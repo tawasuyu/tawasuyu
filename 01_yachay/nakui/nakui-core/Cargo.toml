@@ -1,0 +1,38 @@
+[package]
+name = "nakui-core"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+# Pulls in surrealdb's pure-Rust SurrealKV backend so SurrealStore can
+# persist to disk across process restarts. Lighter compile cost than
+# RocksDB (which would otherwise pull in a C++ build); opt-in only.
+persistent = ["surrealdb/kv-surrealkv"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rhai = { version = "1.20", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+thiserror = "1"
+petgraph = "0.6"
+sha2 = "0.10"
+surrealdb = { version = "2", default-features = false, features = ["kv-mem"] }
+tokio = { version = "1", features = ["rt", "macros"] }
+
+[[bin]]
+name = "nakui"
+path = "src/bin/nakui.rs"
+
+[[bin]]
+name = "demo"
+path = "src/bin/demo.rs"
+
+[[bin]]
+name = "inventory_demo"
+path = "src/bin/inventory_demo.rs"
+
+[[bin]]
+name = "sales_demo"
+path = "src/bin/sales_demo.rs"
