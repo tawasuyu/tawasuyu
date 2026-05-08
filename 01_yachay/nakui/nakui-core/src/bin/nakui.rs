@@ -313,6 +313,10 @@ fn cmd_run(args: &[String]) -> Result<(), CliError> {
             .unwrap_or_else(|| "<memory>".into()),
     );
 
+    // Sidecar brahman: nakui se presenta al Init mientras el daemon vive.
+    // No bloquea; si el Init no está, el sidecar termina silenciosamente.
+    brahman_sidecar::spawn(brahman_card_for_nakui());
+
     let executor = Executor::load_module(&module_dir)
         .map_err(|e| CliError::Op(format!("load module {}: {}", module_dir.display(), e)))?;
     let log = EventLog::open(&log_path).map_err(|e| CliError::Op(format!("open log: {}", e)))?;
@@ -451,5 +455,61 @@ fn cmd_verify_log(args: &[String]) -> Result<(), CliError> {
             Ok(())
         }
         Err(e) => Err(CliError::Op(format!("verify failed: {}", e))),
+    }
+}
+
+/// Card que nakui presenta al Init brahman cuando arranca como daemon.
+///
+/// Lifecycle Daemon (proceso largo). Flujos JSON: consume `command`
+/// (queries del UI), produce `report` (resultados de cómputo). Los
+/// nombres están escogidos para que el broker pueda matchearlos contra
+/// `user-intent` / `render-data` de yahweh-shell por compatibilidad de
+/// tipo (todos `json`).
+fn brahman_card_for_nakui() -> brahman_card::Card {
+    use brahman_card::{
+        Card, Flow, Flows, FsPolicy, IpcPolicy, Lifecycle, Payload, Permissions, Priority,
+        Supervision, TypeRef, CARD_SCHEMA_VERSION,
+    };
+    use std::collections::BTreeSet;
+    use std::time::Duration;
+
+    Card {
+        schema_version: CARD_SCHEMA_VERSION,
+        id: ulid::Ulid::new(),
+        lineage: None,
+        label: "brahman.nakui_erp".into(),
+        provides: BTreeSet::new(),
+        requires: BTreeSet::new(),
+        payload: Payload::Virtual,
+        supervision: Supervision::Restart {
+            initial: Duration::from_millis(200),
+            max: Duration::from_secs(30),
+        },
+        lifecycle: Lifecycle::Daemon,
+        priority: Priority::Normal,
+        permissions: Permissions {
+            filesystem: FsPolicy::ReadWrite,
+            ipc: IpcPolicy {
+                allow: vec!["wit-v1".into()],
+            },
+            ..Default::default()
+        },
+        flow: Flows {
+            input: vec![Flow {
+                name: "command".into(),
+                ty: TypeRef::Primitive {
+                    name: "json".into(),
+                },
+                pin_to: None,
+            }],
+            output: vec![Flow {
+                name: "report".into(),
+                ty: TypeRef::Primitive {
+                    name: "json".into(),
+                },
+                pin_to: None,
+            }],
+        },
+        ..Default::default()
     }
 }

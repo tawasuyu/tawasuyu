@@ -21,6 +21,11 @@ sha2 = "0.10"
 surrealdb = { version = "2", default-features = false, features = ["kv-mem"] }
 tokio = { version = "1", features = ["rt", "macros"] }
 
+# Brahman protocol — presencia ante el Init cuando `nakui run` arranca.
+brahman-card = { path = "../../../core/brahman-card" }
+brahman-sidecar = { path = "../../../shared/brahman-sidecar" }
+ulid = { version = "1" }
+
 [[bin]]
 name = "nakui"
 path = "src/bin/nakui.rs"
