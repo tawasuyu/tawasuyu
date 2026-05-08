@@ -1,0 +1,10 @@
+[package]
+name = "minga-vfs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Virtual File System de Minga (FUSE). Aún no implementado."
+
+[dependencies]
+minga-core = { path = "../minga-core" }
