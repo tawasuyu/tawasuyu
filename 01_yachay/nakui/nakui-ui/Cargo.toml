@@ -1,0 +1,20 @@
+[package]
+name = "nakui-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Nakui — runtime GPUI de la metainterfaz: carga module.json desde un directorio, monta sidebar de menús + área principal con listas y formularios sin código compilado por módulo."
+
+[dependencies]
+nakui-core = { path = "../../modules/nakui/core" }
+nakui-ui-schema = { path = "../../modules/nakui/ui-schema" }
+gpui = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }
+
+[[bin]]
+name = "nakui-ui"
+path = "src/main.rs"
+
+[dev-dependencies]
+tempfile = { workspace = true }
