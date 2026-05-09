@@ -468,18 +468,29 @@ impl MetaUi {
         } else {
             params_fields.to_vec()
         };
+
+        // Buscamos los FieldSpec del Form view activo para conocer
+        // el `kind` declarado de cada param. Usamos `parse_field_value`
+        // estricto en lugar de la heurística `infer_param_value` —
+        // así un "abc" en un campo Boolean rebota en la UI con un
+        // mensaje claro ANTES de llegar al morphism Rhai.
+        let active_form_fields: Option<Vec<FieldSpec>> = self.active.as_ref().and_then(|(_, vk)| {
+            module.views.get(vk).and_then(|v| match v {
+                View::Form(f) => Some(f.fields.clone()),
+                _ => None,
+            })
+        });
+
         for field_name in field_iter {
             let raw = self
                 .form_inputs
                 .get(&field_name)
                 .map(|inp| inp.read(&*cx).text().to_string())
                 .unwrap_or_default();
-            // Inferencia ligera: número si parsea, bool en
-            // true/false, string en cualquier otro caso. Coherente
-            // con el modelo "el morphism Rhai espera tipos", pero
-            // simple — para casos finos, el caller puede declarar
-            // `kind: Number` en el FieldSpec, y el form lo respeta.
-            let value = infer_param_value(&raw);
+            let spec = active_form_fields
+                .as_ref()
+                .and_then(|fs| fs.iter().find(|f| f.name == field_name));
+            let value = resolve_param_value(&field_name, &raw, spec)?;
             params_obj.insert(field_name, value);
         }
 
@@ -684,10 +695,40 @@ fn render_value(v: Option<&Value>) -> String {
     }
 }
 
+/// Resuelve un param de morphism a su `Value` según el `FieldSpec`
+/// del form. **Strict path**: si hay spec, valida `required` y parsea
+/// con el `kind` declarado (ej. Boolean rebota con "abc" antes de
+/// llegar al morphism). **Fallback path**: si no hay spec (param
+/// declarado en `Action::Morphism.params` que no aparece en
+/// `form.fields`), usa la heurística `infer_param_value` para no
+/// quedar atado a un schema mal-formado.
+///
+/// Errores tienen el label legible del spec, así el toast de la UI
+/// es interpretable.
+fn resolve_param_value(
+    field_name: &str,
+    raw: &str,
+    spec: Option<&FieldSpec>,
+) -> Result<Value, String> {
+    let Some(s) = spec else {
+        return Ok(infer_param_value(raw));
+    };
+
+    let label = if s.label.is_empty() { field_name } else { &s.label };
+
+    if s.required && raw.trim().is_empty() {
+        return Err(format!("param '{label}' es obligatorio y está vacío"));
+    }
+    if raw.is_empty() && !s.required {
+        return Ok(Value::Null);
+    }
+    parse_field_value(s.kind, raw).map_err(|e| format!("param '{label}': {e}"))
+}
+
 /// Inferencia de tipo para values pasados como `params` a un
-/// morphism. Usada cuando el form no declara `FieldKind` explícito
-/// (Action::Morphism toma `params: Vec<String>` con sólo los nombres,
-/// no los kinds).
+/// morphism. Usada como fallback en `resolve_param_value` cuando el
+/// param declarado en `Action::Morphism.params` no aparece en los
+/// `form.fields` (módulo mal-formado).
 ///
 /// Heurística simple: int → i64, float → f64, "true"/"false" → bool,
 /// resto → string.
@@ -1363,6 +1404,72 @@ mod tests {
         assert_eq!(infer_param_value("true"), json!(true));
         assert_eq!(infer_param_value("false"), json!(false));
         assert_eq!(infer_param_value("hola"), json!("hola"));
+    }
+
+    fn spec(name: &str, kind: FieldKind, required: bool) -> FieldSpec {
+        FieldSpec {
+            name: name.into(),
+            label: name.into(),
+            kind,
+            default: None,
+            required,
+            help: None,
+            ref_entity: None,
+        }
+    }
+
+    #[test]
+    fn resolve_param_strict_number_parses_i64() {
+        let s = spec("qty", FieldKind::Number, true);
+        let v = resolve_param_value("qty", "42", Some(&s)).unwrap();
+        assert_eq!(v, json!(42));
+    }
+
+    #[test]
+    fn resolve_param_strict_boolean_rejects_non_boolean() {
+        let s = spec("active", FieldKind::Boolean, true);
+        let err = resolve_param_value("active", "abc", Some(&s)).unwrap_err();
+        assert!(err.contains("active"), "msg debe mencionar el label: {err}");
+        assert!(
+            err.to_lowercase().contains("bool") || err.contains("'abc'"),
+            "msg debe explicar el tipo o value: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_param_strict_number_rejects_garbage() {
+        let s = spec("qty", FieldKind::Number, true);
+        let err = resolve_param_value("qty", "abc", Some(&s)).unwrap_err();
+        assert!(err.contains("qty"), "msg debe mencionar el label: {err}");
+    }
+
+    #[test]
+    fn resolve_param_required_empty_rejected() {
+        let s = spec("name", FieldKind::Text, true);
+        let err = resolve_param_value("name", "   ", Some(&s)).unwrap_err();
+        assert!(
+            err.contains("obligatorio"),
+            "msg debe decir obligatorio: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_param_optional_empty_returns_null() {
+        let s = spec("notes", FieldKind::Text, false);
+        let v = resolve_param_value("notes", "", Some(&s)).unwrap();
+        assert_eq!(v, json!(null));
+    }
+
+    #[test]
+    fn resolve_param_no_spec_falls_back_to_infer() {
+        // Sin FieldSpec (módulo mal-formado): infer_param_value
+        // se usa como red de seguridad.
+        let v = resolve_param_value("foo", "42", None).unwrap();
+        assert_eq!(v, json!(42));
+        let v = resolve_param_value("foo", "true", None).unwrap();
+        assert_eq!(v, json!(true));
+        let v = resolve_param_value("foo", "x", None).unwrap();
+        assert_eq!(v, json!("x"));
     }
 
     #[test]
