@@ -631,6 +631,10 @@ impl MetaUi {
 fn parse_field_value(kind: FieldKind, raw: &str) -> Result<Value, String> {
     match kind {
         FieldKind::Text | FieldKind::Multiline | FieldKind::Date => Ok(json!(raw)),
+        // EntityRef se almacena como string del UUID seleccionado.
+        // El commit_morphism luego lo parsea como Uuid para inputs;
+        // en seed_entity normal queda como string en el record.
+        FieldKind::EntityRef => Ok(json!(raw)),
         FieldKind::Boolean => match raw.to_ascii_lowercase().as_str() {
             "true" | "yes" | "1" | "on" | "y" => Ok(json!(true)),
             "" | "false" | "no" | "0" | "off" | "n" => Ok(json!(false)),
@@ -646,6 +650,20 @@ fn parse_field_value(kind: FieldKind, raw: &str) -> Result<Value, String> {
             }
         }
     }
+}
+
+/// Etiqueta humana para representar un record en el selector de
+/// EntityRef. Heurística: prefiere campos comunes en este orden:
+/// `name`, `label`, `title`, `sku`, `sku_id`. Fallback al UUID corto.
+fn human_label_for_record(value: &Value, id: &Uuid) -> String {
+    for key in ["name", "label", "title", "sku", "sku_id"] {
+        if let Some(v) = value.get(key).and_then(Value::as_str) {
+            if !v.is_empty() {
+                return format!("{} ({})", v, short_uuid(id));
+            }
+        }
+    }
+    short_uuid(id)
 }
 
 fn lookup_field<'a>(v: &'a Value, path: &str) -> Option<&'a Value> {
@@ -1078,6 +1096,87 @@ impl MetaUi {
         main
     }
 
+    /// Renderea el selector clickable de records existentes para un
+    /// FieldSpec con kind=EntityRef. Lista compacta debajo del input;
+    /// click en una opción setea el TextInput del field con el UUID
+    /// seleccionado. El item del UUID actualmente seleccionado (si
+    /// hay) se resalta con accent color.
+    #[allow(clippy::too_many_arguments)]
+    fn render_entity_ref_selector(
+        &self,
+        cx: &mut Context<Self>,
+        field_name: String,
+        target_entity: String,
+        text: gpui::Rgba,
+        text_dim: gpui::Rgba,
+        accent: gpui::Rgba,
+    ) -> gpui::Div {
+        let _ = text;
+        let rows = self.list_rows(&target_entity);
+        let current = self
+            .form_inputs
+            .get(&field_name)
+            .map(|inp| inp.read(&*cx).text().to_string())
+            .unwrap_or_default();
+
+        let mut container = div()
+            .mt(px(4.))
+            .pl(px(8.))
+            .border_l_2()
+            .border_color(gpui::rgb(0x2a2f38))
+            .flex()
+            .flex_col()
+            .gap(px(2.));
+
+        if rows.is_empty() {
+            return container.child(
+                div()
+                    .px(px(6.))
+                    .py(px(4.))
+                    .text_color(text_dim)
+                    .text_size(px(10.))
+                    .child(format!(
+                        "(sin {target_entity}: creá uno antes para referenciar)"
+                    )),
+            );
+        }
+
+        container = container.child(
+            div()
+                .text_color(text_dim)
+                .text_size(px(10.))
+                .child(format!("Seleccioná un {target_entity}:")),
+        );
+
+        for (id, value) in &rows {
+            let label = human_label_for_record(value, id);
+            let id_str = id.to_string();
+            let is_selected = current == id_str;
+            let field_for_click = field_name.clone();
+            let id_for_click = id_str.clone();
+            container = container.child(
+                div()
+                    .id(SharedString::from(format!(
+                        "entity-ref-{field_name}-{id_str}"
+                    )))
+                    .px(px(6.))
+                    .py(px(2.))
+                    .text_size(px(11.))
+                    .text_color(if is_selected { accent } else { text_dim })
+                    .when(is_selected, |d| d.bg(gpui::rgb(0x232a36)))
+                    .hover(|d| d.bg(gpui::rgb(0x1f2630)))
+                    .child(label)
+                    .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                        if let Some(input) = this.form_inputs.get(&field_for_click) {
+                            input.update(cx, |inp, cx| inp.set_text(id_for_click.clone(), cx));
+                        }
+                        cx.notify();
+                    })),
+            );
+        }
+        container
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn render_form(
         &self,
@@ -1134,6 +1233,23 @@ impl MetaUi {
                         .text_color(text_dim)
                         .child("(input no inicializado)"),
                 );
+            }
+
+            // Para EntityRef, agregamos un selector clickable de
+            // records existentes debajo del TextInput. Click en una
+            // opción setea el TextInput interno con el UUID; el
+            // submit lee de ahí como cualquier otro field.
+            if f.kind == FieldKind::EntityRef {
+                if let Some(target_entity) = &f.ref_entity {
+                    field_box = field_box.child(self.render_entity_ref_selector(
+                        cx,
+                        f.name.clone(),
+                        target_entity.clone(),
+                        text,
+                        text_dim,
+                        accent,
+                    ));
+                }
             }
 
             if let Some(help) = &f.help {
@@ -1247,6 +1363,44 @@ mod tests {
         assert_eq!(infer_param_value("true"), json!(true));
         assert_eq!(infer_param_value("false"), json!(false));
         assert_eq!(infer_param_value("hola"), json!("hola"));
+    }
+
+    #[test]
+    fn parse_field_entity_ref_returns_string() {
+        // EntityRef se almacena como string del UUID. parse_field_value
+        // no lo valida como UUID — eso lo hace commit_morphism al
+        // resolver inputs.
+        let v = parse_field_value(FieldKind::EntityRef, "abc-123").unwrap();
+        assert_eq!(v, json!("abc-123"));
+    }
+
+    #[test]
+    fn human_label_for_record_prefers_name_over_id() {
+        let id = Uuid::new_v4();
+        let with_name = json!({"name": "Acme S.A.", "email": "x@y.z"});
+        let label = human_label_for_record(&with_name, &id);
+        assert!(label.starts_with("Acme S.A."), "got: {label}");
+        assert!(label.contains(&short_uuid(&id)));
+    }
+
+    #[test]
+    fn human_label_falls_back_through_label_title_sku() {
+        let id = Uuid::new_v4();
+        let only_label = json!({"label": "X"});
+        assert!(human_label_for_record(&only_label, &id).starts_with("X "));
+        let only_title = json!({"title": "Y"});
+        assert!(human_label_for_record(&only_title, &id).starts_with("Y "));
+        let only_sku = json!({"sku": "Z-001"});
+        assert!(human_label_for_record(&only_sku, &id).starts_with("Z-001 "));
+        let only_sku_id = json!({"sku_id": "W-002"});
+        assert!(human_label_for_record(&only_sku_id, &id).starts_with("W-002 "));
+    }
+
+    #[test]
+    fn human_label_falls_back_to_id_when_no_known_keys() {
+        let id = Uuid::new_v4();
+        let v = json!({"weird_field": "val"});
+        assert_eq!(human_label_for_record(&v, &id), short_uuid(&id));
     }
 
     #[test]
