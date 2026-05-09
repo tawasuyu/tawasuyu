@@ -31,7 +31,8 @@ use gpui::{
     Render, SharedString, Window, WindowBounds, WindowOptions,
 };
 use nakui_core::delta::{FieldOp, FieldPath};
-use nakui_core::event_log::{replay_into, EventLog, LogEntry};
+use nakui_core::event_log::{execute_and_log_with_recovery, replay_into, EventLog, LogEntry};
+use nakui_core::executor::Executor;
 use nakui_core::store::{MemoryStore, Store};
 use nakui_ui_schema::{
     Action, FieldKind, FieldSpec, FormView, ListView, Module, View,
@@ -75,6 +76,11 @@ struct MetaUi {
     /// log falló — en ese caso el runtime degrada a in-memory only y
     /// loggea un toast informativo.
     event_log: Option<Arc<Mutex<EventLog>>>,
+    /// Executors nakui cargados, indexados por `module.id`. Sólo
+    /// existen los módulos que declaran `nakui_module_dir`. Las
+    /// acciones `Morphism` requieren que el módulo activo tenga
+    /// uno; sin él, despachan un toast informativo.
+    executors: BTreeMap<String, Arc<Executor>>,
     /// (módulo idx, vista key) actualmente activos.
     active: Option<(usize, String)>,
     /// Inputs vivos para el form actual: nombre del campo → TextInput.
@@ -169,6 +175,43 @@ impl MetaUi {
             }
         };
 
+        // Cargar Executors para los módulos que declararon
+        // `nakui_module_dir`. Resolvemos paths relativos al
+        // directorio del modules (NAKUI_MODULES_DIR/<id>/), no al
+        // pwd. Cualquier error de carga deja la entry afuera y
+        // anota al banner — Action::Morphism queda no-op para ese
+        // módulo pero el resto sigue funcionando.
+        let mut executors: BTreeMap<String, Arc<Executor>> = BTreeMap::new();
+        for m in &modules {
+            let Some(rel) = &m.nakui_module_dir else {
+                continue;
+            };
+            let module_root = modules_dir.join(&m.id);
+            let nakui_dir = if std::path::Path::new(rel).is_absolute() {
+                PathBuf::from(rel)
+            } else {
+                module_root.join(rel)
+            };
+            match Executor::load_module(&nakui_dir) {
+                Ok(exec) => {
+                    executors.insert(m.id.clone(), Arc::new(exec));
+                }
+                Err(e) => {
+                    let msg = format!(
+                        "módulo {}: no pude cargar executor nakui en {}: {e}",
+                        m.id,
+                        nakui_dir.display()
+                    );
+                    match &load_error {
+                        Some(prev) => {
+                            load_error = Some(SharedString::from(format!("{prev}; {msg}")));
+                        }
+                        None => load_error = Some(SharedString::from(msg)),
+                    }
+                }
+            }
+        }
+
         let active = modules
             .first()
             .and_then(|m| m.menu.first().map(|item| (0usize, item.view.clone())));
@@ -177,6 +220,7 @@ impl MetaUi {
             modules,
             store: Arc::new(Mutex::new(store)),
             event_log,
+            executors,
             active,
             form_inputs: BTreeMap::new(),
             editing: None,
@@ -334,13 +378,134 @@ impl MetaUi {
                 }
                 cx.notify();
             }
-            Action::Morphism { name, .. } => {
-                self.toast = Some(SharedString::from(format!(
-                    "morphism '{name}': pendiente (requiere manifest nakui)"
-                )));
+            Action::Morphism {
+                name,
+                inputs,
+                params,
+                next_view,
+            } => {
+                match self.commit_morphism(mod_idx, &name, &inputs, &params, cx) {
+                    Ok(op_count) => {
+                        self.toast = Some(SharedString::from(format!(
+                            "morphism '{name}' OK ({op_count} op(s) aplicadas)"
+                        )));
+                        if let Some(v) = next_view {
+                            self.select_view(mod_idx, v, cx);
+                        }
+                    }
+                    Err(e) => {
+                        self.toast = Some(SharedString::from(format!(
+                            "morphism '{name}' falló: {e}"
+                        )));
+                    }
+                }
                 cx.notify();
             }
         }
+    }
+
+    /// Despacha un morphism al pipeline real de nakui-core: lee
+    /// inputs (UUIDs) + params (Value object) del form, llama
+    /// `execute_and_log_with_recovery`. Devuelve la cantidad de ops
+    /// que el morphism produjo (para feedback).
+    fn commit_morphism(
+        &mut self,
+        mod_idx: usize,
+        morphism: &str,
+        inputs_map: &BTreeMap<String, String>,
+        params_fields: &[String],
+        cx: &mut Context<Self>,
+    ) -> Result<usize, String> {
+        let _ = cx;
+        let module = self
+            .modules
+            .get(mod_idx)
+            .ok_or_else(|| "módulo inválido".to_string())?;
+        let executor = self
+            .executors
+            .get(&module.id)
+            .ok_or_else(|| {
+                format!(
+                    "módulo '{}' no tiene executor nakui (falta nakui_module_dir o falló la carga)",
+                    module.id
+                )
+            })?
+            .clone();
+        let log_arc = self
+            .event_log
+            .as_ref()
+            .ok_or_else(|| "morphism requiere event log activo".to_string())?
+            .clone();
+
+        // Resolver inputs: por cada (role, field_name), parsear el
+        // value del input como Uuid.
+        let mut input_pairs: Vec<(String, Uuid)> = Vec::with_capacity(inputs_map.len());
+        for (role, field_name) in inputs_map {
+            let raw = self
+                .form_inputs
+                .get(field_name)
+                .map(|inp| inp.read(&*cx).text().to_string())
+                .ok_or_else(|| format!("input field '{field_name}' no existe en el form"))?;
+            let id = Uuid::parse_str(raw.trim()).map_err(|_| {
+                format!(
+                    "input '{role}' (field '{field_name}'): '{raw}' no es UUID válido"
+                )
+            })?;
+            input_pairs.push((role.clone(), id));
+        }
+
+        // Resolver params: si la lista está vacía, todos los fields
+        // del form que no estén en `inputs_map` van a params. Si
+        // hay lista, sólo esos.
+        let input_field_set: std::collections::BTreeSet<&String> = inputs_map.values().collect();
+        let mut params_obj = serde_json::Map::new();
+        let field_iter: Vec<String> = if params_fields.is_empty() {
+            self.form_inputs
+                .keys()
+                .filter(|k| !input_field_set.contains(*k))
+                .cloned()
+                .collect()
+        } else {
+            params_fields.to_vec()
+        };
+        for field_name in field_iter {
+            let raw = self
+                .form_inputs
+                .get(&field_name)
+                .map(|inp| inp.read(&*cx).text().to_string())
+                .unwrap_or_default();
+            // Inferencia ligera: número si parsea, bool en
+            // true/false, string en cualquier otro caso. Coherente
+            // con el modelo "el morphism Rhai espera tipos", pero
+            // simple — para casos finos, el caller puede declarar
+            // `kind: Number` en el FieldSpec, y el form lo respeta.
+            let value = infer_param_value(&raw);
+            params_obj.insert(field_name, value);
+        }
+
+        let inputs_ref: Vec<(&str, Uuid)> = input_pairs
+            .iter()
+            .map(|(r, id)| (r.as_str(), *id))
+            .collect();
+
+        let mut log = log_arc
+            .lock()
+            .map_err(|_| "log mutex envenenado".to_string())?;
+        let mut store = self
+            .store
+            .lock()
+            .map_err(|_| "store mutex envenenado".to_string())?;
+
+        let ops = execute_and_log_with_recovery(
+            &executor,
+            &mut *store,
+            &mut *log,
+            morphism,
+            &inputs_ref,
+            Value::Object(params_obj),
+        )
+        .map_err(|e| format!("{e}"))?;
+        Ok(ops.len())
     }
 
     /// Construye un Value desde los TextInput vivos y lo seedea al store.
@@ -499,6 +664,31 @@ fn render_value(v: Option<&Value>) -> String {
         Some(Value::Number(n)) => n.to_string(),
         Some(other) => other.to_string(),
     }
+}
+
+/// Inferencia de tipo para values pasados como `params` a un
+/// morphism. Usada cuando el form no declara `FieldKind` explícito
+/// (Action::Morphism toma `params: Vec<String>` con sólo los nombres,
+/// no los kinds).
+///
+/// Heurística simple: int → i64, float → f64, "true"/"false" → bool,
+/// resto → string.
+fn infer_param_value(raw: &str) -> Value {
+    if raw.is_empty() {
+        return Value::Null;
+    }
+    if let Ok(i) = raw.parse::<i64>() {
+        return json!(i);
+    }
+    if let Ok(f) = raw.parse::<f64>() {
+        return json!(f);
+    }
+    match raw {
+        "true" => return json!(true),
+        "false" => return json!(false),
+        _ => {}
+    }
+    json!(raw)
 }
 
 /// Conversión inversa a `parse_field_value`: del JSON al texto raw
@@ -1050,6 +1240,16 @@ mod tests {
     }
 
     #[test]
+    fn infer_param_value_int_then_float_then_bool_then_string() {
+        assert_eq!(infer_param_value(""), json!(null));
+        assert_eq!(infer_param_value("42"), json!(42));
+        assert_eq!(infer_param_value("3.14"), json!(3.14));
+        assert_eq!(infer_param_value("true"), json!(true));
+        assert_eq!(infer_param_value("false"), json!(false));
+        assert_eq!(infer_param_value("hola"), json!("hola"));
+    }
+
+    #[test]
     fn render_value_handles_null_string_bool() {
         assert_eq!(render_value(None), "");
         assert_eq!(render_value(Some(&json!(null))), "");
@@ -1151,6 +1351,106 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// E2E del Action::Morphism: carga el módulo nakui-core real
+    /// `sales` (que vive en `crates/modules/nakui/modules/sales`),
+    /// arma store + log, y ejecuta el morphism `vender` vía
+    /// `execute_and_log_with_recovery` (la misma función que
+    /// `commit_morphism` invoca). Verifica que las ops esperadas
+    /// se loguean y aplican (stock decrementa, caja incrementa).
+    ///
+    /// Reproduce el flujo del runtime sin necesitar GPUI.
+    #[test]
+    fn morphism_pipeline_executes_real_sales_vender() {
+        use nakui_core::event_log::{execute_and_log_with_recovery, EventLog};
+        use nakui_core::executor::Executor;
+        use nakui_core::store::{MemoryStore, Store};
+
+        // Path al módulo real (3 dirs arriba: crates/apps/nakui-ui/
+        // → crates/modules/nakui/modules/sales).
+        let here = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let sales_dir = here
+            .join("../../..")
+            .join("crates/modules/nakui/modules/sales");
+        if !sales_dir.join("nsmc.json").exists() {
+            // Si el módulo demo no está donde esperamos, skipeamos
+            // — no es regresión del feature, es ambiente.
+            eprintln!(
+                "skip: sales module no encontrado en {}",
+                sales_dir.display()
+            );
+            return;
+        }
+
+        let executor = Executor::load_module(&sales_dir).expect("cargar sales executor");
+
+        let mut store = MemoryStore::new();
+        let stock_id = Uuid::new_v4();
+        let caja_id = Uuid::new_v4();
+        store.seed(
+            "Stock",
+            stock_id,
+            json!({
+                "id": stock_id.to_string(),
+                "sku_id": "test-sku",
+                "ubicacion": "loc-1",
+                "cantidad": 100_i64,
+            }),
+        );
+        store.seed(
+            "Caja",
+            caja_id,
+            json!({
+                "id": caja_id.to_string(),
+                "name": "Caja Test",
+                "currency": "USD",
+                "saldo": 1_000_000_i64,
+            }),
+        );
+
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let log_path = tmp.path().to_path_buf();
+        drop(tmp);
+        let mut log = EventLog::open(&log_path).unwrap();
+
+        let venta_id = Uuid::new_v4();
+        let inputs = vec![("stock", stock_id), ("caja", caja_id)];
+        let params = json!({
+            "venta_id": venta_id.to_string(),
+            "cantidad": 5_i64,
+            "precio_unitario": 200_i64,
+            "timestamp": "2026-05-04T10:00:00Z",
+        });
+
+        let ops = execute_and_log_with_recovery(
+            &executor,
+            &mut store,
+            &mut log,
+            "vender",
+            &inputs,
+            params,
+        )
+        .expect("morphism vender debe ejecutar limpio");
+
+        assert!(!ops.is_empty(), "vender debería producir ops");
+
+        // Sanity post-condiciones esperadas del manifest sales:
+        // - stock.cantidad bajó (vendimos 5).
+        let stock_after = store
+            .load("Stock", stock_id)
+            .and_then(|v| v.get("cantidad").and_then(Value::as_i64))
+            .expect("stock con cantidad");
+        assert_eq!(stock_after, 95, "stock debería bajar de 100 a 95");
+        // - caja.saldo subió (cobramos 5*200 = 1000 sobre saldo
+        // inicial 1_000_000).
+        let caja_after = store
+            .load("Caja", caja_id)
+            .and_then(|v| v.get("saldo").and_then(Value::as_i64))
+            .expect("caja con saldo");
+        assert_eq!(caja_after, 1_001_000, "caja debería subir 5*200=1000");
+
+        let _ = std::fs::remove_file(&log_path);
     }
 
     /// E2E del ciclo CRUD vía log:
