@@ -42,15 +42,13 @@
 //!   enforcement); recolectamos sólo del primer alternativo para
 //!   evitar duplicados, emitimos feed_pattern para cada uno.
 
+use crate::alpha::common::{
+    emit_binder_body, emit_binder_node, emit_identifier_ref, emit_leaf_marker,
+    push_identifier_name, write_kind_and_field, TAG_NO_LEAF,
+};
 use crate::ast::SemanticNode;
 use crate::cas::ContentHash;
 use blake3::Hasher;
-
-const TAG_NO_LEAF: u8 = 0;
-const TAG_LEAF: u8 = 1;
-const TAG_BINDER: u8 = 2;
-const TAG_REF_BOUND: u8 = 3;
-const TAG_REF_FREE: u8 = 4;
 
 pub fn hash_node_alpha(node: &SemanticNode) -> ContentHash {
     let mut h = Hasher::new();
@@ -168,55 +166,6 @@ fn feed_default(h: &mut Hasher, node: &SemanticNode, scope: &mut Vec<String>) {
     h.update(&(node.children.len() as u64).to_le_bytes());
     for c in &node.children {
         feed(h, c, scope);
-    }
-}
-
-fn emit_identifier_ref(h: &mut Hasher, node: &SemanticNode, scope: &Vec<String>) {
-    h.update(&[TAG_NO_LEAF]);
-    if let Some(t) = &node.leaf_text {
-        if let Ok(name) = std::str::from_utf8(t) {
-            if let Some(i) = scope.iter().rposition(|n| n == name) {
-                let de_bruijn = (scope.len() - 1 - i) as u64;
-                h.update(&[TAG_REF_BOUND]);
-                h.update(&de_bruijn.to_le_bytes());
-            } else {
-                h.update(&[TAG_REF_FREE]);
-                h.update(&(t.len() as u64).to_le_bytes());
-                h.update(t);
-            }
-        } else {
-            h.update(&[TAG_REF_FREE]);
-            h.update(&(t.len() as u64).to_le_bytes());
-            h.update(t);
-        }
-    } else {
-        h.update(&[TAG_REF_FREE]);
-        h.update(&[0u8; 8]);
-    }
-    h.update(&[0u8; 8]);
-}
-
-fn emit_binder_body(h: &mut Hasher) {
-    h.update(&[TAG_NO_LEAF]);
-    h.update(&[TAG_BINDER]);
-    h.update(&[0u8; 8]);
-}
-
-fn emit_binder_node(h: &mut Hasher, node: &SemanticNode) {
-    write_kind_and_field(h, node);
-    emit_binder_body(h);
-}
-
-fn emit_leaf_marker(h: &mut Hasher, node: &SemanticNode) {
-    match &node.leaf_text {
-        Some(t) => {
-            h.update(&[TAG_LEAF]);
-            h.update(&(t.len() as u64).to_le_bytes());
-            h.update(t);
-        }
-        None => {
-            h.update(&[TAG_NO_LEAF]);
-        }
     }
 }
 
@@ -585,16 +534,8 @@ fn collect_field_pattern_binders(fp: &SemanticNode, out: &mut Vec<String>) {
     }
 }
 
-fn push_identifier_name(node: &SemanticNode, out: &mut Vec<String>) {
-    if let Some(t) = &node.leaf_text {
-        if let Ok(s) = std::str::from_utf8(t) {
-            out.push(s.to_string());
-        }
-    }
-}
-
 /// Determina si un `identifier` en posición de patrón se interpreta como
-/// binder. Reglas:
+/// binder. Reglas (específicas de Rust):
 /// - Si tiene `field_name == "pattern"` (parámetros, lets), siempre es binder.
 /// - Si su nombre comienza con minúscula, es binder.
 /// - Si comienza con `_` seguido de letra/dígito, es binder (convención
@@ -618,22 +559,4 @@ fn is_binder_name(s: &str) -> bool {
         Some(c) => c.is_lowercase(),
         None => false,
     }
-}
-
-fn write_kind_and_field(h: &mut Hasher, node: &SemanticNode) {
-    write_str(h, &node.kind);
-    match &node.field_name {
-        Some(f) => {
-            h.update(&[1]);
-            write_str(h, f);
-        }
-        None => {
-            h.update(&[0]);
-        }
-    }
-}
-
-fn write_str(h: &mut Hasher, s: &str) {
-    h.update(&(s.len() as u64).to_le_bytes());
-    h.update(s.as_bytes());
 }
