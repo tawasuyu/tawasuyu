@@ -865,9 +865,20 @@ fn parse_field_value(kind: FieldKind, raw: &str) -> Result<Value, String> {
     match kind {
         FieldKind::Text | FieldKind::Multiline | FieldKind::Date => Ok(json!(raw)),
         // EntityRef se almacena como string del UUID seleccionado.
-        // El commit_morphism luego lo parsea como Uuid para inputs;
-        // en seed_entity normal queda como string en el record.
-        FieldKind::EntityRef => Ok(json!(raw)),
+        // Validamos que parsee como UUID al submit — antes esto se
+        // chequeaba sólo para morphism inputs (línea ~540), pero un
+        // EntityRef como SEED field o como param de morphism caía
+        // de la heurística silenciosa. Ahora rebota con mensaje
+        // claro acá, antes de tocar el log o el morphism Rhai.
+        // El selector clickable garantiza UUIDs válidos en happy
+        // path; este check protege paste manual o garbage.
+        FieldKind::EntityRef => {
+            let trimmed = raw.trim();
+            Uuid::parse_str(trimmed).map_err(|_| {
+                format!("'{raw}' no es UUID válido (usá el selector de records)")
+            })?;
+            Ok(json!(trimmed))
+        }
         FieldKind::Boolean => match raw.to_ascii_lowercase().as_str() {
             "true" | "yes" | "1" | "on" | "y" => Ok(json!(true)),
             "" | "false" | "no" | "0" | "off" | "n" => Ok(json!(false)),
@@ -2024,12 +2035,50 @@ mod tests {
     }
 
     #[test]
-    fn parse_field_entity_ref_returns_string() {
-        // EntityRef se almacena como string del UUID. parse_field_value
-        // no lo valida como UUID — eso lo hace commit_morphism al
-        // resolver inputs.
-        let v = parse_field_value(FieldKind::EntityRef, "abc-123").unwrap();
-        assert_eq!(v, json!("abc-123"));
+    fn parse_field_entity_ref_accepts_valid_uuid() {
+        let id = Uuid::new_v4();
+        let v = parse_field_value(FieldKind::EntityRef, &id.to_string()).unwrap();
+        assert_eq!(v, json!(id.to_string()));
+    }
+
+    #[test]
+    fn parse_field_entity_ref_trims_whitespace() {
+        // El selector clickable garantiza el value pelado; este check
+        // protege contra paste manual con espacios accidentales.
+        let id = Uuid::new_v4();
+        let padded = format!("  {id}\n");
+        let v = parse_field_value(FieldKind::EntityRef, &padded).unwrap();
+        assert_eq!(v, json!(id.to_string()), "debería trimear y devolver el UUID limpio");
+    }
+
+    #[test]
+    fn parse_field_entity_ref_rejects_non_uuid() {
+        let err = parse_field_value(FieldKind::EntityRef, "abc-123").unwrap_err();
+        assert!(err.contains("'abc-123'"), "msg debe mencionar el value: {err}");
+        assert!(
+            err.contains("UUID") || err.contains("uuid"),
+            "msg debe mencionar UUID: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_field_entity_ref_rejects_empty_string() {
+        // Un EntityRef vacío al submit: el form lo manda como ""
+        // si el usuario no clickeó nada. Debería rebotar acá en
+        // lugar de loguear "" como un record id basura.
+        let err = parse_field_value(FieldKind::EntityRef, "").unwrap_err();
+        assert!(err.contains("UUID"), "msg debe mencionar UUID: {err}");
+    }
+
+    #[test]
+    fn resolve_param_strict_entity_ref_propagates_error() {
+        // Sanity: resolve_param_value con kind=EntityRef invoca
+        // parse_field_value y propaga el error de UUID inválido,
+        // con el label del FieldSpec en el mensaje.
+        let s = spec("stock_ref", FieldKind::EntityRef, true);
+        let err = resolve_param_value("stock_ref", "not-a-uuid", Some(&s)).unwrap_err();
+        assert!(err.contains("stock_ref"), "msg debe incluir label: {err}");
+        assert!(err.contains("UUID"), "msg debe mencionar UUID: {err}");
     }
 
     #[test]
