@@ -1,0 +1,19 @@
+[package]
+name = "nakui-explorer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Explorador GPUI del event log de Nakui: timeline de seeds + morphisms, schema hashes, breakdown por entity. Standalone (lee un .jsonl) — futura integración con sidecar brahman cuando nakui se daemonice."
+
+[dependencies]
+nakui-core = { path = "../../modules/nakui/core" }
+gpui = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[[bin]]
+name = "nakui-explorer"
+path = "src/main.rs"
