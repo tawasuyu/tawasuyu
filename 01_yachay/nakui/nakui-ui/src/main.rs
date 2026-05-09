@@ -30,6 +30,7 @@ use gpui::{
     div, prelude::*, px, App, Application, Bounds, ClickEvent, Context, Entity, IntoElement,
     Render, SharedString, Window, WindowBounds, WindowOptions,
 };
+use nakui_core::event_log::{replay_into, EventLog, LogEntry};
 use nakui_core::store::{MemoryStore, Store};
 use nakui_ui_schema::{
     Action, FieldKind, FieldSpec, FormView, ListView, Module, View,
@@ -68,6 +69,11 @@ struct MetaUi {
     modules: Vec<Module>,
     /// Store compartido. Mutado por el submit de los forms.
     store: Arc<Mutex<MemoryStore>>,
+    /// Event log persistente compartido. Cada `seed_entity` se appende
+    /// acá antes de mutar el store (WAL). `None` si la apertura del
+    /// log falló — en ese caso el runtime degrada a in-memory only y
+    /// loggea un toast informativo.
+    event_log: Option<Arc<Mutex<EventLog>>>,
     /// (módulo idx, vista key) actualmente activos.
     active: Option<(usize, String)>,
     /// Inputs vivos para el form actual: nombre del campo → TextInput.
@@ -86,7 +92,7 @@ impl MetaUi {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("nakui-modules"));
 
-        let (modules, load_error) =
+        let (modules, mut load_error) =
             match nakui_ui_schema::load_modules_from_dir(&modules_dir) {
                 Ok(m) => (m, None),
                 Err(e) => (
@@ -98,16 +104,75 @@ impl MetaUi {
                 ),
             };
 
+        // Persistencia: abrir/crear el event log y hacer replay al
+        // store. Path por env `NAKUI_EVENT_LOG`, default
+        // `./nakui-ui-state.jsonl`. Si abrir o replay falla, el
+        // runtime sigue en modo in-memory (sin persistencia) y el
+        // load_error se acumula al banner.
+        let log_path = std::env::var("NAKUI_EVENT_LOG")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("nakui-ui-state.jsonl"));
+        let mut store = MemoryStore::new();
+        let mut initial_toast: Option<SharedString> = None;
+        let event_log = match EventLog::open(&log_path) {
+            Ok(log) => {
+                match replay_into(&log, &mut store) {
+                    Ok(()) => {
+                        let n = log.next_seq();
+                        if n > 0 {
+                            initial_toast = Some(SharedString::from(format!(
+                                "log {} cargado: {n} evento(s) replayed",
+                                log_path.display()
+                            )));
+                        } else {
+                            initial_toast = Some(SharedString::from(format!(
+                                "log nuevo en {}",
+                                log_path.display()
+                            )));
+                        }
+                        Some(Arc::new(Mutex::new(log)))
+                    }
+                    Err(e) => {
+                        let msg = format!(
+                            "replay del log {} falló: {e} — running in-memory",
+                            log_path.display()
+                        );
+                        match &load_error {
+                            Some(prev) => {
+                                load_error = Some(SharedString::from(format!("{prev}; {msg}")));
+                            }
+                            None => load_error = Some(SharedString::from(msg)),
+                        }
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                let msg = format!(
+                    "abrir log {}: {e} — running in-memory only",
+                    log_path.display()
+                );
+                match &load_error {
+                    Some(prev) => {
+                        load_error = Some(SharedString::from(format!("{prev}; {msg}")));
+                    }
+                    None => load_error = Some(SharedString::from(msg)),
+                }
+                None
+            }
+        };
+
         let active = modules
             .first()
             .and_then(|m| m.menu.first().map(|item| (0usize, item.view.clone())));
 
         Self {
             modules,
-            store: Arc::new(Mutex::new(MemoryStore::new())),
+            store: Arc::new(Mutex::new(store)),
+            event_log,
             active,
             form_inputs: BTreeMap::new(),
-            toast: None,
+            toast: initial_toast,
             load_error,
         }
     }
@@ -206,8 +271,36 @@ impl MetaUi {
             obj.insert(f.name.clone(), value);
         }
         let id = Uuid::new_v4();
+        let data = Value::Object(obj);
+
+        // WAL: si hay event_log activo, escribir al log ANTES de mutar
+        // el store. Si el log falla, cancelamos toda la operación (el
+        // user reintenta). Si no hay log (degraded), seedea al store
+        // y aceptamos no-persistencia.
+        if let Some(log_arc) = self.event_log.as_ref() {
+            let mut log = log_arc
+                .lock()
+                .map_err(|_| "log mutex envenenado".to_string())?;
+            let seq = log.next_seq();
+            // schema_hash = None: ver doc del campo en
+            // nakui_core::event_log::LogEntry — "legacy/pre-versioning
+            // entries". Es el path correcto cuando el ingreso no
+            // pasa por un Manifest+Executor (que sería el path de
+            // morphism). Las altas administrativas vía la
+            // metainterfaz quedan flagged como pre-versioning hasta
+            // que Action::Morphism wireé el Manifest.
+            log.append(LogEntry::Seed {
+                seq,
+                entity: entity.to_string(),
+                id,
+                data: data.clone(),
+                schema_hash: None,
+            })
+            .map_err(|e| format!("append al log: {e}"))?;
+        }
+
         if let Ok(mut store) = self.store.lock() {
-            store.seed(entity, id, Value::Object(obj));
+            store.seed(entity, id, data);
             Ok(id)
         } else {
             Err("store mutex envenenado".into())
@@ -738,5 +831,65 @@ mod tests {
         assert_eq!(render_value(Some(&json!(true))), "✓");
         assert_eq!(render_value(Some(&json!(false))), "✗");
         assert_eq!(render_value(Some(&json!(42))), "42");
+    }
+
+    /// E2E mínimo del WAL: armamos un log a mano con dos seeds,
+    /// abrimos con `EventLog::open` + `replay_into`, y verificamos
+    /// que el `MemoryStore` queda con esos records aplicados.
+    /// Esto reproduce el flujo del startup de `MetaUi::new` sin
+    /// necesitar GPUI.
+    #[test]
+    fn event_log_replay_restores_memory_store() {
+        use nakui_core::event_log::{replay_into, EventLog, LogEntry};
+        use nakui_core::store::{MemoryStore, Store};
+
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        // Cerramos el handle de tempfile pero conservamos el path
+        // para que EventLog pueda re-abrir.
+        drop(tmp);
+
+        // Escribimos dos seeds via EventLog::append.
+        let id_a = Uuid::new_v4();
+        let id_b = Uuid::new_v4();
+        {
+            let mut log = EventLog::open(&path).unwrap();
+            log.append(LogEntry::Seed {
+                seq: 0,
+                entity: "customer".into(),
+                id: id_a,
+                data: json!({"name": "Acme"}),
+                schema_hash: None,
+            })
+            .unwrap();
+            log.append(LogEntry::Seed {
+                seq: 1,
+                entity: "customer".into(),
+                id: id_b,
+                data: json!({"name": "Globex"}),
+                schema_hash: None,
+            })
+            .unwrap();
+        }
+
+        // Re-abrir + replay (simula startup de MetaUi).
+        let log = EventLog::open(&path).unwrap();
+        assert_eq!(log.next_seq(), 2, "next_seq debe ser 2 tras 2 entries");
+        let mut store = MemoryStore::new();
+        replay_into(&log, &mut store).unwrap();
+
+        // Verificar que ambos records están en el store.
+        assert_eq!(
+            store.load("customer", id_a),
+            Some(json!({"name": "Acme"})),
+            "Acme debería estar tras replay"
+        );
+        assert_eq!(
+            store.load("customer", id_b),
+            Some(json!({"name": "Globex"})),
+            "Globex debería estar tras replay"
+        );
+
+        let _ = std::fs::remove_file(&path);
     }
 }
