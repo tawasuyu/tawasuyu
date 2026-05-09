@@ -1,7 +1,12 @@
 [package]
 name = "nakui-core"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Nakui — ERP modular: graph runtime, executor de scripts Rhai, persistencia opcional SurrealDB."
 
 [features]
 default = []
@@ -11,20 +16,26 @@ default = []
 persistent = ["surrealdb/kv-surrealkv"]
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# Workspace-shared (versión y features alineadas con el resto del monorepo).
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+ulid = { workspace = true }
+sha2 = { workspace = true }
+# uuid del workspace ya activa "v4"; le sumamos "serde" para soporte
+# de derive en structs propios de nakui.
+uuid = { workspace = true, features = ["serde"] }
+
+# Específicas de nakui — no compartidas con otros crates del workspace,
+# por lo que se mantienen inline (versión local).
 rhai = { version = "1.20", features = ["serde"] }
-uuid = { version = "1", features = ["v4", "serde"] }
-thiserror = "1"
 petgraph = "0.6"
-sha2 = "0.10"
 surrealdb = { version = "2", default-features = false, features = ["kv-mem"] }
-tokio = { version = "1", features = ["rt", "macros"] }
 
 # Brahman protocol — presencia ante el Init cuando `nakui run` arranca.
 brahman-card = { path = "../../../core/brahman-card" }
 brahman-sidecar = { path = "../../../shared/brahman-sidecar" }
-ulid = { version = "1" }
 
 [[bin]]
 name = "nakui"
