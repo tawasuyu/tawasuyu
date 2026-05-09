@@ -28,7 +28,7 @@ use std::sync::{Arc, Mutex};
 
 use gpui::{
     div, prelude::*, px, App, Application, Bounds, ClickEvent, Context, Entity, IntoElement,
-    Render, SharedString, Window, WindowBounds, WindowOptions,
+    KeyDownEvent, Render, SharedString, Window, WindowBounds, WindowOptions,
 };
 use nakui_core::delta::{FieldOp, FieldPath};
 use nakui_core::event_log::{
@@ -1037,6 +1037,21 @@ impl Render for MetaUi {
             .flex_col()
             .size_full()
             .bg(bg)
+            // Capture phase: el Esc llega al root ANTES que cualquier
+            // TextInput descendiente. Si hay un delete pendiente, lo
+            // cancelamos. Sin pending no hacemos nada (el evento sigue
+            // su flujo normal y el TextInput recibe el Esc bubble).
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _w, cx| {
+                if event.keystroke.key != "escape" {
+                    return;
+                }
+                if let Some((entity, _id)) = this.pending_delete.take() {
+                    this.toast = Some(SharedString::from(format!(
+                        "delete cancelado ({entity}) [esc]"
+                    )));
+                    cx.notify();
+                }
+            }))
             .when_some(error_banner, |d, b| d.child(b))
             .when_some(confirm_banner, |d, b| d.child(b))
             .child(
@@ -1089,7 +1104,15 @@ impl MetaUi {
                 .child(
                     div()
                         .flex_grow()
-                        .child(format!("¿Borrar {entity_owned} {id_short}?")),
+                        .flex()
+                        .flex_col()
+                        .child(format!("¿Borrar {entity_owned} {id_short}?"))
+                        .child(
+                            div()
+                                .text_size(px(10.))
+                                .text_color(gpui::rgb(0xc0a070))
+                                .child("Esc para cancelar · click [Confirmar] para borrar"),
+                        ),
                 )
                 .child(
                     div()
