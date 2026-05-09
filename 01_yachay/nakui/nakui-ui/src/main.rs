@@ -34,6 +34,7 @@ use nakui_core::delta::{FieldOp, FieldPath};
 use nakui_core::event_log::{
     execute_and_log_with_recovery, replay_with_snapshot_into, EventLog, LogEntry, Snapshot,
 };
+use brahman_cards::CardBody;
 use nakui_core::executor::Executor;
 use nakui_core::store::{MemoryStore, Store};
 use nakui_ui_schema::{
@@ -125,17 +126,36 @@ impl MetaUi {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("nakui-modules"));
 
-        let (modules, mut load_error) =
-            match nakui_ui_schema::load_modules_from_dir(&modules_dir) {
-                Ok(m) => (m, None),
-                Err(e) => (
-                    Vec::new(),
+        // Carga via el brazo unificado: brahman_cards::load_cards_from_dir
+        // walkea subdirs buscando card.ncl/card.json/module.ncl/module.json,
+        // dispatcha al reader apropiado, devuelve Vec<Card>. Acá filtramos
+        // a los UiModule body variants y aplicamos las validaciones
+        // específicas de la UI (validate de cada Module + dedup de id).
+        // Cards de otros kinds (Ente, Monad) que aparezcan en el dir se
+        // skipean con un msg al banner — no son fatales pero el usuario
+        // sabe que estaban ahí.
+        let (modules, mut load_error) = match load_ui_modules(&modules_dir) {
+            Ok((mods, skipped)) => {
+                let toast = if skipped.is_empty() {
+                    None
+                } else {
                     Some(SharedString::from(format!(
-                        "no pude cargar módulos de {}: {e}",
-                        modules_dir.display()
-                    ))),
-                ),
-            };
+                        "skipeé {} card(s) no-UiModule en {}: {:?}",
+                        skipped.len(),
+                        modules_dir.display(),
+                        skipped
+                    )))
+                };
+                (mods, toast)
+            }
+            Err(e) => (
+                Vec::new(),
+                Some(SharedString::from(format!(
+                    "no pude cargar módulos de {}: {e}",
+                    modules_dir.display()
+                ))),
+            ),
+        };
 
         // Persistencia: abrir/crear el event log + opcionalmente un
         // snapshot sibling para acortar el replay. Path del log por
@@ -895,6 +915,50 @@ impl CommitOutcome {
 /// Concatena un mensaje de compact opcional al toast del op original.
 /// Devuelve el toast resultante listo para ir a `SharedString`.
 /// Sin `compact_msg` devuelve `base` tal cual.
+/// Carga UiModules desde un directorio via el brazo unificado
+/// `brahman_cards::load_cards_from_dir`. Aplica las reglas
+/// específicas de la UI:
+///  - Sólo `CardBody::UiModule` cuenta; otros body kinds
+///    (Ente, Monad, ...) se reportan en el `skipped` para que el
+///    runtime los muestre como banner informativo.
+///  - Cada `Module` se valida via `Module::validate()`.
+///  - Detecta `id` duplicados entre módulos UiModule (el runtime
+///    los direcciona por id; duplicados serían ambiguos).
+///
+/// Devuelve `(modules, skipped_ids)` ordenados por id.
+fn load_ui_modules(
+    dir: &std::path::Path,
+) -> Result<(Vec<Module>, Vec<String>), String> {
+    let cards = brahman_cards::load_cards_from_dir(dir)
+        .map_err(|e| e.to_string())?;
+    let mut modules: Vec<Module> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
+    for c in cards {
+        match c.body {
+            CardBody::UiModule(m) => modules.push(m),
+            other => skipped.push(format!("{}({})", c.id, other.kind_name())),
+        }
+    }
+    for m in &modules {
+        m.validate()
+            .map_err(|e| format!("módulo '{}' inválido: {e}", m.id))?;
+    }
+    modules.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut prev: Option<&Module> = None;
+    for cur in &modules {
+        if let Some(p) = prev {
+            if p.id == cur.id {
+                return Err(format!(
+                    "id de módulo duplicado: '{}' aparece más de una vez",
+                    cur.id
+                ));
+            }
+        }
+        prev = Some(cur);
+    }
+    Ok((modules, skipped))
+}
+
 fn append_compact_msg(base: String, compact_msg: Option<String>) -> SharedString {
     match compact_msg {
         Some(m) => SharedString::from(format!("{base}; {m}")),
@@ -2173,6 +2237,102 @@ mod tests {
         // Mismo UUID, target distinto.
         let refs = vec![("Stock".into(), "Stock".into(), id)];
         assert!(validate_entity_refs(&store, &refs).is_err());
+    }
+
+    /// E2E del nuevo `load_ui_modules` que pasa por
+    /// `brahman_cards::load_cards_from_dir`. Verifica:
+    /// 1. UiModules cargados ordenados por id.
+    /// 2. Validación per-module se aplica (un module.json con
+    ///    menu apuntando a una view inexistente debería fallar).
+    /// 3. Cards de otros body kinds (Ente fixture) se reportan
+    ///    en el `skipped` sin romper la carga.
+    #[test]
+    fn load_ui_modules_via_brahman_cards_returns_ui_modules_and_skips_others() {
+        let root = tempfile::tempdir().unwrap();
+
+        // Subdir A: UiModule válido.
+        let a = root.path().join("alpha");
+        std::fs::create_dir(&a).unwrap();
+        std::fs::write(
+            a.join("module.json"),
+            serde_json::to_vec(&json!({
+                "id": "alpha",
+                "label": "Alpha",
+                "entities": [],
+                "menu": [],
+                "views": {}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        // Subdir B: Ente card (no UiModule). Debe skipearse,
+        // no romper la carga.
+        let b = root.path().join("bravo");
+        std::fs::create_dir(&b).unwrap();
+        std::fs::write(
+            b.join("card.json"),
+            serde_json::to_vec(&json!({
+                "schema_version": 1,
+                "id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "label": "ente-bravo",
+                "payload": "Virtual",
+                "supervision": "OneShot"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let (modules, skipped) =
+            load_ui_modules(root.path()).expect("load ok");
+        assert_eq!(modules.len(), 1);
+        assert_eq!(modules[0].id, "alpha");
+        assert_eq!(skipped.len(), 1);
+        assert!(skipped[0].contains("ente"));
+    }
+
+    #[test]
+    fn load_ui_modules_via_brahman_cards_rejects_invalid_module() {
+        let root = tempfile::tempdir().unwrap();
+        let sub = root.path().join("broken");
+        std::fs::create_dir(&sub).unwrap();
+        // menu apunta a una view que no existe en `views`.
+        std::fs::write(
+            sub.join("module.json"),
+            serde_json::to_vec(&json!({
+                "id": "broken",
+                "label": "Broken",
+                "entities": [],
+                "menu": [{ "label": "Phantom", "view": "ghost" }],
+                "views": {}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let err = load_ui_modules(root.path()).unwrap_err();
+        assert!(err.contains("broken"), "msg debe nombrar el módulo: {err}");
+    }
+
+    #[test]
+    fn load_ui_modules_detects_duplicate_id() {
+        let root = tempfile::tempdir().unwrap();
+        for name in ["dir_a", "dir_b"] {
+            let sub = root.path().join(name);
+            std::fs::create_dir(&sub).unwrap();
+            std::fs::write(
+                sub.join("module.json"),
+                serde_json::to_vec(&json!({
+                    "id": "dup",
+                    "label": "Dup",
+                    "entities": [], "menu": [], "views": {}
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        let err = load_ui_modules(root.path()).unwrap_err();
+        assert!(err.contains("duplicado"), "msg debe decir duplicado: {err}");
+        assert!(err.contains("dup"), "msg debe nombrar el id: {err}");
     }
 
     #[test]
