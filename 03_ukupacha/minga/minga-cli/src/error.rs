@@ -40,4 +40,10 @@ pub enum CliError {
 
     #[error("notify (file watcher): {0}")]
     Notify(#[from] notify::Error),
+
+    #[error(
+        "lenguaje no soportado para {path}: extensión '{extension}' no mapea \
+         a ningún dialecto conocido (rs, py, pyi, ts, js, mjs, cjs, go)"
+    )]
+    UnsupportedLanguage { path: PathBuf, extension: String },
 }

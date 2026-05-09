@@ -83,7 +83,8 @@ pub fn cmd_ingest(
     let repo = PersistentRepo::open(repo_path.join(REPO_DIRNAME))?;
 
     let source = fs::read_to_string(file)?;
-    let node = parse::rust(&source)?;
+    let dialect = detect_dialect(file)?;
+    let node = dialect.parse(&source)?;
     let hash = repo.nodes.put(&node)?;
     repo.mst.insert(hash)?;
     repo.attestations
@@ -93,6 +94,21 @@ pub fn cmd_ingest(
     Ok(IngestResult {
         hash,
         did: keypair.did(),
+    })
+}
+
+/// Detecta el dialecto desde la extensión del archivo. Error si la
+/// extensión no corresponde a un lenguaje soportado.
+fn detect_dialect(file: &Path) -> Result<parse::Dialect, CliError> {
+    let ext = file
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    parse::detect_by_extension(ext).ok_or_else(|| {
+        CliError::UnsupportedLanguage {
+            path: file.to_path_buf(),
+            extension: ext.to_string(),
+        }
     })
 }
 
@@ -191,7 +207,7 @@ pub async fn cmd_watch(
             continue;
         }
         for path in &event.paths {
-            if is_rs_file(path) {
+            if is_supported_source(path) {
                 match ingest_into_repo(&repo, &keypair, path) {
                     Ok(hash) => {
                         eprintln!("ingerido: {} → {}", path.display(), hash);
@@ -213,7 +229,7 @@ fn initial_scan(repo: &PersistentRepo, keypair: &Keypair, dir: &Path) {
     };
     for entry in entries.flatten() {
         let p = entry.path();
-        if is_rs_file(&p) {
+        if is_supported_source(&p) {
             let _ = ingest_into_repo(repo, keypair, &p);
         }
     }
@@ -225,7 +241,8 @@ fn ingest_into_repo(
     file: &Path,
 ) -> Result<ContentHash, CliError> {
     let source = fs::read_to_string(file)?;
-    let node = parse::rust(&source)?;
+    let dialect = detect_dialect(file)?;
+    let node = dialect.parse(&source)?;
     let hash = repo.nodes.put(&node)?;
     repo.mst.insert(hash)?;
     repo.attestations
@@ -234,8 +251,14 @@ fn ingest_into_repo(
     Ok(hash)
 }
 
-fn is_rs_file(path: &Path) -> bool {
-    path.extension().and_then(|e| e.to_str()) == Some("rs") && path.is_file()
+/// Detecta si un archivo debe ingerirse: existe, es regular, y su
+/// extensión corresponde a un dialecto soportado.
+fn is_supported_source(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    parse::detect_by_extension(ext).is_some()
 }
 
 fn is_relevant_event(event: &notify::Event) -> bool {
