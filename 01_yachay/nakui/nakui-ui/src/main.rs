@@ -30,6 +30,7 @@ use gpui::{
     div, prelude::*, px, App, Application, Bounds, ClickEvent, Context, Entity, IntoElement,
     Render, SharedString, Window, WindowBounds, WindowOptions,
 };
+use nakui_core::delta::{FieldOp, FieldPath};
 use nakui_core::event_log::{replay_into, EventLog, LogEntry};
 use nakui_core::store::{MemoryStore, Store};
 use nakui_ui_schema::{
@@ -79,6 +80,12 @@ struct MetaUi {
     /// Inputs vivos para el form actual: nombre del campo → TextInput.
     /// Se reemplaza al cambiar de vista (drop de los anteriores).
     form_inputs: BTreeMap<String, Entity<TextInput>>,
+    /// Si está set, el próximo render del Form pre-llena los inputs
+    /// con los valores del record indicado, y `commit_seed` emite
+    /// un `LogEntry::Morphism { name: "ui.edit_record", ops: [Set...] }`
+    /// en lugar de un Seed nuevo. Limpia al cambiar de view o tras
+    /// submit exitoso.
+    editing: Option<(String, Uuid)>,
     /// Mensaje toast al pie (success de submit, error de carga, etc.).
     toast: Option<SharedString>,
     /// Si la carga de módulos falló al inicio.
@@ -172,13 +179,16 @@ impl MetaUi {
             event_log,
             active,
             form_inputs: BTreeMap::new(),
+            editing: None,
             toast: initial_toast,
             load_error,
         }
     }
 
     /// Cambia la vista activa. Si la nueva vista es un Form, crea
-    /// `TextInput` entities para cada field con su valor por defecto.
+    /// `TextInput` entities para cada field. Pre-llena con valores
+    /// del record si hay `editing` para esa entity; si no, usa el
+    /// `default` del schema.
     /// Drop de los inputs anteriores ocurre al sobreescribir el map.
     fn select_view(&mut self, mod_idx: usize, view_key: String, cx: &mut Context<Self>) {
         self.active = Some((mod_idx, view_key.clone()));
@@ -186,14 +196,100 @@ impl MetaUi {
         self.form_inputs = BTreeMap::new();
         if let Some(module) = self.modules.get(mod_idx) {
             if let Some(View::Form(form)) = module.views.get(&view_key) {
+                // Snapshot del record si estamos editando esta entity.
+                let editing_record: Option<Value> = self.editing.as_ref().and_then(|(e, id)| {
+                    if e == &form.entity {
+                        let store = self.store.lock().ok()?;
+                        store.load(e, *id)
+                    } else {
+                        None
+                    }
+                });
                 for f in &form.fields {
-                    let initial = f.default.clone().unwrap_or_default();
+                    let initial = if let Some(rec) = &editing_record {
+                        rec.get(&f.name)
+                            .map(value_to_input_text)
+                            .unwrap_or_else(|| f.default.clone().unwrap_or_default())
+                    } else {
+                        f.default.clone().unwrap_or_default()
+                    };
                     let input = cx.new(|cx| TextInput::new(initial, cx));
                     self.form_inputs.insert(f.name.clone(), input);
                 }
+            } else {
+                // Cambiar a una view que no es Form invalida el editing
+                // pendiente.
+                self.editing = None;
             }
         }
         cx.notify();
+    }
+
+    /// Inicia un edit del record: setea `editing` y abre la primera
+    /// view de tipo Form del módulo (convención: la del schema).
+    fn open_edit(
+        &mut self,
+        mod_idx: usize,
+        entity: String,
+        id: Uuid,
+        cx: &mut Context<Self>,
+    ) {
+        self.editing = Some((entity.clone(), id));
+        let form_view_key = self.modules.get(mod_idx).and_then(|m| {
+            m.views
+                .iter()
+                .find_map(|(key, v)| match v {
+                    View::Form(form) if form.entity == entity => Some(key.clone()),
+                    _ => None,
+                })
+        });
+        match form_view_key {
+            Some(key) => self.select_view(mod_idx, key, cx),
+            None => {
+                self.toast = Some(SharedString::from(format!(
+                    "no hay form view para entity '{entity}' en este módulo"
+                )));
+                self.editing = None;
+                cx.notify();
+            }
+        }
+    }
+
+    /// Borra un record. Emite Morphism con un FieldOp::Delete + lo
+    /// aplica al store via `apply` (no via remove directo, mantiene
+    /// el modelo de "todo cambio post-seed pasa por ops").
+    fn commit_delete(
+        &mut self,
+        entity: &str,
+        id: Uuid,
+    ) -> Result<(), String> {
+        let ops = vec![FieldOp::Delete {
+            entity: entity.to_string(),
+            id,
+        }];
+        if let Some(log_arc) = self.event_log.as_ref() {
+            let mut log = log_arc
+                .lock()
+                .map_err(|_| "log mutex envenenado".to_string())?;
+            let seq = log.next_seq();
+            log.append(LogEntry::Morphism {
+                seq,
+                morphism: "ui.delete_record".into(),
+                inputs: Default::default(),
+                params: json!({ "entity": entity, "id": id.to_string() }),
+                ops: ops.clone(),
+                schema_hash: None,
+            })
+            .map_err(|e| format!("append al log: {e}"))?;
+        }
+        let mut store = self
+            .store
+            .lock()
+            .map_err(|_| "store mutex envenenado".to_string())?;
+        store
+            .apply(&ops)
+            .map_err(|e| format!("apply Delete: {e}"))?;
+        Ok(())
     }
 
     /// Aplica una acción (click en menú, botón de form, action de
@@ -203,21 +299,30 @@ impl MetaUi {
             Some((i, _)) => *i,
             None => return,
         };
+        // Snapshot del editing al entrar — si commit_seed modifica
+        // self.editing antes del toast, el mensaje refleja el modo
+        // correcto.
+        let was_editing = self.editing.is_some();
         match action {
             Action::OpenView { view, .. } => {
+                // Salir a otra view cancela el edit pendiente.
+                self.editing = None;
                 self.select_view(mod_idx, view, cx);
             }
             Action::SeedEntity { entity, next_view } => {
                 match self.commit_seed(mod_idx, &entity, cx) {
                     Ok(id) => {
+                        let action_label = if was_editing { "actualizado" } else { "creado" };
                         self.toast = Some(SharedString::from(format!(
-                            "creado {entity} {}",
+                            "{action_label} {entity} {}",
                             short_uuid(&id)
                         )));
+                        // Limpia editing tras un commit exitoso —
+                        // el record ya está sincronizado.
+                        self.editing = None;
                         if let Some(v) = next_view {
                             self.select_view(mod_idx, v, cx);
                         } else {
-                            // Reset inputs al vacío para alta consecutiva.
                             for input in self.form_inputs.values() {
                                 input.update(cx, |inp, cx| inp.set_text("", cx));
                             }
@@ -270,40 +375,75 @@ impl MetaUi {
                 .map_err(|e| format!("campo '{}': {e}", f.label))?;
             obj.insert(f.name.clone(), value);
         }
-        let id = Uuid::new_v4();
-        let data = Value::Object(obj);
+        // Ramificación: si `editing` está set para esta entity, es un
+        // edit de un record existente — emitimos Morphism con un
+        // FieldOp::Set por cada campo del form (sobreescribe). Si no,
+        // es alta nueva — emitimos Seed con UUID fresco.
+        let editing_match = self.editing.as_ref().filter(|(e, _)| e == entity).cloned();
 
-        // WAL: si hay event_log activo, escribir al log ANTES de mutar
-        // el store. Si el log falla, cancelamos toda la operación (el
-        // user reintenta). Si no hay log (degraded), seedea al store
-        // y aceptamos no-persistencia.
-        if let Some(log_arc) = self.event_log.as_ref() {
-            let mut log = log_arc
+        if let Some((_, id)) = editing_match {
+            // EDIT path: Morphism { ui.edit_record, ops: [Set...] }
+            let ops: Vec<FieldOp> = obj
+                .iter()
+                .map(|(field, value)| FieldOp::Set {
+                    path: FieldPath {
+                        entity: entity.to_string(),
+                        id,
+                        field: field.clone(),
+                    },
+                    value: value.clone(),
+                })
+                .collect();
+
+            if let Some(log_arc) = self.event_log.as_ref() {
+                let mut log = log_arc
+                    .lock()
+                    .map_err(|_| "log mutex envenenado".to_string())?;
+                let seq = log.next_seq();
+                log.append(LogEntry::Morphism {
+                    seq,
+                    morphism: "ui.edit_record".into(),
+                    inputs: Default::default(),
+                    params: json!({
+                        "entity": entity,
+                        "id": id.to_string(),
+                        "fields": Value::Object(obj.clone()),
+                    }),
+                    ops: ops.clone(),
+                    schema_hash: None,
+                })
+                .map_err(|e| format!("append al log: {e}"))?;
+            }
+            let mut store = self
+                .store
                 .lock()
-                .map_err(|_| "log mutex envenenado".to_string())?;
-            let seq = log.next_seq();
-            // schema_hash = None: ver doc del campo en
-            // nakui_core::event_log::LogEntry — "legacy/pre-versioning
-            // entries". Es el path correcto cuando el ingreso no
-            // pasa por un Manifest+Executor (que sería el path de
-            // morphism). Las altas administrativas vía la
-            // metainterfaz quedan flagged como pre-versioning hasta
-            // que Action::Morphism wireé el Manifest.
-            log.append(LogEntry::Seed {
-                seq,
-                entity: entity.to_string(),
-                id,
-                data: data.clone(),
-                schema_hash: None,
-            })
-            .map_err(|e| format!("append al log: {e}"))?;
-        }
-
-        if let Ok(mut store) = self.store.lock() {
-            store.seed(entity, id, data);
+                .map_err(|_| "store mutex envenenado".to_string())?;
+            store.apply(&ops).map_err(|e| format!("apply Set: {e}"))?;
             Ok(id)
         } else {
-            Err("store mutex envenenado".into())
+            // SEED path: alta nueva.
+            let id = Uuid::new_v4();
+            let data = Value::Object(obj);
+            if let Some(log_arc) = self.event_log.as_ref() {
+                let mut log = log_arc
+                    .lock()
+                    .map_err(|_| "log mutex envenenado".to_string())?;
+                let seq = log.next_seq();
+                log.append(LogEntry::Seed {
+                    seq,
+                    entity: entity.to_string(),
+                    id,
+                    data: data.clone(),
+                    schema_hash: None,
+                })
+                .map_err(|e| format!("append al log: {e}"))?;
+            }
+            let mut store = self
+                .store
+                .lock()
+                .map_err(|_| "store mutex envenenado".to_string())?;
+            store.seed(entity, id, data);
+            Ok(id)
         }
     }
 
@@ -358,6 +498,19 @@ fn render_value(v: Option<&Value>) -> String {
         Some(Value::Bool(b)) => if *b { "✓" } else { "✗" }.to_string(),
         Some(Value::Number(n)) => n.to_string(),
         Some(other) => other.to_string(),
+    }
+}
+
+/// Conversión inversa a `parse_field_value`: del JSON al texto raw
+/// que un input puede tomar y volver a parsearse igual al submit.
+/// Usado para pre-llenar inputs en modo edit.
+fn value_to_input_text(v: &Value) -> String {
+    match v {
+        Value::Null => String::new(),
+        Value::String(s) => s.clone(),
+        Value::Bool(b) => if *b { "true" } else { "false" }.to_string(),
+        Value::Number(n) => n.to_string(),
+        other => other.to_string(),
     }
 }
 
@@ -627,10 +780,16 @@ impl MetaUi {
                     .child(c.label.clone()),
             );
         }
-        col_header = col_header.child(div().w(px(80.)).text_color(text_dim).child("id"));
+        col_header = col_header
+            .child(div().w(px(80.)).text_color(text_dim).child("id"))
+            .child(div().w(px(70.)).text_color(text_dim).child("acciones"));
         main = main.child(col_header);
 
+        let entity_name = lv.entity.clone();
         for (id, value) in &rows {
+            let id_copy = *id;
+            let entity_for_edit = entity_name.clone();
+            let entity_for_delete = entity_name.clone();
             let mut row = div()
                 .flex()
                 .flex_row()
@@ -655,6 +814,55 @@ impl MetaUi {
                     .text_color(text_dim)
                     .text_size(px(11.))
                     .child(short_uuid(id)),
+            );
+            // Acciones: ✎ edit + ✕ delete por fila.
+            row = row.child(
+                div()
+                    .w(px(70.))
+                    .flex()
+                    .flex_row()
+                    .gap(px(4.))
+                    .child(
+                        div()
+                            .id(SharedString::from(format!(
+                                "row-edit-{mod_idx}-{id_copy}"
+                            )))
+                            .px(px(6.))
+                            .text_color(accent)
+                            .text_size(px(13.))
+                            .hover(|d| d.bg(gpui::rgb(0x2c3540)))
+                            .child("✎")
+                            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                                this.open_edit(mod_idx, entity_for_edit.clone(), id_copy, cx);
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!(
+                                "row-del-{mod_idx}-{id_copy}"
+                            )))
+                            .px(px(6.))
+                            .text_color(gpui::rgb(0xd07070))
+                            .text_size(px(13.))
+                            .hover(|d| d.bg(gpui::rgb(0x4a2020)))
+                            .child("✕")
+                            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                                match this.commit_delete(&entity_for_delete, id_copy) {
+                                    Ok(()) => {
+                                        this.toast = Some(SharedString::from(format!(
+                                            "borrado {entity_for_delete} {}",
+                                            short_uuid(&id_copy)
+                                        )));
+                                    }
+                                    Err(e) => {
+                                        this.toast = Some(SharedString::from(format!(
+                                            "error borrando: {e}"
+                                        )));
+                                    }
+                                }
+                                cx.notify();
+                            })),
+                    ),
             );
             main = main.child(row);
         }
@@ -692,12 +900,20 @@ impl MetaUi {
         text_dim: gpui::Rgba,
         accent: gpui::Rgba,
     ) -> gpui::Div {
+        // En modo edit, el título refleja eso para que el user no
+        // se confunda creyendo que hace alta nueva.
+        let title = match self.editing.as_ref() {
+            Some((e, id)) if e == &fv.entity => {
+                format!("Editar {} {}", fv.entity, short_uuid(id))
+            }
+            _ => fv.title.clone(),
+        };
         main = main.child(
             div()
                 .text_color(text)
                 .text_size(px(18.))
                 .mb(px(12.))
-                .child(fv.title.clone()),
+                .child(title),
         );
         for f in &fv.fields {
             let label = if f.required {
@@ -742,8 +958,18 @@ impl MetaUi {
             main = main.child(field_box);
         }
 
+        let editing_this = matches!(
+            self.editing.as_ref(),
+            Some((e, _)) if e == &fv.entity
+        );
         let submit_label = match &fv.on_submit {
-            Action::SeedEntity { entity, .. } => format!("Crear {entity}"),
+            Action::SeedEntity { entity, .. } => {
+                if editing_this {
+                    format!("Guardar cambios en {entity}")
+                } else {
+                    format!("Crear {entity}")
+                }
+            }
             Action::Morphism { name, .. } => format!("Ejecutar {name}"),
             Action::OpenView { label, view } => {
                 label.clone().unwrap_or_else(|| format!("Ir a {view}"))
@@ -833,6 +1059,40 @@ mod tests {
         assert_eq!(render_value(Some(&json!(42))), "42");
     }
 
+    #[test]
+    fn value_to_input_text_inverse_of_parse() {
+        // text → text
+        assert_eq!(value_to_input_text(&json!("hola")), "hola");
+        // bool → "true"/"false" (parse_field_value lo acepta)
+        assert_eq!(value_to_input_text(&json!(true)), "true");
+        assert_eq!(value_to_input_text(&json!(false)), "false");
+        // number → string
+        assert_eq!(value_to_input_text(&json!(42)), "42");
+        assert_eq!(value_to_input_text(&json!(3.14)), "3.14");
+        // null → ""
+        assert_eq!(value_to_input_text(&json!(null)), "");
+    }
+
+    #[test]
+    fn value_to_input_then_parse_round_trip() {
+        // El round-trip es la propiedad fundamental: edit → text →
+        // parse → mismo Value (modulo casts numéricos).
+        let cases = vec![
+            (FieldKind::Text, json!("hola")),
+            (FieldKind::Boolean, json!(true)),
+            (FieldKind::Boolean, json!(false)),
+            (FieldKind::Number, json!(42)),
+        ];
+        for (kind, original) in cases {
+            let text = value_to_input_text(&original);
+            let parsed = parse_field_value(kind, &text).unwrap();
+            assert_eq!(
+                parsed, original,
+                "round-trip text→parse falló para {original:?}"
+            );
+        }
+    }
+
     /// E2E mínimo del WAL: armamos un log a mano con dos seeds,
     /// abrimos con `EventLog::open` + `replay_into`, y verificamos
     /// que el `MemoryStore` queda con esos records aplicados.
@@ -888,6 +1148,120 @@ mod tests {
             store.load("customer", id_b),
             Some(json!({"name": "Globex"})),
             "Globex debería estar tras replay"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// E2E del ciclo CRUD vía log:
+    /// 1. Seed un record.
+    /// 2. Morphism con Set ops (edit) — sobreescribe campos.
+    /// 3. Morphism con Delete op — borra el record.
+    /// 4. Replay desde cero: el store queda como tras el delete (vacío).
+    #[test]
+    fn event_log_replay_handles_full_crud_cycle() {
+        use nakui_core::delta::{FieldOp, FieldPath};
+        use nakui_core::event_log::{replay_into, EventLog, LogEntry};
+        use nakui_core::store::{MemoryStore, Store};
+
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        drop(tmp);
+
+        let id = Uuid::new_v4();
+
+        // 1. Escribir 3 entries: seed, edit, delete.
+        {
+            let mut log = EventLog::open(&path).unwrap();
+            log.append(LogEntry::Seed {
+                seq: 0,
+                entity: "customer".into(),
+                id,
+                data: json!({"name": "Acme", "active": true}),
+                schema_hash: None,
+            })
+            .unwrap();
+            log.append(LogEntry::Morphism {
+                seq: 1,
+                morphism: "ui.edit_record".into(),
+                inputs: Default::default(),
+                params: json!({}),
+                ops: vec![
+                    FieldOp::Set {
+                        path: FieldPath {
+                            entity: "customer".into(),
+                            id,
+                            field: "name".into(),
+                        },
+                        value: json!("Acme S.A."),
+                    },
+                    FieldOp::Set {
+                        path: FieldPath {
+                            entity: "customer".into(),
+                            id,
+                            field: "active".into(),
+                        },
+                        value: json!(false),
+                    },
+                ],
+                schema_hash: None,
+            })
+            .unwrap();
+            log.append(LogEntry::Morphism {
+                seq: 2,
+                morphism: "ui.delete_record".into(),
+                inputs: Default::default(),
+                params: json!({}),
+                ops: vec![FieldOp::Delete {
+                    entity: "customer".into(),
+                    id,
+                }],
+                schema_hash: None,
+            })
+            .unwrap();
+        }
+
+        // 2. Replay desde cero — debe terminar con store vacío
+        // (el delete fue el último op).
+        let log = EventLog::open(&path).unwrap();
+        let mut store = MemoryStore::new();
+        replay_into(&log, &mut store).unwrap();
+        assert_eq!(
+            store.load("customer", id),
+            None,
+            "tras seed + edit + delete, el record no debería existir"
+        );
+
+        // 3. Sanity: si paramos en seq=1 (snapshot post-edit), el
+        // record debería tener los valores editados.
+        // (Construimos un store fresh y aplicamos sólo seq 0 y 1
+        // a mano para verificar.)
+        let mut store_partial = MemoryStore::new();
+        store_partial.seed("customer", id, json!({"name": "Acme", "active": true}));
+        store_partial
+            .apply(&[
+                FieldOp::Set {
+                    path: FieldPath {
+                        entity: "customer".into(),
+                        id,
+                        field: "name".into(),
+                    },
+                    value: json!("Acme S.A."),
+                },
+                FieldOp::Set {
+                    path: FieldPath {
+                        entity: "customer".into(),
+                        id,
+                        field: "active".into(),
+                    },
+                    value: json!(false),
+                },
+            ])
+            .unwrap();
+        assert_eq!(
+            store_partial.load("customer", id),
+            Some(json!({"name": "Acme S.A.", "active": false})),
+            "tras seed + edit, el record debería tener los nuevos valores"
         );
 
         let _ = std::fs::remove_file(&path);
