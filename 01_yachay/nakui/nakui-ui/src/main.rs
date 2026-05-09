@@ -705,6 +705,10 @@ impl MetaUi {
         // current store value tiene algo en ese key). En el SEED path
         // simplemente no se incluyen, igual que antes.
         let mut to_clear: Vec<String> = Vec::new();
+        // EntityRef references a chequear existencia DESPUÉS del parse
+        // loop (necesitan lock del store; lo tomamos una sola vez).
+        // Tuple: (label legible, target entity, parsed UUID).
+        let mut entity_refs: Vec<(String, String, Uuid)> = Vec::new();
         for f in &spec_fields {
             let raw = self
                 .form_inputs
@@ -720,7 +724,27 @@ impl MetaUi {
             }
             let value = parse_field_value(f.kind, &raw)
                 .map_err(|e| format!("campo '{}': {e}", f.label))?;
+            // Si el field es EntityRef y declara ref_entity, encolamos
+            // el (label, target, uuid) para validar existence en lote.
+            // El UUID ya está bien-formado (parse_field_value lo
+            // validó); ahora chequeamos que el record exista.
+            if f.kind == FieldKind::EntityRef {
+                if let (Some(target), Some(uuid_str)) = (&f.ref_entity, value.as_str()) {
+                    let id = Uuid::parse_str(uuid_str)
+                        .expect("parse_field_value validated UUID");
+                    entity_refs.push((f.label.clone(), target.clone(), id));
+                }
+            }
             obj.insert(f.name.clone(), value);
+        }
+        // Validar EntityRefs contra el store actual. Una sola toma del
+        // lock para todas las refs.
+        if !entity_refs.is_empty() {
+            let store = self
+                .store
+                .lock()
+                .map_err(|_| "store mutex envenenado".to_string())?;
+            validate_entity_refs(&*store, &entity_refs)?;
         }
         // Ramificación: si `editing` está set para esta entity, es un
         // edit de un record existente — emitimos Morphism con un
@@ -939,6 +963,33 @@ fn maybe_compact_log(
         "auto-compact: snapshot @ seq {snap_seq}, {} entries dropped (1 anchor kept)",
         entry_count - 1
     )))
+}
+
+/// Valida que cada UUID en `refs` apunte a un record que realmente
+/// existe en el store bajo la entity esperada. Devuelve el primer
+/// error encontrado (fail-fast).
+///
+/// `refs` es una lista de `(label, target_entity, uuid)`. El label
+/// va al error message, así que conviene que sea legible (ej:
+/// `FieldSpec.label` en lugar de `FieldSpec.name`).
+///
+/// Sólo se llama desde el SEED path de la UI. Los inputs de morphism
+/// no necesitan este check porque `Executor::compute` ya valida cada
+/// input via `store.load(...).ok_or(EntityMissing)` antes de correr
+/// el script Rhai.
+fn validate_entity_refs<S: Store>(
+    store: &S,
+    refs: &[(String, String, Uuid)],
+) -> Result<(), String> {
+    for (label, target, id) in refs {
+        if store.load(target, *id).is_none() {
+            return Err(format!(
+                "campo '{label}': record {} de '{target}' no existe en el store",
+                short_uuid(id)
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Decide cuáles fields del `to_clear` candidate list ameritan
@@ -2057,6 +2108,71 @@ mod tests {
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(&snap_path);
+    }
+
+    #[test]
+    fn validate_entity_refs_passes_when_all_records_exist() {
+        let mut store = MemoryStore::new();
+        let stock_id = Uuid::new_v4();
+        let caja_id = Uuid::new_v4();
+        store.seed("Stock", stock_id, json!({"sku_id": "abc"}));
+        store.seed("Caja", caja_id, json!({"name": "Principal"}));
+        let refs = vec![
+            ("Stock".into(), "Stock".into(), stock_id),
+            ("Caja".into(), "Caja".into(), caja_id),
+        ];
+        assert!(validate_entity_refs(&store, &refs).is_ok());
+    }
+
+    #[test]
+    fn validate_entity_refs_fails_on_first_missing() {
+        let mut store = MemoryStore::new();
+        let stock_id = Uuid::new_v4();
+        store.seed("Stock", stock_id, json!({"sku_id": "abc"}));
+        let missing_caja = Uuid::new_v4();
+        let refs = vec![
+            ("Stock".into(), "Stock".into(), stock_id),
+            ("Caja".into(), "Caja".into(), missing_caja),
+        ];
+        let err = validate_entity_refs(&store, &refs).unwrap_err();
+        assert!(err.contains("Caja"), "msg debe nombrar la entity: {err}");
+        assert!(
+            err.contains(&short_uuid(&missing_caja)),
+            "msg debe incluir el UUID corto: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_entity_refs_uses_label_not_entity_in_msg() {
+        // Si el FieldSpec.label es distinto de la entity (ej:
+        // "Stock origen" en lugar de "Stock"), el error debería usar
+        // el label legible.
+        let store = MemoryStore::new();
+        let id = Uuid::new_v4();
+        let refs = vec![("Stock origen".into(), "Stock".into(), id)];
+        let err = validate_entity_refs(&store, &refs).unwrap_err();
+        assert!(
+            err.contains("Stock origen"),
+            "msg debe incluir el label: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_entity_refs_empty_list_is_ok() {
+        let store = MemoryStore::new();
+        assert!(validate_entity_refs(&store, &[]).is_ok());
+    }
+
+    #[test]
+    fn validate_entity_refs_distinguishes_target_from_other_entities() {
+        // Sanity: un UUID que existe bajo entity X pero NO bajo Y
+        // debería fallar la validación contra Y.
+        let mut store = MemoryStore::new();
+        let id = Uuid::new_v4();
+        store.seed("Customer", id, json!({"name": "Acme"}));
+        // Mismo UUID, target distinto.
+        let refs = vec![("Stock".into(), "Stock".into(), id)];
+        assert!(validate_entity_refs(&store, &refs).is_err());
     }
 
     #[test]
