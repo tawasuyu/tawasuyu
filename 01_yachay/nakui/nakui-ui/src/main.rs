@@ -37,7 +37,7 @@ use nakui_core::event_log::{
 use brahman_cards::CardBody;
 use nakui_core::executor::Executor;
 use nakui_core::store::{MemoryStore, Store};
-use nakui_ui_schema::{
+use yahweh_meta_schema::{
     Action, FieldKind, FieldSpec, FormView, ListView, Module, View,
 };
 use serde_json::{json, Value};
