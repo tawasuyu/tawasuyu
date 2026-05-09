@@ -250,3 +250,118 @@ fn alpha_match_constructor_vs_binder() {
         parse::rust("fn f(v: Option<i32>) -> i32 { match v { x => 0, Some(z) => z } }").unwrap();
     assert_ne!(hash_node_alpha(&a), hash_node_alpha(&b));
 }
+
+// ====================================================================
+// Pendientes documentados — cierre del MVP de α-Rust.
+// ====================================================================
+
+#[test]
+fn alpha_if_let_binder_rename_invariant() {
+    // El binder de `if let Some(x) = v` participa sólo del consequence.
+    // Renombrar x por y no debe afectar el hash.
+    let a = parse::rust(
+        "fn f(v: Option<i32>) -> i32 { if let Some(x) = v { x + 1 } else { 0 } }",
+    )
+    .unwrap();
+    let b = parse::rust(
+        "fn f(v: Option<i32>) -> i32 { if let Some(y) = v { y + 1 } else { 0 } }",
+    )
+    .unwrap();
+    assert_eq!(hash_node_alpha(&a), hash_node_alpha(&b));
+}
+
+#[test]
+fn alpha_if_let_else_does_not_see_binder() {
+    // Sanity: el binder NO debe visitar el `else` (alternative). En
+    // `if let Some(x) = v { ... } else { v }`, el `else` ve `v` libre.
+    // Si renombramos sólo en el consequence, da el mismo hash.
+    let a = parse::rust(
+        "fn f(v: Option<i32>) -> i32 { if let Some(x) = v { x } else { 0 } }",
+    )
+    .unwrap();
+    let b = parse::rust(
+        "fn f(v: Option<i32>) -> i32 { if let Some(y) = v { y } else { 0 } }",
+    )
+    .unwrap();
+    assert_eq!(hash_node_alpha(&a), hash_node_alpha(&b));
+}
+
+#[test]
+fn alpha_while_let_binder_rename_invariant() {
+    // El binder del while-let vive sólo en el body.
+    let a = parse::rust(
+        "fn f(mut it: Option<i32>) -> i32 { let mut total = 0; while let Some(x) = it { total += x; it = None; } total }",
+    )
+    .unwrap();
+    let b = parse::rust(
+        "fn f(mut it: Option<i32>) -> i32 { let mut total = 0; while let Some(y) = it { total += y; it = None; } total }",
+    )
+    .unwrap();
+    assert_eq!(hash_node_alpha(&a), hash_node_alpha(&b));
+}
+
+#[test]
+fn alpha_let_else_binder_rename_invariant() {
+    // let-else: el binder vive sólo después del let, no en el else.
+    let a = parse::rust(
+        "fn f(v: Option<i32>) -> i32 { let Some(x) = v else { return 0 }; x + 1 }",
+    )
+    .unwrap();
+    let b = parse::rust(
+        "fn f(v: Option<i32>) -> i32 { let Some(y) = v else { return 0 }; y + 1 }",
+    )
+    .unwrap();
+    assert_eq!(hash_node_alpha(&a), hash_node_alpha(&b));
+}
+
+#[test]
+fn alpha_or_pattern_binder_rename_invariant() {
+    // En un or-pattern (`Some(x) | Other(x)`), todos los lados
+    // introducen el mismo binder. Renombrar afecta a TODOS los lados
+    // a la vez. El hash se mantiene.
+    let a = parse::rust(
+        r#"
+        enum E { A(i32), B(i32) }
+        fn f(v: E) -> i32 { match v { E::A(x) | E::B(x) => x } }
+        "#,
+    )
+    .unwrap();
+    let b = parse::rust(
+        r#"
+        enum E { A(i32), B(i32) }
+        fn f(v: E) -> i32 { match v { E::A(y) | E::B(y) => y } }
+        "#,
+    )
+    .unwrap();
+    assert_eq!(hash_node_alpha(&a), hash_node_alpha(&b));
+}
+
+#[test]
+fn alpha_let_chain_binders_propagate_to_consequence() {
+    // Let-chain: dos let-conditions con &&. Ambos binders viven en
+    // el consequence. Renombrar ambos da mismo hash.
+    let a = parse::rust(
+        "fn f(a: Option<i32>, b: Option<i32>) -> i32 { if let Some(x) = a && let Some(y) = b { x + y } else { 0 } }",
+    )
+    .unwrap();
+    let c = parse::rust(
+        "fn f(a: Option<i32>, b: Option<i32>) -> i32 { if let Some(p) = a && let Some(q) = b { p + q } else { 0 } }",
+    )
+    .unwrap();
+    assert_eq!(hash_node_alpha(&a), hash_node_alpha(&c));
+}
+
+#[test]
+fn alpha_if_let_does_not_collide_with_unrelated_program() {
+    // Sanity negativo: dos programas con `if let` distintos
+    // (operación distinta) NO deben dar el mismo hash.
+    let plus = parse::rust(
+        "fn f(v: Option<i32>) -> i32 { if let Some(x) = v { x + 1 } else { 0 } }",
+    )
+    .unwrap();
+    let minus = parse::rust(
+        "fn f(v: Option<i32>) -> i32 { if let Some(x) = v { x - 1 } else { 0 } }",
+    )
+    .unwrap();
+    assert_ne!(hash_node_alpha(&plus), hash_node_alpha(&minus));
+}

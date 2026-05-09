@@ -30,8 +30,17 @@
 //!   (`n @ pat`), `range_pattern`, `slice_pattern`, `ref_pattern`,
 //!   `reference_pattern`, `mut_pattern`.
 //!
-//! **Pendiente:** `if let`, `while let`, `let-else`, let-chains, `or_pattern`
-//! con bindings (Rust requiere mismas variables en cada rama).
+//! **Cobertura adicional (este módulo cierra el plan):**
+//! - `if_expression` y `while_expression` detectan `let_condition`
+//!   en su `condition` y propagan los binders al `consequence`/`body`.
+//!   Cubre `if let`, `while let` y let-chains (`let X && let Y`).
+//! - `let_declaration` con `alternative` (let-else): el alternative
+//!   se procesa en el scope SIN los binders del pattern (Rust no
+//!   los ve en la rama de fallo). Funciona naturalmente porque
+//!   `feed_let` no extiende scope; el block padre lo hace después.
+//! - `or_pattern`: todos los lados tienen los mismos binders (Rust
+//!   enforcement); recolectamos sólo del primer alternativo para
+//!   evitar duplicados, emitimos feed_pattern para cada uno.
 
 use crate::ast::SemanticNode;
 use crate::cas::ContentHash;
@@ -57,10 +66,100 @@ fn feed(h: &mut Hasher, node: &SemanticNode, scope: &mut Vec<String>) {
         "function_item" | "closure_expression" => feed_callable(h, node, scope),
         "block" => feed_block(h, node, scope),
         "for_expression" => feed_for(h, node, scope),
+        "if_expression" => feed_if_expression(h, node, scope),
+        "while_expression" => feed_while_expression(h, node, scope),
+        "let_condition" => feed_let_condition(h, node, scope),
         "match_arm" => feed_match_arm(h, node, scope),
         "identifier" if node.field_name.as_deref() == Some("pattern") => emit_binder_body(h),
         "identifier" => emit_identifier_ref(h, node, scope),
         _ => feed_default(h, node, scope),
+    }
+}
+
+/// Dentro de un `let_condition` (`if let X = expr`, `while let X = expr`,
+/// let-chains), el `pattern` debe pasar por `feed_pattern` para que los
+/// identifiers del pattern se emitan como TAG_BINDER (anónimos), no
+/// como referencias libres. El `value` y demás children van por feed
+/// normal.
+fn feed_let_condition(h: &mut Hasher, node: &SemanticNode, scope: &mut Vec<String>) {
+    h.update(&[TAG_NO_LEAF]);
+    h.update(&(node.children.len() as u64).to_le_bytes());
+    for c in &node.children {
+        if c.field_name.as_deref() == Some("pattern") {
+            feed_pattern(h, c);
+        } else {
+            feed(h, c, scope);
+        }
+    }
+}
+
+/// Maneja `if let X = expr { ... }` y let-chains (`if let X = a && let Y = b`).
+/// Los binders del/los `let_condition`(s) se acumulan y se propagan
+/// SÓLO al `consequence` (no al `alternative`, que es el `else`).
+fn feed_if_expression(h: &mut Hasher, node: &SemanticNode, scope: &mut Vec<String>) {
+    h.update(&[TAG_NO_LEAF]);
+
+    let mut binders: Vec<String> = Vec::new();
+    for c in &node.children {
+        if c.field_name.as_deref() == Some("condition") {
+            collect_let_condition_binders(c, &mut binders);
+        }
+    }
+
+    h.update(&(node.children.len() as u64).to_le_bytes());
+    for c in &node.children {
+        match c.field_name.as_deref() {
+            Some("consequence") => {
+                let scope_before = scope.len();
+                scope.extend(binders.iter().cloned());
+                feed(h, c, scope);
+                scope.truncate(scope_before);
+            }
+            _ => feed(h, c, scope),
+        }
+    }
+}
+
+/// Maneja `while let X = expr { ... }`. Los binders del `let_condition`
+/// se propagan SÓLO al `body` (no al `condition` mismo, que se evalúa
+/// con el scope previo).
+fn feed_while_expression(h: &mut Hasher, node: &SemanticNode, scope: &mut Vec<String>) {
+    h.update(&[TAG_NO_LEAF]);
+
+    let mut binders: Vec<String> = Vec::new();
+    for c in &node.children {
+        if c.field_name.as_deref() == Some("condition") {
+            collect_let_condition_binders(c, &mut binders);
+        }
+    }
+
+    h.update(&(node.children.len() as u64).to_le_bytes());
+    for c in &node.children {
+        match c.field_name.as_deref() {
+            Some("body") => {
+                let scope_before = scope.len();
+                scope.extend(binders.iter().cloned());
+                feed(h, c, scope);
+                scope.truncate(scope_before);
+            }
+            _ => feed(h, c, scope),
+        }
+    }
+}
+
+/// Recolecta binders de patterns dentro de cualquier `let_condition`
+/// nested en `node`. Para let-chains (`let X = a && let Y = b`),
+/// recursa en el árbol del condition para capturar todos.
+fn collect_let_condition_binders(node: &SemanticNode, out: &mut Vec<String>) {
+    if node.kind == "let_condition" {
+        for c in &node.children {
+            if c.field_name.as_deref() == Some("pattern") {
+                collect_pattern_binders(c, out);
+            }
+        }
+    }
+    for c in &node.children {
+        collect_let_condition_binders(c, out);
     }
 }
 
@@ -306,6 +405,17 @@ fn feed_pattern(h: &mut Hasher, node: &SemanticNode) {
                 feed_pattern(h, c);
             }
         }
+        "or_pattern" => {
+            // Cada lado del or-pattern debe introducir el mismo set
+            // de binders (Rust enforcement). Emitimos cada rama pero
+            // sólo recolectaremos binders de la primera —
+            // la responsabilidad recae en `collect_pattern_binders`.
+            h.update(&[TAG_NO_LEAF]);
+            h.update(&(node.children.len() as u64).to_le_bytes());
+            for c in &node.children {
+                feed_pattern(h, c);
+            }
+        }
         "tuple_struct_pattern" => {
             h.update(&[TAG_NO_LEAF]);
             h.update(&(node.children.len() as u64).to_le_bytes());
@@ -407,6 +517,20 @@ fn collect_pattern_binders(p: &SemanticNode, out: &mut Vec<String>) {
         "tuple_pattern" | "ref_pattern" | "reference_pattern" | "mut_pattern" | "slice_pattern" => {
             for c in &p.children {
                 collect_pattern_binders(c, out);
+            }
+        }
+        "or_pattern" => {
+            // Sólo recolectamos del primer alternativo: Rust exige
+            // que todos los lados introduzcan exactamente los mismos
+            // binders, así que el primero es representativo. Iterar
+            // todos duplicaría los nombres y rompería los índices
+            // de Bruijn en el cuerpo.
+            if let Some(first) = p
+                .children
+                .iter()
+                .find(|c| !matches!(c.kind.as_str(), "|" | "or"))
+            {
+                collect_pattern_binders(first, out);
             }
         }
         "tuple_struct_pattern" => {
