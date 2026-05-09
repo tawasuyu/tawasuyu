@@ -100,6 +100,18 @@ struct MetaUi {
     /// (ejecuta `commit_delete` y limpia) o [Cancelar] (sólo limpia).
     /// Navegación a otra view también cancela.
     pending_delete: Option<(String, Uuid)>,
+    /// Path del snapshot sibling del log; cacheado en `new()` para
+    /// que `tick_runtime_compact` no tenga que recomputarlo.
+    snap_path: PathBuf,
+    /// Threshold de auto-compaction (número de writes antes de
+    /// snapshot+compact). Cacheado del env `NAKUI_SNAPSHOT_THRESHOLD`
+    /// al startup; 0 = runtime compact desactivado.
+    snapshot_threshold: usize,
+    /// Contador de writes desde el último compact (o desde el boot
+    /// si nunca compactamos). Incrementa por cada commit_seed
+    /// efectivo / commit_morphism / commit_delete; cuando alcanza
+    /// `snapshot_threshold` dispara el auto-compact y se resetea.
+    writes_since_compact: u64,
     /// Mensaje toast al pie (success de submit, error de carga, etc.).
     toast: Option<SharedString>,
     /// Si la carga de módulos falló al inicio.
@@ -301,6 +313,9 @@ impl MetaUi {
             form_inputs: BTreeMap::new(),
             editing: None,
             pending_delete: None,
+            snap_path,
+            snapshot_threshold,
+            writes_since_compact: 0,
             toast: initial_toast,
             load_error,
         }
@@ -416,6 +431,56 @@ impl MetaUi {
         Ok(())
     }
 
+    /// Incrementa el contador de writes y, si cruzó el threshold,
+    /// ejecuta `maybe_compact_log` (snapshot + compact). Devuelve un
+    /// mensaje de status si compactó (para concatenar al toast del
+    /// op original) o si la compactación falló; `None` si todavía no
+    /// alcanzó el threshold.
+    ///
+    /// Llamar SIEMPRE después de cada write efectivo (commit_seed
+    /// Created/Updated, commit_morphism Ok, commit_delete Ok).
+    /// `NoChange` NO debería llamar — no hay write nuevo que contar.
+    ///
+    /// Threshold == 0 desactiva el runtime compact (early return).
+    fn tick_runtime_compact(&mut self) -> Option<String> {
+        if self.snapshot_threshold == 0 {
+            return None;
+        }
+        self.writes_since_compact += 1;
+        if self.writes_since_compact < self.snapshot_threshold as u64 {
+            return None;
+        }
+        let log_arc = self.event_log.as_ref()?.clone();
+        let mut log = match log_arc.lock() {
+            Ok(l) => l,
+            Err(_) => return Some("auto-compact skip: log mutex envenenado".into()),
+        };
+        let store = match self.store.lock() {
+            Ok(s) => s,
+            Err(_) => return Some("auto-compact skip: store mutex envenenado".into()),
+        };
+        match maybe_compact_log(&mut log, &self.snap_path, &store, self.snapshot_threshold) {
+            Ok(Some(msg)) => {
+                self.writes_since_compact = 0;
+                Some(msg)
+            }
+            Ok(None) => {
+                // Counter cruzó pero entry_count no — log tiene < 2
+                // entries en disco (ej: snapshot ya cubrió todo y sólo
+                // quedan los nuevos). Reseteamos para no re-entrar
+                // en cada write subsiguiente.
+                self.writes_since_compact = 0;
+                None
+            }
+            Err(e) => {
+                // Compactación falló — NO reseteamos el counter, así
+                // el próximo write reintenta. El usuario ve el error
+                // en el toast.
+                Some(format!("auto-compact: {e}"))
+            }
+        }
+    }
+
     /// Aplica una acción (click en menú, botón de form, action de
     /// list). Mutaciones contra el store ocurren acá.
     fn apply_action(&mut self, action: Action, cx: &mut Context<Self>) {
@@ -450,7 +515,14 @@ impl MetaUi {
                                 )
                             }
                         };
-                        self.toast = Some(SharedString::from(toast_msg));
+                        // NoChange no escribió al log → no avanza el
+                        // counter de runtime compact. Created/Updated
+                        // sí lo hacen.
+                        let was_write = !matches!(outcome, CommitOutcome::NoChange(_));
+                        self.toast = Some(append_compact_msg(
+                            toast_msg,
+                            was_write.then(|| self.tick_runtime_compact()).flatten(),
+                        ));
                         // Limpia editing tras un commit exitoso —
                         // el record ya está sincronizado (incluso
                         // un NoChange cierra el modo edit).
@@ -477,9 +549,9 @@ impl MetaUi {
             } => {
                 match self.commit_morphism(mod_idx, &name, &inputs, &params, cx) {
                     Ok(op_count) => {
-                        self.toast = Some(SharedString::from(format!(
-                            "morphism '{name}' OK ({op_count} op(s) aplicadas)"
-                        )));
+                        let base = format!("morphism '{name}' OK ({op_count} op(s) aplicadas)");
+                        self.toast =
+                            Some(append_compact_msg(base, self.tick_runtime_compact()));
                         if let Some(v) = next_view {
                             self.select_view(mod_idx, v, cx);
                         }
@@ -774,6 +846,16 @@ impl CommitOutcome {
         match self {
             Self::Created(id) | Self::Updated { id, .. } | Self::NoChange(id) => *id,
         }
+    }
+}
+
+/// Concatena un mensaje de compact opcional al toast del op original.
+/// Devuelve el toast resultante listo para ir a `SharedString`.
+/// Sin `compact_msg` devuelve `base` tal cual.
+fn append_compact_msg(base: String, compact_msg: Option<String>) -> SharedString {
+    match compact_msg {
+        Some(m) => SharedString::from(format!("{base}; {m}")),
+        None => SharedString::from(base),
     }
 }
 
@@ -1153,10 +1235,14 @@ impl MetaUi {
                             this.pending_delete = None;
                             match this.commit_delete(&entity_for_confirm, id_owned) {
                                 Ok(()) => {
-                                    this.toast = Some(SharedString::from(format!(
+                                    let base = format!(
                                         "borrado {entity_for_confirm} {}",
                                         short_uuid(&id_owned)
-                                    )));
+                                    );
+                                    this.toast = Some(append_compact_msg(
+                                        base,
+                                        this.tick_runtime_compact(),
+                                    ));
                                 }
                                 Err(e) => {
                                     this.toast = Some(SharedString::from(format!(
@@ -1854,6 +1940,86 @@ mod tests {
         assert_eq!(delta.len(), 1);
         assert_eq!(delta.get("saldo"), Some(&json!(150_i64)));
         assert!(!delta.contains_key("internal_marker"));
+    }
+
+    #[test]
+    fn append_compact_msg_handles_both_branches() {
+        // Sin compact: base solo, sin separador.
+        let s = append_compact_msg("creado X".into(), None);
+        assert_eq!(s.as_ref(), "creado X");
+        // Con compact: concatena con "; ".
+        let s = append_compact_msg(
+            "creado X".into(),
+            Some("auto-compact: snapshot @ seq 49".into()),
+        );
+        assert_eq!(s.as_ref(), "creado X; auto-compact: snapshot @ seq 49");
+    }
+
+    /// Simula el ciclo de write+tick que ocurriría en runtime: con
+    /// threshold=N, los primeros N-1 writes no compactan, el N-ésimo
+    /// dispara compact y resetea el counter, los siguientes vuelven
+    /// a acumular.
+    ///
+    /// Como `tick_runtime_compact` es un método de `MetaUi` (necesita
+    /// el cx GPUI para construir el state completo), reproducimos el
+    /// algorithm por separado: counter manual + invocación directa de
+    /// `maybe_compact_log`. Si la lógica del tick cambia, este test
+    /// se va a romper como signal de que hay que actualizarlo.
+    #[test]
+    fn runtime_compact_cycle_resets_counter_after_threshold() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        drop(tmp);
+        let snap_path = snapshot_path_for(&path);
+        let threshold: usize = 3;
+
+        let mut store = MemoryStore::new();
+        let mut log = EventLog::open(&path).unwrap();
+        let mut counter: u64 = 0;
+        let mut total_compactions = 0u32;
+
+        // 7 writes con threshold=3 → 2 compacts (en write 3 y en
+        // write 6), counter restante = 1 al final.
+        for i in 0..7u64 {
+            let id = Uuid::new_v4();
+            log.append(LogEntry::Seed {
+                seq: i,
+                entity: "row".into(),
+                id,
+                data: json!({"i": i}),
+                schema_hash: None,
+            })
+            .unwrap();
+            store.seed("row", id, json!({"i": i}));
+
+            // Tick.
+            counter += 1;
+            if counter >= threshold as u64 {
+                let res =
+                    maybe_compact_log(&mut log, &snap_path, &store, threshold).unwrap();
+                if res.is_some() {
+                    total_compactions += 1;
+                }
+                counter = 0;
+            }
+        }
+
+        assert_eq!(
+            total_compactions, 2,
+            "con 7 writes y threshold 3 deberíamos disparar 2 compacts"
+        );
+        assert_eq!(counter, 1, "1 write residual sin compactar");
+
+        // El log final debería tener: el anchor del último compact +
+        // el write residual = 2 entries.
+        let entries_after = EventLog::open(&path).unwrap().entries().unwrap().len();
+        assert_eq!(
+            entries_after, 2,
+            "1 anchor del último compact + 1 write residual"
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&snap_path);
     }
 
     #[test]
