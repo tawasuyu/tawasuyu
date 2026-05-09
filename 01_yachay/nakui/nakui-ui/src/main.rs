@@ -92,6 +92,12 @@ struct MetaUi {
     /// en lugar de un Seed nuevo. Limpia al cambiar de view o tras
     /// submit exitoso.
     editing: Option<(String, Uuid)>,
+    /// Si está set, el banner modal de confirmación de delete está
+    /// activo: `(entity, id)` del record que el usuario marcó para
+    /// borrar. Permanece hasta que el usuario click [Confirmar]
+    /// (ejecuta `commit_delete` y limpia) o [Cancelar] (sólo limpia).
+    /// Navegación a otra view también cancela.
+    pending_delete: Option<(String, Uuid)>,
     /// Mensaje toast al pie (success de submit, error de carga, etc.).
     toast: Option<SharedString>,
     /// Si la carga de módulos falló al inicio.
@@ -224,6 +230,7 @@ impl MetaUi {
             active,
             form_inputs: BTreeMap::new(),
             editing: None,
+            pending_delete: None,
             toast: initial_toast,
             load_error,
         }
@@ -237,6 +244,9 @@ impl MetaUi {
     fn select_view(&mut self, mod_idx: usize, view_key: String, cx: &mut Context<Self>) {
         self.active = Some((mod_idx, view_key.clone()));
         self.toast = None;
+        // Navegar a otra view cancela cualquier delete pendiente:
+        // el record marcado puede no estar visible en la nueva view.
+        self.pending_delete = None;
         self.form_inputs = BTreeMap::new();
         if let Some(module) = self.modules.get(mod_idx) {
             if let Some(View::Form(form)) = module.views.get(&view_key) {
@@ -779,6 +789,7 @@ impl Render for MetaUi {
 
         let sidebar = self.render_sidebar(cx, panel, border, text, text_dim, accent_active);
         let main_panel = self.render_main(cx, panel, border, text, text_dim, accent);
+        let confirm_banner = self.render_confirm_delete_banner(cx);
         let toast_div = self.toast.as_ref().map(|t| {
             div()
                 .px(px(12.))
@@ -804,6 +815,7 @@ impl Render for MetaUi {
             .size_full()
             .bg(bg)
             .when_some(error_banner, |d, b| d.child(b))
+            .when_some(confirm_banner, |d, b| d.child(b))
             .child(
                 div()
                     .flex()
@@ -817,6 +829,101 @@ impl Render for MetaUi {
 }
 
 impl MetaUi {
+    /// Renderea el banner modal de confirmación cuando hay un delete
+    /// pendiente. Devuelve `None` si no hay nada que confirmar.
+    ///
+    /// UX: banner amber prominente arriba de todo el contenido. No es
+    /// un overlay flotante (GPUI no expone z-index fácilmente sin
+    /// setup) — es un row del flex_col raíz, así que el contenido
+    /// debajo se desplaza unos pixels mientras está activo. Suficiente
+    /// para forzar al usuario a leer + click.
+    fn render_confirm_delete_banner(&self, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        let (entity, id) = self.pending_delete.as_ref()?;
+        let entity_owned = entity.clone();
+        let id_owned = *id;
+        let entity_for_cancel = entity_owned.clone();
+        let id_short = short_uuid(&id_owned);
+        let entity_for_confirm = entity_owned.clone();
+
+        let banner_bg = gpui::rgb(0x4a3a1a);
+        let banner_text = gpui::rgb(0xf0e0a0);
+        let confirm_bg = gpui::rgb(0x6a2222);
+        let confirm_text = gpui::rgb(0xffd0d0);
+        let cancel_bg = gpui::rgb(0x2a2f38);
+        let cancel_text = gpui::rgb(0xc0c8d0);
+
+        Some(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(12.))
+                .px(px(12.))
+                .py(px(8.))
+                .bg(banner_bg)
+                .text_color(banner_text)
+                .text_size(px(12.))
+                .child(
+                    div()
+                        .flex_grow()
+                        .child(format!("¿Borrar {entity_owned} {id_short}?")),
+                )
+                .child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "confirm-del-cancel-{}",
+                            id_owned
+                        )))
+                        .px(px(10.))
+                        .py(px(4.))
+                        .bg(cancel_bg)
+                        .text_color(cancel_text)
+                        .hover(|d| d.bg(gpui::rgb(0x3a3f48)))
+                        .child("Cancelar")
+                        .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                            this.pending_delete = None;
+                            this.toast = Some(SharedString::from(format!(
+                                "delete cancelado ({entity_for_cancel})"
+                            )));
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "confirm-del-ok-{}",
+                            id_owned
+                        )))
+                        .px(px(10.))
+                        .py(px(4.))
+                        .bg(confirm_bg)
+                        .text_color(confirm_text)
+                        .hover(|d| d.bg(gpui::rgb(0x8a2828)))
+                        .child("Confirmar")
+                        .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                            // Limpiar primero para que un fallo del
+                            // commit no deje el banner colgado y el
+                            // toast tape el banner.
+                            this.pending_delete = None;
+                            match this.commit_delete(&entity_for_confirm, id_owned) {
+                                Ok(()) => {
+                                    this.toast = Some(SharedString::from(format!(
+                                        "borrado {entity_for_confirm} {}",
+                                        short_uuid(&id_owned)
+                                    )));
+                                }
+                                Err(e) => {
+                                    this.toast = Some(SharedString::from(format!(
+                                        "error borrando: {e}"
+                                    )));
+                                }
+                            }
+                            cx.notify();
+                        })),
+                ),
+        )
+    }
+
     fn render_sidebar(
         &self,
         cx: &mut Context<Self>,
@@ -1096,19 +1203,13 @@ impl MetaUi {
                             .hover(|d| d.bg(gpui::rgb(0x4a2020)))
                             .child("✕")
                             .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-                                match this.commit_delete(&entity_for_delete, id_copy) {
-                                    Ok(()) => {
-                                        this.toast = Some(SharedString::from(format!(
-                                            "borrado {entity_for_delete} {}",
-                                            short_uuid(&id_copy)
-                                        )));
-                                    }
-                                    Err(e) => {
-                                        this.toast = Some(SharedString::from(format!(
-                                            "error borrando: {e}"
-                                        )));
-                                    }
-                                }
+                                // Marca para borrar en lugar de borrar
+                                // directo: el modal de confirmación se
+                                // renderea arriba en `render` y maneja
+                                // confirm/cancel.
+                                this.pending_delete =
+                                    Some((entity_for_delete.clone(), id_copy));
+                                this.toast = None;
                                 cx.notify();
                             })),
                     ),
