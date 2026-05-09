@@ -700,6 +700,11 @@ impl MetaUi {
             None => return Err("ninguna vista activa".into()),
         };
         let mut obj = serde_json::Map::new();
+        // Fields que el form deja vacíos y son optional: candidatos a
+        // `FieldOp::Clear` en el path de EDIT (sólo se emiten si el
+        // current store value tiene algo en ese key). En el SEED path
+        // simplemente no se incluyen, igual que antes.
+        let mut to_clear: Vec<String> = Vec::new();
         for f in &spec_fields {
             let raw = self
                 .form_inputs
@@ -710,6 +715,7 @@ impl MetaUi {
                 return Err(format!("campo '{}' es obligatorio", f.label));
             }
             if raw.is_empty() && !f.required {
+                to_clear.push(f.name.clone());
                 continue;
             }
             let value = parse_field_value(f.kind, &raw)
@@ -724,16 +730,10 @@ impl MetaUi {
 
         if let Some((_, id)) = editing_match {
             // EDIT path: delta-only. Cargar el record actual del store
-            // y emitir `FieldOp::Set` sólo para los campos cuyo valor
-            // nuevo difiere del actual. Si nada cambió, ningún log
-            // entry y ningún apply — el toast lo refleja.
-            //
-            // Nota: campos que el form deja vacíos *no* se incluyen
-            // en `obj` (skip arriba), así que no se pueden "limpiar"
-            // borrando el input. Esto es consistente con el comportamiento
-            // pre-delta y con el seed path. Para clearear hay que
-            // declarar el field como required y forzar un value, o
-            // implementar un FieldOp::Clear futuro.
+            // y emitir `FieldOp::Set` por cada campo cuyo valor nuevo
+            // difiere del actual + `FieldOp::Clear` por cada optional
+            // empty cuyo current tenía un valor non-null. Si nada
+            // cambió, ningún log entry y ningún apply.
             let current: Value = {
                 let store = self
                     .store
@@ -741,15 +741,15 @@ impl MetaUi {
                     .map_err(|_| "store mutex envenenado".to_string())?;
                 store.load(entity, id).unwrap_or(Value::Null)
             };
-            let delta = compute_field_delta(&current, &obj);
+            let set_delta = compute_field_delta(&current, &obj);
+            let clear_fields = compute_clear_fields(&current, &to_clear);
 
-            if delta.is_empty() {
-                // No-op edit: no entry al log, no apply. Limpia
-                // editing en el caller via toast diferente.
+            if set_delta.is_empty() && clear_fields.is_empty() {
+                // No-op edit: no entry al log, no apply.
                 return Ok(CommitOutcome::NoChange(id));
             }
 
-            let ops: Vec<FieldOp> = delta
+            let mut ops: Vec<FieldOp> = set_delta
                 .iter()
                 .map(|(field, value)| FieldOp::Set {
                     path: FieldPath {
@@ -760,21 +760,40 @@ impl MetaUi {
                     value: value.clone(),
                 })
                 .collect();
+            for field in &clear_fields {
+                ops.push(FieldOp::Clear {
+                    path: FieldPath {
+                        entity: entity.to_string(),
+                        id,
+                        field: field.clone(),
+                    },
+                });
+            }
 
             if let Some(log_arc) = self.event_log.as_ref() {
                 let mut log = log_arc
                     .lock()
                     .map_err(|_| "log mutex envenenado".to_string())?;
                 let seq = log.next_seq();
+                let mut params = serde_json::Map::new();
+                params.insert("entity".into(), json!(entity));
+                params.insert("id".into(), json!(id.to_string()));
+                if !set_delta.is_empty() {
+                    params.insert("fields".into(), Value::Object(set_delta.clone()));
+                }
+                if !clear_fields.is_empty() {
+                    params.insert(
+                        "cleared".into(),
+                        Value::Array(
+                            clear_fields.iter().map(|s| json!(s)).collect(),
+                        ),
+                    );
+                }
                 log.append(LogEntry::Morphism {
                     seq,
                     morphism: "ui.edit_record".into(),
                     inputs: Default::default(),
-                    params: json!({
-                        "entity": entity,
-                        "id": id.to_string(),
-                        "fields": Value::Object(delta.clone()),
-                    }),
+                    params: Value::Object(params),
                     ops: ops.clone(),
                     schema_hash: None,
                 })
@@ -784,10 +803,10 @@ impl MetaUi {
                 .store
                 .lock()
                 .map_err(|_| "store mutex envenenado".to_string())?;
-            store.apply(&ops).map_err(|e| format!("apply Set: {e}"))?;
+            store.apply(&ops).map_err(|e| format!("apply edit ops: {e}"))?;
             Ok(CommitOutcome::Updated {
                 id,
-                changed: delta.len(),
+                changed: set_delta.len() + clear_fields.len(),
             })
         } else {
             // SEED path: alta nueva.
@@ -920,6 +939,24 @@ fn maybe_compact_log(
         "auto-compact: snapshot @ seq {snap_seq}, {} entries dropped (1 anchor kept)",
         entry_count - 1
     )))
+}
+
+/// Decide cuáles fields del `to_clear` candidate list ameritan
+/// realmente un `FieldOp::Clear`: sólo los que existen en el current
+/// con un valor non-null. Para fields ausentes o ya null, Clear es
+/// no-op semántico (el post-state es el mismo) y dropearlos
+/// preserva la propiedad "1 op = 1 cambio efectivo" del log.
+///
+/// Preserva el orden del input para que el log entry sea estable.
+fn compute_clear_fields(current: &Value, to_clear: &[String]) -> Vec<String> {
+    to_clear
+        .iter()
+        .filter(|f| match current.get(f.as_str()) {
+            None | Some(Value::Null) => false,
+            Some(_) => true,
+        })
+        .cloned()
+        .collect()
 }
 
 /// Calcula el delta entre el record actual y los valores propuestos
@@ -2020,6 +2057,44 @@ mod tests {
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(&snap_path);
+    }
+
+    #[test]
+    fn clear_fields_skips_absent_and_null() {
+        let current = json!({
+            "name": "Acme",
+            "notes": "lorem",
+            "tag": null,
+        });
+        let to_clear = vec![
+            "name".to_string(),
+            "notes".to_string(),
+            "tag".to_string(),
+            "missing".to_string(),
+        ];
+        let actual = compute_clear_fields(&current, &to_clear);
+        assert_eq!(
+            actual,
+            vec!["name".to_string(), "notes".to_string()],
+            "tag (null) y missing (ausente) deberían filtrarse — Clear sería no-op"
+        );
+    }
+
+    #[test]
+    fn clear_fields_preserves_input_order() {
+        let current = json!({"a": 1, "b": 2, "c": 3});
+        let to_clear = vec!["c".to_string(), "a".to_string(), "b".to_string()];
+        let actual = compute_clear_fields(&current, &to_clear);
+        assert_eq!(actual, vec!["c", "a", "b"], "orden del input se preserva");
+    }
+
+    #[test]
+    fn clear_fields_empty_when_current_is_null() {
+        // Record no existe en el store (load → None → Value::Null
+        // upstream). Ningún clear debería emitirse.
+        let current = Value::Null;
+        let to_clear = vec!["name".to_string()];
+        assert!(compute_clear_fields(&current, &to_clear).is_empty());
     }
 
     #[test]

@@ -231,7 +231,11 @@ impl Store for MemoryStore {
     fn apply_dry_run(&self, ops: &[FieldOp]) -> Result<(), StoreError> {
         for op in ops {
             match op {
-                FieldOp::Set { path, .. } => {
+                FieldOp::Set { path, .. } | FieldOp::Clear { path } => {
+                    // Set y Clear comparten la misma pre-condición: el
+                    // record padre tiene que existir y ser un objeto.
+                    // Clear de un field que no existe en el map es no-op
+                    // benigno en apply (no error).
                     match self.records.get(&path.entity).and_then(|m| m.get(&path.id)) {
                         None => {
                             return Err(StoreError::NotFound(path.entity.clone(), path.id));
@@ -282,6 +286,21 @@ impl Store for MemoryStore {
                         _ => unreachable!("dry_run guards against non-object"),
                     };
                     map.insert(path.field.clone(), value.clone());
+                }
+                FieldOp::Clear { path } => {
+                    let rec = self
+                        .records
+                        .get_mut(&path.entity)
+                        .and_then(|m| m.get_mut(&path.id))
+                        .expect("validated by dry_run");
+                    let map = match rec {
+                        Value::Object(m) => m,
+                        _ => unreachable!("dry_run guards against non-object"),
+                    };
+                    // Clear de un field ausente: no-op silencioso. El
+                    // post-state es el mismo (el field no está) y permite
+                    // que el caller emita Clear sin hacer load previo.
+                    map.remove(&path.field);
                 }
                 FieldOp::Create { entity, id, data } => {
                     self.records
@@ -392,6 +411,89 @@ mod tests {
             value: json!(150),
         };
         assert!(store.apply_dry_run(&[op]).is_ok());
+    }
+
+    #[test]
+    fn apply_clear_removes_field_key() {
+        let mut store = MemoryStore::new();
+        let id = Uuid::new_v4();
+        store.seed(
+            "Customer",
+            id,
+            json!({"id": id.to_string(), "name": "Acme", "notes": "lorem"}),
+        );
+        let op = FieldOp::Clear {
+            path: FieldPath {
+                entity: "Customer".into(),
+                id,
+                field: "notes".into(),
+            },
+        };
+        store.apply(&[op]).unwrap();
+        let after = store.load("Customer", id).unwrap();
+        let map = after.as_object().unwrap();
+        assert!(!map.contains_key("notes"), "notes debería estar borrado");
+        assert_eq!(map.get("name"), Some(&json!("Acme")), "otros fields intactos");
+    }
+
+    #[test]
+    fn apply_clear_on_absent_field_is_noop() {
+        let mut store = MemoryStore::new();
+        let id = Uuid::new_v4();
+        store.seed(
+            "Customer",
+            id,
+            json!({"id": id.to_string(), "name": "Acme"}),
+        );
+        let op = FieldOp::Clear {
+            path: FieldPath {
+                entity: "Customer".into(),
+                id,
+                field: "notes".into(),
+            },
+        };
+        // No debería errar: clear de un field ausente es benigno.
+        store.apply(&[op]).unwrap();
+        let after = store.load("Customer", id).unwrap();
+        assert_eq!(
+            after.as_object().unwrap().get("name"),
+            Some(&json!("Acme"))
+        );
+    }
+
+    #[test]
+    fn dry_run_rejects_clear_on_missing_record() {
+        let store = MemoryStore::new();
+        let id = Uuid::new_v4();
+        let op = FieldOp::Clear {
+            path: FieldPath {
+                entity: "Customer".into(),
+                id,
+                field: "notes".into(),
+            },
+        };
+        assert!(matches!(
+            store.apply_dry_run(&[op]),
+            Err(StoreError::NotFound(_, _))
+        ));
+    }
+
+    #[test]
+    fn dry_run_rejects_clear_on_non_object() {
+        let mut store = MemoryStore::new();
+        let id = Uuid::new_v4();
+        store.seed("Customer", id, json!(42)); // not an object
+        let op = FieldOp::Clear {
+            path: FieldPath {
+                entity: "Customer".into(),
+                id,
+                field: "notes".into(),
+            },
+        };
+        assert!(matches!(
+            store.apply_dry_run(&[op]),
+            Err(StoreError::NotAnObject(_, _))
+        ));
     }
 
     #[test]

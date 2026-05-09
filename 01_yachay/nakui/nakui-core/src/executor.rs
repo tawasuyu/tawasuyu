@@ -275,28 +275,35 @@ impl Executor {
         let declared: HashSet<&str> = spec.writes.iter().map(String::as_str).collect();
         for op in &ops {
             let token = match op {
-                FieldOp::Set { path, .. } => match id_to_input.get(&path.id) {
-                    Some(binding) if binding.entity == path.entity => {
-                        format!("{}.{}", binding.role, path.field)
+                // Set y Clear comparten el mismo token shape: ambos
+                // mutan un field específico de un record tracked.
+                FieldOp::Set { path, .. } | FieldOp::Clear { path } => {
+                    match id_to_input.get(&path.id) {
+                        Some(binding) if binding.entity == path.entity => {
+                            format!("{}.{}", binding.role, path.field)
+                        }
+                        Some(_) => {
+                            return Err(ExecError::CapabilityViolation {
+                                morphism: morphism_name.to_string(),
+                                token: format!(
+                                    "<entity-mismatch>.{}.{}",
+                                    path.entity, path.field
+                                ),
+                                declared: spec.writes.clone(),
+                            });
+                        }
+                        None => {
+                            return Err(ExecError::CapabilityViolation {
+                                morphism: morphism_name.to_string(),
+                                token: format!(
+                                    "<untracked id>.{}.{}",
+                                    path.entity, path.field
+                                ),
+                                declared: spec.writes.clone(),
+                            });
+                        }
                     }
-                    Some(_) => {
-                        return Err(ExecError::CapabilityViolation {
-                            morphism: morphism_name.to_string(),
-                            token: format!(
-                                "<entity-mismatch>.{}.{}",
-                                path.entity, path.field
-                            ),
-                            declared: spec.writes.clone(),
-                        });
-                    }
-                    None => {
-                        return Err(ExecError::CapabilityViolation {
-                            morphism: morphism_name.to_string(),
-                            token: format!("<untracked id>.{}.{}", path.entity, path.field),
-                            declared: spec.writes.clone(),
-                        });
-                    }
-                },
+                }
                 FieldOp::Create { entity, .. } => entity.clone(),
                 FieldOp::Delete { entity, .. } => entity.clone(),
             };

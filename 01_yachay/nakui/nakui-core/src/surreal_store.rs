@@ -168,7 +168,11 @@ impl Store for SurrealStore {
         self.runtime.block_on(async {
             for op in ops {
                 match op {
-                    FieldOp::Set { path, .. } => {
+                    FieldOp::Set { path, .. } | FieldOp::Clear { path } => {
+                        // Set y Clear comparten la misma pre-condición:
+                        // el record padre tiene que existir. Clear de
+                        // un field inexistente es no-op benigno (UNSET
+                        // sobre un field ausente no falla).
                         let exists = self.exists(&path.entity, path.id).await?;
                         if !exists {
                             return Err(StoreError::NotFound(
@@ -356,6 +360,24 @@ impl Store for SurrealStore {
                             .bind(("table", path.entity.clone()))
                             .bind(("id", path.id.to_string()))
                             .bind(("patch", patch))
+                            .await
+                            .and_then(|r| r.check())
+                            .map_err(map_err)?;
+                    }
+                    FieldOp::Clear { path } => {
+                        // SurrealQL `UNSET` borra la key. El field name
+                        // viene de un FieldSpec validado upstream y
+                        // SurrealQL no soporta binding de identifiers
+                        // (sólo valores), así que va inline. Si en
+                        // el futuro se permite que el field name venga
+                        // de un input no-trusted, validar aquí.
+                        self.db
+                            .query(format!(
+                                "UPDATE type::thing($table, $id) UNSET {}",
+                                path.field
+                            ))
+                            .bind(("table", path.entity.clone()))
+                            .bind(("id", path.id.to_string()))
                             .await
                             .and_then(|r| r.check())
                             .map_err(map_err)?;
