@@ -353,10 +353,6 @@ impl MetaUi {
             Some((i, _)) => *i,
             None => return,
         };
-        // Snapshot del editing al entrar — si commit_seed modifica
-        // self.editing antes del toast, el mensaje refleja el modo
-        // correcto.
-        let was_editing = self.editing.is_some();
         match action {
             Action::OpenView { view, .. } => {
                 // Salir a otra view cancela el edit pendiente.
@@ -365,14 +361,29 @@ impl MetaUi {
             }
             Action::SeedEntity { entity, next_view } => {
                 match self.commit_seed(mod_idx, &entity, cx) {
-                    Ok(id) => {
-                        let action_label = if was_editing { "actualizado" } else { "creado" };
-                        self.toast = Some(SharedString::from(format!(
-                            "{action_label} {entity} {}",
-                            short_uuid(&id)
-                        )));
+                    Ok(outcome) => {
+                        let id = outcome.id();
+                        let toast_msg = match &outcome {
+                            CommitOutcome::Created(_) => {
+                                format!("creado {entity} {}", short_uuid(&id))
+                            }
+                            CommitOutcome::Updated { changed, .. } => {
+                                format!(
+                                    "actualizado {entity} {} ({changed} campo(s))",
+                                    short_uuid(&id)
+                                )
+                            }
+                            CommitOutcome::NoChange(_) => {
+                                format!(
+                                    "{entity} {} sin cambios — no log entry",
+                                    short_uuid(&id)
+                                )
+                            }
+                        };
+                        self.toast = Some(SharedString::from(toast_msg));
                         // Limpia editing tras un commit exitoso —
-                        // el record ya está sincronizado.
+                        // el record ya está sincronizado (incluso
+                        // un NoChange cierra el modo edit).
                         self.editing = None;
                         if let Some(v) = next_view {
                             self.select_view(mod_idx, v, cx);
@@ -530,12 +541,14 @@ impl MetaUi {
     }
 
     /// Construye un Value desde los TextInput vivos y lo seedea al store.
+    /// Resultado de `commit_seed`. Distingue alta nueva vs edit
+    /// efectivo vs no-op para que el toast sea preciso.
     fn commit_seed(
         &mut self,
         mod_idx: usize,
         entity: &str,
         cx: &mut Context<Self>,
-    ) -> Result<Uuid, String> {
+    ) -> Result<CommitOutcome, String> {
         let module = &self.modules[mod_idx];
         let spec_fields: Vec<FieldSpec> = match self.active.as_ref() {
             Some((_, view_key)) => match module.views.get(view_key) {
@@ -568,8 +581,33 @@ impl MetaUi {
         let editing_match = self.editing.as_ref().filter(|(e, _)| e == entity).cloned();
 
         if let Some((_, id)) = editing_match {
-            // EDIT path: Morphism { ui.edit_record, ops: [Set...] }
-            let ops: Vec<FieldOp> = obj
+            // EDIT path: delta-only. Cargar el record actual del store
+            // y emitir `FieldOp::Set` sólo para los campos cuyo valor
+            // nuevo difiere del actual. Si nada cambió, ningún log
+            // entry y ningún apply — el toast lo refleja.
+            //
+            // Nota: campos que el form deja vacíos *no* se incluyen
+            // en `obj` (skip arriba), así que no se pueden "limpiar"
+            // borrando el input. Esto es consistente con el comportamiento
+            // pre-delta y con el seed path. Para clearear hay que
+            // declarar el field como required y forzar un value, o
+            // implementar un FieldOp::Clear futuro.
+            let current: Value = {
+                let store = self
+                    .store
+                    .lock()
+                    .map_err(|_| "store mutex envenenado".to_string())?;
+                store.load(entity, id).unwrap_or(Value::Null)
+            };
+            let delta = compute_field_delta(&current, &obj);
+
+            if delta.is_empty() {
+                // No-op edit: no entry al log, no apply. Limpia
+                // editing en el caller via toast diferente.
+                return Ok(CommitOutcome::NoChange(id));
+            }
+
+            let ops: Vec<FieldOp> = delta
                 .iter()
                 .map(|(field, value)| FieldOp::Set {
                     path: FieldPath {
@@ -593,7 +631,7 @@ impl MetaUi {
                     params: json!({
                         "entity": entity,
                         "id": id.to_string(),
-                        "fields": Value::Object(obj.clone()),
+                        "fields": Value::Object(delta.clone()),
                     }),
                     ops: ops.clone(),
                     schema_hash: None,
@@ -605,7 +643,10 @@ impl MetaUi {
                 .lock()
                 .map_err(|_| "store mutex envenenado".to_string())?;
             store.apply(&ops).map_err(|e| format!("apply Set: {e}"))?;
-            Ok(id)
+            Ok(CommitOutcome::Updated {
+                id,
+                changed: delta.len(),
+            })
         } else {
             // SEED path: alta nueva.
             let id = Uuid::new_v4();
@@ -629,7 +670,7 @@ impl MetaUi {
                 .lock()
                 .map_err(|_| "store mutex envenenado".to_string())?;
             store.seed(entity, id, data);
-            Ok(id)
+            Ok(CommitOutcome::Created(id))
         }
     }
 
@@ -647,6 +688,44 @@ impl MetaUi {
             .map(|(_, id, v)| (id, v))
             .collect()
     }
+}
+
+/// Resultado de `commit_seed`. Distingue alta nueva, edit efectivo
+/// con N campos modificados, y no-op (delta vacío en el path de edit).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CommitOutcome {
+    Created(Uuid),
+    Updated { id: Uuid, changed: usize },
+    NoChange(Uuid),
+}
+
+impl CommitOutcome {
+    fn id(&self) -> Uuid {
+        match self {
+            Self::Created(id) | Self::Updated { id, .. } | Self::NoChange(id) => *id,
+        }
+    }
+}
+
+/// Calcula el delta entre el record actual y los valores propuestos
+/// del form. Devuelve un Map con sólo los campos cuyo valor difiere.
+///
+/// Comparación: igualdad estructural sobre `serde_json::Value`. Un
+/// `current=Value::Null` (record no encontrado) hace que todos los
+/// campos del `proposed` sean considerados nuevos. Un campo del
+/// proposed que coincide con el del current se omite. Campos que
+/// están en current pero NO en proposed se preservan tal cual (el
+/// edit no los toca; ver el comentario en commit_seed sobre por qué
+/// no clearemos campos vacíos).
+fn compute_field_delta(
+    current: &Value,
+    proposed: &serde_json::Map<String, Value>,
+) -> serde_json::Map<String, Value> {
+    proposed
+        .iter()
+        .filter(|(field, value)| current.get(field.as_str()) != Some(*value))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
 }
 
 fn parse_field_value(kind: FieldKind, raw: &str) -> Result<Value, String> {
@@ -1517,6 +1596,97 @@ mod tests {
             help: None,
             ref_entity: None,
         }
+    }
+
+    fn map(items: &[(&str, Value)]) -> serde_json::Map<String, Value> {
+        items.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+    }
+
+    #[test]
+    fn delta_empty_when_all_fields_match() {
+        let current = json!({
+            "name": "Acme",
+            "saldo": 100_i64,
+            "currency": "USD",
+        });
+        let proposed = map(&[
+            ("name", json!("Acme")),
+            ("saldo", json!(100_i64)),
+            ("currency", json!("USD")),
+        ]);
+        let delta = compute_field_delta(&current, &proposed);
+        assert!(delta.is_empty(), "no-op edit debería dar delta vacío");
+    }
+
+    #[test]
+    fn delta_includes_only_changed_field() {
+        let current = json!({
+            "name": "Acme",
+            "saldo": 100_i64,
+            "currency": "USD",
+        });
+        // El usuario sólo cambió saldo.
+        let proposed = map(&[
+            ("name", json!("Acme")),
+            ("saldo", json!(200_i64)),
+            ("currency", json!("USD")),
+        ]);
+        let delta = compute_field_delta(&current, &proposed);
+        assert_eq!(delta.len(), 1, "sólo saldo debería estar en delta");
+        assert_eq!(delta.get("saldo"), Some(&json!(200_i64)));
+        assert!(!delta.contains_key("name"));
+        assert!(!delta.contains_key("currency"));
+    }
+
+    #[test]
+    fn delta_treats_missing_record_as_all_new() {
+        // Record no existe en el store (load → None → Value::Null).
+        // Todos los campos del proposed deberían entrar al delta.
+        let current = Value::Null;
+        let proposed = map(&[
+            ("name", json!("Acme")),
+            ("saldo", json!(0_i64)),
+        ]);
+        let delta = compute_field_delta(&current, &proposed);
+        assert_eq!(delta.len(), 2);
+    }
+
+    #[test]
+    fn delta_distinguishes_int_from_string_repr() {
+        // Sanity: si el form devuelve "100" como Number → json!(100_i64)
+        // y el store tiene json!(100), comparan iguales (PartialEq de
+        // Value normaliza). Si el store tuviera "100" string, NO igualan.
+        let current = json!({"qty": 100_i64});
+        let proposed = map(&[("qty", json!(100_i64))]);
+        assert!(compute_field_delta(&current, &proposed).is_empty());
+
+        let current_str = json!({"qty": "100"});
+        let proposed_int = map(&[("qty", json!(100_i64))]);
+        assert_eq!(
+            compute_field_delta(&current_str, &proposed_int).len(),
+            1,
+            "string '100' vs int 100 sí debería contar como cambio"
+        );
+    }
+
+    #[test]
+    fn delta_skips_fields_absent_from_proposed() {
+        // Si el form omite un field (porque el FieldSpec no lo
+        // declara), no lo deberíamos mencionar en el delta — el edit
+        // sólo toca los fields del form.
+        let current = json!({
+            "name": "Acme",
+            "saldo": 100_i64,
+            "internal_marker": "x",
+        });
+        let proposed = map(&[
+            ("name", json!("Acme")),
+            ("saldo", json!(150_i64)),
+        ]);
+        let delta = compute_field_delta(&current, &proposed);
+        assert_eq!(delta.len(), 1);
+        assert_eq!(delta.get("saldo"), Some(&json!(150_i64)));
+        assert!(!delta.contains_key("internal_marker"));
     }
 
     #[test]
