@@ -4,11 +4,12 @@
 //! `module.json`), monta sidebar con sus menús, y renderea la vista
 //! activa en el panel principal:
 //!
-//! - **List**: tabla de instancias de la entity. Botones de acción
-//!   en el header (típicamente "Nuevo" → form).
-//! - **Form**: campos editables; al submit, escribe al `MemoryStore`
-//!   in-process via `seed_and_log` (alta directa) o por morphism
-//!   (TODO en este iter).
+//! - **List**: tabla de instancias del entity. Botones de acción en
+//!   el header (típicamente "Nuevo" → form).
+//! - **Form**: campos editables (con `yahweh-widget-text-input` para
+//!   teclado real); al submit, escribe al `MemoryStore` in-process
+//!   via `seed_entity` (alta directa) o por morphism (TODO en este
+//!   iter).
 //!
 //! Todo el storage es in-memory por ahora — el escenario "save to
 //! disk" se materializa cuando el daemon Nakui exista. La
@@ -21,22 +22,29 @@
 //! # default sin env: ./nakui-modules en pwd.
 //! ```
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use gpui::{
-    div, prelude::*, px, rgb, App, Application, Bounds, ClickEvent, Context, IntoElement, Render,
-    SharedString, Window, WindowBounds, WindowOptions,
+    div, prelude::*, px, App, Application, Bounds, ClickEvent, Context, Entity, IntoElement,
+    Render, SharedString, Window, WindowBounds, WindowOptions,
 };
 use nakui_core::store::{MemoryStore, Store};
 use nakui_ui_schema::{
-    Action, Column, FieldKind, FieldSpec, FormView, ListView, MenuItem, Module, View,
+    Action, FieldKind, FieldSpec, FormView, ListView, Module, View,
 };
 use serde_json::{json, Value};
 use uuid::Uuid;
+use yahweh_theme::Theme;
+use yahweh_widget_text_input::TextInput;
 
 fn main() {
     Application::new().run(|cx: &mut App| {
+        // El text input pide Theme::global; instalarlo antes de
+        // crear el window evita que panicee.
+        Theme::install_default(cx);
+
         let bounds = Bounds::centered(None, gpui::size(px(1100.), px(720.)), cx);
         cx.open_window(
             WindowOptions {
@@ -60,16 +68,14 @@ struct MetaUi {
     modules: Vec<Module>,
     /// Store compartido. Mutado por el submit de los forms.
     store: Arc<Mutex<MemoryStore>>,
-    /// Módulo + vista actualmente seleccionados (índices a `modules`
-    /// y key dentro de `views` respectivamente).
+    /// (módulo idx, vista key) actualmente activos.
     active: Option<(usize, String)>,
-    /// Buffer del form actual: nombre del campo → valor texto. Se
-    /// resetea al cambiar de vista.
-    form_buffer: std::collections::BTreeMap<String, String>,
+    /// Inputs vivos para el form actual: nombre del campo → TextInput.
+    /// Se reemplaza al cambiar de vista (drop de los anteriores).
+    form_inputs: BTreeMap<String, Entity<TextInput>>,
     /// Mensaje toast al pie (success de submit, error de carga, etc.).
     toast: Option<SharedString>,
-    /// Si la carga de módulos falló al inicio, lo guardamos para
-    /// mostrarlo como banner de error permanente.
+    /// Si la carga de módulos falló al inicio.
     load_error: Option<SharedString>,
 }
 
@@ -92,7 +98,6 @@ impl MetaUi {
                 ),
             };
 
-        // Auto-seleccionar la primera vista del primer módulo si hay.
         let active = modules
             .first()
             .and_then(|m| m.menu.first().map(|item| (0usize, item.view.clone())));
@@ -101,62 +106,81 @@ impl MetaUi {
             modules,
             store: Arc::new(Mutex::new(MemoryStore::new())),
             active,
-            form_buffer: Default::default(),
+            form_inputs: BTreeMap::new(),
             toast: None,
             load_error,
         }
     }
 
-    fn select_view(&mut self, mod_idx: usize, view_key: String) {
-        self.active = Some((mod_idx, view_key));
-        self.form_buffer.clear();
+    /// Cambia la vista activa. Si la nueva vista es un Form, crea
+    /// `TextInput` entities para cada field con su valor por defecto.
+    /// Drop de los inputs anteriores ocurre al sobreescribir el map.
+    fn select_view(&mut self, mod_idx: usize, view_key: String, cx: &mut Context<Self>) {
+        self.active = Some((mod_idx, view_key.clone()));
         self.toast = None;
+        self.form_inputs = BTreeMap::new();
+        if let Some(module) = self.modules.get(mod_idx) {
+            if let Some(View::Form(form)) = module.views.get(&view_key) {
+                for f in &form.fields {
+                    let initial = f.default.clone().unwrap_or_default();
+                    let input = cx.new(|cx| TextInput::new(initial, cx));
+                    self.form_inputs.insert(f.name.clone(), input);
+                }
+            }
+        }
+        cx.notify();
     }
 
     /// Aplica una acción (click en menú, botón de form, action de
     /// list). Mutaciones contra el store ocurren acá.
-    fn apply_action(&mut self, action: &Action) {
+    fn apply_action(&mut self, action: Action, cx: &mut Context<Self>) {
         let mod_idx = match self.active.as_ref() {
             Some((i, _)) => *i,
             None => return,
         };
         match action {
             Action::OpenView { view, .. } => {
-                self.select_view(mod_idx, view.clone());
+                self.select_view(mod_idx, view, cx);
             }
             Action::SeedEntity { entity, next_view } => {
-                match self.commit_seed(mod_idx, entity) {
+                match self.commit_seed(mod_idx, &entity, cx) {
                     Ok(id) => {
                         self.toast = Some(SharedString::from(format!(
                             "creado {entity} {}",
                             short_uuid(&id)
                         )));
                         if let Some(v) = next_view {
-                            self.select_view(mod_idx, v.clone());
+                            self.select_view(mod_idx, v, cx);
                         } else {
-                            self.form_buffer.clear();
+                            // Reset inputs al vacío para alta consecutiva.
+                            for input in self.form_inputs.values() {
+                                input.update(cx, |inp, cx| inp.set_text("", cx));
+                            }
                         }
                     }
                     Err(e) => {
                         self.toast = Some(SharedString::from(format!("error: {e}")));
                     }
                 }
+                cx.notify();
             }
             Action::Morphism { name, .. } => {
-                // Pipeline morphism completo (executor + event_log)
-                // requiere un Manifest cargado. Fuera de scope para
-                // este MVP; toast informativo.
                 self.toast = Some(SharedString::from(format!(
                     "morphism '{name}': pendiente (requiere manifest nakui)"
                 )));
+                cx.notify();
             }
         }
     }
 
-    /// Construye un Value desde el form buffer y lo seedea al store.
-    fn commit_seed(&mut self, mod_idx: usize, entity: &str) -> Result<Uuid, String> {
+    /// Construye un Value desde los TextInput vivos y lo seedea al store.
+    fn commit_seed(
+        &mut self,
+        mod_idx: usize,
+        entity: &str,
+        cx: &mut Context<Self>,
+    ) -> Result<Uuid, String> {
         let module = &self.modules[mod_idx];
-        // Recoge la spec del FormView activo para conocer field kinds.
         let spec_fields: Vec<FieldSpec> = match self.active.as_ref() {
             Some((_, view_key)) => match module.views.get(view_key) {
                 Some(View::Form(f)) => f.fields.clone(),
@@ -166,7 +190,11 @@ impl MetaUi {
         };
         let mut obj = serde_json::Map::new();
         for f in &spec_fields {
-            let raw = self.form_buffer.get(&f.name).cloned().unwrap_or_default();
+            let raw = self
+                .form_inputs
+                .get(&f.name)
+                .map(|input| input.read(cx).text().to_string())
+                .unwrap_or_default();
             if f.required && raw.trim().is_empty() {
                 return Err(format!("campo '{}' es obligatorio", f.label));
             }
@@ -186,9 +214,7 @@ impl MetaUi {
         }
     }
 
-    /// Snapshot ordenado de records de una entity (entity → rows).
-    /// Materializa a Vec antes de soltar el lock — el iterator del
-    /// Store traer un borrow que no sobrevive al drop del guard.
+    /// Snapshot ordenado de records de una entity.
     fn list_rows(&self, entity: &str) -> Vec<(Uuid, Value)> {
         let store = match self.store.lock() {
             Ok(g) => g,
@@ -198,11 +224,9 @@ impl MetaUi {
             Ok(i) => i,
             Err(_) => return Vec::new(),
         };
-        let out: Vec<(Uuid, Value)> = it
-            .filter(|(e, _, _)| e == entity)
+        it.filter(|(e, _, _)| e == entity)
             .map(|(_, id, v)| (id, v))
-            .collect();
-        out
+            .collect()
     }
 }
 
@@ -226,8 +250,6 @@ fn parse_field_value(kind: FieldKind, raw: &str) -> Result<Value, String> {
     }
 }
 
-/// Navegación por path con puntos para columns nested.
-/// Ej: `address.city` → v["address"]["city"].
 fn lookup_field<'a>(v: &'a Value, path: &str) -> Option<&'a Value> {
     let mut cur = v;
     for seg in path.split('.') {
@@ -252,13 +274,13 @@ fn short_uuid(id: &Uuid) -> String {
 
 impl Render for MetaUi {
     fn render(&mut self, _w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let bg = rgb(0x14171c);
-        let panel = rgb(0x1d2128);
-        let border = rgb(0x2a2f38);
-        let text = rgb(0xe6e8ec);
-        let text_dim = rgb(0x9ba1ad);
-        let accent = rgb(0x88c0d0);
-        let accent_active = rgb(0xa3be8c);
+        let bg = gpui::rgb(0x14171c);
+        let panel = gpui::rgb(0x1d2128);
+        let border = gpui::rgb(0x2a2f38);
+        let text = gpui::rgb(0xe6e8ec);
+        let text_dim = gpui::rgb(0x9ba1ad);
+        let accent = gpui::rgb(0x88c0d0);
+        let accent_active = gpui::rgb(0xa3be8c);
 
         let sidebar = self.render_sidebar(cx, panel, border, text, text_dim, accent_active);
         let main_panel = self.render_main(cx, panel, border, text, text_dim, accent);
@@ -266,8 +288,8 @@ impl Render for MetaUi {
             div()
                 .px(px(12.))
                 .py(px(6.))
-                .bg(rgb(0x2d3a2a))
-                .text_color(rgb(0xc0e0a0))
+                .bg(gpui::rgb(0x2d3a2a))
+                .text_color(gpui::rgb(0xc0e0a0))
                 .text_size(px(11.))
                 .child(t.clone())
         });
@@ -275,8 +297,8 @@ impl Render for MetaUi {
             div()
                 .px(px(12.))
                 .py(px(6.))
-                .bg(rgb(0x4a2020))
-                .text_color(rgb(0xffd0d0))
+                .bg(gpui::rgb(0x4a2020))
+                .text_color(gpui::rgb(0xffd0d0))
                 .text_size(px(11.))
                 .child(e.clone())
         });
@@ -338,6 +360,9 @@ impl MetaUi {
             );
         }
 
+        // Snapshot del active para evitar borrow del self adentro de la closure.
+        let active_snapshot = self.active.clone();
+
         for (mod_idx, m) in self.modules.iter().enumerate() {
             sidebar = sidebar.child(
                 div()
@@ -351,8 +376,7 @@ impl MetaUi {
             );
 
             for item in &m.menu {
-                let is_active = self
-                    .active
+                let is_active = active_snapshot
                     .as_ref()
                     .map(|(i, v)| *i == mod_idx && v == &item.view)
                     .unwrap_or(false);
@@ -362,58 +386,33 @@ impl MetaUi {
                     .map(|ic| format!("{ic}  {}", item.label))
                     .unwrap_or_else(|| item.label.clone());
 
+                let view_key = item.view.clone();
                 sidebar = sidebar.child(
-                    self.menu_item_button(
-                        cx,
-                        mod_idx,
-                        item.view.clone(),
-                        label,
-                        is_active,
-                        text,
-                        text_dim,
-                        accent_active,
-                    ),
+                    div()
+                        .id(SharedString::from(format!(
+                            "menu-{}-{}",
+                            mod_idx, item.view
+                        )))
+                        .px(px(20.))
+                        .py(px(6.))
+                        .text_size(px(12.))
+                        .text_color(if is_active { accent_active } else { text_dim })
+                        .when(is_active, |d| {
+                            d.bg(gpui::rgb(0x232a36)).text_color(text)
+                        })
+                        .hover(|d| d.bg(gpui::rgb(0x1f2630)))
+                        .child(label)
+                        .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                            this.select_view(mod_idx, view_key.clone(), cx);
+                        })),
                 );
             }
         }
         sidebar
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn menu_item_button(
-        &self,
-        _cx: &mut Context<Self>,
-        mod_idx: usize,
-        view_key: String,
-        label: String,
-        is_active: bool,
-        text: gpui::Rgba,
-        text_dim: gpui::Rgba,
-        accent: gpui::Rgba,
-    ) -> gpui::Stateful<gpui::Div> {
-        let id = format!("menu-{}-{}", mod_idx, view_key);
-        let entity = self.entity_id_for_action(&id);
-        div()
-            .id(SharedString::from(entity))
-            .px(px(20.))
-            .py(px(6.))
-            .text_size(px(12.))
-            .text_color(if is_active { accent } else { text_dim })
-            .when(is_active, |d| {
-                d.bg(rgb(0x232a36)).text_color(text)
-            })
-            .child(label)
-            .on_click(cx_handler_view(mod_idx, view_key))
-    }
-
-    fn entity_id_for_action(&self, base: &str) -> String {
-        // Helper para el id de la div clickable. GPUI requiere que
-        // las divs `Stateful` tengan un id único por scope.
-        base.to_string()
-    }
-
     fn render_main(
-        &self,
+        &mut self,
         cx: &mut Context<Self>,
         panel: gpui::Rgba,
         border: gpui::Rgba,
@@ -440,24 +439,24 @@ impl MetaUi {
             }
         };
 
-        let module = match self.modules.get(mod_idx) {
-            Some(m) => m,
-            None => return main.child(div().text_color(text_dim).child("Módulo inválido")),
-        };
-        let view = match module.views.get(&view_key) {
-            Some(v) => v,
+        let view = match self
+            .modules
+            .get(mod_idx)
+            .and_then(|m| m.views.get(&view_key))
+        {
+            Some(v) => v.clone(),
             None => {
                 return main.child(
                     div()
                         .text_color(text_dim)
                         .child(format!("Vista no encontrada: {view_key}")),
-                )
+                );
             }
         };
 
         match view {
-            View::List(lv) => self.render_list(cx, main, lv, mod_idx, border, text, text_dim, accent),
-            View::Form(fv) => self.render_form(cx, main, fv, mod_idx, border, text, text_dim, accent),
+            View::List(lv) => self.render_list(cx, main, &lv, mod_idx, border, text, text_dim, accent),
+            View::Form(fv) => self.render_form(cx, main, &fv, mod_idx, border, text, text_dim, accent),
         }
     }
 
@@ -473,7 +472,6 @@ impl MetaUi {
         text_dim: gpui::Rgba,
         accent: gpui::Rgba,
     ) -> gpui::Div {
-        // Header con título + acciones.
         let mut header = div()
             .flex()
             .flex_row()
@@ -494,20 +492,30 @@ impl MetaUi {
                 Action::SeedEntity { entity, .. } => format!("Seed {entity}"),
                 Action::Morphism { name, .. } => format!("⚡ {name}"),
             };
-            header = header.child(action_button(
-                cx,
-                format!("list-action-{mod_idx}-{idx}"),
-                label,
-                action.clone(),
-                accent,
-            ));
+            let action_clone = action.clone();
+            header = header.child(
+                div()
+                    .id(SharedString::from(format!(
+                        "list-action-{mod_idx}-{idx}"
+                    )))
+                    .px(px(10.))
+                    .py(px(4.))
+                    .bg(gpui::rgb(0x232a36))
+                    .text_color(accent)
+                    .text_size(px(11.))
+                    .rounded(px(3.))
+                    .hover(|d| d.bg(gpui::rgb(0x2c3540)))
+                    .child(label)
+                    .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                        this.apply_action(action_clone.clone(), cx);
+                    })),
+            );
         }
         main = main.child(header);
 
         let rows = self.list_rows(&lv.entity);
         let total = rows.len();
 
-        // Header de columnas.
         let total_weight: f32 = lv.columns.iter().map(|c| c.weight).sum::<f32>().max(0.01);
         let mut col_header = div()
             .flex()
@@ -526,22 +534,16 @@ impl MetaUi {
                     .child(c.label.clone()),
             );
         }
-        col_header = col_header.child(
-            div()
-                .w(px(80.))
-                .text_color(text_dim)
-                .child("id"),
-        );
+        col_header = col_header.child(div().w(px(80.)).text_color(text_dim).child("id"));
         main = main.child(col_header);
 
-        // Filas.
         for (id, value) in &rows {
             let mut row = div()
                 .flex()
                 .flex_row()
                 .py(px(6.))
                 .border_b_1()
-                .border_color(rgb(0x232a36))
+                .border_color(gpui::rgb(0x232a36))
                 .text_color(text)
                 .text_size(px(12.));
             for c in &lv.columns {
@@ -592,12 +594,11 @@ impl MetaUi {
         mut main: gpui::Div,
         fv: &FormView,
         mod_idx: usize,
-        border: gpui::Rgba,
+        _border: gpui::Rgba,
         text: gpui::Rgba,
         text_dim: gpui::Rgba,
         accent: gpui::Rgba,
     ) -> gpui::Div {
-        let _ = border;
         main = main.child(
             div()
                 .text_color(text)
@@ -606,49 +607,36 @@ impl MetaUi {
                 .child(fv.title.clone()),
         );
         for f in &fv.fields {
-            let raw = self.form_buffer.get(&f.name).cloned().unwrap_or_default();
-            let display = if raw.is_empty() {
-                f.default.clone().unwrap_or_default()
-            } else {
-                raw
-            };
             let label = if f.required {
                 format!("{} *", f.label)
             } else {
                 f.label.clone()
             };
-            let mut field_box = div()
-                .flex()
-                .flex_col()
-                .mb(px(10.))
-                .child(
-                    div()
-                        .text_color(text_dim)
-                        .text_size(px(11.))
-                        .mb(px(2.))
-                        .child(label),
-                )
-                .child(
-                    // GPUI no incluye un text_input nativo; mostramos
-                    // el buffer actual como texto. Para entrada
-                    // teclado real, integrar yahweh-widget-text-input
-                    // (próxima iteración). Por ahora el form sirve
-                    // demos visuales y el seed via API programática.
+
+            let mut field_box = div().flex().flex_col().mb(px(10.)).child(
+                div()
+                    .text_color(text_dim)
+                    .text_size(px(11.))
+                    .mb(px(2.))
+                    .child(label),
+            );
+
+            // Mount del TextInput vivo (creado en select_view).
+            if let Some(input) = self.form_inputs.get(&f.name) {
+                field_box = field_box.child(input.clone());
+            } else {
+                // No debería pasar — select_view crea inputs por cada
+                // field. Fallback display estático por seguridad.
+                field_box = field_box.child(
                     div()
                         .px(px(8.))
                         .py(px(6.))
-                        .bg(rgb(0x171a20))
-                        .border_1()
-                        .border_color(rgb(0x2a2f38))
-                        .rounded(px(3.))
-                        .text_color(text)
-                        .text_size(px(12.))
-                        .child(if display.is_empty() {
-                            "(vacío — input GPUI pendiente)".to_string()
-                        } else {
-                            display
-                        }),
+                        .bg(gpui::rgb(0x171a20))
+                        .text_color(text_dim)
+                        .child("(input no inicializado)"),
                 );
+            }
+
             if let Some(help) = &f.help {
                 field_box = field_box.child(
                     div()
@@ -668,14 +656,23 @@ impl MetaUi {
                 label.clone().unwrap_or_else(|| format!("Ir a {view}"))
             }
         };
+        let submit_action = fv.on_submit.clone();
         main = main.child(
-            div().mt(px(12.)).child(action_button(
-                cx,
-                format!("form-submit-{mod_idx}"),
-                submit_label,
-                fv.on_submit.clone(),
-                accent,
-            )),
+            div().mt(px(12.)).child(
+                div()
+                    .id(SharedString::from(format!("form-submit-{mod_idx}")))
+                    .px(px(12.))
+                    .py(px(6.))
+                    .bg(gpui::rgb(0x2c3540))
+                    .text_color(accent)
+                    .text_size(px(12.))
+                    .rounded(px(3.))
+                    .hover(|d| d.bg(gpui::rgb(0x3a4555)))
+                    .child(submit_label)
+                    .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                        this.apply_action(submit_action.clone(), cx);
+                    })),
+            ),
         );
 
         main = main.child(
@@ -684,44 +681,12 @@ impl MetaUi {
                 .text_color(text_dim)
                 .text_size(px(10.))
                 .child(
-                    "Nota: en este MVP, los inputs todavía no aceptan teclado. \
-                     El submit usa los `default` del schema o vacío (campo opcional). \
-                     Próximo iter: integración con yahweh-widget-text-input.",
+                    "Tip: click en el campo para enfocar; Enter no envía (todavía), \
+                     usá el botón. Backspace borra el último carácter.",
                 ),
         );
         main
     }
-}
-
-fn cx_handler_view(
-    mod_idx: usize,
-    view_key: String,
-) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
-    let _ = (mod_idx, &view_key);
-    move |_e, _w, _cx| {
-        // GPUI handlers necesitan acceder al modelo de la entity actual;
-        // wirearemos via cx.update en el render real cuando el iter de
-        // eventos tipados esté listo. Por ahora el menu se navega via
-        // env var/restart.
-    }
-}
-
-fn action_button(
-    _cx: &mut Context<MetaUi>,
-    id: String,
-    label: String,
-    _action: Action,
-    accent: gpui::Rgba,
-) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(SharedString::from(id))
-        .px(px(10.))
-        .py(px(4.))
-        .bg(rgb(0x232a36))
-        .text_color(accent)
-        .text_size(px(11.))
-        .rounded(px(3.))
-        .child(label)
 }
 
 #[cfg(test)]
@@ -730,42 +695,26 @@ mod tests {
 
     #[test]
     fn parse_field_text_returns_string() {
-        let v = parse_field_value(FieldKind::Text, "hola").unwrap();
-        assert_eq!(v, json!("hola"));
+        assert_eq!(parse_field_value(FieldKind::Text, "hola").unwrap(), json!("hola"));
     }
 
     #[test]
     fn parse_field_number_int_then_float() {
-        let i = parse_field_value(FieldKind::Number, "42").unwrap();
-        assert_eq!(i, json!(42));
-        let f = parse_field_value(FieldKind::Number, "3.14").unwrap();
-        assert_eq!(f, json!(3.14));
+        assert_eq!(parse_field_value(FieldKind::Number, "42").unwrap(), json!(42));
+        assert_eq!(parse_field_value(FieldKind::Number, "3.14").unwrap(), json!(3.14));
     }
 
     #[test]
     fn parse_field_number_invalid_errors() {
-        let r = parse_field_value(FieldKind::Number, "not-a-number");
-        assert!(r.is_err());
+        assert!(parse_field_value(FieldKind::Number, "not-a-number").is_err());
     }
 
     #[test]
     fn parse_field_boolean_variants() {
-        assert_eq!(
-            parse_field_value(FieldKind::Boolean, "true").unwrap(),
-            json!(true)
-        );
-        assert_eq!(
-            parse_field_value(FieldKind::Boolean, "yes").unwrap(),
-            json!(true)
-        );
-        assert_eq!(
-            parse_field_value(FieldKind::Boolean, "false").unwrap(),
-            json!(false)
-        );
-        assert_eq!(
-            parse_field_value(FieldKind::Boolean, "").unwrap(),
-            json!(false)
-        );
+        assert_eq!(parse_field_value(FieldKind::Boolean, "true").unwrap(), json!(true));
+        assert_eq!(parse_field_value(FieldKind::Boolean, "yes").unwrap(), json!(true));
+        assert_eq!(parse_field_value(FieldKind::Boolean, "false").unwrap(), json!(false));
+        assert_eq!(parse_field_value(FieldKind::Boolean, "").unwrap(), json!(false));
         assert!(parse_field_value(FieldKind::Boolean, "maybe").is_err());
     }
 
@@ -776,10 +725,7 @@ mod tests {
             "address": { "city": "Bogotá", "country": "CO" }
         });
         assert_eq!(lookup_field(&v, "name").unwrap(), &json!("Acme"));
-        assert_eq!(
-            lookup_field(&v, "address.city").unwrap(),
-            &json!("Bogotá")
-        );
+        assert_eq!(lookup_field(&v, "address.city").unwrap(), &json!("Bogotá"));
         assert!(lookup_field(&v, "missing").is_none());
         assert!(lookup_field(&v, "address.zipcode").is_none());
     }

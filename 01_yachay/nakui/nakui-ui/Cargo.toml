@@ -8,6 +8,8 @@ description = "Nakui — runtime GPUI de la metainterfaz: carga module.json desd
 [dependencies]
 nakui-core = { path = "../../modules/nakui/core" }
 nakui-ui-schema = { path = "../../modules/nakui/ui-schema" }
+yahweh-widget-text-input = { path = "../../modules/ui_engine/widgets/text_input" }
+yahweh-theme = { path = "../../modules/ui_engine/libs/theme" }
 gpui = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true, features = ["serde"] }
