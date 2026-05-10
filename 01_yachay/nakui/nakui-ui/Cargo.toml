@@ -11,6 +11,7 @@ yahweh-meta-schema = { path = "../../modules/ui_engine/libs/meta-schema" }
 yahweh-meta-runtime = { path = "../../modules/ui_engine/libs/meta-runtime" }
 brahman-cards = { path = "../../core/brahman-cards" }
 yahweh-widget-text-input = { path = "../../modules/ui_engine/widgets/text_input" }
+yahweh-widget-meta-form = { path = "../../modules/ui_engine/widgets/meta-form" }
 yahweh-theme = { path = "../../modules/ui_engine/libs/theme" }
 gpui = { workspace = true }
 serde_json = { workspace = true }
