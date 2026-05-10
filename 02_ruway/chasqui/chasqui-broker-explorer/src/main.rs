@@ -26,8 +26,11 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use brahman_handshake::messages::SessionList;
 use brahman_handshake::transport;
-use brahman_sidecar::{await_provider_blocking, build_consumer_card, ConsumerError};
+use brahman_sidecar::{
+    await_provider_blocking, build_consumer_card, list_sessions_blocking, ConsumerError,
+};
 use gpui::{
     div, prelude::*, px, Context, IntoElement, Render, SharedString, Window,
 };
@@ -67,6 +70,9 @@ struct Explorer {
     state: ProbeState,
     last_probe_ms: u64,
     last_probe_at: Option<Instant>,
+    /// Última `SessionList` recibida del broker (None = aún sin pedir
+    /// o último intento falló).
+    sessions: Option<SessionList>,
 }
 
 impl Explorer {
@@ -110,8 +116,22 @@ impl Explorer {
                     },
                 };
 
+                // Si el broker está reachable (UP*), aprovechar el
+                // round-trip para pedir la lista de sesiones. Si está
+                // DOWN, ni intentar — la lista serviría de nada con
+                // connect failed igual.
+                let sessions_snapshot = match &new_state {
+                    ProbeState::Down { .. } | ProbeState::Pending => None,
+                    _ => bg
+                        .spawn(async move {
+                            list_sessions_blocking("brahman-broker-explorer").ok()
+                        })
+                        .await,
+                };
+
                 let _ = this.update(cx, |me, cx| {
                     me.state = new_state;
+                    me.sessions = sessions_snapshot;
                     me.last_probe_ms = elapsed;
                     me.last_probe_at = Some(Instant::now());
                     cx.notify();
@@ -129,6 +149,7 @@ impl Explorer {
             state: ProbeState::Pending,
             last_probe_ms: 0,
             last_probe_at: None,
+            sessions: None,
         }
     }
 }
@@ -178,6 +199,41 @@ impl Render for Explorer {
             )),
         };
 
+        let sessions_items: Vec<String> = self
+            .sessions
+            .as_ref()
+            .map(|list| {
+                let mut entries: Vec<_> = list.entries.iter().collect();
+                // Orden estable por session id (Ulid es ordenable
+                // temporal); útil para que la UI no se reordene
+                // entre ticks aunque el HashMap del server sí.
+                entries.sort_by_key(|e| e.session);
+                entries
+                    .iter()
+                    .map(|e| {
+                        format!(
+                            "{}  ·  in:[{}]  out:[{}]{}",
+                            e.label,
+                            e.inputs.join(","),
+                            e.outputs.join(","),
+                            if e.conscious { "  (wit)" } else { "" }
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let sessions_count_value = self
+            .sessions
+            .as_ref()
+            .map(|l| l.entries.len().to_string())
+            .unwrap_or_else(|| "—".into());
+        let sessions_descr = match &self.sessions {
+            None => "lista no disponible (broker DOWN o pendiente)".to_string(),
+            Some(l) if l.entries.is_empty() => "sin sesiones registradas en el broker".into(),
+            Some(_) => "labels visibles + flows in/out · (wit) = consciente".into(),
+        };
+
         let body = div()
             .flex()
             .flex_col()
@@ -185,7 +241,17 @@ impl Render for Explorer {
             .px(px(16.))
             .py(px(16.))
             .child(state_card(cx, &self.state, text, text_dim, accent_up,
-                accent_partial, accent_down, accent_pending));
+                accent_partial, accent_down, accent_pending))
+            .child(stat_card(
+                cx,
+                "Sesiones activas",
+                sessions_count_value,
+                &sessions_descr,
+                accent_up,
+                text,
+                text_dim,
+                &sessions_items,
+            ));
 
         div()
             .flex()
