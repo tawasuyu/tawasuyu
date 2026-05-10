@@ -6,8 +6,11 @@ license.workspace = true
 description = "Probe GUI del broker brahman: conecta cada N segundos vía await_provider_blocking con un Card observer agnóstico, reporta 3 estados (down / up sin provider / up con provider)."
 
 [dependencies]
+brahman-broker = { path = "../../core/brahman-broker" }
+brahman-card = { path = "../../core/brahman-card" }
 brahman-handshake = { path = "../../core/brahman-handshake" }
 brahman-sidecar = { path = "../../shared/brahman-sidecar" }
+ulid = { workspace = true }
 yahweh-theme = { path = "../../modules/ui_engine/libs/theme" }
 yahweh-launcher = { path = "../../modules/ui_engine/libs/launcher" }
 yahweh-widget-banner = { path = "../../modules/ui_engine/widgets/banner" }
