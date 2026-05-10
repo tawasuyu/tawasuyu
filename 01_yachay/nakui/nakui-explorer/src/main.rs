@@ -31,6 +31,7 @@ use gpui::{
 };
 use nakui_core::event_log::{EventLog, LogEntry};
 use yahweh_meta_runtime::{preview_value, short_hash, short_uuid};
+use yahweh_widget_banner::{banner, Banner};
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
@@ -188,15 +189,14 @@ impl Render for Explorer {
                 .child(breakdown_line)
         });
 
-        let error_banner = self.error.as_ref().map(|e| {
-            div()
-                .px(px(16.))
-                .py(px(8.))
-                .bg(rgb(0x4a2020))
-                .text_color(rgb(0xffd0d0))
-                .text_size(px(12.))
-                .child(e.clone())
-        });
+        // Banner de error vía widget compartido yahweh-widget-banner.
+        // Padding extra (px 16/8) por convención del explorer; el
+        // default del widget es 12/6 — el override mantiene la
+        // visual del header.
+        let error_banner = self
+            .error
+            .as_ref()
+            .map(|e| banner(Banner::Error, e.clone()).px(px(16.)).py(px(8.)).text_size(px(12.)));
 
         // Renderea las últimas N entries (la timeline crece hacia abajo
         // en append-order; mostramos las más recientes primero para

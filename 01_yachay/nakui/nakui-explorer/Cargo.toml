@@ -8,6 +8,7 @@ description = "Explorador GPUI del event log de Nakui: timeline de seeds + morph
 [dependencies]
 nakui-core = { path = "../../modules/nakui/core" }
 yahweh-meta-runtime = { path = "../../modules/ui_engine/libs/meta-runtime" }
+yahweh-widget-banner = { path = "../../modules/ui_engine/widgets/banner" }
 gpui = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true, features = ["serde"] }
