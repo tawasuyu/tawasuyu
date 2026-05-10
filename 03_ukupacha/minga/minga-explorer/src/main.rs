@@ -33,7 +33,7 @@ use gpui::{
 use minga_store::PersistentRepo;
 use yahweh_theme::Theme;
 use yahweh_widget_banner::{banner_themed, Banner};
-use yahweh_widget_card::card_themed;
+use yahweh_widget_stat_card::stat_card;
 use yahweh_widget_theme_switcher::theme_switcher;
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
@@ -274,7 +274,7 @@ impl Render for Explorer {
                     .child(stat_card(
                         cx,
                         "Nodos AST",
-                        snap.nodes,
+                        snap.nodes.to_string(),
                         "fragments parseados del código",
                         accent_nodes,
                         text,
@@ -284,7 +284,7 @@ impl Render for Explorer {
                     .child(stat_card(
                         cx,
                         "Atestaciones",
-                        snap.attestations,
+                        snap.attestations.to_string(),
                         "firmas Ed25519 sobre los nodos",
                         accent_attestations,
                         text,
@@ -294,7 +294,7 @@ impl Render for Explorer {
                     .child(stat_card(
                         cx,
                         "Claves MST",
-                        snap.mst_keys,
+                        snap.mst_keys.to_string(),
                         "entradas del Merkle Search Tree",
                         accent_mst,
                         text,
@@ -315,68 +315,8 @@ impl Render for Explorer {
     }
 }
 
-/// Card visual para una estadística del dashboard. Border-l por
-/// kind, label arriba + número grande + descripción + listing de
-/// items recientes (puede estar vacío). Items se renderean en
-/// `monospace`-look (text_size chico) — útil para hashes/dids.
-fn stat_card(
-    cx: &mut Context<Explorer>,
-    label: &str,
-    value: usize,
-    description: &str,
-    accent: gpui::Rgba,
-    text: gpui::Hsla,
-    text_dim: gpui::Hsla,
-    recent_items: &[String],
-) -> impl IntoElement {
-    let mut card = card_themed(cx)
-        .border_l_4()
-        .border_color(accent)
-        .child(
-            div()
-                .text_color(accent)
-                .text_size(px(11.))
-                .child(SharedString::from(label.to_string())),
-        )
-        .child(
-            div()
-                .text_color(text)
-                .text_size(px(28.))
-                .child(SharedString::from(value.to_string())),
-        )
-        .child(
-            div()
-                .text_color(text_dim)
-                .text_size(px(11.))
-                .child(SharedString::from(description.to_string())),
-        );
-
-    if !recent_items.is_empty() {
-        // Header de la sub-section.
-        card = card.child(
-            div()
-                .mt(px(6.))
-                .text_color(text_dim)
-                .text_size(px(10.))
-                .child(SharedString::from(format!(
-                    "recent ({} de {}):",
-                    recent_items.len(),
-                    value
-                ))),
-        );
-        // Una linea por item.
-        for it in recent_items {
-            card = card.child(
-                div()
-                    .text_color(text)
-                    .text_size(px(11.))
-                    .child(SharedString::from(it.clone())),
-            );
-        }
-    }
-
-    card
-}
+// `stat_card` se promovió a `yahweh-widget-stat-card` y se importa
+// arriba. La fn local fue eliminada en la iter 15 del refactor.
 
 #[cfg(test)]
 mod tests {

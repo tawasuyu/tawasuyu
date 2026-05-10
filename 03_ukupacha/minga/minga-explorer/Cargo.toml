@@ -9,7 +9,7 @@ description = "Dashboard GPUI del repo Minga: counts de nodos AST, atestaciones,
 minga-store = { path = "../../modules/semantic_dht/minga-store" }
 yahweh-theme = { path = "../../modules/ui_engine/libs/theme" }
 yahweh-widget-banner = { path = "../../modules/ui_engine/widgets/banner" }
-yahweh-widget-card = { path = "../../modules/ui_engine/widgets/card" }
+yahweh-widget-stat-card = { path = "../../modules/ui_engine/widgets/stat-card" }
 yahweh-widget-theme-switcher = { path = "../../modules/ui_engine/widgets/theme-switcher" }
 gpui = { workspace = true }
 

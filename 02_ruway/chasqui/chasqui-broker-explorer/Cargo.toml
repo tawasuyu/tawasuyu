@@ -10,7 +10,7 @@ brahman-handshake = { path = "../../core/brahman-handshake" }
 brahman-sidecar = { path = "../../shared/brahman-sidecar" }
 yahweh-theme = { path = "../../modules/ui_engine/libs/theme" }
 yahweh-widget-banner = { path = "../../modules/ui_engine/widgets/banner" }
-yahweh-widget-card = { path = "../../modules/ui_engine/widgets/card" }
+yahweh-widget-stat-card = { path = "../../modules/ui_engine/widgets/stat-card" }
 yahweh-widget-theme-switcher = { path = "../../modules/ui_engine/widgets/theme-switcher" }
 gpui = { workspace = true }
 

@@ -34,7 +34,7 @@ use gpui::{
 };
 use yahweh_theme::Theme;
 use yahweh_widget_banner::{banner_themed, Banner};
-use yahweh_widget_card::card_themed;
+use yahweh_widget_stat_card::stat_card;
 use yahweh_widget_theme_switcher::theme_switcher;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
@@ -225,6 +225,10 @@ impl Render for Explorer {
     }
 }
 
+/// Wrap del `stat_card` compartido con el mapeo de
+/// `ProbeState` → (label/accent/value/description). Mantenemos
+/// este helper local porque la traducción del enum a strings es
+/// específica del explorer (no es un patrón cross-app).
 #[allow(clippy::too_many_arguments)]
 fn state_card(
     cx: &mut Context<Explorer>,
@@ -236,21 +240,18 @@ fn state_card(
     accent_down: gpui::Rgba,
     accent_pending: gpui::Rgba,
 ) -> impl IntoElement {
-    let (label, accent, value, description): (&str, gpui::Rgba, String, String) = match state {
+    let (accent, value, description): (gpui::Rgba, String, String) = match state {
         ProbeState::Pending => (
-            "Estado",
             accent_pending,
             "PENDING".into(),
             "esperando primer probe…".into(),
         ),
         ProbeState::Down { reason } => (
-            "Estado",
             accent_down,
             "DOWN".into(),
             format!("connect failed: {reason}"),
         ),
         ProbeState::UpNoProvider { flow } => (
-            "Estado",
             accent_partial,
             "UP / NO PROVIDER".into(),
             format!("broker reachable; sin productor para flow `{flow}`"),
@@ -259,7 +260,6 @@ fn state_card(
             flow,
             producer_socket,
         } => (
-            "Estado",
             accent_up,
             "UP / PROVIDER".into(),
             format!(
@@ -269,27 +269,7 @@ fn state_card(
         ),
     };
 
-    card_themed(cx)
-        .border_l_4()
-        .border_color(accent)
-        .child(
-            div()
-                .text_color(accent)
-                .text_size(px(11.))
-                .child(SharedString::from(label.to_string())),
-        )
-        .child(
-            div()
-                .text_color(text)
-                .text_size(px(28.))
-                .child(SharedString::from(value)),
-        )
-        .child(
-            div()
-                .text_color(text_dim)
-                .text_size(px(11.))
-                .child(SharedString::from(description)),
-        )
+    stat_card(cx, "Estado", value, &description, accent, text, text_dim, &[])
 }
 
 #[cfg(test)]
