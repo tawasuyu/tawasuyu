@@ -34,6 +34,7 @@ use yahweh_meta_runtime::{preview_value, short_hash, short_uuid};
 use yahweh_theme::Theme;
 use yahweh_widget_banner::{banner_themed, Banner};
 use yahweh_widget_card::card_themed;
+use yahweh_widget_theme_switcher::theme_switcher;
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
@@ -167,7 +168,13 @@ impl Render for Explorer {
             self.last_load_ms,
         );
 
+        // Header con título a la izquierda + theme switcher a la
+        // derecha. flex_row + flex_grow del label empuja el switcher
+        // al borde.
         let header = div()
+            .flex()
+            .flex_row()
+            .items_center()
             .px(px(16.))
             .py(px(12.))
             .bg(theme.bg_panel.clone())
@@ -175,7 +182,8 @@ impl Render for Explorer {
             .border_color(theme.border)
             .text_color(text)
             .text_size(px(14.))
-            .child(header_text);
+            .child(div().flex_grow().child(header_text))
+            .child(theme_switcher(cx));
 
         let breakdown_line = if top_breakdown.is_empty() {
             String::new()
