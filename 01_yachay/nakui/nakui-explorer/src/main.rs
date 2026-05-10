@@ -31,13 +31,18 @@ use gpui::{
 };
 use nakui_core::event_log::{EventLog, LogEntry};
 use yahweh_meta_runtime::{preview_value, short_hash, short_uuid};
-use yahweh_widget_banner::{banner, Banner};
-use yahweh_widget_card::card;
+use yahweh_theme::Theme;
+use yahweh_widget_banner::{banner_themed, Banner};
+use yahweh_widget_card::card_themed;
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
 fn main() {
     Application::new().run(|cx: &mut App| {
+        // Theme global instalado al boot — los widgets themed lo
+        // requieren, y simplifica el chrome del app a una paleta
+        // consistente.
+        Theme::install_default(cx);
         let bounds = Bounds::centered(None, gpui::size(px(900.), px(640.)), cx);
         cx.open_window(
             WindowOptions {
@@ -139,14 +144,17 @@ fn load_log(path: &std::path::Path) -> Result<Vec<LogEntry>, String> {
 }
 
 impl Render for Explorer {
-    fn render(&mut self, _w: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let bg = rgb(0x14171c);
-        let card_bg = rgb(0x1d2128);
-        let text_dim = rgb(0x9ba1ad);
-        let text = rgb(0xe6e8ec);
+    fn render(&mut self, _w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Colores cromáticos del chrome del app vienen del Theme
+        // global (instalado en main). Los acentos por kind (seed
+        // azul, morphism verde) siguen siendo locales: son señales
+        // semánticas del log, no del chrome.
+        let theme = Theme::global(cx).clone();
+        let bg = theme.bg_app.clone();
+        let text = theme.fg_text;
+        let text_dim = theme.fg_muted;
         let accent_seed = rgb(0x88c0d0);
         let accent_morphism = rgb(0xa3be8c);
-        let _ = card_bg;
 
         let (seed_count, morphism_count, top_breakdown) = self.breakdown();
 
@@ -162,9 +170,9 @@ impl Render for Explorer {
         let header = div()
             .px(px(16.))
             .py(px(12.))
-            .bg(card_bg)
+            .bg(theme.bg_panel.clone())
             .border_b_1()
-            .border_color(rgb(0x2a2f38))
+            .border_color(theme.border)
             .text_color(text)
             .text_size(px(14.))
             .child(header_text);
@@ -184,20 +192,21 @@ impl Render for Explorer {
             div()
                 .px(px(16.))
                 .py(px(6.))
-                .bg(rgb(0x16191f))
+                .bg(theme.bg_panel_alt.clone())
                 .text_color(text_dim)
                 .text_size(px(11.))
                 .child(breakdown_line)
         });
 
-        // Banner de error vía widget compartido yahweh-widget-banner.
-        // Padding extra (px 16/8) por convención del explorer; el
-        // default del widget es 12/6 — el override mantiene la
-        // visual del header.
-        let error_banner = self
-            .error
-            .as_ref()
-            .map(|e| banner(Banner::Error, e.clone()).px(px(16.)).py(px(8.)).text_size(px(12.)));
+        // Banner de error themed: deriva (bg, fg) del Theme actual
+        // según `Banner::Error` + `is_dark`. Padding extra (16/8)
+        // del header preservado via overrides del builder.
+        let error_banner = self.error.as_ref().map(|e| {
+            banner_themed(cx, Banner::Error, e.clone())
+                .px(px(16.))
+                .py(px(8.))
+                .text_size(px(12.))
+        });
 
         // Renderea las últimas N entries (la timeline crece hacia abajo
         // en append-order; mostramos las más recientes primero para
@@ -225,8 +234,7 @@ impl Render for Explorer {
                         .as_ref()
                         .map(|h| format!("schema={}", short_hash(h)))
                         .unwrap_or_else(|| "schema=(legacy)".into());
-                    card()
-                        .bg(card_bg)
+                    card_themed(cx)
                         .border_l_4()
                         .border_color(accent_seed)
                         .child(
@@ -291,8 +299,7 @@ impl Render for Explorer {
                         .as_ref()
                         .map(|h| format!("schema={}", short_hash(h)))
                         .unwrap_or_else(|| "schema=(legacy)".into());
-                    card()
-                        .bg(card_bg)
+                    card_themed(cx)
                         .border_l_4()
                         .border_color(accent_morphism)
                         .child(

@@ -10,6 +10,7 @@ nakui-core = { path = "../../modules/nakui/core" }
 yahweh-meta-runtime = { path = "../../modules/ui_engine/libs/meta-runtime" }
 yahweh-widget-banner = { path = "../../modules/ui_engine/widgets/banner" }
 yahweh-widget-card = { path = "../../modules/ui_engine/widgets/card" }
+yahweh-theme = { path = "../../modules/ui_engine/libs/theme" }
 gpui = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true, features = ["serde"] }
