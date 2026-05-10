@@ -32,6 +32,7 @@ use gpui::{
 use nakui_core::event_log::{EventLog, LogEntry};
 use yahweh_meta_runtime::{preview_value, short_hash, short_uuid};
 use yahweh_widget_banner::{banner, Banner};
+use yahweh_widget_card::card;
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
@@ -224,17 +225,10 @@ impl Render for Explorer {
                         .as_ref()
                         .map(|h| format!("schema={}", short_hash(h)))
                         .unwrap_or_else(|| "schema=(legacy)".into());
-                    div()
-                        .flex()
-                        .flex_col()
-                        .px(px(12.))
-                        .py(px(8.))
-                        .mb(px(4.))
+                    card()
                         .bg(card_bg)
-                        .rounded(px(4.))
                         .border_l_4()
                         .border_color(accent_seed)
-                        .gap(px(2.))
                         .child(
                             div()
                                 .flex()
@@ -297,17 +291,10 @@ impl Render for Explorer {
                         .as_ref()
                         .map(|h| format!("schema={}", short_hash(h)))
                         .unwrap_or_else(|| "schema=(legacy)".into());
-                    div()
-                        .flex()
-                        .flex_col()
-                        .px(px(12.))
-                        .py(px(8.))
-                        .mb(px(4.))
+                    card()
                         .bg(card_bg)
-                        .rounded(px(4.))
                         .border_l_4()
                         .border_color(accent_morphism)
-                        .gap(px(2.))
                         .child(
                             div()
                                 .flex()
