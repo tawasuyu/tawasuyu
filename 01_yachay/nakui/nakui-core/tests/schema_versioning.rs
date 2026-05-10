@@ -335,7 +335,7 @@ fn seed_and_log_writes_bundle_hash_into_seed_entries() {
 }
 
 #[test]
-fn verify_log_rejects_seed_after_schema_kcl_changes() {
+fn verify_log_rejects_seed_after_schema_changes() {
     let temp = TempModule::from(&treasury_module());
     let log_path = fresh_log_path();
     let id = Uuid::new_v4();

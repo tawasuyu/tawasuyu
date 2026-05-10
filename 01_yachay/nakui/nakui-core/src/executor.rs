@@ -136,7 +136,12 @@ impl Executor {
         let graph = ManifestGraph::build(&manifest)?;
         let schema_path = build_schema_bundle(&module_dir, &manifest.effective_schemas())?;
 
-        let schema_bundle_bytes = std::fs::read(&schema_path)?;
+        // Hash insumos = bytes reales de cada schema file, NO el bundle
+        // (que sólo contiene `import "/abs/path"` y no cambia cuando el
+        // archivo apuntado se mueve). Sin esto, el bundle hash quedaba
+        // pegado y la versión del seed nunca detectaba ediciones de
+        // schema. Ver `verify_log_rejects_seed_after_schema_changes`.
+        let schema_bundle_bytes = read_schema_files_concat(&module_dir, &manifest.effective_schemas())?;
         let schema_bundle_hash = compute_schema_bundle_hash(&schema_bundle_bytes);
         let mut schema_hashes = HashMap::with_capacity(manifest.morphisms.len());
         for spec in &manifest.morphisms {
@@ -519,6 +524,28 @@ pub fn normalize_rhai_source(src: &str) -> String {
 /// El path en el `import "..."` queda absoluto (resuelto desde
 /// `module_dir`) para que el evaluator lo encuentre desde el
 /// tempdir.
+/// Concatena los bytes de cada schema file declarado, en orden y con
+/// framing `\0NCL:<name>\0`, para alimentar el bundle hash con el
+/// contenido real de los schemas. El bundle compilado por
+/// `build_schema_bundle` sólo contiene imports de paths absolutos —
+/// inestables entre runs y, peor, invariantes a ediciones del archivo
+/// apuntado. Esta función entrega bytes que sí mueven el hash cuando
+/// cambia el schema en disco.
+fn read_schema_files_concat(
+    module_dir: &std::path::Path,
+    schemas: &[String],
+) -> std::io::Result<Vec<u8>> {
+    let mut out = Vec::new();
+    for s in schemas {
+        out.extend_from_slice(b"\0NCL:");
+        out.extend_from_slice(s.as_bytes());
+        out.push(0);
+        let bytes = std::fs::read(module_dir.join(s))?;
+        out.extend_from_slice(&bytes);
+    }
+    Ok(out)
+}
+
 fn build_schema_bundle(
     module_dir: &std::path::Path,
     schemas: &[String],
