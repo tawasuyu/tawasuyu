@@ -30,6 +30,7 @@ use gpui::{
     SharedString, Window, WindowBounds, WindowOptions,
 };
 use nakui_core::event_log::{EventLog, LogEntry};
+use yahweh_meta_runtime::{preview_value, short_hash, short_uuid};
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
@@ -378,35 +379,8 @@ impl Render for Explorer {
     }
 }
 
-fn short_uuid(id: &uuid::Uuid) -> String {
-    let s = id.to_string();
-    if s.len() > 8 {
-        s[..8].to_string()
-    } else {
-        s
-    }
-}
-
-fn short_hash(h: &[u8; 32]) -> String {
-    let mut s = String::with_capacity(8);
-    for b in h.iter().take(4) {
-        use std::fmt::Write;
-        let _ = write!(s, "{:02x}", b);
-    }
-    s
-}
-
-/// Renderiza un `serde_json::Value` en una sola línea limitada a `max`
-/// caracteres (para preview en la timeline, no para edición).
-fn preview_value(v: &serde_json::Value, max: usize) -> String {
-    let s = v.to_string();
-    if s.chars().count() <= max {
-        s
-    } else {
-        let truncated: String = s.chars().take(max - 3).collect();
-        format!("{truncated}...")
-    }
-}
+// Helpers `short_uuid`, `short_hash`, `preview_value` viven en
+// `yahweh_meta_runtime::format`. Se usan acá via el `use` de arriba.
 
 #[cfg(test)]
 mod tests {
@@ -472,34 +446,8 @@ mod tests {
         assert!(result.is_empty());
     }
 
-    #[test]
-    fn preview_value_truncates_long_strings() {
-        let v = serde_json::json!({"a": "x".repeat(200)});
-        let p = preview_value(&v, 30);
-        assert!(p.len() <= 30);
-        assert!(p.ends_with("..."));
-    }
-
-    #[test]
-    fn preview_value_keeps_short_strings_intact() {
-        let v = serde_json::json!({"a": 1});
-        let p = preview_value(&v, 30);
-        assert_eq!(p, "{\"a\":1}");
-    }
-
-    #[test]
-    fn short_uuid_takes_first_8_chars() {
-        let id = uuid::Uuid::parse_str("a1b2c3d4-e5f6-7890-abcd-ef1234567890").unwrap();
-        assert_eq!(short_uuid(&id), "a1b2c3d4");
-    }
-
-    #[test]
-    fn short_hash_takes_first_4_bytes_hex() {
-        let mut h = [0u8; 32];
-        h[0] = 0xaa;
-        h[1] = 0xbb;
-        h[2] = 0xcc;
-        h[3] = 0xdd;
-        assert_eq!(short_hash(&h), "aabbccdd");
-    }
+    // Tests de `short_uuid` / `short_hash` / `preview_value` viven
+    // en `yahweh-meta-runtime::format` tras la migración. Si esos se
+    // vuelven a romper, los tests específicos del crate runtime los
+    // capturan; acá no duplicamos.
 }
