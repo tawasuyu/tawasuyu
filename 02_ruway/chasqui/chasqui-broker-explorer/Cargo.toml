@@ -11,7 +11,7 @@ brahman-sidecar = { path = "../../shared/brahman-sidecar" }
 yahweh-theme = { path = "../../modules/ui_engine/libs/theme" }
 yahweh-widget-banner = { path = "../../modules/ui_engine/widgets/banner" }
 yahweh-widget-stat-card = { path = "../../modules/ui_engine/widgets/stat-card" }
-yahweh-widget-theme-switcher = { path = "../../modules/ui_engine/widgets/theme-switcher" }
+yahweh-widget-app-header = { path = "../../modules/ui_engine/widgets/app-header" }
 gpui = { workspace = true }
 
 [[bin]]

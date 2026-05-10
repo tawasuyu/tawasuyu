@@ -35,7 +35,7 @@ use gpui::{
 use yahweh_theme::Theme;
 use yahweh_widget_banner::{banner_themed, Banner};
 use yahweh_widget_stat_card::stat_card;
-use yahweh_widget_theme_switcher::theme_switcher;
+use yahweh_widget_app_header::app_header;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
@@ -170,19 +170,8 @@ impl Render for Explorer {
             self.last_probe_ms,
         );
 
-        let header = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .px(px(16.))
-            .py(px(12.))
-            .bg(theme.bg_panel.clone())
-            .border_b_1()
-            .border_color(theme.border)
-            .text_color(text)
-            .text_size(px(14.))
-            .child(div().flex_grow().child(header_text))
-            .child(theme_switcher(cx));
+        // Header standard via widget compartido.
+        let header = app_header(cx, header_text);
 
         // Banner permanente debajo del header con el estado actual.
         // Severidad acorde al kind.
