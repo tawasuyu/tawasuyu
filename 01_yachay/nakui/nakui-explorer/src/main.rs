@@ -26,39 +26,20 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui::{
-    div, prelude::*, px, rgb, App, Application, Bounds, Context, IntoElement, Render,
-    SharedString, Window, WindowBounds, WindowOptions,
+    div, prelude::*, px, rgb, Context, IntoElement, Render, SharedString, Window,
 };
 use nakui_core::event_log::{EventLog, LogEntry};
+use yahweh_launcher::launch_app;
 use yahweh_meta_runtime::{preview_value, short_hash, short_uuid};
 use yahweh_theme::Theme;
-use yahweh_widget_banner::{banner_themed, Banner};
 use yahweh_widget_app_header::app_header;
+use yahweh_widget_banner::{banner_themed, Banner};
 use yahweh_widget_card::card_themed;
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
 fn main() {
-    Application::new().run(|cx: &mut App| {
-        // Theme global instalado al boot — los widgets themed lo
-        // requieren, y simplifica el chrome del app a una paleta
-        // consistente.
-        Theme::install_default(cx);
-        let bounds = Bounds::centered(None, gpui::size(px(900.), px(640.)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(gpui::TitlebarOptions {
-                    title: Some(SharedString::from("Nakui — Event Log")),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            },
-            |_w, cx| cx.new(Explorer::new),
-        )
-        .expect("open window");
-        cx.activate(true);
-    });
+    launch_app("Nakui — Event Log", (900., 640.), Explorer::new);
 }
 
 /// Estado de la vista. `entries` se reescribe en cada tick (el log

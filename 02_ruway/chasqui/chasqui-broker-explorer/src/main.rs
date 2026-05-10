@@ -29,35 +29,19 @@ use std::time::{Duration, Instant};
 use brahman_handshake::transport;
 use brahman_sidecar::{await_provider_blocking, build_consumer_card, ConsumerError};
 use gpui::{
-    div, prelude::*, px, App, Application, Bounds, Context, IntoElement, Render, SharedString,
-    Window, WindowBounds, WindowOptions,
+    div, prelude::*, px, Context, IntoElement, Render, SharedString, Window,
 };
+use yahweh_launcher::launch_app;
 use yahweh_theme::Theme;
+use yahweh_widget_app_header::app_header;
 use yahweh_widget_banner::{banner_themed, Banner};
 use yahweh_widget_stat_card::stat_card;
-use yahweh_widget_app_header::app_header;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 
 fn main() {
-    Application::new().run(|cx: &mut App| {
-        Theme::install_default(cx);
-        let bounds = Bounds::centered(None, gpui::size(px(720.), px(480.)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(gpui::TitlebarOptions {
-                    title: Some(SharedString::from("Brahman Broker — Probe")),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            },
-            |_w, cx| cx.new(Explorer::new),
-        )
-        .expect("open window");
-        cx.activate(true);
-    });
+    launch_app("Brahman Broker — Probe", (720., 480.), Explorer::new);
 }
 
 /// Snapshot de un probe.

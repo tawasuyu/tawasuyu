@@ -27,36 +27,20 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui::{
-    div, prelude::*, px, App, Application, Bounds, Context, IntoElement, Render, SharedString,
-    Window, WindowBounds, WindowOptions,
+    div, prelude::*, px, Context, IntoElement, Render, SharedString, Window,
 };
 use minga_store::PersistentRepo;
+use yahweh_launcher::launch_app;
 use yahweh_theme::Theme;
+use yahweh_widget_app_header::app_header;
 use yahweh_widget_banner::{banner_themed, Banner};
 use yahweh_widget_stat_card::stat_card;
-use yahweh_widget_app_header::app_header;
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 const REPO_DIRNAME: &str = "repo";
 
 fn main() {
-    Application::new().run(|cx: &mut App| {
-        Theme::install_default(cx);
-        let bounds = Bounds::centered(None, gpui::size(px(800.), px(560.)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(gpui::TitlebarOptions {
-                    title: Some(SharedString::from("Minga — Repo")),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            },
-            |_w, cx| cx.new(Explorer::new),
-        )
-        .expect("open window");
-        cx.activate(true);
-    });
+    launch_app("Minga — Repo", (800., 560.), Explorer::new);
 }
 
 /// Cuántos items recientes mostrar por sección. Los stores no
