@@ -37,6 +37,10 @@ use nakui_core::event_log::{
 use brahman_cards::CardBody;
 use nakui_core::executor::Executor;
 use nakui_core::store::{MemoryStore, Store};
+use yahweh_meta_runtime::{
+    compute_clear_fields, compute_field_delta, human_label_for_record, parse_field_value,
+    render_value, resolve_param_value, short_uuid, validate_entity_refs, value_to_input_text,
+};
 use yahweh_meta_schema::{
     Action, FieldKind, FieldSpec, FormView, ListView, Module, View,
 };
@@ -764,7 +768,10 @@ impl MetaUi {
                 .store
                 .lock()
                 .map_err(|_| "store mutex envenenado".to_string())?;
-            validate_entity_refs(&*store, &entity_refs)?;
+            // El helper de yahweh-meta-runtime es store-agnóstico —
+            // toma un cierre `Fn(&str, Uuid) -> Option<Value>` que
+            // wrappea el store concreto.
+            validate_entity_refs(|e, id| store.load(e, id), &entity_refs)?;
         }
         // Ramificación: si `editing` está set para esta entity, es un
         // edit de un record existente — emitimos Morphism con un
@@ -1029,209 +1036,15 @@ fn maybe_compact_log(
     )))
 }
 
-/// Valida que cada UUID en `refs` apunte a un record que realmente
-/// existe en el store bajo la entity esperada. Devuelve el primer
-/// error encontrado (fail-fast).
-///
-/// `refs` es una lista de `(label, target_entity, uuid)`. El label
-/// va al error message, así que conviene que sea legible (ej:
-/// `FieldSpec.label` en lugar de `FieldSpec.name`).
-///
-/// Sólo se llama desde el SEED path de la UI. Los inputs de morphism
-/// no necesitan este check porque `Executor::compute` ya valida cada
-/// input via `store.load(...).ok_or(EntityMissing)` antes de correr
-/// el script Rhai.
-fn validate_entity_refs<S: Store>(
-    store: &S,
-    refs: &[(String, String, Uuid)],
-) -> Result<(), String> {
-    for (label, target, id) in refs {
-        if store.load(target, *id).is_none() {
-            return Err(format!(
-                "campo '{label}': record {} de '{target}' no existe en el store",
-                short_uuid(id)
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// Decide cuáles fields del `to_clear` candidate list ameritan
-/// realmente un `FieldOp::Clear`: sólo los que existen en el current
-/// con un valor non-null. Para fields ausentes o ya null, Clear es
-/// no-op semántico (el post-state es el mismo) y dropearlos
-/// preserva la propiedad "1 op = 1 cambio efectivo" del log.
-///
-/// Preserva el orden del input para que el log entry sea estable.
-fn compute_clear_fields(current: &Value, to_clear: &[String]) -> Vec<String> {
-    to_clear
-        .iter()
-        .filter(|f| match current.get(f.as_str()) {
-            None | Some(Value::Null) => false,
-            Some(_) => true,
-        })
-        .cloned()
-        .collect()
-}
-
-/// Calcula el delta entre el record actual y los valores propuestos
-/// del form. Devuelve un Map con sólo los campos cuyo valor difiere.
-///
-/// Comparación: igualdad estructural sobre `serde_json::Value`. Un
-/// `current=Value::Null` (record no encontrado) hace que todos los
-/// campos del `proposed` sean considerados nuevos. Un campo del
-/// proposed que coincide con el del current se omite. Campos que
-/// están en current pero NO en proposed se preservan tal cual (el
-/// edit no los toca; ver el comentario en commit_seed sobre por qué
-/// no clearemos campos vacíos).
-fn compute_field_delta(
-    current: &Value,
-    proposed: &serde_json::Map<String, Value>,
-) -> serde_json::Map<String, Value> {
-    proposed
-        .iter()
-        .filter(|(field, value)| current.get(field.as_str()) != Some(*value))
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect()
-}
-
-fn parse_field_value(kind: FieldKind, raw: &str) -> Result<Value, String> {
-    match kind {
-        FieldKind::Text | FieldKind::Multiline | FieldKind::Date => Ok(json!(raw)),
-        // EntityRef se almacena como string del UUID seleccionado.
-        // Validamos que parsee como UUID al submit — antes esto se
-        // chequeaba sólo para morphism inputs (línea ~540), pero un
-        // EntityRef como SEED field o como param de morphism caía
-        // de la heurística silenciosa. Ahora rebota con mensaje
-        // claro acá, antes de tocar el log o el morphism Rhai.
-        // El selector clickable garantiza UUIDs válidos en happy
-        // path; este check protege paste manual o garbage.
-        FieldKind::EntityRef => {
-            let trimmed = raw.trim();
-            Uuid::parse_str(trimmed).map_err(|_| {
-                format!("'{raw}' no es UUID válido (usá el selector de records)")
-            })?;
-            Ok(json!(trimmed))
-        }
-        FieldKind::Boolean => match raw.to_ascii_lowercase().as_str() {
-            "true" | "yes" | "1" | "on" | "y" => Ok(json!(true)),
-            "" | "false" | "no" | "0" | "off" | "n" => Ok(json!(false)),
-            other => Err(format!("'{other}' no es booleano")),
-        },
-        FieldKind::Number => {
-            if let Ok(i) = raw.parse::<i64>() {
-                Ok(json!(i))
-            } else if let Ok(f) = raw.parse::<f64>() {
-                Ok(json!(f))
-            } else {
-                Err(format!("'{raw}' no es número"))
-            }
-        }
-    }
-}
-
-/// Etiqueta humana para representar un record en el selector de
-/// EntityRef. Heurística: prefiere campos comunes en este orden:
-/// `name`, `label`, `title`, `sku`, `sku_id`. Fallback al UUID corto.
-fn human_label_for_record(value: &Value, id: &Uuid) -> String {
-    for key in ["name", "label", "title", "sku", "sku_id"] {
-        if let Some(v) = value.get(key).and_then(Value::as_str) {
-            if !v.is_empty() {
-                return format!("{} ({})", v, short_uuid(id));
-            }
-        }
-    }
-    short_uuid(id)
-}
-
+/// Walker dentro de un `Value` por path con `.` como separador.
+/// Local porque sólo lo usa la lista renderer y no tiene tests
+/// dedicados afuera. Si crece su uso se puede mover a meta-runtime.
 fn lookup_field<'a>(v: &'a Value, path: &str) -> Option<&'a Value> {
     let mut cur = v;
     for seg in path.split('.') {
         cur = cur.get(seg)?;
     }
     Some(cur)
-}
-
-fn render_value(v: Option<&Value>) -> String {
-    match v {
-        None | Some(Value::Null) => String::new(),
-        Some(Value::String(s)) => s.clone(),
-        Some(Value::Bool(b)) => if *b { "✓" } else { "✗" }.to_string(),
-        Some(Value::Number(n)) => n.to_string(),
-        Some(other) => other.to_string(),
-    }
-}
-
-/// Resuelve un param de morphism a su `Value` según el `FieldSpec`
-/// del form. **Strict path**: si hay spec, valida `required` y parsea
-/// con el `kind` declarado (ej. Boolean rebota con "abc" antes de
-/// llegar al morphism). **Fallback path**: si no hay spec (param
-/// declarado en `Action::Morphism.params` que no aparece en
-/// `form.fields`), usa la heurística `infer_param_value` para no
-/// quedar atado a un schema mal-formado.
-///
-/// Errores tienen el label legible del spec, así el toast de la UI
-/// es interpretable.
-fn resolve_param_value(
-    field_name: &str,
-    raw: &str,
-    spec: Option<&FieldSpec>,
-) -> Result<Value, String> {
-    let Some(s) = spec else {
-        return Ok(infer_param_value(raw));
-    };
-
-    let label = if s.label.is_empty() { field_name } else { &s.label };
-
-    if s.required && raw.trim().is_empty() {
-        return Err(format!("param '{label}' es obligatorio y está vacío"));
-    }
-    if raw.is_empty() && !s.required {
-        return Ok(Value::Null);
-    }
-    parse_field_value(s.kind, raw).map_err(|e| format!("param '{label}': {e}"))
-}
-
-/// Inferencia de tipo para values pasados como `params` a un
-/// morphism. Usada como fallback en `resolve_param_value` cuando el
-/// param declarado en `Action::Morphism.params` no aparece en los
-/// `form.fields` (módulo mal-formado).
-///
-/// Heurística simple: int → i64, float → f64, "true"/"false" → bool,
-/// resto → string.
-fn infer_param_value(raw: &str) -> Value {
-    if raw.is_empty() {
-        return Value::Null;
-    }
-    if let Ok(i) = raw.parse::<i64>() {
-        return json!(i);
-    }
-    if let Ok(f) = raw.parse::<f64>() {
-        return json!(f);
-    }
-    match raw {
-        "true" => return json!(true),
-        "false" => return json!(false),
-        _ => {}
-    }
-    json!(raw)
-}
-
-/// Conversión inversa a `parse_field_value`: del JSON al texto raw
-/// que un input puede tomar y volver a parsearse igual al submit.
-/// Usado para pre-llenar inputs en modo edit.
-fn value_to_input_text(v: &Value) -> String {
-    match v {
-        Value::Null => String::new(),
-        Value::String(s) => s.clone(),
-        Value::Bool(b) => if *b { "true" } else { "false" }.to_string(),
-        Value::Number(n) => n.to_string(),
-        other => other.to_string(),
-    }
-}
-
-fn short_uuid(id: &Uuid) -> String {
-    id.to_string().chars().take(8).collect()
 }
 
 impl Render for MetaUi {
@@ -1944,30 +1757,9 @@ impl MetaUi {
 mod tests {
     use super::*;
 
-    #[test]
-    fn parse_field_text_returns_string() {
-        assert_eq!(parse_field_value(FieldKind::Text, "hola").unwrap(), json!("hola"));
-    }
-
-    #[test]
-    fn parse_field_number_int_then_float() {
-        assert_eq!(parse_field_value(FieldKind::Number, "42").unwrap(), json!(42));
-        assert_eq!(parse_field_value(FieldKind::Number, "3.14").unwrap(), json!(3.14));
-    }
-
-    #[test]
-    fn parse_field_number_invalid_errors() {
-        assert!(parse_field_value(FieldKind::Number, "not-a-number").is_err());
-    }
-
-    #[test]
-    fn parse_field_boolean_variants() {
-        assert_eq!(parse_field_value(FieldKind::Boolean, "true").unwrap(), json!(true));
-        assert_eq!(parse_field_value(FieldKind::Boolean, "yes").unwrap(), json!(true));
-        assert_eq!(parse_field_value(FieldKind::Boolean, "false").unwrap(), json!(false));
-        assert_eq!(parse_field_value(FieldKind::Boolean, "").unwrap(), json!(false));
-        assert!(parse_field_value(FieldKind::Boolean, "maybe").is_err());
-    }
+    // NOTA: `parse_field_value` / `parse_field_*` viven y se testean
+    // en `yahweh-meta-runtime`. Tests duplicados aquí se borraron en
+    // la Fase 2 del refactor yahweh.
 
     #[test]
     fn lookup_field_simple_and_nested() {
@@ -1981,118 +1773,12 @@ mod tests {
         assert!(lookup_field(&v, "address.zipcode").is_none());
     }
 
-    #[test]
-    fn infer_param_value_int_then_float_then_bool_then_string() {
-        assert_eq!(infer_param_value(""), json!(null));
-        assert_eq!(infer_param_value("42"), json!(42));
-        assert_eq!(infer_param_value("3.14"), json!(3.14));
-        assert_eq!(infer_param_value("true"), json!(true));
-        assert_eq!(infer_param_value("false"), json!(false));
-        assert_eq!(infer_param_value("hola"), json!("hola"));
-    }
-
-    fn spec(name: &str, kind: FieldKind, required: bool) -> FieldSpec {
-        FieldSpec {
-            name: name.into(),
-            label: name.into(),
-            kind,
-            default: None,
-            required,
-            help: None,
-            ref_entity: None,
-        }
-    }
-
-    fn map(items: &[(&str, Value)]) -> serde_json::Map<String, Value> {
-        items.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
-    }
-
-    #[test]
-    fn delta_empty_when_all_fields_match() {
-        let current = json!({
-            "name": "Acme",
-            "saldo": 100_i64,
-            "currency": "USD",
-        });
-        let proposed = map(&[
-            ("name", json!("Acme")),
-            ("saldo", json!(100_i64)),
-            ("currency", json!("USD")),
-        ]);
-        let delta = compute_field_delta(&current, &proposed);
-        assert!(delta.is_empty(), "no-op edit debería dar delta vacío");
-    }
-
-    #[test]
-    fn delta_includes_only_changed_field() {
-        let current = json!({
-            "name": "Acme",
-            "saldo": 100_i64,
-            "currency": "USD",
-        });
-        // El usuario sólo cambió saldo.
-        let proposed = map(&[
-            ("name", json!("Acme")),
-            ("saldo", json!(200_i64)),
-            ("currency", json!("USD")),
-        ]);
-        let delta = compute_field_delta(&current, &proposed);
-        assert_eq!(delta.len(), 1, "sólo saldo debería estar en delta");
-        assert_eq!(delta.get("saldo"), Some(&json!(200_i64)));
-        assert!(!delta.contains_key("name"));
-        assert!(!delta.contains_key("currency"));
-    }
-
-    #[test]
-    fn delta_treats_missing_record_as_all_new() {
-        // Record no existe en el store (load → None → Value::Null).
-        // Todos los campos del proposed deberían entrar al delta.
-        let current = Value::Null;
-        let proposed = map(&[
-            ("name", json!("Acme")),
-            ("saldo", json!(0_i64)),
-        ]);
-        let delta = compute_field_delta(&current, &proposed);
-        assert_eq!(delta.len(), 2);
-    }
-
-    #[test]
-    fn delta_distinguishes_int_from_string_repr() {
-        // Sanity: si el form devuelve "100" como Number → json!(100_i64)
-        // y el store tiene json!(100), comparan iguales (PartialEq de
-        // Value normaliza). Si el store tuviera "100" string, NO igualan.
-        let current = json!({"qty": 100_i64});
-        let proposed = map(&[("qty", json!(100_i64))]);
-        assert!(compute_field_delta(&current, &proposed).is_empty());
-
-        let current_str = json!({"qty": "100"});
-        let proposed_int = map(&[("qty", json!(100_i64))]);
-        assert_eq!(
-            compute_field_delta(&current_str, &proposed_int).len(),
-            1,
-            "string '100' vs int 100 sí debería contar como cambio"
-        );
-    }
-
-    #[test]
-    fn delta_skips_fields_absent_from_proposed() {
-        // Si el form omite un field (porque el FieldSpec no lo
-        // declara), no lo deberíamos mencionar en el delta — el edit
-        // sólo toca los fields del form.
-        let current = json!({
-            "name": "Acme",
-            "saldo": 100_i64,
-            "internal_marker": "x",
-        });
-        let proposed = map(&[
-            ("name", json!("Acme")),
-            ("saldo", json!(150_i64)),
-        ]);
-        let delta = compute_field_delta(&current, &proposed);
-        assert_eq!(delta.len(), 1);
-        assert_eq!(delta.get("saldo"), Some(&json!(150_i64)));
-        assert!(!delta.contains_key("internal_marker"));
-    }
+    // `infer_param_value`, helpers `spec`/`map`, todos los tests
+    // delta_* / clear_fields_* / parse_field_* / resolve_param_* /
+    // human_label_* / render_value / value_to_input_text / validate_entity_refs_*
+    // viven en `yahweh-meta-runtime`. Borrados en Fase 2 — quedan acá
+    // sólo tests de funcionalidad runtime-específica (compact, snapshot,
+    // event log, morphism pipeline, load_ui_modules).
 
     #[test]
     fn append_compact_msg_handles_both_branches() {
@@ -2172,71 +1858,6 @@ mod tests {
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(&snap_path);
-    }
-
-    #[test]
-    fn validate_entity_refs_passes_when_all_records_exist() {
-        let mut store = MemoryStore::new();
-        let stock_id = Uuid::new_v4();
-        let caja_id = Uuid::new_v4();
-        store.seed("Stock", stock_id, json!({"sku_id": "abc"}));
-        store.seed("Caja", caja_id, json!({"name": "Principal"}));
-        let refs = vec![
-            ("Stock".into(), "Stock".into(), stock_id),
-            ("Caja".into(), "Caja".into(), caja_id),
-        ];
-        assert!(validate_entity_refs(&store, &refs).is_ok());
-    }
-
-    #[test]
-    fn validate_entity_refs_fails_on_first_missing() {
-        let mut store = MemoryStore::new();
-        let stock_id = Uuid::new_v4();
-        store.seed("Stock", stock_id, json!({"sku_id": "abc"}));
-        let missing_caja = Uuid::new_v4();
-        let refs = vec![
-            ("Stock".into(), "Stock".into(), stock_id),
-            ("Caja".into(), "Caja".into(), missing_caja),
-        ];
-        let err = validate_entity_refs(&store, &refs).unwrap_err();
-        assert!(err.contains("Caja"), "msg debe nombrar la entity: {err}");
-        assert!(
-            err.contains(&short_uuid(&missing_caja)),
-            "msg debe incluir el UUID corto: {err}"
-        );
-    }
-
-    #[test]
-    fn validate_entity_refs_uses_label_not_entity_in_msg() {
-        // Si el FieldSpec.label es distinto de la entity (ej:
-        // "Stock origen" en lugar de "Stock"), el error debería usar
-        // el label legible.
-        let store = MemoryStore::new();
-        let id = Uuid::new_v4();
-        let refs = vec![("Stock origen".into(), "Stock".into(), id)];
-        let err = validate_entity_refs(&store, &refs).unwrap_err();
-        assert!(
-            err.contains("Stock origen"),
-            "msg debe incluir el label: {err}"
-        );
-    }
-
-    #[test]
-    fn validate_entity_refs_empty_list_is_ok() {
-        let store = MemoryStore::new();
-        assert!(validate_entity_refs(&store, &[]).is_ok());
-    }
-
-    #[test]
-    fn validate_entity_refs_distinguishes_target_from_other_entities() {
-        // Sanity: un UUID que existe bajo entity X pero NO bajo Y
-        // debería fallar la validación contra Y.
-        let mut store = MemoryStore::new();
-        let id = Uuid::new_v4();
-        store.seed("Customer", id, json!({"name": "Acme"}));
-        // Mismo UUID, target distinto.
-        let refs = vec![("Stock".into(), "Stock".into(), id)];
-        assert!(validate_entity_refs(&store, &refs).is_err());
     }
 
     /// E2E del nuevo `load_ui_modules` que pasa por
@@ -2333,44 +1954,6 @@ mod tests {
         let err = load_ui_modules(root.path()).unwrap_err();
         assert!(err.contains("duplicado"), "msg debe decir duplicado: {err}");
         assert!(err.contains("dup"), "msg debe nombrar el id: {err}");
-    }
-
-    #[test]
-    fn clear_fields_skips_absent_and_null() {
-        let current = json!({
-            "name": "Acme",
-            "notes": "lorem",
-            "tag": null,
-        });
-        let to_clear = vec![
-            "name".to_string(),
-            "notes".to_string(),
-            "tag".to_string(),
-            "missing".to_string(),
-        ];
-        let actual = compute_clear_fields(&current, &to_clear);
-        assert_eq!(
-            actual,
-            vec!["name".to_string(), "notes".to_string()],
-            "tag (null) y missing (ausente) deberían filtrarse — Clear sería no-op"
-        );
-    }
-
-    #[test]
-    fn clear_fields_preserves_input_order() {
-        let current = json!({"a": 1, "b": 2, "c": 3});
-        let to_clear = vec!["c".to_string(), "a".to_string(), "b".to_string()];
-        let actual = compute_clear_fields(&current, &to_clear);
-        assert_eq!(actual, vec!["c", "a", "b"], "orden del input se preserva");
-    }
-
-    #[test]
-    fn clear_fields_empty_when_current_is_null() {
-        // Record no existe en el store (load → None → Value::Null
-        // upstream). Ningún clear debería emitirse.
-        let current = Value::Null;
-        let to_clear = vec!["name".to_string()];
-        assert!(compute_clear_fields(&current, &to_clear).is_empty());
     }
 
     #[test]
@@ -2518,160 +2101,6 @@ mod tests {
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(&snap_path);
-    }
-
-    #[test]
-    fn resolve_param_strict_number_parses_i64() {
-        let s = spec("qty", FieldKind::Number, true);
-        let v = resolve_param_value("qty", "42", Some(&s)).unwrap();
-        assert_eq!(v, json!(42));
-    }
-
-    #[test]
-    fn resolve_param_strict_boolean_rejects_non_boolean() {
-        let s = spec("active", FieldKind::Boolean, true);
-        let err = resolve_param_value("active", "abc", Some(&s)).unwrap_err();
-        assert!(err.contains("active"), "msg debe mencionar el label: {err}");
-        assert!(
-            err.to_lowercase().contains("bool") || err.contains("'abc'"),
-            "msg debe explicar el tipo o value: {err}"
-        );
-    }
-
-    #[test]
-    fn resolve_param_strict_number_rejects_garbage() {
-        let s = spec("qty", FieldKind::Number, true);
-        let err = resolve_param_value("qty", "abc", Some(&s)).unwrap_err();
-        assert!(err.contains("qty"), "msg debe mencionar el label: {err}");
-    }
-
-    #[test]
-    fn resolve_param_required_empty_rejected() {
-        let s = spec("name", FieldKind::Text, true);
-        let err = resolve_param_value("name", "   ", Some(&s)).unwrap_err();
-        assert!(
-            err.contains("obligatorio"),
-            "msg debe decir obligatorio: {err}"
-        );
-    }
-
-    #[test]
-    fn resolve_param_optional_empty_returns_null() {
-        let s = spec("notes", FieldKind::Text, false);
-        let v = resolve_param_value("notes", "", Some(&s)).unwrap();
-        assert_eq!(v, json!(null));
-    }
-
-    #[test]
-    fn resolve_param_no_spec_falls_back_to_infer() {
-        // Sin FieldSpec (módulo mal-formado): infer_param_value
-        // se usa como red de seguridad.
-        let v = resolve_param_value("foo", "42", None).unwrap();
-        assert_eq!(v, json!(42));
-        let v = resolve_param_value("foo", "true", None).unwrap();
-        assert_eq!(v, json!(true));
-        let v = resolve_param_value("foo", "x", None).unwrap();
-        assert_eq!(v, json!("x"));
-    }
-
-    #[test]
-    fn parse_field_entity_ref_accepts_valid_uuid() {
-        let id = Uuid::new_v4();
-        let v = parse_field_value(FieldKind::EntityRef, &id.to_string()).unwrap();
-        assert_eq!(v, json!(id.to_string()));
-    }
-
-    #[test]
-    fn parse_field_entity_ref_trims_whitespace() {
-        // El selector clickable garantiza el value pelado; este check
-        // protege contra paste manual con espacios accidentales.
-        let id = Uuid::new_v4();
-        let padded = format!("  {id}\n");
-        let v = parse_field_value(FieldKind::EntityRef, &padded).unwrap();
-        assert_eq!(v, json!(id.to_string()), "debería trimear y devolver el UUID limpio");
-    }
-
-    #[test]
-    fn parse_field_entity_ref_rejects_non_uuid() {
-        let err = parse_field_value(FieldKind::EntityRef, "abc-123").unwrap_err();
-        assert!(err.contains("'abc-123'"), "msg debe mencionar el value: {err}");
-        assert!(
-            err.contains("UUID") || err.contains("uuid"),
-            "msg debe mencionar UUID: {err}"
-        );
-    }
-
-    #[test]
-    fn parse_field_entity_ref_rejects_empty_string() {
-        // Un EntityRef vacío al submit: el form lo manda como ""
-        // si el usuario no clickeó nada. Debería rebotar acá en
-        // lugar de loguear "" como un record id basura.
-        let err = parse_field_value(FieldKind::EntityRef, "").unwrap_err();
-        assert!(err.contains("UUID"), "msg debe mencionar UUID: {err}");
-    }
-
-    #[test]
-    fn resolve_param_strict_entity_ref_propagates_error() {
-        // Sanity: resolve_param_value con kind=EntityRef invoca
-        // parse_field_value y propaga el error de UUID inválido,
-        // con el label del FieldSpec en el mensaje.
-        let s = spec("stock_ref", FieldKind::EntityRef, true);
-        let err = resolve_param_value("stock_ref", "not-a-uuid", Some(&s)).unwrap_err();
-        assert!(err.contains("stock_ref"), "msg debe incluir label: {err}");
-        assert!(err.contains("UUID"), "msg debe mencionar UUID: {err}");
-    }
-
-    #[test]
-    fn human_label_for_record_prefers_name_over_id() {
-        let id = Uuid::new_v4();
-        let with_name = json!({"name": "Acme S.A.", "email": "x@y.z"});
-        let label = human_label_for_record(&with_name, &id);
-        assert!(label.starts_with("Acme S.A."), "got: {label}");
-        assert!(label.contains(&short_uuid(&id)));
-    }
-
-    #[test]
-    fn human_label_falls_back_through_label_title_sku() {
-        let id = Uuid::new_v4();
-        let only_label = json!({"label": "X"});
-        assert!(human_label_for_record(&only_label, &id).starts_with("X "));
-        let only_title = json!({"title": "Y"});
-        assert!(human_label_for_record(&only_title, &id).starts_with("Y "));
-        let only_sku = json!({"sku": "Z-001"});
-        assert!(human_label_for_record(&only_sku, &id).starts_with("Z-001 "));
-        let only_sku_id = json!({"sku_id": "W-002"});
-        assert!(human_label_for_record(&only_sku_id, &id).starts_with("W-002 "));
-    }
-
-    #[test]
-    fn human_label_falls_back_to_id_when_no_known_keys() {
-        let id = Uuid::new_v4();
-        let v = json!({"weird_field": "val"});
-        assert_eq!(human_label_for_record(&v, &id), short_uuid(&id));
-    }
-
-    #[test]
-    fn render_value_handles_null_string_bool() {
-        assert_eq!(render_value(None), "");
-        assert_eq!(render_value(Some(&json!(null))), "");
-        assert_eq!(render_value(Some(&json!("x"))), "x");
-        assert_eq!(render_value(Some(&json!(true))), "✓");
-        assert_eq!(render_value(Some(&json!(false))), "✗");
-        assert_eq!(render_value(Some(&json!(42))), "42");
-    }
-
-    #[test]
-    fn value_to_input_text_inverse_of_parse() {
-        // text → text
-        assert_eq!(value_to_input_text(&json!("hola")), "hola");
-        // bool → "true"/"false" (parse_field_value lo acepta)
-        assert_eq!(value_to_input_text(&json!(true)), "true");
-        assert_eq!(value_to_input_text(&json!(false)), "false");
-        // number → string
-        assert_eq!(value_to_input_text(&json!(42)), "42");
-        assert_eq!(value_to_input_text(&json!(3.14)), "3.14");
-        // null → ""
-        assert_eq!(value_to_input_text(&json!(null)), "");
     }
 
     #[test]
