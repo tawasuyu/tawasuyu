@@ -22,32 +22,33 @@
 //! # default sin env: ./nakui-modules en pwd.
 //! ```
 
+mod backend;
+
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use gpui::{
     div, prelude::*, px, App, Application, Bounds, ClickEvent, Context, Entity, IntoElement,
     KeyDownEvent, Render, SharedString, Window, WindowBounds, WindowOptions,
 };
-use nakui_core::delta::{FieldOp, FieldPath};
-use nakui_core::event_log::{
-    execute_and_log_with_recovery, replay_with_snapshot_into, EventLog, LogEntry, Snapshot,
-};
+
 use brahman_cards::CardBody;
 use nakui_core::executor::Executor;
-use nakui_core::store::{MemoryStore, Store};
 use yahweh_meta_runtime::{
     compute_clear_fields, compute_field_delta, human_label_for_record, parse_field_value,
     render_value, resolve_param_value, short_uuid, validate_entity_refs, value_to_input_text,
+    MetaBackend, WriteOutcome,
 };
 use yahweh_meta_schema::{
     Action, FieldKind, FieldSpec, FormView, ListView, Module, View,
 };
-use serde_json::{json, Value};
+use serde_json::Value;
 use uuid::Uuid;
 use yahweh_theme::Theme;
 use yahweh_widget_text_input::TextInput;
+
+use crate::backend::NakuiBackend;
 
 fn main() {
     Application::new().run(|cx: &mut App| {
@@ -72,22 +73,16 @@ fn main() {
     });
 }
 
-/// Estado del runtime.
+/// Estado del runtime de UI. Toda la persistencia/ejecución está
+/// detrás del trait `MetaBackend`; este struct sólo conoce GPUI
+/// state y el schema de los módulos.
 struct MetaUi {
     /// Módulos cargados, ordenados por id.
     modules: Vec<Module>,
-    /// Store compartido. Mutado por el submit de los forms.
-    store: Arc<Mutex<MemoryStore>>,
-    /// Event log persistente compartido. Cada `seed_entity` se appende
-    /// acá antes de mutar el store (WAL). `None` si la apertura del
-    /// log falló — en ese caso el runtime degrada a in-memory only y
-    /// loggea un toast informativo.
-    event_log: Option<Arc<Mutex<EventLog>>>,
-    /// Executors nakui cargados, indexados por `module.id`. Sólo
-    /// existen los módulos que declaran `nakui_module_dir`. Las
-    /// acciones `Morphism` requieren que el módulo activo tenga
-    /// uno; sin él, despachan un toast informativo.
-    executors: BTreeMap<String, Arc<Executor>>,
+    /// Backend que ejecuta seed/update/delete/morphism. Para Nakui
+    /// esto wirea al stack de event_log + MemoryStore + Executors.
+    /// Otra app podría implementar `MetaBackend` distinto.
+    backend: NakuiBackend,
     /// (módulo idx, vista key) actualmente activos.
     active: Option<(usize, String)>,
     /// Inputs vivos para el form actual: nombre del campo → TextInput.
@@ -95,9 +90,8 @@ struct MetaUi {
     form_inputs: BTreeMap<String, Entity<TextInput>>,
     /// Si está set, el próximo render del Form pre-llena los inputs
     /// con los valores del record indicado, y `commit_seed` emite
-    /// un `LogEntry::Morphism { name: "ui.edit_record", ops: [Set...] }`
-    /// en lugar de un Seed nuevo. Limpia al cambiar de view o tras
-    /// submit exitoso.
+    /// un `update` (no un seed nuevo). Limpia al cambiar de view o
+    /// tras submit exitoso.
     editing: Option<(String, Uuid)>,
     /// Si está set, el banner modal de confirmación de delete está
     /// activo: `(entity, id)` del record que el usuario marcó para
@@ -105,18 +99,6 @@ struct MetaUi {
     /// (ejecuta `commit_delete` y limpia) o [Cancelar] (sólo limpia).
     /// Navegación a otra view también cancela.
     pending_delete: Option<(String, Uuid)>,
-    /// Path del snapshot sibling del log; cacheado en `new()` para
-    /// que `tick_runtime_compact` no tenga que recomputarlo.
-    snap_path: PathBuf,
-    /// Threshold de auto-compaction (número de writes antes de
-    /// snapshot+compact). Cacheado del env `NAKUI_SNAPSHOT_THRESHOLD`
-    /// al startup; 0 = runtime compact desactivado.
-    snapshot_threshold: usize,
-    /// Contador de writes desde el último compact (o desde el boot
-    /// si nunca compactamos). Incrementa por cada commit_seed
-    /// efectivo / commit_morphism / commit_delete; cuando alcanza
-    /// `snapshot_threshold` dispara el auto-compact y se resetea.
-    writes_since_compact: u64,
     /// Mensaje toast al pie (success de submit, error de carga, etc.).
     toast: Option<SharedString>,
     /// Si la carga de módulos falló al inicio.
@@ -161,137 +143,11 @@ impl MetaUi {
             ),
         };
 
-        // Persistencia: abrir/crear el event log + opcionalmente un
-        // snapshot sibling para acortar el replay. Path del log por
-        // env `NAKUI_EVENT_LOG`, default `./nakui-ui-state.jsonl`. El
-        // snapshot vive como sibling con extensión `.snap.json`.
-        //
-        // Si abrir o replay falla, el runtime sigue en modo in-memory
-        // (sin persistencia) y el load_error se acumula al banner.
-        //
-        // Threshold de auto-compaction via env
-        // `NAKUI_SNAPSHOT_THRESHOLD` (default 50): después del replay,
-        // si el log file tiene >= N entries, capturamos un snapshot
-        // del store actual y compactamos el log. La próxima boot ya
-        // arranca de snapshot + log corto.
-        let log_path = std::env::var("NAKUI_EVENT_LOG")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("nakui-ui-state.jsonl"));
-        let snap_path = snapshot_path_for(&log_path);
-        let snapshot_threshold: usize = std::env::var("NAKUI_SNAPSHOT_THRESHOLD")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(50);
-        let mut store = MemoryStore::new();
-        let mut initial_toast: Option<SharedString> = None;
-
-        // Cargar snapshot (si existe y no falla). Un snapshot
-        // corrupto no es fatal: caemos a full replay del log.
-        let snapshot: Option<Snapshot> = match Snapshot::load(&snap_path) {
-            Ok(s) => s,
-            Err(e) => {
-                let msg = format!(
-                    "snapshot {}: {e} — full replay",
-                    snap_path.display()
-                );
-                match &load_error {
-                    Some(prev) => {
-                        load_error = Some(SharedString::from(format!("{prev}; {msg}")));
-                    }
-                    None => load_error = Some(SharedString::from(msg)),
-                }
-                None
-            }
-        };
-
-        let event_log = match EventLog::open(&log_path) {
-            Ok(mut log) => {
-                match replay_with_snapshot_into(&log, snapshot.as_ref(), &mut store) {
-                    Ok(()) => {
-                        let n = log.next_seq();
-                        let from_snap = snapshot
-                            .as_ref()
-                            .map(|s| format!(" (snapshot @ seq {})", s.seq))
-                            .unwrap_or_default();
-                        if n > 0 {
-                            initial_toast = Some(SharedString::from(format!(
-                                "log {} cargado: next_seq={n}{from_snap}",
-                                log_path.display()
-                            )));
-                        } else {
-                            initial_toast = Some(SharedString::from(format!(
-                                "log nuevo en {}",
-                                log_path.display()
-                            )));
-                        }
-
-                        // Auto-compact si pasamos el threshold. No
-                        // fatal — un fallo deja log+snap como están.
-                        match maybe_compact_log(
-                            &mut log,
-                            &snap_path,
-                            &store,
-                            snapshot_threshold,
-                        ) {
-                            Ok(Some(msg)) => {
-                                let prev = initial_toast
-                                    .map(|t| t.to_string())
-                                    .unwrap_or_default();
-                                initial_toast = Some(SharedString::from(format!(
-                                    "{prev}; {msg}"
-                                )));
-                            }
-                            Ok(None) => {}
-                            Err(e) => {
-                                let msg = format!("auto-compact: {e}");
-                                match &load_error {
-                                    Some(prev) => {
-                                        load_error = Some(SharedString::from(format!(
-                                            "{prev}; {msg}"
-                                        )));
-                                    }
-                                    None => load_error = Some(SharedString::from(msg)),
-                                }
-                            }
-                        }
-
-                        Some(Arc::new(Mutex::new(log)))
-                    }
-                    Err(e) => {
-                        let msg = format!(
-                            "replay del log {} falló: {e} — running in-memory",
-                            log_path.display()
-                        );
-                        match &load_error {
-                            Some(prev) => {
-                                load_error = Some(SharedString::from(format!("{prev}; {msg}")));
-                            }
-                            None => load_error = Some(SharedString::from(msg)),
-                        }
-                        None
-                    }
-                }
-            }
-            Err(e) => {
-                let msg = format!(
-                    "abrir log {}: {e} — running in-memory only",
-                    log_path.display()
-                );
-                match &load_error {
-                    Some(prev) => {
-                        load_error = Some(SharedString::from(format!("{prev}; {msg}")));
-                    }
-                    None => load_error = Some(SharedString::from(msg)),
-                }
-                None
-            }
-        };
-
         // Cargar Executors para los módulos que declararon
         // `nakui_module_dir`. Resolvemos paths relativos al
         // directorio del modules (NAKUI_MODULES_DIR/<id>/), no al
         // pwd. Cualquier error de carga deja la entry afuera y
-        // anota al banner — Action::Morphism queda no-op para ese
+        // anota al banner — el morphism queda inejecutable para ese
         // módulo pero el resto sigue funcionando.
         let mut executors: BTreeMap<String, Arc<Executor>> = BTreeMap::new();
         for m in &modules {
@@ -324,22 +180,38 @@ impl MetaUi {
             }
         }
 
+        // Persistencia: el backend abre el log + snapshot + replay.
+        // Path del log por env `NAKUI_EVENT_LOG` (default
+        // `./nakui-ui-state.jsonl`). Threshold de auto-compaction
+        // via env `NAKUI_SNAPSHOT_THRESHOLD` (default 50).
+        let log_path = std::env::var("NAKUI_EVENT_LOG")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("nakui-ui-state.jsonl"));
+        let snapshot_threshold: usize = std::env::var("NAKUI_SNAPSHOT_THRESHOLD")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(50);
+        let (backend, status) =
+            NakuiBackend::open(log_path, snapshot_threshold, executors);
+        let initial_toast = status.init_toast.map(SharedString::from);
+        if let Some(msg) = status.load_error {
+            load_error = Some(match load_error {
+                Some(prev) => SharedString::from(format!("{prev}; {msg}")),
+                None => SharedString::from(msg),
+            });
+        }
+
         let active = modules
             .first()
             .and_then(|m| m.menu.first().map(|item| (0usize, item.view.clone())));
 
         Self {
             modules,
-            store: Arc::new(Mutex::new(store)),
-            event_log,
-            executors,
+            backend,
             active,
             form_inputs: BTreeMap::new(),
             editing: None,
             pending_delete: None,
-            snap_path,
-            snapshot_threshold,
-            writes_since_compact: 0,
             toast: initial_toast,
             load_error,
         }
@@ -362,8 +234,7 @@ impl MetaUi {
                 // Snapshot del record si estamos editando esta entity.
                 let editing_record: Option<Value> = self.editing.as_ref().and_then(|(e, id)| {
                     if e == &form.entity {
-                        let store = self.store.lock().ok()?;
-                        store.load(e, *id)
+                        self.backend.load_record(e, *id)
                     } else {
                         None
                     }
@@ -421,92 +292,18 @@ impl MetaUi {
     /// Borra un record. Emite Morphism con un FieldOp::Delete + lo
     /// aplica al store via `apply` (no via remove directo, mantiene
     /// el modelo de "todo cambio post-seed pasa por ops").
+    /// Borra un record vía `MetaBackend::delete`. Devuelve el outcome
+    /// del backend (incluye eventual `post_status` del compact tick).
     fn commit_delete(
         &mut self,
         entity: &str,
         id: Uuid,
-    ) -> Result<(), String> {
-        let ops = vec![FieldOp::Delete {
-            entity: entity.to_string(),
-            id,
-        }];
-        if let Some(log_arc) = self.event_log.as_ref() {
-            let mut log = log_arc
-                .lock()
-                .map_err(|_| "log mutex envenenado".to_string())?;
-            let seq = log.next_seq();
-            log.append(LogEntry::Morphism {
-                seq,
-                morphism: "ui.delete_record".into(),
-                inputs: Default::default(),
-                params: json!({ "entity": entity, "id": id.to_string() }),
-                ops: ops.clone(),
-                schema_hash: None,
-            })
-            .map_err(|e| format!("append al log: {e}"))?;
-        }
-        let mut store = self
-            .store
-            .lock()
-            .map_err(|_| "store mutex envenenado".to_string())?;
-        store
-            .apply(&ops)
-            .map_err(|e| format!("apply Delete: {e}"))?;
-        Ok(())
-    }
-
-    /// Incrementa el contador de writes y, si cruzó el threshold,
-    /// ejecuta `maybe_compact_log` (snapshot + compact). Devuelve un
-    /// mensaje de status si compactó (para concatenar al toast del
-    /// op original) o si la compactación falló; `None` si todavía no
-    /// alcanzó el threshold.
-    ///
-    /// Llamar SIEMPRE después de cada write efectivo (commit_seed
-    /// Created/Updated, commit_morphism Ok, commit_delete Ok).
-    /// `NoChange` NO debería llamar — no hay write nuevo que contar.
-    ///
-    /// Threshold == 0 desactiva el runtime compact (early return).
-    fn tick_runtime_compact(&mut self) -> Option<String> {
-        if self.snapshot_threshold == 0 {
-            return None;
-        }
-        self.writes_since_compact += 1;
-        if self.writes_since_compact < self.snapshot_threshold as u64 {
-            return None;
-        }
-        let log_arc = self.event_log.as_ref()?.clone();
-        let mut log = match log_arc.lock() {
-            Ok(l) => l,
-            Err(_) => return Some("auto-compact skip: log mutex envenenado".into()),
-        };
-        let store = match self.store.lock() {
-            Ok(s) => s,
-            Err(_) => return Some("auto-compact skip: store mutex envenenado".into()),
-        };
-        match maybe_compact_log(&mut log, &self.snap_path, &store, self.snapshot_threshold) {
-            Ok(Some(msg)) => {
-                self.writes_since_compact = 0;
-                Some(msg)
-            }
-            Ok(None) => {
-                // Counter cruzó pero entry_count no — log tiene < 2
-                // entries en disco (ej: snapshot ya cubrió todo y sólo
-                // quedan los nuevos). Reseteamos para no re-entrar
-                // en cada write subsiguiente.
-                self.writes_since_compact = 0;
-                None
-            }
-            Err(e) => {
-                // Compactación falló — NO reseteamos el counter, así
-                // el próximo write reintenta. El usuario ve el error
-                // en el toast.
-                Some(format!("auto-compact: {e}"))
-            }
-        }
+    ) -> Result<WriteOutcome, String> {
+        self.backend.delete(entity, id)
     }
 
     /// Aplica una acción (click en menú, botón de form, action de
-    /// list). Mutaciones contra el store ocurren acá.
+    /// list). Mutaciones contra el backend ocurren acá.
     fn apply_action(&mut self, action: Action, cx: &mut Context<Self>) {
         let mod_idx = match self.active.as_ref() {
             Some((i, _)) => *i,
@@ -519,34 +316,11 @@ impl MetaUi {
                 self.select_view(mod_idx, view, cx);
             }
             Action::SeedEntity { entity, next_view } => {
+                let was_editing = self.editing.is_some();
                 match self.commit_seed(mod_idx, &entity, cx) {
                     Ok(outcome) => {
-                        let id = outcome.id();
-                        let toast_msg = match &outcome {
-                            CommitOutcome::Created(_) => {
-                                format!("creado {entity} {}", short_uuid(&id))
-                            }
-                            CommitOutcome::Updated { changed, .. } => {
-                                format!(
-                                    "actualizado {entity} {} ({changed} campo(s))",
-                                    short_uuid(&id)
-                                )
-                            }
-                            CommitOutcome::NoChange(_) => {
-                                format!(
-                                    "{entity} {} sin cambios — no log entry",
-                                    short_uuid(&id)
-                                )
-                            }
-                        };
-                        // NoChange no escribió al log → no avanza el
-                        // counter de runtime compact. Created/Updated
-                        // sí lo hacen.
-                        let was_write = !matches!(outcome, CommitOutcome::NoChange(_));
-                        self.toast = Some(append_compact_msg(
-                            toast_msg,
-                            was_write.then(|| self.tick_runtime_compact()).flatten(),
-                        ));
+                        let toast_msg = format_seed_toast(&entity, was_editing, &outcome);
+                        self.toast = Some(append_compact_msg(toast_msg, outcome.post_status));
                         // Limpia editing tras un commit exitoso —
                         // el record ya está sincronizado (incluso
                         // un NoChange cierra el modo edit).
@@ -572,10 +346,12 @@ impl MetaUi {
                 next_view,
             } => {
                 match self.commit_morphism(mod_idx, &name, &inputs, &params, cx) {
-                    Ok(op_count) => {
-                        let base = format!("morphism '{name}' OK ({op_count} op(s) aplicadas)");
-                        self.toast =
-                            Some(append_compact_msg(base, self.tick_runtime_compact()));
+                    Ok(outcome) => {
+                        let base = format!(
+                            "morphism '{name}' OK ({} op(s) aplicadas)",
+                            outcome.changed
+                        );
+                        self.toast = Some(append_compact_msg(base, outcome.post_status));
                         if let Some(v) = next_view {
                             self.select_view(mod_idx, v, cx);
                         }
@@ -591,10 +367,8 @@ impl MetaUi {
         }
     }
 
-    /// Despacha un morphism al pipeline real de nakui-core: lee
-    /// inputs (UUIDs) + params (Value object) del form, llama
-    /// `execute_and_log_with_recovery`. Devuelve la cantidad de ops
-    /// que el morphism produjo (para feedback).
+    /// Despacha un morphism via el backend. Resuelve inputs (UUIDs)
+    /// + params (Value object) leyendo los TextInput del form.
     fn commit_morphism(
         &mut self,
         mod_idx: usize,
@@ -602,31 +376,16 @@ impl MetaUi {
         inputs_map: &BTreeMap<String, String>,
         params_fields: &[String],
         cx: &mut Context<Self>,
-    ) -> Result<usize, String> {
-        let _ = cx;
+    ) -> Result<WriteOutcome, String> {
         let module = self
             .modules
             .get(mod_idx)
             .ok_or_else(|| "módulo inválido".to_string())?;
-        let executor = self
-            .executors
-            .get(&module.id)
-            .ok_or_else(|| {
-                format!(
-                    "módulo '{}' no tiene executor nakui (falta nakui_module_dir o falló la carga)",
-                    module.id
-                )
-            })?
-            .clone();
-        let log_arc = self
-            .event_log
-            .as_ref()
-            .ok_or_else(|| "morphism requiere event log activo".to_string())?
-            .clone();
+        let module_id = module.id.clone();
 
         // Resolver inputs: por cada (role, field_name), parsear el
         // value del input como Uuid.
-        let mut input_pairs: Vec<(String, Uuid)> = Vec::with_capacity(inputs_map.len());
+        let mut inputs: BTreeMap<String, Uuid> = BTreeMap::new();
         for (role, field_name) in inputs_map {
             let raw = self
                 .form_inputs
@@ -638,12 +397,11 @@ impl MetaUi {
                     "input '{role}' (field '{field_name}'): '{raw}' no es UUID válido"
                 )
             })?;
-            input_pairs.push((role.clone(), id));
+            inputs.insert(role.clone(), id);
         }
 
         // Resolver params: si la lista está vacía, todos los fields
-        // del form que no estén en `inputs_map` van a params. Si
-        // hay lista, sólo esos.
+        // del form que no estén en `inputs_map` van a params.
         let input_field_set: std::collections::BTreeSet<&String> = inputs_map.values().collect();
         let mut params_obj = serde_json::Map::new();
         let field_iter: Vec<String> = if params_fields.is_empty() {
@@ -656,17 +414,14 @@ impl MetaUi {
             params_fields.to_vec()
         };
 
-        // Buscamos los FieldSpec del Form view activo para conocer
-        // el `kind` declarado de cada param. Usamos `parse_field_value`
-        // estricto en lugar de la heurística `infer_param_value` —
-        // así un "abc" en un campo Boolean rebota en la UI con un
-        // mensaje claro ANTES de llegar al morphism Rhai.
-        let active_form_fields: Option<Vec<FieldSpec>> = self.active.as_ref().and_then(|(_, vk)| {
-            module.views.get(vk).and_then(|v| match v {
-                View::Form(f) => Some(f.fields.clone()),
-                _ => None,
-            })
-        });
+        // FieldSpec del Form view activo para parseo estricto por kind.
+        let active_form_fields: Option<Vec<FieldSpec>> =
+            self.active.as_ref().and_then(|(_, vk)| {
+                module.views.get(vk).and_then(|v| match v {
+                    View::Form(f) => Some(f.fields.clone()),
+                    _ => None,
+                })
+            });
 
         for field_name in field_iter {
             let raw = self
@@ -681,40 +436,20 @@ impl MetaUi {
             params_obj.insert(field_name, value);
         }
 
-        let inputs_ref: Vec<(&str, Uuid)> = input_pairs
-            .iter()
-            .map(|(r, id)| (r.as_str(), *id))
-            .collect();
-
-        let mut log = log_arc
-            .lock()
-            .map_err(|_| "log mutex envenenado".to_string())?;
-        let mut store = self
-            .store
-            .lock()
-            .map_err(|_| "store mutex envenenado".to_string())?;
-
-        let ops = execute_and_log_with_recovery(
-            &executor,
-            &mut *store,
-            &mut *log,
-            morphism,
-            &inputs_ref,
-            Value::Object(params_obj),
-        )
-        .map_err(|e| format!("{e}"))?;
-        Ok(ops.len())
+        self.backend
+            .morphism(&module_id, morphism, inputs, Value::Object(params_obj))
     }
 
-    /// Construye un Value desde los TextInput vivos y lo seedea al store.
-    /// Resultado de `commit_seed`. Distingue alta nueva vs edit
-    /// efectivo vs no-op para que el toast sea preciso.
+    /// Construye un payload desde los TextInput vivos y delega al
+    /// backend (`seed` para alta nueva, `update` con set+clear para
+    /// edit). Devuelve el `WriteOutcome` del backend (incluye
+    /// `changed` y `post_status` para el toast).
     fn commit_seed(
         &mut self,
         mod_idx: usize,
         entity: &str,
         cx: &mut Context<Self>,
-    ) -> Result<CommitOutcome, String> {
+    ) -> Result<WriteOutcome, String> {
         let module = &self.modules[mod_idx];
         let spec_fields: Vec<FieldSpec> = match self.active.as_ref() {
             Some((_, view_key)) => match module.views.get(view_key) {
@@ -724,14 +459,11 @@ impl MetaUi {
             None => return Err("ninguna vista activa".into()),
         };
         let mut obj = serde_json::Map::new();
-        // Fields que el form deja vacíos y son optional: candidatos a
-        // `FieldOp::Clear` en el path de EDIT (sólo se emiten si el
-        // current store value tiene algo en ese key). En el SEED path
-        // simplemente no se incluyen, igual que antes.
+        // Fields que el form deja vacíos y son optional: candidatos
+        // a Clear en el path de EDIT.
         let mut to_clear: Vec<String> = Vec::new();
-        // EntityRef references a chequear existencia DESPUÉS del parse
-        // loop (necesitan lock del store; lo tomamos una sola vez).
-        // Tuple: (label legible, target entity, parsed UUID).
+        // EntityRef refs a validar tras parse loop (en una toma del
+        // backend en lugar de N).
         let mut entity_refs: Vec<(String, String, Uuid)> = Vec::new();
         for f in &spec_fields {
             let raw = self
@@ -748,10 +480,6 @@ impl MetaUi {
             }
             let value = parse_field_value(f.kind, &raw)
                 .map_err(|e| format!("campo '{}': {e}", f.label))?;
-            // Si el field es EntityRef y declara ref_entity, encolamos
-            // el (label, target, uuid) para validar existence en lote.
-            // El UUID ya está bien-formado (parse_field_value lo
-            // validó); ahora chequeamos que el record exista.
             if f.kind == FieldKind::EntityRef {
                 if let (Some(target), Some(uuid_str)) = (&f.ref_entity, value.as_str()) {
                     let id = Uuid::parse_str(uuid_str)
@@ -761,167 +489,52 @@ impl MetaUi {
             }
             obj.insert(f.name.clone(), value);
         }
-        // Validar EntityRefs contra el store actual. Una sola toma del
-        // lock para todas las refs.
+        // Validar EntityRefs contra el backend actual. Cierre wrappea
+        // backend.load_record para mantener la firma de
+        // validate_entity_refs (que es store-agnóstica).
         if !entity_refs.is_empty() {
-            let store = self
-                .store
-                .lock()
-                .map_err(|_| "store mutex envenenado".to_string())?;
-            // El helper de yahweh-meta-runtime es store-agnóstico —
-            // toma un cierre `Fn(&str, Uuid) -> Option<Value>` que
-            // wrappea el store concreto.
-            validate_entity_refs(|e, id| store.load(e, id), &entity_refs)?;
+            let backend = &self.backend;
+            validate_entity_refs(|e, id| backend.load_record(e, id), &entity_refs)?;
         }
-        // Ramificación: si `editing` está set para esta entity, es un
-        // edit de un record existente — emitimos Morphism con un
-        // FieldOp::Set por cada campo del form (sobreescribe). Si no,
-        // es alta nueva — emitimos Seed con UUID fresco.
+
+        // Ramificación: edit (hay editing para esta entity) vs alta.
         let editing_match = self.editing.as_ref().filter(|(e, _)| e == entity).cloned();
 
         if let Some((_, id)) = editing_match {
-            // EDIT path: delta-only. Cargar el record actual del store
-            // y emitir `FieldOp::Set` por cada campo cuyo valor nuevo
-            // difiere del actual + `FieldOp::Clear` por cada optional
-            // empty cuyo current tenía un valor non-null. Si nada
-            // cambió, ningún log entry y ningún apply.
-            let current: Value = {
-                let store = self
-                    .store
-                    .lock()
-                    .map_err(|_| "store mutex envenenado".to_string())?;
-                store.load(entity, id).unwrap_or(Value::Null)
-            };
+            // EDIT: cargar current, computar delta, llamar
+            // backend.update con set+clear pre-computados.
+            let current = self.backend.load_record(entity, id).unwrap_or(Value::Null);
             let set_delta = compute_field_delta(&current, &obj);
             let clear_fields = compute_clear_fields(&current, &to_clear);
-
-            if set_delta.is_empty() && clear_fields.is_empty() {
-                // No-op edit: no entry al log, no apply.
-                return Ok(CommitOutcome::NoChange(id));
-            }
-
-            let mut ops: Vec<FieldOp> = set_delta
-                .iter()
-                .map(|(field, value)| FieldOp::Set {
-                    path: FieldPath {
-                        entity: entity.to_string(),
-                        id,
-                        field: field.clone(),
-                    },
-                    value: value.clone(),
-                })
-                .collect();
-            for field in &clear_fields {
-                ops.push(FieldOp::Clear {
-                    path: FieldPath {
-                        entity: entity.to_string(),
-                        id,
-                        field: field.clone(),
-                    },
-                });
-            }
-
-            if let Some(log_arc) = self.event_log.as_ref() {
-                let mut log = log_arc
-                    .lock()
-                    .map_err(|_| "log mutex envenenado".to_string())?;
-                let seq = log.next_seq();
-                let mut params = serde_json::Map::new();
-                params.insert("entity".into(), json!(entity));
-                params.insert("id".into(), json!(id.to_string()));
-                if !set_delta.is_empty() {
-                    params.insert("fields".into(), Value::Object(set_delta.clone()));
-                }
-                if !clear_fields.is_empty() {
-                    params.insert(
-                        "cleared".into(),
-                        Value::Array(
-                            clear_fields.iter().map(|s| json!(s)).collect(),
-                        ),
-                    );
-                }
-                log.append(LogEntry::Morphism {
-                    seq,
-                    morphism: "ui.edit_record".into(),
-                    inputs: Default::default(),
-                    params: Value::Object(params),
-                    ops: ops.clone(),
-                    schema_hash: None,
-                })
-                .map_err(|e| format!("append al log: {e}"))?;
-            }
-            let mut store = self
-                .store
-                .lock()
-                .map_err(|_| "store mutex envenenado".to_string())?;
-            store.apply(&ops).map_err(|e| format!("apply edit ops: {e}"))?;
-            Ok(CommitOutcome::Updated {
-                id,
-                changed: set_delta.len() + clear_fields.len(),
-            })
+            self.backend.update(entity, id, set_delta, clear_fields)
         } else {
-            // SEED path: alta nueva.
-            let id = Uuid::new_v4();
-            let data = Value::Object(obj);
-            if let Some(log_arc) = self.event_log.as_ref() {
-                let mut log = log_arc
-                    .lock()
-                    .map_err(|_| "log mutex envenenado".to_string())?;
-                let seq = log.next_seq();
-                log.append(LogEntry::Seed {
-                    seq,
-                    entity: entity.to_string(),
-                    id,
-                    data: data.clone(),
-                    schema_hash: None,
-                })
-                .map_err(|e| format!("append al log: {e}"))?;
-            }
-            let mut store = self
-                .store
-                .lock()
-                .map_err(|_| "store mutex envenenado".to_string())?;
-            store.seed(entity, id, data);
-            Ok(CommitOutcome::Created(id))
+            // SEED: alta nueva — el backend genera el Uuid.
+            self.backend.seed(entity, obj)
         }
     }
 
-    /// Snapshot ordenado de records de una entity.
+    /// Snapshot ordenado de records de una entity (proxy al backend).
     fn list_rows(&self, entity: &str) -> Vec<(Uuid, Value)> {
-        let store = match self.store.lock() {
-            Ok(g) => g,
-            Err(_) => return Vec::new(),
-        };
-        let it = match store.iter() {
-            Ok(i) => i,
-            Err(_) => return Vec::new(),
-        };
-        it.filter(|(e, _, _)| e == entity)
-            .map(|(_, id, v)| (id, v))
-            .collect()
+        self.backend.list_records(entity)
     }
 }
 
-/// Resultado de `commit_seed`. Distingue alta nueva, edit efectivo
-/// con N campos modificados, y no-op (delta vacío en el path de edit).
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum CommitOutcome {
-    Created(Uuid),
-    Updated { id: Uuid, changed: usize },
-    NoChange(Uuid),
-}
-
-impl CommitOutcome {
-    fn id(&self) -> Uuid {
-        match self {
-            Self::Created(id) | Self::Updated { id, .. } | Self::NoChange(id) => *id,
-        }
+/// Formatea el toast para la rama Action::SeedEntity según el
+/// `WriteOutcome` del backend. `was_editing` distingue "creado"
+/// vs "actualizado" — el WriteOutcome solo no alcanza porque
+/// `seed` y `update` ambos devuelven `id = Some(...)`.
+fn format_seed_toast(entity: &str, was_editing: bool, outcome: &WriteOutcome) -> String {
+    let id_short = outcome
+        .id
+        .map(|id| short_uuid(&id))
+        .unwrap_or_default();
+    match (was_editing, outcome.changed) {
+        (false, _) => format!("creado {entity} {id_short}"),
+        (true, 0) => format!("{entity} {id_short} sin cambios — no log entry"),
+        (true, n) => format!("actualizado {entity} {id_short} ({n} campo(s))"),
     }
 }
 
-/// Concatena un mensaje de compact opcional al toast del op original.
-/// Devuelve el toast resultante listo para ir a `SharedString`.
-/// Sin `compact_msg` devuelve `base` tal cual.
 /// Carga UiModules desde un directorio via el brazo unificado
 /// `brahman_cards::load_cards_from_dir`. Aplica las reglas
 /// específicas de la UI:
@@ -971,69 +584,6 @@ fn append_compact_msg(base: String, compact_msg: Option<String>) -> SharedString
         Some(m) => SharedString::from(format!("{base}; {m}")),
         None => SharedString::from(base),
     }
-}
-
-/// Devuelve el path del snapshot sibling para un log dado:
-/// `nakui-ui-state.jsonl` → `nakui-ui-state.snap.json`. Mantiene el
-/// snapshot junto al log para que un usuario pueda mover la pareja
-/// sin desincronizarlos.
-fn snapshot_path_for(log_path: &std::path::Path) -> PathBuf {
-    log_path.with_extension("snap.json")
-}
-
-/// Si el log file tiene >= `threshold` entries, captura un snapshot
-/// del store actual y compacta el log. Idempotente abajo del threshold.
-///
-/// Cursor invariant: `EventLog::open` re-deriva `next_seq` del primer
-/// entry del archivo. Si compactáramos *todo*, al reabrir el cursor
-/// volvería a 0 — el próximo append crashearía con NonMonotonic. Por
-/// eso siempre dejamos la última entry como anchor: compactamos sólo
-/// hasta `next_seq - 2`. La survivor entry del snap.seq queda en
-/// disco pero `replay_with_snapshot_into` la skipea (snap ya cubre
-/// hasta snap.seq inclusive), así el costo es 1 línea de log y el
-/// resultado del replay es idéntico.
-///
-/// Orden de operaciones (importa por crash safety):
-/// 1. Capturar snapshot en memoria.
-/// 2. `Snapshot::write` (atómico via tempfile + fsync + rename).
-/// 3. `EventLog::compact_through` (atómico igual).
-/// Si (3) falla tras (2) éxito, el próximo boot ve snap@K + log con
-/// entries 0..N — `replay_with_snapshot_into` skipea las cubiertas
-/// por snap, outcome idéntico.
-///
-/// Devuelve `Ok(Some(msg))` si compactó, `Ok(None)` si no había
-/// nada que hacer, `Err(s)` si snapshot/compact falló.
-fn maybe_compact_log(
-    log: &mut EventLog,
-    snap_path: &std::path::Path,
-    store: &MemoryStore,
-    threshold: usize,
-) -> Result<Option<String>, String> {
-    if threshold == 0 {
-        return Ok(None);
-    }
-    let entry_count = log
-        .entries()
-        .map_err(|e| format!("read entries: {e}"))?
-        .len();
-    if entry_count < threshold || entry_count < 2 {
-        // < 2 entries: la regla "dejar 1 como anchor" no permite
-        // dropear nada útil (sólo el anchor sobreviviría).
-        // entry_count<threshold también incluye el caso post-compact
-        // donde sobrevive 1 anchor: idempotente, no rebote infinito.
-        return Ok(None);
-    }
-    let snap_seq = log.next_seq() - 1;
-    let through = log.next_seq() - 2;
-    let snap = Snapshot::from_memory_store(store, snap_seq);
-    snap.write(snap_path)
-        .map_err(|e| format!("write snapshot {}: {e}", snap_path.display()))?;
-    log.compact_through(through)
-        .map_err(|e| format!("compact_through({through}): {e}"))?;
-    Ok(Some(format!(
-        "auto-compact: snapshot @ seq {snap_seq}, {} entries dropped (1 anchor kept)",
-        entry_count - 1
-    )))
 }
 
 /// Walker dentro de un `Value` por path con `.` como separador.
@@ -1199,14 +749,14 @@ impl MetaUi {
                             // toast tape el banner.
                             this.pending_delete = None;
                             match this.commit_delete(&entity_for_confirm, id_owned) {
-                                Ok(()) => {
+                                Ok(outcome) => {
                                     let base = format!(
                                         "borrado {entity_for_confirm} {}",
                                         short_uuid(&id_owned)
                                     );
                                     this.toast = Some(append_compact_msg(
                                         base,
-                                        this.tick_runtime_compact(),
+                                        outcome.post_status,
                                     ));
                                 }
                                 Err(e) => {
@@ -1756,6 +1306,16 @@ impl MetaUi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Helpers de persistencia movidos al backend en Fase 2b.
+    use crate::backend::{maybe_compact_log, snapshot_path_for};
+    // Tests E2E de nakui-core que vivieron históricamente en este
+    // crate y siguen acá (no son duplicados con yahweh-meta-runtime).
+    use nakui_core::event_log::{
+        replay_with_snapshot_into, EventLog, LogEntry, Snapshot,
+    };
+    use nakui_core::store::{MemoryStore, Store};
+    use serde_json::json;
 
     // NOTA: `parse_field_value` / `parse_field_*` viven y se testean
     // en `yahweh-meta-runtime`. Tests duplicados aquí se borraron en
