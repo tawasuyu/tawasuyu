@@ -59,14 +59,27 @@ fn main() {
     });
 }
 
-/// Snapshot de counts del repo. Se reemplaza completo en cada
-/// refresh — los stores no diff fácilmente, y los counts son
-/// baratos (sled tracks size).
+/// Cuántos items recientes mostrar por sección. Los stores no
+/// tienen orden cronológico (sled ordena lexicográfico por hash);
+/// los "recent" acá son simplemente los primeros del iter — sirve
+/// como sample, no como log temporal. Para timeline real haría
+/// falta agregar timestamp al schema.
+const RECENT_LIMIT: usize = 5;
+
+/// Snapshot de counts + sample de items recientes. Reemplaza el
+/// completo en cada refresh — los stores no diff fácilmente y los
+/// counts son baratos (sled tracks size).
 #[derive(Clone, Default, Debug)]
 struct RepoSnapshot {
     nodes: usize,
     attestations: usize,
     mst_keys: usize,
+    /// Sample de nodos: `(hash_short, kind)`.
+    recent_nodes: Vec<(String, String)>,
+    /// Sample de atestaciones: `(content_hash_short, did_short)`.
+    recent_attestations: Vec<(String, String)>,
+    /// Sample de claves MST: `hash_short`.
+    recent_mst_keys: Vec<String>,
 }
 
 struct Explorer {
@@ -133,11 +146,61 @@ fn load_snapshot(repo_path: &std::path::Path) -> Result<RepoSnapshot, String> {
         ));
     }
     let repo = PersistentRepo::open(&inner).map_err(|e| format!("open: {e}"))?;
+
+    // Counts: cheap (sled tracks size).
+    let nodes = repo.nodes.len();
+    let attestations = repo.attestations.len();
+    let mst_keys = repo.mst.len();
+
+    // Samples: tomar los primeros RECENT_LIMIT items del iter.
+    // Errores per-item se silencian (filter_map) porque el dashboard
+    // muestra lo que pueda; un par de items corruptos no debería
+    // tirar el panel entero.
+    let recent_nodes: Vec<(String, String)> = repo
+        .nodes
+        .iter()
+        .filter_map(|r| r.ok())
+        .take(RECENT_LIMIT)
+        .map(|(hash, stored)| (short_hash(&hash.to_string()), stored.kind))
+        .collect();
+
+    let recent_attestations: Vec<(String, String)> = repo
+        .attestations
+        .iter()
+        .filter_map(|r| r.ok())
+        .take(RECENT_LIMIT)
+        .map(|att| {
+            (
+                short_hash(&att.content.to_string()),
+                short_hash(&att.author.to_string()),
+            )
+        })
+        .collect();
+
+    let recent_mst_keys: Vec<String> = repo
+        .mst
+        .iter()
+        .filter_map(|r| r.ok())
+        .take(RECENT_LIMIT)
+        .map(|h| short_hash(&h.to_string()))
+        .collect();
+
     Ok(RepoSnapshot {
-        nodes: repo.nodes.len(),
-        attestations: repo.attestations.len(),
-        mst_keys: repo.mst.len(),
+        nodes,
+        attestations,
+        mst_keys,
+        recent_nodes,
+        recent_attestations,
+        recent_mst_keys,
     })
+}
+
+/// Trunca un hex string a sus primeros 12 chars. Convención cross-app
+/// para mostrar hashes/dids/contenthash compactos sin perder
+/// distintividad práctica (12 hex = 48 bits, colisión improbable
+/// dentro de un repo single-machine).
+fn short_hash(s: &str) -> String {
+    s.chars().take(12).collect()
 }
 
 impl Render for Explorer {
@@ -189,39 +252,56 @@ impl Render for Explorer {
                 .text_color(text_dim)
                 .text_size(px(13.))
                 .child("Esperando primer refresh…"),
-            Some(snap) => div()
-                .flex()
-                .flex_col()
-                .gap(px(8.))
-                .px(px(16.))
-                .py(px(16.))
-                .child(stat_card(
-                    cx,
-                    "Nodos AST",
-                    snap.nodes,
-                    "fragments parseados del código",
-                    accent_nodes,
-                    text,
-                    text_dim,
-                ))
-                .child(stat_card(
-                    cx,
-                    "Atestaciones",
-                    snap.attestations,
-                    "firmas Ed25519 sobre los nodos",
-                    accent_attestations,
-                    text,
-                    text_dim,
-                ))
-                .child(stat_card(
-                    cx,
-                    "Claves MST",
-                    snap.mst_keys,
-                    "entradas del Merkle Search Tree",
-                    accent_mst,
-                    text,
-                    text_dim,
-                )),
+            Some(snap) => {
+                let node_items: Vec<String> = snap
+                    .recent_nodes
+                    .iter()
+                    .map(|(h, k)| format!("{h}  {k}"))
+                    .collect();
+                let attestation_items: Vec<String> = snap
+                    .recent_attestations
+                    .iter()
+                    .map(|(h, did)| format!("{h}  ←  {did}"))
+                    .collect();
+                let mst_items: Vec<String> = snap.recent_mst_keys.clone();
+
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .px(px(16.))
+                    .py(px(16.))
+                    .child(stat_card(
+                        cx,
+                        "Nodos AST",
+                        snap.nodes,
+                        "fragments parseados del código",
+                        accent_nodes,
+                        text,
+                        text_dim,
+                        &node_items,
+                    ))
+                    .child(stat_card(
+                        cx,
+                        "Atestaciones",
+                        snap.attestations,
+                        "firmas Ed25519 sobre los nodos",
+                        accent_attestations,
+                        text,
+                        text_dim,
+                        &attestation_items,
+                    ))
+                    .child(stat_card(
+                        cx,
+                        "Claves MST",
+                        snap.mst_keys,
+                        "entradas del Merkle Search Tree",
+                        accent_mst,
+                        text,
+                        text_dim,
+                        &mst_items,
+                    ))
+            }
         };
 
         div()
@@ -236,7 +316,9 @@ impl Render for Explorer {
 }
 
 /// Card visual para una estadística del dashboard. Border-l por
-/// kind, label arriba + número grande + descripción abajo.
+/// kind, label arriba + número grande + descripción + listing de
+/// items recientes (puede estar vacío). Items se renderean en
+/// `monospace`-look (text_size chico) — útil para hashes/dids.
 fn stat_card(
     cx: &mut Context<Explorer>,
     label: &str,
@@ -245,8 +327,9 @@ fn stat_card(
     accent: gpui::Rgba,
     text: gpui::Hsla,
     text_dim: gpui::Hsla,
+    recent_items: &[String],
 ) -> impl IntoElement {
-    card_themed(cx)
+    let mut card = card_themed(cx)
         .border_l_4()
         .border_color(accent)
         .child(
@@ -266,7 +349,33 @@ fn stat_card(
                 .text_color(text_dim)
                 .text_size(px(11.))
                 .child(SharedString::from(description.to_string())),
-        )
+        );
+
+    if !recent_items.is_empty() {
+        // Header de la sub-section.
+        card = card.child(
+            div()
+                .mt(px(6.))
+                .text_color(text_dim)
+                .text_size(px(10.))
+                .child(SharedString::from(format!(
+                    "recent ({} de {}):",
+                    recent_items.len(),
+                    value
+                ))),
+        );
+        // Una linea por item.
+        for it in recent_items {
+            card = card.child(
+                div()
+                    .text_color(text)
+                    .text_size(px(11.))
+                    .child(SharedString::from(it.clone())),
+            );
+        }
+    }
+
+    card
 }
 
 #[cfg(test)]
@@ -294,10 +403,26 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_default_is_zeros() {
+    fn snapshot_default_is_zeros_and_empty_lists() {
         let s = RepoSnapshot::default();
         assert_eq!(s.nodes, 0);
         assert_eq!(s.attestations, 0);
         assert_eq!(s.mst_keys, 0);
+        assert!(s.recent_nodes.is_empty());
+        assert!(s.recent_attestations.is_empty());
+        assert!(s.recent_mst_keys.is_empty());
+    }
+
+    #[test]
+    fn short_hash_takes_first_12_chars() {
+        let s = "a1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd";
+        assert_eq!(short_hash(s), "a1b2c3d4e5f6");
+        assert_eq!(short_hash(s).len(), 12);
+    }
+
+    #[test]
+    fn short_hash_handles_empty_or_shorter() {
+        assert_eq!(short_hash(""), "");
+        assert_eq!(short_hash("abc"), "abc");
     }
 }
