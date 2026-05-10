@@ -123,11 +123,12 @@ impl Manifest {
         self.morphisms.iter().find(|m| m.name == name)
     }
 
-    /// Schema files this module exposes. Defaults to `["schema.k"]` when
-    /// the manifest doesn't declare any explicitly.
+    /// Schema files this module exposes. Defaults to `["schema.ncl"]`
+    /// when the manifest doesn't declare any explicitly. Acepta
+    /// también legacy `.k` para no romper módulos no-migrados.
     pub fn effective_schemas(&self) -> Vec<String> {
         if self.schemas.is_empty() {
-            vec!["schema.k".to_string()]
+            vec!["schema.ncl".to_string()]
         } else {
             self.schemas.clone()
         }
@@ -253,20 +254,47 @@ impl Manifest {
 /// at column 0 (top-level). Tolerates inheritance (`schema X(Y):`) and
 /// generic params (`schema X[T]:`); ignores comments and string literals
 /// because top-level KCL syntax doesn't admit them ambiguously.
+/// Extrae los nombres de entities declarados en un schema Nickel.
+///
+/// Convención de los `schema.ncl` de Nakui: el archivo evalúa a un
+/// record top-level cuyas keys son los entity names (CapitalCase).
+/// Las helpers locales (`let positive_int = ...`) no matchean
+/// porque no están indentadas con 2 spaces ni empiezan con
+/// mayúscula.
+///
+/// Heurística (no parser completo): líneas con exactamente 2 spaces
+/// de indent + identifier CapitalCase + `=`. Robusto para los
+/// schemas actuales; si futuras convenciones requieren otro
+/// indent, flexibilizar acá.
 fn extract_schema_names(content: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in content.lines() {
-        // Top-level declarations are not indented in idiomatic KCL.
-        if line.starts_with("schema ") {
-            let after = &line["schema ".len()..];
-            let name: String = after
-                .chars()
-                .take_while(|c| c.is_alphanumeric() || *c == '_')
-                .collect();
-            if !name.is_empty() {
-                out.push(name);
-            }
+        let trimmed = line.trim_start_matches(' ');
+        let leading_spaces = line.len() - trimmed.len();
+        if leading_spaces != 2 {
+            continue;
         }
+        let first = match trimmed.chars().next() {
+            Some(c) => c,
+            None => continue,
+        };
+        if !first.is_ascii_uppercase() {
+            continue;
+        }
+        let name: String = trimmed
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if name.is_empty() {
+            continue;
+        }
+        // Después del identifier debe venir `=` (eventualmente
+        // tras whitespace).
+        let after = &trimmed[name.len()..];
+        if !after.trim_start().starts_with('=') {
+            continue;
+        }
+        out.push(name);
     }
     out
 }
@@ -282,25 +310,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn extract_schema_names_handles_basic_forms() {
+    fn extract_schema_names_handles_nickel_record_top_level() {
         let content = r#"
-schema Caja:
-    saldo: int
+let positive_int = std.contract.from_predicate (fun n => n > 0) in
+let currency_iso = std.contract.from_predicate (fun s => true) in
 
-schema Movimiento(Base):
-    monto: int
+{
+  Caja = {
+    id | String,
+    saldo | positive_int,
+  },
 
-# schema Comentario:
-schema Generic[T]:
-    inner: T
+  Movimiento = {
+    id | String,
+    monto | positive_int,
+  } | std.contract.from_predicate (fun r => true),
 
-schema _Underscore:
-    x: int
+  Transferencia = {
+    id | String,
+  },
+}
 "#;
         let names = extract_schema_names(content);
-        assert_eq!(
-            names,
-            vec!["Caja", "Movimiento", "Generic", "_Underscore"]
-        );
+        assert_eq!(names, vec!["Caja", "Movimiento", "Transferencia"]);
+    }
+
+    #[test]
+    fn extract_schema_names_skips_let_bindings_and_lowercase() {
+        // `let x = ...` no debe aparecer; tampoco lowercase keys
+        // (no son entities por convención).
+        let content = r#"
+let positive_int = ... in
+{
+  Caja = { id | String },
+  helper = "not an entity",
+}
+"#;
+        let names = extract_schema_names(content);
+        assert_eq!(names, vec!["Caja"]);
     }
 }

@@ -120,11 +120,11 @@ fn overdraw_stock_rejected_by_inventory_post_check() {
     );
 
     match result {
-        Err(ExecError::KclPost { role, entity, .. }) => {
+        Err(ExecError::SchemaPost { role, entity, .. }) => {
             assert_eq!(role, "stock");
             assert_eq!(entity, "Stock");
         }
-        other => panic!("expected KclPost on stock, got {:?}", other),
+        other => panic!("expected SchemaPost on stock, got {:?}", other),
     }
     assert_eq!(stock_cantidad(&store, stock), 500);
     assert_eq!(caja_saldo(&store, caja), 1_000_000);

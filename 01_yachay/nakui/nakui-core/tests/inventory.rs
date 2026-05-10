@@ -132,11 +132,11 @@ fn overdraw_transfer_blocked_by_kcl_post_check() {
     );
 
     match result {
-        Err(ExecError::KclPost { role, entity, .. }) => {
+        Err(ExecError::SchemaPost { role, entity, .. }) => {
             assert_eq!(role, "source");
             assert_eq!(entity, "Stock");
         }
-        other => panic!("expected KclPost on source, got {:?}", other),
+        other => panic!("expected SchemaPost on source, got {:?}", other),
     }
     assert_eq!(cantidad(&store, a), 100);
     assert_eq!(cantidad(&store, b), 0);

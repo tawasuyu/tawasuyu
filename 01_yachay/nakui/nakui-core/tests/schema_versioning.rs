@@ -348,10 +348,10 @@ fn verify_log_rejects_seed_after_schema_kcl_changes() {
         seed_caja(&exec, &mut store, &mut log, id);
     }
 
-    // Mutate schema.k. Even a comment is enough — bundle hash is byte-
+    // Mutate schema.ncl. Even a comment is enough — bundle hash is byte-
     // level for the same false-positive-over-false-negative reason as
     // morphism hashes.
-    let schema_path = temp.path.join("schema.k");
+    let schema_path = temp.path.join("schema.ncl");
     let original = std::fs::read_to_string(&schema_path).expect("read schema");
     std::fs::write(
         &schema_path,
@@ -361,7 +361,7 @@ fn verify_log_rejects_seed_after_schema_kcl_changes() {
 
     let exec2 = Executor::load_module(&temp.path).expect("reload v2");
     let new_hash = exec2.schema_bundle_hash;
-    assert_ne!(original_hash, new_hash, "schema.k byte change must move the bundle hash");
+    assert_ne!(original_hash, new_hash, "schema.ncl byte change must move the bundle hash");
 
     let log = EventLog::open(&log_path).unwrap();
     match verify_log(&log, &exec2) {
@@ -410,13 +410,13 @@ fn comment_only_edits_do_not_invalidate_the_hash() {
         "comment-only and whitespace-only edits must not move the hash"
     );
 
-    // Sanity: the bundle hash also stays intact (we didn't touch schema.k).
+    // Sanity: the bundle hash also stays intact (we didn't touch schema.ncl).
     assert_eq!(exec1.schema_bundle_hash, exec2.schema_bundle_hash);
 }
 
 #[test]
 fn morphism_script_change_does_not_flag_unrelated_seeds() {
-    // Bundle hash covers schema.k only — a .rhai edit moves the
+    // Bundle hash covers schema.ncl only — a .rhai edit moves the
     // morphism hash but leaves the bundle hash alone. So existing
     // seeds verify cleanly even when a morphism's behaviour changed.
     let temp = TempModule::from(&treasury_module());

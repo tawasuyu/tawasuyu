@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::delta::{FieldOp, simulate_on};
 use crate::graph::{GraphError, ManifestGraph};
-use crate::kcl_wrapper::{self, KclError};
+use crate::nickel_validator::{self, NickelError};
 use crate::manifest::{ConserveRule, Manifest, ManifestError, MorphismSpec, ValidationError};
 use crate::rhai_executor::{RhaiError, RhaiExecutor};
 use crate::store::{Store, StoreError};
@@ -50,26 +50,26 @@ pub enum ExecError {
         field: String,
         message: String,
     },
-    #[error("kcl pre-check failed on `{role}` ({entity}): {source}")]
-    KclPre {
+    #[error("schema pre-check failed on `{role}` ({entity}): {source}")]
+    SchemaPre {
         role: String,
         entity: String,
         #[source]
-        source: KclError,
+        source: NickelError,
     },
-    #[error("kcl post-check failed on `{role}` ({entity}): {source}")]
-    KclPost {
+    #[error("schema post-check failed on `{role}` ({entity}): {source}")]
+    SchemaPost {
         role: String,
         entity: String,
         #[source]
-        source: KclError,
+        source: NickelError,
     },
-    #[error("kcl post-check failed on created {entity} {id}: {source}")]
-    KclPostCreate {
+    #[error("schema post-check failed on created {entity} {id}: {source}")]
+    SchemaPostCreate {
         entity: String,
         id: Uuid,
         #[source]
-        source: KclError,
+        source: NickelError,
     },
     #[error("rhai: {0}")]
     Rhai(#[from] RhaiError),
@@ -95,12 +95,13 @@ pub struct Executor {
     /// `load_module`; Drop removes it. `false` for inline-built executors
     /// that point at a real schema file owned by the caller (tests).
     pub owned_bundle: bool,
-    /// Per-morphism `schema_hash`: SHA-256 of (kcl bundle + manifest spec
-    /// + rhai script bytes), computed once at load. The hash is the
-    /// determinism contract for KCL evolution — `verify_log` uses it to
-    /// reject logs whose entries were produced under different rules.
+    /// Per-morphism `schema_hash`: SHA-256 of (Nickel bundle + manifest
+    /// spec + rhai script bytes), computed once at load. The hash es
+    /// el determinism contract para evolución de schemas —
+    /// `verify_log` lo usa para rechazar logs cuyos entries se
+    /// produjeron bajo reglas distintas.
     pub schema_hashes: HashMap<String, [u8; 32]>,
-    /// Module-wide bundle hash: SHA-256 of just the KCL bundle bytes.
+    /// Module-wide bundle hash: SHA-256 de los bytes del bundle Nickel.
     /// Stamped onto every `LogEntry::Seed` via `seed_and_log` so
     /// `verify_log` can flag seeds whose entity schemas have evolved
     /// since they were logged. Coarser than `schema_hashes` (any
@@ -252,8 +253,8 @@ impl Executor {
             let state = store
                 .load(&spec_in.entity, id)
                 .ok_or_else(|| ExecError::EntityMissing(spec_in.entity.clone(), id))?;
-            self.kcl_check(&spec_in.entity, &state)
-                .map_err(|e| ExecError::KclPre {
+            self.validate_entity(&spec_in.entity, &state)
+                .map_err(|e| ExecError::SchemaPre {
                     role: spec_in.role.clone(),
                     entity: spec_in.entity.clone(),
                     source: e,
@@ -327,8 +328,8 @@ impl Executor {
             if let Some(new_state) =
                 simulate_on(&loaded[&spec_in.role], &spec_in.entity, id, &ops)
             {
-                self.kcl_check(&spec_in.entity, &new_state)
-                    .map_err(|e| ExecError::KclPost {
+                self.validate_entity(&spec_in.entity, &new_state)
+                    .map_err(|e| ExecError::SchemaPost {
                         role: spec_in.role.clone(),
                         entity: spec_in.entity.clone(),
                         source: e,
@@ -339,8 +340,8 @@ impl Executor {
         // 8. Validate every Created record against its entity schema.
         for op in &ops {
             if let FieldOp::Create { entity, id, data } = op {
-                self.kcl_check(entity, data)
-                    .map_err(|e| ExecError::KclPostCreate {
+                self.validate_entity(entity, data)
+                    .map_err(|e| ExecError::SchemaPostCreate {
                         entity: entity.clone(),
                         id: *id,
                         source: e,
@@ -367,26 +368,16 @@ impl Executor {
         Ok(ops)
     }
 
-    fn kcl_check(&self, entity: &str, state: &Value) -> Result<(), KclError> {
-        let tmp = std::env::temp_dir().join(format!("nakui_{}_{}.json", entity, Uuid::new_v4()));
-        std::fs::write(&tmp, serde_json::to_vec(state).expect("state serializes"))
-            .map_err(KclError::Io)?;
-        let result = kcl_wrapper::vet(&self.schema_path, &tmp, entity);
-        let _ = std::fs::remove_file(&tmp);
-        result
+    fn validate_entity(&self, entity: &str, state: &Value) -> Result<(), NickelError> {
+        nickel_validator::vet(&self.schema_path, state, entity)
     }
 }
 
-/// Concatenate every declared `.k` file into a single bundle on disk.
-/// `kcl vet` only takes one schema arg, so cross-module modules (e.g. sales
-/// referencing both treasury and inventory entities) bundle their imports
-/// at load time. The bundle lives in `temp_dir` for the lifetime of the
-/// executor; one file per Executor instance.
-/// Module-wide hash of just the KCL bundle bytes. Stamped on
+/// Module-wide hash of the Nickel bundle bytes. Stamped on
 /// `LogEntry::Seed` entries (which don't run through any morphism, so
 /// `compute_morphism_schema_hash` doesn't apply). Bumped by any byte
 /// change in any schema file the manifest exposes — coarser than a
-/// per-entity hash would be, but doesn't require KCL parsing.
+/// per-entity hash would be, but doesn't require Nickel parsing.
 fn compute_schema_bundle_hash(schema_bundle_bytes: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(b"nakui-bundle-v1\0");
@@ -514,18 +505,43 @@ pub fn normalize_rhai_source(src: &str) -> String {
     out
 }
 
-fn build_schema_bundle(module_dir: &std::path::Path, schemas: &[String]) -> std::io::Result<PathBuf> {
-    let mut combined = String::new();
+/// Construye un bundle Nickel: en lugar de concatenar contenidos
+/// (cada `.ncl` es una expresión record completa, no juntable como
+/// texto plano), emite un archivo que mergea via `&` los imports.
+///
+/// El operador `&` de Nickel mergea records: si las keys son
+/// distintas (que es lo esperado entre schemas de módulos distintos)
+/// el resultado tiene la unión. Si hay colisión, Nickel rebota con
+/// un error claro al evaluar — ya cubierto por `manifest::validate`
+/// que chequea duplicados antes de llegar acá.
+///
+/// Verifica que cada path exista para fallar early con I/O error.
+/// El path en el `import "..."` queda absoluto (resuelto desde
+/// `module_dir`) para que el evaluator lo encuentre desde el
+/// tempdir.
+fn build_schema_bundle(
+    module_dir: &std::path::Path,
+    schemas: &[String],
+) -> std::io::Result<PathBuf> {
+    let mut imports: Vec<String> = Vec::with_capacity(schemas.len());
     for s in schemas {
         let p = module_dir.join(s);
-        let content = std::fs::read_to_string(&p)?;
-        combined.push_str("# --- ");
-        combined.push_str(p.to_string_lossy().as_ref());
-        combined.push_str(" ---\n");
-        combined.push_str(&content);
-        combined.push_str("\n\n");
+        // Verificar existencia + canonicalize para path absoluto
+        // estable (evita que cwd movimiento rompa el bundle).
+        let abs = std::fs::canonicalize(&p)?;
+        let abs_str = abs.display().to_string();
+        let escaped = abs_str.replace('\\', "\\\\").replace('"', "\\\"");
+        imports.push(format!("(import \"{escaped}\")"));
     }
-    let bundle = std::env::temp_dir().join(format!("nakui_schema_{}.k", Uuid::new_v4()));
+    let combined = if imports.is_empty() {
+        // Bundle vacío = record vacío. Cualquier validación contra
+        // un entity rebota con "field not found" — comportamiento
+        // razonable para un módulo sin schemas declarados.
+        "{}".to_string()
+    } else {
+        imports.join(" & ")
+    };
+    let bundle = std::env::temp_dir().join(format!("nakui_schema_{}.ncl", Uuid::new_v4()));
     std::fs::write(&bundle, combined)?;
     Ok(bundle)
 }

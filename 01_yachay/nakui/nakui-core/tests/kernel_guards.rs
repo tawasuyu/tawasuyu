@@ -7,7 +7,7 @@
 //! Layers exercised (in pipeline order):
 //!   1. CapabilityViolation  (untracked write)
 //!   2. ConservationViolation (delta sum != 0)
-//!   3. KclPostCreate         (created record fails its schema)
+//!   3. SchemaPostCreate         (created record fails its schema)
 
 use std::path::{Path, PathBuf};
 
@@ -47,7 +47,7 @@ fn build_executor(spec: MorphismSpec) -> Executor {
         // schema_path stays on the real treasury schema so we exercise the
         // production check blocks. `owned_bundle: false` so Drop leaves it
         // alone — it belongs to the source tree.
-        schema_path: workspace_root().join("modules/treasury/schema.k"),
+        schema_path: workspace_root().join("modules/treasury/schema.ncl"),
         rhai: RhaiExecutor::new_sandboxed(),
         owned_bundle: false,
         // Inline-built executors don't go through `load_module`, so they
@@ -282,10 +282,10 @@ fn bad_created_record_blocks_negative_movimiento() {
     let result = exec.run(&mut store, "evil_create", &[("caja", caja_id)], params);
 
     match result {
-        Err(ExecError::KclPostCreate { entity, .. }) => {
+        Err(ExecError::SchemaPostCreate { entity, .. }) => {
             assert_eq!(entity, "Movimiento");
         }
-        other => panic!("expected KclPostCreate, got {:?}", other),
+        other => panic!("expected SchemaPostCreate, got {:?}", other),
     }
 
     // Caja unchanged, Movimiento never landed.

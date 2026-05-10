@@ -31,6 +31,10 @@ uuid = { workspace = true, features = ["serde"] }
 # por lo que se mantienen inline (versión local).
 rhai = { version = "1.20", features = ["serde"] }
 petgraph = "0.6"
+# Nickel reemplaza a KCL como motor de validación de entities.
+# Evaluación in-process (sin shellear binarios), contracts Nickel
+# nativos en los `schema.ncl` de cada módulo.
+nickel-lang = "2.0.0"
 surrealdb = { version = "2", default-features = false, features = ["kv-mem"] }
 
 # Brahman protocol — presencia ante el Init cuando `nakui run` arranca.

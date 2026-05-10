@@ -195,25 +195,26 @@ fn rejects_missing_schema_file() {
 
 #[test]
 fn rejects_duplicate_schema_across_files() {
-    // Synthesize a tempdir with two .k files that both declare `schema X`.
+    // Synthesize a tempdir with two .ncl files that both declare
+    // `Caja` en el record top-level.
     let tmp = std::env::temp_dir().join(format!("nakui_dup_{}", Uuid::new_v4()));
     fs::create_dir_all(&tmp).unwrap();
     fs::create_dir_all(tmp.join("morphisms")).unwrap();
     fs::write(
-        tmp.join("a.k"),
-        "schema Caja:\n    saldo: int\n    check:\n        saldo >= 0\n",
+        tmp.join("a.ncl"),
+        "{\n  Caja = { saldo | Number },\n}\n",
     )
     .unwrap();
     fs::write(
-        tmp.join("b.k"),
-        "schema Caja:\n    monto: int\n    check:\n        monto >= 0\n",
+        tmp.join("b.ncl"),
+        "{\n  Caja = { monto | Number },\n}\n",
     )
     .unwrap();
     fs::write(tmp.join("morphisms/op.rhai"), "[]").unwrap();
 
     let m = Manifest {
         module: "dup".into(),
-        schemas: vec!["a.k".into(), "b.k".into()],
+        schemas: vec!["a.ncl".into(), "b.ncl".into()],
         morphisms: vec![MorphismSpec {
             name: "op".into(),
             inputs: vec![MorphismInput {
@@ -231,8 +232,8 @@ fn rejects_duplicate_schema_across_files() {
     match m.validate(&tmp) {
         Err(ValidationError::DuplicateSchema { name, files }) => {
             assert_eq!(name, "Caja");
-            assert!(files.contains(&"a.k".to_string()));
-            assert!(files.contains(&"b.k".to_string()));
+            assert!(files.contains(&"a.ncl".to_string()));
+            assert!(files.contains(&"b.ncl".to_string()));
         }
         other => panic!("expected DuplicateSchema, got {:?}", other),
     }
@@ -247,8 +248,8 @@ fn executor_load_module_runs_validation() {
     let tmp = std::env::temp_dir().join(format!("nakui_bad_{}", Uuid::new_v4()));
     fs::create_dir_all(&tmp).unwrap();
     fs::write(
-        tmp.join("schema.k"),
-        "schema Caja:\n    saldo: int\n    check:\n        saldo >= 0\n",
+        tmp.join("schema.ncl"),
+        "{\n  Caja = {\n    saldo | std.contract.from_predicate (fun n => std.is_number n && n >= 0),\n  },\n}\n",
     )
     .unwrap();
     fs::write(

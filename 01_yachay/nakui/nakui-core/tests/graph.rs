@@ -219,8 +219,9 @@ fn executor_load_module_rejects_cyclic_manifest() {
     let tmp = std::env::temp_dir().join(format!("nakui_cycle_{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(tmp.join("morphisms")).unwrap();
     std::fs::write(
-        tmp.join("schema.k"),
-        "schema Caja:\n    saldo: int\n    check:\n        saldo >= 0\n",
+        tmp.join("schema.ncl"),
+        // Schema Nickel mínimo (top-level Caja con saldo >= 0).
+        "{\n  Caja = {\n    saldo | std.contract.from_predicate (fun n => std.is_number n && n >= 0),\n  },\n}\n",
     )
     .unwrap();
     std::fs::write(tmp.join("morphisms/op.rhai"), "[]").unwrap();
