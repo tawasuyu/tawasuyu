@@ -1,0 +1,18 @@
+[package]
+name = "minga-explorer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Dashboard GPUI del repo Minga: counts de nodos AST, atestaciones, claves MST, refresh por polling. Lee sled directo (sin passphrase). Standalone."
+
+[dependencies]
+minga-store = { path = "../../modules/semantic_dht/minga-store" }
+yahweh-theme = { path = "../../modules/ui_engine/libs/theme" }
+yahweh-widget-banner = { path = "../../modules/ui_engine/widgets/banner" }
+yahweh-widget-card = { path = "../../modules/ui_engine/widgets/card" }
+yahweh-widget-theme-switcher = { path = "../../modules/ui_engine/widgets/theme-switcher" }
+gpui = { workspace = true }
+
+[[bin]]
+name = "minga-explorer"
+path = "src/main.rs"

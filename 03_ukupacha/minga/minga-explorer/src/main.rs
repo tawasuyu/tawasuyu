@@ -1,0 +1,303 @@
+//! `minga-explorer` — dashboard GPUI del repo Minga (VCS semántico
+//! P2P).
+//!
+//! Polling cada 2s contra `MINGA_REPO` (env, default `./.minga`),
+//! abre el `PersistentRepo` (sled, sin passphrase porque los counts
+//! son lectura pública) y muestra:
+//! - Cantidad de nodos AST almacenados.
+//! - Cantidad de atestaciones firmadas.
+//! - Cantidad de claves del MST (Merkle Search Tree).
+//!
+//! No requiere keypair descifrado — eso se queda para el CLI
+//! (`minga status`) cuando hace falta el DID. El explorer foco es
+//! observabilidad rápida.
+//!
+//! Stack visual: yahweh-theme + banner_themed + card_themed +
+//! theme_switcher. Mismo patrón que `nakui-explorer` /
+//! `nouser-explorer`.
+//!
+//! Uso:
+//! ```sh
+//! cargo run -p minga-explorer
+//! # con repo custom:
+//! MINGA_REPO=/path/to/.minga cargo run -p minga-explorer
+//! ```
+
+use std::path::PathBuf;
+use std::time::Duration;
+
+use gpui::{
+    div, prelude::*, px, App, Application, Bounds, Context, IntoElement, Render, SharedString,
+    Window, WindowBounds, WindowOptions,
+};
+use minga_store::PersistentRepo;
+use yahweh_theme::Theme;
+use yahweh_widget_banner::{banner_themed, Banner};
+use yahweh_widget_card::card_themed;
+use yahweh_widget_theme_switcher::theme_switcher;
+
+const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+const REPO_DIRNAME: &str = "repo";
+
+fn main() {
+    Application::new().run(|cx: &mut App| {
+        Theme::install_default(cx);
+        let bounds = Bounds::centered(None, gpui::size(px(800.), px(560.)), cx);
+        cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: Some(gpui::TitlebarOptions {
+                    title: Some(SharedString::from("Minga — Repo")),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            |_w, cx| cx.new(Explorer::new),
+        )
+        .expect("open window");
+        cx.activate(true);
+    });
+}
+
+/// Snapshot de counts del repo. Se reemplaza completo en cada
+/// refresh — los stores no diff fácilmente, y los counts son
+/// baratos (sled tracks size).
+#[derive(Clone, Default, Debug)]
+struct RepoSnapshot {
+    nodes: usize,
+    attestations: usize,
+    mst_keys: usize,
+}
+
+struct Explorer {
+    repo_path: PathBuf,
+    snapshot: Option<RepoSnapshot>,
+    error: Option<SharedString>,
+    last_load_ms: u64,
+}
+
+impl Explorer {
+    fn new(cx: &mut Context<Self>) -> Self {
+        let repo_path = std::env::var("MINGA_REPO")
+            .ok()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(".minga"));
+        let path_for_loop = repo_path.clone();
+        cx.spawn(async move |this, cx| {
+            let timer = cx.background_executor().clone();
+            loop {
+                let started = std::time::Instant::now();
+                let result = load_snapshot(&path_for_loop);
+                let elapsed = started.elapsed().as_millis() as u64;
+                let _ = this.update(cx, |me, cx| {
+                    match result {
+                        Ok(snap) => {
+                            me.snapshot = Some(snap);
+                            me.error = None;
+                        }
+                        Err(e) => {
+                            me.error = Some(SharedString::from(format!(
+                                "no pude leer repo {}: {}",
+                                me.repo_path.display(),
+                                e
+                            )));
+                        }
+                    }
+                    me.last_load_ms = elapsed;
+                    cx.notify();
+                });
+                timer.timer(REFRESH_INTERVAL).await;
+            }
+        })
+        .detach();
+
+        Self {
+            repo_path,
+            snapshot: None,
+            error: None,
+            last_load_ms: 0,
+        }
+    }
+}
+
+/// Lee el repo sled `<repo_path>/repo` y devuelve los 3 counts.
+/// Falla si: el dir no existe, sled rebota al abrir, o cualquier
+/// store falla a `len()`. Ningún error es fatal — la UI muestra el
+/// banner y mantiene el último snapshot bueno.
+fn load_snapshot(repo_path: &std::path::Path) -> Result<RepoSnapshot, String> {
+    let inner = repo_path.join(REPO_DIRNAME);
+    if !inner.exists() {
+        return Err(format!(
+            "directorio del repo sled no existe: {}",
+            inner.display()
+        ));
+    }
+    let repo = PersistentRepo::open(&inner).map_err(|e| format!("open: {e}"))?;
+    Ok(RepoSnapshot {
+        nodes: repo.nodes.len(),
+        attestations: repo.attestations.len(),
+        mst_keys: repo.mst.len(),
+    })
+}
+
+impl Render for Explorer {
+    fn render(&mut self, _w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::global(cx).clone();
+        let bg = theme.bg_app.clone();
+        let text = theme.fg_text;
+        let text_dim = theme.fg_muted;
+        // Acentos por kind del dashboard: nodos azul, atestaciones
+        // verde, MST purple. Señales semánticas del dominio Minga.
+        let accent_nodes = gpui::rgb(0x88c0d0);
+        let accent_attestations = gpui::rgb(0xa3be8c);
+        let accent_mst = gpui::rgb(0xb48ead);
+
+        let header_text = match &self.snapshot {
+            Some(_) => format!(
+                "Repo: {}  ·  reload {} ms",
+                self.repo_path.display(),
+                self.last_load_ms
+            ),
+            None => format!("Buscando repo en {}…", self.repo_path.display()),
+        };
+
+        let header = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .px(px(16.))
+            .py(px(12.))
+            .bg(theme.bg_panel.clone())
+            .border_b_1()
+            .border_color(theme.border)
+            .text_color(text)
+            .text_size(px(14.))
+            .child(div().flex_grow().child(header_text))
+            .child(theme_switcher(cx));
+
+        let error_banner = self.error.as_ref().map(|e| {
+            banner_themed(cx, Banner::Error, e.clone())
+                .px(px(16.))
+                .py(px(8.))
+                .text_size(px(12.))
+        });
+
+        let body = match &self.snapshot {
+            None => div()
+                .px(px(16.))
+                .py(px(20.))
+                .text_color(text_dim)
+                .text_size(px(13.))
+                .child("Esperando primer refresh…"),
+            Some(snap) => div()
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .px(px(16.))
+                .py(px(16.))
+                .child(stat_card(
+                    cx,
+                    "Nodos AST",
+                    snap.nodes,
+                    "fragments parseados del código",
+                    accent_nodes,
+                    text,
+                    text_dim,
+                ))
+                .child(stat_card(
+                    cx,
+                    "Atestaciones",
+                    snap.attestations,
+                    "firmas Ed25519 sobre los nodos",
+                    accent_attestations,
+                    text,
+                    text_dim,
+                ))
+                .child(stat_card(
+                    cx,
+                    "Claves MST",
+                    snap.mst_keys,
+                    "entradas del Merkle Search Tree",
+                    accent_mst,
+                    text,
+                    text_dim,
+                )),
+        };
+
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .bg(bg)
+            .child(header)
+            .when_some(error_banner, |d, b| d.child(b))
+            .child(body)
+    }
+}
+
+/// Card visual para una estadística del dashboard. Border-l por
+/// kind, label arriba + número grande + descripción abajo.
+fn stat_card(
+    cx: &mut Context<Explorer>,
+    label: &str,
+    value: usize,
+    description: &str,
+    accent: gpui::Rgba,
+    text: gpui::Hsla,
+    text_dim: gpui::Hsla,
+) -> impl IntoElement {
+    card_themed(cx)
+        .border_l_4()
+        .border_color(accent)
+        .child(
+            div()
+                .text_color(accent)
+                .text_size(px(11.))
+                .child(SharedString::from(label.to_string())),
+        )
+        .child(
+            div()
+                .text_color(text)
+                .text_size(px(28.))
+                .child(SharedString::from(value.to_string())),
+        )
+        .child(
+            div()
+                .text_color(text_dim)
+                .text_size(px(11.))
+                .child(SharedString::from(description.to_string())),
+        )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Sanity: load_snapshot rebota si el dir no existe (mensaje
+    /// claro). Es el path típico para "no inicializaste el repo".
+    #[test]
+    fn load_snapshot_errors_on_missing_dir() {
+        let p = std::env::temp_dir().join(format!(
+            "minga-explorer-missing-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        // p NO existe.
+        let err = load_snapshot(&p).unwrap_err();
+        assert!(
+            err.contains("no existe"),
+            "msg debe explicar el missing: {err}"
+        );
+    }
+
+    #[test]
+    fn snapshot_default_is_zeros() {
+        let s = RepoSnapshot::default();
+        assert_eq!(s.nodes, 0);
+        assert_eq!(s.attestations, 0);
+        assert_eq!(s.mst_keys, 0);
+    }
+}
