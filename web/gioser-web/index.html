@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>GioSer · En el centro, el ser</title>
+  <link rel="stylesheet" href="./styles.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Inter:wght@300;500&display=swap">
+</head>
+<body>
+  <canvas id="gioser-canvas" aria-hidden="true"></canvas>
+
+  <header class="brand">
+    <h1 class="brand-title">Gio<span class="brand-dot">·</span>Ser</h1>
+    <p class="brand-sub">EN EL CENTRO · EL SER</p>
+  </header>
+
+  <main id="tips" aria-label="Cuatro elementos">
+    <a id="tip-aire" class="tip tip-aire" href="#aire" aria-label="Aire">
+      <svg viewBox="0 0 40 40" class="tip-glyph">
+        <path d="M6 14 q 7 -10 14 0 t 14 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        <path d="M6 22 q 7 -10 14 0 t 14 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" opacity="0.75"/>
+        <circle cx="32" cy="9" r="2.2" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      </svg>
+      <span class="tip-label">AIRE</span>
+      <span class="tip-sub">Software · IA</span>
+    </a>
+
+    <a id="tip-fuego" class="tip tip-fuego" href="#fuego" aria-label="Fuego">
+      <svg viewBox="0 0 40 40" class="tip-glyph">
+        <path d="M20 4 q -10 10 -5 20 q 3 -5 5 -5 q 1 8 5 10 q 8 -8 0 -18 q -4 5 -5 -7 z"
+              fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+        <circle cx="20" cy="22" r="2.5" fill="currentColor" opacity="0.55"/>
+      </svg>
+      <span class="tip-label">FUEGO</span>
+      <span class="tip-sub">Inspiración</span>
+    </a>
+
+    <a id="tip-tierra" class="tip tip-tierra" href="#tierra" aria-label="Tierra">
+      <svg viewBox="0 0 40 40" class="tip-glyph">
+        <path d="M4 30 l 10 -14 l 6 7 l 5 -10 l 11 17 z"
+              fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+        <path d="M20 30 v 6 M16 32 l -3 4 M24 32 l 3 4 M20 36 v 1"
+              fill="none" stroke="currentColor" stroke-width="1.1" opacity="0.7"/>
+      </svg>
+      <span class="tip-label">TIERRA</span>
+      <span class="tip-sub">Cuerpo</span>
+    </a>
+
+    <a id="tip-agua" class="tip tip-agua" href="#agua" aria-label="Agua">
+      <svg viewBox="0 0 40 40" class="tip-glyph">
+        <path d="M5 20 q 5 -8 10 0 t 10 0 t 10 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        <path d="M5 27 q 5 -8 10 0 t 10 0 t 10 0" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" opacity="0.75"/>
+        <path d="M5 34 q 5 -8 10 0 t 10 0 t 10 0" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity="0.5"/>
+      </svg>
+      <span class="tip-label">AGUA</span>
+      <span class="tip-sub">Espiritualidad</span>
+    </a>
+  </main>
+
+  <footer class="quote">aire · agua · fuego · tierra</footer>
+
+  <script type="module">
+    import init from "./pkg/gioser_web.js";
+    init().catch(err => {
+      console.error(err);
+      document.body.insertAdjacentHTML("beforeend",
+        '<pre style="color:#f59056;position:fixed;left:1rem;bottom:1rem;max-width:90vw;white-space:pre-wrap;font-family:monospace">' +
+        String(err) + '</pre>');
+    });
+  </script>
+</body>
+</html>

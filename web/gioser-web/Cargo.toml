@@ -1,0 +1,31 @@
+[package]
+name = "gioser-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+gioser-canvas-web = { path = "../../modules/gioser/gioser-canvas-web" }
+wasm-bindgen.workspace = true
+js-sys.workspace = true
+
+[dependencies.web-sys]
+workspace = true
+features = [
+    "Window",
+    "Document",
+    "Element",
+    "HtmlElement",
+    "HtmlCanvasElement",
+    "CssStyleDeclaration",
+    "MouseEvent",
+    "EventTarget",
+    "Performance",
+    "console",
+]
+
