@@ -1,0 +1,69 @@
+{
+  "description": "Swiss Ephemeris 2.10.03 next-rise/set/transit times (UT) for Sun + Moon. Generated 2026-05-12T01:47:23.275446+00:00.",
+  "charts": [
+    {
+      "name": "Greenwich @ J2000",
+      "lat_deg": 51.4769,
+      "lon_deg": 0.0,
+      "elev_m": 0.0,
+      "jd_tdb": 2451545.0,
+      "delta_t_seconds": 63.83,
+      "swiss": {
+        "sun_rise_jd_ut": 2451545.836891057,
+        "sun_set_jd_ut": 2451545.16773837,
+        "sun_transit_jd_ut": 2451545.0022823457,
+        "moon_rise_jd_ut": 2451545.6562035237,
+        "moon_set_jd_ut": 2451545.0505672144,
+        "moon_transit_jd_ut": 2451545.864553197
+      }
+    },
+    {
+      "name": "Madrid @ 2023-02-25",
+      "lat_deg": 40.4168,
+      "lon_deg": -3.7038,
+      "elev_m": 0.0,
+      "jd_tdb": 2460000.5,
+      "delta_t_seconds": 69.5,
+      "swiss": {
+        "sun_rise_jd_ut": 2460000.7880315897,
+        "sun_set_jd_ut": 2460001.251083812,
+        "sun_transit_jd_ut": 2460001.0193485925,
+        "moon_rise_jd_ut": 2460000.903530497,
+        "moon_set_jd_ut": 2460001.512908342,
+        "moon_transit_jd_ut": 2460001.2041314915
+      }
+    },
+    {
+      "name": "New York @ 1968-05-24",
+      "lat_deg": 40.7128,
+      "lon_deg": -74.006,
+      "elev_m": 0.0,
+      "jd_tdb": 2440000.5,
+      "delta_t_seconds": 38.3,
+      "swiss": {
+        "sun_rise_jd_ut": 2440000.896628033,
+        "sun_set_jd_ut": 2440000.5097454023,
+        "sun_transit_jd_ut": 2440001.2033246323,
+        "moon_rise_jd_ut": 2440000.8307523653,
+        "moon_set_jd_ut": 2440001.4173845123,
+        "moon_transit_jd_ut": 2440001.1200983133
+      }
+    },
+    {
+      "name": "Sydney @ J2000",
+      "lat_deg": -33.8688,
+      "lon_deg": 151.2093,
+      "elev_m": 0.0,
+      "jd_tdb": 2451545.0,
+      "delta_t_seconds": 63.83,
+      "swiss": {
+        "sun_rise_jd_ut": 2451545.2829954587,
+        "sun_set_jd_ut": 2451545.881781378,
+        "sun_transit_jd_ut": 2451545.582447336,
+        "moon_rise_jd_ut": 2451545.1517734854,
+        "moon_set_jd_ut": 2451545.7155053723,
+        "moon_transit_jd_ut": 2451545.43161647
+      }
+    }
+  ]
+}

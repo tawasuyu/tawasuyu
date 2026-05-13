@@ -1,0 +1,713 @@
+{
+  "description": "JPL Horizons reference fixtures for Spk backend (ICRF, TDB, km/(km·s⁻¹), corrections=Corrections { light_time: true, stellar_aberration: false, gravitational_deflection: false }).",
+  "backend": "spk",
+  "corrections": {
+    "light_time": true,
+    "stellar_aberration": false,
+    "gravitational_deflection": false
+  },
+  "fixtures": [
+    {
+      "name": "Mercury barycenter astrometric wrt Earth @ J2000",
+      "body": 1,
+      "center": 399,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        7011172.178053189,
+        -192679346.2917017,
+        -87543556.25397848
+      ],
+      "vel_km_s": [
+        66.78387976226591,
+        -3.52815320169,
+        -6.22599998559533
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778532008Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Mercury barycenter astrometric wrt Earth @ 2023-02-25",
+      "body": 1,
+      "center": 399,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        150237090.3863813,
+        -113568068.4274843,
+        -56634177.43771873
+      ],
+      "vel_km_s": [
+        50.39575854314712,
+        38.29113828369695,
+        14.02667408032184
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778532009Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Mercury barycenter astrometric wrt Earth @ 1968-05-24",
+      "body": 1,
+      "center": 399,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        8891678.127632737,
+        111618457.3709263,
+        53273314.68738158
+      ],
+      "vel_km_s": [
+        -26.72282864399016,
+        -28.05589038467171,
+        -16.1667414481665
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778532009Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Venus barycenter astrometric wrt Earth @ J2000",
+      "body": 2,
+      "center": 399,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        -80958248.26996781,
+        -139661764.2752543,
+        -53862302.14304181
+      ],
+      "vel_km_s": [
+        31.16969349967208,
+        -27.00018260700567,
+        -12.31621941470261
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778532009Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Venus barycenter astrometric wrt Earth @ 2023-02-25",
+      "body": 2,
+      "center": 399,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        207277258.0247952,
+        19266138.75081774,
+        5015170.5551368
+      ],
+      "vel_km_s": [
+        -13.46347435926682,
+        45.65314610608399,
+        21.78572436520542
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778532009Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Venus barycenter astrometric wrt Earth @ 1968-05-24",
+      "body": 2,
+      "center": 399,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        143865542.6572317,
+        196217037.6358027,
+        81447456.23454538
+      ],
+      "vel_km_s": [
+        -51.19757818251705,
+        34.07754084685982,
+        16.71513872893244
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778532010Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Mars barycenter astrometric wrt Earth @ J2000",
+      "body": 4,
+      "center": 399,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        234546091.2712738,
+        -132569864.0836675,
+        -63095972.76961299
+      ],
+      "vel_km_s": [
+        30.95975928507258,
+        28.93646445551476,
+        13.11449039979073
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778532010Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Mars barycenter astrometric wrt Earth @ 2023-02-25",
+      "body": 4,
+      "center": 399,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        36486138.10472082,
+        144924618.6803984,
+        70535190.87870736
+      ],
+      "vel_km_s": [
+        -8.531257808858454,
+        17.75905764253627,
+        8.08876740059876
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778532010Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Mars barycenter astrometric wrt Earth @ 1968-05-24",
+      "body": 4,
+      "center": 399,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        122111898.3646781,
+        327842091.8094971,
+        145792784.2880622
+      ],
+      "vel_km_s": [
+        -48.75915123592853,
+        19.20987006072352,
+        9.115308820666609
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778532011Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Jupiter barycenter astrometric wrt Earth @ J2000",
+      "body": 5,
+      "center": 399,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        625084835.234756,
+        276605476.4391856,
+        103327130.6018555
+      ],
+      "vel_km_s": [
+        21.8848692154133,
+        15.20185563740392,
+        6.733232933843297
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778532011Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Jupiter barycenter astrometric wrt Earth @ 2023-02-25",
+      "body": 5,
+      "center": 399,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        842334813.3806131,
+        152194746.138281,
+        47746345.84878689
+      ],
+      "vel_km_s": [
+        8.666570436561065,
+        37.05131852171049,
+        16.10214012172015
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778532011Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Jupiter barycenter astrometric wrt Earth @ 1968-05-24",
+      "body": 5,
+      "center": 399,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        -684100408.4327756,
+        389156822.5960062,
+        185772531.121049
+      ],
+      "vel_km_s": [
+        -31.07159956033747,
+        1.706814475575289,
+        0.9143299866150558
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778532011Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Saturn barycenter astrometric wrt Earth @ J2000",
+      "body": 6,
+      "center": 399,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        984916207.075513,
+        790931912.7369509,
+        282731894.4473133
+      ],
+      "vel_km_s": [
+        22.36245055221295,
+        11.12743375064767,
+        5.018402904635371
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778532012Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Saturn barycenter astrometric wrt Earth @ 2023-02-25",
+      "body": 6,
+      "center": 399,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        1376405382.48343,
+        -761900680.2549078,
+        -369285978.5864623
+      ],
+      "vel_km_s": [
+        17.31740245579056,
+        32.65444273398973,
+        13.801826131687
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778532012Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Saturn barycenter astrometric wrt Earth @ 1968-05-24",
+      "body": 6,
+      "center": 399,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        1404499930.402336,
+        534918248.0810829,
+        165998224.4103626
+      ],
+      "vel_km_s": [
+        -29.5731167153696,
+        20.81269224578012,
+        8.998810548605643
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778532012Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Uranus barycenter astrometric wrt Earth @ J2000",
+      "body": 7,
+      "center": 399,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        2185425996.011034,
+        -2003712189.066105,
+        -907544030.8213049
+      ],
+      "vel_km_s": [
+        34.43139631183656,
+        9.280809377609703,
+        3.976773736499523
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778532013Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Uranus barycenter astrometric wrt Earth @ 2023-02-25",
+      "body": 7,
+      "center": 399,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        2111065286.400438,
+        1950130479.059044,
+        826388855.4302933
+      ],
+      "vel_km_s": [
+        7.594242666040054,
+        28.926928361995,
+        12.63006177757925
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778532013Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Uranus barycenter astrometric wrt Earth @ 1968-05-24",
+      "body": 7,
+      "center": 399,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        -2667690312.576204,
+        176169643.2737123,
+        115380131.1177862
+      ],
+      "vel_km_s": [
+        -26.37355699224448,
+        5.841069334925081,
+        2.508994867387765
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778532013Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Neptune barycenter astrometric wrt Earth @ J2000",
+      "body": 8,
+      "center": 399,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        2541476179.314507,
+        -3570576062.397285,
+        -1527286682.286745
+      ],
+      "vel_km_s": [
+        34.26021865298353,
+        7.906781340954099,
+        3.246812558764213
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778532013Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Neptune barycenter astrometric wrt Earth @ 2023-02-25",
+      "body": 8,
+      "center": 399,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        4589478812.604215,
+        -398456117.2069641,
+        -275337833.8239041
+      ],
+      "vel_km_s": [
+        13.15765564141799,
+        30.09823093167474,
+        12.91475873472904
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778532014Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Neptune barycenter astrometric wrt Earth @ 1968-05-24",
+      "body": 8,
+      "center": 399,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        -2490493680.540072,
+        -3364571009.132999,
+        -1310450970.00777
+      ],
+      "vel_km_s": [
+        -21.68983686180995,
+        9.601039495659936,
+        4.12105040779242
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778532014Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Sun astrometric wrt Earth @ J2000",
+      "body": 10,
+      "center": 399,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        26499029.1079096,
+        -132757411.5965711,
+        -57556715.89381485
+      ],
+      "vel_km_s": [
+        29.79425998790753,
+        5.01805223492114,
+        2.175393773041633
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778532014Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Sun astrometric wrt Earth @ 2023-02-25",
+      "body": 10,
+      "center": 399,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        135038226.3857387,
+        -55704868.38005672,
+        -24148353.57323183
+      ],
+      "vel_km_s": [
+        12.69276575246415,
+        25.04043036712127,
+        10.85593934852245
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778532014Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Sun astrometric wrt Earth @ 1968-05-24",
+      "body": 10,
+      "center": 399,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        68012343.2556391,
+        124219811.1128409,
+        53866894.50029951
+      ],
+      "vel_km_s": [
+        -26.1381648007202,
+        12.37752519534339,
+        5.368370511742742
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778532015Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Moon astrometric wrt Earth @ J2000",
+      "body": 301,
+      "center": 399,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        -291569.2673527859,
+        -266709.1882690638,
+        -76099.15573261678
+      ],
+      "vel_km_s": [
+        0.643527489072433,
+        -0.6660824249771862,
+        -0.301323098347448
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778532015Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Moon astrometric wrt Earth @ 2023-02-25",
+      "body": 301,
+      "center": 399,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        299677.2975282669,
+        216638.2639269978,
+        95708.47070866078
+      ],
+      "vel_km_s": [
+        -0.5758853817606031,
+        0.7395468158878202,
+        0.4199171470671299
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778532015Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Moon astrometric wrt Earth @ 1968-05-24",
+      "body": 301,
+      "center": 399,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        359017.5585969985,
+        168139.1949474216,
+        79036.17575199157
+      ],
+      "vel_km_s": [
+        -0.4268451378060831,
+        0.7640441180462947,
+        0.4258732761571773
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778532016Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    }
+  ]
+}

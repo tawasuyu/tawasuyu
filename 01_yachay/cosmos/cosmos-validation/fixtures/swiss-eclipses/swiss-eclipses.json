@@ -1,0 +1,160 @@
+{
+  "description": "Swiss Ephemeris 2.10.03 next 10 lunar + solar eclipses from JD 2460310.5 (UT). Generated 2026-05-12T02:52:07.968853+00:00.",
+  "start_jd_ut": 2460310.5,
+  "eclipses": [
+    {
+      "max_jd_ut": 2460394.8006088505,
+      "kind": "penumbral",
+      "flags_hex": "0x40"
+    },
+    {
+      "max_jd_ut": 2460571.614092363,
+      "kind": "partial",
+      "flags_hex": "0x10"
+    },
+    {
+      "max_jd_ut": 2460748.790811237,
+      "kind": "total",
+      "flags_hex": "0x4"
+    },
+    {
+      "max_jd_ut": 2460926.2582209394,
+      "kind": "total",
+      "flags_hex": "0x4"
+    },
+    {
+      "max_jd_ut": 2461102.9817270124,
+      "kind": "total",
+      "flags_hex": "0x4"
+    },
+    {
+      "max_jd_ut": 2461280.675670948,
+      "kind": "partial",
+      "flags_hex": "0x10"
+    },
+    {
+      "max_jd_ut": 2461457.467278241,
+      "kind": "penumbral",
+      "flags_hex": "0x40"
+    },
+    {
+      "max_jd_ut": 2461605.1687552095,
+      "kind": "penumbral",
+      "flags_hex": "0x40"
+    },
+    {
+      "max_jd_ut": 2461634.8012875426,
+      "kind": "penumbral",
+      "flags_hex": "0x40"
+    },
+    {
+      "max_jd_ut": 2461782.675777991,
+      "kind": "partial",
+      "flags_hex": "0x10"
+    }
+  ],
+  "lunar_eclipses": [
+    {
+      "max_jd_ut": 2460394.8006088505,
+      "kind": "penumbral",
+      "flags_hex": "0x40"
+    },
+    {
+      "max_jd_ut": 2460571.614092363,
+      "kind": "partial",
+      "flags_hex": "0x10"
+    },
+    {
+      "max_jd_ut": 2460748.790811237,
+      "kind": "total",
+      "flags_hex": "0x4"
+    },
+    {
+      "max_jd_ut": 2460926.2582209394,
+      "kind": "total",
+      "flags_hex": "0x4"
+    },
+    {
+      "max_jd_ut": 2461102.9817270124,
+      "kind": "total",
+      "flags_hex": "0x4"
+    },
+    {
+      "max_jd_ut": 2461280.675670948,
+      "kind": "partial",
+      "flags_hex": "0x10"
+    },
+    {
+      "max_jd_ut": 2461457.467278241,
+      "kind": "penumbral",
+      "flags_hex": "0x40"
+    },
+    {
+      "max_jd_ut": 2461605.1687552095,
+      "kind": "penumbral",
+      "flags_hex": "0x40"
+    },
+    {
+      "max_jd_ut": 2461634.8012875426,
+      "kind": "penumbral",
+      "flags_hex": "0x40"
+    },
+    {
+      "max_jd_ut": 2461782.675777991,
+      "kind": "partial",
+      "flags_hex": "0x10"
+    }
+  ],
+  "solar_eclipses_global": [
+    {
+      "max_jd_ut": 2460409.2620413844,
+      "kind": "total",
+      "flags_hex": "0x5"
+    },
+    {
+      "max_jd_ut": 2460586.281298982,
+      "kind": "annular",
+      "flags_hex": "0x9"
+    },
+    {
+      "max_jd_ut": 2460763.949601422,
+      "kind": "partial",
+      "flags_hex": "0x12"
+    },
+    {
+      "max_jd_ut": 2460940.3208210655,
+      "kind": "partial",
+      "flags_hex": "0x12"
+    },
+    {
+      "max_jd_ut": 2461089.0082554226,
+      "kind": "annular",
+      "flags_hex": "0x9"
+    },
+    {
+      "max_jd_ut": 2461265.2402687175,
+      "kind": "total",
+      "flags_hex": "0x5"
+    },
+    {
+      "max_jd_ut": 2461443.166422351,
+      "kind": "annular",
+      "flags_hex": "0x9"
+    },
+    {
+      "max_jd_ut": 2461619.9213118604,
+      "kind": "total",
+      "flags_hex": "0x5"
+    },
+    {
+      "max_jd_ut": 2461797.1304399283,
+      "kind": "annular",
+      "flags_hex": "0x9"
+    },
+    {
+      "max_jd_ut": 2461974.6218738593,
+      "kind": "total",
+      "flags_hex": "0x5"
+    }
+  ]
+}

@@ -1,0 +1,680 @@
+{
+  "description": "Self-baseline fixtures generated from de432s.bsp. NOT external validation.",
+  "fixtures": [
+    {
+      "name": "Mercury barycenter @ J2000",
+      "body": 1,
+      "center": 0,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        -20529324.97950322,
+        -60323956.762106776,
+        -30130843.736129623
+      ],
+      "vel_km_s": [
+        37.00430443093661,
+        -8.541376782511248,
+        -8.398372382646933
+      ],
+      "source": {
+        "kind": "self_baseline",
+        "kernel": "de432s.bsp"
+      },
+      "tolerance": {
+        "pos_km": 1e-6,
+        "vel_km_s": 1e-12
+      }
+    },
+    {
+      "name": "Mercury barycenter @ 2023-02-25",
+      "body": 1,
+      "center": 0,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        13879696.786575615,
+        -57921375.89224725,
+        -32478097.271270104
+      ],
+      "vel_km_s": [
+        37.701616047339975,
+        13.252644351641287,
+        3.173679115546014
+      ],
+      "source": {
+        "kind": "self_baseline",
+        "kernel": "de432s.bsp"
+      },
+      "tolerance": {
+        "pos_km": 1e-6,
+        "vel_km_s": 1e-12
+      }
+    },
+    {
+      "name": "Mercury barycenter @ 1968-05-24",
+      "body": 1,
+      "center": 0,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        -58534355.26869437,
+        -12810581.965111084,
+        -692705.406019195
+      ],
+      "vel_km_s": [
+        -0.5645198868310758,
+        -40.42209911639155,
+        -21.531572989572847
+      ],
+      "source": {
+        "kind": "self_baseline",
+        "kernel": "de432s.bsp"
+      },
+      "tolerance": {
+        "pos_km": 1e-6,
+        "vel_km_s": 1e-12
+      }
+    },
+    {
+      "name": "Venus barycenter @ J2000",
+      "body": 2,
+      "center": 0,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        -108524092.6903882,
+        -7318517.776977287,
+        3548115.9464046387
+      ],
+      "vel_km_s": [
+        1.3912186119801582,
+        -32.02951994769371,
+        -14.497086701724804
+      ],
+      "source": {
+        "kind": "self_baseline",
+        "kernel": "de432s.bsp"
+      },
+      "tolerance": {
+        "pos_km": 1e-6,
+        "vel_km_s": 1e-12
+      }
+    },
+    {
+      "name": "Venus barycenter @ 2023-02-25",
+      "body": 2,
+      "center": 0,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        70876963.06681737,
+        74918448.56171891,
+        29176758.43758224
+      ],
+      "vel_km_s": [
+        -26.158687276680904,
+        20.593217069800566,
+        10.921637668296356
+      ],
+      "source": {
+        "kind": "self_baseline",
+        "kernel": "de432s.bsp"
+      },
+      "tolerance": {
+        "pos_km": 1e-6,
+        "vel_km_s": 1e-12
+      }
+    },
+    {
+      "name": "Venus barycenter @ 1968-05-24",
+      "body": 2,
+      "center": 0,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        76418300.4370399,
+        71823294.58252293,
+        27500054.983497806
+      ],
+      "vel_km_s": [
+        -25.060766915357235,
+        21.701734949791263,
+        11.347682142858439
+      ],
+      "source": {
+        "kind": "self_baseline",
+        "kernel": "de432s.bsp"
+      },
+      "tolerance": {
+        "pos_km": 1e-6,
+        "vel_km_s": 1e-12
+      }
+    },
+    {
+      "name": "Earth-Moon barycenter @ J2000",
+      "body": 3,
+      "center": 0,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        -27570175.588424373,
+        132358187.63084124,
+        57417722.61070698
+      ],
+      "vel_km_s": [
+        -29.77712821627309,
+        -5.037847183456792,
+        -2.184306335195768
+      ],
+      "source": {
+        "kind": "self_baseline",
+        "kernel": "de432s.bsp"
+      },
+      "tolerance": {
+        "pos_km": 1e-6,
+        "vel_km_s": 1e-12
+      }
+    },
+    {
+      "name": "Earth-Moon barycenter @ 2023-02-25",
+      "body": 3,
+      "center": 0,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        -136378486.29653448,
+        55640635.78974089,
+        24155163.780124202
+      ],
+      "vel_km_s": [
+        -12.696942246868948,
+        -25.04547466818515,
+        -10.856857142039013
+      ],
+      "source": {
+        "kind": "self_baseline",
+        "kernel": "de432s.bsp"
+      },
+      "tolerance": {
+        "pos_km": 1e-6,
+        "vel_km_s": 1e-12
+      }
+    },
+    {
+      "name": "Earth-Moon barycenter @ 1968-05-24",
+      "body": 3,
+      "center": 0,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        -67421434.12484485,
+        -124410276.54985517,
+        -53956153.871960506
+      ],
+      "vel_km_s": [
+        26.13843356945833,
+        -12.360058077252344,
+        -5.359805533151126
+      ],
+      "source": {
+        "kind": "self_baseline",
+        "kernel": "de432s.bsp"
+      },
+      "tolerance": {
+        "pos_km": 1e-6,
+        "vel_km_s": 1e-12
+      }
+    },
+    {
+      "name": "Mars barycenter @ J2000",
+      "body": 4,
+      "center": 0,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        206980542.0010649,
+        -186369.71154444106,
+        -5667233.380362131
+      ],
+      "vel_km_s": [
+        1.1719849952406103,
+        23.90670820005706,
+        10.933920636992784
+      ],
+      "source": {
+        "kind": "self_baseline",
+        "kernel": "de432s.bsp"
+      },
+      "tolerance": {
+        "pos_km": 1e-6,
+        "vel_km_s": 1e-12
+      }
+    },
+    {
+      "name": "Mars barycenter @ 2023-02-25",
+      "body": 4,
+      "center": 0,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        -99907687.11512643,
+        200558600.9389903,
+        94687663.05659103
+      ],
+      "vel_km_s": [
+        -21.220698676119515,
+        -7.2964288757620155,
+        -2.773676166609965
+      ],
+      "source": {
+        "kind": "self_baseline",
+        "kernel": "de432s.bsp"
+      },
+      "tolerance": {
+        "pos_km": 1e-6,
+        "vel_km_s": 1e-12
+      }
+    },
+    {
+      "name": "Mars barycenter @ 1968-05-24",
+      "body": 4,
+      "center": 0,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        54657509.87419309,
+        203438418.75546327,
+        91840410.40857475
+      ],
+      "vel_km_s": [
+        -22.616278563931996,
+        6.8377156058179605,
+        3.7490588217871252
+      ],
+      "source": {
+        "kind": "self_baseline",
+        "kernel": "de432s.bsp"
+      },
+      "tolerance": {
+        "pos_km": 1e-6,
+        "vel_km_s": 1e-12
+      }
+    },
+    {
+      "name": "Jupiter barycenter @ J2000",
+      "body": 5,
+      "center": 0,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        597499981.3934388,
+        408990371.09631693,
+        160756258.67036384
+      ],
+      "vel_km_s": [
+        -7.9005251702426404,
+        10.171796318760435,
+        4.552467735835004
+      ],
+      "source": {
+        "kind": "self_baseline",
+        "kernel": "de432s.bsp"
+      },
+      "tolerance": {
+        "pos_km": 1e-6,
+        "vel_km_s": 1e-12
+      }
+    },
+    {
+      "name": "Jupiter barycenter @ 2023-02-25",
+      "body": 5,
+      "center": 0,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        705941171.6076729,
+        207867081.51680025,
+        71915323.52981046
+      ],
+      "vel_km_s": [
+        -4.024035366964,
+        11.996663776931694,
+        5.240113393388969
+      ],
+      "source": {
+        "kind": "self_baseline",
+        "kernel": "de432s.bsp"
+      },
+      "tolerance": {
+        "pos_km": 1e-6,
+        "vel_km_s": 1e-12
+      }
+    },
+    {
+      "name": "Jupiter barycenter @ 1968-05-24",
+      "body": 5,
+      "center": 0,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        -751539490.6894236,
+        264715752.83218873,
+        131803425.23216408
+      ],
+      "vel_km_s": [
+        -4.927469870203428,
+        -10.662706889929602,
+        -4.4507392732118225
+      ],
+      "source": {
+        "kind": "self_baseline",
+        "kernel": "de432s.bsp"
+      },
+      "tolerance": {
+        "pos_km": 1e-6,
+        "vel_km_s": 1e-12
+      }
+    },
+    {
+      "name": "Saturn barycenter @ J2000",
+      "body": 6,
+      "center": 0,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        957317525.2398679,
+        923319668.9885044,
+        340162796.3053182
+      ],
+      "vel_km_s": [
+        -7.42270943261039,
+        6.097474806175346,
+        2.837682315924676
+      ],
+      "source": {
+        "kind": "self_baseline",
+        "kernel": "de432s.bsp"
+      },
+      "tolerance": {
+        "pos_km": 1e-6,
+        "vel_km_s": 1e-12
+      }
+    },
+    {
+      "name": "Saturn barycenter @ 2023-02-25",
+      "body": 6,
+      "center": 0,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        1240048198.8419888,
+        -706221706.9893068,
+        -345116130.7501868
+      ],
+      "vel_km_s": [
+        4.627177235072732,
+        7.600141918634892,
+        2.9399448191194586
+      ],
+      "source": {
+        "kind": "self_baseline",
+        "kernel": "de432s.bsp"
+      },
+      "tolerance": {
+        "pos_km": 1e-6,
+        "vel_km_s": 1e-12
+      }
+    },
+    {
+      "name": "Saturn barycenter @ 1968-05-24",
+      "body": 6,
+      "center": 0,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        1337056836.507765,
+        410548512.4475805,
+        112059438.05344692
+      ],
+      "vel_km_s": [
+        -3.429821040537156,
+        8.443250888376092,
+        3.633803192355504
+      ],
+      "source": {
+        "kind": "self_baseline",
+        "kernel": "de432s.bsp"
+      },
+      "tolerance": {
+        "pos_km": 1e-6,
+        "vel_km_s": 1e-12
+      }
+    },
+    {
+      "name": "Uranus barycenter @ J2000",
+      "body": 7,
+      "center": 0,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        2157907336.337186,
+        -1871306892.3625028,
+        -850106769.3902797
+      ],
+      "vel_km_s": [
+        4.646336787760325,
+        4.251152456454851,
+        1.796172941593772
+      ],
+      "source": {
+        "kind": "self_baseline",
+        "kernel": "de432s.bsp"
+      },
+      "tolerance": {
+        "pos_km": 1e-6,
+        "vel_km_s": 1e-12
+      }
+    },
+    {
+      "name": "Uranus barycenter @ 2023-02-25",
+      "body": 7,
+      "center": 0,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        1974632087.3032875,
+        2005807001.050841,
+        850560548.7843676
+      ],
+      "vel_km_s": [
+        -5.095805916104684,
+        3.872363172508225,
+        1.7680578411970083
+      ],
+      "source": {
+        "kind": "self_baseline",
+        "kernel": "de432s.bsp"
+      },
+      "tolerance": {
+        "pos_km": 1e-6,
+        "vel_km_s": 1e-12
+      }
+    },
+    {
+      "name": "Uranus barycenter @ 1968-05-24",
+      "body": 7,
+      "center": 0,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        -2735118007.7063766,
+        51699231.90430491,
+        61397482.17544869
+      ],
+      "vel_km_s": [
+        -0.22977933624531352,
+        -6.528275547850485,
+        -2.855988984268311
+      ],
+      "source": {
+        "kind": "self_baseline",
+        "kernel": "de432s.bsp"
+      },
+      "tolerance": {
+        "pos_km": 1e-6,
+        "vel_km_s": 1e-12
+      }
+    },
+    {
+      "name": "Neptune barycenter @ J2000",
+      "body": 8,
+      "center": 0,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        2513978699.845012,
+        -3438170134.7350836,
+        -1469851482.2553165
+      ],
+      "vel_km_s": [
+        4.475214219059955,
+        2.877104765530599,
+        1.0662007219078429
+      ],
+      "source": {
+        "kind": "self_baseline",
+        "kernel": "de432s.bsp"
+      },
+      "tolerance": {
+        "pos_km": 1e-6,
+        "vel_km_s": 1e-12
+      }
+    },
+    {
+      "name": "Neptune barycenter @ 2023-02-25",
+      "body": 8,
+      "center": 0,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        4453103346.10161,
+        -342740437.0716685,
+        -251152051.73740387
+      ],
+      "vel_km_s": [
+        0.467607935162813,
+        5.043778535701105,
+        2.0528053038280616
+      ],
+      "source": {
+        "kind": "self_baseline",
+        "kernel": "de432s.bsp"
+      },
+      "tolerance": {
+        "pos_km": 1e-6,
+        "vel_km_s": 1e-12
+      }
+    },
+    {
+      "name": "Neptune barycenter @ 1968-05-24",
+      "body": 8,
+      "center": 0,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        -2557854056.8712583,
+        -3489023673.7879963,
+        -1364426340.5801716
+      ],
+      "vel_km_s": [
+        4.453835992470348,
+        -2.768229941467237,
+        -1.2439013734308064
+      ],
+      "source": {
+        "kind": "self_baseline",
+        "kernel": "de432s.bsp"
+      },
+      "tolerance": {
+        "pos_km": 1e-6,
+        "vel_km_s": 1e-12
+      }
+    },
+    {
+      "name": "Sun @ J2000",
+      "body": 10,
+      "center": 0,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        -1067598.6403504945,
+        -395988.9665119929,
+        -138071.08985124814
+      ],
+      "vel_km_s": [
+        0.009312569408909975,
+        -0.011701507503671382,
+        -0.005251248217105144
+      ],
+      "source": {
+        "kind": "self_baseline",
+        "kernel": "de432s.bsp"
+      },
+      "tolerance": {
+        "pos_km": 1e-6,
+        "vel_km_s": 1e-12
+      }
+    },
+    {
+      "name": "Sun @ 2023-02-25",
+      "body": 10,
+      "center": 0,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        -1343899.4697098273,
+        -66871.24248490843,
+        5644.596036175657
+      ],
+      "vel_km_s": [
+        0.002820872017931564,
+        -0.014030103537182552,
+        -0.006019999957248437
+      ],
+      "source": {
+        "kind": "self_baseline",
+        "kernel": "de432s.bsp"
+      },
+      "tolerance": {
+        "pos_km": 1e-6,
+        "vel_km_s": 1e-12
+      }
+    },
+    {
+      "name": "Sun @ 1968-05-24",
+      "body": 10,
+      "center": 0,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        586549.1878980334,
+        -192504.0630197948,
+        -90217.98648107637
+      ],
+      "vel_km_s": [
+        0.005455099857682614,
+        0.008183512122891888,
+        0.0033903545040032267
+      ],
+      "source": {
+        "kind": "self_baseline",
+        "kernel": "de432s.bsp"
+      },
+      "tolerance": {
+        "pos_km": 1e-6,
+        "vel_km_s": 1e-12
+      }
+    }
+  ]
+}

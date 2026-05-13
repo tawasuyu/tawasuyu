@@ -1,0 +1,69 @@
+{
+  "description": "Swiss Ephemeris 2.10.03 topocentric alt/az for Moon and Sun. Generated 2026-05-12T01:12:38.244028+00:00.",
+  "charts": [
+    {
+      "name": "Greenwich @ J2000",
+      "lat_deg": 51.4769,
+      "lon_deg": 0.0,
+      "elev_m": 0.0,
+      "jd_tdb": 2451545.0,
+      "delta_t_seconds": 63.83,
+      "swiss": {
+        "moon_az_deg": 57.56714052019731,
+        "moon_true_alt_deg": 9.387089359896343,
+        "moon_app_alt_deg": 9.48415264716299,
+        "sun_az_deg": 358.9617474946788,
+        "sun_true_alt_deg": 15.482089002164187,
+        "sun_app_alt_deg": 15.54195019397445
+      }
+    },
+    {
+      "name": "Madrid @ 2023-02-25",
+      "lat_deg": 40.4168,
+      "lon_deg": -3.7038,
+      "elev_m": 0.0,
+      "jd_tdb": 2460000.5,
+      "delta_t_seconds": 69.5,
+      "swiss": {
+        "moon_az_deg": 117.14168810957005,
+        "moon_true_alt_deg": -9.055765068020087,
+        "moon_app_alt_deg": -9.055765068020087,
+        "sun_az_deg": 166.28421776309517,
+        "sun_true_alt_deg": -58.19222428511362,
+        "sun_app_alt_deg": -58.19222428511362
+      }
+    },
+    {
+      "name": "New York @ 1968-05-24",
+      "lat_deg": 40.7128,
+      "lon_deg": -74.006,
+      "elev_m": 0.0,
+      "jd_tdb": 2440000.5,
+      "delta_t_seconds": 38.3,
+      "swiss": {
+        "moon_az_deg": 137.89070720051183,
+        "moon_true_alt_deg": -28.621017344119903,
+        "moon_app_alt_deg": -28.621017344119903,
+        "sun_az_deg": 116.32628166548713,
+        "sun_true_alt_deg": 1.5886320230011697,
+        "sun_app_alt_deg": 1.9163717673159955
+      }
+    },
+    {
+      "name": "Sydney @ J2000",
+      "lat_deg": -33.8688,
+      "lon_deg": 151.2093,
+      "elev_m": 0.0,
+      "jd_tdb": 2451545.0,
+      "delta_t_seconds": 63.83,
+      "swiss": {
+        "moon_az_deg": 323.2158895198513,
+        "moon_true_alt_deg": -38.16085086317755,
+        "moon_app_alt_deg": -38.16085086317755,
+        "sun_az_deg": 30.782830529417765,
+        "sun_true_alt_deg": -26.39502826719103,
+        "sun_app_alt_deg": -26.39502826719103
+      }
+    }
+  ]
+}

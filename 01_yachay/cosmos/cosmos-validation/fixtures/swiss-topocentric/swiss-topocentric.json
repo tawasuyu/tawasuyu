@@ -1,0 +1,93 @@
+{
+  "description": "Swiss Ephemeris 2.10.03 geocentric vs topocentric apparent ecliptic for Moon + Sun. Generated 2026-05-11T23:09:19.621687+00:00.",
+  "charts": [
+    {
+      "name": "Greenwich @ J2000",
+      "lat_deg": 51.4769,
+      "lon_deg": 0.0,
+      "elev_m": 0.0,
+      "jd_tdb": 2451545.0,
+      "delta_t_seconds": 63.83,
+      "swiss": {
+        "moon_geo_lon_deg": 223.31487040183669,
+        "moon_geo_lat_deg": 5.170872011393831,
+        "moon_geo_dist_au": 0.002689975432019147,
+        "moon_topo_lon_deg": 223.07708995380094,
+        "moon_topo_lat_deg": 4.309033175835929,
+        "moon_topo_dist_au": 0.002682635766153483,
+        "sun_geo_lon_deg": 280.36816554071225,
+        "sun_geo_lat_deg": 0.000227358276529778,
+        "sun_geo_dist_au": 0.9833276307942606,
+        "sun_topo_lon_deg": 280.368064544677,
+        "sun_topo_lat_deg": -0.0021584484265238547,
+        "sun_topo_dist_au": 0.9833161387223308
+      }
+    },
+    {
+      "name": "Madrid @ 2023-02-25",
+      "lat_deg": 40.4168,
+      "lon_deg": -3.7038,
+      "elev_m": 0.0,
+      "jd_tdb": 2460000.5,
+      "delta_t_seconds": 69.5,
+      "swiss": {
+        "moon_geo_lon_deg": 38.63717988398147,
+        "moon_geo_lat_deg": 0.2476608533186147,
+        "moon_geo_dist_au": 0.0025532910018427426,
+        "moon_topo_lon_deg": 37.794082559668624,
+        "moon_topo_lat_deg": -0.17563438666464629,
+        "moon_topo_dist_au": 0.00255970842031485,
+        "sun_geo_lon_deg": 336.10613344616337,
+        "sun_geo_lat_deg": -4.930651252379331e-05,
+        "sun_geo_dist_au": 0.9897139744773669,
+        "sun_topo_lon_deg": 336.10538067541734,
+        "sun_topo_lat_deg": -0.0011189083671510648,
+        "sun_topo_dist_au": 0.9897502258970633
+      }
+    },
+    {
+      "name": "New York @ 1968-05-24",
+      "lat_deg": 40.7128,
+      "lon_deg": -74.006,
+      "elev_m": 0.0,
+      "jd_tdb": 2440000.5,
+      "delta_t_seconds": 38.3,
+      "swiss": {
+        "moon_geo_lon_deg": 26.902882819573186,
+        "moon_geo_lat_deg": 0.796081063756576,
+        "moon_geo_dist_au": 0.002702186930716658,
+        "moon_topo_lon_deg": 26.274690125313125,
+        "moon_topo_lat_deg": 0.31476543191774015,
+        "moon_topo_dist_au": 0.002722411478149625,
+        "sun_geo_lon_deg": 62.87999163864168,
+        "sun_geo_lat_deg": -9.517329128581967e-06,
+        "sun_geo_dist_au": 1.0128392010119676,
+        "sun_topo_lon_deg": 62.877936647937894,
+        "sun_topo_lat_deg": -0.0012612260507904199,
+        "sun_topo_dist_au": 1.0128380794826717
+      }
+    },
+    {
+      "name": "Sydney @ J2000",
+      "lat_deg": -33.8688,
+      "lon_deg": 151.2093,
+      "elev_m": 0.0,
+      "jd_tdb": 2451545.0,
+      "delta_t_seconds": 63.83,
+      "swiss": {
+        "moon_geo_lon_deg": 223.31487040183669,
+        "moon_geo_lat_deg": 5.170872011393831,
+        "moon_geo_dist_au": 0.002689975432019147,
+        "moon_topo_lon_deg": 223.48081248695632,
+        "moon_topo_lat_deg": 5.863294096012303,
+        "moon_topo_dist_au": 0.0027161640904169444,
+        "sun_geo_lon_deg": 280.36816554071225,
+        "sun_geo_lat_deg": 0.000227358276529778,
+        "sun_geo_dist_au": 0.9833276307942606,
+        "sun_topo_lon_deg": 280.3672280445525,
+        "sun_topo_lat_deg": 0.0022594227672529904,
+        "sun_topo_dist_au": 0.9833466633902744
+      }
+    }
+  ]
+}
