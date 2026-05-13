@@ -11,7 +11,9 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 gioser-canvas-web = { path = "../../modules/gioser/gioser-canvas-web" }
+pluma-reader-web = { path = "../../modules/pluma/pluma-reader-web" }
 wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
 js-sys.workspace = true
 
 [dependencies.web-sys]
@@ -23,9 +25,13 @@ features = [
     "HtmlElement",
     "HtmlCanvasElement",
     "CssStyleDeclaration",
-    "MouseEvent",
+    "DomTokenList",
+    "DomRect",
+    "Event",
     "EventTarget",
+    "MouseEvent",
+    "KeyboardEvent",
+    "NodeList",
     "Performance",
     "console",
 ]
-

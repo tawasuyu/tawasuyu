@@ -87,12 +87,14 @@ pub mod cosmos {
     pub const NEBULA_A: Rgb = Rgb(0.220, 0.130, 0.380);
     /// Nebulosa exterior — azul profundo.
     pub const NEBULA_B: Rgb = Rgb(0.080, 0.180, 0.320);
-    /// Núcleo solar central.
-    pub const SUN_CORE: Rgb = Rgb(1.000, 0.860, 0.520);
-    /// Líneas de la chacana — cyan helado.
-    pub const CHACANA_LINE: Rgb = Rgb(0.55, 0.92, 1.00);
-    /// Aro de fuego del logo — dorado-ámbar.
-    pub const CHACANA_RIM: Rgb = Rgb(0.95, 0.65, 0.32);
+    /// Núcleo solar central — amarillo cálido, base del halo dorado.
+    pub const SUN_CORE: Rgb = Rgb(1.000, 0.870, 0.540);
+    /// Línea principal de la chacana — dorado/ámbar luminoso (color del logo).
+    pub const CHACANA_LINE: Rgb = Rgb(0.96, 0.74, 0.40);
+    /// Aro/rim cálido más profundo — ámbar tostado.
+    pub const CHACANA_RIM: Rgb = Rgb(0.88, 0.58, 0.28);
+    /// Niebla oscura del interior de la chacana — violeta-negro translúcido.
+    pub const CHACANA_DARK: Rgb = Rgb(0.04, 0.03, 0.10);
     /// Polvo de estrellas.
     pub const STARDUST: Rgb = Rgb(0.85, 0.88, 1.00);
 }

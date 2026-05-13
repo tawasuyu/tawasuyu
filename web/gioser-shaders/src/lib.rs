@@ -1,9 +1,8 @@
 //! Fuentes GLSL ES 3.00 para GioSer.
 //!
-//! Cada `const &str` es un shader completo, listo para pasar a
-//! `gl.shaderSource()`. No dependemos de ningún backend; el cliente
-//! decide cómo compilarlos. Convención: precision `highp float`,
-//! atributo `a_pos`, varying `v_*`, uniforms `u_*`.
+//! Cada `const &str` es un shader completo listo para `gl.shaderSource()`.
+//! Convención: precision `highp float`, atributo `a_pos`, varying `v_*`,
+//! uniforms `u_*`.
 
 #![no_std]
 
@@ -20,9 +19,9 @@ void main() {
 }
 ";
 
-/// Fragment del fondo cósmico: nubes FBM en 3 capas, 3 estratos de
-/// estrellas con titilación independiente, viñeta, y 4 meteoros
-/// procedurales que cruzan el cielo periódicamente.
+/// Fragment del fondo cósmico: nubes FBM en 3 capas con drift visible,
+/// 3 estratos de estrellas con titilación independiente, viñeta radial,
+/// 4 meteoros procedurales con vida cíclica.
 pub const FS_COSMOS: &str = "#version 300 es
 precision highp float;
 in vec2 v_clip;
@@ -63,7 +62,6 @@ float fbm(vec2 p) {
     return v;
 }
 
-// Meteoro procedural: trazo brillante con cola, vida 1.6s, respawnea solo.
 float meteor(vec2 uv, float seed) {
     float period = 6.5 + 4.0 * hash11(seed * 17.0);
     float t_seeded = u_time + seed * 19.0;
@@ -81,20 +79,16 @@ float meteor(vec2 uv, float seed) {
         hash21(vec2(seed + 1.0, epoch)) * 1.6 - 0.8,
         -0.7 - hash21(vec2(seed + 2.0, epoch)) * 0.6
     ));
-
     vec2 head = origin + dir * t * 2.1;
     vec2 tail = head - dir * 0.24;
-
     vec2 pa = uv - tail;
     vec2 ba = head - tail;
     float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0);
     float dist = length(pa - ba * h);
-
     float perpGlow = exp(-dist * 420.0);
     float trailFalloff = smoothstep(0.0, 1.0, h);
     float headPulse = exp(-dist * 900.0);
     float lifeFade = sin(t * 3.14159);
-
     return (perpGlow * trailFalloff + headPulse * 1.4) * lifeFade;
 }
 
@@ -103,11 +97,9 @@ void main() {
     vec2 uv = v_clip;
     uv.x *= aspect;
 
-    // === NUBES (drift visible, 5× más rápido que la versión anterior) ===
     vec2 d1 = vec2( u_time * 0.055,  u_time * 0.022) + u_parallax * 0.10;
     vec2 d2 = vec2(-u_time * 0.085,  u_time * 0.058) + u_parallax * 0.22;
     vec2 d3 = vec2( u_time * 0.130, -u_time * 0.095) + u_parallax * 0.40;
-
     float n1 = fbm(uv * 0.85 + d1);
     float n2 = fbm(uv * 2.05 + d2);
     float n3 = fbm(uv * 4.40 + d3);
@@ -117,12 +109,9 @@ void main() {
     color = mix(color, u_nebula_b, pow(n2, 1.85) * 0.62);
     color += u_nebula_a * pow(n3, 3.0) * 0.28;
 
-    // Viñeta radial.
     float r = length(v_clip);
     color *= 1.0 - smoothstep(0.55, 1.40, r) * 0.85;
 
-    // === ESTRELLAS — 3 estratos con titilación distinta ===
-    // Brillantes, pocas, titilan rápido.
     {
         vec2 sgrid = uv * 75.0;
         vec2 sid = floor(sgrid);
@@ -131,7 +120,6 @@ void main() {
         float mask = smoothstep(0.9935, 0.999, sh);
         color += u_stardust * mask * tw * 1.15;
     }
-    // Medianas, densas, titilan lento.
     {
         vec2 sgrid = uv * 135.0 + vec2(7.0, 11.0);
         vec2 sid = floor(sgrid);
@@ -140,7 +128,6 @@ void main() {
         float mask = smoothstep(0.987, 0.994, sh);
         color += u_stardust * mask * tw * 0.75;
     }
-    // Polvo de fondo, muchas, casi sin twinkle.
     {
         vec2 sgrid = uv * 260.0 + vec2(13.0, 3.0);
         vec2 sid = floor(sgrid);
@@ -150,7 +137,6 @@ void main() {
         color += u_stardust * mask * tw * 0.40;
     }
 
-    // === METEOROS (4 procedurales, respawn independiente) ===
     float meteors = 0.0;
     meteors += meteor(uv, 0.31);
     meteors += meteor(uv, 1.73);
@@ -174,10 +160,20 @@ void main() {
 }
 ";
 
-/// Fragment de la chacana mística: SDF de 2 escalones por brazo,
-/// líneas glow + aro + rayos zodiacales + sol central pulsante.
-/// Uniforms: `u_time`, `u_thickness` (s), `u_center_half` (c), `u_arm_extent`,
-/// `u_line_color`, `u_rim_color`, `u_sun_color`, `u_sun_pulse`.
+/// Fragment de la chacana mística (estética dorada del logo GioSer):
+/// 1. **Sol detrás**: halo gauss + corona, visible SÓLO dentro de la superficie
+///    de la chacana (clip por SDF), apenas asomando por las junturas de los pasos.
+/// 2. **Doble outline**: dos líneas paralelas en dorado/ámbar — la chacana se
+///    siente "grabada" sobre el cielo.
+/// 3. **Interior**: niebla oscura translúcida con sutiles rayos radiales
+///    desde el centro (el sol los proyecta a través de la superficie).
+/// 4. **Aro doble exterior**: ring fino + ring grueso (este último con marcas
+///    cardinales de 3 puntos cada una, como en el logo).
+///
+/// Uniforms:
+///   `u_time`, `u_thickness` (s), `u_center_half` (c), `u_arm_extent` (L),
+///   `u_line_color` (gold rim), `u_rim_color` (gold rim oscuro),
+///   `u_sun_color`, `u_sun_pulse`, `u_dark_color` (interior fill).
 pub const FS_CHACANA: &str = "#version 300 es
 precision highp float;
 in vec2 v_world;
@@ -189,26 +185,26 @@ uniform float u_arm_extent;
 uniform vec3  u_line_color;
 uniform vec3  u_rim_color;
 uniform vec3  u_sun_color;
+uniform vec3  u_dark_color;
 uniform float u_sun_pulse;
+
+const float PI = 3.14159265;
 
 float sdBox(vec2 p, vec2 b) {
     vec2 d = abs(p) - b;
     return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
 }
 
-// Chacana de 2 escalones (mística clásica): centro 2c×2c + 4 brazos
-// con 2 niveles. Inner level half-width = 2s, outer (tip) = s.
+// Chacana de 2 escalones (mística clásica de Tiwanaku).
 float sdChacana(vec2 p, float s, float c) {
     float d = sdBox(p, vec2(c, c));
     float hd = 0.5 * s;
-    // Nivel interno (más ancho, pegado al centro).
     float mid1 = c + 0.5 * s;
     float hw1 = 2.0 * s;
-    d = min(d, sdBox(p - vec2(0.0,  mid1), vec2(hw1, hd))); // N
-    d = min(d, sdBox(p - vec2(0.0, -mid1), vec2(hw1, hd))); // S
-    d = min(d, sdBox(p - vec2( mid1, 0.0), vec2(hd, hw1))); // E
-    d = min(d, sdBox(p - vec2(-mid1, 0.0), vec2(hd, hw1))); // W
-    // Punta (más angosta, externa).
+    d = min(d, sdBox(p - vec2(0.0,  mid1), vec2(hw1, hd)));
+    d = min(d, sdBox(p - vec2(0.0, -mid1), vec2(hw1, hd)));
+    d = min(d, sdBox(p - vec2( mid1, 0.0), vec2(hd, hw1)));
+    d = min(d, sdBox(p - vec2(-mid1, 0.0), vec2(hd, hw1)));
     float mid2 = c + 1.5 * s;
     float hw2 = 1.0 * s;
     d = min(d, sdBox(p - vec2(0.0,  mid2), vec2(hw2, hd)));
@@ -218,66 +214,90 @@ float sdChacana(vec2 p, float s, float c) {
     return d;
 }
 
+// 3 puntos pequeños en cada uno de los 4 cardinales sobre el aro grueso.
+float cardinal_dots(vec2 p, float ringR, float dotSize) {
+    float r = length(p);
+    float ang = atan(p.y, p.x);
+    // Acercamiento al aro (gauss tight en r=ringR).
+    float on_ring = exp(-((r - ringR) * (r - ringR)) / (2.0 * dotSize * dotSize));
+    float dots = 0.0;
+    // 4 cardinales en ángulos 0, π/2, π, -π/2.
+    for (int i = 0; i < 4; i++) {
+        float base = float(i) * (PI * 0.5);
+        // 3 puntos por cardinal, offset angular pequeño.
+        for (int j = -1; j <= 1; j++) {
+            float a = base + float(j) * 0.075;
+            float da = ang - a;
+            da = da - 2.0 * PI * floor((da + PI) / (2.0 * PI));
+            dots += exp(-(da * da) / (2.0 * 0.012 * 0.012));
+        }
+    }
+    return on_ring * dots;
+}
+
 void main() {
     vec2 p = v_world;
     float d = sdChacana(p, u_thickness, u_center_half);
     float r = length(p);
 
-    // Línea principal: gaussiana sobre el borde de la chacana.
-    float lineW = 0.011;
-    float line = exp(-(d * d) / (2.0 * lineW * lineW));
+    // === SOL DETRÁS ===
+    // Halo grande, sólo visible dentro de la superficie de la chacana.
+    float inside = 1.0 - smoothstep(-0.004, 0.004, d);
+    float sunR = u_thickness * 0.42;
+    float sun = exp(-(r * r) / (2.0 * sunR * sunR));
+    float corR = u_center_half * 0.75;
+    float corona = exp(-(r * r) / (2.0 * corR * corR));
+    float halo = sun * (1.15 + 0.20 * u_sun_pulse) + corona * (0.55 + 0.15 * u_sun_pulse);
 
-    // Glow exterior cae suave hacia el infinito.
-    float glow = exp(-max(d, 0.0) * 8.0) * 0.55;
-
-    // Fill interior, una niebla cyan muy tenue.
-    float fill = smoothstep(0.0, -0.025, d);
-
-    // Aro circular que envuelve la chacana (rasgo del logo).
-    float ringR_outer = u_arm_extent * 1.32;
-    float ringD_outer = abs(r - ringR_outer);
-    float ring_outer = exp(-(ringD_outer * ringD_outer) / (2.0 * 0.008 * 0.008)) * 0.80;
-
-    // Aro interior fino (segundo orbital).
-    float ringR_inner = u_arm_extent * 1.18;
-    float ringD_inner = abs(r - ringR_inner);
-    float ring_inner = exp(-(ringD_inner * ringD_inner) / (2.0 * 0.0035 * 0.0035)) * 0.42;
-
-    // Ventana radial entre arm_extent y el aro exterior — para rayos y muescas.
+    // Rayos radiales sutiles desde el centro, sólo visibles donde la superficie
+    // de la chacana los recibe.
     float ang = atan(p.y, p.x);
-    float band = smoothstep(u_arm_extent * 1.00, u_arm_extent * 1.10, r)
-               * (1.0 - smoothstep(ringR_outer * 0.92, ringR_outer * 1.00, r));
+    float radial = pow(abs(cos(ang * 4.0 + sin(u_time * 0.3) * 0.2)), 8.0)
+                 * smoothstep(0.0, u_center_half * 0.8, r)
+                 * (1.0 - smoothstep(u_center_half * 0.85, u_center_half * 1.2, r))
+                 * 0.30;
 
-    // Rayos: 12 divisiones (meses andinos / horas), modulados en el tiempo.
-    float rays = pow(abs(cos(ang * 6.0)), 24.0) * band
-               * (0.55 + 0.45 * sin(u_time * 0.7));
+    // === DOBLE OUTLINE ===
+    // Línea interior (sobre la SDF=0).
+    float lineW1 = 0.0085;
+    float line_in = exp(-(d * d) / (2.0 * lineW1 * lineW1));
+    // Línea exterior paralela, offset 0.018 hacia afuera.
+    float dOff = d - 0.020;
+    float lineW2 = 0.005;
+    float line_out = exp(-(dOff * dOff) / (2.0 * lineW2 * lineW2));
+    float line = line_in * 1.0 + line_out * 0.65;
 
-    // Marcas cardinales (4 muescas finas) — exponente alto = picos angostos.
-    float card = pow(abs(cos(ang * 2.0)), 120.0) * band * 1.10;
+    // Glow exterior leve.
+    float glow = exp(-max(d, 0.0) * 14.0) * 0.30;
 
-    // Sol central: gauss tight + corona suave + pulso.
-    float sunR = u_thickness * 0.50;
-    float sunDist = r;
-    float sun = exp(-(sunDist * sunDist) / (2.0 * sunR * sunR));
-    float corR = sunR * 5.0;
-    float corona = exp(-(sunDist * sunDist) / (2.0 * corR * corR)) * 0.50;
-    float sunMix = sun * (1.0 + 0.2 * u_sun_pulse) + corona * (0.7 + 0.3 * u_sun_pulse);
+    // === AROS EXTERIORES ===
+    float ringR_main = u_arm_extent * 1.45;
+    float ringD_main = abs(r - ringR_main);
+    float ring_main = exp(-(ringD_main * ringD_main) / (2.0 * 0.005 * 0.005));
 
-    // Halo del centro: cuadrado oscuro detrás de la chacana para profundidad.
-    float coreShadow = smoothstep(u_center_half * 0.95, u_center_half * 0.3, max(abs(p.x), abs(p.y))) * 0.20;
+    float ringR_inner = u_arm_extent * 1.30;
+    float ringD_inner = abs(r - ringR_inner);
+    float ring_inner = exp(-(ringD_inner * ringD_inner) / (2.0 * 0.003 * 0.003)) * 0.40;
 
+    // 4 grupos de 3 puntos cardinales sobre el aro principal.
+    float dots = cardinal_dots(p, ringR_main, 0.008) * 1.10;
+
+    // === COMPOSICIÓN ===
     vec3 col = vec3(0.0);
-    col += u_line_color * line * 1.55;
-    col += u_rim_color  * glow * 1.05;
-    col += u_line_color * ring_outer * 1.00;
-    col += u_rim_color  * ring_inner * 1.15;
-    col += u_rim_color  * rays * 1.20;
-    col += u_line_color * card * 1.30;
-    col += u_sun_color  * sunMix * 1.45;
-    col += vec3(0.05, 0.08, 0.14) * (fill + coreShadow) * 0.6;
+    // Sol detrás (clip a interior).
+    col += u_sun_color * halo * inside * 1.55;
+    col += u_line_color * radial * inside * 0.6;
+    // Niebla oscura translúcida en el interior para profundidad.
+    col += u_dark_color * inside * 0.20;
+    // Líneas y aros.
+    col += u_line_color * line * 1.70;
+    col += u_line_color * glow * 0.95;
+    col += u_line_color * ring_main * 1.45;
+    col += u_rim_color  * ring_inner * 1.05;
+    col += u_line_color * dots * 1.85;
 
     float alpha = clamp(
-        line * 1.2 + glow + ring_outer + ring_inner + rays + card + sunMix + fill * 0.5,
+        halo * inside + line + glow + ring_main + ring_inner + dots + inside * 0.12,
         0.0, 1.0);
     fragColor = vec4(col, alpha);
 }
@@ -288,10 +308,9 @@ pub const FULLSCREEN_QUAD: [f32; 12] = [
     -1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 1.0, 1.0, -1.0, 1.0,
 ];
 
-/// Quad ligeramente mayor que la chacana para no recortar aros ni glow.
-/// `arm_extent` es la distancia centro→punta; multiplicamos por un factor
-/// que cubre el aro exterior (1.32×) más halo.
+/// Quad ligeramente mayor que la chacana + aros + glow.
 pub fn chacana_quad(arm_extent: f32) -> [f32; 12] {
-    let e = arm_extent * 1.65;
+    // Aro principal vive a 1.45 * arm_extent; sumamos margen para el glow.
+    let e = arm_extent * 1.70;
     [-e, -e, e, -e, e, e, -e, -e, e, e, -e, e]
 }

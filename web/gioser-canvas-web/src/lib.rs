@@ -1,20 +1,14 @@
 //! Renderer WebGL2 que compone geometría + física + paleta + shaders en pantalla.
 //!
-//! Es agnóstico del DOM: el caller monta el `<canvas>`, pasa eventos de mouse,
-//! y llama `render(time_ms)` desde un `requestAnimationFrame`.
+//! Es agnóstico del DOM: el caller monta el `<canvas>`, le pasa eventos
+//! de mouse y llama `render(time_ms)` desde un `requestAnimationFrame`.
 //!
 //! ```ignore
 //! let mut r = Renderer::new(&canvas)?;
 //! r.resize(w, h);
-//! // por cada mousemove:
 //! r.set_mouse_px(dx, dy);
-//! // por cada frame:
 //! r.render(time_ms);
 //! ```
-//!
-//! El layout sigue el patrón de `yahweh_launcher::launch_app(title, size, factory)`:
-//! una sola línea para arrancar, escena auto-contenida. Cuando exista `yahweh-web`,
-//! este renderer es el "factory" que recibirá.
 
 use gioser_geom::ChacanaSpec;
 use gioser_palette::{cosmos, Rgb};
@@ -31,15 +25,16 @@ use web_sys::{
 };
 
 const RAD: f32 = core::f32::consts::PI / 180.0;
-/// Inclinación máxima en cada eje. 35° hace que las puntas se desplacen
-/// visiblemente en pantalla — los botones DOM cabalgan ese movimiento.
-const MAX_TILT_DEG: f32 = 35.0;
-/// Escala mundo→viewport: la chacana clásica con arm_extent ≈ 0.65 ocupa
-/// ~94% del eje vertical del viewport, dejando aire para aros y glow.
-const WORLD_SCALE: f32 = 1.45;
+const DEG: f32 = 180.0 / core::f32::consts::PI;
+/// Inclinación máxima en cada eje. 28° = movimiento bien legible pero
+/// no caricaturesco; la chacana se siente "pesada y noble".
+const MAX_TILT_DEG: f32 = 28.0;
+/// Escala mundo→viewport: con arm_extent=0.65 + aro a 1.45×, la chacana
+/// + aro entran cómodos con margen para botones DOM más allá del aro.
+const WORLD_SCALE: f32 = 1.05;
 
-/// Re-export para apps: identidad (id, color, label) de cada punta cardinal,
-/// en el orden `[N, E, S, W]` de `ChacanaSpec::tips()`.
+/// Identidad de cada cardinal (id, color de acento, label visible).
+/// Orden `[N, E, S, W]` coincide con `ChacanaSpec::tips()`.
 pub mod tips {
     use gioser_palette::{elements, Rgb};
     pub const ORDER: [(&str, Rgb, &str); 4] = [
@@ -180,6 +175,7 @@ impl Renderer {
                 "u_line_color",
                 "u_rim_color",
                 "u_sun_color",
+                "u_dark_color",
                 "u_sun_pulse",
             ],
         )
@@ -190,9 +186,7 @@ impl Renderer {
         let (chacana_vao, chacana_quad_count) =
             upload_quad(&gl, &chacana_quad_verts, 0).map_err(JsValue::from)?;
 
-        // Spring sub-crítico, frecuencia baja: sensación de cuerpo pesado
-        // que se inclina hacia el cursor con overshoot orgánico (~10%).
-        let tilt = SpringDamper2::new(1.8, 0.62);
+        let tilt = SpringDamper2::new(1.7, 0.65);
 
         Ok(Self {
             gl,
@@ -216,7 +210,6 @@ impl Renderer {
             .viewport(0, 0, self.viewport.0 as i32, self.viewport.1 as i32);
     }
 
-    /// Mouse en pixeles desde el centro del canvas (+x derecha, +y arriba).
     pub fn set_mouse_px(&mut self, x: f32, y: f32) {
         let (w, h) = self.viewport;
         if h == 0 {
@@ -227,20 +220,28 @@ impl Renderer {
         let mx = (x / half_h).clamp(-aspect, aspect);
         let my = (y / half_h).clamp(-1.0, 1.0);
         self.mouse = (mx, my);
-
         let max_tilt = MAX_TILT_DEG * RAD;
-        // Pitch (+rotX) cuando mouse arriba: el tope se acerca al viewer.
-        // Yaw  (-rotY) cuando mouse derecha: el lado derecho se acerca.
         let target = [my * max_tilt, -mx * max_tilt / aspect];
         self.tilt.set_target(target);
     }
 
-    /// Posición proyectada (NDC `[-1, 1]²`) de cada tip cardinal en orden N/E/S/W.
-    /// El caller la usa para anclar el DOM.
+    /// Posición proyectada NDC de cada tip cardinal `[N, E, S, W]`.
     pub fn tips_ndc(&self) -> [(f32, f32); 4] {
+        self.points_ndc(&self.chacana.tips())
+    }
+
+    /// Posición NDC de un punto en cualquier radio cardinal (factor sobre
+    /// `arm_extent`). Útil para anclar los botones DOM más allá de la chacana
+    /// pero dentro del aro.
+    pub fn cardinal_positions_ndc(&self, radius_factor: f32) -> [(f32, f32); 4] {
+        let r = self.chacana.arm_extent() * radius_factor;
+        self.points_ndc(&[(0.0, r), (r, 0.0), (0.0, -r), (-r, 0.0)])
+    }
+
+    fn points_ndc(&self, pts: &[(f32, f32); 4]) -> [(f32, f32); 4] {
         let mvp = self.build_mvp();
         let mut out = [(0.0_f32, 0.0_f32); 4];
-        for (i, t) in self.chacana.tips().iter().enumerate() {
+        for (i, t) in pts.iter().enumerate() {
             let p = mvp * Vec4::new(t.0, t.1, 0.0, 1.0);
             let w = if p.w == 0.0 { 1.0 } else { p.w };
             out[i] = (p.x / w, p.y / w);
@@ -252,10 +253,15 @@ impl Renderer {
         &self.chacana
     }
 
-    /// Posición normalizada del mouse en clip-space; útil para que el caller
-    /// añada parallax sutil a elementos DOM independientes de la chacana.
     pub fn mouse_clip(&self) -> (f32, f32) {
         self.mouse
+    }
+
+    /// Devuelve `(pitch_deg, yaw_deg)` actuales del spring de tilt.
+    /// El caller los inyecta como CSS vars en el contenedor del título para
+    /// que el HTML se tumbe junto con la chacana renderizada en GL.
+    pub fn tilt_degrees(&self) -> (f32, f32) {
+        (self.tilt.position[0] * DEG, self.tilt.position[1] * DEG)
     }
 
     fn build_mvp(&self) -> Mat4 {
@@ -276,7 +282,6 @@ impl Renderer {
             ((time_ms - self.last_time_ms) as f32 / 1000.0).clamp(0.0, 1.0 / 15.0)
         };
         self.last_time_ms = time_ms;
-
         let sub = 4;
         let sub_dt = dt / sub as f32;
         for _ in 0..sub {
@@ -293,7 +298,7 @@ impl Renderer {
         gl.clear_color(0.02, 0.015, 0.04, 1.0);
         gl.clear(GL::COLOR_BUFFER_BIT);
 
-        // ---- Cosmos ----
+        // Cosmos
         gl.use_program(Some(&self.cosmos_prog.program));
         if let Some(u) = self.cosmos_prog.u("u_resolution") {
             gl.uniform2f(Some(u), self.viewport.0 as f32, self.viewport.1 as f32);
@@ -311,7 +316,7 @@ impl Renderer {
         gl.bind_vertex_array(Some(&self.cosmos_vao));
         gl.draw_arrays(GL::TRIANGLES, 0, 6);
 
-        // ---- Chacana (blend aditivo para que el glow sume luz) ----
+        // Chacana (blend aditivo para que dorado y sol sumen luz al cosmos)
         gl.blend_func(GL::SRC_ALPHA, GL::ONE);
         gl.use_program(Some(&self.chacana_prog.program));
         let mvp = self.build_mvp();
@@ -333,6 +338,7 @@ impl Renderer {
         upload_rgb(gl, self.chacana_prog.u("u_line_color"), cosmos::CHACANA_LINE);
         upload_rgb(gl, self.chacana_prog.u("u_rim_color"), cosmos::CHACANA_RIM);
         upload_rgb(gl, self.chacana_prog.u("u_sun_color"), cosmos::SUN_CORE);
+        upload_rgb(gl, self.chacana_prog.u("u_dark_color"), cosmos::CHACANA_DARK);
         if let Some(u) = self.chacana_prog.u("u_sun_pulse") {
             gl.uniform1f(Some(u), self.sun_pulse);
         }
