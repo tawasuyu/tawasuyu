@@ -1,85 +1,66 @@
-//! Geometría de la chacana andina (cruz cuadrada escalonada).
+//! Geometría de la chacana andina escalonada (cruz cuadrada de Tiwanaku).
 //!
-//! Genera un polígono cerrado de 20 vértices: un cuadrado central,
-//! cuatro escalones (uno por brazo cardinal) y cuatro puntas que
-//! extienden hasta `arm_extent`.
+//! Modelo paramétrico: un cuadrado central de lado `2 * center_half()`,
+//! del que sobresalen cuatro brazos cardinales formados por `steps`
+//! niveles. Cada nivel adelgaza al brazo en `thickness` por lado y lo
+//! prolonga en `thickness` hacia afuera.
 //!
-//! Convención: plano XY, centro en `(0, 0)`, +Y hacia el norte,
-//! +X hacia el este. Toda la API es pura: ningún I/O, ninguna asignación
-//! global; apta para ejecutar dentro de un shader-host, en un test,
-//! o en una integración nativa.
+//! Para `steps = 2` (clásica mística):
+//! - Centro: cuadrado `6s × 6s` (donde `s = thickness`).
+//! - Nivel 1: rectángulo perpendicular `4s × s` adosado a cada cara del centro.
+//! - Nivel 2 (punta): rectángulo `2s × s` adosado al nivel 1.
+//!
+//! Resultado: bounding box `±5s` (cuadrado, no alargado como una cruz latina),
+//! 9 rectángulos disjuntos triangulables, 4 tips cardinales.
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ChacanaSpec {
-    /// Distancia desde el centro hasta la punta del brazo.
-    pub arm_extent: f32,
-    /// Semi-grosor del brazo. El escalón mide `2 * thickness`.
+    /// Unidad base de la geometría. Cada paso aporta `thickness` de ancho
+    /// y `thickness` de profundidad.
     pub thickness: f32,
+    /// Cantidad de escalones por brazo (`>= 1`). La chacana mística clásica = `2`.
+    pub steps: u32,
 }
 
 impl ChacanaSpec {
-    /// Configuración canónica: brazo 1.0, grosor 0.18 (proporciones del logo).
+    /// Configuración canónica del logo GioSer: 2 escalones, thickness 0.13
+    /// (bounding box ≈ 1.30 × 1.30 en unidades de mundo).
     pub const CLASSIC: Self = Self {
-        arm_extent: 1.0,
-        thickness: 0.18,
+        thickness: 0.13,
+        steps: 2,
     };
 
-    pub const fn new(arm_extent: f32, thickness: f32) -> Self {
-        Self {
-            arm_extent,
-            thickness,
-        }
+    pub const fn new(thickness: f32, steps: u32) -> Self {
+        Self { thickness, steps }
     }
 
-    /// Las cuatro puntas cardinales en orden `[N, E, S, W]`.
-    /// Coordenadas listas para anclar UI sobre la chacana.
+    /// Semi-lado del cuadrado central — la parte **más ancha** de la chacana.
+    pub fn center_half(&self) -> f32 {
+        (self.steps as f32 + 1.0) * self.thickness
+    }
+
+    /// Distancia desde el centro a la punta más externa.
+    pub fn arm_extent(&self) -> f32 {
+        self.center_half() + self.steps as f32 * self.thickness
+    }
+
+    /// Las cuatro puntas cardinales `[N, E, S, W]`.
     pub fn tips(&self) -> [(f32, f32); 4] {
-        let l = self.arm_extent;
+        let l = self.arm_extent();
         [(0.0, l), (l, 0.0), (0.0, -l), (-l, 0.0)]
     }
 
-    /// Bounding box axis-aligned `(min, max)`.
     pub fn aabb(&self) -> ((f32, f32), (f32, f32)) {
-        let l = self.arm_extent;
+        let l = self.arm_extent();
         ((-l, -l), (l, l))
     }
 
-    /// Perímetro cerrado en orden horario: 20 vértices, listo para `LINE_LOOP`.
-    pub fn perimeter(&self) -> Vec<(f32, f32)> {
-        let s = self.thickness;
-        let l = self.arm_extent;
-        let s2 = s * 2.0;
-        vec![
-            (s, l),
-            (s, s2),
-            (s2, s2),
-            (s2, s),
-            (l, s),
-            (l, -s),
-            (s2, -s),
-            (s2, -s2),
-            (s, -s2),
-            (s, -l),
-            (-s, -l),
-            (-s, -s2),
-            (-s2, -s2),
-            (-s2, -s),
-            (-l, -s),
-            (-l, s),
-            (-s2, s),
-            (-s2, s2),
-            (-s, s2),
-            (-s, l),
-        ]
-    }
-
-    /// Triangulación: 9 rectángulos (1 centro + 4 escalones + 4 puntas) = 54 vértices.
-    /// Listo para `GL_TRIANGLES`.
+    /// Triangulación: `1 + 4 * steps` rectángulos en `GL_TRIANGLES`.
+    /// Para `steps = 2`: 9 rects = 54 vértices.
     pub fn triangles(&self) -> Vec<(f32, f32)> {
         let s = self.thickness;
-        let l = self.arm_extent;
-        let s2 = s * 2.0;
-        let mut tri = Vec::with_capacity(9 * 6);
+        let c = self.center_half();
+        let mut tri = Vec::with_capacity(6 * (1 + 4 * self.steps as usize));
         let mut rect = |x0: f32, y0: f32, x1: f32, y1: f32| {
             tri.push((x0, y0));
             tri.push((x1, y0));
@@ -88,23 +69,22 @@ impl ChacanaSpec {
             tri.push((x1, y1));
             tri.push((x0, y1));
         };
-        // Cuadrado central
-        rect(-s, -s, s, s);
-        // Escalones (un rect 4s × s por brazo)
-        rect(-s2, s, s2, s2); // N
-        rect(-s2, -s2, s2, -s); // S
-        rect(s, -s2, s2, s2); // E
-        rect(-s2, -s2, -s, s2); // W
-        // Puntas (un rect 2s × (l - 2s) por brazo)
-        rect(-s, s2, s, l); // N
-        rect(-s, -l, s, -s2); // S
-        rect(s2, -s, l, s); // E
-        rect(-l, -s, -s2, s); // W
+        rect(-c, -c, c, c);
+        for k in 1..=self.steps {
+            // El k-ésimo nivel (1 = más cerca del centro, steps = punta)
+            // adelgaza a (steps - k + 1) * thickness de semi-ancho.
+            let hw = (self.steps - k + 1) as f32 * s;
+            let inner = c + (k - 1) as f32 * s;
+            let outer = c + k as f32 * s;
+            rect(-hw, inner, hw, outer); // N
+            rect(-hw, -outer, hw, -inner); // S
+            rect(inner, -hw, outer, hw); // E
+            rect(-outer, -hw, -inner, hw); // W
+        }
         tri
     }
 
-    /// Para un punto cualquiera, devuelve la punta más cercana y su distancia.
-    /// Útil para snapping de interacción.
+    /// Para un punto cualquiera, devuelve la punta más cercana y la distancia.
     pub fn closest_tip(&self, p: (f32, f32)) -> ((f32, f32), f32) {
         let tips = self.tips();
         let mut best = (tips[0], f32::INFINITY);
@@ -125,35 +105,55 @@ mod tests {
     use super::*;
 
     #[test]
-    fn perimeter_has_20_vertices() {
-        assert_eq!(ChacanaSpec::CLASSIC.perimeter().len(), 20);
+    fn classic_is_two_step_chacana() {
+        let c = ChacanaSpec::CLASSIC;
+        assert_eq!(c.steps, 2);
+        // center_half = 3 * 0.13 = 0.39; arm_extent = 0.65.
+        assert!((c.center_half() - 0.39).abs() < 1e-6);
+        assert!((c.arm_extent() - 0.65).abs() < 1e-6);
     }
 
     #[test]
-    fn triangles_form_9_rectangles() {
-        assert_eq!(ChacanaSpec::CLASSIC.triangles().len(), 9 * 6);
+    fn arm_extent_grows_with_steps() {
+        let c1 = ChacanaSpec::new(0.1, 1);
+        let c2 = ChacanaSpec::new(0.1, 2);
+        let c3 = ChacanaSpec::new(0.1, 3);
+        assert!(c1.arm_extent() < c2.arm_extent());
+        assert!(c2.arm_extent() < c3.arm_extent());
+    }
+
+    #[test]
+    fn triangles_one_rect_plus_four_per_step() {
+        let c1 = ChacanaSpec::new(0.1, 1);
+        assert_eq!(c1.triangles().len(), 6 * (1 + 4 * 1));
+        let c2 = ChacanaSpec::CLASSIC;
+        assert_eq!(c2.triangles().len(), 6 * (1 + 4 * 2));
+        let c3 = ChacanaSpec::new(0.1, 3);
+        assert_eq!(c3.triangles().len(), 6 * (1 + 4 * 3));
     }
 
     #[test]
     fn tips_match_cardinals() {
-        let c = ChacanaSpec::new(2.0, 0.3);
+        let c = ChacanaSpec::CLASSIC;
+        let l = c.arm_extent();
         let tips = c.tips();
-        assert_eq!(tips[0], (0.0, 2.0)); // N
-        assert_eq!(tips[1], (2.0, 0.0)); // E
-        assert_eq!(tips[2], (0.0, -2.0)); // S
-        assert_eq!(tips[3], (-2.0, 0.0)); // W
+        assert_eq!(tips[0], (0.0, l)); // N
+        assert_eq!(tips[1], (l, 0.0)); // E
+        assert_eq!(tips[2], (0.0, -l)); // S
+        assert_eq!(tips[3], (-l, 0.0)); // W
     }
 
     #[test]
-    fn closest_tip_to_upper_left_is_north() {
+    fn closest_tip_to_upper_point_is_north() {
         let c = ChacanaSpec::CLASSIC;
-        let (tip, _d) = c.closest_tip((-0.1, 0.95));
-        assert_eq!(tip, (0.0, 1.0));
+        let (tip, _d) = c.closest_tip((-0.1, 0.55));
+        assert_eq!(tip, (0.0, c.arm_extent()));
     }
 
     #[test]
     fn aabb_matches_extent() {
-        let c = ChacanaSpec::new(1.5, 0.2);
-        assert_eq!(c.aabb(), ((-1.5, -1.5), (1.5, 1.5)));
+        let c = ChacanaSpec::new(0.12, 2);
+        let l = c.arm_extent();
+        assert_eq!(c.aabb(), ((-l, -l), (l, l)));
     }
 }

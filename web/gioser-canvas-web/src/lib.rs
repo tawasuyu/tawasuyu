@@ -31,17 +31,22 @@ use web_sys::{
 };
 
 const RAD: f32 = core::f32::consts::PI / 180.0;
-const MAX_TILT_DEG: f32 = 22.0;
+/// Inclinación máxima en cada eje. 35° hace que las puntas se desplacen
+/// visiblemente en pantalla — los botones DOM cabalgan ese movimiento.
+const MAX_TILT_DEG: f32 = 35.0;
+/// Escala mundo→viewport: la chacana clásica con arm_extent ≈ 0.65 ocupa
+/// ~94% del eje vertical del viewport, dejando aire para aros y glow.
+const WORLD_SCALE: f32 = 1.45;
 
 /// Re-export para apps: identidad (id, color, label) de cada punta cardinal,
 /// en el orden `[N, E, S, W]` de `ChacanaSpec::tips()`.
 pub mod tips {
     use gioser_palette::{elements, Rgb};
     pub const ORDER: [(&str, Rgb, &str); 4] = [
-        ("aire", elements::AIRE, "AIRE"),     // N
-        ("fuego", elements::FUEGO, "FUEGO"),  // E
+        ("aire", elements::AIRE, "AIRE"),       // N
+        ("fuego", elements::FUEGO, "FUEGO"),    // E
         ("tierra", elements::TIERRA, "TIERRA"), // S
-        ("agua", elements::AGUA, "AGUA"),     // W
+        ("agua", elements::AGUA, "AGUA"),       // W
     ];
 }
 
@@ -73,7 +78,6 @@ impl Program {
         let program = gl.create_program().ok_or("create_program failed")?;
         gl.attach_shader(&program, &vs);
         gl.attach_shader(&program, &fs);
-        // Atributo `a_pos` siempre en location 0.
         gl.bind_attrib_location(&program, 0, "a_pos");
         gl.link_program(&program);
         let linked = gl
@@ -126,8 +130,8 @@ fn upload_quad(
     gl.bind_vertex_array(Some(&vao));
     let buf = gl.create_buffer().ok_or("create_buffer failed")?;
     gl.bind_buffer(GL::ARRAY_BUFFER, Some(&buf));
-    // SAFETY: `Float32Array::view` apunta directamente a la memoria del WASM linear,
-    // que no podemos mover durante este scope (sin allocs intermedias).
+    // SAFETY: `Float32Array::view` apunta a memoria WASM lineal; no la
+    // movemos durante este scope (no hay allocs intermedias).
     unsafe {
         let view = js_sys::Float32Array::view(verts);
         gl.buffer_data_with_array_buffer_view(GL::ARRAY_BUFFER, &view, GL::STATIC_DRAW);
@@ -171,6 +175,7 @@ impl Renderer {
                 "u_mvp",
                 "u_time",
                 "u_thickness",
+                "u_center_half",
                 "u_arm_extent",
                 "u_line_color",
                 "u_rim_color",
@@ -181,11 +186,13 @@ impl Renderer {
         .map_err(JsValue::from)?;
 
         let (cosmos_vao, _) = upload_quad(&gl, &FULLSCREEN_QUAD, 0).map_err(JsValue::from)?;
-        let chacana_quad_verts = chacana_quad(chacana.arm_extent);
+        let chacana_quad_verts = chacana_quad(chacana.arm_extent());
         let (chacana_vao, chacana_quad_count) =
             upload_quad(&gl, &chacana_quad_verts, 0).map_err(JsValue::from)?;
 
-        let tilt = SpringDamper2::new(2.2, 0.72);
+        // Spring sub-crítico, frecuencia baja: sensación de cuerpo pesado
+        // que se inclina hacia el cursor con overshoot orgánico (~10%).
+        let tilt = SpringDamper2::new(1.8, 0.62);
 
         Ok(Self {
             gl,
@@ -209,8 +216,7 @@ impl Renderer {
             .viewport(0, 0, self.viewport.0 as i32, self.viewport.1 as i32);
     }
 
-    /// Recibe coords del mouse en pixeles, origen en el centro del canvas
-    /// (+x derecha, +y arriba). Setea el target de inclinación.
+    /// Mouse en pixeles desde el centro del canvas (+x derecha, +y arriba).
     pub fn set_mouse_px(&mut self, x: f32, y: f32) {
         let (w, h) = self.viewport;
         if h == 0 {
@@ -223,13 +229,13 @@ impl Renderer {
         self.mouse = (mx, my);
 
         let max_tilt = MAX_TILT_DEG * RAD;
-        // Pitch (rot X): mouse arriba → top inclina hacia el viewer (+rotX).
-        // Yaw  (rot Y): mouse derecha → right inclina hacia el viewer (-rotY).
+        // Pitch (+rotX) cuando mouse arriba: el tope se acerca al viewer.
+        // Yaw  (-rotY) cuando mouse derecha: el lado derecho se acerca.
         let target = [my * max_tilt, -mx * max_tilt / aspect];
         self.tilt.set_target(target);
     }
 
-    /// Posición proyectada (NDC `[-1, 1]²`) de cada tip cardinal en el orden N/E/S/W.
+    /// Posición proyectada (NDC `[-1, 1]²`) de cada tip cardinal en orden N/E/S/W.
     /// El caller la usa para anclar el DOM.
     pub fn tips_ndc(&self) -> [(f32, f32); 4] {
         let mvp = self.build_mvp();
@@ -246,6 +252,12 @@ impl Renderer {
         &self.chacana
     }
 
+    /// Posición normalizada del mouse en clip-space; útil para que el caller
+    /// añada parallax sutil a elementos DOM independientes de la chacana.
+    pub fn mouse_clip(&self) -> (f32, f32) {
+        self.mouse
+    }
+
     fn build_mvp(&self) -> Mat4 {
         let (w, h) = self.viewport;
         let aspect = w as f32 / h as f32;
@@ -253,7 +265,7 @@ impl Renderer {
         let view = Mat4::look_at_rh(Vec3::new(0.0, 0.0, 2.6), Vec3::ZERO, Vec3::Y);
         let pitch = Mat4::from_rotation_x(self.tilt.position[0]);
         let yaw = Mat4::from_rotation_y(self.tilt.position[1]);
-        let scale = Mat4::from_scale(Vec3::splat(0.92));
+        let scale = Mat4::from_scale(Vec3::splat(WORLD_SCALE));
         proj * view * yaw * pitch * scale
     }
 
@@ -265,7 +277,6 @@ impl Renderer {
         };
         self.last_time_ms = time_ms;
 
-        // Subdividimos la física para mantener estabilidad con dt grandes.
         let sub = 4;
         let sub_dt = dt / sub as f32;
         for _ in 0..sub {
@@ -313,8 +324,11 @@ impl Renderer {
         if let Some(u) = self.chacana_prog.u("u_thickness") {
             gl.uniform1f(Some(u), self.chacana.thickness);
         }
+        if let Some(u) = self.chacana_prog.u("u_center_half") {
+            gl.uniform1f(Some(u), self.chacana.center_half());
+        }
         if let Some(u) = self.chacana_prog.u("u_arm_extent") {
-            gl.uniform1f(Some(u), self.chacana.arm_extent);
+            gl.uniform1f(Some(u), self.chacana.arm_extent());
         }
         upload_rgb(gl, self.chacana_prog.u("u_line_color"), cosmos::CHACANA_LINE);
         upload_rgb(gl, self.chacana_prog.u("u_rim_color"), cosmos::CHACANA_RIM);
