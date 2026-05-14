@@ -105,6 +105,20 @@
     <section class="drawer-content" id="drawer-agua-content"></section>
   </aside>
 
+  <!-- TASKBAR estilo Windows: home a la izquierda + cajitas dinámicas
+       de las vistas MD abiertas. Sincronizada por WASM. -->
+  <nav class="taskbar" aria-label="Vistas abiertas">
+    <button class="taskbar-home" data-home aria-label="Volver al home" type="button">
+      <svg viewBox="0 0 24 24" class="taskbar-home-glyph" aria-hidden="true">
+        <path d="M3 12 L12 3 L21 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+        <path d="M5 11 V20 H10 V14 H14 V20 H19 V11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+        <circle cx="12" cy="17" r="0.8" fill="currentColor"/>
+      </svg>
+    </button>
+    <span class="taskbar-divider" aria-hidden="true"></span>
+    <ul class="taskbar-list" id="taskbar-list" role="presentation"></ul>
+  </nav>
+
   <script type="module">
     import init from "./pkg/gioser_web.js";
     init().catch(err => {

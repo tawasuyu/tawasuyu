@@ -186,9 +186,20 @@ uniform vec3  u_line_color;
 uniform vec3  u_rim_color;
 uniform vec3  u_sun_color;
 uniform vec3  u_dark_color;
+uniform vec3  u_aire_color;
+uniform vec3  u_fuego_color;
+uniform vec3  u_tierra_color;
+uniform vec3  u_agua_color;
 uniform float u_sun_pulse;
 
 const float PI = 3.14159265;
+
+float hash21c(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+float hash11c(float n) {
+    return fract(sin(n * 78.233) * 43758.5453);
+}
 
 float sdBox(vec2 p, vec2 b) {
     vec2 d = abs(p) - b;
@@ -212,6 +223,65 @@ float sdChacana(vec2 p, float s, float c) {
     d = min(d, sdBox(p - vec2( mid2, 0.0), vec2(hd, hw2)));
     d = min(d, sdBox(p - vec2(-mid2, 0.0), vec2(hd, hw2)));
     return d;
+}
+
+// Emisor de partículas por tip cardinal. Cada elemento tiene su propio
+// patrón de velocidad para sentirse vivo:
+//   AIRE  → drift hacia afuera con sway lateral (viento)
+//   FUEGO → asciende erráticamente con flicker amplio
+//   TIERRA→ cae con gravedad y rebote sutil
+//   AGUA  → ondula descendiendo (gotas que se deslizan)
+//
+// `element_kind`: 0=AIRE, 1=FUEGO, 2=TIERRA, 3=AGUA.
+// `outward`: dirección unitaria desde el centro hacia el tip.
+vec3 element_particles(vec2 p, vec2 tip, vec2 outward, vec3 color, int kind, float seed_base) {
+    vec3 accum = vec3(0.0);
+    vec2 perp = vec2(-outward.y, outward.x);
+    // 4 partículas por tip — suficiente densidad sin saturar el costo del frag.
+    for (int k = 0; k < 4; k++) {
+        float seed = seed_base + float(k) * 1.31;
+        float life = 1.5 + hash11c(seed * 11.0) * 0.7;
+        float t_seeded = u_time + seed * 9.3;
+        float phase = mod(t_seeded, life);
+        float ph = phase / life; // 0..1
+
+        // Random offsets por época (cuando el ciclo reinicia).
+        float epoch = floor(t_seeded / life);
+        vec2 jitter = vec2(
+            hash21c(vec2(seed, epoch)) - 0.5,
+            hash21c(vec2(epoch, seed)) - 0.5
+        );
+
+        // Velocidad por elemento — distinto carácter visual.
+        vec2 vel;
+        float sway = sin(u_time * 4.0 + seed * 7.3);
+        if (kind == 0) {
+            // AIRE: drift hacia afuera + sway perpendicular notable.
+            vel = outward * 0.14 + perp * sway * 0.10;
+        } else if (kind == 1) {
+            // FUEGO: rise erratic — siempre con componente +Y (hacia arriba en el mundo),
+            // independiente del tip → flamas suben.
+            float erratic = sin(u_time * 6.0 + seed * 11.0) * 0.06;
+            vel = outward * 0.10 + vec2(erratic, 0.18 + 0.04 * sway);
+        } else if (kind == 2) {
+            // TIERRA: cae — outward más componente -Y.
+            vel = outward * 0.05 + vec2(0.03 * sway, -0.16);
+        } else {
+            // AGUA: drift outward con descenso y ondulación.
+            float wave = sin(u_time * 3.2 + seed * 8.7) * 0.07;
+            vel = outward * 0.12 + vec2(wave, -0.08);
+        }
+
+        vec2 pos = tip + vel * phase + jitter * 0.04;
+
+        // Brillo gauss + envelope sinusoidal en la vida.
+        float bright = sin(ph * PI);
+        float dist = length(p - pos);
+        float size = 0.014 + 0.006 * (kind == 1 ? sway : 0.0); // fuego pulsa
+        float glow = exp(-(dist * dist) / (2.0 * size * size));
+        accum += color * glow * bright;
+    }
+    return accum;
 }
 
 // 3 puntos pequeños en cada uno de los 4 cardinales sobre el aro grueso.
@@ -282,6 +352,15 @@ void main() {
     // 4 grupos de 3 puntos cardinales sobre el aro principal.
     float dots = cardinal_dots(p, ringR_main, 0.008) * 1.10;
 
+    // === PARTÍCULAS POR ELEMENTO ===
+    // Cada tip emite partículas con la personalidad del elemento.
+    float L = u_arm_extent;
+    vec3 particles = vec3(0.0);
+    particles += element_particles(p, vec2(0.0,  L), vec2(0.0,  1.0), u_aire_color,   0, 0.31);
+    particles += element_particles(p, vec2( L, 0.0), vec2( 1.0, 0.0), u_fuego_color,  1, 1.73);
+    particles += element_particles(p, vec2(0.0, -L), vec2(0.0, -1.0), u_tierra_color, 2, 3.11);
+    particles += element_particles(p, vec2(-L, 0.0), vec2(-1.0, 0.0), u_agua_color,   3, 5.97);
+
     // === COMPOSICIÓN ===
     vec3 col = vec3(0.0);
     // Sol detrás (clip a interior).
@@ -295,9 +374,11 @@ void main() {
     col += u_line_color * ring_main * 1.45;
     col += u_rim_color  * ring_inner * 1.05;
     col += u_line_color * dots * 1.85;
+    col += particles * 1.25;
 
     float alpha = clamp(
-        halo * inside + line + glow + ring_main + ring_inner + dots + inside * 0.12,
+        halo * inside + line + glow + ring_main + ring_inner + dots + inside * 0.12
+            + (particles.r + particles.g + particles.b) * 0.5,
         0.0, 1.0);
     fragColor = vec4(col, alpha);
 }

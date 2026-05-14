@@ -47,12 +47,14 @@ html, body {
   pointer-events: none;
   user-select: none;
   transform-style: preserve-3d;
-  /* perspective hace que la rotación del título dé sensación 3D igual que la chacana */
+  /* perspective hace que la rotación del título dé sensación 3D igual que la chacana.
+     rotateZ refleja el shake de click — el título tiembla con la cruz. */
   transform:
     translate(-50%, -50%)
     perspective(900px)
     rotateX(var(--tilt-x, 0deg))
-    rotateY(var(--tilt-y, 0deg));
+    rotateY(var(--tilt-y, 0deg))
+    rotateZ(var(--tilt-z, 0deg));
   transition: transform 30ms linear;
 }
 .brand-title {
@@ -188,7 +190,10 @@ body.drawer-active .brand {
 /* === Drawers (visor MD full-screen) === */
 .drawer {
   position: fixed;
-  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 52px; /* reservamos la altura de la taskbar */
   z-index: 100;
   pointer-events: none;
   opacity: 0;
@@ -487,6 +492,114 @@ body.drawer-active .brand {
 }
 
 /* === Responsive === */
+/* === Taskbar estilo Windows === */
+.taskbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 52px;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0 0.7rem;
+  background:
+    linear-gradient(to top, rgba(6, 5, 13, 0.92), rgba(8, 6, 22, 0.78));
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  border-top: 1px solid rgba(216, 168, 93, 0.22);
+  box-shadow: 0 -10px 36px rgba(0, 0, 0, 0.45);
+}
+
+.taskbar-home {
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid rgba(216, 168, 93, 0.32);
+  color: var(--gold);
+  border-radius: 9px;
+  cursor: pointer;
+  padding: 0;
+  transition: all 220ms var(--ease-emerge);
+}
+.taskbar-home:hover {
+  border-color: var(--gold);
+  background: rgba(216, 168, 93, 0.12);
+  box-shadow: 0 0 16px rgba(216, 168, 93, 0.35);
+  transform: translateY(-1px);
+}
+.taskbar-home-glyph {
+  width: 22px;
+  height: 22px;
+  filter: drop-shadow(0 0 6px currentColor);
+}
+
+.taskbar-divider {
+  display: inline-block;
+  width: 1px;
+  height: 26px;
+  background: rgba(255, 255, 255, 0.12);
+  margin: 0 0.2rem;
+}
+
+.taskbar-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  gap: 0.4rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.taskbar-list::-webkit-scrollbar { display: none; }
+
+.taskbar-item {
+  height: 38px;
+  padding: 0 1.0rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 9px;
+  color: var(--task-color, var(--fg));
+  font-family: 'Cinzel', serif;
+  font-size: 0.72rem;
+  letter-spacing: 0.36em;
+  text-indent: 0.36em;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 260ms var(--ease-emerge);
+}
+.taskbar-item:hover {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: var(--task-color, currentColor);
+  transform: translateY(-1px);
+}
+.taskbar-item.active {
+  background: rgba(255, 255, 255, 0.11);
+  border-color: var(--task-color);
+  box-shadow:
+    0 0 18px var(--task-color),
+    inset 0 -2px 0 0 var(--task-color);
+}
+.taskbar-item-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--task-color, var(--gold));
+  box-shadow: 0 0 8px currentColor;
+}
+.taskbar-item[data-task="aire"]   { --task-color: var(--aire); }
+.taskbar-item[data-task="fuego"]  { --task-color: var(--fuego); }
+.taskbar-item[data-task="tierra"] { --task-color: var(--tierra); }
+.taskbar-item[data-task="agua"]   { --task-color: var(--agua); }
+
 @media (max-width: 720px) {
   .tip { min-width: 110px; padding: 0.7rem 0.9rem; }
   .tip-glyph { width: 36px; height: 36px; }
@@ -495,4 +608,8 @@ body.drawer-active .brand {
   .brand-title { font-size: clamp(2rem, 10vw, 3rem); }
   .drawer-head { padding: 5vh 5vw 1vh; }
   .drawer-content { padding: 0 5vw 5vh; }
+  .taskbar { height: 46px; padding: 0 0.4rem; gap: 0.3rem; }
+  .taskbar-home { width: 36px; height: 36px; }
+  .taskbar-item { height: 34px; padding: 0 0.7rem; font-size: 0.65rem; }
+  .drawer { bottom: 46px; }
 }

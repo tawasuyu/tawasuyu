@@ -1,18 +1,14 @@
 //! Renderer WebGL2 que compone geometría + física + paleta + shaders en pantalla.
 //!
-//! Es agnóstico del DOM: el caller monta el `<canvas>`, le pasa eventos
-//! de mouse y llama `render(time_ms)` desde un `requestAnimationFrame`.
-//!
-//! ```ignore
-//! let mut r = Renderer::new(&canvas)?;
-//! r.resize(w, h);
-//! r.set_mouse_px(dx, dy);
-//! r.render(time_ms);
-//! ```
+//! El loop externo (típicamente `requestAnimationFrame`) llama `render(time_ms)`.
+//! Los eventos input se propagan vía métodos: `set_mouse_px`, `release_tilt`,
+//! `impulse_click`. El cliente puede consultar dimensiones derivadas
+//! (`click_radius_css_px`, `tilt_degrees`, `cardinal_positions_ndc`) para
+//! sincronizar DOM (botones, título, taskbar).
 
 use gioser_geom::ChacanaSpec;
 use gioser_palette::{cosmos, Rgb};
-use gioser_physics::SpringDamper2;
+use gioser_physics::{SpringDamper1, SpringDamper2};
 use gioser_shaders::{
     chacana_quad, FS_CHACANA, FS_COSMOS, FULLSCREEN_QUAD, VS_CHACANA, VS_FULLSCREEN,
 };
@@ -26,22 +22,23 @@ use web_sys::{
 
 const RAD: f32 = core::f32::consts::PI / 180.0;
 const DEG: f32 = 180.0 / core::f32::consts::PI;
-/// Inclinación máxima en cada eje. 28° = movimiento bien legible pero
-/// no caricaturesco; la chacana se siente "pesada y noble".
+/// Inclinación máxima en cada eje.
 const MAX_TILT_DEG: f32 = 28.0;
-/// Escala mundo→viewport: con arm_extent=0.65 + aro a 1.45×, la chacana
-/// + aro entran cómodos con margen para botones DOM más allá del aro.
-const WORLD_SCALE: f32 = 1.05;
+/// `cot(45°/2)` — factor de proyección. Lo necesitamos también para calcular
+/// el radio del círculo en pixels (hit-test del click).
+const COT_HALF_FOV: f32 = 2.414_213_5;
+/// Distancia del aro principal respecto al centro de la chacana — sincronizar
+/// con `FS_CHACANA::ringR_main` del shader.
+const RING_FACTOR: f32 = 1.45;
 
-/// Identidad de cada cardinal (id, color de acento, label visible).
-/// Orden `[N, E, S, W]` coincide con `ChacanaSpec::tips()`.
+/// Identidad de cada cardinal (id, color de acento, label). Orden `[N, E, S, W]`.
 pub mod tips {
     use gioser_palette::{elements, Rgb};
     pub const ORDER: [(&str, Rgb, &str); 4] = [
-        ("aire", elements::AIRE, "AIRE"),       // N
-        ("fuego", elements::FUEGO, "FUEGO"),    // E
-        ("tierra", elements::TIERRA, "TIERRA"), // S
-        ("agua", elements::AGUA, "AGUA"),       // W
+        ("aire", elements::AIRE, "AIRE"),
+        ("fuego", elements::FUEGO, "FUEGO"),
+        ("tierra", elements::TIERRA, "TIERRA"),
+        ("agua", elements::AGUA, "AGUA"),
     ];
 }
 
@@ -53,10 +50,19 @@ pub struct Renderer {
     chacana_vao: WebGlVertexArrayObject,
     chacana_quad_count: i32,
     chacana: ChacanaSpec,
+    /// Spring del tilt 3D que sigue al mouse. Sub-crítico orgánico.
     tilt: SpringDamper2,
+    /// Spring de "vibración" tras click: rotación Z bien underdamped que
+    /// decae naturalmente. Independiente del tilt.
+    shake: SpringDamper1,
+    /// Contador para alternar sentido del shake en clicks sucesivos.
+    click_count: u32,
     sun_pulse: f32,
     last_time_ms: f64,
+    /// Dimensiones device-pixel del canvas (lo que GL viewport usa).
     viewport: (u32, u32),
+    /// Dimensiones CSS-pixel del canvas (lo que ven los eventos DOM).
+    client_size: (f32, f32),
     /// Mouse en clip-space, x ∈ [-aspect, aspect], y ∈ [-1, 1].
     mouse: (f32, f32),
 }
@@ -137,6 +143,21 @@ fn upload_quad(
     Ok((vao, (verts.len() / 2) as i32))
 }
 
+/// Devuelve el factor de escala mundo→viewport en función del aspect.
+/// Para portrait (aspect < 1), achicamos proporcionalmente para que la
+/// circunferencia exterior no se corte por los lados.
+fn world_scale_for_aspect(aspect: f32) -> f32 {
+    let base = 1.05;
+    if aspect >= 1.0 {
+        base
+    } else {
+        // En portrait, el extent visible horizontal se reduce con `aspect`.
+        // Bajamos la escala para mantener el aro entero dentro del viewport,
+        // con piso 0.45 para que no quede ridículamente pequeña.
+        (base * aspect.max(0.45)).min(base)
+    }
+}
+
 impl Renderer {
     pub fn new(canvas: &HtmlCanvasElement) -> Result<Self, JsValue> {
         let gl = canvas
@@ -176,6 +197,10 @@ impl Renderer {
                 "u_rim_color",
                 "u_sun_color",
                 "u_dark_color",
+                "u_aire_color",
+                "u_fuego_color",
+                "u_tierra_color",
+                "u_agua_color",
                 "u_sun_pulse",
             ],
         )
@@ -187,6 +212,9 @@ impl Renderer {
             upload_quad(&gl, &chacana_quad_verts, 0).map_err(JsValue::from)?;
 
         let tilt = SpringDamper2::new(1.7, 0.65);
+        // Shake: alta frecuencia, muy underdamped → vibración fuerte que
+        // muere en ~0.8 s con varios ciclos visibles.
+        let shake = SpringDamper1::new(7.5, 0.13);
 
         Ok(Self {
             gl,
@@ -197,9 +225,15 @@ impl Renderer {
             chacana_quad_count,
             chacana,
             tilt,
+            shake,
+            click_count: 0,
             sun_pulse: 0.0,
             last_time_ms: 0.0,
             viewport: (canvas.width().max(1), canvas.height().max(1)),
+            client_size: (
+                canvas.client_width().max(1) as f32,
+                canvas.client_height().max(1) as f32,
+            ),
             mouse: (0.0, 0.0),
         })
     }
@@ -208,6 +242,12 @@ impl Renderer {
         self.viewport = (w.max(1), h.max(1));
         self.gl
             .viewport(0, 0, self.viewport.0 as i32, self.viewport.1 as i32);
+    }
+
+    /// Tamaño en CSS pixels (independiente del DPR). Lo usa el hit-test del
+    /// click para que coincida con coordenadas DOM.
+    pub fn set_client_size(&mut self, w: f32, h: f32) {
+        self.client_size = (w.max(1.0), h.max(1.0));
     }
 
     pub fn set_mouse_px(&mut self, x: f32, y: f32) {
@@ -225,14 +265,41 @@ impl Renderer {
         self.tilt.set_target(target);
     }
 
+    /// Mouse fuera del canvas — la chacana vuelve al frente con rebote
+    /// natural del spring sub-crítico.
+    pub fn release_tilt(&mut self) {
+        self.tilt.set_target([0.0, 0.0]);
+        // mouse parallax (fondo) también vuelve al centro
+        self.mouse = (0.0, 0.0);
+    }
+
+    /// Inyecta un impulso al spring shake — la chacana vibra fuerte y decae.
+    /// Llamar en respuesta a un click/tap dentro del aro.
+    pub fn impulse_click(&mut self) {
+        self.click_count = self.click_count.wrapping_add(1);
+        let dir = if self.click_count % 2 == 0 { 1.0 } else { -1.0 };
+        // Magnitud del impulso en rad/s. Con ω≈47, esto produce un pico
+        // de ~5-7° en la rotación Z, decayendo en ~0.8 s.
+        self.shake.velocity[0] += 6.5 * dir;
+    }
+
+    /// Radio del aro exterior, en CSS pixels desde el centro del canvas.
+    /// El cliente lo usa para decidir si un click cae dentro del círculo.
+    pub fn click_radius_css_px(&self) -> f32 {
+        let (w, _h) = self.viewport;
+        let aspect = w as f32 / self.viewport.1.max(1) as f32;
+        let scale = world_scale_for_aspect(aspect);
+        let ring_ndc = self.chacana.arm_extent() * RING_FACTOR * scale * COT_HALF_FOV / 2.6;
+        ring_ndc * self.client_size.1 / 2.0
+    }
+
     /// Posición proyectada NDC de cada tip cardinal `[N, E, S, W]`.
     pub fn tips_ndc(&self) -> [(f32, f32); 4] {
         self.points_ndc(&self.chacana.tips())
     }
 
-    /// Posición NDC de un punto en cualquier radio cardinal (factor sobre
-    /// `arm_extent`). Útil para anclar los botones DOM más allá de la chacana
-    /// pero dentro del aro.
+    /// Posiciones NDC para anclar botones en los 4 cardinales a un radio
+    /// específico (factor sobre `arm_extent`).
     pub fn cardinal_positions_ndc(&self, radius_factor: f32) -> [(f32, f32); 4] {
         let r = self.chacana.arm_extent() * radius_factor;
         self.points_ndc(&[(0.0, r), (r, 0.0), (0.0, -r), (-r, 0.0)])
@@ -257,22 +324,26 @@ impl Renderer {
         self.mouse
     }
 
-    /// Devuelve `(pitch_deg, yaw_deg)` actuales del spring de tilt.
-    /// El caller los inyecta como CSS vars en el contenedor del título para
-    /// que el HTML se tumbe junto con la chacana renderizada en GL.
-    pub fn tilt_degrees(&self) -> (f32, f32) {
-        (self.tilt.position[0] * DEG, self.tilt.position[1] * DEG)
+    /// `(pitch_deg, yaw_deg, roll_deg)` actuales. Roll viene del shake spring.
+    pub fn tilt_degrees(&self) -> (f32, f32, f32) {
+        (
+            self.tilt.position[0] * DEG,
+            self.tilt.position[1] * DEG,
+            self.shake.position[0] * DEG,
+        )
     }
 
     fn build_mvp(&self) -> Mat4 {
         let (w, h) = self.viewport;
         let aspect = w as f32 / h as f32;
+        let scale_val = world_scale_for_aspect(aspect);
         let proj = Mat4::perspective_rh(45.0_f32.to_radians(), aspect, 0.1, 20.0);
         let view = Mat4::look_at_rh(Vec3::new(0.0, 0.0, 2.6), Vec3::ZERO, Vec3::Y);
         let pitch = Mat4::from_rotation_x(self.tilt.position[0]);
         let yaw = Mat4::from_rotation_y(self.tilt.position[1]);
-        let scale = Mat4::from_scale(Vec3::splat(WORLD_SCALE));
-        proj * view * yaw * pitch * scale
+        let roll = Mat4::from_rotation_z(self.shake.position[0]);
+        let scale = Mat4::from_scale(Vec3::splat(scale_val));
+        proj * view * yaw * pitch * roll * scale
     }
 
     pub fn render(&mut self, time_ms: f64) {
@@ -282,11 +353,17 @@ impl Renderer {
             ((time_ms - self.last_time_ms) as f32 / 1000.0).clamp(0.0, 1.0 / 15.0)
         };
         self.last_time_ms = time_ms;
-        let sub = 4;
+
+        // Subdividir físico — el shake corre a alta frecuencia y necesita
+        // dt < 1/freq para mantenerse estable (1/7.5 ≈ 133 ms; 8 sub-pasos a
+        // 60fps dejan 2 ms por sub-paso).
+        let sub = 8;
         let sub_dt = dt / sub as f32;
         for _ in 0..sub {
             self.tilt.step(sub_dt);
+            self.shake.step(sub_dt);
         }
+
         let t = time_ms as f32 * 0.001;
         self.sun_pulse = 0.5 + 0.5 * (t * 1.4).sin();
 
@@ -316,7 +393,7 @@ impl Renderer {
         gl.bind_vertex_array(Some(&self.cosmos_vao));
         gl.draw_arrays(GL::TRIANGLES, 0, 6);
 
-        // Chacana (blend aditivo para que dorado y sol sumen luz al cosmos)
+        // Chacana (blend aditivo)
         gl.blend_func(GL::SRC_ALPHA, GL::ONE);
         gl.use_program(Some(&self.chacana_prog.program));
         let mvp = self.build_mvp();
@@ -339,6 +416,26 @@ impl Renderer {
         upload_rgb(gl, self.chacana_prog.u("u_rim_color"), cosmos::CHACANA_RIM);
         upload_rgb(gl, self.chacana_prog.u("u_sun_color"), cosmos::SUN_CORE);
         upload_rgb(gl, self.chacana_prog.u("u_dark_color"), cosmos::CHACANA_DARK);
+        upload_rgb(
+            gl,
+            self.chacana_prog.u("u_aire_color"),
+            gioser_palette::elements::AIRE,
+        );
+        upload_rgb(
+            gl,
+            self.chacana_prog.u("u_fuego_color"),
+            gioser_palette::elements::FUEGO,
+        );
+        upload_rgb(
+            gl,
+            self.chacana_prog.u("u_tierra_color"),
+            gioser_palette::elements::TIERRA,
+        );
+        upload_rgb(
+            gl,
+            self.chacana_prog.u("u_agua_color"),
+            gioser_palette::elements::AGUA,
+        );
         if let Some(u) = self.chacana_prog.u("u_sun_pulse") {
             gl.uniform1f(Some(u), self.sun_pulse);
         }
