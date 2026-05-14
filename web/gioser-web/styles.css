@@ -11,6 +11,9 @@
 
   --ease-emerge: cubic-bezier(0.22, 0.61, 0.20, 1);
   --ease-magma: cubic-bezier(0.32, 0, 0.05, 1);
+  --ease-page: cubic-bezier(0.22, 0.61, 0.36, 1);
+
+  --taskbar-height: 52px;
 }
 
 * { box-sizing: border-box; }
@@ -37,52 +40,22 @@ html, body {
   z-index: 0;
   transition: opacity 600ms var(--ease-emerge), filter 600ms var(--ease-emerge);
 }
-
-/* === Marca central: GioSer sobre la superficie de la chacana === */
-.brand {
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  z-index: 6;
-  pointer-events: none;
-  user-select: none;
-  transform-style: preserve-3d;
-  /* perspective hace que la rotación del título dé sensación 3D igual que la chacana.
-     rotateZ refleja el shake de click — el título tiembla con la cruz. */
-  transform:
-    translate(-50%, -50%)
-    perspective(900px)
-    rotateX(var(--tilt-x, 0deg))
-    rotateY(var(--tilt-y, 0deg))
-    rotateZ(var(--tilt-z, 0deg));
-  transition: transform 30ms linear;
-}
-.brand-title {
-  font-family: 'Cinzel', serif;
-  font-weight: 700;
-  font-size: clamp(2.6rem, 6vw, 5.4rem);
-  margin: 0;
-  letter-spacing: 0.08em;
-  color: #f4eedf;
-  text-shadow:
-    0 0 22px rgba(216, 168, 93, 0.55),
-    0 0 50px rgba(183, 126, 52, 0.30),
-    0 0 80px rgba(216, 168, 93, 0.15);
-}
-.brand-dot {
-  color: var(--gold);
-  margin: 0 0.05em;
-  text-shadow:
-    0 0 14px var(--gold),
-    0 0 32px rgba(245, 144, 86, 0.55);
+body.deck-visible #gioser-canvas {
+  opacity: 0.30;
+  filter: blur(4px) saturate(80%);
 }
 
-/* === Tips (botones cardinales) === */
+/* === Tips (botones cardinales sobre el aro) === */
 #tips {
   position: fixed;
   inset: 0;
   pointer-events: none;
   z-index: 5;
+  transition: opacity 250ms ease;
+}
+body.deck-visible #tips {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .tip {
@@ -116,8 +89,7 @@ html, body {
   transition:
     box-shadow 350ms var(--ease-emerge),
     border-color 350ms var(--ease-emerge),
-    background  350ms var(--ease-emerge),
-    opacity 300ms ease;
+    background  350ms var(--ease-emerge);
 }
 .tip::before {
   content: "";
@@ -172,96 +144,112 @@ html, body {
 .tip-agua   { color: var(--agua); }
 .tip-tierra { color: var(--tierra); }
 
-/* Cuando un drawer está abierto, los tips se ocultan suavemente. */
-body.drawer-active .tip {
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 250ms ease;
-}
-body.drawer-active #gioser-canvas {
-  opacity: 0.35;
-  filter: blur(4px) saturate(80%);
-}
-body.drawer-active .brand {
-  opacity: 0;
-  transition: opacity 250ms ease;
-}
-
-/* === Drawers (visor MD full-screen) === */
-.drawer {
+/* === DECK: contenedor único de páginas swipeable === */
+.deck {
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
-  bottom: 52px; /* reservamos la altura de la taskbar */
+  bottom: var(--taskbar-height);
   z-index: 100;
   pointer-events: none;
   opacity: 0;
   visibility: hidden;
   transform-origin: var(--origin-x, 50%) var(--origin-y, 50%);
   transform: scale(0.0);
+  overflow: hidden;
+  touch-action: pan-y;
   background:
-    radial-gradient(ellipse at center, var(--drawer-glow, rgba(216, 168, 93, 0.15)), transparent 65%),
+    radial-gradient(ellipse at center, var(--deck-glow, rgba(216, 168, 93, 0.15)), transparent 65%),
     rgba(6, 5, 13, 0.96);
   backdrop-filter: blur(28px) saturate(140%);
   -webkit-backdrop-filter: blur(28px) saturate(140%);
   transition:
-    transform 700ms var(--ease-magma),
+    transform 600ms var(--ease-magma),
     opacity 450ms ease,
-    visibility 0s 700ms;
-  overflow: hidden;
+    visibility 0s 600ms;
 }
-.drawer.open {
+.deck.open {
   pointer-events: auto;
   opacity: 1;
   visibility: visible;
   transform: scale(1);
   transition:
-    transform 700ms var(--ease-magma),
+    transform 600ms var(--ease-magma),
     opacity 450ms ease,
     visibility 0s;
 }
+/* Acento del deck según elemento activo: glow radial del color. */
+body.deck-active-aire   .deck { --deck-glow: rgba(208, 219, 255, 0.22); }
+body.deck-active-fuego  .deck { --deck-glow: rgba(245, 144, 86, 0.28); }
+body.deck-active-agua   .deck { --deck-glow: rgba(108, 208, 243, 0.22); }
+body.deck-active-tierra .deck { --deck-glow: rgba(212, 152, 115, 0.24); }
 
-.drawer-aire   { --drawer-glow: rgba(208, 219, 255, 0.22); --drawer-accent: var(--aire); }
-.drawer-fuego  { --drawer-glow: rgba(245, 144, 86, 0.28);  --drawer-accent: var(--fuego); }
-.drawer-agua   { --drawer-glow: rgba(108, 208, 243, 0.22); --drawer-accent: var(--agua); }
-.drawer-tierra { --drawer-glow: rgba(212, 152, 115, 0.24); --drawer-accent: var(--tierra); }
+/* Strip horizontal con páginas — vista-web traslada esto. */
+.deck-strip {
+  display: flex;
+  flex-direction: row;
+  width: 100%;
+  height: 100%;
+  transform: translate3d(var(--vista-offset, 0px), 0, 0);
+  transition: transform 360ms var(--ease-page);
+  will-change: transform;
+}
+.deck-strip.vista-dragging,
+.deck-strip.vista-instant {
+  transition: none;
+}
 
-/* Ambience: capa decorativa con efectos según elemento. */
-.drawer-ambience {
+.deck-page {
+  flex: 0 0 100%;
+  width: 100%;
+  height: 100%;
+  position: relative;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* contenido alineado al pop-snap mismo si la lista de páginas viviera
+     dentro de scroll nativo; con vista-web esto es informativo nomás. */
+  scroll-snap-align: start;
+}
+.deck-page[data-element="aire"]   { --page-accent: var(--aire); }
+.deck-page[data-element="fuego"]  { --page-accent: var(--fuego); }
+.deck-page[data-element="agua"]   { --page-accent: var(--agua); }
+.deck-page[data-element="tierra"] { --page-accent: var(--tierra); }
+
+/* Ambience por página */
+.page-ambience {
   position: absolute;
   inset: 0;
   pointer-events: none;
   z-index: 0;
 }
-.drawer-aire .drawer-ambience {
+.deck-page[data-element="aire"] .page-ambience {
   background:
     radial-gradient(circle at 18% 22%, rgba(208, 219, 255, 0.20), transparent 38%),
     radial-gradient(circle at 78% 68%, rgba(208, 219, 255, 0.14), transparent 40%),
     radial-gradient(circle at 45% 90%, rgba(180, 200, 255, 0.10), transparent 45%);
   animation: aire-drift 28s ease-in-out infinite alternate;
 }
-.drawer-fuego .drawer-ambience {
+.deck-page[data-element="fuego"] .page-ambience {
   background:
     radial-gradient(circle at 50% 100%, rgba(245, 144, 86, 0.35), transparent 55%),
     radial-gradient(circle at 25% 80%, rgba(255, 90, 40, 0.18), transparent 35%),
     radial-gradient(circle at 80% 85%, rgba(255, 140, 60, 0.18), transparent 35%);
   animation: fuego-flicker 5s ease-in-out infinite;
 }
-.drawer-agua .drawer-ambience {
+.deck-page[data-element="agua"] .page-ambience {
   background:
     radial-gradient(ellipse at 50% 95%, rgba(60, 160, 230, 0.30), transparent 60%),
     radial-gradient(ellipse at 20% 70%, rgba(108, 208, 243, 0.15), transparent 50%),
     radial-gradient(ellipse at 80% 75%, rgba(108, 208, 243, 0.12), transparent 50%);
   animation: agua-tide 14s ease-in-out infinite alternate;
 }
-.drawer-tierra .drawer-ambience {
+.deck-page[data-element="tierra"] .page-ambience {
   background:
     radial-gradient(ellipse at 50% 100%, rgba(120, 80, 40, 0.40), transparent 60%),
     radial-gradient(ellipse at 22% 88%, rgba(180, 130, 80, 0.20), transparent 45%),
     radial-gradient(ellipse at 78% 88%, rgba(150, 100, 60, 0.22), transparent 45%);
 }
-
 @keyframes aire-drift {
   from { transform: translate(-4%, -1%); }
   to   { transform: translate(4%, 2%); }
@@ -276,15 +264,56 @@ body.drawer-active .brand {
   to   { transform: translateY(-3%); }
 }
 
-/* === Drawer head + close === */
-.drawer-head {
+/* Head + controls */
+.page-controls {
+  position: absolute;
+  top: 1.8vh;
+  right: 1.8vw;
+  z-index: 5;
+  display: flex;
+  gap: 0.5rem;
+}
+.page-control-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: var(--page-accent, var(--gold));
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-family: 'Inter', sans-serif;
+  transition:
+    background 200ms ease,
+    border-color 200ms ease,
+    transform 250ms var(--ease-emerge);
+}
+.page-control-btn:hover {
+  background: rgba(255, 255, 255, 0.10);
+  border-color: currentColor;
+}
+.page-minimize svg {
+  width: 18px;
+  height: 18px;
+}
+.page-close {
+  font-size: 1.6rem;
+}
+.page-close:hover { transform: rotate(90deg); }
+
+.page-head {
   position: relative;
   z-index: 2;
   text-align: center;
   padding: 7vh 8vw 2vh;
-  color: var(--drawer-accent);
+  color: var(--page-accent, var(--gold));
 }
-.drawer-mark {
+.page-mark {
   display: inline-block;
   font-family: 'Inter', sans-serif;
   font-size: 0.7rem;
@@ -294,16 +323,16 @@ body.drawer-active .brand {
   margin-bottom: 0.4rem;
   text-indent: 0.55em;
 }
-.drawer-title {
+.page-title {
   font-family: 'Cinzel', serif;
   font-weight: 700;
   font-size: clamp(2.4rem, 6vw, 4.6rem);
   margin: 0;
   letter-spacing: 0.08em;
-  color: var(--drawer-accent);
+  color: var(--page-accent, var(--gold));
   text-shadow: 0 0 28px currentColor, 0 0 56px rgba(255, 255, 255, 0.10);
 }
-.drawer-tag {
+.page-tag {
   display: block;
   font-family: 'Inter', sans-serif;
   font-size: 0.78rem;
@@ -313,54 +342,18 @@ body.drawer-active .brand {
   margin-top: 0.7rem;
   text-indent: 0.32em;
 }
-
-.drawer-close {
-  position: absolute;
-  top: 2.4vh;
-  right: 2.4vw;
-  z-index: 5;
-  width: 48px;
-  height: 48px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  color: var(--drawer-accent);
-  font-size: 1.6rem;
-  line-height: 1;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 200ms ease, transform 250ms var(--ease-emerge), border-color 200ms ease;
-  font-family: 'Inter', sans-serif;
-}
-.drawer-close:hover {
-  background: rgba(255, 255, 255, 0.10);
-  border-color: currentColor;
-  transform: rotate(90deg);
-}
-
-/* === Drawer content (MD render via pluma-reader-web) === */
-.drawer-content {
+.page-content {
   position: relative;
   z-index: 2;
-  max-height: calc(100vh - 22vh);
-  overflow-y: auto;
   padding: 1vh 10vw 8vh;
   opacity: 0;
-  transition: opacity 500ms ease 250ms;
+  transition: opacity 400ms ease 250ms;
 }
-.drawer.open .drawer-content {
+.deck.open .deck-page .page-content {
   opacity: 1;
 }
-.drawer-content::-webkit-scrollbar { width: 6px; }
-.drawer-content::-webkit-scrollbar-thumb {
-  background: var(--drawer-accent);
-  border-radius: 3px;
-  opacity: 0.4;
-}
 
-/* === pluma-doc: estilos del visor MD === */
+/* === pluma-doc dentro de la página === */
 .pluma-doc {
   max-width: 760px;
   margin: 0 auto;
@@ -375,7 +368,7 @@ body.drawer-active .brand {
   font-family: 'Cinzel', serif;
   font-weight: 700;
   font-size: clamp(1.7rem, 3vw, 2.4rem);
-  color: var(--drawer-accent);
+  color: var(--page-accent);
   text-shadow: 0 0 18px currentColor;
   letter-spacing: 0.04em;
   margin-top: 1.4em;
@@ -384,7 +377,7 @@ body.drawer-active .brand {
   font-family: 'Cinzel', serif;
   font-weight: 500;
   font-size: 1.5rem;
-  color: var(--drawer-accent);
+  color: var(--page-accent);
   letter-spacing: 0.04em;
   margin-top: 1.6em;
   padding-bottom: 0.3em;
@@ -400,7 +393,7 @@ body.drawer-active .brand {
 }
 .pluma-doc p { margin: 0; }
 .pluma-doc a {
-  color: var(--drawer-accent);
+  color: var(--page-accent);
   text-decoration: none;
   border-bottom: 1px solid currentColor;
   transition: opacity 200ms ease;
@@ -414,12 +407,12 @@ body.drawer-active .brand {
   padding: 0.12em 0.45em;
   border-radius: 4px;
   font-size: 0.92em;
-  color: var(--drawer-accent);
+  color: var(--page-accent);
 }
 .pluma-doc pre {
   background: rgba(0, 0, 0, 0.45);
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-left: 3px solid var(--drawer-accent);
+  border-left: 3px solid var(--page-accent);
   border-radius: 8px;
   padding: 1rem 1.2rem;
   overflow-x: auto;
@@ -431,7 +424,7 @@ body.drawer-active .brand {
   padding: 0;
 }
 .pluma-doc blockquote {
-  border-left: 3px solid var(--drawer-accent);
+  border-left: 3px solid var(--page-accent);
   padding: 0.4em 1.2em;
   color: rgba(232, 234, 245, 0.75);
   font-style: italic;
@@ -440,11 +433,11 @@ body.drawer-active .brand {
 }
 .pluma-doc ul, .pluma-doc ol { padding-left: 1.6em; }
 .pluma-doc li { margin: 0.4em 0; }
-.pluma-doc li::marker { color: var(--drawer-accent); }
+.pluma-doc li::marker { color: var(--page-accent); }
 .pluma-doc hr {
   border: none;
   height: 1px;
-  background: linear-gradient(to right, transparent, var(--drawer-accent), transparent);
+  background: linear-gradient(to right, transparent, var(--page-accent), transparent);
   margin: 2em 0;
 }
 .pluma-doc table {
@@ -458,11 +451,10 @@ body.drawer-active .brand {
   text-align: left;
 }
 .pluma-doc th {
-  color: var(--drawer-accent);
+  color: var(--page-accent);
   font-weight: 600;
   letter-spacing: 0.04em;
 }
-
 .pluma-loading, .pluma-error {
   display: flex;
   align-items: center;
@@ -478,34 +470,27 @@ body.drawer-active .brand {
   width: 28px;
   height: 28px;
   margin-right: 1rem;
-  border: 1px solid var(--drawer-accent);
+  border: 1px solid var(--page-accent);
   border-top-color: transparent;
   border-radius: 50%;
   animation: pluma-spin 1s linear infinite;
 }
-.pluma-error {
-  color: var(--fuego);
-  font-style: italic;
-}
-@keyframes pluma-spin {
-  to { transform: rotate(360deg); }
-}
+.pluma-error { color: var(--fuego); font-style: italic; }
+@keyframes pluma-spin { to { transform: rotate(360deg); } }
 
-/* === Responsive === */
 /* === Taskbar estilo Windows === */
 .taskbar {
   position: fixed;
   left: 0;
   right: 0;
   bottom: 0;
-  height: 52px;
+  height: var(--taskbar-height);
   z-index: 200;
   display: flex;
   align-items: center;
-  gap: 0.45rem;
-  padding: 0 0.7rem;
-  background:
-    linear-gradient(to top, rgba(6, 5, 13, 0.92), rgba(8, 6, 22, 0.78));
+  gap: 0.5rem;
+  padding: 0 0.8rem;
+  background: linear-gradient(to top, rgba(6, 5, 13, 0.94), rgba(8, 6, 22, 0.80));
   backdrop-filter: blur(24px) saturate(140%);
   -webkit-backdrop-filter: blur(24px) saturate(140%);
   border-top: 1px solid rgba(216, 168, 93, 0.22);
@@ -538,12 +523,34 @@ body.drawer-active .brand {
   filter: drop-shadow(0 0 6px currentColor);
 }
 
+.taskbar-brand {
+  font-family: 'Cinzel', serif;
+  font-weight: 700;
+  font-size: 1.30rem;
+  letter-spacing: 0.07em;
+  color: #f4eedf;
+  text-decoration: none;
+  text-shadow: 0 0 14px rgba(216, 168, 93, 0.45);
+  padding: 0 0.55rem;
+  user-select: none;
+  transition: text-shadow 220ms ease, color 220ms ease;
+  white-space: nowrap;
+}
+.taskbar-brand:hover {
+  color: #ffffff;
+  text-shadow: 0 0 20px rgba(216, 168, 93, 0.7), 0 0 36px rgba(245, 144, 86, 0.30);
+}
+.taskbar-brand .brand-dot {
+  color: var(--gold);
+  margin: 0 0.05em;
+}
+
 .taskbar-divider {
   display: inline-block;
   width: 1px;
   height: 26px;
   background: rgba(255, 255, 255, 0.12);
-  margin: 0 0.2rem;
+  margin: 0 0.25rem;
 }
 
 .taskbar-list {
@@ -575,6 +582,7 @@ body.drawer-active .brand {
   font-weight: 600;
   cursor: pointer;
   transition: all 260ms var(--ease-emerge);
+  white-space: nowrap;
 }
 .taskbar-item:hover {
   background: rgba(255, 255, 255, 0.09);
@@ -600,16 +608,51 @@ body.drawer-active .brand {
 .taskbar-item[data-task="tierra"] { --task-color: var(--tierra); }
 .taskbar-item[data-task="agua"]   { --task-color: var(--agua); }
 
+.taskbar-spacer {
+  flex: 1;
+  min-width: 0.6rem;
+}
+
+.taskbar-credit {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: 'Inter', sans-serif;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  color: rgba(216, 168, 93, 0.75);
+  text-decoration: none;
+  padding: 0.35rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  transition: all 220ms var(--ease-emerge);
+  white-space: nowrap;
+}
+.taskbar-credit:hover {
+  color: var(--gold);
+  border-color: rgba(216, 168, 93, 0.25);
+  background: rgba(216, 168, 93, 0.06);
+}
+.copyleft-mark {
+  display: inline-block;
+  font-size: 1rem;
+  /* © con escala horizontal -1 = copyleft visual. */
+  transform: scaleX(-1);
+  color: currentColor;
+}
+
 @media (max-width: 720px) {
   .tip { min-width: 110px; padding: 0.7rem 0.9rem; }
   .tip-glyph { width: 36px; height: 36px; }
   .tip-label { font-size: 0.72rem; }
   .tip-sub { display: none; }
-  .brand-title { font-size: clamp(2rem, 10vw, 3rem); }
-  .drawer-head { padding: 5vh 5vw 1vh; }
-  .drawer-content { padding: 0 5vw 5vh; }
+  .page-head { padding: 5vh 5vw 1vh; }
+  .page-content { padding: 0 5vw 5vh; }
   .taskbar { height: 46px; padding: 0 0.4rem; gap: 0.3rem; }
   .taskbar-home { width: 36px; height: 36px; }
   .taskbar-item { height: 34px; padding: 0 0.7rem; font-size: 0.65rem; }
-  .drawer { bottom: 46px; }
+  .taskbar-brand { font-size: 1.05rem; padding: 0 0.3rem; }
+  .taskbar-credit-text { display: none; }
+  .deck { bottom: 46px; }
+  :root { --taskbar-height: 46px; }
 }

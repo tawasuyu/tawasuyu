@@ -1,22 +1,27 @@
 //! Entrypoint WASM de la landing GioSer.
 //!
-//! Responsabilidades:
-//! - Montar canvas WebGL2 + listeners de mouse/pointer/resize/keyboard/RAF.
-//! - Reposicionar los 4 tips DOM cada frame siguiendo el aro de la chacana,
-//!   con clamp para que nunca salgan del viewport ni cubran la taskbar.
-//! - Inclinar el título "GioSer" central inyectando CSS vars de tilt+roll.
-//! - Manejar **click/tap dentro del aro** → vibración (impulso al shake spring).
-//! - Manejar **mouseleave del canvas** → tilt vuelve al frente con rebote.
-//! - Drawers MD por elemento que crecen desde la posición del botón
-//!   clickeado hasta fullscreen (excepto la taskbar).
-//! - Taskbar estilo Windows: home a la izquierda + cajitas dinámicas por
-//!   cada vista MD abierta, click cambia el activo.
+//! Capas:
+//! - **Canvas WebGL**: chacana animada (gioser-canvas-web).
+//! - **Tips**: 4 botones DOM en los cardinales, posicionados cada frame.
+//! - **Deck** (vista-web): contenedor único con páginas swipeable estilo
+//!   Flutter `PageView`. Cada elemento del logo es una página dinámica.
+//! - **Taskbar**: barra abajo con home + brand "GioSer" + tabs activas +
+//!   copyleft/email a la derecha. Sincronizada por WASM.
+//!
+//! Acciones (todas pasan por `AppState`):
+//! - `open_or_switch`   — click en tip o abrir nueva pestaña.
+//! - `restore_from_tab` — click en cajita de la taskbar.
+//! - `minimize`         — botón ─ de la página o Escape.
+//! - `close`            — botón × de la página, remueve del taskbar.
+//! - `home`             — botón casa o brand, minimiza todo (mantiene tabs).
+//! - `on_swipe`         — callback de vista-web cuando el snap cambia.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use gioser_canvas_web::{tips, Renderer};
 use pluma_reader_web::Reader;
+use vista_web::Deck;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{
@@ -24,121 +29,175 @@ use web_sys::{
     PointerEvent, Window,
 };
 
-/// Botones se anclan entre la punta de la chacana y el aro grueso.
 const BUTTON_RADIUS_FACTOR: f32 = 1.32;
-/// Altura reservada para la taskbar abajo. Sincronizar con CSS `.taskbar { height }`.
 const TASKBAR_HEIGHT_PX: f32 = 52.0;
-/// Padding de seguridad alrededor de los botones para que nunca toquen los bordes.
 const BUTTON_HALF_W_PX: f32 = 90.0;
 const BUTTON_HALF_H_PX: f32 = 64.0;
 const VIEWPORT_MARGIN_PX: f32 = 14.0;
 const ELEMENTS: [&str; 4] = ["aire", "fuego", "tierra", "agua"];
 
 #[derive(Default)]
-struct TaskbarState {
-    /// Elementos abiertos (en orden de apertura), aparecen como cajitas.
-    open: Vec<String>,
-    /// Cuál está visible. `None` = home (sin drawer activo).
+struct DeckState {
+    /// Pestañas abiertas en orden de apertura. Coincide con páginas en el strip.
+    pages: Vec<String>,
+    /// Cuál es la página visible. `None` = deck minimizado (pestañas siguen
+    /// en la taskbar) o sin pestañas.
     active: Option<String>,
 }
 
 struct AppState {
     document: Document,
-    state: RefCell<TaskbarState>,
+    deck: Deck,
+    state: RefCell<DeckState>,
 }
 
 impl AppState {
-    fn open_tab(&self, element: &str, origin_x: f64, origin_y: f64, md_url: &str) {
-        self.set_drawer_origin(element, origin_x, origin_y);
-        {
-            let mut s = self.state.borrow_mut();
-            if !s.open.iter().any(|e| e == element) {
-                s.open.push(element.to_string());
-            }
-            s.active = Some(element.to_string());
+    fn open_or_switch(&self, element: &str, origin_x: f64, origin_y: f64, md_url: &str) {
+        let was_visible = self.state.borrow().active.is_some();
+        let was_in_pages = self.state.borrow().pages.iter().any(|e| e == element);
+        if !was_in_pages {
+            self.ensure_page_dom(element);
+            self.state.borrow_mut().pages.push(element.to_string());
         }
-        self.sync();
+        self.state.borrow_mut().active = Some(element.to_string());
+        let idx = self
+            .state
+            .borrow()
+            .pages
+            .iter()
+            .position(|e| e == element)
+            .unwrap_or(0);
+        if was_visible {
+            self.deck.goto(idx, true);
+        } else {
+            self.deck.goto(idx, false);
+            self.show_deck(origin_x, origin_y);
+        }
+        self.sync_active_class();
+        self.sync_taskbar();
         self.load_md_if_empty(element, md_url);
     }
 
-    fn switch_tab(&self, element: &str, origin_x: f64, origin_y: f64) {
-        self.set_drawer_origin(element, origin_x, origin_y);
-        let mut s = self.state.borrow_mut();
-        if s.open.iter().any(|e| e == element) {
-            s.active = Some(element.to_string());
+    fn restore_from_tab(&self, element: &str, origin_x: f64, origin_y: f64) {
+        let idx_opt = self
+            .state
+            .borrow()
+            .pages
+            .iter()
+            .position(|e| e == element);
+        let Some(idx) = idx_opt else { return };
+        let was_visible = self.state.borrow().active.is_some();
+        self.state.borrow_mut().active = Some(element.to_string());
+        if was_visible {
+            self.deck.goto(idx, true);
+        } else {
+            self.deck.goto(idx, false);
+            self.show_deck(origin_x, origin_y);
         }
-        drop(s);
-        self.sync();
+        self.sync_active_class();
+        self.sync_taskbar();
     }
 
-    fn close_tab(&self, element: &str) {
-        let mut s = self.state.borrow_mut();
-        s.open.retain(|e| e != element);
-        if s.active.as_deref() == Some(element) {
-            s.active = s.open.last().cloned();
+    fn minimize(&self, origin_x: f64, origin_y: f64) {
+        self.state.borrow_mut().active = None;
+        self.sync_active_class();
+        self.sync_taskbar();
+        self.hide_deck(origin_x, origin_y);
+    }
+
+    fn close(&self, element: &str, origin_x: f64, origin_y: f64) {
+        let was_active = self.state.borrow().active.as_deref() == Some(element);
+        self.state.borrow_mut().pages.retain(|e| e != element);
+        self.remove_page_dom(element);
+        if was_active {
+            let pages_now: Vec<String> = self.state.borrow().pages.clone();
+            let new_active = pages_now.last().cloned();
+            self.state.borrow_mut().active = new_active.clone();
+            if let Some(new_active) = new_active {
+                let idx = pages_now
+                    .iter()
+                    .position(|e| e == &new_active)
+                    .unwrap_or(0);
+                self.deck.goto(idx, true);
+            } else {
+                self.hide_deck(origin_x, origin_y);
+            }
         }
-        drop(s);
-        self.sync();
+        self.sync_active_class();
+        self.sync_taskbar();
     }
 
     fn home(&self) {
-        let mut s = self.state.borrow_mut();
-        s.open.clear();
-        s.active = None;
-        drop(s);
-        self.sync();
+        // Minimiza el deck sin cerrar las pestañas (estilo "show desktop").
+        let (ox, oy) = self
+            .element_center(".taskbar-home")
+            .unwrap_or((24.0, self.viewport_height() - 26.0));
+        self.minimize(ox, oy);
     }
 
-    fn active(&self) -> Option<String> {
-        self.state.borrow().active.clone()
-    }
-
-    fn set_drawer_origin(&self, element: &str, x: f64, y: f64) {
-        let id = format!("drawer-{}", element);
-        if let Some(el) = self.document.get_element_by_id(&id) {
-            if let Ok(el) = el.dyn_into::<HtmlElement>() {
-                let _ = el.style().set_property("--origin-x", &format!("{:.1}px", x));
-                let _ = el.style().set_property("--origin-y", &format!("{:.1}px", y));
-            }
+    fn on_swipe(&self, new_index: usize) {
+        let element = self.state.borrow().pages.get(new_index).cloned();
+        if let Some(element) = element {
+            self.state.borrow_mut().active = Some(element);
+            self.sync_active_class();
+            self.sync_taskbar();
         }
     }
 
-    fn sync(&self) {
-        let s = self.state.borrow();
-        let body = match self.document.body() {
-            Some(b) => b,
-            None => return,
-        };
-        if s.active.is_some() {
-            let _ = body.class_list().add_1("drawer-active");
-        } else {
-            let _ = body.class_list().remove_1("drawer-active");
+    fn show_deck(&self, x: f64, y: f64) {
+        self.set_deck_origin(x, y);
+        if let Some(deck) = self.deck_el() {
+            let _ = deck.class_list().add_1("open");
+            let _ = deck.set_attribute("aria-hidden", "false");
         }
-        for &e in &ELEMENTS {
-            let cls = format!("drawer-active-{}", e);
-            if s.active.as_deref() == Some(e) {
-                let _ = body.class_list().add_1(&cls);
-            } else {
-                let _ = body.class_list().remove_1(&cls);
-            }
+        if let Some(body) = self.document.body() {
+            let _ = body.class_list().add_1("deck-visible");
         }
-        for &e in &ELEMENTS {
-            let id = format!("drawer-{}", e);
-            if let Some(el) = self.document.get_element_by_id(&id) {
-                if let Ok(el) = el.dyn_into::<HtmlElement>() {
-                    if s.active.as_deref() == Some(e) {
-                        let _ = el.class_list().add_1("open");
-                        el.set_attribute("aria-hidden", "false").ok();
-                    } else {
-                        let _ = el.class_list().remove_1("open");
-                        el.set_attribute("aria-hidden", "true").ok();
-                    }
+    }
+
+    fn hide_deck(&self, x: f64, y: f64) {
+        self.set_deck_origin(x, y);
+        if let Some(deck) = self.deck_el() {
+            let _ = deck.class_list().remove_1("open");
+            let _ = deck.set_attribute("aria-hidden", "true");
+        }
+        if let Some(body) = self.document.body() {
+            let _ = body.class_list().remove_1("deck-visible");
+        }
+    }
+
+    fn deck_el(&self) -> Option<HtmlElement> {
+        self.document
+            .get_element_by_id("deck")
+            .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+    }
+
+    fn set_deck_origin(&self, x: f64, y: f64) {
+        if let Some(deck) = self.deck_el() {
+            let _ = deck.style().set_property("--origin-x", &format!("{:.1}px", x));
+            let _ = deck.style().set_property("--origin-y", &format!("{:.1}px", y));
+        }
+    }
+
+    fn sync_active_class(&self) {
+        if let Some(body) = self.document.body() {
+            let active = self.state.borrow().active.clone();
+            for &e in &ELEMENTS {
+                let cls = format!("deck-active-{}", e);
+                if active.as_deref() == Some(e) {
+                    let _ = body.class_list().add_1(&cls);
+                } else {
+                    let _ = body.class_list().remove_1(&cls);
                 }
             }
         }
+    }
+
+    fn sync_taskbar(&self) {
+        let s = self.state.borrow();
         if let Some(list) = self.document.get_element_by_id("taskbar-list") {
             let mut html = String::new();
-            for e in &s.open {
+            for e in &s.pages {
                 let label = e.to_uppercase();
                 let active = if s.active.as_deref() == Some(e.as_str()) {
                     " active"
@@ -154,8 +213,57 @@ impl AppState {
         }
     }
 
+    fn ensure_page_dom(&self, element: &str) {
+        let sel = format!(".deck-page[data-element=\"{}\"]", element);
+        if self
+            .document
+            .query_selector(&sel)
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            return;
+        }
+        let Some(strip) = self.document.get_element_by_id("deck-strip") else {
+            return;
+        };
+        let (title, tag) = match element {
+            "aire" => ("Aire", "Software · IA · Aspiración"),
+            "fuego" => ("Fuego", "Inspiración"),
+            "tierra" => ("Tierra", "Cuerpo"),
+            "agua" => ("Agua", "Espiritualidad aplicada"),
+            _ => return,
+        };
+        let html = format!(
+            "<article class=\"deck-page\" data-element=\"{el}\" id=\"deck-page-{el}\">\
+                <div class=\"page-controls\">\
+                    <button class=\"page-control-btn page-minimize\" data-minimize=\"{el}\" type=\"button\" aria-label=\"Minimizar {title}\">\
+                        <svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 19 H19\" stroke=\"currentColor\" stroke-width=\"2\" fill=\"none\" stroke-linecap=\"round\"/></svg>\
+                    </button>\
+                    <button class=\"page-control-btn page-close\" data-close-page=\"{el}\" type=\"button\" aria-label=\"Cerrar {title}\">×</button>\
+                </div>\
+                <div class=\"page-ambience\" aria-hidden=\"true\"></div>\
+                <header class=\"page-head\">\
+                    <span class=\"page-mark\">{el}</span>\
+                    <h2 class=\"page-title\">{title}</h2>\
+                    <span class=\"page-tag\">{tag}</span>\
+                </header>\
+                <section class=\"page-content\" id=\"page-{el}-content\"></section>\
+            </article>",
+            el = element, title = title, tag = tag
+        );
+        let _ = strip.insert_adjacent_html("beforeend", &html);
+    }
+
+    fn remove_page_dom(&self, element: &str) {
+        let id = format!("deck-page-{}", element);
+        if let Some(el) = self.document.get_element_by_id(&id) {
+            el.remove();
+        }
+    }
+
     fn load_md_if_empty(&self, element: &str, md_url: &str) {
-        let content_id = format!("drawer-{}-content", element);
+        let content_id = format!("page-{}-content", element);
         let Some(content_el) = self.document.get_element_by_id(&content_id) else {
             return;
         };
@@ -163,9 +271,8 @@ impl AppState {
             return;
         };
         let inner = content.inner_html();
-        // Si ya tiene contenido renderizado (pluma-doc) y no es loader/error, no re-fetch.
         if inner.contains("pluma-doc") {
-            return;
+            return; // ya hidratado
         }
         let reader = Reader::new(content);
         let element_owned = element.to_string();
@@ -175,6 +282,27 @@ impl AppState {
                 web_sys::console::warn_1(&e);
             }
         });
+    }
+
+    fn element_center(&self, selector: &str) -> Option<(f64, f64)> {
+        let el = self.document.query_selector(selector).ok().flatten()?;
+        let rect = el.get_bounding_client_rect();
+        Some((
+            rect.left() + rect.width() / 2.0,
+            rect.top() + rect.height() / 2.0,
+        ))
+    }
+
+    fn taskbar_item_center(&self, element: &str) -> Option<(f64, f64)> {
+        let sel = format!(".taskbar-item[data-task=\"{}\"]", element);
+        self.element_center(&sel)
+    }
+
+    fn viewport_height(&self) -> f64 {
+        web_sys::window()
+            .and_then(|w| w.inner_height().ok())
+            .and_then(|v| v.as_f64())
+            .unwrap_or(720.0)
     }
 }
 
@@ -202,17 +330,33 @@ pub fn boot() -> Result<(), JsValue> {
         );
     }
 
+    // Mount vista deck
+    let strip_el: HtmlElement = document
+        .get_element_by_id("deck-strip")
+        .ok_or_else(|| JsValue::from_str("no #deck-strip"))?
+        .dyn_into()?;
+    let deck = Deck::mount(strip_el)?;
+
     let app = Rc::new(AppState {
         document: document.clone(),
+        deck: deck.clone(),
         state: RefCell::default(),
     });
+
+    // vista on_change → on_swipe del app
+    {
+        let app2 = app.clone();
+        deck.on_change(move |idx| {
+            app2.on_swipe(idx);
+        });
+    }
 
     install_resize(&window, &canvas, &renderer)?;
     install_mouse(&document, &canvas, &renderer)?;
     install_canvas_pointer(&canvas, &renderer)?;
     install_canvas_leave(&canvas, &renderer)?;
     install_tip_clicks(&document, &app)?;
-    install_drawer_close_buttons(&document, &app)?;
+    install_deck_delegation(&document, &app)?;
     install_taskbar(&document, &app)?;
     install_keyboard(&document, &app)?;
     install_raf(&window, &document, &canvas, &renderer);
@@ -261,7 +405,6 @@ fn install_mouse(
     Ok(())
 }
 
-/// Pointer down dentro del aro → impulso de vibración (click/tap shake).
 fn install_canvas_pointer(
     canvas: &HtmlCanvasElement,
     renderer: &Rc<RefCell<Renderer>>,
@@ -286,7 +429,6 @@ fn install_canvas_pointer(
     Ok(())
 }
 
-/// Mouse sale del canvas → tilt vuelve al frente con rebote del spring.
 fn install_canvas_leave(
     canvas: &HtmlCanvasElement,
     renderer: &Rc<RefCell<Renderer>>,
@@ -319,7 +461,7 @@ fn install_tip_clicks(document: &Document, app: &Rc<AppState>) -> Result<(), JsV
             let rect = el_for_rect.get_bounding_client_rect();
             let cx = rect.left() + rect.width() / 2.0;
             let cy = rect.top() + rect.height() / 2.0;
-            app2.open_tab(&element, cx, cy, &md_url);
+            app2.open_or_switch(&element, cx, cy, &md_url);
         });
         el.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
         cb.forget();
@@ -327,36 +469,56 @@ fn install_tip_clicks(document: &Document, app: &Rc<AppState>) -> Result<(), JsV
     Ok(())
 }
 
-fn install_drawer_close_buttons(
-    document: &Document,
-    app: &Rc<AppState>,
-) -> Result<(), JsValue> {
-    let closes = document.query_selector_all("[data-close-drawer]")?;
-    for i in 0..closes.length() {
-        let Some(node) = closes.item(i) else { continue };
-        let Ok(el) = node.dyn_into::<HtmlElement>() else {
-            continue;
+/// Un listener en el deck delega clicks de minimize y close en cada página.
+/// Las páginas se crean dinámicamente, así que no podemos adjuntar listeners
+/// por botón en boot.
+fn install_deck_delegation(document: &Document, app: &Rc<AppState>) -> Result<(), JsValue> {
+    let Some(deck_el) = document.get_element_by_id("deck") else {
+        return Ok(());
+    };
+    let app2 = app.clone();
+    let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |e: MouseEvent| {
+        let Some(target) = e.target() else { return };
+        let Ok(target_el): Result<Element, _> = target.dyn_into() else {
+            return;
         };
-        let el_ref: &Element = el.as_ref();
-        let element_attr = el_ref
-            .closest(".drawer")
-            .ok()
-            .flatten()
-            .and_then(|d| d.get_attribute("data-element"))
-            .unwrap_or_default();
-        let app2 = app.clone();
-        let cb = Closure::<dyn FnMut(Event)>::new(move |e: Event| {
+        // Minimize
+        if let Ok(Some(btn)) = target_el.closest("[data-minimize]") {
             e.stop_propagation();
-            app2.close_tab(&element_attr);
-        });
-        el.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
-        cb.forget();
-    }
+            let element = btn.get_attribute("data-minimize").unwrap_or_default();
+            // Origin = la cajita correspondiente en la taskbar (efecto
+            // visual: la página se "encoge" hacia su entrada del taskbar).
+            let origin = app2
+                .taskbar_item_center(&element)
+                .unwrap_or_else(|| center_of_element(&btn));
+            app2.minimize(origin.0, origin.1);
+            return;
+        }
+        // Close
+        if let Ok(Some(btn)) = target_el.closest("[data-close-page]") {
+            e.stop_propagation();
+            let element = btn.get_attribute("data-close-page").unwrap_or_default();
+            let origin = app2
+                .taskbar_item_center(&element)
+                .unwrap_or_else(|| center_of_element(&btn));
+            app2.close(&element, origin.0, origin.1);
+        }
+    });
+    deck_el.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+    cb.forget();
     Ok(())
+}
+
+fn center_of_element(el: &Element) -> (f64, f64) {
+    let rect = el.get_bounding_client_rect();
+    (
+        rect.left() + rect.width() / 2.0,
+        rect.top() + rect.height() / 2.0,
+    )
 }
 
 fn install_taskbar(document: &Document, app: &Rc<AppState>) -> Result<(), JsValue> {
-    // Botón home
+    // Home button & brand link comparten data-home — minimizan todo.
     let homes = document.query_selector_all("[data-home]")?;
     for i in 0..homes.length() {
         let Some(node) = homes.item(i) else { continue };
@@ -364,13 +526,15 @@ fn install_taskbar(document: &Document, app: &Rc<AppState>) -> Result<(), JsValu
             continue;
         };
         let app2 = app.clone();
-        let cb = Closure::<dyn FnMut(Event)>::new(move |_e: Event| {
+        let cb = Closure::<dyn FnMut(Event)>::new(move |e: Event| {
+            e.prevent_default();
             app2.home();
         });
         el.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
         cb.forget();
     }
-    // Delegación: 1 listener en la lista, dispatch por data-task del closest .taskbar-item.
+
+    // Delegación en la lista de tabs.
     if let Some(list) = document.get_element_by_id("taskbar-list") {
         let app2 = app.clone();
         let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |e: MouseEvent| {
@@ -385,7 +549,13 @@ fn install_taskbar(document: &Document, app: &Rc<AppState>) -> Result<(), JsValu
                 let rect = item.get_bounding_client_rect();
                 let cx = rect.left() + rect.width() / 2.0;
                 let cy = rect.top() + rect.height() / 2.0;
-                app2.switch_tab(&task, cx, cy);
+                // Si la pestaña ya está activa, minimiza (toggle estilo Windows).
+                let is_active = app2.state.borrow().active.as_deref() == Some(&task);
+                if is_active {
+                    app2.minimize(cx, cy);
+                } else {
+                    app2.restore_from_tab(&task, cx, cy);
+                }
             }
         });
         list.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
@@ -398,8 +568,8 @@ fn install_keyboard(document: &Document, app: &Rc<AppState>) -> Result<(), JsVal
     let app2 = app.clone();
     let cb = Closure::<dyn FnMut(KeyboardEvent)>::new(move |e: KeyboardEvent| {
         if e.key() == "Escape" {
-            if let Some(active) = app2.active() {
-                app2.close_tab(&active);
+            if app2.state.borrow().active.is_some() {
+                app2.home();
             }
         }
     });
@@ -424,7 +594,6 @@ fn install_raf(
         renderer.borrow_mut().render(time_ms);
         let r = renderer.borrow();
         position_tips(&document, &canvas, &r);
-        update_tilt_css(&document, &r);
         drop(r);
         if let Some(cb) = f.borrow().as_ref() {
             let _ = window2.request_animation_frame(cb.as_ref().unchecked_ref());
@@ -457,7 +626,6 @@ fn position_tips(document: &Document, canvas: &HtmlCanvasElement, renderer: &Ren
     let clips = renderer.cardinal_positions_ndc(BUTTON_RADIUS_FACTOR);
     let cw = canvas.client_width().max(1) as f32;
     let ch = canvas.client_height().max(1) as f32;
-    // Bounds en CSS pixels donde los botones pueden moverse libremente.
     let min_x = VIEWPORT_MARGIN_PX + BUTTON_HALF_W_PX;
     let max_x = (cw - VIEWPORT_MARGIN_PX - BUTTON_HALF_W_PX).max(min_x);
     let min_y = VIEWPORT_MARGIN_PX + BUTTON_HALF_H_PX;
@@ -476,23 +644,6 @@ fn position_tips(document: &Document, canvas: &HtmlCanvasElement, renderer: &Ren
                     &format!("translate({:.2}px, {:.2}px) translate(-50%, -50%)", px, py),
                 );
             }
-        }
-    }
-}
-
-fn update_tilt_css(document: &Document, renderer: &Renderer) {
-    let (pitch, yaw, roll) = renderer.tilt_degrees();
-    if let Some(brand) = document.get_element_by_id("brand") {
-        if let Ok(brand) = brand.dyn_into::<HtmlElement>() {
-            let _ = brand
-                .style()
-                .set_property("--tilt-x", &format!("{:.2}deg", pitch));
-            let _ = brand
-                .style()
-                .set_property("--tilt-y", &format!("{:.2}deg", yaw));
-            let _ = brand
-                .style()
-                .set_property("--tilt-z", &format!("{:.2}deg", roll));
         }
     }
 }

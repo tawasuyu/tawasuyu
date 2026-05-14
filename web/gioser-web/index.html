@@ -12,10 +12,6 @@
 <body>
   <canvas id="gioser-canvas" aria-hidden="true"></canvas>
 
-  <header id="brand" class="brand">
-    <h1 class="brand-title">Gio<span class="brand-dot">·</span>Ser</h1>
-  </header>
-
   <main id="tips" aria-label="Cuatro elementos">
     <a id="tip-aire" class="tip tip-aire" href="#aire" data-md="./md/aire.md" aria-label="Aire — Software e IA">
       <svg viewBox="0 0 48 48" class="tip-glyph" aria-hidden="true">
@@ -59,55 +55,14 @@
     </a>
   </main>
 
-  <!-- DRAWERS: uno por elemento. Cada uno crece desde la posición del tip
-       clickeado (origin set via CSS vars desde WASM) hasta fullscreen. -->
-  <aside id="drawer-aire" class="drawer drawer-aire" data-element="aire" aria-hidden="true">
-    <button class="drawer-close" data-close-drawer aria-label="Cerrar Aire">×</button>
-    <div class="drawer-ambience" aria-hidden="true"></div>
-    <header class="drawer-head">
-      <span class="drawer-mark">aire</span>
-      <h2 class="drawer-title">Aire</h2>
-      <span class="drawer-tag">Software · IA · Aspiración</span>
-    </header>
-    <section class="drawer-content" id="drawer-aire-content"></section>
-  </aside>
+  <!-- DECK: contenedor único con strip horizontal. Las páginas se inyectan
+       dinámicamente desde WASM. vista-web maneja swipe + snap. -->
+  <div id="deck" class="deck vista-deck" aria-hidden="true">
+    <div id="deck-strip" class="deck-strip vista-strip" role="region" aria-label="Vistas abiertas"></div>
+  </div>
 
-  <aside id="drawer-fuego" class="drawer drawer-fuego" data-element="fuego" aria-hidden="true">
-    <button class="drawer-close" data-close-drawer aria-label="Cerrar Fuego">×</button>
-    <div class="drawer-ambience" aria-hidden="true"></div>
-    <header class="drawer-head">
-      <span class="drawer-mark">fuego</span>
-      <h2 class="drawer-title">Fuego</h2>
-      <span class="drawer-tag">Inspiración</span>
-    </header>
-    <section class="drawer-content" id="drawer-fuego-content"></section>
-  </aside>
-
-  <aside id="drawer-tierra" class="drawer drawer-tierra" data-element="tierra" aria-hidden="true">
-    <button class="drawer-close" data-close-drawer aria-label="Cerrar Tierra">×</button>
-    <div class="drawer-ambience" aria-hidden="true"></div>
-    <header class="drawer-head">
-      <span class="drawer-mark">tierra</span>
-      <h2 class="drawer-title">Tierra</h2>
-      <span class="drawer-tag">Cuerpo</span>
-    </header>
-    <section class="drawer-content" id="drawer-tierra-content"></section>
-  </aside>
-
-  <aside id="drawer-agua" class="drawer drawer-agua" data-element="agua" aria-hidden="true">
-    <button class="drawer-close" data-close-drawer aria-label="Cerrar Agua">×</button>
-    <div class="drawer-ambience" aria-hidden="true"></div>
-    <header class="drawer-head">
-      <span class="drawer-mark">agua</span>
-      <h2 class="drawer-title">Agua</h2>
-      <span class="drawer-tag">Espiritualidad aplicada</span>
-    </header>
-    <section class="drawer-content" id="drawer-agua-content"></section>
-  </aside>
-
-  <!-- TASKBAR estilo Windows: home a la izquierda + cajitas dinámicas
-       de las vistas MD abiertas. Sincronizada por WASM. -->
-  <nav class="taskbar" aria-label="Vistas abiertas">
+  <!-- TASKBAR estilo Windows: home + GioSer + tabs + copyleft -->
+  <nav class="taskbar" aria-label="Barra de vistas">
     <button class="taskbar-home" data-home aria-label="Volver al home" type="button">
       <svg viewBox="0 0 24 24" class="taskbar-home-glyph" aria-hidden="true">
         <path d="M3 12 L12 3 L21 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
@@ -115,8 +70,19 @@
         <circle cx="12" cy="17" r="0.8" fill="currentColor"/>
       </svg>
     </button>
+
+    <a class="taskbar-brand" data-home href="#home" aria-label="GioSer · home">
+      <span>Gio</span><span class="brand-dot">·</span><span>Ser</span>
+    </a>
+
     <span class="taskbar-divider" aria-hidden="true"></span>
     <ul class="taskbar-list" id="taskbar-list" role="presentation"></ul>
+    <span class="taskbar-spacer" aria-hidden="true"></span>
+
+    <a class="taskbar-credit" href="https://sergio.gioser.net" target="_blank" rel="noopener noreferrer" aria-label="Copyleft sergio arroba gioser punto net">
+      <span class="copyleft-mark" aria-hidden="true">©</span>
+      <span class="taskbar-credit-text">sergio@gioser.net</span>
+    </a>
   </nav>
 
   <script type="module">
