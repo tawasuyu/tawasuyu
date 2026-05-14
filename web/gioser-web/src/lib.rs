@@ -19,6 +19,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use barra_web::{Task, TaskList};
 use gioser_canvas_web::{tips, Renderer};
 use pluma_reader_web::Reader;
 use vista_web::Deck;
@@ -48,6 +49,7 @@ struct DeckState {
 struct AppState {
     document: Document,
     deck: Deck,
+    taskbar: TaskList,
     state: RefCell<DeckState>,
 }
 
@@ -195,22 +197,18 @@ impl AppState {
 
     fn sync_taskbar(&self) {
         let s = self.state.borrow();
-        if let Some(list) = self.document.get_element_by_id("taskbar-list") {
-            let mut html = String::new();
-            for e in &s.pages {
-                let label = e.to_uppercase();
-                let active = if s.active.as_deref() == Some(e.as_str()) {
-                    " active"
-                } else {
-                    ""
-                };
-                html.push_str(&format!(
-                    "<li><button class=\"taskbar-item{active}\" data-task=\"{e}\" type=\"button\">\
-                     <span class=\"taskbar-item-dot\" aria-hidden=\"true\"></span>{label}</button></li>"
-                ));
-            }
-            list.set_inner_html(&html);
-        }
+        let tasks: Vec<Task> = s
+            .pages
+            .iter()
+            .map(|e| {
+                let mut t = Task::new(e.clone(), e.to_uppercase());
+                if s.active.as_deref() == Some(e.as_str()) {
+                    t = t.active();
+                }
+                t
+            })
+            .collect();
+        self.taskbar.set_tasks(&tasks);
     }
 
     fn ensure_page_dom(&self, element: &str) {
@@ -294,8 +292,7 @@ impl AppState {
     }
 
     fn taskbar_item_center(&self, element: &str) -> Option<(f64, f64)> {
-        let sel = format!(".taskbar-item[data-task=\"{}\"]", element);
-        self.element_center(&sel)
+        self.taskbar.task_center(element)
     }
 
     fn viewport_height(&self) -> f64 {
@@ -337,9 +334,17 @@ pub fn boot() -> Result<(), JsValue> {
         .dyn_into()?;
     let deck = Deck::mount(strip_el)?;
 
+    // Mount barra-web taskbar (manages the dynamic task list).
+    let list_el: HtmlElement = document
+        .get_element_by_id("taskbar-list")
+        .ok_or_else(|| JsValue::from_str("no #taskbar-list"))?
+        .dyn_into()?;
+    let taskbar = TaskList::mount(list_el)?;
+
     let app = Rc::new(AppState {
         document: document.clone(),
         deck: deck.clone(),
+        taskbar: taskbar.clone(),
         state: RefCell::default(),
     });
 
@@ -348,6 +353,19 @@ pub fn boot() -> Result<(), JsValue> {
         let app2 = app.clone();
         deck.on_change(move |idx| {
             app2.on_swipe(idx);
+        });
+    }
+
+    // barra on_click → restore / toggle minimize del app
+    {
+        let app2 = app.clone();
+        taskbar.on_click(move |id, cx, cy| {
+            let is_active = app2.state.borrow().active.as_deref() == Some(id);
+            if is_active {
+                app2.minimize(cx, cy);
+            } else {
+                app2.restore_from_tab(id, cx, cy);
+            }
         });
     }
 
@@ -517,8 +535,9 @@ fn center_of_element(el: &Element) -> (f64, f64) {
     )
 }
 
+/// Home button + brand link (data-home) — toda la lógica de tabs vive en
+/// barra-web::TaskList. Acá sólo se instalan los handlers para [data-home].
 fn install_taskbar(document: &Document, app: &Rc<AppState>) -> Result<(), JsValue> {
-    // Home button & brand link comparten data-home — minimizan todo.
     let homes = document.query_selector_all("[data-home]")?;
     for i in 0..homes.length() {
         let Some(node) = homes.item(i) else { continue };
@@ -531,34 +550,6 @@ fn install_taskbar(document: &Document, app: &Rc<AppState>) -> Result<(), JsValu
             app2.home();
         });
         el.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
-        cb.forget();
-    }
-
-    // Delegación en la lista de tabs.
-    if let Some(list) = document.get_element_by_id("taskbar-list") {
-        let app2 = app.clone();
-        let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |e: MouseEvent| {
-            let Some(target) = e.target() else { return };
-            let Ok(target_el): Result<Element, _> = target.dyn_into() else {
-                return;
-            };
-            let Ok(Some(item)) = target_el.closest(".taskbar-item") else {
-                return;
-            };
-            if let Some(task) = item.get_attribute("data-task") {
-                let rect = item.get_bounding_client_rect();
-                let cx = rect.left() + rect.width() / 2.0;
-                let cy = rect.top() + rect.height() / 2.0;
-                // Si la pestaña ya está activa, minimiza (toggle estilo Windows).
-                let is_active = app2.state.borrow().active.as_deref() == Some(&task);
-                if is_active {
-                    app2.minimize(cx, cy);
-                } else {
-                    app2.restore_from_tab(&task, cx, cy);
-                }
-            }
-        });
-        list.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
         cb.forget();
     }
     Ok(())

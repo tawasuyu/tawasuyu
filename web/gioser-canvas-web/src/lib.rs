@@ -42,6 +42,30 @@ pub mod tips {
     ];
 }
 
+/// Colores zodiacales en orden Aries→Piscis. Sigue la asignación tradicional
+/// por triplicidad elemental:
+///   fuego: aries, leo, sagitario     (rojo, dorado, púrpura)
+///   tierra: tauro, virgo, capricornio (verde, marrón, verde oscuro)
+///   aire: géminis, libra, acuario     (amarillo, rosa, celeste)
+///   agua: cáncer, escorpio, piscis    (plata, rojo profundo, verde mar)
+///
+/// El shader los recibe como `uniform vec3 u_zodiac[12]` y los dibuja como
+/// trazos radiales muy sutiles entre la chacana y el aro exterior.
+pub const ZODIAC_COLORS: [[f32; 3]; 12] = [
+    [0.95, 0.30, 0.20], // 0 Aries — fuego rojo
+    [0.35, 0.65, 0.30], // 1 Tauro — tierra verde
+    [0.95, 0.85, 0.30], // 2 Géminis — aire amarillo
+    [0.80, 0.88, 0.95], // 3 Cáncer — agua plata
+    [0.98, 0.65, 0.20], // 4 Leo — fuego dorado
+    [0.62, 0.50, 0.32], // 5 Virgo — tierra marrón
+    [0.95, 0.65, 0.82], // 6 Libra — aire rosa
+    [0.55, 0.15, 0.22], // 7 Escorpio — agua rojo profundo
+    [0.60, 0.30, 0.85], // 8 Sagitario — fuego púrpura
+    [0.22, 0.45, 0.28], // 9 Capricornio — tierra verde oscuro
+    [0.48, 0.78, 0.95], // 10 Acuario — aire celeste
+    [0.22, 0.72, 0.62], // 11 Piscis — agua verde mar
+];
+
 pub struct Renderer {
     gl: GL,
     cosmos_prog: Program,
@@ -201,6 +225,7 @@ impl Renderer {
                 "u_fuego_color",
                 "u_tierra_color",
                 "u_agua_color",
+                "u_zodiac[0]",
                 "u_sun_pulse",
             ],
         )
@@ -436,6 +461,17 @@ impl Renderer {
             self.chacana_prog.u("u_agua_color"),
             gioser_palette::elements::AGUA,
         );
+        // Subir las 12 colores zodiacales como vec3[12]. Aplanamos a un único
+        // slice de 36 floats; uniform3fv interpreta cada terna como vec3.
+        if let Some(u) = self.chacana_prog.u("u_zodiac[0]") {
+            let mut flat = [0.0f32; 36];
+            for (i, c) in ZODIAC_COLORS.iter().enumerate() {
+                flat[i * 3] = c[0];
+                flat[i * 3 + 1] = c[1];
+                flat[i * 3 + 2] = c[2];
+            }
+            gl.uniform3fv_with_f32_array(Some(u), &flat);
+        }
         if let Some(u) = self.chacana_prog.u("u_sun_pulse") {
             gl.uniform1f(Some(u), self.sun_pulse);
         }

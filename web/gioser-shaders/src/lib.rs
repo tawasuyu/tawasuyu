@@ -190,6 +190,7 @@ uniform vec3  u_aire_color;
 uniform vec3  u_fuego_color;
 uniform vec3  u_tierra_color;
 uniform vec3  u_agua_color;
+uniform vec3  u_zodiac[12];
 uniform float u_sun_pulse;
 
 const float PI = 3.14159265;
@@ -361,6 +362,43 @@ void main() {
     particles += element_particles(p, vec2(0.0, -L), vec2(0.0, -1.0), u_tierra_color, 2, 3.11);
     particles += element_particles(p, vec2(-L, 0.0), vec2(-1.0, 0.0), u_agua_color,   3, 5.97);
 
+    // === TRAZOS ZODIACALES ===
+    // 12 líneas radiales muy sutiles entre la chacana y el aro principal,
+    // una por signo, con sus colores significativos (Aries=fuego rojo,
+    // Tauro=tierra verde, Géminis=aire amarillo, Cáncer=agua plata, ...).
+    // Aries arranca en el norte y giran en sentido horario (rueda zodiacal
+    // clásica).
+    vec3 zodiac = vec3(0.0);
+    {
+        float seg = 2.0 * PI / 12.0;
+        // delta = ángulo medido desde el norte, en sentido horario, en [0, 2π).
+        float delta = (PI * 0.5) - ang;
+        delta = mod(delta + 8.0 * PI, 2.0 * PI);
+        // Índice del signo más cercano.
+        float k_round = mod(floor(delta / seg + 0.5), 12.0);
+        int k = int(k_round);
+        // Distancia angular al centro del segmento de ese signo.
+        float center_delta = k_round * seg;
+        float ang_diff = delta - center_delta;
+        // Wrap a (-π, π].
+        if (ang_diff >  PI) ang_diff -= 2.0 * PI;
+        if (ang_diff < -PI) ang_diff += 2.0 * PI;
+        float ang_dist = abs(ang_diff);
+
+        // Línea fina, gaussiana.
+        float lineW = 0.0042;
+        float line = exp(-(ang_dist * ang_dist) / (2.0 * lineW * lineW));
+
+        // Banda radial: arranca un poco fuera de la punta de la chacana y
+        // termina antes del aro principal.
+        float r_inner = u_arm_extent * 1.05;
+        float r_outer = ringR_main * 0.96;
+        float band = smoothstep(r_inner, r_inner + 0.035, r)
+                   * (1.0 - smoothstep(r_outer - 0.035, r_outer, r));
+
+        zodiac = u_zodiac[k] * line * band;
+    }
+
     // === COMPOSICIÓN ===
     vec3 col = vec3(0.0);
     // Sol detrás (clip a interior).
@@ -375,10 +413,13 @@ void main() {
     col += u_rim_color  * ring_inner * 1.05;
     col += u_line_color * dots * 1.85;
     col += particles * 1.25;
+    col += zodiac * 0.55; // muy sutil — apenas visible.
 
+    float zodiac_lum = zodiac.r + zodiac.g + zodiac.b;
     float alpha = clamp(
         halo * inside + line + glow + ring_main + ring_inner + dots + inside * 0.12
-            + (particles.r + particles.g + particles.b) * 0.5,
+            + (particles.r + particles.g + particles.b) * 0.5
+            + zodiac_lum * 0.3,
         0.0, 1.0);
     fragColor = vec4(col, alpha);
 }

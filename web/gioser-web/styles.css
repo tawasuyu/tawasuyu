@@ -185,7 +185,11 @@ body.deck-active-fuego  .deck { --deck-glow: rgba(245, 144, 86, 0.28); }
 body.deck-active-agua   .deck { --deck-glow: rgba(108, 208, 243, 0.22); }
 body.deck-active-tierra .deck { --deck-glow: rgba(212, 152, 115, 0.24); }
 
-/* Strip horizontal con páginas — vista-web traslada esto. */
+/* Strip horizontal con páginas — vista-web traslada esto.
+   touch-action: pan-y declara al browser "yo manejo horizontal, el
+   vertical (scroll interno de cada página) lo dejas pasar". Sin esto
+   el navegador móvil se traga el gesto horizontal antes de que JS
+   pueda capturarlo. */
 .deck-strip {
   display: flex;
   flex-direction: row;
@@ -194,6 +198,13 @@ body.deck-active-tierra .deck { --deck-glow: rgba(212, 152, 115, 0.24); }
   transform: translate3d(var(--vista-offset, 0px), 0, 0);
   transition: transform 360ms var(--ease-page);
   will-change: transform;
+  touch-action: pan-y;
+}
+/* Asegurar que TODOS los descendientes del strip hereden el contrato
+   touch-action — si el toque llega a un párrafo o <a>, el browser
+   chequea el touch-action del target, no del padre. */
+.deck-strip * {
+  touch-action: pan-y;
 }
 .deck-strip.vista-dragging,
 .deck-strip.vista-instant {
@@ -207,9 +218,7 @@ body.deck-active-tierra .deck { --deck-glow: rgba(212, 152, 115, 0.24); }
   position: relative;
   overflow-y: auto;
   overflow-x: hidden;
-  /* contenido alineado al pop-snap mismo si la lista de páginas viviera
-     dentro de scroll nativo; con vista-web esto es informativo nomás. */
-  scroll-snap-align: start;
+  touch-action: pan-y;
 }
 .deck-page[data-element="aire"]   { --page-accent: var(--aire); }
 .deck-page[data-element="fuego"]  { --page-accent: var(--fuego); }
