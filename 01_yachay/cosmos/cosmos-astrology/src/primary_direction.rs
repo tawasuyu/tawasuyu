@@ -31,6 +31,7 @@
 
 use eternal_sky::Body;
 
+use crate::aspect::AspectKind;
 use crate::chart::NatalChart;
 use crate::error::AstrologyResult;
 use crate::mundane::{
@@ -81,18 +82,6 @@ pub enum Significator {
 }
 
 impl Significator {
-    /// The fixed mundane position of an angle, for the cases where the
-    /// significator is one of the four cardinal points.
-    fn angle_mundane(self) -> Option<f64> {
-        match self {
-            Significator::Ascendant => Some(0.0),
-            Significator::Midheaven => Some(1.0),
-            Significator::Descendant => Some(2.0),
-            Significator::ImumCoeli => Some(3.0),
-            Significator::Body(_) => None,
-        }
-    }
-
     pub fn label(self) -> String {
         match self {
             Significator::Body(b) => b.name().to_string(),
@@ -109,6 +98,11 @@ impl Significator {
 pub struct Direction {
     pub promissor: Body,
     pub significator: Significator,
+    /// Which aspect family this direction targets. `Conjunction` means
+    /// the promissor reaches the significator's natal mundane position
+    /// directly; other aspects target the corresponding aspect points
+    /// (the ecliptic longitudes `significator ± aspect.exact_angle`).
+    pub aspect: AspectKind,
     pub method: DirectionMethod,
     pub key: DirectionKey,
     /// Arc of direction, radians. Always normalised to `[0, 2π)` —
@@ -127,7 +121,11 @@ impl Direction {
     }
 }
 
-/// Compute a single direction from `promissor` to `significator`.
+/// Compute a single conjunctional direction from `promissor` to
+/// `significator`.
+///
+/// Equivalent to [`direct_to_aspect`] with `AspectKind::Conjunction`,
+/// unwrapping the single-element result for ergonomics.
 ///
 /// `Err` is returned if the promissor has no real semi-arc at the
 /// observer's latitude (circumpolar / never-rising case).
@@ -138,6 +136,35 @@ pub fn direct(
     method: DirectionMethod,
     key: DirectionKey,
 ) -> AstrologyResult<Direction> {
+    let mut out = direct_to_aspect(
+        natal,
+        promissor,
+        significator,
+        AspectKind::Conjunction,
+        method,
+        key,
+    )?;
+    Ok(out.remove(0))
+}
+
+/// Compute every direction of `promissor` to `significator` for the
+/// given aspect family. Returns one direction for Conjunction and
+/// Opposition (the aspect is symmetric and lands on a unique ecliptic
+/// point); two for every other family — one for the "dexter" branch
+/// (`significator − exact_angle`) and one for the "sinister" branch
+/// (`significator + exact_angle`).
+///
+/// The promissor still reaches the *mundane* position of each aspect
+/// point in the Placidus framework — i.e. the rotation arc is in
+/// equatorial degrees, not zodiacal.
+pub fn direct_to_aspect(
+    natal: &NatalChart,
+    promissor: Body,
+    significator: Significator,
+    aspect: AspectKind,
+    method: DirectionMethod,
+    key: DirectionKey,
+) -> AstrologyResult<Vec<Direction>> {
     let _ = method; // Only PlacidusMundane today, but the parameter is honoured.
 
     let placement = natal.placement(promissor).ok_or_else(|| {
@@ -149,6 +176,7 @@ pub fn direct(
 
     let phi = natal.birth.observer.lat_rad;
     let ramc = natal.local_apparent_sidereal_time_rad;
+    let obliquity = natal.obliquity_rad;
     let dsa_p = diurnal_semi_arc_rad(placement.declination_rad, phi);
     let nsa_p = nocturnal_semi_arc_rad(placement.declination_rad, phi);
     if dsa_p.is_nan() || nsa_p.is_nan() {
@@ -159,48 +187,90 @@ pub fn direct(
     }
     let h_p_natal = signed_hour_angle_rad(ramc, placement.right_ascension_rad);
 
-    // Target mundane position.
-    let m_target = match significator {
+    // The natal ecliptic longitude of the significator, and a marker
+    // for whether it is an angle (which has no defined ecliptic
+    // latitude — we treat all aspect points as ecliptic-latitude zero).
+    let sig_lon_rad = match significator {
         Significator::Body(target_body) => {
-            if let Some(target_p) = natal.placement(target_body) {
-                natal_mundane_position(
-                    ramc,
-                    target_p.right_ascension_rad,
-                    target_p.declination_rad,
-                    phi,
-                )
-            } else {
-                return Err(crate::error::AstrologyError::BodyUnavailable(format!(
+            let target_p = natal.placement(target_body).ok_or_else(|| {
+                crate::error::AstrologyError::BodyUnavailable(format!(
                     "significator {} not in chart",
                     target_body.name()
-                )));
-            }
+                ))
+            })?;
+            // Convert back to *tropical* ecliptic longitude (placement
+            // stores it in chart's zodiac — add ayanamsha to undo
+            // sidereal offset if applicable).
+            (target_p.longitude.longitude_rad() + natal.ayanamsha_rad)
+                .rem_euclid(std::f64::consts::TAU)
         }
-        _ => significator
-            .angle_mundane()
-            .expect("non-Body significator must have a fixed mundane"),
+        Significator::Ascendant => (natal.ascendant().longitude_rad() + natal.ayanamsha_rad)
+            .rem_euclid(std::f64::consts::TAU),
+        Significator::Midheaven => (natal.midheaven().longitude_rad() + natal.ayanamsha_rad)
+            .rem_euclid(std::f64::consts::TAU),
+        Significator::Descendant => (natal.descendant().longitude_rad() + natal.ayanamsha_rad)
+            .rem_euclid(std::f64::consts::TAU),
+        Significator::ImumCoeli => (natal.imum_coeli().longitude_rad() + natal.ayanamsha_rad)
+            .rem_euclid(std::f64::consts::TAU),
     };
 
-    // Hour angle the promissor needs to have so its NEW mundane (computed
-    // with its OWN semi-arcs) equals `m_target`.
-    let h_target = hour_angle_for_mundane(m_target, dsa_p, nsa_p);
+    // Build each aspect branch's mundane target.
+    let offsets_deg = aspect_branch_offsets_deg(aspect);
+    let mut out = Vec::with_capacity(offsets_deg.len());
+    for offset_deg in offsets_deg {
+        let aspect_point_lon = (sig_lon_rad + offset_deg.to_radians())
+            .rem_euclid(std::f64::consts::TAU);
+        let (target_ra, target_dec) =
+            ecliptic_to_equatorial(aspect_point_lon, 0.0, obliquity);
+        let m_target = natal_mundane_position(ramc, target_ra, target_dec, phi);
 
-    // Arc of direction in RA: how far must the sphere rotate so the
-    // promissor's hour angle changes from `h_p_natal` to `h_target`?
-    // The promissor's RA is fixed (the natal ecliptic position is
-    // frozen), so `h_new = h_natal + Δ_RA`.
-    let raw_arc = h_target - h_p_natal;
-    let arc_rad = normalise_forward(raw_arc);
+        let h_target = hour_angle_for_mundane(m_target, dsa_p, nsa_p);
+        let arc_rad = normalise_forward(h_target - h_p_natal);
+        let age_years = arc_rad.to_degrees() / key.degrees_per_year();
+        out.push(Direction {
+            promissor,
+            significator,
+            aspect,
+            method,
+            key,
+            arc_rad,
+            age_years,
+        });
+    }
+    Ok(out)
+}
 
-    let age_years = arc_rad.to_degrees() / key.degrees_per_year();
-    Ok(Direction {
-        promissor,
-        significator,
-        method,
-        key,
-        arc_rad,
-        age_years,
-    })
+/// Offsets (in degrees) at which the aspect family lands relative to
+/// the significator's natal longitude. Conjunction → `[0]`; opposition
+/// → `[180]`; symmetric aspects → both `+exact` and `−exact`.
+fn aspect_branch_offsets_deg(aspect: AspectKind) -> Vec<f64> {
+    let exact = aspect.exact_angle_deg();
+    match aspect {
+        AspectKind::Conjunction => vec![0.0],
+        AspectKind::Opposition => vec![180.0],
+        _ => vec![exact, -exact],
+    }
+}
+
+/// Convert an ecliptic longitude / latitude (radians) to equatorial
+/// (RA, Dec) at the given true obliquity. Standard textbook formula —
+/// kept inline so the primary-direction module is self-contained.
+fn ecliptic_to_equatorial(lon: f64, lat: f64, obliquity: f64) -> (f64, f64) {
+    let (sin_lon, cos_lon) = libm::sincos(lon);
+    let (sin_lat, cos_lat) = libm::sincos(lat);
+    let (sin_eps, cos_eps) = libm::sincos(obliquity);
+    let sin_dec = sin_lat * cos_eps + cos_lat * sin_eps * sin_lon;
+    let dec = libm::asin(sin_dec);
+    let ra = libm::atan2(
+        sin_lon * cos_eps - libm::tan(lat) * sin_eps,
+        cos_lon,
+    );
+    let ra = if ra < 0.0 {
+        ra + std::f64::consts::TAU
+    } else {
+        ra
+    };
+    (ra, dec)
 }
 
 /// Compute directions of `promissor` to each of the four angles.
@@ -221,10 +291,36 @@ pub fn directions_to_angles(
 /// Compute every conjunctional direction (each natal body as promissor
 /// to each angle and to each other body) whose perfection lies within
 /// `max_age_years`. Sorted by `age_years` ascending.
+///
+/// Use [`all_directions_with_aspects`] to also include non-conjunction
+/// aspects (trine, square, sextile, …).
 pub fn all_directions(
     natal: &NatalChart,
     method: DirectionMethod,
     key: DirectionKey,
+    max_age_years: f64,
+) -> Vec<Direction> {
+    all_directions_with_aspects(
+        natal,
+        method,
+        key,
+        &[AspectKind::Conjunction],
+        max_age_years,
+    )
+}
+
+/// Compute every direction across the requested aspect families
+/// (promissor × significator × aspect) that perfects within
+/// `max_age_years`. Sorted by `age_years` ascending.
+///
+/// `aspect_kinds` selects which aspect families to include. Pass
+/// `AspectKind::MAJORS` for the classical five, or `AspectKind::ALL`
+/// for every wired aspect.
+pub fn all_directions_with_aspects(
+    natal: &NatalChart,
+    method: DirectionMethod,
+    key: DirectionKey,
+    aspect_kinds: &[AspectKind],
     max_age_years: f64,
 ) -> Vec<Direction> {
     let mut out: Vec<Direction> = Vec::new();
@@ -238,9 +334,13 @@ pub fn all_directions(
             Significator::Descendant,
             Significator::ImumCoeli,
         ] {
-            if let Ok(d) = direct(natal, promissor, sig, method, key) {
-                if d.age_years <= max_age_years && d.age_years >= 0.0 {
-                    out.push(d);
+            for &aspect in aspect_kinds {
+                if let Ok(dirs) = direct_to_aspect(natal, promissor, sig, aspect, method, key) {
+                    for d in dirs {
+                        if (0.0..=max_age_years).contains(&d.age_years) {
+                            out.push(d);
+                        }
+                    }
                 }
             }
         }
@@ -249,21 +349,30 @@ pub fn all_directions(
             if sig_p.body == promissor {
                 continue;
             }
-            if let Ok(d) = direct(
-                natal,
-                promissor,
-                Significator::Body(sig_p.body),
-                method,
-                key,
-            ) {
-                if d.age_years <= max_age_years && d.age_years >= 0.0 {
-                    out.push(d);
+            for &aspect in aspect_kinds {
+                if let Ok(dirs) = direct_to_aspect(
+                    natal,
+                    promissor,
+                    Significator::Body(sig_p.body),
+                    aspect,
+                    method,
+                    key,
+                ) {
+                    for d in dirs {
+                        if (0.0..=max_age_years).contains(&d.age_years) {
+                            out.push(d);
+                        }
+                    }
                 }
             }
         }
     }
 
-    out.sort_by(|a, b| a.age_years.partial_cmp(&b.age_years).unwrap_or(std::cmp::Ordering::Equal));
+    out.sort_by(|a, b| {
+        a.age_years
+            .partial_cmp(&b.age_years)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     out
 }
 

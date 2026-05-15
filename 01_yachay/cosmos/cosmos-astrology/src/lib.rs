@@ -66,6 +66,7 @@ pub mod profections;
 pub mod progression;
 pub mod returns;
 pub mod solar_arc;
+pub mod stations;
 pub mod synastry;
 pub mod transits;
 pub mod zodiac;
@@ -82,8 +83,8 @@ pub use progression::{
     ProgressedChart, ProgressedHouses, ProgressionMethod,
 };
 pub use primary_direction::{
-    all_directions, direct, directions_to_angles, Direction, DirectionKey, DirectionMethod,
-    Significator,
+    all_directions, all_directions_with_aspects, direct, direct_to_aspect, directions_to_angles,
+    Direction, DirectionKey, DirectionMethod, Significator,
 };
 pub use lots::{all_lots, compute_lot, custom_lot, Lot, LotName, LotPoint, Sect};
 pub use profections::{
@@ -92,6 +93,7 @@ pub use profections::{
 };
 pub use returns::next_return;
 pub use solar_arc::{solar_arc, solar_arc_naibod, solar_arc_true, SolarArcChart, SolarArcMethod};
+pub use stations::{all_stations, next_station, Station, StationKind};
 pub use synastry::{find_synastry_aspects, SynastryAspect};
 pub use transits::{
     default_natal_targets, find_current_transits, find_next_exact_transit, TransitAspect,
