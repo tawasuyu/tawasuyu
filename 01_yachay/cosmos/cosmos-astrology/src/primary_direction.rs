@@ -60,15 +60,70 @@ impl DirectionKey {
     }
 }
 
-/// Which directional method to use. Today only Placidus-mundane is
-/// implemented; the variant is kept here as a forward-compatible enum
-/// so callers don't need to rewire when more methods land.
+/// Which directional method to use. The three classical mundane
+/// frameworks differ only in how the "house position" `m ∈ [0, 4)` is
+/// projected from a body's (RA, Dec).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DirectionMethod {
-    /// Placidus mundane: the promissor must reach the significator's
-    /// natal Placidus quadrant position.
+    /// Placidus mundane: position = proportional position within the
+    /// body's own diurnal/nocturnal semi-arc. The dominant choice in
+    /// modern practice.
     #[default]
     PlacidusMundane,
+    /// Regiomontanus mundane: position depends only on hour angle —
+    /// the framework is anchored to the celestial equator and the
+    /// poles of the world, so every body of any declination shares
+    /// the same `m(H)` function. As a consequence the arc of
+    /// direction between any two points reduces to a pure RA delta.
+    Regiomontanus,
+}
+
+impl DirectionMethod {
+    /// Compute the natal mundane position `m ∈ [0, 4)` of a target
+    /// point with the given equatorial coordinates, at the observer's
+    /// latitude, with the chart's RAMC.
+    fn mundane_position_for(
+        self,
+        ramc_rad: f64,
+        ra_rad: f64,
+        dec_rad: f64,
+        lat_rad: f64,
+    ) -> f64 {
+        match self {
+            DirectionMethod::PlacidusMundane => {
+                natal_mundane_position(ramc_rad, ra_rad, dec_rad, lat_rad)
+            }
+            DirectionMethod::Regiomontanus => {
+                let h = signed_hour_angle_rad(ramc_rad, ra_rad);
+                // m = 1 + H · (2/π), wrapped into [0, 4).
+                let m = 1.0 + h * 2.0 / std::f64::consts::PI;
+                wrap_mundane(m)
+            }
+        }
+    }
+
+    /// Given a target mundane position `m_target` and the promissor's
+    /// declination, return the hour angle the promissor needs to have
+    /// so that its mundane position (under this method) equals
+    /// `m_target`.
+    fn hour_angle_for_target(
+        self,
+        m_target: f64,
+        promissor_dec_rad: f64,
+        lat_rad: f64,
+    ) -> f64 {
+        match self {
+            DirectionMethod::PlacidusMundane => {
+                let dsa = diurnal_semi_arc_rad(promissor_dec_rad, lat_rad);
+                let nsa = nocturnal_semi_arc_rad(promissor_dec_rad, lat_rad);
+                hour_angle_for_mundane(m_target, dsa, nsa)
+            }
+            DirectionMethod::Regiomontanus => {
+                // Inverse of `m = 1 + H · (2/π)`.
+                (m_target - 1.0) * std::f64::consts::PI / 2.0
+            }
+        }
+    }
 }
 
 /// A "significator" target — either a natal body or an angle.
@@ -165,8 +220,6 @@ pub fn direct_to_aspect(
     method: DirectionMethod,
     key: DirectionKey,
 ) -> AstrologyResult<Vec<Direction>> {
-    let _ = method; // Only PlacidusMundane today, but the parameter is honoured.
-
     let placement = natal.placement(promissor).ok_or_else(|| {
         crate::error::AstrologyError::BodyUnavailable(format!(
             "{} not in chart",
@@ -177,13 +230,18 @@ pub fn direct_to_aspect(
     let phi = natal.birth.observer.lat_rad;
     let ramc = natal.local_apparent_sidereal_time_rad;
     let obliquity = natal.obliquity_rad;
-    let dsa_p = diurnal_semi_arc_rad(placement.declination_rad, phi);
-    let nsa_p = nocturnal_semi_arc_rad(placement.declination_rad, phi);
-    if dsa_p.is_nan() || nsa_p.is_nan() {
-        return Err(crate::error::AstrologyError::HouseSystemUnavailable(
-            "promissor is circumpolar at the observer's latitude — \
-             primary directions undefined",
-        ));
+    // Placidus needs real semi-arcs at the promissor's declination;
+    // Regiomontanus does not (the framework ignores declination). We
+    // only fail in the circumpolar case when the method needs it.
+    if matches!(method, DirectionMethod::PlacidusMundane) {
+        let dsa_p = diurnal_semi_arc_rad(placement.declination_rad, phi);
+        let nsa_p = nocturnal_semi_arc_rad(placement.declination_rad, phi);
+        if dsa_p.is_nan() || nsa_p.is_nan() {
+            return Err(crate::error::AstrologyError::HouseSystemUnavailable(
+                "promissor is circumpolar at the observer's latitude — \
+                 Placidus primary directions undefined",
+            ));
+        }
     }
     let h_p_natal = signed_hour_angle_rad(ramc, placement.right_ascension_rad);
 
@@ -215,16 +273,33 @@ pub fn direct_to_aspect(
     };
 
     // Build each aspect branch's mundane target.
+    //
+    // Convention: a CONJUNCTION to a natal body uses the body's
+    // **actual** (RA, Dec) — preserving its true ecliptic latitude
+    // (this is the classical "in mundo" direction to the body). All
+    // *other* aspects, and conjunctions to angles, use the zodiacal
+    // projection at β=0 (the aspect point is a longitude-only
+    // construct).
     let offsets_deg = aspect_branch_offsets_deg(aspect);
     let mut out = Vec::with_capacity(offsets_deg.len());
     for offset_deg in offsets_deg {
-        let aspect_point_lon = (sig_lon_rad + offset_deg.to_radians())
-            .rem_euclid(std::f64::consts::TAU);
-        let (target_ra, target_dec) =
-            ecliptic_to_equatorial(aspect_point_lon, 0.0, obliquity);
-        let m_target = natal_mundane_position(ramc, target_ra, target_dec, phi);
+        let (target_ra, target_dec) = if offset_deg == 0.0 {
+            // Conjunction case.
+            match significator {
+                Significator::Body(b) => {
+                    let p = natal.placement(b).expect("checked above");
+                    (p.right_ascension_rad, p.declination_rad)
+                }
+                _ => ecliptic_to_equatorial(sig_lon_rad, 0.0, obliquity),
+            }
+        } else {
+            let aspect_point_lon = (sig_lon_rad + offset_deg.to_radians())
+                .rem_euclid(std::f64::consts::TAU);
+            ecliptic_to_equatorial(aspect_point_lon, 0.0, obliquity)
+        };
+        let m_target = method.mundane_position_for(ramc, target_ra, target_dec, phi);
 
-        let h_target = hour_angle_for_mundane(m_target, dsa_p, nsa_p);
+        let h_target = method.hour_angle_for_target(m_target, placement.declination_rad, phi);
         let arc_rad = normalise_forward(h_target - h_p_natal);
         let age_years = arc_rad.to_degrees() / key.degrees_per_year();
         out.push(Direction {
