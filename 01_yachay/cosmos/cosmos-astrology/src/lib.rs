@@ -57,9 +57,11 @@ pub mod birth_data;
 pub mod chart;
 pub mod chart_config;
 pub mod composite;
+pub mod eclipses;
 pub mod error;
 pub mod house_system;
 pub mod lots;
+pub mod lunar_phase;
 pub mod mundane;
 pub mod placement;
 pub mod primary_direction;
@@ -77,6 +79,10 @@ pub use birth_data::{BirthData, TimeCertainty};
 pub use chart::{Angle, NatalChart};
 pub use chart_config::{BodySet, ChartConfig};
 pub use composite::{angular_midpoint_rad, composite, CompositeChart, CompositePlacement};
+pub use eclipses::{
+    eclipses_on_natal, next_lunar_eclipse, next_solar_eclipse, Eclipse, EclipseFamily,
+    LunarEclipseKind, NatalEclipse, SolarEclipseKind,
+};
 pub use error::{AstrologyError, AstrologyResult};
 pub use house_system::{HouseSystem, Houses};
 pub use placement::BodyPlacement;
@@ -89,6 +95,10 @@ pub use primary_direction::{
     Direction, DirectionKey, DirectionMethod, Significator,
 };
 pub use lots::{all_lots, compute_lot, custom_lot, Lot, LotName, LotPoint, Sect};
+pub use lunar_phase::{
+    classify_lunation_phase, next_canonical_phase, next_lunar_phase, phase_angle_at,
+    phase_angle_at_deg, LunarPhase, LunationPhase,
+};
 pub use profections::{
     annual_profection, modern_ruler, monthly_profection, profection_at, traditional_ruler,
     AnnualProfection, MonthlyProfection, ProfectionHouses,

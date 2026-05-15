@@ -11,6 +11,7 @@ publish = false
 
 [dependencies]
 eternal-core.workspace = true
+eternal-ephemeris.workspace = true
 eternal-time.workspace = true
 eternal-sky = { path = "../eternal-sky" }
 eternal-validation = { path = "../eternal-validation" }
