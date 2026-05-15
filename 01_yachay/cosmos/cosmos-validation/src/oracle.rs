@@ -131,6 +131,15 @@ impl Oracle {
         &self.backend
     }
 
+    /// Direct access to the underlying SPK kernel handle. Returns `None`
+    /// when the backend is analytical (VSOP2013). Exposed so higher-level
+    /// crates (`eternal-sky`) can route the lunar-node, Lilith, and
+    /// asteroid paths through the same memory-mapped kernel that the
+    /// planet path uses, without opening a second handle.
+    pub fn spk(&self) -> Option<&SpkFile> {
+        self.spk.as_ref()
+    }
+
     /// Compute geometric state vector for the requested (body, center, jd_tdb)
     /// tuple in the requested frame. Returns km, km/s.
     pub fn state(
