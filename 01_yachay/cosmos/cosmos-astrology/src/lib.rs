@@ -58,9 +58,11 @@ pub mod chart;
 pub mod chart_config;
 pub mod error;
 pub mod house_system;
+pub mod lots;
 pub mod mundane;
 pub mod placement;
 pub mod primary_direction;
+pub mod profections;
 pub mod progression;
 pub mod returns;
 pub mod solar_arc;
@@ -82,6 +84,11 @@ pub use progression::{
 pub use primary_direction::{
     all_directions, direct, directions_to_angles, Direction, DirectionKey, DirectionMethod,
     Significator,
+};
+pub use lots::{all_lots, compute_lot, custom_lot, Lot, LotName, LotPoint, Sect};
+pub use profections::{
+    annual_profection, modern_ruler, monthly_profection, profection_at, traditional_ruler,
+    AnnualProfection, MonthlyProfection, ProfectionHouses,
 };
 pub use returns::next_return;
 pub use solar_arc::{solar_arc, solar_arc_naibod, solar_arc_true, SolarArcChart, SolarArcMethod};
