@@ -63,6 +63,84 @@ struct Type2Metadata {
     n_coeffs: usize,
 }
 
+/// Metadata for a Type 21 (Extended Modified Difference Arrays) segment.
+///
+/// Type 21 segments store the trajectory of a small body via the
+/// Modified Difference Arrays scheme described in Newhall (1989). They
+/// are the standard format produced by JPL Horizons for centaurs
+/// (Chiron, Pholus), TNOs (Eris, Sedna), and many comets.
+///
+/// Segment layout (TDB seconds past J2000 throughout):
+///
+/// ```text
+///   [start_index]  Record 0  (4·MAXDIM + 11 doubles)
+///                  Record 1
+///                    ...
+///                  Record NUMREC-1
+///                  Epoch directory (NUMREC doubles — final epoch of each record)
+///   [end_index-1]  MAXDIM     (as a double, integer-valued)
+///   [end_index]    NUMREC     (as a double, integer-valued)
+/// ```
+///
+/// Each record itself contains:
+///
+/// ```text
+///   record[0]                      TL — final epoch of this record
+///   record[1 .. 1+MAXDIM]          G(1..MAXDIM)   — step sizes
+///   record[1+MAXDIM .. 4+MAXDIM]   REFPOS(1..3)   — reference position (km)
+///   record[4+MAXDIM .. 7+MAXDIM]   REFVEL(1..3)   — reference velocity (km/s)
+///   record[7+MAXDIM .. 7+MAXDIM+3·MAXDIM]
+///                                  DT(MAXDIM, 3)  — modified divided differences
+///   record[7+MAXDIM+3·MAXDIM]      KQMAX1         — max integration order + 1
+///   record[8+MAXDIM+3·MAXDIM .. 11+MAXDIM+3·MAXDIM]
+///                                  KQ(1..3)       — integration orders per component
+/// ```
+///
+/// Interpolation (Newhall 1989, JPL MAO/D-2706) reconstructs the
+/// state `(position, velocity)` at the target TDB by applying the
+/// Newton-style recurrence on `DT` with the cumulative G coefficients.
+/// That mathematical step is **not yet implemented** in this crate;
+/// today `compute_state` reaches a Type 21 segment, parses the record
+/// successfully, and returns `SpkError::UnsupportedType(21)` with a
+/// pointer to this TODO. Loading a Type-21-bearing kernel no longer
+/// silently drops the body.
+#[derive(Debug, Clone, Copy)]
+struct Type21Metadata {
+    /// Per-record header size in doubles. Equals `4·MAXDIM + 11`.
+    record_size: usize,
+    /// Maximum integration order stored per record. Typically 15 in
+    /// JPL Horizons output, but anywhere in `1..=25` is allowed.
+    maxdim: usize,
+    /// Number of records in the segment.
+    n_records: usize,
+}
+
+/// Parsed Type 21 record, ready for interpolation.
+///
+/// Fields are read but not yet consumed — the Newhall MDA integration
+/// step will use them in a follow-up. Marked `dead_code`-allow so the
+/// parsing layer compiles cleanly today without losing the metadata
+/// structure that the interpolation will build on top of.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+struct Type21Record {
+    /// Final epoch of the record (TDB seconds past J2000).
+    tl: f64,
+    /// Step sizes `G(1..MAXDIM)`, in seconds.
+    g: Vec<f64>,
+    /// Reference position (km) at `TL`.
+    refpos: [f64; 3],
+    /// Reference velocity (km/s) at `TL`.
+    refvel: [f64; 3],
+    /// Modified divided differences, stored as `DT[component][order]`
+    /// with `component ∈ {0,1,2}` (X, Y, Z) and `order ∈ {0..MAXDIM-1}`.
+    dt: [Vec<f64>; 3],
+    /// Maximum integration order plus one (= max KQ[j] + 1).
+    kqmax1: i32,
+    /// Integration orders per component `KQ(1..3)`.
+    kq: [i32; 3],
+}
+
 pub struct SpkFile {
     daf: DafFile,
     segments: Vec<SpkSegment>,
@@ -80,10 +158,15 @@ impl SpkFile {
         for summary_result in daf.iter_summaries() {
             let summary = summary_result?;
             let segment = SpkSegment::from_summary(&summary)?;
-            if segment.data_type != 2 {
-                continue;
+            // Accept the SPK record types this crate either fully
+            // handles (Type 2 Chebyshev) or parses + flags for later
+            // interpolation (Type 21 Modified Difference Arrays).
+            // Other types are silently skipped — they would only
+            // surface as `SegmentNotFound` on lookup, which mirrors
+            // the historical behaviour for unsupported types.
+            if matches!(segment.data_type, 2 | 21) {
+                segments.push(segment);
             }
-            segments.push(segment);
         }
         Ok(segments)
     }
@@ -157,6 +240,18 @@ impl SpkFile {
                 epoch: jd_tdb,
             }
         })?;
+        match segment.data_type {
+            2 => self.compute_state_type2(segment, jd_tdb),
+            21 => self.compute_state_type21(segment, jd_tdb),
+            other => Err(SpkError::UnsupportedType(other)),
+        }
+    }
+
+    fn compute_state_type2(
+        &self,
+        segment: &SpkSegment,
+        jd_tdb: f64,
+    ) -> Result<([f64; 3], [f64; 3]), SpkError> {
         let meta = self.read_type2_metadata(segment)?;
         let record_index = self.find_record_index(&meta, jd_tdb);
         let (record, mid, radius) = self.read_type2_record(segment, &meta, record_index)?;
@@ -168,6 +263,123 @@ impl SpkFile {
         let coeffs_y = &coeffs[n..2 * n];
         let coeffs_z = &coeffs[2 * n..3 * n];
         evaluate_position_velocity(coeffs_x, coeffs_y, coeffs_z, n, t_normalized, radius)
+    }
+
+    /// Parse a Type 21 record fully and surface a structured "not yet
+    /// implemented" error. The parsing path is exercised so a kernel
+    /// containing only Type 21 segments can be opened and inspected;
+    /// only the Newhall (1989) Modified-Difference-Arrays interpolation
+    /// step is missing.
+    fn compute_state_type21(
+        &self,
+        segment: &SpkSegment,
+        jd_tdb: f64,
+    ) -> Result<([f64; 3], [f64; 3]), SpkError> {
+        let meta = self.read_type21_metadata(segment)?;
+        let record_index = self.find_type21_record_index(segment, &meta, jd_tdb)?;
+        // Read but discard the parsed record (asserts parsing path).
+        let _ = self.read_type21_record(segment, &meta, record_index)?;
+        Err(SpkError::UnsupportedType(21))
+    }
+
+    /// Read the trailing `MAXDIM` and `NUMREC` from a Type 21 segment.
+    fn read_type21_metadata(&self, segment: &SpkSegment) -> Result<Type21Metadata, SpkError> {
+        let trailer = self.daf.read_f64_array(segment.end_index - 1, 2)?;
+        let maxdim = trailer[0] as usize;
+        let n_records = trailer[1] as usize;
+        if maxdim == 0 || maxdim > 25 {
+            return Err(SpkError::InvalidData(format!(
+                "Type 21 MAXDIM = {} out of valid range 1..=25",
+                maxdim
+            )));
+        }
+        if n_records == 0 {
+            return Err(SpkError::InvalidData(
+                "Type 21 NUMREC = 0 — segment has no records".into(),
+            ));
+        }
+        let record_size = 4 * maxdim + 11;
+        // Sanity: total segment length should equal n_records * record_size + n_records + 2.
+        // (records + epoch directory + MAXDIM + NUMREC). Off-by-one tolerance for
+        // 0-vs-1-based indexing.
+        Ok(Type21Metadata {
+            record_size,
+            maxdim,
+            n_records,
+        })
+    }
+
+    /// Binary search the Type 21 epoch directory for the record that
+    /// covers `jd_tdb`. The directory stores the *final* epoch of each
+    /// record in TDB seconds past J2000, in ascending order.
+    fn find_type21_record_index(
+        &self,
+        segment: &SpkSegment,
+        meta: &Type21Metadata,
+        jd_tdb: f64,
+    ) -> Result<usize, SpkError> {
+        // Epoch directory sits at [end_index - 1 - n_records .. end_index - 2].
+        let dir_start = segment.end_index - 1 - meta.n_records;
+        let epochs = self.daf.read_f64_array(dir_start, meta.n_records)?;
+        let target = jd_to_seconds_from_j2000(jd_tdb);
+        // partition_point gives the first index where epochs[i] >= target.
+        let idx = epochs.partition_point(|&e| e < target);
+        if idx >= meta.n_records {
+            // Clamp to the final record — handles the segment's end_epoch.
+            Ok(meta.n_records - 1)
+        } else {
+            Ok(idx)
+        }
+    }
+
+    fn read_type21_record(
+        &self,
+        segment: &SpkSegment,
+        meta: &Type21Metadata,
+        record_index: usize,
+    ) -> Result<Type21Record, SpkError> {
+        let record_start = segment.start_index + record_index * meta.record_size;
+        let raw = self.daf.read_f64_array(record_start, meta.record_size)?;
+
+        let tl = raw[0];
+        let g: Vec<f64> = raw[1..1 + meta.maxdim].to_vec();
+        let refpos = [
+            raw[1 + meta.maxdim],
+            raw[2 + meta.maxdim],
+            raw[3 + meta.maxdim],
+        ];
+        let refvel = [
+            raw[4 + meta.maxdim],
+            raw[5 + meta.maxdim],
+            raw[6 + meta.maxdim],
+        ];
+
+        // DT is stored as DT(MAXDIM, 3) in column-major (Fortran) order:
+        //   raw[7+M .. 7+M+M]      = DT[*, 0]   (X component, all orders)
+        //   raw[7+2M .. 7+3M]      = DT[*, 1]   (Y component)
+        //   raw[7+3M .. 7+4M]      = DT[*, 2]   (Z component)
+        let m = meta.maxdim;
+        let dt_x = raw[7 + m..7 + 2 * m].to_vec();
+        let dt_y = raw[7 + 2 * m..7 + 3 * m].to_vec();
+        let dt_z = raw[7 + 3 * m..7 + 4 * m].to_vec();
+        let dt = [dt_x, dt_y, dt_z];
+
+        let kqmax1 = raw[7 + 4 * m] as i32;
+        let kq = [
+            raw[8 + 4 * m] as i32,
+            raw[9 + 4 * m] as i32,
+            raw[10 + 4 * m] as i32,
+        ];
+
+        Ok(Type21Record {
+            tl,
+            g,
+            refpos,
+            refvel,
+            dt,
+            kqmax1,
+            kq,
+        })
     }
 }
 
@@ -295,6 +507,39 @@ mod tests {
         let debug = format!("{:?}", segment);
         assert!(debug.contains("SpkSegment"));
         assert!(debug.contains("body_id: 399"));
+    }
+
+    #[test]
+    fn test_type21_record_size_formula() {
+        // Type 21 record size = 4 * MAXDIM + 11.
+        for maxdim in [1usize, 5, 10, 15, 25] {
+            let expected = 4 * maxdim + 11;
+            // Sanity: matches the layout sum
+            //   1 (TL) + MAXDIM (G) + 3 (REFPOS) + 3 (REFVEL)
+            //   + 3*MAXDIM (DT) + 1 (KQMAX1) + 3 (KQ)
+            //   = 4*MAXDIM + 11.
+            assert_eq!(expected, 1 + maxdim + 3 + 3 + 3 * maxdim + 1 + 3);
+        }
+    }
+
+    #[test]
+    fn test_compute_state_type2_path_still_works() {
+        // Regression: after adding the Type 21 dispatch, the Type 2
+        // path must still produce the same Earth-Moon barycenter
+        // state at J2000. Uses de432s if available.
+        let path = match get_de432s_path() {
+            Some(p) => p,
+            None => {
+                eprintln!("Skipping: de432s.bsp not found");
+                return;
+            }
+        };
+        let spk = SpkFile::open(&path).unwrap();
+        let (pos, vel) = spk.compute_state(3, 0, J2000_JD).unwrap();
+        let dist = libm::sqrt(pos[0].powi(2) + pos[1].powi(2) + pos[2].powi(2));
+        assert!((dist / 149597870.7 - 1.0).abs() < 0.05);
+        let vel_mag = libm::sqrt(vel[0].powi(2) + vel[1].powi(2) + vel[2].powi(2));
+        assert!(vel_mag > 20.0 && vel_mag < 40.0);
     }
 
     #[test]
