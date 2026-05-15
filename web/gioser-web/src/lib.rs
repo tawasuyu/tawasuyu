@@ -226,10 +226,10 @@ impl AppState {
             return;
         };
         let (title, tag) = match element {
-            "aire" => ("Aire", "Software · IA · Aspiración"),
-            "fuego" => ("Fuego", "Inspiración"),
-            "tierra" => ("Tierra", "Cuerpo"),
-            "agua" => ("Agua", "Espiritualidad aplicada"),
+            "aire" => ("Software", "Tecnología · Open Source · IA"),
+            "fuego" => ("Quién Soy", "Bitácora · Crónica"),
+            "tierra" => ("Manifiesto", "Invariantes · Piedra de toque"),
+            "agua" => ("Mística", "Espiritualidad aplicada"),
             _ => return,
         };
         let html = format!(

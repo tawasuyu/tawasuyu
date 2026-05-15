@@ -1,26 +1,34 @@
-# Aire
+# Software · Tecnología
 
-> *Lo que respira el sistema. Lo que sube.*
+> *Lo público. Lo que se mantiene abierto.*
 
-El **Aire** es el dominio del **software público y la IA**. Es la capa
-intangible que transporta pensamiento — los bits que vuelan entre
-máquinas, las inferencias que destilan sentido del ruido, las APIs
-que conversan sin verse.
+Acá viven los proyectos de **software libre**, herramientas, librerías
+y exploraciones técnicas que voy publicando. La premisa es mantener
+el código abierto, documentado y útil más allá del autor.
 
-## Aspiración
+## Qué vas a encontrar acá
 
-El Aire **aspira**: empuja hacia arriba. Es el movimiento de subir el
-nivel de abstracción, de hacer que una cosa difícil parezca obvia, de
-regalarle al usuario una herramienta que no le pesa.
+- Repos públicos de cosas que escribo (Rust, Python, embedded, web).
+- Notas técnicas sobre arquitectura, sistemas distribuidos, runtimes.
+- Ensayos sobre **IA aplicada** — sin hype, con ejemplos concretos.
+- Bitácoras de exploración: lo que probé, lo que descarté, lo que sigo
+  usando.
 
-## Lo que vive acá
+## Por qué open source
 
-- Herramientas open source que **GioSer** publica y mantiene.
-- Modelos de IA que asisten al ciclo de creación.
-- Documentación, ensayos, manifiestos.
+Porque el conocimiento técnico se multiplica cuando circula. Y porque
+mucho de lo que uso a diario me lo regaló alguien que decidió compartir.
+La reciprocidad importa.
+
+## Stack actual
+
+- **Rust** para lo que necesita ser rápido, seguro y portable.
+- **Python** para análisis, ML y prototipos rápidos.
+- **Linux** (Artix/Arch) como sistema operativo de trabajo.
+- **gitea** + **nix** para infraestructura personal.
 
 ## Próximamente
 
-*Esta sección se va a llenar con los proyectos concretos del eje aire.*
-Por ahora, este placeholder vive en `md/aire.md` y se renderiza vía
-`pluma-md` con tema *aire*.
+*Voy a ir enlazando proyectos específicos acá: tools, runtimes,
+experimentos. Por ahora, este placeholder vive en `md/aire.md` y se
+renderea con el tema **aire** (azul-blanco).*

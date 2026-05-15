@@ -1,25 +1,33 @@
-# Fuego
+# Quién Soy · Bitácora
 
-> *Lo que enciende. Lo que transforma.*
+> *La identidad como verbo. La crónica como práctica.*
 
-El **Fuego** es el dominio de la **inspiración**. Es la chispa que
-convierte una idea en gesto, una frase en ritual, un problema en
-prototipo. Sin fuego, los otros tres elementos se enfrían y se quedan
-contemplándose.
+Acá vive lo personal: quién soy, qué hago, qué leo, qué pienso. Una
+bitácora honesta, no curada para impresionar. Si vas a leer esto,
+asumí que es borrador.
 
-## Inspiración
+## Quién soy
 
-El fuego no se planea, se **atiende**. Llega — y la respuesta es no
-dejarlo pasar. Acá viven los ensayos, los videos, los manifiestos y
-los experimentos que nacieron porque algo prendió.
+**Sergio**. Programador, lector, padre, alguien que practica
+mantenerse despierto. Vivo entre código, café, montañas y libros.
 
-## Lo que vive acá
+Las cosas que más me importan no son las que mejor cuento todavía.
+Por eso escribo: para precisar lo que sé y lo que no.
 
-- Charlas, ensayos cortos, posts crudos.
-- Bocetos visuales, exploraciones tipográficas.
-- Documentos de manifiesto sobre cómo trabajar y para qué.
+## Bitácora
+
+Notas más o menos diarias sobre lo que voy pensando, viviendo,
+fallando. Sin algoritmo de engagement, sin métricas. Sólo crónica.
+
+Las entradas se ordenan por fecha. Las más viejas a veces dicen cosas
+que ya no pienso así — las dejo igual.
+
+## Por qué publicarlo
+
+Porque escribir en público obliga a precisar. Y porque a veces lo que
+uno escribe para sí mismo le sirve a otra persona que no conoce.
 
 ## Próximamente
 
-*Voy a ir enlazando archivos `.md` específicos acá. Por ahora este
-texto sirve para verificar el render bajo el tema **fuego**.*
+*Acá se va a ir armando una bitácora con entradas fechadas. Por ahora
+este placeholder verifica el tema **fuego** (ámbar/escarlata).*

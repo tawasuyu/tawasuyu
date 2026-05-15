@@ -192,6 +192,11 @@ uniform vec3  u_tierra_color;
 uniform vec3  u_agua_color;
 uniform vec3  u_zodiac[12];
 uniform float u_sun_pulse;
+// Ciclo del cuerpo central: 0=sol, 1=luna, 2=tierra. Se interpola entre
+// `u_body_a` y `u_body_b` con `u_body_blend ∈ [0, 1]`.
+uniform int   u_body_a;
+uniform int   u_body_b;
+uniform float u_body_blend;
 
 const float PI = 3.14159265;
 
@@ -201,10 +206,145 @@ float hash21c(vec2 p) {
 float hash11c(float n) {
     return fract(sin(n * 78.233) * 43758.5453);
 }
+// Value noise + fbm para superficies (lunar craters, continentes terrestres).
+float vnoise_c(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = hash21c(i);
+    float b = hash21c(i + vec2(1.0, 0.0));
+    float c = hash21c(i + vec2(0.0, 1.0));
+    float d = hash21c(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+float fbm_c(vec2 p) {
+    float v = 0.0;
+    float a = 0.5;
+    for (int i = 0; i < 4; i++) {
+        v += a * vnoise_c(p);
+        p = p * 2.03 + vec2(1.7, 9.2);
+        a *= 0.5;
+    }
+    return v;
+}
 
 float sdBox(vec2 p, vec2 b) {
     vec2 d = abs(p) - b;
     return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
+}
+
+// ===== CUERPO CENTRAL: Sol / Luna / Tierra =====
+//
+// Cada uno renderea dentro del cuadrado central de la chacana con su
+// propia personalidad realista. El loop temporal (cambio entre cuerpos
+// + transiciones graduales) lo decide el host vía u_body_a/b/blend.
+
+vec3 render_sun(vec2 p, float r, float pulse) {
+    // Núcleo brillante + corona difusa con pulso.
+    float coreR = u_thickness * 0.42;
+    float core  = exp(-(r * r) / (2.0 * coreR * coreR));
+    float halR  = u_center_half * 0.70;
+    float halo  = exp(-(r * r) / (2.0 * halR * halR));
+    // Superficie boiling (plasma) muy sutil.
+    float plasma = fbm_c(p * 18.0 + vec2(u_time * 0.15, u_time * 0.10)) * 0.20;
+    vec3 base = u_sun_color * (core * (1.20 + 0.25 * pulse) + halo * (0.55 + 0.15 * pulse));
+    return base + u_sun_color * core * plasma * 0.6;
+}
+
+vec3 render_moon(vec2 p, float r, float time) {
+    float moonR = u_thickness * 1.35;
+    // Disco con borde suave.
+    float disk = 1.0 - smoothstep(moonR * 0.86, moonR * 1.00, r);
+    // Limb darkening: el borde más oscuro que el centro.
+    float limb_factor = sqrt(max(1.0 - (r * r) / (moonR * moonR), 0.0));
+    // Cráteres y mares lunares vía fbm.
+    float craters = fbm_c(p * 22.0) * 0.45 + fbm_c(p * 48.0) * 0.20;
+    // Fase: terminator se mueve de izquierda a derecha lentamente.
+    // 1 ciclo lunar visible cada ~38 s. sin(t*0.165) recorre full→new→full.
+    float phase = sin(time * 0.165) * 0.5 + 0.5; // 0..1
+    float terminator_x = mix(-moonR * 1.1, moonR * 1.1, phase);
+    float nx = p.x;
+    float lit = smoothstep(terminator_x - moonR * 0.12, terminator_x + moonR * 0.05, nx);
+    // Color superficie lunar (gris-azulado).
+    vec3 surface = vec3(0.86, 0.88, 0.94) * (0.70 + craters * 0.55);
+    // Halo cercano al limb iluminado (luz dispersada).
+    float outer_glow = smoothstep(moonR * 1.18, moonR * 0.94, r) - disk;
+    vec3 glow = vec3(0.55, 0.70, 0.95) * max(outer_glow, 0.0) * lit * 0.50;
+    return surface * disk * lit * limb_factor + glow;
+}
+
+vec3 render_earth(vec2 p, float r, float time) {
+    float earthR = u_thickness * 1.35;
+    float disk = 1.0 - smoothstep(earthR * 0.86, earthR * 1.00, r);
+    float limb_factor = sqrt(max(1.0 - (r * r) / (earthR * earthR), 0.0));
+    // Rotación lenta: continentes drift horizontalmente.
+    float rot = time * 0.08;
+    vec2 rp = p + vec2(rot, 0.0);
+    // Continentes con fbm orgánico.
+    float landmass = fbm_c(rp * 7.5);
+    float is_land = smoothstep(0.50, 0.56, landmass);
+    vec3 ocean = vec3(0.08, 0.28, 0.52);
+    vec3 land  = vec3(0.30, 0.52, 0.24);
+    vec3 land_high = vec3(0.55, 0.45, 0.28); // montañas / desiertos
+    land = mix(land, land_high, smoothstep(0.60, 0.78, landmass));
+    vec3 surface = mix(ocean, land, is_land);
+    // Casquetes polares.
+    float ny = abs(p.y / max(earthR, 1e-4));
+    float polar = smoothstep(0.70, 0.94, ny);
+    surface = mix(surface, vec3(0.96, 0.97, 1.0), polar * 0.85);
+    // Nubes flotando en otra capa rotando algo distinto.
+    float clouds = fbm_c(rp * 6.0 + vec2(rot * 0.3, 0.0)) * 0.7;
+    float cloud_mask = smoothstep(0.55, 0.75, clouds);
+    surface = mix(surface, vec3(0.95, 0.96, 0.99), cloud_mask * 0.40);
+    // Día / noche: hemisferio iluminado.
+    float lit = smoothstep(-0.45, 0.55, p.x / max(earthR, 1e-4) + 0.15);
+    surface *= 0.30 + 0.70 * lit;
+    // Atmósfera azul en el limb (Rayleigh scattering simplificado).
+    float atm_inner = smoothstep(earthR * 1.10, earthR * 0.95, r);
+    float atm = max(atm_inner - disk, 0.0);
+    return surface * disk * limb_factor + vec3(0.30, 0.55, 0.95) * atm * 0.55;
+}
+
+vec3 render_body(int kind, vec2 p, float r, float time, float pulse) {
+    if (kind == 0) return render_sun(p, r, pulse);
+    if (kind == 1) return render_moon(p, r, time);
+    return render_earth(p, r, time);
+}
+
+// ===== AURA ELEMENTAL (NUBE ANCHA POR CARDINAL) =====
+// Se suma a las partículas puntuales: una cobertura ancha del cuadrante
+// del cardinal correspondiente, con personalidad por elemento.
+vec3 element_cloud(vec2 p, vec2 tip, vec2 outward, vec3 color, float time, int kind) {
+    vec2 perp = vec2(-outward.y, outward.x);
+    // Centro de la nube: bien adentro del cuadrante (más allá del tip).
+    vec2 cloud_center = tip + outward * 0.22;
+    vec2 to_p = p - cloud_center;
+    float along = dot(to_p, outward);
+    float perp_d = dot(to_p, perp);
+    // Anisotropía: bien ancha perpendicular, larga a lo largo del eje.
+    float sigma_along = 0.42;
+    float sigma_perp  = 0.34;
+    float base = exp(-(along * along) / (2.0 * sigma_along * sigma_along)
+                     -(perp_d * perp_d) / (2.0 * sigma_perp * sigma_perp));
+    // Textura noise animada por elemento.
+    vec2 noise_uv = (p - tip) * (3.5 + float(kind) * 0.4)
+                  + vec2(time * (0.20 + float(kind) * 0.05), time * 0.10);
+    float n = fbm_c(noise_uv);
+    float modulation;
+    if (kind == 0) {
+        // AIRE: corrientes suaves que se mueven horizontalmente.
+        modulation = 0.55 + 0.45 * (n * 0.7 + sin(time * 0.6 + perp_d * 4.0) * 0.3);
+    } else if (kind == 1) {
+        // FUEGO: lengüetazos que parpadean rápido.
+        modulation = (0.40 + 0.60 * n) * (0.7 + 0.3 * sin(time * 3.2 + along * 8.0));
+    } else if (kind == 2) {
+        // TIERRA: densidad sólida con variación lenta.
+        modulation = 0.65 + 0.35 * fbm_c(p * 4.0 + vec2(time * 0.05, 0.0));
+    } else {
+        // AGUA: ondulaciones grandes que viajan hacia afuera.
+        modulation = 0.50 + 0.50 * sin(time * 0.9 - along * 5.0 + n * 4.0);
+    }
+    return color * base * max(modulation, 0.0) * 0.28;
 }
 
 // Chacana de 2 escalones (mística clásica de Tiwanaku).
@@ -311,22 +451,31 @@ void main() {
     float d = sdChacana(p, u_thickness, u_center_half);
     float r = length(p);
 
-    // === SOL DETRÁS ===
-    // Halo grande, sólo visible dentro de la superficie de la chacana.
+    // === CUERPO CENTRAL — SOL / LUNA / TIERRA ===
+    // Sólo se computa dentro de la superficie de la chacana (perf + estética).
     float inside = 1.0 - smoothstep(-0.004, 0.004, d);
-    float sunR = u_thickness * 0.42;
-    float sun = exp(-(r * r) / (2.0 * sunR * sunR));
-    float corR = u_center_half * 0.75;
-    float corona = exp(-(r * r) / (2.0 * corR * corR));
-    float halo = sun * (1.15 + 0.20 * u_sun_pulse) + corona * (0.55 + 0.15 * u_sun_pulse);
+    vec3 central = vec3(0.0);
+    if (inside > 0.001) {
+        central = render_body(u_body_a, p, r, u_time, u_sun_pulse);
+        if (u_body_blend > 0.001) {
+            vec3 next_body = render_body(u_body_b, p, r, u_time, u_sun_pulse);
+            central = mix(central, next_body, u_body_blend);
+        }
+    }
 
-    // Rayos radiales sutiles desde el centro, sólo visibles donde la superficie
-    // de la chacana los recibe.
+    // Rayos radiales sutiles desde el centro (el cuerpo los proyecta a
+    // través de la superficie). El multiplicador disminuye cuando la luna
+    // o la tierra están activas — el sol es el que más irradia.
     float ang = atan(p.y, p.x);
+    float radial_mult = (u_body_a == 0) ? 1.0 : 0.35;
+    if (u_body_blend > 0.001) {
+        float next_mult = (u_body_b == 0) ? 1.0 : 0.35;
+        radial_mult = mix(radial_mult, next_mult, u_body_blend);
+    }
     float radial = pow(abs(cos(ang * 4.0 + sin(u_time * 0.3) * 0.2)), 8.0)
                  * smoothstep(0.0, u_center_half * 0.8, r)
                  * (1.0 - smoothstep(u_center_half * 0.85, u_center_half * 1.2, r))
-                 * 0.30;
+                 * 0.30 * radial_mult;
 
     // === DOBLE OUTLINE ===
     // Línea interior (sobre la SDF=0).
@@ -361,6 +510,15 @@ void main() {
     particles += element_particles(p, vec2( L, 0.0), vec2( 1.0, 0.0), u_fuego_color,  1, 1.73);
     particles += element_particles(p, vec2(0.0, -L), vec2(0.0, -1.0), u_tierra_color, 2, 3.11);
     particles += element_particles(p, vec2(-L, 0.0), vec2(-1.0, 0.0), u_agua_color,   3, 5.97);
+
+    // === AURA ELEMENTAL ANCHA ===
+    // Una nube wide por cardinal — ocupa el cuadrante entero, no sólo la
+    // punta. Las partículas puntuales aportan detalle agudo encima.
+    vec3 clouds = vec3(0.0);
+    clouds += element_cloud(p, vec2(0.0,  L), vec2(0.0,  1.0), u_aire_color,   u_time, 0);
+    clouds += element_cloud(p, vec2( L, 0.0), vec2( 1.0, 0.0), u_fuego_color,  u_time, 1);
+    clouds += element_cloud(p, vec2(0.0, -L), vec2(0.0, -1.0), u_tierra_color, u_time, 2);
+    clouds += element_cloud(p, vec2(-L, 0.0), vec2(-1.0, 0.0), u_agua_color,   u_time, 3);
 
     // === TRAZOS ZODIACALES ===
     // 12 líneas radiales muy sutiles entre la chacana y el aro principal,
@@ -401,11 +559,13 @@ void main() {
 
     // === COMPOSICIÓN ===
     vec3 col = vec3(0.0);
-    // Sol detrás (clip a interior).
-    col += u_sun_color * halo * inside * 1.55;
+    // Cuerpo central (sol / luna / tierra) clipeado al interior de la chacana.
+    col += central * inside * 1.55;
     col += u_line_color * radial * inside * 0.6;
     // Niebla oscura translúcida en el interior para profundidad.
     col += u_dark_color * inside * 0.20;
+    // Auras anchas de los elementos (debajo de los aros, sin clip al interior).
+    col += clouds;
     // Líneas y aros.
     col += u_line_color * line * 1.70;
     col += u_line_color * glow * 0.95;
@@ -416,9 +576,13 @@ void main() {
     col += zodiac * 0.55; // muy sutil — apenas visible.
 
     float zodiac_lum = zodiac.r + zodiac.g + zodiac.b;
+    float cloud_lum = clouds.r + clouds.g + clouds.b;
+    float central_lum = central.r + central.g + central.b;
     float alpha = clamp(
-        halo * inside + line + glow + ring_main + ring_inner + dots + inside * 0.12
+        central_lum * inside * 0.7 + line + glow + ring_main + ring_inner
+            + dots + inside * 0.12
             + (particles.r + particles.g + particles.b) * 0.5
+            + cloud_lum * 0.45
             + zodiac_lum * 0.3,
         0.0, 1.0);
     fragColor = vec4(col, alpha);

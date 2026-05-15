@@ -31,6 +31,16 @@ const COT_HALF_FOV: f32 = 2.414_213_5;
 /// con `FS_CHACANA::ringR_main` del shader.
 const RING_FACTOR: f32 = 1.45;
 
+/// Duración en segundos de cada "cuerpo central" (sol / luna / tierra)
+/// antes de empezar a transicionar al siguiente. ~45 s = ~10 pulsos del
+/// sol (`sin(t*1.4)` período ≈ 4.5 s).
+const BODY_PHASE_SECS: f32 = 45.0;
+/// Duración del cross-fade entre cuerpos. Más alto = transiciones más
+/// graduales.
+const BODY_TRANSITION_SECS: f32 = 4.0;
+/// Cantidad de cuerpos en el ciclo: sol(0), luna(1), tierra(2).
+const BODY_COUNT: i32 = 3;
+
 /// Identidad de cada cardinal (id, color de acento, label). Orden `[N, E, S, W]`.
 pub mod tips {
     use gioser_palette::{elements, Rgb};
@@ -227,6 +237,9 @@ impl Renderer {
                 "u_agua_color",
                 "u_zodiac[0]",
                 "u_sun_pulse",
+                "u_body_a",
+                "u_body_b",
+                "u_body_blend",
             ],
         )
         .map_err(JsValue::from)?;
@@ -475,6 +488,16 @@ impl Renderer {
         if let Some(u) = self.chacana_prog.u("u_sun_pulse") {
             gl.uniform1f(Some(u), self.sun_pulse);
         }
+        let (body_a, body_b, blend) = body_state(t);
+        if let Some(u) = self.chacana_prog.u("u_body_a") {
+            gl.uniform1i(Some(u), body_a);
+        }
+        if let Some(u) = self.chacana_prog.u("u_body_b") {
+            gl.uniform1i(Some(u), body_b);
+        }
+        if let Some(u) = self.chacana_prog.u("u_body_blend") {
+            gl.uniform1f(Some(u), blend);
+        }
         gl.bind_vertex_array(Some(&self.chacana_vao));
         gl.draw_arrays(GL::TRIANGLES, 0, self.chacana_quad_count);
         gl.bind_vertex_array(None);
@@ -485,4 +508,30 @@ fn upload_rgb(gl: &GL, loc: Option<&WebGlUniformLocation>, c: Rgb) {
     if let Some(u) = loc {
         gl.uniform3f(Some(u), c.0, c.1, c.2);
     }
+}
+
+/// Devuelve `(body_a, body_b, blend)` para el tiempo `t` (segundos).
+/// El ciclo es sol → luna → tierra → sol → ... cada uno estable por
+/// `BODY_PHASE_SECS` y con `BODY_TRANSITION_SECS` de cross-fade al
+/// siguiente.
+fn body_state(t: f32) -> (i32, i32, f32) {
+    let slot = BODY_PHASE_SECS + BODY_TRANSITION_SECS;
+    let cycle = slot * BODY_COUNT as f32;
+    let pt = t.rem_euclid(cycle).max(0.0);
+    let mut acc = 0.0_f32;
+    for i in 0..BODY_COUNT {
+        let stable_end = acc + BODY_PHASE_SECS;
+        if pt < stable_end {
+            return (i, i, 0.0);
+        }
+        let trans_end = stable_end + BODY_TRANSITION_SECS;
+        if pt < trans_end {
+            let blend = ((pt - stable_end) / BODY_TRANSITION_SECS).clamp(0.0, 1.0);
+            // Smoothstep para una curva más natural que linear lerp.
+            let s = blend * blend * (3.0 - 2.0 * blend);
+            return (i, (i + 1) % BODY_COUNT, s);
+        }
+        acc = trans_end;
+    }
+    (0, 0, 0.0)
 }

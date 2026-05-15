@@ -1,25 +1,38 @@
-# Agua
+# Mística · Espiritualidad
 
-> *Lo que fluye. Lo que une dentro y afuera.*
+> *La práctica como puente. El misterio como interlocutor.*
 
-El **Agua** es el dominio de la **espiritualidad aplicada**: las
-prácticas, lecturas y tradiciones que sostienen la atención y dan
-sentido al hacer. No es decoración mística: es la práctica concreta
-de mantenerse permeable, vivo, conectado.
+Acá vive lo místico, lo espiritual, las prácticas que sostienen la
+atención. No es decoración: es la otra mitad del trabajo. Sin esto,
+el resto se vuelve ruido.
 
-## Espiritualidad aplicada
+## Prácticas
 
-Aplicada significa que no se queda en libros: pasa por la práctica
-diaria — la lectura, la meditación, la ceremonia, la conversación
-honda. El agua moja todos los otros ejes.
+Lo que sostiene día a día:
 
-## Lo que vive acá
+- **Meditación.** Sentarse a observar lo que sucede, sin agarrarlo.
+- **Lectura contemplativa.** Textos que se vuelven a leer hasta que
+  cambian.
+- **Ceremonia.** Marcar inicios y cierres con gestos que pesan.
+- **Naturaleza.** Estar en lugares donde uno no es el centro.
+- **Silencio.** Día completo, una vez por mes mínimo.
 
-- Notas de lectura sobre filosofía, mística, sabiduría andina.
-- Diario de prácticas (meditación, ceremonias, retiros).
-- Conversaciones con maestros y comunidades.
+## Por qué mística
+
+Porque la racionalidad sola no alcanza para vivir. Y porque las
+tradiciones llevan miles de años elaborando vocabulario para lo que
+nos pasa cuando atendemos en serio: contemplación, ego, símbolo,
+muerte, asombro.
+
+**Mística aplicada** = no quedarse en el libro. Pasar por el cuerpo,
+por la relación, por la vida cotidiana.
+
+## Lo que leo
+
+Andino, budista, cristiano-contemplativo, hindú, sufí. Sin
+exclusividad: cada tradición resuelve algunas cosas mejor que otras.
 
 ## Próximamente
 
-*Acá se va a ir armando una bitácora de lecturas y prácticas. Por
-ahora el placeholder verifica el render bajo el tema **agua**.*
+*Acá se va a ir armando una bitácora de lecturas, prácticas y notas.
+Por ahora este placeholder verifica el tema **agua** (cyan).*

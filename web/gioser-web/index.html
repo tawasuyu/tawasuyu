@@ -12,45 +12,59 @@
 <body>
   <canvas id="gioser-canvas" aria-hidden="true"></canvas>
 
-  <main id="tips" aria-label="Cuatro elementos">
-    <a id="tip-aire" class="tip tip-aire" href="#aire" data-md="./md/aire.md" aria-label="Aire — Software e IA">
+  <main id="tips" aria-label="Cuatro cardinales">
+    <!-- NORTE (aire): SOFTWARE · Tecnología — circuito + nodos -->
+    <a id="tip-aire" class="tip tip-aire" href="#aire" data-md="./md/aire.md" aria-label="Software · Tecnología">
       <svg viewBox="0 0 48 48" class="tip-glyph" aria-hidden="true">
-        <path d="M6 18 q 9 -12 18 0 t 18 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-        <path d="M6 28 q 9 -12 18 0 t 18 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" opacity="0.75"/>
-        <path d="M6 38 q 9 -12 18 0 t 18 0" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" opacity="0.45"/>
+        <rect x="18" y="18" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.7" rx="1"/>
+        <circle cx="24" cy="24" r="2" fill="currentColor"/>
+        <path d="M22 18 V14 M26 18 V14 M22 30 V34 M26 30 V34 M18 22 H14 M18 26 H14 M30 22 H34 M30 26 H34"
+              stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        <circle cx="10" cy="10" r="1.6" fill="currentColor" opacity="0.7"/>
+        <circle cx="38" cy="10" r="1.6" fill="currentColor" opacity="0.7"/>
+        <circle cx="10" cy="38" r="1.6" fill="currentColor" opacity="0.7"/>
+        <circle cx="38" cy="38" r="1.6" fill="currentColor" opacity="0.7"/>
+        <path d="M11 11 L17 17 M37 11 L31 17 M11 37 L17 31 M37 37 L31 31"
+              stroke="currentColor" stroke-width="1.1" opacity="0.45"/>
       </svg>
-      <span class="tip-label">AIRE</span>
-      <span class="tip-sub">Software · IA</span>
+      <span class="tip-label">SOFTWARE</span>
+      <span class="tip-sub">Tecnología</span>
     </a>
 
-    <a id="tip-fuego" class="tip tip-fuego" href="#fuego" data-md="./md/fuego.md" aria-label="Fuego — Inspiración">
+    <!-- ESTE (fuego): QUIÉN SOY · Bitácora — libro abierto -->
+    <a id="tip-fuego" class="tip tip-fuego" href="#fuego" data-md="./md/fuego.md" aria-label="Quién Soy · Bitácora">
       <svg viewBox="0 0 48 48" class="tip-glyph" aria-hidden="true">
-        <path d="M24 4 q -12 12 -6 24 q 3 -6 6 -6 q 1 10 6 12 q 10 -10 0 -22 q -4 6 -6 -8 z"
-              fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
-        <circle cx="24" cy="28" r="3" fill="currentColor" opacity="0.5"/>
+        <path d="M8 14 L24 18 L40 14 V36 L24 32 L8 36 Z"
+              fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+        <path d="M24 18 V32" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M12 22 H21 M12 26 H21 M12 30 H19" stroke="currentColor" stroke-width="1.1" opacity="0.65" stroke-linecap="round"/>
+        <path d="M27 22 H36 M27 26 H36 M29 30 H36" stroke="currentColor" stroke-width="1.1" opacity="0.65" stroke-linecap="round"/>
       </svg>
-      <span class="tip-label">FUEGO</span>
-      <span class="tip-sub">Inspiración</span>
+      <span class="tip-label">QUIÉN SOY</span>
+      <span class="tip-sub">Bitácora</span>
     </a>
 
-    <a id="tip-tierra" class="tip tip-tierra" href="#tierra" data-md="./md/tierra.md" aria-label="Tierra — Cuerpo">
+    <!-- SUR (tierra): MANIFIESTO · Invariantes — hexagrama + círculo -->
+    <a id="tip-tierra" class="tip tip-tierra" href="#tierra" data-md="./md/tierra.md" aria-label="Manifiesto · Invariantes">
       <svg viewBox="0 0 48 48" class="tip-glyph" aria-hidden="true">
-        <path d="M4 36 l 12 -16 l 8 9 l 6 -12 l 14 19 z"
-              fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
-        <path d="M24 36 v 8 M19 38 l -4 5 M29 38 l 4 5 M24 44 v 2"
-              fill="none" stroke="currentColor" stroke-width="1.3" opacity="0.7"/>
+        <circle cx="24" cy="24" r="18" fill="none" stroke="currentColor" stroke-width="1.4" opacity="0.55"/>
+        <path d="M24 8 L39 32 L9 32 Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+        <path d="M24 40 L9 16 L39 16 Z" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.85" stroke-linejoin="round"/>
+        <circle cx="24" cy="24" r="1.8" fill="currentColor"/>
       </svg>
-      <span class="tip-label">TIERRA</span>
-      <span class="tip-sub">Cuerpo</span>
+      <span class="tip-label">MANIFIESTO</span>
+      <span class="tip-sub">Invariantes</span>
     </a>
 
-    <a id="tip-agua" class="tip tip-agua" href="#agua" data-md="./md/agua.md" aria-label="Agua — Espiritualidad aplicada">
+    <!-- OESTE (agua): MÍSTICA · Espiritualidad — ojo en triángulo -->
+    <a id="tip-agua" class="tip tip-agua" href="#agua" data-md="./md/agua.md" aria-label="Mística · Espiritualidad">
       <svg viewBox="0 0 48 48" class="tip-glyph" aria-hidden="true">
-        <path d="M6 22 q 6 -10 12 0 t 12 0 t 12 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-        <path d="M6 30 q 6 -10 12 0 t 12 0 t 12 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" opacity="0.75"/>
-        <path d="M6 38 q 6 -10 12 0 t 12 0 t 12 0" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" opacity="0.5"/>
+        <path d="M24 6 L42 40 L6 40 Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+        <path d="M13 26 Q24 16 35 26 Q24 34 13 26 Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+        <circle cx="24" cy="26" r="3.2" fill="currentColor"/>
+        <circle cx="22.5" cy="24.5" r="0.9" fill="rgba(255,255,255,0.55)"/>
       </svg>
-      <span class="tip-label">AGUA</span>
+      <span class="tip-label">MÍSTICA</span>
       <span class="tip-sub">Espiritualidad</span>
     </a>
   </main>
