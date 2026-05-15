@@ -76,6 +76,12 @@ pub enum DirectionMethod {
     /// the same `m(H)` function. As a consequence the arc of
     /// direction between any two points reduces to a pure RA delta.
     Regiomontanus,
+    /// Campanus mundane: position is the angle along the prime
+    /// vertical at which the great circle through (N, body, S)
+    /// crosses. The framework is anchored to the observer's horizon —
+    /// East horizon = m=0, zenith = m=1 (MC slot), West horizon =
+    /// m=2, nadir = m=3.
+    Campanus,
 }
 
 impl DirectionMethod {
@@ -99,6 +105,9 @@ impl DirectionMethod {
                 let m = 1.0 + h * 2.0 / std::f64::consts::PI;
                 wrap_mundane(m)
             }
+            DirectionMethod::Campanus => campanus_mundane_position(
+                ramc_rad, ra_rad, dec_rad, lat_rad,
+            ),
         }
     }
 
@@ -122,7 +131,108 @@ impl DirectionMethod {
                 // Inverse of `m = 1 + H · (2/π)`.
                 (m_target - 1.0) * std::f64::consts::PI / 2.0
             }
+            DirectionMethod::Campanus => {
+                campanus_hour_angle_for_target(m_target, promissor_dec_rad, lat_rad)
+            }
         }
+    }
+}
+
+/// Campanus mundane position of a body at `(RA, Dec)` for an observer
+/// at latitude `φ` with chart RAMC. Result in `[0, 4)`.
+///
+/// The body's local horizontal Cartesian:
+/// * `y_local = -cos(δ) · sin(H)`  (east component)
+/// * `z_local =  cos(δ) · cos(H) · cos(φ) + sin(δ) · sin(φ)`  (up)
+///
+/// Then `θ = atan2(z, y)` is the Campanus angle along the prime
+/// vertical, and `m_Camp = θ · (2/π)` wrapped to `[0, 4)`.
+fn campanus_mundane_position(
+    ramc_rad: f64,
+    ra_rad: f64,
+    dec_rad: f64,
+    lat_rad: f64,
+) -> f64 {
+    let h = signed_hour_angle_rad(ramc_rad, ra_rad);
+    let cos_dec = libm::cos(dec_rad);
+    let sin_dec = libm::sin(dec_rad);
+    let cos_lat = libm::cos(lat_rad);
+    let sin_lat = libm::sin(lat_rad);
+    let cos_h = libm::cos(h);
+    let sin_h = libm::sin(h);
+
+    let y = -cos_dec * sin_h;
+    let z = cos_dec * cos_h * cos_lat + sin_dec * sin_lat;
+    let theta = libm::atan2(z, y);
+    let theta = if theta < 0.0 {
+        theta + std::f64::consts::TAU
+    } else {
+        theta
+    };
+    wrap_mundane(theta * 2.0 / std::f64::consts::PI)
+}
+
+/// Inverse of [`campanus_mundane_position`]: given the target Campanus
+/// position `m_target` and the promissor's declination + observer
+/// latitude, return the hour angle the promissor needs to occupy.
+///
+/// Solves `A · cos(H) + B · sin(H) = C` where:
+/// * `A = cos(φ) · cos(θ)`, `B = sin(θ)`, `C = -tan(δ_p) · sin(φ) · cos(θ)`,
+/// * `θ = m_target · (π/2)`.
+///
+/// Two algebraic solutions exist; we pick the one whose `(y, z)` sign
+/// places the body in the correct prime-vertical quadrant (i.e. the
+/// one for which `z·sin(θ) + y·cos(θ)` is positive — the analogue of
+/// `r` in `atan2(z, y) = θ`).
+fn campanus_hour_angle_for_target(
+    m_target: f64,
+    dec_rad: f64,
+    lat_rad: f64,
+) -> f64 {
+    let theta = m_target * std::f64::consts::PI / 2.0;
+    let cos_dec = libm::cos(dec_rad);
+    let sin_dec = libm::sin(dec_rad);
+    let cos_lat = libm::cos(lat_rad);
+    let sin_lat = libm::sin(lat_rad);
+    let cos_theta = libm::cos(theta);
+    let sin_theta = libm::sin(theta);
+
+    // Degenerate cases.
+    if libm::fabs(cos_dec) < 1.0e-15 {
+        // Body essentially on a celestial pole — never moves through
+        // a Campanus cycle. Return 0.
+        return 0.0;
+    }
+
+    let a = cos_lat * cos_theta;
+    let b = sin_theta;
+    let c = -libm::tan(dec_rad) * sin_lat * cos_theta;
+
+    let r = libm::sqrt(a * a + b * b);
+    if r < 1.0e-15 {
+        return 0.0;
+    }
+    let argument = c / r;
+    if argument.abs() > 1.0 {
+        // No real solution at this latitude/declination combination —
+        // body cannot reach the requested Campanus position.
+        return f64::NAN;
+    }
+
+    let psi = libm::atan2(b, a);
+    let delta = libm::acos(argument);
+    let h_plus = psi + delta;
+    let h_minus = psi - delta;
+
+    let check = |h: f64| -> f64 {
+        let y = -cos_dec * libm::sin(h);
+        let z = cos_dec * libm::cos(h) * cos_lat + sin_dec * sin_lat;
+        z * sin_theta + y * cos_theta
+    };
+    if check(h_plus) >= check(h_minus) {
+        h_plus
+    } else {
+        h_minus
     }
 }
 
@@ -231,8 +341,8 @@ pub fn direct_to_aspect(
     let ramc = natal.local_apparent_sidereal_time_rad;
     let obliquity = natal.obliquity_rad;
     // Placidus needs real semi-arcs at the promissor's declination;
-    // Regiomontanus does not (the framework ignores declination). We
-    // only fail in the circumpolar case when the method needs it.
+    // Regiomontanus and Campanus do not (they don't depend on the
+    // semi-arc construction). Skip the circumpolar guard for those.
     if matches!(method, DirectionMethod::PlacidusMundane) {
         let dsa_p = diurnal_semi_arc_rad(placement.declination_rad, phi);
         let nsa_p = nocturnal_semi_arc_rad(placement.declination_rad, phi);
