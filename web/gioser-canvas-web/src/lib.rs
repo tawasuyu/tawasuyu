@@ -10,7 +10,8 @@ use gioser_geom::ChacanaSpec;
 use gioser_palette::{cosmos, Rgb};
 use gioser_physics::{SpringDamper1, SpringDamper2};
 use gioser_shaders::{
-    chacana_quad, FS_CHACANA, FS_COSMOS, FULLSCREEN_QUAD, VS_CHACANA, VS_FULLSCREEN,
+    chacana_quad, FS_CHACANA, FS_COSMOS, FS_OVERLAY_CLOUDS, FULLSCREEN_QUAD, VS_CHACANA,
+    VS_FULLSCREEN,
 };
 use glam::{Mat4, Vec3, Vec4};
 use std::collections::HashMap;
@@ -80,6 +81,7 @@ pub struct Renderer {
     gl: GL,
     cosmos_prog: Program,
     chacana_prog: Program,
+    overlay_prog: Program,
     cosmos_vao: WebGlVertexArrayObject,
     chacana_vao: WebGlVertexArrayObject,
     chacana_quad_count: i32,
@@ -244,6 +246,14 @@ impl Renderer {
         )
         .map_err(JsValue::from)?;
 
+        let overlay_prog = Program::new(
+            &gl,
+            VS_FULLSCREEN,
+            FS_OVERLAY_CLOUDS,
+            &["u_resolution", "u_time", "u_parallax"],
+        )
+        .map_err(JsValue::from)?;
+
         let (cosmos_vao, _) = upload_quad(&gl, &FULLSCREEN_QUAD, 0).map_err(JsValue::from)?;
         let chacana_quad_verts = chacana_quad(chacana.arm_extent());
         let (chacana_vao, chacana_quad_count) =
@@ -258,6 +268,7 @@ impl Renderer {
             gl,
             cosmos_prog,
             chacana_prog,
+            overlay_prog,
             cosmos_vao,
             chacana_vao,
             chacana_quad_count,
@@ -500,6 +511,23 @@ impl Renderer {
         }
         gl.bind_vertex_array(Some(&self.chacana_vao));
         gl.draw_arrays(GL::TRIANGLES, 0, self.chacana_quad_count);
+
+        // ---- Capa overlay de nubes (apenas visible, encima de todo) ----
+        // blend normal alpha — las nubes COMPONEN sobre la escena, no suman luz.
+        gl.blend_func(GL::SRC_ALPHA, GL::ONE_MINUS_SRC_ALPHA);
+        gl.use_program(Some(&self.overlay_prog.program));
+        if let Some(u) = self.overlay_prog.u("u_resolution") {
+            gl.uniform2f(Some(u), self.viewport.0 as f32, self.viewport.1 as f32);
+        }
+        if let Some(u) = self.overlay_prog.u("u_time") {
+            gl.uniform1f(Some(u), t);
+        }
+        if let Some(u) = self.overlay_prog.u("u_parallax") {
+            gl.uniform2f(Some(u), self.mouse.0, self.mouse.1);
+        }
+        gl.bind_vertex_array(Some(&self.cosmos_vao));
+        gl.draw_arrays(GL::TRIANGLES, 0, 6);
+
         gl.bind_vertex_array(None);
     }
 }

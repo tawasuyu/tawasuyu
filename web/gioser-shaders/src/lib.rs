@@ -252,24 +252,65 @@ vec3 render_sun(vec2 p, float r, float pulse) {
 }
 
 vec3 render_moon(vec2 p, float r, float time) {
-    float moonR = u_thickness * 1.35;
-    // Disco con borde suave.
-    float disk = 1.0 - smoothstep(moonR * 0.86, moonR * 1.00, r);
-    // Limb darkening: el borde más oscuro que el centro.
-    float limb_factor = sqrt(max(1.0 - (r * r) / (moonR * moonR), 0.0));
-    // Cráteres y mares lunares vía fbm.
-    float craters = fbm_c(p * 22.0) * 0.45 + fbm_c(p * 48.0) * 0.20;
-    // Fase: terminator se mueve de izquierda a derecha lentamente.
-    // 1 ciclo lunar visible cada ~38 s. sin(t*0.165) recorre full→new→full.
-    float phase = sin(time * 0.165) * 0.5 + 0.5; // 0..1
-    float terminator_x = mix(-moonR * 1.1, moonR * 1.1, phase);
-    float nx = p.x;
-    float lit = smoothstep(terminator_x - moonR * 0.12, terminator_x + moonR * 0.05, nx);
-    // Color superficie lunar (gris-azulado).
-    vec3 surface = vec3(0.86, 0.88, 0.94) * (0.70 + craters * 0.55);
-    // Halo cercano al limb iluminado (luz dispersada).
-    float outer_glow = smoothstep(moonR * 1.18, moonR * 0.94, r) - disk;
-    vec3 glow = vec3(0.55, 0.70, 0.95) * max(outer_glow, 0.0) * lit * 0.50;
+    float moonR = u_thickness * 1.40;
+    if (r > moonR * 1.20) return vec3(0.0);
+
+    // Normales de la esfera proyectadas en pantalla (sólo la cara visible).
+    float nx = p.x / moonR;
+    float ny = p.y / moonR;
+    float n2 = nx * nx + ny * ny;
+    float nz = sqrt(max(1.0 - n2, 0.0));
+    float disk = 1.0 - smoothstep(moonR * 0.88, moonR * 1.00, r);
+
+    // Limb darkening realista (regolito lunar dispersa más al borde).
+    float limb_factor = pow(max(nz, 0.0), 0.45);
+
+    // === SUPERFICIE: 4 capas + crater rings ===
+    // Maria — mares oscuros grandes (Mare Imbrium, Tranquillitatis, etc.)
+    float maria_n = fbm_c(p * 4.5 + vec2(2.3, 1.1));
+    float maria = smoothstep(0.42, 0.60, maria_n);
+    // Cráteres grandes (radio mid).
+    float craters_mid = fbm_c(p * 13.0 + vec2(8.5, 3.2));
+    // Cráteres chicos.
+    float craters_small = fbm_c(p * 28.0 + vec2(17.1, 5.8));
+    // Detalle fino y micro (granularidad de polvo).
+    float fine = fbm_c(p * 55.0 + vec2(7.3, 11.4));
+    float micro = fbm_c(p * 110.0);
+    // Rims (bordes elevados de cráteres) — picos donde el fbm cruza 0.5.
+    float ring_mid = pow(abs(craters_mid - 0.5) * 2.0, 3.5);
+    float ring_small = pow(abs(craters_small - 0.5) * 2.0, 5.0);
+
+    float albedo = 0.80;
+    albedo += (craters_mid - 0.5) * 0.32;
+    albedo += (craters_small - 0.5) * 0.22;
+    albedo += (fine - 0.5) * 0.20;
+    albedo += (micro - 0.5) * 0.10;
+    albedo += ring_mid * 0.22;
+    albedo += ring_small * 0.16;
+    albedo -= maria * 0.50;
+    albedo = clamp(albedo, 0.10, 1.15);
+
+    // === FASE LUNAR CURVA ===
+    // Ciclo lineal — un mes lunar comprimido en ~40 s. Avanza 0→1
+    // pasando por new(0) → first-q(0.25) → full(0.5) → last-q(0.75) → new(1).
+    float phase = fract(time / 40.0);
+    float phi = phase * 2.0 * PI;
+    // Dirección del sol relativa al observador.
+    //   phi=0   → sun_dir = (0, 0, -1) ⇒ atrás de la luna (new moon).
+    //   phi=π/2 → sun_dir = (+1, 0, 0) ⇒ a la derecha (first quarter).
+    //   phi=π   → sun_dir = (0, 0, +1) ⇒ frente al observador (full moon).
+    // Como `dot(normal, sun_dir) = nx*sin(phi) - nz*cos(phi)`, el terminador
+    // resulta ser una elipse en la pantalla — curva como en la luna real.
+    float lit_value = nx * sin(phi) - nz * cos(phi);
+    float lit = smoothstep(-0.035, 0.035, lit_value);
+
+    // Color superficie (gris ligeramente azulado).
+    vec3 surface = vec3(0.86, 0.88, 0.94) * albedo;
+
+    // Halo cercano al limb iluminado — luz dispersada en el regolito.
+    float outer_glow = smoothstep(moonR * 1.15, moonR * 0.95, r) - disk;
+    vec3 glow = vec3(0.55, 0.70, 0.95) * max(outer_glow, 0.0) * lit * 0.55;
+
     return surface * disk * lit * limb_factor + glow;
 }
 
@@ -317,13 +358,14 @@ vec3 render_body(int kind, vec2 p, float r, float time, float pulse) {
 vec3 element_cloud(vec2 p, vec2 tip, vec2 outward, vec3 color, float time, int kind) {
     vec2 perp = vec2(-outward.y, outward.x);
     // Centro de la nube: bien adentro del cuadrante (más allá del tip).
-    vec2 cloud_center = tip + outward * 0.22;
+    vec2 cloud_center = tip + outward * 0.28;
     vec2 to_p = p - cloud_center;
     float along = dot(to_p, outward);
     float perp_d = dot(to_p, perp);
-    // Anisotropía: bien ancha perpendicular, larga a lo largo del eje.
-    float sigma_along = 0.42;
-    float sigma_perp  = 0.34;
+    // Anisotropía: el aura cubre TODO el cuadrante del cardinal. Sigmas
+    // grandes → se solapan en las esquinas (NE/NW/SE/SW) y crean mezclas.
+    float sigma_along = 0.62;
+    float sigma_perp  = 0.62;
     float base = exp(-(along * along) / (2.0 * sigma_along * sigma_along)
                      -(perp_d * perp_d) / (2.0 * sigma_perp * sigma_perp));
     // Textura noise animada por elemento.
@@ -344,7 +386,7 @@ vec3 element_cloud(vec2 p, vec2 tip, vec2 outward, vec3 color, float time, int k
         // AGUA: ondulaciones grandes que viajan hacia afuera.
         modulation = 0.50 + 0.50 * sin(time * 0.9 - along * 5.0 + n * 4.0);
     }
-    return color * base * max(modulation, 0.0) * 0.28;
+    return color * base * max(modulation, 0.0) * 0.26;
 }
 
 // Chacana de 2 escalones (mística clásica de Tiwanaku).
@@ -586,6 +628,73 @@ void main() {
             + zodiac_lum * 0.3,
         0.0, 1.0);
     fragColor = vec4(col, alpha);
+}
+";
+
+/// Capa overlay de nubes apenas visible, dibujada DESPUÉS de la chacana
+/// con `blend = SRC_ALPHA, ONE_MINUS_SRC_ALPHA` (compositing normal).
+/// Dos capas FBM en parallax distinto del fondo, alpha máximo ~0.10.
+/// Da sensación de niebla / cirros pasando por delante de la escena.
+///
+/// Uniforms: `u_resolution`, `u_time`, `u_parallax`.
+pub const FS_OVERLAY_CLOUDS: &str = "#version 300 es
+precision highp float;
+in vec2 v_clip;
+in vec2 v_uv;
+out vec4 fragColor;
+uniform vec2  u_resolution;
+uniform float u_time;
+uniform vec2  u_parallax;
+
+float hash21o(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+float vnoise_o(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = hash21o(i);
+    float b = hash21o(i + vec2(1.0, 0.0));
+    float c = hash21o(i + vec2(0.0, 1.0));
+    float d = hash21o(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+float fbm_o(vec2 p) {
+    float v = 0.0;
+    float a = 0.55;
+    for (int i = 0; i < 4; i++) {
+        v += a * vnoise_o(p);
+        p = p * 2.10 + vec2(3.1, 9.4);
+        a *= 0.55;
+    }
+    return v;
+}
+
+void main() {
+    float aspect = u_resolution.x / max(u_resolution.y, 1.0);
+    vec2 uv = v_clip;
+    uv.x *= aspect;
+
+    // Parallax inverso (las nubes 'delante' se mueven al revés que las del
+    // fondo) → percepción de capa más cercana.
+    vec2 drift1 = vec2( u_time * 0.020,  u_time * 0.007) - u_parallax * 0.05;
+    vec2 drift2 = vec2(-u_time * 0.028,  u_time * 0.013) - u_parallax * 0.09;
+
+    // Escalas grandes (~0.55 y 1.30) = cúmulos amplios, no granulado.
+    float n1 = fbm_o(uv * 0.55 + drift1);
+    float n2 = fbm_o(uv * 1.30 + drift2);
+
+    // Densidad: sólo las crestas del noise se vuelven nube. Mucha del
+    // viewport queda transparente.
+    float dens = smoothstep(0.55, 0.88, n1) * 0.65
+               + smoothstep(0.50, 0.82, n2) * 0.35;
+
+    // Color levemente azul-blanco; con baja densidad tira a gris.
+    vec3 cloud_color = mix(vec3(0.55, 0.62, 0.74), vec3(0.90, 0.93, 1.00), dens);
+
+    // Alpha bajísimo: 0.10 máximo (apenas visible, como pidieron).
+    float alpha = dens * 0.10;
+    fragColor = vec4(cloud_color, alpha);
 }
 ";
 
