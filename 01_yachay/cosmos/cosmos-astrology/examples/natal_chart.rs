@@ -66,7 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             p.body.name(),
             p.longitude.to_chart_format(),
             p.house_number,
-            if p.is_retrograde { "R" } else { "" },
+            if p.is_retrograde() { "R" } else { "" },
         );
     }
     println!();

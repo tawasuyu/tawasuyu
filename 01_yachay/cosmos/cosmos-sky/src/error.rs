@@ -35,4 +35,10 @@ pub enum SkyError {
     /// observer (e.g. local sidereal time without a location).
     #[error("this operation requires an Observer but none was supplied")]
     ObserverRequired,
+
+    /// An operation that requires a JPL SPK planetary kernel was
+    /// invoked on a session opened with the analytical VSOP2013
+    /// backend (or any other non-SPK source).
+    #[error("this operation requires an SPK planetary kernel; session was opened without one")]
+    SpkRequired,
 }

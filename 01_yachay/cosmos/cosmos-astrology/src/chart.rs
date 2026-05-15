@@ -220,7 +220,6 @@ impl NatalChart {
                     longitude_rate_rad_per_day: node.longitude_rate_rad_per_day,
                     right_ascension_rad: south_ra,
                     declination_rad: south_dec,
-                    is_retrograde: node.is_retrograde,
                     house_number: south_house,
                     horizon: south_horizon,
                 });

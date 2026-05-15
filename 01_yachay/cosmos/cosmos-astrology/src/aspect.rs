@@ -19,6 +19,7 @@ use std::collections::HashMap;
 
 use eternal_sky::Body;
 
+use crate::angles::signed_delta_deg;
 use crate::chart::NatalChart;
 use crate::placement::BodyPlacement;
 
@@ -191,6 +192,55 @@ impl OrbTable {
             .unwrap_or(self.default_body_multiplier);
         base * ma.max(mb)
     }
+
+    /// Build a flat lookup snapshot for use in tight pair-iteration
+    /// loops. The snapshot replaces three HashMap hashings per
+    /// `orb_for` call with two array indexes — meaningful when the
+    /// outer loop is N² in chart placements × `AspectKind::ALL`.
+    pub(crate) fn snapshot(&self) -> OrbSnapshot {
+        let mut base = [0.0_f64; AspectKind::ALL.len()];
+        for (i, &kind) in AspectKind::ALL.iter().enumerate() {
+            base[i] = self.base_orb_deg.get(&kind).copied().unwrap_or(0.0);
+        }
+        OrbSnapshot {
+            base_orb_deg: base,
+            body_multiplier: self
+                .body_multiplier
+                .iter()
+                .map(|(&b, &m)| (b, m))
+                .collect(),
+            default_body_multiplier: self.default_body_multiplier,
+        }
+    }
+}
+
+/// Flat, fixed-size view of an [`OrbTable`]'s contents, suitable for
+/// inner pair-iteration loops.
+pub(crate) struct OrbSnapshot {
+    base_orb_deg: [f64; AspectKind::ALL.len()],
+    body_multiplier: Vec<(Body, f64)>,
+    default_body_multiplier: f64,
+}
+
+impl OrbSnapshot {
+    #[inline]
+    pub(crate) fn orb_for(&self, a: Body, b: Body, kind: AspectKind) -> f64 {
+        let idx = AspectKind::ALL.iter().position(|k| *k == kind).unwrap_or(0);
+        let base = self.base_orb_deg[idx];
+        let ma = self.lookup_mult(a);
+        let mb = self.lookup_mult(b);
+        base * ma.max(mb)
+    }
+
+    #[inline]
+    fn lookup_mult(&self, body: Body) -> f64 {
+        for &(b, m) in &self.body_multiplier {
+            if b == body {
+                return m;
+            }
+        }
+        self.default_body_multiplier
+    }
 }
 
 impl Default for OrbTable {
@@ -236,25 +286,7 @@ impl Aspect {
 /// aspects whose orb sits within the table's allowance. The returned
 /// list is sorted by tightness (most exact first).
 pub fn find_aspects(chart: &NatalChart, orbs: &OrbTable) -> Vec<Aspect> {
-    let placements = &chart.placements;
-    let mut out = Vec::new();
-
-    for i in 0..placements.len() {
-        for j in (i + 1)..placements.len() {
-            for &kind in AspectKind::ALL {
-                if let Some(asp) = test_pair(&placements[i], &placements[j], kind, orbs) {
-                    out.push(asp);
-                }
-            }
-        }
-    }
-
-    out.sort_by(|x, y| {
-        x.orb_abs_deg()
-            .partial_cmp(&y.orb_abs_deg())
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    out
+    find_aspects_filtered(chart, orbs, AspectKind::ALL)
 }
 
 /// Same as [`find_aspects`] but restricted to a subset of [`AspectKind`].
@@ -264,12 +296,16 @@ pub fn find_aspects_filtered(
     kinds: &[AspectKind],
 ) -> Vec<Aspect> {
     let placements = &chart.placements;
-    let mut out = Vec::new();
+    let snapshot = orbs.snapshot();
+    // Upper bound on aspects: every pair × every kind (worst case).
+    let mut out = Vec::with_capacity(
+        placements.len() * (placements.len() - 1) / 2 * kinds.len(),
+    );
 
     for i in 0..placements.len() {
         for j in (i + 1)..placements.len() {
             for &kind in kinds {
-                if let Some(asp) = test_pair(&placements[i], &placements[j], kind, orbs) {
+                if let Some(asp) = test_pair(&placements[i], &placements[j], kind, &snapshot) {
                     out.push(asp);
                 }
             }
@@ -287,7 +323,7 @@ fn test_pair(
     a: &BodyPlacement,
     b: &BodyPlacement,
     kind: AspectKind,
-    orbs: &OrbTable,
+    orbs: &OrbSnapshot,
 ) -> Option<Aspect> {
     // Same-body pairs (e.g. mean node duplicated as ascending + descending
     // in `BodySet::include_south_node`) would otherwise trigger spurious
@@ -300,11 +336,13 @@ fn test_pair(
     if allowed <= 0.0 {
         return None;
     }
-    // Signed angular separation, normalised to [-180°, 180°]. The
-    // *unsigned* separation is what we compare against the exact angle.
+    // Signed angular separation `lon_b − lon_a`, normalised to
+    // `[-180°, 180°]`. The unsigned separation is what we compare
+    // against the exact angle. (We pass `(b, a)` to the helper which
+    // computes `arg0 − arg1`.)
     let raw_delta_deg = signed_delta_deg(
-        a.longitude.longitude_deg(),
         b.longitude.longitude_deg(),
+        a.longitude.longitude_deg(),
     );
     let separation = raw_delta_deg.abs();
     let exact = kind.exact_angle_deg();
@@ -354,28 +392,9 @@ fn test_pair(
     })
 }
 
-/// Signed difference `lon_b − lon_a` normalised to `[-180°, 180°]`.
-fn signed_delta_deg(lon_a_deg: f64, lon_b_deg: f64) -> f64 {
-    let mut d = lon_b_deg - lon_a_deg;
-    while d > 180.0 {
-        d -= 360.0;
-    }
-    while d < -180.0 {
-        d += 360.0;
-    }
-    d
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn signed_delta_wraps_correctly() {
-        assert!((signed_delta_deg(350.0, 10.0) - 20.0).abs() < 1e-12);
-        assert!((signed_delta_deg(10.0, 350.0) + 20.0).abs() < 1e-12);
-        assert!((signed_delta_deg(0.0, 180.0) - 180.0).abs() < 1e-12);
-    }
 
     #[test]
     fn aspect_exact_angles_round_to_traditional_values() {

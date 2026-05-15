@@ -18,12 +18,12 @@
 
 use eternal_sky::Body;
 
+use crate::angles::wrap_two_pi;
 use crate::birth_data::BirthData;
 use crate::chart::NatalChart;
 use crate::error::{AstrologyError, AstrologyResult};
 use crate::zodiac::{Sign, SignedLongitude};
 
-const TAU: f64 = std::f64::consts::TAU;
 const PI: f64 = std::f64::consts::PI;
 
 /// One body's midpoint placement.
@@ -139,11 +139,3 @@ fn whole_sign_house(asc_sign: Sign, point_sign: Sign) -> u8 {
     (diff + 1) as u8
 }
 
-fn wrap_two_pi(x: f64) -> f64 {
-    let v = x.rem_euclid(TAU);
-    if v < 0.0 {
-        v + TAU
-    } else {
-        v
-    }
-}

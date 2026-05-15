@@ -96,7 +96,6 @@ fn applying_flag_is_consistent_with_signed_orb() {
         longitude_rate_rad_per_day: 1.0_f64.to_radians(),
         right_ascension_rad: 0.0,
         declination_rad: 0.0,
-        is_retrograde: false,
         house_number: 1,
         horizon: None,
     };
@@ -109,7 +108,6 @@ fn applying_flag_is_consistent_with_signed_orb() {
         longitude_rate_rad_per_day: 0.5_f64.to_radians(),
         right_ascension_rad: 0.0,
         declination_rad: 0.0,
-        is_retrograde: false,
         house_number: 1,
         horizon: None,
     };

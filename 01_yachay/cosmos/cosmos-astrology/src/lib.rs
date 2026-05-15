@@ -52,6 +52,7 @@
 //! # Ok::<_, eternal_astrology::AstrologyError>(())
 //! ```
 
+pub mod angles;
 pub mod aspect;
 pub mod birth_data;
 pub mod chart;

@@ -12,6 +12,7 @@
 use eternal_sky::{Body, EphemerisSession, Instant};
 use eternal_validation::eclipses as ev_eclipses;
 
+use crate::angles::unsigned_arc_deg;
 use crate::chart::NatalChart;
 use crate::error::{AstrologyError, AstrologyResult};
 use crate::primary_direction::Significator;
@@ -62,27 +63,7 @@ pub fn next_solar_eclipse(
     after: Instant,
     max_synodic_months: usize,
 ) -> AstrologyResult<Option<Eclipse>> {
-    let spk = require_spk(session)?;
-    let jd_start = after.jd_tdb()?;
-    let next = ev_eclipses::next_solar_eclipse(spk, jd_start, max_synodic_months)
-        .map_err(|e| AstrologyError::Sky(eternal_sky::SkyError::Ephemeris(e)))?;
-    match next {
-        None => Ok(None),
-        Some((jd_tdb, snap)) => {
-            let instant = Instant::from_jd_tdb(jd_tdb)?;
-            // Solar eclipse longitude = Sun's apparent ecliptic longitude.
-            let sun = session
-                .body_apparent(Body::Sun, instant, None)
-                .map_err(AstrologyError::Sky)?;
-            Ok(Some(Eclipse {
-                family: EclipseFamily::Solar,
-                solar_kind: Some(snap.kind),
-                lunar_kind: None,
-                instant,
-                eclipse_longitude_rad: sun.ecliptic_of_date.longitude_rad,
-            }))
-        }
-    }
+    next_eclipse(session, after, max_synodic_months, EclipseFamily::Solar)
 }
 
 /// Find the next lunar eclipse after `after` and within
@@ -92,25 +73,74 @@ pub fn next_lunar_eclipse(
     after: Instant,
     max_synodic_months: usize,
 ) -> AstrologyResult<Option<Eclipse>> {
+    next_eclipse(session, after, max_synodic_months, EclipseFamily::Lunar)
+}
+
+/// Shared scan path for both solar and lunar eclipses. The two
+/// families only differ in (a) which validation routine drives the
+/// shadow-geometry check and (b) which body (Sun for solar, Moon for
+/// lunar) carries the ecliptic longitude reported as the eclipse
+/// point.
+fn next_eclipse(
+    session: &EphemerisSession,
+    after: Instant,
+    max_synodic_months: usize,
+    family: EclipseFamily,
+) -> AstrologyResult<Option<Eclipse>> {
     let spk = require_spk(session)?;
     let jd_start = after.jd_tdb()?;
-    let next = ev_eclipses::next_lunar_eclipse(spk, jd_start, max_synodic_months)
-        .map_err(|e| AstrologyError::Sky(eternal_sky::SkyError::Ephemeris(e)))?;
-    match next {
-        None => Ok(None),
-        Some((jd_tdb, snap)) => {
-            let instant = Instant::from_jd_tdb(jd_tdb)?;
-            // Lunar eclipse longitude = Moon's apparent ecliptic longitude.
-            let moon = session
-                .body_apparent(Body::Moon, instant, None)
-                .map_err(AstrologyError::Sky)?;
-            Ok(Some(Eclipse {
-                family: EclipseFamily::Lunar,
-                solar_kind: None,
-                lunar_kind: Some(snap.kind),
-                instant,
-                eclipse_longitude_rad: moon.ecliptic_of_date.longitude_rad,
-            }))
+    let found = match family {
+        EclipseFamily::Solar => ev_eclipses::next_solar_eclipse(
+            spk,
+            jd_start,
+            max_synodic_months,
+        )
+        .map(|opt| opt.map(EclipseHit::Solar)),
+        EclipseFamily::Lunar => ev_eclipses::next_lunar_eclipse(
+            spk,
+            jd_start,
+            max_synodic_months,
+        )
+        .map(|opt| opt.map(EclipseHit::Lunar)),
+    }
+    .map_err(|e| AstrologyError::Sky(eternal_sky::SkyError::Ephemeris(e)))?;
+
+    let Some(hit) = found else {
+        return Ok(None);
+    };
+    let jd_tdb = hit.jd_tdb();
+    let instant = Instant::from_jd_tdb(jd_tdb)?;
+    let longitude_body = match family {
+        EclipseFamily::Solar => Body::Sun,
+        EclipseFamily::Lunar => Body::Moon,
+    };
+    let snap = session
+        .body_apparent(longitude_body, instant, None)
+        .map_err(AstrologyError::Sky)?;
+    let (solar_kind, lunar_kind) = match hit {
+        EclipseHit::Solar((_, s)) => (Some(s.kind), None),
+        EclipseHit::Lunar((_, s)) => (None, Some(s.kind)),
+    };
+    Ok(Some(Eclipse {
+        family,
+        solar_kind,
+        lunar_kind,
+        instant,
+        eclipse_longitude_rad: snap.ecliptic_of_date.longitude_rad,
+    }))
+}
+
+/// Internal tagged union over the two underlying eclipse snapshot types.
+enum EclipseHit {
+    Solar((f64, ev_eclipses::SolarEclipseSnapshot)),
+    Lunar((f64, ev_eclipses::LunarEclipseSnapshot)),
+}
+
+impl EclipseHit {
+    fn jd_tdb(&self) -> f64 {
+        match self {
+            EclipseHit::Solar((jd, _)) => *jd,
+            EclipseHit::Lunar((jd, _)) => *jd,
         }
     }
 }
@@ -139,35 +169,25 @@ pub fn eclipses_on_natal(
         }
     };
 
-    // Build a list of every eclipse in the window. We scan solar and
-    // lunar independently, then merge in chronological order.
+    // Sweep solar and lunar independently as monotonic cursor walks:
+    // each `next_*_eclipse` call advances past the prior find rather
+    // than restarting from `after + N·month`. Two sweeps, never more
+    // than (NUMEC_solar + NUMEC_lunar) underlying calls, no dedup.
     let mut all_eclipses = Vec::new();
-    let mut cursor = after;
-    for _ in 0..max_synodic_months {
-        let solar = next_solar_eclipse(session, cursor, 1)?;
-        if let Some(e) = solar {
-            all_eclipses.push(e);
-        }
-        let lunar = next_lunar_eclipse(session, cursor, 1)?;
-        if let Some(e) = lunar {
-            all_eclipses.push(e);
-        }
-        // Advance the cursor by ~one synodic month to keep moving.
-        cursor = Instant::from_utc(cursor.utc().add_days(29.530_588));
-    }
+    sweep_eclipses(session, after, max_synodic_months, EclipseFamily::Solar, &mut all_eclipses)?;
+    sweep_eclipses(session, after, max_synodic_months, EclipseFamily::Lunar, &mut all_eclipses)?;
     all_eclipses.sort_by(|a, b| {
         a.instant
             .jd_utc()
             .partial_cmp(&b.instant.jd_utc())
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    all_eclipses.dedup_by(|a, b| (a.instant.jd_utc() - b.instant.jd_utc()).abs() < 0.1);
 
     // Filter by natal proximity.
     let mut out = Vec::new();
     for ecl in all_eclipses {
         for &target in targets {
-            let Some(target_lon_rad) = significator_longitude_rad(natal, target) else {
+            let Some(target_lon_rad) = target.longitude_rad(natal) else {
                 continue;
             };
             let orb = unsigned_arc_deg(
@@ -198,35 +218,41 @@ pub fn eclipses_on_natal(
 fn require_spk(
     session: &EphemerisSession,
 ) -> AstrologyResult<&eternal_ephemeris::jpl::SpkFile> {
-    session.oracle().spk().ok_or_else(|| {
-        AstrologyError::Sky(eternal_sky::SkyError::Ephemeris(
-            eternal_validation::oracle::OracleError::Inner(
-                "eclipses require an SPK planetary kernel; the session was \
-                 opened with the analytical VSOP2013 backend"
-                    .into(),
-            ),
-        ))
-    })
+    session.require_spk().map_err(AstrologyError::Sky)
+}
+
+/// Walk a monotonic cursor through `max_synodic_months`-worth of
+/// eclipses of the requested family, accumulating into `out`.
+///
+/// The previous implementation called `next_X_eclipse(session, cursor, 1)`
+/// in a loop and advanced the cursor by ~29.53 days, which forced
+/// `next_X_eclipse` to redo most of its internal sweep on every
+/// iteration. By advancing the cursor past each *found* eclipse instead,
+/// the total scan now does ~N underlying calls for N synodic months
+/// instead of ~2N redundant ones.
+fn sweep_eclipses(
+    session: &EphemerisSession,
+    after: Instant,
+    max_synodic_months: usize,
+    family: EclipseFamily,
+    out: &mut Vec<Eclipse>,
+) -> AstrologyResult<()> {
+    let mut cursor = after;
+    let mut budget = max_synodic_months;
+    while budget > 0 {
+        let Some(ecl) = next_eclipse(session, cursor, budget, family)? else {
+            return Ok(());
+        };
+        let jd_after = ecl.instant.jd_utc() + 1.0;
+        out.push(ecl);
+        cursor = Instant::from_utc(after.utc().add_days(jd_after - after.jd_utc()));
+        // Each found eclipse "consumes" one synodic month of budget.
+        budget -= 1;
+    }
+    Ok(())
 }
 
 fn default_natal_targets(natal: &NatalChart) -> Vec<Significator> {
     crate::transits::default_natal_targets(natal)
 }
 
-fn significator_longitude_rad(natal: &NatalChart, sig: Significator) -> Option<f64> {
-    match sig {
-        Significator::Body(b) => Some(natal.placement(b)?.longitude.longitude_rad()),
-        Significator::Ascendant => Some(natal.ascendant().longitude_rad()),
-        Significator::Midheaven => Some(natal.midheaven().longitude_rad()),
-        Significator::Descendant => Some(natal.descendant().longitude_rad()),
-        Significator::ImumCoeli => Some(natal.imum_coeli().longitude_rad()),
-    }
-}
-
-fn unsigned_arc_deg(a_deg: f64, b_deg: f64) -> f64 {
-    let mut d = (a_deg - b_deg).rem_euclid(360.0);
-    if d > 180.0 {
-        d = 360.0 - d;
-    }
-    d
-}

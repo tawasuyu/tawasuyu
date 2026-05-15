@@ -247,6 +247,24 @@ pub enum Significator {
 }
 
 impl Significator {
+    /// Natal zodiacal longitude of this significator in radians.
+    /// Returns `None` only when the significator refers to a body not
+    /// present in the chart's [`crate::BodySet`].
+    pub fn longitude_rad(self, natal: &NatalChart) -> Option<f64> {
+        match self {
+            Significator::Body(b) => Some(natal.placement(b)?.longitude.longitude_rad()),
+            Significator::Ascendant => Some(natal.ascendant().longitude_rad()),
+            Significator::Midheaven => Some(natal.midheaven().longitude_rad()),
+            Significator::Descendant => Some(natal.descendant().longitude_rad()),
+            Significator::ImumCoeli => Some(natal.imum_coeli().longitude_rad()),
+        }
+    }
+
+    /// Natal zodiacal longitude in degrees `[0, 360)`.
+    pub fn longitude_deg(self, natal: &NatalChart) -> Option<f64> {
+        self.longitude_rad(natal).map(f64::to_degrees)
+    }
+
     pub fn label(self) -> String {
         match self {
             Significator::Body(b) => b.name().to_string(),
@@ -336,7 +354,21 @@ pub fn direct_to_aspect(
             promissor.name()
         ))
     })?;
+    direct_to_aspect_with_placement(natal, placement, significator, aspect, method, key)
+}
 
+/// Same as [`direct_to_aspect`] but accepts a pre-resolved
+/// [`BodyPlacement`] reference. Used by [`all_directions_with_aspects`]
+/// to skip the body lookup in the inner loop.
+fn direct_to_aspect_with_placement(
+    natal: &NatalChart,
+    placement: &crate::placement::BodyPlacement,
+    significator: Significator,
+    aspect: AspectKind,
+    method: DirectionMethod,
+    key: DirectionKey,
+) -> AstrologyResult<Vec<Direction>> {
+    let promissor = placement.body;
     let phi = natal.birth.observer.lat_rad;
     let ramc = natal.local_apparent_sidereal_time_rad;
     let obliquity = natal.obliquity_rad;
@@ -390,9 +422,9 @@ pub fn direct_to_aspect(
     // *other* aspects, and conjunctions to angles, use the zodiacal
     // projection at β=0 (the aspect point is a longitude-only
     // construct).
-    let offsets_deg = aspect_branch_offsets_deg(aspect);
-    let mut out = Vec::with_capacity(offsets_deg.len());
-    for offset_deg in offsets_deg {
+    let (offsets_deg, n_offsets) = aspect_branch_offsets_deg(aspect);
+    let mut out = Vec::with_capacity(n_offsets);
+    for &offset_deg in &offsets_deg[..n_offsets] {
         let (target_ra, target_dec) = if offset_deg == 0.0 {
             // Conjunction case.
             match significator {
@@ -427,13 +459,14 @@ pub fn direct_to_aspect(
 
 /// Offsets (in degrees) at which the aspect family lands relative to
 /// the significator's natal longitude. Conjunction → `[0]`; opposition
-/// → `[180]`; symmetric aspects → both `+exact` and `−exact`.
-fn aspect_branch_offsets_deg(aspect: AspectKind) -> Vec<f64> {
+/// → `[180]`; symmetric aspects → both `+exact` and `−exact`. Returns
+/// a small stack buffer to keep the per-direction loop allocation-free.
+fn aspect_branch_offsets_deg(aspect: AspectKind) -> ([f64; 2], usize) {
     let exact = aspect.exact_angle_deg();
     match aspect {
-        AspectKind::Conjunction => vec![0.0],
-        AspectKind::Opposition => vec![180.0],
-        _ => vec![exact, -exact],
+        AspectKind::Conjunction => ([0.0, 0.0], 1),
+        AspectKind::Opposition => ([180.0, 0.0], 1),
+        _ => ([exact, -exact], 2),
     }
 }
 
@@ -508,11 +541,18 @@ pub fn all_directions_with_aspects(
     aspect_kinds: &[AspectKind],
     max_age_years: f64,
 ) -> Vec<Direction> {
-    let mut out: Vec<Direction> = Vec::new();
+    // Pre-size to a reasonable upper bound to avoid Vec growth in the
+    // inner accumulation loop. Each promissor produces up to
+    // (4 angles + (N − 1) bodies) × |aspect_kinds| × 2 branches directions.
+    let n = natal.placements.len();
+    let mut out: Vec<Direction> =
+        Vec::with_capacity(n * (4 + n) * aspect_kinds.len() * 2);
 
+    // Outer loop walks each placement exactly once and resolves it
+    // here — this hoists the linear-scan body lookup that
+    // `direct_to_aspect` would otherwise repeat for every (sig, aspect)
+    // triple. Inner calls use `direct_to_aspect_with_placement`.
     for promissor_p in &natal.placements {
-        let promissor = promissor_p.body;
-        // To the four angles.
         for sig in [
             Significator::Ascendant,
             Significator::Midheaven,
@@ -520,7 +560,9 @@ pub fn all_directions_with_aspects(
             Significator::ImumCoeli,
         ] {
             for &aspect in aspect_kinds {
-                if let Ok(dirs) = direct_to_aspect(natal, promissor, sig, aspect, method, key) {
+                if let Ok(dirs) = direct_to_aspect_with_placement(
+                    natal, promissor_p, sig, aspect, method, key,
+                ) {
                     for d in dirs {
                         if (0.0..=max_age_years).contains(&d.age_years) {
                             out.push(d);
@@ -529,15 +571,14 @@ pub fn all_directions_with_aspects(
                 }
             }
         }
-        // To every other body.
         for sig_p in &natal.placements {
-            if sig_p.body == promissor {
+            if sig_p.body == promissor_p.body {
                 continue;
             }
             for &aspect in aspect_kinds {
-                if let Ok(dirs) = direct_to_aspect(
+                if let Ok(dirs) = direct_to_aspect_with_placement(
                     natal,
-                    promissor,
+                    promissor_p,
                     Significator::Body(sig_p.body),
                     aspect,
                     method,

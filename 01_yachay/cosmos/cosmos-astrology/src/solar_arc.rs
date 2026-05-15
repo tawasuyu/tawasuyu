@@ -21,6 +21,7 @@
 
 use eternal_sky::{Body, EphemerisSession};
 
+use crate::angles::signed_delta_rad;
 use crate::chart::{Angle, NatalChart};
 use crate::error::{AstrologyError, AstrologyResult};
 use crate::progression::{progress, ProgressedHouses, ProgressionMethod};
@@ -177,16 +178,3 @@ fn direct(natal: &NatalChart, arc_rad: f64) -> NatalChart {
     directed
 }
 
-/// Signed angular distance `a − b` normalised to `[-π, π]`.
-fn signed_delta_rad(a: f64, b: f64) -> f64 {
-    const PI: f64 = std::f64::consts::PI;
-    const TAU: f64 = std::f64::consts::TAU;
-    let mut d = a - b;
-    while d > PI {
-        d -= TAU;
-    }
-    while d < -PI {
-        d += TAU;
-    }
-    d
-}

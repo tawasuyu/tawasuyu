@@ -12,6 +12,7 @@
 
 use eternal_sky::{find_root, Body, EphemerisSession, Instant, SearchOptions};
 
+use crate::angles::signed_delta_rad;
 use crate::error::{AstrologyError, AstrologyResult};
 
 /// Estimated synodic period of `body` around the geocenter, in days.
@@ -94,16 +95,3 @@ pub fn next_return(
     })
 }
 
-/// Signed angular distance `actual − target` normalised to `[-π, π]`.
-fn signed_delta_rad(actual: f64, target: f64) -> f64 {
-    const PI: f64 = std::f64::consts::PI;
-    const TAU: f64 = std::f64::consts::TAU;
-    let mut d = actual - target;
-    while d > PI {
-        d -= TAU;
-    }
-    while d < -PI {
-        d += TAU;
-    }
-    d
-}

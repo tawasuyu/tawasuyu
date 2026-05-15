@@ -124,6 +124,16 @@ impl EphemerisSession {
         &self.oracle
     }
 
+    /// Borrow the underlying SPK planetary kernel handle if the session
+    /// was opened with one. Returns [`SkyError::SpkRequired`] otherwise.
+    ///
+    /// Used by higher-level crates (e.g. `eternal-astrology` for
+    /// eclipses) that need direct access to the JPL kernel without
+    /// reaching into the validation crate's `Oracle` API.
+    pub fn require_spk(&self) -> SkyResult<&eternal_ephemeris::jpl::SpkFile> {
+        self.oracle.spk().ok_or(SkyError::SpkRequired)
+    }
+
     /// Compute the apparent position of `body` at instant `t`, optionally
     /// reduced to a topocentric observer. The output is in the
     /// **true ecliptic and equator of date** (tropical frame).

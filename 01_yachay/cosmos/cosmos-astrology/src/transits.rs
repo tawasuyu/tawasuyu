@@ -18,6 +18,7 @@
 
 use eternal_sky::{find_root, Body, EphemerisSession, Instant, SearchOptions};
 
+use crate::angles::signed_delta_deg;
 use crate::aspect::{AspectKind, OrbTable};
 use crate::chart::NatalChart;
 use crate::error::{AstrologyError, AstrologyResult};
@@ -65,7 +66,9 @@ pub fn find_current_transits(
     orbs: &OrbTable,
     aspect_kinds: &[AspectKind],
 ) -> AstrologyResult<Vec<TransitAspect>> {
-    let mut out = Vec::new();
+    let snapshot = orbs.snapshot();
+    let mut out =
+        Vec::with_capacity(transiting_bodies.len() * targets.len() * aspect_kinds.len());
 
     for &transiting in transiting_bodies {
         let pos = session
@@ -76,14 +79,17 @@ pub fn find_current_transits(
             pos.ecliptic_velocity.longitude_rate_rad_per_day.to_degrees();
 
         for &target in targets {
-            let target_lon_deg = significator_longitude_deg(natal, target);
+            let target_lon_deg = target.longitude_deg(natal);
             let target_lon_deg = match target_lon_deg {
                 Some(v) => v,
                 None => continue,
             };
             for &kind in aspect_kinds {
-                let allowed =
-                    orbs.orb_for(transiting, body_for_significator(target, transiting), kind);
+                let allowed = snapshot.orb_for(
+                    transiting,
+                    body_for_significator(target, transiting),
+                    kind,
+                );
                 if allowed <= 0.0 {
                     continue;
                 }
@@ -208,28 +214,6 @@ fn body_for_significator(sig: Significator, fallback: Body) -> Body {
         Significator::Body(b) => b,
         _ => fallback,
     }
-}
-
-fn significator_longitude_deg(natal: &NatalChart, sig: Significator) -> Option<f64> {
-    match sig {
-        Significator::Body(b) => Some(natal.placement(b)?.longitude.longitude_deg()),
-        Significator::Ascendant => Some(natal.ascendant().longitude_deg()),
-        Significator::Midheaven => Some(natal.midheaven().longitude_deg()),
-        Significator::Descendant => Some(natal.descendant().longitude_deg()),
-        Significator::ImumCoeli => Some(natal.imum_coeli().longitude_deg()),
-    }
-}
-
-/// Signed delta `a − b` in degrees, normalised to `[-180°, 180°]`.
-fn signed_delta_deg(a_deg: f64, b_deg: f64) -> f64 {
-    let mut d = a_deg - b_deg;
-    while d > 180.0 {
-        d -= 360.0;
-    }
-    while d < -180.0 {
-        d += 360.0;
-    }
-    d
 }
 
 /// For an aspect that perfects when `(actual − target)` equals either

@@ -26,8 +26,6 @@ pub struct BodyPlacement {
     pub right_ascension_rad: f64,
     /// Apparent declination of date, radians, `[-π/2, π/2]`.
     pub declination_rad: f64,
-    /// `true` if dλ/dt < 0 at the chart's epoch.
-    pub is_retrograde: bool,
     /// 1..=12. Computed against the chart's chosen house system.
     pub house_number: u8,
     /// Topocentric horizon coordinates if an Observer was supplied to
@@ -36,6 +34,13 @@ pub struct BodyPlacement {
 }
 
 impl BodyPlacement {
+    /// `true` if `dλ/dt < 0` at the chart's epoch — i.e. the body is
+    /// moving retrograde relative to its mean direction.
+    #[inline]
+    pub fn is_retrograde(&self) -> bool {
+        self.longitude_rate_rad_per_day < 0.0
+    }
+
     pub(crate) fn from_apparent(
         body: Body,
         apparent: &ApparentPosition,
@@ -50,7 +55,6 @@ impl BodyPlacement {
             longitude_rate_rad_per_day: apparent.ecliptic_velocity.longitude_rate_rad_per_day,
             right_ascension_rad: apparent.equatorial_of_date.right_ascension_rad,
             declination_rad: apparent.equatorial_of_date.declination_rad,
-            is_retrograde: apparent.ecliptic_velocity.is_retrograde(),
             house_number,
             horizon: apparent.topocentric_horizon,
         }

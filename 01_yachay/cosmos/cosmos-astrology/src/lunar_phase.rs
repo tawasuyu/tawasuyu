@@ -12,6 +12,7 @@
 
 use eternal_sky::{find_root, Body, EphemerisSession, Instant, SearchOptions, SkyResult};
 
+use crate::angles::signed_delta_rad;
 use crate::error::{AstrologyError, AstrologyResult};
 
 const TAU: f64 = std::f64::consts::TAU;
@@ -174,42 +175,31 @@ pub fn next_lunar_phase(
 
 /// Find the next of *any* canonical phase. Returns `(Instant, LunarPhase)`
 /// with the phase identity for the event found.
+///
+/// The four phases are 90° apart on the phase angle, so we can pick
+/// the next target in a single computation from the current phase
+/// angle — no need to bisect for all four and discard three.
 pub fn next_canonical_phase(
     session: &EphemerisSession,
     after: Instant,
     max_window_days: f64,
 ) -> AstrologyResult<Option<(Instant, LunarPhase)>> {
-    // The four phases are 7.4 days apart on average, so a 10-day
-    // window finds the next one from any starting instant.
-    let mut best: Option<(Instant, LunarPhase)> = None;
-    for phase in [
-        LunarPhase::NewMoon,
-        LunarPhase::FirstQuarter,
-        LunarPhase::FullMoon,
-        LunarPhase::LastQuarter,
-    ] {
-        if let Some(t) = next_lunar_phase(session, phase, after, max_window_days)? {
-            match best {
-                None => best = Some((t, phase)),
-                Some((cur, _)) if t.jd_utc() < cur.jd_utc() => best = Some((t, phase)),
-                _ => {}
-            }
-        }
-    }
-    Ok(best)
+    let current = phase_angle_at(session, after).map_err(AstrologyError::Sky)?;
+    // Phase quadrants on the unit cycle: New @ 0°, FQ @ 90°, Full @ 180°,
+    // LQ @ 270°. The "next" target is the next 90°-multiple boundary
+    // strictly *ahead* of `current`. floor(current/90°) + 1 gives the
+    // index of that boundary mod 4.
+    let quadrant_index = (current.to_degrees() / 90.0).floor() as i32;
+    let next_index = ((quadrant_index + 1) % 4 + 4) % 4;
+    let phase = match next_index {
+        0 => LunarPhase::NewMoon,
+        1 => LunarPhase::FirstQuarter,
+        2 => LunarPhase::FullMoon,
+        _ => LunarPhase::LastQuarter,
+    };
+    Ok(next_lunar_phase(session, phase, after, max_window_days)?.map(|t| (t, phase)))
 }
 
-/// `signed_delta(a, b)` in radians, normalised to `[-π, π]`.
-fn signed_delta_rad(a: f64, b: f64) -> f64 {
-    let mut d = a - b;
-    while d > PI {
-        d -= TAU;
-    }
-    while d < -PI {
-        d += TAU;
-    }
-    d
-}
 
 #[cfg(test)]
 mod tests {

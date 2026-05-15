@@ -9,6 +9,7 @@
 
 use eternal_sky::Body;
 
+use crate::angles::signed_delta_deg;
 use crate::aspect::{AspectKind, OrbTable};
 use crate::chart::NatalChart;
 
@@ -74,13 +75,3 @@ pub fn find_synastry_aspects(
     out
 }
 
-fn signed_delta_deg(a: f64, b: f64) -> f64 {
-    let mut d = a - b;
-    while d > 180.0 {
-        d -= 360.0;
-    }
-    while d < -180.0 {
-        d += 360.0;
-    }
-    d
-}

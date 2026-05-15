@@ -69,7 +69,7 @@ for placement in &chart.placements {
         placement.body.name(),
         placement.longitude.to_chart_format(),
         placement.house_number,
-        if placement.is_retrograde { "R" } else { " " },
+        if placement.is_retrograde() { "R" } else { " " },
     );
 }
 
