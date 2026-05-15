@@ -56,6 +56,7 @@ pub mod aspect;
 pub mod birth_data;
 pub mod chart;
 pub mod chart_config;
+pub mod composite;
 pub mod error;
 pub mod house_system;
 pub mod lots;
@@ -75,6 +76,7 @@ pub use aspect::{find_aspects, find_aspects_filtered, Aspect, AspectKind, OrbTab
 pub use birth_data::{BirthData, TimeCertainty};
 pub use chart::{Angle, NatalChart};
 pub use chart_config::{BodySet, ChartConfig};
+pub use composite::{angular_midpoint_rad, composite, CompositeChart, CompositePlacement};
 pub use error::{AstrologyError, AstrologyResult};
 pub use house_system::{HouseSystem, Houses};
 pub use placement::BodyPlacement;
