@@ -53,7 +53,7 @@ println!("Mars λ = {:.4}°  β = {:.4}°  alt = {:.2}°",
 | MeanNode, MeanLilith | analytical | Pure series, no SPK needed |
 | TrueNode, TrueLilith | SPK | Osculating from the Moon's instantaneous state |
 | Ceres, Pallas, Juno, Vesta | SPK + asteroid kernel | Use `with_asteroid_kernel(path)` |
-| Chiron, Pholus, Eris, Sedna | SPK Type 21 (future) | Currently surface `UnsupportedBody` |
+| Chiron, Pholus, Eris, Sedna | SPK Type 21 (parsing wired, interpolation TBD) | Segment metadata is read; the Newhall MDA interpolation step is the open work item |
 
 ## Backends
 
@@ -108,3 +108,22 @@ Every astrology-layer forecast (returns, transits, station-finding) builds on th
 Licensed under the Apache License, Version 2.0
 ([LICENSE-APACHE](../LICENSE-APACHE) or
 <https://www.apache.org/licenses/LICENSE-2.0>).
+
+## Acknowledgements
+
+This crate is part of the [eternal](../) workspace — a fork of
+[celestial](https://github.com/gaker/celestial) by Greg Aker — and
+was added by Sergio Velásquez Zeballos in collaboration with
+Claude (Anthropic) to provide an ergonomic API surface for the
+validated astronomy living in `eternal-validation`.
+
+### With thanks to
+
+For their guidance, conversations, and inspiration that shaped the
+direction of the astronomy façade and the astrology pipeline built
+on top of it:
+
+- **Roberto Reiley**
+- **Germán Rosas**
+- **Juan Velásquez**
+- **Guillermo Velásquez**

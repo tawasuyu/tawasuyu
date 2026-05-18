@@ -4,7 +4,7 @@ The astrology-specific layer of the `eternal` workspace, built on the [`eternal-
 
 [![License: Apache 2.0](https://img.shields.io/crates/l/eternal-astrology)](https://gitea.gioser.net/sergio/eternal)
 
-A typed pipeline that turns *(when, where)* into a `NatalChart`: four angles, twelve house cusps in the chosen system, every requested body placed in its sign and house with retrograde flag — plus a full forecasting toolkit (aspects, returns, progressions, solar arc, primary directions, transits, synastry).
+A typed pipeline that turns *(when, where)* into a `NatalChart`: four angles, twelve house cusps in the chosen system, every requested body placed in its sign and house with retrograde flag — plus a full forecasting toolkit: aspects, returns, progressions, solar arc, the classical primary-direction trilogy (Placidus, Regiomontanus, Campanus), transits, stations, synastry, midpoint composites, Arabic Parts, Hellenistic profections, lunar phases, and eclipses-on-natal.
 
 ## Disclaimer
 
@@ -28,15 +28,22 @@ eternal-sky = "0.1"
 | 22 bodies — luminaries, planets, nodes m+v, Lilith m+v, asteroids | `BodySet` | ✅ |
 | Mundane helpers (DA, semi-arcs, Placidus quadrant `m`) | `mundane::*` | ✅ |
 | Aspects (12 kinds, applying/separating, orb table) | `find_aspects` | ✅ |
-| Planetary returns (Sol/Luna/anyone) | `next_return` | ✅ |
+| Planetary returns (Sun / Moon / any body) | `next_return` | ✅ |
 | Progressions: Secondary, Tertiary, Minor | `secondary_progression`, … | ✅ |
 | Solar Arc directions (TrueProgressedSun, Naibod) | `solar_arc_true`, `solar_arc_naibod` | ✅ |
-| Primary directions (Placidus mundane; Ptolemy / Naibod keys) | `direct`, `all_directions` | ✅ |
-| Transits — current and next exact | `find_current_transits`, `find_next_exact_transit` | ✅ |
+| Primary directions — Placidus mundane, **Regiomontanus**, **Campanus** | `direct`, `direct_to_aspect`, `all_directions_with_aspects` | ✅ |
+| Direction keys (Ptolemy 1°/yr, Naibod 0°59'08"/yr) | `DirectionKey` | ✅ |
+| Transits — current snapshot + next exact root-finder | `find_current_transits`, `find_next_exact_transit` | ✅ |
+| Planetary stations (retrograde / direct) | `next_station`, `all_stations` | ✅ |
 | Synastry — cross-aspects between two charts | `find_synastry_aspects` | ✅ |
-| Event root-finder over time (generic) | `eternal_sky::find_root` | ✅ |
+| Composite — midpoint chart | `composite` | ✅ |
+| Arabic Parts (7 canonical Lots + custom) | `compute_lot`, `all_lots`, `custom_lot` | ✅ |
+| Hellenistic profections (annual + monthly + Lord of the Year) | `annual_profection`, `monthly_profection`, `profection_at` | ✅ |
+| Lunar phases (4 canonical + 8-fold lunation classification) | `next_lunar_phase`, `next_canonical_phase`, `classify_lunation_phase` | ✅ |
+| Eclipses (solar / lunar) on natal points | `eclipses_on_natal`, `next_solar_eclipse`, `next_lunar_eclipse` | ✅ |
+| Generic event root-finder over time | `eternal_sky::find_root` | ✅ |
 
-61 tests gate the precision and behaviour of these features against direct calls into the validated underlying machinery.
+102 tests across `eternal-sky` + `eternal-astrology` gate the precision and behaviour of these features against direct calls into the validated underlying machinery.
 
 ## Quick start: a complete natal chart
 
@@ -131,22 +138,29 @@ let sync = find_synastry_aspects(
 
 ## Modules
 
-| Module               | Purpose                                                      |
-|----------------------|--------------------------------------------------------------|
-| `birth_data`         | `BirthData` + `TimeCertainty`                                |
-| `chart_config`       | `ChartConfig`, `BodySet`                                     |
-| `chart`              | `NatalChart::compute` and accessors                          |
-| `zodiac`             | `Sign` enum, `Zodiac` (Tropical/Sidereal), `SignedLongitude` |
-| `house_system`       | `HouseSystem` enum + `Houses::compute`                       |
-| `placement`          | `BodyPlacement` (sign, house, retrograde, RA/Dec)            |
-| `mundane`            | DA, semi-arcs, Placidus quadrant `m`                         |
-| `aspect`             | `AspectKind`, `OrbTable`, `find_aspects`                     |
-| `returns`            | `next_return` (planetary returns)                            |
-| `progression`        | Secondary / Tertiary / Minor progressions                    |
-| `solar_arc`          | Solar Arc directions (true / Naibod)                         |
-| `primary_direction`  | Placidus mundane directions                                  |
-| `transits`           | Current + next-exact transit                                 |
-| `synastry`           | Cross-chart aspect grid                                      |
+| Module               | Purpose                                                                 |
+|----------------------|-------------------------------------------------------------------------|
+| `angles`             | Shared `signed_delta_*`, `wrap_two_pi`, `unsigned_arc_deg` helpers     |
+| `birth_data`         | `BirthData` + `TimeCertainty`                                           |
+| `chart_config`       | `ChartConfig`, `BodySet`                                                |
+| `chart`              | `NatalChart::compute` and accessors                                     |
+| `zodiac`             | `Sign` enum, `Zodiac` (Tropical/Sidereal), `SignedLongitude`            |
+| `house_system`       | `HouseSystem` enum + `Houses::compute`                                  |
+| `placement`          | `BodyPlacement` (sign, house, RA/Dec, derived `is_retrograde()`)        |
+| `mundane`            | DA, semi-arcs, Placidus quadrant `m`                                    |
+| `aspect`             | `AspectKind`, `OrbTable`, `find_aspects`                                |
+| `returns`            | `next_return` (planetary returns)                                       |
+| `progression`        | Secondary / Tertiary / Minor progressions                               |
+| `solar_arc`          | Solar Arc directions (true / Naibod)                                    |
+| `primary_direction`  | Placidus mundane, Regiomontanus, and Campanus directions                |
+| `transits`           | Current snapshot + next-exact transit                                   |
+| `stations`           | Retrograde / direct station finder                                      |
+| `synastry`           | Cross-chart aspect grid                                                 |
+| `composite`          | Midpoint composite chart                                                |
+| `lots`               | Arabic Parts (Hellenistic Lots) with sect-aware reversal                |
+| `profections`        | Annual + monthly profections with traditional / modern rulerships       |
+| `lunar_phase`        | 4 canonical phases + 8-fold lunation classification                     |
+| `eclipses`           | Solar / lunar eclipse search and on-natal proximity filter              |
 
 ## Design
 
@@ -160,3 +174,20 @@ let sync = find_synastry_aspects(
 Licensed under the Apache License, Version 2.0
 ([LICENSE-APACHE](../LICENSE-APACHE) or
 <https://www.apache.org/licenses/LICENSE-2.0>).
+
+## Acknowledgements
+
+This crate was added to the `eternal` workspace by Sergio Velásquez
+Zeballos in collaboration with Claude (Anthropic). It builds on the
+upstream [celestial](https://github.com/gaker/celestial) project by
+Greg Aker and on the validated astronomy of `eternal-validation`.
+
+### With thanks to
+
+For their guidance, conversations, and inspiration that shaped the
+direction of this astrology pipeline:
+
+- **Roberto Reiley**
+- **Germán Rosas**
+- **Juan Velásquez**
+- **Guillermo Velásquez**

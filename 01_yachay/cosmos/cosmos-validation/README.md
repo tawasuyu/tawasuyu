@@ -306,7 +306,9 @@ separately from Swiss's [public mirror](https://github.com/aloistr/swisseph/tree
   (`eternal-core`, `eternal-time`, `eternal-coords`, `eternal-ephemeris`,
   `eternal-images`, `eternal-pointing`, `eternal-wcs`, `eternal-catalog`)
   are his work; `eternal-validation` is the new layer added in this fork
-  by Sergio Velásquez Zeballos with Claude (Anthropic).
+  by Sergio Velásquez Zeballos with Claude (Anthropic). The
+  `eternal-sky` façade and the `eternal-astrology` symbolic layer were
+  added subsequently in the same collaboration.
 - **JPL Horizons** and the **NAIF SPICE Toolkit** — for the DE441 / DE440
   ephemerides and the SPK format that underpins every precision claim
   in this document.
@@ -318,3 +320,14 @@ separately from Swiss's [public mirror](https://github.com/aloistr/swisseph/tree
   bundled in `celestial-eop-data`.
 - **IAU SOFA** — for the precession / nutation / frame transformations
   re-implemented in `eternal-core`.
+
+### With thanks to
+
+For their guidance, conversations, and inspiration that shaped the
+direction of the astrology pipeline built on top of this validation
+harness:
+
+- **Roberto Reiley**
+- **Germán Rosas**
+- **Juan Velásquez**
+- **Guillermo Velásquez**

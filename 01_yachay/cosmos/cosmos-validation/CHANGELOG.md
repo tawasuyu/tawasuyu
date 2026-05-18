@@ -14,6 +14,39 @@ version `0.1.1-alpha.2`.
 
 ### Added
 
+#### Phase 6 — Astronomy façade + symbolic astrology layer
+
+These changes did not modify `eternal-validation` itself, but they
+build directly on its `Oracle` and lunar / asteroid / eclipses / houses
+modules. They are listed here so the validation harness's downstream
+consumers are documented in one place.
+
+- **`eternal-sky`** — ergonomic public façade. `Instant` (civil UTC
+  with on-demand TT/TDB/UT1/JD), `Observer`, `EphemerisSession`,
+  `ApparentPosition` (ecliptic + equatorial + horizon), `Body` enum
+  spanning 22 luminaries/planets/nodes/Lilith/asteroids, `find_root`
+  generic root-finder over time.
+- **`Oracle::spk()`** getter added so higher-level crates can route
+  the lunar-node / Lilith / asteroid paths through the same memory-
+  mapped kernel without opening a second handle.
+- **SPK Type 21 parsing** — `load_segments` now accepts both Type 2
+  Chebyshev and Type 21 (Extended Modified Difference Arrays)
+  segments. Metadata (NUMREC, MAXDIM) is read from the segment
+  trailer; each record's TL, G, REFPOS, REFVEL, DT, KQMAX1, and KQ
+  fields are fully parsed. The Newhall (1989) MDA *interpolation*
+  step itself is not yet implemented — `compute_state` on a Type 21
+  segment returns `SpkError::UnsupportedType(21)` after a successful
+  parse rather than silently dropping the body.
+- **`eternal-astrology`** — symbolic layer on top of `eternal-sky`.
+  Adds `NatalChart::compute`, 7 house systems, 8 ayanamshas, 12-kind
+  aspect engine with applying/separating, planetary returns,
+  secondary/tertiary/minor progressions, true and Naibod solar arc,
+  the classical primary-direction trilogy (Placidus mundane,
+  Regiomontanus, Campanus) with Ptolemy/Naibod keys and aspect
+  branches, transits (snapshot + next-exact), planetary stations,
+  synastry, midpoint composite charts, Arabic Parts (Lots),
+  Hellenistic profections, lunar phases, and eclipses-on-natal.
+
 #### Phase 1 — SPK reader validation
 
 - **Validation harness scaffold**: `eternal-validation` crate with
