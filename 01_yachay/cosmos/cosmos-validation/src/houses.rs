@@ -445,6 +445,68 @@ fn wrap_two_pi(x: f64) -> f64 {
     y
 }
 
+/// Twelve cusps del sistema **Polich-Page (Topocentric)**, formulado
+/// por Wendel Polich y A. Page en 1961. A diferencia de Placidus —
+/// que itera sobre el semi-arco diurno — Polich-Page tiene forma
+/// cerrada: cada cusp intermedia usa una "altitud polar de la casa"
+/// `F_n = atan(tan φ · n/3)` y se proyecta sobre la eclíptica con la
+/// misma fórmula tipo asc/MC. Los cusps angulares (1, 4, 7, 10)
+/// coinciden con ASC/IC/DESC/MC. Falla dentro del círculo polar
+/// igual que Placidus.
+///
+/// Referencia: Polich & Page, *Topocentric System*, 1961.
+pub fn polich_page_houses(
+    last_rad: f64,
+    lat_rad: f64,
+    obliquity_rad: f64,
+) -> Result<[f64; 12], &'static str> {
+    let armc_deg = last_rad.to_degrees();
+    let lat_deg = lat_rad.to_degrees();
+    let eps_deg = obliquity_rad.to_degrees();
+
+    if lat_deg.abs() >= 90.0 - eps_deg {
+        return Err("Polich-Page undefined inside the polar circle");
+    }
+
+    let asc_deg = asc_meeus_to_degnorm(armc_deg, lat_deg, sind(eps_deg), cosd(eps_deg));
+    let mc_deg = mc_meeus_to_degnorm(armc_deg, eps_deg);
+
+    // Cusp intermedia para n signos desde MC. n=1,2,4,5 dan 11,12,2,3;
+    // las opuestas (5,6,8,9) se derivan por +180°.
+    let intermediate = |n_signs: f64| -> f64 {
+        let f_rad = libm::atan(libm::tan(lat_rad) * n_signs / 3.0);
+        let h_deg = armc_deg + n_signs * 30.0;
+        let h_rad = h_deg.to_radians();
+        let raw = libm::atan2(
+            libm::sin(h_rad),
+            libm::cos(h_rad) * cosd(eps_deg) - libm::tan(f_rad) * sind(eps_deg),
+        );
+        degnorm(raw.to_degrees())
+    };
+
+    let cusp_11 = intermediate(1.0);
+    let cusp_12 = intermediate(2.0);
+    let cusp_2 = intermediate(4.0);
+    let cusp_3 = intermediate(5.0);
+
+    let to_rad = |d: f64| (degnorm(d)).to_radians();
+
+    Ok([
+        to_rad(asc_deg),
+        to_rad(cusp_2),
+        to_rad(cusp_3),
+        to_rad(mc_deg + 180.0),
+        to_rad(cusp_11 + 180.0),
+        to_rad(cusp_12 + 180.0),
+        to_rad(asc_deg + 180.0),
+        to_rad(cusp_2 + 180.0),
+        to_rad(cusp_3 + 180.0),
+        to_rad(mc_deg),
+        to_rad(cusp_11),
+        to_rad(cusp_12),
+    ])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -469,6 +531,69 @@ mod tests {
             let expected = wrap_two_pi(asc + (i as f64) * (PI / 6.0));
             assert!((cusps[i] - expected).abs() < 1e-12);
         }
+    }
+
+    #[test]
+    fn polich_page_angular_cusps_match_asc_mc() {
+        // En cualquier latitud no-polar, cusp 1 = ASC, cusp 10 = MC,
+        // cusp 4 = IC (MC+180), cusp 7 = DESC (ASC+180).
+        let last = 120.0_f64.to_radians();
+        let lat = 40.0_f64.to_radians();
+        let eps = 23.4_f64.to_radians();
+        let cusps = polich_page_houses(last, lat, eps).unwrap();
+        let asc = ascendant(last, lat, eps);
+        let mc = midheaven(last, eps);
+        assert!((cusps[0] - asc).abs() < 1e-9);
+        assert!((cusps[9] - mc).abs() < 1e-9);
+        assert!((cusps[6] - wrap_two_pi(asc + PI)).abs() < 1e-9);
+        assert!((cusps[3] - wrap_two_pi(mc + PI)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn polich_page_opposite_cusps_are_symmetric() {
+        // Cada cusp i (i = 1..=12) tiene su opuesta en cusp i+6 = i+180°.
+        let last = 85.0_f64.to_radians();
+        let lat = -33.0_f64.to_radians();
+        let eps = 23.4_f64.to_radians();
+        let cusps = polich_page_houses(last, lat, eps).unwrap();
+        for i in 0..6 {
+            let opposite = wrap_two_pi(cusps[i] + PI);
+            assert!(
+                (cusps[i + 6] - opposite).abs() < 1e-9,
+                "cusp {} y {} no son antipodal: {} vs {}",
+                i + 1,
+                i + 7,
+                cusps[i + 6].to_degrees(),
+                opposite.to_degrees()
+            );
+        }
+    }
+
+    #[test]
+    fn polich_page_fails_inside_polar_circle() {
+        let last = 0.0_f64.to_radians();
+        let lat = 80.0_f64.to_radians();
+        let eps = 23.4_f64.to_radians();
+        assert!(polich_page_houses(last, lat, eps).is_err());
+    }
+
+    #[test]
+    fn polich_page_diverges_from_placidus() {
+        // En latitudes medias los dos sistemas dan resultados parecidos
+        // pero no idénticos. Las cusps intermedias deben diferir al
+        // menos en una fracción de grado.
+        let last = 200.0_f64.to_radians();
+        let lat = 45.0_f64.to_radians();
+        let eps = 23.4_f64.to_radians();
+        let pp = polich_page_houses(last, lat, eps).unwrap();
+        let pl = placidus_houses(last, lat, eps).unwrap();
+        // Cusp 11 (intermedia) — diferencia esperada ~0.1° o más
+        let diff_11 = (pp[10] - pl[10]).to_degrees().abs();
+        assert!(
+            diff_11 > 0.05 && diff_11 < 5.0,
+            "diff cusp 11 esperada en (0.05°, 5°), fue {}",
+            diff_11
+        );
     }
 
     #[test]

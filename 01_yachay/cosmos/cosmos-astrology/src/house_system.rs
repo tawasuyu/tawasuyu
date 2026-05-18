@@ -32,6 +32,13 @@ pub enum HouseSystem {
     Regiomontanus,
     /// Trisection of the prime vertical → great-circle horizons.
     Campanus,
+    /// **Polich–Page (Topocentric)** — closed-form quadrant system
+    /// derived from a topocentric "pole height" `atan(tan φ · n/3)`
+    /// per intermediate cusp. Faster than Placidus (no iteration),
+    /// agrees closely in mid-latitudes, and is the canonical system
+    /// for primary-direction work in the GR school. Undefined inside
+    /// the polar circle.
+    PolichPage,
 }
 
 impl Default for HouseSystem {
@@ -78,6 +85,10 @@ impl Houses {
             }
             HouseSystem::Campanus => ev_houses::campanus_houses(last_rad, lat_rad, obliquity_rad)
                 .map_err(AstrologyError::HouseSystemUnavailable)?,
+            HouseSystem::PolichPage => {
+                ev_houses::polich_page_houses(last_rad, lat_rad, obliquity_rad)
+                    .map_err(AstrologyError::HouseSystemUnavailable)?
+            }
         };
 
         Ok(Self {

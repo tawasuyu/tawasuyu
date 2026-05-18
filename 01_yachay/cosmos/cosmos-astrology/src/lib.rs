@@ -72,6 +72,7 @@ pub mod returns;
 pub mod solar_arc;
 pub mod stations;
 pub mod synastry;
+pub mod topocentric;
 pub mod transits;
 pub mod zodiac;
 
@@ -87,6 +88,7 @@ pub use eclipses::{
 pub use error::{AstrologyError, AstrologyResult};
 pub use house_system::{HouseSystem, Houses};
 pub use placement::BodyPlacement;
+pub use topocentric::topocentric_ecliptic;
 pub use progression::{
     minor_progression, progress, progressed_instant, secondary_progression, tertiary_progression,
     ProgressedChart, ProgressedHouses, ProgressionMethod,
