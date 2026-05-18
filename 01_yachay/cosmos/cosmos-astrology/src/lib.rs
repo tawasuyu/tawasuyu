@@ -94,8 +94,8 @@ pub use progression::{
     ProgressedChart, ProgressedHouses, ProgressionMethod,
 };
 pub use primary_direction::{
-    all_directions, all_directions_with_aspects, direct, direct_to_aspect, directions_to_angles,
-    Direction, DirectionKey, DirectionMethod, Significator,
+    all_directions, all_directions_with_aspects, direct, direct_to_aspect, directed_longitude,
+    directions_to_angles, Direction, DirectionKey, DirectionMethod, PrimaryDirection, Significator,
 };
 pub use lots::{all_lots, compute_lot, custom_lot, Lot, LotName, LotPoint, Sect};
 pub use lunar_phase::{

@@ -276,6 +276,57 @@ impl Significator {
     }
 }
 
+/// Direct vs Converse — sentido de la rotación que mueve el promissor.
+/// Direct = forward in time (la esfera sigue rotando después del
+/// nacimiento). Converse = backward in time (rotación simétrica
+/// inversa, como si fuera "el tiempo desplegándose al revés"). En la
+/// escuela GR las conversas se usan en paralelo con las directas para
+/// rectificar: un mismo evento debería aparecer en ambos rings con
+/// arcos consistentes si la hora natal es correcta.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PrimaryDirection {
+    #[default]
+    Direct,
+    Converse,
+}
+
+/// Proyecta un cuerpo natal según las direcciones primarias a la edad
+/// dada. Convierte la edad a un arco en RA usando `key`
+/// (Ptolemy/Naibod), aplica la rotación al RA natal del cuerpo
+/// (manteniendo su declinación constante — convención clásica), y
+/// devuelve la nueva longitud eclíptica proyectada sobre la
+/// eclíptica de la fecha.
+///
+/// Es el cómputo "moderno" de direcciones primarias usado para
+/// visualización en time-scrubbing: en lugar de buscar el evento de
+/// llegada a un significator, devuelve directamente "dónde está el
+/// cuerpo natal después de N años de rotación diurna".
+pub fn directed_longitude(
+    natal_ra_rad: f64,
+    natal_dec_rad: f64,
+    age_years: f64,
+    direction: PrimaryDirection,
+    key: DirectionKey,
+    obliquity_rad: f64,
+) -> f64 {
+    let arc_rad = (age_years * key.degrees_per_year()).to_radians();
+    let sign = match direction {
+        PrimaryDirection::Direct => 1.0,
+        PrimaryDirection::Converse => -1.0,
+    };
+    let new_ra = (natal_ra_rad + sign * arc_rad).rem_euclid(std::f64::consts::TAU);
+    // RA + Dec → longitud eclíptica de fecha. Declinación fija
+    // (la rotación diurna no la cambia para un punto natal).
+    let (sin_ra, cos_ra) = libm::sincos(new_ra);
+    let (sin_dec, cos_dec) = libm::sincos(natal_dec_rad);
+    let (sin_eps, cos_eps) = libm::sincos(obliquity_rad);
+    let lon = libm::atan2(
+        sin_dec * sin_eps + cos_dec * cos_eps * sin_ra,
+        cos_dec * cos_ra,
+    );
+    lon.rem_euclid(std::f64::consts::TAU)
+}
+
 /// A computed primary direction.
 #[derive(Debug, Clone, Copy)]
 pub struct Direction {
