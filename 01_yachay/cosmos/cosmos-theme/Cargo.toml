@@ -1,0 +1,10 @@
+[package]
+name = "cosmobiologia-theme"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+description = "Tahuantinsuyu — paleta astrológica (elementos, planetas, signos) + presets dark/light místicos sobre yahweh-theme."
+
+[dependencies]
+gpui = { workspace = true }
+yahweh-theme = { workspace = true }
