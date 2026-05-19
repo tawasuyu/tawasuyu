@@ -1,0 +1,35 @@
+[package]
+name = "cosmobiologia"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+description = "Tahuantinsuyu — estudio profesional de astrología. Tree + canvas + panel sobre yahweh + eternal-astrology."
+
+[dependencies]
+cosmobiologia-card = { path = "../../modules/cosmobiologia/cosmobiologia-card" }
+cosmobiologia-canvas = { path = "../../modules/cosmobiologia/cosmobiologia-canvas" }
+cosmobiologia-engine = { path = "../../modules/cosmobiologia/cosmobiologia-engine" }
+cosmobiologia-model = { path = "../../modules/cosmobiologia/cosmobiologia-model" }
+cosmobiologia-modules = { path = "../../modules/cosmobiologia/cosmobiologia-modules" }
+cosmobiologia-panel = { path = "../../modules/cosmobiologia/cosmobiologia-panel" }
+cosmobiologia-store = { path = "../../modules/cosmobiologia/cosmobiologia-store" }
+cosmobiologia-theme = { path = "../../modules/cosmobiologia/cosmobiologia-theme" }
+cosmobiologia-tree = { path = "../../modules/cosmobiologia/cosmobiologia-tree" }
+brahman-sidecar = { path = "../../shared/brahman-sidecar" }
+
+yahweh-core = { workspace = true }
+yahweh-theme = { workspace = true }
+yahweh-widget-theme-switcher = { path = "../../modules/ui_engine/widgets/theme-switcher" }
+yahweh-widget-splitter = { workspace = true }
+yahweh-widget-container-core = { workspace = true }
+gpui = { workspace = true }
+directories = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# TestAppContext + #[gpui::test] para tests de integración del shell.
+gpui = { workspace = true, features = ["test-support"] }
+
+[[bin]]
+name = "cosmobiologia"
+path = "src/main.rs"
