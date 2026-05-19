@@ -1,6 +1,6 @@
 //! `cosmobiologia-tree` — explorador jerárquico Groups → Contacts → Charts.
 //!
-//! Envuelve [`yahweh_widget_tree::TreeView`] con la lógica de dominio
+//! Envuelve [`nahual_widget_tree::TreeView`] con la lógica de dominio
 //! de Tahuantinsuyu. Los `RowId` codifican el tipo con prefijo:
 //!
 //! - `g:<ulid>` → Group
@@ -17,7 +17,7 @@
 //! - **Borrar** pide confirmación con `window.prompt`.
 //!
 //! El host (la app) se suscribe a [`TreeEvent`] y traduce a `AppEvent`
-//! del bus de yahweh para que el canvas/panel reaccionen.
+//! del bus de nahual para que el canvas/panel reaccionen.
 
 #![forbid(unsafe_code)]
 #![warn(rust_2018_idioms)]
@@ -34,9 +34,9 @@ use cosmobiologia_model::{
     TimeCertainty, TreeSelection,
 };
 use cosmobiologia_store::Store;
-use yahweh_theme::Theme;
-use yahweh_widget_text_input::{TextInput, TextInputEvent};
-use yahweh_widget_tree::{RowId, RowKind, TreeEvent as InnerTreeEvent, TreeRow, TreeView};
+use nahual_theme::Theme;
+use nahual_widget_text_input::{TextInput, TextInputEvent};
+use nahual_widget_tree::{RowId, RowKind, TreeEvent as InnerTreeEvent, TreeRow, TreeView};
 
 const PREFIX_GROUP: &str = "g:";
 const PREFIX_CONTACT: &str = "c:";

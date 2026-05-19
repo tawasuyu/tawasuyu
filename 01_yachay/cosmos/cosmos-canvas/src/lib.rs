@@ -43,7 +43,7 @@ use gpui::{
 use cosmobiologia_engine::{Geometry, Layer, LayerKind, OUTER_RING_MODULES, RenderModel};
 use cosmobiologia_model::{ChartId, ContactId, GroupId};
 use cosmobiologia_theme::{AspectKind as TAspectKind, AstroPalette, Element, Planet};
-use yahweh_theme::Theme;
+use nahual_theme::Theme;
 
 // =====================================================================
 // Eventos

@@ -15,13 +15,13 @@ cosmobiologia-panel = { path = "../../modules/cosmobiologia/cosmobiologia-panel"
 cosmobiologia-store = { path = "../../modules/cosmobiologia/cosmobiologia-store" }
 cosmobiologia-theme = { path = "../../modules/cosmobiologia/cosmobiologia-theme" }
 cosmobiologia-tree = { path = "../../modules/cosmobiologia/cosmobiologia-tree" }
-brahman-sidecar = { path = "../../shared/brahman-sidecar" }
+brahman-sidecar = { path = "../../protocol/brahman-sidecar" }
 
-yahweh-core = { workspace = true }
-yahweh-theme = { workspace = true }
-yahweh-widget-theme-switcher = { path = "../../modules/ui_engine/widgets/theme-switcher" }
-yahweh-widget-splitter = { workspace = true }
-yahweh-widget-container-core = { workspace = true }
+nahual-core = { workspace = true }
+nahual-theme = { workspace = true }
+nahual-widget-theme-switcher = { path = "../../modules/nahual/widgets/theme-switcher" }
+nahual-widget-splitter = { workspace = true }
+nahual-widget-container-core = { workspace = true }
 gpui = { workspace = true }
 directories = { workspace = true }
 serde_json = { workspace = true }

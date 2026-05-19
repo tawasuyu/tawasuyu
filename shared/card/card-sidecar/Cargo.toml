@@ -1,0 +1,28 @@
+[package]
+name = "brahman-sidecar"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Brahman — sidecar reusable: thread + tokio runtime que mantiene viva la sesión de un módulo contra el Init."
+
+[dependencies]
+brahman-card = { path = "../brahman-card" }
+brahman-handshake = { path = "../brahman-handshake" }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tracing-subscriber = { workspace = true }
+brahman-card-wit = { path = "../brahman-card-wit" }
+
+[[example]]
+name = "presence"
+path = "examples/presence.rs"
+
+[[example]]
+name = "presence-conscious"
+path = "examples/presence-conscious.rs"

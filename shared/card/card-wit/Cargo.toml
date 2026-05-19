@@ -1,0 +1,21 @@
+[package]
+name = "brahman-card-wit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Brahman — extractor opcional: parsea contratos WIT y devuelve `WitInterface` listo para acoplar a una `Card`."
+
+[dependencies]
+brahman-card = { path = "../brahman-card" }
+wit-parser = "0.230"
+thiserror = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+
+[[example]]
+name = "brahman-wit-info"
+path = "examples/brahman-wit-info.rs"

@@ -1,0 +1,29 @@
+[package]
+name = "shuma-daemon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Daemon de shipote: dueño de los Workspaces, expone admin socket para shipote-cli."
+
+[[bin]]
+name = "shuma-daemon"
+path = "src/main.rs"
+
+[dependencies]
+shuma-card = { path = "../../modules/shuma/shuma-card" }
+shuma-protocol = { path = "../../modules/shuma/shuma-protocol" }
+shuma-discern = { path = "../../modules/shuma/shuma-discern" }
+shuma-core = { path = "../../modules/shuma/shuma-core" }
+ente-incarnate = { path = "../../init/ente-incarnate" }
+brahman-card = { path = "../../protocol/brahman-card" }
+brahman-sidecar = { path = "../../protocol/brahman-sidecar" }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+ulid = { workspace = true }
+nix = { workspace = true }
+libc = { workspace = true }

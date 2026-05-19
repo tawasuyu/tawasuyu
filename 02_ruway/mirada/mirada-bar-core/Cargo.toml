@@ -1,0 +1,8 @@
+[package]
+name = "barra-core"
+description = "Barra — modelo de taskbar agnóstico: Task + render-to-html + sanitizadores. Sin dependencias web/DOM."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true

@@ -1,0 +1,16 @@
+[package]
+name = "pineal-phosphor-demo"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+publish = { workspace = true }
+description = "Lapaloma — demo del trail CRT (phosphor) sobre un RingBuffer streaming a 60Hz. Compará con lapaloma-stream-demo para ver el contraste."
+
+[dependencies]
+gpui = { workspace = true }
+nahual-launcher = { path = "../../modules/nahual/libs/launcher" }
+nahual-theme = { path = "../../modules/nahual/libs/theme" }
+pineal-core = { path = "../../modules/pineal/core" }
+pineal-render = { path = "../../modules/pineal/render", features = ["gpui"] }
+pineal-phosphor = { path = "../../modules/pineal/phosphor" }

@@ -7,11 +7,11 @@ description = "Dashboard GPUI del repo Minga: counts de nodos AST, atestaciones,
 
 [dependencies]
 minga-store = { path = "../../modules/semantic_dht/minga-store" }
-yahweh-theme = { path = "../../modules/ui_engine/libs/theme" }
-yahweh-launcher = { path = "../../modules/ui_engine/libs/launcher" }
-yahweh-widget-banner = { path = "../../modules/ui_engine/widgets/banner" }
-yahweh-widget-stat-card = { path = "../../modules/ui_engine/widgets/stat-card" }
-yahweh-widget-app-header = { path = "../../modules/ui_engine/widgets/app-header" }
+nahual-theme = { path = "../../modules/nahual/libs/theme" }
+nahual-launcher = { path = "../../modules/nahual/libs/launcher" }
+nahual-widget-banner = { path = "../../modules/nahual/widgets/banner" }
+nahual-widget-stat-card = { path = "../../modules/nahual/widgets/stat-card" }
+nahual-widget-app-header = { path = "../../modules/nahual/widgets/app-header" }
 gpui = { workspace = true }
 
 [[bin]]

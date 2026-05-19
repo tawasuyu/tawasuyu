@@ -5,7 +5,7 @@
 //!    (fire-and-forget; si no hay Init, la app sigue standalone).
 //! 2. Abre la DB SQLite en `$XDG_DATA_HOME/cosmobiologia/charts.db`
 //!    (fallback a `~/.local/share/cosmobiologia/charts.db`).
-//! 3. Levanta GPUI con [`yahweh_theme::Theme::install_default`].
+//! 3. Levanta GPUI con [`nahual_theme::Theme::install_default`].
 //! 4. Compone el shell: [`Shell`] dueño del tree (izq), canvas (centro)
 //!    y panel (abajo). Cablea las suscripciones cross-widget.
 //!
@@ -34,7 +34,7 @@ use gpui::{
 };
 
 use cosmobiologia_store::Store;
-use yahweh_theme::Theme;
+use nahual_theme::Theme;
 
 use crate::shell::Shell;
 

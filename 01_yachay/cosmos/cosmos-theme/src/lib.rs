@@ -1,6 +1,6 @@
 //! `cosmobiologia-theme` — paleta simbólica + presets místicos.
 //!
-//! Una capa fina sobre [`yahweh_theme::Theme`]: el theme base aporta los
+//! Una capa fina sobre [`nahual_theme::Theme`]: el theme base aporta los
 //! slots de panel/foreground/accent; nosotros agregamos paletas
 //! semánticas para los elementos (fuego/tierra/aire/agua), los modos
 //! (cardinal/fijo/mutable), los planetas y los aspectos.
@@ -72,7 +72,7 @@ pub enum AspectKind {
 
 /// Paleta completa de símbolos astrológicos resuelta a colores HSLA. Las
 /// dos variantes (`dark` / `light`) comparten estructura — el canvas
-/// elige según `yahweh_theme::Theme::is_dark`.
+/// elige según `nahual_theme::Theme::is_dark`.
 #[derive(Debug, Clone)]
 pub struct AstroPalette {
     pub is_dark: bool,
@@ -319,7 +319,7 @@ impl AstroPalette {
         }
     }
 
-    pub fn for_theme(theme: &yahweh_theme::Theme) -> Self {
+    pub fn for_theme(theme: &nahual_theme::Theme) -> Self {
         // Dispatcher por nombre para los themes "papel"; el resto cae
         // al binary dark/light según `is_dark`. Mantenemos el match
         // case-insensitive por defensa contra cambios de naming.

@@ -18,7 +18,7 @@ use nakui_core::event_log::{
 };
 use nakui_core::executor::Executor;
 use nakui_core::store::{MemoryStore, Store};
-use yahweh_meta_runtime::{MetaBackend, WriteOutcome};
+use nahual_meta_runtime::{MetaBackend, WriteOutcome};
 
 /// Path del snapshot sibling del log:
 /// `nakui-ui-state.jsonl` ↔ `nakui-ui-state.snap.json`.

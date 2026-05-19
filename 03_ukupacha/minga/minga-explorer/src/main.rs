@@ -12,9 +12,9 @@
 //! (`minga status`) cuando hace falta el DID. El explorer foco es
 //! observabilidad rápida.
 //!
-//! Stack visual: yahweh-theme + banner_themed + card_themed +
+//! Stack visual: nahual-theme + banner_themed + card_themed +
 //! theme_switcher. Mismo patrón que `nakui-explorer` /
-//! `nouser-explorer`.
+//! `akasha-explorer`.
 //!
 //! Uso:
 //! ```sh
@@ -30,11 +30,11 @@ use gpui::{
     div, prelude::*, px, Context, IntoElement, Render, SharedString, Window,
 };
 use minga_store::PersistentRepo;
-use yahweh_launcher::launch_app;
-use yahweh_theme::Theme;
-use yahweh_widget_app_header::app_header;
-use yahweh_widget_banner::{banner_themed, Banner};
-use yahweh_widget_stat_card::stat_card;
+use nahual_launcher::launch_app;
+use nahual_theme::Theme;
+use nahual_widget_app_header::app_header;
+use nahual_widget_banner::{banner_themed, Banner};
+use nahual_widget_stat_card::stat_card;
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 const REPO_DIRNAME: &str = "repo";
@@ -288,7 +288,7 @@ impl Render for Explorer {
     }
 }
 
-// `stat_card` se promovió a `yahweh-widget-stat-card` y se importa
+// `stat_card` se promovió a `nahual-widget-stat-card` y se importa
 // arriba. La fn local fue eliminada en la iter 15 del refactor.
 
 #[cfg(test)]

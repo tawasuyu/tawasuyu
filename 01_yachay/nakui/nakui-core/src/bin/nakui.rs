@@ -463,7 +463,7 @@ fn cmd_verify_log(args: &[String]) -> Result<(), CliError> {
 /// Lifecycle Daemon (proceso largo). Flujos JSON: consume `command`
 /// (queries del UI), produce `report` (resultados de cómputo). Los
 /// nombres están escogidos para que el broker pueda matchearlos contra
-/// `user-intent` / `render-data` de yahweh-shell por compatibilidad de
+/// `user-intent` / `render-data` de nahual-shell por compatibilidad de
 /// tipo (todos `json`).
 fn brahman_card_for_nakui() -> brahman_card::Card {
     use brahman_card::{

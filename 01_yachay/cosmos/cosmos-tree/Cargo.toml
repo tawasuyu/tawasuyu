@@ -8,7 +8,7 @@ description = "Tahuantinsuyu — explorador izquierdo (Groups/Contacts/Charts) s
 [dependencies]
 cosmobiologia-model = { path = "../cosmobiologia-model" }
 cosmobiologia-store = { path = "../cosmobiologia-store" }
-yahweh-theme = { workspace = true }
-yahweh-widget-tree = { workspace = true }
-yahweh-widget-text-input = { path = "../../ui_engine/widgets/text_input" }
+nahual-theme = { workspace = true }
+nahual-widget-tree = { workspace = true }
+nahual-widget-text-input = { path = "../../nahual/widgets/text_input" }
 gpui = { workspace = true }

@@ -7,12 +7,12 @@ description = "Nakui — runtime GPUI de la metainterfaz: carga module.json desd
 
 [dependencies]
 nakui-core = { path = "../../modules/nakui/core" }
-yahweh-meta-schema = { path = "../../modules/ui_engine/libs/meta-schema" }
-yahweh-meta-runtime = { path = "../../modules/ui_engine/libs/meta-runtime" }
-brahman-cards = { path = "../../core/brahman-cards" }
-yahweh-widget-text-input = { path = "../../modules/ui_engine/widgets/text_input" }
-yahweh-widget-meta-form = { path = "../../modules/ui_engine/widgets/meta-form" }
-yahweh-theme = { path = "../../modules/ui_engine/libs/theme" }
+nahual-meta-schema = { path = "../../modules/nahual/libs/meta-schema" }
+nahual-meta-runtime = { path = "../../modules/nahual/libs/meta-runtime" }
+brahman-cards = { path = "../../protocol/brahman-cards" }
+nahual-widget-text-input = { path = "../../modules/nahual/widgets/text_input" }
+nahual-widget-meta-form = { path = "../../modules/nahual/widgets/meta-form" }
+nahual-theme = { path = "../../modules/nahual/libs/theme" }
 gpui = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true, features = ["serde"] }

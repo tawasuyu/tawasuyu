@@ -38,11 +38,11 @@ use ulid::Ulid;
 use gpui::{
     div, prelude::*, px, Context, IntoElement, Render, SharedString, Window,
 };
-use yahweh_launcher::launch_app;
-use yahweh_theme::Theme;
-use yahweh_widget_app_header::app_header;
-use yahweh_widget_banner::{banner_themed, Banner};
-use yahweh_widget_stat_card::stat_card;
+use nahual_launcher::launch_app;
+use nahual_theme::Theme;
+use nahual_widget_app_header::app_header;
+use nahual_widget_banner::{banner_themed, Banner};
+use nahual_widget_stat_card::stat_card;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(1);

@@ -1,0 +1,16 @@
+[package]
+name = "pineal-financial-demo"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+publish = { workspace = true }
+description = "Lapaloma — demo de candlesticks OHLC. Random walk sintético de 120 días con pan + zoom."
+
+[dependencies]
+gpui = { workspace = true }
+nahual-launcher = { path = "../../modules/nahual/libs/launcher" }
+nahual-theme = { path = "../../modules/nahual/libs/theme" }
+pineal-render = { path = "../../modules/pineal/render", features = ["gpui"] }
+pineal-cartesian = { path = "../../modules/pineal/cartesian" }
+pineal-financial = { path = "../../modules/pineal/financial" }

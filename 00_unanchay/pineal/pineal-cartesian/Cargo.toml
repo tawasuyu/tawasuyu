@@ -1,0 +1,17 @@
+[package]
+name = "pineal-cartesian"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+publish = { workspace = true }
+description = "Lapaloma — gráficos cartesianos: LineSeries / BarSeries / AreaSeries, viewport con pan/zoom, picture cache, ejes con decimación, tooltips."
+
+[dependencies]
+pineal-core = { path = "../core" }
+pineal-render = { path = "../render" }
+gpui = { workspace = true, optional = true }
+
+[features]
+default = ["gpui"]
+gpui = ["dep:gpui", "pineal-render/gpui"]

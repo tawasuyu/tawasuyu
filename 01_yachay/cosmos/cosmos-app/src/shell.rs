@@ -44,11 +44,11 @@ use cosmobiologia_store::Store;
 use cosmobiologia_tree::{
     parse_city_atlas_tsv, FreeChartEntry, TahuantinsuyuTree, TreeEvent,
 };
-use yahweh_core::{LayoutDirection, NodeId};
-use yahweh_theme::Theme;
-use yahweh_widget_container_core::ChildSlot;
-use yahweh_widget_splitter::{SplitContainer, SplitEvent};
-use yahweh_widget_theme_switcher::theme_switcher;
+use nahual_core::{LayoutDirection, NodeId};
+use nahual_theme::Theme;
+use nahual_widget_container_core::ChildSlot;
+use nahual_widget_splitter::{SplitContainer, SplitEvent};
+use nahual_widget_theme_switcher::theme_switcher;
 
 /// Posición del panel de control dentro del shell. `Bottom` mantiene
 /// el layout histórico (tree+canvas arriba, panel abajo); las variantes
@@ -1671,7 +1671,7 @@ impl Shell {
     /// Click llama a `apply_dock` que reorganiza splitters y persiste.
     fn render_dock_switcher(
         &self,
-        theme: &yahweh_theme::Theme,
+        theme: &nahual_theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let mut row = div()

@@ -10,7 +10,7 @@
 //! producción que va escribiendo). Sin discovery dinámico vía broker
 //! brahman porque nakui hoy es CLI/library/demos, no daemon — cuando
 //! se daemonice, sustituir el lector de archivo por un sidecar
-//! consumer (mismo patrón que `nouser-explorer`).
+//! consumer (mismo patrón que `akasha-explorer`).
 //!
 //! ## Uso
 //!
@@ -29,12 +29,12 @@ use gpui::{
     div, prelude::*, px, rgb, Context, IntoElement, Render, SharedString, Window,
 };
 use nakui_core::event_log::{EventLog, LogEntry};
-use yahweh_launcher::launch_app;
-use yahweh_meta_runtime::{preview_value, short_hash, short_uuid};
-use yahweh_theme::Theme;
-use yahweh_widget_app_header::app_header;
-use yahweh_widget_banner::{banner_themed, Banner};
-use yahweh_widget_card::card_themed;
+use nahual_launcher::launch_app;
+use nahual_meta_runtime::{preview_value, short_hash, short_uuid};
+use nahual_theme::Theme;
+use nahual_widget_app_header::app_header;
+use nahual_widget_banner::{banner_themed, Banner};
+use nahual_widget_card::card_themed;
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
@@ -149,7 +149,7 @@ impl Render for Explorer {
             self.last_load_ms,
         );
 
-        // Header standard via widget compartido yahweh-widget-app-header
+        // Header standard via widget compartido nahual-widget-app-header
         // (label flex_grow + theme switcher derecha + bg panel + border
         // bottom + text styling consistente).
         let header = app_header(cx, header_text);
@@ -351,7 +351,7 @@ impl Render for Explorer {
 }
 
 // Helpers `short_uuid`, `short_hash`, `preview_value` viven en
-// `yahweh_meta_runtime::format`. Se usan acá via el `use` de arriba.
+// `nahual_meta_runtime::format`. Se usan acá via el `use` de arriba.
 
 #[cfg(test)]
 mod tests {
@@ -418,7 +418,7 @@ mod tests {
     }
 
     // Tests de `short_uuid` / `short_hash` / `preview_value` viven
-    // en `yahweh-meta-runtime::format` tras la migración. Si esos se
+    // en `nahual-meta-runtime::format` tras la migración. Si esos se
     // vuelven a romper, los tests específicos del crate runtime los
     // capturan; acá no duplicamos.
 }

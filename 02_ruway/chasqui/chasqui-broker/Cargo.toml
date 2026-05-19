@@ -1,0 +1,15 @@
+[package]
+name = "brahman-broker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Brahman — broker de tipos: empareja productores↔consumidores por TypeRef con matching híbrido (exact + structural) y prioridad."
+
+[dependencies]
+brahman-card = { path = "../brahman-card" }
+serde = { workspace = true }
+thiserror = { workspace = true }
+ulid = { workspace = true }

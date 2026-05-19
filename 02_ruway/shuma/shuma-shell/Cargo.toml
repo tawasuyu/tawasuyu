@@ -1,0 +1,25 @@
+[package]
+name = "shuma-shell"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "GUI de shipote: vista de Workspaces+comandos+capabilities. Conecta al daemon vía shipote-protocol."
+
+[[bin]]
+name = "shuma-shell"
+path = "src/main.rs"
+
+[dependencies]
+shuma-card = { path = "../../modules/shuma/shuma-card" }
+shuma-protocol = { path = "../../modules/shuma/shuma-protocol" }
+nahual-theme = { path = "../../modules/nahual/libs/theme" }
+nahual-launcher = { path = "../../modules/nahual/libs/launcher" }
+nahual-widget-banner = { path = "../../modules/nahual/widgets/banner" }
+nahual-widget-stat-card = { path = "../../modules/nahual/widgets/stat-card" }
+nahual-widget-app-header = { path = "../../modules/nahual/widgets/app-header" }
+tokio = { workspace = true }
+gpui = { workspace = true }
+ulid = { workspace = true }

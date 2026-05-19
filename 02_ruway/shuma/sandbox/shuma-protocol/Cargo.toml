@@ -1,0 +1,19 @@
+[package]
+name = "shuma-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Wire protocol entre shipote-daemon y clientes (cli/gui). Postcard length-prefixed sobre Unix socket."
+
+[dependencies]
+shuma-card = { path = "../shuma-card" }
+brahman-card = { path = "../../../protocol/brahman-card" }
+serde = { workspace = true }
+postcard = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+ulid = { workspace = true }
+nix = { workspace = true }

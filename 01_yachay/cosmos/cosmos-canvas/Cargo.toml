@@ -11,5 +11,5 @@ cosmobiologia-model = { path = "../cosmobiologia-model" }
 cosmobiologia-modules = { path = "../cosmobiologia-modules" }
 cosmobiologia-render = { path = "../cosmobiologia-render" }
 cosmobiologia-theme = { path = "../cosmobiologia-theme" }
-yahweh-theme = { workspace = true }
+nahual-theme = { workspace = true }
 gpui = { workspace = true }

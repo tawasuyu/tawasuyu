@@ -1,0 +1,22 @@
+[package]
+name = "brahman-net"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Brahman — capa de transporte P2P compartida (libp2p TCP+Noise+Yamux+Kad+Identify+Stream). Cualquier protocolo (handshake brahman, sync minga, futuros) puede registrar su StreamProtocol y abrir/aceptar streams sobre la malla común."
+
+[dependencies]
+futures = { workspace = true }
+libp2p = { workspace = true }
+libp2p-stream = { workspace = true }
+libp2p-allow-block-list = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tokio-util = { workspace = true }

@@ -6,8 +6,8 @@ license = { workspace = true }
 description = "Tahuantinsuyu — Tarjeta de Presentación brahman + spawn del sidecar + protocolo del service socket."
 
 [dependencies]
-brahman-card = { path = "../../../core/brahman-card" }
-brahman-sidecar = { path = "../../../shared/brahman-sidecar" }
+brahman-card = { path = "../../../protocol/brahman-card" }
+brahman-sidecar = { path = "../../../protocol/brahman-sidecar" }
 cosmobiologia-engine = { path = "../cosmobiologia-engine" }
 cosmobiologia-model = { path = "../cosmobiologia-model" }
 ulid = { workspace = true }

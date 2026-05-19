@@ -5,10 +5,10 @@
 //! migración inicial corre la primera vez que se abre un archivo nuevo
 //! (idempotente vía `CREATE TABLE IF NOT EXISTS`).
 //!
-//! Patrón inspirado en `yahweh_provider_sqlite::SqliteDataProvider` pero
+//! Patrón inspirado en `nahual_provider_sqlite::SqliteDataProvider` pero
 //! con dominio propio (no extiende el `DataProvider` agnóstico — esa
 //! integración viene en `cosmobiologia-tree` que envuelve este store
-//! detrás del trait de yahweh).
+//! detrás del trait de nahual).
 
 #![forbid(unsafe_code)]
 #![warn(rust_2018_idioms)]

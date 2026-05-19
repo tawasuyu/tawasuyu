@@ -7,4 +7,4 @@ description = "Tahuantinsuyu — paleta astrológica (elementos, planetas, signo
 
 [dependencies]
 gpui = { workspace = true }
-yahweh-theme = { workspace = true }
+nahual-theme = { workspace = true }

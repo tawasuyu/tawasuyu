@@ -31,7 +31,7 @@ use gpui::{
 
 use cosmobiologia_model::ChartKind;
 use cosmobiologia_modules::{Control, Registry, SelectOption};
-use yahweh_theme::Theme;
+use nahual_theme::Theme;
 
 // =====================================================================
 // Eventos

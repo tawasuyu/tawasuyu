@@ -1,7 +1,7 @@
 //! `nakui-ui` — binario shell de la metainterfaz Nakui.
 //!
 //! Compone:
-//! - **Yahweh widget** [`yahweh_widget_meta_form::MetaApp`] genérico
+//! - **Yahweh widget** [`nahual_widget_meta_form::MetaApp`] genérico
 //!   sobre cualquier `MetaBackend` — toda la lógica de
 //!   render/edit/delete/morphism vive ahí.
 //! - **Backend** [`backend::NakuiBackend`] — implementa el trait
@@ -31,9 +31,9 @@ use gpui::{
 
 use brahman_cards::CardBody;
 use nakui_core::executor::Executor;
-use yahweh_meta_schema::Module;
-use yahweh_theme::Theme;
-use yahweh_widget_meta_form::MetaApp;
+use nahual_meta_schema::Module;
+use nahual_theme::Theme;
+use nahual_widget_meta_form::MetaApp;
 
 use crate::backend::NakuiBackend;
 
@@ -190,8 +190,8 @@ fn load_ui_modules(
 mod tests {
     //! Tests del shell. Los tests del backend impl viven en
     //! `backend.rs`. Los tests del widget viven en
-    //! `yahweh-widget-meta-form`. Los helpers puros en
-    //! `yahweh-meta-runtime`.
+    //! `nahual-widget-meta-form`. Los helpers puros en
+    //! `nahual-meta-runtime`.
 
     use super::*;
     use serde_json::json;
