@@ -171,30 +171,58 @@
       await refreshSelected();
     }
 
+    // Cliente WASM opcional. Si `/static/wasm/cosmobiologia_web.js`
+    // existe (= el usuario corrió `wasm-pack build` después de
+    // `cargo build`), el rendering se hace localmente sin pedirle
+    // el SVG al server por cada interacción. Si NO existe (deploy
+    // mínimo), caemos al SSR de `/api/*.svg`. Toggle automático,
+    // sin configuración.
+    let wasm = null;
+    async function tryLoadWasm() {
+      try {
+        const mod = await import('/static/wasm/cosmobiologia_web.js');
+        await mod.default(); // wasm-pack: inicializa
+        wasm = mod;
+        document.getElementById('info').textContent = 'WASM cargado — render local';
+      } catch (e) {
+        console.info('WASM no disponible, usando SSR:', e.message);
+      }
+    }
+
     async function refreshSelected() {
       const offset = document.getElementById('offset').value || 0;
       const transit = document.getElementById('transit').checked ? '1' : '0';
       const params = new URLSearchParams({ offset_min: offset, transit });
-      let svgUrl, infoUrl;
-      if (mode === 'sky') {
-        svgUrl = `/api/sky.svg`;
-        infoUrl = `/api/sky`;
+      const jsonUrl = mode === 'sky'
+        ? `/api/sky`
+        : `/api/charts/${selectedChartId}/render?${params}`;
+      const ssrUrl = mode === 'sky'
+        ? `/api/sky.svg`
+        : `/api/charts/${selectedChartId}/wheel.svg?${params}`;
+
+      const render = await fetch(jsonUrl).then(r => r.json()).catch(() => null);
+      let svg;
+      if (wasm && render) {
+        // Render local — WASM compose_wheel + draw_commands_to_svg.
+        try {
+          svg = wasm.render_model_to_svg(JSON.stringify(render), 600, 0);
+        } catch (e) {
+          console.warn('WASM render falló, fallback SSR:', e);
+          svg = await fetch(ssrUrl).then(r => r.text());
+        }
       } else {
-        svgUrl = `/api/charts/${selectedChartId}/wheel.svg?${params}`;
-        infoUrl = `/api/charts/${selectedChartId}/render?${params}`;
+        // Fallback: SSR — el server devuelve el SVG ya compuesto.
+        svg = await fetch(ssrUrl).then(r => r.text());
       }
-      const [svg, render] = await Promise.all([
-        fetch(svgUrl).then(r => r.text()),
-        fetch(infoUrl).then(r => r.json()).catch(() => null),
-      ]);
       document.getElementById('wheel-container').innerHTML = svg;
       const info = document.getElementById('info');
       if (render) {
+        const mode_label = wasm ? 'WASM' : 'SSR';
         info.innerHTML =
           `<b>${escapeHtml(render.title)}</b> · ` +
           `Asc ${render.ascendant_deg.toFixed(2)}° · ` +
           `MC ${render.midheaven_deg.toFixed(2)}° · ` +
-          `${render.compute_ms} ms`;
+          `${render.compute_ms} ms · ${mode_label}`;
       } else {
         info.textContent = '';
       }
@@ -238,8 +266,11 @@
       }[c]));
     }
 
-    loadTree();
-    loadSky();
+    (async () => {
+      await tryLoadWasm();
+      await loadTree();
+      await loadSky();
+    })();
   </script>
 </body>
 </html>

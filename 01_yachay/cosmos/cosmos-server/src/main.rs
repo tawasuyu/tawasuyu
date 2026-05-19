@@ -53,6 +53,7 @@ use cosmobiologia_model::{
 use cosmobiologia_store::Store;
 use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
+use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
@@ -73,6 +74,12 @@ struct Cli {
     /// (`$XDG_DATA_HOME/cosmobiologia/charts.db`).
     #[arg(long)]
     db: Option<PathBuf>,
+    /// Directorio con los assets estáticos del cliente WASM
+    /// (output de `wasm-pack build --out-dir <este path>`). Si el
+    /// directorio no existe, el endpoint `/static/wasm/*` devuelve
+    /// 404 y el cliente cae al SSR.
+    #[arg(long, default_value = "crates/apps/cosmobiologia-server/static/wasm")]
+    static_wasm: PathBuf,
 }
 
 #[derive(Clone)]
@@ -102,7 +109,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store = Arc::new(Store::open(&db_path)?);
 
     let state = AppState { store };
-    let app = router().with_state(state);
+    let app = router()
+        .nest_service("/static/wasm", ServeDir::new(&cli.static_wasm))
+        .with_state(state);
 
     let addr: SocketAddr = format!("{}:{}", cli.bind, cli.port).parse()?;
     info!("listening on http://{}", addr);
