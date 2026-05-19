@@ -1,0 +1,185 @@
+//! Helpers de presentación humana para records y values.
+//!
+//! Sin GPUI: devuelven `String`s. El widget renderer los wrap-ea
+//! en `div().child(...)` o equivalente.
+
+use serde_json::Value;
+use uuid::Uuid;
+
+/// Etiqueta humana para representar un record en el selector de
+/// EntityRef. Heurística: prefiere campos comunes en este orden:
+/// `name`, `label`, `title`, `sku`, `sku_id`. Fallback al UUID corto.
+pub fn human_label_for_record(value: &Value, id: &Uuid) -> String {
+    for key in ["name", "label", "title", "sku", "sku_id"] {
+        if let Some(v) = value.get(key).and_then(Value::as_str) {
+            if !v.is_empty() {
+                return format!("{} ({})", v, short_uuid(id));
+            }
+        }
+    }
+    short_uuid(id)
+}
+
+/// Render legible de un `Value` arbitrario para mostrar en una celda
+/// de lista. Strings van pelados; bools como ✓/✗; el resto via
+/// `Display`.
+pub fn render_value(v: Option<&Value>) -> String {
+    match v {
+        None | Some(Value::Null) => String::new(),
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Bool(b)) => if *b { "✓" } else { "✗" }.to_string(),
+        Some(Value::Number(n)) => n.to_string(),
+        Some(other) => other.to_string(),
+    }
+}
+
+/// Conversión inversa a `parse_field_value`: del JSON al texto raw
+/// que un input puede tomar y volver a parsearse igual al submit.
+/// Usado para pre-llenar inputs en modo edit.
+pub fn value_to_input_text(v: &Value) -> String {
+    match v {
+        Value::Null => String::new(),
+        Value::String(s) => s.clone(),
+        Value::Bool(b) => if *b { "true" } else { "false" }.to_string(),
+        Value::Number(n) => n.to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Primeros 8 chars del UUID en forma canónica. Útil para logs y UI
+/// donde el UUID full es ruido visual.
+pub fn short_uuid(id: &Uuid) -> String {
+    id.to_string().chars().take(8).collect()
+}
+
+/// Hex string de los primeros 4 bytes de un hash SHA-256 (8
+/// caracteres). Útil para mostrar bundle/schema hashes en UI sin
+/// quemar pantalla con los 64 chars completos.
+pub fn short_hash(h: &[u8; 32]) -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(8);
+    for b in h.iter().take(4) {
+        let _ = write!(s, "{:02x}", b);
+    }
+    s
+}
+
+/// Renderea un `serde_json::Value` en una sola línea, truncado a
+/// `max` caracteres con `...` al final si excede. Para preview en
+/// timelines/cards/listas — NO para edición.
+///
+/// `max` es un upper-bound aproximado: el resultado nunca excede
+/// `max` chars, pero puede ser más corto si el value es chico.
+pub fn preview_value(v: &Value, max: usize) -> String {
+    let s = v.to_string();
+    if s.chars().count() <= max {
+        s
+    } else if max < 3 {
+        s.chars().take(max).collect()
+    } else {
+        let truncated: String = s.chars().take(max - 3).collect();
+        format!("{truncated}...")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn human_label_prefers_name_over_id() {
+        let id = Uuid::new_v4();
+        let v = json!({"name": "Acme S.A.", "email": "x@y.z"});
+        let label = human_label_for_record(&v, &id);
+        assert!(label.starts_with("Acme S.A."));
+        assert!(label.contains(&short_uuid(&id)));
+    }
+
+    #[test]
+    fn human_label_falls_back_through_label_title_sku() {
+        let id = Uuid::new_v4();
+        let only_label = json!({"label": "X"});
+        assert!(human_label_for_record(&only_label, &id).starts_with("X "));
+        let only_title = json!({"title": "Y"});
+        assert!(human_label_for_record(&only_title, &id).starts_with("Y "));
+        let only_sku = json!({"sku": "Z"});
+        assert!(human_label_for_record(&only_sku, &id).starts_with("Z "));
+        let only_sku_id = json!({"sku_id": "W"});
+        assert!(human_label_for_record(&only_sku_id, &id).starts_with("W "));
+    }
+
+    #[test]
+    fn human_label_falls_back_to_short_uuid_when_no_keys_match() {
+        let id = Uuid::new_v4();
+        let v = json!({"random": "field"});
+        assert_eq!(human_label_for_record(&v, &id), short_uuid(&id));
+    }
+
+    #[test]
+    fn render_value_handles_basic_kinds() {
+        assert_eq!(render_value(None), "");
+        assert_eq!(render_value(Some(&Value::Null)), "");
+        assert_eq!(render_value(Some(&json!("hola"))), "hola");
+        assert_eq!(render_value(Some(&json!(true))), "✓");
+        assert_eq!(render_value(Some(&json!(false))), "✗");
+        assert_eq!(render_value(Some(&json!(42))), "42");
+    }
+
+    #[test]
+    fn value_to_input_text_round_trip_with_strings_and_numbers() {
+        assert_eq!(value_to_input_text(&Value::Null), "");
+        assert_eq!(value_to_input_text(&json!("x")), "x");
+        assert_eq!(value_to_input_text(&json!(true)), "true");
+        assert_eq!(value_to_input_text(&json!(false)), "false");
+        assert_eq!(value_to_input_text(&json!(42)), "42");
+    }
+
+    #[test]
+    fn short_hash_takes_first_4_bytes_hex() {
+        let mut h = [0u8; 32];
+        h[0] = 0xaa;
+        h[1] = 0xbb;
+        h[2] = 0xcc;
+        h[3] = 0xdd;
+        assert_eq!(short_hash(&h), "aabbccdd");
+    }
+
+    #[test]
+    fn short_hash_zeros() {
+        let h = [0u8; 32];
+        assert_eq!(short_hash(&h), "00000000");
+    }
+
+    #[test]
+    fn preview_value_keeps_short_strings_intact() {
+        let v = json!({"a": 1});
+        assert_eq!(preview_value(&v, 30), "{\"a\":1}");
+    }
+
+    #[test]
+    fn preview_value_truncates_long_strings_with_ellipsis() {
+        let v = json!({"a": "x".repeat(200)});
+        let p = preview_value(&v, 30);
+        assert!(p.chars().count() <= 30);
+        assert!(p.ends_with("..."));
+    }
+
+    #[test]
+    fn preview_value_handles_max_smaller_than_ellipsis() {
+        // Edge case: max < 3 (no espacio para "..."). Devuelve
+        // los primeros `max` chars sin sufijo, sin panic.
+        let v = json!("xxxxxxxxxxxxxxxx");
+        let p = preview_value(&v, 2);
+        assert!(p.chars().count() <= 2);
+    }
+
+    #[test]
+    fn short_uuid_returns_first_8_chars() {
+        let id = Uuid::parse_str("01ARZ3ND-EKTS-V4RR-FFQ6-9G5FAV000000").ok();
+        // Si el parse falla, usamos uno fresco — el invariant es la
+        // longitud, no el contenido.
+        let id = id.unwrap_or_else(Uuid::new_v4);
+        assert_eq!(short_uuid(&id).len(), 8);
+    }
+}

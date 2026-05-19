@@ -1,0 +1,10 @@
+[package]
+name = "nahual-widget-tree"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+description = "TreeView genérico — widget agnóstico de dominio sobre GPUI."
+
+[dependencies]
+gpui = { workspace = true }
+nahual-theme = { workspace = true }

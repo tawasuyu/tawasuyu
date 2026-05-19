@@ -1,0 +1,13 @@
+[package]
+name = "nahual-provider-fs"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+description = "DataProvider de filesystem local con discernimiento de contenido (shipote-discern)."
+
+[dependencies]
+nahual-core = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+notify = { workspace = true }
+shuma-discern = { path = "../../../../shuma/shuma-discern" }

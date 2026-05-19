@@ -1,0 +1,12 @@
+[package]
+name = "nahual-meta-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Yahweh — meta-runtime: helpers puros (parse, delta, validación, formato) que cualquier widget metainterfaz consume sobre `yahweh-meta-schema`. Sin GPUI, sin backend específico — toma cierres/closures para acceder al store."
+
+[dependencies]
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }
+nahual-meta-schema = { path = "../meta-schema" }
