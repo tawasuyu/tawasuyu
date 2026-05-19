@@ -45,6 +45,7 @@ use clap::Parser;
 use cosmobiologia_engine::{
     compose_with_options, svg_export, EngineError, NatalOptions, PipelineRequest, RenderModel,
 };
+use cosmobiologia_render::{compose_wheel, draw_commands_to_svg, CompositionOpts};
 use cosmobiologia_model::{
     Chart, ChartId, ChartKind, Contact, ContactId, Group, GroupId, StoredBirthData,
     StoredChartConfig,
@@ -118,9 +119,17 @@ fn default_db_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
 
 fn router() -> Router<AppState> {
     Router::new()
+        .route("/", get(get_index))
         .route("/api/health", get(health))
         .route("/api/tree", get(get_tree))
         .route("/api/sky", get(get_sky))
+        // El render SVG agnóstico (via `cosmobiologia-render::compose_wheel`
+        // + `draw_commands_to_svg`) sirve a la fase 3 inicial: el
+        // cliente recibe SVG ya compuesto, sin necesidad de WASM.
+        // Cuando agreguemos el cliente WASM real, este endpoint se
+        // mantiene como fallback "ver SVG sin JS".
+        .route("/api/sky.svg", get(get_sky_svg))
+        .route("/api/charts/:id/wheel.svg", get(get_chart_wheel_svg))
         .route("/api/groups", post(post_group))
         .route("/api/groups/:id", patch(patch_group).delete(delete_group))
         .route("/api/contacts", post(post_contact))
@@ -137,6 +146,55 @@ fn router() -> Router<AppState> {
         .route("/api/charts/:id/svg", get(get_chart_svg))
         .layer(CorsLayer::permissive()) // single-user, localhost: cors abierto
         .layer(TraceLayer::new_for_http())
+}
+
+// =====================================================================
+// Página HTML inicial
+// =====================================================================
+
+const INDEX_HTML: &str = include_str!("../static/index.html");
+
+async fn get_index() -> Response {
+    (
+        [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        INDEX_HTML.to_string(),
+    )
+        .into_response()
+}
+
+// SVG render agnóstico (no es el del engine — este viene de
+// `cosmobiologia-render::compose_wheel` que es lo que mañana el
+// cliente WASM también va a usar). Útil para demos sin WASM.
+async fn get_sky_svg() -> Result<Response, ApiError> {
+    let chart = build_present_sky_chart();
+    let model = compose_with_options(&chart, 0, &[], &NatalOptions::default())?;
+    let cmds = compose_wheel(&model, &CompositionOpts::default());
+    let svg = draw_commands_to_svg(&cmds, 600.0);
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "image/svg+xml")],
+        svg,
+    )
+        .into_response())
+}
+
+async fn get_chart_wheel_svg(
+    State(s): State<AppState>,
+    Path(id): Path<ChartId>,
+    Query(q): Query<RenderQuery>,
+) -> Result<Response, ApiError> {
+    let chart = s
+        .store
+        .get_chart(id)
+        .map_err(|_| ApiError::NotFound(format!("chart {}", id)))?;
+    let model =
+        compose_with_options(&chart, q.offset_min, &build_requests(&q), &NatalOptions::default())?;
+    let cmds = compose_wheel(&model, &CompositionOpts::default());
+    let svg = draw_commands_to_svg(&cmds, 600.0);
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "image/svg+xml")],
+        svg,
+    )
+        .into_response())
 }
 
 // =====================================================================
