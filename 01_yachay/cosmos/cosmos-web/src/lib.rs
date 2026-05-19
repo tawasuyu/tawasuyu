@@ -34,7 +34,7 @@
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use cosmobiologia_render::{
-        compose_wheel, draw_commands_to_svg, CompositionOpts, RenderModel,
+        compose_wheel, draw_commands_to_svg, CompositionOpts, Palette, RenderModel,
     };
     use wasm_bindgen::prelude::*;
 
@@ -44,13 +44,39 @@ mod wasm {
     /// `size` es el lado del cuadrado contenedor en px (default 600).
     /// `rot_offset_deg` permite rotar la vista (jog-dial / preview).
     #[wasm_bindgen]
-    pub fn render_model_to_svg(json: &str, size: f32, rot_offset_deg: f32) -> Result<String, JsValue> {
+    pub fn render_model_to_svg(
+        json: &str,
+        size: f32,
+        rot_offset_deg: f32,
+    ) -> Result<String, JsValue> {
+        render_with_opts(json, size, rot_offset_deg, true)
+    }
+
+    /// Variante con palette explícita (dark = `true` por default, light
+    /// = `false`). El JS pasa el modo según preferencia/tema del UA.
+    #[wasm_bindgen]
+    pub fn render_model_to_svg_themed(
+        json: &str,
+        size: f32,
+        rot_offset_deg: f32,
+        dark: bool,
+    ) -> Result<String, JsValue> {
+        render_with_opts(json, size, rot_offset_deg, dark)
+    }
+
+    fn render_with_opts(
+        json: &str,
+        size: f32,
+        rot_offset_deg: f32,
+        dark: bool,
+    ) -> Result<String, JsValue> {
         let model: RenderModel = serde_json::from_str(json)
             .map_err(|e| JsValue::from_str(&format!("parse RenderModel: {}", e)))?;
         let opts = CompositionOpts {
             size: if size > 0.0 { size } else { 600.0 },
             rot_offset_deg,
-            include_bodies: true,
+            palette: if dark { Palette::dark() } else { Palette::light() },
+            ..Default::default()
         };
         let cmds = compose_wheel(&model, &opts);
         Ok(draw_commands_to_svg(&cmds, opts.size))

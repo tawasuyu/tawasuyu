@@ -32,6 +32,7 @@ pub use cosmobiologia_model::{Chart, ChartId, ChartKind};
 
 pub mod draw;
 pub mod math;
+pub mod palette;
 
 pub use draw::{
     compose_wheel, draw_commands_to_svg, CompositionOpts, DrawCommand, Rgba, TextAnchor,
@@ -39,6 +40,7 @@ pub use draw::{
 pub use math::{
     find_clusters, format_coord_compact, polar_to_screen, spread_angles, Radii,
 };
+pub use palette::Palette;
 
 // =====================================================================
 // RenderModel — lo que el client renderea
