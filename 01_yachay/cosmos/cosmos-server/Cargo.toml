@@ -1,0 +1,27 @@
+[package]
+name = "cosmobiologia-server"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+description = "Cosmobiología — server HTTP single-user. axum + cosmobiologia-engine. Sirve cartas y assets del cliente web. CRUD completo de groups/contacts/charts."
+
+[dependencies]
+cosmobiologia-engine = { path = "../../modules/cosmobiologia/cosmobiologia-engine" }
+cosmobiologia-model = { path = "../../modules/cosmobiologia/cosmobiologia-model" }
+cosmobiologia-render = { path = "../../modules/cosmobiologia/cosmobiologia-render" }
+cosmobiologia-store = { path = "../../modules/cosmobiologia/cosmobiologia-store" }
+
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+directories = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+axum = "0.7"
+tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
+
+[[bin]]
+name = "cosmobiologia-server"
+path = "src/main.rs"
