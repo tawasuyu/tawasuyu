@@ -7,7 +7,9 @@
 pub mod rules;
 pub mod engine;
 pub mod dispatch;
+pub mod loader;
 
 pub use rules::{Action, EventKind, EventPattern, LogLevel, Rule, Scope, TimedEvent};
 pub use engine::{EventKindDiscriminant, RuleEngine, SubjectInfo};
 pub use dispatch::{dispatch_actions, ActionSink, NullSink};
+pub use loader::{extract_rules_from_json, load_rules_file};

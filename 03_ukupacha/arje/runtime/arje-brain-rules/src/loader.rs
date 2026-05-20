@@ -1,52 +1,13 @@
-//! Loader de Cards y Reglas desde archivos JSON.
+//! Loader de Reglas (`Rule`) desde archivos JSON / JSONL.
 //!
-//! Sustituye al antiguo `kcl_loader.rs` (eliminado): la rama KCL invocaba
-//! un subprocess al CLI Go `kcl` que ningún target real tenía instalado y
-//! cuya validación duplicaba `EntityCard::validate()`. La fuente de verdad
-//! del shape de la Card es Rust + serde; en disco se guarda JSON crudo.
-//!
-//! Ergonomía de autoría futura (RON, Dhall, etc.) se añade como ramas
-//! adicionales aquí cuando duela escribir JSON a mano. Hoy: una sola rama.
+//! La carga de `Rule` vive aquí, junto a su definición. La carga de
+//! `EntityCard` se consolidó en `brahman-cards::entity_loader`.
 
-use arje_brain_rules::rules::Rule;
-use arje_card::EntityCard;
+use crate::rules::Rule;
 use std::path::Path;
 use tracing::info;
 
-/// Carga una `EntityCard` desde un archivo JSON. Pasa por
-/// `EntityCard::validate()` antes de devolver — falla rápida.
-pub fn load_card_file(path: &Path) -> anyhow::Result<EntityCard> {
-    info!(path = %path.display(), "cargando Card desde JSON");
-    let raw = std::fs::read_to_string(path)?;
-    let card = extract_card_from_json(&raw)?;
-    card.validate()
-        .map_err(|e| anyhow::anyhow!("Card inválida ({}): {e}", path.display()))?;
-    Ok(card)
-}
-
-/// Extrae una `EntityCard` de JSON. Acepta:
-/// 1. Object directamente serializable como EntityCard.
-/// 2. Object dict con un único valor que sea EntityCard (compat con
-///    salidas de generadores que envuelven en `{"seed": {...}}`).
-pub fn extract_card_from_json(raw: &str) -> anyhow::Result<EntityCard> {
-    let v: serde_json::Value = serde_json::from_str(raw)?;
-    let direct_err = match serde_json::from_value::<EntityCard>(v.clone()) {
-        Ok(c) => return Ok(c),
-        Err(e) => e,
-    };
-    if let serde_json::Value::Object(map) = v {
-        for (_, vv) in map {
-            if let Ok(c) = serde_json::from_value::<EntityCard>(vv) {
-                return Ok(c);
-            }
-        }
-    }
-    // Propagamos el error del intento directo: es el caso típico (JSON top-level
-    // = EntityCard) y su mensaje apunta al campo concreto que rompió.
-    anyhow::bail!("JSON no contiene una EntityCard válida: {direct_err}")
-}
-
-/// Carga reglas desde un archivo JSON.
+/// Carga reglas desde un archivo JSON / JSONL.
 pub fn load_rules_file(path: &Path) -> anyhow::Result<Vec<Rule>> {
     info!(path = %path.display(), "cargando reglas desde JSON");
     let raw = std::fs::read_to_string(path)?;
@@ -54,14 +15,12 @@ pub fn load_rules_file(path: &Path) -> anyhow::Result<Vec<Rule>> {
 }
 
 /// Extrae un `Vec<Rule>` de un blob de texto. Acepta tres formas:
-/// 1. JSONL: una `Rule` por línea (el formato que escribe `append_rule_jsonl`).
+/// 1. JSONL: una `Rule` por línea.
 /// 2. Array directo: `[{...}, {...}]`.
 /// 3. Object con un campo array: `{"rules": [...]}`.
 ///
-/// Heurística: si el primer carácter no-blanco es `[` o `{` con formato
-/// "objeto-con-array", parseamos como JSON único; en otro caso intentamos
-/// línea-por-línea. Líneas vacías o que empiecen con `#` se ignoran (compat
-/// con archivos editados a mano que dejen comentarios estilo shell).
+/// Líneas vacías o que empiecen con `#` se ignoran (compat con archivos
+/// editados a mano que dejen comentarios estilo shell).
 pub fn extract_rules_from_json(raw: &str) -> anyhow::Result<Vec<Rule>> {
     let trimmed_start = raw.trim_start();
     let looks_jsonl = trimmed_start.starts_with('{')
@@ -83,8 +42,7 @@ pub fn extract_rules_from_json(raw: &str) -> anyhow::Result<Vec<Rule>> {
             };
             return Ok(serde_json::from_value(arr)?);
         }
-        // Caer a JSONL si el documento único no parsea — útil para archivos
-        // que mezclan comentarios `#` (no JSON válido como documento único).
+        // Caer a JSONL si el documento único no parsea.
     }
 
     let mut rules = Vec::new();
@@ -101,8 +59,7 @@ pub fn extract_rules_from_json(raw: &str) -> anyhow::Result<Vec<Rule>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::introspect::append_rule_jsonl;
-    use arje_brain_rules::rules::{Action, EventKind, EventPattern, LogLevel, Rule, Scope};
+    use crate::rules::{Action, EventKind, EventPattern, LogLevel, Rule, Scope};
     use ulid::Ulid;
 
     fn sample_rule() -> Rule {
@@ -148,25 +105,18 @@ mod tests {
     }
 
     #[test]
-    fn append_rule_jsonl_roundtrip() {
-        let dir = tempdir_unique();
-        let path = dir.join("rules.jsonl");
+    fn jsonl_roundtrip_preserves_order_and_ids() {
+        // Roundtrip JSONL escrito manualmente (una Rule por línea).
         let r1 = sample_rule();
         let r2 = sample_rule();
-        append_rule_jsonl(&path, &r1).expect("append 1");
-        append_rule_jsonl(&path, &r2).expect("append 2");
-        let raw = std::fs::read_to_string(&path).expect("read back");
+        let raw = format!(
+            "{}\n{}\n",
+            serde_json::to_string(&r1).unwrap(),
+            serde_json::to_string(&r2).unwrap(),
+        );
         let parsed = extract_rules_from_json(&raw).expect("roundtrip parse");
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].id, r1.id);
         assert_eq!(parsed[1].id, r2.id);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    fn tempdir_unique() -> std::path::PathBuf {
-        let base = std::env::temp_dir();
-        let p = base.join(format!("ente-brain-loader-{}", Ulid::new()));
-        std::fs::create_dir_all(&p).unwrap();
-        p
     }
 }

@@ -13,7 +13,6 @@
 pub mod introspect;
 pub mod autopromote;
 pub mod metrics;
-pub mod loader;
 
 // --- Re-export de los módulos de las 3 sub-crates ---
 pub use arje_brain_rules::{dispatch, engine, rules};
@@ -30,5 +29,9 @@ pub use audit::AuditLog;
 
 pub use autopromote::{spawn_autopromote_loop, AutopromoteParams};
 pub use introspect::{BrainState, IntrospectRequest, IntrospectResponse, IntrospectServer};
-pub use loader::{load_card_file, load_rules_file};
 pub use metrics::serve_metrics;
+
+// --- Loader: card-loading vive en brahman-cards, rule-loading en
+//     arje-brain-rules. Re-exportados aquí por compat de consumidores. ---
+pub use arje_brain_rules::{extract_rules_from_json, load_rules_file};
+pub use brahman_cards::{extract_card_from_json, load_card_file};

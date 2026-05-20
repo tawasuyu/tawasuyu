@@ -183,8 +183,10 @@ pub trait CardReader: Send + Sync {
     fn read(&self, input: Value) -> Result<Card, CardLoadError>;
 }
 
+mod entity_loader;
 mod nickel_eval;
 mod readers;
+pub use entity_loader::{extract_card_from_json, load_card_file};
 pub use nickel_eval::{eval_nickel_file, NickelEvalError, BRAHMAN_CARDS_TEMPLATES_ENV};
 pub use readers::{EnteJsonReader, MonadJsonReader, UiModuleJsonReader};
 

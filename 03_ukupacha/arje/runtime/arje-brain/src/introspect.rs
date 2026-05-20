@@ -424,7 +424,7 @@ impl IntrospectServer {
                         "ReloadRules sin path y sin rules_out configurado".into()
                     ),
                 };
-                let rules = match crate::loader::load_rules_file(&path) {
+                let rules = match arje_brain_rules::load_rules_file(&path) {
                     Ok(r) => r,
                     Err(e) => return IntrospectResponse::Error(format!("load: {e}")),
                 };

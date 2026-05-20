@@ -12,6 +12,7 @@ description = "Brahman — brazo unificado: lee múltiples formatos de Card (Ent
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+anyhow = { workspace = true }
 ulid = { workspace = true }
 brahman-card = { path = "../brahman-card" }
 chasqui-card = { path = "../../modules/chasqui/card" }
