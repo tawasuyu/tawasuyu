@@ -1,21 +1,23 @@
-//! `pineal-heatmap` — matriz `[width × height]` de `f32` → imagen.
+//! `pineal-heatmap` — matriz `width × height` de `f32` → visualización.
 //!
-//! Para matrices grandes (4096² = 67 MB de pixels), encodear la
-//! imagen una vez al cambiar la data y renderear con un solo
-//! `drawImageRect` (o equivalente GPUI). Eso convierte el coste
-//! de cada frame en "blit de una textura", sub-millisecond.
+//! Dos caminos de render:
+//! - [`paint`] — agnóstico, un `fill_rect` por celda contra un `Canvas`.
+//!   Apto para matrices chicas y export SVG.
+//! - [`encoder::encode_argb`] — empaqueta la matriz como buffer ARGB para
+//!   que un backend lo suba como textura y la rendee con un solo blit.
+//!   Apto para matrices grandes (4096² sin sudar).
 //!
-//! - **`matrix`** — `HeatmapMatrix { data: Vec<f32>, width, height,
-//!   revision }`.
-//! - **`palette`** — color ramps (viridis, plasma, gray…).
-//! - **`encoder`** — convierte la matrix a un buffer ARGB para
-//!   subir como textura.
-//! - **`element`** — `Element` GPUI.
+//! - [`matrix`] — `HeatmapMatrix` con `revision` para invalidación.
+//! - [`palette`] — color ramps (Viridis, Grayscale).
 
 #![forbid(unsafe_code)]
-#![allow(dead_code)]
 
-pub mod matrix {}
-pub mod palette {}
-pub mod encoder {}
-pub mod element {}
+pub mod matrix;
+pub mod palette;
+pub mod encoder;
+pub mod paint;
+
+pub use encoder::encode_argb;
+pub use matrix::HeatmapMatrix;
+pub use paint::paint;
+pub use palette::Ramp;
