@@ -1,0 +1,16 @@
+[package]
+name = "yachay"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "yachay — demostración de notebooks reproducibles: DAG de celdas, orden de ejecución, propagación de staleness y digest Merkle."
+
+[[bin]]
+name = "yachay"
+path = "src/main.rs"
+
+[dependencies]
+yachay-core = { path = "../../modules/yachay/yachay-core" }
