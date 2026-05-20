@@ -44,6 +44,12 @@ fn unix_now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
+/// Índice de grupo (0-based) de una tecla de función `f1`..`f8`.
+fn fkey_index(key: &str) -> Option<usize> {
+    let n: usize = key.strip_prefix('f')?.parse().ok()?;
+    (1..=8).contains(&n).then_some(n - 1)
+}
+
 // =====================================================================
 // Fuente de autocompletado.
 // =====================================================================
@@ -642,6 +648,17 @@ impl Shell {
                     changed = true;
                 }
             }
+            _ if fkey_index(key).is_some() => {
+                // F1..F8 ejecutan el grupo de esa posición en [RUN].
+                let idx = fkey_index(key).unwrap();
+                let joined =
+                    self.session.groups().get(idx).map(|g| g.lines.join(" && "));
+                if let Some(j) = joined {
+                    self.run_command(j);
+                }
+                cx.notify();
+                return;
+            }
             _ => {
                 if !ctrl {
                     if let Some(ch) = ks.key_char.as_deref() {
@@ -935,9 +952,16 @@ impl Render for Shell {
                 .session
                 .groups()
                 .iter()
-                .map(|g| {
+                .enumerate()
+                .map(|(idx, g)| {
                     let joined = g.lines.join(" && ");
                     let count = g.lines.len();
+                    // Los 8 primeros grupos llevan atajo dinámico F1..F8.
+                    let label = if idx < 8 {
+                        format!("F{}  ▸ {}  ·{count}", idx + 1, g.name)
+                    } else {
+                        format!("▸ {}  ·{count}", g.name)
+                    };
                     div()
                         .id(SharedString::from(format!("group-{}", g.name)))
                         .px(px(8.))
@@ -948,7 +972,7 @@ impl Render for Shell {
                         .text_size(px(13.))
                         .cursor_pointer()
                         .hover(|s| s.bg(theme.bg_row_hover))
-                        .child(SharedString::from(format!("▸ {}  ·{count}", g.name)))
+                        .child(SharedString::from(label))
                         .on_click(cx.listener(move |shell, _, _, cx| {
                             shell.run_command(joined.clone());
                             cx.notify();
