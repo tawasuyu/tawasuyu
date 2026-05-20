@@ -36,9 +36,6 @@ use shuma_sysmon::{Snapshot, SystemSampler};
 
 /// Cuántas muestras guarda la curva de cada monitor.
 const HISTORY: usize = 80;
-/// Líneas de salida visibles por comando (modo launcher liviano).
-const OUTPUT_LINES: usize = 16;
-
 /// Archivos/directorios que delatan la estructura de un proyecto.
 const PROJECT_MARKERS: &[&str] = &[
     ".git",
@@ -885,6 +882,57 @@ fn render_run(
     // Cuerpo: sólo con el acordeón abierto. El filtro elige el flujo.
     let mut body: Vec<gpui::Div> = Vec::new();
     if !ui.collapsed {
+        // Etapas del pipe: un clic re-ejecuta la línea hasta esa etapa,
+        // como un comando nuevo — así se inspeccionan los intermedios.
+        if r.line.contains('|') {
+            let toks = shuma_line::tokenize(&r.line, shuma_line::Dialect::Bash);
+            let pipe = shuma_line::split_pipeline(&toks);
+            if pipe.stages.len() >= 2 {
+                let chip_bg = gpui::hsla(220.0 / 360.0, 0.18, 0.24, 1.0);
+                let accent = gpui::hsla(190.0 / 360.0, 0.62, 0.62, 1.0);
+                let mut chips: Vec<gpui::AnyElement> = vec![div()
+                    .flex_none()
+                    .text_size(px(10.))
+                    .text_color(dim)
+                    .child("⇢ etapas")
+                    .into_any_element()];
+                for (i, st) in pipe.stages.iter().enumerate() {
+                    let end = st.tokens.last().map(|t| t.end).unwrap_or(r.line.len());
+                    let prefix = r.line[..end].trim().to_string();
+                    let name =
+                        st.command.clone().unwrap_or_else(|| format!("{}", i + 1));
+                    chips.push(
+                        div()
+                            .id(SharedString::from(format!("stage-{id}-{i}")))
+                            .flex_none()
+                            .px(px(6.))
+                            .py(px(1.))
+                            .rounded(px(3.))
+                            .bg(chip_bg)
+                            .text_size(px(11.))
+                            .text_color(accent)
+                            .cursor_pointer()
+                            .hover(|s| s.text_color(gpui::hsla(0.0, 0.0, 0.95, 1.0)))
+                            .child(SharedString::from(name))
+                            .on_click(cx.listener(move |shell, _, _, cx| {
+                                shell.run_command(prefix.clone());
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                    );
+                }
+                body.push(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .flex_wrap()
+                        .gap(px(4.))
+                        .items_center()
+                        .children(chips),
+                );
+            }
+        }
+
         let stream = if ui.show_stderr { Stream::Stderr } else { Stream::Stdout };
         let lines: Vec<&str> = r.lines_of(stream).collect();
         let color = if ui.show_stderr { stderr_color } else { theme.fg_text };
@@ -893,16 +941,8 @@ fn render_run(
                 if ui.show_stderr { "sin errores" } else { "sin salida" },
             ));
         } else {
-            let skipped = lines.len().saturating_sub(OUTPUT_LINES);
-            if skipped > 0 {
-                body.push(
-                    div()
-                        .text_size(px(11.))
-                        .text_color(dim)
-                        .child(SharedString::from(format!("… {skipped} líneas antes"))),
-                );
-            }
-            for l in lines.iter().skip(skipped) {
+            // Sin truncar: si hay contenido, se muestra entero.
+            for l in &lines {
                 body.push(
                     div()
                         .text_size(px(12.))
