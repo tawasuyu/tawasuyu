@@ -20,6 +20,23 @@ use serde::{Deserialize, Serialize};
 /// Identificador de un comando dentro de su sesión.
 pub type RunId = u64;
 
+/// Política de captura de salida — configurable por sesión de trabajo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CapturePolicy {
+    /// Tope de captura en bytes; `0` = sin límite.
+    pub limit_bytes: usize,
+    /// Si la salida que excede el tope se vuelca a un archivo (en vez de
+    /// descartarse).
+    pub spill: bool,
+}
+
+impl Default for CapturePolicy {
+    /// Por defecto: 8 MiB, sin volcado a disco.
+    fn default() -> Self {
+        Self { limit_bytes: 8 * 1024 * 1024, spill: false }
+    }
+}
+
 /// Estado de un comando ejecutado.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RunStatus {
@@ -113,6 +130,8 @@ pub struct WorkSession {
     cwd: String,
     history: Vec<CommandRun>,
     groups: Vec<CommandGroup>,
+    /// Política de captura — propia de esta sesión.
+    capture: CapturePolicy,
     next_id: RunId,
 }
 
@@ -134,8 +153,29 @@ impl WorkSession {
             cwd: cwd.into(),
             history: Vec::new(),
             groups: Vec::new(),
+            capture: CapturePolicy::default(),
             next_id: 1,
         }
+    }
+
+    /// Política de captura vigente de la sesión.
+    pub fn capture(&self) -> CapturePolicy {
+        self.capture
+    }
+
+    /// Reemplaza la política de captura.
+    pub fn set_capture(&mut self, policy: CapturePolicy) {
+        self.capture = policy;
+    }
+
+    /// Ajusta sólo el tope de captura en bytes.
+    pub fn set_capture_limit(&mut self, bytes: usize) {
+        self.capture.limit_bytes = bytes;
+    }
+
+    /// Activa o desactiva el volcado a disco de la salida excedente.
+    pub fn set_spill(&mut self, spill: bool) {
+        self.capture.spill = spill;
     }
 
     /// Directorio actual de la sesión.
@@ -366,5 +406,15 @@ mod tests {
         s.save_group("x", vec!["echo x".into()]);
         assert!(s.remove_group("x"));
         assert!(!s.remove_group("x"));
+    }
+
+    #[test]
+    fn capture_policy_is_per_session() {
+        let mut s = WorkSession::new("t", "/home");
+        assert_eq!(s.capture(), CapturePolicy::default());
+        s.set_capture_limit(1_000_000);
+        s.set_spill(true);
+        assert_eq!(s.capture().limit_bytes, 1_000_000);
+        assert!(s.capture().spill);
     }
 }

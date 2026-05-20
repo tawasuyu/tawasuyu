@@ -29,17 +29,13 @@ use gpui::{
 };
 use nahual_launcher::launch_app;
 use nahual_theme::Theme;
-use shuma_exec::{run as exec_run, CommandSpec, RunEvent, RunHandle};
+use shuma_exec::{run as exec_run, CommandSpec, Exec, RunEvent, RunHandle, StageSpec};
 use shuma_line::{CompletionKind, CompletionSource, LineState, TokenKind};
 use shuma_session::{CommandRun, RunId, RunStatus, Stream, WorkSession};
 use shuma_sysmon::{Snapshot, SystemSampler};
 
 /// Cuántas muestras guarda la curva de cada monitor.
 const HISTORY: usize = 80;
-/// Tope de captura de salida por comando — 8 MiB. Pasado el tope la
-/// salida se descarta: cota dura de memoria ante un stream gigante.
-const CAPTURE_LIMIT: usize = 8 * 1024 * 1024;
-
 /// Archivos/directorios que delatan la estructura de un proyecto.
 const PROJECT_MARKERS: &[&str] = &[
     ".git",
@@ -71,6 +67,55 @@ fn unix_now() -> u64 {
 fn fkey_index(key: &str) -> Option<usize> {
     let n: usize = key.strip_prefix('f')?.parse().ok()?;
     (1..=8).contains(&n).then_some(n - 1)
+}
+
+/// Quita las comillas exteriores de un argumento (`"hola"` → `hola`).
+fn unquote(arg: &str) -> String {
+    let b = arg.as_bytes();
+    if b.len() >= 2 && (b[0] == b'"' || b[0] == b'\'') && b[b.len() - 1] == b[0] {
+        let inner = &arg[1..arg.len() - 1];
+        if b[0] == b'"' {
+            inner.replace("\\\"", "\"").replace("\\\\", "\\")
+        } else {
+            inner.to_string()
+        }
+    } else {
+        arg.to_string()
+    }
+}
+
+/// Decide cómo ejecutar una línea. Si es un pipe «simple» —sólo comandos,
+/// argumentos y `|`, sin `$`, redirecciones, operadores ni globs— brahman
+/// la ejecuta **directo**, conectando los procesos él mismo. Si tiene
+/// sintaxis que el modo directo aún no absorbe, cae a `bash -c`: bash
+/// queda como un parser de sintaxis, no como el ejecutor por defecto.
+fn plan_exec(line: &str) -> Exec {
+    use shuma_line::TokenKind::*;
+    let tokens = shuma_line::tokenize(line, shuma_line::Dialect::Bash);
+    let simple = !tokens.is_empty()
+        && tokens.iter().all(|t| {
+            matches!(t.kind, Command | Argument | Flag | StringLit | Pipe | Whitespace)
+                && !t.text.contains(['*', '?', '[', ']', '{', '}'])
+                && !t.text.starts_with('~')
+        });
+    if simple {
+        let pipeline = shuma_line::split_pipeline(&tokens);
+        let mut stages = Vec::new();
+        for st in &pipeline.stages {
+            match &st.command {
+                Some(cmd) => stages.push(StageSpec {
+                    program: cmd.clone(),
+                    args: st.args.iter().map(|a| unquote(a)).collect(),
+                }),
+                // Una etapa sin comando (línea incompleta) → al shell.
+                None => return Exec::Shell { line: line.into(), program: "bash".into() },
+            }
+        }
+        if !stages.is_empty() {
+            return Exec::Direct { stages };
+        }
+    }
+    Exec::Shell { line: line.into(), program: "bash".into() }
 }
 
 // =====================================================================
@@ -380,6 +425,14 @@ impl Shell {
                         self.session.append_output(*id, Stream::Stderr, l)
                     }
                     RunEvent::Truncated => self.session.mark_truncated(*id),
+                    RunEvent::Spilled(path) => {
+                        self.session.mark_truncated(*id);
+                        self.session.append_output(
+                            *id,
+                            Stream::Stdout,
+                            format!("↡ salida excedente volcada a {path}"),
+                        );
+                    }
                     RunEvent::Exited(code) => self.session.finish_run(*id, code, now),
                     RunEvent::Failed(msg) => {
                         self.session.append_output(
@@ -529,9 +582,22 @@ impl Shell {
         }
         let now = unix_now();
 
-        // Meta-comando `:save <nombre>` — guarda un grupo, no se ejecuta.
+        // Meta-comandos del shell — configuran la sesión, no se ejecutan.
         if let Some(name) = line.strip_prefix(":save ") {
             self.save_group(name);
+            return;
+        }
+        if let Some(arg) = line.strip_prefix(":limit ") {
+            // `:limit <MB>` — tope de captura de la sesión; 0 = sin tope.
+            if let Ok(mb) = arg.trim().parse::<usize>() {
+                self.session.set_capture_limit(mb * 1024 * 1024);
+            }
+            return;
+        }
+        if let Some(arg) = line.strip_prefix(":spill ") {
+            // `:spill on|off` — volcar a disco la salida excedente.
+            self.session
+                .set_spill(matches!(arg.trim(), "on" | "si" | "sí" | "1" | "true"));
             return;
         }
 
@@ -567,9 +633,24 @@ impl Shell {
 
         let id = self.session.begin_run(&line, now);
         self.run_ui.insert(id, RunUi::default());
-        let spec = CommandSpec::bash(&line, self.session.cwd()).with_limit(CAPTURE_LIMIT);
+        let spec = self.build_spec(&line, None, id);
         self.active.push((id, exec_run(&spec)));
         self.scroll.scroll_to_bottom();
+    }
+
+    /// Arma la `CommandSpec` de una línea: decide directo vs shell y
+    /// aplica la política de captura de la sesión.
+    fn build_spec(&self, line: &str, stdin: Option<String>, run_id: RunId) -> CommandSpec {
+        let policy = self.session.capture();
+        let spill_path = (policy.spill && policy.limit_bytes > 0)
+            .then(|| std::env::temp_dir().join(format!("shuma-spill-{run_id}.log")));
+        CommandSpec {
+            exec: plan_exec(line),
+            cwd: self.session.cwd().to_string(),
+            capture_limit: policy.limit_bytes,
+            spill_path,
+            stdin_data: stdin,
+        }
     }
 
     /// Reprocesa la salida capturada del comando `source`: ejecuta `line`
@@ -593,9 +674,7 @@ impl Shell {
         let now = unix_now();
         let id = self.session.begin_run(&line, now);
         self.run_ui.insert(id, RunUi::default());
-        let spec = CommandSpec::bash(&line, self.session.cwd())
-            .with_limit(CAPTURE_LIMIT)
-            .with_stdin(data);
+        let spec = self.build_spec(&line, Some(data), id);
         self.active.push((id, exec_run(&spec)));
         self.scroll.scroll_to_bottom();
     }
@@ -1082,13 +1161,25 @@ impl Render for Shell {
                     ))),
             )
             .child(
-                div().text_color(dim).text_size(px(12.)).child(SharedString::from(
-                    if piped > 1 {
+                div().text_color(dim).text_size(px(12.)).child(SharedString::from({
+                    // Política de captura de la sesión: tope + volcado.
+                    let pol = self.session.capture();
+                    let cap = if pol.limit_bytes == 0 {
+                        "cap ∞".to_string()
+                    } else {
+                        format!(
+                            "cap {}M{}",
+                            pol.limit_bytes / (1024 * 1024),
+                            if pol.spill { "↡" } else { "" }
+                        )
+                    };
+                    let running = if piped > 1 {
                         format!("⇄ {piped} etapas · {} en curso", self.active.len())
                     } else {
                         format!("{} en curso", self.active.len())
-                    },
-                )),
+                    };
+                    format!("{cap}  ·  {running}")
+                })),
             );
 
         // --- Panel izquierdo: grupos reutilizables [RUN] ---
