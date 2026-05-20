@@ -19,17 +19,19 @@
 use std::panic;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use std::collections::HashMap;
+
 use gpui::{
     div, point, prelude::*, px, App, Bounds, Context, CursorStyle, Element, ElementId, FocusHandle,
     GlobalElementId, Hsla, InspectorElementId, IntoElement, KeyDownEvent, LayoutId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Render, SharedString, Style,
-    Window,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Render, ScrollHandle,
+    SharedString, Style, Window,
 };
 use nahual_launcher::launch_app;
 use nahual_theme::Theme;
 use shuma_exec::{run as exec_run, CommandSpec, RunEvent, RunHandle};
 use shuma_line::{CompletionKind, CompletionSource, LineState, TokenKind};
-use shuma_session::{CommandRun, RunId, RunStatus, WorkSession};
+use shuma_session::{CommandRun, RunId, RunStatus, Stream, WorkSession};
 use shuma_sysmon::{Snapshot, SystemSampler};
 
 /// Cuántas muestras guarda la curva de cada monitor.
@@ -218,6 +220,17 @@ struct Drag {
     start_w: f32,
 }
 
+/// Estado de presentación de la tarjeta de un comando.
+#[derive(Default, Clone, Copy)]
+struct RunUi {
+    /// Acordeón cerrado — sólo se ve la cabecera.
+    collapsed: bool,
+    /// El filtro muestra stderr en vez de stdout.
+    show_stderr: bool,
+    /// El usuario tocó el acordeón a mano — ya no se autocolapsa.
+    user_touched: bool,
+}
+
 struct Shell {
     line: LineState,
     /// La sesión de trabajo: cwd, historial y grupos.
@@ -237,6 +250,10 @@ struct Shell {
     right_width: f32,
     /// Arrastre de divisor en curso, si lo hay.
     drag: Option<Drag>,
+    /// Estado de presentación por comando (acordeón, filtro stderr).
+    run_ui: HashMap<RunId, RunUi>,
+    /// Scroll del feed central — sigue al comando más reciente.
+    scroll: ScrollHandle,
     focus: FocusHandle,
     focused_once: bool,
 }
@@ -273,6 +290,8 @@ impl Shell {
             left_width: 176.0,
             right_width: 188.0,
             drag: None,
+            run_ui: HashMap::new(),
+            scroll: ScrollHandle::new(),
             focus: cx.focus_handle(),
             focused_once: false,
         };
@@ -315,19 +334,28 @@ impl Shell {
             for ev in handle.try_events() {
                 changed = true;
                 match ev {
-                    RunEvent::Stdout(l) | RunEvent::Stderr(l) => {
-                        self.session.append_output(*id, l)
+                    RunEvent::Stdout(l) => {
+                        self.session.append_output(*id, Stream::Stdout, l)
+                    }
+                    RunEvent::Stderr(l) => {
+                        self.session.append_output(*id, Stream::Stderr, l)
                     }
                     RunEvent::Exited(code) => self.session.finish_run(*id, code, now),
                     RunEvent::Failed(msg) => {
-                        self.session
-                            .append_output(*id, format!("✗ no se pudo lanzar: {msg}"));
+                        self.session.append_output(
+                            *id,
+                            Stream::Stderr,
+                            format!("✗ no se pudo lanzar: {msg}"),
+                        );
                         self.session.finish_run(*id, -1, now);
                     }
                 }
             }
         }
         self.active.retain(|(_, h)| !h.is_finished());
+        if changed {
+            self.scroll.scroll_to_bottom();
+        }
         changed
     }
 
@@ -360,28 +388,41 @@ impl Shell {
         }
         let now = unix_now();
 
+        // Los comandos anteriores que el usuario no fijó se autocolapsan
+        // al aparecer uno nuevo abajo — orden de terminal tradicional.
+        for ui in self.run_ui.values_mut() {
+            if !ui.user_touched {
+                ui.collapsed = true;
+            }
+        }
+
         // `cd` interno — un subproceso no podría cambiar nuestro cwd.
         if line == "cd" || line.starts_with("cd ") {
             let arg = line.strip_prefix("cd").unwrap_or("").trim();
             let id = self.session.begin_run(&line, now);
+            self.run_ui.insert(id, RunUi::default());
             match self.resolve_cd(arg) {
                 Ok(new_cwd) => {
                     self.session.set_cwd(new_cwd.clone());
                     self.source.cwd = new_cwd.clone();
-                    self.session.append_output(id, format!("→ {new_cwd}"));
+                    self.session
+                        .append_output(id, Stream::Stdout, format!("→ {new_cwd}"));
                     self.session.finish_run(id, 0, now);
                 }
                 Err(e) => {
-                    self.session.append_output(id, e);
+                    self.session.append_output(id, Stream::Stderr, e);
                     self.session.finish_run(id, 1, now);
                 }
             }
+            self.scroll.scroll_to_bottom();
             return;
         }
 
         let id = self.session.begin_run(&line, now);
+        self.run_ui.insert(id, RunUi::default());
         let spec = CommandSpec::bash(&line, self.session.cwd());
         self.active.push((id, exec_run(&spec)));
+        self.scroll.scroll_to_bottom();
     }
 
     fn refresh_completion(&mut self) {
@@ -552,40 +593,128 @@ fn pretty_cwd(cwd: &str) -> String {
     }
 }
 
-/// Panel de un comando ejecutado: cabecera resaltada + su salida.
-fn run_panel(r: &CommandRun, theme: &Theme, node_bg: Hsla) -> impl IntoElement {
+/// Renderiza la tarjeta de un comando ejecutado: cabecera-acordeón +
+/// filtro stdout/stderr + cuerpo de salida.
+fn render_run(
+    r: &CommandRun,
+    ui: RunUi,
+    theme: &Theme,
+    node_bg: Hsla,
+    cx: &mut Context<Shell>,
+) -> impl IntoElement {
+    let id = r.id;
+    let dim = theme.fg_muted;
     let (glyph, gcolor) = match r.status {
         RunStatus::Running => ("▷", gpui::hsla(45.0 / 360.0, 0.75, 0.60, 1.0)),
         RunStatus::Ok => ("✓", gpui::hsla(140.0 / 360.0, 0.48, 0.55, 1.0)),
         RunStatus::Failed => ("✗", gpui::hsla(2.0 / 360.0, 0.68, 0.60, 1.0)),
     };
-    let dim = theme.fg_muted;
+    let stderr_color = gpui::hsla(8.0 / 360.0, 0.62, 0.66, 1.0);
 
-    let total = r.output.len();
-    let skipped = total.saturating_sub(OUTPUT_LINES);
-    let mut body: Vec<gpui::Div> = Vec::new();
-    if skipped > 0 {
-        body.push(
+    // Nota a la derecha: código de salida, y al colapsar, conteo de líneas.
+    let mut note = match r.exit_code {
+        Some(0) | None => String::new(),
+        Some(c) => format!("salió {c}"),
+    };
+    if ui.collapsed {
+        let n = r.count_of(Stream::Stdout);
+        if n > 0 {
+            note = format!("{note} · {n} líneas").trim_start().to_string();
+        }
+    }
+
+    // Cabecera-acordeón: un clic colapsa/expande.
+    let caret = if ui.collapsed { "▸" } else { "▾" };
+    let header_left = div()
+        .id(SharedString::from(format!("hdr-{id}")))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(6.))
+        .flex_1()
+        .cursor_pointer()
+        .child(div().flex_none().text_color(dim).child(caret))
+        .child(div().flex_none().text_color(gcolor).child(glyph))
+        .children(highlight(&r.line, theme))
+        .child(
             div()
+                .flex_none()
                 .text_size(px(11.))
                 .text_color(dim)
-                .child(SharedString::from(format!("… {skipped} líneas antes"))),
-        );
-    }
-    for line in r.output.iter().skip(skipped) {
-        body.push(
-            div()
-                .text_size(px(12.))
-                .text_color(theme.fg_text)
-                .child(SharedString::from(line.clone())),
-        );
-    }
+                .child(SharedString::from(note)),
+        )
+        .on_click(cx.listener(move |shell, _, _, cx| {
+            let e = shell.run_ui.entry(id).or_default();
+            e.collapsed = !e.collapsed;
+            e.user_touched = true;
+            cx.notify();
+        }));
 
-    let exit_note = match r.exit_code {
-        Some(0) => String::new(),
-        Some(c) => format!("salió {c}"),
-        None => String::new(),
+    // Filtro de stderr — sólo aparece si el comando emitió errores.
+    let stderr_chip = if r.has_stderr() {
+        let n = r.count_of(Stream::Stderr);
+        Some(
+            div()
+                .id(SharedString::from(format!("err-{id}")))
+                .flex_none()
+                .px(px(6.))
+                .py(px(1.))
+                .rounded(px(3.))
+                .text_size(px(11.))
+                .cursor_pointer()
+                .when(ui.show_stderr, |d| {
+                    d.bg(stderr_color).text_color(gpui::hsla(0.0, 0.0, 0.12, 1.0))
+                })
+                .when(!ui.show_stderr, |d| d.text_color(stderr_color))
+                .child(SharedString::from(format!("⚠ {n}")))
+                .on_click(cx.listener(move |shell, _, _, cx| {
+                    let e = shell.run_ui.entry(id).or_default();
+                    e.show_stderr = !e.show_stderr;
+                    cx.notify();
+                })),
+        )
+    } else {
+        None
     };
+
+    let header = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(6.))
+        .child(header_left)
+        .children(stderr_chip);
+
+    // Cuerpo: sólo con el acordeón abierto. El filtro elige el flujo.
+    let mut body: Vec<gpui::Div> = Vec::new();
+    if !ui.collapsed {
+        let stream = if ui.show_stderr { Stream::Stderr } else { Stream::Stdout };
+        let lines: Vec<&str> = r.lines_of(stream).collect();
+        let color = if ui.show_stderr { stderr_color } else { theme.fg_text };
+        if lines.is_empty() {
+            body.push(div().text_size(px(11.)).text_color(dim).child(
+                if ui.show_stderr { "sin errores" } else { "sin salida" },
+            ));
+        } else {
+            let skipped = lines.len().saturating_sub(OUTPUT_LINES);
+            if skipped > 0 {
+                body.push(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(dim)
+                        .child(SharedString::from(format!("… {skipped} líneas antes"))),
+                );
+            }
+            for l in lines.iter().skip(skipped) {
+                body.push(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(color)
+                        .child(SharedString::from(l.to_string())),
+                );
+            }
+        }
+    }
 
     div()
         .flex()
@@ -596,22 +725,7 @@ fn run_panel(r: &CommandRun, theme: &Theme, node_bg: Hsla) -> impl IntoElement {
         .border_l_2()
         .border_color(gcolor)
         .rounded(px(5.))
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(6.))
-                .child(div().flex_none().text_color(gcolor).child(glyph))
-                .children(highlight(&r.line, theme))
-                .child(
-                    div()
-                        .flex_none()
-                        .text_size(px(11.))
-                        .text_color(dim)
-                        .child(SharedString::from(exit_note)),
-                ),
-        )
+        .child(header)
         .children(body)
 }
 
@@ -749,19 +863,22 @@ impl Render for Shell {
         };
 
         // --- Lienzo central: comandos ejecutados + su salida ---
-        let runs: Vec<_> = self
-            .session
-            .history()
+        // Orden de terminal: los más viejos arriba, los nuevos abajo.
+        let hist = self.session.history();
+        let start = hist.len().saturating_sub(40);
+        let runs: Vec<_> = hist[start..]
             .iter()
-            .rev()
-            .take(40)
-            .map(|r| run_panel(r, &theme, node_bg))
+            .map(|r| {
+                let ui = self.run_ui.get(&r.id).copied().unwrap_or_default();
+                render_run(r, ui, &theme, node_bg, cx)
+            })
             .collect();
         let runs_empty = runs.is_empty();
         let canvas = div()
             .id("runs")
             .flex_1()
             .overflow_y_scroll()
+            .track_scroll(&self.scroll)
             .flex()
             .flex_col()
             .gap(px(8.))

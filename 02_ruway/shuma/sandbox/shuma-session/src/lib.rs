@@ -31,6 +31,22 @@ pub enum RunStatus {
     Failed,
 }
 
+/// De qué flujo viene una línea de salida.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Stream {
+    /// Salida estándar.
+    Stdout,
+    /// Salida de error.
+    Stderr,
+}
+
+/// Una línea de salida con el flujo del que proviene.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutputLine {
+    pub stream: Stream,
+    pub text: String,
+}
+
 /// Un comando ejecutado: la línea, el directorio, el estado y la salida.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandRun {
@@ -42,8 +58,8 @@ pub struct CommandRun {
     pub status: RunStatus,
     /// Código de salida, una vez terminado.
     pub exit_code: Option<i32>,
-    /// Salida combinada (stdout + stderr), una línea por elemento.
-    pub output: Vec<String>,
+    /// Salida — cada línea sabe si es de stdout o de stderr.
+    pub output: Vec<OutputLine>,
     /// Segundo Unix en que arrancó.
     pub started_at: u64,
     /// Segundo Unix en que terminó.
@@ -56,9 +72,27 @@ impl CommandRun {
         self.status == RunStatus::Running
     }
 
-    /// Cantidad de líneas de salida.
+    /// Cantidad total de líneas de salida.
     pub fn line_count(&self) -> usize {
         self.output.len()
+    }
+
+    /// Líneas de un flujo concreto.
+    pub fn lines_of(&self, stream: Stream) -> impl Iterator<Item = &str> {
+        self.output
+            .iter()
+            .filter(move |l| l.stream == stream)
+            .map(|l| l.text.as_str())
+    }
+
+    /// Cuántas líneas tiene un flujo.
+    pub fn count_of(&self, stream: Stream) -> usize {
+        self.output.iter().filter(|l| l.stream == stream).count()
+    }
+
+    /// `true` si el comando emitió algo por stderr.
+    pub fn has_stderr(&self) -> bool {
+        self.output.iter().any(|l| l.stream == Stream::Stderr)
     }
 }
 
@@ -147,10 +181,10 @@ impl WorkSession {
         self.history.iter_mut().find(|r| r.id == id)
     }
 
-    /// Añade una línea de salida a un comando en curso.
-    pub fn append_output(&mut self, id: RunId, line: impl Into<String>) {
+    /// Añade una línea de salida a un comando en curso, marcando su flujo.
+    pub fn append_output(&mut self, id: RunId, stream: Stream, text: impl Into<String>) {
         if let Some(r) = self.run_mut(id) {
-            r.output.push(line.into());
+            r.output.push(OutputLine { stream, text: text.into() });
         }
     }
 
@@ -251,13 +285,31 @@ mod tests {
     fn output_accumulates_and_run_finishes() {
         let mut s = WorkSession::new("t", "/home");
         let id = s.begin_run("echo hola", 1000);
-        s.append_output(id, "hola");
+        s.append_output(id, Stream::Stdout, "hola");
         s.finish_run(id, 0, 1001);
         let r = s.run(id).unwrap();
-        assert_eq!(r.output, vec!["hola"]);
+        assert_eq!(r.line_count(), 1);
+        assert_eq!(r.lines_of(Stream::Stdout).collect::<Vec<_>>(), vec!["hola"]);
         assert_eq!(r.status, RunStatus::Ok);
         assert_eq!(r.exit_code, Some(0));
         assert_eq!(r.finished_at, Some(1001));
+    }
+
+    #[test]
+    fn output_separates_stdout_from_stderr() {
+        let mut s = WorkSession::new("t", "/home");
+        let id = s.begin_run("build", 0);
+        s.append_output(id, Stream::Stdout, "compilando…");
+        s.append_output(id, Stream::Stderr, "warning: variable sin usar");
+        s.append_output(id, Stream::Stdout, "listo");
+        let r = s.run(id).unwrap();
+        assert!(r.has_stderr());
+        assert_eq!(r.count_of(Stream::Stdout), 2);
+        assert_eq!(r.count_of(Stream::Stderr), 1);
+        assert_eq!(
+            r.lines_of(Stream::Stderr).collect::<Vec<_>>(),
+            vec!["warning: variable sin usar"]
+        );
     }
 
     #[test]
