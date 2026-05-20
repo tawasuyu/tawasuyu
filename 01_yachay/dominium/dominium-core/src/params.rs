@@ -32,6 +32,10 @@ pub struct SimParams {
     pub desperation_threshold: f32,
     /// Edad máxima; al superarla el agente muere.
     pub max_edad: u32,
+    /// Fracción que cada celda difunde hacia sus 4 vecinas por tick (0-1).
+    pub diffusion_rate: f32,
+    /// Tasa de pérdida natural (entropía) de los campos por tick (0-1).
+    pub entropy_rate: f32,
 }
 
 impl Default for SimParams {
@@ -49,6 +53,8 @@ impl Default for SimParams {
             absorb_frac: 0.50,
             desperation_threshold: 5.0,
             max_edad: 1000,
+            diffusion_rate: 0.10,
+            entropy_rate: 0.01,
         }
     }
 }
