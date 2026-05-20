@@ -8,3 +8,5 @@ publish.workspace = true
 description = "shuma — ejecutor de comandos del shell con salida en streaming: lanza un proceso y entrega stdout/stderr línea a línea por un canal. Agnóstico de UI."
 
 [dependencies]
+# `zerocopy` habilita `splice` — volcado pipe→archivo sin copia.
+nix = { workspace = true, features = ["zerocopy"] }

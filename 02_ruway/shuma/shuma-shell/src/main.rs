@@ -642,8 +642,10 @@ impl Shell {
     /// aplica la política de captura de la sesión.
     fn build_spec(&self, line: &str, stdin: Option<String>, run_id: RunId) -> CommandSpec {
         let policy = self.session.capture();
-        let spill_path = (policy.spill && policy.limit_bytes > 0)
-            .then(|| std::env::temp_dir().join(format!("shuma-spill-{run_id}.log")));
+        let spill_path = (policy.spill && policy.limit_bytes > 0).then(|| {
+            std::env::temp_dir()
+                .join(format!("shuma-spill-{}-{run_id}.log", std::process::id()))
+        });
         CommandSpec {
             exec: plan_exec(line),
             cwd: self.session.cwd().to_string(),
@@ -1618,6 +1620,20 @@ impl Render for Shell {
             .child(middle)
             .child(prompt)
             .children(popup_layer)
+    }
+}
+
+impl Drop for Shell {
+    /// Al cerrar la sesión, limpia sus archivos de volcado temporales.
+    fn drop(&mut self) {
+        let prefix = format!("shuma-spill-{}-", std::process::id());
+        if let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) {
+            for e in entries.flatten() {
+                if e.file_name().to_string_lossy().starts_with(&prefix) {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
     }
 }
 
