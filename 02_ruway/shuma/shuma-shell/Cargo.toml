@@ -13,10 +13,10 @@ name = "shuma-shell"
 path = "src/main.rs"
 
 [dependencies]
-shuma-intent = { path = "../../modules/shuma/shuma-intent" }
 shuma-line = { path = "../../modules/shuma/shuma-line" }
+shuma-session = { path = "../../modules/shuma/shuma-session" }
+shuma-exec = { path = "../../modules/shuma/shuma-exec" }
 shuma-sysmon = { path = "../../modules/shuma/shuma-sysmon" }
-shuma-shell-render = { path = "../../modules/shuma/shuma-shell-render" }
 nahual-theme = { path = "../../modules/nahual/libs/theme" }
 nahual-launcher = { path = "../../modules/nahual/libs/launcher" }
 gpui = { workspace = true }

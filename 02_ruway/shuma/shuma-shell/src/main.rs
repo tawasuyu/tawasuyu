@@ -1,22 +1,23 @@
-//! `shuma-shell` — el shell de brahman, vivo.
+//! `shuma-shell` — el shell de brahman, ejecutando de verdad.
 //!
-//! Tres zonas alrededor de su función principal, el input de abajo:
+//! El shell trabaja *dentro de una sesión* ([`shuma_session::WorkSession`]):
+//! un directorio actual —que es además el identificador de aislamiento—,
+//! el historial de comandos ejecutados y los grupos reutilizables.
 //!
 //! ```text
-//!   ┌─ estado ─────────────────────────────────────────┐
-//!   │ [RUN]  │   Lienzo de Contexto        │  [SENS]    │
-//!   │ macros │   (grafo de intenciones)    │ monitores  │
+//!   ┌─ estado · cwd · aislamiento ──────────────────────┐
+//!   │ [RUN]   │   comandos ejecutados + su salida   │ [SENS] │
+//!   │ grupos  │   (streaming en vivo)               │ monit. │
 //!   └─ prompt inteligente ─────────────────────────────┘
 //! ```
 //!
-//! El input no es un campo de texto tonto: `shuma-line` analiza la línea
-//! bash mientras se escribe —resaltado por token, autocompletado
-//! posicional, descomposición de los pipes—. Los monitores de la derecha
-//! grafican CPU y memoria con `shuma-sysmon`. Toda la lógica vive en
-//! crates agnósticos; este binario sólo es el frontend GPUI.
+//! El input se analiza con `shuma-line` (resaltado + autocompletado);
+//! al ejecutar, `shuma-exec` lanza el comando y transmite su salida
+//! línea a línea, que se vuelca en el panel central. El cerebro vive en
+//! crates agnósticos — este binario sólo es el frontend GPUI.
 
 use std::panic;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gpui::{
     div, point, prelude::*, px, App, Bounds, Context, Element, ElementId, FocusHandle,
@@ -25,26 +26,32 @@ use gpui::{
 };
 use nahual_launcher::launch_app;
 use nahual_theme::Theme;
-use shuma_intent::{Macro, MacroBook, NodeStatus, SessionGraph};
+use shuma_exec::{run as exec_run, CommandSpec, RunEvent, RunHandle};
 use shuma_line::{CompletionKind, CompletionSource, LineState, TokenKind};
-use shuma_shell_render::{layout, LayoutParams};
+use shuma_session::{CommandRun, RunId, RunStatus, WorkSession};
 use shuma_sysmon::{Snapshot, SystemSampler};
 
 /// Cuántas muestras guarda la curva de cada monitor.
 const HISTORY: usize = 80;
+/// Líneas de salida visibles por comando (modo launcher liviano).
+const OUTPUT_LINES: usize = 16;
+
+/// Segundo Unix actual.
+fn unix_now() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
 
 // =====================================================================
-// Fuente de autocompletado — la parte que sí toca el sistema.
+// Fuente de autocompletado.
 // =====================================================================
 
-/// Provee candidatos reales: comandos del `PATH` y rutas del disco.
 struct ShellCompletionSource {
     commands: Vec<String>,
+    cwd: String,
 }
 
 impl ShellCompletionSource {
-    /// Escanea el `PATH` una vez al arrancar.
-    fn scan() -> Self {
+    fn scan(cwd: String) -> Self {
         let mut commands = Vec::new();
         if let Ok(path) = std::env::var("PATH") {
             for dir in path.split(':') {
@@ -59,7 +66,7 @@ impl ShellCompletionSource {
         }
         commands.sort();
         commands.dedup();
-        Self { commands }
+        Self { commands, cwd }
     }
 }
 
@@ -73,9 +80,16 @@ impl CompletionSource for ShellCompletionSource {
             Some(i) => (&prefix[..=i], &prefix[i + 1..]),
             None => ("", prefix),
         };
-        let read_from = if dir.is_empty() { "." } else { dir };
+        // Una ruta relativa se resuelve contra el cwd de la sesión.
+        let base = if dir.starts_with('/') {
+            dir.to_string()
+        } else if dir.is_empty() {
+            self.cwd.clone()
+        } else {
+            format!("{}/{}", self.cwd, dir)
+        };
         let mut out = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(read_from) {
+        if let Ok(entries) = std::fs::read_dir(&base) {
             for e in entries.flatten() {
                 if let Some(name) = e.file_name().to_str() {
                     if name.starts_with(partial) {
@@ -92,10 +106,9 @@ impl CompletionSource for ShellCompletionSource {
 }
 
 // =====================================================================
-// CurveElement — la "curvita" de un monitor.
+// CurveElement — la curva de un monitor.
 // =====================================================================
 
-/// `Element` GPUI que pinta una serie `0..=100` como una curva.
 struct CurveElement {
     values: Vec<f32>,
     color: Hsla,
@@ -167,7 +180,6 @@ impl Element for CurveElement {
         let oy: f32 = bounds.origin.y.into();
         let bw: f32 = bounds.size.width.into();
         let bh: f32 = bounds.size.height.into();
-
         let mut pb = PathBuilder::stroke(px(1.6));
         for (i, v) in self.values.iter().enumerate() {
             let x = ox + bw * (i as f32 / (n - 1) as f32);
@@ -190,20 +202,17 @@ impl Element for CurveElement {
 // =====================================================================
 
 struct Shell {
-    /// El input inteligente — texto, cursor, análisis.
     line: LineState,
-    /// Lienzo: el grafo de intenciones de la sesión.
-    session: SessionGraph,
-    macros: MacroBook,
-    /// Autocompletado vigente y el candidato seleccionado.
+    /// La sesión de trabajo: cwd, historial y grupos.
+    session: WorkSession,
+    /// Comandos en curso, con su canal de salida.
+    active: Vec<(RunId, RunHandle)>,
     completion: Option<shuma_line::Completion>,
     completion_index: usize,
     show_completion: bool,
     source: ShellCompletionSource,
-    /// Muestreo de CPU/memoria.
     sampler: SystemSampler,
     snapshot: Snapshot,
-    /// Estado de los paneles laterales.
     left_collapsed: bool,
     right_collapsed: bool,
     focus: FocusHandle,
@@ -212,26 +221,23 @@ struct Shell {
 
 impl Shell {
     fn new(cx: &mut Context<Self>) -> Self {
-        // Datos de ejemplo para que el lienzo no nazca vacío.
-        let mut session = SessionGraph::new();
-        let c1 = session.record("ssh remote 'cat data.json'");
-        session.complete(c1, true, 2_400_000);
-        let c2 = session.record("sort | %p1");
-        session.complete(c2, true, 2_390_000);
+        let cwd = std::env::current_dir()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| "/".to_string());
 
-        let mut macros = MacroBook::new();
-        macros.insert(Macro::new("build").bind("F1").step("cargo build --release"));
-        macros.insert(Macro::new("deploy").bind("F2").step("scp target host:/srv"));
-        macros.insert(Macro::new("clean").bind("F3").step("cargo clean"));
+        let mut session = WorkSession::new("sesión", &cwd);
+        // Grupos de ejemplo — recetas reutilizables.
+        session.save_group("estado git", vec!["git status --short".into()]);
+        session.save_group("build", vec!["cargo build --release".into()]);
 
         let shell = Self {
             line: LineState::new(),
             session,
-            macros,
+            active: Vec::new(),
             completion: None,
             completion_index: 0,
             show_completion: false,
-            source: ShellCompletionSource::scan(),
+            source: ShellCompletionSource::scan(cwd),
             sampler: SystemSampler::new(HISTORY),
             snapshot: Snapshot {
                 cpu_percent: 0.0,
@@ -245,37 +251,122 @@ impl Shell {
             focus: cx.focus_handle(),
             focused_once: false,
         };
-        shell.start_sampler(cx);
+        shell.start_loop(cx);
         shell
     }
 
-    /// Bucle de fondo que refresca los monitores ~1 vez por segundo.
-    fn start_sampler(&self, cx: &mut Context<Self>) {
-        cx.spawn(async move |this, cx| loop {
-            cx.background_executor().timer(Duration::from_millis(1100)).await;
-            let alive = this.update(cx, |shell, cx| {
-                shell.snapshot = shell.sampler.sample();
-                cx.notify();
-            });
-            if alive.is_err() {
-                break;
+    /// Bucle de fondo: drena la salida de los comandos (~9/s) y refresca
+    /// los monitores (~1/s).
+    fn start_loop(&self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let mut tick: u32 = 0;
+            loop {
+                cx.background_executor().timer(Duration::from_millis(110)).await;
+                tick += 1;
+                let sysmon = tick % 10 == 0;
+                let alive = this.update(cx, |shell, cx| {
+                    let mut changed = shell.drain_exec();
+                    if sysmon {
+                        shell.snapshot = shell.sampler.sample();
+                        changed = true;
+                    }
+                    if changed {
+                        cx.notify();
+                    }
+                });
+                if alive.is_err() {
+                    break;
+                }
             }
         })
         .detach();
     }
 
-    /// Recalcula el autocompletado tras un cambio en la línea.
+    /// Vuelca la salida disponible de los comandos en curso al historial.
+    fn drain_exec(&mut self) -> bool {
+        let now = unix_now();
+        let mut changed = false;
+        for (id, handle) in &mut self.active {
+            for ev in handle.try_events() {
+                changed = true;
+                match ev {
+                    RunEvent::Stdout(l) | RunEvent::Stderr(l) => {
+                        self.session.append_output(*id, l)
+                    }
+                    RunEvent::Exited(code) => self.session.finish_run(*id, code, now),
+                    RunEvent::Failed(msg) => {
+                        self.session
+                            .append_output(*id, format!("✗ no se pudo lanzar: {msg}"));
+                        self.session.finish_run(*id, -1, now);
+                    }
+                }
+            }
+        }
+        self.active.retain(|(_, h)| !h.is_finished());
+        changed
+    }
+
+    /// Resuelve el destino de un `cd` contra el cwd de la sesión.
+    fn resolve_cd(&self, arg: &str) -> Result<String, String> {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+        let target = if arg.is_empty() || arg == "~" {
+            home
+        } else if let Some(rest) = arg.strip_prefix("~/") {
+            format!("{home}/{rest}")
+        } else if arg.starts_with('/') {
+            arg.to_string()
+        } else {
+            format!("{}/{}", self.session.cwd(), arg)
+        };
+        match std::fs::canonicalize(&target) {
+            Ok(p) if p.is_dir() => Ok(p.to_string_lossy().into_owned()),
+            Ok(_) => Err(format!("cd: no es un directorio: {target}")),
+            Err(e) => Err(format!("cd: {target}: {e}")),
+        }
+    }
+
+    /// Ejecuta una línea: `cd` se maneja internamente (cambia el cwd y,
+    /// con él, el aislamiento); el resto se lanza con `shuma-exec` y su
+    /// salida se transmite al panel central.
+    fn run_command(&mut self, line: String) {
+        let line = line.trim().to_string();
+        if line.is_empty() {
+            return;
+        }
+        let now = unix_now();
+
+        // `cd` interno — un subproceso no podría cambiar nuestro cwd.
+        if line == "cd" || line.starts_with("cd ") {
+            let arg = line.strip_prefix("cd").unwrap_or("").trim();
+            let id = self.session.begin_run(&line, now);
+            match self.resolve_cd(arg) {
+                Ok(new_cwd) => {
+                    self.session.set_cwd(new_cwd.clone());
+                    self.source.cwd = new_cwd.clone();
+                    self.session.append_output(id, format!("→ {new_cwd}"));
+                    self.session.finish_run(id, 0, now);
+                }
+                Err(e) => {
+                    self.session.append_output(id, e);
+                    self.session.finish_run(id, 1, now);
+                }
+            }
+            return;
+        }
+
+        let id = self.session.begin_run(&line, now);
+        let spec = CommandSpec::bash(&line, self.session.cwd());
+        self.active.push((id, exec_run(&spec)));
+    }
+
     fn refresh_completion(&mut self) {
         let comp = self.line.complete(&self.source);
-        // El popup se muestra solo si hay una palabra parcial en curso.
         self.show_completion =
             !comp.candidates.is_empty() && comp.replace_end > comp.replace_start;
         self.completion_index = 0;
         self.completion = Some(comp);
     }
 
-    /// Tab: muestra el popup, o aplica el candidato seleccionado si ya
-    /// estaba visible.
     fn on_tab(&mut self) {
         let comp = self.line.complete(&self.source);
         if comp.candidates.is_empty() {
@@ -294,7 +385,6 @@ impl Shell {
         }
     }
 
-    /// Mueve la selección del popup.
     fn cycle_completion(&mut self, delta: i32) {
         if !self.show_completion {
             return;
@@ -308,16 +398,13 @@ impl Shell {
         }
     }
 
-    /// Enter: registra la línea como una intención en el lienzo.
+    /// Enter — ejecuta el contenido del input.
     fn submit(&mut self) {
-        let cmd = self.line.text().trim().to_string();
-        if !cmd.is_empty() {
-            let id = self.session.record(&cmd);
-            self.session.complete(id, true, 0);
-        }
+        let line = self.line.text().to_string();
         self.line.clear();
         self.completion = None;
         self.show_completion = false;
+        self.run_command(line);
     }
 
     fn handle_key(&mut self, event: &KeyDownEvent, _w: &mut Window, cx: &mut Context<Self>) {
@@ -418,13 +505,89 @@ fn token_color(kind: TokenKind, theme: &Theme) -> Hsla {
     }
 }
 
-/// Estado del nodo del lienzo → color de borde.
-fn status_rgb(s: NodeStatus) -> Hsla {
-    match s {
-        NodeStatus::Running => gpui::hsla(45.0 / 360.0, 0.70, 0.55, 1.0),
-        NodeStatus::Ok => gpui::hsla(140.0 / 360.0, 0.45, 0.52, 1.0),
-        NodeStatus::Failed => gpui::hsla(2.0 / 360.0, 0.65, 0.55, 1.0),
+/// Resalta un texto estático (la línea de un comando del historial).
+fn highlight(text: &str, theme: &Theme) -> Vec<gpui::Div> {
+    shuma_line::tokenize(text, shuma_line::Dialect::Bash)
+        .into_iter()
+        .map(|t| {
+            div()
+                .flex_none()
+                .text_color(token_color(t.kind, theme))
+                .child(t.text)
+        })
+        .collect()
+}
+
+/// Acorta el cwd: el `$HOME` se muestra como `~`.
+fn pretty_cwd(cwd: &str) -> String {
+    match std::env::var("HOME") {
+        Ok(home) if cwd == home => "~".to_string(),
+        Ok(home) if cwd.starts_with(&format!("{home}/")) => format!("~{}", &cwd[home.len()..]),
+        _ => cwd.to_string(),
     }
+}
+
+/// Panel de un comando ejecutado: cabecera resaltada + su salida.
+fn run_panel(r: &CommandRun, theme: &Theme, node_bg: Hsla) -> impl IntoElement {
+    let (glyph, gcolor) = match r.status {
+        RunStatus::Running => ("▷", gpui::hsla(45.0 / 360.0, 0.75, 0.60, 1.0)),
+        RunStatus::Ok => ("✓", gpui::hsla(140.0 / 360.0, 0.48, 0.55, 1.0)),
+        RunStatus::Failed => ("✗", gpui::hsla(2.0 / 360.0, 0.68, 0.60, 1.0)),
+    };
+    let dim = theme.fg_muted;
+
+    let total = r.output.len();
+    let skipped = total.saturating_sub(OUTPUT_LINES);
+    let mut body: Vec<gpui::Div> = Vec::new();
+    if skipped > 0 {
+        body.push(
+            div()
+                .text_size(px(11.))
+                .text_color(dim)
+                .child(SharedString::from(format!("… {skipped} líneas antes"))),
+        );
+    }
+    for line in r.output.iter().skip(skipped) {
+        body.push(
+            div()
+                .text_size(px(12.))
+                .text_color(theme.fg_text)
+                .child(SharedString::from(line.clone())),
+        );
+    }
+
+    let exit_note = match r.exit_code {
+        Some(0) => String::new(),
+        Some(c) => format!("salió {c}"),
+        None => String::new(),
+    };
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(3.))
+        .p(px(8.))
+        .bg(node_bg)
+        .border_l_2()
+        .border_color(gcolor)
+        .rounded(px(5.))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(6.))
+                .child(div().flex_none().text_color(gcolor).child(glyph))
+                .children(highlight(&r.line, theme))
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(px(11.))
+                        .text_color(dim)
+                        .child(SharedString::from(exit_note)),
+                ),
+        )
+        .children(body)
 }
 
 impl Render for Shell {
@@ -442,14 +605,9 @@ impl Render for Shell {
         let dim = theme.fg_muted;
 
         let pipeline = self.line.pipeline();
-        let stage_count = pipeline.stages.iter().filter(|s| s.command.is_some()).count();
+        let piped = pipeline.stages.iter().filter(|s| s.command.is_some()).count();
 
-        // --- Zona de estado ---
-        let pipe_note = if pipeline.is_piped() {
-            format!("  ·  ⇄ {stage_count} etapas")
-        } else {
-            String::new()
-        };
+        // --- Barra de estado: cwd + identificador de aislamiento ---
         let status = div()
             .h(px(32.))
             .flex()
@@ -459,17 +617,32 @@ impl Render for Shell {
             .px(px(14.))
             .bg(panel)
             .text_color(text)
-            .child(SharedString::from(format!(
-                "● shuma · shell brahman{pipe_note}"
-            )))
             .child(
                 div()
-                    .text_color(dim)
-                    .text_size(px(12.))
-                    .child(SharedString::from(format!("{} · launcher", self.line.dialect().name()))),
+                    .flex()
+                    .flex_row()
+                    .gap(px(10.))
+                    .items_baseline()
+                    .child("● shuma")
+                    .child(div().text_color(accent).child(SharedString::from(format!(
+                        "📁 {}",
+                        pretty_cwd(self.session.cwd())
+                    ))))
+                    .child(div().text_color(dim).text_size(px(11.)).child(SharedString::from(
+                        format!("aisl:{}", self.session.isolation_id()),
+                    ))),
+            )
+            .child(
+                div().text_color(dim).text_size(px(12.)).child(SharedString::from(
+                    if piped > 1 {
+                        format!("⇄ {piped} etapas · {} en curso", self.active.len())
+                    } else {
+                        format!("{} en curso", self.active.len())
+                    },
+                )),
             );
 
-        // --- Panel izquierdo: macros [RUN] ---
+        // --- Panel izquierdo: grupos reutilizables [RUN] ---
         let left = if self.left_collapsed {
             div()
                 .id("expand-left")
@@ -488,25 +661,33 @@ impl Render for Shell {
                     cx.notify();
                 }))
         } else {
-            let run_items: Vec<_> = self
-                .macros
-                .all()
+            let groups: Vec<_> = self
+                .session
+                .groups()
                 .iter()
-                .map(|m| {
-                    let key = m.key.clone().unwrap_or_default();
+                .map(|g| {
+                    let joined = g.lines.join(" && ");
+                    let count = g.lines.len();
                     div()
+                        .id(SharedString::from(format!("group-{}", g.name)))
                         .px(px(8.))
                         .py(px(6.))
                         .bg(node_bg)
                         .rounded(px(4.))
                         .text_color(text)
                         .text_size(px(13.))
-                        .child(SharedString::from(format!("{key}  {}", m.name)))
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme.bg_row_hover))
+                        .child(SharedString::from(format!("▸ {}  ·{count}", g.name)))
+                        .on_click(cx.listener(move |shell, _, _, cx| {
+                            shell.run_command(joined.clone());
+                            cx.notify();
+                        }))
                 })
                 .collect();
             div()
                 .id("run-panel")
-                .w(px(168.))
+                .w(px(176.))
                 .flex()
                 .flex_col()
                 .gap(px(6.))
@@ -518,7 +699,7 @@ impl Render for Shell {
                         .flex_row()
                         .justify_between()
                         .items_center()
-                        .child(div().text_color(dim).text_size(px(12.)).child("[RUN]"))
+                        .child(div().text_color(dim).text_size(px(12.)).child("[RUN] grupos"))
                         .child(
                             div()
                                 .id("collapse-left")
@@ -533,40 +714,40 @@ impl Render for Shell {
                                 })),
                         ),
                 )
-                .children(run_items)
+                .children(groups)
+                .child(
+                    div()
+                        .text_size(px(10.))
+                        .text_color(dim)
+                        .child("clic para ejecutar el grupo"),
+                )
         };
 
-        // --- Lienzo central: grafo de intenciones ---
-        let plan = layout(&self.session, &LayoutParams::default());
-        let node_els: Vec<_> = plan
-            .nodes
+        // --- Lienzo central: comandos ejecutados + su salida ---
+        let runs: Vec<_> = self
+            .session
+            .history()
             .iter()
-            .map(|n| {
-                div()
-                    .absolute()
-                    .left(px(n.rect.x))
-                    .top(px(n.rect.y))
-                    .w(px(n.rect.w))
-                    .h(px(n.rect.h))
-                    .p(px(6.))
-                    .bg(node_bg)
-                    .border_2()
-                    .border_color(status_rgb(n.status))
-                    .rounded(px(4.))
-                    .text_color(text)
-                    .text_size(px(12.))
-                    .child(SharedString::from(format!("%c{}", n.command_id)))
-                    .child(div().text_color(dim).child(SharedString::from(n.label.clone())))
-            })
+            .rev()
+            .take(40)
+            .map(|r| run_panel(r, &theme, node_bg))
             .collect();
+        let runs_empty = runs.is_empty();
         let canvas = div()
+            .id("runs")
             .flex_1()
-            .relative()
-            .overflow_hidden()
-            .p(px(12.))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .p(px(10.))
             .bg(bg.clone())
-            .child(div().text_color(dim).text_size(px(12.)).child("Lienzo de Contexto"))
-            .children(node_els);
+            .when(runs_empty, |d| {
+                d.child(div().text_color(dim).child(
+                    "Escribe un comando abajo y presiona Enter — su salida aparece aquí.",
+                ))
+            })
+            .children(runs);
 
         // --- Panel derecho: monitores [SENS] ---
         let right = if self.right_collapsed {
@@ -588,7 +769,6 @@ impl Render for Shell {
                 }))
         } else {
             let cpu = self.snapshot.cpu_percent;
-            let mem = self.snapshot.mem_percent;
             let cpu_curve = self.sampler.cpu_history().values();
             let mem_curve = self.sampler.mem_history().values();
             let cpu_color = gpui::hsla(190.0 / 360.0, 0.72, 0.62, 1.0);
@@ -644,12 +824,7 @@ impl Render for Shell {
                                 })),
                         ),
                 )
-                .child(monitor(
-                    "CPU",
-                    format!("{cpu:.0} %"),
-                    cpu_curve,
-                    cpu_color,
-                ))
+                .child(monitor("CPU", format!("{cpu:.0} %"), cpu_curve, cpu_color))
                 .child(monitor(
                     "MEM",
                     if self.snapshot.valid {
@@ -664,19 +839,10 @@ impl Render for Shell {
                     mem_curve,
                     mem_color,
                 ))
-                .child(
-                    div()
-                        .text_color(dim)
-                        .text_size(px(10.))
-                        .child(SharedString::from(format!("mem {mem:.0} %"))),
-                )
         };
 
         // --- Zona prompt: el input inteligente ---
-        let mut input_row: Vec<gpui::Div> = vec![div()
-            .flex_none()
-            .text_color(accent)
-            .child("›  ")];
+        let mut input_row: Vec<gpui::Div> = vec![div().flex_none().text_color(accent).child("›  ")];
         let cursor = self.line.cursor();
         let tokens = self.line.tokens();
         let caret = || div().w(px(2.)).h(px(19.)).bg(accent);
@@ -685,7 +851,7 @@ impl Render for Shell {
             input_row.push(
                 div()
                     .text_color(dim)
-                    .child("escribe un comando…  (Tab autocompleta)"),
+                    .child("escribe un comando…  (Tab autocompleta · Enter ejecuta)"),
             );
         } else {
             let mut caret_done = false;
@@ -695,26 +861,21 @@ impl Render for Shell {
                     let local = cursor - t.start;
                     let (left_s, right_s) = t.text.split_at(local);
                     if !left_s.is_empty() {
-                        input_row.push(
-                            div().flex_none().text_color(color).child(left_s.to_string()),
-                        );
+                        input_row
+                            .push(div().flex_none().text_color(color).child(left_s.to_string()));
                     }
                     input_row.push(caret());
-                    input_row.push(
-                        div().flex_none().text_color(color).child(right_s.to_string()),
-                    );
+                    input_row
+                        .push(div().flex_none().text_color(color).child(right_s.to_string()));
                     caret_done = true;
                 } else {
-                    input_row.push(
-                        div().flex_none().text_color(color).child(t.text.clone()),
-                    );
+                    input_row.push(div().flex_none().text_color(color).child(t.text.clone()));
                 }
             }
             if !caret_done {
                 input_row.push(caret());
             }
         }
-
         let prompt = div()
             .h(px(46.))
             .flex()
@@ -726,7 +887,7 @@ impl Render for Shell {
             .text_size(px(14.))
             .children(input_row);
 
-        // --- Popup de autocompletado (flotante sobre el prompt) ---
+        // --- Popup de autocompletado ---
         let mut popup_layer: Vec<gpui::Div> = Vec::new();
         if self.show_completion {
             if let Some(comp) = &self.completion {
@@ -736,9 +897,11 @@ impl Render for Shell {
                         CompletionKind::Flag => "flag",
                         CompletionKind::Path => "ruta",
                     };
-                    // Ventana de 8 candidatos centrada en la selección.
                     let total = comp.candidates.len();
-                    let start = self.completion_index.saturating_sub(3).min(total.saturating_sub(8));
+                    let start = self
+                        .completion_index
+                        .saturating_sub(3)
+                        .min(total.saturating_sub(8));
                     let rows: Vec<_> = comp
                         .candidates
                         .iter()
@@ -750,7 +913,9 @@ impl Render for Shell {
                             div()
                                 .px(px(8.))
                                 .py(px(3.))
-                                .when(selected, |d| d.bg(accent).text_color(gpui::hsla(0.0, 0.0, 0.1, 1.0)))
+                                .when(selected, |d| {
+                                    d.bg(accent).text_color(gpui::hsla(0.0, 0.0, 0.1, 1.0))
+                                })
                                 .when(!selected, |d| d.text_color(text))
                                 .child(SharedString::from(cand.clone()))
                         })
@@ -800,6 +965,7 @@ impl Render for Shell {
                     .flex()
                     .flex_row()
                     .flex_1()
+                    .overflow_hidden()
                     .child(left)
                     .child(canvas)
                     .child(right),
@@ -810,5 +976,5 @@ impl Render for Shell {
 }
 
 fn main() {
-    launch_app("brahman · shuma shell", (1080., 680.), Shell::new);
+    launch_app("brahman · shuma shell", (1100., 700.), Shell::new);
 }
