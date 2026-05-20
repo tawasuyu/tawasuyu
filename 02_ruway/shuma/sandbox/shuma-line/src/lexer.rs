@@ -49,7 +49,7 @@ fn scan_bash(input: &str) -> Vec<Token> {
     let n = chars.len();
     let byte_at = |p: usize| if p < n { chars[p].0 } else { input.len() };
     let mut tokens: Vec<Token> = Vec::new();
-    let mut push = |tokens: &mut Vec<Token>, kind: TokenKind, sp: usize, ep: usize| {
+    let push = |tokens: &mut Vec<Token>, kind: TokenKind, sp: usize, ep: usize| {
         let (sb, eb) = (byte_at(sp), byte_at(ep));
         tokens.push(Token::new(kind, sb, eb, &input[sb..eb]));
     };
