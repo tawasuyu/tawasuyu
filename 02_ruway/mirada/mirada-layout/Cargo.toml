@@ -1,0 +1,11 @@
+[package]
+name = "mirada-layout"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "mirada — motor de teselado del compositor Wayland: reparte la pantalla entre ventanas según el modo de layout. Agnóstico de Wayland y de smithay."
+
+[dependencies]
+serde = { workspace = true }
