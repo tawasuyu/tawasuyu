@@ -36,6 +36,10 @@ use shuma_sysmon::{Snapshot, SystemSampler};
 
 /// Cuántas muestras guarda la curva de cada monitor.
 const HISTORY: usize = 80;
+/// Tope de captura de salida por comando — 8 MiB. Pasado el tope la
+/// salida se descarta: cota dura de memoria ante un stream gigante.
+const CAPTURE_LIMIT: usize = 8 * 1024 * 1024;
+
 /// Archivos/directorios que delatan la estructura de un proyecto.
 const PROJECT_MARKERS: &[&str] = &[
     ".git",
@@ -282,6 +286,8 @@ struct Shell {
     group_anchor: usize,
     /// Patrones detectados por el motor de inferencia (cache).
     patterns: Vec<shuma_infer::EmergingPattern>,
+    /// Si está activo, el próximo comando reprocesa la salida de este run.
+    reprocess_source: Option<RunId>,
     /// Scroll del feed central — sigue al comando más reciente.
     scroll: ScrollHandle,
     focus: FocusHandle,
@@ -323,6 +329,7 @@ impl Shell {
             run_ui: HashMap::new(),
             group_anchor: 0,
             patterns: Vec::new(),
+            reprocess_source: None,
             scroll: ScrollHandle::new(),
             focus: cx.focus_handle(),
             focused_once: false,
@@ -372,6 +379,7 @@ impl Shell {
                     RunEvent::Stderr(l) => {
                         self.session.append_output(*id, Stream::Stderr, l)
                     }
+                    RunEvent::Truncated => self.session.mark_truncated(*id),
                     RunEvent::Exited(code) => self.session.finish_run(*id, code, now),
                     RunEvent::Failed(msg) => {
                         self.session.append_output(
@@ -559,7 +567,35 @@ impl Shell {
 
         let id = self.session.begin_run(&line, now);
         self.run_ui.insert(id, RunUi::default());
-        let spec = CommandSpec::bash(&line, self.session.cwd());
+        let spec = CommandSpec::bash(&line, self.session.cwd()).with_limit(CAPTURE_LIMIT);
+        self.active.push((id, exec_run(&spec)));
+        self.scroll.scroll_to_bottom();
+    }
+
+    /// Reprocesa la salida capturada del comando `source`: ejecuta `line`
+    /// alimentándole esa salida por stdin, sin volver a correr el
+    /// original. Así un resultado se filtra con distintas herramientas.
+    fn run_reprocess(&mut self, line: String, source: RunId) {
+        let line = line.trim().to_string();
+        if line.is_empty() {
+            return;
+        }
+        let data: String = self
+            .session
+            .run(source)
+            .map(|r| r.lines_of(Stream::Stdout).collect::<Vec<_>>().join("\n"))
+            .unwrap_or_default();
+        for ui in self.run_ui.values_mut() {
+            if !ui.user_touched {
+                ui.collapsed = true;
+            }
+        }
+        let now = unix_now();
+        let id = self.session.begin_run(&line, now);
+        self.run_ui.insert(id, RunUi::default());
+        let spec = CommandSpec::bash(&line, self.session.cwd())
+            .with_limit(CAPTURE_LIMIT)
+            .with_stdin(data);
         self.active.push((id, exec_run(&spec)));
         self.scroll.scroll_to_bottom();
     }
@@ -610,13 +646,18 @@ impl Shell {
         }
     }
 
-    /// Enter — ejecuta el contenido del input.
+    /// Enter — ejecuta el contenido del input, o reprocesa una salida
+    /// previa si hay un origen de reproceso activo.
     fn submit(&mut self) {
         let line = self.line.text().to_string();
         self.line.clear();
         self.completion = None;
         self.show_completion = false;
-        self.run_command(line);
+        if let Some(source) = self.reprocess_source.take() {
+            self.run_reprocess(line, source);
+        } else {
+            self.run_command(line);
+        }
     }
 
     fn handle_key(&mut self, event: &KeyDownEvent, _w: &mut Window, cx: &mut Context<Self>) {
@@ -633,6 +674,7 @@ impl Shell {
             }
             "escape" => {
                 self.show_completion = false;
+                self.reprocess_source = None;
                 cx.notify();
                 return;
             }
@@ -780,18 +822,25 @@ fn render_run(
         RunStatus::Failed => ("✗", gpui::hsla(2.0 / 360.0, 0.68, 0.60, 1.0)),
     };
     let stderr_color = gpui::hsla(8.0 / 360.0, 0.62, 0.66, 1.0);
+    let accent = gpui::hsla(190.0 / 360.0, 0.60, 0.62, 1.0);
 
-    // Nota a la derecha: código de salida, y al colapsar, conteo de líneas.
-    let mut note = match r.exit_code {
-        Some(0) | None => String::new(),
-        Some(c) => format!("salió {c}"),
-    };
+    // Nota a la derecha: salida no-cero, truncado, y conteo si colapsada.
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(c) = r.exit_code {
+        if c != 0 {
+            parts.push(format!("salió {c}"));
+        }
+    }
+    if r.truncated {
+        parts.push("⚠ truncado".to_string());
+    }
     if ui.collapsed {
         let n = r.count_of(Stream::Stdout);
         if n > 0 {
-            note = format!("{note} · {n} líneas").trim_start().to_string();
+            parts.push(format!("{n} líneas"));
         }
     }
+    let note = parts.join(" · ");
 
     // Cabecera-acordeón: un clic colapsa/expande.
     let caret = if ui.collapsed { "▸" } else { "▾" };
@@ -870,6 +919,29 @@ fn render_run(
         None
     };
 
+    // Reprocesar — sólo si el comando dejó algo en stdout que filtrar.
+    let reprocess_chip = if r.count_of(Stream::Stdout) > 0 {
+        Some(
+            div()
+                .id(SharedString::from(format!("repro-{id}")))
+                .flex_none()
+                .px(px(6.))
+                .py(px(1.))
+                .rounded(px(3.))
+                .text_size(px(11.))
+                .text_color(accent)
+                .cursor_pointer()
+                .hover(|s| s.text_color(gpui::hsla(0.0, 0.0, 0.95, 1.0)))
+                .child("⤳ reprocesar")
+                .on_click(cx.listener(move |shell, _, _, cx| {
+                    shell.reprocess_source = Some(id);
+                    cx.notify();
+                })),
+        )
+    } else {
+        None
+    };
+
     let header = div()
         .flex()
         .flex_row()
@@ -877,6 +949,7 @@ fn render_run(
         .gap(px(6.))
         .child(header_left)
         .children(stderr_chip)
+        .children(reprocess_chip)
         .children(kill_chip);
 
     // Cuerpo: sólo con el acordeón abierto. El filtro elige el flujo.
@@ -1291,16 +1364,33 @@ impl Render for Shell {
                     .child(SharedString::from(ghost)),
             );
         }
-        let prompt = div()
+        let input_bar = div()
             .h(px(46.))
             .flex()
             .flex_row()
             .items_center()
             .px(px(14.))
-            .bg(panel)
             .text_color(text)
             .text_size(px(14.))
             .children(input_row);
+        // Banner del modo reproceso — escribí un filtro para la salida.
+        let banner = self.reprocess_source.map(|src| {
+            div()
+                .px(px(14.))
+                .py(px(3.))
+                .bg(gpui::hsla(190.0 / 360.0, 0.30, 0.22, 1.0))
+                .text_size(px(11.))
+                .text_color(accent)
+                .child(SharedString::from(format!(
+                    "⤳ reprocesando la salida de #{src} — escribí un filtro · Esc cancela"
+                )))
+        });
+        let prompt = div()
+            .flex()
+            .flex_col()
+            .bg(panel)
+            .children(banner)
+            .child(input_bar);
 
         // --- Popup de autocompletado ---
         let mut popup_layer: Vec<gpui::Div> = Vec::new();

@@ -10,16 +10,29 @@
 //! shell, en cambio, corre líneas de shell ad-hoc y necesita ver la
 //! salida fluir. Dos capas distintas, a propósito.
 //!
+//! **Captura acotada.** Para no cargar en RAM un stream de gigabytes, la
+//! captura tiene un límite de bytes ([`CommandSpec::capture_limit`]):
+//! pasado el límite se emite [`RunEvent::Truncated`] una vez y el resto
+//! se **descarta** — pero el pipe se sigue drenando, así el proceso no
+//! se bloquea y termina normal.
+//!
+//! **Reproceso.** [`CommandSpec::stdin_data`] alimenta un texto por la
+//! entrada estándar del proceso: permite reprocesar la salida capturada
+//! de un comando previo con otra herramienta, sin volver a correr el
+//! comando original.
+//!
 //! El crate es agnóstico de frontend: el proceso y sus lectores corren
 //! en hilos; el consumidor (shell GPUI o TUI) drena el canal cuando
 //! quiere — sin `async`, sin acoplarse a ningún runtime.
 
 #![forbid(unsafe_code)]
 
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 
 /// Qué ejecutar: una línea de comandos, en un directorio, con un shell.
 #[derive(Debug, Clone)]
@@ -30,12 +43,35 @@ pub struct CommandSpec {
     pub cwd: String,
     /// Programa de shell — `"bash"`, `"sh"`, `"fish"`…
     pub shell: String,
+    /// Tope de bytes a capturar; `0` = sin límite. Pasado el tope, la
+    /// salida se descarta (se emite [`RunEvent::Truncated`]).
+    pub capture_limit: usize,
+    /// Texto a alimentar por stdin — para reprocesar una salida previa.
+    pub stdin_data: Option<String>,
 }
 
 impl CommandSpec {
-    /// Spec con `bash` como shell.
+    /// Spec con `bash` como shell, sin límite ni stdin.
     pub fn bash(line: impl Into<String>, cwd: impl Into<String>) -> Self {
-        Self { line: line.into(), cwd: cwd.into(), shell: "bash".into() }
+        Self {
+            line: line.into(),
+            cwd: cwd.into(),
+            shell: "bash".into(),
+            capture_limit: 0,
+            stdin_data: None,
+        }
+    }
+
+    /// Fija el tope de captura en bytes (encadenable).
+    pub fn with_limit(mut self, bytes: usize) -> Self {
+        self.capture_limit = bytes;
+        self
+    }
+
+    /// Alimenta `data` por la entrada estándar del proceso (encadenable).
+    pub fn with_stdin(mut self, data: impl Into<String>) -> Self {
+        self.stdin_data = Some(data.into());
+        self
     }
 }
 
@@ -46,6 +82,8 @@ pub enum RunEvent {
     Stdout(String),
     /// Una línea de salida de error.
     Stderr(String),
+    /// La captura alcanzó su tope; lo que sigue se descarta.
+    Truncated,
     /// El proceso terminó con este código de salida.
     Exited(i32),
     /// El proceso no pudo siquiera lanzarse.
@@ -122,6 +160,33 @@ impl RunHandle {
     }
 }
 
+/// Lanza un hilo lector de un flujo. Cuenta los bytes contra `counter`;
+/// pasado `limit` emite `Truncated` una vez (vía `announced`) y descarta
+/// el resto, pero **sigue drenando** el pipe para no bloquear al proceso.
+fn spawn_reader<R: Read + Send + 'static>(
+    stream: R,
+    tx: Sender<RunEvent>,
+    make: fn(String) -> RunEvent,
+    limit: usize,
+    counter: Arc<AtomicUsize>,
+    announced: Arc<AtomicBool>,
+) -> JoinHandle<()> {
+    std::thread::spawn(move || {
+        for line in BufReader::new(stream).lines().map_while(Result::ok) {
+            let total = counter.fetch_add(line.len() + 1, Ordering::Relaxed) + line.len() + 1;
+            if limit != 0 && total > limit {
+                if !announced.swap(true, Ordering::Relaxed) {
+                    let _ = tx.send(RunEvent::Truncated);
+                }
+                continue; // descarta, pero sigue leyendo el pipe
+            }
+            if tx.send(make(line)).is_err() {
+                break;
+            }
+        }
+    })
+}
+
 /// Lanza `spec` y devuelve un [`RunHandle`] desde el que drenar la
 /// salida. La función vuelve de inmediato: el proceso corre en hilos.
 pub fn run(spec: &CommandSpec) -> RunHandle {
@@ -131,11 +196,16 @@ pub fn run(spec: &CommandSpec) -> RunHandle {
     let cell = Arc::clone(&child_cell);
 
     std::thread::spawn(move || {
+        let stdin_mode = if spec.stdin_data.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        };
         let spawned = Command::new(&spec.shell)
             .arg("-c")
             .arg(&spec.line)
             .current_dir(&spec.cwd)
-            .stdin(Stdio::null())
+            .stdin(stdin_mode)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn();
@@ -148,32 +218,48 @@ pub fn run(spec: &CommandSpec) -> RunHandle {
             }
         };
 
-        // Un hilo lector por flujo: stdout y stderr fluyen en paralelo.
+        // Si hay datos para reprocesar, se escriben por stdin en su
+        // propio hilo (la escritura puede bloquear hasta que el proceso
+        // consuma); al terminar, `stdin` se cierra → EOF.
+        if let Some(data) = spec.stdin_data.clone() {
+            if let Some(mut stdin) = child.stdin.take() {
+                std::thread::spawn(move || {
+                    let _ = stdin.write_all(data.as_bytes());
+                });
+            }
+        }
+
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         // Comparte el proceso para que `RunHandle::kill` pueda alcanzarlo.
         if let Ok(mut g) = cell.lock() {
             *g = Some(child);
         }
+
+        // Contador de bytes compartido: el tope vale para stdout+stderr.
+        let counter = Arc::new(AtomicUsize::new(0));
+        let announced = Arc::new(AtomicBool::new(false));
+        let limit = spec.capture_limit;
+
         let out_reader = stdout.map(|s| {
-            let tx = tx.clone();
-            std::thread::spawn(move || {
-                for line in BufReader::new(s).lines().map_while(Result::ok) {
-                    if tx.send(RunEvent::Stdout(line)).is_err() {
-                        break;
-                    }
-                }
-            })
+            spawn_reader(
+                s,
+                tx.clone(),
+                RunEvent::Stdout,
+                limit,
+                Arc::clone(&counter),
+                Arc::clone(&announced),
+            )
         });
         let err_reader = stderr.map(|s| {
-            let tx = tx.clone();
-            std::thread::spawn(move || {
-                for line in BufReader::new(s).lines().map_while(Result::ok) {
-                    if tx.send(RunEvent::Stderr(line)).is_err() {
-                        break;
-                    }
-                }
-            })
+            spawn_reader(
+                s,
+                tx.clone(),
+                RunEvent::Stderr,
+                limit,
+                Arc::clone(&counter),
+                Arc::clone(&announced),
+            )
         });
 
         // Los lectores terminan cuando el proceso cierra sus pipes —sea
@@ -203,7 +289,7 @@ mod tests {
     /// `sh` está en cualquier entorno POSIX — más portable que bash
     /// para los tests.
     fn sh(line: &str) -> CommandSpec {
-        CommandSpec { line: line.into(), cwd: ".".into(), shell: "sh".into() }
+        CommandSpec { shell: "sh".into(), ..CommandSpec::bash(line, ".") }
     }
 
     #[test]
@@ -259,11 +345,7 @@ mod tests {
 
     #[test]
     fn missing_shell_fails_gracefully() {
-        let spec = CommandSpec {
-            line: "echo x".into(),
-            cwd: ".".into(),
-            shell: "/no/existe/shell-xyz".into(),
-        };
+        let spec = CommandSpec { shell: "/no/existe/shell-xyz".into(), ..sh("echo x") };
         let mut h = run(&spec);
         let events = h.wait_all();
         assert!(matches!(events.first(), Some(RunEvent::Failed(_))));
@@ -274,18 +356,72 @@ mod tests {
         assert!(RunEvent::Exited(0).is_terminal());
         assert!(RunEvent::Failed("x".into()).is_terminal());
         assert!(!RunEvent::Stdout("x".into()).is_terminal());
+        assert!(!RunEvent::Truncated.is_terminal());
     }
 
     #[test]
     fn kill_stops_a_long_running_process() {
         let mut h = run(&sh("sleep 30"));
-        // Espera breve para que el proceso se haya lanzado.
         std::thread::sleep(std::time::Duration::from_millis(250));
         h.kill();
-        // wait_all retorna pronto (no espera los 30s) y cierra con un
-        // evento terminal.
         let events = h.wait_all();
         assert!(events.last().map(|e| e.is_terminal()).unwrap_or(false));
         assert!(h.is_finished());
+    }
+
+    #[test]
+    fn capture_limit_truncates_but_process_finishes() {
+        // 20.000 líneas, pero la captura se corta a ~400 bytes.
+        let mut h = run(&sh("seq 1 20000").with_limit(400));
+        let events = h.wait_all();
+        // Se anunció el truncado…
+        assert!(events.contains(&RunEvent::Truncated));
+        // …pero el proceso terminó normal (no se bloqueó).
+        assert!(events.contains(&RunEvent::Exited(0)));
+        // Y lo capturado quedó acotado.
+        let captured = events
+            .iter()
+            .filter(|e| matches!(e, RunEvent::Stdout(_)))
+            .count();
+        assert!(captured < 20000, "la salida quedó acotada");
+    }
+
+    #[test]
+    fn no_limit_captures_everything() {
+        let mut h = run(&sh("seq 1 500")); // capture_limit = 0
+        let events = h.wait_all();
+        assert!(!events.contains(&RunEvent::Truncated));
+        let n = events.iter().filter(|e| matches!(e, RunEvent::Stdout(_))).count();
+        assert_eq!(n, 500);
+    }
+
+    #[test]
+    fn stdin_data_is_fed_to_the_process() {
+        // `cat` devuelve por stdout lo que recibe por stdin — es el
+        // reproceso más simple: tomar una salida y pasarla a otro filtro.
+        let mut h = run(&sh("cat").with_stdin("alfa\nbeta\ngamma"));
+        let lines: Vec<String> = h
+            .wait_all()
+            .into_iter()
+            .filter_map(|e| match e {
+                RunEvent::Stdout(l) => Some(l),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lines, vec!["alfa", "beta", "gamma"]);
+    }
+
+    #[test]
+    fn stdin_data_reprocessed_by_a_filter() {
+        let mut h = run(&sh("grep beta").with_stdin("alfa\nbeta\nbetabel\ngamma"));
+        let lines: Vec<String> = h
+            .wait_all()
+            .into_iter()
+            .filter_map(|e| match e {
+                RunEvent::Stdout(l) => Some(l),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lines, vec!["beta", "betabel"]);
     }
 }

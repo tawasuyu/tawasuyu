@@ -60,6 +60,8 @@ pub struct CommandRun {
     pub exit_code: Option<i32>,
     /// Salida — cada línea sabe si es de stdout o de stderr.
     pub output: Vec<OutputLine>,
+    /// `true` si la salida superó el tope de captura y se descartó parte.
+    pub truncated: bool,
     /// Segundo Unix en que arrancó.
     pub started_at: u64,
     /// Segundo Unix en que terminó.
@@ -167,10 +169,18 @@ impl WorkSession {
             status: RunStatus::Running,
             exit_code: None,
             output: Vec::new(),
+            truncated: false,
             started_at: now,
             finished_at: None,
         });
         id
+    }
+
+    /// Marca que la salida de un comando se truncó al tope de captura.
+    pub fn mark_truncated(&mut self, id: RunId) {
+        if let Some(r) = self.run_mut(id) {
+            r.truncated = true;
+        }
     }
 
     pub fn run(&self, id: RunId) -> Option<&CommandRun> {
