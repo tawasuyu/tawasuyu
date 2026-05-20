@@ -1,0 +1,11 @@
+[package]
+name = "shuma-sysmon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "shuma — muestreo de CPU y memoria con historial para los monitores del shell. Parseo de /proc separado del cálculo, agnóstico de UI."
+
+[dependencies]
+serde = { workspace = true }
