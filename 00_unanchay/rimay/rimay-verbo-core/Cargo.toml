@@ -1,0 +1,13 @@
+[package]
+name = "verbo-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "verbo — contrato model-agnostic de embeddings: ModelId + EmbeddingVector + trait Provider. Las impls concretas (cohere/bge/fastembed) lo cumplen."
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
