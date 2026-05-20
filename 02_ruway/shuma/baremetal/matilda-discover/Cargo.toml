@@ -10,6 +10,7 @@ description = "matilda — descubrimiento del estado actual de un servidor: qué
 [dependencies]
 matilda-core = { path = "../matilda-core" }
 serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 matilda-plan = { path = "../matilda-plan" }

@@ -88,8 +88,8 @@ fn current_inventory(
     desired: &Inventory,
 ) -> Result<Inventory, String> {
     if discover {
-        let state = matilda_discover::discover_local();
-        Ok(matilda_discover::observed_inventory(&state, desired))
+        // Descubrimiento detallado: `docker inspect` detecta el drift.
+        Ok(matilda_discover::discover_inventory(desired))
     } else {
         match current {
             Some(p) => load(p),

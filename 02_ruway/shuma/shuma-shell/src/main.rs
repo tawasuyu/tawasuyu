@@ -737,9 +737,9 @@ impl Shell {
                 return;
             }
         };
-        // Reconcilia contra el estado observado de esta máquina.
-        let current =
-            matilda_discover::observed_inventory(&matilda_discover::discover_local(), &desired);
+        // Reconcilia contra el estado real de esta máquina — con
+        // detección de drift vía `docker inspect`.
+        let current = matilda_discover::discover_inventory(&desired);
         let p = matilda_plan::plan(&current, &desired);
 
         match sub {
