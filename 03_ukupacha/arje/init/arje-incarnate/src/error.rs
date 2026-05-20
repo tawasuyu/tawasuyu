@@ -31,6 +31,9 @@ pub enum IncarnateError {
 
     #[error("invalid argv: contains NUL byte")]
     InvalidArgv,
+
+    #[error("rootfs path contains NUL byte (pivot_root / overlayfs)")]
+    InvalidRootfsPath,
 }
 
 /// Cuando `strict_caps = false`, errores no-fatales se reportan como
