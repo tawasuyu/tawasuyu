@@ -1,16 +1,15 @@
 //! `pineal-polar` — gráficos en coordenadas polares.
 //!
-//! - **`pie`** — pie / donut chart.
-//! - **`radar`** — radar (spider) chart.
-//! - **`element`** — `Element` GPUI.
+//! Painters agnósticos (hablan contra `Canvas`): el `Canvas` no tiene
+//! primitiva de arco, así que cada forma se tesela en triangle strips.
 //!
-//! No comparte mucho con cartesian; viewport y gestures van
-//! ad-hoc. El picture-cache de cartesian no aplica acá (las
-//! rotaciones lo invalidan).
+//! - [`pie`] — pie / donut chart.
+//! - [`radar`] — radar (spider) chart.
 
 #![forbid(unsafe_code)]
-#![allow(dead_code)]
 
-pub mod pie {}
-pub mod radar {}
-pub mod element {}
+pub mod pie;
+pub mod radar;
+
+pub use pie::{paint_pie, Slice};
+pub use radar::paint_radar;
