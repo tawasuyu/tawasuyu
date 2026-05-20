@@ -1,0 +1,16 @@
+[package]
+name = "sandokan-core"
+description = "Contrato del orquestador sandokan: trait Engine + tipos (Intent, ExecHandle, eventos, telemetría). Sin transporte ni impl concreta."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+brahman-card = { path = "../../protocol/brahman-card" }
+sandokan-lifecycle = { path = "../sandokan-lifecycle" }
+serde = { workspace = true }
+ulid = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
