@@ -1,0 +1,13 @@
+[package]
+name = "dominium-iso"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "dominium — proyección pseudo-3D isométrica calculada en CPU: matriz iso fija + Z compuesto de 5 capas + sombras analíticas Lambert."
+
+[dependencies]
+dominium-core = { path = "../dominium-core" }
+libm = { workspace = true }
+serde = { workspace = true }
