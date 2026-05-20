@@ -1,0 +1,12 @@
+[package]
+name = "mirada-brain"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "mirada — orquestador de escritorio del compositor: mantiene salidas, escritorios virtuales, ventanas y foco; consume BodyEvent y produce BrainCommand. Agnóstico de GPUI y de smithay."
+
+[dependencies]
+mirada-layout = { path = "../mirada-layout" }
+mirada-protocol = { path = "../mirada-protocol" }
