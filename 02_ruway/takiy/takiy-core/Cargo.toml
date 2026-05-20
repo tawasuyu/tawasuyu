@@ -1,0 +1,11 @@
+[package]
+name = "takiy-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "takiy — teoría musical y modelo de partitura: pitch MIDI, escalas, acordes y un Score multipista con tempo. Agnóstico de síntesis y de UI."
+
+[dependencies]
+serde = { workspace = true }
