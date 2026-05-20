@@ -600,6 +600,11 @@ impl Shell {
                 .set_spill(matches!(arg.trim(), "on" | "si" | "sí" | "1" | "true"));
             return;
         }
+        if let Some(args) = line.strip_prefix(":matilda ") {
+            // Herramienta matilda embebida — administración de servidores.
+            self.matilda_command(args);
+            return;
+        }
 
         // Los comandos anteriores que el usuario no fijó se autocolapsan
         // al aparecer uno nuevo abajo — orden de terminal tradicional.
@@ -641,17 +646,133 @@ impl Shell {
     /// Arma la `CommandSpec` de una línea: decide directo vs shell y
     /// aplica la política de captura de la sesión.
     fn build_spec(&self, line: &str, stdin: Option<String>, run_id: RunId) -> CommandSpec {
+        self.build_spec_exec(plan_exec(line), stdin, run_id)
+    }
+
+    /// `build_spec` con el modo de ejecución ya decidido (lo usa la
+    /// herramienta matilda, que ejecuta un script de shell completo).
+    fn build_spec_exec(&self, exec: Exec, stdin: Option<String>, run_id: RunId) -> CommandSpec {
         let policy = self.session.capture();
         let spill_path = (policy.spill && policy.limit_bytes > 0).then(|| {
             std::env::temp_dir()
                 .join(format!("shuma-spill-{}-{run_id}.log", std::process::id()))
         });
         CommandSpec {
-            exec: plan_exec(line),
+            exec,
             cwd: self.session.cwd().to_string(),
             capture_limit: policy.limit_bytes,
             spill_path,
             stdin_data: stdin,
+        }
+    }
+
+    /// Registra un comando "sintético" ya terminado — su salida la
+    /// produce el shell mismo, no un proceso (la usa `:matilda plan`).
+    fn synthetic_run(&mut self, label: &str, output: Vec<String>, ok: bool) {
+        for ui in self.run_ui.values_mut() {
+            if !ui.user_touched {
+                ui.collapsed = true;
+            }
+        }
+        let now = unix_now();
+        let id = self.session.begin_run(label, now);
+        self.run_ui.insert(id, RunUi::default());
+        for line in output {
+            self.session.append_output(id, Stream::Stdout, line);
+        }
+        self.session.finish_run(id, if ok { 0 } else { 1 }, now);
+        self.scroll.scroll_to_bottom();
+    }
+
+    /// Ejecuta `exec_line` mostrando `label` en la tarjeta — el comando
+    /// real puede diferir de lo que se ve (matilda corre un script).
+    fn spawn_labeled(&mut self, label: String, exec_line: String) {
+        for ui in self.run_ui.values_mut() {
+            if !ui.user_touched {
+                ui.collapsed = true;
+            }
+        }
+        let now = unix_now();
+        let id = self.session.begin_run(&label, now);
+        self.run_ui.insert(id, RunUi::default());
+        let exec = Exec::Shell { line: exec_line, program: "bash".into() };
+        let spec = self.build_spec_exec(exec, None, id);
+        self.active.push((id, exec_run(&spec)));
+        self.scroll.scroll_to_bottom();
+    }
+
+    /// Carga un inventario JSON, resolviendo la ruta contra el cwd.
+    fn load_inventory(&self, file: &str) -> Result<matilda_core::Inventory, String> {
+        let path = if file.starts_with('/') {
+            file.to_string()
+        } else {
+            format!("{}/{}", self.session.cwd(), file)
+        };
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("no se pudo leer {path}: {e}"))?;
+        serde_json::from_str(&text).map_err(|e| format!("JSON inválido: {e}"))
+    }
+
+    /// La herramienta matilda, embebida: `:matilda plan|script|apply
+    /// <inventario.json>`. Reconcilia contra el estado real de la
+    /// máquina y vuelca el resultado al feed del shell.
+    fn matilda_command(&mut self, args: &str) {
+        let label = format!(":matilda {args}");
+        let parts: Vec<&str> = args.split_whitespace().collect();
+        let (sub, file) = match parts.as_slice() {
+            [s, f] => (*s, *f),
+            _ => {
+                self.synthetic_run(
+                    &label,
+                    vec!["uso: :matilda plan|script|apply <inventario.json>".into()],
+                    false,
+                );
+                return;
+            }
+        };
+        let desired = match self.load_inventory(file) {
+            Ok(d) => d,
+            Err(e) => {
+                self.synthetic_run(&label, vec![e], false);
+                return;
+            }
+        };
+        // Reconcilia contra el estado observado de esta máquina.
+        let current =
+            matilda_discover::observed_inventory(&matilda_discover::discover_local(), &desired);
+        let p = matilda_plan::plan(&current, &desired);
+
+        match sub {
+            "plan" => {
+                let lines: Vec<String> = if p.is_empty() {
+                    vec!["sin cambios: el servidor ya está al día".into()]
+                } else {
+                    p.actions
+                        .iter()
+                        .enumerate()
+                        .map(|(i, a)| format!("{:>2}. {}", i + 1, a.describe()))
+                        .collect()
+                };
+                self.synthetic_run(&label, lines, true);
+            }
+            "script" => {
+                let script = matilda_apply::steps_to_script(&matilda_apply::plan_to_steps(
+                    &p, &desired,
+                ));
+                self.synthetic_run(&label, script.lines().map(String::from).collect(), true);
+            }
+            "apply" => {
+                let steps = matilda_apply::plan_to_steps(&p, &desired);
+                if steps.is_empty() {
+                    self.synthetic_run(&label, vec!["sin cambios: nada que aplicar".into()], true);
+                } else {
+                    // El script se ejecuta de verdad — fluye al feed.
+                    self.spawn_labeled(label, matilda_apply::steps_to_script(&steps));
+                }
+            }
+            other => {
+                self.synthetic_run(&label, vec![format!("subcomando desconocido: {other}")], false)
+            }
         }
     }
 
@@ -1289,6 +1410,26 @@ impl Render for Shell {
                         .text_size(px(10.))
                         .text_color(dim)
                         .child("clic ejecuta · ＋ guarda lo último"),
+                )
+                .child(div().h(px(1.)).bg(theme.border))
+                .child(div().text_color(dim).text_size(px(12.)).child("[tools]"))
+                .child(
+                    div()
+                        .id("tool-matilda")
+                        .px(px(8.))
+                        .py(px(6.))
+                        .bg(node_bg)
+                        .rounded(px(4.))
+                        .text_color(text)
+                        .text_size(px(13.))
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme.bg_row_hover))
+                        .child("⚙ matilda")
+                        .on_click(cx.listener(|shell, _, _, cx| {
+                            // Precarga el comando para que el usuario nombre el inventario.
+                            shell.line.set_text(":matilda plan ");
+                            cx.notify();
+                        })),
                 )
         };
 

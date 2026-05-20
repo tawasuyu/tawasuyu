@@ -18,6 +18,12 @@ shuma-session = { path = "../../modules/shuma/shuma-session" }
 shuma-exec = { path = "../../modules/shuma/shuma-exec" }
 shuma-infer = { path = "../../modules/shuma/shuma-infer" }
 shuma-sysmon = { path = "../../modules/shuma/shuma-sysmon" }
+# Herramienta matilda, embebida en la ventana del shell.
+matilda-core = { path = "../../modules/matilda/matilda-core" }
+matilda-plan = { path = "../../modules/matilda/matilda-plan" }
+matilda-apply = { path = "../../modules/matilda/matilda-apply" }
+matilda-discover = { path = "../../modules/matilda/matilda-discover" }
 nahual-theme = { path = "../../modules/nahual/libs/theme" }
 nahual-launcher = { path = "../../modules/nahual/libs/launcher" }
 gpui = { workspace = true }
+serde_json = { workspace = true }
