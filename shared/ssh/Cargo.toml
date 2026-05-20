@@ -1,0 +1,14 @@
+[package]
+name = "brahman-ssh-multiplex"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Brahman — sesión SSH maestra con canales multiplexados (russh). Una conexión, N canales paralelos. Base de sandokan RemoteEngine y matilda."
+
+[dependencies]
+russh = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
