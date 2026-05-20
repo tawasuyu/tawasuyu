@@ -14,6 +14,8 @@
 
 pub mod parse;
 pub mod graph;
+pub mod macros;
 
 pub use graph::{CommandNode, NodeStatus, SessionGraph};
+pub use macros::{Macro, MacroBook};
 pub use parse::{Intention, Ref, Stage};
