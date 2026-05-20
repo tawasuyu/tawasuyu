@@ -1,0 +1,13 @@
+[package]
+name = "matilda-linker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "matilda — el enlace SSH: conecta a un servidor y aplica los ApplySteps remotamente, escribiendo archivos y corriendo comandos sobre la conexión multiplexada."
+
+[dependencies]
+matilda-apply = { path = "../matilda-apply" }
+matilda-ghost = { path = "../matilda-ghost" }
+brahman-ssh-multiplex = { path = "../../../protocol/brahman-ssh-multiplex" }
