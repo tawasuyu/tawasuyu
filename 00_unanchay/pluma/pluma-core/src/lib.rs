@@ -10,12 +10,13 @@
 
 #![forbid(unsafe_code)]
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
 /// Estado de coherencia lógica de un átomo dentro del grafo narrativo.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CoherenceState {
     /// Consistente con sus dependencias.
     Valid,
@@ -26,7 +27,7 @@ pub enum CoherenceState {
 }
 
 /// Un átomo narrativo: la unidad atómica del documento.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NarrativeAtom {
     pub id: Uuid,
     /// SHA-256 del contenido — verifica integridad de toda mutación.

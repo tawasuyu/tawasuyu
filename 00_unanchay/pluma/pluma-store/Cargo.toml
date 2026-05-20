@@ -1,0 +1,19 @@
+[package]
+name = "fana-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "fana — persistencia del grafo narrativo en un store key-value embebido (sled), serializado con bincode."
+
+[dependencies]
+fana-core = { path = "../fana-core" }
+fana-graph = { path = "../fana-graph" }
+sled = { workspace = true }
+bincode = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

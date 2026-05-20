@@ -45,6 +45,20 @@ impl NarrativeGraph {
         self.nodes.get_mut(&id)
     }
 
+    /// Itera todos los átomos del grafo (orden no determinista).
+    pub fn atoms(&self) -> impl Iterator<Item = &NarrativeAtom> {
+        self.nodes.values()
+    }
+
+    /// Construye un grafo desde una colección de átomos.
+    pub fn from_atoms(atoms: impl IntoIterator<Item = NarrativeAtom>) -> Self {
+        let mut g = Self::new();
+        for a in atoms {
+            g.insert(a);
+        }
+        g
+    }
+
     /// Inserta un átomo y conecta las aristas desde sus dependencias.
     pub fn insert(&mut self, atom: NarrativeAtom) {
         let id = atom.id;

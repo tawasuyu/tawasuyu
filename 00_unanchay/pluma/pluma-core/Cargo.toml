@@ -8,5 +8,6 @@ publish.workspace = true
 description = "fana — átomo narrativo (NarrativeAtom) + estado de coherencia. Tipos puros del editor DAG, agnósticos de UI."
 
 [dependencies]
-uuid = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }
 sha2 = { workspace = true }
+serde = { workspace = true, features = ["rc"] }
