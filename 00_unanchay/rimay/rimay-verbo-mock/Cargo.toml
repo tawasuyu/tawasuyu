@@ -1,0 +1,15 @@
+[package]
+name = "verbo-mock"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "verbo — backend de embeddings determinista (sin modelo real). Mismo texto → mismo vector. Para desarrollar y testear consumidores sin descargar modelos."
+
+[dependencies]
+verbo-core = { path = "../verbo-core" }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
