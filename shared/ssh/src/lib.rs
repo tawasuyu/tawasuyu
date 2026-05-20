@@ -141,6 +141,24 @@ impl SshSession {
         Ok(Self { handle: Arc::new(handle) })
     }
 
+    /// Abre un canal `direct-streamlocal` hacia un Unix socket del host
+    /// remoto y devuelve su stream bidireccional (`AsyncRead + AsyncWrite`).
+    ///
+    /// Permite tunelar un protocolo arbitrario (p. ej. el wire postcard
+    /// de `sandokan-daemon`) contra un socket remoto, reusando el código
+    /// de cliente sin cambios — sólo cambia el transporte.
+    pub async fn forward_unix(
+        &self,
+        remote_socket: &str,
+    ) -> Result<russh::ChannelStream<russh::client::Msg>, SshError> {
+        let channel = self
+            .handle
+            .channel_open_direct_streamlocal(remote_socket)
+            .await
+            .map_err(|e| SshError::Channel(e.to_string()))?;
+        Ok(channel.into_stream())
+    }
+
     /// Ejecuta `command` en un canal nuevo y junta su salida completa.
     /// Canales concurrentes se multiplexan sobre la misma conexión.
     pub async fn exec(&self, command: &str) -> Result<ExecOutput, SshError> {

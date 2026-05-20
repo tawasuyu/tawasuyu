@@ -12,6 +12,7 @@ sandokan-core = { path = "../sandokan-core" }
 sandokan-lifecycle = { path = "../sandokan-lifecycle" }
 sandokan-local = { path = "../sandokan-local" }
 sandokan-daemon = { path = "../sandokan-daemon" }
+sandokan-remote = { path = "../sandokan-remote" }
 tokio = { workspace = true }
 
 [dev-dependencies]

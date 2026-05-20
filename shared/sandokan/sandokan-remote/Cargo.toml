@@ -1,0 +1,16 @@
+[package]
+name = "sandokan-remote"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "sandokan RemoteEngine — orquesta en un host remoto tunelando el wire del daemon sobre un canal SSH direct-streamlocal."
+
+[dependencies]
+sandokan-core = { path = "../sandokan-core" }
+sandokan-daemon = { path = "../sandokan-daemon" }
+sandokan-lifecycle = { path = "../sandokan-lifecycle" }
+brahman-ssh-multiplex = { path = "../../protocol/brahman-ssh-multiplex" }
+async-trait = { workspace = true }
+ulid = { workspace = true }

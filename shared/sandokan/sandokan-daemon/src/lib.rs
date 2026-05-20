@@ -11,9 +11,9 @@
 //! demás se le suman como `DaemonEngine`.
 
 mod client;
-mod protocol;
+pub mod protocol;
 mod server;
 
 pub use client::DaemonEngine;
-pub use protocol::{DaemonRequest, DaemonResponse};
+pub use protocol::{read_frame, write_frame, DaemonRequest, DaemonResponse};
 pub use server::serve;

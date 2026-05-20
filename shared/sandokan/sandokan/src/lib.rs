@@ -17,6 +17,7 @@ pub use sandokan_core::{
 };
 pub use sandokan_daemon::{serve, DaemonEngine, DaemonRequest, DaemonResponse};
 pub use sandokan_local::LocalEngine;
+pub use sandokan_remote::RemoteEngine;
 
 /// Re-export de las primitivas de lifecycle.
 pub use sandokan_lifecycle as lifecycle;
