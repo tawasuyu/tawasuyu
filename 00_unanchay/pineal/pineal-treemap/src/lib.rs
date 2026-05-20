@@ -1,12 +1,14 @@
 //! `pineal-treemap` — treemap squarified.
 //!
-//! Algoritmo en `pineal_core::squarify` (placeholder); el `Element`
-//! sólo se encarga de iterar las tiles resultantes y dibujarlas.
-//! Pre-scaling de valores al area total del rect es clave para
-//! estabilidad numérica con rangos amplios.
+//! - [`squarify`] — algoritmo de Bruls, Huizing & van Wijk (2000):
+//!   asigna a cada peso un rect de área proporcional minimizando el
+//!   peor aspect ratio. Pre-escala los pesos al área del rect destino.
+//! - [`paint`] — painter agnóstico: tiles → `fill_rect` contra `Canvas`.
 
 #![forbid(unsafe_code)]
-#![allow(dead_code)]
 
-pub mod tile {}
-pub mod element {}
+pub mod squarify;
+pub mod paint;
+
+pub use paint::{paint_treemap, Tile};
+pub use squarify::squarify;
