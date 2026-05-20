@@ -39,6 +39,28 @@ const HISTORY: usize = 80;
 /// Líneas de salida visibles por comando (modo launcher liviano).
 const OUTPUT_LINES: usize = 16;
 
+/// Archivos/directorios que delatan la estructura de un proyecto.
+const PROJECT_MARKERS: &[&str] = &[
+    ".git",
+    "Cargo.toml",
+    "package.json",
+    "go.mod",
+    "Makefile",
+    "pyproject.toml",
+    "pom.xml",
+    "build.gradle",
+];
+
+/// Marcadores de proyecto presentes en `dir`.
+fn markers_in(dir: &str) -> Vec<String> {
+    let base = std::path::Path::new(dir);
+    PROJECT_MARKERS
+        .iter()
+        .filter(|m| base.join(m).exists())
+        .map(|m| m.to_string())
+        .collect()
+}
+
 /// Segundo Unix actual.
 fn unix_now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
@@ -403,6 +425,21 @@ impl Shell {
         }
     }
 
+    /// Condición de disparo de un patrón: los marcadores de proyecto
+    /// comunes a todos los directorios donde corrió.
+    fn pattern_trigger(&self, p: &shuma_infer::EmergingPattern) -> Vec<String> {
+        let mut dirs = p.directories.iter();
+        let Some(first) = dirs.next() else {
+            return Vec::new();
+        };
+        let mut common = markers_in(first);
+        for d in dirs {
+            let here = markers_in(d);
+            common.retain(|m| here.contains(m));
+        }
+        common
+    }
+
     /// La secuencia que el motor predice como continuación, si la hay.
     fn predicted_sequence(&self) -> Option<String> {
         if self.patterns.is_empty() {
@@ -410,8 +447,20 @@ impl Shell {
         }
         let records = self.infer_records();
         let tail = &records[records.len().saturating_sub(6)..];
-        let next = shuma_infer::predict_next(tail, &self.patterns)?;
-        (!next.is_empty()).then(|| next.join(" && "))
+        let (pi, next) = shuma_infer::predict_next(tail, &self.patterns)?;
+        if next.is_empty() {
+            return None;
+        }
+        // Disparo por estructura: no anticipar un patrón en un directorio
+        // que no comparte su forma (no sugerir `cargo` sin `Cargo.toml`).
+        let trigger = self.pattern_trigger(&self.patterns[pi]);
+        if !trigger.is_empty() {
+            let here = markers_in(self.session.cwd());
+            if !trigger.iter().all(|m| here.contains(m)) {
+                return None;
+            }
+        }
+        Some(next.join(" && "))
     }
 
     /// Calcula el sufijo fantasma del prompt: el resto de la línea que el

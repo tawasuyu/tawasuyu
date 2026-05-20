@@ -168,9 +168,11 @@ fn build_pattern(
         })
         .collect();
 
+    // El directorio "de trabajo" de una ocurrencia: el cwd de su último
+    // comando — para entonces todos los `cd` ya se hicieron.
     let mut directories: Vec<String> = Vec::new();
     for &s in starts {
-        let d = &history[s].cwd;
+        let d = &history[s + len - 1].cwd;
         if !directories.contains(d) {
             directories.push(d.clone());
         }
@@ -240,13 +242,15 @@ pub fn detect_patterns(history: &[CommandRecord], cfg: &InferConfig) -> Vec<Emer
 /// líneas que faltan para completarlo —tomadas de la ocurrencia más
 /// reciente, así son ejecutables—. Ante varios, gana el patrón cuyo
 /// prefijo coincidente sea más largo. Es lo que alimenta el "ghosting".
+/// Devuelve `(índice del patrón en `patterns`, líneas de continuación)`.
 pub fn predict_next(
     recent: &[CommandRecord],
     patterns: &[EmergingPattern],
-) -> Option<Vec<String>> {
+) -> Option<(usize, Vec<String>)> {
     let bins: Vec<&str> = recent.iter().map(|r| r.binary.as_str()).collect();
-    let mut best: Option<(usize, &EmergingPattern)> = None;
-    for p in patterns {
+    // best = (longitud del prefijo coincidente, índice del patrón).
+    let mut best: Option<(usize, usize)> = None;
+    for (pi, p) in patterns.iter().enumerate() {
         // Tiene que quedar al menos un paso por predecir.
         let max_k = p.signature.len().saturating_sub(1).min(bins.len());
         for k in (1..=max_k).rev() {
@@ -259,13 +263,13 @@ pub fn predict_next(
                 .eq(tail.iter().copied());
             if prefix_matches {
                 if best.map(|(bk, _)| k > bk).unwrap_or(true) {
-                    best = Some((k, p));
+                    best = Some((k, pi));
                 }
                 break;
             }
         }
     }
-    best.map(|(k, p)| p.example[k..].to_vec())
+    best.map(|(k, pi)| (pi, patterns[pi].example[k..].to_vec()))
 }
 
 #[cfg(test)]
@@ -379,7 +383,8 @@ mod tests {
             ok("git pull", "/b"),
         ];
         let p = &detect_patterns(&history, &InferConfig::default())[0];
-        assert_eq!(p.directories, vec!["/home", "/work"]);
+        // El directorio de cada ocurrencia es el de su último comando.
+        assert_eq!(p.directories, vec!["/a", "/b"]);
     }
 
     #[test]
@@ -415,7 +420,7 @@ mod tests {
         let patterns = pattern_world();
         // El usuario acaba de hacer `cd` → se predicen los pasos que faltan.
         let recent = vec![ok("cd /nuevo", "/h")];
-        let next = predict_next(&recent, &patterns).unwrap();
+        let (_, next) = predict_next(&recent, &patterns).unwrap();
         assert_eq!(next, vec!["git pull", "cargo build"]);
     }
 
@@ -423,7 +428,7 @@ mod tests {
     fn prediction_shrinks_as_the_pattern_advances() {
         let patterns = pattern_world();
         let recent = vec![ok("cd /nuevo", "/h"), ok("git pull", "/nuevo")];
-        let next = predict_next(&recent, &patterns).unwrap();
+        let (_, next) = predict_next(&recent, &patterns).unwrap();
         assert_eq!(next, vec!["cargo build"]);
     }
 
