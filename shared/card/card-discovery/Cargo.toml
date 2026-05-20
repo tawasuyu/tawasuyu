@@ -1,0 +1,21 @@
+[package]
+name = "brahman-card-discovery"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Brahman — búsqueda de Cards: índice local con filtros + escaneo de directorios + discovery P2P sobre brahman-dht."
+
+[dependencies]
+brahman-card = { path = "../brahman-card" }
+brahman-cards = { path = "../brahman-cards" }
+brahman-dht = { path = "../brahman-dht" }
+libp2p = { workspace = true }
+ulid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
