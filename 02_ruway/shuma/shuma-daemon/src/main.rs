@@ -12,7 +12,7 @@
 
 use anyhow::Context;
 use brahman_card::{Card, CardKind, Flow, Flows, Lifecycle, Payload, Supervision, TypeRef};
-use ente_incarnate::IncarnatorConfig;
+use arje_incarnate::IncarnatorConfig;
 use shuma_core::WorkspaceManager;
 use shuma_discern::{DiscernPipeline, Hint};
 use shuma_protocol::{

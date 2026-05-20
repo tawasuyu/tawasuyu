@@ -1,7 +1,7 @@
 //! Pipeline runtime: encadena nodos con pipes y opcionalmente intercepta
 //! cada flow para discernir su contenido.
 //!
-//! Cada nodo se encarna via [`ente_incarnate::Incarnator`] — eso significa
+//! Cada nodo se encarna via [`arje_incarnate::Incarnator`] — eso significa
 //! que **cada comando puede tener su propio SomaSpec** (namespaces, cgroup,
 //! rlimits) heredado del workspace. La conexión stdin↔stdout se hace con
 //! `pipe2(2)` + `ChildStdio` declarativo: el callback de clone(2) hace los
@@ -9,7 +9,7 @@
 
 use crate::CoreError;
 use brahman_card::Payload;
-use ente_incarnate::{ChildStdio, Incarnator};
+use arje_incarnate::{ChildStdio, Incarnator};
 use nix::fcntl::OFlag;
 use nix::unistd::pipe2;
 use shuma_card::PipelineSpec;
@@ -87,7 +87,7 @@ pub async fn run_pipeline(
     let mut edge_w: Vec<RawFd> = vec![-1; spec.edges.len()];
     for i in 0..spec.edges.len() {
         let (r, w) = pipe2(OFlag::O_CLOEXEC).map_err(|e| {
-            CoreError::Incarnate(ente_incarnate::IncarnateError::Pipe(e))
+            CoreError::Incarnate(arje_incarnate::IncarnateError::Pipe(e))
         })?;
         edge_r[i] = r.into_raw_fd();
         edge_w[i] = w.into_raw_fd();
@@ -110,7 +110,7 @@ pub async fn run_pipeline(
         }
         // Splitter: pipe propio para el productor → splitter lee y replica a edge_w[*].
         let (prod_r, prod_w) = pipe2(OFlag::O_CLOEXEC).map_err(|e| {
-            CoreError::Incarnate(ente_incarnate::IncarnateError::Pipe(e))
+            CoreError::Incarnate(arje_incarnate::IncarnateError::Pipe(e))
         })?;
         producer_stdout_fd[i] = Some(prod_w.into_raw_fd());
         let prod_r_fd = prod_r.into_raw_fd();
@@ -147,7 +147,7 @@ pub async fn run_pipeline(
                 // Merger: lee de N edge_r y escribe a un nuevo pipe cuyo
                 // read end es el stdin del consumer.
                 let (cons_r, cons_w) = pipe2(OFlag::O_CLOEXEC).map_err(|e| {
-                    CoreError::Incarnate(ente_incarnate::IncarnateError::Pipe(e))
+                    CoreError::Incarnate(arje_incarnate::IncarnateError::Pipe(e))
                 })?;
                 consumer_stdin_fd[j] = Some(cons_r.into_raw_fd());
                 let inputs: Vec<RawFd> = predecessors[j]
@@ -169,7 +169,7 @@ pub async fn run_pipeline(
             Payload::Native { .. } | Payload::Legacy { .. } => {}
             _ => {
                 return Err(CoreError::Incarnate(
-                    ente_incarnate::IncarnateError::NonExecutablePayload,
+                    arje_incarnate::IncarnateError::NonExecutablePayload,
                 ))
             }
         }
@@ -638,7 +638,7 @@ fn _keep_raw(_: &dyn AsRawFd) {}
 mod tests {
     use super::*;
     use brahman_card::Payload;
-    use ente_incarnate::IncarnatorConfig;
+    use arje_incarnate::IncarnatorConfig;
     use shuma_card::{CommandRef, DiscernPolicy, FlowEdge, PipelineSpec, WorkspaceId};
 
     fn cmd(label: &str, exec: &str, argv: &[&str]) -> CommandRef {

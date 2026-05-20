@@ -1,0 +1,14 @@
+[package]
+name = "chasqui-nous"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Nouser — protocolo Nous: contrato JSON line-delimited entre nouser-core y los proveedores de embeddings (mock o LLM real)."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

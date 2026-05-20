@@ -282,7 +282,7 @@ pub struct RestoreOutcome {
 mod tests {
     use super::*;
     use crate::WorkspaceManager;
-    use ente_incarnate::IncarnatorConfig;
+    use arje_incarnate::IncarnatorConfig;
     use shuma_card::{ExitPolicy, WorkspaceSpec};
     use std::sync::Arc;
 

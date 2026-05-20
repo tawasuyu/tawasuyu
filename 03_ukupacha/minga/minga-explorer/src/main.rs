@@ -14,7 +14,7 @@
 //!
 //! Stack visual: nahual-theme + banner_themed + card_themed +
 //! theme_switcher. Mismo patrón que `nakui-explorer` /
-//! `akasha-explorer`.
+//! `chasqui-explorer`.
 //!
 //! Uso:
 //! ```sh

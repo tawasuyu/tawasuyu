@@ -21,8 +21,8 @@ use std::rc::Rc;
 
 use barra_web::{Task, TaskList};
 use gioser_canvas_web::{tips, Renderer};
-use pluma_reader_web::Reader;
-use vista_web::Deck;
+use fana_md_reader_web::Reader;
+use revista_web::Deck;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{

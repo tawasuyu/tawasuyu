@@ -1,0 +1,40 @@
+[package]
+name = "chasqui-nous-real"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Nouser — proveedor Nous con LLM real (text-embedding via ONNX). El soporte AI vive detrás del feature `embeddings`; sin él, este crate compila como stub mínimo."
+
+[features]
+# Sin features = stub que arranca y rechaza requests. Compila en
+# segundos, sin descargar nada.
+default = []
+# Con feature embeddings: pulls fastembed + ONNX Runtime descargado.
+# Modelo default: all-MiniLM-L6-v2 (384-d, ~80MB descargado al primer
+# run y cacheado).
+embeddings = ["dep:fastembed"]
+
+[dependencies]
+brahman-card = { path = "../../../protocol/brahman-card" }
+brahman-sidecar = { path = "../../../protocol/brahman-sidecar" }
+arje-cas = { path = "../../../runtime/arje-cas" }
+chasqui-nous = { path = "../nous" }
+serde_json = { workspace = true }
+sled = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+ulid = { workspace = true }
+
+# Opcional: gateado por feature `embeddings`.
+fastembed = { version = "4", optional = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[[bin]]
+name = "chasqui-nous-real"
+path = "src/main.rs"

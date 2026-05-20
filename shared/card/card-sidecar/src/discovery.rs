@@ -3,7 +3,7 @@
 //! sockets ni reimplementar el patrón a mano.
 //!
 //! Es la generalización de `discover_producer_socket` del CLI
-//! `akasha attract --remote`: declarás el `TypeRef` que querés
+//! `chasqui attract --remote`: declarás el `TypeRef` que querés
 //! consumir y el broker te empuja un `MatchEvent::Available` con el
 //! `producer_service_socket` del primer proveedor matched.
 //!
@@ -263,8 +263,8 @@ mod tests {
 
     #[test]
     fn builder_sets_input_flow_with_primitive_type() {
-        let c = build_consumer_card("akasha.cli", "embed-result", "json");
-        assert_eq!(c.label, "akasha.cli");
+        let c = build_consumer_card("chasqui.cli", "embed-result", "json");
+        assert_eq!(c.label, "chasqui.cli");
         assert_eq!(c.kind, CardKind::Ente);
         assert!(matches!(c.lifecycle, Lifecycle::Oneshot));
         assert!(matches!(c.supervision, Supervision::OneShot));

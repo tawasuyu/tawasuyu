@@ -21,7 +21,7 @@
 //!   vía la conexión directa establecida en step 2 y obtiene el record
 //!   del store local de A.
 //! - El test usa flow `monad-list:json` por familiaridad (es el flow
-//!   real que `akasha daemon` declara). Sirve también como prueba de
+//!   real que `chasqui daemon` declara). Sirve también como prueba de
 //!   que el sistema completo (daemon + DHT) funcionaría con cero
 //!   cambios en la Card.
 

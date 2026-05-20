@@ -1,0 +1,42 @@
+[package]
+name = "arje-zero"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "arje-zero"
+path = "src/main.rs"
+
+[dependencies]
+# Lib crates del fractal — orden: contratos → infra → encarnación → orquestación
+arje-card = { path = "../../protocol/arje-card" }
+arje-bus = { path = "../../runtime/arje-bus" }
+arje-cas = { path = "../../runtime/arje-cas" }
+arje-kernel = { path = "../arje-kernel" }
+arje-soma = { path = "../arje-soma" }
+arje-wasm = { path = "../../runtime/arje-wasm" }
+arje-snapshot = { path = "../arje-snapshot" }
+arje-brain = { path = "../../runtime/arje-brain" }
+arje-echo = { path = "../../runtime/arje-echo" }   # solo para constantes del demo
+
+# Brahman protocol — handshake para módulos brahman conscientes
+brahman-handshake = { path = "../../protocol/brahman-handshake" }
+brahman-broker = { path = "../../protocol/brahman-broker" }
+brahman-admin = { path = "../../protocol/brahman-admin" }
+brahman-net = { path = "../../protocol/brahman-net" }
+
+# Runtime / utilidades de PID 1
+serde = { workspace = true }
+serde_json = { workspace = true }
+ulid = { workspace = true }
+tokio = { workspace = true }
+nix = { workspace = true }
+libc = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

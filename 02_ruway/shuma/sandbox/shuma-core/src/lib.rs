@@ -18,7 +18,7 @@ pub mod pipeline;
 pub mod stats;
 
 use brahman_card::{Card, Payload, Supervision};
-use ente_incarnate::{Incarnator, IncarnatorConfig};
+use arje_incarnate::{Incarnator, IncarnatorConfig};
 use nix::sys::signal::{kill, Signal};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
@@ -38,7 +38,7 @@ pub enum CoreError {
     #[error("compile: {0}")]
     Compile(#[from] shuma_card::CompileError),
     #[error("incarnate: {0}")]
-    Incarnate(#[from] ente_incarnate::IncarnateError),
+    Incarnate(#[from] arje_incarnate::IncarnateError),
 }
 
 #[derive(Debug)]
@@ -682,9 +682,9 @@ impl WorkspaceManager {
         // hace OOM kill al exceder memory.max — enforcement automático
         // sin policy adicional. Falla silenciosa si no hay delegation.
         if !spec.soma.cgroup.path.is_empty() {
-            if let Ok(abs) = ente_incarnate::cgroup::ensure_cgroup(&spec.soma.cgroup) {
+            if let Ok(abs) = arje_incarnate::cgroup::ensure_cgroup(&spec.soma.cgroup) {
                 let applied =
-                    ente_incarnate::cgroup::apply_rlimits_to_cgroup(&abs, &spec.soma.rlimits);
+                    arje_incarnate::cgroup::apply_rlimits_to_cgroup(&abs, &spec.soma.rlimits);
                 if !applied.is_empty() {
                     warnings.push(format!("cgroup limits applied: {}", applied.join(", ")));
                 }
@@ -842,11 +842,11 @@ impl WorkspaceManager {
         use std::os::fd::IntoRawFd;
         let (sout_r, sout_w) =
             nix::unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC).map_err(|e| {
-                CoreError::Incarnate(ente_incarnate::IncarnateError::Pipe(e))
+                CoreError::Incarnate(arje_incarnate::IncarnateError::Pipe(e))
             })?;
         let (serr_r, serr_w) =
             nix::unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC).map_err(|e| {
-                CoreError::Incarnate(ente_incarnate::IncarnateError::Pipe(e))
+                CoreError::Incarnate(arje_incarnate::IncarnateError::Pipe(e))
             })?;
         let sout_r_fd = sout_r.into_raw_fd();
         let sout_w_fd = sout_w.into_raw_fd();
@@ -856,7 +856,7 @@ impl WorkspaceManager {
         let stdout_buf = logbuf::LogBuf::new();
         let stderr_buf = logbuf::LogBuf::new();
 
-        let stdio = ente_incarnate::ChildStdio {
+        let stdio = arje_incarnate::ChildStdio {
             stdin_fd: None,
             stdout_fd: Some(sout_w_fd),
             stderr_fd: Some(serr_w_fd),

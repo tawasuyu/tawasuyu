@@ -11,8 +11,8 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 gioser-canvas-web = { path = "../../modules/gioser/gioser-canvas-web" }
-pluma-reader-web = { path = "../../modules/pluma/pluma-reader-web" }
-vista-web = { path = "../../modules/vista/vista-web" }
+fana-md-reader-web = { path = "../../modules/fana/fana-md-reader-web" }
+revista-web = { path = "../../modules/revista/revista-web" }
 barra-web = { path = "../../modules/barra/barra-web" }
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true

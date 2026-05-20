@@ -10,7 +10,7 @@
 //! producción que va escribiendo). Sin discovery dinámico vía broker
 //! brahman porque nakui hoy es CLI/library/demos, no daemon — cuando
 //! se daemonice, sustituir el lector de archivo por un sidecar
-//! consumer (mismo patrón que `akasha-explorer`).
+//! consumer (mismo patrón que `chasqui-explorer`).
 //!
 //! ## Uso
 //!

@@ -69,10 +69,10 @@ impl CardReader for EnteJsonReader {
 }
 
 // ============================================================================
-// Monad (akasha-card)
+// Monad (chasqui-card)
 // ============================================================================
 
-/// Reader para el shape JSON de [`akasha_card::MonadManifest`].
+/// Reader para el shape JSON de [`chasqui_card::MonadManifest`].
 ///
 /// Heurística: tiene `members` (BTreeSet<FileId>) Y `cardinality`
 /// (u32). La combinación es exclusiva del MonadManifest.

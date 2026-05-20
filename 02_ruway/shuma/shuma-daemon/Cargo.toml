@@ -17,7 +17,7 @@ shuma-card = { path = "../../modules/shuma/shuma-card" }
 shuma-protocol = { path = "../../modules/shuma/shuma-protocol" }
 shuma-discern = { path = "../../modules/shuma/shuma-discern" }
 shuma-core = { path = "../../modules/shuma/shuma-core" }
-ente-incarnate = { path = "../../init/ente-incarnate" }
+arje-incarnate = { path = "../../init/arje-incarnate" }
 brahman-card = { path = "../../protocol/brahman-card" }
 brahman-sidecar = { path = "../../protocol/brahman-sidecar" }
 anyhow = { workspace = true }

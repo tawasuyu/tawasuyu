@@ -14,7 +14,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 ulid = { workspace = true }
 brahman-card = { path = "../brahman-card" }
-akasha-card = { path = "../../modules/akasha/card" }
+chasqui-card = { path = "../../modules/chasqui/card" }
 nahual-meta-schema = { path = "../../modules/nahual/libs/meta-schema" }
 nickel-lang = "2.0.0"
 

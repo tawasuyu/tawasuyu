@@ -1,0 +1,25 @@
+[package]
+name = "arje-journald-compat"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "arje-journald-compat"
+path = "src/main.rs"
+
+[[bin]]
+name = "arje-journalctl"
+path = "src/journalctl.rs"
+
+[dependencies]
+arje-card = { path = "../../protocol/arje-card" }
+arje-bus = { path = "../../runtime/arje-bus" }
+arje-cas = { path = "../../runtime/arje-cas" }
+nix = { workspace = true }
+libc = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

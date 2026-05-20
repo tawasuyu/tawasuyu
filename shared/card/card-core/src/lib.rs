@@ -1187,7 +1187,7 @@ mod tests {
 
     #[test]
     fn wirecard_postcard_with_priority_contexts() {
-        // Repro del bug que rompía akasha-nous-mock: ContextBias con
+        // Repro del bug que rompía chasqui-nous-mock: ContextBias con
         // skip_serializing_if causaba que postcard leyera bytes
         // equivocados. Sin esos atributos, el roundtrip es estable.
         let src = r#"{
@@ -1266,8 +1266,8 @@ mod tests {
 
     #[test]
     fn new_assigns_real_ulid_and_label() {
-        let c = Card::new("akasha.engine");
-        assert_eq!(c.label, "akasha.engine");
+        let c = Card::new("chasqui.engine");
+        assert_eq!(c.label, "chasqui.engine");
         assert_ne!(c.id, Ulid::nil(), "Card::new no debe dejar id en nil");
     }
 

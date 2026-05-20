@@ -1,0 +1,22 @@
+[package]
+name = "arje-echo"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "arje_echo"
+path = "src/lib.rs"
+
+[[bin]]
+name = "arje-echo"
+path = "src/main.rs"
+
+[dependencies]
+arje-card = { path = "../../protocol/arje-card" }
+arje-bus = { path = "../arje-bus" }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

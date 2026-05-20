@@ -2,7 +2,7 @@
 //!
 //! Trait + pipeline + discerners default. Devuelve un [`Discernment`] con
 //! `TypeRef` consistente con el broker, confidence, MIME y un `lens` hint
-//! para UIs (reusa el espíritu del `dominant_lens` de akasha).
+//! para UIs (reusa el espíritu del `dominant_lens` de chasqui).
 
 #![forbid(unsafe_code)]
 

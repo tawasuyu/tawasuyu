@@ -12,7 +12,7 @@
 //! ```text
 //! ┌─────────────┐  ┌──────────────┐  ┌─────────────┐
 //! │ Ente JSON   │  │ Monad JSON   │  │ UiModule    │ … futuro
-//! │ (brahman-   │  │ (akasha-     │  │ (nakui-ui-  │
+//! │ (brahman-   │  │ (chasqui-     │  │ (nakui-ui-  │
 //! │  card)      │  │  card)       │  │  schema)    │
 //! └─────┬───────┘  └──────┬───────┘  └──────┬──────┘
 //!       │                 │                 │
@@ -48,7 +48,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 pub use brahman_card::Card as EnteCard;
-pub use akasha_card::MonadManifest;
+pub use chasqui_card::MonadManifest;
 pub use nahual_meta_schema::Module as UiModuleSpec;
 
 /// Estructura canónica única que consumen los downstream del sistema

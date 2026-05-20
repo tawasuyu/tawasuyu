@@ -95,7 +95,7 @@ pub fn spawn_with_handle(config: SidecarConfig) -> std::io::Result<JoinHandle<()
 /// Pool consolidado: un único thread con un runtime tokio
 /// `current_thread` que hostea N tasks de sidecar simultáneas.
 ///
-/// Para módulos con muchas sesiones (p. ej. `akasha daemon` publicando
+/// Para módulos con muchas sesiones (p. ej. `chasqui daemon` publicando
 /// 50+ Mónadas), evita el costo de tener un thread+runtime por cada
 /// sesión.
 ///
@@ -111,7 +111,7 @@ pub struct SidecarPool {
     handle: tokio::runtime::Handle,
     /// Sesiones vivas indexadas por `Card.id`. Permite que un nuevo
     /// `spawn` con el mismo id aborte la sesión previa — útil cuando
-    /// un módulo (p. ej. `akasha daemon`) re-publica una Mónada cuya
+    /// un módulo (p. ej. `chasqui daemon`) re-publica una Mónada cuya
     /// composición cambió.
     sessions: Arc<Mutex<HashMap<Ulid, AbortHandle>>>,
     _thread: JoinHandle<()>,
