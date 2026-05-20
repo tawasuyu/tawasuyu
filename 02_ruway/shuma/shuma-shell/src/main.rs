@@ -356,11 +356,42 @@ impl Shell {
                 }
             }
         }
+        let finished = self.active.iter().any(|(_, h)| h.is_finished());
         self.active.retain(|(_, h)| !h.is_finished());
+        if finished {
+            // Al cerrarse un comando, el motor de inferencia revisa si
+            // emergió un patrón repetido y lo promueve a un grupo.
+            self.infer_patterns();
+        }
         if changed {
             self.scroll.scroll_to_bottom();
         }
         changed
+    }
+
+    /// Corre el motor de inferencia sobre el historial y promueve el
+    /// patrón más fuerte a un grupo reutilizable (rehidratación).
+    fn infer_patterns(&mut self) {
+        let records: Vec<shuma_infer::CommandRecord> = self
+            .session
+            .history()
+            .iter()
+            .map(|r| {
+                shuma_infer::CommandRecord::parse(
+                    &r.line,
+                    &r.cwd,
+                    r.status == RunStatus::Ok,
+                )
+            })
+            .collect();
+        let patterns =
+            shuma_infer::detect_patterns(&records, &shuma_infer::InferConfig::default());
+        if let Some(top) = patterns.first() {
+            let name = format!("✨ {}", top.suggested_name());
+            if self.session.group(&name).is_none() {
+                self.session.save_group(name, top.example.clone());
+            }
+        }
     }
 
     /// Resuelve el destino de un `cd` contra el cwd de la sesión.

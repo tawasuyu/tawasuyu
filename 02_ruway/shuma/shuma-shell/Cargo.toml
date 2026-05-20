@@ -16,6 +16,7 @@ path = "src/main.rs"
 shuma-line = { path = "../../modules/shuma/shuma-line" }
 shuma-session = { path = "../../modules/shuma/shuma-session" }
 shuma-exec = { path = "../../modules/shuma/shuma-exec" }
+shuma-infer = { path = "../../modules/shuma/shuma-infer" }
 shuma-sysmon = { path = "../../modules/shuma/shuma-sysmon" }
 nahual-theme = { path = "../../modules/nahual/libs/theme" }
 nahual-launcher = { path = "../../modules/nahual/libs/launcher" }
