@@ -6,20 +6,15 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "GUI de shipote: vista de Workspaces+comandos+capabilities. Conecta al daemon vía shipote-protocol."
+description = "Shell shuma — las 3 zonas: barra RUN (macros) + Lienzo de Contexto (grafo de intenciones) + barra SENS (telemetría) + prompt fijo."
 
 [[bin]]
 name = "shuma-shell"
 path = "src/main.rs"
 
 [dependencies]
-shuma-card = { path = "../../modules/shuma/shuma-card" }
-shuma-protocol = { path = "../../modules/shuma/shuma-protocol" }
+shuma-intent = { path = "../../modules/shuma/shuma-intent" }
+shuma-shell-render = { path = "../../modules/shuma/shuma-shell-render" }
 nahual-theme = { path = "../../modules/nahual/libs/theme" }
 nahual-launcher = { path = "../../modules/nahual/libs/launcher" }
-nahual-widget-banner = { path = "../../modules/nahual/widgets/banner" }
-nahual-widget-stat-card = { path = "../../modules/nahual/widgets/stat-card" }
-nahual-widget-app-header = { path = "../../modules/nahual/widgets/app-header" }
-tokio = { workspace = true }
 gpui = { workspace = true }
-ulid = { workspace = true }
