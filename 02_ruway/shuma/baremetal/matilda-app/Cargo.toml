@@ -16,3 +16,4 @@ path = "src/main.rs"
 matilda-core = { path = "../../modules/matilda/matilda-core" }
 matilda-config = { path = "../../modules/matilda/matilda-config" }
 matilda-plan = { path = "../../modules/matilda/matilda-plan" }
+matilda-apply = { path = "../../modules/matilda/matilda-apply" }

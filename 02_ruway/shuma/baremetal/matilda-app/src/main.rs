@@ -85,6 +85,14 @@ fn main() {
         );
     }
 
+    rule("script de aplicación (lo que correría en el servidor)");
+    let steps = matilda_apply::plan_to_steps(&p, &desired);
+    if steps.is_empty() {
+        println!("  nada que aplicar.");
+    } else {
+        print!("{}", matilda_apply::steps_to_script(&steps));
+    }
+
     let broken = desired.broken_vhosts();
     rule("consistencia");
     if broken.is_empty() {
