@@ -8,7 +8,7 @@
 //!   border-bottom = `theme.border`.
 //! - Padding 16/12, text_size 14.
 //!
-//! Patrón emergente: `nakui-explorer`, `akasha-explorer`,
+//! Patrón emergente: `nakui-explorer`, `chasqui-explorer`,
 //! `minga-explorer`, `brahman-broker-explorer` declaran headers
 //! idénticos sólo cambiando el label. Ahora es 1 línea.
 //!
