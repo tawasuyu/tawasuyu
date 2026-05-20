@@ -1,0 +1,16 @@
+[package]
+name = "fana-semantic"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "fana — scoring de intensidad semántica: embebe los átomos vía verbo y mide su afinidad coseno a un conjunto de conceptos."
+
+[dependencies]
+fana-core = { path = "../fana-core" }
+verbo-core = { path = "../../verbo/verbo-core" }
+
+[dev-dependencies]
+verbo-mock = { path = "../../verbo/verbo-mock" }
+tokio = { workspace = true }
