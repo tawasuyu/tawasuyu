@@ -19,6 +19,7 @@ matilda-plan = { path = "../../modules/matilda/matilda-plan" }
 matilda-apply = { path = "../../modules/matilda/matilda-apply" }
 matilda-ghost = { path = "../../modules/matilda/matilda-ghost" }
 matilda-linker = { path = "../../modules/matilda/matilda-linker" }
+matilda-discover = { path = "../../modules/matilda/matilda-discover" }
 clap = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

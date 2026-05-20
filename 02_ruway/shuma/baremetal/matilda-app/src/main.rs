@@ -40,18 +40,26 @@ enum Cmd {
         /// Estado actual del servidor (por defecto: vacío).
         #[arg(long)]
         current: Option<PathBuf>,
+        /// Descubre el estado actual de esta máquina (docker + nginx).
+        #[arg(long)]
+        discover: bool,
     },
     /// Emite el script de shell que aplicaría el plan.
     Script {
         inventory: PathBuf,
         #[arg(long)]
         current: Option<PathBuf>,
+        #[arg(long)]
+        discover: bool,
     },
     /// Aplica el plan: local, en seco, o remoto por SSH.
     Apply {
         inventory: PathBuf,
         #[arg(long)]
         current: Option<PathBuf>,
+        /// Descubre el estado actual de esta máquina antes de reconciliar.
+        #[arg(long)]
+        discover: bool,
         /// Simula sin tocar nada.
         #[arg(long)]
         dry_run: bool,
@@ -71,11 +79,22 @@ fn load(path: &PathBuf) -> Result<Inventory, String> {
     serde_json::from_str(&text).map_err(|e| format!("JSON inválido en {}: {e}", path.display()))
 }
 
-/// Carga el inventario actual, o uno vacío si no se especificó.
-fn load_current(current: &Option<PathBuf>) -> Result<Inventory, String> {
-    match current {
-        Some(p) => load(p),
-        None => Ok(Inventory::new()),
+/// Resuelve el inventario "actual" contra el que reconciliar:
+/// `--discover` observa esta máquina; `--current` lee un archivo; si no,
+/// se parte de un inventario vacío (todo es creación).
+fn current_inventory(
+    discover: bool,
+    current: &Option<PathBuf>,
+    desired: &Inventory,
+) -> Result<Inventory, String> {
+    if discover {
+        let state = matilda_discover::discover_local();
+        Ok(matilda_discover::observed_inventory(&state, desired))
+    } else {
+        match current {
+            Some(p) => load(p),
+            None => Ok(Inventory::new()),
+        }
     }
 }
 
@@ -155,9 +174,9 @@ fn run() -> Result<(), String> {
             println!("{json}");
         }
 
-        Cmd::Plan { inventory, current } => {
+        Cmd::Plan { inventory, current, discover } => {
             let desired = load(&inventory)?;
-            let p = plan(&load_current(&current)?, &desired);
+            let p = plan(&current_inventory(discover, &current, &desired)?, &desired);
             if p.is_empty() {
                 println!("Sin cambios: el servidor ya está al día.");
             } else {
@@ -174,15 +193,15 @@ fn run() -> Result<(), String> {
             }
         }
 
-        Cmd::Script { inventory, current } => {
+        Cmd::Script { inventory, current, discover } => {
             let desired = load(&inventory)?;
-            let p = plan(&load_current(&current)?, &desired);
+            let p = plan(&current_inventory(discover, &current, &desired)?, &desired);
             print!("{}", steps_to_script(&plan_to_steps(&p, &desired)));
         }
 
-        Cmd::Apply { inventory, current, dry_run, host, password } => {
+        Cmd::Apply { inventory, current, discover, dry_run, host, password } => {
             let desired = load(&inventory)?;
-            let p = plan(&load_current(&current)?, &desired);
+            let p = plan(&current_inventory(discover, &current, &desired)?, &desired);
             let steps = plan_to_steps(&p, &desired);
             if steps.is_empty() {
                 println!("Sin cambios: nada que aplicar.");

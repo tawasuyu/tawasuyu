@@ -1,0 +1,15 @@
+[package]
+name = "matilda-discover"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "matilda — descubrimiento del estado actual de un servidor: qué contenedores y vhosts existen, para reconciliar contra el inventario deseado."
+
+[dependencies]
+matilda-core = { path = "../matilda-core" }
+serde = { workspace = true }
+
+[dev-dependencies]
+matilda-plan = { path = "../matilda-plan" }
