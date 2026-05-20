@@ -475,6 +475,34 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         state.apply_commands(vec![grab]);
     }
 
+    // El backend gráfico va primero. winit abre la ventana del compositor
+    // dentro de tu sesión gráfica anfitriona, y para encontrarla lee
+    // `WAYLAND_DISPLAY` / `DISPLAY` del entorno. Si publicáramos antes
+    // nuestro propio socket en `WAYLAND_DISPLAY`, winit intentaría
+    // anidarse en nosotros mismos —un socket que aún no atiende a nadie—
+    // y se quedaría colgado para siempre.
+    let (mut backend, mut winit) = match winit::init::<GlesRenderer>() {
+        Ok(pair) => pair,
+        Err(e) => {
+            eprintln!("mirada-compositor · no pude abrir la ventana: {e}");
+            eprintln!(
+                "   El backend `winit` necesita una sesión gráfica anfitriona\n   \
+                 (X11 o Wayland) donde dibujar la ventana del compositor.\n   \
+                 Aquí no hay ninguna: DISPLAY='{}', WAYLAND_DISPLAY='{}',\n   \
+                 XDG_SESSION_TYPE='{}'.\n   \
+                 Lánzalo desde un escritorio gráfico, o desde un servidor X\n   \
+                 virtual (Xvfb) al que te conectes por VNC.",
+                std::env::var("DISPLAY").unwrap_or_default(),
+                std::env::var("WAYLAND_DISPLAY").unwrap_or_default(),
+                std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "tty".into()),
+            );
+            return Err(e.into());
+        }
+    };
+
+    // Ahora sí, nuestro propio socket Wayland — y `WAYLAND_DISPLAY` se
+    // publica *después* de winit, sólo para los clientes que lancemos
+    // como procesos hijos.
     let listener = ListeningSocket::bind_auto("wayland", 1..32)?;
     let socket_name = listener
         .socket_name()
@@ -485,7 +513,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     println!("mirada-compositor · escuchando en WAYLAND_DISPLAY={socket_name}");
     println!("   lanza un cliente:  WAYLAND_DISPLAY={socket_name} foot");
 
-    let (mut backend, mut winit) = winit::init::<GlesRenderer>()?;
     let start = Instant::now();
     let mut clients = Vec::new();
 

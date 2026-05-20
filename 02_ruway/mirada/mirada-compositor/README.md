@@ -10,6 +10,27 @@ Backend `winit`: corre **anidado** — una ventana dentro de tu sesión
 gráfica actual, X11 o Wayland. No toca DRM/KMS, así que es seguro de
 arrancar sin dejar la sesión.
 
+## Requisitos
+
+Hace falta una **sesión gráfica anfitriona** (X11 o Wayland) donde
+dibujar la ventana del compositor — es donde `winit` se anida. En un
+servidor *headless* (SSH a una caja sin escritorio, `XDG_SESSION_TYPE=tty`,
+sin `/dev/dri`) no hay dónde mostrar nada y el arranque aborta con un
+mensaje que lo explica.
+
+Para verlo en una caja headless: levanta un servidor X virtual y
+conéctate por VNC.
+
+```sh
+Xvfb :99 -screen 0 1280x800x24 &
+x11vnc -display :99 -localhost -nopw &        # luego túnel SSH al :5900
+DISPLAY=:99 cargo run -p mirada-compositor
+```
+
+El backend nativo DRM/KMS —que pintaría directo en la pantalla sin
+sesión anfitriona— está pendiente (ver el SDD), y de todos modos
+necesitaría un `/dev/dri`.
+
 ## Dos modos
 
 - **Autónomo** (por defecto) — lleva un `Desktop` (de `mirada-brain`)
