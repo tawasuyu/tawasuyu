@@ -23,6 +23,7 @@ pub mod color;
 pub mod geom;
 pub mod canvas;
 pub mod plan;
+pub mod recorder;
 
 #[cfg(feature = "gpui")]
 pub mod gpui_backend;
@@ -31,6 +32,7 @@ pub use color::Color;
 pub use geom::{Point, Rect};
 pub use canvas::{Canvas, StrokeStyle};
 pub use plan::{RenderCmd, RenderPlan};
+pub use recorder::PlanRecorder;
 
 #[cfg(feature = "gpui")]
 pub use gpui_backend::WindowCanvas;

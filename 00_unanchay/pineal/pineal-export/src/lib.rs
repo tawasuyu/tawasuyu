@@ -1,23 +1,21 @@
-//! `pineal-export` — exporters.
+//! `pineal-export` — exporters de `RenderPlan`.
 //!
-//! Estrategia: implementar `pineal_render::Canvas` con un
-//! adapter que emite elementos SVG (o instrucciones PDF). El mismo
-//! painter que dibuja en pantalla escribe en el exporter — un sólo
-//! camino de código.
+//! Estrategia: el painter dibuja contra el trait `Canvas`; un
+//! `PlanRecorder` (en `pineal-render`) lo graba como `RenderPlan`; este
+//! crate consume el plan y emite el formato destino. Un solo camino de
+//! código para screen y export.
 //!
-//! Decimación contextual:
-//! ```text
-//! target = width_inches × dpi × vertices_per_pixel
-//! ```
-//! Print (300 dpi) saca ~3× más vértices que screen (96 dpi) del
-//! mismo source data (sección 3.10).
-//!
-//! - **`svg`** — exporter SVG.
-//! - **`pdf`** — placeholder; cuando se implemente, vía `printpdf`
-//!   sobre el mismo `RenderPlan` que el SVG.
+//! - [`svg`] — exporter SVG (implementado).
+//! - [`pdf`] — placeholder; cuando se implemente, vía `printpdf` sobre
+//!   el mismo `RenderPlan`, con decimación contextual por DPI
+//!   (`target = width_inches × dpi × vertices_per_pixel`).
 
 #![forbid(unsafe_code)]
-#![allow(dead_code)]
 
-pub mod svg {}
+pub mod svg;
+
+/// Exporter PDF — pendiente. Se implementará sobre `printpdf`
+/// consumiendo el mismo `RenderPlan` que `svg`.
 pub mod pdf {}
+
+pub use svg::to_svg;
