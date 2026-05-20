@@ -1,28 +1,25 @@
 //! `pineal-mesh` — visualización de grafos.
 //!
-//! Módulos:
-//! - **`node_buffer`** / **`edge_buffer`** — `Vec<f32>` planos con
-//!   stride fijo (3 floats por nodo: `[x, y, radius]`).
-//! - **`spatial_hash`** — uniform grid para hit-test de nodos
-//!   móviles (sección 5.1).
-//! - **`force_directed`** — layout con Barnes-Hut delegado a
-//!   `pineal_core::barnes_hut` (cuando se implemente).
-//! - **`hierarchical`** — Sugiyama-lite, delegado a
-//!   `pineal_core::sugiyama`.
-//! - **`tree`** — subtree-width layout, delegado a
-//!   `pineal_core::tree_layout`.
-//! - **`camera`** — pan/zoom con anchor-preserving zoom de la
-//!   sección 5.3.
-//! - **`element`** — `Element` GPUI.
+//! - [`buffers`] — `NodeBuffer` / `EdgeBuffer`: `Vec` planos con stride
+//!   fijo (3 floats por nodo `[x,y,radius]`, 2 por arista).
+//! - [`spatial_hash`] — uniform grid para hit-test de nodos móviles.
+//! - [`force`] — layout force-directed (Fruchterman-Reingold naïve).
+//! - [`tree`] — layout de árbol por ancho de subárbol.
+//! - [`camera`] — pan/zoom con zoom anclado al cursor.
+//!
+//! Pendiente: `hierarchical` (Sugiyama, layered graph drawing) y la
+//! optimización Barnes-Hut del force-directed para grafos masivos.
 
 #![forbid(unsafe_code)]
-#![allow(dead_code)]
 
-pub mod node_buffer {}
-pub mod edge_buffer {}
-pub mod spatial_hash {}
-pub mod force_directed {}
-pub mod hierarchical {}
-pub mod tree {}
-pub mod camera {}
-pub mod element {}
+pub mod buffers;
+pub mod camera;
+pub mod force;
+pub mod spatial_hash;
+pub mod tree;
+
+pub use buffers::{EdgeBuffer, NodeBuffer};
+pub use camera::Camera;
+pub use force::{ForceLayout, ForceParams};
+pub use spatial_hash::SpatialHash;
+pub use tree::tree_layout;
