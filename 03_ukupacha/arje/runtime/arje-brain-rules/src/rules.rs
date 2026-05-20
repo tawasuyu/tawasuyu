@@ -7,7 +7,17 @@
 
 use arje_card::Capability;
 use serde::{Deserialize, Serialize};
+use std::time::Instant;
 use ulid::Ulid;
+
+/// Evento timestamped. El timestamp se conserva para futuras políticas de
+/// expiración por tiempo (no sólo por count). Tipo base compartido entre
+/// el motor de reglas (`engine`) y el observador estadístico (`cognitive`).
+#[derive(Debug, Clone)]
+pub struct TimedEvent {
+    pub kind: EventKind,
+    pub at: Instant,
+}
 
 /// Triplet [Sujeto + Evento + Acción]. Inmutable tras carga.
 #[derive(Debug, Clone, Serialize, Deserialize)]

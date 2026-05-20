@@ -6,7 +6,7 @@
 //! escribe al content-addressable store y devuelve el SHA del head, que
 //! puede guardarse en un archivo de "head pointer" (fuera de scope aquí).
 
-use crate::crystallize::Crystal;
+use arje_brain_cognitive::crystallize::Crystal;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use ulid::Ulid;
@@ -323,7 +323,7 @@ pub fn collect_chain_from_cas(start_sha: [u8; 32]) -> anyhow::Result<Vec<AuditEn
 /// log informativo (los archivos pueden no existir en el ambiente actual).
 pub fn replay_chain(
     start_sha: [u8; 32],
-    engine: &mut crate::engine::RuleEngine,
+    engine: &mut arje_brain_rules::engine::RuleEngine,
 ) -> ReplayReport {
     let entries = match collect_chain_from_cas(start_sha) {
         Ok(es) => es,
@@ -336,7 +336,7 @@ pub fn replay_chain(
     for entry in &entries {
         match &entry.action {
             AuditAction::PromoteCrystal { rule_id, crystal } => {
-                let mut rule = crate::crystallize::crystal_to_rule(crystal);
+                let mut rule = arje_brain_cognitive::crystallize::crystal_to_rule(crystal);
                 rule.id = *rule_id; // preservar identidad histórica
                 engine.insert(rule);
             }
@@ -422,7 +422,7 @@ mod tests {
 
     // ---------- Tests de integración con CAS real (en directorio temporal) ----------
 
-    use crate::engine::RuleEngine;
+    use arje_brain_rules::engine::RuleEngine;
     use std::sync::Mutex;
 
     /// Lock para serializar tests que mutan ENTE_CAS_ROOT (test threads
@@ -459,7 +459,7 @@ mod tests {
         }
     }
 
-    use crate::rules::EventKind;
+    use arje_brain_rules::rules::EventKind;
 
     #[test]
     fn flush_round_trip_preserves_chain() {

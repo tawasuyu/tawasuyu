@@ -8,7 +8,7 @@
 //! Ergonomía de autoría futura (RON, Dhall, etc.) se añade como ramas
 //! adicionales aquí cuando duela escribir JSON a mano. Hoy: una sola rama.
 
-use crate::rules::Rule;
+use arje_brain_rules::rules::Rule;
 use arje_card::EntityCard;
 use std::path::Path;
 use tracing::info;
@@ -102,7 +102,7 @@ pub fn extract_rules_from_json(raw: &str) -> anyhow::Result<Vec<Rule>> {
 mod tests {
     use super::*;
     use crate::introspect::append_rule_jsonl;
-    use crate::rules::{Action, EventKind, EventPattern, LogLevel, Rule, Scope};
+    use arje_brain_rules::rules::{Action, EventKind, EventPattern, LogLevel, Rule, Scope};
     use ulid::Ulid;
 
     fn sample_rule() -> Rule {

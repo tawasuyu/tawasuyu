@@ -1,38 +1,34 @@
-//! ente-brain: motor de reglas determinista + observador estadístico.
+//! arje-brain — capa de integración del brain.
 //!
-//! Tres capas:
-//!   1. `rules`       — tipos de regla (Triplet: Subject + Event + Action)
-//!   2. `engine`      — RuleEngine con HashMap<EventKindDiscriminant, Vec<Arc<Rule>>>
-//!                      para dispatch O(1)
-//!   3. `dispatch`    — ejecutor async de Actions (vía tokio)
-//!   4. `observer`    — sliding window + marginales + co-ocurrencias
-//!                    + Shannon entropy + información mutua
-//!   5. `crystallize` — detección de patrones estadísticamente significativos
-//!                      y materialización en `Rule` ejecutables
-//!   6. `introspect`  — Unix socket bincode API para tools externos
+//! El brain se divide en tres sub-crates con un DAG de dependencias limpio:
+//!   - `arje-brain-rules`     — motor determinista (rules + engine + dispatch)
+//!   - `arje-brain-cognitive` — estadística (observer + crystallize)
+//!   - `arje-brain-audit`     — accountability (audit chain → CAS)
 //!
-//! Diseño de inmutabilidad:
-//!   - Rules son `Arc<Rule>` — clonar es zero-copy (refcount bump).
-//!   - El motor expone sólo lecturas; mutaciones pasan por `insert/remove`.
-//!   - Observer mantiene contadores incrementales — sin recomputación.
+//! Este crate es la capa que los wirea: `introspect` (socket API),
+//! `autopromote` (loop de promoción de cristales), `metrics` (HTTP) y
+//! `loader` (carga de cards/rules). Re-exporta la API de los tres
+//! sub-crates para compatibilidad de los consumidores históricos.
 
-pub mod audit;
-pub mod autopromote;
-pub mod crystallize;
-pub mod dispatch;
-pub mod engine;
 pub mod introspect;
-pub mod loader;
+pub mod autopromote;
 pub mod metrics;
-pub mod observer;
-pub mod rules;
+pub mod loader;
+
+// --- Re-export de los módulos de las 3 sub-crates ---
+pub use arje_brain_rules::{dispatch, engine, rules};
+pub use arje_brain_cognitive::{crystallize, observer};
+pub use arje_brain_audit::audit;
+
+// --- Re-exports planos (API histórica que consumen arje-zero, chasqui) ---
+pub use rules::{Action, EventKind, EventPattern, LogLevel, Rule, Scope, TimedEvent};
+pub use engine::{EventKindDiscriminant, RuleEngine, SubjectInfo};
+pub use dispatch::{dispatch_actions, ActionSink, NullSink};
+pub use crystallize::{detect_crystals, Crystal, CrystallizationParams};
+pub use observer::Observer;
+pub use audit::AuditLog;
 
 pub use autopromote::{spawn_autopromote_loop, AutopromoteParams};
-pub use crystallize::{detect_crystals, Crystal, CrystallizationParams};
-pub use dispatch::{dispatch_actions, ActionSink, NullSink};
-pub use engine::{EventKindDiscriminant, RuleEngine, SubjectInfo};
-pub use introspect::{IntrospectRequest, IntrospectResponse, IntrospectServer, BrainState};
+pub use introspect::{BrainState, IntrospectRequest, IntrospectResponse, IntrospectServer};
 pub use loader::{load_card_file, load_rules_file};
 pub use metrics::serve_metrics;
-pub use observer::{Observer, TimedEvent};
-pub use rules::{Action, EventKind, EventPattern, LogLevel, Rule, Scope};

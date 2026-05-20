@@ -6,10 +6,10 @@
 //! no exista ya una regla con el mismo trigger_kind (heurística simple —
 //! evita ráfagas de duplicados de la misma estadística).
 
-use crate::audit::AuditAction;
-use crate::crystallize::{crystal_to_rule, detect_crystals, Crystal, CrystallizationParams};
+use arje_brain_audit::audit::AuditAction;
+use arje_brain_cognitive::crystallize::{crystal_to_rule, detect_crystals, Crystal, CrystallizationParams};
 use crate::introspect::{append_rule_jsonl, BrainState};
-use crate::rules::EventKind;
+use arje_brain_rules::rules::EventKind;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;

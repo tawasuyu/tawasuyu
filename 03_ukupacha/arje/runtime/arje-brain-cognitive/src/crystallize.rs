@@ -10,7 +10,7 @@
 //! resultante con serde — sin formatos intermedios.
 
 use crate::observer::{GapStats, Observer};
-use crate::rules::{Action, EventKind, EventPattern, LogLevel, Rule, Scope};
+use arje_brain_rules::{Action, EventKind, EventPattern, LogLevel, Rule, Scope};
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use ulid::Ulid;
@@ -215,7 +215,7 @@ pub fn detect_pattern_crystals(obs: &Observer, params: &PatternParams) -> Vec<Pa
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::EventKind::*;
+    use arje_brain_rules::EventKind::*;
 
     #[test]
     fn detects_perfect_correlation() {

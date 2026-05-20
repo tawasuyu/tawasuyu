@@ -5,7 +5,7 @@
 //! Inmutabilidad fractal: `Arc<Rule>` es el unit de compartición. Clonar una
 //! regla del motor para entregarla al dispatcher es un refcount bump, no copia.
 
-use crate::observer::TimedEvent;
+use crate::rules::TimedEvent;
 use crate::rules::{EventKind, EventPattern, Rule, Scope};
 use arje_card::Capability;
 use std::collections::HashMap;

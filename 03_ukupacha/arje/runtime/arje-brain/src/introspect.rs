@@ -4,10 +4,10 @@
 //! cerebro sin tocar el bus interno del fractal. Esto separa observación de
 //! ejecución — la introspección es read-only por diseño.
 
-use crate::crystallize::{detect_crystals, Crystal, CrystallizationParams};
-use crate::engine::RuleEngine;
-use crate::observer::Observer;
-use crate::rules::Rule;
+use arje_brain_cognitive::crystallize::{detect_crystals, Crystal, CrystallizationParams};
+use arje_brain_rules::engine::RuleEngine;
+use arje_brain_cognitive::observer::Observer;
+use arje_brain_rules::rules::Rule;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -32,7 +32,7 @@ pub struct BrainState {
     /// cada PromoteCrystal añade una línea (append-only) con la Rule serializada.
     pub rules_out: Option<Arc<PathBuf>>,
     /// Audit log en memoria. Cada promote/remove deja huella aquí.
-    pub audit: Arc<RwLock<crate::audit::AuditLog>>,
+    pub audit: Arc<RwLock<arje_brain_audit::audit::AuditLog>>,
 }
 
 impl BrainState {
@@ -46,7 +46,7 @@ impl BrainState {
             observer: Arc::new(RwLock::new(Observer::new(window_size))),
             params,
             rules_out: None,
-            audit: Arc::new(RwLock::new(crate::audit::AuditLog::new())),
+            audit: Arc::new(RwLock::new(arje_brain_audit::audit::AuditLog::new())),
         }
     }
 
@@ -135,21 +135,21 @@ pub enum IntrospectResponse {
     /// Resultado de RemoveRule: true si existía, false si ya no.
     Removed(bool),
     /// Entradas del audit log (más recientes al final).
-    AuditEntries(Vec<crate::audit::AuditEntry>),
+    AuditEntries(Vec<arje_brain_audit::audit::AuditEntry>),
     /// Resultado de FlushAudit: cuántas entries se escribieron y SHA del head.
     Flushed { written: usize, head_sha: Option<[u8; 32]>, total_flushed: u64 },
     /// Resultado de ReloadRules: número total de reglas tras el reload.
     Reloaded { count: usize },
     /// Resultado de VerifyAudit.
-    AuditVerified(crate::audit::VerificationReport),
+    AuditVerified(arje_brain_audit::audit::VerificationReport),
     /// Resultado de ReplayAudit.
-    Replayed(crate::audit::ReplayReport),
+    Replayed(arje_brain_audit::audit::ReplayReport),
     /// Frame de streaming. El cliente lee estos en bucle hasta EOF.
-    AuditStreamFrame(crate::audit::AuditEntry),
+    AuditStreamFrame(arje_brain_audit::audit::AuditEntry),
     /// Resultado de GcCas: cuántos blobs eliminados y bytes liberados.
     GcResult { deleted: usize, freed_bytes: u64 },
     /// Cristales de Burst/Silence detectados.
-    Patterns(Vec<crate::crystallize::PatternCrystal>),
+    Patterns(Vec<arje_brain_cognitive::crystallize::PatternCrystal>),
     Error(String),
 }
 
@@ -306,7 +306,7 @@ impl IntrospectServer {
                 let obs = self.state.observer.read().await;
                 let crystals = detect_crystals(&obs, &self.state.params);
                 match crystals.get(index) {
-                    Some(c) => IntrospectResponse::Json(crate::crystallize::crystal_to_json_pretty(c)),
+                    Some(c) => IntrospectResponse::Json(arje_brain_cognitive::crystallize::crystal_to_json_pretty(c)),
                     None => IntrospectResponse::Error(format!("no crystal at index {index}")),
                 }
             }
@@ -317,7 +317,7 @@ impl IntrospectServer {
                 };
                 match crystals.get(index) {
                     Some(c) => {
-                        let rule = crate::crystallize::crystal_to_rule(c);
+                        let rule = arje_brain_cognitive::crystallize::crystal_to_rule(c);
                         let rule_id = rule.id;
                         let rule_json = serde_json::to_string_pretty(&rule)
                             .unwrap_or_else(|_| "<serialize failed>".into());
@@ -332,7 +332,7 @@ impl IntrospectServer {
                         }
                         // Audit entry
                         self.state.audit.write().await.append(
-                            crate::audit::AuditAction::PromoteCrystal {
+                            arje_brain_audit::audit::AuditAction::PromoteCrystal {
                                 rule_id, crystal: c.clone(),
                             }
                         );
@@ -345,7 +345,7 @@ impl IntrospectServer {
                 let removed = self.state.engine.write().await.remove(id);
                 if removed {
                     self.state.audit.write().await.append(
-                        crate::audit::AuditAction::RemoveRule { rule_id: id }
+                        arje_brain_audit::audit::AuditAction::RemoveRule { rule_id: id }
                     );
                 }
                 IntrospectResponse::Removed(removed)
@@ -373,7 +373,7 @@ impl IntrospectServer {
                         "audit log sin entries flushadas — nada que verificar".into()
                     ),
                 };
-                let report = crate::audit::verify_chain_from_cas(head);
+                let report = arje_brain_audit::audit::verify_chain_from_cas(head);
                 IntrospectResponse::AuditVerified(report)
             }
             IntrospectRequest::StreamAudit => {
@@ -385,15 +385,15 @@ impl IntrospectServer {
             }
             IntrospectRequest::PatternCrystals => {
                 let obs = self.state.observer.read().await;
-                let params = crate::crystallize::PatternParams::default();
-                let patterns = crate::crystallize::detect_pattern_crystals(&obs, &params);
+                let params = arje_brain_cognitive::crystallize::PatternParams::default();
+                let patterns = arje_brain_cognitive::crystallize::detect_pattern_crystals(&obs, &params);
                 IntrospectResponse::Patterns(patterns)
             }
             IntrospectRequest::GcCas { extra_roots } => {
                 // Reachable = audit chain desde head + extra_roots provistos.
                 let mut reachable = std::collections::HashSet::new();
                 if let Some(head) = self.state.audit.read().await.last_flushed_sha() {
-                    reachable.extend(crate::audit::reachable_from_head(head));
+                    reachable.extend(arje_brain_audit::audit::reachable_from_head(head));
                 }
                 reachable.extend(extra_roots);
                 match arje_cas::gc(&reachable) {
@@ -410,8 +410,8 @@ impl IntrospectServer {
                     ),
                 };
                 let mut engine = self.state.engine.write().await;
-                *engine = crate::engine::RuleEngine::empty();
-                let report = crate::audit::replay_chain(head, &mut engine);
+                *engine = arje_brain_rules::engine::RuleEngine::empty();
+                let report = arje_brain_audit::audit::replay_chain(head, &mut engine);
                 IntrospectResponse::Replayed(report)
             }
             IntrospectRequest::ReloadRules { path } => {
@@ -430,12 +430,12 @@ impl IntrospectServer {
                 };
                 // Vaciamos el engine antes de re-cargar — semántica clean-slate.
                 let mut engine = self.state.engine.write().await;
-                *engine = crate::engine::RuleEngine::empty();
+                *engine = arje_brain_rules::engine::RuleEngine::empty();
                 let count = rules.len();
                 for r in rules { engine.insert(r); }
                 drop(engine);
                 self.state.audit.write().await.append(
-                    crate::audit::AuditAction::LoadRulesFile {
+                    arje_brain_audit::audit::AuditAction::LoadRulesFile {
                         path: path.to_string_lossy().into_owned(),
                         count,
                     }

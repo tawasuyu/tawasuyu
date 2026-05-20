@@ -8,17 +8,9 @@
 //!   - Sin recomputaciones globales: marginales y joint counts son state.
 //!   - El cálculo de H(X), P(B|A), I(A;B) es O(|distinct events|).
 
-use crate::rules::EventKind;
+use arje_brain_rules::{EventKind, TimedEvent};
 use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
-
-/// Evento timestamped. El timestamp se conserva para futuras políticas de
-/// expiración por tiempo (no sólo por count).
-#[derive(Debug, Clone)]
-pub struct TimedEvent {
-    pub kind: EventKind,
-    pub at: Instant,
-}
 
 /// Histograma de gaps temporales con buckets exponenciales en segundos.
 /// Cubre 6 órdenes de magnitud: 1ms hasta 1000s.
@@ -420,7 +412,7 @@ pub struct ObserverSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::EventKind::*;
+    use arje_brain_rules::EventKind::*;
 
     #[test]
     fn entropy_zero_for_single_event() {

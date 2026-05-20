@@ -5,7 +5,7 @@
 //! `prometheus` con su Registry + encoders.
 
 use crate::introspect::BrainState;
-use crate::rules::EventKind;
+use arje_brain_rules::rules::EventKind;
 use std::net::SocketAddr;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -98,7 +98,7 @@ async fn format_metrics(state: &BrainState) -> String {
     }
 
     // ---- Cristales detectados (con params actuales) ----
-    let crystals = crate::detect_crystals(&obs, &state.params);
+    let crystals = arje_brain_cognitive::detect_crystals(&obs, &state.params);
     out.push_str("# HELP ente_brain_crystals_total Number of crystals detected with current params.\n");
     out.push_str("# TYPE ente_brain_crystals_total gauge\n");
     out.push_str(&format!("ente_brain_crystals_total {}\n", crystals.len()));
@@ -135,7 +135,7 @@ async fn format_metrics(state: &BrainState) -> String {
     // ---- Histogramas de gaps temporales (top-32 pares más frecuentes) ----
     out.push_str("# HELP ente_brain_pair_gap_seconds Time gap between correlated events.\n");
     out.push_str("# TYPE ente_brain_pair_gap_seconds histogram\n");
-    let limits = crate::observer::GapHistogram::bucket_limits();
+    let limits = arje_brain_cognitive::observer::GapHistogram::bucket_limits();
     for ((a, b), hist) in obs.top_gap_pairs(32) {
         let labels = format!(r#"a="{}",b="{}""#, kind_label(a), kind_label(b));
         for (i, &limit) in limits.iter().enumerate() {
