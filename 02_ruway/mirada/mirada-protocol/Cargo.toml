@@ -1,0 +1,13 @@
+[package]
+name = "mirada-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "mirada — contrato Cerebro↔Cuerpo del compositor: comandos de geometría que el Cerebro (GPUI) envía y eventos de hardware/superficies que el Cuerpo (smithay) reporta. Marco postcard con prefijo de longitud."
+
+[dependencies]
+mirada-layout = { path = "../mirada-layout" }
+serde = { workspace = true }
+postcard = { workspace = true }
