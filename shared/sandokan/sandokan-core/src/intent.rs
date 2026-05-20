@@ -32,9 +32,28 @@ pub struct ExecContext {
 /// Una intención de ejecución: la `Card` a encarnar + su contexto.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Intent {
+    /// La Card se serializa vía `WireCard` (proyección postcard-friendly):
+    /// el campo `extensions` de `Card` usa `#[serde(flatten)]`, que no es
+    /// compatible con formatos no auto-descriptivos como postcard.
+    #[serde(with = "card_wire")]
     pub card: Card,
     #[serde(default)]
     pub context: ExecContext,
+}
+
+/// Serde adapter: `Card` ↔ `WireCard` en el límite de serialización.
+/// Las `extensions` locales de la Card se descartan al cruzar el wire.
+mod card_wire {
+    use brahman_card::{Card, WireCard};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(card: &Card, s: S) -> Result<S::Ok, S::Error> {
+        WireCard::from(card.clone()).serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Card, D::Error> {
+        Ok(Card::from(WireCard::deserialize(d)?))
+    }
 }
 
 impl Intent {
