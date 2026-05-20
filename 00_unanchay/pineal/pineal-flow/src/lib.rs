@@ -1,16 +1,18 @@
 //! `pineal-flow` — diagramas Sankey.
 //!
-//! Pipeline (sección 3.7 del ARCHITECTURE.md):
-//! 1. Columnas via longest-path en el DAG (back-edges drop).
-//! 2. Flow por nodo = max(in_value, out_value).
-//! 3. Barycenter ordering con inversion-count crossings.
-//! 4. Stripes por edge dentro de cada lado del nodo.
-//! 5. Ribbons como triangle-strip de béziers, un draw call por
-//!    ribbon, color por vértice.
+//! Pipeline:
+//! 1. Columnas por longest-path en el DAG (back-edges descartadas).
+//! 2. Valor de nodo = max(caudal entrante, caudal saliente).
+//! 3. Apilado vertical por columna + una pasada de barycenter.
+//! 4. Bandas (ribbons) como triangle-strips con curva S (`smoothstep`).
+//!
+//! - [`layout`] — cómputo del layout (agnóstico).
+//! - [`ribbon`] — teselado + painters contra `Canvas`.
 
 #![forbid(unsafe_code)]
-#![allow(dead_code)]
 
-pub mod layout {}
-pub mod ribbon {}
-pub mod element {}
+pub mod layout;
+pub mod ribbon;
+
+pub use layout::{compute_layout, LinkBand, NodeBox, SankeyLayout, SankeyLink, SankeyNode};
+pub use ribbon::{paint_ribbon, paint_sankey, ribbon_strip};
