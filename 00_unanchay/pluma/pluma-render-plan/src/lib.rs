@@ -124,6 +124,9 @@ pub struct RenderPlan {
     pub sidepane: Vec<SidepaneMark>,
     /// Alto total del contenido — el backend lo usa para el scroll.
     pub content_height: f32,
+    /// Config con la que se construyó — el backend lee de aquí los
+    /// márgenes y el ancho del sidepane sin recibirlos por separado.
+    pub config: LayoutConfig,
 }
 
 /// Profundidad topológica de cada átomo: 0 para las raíces, `1 + máx`
@@ -254,6 +257,7 @@ pub fn build_plan(graph: &NarrativeGraph, cfg: &LayoutConfig) -> RenderPlan {
         edges,
         sidepane,
         content_height: cfg.margin * 2.0 + order.len() as f32 * row_stride,
+        config: *cfg,
     }
 }
 
