@@ -252,6 +252,9 @@ struct Shell {
     drag: Option<Drag>,
     /// Estado de presentación por comando (acordeón, filtro stderr).
     run_ui: HashMap<RunId, RunUi>,
+    /// Largo del historial en el último `:save` — define qué comandos
+    /// entran al próximo grupo guardado.
+    group_anchor: usize,
     /// Scroll del feed central — sigue al comando más reciente.
     scroll: ScrollHandle,
     focus: FocusHandle,
@@ -291,6 +294,7 @@ impl Shell {
             right_width: 188.0,
             drag: None,
             run_ui: HashMap::new(),
+            group_anchor: 0,
             scroll: ScrollHandle::new(),
             focus: cx.focus_handle(),
             focused_once: false,
@@ -381,12 +385,31 @@ impl Shell {
     /// Ejecuta una línea: `cd` se maneja internamente (cambia el cwd y,
     /// con él, el aislamiento); el resto se lanza con `shuma-exec` y su
     /// salida se transmite al panel central.
+    /// Guarda como grupo los comandos ejecutados desde el último `:save`.
+    fn save_group(&mut self, name: &str) {
+        let name = name.trim();
+        if name.is_empty() {
+            return;
+        }
+        let n = self.session.history().len().saturating_sub(self.group_anchor);
+        if n > 0 {
+            self.session.save_recent_as_group(name, n);
+            self.group_anchor = self.session.history().len();
+        }
+    }
+
     fn run_command(&mut self, line: String) {
         let line = line.trim().to_string();
         if line.is_empty() {
             return;
         }
         let now = unix_now();
+
+        // Meta-comando `:save <nombre>` — guarda un grupo, no se ejecuta.
+        if let Some(name) = line.strip_prefix(":save ") {
+            self.save_group(name);
+            return;
+        }
 
         // Los comandos anteriores que el usuario no fijó se autocolapsan
         // al aparecer uno nuevo abajo — orden de terminal tradicional.
@@ -423,6 +446,13 @@ impl Shell {
         let spec = CommandSpec::bash(&line, self.session.cwd());
         self.active.push((id, exec_run(&spec)));
         self.scroll.scroll_to_bottom();
+    }
+
+    /// Mata el proceso de un comando en curso.
+    fn kill_run(&self, id: RunId) {
+        if let Some((_, handle)) = self.active.iter().find(|(rid, _)| *rid == id) {
+            handle.kill();
+        }
     }
 
     fn refresh_completion(&mut self) {
@@ -677,13 +707,37 @@ fn render_run(
         None
     };
 
+    // Botón de matar — sólo mientras el comando sigue corriendo.
+    let kill_chip = if r.status == RunStatus::Running {
+        Some(
+            div()
+                .id(SharedString::from(format!("kill-{id}")))
+                .flex_none()
+                .px(px(6.))
+                .py(px(1.))
+                .rounded(px(3.))
+                .text_size(px(11.))
+                .text_color(gpui::hsla(2.0 / 360.0, 0.66, 0.64, 1.0))
+                .cursor_pointer()
+                .hover(|s| s.bg(gpui::hsla(2.0 / 360.0, 0.55, 0.28, 1.0)))
+                .child("✕ matar")
+                .on_click(cx.listener(move |shell, _, _, cx| {
+                    shell.kill_run(id);
+                    cx.notify();
+                })),
+        )
+    } else {
+        None
+    };
+
     let header = div()
         .flex()
         .flex_row()
         .items_center()
         .gap(px(6.))
         .child(header_left)
-        .children(stderr_chip);
+        .children(stderr_chip)
+        .children(kill_chip);
 
     // Cuerpo: sólo con el acordeón abierto. El filtro elige el flujo.
     let mut body: Vec<gpui::Div> = Vec::new();
@@ -841,16 +895,36 @@ impl Render for Shell {
                         .child(div().text_color(dim).text_size(px(12.)).child("[RUN] grupos"))
                         .child(
                             div()
-                                .id("collapse-left")
-                                .px(px(5.))
-                                .text_color(dim)
-                                .cursor_pointer()
-                                .hover(|s| s.text_color(accent))
-                                .child("«")
-                                .on_click(cx.listener(|s, _, _, cx| {
-                                    s.left_collapsed = true;
-                                    cx.notify();
-                                })),
+                                .flex()
+                                .flex_row()
+                                .gap(px(4.))
+                                .items_center()
+                                .child(
+                                    div()
+                                        .id("save-group")
+                                        .px(px(5.))
+                                        .text_color(dim)
+                                        .cursor_pointer()
+                                        .hover(|s| s.text_color(accent))
+                                        .child("＋")
+                                        .on_click(cx.listener(|s, _, _, cx| {
+                                            s.line.set_text(":save ");
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .id("collapse-left")
+                                        .px(px(5.))
+                                        .text_color(dim)
+                                        .cursor_pointer()
+                                        .hover(|s| s.text_color(accent))
+                                        .child("«")
+                                        .on_click(cx.listener(|s, _, _, cx| {
+                                            s.left_collapsed = true;
+                                            cx.notify();
+                                        })),
+                                ),
                         ),
                 )
                 .children(groups)
@@ -858,7 +932,7 @@ impl Render for Shell {
                     div()
                         .text_size(px(10.))
                         .text_color(dim)
-                        .child("clic para ejecutar el grupo"),
+                        .child("clic ejecuta · ＋ guarda lo último"),
                 )
         };
 

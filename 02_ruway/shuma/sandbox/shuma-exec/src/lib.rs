@@ -17,8 +17,9 @@
 #![forbid(unsafe_code)]
 
 use std::io::{BufRead, BufReader};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::{Arc, Mutex};
 
 /// Qué ejecutar: una línea de comandos, en un directorio, con un shell.
 #[derive(Debug, Clone)]
@@ -63,9 +64,21 @@ impl RunEvent {
 pub struct RunHandle {
     rx: Receiver<RunEvent>,
     finished: bool,
+    /// El proceso, compartido con su hilo coordinador para poder matarlo.
+    child: Arc<Mutex<Option<Child>>>,
 }
 
 impl RunHandle {
+    /// Mata el proceso (envía la señal de terminación). No hace nada si
+    /// el proceso ya terminó o nunca llegó a lanzarse.
+    pub fn kill(&self) {
+        if let Ok(mut guard) = self.child.lock() {
+            if let Some(c) = guard.as_mut() {
+                let _ = c.kill();
+            }
+        }
+    }
+
     /// Drena todos los eventos disponibles ahora mismo, sin bloquear.
     /// Marca el asa como terminada al ver un evento terminal.
     pub fn try_events(&mut self) -> Vec<RunEvent> {
@@ -114,6 +127,8 @@ impl RunHandle {
 pub fn run(spec: &CommandSpec) -> RunHandle {
     let (tx, rx) = mpsc::channel();
     let spec = spec.clone();
+    let child_cell: Arc<Mutex<Option<Child>>> = Arc::new(Mutex::new(None));
+    let cell = Arc::clone(&child_cell);
 
     std::thread::spawn(move || {
         let spawned = Command::new(&spec.shell)
@@ -136,6 +151,10 @@ pub fn run(spec: &CommandSpec) -> RunHandle {
         // Un hilo lector por flujo: stdout y stderr fluyen en paralelo.
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
+        // Comparte el proceso para que `RunHandle::kill` pueda alcanzarlo.
+        if let Ok(mut g) = cell.lock() {
+            *g = Some(child);
+        }
         let out_reader = stdout.map(|s| {
             let tx = tx.clone();
             std::thread::spawn(move || {
@@ -157,21 +176,24 @@ pub fn run(spec: &CommandSpec) -> RunHandle {
             })
         });
 
+        // Los lectores terminan cuando el proceso cierra sus pipes —sea
+        // por fin natural o por `kill`—; recién entonces se cosecha.
         if let Some(h) = out_reader {
             let _ = h.join();
         }
         if let Some(h) = err_reader {
             let _ = h.join();
         }
-        let code = child
-            .wait()
+        let code = cell
+            .lock()
             .ok()
+            .and_then(|mut g| g.as_mut().and_then(|c| c.wait().ok()))
             .and_then(|s| s.code())
             .unwrap_or(-1);
         let _ = tx.send(RunEvent::Exited(code));
     });
 
-    RunHandle { rx, finished: false }
+    RunHandle { rx, finished: false, child: child_cell }
 }
 
 #[cfg(test)]
@@ -252,5 +274,18 @@ mod tests {
         assert!(RunEvent::Exited(0).is_terminal());
         assert!(RunEvent::Failed("x".into()).is_terminal());
         assert!(!RunEvent::Stdout("x".into()).is_terminal());
+    }
+
+    #[test]
+    fn kill_stops_a_long_running_process() {
+        let mut h = run(&sh("sleep 30"));
+        // Espera breve para que el proceso se haya lanzado.
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        h.kill();
+        // wait_all retorna pronto (no espera los 30s) y cierra con un
+        // evento terminal.
+        let events = h.wait_all();
+        assert!(events.last().map(|e| e.is_terminal()).unwrap_or(false));
+        assert!(h.is_finished());
     }
 }
