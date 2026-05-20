@@ -1,0 +1,12 @@
+[package]
+name = "shuma-shell-render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "shuma — draw-plan agnóstico del Lienzo de Contexto: layout del grafo de intenciones (columnas por dependencia) + paint contra pineal-render."
+
+[dependencies]
+shuma-intent = { path = "../shuma-intent" }
+pineal-render = { path = "../../pineal/render" }
