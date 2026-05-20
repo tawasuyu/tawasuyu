@@ -20,9 +20,10 @@ use std::panic;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use gpui::{
-    div, point, prelude::*, px, App, Bounds, Context, Element, ElementId, FocusHandle,
-    GlobalElementId, Hsla, InspectorElementId, IntoElement, KeyDownEvent, LayoutId, PathBuilder,
-    Pixels, Render, SharedString, Style, Window,
+    div, point, prelude::*, px, App, Bounds, Context, CursorStyle, Element, ElementId, FocusHandle,
+    GlobalElementId, Hsla, InspectorElementId, IntoElement, KeyDownEvent, LayoutId, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Render, SharedString, Style,
+    Window,
 };
 use nahual_launcher::launch_app;
 use nahual_theme::Theme;
@@ -201,6 +202,22 @@ impl Element for CurveElement {
 // El shell.
 // =====================================================================
 
+/// Qué panel lateral está redimensionando un drag activo.
+#[derive(Clone, Copy)]
+enum Side {
+    Left,
+    Right,
+}
+
+/// Estado de un arrastre de divisor en curso.
+struct Drag {
+    side: Side,
+    /// Posición X del cursor al iniciar el arrastre.
+    start_x: f32,
+    /// Ancho del panel al iniciar el arrastre.
+    start_w: f32,
+}
+
 struct Shell {
     line: LineState,
     /// La sesión de trabajo: cwd, historial y grupos.
@@ -215,6 +232,11 @@ struct Shell {
     snapshot: Snapshot,
     left_collapsed: bool,
     right_collapsed: bool,
+    /// Anchos de los paneles laterales (los divisores los ajustan).
+    left_width: f32,
+    right_width: f32,
+    /// Arrastre de divisor en curso, si lo hay.
+    drag: Option<Drag>,
     focus: FocusHandle,
     focused_once: bool,
 }
@@ -248,6 +270,9 @@ impl Shell {
             },
             left_collapsed: false,
             right_collapsed: false,
+            left_width: 176.0,
+            right_width: 188.0,
+            drag: None,
             focus: cx.focus_handle(),
             focused_once: false,
         };
@@ -687,7 +712,7 @@ impl Render for Shell {
                 .collect();
             div()
                 .id("run-panel")
-                .w(px(176.))
+                .w(px(self.left_width))
                 .flex()
                 .flex_col()
                 .gap(px(6.))
@@ -796,7 +821,7 @@ impl Render for Shell {
 
             div()
                 .id("sens-panel")
-                .w(px(184.))
+                .w(px(self.right_width))
                 .flex()
                 .flex_col()
                 .gap(px(10.))
@@ -949,6 +974,40 @@ impl Render for Shell {
             }
         }
 
+        // --- Divisores arrastrables ---
+        let divider = |side: Side, cx: &mut Context<Self>| {
+            div()
+                .w(px(5.))
+                .bg(node_bg)
+                .cursor(CursorStyle::ResizeLeftRight)
+                .hover(|s| s.bg(accent))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |shell, ev: &MouseDownEvent, _w, cx| {
+                        let start_w = match side {
+                            Side::Left => shell.left_width,
+                            Side::Right => shell.right_width,
+                        };
+                        shell.drag = Some(Drag {
+                            side,
+                            start_x: ev.position.x.into(),
+                            start_w,
+                        });
+                        cx.notify();
+                    }),
+                )
+        };
+
+        let mut middle = div().flex().flex_row().flex_1().overflow_hidden().child(left);
+        if !self.left_collapsed {
+            middle = middle.child(divider(Side::Left, cx));
+        }
+        middle = middle.child(canvas);
+        if !self.right_collapsed {
+            middle = middle.child(divider(Side::Right, cx));
+        }
+        middle = middle.child(right);
+
         // --- Composición ---
         div()
             .size_full()
@@ -959,17 +1018,33 @@ impl Render for Shell {
             .track_focus(&self.focus)
             .key_context("ShumaShell")
             .on_key_down(cx.listener(Self::handle_key))
-            .child(status)
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_1()
-                    .overflow_hidden()
-                    .child(left)
-                    .child(canvas)
-                    .child(right),
+            .on_mouse_move(cx.listener(|shell, ev: &MouseMoveEvent, _w, cx| {
+                if let Some(drag) = &shell.drag {
+                    let cur: f32 = ev.position.x.into();
+                    let delta = cur - drag.start_x;
+                    match drag.side {
+                        // El panel izquierdo crece al arrastrar a la derecha.
+                        Side::Left => {
+                            shell.left_width = (drag.start_w + delta).clamp(130.0, 420.0)
+                        }
+                        // El derecho crece al arrastrar a la izquierda.
+                        Side::Right => {
+                            shell.right_width = (drag.start_w - delta).clamp(130.0, 420.0)
+                        }
+                    }
+                    cx.notify();
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|shell, _ev: &MouseUpEvent, _w, cx| {
+                    if shell.drag.take().is_some() {
+                        cx.notify();
+                    }
+                }),
             )
+            .child(status)
+            .child(middle)
             .child(prompt)
             .children(popup_layer)
     }
