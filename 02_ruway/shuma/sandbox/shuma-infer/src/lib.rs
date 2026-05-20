@@ -233,6 +233,41 @@ pub fn detect_patterns(history: &[CommandRecord], cfg: &InferConfig) -> Vec<Emer
     patterns
 }
 
+/// Predice la continuación de un patrón en curso.
+///
+/// Mira el final del historial `recent`: si sus últimos comandos
+/// coinciden con el prefijo de la firma de algún patrón, devuelve las
+/// líneas que faltan para completarlo —tomadas de la ocurrencia más
+/// reciente, así son ejecutables—. Ante varios, gana el patrón cuyo
+/// prefijo coincidente sea más largo. Es lo que alimenta el "ghosting".
+pub fn predict_next(
+    recent: &[CommandRecord],
+    patterns: &[EmergingPattern],
+) -> Option<Vec<String>> {
+    let bins: Vec<&str> = recent.iter().map(|r| r.binary.as_str()).collect();
+    let mut best: Option<(usize, &EmergingPattern)> = None;
+    for p in patterns {
+        // Tiene que quedar al menos un paso por predecir.
+        let max_k = p.signature.len().saturating_sub(1).min(bins.len());
+        for k in (1..=max_k).rev() {
+            let tail = &bins[bins.len() - k..];
+            let prefix_matches = p
+                .signature
+                .iter()
+                .take(k)
+                .map(String::as_str)
+                .eq(tail.iter().copied());
+            if prefix_matches {
+                if best.map(|(bk, _)| k > bk).unwrap_or(true) {
+                    best = Some((k, p));
+                }
+                break;
+            }
+        }
+    }
+    best.map(|(k, p)| p.example[k..].to_vec())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,6 +394,44 @@ mod tests {
         ];
         let p = &detect_patterns(&history, &InferConfig::default())[0];
         assert_eq!(p.suggested_name(), "git+cargo");
+    }
+
+    /// Mundo de prueba: el patrón cd → git pull → cargo build, visto dos
+    /// veces, y la lista de patrones que produce.
+    fn pattern_world() -> Vec<EmergingPattern> {
+        let history = vec![
+            ok("cd /a", "/h"),
+            ok("git pull", "/a"),
+            ok("cargo build", "/a"),
+            ok("cd /b", "/h"),
+            ok("git pull", "/b"),
+            ok("cargo build", "/b"),
+        ];
+        detect_patterns(&history, &InferConfig::default())
+    }
+
+    #[test]
+    fn predicts_the_rest_after_a_cd() {
+        let patterns = pattern_world();
+        // El usuario acaba de hacer `cd` → se predicen los pasos que faltan.
+        let recent = vec![ok("cd /nuevo", "/h")];
+        let next = predict_next(&recent, &patterns).unwrap();
+        assert_eq!(next, vec!["git pull", "cargo build"]);
+    }
+
+    #[test]
+    fn prediction_shrinks_as_the_pattern_advances() {
+        let patterns = pattern_world();
+        let recent = vec![ok("cd /nuevo", "/h"), ok("git pull", "/nuevo")];
+        let next = predict_next(&recent, &patterns).unwrap();
+        assert_eq!(next, vec!["cargo build"]);
+    }
+
+    #[test]
+    fn no_prediction_when_nothing_matches() {
+        let patterns = pattern_world();
+        let recent = vec![ok("ls", "/h"), ok("pwd", "/h")];
+        assert!(predict_next(&recent, &patterns).is_none());
     }
 
     #[test]

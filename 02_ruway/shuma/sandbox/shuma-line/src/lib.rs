@@ -23,6 +23,7 @@
 pub mod complete;
 pub mod dialect;
 pub mod editor;
+pub mod ghost;
 pub mod lexer;
 pub mod pipeline;
 pub mod token;
@@ -30,6 +31,7 @@ pub mod token;
 pub use complete::{complete, Completion, CompletionKind, CompletionSource, StaticSource};
 pub use dialect::Dialect;
 pub use editor::LineState;
+pub use ghost::ghost_suggestion;
 pub use lexer::tokenize;
 pub use pipeline::{split_pipeline, Pipeline, Stage};
 pub use token::{Token, TokenKind};

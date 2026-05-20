@@ -255,6 +255,8 @@ struct Shell {
     /// Largo del historial en el último `:save` — define qué comandos
     /// entran al próximo grupo guardado.
     group_anchor: usize,
+    /// Patrones detectados por el motor de inferencia (cache).
+    patterns: Vec<shuma_infer::EmergingPattern>,
     /// Scroll del feed central — sigue al comando más reciente.
     scroll: ScrollHandle,
     focus: FocusHandle,
@@ -295,6 +297,7 @@ impl Shell {
             drag: None,
             run_ui: HashMap::new(),
             group_anchor: 0,
+            patterns: Vec::new(),
             scroll: ScrollHandle::new(),
             focus: cx.focus_handle(),
             focused_once: false,
@@ -369,29 +372,59 @@ impl Shell {
         changed
     }
 
-    /// Corre el motor de inferencia sobre el historial y promueve el
-    /// patrón más fuerte a un grupo reutilizable (rehidratación).
-    fn infer_patterns(&mut self) {
-        let records: Vec<shuma_infer::CommandRecord> = self
-            .session
+    /// Comandos del historial reducidos a registros de inferencia.
+    fn infer_records(&self) -> Vec<shuma_infer::CommandRecord> {
+        self.session
             .history()
             .iter()
             .map(|r| {
-                shuma_infer::CommandRecord::parse(
-                    &r.line,
-                    &r.cwd,
-                    r.status == RunStatus::Ok,
-                )
+                shuma_infer::CommandRecord::parse(&r.line, &r.cwd, r.status == RunStatus::Ok)
             })
-            .collect();
-        let patterns =
+            .collect()
+    }
+
+    /// Corre el motor de inferencia, cachea los patrones y promueve el
+    /// más fuerte a un grupo reutilizable (rehidratación).
+    fn infer_patterns(&mut self) {
+        let records = self.infer_records();
+        self.patterns =
             shuma_infer::detect_patterns(&records, &shuma_infer::InferConfig::default());
-        if let Some(top) = patterns.first() {
+        if let Some(top) = self.patterns.first() {
             let name = format!("✨ {}", top.suggested_name());
             if self.session.group(&name).is_none() {
                 self.session.save_group(name, top.example.clone());
             }
         }
+    }
+
+    /// La secuencia que el motor predice como continuación, si la hay.
+    fn predicted_sequence(&self) -> Option<String> {
+        if self.patterns.is_empty() {
+            return None;
+        }
+        let records = self.infer_records();
+        let tail = &records[records.len().saturating_sub(6)..];
+        let next = shuma_infer::predict_next(tail, &self.patterns)?;
+        (!next.is_empty()).then(|| next.join(" && "))
+    }
+
+    /// Calcula el sufijo fantasma del prompt: el resto de la línea que el
+    /// shell predice. Sólo con el cursor al final.
+    fn compute_ghost(&self) -> Option<String> {
+        let line = self.line.text();
+        if line.is_empty() || self.line.cursor() != line.len() {
+            return None;
+        }
+        // Corpus por prioridad: secuencia predicha, luego historial
+        // reciente.
+        let mut corpus: Vec<String> = Vec::new();
+        if let Some(seq) = self.predicted_sequence() {
+            corpus.push(seq);
+        }
+        for r in self.session.history().iter().rev() {
+            corpus.push(r.line.clone());
+        }
+        shuma_line::ghost_suggestion(line, &corpus)
     }
 
     /// Resuelve el destino de un `cd` contra el cwd de la sesión.
@@ -584,6 +617,12 @@ impl Shell {
             "right" => {
                 if ctrl {
                     self.line.move_word_right();
+                } else if self.line.cursor() == self.line.text().len() {
+                    // En el extremo, la flecha derecha acepta el fantasma.
+                    if let Some(g) = self.compute_ghost() {
+                        self.line.insert(&g);
+                        changed = true;
+                    }
                 } else {
                     self.line.move_right();
                 }
@@ -595,6 +634,13 @@ impl Shell {
             "u" if ctrl => {
                 self.line.clear();
                 changed = true;
+            }
+            "space" if ctrl => {
+                // Ctrl+Space también acepta el fantasma predicho.
+                if let Some(g) = self.compute_ghost() {
+                    self.line.insert(&g);
+                    changed = true;
+                }
             }
             _ => {
                 if !ctrl {
@@ -1122,6 +1168,15 @@ impl Render for Shell {
             if !caret_done {
                 input_row.push(caret());
             }
+        }
+        // Sugerencia fantasma — el resto que el shell predice, en gris.
+        if let Some(ghost) = self.compute_ghost() {
+            input_row.push(
+                div()
+                    .flex_none()
+                    .text_color(theme.fg_disabled)
+                    .child(SharedString::from(ghost)),
+            );
         }
         let prompt = div()
             .h(px(46.))
