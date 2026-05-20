@@ -1,0 +1,18 @@
+[package]
+name = "matilda"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "matilda — demostración de administración de servidores: inventario declarativo, renderizado de docker-compose y nginx, y plan de reconciliación."
+
+[[bin]]
+name = "matilda"
+path = "src/main.rs"
+
+[dependencies]
+matilda-core = { path = "../../modules/matilda/matilda-core" }
+matilda-config = { path = "../../modules/matilda/matilda-config" }
+matilda-plan = { path = "../../modules/matilda/matilda-plan" }
