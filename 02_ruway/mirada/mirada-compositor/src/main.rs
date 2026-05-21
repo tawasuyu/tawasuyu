@@ -722,16 +722,33 @@ fn cursor_hotspot(surface: &WlSurface) -> (i32, i32) {
     })
 }
 
+/// Variables de entorno de tema que el compositor inyecta a cada hijo,
+/// para uniformizar GTK y Qt:
+/// - `XDG_CURRENT_DESKTOP=mirada` hace que `xdg-desktop-portal` enrute
+///   hacia `mirada-portal` (el backend de `org.freedesktop.appearance`).
+/// - `QT_QPA_PLATFORMTHEME=gtk3` hace que las apps Qt sigan el tema GTK,
+///   y por tanto el `gtk.css` que genera `nahual-theme`.
+const THEME_ENV: &[(&str, &str)] = &[
+    ("XDG_CURRENT_DESKTOP", "mirada"),
+    ("QT_QPA_PLATFORMTHEME", "gtk3"),
+];
+
 /// Lanza un comando como proceso hijo, vía `sh -c`. El hijo hereda el
 /// entorno —`WAYLAND_DISPLAY` incluido—, así que el cliente que abra se
-/// conecta a este compositor. Lo usan la acción `spawn:…` del keymap, la
-/// variable `MIRADA_STARTUP` y el autoarranque.
+/// conecta a este compositor; además se le inyecta [`THEME_ENV`] para
+/// que GTK y Qt adopten el tema del escritorio. Lo usan la acción
+/// `spawn:…` del keymap, la variable `MIRADA_STARTUP` y el autoarranque.
 fn spawn_command(cmd: &str) {
     let cmd = cmd.trim();
     if cmd.is_empty() {
         return;
     }
-    match std::process::Command::new("sh").arg("-c").arg(cmd).spawn() {
+    match std::process::Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .envs(THEME_ENV.iter().copied())
+        .spawn()
+    {
         Ok(child) => println!("mirada-compositor · lanzado (pid {}): {cmd}", child.id()),
         Err(e) => eprintln!("mirada-compositor · no pude lanzar «{cmd}»: {e}"),
     }
