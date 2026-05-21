@@ -24,6 +24,7 @@ use smithay::backend::input::{InputEvent, KeyState, KeyboardKeyEvent};
 use smithay::backend::renderer::element::surface::{
     render_elements_from_surface_tree, WaylandSurfaceRenderElement,
 };
+use smithay::backend::renderer::element::solid::SolidColorBuffer;
 use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::utils::{
@@ -99,6 +100,11 @@ struct ManagedWindow {
     visible: bool,
     /// `true` si flota: se compone por encima de las teseladas.
     floating: bool,
+    /// `true` si tiene el foco del teclado — pinta el marco resaltado.
+    focused: bool,
+    /// Búferes de los 4 lados del marco (arriba, abajo, izq., der.) —
+    /// cada uno con su `Id` estable para el seguimiento de daño.
+    borders: [SolidColorBuffer; 4],
 }
 
 /// Un arrastre de ratón en curso: mueve o redimensiona una ventana.
@@ -232,8 +238,9 @@ impl App {
             }
             BodyOp::Focus(id) => {
                 let mut target = None;
-                for w in &self.windows {
+                for w in &mut self.windows {
                     let active = w.id == id;
+                    w.focused = active;
                     if active {
                         target = Some(w.surface.clone());
                     }
@@ -251,6 +258,9 @@ impl App {
                 }
             }
             BodyOp::Unfocus => {
+                for w in &mut self.windows {
+                    w.focused = false;
+                }
                 if let Some(kb) = self.keyboard.clone() {
                     kb.set_focus(self, Option::<WlSurface>::None, SERIAL_COUNTER.next_serial());
                 }
@@ -297,6 +307,8 @@ impl App {
             size: (0, 0),
             visible: false,
             floating: false,
+            focused: false,
+            borders: std::array::from_fn(|_| SolidColorBuffer::default()),
         });
         let ev = self.body.open_surface(id, app_id, title);
         self.brain_feed(ev);

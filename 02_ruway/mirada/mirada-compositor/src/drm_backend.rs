@@ -65,11 +65,11 @@ type Compositor =
     DrmCompositor<GbmAllocator<DrmDeviceFd>, GbmFramebufferExporter<DrmDeviceFd>, (), DrmDeviceFd>;
 
 render_elements! {
-    /// Lo que el backend DRM compone en un cuadro: las superficies de los
-    /// clientes y, encima de todo, el cursor de software.
+    /// Lo que el backend DRM compone en un cuadro: superficies de cliente
+    /// y rectángulos de color sólido (el cursor y los marcos de ventana).
     Frame<R> where R: ImportAll;
     Window = WaylandSurfaceRenderElement<R>,
-    Cursor = SolidColorRenderElement,
+    Solid = SolidColorRenderElement,
 }
 
 /// Color de fondo del escritorio cuando no hay nada que lo tape.
@@ -83,6 +83,30 @@ const CURSOR_COLOR: [f32; 4] = [0.95, 0.95, 0.97, 1.0];
 
 /// Lado mínimo de una ventana al redimensionarla con el ratón.
 const MIN_WINDOW: i32 = 120;
+
+/// Grosor del marco de una ventana, en píxeles.
+const BORDER_WIDTH: i32 = 2;
+
+/// Color del marco de la ventana enfocada — un azul que resalta.
+const BORDER_FOCUS: [f32; 4] = [0.36, 0.56, 0.92, 1.0];
+
+/// Color del marco de las ventanas sin foco — gris discreto.
+const BORDER_NORMAL: [f32; 4] = [0.22, 0.22, 0.27, 1.0];
+
+/// Los 4 rectángulos `(x, y, w, h)` del marco de una ventana cuyo
+/// contenido ocupa `(sx, sy, sw, sh)`. El marco va *hacia adentro* (pisa
+/// el borde de la superficie), así nunca se solapa con el de la ventana
+/// vecina: arriba, abajo, izquierda, derecha.
+fn border_rects(sx: i32, sy: i32, sw: i32, sh: i32) -> [(i32, i32, i32, i32); 4] {
+    let bw = BORDER_WIDTH;
+    let side_h = (sh - 2 * bw).max(0);
+    [
+        (sx, sy, sw, bw),
+        (sx, sy + sh - bw, sw, bw),
+        (sx, sy + bw, bw, side_h),
+        (sx + sw - bw, sy + bw, bw, side_h),
+    ]
+}
 
 /// Códigos de botón de `<linux/input-event-codes.h>`.
 const BTN_LEFT: u32 = 0x110;
@@ -118,8 +142,26 @@ impl DrmState {
         if self.pending_flip {
             return; // aún esperamos el VBlank del cuadro anterior
         }
-        // Elementos a pintar — lista front-to-back (índice 0 = encima):
-        // primero el cursor, luego las flotantes, luego las teseladas.
+
+        // Paso 1 · refresca los búferes del marco de cada ventana — su
+        // tamaño (sigue al contenido) y su color (según el foco). Cada
+        // `SolidColorBuffer` sube su contador de daño sólo si algo cambió.
+        for w in &mut self.app.windows {
+            if !w.visible {
+                continue;
+            }
+            let (x, y) = crate::render_loc(w);
+            let (sw, sh) = crate::surface_px_size(w).unwrap_or(w.size);
+            let color = if w.focused { BORDER_FOCUS } else { BORDER_NORMAL };
+            let rects = border_rects(x, y, sw, sh);
+            for (buf, (_, _, bw, bh)) in w.borders.iter_mut().zip(rects) {
+                buf.update((bw, bh), color);
+            }
+        }
+
+        // Paso 2 · arma los elementos — lista front-to-back (índice 0 =
+        // encima): el cursor, y por cada ventana su marco sobre su
+        // superficie. Las flotantes van antes que las teseladas.
         let elements: Vec<Frame<GlesRenderer>> = {
             let mut out: Vec<Frame<GlesRenderer>> = Vec::new();
 
@@ -128,7 +170,7 @@ impl DrmState {
                 Point::<i32, Physical>::from((cx.round() as i32, cy.round() as i32)),
                 Size::<i32, Physical>::from((CURSOR_SIZE, CURSOR_SIZE)),
             );
-            out.push(Frame::Cursor(SolidColorRenderElement::new(
+            out.push(Frame::Solid(SolidColorRenderElement::new(
                 self.cursor_id.clone(),
                 cursor_rect,
                 CommitCounter::default(),
@@ -139,10 +181,23 @@ impl DrmState {
             let mut shown: Vec<_> = self.app.windows.iter().filter(|w| w.visible).collect();
             shown.sort_by_key(|w| !w.floating);
             for w in &shown {
+                let (x, y) = crate::render_loc(w);
+                let (sw, sh) = crate::surface_px_size(w).unwrap_or(w.size);
+                let rects = border_rects(x, y, sw, sh);
+                // El marco, encima de la propia superficie de la ventana.
+                for (buf, (bx, by, _, _)) in w.borders.iter().zip(rects) {
+                    out.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                        buf,
+                        (bx, by),
+                        1.0,
+                        1.0,
+                        Kind::Unspecified,
+                    )));
+                }
                 for el in render_elements_from_surface_tree(
                     &mut self.renderer,
                     &w.surface,
-                    crate::render_loc(w),
+                    (x, y),
                     1.0,
                     1.0,
                     Kind::Unspecified,
