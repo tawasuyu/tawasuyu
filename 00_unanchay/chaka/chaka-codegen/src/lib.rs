@@ -475,6 +475,21 @@ mod tests {
     }
 
     #[test]
+    fn edited_field_is_text_and_move_formats_it() {
+        let out = gen("DATA DIVISION.\n\
+             WORKING-STORAGE SECTION.\n\
+             01 WS-N PIC 9(5).\n\
+             01 WS-E PIC Z,ZZ9.99.\n\
+             PROCEDURE DIVISION.\n\
+             MAIN.\n\
+                 MOVE WS-N TO WS-E.\n");
+        // El campo de edición se materializa como texto de presentación.
+        assert!(out.contains("ws_e: Text,"));
+        // El MOVE pasa por `format_edited` con la PICTURE de edición.
+        assert!(out.contains("self.ws_e.store(&format_edited(self.ws_n.value(), \"Z,ZZ9.99\"));"));
+    }
+
+    #[test]
     fn empty_program_still_compiles_shape() {
         let out = gen("");
         assert!(out.contains("struct Program {"));

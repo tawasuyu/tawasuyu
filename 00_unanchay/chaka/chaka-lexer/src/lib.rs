@@ -149,8 +149,20 @@ fn lex_line(content: &str, line: u32, base_col: u32, out: &mut Vec<Token>) -> Re
             });
             i = next;
         } else if c == '.' {
+            // El separador de sentencia COBOL siempre lleva un espacio
+            // (o el fin de línea) detrás. Un punto pegado a un carácter
+            // —`ZZ9.99`— no es separador: pertenece a una PICTURE de
+            // edición y se emite como símbolo para que el parser lo
+            // reensamble dentro de la cláusula.
+            let is_separator = chars
+                .get(i + 1)
+                .map_or(true, |n| n.is_whitespace());
             out.push(Token {
-                kind: TokenKind::Period,
+                kind: if is_separator {
+                    TokenKind::Period
+                } else {
+                    TokenKind::Symbol
+                },
                 text: ".".into(),
                 line,
                 col,
@@ -327,6 +339,19 @@ mod tests {
                 (TokenKind::Period, ".".into()),
             ]
         );
+    }
+
+    #[test]
+    fn period_inside_an_edit_picture_is_not_a_separator() {
+        // El punto de `ZZ9.99` va pegado a un dígito: es símbolo, no
+        // terminador. El punto final, con espacio detrás, sí termina.
+        let toks = kinds("PIC Z,ZZ9.99 .", SourceFormat::Free);
+        let dots: Vec<TokenKind> = toks
+            .iter()
+            .filter(|(_, t)| t == ".")
+            .map(|(k, _)| *k)
+            .collect();
+        assert_eq!(dots, vec![TokenKind::Symbol, TokenKind::Period]);
     }
 
     #[test]

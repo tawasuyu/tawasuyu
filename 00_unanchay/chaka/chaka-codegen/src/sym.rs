@@ -22,6 +22,8 @@ pub(crate) struct Field {
     pub init: String,
     /// Si es una tabla (`OCCURS n`), su número de elementos.
     pub occurs: Option<u32>,
+    /// Si es un campo de edición, su PICTURE.
+    pub edit: Option<String>,
 }
 
 /// Un fichero del programa generado.
@@ -62,6 +64,7 @@ impl Symbols {
                 kind: f.kind,
                 init: f.init.clone(),
                 occurs: f.occurs,
+                edit: f.edit.clone(),
             })
             .collect();
         dedup_idents(&mut fields);

@@ -31,6 +31,9 @@ pub struct Field {
     /// Si es una tabla (`OCCURS n`), su número de elementos; `None`
     /// para un dato escalar.
     pub occurs: Option<u32>,
+    /// Si es un campo de edición (`ZZ,ZZ9.99`), su PICTURE — para
+    /// formatear el valor al moverlo. El campo se almacena como texto.
+    pub edit: Option<String>,
 }
 
 /// Un nombre de condición — un dato de nivel 88. `IF <name>` equivale
@@ -126,7 +129,7 @@ fn walk(items: &[DataItem], model: &mut DataModel) -> Vec<String> {
             }
             produced.extend(members);
         } else if it.name != "FILLER" {
-            if let Some(kind) = classify(it.picture.as_deref()) {
+            if let Some((kind, edit)) = classify(it.picture.as_deref()) {
                 let init = match kind {
                     FieldKind::Num { .. } => numeric_value(it.value.as_deref()),
                     FieldKind::Text { .. } => text_value(it.value.as_deref()),
@@ -137,6 +140,7 @@ fn walk(items: &[DataItem], model: &mut DataModel) -> Vec<String> {
                     kind,
                     init,
                     occurs: it.occurs,
+                    edit,
                 });
             }
         }
@@ -147,23 +151,37 @@ fn walk(items: &[DataItem], model: &mut DataModel) -> Vec<String> {
 /// Clasifica una cláusula PICTURE: alfanumérica si tiene `X`/`A`,
 /// numérica si `charka-bcd` la parsea; una PICTURE de edición se trata
 /// como texto de presentación.
-fn classify(pic: Option<&str>) -> Option<FieldKind> {
+fn classify(pic: Option<&str>) -> Option<(FieldKind, Option<String>)> {
     let up = pic?.to_uppercase();
     if up.contains('X') || up.contains('A') {
-        return Some(FieldKind::Text {
-            len: pic_width(&up).max(1),
-        });
+        return Some((
+            FieldKind::Text {
+                len: pic_width(&up).max(1),
+            },
+            None,
+        ));
     }
     if let Ok(p) = Picture::parse(&up) {
-        return Some(FieldKind::Num {
-            int: p.integer_digits,
-            frac: p.fraction_digits,
-            signed: p.signed,
-        });
+        return Some((
+            FieldKind::Num {
+                int: p.integer_digits,
+                frac: p.fraction_digits,
+                signed: p.signed,
+            },
+            None,
+        ));
     }
-    Some(FieldKind::Text {
+    // ¿PICTURE de edición? — tiene un símbolo de edición y un dígito.
+    let kind = FieldKind::Text {
         len: pic_width(&up).max(1),
-    })
+    };
+    let has_edit = up.contains(['Z', ',', '.', '*']);
+    let has_digit = up.contains(['9', 'Z']);
+    if has_edit && has_digit {
+        Some((kind, Some(up)))
+    } else {
+        Some((kind, None))
+    }
 }
 
 /// Cuenta las posiciones de presentación de una PICTURE, expandiendo

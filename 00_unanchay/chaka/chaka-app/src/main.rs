@@ -240,9 +240,7 @@ fn collect_unknowns(stmts: &[Stmt], out: &mut Vec<String>) {
                 collect_unknowns(other, out);
             }
             Stmt::Read {
-                at_end,
-                not_at_end,
-                ..
+                at_end, not_at_end, ..
             } => {
                 collect_unknowns(at_end, out);
                 collect_unknowns(not_at_end, out);

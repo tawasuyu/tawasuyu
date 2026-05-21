@@ -8,7 +8,8 @@ use charka_ir::{
 
 use crate::emit::Emitter;
 use crate::expr::{
-    emit_cond, emit_expr, field_ref, figurative_fill, operand_decimal, operand_display, operand_str,
+    emit_cond, emit_expr, field_ref, figurative_fill, operand_decimal, operand_display,
+    operand_str, rust_str,
 };
 use crate::sym::{paragraph_method, FieldKind, Symbols};
 
@@ -136,6 +137,21 @@ fn emit_store(em: &mut Emitter, sym: &Symbols, target: &Operand, value: &str, ro
 
 fn emit_move(em: &mut Emitter, sym: &Symbols, from: &Operand, to: &[Operand]) {
     for t in to {
+        // Un destino con PICTURE de edición formatea el valor numérico.
+        if let Operand::Data(name) = t {
+            if let Some(pic) = sym.lookup(name).and_then(|f| f.edit.clone()) {
+                let ident = sym
+                    .lookup(name)
+                    .map(|f| f.ident.clone())
+                    .unwrap_or_default();
+                em.line(&format!(
+                    "self.{ident}.store(&format_edited({}, {}));",
+                    operand_decimal(sym, from),
+                    rust_str(&pic)
+                ));
+                continue;
+            }
+        }
         match field_ref(sym, t) {
             Some((lref, FieldKind::Num { .. })) => {
                 em.line(&format!("{lref}.store({});", operand_decimal(sym, from)));

@@ -11,7 +11,7 @@ use charka_ir::{
     BinOp, CmpOp, Cond, ConditionName, Expr, Figurative, FileMode, InspectOp, Ir, Operand, Perform,
     PerformControl, PerformTarget, Stmt, WhenTest,
 };
-use charka_runtime::{cobol_text_cmp, CobFile, Decimal, Num, Rounding, Text};
+use charka_runtime::{cobol_text_cmp, format_edited, CobFile, Decimal, Num, Rounding, Text};
 
 use crate::field::{build_fields, Cell};
 
@@ -531,6 +531,15 @@ impl<'a> Machine<'a> {
 
     /// `MOVE from` a un solo destino (escalar o elemento de tabla).
     fn do_move(&mut self, from: &Operand, target: &Operand) {
+        // Un destino con PICTURE de edición formatea el valor numérico.
+        if let Operand::Data(name) = target {
+            if let Some(pic) = self.ir.model.field(name).and_then(|f| f.edit.clone()) {
+                let value = self.eval_decimal(from);
+                let text = format_edited(value, &pic);
+                self.store_text(target, &text);
+                return;
+            }
+        }
         let Some((key, idx)) = self.resolve(target) else {
             return;
         };
