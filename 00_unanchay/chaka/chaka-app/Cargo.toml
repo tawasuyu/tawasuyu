@@ -1,0 +1,22 @@
+[package]
+name = "charka"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "charka — CLI del transpilador COBOL→Rust: transpila, ejecuta y valida programas COBOL."
+
+[[bin]]
+name = "charka"
+path = "src/main.rs"
+
+[dependencies]
+charka-lexer = { path = "../../modules/charka/charka-lexer" }
+charka-parser = { path = "../../modules/charka/charka-parser" }
+charka-ir = { path = "../../modules/charka/charka-ir" }
+charka-codegen = { path = "../../modules/charka/charka-codegen" }
+charka-shadow = { path = "../../modules/charka/charka-shadow" }
+clap = { workspace = true }
+anyhow = { workspace = true }
