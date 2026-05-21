@@ -17,9 +17,11 @@
 //! compositor necesita para arrancar la sesión.
 
 mod pam_backend;
+mod ticket;
 mod user;
 
 pub use pam_backend::{PamAuthenticator, DEFAULT_SERVICE};
+pub use ticket::{SessionTicket, TICKET_TAG};
 pub use user::{resolve_user, UserInfo};
 
 use std::collections::HashMap;

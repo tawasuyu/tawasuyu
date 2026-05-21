@@ -1,0 +1,19 @@
+[package]
+name = "mirada-greeter"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "mirada-greeter — el greeter de carmen: ventana GPUI de login que autentica con brahman-auth y emite un SessionTicket al compositor por stdout."
+
+[[bin]]
+name = "mirada-greeter"
+path = "src/main.rs"
+
+[dependencies]
+gpui = { workspace = true }
+nahual-theme = { workspace = true }
+nahual-widget-text-input = { workspace = true }
+brahman-auth = { path = "../../protocol/brahman-auth" }
