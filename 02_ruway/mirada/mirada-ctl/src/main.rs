@@ -120,6 +120,7 @@ Acciones de mirada-ctl:
   move-forward               adelanta la ventana enfocada en el teselado
   move-backward              la atrasa
   close-focused              cierra la ventana enfocada
+  toggle-float               alterna flotante / teselada la enfocada
   cycle-layout               pasa al siguiente modo de teselado
   layout <modo>              master-stack · centered-master · spiral
                              grid · columns · rows · monocle

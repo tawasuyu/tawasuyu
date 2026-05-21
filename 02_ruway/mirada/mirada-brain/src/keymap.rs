@@ -237,6 +237,7 @@ const KEYMAP_HEADER: &str = "\
 //   focus-next / focus-prev          mueve el foco
 //   move-forward / move-backward     reordena la ventana enfocada
 //   close-focused                    cierra la enfocada
+//   toggle-float                     alterna flotante / teselada
 //   cycle-layout                     siguiente modo de teselado
 //   layout:<modo>                    master-stack | centered-master | spiral
 //                                    grid | columns | rows | monocle

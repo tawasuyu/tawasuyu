@@ -46,6 +46,8 @@ pub struct WindowPlacement {
     pub visible: bool,
     /// `true` si esta ventana tiene el foco del teclado.
     pub focused: bool,
+    /// `true` si flota (fuera del teselado): el Cuerpo la pinta encima.
+    pub floating: bool,
 }
 
 /// Una orden del Cerebro al Cuerpo.
@@ -144,11 +146,14 @@ pub fn placements(ws: &Workspace, screen: Rect) -> Vec<WindowPlacement> {
         .into_iter()
         .map(|(id, rect)| {
             let is_focused = focused == Some(id);
+            let floating = ws.is_floating(id);
             WindowPlacement {
                 id,
                 rect,
-                visible: !monocle || is_focused,
+                // Una flotante siempre se ve; en `Monocle`, sólo la enfocada.
+                visible: floating || !monocle || is_focused,
                 focused: is_focused,
+                floating,
             }
         })
         .collect()
@@ -177,6 +182,7 @@ mod tests {
             rect: Rect::new(0, 0, 800, 600),
             visible: true,
             focused: true,
+            floating: false,
         }]);
         let mut buf = Vec::new();
         write_frame(&mut buf, &cmd).unwrap();
@@ -257,6 +263,18 @@ mod tests {
     fn an_empty_workspace_places_nothing() {
         let empty = Workspace::new(LayoutParams::default());
         assert!(placements(&empty, SCREEN).is_empty());
+    }
+
+    #[test]
+    fn a_floating_window_is_marked_and_stays_visible_in_monocle() {
+        let mut w = ws(LayoutMode::Monocle); // Monocle oculta las no enfocadas
+        w.set_floating(10, Some(Rect::new(0, 0, 200, 200)));
+        let p = placements(&w, SCREEN);
+        let f = p.iter().find(|x| x.id == 10).unwrap();
+        assert!(f.floating);
+        assert!(f.visible, "una flotante se ve aunque el modo sea Monocle");
+        // Y conserva su rectángulo flotante.
+        assert_eq!(f.rect, Rect::new(0, 0, 200, 200));
     }
 
     #[test]

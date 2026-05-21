@@ -179,6 +179,22 @@ impl Desktop {
                     None => Vec::new(),
                 }
             }
+            DesktopAction::ToggleFloat => {
+                let Some(id) = self.workspaces[self.active].focused() else {
+                    return Vec::new();
+                };
+                let screen = self.screen();
+                let ws = &mut self.workspaces[self.active];
+                if ws.is_floating(id) {
+                    ws.set_floating(id, None);
+                } else {
+                    let rect = screen
+                        .map(centered_float_rect)
+                        .unwrap_or_else(|| Rect::new(100, 100, 800, 600));
+                    ws.set_floating(id, Some(rect));
+                }
+                self.relayout()
+            }
             DesktopAction::CycleLayout => {
                 let next = self.workspaces[self.active].params().mode.next();
                 self.workspaces[self.active].set_mode(next);
@@ -306,6 +322,18 @@ impl Desktop {
     }
 }
 
+/// El rectángulo flotante por defecto: 60 % de la pantalla, centrado.
+fn centered_float_rect(screen: Rect) -> Rect {
+    let w = screen.w * 3 / 5;
+    let h = screen.h * 3 / 5;
+    Rect::new(
+        screen.x + (screen.w - w) / 2,
+        screen.y + (screen.h - h) / 2,
+        w,
+        h,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -407,6 +435,21 @@ mod tests {
         // La 1 quedó enfocada en el escritorio activo (el 1).
         assert!(w1.focused);
         assert!(!w2.focused);
+    }
+
+    #[test]
+    fn toggle_float_marks_the_focused_window_and_floats_it_last() {
+        let mut d = desktop_with_screen();
+        open(&mut d, 1);
+        open(&mut d, 2); // enfocada
+        let cmds = d.apply(DesktopAction::ToggleFloat);
+        let p = places(&cmds);
+        assert!(p.iter().find(|x| x.id == 2).unwrap().floating);
+        // La flotante va al final de la lista — orden de pintado.
+        assert_eq!(p.last().unwrap().id, 2);
+        // Alternar de nuevo la devuelve al teselado.
+        let cmds = d.apply(DesktopAction::ToggleFloat);
+        assert!(!places(&cmds).iter().find(|x| x.id == 2).unwrap().floating);
     }
 
     #[test]

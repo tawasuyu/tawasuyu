@@ -54,12 +54,13 @@ fn main() {
                                 BrainCommand::Place(places) => {
                                     for p in places {
                                         eprintln!(
-                                            "    win {} → {:>5}×{:<4} @ ({:>5},{:>4}){}",
+                                            "    win {} → {:>5}×{:<4} @ ({:>5},{:>4}){}{}",
                                             p.id,
                                             p.rect.w,
                                             p.rect.h,
                                             p.rect.x,
                                             p.rect.y,
+                                            if p.floating { "  ~flotante" } else { "" },
                                             if p.focused { "  *" } else { "" },
                                         );
                                     }

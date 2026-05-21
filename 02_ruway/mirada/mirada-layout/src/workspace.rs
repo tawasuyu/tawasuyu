@@ -1,5 +1,7 @@
 //! `Workspace` — un conjunto de ventanas, su foco y su modo de teselado.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::geometry::Rect;
@@ -16,12 +18,20 @@ pub struct Workspace {
     /// Índice de la ventana enfocada en `windows`.
     focus: usize,
     params: LayoutParams,
+    /// Ventanas flotantes y su rectángulo: salen del teselado y se pintan
+    /// encima. Las que no están aquí se teselan normalmente.
+    floating: BTreeMap<WindowId, Rect>,
 }
 
 impl Workspace {
     /// Escritorio vacío con los parámetros dados.
     pub fn new(params: LayoutParams) -> Self {
-        Self { windows: Vec::new(), focus: 0, params }
+        Self {
+            windows: Vec::new(),
+            focus: 0,
+            params,
+            floating: BTreeMap::new(),
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -73,6 +83,7 @@ impl Workspace {
             return false;
         };
         self.windows.remove(i);
+        self.floating.remove(&window);
         if i < self.focus {
             self.focus -= 1;
         }
@@ -80,6 +91,24 @@ impl Workspace {
             self.focus = self.windows.len().saturating_sub(1);
         }
         true
+    }
+
+    /// Marca una ventana como flotante en `rect`, o la devuelve al
+    /// teselado con `None`. La ventana sigue en el orden de foco.
+    pub fn set_floating(&mut self, window: WindowId, rect: Option<Rect>) {
+        match rect {
+            Some(r) => {
+                self.floating.insert(window, r);
+            }
+            None => {
+                self.floating.remove(&window);
+            }
+        }
+    }
+
+    /// `true` si la ventana está flotando.
+    pub fn is_floating(&self, window: WindowId) -> bool {
+        self.floating.contains_key(&window)
     }
 
     /// Ventana enfocada, o `None` si el escritorio está vacío.
@@ -142,10 +171,24 @@ impl Workspace {
     }
 
     /// Resuelve la geometría: el rectángulo de cada ventana dentro de
-    /// `screen`, en orden de teselado.
+    /// `screen`. Primero las teseladas en orden de teselado, luego las
+    /// flotantes con su propio rectángulo — éstas van al final para que
+    /// el Cuerpo las pinte encima.
     pub fn layout(&self, screen: Rect) -> Vec<(WindowId, Rect)> {
-        let rects = tile(screen, self.windows.len(), &self.params);
-        self.windows.iter().copied().zip(rects).collect()
+        let tiled: Vec<WindowId> = self
+            .windows
+            .iter()
+            .copied()
+            .filter(|id| !self.floating.contains_key(id))
+            .collect();
+        let rects = tile(screen, tiled.len(), &self.params);
+        let mut out: Vec<(WindowId, Rect)> = tiled.into_iter().zip(rects).collect();
+        for &id in &self.windows {
+            if let Some(&rect) = self.floating.get(&id) {
+                out.push((id, rect));
+            }
+        }
+        out
     }
 }
 
@@ -267,5 +310,36 @@ mod tests {
     #[test]
     fn empty_workspace_lays_out_nothing() {
         assert!(ws().layout(Rect::new(0, 0, 800, 600)).is_empty());
+    }
+
+    #[test]
+    fn a_floating_window_keeps_its_rect_and_goes_last() {
+        let mut w = ws();
+        for id in [1, 2, 3] {
+            w.add(id);
+        }
+        let float_rect = Rect::new(50, 50, 400, 300);
+        w.set_floating(2, Some(float_rect));
+        assert!(w.is_floating(2));
+        let placed = w.layout(Rect::new(0, 0, 1920, 1080));
+        assert_eq!(placed.len(), 3);
+        // La flotante va al final, con su rectángulo intacto.
+        assert_eq!(placed[2], (2, float_rect));
+        let ids: Vec<_> = placed.iter().map(|(id, _)| *id).collect();
+        assert_eq!(ids, vec![1, 3, 2]);
+        // Devolverla al teselado.
+        w.set_floating(2, None);
+        assert!(!w.is_floating(2));
+        assert_eq!(w.layout(Rect::new(0, 0, 1920, 1080)).len(), 3);
+    }
+
+    #[test]
+    fn removing_a_window_clears_its_floating_state() {
+        let mut w = ws();
+        w.add(1);
+        w.set_floating(1, Some(Rect::new(0, 0, 100, 100)));
+        w.remove(1);
+        w.add(1); // mismo id, ventana nueva: ya no flota
+        assert!(!w.is_floating(1));
     }
 }

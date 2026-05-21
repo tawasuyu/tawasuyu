@@ -21,10 +21,10 @@
 //! ```text
 //!   n            abre una ventana          tab / espacio  cicla layout
 //!   w            cierra la enfocada        t m g c r d s  layout directo
-//!   j / k        foco siguiente/anterior   h / l          área maestra −/+
-//!   Shift+j / k  mueve la enfocada         , / .          nmaster −/+
-//!   Enter        promueve a maestra        1..9           ir a escritorio
-//!                                          Ctrl+1..9      enviar a escritorio
+//!   f            flota / tesela            h / l          área maestra −/+
+//!   j / k        foco siguiente/anterior   , / .          nmaster −/+
+//!   Shift+j / k  mueve la enfocada         1..9           ir a escritorio
+//!   Enter        promueve a maestra        Ctrl+1..9      enviar a escritorio
 //! ```
 //!
 //! Los pips de escritorio y las ventanas del lienzo son **clicables**, y
@@ -278,6 +278,7 @@ impl Mirada {
         match ks.key.as_str() {
             "n" if !connected => self.open_window(),
             "w" => self.act(DesktopAction::CloseFocused),
+            "f" => self.act(DesktopAction::ToggleFloat),
             "j" if shift => self.act(DesktopAction::MoveForward),
             "k" if shift => self.act(DesktopAction::MoveBackward),
             "j" => self.act(DesktopAction::FocusNext),
@@ -440,6 +441,11 @@ impl Render for Mirada {
             let tb_bg = if p.focused { theme.accent } else { theme.bg_row_hover };
             let tb_fg = if p.focused { on_accent } else { theme.fg_muted };
             let pid = p.id;
+            let kind_label = if p.floating {
+                "· ventana flotante ·"
+            } else {
+                "· superficie del Cuerpo ·"
+            };
 
             canvas = canvas.child(
                 div()
@@ -486,7 +492,7 @@ impl Render for Mirada {
                             .gap(px(4.))
                             .text_color(theme.fg_disabled)
                             .child(SharedString::from(app_id))
-                            .child("· superficie del Cuerpo ·"),
+                            .child(kind_label),
                     ),
             );
         }

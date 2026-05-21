@@ -38,6 +38,8 @@ pub enum DesktopAction {
     MoveBackward,
     /// Cierra la ventana enfocada (cierre ordenado).
     CloseFocused,
+    /// Alterna entre flotante y teselada la ventana enfocada.
+    ToggleFloat,
     /// Pasa al siguiente modo de teselado.
     CycleLayout,
     /// Fija un modo de teselado concreto.
@@ -98,6 +100,7 @@ impl fmt::Display for DesktopAction {
             DesktopAction::MoveForward => f.write_str("move-forward"),
             DesktopAction::MoveBackward => f.write_str("move-backward"),
             DesktopAction::CloseFocused => f.write_str("close-focused"),
+            DesktopAction::ToggleFloat => f.write_str("toggle-float"),
             DesktopAction::CycleLayout => f.write_str("cycle-layout"),
             DesktopAction::SetLayout(m) => write!(f, "layout:{}", layout_slug(*m)),
             DesktopAction::GrowMaster => f.write_str("grow-master"),
@@ -125,6 +128,7 @@ impl FromStr for DesktopAction {
             "move-forward" => Self::MoveForward,
             "move-backward" => Self::MoveBackward,
             "close-focused" => Self::CloseFocused,
+            "toggle-float" => Self::ToggleFloat,
             "cycle-layout" => Self::CycleLayout,
             "grow-master" => Self::GrowMaster,
             "shrink-master" => Self::ShrinkMaster,
@@ -183,6 +187,7 @@ pub fn default_keymap() -> Vec<(String, DesktopAction)> {
         ("Super+Shift+j".into(), DesktopAction::MoveForward),
         ("Super+Shift+k".into(), DesktopAction::MoveBackward),
         ("Super+q".into(), DesktopAction::CloseFocused),
+        ("Super+f".into(), DesktopAction::ToggleFloat),
         ("Super+space".into(), DesktopAction::CycleLayout),
         ("Super+t".into(), DesktopAction::SetLayout(LayoutMode::MasterStack)),
         ("Super+m".into(), DesktopAction::SetLayout(LayoutMode::Monocle)),

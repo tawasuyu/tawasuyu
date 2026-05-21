@@ -29,19 +29,29 @@ pub struct Surface {
     pub geometry: Option<Rect>,
     pub visible: bool,
     pub focused: bool,
+    /// `true` si flota: el backend la pinta por encima de las teseladas.
+    pub floating: bool,
 }
 
 impl Surface {
     fn new(app_id: String, title: String) -> Self {
-        Self { app_id, title, geometry: None, visible: false, focused: false }
+        Self {
+            app_id,
+            title,
+            geometry: None,
+            visible: false,
+            focused: false,
+            floating: false,
+        }
     }
 }
 
 /// Una orden concreta para el backend (smithay, headless, …).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BodyOp {
-    /// Recoloca una superficie y la muestra u oculta.
-    Configure { id: WindowId, rect: Rect, visible: bool },
+    /// Recoloca una superficie, la muestra u oculta y dice si flota
+    /// (las flotantes se componen por encima de las teseladas).
+    Configure { id: WindowId, rect: Rect, visible: bool, floating: bool },
     /// Da el foco del teclado a una superficie.
     Focus(WindowId),
     /// Quita el foco a todas las superficies.
@@ -91,13 +101,18 @@ impl BodyState {
                         new_focus = Some(p.id);
                     }
                     if let Some(s) = self.surfaces.get_mut(&p.id) {
-                        if s.geometry != Some(p.rect) || s.visible != p.visible {
+                        if s.geometry != Some(p.rect)
+                            || s.visible != p.visible
+                            || s.floating != p.floating
+                        {
                             s.geometry = Some(p.rect);
                             s.visible = p.visible;
+                            s.floating = p.floating;
                             ops.push(BodyOp::Configure {
                                 id: p.id,
                                 rect: p.rect,
                                 visible: p.visible,
+                                floating: p.floating,
                             });
                         }
                     }
@@ -108,7 +123,12 @@ impl BodyState {
                     if !listed.contains(id) && s.visible {
                         s.visible = false;
                         let rect = s.geometry.unwrap_or(Rect::new(0, 0, 0, 0));
-                        ops.push(BodyOp::Configure { id: *id, rect, visible: false });
+                        ops.push(BodyOp::Configure {
+                            id: *id,
+                            rect,
+                            visible: false,
+                            floating: s.floating,
+                        });
                     }
                 }
 
@@ -227,6 +247,7 @@ mod tests {
             rect: Rect::new(0, 0, 800, 600),
             visible,
             focused,
+            floating: false,
         }
     }
 
@@ -288,6 +309,7 @@ mod tests {
             id: 2,
             rect: Rect::new(0, 0, 800, 600),
             visible: false,
+            floating: false,
         }));
         assert!(!b.surface(2).unwrap().visible);
     }
@@ -367,6 +389,20 @@ mod tests {
             placement(2, true, true),
         ]));
         assert_eq!(ops, vec![BodyOp::Focus(2)]);
+    }
+
+    #[test]
+    fn a_floating_change_alone_triggers_a_configure() {
+        let mut b = body_with_two();
+        let mut p1 = placement(1, true, true);
+        b.apply(BrainCommand::Place(vec![p1, placement(2, true, false)]));
+        // Sólo cambia `floating` — misma geometría y visibilidad.
+        p1.floating = true;
+        let ops = b.apply(BrainCommand::Place(vec![p1, placement(2, true, false)]));
+        assert!(ops
+            .iter()
+            .any(|o| matches!(o, BodyOp::Configure { id: 1, floating: true, .. })));
+        assert!(b.surface(1).unwrap().floating);
     }
 
     #[test]

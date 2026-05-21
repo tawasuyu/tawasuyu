@@ -82,6 +82,8 @@ struct ManagedWindow {
     /// Esquina superior-izquierda en píxeles, según el Cerebro.
     loc: (i32, i32),
     visible: bool,
+    /// `true` si flota: se compone por encima de las teseladas.
+    floating: bool,
 }
 
 /// El estado global del compositor.
@@ -170,10 +172,11 @@ impl App {
     /// Ejecuta una operación concreta sobre las superficies reales.
     fn exec_op(&mut self, op: BodyOp) {
         match op {
-            BodyOp::Configure { id, rect, visible } => {
+            BodyOp::Configure { id, rect, visible, floating } => {
                 if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
                     w.loc = (rect.x, rect.y);
                     w.visible = visible;
+                    w.floating = floating;
                     w.toplevel.with_pending_state(|s| {
                         s.size = Some((rect.w.max(1), rect.h.max(1)).into());
                     });
@@ -244,6 +247,7 @@ impl App {
             surface,
             loc: (0, 0),
             visible: false,
+            floating: false,
         });
         let ev = self.body.open_surface(id, app_id, title);
         self.brain_feed(ev);
@@ -684,10 +688,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let damage: Rectangle<i32, smithay::utils::Physical> = Rectangle::from_size(size);
         {
             let (renderer, mut framebuffer) = backend.bind().unwrap();
-            let elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = state
-                .windows
+            // Orden de pintado: la lista de elementos va front-to-back
+            // (índice 0 = encima), así que las flotantes —que deben
+            // quedar sobre las teseladas— se ordenan primero. `sort_by_key`
+            // es estable: dentro de cada grupo se respeta el orden de apertura.
+            let mut shown: Vec<&ManagedWindow> =
+                state.windows.iter().filter(|w| w.visible).collect();
+            shown.sort_by_key(|w| !w.floating);
+            let elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = shown
                 .iter()
-                .filter(|w| w.visible)
                 .flat_map(|w| {
                     render_elements_from_surface_tree(
                         renderer,
