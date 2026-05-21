@@ -26,7 +26,9 @@ use smithay::backend::renderer::element::surface::{
 };
 use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::GlesRenderer;
-use smithay::backend::renderer::utils::{draw_render_elements, on_commit_buffer_handler};
+use smithay::backend::renderer::utils::{
+    draw_render_elements, on_commit_buffer_handler, with_renderer_surface_state,
+};
 use smithay::backend::renderer::{Color32F, Frame, Renderer};
 use smithay::backend::winit::{self, WinitEvent};
 use smithay::input::keyboard::{xkb, FilterResult, KeyboardHandle, Keysym, ModifiersState};
@@ -86,8 +88,11 @@ struct ManagedWindow {
     id: u64,
     toplevel: ToplevelSurface,
     surface: WlSurface,
-    /// Esquina superior-izquierda en píxeles, según el Cerebro.
+    /// Esquina superior-izquierda de la celda asignada, según el Cerebro.
     loc: (i32, i32),
+    /// Tamaño de la celda asignada — para centrar la ventana si el
+    /// cliente presenta una superficie más pequeña.
+    size: (i32, i32),
     visible: bool,
     /// `true` si flota: se compone por encima de las teseladas.
     floating: bool,
@@ -182,6 +187,7 @@ impl App {
             BodyOp::Configure { id, rect, visible, floating, fullscreen } => {
                 if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
                     w.loc = (rect.x, rect.y);
+                    w.size = (rect.w, rect.h);
                     w.visible = visible;
                     w.floating = floating;
                     w.toplevel.with_pending_state(|s| {
@@ -258,6 +264,7 @@ impl App {
             toplevel,
             surface,
             loc: (0, 0),
+            size: (0, 0),
             visible: false,
             floating: false,
         });
@@ -511,6 +518,21 @@ fn send_frames_surface_tree(surface: &WlSurface, time: u32) {
 // ---------------------------------------------------------------------
 // Bucle principal
 // ---------------------------------------------------------------------
+
+/// Dónde pintar una ventana: su celda asignada, pero si el cliente
+/// presenta una superficie más pequeña que la celda (p. ej. un terminal
+/// que redondea su tamaño a celdas de texto enteras), se centra en el
+/// hueco sobrante en vez de dejarlo todo a un lado.
+fn render_loc(w: &ManagedWindow) -> (i32, i32) {
+    match with_renderer_surface_state(&w.surface, |s| s.surface_size()) {
+        Some(Some(size)) => {
+            let dx = ((w.size.0 - size.w) / 2).max(0);
+            let dy = ((w.size.1 - size.h) / 2).max(0);
+            (w.loc.0 + dx, w.loc.1 + dy)
+        }
+        _ => w.loc,
+    }
+}
 
 /// Carga las reglas de ventana del usuario, o ninguna si no hay archivo.
 fn load_user_rules() -> Rules {
@@ -815,7 +837,7 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
                     render_elements_from_surface_tree(
                         renderer,
                         &w.surface,
-                        w.loc,
+                        render_loc(w),
                         1.0,
                         1.0,
                         Kind::Unspecified,

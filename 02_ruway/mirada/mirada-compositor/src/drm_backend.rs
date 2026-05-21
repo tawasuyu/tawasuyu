@@ -92,7 +92,7 @@ impl DrmState {
                     render_elements_from_surface_tree(
                         &mut self.renderer,
                         &w.surface,
-                        w.loc,
+                        crate::render_loc(w),
                         1.0,
                         1.0,
                         Kind::Unspecified,
