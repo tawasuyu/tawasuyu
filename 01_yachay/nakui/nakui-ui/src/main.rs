@@ -432,9 +432,34 @@ mod tests {
             "interaccion_form",
             "cliente_detail",
             "oportunidad_detail",
+            "panorama",
         ] {
             assert!(m.views.contains_key(view), "falta la vista «{view}»");
         }
+
+        // Fase 5: el tablero «panorama» con sus tarjetas de KPI.
+        let nahual_meta_schema::View::Dashboard(dash) = &m.views["panorama"] else {
+            panic!("panorama debe ser un tablero (dashboard)");
+        };
+        assert!(
+            dash.cards.len() >= 5,
+            "el panorama debe tener varias tarjetas"
+        );
+        let ganadas = dash
+            .cards
+            .iter()
+            .find(|c| c.label.contains("ganadas"))
+            .expect("tarjeta de oportunidades ganadas");
+        assert!(
+            ganadas.filter.is_some(),
+            "la tarjeta «ganadas» debe filtrar por etapa",
+        );
+        assert!(
+            dash.cards
+                .iter()
+                .any(|c| matches!(c.metric, nahual_meta_schema::Metric::GroupBy { .. })),
+            "el panorama debe tener al menos un breakdown",
+        );
 
         // Fase 2: la lista de oportunidades resuelve `cliente_id` al
         // label del cliente y formatea `monto` como moneda.
