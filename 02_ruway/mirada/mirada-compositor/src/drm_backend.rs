@@ -32,7 +32,6 @@ use smithay::backend::renderer::element::surface::{
 };
 use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::GlesRenderer;
-use smithay::backend::renderer::utils::with_renderer_surface_state;
 use smithay::backend::renderer::ImportDma;
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::{Event as SessionEvent, Session};
@@ -75,8 +74,6 @@ struct DrmState {
     start: Instant,
     /// Nº de ventanas en el último `tick` — para registrar los cambios.
     last_windows: usize,
-    /// Cuenta de `tick`s — para registrar diagnósticos cada cierto rato.
-    tick_count: u32,
 }
 
 impl DrmState {
@@ -137,18 +134,6 @@ impl DrmState {
             self.last_windows = n;
         }
 
-        // Diagnóstico cada ~2 s: dónde y de qué tamaño está cada superficie.
-        self.tick_count = self.tick_count.wrapping_add(1);
-        if self.tick_count % 120 == 0 {
-            for w in &self.app.windows {
-                let size = with_renderer_surface_state(&w.surface, |s| s.surface_size());
-                eprintln!(
-                    "mirada-compositor · ventana id={} loc={:?} visible={} superficie={size:?}",
-                    w.id, w.loc, w.visible,
-                );
-            }
-        }
-
         if self.keymap_watch.as_ref().is_some_and(|w| w.changed()) {
             if let Some(path) = &self.keymap_path {
                 match Keymap::load(path) {
@@ -184,48 +169,39 @@ impl DrmState {
     }
 
     /// Procesa un evento de `libinput` — por ahora, sólo el teclado.
-    /// Va instrumentado: registra los dispositivos que encuentra y cada
-    /// tecla, para diagnosticar la entrada sin el hardware delante.
     fn handle_input(&mut self, event: InputEvent<LibinputInputBackend>) {
-        match event {
-            InputEvent::DeviceAdded { device } => {
-                eprintln!("input · dispositivo detectado: «{}»", device.name());
-            }
-            InputEvent::Keyboard { event } => {
-                let Some(keyboard) = self.app.keyboard.clone() else {
-                    eprintln!("input · ¡sin teclado en el seat!");
-                    return;
-                };
-                let code = event.key_code();
-                let key_state = event.state();
-                let pressed = key_state == KeyState::Pressed;
-                let time = self.start.elapsed().as_millis() as u32;
-                keyboard.input::<(), _>(
-                    &mut self.app,
-                    code,
-                    key_state,
-                    SERIAL_COUNTER.next_serial(),
-                    time,
-                    |st, mods, handle| {
-                        if !pressed {
-                            return FilterResult::Forward;
-                        }
-                        let combo = combo_string(mods, handle.modified_sym());
-                        let grabbed = combo.as_ref().is_some_and(|c| st.grabs.contains(c));
-                        eprintln!("input · tecla {code:?} → combo {combo:?} · atajo={grabbed}");
-                        if grabbed {
-                            st.pending_keybind = combo;
-                            return FilterResult::Intercept(());
-                        }
-                        FilterResult::Forward
-                    },
-                );
-                if let Some(combo) = self.app.pending_keybind.take() {
-                    let ev = self.app.body.keybind(combo);
-                    self.app.brain_feed(ev);
+        let InputEvent::Keyboard { event } = event else {
+            return; // dispositivos, puntero, táctil: aún no
+        };
+        let Some(keyboard) = self.app.keyboard.clone() else {
+            return;
+        };
+        let code = event.key_code();
+        let key_state = event.state();
+        let pressed = key_state == KeyState::Pressed;
+        let time = self.start.elapsed().as_millis() as u32;
+        keyboard.input::<(), _>(
+            &mut self.app,
+            code,
+            key_state,
+            SERIAL_COUNTER.next_serial(),
+            time,
+            |st, mods, handle| {
+                if !pressed {
+                    return FilterResult::Forward;
                 }
-            }
-            _ => {} // puntero/táctil: pendiente
+                if let Some(combo) = combo_string(mods, handle.modified_sym()) {
+                    if st.grabs.contains(&combo) {
+                        st.pending_keybind = Some(combo);
+                        return FilterResult::Intercept(());
+                    }
+                }
+                FilterResult::Forward
+            },
+        );
+        if let Some(combo) = self.app.pending_keybind.take() {
+            let ev = self.app.body.keybind(combo);
+            self.app.brain_feed(ev);
         }
     }
 }
@@ -472,13 +448,13 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         })
         .map_err(|e| format!("insert timer: {e}"))?;
 
-    // Salida garantizada mientras depuramos: se cierra solo a los N s
-    // (env `MIRADA_DRM_TIMEOUT`, 0 lo desactiva) — así nunca te quedas
-    // atrapado si el teclado aún no responde.
+    // Tope de tiempo opcional: `MIRADA_DRM_TIMEOUT=<segundos>` cierra el
+    // compositor solo (0 o sin definir = sin tope). El teclado ya
+    // funciona — `Super+Shift+e` o `Ctrl+C` son la salida normal.
     let timeout_secs: u64 = std::env::var("MIRADA_DRM_TIMEOUT")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(60);
+        .unwrap_or(0);
 
     println!("──────────────────────────────────────────────────");
     println!("mirada-compositor · escritorio en marcha sobre «{out_name}».");
@@ -499,7 +475,6 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         ctl,
         start: Instant::now(),
         last_windows: 0,
-        tick_count: 0,
     };
 
     let signal = event_loop.get_signal();
