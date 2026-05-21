@@ -48,6 +48,8 @@ pub struct WindowPlacement {
     pub focused: bool,
     /// `true` si flota (fuera del teselado): el Cuerpo la pinta encima.
     pub floating: bool,
+    /// `true` si está en pantalla completa: cubre toda la salida.
+    pub fullscreen: bool,
 }
 
 /// Una orden del Cerebro al Cuerpo.
@@ -140,20 +142,31 @@ pub fn read_frame<R: Read, T: DeserializeOwned>(r: &mut R) -> io::Result<Option<
 /// En modo [`LayoutMode::Monocle`] sólo la ventana enfocada queda
 /// `visible`; en el resto de modos todas lo están.
 pub fn placements(ws: &Workspace, screen: Rect) -> Vec<WindowPlacement> {
+    let fullscreen = ws.fullscreen();
     let monocle = ws.params().mode == LayoutMode::Monocle;
     let focused = ws.focused();
     ws.layout(screen)
         .into_iter()
         .map(|(id, rect)| {
-            let is_focused = focused == Some(id);
             let floating = ws.is_floating(id);
+            let is_fs = fullscreen == Some(id);
+            // Con una ventana en pantalla completa manda ella: ocupa toda
+            // la salida, es la única visible y se lleva el foco.
+            let (rect, visible, is_focused) = match fullscreen {
+                Some(_) => (if is_fs { screen } else { rect }, is_fs, is_fs),
+                None => {
+                    let f = focused == Some(id);
+                    // Una flotante siempre se ve; en `Monocle`, sólo la enfocada.
+                    (rect, floating || !monocle || f, f)
+                }
+            };
             WindowPlacement {
                 id,
                 rect,
-                // Una flotante siempre se ve; en `Monocle`, sólo la enfocada.
-                visible: floating || !monocle || is_focused,
+                visible,
                 focused: is_focused,
                 floating,
+                fullscreen: is_fs,
             }
         })
         .collect()
@@ -183,6 +196,7 @@ mod tests {
             visible: true,
             focused: true,
             floating: false,
+            fullscreen: false,
         }]);
         let mut buf = Vec::new();
         write_frame(&mut buf, &cmd).unwrap();
@@ -275,6 +289,19 @@ mod tests {
         assert!(f.visible, "una flotante se ve aunque el modo sea Monocle");
         // Y conserva su rectángulo flotante.
         assert_eq!(f.rect, Rect::new(0, 0, 200, 200));
+    }
+
+    #[test]
+    fn a_fullscreen_window_covers_the_screen_and_hides_the_rest() {
+        let mut w = ws(LayoutMode::Columns);
+        w.set_fullscreen(Some(20));
+        let p = placements(&w, SCREEN);
+        let fs = p.iter().find(|x| x.id == 20).unwrap();
+        assert!(fs.fullscreen);
+        assert!(fs.focused, "la ventana en pantalla completa se lleva el foco");
+        assert_eq!(fs.rect, SCREEN);
+        // El resto queda oculto.
+        assert!(p.iter().filter(|x| x.id != 20).all(|x| !x.visible));
     }
 
     #[test]

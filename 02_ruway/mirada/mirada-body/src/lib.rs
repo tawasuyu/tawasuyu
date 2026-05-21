@@ -31,6 +31,8 @@ pub struct Surface {
     pub focused: bool,
     /// `true` si flota: el backend la pinta por encima de las teseladas.
     pub floating: bool,
+    /// `true` si está en pantalla completa.
+    pub fullscreen: bool,
 }
 
 impl Surface {
@@ -42,6 +44,7 @@ impl Surface {
             visible: false,
             focused: false,
             floating: false,
+            fullscreen: false,
         }
     }
 }
@@ -49,9 +52,16 @@ impl Surface {
 /// Una orden concreta para el backend (smithay, headless, …).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BodyOp {
-    /// Recoloca una superficie, la muestra u oculta y dice si flota
-    /// (las flotantes se componen por encima de las teseladas).
-    Configure { id: WindowId, rect: Rect, visible: bool, floating: bool },
+    /// Recoloca una superficie, la muestra u oculta y dice si flota o
+    /// está en pantalla completa (el backend ajusta el orden de pintado
+    /// y el estado `xdg_toplevel` en consecuencia).
+    Configure {
+        id: WindowId,
+        rect: Rect,
+        visible: bool,
+        floating: bool,
+        fullscreen: bool,
+    },
     /// Da el foco del teclado a una superficie.
     Focus(WindowId),
     /// Quita el foco a todas las superficies.
@@ -104,15 +114,18 @@ impl BodyState {
                         if s.geometry != Some(p.rect)
                             || s.visible != p.visible
                             || s.floating != p.floating
+                            || s.fullscreen != p.fullscreen
                         {
                             s.geometry = Some(p.rect);
                             s.visible = p.visible;
                             s.floating = p.floating;
+                            s.fullscreen = p.fullscreen;
                             ops.push(BodyOp::Configure {
                                 id: p.id,
                                 rect: p.rect,
                                 visible: p.visible,
                                 floating: p.floating,
+                                fullscreen: p.fullscreen,
                             });
                         }
                     }
@@ -128,6 +141,7 @@ impl BodyState {
                             rect,
                             visible: false,
                             floating: s.floating,
+                            fullscreen: s.fullscreen,
                         });
                     }
                 }
@@ -248,6 +262,7 @@ mod tests {
             visible,
             focused,
             floating: false,
+            fullscreen: false,
         }
     }
 
@@ -310,6 +325,7 @@ mod tests {
             rect: Rect::new(0, 0, 800, 600),
             visible: false,
             floating: false,
+            fullscreen: false,
         }));
         assert!(!b.surface(2).unwrap().visible);
     }

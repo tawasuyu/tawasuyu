@@ -21,6 +21,9 @@ pub struct Workspace {
     /// Ventanas flotantes y su rectángulo: salen del teselado y se pintan
     /// encima. Las que no están aquí se teselan normalmente.
     floating: BTreeMap<WindowId, Rect>,
+    /// La ventana en pantalla completa, si hay alguna: cubre toda la
+    /// salida y oculta al resto.
+    fullscreen: Option<WindowId>,
 }
 
 impl Workspace {
@@ -31,6 +34,7 @@ impl Workspace {
             focus: 0,
             params,
             floating: BTreeMap::new(),
+            fullscreen: None,
         }
     }
 
@@ -84,6 +88,9 @@ impl Workspace {
         };
         self.windows.remove(i);
         self.floating.remove(&window);
+        if self.fullscreen == Some(window) {
+            self.fullscreen = None;
+        }
         if i < self.focus {
             self.focus -= 1;
         }
@@ -109,6 +116,16 @@ impl Workspace {
     /// `true` si la ventana está flotando.
     pub fn is_floating(&self, window: WindowId) -> bool {
         self.floating.contains_key(&window)
+    }
+
+    /// La ventana en pantalla completa de este escritorio, si hay alguna.
+    pub fn fullscreen(&self) -> Option<WindowId> {
+        self.fullscreen
+    }
+
+    /// Pone (o quita, con `None`) la ventana en pantalla completa.
+    pub fn set_fullscreen(&mut self, window: Option<WindowId>) {
+        self.fullscreen = window;
     }
 
     /// Ventana enfocada, o `None` si el escritorio está vacío.

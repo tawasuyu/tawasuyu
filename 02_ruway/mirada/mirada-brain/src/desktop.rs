@@ -218,6 +218,18 @@ impl Desktop {
                 }
                 self.relayout()
             }
+            DesktopAction::ToggleFullscreen => {
+                let Some(id) = self.workspaces[self.active].focused() else {
+                    return Vec::new();
+                };
+                let ws = &mut self.workspaces[self.active];
+                if ws.fullscreen() == Some(id) {
+                    ws.set_fullscreen(None);
+                } else {
+                    ws.set_fullscreen(Some(id));
+                }
+                self.relayout()
+            }
             DesktopAction::CycleLayout => {
                 let next = self.workspaces[self.active].params().mode.next();
                 self.workspaces[self.active].set_mode(next);
@@ -473,6 +485,23 @@ mod tests {
         // Alternar de nuevo la devuelve al teselado.
         let cmds = d.apply(DesktopAction::ToggleFloat);
         assert!(!places(&cmds).iter().find(|x| x.id == 2).unwrap().floating);
+    }
+
+    #[test]
+    fn toggle_fullscreen_covers_the_screen_and_hides_the_rest() {
+        let mut d = desktop_with_screen();
+        for id in [1, 2, 3] {
+            open(&mut d, id);
+        }
+        let cmds = d.apply(DesktopAction::ToggleFullscreen); // sobre la 3
+        let p = places(&cmds);
+        let fs = p.iter().find(|x| x.id == 3).unwrap();
+        assert!(fs.fullscreen && fs.visible);
+        assert_eq!(fs.rect, d.screen().unwrap());
+        assert!(p.iter().filter(|x| x.id != 3).all(|x| !x.visible));
+        // Alternar de nuevo restaura el teselado: las tres visibles.
+        let cmds = d.apply(DesktopAction::ToggleFullscreen);
+        assert_eq!(places(&cmds).iter().filter(|x| x.visible).count(), 3);
     }
 
     #[test]

@@ -174,13 +174,18 @@ impl App {
     /// Ejecuta una operación concreta sobre las superficies reales.
     fn exec_op(&mut self, op: BodyOp) {
         match op {
-            BodyOp::Configure { id, rect, visible, floating } => {
+            BodyOp::Configure { id, rect, visible, floating, fullscreen } => {
                 if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
                     w.loc = (rect.x, rect.y);
                     w.visible = visible;
                     w.floating = floating;
                     w.toplevel.with_pending_state(|s| {
                         s.size = Some((rect.w.max(1), rect.h.max(1)).into());
+                        if fullscreen {
+                            s.states.set(xdg_toplevel::State::Fullscreen);
+                        } else {
+                            s.states.unset(xdg_toplevel::State::Fullscreen);
+                        }
                     });
                     w.toplevel.send_pending_configure();
                 }

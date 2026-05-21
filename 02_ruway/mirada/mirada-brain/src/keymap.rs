@@ -238,6 +238,7 @@ const KEYMAP_HEADER: &str = "\
 //   move-forward / move-backward     reordena la ventana enfocada
 //   close-focused                    cierra la enfocada
 //   toggle-float                     alterna flotante / teselada
+//   toggle-fullscreen                alterna pantalla completa
 //   cycle-layout                     siguiente modo de teselado
 //   layout:<modo>                    master-stack | centered-master | spiral
 //                                    grid | columns | rows | monocle

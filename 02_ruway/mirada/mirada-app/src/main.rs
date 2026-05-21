@@ -21,7 +21,7 @@
 //! ```text
 //!   n            abre una ventana          tab / espacio  cicla layout
 //!   w            cierra la enfocada        t m g c r d s  layout directo
-//!   f            flota / tesela            h / l          área maestra −/+
+//!   f / Shift+f  flota / pantalla completa h / l          área maestra −/+
 //!   j / k        foco siguiente/anterior   , / .          nmaster −/+
 //!   Shift+j / k  mueve la enfocada         1..9           ir a escritorio
 //!   Enter        promueve a maestra        Ctrl+1..9      enviar a escritorio
@@ -283,6 +283,7 @@ impl Mirada {
         match ks.key.as_str() {
             "n" if !connected => self.open_window(),
             "w" => self.act(DesktopAction::CloseFocused),
+            "f" if shift => self.act(DesktopAction::ToggleFullscreen),
             "f" => self.act(DesktopAction::ToggleFloat),
             "j" if shift => self.act(DesktopAction::MoveForward),
             "k" if shift => self.act(DesktopAction::MoveBackward),
@@ -454,7 +455,9 @@ impl Render for Mirada {
             let tb_bg = if p.focused { theme.accent } else { theme.bg_row_hover };
             let tb_fg = if p.focused { on_accent } else { theme.fg_muted };
             let pid = p.id;
-            let kind_label = if p.floating {
+            let kind_label = if p.fullscreen {
+                "· pantalla completa ·"
+            } else if p.floating {
                 "· ventana flotante ·"
             } else {
                 "· superficie del Cuerpo ·"

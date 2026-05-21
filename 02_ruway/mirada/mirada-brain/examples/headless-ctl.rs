@@ -60,7 +60,13 @@ fn main() {
                                             p.rect.h,
                                             p.rect.x,
                                             p.rect.y,
-                                            if p.floating { "  ~flotante" } else { "" },
+                                            if p.fullscreen {
+                                                "  ~pantalla"
+                                            } else if p.floating {
+                                                "  ~flotante"
+                                            } else {
+                                                ""
+                                            },
                                             if p.focused { "  *" } else { "" },
                                         );
                                     }
