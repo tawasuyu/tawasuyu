@@ -2,8 +2,8 @@
 //! una o varias líneas de código Rust sobre `charka-runtime`.
 
 use charka_ir::{
-    CmpOp, Cond, InspectOp, Operand, Perform, PerformControl, PerformTarget, Stmt, WhenBranch,
-    WhenTest,
+    CmpOp, Cond, FileMode, InspectOp, Operand, Perform, PerformControl, PerformTarget, Stmt,
+    WhenBranch, WhenTest,
 };
 
 use crate::emit::Emitter;
@@ -88,6 +88,14 @@ pub(crate) fn emit_stmt(em: &mut Emitter, sym: &Symbols, stmt: &Stmt) {
         Stmt::Inspect { target, op } => emit_inspect(em, sym, target, op),
         Stmt::Initialize { targets } => emit_initialize(em, sym, targets),
         Stmt::SetTrue { conditions } => emit_set_true(em, sym, conditions),
+        Stmt::Open { mode, files } => emit_open(em, sym, *mode, files),
+        Stmt::Close { files } => emit_close(em, sym, files),
+        Stmt::Read {
+            file,
+            at_end,
+            not_at_end,
+        } => emit_read(em, sym, file, at_end, not_at_end),
+        Stmt::Write { record, from } => emit_write(em, sym, record, from.as_ref()),
         Stmt::Perform(p) => emit_perform(em, sym, p),
         Stmt::GoTo { target } => {
             em.line(&format!(
@@ -490,6 +498,77 @@ fn emit_initialize(em: &mut Emitter, sym: &Symbols, targets: &[Operand]) {
             Operand::Indexed { .. } => emit_reset_element(em, sym, t),
             _ => {}
         }
+    }
+}
+
+/// `OPEN {INPUT|OUTPUT} files...`
+fn emit_open(em: &mut Emitter, sym: &Symbols, mode: FileMode, files: &[String]) {
+    let method = match mode {
+        FileMode::Input => "open_input",
+        FileMode::Output => "open_output",
+    };
+    for f in files {
+        match sym.file(f) {
+            Some(fs) => em.line(&format!("self.{}.{method}();", fs.ident)),
+            None => em.line("// charka: OPEN de fichero no resuelto"),
+        }
+    }
+}
+
+/// `CLOSE files...`
+fn emit_close(em: &mut Emitter, sym: &Symbols, files: &[String]) {
+    for f in files {
+        match sym.file(f) {
+            Some(fs) => em.line(&format!("self.{}.close();", fs.ident)),
+            None => em.line("// charka: CLOSE de fichero no resuelto"),
+        }
+    }
+}
+
+/// `READ file [AT END ...] [NOT AT END ...]` — lee la línea siguiente
+/// en el registro del fichero.
+fn emit_read(em: &mut Emitter, sym: &Symbols, file: &str, at_end: &[Stmt], not_at_end: &[Stmt]) {
+    let Some(fs) = sym.file(file) else {
+        em.line("// charka: READ de fichero no resuelto");
+        return;
+    };
+    let record_ident = sym.lookup(&fs.record).map(|r| r.ident.clone());
+    em.line(&format!("match self.{}.read() {{", fs.ident));
+    em.indent();
+    em.line("Some(__line) => {");
+    em.indent();
+    if let Some(rec) = &record_ident {
+        em.line(&format!("self.{rec}.store(__line.as_str());"));
+    }
+    emit_block(em, sym, not_at_end);
+    em.dedent();
+    em.line("}");
+    em.line("None => {");
+    em.indent();
+    emit_block(em, sym, at_end);
+    em.dedent();
+    em.line("}");
+    em.dedent();
+    em.line("}");
+}
+
+/// `WRITE record [FROM from]` — escribe el registro en su fichero.
+fn emit_write(em: &mut Emitter, sym: &Symbols, record: &str, from: Option<&Operand>) {
+    if let Some(src) = from {
+        if let Some((lref, _)) = field_ref(sym, &Operand::Data(record.to_string())) {
+            em.line(&format!("{lref}.store({});", operand_str(sym, src)));
+        }
+    }
+    match sym.file_of_record(record) {
+        Some(fs) => {
+            if let Some(rec) = sym.lookup(record) {
+                em.line(&format!(
+                    "self.{}.write(&self.{}.display());",
+                    fs.ident, rec.ident
+                ));
+            }
+        }
+        None => em.line("// charka: WRITE de registro no resuelto"),
     }
 }
 

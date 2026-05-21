@@ -34,8 +34,19 @@ pub struct Program {
     pub program_id: Option<String>,
     /// Los ítems raíz de la DATA division (cada `01`/`77` con su árbol).
     pub data: Vec<DataItem>,
+    /// Los ficheros declarados (`SELECT` + `FD`).
+    pub files: Vec<FileEntry>,
     /// Los párrafos de la PROCEDURE division, en orden de aparición.
     pub paragraphs: Vec<Paragraph>,
+}
+
+/// Un fichero declarado: su nombre lógico, la ruta a la que se asigna
+/// (`ASSIGN TO`) y el dato de registro asociado (el `01` bajo su `FD`).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FileEntry {
+    pub name: String,
+    pub path: String,
+    pub record: String,
 }
 
 /// Un ítem de datos de la DATA division: un número de nivel, un nombre
@@ -110,8 +121,17 @@ pub fn parse(tokens: &[Token]) -> Result<Program, ParseError> {
         let body = &tokens[lo..next.max(lo)];
         match kind {
             DivKind::Identification => parse_identification(body, &mut program),
-            DivKind::Environment => {} // la v1 ignora la ENVIRONMENT division
-            DivKind::Data => program.data = parse_data(body)?,
+            DivKind::Environment => parse_environment(body, &mut program),
+            DivKind::Data => {
+                let (data, fd_records) = parse_data(body)?;
+                program.data = data;
+                // Asocia cada `FD` con el registro `01` que le sigue.
+                for (fd, record) in fd_records {
+                    if let Some(f) = program.files.iter_mut().find(|f| f.name == fd) {
+                        f.record = record;
+                    }
+                }
+            }
             DivKind::Procedure => program.paragraphs = parse_procedure(body),
         }
     }
@@ -165,20 +185,76 @@ fn parse_identification(body: &[Token], program: &mut Program) {
 }
 
 /// Parsea el cuerpo de la DATA division en un árbol de [`DataItem`].
-fn parse_data(body: &[Token]) -> Result<Vec<DataItem>, ParseError> {
+/// Parsea la cláusula `FILE-CONTROL` de la ENVIRONMENT division: cada
+/// `SELECT name ASSIGN TO "ruta"` se registra como un fichero.
+fn parse_environment(body: &[Token], program: &mut Program) {
+    for sent in split_sentences(body) {
+        if kw(sent.first()).as_deref() != Some("SELECT") {
+            continue;
+        }
+        let Some(name_tok) = sent.get(1) else {
+            continue;
+        };
+        if name_tok.kind != TokenKind::Word {
+            continue;
+        }
+        let mut path = String::new();
+        let mut i = 2;
+        while i < sent.len() {
+            if kw(sent.get(i)).as_deref() == Some("ASSIGN") {
+                i += 1;
+                if kw(sent.get(i)).as_deref() == Some("TO") {
+                    i += 1;
+                }
+                if let Some(t) = sent.get(i) {
+                    path = t.text.clone();
+                }
+                break;
+            }
+            i += 1;
+        }
+        program.files.push(FileEntry {
+            name: name_tok.text.to_uppercase(),
+            path,
+            record: String::new(),
+        });
+    }
+}
+
+/// El resultado de parsear la DATA division: el árbol de datos y las
+/// parejas `(FD, registro)` — el `01` que sigue a cada `FD`.
+type DataResult = (Vec<DataItem>, Vec<(String, String)>);
+
+/// Parsea la DATA division.
+fn parse_data(body: &[Token]) -> Result<DataResult, ParseError> {
     let mut flat = Vec::new();
+    let mut fd_records = Vec::new();
+    let mut pending_fd: Option<String> = None;
     for sent in split_sentences(body) {
         let Some(first) = sent.first() else { continue };
-        // Sólo las sentencias que arrancan con un número de nivel son
-        // entradas de datos; los encabezados de SECTION y las entradas
-        // FD/SD empiezan con palabra y se ignoran.
+        // Las sentencias que arrancan con un número de nivel son
+        // entradas de datos; las demás son encabezados de SECTION o
+        // de `FD`/`SD`.
         if first.kind != TokenKind::Number {
+            if matches!(kw(Some(first)).as_deref(), Some("FD") | Some("SD")) {
+                pending_fd = sent
+                    .get(1)
+                    .filter(|t| t.kind == TokenKind::Word)
+                    .map(|t| t.text.to_uppercase());
+            }
             continue;
         }
         let level = parse_level(first)?;
-        flat.push(parse_data_entry(level, &sent)?);
+        let entry = parse_data_entry(level, &sent)?;
+        // El primer `01` tras un `FD` es su registro.
+        if level == 1 {
+            if let Some(fd) = pending_fd.take() {
+                fd_records.push((fd, entry.name.clone()));
+            }
+        }
+        flat.push(entry);
     }
-    Ok(build_tree(flat))
+    Ok((build_tree(flat), fd_records))
 }
 
 /// Valida que el token sea un número de nivel COBOL (01-49, 66, 77, 88).
@@ -622,6 +698,26 @@ mod tests {
         assert_eq!(p.data[0].children.len(), 2);
         assert_eq!(p.data[0].children[0].name, "FILLER");
         assert_eq!(p.data[0].children[1].name, "FILLER");
+    }
+
+    #[test]
+    fn select_and_fd_captured() {
+        let p = parse_src(
+            "ENVIRONMENT DIVISION.\n\
+             INPUT-OUTPUT SECTION.\n\
+             FILE-CONTROL.\n\
+                 SELECT CLIENTES ASSIGN TO 'clientes.dat'.\n\
+             DATA DIVISION.\n\
+             FILE SECTION.\n\
+             FD CLIENTES.\n\
+             01 REG-CLIENTE PIC X(40).\n\
+             WORKING-STORAGE SECTION.\n\
+             01 WS-FIN PIC X.\n",
+        );
+        assert_eq!(p.files.len(), 1);
+        assert_eq!(p.files[0].name, "CLIENTES");
+        assert_eq!(p.files[0].path, "clientes.dat");
+        assert_eq!(p.files[0].record, "REG-CLIENTE");
     }
 
     #[test]

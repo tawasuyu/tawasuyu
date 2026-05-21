@@ -17,10 +17,12 @@
 
 #![forbid(unsafe_code)]
 
+mod file;
 mod num;
 mod text;
 
 pub use charka_bcd::{Decimal, Picture, Rounding};
+pub use file::CobFile;
 pub use num::Num;
 pub use text::Text;
 

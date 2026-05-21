@@ -81,6 +81,9 @@ fn emit_struct(em: &mut Emitter, sym: &Symbols) {
         };
         em.line(&format!("{}: {ty},", f.ident));
     }
+    for fs in &sym.files {
+        em.line(&format!("{}: CobFile,", fs.ident));
+    }
     em.dedent();
     em.line("}");
     em.blank();
@@ -98,6 +101,13 @@ fn emit_impl(em: &mut Emitter, sym: &Symbols, ir: &Ir) {
     em.indent();
     for f in &sym.fields {
         em.line(&format!("{}: {},", f.ident, field_init(f)));
+    }
+    for fs in &sym.files {
+        em.line(&format!(
+            "{}: CobFile::new({}),",
+            fs.ident,
+            rust_str(&fs.path)
+        ));
     }
     em.dedent();
     em.line("}");
@@ -436,6 +446,32 @@ mod tests {
         // `PERFORM A THRU C` emite la llamada a p_b dentro de p_main,
         // además de la que hace run() — de ahí >= 2 apariciones.
         assert!(out.matches("self.p_b();").count() >= 2);
+    }
+
+    #[test]
+    fn file_io_emits_open_read_write_close() {
+        let out = gen("ENVIRONMENT DIVISION.\n\
+             INPUT-OUTPUT SECTION.\n\
+             FILE-CONTROL.\n\
+                 SELECT ARCH ASSIGN TO 'x.dat'.\n\
+             DATA DIVISION.\n\
+             FILE SECTION.\n\
+             FD ARCH.\n\
+             01 REG PIC X(10).\n\
+             PROCEDURE DIVISION.\n\
+             MAIN.\n\
+                 OPEN OUTPUT ARCH.\n\
+                 WRITE REG FROM 'HI'.\n\
+                 CLOSE ARCH.\n\
+                 OPEN INPUT ARCH.\n\
+                 READ ARCH AT END CONTINUE END-READ.\n\
+                 CLOSE ARCH.\n");
+        assert!(out.contains("file_arch: CobFile,"));
+        assert!(out.contains("CobFile::new(\"x.dat\")"));
+        assert!(out.contains("self.file_arch.open_output();"));
+        assert!(out.contains("self.file_arch.write("));
+        assert!(out.contains("self.file_arch.read()"));
+        assert!(out.contains("self.file_arch.close();"));
     }
 
     #[test]

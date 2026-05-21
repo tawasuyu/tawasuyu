@@ -8,10 +8,10 @@
 use std::collections::HashMap;
 
 use charka_ir::{
-    BinOp, CmpOp, Cond, ConditionName, Expr, Figurative, InspectOp, Ir, Operand, Perform,
+    BinOp, CmpOp, Cond, ConditionName, Expr, Figurative, FileMode, InspectOp, Ir, Operand, Perform,
     PerformControl, PerformTarget, Stmt, WhenTest,
 };
-use charka_runtime::{cobol_text_cmp, Decimal, Num, Rounding, Text};
+use charka_runtime::{cobol_text_cmp, CobFile, Decimal, Num, Rounding, Text};
 
 use crate::field::{build_fields, Cell};
 
@@ -39,6 +39,7 @@ pub(crate) struct Machine<'a> {
     fields: HashMap<String, Cell>,
     para_index: HashMap<String, usize>,
     conditions: HashMap<String, ConditionName>,
+    files: HashMap<String, CobFile>,
     pub output: Vec<String>,
     budget: u64,
     pub step_limit_hit: bool,
@@ -58,11 +59,17 @@ impl<'a> Machine<'a> {
             .iter()
             .map(|c| (c.name.clone(), c.clone()))
             .collect();
+        let files = ir
+            .files
+            .iter()
+            .map(|f| (f.name.to_uppercase(), CobFile::new(&f.path)))
+            .collect();
         Self {
             ir,
             fields: build_fields(&ir.model),
             para_index,
             conditions,
+            files,
             output: Vec::new(),
             budget: STEP_BUDGET,
             step_limit_hit: false,
@@ -316,6 +323,69 @@ impl<'a> Machine<'a> {
                 for name in conditions {
                     if let Some(cn) = self.conditions.get(&name.to_uppercase()).cloned() {
                         self.do_move(&cn.value, &Operand::Data(cn.parent));
+                    }
+                }
+                Flow::Normal
+            }
+            Stmt::Open { mode, files } => {
+                for f in files {
+                    if let Some(cf) = self.files.get_mut(&f.to_uppercase()) {
+                        match mode {
+                            FileMode::Input => cf.open_input(),
+                            FileMode::Output => cf.open_output(),
+                        }
+                    }
+                }
+                Flow::Normal
+            }
+            Stmt::Close { files } => {
+                for f in files {
+                    if let Some(cf) = self.files.get_mut(&f.to_uppercase()) {
+                        cf.close();
+                    }
+                }
+                Flow::Normal
+            }
+            Stmt::Read {
+                file,
+                at_end,
+                not_at_end,
+            } => {
+                let line = self
+                    .files
+                    .get_mut(&file.to_uppercase())
+                    .and_then(|cf| cf.read());
+                match line {
+                    Some(text) => {
+                        let record = self
+                            .ir
+                            .files
+                            .iter()
+                            .find(|f| f.name.eq_ignore_ascii_case(file))
+                            .map(|f| f.record.clone());
+                        if let Some(rec) = record {
+                            self.store_text(&Operand::Data(rec), &text);
+                        }
+                        self.exec_block(not_at_end)
+                    }
+                    None => self.exec_block(at_end),
+                }
+            }
+            Stmt::Write { record, from } => {
+                if let Some(src) = from {
+                    let text = self.eval_text(src);
+                    self.store_text(&Operand::Data(record.clone()), &text);
+                }
+                let file = self
+                    .ir
+                    .files
+                    .iter()
+                    .find(|f| f.record.eq_ignore_ascii_case(record))
+                    .map(|f| f.name.to_uppercase());
+                if let Some(file) = file {
+                    let line = self.eval_text(&Operand::Data(record.clone()));
+                    if let Some(cf) = self.files.get_mut(&file) {
+                        cf.write(&line);
                     }
                 }
                 Flow::Normal

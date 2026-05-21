@@ -19,7 +19,8 @@
 //! condiciones `AND`/`OR`/`NOT`), `EVALUATE`/`WHEN`, `STRING`,
 //! `UNSTRING`, `INSPECT`, `PERFORM` (fuera de línea, en línea,
 //! `TIMES`, `UNTIL`, `VARYING`), `GO TO`, `STOP RUN`, `GOBACK`,
-//! `EXIT`, `CONTINUE`. Fuera de alcance: E/S de ficheros, CICS y SQL.
+//! `EXIT`, `CONTINUE`, E/S de ficheros (`OPEN`/`READ`/`WRITE`/`CLOSE`).
+//! Fuera de alcance: CICS y SQL embebido.
 
 #![forbid(unsafe_code)]
 
@@ -58,6 +59,7 @@ pub fn lower(program: &Program) -> Ir {
         program_id: program.program_id.clone().unwrap_or_default(),
         data: program.data.clone(),
         model: model::resolve_data(&program.data),
+        files: program.files.clone(),
         procedures,
     }
 }
@@ -469,6 +471,39 @@ mod tests {
             }
             other => panic!("se esperaba SET, vino {other:?}"),
         }
+    }
+
+    #[test]
+    fn file_io_statements_parse() {
+        let program = ir("ENVIRONMENT DIVISION.\n\
+             INPUT-OUTPUT SECTION.\n\
+             FILE-CONTROL.\n\
+                 SELECT ARCH ASSIGN TO 'datos.dat'.\n\
+             DATA DIVISION.\n\
+             FILE SECTION.\n\
+             FD ARCH.\n\
+             01 REG PIC X(20).\n\
+             PROCEDURE DIVISION.\n\
+             MAIN.\n\
+                 OPEN OUTPUT ARCH.\n\
+                 WRITE REG FROM 'HOLA'.\n\
+                 CLOSE ARCH.\n\
+                 OPEN INPUT ARCH.\n\
+                 READ ARCH AT END CONTINUE NOT AT END DISPLAY REG END-READ.\n\
+                 CLOSE ARCH.\n");
+        assert_eq!(program.files.len(), 1);
+        assert_eq!(program.files[0].record, "REG");
+        let body = &program.procedures[0].body;
+        assert!(matches!(
+            body[0],
+            Stmt::Open {
+                mode: FileMode::Output,
+                ..
+            }
+        ));
+        assert!(matches!(&body[1], Stmt::Write { record, .. } if record == "REG"));
+        assert!(matches!(body[2], Stmt::Close { .. }));
+        assert!(matches!(&body[4], Stmt::Read { not_at_end, .. } if not_at_end.len() == 1));
     }
 
     #[test]

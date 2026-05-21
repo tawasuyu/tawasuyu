@@ -24,8 +24,20 @@ pub(crate) struct Field {
     pub occurs: Option<u32>,
 }
 
-/// Los campos del programa, sus nombres de condición, sus grupos y
-/// sus párrafos.
+/// Un fichero del programa generado.
+pub(crate) struct FileSym {
+    /// Nombre COBOL del fichero.
+    pub cobol: String,
+    /// Identificador Rust del campo `CobFile` (prefijo `file_`).
+    pub ident: String,
+    /// Ruta a la que está asignado.
+    pub path: String,
+    /// Nombre COBOL del registro asociado (su `FD`).
+    pub record: String,
+}
+
+/// Los campos del programa, sus nombres de condición, sus grupos, sus
+/// párrafos y sus ficheros.
 pub(crate) struct Symbols {
     pub fields: Vec<Field>,
     by_name: HashMap<String, usize>,
@@ -33,6 +45,8 @@ pub(crate) struct Symbols {
     groups: HashMap<String, Vec<String>>,
     /// Los párrafos en orden: `(nombre COBOL, nombre de método Rust)`.
     pub paragraphs: Vec<(String, String)>,
+    /// Los ficheros declarados.
+    pub files: Vec<FileSym>,
 }
 
 impl Symbols {
@@ -79,13 +93,36 @@ impl Symbols {
                 (proc.name.to_uppercase(), method)
             })
             .collect();
+        let files = ir
+            .files
+            .iter()
+            .map(|f| FileSym {
+                cobol: f.name.clone(),
+                ident: format!("file_{}", sanitize_ident(&f.name)),
+                path: f.path.clone(),
+                record: f.record.clone(),
+            })
+            .collect();
         Self {
             fields,
             by_name,
             conditions,
             groups,
             paragraphs,
+            files,
         }
+    }
+
+    /// Busca un fichero por su nombre COBOL.
+    pub(crate) fn file(&self, name: &str) -> Option<&FileSym> {
+        let up = name.to_uppercase();
+        self.files.iter().find(|f| f.cobol == up)
+    }
+
+    /// Busca el fichero cuyo registro `FD` es `record`.
+    pub(crate) fn file_of_record(&self, record: &str) -> Option<&FileSym> {
+        let up = record.to_uppercase();
+        self.files.iter().find(|f| f.record == up)
     }
 
     /// Los métodos a llamar para un `PERFORM name [THRU thru]`: el

@@ -6,7 +6,8 @@
 use charka_parser::TokenKind;
 
 use crate::ast::{
-    InspectOp, Operand, Perform, PerformControl, PerformTarget, Stmt, WhenBranch, WhenTest,
+    FileMode, InspectOp, Operand, Perform, PerformControl, PerformTarget, Stmt, WhenBranch,
+    WhenTest,
 };
 use crate::cursor::{parse_operand, Cursor};
 use crate::expr::{parse_cond, parse_expr};
@@ -46,6 +47,10 @@ fn parse_one_stmt(c: &mut Cursor, stops: &[&str]) -> Stmt {
         "INSPECT" => parse_inspect(c),
         "INITIALIZE" => parse_initialize(c),
         "SET" => parse_set(c),
+        "OPEN" => parse_open(c),
+        "CLOSE" => parse_close(c),
+        "READ" => parse_read(c),
+        "WRITE" => parse_write(c),
         "PERFORM" => parse_perform(c),
         "GO" => parse_goto(c),
         "STOP" => parse_stop(c),
@@ -416,6 +421,79 @@ fn parse_initialize(c: &mut Cursor) -> Stmt {
     let targets = parse_targets(c, &mut rounded);
     skip_to_stmt_boundary(c); // p. ej. la cláusula `REPLACING`
     Stmt::Initialize { targets }
+}
+
+fn parse_open(c: &mut Cursor) -> Stmt {
+    c.bump(); // OPEN
+    let mode = if c.eat_word("OUTPUT") || c.eat_word("EXTEND") {
+        FileMode::Output
+    } else {
+        c.eat_word("INPUT");
+        c.eat_word("I-O");
+        FileMode::Input
+    };
+    let mut files = Vec::new();
+    while let Some(w) = c.peek_word() {
+        if is_boundary(&w) || matches!(w.as_str(), "INPUT" | "OUTPUT" | "EXTEND" | "I-O") {
+            break;
+        }
+        c.bump();
+        files.push(w);
+    }
+    skip_to_stmt_boundary(c);
+    Stmt::Open { mode, files }
+}
+
+fn parse_close(c: &mut Cursor) -> Stmt {
+    c.bump(); // CLOSE
+    let mut files = Vec::new();
+    while let Some(name) = parse_one_name(c) {
+        files.push(name);
+    }
+    Stmt::Close { files }
+}
+
+fn parse_read(c: &mut Cursor) -> Stmt {
+    c.bump(); // READ
+    let file = parse_one_name(c).unwrap_or_default();
+    c.eat_word("NEXT");
+    c.eat_word("RECORD");
+    if c.eat_word("INTO") {
+        let _ = parse_operand(c); // `READ ... INTO`: la v1 lo ignora
+    }
+    let mut at_end = Vec::new();
+    let mut not_at_end = Vec::new();
+    loop {
+        if c.eat_word("AT") {
+            c.eat_word("END");
+            at_end = parse_statements(c, &["NOT", "END-READ"]);
+        } else if c.eat_word("NOT") {
+            c.eat_word("AT");
+            c.eat_word("END");
+            not_at_end = parse_statements(c, &["END-READ"]);
+        } else {
+            break;
+        }
+    }
+    c.eat_word("END-READ");
+    Stmt::Read {
+        file,
+        at_end,
+        not_at_end,
+    }
+}
+
+fn parse_write(c: &mut Cursor) -> Stmt {
+    c.bump(); // WRITE
+    let record = parse_one_name(c).unwrap_or_default();
+    let from = if c.eat_word("FROM") {
+        Some(parse_operand(c))
+    } else {
+        None
+    };
+    skip_to_stmt_boundary(c); // p. ej. `AFTER ADVANCING`
+    c.eat_word("END-WRITE");
+    Stmt::Write { record, from }
 }
 
 fn parse_inspect(c: &mut Cursor) -> Stmt {

@@ -126,6 +126,7 @@ mod tests {
     corpus_test!(corpus_15_resetear, "15-resetear");
     corpus_test!(corpus_16_bandera, "16-bandera");
     corpus_test!(corpus_17_rangopar, "17-rangopar");
+    corpus_test!(corpus_18_fichero, "18-fichero");
 
     #[test]
     fn empty_source_runs_clean() {

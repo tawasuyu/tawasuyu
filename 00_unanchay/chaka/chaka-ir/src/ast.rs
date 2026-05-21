@@ -1,7 +1,7 @@
 //! Los tipos del IR: el programa COBOL con su PROCEDURE division ya
 //! parseada a instrucciones tipadas.
 
-pub use charka_parser::{DataItem, Token};
+pub use charka_parser::{DataItem, FileEntry, Token};
 
 /// Un programa COBOL en representación intermedia.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -14,6 +14,8 @@ pub struct Ir {
     /// El modelo de datos resuelto: los datos elementales aplanados y
     /// los nombres de condición (nivel 88).
     pub model: crate::model::DataModel,
+    /// Los ficheros declarados (`SELECT` + `FD`).
+    pub files: Vec<FileEntry>,
     /// Los párrafos del PROCEDURE, con sus statements ya tipados.
     pub procedures: Vec<Procedure>,
 }
@@ -191,6 +193,21 @@ pub enum Stmt {
     /// `SET cond-name... TO TRUE` — hace verdaderos esos nombres de
     /// condición (nivel 88): asigna a su dato padre el valor del 88.
     SetTrue { conditions: Vec<String> },
+    /// `OPEN {INPUT|OUTPUT} files...`
+    Open { mode: FileMode, files: Vec<String> },
+    /// `CLOSE files...`
+    Close { files: Vec<String> },
+    /// `READ file [AT END at_end] [NOT AT END not_at_end] [END-READ]`
+    Read {
+        file: String,
+        at_end: Vec<Stmt>,
+        not_at_end: Vec<Stmt>,
+    },
+    /// `WRITE record [FROM from]`
+    Write {
+        record: String,
+        from: Option<Operand>,
+    },
     /// `PERFORM ...` — ver [`Perform`].
     Perform(Perform),
     /// `GO TO target`
@@ -206,6 +223,15 @@ pub enum Stmt {
     /// Un verbo que la v1 no parsea: se conserva crudo para que las
     /// etapas siguientes (o un humano) lo revisen.
     Unknown { verb: String, tokens: Vec<Token> },
+}
+
+/// El modo de apertura de un fichero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileMode {
+    /// `OPEN INPUT` — para lectura.
+    Input,
+    /// `OPEN OUTPUT` — para escritura (crea el fichero de cero).
+    Output,
 }
 
 /// La operación de un `INSPECT`.
