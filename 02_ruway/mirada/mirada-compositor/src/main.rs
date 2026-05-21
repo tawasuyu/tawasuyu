@@ -513,9 +513,21 @@ fn load_user_rules() -> Rules {
     }
 }
 
-/// El backend `winit`: corre anidado dentro de una sesión gráfica.
-fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
-    let mut display: Display<App> = Display::new()?;
+/// Lo que comparten los dos backends gráficos: el `Display` de Wayland,
+/// el `App` ya armado y la maquinaria de keymap y control.
+struct Setup {
+    display: Display<App>,
+    app: App,
+    keymap_path: Option<std::path::PathBuf>,
+    keymap_watch: Option<mirada_brain::KeymapWatch>,
+    ctl: Option<CtlServer>,
+}
+
+/// Arma el estado del compositor — todo lo independiente del backend
+/// gráfico (Wayland, Cerebro, teclado, keymap, control). Cada backend
+/// (winit o DRM) registra luego su propia salida y monta su bucle.
+fn build_app() -> Result<Setup, Box<dyn std::error::Error>> {
+    let display: Display<App> = Display::new()?;
     let dh = display.handle();
 
     let mut seat_state = SeatState::new();
@@ -545,7 +557,7 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let mut state = App {
+    let mut app = App {
         compositor_state: CompositorState::new::<App>(&dh),
         xdg_shell_state: XdgShellState::new::<App>(&dh),
         shm_state: ShmState::new::<App>(&dh, Vec::new()),
@@ -562,18 +574,18 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
         running: true,
     };
 
-    let keyboard = state.seat.add_keyboard(Default::default(), 200, 25)?;
-    state.keyboard = Some(keyboard.clone());
+    let keyboard = app.seat.add_keyboard(Default::default(), 200, 25)?;
+    app.keyboard = Some(keyboard);
 
     // En modo embebido, el propio Desktop dicta los atajos a interceptar.
-    if let Brain::Embedded(desktop) = &state.brain {
+    if let Brain::Embedded(desktop) = &app.brain {
         let grab = desktop.grab_keys();
-        state.apply_commands(vec![grab]);
+        app.apply_commands(vec![grab]);
     }
 
     // Vigilancia del keymap para recargarlo en caliente — sólo tiene
     // sentido con el Cerebro embebido.
-    let keymap_watch = match (&state.brain, &keymap_path) {
+    let keymap_watch = match (&app.brain, &keymap_path) {
         (Brain::Embedded(_), Some(p)) => Keymap::watch(p).ok(),
         _ => None,
     };
@@ -583,7 +595,7 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
 
     // API de control (mirada-ctl) — sólo con el Cerebro embebido; si es
     // externo, el socket de control lo abre él.
-    let ctl = match &state.brain {
+    let ctl = match &app.brain {
         Brain::Embedded(_) => {
             let path = mirada_brain::ctl::default_socket_path();
             match CtlServer::bind(&path) {
@@ -599,6 +611,20 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
         }
         Brain::Linked(_) => None,
     };
+
+    Ok(Setup { display, app, keymap_path, keymap_watch, ctl })
+}
+
+/// El backend `winit`: corre anidado dentro de una sesión gráfica.
+fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
+    let Setup {
+        mut display,
+        app: mut state,
+        keymap_path,
+        keymap_watch,
+        ctl,
+    } = build_app()?;
+    let keyboard = state.keyboard.clone().expect("teclado inicializado");
 
     // El backend gráfico va primero. winit abre la ventana del compositor
     // dentro de tu sesión gráfica anfitriona, y para encontrarla lee
