@@ -609,12 +609,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     // App de arranque: si `MIRADA_STARTUP` trae un comando, se lanza como
     // hijo (hereda `WAYLAND_DISPLAY`) — cómodo para probar sin saltar de VT.
     if let Ok(cmd) = std::env::var("MIRADA_STARTUP") {
-        if !cmd.trim().is_empty() {
-            match std::process::Command::new("sh").arg("-c").arg(&cmd).spawn() {
-                Ok(child) => println!("      app de arranque lanzada (pid {}): {cmd}", child.id()),
-                Err(e) => eprintln!("      no pude lanzar «{cmd}»: {e}"),
-            }
-        }
+        crate::spawn_command(&cmd);
     }
 
     // 8 · El bucle `calloop`: VBlank, teclado, clientes y un timer.

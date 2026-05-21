@@ -67,7 +67,7 @@ impl Keymap {
 
     /// La acción asociada a una combinación, si la hay.
     pub fn lookup(&self, combo: &str) -> Option<DesktopAction> {
-        self.bindings.get(combo).copied()
+        self.bindings.get(combo).cloned()
     }
 
     /// Las combinaciones a interceptar — el contenido de un `GrabKeys`.
@@ -250,6 +250,7 @@ const KEYMAP_HEADER: &str = "\
 //   focus-output-next                pasa el foco al siguiente monitor
 //   workspace:N                      activa el escritorio N (1..9)
 //   send-to-workspace:N              manda la enfocada al escritorio N
+//   spawn:<comando>                  lanza un programa (p. ej. spawn:foot)
 //   quit                             apaga el compositor
 //
 // Edita y guarda: mirada recarga el keymap en caliente, sin reiniciar.";

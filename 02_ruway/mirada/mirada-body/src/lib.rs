@@ -74,6 +74,8 @@ pub enum BodyOp {
     SetGrabs(Vec<String>),
     /// Cambia el cursor del puntero.
     SetCursor(String),
+    /// Lanza un programa como proceso hijo del compositor.
+    Spawn(String),
     /// Apaga el compositor y libera el hardware.
     Shutdown,
 }
@@ -163,6 +165,7 @@ impl BodyState {
             BrainCommand::Kill(id) => vec![BodyOp::KillClient(id)],
             BrainCommand::GrabKeys(keys) => vec![BodyOp::SetGrabs(keys)],
             BrainCommand::SetCursor(name) => vec![BodyOp::SetCursor(name)],
+            BrainCommand::Spawn(cmd) => vec![BodyOp::Spawn(cmd)],
             BrainCommand::Shutdown => vec![BodyOp::Shutdown],
         }
     }

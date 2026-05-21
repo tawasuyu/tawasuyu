@@ -262,6 +262,7 @@ impl App {
             }
             BodyOp::SetGrabs(keys) => self.grabs = keys,
             BodyOp::SetCursor(_) => {}
+            BodyOp::Spawn(cmd) => spawn_command(&cmd),
             BodyOp::Shutdown => self.running = false,
         }
     }
@@ -594,6 +595,21 @@ fn surface_px_size(w: &ManagedWindow) -> Option<(i32, i32)> {
     with_renderer_surface_state(&w.surface, |s| s.surface_size())
         .flatten()
         .map(|s| (s.w, s.h))
+}
+
+/// Lanza un comando como proceso hijo, vía `sh -c`. El hijo hereda el
+/// entorno —`WAYLAND_DISPLAY` incluido—, así que el cliente que abra se
+/// conecta a este compositor. Lo usan la acción `spawn:…` del keymap y
+/// la variable `MIRADA_STARTUP`.
+fn spawn_command(cmd: &str) {
+    let cmd = cmd.trim();
+    if cmd.is_empty() {
+        return;
+    }
+    match std::process::Command::new("sh").arg("-c").arg(cmd).spawn() {
+        Ok(child) => println!("mirada-compositor · lanzado (pid {}): {cmd}", child.id()),
+        Err(e) => eprintln!("mirada-compositor · no pude lanzar «{cmd}»: {e}"),
+    }
 }
 
 /// Carga las reglas de ventana del usuario, o ninguna si no hay archivo.

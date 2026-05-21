@@ -387,6 +387,7 @@ impl Desktop {
                     Vec::new()
                 }
             }
+            DesktopAction::Spawn(cmd) => vec![BrainCommand::Spawn(cmd)],
             DesktopAction::Quit => vec![BrainCommand::Shutdown],
         }
     }
@@ -874,6 +875,13 @@ mod tests {
         let p = places(&cmds).iter().find(|p| p.id == 2).unwrap();
         assert!(p.floating);
         assert_eq!(p.rect, target);
+    }
+
+    #[test]
+    fn a_spawn_keybind_becomes_a_spawn_command() {
+        let mut d = desktop_with_screen();
+        let cmds = d.on_event(BodyEvent::Keybind("Super+Shift+Return".into()));
+        assert_eq!(cmds, vec![BrainCommand::Spawn("foot".into())]);
     }
 
     #[test]

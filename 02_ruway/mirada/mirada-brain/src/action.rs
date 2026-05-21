@@ -23,7 +23,9 @@ pub const WORKSPACE_COUNT: usize = 9;
 /// Es serializable (`postcard`) para viajar por el API de control
 /// ([`crate::ctl`]) y tiene una forma textual estable ([`Display`] /
 /// [`FromStr`]) para el keymap y `mirada-ctl`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// No es `Copy`: [`Spawn`](DesktopAction::Spawn) lleva su comando.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DesktopAction {
     /// Mueve el foco a la ventana siguiente del escritorio activo.
     FocusNext,
@@ -66,6 +68,9 @@ pub enum DesktopAction {
     SendToWorkspace(usize),
     /// Mueve el foco a la siguiente salida (monitor).
     FocusOutputNext,
+    /// Lanza un programa — abre una terminal, un navegador, lo que sea.
+    /// El comando se pasa a `sh -c` en el Cuerpo.
+    Spawn(String),
     /// Apaga el compositor.
     Quit,
 }
@@ -123,6 +128,7 @@ impl fmt::Display for DesktopAction {
             DesktopAction::SwitchWorkspace(n) => write!(f, "workspace:{}", n + 1),
             DesktopAction::SendToWorkspace(n) => write!(f, "send-to-workspace:{}", n + 1),
             DesktopAction::FocusOutputNext => f.write_str("focus-output-next"),
+            DesktopAction::Spawn(cmd) => write!(f, "spawn:{cmd}"),
             DesktopAction::Quit => f.write_str("quit"),
         }
     }
@@ -168,6 +174,12 @@ impl FromStr for DesktopAction {
                     Self::SendToWorkspace(parse_workspace(n)?)
                 } else if let Some(n) = s.strip_prefix("workspace:") {
                     Self::SwitchWorkspace(parse_workspace(n)?)
+                } else if let Some(cmd) = s.strip_prefix("spawn:") {
+                    let cmd = cmd.trim();
+                    if cmd.is_empty() {
+                        return Err("spawn: necesita un comando".into());
+                    }
+                    Self::Spawn(cmd.to_string())
                 } else {
                     return Err(format!("acción desconocida: '{s}'"));
                 }
@@ -218,6 +230,7 @@ pub fn default_keymap() -> Vec<(String, DesktopAction)> {
         ("Super+l".into(), DesktopAction::GrowMaster),
         ("Super+o".into(), DesktopAction::FocusOutputNext),
         ("Super+Return".into(), DesktopAction::PromoteToMaster),
+        ("Super+Shift+Return".into(), DesktopAction::Spawn("foot".into())),
         ("Super+,".into(), DesktopAction::IncMaster),
         ("Super+.".into(), DesktopAction::DecMaster),
         ("Super+Shift+e".into(), DesktopAction::Quit),
@@ -254,10 +267,10 @@ mod tests {
         for n in 0..WORKSPACE_COUNT {
             assert!(map
                 .iter()
-                .any(|(_, a)| *a == DesktopAction::SwitchWorkspace(n)));
+                .any(|(_, a)| a == &DesktopAction::SwitchWorkspace(n)));
             assert!(map
                 .iter()
-                .any(|(_, a)| *a == DesktopAction::SendToWorkspace(n)));
+                .any(|(_, a)| a == &DesktopAction::SendToWorkspace(n)));
         }
     }
 
@@ -305,5 +318,18 @@ mod tests {
         let a = DesktopAction::FocusWindow(42);
         assert_eq!(a.to_string(), "focus-window:42");
         assert_eq!("focus-window:42".parse::<DesktopAction>().unwrap(), a);
+    }
+
+    #[test]
+    fn spawn_round_trips_keeping_the_whole_command() {
+        let a = DesktopAction::Spawn("foot --title diario".into());
+        assert_eq!(a.to_string(), "spawn:foot --title diario");
+        assert_eq!(a.to_string().parse::<DesktopAction>().unwrap(), a);
+    }
+
+    #[test]
+    fn spawn_without_a_command_is_rejected() {
+        assert!("spawn:".parse::<DesktopAction>().is_err());
+        assert!("spawn:   ".parse::<DesktopAction>().is_err());
     }
 }

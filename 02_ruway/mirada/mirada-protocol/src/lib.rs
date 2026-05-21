@@ -67,6 +67,10 @@ pub enum BrainCommand {
     GrabKeys(Vec<String>),
     /// Cambia el cursor del puntero al nombre dado (tema XCursor).
     SetCursor(String),
+    /// Lanza un programa como proceso hijo del Cuerpo — hereda su
+    /// entorno, `WAYLAND_DISPLAY` incluido, así el cliente se conecta
+    /// aquí. La cadena se pasa a `sh -c`.
+    Spawn(String),
     /// Apaga el Cuerpo y libera el hardware.
     Shutdown,
 }
