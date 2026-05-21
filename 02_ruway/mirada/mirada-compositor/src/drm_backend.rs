@@ -32,6 +32,7 @@ use smithay::backend::renderer::element::surface::{
 };
 use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::GlesRenderer;
+use smithay::backend::renderer::utils::with_renderer_surface_state;
 use smithay::backend::renderer::ImportDma;
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::{Event as SessionEvent, Session};
@@ -74,6 +75,8 @@ struct DrmState {
     start: Instant,
     /// Nº de ventanas en el último `tick` — para registrar los cambios.
     last_windows: usize,
+    /// Cuenta de `tick`s — para registrar diagnósticos cada cierto rato.
+    tick_count: u32,
 }
 
 impl DrmState {
@@ -132,6 +135,18 @@ impl DrmState {
         if n != self.last_windows {
             eprintln!("mirada-compositor · ventanas en pantalla: {n}");
             self.last_windows = n;
+        }
+
+        // Diagnóstico cada ~2 s: dónde y de qué tamaño está cada superficie.
+        self.tick_count = self.tick_count.wrapping_add(1);
+        if self.tick_count % 120 == 0 {
+            for w in &self.app.windows {
+                let size = with_renderer_surface_state(&w.surface, |s| s.surface_size());
+                eprintln!(
+                    "mirada-compositor · ventana id={} loc={:?} visible={} superficie={size:?}",
+                    w.id, w.loc, w.visible,
+                );
+            }
         }
 
         if self.keymap_watch.as_ref().is_some_and(|w| w.changed()) {
@@ -484,6 +499,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         ctl,
         start: Instant::now(),
         last_windows: 0,
+        tick_count: 0,
     };
 
     let signal = event_loop.get_signal();
