@@ -72,6 +72,8 @@ struct DrmState {
     ctl: Option<crate::CtlServer>,
     /// Inicio del compositor — base de tiempos para los frame-callbacks.
     start: Instant,
+    /// Nº de ventanas en el último `tick` — para registrar los cambios.
+    last_windows: usize,
 }
 
 impl DrmState {
@@ -125,6 +127,12 @@ impl DrmState {
     /// control, composición y vaciado hacia los clientes.
     fn tick(&mut self) {
         self.app.brain_poll();
+
+        let n = self.app.windows.len();
+        if n != self.last_windows {
+            eprintln!("mirada-compositor · ventanas en pantalla: {n}");
+            self.last_windows = n;
+        }
 
         if self.keymap_watch.as_ref().is_some_and(|w| w.changed()) {
             if let Some(path) = &self.keymap_path {
@@ -330,6 +338,17 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     std::env::set_var("WAYLAND_DISPLAY", &socket_name);
     println!("      escuchando en WAYLAND_DISPLAY={socket_name}");
 
+    // App de arranque: si `MIRADA_STARTUP` trae un comando, se lanza como
+    // hijo (hereda `WAYLAND_DISPLAY`) — cómodo para probar sin saltar de VT.
+    if let Ok(cmd) = std::env::var("MIRADA_STARTUP") {
+        if !cmd.trim().is_empty() {
+            match std::process::Command::new("sh").arg("-c").arg(&cmd).spawn() {
+                Ok(child) => println!("      app de arranque lanzada (pid {}): {cmd}", child.id()),
+                Err(e) => eprintln!("      no pude lanzar «{cmd}»: {e}"),
+            }
+        }
+    }
+
     // 8 · El bucle `calloop`: VBlank, teclado, clientes y un timer.
     println!("[8/8] montando el bucle de eventos …");
     let mut event_loop: EventLoop<DrmState> =
@@ -374,6 +393,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             Generic::new(listener, Interest::READ, CalloopMode::Level),
             |_readiness, listener, state| {
                 while let Some(stream) = listener.accept()? {
+                    eprintln!("mirada-compositor · cliente Wayland conectado.");
                     let _ = state
                         .display
                         .handle()
@@ -434,6 +454,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         keymap_watch,
         ctl,
         start: Instant::now(),
+        last_windows: 0,
     };
 
     let signal = event_loop.get_signal();
