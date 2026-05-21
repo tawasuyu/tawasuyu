@@ -23,8 +23,8 @@
 use std::time::Duration;
 
 use gpui::{
-    Context, EventEmitter, FocusHandle, Focusable, IntoElement, KeyDownEvent, Render,
-    SharedString, Task, Window, div, prelude::*, px,
+    div, prelude::*, px, Context, EventEmitter, FocusHandle, Focusable, IntoElement, KeyDownEvent,
+    Render, SharedString, Task, Window,
 };
 
 use nahual_theme::Theme;
@@ -46,6 +46,9 @@ pub struct TextInput {
     focus_handle: FocusHandle,
     /// Placeholder visible cuando `text` está vacío.
     placeholder: SharedString,
+    /// Si `true`, el contenido se dibuja como puntos (`•`) en vez del
+    /// texto real — para campos de contraseña.
+    mask: bool,
     /// Toggle del caret: alterna cada [`CARET_BLINK_INTERVAL`]
     /// entre `true` (visible) y `false` (oculto). El render lo
     /// considera junto con focus para decidir si dibujar `|`.
@@ -89,6 +92,7 @@ impl TextInput {
             text: initial.into(),
             focus_handle: cx.focus_handle(),
             placeholder: SharedString::from(""),
+            mask: false,
             caret_visible: true,
             _blink_task: blink_task,
         }
@@ -98,6 +102,13 @@ impl TextInput {
     #[allow(dead_code)]
     pub fn with_placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
         self.placeholder = placeholder.into();
+        self
+    }
+
+    /// Dibuja el contenido como puntos (`•`) — para campos de
+    /// contraseña. El texto real sigue accesible vía [`Self::text`].
+    pub fn with_mask(mut self) -> Self {
+        self.mask = true;
         self
     }
 
@@ -117,12 +128,7 @@ impl TextInput {
         window.focus(&self.focus_handle);
     }
 
-    fn handle_key_down(
-        &mut self,
-        event: &KeyDownEvent,
-        _w: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn handle_key_down(&mut self, event: &KeyDownEvent, _w: &mut Window, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
         match key {
             "enter" => {
@@ -173,12 +179,13 @@ impl Render for TextInput {
         // toggle del blink loop está en `true`. El loop alterna
         // cada 500ms — feel familiar a los inputs del SO.
         let show_caret = is_focused && self.caret_visible;
+        let shown = display_text(&self.text, self.mask);
         let display: SharedString = if is_empty {
             self.placeholder.clone()
         } else if show_caret {
-            SharedString::from(format!("{}|", self.text))
+            SharedString::from(format!("{shown}|"))
         } else {
-            SharedString::from(self.text.clone())
+            SharedString::from(shown)
         };
         let text_color = if is_empty {
             theme.fg_disabled
@@ -194,12 +201,40 @@ impl Render for TextInput {
             .px(px(10.0))
             .py(px(6.0))
             .min_w(px(200.0))
-            .bg(theme.bg_panel.clone())
+            .bg(theme.bg_panel)
             .border_1()
             .border_color(border_color)
             .rounded(px(4.0))
             .text_size(px(13.0))
             .text_color(text_color)
             .child(display)
+    }
+}
+
+/// Texto a mostrar: el contenido tal cual, o un punto (`•`) por cada
+/// carácter si el campo está enmascarado.
+fn display_text(text: &str, mask: bool) -> String {
+    if mask {
+        "•".repeat(text.chars().count())
+    } else {
+        text.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::display_text;
+
+    #[test]
+    fn plain_text_shown_verbatim() {
+        assert_eq!(display_text("hola", false), "hola");
+    }
+
+    #[test]
+    fn masked_text_is_dots_one_per_char() {
+        assert_eq!(display_text("hola", true), "••••");
+        // Un punto por carácter Unicode, no por byte.
+        assert_eq!(display_text("ñoño", true), "••••");
+        assert_eq!(display_text("", true), "");
     }
 }
