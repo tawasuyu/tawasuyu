@@ -75,7 +75,7 @@ fn every_demo_module_has_list_and_form_views() {
             match v {
                 View::List(_) => has_list = true,
                 View::Form(_) => has_form = true,
-                View::Detail(_) => {}
+                View::Detail(_) | View::Dashboard(_) => {}
             }
         }
         assert!(

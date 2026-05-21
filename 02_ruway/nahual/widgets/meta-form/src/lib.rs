@@ -27,14 +27,13 @@ use gpui::{
 };
 
 use nahual_meta_runtime::{
-    cmp_values, compute_clear_fields, compute_field_delta, format_value, human_label_for_record,
-    parse_field_value, render_value, resolve_param_value, short_uuid, validate_entity_refs,
-    value_to_input_text, MetaBackend, WriteOutcome,
+    cmp_values, compute_clear_fields, compute_field_delta, compute_metric, format_value,
+    human_label_for_record, parse_field_value, render_value, resolve_param_value, short_uuid,
+    validate_entity_refs, value_to_input_text, MetaBackend, MetricResult, WriteOutcome,
 };
-
 use nahual_meta_schema::{
-    Action, Column, DetailView, FieldKind, FieldSpec, FormView, ListView, Module, RelatedList,
-    SelectOption, View,
+    Action, Column, DashboardView, DetailView, FieldKind, FieldSpec, FormView, ListView, Module,
+    RelatedList, SelectOption, View,
 };
 use nahual_theme::Theme;
 use nahual_widget_banner::{banner_themed, themed_colors, Banner};
@@ -834,6 +833,9 @@ impl<B: MetaBackend> MetaApp<B> {
             View::Detail(dv) => {
                 self.render_detail(cx, main, &dv, mod_idx, border, text, text_dim, accent)
             }
+            View::Dashboard(dv) => {
+                self.render_dashboard(cx, main, &dv, border, text, text_dim, accent)
+            }
         }
     }
 
@@ -1341,6 +1343,95 @@ impl<B: MetaBackend> MetaApp<B> {
             section = section.child(row);
         }
         section
+    }
+
+    /// Renderea un tablero: una grilla de tarjetas de KPI, cada una con
+    /// su agregado computado sobre los records de su entity.
+    #[allow(clippy::too_many_arguments)]
+    fn render_dashboard(
+        &self,
+        cx: &mut Context<Self>,
+        mut main: gpui::Div,
+        dv: &DashboardView,
+        border: gpui::Hsla,
+        text: gpui::Hsla,
+        text_dim: gpui::Hsla,
+        accent: gpui::Hsla,
+    ) -> gpui::Div {
+        let card_bg = Theme::global(cx).bg_panel_alt;
+        main = main.child(
+            div()
+                .text_color(text)
+                .text_size(px(18.))
+                .mb(px(12.))
+                .child(dv.title.clone()),
+        );
+
+        let mut grid = div().flex().flex_row().flex_wrap().gap(px(12.));
+        for card in &dv.cards {
+            let records = self.backend.list_records(&card.entity);
+            let result = compute_metric(&card.metric, card.filter.as_ref(), &records);
+            let mut card_box = div()
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .p(px(14.))
+                .min_w(px(190.))
+                .bg(card_bg)
+                .border_1()
+                .border_color(border)
+                .rounded(px(8.))
+                .child(
+                    div()
+                        .text_color(text_dim)
+                        .text_size(px(11.))
+                        .child(card.label.clone()),
+                );
+            match result {
+                MetricResult::Scalar(s) => {
+                    // Entero si no tiene parte decimal — `Count` y sumas
+                    // de enteros se ven sin `.00`.
+                    let value = if s.fract() == 0.0 {
+                        Value::from(s as i64)
+                    } else {
+                        Value::from(s)
+                    };
+                    card_box = card_box.child(
+                        div()
+                            .text_color(accent)
+                            .text_size(px(26.))
+                            .child(format_value(Some(&value), &card.format)),
+                    );
+                }
+                MetricResult::Breakdown(rows) => {
+                    if rows.is_empty() {
+                        card_box = card_box.child(
+                            div()
+                                .text_color(text_dim)
+                                .text_size(px(11.))
+                                .child("(sin datos)"),
+                        );
+                    }
+                    let max = rows.iter().map(|(_, n)| *n).max().unwrap_or(1).max(1);
+                    for (key, n) in rows {
+                        let bar = "█".repeat((n * 12 / max).max(1));
+                        card_box = card_box.child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(6.))
+                                .text_size(px(11.))
+                                .child(div().w(px(96.)).flex_none().text_color(text).child(key))
+                                .child(div().flex_grow().text_color(accent).child(bar))
+                                .child(div().text_color(text_dim).child(n.to_string())),
+                        );
+                    }
+                }
+            }
+            grid = grid.child(card_box);
+        }
+        main.child(grid)
     }
 
     /// Render del valor de una celda de lista. Una columna con

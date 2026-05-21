@@ -25,6 +25,7 @@
 pub mod backend;
 pub mod delta;
 pub mod format;
+pub mod metric;
 pub mod parse;
 pub mod refs;
 pub mod testing;
@@ -35,5 +36,6 @@ pub use format::{
     cmp_values, format_value, human_label_for_record, preview_value, render_value, short_hash,
     short_uuid, value_to_input_text,
 };
+pub use metric::{compute_metric, MetricResult};
 pub use parse::{infer_param_value, parse_field_value, resolve_param_value};
 pub use refs::validate_entity_refs;

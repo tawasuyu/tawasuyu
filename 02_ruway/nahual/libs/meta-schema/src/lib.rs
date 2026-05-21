@@ -121,6 +121,8 @@ pub enum View {
     Form(FormView),
     /// Ficha de un record: sus campos + listas de records relacionados.
     Detail(DetailView),
+    /// Tablero de KPIs: una grilla de tarjetas de agregados.
+    Dashboard(DashboardView),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -171,6 +173,51 @@ pub struct RelatedList {
     /// actual. El runtime filtra `record[via_field] == id_actual`.
     pub via_field: String,
     pub columns: Vec<Column>,
+}
+
+/// Tablero de KPIs: una grilla de tarjetas de agregados.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashboardView {
+    pub title: String,
+    pub cards: Vec<DashboardCard>,
+}
+
+/// Una tarjeta de KPI del tablero.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashboardCard {
+    /// Etiqueta de la tarjeta.
+    pub label: String,
+    /// Entity sobre cuyos records se computa el agregado.
+    pub entity: String,
+    /// Qué se computa.
+    pub metric: Metric,
+    /// Filtro opcional: sólo entran los records que lo cumplen.
+    #[serde(default)]
+    pub filter: Option<CardFilter>,
+    /// Formato del número resultante (`Currency` para sumas de dinero).
+    /// Ignorado por `GroupBy`.
+    #[serde(default)]
+    pub format: ValueFormat,
+}
+
+/// El agregado que computa una [`DashboardCard`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Metric {
+    /// Cantidad de records.
+    Count,
+    /// Suma de un campo numérico.
+    Sum { field: String },
+    /// Conteo de records por cada valor distinto de un campo.
+    GroupBy { field: String },
+}
+
+/// Filtro de una [`DashboardCard`]: el record entra si el valor de
+/// `field` (como texto) es igual a `equals`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CardFilter {
+    pub field: String,
+    pub equals: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -473,7 +520,7 @@ impl Module {
                         }
                     }
                 }
-                View::Detail(_) => {}
+                View::Detail(_) | View::Dashboard(_) => {}
             }
         }
         Ok(())
