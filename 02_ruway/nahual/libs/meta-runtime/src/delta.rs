@@ -50,7 +50,10 @@ mod tests {
     use serde_json::json;
 
     fn map(items: &[(&str, Value)]) -> serde_json::Map<String, Value> {
-        items.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+        items
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
     }
 
     #[test]

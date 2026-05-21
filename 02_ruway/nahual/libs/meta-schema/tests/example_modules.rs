@@ -26,6 +26,7 @@ fn loads_all_demo_modules() {
     assert_eq!(
         ids,
         vec![
+            "crm",
             "customers",
             "inventory_movements",
             "invoices",
@@ -34,8 +35,8 @@ fn loads_all_demo_modules() {
             "sales_orders",
             "suppliers",
         ],
-        "expected 7 modules in alphabetical order \
-         (sales_engine se sumó al wirear Action::Morphism)"
+        "expected 8 modules in alphabetical order \
+         (crm se sumó como ERP con morfismos)"
     );
 }
 

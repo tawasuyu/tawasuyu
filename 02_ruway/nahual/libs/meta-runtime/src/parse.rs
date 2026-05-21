@@ -15,15 +15,20 @@ use nahual_meta_schema::{FieldKind, FieldSpec};
 /// - `Number` → i64 si parsea, sino f64.
 pub fn parse_field_value(kind: FieldKind, raw: &str) -> Result<Value, String> {
     match kind {
-        FieldKind::Text | FieldKind::Multiline | FieldKind::Date => Ok(json!(raw)),
+        // Select y AutoId guardan un string: el valor de la opción
+        // elegida y el UUID autogenerado, respectivamente.
+        FieldKind::Text
+        | FieldKind::Multiline
+        | FieldKind::Date
+        | FieldKind::Select
+        | FieldKind::AutoId => Ok(json!(raw)),
         // EntityRef se almacena como string del UUID seleccionado.
         // El selector clickable garantiza UUIDs válidos en happy
         // path; este check protege paste manual o garbage tipeado.
         FieldKind::EntityRef => {
             let trimmed = raw.trim();
-            Uuid::parse_str(trimmed).map_err(|_| {
-                format!("'{raw}' no es UUID válido (usá el selector de records)")
-            })?;
+            Uuid::parse_str(trimmed)
+                .map_err(|_| format!("'{raw}' no es UUID válido (usá el selector de records)"))?;
             Ok(json!(trimmed))
         }
         FieldKind::Boolean => match raw.to_ascii_lowercase().as_str() {
@@ -62,7 +67,11 @@ pub fn resolve_param_value(
         return Ok(infer_param_value(raw));
     };
 
-    let label = if s.label.is_empty() { field_name } else { &s.label };
+    let label = if s.label.is_empty() {
+        field_name
+    } else {
+        &s.label
+    };
 
     if s.required && raw.trim().is_empty() {
         return Err(format!("param '{label}' es obligatorio y está vacío"));
@@ -112,6 +121,7 @@ mod tests {
             required,
             help: None,
             ref_entity: None,
+            options: Vec::new(),
         }
     }
 
@@ -119,7 +129,7 @@ mod tests {
     fn infer_handles_basic_types() {
         assert_eq!(infer_param_value(""), Value::Null);
         assert_eq!(infer_param_value("42"), json!(42));
-        assert_eq!(infer_param_value("3.14"), json!(3.14));
+        assert_eq!(infer_param_value("2.5"), json!(2.5));
         assert_eq!(infer_param_value("true"), json!(true));
         assert_eq!(infer_param_value("false"), json!(false));
         assert_eq!(infer_param_value("hola"), json!("hola"));
@@ -132,11 +142,29 @@ mod tests {
     }
 
     #[test]
-    fn parse_number_i64_or_f64() {
-        assert_eq!(parse_field_value(FieldKind::Number, "42").unwrap(), json!(42));
+    fn parse_select_and_auto_id_passthrough() {
+        // Select guarda el valor de la opción elegida.
         assert_eq!(
-            parse_field_value(FieldKind::Number, "3.14").unwrap(),
-            json!(3.14)
+            parse_field_value(FieldKind::Select, "ganada").unwrap(),
+            json!("ganada")
+        );
+        // AutoId guarda el UUID autogenerado tal cual.
+        let id = Uuid::new_v4().to_string();
+        assert_eq!(
+            parse_field_value(FieldKind::AutoId, &id).unwrap(),
+            json!(id)
+        );
+    }
+
+    #[test]
+    fn parse_number_i64_or_f64() {
+        assert_eq!(
+            parse_field_value(FieldKind::Number, "42").unwrap(),
+            json!(42)
+        );
+        assert_eq!(
+            parse_field_value(FieldKind::Number, "2.5").unwrap(),
+            json!(2.5)
         );
         assert!(parse_field_value(FieldKind::Number, "abc").is_err());
     }
@@ -144,7 +172,10 @@ mod tests {
     #[test]
     fn parse_boolean_recognizes_variants() {
         for s in ["true", "yes", "1", "on", "y"] {
-            assert_eq!(parse_field_value(FieldKind::Boolean, s).unwrap(), json!(true));
+            assert_eq!(
+                parse_field_value(FieldKind::Boolean, s).unwrap(),
+                json!(true)
+            );
         }
         for s in ["false", "no", "0", "off", "n", ""] {
             assert_eq!(

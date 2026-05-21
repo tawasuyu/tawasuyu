@@ -26,18 +26,20 @@ use gpui::{
     SharedString, Window,
 };
 
-use serde_json::Value;
-use uuid::Uuid;
 use nahual_meta_runtime::{
     compute_clear_fields, compute_field_delta, human_label_for_record, parse_field_value,
     render_value, resolve_param_value, short_uuid, validate_entity_refs, value_to_input_text,
     MetaBackend, WriteOutcome,
 };
-use nahual_meta_schema::{Action, FieldKind, FieldSpec, FormView, ListView, Module, View};
+use nahual_meta_schema::{
+    Action, FieldKind, FieldSpec, FormView, ListView, Module, SelectOption, View,
+};
 use nahual_theme::Theme;
 use nahual_widget_banner::{banner_themed, themed_colors, Banner};
 use nahual_widget_text_input::TextInput;
 use nahual_widget_theme_switcher::theme_switcher;
+use serde_json::Value;
+use uuid::Uuid;
 
 /// Estado del runtime de UI. Toda la persistencia/ejecución está
 /// detrás del trait [`MetaBackend`]; este struct sólo conoce GPUI
@@ -125,7 +127,14 @@ impl<B: MetaBackend> MetaApp<B> {
                     }
                 });
                 for f in &form.fields {
-                    let initial = if let Some(rec) = &editing_record {
+                    let initial = if f.kind == FieldKind::AutoId {
+                        // Editando: conservar el id del record.
+                        // Alta: UUID nuevo, que el usuario no teclea.
+                        editing_record
+                            .as_ref()
+                            .and_then(|rec| rec.get(&f.name).map(value_to_input_text))
+                            .unwrap_or_else(|| Uuid::new_v4().to_string())
+                    } else if let Some(rec) = &editing_record {
                         rec.get(&f.name)
                             .map(value_to_input_text)
                             .unwrap_or_else(|| f.default.clone().unwrap_or_default())
@@ -146,21 +155,13 @@ impl<B: MetaBackend> MetaApp<B> {
 
     /// Inicia un edit del record: setea `editing` y abre la primera
     /// view de tipo Form del módulo (convención: la del schema).
-    fn open_edit(
-        &mut self,
-        mod_idx: usize,
-        entity: String,
-        id: Uuid,
-        cx: &mut Context<Self>,
-    ) {
+    fn open_edit(&mut self, mod_idx: usize, entity: String, id: Uuid, cx: &mut Context<Self>) {
         self.editing = Some((entity.clone(), id));
         let form_view_key = self.modules.get(mod_idx).and_then(|m| {
-            m.views
-                .iter()
-                .find_map(|(key, v)| match v {
-                    View::Form(form) if form.entity == entity => Some(key.clone()),
-                    _ => None,
-                })
+            m.views.iter().find_map(|(key, v)| match v {
+                View::Form(form) if form.entity == entity => Some(key.clone()),
+                _ => None,
+            })
         });
         match form_view_key {
             Some(key) => self.select_view(mod_idx, key, cx),
@@ -179,11 +180,7 @@ impl<B: MetaBackend> MetaApp<B> {
     /// el modelo de "todo cambio post-seed pasa por ops").
     /// Borra un record vía `MetaBackend::delete`. Devuelve el outcome
     /// del backend (incluye eventual `post_status` del compact tick).
-    fn commit_delete(
-        &mut self,
-        entity: &str,
-        id: Uuid,
-    ) -> Result<WriteOutcome, String> {
+    fn commit_delete(&mut self, entity: &str, id: Uuid) -> Result<WriteOutcome, String> {
         self.backend.delete(entity, id)
     }
 
@@ -232,19 +229,16 @@ impl<B: MetaBackend> MetaApp<B> {
             } => {
                 match self.commit_morphism(mod_idx, &name, &inputs, &params, cx) {
                     Ok(outcome) => {
-                        let base = format!(
-                            "morphism '{name}' OK ({} op(s) aplicadas)",
-                            outcome.changed
-                        );
+                        let base =
+                            format!("morphism '{name}' OK ({} op(s) aplicadas)", outcome.changed);
                         self.toast = Some(append_compact_msg(base, outcome.post_status));
                         if let Some(v) = next_view {
                             self.select_view(mod_idx, v, cx);
                         }
                     }
                     Err(e) => {
-                        self.toast = Some(SharedString::from(format!(
-                            "morphism '{name}' falló: {e}"
-                        )));
+                        self.toast =
+                            Some(SharedString::from(format!("morphism '{name}' falló: {e}")));
                     }
                 }
                 cx.notify();
@@ -278,9 +272,7 @@ impl<B: MetaBackend> MetaApp<B> {
                 .map(|inp| inp.read(&*cx).text().to_string())
                 .ok_or_else(|| format!("input field '{field_name}' no existe en el form"))?;
             let id = Uuid::parse_str(raw.trim()).map_err(|_| {
-                format!(
-                    "input '{role}' (field '{field_name}'): '{raw}' no es UUID válido"
-                )
+                format!("input '{role}' (field '{field_name}'): '{raw}' no es UUID válido")
             })?;
             inputs.insert(role.clone(), id);
         }
@@ -363,12 +355,11 @@ impl<B: MetaBackend> MetaApp<B> {
                 to_clear.push(f.name.clone());
                 continue;
             }
-            let value = parse_field_value(f.kind, &raw)
-                .map_err(|e| format!("campo '{}': {e}", f.label))?;
+            let value =
+                parse_field_value(f.kind, &raw).map_err(|e| format!("campo '{}': {e}", f.label))?;
             if f.kind == FieldKind::EntityRef {
                 if let (Some(target), Some(uuid_str)) = (&f.ref_entity, value.as_str()) {
-                    let id = Uuid::parse_str(uuid_str)
-                        .expect("parse_field_value validated UUID");
+                    let id = Uuid::parse_str(uuid_str).expect("parse_field_value validated UUID");
                     entity_refs.push((f.label.clone(), target.clone(), id));
                 }
             }
@@ -409,10 +400,7 @@ impl<B: MetaBackend> MetaApp<B> {
 /// vs "actualizado" — el WriteOutcome solo no alcanza porque
 /// `seed` y `update` ambos devuelven `id = Some(...)`.
 fn format_seed_toast(entity: &str, was_editing: bool, outcome: &WriteOutcome) -> String {
-    let id_short = outcome
-        .id
-        .map(|id| short_uuid(&id))
-        .unwrap_or_default();
+    let id_short = outcome.id.map(|id| short_uuid(&id)).unwrap_or_default();
     match (was_editing, outcome.changed) {
         (false, _) => format!("creado {entity} {id_short}"),
         (true, 0) => format!("{entity} {id_short} sin cambios — no log entry"),
@@ -450,16 +438,15 @@ impl<B: MetaBackend> Render for MetaApp<B> {
         // Si el caller no instaló un Theme, `Theme::global` panicea.
         // Convención: el binario shell instala el theme en main.
         let theme = Theme::global(cx).clone();
-        let bg = theme.bg_app.clone();
-        let panel = theme.bg_panel.clone();
+        let bg = theme.bg_app;
+        let panel = theme.bg_panel;
         let border = theme.border;
         let text = theme.fg_text;
         let text_dim = theme.fg_muted;
         let accent = theme.accent;
         let accent_active = theme.accent_strong;
 
-        let sidebar =
-            self.render_sidebar(cx, panel.clone(), border, text, text_dim, accent_active);
+        let sidebar = self.render_sidebar(cx, panel, border, text, text_dim, accent_active);
         let main_panel = self.render_main(cx, panel, border, text, text_dim, accent);
         let confirm_banner = self.render_confirm_delete_banner(cx);
         let toast_div = self
@@ -529,7 +516,7 @@ impl<B: MetaBackend> MetaApp<B> {
         let theme = Theme::global(cx);
         let (banner_bg, banner_text) = themed_colors(Banner::Warning, theme);
         let (confirm_bg, confirm_text) = themed_colors(Banner::Error, theme);
-        let cancel_bg: gpui::Background = theme.bg_panel_alt.clone();
+        let cancel_bg: gpui::Background = theme.bg_panel_alt;
         let cancel_text = theme.fg_text;
         // Hover colors capturados antes de las closures para que el
         // move |d| d.bg(...) los cierre.
@@ -583,10 +570,7 @@ impl<B: MetaBackend> MetaApp<B> {
                 )
                 .child(
                     div()
-                        .id(SharedString::from(format!(
-                            "confirm-del-ok-{}",
-                            id_owned
-                        )))
+                        .id(SharedString::from(format!("confirm-del-ok-{}", id_owned)))
                         .px(px(10.))
                         .py(px(4.))
                         .bg(confirm_bg)
@@ -604,15 +588,12 @@ impl<B: MetaBackend> MetaApp<B> {
                                         "borrado {entity_for_confirm} {}",
                                         short_uuid(&id_owned)
                                     );
-                                    this.toast = Some(append_compact_msg(
-                                        base,
-                                        outcome.post_status,
-                                    ));
+                                    this.toast =
+                                        Some(append_compact_msg(base, outcome.post_status));
                                 }
                                 Err(e) => {
-                                    this.toast = Some(SharedString::from(format!(
-                                        "error borrando: {e}"
-                                    )));
+                                    this.toast =
+                                        Some(SharedString::from(format!("error borrando: {e}")));
                                 }
                             }
                             cx.notify();
@@ -761,8 +742,12 @@ impl<B: MetaBackend> MetaApp<B> {
         };
 
         match view {
-            View::List(lv) => self.render_list(cx, main, &lv, mod_idx, border, text, text_dim, accent),
-            View::Form(fv) => self.render_form(cx, main, &fv, mod_idx, border, text, text_dim, accent),
+            View::List(lv) => {
+                self.render_list(cx, main, &lv, mod_idx, border, text, text_dim, accent)
+            }
+            View::Form(fv) => {
+                self.render_form(cx, main, &fv, mod_idx, border, text, text_dim, accent)
+            }
         }
     }
 
@@ -809,9 +794,7 @@ impl<B: MetaBackend> MetaApp<B> {
             let action_clone = action.clone();
             header = header.child(
                 div()
-                    .id(SharedString::from(format!(
-                        "list-action-{mod_idx}-{idx}"
-                    )))
+                    .id(SharedString::from(format!("list-action-{mod_idx}-{idx}")))
                     .px(px(10.))
                     .py(px(4.))
                     .bg(action_bg)
@@ -892,9 +875,7 @@ impl<B: MetaBackend> MetaApp<B> {
                     .gap(px(4.))
                     .child(
                         div()
-                            .id(SharedString::from(format!(
-                                "row-edit-{mod_idx}-{id_copy}"
-                            )))
+                            .id(SharedString::from(format!("row-edit-{mod_idx}-{id_copy}")))
                             .px(px(6.))
                             .text_color(accent)
                             .text_size(px(13.))
@@ -906,9 +887,7 @@ impl<B: MetaBackend> MetaApp<B> {
                     )
                     .child(
                         div()
-                            .id(SharedString::from(format!(
-                                "row-del-{mod_idx}-{id_copy}"
-                            )))
+                            .id(SharedString::from(format!("row-del-{mod_idx}-{id_copy}")))
                             .px(px(6.))
                             .text_color(destructive_fg)
                             .text_size(px(13.))
@@ -919,8 +898,7 @@ impl<B: MetaBackend> MetaApp<B> {
                                 // directo: el modal de confirmación se
                                 // renderea arriba en `render` y maneja
                                 // confirm/cancel.
-                                this.pending_delete =
-                                    Some((entity_for_delete.clone(), id_copy));
+                                this.pending_delete = Some((entity_for_delete.clone(), id_copy));
                                 this.toast = None;
                                 cx.notify();
                             })),
@@ -955,6 +933,59 @@ impl<B: MetaBackend> MetaApp<B> {
     /// click en una opción setea el TextInput del field con el UUID
     /// seleccionado. El item del UUID actualmente seleccionado (si
     /// hay) se resalta con accent color.
+    /// Chips clickables para un campo [`FieldKind::Select`]. El chip de
+    /// la opción elegida se resalta con accent. Click setea el
+    /// `TextInput` del field (de donde lee el submit), igual que el
+    /// selector de EntityRef.
+    fn render_select_chips(
+        &self,
+        cx: &mut Context<Self>,
+        field_name: String,
+        options: &[SelectOption],
+        text_dim: gpui::Hsla,
+        accent: gpui::Hsla,
+    ) -> gpui::Div {
+        let theme = Theme::global(cx);
+        let row_active = theme.bg_row_active;
+        let row_hover = theme.bg_row_hover;
+        let border = theme.border;
+        let current = self
+            .form_inputs
+            .get(&field_name)
+            .map(|inp| inp.read(&*cx).text().to_string())
+            .unwrap_or_default();
+
+        let mut row = div().mt(px(2.)).flex().flex_row().flex_wrap().gap(px(4.));
+
+        for opt in options {
+            let value = opt.value.clone();
+            let is_selected = current == value;
+            let field_for_click = field_name.clone();
+            let value_for_click = value.clone();
+            row = row.child(
+                div()
+                    .id(SharedString::from(format!("select-{field_name}-{value}")))
+                    .px(px(8.))
+                    .py(px(3.))
+                    .rounded(px(10.))
+                    .border_1()
+                    .border_color(if is_selected { accent } else { border })
+                    .text_size(px(11.))
+                    .text_color(if is_selected { accent } else { text_dim })
+                    .when(is_selected, move |d| d.bg(row_active))
+                    .hover(move |d| d.bg(row_hover))
+                    .child(opt.display().to_string())
+                    .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                        if let Some(input) = this.form_inputs.get(&field_for_click) {
+                            input.update(cx, |inp, cx| inp.set_text(value_for_click.clone(), cx));
+                        }
+                        cx.notify();
+                    })),
+            );
+        }
+        row
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn render_entity_ref_selector(
         &self,
@@ -1082,36 +1113,66 @@ impl<B: MetaBackend> MetaApp<B> {
                     .child(label),
             );
 
-            // Mount del TextInput vivo (creado en select_view).
-            if let Some(input) = self.form_inputs.get(&f.name) {
-                field_box = field_box.child(input.clone());
-            } else {
-                // No debería pasar — select_view crea inputs por cada
-                // field. Fallback display estático por seguridad.
-                field_box = field_box.child(
-                    div()
-                        .px(px(8.))
-                        .py(px(6.))
-                        .bg(input_bg)
-                        .text_color(text_dim)
-                        .child("(input no inicializado)"),
-                );
-            }
-
-            // Para EntityRef, agregamos un selector clickable de
-            // records existentes debajo del TextInput. Click en una
-            // opción setea el TextInput interno con el UUID; el
-            // submit lee de ahí como cualquier otro field.
-            if f.kind == FieldKind::EntityRef {
-                if let Some(target_entity) = &f.ref_entity {
-                    field_box = field_box.child(self.render_entity_ref_selector(
+            // Render según el kind. AutoId y Select NO montan el
+            // TextInput editable —aunque sí existe en `form_inputs`, de
+            // donde lee el submit—; presentan su propio control.
+            match f.kind {
+                FieldKind::AutoId => {
+                    // Read-only: el UUID autogenerado, sólo informativo.
+                    let val = self
+                        .form_inputs
+                        .get(&f.name)
+                        .map(|i| i.read(&*cx).text().to_string())
+                        .unwrap_or_default();
+                    field_box = field_box.child(
+                        div()
+                            .px(px(8.))
+                            .py(px(6.))
+                            .bg(input_bg)
+                            .text_color(text_dim)
+                            .text_size(px(11.))
+                            .child(format!("{val}  ·  automático")),
+                    );
+                }
+                FieldKind::Select => {
+                    field_box = field_box.child(self.render_select_chips(
                         cx,
                         f.name.clone(),
-                        target_entity.clone(),
-                        text,
+                        &f.options,
                         text_dim,
                         accent,
                     ));
+                }
+                _ => {
+                    // Mount del TextInput vivo (creado en select_view).
+                    if let Some(input) = self.form_inputs.get(&f.name) {
+                        field_box = field_box.child(input.clone());
+                    } else {
+                        // No debería pasar — select_view crea inputs por
+                        // cada field. Fallback estático por seguridad.
+                        field_box = field_box.child(
+                            div()
+                                .px(px(8.))
+                                .py(px(6.))
+                                .bg(input_bg)
+                                .text_color(text_dim)
+                                .child("(input no inicializado)"),
+                        );
+                    }
+                    // EntityRef: selector clickable de records debajo
+                    // del input. Click setea el TextInput con el UUID.
+                    if f.kind == FieldKind::EntityRef {
+                        if let Some(target_entity) = &f.ref_entity {
+                            field_box = field_box.child(self.render_entity_ref_selector(
+                                cx,
+                                f.name.clone(),
+                                target_entity.clone(),
+                                text,
+                                text_dim,
+                                accent,
+                            ));
+                        }
+                    }
                 }
             }
 

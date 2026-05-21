@@ -14,13 +14,13 @@
 use std::collections::BTreeMap;
 
 use gpui::TestAppContext;
-use serde_json::json;
 use nahual_meta_runtime::testing::MockBackend;
 use nahual_meta_schema::{
     Action, Column, EntitySpec, FieldKind, FieldSpec, FormView, ListView, MenuItem, Module, View,
 };
 use nahual_theme::Theme;
 use nahual_widget_meta_form::MetaApp;
+use serde_json::json;
 
 /// Helper: módulo demo simple con una entity Customer + view list.
 fn customers_module() -> Module {
@@ -52,6 +52,7 @@ fn customers_module() -> Module {
                 required: true,
                 help: None,
                 ref_entity: None,
+                options: Vec::new(),
             }],
             on_submit: Action::SeedEntity {
                 entity: "Customer".into(),
@@ -92,22 +93,11 @@ fn customers_module() -> Module {
 fn meta_app_constructs_with_mock_backend_and_initial_state(cx: &mut TestAppContext) {
     cx.update(|cx| Theme::install_default(cx));
     let id = uuid::Uuid::new_v4();
-    let backend = MockBackend::with_records([(
-        "Customer".into(),
-        id,
-        json!({"name": "Acme"}),
-    )]);
+    let backend = MockBackend::with_records([("Customer".into(), id, json!({"name": "Acme"}))]);
     let modules = vec![customers_module()];
 
-    let entity = cx.add_window(|_w, cx| {
-        MetaApp::new(
-            modules,
-            backend,
-            Some("hola".into()),
-            None,
-            cx,
-        )
-    });
+    let entity =
+        cx.add_window(|_w, cx| MetaApp::new(modules, backend, Some("hola".into()), None, cx));
 
     let _ = entity; // mantener viva la window para el reactor.
 }
@@ -123,9 +113,7 @@ fn open_view_action_does_not_panic(cx: &mut TestAppContext) {
     let backend = MockBackend::new();
     let modules = vec![customers_module()];
 
-    let window = cx.add_window(|_w, cx| {
-        MetaApp::new(modules, backend, None, None, cx)
-    });
+    let window = cx.add_window(|_w, cx| MetaApp::new(modules, backend, None, None, cx));
 
     // Update vía window: ejecutar apply_action.
     window
@@ -152,16 +140,10 @@ fn open_view_action_does_not_panic(cx: &mut TestAppContext) {
 fn backend_state_visible_from_widget_perspective(cx: &mut TestAppContext) {
     cx.update(|cx| Theme::install_default(cx));
     let id = uuid::Uuid::new_v4();
-    let backend = MockBackend::with_records([(
-        "Customer".into(),
-        id,
-        json!({"name": "Acme"}),
-    )]);
+    let backend = MockBackend::with_records([("Customer".into(), id, json!({"name": "Acme"}))]);
     let modules = vec![customers_module()];
 
-    let window = cx.add_window(|_w, cx| {
-        MetaApp::new(modules, backend, None, None, cx)
-    });
+    let window = cx.add_window(|_w, cx| MetaApp::new(modules, backend, None, None, cx));
 
     // Read directo del backend via list_records, vía la API
     // que renders usan internamente.
@@ -172,11 +154,8 @@ fn backend_state_visible_from_widget_perspective(cx: &mut TestAppContext) {
             // un nuevo MockBackend igual al construido devuelve el
             // mismo record, validamos el contrato de cómo el mock
             // simula state.
-            let mock_check = MockBackend::with_records([(
-                "Customer".into(),
-                id,
-                json!({"name": "Acme"}),
-            )]);
+            let mock_check =
+                MockBackend::with_records([("Customer".into(), id, json!({"name": "Acme"}))]);
             use nahual_meta_runtime::MetaBackend;
             let rows = mock_check.list_records("Customer");
             assert_eq!(rows.len(), 1);
@@ -190,9 +169,7 @@ fn backend_state_visible_from_widget_perspective(cx: &mut TestAppContext) {
 /// para vivir en una `Entity` de GPUI (el bound del trait es
 /// `'static`; se cumple).
 #[gpui::test]
-fn morphism_handler_can_be_registered_and_called_via_widget(
-    cx: &mut TestAppContext,
-) {
+fn morphism_handler_can_be_registered_and_called_via_widget(cx: &mut TestAppContext) {
     cx.update(|cx| Theme::install_default(cx));
     let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counter_clone = counter.clone();
@@ -205,9 +182,7 @@ fn morphism_handler_can_be_registered_and_called_via_widget(
     );
     let modules = vec![customers_module()];
 
-    let window = cx.add_window(|_w, cx| {
-        MetaApp::new(modules, backend, None, None, cx)
-    });
+    let window = cx.add_window(|_w, cx| MetaApp::new(modules, backend, None, None, cx));
 
     // Invocar un Action::Morphism vía apply_action: como el módulo
     // demo no declara morphism + no hay nakui_module_dir, esperamos

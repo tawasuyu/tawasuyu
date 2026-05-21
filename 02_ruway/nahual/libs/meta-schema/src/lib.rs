@@ -190,6 +190,10 @@ pub struct FieldSpec {
     /// Para los demás kinds, este campo se ignora.
     #[serde(default)]
     pub ref_entity: Option<String>,
+    /// Opciones de un campo `kind == Select`. Ignorado para los demás
+    /// kinds. `Module::validate` exige que un Select las tenga.
+    #[serde(default)]
+    pub options: Vec<SelectOption>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -210,6 +214,31 @@ pub enum FieldKind {
     /// `FieldSpec.ref_entity`; el value almacenado es el UUID del
     /// seleccionado, parseable como cualquier text/UUID al submit.
     EntityRef,
+    /// Valor elegido de un conjunto cerrado declarado en
+    /// `FieldSpec.options`. El runtime lo renderiza como selección
+    /// (no texto libre). `Module::validate` exige `options` no vacío.
+    Select,
+    /// Identificador autogenerado (UUID v4). El runtime lo rellena al
+    /// abrir el formulario; el usuario no lo teclea ni lo edita. Para
+    /// los ids de idempotencia que piden los morfismos.
+    AutoId,
+}
+
+/// Una opción de un campo [`FieldKind::Select`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SelectOption {
+    /// Valor que se guarda (lo que recibe el backend o el morfismo).
+    pub value: String,
+    /// Etiqueta legible. Si se omite, se muestra el `value` crudo.
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+impl SelectOption {
+    /// Texto a mostrar: `label` si está, sino el `value`.
+    pub fn display(&self) -> &str {
+        self.label.as_deref().unwrap_or(&self.value)
+    }
 }
 
 /// Acciones disparables por menús, botones o submit de formularios.
@@ -307,6 +336,15 @@ pub enum SchemaError {
         view: String,
         field: String,
     },
+    #[error(
+        "módulo {id} vista '{view}': field '{field}' tiene kind=select \
+         pero no declaró options"
+    )]
+    SelectMissingOptions {
+        id: String,
+        view: String,
+        field: String,
+    },
 }
 
 impl Module {
@@ -344,6 +382,13 @@ impl Module {
                 for f in &form.fields {
                     if f.kind == FieldKind::EntityRef && f.ref_entity.is_none() {
                         return Err(SchemaError::EntityRefMissingTarget {
+                            id: self.id.clone(),
+                            view: view_key.clone(),
+                            field: f.name.clone(),
+                        });
+                    }
+                    if f.kind == FieldKind::Select && f.options.is_empty() {
+                        return Err(SchemaError::SelectMissingOptions {
                             id: self.id.clone(),
                             view: view_key.clone(),
                             field: f.name.clone(),
@@ -419,6 +464,7 @@ mod tests {
                         required: true,
                         help: None,
                         ref_entity: None,
+                        options: Vec::new(),
                     },
                     FieldSpec {
                         name: "email".into(),
@@ -428,6 +474,7 @@ mod tests {
                         required: false,
                         help: Some("Opcional".into()),
                         ref_entity: None,
+                        options: Vec::new(),
                     },
                 ],
             }],
@@ -481,6 +528,7 @@ mod tests {
                             required: true,
                             help: None,
                             ref_entity: None,
+                            options: Vec::new(),
                         }],
                         on_submit: Action::SeedEntity {
                             entity: "customer".into(),
@@ -573,6 +621,7 @@ mod tests {
                     required: true,
                     help: None,
                     ref_entity: None,
+                    options: Vec::new(),
                 }],
                 on_submit: Action::SeedEntity {
                     entity: "customer".into(),
@@ -603,6 +652,7 @@ mod tests {
                     required: true,
                     help: None,
                     ref_entity: Some("supplier".into()),
+                    options: Vec::new(),
                 }],
                 on_submit: Action::SeedEntity {
                     entity: "customer".into(),
@@ -619,6 +669,92 @@ mod tests {
     }
 
     #[test]
+    fn select_without_options_is_rejected() {
+        let mut m = sample_module();
+        m.views.insert(
+            "sel_form".into(),
+            View::Form(FormView {
+                title: "Select roto".into(),
+                entity: "customer".into(),
+                fields: vec![FieldSpec {
+                    name: "estado".into(),
+                    label: "Estado".into(),
+                    kind: FieldKind::Select,
+                    default: None,
+                    required: true,
+                    help: None,
+                    ref_entity: None,
+                    options: Vec::new(),
+                }],
+                on_submit: Action::SeedEntity {
+                    entity: "customer".into(),
+                    next_view: None,
+                },
+            }),
+        );
+        let err = m.validate().unwrap_err();
+        assert!(
+            matches!(err, SchemaError::SelectMissingOptions { .. }),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn select_with_options_validates_clean() {
+        let mut m = sample_module();
+        m.views.insert(
+            "sel_form".into(),
+            View::Form(FormView {
+                title: "Select OK".into(),
+                entity: "customer".into(),
+                fields: vec![FieldSpec {
+                    name: "estado".into(),
+                    label: "Estado".into(),
+                    kind: FieldKind::Select,
+                    default: None,
+                    required: true,
+                    help: None,
+                    ref_entity: None,
+                    options: vec![
+                        SelectOption {
+                            value: "activo".into(),
+                            label: Some("Activo".into()),
+                        },
+                        SelectOption {
+                            value: "baja".into(),
+                            label: None,
+                        },
+                    ],
+                }],
+                on_submit: Action::SeedEntity {
+                    entity: "customer".into(),
+                    next_view: None,
+                },
+            }),
+        );
+        m.menu.push(MenuItem {
+            label: "Sel".into(),
+            view: "sel_form".into(),
+            icon: None,
+        });
+        m.validate().unwrap();
+    }
+
+    #[test]
+    fn select_option_display_falls_back_to_value() {
+        let with_label = SelectOption {
+            value: "x".into(),
+            label: Some("Equis".into()),
+        };
+        let bare = SelectOption {
+            value: "y".into(),
+            label: None,
+        };
+        assert_eq!(with_label.display(), "Equis");
+        assert_eq!(bare.display(), "y");
+    }
+
+    #[test]
     fn load_modules_detects_duplicate_id() {
         let tmp = tempfile::tempdir().unwrap();
         let a_dir = tmp.path().join("a");
@@ -626,16 +762,8 @@ mod tests {
         std::fs::create_dir_all(&a_dir).unwrap();
         std::fs::create_dir_all(&b_dir).unwrap();
         let m = sample_module(); // id = "customers"
-        std::fs::write(
-            a_dir.join("module.json"),
-            serde_json::to_vec(&m).unwrap(),
-        )
-        .unwrap();
-        std::fs::write(
-            b_dir.join("module.json"),
-            serde_json::to_vec(&m).unwrap(),
-        )
-        .unwrap();
+        std::fs::write(a_dir.join("module.json"), serde_json::to_vec(&m).unwrap()).unwrap();
+        std::fs::write(b_dir.join("module.json"), serde_json::to_vec(&m).unwrap()).unwrap();
         let err = load_modules_from_dir(tmp.path()).unwrap_err();
         assert!(matches!(err, SchemaError::DuplicateModuleId { .. }));
     }

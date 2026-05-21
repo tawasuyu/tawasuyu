@@ -137,7 +137,10 @@ mod tests {
     use serde_json::json;
 
     fn map_of(items: &[(&str, Value)]) -> serde_json::Map<String, Value> {
-        items.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+        items
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
     }
 
     #[test]
@@ -180,7 +183,10 @@ mod tests {
     fn update_with_set_changes_field() {
         let mut b = MockBackend::new();
         let id = b
-            .seed("Customer", map_of(&[("name", json!("Acme")), ("notes", json!("x"))]))
+            .seed(
+                "Customer",
+                map_of(&[("name", json!("Acme")), ("notes", json!("x"))]),
+            )
             .unwrap()
             .id
             .unwrap();
@@ -205,7 +211,10 @@ mod tests {
     fn update_with_clear_removes_key() {
         let mut b = MockBackend::new();
         let id = b
-            .seed("Customer", map_of(&[("name", json!("Acme")), ("notes", json!("x"))]))
+            .seed(
+                "Customer",
+                map_of(&[("name", json!("Acme")), ("notes", json!("x"))]),
+            )
             .unwrap()
             .id
             .unwrap();

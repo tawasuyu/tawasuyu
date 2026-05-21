@@ -204,30 +204,24 @@ mod tests {
     use serde_json::json;
 
     fn map_of(items: &[(&str, Value)]) -> serde_json::Map<String, Value> {
-        items.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+        items
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
     }
 
     #[test]
     fn with_records_populates_state() {
         let id = Uuid::new_v4();
-        let b = MockBackend::with_records([(
-            "Customer".into(),
-            id,
-            json!({"name": "Acme"}),
-        )]);
+        let b = MockBackend::with_records([("Customer".into(), id, json!({"name": "Acme"}))]);
         assert_eq!(b.total_records(), 1);
-        assert_eq!(
-            b.load_record("Customer", id),
-            Some(json!({"name": "Acme"}))
-        );
+        assert_eq!(b.load_record("Customer", id), Some(json!({"name": "Acme"})));
     }
 
     #[test]
     fn seed_then_load_round_trip_via_trait() {
         let mut b = MockBackend::new();
-        let out = b
-            .seed("X", map_of(&[("k", json!(1))]))
-            .unwrap();
+        let out = b.seed("X", map_of(&[("k", json!(1))])).unwrap();
         let id = out.id.unwrap();
         assert_eq!(out.changed, 1);
         assert_eq!(b.load_record("X", id), Some(json!({"k": 1})));
@@ -236,25 +230,15 @@ mod tests {
     #[test]
     fn update_no_op_returns_no_change() {
         let id = Uuid::new_v4();
-        let mut b = MockBackend::with_records([(
-            "X".into(),
-            id,
-            json!({"k": 1}),
-        )]);
-        let out = b
-            .update("X", id, serde_json::Map::new(), vec![])
-            .unwrap();
+        let mut b = MockBackend::with_records([("X".into(), id, json!({"k": 1}))]);
+        let out = b.update("X", id, serde_json::Map::new(), vec![]).unwrap();
         assert_eq!(out, WriteOutcome::no_change(id));
     }
 
     #[test]
     fn update_set_and_clear_aplica_ambos() {
         let id = Uuid::new_v4();
-        let mut b = MockBackend::with_records([(
-            "X".into(),
-            id,
-            json!({"a": 1, "b": 2}),
-        )]);
+        let mut b = MockBackend::with_records([("X".into(), id, json!({"a": 1, "b": 2}))]);
         let out = b
             .update("X", id, map_of(&[("a", json!(10))]), vec!["b".into()])
             .unwrap();
@@ -267,11 +251,7 @@ mod tests {
     #[test]
     fn delete_then_load_returns_none() {
         let id = Uuid::new_v4();
-        let mut b = MockBackend::with_records([(
-            "X".into(),
-            id,
-            json!({"k": 1}),
-        )]);
+        let mut b = MockBackend::with_records([("X".into(), id, json!({"k": 1}))]);
         b.delete("X", id).unwrap();
         assert!(b.load_record("X", id).is_none());
     }
@@ -287,17 +267,14 @@ mod tests {
 
     #[test]
     fn with_morphism_lets_caller_simulate_logic() {
-        let mut b = MockBackend::new().with_morphism(
-            "double_qty",
-            |inputs, params| {
-                assert!(inputs.is_empty());
-                let qty = params.get("qty").and_then(|v| v.as_i64()).unwrap_or(0);
-                if qty <= 0 {
-                    return Err("qty must be positive".into());
-                }
-                Ok(qty as usize)
-            },
-        );
+        let mut b = MockBackend::new().with_morphism("double_qty", |inputs, params| {
+            assert!(inputs.is_empty());
+            let qty = params.get("qty").and_then(|v| v.as_i64()).unwrap_or(0);
+            if qty <= 0 {
+                return Err("qty must be positive".into());
+            }
+            Ok(qty as usize)
+        });
         let out = b
             .morphism("mod", "double_qty", BTreeMap::new(), json!({"qty": 7}))
             .unwrap();
@@ -326,11 +303,7 @@ mod tests {
     #[test]
     fn records_for_returns_borrowed_view() {
         let id = Uuid::new_v4();
-        let b = MockBackend::with_records([(
-            "X".into(),
-            id,
-            json!({"k": 1}),
-        )]);
+        let b = MockBackend::with_records([("X".into(), id, json!({"k": 1}))]);
         let view = b.records_for("X");
         assert_eq!(view.len(), 1);
         assert_eq!(view[0].0, id);
