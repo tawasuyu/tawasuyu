@@ -42,7 +42,7 @@ use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::{Event as SessionEvent, Session};
 use smithay::backend::udev;
 use smithay::input::keyboard::FilterResult;
-use smithay::input::pointer::{AxisFrame, ButtonEvent, MotionEvent};
+use smithay::input::pointer::{AxisFrame, ButtonEvent, CursorImageStatus, MotionEvent};
 use smithay::output::OutputModeSource;
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
@@ -53,7 +53,7 @@ use smithay::reexports::input::Libinput;
 use smithay::reexports::rustix::fs::OFlags;
 use smithay::reexports::wayland_server::{Display, ListeningSocket};
 use smithay::utils::{
-    DeviceFd, Logical, Physical, Point, Rectangle, Scale, Size, Transform, SERIAL_COUNTER,
+    DeviceFd, IsAlive, Logical, Physical, Point, Rectangle, Scale, Size, Transform, SERIAL_COUNTER,
 };
 
 use mirada_brain::{BodyEvent, CtlReply, Keymap, Rect};
@@ -165,18 +165,40 @@ impl DrmState {
         let elements: Vec<Frame<GlesRenderer>> = {
             let mut out: Vec<Frame<GlesRenderer>> = Vec::new();
 
+            // El cursor — la superficie que pidió el cliente (la «I» del
+            // texto, una mano…), o el cuadrado por defecto si pidió un
+            // cursor con nombre y no hay tema. `Hidden` no pinta nada.
             let (cx, cy) = self.app.pointer_loc;
-            let cursor_rect = Rectangle::new(
-                Point::<i32, Physical>::from((cx.round() as i32, cy.round() as i32)),
-                Size::<i32, Physical>::from((CURSOR_SIZE, CURSOR_SIZE)),
-            );
-            out.push(Frame::Solid(SolidColorRenderElement::new(
-                self.cursor_id.clone(),
-                cursor_rect,
-                CommitCounter::default(),
-                CURSOR_COLOR,
-                Kind::Cursor,
-            )));
+            match &self.app.cursor_status {
+                CursorImageStatus::Hidden => {}
+                CursorImageStatus::Surface(surface) if surface.alive() => {
+                    let (hx, hy) = crate::cursor_hotspot(surface);
+                    let loc = (cx.round() as i32 - hx, cy.round() as i32 - hy);
+                    for el in render_elements_from_surface_tree(
+                        &mut self.renderer,
+                        surface,
+                        loc,
+                        1.0,
+                        1.0,
+                        Kind::Cursor,
+                    ) {
+                        out.push(Frame::Window(el));
+                    }
+                }
+                _ => {
+                    let cursor_rect = Rectangle::new(
+                        Point::<i32, Physical>::from((cx.round() as i32, cy.round() as i32)),
+                        Size::<i32, Physical>::from((CURSOR_SIZE, CURSOR_SIZE)),
+                    );
+                    out.push(Frame::Solid(SolidColorRenderElement::new(
+                        self.cursor_id.clone(),
+                        cursor_rect,
+                        CommitCounter::default(),
+                        CURSOR_COLOR,
+                        Kind::Cursor,
+                    )));
+                }
+            }
 
             let mut shown: Vec<_> = self.app.windows.iter().filter(|w| w.visible).collect();
             shown.sort_by_key(|w| !w.floating);
@@ -227,6 +249,12 @@ impl DrmState {
         let time = self.start.elapsed().as_millis() as u32;
         for w in &self.app.windows {
             send_frames_surface_tree(&w.surface, time);
+        }
+        // También a la superficie del cursor, por si es un cursor animado.
+        if let CursorImageStatus::Surface(surface) = &self.app.cursor_status {
+            if surface.alive() {
+                send_frames_surface_tree(surface, time);
+            }
         }
     }
 
@@ -451,6 +479,13 @@ impl DrmState {
             },
         );
         pointer.frame(&mut self.app);
+
+        // Sobre el escritorio pelado no manda ningún cliente: el cursor
+        // vuelve al de por defecto (si no, se queda con la «I» del texto
+        // de la última ventana).
+        if hit.is_none() {
+            self.app.cursor_status = CursorImageStatus::default_named();
+        }
 
         // Foco-sigue-ratón: al pasar a otra ventana, que el Cerebro la enfoque.
         let hovered = hit.map(|i| self.app.windows[i].id);

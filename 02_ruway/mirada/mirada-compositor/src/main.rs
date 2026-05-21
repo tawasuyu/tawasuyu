@@ -33,7 +33,7 @@ use smithay::backend::renderer::utils::{
 use smithay::backend::renderer::{Color32F, Frame, Renderer};
 use smithay::backend::winit::{self, WinitEvent};
 use smithay::input::keyboard::{xkb, FilterResult, KeyboardHandle, Keysym, ModifiersState};
-use smithay::input::pointer::PointerHandle;
+use smithay::input::pointer::{CursorImageStatus, CursorImageSurfaceData, PointerHandle};
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
@@ -140,6 +140,9 @@ struct App {
     pointer: Option<PointerHandle<Self>>,
     /// Posición del puntero en coordenadas globales.
     pointer_loc: (f64, f64),
+    /// Qué cursor pide el cliente enfocado — una superficie suya, un
+    /// cursor con nombre, u oculto. El backend lo pinta en consecuencia.
+    cursor_status: CursorImageStatus,
     /// Arrastre de ventana en curso (mover o redimensionar con el ratón).
     drag: Option<DragGrab>,
 
@@ -476,11 +479,11 @@ impl SeatHandler for App {
     }
 
     fn focus_changed(&mut self, _seat: &Seat<Self>, _focused: Option<&WlSurface>) {}
-    fn cursor_image(
-        &mut self,
-        _seat: &Seat<Self>,
-        _image: smithay::input::pointer::CursorImageStatus,
-    ) {
+
+    /// El cliente enfocado pidió un cursor — guardamos su petición; el
+    /// backend la pinta (su superficie, o el cuadrado si es con nombre).
+    fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
+        self.cursor_status = image;
     }
 }
 
@@ -609,6 +612,22 @@ fn surface_px_size(w: &ManagedWindow) -> Option<(i32, i32)> {
         .map(|s| (s.w, s.h))
 }
 
+/// El punto caliente (hotspot) de una superficie de cursor: el píxel de
+/// la imagen que debe quedar bajo la posición real del puntero. `(0, 0)`
+/// si el cliente no lo declaró.
+fn cursor_hotspot(surface: &WlSurface) -> (i32, i32) {
+    with_states(surface, |states| {
+        states
+            .data_map
+            .get::<CursorImageSurfaceData>()
+            .map(|m| {
+                let h = m.lock().unwrap().hotspot;
+                (h.x, h.y)
+            })
+            .unwrap_or((0, 0))
+    })
+}
+
 /// Lanza un comando como proceso hijo, vía `sh -c`. El hijo hereda el
 /// entorno —`WAYLAND_DISPLAY` incluido—, así que el cliente que abra se
 /// conecta a este compositor. Lo usan la acción `spawn:…` del keymap y
@@ -724,6 +743,7 @@ fn build_app() -> Result<Setup, Box<dyn std::error::Error>> {
         keyboard: None,
         pointer: None,
         pointer_loc: (0.0, 0.0),
+        cursor_status: CursorImageStatus::default_named(),
         drag: None,
         windows: Vec::new(),
         body: BodyState::new(),
