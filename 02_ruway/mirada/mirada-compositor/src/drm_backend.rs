@@ -157,8 +157,8 @@ impl DrmState {
         // tamaño (sigue al contenido) y su color (según el foco). Cada
         // `SolidColorBuffer` sube su contador de daño sólo si algo cambió.
         for w in &mut self.app.windows {
-            if !w.visible {
-                continue;
+            if !w.visible || w.is_shell {
+                continue; // el shell no lleva marco
             }
             let (x, y) = crate::render_loc(w);
             let (sw, sh) = crate::surface_px_size(w).unwrap_or(w.size);
@@ -210,21 +210,27 @@ impl DrmState {
                 }
             }
 
+            // El shell va sobre todo; luego las flotantes; luego las
+            // teseladas. `sort_by_key` es estable: respeta el orden de
+            // apertura dentro de cada grupo.
             let mut shown: Vec<_> = self.app.windows.iter().filter(|w| w.visible).collect();
-            shown.sort_by_key(|w| !w.floating);
+            shown.sort_by_key(|w| (!w.is_shell, !w.floating));
             for w in &shown {
                 let (x, y) = crate::render_loc(w);
                 let (sw, sh) = crate::surface_px_size(w).unwrap_or(w.size);
-                let rects = border_rects(x, y, sw, sh);
-                // El marco, encima de la propia superficie de la ventana.
-                for (buf, (bx, by, _, _)) in w.borders.iter().zip(rects) {
-                    out.push(Frame::Solid(SolidColorRenderElement::from_buffer(
-                        buf,
-                        (bx, by),
-                        1.0,
-                        1.0,
-                        Kind::Unspecified,
-                    )));
+                // El marco, encima de la propia superficie de la ventana
+                // — el shell no lleva.
+                if !w.is_shell {
+                    let rects = border_rects(x, y, sw, sh);
+                    for (buf, (bx, by, _, _)) in w.borders.iter().zip(rects) {
+                        out.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                            buf,
+                            (bx, by),
+                            1.0,
+                            1.0,
+                            Kind::Unspecified,
+                        )));
+                    }
                 }
                 for el in render_elements_from_surface_tree(
                     &mut self.renderer,
@@ -525,13 +531,25 @@ impl DrmState {
             self.app.cursor_status = CursorImageStatus::default_named();
         }
 
-        // Foco-sigue-ratón: al pasar a otra ventana, que el Cerebro la enfoque.
+        // Foco-sigue-ratón: al pasar a otra ventana, que la enfoque quien
+        // corresponda — el Cerebro para las teseladas, carmen mismo para
+        // el shell (que no vive en el Cerebro).
         let hovered = hit.map(|i| self.app.windows[i].id);
         if hovered != self.last_pointer_window {
             self.last_pointer_window = hovered;
-            if let Some(id) = hovered {
-                let ev = self.app.body.pointer_enter(id);
-                self.app.brain_feed(ev);
+            match hit {
+                Some(i) if self.app.windows[i].is_shell => {
+                    let surf = self.app.windows[i].surface.clone();
+                    if let Some(kb) = self.app.keyboard.clone() {
+                        kb.set_focus(&mut self.app, Some(surf), SERIAL_COUNTER.next_serial());
+                    }
+                }
+                Some(i) => {
+                    let id = self.app.windows[i].id;
+                    let ev = self.app.body.pointer_enter(id);
+                    self.app.brain_feed(ev);
+                }
+                None => {}
             }
         }
     }
@@ -564,13 +582,17 @@ impl DrmState {
         true
     }
 
-    /// El índice de la ventana visible bajo el punto `(x, y)`, si la hay —
-    /// en orden front-to-back (las flotantes ganan a las teseladas).
+    /// El índice de la ventana visible bajo el punto `(x, y)`, si la hay
+    /// — en orden front-to-back (el shell gana a las flotantes, y éstas a
+    /// las teseladas).
     fn window_at(&self, x: f64, y: f64) -> Option<usize> {
         let mut idx: Vec<usize> = (0..self.app.windows.len())
             .filter(|&i| self.app.windows[i].visible)
             .collect();
-        idx.sort_by_key(|&i| !self.app.windows[i].floating);
+        idx.sort_by_key(|&i| {
+            let w = &self.app.windows[i];
+            (!w.is_shell, !w.floating)
+        });
         idx.into_iter().find(|&i| {
             let w = &self.app.windows[i];
             let (lx, ly) = crate::render_loc(w);
@@ -716,6 +738,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     // La salida del Cerebro = el modo del monitor.
     let ev = app.body.add_output(0, mode_w as i32, mode_h as i32);
     app.brain_feed(ev);
+    app.output_size = (mode_w as i32, mode_h as i32);
     // El puntero arranca en el centro de la pantalla.
     app.pointer_loc = (mode_w as f64 / 2.0, mode_h as f64 / 2.0);
     // Anuncia el monitor en el protocolo Wayland — los clientes lo exigen.

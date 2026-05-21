@@ -89,6 +89,13 @@ enum Brain {
     Linked(BodyLink),
 }
 
+/// `app_id` que distingue a la ventana del shell del escritorio. carmen
+/// no la tesela: la acopla a una franja al pie de la pantalla.
+const SHELL_APP_ID: &str = "carmen.shell";
+
+/// Alto en píxeles de la franja del shell, al pie de la salida.
+const SHELL_DOCK_HEIGHT: i32 = 40;
+
 /// Una ventana de cliente que el compositor gestiona.
 struct ManagedWindow {
     id: u64,
@@ -104,6 +111,8 @@ struct ManagedWindow {
     floating: bool,
     /// `true` si tiene el foco del teclado — pinta el marco resaltado.
     focused: bool,
+    /// `true` si es la ventana del shell — acoplada al pie, sin teselar.
+    is_shell: bool,
     /// Búferes de los 4 lados del marco (arriba, abajo, izq., der.) —
     /// cada uno con su `Id` estable para el seguimiento de daño.
     borders: [SolidColorBuffer; 4],
@@ -150,6 +159,9 @@ struct App {
     cursor_status: CursorImageStatus,
     /// Arrastre de ventana en curso (mover o redimensionar con el ratón).
     drag: Option<DragGrab>,
+    /// Tamaño real de la salida (con la franja del shell incluida) — lo
+    /// fija el backend; sirve para acoplar la ventana del shell.
+    output_size: (i32, i32),
 
     /// Ventanas gestionadas, en orden de aparición.
     windows: Vec<ManagedWindow>,
@@ -304,8 +316,8 @@ impl App {
                 })
                 .unwrap_or_default()
         });
-        let app_id = if app_id.is_empty() { "cliente".into() } else { app_id };
-        let title = if title.is_empty() { format!("ventana {id}") } else { title };
+        // La ventana del shell no se tesela: carmen la acopla al pie.
+        let is_shell = app_id == SHELL_APP_ID;
 
         self.windows.push(ManagedWindow {
             id,
@@ -316,10 +328,55 @@ impl App {
             visible: false,
             floating: false,
             focused: false,
+            is_shell,
             borders: std::array::from_fn(|_| SolidColorBuffer::default()),
         });
-        let ev = self.body.open_surface(id, app_id, title);
+
+        if is_shell {
+            self.dock_shell();
+        } else {
+            let app_id = if app_id.is_empty() { "cliente".into() } else { app_id };
+            let title = if title.is_empty() { format!("ventana {id}") } else { title };
+            let ev = self.body.open_surface(id, app_id, title);
+            self.brain_feed(ev);
+        }
+    }
+
+    /// Acopla la ventana del shell: le reserva una franja al pie de la
+    /// salida —el Cerebro tesela el área que queda— y la dimensiona y
+    /// coloca ahí. Se llama al registrarla y al cambiar el tamaño de la
+    /// salida.
+    fn dock_shell(&mut self) {
+        let (ow, oh) = self.output_size;
+        if ow == 0 || oh == 0 {
+            return; // la salida todavía no está lista
+        }
+        // Reserva la franja: el Cerebro tesela en el alto que queda.
+        let ev = self.body.resize_output(0, ow, oh - SHELL_DOCK_HEIGHT);
         self.brain_feed(ev);
+        // Dimensiona la ventana del shell y la fija en la franja.
+        if let Some(w) = self.windows.iter_mut().find(|w| w.is_shell) {
+            w.loc = (0, oh - SHELL_DOCK_HEIGHT);
+            w.size = (ow, SHELL_DOCK_HEIGHT);
+            w.visible = true;
+            w.toplevel.with_pending_state(|s| {
+                s.size = Some((ow.max(1), SHELL_DOCK_HEIGHT.max(1)).into());
+            });
+            w.toplevel.send_pending_configure();
+        }
+    }
+
+    /// El backend informa de un tamaño de salida nuevo (arranque o
+    /// redimensión). Si hay shell acoplado, recoloca su franja; si no,
+    /// le pasa el área entera al Cerebro.
+    fn output_changed(&mut self, width: i32, height: i32) {
+        self.output_size = (width, height);
+        if self.windows.iter().any(|w| w.is_shell) {
+            self.dock_shell();
+        } else {
+            let ev = self.body.resize_output(0, width, height);
+            self.brain_feed(ev);
+        }
     }
 }
 
@@ -388,8 +445,16 @@ impl XdgShellHandler for App {
             .iter()
             .position(|w| w.surface == *surface.wl_surface());
         if let Some(pos) = pos {
-            let id = self.windows.remove(pos).id;
-            if let Some(ev) = self.body.close_surface(id) {
+            let w = self.windows.remove(pos);
+            if w.is_shell {
+                // El shell se cerró: libera su franja, el Cerebro vuelve
+                // a teselar en la salida entera.
+                let (ow, oh) = self.output_size;
+                if ow != 0 && oh != 0 {
+                    let ev = self.body.resize_output(0, ow, oh);
+                    self.brain_feed(ev);
+                }
+            } else if let Some(ev) = self.body.close_surface(w.id) {
                 self.brain_feed(ev);
             }
         }
@@ -813,6 +878,7 @@ fn build_app() -> Result<Setup, Box<dyn std::error::Error>> {
         pointer_loc: (0.0, 0.0),
         cursor_status: CursorImageStatus::default_named(),
         drag: None,
+        output_size: (0, 0),
         windows: Vec::new(),
         body: BodyState::new(),
         brain,
@@ -925,6 +991,7 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
     {
         let ev = state.body.add_output(0, win_size.w, win_size.h);
         state.brain_feed(ev);
+        state.output_size = (win_size.w, win_size.h);
     }
 
     while state.running {
@@ -932,10 +999,7 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
         let status = winit.dispatch_new_events(|event| match event {
             WinitEvent::CloseRequested => state.running = false,
             WinitEvent::Resized { size, .. } => {
-                let ev = state.body.remove_output(0);
-                state.brain_feed(ev);
-                let ev = state.body.add_output(0, size.w, size.h);
-                state.brain_feed(ev);
+                state.output_changed(size.w, size.h);
             }
             WinitEvent::Input(InputEvent::Keyboard { event }) => {
                 let code = event.key_code();
@@ -1015,12 +1079,12 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
         {
             let (renderer, mut framebuffer) = backend.bind().unwrap();
             // Orden de pintado: la lista de elementos va front-to-back
-            // (índice 0 = encima), así que las flotantes —que deben
-            // quedar sobre las teseladas— se ordenan primero. `sort_by_key`
-            // es estable: dentro de cada grupo se respeta el orden de apertura.
+            // (índice 0 = encima): el shell primero —va sobre todo—, luego
+            // las flotantes, luego las teseladas. `sort_by_key` es estable:
+            // dentro de cada grupo se respeta el orden de apertura.
             let mut shown: Vec<&ManagedWindow> =
                 state.windows.iter().filter(|w| w.visible).collect();
-            shown.sort_by_key(|w| !w.floating);
+            shown.sort_by_key(|w| (!w.is_shell, !w.floating));
             let elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = shown
                 .iter()
                 .flat_map(|w| {

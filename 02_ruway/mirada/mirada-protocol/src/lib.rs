@@ -82,6 +82,11 @@ pub enum BodyEvent {
     OutputAdded { id: OutputId, width: i32, height: i32 },
     /// Desapareció un monitor.
     OutputRemoved { id: OutputId },
+    /// Cambió el área útil de un monitor — porque se redimensionó la
+    /// ventana anfitriona, o porque el shell reservó o liberó su franja.
+    /// El escritorio que muestra **no** cambia (a diferencia de quitar y
+    /// volver a añadir la salida).
+    OutputResized { id: OutputId, width: i32, height: i32 },
     /// Un cliente creó una ventana de nivel superior.
     WindowOpened { id: WindowId, app_id: String, title: String },
     /// Una ventana se cerró (por el cliente o tras un [`BrainCommand::Close`]).

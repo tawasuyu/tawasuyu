@@ -141,6 +141,18 @@ impl Desktop {
                 self.reflow_outputs();
                 self.relayout()
             }
+            BodyEvent::OutputResized { id, width, height } => {
+                // Sólo cambia el área útil; el escritorio que muestra la
+                // salida se conserva.
+                if let Some(o) = self.outputs.iter_mut().find(|o| o.id == id) {
+                    o.rect.w = width;
+                    o.rect.h = height;
+                    self.reflow_outputs();
+                    self.relayout()
+                } else {
+                    Vec::new()
+                }
+            }
             BodyEvent::WindowOpened { id, app_id, title } => {
                 // Las reglas pueden mandarla a otro escritorio o hacerla flotar.
                 let outcome = self.rules.resolve(&app_id, &title);
@@ -875,6 +887,23 @@ mod tests {
         let p = places(&cmds).iter().find(|p| p.id == 2).unwrap();
         assert!(p.floating);
         assert_eq!(p.rect, target);
+    }
+
+    #[test]
+    fn resizing_an_output_retiles_without_losing_the_workspace() {
+        let mut d = desktop_with_screen();
+        open(&mut d, 1);
+        d.on_event(BodyEvent::Keybind("Super+2".into())); // escritorio activo → 2
+        assert_eq!(d.active_index(), 1);
+        let cmds = d.on_event(BodyEvent::OutputResized {
+            id: 0,
+            width: 1920,
+            height: 1040,
+        });
+        // A diferencia de quitar y volver a añadir la salida, el
+        // escritorio activo se conserva.
+        assert_eq!(d.active_index(), 1);
+        assert!(matches!(cmds.as_slice(), [BrainCommand::Place(_)]));
     }
 
     #[test]

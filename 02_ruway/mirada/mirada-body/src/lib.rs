@@ -184,6 +184,17 @@ impl BodyState {
         BodyEvent::OutputRemoved { id }
     }
 
+    /// Cambia el área útil de una salida sin desconectarla — al
+    /// redimensionar la ventana anfitriona o al reservar/liberar la
+    /// franja del shell. Conserva el escritorio que muestra.
+    pub fn resize_output(&mut self, id: OutputId, width: i32, height: i32) -> BodyEvent {
+        if let Some((_, rect)) = self.outputs.iter_mut().find(|(o, _)| *o == id) {
+            rect.w = width;
+            rect.h = height;
+        }
+        BodyEvent::OutputResized { id, width, height }
+    }
+
     /// Registra una superficie recién creada por un cliente.
     pub fn open_surface(
         &mut self,
