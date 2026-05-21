@@ -297,6 +297,10 @@ pub struct FieldSpec {
     /// kinds. `Module::validate` exige que un Select las tenga.
     #[serde(default)]
     pub options: Vec<SelectOption>,
+    /// Sección del formulario a la que pertenece el campo. Campos
+    /// consecutivos con la misma sección se agrupan bajo un encabezado.
+    #[serde(default)]
+    pub section: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -591,6 +595,7 @@ mod tests {
                         help: None,
                         ref_entity: None,
                         options: Vec::new(),
+                        section: None,
                     },
                     FieldSpec {
                         name: "email".into(),
@@ -601,6 +606,7 @@ mod tests {
                         help: Some("Opcional".into()),
                         ref_entity: None,
                         options: Vec::new(),
+                        section: None,
                     },
                 ],
             }],
@@ -660,6 +666,7 @@ mod tests {
                             help: None,
                             ref_entity: None,
                             options: Vec::new(),
+                            section: None,
                         }],
                         on_submit: Action::SeedEntity {
                             entity: "customer".into(),
@@ -753,6 +760,7 @@ mod tests {
                     help: None,
                     ref_entity: None,
                     options: Vec::new(),
+                    section: None,
                 }],
                 on_submit: Action::SeedEntity {
                     entity: "customer".into(),
@@ -784,6 +792,7 @@ mod tests {
                     help: None,
                     ref_entity: Some("supplier".into()),
                     options: Vec::new(),
+                    section: None,
                 }],
                 on_submit: Action::SeedEntity {
                     entity: "customer".into(),
@@ -816,6 +825,7 @@ mod tests {
                     help: None,
                     ref_entity: None,
                     options: Vec::new(),
+                    section: None,
                 }],
                 on_submit: Action::SeedEntity {
                     entity: "customer".into(),
@@ -856,6 +866,7 @@ mod tests {
                             label: None,
                         },
                     ],
+                    section: None,
                 }],
                 on_submit: Action::SeedEntity {
                     entity: "customer".into(),

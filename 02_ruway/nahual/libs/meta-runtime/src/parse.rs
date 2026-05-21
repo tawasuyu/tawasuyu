@@ -122,6 +122,7 @@ mod tests {
             help: None,
             ref_entity: None,
             options: Vec::new(),
+            section: None,
         }
     }
 

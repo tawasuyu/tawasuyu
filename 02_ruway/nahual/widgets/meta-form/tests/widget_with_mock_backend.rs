@@ -57,6 +57,7 @@ fn customers_module() -> Module {
                 help: None,
                 ref_entity: None,
                 options: Vec::new(),
+                section: None,
             }],
             on_submit: Action::SeedEntity {
                 entity: "Customer".into(),

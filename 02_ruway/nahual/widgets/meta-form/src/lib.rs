@@ -85,6 +85,10 @@ pub struct MetaApp<B: MetaBackend> {
     list_search: Option<Entity<TextInput>>,
     list_sort: Option<(String, bool)>,
     list_page: usize,
+    /// Errores de validación por campo del formulario activo
+    /// (nombre → mensaje). Se llenan al fallar un submit y el form los
+    /// muestra inline, debajo del campo.
+    form_errors: BTreeMap<String, String>,
     /// Mensaje toast al pie (success de submit, error de carga, etc.).
     toast: Option<SharedString>,
     /// Si la carga de módulos falló al inicio.
@@ -121,6 +125,7 @@ impl<B: MetaBackend> MetaApp<B> {
             list_search: None,
             list_sort: None,
             list_page: 0,
+            form_errors: BTreeMap::new(),
             toast: initial_toast.map(SharedString::from),
             load_error: initial_error.map(SharedString::from),
         }
@@ -139,6 +144,7 @@ impl<B: MetaBackend> MetaApp<B> {
         self.pending_delete = None;
         self.detail_target = None;
         self.form_inputs = BTreeMap::new();
+        self.form_errors.clear();
         self.list_search = None;
         self.list_sort = None;
         self.list_page = 0;
@@ -209,11 +215,40 @@ impl<B: MetaBackend> MetaApp<B> {
         self.editing = None;
         self.pending_delete = None;
         self.form_inputs = BTreeMap::new();
+        self.form_errors.clear();
         self.list_search = None;
         self.list_sort = None;
         self.list_page = 0;
         self.toast = None;
         cx.notify();
+    }
+
+    /// Revisa los campos `required` del formulario activo: devuelve un
+    /// mapa nombre→error con los que están vacíos. Mapa vacío = todo OK.
+    /// `AutoId` se omite — se autogenera, nunca está vacío.
+    fn validate_required_fields(&self, cx: &mut Context<Self>) -> BTreeMap<String, String> {
+        let mut errors = BTreeMap::new();
+        let Some(View::Form(fv)) = self
+            .active
+            .as_ref()
+            .and_then(|(i, vk)| self.modules.get(*i).and_then(|m| m.views.get(vk)))
+        else {
+            return errors;
+        };
+        for f in &fv.fields {
+            if !f.required || f.kind == FieldKind::AutoId {
+                continue;
+            }
+            let empty = self
+                .form_inputs
+                .get(&f.name)
+                .map(|i| i.read(cx).text().trim().is_empty())
+                .unwrap_or(true);
+            if empty {
+                errors.insert(f.name.clone(), "este campo es obligatorio".to_string());
+            }
+        }
+        errors
     }
 
     /// Cambia el orden de la lista al hacer clic en un header: misma
@@ -269,6 +304,17 @@ impl<B: MetaBackend> MetaApp<B> {
                 self.select_view(mod_idx, view, cx);
             }
             Action::SeedEntity { entity, next_view } => {
+                let errors = self.validate_required_fields(cx);
+                if !errors.is_empty() {
+                    let n = errors.len();
+                    self.form_errors = errors;
+                    self.toast = Some(SharedString::from(format!(
+                        "faltan {n} campo(s) obligatorio(s)"
+                    )));
+                    cx.notify();
+                    return;
+                }
+                self.form_errors.clear();
                 let was_editing = self.editing.is_some();
                 match self.commit_seed(mod_idx, &entity, cx) {
                     Ok(outcome) => {
@@ -298,6 +344,17 @@ impl<B: MetaBackend> MetaApp<B> {
                 params,
                 next_view,
             } => {
+                let errors = self.validate_required_fields(cx);
+                if !errors.is_empty() {
+                    let n = errors.len();
+                    self.form_errors = errors;
+                    self.toast = Some(SharedString::from(format!(
+                        "faltan {n} campo(s) obligatorio(s)"
+                    )));
+                    cx.notify();
+                    return;
+                }
+                self.form_errors.clear();
                 match self.commit_morphism(mod_idx, &name, &inputs, &params, cx) {
                     Ok(outcome) => {
                         let base =
@@ -1680,7 +1737,7 @@ impl<B: MetaBackend> MetaApp<B> {
         mut main: gpui::Div,
         fv: &FormView,
         mod_idx: usize,
-        _border: gpui::Hsla,
+        border: gpui::Hsla,
         text: gpui::Hsla,
         text_dim: gpui::Hsla,
         accent: gpui::Hsla,
@@ -1690,6 +1747,7 @@ impl<B: MetaBackend> MetaApp<B> {
         let submit_bg = theme.bg_button();
         let submit_hover = theme.bg_button_hover();
         let input_bg = theme.bg_input();
+        let destructive = theme.accent_destructive();
         // En modo edit, el título refleja eso para que el user no
         // se confunda creyendo que hace alta nueva.
         let title = match self.editing.as_ref() {
@@ -1705,16 +1763,40 @@ impl<B: MetaBackend> MetaApp<B> {
                 .mb(px(12.))
                 .child(title),
         );
+        let mut current_section: Option<&str> = None;
         for f in &fv.fields {
+            // Encabezado al cambiar de sección (campos consecutivos con
+            // la misma `section` se agrupan bajo un título).
+            if f.section.as_deref() != current_section {
+                if let Some(sec) = &f.section {
+                    main = main.child(
+                        div()
+                            .mt(px(8.))
+                            .mb(px(4.))
+                            .pb(px(2.))
+                            .border_b_1()
+                            .border_color(border)
+                            .text_color(accent)
+                            .text_size(px(12.))
+                            .child(sec.clone()),
+                    );
+                }
+                current_section = f.section.as_deref();
+            }
+
             let label = if f.required {
                 format!("{} *", f.label)
             } else {
                 f.label.clone()
             };
+            // Si el campo tiene un error de validación, el label se
+            // resalta en color destructivo.
+            let has_error = self.form_errors.contains_key(&f.name);
+            let label_color = if has_error { destructive } else { text_dim };
 
             let mut field_box = div().flex().flex_col().mb(px(10.)).child(
                 div()
-                    .text_color(text_dim)
+                    .text_color(label_color)
                     .text_size(px(11.))
                     .mb(px(2.))
                     .child(label),
@@ -1808,6 +1890,16 @@ impl<B: MetaBackend> MetaApp<B> {
                         .text_color(text_dim)
                         .text_size(px(10.))
                         .child(help.clone()),
+                );
+            }
+            // Error de validación inline, debajo del campo.
+            if let Some(err) = self.form_errors.get(&f.name) {
+                field_box = field_box.child(
+                    div()
+                        .mt(px(2.))
+                        .text_color(destructive)
+                        .text_size(px(10.))
+                        .child(err.clone()),
                 );
             }
             main = main.child(field_box);
