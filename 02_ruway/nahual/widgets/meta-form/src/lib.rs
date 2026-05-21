@@ -27,12 +27,12 @@ use gpui::{
 };
 
 use nahual_meta_runtime::{
-    compute_clear_fields, compute_field_delta, human_label_for_record, parse_field_value,
-    render_value, resolve_param_value, short_uuid, validate_entity_refs, value_to_input_text,
-    MetaBackend, WriteOutcome,
+    compute_clear_fields, compute_field_delta, format_value, human_label_for_record,
+    parse_field_value, render_value, resolve_param_value, short_uuid, validate_entity_refs,
+    value_to_input_text, MetaBackend, WriteOutcome,
 };
 use nahual_meta_schema::{
-    Action, FieldKind, FieldSpec, FormView, ListView, Module, SelectOption, View,
+    Action, Column, FieldKind, FieldSpec, FormView, ListView, Module, SelectOption, View,
 };
 use nahual_theme::Theme;
 use nahual_widget_banner::{banner_themed, themed_colors, Banner};
@@ -856,7 +856,7 @@ impl<B: MetaBackend> MetaApp<B> {
                     div()
                         .flex_grow()
                         .flex_basis(px(100. * frac))
-                        .child(render_value(v)),
+                        .child(self.render_cell(c, v)),
                 );
             }
             row = row.child(
@@ -933,6 +933,43 @@ impl<B: MetaBackend> MetaApp<B> {
     /// click en una opción setea el TextInput del field con el UUID
     /// seleccionado. El item del UUID actualmente seleccionado (si
     /// hay) se resalta con accent color.
+    /// Render del valor de una celda de lista. Una columna con
+    /// `ref_entity` resuelve su UUID al label del record referido; el
+    /// resto aplica el `ValueFormat` declarado en la columna.
+    fn render_cell(&self, c: &Column, v: Option<&Value>) -> String {
+        if let Some(ref_entity) = &c.ref_entity {
+            return match v {
+                Some(Value::String(s)) => match Uuid::parse_str(s) {
+                    Ok(uuid) => self
+                        .backend
+                        .load_record(ref_entity, uuid)
+                        .map(|rec| human_label_for_record(&rec, &uuid))
+                        .unwrap_or_else(|| format!("(borrado · {})", short_uuid(&uuid))),
+                    Err(_) => render_value(v),
+                },
+                _ => render_value(v),
+            };
+        }
+        format_value(v, &c.format)
+    }
+
+    /// Label legible del record referenciado por un campo EntityRef.
+    /// `(sin seleccionar)` si el campo está vacío.
+    fn ref_label(&self, target: &str, current: &str) -> String {
+        let current = current.trim();
+        if current.is_empty() {
+            return "(sin seleccionar)".to_string();
+        }
+        match Uuid::parse_str(current) {
+            Ok(uuid) => self
+                .backend
+                .load_record(target, uuid)
+                .map(|rec| human_label_for_record(&rec, &uuid))
+                .unwrap_or_else(|| format!("(borrado · {})", short_uuid(&uuid))),
+            Err(_) => current.to_string(),
+        }
+    }
+
     /// Chips clickables para un campo [`FieldKind::Select`]. El chip de
     /// la opción elegida se resalta con accent. Click setea el
     /// `TextInput` del field (de donde lee el submit), igual que el
@@ -1143,6 +1180,38 @@ impl<B: MetaBackend> MetaApp<B> {
                         accent,
                     ));
                 }
+                FieldKind::EntityRef => {
+                    // Display read-only del record elegido (label, no
+                    // el UUID crudo) + selector clickable debajo. El
+                    // TextInput vive en `form_inputs` pero no se monta.
+                    if let Some(target) = &f.ref_entity {
+                        let current = self
+                            .form_inputs
+                            .get(&f.name)
+                            .map(|i| i.read(&*cx).text().to_string())
+                            .unwrap_or_default();
+                        let is_empty = current.trim().is_empty();
+                        field_box = field_box.child(
+                            div()
+                                .px(px(8.))
+                                .py(px(6.))
+                                .bg(input_bg)
+                                .text_color(if is_empty { text_dim } else { text })
+                                .text_size(px(11.))
+                                .child(self.ref_label(target, &current)),
+                        );
+                        field_box = field_box.child(self.render_entity_ref_selector(
+                            cx,
+                            f.name.clone(),
+                            target.clone(),
+                            text,
+                            text_dim,
+                            accent,
+                        ));
+                    }
+                    // Sin ref_entity es imposible: Module::validate lo
+                    // rechaza al cargar el módulo.
+                }
                 _ => {
                     // Mount del TextInput vivo (creado en select_view).
                     if let Some(input) = self.form_inputs.get(&f.name) {
@@ -1158,20 +1227,6 @@ impl<B: MetaBackend> MetaApp<B> {
                                 .text_color(text_dim)
                                 .child("(input no inicializado)"),
                         );
-                    }
-                    // EntityRef: selector clickable de records debajo
-                    // del input. Click setea el TextInput con el UUID.
-                    if f.kind == FieldKind::EntityRef {
-                        if let Some(target_entity) = &f.ref_entity {
-                            field_box = field_box.child(self.render_entity_ref_selector(
-                                cx,
-                                f.name.clone(),
-                                target_entity.clone(),
-                                text,
-                                text_dim,
-                                accent,
-                            ));
-                        }
                     }
                 }
             }

@@ -16,7 +16,8 @@ use std::collections::BTreeMap;
 use gpui::TestAppContext;
 use nahual_meta_runtime::testing::MockBackend;
 use nahual_meta_schema::{
-    Action, Column, EntitySpec, FieldKind, FieldSpec, FormView, ListView, MenuItem, Module, View,
+    Action, Column, EntitySpec, FieldKind, FieldSpec, FormView, ListView, MenuItem, Module,
+    ValueFormat, View,
 };
 use nahual_theme::Theme;
 use nahual_widget_meta_form::MetaApp;
@@ -34,6 +35,8 @@ fn customers_module() -> Module {
                 field: "name".into(),
                 label: "Nombre".into(),
                 weight: 1.0,
+                ref_entity: None,
+                format: ValueFormat::Plain,
             }],
             actions: vec![],
             search_in: vec![],

@@ -148,10 +148,31 @@ pub struct Column {
     /// Ancho relativo (peso flex). Default 1.
     #[serde(default = "default_weight")]
     pub weight: f32,
+    /// Si está set, la celda resuelve su valor (un UUID) al label
+    /// legible del record de esta entity, en vez de mostrar el UUID
+    /// crudo. Para columnas que son referencias a otra entity.
+    #[serde(default)]
+    pub ref_entity: Option<String>,
+    /// Formato de presentación del valor de la celda.
+    #[serde(default)]
+    pub format: ValueFormat,
 }
 
 fn default_weight() -> f32 {
     1.0
+}
+
+/// Formato de presentación de un valor en una celda de lista.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ValueFormat {
+    /// Sin formato — el valor se muestra crudo. Default.
+    #[default]
+    Plain,
+    /// Entero/decimal con separador de miles (`12000` → `12,000`).
+    Number,
+    /// Moneda: separador de miles + símbolo prefijo (`12000` → `$12,000`).
+    Currency { symbol: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -501,11 +522,15 @@ mod tests {
                                 field: "name".into(),
                                 label: "Nombre".into(),
                                 weight: 2.0,
+                                ref_entity: None,
+                                format: ValueFormat::Plain,
                             },
                             Column {
                                 field: "email".into(),
                                 label: "Email".into(),
                                 weight: 3.0,
+                                ref_entity: None,
+                                format: ValueFormat::Plain,
                             },
                         ],
                         actions: vec![Action::OpenView {

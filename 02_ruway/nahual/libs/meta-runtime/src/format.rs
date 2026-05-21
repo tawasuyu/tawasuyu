@@ -6,11 +6,15 @@
 use serde_json::Value;
 use uuid::Uuid;
 
+use nahual_meta_schema::ValueFormat;
+
 /// Etiqueta humana para representar un record en el selector de
-/// EntityRef. Heurística: prefiere campos comunes en este orden:
-/// `name`, `label`, `title`, `sku`, `sku_id`. Fallback al UUID corto.
+/// EntityRef y en columnas de referencia. Heurística: prefiere campos
+/// de nombre comunes (ES + EN); fallback al UUID corto.
 pub fn human_label_for_record(value: &Value, id: &Uuid) -> String {
-    for key in ["name", "label", "title", "sku", "sku_id"] {
+    for key in [
+        "name", "nombre", "label", "title", "titulo", "sku", "sku_id",
+    ] {
         if let Some(v) = value.get(key).and_then(Value::as_str) {
             if !v.is_empty() {
                 return format!("{} ({})", v, short_uuid(id));
@@ -30,6 +34,60 @@ pub fn render_value(v: Option<&Value>) -> String {
         Some(Value::Bool(b)) => if *b { "✓" } else { "✗" }.to_string(),
         Some(Value::Number(n)) => n.to_string(),
         Some(other) => other.to_string(),
+    }
+}
+
+/// Render de un valor de celda según un [`ValueFormat`]. `Plain`
+/// delega en [`render_value`]; `Number`/`Currency` agrupan miles. Un
+/// valor no numérico bajo `Number`/`Currency` cae a `render_value`.
+pub fn format_value(v: Option<&Value>, fmt: &ValueFormat) -> String {
+    match fmt {
+        ValueFormat::Plain => render_value(v),
+        ValueFormat::Number => match v {
+            Some(Value::Number(n)) => group_thousands(n),
+            _ => render_value(v),
+        },
+        ValueFormat::Currency { symbol } => match v {
+            Some(Value::Number(n)) => format!("{symbol}{}", group_thousands(n)),
+            _ => render_value(v),
+        },
+    }
+}
+
+/// Formatea un `Number` con separador de miles. Enteros sin decimales;
+/// flotantes con dos.
+fn group_thousands(n: &serde_json::Number) -> String {
+    if let Some(i) = n.as_i64() {
+        group_int(i)
+    } else if let Some(f) = n.as_f64() {
+        let neg = f.is_sign_negative();
+        let cents = (f.abs() * 100.0).round() as i64;
+        format!(
+            "{}{}.{:02}",
+            if neg { "-" } else { "" },
+            group_int(cents / 100),
+            cents % 100,
+        )
+    } else {
+        n.to_string()
+    }
+}
+
+/// Inserta comas cada tres dígitos en un entero con signo.
+fn group_int(i: i64) -> String {
+    let digits = i.unsigned_abs().to_string();
+    let bytes = digits.as_bytes();
+    let mut out = String::new();
+    for (idx, &b) in bytes.iter().enumerate() {
+        if idx > 0 && (bytes.len() - idx).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(b as char);
+    }
+    if i < 0 {
+        format!("-{out}")
+    } else {
+        out
     }
 }
 
@@ -114,6 +172,51 @@ mod tests {
         let id = Uuid::new_v4();
         let v = json!({"random": "field"});
         assert_eq!(human_label_for_record(&v, &id), short_uuid(&id));
+    }
+
+    #[test]
+    fn human_label_recognizes_spanish_name_fields() {
+        let id = Uuid::new_v4();
+        assert!(human_label_for_record(&json!({"nombre": "Acme"}), &id).starts_with("Acme "));
+        assert!(human_label_for_record(&json!({"titulo": "Trato"}), &id).starts_with("Trato "));
+    }
+
+    #[test]
+    fn format_value_number_groups_thousands() {
+        assert_eq!(
+            format_value(Some(&json!(12000)), &ValueFormat::Number),
+            "12,000"
+        );
+        assert_eq!(format_value(Some(&json!(5)), &ValueFormat::Number), "5");
+        assert_eq!(
+            format_value(Some(&json!(-1234567)), &ValueFormat::Number),
+            "-1,234,567"
+        );
+    }
+
+    #[test]
+    fn format_value_currency_prefixes_symbol() {
+        let fmt = ValueFormat::Currency { symbol: "$".into() };
+        assert_eq!(format_value(Some(&json!(25000)), &fmt), "$25,000");
+    }
+
+    #[test]
+    fn format_value_float_gets_two_decimals() {
+        assert_eq!(
+            format_value(Some(&json!(1234.5)), &ValueFormat::Number),
+            "1,234.50"
+        );
+    }
+
+    #[test]
+    fn format_value_non_number_falls_back_to_render_value() {
+        assert_eq!(
+            format_value(Some(&json!("hola")), &ValueFormat::Plain),
+            "hola"
+        );
+        let fmt = ValueFormat::Currency { symbol: "$".into() };
+        assert_eq!(format_value(Some(&json!("x")), &fmt), "x");
+        assert_eq!(format_value(None, &ValueFormat::Number), "");
     }
 
     #[test]
