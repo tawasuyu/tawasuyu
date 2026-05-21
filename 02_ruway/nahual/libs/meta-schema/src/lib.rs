@@ -119,6 +119,8 @@ pub enum View {
     List(ListView),
     /// Formulario de creación / edición.
     Form(FormView),
+    /// Ficha de un record: sus campos + listas de records relacionados.
+    Detail(DetailView),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,6 +138,39 @@ pub struct ListView {
     /// las filas por substring contra los valores de estas columnas.
     #[serde(default)]
     pub search_in: Vec<String>,
+    /// Si está set, cada fila gana un botón 👁 que abre esta vista
+    /// (debe ser una `View::Detail`) para el record de la fila.
+    #[serde(default)]
+    pub row_detail: Option<String>,
+}
+
+/// Ficha de un record: sus campos + listas de records relacionados.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DetailView {
+    pub title: String,
+    /// Entity del record que se muestra.
+    pub entity: String,
+    /// Campos a mostrar, en orden. Reusa [`Column`] (label + field +
+    /// `ref_entity` + `format`; el `weight` se ignora en la ficha).
+    #[serde(default)]
+    pub fields: Vec<Column>,
+    /// Listas de records relacionados (back-references).
+    #[serde(default)]
+    pub related: Vec<RelatedList>,
+}
+
+/// Una lista de records relacionados dentro de una [`DetailView`]: los
+/// records de otra entity cuyo campo `via_field` apunta al record que
+/// se está viendo.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelatedList {
+    pub title: String,
+    /// Entity de los records relacionados.
+    pub entity: String,
+    /// Campo de esa entity cuyo valor (UUID) referencia al record
+    /// actual. El runtime filtra `record[via_field] == id_actual`.
+    pub via_field: String,
+    pub columns: Vec<Column>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -366,6 +401,15 @@ pub enum SchemaError {
         view: String,
         field: String,
     },
+    #[error(
+        "módulo {id} vista '{view}': row_detail='{target}' no apunta a \
+         una vista kind=detail"
+    )]
+    RowDetailInvalid {
+        id: String,
+        view: String,
+        target: String,
+    },
 }
 
 impl Module {
@@ -399,23 +443,37 @@ impl Module {
             }
         }
         for (view_key, view) in &self.views {
-            if let View::Form(form) = view {
-                for f in &form.fields {
-                    if f.kind == FieldKind::EntityRef && f.ref_entity.is_none() {
-                        return Err(SchemaError::EntityRefMissingTarget {
-                            id: self.id.clone(),
-                            view: view_key.clone(),
-                            field: f.name.clone(),
-                        });
-                    }
-                    if f.kind == FieldKind::Select && f.options.is_empty() {
-                        return Err(SchemaError::SelectMissingOptions {
-                            id: self.id.clone(),
-                            view: view_key.clone(),
-                            field: f.name.clone(),
-                        });
+            match view {
+                View::Form(form) => {
+                    for f in &form.fields {
+                        if f.kind == FieldKind::EntityRef && f.ref_entity.is_none() {
+                            return Err(SchemaError::EntityRefMissingTarget {
+                                id: self.id.clone(),
+                                view: view_key.clone(),
+                                field: f.name.clone(),
+                            });
+                        }
+                        if f.kind == FieldKind::Select && f.options.is_empty() {
+                            return Err(SchemaError::SelectMissingOptions {
+                                id: self.id.clone(),
+                                view: view_key.clone(),
+                                field: f.name.clone(),
+                            });
+                        }
                     }
                 }
+                View::List(list) => {
+                    if let Some(target) = &list.row_detail {
+                        if !matches!(self.views.get(target), Some(View::Detail(_))) {
+                            return Err(SchemaError::RowDetailInvalid {
+                                id: self.id.clone(),
+                                view: view_key.clone(),
+                                target: target.clone(),
+                            });
+                        }
+                    }
+                }
+                View::Detail(_) => {}
             }
         }
         Ok(())
@@ -538,6 +596,7 @@ mod tests {
                             label: Some("Nuevo".into()),
                         }],
                         search_in: vec!["name".into(), "email".into()],
+                        row_detail: None,
                     }),
                 ),
                 (

@@ -32,7 +32,8 @@ use nahual_meta_runtime::{
     value_to_input_text, MetaBackend, WriteOutcome,
 };
 use nahual_meta_schema::{
-    Action, Column, FieldKind, FieldSpec, FormView, ListView, Module, SelectOption, View,
+    Action, Column, DetailView, FieldKind, FieldSpec, FormView, ListView, Module, RelatedList,
+    SelectOption, View,
 };
 use nahual_theme::Theme;
 use nahual_widget_banner::{banner_themed, themed_colors, Banner};
@@ -68,6 +69,12 @@ pub struct MetaApp<B: MetaBackend> {
     /// (ejecuta `commit_delete` y limpia) o [Cancelar] (sólo limpia).
     /// Navegación a otra view también cancela.
     pending_delete: Option<(String, Uuid)>,
+    /// Si la vista activa es una `Detail`, el id del record que se
+    /// muestra. Lo setea [`Self::select_detail`].
+    detail_target: Option<Uuid>,
+    /// Key de la vista a la que vuelve el botón «← Volver» de una
+    /// ficha — la lista desde la que se abrió.
+    detail_return: Option<String>,
     /// Mensaje toast al pie (success de submit, error de carga, etc.).
     toast: Option<SharedString>,
     /// Si la carga de módulos falló al inicio.
@@ -99,6 +106,8 @@ impl<B: MetaBackend> MetaApp<B> {
             form_inputs: BTreeMap::new(),
             editing: None,
             pending_delete: None,
+            detail_target: None,
+            detail_return: None,
             toast: initial_toast.map(SharedString::from),
             load_error: initial_error.map(SharedString::from),
         }
@@ -115,6 +124,7 @@ impl<B: MetaBackend> MetaApp<B> {
         // Navegar a otra view cancela cualquier delete pendiente:
         // el record marcado puede no estar visible en la nueva view.
         self.pending_delete = None;
+        self.detail_target = None;
         self.form_inputs = BTreeMap::new();
         if let Some(module) = self.modules.get(mod_idx) {
             if let Some(View::Form(form)) = module.views.get(&view_key) {
@@ -150,6 +160,25 @@ impl<B: MetaBackend> MetaApp<B> {
                 self.editing = None;
             }
         }
+        cx.notify();
+    }
+
+    /// Abre la ficha de detalle `detail_view` para el record `id`.
+    /// Recuerda la vista actual para el botón «← Volver».
+    fn select_detail(
+        &mut self,
+        mod_idx: usize,
+        detail_view: String,
+        id: Uuid,
+        cx: &mut Context<Self>,
+    ) {
+        self.detail_return = self.active.as_ref().map(|(_, v)| v.clone());
+        self.active = Some((mod_idx, detail_view));
+        self.detail_target = Some(id);
+        self.editing = None;
+        self.pending_delete = None;
+        self.form_inputs = BTreeMap::new();
+        self.toast = None;
         cx.notify();
     }
 
@@ -748,6 +777,9 @@ impl<B: MetaBackend> MetaApp<B> {
             View::Form(fv) => {
                 self.render_form(cx, main, &fv, mod_idx, border, text, text_dim, accent)
             }
+            View::Detail(dv) => {
+                self.render_detail(cx, main, &dv, mod_idx, border, text, text_dim, accent)
+            }
         }
     }
 
@@ -812,6 +844,7 @@ impl<B: MetaBackend> MetaApp<B> {
 
         let rows = self.list_rows(&lv.entity);
         let total = rows.len();
+        let row_detail = lv.row_detail.clone();
 
         let total_weight: f32 = lv.columns.iter().map(|c| c.weight).sum::<f32>().max(0.01);
         let mut col_header = div()
@@ -833,7 +866,7 @@ impl<B: MetaBackend> MetaApp<B> {
         }
         col_header = col_header
             .child(div().w(px(80.)).text_color(text_dim).child("id"))
-            .child(div().w(px(70.)).text_color(text_dim).child("acciones"));
+            .child(div().w(px(100.)).text_color(text_dim).child("acciones"));
         main = main.child(col_header);
 
         let entity_name = lv.entity.clone();
@@ -866,13 +899,25 @@ impl<B: MetaBackend> MetaApp<B> {
                     .text_size(px(11.))
                     .child(short_uuid(id)),
             );
-            // Acciones: ✎ edit + ✕ delete por fila.
+            // Acciones por fila: 👁 ver (si hay row_detail) + ✎ + ✕.
+            let mut actions = div().w(px(100.)).flex().flex_row().gap(px(4.));
+            if let Some(detail_view) = &row_detail {
+                let dv_key = detail_view.clone();
+                actions = actions.child(
+                    div()
+                        .id(SharedString::from(format!("row-view-{mod_idx}-{id_copy}")))
+                        .px(px(6.))
+                        .text_color(text_dim)
+                        .text_size(px(13.))
+                        .hover(move |d| d.bg(action_hover))
+                        .child("👁")
+                        .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                            this.select_detail(mod_idx, dv_key.clone(), id_copy, cx);
+                        })),
+                );
+            }
             row = row.child(
-                div()
-                    .w(px(70.))
-                    .flex()
-                    .flex_row()
-                    .gap(px(4.))
+                actions
                     .child(
                         div()
                             .id(SharedString::from(format!("row-edit-{mod_idx}-{id_copy}")))
@@ -933,6 +978,213 @@ impl<B: MetaBackend> MetaApp<B> {
     /// click en una opción setea el TextInput del field con el UUID
     /// seleccionado. El item del UUID actualmente seleccionado (si
     /// hay) se resalta con accent color.
+    /// Renderea una ficha de detalle: campos del record + listas de
+    /// records relacionados (back-references) + botones Volver/Editar.
+    #[allow(clippy::too_many_arguments)]
+    fn render_detail(
+        &self,
+        cx: &mut Context<Self>,
+        mut main: gpui::Div,
+        dv: &DetailView,
+        mod_idx: usize,
+        border: gpui::Hsla,
+        text: gpui::Hsla,
+        text_dim: gpui::Hsla,
+        accent: gpui::Hsla,
+    ) -> gpui::Div {
+        let theme = Theme::global(cx);
+        let action_bg = theme.bg_button();
+        let action_hover = theme.bg_button_hover();
+        let row_separator = theme.bg_row_active;
+
+        let back_view = self.detail_return.clone();
+        let mut header = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(10.))
+            .mb(px(12.))
+            .child(
+                div()
+                    .text_color(text)
+                    .text_size(px(18.))
+                    .flex_grow()
+                    .child(dv.title.clone()),
+            )
+            .child(
+                div()
+                    .id("detail-back")
+                    .px(px(10.))
+                    .py(px(4.))
+                    .bg(action_bg)
+                    .text_color(accent)
+                    .text_size(px(11.))
+                    .rounded(px(3.))
+                    .hover(move |d| d.bg(action_hover))
+                    .child("← Volver")
+                    .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                        match back_view.clone() {
+                            Some(v) => this.select_view(mod_idx, v, cx),
+                            None => {
+                                if let Some(first) = this
+                                    .modules
+                                    .get(mod_idx)
+                                    .and_then(|m| m.menu.first().map(|i| i.view.clone()))
+                                {
+                                    this.select_view(mod_idx, first, cx);
+                                }
+                            }
+                        }
+                    })),
+            );
+
+        let Some(target_id) = self.detail_target else {
+            return main.child(header).child(
+                div()
+                    .text_color(text_dim)
+                    .child("Ningún record seleccionado."),
+            );
+        };
+
+        let entity_for_edit = dv.entity.clone();
+        header = header.child(
+            div()
+                .id("detail-edit")
+                .px(px(10.))
+                .py(px(4.))
+                .bg(action_bg)
+                .text_color(accent)
+                .text_size(px(11.))
+                .rounded(px(3.))
+                .hover(move |d| d.bg(action_hover))
+                .child("✎ Editar")
+                .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                    this.open_edit(mod_idx, entity_for_edit.clone(), target_id, cx);
+                })),
+        );
+        main = main.child(header);
+
+        let Some(record) = self.backend.load_record(&dv.entity, target_id) else {
+            return main.child(div().text_color(text_dim).child(format!(
+                "El record {} ya no existe.",
+                short_uuid(&target_id)
+            )));
+        };
+
+        // Campos del record.
+        let mut fields_box = div().flex().flex_col();
+        for c in &dv.fields {
+            let v = lookup_field(&record, &c.field);
+            fields_box = fields_box.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(12.))
+                    .py(px(4.))
+                    .border_b_1()
+                    .border_color(row_separator)
+                    .child(
+                        div()
+                            .w(px(160.))
+                            .flex_none()
+                            .text_color(text_dim)
+                            .text_size(px(12.))
+                            .child(c.label.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_grow()
+                            .text_color(text)
+                            .text_size(px(12.))
+                            .child(self.render_cell(c, v)),
+                    ),
+            );
+        }
+        main = main.child(fields_box);
+
+        // Listas de records relacionados.
+        for rl in &dv.related {
+            main = main.child(self.render_related(rl, target_id, border, text, text_dim));
+        }
+        main
+    }
+
+    /// Renderea una lista de records relacionados (back-reference):
+    /// los records de `rl.entity` cuyo `rl.via_field` apunta al record
+    /// `target_id`.
+    fn render_related(
+        &self,
+        rl: &RelatedList,
+        target_id: Uuid,
+        border: gpui::Hsla,
+        text: gpui::Hsla,
+        text_dim: gpui::Hsla,
+    ) -> gpui::Div {
+        let id_str = target_id.to_string();
+        let rows: Vec<(Uuid, Value)> = self
+            .backend
+            .list_records(&rl.entity)
+            .into_iter()
+            .filter(|(_, v)| v.get(&rl.via_field).and_then(Value::as_str) == Some(id_str.as_str()))
+            .collect();
+
+        let mut section = div().flex().flex_col().mt(px(18.)).child(
+            div()
+                .text_color(text)
+                .text_size(px(13.))
+                .mb(px(4.))
+                .child(format!("{} ({})", rl.title, rows.len())),
+        );
+
+        if rows.is_empty() {
+            return section.child(
+                div()
+                    .py(px(4.))
+                    .text_color(text_dim)
+                    .text_size(px(11.))
+                    .child("(ninguno)"),
+            );
+        }
+
+        let total_weight: f32 = rl.columns.iter().map(|c| c.weight).sum::<f32>().max(0.01);
+        let mut head = div()
+            .flex()
+            .flex_row()
+            .py(px(4.))
+            .border_b_1()
+            .border_color(border)
+            .text_color(text_dim)
+            .text_size(px(10.));
+        for c in &rl.columns {
+            head = head.child(
+                div()
+                    .flex_grow()
+                    .flex_basis(px(100. * c.weight / total_weight))
+                    .child(c.label.clone()),
+            );
+        }
+        section = section.child(head);
+
+        for (_, v) in &rows {
+            let mut row = div()
+                .flex()
+                .flex_row()
+                .py(px(3.))
+                .text_color(text)
+                .text_size(px(11.));
+            for c in &rl.columns {
+                row = row.child(
+                    div()
+                        .flex_grow()
+                        .flex_basis(px(100. * c.weight / total_weight))
+                        .child(self.render_cell(c, lookup_field(v, &c.field))),
+                );
+            }
+            section = section.child(row);
+        }
+        section
+    }
+
     /// Render del valor de una celda de lista. Una columna con
     /// `ref_entity` resuelve su UUID al label del record referido; el
     /// resto aplica el `ValueFormat` declarado en la columna.

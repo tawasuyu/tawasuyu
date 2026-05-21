@@ -40,6 +40,7 @@ fn customers_module() -> Module {
             }],
             actions: vec![],
             search_in: vec![],
+            row_detail: None,
         }),
     );
     views.insert(
