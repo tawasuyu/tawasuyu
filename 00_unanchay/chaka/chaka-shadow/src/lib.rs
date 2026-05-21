@@ -117,6 +117,7 @@ mod tests {
     corpus_test!(corpus_06_nomina, "06-nomina");
     corpus_test!(corpus_07_clasificar, "07-clasificar");
     corpus_test!(corpus_08_varying, "08-varying");
+    corpus_test!(corpus_09_evaluar, "09-evaluar");
 
     #[test]
     fn empty_source_runs_clean() {

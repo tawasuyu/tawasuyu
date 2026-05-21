@@ -233,6 +233,12 @@ fn collect_unknowns(stmts: &[Stmt], out: &mut Vec<String>) {
                 collect_unknowns(then_branch, out);
                 collect_unknowns(else_branch, out);
             }
+            Stmt::Evaluate { whens, other, .. } => {
+                for w in whens {
+                    collect_unknowns(&w.body, out);
+                }
+                collect_unknowns(other, out);
+            }
             Stmt::Perform(p) => {
                 if let PerformTarget::Inline(body) = &p.target {
                     collect_unknowns(body, out);

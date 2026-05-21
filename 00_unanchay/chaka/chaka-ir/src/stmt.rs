@@ -5,7 +5,7 @@
 
 use charka_parser::TokenKind;
 
-use crate::ast::{Operand, Perform, PerformControl, PerformTarget, Stmt};
+use crate::ast::{Operand, Perform, PerformControl, PerformTarget, Stmt, WhenBranch};
 use crate::cursor::{parse_operand, Cursor};
 use crate::expr::{parse_cond, parse_expr};
 use crate::kw::{is_boundary, is_terminator, is_verb};
@@ -38,6 +38,7 @@ fn parse_one_stmt(c: &mut Cursor, stops: &[&str]) -> Stmt {
         "MULTIPLY" => parse_multiply(c),
         "DIVIDE" => parse_divide(c),
         "IF" => parse_if(c),
+        "EVALUATE" => parse_evaluate(c),
         "PERFORM" => parse_perform(c),
         "GO" => parse_goto(c),
         "STOP" => parse_stop(c),
@@ -282,6 +283,40 @@ fn parse_if(c: &mut Cursor) -> Stmt {
         cond,
         then_branch,
         else_branch,
+    }
+}
+
+fn parse_evaluate(c: &mut Cursor) -> Stmt {
+    c.bump(); // EVALUATE
+    let subject = parse_operand(c);
+    let mut whens = Vec::new();
+    let mut other = Vec::new();
+    while !c.done() && !c.at_word("END-EVALUATE") {
+        if !c.at_word("WHEN") {
+            break; // algo inesperado dentro del EVALUATE: se corta
+        }
+        // Varios `WHEN` apilados comparten el mismo cuerpo.
+        let mut values = Vec::new();
+        let mut is_other = false;
+        while c.eat_word("WHEN") {
+            if c.eat_word("OTHER") {
+                is_other = true;
+            } else {
+                values.push(parse_operand(c));
+            }
+        }
+        let body = parse_statements(c, &["WHEN", "END-EVALUATE"]);
+        if is_other {
+            other = body;
+        } else {
+            whens.push(WhenBranch { values, body });
+        }
+    }
+    c.eat_word("END-EVALUATE");
+    Stmt::Evaluate {
+        subject,
+        whens,
+        other,
     }
 }
 

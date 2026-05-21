@@ -16,9 +16,9 @@
 //! Alcance v1 — los verbos parseados a fondo: `MOVE`, `DISPLAY`,
 //! `ACCEPT`, `COMPUTE` (con expresiones con precedencia), `ADD`,
 //! `SUBTRACT`, `MULTIPLY`, `DIVIDE`, `IF`/`ELSE`/`END-IF` (con
-//! condiciones `AND`/`OR`/`NOT`), `PERFORM` (fuera de línea, en línea,
-//! `TIMES`, `UNTIL`, `VARYING`), `GO TO`, `STOP RUN`, `GOBACK`,
-//! `EXIT`, `CONTINUE`. Fuera de alcance: `EVALUATE`,
+//! condiciones `AND`/`OR`/`NOT`), `EVALUATE`/`WHEN`, `PERFORM` (fuera
+//! de línea, en línea, `TIMES`, `UNTIL`, `VARYING`), `GO TO`,
+//! `STOP RUN`, `GOBACK`, `EXIT`, `CONTINUE`. Fuera de alcance:
 //! `STRING`/`UNSTRING`, E/S de ficheros, CICS y SQL embebido.
 
 #![forbid(unsafe_code)]
@@ -308,6 +308,34 @@ mod tests {
                 other => panic!("se esperaba Varying, vino {other:?}"),
             },
             other => panic!("se esperaba PERFORM, vino {other:?}"),
+        }
+    }
+
+    #[test]
+    fn evaluate_parses_whens_and_other() {
+        let b = body(
+            "EVALUATE WS-X \
+             WHEN 1 DISPLAY 'A' \
+             WHEN 2 WHEN 3 DISPLAY 'B' \
+             WHEN OTHER DISPLAY 'C' \
+             END-EVALUATE.",
+        );
+        match &b[0] {
+            Stmt::Evaluate {
+                subject,
+                whens,
+                other,
+            } => {
+                assert_eq!(subject, &Operand::Data("WS-X".into()));
+                assert_eq!(whens.len(), 2);
+                assert_eq!(whens[0].values, vec![Operand::Num("1".into())]);
+                assert_eq!(
+                    whens[1].values,
+                    vec![Operand::Num("2".into()), Operand::Num("3".into())]
+                );
+                assert_eq!(other.len(), 1);
+            }
+            other => panic!("se esperaba EVALUATE, vino {other:?}"),
         }
     }
 

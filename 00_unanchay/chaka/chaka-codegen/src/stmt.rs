@@ -1,7 +1,7 @@
 //! Emisión de los statements del PROCEDURE: cada [`Stmt`] se traduce a
 //! una o varias líneas de código Rust sobre `charka-runtime`.
 
-use charka_ir::{Operand, Perform, PerformControl, PerformTarget, Stmt};
+use charka_ir::{CmpOp, Cond, Operand, Perform, PerformControl, PerformTarget, Stmt, WhenBranch};
 
 use crate::emit::Emitter;
 use crate::expr::{
@@ -73,6 +73,11 @@ pub(crate) fn emit_stmt(em: &mut Emitter, sym: &Symbols, stmt: &Stmt) {
                 em.line("}");
             }
         }
+        Stmt::Evaluate {
+            subject,
+            whens,
+            other,
+        } => emit_evaluate(em, sym, subject, whens, other),
         Stmt::Perform(p) => emit_perform(em, sym, p),
         Stmt::GoTo { target } => {
             em.line(&format!(
@@ -319,6 +324,72 @@ fn count_expr(sym: &Symbols, op: &Operand) -> String {
             operand_decimal(sym, op)
         ),
     }
+}
+
+/// Emite un `EVALUATE` como una cadena `if / else if / else`.
+fn emit_evaluate(
+    em: &mut Emitter,
+    sym: &Symbols,
+    subject: &Operand,
+    whens: &[WhenBranch],
+    other: &[Stmt],
+) {
+    if whens.is_empty() {
+        if !other.is_empty() {
+            em.line("{");
+            em.indent();
+            emit_block(em, sym, other);
+            em.dedent();
+            em.line("}");
+        }
+        return;
+    }
+    for (i, branch) in whens.iter().enumerate() {
+        let cond = branch_condition(sym, subject, branch);
+        if i == 0 {
+            em.line(&format!("if {cond} {{"));
+        } else {
+            em.line(&format!("}} else if {cond} {{"));
+        }
+        em.indent();
+        emit_block(em, sym, &branch.body);
+        em.dedent();
+    }
+    if other.is_empty() {
+        em.line("}");
+    } else {
+        em.line("} else {");
+        em.indent();
+        emit_block(em, sym, other);
+        em.dedent();
+        em.line("}");
+    }
+}
+
+/// La condición de una rama `WHEN`: el sujeto igual a cualquiera de
+/// sus valores.
+fn branch_condition(sym: &Symbols, subject: &Operand, branch: &WhenBranch) -> String {
+    if branch.values.is_empty() {
+        return "false".to_string();
+    }
+    branch
+        .values
+        .iter()
+        .map(|v| {
+            format!(
+                "({})",
+                emit_cond(
+                    sym,
+                    &Cond::Compare {
+                        lhs: subject.clone(),
+                        op: CmpOp::Eq,
+                        rhs: v.clone(),
+                    },
+                )
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" || ")
 }
 
 fn emit_perform(em: &mut Emitter, sym: &Symbols, p: &Perform) {

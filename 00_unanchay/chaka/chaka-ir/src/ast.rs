@@ -155,6 +155,15 @@ pub enum Stmt {
         then_branch: Vec<Stmt>,
         else_branch: Vec<Stmt>,
     },
+    /// `EVALUATE subject WHEN ... [WHEN OTHER ...] END-EVALUATE` — el
+    /// `case` de COBOL. Una rama se elige si `subject` es igual a
+    /// alguno de sus valores; sin caída entre ramas.
+    Evaluate {
+        subject: Operand,
+        whens: Vec<WhenBranch>,
+        /// El cuerpo de `WHEN OTHER` (vacío si no hay).
+        other: Vec<Stmt>,
+    },
     /// `PERFORM ...` — ver [`Perform`].
     Perform(Perform),
     /// `GO TO target`
@@ -170,6 +179,14 @@ pub enum Stmt {
     /// Un verbo que la v1 no parsea: se conserva crudo para que las
     /// etapas siguientes (o un humano) lo revisen.
     Unknown { verb: String, tokens: Vec<Token> },
+}
+
+/// Una rama `WHEN` de un `EVALUATE`: los valores que la disparan
+/// (varios `WHEN` apilados comparten cuerpo) y el cuerpo a ejecutar.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WhenBranch {
+    pub values: Vec<Operand>,
+    pub body: Vec<Stmt>,
 }
 
 /// Un statement `PERFORM`: a quién ejecuta y cuántas veces.

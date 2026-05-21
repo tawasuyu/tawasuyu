@@ -224,6 +224,22 @@ impl<'a> Machine<'a> {
                     self.exec_block(else_branch)
                 }
             }
+            Stmt::Evaluate {
+                subject,
+                whens,
+                other,
+            } => {
+                for branch in whens {
+                    if branch
+                        .values
+                        .iter()
+                        .any(|v| self.operands_equal(subject, v))
+                    {
+                        return self.exec_block(&branch.body);
+                    }
+                }
+                self.exec_block(other)
+            }
             Stmt::Perform(p) => self.exec_perform(p),
             Stmt::GoTo { target } => {
                 // Aproximación: ejecuta el destino y sale del párrafo.
@@ -435,6 +451,15 @@ impl<'a> Machine<'a> {
                 matches!(self.fields.get(&name.to_uppercase()), Some(Cell::Text(_)))
             }
             _ => false,
+        }
+    }
+
+    /// ¿Son iguales dos operandos? (Para las ramas `WHEN` del `EVALUATE`.)
+    fn operands_equal(&self, a: &Operand, b: &Operand) -> bool {
+        if self.is_text(a) || self.is_text(b) {
+            cobol_text_cmp(&self.eval_text(a), &self.eval_text(b)).is_eq()
+        } else {
+            self.eval_decimal(a) == self.eval_decimal(b)
         }
     }
 

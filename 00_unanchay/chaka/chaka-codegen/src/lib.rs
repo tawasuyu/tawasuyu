@@ -351,6 +351,21 @@ mod tests {
     }
 
     #[test]
+    fn evaluate_emits_an_if_else_chain() {
+        let out = gen("DATA DIVISION.\n\
+             WORKING-STORAGE SECTION.\n\
+             01 WS-X PIC 9(1).\n\
+             PROCEDURE DIVISION.\n\
+             MAIN.\n\
+                 EVALUATE WS-X\n\
+                     WHEN 1 DISPLAY 'UNO'\n\
+                     WHEN OTHER DISPLAY 'OTRO'\n\
+                 END-EVALUATE.\n");
+        assert!(out.contains("if ((self.ws_x.value()) == (dec(\"1\"))) {"));
+        assert!(out.contains("} else {"));
+    }
+
+    #[test]
     fn empty_program_still_compiles_shape() {
         let out = gen("");
         assert!(out.contains("struct Program {"));
