@@ -282,6 +282,11 @@ impl MetaBackend for NakuiBackend {
         data: serde_json::Map<String, Value>,
     ) -> Result<WriteOutcome, String> {
         let id = Uuid::new_v4();
+        // El `id` de la entity = la clave del store. Inyectarlo en el
+        // record hace que `data.id` y la clave coincidan — los schemas
+        // Nickel suelen declarar `id | String` y los morfismos lo leen.
+        let mut data = data;
+        data.insert("id".to_string(), Value::String(id.to_string()));
         let value = Value::Object(data);
         // WAL: log primero, store después.
         if self.event_log.is_some() {
