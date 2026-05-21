@@ -12,13 +12,13 @@ use std::sync::{Arc, Mutex};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use nahual_meta_runtime::{MetaBackend, WriteOutcome};
 use nakui_core::delta::{FieldOp, FieldPath};
 use nakui_core::event_log::{
     execute_and_log_with_recovery, replay_with_snapshot_into, EventLog, LogEntry, Snapshot,
 };
 use nakui_core::executor::Executor;
 use nakui_core::store::{MemoryStore, Store};
-use nahual_meta_runtime::{MetaBackend, WriteOutcome};
 
 /// Path del snapshot sibling del log:
 /// `nakui-ui-state.jsonl` ↔ `nakui-ui-state.snap.json`.
@@ -122,7 +122,10 @@ impl NakuiBackend {
         let snapshot: Option<Snapshot> = match Snapshot::load(&snap_path) {
             Ok(s) => s,
             Err(e) => {
-                load_error = Some(format!("snapshot {}: {e} — full replay", snap_path.display()));
+                load_error = Some(format!(
+                    "snapshot {}: {e} — full replay",
+                    snap_path.display()
+                ));
                 None
             }
         };
@@ -142,13 +145,11 @@ impl NakuiBackend {
                                 log_path.display()
                             ));
                         } else {
-                            init_toast =
-                                Some(format!("log nuevo en {}", log_path.display()));
+                            init_toast = Some(format!("log nuevo en {}", log_path.display()));
                         }
 
                         // Auto-compact si pasamos el threshold.
-                        match maybe_compact_log(&mut log, &snap_path, &store, snapshot_threshold)
-                        {
+                        match maybe_compact_log(&mut log, &snap_path, &store, snapshot_threshold) {
                             Ok(Some(msg)) => {
                                 let prev = init_toast.unwrap_or_default();
                                 init_toast = Some(format!("{prev}; {msg}"));
@@ -285,11 +286,7 @@ impl MetaBackend for NakuiBackend {
         // WAL: log primero, store después.
         if self.event_log.is_some() {
             let seq = {
-                let log_arc = self
-                    .event_log
-                    .as_ref()
-                    .expect("checked above")
-                    .clone();
+                let log_arc = self.event_log.as_ref().expect("checked above").clone();
                 let log = log_arc
                     .lock()
                     .map_err(|_| "log mutex envenenado".to_string())?;
@@ -385,7 +382,9 @@ impl MetaBackend for NakuiBackend {
             .store
             .lock()
             .map_err(|_| "store mutex envenenado".to_string())?;
-        store.apply(&ops).map_err(|e| format!("apply edit ops: {e}"))?;
+        store
+            .apply(&ops)
+            .map_err(|e| format!("apply edit ops: {e}"))?;
         drop(store);
         let post_status = self.tick_compact();
         Ok(WriteOutcome {
@@ -421,7 +420,9 @@ impl MetaBackend for NakuiBackend {
             .store
             .lock()
             .map_err(|_| "store mutex envenenado".to_string())?;
-        store.apply(&ops).map_err(|e| format!("apply Delete: {e}"))?;
+        store
+            .apply(&ops)
+            .map_err(|e| format!("apply Delete: {e}"))?;
         drop(store);
         let post_status = self.tick_compact();
         Ok(WriteOutcome {
@@ -505,7 +506,10 @@ mod tests {
     }
 
     fn map_of(items: &[(&str, Value)]) -> serde_json::Map<String, Value> {
-        items.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+        items
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
     }
 
     #[test]
@@ -543,9 +547,7 @@ mod tests {
     fn update_no_op_returns_no_change() {
         let (mut b, _dir) = open_in_tempdir();
         let id = b.seed("X", map_of(&[("a", json!(1))])).unwrap().id.unwrap();
-        let out = b
-            .update("X", id, serde_json::Map::new(), vec![])
-            .unwrap();
+        let out = b.update("X", id, serde_json::Map::new(), vec![]).unwrap();
         assert_eq!(out, WriteOutcome::no_change(id));
     }
 
@@ -574,7 +576,10 @@ mod tests {
         let err = b
             .morphism("missing", "vender", BTreeMap::new(), json!({}))
             .unwrap_err();
-        assert!(err.contains("missing"), "msg debe mencionar el módulo: {err}");
+        assert!(
+            err.contains("missing"),
+            "msg debe mencionar el módulo: {err}"
+        );
         assert!(err.contains("nakui_module_dir") || err.contains("executor"));
     }
 
