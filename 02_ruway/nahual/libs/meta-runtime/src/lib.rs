@@ -23,6 +23,7 @@
 #![forbid(unsafe_code)]
 
 pub mod backend;
+pub mod csv;
 pub mod delta;
 pub mod format;
 pub mod metric;
@@ -31,6 +32,7 @@ pub mod refs;
 pub mod testing;
 
 pub use backend::{MetaBackend, WriteOutcome};
+pub use csv::to_csv;
 pub use delta::{compute_clear_fields, compute_field_delta};
 pub use format::{
     cmp_values, format_value, human_label_for_record, preview_value, render_value, short_hash,

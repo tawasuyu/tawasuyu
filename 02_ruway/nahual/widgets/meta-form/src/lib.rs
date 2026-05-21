@@ -29,7 +29,7 @@ use gpui::{
 use nahual_meta_runtime::{
     cmp_values, compute_clear_fields, compute_field_delta, compute_metric, format_value,
     human_label_for_record, parse_field_value, render_value, resolve_param_value, short_uuid,
-    validate_entity_refs, value_to_input_text, MetaBackend, MetricResult, WriteOutcome,
+    to_csv, validate_entity_refs, value_to_input_text, MetaBackend, MetricResult, WriteOutcome,
 };
 use nahual_meta_schema::{
     Action, Column, DashboardView, DetailView, FieldKind, FieldSpec, FormView, ListView, Module,
@@ -464,6 +464,61 @@ impl<B: MetaBackend> MetaApp<B> {
     fn list_rows(&self, entity: &str) -> Vec<(Uuid, Value)> {
         self.backend.list_records(entity)
     }
+
+    /// Filas de una lista tras aplicar la búsqueda y el orden activos
+    /// (sin paginar). Compartido por el render de la lista y el export
+    /// a CSV.
+    fn list_filtered_sorted(&self, lv: &ListView, cx: &mut Context<Self>) -> Vec<(Uuid, Value)> {
+        let mut rows = self.list_rows(&lv.entity);
+        let query = self
+            .list_search
+            .as_ref()
+            .map(|i| i.read(cx).text().trim().to_lowercase())
+            .unwrap_or_default();
+        if !query.is_empty() {
+            rows.retain(|(_, v)| {
+                lv.search_in.iter().any(|field| {
+                    lookup_field(v, field)
+                        .map(|cell| render_value(Some(cell)).to_lowercase().contains(&query))
+                        .unwrap_or(false)
+                })
+            });
+        }
+        if let Some((field, asc)) = &self.list_sort {
+            rows.sort_by(|(_, a), (_, b)| {
+                let ord = cmp_values(lookup_field(a, field), lookup_field(b, field));
+                if *asc {
+                    ord
+                } else {
+                    ord.reverse()
+                }
+            });
+        }
+        rows
+    }
+
+    /// Exporta la lista (filas filtradas/ordenadas, todas las columnas)
+    /// a un archivo CSV en el directorio de trabajo; avisa por toast.
+    fn export_csv(&mut self, lv: &ListView, cx: &mut Context<Self>) {
+        let rows = self.list_filtered_sorted(lv, cx);
+        let headers: Vec<String> = lv.columns.iter().map(|c| c.label.clone()).collect();
+        let data: Vec<Vec<String>> = rows
+            .iter()
+            .map(|(_, v)| {
+                lv.columns
+                    .iter()
+                    .map(|c| self.render_cell(c, lookup_field(v, &c.field)))
+                    .collect()
+            })
+            .collect();
+        let csv = to_csv(&headers, &data);
+        let path = export_path(&lv.entity);
+        self.toast = Some(SharedString::from(match std::fs::write(&path, csv) {
+            Ok(()) => format!("exporté {} fila(s) a {}", rows.len(), path.display()),
+            Err(e) => format!("no pude exportar CSV: {e}"),
+        }));
+        cx.notify();
+    }
 }
 
 /// Formatea el toast para la rama Action::SeedEntity según el
@@ -497,6 +552,19 @@ fn lookup_field<'a>(v: &'a Value, path: &str) -> Option<&'a Value> {
         cur = cur.get(seg)?;
     }
     Some(cur)
+}
+
+/// Ruta destino de un export CSV: `<entity>-<unix-secs>.csv` en el
+/// directorio de trabajo actual.
+fn export_path(entity: &str) -> std::path::PathBuf {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let name = format!("{entity}-{secs}.csv");
+    std::env::current_dir()
+        .map(|d| d.join(&name))
+        .unwrap_or_else(|_| std::path::PathBuf::from(name))
 }
 
 /// Próximo estado de orden al hacer clic en el header `field`: la misma
@@ -896,6 +964,25 @@ impl<B: MetaBackend> MetaApp<B> {
                     })),
             );
         }
+        // Botón de export CSV — disponible en toda lista.
+        {
+            let lv_for_csv = lv.clone();
+            header = header.child(
+                div()
+                    .id(SharedString::from(format!("list-csv-{mod_idx}")))
+                    .px(px(10.))
+                    .py(px(4.))
+                    .bg(action_bg)
+                    .text_color(accent)
+                    .text_size(px(11.))
+                    .rounded(px(3.))
+                    .hover(move |d| d.bg(action_hover))
+                    .child("⬇ CSV")
+                    .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                        this.export_csv(&lv_for_csv, cx);
+                    })),
+            );
+        }
         main = main.child(header);
 
         // Caja de búsqueda (sólo si la lista declara `search_in`).
@@ -914,32 +1001,14 @@ impl<B: MetaBackend> MetaApp<B> {
 
         let row_detail = lv.row_detail.clone();
 
-        // Filas: buscar → ordenar → paginar.
-        let mut all_rows = self.list_rows(&lv.entity);
-        let query = self
+        // Filas: buscar + ordenar (helper compartido con el export CSV),
+        // luego paginar.
+        let all_rows = self.list_filtered_sorted(lv, cx);
+        let has_query = self
             .list_search
             .as_ref()
-            .map(|i| i.read(cx).text().trim().to_lowercase())
-            .unwrap_or_default();
-        if !query.is_empty() {
-            all_rows.retain(|(_, v)| {
-                lv.search_in.iter().any(|field| {
-                    lookup_field(v, field)
-                        .map(|cell| render_value(Some(cell)).to_lowercase().contains(&query))
-                        .unwrap_or(false)
-                })
-            });
-        }
-        if let Some((field, asc)) = &self.list_sort {
-            all_rows.sort_by(|(_, a), (_, b)| {
-                let ord = cmp_values(lookup_field(a, field), lookup_field(b, field));
-                if *asc {
-                    ord
-                } else {
-                    ord.reverse()
-                }
-            });
-        }
+            .map(|i| !i.read(cx).text().trim().is_empty())
+            .unwrap_or(false);
         let total = all_rows.len();
         let page_count = total.div_ceil(PAGE_SIZE).max(1);
         let page = self.list_page.min(page_count - 1);
@@ -1071,10 +1140,10 @@ impl<B: MetaBackend> MetaApp<B> {
         }
 
         if total == 0 {
-            let msg = if query.is_empty() {
-                format!("(sin {})", lv.entity)
-            } else {
+            let msg = if has_query {
                 "(sin resultados para la búsqueda)".to_string()
+            } else {
+                format!("(sin {})", lv.entity)
             };
             main = main.child(
                 div()
