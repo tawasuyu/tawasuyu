@@ -59,7 +59,9 @@ use smithay::{
 };
 
 use mirada_body::{BodyOp, BodyState};
-use mirada_brain::{BodyEvent, BrainCommand, CtlReply, CtlRequest, CtlServer, Desktop, Keymap};
+use mirada_brain::{
+    BodyEvent, BrainCommand, CtlReply, CtlRequest, CtlServer, Desktop, Keymap, Rules,
+};
 use mirada_link::BodyLink;
 
 // ---------------------------------------------------------------------
@@ -469,6 +471,14 @@ fn send_frames_surface_tree(surface: &WlSurface, time: u32) {
 // Bucle principal
 // ---------------------------------------------------------------------
 
+/// Carga las reglas de ventana del usuario, o ninguna si no hay archivo.
+fn load_user_rules() -> Rules {
+    match Rules::default_path() {
+        Some(p) => Rules::load_or_default(&p),
+        None => Rules::default(),
+    }
+}
+
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut display: Display<App> = Display::new()?;
     let dh = display.handle();
@@ -494,7 +504,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 Some(p) => Keymap::load_or_init(p),
                 None => Keymap::default(),
             };
-            Brain::Embedded(Desktop::with_keymap(keymap))
+            let mut desktop = Desktop::with_keymap(keymap);
+            desktop.set_rules(load_user_rules());
+            Brain::Embedded(desktop)
         }
     };
 

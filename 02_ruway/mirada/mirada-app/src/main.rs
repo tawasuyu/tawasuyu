@@ -40,7 +40,7 @@ use gpui::{
 };
 use mirada_brain::{
     BodyEvent, BrainCommand, CtlConn, CtlReply, CtlRequest, CtlServer, Desktop, DesktopAction,
-    Keymap, KeymapWatch, LayoutMode, WindowId, WindowPlacement,
+    Keymap, KeymapWatch, LayoutMode, Rules, WindowId, WindowPlacement,
 };
 use mirada_link::BrainLink;
 use nahual_launcher::launch_app;
@@ -105,8 +105,13 @@ impl Mirada {
             }
         };
 
+        // Reglas de ventana (~/.config/mirada/rules.ron): a qué
+        // escritorio va cada ventana, si flota.
+        let mut desktop = Desktop::with_keymap(keymap);
+        desktop.set_rules(load_user_rules());
+
         let mut app = Self {
-            desktop: Desktop::with_keymap(keymap),
+            desktop,
             placements: Vec::new(),
             next_id: 1,
             link,
@@ -314,6 +319,14 @@ impl Mirada {
 fn connect_body() -> Option<BrainLink> {
     let path = std::env::var("MIRADA_SOCKET").ok()?;
     BrainLink::connect(&path).ok()
+}
+
+/// Carga las reglas de ventana del usuario, o ninguna si no hay archivo.
+fn load_user_rules() -> Rules {
+    match Rules::default_path() {
+        Some(p) => Rules::load_or_default(&p),
+        None => Rules::default(),
+    }
 }
 
 /// Nombre legible de un modo de teselado.

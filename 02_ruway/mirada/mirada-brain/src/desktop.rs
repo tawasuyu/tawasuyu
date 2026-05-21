@@ -7,6 +7,7 @@ use mirada_protocol::{placements, BodyEvent, BrainCommand, OutputId};
 
 use crate::action::{DesktopAction, WORKSPACE_COUNT};
 use crate::keymap::Keymap;
+use crate::rules::Rules;
 
 /// Lo que el Cerebro sabe de una ventana: su identidad de aplicación.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -35,6 +36,8 @@ pub struct Desktop {
     windows: HashMap<WindowId, WindowInfo>,
     /// Atajos globales → acción. Configurable, recargable en caliente.
     keymap: Keymap,
+    /// Reglas de ventana — escritorio/flotante por `app_id`/título.
+    rules: Rules,
 }
 
 impl Default for Desktop {
@@ -62,7 +65,14 @@ impl Desktop {
             active: 0,
             windows: HashMap::new(),
             keymap,
+            rules: Rules::default(),
         }
+    }
+
+    /// Reemplaza las reglas de ventana. Se aplican a las ventanas que se
+    /// abran a partir de ahora; las ya abiertas no se tocan.
+    pub fn set_rules(&mut self, rules: Rules) {
+        self.rules = rules;
     }
 
     /// El comando que registra los atajos globales en el Cuerpo. La app
@@ -103,8 +113,21 @@ impl Desktop {
                 self.relayout()
             }
             BodyEvent::WindowOpened { id, app_id, title } => {
+                // Las reglas pueden mandarla a otro escritorio o hacerla flotar.
+                let outcome = self.rules.resolve(&app_id, &title);
                 self.windows.insert(id, WindowInfo { app_id, title });
-                self.workspaces[self.active].add(id);
+                let ws = outcome
+                    .workspace
+                    .filter(|&n| n < self.workspaces.len())
+                    .unwrap_or(self.active);
+                self.workspaces[ws].add(id);
+                if outcome.floating {
+                    let rect = self
+                        .screen()
+                        .map(centered_float_rect)
+                        .unwrap_or_else(|| Rect::new(100, 100, 800, 600));
+                    self.workspaces[ws].set_floating(id, Some(rect));
+                }
                 self.relayout()
             }
             BodyEvent::WindowClosed { id } => {
@@ -450,6 +473,24 @@ mod tests {
         // Alternar de nuevo la devuelve al teselado.
         let cmds = d.apply(DesktopAction::ToggleFloat);
         assert!(!places(&cmds).iter().find(|x| x.id == 2).unwrap().floating);
+    }
+
+    #[test]
+    fn a_rule_sends_a_new_window_to_its_workspace() {
+        let mut d = desktop_with_screen();
+        d.set_rules(Rules::from_ron(r#"( rules: [ (app_id: "app2", workspace: 3) ] )"#).unwrap());
+        open(&mut d, 1); // app1 → sin regla → escritorio activo (1)
+        open(&mut d, 2); // app2 → regla → escritorio 3
+        assert_eq!(d.workspace_loads()[0], 1);
+        assert_eq!(d.workspace_loads()[2], 1);
+    }
+
+    #[test]
+    fn a_rule_can_open_a_window_floating() {
+        let mut d = desktop_with_screen();
+        d.set_rules(Rules::from_ron(r#"( rules: [ (app_id: "app1", floating: true) ] )"#).unwrap());
+        let cmds = open(&mut d, 1);
+        assert!(places(&cmds).iter().find(|p| p.id == 1).unwrap().floating);
     }
 
     #[test]
