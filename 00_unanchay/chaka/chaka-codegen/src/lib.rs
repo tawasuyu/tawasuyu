@@ -428,6 +428,18 @@ mod tests {
     }
 
     #[test]
+    fn set_to_true_moves_the_88_value() {
+        let out = gen("DATA DIVISION.\n\
+             WORKING-STORAGE SECTION.\n\
+             01 WS-F PIC X VALUE 'N'.\n\
+                88 LISTO VALUE 'S'.\n\
+             PROCEDURE DIVISION.\n\
+             MAIN.\n\
+                 SET LISTO TO TRUE.\n");
+        assert!(out.contains("self.ws_f.store(\"S\");"));
+    }
+
+    #[test]
     fn empty_program_still_compiles_shape() {
         let out = gen("");
         assert!(out.contains("struct Program {"));

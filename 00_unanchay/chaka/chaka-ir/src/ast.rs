@@ -188,6 +188,9 @@ pub enum Stmt {
     /// `INITIALIZE targets...` — pone cada dato (o grupo) en su valor
     /// por defecto: 0 los numéricos, espacios los alfanuméricos.
     Initialize { targets: Vec<Operand> },
+    /// `SET cond-name... TO TRUE` — hace verdaderos esos nombres de
+    /// condición (nivel 88): asigna a su dato padre el valor del 88.
+    SetTrue { conditions: Vec<String> },
     /// `PERFORM ...` — ver [`Perform`].
     Perform(Perform),
     /// `GO TO target`

@@ -45,6 +45,7 @@ fn parse_one_stmt(c: &mut Cursor, stops: &[&str]) -> Stmt {
         "UNSTRING" => parse_unstring(c),
         "INSPECT" => parse_inspect(c),
         "INITIALIZE" => parse_initialize(c),
+        "SET" => parse_set(c),
         "PERFORM" => parse_perform(c),
         "GO" => parse_goto(c),
         "STOP" => parse_stop(c),
@@ -388,6 +389,24 @@ fn parse_unstring(c: &mut Cursor) -> Stmt {
         source,
         delimiter,
         into,
+    }
+}
+
+fn parse_set(c: &mut Cursor) -> Stmt {
+    c.bump(); // SET
+    let mut conditions = Vec::new();
+    while let Some(name) = parse_one_name(c) {
+        conditions.push(name);
+    }
+    // La v1 sólo modela `SET ... TO TRUE`.
+    if c.eat_word("TO") && c.eat_word("TRUE") {
+        Stmt::SetTrue { conditions }
+    } else {
+        skip_to_stmt_boundary(c);
+        Stmt::Unknown {
+            verb: "SET".to_string(),
+            tokens: Vec::new(),
+        }
     }
 }
 

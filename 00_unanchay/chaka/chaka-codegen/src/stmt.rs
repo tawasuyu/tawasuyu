@@ -87,6 +87,7 @@ pub(crate) fn emit_stmt(em: &mut Emitter, sym: &Symbols, stmt: &Stmt) {
         } => emit_unstring(em, sym, source, delimiter, into),
         Stmt::Inspect { target, op } => emit_inspect(em, sym, target, op),
         Stmt::Initialize { targets } => emit_initialize(em, sym, targets),
+        Stmt::SetTrue { conditions } => emit_set_true(em, sym, conditions),
         Stmt::Perform(p) => emit_perform(em, sym, p),
         Stmt::GoTo { target } => {
             em.line(&format!(
@@ -488,6 +489,21 @@ fn emit_initialize(em: &mut Emitter, sym: &Symbols, targets: &[Operand]) {
             },
             Operand::Indexed { .. } => emit_reset_element(em, sym, t),
             _ => {}
+        }
+    }
+}
+
+/// `SET cond... TO TRUE` — asigna a cada dato padre el valor que hace
+/// verdadero su nombre de condición (nivel 88).
+fn emit_set_true(em: &mut Emitter, sym: &Symbols, conditions: &[String]) {
+    for name in conditions {
+        match sym.condition(name) {
+            Some(cn) => {
+                let target = Operand::Data(cn.parent.clone());
+                let value = cn.value.clone();
+                emit_move(em, sym, &value, std::slice::from_ref(&target));
+            }
+            None => em.line(&format!("// charka: condición 88 no resuelta — {name}")),
         }
     }
 }

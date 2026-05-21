@@ -461,6 +461,17 @@ mod tests {
     }
 
     #[test]
+    fn set_to_true_parses() {
+        let b = body("SET ACTIVO LISTO TO TRUE.");
+        match &b[0] {
+            Stmt::SetTrue { conditions } => {
+                assert_eq!(conditions, &vec!["ACTIVO".to_string(), "LISTO".to_string()]);
+            }
+            other => panic!("se esperaba SET, vino {other:?}"),
+        }
+    }
+
+    #[test]
     fn several_statements_in_one_sentence() {
         let b = body("MOVE 1 TO X DISPLAY X STOP RUN.");
         assert_eq!(b.len(), 3);

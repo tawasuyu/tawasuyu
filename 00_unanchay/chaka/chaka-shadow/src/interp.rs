@@ -312,6 +312,14 @@ impl<'a> Machine<'a> {
                 }
                 Flow::Normal
             }
+            Stmt::SetTrue { conditions } => {
+                for name in conditions {
+                    if let Some(cn) = self.conditions.get(&name.to_uppercase()).cloned() {
+                        self.do_move(&cn.value, &Operand::Data(cn.parent));
+                    }
+                }
+                Flow::Normal
+            }
             Stmt::Perform(p) => self.exec_perform(p),
             Stmt::GoTo { target } => {
                 // Aproximación: ejecuta el destino y sale del párrafo.
