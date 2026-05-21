@@ -430,6 +430,8 @@ mod tests {
             "mover_form",
             "interaccion_list",
             "interaccion_form",
+            "cliente_detail",
+            "oportunidad_detail",
         ] {
             assert!(m.views.contains_key(view), "falta la vista «{view}»");
         }
@@ -457,6 +459,30 @@ mod tests {
             ),
             "monto debe formatearse como moneda",
         );
+        assert_eq!(
+            lv.row_detail.as_deref(),
+            Some("oportunidad_detail"),
+            "la fila de oportunidad debe abrir su ficha",
+        );
+
+        // Fase 3: la ficha del cliente lista sus oportunidades e
+        // interacciones (back-references).
+        let nahual_meta_schema::View::Detail(dv) = &m.views["cliente_detail"] else {
+            panic!("cliente_detail debe ser una ficha (detail)");
+        };
+        assert_eq!(dv.entity, "Cliente");
+        let related: Vec<&str> = dv.related.iter().map(|r| r.entity.as_str()).collect();
+        assert!(
+            related.contains(&"Oportunidad"),
+            "ficha cliente: falta Oportunidad"
+        );
+        assert!(
+            related.contains(&"Interaccion"),
+            "ficha cliente: falta Interaccion"
+        );
+        for r in &dv.related {
+            assert_eq!(r.via_field, "cliente_id", "back-ref por cliente_id");
+        }
     }
 
     /// Carga el módulo crm por el mismo camino que usa `nakui-ui`
