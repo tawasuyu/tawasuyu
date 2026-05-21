@@ -22,10 +22,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::collections::HashMap;
 
 use gpui::{
-    div, point, prelude::*, px, App, Bounds, Context, CursorStyle, Element, ElementId, FocusHandle,
-    GlobalElementId, Hsla, InspectorElementId, IntoElement, KeyDownEvent, LayoutId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Render, ScrollHandle,
-    SharedString, Style, Window,
+    div, point, prelude::*, px, App, Application, Bounds, Context, CursorStyle, Element, ElementId,
+    FocusHandle, GlobalElementId, Hsla, InspectorElementId, IntoElement, KeyDownEvent, LayoutId,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Render,
+    ScrollHandle, SharedString, Style, Window, WindowBounds, WindowOptions,
 };
 use nahual_launcher::launch_app;
 use nahual_theme::Theme;
@@ -337,6 +337,9 @@ struct Shell {
     scroll: ScrollHandle,
     focus: FocusHandle,
     focused_once: bool,
+    /// `true` cuando el shell corre como **modo launcher**: una barra
+    /// compacta acoplada al pie de carmen, en vez del panel completo.
+    launcher: bool,
 }
 
 impl Shell {
@@ -378,6 +381,7 @@ impl Shell {
             scroll: ScrollHandle::new(),
             focus: cx.focus_handle(),
             focused_once: false,
+            launcher: false,
         };
         shell.start_loop(cx);
         shell
@@ -966,6 +970,120 @@ impl Shell {
         }
         cx.notify();
     }
+
+    /// Construye la fila del input: los tokens coloreados, el caret en su
+    /// sitio y el sufijo fantasma. Sin el prefijo del prompt — lo pone
+    /// quien la usa. La comparten el panel completo y el modo launcher.
+    fn input_row(&self, theme: &Theme) -> Vec<gpui::Div> {
+        let accent = gpui::hsla(190.0 / 360.0, 0.70, 0.62, 1.0);
+        let dim = theme.fg_muted;
+        let mut row: Vec<gpui::Div> = Vec::new();
+        let cursor = self.line.cursor();
+        let tokens = self.line.tokens();
+        let caret = || div().w(px(2.)).h(px(19.)).bg(accent);
+        if tokens.is_empty() {
+            row.push(caret());
+            row.push(
+                div()
+                    .text_color(dim)
+                    .child("escribe un comando…  (Tab autocompleta · Enter ejecuta)"),
+            );
+        } else {
+            let mut caret_done = false;
+            for t in &tokens {
+                let color = token_color(t.kind, theme);
+                if !caret_done && cursor >= t.start && cursor < t.end {
+                    let local = cursor - t.start;
+                    let (left_s, right_s) = t.text.split_at(local);
+                    if !left_s.is_empty() {
+                        row.push(div().flex_none().text_color(color).child(left_s.to_string()));
+                    }
+                    row.push(caret());
+                    row.push(div().flex_none().text_color(color).child(right_s.to_string()));
+                    caret_done = true;
+                } else {
+                    row.push(div().flex_none().text_color(color).child(t.text.clone()));
+                }
+            }
+            if !caret_done {
+                row.push(caret());
+            }
+        }
+        if let Some(ghost) = self.compute_ghost() {
+            row.push(
+                div()
+                    .flex_none()
+                    .text_color(theme.fg_disabled)
+                    .child(SharedString::from(ghost)),
+            );
+        }
+        row
+    }
+
+    /// El modo launcher: una barra compacta —glifo, input, estado del
+    /// último comando— pensada para la franja que carmen reserva al pie.
+    fn render_launcher(&mut self, cx: &mut Context<Self>) -> gpui::Div {
+        let theme = Theme::global(cx).clone();
+        let panel = gpui::hsla(220.0 / 360.0, 0.16, 0.11, 1.0);
+        let accent = gpui::hsla(190.0 / 360.0, 0.70, 0.62, 1.0);
+        let dim = theme.fg_muted;
+        let text = theme.fg_text;
+
+        // Estado a la derecha: nº de comandos en curso, o el último.
+        let status = if !self.active.is_empty() {
+            div()
+                .flex_none()
+                .text_size(px(12.))
+                .text_color(accent)
+                .child(SharedString::from(format!("▷ {} en curso", self.active.len())))
+        } else if let Some(last) = self.session.history().last() {
+            let (glyph, color) = match last.status {
+                RunStatus::Running => ("▷", accent),
+                RunStatus::Ok => ("✓", gpui::hsla(140.0 / 360.0, 0.48, 0.55, 1.0)),
+                RunStatus::Failed => ("✗", gpui::hsla(2.0 / 360.0, 0.68, 0.60, 1.0)),
+            };
+            let mut line = last.line.clone();
+            if line.chars().count() > 32 {
+                line = format!("{}…", line.chars().take(32).collect::<String>());
+            }
+            div()
+                .flex_none()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(5.))
+                .text_size(px(12.))
+                .child(div().text_color(color).child(glyph))
+                .child(div().text_color(dim).child(SharedString::from(line)))
+        } else {
+            div().flex_none()
+        };
+
+        div()
+            .size_full()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(10.))
+            .px(px(12.))
+            .bg(panel)
+            .text_color(text)
+            .text_size(px(13.))
+            .track_focus(&self.focus)
+            .key_context("ShumaShell")
+            .on_key_down(cx.listener(Self::handle_key))
+            .child(div().flex_none().text_color(accent).child("⟫"))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .flex_1()
+                    .overflow_hidden()
+                    .children(self.input_row(&theme)),
+            )
+            .child(status)
+    }
 }
 
 /// Color de resaltado de cada clase de token.
@@ -1247,8 +1365,12 @@ impl Render for Shell {
             window.focus(&self.focus);
             self.focused_once = true;
         }
+        // Modo launcher: una barra compacta, no el panel de 3 columnas.
+        if self.launcher {
+            return self.render_launcher(cx);
+        }
         let theme = Theme::global(cx).clone();
-        let bg = theme.bg_app.clone();
+        let bg = theme.bg_app;
         let panel = gpui::hsla(220.0 / 360.0, 0.16, 0.11, 1.0);
         let node_bg = gpui::hsla(220.0 / 360.0, 0.14, 0.16, 1.0);
         let accent = gpui::hsla(190.0 / 360.0, 0.70, 0.62, 1.0);
@@ -1454,7 +1576,7 @@ impl Render for Shell {
             .flex_col()
             .gap(px(8.))
             .p(px(10.))
-            .bg(bg.clone())
+            .bg(bg)
             .when(runs_empty, |d| {
                 d.child(div().text_color(dim).child(
                     "Escribe un comando abajo y presiona Enter — su salida aparece aquí.",
@@ -1555,49 +1677,10 @@ impl Render for Shell {
         };
 
         // --- Zona prompt: el input inteligente ---
+        // El prefijo `›`, y el resto (tokens + caret + fantasma) lo arma
+        // el helper compartido con el modo launcher.
         let mut input_row: Vec<gpui::Div> = vec![div().flex_none().text_color(accent).child("›  ")];
-        let cursor = self.line.cursor();
-        let tokens = self.line.tokens();
-        let caret = || div().w(px(2.)).h(px(19.)).bg(accent);
-        if tokens.is_empty() {
-            input_row.push(caret());
-            input_row.push(
-                div()
-                    .text_color(dim)
-                    .child("escribe un comando…  (Tab autocompleta · Enter ejecuta)"),
-            );
-        } else {
-            let mut caret_done = false;
-            for t in &tokens {
-                let color = token_color(t.kind, &theme);
-                if !caret_done && cursor >= t.start && cursor < t.end {
-                    let local = cursor - t.start;
-                    let (left_s, right_s) = t.text.split_at(local);
-                    if !left_s.is_empty() {
-                        input_row
-                            .push(div().flex_none().text_color(color).child(left_s.to_string()));
-                    }
-                    input_row.push(caret());
-                    input_row
-                        .push(div().flex_none().text_color(color).child(right_s.to_string()));
-                    caret_done = true;
-                } else {
-                    input_row.push(div().flex_none().text_color(color).child(t.text.clone()));
-                }
-            }
-            if !caret_done {
-                input_row.push(caret());
-            }
-        }
-        // Sugerencia fantasma — el resto que el shell predice, en gris.
-        if let Some(ghost) = self.compute_ghost() {
-            input_row.push(
-                div()
-                    .flex_none()
-                    .text_color(theme.fg_disabled)
-                    .child(SharedString::from(ghost)),
-            );
-        }
+        input_row.extend(self.input_row(&theme));
         let input_bar = div()
             .h(px(46.))
             .flex()
@@ -1778,6 +1861,41 @@ impl Drop for Shell {
     }
 }
 
+/// Levanta el shell en **modo launcher**: una ventana sin barra de
+/// título y con `app_id` `carmen.shell`, para que el compositor la
+/// reconozca y la acople a la franja del pie.
+fn run_launcher() {
+    Application::new().run(|cx: &mut App| {
+        Theme::install_default(cx);
+        let bounds = Bounds::centered(None, gpui::size(px(1280.), px(40.)), cx);
+        cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: None,
+                app_id: Some("carmen.shell".into()),
+                ..Default::default()
+            },
+            |_w, cx| {
+                cx.new(|cx| {
+                    let mut shell = Shell::new(cx);
+                    shell.launcher = true;
+                    shell
+                })
+            },
+        )
+        .expect("open window");
+        cx.activate(true);
+    });
+}
+
 fn main() {
-    launch_app("brahman · shuma shell", (1100., 700.), Shell::new);
+    // Modo launcher: barra acoplada a carmen. Lo activan el argumento
+    // `--launcher` o la variable de entorno `MIRADA_SHELL`.
+    let launcher = std::env::args().any(|a| a == "--launcher")
+        || std::env::var_os("MIRADA_SHELL").is_some();
+    if launcher {
+        run_launcher();
+    } else {
+        launch_app("brahman · shuma shell", (1100., 700.), Shell::new);
+    }
 }
