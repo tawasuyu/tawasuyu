@@ -8,7 +8,9 @@
 //! ningún widget concreto. Cada widget pide slots semánticos (panel_bg,
 //! row_hover, accent…) sin acoplarse a colores hex específicos.
 
-use gpui::{Background, Global, Hsla, hsla, linear_color_stop, linear_gradient};
+use gpui::{hsla, linear_color_stop, linear_gradient, Background, Global, Hsla};
+
+pub mod toolkit;
 
 /// Paleta semántica del theme. Cada slot tiene un nombre funcional, no
 /// cromático — así los widgets piden "fondo de panel" sin acoplarse a
@@ -121,6 +123,8 @@ impl Theme {
     /// theme cambia (típicamente vía `theme_switcher`).
     pub fn install_default(cx: &mut gpui::App) {
         let theme = load_persisted().unwrap_or_else(Self::nebula);
+        // Asegura que GTK/Qt arranquen con el `gtk.css` del tema activo.
+        let _ = toolkit::export_toolkit_configs(&theme);
         cx.set_global(theme);
     }
 
@@ -134,6 +138,8 @@ impl Theme {
     /// por un I/O secundario.
     pub fn set(cx: &mut gpui::App, theme: Self) {
         let _ = persist(&theme);
+        // Reexporta `gtk.css` para que las apps GTK/Qt sigan el cambio.
+        let _ = toolkit::export_toolkit_configs(&theme);
         cx.set_global(theme);
     }
 
@@ -484,7 +490,15 @@ const CONFIG_FILE: &str = "theme";
 /// sino `$HOME/.config/nahual/theme`. `None` si ni `XDG_CONFIG_HOME`
 /// ni `HOME` están definidos (típicamente en sandboxes / CI).
 pub fn config_path() -> Option<PathBuf> {
-    let base = std::env::var("XDG_CONFIG_HOME")
+    Some(config_home()?.join(CONFIG_SUBDIR).join(CONFIG_FILE))
+}
+
+/// Directorio base de configuración del usuario: `$XDG_CONFIG_HOME` si
+/// está definido, sino `$HOME/.config`. `None` si ninguno está set
+/// (típicamente en sandboxes / CI). Lo usan [`config_path`] y el módulo
+/// [`toolkit`] para ubicar `gtk-3.0/gtk.css` y `gtk-4.0/gtk.css`.
+pub(crate) fn config_home() -> Option<PathBuf> {
+    std::env::var("XDG_CONFIG_HOME")
         .ok()
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
@@ -493,8 +507,7 @@ pub fn config_path() -> Option<PathBuf> {
                 .ok()
                 .filter(|s| !s.is_empty())
                 .map(|h| PathBuf::from(h).join(".config"))
-        })?;
-    Some(base.join(CONFIG_SUBDIR).join(CONFIG_FILE))
+        })
 }
 
 /// Lee el theme persistido. `None` si: no hay config dir, file no
