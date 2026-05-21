@@ -245,6 +245,7 @@ const KEYMAP_HEADER: &str = "\
 //   grow-master / shrink-master      redimensiona el área maestra
 //   inc-master / dec-master          nº de ventanas maestras (nmaster)
 //   promote-to-master                la enfocada al puesto maestro
+//   focus-output-next                pasa el foco al siguiente monitor
 //   workspace:N                      activa el escritorio N (1..9)
 //   send-to-workspace:N              manda la enfocada al escritorio N
 //   quit                             apaga el compositor

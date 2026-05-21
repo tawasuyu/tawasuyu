@@ -16,22 +16,34 @@ pub struct WindowInfo {
     pub title: String,
 }
 
+/// Una salida física y el escritorio virtual que muestra ahora mismo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Output {
+    pub id: OutputId,
+    /// Rectángulo en el espacio global — las salidas van en fila horizontal.
+    pub rect: Rect,
+    /// Índice del escritorio que esta salida muestra.
+    pub workspace: usize,
+}
+
 /// El estado completo del escritorio.
 ///
 /// Mantiene las salidas físicas, [`WORKSPACE_COUNT`] escritorios
-/// virtuales, el registro de ventanas y el mapa de atajos. El único
+/// virtuales, el registro de ventanas, el keymap y las reglas. El único
 /// punto de entrada es [`Desktop::on_event`]: traga un [`BodyEvent`],
 /// muta el estado y devuelve los [`BrainCommand`]s a enviar al Cuerpo.
 ///
-/// Limitación de v1: el teselado se calcula sobre la salida primaria
-/// (la primera conectada). El multi-monitor real llegará después.
+/// **Multi-monitor**: cada salida muestra un escritorio distinto; el
+/// teselado se calcula para todas y el `Place` resultante las cubre. Un
+/// escritorio se ve en una salida como mucho — pedir uno que ya muestra
+/// otra salida las intercambia.
 pub struct Desktop {
     /// Salidas físicas, en fila horizontal y en orden de aparición.
-    outputs: Vec<(OutputId, Rect)>,
+    outputs: Vec<Output>,
     /// Escritorios virtuales — `WORKSPACE_COUNT` fijos.
     workspaces: Vec<Workspace>,
-    /// Índice del escritorio activo.
-    active: usize,
+    /// Índice (en `outputs`) de la salida con el foco.
+    focused_output: usize,
     /// Identidad de cada ventana conocida.
     windows: HashMap<WindowId, WindowInfo>,
     /// Atajos globales → acción. Configurable, recargable en caliente.
@@ -62,7 +74,7 @@ impl Desktop {
         Self {
             outputs: Vec::new(),
             workspaces,
-            active: 0,
+            focused_output: 0,
             windows: HashMap::new(),
             keymap,
             rules: Rules::default(),
@@ -93,9 +105,9 @@ impl Desktop {
         &self.keymap
     }
 
-    /// Geometría de la salida primaria, si hay alguna conectada.
+    /// Geometría de la salida enfocada, si hay alguna conectada.
     pub fn screen(&self) -> Option<Rect> {
-        self.outputs.first().map(|(_, r)| *r)
+        self.outputs.get(self.focused_output).map(|o| o.rect)
     }
 
     /// Procesa un evento del Cuerpo: muta el estado y devuelve los
@@ -103,13 +115,26 @@ impl Desktop {
     pub fn on_event(&mut self, event: BodyEvent) -> Vec<BrainCommand> {
         match event {
             BodyEvent::OutputAdded { id, width, height } => {
-                // Las salidas se alinean en fila a la derecha de las previas.
-                let x: i32 = self.outputs.iter().map(|(_, r)| r.w).sum();
-                self.outputs.push((id, Rect::new(x, 0, width, height)));
+                // La salida nueva muestra el primer escritorio que no
+                // muestre ya otra salida.
+                let taken: Vec<usize> = self.outputs.iter().map(|o| o.workspace).collect();
+                let workspace = (0..self.workspaces.len())
+                    .find(|n| !taken.contains(n))
+                    .unwrap_or(0);
+                self.outputs.push(Output {
+                    id,
+                    rect: Rect::new(0, 0, width, height),
+                    workspace,
+                });
+                self.reflow_outputs();
                 self.relayout()
             }
             BodyEvent::OutputRemoved { id } => {
-                self.outputs.retain(|(o, _)| *o != id);
+                self.outputs.retain(|o| o.id != id);
+                if self.focused_output >= self.outputs.len() {
+                    self.focused_output = self.outputs.len().saturating_sub(1);
+                }
+                self.reflow_outputs();
                 self.relayout()
             }
             BodyEvent::WindowOpened { id, app_id, title } => {
@@ -119,7 +144,7 @@ impl Desktop {
                 let ws = outcome
                     .workspace
                     .filter(|&n| n < self.workspaces.len())
-                    .unwrap_or(self.active);
+                    .unwrap_or(self.active_index());
                 self.workspaces[ws].add(id);
                 if outcome.floating {
                     let rect = self
@@ -147,7 +172,8 @@ impl Desktop {
             BodyEvent::PointerEntered { id } => {
                 // Foco al pasar el puntero, sólo si la ventana está en el
                 // escritorio activo.
-                if self.workspaces[self.active].focus_window(id) {
+                let active = self.active_index();
+                if self.workspaces[active].focus_window(id) {
                     self.relayout()
                 } else {
                     Vec::new()
@@ -163,51 +189,52 @@ impl Desktop {
     /// Aplica una acción de escritorio directamente (sin pasar por una
     /// tecla). Útil para disparar acciones desde un HUD.
     pub fn apply(&mut self, action: DesktopAction) -> Vec<BrainCommand> {
+        let active = self.active_index();
         match action {
             DesktopAction::FocusNext => {
-                self.workspaces[self.active].focus_next();
+                self.workspaces[active].focus_next();
                 self.relayout()
             }
             DesktopAction::FocusPrev => {
-                self.workspaces[self.active].focus_prev();
+                self.workspaces[active].focus_prev();
                 self.relayout()
             }
             DesktopAction::FocusWindow(id) => {
                 // En el escritorio activo basta enfocar; si la ventana
-                // está en otro, saltamos a ese escritorio.
-                if self.workspaces[self.active].focus_window(id) {
+                // está en otro, lo traemos a la salida enfocada.
+                if self.workspaces[active].focus_window(id) {
                     return self.relayout();
                 }
                 for n in 0..self.workspaces.len() {
-                    if n != self.active && self.workspaces[n].focus_window(id) {
-                        self.active = n;
+                    if n != active && self.workspaces[n].focus_window(id) {
+                        self.show_workspace(n);
                         return self.relayout();
                     }
                 }
                 Vec::new()
             }
             DesktopAction::MoveForward => {
-                self.workspaces[self.active].move_focused_forward();
+                self.workspaces[active].move_focused_forward();
                 self.relayout()
             }
             DesktopAction::MoveBackward => {
-                self.workspaces[self.active].move_focused_backward();
+                self.workspaces[active].move_focused_backward();
                 self.relayout()
             }
             DesktopAction::CloseFocused => {
                 // Pedimos el cierre; el estado se actualiza al recibir el
                 // `WindowClosed` de vuelta, no antes.
-                match self.workspaces[self.active].focused() {
+                match self.workspaces[active].focused() {
                     Some(id) => vec![BrainCommand::Close(id)],
                     None => Vec::new(),
                 }
             }
             DesktopAction::ToggleFloat => {
-                let Some(id) = self.workspaces[self.active].focused() else {
+                let Some(id) = self.workspaces[active].focused() else {
                     return Vec::new();
                 };
                 let screen = self.screen();
-                let ws = &mut self.workspaces[self.active];
+                let ws = &mut self.workspaces[active];
                 if ws.is_floating(id) {
                     ws.set_floating(id, None);
                 } else {
@@ -219,10 +246,10 @@ impl Desktop {
                 self.relayout()
             }
             DesktopAction::ToggleFullscreen => {
-                let Some(id) = self.workspaces[self.active].focused() else {
+                let Some(id) = self.workspaces[active].focused() else {
                     return Vec::new();
                 };
-                let ws = &mut self.workspaces[self.active];
+                let ws = &mut self.workspaces[active];
                 if ws.fullscreen() == Some(id) {
                     ws.set_fullscreen(None);
                 } else {
@@ -231,12 +258,12 @@ impl Desktop {
                 self.relayout()
             }
             DesktopAction::CycleLayout => {
-                let next = self.workspaces[self.active].params().mode.next();
-                self.workspaces[self.active].set_mode(next);
+                let next = self.workspaces[active].params().mode.next();
+                self.workspaces[active].set_mode(next);
                 self.relayout()
             }
             DesktopAction::SetLayout(mode) => {
-                self.workspaces[self.active].set_mode(mode);
+                self.workspaces[active].set_mode(mode);
                 self.relayout()
             }
             DesktopAction::GrowMaster => self.nudge_master(0.05),
@@ -244,38 +271,83 @@ impl Desktop {
             DesktopAction::IncMaster => self.nudge_master_count(1),
             DesktopAction::DecMaster => self.nudge_master_count(-1),
             DesktopAction::PromoteToMaster => {
-                self.workspaces[self.active].promote_focused();
+                self.workspaces[active].promote_focused();
                 self.relayout()
             }
             DesktopAction::SwitchWorkspace(n) => {
-                if n < self.workspaces.len() && n != self.active {
-                    self.active = n;
+                if n < self.workspaces.len() && n != active {
+                    self.show_workspace(n);
                     self.relayout()
                 } else {
                     Vec::new()
                 }
             }
             DesktopAction::SendToWorkspace(n) => {
-                if n >= self.workspaces.len() || n == self.active {
+                if n >= self.workspaces.len() || n == active {
                     return Vec::new();
                 }
-                match self.workspaces[self.active].focused() {
+                match self.workspaces[active].focused() {
                     Some(id) => {
-                        self.workspaces[self.active].remove(id);
+                        self.workspaces[active].remove(id);
                         self.workspaces[n].add(id);
                         self.relayout()
                     }
                     None => Vec::new(),
                 }
             }
+            DesktopAction::FocusOutputNext => {
+                if self.outputs.len() > 1 {
+                    self.focused_output = (self.focused_output + 1) % self.outputs.len();
+                    self.relayout()
+                } else {
+                    Vec::new()
+                }
+            }
             DesktopAction::Quit => vec![BrainCommand::Shutdown],
+        }
+    }
+
+    /// El índice del escritorio activo — el que muestra la salida
+    /// enfocada. `0` si todavía no hay ninguna salida.
+    pub fn active_index(&self) -> usize {
+        self.outputs
+            .get(self.focused_output)
+            .map(|o| o.workspace)
+            .unwrap_or(0)
+    }
+
+    /// Hace que la salida enfocada muestre el escritorio `n`. Si otra
+    /// salida ya lo mostraba, intercambian — así ningún escritorio se
+    /// ve en dos sitios a la vez.
+    fn show_workspace(&mut self, n: usize) {
+        if n >= self.workspaces.len() || self.focused_output >= self.outputs.len() {
+            return;
+        }
+        let current = self.outputs[self.focused_output].workspace;
+        if current == n {
+            return;
+        }
+        if let Some(other) = self.outputs.iter().position(|o| o.workspace == n) {
+            self.outputs[other].workspace = current;
+        }
+        self.outputs[self.focused_output].workspace = n;
+    }
+
+    /// Recoloca las salidas en fila horizontal, en su orden de aparición.
+    fn reflow_outputs(&mut self) {
+        let mut x = 0;
+        for o in &mut self.outputs {
+            o.rect.x = x;
+            o.rect.y = 0;
+            x += o.rect.w;
         }
     }
 
     /// Ajusta la fracción del área maestra del escritorio activo (la usan
     /// `MasterStack` y `CenteredMaster`), acotada a `0.05..=0.95`.
     fn nudge_master(&mut self, delta: f32) -> Vec<BrainCommand> {
-        let ws = &mut self.workspaces[self.active];
+        let active = self.active_index();
+        let ws = &mut self.workspaces[active];
         let ratio = (ws.params().master_ratio + delta).clamp(0.05, 0.95);
         ws.set_master_ratio(ratio);
         self.relayout()
@@ -283,42 +355,49 @@ impl Desktop {
 
     /// Ajusta `nmaster` del escritorio activo, acotado a `1..=9`.
     fn nudge_master_count(&mut self, delta: i32) -> Vec<BrainCommand> {
-        let ws = &mut self.workspaces[self.active];
+        let active = self.active_index();
+        let ws = &mut self.workspaces[active];
         let n = (ws.params().master_count as i32 + delta).clamp(1, 9) as usize;
         ws.set_master_count(n);
         self.relayout()
     }
 
-    /// Recalcula la geometría del escritorio activo y la empaqueta en un
-    /// [`BrainCommand::Place`]. Sin salida conectada, no hay nada que
+    /// Recalcula la geometría de **todas** las salidas y la empaqueta en
+    /// un único [`BrainCommand::Place`]. Sin salidas, no hay nada que
     /// colocar.
     fn relayout(&self) -> Vec<BrainCommand> {
-        match self.screen() {
-            Some(screen) => {
-                vec![BrainCommand::Place(placements(
-                    &self.workspaces[self.active],
-                    screen,
-                ))]
-            }
-            None => Vec::new(),
+        if self.outputs.is_empty() {
+            return Vec::new();
         }
+        let mut all = Vec::new();
+        for o in &self.outputs {
+            all.extend(placements(&self.workspaces[o.workspace], o.rect));
+        }
+        // El foco del teclado es único: sólo la ventana enfocada de la
+        // salida enfocada. `placements` marca el foco por escritorio (lo
+        // necesita para la visibilidad en `Monocle`); aquí lo unificamos.
+        let global_focus = self.focused_window();
+        for p in &mut all {
+            p.focused = Some(p.id) == global_focus;
+        }
+        vec![BrainCommand::Place(all)]
     }
 
     // --- Accesores de sólo lectura, para el HUD de la app GPUI ---------
 
-    /// Índice del escritorio activo.
-    pub fn active_index(&self) -> usize {
-        self.active
-    }
-
-    /// El escritorio activo.
+    /// El escritorio activo — el de la salida enfocada.
     pub fn active_workspace(&self) -> &Workspace {
-        &self.workspaces[self.active]
+        &self.workspaces[self.active_index()]
     }
 
-    /// Las salidas conectadas, en orden.
-    pub fn outputs(&self) -> &[(OutputId, Rect)] {
+    /// Las salidas conectadas, en orden, con el escritorio que muestran.
+    pub fn outputs(&self) -> &[Output] {
         &self.outputs
+    }
+
+    /// Índice (en [`outputs`](Desktop::outputs)) de la salida enfocada.
+    pub fn focused_output(&self) -> usize {
+        self.focused_output
     }
 
     /// Identidad de una ventana conocida.
@@ -326,9 +405,11 @@ impl Desktop {
         self.windows.get(&id)
     }
 
-    /// La ventana enfocada en el escritorio activo.
+    /// La ventana con el foco del teclado: la enfocada del escritorio
+    /// activo — o su ventana en pantalla completa, si la hay.
     pub fn focused_window(&self) -> Option<WindowId> {
-        self.workspaces[self.active].focused()
+        let ws = &self.workspaces[self.active_index()];
+        ws.fullscreen().or_else(|| ws.focused())
     }
 
     /// Cuántas ventanas hay en cada escritorio virtual.
@@ -339,6 +420,7 @@ impl Desktop {
     /// Una vista de todas las ventanas conocidas, en todos los
     /// escritorios — la base de `mirada-ctl windows` y de una taskbar.
     pub fn window_lines(&self) -> Vec<crate::ctl::WindowLine> {
+        let active = self.active_index();
         let mut lines = Vec::new();
         for (n, ws) in self.workspaces.iter().enumerate() {
             let ws_focus = ws.focused();
@@ -349,7 +431,7 @@ impl Desktop {
                     app_id: info.map(|i| i.app_id.clone()).unwrap_or_default(),
                     title: info.map(|i| i.title.clone()).unwrap_or_default(),
                     workspace: n + 1,
-                    focused: n == self.active && ws_focus == Some(id),
+                    focused: n == active && ws_focus == Some(id),
                 });
             }
         }
@@ -709,6 +791,16 @@ mod tests {
         );
     }
 
+    // --- Multi-monitor -------------------------------------------------
+
+    /// Un escritorio con dos salidas 1920×1080.
+    fn desktop_with_two_outputs() -> Desktop {
+        let mut d = Desktop::new();
+        d.on_event(BodyEvent::OutputAdded { id: 0, width: 1920, height: 1080 });
+        d.on_event(BodyEvent::OutputAdded { id: 1, width: 1920, height: 1080 });
+        d
+    }
+
     #[test]
     fn outputs_lay_side_by_side() {
         let mut d = Desktop::new();
@@ -716,8 +808,69 @@ mod tests {
         d.on_event(BodyEvent::OutputAdded { id: 1, width: 2560, height: 1440 });
         assert_eq!(d.outputs().len(), 2);
         // La segunda salida arranca donde acaba la primera.
-        assert_eq!(d.outputs()[1].1.x, 1920);
-        // El teselado sigue sobre la salida primaria.
-        assert_eq!(d.screen().unwrap().w, 1920);
+        assert_eq!(d.outputs()[1].rect.x, 1920);
+    }
+
+    #[test]
+    fn each_output_shows_a_distinct_workspace() {
+        let d = desktop_with_two_outputs();
+        assert_eq!(d.outputs()[0].workspace, 0);
+        assert_eq!(d.outputs()[1].workspace, 1);
+    }
+
+    #[test]
+    fn switching_to_a_workspace_shown_on_another_output_swaps_them() {
+        let mut d = desktop_with_two_outputs();
+        // La salida enfocada (0, ws 0) pide el ws 1, que muestra la 1 → swap.
+        d.apply(DesktopAction::SwitchWorkspace(1));
+        assert_eq!(d.outputs()[0].workspace, 1);
+        assert_eq!(d.outputs()[1].workspace, 0);
+    }
+
+    #[test]
+    fn focus_output_next_moves_the_focus_between_outputs() {
+        let mut d = desktop_with_two_outputs();
+        assert_eq!(d.active_index(), 0); // salida 0 → ws 0
+        d.apply(DesktopAction::FocusOutputNext);
+        assert_eq!(d.active_index(), 1); // salida 1 → ws 1
+        d.apply(DesktopAction::FocusOutputNext); // envuelve
+        assert_eq!(d.active_index(), 0);
+    }
+
+    #[test]
+    fn relayout_places_windows_on_every_output() {
+        let mut d = Desktop::new();
+        d.on_event(BodyEvent::OutputAdded { id: 0, width: 1920, height: 1080 });
+        d.on_event(BodyEvent::OutputAdded { id: 1, width: 1280, height: 720 });
+        open(&mut d, 1); // en la salida 0 (ws 0)
+        d.apply(DesktopAction::FocusOutputNext);
+        let cmds = open(&mut d, 2); // en la salida 1 (ws 1)
+        let p = places(&cmds);
+        assert_eq!(p.len(), 2);
+        // Cada ventana cae en el rectángulo de su salida.
+        assert_eq!(p.iter().find(|x| x.id == 1).unwrap().rect.x, 0);
+        assert_eq!(p.iter().find(|x| x.id == 2).unwrap().rect.x, 1920);
+    }
+
+    #[test]
+    fn keyboard_focus_is_unique_across_outputs() {
+        let mut d = desktop_with_two_outputs();
+        open(&mut d, 1);
+        d.apply(DesktopAction::FocusOutputNext);
+        let cmds = open(&mut d, 2);
+        // Sólo una ventana con foco de teclado en todo el Place.
+        assert_eq!(places(&cmds).iter().filter(|p| p.focused).count(), 1);
+    }
+
+    #[test]
+    fn removing_an_output_keeps_its_windows_in_their_workspace() {
+        let mut d = desktop_with_two_outputs();
+        d.apply(DesktopAction::FocusOutputNext); // foco en la salida 1 (ws 1)
+        open(&mut d, 1); // en ws 1
+        d.on_event(BodyEvent::OutputRemoved { id: 1 });
+        // La ventana sigue registrada, en el ws 1.
+        assert!(d.window_info(1).is_some());
+        assert_eq!(d.workspace_loads()[1], 1);
+        assert_eq!(d.outputs().len(), 1);
     }
 }

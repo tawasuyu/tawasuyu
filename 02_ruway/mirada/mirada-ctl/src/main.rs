@@ -131,6 +131,7 @@ Acciones de mirada-ctl:
   promote-to-master          la ventana enfocada al puesto maestro
   workspace <n>              activa el escritorio n (1..9)
   send-to-workspace <n>      manda la enfocada al escritorio n
+  focus-output-next          pasa el foco al siguiente monitor
   quit                       apaga el compositor
 "
     );

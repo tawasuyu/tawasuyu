@@ -60,6 +60,8 @@ pub enum DesktopAction {
     SwitchWorkspace(usize),
     /// Manda la ventana enfocada al escritorio virtual `n`.
     SendToWorkspace(usize),
+    /// Mueve el foco a la siguiente salida (monitor).
+    FocusOutputNext,
     /// Apaga el compositor.
     Quit,
 }
@@ -114,6 +116,7 @@ impl fmt::Display for DesktopAction {
             // Los escritorios se numeran 1-based de cara al usuario.
             DesktopAction::SwitchWorkspace(n) => write!(f, "workspace:{}", n + 1),
             DesktopAction::SendToWorkspace(n) => write!(f, "send-to-workspace:{}", n + 1),
+            DesktopAction::FocusOutputNext => f.write_str("focus-output-next"),
             DesktopAction::Quit => f.write_str("quit"),
         }
     }
@@ -139,6 +142,7 @@ impl FromStr for DesktopAction {
             "inc-master" => Self::IncMaster,
             "dec-master" => Self::DecMaster,
             "promote-to-master" => Self::PromoteToMaster,
+            "focus-output-next" => Self::FocusOutputNext,
             "quit" => Self::Quit,
             _ => {
                 if let Some(slug) = s.strip_prefix("layout:") {
@@ -203,6 +207,7 @@ pub fn default_keymap() -> Vec<(String, DesktopAction)> {
         ("Super+s".into(), DesktopAction::SetLayout(LayoutMode::Spiral)),
         ("Super+h".into(), DesktopAction::ShrinkMaster),
         ("Super+l".into(), DesktopAction::GrowMaster),
+        ("Super+o".into(), DesktopAction::FocusOutputNext),
         ("Super+Return".into(), DesktopAction::PromoteToMaster),
         ("Super+,".into(), DesktopAction::IncMaster),
         ("Super+.".into(), DesktopAction::DecMaster),

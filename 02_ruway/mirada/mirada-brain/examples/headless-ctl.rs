@@ -29,9 +29,10 @@ fn main() {
     };
     eprintln!("Cerebro headless · control en {}", path.display());
 
-    // Una pantalla y tres ventanas de muestra.
+    // Dos pantallas y tres ventanas de muestra.
     let mut desktop = Desktop::new();
     desktop.on_event(BodyEvent::OutputAdded { id: 0, width: 1920, height: 1080 });
+    desktop.on_event(BodyEvent::OutputAdded { id: 1, width: 1920, height: 1080 });
     for id in 1..=3 {
         desktop.on_event(BodyEvent::WindowOpened {
             id,
@@ -93,10 +94,21 @@ fn main() {
 fn print_state(d: &Desktop) {
     let ws = d.active_workspace();
     eprintln!(
-        "  escritorio {} · {:?} (maestra {:.0}%) · foco {:?}",
+        "  activo: escritorio {} · {:?} (maestra {:.0}%) · foco {:?}",
         d.active_index() + 1,
         ws.params().mode,
         ws.params().master_ratio * 100.0,
         d.focused_window(),
     );
+    for (i, o) in d.outputs().iter().enumerate() {
+        let mark = if i == d.focused_output() { '*' } else { ' ' };
+        eprintln!(
+            "  {mark} salida {} {}×{} @ x{} → escritorio {}",
+            o.id,
+            o.rect.w,
+            o.rect.h,
+            o.rect.x,
+            o.workspace + 1,
+        );
+    }
 }

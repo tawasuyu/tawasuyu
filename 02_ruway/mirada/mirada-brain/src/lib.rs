@@ -26,7 +26,7 @@ pub mod rules;
 
 pub use action::{default_keymap, DesktopAction, WORKSPACE_COUNT};
 pub use ctl::{CtlConn, CtlReply, CtlRequest, CtlServer, WindowLine};
-pub use desktop::{Desktop, WindowInfo};
+pub use desktop::{Desktop, Output, WindowInfo};
 pub use keymap::{Keymap, KeymapError, KeymapWatch};
 pub use rules::{Rule, RuleOutcome, Rules};
 
