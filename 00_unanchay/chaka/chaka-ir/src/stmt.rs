@@ -288,6 +288,14 @@ fn parse_if(c: &mut Cursor) -> Stmt {
 fn parse_perform(c: &mut Cursor) -> Stmt {
     c.bump(); // PERFORM
 
+    // `PERFORM VARYING ... ... END-PERFORM` — cuerpo en línea.
+    if c.eat_word("VARYING") {
+        let control = parse_varying(c);
+        let body = parse_statements(c, &["END-PERFORM"]);
+        c.eat_word("END-PERFORM");
+        return inline_perform(body, control);
+    }
+
     // `PERFORM UNTIL cond ... END-PERFORM` — cuerpo en línea.
     if c.eat_word("UNTIL") {
         let cond = parse_cond(c);
@@ -312,9 +320,9 @@ fn parse_perform(c: &mut Cursor) -> Stmt {
         return inline_perform(body, PerformControl::Once);
     }
 
-    // `PERFORM PARA [THRU PARA2] [n TIMES | UNTIL cond]` — fuera de línea.
+    // `PERFORM PARA [THRU PARA2] [VARYING ... | n TIMES | UNTIL cond]`.
     let Some(name) = parse_one_name(c) else {
-        // Forma no soportada (p. ej. `PERFORM VARYING`): perform vacío.
+        // Forma no reconocida tras `PERFORM`: perform vacío.
         return inline_perform(Vec::new(), PerformControl::Once);
     };
     let thru = if c.eat_word("THRU") || c.eat_word("THROUGH") {
@@ -322,7 +330,9 @@ fn parse_perform(c: &mut Cursor) -> Stmt {
     } else {
         None
     };
-    let control = if c.eat_word("UNTIL") {
+    let control = if c.eat_word("VARYING") {
+        parse_varying(c)
+    } else if c.eat_word("UNTIL") {
         PerformControl::Until(parse_cond(c))
     } else if at_count(c) {
         let n = parse_operand(c);
@@ -343,6 +353,24 @@ fn inline_perform(body: Vec<Stmt>, control: PerformControl) -> Stmt {
         target: PerformTarget::Inline(body),
         control,
     })
+}
+
+/// Parsea la cláusula `VARYING var FROM x BY y UNTIL cond`, ya
+/// consumida la palabra `VARYING`.
+fn parse_varying(c: &mut Cursor) -> PerformControl {
+    let var = parse_one_name(c).unwrap_or_default();
+    c.eat_word("FROM");
+    let from = parse_operand(c);
+    c.eat_word("BY");
+    let by = parse_operand(c);
+    c.eat_word("UNTIL");
+    let until = parse_cond(c);
+    PerformControl::Varying {
+        var,
+        from,
+        by,
+        until,
+    }
 }
 
 /// ¿El cursor está sobre `<operando> TIMES`?

@@ -265,6 +265,28 @@ impl<'a> Machine<'a> {
                     return Flow::Stop;
                 }
             },
+            PerformControl::Varying {
+                var,
+                from,
+                by,
+                until,
+            } => {
+                let start = self.eval_decimal(from);
+                self.store(var, start, false);
+                loop {
+                    if self.tick() {
+                        return Flow::Stop;
+                    }
+                    if self.eval_cond(until) {
+                        return Flow::Normal;
+                    }
+                    if let Flow::Stop = self.run_target(&p.target) {
+                        return Flow::Stop;
+                    }
+                    let next = self.field_value(var).add(&self.eval_decimal(by));
+                    self.store(var, next, false);
+                }
+            }
         }
     }
 

@@ -197,4 +197,13 @@ pub enum PerformControl {
     Times(Operand),
     /// `UNTIL cond`.
     Until(Cond),
+    /// `VARYING var FROM from BY by UNTIL until` — el bucle con
+    /// variable de control: `var = from`; mientras no se cumpla
+    /// `until`, ejecuta el cuerpo y hace `var = var + by`.
+    Varying {
+        var: String,
+        from: Operand,
+        by: Operand,
+        until: Cond,
+    },
 }

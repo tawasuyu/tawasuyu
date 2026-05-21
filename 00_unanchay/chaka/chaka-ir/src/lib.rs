@@ -17,9 +17,9 @@
 //! `ACCEPT`, `COMPUTE` (con expresiones con precedencia), `ADD`,
 //! `SUBTRACT`, `MULTIPLY`, `DIVIDE`, `IF`/`ELSE`/`END-IF` (con
 //! condiciones `AND`/`OR`/`NOT`), `PERFORM` (fuera de línea, en línea,
-//! `TIMES`, `UNTIL`), `GO TO`, `STOP RUN`, `GOBACK`, `EXIT`,
-//! `CONTINUE`. Fuera de alcance: `EVALUATE`, `STRING`/`UNSTRING`, E/S
-//! de ficheros, `PERFORM VARYING`, CICS y SQL embebido.
+//! `TIMES`, `UNTIL`, `VARYING`), `GO TO`, `STOP RUN`, `GOBACK`,
+//! `EXIT`, `CONTINUE`. Fuera de alcance: `EVALUATE`,
+//! `STRING`/`UNSTRING`, E/S de ficheros, CICS y SQL embebido.
 
 #![forbid(unsafe_code)]
 
@@ -282,6 +282,31 @@ mod tests {
                     other => panic!("se esperaba cuerpo en línea, vino {other:?}"),
                 }
             }
+            other => panic!("se esperaba PERFORM, vino {other:?}"),
+        }
+    }
+
+    #[test]
+    fn perform_varying_inline() {
+        let b = body(
+            "PERFORM VARYING WS-I FROM 1 BY 2 UNTIL WS-I > 9 \
+             CONTINUE END-PERFORM.",
+        );
+        match &b[0] {
+            Stmt::Perform(p) => match &p.control {
+                PerformControl::Varying {
+                    var,
+                    from,
+                    by,
+                    until,
+                } => {
+                    assert_eq!(var, "WS-I");
+                    assert_eq!(from, &Operand::Num("1".into()));
+                    assert_eq!(by, &Operand::Num("2".into()));
+                    assert!(matches!(until, Cond::Compare { .. }));
+                }
+                other => panic!("se esperaba Varying, vino {other:?}"),
+            },
             other => panic!("se esperaba PERFORM, vino {other:?}"),
         }
     }

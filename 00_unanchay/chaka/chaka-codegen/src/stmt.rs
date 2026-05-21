@@ -360,5 +360,20 @@ fn emit_perform(em: &mut Emitter, sym: &Symbols, p: &Perform) {
             em.dedent();
             em.line("}");
         }
+        PerformControl::Varying {
+            var,
+            from,
+            by,
+            until,
+        } => {
+            // var = from; mientras no se cumpla `until`: cuerpo; var += by.
+            emit_store(em, sym, var, &operand_decimal(sym, from), false);
+            em.line(&format!("while !({}) {{", emit_cond(sym, until)));
+            em.indent();
+            emit_body(em, sym);
+            emit_inplace(em, sym, var, "add", &operand_decimal(sym, by), false);
+            em.dedent();
+            em.line("}");
+        }
     }
 }

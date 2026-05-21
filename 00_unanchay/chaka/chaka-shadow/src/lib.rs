@@ -116,6 +116,7 @@ mod tests {
     corpus_test!(corpus_05_factorial, "05-factorial");
     corpus_test!(corpus_06_nomina, "06-nomina");
     corpus_test!(corpus_07_clasificar, "07-clasificar");
+    corpus_test!(corpus_08_varying, "08-varying");
 
     #[test]
     fn empty_source_runs_clean() {
@@ -144,6 +145,27 @@ mod tests {
         )
         .expect("pipeline OK");
         assert_eq!(outcome.halt, Halt::StepLimit);
+    }
+
+    #[test]
+    fn perform_varying_out_of_line() {
+        // `PERFORM CONTAR VARYING ...` — el párrafo es el cuerpo del bucle.
+        // WS-I = 1, 3, 5, 7, 9 (FROM 1 BY 2 UNTIL > 9) → 5 iteraciones.
+        let outcome = run_source(
+            "DATA DIVISION.\n\
+             WORKING-STORAGE SECTION.\n\
+             01 WS-I PIC 9(2) VALUE 0.\n\
+             01 WS-N PIC 9(3) VALUE 0.\n\
+             PROCEDURE DIVISION.\n\
+             MAIN.\n\
+                 PERFORM CONTAR VARYING WS-I FROM 1 BY 2 UNTIL WS-I > 9.\n\
+                 DISPLAY WS-N.\n\
+                 STOP RUN.\n\
+             CONTAR.\n\
+                 ADD 1 TO WS-N.\n",
+        )
+        .expect("pipeline OK");
+        assert_eq!(outcome.lines, vec!["005".to_string()]);
     }
 
     #[test]

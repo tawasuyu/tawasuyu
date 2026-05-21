@@ -335,6 +335,22 @@ mod tests {
     }
 
     #[test]
+    fn perform_varying_emits_init_loop_and_increment() {
+        let out = gen("DATA DIVISION.\n\
+             WORKING-STORAGE SECTION.\n\
+             01 WS-I PIC 9(2).\n\
+             01 WS-N PIC 9(3).\n\
+             PROCEDURE DIVISION.\n\
+             MAIN.\n\
+                 PERFORM VARYING WS-I FROM 1 BY 1 UNTIL WS-I > 5\n\
+                     ADD 1 TO WS-N\n\
+                 END-PERFORM.\n");
+        assert!(out.contains("self.ws_i.store(dec(\"1\"));"));
+        assert!(out.contains("while !((self.ws_i.value()) > (dec(\"5\"))) {"));
+        assert!(out.contains("self.ws_i.store(self.ws_i.value().add(&(dec(\"1\"))));"));
+    }
+
+    #[test]
     fn empty_program_still_compiles_shape() {
         let out = gen("");
         assert!(out.contains("struct Program {"));
