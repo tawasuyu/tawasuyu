@@ -263,17 +263,25 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             continue;
         }
         let name = format!("{:?}-{}", conn.interface(), conn.interface_id());
-        // El modo: el marcado PREFERRED (el nativo del panel) y, si no
-        // hay ninguno marcado, el de mayor área. `modes()[0]` no sirve —
-        // suele ser un modo menor (p. ej. 1920×1080 en un panel 16:10).
+        // Registra todos los modos del panel — diagnóstico.
+        for m in conn.modes() {
+            let (mw, mh) = m.size();
+            let pref = if m.mode_type().contains(ModeTypeFlags::PREFERRED) {
+                " [PREFERRED]"
+            } else {
+                ""
+            };
+            eprintln!("      modo de «{name}»: {mw}×{mh} @ {} Hz{pref}", m.vrefresh());
+        }
+        // Elige el modo de mayor área (a igualdad, mayor refresco) — el
+        // nativo del panel. La marca PREFERRED no es fiable: a veces
+        // señala un modo menor.
         let mode = conn
             .modes()
             .iter()
-            .find(|m| m.mode_type().contains(ModeTypeFlags::PREFERRED))
-            .or_else(|| {
-                conn.modes()
-                    .iter()
-                    .max_by_key(|m| m.size().0 as u32 * m.size().1 as u32)
+            .max_by_key(|m| {
+                let (mw, mh) = m.size();
+                (mw as u32 * mh as u32, m.vrefresh())
             })
             .copied();
         let Some(mode) = mode else {
