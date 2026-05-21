@@ -44,6 +44,7 @@ fn parse_one_stmt(c: &mut Cursor, stops: &[&str]) -> Stmt {
         "STRING" => parse_string(c),
         "UNSTRING" => parse_unstring(c),
         "INSPECT" => parse_inspect(c),
+        "INITIALIZE" => parse_initialize(c),
         "PERFORM" => parse_perform(c),
         "GO" => parse_goto(c),
         "STOP" => parse_stop(c),
@@ -388,6 +389,14 @@ fn parse_unstring(c: &mut Cursor) -> Stmt {
         delimiter,
         into,
     }
+}
+
+fn parse_initialize(c: &mut Cursor) -> Stmt {
+    c.bump(); // INITIALIZE
+    let mut rounded = false;
+    let targets = parse_targets(c, &mut rounded);
+    skip_to_stmt_boundary(c); // p. ej. la cláusula `REPLACING`
+    Stmt::Initialize { targets }
 }
 
 fn parse_inspect(c: &mut Cursor) -> Stmt {

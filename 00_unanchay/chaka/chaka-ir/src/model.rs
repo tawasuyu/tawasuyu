@@ -45,6 +45,16 @@ pub struct ConditionName {
     pub value: Operand,
 }
 
+/// Un grupo de datos: su nombre y los datos elementales que contiene
+/// (recursivamente).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupInfo {
+    /// Nombre COBOL del grupo, en mayúsculas.
+    pub name: String,
+    /// Nombres COBOL de los datos elementales que agrupa.
+    pub members: Vec<String>,
+}
+
 /// El modelo de datos resuelto de un programa.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct DataModel {
@@ -52,6 +62,8 @@ pub struct DataModel {
     pub fields: Vec<Field>,
     /// Los nombres de condición (nivel 88).
     pub conditions: Vec<ConditionName>,
+    /// Los grupos y sus datos elementales.
+    pub groups: Vec<GroupInfo>,
 }
 
 impl DataModel {
@@ -66,6 +78,12 @@ impl DataModel {
         let up = name.to_uppercase();
         self.conditions.iter().find(|c| c.name == up)
     }
+
+    /// Busca un grupo por su nombre COBOL.
+    pub fn group(&self, name: &str) -> Option<&GroupInfo> {
+        let up = name.to_uppercase();
+        self.groups.iter().find(|g| g.name == up)
+    }
 }
 
 /// Aplana el árbol de datos en un [`DataModel`].
@@ -75,9 +93,12 @@ pub fn resolve_data(data: &[DataItem]) -> DataModel {
     model
 }
 
-/// Recorre el árbol: registra los 88 como condiciones sobre su dato
-/// padre, recurre en los grupos y emite los datos elementales.
-fn walk(items: &[DataItem], model: &mut DataModel) {
+/// Recorre el árbol: registra los 88 como condiciones, los grupos con
+/// sus miembros, y emite los datos elementales. Devuelve los nombres
+/// de los datos elementales producidos (para que el grupo que llama
+/// los reúna como sus miembros).
+fn walk(items: &[DataItem], model: &mut DataModel) -> Vec<String> {
+    let mut produced = Vec::new();
     for it in items {
         if it.level == 66 || it.level == 88 {
             // Los 88 los registra su dato padre; los 66 se omiten.
@@ -96,13 +117,21 @@ fn walk(items: &[DataItem], model: &mut DataModel) {
         // Un dato con hijos «reales» (no 88/66) es un grupo.
         let is_group = it.children.iter().any(|c| c.level != 88 && c.level != 66);
         if is_group {
-            walk(&it.children, model);
+            let members = walk(&it.children, model);
+            if it.name != "FILLER" {
+                model.groups.push(GroupInfo {
+                    name: it.name.to_uppercase(),
+                    members: members.clone(),
+                });
+            }
+            produced.extend(members);
         } else if it.name != "FILLER" {
             if let Some(kind) = classify(it.picture.as_deref()) {
                 let init = match kind {
                     FieldKind::Num { .. } => numeric_value(it.value.as_deref()),
                     FieldKind::Text { .. } => text_value(it.value.as_deref()),
                 };
+                produced.push(it.name.to_uppercase());
                 model.fields.push(Field {
                     name: it.name.to_uppercase(),
                     kind,
@@ -112,6 +141,7 @@ fn walk(items: &[DataItem], model: &mut DataModel) {
             }
         }
     }
+    produced
 }
 
 /// Clasifica una cláusula PICTURE: alfanumérica si tiene `X`/`A`,

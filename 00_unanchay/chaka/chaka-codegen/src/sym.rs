@@ -24,11 +24,12 @@ pub(crate) struct Field {
     pub occurs: Option<u32>,
 }
 
-/// Los campos del programa y sus nombres de condición, indexados.
+/// Los campos del programa, sus nombres de condición y sus grupos.
 pub(crate) struct Symbols {
     pub fields: Vec<Field>,
     by_name: HashMap<String, usize>,
     conditions: HashMap<String, ConditionName>,
+    groups: HashMap<String, Vec<String>>,
 }
 
 impl Symbols {
@@ -56,11 +57,22 @@ impl Symbols {
             .iter()
             .map(|c| (c.name.clone(), c.clone()))
             .collect();
+        let groups = model
+            .groups
+            .iter()
+            .map(|g| (g.name.clone(), g.members.clone()))
+            .collect();
         Self {
             fields,
             by_name,
             conditions,
+            groups,
         }
+    }
+
+    /// Los miembros de un grupo, si `name` es un grupo.
+    pub(crate) fn group(&self, name: &str) -> Option<&[String]> {
+        self.groups.get(&name.to_uppercase()).map(|v| v.as_slice())
     }
 
     /// Busca un campo por su nombre COBOL (sin distinguir mayúsculas).

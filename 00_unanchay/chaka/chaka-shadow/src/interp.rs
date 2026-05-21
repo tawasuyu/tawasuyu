@@ -11,7 +11,7 @@ use charka_ir::{
     BinOp, CmpOp, Cond, ConditionName, Expr, Figurative, InspectOp, Ir, Operand, Perform,
     PerformControl, PerformTarget, Stmt, WhenTest,
 };
-use charka_runtime::{cobol_text_cmp, Decimal, Rounding};
+use charka_runtime::{cobol_text_cmp, Decimal, Num, Rounding, Text};
 
 use crate::field::{build_fields, Cell};
 
@@ -293,6 +293,25 @@ impl<'a> Machine<'a> {
                 }
                 Flow::Normal
             }
+            Stmt::Initialize { targets } => {
+                for t in targets {
+                    match t {
+                        Operand::Data(name) => {
+                            match self.ir.model.group(name).map(|g| g.members.clone()) {
+                                Some(members) => {
+                                    for m in &members {
+                                        self.reset_field(m);
+                                    }
+                                }
+                                None => self.reset_field(name),
+                            }
+                        }
+                        Operand::Indexed { .. } => self.reset_element(t),
+                        _ => {}
+                    }
+                }
+                Flow::Normal
+            }
             Stmt::Perform(p) => self.exec_perform(p),
             Stmt::GoTo { target } => {
                 // Aproximación: ejecuta el destino y sale del párrafo.
@@ -450,6 +469,44 @@ impl<'a> Machine<'a> {
             Some(Cell::Text(arr)) => {
                 if let Some(t) = arr.get_mut(idx) {
                     t.store(&value.to_string());
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// Resetea un campo completo (escalar o tabla) a su valor por
+    /// defecto: 0 si es numérico, espacios si es alfanumérico.
+    fn reset_field(&mut self, name: &str) {
+        match self.fields.get_mut(&name.to_uppercase()) {
+            Some(Cell::Num(arr)) => {
+                for n in arr.iter_mut() {
+                    *n = Num::new(n.picture());
+                }
+            }
+            Some(Cell::Text(arr)) => {
+                for t in arr.iter_mut() {
+                    *t = Text::new(t.len());
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// Resetea un solo elemento de tabla a su valor por defecto.
+    fn reset_element(&mut self, op: &Operand) {
+        let Some((key, idx)) = self.resolve(op) else {
+            return;
+        };
+        match self.fields.get_mut(&key) {
+            Some(Cell::Num(arr)) => {
+                if let Some(n) = arr.get_mut(idx) {
+                    *n = Num::new(n.picture());
+                }
+            }
+            Some(Cell::Text(arr)) => {
+                if let Some(t) = arr.get_mut(idx) {
+                    *t = Text::new(t.len());
                 }
             }
             None => {}

@@ -280,8 +280,8 @@ mod tests {
     fn unknown_verb_becomes_a_comment() {
         let out = gen("PROCEDURE DIVISION.\n\
              MAIN.\n\
-                 INITIALIZE WS-X.\n");
-        assert!(out.contains("// charka: verbo no transpilado — INITIALIZE"));
+                 CALL 'SUBPROG'.\n");
+        assert!(out.contains("// charka: verbo no transpilado — CALL"));
     }
 
     #[test]
@@ -411,6 +411,20 @@ mod tests {
         assert!(out.contains(">= (dec(\"1\"))"));
         assert!(out.contains("<= (dec(\"9\"))"));
         assert!(out.contains("> (dec(\"5\"))"));
+    }
+
+    #[test]
+    fn initialize_resets_group_members() {
+        let out = gen("DATA DIVISION.\n\
+             WORKING-STORAGE SECTION.\n\
+             01 WS-REC.\n\
+                05 WS-A PIC 9(3).\n\
+                05 WS-B PIC X(4).\n\
+             PROCEDURE DIVISION.\n\
+             MAIN.\n\
+                 INITIALIZE WS-REC.\n");
+        assert!(out.contains("self.ws_a.store(Decimal::zero());"));
+        assert!(out.contains("self.ws_b.fill(' ');"));
     }
 
     #[test]

@@ -32,7 +32,7 @@ mod stmt;
 
 pub use ast::*;
 pub use charka_parser::Program;
-pub use model::{resolve_data, ConditionName, DataModel, Field, FieldKind};
+pub use model::{resolve_data, ConditionName, DataModel, Field, FieldKind, GroupInfo};
 
 use cursor::Cursor;
 
@@ -441,6 +441,26 @@ mod tests {
     }
 
     #[test]
+    fn initialize_parses_and_groups_are_modeled() {
+        let program = ir("DATA DIVISION.\n\
+             WORKING-STORAGE SECTION.\n\
+             01 WS-REC.\n\
+                05 WS-A PIC 9(3).\n\
+                05 WS-B PIC X(4).\n\
+             PROCEDURE DIVISION.\n\
+             MAIN.\n\
+                 INITIALIZE WS-REC.\n");
+        let g = program.model.group("WS-REC").expect("grupo WS-REC");
+        assert_eq!(g.members, vec!["WS-A".to_string(), "WS-B".to_string()]);
+        match &program.procedures[0].body[0] {
+            Stmt::Initialize { targets } => {
+                assert_eq!(targets, &vec![Operand::Data("WS-REC".into())]);
+            }
+            other => panic!("se esperaba INITIALIZE, vino {other:?}"),
+        }
+    }
+
+    #[test]
     fn several_statements_in_one_sentence() {
         let b = body("MOVE 1 TO X DISPLAY X STOP RUN.");
         assert_eq!(b.len(), 3);
@@ -451,10 +471,10 @@ mod tests {
 
     #[test]
     fn unrecognized_verb_becomes_unknown() {
-        let b = body("INITIALIZE WS-X WS-Y.");
+        let b = body("CALL 'SUBPROG' USING WS-X.");
         match &b[0] {
             Stmt::Unknown { verb, tokens } => {
-                assert_eq!(verb, "INITIALIZE");
+                assert_eq!(verb, "CALL");
                 assert!(!tokens.is_empty());
             }
             other => panic!("se esperaba Unknown, vino {other:?}"),

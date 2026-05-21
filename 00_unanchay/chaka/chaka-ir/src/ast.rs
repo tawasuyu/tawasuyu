@@ -185,6 +185,9 @@ pub enum Stmt {
     },
     /// `INSPECT target ...` — cuenta o reemplaza caracteres.
     Inspect { target: Operand, op: InspectOp },
+    /// `INITIALIZE targets...` — pone cada dato (o grupo) en su valor
+    /// por defecto: 0 los numéricos, espacios los alfanuméricos.
+    Initialize { targets: Vec<Operand> },
     /// `PERFORM ...` — ver [`Perform`].
     Perform(Perform),
     /// `GO TO target`

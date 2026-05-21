@@ -86,6 +86,7 @@ pub(crate) fn emit_stmt(em: &mut Emitter, sym: &Symbols, stmt: &Stmt) {
             into,
         } => emit_unstring(em, sym, source, delimiter, into),
         Stmt::Inspect { target, op } => emit_inspect(em, sym, target, op),
+        Stmt::Initialize { targets } => emit_initialize(em, sym, targets),
         Stmt::Perform(p) => emit_perform(em, sym, p),
         Stmt::GoTo { target } => {
             em.line(&format!(
@@ -469,6 +470,56 @@ fn emit_inspect(em: &mut Emitter, sym: &Symbols, target: &Operand, op: &InspectO
             );
             emit_store_text(em, sym, target, &format!("{replaced}.as_str()"));
         }
+    }
+}
+
+/// `INITIALIZE` — pone cada destino (o los miembros de un grupo) en su
+/// valor por defecto.
+fn emit_initialize(em: &mut Emitter, sym: &Symbols, targets: &[Operand]) {
+    for t in targets {
+        match t {
+            Operand::Data(name) => match sym.group(name) {
+                Some(members) => {
+                    for m in members {
+                        emit_reset(em, sym, m);
+                    }
+                }
+                None => emit_reset(em, sym, name),
+            },
+            Operand::Indexed { .. } => emit_reset_element(em, sym, t),
+            _ => {}
+        }
+    }
+}
+
+/// Resetea un campo completo (escalar o tabla entera).
+fn emit_reset(em: &mut Emitter, sym: &Symbols, name: &str) {
+    let Some(f) = sym.lookup(name) else {
+        em.line(&format!("// charka: INITIALIZE de {name} no resuelto"));
+        return;
+    };
+    let reset = match f.kind {
+        FieldKind::Num { .. } => "store(Decimal::zero())",
+        FieldKind::Text { .. } => "fill(' ')",
+    };
+    match f.occurs {
+        None => em.line(&format!("self.{}.{reset};", f.ident)),
+        Some(_) => {
+            em.line(&format!("for __e in self.{}.iter_mut() {{", f.ident));
+            em.indent();
+            em.line(&format!("__e.{reset};"));
+            em.dedent();
+            em.line("}");
+        }
+    }
+}
+
+/// Resetea un solo elemento de tabla (`INITIALIZE ELEM(I)`).
+fn emit_reset_element(em: &mut Emitter, sym: &Symbols, op: &Operand) {
+    match field_ref(sym, op) {
+        Some((lref, FieldKind::Num { .. })) => em.line(&format!("{lref}.store(Decimal::zero());")),
+        Some((lref, FieldKind::Text { .. })) => em.line(&format!("{lref}.fill(' ');")),
+        None => em.line("// charka: INITIALIZE no resuelto"),
     }
 }
 

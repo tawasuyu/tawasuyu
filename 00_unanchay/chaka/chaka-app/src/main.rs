@@ -290,13 +290,13 @@ mod tests {
         let ir = ir_of(
             "PROCEDURE DIVISION.\n\
              MAIN.\n\
-                 INITIALIZE WS-X.\n",
+                 CALL 'SUBPROG'.\n",
         );
         let mut verbs = Vec::new();
         for proc in &ir.procedures {
             collect_unknowns(&proc.body, &mut verbs);
         }
-        assert_eq!(verbs, vec!["INITIALIZE".to_string()]);
+        assert_eq!(verbs, vec!["CALL".to_string()]);
     }
 
     #[test]
