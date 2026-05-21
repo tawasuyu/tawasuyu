@@ -327,6 +327,14 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     // La salida del Cerebro = el modo del monitor.
     let ev = app.body.add_output(0, mode_w as i32, mode_h as i32);
     app.brain_feed(ev);
+    // Anuncia el monitor en el protocolo Wayland — los clientes lo exigen.
+    let _wl_output = crate::announce_output(
+        &display.handle(),
+        &out_name,
+        mode_w as i32,
+        mode_h as i32,
+        mode.vrefresh() as i32 * 1000,
+    );
 
     // El socket Wayland por el que se conectan los clientes.
     let listener = ListeningSocket::bind_auto("wayland", 1..32)?;

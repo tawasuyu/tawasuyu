@@ -37,7 +37,7 @@ use smithay::reexports::wayland_server::protocol::wl_buffer;
 use smithay::reexports::wayland_server::protocol::wl_output;
 use smithay::reexports::wayland_server::protocol::wl_seat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::reexports::wayland_server::{Client, Display, ListeningSocket};
+use smithay::reexports::wayland_server::{Client, Display, DisplayHandle, ListeningSocket};
 use smithay::reexports::winit::platform::pump_events::PumpStatus;
 use smithay::utils::{Rectangle, SERIAL_COUNTER};
 use smithay::utils::{Serial, Transform};
@@ -54,9 +54,11 @@ use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
     XdgToplevelSurfaceData,
 };
+use smithay::wayland::output::OutputHandler;
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::{
-    delegate_compositor, delegate_data_device, delegate_seat, delegate_shm, delegate_xdg_shell,
+    delegate_compositor, delegate_data_device, delegate_output, delegate_seat, delegate_shm,
+    delegate_xdg_shell,
 };
 
 use mirada_body::{BodyOp, BodyState};
@@ -411,11 +413,16 @@ impl SeatHandler for App {
     }
 }
 
+/// El protocolo `wl_output` no necesita estado propio — basta con
+/// anunciar el global para que los clientes vean que hay un monitor.
+impl OutputHandler for App {}
+
 delegate_compositor!(App);
 delegate_xdg_shell!(App);
 delegate_shm!(App);
 delegate_seat!(App);
 delegate_data_device!(App);
+delegate_output!(App);
 
 // ---------------------------------------------------------------------
 // Datos por cliente
@@ -511,6 +518,39 @@ fn load_user_rules() -> Rules {
         Some(p) => Rules::load_or_default(&p),
         None => Rules::default(),
     }
+}
+
+/// Crea y anuncia un `wl_output` (un monitor) en el protocolo Wayland —
+/// muchos clientes (`foot` entre ellos) se niegan a arrancar sin uno.
+/// Devuelve el [`Output`](smithay::output::Output); hay que mantenerlo
+/// vivo mientras el compositor corra.
+fn announce_output(
+    dh: &DisplayHandle,
+    name: &str,
+    width: i32,
+    height: i32,
+    refresh_mhz: i32,
+) -> smithay::output::Output {
+    use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
+    let output = Output::new(
+        name.to_string(),
+        PhysicalProperties {
+            size: (0, 0).into(),
+            subpixel: Subpixel::Unknown,
+            make: "mirada".into(),
+            model: name.to_string(),
+        },
+    );
+    output.create_global::<App>(dh);
+    let mode = Mode { size: (width, height).into(), refresh: refresh_mhz };
+    output.change_current_state(
+        Some(mode),
+        Some(Transform::Normal),
+        Some(Scale::Integer(1)),
+        Some((0, 0).into()),
+    );
+    output.set_preferred(mode);
+    output
 }
 
 /// Lo que comparten los dos backends gráficos: el `Display` de Wayland,
@@ -668,9 +708,10 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
     let mut clients = Vec::new();
 
     // Salida inicial = el tamaño de la ventana winit.
+    let win_size = backend.window_size();
+    let _wl_output = announce_output(&display.handle(), "winit", win_size.w, win_size.h, 60_000);
     {
-        let size = backend.window_size();
-        let ev = state.body.add_output(0, size.w, size.h);
+        let ev = state.body.add_output(0, win_size.w, win_size.h);
         state.brain_feed(ev);
     }
 
