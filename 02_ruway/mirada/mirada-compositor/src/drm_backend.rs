@@ -42,7 +42,7 @@ use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{EventLoop, Interest, Mode as CalloopMode, PostAction};
 use smithay::reexports::drm::control::connector::State as ConnectorState;
-use smithay::reexports::drm::control::Device as ControlDevice;
+use smithay::reexports::drm::control::{Device as ControlDevice, ModeTypeFlags};
 use smithay::reexports::input::Libinput;
 use smithay::reexports::rustix::fs::OFlags;
 use smithay::reexports::wayland_server::{Display, ListeningSocket};
@@ -263,7 +263,20 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             continue;
         }
         let name = format!("{:?}-{}", conn.interface(), conn.interface_id());
-        let Some(&mode) = conn.modes().first() else {
+        // El modo: el marcado PREFERRED (el nativo del panel) y, si no
+        // hay ninguno marcado, el de mayor área. `modes()[0]` no sirve —
+        // suele ser un modo menor (p. ej. 1920×1080 en un panel 16:10).
+        let mode = conn
+            .modes()
+            .iter()
+            .find(|m| m.mode_type().contains(ModeTypeFlags::PREFERRED))
+            .or_else(|| {
+                conn.modes()
+                    .iter()
+                    .max_by_key(|m| m.size().0 as u32 * m.size().1 as u32)
+            })
+            .copied();
+        let Some(mode) = mode else {
             continue;
         };
         let crtc = conn
