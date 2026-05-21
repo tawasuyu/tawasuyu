@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use charka_ir::{
     BinOp, CmpOp, Cond, ConditionName, Expr, Figurative, InspectOp, Ir, Operand, Perform,
-    PerformControl, PerformTarget, Stmt,
+    PerformControl, PerformTarget, Stmt, WhenTest,
 };
 use charka_runtime::{cobol_text_cmp, Decimal, Rounding};
 
@@ -237,11 +237,7 @@ impl<'a> Machine<'a> {
                 other,
             } => {
                 for branch in whens {
-                    if branch
-                        .values
-                        .iter()
-                        .any(|v| self.operands_equal(subject, v))
-                    {
+                    if branch.tests.iter().any(|t| self.when_test(subject, t)) {
                         return self.exec_block(&branch.body);
                     }
                 }
@@ -579,6 +575,18 @@ impl<'a> Machine<'a> {
                 None => false,
             },
             _ => false,
+        }
+    }
+
+    /// ¿Se cumple una prueba `WHEN` para el sujeto dado?
+    fn when_test(&self, subject: &Operand, test: &WhenTest) -> bool {
+        match test {
+            WhenTest::Value(v) => self.operands_equal(subject, v),
+            WhenTest::Range(lo, hi) => {
+                let s = self.eval_decimal(subject);
+                s >= self.eval_decimal(lo) && s <= self.eval_decimal(hi)
+            }
+            WhenTest::Cond(cond) => self.eval_cond(cond),
         }
     }
 

@@ -122,6 +122,7 @@ mod tests {
     corpus_test!(corpus_11_tabla, "11-tabla");
     corpus_test!(corpus_12_cadenas, "12-cadenas");
     corpus_test!(corpus_13_inspeccion, "13-inspeccion");
+    corpus_test!(corpus_14_clasifica, "14-clasifica");
 
     #[test]
     fn empty_source_runs_clean() {

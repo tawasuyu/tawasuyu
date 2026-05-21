@@ -400,6 +400,20 @@ mod tests {
     }
 
     #[test]
+    fn evaluate_true_and_range_emit() {
+        let out = gen("DATA DIVISION.\n\
+             WORKING-STORAGE SECTION.\n\
+             01 WS-X PIC 9(3).\n\
+             PROCEDURE DIVISION.\n\
+             MAIN.\n\
+                 EVALUATE WS-X WHEN 1 THRU 9 DISPLAY 'R' END-EVALUATE.\n\
+                 EVALUATE TRUE WHEN WS-X > 5 DISPLAY 'T' END-EVALUATE.\n");
+        assert!(out.contains(">= (dec(\"1\"))"));
+        assert!(out.contains("<= (dec(\"9\"))"));
+        assert!(out.contains("> (dec(\"5\"))"));
+    }
+
+    #[test]
     fn empty_program_still_compiles_shape() {
         let out = gen("");
         assert!(out.contains("struct Program {"));

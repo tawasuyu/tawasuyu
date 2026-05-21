@@ -347,13 +347,43 @@ mod tests {
             } => {
                 assert_eq!(subject, &Operand::Data("WS-X".into()));
                 assert_eq!(whens.len(), 2);
-                assert_eq!(whens[0].values, vec![Operand::Num("1".into())]);
                 assert_eq!(
-                    whens[1].values,
-                    vec![Operand::Num("2".into()), Operand::Num("3".into())]
+                    whens[0].tests,
+                    vec![WhenTest::Value(Operand::Num("1".into()))]
+                );
+                assert_eq!(
+                    whens[1].tests,
+                    vec![
+                        WhenTest::Value(Operand::Num("2".into())),
+                        WhenTest::Value(Operand::Num("3".into())),
+                    ]
                 );
                 assert_eq!(other.len(), 1);
             }
+            other => panic!("se esperaba EVALUATE, vino {other:?}"),
+        }
+    }
+
+    #[test]
+    fn evaluate_true_and_range_when() {
+        // `EVALUATE TRUE` → los WHEN son condiciones.
+        let b = body("EVALUATE TRUE WHEN WS-X > 0 DISPLAY 'P' END-EVALUATE.");
+        match &b[0] {
+            Stmt::Evaluate { whens, .. } => {
+                assert!(matches!(whens[0].tests[0], WhenTest::Cond(_)));
+            }
+            other => panic!("se esperaba EVALUATE, vino {other:?}"),
+        }
+        // `WHEN lo THRU hi` → un rango.
+        let b = body("EVALUATE WS-X WHEN 1 THRU 9 DISPLAY 'D' END-EVALUATE.");
+        match &b[0] {
+            Stmt::Evaluate { whens, .. } => match &whens[0].tests[0] {
+                WhenTest::Range(lo, hi) => {
+                    assert_eq!(lo, &Operand::Num("1".into()));
+                    assert_eq!(hi, &Operand::Num("9".into()));
+                }
+                other => panic!("se esperaba Range, vino {other:?}"),
+            },
             other => panic!("se esperaba EVALUATE, vino {other:?}"),
         }
     }

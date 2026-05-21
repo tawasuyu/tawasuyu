@@ -212,11 +212,23 @@ pub enum InspectOp {
     ReplacingAll { from: Operand, to: Operand },
 }
 
-/// Una rama `WHEN` de un `EVALUATE`: los valores que la disparan
+/// Cómo una rama `WHEN` decide si se dispara.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WhenTest {
+    /// El sujeto es igual a este valor.
+    Value(Operand),
+    /// El sujeto está en el rango `[lo, hi]` (`WHEN lo THRU hi`).
+    Range(Operand, Operand),
+    /// La condición se cumple — la forma `EVALUATE TRUE WHEN cond`.
+    Cond(Cond),
+}
+
+/// Una rama `WHEN` de un `EVALUATE`: las pruebas que la disparan
 /// (varios `WHEN` apilados comparten cuerpo) y el cuerpo a ejecutar.
+/// La rama se dispara si **alguna** de sus pruebas pasa.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WhenBranch {
-    pub values: Vec<Operand>,
+    pub tests: Vec<WhenTest>,
     pub body: Vec<Stmt>,
 }
 

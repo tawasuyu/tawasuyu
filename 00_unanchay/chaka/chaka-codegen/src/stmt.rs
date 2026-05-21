@@ -3,6 +3,7 @@
 
 use charka_ir::{
     CmpOp, Cond, InspectOp, Operand, Perform, PerformControl, PerformTarget, Stmt, WhenBranch,
+    WhenTest,
 };
 
 use crate::emit::Emitter;
@@ -349,30 +350,43 @@ fn emit_evaluate(
     }
 }
 
-/// La condición de una rama `WHEN`: el sujeto igual a cualquiera de
-/// sus valores.
+/// La condición de una rama `WHEN`: pasa si **alguna** de sus pruebas
+/// se cumple.
 fn branch_condition(sym: &Symbols, subject: &Operand, branch: &WhenBranch) -> String {
-    if branch.values.is_empty() {
+    if branch.tests.is_empty() {
         return "false".to_string();
     }
     branch
-        .values
+        .tests
         .iter()
-        .map(|v| {
-            format!(
-                "({})",
-                emit_cond(
-                    sym,
-                    &Cond::Compare {
-                        lhs: subject.clone(),
-                        op: CmpOp::Eq,
-                        rhs: v.clone(),
-                    },
-                )
-            )
-        })
+        .map(|t| format!("({})", test_condition(sym, subject, t)))
         .collect::<Vec<_>>()
         .join(" || ")
+}
+
+/// Traduce una prueba `WHEN` a una expresión Rust de tipo `bool`.
+fn test_condition(sym: &Symbols, subject: &Operand, test: &WhenTest) -> String {
+    let compare = |op: CmpOp, rhs: &Operand| {
+        emit_cond(
+            sym,
+            &Cond::Compare {
+                lhs: subject.clone(),
+                op,
+                rhs: rhs.clone(),
+            },
+        )
+    };
+    match test {
+        WhenTest::Value(v) => compare(CmpOp::Eq, v),
+        WhenTest::Range(lo, hi) => {
+            format!(
+                "({}) && ({})",
+                compare(CmpOp::Ge, lo),
+                compare(CmpOp::Le, hi)
+            )
+        }
+        WhenTest::Cond(cond) => emit_cond(sym, cond),
+    }
 }
 
 /// Almacena una expresión `&str` en un destino: directo si es de
