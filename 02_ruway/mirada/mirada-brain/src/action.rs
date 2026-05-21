@@ -231,6 +231,7 @@ pub fn default_keymap() -> Vec<(String, DesktopAction)> {
         ("Super+o".into(), DesktopAction::FocusOutputNext),
         ("Super+Return".into(), DesktopAction::PromoteToMaster),
         ("Super+Shift+Return".into(), DesktopAction::Spawn("foot".into())),
+        ("Super+p".into(), DesktopAction::Spawn("foot -e mirada-launcher".into())),
         ("Super+,".into(), DesktopAction::IncMaster),
         ("Super+.".into(), DesktopAction::DecMaster),
         ("Super+Shift+e".into(), DesktopAction::Quit),

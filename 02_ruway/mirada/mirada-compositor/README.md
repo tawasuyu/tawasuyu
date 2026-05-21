@@ -59,9 +59,9 @@ sólo probarlo:
 1. Compila e instala los binarios en el `PATH`:
 
    ```sh
-   cargo build --release -p mirada-compositor -p mirada-ctl
+   cargo build --release -p mirada-compositor -p mirada-ctl -p mirada-launcher
    sudo install -m755 target/release/mirada-compositor \
-        target/release/mirada-ctl /usr/local/bin/
+        target/release/mirada-ctl target/release/mirada-launcher /usr/local/bin/
    sudo install -m755 session/mirada-session /usr/local/bin/
    ```
 
@@ -86,6 +86,17 @@ sólo probarlo:
 
 Dentro de la sesión, `Ctrl+Alt+F1…F12` salta a otra TTY y vuelve sin
 romper carmen.
+
+## Lanzador de aplicaciones
+
+`mirada-launcher` escanea los `.desktop` del sistema y lanza el que
+elijas. Es un programa de terminal sin dependencias: lo abres en una
+terminal pequeña y filtras escribiendo. El keymap por defecto ata
+`Super+p` a `spawn:foot -e mirada-launcher` — pulsa el atajo, escribe
+unas letras del nombre, Enter.
+
+Necesita `mirada-launcher` y `foot` en el `PATH` (ver la instalación de
+arriba). Suelto también vale: `mirada-launcher` en cualquier terminal.
 
 ## Dos modos
 
@@ -116,12 +127,12 @@ WAYLAND_DISPLAY=wayland-1 foot      # o weston-terminal, alacritty, …
 ```
 
 Las ventanas se teselan solas. El teclado, con la ventana del compositor
-enfocada, maneja el escritorio con atajos `Super+…`: lanzar una terminal
-`Super+Shift+Return`, foco `Super+j/k`, los 7 layouts en
-`Super+t/m/g/c/r/d/s` (o ciclar con `Super+space`), área maestra
-`Super+h/l`, `nmaster` `Super+,/.`, promover a maestra `Super+Return`,
-escritorios `Super+1..9`, cerrar `Super+q`. Cierra la ventana del
-compositor para salir.
+enfocada, maneja el escritorio con atajos `Super+…`: el lanzador de
+aplicaciones `Super+p`, una terminal `Super+Shift+Return`, foco
+`Super+j/k`, los 7 layouts en `Super+t/m/g/c/r/d/s` (o ciclar con
+`Super+space`), área maestra `Super+h/l`, `nmaster` `Super+,/.`,
+promover a maestra `Super+Return`, escritorios `Super+1..9`, cerrar
+`Super+q`. Cierra la ventana del compositor para salir.
 
 ## Atajos de teclado
 
