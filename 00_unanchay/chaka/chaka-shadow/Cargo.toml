@@ -1,0 +1,16 @@
+[package]
+name = "charka-shadow"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "charka-shadow — validador en sombra del transpilador: un intérprete del IR que ejecuta el programa COBOL y compara su salida contra una referencia."
+
+[dependencies]
+charka-lexer = { path = "../charka-lexer" }
+charka-parser = { path = "../charka-parser" }
+charka-ir = { path = "../charka-ir" }
+charka-runtime = { path = "../charka-runtime" }
+thiserror = { workspace = true }
