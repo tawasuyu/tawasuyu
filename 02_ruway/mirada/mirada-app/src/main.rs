@@ -24,17 +24,21 @@
 //!   j / k        foco siguiente/anterior   1..9           ir a escritorio
 //!   Shift+j / k  mueve la enfocada         Ctrl+1..9      enviar a escritorio
 //! ```
+//!
+//! Los pips de escritorio y las ventanas del lienzo son **clicables**, y
+//! `mirada-ctl` controla el escritorio desde la terminal — ambos pasan
+//! por el mismo `Desktop::apply`.
 
 use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui::{
-    div, hsla, prelude::*, px, Context, FocusHandle, IntoElement, KeyDownEvent, Render,
-    SharedString, Window,
+    div, hsla, prelude::*, px, Context, FocusHandle, IntoElement, KeyDownEvent, MouseButton,
+    Render, SharedString, Window,
 };
 use mirada_brain::{
-    BodyEvent, BrainCommand, Desktop, DesktopAction, Keymap, KeymapWatch, LayoutMode, WindowId,
-    WindowPlacement,
+    BodyEvent, BrainCommand, CtlConn, CtlReply, CtlRequest, CtlServer, Desktop, DesktopAction,
+    Keymap, KeymapWatch, LayoutMode, WindowId, WindowPlacement,
 };
 use mirada_link::BrainLink;
 use nahual_launcher::launch_app;
@@ -68,6 +72,8 @@ struct Mirada {
     keymap_path: Option<PathBuf>,
     /// Vigía del keymap; `None` en simulación o si no hay archivo.
     keymap_watch: Option<KeymapWatch>,
+    /// Socket del API de control externo (`mirada-ctl`).
+    ctl: Option<CtlServer>,
 }
 
 impl Mirada {
@@ -87,6 +93,15 @@ impl Mirada {
         } else {
             None
         };
+        // API de control: mirada siempre posee el Desktop, así que
+        // siempre abre el socket de `mirada-ctl`.
+        let ctl = match CtlServer::bind(&mirada_brain::ctl::default_socket_path()) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                eprintln!("mirada · sin API de control: {e}");
+                None
+            }
+        };
 
         let mut app = Self {
             desktop: Desktop::with_keymap(keymap),
@@ -98,12 +113,12 @@ impl Mirada {
             focused_once: false,
             keymap_path,
             keymap_watch,
+            ctl,
         };
         if let Some(link) = app.link.as_mut() {
             // Registra los atajos globales en el Cuerpo.
             let _ = link.send(&app.desktop.grab_keys());
             app.note = SharedString::from("Cuerpo conectado");
-            app.start_poll(cx);
         } else {
             // Simulación: una pantalla virtual y tres ventanas de muestra.
             app.feed(BodyEvent::OutputAdded { id: 0, width: SCREEN_W, height: SCREEN_H });
@@ -112,6 +127,9 @@ impl Mirada {
             }
             app.note = SharedString::from("simulación — sin Cuerpo");
         }
+        // El sondeo corre siempre: drena el Cuerpo (si lo hay), vigila el
+        // keymap y atiende `mirada-ctl`.
+        app.start_poll(cx);
         app
     }
 
@@ -131,10 +149,11 @@ impl Mirada {
                 if keymap_changed {
                     app.reload_keymap();
                 }
+                let ctl_served = app.poll_ctl();
                 for ev in events {
                     app.feed(ev);
                 }
-                if had_events || keymap_changed {
+                if had_events || keymap_changed || ctl_served {
                     cx.notify();
                 }
             });
@@ -182,6 +201,40 @@ impl Mirada {
                 self.note = SharedString::from("keymap recargado");
             }
             Err(e) => self.note = SharedString::from(format!("keymap inválido: {e}")),
+        }
+    }
+
+    /// Atiende las peticiones pendientes del API de control. Devuelve
+    /// `true` si sirvió alguna (para repintar).
+    fn poll_ctl(&mut self) -> bool {
+        let conns: Vec<CtlConn> = match &self.ctl {
+            Some(ctl) => std::iter::from_fn(|| ctl.poll()).collect(),
+            None => return false,
+        };
+        let mut served = false;
+        for mut conn in conns {
+            let reply = match conn.read_request() {
+                Ok(Some(req)) => {
+                    served = true;
+                    self.serve_ctl(req)
+                }
+                Ok(None) => continue,
+                Err(e) => CtlReply::Error(format!("{e}")),
+            };
+            let _ = conn.reply(&reply);
+        }
+        served
+    }
+
+    /// Resuelve una petición de control: la acción pasa por el mismo
+    /// `apply` que el teclado; la consulta lee el `Desktop`.
+    fn serve_ctl(&mut self, req: CtlRequest) -> CtlReply {
+        match req {
+            CtlRequest::Do(action) => {
+                self.act(action);
+                CtlReply::Ok
+            }
+            CtlRequest::ListWindows => CtlReply::Windows(self.desktop.window_lines()),
         }
     }
 
@@ -299,9 +352,17 @@ impl Render for Mirada {
                 .items_center()
                 .justify_center()
                 .rounded(px(4.))
+                .cursor_pointer()
                 .when(is_active, |d| d.bg(theme.accent))
                 .when(!is_active && load > 0, |d| d.bg(theme.bg_row_hover))
                 .text_color(fg)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |app, _, _, cx| {
+                        app.act(DesktopAction::SwitchWorkspace(i));
+                        cx.notify();
+                    }),
+                )
                 .child(SharedString::from(format!("{}", i + 1)))
         });
 
@@ -365,6 +426,7 @@ impl Render for Mirada {
             let border = if p.focused { theme.accent } else { theme.border };
             let tb_bg = if p.focused { theme.accent } else { theme.bg_row_hover };
             let tb_fg = if p.focused { on_accent } else { theme.fg_muted };
+            let pid = p.id;
 
             canvas = canvas.child(
                 div()
@@ -378,6 +440,14 @@ impl Render for Mirada {
                     .bg(win_bg)
                     .rounded(px(5.))
                     .overflow_hidden()
+                    .cursor_pointer()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |app, _, _, cx| {
+                            app.act(DesktopAction::FocusWindow(pid));
+                            cx.notify();
+                        }),
+                    )
                     .flex()
                     .flex_col()
                     .child(

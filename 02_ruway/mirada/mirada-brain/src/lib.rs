@@ -13,14 +13,17 @@
 //! - [`action`] — las acciones de escritorio y el mapa de teclas.
 //! - [`desktop`] — el [`Desktop`]: el estado y el bucle `evento → comandos`.
 //! - [`keymap`] — el [`Keymap`] configurable en RON, recargable en caliente.
+//! - [`ctl`] — el API de control externo (`mirada-ctl`, taskbars, scripts).
 
 #![forbid(unsafe_code)]
 
 pub mod action;
+pub mod ctl;
 pub mod desktop;
 pub mod keymap;
 
 pub use action::{default_keymap, DesktopAction, WORKSPACE_COUNT};
+pub use ctl::{CtlConn, CtlReply, CtlRequest, CtlServer, WindowLine};
 pub use desktop::{Desktop, WindowInfo};
 pub use keymap::{Keymap, KeymapError, KeymapWatch};
 

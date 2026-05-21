@@ -11,18 +11,27 @@
 use std::fmt;
 use std::str::FromStr;
 
-use mirada_layout::LayoutMode;
+use serde::{Deserialize, Serialize};
+
+use mirada_layout::{LayoutMode, WindowId};
 
 /// Número de escritorios virtuales que mantiene el `Desktop`.
 pub const WORKSPACE_COUNT: usize = 9;
 
 /// Una orden de escritorio de alto nivel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Es serializable (`postcard`) para viajar por el API de control
+/// ([`crate::ctl`]) y tiene una forma textual estable ([`Display`] /
+/// [`FromStr`]) para el keymap y `mirada-ctl`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DesktopAction {
     /// Mueve el foco a la ventana siguiente del escritorio activo.
     FocusNext,
     /// Mueve el foco a la ventana anterior.
     FocusPrev,
+    /// Enfoca una ventana concreta por su id; si está en otro escritorio,
+    /// salta a él. Para clics de taskbar o `mirada-ctl focus-window`.
+    FocusWindow(WindowId),
     /// Adelanta la ventana enfocada en el orden de teselado.
     MoveForward,
     /// Atrasa la ventana enfocada en el orden de teselado.
@@ -69,6 +78,7 @@ impl fmt::Display for DesktopAction {
         match self {
             DesktopAction::FocusNext => f.write_str("focus-next"),
             DesktopAction::FocusPrev => f.write_str("focus-prev"),
+            DesktopAction::FocusWindow(id) => write!(f, "focus-window:{id}"),
             DesktopAction::MoveForward => f.write_str("move-forward"),
             DesktopAction::MoveBackward => f.write_str("move-backward"),
             DesktopAction::CloseFocused => f.write_str("close-focused"),
@@ -101,6 +111,12 @@ impl FromStr for DesktopAction {
                     Self::SetLayout(
                         layout_from_slug(slug)
                             .ok_or_else(|| format!("modo de teselado desconocido: '{slug}'"))?,
+                    )
+                } else if let Some(id) = s.strip_prefix("focus-window:") {
+                    Self::FocusWindow(
+                        id.trim()
+                            .parse()
+                            .map_err(|_| format!("id de ventana inválido: '{id}'"))?,
                     )
                 } else if let Some(n) = s.strip_prefix("send-to-workspace:") {
                     Self::SendToWorkspace(parse_workspace(n)?)
@@ -227,6 +243,14 @@ mod tests {
         assert!("workspace:0".parse::<DesktopAction>().is_err());
         assert!("workspace:99".parse::<DesktopAction>().is_err());
         assert!("layout:fractal".parse::<DesktopAction>().is_err());
+        assert!("focus-window:abc".parse::<DesktopAction>().is_err());
         assert!("teleport".parse::<DesktopAction>().is_err());
+    }
+
+    #[test]
+    fn focus_window_round_trips_with_its_id() {
+        let a = DesktopAction::FocusWindow(42);
+        assert_eq!(a.to_string(), "focus-window:42");
+        assert_eq!("focus-window:42".parse::<DesktopAction>().unwrap(), a);
     }
 }

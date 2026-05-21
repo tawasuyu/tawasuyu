@@ -59,7 +59,7 @@ use smithay::{
 };
 
 use mirada_body::{BodyOp, BodyState};
-use mirada_brain::{BodyEvent, BrainCommand, Desktop, Keymap};
+use mirada_brain::{BodyEvent, BrainCommand, CtlReply, CtlRequest, CtlServer, Desktop, Keymap};
 use mirada_link::BodyLink;
 
 // ---------------------------------------------------------------------
@@ -129,6 +129,31 @@ impl App {
         };
         if !cmds.is_empty() {
             self.apply_commands(cmds);
+        }
+    }
+
+    /// Atiende una petición del API de control (`mirada-ctl`).
+    fn serve_ctl(&mut self, req: CtlRequest) -> CtlReply {
+        match req {
+            CtlRequest::Do(action) => {
+                let cmds = match &mut self.brain {
+                    Brain::Embedded(d) => Some(d.apply(action)),
+                    Brain::Linked(_) => None,
+                };
+                match cmds {
+                    Some(cmds) => {
+                        self.apply_commands(cmds);
+                        CtlReply::Ok
+                    }
+                    None => CtlReply::Error(
+                        "el Cerebro es externo; usa mirada-ctl contra la app mirada".into(),
+                    ),
+                }
+            }
+            CtlRequest::ListWindows => match &self.brain {
+                Brain::Embedded(d) => CtlReply::Windows(d.window_lines()),
+                Brain::Linked(_) => CtlReply::Error("el Cerebro es externo".into()),
+            },
         }
     }
 
@@ -493,6 +518,25 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         println!("mirada-compositor · vigilando el keymap (recarga en caliente).");
     }
 
+    // API de control (mirada-ctl) — sólo con el Cerebro embebido; si es
+    // externo, el socket de control lo abre él.
+    let ctl = match &state.brain {
+        Brain::Embedded(_) => {
+            let path = mirada_brain::ctl::default_socket_path();
+            match CtlServer::bind(&path) {
+                Ok(s) => {
+                    println!("mirada-compositor · API de control en {}", path.display());
+                    Some(s)
+                }
+                Err(e) => {
+                    eprintln!("mirada-compositor · sin API de control: {e}");
+                    None
+                }
+            }
+        }
+        Brain::Linked(_) => None,
+    };
+
     // El backend gráfico va primero. winit abre la ventana del compositor
     // dentro de tu sesión gráfica anfitriona, y para encontrarla lee
     // `WAYLAND_DISPLAY` / `DISPLAY` del entorno. Si publicáramos antes
@@ -608,6 +652,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         "mirada-compositor · keymap inválido, conservo el anterior: {e}"
                     ),
                 }
+            }
+        }
+
+        // 2 ter · Peticiones del API de control (mirada-ctl).
+        if let Some(ctl) = &ctl {
+            while let Some(mut conn) = ctl.poll() {
+                let reply = match conn.read_request() {
+                    Ok(Some(req)) => state.serve_ctl(req),
+                    Ok(None) => continue,
+                    Err(e) => CtlReply::Error(format!("{e}")),
+                };
+                let _ = conn.reply(&reply);
             }
         }
 

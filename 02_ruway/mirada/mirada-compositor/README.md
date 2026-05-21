@@ -80,6 +80,21 @@ El compositor en sí no interpreta atajos: sólo intercepta las
 combinaciones que el Cerebro le pide (`GrabKeys`) y le devuelve la
 pulsada. *Qué significa* cada una lo decide `mirada-brain`. Ver el SDD.
 
+## Control externo
+
+En modo autónomo, el compositor abre un socket de control y `mirada-ctl`
+lo maneja desde la terminal — al estilo de `swaymsg`/`hyprctl`:
+
+```sh
+mirada-ctl focus-next            # cambia el foco
+mirada-ctl focus-window 5        # enfoca una ventana concreta
+mirada-ctl workspace 3           # va al escritorio 3
+mirada-ctl windows               # lista las ventanas
+```
+
+En modo enlazado el socket de control lo abre el Cerebro (la app
+`mirada`), no el compositor.
+
 ## Qué implementa
 
 `wl_compositor`, `xdg_shell` (toplevels y popups), `wl_shm`, `wl_seat`

@@ -149,6 +149,20 @@ impl Desktop {
                 self.workspaces[self.active].focus_prev();
                 self.relayout()
             }
+            DesktopAction::FocusWindow(id) => {
+                // En el escritorio activo basta enfocar; si la ventana
+                // está en otro, saltamos a ese escritorio.
+                if self.workspaces[self.active].focus_window(id) {
+                    return self.relayout();
+                }
+                for n in 0..self.workspaces.len() {
+                    if n != self.active && self.workspaces[n].focus_window(id) {
+                        self.active = n;
+                        return self.relayout();
+                    }
+                }
+                Vec::new()
+            }
             DesktopAction::MoveForward => {
                 self.workspaces[self.active].move_focused_forward();
                 self.relayout()
@@ -245,6 +259,26 @@ impl Desktop {
     pub fn workspace_loads(&self) -> Vec<usize> {
         self.workspaces.iter().map(Workspace::len).collect()
     }
+
+    /// Una vista de todas las ventanas conocidas, en todos los
+    /// escritorios — la base de `mirada-ctl windows` y de una taskbar.
+    pub fn window_lines(&self) -> Vec<crate::ctl::WindowLine> {
+        let mut lines = Vec::new();
+        for (n, ws) in self.workspaces.iter().enumerate() {
+            let ws_focus = ws.focused();
+            for &id in ws.windows() {
+                let info = self.windows.get(&id);
+                lines.push(crate::ctl::WindowLine {
+                    id,
+                    app_id: info.map(|i| i.app_id.clone()).unwrap_or_default(),
+                    title: info.map(|i| i.title.clone()).unwrap_or_default(),
+                    workspace: n + 1,
+                    focused: n == self.active && ws_focus == Some(id),
+                });
+            }
+        }
+        lines
+    }
 }
 
 /// El siguiente modo en el ciclo de [`DesktopAction::CycleLayout`].
@@ -315,6 +349,48 @@ mod tests {
         d.on_event(BodyEvent::Keybind("Alt+x".into()));
         assert_eq!(d.focused_window(), Some(2));
         assert!(d.on_event(BodyEvent::Keybind("Super+j".into())).is_empty());
+    }
+
+    #[test]
+    fn focus_window_addresses_a_specific_window() {
+        let mut d = desktop_with_screen();
+        for id in [1, 2, 3] {
+            open(&mut d, id);
+        }
+        assert_eq!(d.focused_window(), Some(3));
+        d.apply(DesktopAction::FocusWindow(1));
+        assert_eq!(d.focused_window(), Some(1));
+    }
+
+    #[test]
+    fn focus_window_jumps_to_the_workspace_that_holds_it() {
+        let mut d = desktop_with_screen();
+        open(&mut d, 1);
+        open(&mut d, 2); // enfocada
+        // Manda la 2 al escritorio 3; seguimos en el 1.
+        d.on_event(BodyEvent::Keybind("Super+Shift+3".into()));
+        assert_eq!(d.active_index(), 0);
+        // Enfocar la 2 nos lleva a su escritorio.
+        d.apply(DesktopAction::FocusWindow(2));
+        assert_eq!(d.active_index(), 2);
+        assert_eq!(d.focused_window(), Some(2));
+    }
+
+    #[test]
+    fn window_lines_cover_every_window_with_its_workspace() {
+        let mut d = desktop_with_screen();
+        open(&mut d, 1);
+        open(&mut d, 2);
+        d.on_event(BodyEvent::Keybind("Super+Shift+3".into())); // la 2 al esc. 3
+        let lines = d.window_lines();
+        assert_eq!(lines.len(), 2);
+        let w1 = lines.iter().find(|l| l.id == 1).unwrap();
+        let w2 = lines.iter().find(|l| l.id == 2).unwrap();
+        assert_eq!(w1.workspace, 1);
+        assert_eq!(w2.workspace, 3);
+        // La 1 quedó enfocada en el escritorio activo (el 1).
+        assert!(w1.focused);
+        assert!(!w2.focused);
     }
 
     #[test]
