@@ -5,7 +5,7 @@
 
 use charka_parser::TokenKind;
 
-use crate::ast::{Operand, Perform, PerformControl, PerformTarget, Stmt, WhenBranch};
+use crate::ast::{InspectOp, Operand, Perform, PerformControl, PerformTarget, Stmt, WhenBranch};
 use crate::cursor::{parse_operand, Cursor};
 use crate::expr::{parse_cond, parse_expr};
 use crate::kw::{is_boundary, is_terminator, is_verb};
@@ -41,6 +41,7 @@ fn parse_one_stmt(c: &mut Cursor, stops: &[&str]) -> Stmt {
         "EVALUATE" => parse_evaluate(c),
         "STRING" => parse_string(c),
         "UNSTRING" => parse_unstring(c),
+        "INSPECT" => parse_inspect(c),
         "PERFORM" => parse_perform(c),
         "GO" => parse_goto(c),
         "STOP" => parse_stop(c),
@@ -375,6 +376,39 @@ fn parse_unstring(c: &mut Cursor) -> Stmt {
         source,
         delimiter,
         into,
+    }
+}
+
+fn parse_inspect(c: &mut Cursor) -> Stmt {
+    c.bump(); // INSPECT
+    let target = parse_operand(c);
+    if c.eat_word("TALLYING") {
+        let counter = parse_operand(c);
+        c.eat_word("FOR");
+        c.eat_word("ALL");
+        let search = parse_operand(c);
+        skip_to_stmt_boundary(c);
+        Stmt::Inspect {
+            target,
+            op: InspectOp::TallyingForAll { counter, search },
+        }
+    } else if c.eat_word("REPLACING") {
+        c.eat_word("ALL");
+        let from = parse_operand(c);
+        c.eat_word("BY");
+        let to = parse_operand(c);
+        skip_to_stmt_boundary(c);
+        Stmt::Inspect {
+            target,
+            op: InspectOp::ReplacingAll { from, to },
+        }
+    } else {
+        // Forma de INSPECT que la v1 no modela.
+        skip_to_stmt_boundary(c);
+        Stmt::Unknown {
+            verb: "INSPECT".to_string(),
+            tokens: Vec::new(),
+        }
     }
 }
 

@@ -183,6 +183,8 @@ pub enum Stmt {
         delimiter: Operand,
         into: Vec<Operand>,
     },
+    /// `INSPECT target ...` — cuenta o reemplaza caracteres.
+    Inspect { target: Operand, op: InspectOp },
     /// `PERFORM ...` — ver [`Perform`].
     Perform(Perform),
     /// `GO TO target`
@@ -198,6 +200,16 @@ pub enum Stmt {
     /// Un verbo que la v1 no parsea: se conserva crudo para que las
     /// etapas siguientes (o un humano) lo revisen.
     Unknown { verb: String, tokens: Vec<Token> },
+}
+
+/// La operación de un `INSPECT`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InspectOp {
+    /// `TALLYING counter FOR ALL search` — suma a `counter` la cantidad
+    /// de apariciones de `search` en el destino.
+    TallyingForAll { counter: Operand, search: Operand },
+    /// `REPLACING ALL from BY to` — reemplaza las apariciones de `from`.
+    ReplacingAll { from: Operand, to: Operand },
 }
 
 /// Una rama `WHEN` de un `EVALUATE`: los valores que la disparan

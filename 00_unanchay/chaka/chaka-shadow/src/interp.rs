@@ -8,8 +8,8 @@
 use std::collections::HashMap;
 
 use charka_ir::{
-    BinOp, CmpOp, Cond, ConditionName, Expr, Figurative, Ir, Operand, Perform, PerformControl,
-    PerformTarget, Stmt,
+    BinOp, CmpOp, Cond, ConditionName, Expr, Figurative, InspectOp, Ir, Operand, Perform,
+    PerformControl, PerformTarget, Stmt,
 };
 use charka_runtime::{cobol_text_cmp, Decimal, Rounding};
 
@@ -267,6 +267,33 @@ impl<'a> Machine<'a> {
                 for (i, target) in into.iter().enumerate() {
                     let piece = parts.get(i).cloned().unwrap_or_default();
                     self.store_text(target, &piece);
+                }
+                Flow::Normal
+            }
+            Stmt::Inspect { target, op } => {
+                match op {
+                    InspectOp::TallyingForAll { counter, search } => {
+                        let hay = self.eval_text(target);
+                        let needle = self.eval_text(search);
+                        let n = if needle.is_empty() {
+                            0
+                        } else {
+                            hay.matches(needle.as_str()).count()
+                        };
+                        let cur = self.eval_decimal(counter);
+                        self.store(counter, cur.add(&Decimal::from_integer(n as i128)), false);
+                    }
+                    InspectOp::ReplacingAll { from, to } => {
+                        let hay = self.eval_text(target);
+                        let f = self.eval_text(from);
+                        let t = self.eval_text(to);
+                        let new = if f.is_empty() {
+                            hay
+                        } else {
+                            hay.replace(f.as_str(), t.as_str())
+                        };
+                        self.store_text(target, &new);
+                    }
                 }
                 Flow::Normal
             }

@@ -1,7 +1,9 @@
 //! Emisión de los statements del PROCEDURE: cada [`Stmt`] se traduce a
 //! una o varias líneas de código Rust sobre `charka-runtime`.
 
-use charka_ir::{CmpOp, Cond, Operand, Perform, PerformControl, PerformTarget, Stmt, WhenBranch};
+use charka_ir::{
+    CmpOp, Cond, InspectOp, Operand, Perform, PerformControl, PerformTarget, Stmt, WhenBranch,
+};
 
 use crate::emit::Emitter;
 use crate::expr::{
@@ -82,6 +84,7 @@ pub(crate) fn emit_stmt(em: &mut Emitter, sym: &Symbols, stmt: &Stmt) {
             delimiter,
             into,
         } => emit_unstring(em, sym, source, delimiter, into),
+        Stmt::Inspect { target, op } => emit_inspect(em, sym, target, op),
         Stmt::Perform(p) => emit_perform(em, sym, p),
         Stmt::GoTo { target } => {
             em.line(&format!(
@@ -421,6 +424,38 @@ fn emit_unstring(
     }
     em.dedent();
     em.line("}");
+}
+
+/// `INSPECT` — cuenta (`TALLYING`) o reemplaza (`REPLACING`).
+fn emit_inspect(em: &mut Emitter, sym: &Symbols, target: &Operand, op: &InspectOp) {
+    match op {
+        InspectOp::TallyingForAll { counter, search } => {
+            em.line("{");
+            em.indent();
+            em.line(&format!(
+                "let __n = ({}).matches({}).count() as i128;",
+                operand_display(sym, target),
+                operand_str(sym, search)
+            ));
+            match field_ref(sym, counter) {
+                Some((lref, FieldKind::Num { .. })) => em.line(&format!(
+                    "{lref}.store({lref}.value().add(&Decimal::from_integer(__n)));"
+                )),
+                _ => em.line("// charka: contador INSPECT no resuelto"),
+            }
+            em.dedent();
+            em.line("}");
+        }
+        InspectOp::ReplacingAll { from, to } => {
+            let replaced = format!(
+                "({}).replace({}, {})",
+                operand_display(sym, target),
+                operand_str(sym, from),
+                operand_str(sym, to)
+            );
+            emit_store_text(em, sym, target, &format!("{replaced}.as_str()"));
+        }
+    }
 }
 
 fn emit_perform(em: &mut Emitter, sym: &Symbols, p: &Perform) {

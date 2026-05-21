@@ -17,9 +17,9 @@
 //! `ACCEPT`, `COMPUTE` (con expresiones con precedencia), `ADD`,
 //! `SUBTRACT`, `MULTIPLY`, `DIVIDE`, `IF`/`ELSE`/`END-IF` (con
 //! condiciones `AND`/`OR`/`NOT`), `EVALUATE`/`WHEN`, `STRING`,
-//! `UNSTRING`, `PERFORM` (fuera de línea, en línea, `TIMES`, `UNTIL`,
-//! `VARYING`), `GO TO`, `STOP RUN`, `GOBACK`, `EXIT`, `CONTINUE`.
-//! Fuera de alcance: E/S de ficheros, CICS y SQL embebido.
+//! `UNSTRING`, `INSPECT`, `PERFORM` (fuera de línea, en línea,
+//! `TIMES`, `UNTIL`, `VARYING`), `GO TO`, `STOP RUN`, `GOBACK`,
+//! `EXIT`, `CONTINUE`. Fuera de alcance: E/S de ficheros, CICS y SQL.
 
 #![forbid(unsafe_code)]
 
@@ -384,6 +384,33 @@ mod tests {
     }
 
     #[test]
+    fn inspect_tallying_and_replacing_parse() {
+        let b = body("INSPECT WS-T TALLYING WS-N FOR ALL 'A'.");
+        match &b[0] {
+            Stmt::Inspect {
+                target,
+                op: InspectOp::TallyingForAll { counter, search },
+            } => {
+                assert_eq!(target, &Operand::Data("WS-T".into()));
+                assert_eq!(counter, &Operand::Data("WS-N".into()));
+                assert_eq!(search, &Operand::Str("A".into()));
+            }
+            other => panic!("se esperaba INSPECT TALLYING, vino {other:?}"),
+        }
+        let b = body("INSPECT WS-T REPLACING ALL 'A' BY 'O'.");
+        match &b[0] {
+            Stmt::Inspect {
+                op: InspectOp::ReplacingAll { from, to },
+                ..
+            } => {
+                assert_eq!(from, &Operand::Str("A".into()));
+                assert_eq!(to, &Operand::Str("O".into()));
+            }
+            other => panic!("se esperaba INSPECT REPLACING, vino {other:?}"),
+        }
+    }
+
+    #[test]
     fn several_statements_in_one_sentence() {
         let b = body("MOVE 1 TO X DISPLAY X STOP RUN.");
         assert_eq!(b.len(), 3);
@@ -394,10 +421,10 @@ mod tests {
 
     #[test]
     fn unrecognized_verb_becomes_unknown() {
-        let b = body("INSPECT WS-X TALLYING WS-N FOR ALL ' '.");
+        let b = body("INITIALIZE WS-X WS-Y.");
         match &b[0] {
             Stmt::Unknown { verb, tokens } => {
-                assert_eq!(verb, "INSPECT");
+                assert_eq!(verb, "INITIALIZE");
                 assert!(!tokens.is_empty());
             }
             other => panic!("se esperaba Unknown, vino {other:?}"),

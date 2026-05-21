@@ -280,8 +280,8 @@ mod tests {
     fn unknown_verb_becomes_a_comment() {
         let out = gen("PROCEDURE DIVISION.\n\
              MAIN.\n\
-                 INSPECT WS-X TALLYING WS-N FOR ALL ' '.\n");
-        assert!(out.contains("// charka: verbo no transpilado — INSPECT"));
+                 INITIALIZE WS-X.\n");
+        assert!(out.contains("// charka: verbo no transpilado — INITIALIZE"));
     }
 
     #[test]
@@ -382,6 +382,21 @@ mod tests {
         assert!(out.contains("self.ws_out.store(&format!("));
         assert!(out.contains("__src.split(__delim.as_str())"));
         assert!(out.contains("__it.next().unwrap_or(\"\")"));
+    }
+
+    #[test]
+    fn inspect_emits_tally_and_replace() {
+        let out = gen("DATA DIVISION.\n\
+             WORKING-STORAGE SECTION.\n\
+             01 WS-T PIC X(10).\n\
+             01 WS-N PIC 9(3).\n\
+             PROCEDURE DIVISION.\n\
+             MAIN.\n\
+                 INSPECT WS-T TALLYING WS-N FOR ALL 'X'.\n\
+                 INSPECT WS-T REPLACING ALL 'X' BY 'Y'.\n");
+        assert!(out.contains(".matches("));
+        assert!(out.contains("Decimal::from_integer(__n)"));
+        assert!(out.contains(".replace("));
     }
 
     #[test]
