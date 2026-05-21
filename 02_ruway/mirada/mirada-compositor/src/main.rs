@@ -403,12 +403,13 @@ fn combo_string(mods: &ModifiersState, sym: Keysym) -> Option<String> {
     let name = if key == " " {
         "space".to_string()
     } else {
+        // ¿Es un único carácter imprimible? Entonces la tecla es ese carácter.
         let mut chars = key.chars();
-        let c = chars.next()?;
-        if chars.next().is_some() || !c.is_ascii_graphic() {
-            return None;
+        match (chars.next(), chars.next()) {
+            (Some(c), None) if c.is_ascii_graphic() => c.to_ascii_lowercase().to_string(),
+            // Si no, una tecla con nombre: Return, Tab, Up, F5…
+            _ => named_key(sym)?,
         }
-        c.to_ascii_lowercase().to_string()
     };
     let mut combo = String::new();
     if mods.logo {
@@ -425,6 +426,17 @@ fn combo_string(mods: &ModifiersState, sym: Keysym) -> Option<String> {
     }
     combo.push_str(&name);
     Some(combo)
+}
+
+/// El nombre canónico de una tecla especial — `Return`, `Tab`, `Up`,
+/// `F5`… `None` si xkb no le da un nombre razonable.
+fn named_key(sym: Keysym) -> Option<String> {
+    let name = xkb::keysym_get_name(sym);
+    if name.is_empty() || name == "NoSymbol" || name.starts_with("0x") {
+        None
+    } else {
+        Some(name)
+    }
 }
 
 /// Despacha los callbacks de frame de un árbol de superficies: avisa a

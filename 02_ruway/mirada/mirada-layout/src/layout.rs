@@ -52,16 +52,23 @@ impl LayoutMode {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct LayoutParams {
     pub mode: LayoutMode,
-    /// Fracción del ancho para la ventana maestra en `MasterStack`
-    /// (se acota a `0.05..=0.95`).
+    /// Fracción del ancho para la ventana maestra en `MasterStack` y
+    /// `CenteredMaster` (se acota a `0.05..=0.95`).
     pub master_ratio: f32,
+    /// Cuántas ventanas van en el área maestra (`nmaster`); al menos 1.
+    pub master_count: usize,
     /// Margen en píxeles alrededor de cada ventana.
     pub gap: i32,
 }
 
 impl Default for LayoutParams {
     fn default() -> Self {
-        Self { mode: LayoutMode::MasterStack, master_ratio: 0.6, gap: 8 }
+        Self {
+            mode: LayoutMode::MasterStack,
+            master_ratio: 0.6,
+            master_count: 1,
+            gap: 8,
+        }
     }
 }
 
@@ -77,12 +84,18 @@ pub fn tile(screen: Rect, count: usize, params: &LayoutParams) -> Vec<Rect> {
         LayoutMode::Columns => columns(screen, count),
         LayoutMode::Rows => rows(screen, count),
         LayoutMode::Grid => grid(screen, count),
-        LayoutMode::MasterStack => master_stack(screen, count, params.master_ratio),
-        LayoutMode::CenteredMaster => centered_master(screen, count, params.master_ratio),
+        LayoutMode::MasterStack => {
+            master_stack(screen, count, params.master_ratio, params.master_count)
+        }
+        LayoutMode::CenteredMaster => {
+            centered_master(screen, count, params.master_ratio, params.master_count)
+        }
         LayoutMode::Spiral => spiral(screen, count),
     };
-    // El margen se aplica al final, uniforme para todos los modos.
-    cells.into_iter().map(|c| c.inset(params.gap)).collect()
+    // El margen se aplica al final, uniforme para todos los modos. *Smart
+    // gaps*: una sola ventana va a sangre, sin margen desperdiciado.
+    let gap = if count == 1 { 0 } else { params.gap };
+    cells.into_iter().map(|c| c.inset(gap)).collect()
 }
 
 /// Columnas verticales de igual ancho.
@@ -139,25 +152,27 @@ fn spiral(screen: Rect, count: usize) -> Vec<Rect> {
     out
 }
 
-/// Ventana maestra centrada + pila repartida en columnas a ambos lados.
-fn centered_master(screen: Rect, count: usize, ratio: f32) -> Vec<Rect> {
-    // Con una o dos ventanas no hay nada que centrar: cae a maestro+pila.
-    if count <= 2 {
-        return master_stack(screen, count, ratio);
+/// `master_count` ventanas maestras centradas + el resto repartido en
+/// columnas a ambos lados.
+fn centered_master(screen: Rect, count: usize, ratio: f32, master_count: usize) -> Vec<Rect> {
+    let m = master_count.clamp(1, count);
+    let stack = count - m;
+    // Centrar sólo tiene sentido con al menos una ventana por lado.
+    if stack < 2 {
+        return master_stack(screen, count, ratio, master_count);
     }
     let ratio = ratio.clamp(0.05, 0.95);
     let master_w = (screen.w as f32 * ratio).round() as i32;
     let sides = split(screen.w - master_w, 2);
     let (left_w, right_w) = (sides[0].1, sides[1].1);
-
-    let stack = count - 1;
     let left_n = stack / 2;
     let right_n = stack - left_n;
 
     let mut out = Vec::with_capacity(count);
-    // 0 = la maestra, centrada.
-    out.push(Rect::new(screen.x + left_w, screen.y, master_w, screen.h));
-    // Columna izquierda, luego la derecha — el orden de teselado.
+    // Las maestras, apiladas en la columna central — orden de teselado.
+    for (off, h) in split(screen.h, m) {
+        out.push(Rect::new(screen.x + left_w, screen.y + off, master_w, h));
+    }
     for (off, h) in split(screen.h, left_n) {
         out.push(Rect::new(screen.x, screen.y + off, left_w, h));
     }
@@ -167,19 +182,27 @@ fn centered_master(screen: Rect, count: usize, ratio: f32) -> Vec<Rect> {
     out
 }
 
-/// Ventana maestra a la izquierda + pila a la derecha.
-fn master_stack(screen: Rect, count: usize, ratio: f32) -> Vec<Rect> {
-    if count == 1 {
-        return vec![screen];
+/// `master_count` ventanas maestras a la izquierda + el resto en pila a
+/// la derecha. Sin pila, las maestras llenan toda la pantalla.
+fn master_stack(screen: Rect, count: usize, ratio: f32, master_count: usize) -> Vec<Rect> {
+    let m = master_count.clamp(1, count);
+    let stack = count - m;
+    if stack == 0 {
+        return split(screen.h, m)
+            .into_iter()
+            .map(|(off, h)| Rect::new(screen.x, screen.y + off, screen.w, h))
+            .collect();
     }
     let ratio = ratio.clamp(0.05, 0.95);
     let master_w = (screen.w as f32 * ratio).round() as i32;
-    let master = Rect::new(screen.x, screen.y, master_w, screen.h);
-
     let stack_x = screen.x + master_w;
     let stack_w = screen.w - master_w;
-    let mut out = vec![master];
-    for (off, h) in split(screen.h, count - 1) {
+
+    let mut out = Vec::with_capacity(count);
+    for (off, h) in split(screen.h, m) {
+        out.push(Rect::new(screen.x, screen.y + off, master_w, h));
+    }
+    for (off, h) in split(screen.h, stack) {
         out.push(Rect::new(stack_x, screen.y + off, stack_w, h));
     }
     out
@@ -192,7 +215,7 @@ mod tests {
     const SCREEN: Rect = Rect { x: 0, y: 0, w: 1920, h: 1080 };
 
     fn params(mode: LayoutMode) -> LayoutParams {
-        LayoutParams { mode, master_ratio: 0.6, gap: 0 }
+        LayoutParams { mode, gap: 0, ..LayoutParams::default() }
     }
 
     #[test]
@@ -296,12 +319,54 @@ mod tests {
 
     #[test]
     fn gap_shrinks_every_window() {
-        let p = LayoutParams { mode: LayoutMode::Columns, master_ratio: 0.6, gap: 10 };
+        let p = LayoutParams { mode: LayoutMode::Columns, gap: 10, ..LayoutParams::default() };
         for r in tile(SCREEN, 2, &p) {
             // Cada celda de 960 de ancho se encoge 20 (10 por lado).
             assert_eq!(r.w, 960 - 20);
             assert_eq!(r.h, 1080 - 20);
         }
+    }
+
+    #[test]
+    fn nmaster_keeps_n_windows_in_the_master_column() {
+        let p = LayoutParams {
+            mode: LayoutMode::MasterStack,
+            master_count: 2,
+            gap: 0,
+            ..LayoutParams::default()
+        };
+        let rects = tile(SCREEN, 4, &p);
+        // Dos maestras comparten el ancho maestro (60% de 1920 = 1152).
+        assert_eq!(rects[0].w, 1152);
+        assert_eq!(rects[1].w, 1152);
+        // Dos de pila comparten el resto.
+        assert_eq!(rects[2].w, 1920 - 1152);
+        assert_eq!(rects[3].w, 1920 - 1152);
+        // Las dos maestras parten la altura entre ellas.
+        assert_eq!(rects[0].h + rects[1].h, 1080);
+    }
+
+    #[test]
+    fn nmaster_above_window_count_makes_every_window_a_master() {
+        let p = LayoutParams {
+            mode: LayoutMode::MasterStack,
+            master_count: 9,
+            gap: 0,
+            ..LayoutParams::default()
+        };
+        let rects = tile(SCREEN, 3, &p);
+        // Sin pila: las tres ocupan el ancho completo.
+        assert!(rects.iter().all(|r| r.w == 1920));
+        assert_eq!(rects.iter().map(|r| r.h).sum::<i32>(), 1080);
+    }
+
+    #[test]
+    fn smart_gaps_drop_the_margin_for_a_single_window() {
+        let p = LayoutParams { mode: LayoutMode::MasterStack, gap: 20, ..LayoutParams::default() };
+        // Una sola ventana: a sangre, sin margen.
+        assert_eq!(tile(SCREEN, 1, &p)[0], SCREEN);
+        // Con dos, el margen vuelve.
+        assert!(tile(SCREEN, 2, &p)[0].w < SCREEN.w);
     }
 
     #[test]

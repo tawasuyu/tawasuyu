@@ -22,7 +22,8 @@
 //!   n            abre una ventana          tab / espacio  cicla layout
 //!   w            cierra la enfocada        t m g c r d s  layout directo
 //!   j / k        foco siguiente/anterior   h / l          área maestra −/+
-//!   Shift+j / k  mueve la enfocada         1..9           ir a escritorio
+//!   Shift+j / k  mueve la enfocada         , / .          nmaster −/+
+//!   Enter        promueve a maestra        1..9           ir a escritorio
 //!                                          Ctrl+1..9      enviar a escritorio
 //! ```
 //!
@@ -291,6 +292,9 @@ impl Mirada {
             "s" => self.act(DesktopAction::SetLayout(LayoutMode::Spiral)),
             "h" => self.act(DesktopAction::ShrinkMaster),
             "l" => self.act(DesktopAction::GrowMaster),
+            "enter" => self.act(DesktopAction::PromoteToMaster),
+            "," => self.act(DesktopAction::IncMaster),
+            "." => self.act(DesktopAction::DecMaster),
             d if d.len() == 1 && d.as_bytes()[0].is_ascii_digit() && d != "0" => {
                 let n = (d.as_bytes()[0] - b'1') as usize;
                 if ctrl {

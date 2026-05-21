@@ -125,6 +125,8 @@ Acciones de mirada-ctl:
                              grid · columns · rows · monocle
   grow-master                agranda el área de la ventana maestra
   shrink-master              la encoge
+  inc-master / dec-master    nº de ventanas en el área maestra (nmaster)
+  promote-to-master          la ventana enfocada al puesto maestro
   workspace <n>              activa el escritorio n (1..9)
   send-to-workspace <n>      manda la enfocada al escritorio n
   quit                       apaga el compositor

@@ -51,6 +51,11 @@ impl Workspace {
         self.params.master_ratio = ratio;
     }
 
+    /// Ajusta cuántas ventanas van en el área maestra (`nmaster`).
+    pub fn set_master_count(&mut self, count: usize) {
+        self.params.master_count = count;
+    }
+
     /// Añade una ventana y la enfoca. Si ya estaba, sólo la enfoca.
     pub fn add(&mut self, window: WindowId) {
         if let Some(i) = self.windows.iter().position(|&w| w == window) {
@@ -122,6 +127,17 @@ impl Workspace {
         if self.focus > 0 && !self.windows.is_empty() {
             self.windows.swap(self.focus, self.focus - 1);
             self.focus -= 1;
+        }
+    }
+
+    /// Lleva la ventana enfocada al primer puesto del orden de teselado
+    /// (la posición maestra); el foco la acompaña. No hace nada si ya es
+    /// la primera o el escritorio está vacío.
+    pub fn promote_focused(&mut self) {
+        if self.focus > 0 && self.focus < self.windows.len() {
+            let w = self.windows.remove(self.focus);
+            self.windows.insert(0, w);
+            self.focus = 0;
         }
     }
 
@@ -218,6 +234,21 @@ mod tests {
         assert_eq!(w.focused(), Some(1)); // el foco la acompañó
         w.move_focused_backward();
         assert_eq!(w.windows(), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn promote_brings_the_focused_window_to_the_front() {
+        let mut w = ws();
+        for id in [1, 2, 3] {
+            w.add(id);
+        }
+        w.focus_window(3);
+        w.promote_focused();
+        assert_eq!(w.windows(), &[3, 1, 2]);
+        assert_eq!(w.focused(), Some(3));
+        // Promover la que ya es maestra no hace nada.
+        w.promote_focused();
+        assert_eq!(w.windows(), &[3, 1, 2]);
     }
 
     #[test]

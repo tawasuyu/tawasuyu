@@ -190,6 +190,12 @@ impl Desktop {
             }
             DesktopAction::GrowMaster => self.nudge_master(0.05),
             DesktopAction::ShrinkMaster => self.nudge_master(-0.05),
+            DesktopAction::IncMaster => self.nudge_master_count(1),
+            DesktopAction::DecMaster => self.nudge_master_count(-1),
+            DesktopAction::PromoteToMaster => {
+                self.workspaces[self.active].promote_focused();
+                self.relayout()
+            }
             DesktopAction::SwitchWorkspace(n) => {
                 if n < self.workspaces.len() && n != self.active {
                     self.active = n;
@@ -221,6 +227,14 @@ impl Desktop {
         let ws = &mut self.workspaces[self.active];
         let ratio = (ws.params().master_ratio + delta).clamp(0.05, 0.95);
         ws.set_master_ratio(ratio);
+        self.relayout()
+    }
+
+    /// Ajusta `nmaster` del escritorio activo, acotado a `1..=9`.
+    fn nudge_master_count(&mut self, delta: i32) -> Vec<BrainCommand> {
+        let ws = &mut self.workspaces[self.active];
+        let n = (ws.params().master_count as i32 + delta).clamp(1, 9) as usize;
+        ws.set_master_count(n);
         self.relayout()
     }
 
@@ -466,6 +480,32 @@ mod tests {
         assert!(d.active_workspace().params().master_ratio > r0);
         d.apply(DesktopAction::ShrinkMaster);
         assert!((d.active_workspace().params().master_ratio - r0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn inc_and_dec_master_adjust_nmaster() {
+        let mut d = desktop_with_screen();
+        for id in [1, 2, 3] {
+            open(&mut d, id);
+        }
+        assert_eq!(d.active_workspace().params().master_count, 1);
+        d.apply(DesktopAction::IncMaster);
+        assert_eq!(d.active_workspace().params().master_count, 2);
+        d.apply(DesktopAction::DecMaster);
+        d.apply(DesktopAction::DecMaster); // no baja de 1
+        assert_eq!(d.active_workspace().params().master_count, 1);
+    }
+
+    #[test]
+    fn promote_to_master_brings_the_focused_window_to_the_front() {
+        let mut d = desktop_with_screen();
+        for id in [1, 2, 3] {
+            open(&mut d, id);
+        }
+        d.apply(DesktopAction::FocusWindow(3));
+        d.apply(DesktopAction::PromoteToMaster);
+        assert_eq!(d.active_workspace().windows()[0], 3);
+        assert_eq!(d.focused_window(), Some(3));
     }
 
     #[test]

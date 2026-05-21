@@ -46,6 +46,12 @@ pub enum DesktopAction {
     GrowMaster,
     /// Encoge el área de la ventana maestra.
     ShrinkMaster,
+    /// Mete una ventana más en el área maestra (`nmaster`).
+    IncMaster,
+    /// Saca una ventana del área maestra.
+    DecMaster,
+    /// Lleva la ventana enfocada al puesto maestro (orden de teselado).
+    PromoteToMaster,
     /// Activa el escritorio virtual `n` (índice 0-based).
     SwitchWorkspace(usize),
     /// Manda la ventana enfocada al escritorio virtual `n`.
@@ -96,6 +102,9 @@ impl fmt::Display for DesktopAction {
             DesktopAction::SetLayout(m) => write!(f, "layout:{}", layout_slug(*m)),
             DesktopAction::GrowMaster => f.write_str("grow-master"),
             DesktopAction::ShrinkMaster => f.write_str("shrink-master"),
+            DesktopAction::IncMaster => f.write_str("inc-master"),
+            DesktopAction::DecMaster => f.write_str("dec-master"),
+            DesktopAction::PromoteToMaster => f.write_str("promote-to-master"),
             // Los escritorios se numeran 1-based de cara al usuario.
             DesktopAction::SwitchWorkspace(n) => write!(f, "workspace:{}", n + 1),
             DesktopAction::SendToWorkspace(n) => write!(f, "send-to-workspace:{}", n + 1),
@@ -119,6 +128,9 @@ impl FromStr for DesktopAction {
             "cycle-layout" => Self::CycleLayout,
             "grow-master" => Self::GrowMaster,
             "shrink-master" => Self::ShrinkMaster,
+            "inc-master" => Self::IncMaster,
+            "dec-master" => Self::DecMaster,
+            "promote-to-master" => Self::PromoteToMaster,
             "quit" => Self::Quit,
             _ => {
                 if let Some(slug) = s.strip_prefix("layout:") {
@@ -181,6 +193,9 @@ pub fn default_keymap() -> Vec<(String, DesktopAction)> {
         ("Super+s".into(), DesktopAction::SetLayout(LayoutMode::Spiral)),
         ("Super+h".into(), DesktopAction::ShrinkMaster),
         ("Super+l".into(), DesktopAction::GrowMaster),
+        ("Super+Return".into(), DesktopAction::PromoteToMaster),
+        ("Super+,".into(), DesktopAction::IncMaster),
+        ("Super+.".into(), DesktopAction::DecMaster),
         ("Super+Shift+e".into(), DesktopAction::Quit),
     ];
     // Un escritorio por dígito: `Super+1`..`Super+9` lo activan,
