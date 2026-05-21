@@ -27,6 +27,8 @@ use gpui::{
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Render,
     ScrollHandle, SharedString, Style, Window, WindowBounds, WindowOptions,
 };
+use mirada_brain::ctl::{default_socket_path, send_request};
+use mirada_brain::{CtlReply, CtlRequest, DesktopAction, WindowLine};
 use nahual_launcher::launch_app;
 use nahual_theme::Theme;
 use shuma_exec::{run as exec_run, CommandSpec, Exec, RunEvent, RunHandle, StageSpec};
@@ -67,6 +69,23 @@ fn unix_now() -> u64 {
 fn fkey_index(key: &str) -> Option<usize> {
     let n: usize = key.strip_prefix('f')?.parse().ok()?;
     (1..=8).contains(&n).then_some(n - 1)
+}
+
+/// Pregunta a carmen, por su socket de control, la lista de ventanas
+/// abiertas. `None` si el compositor no está o respondió otra cosa.
+fn poll_ctl_windows() -> Option<Vec<WindowLine>> {
+    match send_request(&default_socket_path(), &CtlRequest::ListWindows) {
+        Ok(CtlReply::Windows(w)) => Some(w),
+        _ => None,
+    }
+}
+
+/// Pide a carmen que enfoque una ventana del escritorio.
+fn focus_window(id: u64) {
+    let _ = send_request(
+        &default_socket_path(),
+        &CtlRequest::Do(DesktopAction::FocusWindow(id)),
+    );
 }
 
 /// Quita las comillas exteriores de un argumento (`"hola"` → `hola`).
@@ -340,6 +359,9 @@ struct Shell {
     /// `true` cuando el shell corre como **modo launcher**: una barra
     /// compacta acoplada al pie de carmen, en vez del panel completo.
     launcher: bool,
+    /// Las ventanas abiertas del escritorio, según el socket de control
+    /// de carmen — la barra de tareas del modo launcher.
+    windows_bar: Vec<WindowLine>,
 }
 
 impl Shell {
@@ -382,6 +404,7 @@ impl Shell {
             focus: cx.focus_handle(),
             focused_once: false,
             launcher: false,
+            windows_bar: Vec::new(),
         };
         shell.start_loop(cx);
         shell
@@ -396,11 +419,21 @@ impl Shell {
                 cx.background_executor().timer(Duration::from_millis(110)).await;
                 tick += 1;
                 let sysmon = tick % 10 == 0;
+                // Cada ~1 s pregunta a carmen por sus ventanas. La llamada
+                // bloquea un instante sobre un socket Unix local — aquí,
+                // en el executor de fondo, no en el hilo de la UI.
+                let windows = (tick % 9 == 0).then(poll_ctl_windows).flatten();
                 let alive = this.update(cx, |shell, cx| {
                     let mut changed = shell.drain_exec();
                     if sysmon {
                         shell.snapshot = shell.sampler.sample();
                         changed = true;
+                    }
+                    if let Some(w) = windows {
+                        if w != shell.windows_bar {
+                            shell.windows_bar = w;
+                            changed = true;
+                        }
                     }
                     if changed {
                         cx.notify();
@@ -1020,14 +1053,62 @@ impl Shell {
         row
     }
 
-    /// El modo launcher: una barra compacta —glifo, input, estado del
-    /// último comando— pensada para la franja que carmen reserva al pie.
+    /// El modo launcher: una barra compacta —glifo, input, barra de
+    /// ventanas, estado del último comando— para la franja que carmen
+    /// reserva al pie.
     fn render_launcher(&mut self, cx: &mut Context<Self>) -> gpui::Div {
         let theme = Theme::global(cx).clone();
         let panel = gpui::hsla(220.0 / 360.0, 0.16, 0.11, 1.0);
+        let node_bg = gpui::hsla(220.0 / 360.0, 0.14, 0.16, 1.0);
         let accent = gpui::hsla(190.0 / 360.0, 0.70, 0.62, 1.0);
         let dim = theme.fg_muted;
         let text = theme.fg_text;
+
+        // Barra de tareas: una cajita por ventana abierta, la enfocada
+        // resaltada. Un clic se la pide a carmen por el socket de control.
+        let chips: Vec<_> = self
+            .windows_bar
+            .iter()
+            .map(|w| {
+                let id = w.id;
+                let raw = if !w.title.is_empty() { &w.title } else { &w.app_id };
+                let label = if raw.chars().count() > 18 {
+                    format!("{}…", raw.chars().take(18).collect::<String>())
+                } else {
+                    raw.clone()
+                };
+                let focused = w.focused;
+                div()
+                    .id(SharedString::from(format!("win-{id}")))
+                    .flex_none()
+                    .px(px(8.))
+                    .py(px(3.))
+                    .rounded(px(4.))
+                    .text_size(px(12.))
+                    .cursor_pointer()
+                    .when(focused, |d| {
+                        d.bg(accent).text_color(gpui::hsla(0.0, 0.0, 0.12, 1.0))
+                    })
+                    .when(!focused, |d| d.bg(node_bg).text_color(dim))
+                    .child(SharedString::from(label))
+                    .on_click(cx.listener(move |shell, _, _, cx| {
+                        focus_window(id);
+                        // Eco inmediato — el sondeo confirma en ~1 s.
+                        for w in &mut shell.windows_bar {
+                            w.focused = w.id == id;
+                        }
+                        cx.notify();
+                    }))
+            })
+            .collect();
+        let taskbar = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(4.))
+            .flex_none()
+            .overflow_hidden()
+            .children(chips);
 
         // Estado a la derecha: nº de comandos en curso, o el último.
         let status = if !self.active.is_empty() {
@@ -1066,6 +1147,7 @@ impl Shell {
             .items_center()
             .gap(px(10.))
             .px(px(12.))
+            .overflow_hidden()
             .bg(panel)
             .text_color(text)
             .text_size(px(13.))
@@ -1082,6 +1164,7 @@ impl Shell {
                     .overflow_hidden()
                     .children(self.input_row(&theme)),
             )
+            .child(taskbar)
             .child(status)
     }
 }

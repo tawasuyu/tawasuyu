@@ -18,6 +18,9 @@ shuma-session = { path = "../../modules/shuma/shuma-session" }
 shuma-exec = { path = "../../modules/shuma/shuma-exec" }
 shuma-infer = { path = "../../modules/shuma/shuma-infer" }
 shuma-sysmon = { path = "../../modules/shuma/shuma-sysmon" }
+# El protocolo de control de carmen — el modo launcher lista y enfoca
+# ventanas a través de él.
+mirada-brain = { path = "../../modules/mirada/mirada-brain" }
 # Herramienta matilda, embebida en la ventana del shell.
 matilda-core = { path = "../../modules/matilda/matilda-core" }
 matilda-plan = { path = "../../modules/matilda/matilda-plan" }
