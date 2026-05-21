@@ -32,6 +32,9 @@ pub struct Procedure {
 pub enum Operand {
     /// Referencia a un dato, por nombre (en mayúsculas).
     Data(String),
+    /// Referencia a un elemento de tabla: `name(index)`. El subíndice
+    /// es 1-based, como en COBOL.
+    Indexed { name: String, index: Box<Operand> },
     /// Literal numérico (texto, posiblemente con signo).
     Num(String),
     /// Literal de texto.
@@ -111,36 +114,36 @@ pub enum CmpOp {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     /// `MOVE from TO to...`
-    Move { from: Operand, to: Vec<String> },
+    Move { from: Operand, to: Vec<Operand> },
     /// `DISPLAY items...`
     Display { items: Vec<Operand> },
     /// `ACCEPT into`
-    Accept { into: String },
+    Accept { into: Operand },
     /// `COMPUTE targets... [ROUNDED] = expr`
     Compute {
-        targets: Vec<String>,
+        targets: Vec<Operand>,
         rounded: bool,
         expr: Expr,
     },
     /// `ADD addends... TO to... [GIVING giving...]`
     Add {
         addends: Vec<Operand>,
-        to: Vec<String>,
-        giving: Vec<String>,
+        to: Vec<Operand>,
+        giving: Vec<Operand>,
         rounded: bool,
     },
     /// `SUBTRACT amounts... FROM from... [GIVING giving...]`
     Subtract {
         amounts: Vec<Operand>,
-        from: Vec<String>,
-        giving: Vec<String>,
+        from: Vec<Operand>,
+        giving: Vec<Operand>,
         rounded: bool,
     },
     /// `MULTIPLY left BY by [GIVING giving...]`
     Multiply {
         left: Operand,
         by: Operand,
-        giving: Vec<String>,
+        giving: Vec<Operand>,
         rounded: bool,
     },
     /// `DIVIDE left {BY|INTO} right [GIVING giving...]`. `by_form` es
@@ -149,7 +152,7 @@ pub enum Stmt {
         left: Operand,
         right: Operand,
         by_form: bool,
-        giving: Vec<String>,
+        giving: Vec<Operand>,
         rounded: bool,
     },
     /// `IF cond [THEN] then_branch [ELSE else_branch] [END-IF]`

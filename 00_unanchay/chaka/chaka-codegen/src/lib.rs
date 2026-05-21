@@ -73,9 +73,13 @@ fn emit_struct(em: &mut Emitter, sym: &Symbols) {
     em.line("struct Program {");
     em.indent();
     for f in &sym.fields {
-        let ty = match f.kind {
+        let elem = match f.kind {
             FieldKind::Num { .. } => "Num",
             FieldKind::Text { .. } => "Text",
+        };
+        let ty = match f.occurs {
+            None => elem.to_string(),
+            Some(_) => format!("Vec<{elem}>"),
         };
         em.line(&format!("{}: {ty},", f.ident));
     }
@@ -143,9 +147,10 @@ fn emit_main(em: &mut Emitter) {
 }
 
 /// El inicializador de un campo, a partir de su `VALUE` ya
-/// normalizado por `charka-ir`.
+/// normalizado por `charka-ir`. Una tabla (`OCCURS n`) se inicializa
+/// como un `Vec` de `n` copias del valor inicial.
 fn field_init(f: &Field) -> String {
-    match &f.kind {
+    let scalar = match &f.kind {
         FieldKind::Num { int, frac, signed } => format!(
             "Num::with_value(Picture::new({int}, {frac}, {signed}), {})",
             rust_str(&f.init)
@@ -153,6 +158,10 @@ fn field_init(f: &Field) -> String {
         FieldKind::Text { len } => {
             format!("Text::with_value({len}, {})", rust_str(&f.init))
         }
+    };
+    match f.occurs {
+        None => scalar,
+        Some(n) => format!("vec![{scalar}; {n}]"),
     }
 }
 
@@ -340,6 +349,22 @@ mod tests {
                  IF ES-SI DISPLAY 'SI' END-IF.\n");
         // ES-SI equivale a `WS-FLAG = 'Y'` (comparación de texto).
         assert!(out.contains("cobol_text_cmp(self.ws_flag.display().as_str(), \"Y\").is_eq()"));
+    }
+
+    #[test]
+    fn occurs_emits_a_vec_field_and_indexed_access() {
+        let out = gen("DATA DIVISION.\n\
+             WORKING-STORAGE SECTION.\n\
+             01 WS-T.\n\
+                05 WS-E PIC 9(3) OCCURS 4 TIMES.\n\
+             01 WS-I PIC 9(1).\n\
+             PROCEDURE DIVISION.\n\
+             MAIN.\n\
+                 MOVE 7 TO WS-E(WS-I).\n");
+        assert!(out.contains("ws_e: Vec<Num>,"));
+        assert!(out.contains("; 4]"));
+        assert!(out.contains("self.ws_e["));
+        assert!(out.contains(".saturating_sub(1)]"));
     }
 
     #[test]

@@ -53,6 +53,9 @@ pub struct DataItem {
     /// Cláusula `VALUE`: literal numérico (con signo), constante
     /// figurativa en mayúsculas, o literal de texto entre comillas.
     pub value: Option<String>,
+    /// Cláusula `OCCURS n [TIMES]`: el dato es una tabla de `n`
+    /// elementos. `None` si es un dato escalar.
+    pub occurs: Option<u32>,
     /// Ítems subordinados (de nivel numérico mayor).
     pub children: Vec<DataItem>,
 }
@@ -205,9 +208,24 @@ fn parse_data_entry(level: u8, sent: &[Token]) -> Result<DataItem, ParseError> {
 
     let mut picture = None;
     let mut value = None;
+    let mut occurs = None;
     let mut i = 2;
     while i < sent.len() {
         match kw(sent.get(i)).as_deref() {
+            Some("OCCURS") => {
+                i += 1;
+                if let Some(t) = sent.get(i) {
+                    if t.kind == TokenKind::Number {
+                        if occurs.is_none() {
+                            occurs = t.text.parse::<u32>().ok();
+                        }
+                        i += 1;
+                    }
+                }
+                if kw(sent.get(i)).as_deref() == Some("TIMES") {
+                    i += 1;
+                }
+            }
             Some("PIC") | Some("PICTURE") => {
                 i += 1;
                 if kw(sent.get(i)).as_deref() == Some("IS") {
@@ -239,6 +257,7 @@ fn parse_data_entry(level: u8, sent: &[Token]) -> Result<DataItem, ParseError> {
         name,
         picture,
         value,
+        occurs,
         children: Vec::new(),
     })
 }
@@ -603,6 +622,20 @@ mod tests {
         assert_eq!(p.data[0].children.len(), 2);
         assert_eq!(p.data[0].children[0].name, "FILLER");
         assert_eq!(p.data[0].children[1].name, "FILLER");
+    }
+
+    #[test]
+    fn occurs_clause_captured() {
+        let p = parse_src(
+            "DATA DIVISION.\n\
+             WORKING-STORAGE SECTION.\n\
+             01 WS-TABLA.\n\
+                05 WS-ELEM PIC 9(3) OCCURS 10 TIMES.\n",
+        );
+        let elem = &p.data[0].children[0];
+        assert_eq!(elem.name, "WS-ELEM");
+        assert_eq!(elem.occurs, Some(10));
+        assert_eq!(elem.picture.as_deref(), Some("9(3)"));
     }
 
     #[test]

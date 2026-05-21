@@ -103,10 +103,26 @@ pub(crate) fn parse_operand(c: &mut Cursor) -> Operand {
             num.text
         });
     }
-    match c.bump() {
+    let base = match c.bump() {
         Some(t) => token_to_operand(&t),
-        None => Operand::Num("0".into()),
+        None => return Operand::Num("0".into()),
+    };
+    // Subíndice de tabla: `name(index)`. La v1 toma un solo subíndice;
+    // lo demás dentro del paréntesis se descarta.
+    if let Operand::Data(name) = &base {
+        if c.eat_sym("(") {
+            let index = parse_operand(c);
+            while !c.at_sym(")") && !c.done() {
+                c.bump();
+            }
+            c.eat_sym(")");
+            return Operand::Indexed {
+                name: name.clone(),
+                index: Box::new(index),
+            };
+        }
     }
+    base
 }
 
 /// Clasifica un token suelto como operando.

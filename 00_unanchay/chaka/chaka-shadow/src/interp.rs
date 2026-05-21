@@ -141,12 +141,12 @@ impl<'a> Machine<'a> {
                 let sum = self.fold_sum(addends);
                 if giving.is_empty() {
                     for t in to {
-                        let cur = self.field_value(t);
+                        let cur = self.eval_decimal(t);
                         self.store(t, cur.add(&sum), *rounded);
                     }
                 } else {
                     let base = match to.first() {
-                        Some(first) => sum.add(&self.field_value(first)),
+                        Some(first) => sum.add(&self.eval_decimal(first)),
                         None => sum,
                     };
                     for g in giving {
@@ -164,13 +164,13 @@ impl<'a> Machine<'a> {
                 let sum = self.fold_sum(amounts);
                 if giving.is_empty() {
                     for t in from {
-                        let cur = self.field_value(t);
+                        let cur = self.eval_decimal(t);
                         self.store(t, cur.sub(&sum), *rounded);
                     }
                 } else {
                     let minuend = from
                         .first()
-                        .map(|f| self.field_value(f))
+                        .map(|f| self.eval_decimal(f))
                         .unwrap_or_else(Decimal::zero);
                     let value = minuend.sub(&sum);
                     for g in giving {
@@ -187,9 +187,8 @@ impl<'a> Machine<'a> {
             } => {
                 let value = self.eval_decimal(left).mul(&self.eval_decimal(by));
                 if giving.is_empty() {
-                    if let Operand::Data(name) = by {
-                        self.store(name, value, *rounded);
-                    }
+                    // `MULTIPLY a BY b` sin GIVING: b queda con a*b.
+                    self.store(by, value, *rounded);
                 } else {
                     for g in giving {
                         self.store(g, value, *rounded);
@@ -210,10 +209,9 @@ impl<'a> Machine<'a> {
                     (self.eval_decimal(right), self.eval_decimal(left))
                 };
                 if giving.is_empty() {
-                    if let Operand::Data(name) = right {
-                        let v = divide(num, den, self.target_scale(name));
-                        self.store(name, v, *rounded);
-                    }
+                    // `DIVIDE a INTO b` sin GIVING: b queda con b/a.
+                    let v = divide(num, den, self.target_scale(right));
+                    self.store(right, v, *rounded);
                 } else {
                     for g in giving {
                         let v = divide(num, den, self.target_scale(g));
@@ -296,8 +294,9 @@ impl<'a> Machine<'a> {
                 by,
                 until,
             } => {
+                let var_op = Operand::Data(var.clone());
                 let start = self.eval_decimal(from);
-                self.store(var, start, false);
+                self.store(&var_op, start, false);
                 loop {
                     if self.tick() {
                         return Flow::Stop;
@@ -308,8 +307,8 @@ impl<'a> Machine<'a> {
                     if let Flow::Stop = self.run_target(&p.target) {
                         return Flow::Stop;
                     }
-                    let next = self.field_value(var).add(&self.eval_decimal(by));
-                    self.store(var, next, false);
+                    let next = self.eval_decimal(&var_op).add(&self.eval_decimal(by));
+                    self.store(&var_op, next, false);
                 }
             }
         }
@@ -339,44 +338,74 @@ impl<'a> Machine<'a> {
         }
     }
 
-    /// `MOVE from` a un solo campo destino.
-    fn do_move(&mut self, from: &Operand, target: &str) {
-        let key = target.to_uppercase();
-        match self.fields.get(&key) {
-            Some(Cell::Num(_)) => {
-                let v = self.eval_decimal(from);
-                if let Some(Cell::Num(n)) = self.fields.get_mut(&key) {
-                    n.store(v);
-                }
+    /// Resuelve una referencia a dato (escalar o elemento de tabla) a
+    /// su nombre y un índice 0-based. `None` si no es una referencia.
+    fn resolve(&self, op: &Operand) -> Option<(String, usize)> {
+        match op {
+            Operand::Data(name) => Some((name.to_uppercase(), 0)),
+            Operand::Indexed { name, index } => {
+                // El subíndice de COBOL es 1-based.
+                let i = self
+                    .eval_decimal(index)
+                    .rescale(0, Rounding::Truncate)
+                    .mantissa();
+                let idx = if i < 1 { 0 } else { (i - 1) as usize };
+                Some((name.to_uppercase(), idx))
             }
-            Some(Cell::Text(_)) => {
-                if let Operand::Figurative(fig) = from {
-                    let ch = figurative_fill(*fig);
-                    if let Some(Cell::Text(t)) = self.fields.get_mut(&key) {
-                        t.fill(ch);
-                    }
-                } else {
-                    let s = self.eval_text(from);
-                    if let Some(Cell::Text(t)) = self.fields.get_mut(&key) {
-                        t.store(&s);
-                    }
-                }
-            }
-            None => {}
+            _ => None,
         }
     }
 
-    /// Almacena un valor en un campo, conformándolo a su tipo.
-    fn store(&mut self, name: &str, value: Decimal, rounded: bool) {
-        match self.fields.get_mut(&name.to_uppercase()) {
-            Some(Cell::Num(n)) => {
-                if rounded {
-                    n.store_rounded(value);
-                } else {
-                    n.store(value);
+    /// `MOVE from` a un solo destino (escalar o elemento de tabla).
+    fn do_move(&mut self, from: &Operand, target: &Operand) {
+        let Some((key, idx)) = self.resolve(target) else {
+            return;
+        };
+        let is_num = matches!(self.fields.get(&key), Some(Cell::Num(_)));
+        if is_num {
+            let v = self.eval_decimal(from);
+            if let Some(Cell::Num(arr)) = self.fields.get_mut(&key) {
+                if let Some(n) = arr.get_mut(idx) {
+                    n.store(v);
                 }
             }
-            Some(Cell::Text(t)) => t.store(&value.to_string()),
+        } else if let Operand::Figurative(fig) = from {
+            let ch = figurative_fill(*fig);
+            if let Some(Cell::Text(arr)) = self.fields.get_mut(&key) {
+                if let Some(t) = arr.get_mut(idx) {
+                    t.fill(ch);
+                }
+            }
+        } else {
+            let s = self.eval_text(from);
+            if let Some(Cell::Text(arr)) = self.fields.get_mut(&key) {
+                if let Some(t) = arr.get_mut(idx) {
+                    t.store(&s);
+                }
+            }
+        }
+    }
+
+    /// Almacena un valor en un destino, conformándolo a su tipo.
+    fn store(&mut self, target: &Operand, value: Decimal, rounded: bool) {
+        let Some((key, idx)) = self.resolve(target) else {
+            return;
+        };
+        match self.fields.get_mut(&key) {
+            Some(Cell::Num(arr)) => {
+                if let Some(n) = arr.get_mut(idx) {
+                    if rounded {
+                        n.store_rounded(value);
+                    } else {
+                        n.store(value);
+                    }
+                }
+            }
+            Some(Cell::Text(arr)) => {
+                if let Some(t) = arr.get_mut(idx) {
+                    t.store(&value.to_string());
+                }
+            }
             None => {}
         }
     }
@@ -388,13 +417,22 @@ impl<'a> Machine<'a> {
             Operand::Num(n) => Decimal::parse(n).unwrap_or_else(|_| Decimal::zero()),
             Operand::Str(s) => Decimal::parse(s).unwrap_or_else(|_| Decimal::zero()),
             Operand::Figurative(_) => Decimal::zero(),
-            Operand::Data(name) => match self.fields.get(&name.to_uppercase()) {
-                Some(Cell::Num(n)) => n.value(),
-                Some(Cell::Text(t)) => {
-                    Decimal::parse(t.as_str().trim()).unwrap_or_else(|_| Decimal::zero())
+            Operand::Data(_) | Operand::Indexed { .. } => {
+                let Some((key, idx)) = self.resolve(op) else {
+                    return Decimal::zero();
+                };
+                match self.fields.get(&key) {
+                    Some(Cell::Num(arr)) => arr
+                        .get(idx)
+                        .map(|n| n.value())
+                        .unwrap_or_else(Decimal::zero),
+                    Some(Cell::Text(arr)) => arr
+                        .get(idx)
+                        .and_then(|t| Decimal::parse(t.as_str().trim()).ok())
+                        .unwrap_or_else(Decimal::zero),
+                    None => Decimal::zero(),
                 }
-                None => Decimal::zero(),
-            },
+            }
         }
     }
 
@@ -403,11 +441,16 @@ impl<'a> Machine<'a> {
             Operand::Str(s) => s.clone(),
             Operand::Num(n) => n.clone(),
             Operand::Figurative(f) => figurative_text(*f).to_string(),
-            Operand::Data(name) => match self.fields.get(&name.to_uppercase()) {
-                Some(Cell::Num(n)) => n.display(),
-                Some(Cell::Text(t)) => t.display(),
-                None => String::new(),
-            },
+            Operand::Data(_) | Operand::Indexed { .. } => {
+                let Some((key, idx)) = self.resolve(op) else {
+                    return String::new();
+                };
+                match self.fields.get(&key) {
+                    Some(Cell::Num(arr)) => arr.get(idx).map(|n| n.display()).unwrap_or_default(),
+                    Some(Cell::Text(arr)) => arr.get(idx).map(|t| t.display()).unwrap_or_default(),
+                    None => String::new(),
+                }
+            }
         }
     }
 
@@ -461,9 +504,10 @@ impl<'a> Machine<'a> {
     fn is_text(&self, op: &Operand) -> bool {
         match op {
             Operand::Str(_) => true,
-            Operand::Data(name) => {
-                matches!(self.fields.get(&name.to_uppercase()), Some(Cell::Text(_)))
-            }
+            Operand::Data(_) | Operand::Indexed { .. } => match self.resolve(op) {
+                Some((key, _)) => matches!(self.fields.get(&key), Some(Cell::Text(_))),
+                None => false,
+            },
             _ => false,
         }
     }
@@ -486,23 +530,16 @@ impl<'a> Machine<'a> {
         acc
     }
 
-    /// El valor actual de un campo por nombre.
-    fn field_value(&self, name: &str) -> Decimal {
-        match self.fields.get(&name.to_uppercase()) {
-            Some(Cell::Num(n)) => n.value(),
-            Some(Cell::Text(t)) => {
-                Decimal::parse(t.as_str().trim()).unwrap_or_else(|_| Decimal::zero())
+    /// Los dígitos fraccionarios de un destino numérico.
+    fn target_scale(&self, op: &Operand) -> u8 {
+        if let Some((key, idx)) = self.resolve(op) {
+            if let Some(Cell::Num(arr)) = self.fields.get(&key) {
+                if let Some(n) = arr.get(idx) {
+                    return n.picture().fraction_digits;
+                }
             }
-            None => Decimal::zero(),
         }
-    }
-
-    /// Los dígitos fraccionarios de un campo numérico destino.
-    fn target_scale(&self, name: &str) -> u8 {
-        match self.fields.get(&name.to_uppercase()) {
-            Some(Cell::Num(n)) => n.picture().fraction_digits,
-            _ => 4,
-        }
+        4
     }
 
     /// El número de repeticiones de un `PERFORM ... TIMES`.

@@ -20,6 +20,8 @@ pub(crate) struct Field {
     pub kind: FieldKind,
     /// Valor inicial normalizado (de la cláusula `VALUE`).
     pub init: String,
+    /// Si es una tabla (`OCCURS n`), su número de elementos.
+    pub occurs: Option<u32>,
 }
 
 /// Los campos del programa y sus nombres de condición, indexados.
@@ -40,6 +42,7 @@ impl Symbols {
                 ident: sanitize_ident(&f.name),
                 kind: f.kind,
                 init: f.init.clone(),
+                occurs: f.occurs,
             })
             .collect();
         dedup_idents(&mut fields);

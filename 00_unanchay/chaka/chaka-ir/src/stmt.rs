@@ -57,10 +57,11 @@ fn parse_one_stmt(c: &mut Cursor, stops: &[&str]) -> Stmt {
 
 // ── Listas ────────────────────────────────────────────────────────
 
-/// Lee una lista de nombres de dato (separados por comas opcionales),
-/// hasta una palabra frontera. Consume las apariciones de `ROUNDED`.
-fn parse_name_list(c: &mut Cursor, rounded: &mut bool) -> Vec<String> {
-    let mut names = Vec::new();
+/// Lee una lista de destinos de dato (separados por comas opcionales),
+/// hasta una palabra frontera. Cada destino puede llevar subíndice de
+/// tabla. Consume las apariciones de `ROUNDED`.
+fn parse_targets(c: &mut Cursor, rounded: &mut bool) -> Vec<Operand> {
+    let mut targets = Vec::new();
     loop {
         c.eat_sym(",");
         if c.eat_word("ROUNDED") {
@@ -68,14 +69,11 @@ fn parse_name_list(c: &mut Cursor, rounded: &mut bool) -> Vec<String> {
             continue;
         }
         match c.peek_word() {
-            Some(w) if !is_boundary(&w) => {
-                c.bump();
-                names.push(w);
-            }
+            Some(w) if !is_boundary(&w) => targets.push(parse_operand(c)),
             _ => break,
         }
     }
-    names
+    targets
 }
 
 /// Lee una lista de operandos hasta una palabra frontera.
@@ -137,7 +135,7 @@ fn parse_move(c: &mut Cursor) -> Stmt {
     let from = parse_operand(c);
     c.eat_word("TO");
     let mut rounded = false;
-    let to = parse_name_list(c, &mut rounded);
+    let to = parse_targets(c, &mut rounded);
     Stmt::Move { from, to }
 }
 
@@ -150,7 +148,11 @@ fn parse_display(c: &mut Cursor) -> Stmt {
 
 fn parse_accept(c: &mut Cursor) -> Stmt {
     c.bump(); // ACCEPT
-    let into = parse_one_name(c).unwrap_or_default();
+    let into = if c.peek_word().map(|w| !is_boundary(&w)).unwrap_or(false) {
+        parse_operand(c)
+    } else {
+        Operand::Data(String::new())
+    };
     skip_to_stmt_boundary(c); // p. ej. `FROM DATE`
     Stmt::Accept { into }
 }
@@ -158,7 +160,7 @@ fn parse_accept(c: &mut Cursor) -> Stmt {
 fn parse_compute(c: &mut Cursor) -> Stmt {
     c.bump(); // COMPUTE
     let mut rounded = false;
-    let targets = parse_name_list(c, &mut rounded);
+    let targets = parse_targets(c, &mut rounded);
     if !c.eat_sym("=") {
         c.eat_word("EQUAL");
     }
@@ -180,10 +182,10 @@ fn parse_add(c: &mut Cursor) -> Stmt {
     let mut to = Vec::new();
     let mut giving = Vec::new();
     if c.eat_word("TO") {
-        to = parse_name_list(c, &mut rounded);
+        to = parse_targets(c, &mut rounded);
     }
     if c.eat_word("GIVING") {
-        giving = parse_name_list(c, &mut rounded);
+        giving = parse_targets(c, &mut rounded);
     }
     c.eat_word("END-ADD");
     Stmt::Add {
@@ -203,10 +205,10 @@ fn parse_subtract(c: &mut Cursor) -> Stmt {
     let mut from = Vec::new();
     let mut giving = Vec::new();
     if c.eat_word("FROM") {
-        from = parse_name_list(c, &mut rounded);
+        from = parse_targets(c, &mut rounded);
     }
     if c.eat_word("GIVING") {
-        giving = parse_name_list(c, &mut rounded);
+        giving = parse_targets(c, &mut rounded);
     }
     c.eat_word("END-SUBTRACT");
     Stmt::Subtract {
@@ -225,7 +227,7 @@ fn parse_multiply(c: &mut Cursor) -> Stmt {
     let mut rounded = false;
     let mut giving = Vec::new();
     if c.eat_word("GIVING") {
-        giving = parse_name_list(c, &mut rounded);
+        giving = parse_targets(c, &mut rounded);
     } else if c.eat_word("ROUNDED") {
         rounded = true;
     }
@@ -251,12 +253,12 @@ fn parse_divide(c: &mut Cursor) -> Stmt {
     let mut rounded = false;
     let mut giving = Vec::new();
     if c.eat_word("GIVING") {
-        giving = parse_name_list(c, &mut rounded);
+        giving = parse_targets(c, &mut rounded);
     } else if c.eat_word("ROUNDED") {
         rounded = true;
     }
     if c.eat_word("REMAINDER") {
-        let _ = parse_name_list(c, &mut rounded);
+        let _ = parse_targets(c, &mut rounded);
     }
     c.eat_word("END-DIVIDE");
     Stmt::Divide {

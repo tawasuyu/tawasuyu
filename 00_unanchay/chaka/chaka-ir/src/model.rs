@@ -28,6 +28,9 @@ pub struct Field {
     pub kind: FieldKind,
     /// Valor inicial ya normalizado (de la cláusula `VALUE`).
     pub init: String,
+    /// Si es una tabla (`OCCURS n`), su número de elementos; `None`
+    /// para un dato escalar.
+    pub occurs: Option<u32>,
 }
 
 /// Un nombre de condición — un dato de nivel 88. `IF <name>` equivale
@@ -104,6 +107,7 @@ fn walk(items: &[DataItem], model: &mut DataModel) {
                     name: it.name.to_uppercase(),
                     kind,
                     init,
+                    occurs: it.occurs,
                 });
             }
         }

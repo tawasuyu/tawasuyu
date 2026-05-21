@@ -93,7 +93,7 @@ mod tests {
             b,
             vec![Stmt::Move {
                 from: Operand::Num("5".into()),
-                to: vec!["WS-X".into()],
+                to: vec![Operand::Data("WS-X".into())],
             }]
         );
     }
@@ -105,9 +105,25 @@ mod tests {
             b,
             vec![Stmt::Move {
                 from: Operand::Data("WS-A".into()),
-                to: vec!["WS-B".into(), "WS-C".into()],
+                to: vec![Operand::Data("WS-B".into()), Operand::Data("WS-C".into()),],
             }]
         );
+    }
+
+    #[test]
+    fn indexed_operand_parses_subscript() {
+        // `WS-ELEM(WS-I)` — un destino con subíndice de tabla.
+        let b = body("MOVE 7 TO WS-ELEM(WS-I).");
+        match &b[0] {
+            Stmt::Move { to, .. } => match &to[0] {
+                Operand::Indexed { name, index } => {
+                    assert_eq!(name, "WS-ELEM");
+                    assert_eq!(**index, Operand::Data("WS-I".into()));
+                }
+                other => panic!("se esperaba Indexed, vino {other:?}"),
+            },
+            other => panic!("se esperaba MOVE, vino {other:?}"),
+        }
     }
 
     #[test]
@@ -130,7 +146,7 @@ mod tests {
         let b = body("COMPUTE WS-T = WS-A + WS-B * 2.");
         let expr = match &b[0] {
             Stmt::Compute { targets, expr, .. } => {
-                assert_eq!(targets, &vec!["WS-T".to_string()]);
+                assert_eq!(targets, &vec![Operand::Data("WS-T".into())]);
                 expr.clone()
             }
             other => panic!("se esperaba COMPUTE, vino {other:?}"),
@@ -162,7 +178,7 @@ mod tests {
             body("ADD 1 TO WS-CT."),
             vec![Stmt::Add {
                 addends: vec![Operand::Num("1".into())],
-                to: vec!["WS-CT".into()],
+                to: vec![Operand::Data("WS-CT".into())],
                 giving: vec![],
                 rounded: false,
             }]
@@ -172,7 +188,7 @@ mod tests {
             vec![Stmt::Add {
                 addends: vec![Operand::Data("WS-A".into()), Operand::Data("WS-B".into()),],
                 to: vec![],
-                giving: vec!["WS-C".into()],
+                giving: vec![Operand::Data("WS-C".into())],
                 rounded: false,
             }]
         );
@@ -184,8 +200,8 @@ mod tests {
             body("SUBTRACT WS-TAX FROM WS-GROSS GIVING WS-NET."),
             vec![Stmt::Subtract {
                 amounts: vec![Operand::Data("WS-TAX".into())],
-                from: vec!["WS-GROSS".into()],
-                giving: vec!["WS-NET".into()],
+                from: vec![Operand::Data("WS-GROSS".into())],
+                giving: vec![Operand::Data("WS-NET".into())],
                 rounded: false,
             }]
         );

@@ -41,6 +41,33 @@ pub(crate) fn figurative_fill(f: Figurative) -> char {
     }
 }
 
+/// La referencia Rust a un campo (un dato escalar `self.x` o un
+/// elemento de tabla `self.x[idx]`) y el tipo del campo. `None` si el
+/// operando no es una referencia a dato.
+pub(crate) fn field_ref(sym: &Symbols, op: &Operand) -> Option<(String, FieldKind)> {
+    match op {
+        Operand::Data(name) => sym
+            .lookup(name)
+            .map(|f| (format!("self.{}", f.ident), f.kind)),
+        Operand::Indexed { name, index } => sym.lookup(name).map(|f| {
+            (
+                format!("self.{}[{}]", f.ident, subscript(sym, index)),
+                f.kind,
+            )
+        }),
+        _ => None,
+    }
+}
+
+/// Un subíndice de tabla como expresión `usize`. COBOL es 1-based;
+/// Rust 0-based — de ahí el `saturating_sub(1)`.
+fn subscript(sym: &Symbols, index: &Operand) -> String {
+    format!(
+        "(({}).rescale(0, Rounding::Truncate).mantissa() as usize).saturating_sub(1)",
+        operand_decimal(sym, index)
+    )
+}
+
 /// Un operando como expresión de tipo `Decimal`.
 pub(crate) fn operand_decimal(sym: &Symbols, op: &Operand) -> String {
     match op {
@@ -50,15 +77,12 @@ pub(crate) fn operand_decimal(sym: &Symbols, op: &Operand) -> String {
             rust_str(s)
         ),
         Operand::Figurative(_) => "Decimal::zero()".to_string(),
-        Operand::Data(name) => match sym.lookup(name) {
-            Some(f) => match f.kind {
-                FieldKind::Num { .. } => format!("self.{}.value()", f.ident),
-                FieldKind::Text { .. } => format!(
-                    "Decimal::parse(self.{}.display().trim()).unwrap_or_else(|_| Decimal::zero())",
-                    f.ident
-                ),
-            },
-            None => format!("Decimal::zero() /* charka: dato no resuelto {name} */"),
+        Operand::Data(_) | Operand::Indexed { .. } => match field_ref(sym, op) {
+            Some((lref, FieldKind::Num { .. })) => format!("{lref}.value()"),
+            Some((lref, FieldKind::Text { .. })) => format!(
+                "Decimal::parse({lref}.display().trim()).unwrap_or_else(|_| Decimal::zero())"
+            ),
+            None => "Decimal::zero() /* charka: dato no resuelto */".to_string(),
         },
     }
 }
@@ -69,9 +93,9 @@ pub(crate) fn operand_str(sym: &Symbols, op: &Operand) -> String {
         Operand::Str(s) => rust_str(s),
         Operand::Num(n) => rust_str(n),
         Operand::Figurative(f) => rust_str(figurative_text(*f)),
-        Operand::Data(name) => match sym.lookup(name) {
-            Some(f) => format!("self.{}.display().as_str()", f.ident),
-            None => format!("\"\" /* charka: dato no resuelto {name} */"),
+        Operand::Data(_) | Operand::Indexed { .. } => match field_ref(sym, op) {
+            Some((lref, _)) => format!("{lref}.display().as_str()"),
+            None => "\"\" /* charka: dato no resuelto */".to_string(),
         },
     }
 }
@@ -82,9 +106,9 @@ pub(crate) fn operand_display(sym: &Symbols, op: &Operand) -> String {
         Operand::Str(s) => rust_str(s),
         Operand::Num(n) => rust_str(n),
         Operand::Figurative(f) => rust_str(figurative_text(*f)),
-        Operand::Data(name) => match sym.lookup(name) {
-            Some(f) => format!("self.{}.display()", f.ident),
-            None => format!("\"\" /* charka: dato no resuelto {name} */"),
+        Operand::Data(_) | Operand::Indexed { .. } => match field_ref(sym, op) {
+            Some((lref, _)) => format!("{lref}.display()"),
+            None => "\"\" /* charka: dato no resuelto */".to_string(),
         },
     }
 }
@@ -171,8 +195,8 @@ fn emit_compare(sym: &Symbols, lhs: &Operand, op: CmpOp, rhs: &Operand) -> Strin
 fn is_text_operand(sym: &Symbols, op: &Operand) -> bool {
     match op {
         Operand::Str(_) => true,
-        Operand::Data(name) => matches!(
-            sym.lookup(name).map(|f| &f.kind),
+        Operand::Data(_) | Operand::Indexed { .. } => matches!(
+            field_ref(sym, op).map(|(_, k)| k),
             Some(FieldKind::Text { .. })
         ),
         _ => false,

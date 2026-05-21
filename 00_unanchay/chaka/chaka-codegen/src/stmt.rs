@@ -5,7 +5,7 @@ use charka_ir::{CmpOp, Cond, Operand, Perform, PerformControl, PerformTarget, St
 
 use crate::emit::Emitter;
 use crate::expr::{
-    emit_cond, emit_expr, figurative_fill, operand_decimal, operand_display, operand_str,
+    emit_cond, emit_expr, field_ref, figurative_fill, operand_decimal, operand_display, operand_str,
 };
 use crate::sym::{paragraph_method, FieldKind, Symbols};
 
@@ -14,10 +14,8 @@ pub(crate) fn emit_stmt(em: &mut Emitter, sym: &Symbols, stmt: &Stmt) {
     match stmt {
         Stmt::Move { from, to } => emit_move(em, sym, from, to),
         Stmt::Display { items } => emit_display(em, sym, items),
-        Stmt::Accept { into } => {
-            em.line(&format!(
-                "// charka: ACCEPT {into} — entrada interactiva no soportada en v1"
-            ));
+        Stmt::Accept { .. } => {
+            em.line("// charka: ACCEPT — entrada interactiva no soportada en v1");
         }
         Stmt::Compute {
             targets,
@@ -101,53 +99,35 @@ fn emit_block(em: &mut Emitter, sym: &Symbols, stmts: &[Stmt]) {
     }
 }
 
-/// Almacena un valor `Decimal` (texto de expresión) en un campo.
-fn emit_store(em: &mut Emitter, sym: &Symbols, name: &str, value: &str, rounded: bool) {
-    match sym.lookup(name) {
-        Some(f) => match f.kind {
-            FieldKind::Num { .. } => {
-                let method = if rounded { "store_rounded" } else { "store" };
-                em.line(&format!("self.{}.{method}({value});", f.ident));
-            }
-            FieldKind::Text { .. } => {
-                em.line(&format!(
-                    "self.{}.store(({value}).to_string().as_str());",
-                    f.ident
-                ));
-            }
-        },
-        None => em.line(&format!("// charka: destino no resuelto — {name}")),
+/// Almacena un valor `Decimal` (texto de expresión) en un destino —
+/// un dato escalar o un elemento de tabla.
+fn emit_store(em: &mut Emitter, sym: &Symbols, target: &Operand, value: &str, rounded: bool) {
+    match field_ref(sym, target) {
+        Some((lref, FieldKind::Num { .. })) => {
+            let method = if rounded { "store_rounded" } else { "store" };
+            em.line(&format!("{lref}.{method}({value});"));
+        }
+        Some((lref, FieldKind::Text { .. })) => {
+            em.line(&format!("{lref}.store(({value}).to_string().as_str());"));
+        }
+        None => em.line("// charka: destino no resuelto"),
     }
 }
 
-fn emit_move(em: &mut Emitter, sym: &Symbols, from: &Operand, to: &[String]) {
+fn emit_move(em: &mut Emitter, sym: &Symbols, from: &Operand, to: &[Operand]) {
     for t in to {
-        match sym.lookup(t) {
-            Some(f) => match f.kind {
-                FieldKind::Num { .. } => {
-                    em.line(&format!(
-                        "self.{}.store({});",
-                        f.ident,
-                        operand_decimal(sym, from)
-                    ));
+        match field_ref(sym, t) {
+            Some((lref, FieldKind::Num { .. })) => {
+                em.line(&format!("{lref}.store({});", operand_decimal(sym, from)));
+            }
+            Some((lref, FieldKind::Text { .. })) => {
+                if let Operand::Figurative(fig) = from {
+                    em.line(&format!("{lref}.fill('{}');", figurative_fill(*fig)));
+                } else {
+                    em.line(&format!("{lref}.store({});", operand_str(sym, from)));
                 }
-                FieldKind::Text { .. } => {
-                    if let Operand::Figurative(fig) = from {
-                        em.line(&format!(
-                            "self.{}.fill('{}');",
-                            f.ident,
-                            figurative_fill(*fig)
-                        ));
-                    } else {
-                        em.line(&format!(
-                            "self.{}.store({});",
-                            f.ident,
-                            operand_str(sym, from)
-                        ));
-                    }
-                }
-            },
-            None => em.line(&format!("// charka: destino MOVE no resuelto — {t}")),
+            }
+            None => em.line("// charka: destino MOVE no resuelto"),
         }
     }
 }
@@ -182,17 +162,14 @@ fn emit_add(
     em: &mut Emitter,
     sym: &Symbols,
     addends: &[Operand],
-    to: &[String],
-    giving: &[String],
+    to: &[Operand],
+    giving: &[Operand],
     rounded: bool,
 ) {
     let sum = fold_sum(sym, addends);
     if !giving.is_empty() {
         let base = match to.first() {
-            Some(first) => format!(
-                "({sum}).add(&({}))",
-                operand_decimal(sym, &Operand::Data(first.clone()))
-            ),
+            Some(first) => format!("({sum}).add(&({}))", operand_decimal(sym, first)),
             None => sum,
         };
         for g in giving {
@@ -209,15 +186,15 @@ fn emit_subtract(
     em: &mut Emitter,
     sym: &Symbols,
     amounts: &[Operand],
-    from: &[String],
-    giving: &[String],
+    from: &[Operand],
+    giving: &[Operand],
     rounded: bool,
 ) {
     let sum = fold_sum(sym, amounts);
     if !giving.is_empty() {
         let minuend = from
             .first()
-            .map(|f| operand_decimal(sym, &Operand::Data(f.clone())))
+            .map(|f| operand_decimal(sym, f))
             .unwrap_or_else(|| "Decimal::zero()".to_string());
         let value = format!("({minuend}).sub(&({sum}))");
         for g in giving {
@@ -235,20 +212,18 @@ fn emit_multiply(
     sym: &Symbols,
     left: &Operand,
     by: &Operand,
-    giving: &[String],
+    giving: &[Operand],
     rounded: bool,
 ) {
     let l = operand_decimal(sym, left);
-    if !giving.is_empty() {
+    if giving.is_empty() {
+        // `MULTIPLY a BY b` sin GIVING: b queda con a*b.
+        emit_inplace(em, sym, by, "mul", &l, rounded);
+    } else {
         let value = format!("({l}).mul(&({}))", operand_decimal(sym, by));
         for g in giving {
             emit_store(em, sym, g, &value, rounded);
         }
-    } else if let Operand::Data(name) = by {
-        // `MULTIPLY a BY b` sin GIVING: b queda con a*b.
-        emit_inplace(em, sym, name, "mul", &l, rounded);
-    } else {
-        em.line("// charka: MULTIPLY sin destino claro");
     }
 }
 
@@ -258,7 +233,7 @@ fn emit_divide(
     left: &Operand,
     right: &Operand,
     by_form: bool,
-    giving: &[String],
+    giving: &[Operand],
     rounded: bool,
 ) {
     // `a BY b` → a/b; `a INTO b` → b/a.
@@ -267,47 +242,46 @@ fn emit_divide(
     } else {
         (operand_decimal(sym, right), operand_decimal(sym, left))
     };
-    if !giving.is_empty() {
+    let div = |scale: u8| {
+        format!(
+            "({num}).div(&({den}), {scale}, Rounding::Truncate).unwrap_or_else(|_| Decimal::zero())"
+        )
+    };
+    if giving.is_empty() {
+        // `DIVIDE a INTO b` sin GIVING: b queda con b/a.
+        let value = div(target_scale(sym, right));
+        emit_store(em, sym, right, &value, rounded);
+    } else {
         for g in giving {
-            let value = format!(
-                "({num}).div(&({den}), {}, Rounding::Truncate).unwrap_or_else(|_| Decimal::zero())",
-                target_scale(sym, g)
-            );
+            let value = div(target_scale(sym, g));
             emit_store(em, sym, g, &value, rounded);
         }
-    } else if let Operand::Data(name) = right {
-        // `DIVIDE a INTO b` sin GIVING: b queda con b/a.
-        let value = format!(
-            "({num}).div(&({den}), {}, Rounding::Truncate).unwrap_or_else(|_| Decimal::zero())",
-            target_scale(sym, name)
-        );
-        emit_store(em, sym, name, &value, rounded);
-    } else {
-        em.line("// charka: DIVIDE sin destino claro");
     }
 }
 
-/// Emite una operación aritmética en el lugar: `t = t <op> rhs`.
-fn emit_inplace(em: &mut Emitter, sym: &Symbols, name: &str, op: &str, rhs: &str, rounded: bool) {
-    match sym.lookup(name) {
-        Some(f) if matches!(f.kind, FieldKind::Num { .. }) => {
+/// Emite una operación aritmética en el lugar: `target = target <op> rhs`.
+fn emit_inplace(
+    em: &mut Emitter,
+    sym: &Symbols,
+    target: &Operand,
+    op: &str,
+    rhs: &str,
+    rounded: bool,
+) {
+    match field_ref(sym, target) {
+        Some((lref, FieldKind::Num { .. })) => {
             let method = if rounded { "store_rounded" } else { "store" };
-            em.line(&format!(
-                "self.{0}.{method}(self.{0}.value().{op}(&({rhs})));",
-                f.ident
-            ));
+            em.line(&format!("{lref}.{method}({lref}.value().{op}(&({rhs})));"));
         }
-        _ => em.line(&format!(
-            "// charka: destino aritmético no resuelto — {name}"
-        )),
+        _ => em.line("// charka: destino aritmético no resuelto"),
     }
 }
 
 /// La escala de redondeo de un destino numérico (sus dígitos
 /// fraccionarios), o 4 por defecto.
-fn target_scale(sym: &Symbols, name: &str) -> u8 {
-    match sym.lookup(name).map(|f| &f.kind) {
-        Some(FieldKind::Num { frac, .. }) => *frac,
+fn target_scale(sym: &Symbols, op: &Operand) -> u8 {
+    match field_ref(sym, op).map(|(_, k)| k) {
+        Some(FieldKind::Num { frac, .. }) => frac,
         _ => 4,
     }
 }
@@ -438,11 +412,12 @@ fn emit_perform(em: &mut Emitter, sym: &Symbols, p: &Perform) {
             until,
         } => {
             // var = from; mientras no se cumpla `until`: cuerpo; var += by.
-            emit_store(em, sym, var, &operand_decimal(sym, from), false);
+            let var_op = Operand::Data(var.clone());
+            emit_store(em, sym, &var_op, &operand_decimal(sym, from), false);
             em.line(&format!("while !({}) {{", emit_cond(sym, until)));
             em.indent();
             emit_body(em, sym);
-            emit_inplace(em, sym, var, "add", &operand_decimal(sym, by), false);
+            emit_inplace(em, sym, &var_op, "add", &operand_decimal(sym, by), false);
             em.dedent();
             em.line("}");
         }
