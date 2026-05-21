@@ -391,7 +391,9 @@ impl<'a> Machine<'a> {
     /// él termina esa pasada, no el programa.
     fn run_target(&mut self, target: &'a PerformTarget) -> Flow {
         let flow = match target {
-            PerformTarget::Paragraph { name, .. } => self.run_paragraph(name),
+            PerformTarget::Paragraph { name, thru } => {
+                self.run_paragraph_range(name, thru.as_deref())
+            }
             PerformTarget::Inline(body) => self.exec_block(body),
         };
         match flow {
@@ -409,6 +411,34 @@ impl<'a> Machine<'a> {
             Flow::Stop => Flow::Stop,
             _ => Flow::Normal,
         }
+    }
+
+    /// Ejecuta el rango de párrafos de `name` a `thru` inclusive (el
+    /// `PERFORM name THRU thru`); sólo `name` si `thru` es `None`.
+    fn run_paragraph_range(&mut self, name: &str, thru: Option<&str>) -> Flow {
+        let Some(&start) = self.para_index.get(&name.to_uppercase()) else {
+            return Flow::Normal;
+        };
+        let end = match thru {
+            Some(t) => self
+                .para_index
+                .get(&t.to_uppercase())
+                .copied()
+                .unwrap_or(start),
+            None => start,
+        };
+        let (lo, hi) = if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        };
+        let ir = self.ir;
+        for i in lo..=hi {
+            if let Flow::Stop = self.exec_block(&ir.procedures[i].body) {
+                return Flow::Stop;
+            }
+        }
+        Flow::Normal
     }
 
     /// Resuelve una referencia a dato (escalar o elemento de tabla) a

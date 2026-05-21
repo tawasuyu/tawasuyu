@@ -28,18 +28,16 @@ mod expr;
 mod stmt;
 mod sym;
 
-use std::collections::HashMap;
-
-use charka_ir::{Ir, Procedure};
+use charka_ir::Ir;
 
 use emit::Emitter;
 use expr::rust_str;
 use stmt::emit_stmt;
-use sym::{paragraph_method, Field, FieldKind, Symbols};
+use sym::{Field, FieldKind, Symbols};
 
 /// Transpila un [`Ir`] a un fuente Rust completo (un `main.rs`).
 pub fn generate(ir: &Ir) -> String {
-    let sym = Symbols::build(&ir.model);
+    let sym = Symbols::build(ir);
     let mut em = Emitter::new();
     emit_header(&mut em);
     emit_struct(&mut em, &sym);
@@ -107,10 +105,9 @@ fn emit_impl(em: &mut Emitter, sym: &Symbols, ir: &Ir) {
     em.line("}");
     em.blank();
 
-    // Un método por párrafo.
-    let methods = paragraph_methods(ir);
-    for (name, proc) in &methods {
-        em.line(&format!("fn {name}(&mut self) {{"));
+    // Un método por párrafo (en paralelo con `sym.paragraphs`).
+    for (i, proc) in ir.procedures.iter().enumerate() {
+        em.line(&format!("fn {}(&mut self) {{", sym.paragraphs[i].1));
         em.indent();
         for s in &proc.body {
             emit_stmt(em, sym, s);
@@ -123,11 +120,11 @@ fn emit_impl(em: &mut Emitter, sym: &Symbols, ir: &Ir) {
     // run() — encadena los párrafos en orden.
     em.line("fn run(&mut self) {");
     em.indent();
-    if methods.is_empty() {
+    if sym.paragraphs.is_empty() {
         em.line("// programa sin PROCEDURE division");
     }
-    for (name, _) in &methods {
-        em.line(&format!("self.{name}();"));
+    for (_, method) in &sym.paragraphs {
+        em.line(&format!("self.{method}();"));
     }
     em.dedent();
     em.line("}");
@@ -163,20 +160,6 @@ fn field_init(f: &Field) -> String {
         None => scalar,
         Some(n) => format!("vec![{scalar}; {n}]"),
     }
-}
-
-/// Asigna a cada párrafo un nombre de método único.
-fn paragraph_methods(ir: &Ir) -> Vec<(String, &Procedure)> {
-    let mut seen: HashMap<String, u32> = HashMap::new();
-    let mut out = Vec::new();
-    for proc in &ir.procedures {
-        let base = paragraph_method(&proc.name);
-        let n = seen.entry(base.clone()).or_insert(0);
-        let name = if *n > 0 { format!("{base}_{n}") } else { base };
-        *n += 1;
-        out.push((name, proc));
-    }
-    out
 }
 
 #[cfg(test)]
@@ -437,6 +420,22 @@ mod tests {
              MAIN.\n\
                  SET LISTO TO TRUE.\n");
         assert!(out.contains("self.ws_f.store(\"S\");"));
+    }
+
+    #[test]
+    fn perform_thru_calls_the_paragraph_range() {
+        let out = gen("PROCEDURE DIVISION.\n\
+             MAIN.\n\
+                 PERFORM A THRU C.\n\
+             A.\n\
+                 DISPLAY 'A'.\n\
+             B.\n\
+                 DISPLAY 'B'.\n\
+             C.\n\
+                 DISPLAY 'C'.\n");
+        // `PERFORM A THRU C` emite la llamada a p_b dentro de p_main,
+        // además de la que hace run() — de ahí >= 2 apariciones.
+        assert!(out.matches("self.p_b();").count() >= 2);
     }
 
     #[test]

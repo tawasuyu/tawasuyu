@@ -543,11 +543,9 @@ fn emit_perform(em: &mut Emitter, sym: &Symbols, p: &Perform) {
     // Emite el "cuerpo": la llamada al párrafo o el bloque en línea.
     let emit_body = |em: &mut Emitter, sym: &Symbols| match &p.target {
         PerformTarget::Paragraph { name, thru } => {
-            let note = thru
-                .as_ref()
-                .map(|t| format!(" // charka: THRU {t} — rango no soportado"))
-                .unwrap_or_default();
-            em.line(&format!("self.{}();{note}", paragraph_method(name)));
+            for m in sym.paragraph_range(name, thru.as_deref()) {
+                em.line(&format!("self.{m}();"));
+            }
         }
         PerformTarget::Inline(body) => emit_block(em, sym, body),
     };

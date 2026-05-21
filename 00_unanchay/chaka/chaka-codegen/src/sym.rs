@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use charka_ir::{ConditionName, DataModel};
+use charka_ir::{ConditionName, Ir};
 
 /// El tipo de campo lo aporta `charka-ir`; se reexporta para que el
 /// resto del crate lo nombre como `crate::sym::FieldKind`.
@@ -24,17 +24,21 @@ pub(crate) struct Field {
     pub occurs: Option<u32>,
 }
 
-/// Los campos del programa, sus nombres de condición y sus grupos.
+/// Los campos del programa, sus nombres de condición, sus grupos y
+/// sus párrafos.
 pub(crate) struct Symbols {
     pub fields: Vec<Field>,
     by_name: HashMap<String, usize>,
     conditions: HashMap<String, ConditionName>,
     groups: HashMap<String, Vec<String>>,
+    /// Los párrafos en orden: `(nombre COBOL, nombre de método Rust)`.
+    pub paragraphs: Vec<(String, String)>,
 }
 
 impl Symbols {
-    /// Construye la tabla desde el modelo de datos resuelto.
-    pub(crate) fn build(model: &DataModel) -> Self {
+    /// Construye la tabla desde el IR (su modelo de datos y párrafos).
+    pub(crate) fn build(ir: &Ir) -> Self {
+        let model = &ir.model;
         let mut fields: Vec<Field> = model
             .fields
             .iter()
@@ -62,12 +66,54 @@ impl Symbols {
             .iter()
             .map(|g| (g.name.clone(), g.members.clone()))
             .collect();
+        // Párrafos en orden, con su nombre de método único.
+        let mut seen: HashMap<String, u32> = HashMap::new();
+        let paragraphs = ir
+            .procedures
+            .iter()
+            .map(|proc| {
+                let base = paragraph_method(&proc.name);
+                let n = seen.entry(base.clone()).or_insert(0);
+                let method = if *n > 0 { format!("{base}_{n}") } else { base };
+                *n += 1;
+                (proc.name.to_uppercase(), method)
+            })
+            .collect();
         Self {
             fields,
             by_name,
             conditions,
             groups,
+            paragraphs,
         }
+    }
+
+    /// Los métodos a llamar para un `PERFORM name [THRU thru]`: el
+    /// rango de párrafos desde `name` hasta `thru` inclusive.
+    pub(crate) fn paragraph_range(&self, name: &str, thru: Option<&str>) -> Vec<String> {
+        let up = name.to_uppercase();
+        let Some(start) = self.paragraphs.iter().position(|(c, _)| *c == up) else {
+            return vec![paragraph_method(name)];
+        };
+        let end = match thru {
+            Some(t) => {
+                let tu = t.to_uppercase();
+                self.paragraphs
+                    .iter()
+                    .position(|(c, _)| *c == tu)
+                    .unwrap_or(start)
+            }
+            None => start,
+        };
+        let (lo, hi) = if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        };
+        self.paragraphs[lo..=hi]
+            .iter()
+            .map(|(_, m)| m.clone())
+            .collect()
     }
 
     /// Los miembros de un grupo, si `name` es un grupo.
