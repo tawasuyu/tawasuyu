@@ -161,39 +161,48 @@ impl DrmState {
     }
 
     /// Procesa un evento de `libinput` — por ahora, sólo el teclado.
+    /// Va instrumentado: registra los dispositivos que encuentra y cada
+    /// tecla, para diagnosticar la entrada sin el hardware delante.
     fn handle_input(&mut self, event: InputEvent<LibinputInputBackend>) {
-        let InputEvent::Keyboard { event } = event else {
-            return; // puntero/táctil: pendiente
-        };
-        let Some(keyboard) = self.app.keyboard.clone() else {
-            return;
-        };
-        let code = event.key_code();
-        let key_state = event.state();
-        let pressed = key_state == KeyState::Pressed;
-        let time = self.start.elapsed().as_millis() as u32;
-        keyboard.input::<(), _>(
-            &mut self.app,
-            code,
-            key_state,
-            SERIAL_COUNTER.next_serial(),
-            time,
-            |st, mods, handle| {
-                if !pressed {
-                    return FilterResult::Forward;
+        match event {
+            InputEvent::DeviceAdded { device } => {
+                eprintln!("input · dispositivo detectado: «{}»", device.name());
+            }
+            InputEvent::Keyboard { event } => {
+                let Some(keyboard) = self.app.keyboard.clone() else {
+                    eprintln!("input · ¡sin teclado en el seat!");
+                    return;
+                };
+                let code = event.key_code();
+                let key_state = event.state();
+                let pressed = key_state == KeyState::Pressed;
+                let time = self.start.elapsed().as_millis() as u32;
+                keyboard.input::<(), _>(
+                    &mut self.app,
+                    code,
+                    key_state,
+                    SERIAL_COUNTER.next_serial(),
+                    time,
+                    |st, mods, handle| {
+                        if !pressed {
+                            return FilterResult::Forward;
+                        }
+                        let combo = combo_string(mods, handle.modified_sym());
+                        let grabbed = combo.as_ref().is_some_and(|c| st.grabs.contains(c));
+                        eprintln!("input · tecla {code:?} → combo {combo:?} · atajo={grabbed}");
+                        if grabbed {
+                            st.pending_keybind = combo;
+                            return FilterResult::Intercept(());
+                        }
+                        FilterResult::Forward
+                    },
+                );
+                if let Some(combo) = self.app.pending_keybind.take() {
+                    let ev = self.app.body.keybind(combo);
+                    self.app.brain_feed(ev);
                 }
-                if let Some(combo) = combo_string(mods, handle.modified_sym()) {
-                    if st.grabs.contains(&combo) {
-                        st.pending_keybind = Some(combo);
-                        return FilterResult::Intercept(());
-                    }
-                }
-                FilterResult::Forward
-            },
-        );
-        if let Some(combo) = self.app.pending_keybind.take() {
-            let ev = self.app.body.keybind(combo);
-            self.app.brain_feed(ev);
+            }
+            _ => {} // puntero/táctil: pendiente
         }
     }
 }
@@ -399,10 +408,21 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         })
         .map_err(|e| format!("insert timer: {e}"))?;
 
+    // Salida garantizada mientras depuramos: se cierra solo a los N s
+    // (env `MIRADA_DRM_TIMEOUT`, 0 lo desactiva) — así nunca te quedas
+    // atrapado si el teclado aún no responde.
+    let timeout_secs: u64 = std::env::var("MIRADA_DRM_TIMEOUT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(60);
+
     println!("──────────────────────────────────────────────────");
     println!("mirada-compositor · escritorio en marcha sobre «{out_name}».");
     println!("   Lanza un cliente:  WAYLAND_DISPLAY={socket_name} foot");
-    println!("   Salir: Super+Shift+e.");
+    println!("   Salir: Super+Shift+e  ·  o Ctrl+C en esta TTY.");
+    if timeout_secs > 0 {
+        println!("   Se cerrará solo a los {timeout_secs}s (MIRADA_DRM_TIMEOUT=0 lo quita).");
+    }
 
     let mut state = DrmState {
         app,
@@ -419,7 +439,12 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let signal = event_loop.get_signal();
     event_loop
         .run(None, &mut state, |state| {
-            if !state.app.running {
+            let timed_out =
+                timeout_secs > 0 && state.start.elapsed() > Duration::from_secs(timeout_secs);
+            if !state.app.running || timed_out {
+                if timed_out {
+                    println!("mirada-compositor · tope de tiempo — cerrando.");
+                }
                 signal.stop();
             }
         })
