@@ -20,6 +20,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::input::{InputEvent, KeyState, KeyboardKeyEvent};
 use smithay::backend::renderer::element::surface::{
     render_elements_from_surface_tree, WaylandSurfaceRenderElement,
@@ -30,7 +31,7 @@ use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::utils::{
     draw_render_elements, on_commit_buffer_handler, with_renderer_surface_state,
 };
-use smithay::backend::renderer::{Color32F, Frame, Renderer};
+use smithay::backend::renderer::{Color32F, Frame, ImportDma, Renderer};
 use smithay::backend::winit::{self, WinitEvent};
 use smithay::input::keyboard::{xkb, FilterResult, KeyboardHandle, Keysym, ModifiersState};
 use smithay::input::pointer::{CursorImageStatus, CursorImageSurfaceData, PointerHandle};
@@ -47,6 +48,7 @@ use smithay::reexports::winit::platform::pump_events::PumpStatus;
 use smithay::utils::{Rectangle, SERIAL_COUNTER};
 use smithay::utils::{Serial, Transform};
 use smithay::wayland::buffer::BufferHandler;
+use smithay::wayland::dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier};
 use smithay::wayland::compositor::{
     with_states, with_surface_tree_downward, CompositorClientState, CompositorHandler,
     CompositorState, SurfaceAttributes, TraversalAction,
@@ -63,8 +65,8 @@ use smithay::wayland::shell::xdg::{
 use smithay::wayland::output::OutputHandler;
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::{
-    delegate_compositor, delegate_data_device, delegate_output, delegate_seat, delegate_shm,
-    delegate_xdg_decoration, delegate_xdg_shell,
+    delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_output, delegate_seat,
+    delegate_shm, delegate_xdg_decoration, delegate_xdg_shell,
 };
 
 use mirada_body::{BodyOp, BodyState};
@@ -133,6 +135,9 @@ struct App {
     compositor_state: CompositorState,
     xdg_shell_state: XdgShellState,
     shm_state: ShmState,
+    /// Estado de `zwp_linux_dmabuf` — deja que los clientes con GPU
+    /// (apps GPUI, navegadores acelerados) compartan búferes de vídeo.
+    dmabuf_state: DmabufState,
     seat_state: SeatState<Self>,
     data_device_state: DataDeviceState,
     seat: Seat<Self>,
@@ -340,6 +345,24 @@ impl BufferHandler for App {
     fn buffer_destroyed(&mut self, _buffer: &wl_buffer::WlBuffer) {}
 }
 
+impl DmabufHandler for App {
+    fn dmabuf_state(&mut self) -> &mut DmabufState {
+        &mut self.dmabuf_state
+    }
+
+    /// Un cliente importó un DMA-BUF. El `GlesRenderer` lo importará de
+    /// verdad al componer; aquí basta con aceptarlo — un búfer inválido
+    /// sólo dejará en blanco ese cuadro de esa ventana.
+    fn dmabuf_imported(
+        &mut self,
+        _global: &DmabufGlobal,
+        _dmabuf: Dmabuf,
+        notifier: ImportNotifier,
+    ) {
+        let _ = notifier.successful::<App>();
+    }
+}
+
 impl ShmHandler for App {
     fn shm_state(&self) -> &ShmState {
         &self.shm_state
@@ -494,6 +517,7 @@ impl OutputHandler for App {}
 delegate_compositor!(App);
 delegate_xdg_shell!(App);
 delegate_xdg_decoration!(App);
+delegate_dmabuf!(App);
 delegate_shm!(App);
 delegate_seat!(App);
 delegate_data_device!(App);
@@ -714,6 +738,19 @@ fn announce_output(
     output
 }
 
+/// Anuncia el global `zwp_linux_dmabuf` con los formatos que el
+/// `GlesRenderer` admite. Hay que llamarlo una vez creado el renderer
+/// (no antes: los formatos salen de él) — así las apps que pintan por
+/// GPU (GPUI, navegadores acelerados) pueden ser clientes del compositor.
+fn announce_dmabuf(app: &mut App, dh: &DisplayHandle, renderer: &GlesRenderer) {
+    let formats: Vec<_> = renderer.dmabuf_formats().into_iter().collect();
+    println!(
+        "mirada-compositor · dmabuf: {} formato(s) anunciado(s).",
+        formats.len()
+    );
+    app.dmabuf_state.create_global::<App>(dh, formats);
+}
+
 /// Lo que comparten los dos backends gráficos: el `Display` de Wayland,
 /// el `App` ya armado y la maquinaria de keymap y control.
 struct Setup {
@@ -767,6 +804,7 @@ fn build_app() -> Result<Setup, Box<dyn std::error::Error>> {
         compositor_state: CompositorState::new::<App>(&dh),
         xdg_shell_state: XdgShellState::new::<App>(&dh),
         shm_state: ShmState::new::<App>(&dh, Vec::new()),
+        dmabuf_state: DmabufState::new(),
         seat_state,
         data_device_state: DataDeviceState::new::<App>(&dh),
         seat,
@@ -877,6 +915,9 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
 
     let start = Instant::now();
     let mut clients = Vec::new();
+
+    // Con el renderer ya creado, anuncia dmabuf (clientes con GPU).
+    announce_dmabuf(&mut state, &display.handle(), backend.renderer());
 
     // Salida inicial = el tamaño de la ventana winit.
     let win_size = backend.window_size();

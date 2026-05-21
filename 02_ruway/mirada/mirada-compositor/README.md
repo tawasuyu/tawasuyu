@@ -169,10 +169,12 @@ En modo enlazado el socket de control lo abre el Cerebro (la app
 
 `wl_compositor`, `xdg_shell` (toplevels y popups), `wl_shm`, `wl_seat`
 (teclado, y ratón en el backend DRM), `wl_output`, `wl_data_device`
-(selección) y `xdg-decoration` — fuerza decoración del servidor y no
-dibuja ninguna, así las ventanas van sin barra de título. Composición
-con `GlesRenderer` — en `winit` sobre la ventana, en `drm` con un
-`DrmCompositor` por salida.
+(selección), `xdg-decoration` — fuerza decoración del servidor y no
+dibuja ninguna, así las ventanas van sin barra de título — y
+`zwp_linux_dmabuf`, que deja conectarse a los clientes que pintan por
+GPU (apps GPUI, navegadores acelerados). Composición con `GlesRenderer`
+— en `winit` sobre la ventana, en `drm` con un `DrmCompositor` por
+salida.
 
 Reusa `mirada-body` para la contabilidad de salidas y superficies, y
 `mirada-link` para el cable hacia un Cerebro externo. Toda la lógica

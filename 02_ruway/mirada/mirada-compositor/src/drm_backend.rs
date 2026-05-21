@@ -710,6 +710,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     // 7 · El estado Wayland (Cerebro, teclado, keymap, control).
     println!("[7/8] armando el estado Wayland …");
     let Setup { mut display, mut app, keymap_path, keymap_watch, ctl } = crate::build_app()?;
+    // Con el renderer ya creado, anuncia dmabuf — sin esto las apps que
+    // pintan por GPU (GPUI, navegadores acelerados) no pueden conectarse.
+    crate::announce_dmabuf(&mut app, &display.handle(), &renderer);
     // La salida del Cerebro = el modo del monitor.
     let ev = app.body.add_output(0, mode_w as i32, mode_h as i32);
     app.brain_feed(ev);
