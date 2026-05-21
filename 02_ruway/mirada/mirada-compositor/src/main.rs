@@ -65,6 +65,8 @@ use mirada_brain::{
 };
 use mirada_link::BodyLink;
 
+mod drm_backend;
+
 // ---------------------------------------------------------------------
 // Estado
 // ---------------------------------------------------------------------
@@ -511,7 +513,8 @@ fn load_user_rules() -> Rules {
     }
 }
 
-fn run() -> Result<(), Box<dyn std::error::Error>> {
+/// El backend `winit`: corre anidado dentro de una sesión gráfica.
+fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
     let mut display: Display<App> = Display::new()?;
     let dh = display.handle();
 
@@ -785,7 +788,29 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn main() {
-    if let Err(e) = run() {
+    let arg = std::env::args().nth(1);
+    let result = match arg.as_deref() {
+        Some("--drm") => drm_backend::run(),
+        Some("--winit") => run_winit(),
+        Some(other) => {
+            eprintln!("mirada-compositor: opción desconocida «{other}» — usa --drm o --winit");
+            std::process::exit(2);
+        }
+        None => {
+            // Auto: con sesión gráfica anfitriona → winit (anidado);
+            // sin ella (una TTY pelada) → backend DRM.
+            let nested = std::env::var_os("WAYLAND_DISPLAY").is_some()
+                || std::env::var_os("DISPLAY").is_some();
+            if nested {
+                println!("mirada-compositor · sesión gráfica detectada → backend winit.");
+                run_winit()
+            } else {
+                println!("mirada-compositor · sin sesión gráfica → backend DRM.");
+                drm_backend::run()
+            }
+        }
+    };
+    if let Err(e) = result {
         eprintln!("mirada-compositor · error: {e}");
         std::process::exit(1);
     }
