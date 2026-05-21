@@ -88,6 +88,9 @@ pub enum BodyEvent {
     Keybind(String),
     /// El puntero entró en una ventana — el Cerebro puede enfocar al pasar.
     PointerEntered { id: WindowId },
+    /// Un cliente pidió pantalla completa para su ventana (`true`), o la
+    /// soltó (`false`) — `xdg_toplevel.set_fullscreen`.
+    FullscreenRequest { id: WindowId, fullscreen: bool },
 }
 
 /// Tamaño máximo de un marco, en bytes. Acota el búfer de [`read_frame`]

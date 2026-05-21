@@ -19,7 +19,7 @@
 //! Teclas (simulación):
 //!
 //! ```text
-//!   n            abre una ventana          tab / espacio  cicla layout
+//!   n / Shift+n  abre ventana / monitor    tab / espacio  cicla layout
 //!   w            cierra la enfocada        t m g c r d s  layout directo
 //!   f / Shift+f  flota / pantalla completa h / l          área maestra −/+
 //!   j / k        foco siguiente/anterior   , / .          nmaster −/+
@@ -282,6 +282,11 @@ impl Mirada {
         let connected = self.link.is_some();
 
         match ks.key.as_str() {
+            "n" if shift && !connected => {
+                // Simulación: añade un monitor más, en fila a la derecha.
+                let id = self.desktop.outputs().len() as u32;
+                self.feed(BodyEvent::OutputAdded { id, width: SCREEN_W, height: SCREEN_H });
+            }
             "n" if !connected => self.open_window(),
             "w" => self.act(DesktopAction::CloseFocused),
             "f" if shift => self.act(DesktopAction::ToggleFullscreen),
@@ -428,13 +433,59 @@ impl Render for Mirada {
                     .child(SharedString::from(format!("foco: {focus_label}"))),
             );
 
-        // --- Lienzo: el escritorio teselado --------------------------
+        // --- Lienzo: el escritorio teselado, a escala ----------------
+        // El lienzo es de tamaño fijo; el contenido vive en el espacio
+        // global de las salidas. `scale` encaja ese espacio en el lienzo
+        // — con una sola salida, escala 1:1.
+        let outs = self.desktop.outputs();
+        let (bb_w, bb_h) = if outs.is_empty() {
+            (SCREEN_W as f32, SCREEN_H as f32)
+        } else {
+            let w = outs.iter().map(|o| o.rect.x + o.rect.w).max().unwrap_or(SCREEN_W);
+            let h = outs.iter().map(|o| o.rect.y + o.rect.h).max().unwrap_or(SCREEN_H);
+            (w as f32, h as f32)
+        };
+        let scale = (SCREEN_W as f32 / bb_w)
+            .min(SCREEN_H as f32 / bb_h)
+            .min(1.0);
+
         let mut canvas = div()
             .relative()
             .w(px(SCREEN_W as f32))
             .h(px(SCREEN_H as f32))
             .bg(canvas_bg)
             .overflow_hidden();
+
+        // Un marco por salida, con su número y el escritorio que muestra.
+        for (i, o) in outs.iter().enumerate() {
+            let is_focused_out = i == self.desktop.focused_output();
+            canvas = canvas.child(
+                div()
+                    .absolute()
+                    .left(px(o.rect.x as f32 * scale))
+                    .top(px(o.rect.y as f32 * scale))
+                    .w(px(o.rect.w as f32 * scale))
+                    .h(px(o.rect.h as f32 * scale))
+                    .border_1()
+                    .border_color(if is_focused_out {
+                        theme.accent
+                    } else {
+                        theme.border
+                    })
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(2.))
+                            .left(px(4.))
+                            .text_color(theme.fg_disabled)
+                            .child(SharedString::from(format!(
+                                "salida {} · escritorio {}",
+                                i + 1,
+                                o.workspace + 1
+                            ))),
+                    ),
+            );
+        }
 
         let visible = self.placements.iter().filter(|p| p.visible).count();
         if visible == 0 {
@@ -470,10 +521,10 @@ impl Render for Mirada {
             canvas = canvas.child(
                 div()
                     .absolute()
-                    .left(px(p.rect.x as f32))
-                    .top(px(p.rect.y as f32))
-                    .w(px(p.rect.w as f32))
-                    .h(px(p.rect.h as f32))
+                    .left(px(p.rect.x as f32 * scale))
+                    .top(px(p.rect.y as f32 * scale))
+                    .w(px(p.rect.w as f32 * scale))
+                    .h(px(p.rect.h as f32 * scale))
                     .border_2()
                     .border_color(border)
                     .bg(win_bg)

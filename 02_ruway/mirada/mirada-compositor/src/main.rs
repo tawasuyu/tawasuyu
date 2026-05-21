@@ -34,6 +34,7 @@ use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use smithay::reexports::wayland_server::protocol::wl_buffer;
+use smithay::reexports::wayland_server::protocol::wl_output;
 use smithay::reexports::wayland_server::protocol::wl_seat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, Display, ListeningSocket};
@@ -332,6 +333,32 @@ impl XdgShellHandler for App {
         });
         if let Some(ev) = self.body.retitle_surface(id, title) {
             self.brain_feed(ev);
+        }
+    }
+
+    fn fullscreen_request(
+        &mut self,
+        surface: ToplevelSurface,
+        _output: Option<wl_output::WlOutput>,
+    ) {
+        let id = self
+            .windows
+            .iter()
+            .find(|w| w.surface == *surface.wl_surface())
+            .map(|w| w.id);
+        if let Some(id) = id {
+            self.brain_feed(BodyEvent::FullscreenRequest { id, fullscreen: true });
+        }
+    }
+
+    fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
+        let id = self
+            .windows
+            .iter()
+            .find(|w| w.surface == *surface.wl_surface())
+            .map(|w| w.id);
+        if let Some(id) = id {
+            self.brain_feed(BodyEvent::FullscreenRequest { id, fullscreen: false });
         }
     }
 

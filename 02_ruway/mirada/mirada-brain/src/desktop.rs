@@ -188,6 +188,27 @@ impl Desktop {
                 Some(action) => self.apply(action),
                 None => Vec::new(),
             },
+            BodyEvent::FullscreenRequest { id, fullscreen } => {
+                // El cliente (un reproductor, un juego) pidió pantalla
+                // completa: la fijamos en el escritorio que tiene la ventana.
+                let mut changed = false;
+                for ws in &mut self.workspaces {
+                    if ws.windows().contains(&id) {
+                        if fullscreen {
+                            ws.set_fullscreen(Some(id));
+                        } else if ws.fullscreen() == Some(id) {
+                            ws.set_fullscreen(None);
+                        }
+                        changed = true;
+                        break;
+                    }
+                }
+                if changed {
+                    self.relayout()
+                } else {
+                    Vec::new()
+                }
+            }
         }
     }
 
@@ -983,6 +1004,27 @@ mod tests {
         d.on_event(BodyEvent::WindowClosed { id: 1 });
         // Ya no hay nada que invocar.
         assert!(d.apply(DesktopAction::ToggleScratchpad).is_empty());
+    }
+
+    #[test]
+    fn a_client_fullscreen_request_is_honoured() {
+        let mut d = desktop_with_screen();
+        open(&mut d, 1);
+        open(&mut d, 2);
+        let cmds = d.on_event(BodyEvent::FullscreenRequest { id: 1, fullscreen: true });
+        assert!(places(&cmds).iter().find(|x| x.id == 1).unwrap().fullscreen);
+        // El cliente la suelta.
+        let cmds = d.on_event(BodyEvent::FullscreenRequest { id: 1, fullscreen: false });
+        assert!(!places(&cmds).iter().find(|x| x.id == 1).unwrap().fullscreen);
+    }
+
+    #[test]
+    fn a_fullscreen_request_for_an_unknown_window_does_nothing() {
+        let mut d = desktop_with_screen();
+        open(&mut d, 1);
+        assert!(d
+            .on_event(BodyEvent::FullscreenRequest { id: 99, fullscreen: true })
+            .is_empty());
     }
 
     #[test]
