@@ -101,6 +101,27 @@ struct ManagedWindow {
     floating: bool,
 }
 
+/// Un arrastre de ratón en curso: mueve o redimensiona una ventana.
+struct DragGrab {
+    /// La ventana que se arrastra.
+    id: u64,
+    /// Mover (`Super`+botón izquierdo) o redimensionar (`Super`+derecho).
+    mode: DragMode,
+    /// Posición del puntero al empezar el arrastre.
+    start_pointer: (f64, f64),
+    /// Rectángulo `(x, y, w, h)` de la ventana al empezar.
+    start_rect: (i32, i32, i32, i32),
+}
+
+/// Qué le hace un arrastre a la ventana.
+#[derive(Clone, Copy)]
+enum DragMode {
+    /// Reubicar la ventana — la esquina la sigue al puntero.
+    Move,
+    /// Redimensionarla — la esquina inferior-derecha sigue al puntero.
+    Resize,
+}
+
 /// El estado global del compositor.
 struct App {
     compositor_state: CompositorState,
@@ -113,6 +134,8 @@ struct App {
     pointer: Option<PointerHandle<Self>>,
     /// Posición del puntero en coordenadas globales.
     pointer_loc: (f64, f64),
+    /// Arrastre de ventana en curso (mover o redimensionar con el ratón).
+    drag: Option<DragGrab>,
 
     /// Ventanas gestionadas, en orden de aparición.
     windows: Vec<ManagedWindow>,
@@ -673,6 +696,7 @@ fn build_app() -> Result<Setup, Box<dyn std::error::Error>> {
         keyboard: None,
         pointer: None,
         pointer_loc: (0.0, 0.0),
+        drag: None,
         windows: Vec::new(),
         body: BodyState::new(),
         brain,

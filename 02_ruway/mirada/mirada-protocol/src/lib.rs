@@ -91,6 +91,10 @@ pub enum BodyEvent {
     /// Un cliente pidió pantalla completa para su ventana (`true`), o la
     /// soltó (`false`) — `xdg_toplevel.set_fullscreen`.
     FullscreenRequest { id: WindowId, fullscreen: bool },
+    /// El usuario arrastró una ventana con el ratón a un rectángulo nuevo
+    /// (mover o redimensionar interactivos). El Cerebro la hace flotar
+    /// ahí; si estaba teselada, deja de estarlo.
+    WindowFloatTo { id: WindowId, rect: Rect },
 }
 
 /// Tamaño máximo de un marco, en bytes. Acota el búfer de [`read_frame`]

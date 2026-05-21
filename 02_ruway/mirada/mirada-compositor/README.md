@@ -41,7 +41,9 @@ pantalla completa; sal con `Super+Shift+e` o `Ctrl+C`.
 
 Lleva teclado y ratón por `libinput`: el ratón mueve un cursor de
 software, el foco sigue al puntero y los clics y la rueda llegan a la
-ventana que tienes debajo.
+ventana que tienes debajo. **`Super`+arrastre** con el botón izquierdo
+mueve una ventana, con el derecho la redimensiona — al arrastrarla, la
+ventana pasa a flotar.
 
 - `MIRADA_STARTUP=<cmd>` — lanza una app al arrancar (`MIRADA_STARTUP=foot`).
 - `MIRADA_DRM_TIMEOUT=<s>` — cierra el compositor solo tras N segundos

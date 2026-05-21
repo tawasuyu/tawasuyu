@@ -135,6 +135,8 @@ mod tests {
             rect: Rect::new(0, 0, 800, 600),
             visible: true,
             focused: true,
+            floating: false,
+            fullscreen: false,
         }])
     }
 

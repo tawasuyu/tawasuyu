@@ -26,7 +26,7 @@ use smithay::backend::drm::exporter::gbm::GbmFramebufferExporter;
 use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent};
 use smithay::backend::egl::{EGLContext, EGLDisplay};
 use smithay::backend::input::{
-    AbsolutePositionEvent, Axis, AxisSource, InputEvent, KeyState, KeyboardKeyEvent,
+    AbsolutePositionEvent, Axis, AxisSource, ButtonState, InputEvent, KeyState, KeyboardKeyEvent,
     PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
 };
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
@@ -56,9 +56,9 @@ use smithay::utils::{
     DeviceFd, Logical, Physical, Point, Rectangle, Scale, Size, Transform, SERIAL_COUNTER,
 };
 
-use mirada_brain::{CtlReply, Keymap};
+use mirada_brain::{BodyEvent, CtlReply, Keymap, Rect};
 
-use crate::{combo_string, send_frames_surface_tree, App, Brain, ClientState, Setup};
+use crate::{combo_string, send_frames_surface_tree, App, Brain, ClientState, DragGrab, DragMode, Setup};
 
 /// El `DrmCompositor` concreto para la salida (un solo GPU).
 type Compositor =
@@ -80,6 +80,13 @@ const CURSOR_SIZE: i32 = 12;
 
 /// Color del cursor — un cuadrado casi blanco, opaco.
 const CURSOR_COLOR: [f32; 4] = [0.95, 0.95, 0.97, 1.0];
+
+/// Lado mínimo de una ventana al redimensionarla con el ratón.
+const MIN_WINDOW: i32 = 120;
+
+/// Códigos de botón de `<linux/input-event-codes.h>`.
+const BTN_LEFT: u32 = 0x110;
+const BTN_RIGHT: u32 = 0x111;
 
 /// El estado del bucle DRM — lo comparten todos los callbacks de `calloop`.
 struct DrmState {
@@ -256,7 +263,9 @@ impl DrmState {
                 x = (x + event.delta_x()).clamp(0.0, self.output_size.0);
                 y = (y + event.delta_y()).clamp(0.0, self.output_size.1);
                 self.app.pointer_loc = (x, y);
-                self.pointer_motion(time);
+                if !self.drag_update() {
+                    self.pointer_motion(time);
+                }
             }
 
             // --- Puntero: movimiento absoluto (táctil, tableta) ----------
@@ -270,11 +279,55 @@ impl DrmState {
                     pos.x.clamp(0.0, self.output_size.0),
                     pos.y.clamp(0.0, self.output_size.1),
                 );
-                self.pointer_motion(time);
+                if !self.drag_update() {
+                    self.pointer_motion(time);
+                }
             }
 
-            // --- Puntero: botones — se reenvían a la ventana enfocada ----
+            // --- Puntero: botones ----------------------------------------
             InputEvent::PointerButton { event } => {
+                let pressed = event.state() == ButtonState::Pressed;
+                let button = event.button_code();
+
+                // ¿Empieza un arrastre? `Super`+botón sobre una ventana:
+                // izquierdo mueve, derecho redimensiona.
+                if pressed && self.app.drag.is_none() {
+                    let super_held = self
+                        .app
+                        .keyboard
+                        .as_ref()
+                        .is_some_and(|kb| kb.modifier_state().logo);
+                    let mode = match button {
+                        BTN_LEFT if super_held => Some(DragMode::Move),
+                        BTN_RIGHT if super_held => Some(DragMode::Resize),
+                        _ => None,
+                    };
+                    if let Some(mode) = mode {
+                        let (x, y) = self.app.pointer_loc;
+                        if let Some(i) = self.window_at(x, y) {
+                            let w = &self.app.windows[i];
+                            let grab = DragGrab {
+                                id: w.id,
+                                mode,
+                                start_pointer: (x, y),
+                                start_rect: (w.loc.0, w.loc.1, w.size.0, w.size.1),
+                            };
+                            self.app.drag = Some(grab);
+                            return; // el arrastre captura el botón
+                        }
+                    }
+                }
+
+                // Durante un arrastre los botones no llegan al cliente;
+                // soltar cualquiera lo termina.
+                if self.app.drag.is_some() {
+                    if !pressed {
+                        self.app.drag = None;
+                    }
+                    return;
+                }
+
+                // Botón normal: a la ventana bajo el puntero.
                 let Some(pointer) = self.app.pointer.clone() else {
                     return;
                 };
@@ -283,7 +336,7 @@ impl DrmState {
                     &ButtonEvent {
                         serial: SERIAL_COUNTER.next_serial(),
                         time,
-                        button: event.button_code(),
+                        button,
                         state: event.state(),
                     },
                 );
@@ -353,6 +406,34 @@ impl DrmState {
                 self.app.brain_feed(ev);
             }
         }
+    }
+
+    /// Si hay un arrastre en curso, recalcula el rectángulo de la ventana
+    /// y se lo manda al Cerebro (que la hace flotar ahí). Devuelve `true`
+    /// si consumió el movimiento — entonces el puntero no llega al cliente.
+    fn drag_update(&mut self) -> bool {
+        let Some(drag) = self.app.drag.as_ref() else {
+            return false;
+        };
+        let mode = drag.mode;
+        let (spx, spy) = drag.start_pointer;
+        let (sx, sy, sw, sh) = drag.start_rect;
+        let id = drag.id;
+
+        let (px, py) = self.app.pointer_loc;
+        let dx = (px - spx) as i32;
+        let dy = (py - spy) as i32;
+        let rect = match mode {
+            DragMode::Move => Rect::new(sx + dx, sy + dy, sw, sh),
+            DragMode::Resize => Rect::new(
+                sx,
+                sy,
+                (sw + dx).max(MIN_WINDOW),
+                (sh + dy).max(MIN_WINDOW),
+            ),
+        };
+        self.app.brain_feed(BodyEvent::WindowFloatTo { id, rect });
+        true
     }
 
     /// El índice de la ventana visible bajo el punto `(x, y)`, si la hay —

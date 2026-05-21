@@ -209,6 +209,23 @@ impl Desktop {
                     Vec::new()
                 }
             }
+            BodyEvent::WindowFloatTo { id, rect } => {
+                // Arrastre interactivo: la ventana pasa a flotar en el
+                // rectángulo dado, en el escritorio donde viva.
+                let mut changed = false;
+                for ws in &mut self.workspaces {
+                    if ws.windows().contains(&id) {
+                        ws.set_floating(id, Some(rect));
+                        changed = true;
+                        break;
+                    }
+                }
+                if changed {
+                    self.relayout()
+                } else {
+                    Vec::new()
+                }
+            }
         }
     }
 
@@ -842,6 +859,32 @@ mod tests {
         open(&mut d, 2); // enfocada
         d.on_event(BodyEvent::PointerEntered { id: 1 });
         assert_eq!(d.focused_window(), Some(1));
+    }
+
+    #[test]
+    fn dragging_floats_a_window_at_the_given_rect() {
+        let mut d = desktop_with_screen();
+        open(&mut d, 1);
+        open(&mut d, 2);
+        assert!(!d.active_workspace().is_floating(2));
+        let target = Rect::new(300, 200, 640, 480);
+        let cmds = d.on_event(BodyEvent::WindowFloatTo { id: 2, rect: target });
+        // La 2 ahora flota exactamente en el rectángulo pedido.
+        assert!(d.active_workspace().is_floating(2));
+        let p = places(&cmds).iter().find(|p| p.id == 2).unwrap();
+        assert!(p.floating);
+        assert_eq!(p.rect, target);
+    }
+
+    #[test]
+    fn dragging_an_unknown_window_does_nothing() {
+        let mut d = desktop_with_screen();
+        open(&mut d, 1);
+        let cmds = d.on_event(BodyEvent::WindowFloatTo {
+            id: 99,
+            rect: Rect::new(0, 0, 100, 100),
+        });
+        assert!(cmds.is_empty());
     }
 
     #[test]
