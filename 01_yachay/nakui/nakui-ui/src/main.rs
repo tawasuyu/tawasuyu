@@ -433,6 +433,30 @@ mod tests {
         ] {
             assert!(m.views.contains_key(view), "falta la vista «{view}»");
         }
+
+        // Fase 2: la lista de oportunidades resuelve `cliente_id` al
+        // label del cliente y formatea `monto` como moneda.
+        let nahual_meta_schema::View::List(lv) = &m.views["oportunidad_list"] else {
+            panic!("oportunidad_list debe ser una lista");
+        };
+        let cliente_col = lv
+            .columns
+            .iter()
+            .find(|c| c.field == "cliente_id")
+            .expect("columna cliente_id");
+        assert_eq!(cliente_col.ref_entity.as_deref(), Some("Cliente"));
+        let monto_col = lv
+            .columns
+            .iter()
+            .find(|c| c.field == "monto")
+            .expect("columna monto");
+        assert!(
+            matches!(
+                monto_col.format,
+                nahual_meta_schema::ValueFormat::Currency { .. }
+            ),
+            "monto debe formatearse como moneda",
+        );
     }
 
     /// Carga el módulo crm por el mismo camino que usa `nakui-ui`
