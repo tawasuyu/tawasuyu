@@ -152,6 +152,7 @@ impl DrmState {
         if self.pending_flip {
             return; // aún esperamos el VBlank del cuadro anterior
         }
+        let output_h = self.app.output_size.1;
 
         // Paso 1 · refresca los búferes del marco de cada ventana — su
         // tamaño (sigue al contenido) y su color (según el foco). Cada
@@ -160,7 +161,7 @@ impl DrmState {
             if !w.visible || w.is_shell {
                 continue; // el shell no lleva marco
             }
-            let (x, y) = crate::render_loc(w);
+            let (x, y) = crate::render_loc(w, output_h);
             let (sw, sh) = crate::surface_px_size(w).unwrap_or(w.size);
             let color = if w.focused { BORDER_FOCUS } else { BORDER_NORMAL };
             let rects = border_rects(x, y, sw, sh);
@@ -216,7 +217,7 @@ impl DrmState {
             let mut shown: Vec<_> = self.app.windows.iter().filter(|w| w.visible).collect();
             shown.sort_by_key(|w| (!w.is_shell, !w.floating));
             for w in &shown {
-                let (x, y) = crate::render_loc(w);
+                let (x, y) = crate::render_loc(w, output_h);
                 let (sw, sh) = crate::surface_px_size(w).unwrap_or(w.size);
                 // El marco, encima de la propia superficie de la ventana
                 // — el shell no lleva.
@@ -507,7 +508,7 @@ impl DrmState {
         let hit = self.window_at(x, y);
         let focus = hit.map(|i| {
             let w = &self.app.windows[i];
-            let (lx, ly) = crate::render_loc(w);
+            let (lx, ly) = crate::render_loc(w, self.app.output_size.1);
             (
                 w.surface.clone(),
                 Point::<f64, Logical>::from((lx as f64, ly as f64)),
@@ -593,9 +594,10 @@ impl DrmState {
             let w = &self.app.windows[i];
             (!w.is_shell, !w.floating)
         });
+        let output_h = self.app.output_size.1;
         idx.into_iter().find(|&i| {
             let w = &self.app.windows[i];
-            let (lx, ly) = crate::render_loc(w);
+            let (lx, ly) = crate::render_loc(w, output_h);
             let (sw, sh) = crate::surface_px_size(w).unwrap_or(w.size);
             x >= lx as f64 && y >= ly as f64 && x < (lx + sw) as f64 && y < (ly + sh) as f64
         })

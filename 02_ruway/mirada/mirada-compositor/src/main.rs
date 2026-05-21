@@ -676,11 +676,16 @@ fn send_frames_surface_tree(surface: &WlSurface, time: u32) {
 // Bucle principal
 // ---------------------------------------------------------------------
 
-/// Dónde pintar una ventana: su celda asignada, pero si el cliente
-/// presenta una superficie más pequeña que la celda (p. ej. un terminal
-/// que redondea su tamaño a celdas de texto enteras), se centra en el
-/// hueco sobrante en vez de dejarlo todo a un lado.
-fn render_loc(w: &ManagedWindow) -> (i32, i32) {
+/// Dónde pintar una ventana. La del shell se ancla al pie de la salida
+/// y crece hacia arriba (su cajón de resultados se despliega sobre las
+/// ventanas). Una ventana normal va en su celda; si el cliente presenta
+/// una superficie más pequeña que la celda (p. ej. un terminal que
+/// redondea su tamaño a celdas de texto), se centra en el hueco.
+fn render_loc(w: &ManagedWindow, output_h: i32) -> (i32, i32) {
+    if w.is_shell {
+        let h = surface_px_size(w).map(|(_, h)| h).unwrap_or(SHELL_DOCK_HEIGHT);
+        return (0, output_h - h);
+    }
     match with_renderer_surface_state(&w.surface, |s| s.surface_size()) {
         Some(Some(size)) => {
             let dx = ((w.size.0 - size.w) / 2).max(0);
@@ -1082,6 +1087,7 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
             // (índice 0 = encima): el shell primero —va sobre todo—, luego
             // las flotantes, luego las teseladas. `sort_by_key` es estable:
             // dentro de cada grupo se respeta el orden de apertura.
+            let output_h = state.output_size.1;
             let mut shown: Vec<&ManagedWindow> =
                 state.windows.iter().filter(|w| w.visible).collect();
             shown.sort_by_key(|w| (!w.is_shell, !w.floating));
@@ -1091,7 +1097,7 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
                     render_elements_from_surface_tree(
                         renderer,
                         &w.surface,
-                        render_loc(w),
+                        render_loc(w, output_h),
                         1.0,
                         1.0,
                         Kind::Unspecified,

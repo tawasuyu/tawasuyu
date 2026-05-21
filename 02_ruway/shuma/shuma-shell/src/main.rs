@@ -38,6 +38,10 @@ use shuma_sysmon::{Snapshot, SystemSampler};
 
 /// Cuántas muestras guarda la curva de cada monitor.
 const HISTORY: usize = 80;
+/// Alto de la barra del modo launcher, en píxeles.
+const LAUNCHER_BAR_H: f32 = 40.0;
+/// Alto del cajón de resultados del modo launcher cuando se despliega.
+const LAUNCHER_DRAWER_H: f32 = 320.0;
 /// Archivos/directorios que delatan la estructura de un proyecto.
 const PROJECT_MARKERS: &[&str] = &[
     ".git",
@@ -362,6 +366,9 @@ struct Shell {
     /// Las ventanas abiertas del escritorio, según el socket de control
     /// de carmen — la barra de tareas del modo launcher.
     windows_bar: Vec<WindowLine>,
+    /// `true` cuando el cajón de resultados del modo launcher está
+    /// desplegado (la ventana crece hacia arriba sobre el escritorio).
+    drawer_open: bool,
 }
 
 impl Shell {
@@ -405,6 +412,7 @@ impl Shell {
             focused_once: false,
             launcher: false,
             windows_bar: Vec::new(),
+            drawer_open: false,
         };
         shell.start_loop(cx);
         shell
@@ -1110,13 +1118,10 @@ impl Shell {
             .overflow_hidden()
             .children(chips);
 
-        // Estado a la derecha: nº de comandos en curso, o el último.
-        let status = if !self.active.is_empty() {
-            div()
-                .flex_none()
-                .text_size(px(12.))
-                .text_color(accent)
-                .child(SharedString::from(format!("▷ {} en curso", self.active.len())))
+        // Estado a la derecha: nº en curso, o el último comando. Un clic
+        // despliega o repliega el cajón de resultados.
+        let (status_text, status_color) = if !self.active.is_empty() {
+            (format!("▷ {} en curso", self.active.len()), accent)
         } else if let Some(last) = self.session.history().last() {
             let (glyph, color) = match last.status {
                 RunStatus::Running => ("▷", accent),
@@ -1124,36 +1129,51 @@ impl Shell {
                 RunStatus::Failed => ("✗", gpui::hsla(2.0 / 360.0, 0.68, 0.60, 1.0)),
             };
             let mut line = last.line.clone();
-            if line.chars().count() > 32 {
-                line = format!("{}…", line.chars().take(32).collect::<String>());
+            if line.chars().count() > 30 {
+                line = format!("{}…", line.chars().take(30).collect::<String>());
             }
-            div()
-                .flex_none()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(5.))
-                .text_size(px(12.))
-                .child(div().text_color(color).child(glyph))
-                .child(div().text_color(dim).child(SharedString::from(line)))
+            (format!("{glyph} {line}"), color)
         } else {
-            div().flex_none()
+            ("sin comandos".to_string(), dim)
         };
+        let caret = if self.drawer_open { "▾" } else { "▴" };
+        let status = div()
+            .id("drawer-toggle")
+            .flex_none()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(5.))
+            .px(px(6.))
+            .rounded(px(4.))
+            .text_size(px(12.))
+            .cursor_pointer()
+            .hover(|s| s.bg(node_bg))
+            .child(div().text_color(dim).child(caret))
+            .child(div().text_color(status_color).child(SharedString::from(status_text)))
+            .on_click(cx.listener(|shell, _, window, cx| {
+                shell.drawer_open = !shell.drawer_open;
+                // La ventana crece o se encoge; carmen la ancla al pie.
+                let w = window.bounds().size.width;
+                let h = if shell.drawer_open {
+                    LAUNCHER_BAR_H + LAUNCHER_DRAWER_H
+                } else {
+                    LAUNCHER_BAR_H
+                };
+                window.resize(gpui::size(w, px(h)));
+                cx.notify();
+            }));
 
-        div()
-            .size_full()
+        // La barra propiamente dicha — glifo, input, ventanas, estado.
+        let bar = div()
+            .h(px(LAUNCHER_BAR_H))
+            .flex_none()
             .flex()
             .flex_row()
             .items_center()
             .gap(px(10.))
             .px(px(12.))
             .overflow_hidden()
-            .bg(panel)
-            .text_color(text)
-            .text_size(px(13.))
-            .track_focus(&self.focus)
-            .key_context("ShumaShell")
-            .on_key_down(cx.listener(Self::handle_key))
             .child(div().flex_none().text_color(accent).child("⟫"))
             .child(
                 div()
@@ -1165,7 +1185,48 @@ impl Shell {
                     .children(self.input_row(&theme)),
             )
             .child(taskbar)
-            .child(status)
+            .child(status);
+
+        // El cajón de resultados — los últimos comandos y su salida.
+        let drawer = self.drawer_open.then(|| {
+            let hist = self.session.history();
+            let start = hist.len().saturating_sub(8);
+            let runs: Vec<_> = hist[start..]
+                .iter()
+                .map(|r| {
+                    let ui = self.run_ui.get(&r.id).copied().unwrap_or_default();
+                    render_run(r, ui, &theme, node_bg, cx)
+                })
+                .collect();
+            let empty = runs.is_empty();
+            div()
+                .id("launcher-drawer")
+                .flex_1()
+                .overflow_y_scroll()
+                .track_scroll(&self.scroll)
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .p(px(8.))
+                .bg(theme.bg_app)
+                .when(empty, |d| {
+                    d.child(div().text_color(dim).child("sin comandos todavía"))
+                })
+                .children(runs)
+        });
+
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(panel)
+            .text_color(text)
+            .text_size(px(13.))
+            .track_focus(&self.focus)
+            .key_context("ShumaShell")
+            .on_key_down(cx.listener(Self::handle_key))
+            .children(drawer)
+            .child(bar)
     }
 }
 
