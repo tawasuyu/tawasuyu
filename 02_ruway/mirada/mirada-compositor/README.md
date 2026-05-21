@@ -6,30 +6,42 @@ de la arquitectura Cerebro↔Cuerpo de `mirada` (ver
 clientes, compone sus superficies y aplica la geometría que decide el
 Cerebro.
 
-Backend `winit`: corre **anidado** — una ventana dentro de tu sesión
-gráfica actual, X11 o Wayland. No toca DRM/KMS, así que es seguro de
-arrancar sin dejar la sesión.
+Tiene **dos backends gráficos**:
 
-## Requisitos
+- **`winit`** — corre **anidado**, como una ventana dentro de tu sesión
+  gráfica actual (X11 o Wayland). Para desarrollar y probar sin dejar el
+  escritorio.
+- **`drm`** — corre **nativo** sobre una TTY, sin sesión anfitriona:
+  toma la GPU (DRM/KMS/GBM/EGL), el teclado (`libinput`) y la pantalla
+  entera. Es carmen como tu escritorio de verdad.
 
-Hace falta una **sesión gráfica anfitriona** (X11 o Wayland) donde
-dibujar la ventana del compositor — es donde `winit` se anida. En un
-servidor *headless* (SSH a una caja sin escritorio, `XDG_SESSION_TYPE=tty`,
-sin `/dev/dri`) no hay dónde mostrar nada y el arranque aborta con un
-mensaje que lo explica.
+Sin argumentos elige solo: con `DISPLAY`/`WAYLAND_DISPLAY` → `winit`;
+sin ellos → `drm`. O fuérzalo: `mirada-compositor --winit` / `--drm`.
 
-Para verlo en una caja headless: levanta un servidor X virtual y
-conéctate por VNC.
+## Backends
+
+### winit — anidado
 
 ```sh
-Xvfb :99 -screen 0 1280x800x24 &
-x11vnc -display :99 -localhost -nopw &        # luego túnel SSH al :5900
-DISPLAY=:99 cargo run -p mirada-compositor
+cargo run -p mirada-compositor -- --winit
 ```
 
-El backend nativo DRM/KMS —que pintaría directo en la pantalla sin
-sesión anfitriona— está pendiente (ver el SDD), y de todos modos
-necesitaría un `/dev/dri`.
+Necesita una sesión gráfica anfitriona (X11 o Wayland) donde dibujar su
+ventana; sin ella aborta con un mensaje que lo explica.
+
+### drm — nativo sobre TTY
+
+```sh
+cargo run -p mirada-compositor -- --drm
+```
+
+Corre directo sobre el hardware. Requiere una **TTY** (`Ctrl+Alt+F3`),
+una GPU con `/dev/dri`, y `seatd` o `logind` para la sesión. Toma la
+pantalla completa; sal con `Super+Shift+e` o `Ctrl+C`.
+
+- `MIRADA_STARTUP=<cmd>` — lanza una app al arrancar (`MIRADA_STARTUP=foot`).
+- `MIRADA_DRM_TIMEOUT=<s>` — cierra el compositor solo tras N segundos
+  (0 o sin definir = sin tope).
 
 ## Dos modos
 
@@ -100,7 +112,9 @@ En modo enlazado el socket de control lo abre el Cerebro (la app
 ## Qué implementa
 
 `wl_compositor`, `xdg_shell` (toplevels y popups), `wl_shm`, `wl_seat`
-(teclado) y `wl_data_device` (selección). Composición con `GlesRenderer`.
+(teclado), `wl_output` y `wl_data_device` (selección). Composición con
+`GlesRenderer` — en `winit` sobre la ventana, en `drm` con un
+`DrmCompositor` por salida.
 
 Reusa `mirada-body` para la contabilidad de salidas y superficies, y
 `mirada-link` para el cable hacia un Cerebro externo. Toda la lógica
@@ -109,7 +123,7 @@ espacial es agnóstica de Wayland y vive en los crates de
 
 ## Pendiente
 
-Backend nativo DRM/libinput (de ventana anidada a sesión real),
-puntero/ratón completo y aislamiento de clientes. Ver el SDD.
+Del backend DRM: puntero/ratón (hoy sólo teclado), conmutación de VT,
+hotplug de monitores. Aislamiento de clientes. Ver el SDD.
 
 [`smithay`]: https://github.com/Smithay/smithay
