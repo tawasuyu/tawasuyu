@@ -18,10 +18,10 @@
 //! a stable shape.
 
 use serde_json::Value;
-use surrealdb::Surreal;
-use surrealdb::engine::local::{Db, Mem};
 #[cfg(feature = "persistent")]
 use surrealdb::engine::local::SurrealKv;
+use surrealdb::engine::local::{Db, Mem};
+use surrealdb::Surreal;
 use thiserror::Error;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -84,9 +84,7 @@ impl SurrealStore {
     /// canonical use is `let store = SurrealStore::new_persistent(path)?`
     /// at process startup, with the path stable across runs.
     #[cfg(feature = "persistent")]
-    pub fn new_persistent(
-        path: impl AsRef<std::path::Path>,
-    ) -> Result<Self, SurrealStoreError> {
+    pub fn new_persistent(path: impl AsRef<std::path::Path>) -> Result<Self, SurrealStoreError> {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -175,10 +173,7 @@ impl Store for SurrealStore {
                         // sobre un field ausente no falla).
                         let exists = self.exists(&path.entity, path.id).await?;
                         if !exists {
-                            return Err(StoreError::NotFound(
-                                path.entity.clone(),
-                                path.id,
-                            ));
+                            return Err(StoreError::NotFound(path.entity.clone(), path.id));
                         }
                         // We don't model NotAnObject for SurrealStore: every
                         // record stored via this trait is map-shaped by
@@ -278,9 +273,11 @@ impl Store for SurrealStore {
                     out.push((table.clone(), id, Value::Object(map)));
                 }
             }
-            out.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.as_bytes().cmp(b.1.as_bytes())));
-            Ok(Box::new(out.into_iter())
-                as Box<dyn Iterator<Item = (String, Uuid, Value)>>)
+            out.sort_by(|a, b| {
+                a.0.cmp(&b.0)
+                    .then_with(|| a.1.as_bytes().cmp(b.1.as_bytes()))
+            });
+            Ok(Box::new(out.into_iter()) as Box<dyn Iterator<Item = (String, Uuid, Value)>>)
         })
     }
 

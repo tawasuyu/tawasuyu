@@ -1,14 +1,14 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::delta::{FieldOp, simulate_on};
+use crate::delta::{simulate_on, FieldOp};
 use crate::graph::{GraphError, ManifestGraph};
-use crate::nickel_validator::{self, NickelError};
 use crate::manifest::{ConserveRule, Manifest, ManifestError, MorphismSpec, ValidationError};
+use crate::nickel_validator::{self, NickelError};
 use crate::rhai_executor::{RhaiError, RhaiExecutor};
 use crate::store::{Store, StoreError};
 
@@ -141,7 +141,8 @@ impl Executor {
         // archivo apuntado se mueve). Sin esto, el bundle hash quedaba
         // pegado y la versión del seed nunca detectaba ediciones de
         // schema. Ver `verify_log_rejects_seed_after_schema_changes`.
-        let schema_bundle_bytes = read_schema_files_concat(&module_dir, &manifest.effective_schemas())?;
+        let schema_bundle_bytes =
+            read_schema_files_concat(&module_dir, &manifest.effective_schemas())?;
         let schema_bundle_hash = compute_schema_bundle_hash(&schema_bundle_bytes);
         let mut schema_hashes = HashMap::with_capacity(manifest.morphisms.len());
         for spec in &manifest.morphisms {
@@ -291,20 +292,14 @@ impl Executor {
                         Some(_) => {
                             return Err(ExecError::CapabilityViolation {
                                 morphism: morphism_name.to_string(),
-                                token: format!(
-                                    "<entity-mismatch>.{}.{}",
-                                    path.entity, path.field
-                                ),
+                                token: format!("<entity-mismatch>.{}.{}", path.entity, path.field),
                                 declared: spec.writes.clone(),
                             });
                         }
                         None => {
                             return Err(ExecError::CapabilityViolation {
                                 morphism: morphism_name.to_string(),
-                                token: format!(
-                                    "<untracked id>.{}.{}",
-                                    path.entity, path.field
-                                ),
+                                token: format!("<untracked id>.{}.{}", path.entity, path.field),
                                 declared: spec.writes.clone(),
                             });
                         }
@@ -330,8 +325,7 @@ impl Executor {
         // 7. Per-input KCL post-check; skip Deleted inputs.
         for spec_in in &spec.inputs {
             let id = inputs_map[&spec_in.role];
-            if let Some(new_state) =
-                simulate_on(&loaded[&spec_in.role], &spec_in.entity, id, &ops)
+            if let Some(new_state) = simulate_on(&loaded[&spec_in.role], &spec_in.entity, id, &ops)
             {
                 self.validate_entity(&spec_in.entity, &new_state)
                     .map_err(|e| ExecError::SchemaPost {
@@ -598,23 +592,21 @@ fn check_conservation(
                     ),
                 })?;
             let old_state = &loaded[&binding.role];
-            let old_val =
-                old_state
-                    .get(&rule.field)
-                    .and_then(Value::as_i64)
-                    .ok_or_else(|| ExecError::ConservationMalformed {
-                        entity: rule.entity.clone(),
-                        field: rule.field.clone(),
-                        message: format!("old value at role `{}` is not i64", binding.role),
-                    })?;
-            let new_val =
-                value
-                    .as_i64()
-                    .ok_or_else(|| ExecError::ConservationMalformed {
-                        entity: rule.entity.clone(),
-                        field: rule.field.clone(),
-                        message: format!("Set value at role `{}` is not i64", binding.role),
-                    })?;
+            let old_val = old_state
+                .get(&rule.field)
+                .and_then(Value::as_i64)
+                .ok_or_else(|| ExecError::ConservationMalformed {
+                    entity: rule.entity.clone(),
+                    field: rule.field.clone(),
+                    message: format!("old value at role `{}` is not i64", binding.role),
+                })?;
+            let new_val = value
+                .as_i64()
+                .ok_or_else(|| ExecError::ConservationMalformed {
+                    entity: rule.entity.clone(),
+                    field: rule.field.clone(),
+                    message: format!("Set value at role `{}` is not i64", binding.role),
+                })?;
             let group_key = match &rule.group_by {
                 Some(g) => old_state
                     .get(g)
@@ -623,8 +615,7 @@ fn check_conservation(
                     .to_string(),
                 None => String::new(),
             };
-            *delta_by_group.entry(group_key).or_insert(0) +=
-                (new_val as i128) - (old_val as i128);
+            *delta_by_group.entry(group_key).or_insert(0) += (new_val as i128) - (old_val as i128);
         }
     }
 
@@ -673,7 +664,10 @@ let y = 2;
         // content, not cosmetic.
         let src = r#"let s = "hello  // not a comment \"world\"";"#;
         let normalized = normalize_rhai_source(src);
-        assert_eq!(normalized, r#"let s = "hello  // not a comment \"world\"";"#);
+        assert_eq!(
+            normalized,
+            r#"let s = "hello  // not a comment \"world\"";"#
+        );
     }
 
     #[test]

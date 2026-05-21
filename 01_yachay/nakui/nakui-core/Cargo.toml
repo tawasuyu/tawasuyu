@@ -56,3 +56,7 @@ path = "src/bin/inventory_demo.rs"
 [[bin]]
 name = "sales_demo"
 path = "src/bin/sales_demo.rs"
+
+[[bin]]
+name = "crm_demo"
+path = "src/bin/crm_demo.rs"

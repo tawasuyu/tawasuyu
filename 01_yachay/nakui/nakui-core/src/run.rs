@@ -24,13 +24,13 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::event_log::{
-    EventLog, RecoverableExecuteError, ReplayError, Snapshot, SnapshotMismatchError,
-    execute_and_log_with_recovery, replay_with_snapshot_into, verify_log,
+    execute_and_log_with_recovery, replay_with_snapshot_into, verify_log, EventLog,
+    RecoverableExecuteError, ReplayError, Snapshot, SnapshotMismatchError,
 };
 use crate::executor::Executor;
 use crate::store::Store;
@@ -206,7 +206,10 @@ fn handle_connection<S: Store>(
         }
         let (response, shutdown) = dispatch(&line, executor, store, log);
         let bytes = serde_json::to_vec(&response).expect("response serializes");
-        if let Err(e) = writer.write_all(&bytes).and_then(|_| writer.write_all(b"\n")) {
+        if let Err(e) = writer
+            .write_all(&bytes)
+            .and_then(|_| writer.write_all(b"\n"))
+        {
             eprintln!("nakui run: write: {}", e);
             return false;
         }
@@ -291,16 +294,10 @@ fn dispatch<S: Store>(
         }
         Request::Verify => match verify_log(log, executor) {
             Ok(()) => {
-                let entries = log
-                    .entries()
-                    .map(|es| es.len())
-                    .unwrap_or(0);
+                let entries = log.entries().map(|es| es.len()).unwrap_or(0);
                 (json!({"ok": true, "entries": entries}), false)
             }
-            Err(e) => (
-                json!({"ok": false, "error": e.to_string()}),
-                false,
-            ),
+            Err(e) => (json!({"ok": false, "error": e.to_string()}), false),
         },
         Request::HashState => {
             let records: Vec<_> = match store.iter() {
@@ -324,9 +321,7 @@ fn dispatch<S: Store>(
         Request::DumpRecords => match store.iter() {
             Ok(it) => {
                 let records: Vec<Value> = it
-                    .map(|(entity, id, value)| {
-                        json!({"entity": entity, "id": id, "value": value})
-                    })
+                    .map(|(entity, id, value)| json!({"entity": entity, "id": id, "value": value}))
                     .collect();
                 (json!({"ok": true, "records": records}), false)
             }
@@ -349,4 +344,3 @@ fn hex_encode(bytes: &[u8]) -> String {
     }
     out
 }
-

@@ -60,8 +60,8 @@ pub fn vet(schema_path: &Path, state: &Value, schema_name: &str) -> Result<(), N
          (std.deserialize 'Json m%%\"{state_json}\"%%) | bundle.{schema_name}"
     );
 
-    let mut ctx = nickel_lang::Context::new()
-        .with_source_name(format!("nakui-validate-{schema_name}"));
+    let mut ctx =
+        nickel_lang::Context::new().with_source_name(format!("nakui-validate-{schema_name}"));
 
     match ctx.eval_deep_for_export(&source) {
         Ok(_) => Ok(()),
@@ -130,7 +130,9 @@ mod tests {
         let state = json!({"id": "abc"}); // falta cantidad
         let err = vet(&schema, &state, "Stock").unwrap_err();
         assert!(matches!(err, NickelError::ValidationFailed(_)));
-        let NickelError::ValidationFailed(msg) = err else { panic!() };
+        let NickelError::ValidationFailed(msg) = err else {
+            panic!()
+        };
         assert!(
             msg.to_lowercase().contains("cantidad") || msg.to_lowercase().contains("missing"),
             "msg debe mencionar el field missing: {msg}"

@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use nakui_core::store::Store;
 use nakui_core::surreal_store::SurrealStore;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 fn fresh_db_path() -> PathBuf {
@@ -39,9 +39,7 @@ fn data_survives_close_and_reopen() {
 
     {
         let store = SurrealStore::new_persistent(&path).expect("reopen persistent");
-        let loaded = store
-            .load("Caja", id)
-            .expect("record must survive reopen");
+        let loaded = store.load("Caja", id).expect("record must survive reopen");
         assert_eq!(
             loaded.get("saldo").and_then(Value::as_i64),
             Some(12_345),

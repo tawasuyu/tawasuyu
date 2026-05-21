@@ -11,8 +11,8 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::thread;
 
-use nakui_core::drift::{DriftDiff, check_against_socket};
-use nakui_core::event_log::{EventLog, execute_and_log, seed_and_log};
+use nakui_core::drift::{check_against_socket, DriftDiff};
+use nakui_core::event_log::{execute_and_log, seed_and_log, EventLog};
 use nakui_core::executor::Executor;
 use nakui_core::run::run_server;
 use nakui_core::store::MemoryStore;

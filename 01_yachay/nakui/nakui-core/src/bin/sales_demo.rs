@@ -5,7 +5,7 @@
 //! against all three.
 
 use nakui_core::event_log::{
-    EventLog, ExecuteError, execute_and_log, replay, seed_and_log, verify_log,
+    execute_and_log, replay, seed_and_log, verify_log, EventLog, ExecuteError,
 };
 use nakui_core::executor::Executor;
 use nakui_core::store::{MemoryStore, Store};
@@ -13,12 +13,10 @@ use serde_json::json;
 use uuid::Uuid;
 
 fn main() {
-    let module_dir = std::env::var("NAKUI_MODULE")
-        .unwrap_or_else(|_| "modules/sales".into());
+    let module_dir = std::env::var("NAKUI_MODULE").unwrap_or_else(|_| "modules/sales".into());
     let exec = Executor::load_module(&module_dir).expect("load module");
 
-    let log_path =
-        std::env::temp_dir().join(format!("nakui_sales_{}.jsonl", Uuid::new_v4()));
+    let log_path = std::env::temp_dir().join(format!("nakui_sales_{}.jsonl", Uuid::new_v4()));
     let mut log = EventLog::open(&log_path).expect("open log");
     let mut store = MemoryStore::new();
 
@@ -26,24 +24,32 @@ fn main() {
     let caja_id = Uuid::new_v4();
     seed_and_log(
         &exec,
-        &mut store, &mut log, "Stock", stock_id,
+        &mut store,
+        &mut log,
+        "Stock",
+        stock_id,
         json!({
             "id": stock_id.to_string(),
             "sku_id": "kg-cafe-honduras-2026",
             "ubicacion": "almacen-norte",
             "cantidad": 500_i64,
         }),
-    ).expect("seed stock");
+    )
+    .expect("seed stock");
     seed_and_log(
         &exec,
-        &mut store, &mut log, "Caja", caja_id,
+        &mut store,
+        &mut log,
+        "Caja",
+        caja_id,
         json!({
             "id": caja_id.to_string(),
             "name": "Caja Principal",
             "saldo": 1_000_000_i64,  // $10_000.00 in cents
             "currency": "USD",
         }),
-    ).expect("seed caja");
+    )
+    .expect("seed caja");
 
     section("== seed ==");
     print_stock(&store, "stock", stock_id);
@@ -51,7 +57,11 @@ fn main() {
 
     // 1. Sell 100 kg cafe at $50.00 / kg = $5000.00 total.
     section("== vender 100 kg @ $50.00 c/u ==");
-    run_and_report(&exec, &mut store, &mut log, "vender",
+    run_and_report(
+        &exec,
+        &mut store,
+        &mut log,
+        "vender",
         &[("stock", stock_id), ("caja", caja_id)],
         json!({
             "cantidad": 100_i64,
@@ -65,7 +75,11 @@ fn main() {
 
     // 2. Try selling more than available stock — should fail Stock post-check.
     section("== vender 9999 kg (reject: stock <= 0) ==");
-    run_and_report(&exec, &mut store, &mut log, "vender",
+    run_and_report(
+        &exec,
+        &mut store,
+        &mut log,
+        "vender",
         &[("stock", stock_id), ("caja", caja_id)],
         json!({
             "cantidad": 9999_i64,
@@ -77,7 +91,11 @@ fn main() {
 
     // 3. Negative price — caught by Rhai.
     section("== vender con precio negativo (reject: rhai throw) ==");
-    run_and_report(&exec, &mut store, &mut log, "vender",
+    run_and_report(
+        &exec,
+        &mut store,
+        &mut log,
+        "vender",
         &[("stock", stock_id), ("caja", caja_id)],
         json!({
             "cantidad": 10_i64,
@@ -89,7 +107,11 @@ fn main() {
 
     // 4. Another good sale.
     section("== vender 50 kg @ $60.00 c/u ==");
-    run_and_report(&exec, &mut store, &mut log, "vender",
+    run_and_report(
+        &exec,
+        &mut store,
+        &mut log,
+        "vender",
         &[("stock", stock_id), ("caja", caja_id)],
         json!({
             "cantidad": 50_i64,
@@ -113,10 +135,12 @@ fn main() {
     ));
     for e in &entries {
         match e {
-            nakui_core::event_log::LogEntry::Seed { seq, entity, id, .. } =>
-                println!("  #{:02} seed   {} {}", seq, entity, id),
-            nakui_core::event_log::LogEntry::Morphism { seq, morphism, ops, .. } =>
-                println!("  #{:02} morph  {} ({} ops)", seq, morphism, ops.len()),
+            nakui_core::event_log::LogEntry::Seed {
+                seq, entity, id, ..
+            } => println!("  #{:02} seed   {} {}", seq, entity, id),
+            nakui_core::event_log::LogEntry::Morphism {
+                seq, morphism, ops, ..
+            } => println!("  #{:02} morph  {} ({} ops)", seq, morphism, ops.len()),
         }
     }
 
@@ -130,9 +154,7 @@ fn main() {
 
     section("== determinism verification (ops) ==");
     match verify_log(&log, &exec) {
-        Ok(()) => println!(
-            "  ok: every logged morphism reproduced its ops on re-execution"
-        ),
+        Ok(()) => println!("  ok: every logged morphism reproduced its ops on re-execution"),
         Err(e) => println!("  nondeterminism detected: {}", e),
     }
 
@@ -148,11 +170,16 @@ fn run_and_report(
     params: serde_json::Value,
 ) {
     match execute_and_log(exec, store, log, morphism, inputs, params) {
-        Ok(ops) => println!("  ok ({} ops, logged at #{})", ops.len(), log.next_seq() - 1),
+        Ok(ops) => println!(
+            "  ok ({} ops, logged at #{})",
+            ops.len(),
+            log.next_seq() - 1
+        ),
         Err(ExecuteError::PreLog(e)) => println!("  rejected: {}", e),
         Err(ExecuteError::LogAppend(e)) => println!("  LOG APPEND FAILED: {}", e),
         Err(ExecuteError::PostLogStore(e)) => println!(
-            "  POST-LOG STORE FAILED (log canonical, store stale): {}", e
+            "  POST-LOG STORE FAILED (log canonical, store stale): {}",
+            e
         ),
     }
 }

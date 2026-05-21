@@ -10,11 +10,11 @@
 use std::path::{Path, PathBuf};
 
 use nakui_core::event_log::{
-    EventLog, LogEntry, VerifyError, execute_and_log, replay, seed_and_log, verify_log,
+    execute_and_log, replay, seed_and_log, verify_log, EventLog, LogEntry, VerifyError,
 };
 use nakui_core::executor::Executor;
 use nakui_core::store::MemoryStore;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 fn workspace_root() -> PathBuf {
@@ -66,12 +66,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn deposit_5k(
-    exec: &Executor,
-    store: &mut MemoryStore,
-    log: &mut EventLog,
-    caja: Uuid,
-) {
+fn deposit_5k(exec: &Executor, store: &mut MemoryStore, log: &mut EventLog, caja: Uuid) {
     execute_and_log(
         exec,
         store,
@@ -122,7 +117,10 @@ fn executor_exposes_per_morphism_schema_hash() {
     // Re-loading the same module yields the same hashes — the contract
     // depends only on the bytes on disk, not load-time state.
     let exec2 = Executor::load_module(treasury_module()).expect("reload");
-    assert_eq!(exec.schema_hash("register_cash_move"), exec2.schema_hash("register_cash_move"));
+    assert_eq!(
+        exec.schema_hash("register_cash_move"),
+        exec2.schema_hash("register_cash_move")
+    );
 }
 
 #[test]
@@ -202,7 +200,10 @@ fn verify_log_rejects_log_after_morphism_script_changes() {
     // Reload — the hash for register_cash_move must change.
     let exec2 = Executor::load_module(&temp.path).expect("reload v2");
     let new_hash = exec2.schema_hash("register_cash_move").unwrap();
-    assert_ne!(original_hash, new_hash, "real source edit must move the hash");
+    assert_ne!(
+        original_hash, new_hash,
+        "real source edit must move the hash"
+    );
 
     // verify_log must surface SchemaMismatch, not OpsMismatch — the
     // schema check runs first because "rules changed" is more
@@ -361,7 +362,10 @@ fn verify_log_rejects_seed_after_schema_changes() {
 
     let exec2 = Executor::load_module(&temp.path).expect("reload v2");
     let new_hash = exec2.schema_bundle_hash;
-    assert_ne!(original_hash, new_hash, "schema.ncl byte change must move the bundle hash");
+    assert_ne!(
+        original_hash, new_hash,
+        "schema.ncl byte change must move the bundle hash"
+    );
 
     let log = EventLog::open(&log_path).unwrap();
     match verify_log(&log, &exec2) {
@@ -433,7 +437,11 @@ fn morphism_script_change_does_not_flag_unrelated_seeds() {
     // Modify a Rhai script. Bundle stays the same.
     let script_path = temp.path.join("morphisms/register_cash_move.rhai");
     let original = std::fs::read_to_string(&script_path).expect("read");
-    std::fs::write(&script_path, format!("{}\n// rhai-only mutation\n", original)).unwrap();
+    std::fs::write(
+        &script_path,
+        format!("{}\n// rhai-only mutation\n", original),
+    )
+    .unwrap();
 
     let exec2 = Executor::load_module(&temp.path).expect("reload");
     let log = EventLog::open(&log_path).unwrap();

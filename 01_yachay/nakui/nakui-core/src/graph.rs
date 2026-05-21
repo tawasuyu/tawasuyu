@@ -189,7 +189,10 @@ fn build_data_flow(
         for r in &m.reads {
             if let Some(token) = canonicalize_token(r, &role_to_entity) {
                 if seen_reads.insert(token.clone()) {
-                    readers.entry(token.clone()).or_default().push(m.name.clone());
+                    readers
+                        .entry(token.clone())
+                        .or_default()
+                        .push(m.name.clone());
                     m_reads.entry(m.name.clone()).or_default().push(token);
                 }
             }
@@ -198,7 +201,10 @@ fn build_data_flow(
         for w in &m.writes {
             if let Some(token) = canonicalize_token(w, &role_to_entity) {
                 if seen_writes.insert(token.clone()) {
-                    writers.entry(token.clone()).or_default().push(m.name.clone());
+                    writers
+                        .entry(token.clone())
+                        .or_default()
+                        .push(m.name.clone());
                     m_writes.entry(m.name.clone()).or_default().push(token);
                 }
             }

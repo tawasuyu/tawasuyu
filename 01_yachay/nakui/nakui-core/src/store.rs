@@ -128,10 +128,7 @@ pub fn hash_value(hasher: &mut Sha256, v: &Value) {
                 // else (fractions, NaN, infinities) hashes as the raw
                 // f64 bit pattern — that's still deterministic, just
                 // not normalized.
-                if f.is_finite()
-                    && f.fract() == 0.0
-                    && f >= I128_MIN_AS_F64
-                    && f <= I128_MAX_AS_F64
+                if f.is_finite() && f.fract() == 0.0 && f >= I128_MIN_AS_F64 && f <= I128_MAX_AS_F64
                 {
                     hash_int(hasher, f as i128);
                 } else {
@@ -247,22 +244,12 @@ impl Store for MemoryStore {
                     }
                 }
                 FieldOp::Create { entity, id, .. } => {
-                    if self
-                        .records
-                        .get(entity)
-                        .and_then(|m| m.get(id))
-                        .is_some()
-                    {
+                    if self.records.get(entity).and_then(|m| m.get(id)).is_some() {
                         return Err(StoreError::Conflict(entity.clone(), *id));
                     }
                 }
                 FieldOp::Delete { entity, id } => {
-                    if self
-                        .records
-                        .get(entity)
-                        .and_then(|m| m.get(id))
-                        .is_none()
-                    {
+                    if self.records.get(entity).and_then(|m| m.get(id)).is_none() {
                         return Err(StoreError::NotFound(entity.clone(), *id));
                     }
                 }
@@ -343,7 +330,10 @@ impl Store for MemoryStore {
                     .map(move |(id, v)| (entity.clone(), *id, v.clone()))
             })
             .collect();
-        out.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.as_bytes().cmp(b.1.as_bytes())));
+        out.sort_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then_with(|| a.1.as_bytes().cmp(b.1.as_bytes()))
+        });
         Ok(Box::new(out.into_iter()))
     }
 }
@@ -433,7 +423,11 @@ mod tests {
         let after = store.load("Customer", id).unwrap();
         let map = after.as_object().unwrap();
         assert!(!map.contains_key("notes"), "notes debería estar borrado");
-        assert_eq!(map.get("name"), Some(&json!("Acme")), "otros fields intactos");
+        assert_eq!(
+            map.get("name"),
+            Some(&json!("Acme")),
+            "otros fields intactos"
+        );
     }
 
     #[test]
@@ -455,10 +449,7 @@ mod tests {
         // No debería errar: clear de un field ausente es benigno.
         store.apply(&[op]).unwrap();
         let after = store.load("Customer", id).unwrap();
-        assert_eq!(
-            after.as_object().unwrap().get("name"),
-            Some(&json!("Acme"))
-        );
+        assert_eq!(after.as_object().unwrap().get("name"), Some(&json!("Acme")));
     }
 
     #[test]
@@ -680,9 +671,8 @@ mod tests {
         // The empty hash is the SHA-256 of an empty input — fix the
         // expected bytes so an accidental framing change in `hash_state`
         // can't silently sail through.
-        let expected = hex_decode(
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-        );
+        let expected =
+            hex_decode("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
         assert_eq!(s1.hash_state().unwrap().to_vec(), expected);
     }
 

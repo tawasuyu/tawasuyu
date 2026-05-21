@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use nakui_core::executor::{ExecError, Executor};
 use nakui_core::store::{MemoryStore, Store};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 fn workspace_root() -> PathBuf {
@@ -95,10 +95,7 @@ fn sale_decreases_stock_and_increases_caja() {
         .expect("venta must be persisted");
     assert_eq!(venta.get("total").and_then(Value::as_i64), Some(500_000));
     assert_eq!(venta.get("cantidad").and_then(Value::as_i64), Some(100));
-    assert_eq!(
-        venta.get("currency").and_then(Value::as_str),
-        Some("USD")
-    );
+    assert_eq!(venta.get("currency").and_then(Value::as_str), Some("USD"));
 }
 
 #[test]

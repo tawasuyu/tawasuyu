@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use nakui_core::event_log::{EventLog, execute_and_log, replay, seed_and_log};
+use nakui_core::event_log::{execute_and_log, replay, seed_and_log, EventLog};
 use nakui_core::executor::Executor;
 use nakui_core::store::{MemoryStore, Store};
 use serde_json::json;
@@ -27,13 +27,7 @@ fn fresh_log_path() -> PathBuf {
     std::env::temp_dir().join(format!("nakui_hash_{}.jsonl", Uuid::new_v4()))
 }
 
-fn seed_two_cajas(
-    exec: &Executor,
-    store: &mut MemoryStore,
-    log: &mut EventLog,
-    a: Uuid,
-    b: Uuid,
-) {
+fn seed_two_cajas(exec: &Executor, store: &mut MemoryStore, log: &mut EventLog, a: Uuid, b: Uuid) {
     seed_and_log(
         exec,
         store,

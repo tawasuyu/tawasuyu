@@ -150,10 +150,7 @@ pub fn simulate_on(state: &Value, entity: &str, id: Uuid, ops: &[FieldOp]) -> Op
             } if e == entity && *i == id => {
                 s = Some(data.clone());
             }
-            FieldOp::Delete {
-                entity: e,
-                id: i,
-            } if e == entity && *i == id => {
+            FieldOp::Delete { entity: e, id: i } if e == entity && *i == id => {
                 s = None;
             }
             _ => {}

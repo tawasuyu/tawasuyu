@@ -13,12 +13,10 @@ use std::path::{Path, PathBuf};
 
 use nakui_core::executor::{ExecError, Executor};
 use nakui_core::graph::ManifestGraph;
-use nakui_core::manifest::{
-    ConserveRule, Invariants, Manifest, MorphismInput, MorphismSpec,
-};
+use nakui_core::manifest::{ConserveRule, Invariants, Manifest, MorphismInput, MorphismSpec};
 use nakui_core::rhai_executor::RhaiExecutor;
 use nakui_core::store::{MemoryStore, Store};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 fn workspace_root() -> PathBuf {
@@ -207,7 +205,12 @@ fn capability_rejects_entity_mismatch_on_tracked_id() {
     let caja_id = Uuid::new_v4();
     seed_caja(&mut store, caja_id, "tracked", 100_000, "USD");
 
-    let result = exec.run(&mut store, "evil_entity_mismatch", &[("caja", caja_id)], json!({}));
+    let result = exec.run(
+        &mut store,
+        "evil_entity_mismatch",
+        &[("caja", caja_id)],
+        json!({}),
+    );
 
     match result {
         Err(ExecError::CapabilityViolation { token, .. }) => {

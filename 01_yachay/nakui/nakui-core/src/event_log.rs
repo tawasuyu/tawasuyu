@@ -363,10 +363,7 @@ impl Snapshot {
     /// Verify the snapshot was produced under a bundle compatible with
     /// `executor`. Snapshots without a hash (legacy / `from_memory_store`)
     /// pass — the operator opted out of this check at capture time.
-    pub fn ensure_compatible_with(
-        &self,
-        executor: &Executor,
-    ) -> Result<(), SnapshotMismatchError> {
+    pub fn ensure_compatible_with(&self, executor: &Executor) -> Result<(), SnapshotMismatchError> {
         let Some(snap_hash) = self.schema_hash else {
             return Ok(());
         };
@@ -405,10 +402,8 @@ impl Snapshot {
             return Ok(None);
         }
         let text = std::fs::read_to_string(path).map_err(LogError::Io)?;
-        let snap: Snapshot = serde_json::from_str(&text).map_err(|e| LogError::Parse {
-            line: 0,
-            source: e,
-        })?;
+        let snap: Snapshot =
+            serde_json::from_str(&text).map_err(|e| LogError::Parse { line: 0, source: e })?;
         Ok(Some(snap))
     }
 }
@@ -485,10 +480,7 @@ pub fn execute_and_log<S: Store>(
     let entry = LogEntry::Morphism {
         seq,
         morphism: morphism.to_string(),
-        inputs: inputs
-            .iter()
-            .map(|(r, id)| (r.to_string(), *id))
-            .collect(),
+        inputs: inputs.iter().map(|(r, id)| (r.to_string(), *id)).collect(),
         params,
         ops: ops.clone(),
         schema_hash: executor.schema_hash(morphism),
@@ -534,10 +526,7 @@ pub fn execute_and_log_with_recovery<S: Store>(
     let entry = LogEntry::Morphism {
         seq,
         morphism: morphism.to_string(),
-        inputs: inputs
-            .iter()
-            .map(|(r, id)| (r.to_string(), *id))
-            .collect(),
+        inputs: inputs.iter().map(|(r, id)| (r.to_string(), *id)).collect(),
         params,
         ops: ops.clone(),
         schema_hash: executor.schema_hash(morphism),

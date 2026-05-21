@@ -5,13 +5,12 @@ use std::path::{Path, PathBuf};
 
 use nakui_core::delta::FieldOp;
 use nakui_core::event_log::{
-    EventLog, ExecuteError, LogEntry, RecoverableExecuteError, Snapshot, execute_and_log,
-    execute_and_log_with_recovery, reconcile, replay, replay_with_snapshot_into, seed_and_log,
-    verify_log,
+    execute_and_log, execute_and_log_with_recovery, reconcile, replay, replay_with_snapshot_into,
+    seed_and_log, verify_log, EventLog, ExecuteError, LogEntry, RecoverableExecuteError, Snapshot,
 };
 use nakui_core::executor::Executor;
 use nakui_core::store::{MemoryStore, Store, StoreError};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 fn workspace_root() -> PathBuf {
@@ -247,11 +246,21 @@ fn post_log_store_failure_leaves_log_canonical() {
 
     // Live store is stale: apply was rejected, so saldos are unchanged.
     assert_eq!(
-        store.load("Caja", a).unwrap().get("saldo").unwrap().as_i64(),
+        store
+            .load("Caja", a)
+            .unwrap()
+            .get("saldo")
+            .unwrap()
+            .as_i64(),
         Some(200_000)
     );
     assert_eq!(
-        store.load("Caja", b).unwrap().get("saldo").unwrap().as_i64(),
+        store
+            .load("Caja", b)
+            .unwrap()
+            .get("saldo")
+            .unwrap()
+            .as_i64(),
         Some(50_000)
     );
 
@@ -464,7 +473,10 @@ fn snapshot_then_compact_then_replay_equals_pre_compaction() {
     let loaded_snap = Snapshot::load(&snap_path).unwrap().unwrap();
     let mut replayed = MemoryStore::new();
     replay_with_snapshot_into(&log, Some(&loaded_snap), &mut replayed).expect("replay");
-    assert_eq!(live, replayed, "snapshot + post-compact log must equal live");
+    assert_eq!(
+        live, replayed,
+        "snapshot + post-compact log must equal live"
+    );
 
     let _ = std::fs::remove_file(&log_path);
     let _ = std::fs::remove_file(&snap_path);
@@ -520,8 +532,14 @@ fn reconcile_rebuilds_drifted_store_from_log() {
     assert_ne!(live, canonical, "drift was set up to differ from log");
 
     reconcile(&mut live, &log).expect("reconcile");
-    assert_eq!(live, canonical, "reconcile must restore log-canonical state");
-    assert!(live.load("Caja", ghost).is_none(), "poison record must be wiped");
+    assert_eq!(
+        live, canonical,
+        "reconcile must restore log-canonical state"
+    );
+    assert!(
+        live.load("Caja", ghost).is_none(),
+        "poison record must be wiped"
+    );
 
     let _ = std::fs::remove_file(&log_path);
 }

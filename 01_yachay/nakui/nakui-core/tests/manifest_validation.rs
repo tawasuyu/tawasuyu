@@ -173,7 +173,9 @@ fn rejects_missing_script() {
     let mut m = baseline_manifest();
     m.morphisms[0].script = "morphisms/ghost.rhai".into();
     match m.validate(&treasury_dir()) {
-        Err(ValidationError::ScriptMissing { morphism, script, .. }) => {
+        Err(ValidationError::ScriptMissing {
+            morphism, script, ..
+        }) => {
             assert_eq!(morphism, "test_op");
             assert_eq!(script, "morphisms/ghost.rhai");
         }
@@ -200,16 +202,8 @@ fn rejects_duplicate_schema_across_files() {
     let tmp = std::env::temp_dir().join(format!("nakui_dup_{}", Uuid::new_v4()));
     fs::create_dir_all(&tmp).unwrap();
     fs::create_dir_all(tmp.join("morphisms")).unwrap();
-    fs::write(
-        tmp.join("a.ncl"),
-        "{\n  Caja = { saldo | Number },\n}\n",
-    )
-    .unwrap();
-    fs::write(
-        tmp.join("b.ncl"),
-        "{\n  Caja = { monto | Number },\n}\n",
-    )
-    .unwrap();
+    fs::write(tmp.join("a.ncl"), "{\n  Caja = { saldo | Number },\n}\n").unwrap();
+    fs::write(tmp.join("b.ncl"), "{\n  Caja = { monto | Number },\n}\n").unwrap();
     fs::write(tmp.join("morphisms/op.rhai"), "[]").unwrap();
 
     let m = Manifest {

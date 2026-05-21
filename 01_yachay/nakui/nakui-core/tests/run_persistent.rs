@@ -29,12 +29,12 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
-use nakui_core::event_log::{EventLog, seed_and_log};
+use nakui_core::event_log::{seed_and_log, EventLog};
 use nakui_core::executor::Executor;
 use nakui_core::run::run_server;
 use nakui_core::store::Store;
 use nakui_core::surreal_store::SurrealStore;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 fn workspace_root() -> PathBuf {
@@ -232,8 +232,7 @@ fn run_server_skips_replay_when_persistent_store_is_in_sync() {
     // Out-of-band mutation: open the persistent store directly and
     // change the saldo. Marker stays at the same seq.
     {
-        let mut store =
-            SurrealStore::new_persistent(&store_path).expect("reopen for poison");
+        let mut store = SurrealStore::new_persistent(&store_path).expect("reopen for poison");
         store.seed(
             "Caja",
             caja,

@@ -9,12 +9,12 @@ use std::thread;
 use std::time::Duration;
 
 use nakui_core::event_log::{
-    EventLog, Snapshot, SnapshotMismatchError, execute_and_log, replay, seed_and_log,
+    execute_and_log, replay, seed_and_log, EventLog, Snapshot, SnapshotMismatchError,
 };
 use nakui_core::executor::Executor;
 use nakui_core::run::run_server;
 use nakui_core::store::{MemoryStore, Store};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 fn workspace_root() -> PathBuf {
@@ -166,7 +166,10 @@ fn snapshot_then_compact_then_run_server_resumes_correctly() {
     let socket_for_client = socket_path.clone();
     let client = thread::spawn(move || -> Result<(), String> {
         let mut conn = connect_with_retry(&socket_for_client);
-        let resp = exchange(&mut conn, json!({"op": "load", "entity": "Caja", "id": caja.to_string()}));
+        let resp = exchange(
+            &mut conn,
+            json!({"op": "load", "entity": "Caja", "id": caja.to_string()}),
+        );
         if resp["value"]["saldo"].as_i64() != Some(112_500) {
             return Err(format!(
                 "expected saldo 112_500 (100k seed + 5k + 7.5k from snapshot), got {}",
@@ -191,9 +194,15 @@ fn snapshot_then_compact_then_run_server_resumes_correctly() {
             }),
         );
         if resp["ok"] != json!(true) {
-            return Err(format!("execute on snapshot-booted server failed: {}", resp));
+            return Err(format!(
+                "execute on snapshot-booted server failed: {}",
+                resp
+            ));
         }
-        let resp = exchange(&mut conn, json!({"op": "load", "entity": "Caja", "id": caja.to_string()}));
+        let resp = exchange(
+            &mut conn,
+            json!({"op": "load", "entity": "Caja", "id": caja.to_string()}),
+        );
         if resp["value"]["saldo"].as_i64() != Some(113_500) {
             return Err(format!("post-execute saldo wrong: {}", resp));
         }
@@ -234,10 +243,7 @@ fn run_server_refuses_snapshot_with_wrong_schema_hash() {
     let store = MemoryStore::new();
     let result = run_server(exec, log, store, Some(bad_snap), &socket_path);
     assert!(
-        matches!(
-            result,
-            Err(nakui_core::run::RunError::SnapshotMismatch(_))
-        ),
+        matches!(result, Err(nakui_core::run::RunError::SnapshotMismatch(_))),
         "expected SnapshotMismatch, got {:?}",
         result
     );
@@ -352,7 +358,8 @@ fn snapshot_write_recovers_from_stale_tempfile() {
 
     let exec = Executor::load_module(treasury_module()).expect("load");
     let snap = Snapshot::capture(&MemoryStore::new(), 0, &exec);
-    snap.write(&snap_path).expect("write despite stale tempfile");
+    snap.write(&snap_path)
+        .expect("write despite stale tempfile");
 
     // Tempfile should be renamed (not orphaned), so it's gone.
     assert!(

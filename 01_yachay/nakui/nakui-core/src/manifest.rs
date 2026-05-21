@@ -150,11 +150,9 @@ impl Manifest {
                     resolved: resolved.display().to_string(),
                 });
             }
-            let content = std::fs::read_to_string(&resolved).map_err(|e| {
-                ValidationError::Io {
-                    path: s.clone(),
-                    source: e,
-                }
+            let content = std::fs::read_to_string(&resolved).map_err(|e| ValidationError::Io {
+                path: s.clone(),
+                source: e,
             })?;
             for name in extract_schema_names(&content) {
                 entity_to_files.entry(name).or_default().push(s.clone());
@@ -168,8 +166,7 @@ impl Manifest {
                 });
             }
         }
-        let known_entities: HashSet<&str> =
-            entity_to_files.keys().map(String::as_str).collect();
+        let known_entities: HashSet<&str> = entity_to_files.keys().map(String::as_str).collect();
 
         // 2. Manifest-level: morphism names must be unique.
         let mut seen: HashSet<&str> = HashSet::new();

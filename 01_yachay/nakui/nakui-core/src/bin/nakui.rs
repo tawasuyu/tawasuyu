@@ -13,10 +13,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use nakui_core::drift::{DriftDiff, check_against_socket};
-use nakui_core::event_log::{
-    EventLog, LogEntry, Snapshot, replay_with_snapshot_into, verify_log,
-};
+use nakui_core::drift::{check_against_socket, DriftDiff};
+use nakui_core::event_log::{replay_with_snapshot_into, verify_log, EventLog, LogEntry, Snapshot};
 use nakui_core::executor::Executor;
 use nakui_core::run::run_server;
 use nakui_core::store::MemoryStore;
@@ -111,19 +109,16 @@ fn parse_flags(args: &[String], allowed: &[&str]) -> Result<BTreeMap<String, Str
         if !allowed.contains(&name) {
             return Err(CliError::BadArgs(format!("unknown flag `--{}`", name)));
         }
-        let val = args.get(i + 1).ok_or_else(|| {
-            CliError::BadArgs(format!("flag `--{}` requires a value", name))
-        })?;
+        let val = args
+            .get(i + 1)
+            .ok_or_else(|| CliError::BadArgs(format!("flag `--{}` requires a value", name)))?;
         out.insert(name.to_string(), val.clone());
         i += 2;
     }
     Ok(out)
 }
 
-fn require<'a>(
-    flags: &'a BTreeMap<String, String>,
-    name: &str,
-) -> Result<&'a String, CliError> {
+fn require<'a>(flags: &'a BTreeMap<String, String>, name: &str) -> Result<&'a String, CliError> {
     flags
         .get(name)
         .ok_or_else(|| CliError::BadArgs(format!("missing required flag `--{}`", name)))
@@ -141,7 +136,11 @@ fn cmd_inspect(args: &[String]) -> Result<(), CliError> {
     if entries.is_empty() {
         return Ok(());
     }
-    println!("seq range: {}..={}", entries[0].seq(), entries.last().unwrap().seq());
+    println!(
+        "seq range: {}..={}",
+        entries[0].seq(),
+        entries.last().unwrap().seq()
+    );
     println!();
     for e in &entries {
         match e {
@@ -195,18 +194,18 @@ fn cmd_replay(args: &[String]) -> Result<(), CliError> {
     let entries = log
         .entries()
         .map_err(|e| CliError::Op(format!("read log: {}", e)))?;
-    let last_seq = entries.last().map(|e| e.seq().to_string()).unwrap_or_else(|| "<empty>".into());
+    let last_seq = entries
+        .last()
+        .map(|e| e.seq().to_string())
+        .unwrap_or_else(|| "<empty>".into());
     println!("replayed log: {}", log.path().display());
     if let Some(snap) = &snapshot {
         println!("snapshot: seq {} (covers seq <= {})", snap.seq, snap.seq);
     }
     println!("last seq: {}", last_seq);
     println!("entities:");
-    let mut by_entity: Vec<(&String, usize)> = store
-        .records()
-        .iter()
-        .map(|(k, v)| (k, v.len()))
-        .collect();
+    let mut by_entity: Vec<(&String, usize)> =
+        store.records().iter().map(|(k, v)| (k, v.len())).collect();
     by_entity.sort_by(|a, b| a.0.cmp(b.0));
     if by_entity.is_empty() {
         println!("  (none)");
@@ -414,7 +413,8 @@ fn cmd_compact(args: &[String]) -> Result<(), CliError> {
     let snap = Snapshot::load(&snap_path)
         .map_err(|e| CliError::Op(format!("load snapshot: {}", e)))?
         .ok_or_else(|| CliError::Op(format!("snapshot not found: {}", snap_path.display())))?;
-    let mut log = EventLog::open(&log_path).map_err(|e| CliError::Op(format!("open log: {}", e)))?;
+    let mut log =
+        EventLog::open(&log_path).map_err(|e| CliError::Op(format!("open log: {}", e)))?;
     let before = log
         .entries()
         .map(|es| es.len())

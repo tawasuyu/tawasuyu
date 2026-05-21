@@ -1,5 +1,5 @@
 use nakui_core::event_log::{
-    EventLog, ExecuteError, execute_and_log, replay, seed_and_log, verify_log,
+    execute_and_log, replay, seed_and_log, verify_log, EventLog, ExecuteError,
 };
 use nakui_core::executor::Executor;
 use nakui_core::store::{MemoryStore, Store};
@@ -7,8 +7,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 fn main() {
-    let module_dir =
-        std::env::var("NAKUI_MODULE").unwrap_or_else(|_| "modules/treasury".into());
+    let module_dir = std::env::var("NAKUI_MODULE").unwrap_or_else(|_| "modules/treasury".into());
     let exec = Executor::load_module(&module_dir).expect("load module");
 
     let log_path = std::env::temp_dir().join(format!("nakui_demo_{}.jsonl", Uuid::new_v4()));
@@ -162,10 +161,7 @@ fn main() {
                 seq, entity, id, ..
             } => println!("  #{:02} seed   {} {}", seq, entity, id),
             nakui_core::event_log::LogEntry::Morphism {
-                seq,
-                morphism,
-                ops,
-                ..
+                seq, morphism, ops, ..
             } => println!("  #{:02} morph  {} ({} ops)", seq, morphism, ops.len()),
         }
     }
@@ -180,16 +176,17 @@ fn main() {
 
     section("== determinism verification (ops) ==");
     match verify_log(&log, &exec) {
-        Ok(()) => println!(
-            "  ok: every logged morphism reproduced its ops on re-execution"
-        ),
+        Ok(()) => println!("  ok: every logged morphism reproduced its ops on re-execution"),
         Err(e) => println!("  nondeterminism detected: {}", e),
     }
 
     if std::env::var_os("NAKUI_DEMO_KEEP").is_none() {
         let _ = std::fs::remove_file(&log_path);
     } else {
-        println!("\n(NAKUI_DEMO_KEEP set — keeping log at {})", log_path.display());
+        println!(
+            "\n(NAKUI_DEMO_KEEP set — keeping log at {})",
+            log_path.display()
+        );
     }
 }
 
@@ -202,7 +199,11 @@ fn run_and_report(
     params: serde_json::Value,
 ) {
     match execute_and_log(exec, store, log, morphism, inputs, params) {
-        Ok(ops) => println!("  ok ({} ops, logged at #{})", ops.len(), log.next_seq() - 1),
+        Ok(ops) => println!(
+            "  ok ({} ops, logged at #{})",
+            ops.len(),
+            log.next_seq() - 1
+        ),
         Err(ExecuteError::PreLog(e)) => println!("  rejected: {}", e),
         Err(ExecuteError::LogAppend(e)) => println!("  LOG APPEND FAILED: {}", e),
         Err(ExecuteError::PostLogStore(e)) => println!(

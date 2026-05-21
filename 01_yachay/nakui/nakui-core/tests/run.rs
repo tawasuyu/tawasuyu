@@ -14,11 +14,11 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
-use nakui_core::event_log::{EventLog, execute_and_log, seed_and_log};
+use nakui_core::event_log::{execute_and_log, seed_and_log, EventLog};
 use nakui_core::executor::Executor;
 use nakui_core::run::run_server;
 use nakui_core::store::MemoryStore;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 fn workspace_root() -> PathBuf {
@@ -118,9 +118,7 @@ fn run_server_full_protocol_round_trip() {
         if resp["protocol"] != json!(1) {
             return Err(format!("protocol mismatch: {}", resp));
         }
-        let morphisms = resp["morphisms"]
-            .as_array()
-            .ok_or("morphisms not array")?;
+        let morphisms = resp["morphisms"].as_array().ok_or("morphisms not array")?;
         if !morphisms.iter().any(|m| m["name"] == "register_cash_move") {
             return Err("register_cash_move missing from describe".into());
         }
@@ -183,9 +181,13 @@ fn run_server_full_protocol_round_trip() {
         }
 
         // Bad JSON — connection survives, server keeps serving.
-        conn.writer.write_all(b"not json\n").map_err(|e| e.to_string())?;
+        conn.writer
+            .write_all(b"not json\n")
+            .map_err(|e| e.to_string())?;
         let mut line = String::new();
-        conn.reader.read_line(&mut line).map_err(|e| e.to_string())?;
+        conn.reader
+            .read_line(&mut line)
+            .map_err(|e| e.to_string())?;
         let parsed: Value = serde_json::from_str(line.trim()).map_err(|e| e.to_string())?;
         if parsed["ok"] != json!(false) {
             return Err(format!("bad request didn't get error: {}", parsed));
@@ -207,7 +209,10 @@ fn run_server_full_protocol_round_trip() {
     });
 
     run_server(executor, log, store, None, &socket_path).expect("server clean exit");
-    client.join().expect("client thread joined").expect("client assertions");
+    client
+        .join()
+        .expect("client thread joined")
+        .expect("client assertions");
 
     assert!(
         !socket_path.exists(),

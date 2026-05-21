@@ -8,12 +8,12 @@ use std::path::{Path, PathBuf};
 
 use nakui_core::delta::{FieldOp, FieldPath};
 use nakui_core::event_log::{
-    EventLog, execute_and_log, reconcile, replay_into, seed_and_log, verify_log,
+    execute_and_log, reconcile, replay_into, seed_and_log, verify_log, EventLog,
 };
 use nakui_core::executor::Executor;
 use nakui_core::store::{MemoryStore, Store, StoreError};
 use nakui_core::surreal_store::SurrealStore;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 fn workspace_root() -> PathBuf {
@@ -240,8 +240,24 @@ fn verify_log_against_surreal_passes() {
 
     let a = Uuid::new_v4();
     let b = Uuid::new_v4();
-    seed_and_log(&exec, &mut live, &mut log, "Caja", a, caja_data(a, 200_000, "USD")).unwrap();
-    seed_and_log(&exec, &mut live, &mut log, "Caja", b, caja_data(b, 50_000, "USD")).unwrap();
+    seed_and_log(
+        &exec,
+        &mut live,
+        &mut log,
+        "Caja",
+        a,
+        caja_data(a, 200_000, "USD"),
+    )
+    .unwrap();
+    seed_and_log(
+        &exec,
+        &mut live,
+        &mut log,
+        "Caja",
+        b,
+        caja_data(b, 50_000, "USD"),
+    )
+    .unwrap();
     execute_and_log(
         &exec,
         &mut live,
@@ -432,8 +448,24 @@ fn iter_and_hash_state_round_trip_against_surreal() {
     let mut live = SurrealStore::new_in_memory().expect("live");
     let a = Uuid::new_v4();
     let b = Uuid::new_v4();
-    seed_and_log(&exec, &mut live, &mut log, "Caja", a, caja_data(a, 200_000, "USD")).unwrap();
-    seed_and_log(&exec, &mut live, &mut log, "Caja", b, caja_data(b, 50_000, "USD")).unwrap();
+    seed_and_log(
+        &exec,
+        &mut live,
+        &mut log,
+        "Caja",
+        a,
+        caja_data(a, 200_000, "USD"),
+    )
+    .unwrap();
+    seed_and_log(
+        &exec,
+        &mut live,
+        &mut log,
+        "Caja",
+        b,
+        caja_data(b, 50_000, "USD"),
+    )
+    .unwrap();
     execute_and_log(
         &exec,
         &mut live,
@@ -453,12 +485,17 @@ fn iter_and_hash_state_round_trip_against_surreal() {
     // iter must enumerate every record.
     let recs: Vec<_> = live.iter().expect("iter").collect();
     let by_entity: std::collections::HashMap<&str, usize> =
-        recs.iter().fold(std::collections::HashMap::new(), |mut m, (e, _, _)| {
-            *m.entry(e.as_str()).or_insert(0) += 1;
-            m
-        });
+        recs.iter()
+            .fold(std::collections::HashMap::new(), |mut m, (e, _, _)| {
+                *m.entry(e.as_str()).or_insert(0) += 1;
+                m
+            });
     assert_eq!(by_entity.get("Caja").copied(), Some(2), "two Cajas");
-    assert_eq!(by_entity.get("Movimiento").copied(), Some(1), "one Movimiento");
+    assert_eq!(
+        by_entity.get("Movimiento").copied(),
+        Some(1),
+        "one Movimiento"
+    );
 
     // canonical order: entities sorted, ids byte-sorted within entity.
     let entities: Vec<&str> = recs.iter().map(|(e, _, _)| e.as_str()).collect();
@@ -496,7 +533,15 @@ fn reconcile_rebuilds_drifted_surreal_store_from_log() {
     let mut store = SurrealStore::new_in_memory().expect("surreal");
 
     let a = Uuid::new_v4();
-    seed_and_log(&exec, &mut store, &mut log, "Caja", a, caja_data(a, 100_000, "USD")).unwrap();
+    seed_and_log(
+        &exec,
+        &mut store,
+        &mut log,
+        "Caja",
+        a,
+        caja_data(a, 100_000, "USD"),
+    )
+    .unwrap();
     execute_and_log(
         &exec,
         &mut store,
@@ -518,7 +563,9 @@ fn reconcile_rebuilds_drifted_surreal_store_from_log() {
     store.seed("Caja", ghost, caja_data(ghost, 0, "USD"));
     store.seed("Caja", a, caja_data(a, 999_999, "USD"));
     assert_eq!(
-        store.load("Caja", a).and_then(|v| v.get("saldo").and_then(Value::as_i64)),
+        store
+            .load("Caja", a)
+            .and_then(|v| v.get("saldo").and_then(Value::as_i64)),
         Some(999_999),
         "drift was applied"
     );
@@ -528,7 +575,9 @@ fn reconcile_rebuilds_drifted_surreal_store_from_log() {
     // After reconcile: ghost gone, saldo = 100_000 (seed) + 5_000 (deposit).
     assert!(store.load("Caja", ghost).is_none(), "poison record wiped");
     assert_eq!(
-        store.load("Caja", a).and_then(|v| v.get("saldo").and_then(Value::as_i64)),
+        store
+            .load("Caja", a)
+            .and_then(|v| v.get("saldo").and_then(Value::as_i64)),
         Some(105_000),
         "reconcile must restore log-canonical saldo"
     );

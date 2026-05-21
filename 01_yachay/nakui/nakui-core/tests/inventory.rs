@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use nakui_core::executor::{ExecError, Executor};
 use nakui_core::store::{MemoryStore, Store};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 fn workspace_root() -> PathBuf {
@@ -104,7 +104,10 @@ fn transfer_across_different_skus_is_rejected_by_conservation() {
 
     match result {
         Err(ExecError::Rhai(_)) => {}
-        other => panic!("expected Rhai (script throw on sku mismatch), got {:?}", other),
+        other => panic!(
+            "expected Rhai (script throw on sku mismatch), got {:?}",
+            other
+        ),
     }
     assert_eq!(cantidad(&store, a), 500);
     assert_eq!(cantidad(&store, c), 200);

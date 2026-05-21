@@ -5,9 +5,7 @@ use std::path::{Path, PathBuf};
 
 use nakui_core::executor::Executor;
 use nakui_core::graph::{DirtyTracker, GraphError, ManifestGraph};
-use nakui_core::manifest::{
-    ConserveRule, Invariants, Manifest, MorphismInput, MorphismSpec,
-};
+use nakui_core::manifest::{ConserveRule, Invariants, Manifest, MorphismInput, MorphismSpec};
 
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -114,14 +112,28 @@ fn treasury_data_flow_indexes_match_manifest() {
     let g = &exec.graph;
 
     // Both register_cash_move and transfer_between_cajas write Caja.saldo.
-    let mut writers: Vec<&str> = g.writers_of("Caja.saldo").iter().map(|s| s.as_str()).collect();
+    let mut writers: Vec<&str> = g
+        .writers_of("Caja.saldo")
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
     writers.sort();
-    assert_eq!(writers, vec!["register_cash_move", "transfer_between_cajas"]);
+    assert_eq!(
+        writers,
+        vec!["register_cash_move", "transfer_between_cajas"]
+    );
 
     // Both read Caja.saldo too.
-    let mut readers: Vec<&str> = g.readers_of("Caja.saldo").iter().map(|s| s.as_str()).collect();
+    let mut readers: Vec<&str> = g
+        .readers_of("Caja.saldo")
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
     readers.sort();
-    assert_eq!(readers, vec!["register_cash_move", "transfer_between_cajas"]);
+    assert_eq!(
+        readers,
+        vec!["register_cash_move", "transfer_between_cajas"]
+    );
 
     // Movimiento is written only by register_cash_move.
     assert_eq!(
@@ -246,8 +258,11 @@ fn executor_load_module_rejects_cyclic_manifest() {
         Err(e) => e,
     };
     let msg = err.to_string();
-    assert!(msg.contains("graph") || msg.contains("cycle"),
-        "expected graph diagnostic, got `{}`", msg);
+    assert!(
+        msg.contains("graph") || msg.contains("cycle"),
+        "expected graph diagnostic, got `{}`",
+        msg
+    );
 
     let _ = std::fs::remove_dir_all(&tmp);
 }

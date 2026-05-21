@@ -19,7 +19,7 @@ use std::path::Path;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::event_log::{EventLog, replay};
+use crate::event_log::{replay, EventLog};
 use crate::store::Store;
 
 /// A single record-level difference between two snapshots. Variants are
@@ -333,13 +333,13 @@ fn parse_records(resp: &Value) -> Result<Vec<(String, Uuid, Value)>, DriftError>
                 field: "records[].entity".into(),
             })?
             .to_string();
-        let id_str = item
-            .get("id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| DriftError::MissingField {
-                op: "dump_records".into(),
-                field: "records[].id".into(),
-            })?;
+        let id_str =
+            item.get("id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| DriftError::MissingField {
+                    op: "dump_records".into(),
+                    field: "records[].id".into(),
+                })?;
         let id = Uuid::parse_str(id_str).map_err(|_| DriftError::MissingField {
             op: "dump_records".into(),
             field: format!("records[].id (not uuid: {})", id_str),
@@ -377,16 +377,8 @@ mod tests {
         // The function compares records, not hashes — hash equality is
         // the operator's fast-path, but the report's truth is the diffs.
         let a = Uuid::new_v4();
-        let log = vec![(
-            "Caja".to_string(),
-            a,
-            json!({"saldo": 100}),
-        )];
-        let server = vec![(
-            "Caja".to_string(),
-            a,
-            json!({"saldo": 100}),
-        )];
+        let log = vec![("Caja".to_string(), a, json!({"saldo": 100}))];
+        let server = vec![("Caja".to_string(), a, json!({"saldo": 100}))];
         let report = compare_states(log, h(1), server, h(2));
         assert!(report.diffs.is_empty(), "records equal → no diffs");
     }
@@ -395,11 +387,7 @@ mod tests {
     fn detects_only_on_server() {
         let a = Uuid::new_v4();
         let b = Uuid::new_v4();
-        let log = vec![(
-            "Caja".to_string(),
-            a,
-            json!({"saldo": 100}),
-        )];
+        let log = vec![("Caja".to_string(), a, json!({"saldo": 100}))];
         let server = vec![
             ("Caja".to_string(), a, json!({"saldo": 100})),
             ("Caja".to_string(), b, json!({"saldo": 999})),
@@ -457,17 +445,16 @@ mod tests {
         let id_caja = Uuid::nil(); // sorts first byte-wise
         let id_mov = Uuid::from_u128(u128::MAX);
 
-        let log = vec![
-            ("Movimiento".to_string(), id_mov, json!({"x": 1})),
-        ];
-        let server = vec![
-            ("Caja".to_string(), id_caja, json!({"saldo": 0})),
-        ];
+        let log = vec![("Movimiento".to_string(), id_mov, json!({"x": 1}))];
+        let server = vec![("Caja".to_string(), id_caja, json!({"saldo": 0}))];
         let report = compare_states(log, h(0), server, h(1));
         assert_eq!(report.diffs.len(), 2);
         // Caja sorts before Movimiento.
         match (&report.diffs[0], &report.diffs[1]) {
-            (DriftDiff::OnlyOnServer { entity: e1, .. }, DriftDiff::OnlyInLog { entity: e2, .. }) => {
+            (
+                DriftDiff::OnlyOnServer { entity: e1, .. },
+                DriftDiff::OnlyInLog { entity: e2, .. },
+            ) => {
                 assert_eq!(e1, "Caja");
                 assert_eq!(e2, "Movimiento");
             }

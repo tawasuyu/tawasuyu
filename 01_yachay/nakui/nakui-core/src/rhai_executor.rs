@@ -2,7 +2,7 @@ use rhai::packages::{
     ArithmeticPackage, BasicArrayPackage, BasicIteratorPackage, BasicMapPackage,
     BasicStringPackage, CorePackage, LogicPackage, Package,
 };
-use rhai::{AST, Dynamic, Engine, Scope};
+use rhai::{Dynamic, Engine, Scope, AST};
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -76,8 +76,8 @@ impl RhaiExecutor {
         for item in arr {
             let json: Value = rhai::serde::from_dynamic(&item)
                 .map_err(|e| RhaiError::BadOp(format!("dynamic -> json: {}", e)))?;
-            let op: FieldOp = serde_json::from_value(json)
-                .map_err(|e| RhaiError::BadOp(e.to_string()))?;
+            let op: FieldOp =
+                serde_json::from_value(json).map_err(|e| RhaiError::BadOp(e.to_string()))?;
             ops.push(op);
         }
         Ok(ops)
