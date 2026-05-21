@@ -27,7 +27,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    println!("Cerebro headless · control en {}", path.display());
+    eprintln!("Cerebro headless · control en {}", path.display());
 
     // Una pantalla y tres ventanas de muestra.
     let mut desktop = Desktop::new();
@@ -40,21 +40,37 @@ fn main() {
         });
     }
     print_state(&desktop);
-    println!("   esperando a mirada-ctl …");
+    eprintln!("   esperando a mirada-ctl …");
 
     loop {
         if let Some(mut conn) = server.poll() {
             if let Ok(Some(req)) = conn.read_request() {
                 let reply = match req {
                     CtlRequest::Do(action) => {
-                        let cmds = desktop.apply(action);
-                        // Sin Cuerpo: simulamos nosotros el cierre.
-                        for cmd in cmds {
-                            if let BrainCommand::Close(id) | BrainCommand::Kill(id) = cmd {
-                                desktop.on_event(BodyEvent::WindowClosed { id });
+                        eprintln!("· {action}");
+                        for cmd in desktop.apply(action) {
+                            match cmd {
+                                // La geometría que el Cerebro mandaría al Cuerpo.
+                                BrainCommand::Place(places) => {
+                                    for p in places {
+                                        eprintln!(
+                                            "    win {} → {:>5}×{:<4} @ ({:>5},{:>4}){}",
+                                            p.id,
+                                            p.rect.w,
+                                            p.rect.h,
+                                            p.rect.x,
+                                            p.rect.y,
+                                            if p.focused { "  *" } else { "" },
+                                        );
+                                    }
+                                }
+                                // Sin Cuerpo: simulamos nosotros el cierre.
+                                BrainCommand::Close(id) | BrainCommand::Kill(id) => {
+                                    desktop.on_event(BodyEvent::WindowClosed { id });
+                                }
+                                _ => {}
                             }
                         }
-                        println!("· {action}");
                         print_state(&desktop);
                         CtlReply::Ok
                     }
@@ -68,10 +84,12 @@ fn main() {
 }
 
 fn print_state(d: &Desktop) {
-    println!(
-        "  escritorio {} · foco {:?} · ventanas/escritorio {:?}",
+    let ws = d.active_workspace();
+    eprintln!(
+        "  escritorio {} · {:?} (maestra {:.0}%) · foco {:?}",
         d.active_index() + 1,
+        ws.params().mode,
+        ws.params().master_ratio * 100.0,
         d.focused_window(),
-        d.workspace_loads(),
     );
 }

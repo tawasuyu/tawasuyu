@@ -109,18 +109,25 @@ fn print_help() {
 }
 
 fn print_actions() {
-    println!(
-        "Acciones de mirada-ctl:\n  \
-           focus-next                 mueve el foco a la siguiente ventana\n  \
-           focus-prev                 mueve el foco a la anterior\n  \
-           focus-window <id>          enfoca la ventana <id>  (ver: mirada-ctl windows)\n  \
-           move-forward               adelanta la ventana enfocada en el teselado\n  \
-           move-backward              la atrasa\n  \
-           close-focused              cierra la ventana enfocada\n  \
-           cycle-layout               pasa al siguiente modo de teselado\n  \
-           layout <modo>              master-stack | monocle | grid | columns\n  \
-           workspace <n>              activa el escritorio n (1..9)\n  \
-           send-to-workspace <n>      manda la enfocada al escritorio n\n  \
-           quit                       apaga el compositor"
+    // Cadena multilínea literal: la indentación de cada línea es la que
+    // se imprime (el `\` tras la comilla se come sólo el primer salto).
+    print!(
+        "\
+Acciones de mirada-ctl:
+  focus-next                 mueve el foco a la siguiente ventana
+  focus-prev                 mueve el foco a la anterior
+  focus-window <id>          enfoca la ventana <id>  (ver: mirada-ctl windows)
+  move-forward               adelanta la ventana enfocada en el teselado
+  move-backward              la atrasa
+  close-focused              cierra la ventana enfocada
+  cycle-layout               pasa al siguiente modo de teselado
+  layout <modo>              master-stack · centered-master · spiral
+                             grid · columns · rows · monocle
+  grow-master                agranda el área de la ventana maestra
+  shrink-master              la encoge
+  workspace <n>              activa el escritorio n (1..9)
+  send-to-workspace <n>      manda la enfocada al escritorio n
+  quit                       apaga el compositor
+"
     );
 }

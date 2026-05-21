@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 use crate::geometry::{split, Rect};
 
 /// Estrategia de teselado.
+///
+/// Las variantes nuevas se añaden **al final** para no mover los índices
+/// con que `postcard` las serializa en el API de control.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum LayoutMode {
@@ -16,6 +19,33 @@ pub enum LayoutMode {
     Grid,
     /// Columnas verticales de igual ancho.
     Columns,
+    /// Filas horizontales de igual alto.
+    Rows,
+    /// Ventana maestra centrada; el resto en columnas a ambos lados.
+    /// Pensado para monitores anchos.
+    CenteredMaster,
+    /// Espiral de Fibonacci: cada ventana parte por la mitad el espacio
+    /// que queda, alternando el sentido del corte.
+    Spiral,
+}
+
+impl LayoutMode {
+    /// Todos los modos, en el orden del ciclo de `CycleLayout`.
+    pub const ALL: [LayoutMode; 7] = [
+        LayoutMode::MasterStack,
+        LayoutMode::CenteredMaster,
+        LayoutMode::Spiral,
+        LayoutMode::Grid,
+        LayoutMode::Columns,
+        LayoutMode::Rows,
+        LayoutMode::Monocle,
+    ];
+
+    /// El siguiente modo en el ciclo (envuelve al llegar al final).
+    pub fn next(self) -> LayoutMode {
+        let i = Self::ALL.iter().position(|&m| m == self).unwrap_or(0);
+        Self::ALL[(i + 1) % Self::ALL.len()]
+    }
 }
 
 /// Parámetros del teselado.
@@ -45,8 +75,11 @@ pub fn tile(screen: Rect, count: usize, params: &LayoutParams) -> Vec<Rect> {
     let cells = match params.mode {
         LayoutMode::Monocle => vec![screen; count],
         LayoutMode::Columns => columns(screen, count),
+        LayoutMode::Rows => rows(screen, count),
         LayoutMode::Grid => grid(screen, count),
         LayoutMode::MasterStack => master_stack(screen, count, params.master_ratio),
+        LayoutMode::CenteredMaster => centered_master(screen, count, params.master_ratio),
+        LayoutMode::Spiral => spiral(screen, count),
     };
     // El margen se aplica al final, uniforme para todos los modos.
     cells.into_iter().map(|c| c.inset(params.gap)).collect()
@@ -73,6 +106,65 @@ fn grid(screen: Rect, count: usize) -> Vec<Rect> {
             Rect::new(screen.x + cx, screen.y + ry, cw, rh)
         })
         .collect()
+}
+
+/// Filas horizontales de igual alto.
+fn rows(screen: Rect, count: usize) -> Vec<Rect> {
+    split(screen.h, count)
+        .into_iter()
+        .map(|(off, h)| Rect::new(screen.x, screen.y + off, screen.w, h))
+        .collect()
+}
+
+/// Espiral de Fibonacci: cada ventana se queda con la mitad del espacio
+/// libre y la siguiente recurre en la otra mitad, alternando el corte.
+/// La última ventana llena todo lo que sobra.
+fn spiral(screen: Rect, count: usize) -> Vec<Rect> {
+    let mut out = Vec::with_capacity(count);
+    let mut area = screen;
+    let mut horizontal = true;
+    for _ in 1..count {
+        if horizontal {
+            let p = split(area.w, 2);
+            out.push(Rect::new(area.x, area.y, p[0].1, area.h));
+            area = Rect::new(area.x + p[1].0, area.y, p[1].1, area.h);
+        } else {
+            let p = split(area.h, 2);
+            out.push(Rect::new(area.x, area.y, area.w, p[0].1));
+            area = Rect::new(area.x, area.y + p[1].0, area.w, p[1].1);
+        }
+        horizontal = !horizontal;
+    }
+    out.push(area);
+    out
+}
+
+/// Ventana maestra centrada + pila repartida en columnas a ambos lados.
+fn centered_master(screen: Rect, count: usize, ratio: f32) -> Vec<Rect> {
+    // Con una o dos ventanas no hay nada que centrar: cae a maestro+pila.
+    if count <= 2 {
+        return master_stack(screen, count, ratio);
+    }
+    let ratio = ratio.clamp(0.05, 0.95);
+    let master_w = (screen.w as f32 * ratio).round() as i32;
+    let sides = split(screen.w - master_w, 2);
+    let (left_w, right_w) = (sides[0].1, sides[1].1);
+
+    let stack = count - 1;
+    let left_n = stack / 2;
+    let right_n = stack - left_n;
+
+    let mut out = Vec::with_capacity(count);
+    // 0 = la maestra, centrada.
+    out.push(Rect::new(screen.x + left_w, screen.y, master_w, screen.h));
+    // Columna izquierda, luego la derecha — el orden de teselado.
+    for (off, h) in split(screen.h, left_n) {
+        out.push(Rect::new(screen.x, screen.y + off, left_w, h));
+    }
+    for (off, h) in split(screen.h, right_n) {
+        out.push(Rect::new(screen.x + left_w + master_w, screen.y + off, right_w, h));
+    }
+    out
 }
 
 /// Ventana maestra a la izquierda + pila a la derecha.
@@ -110,15 +202,56 @@ mod tests {
 
     #[test]
     fn tile_count_matches_window_count() {
-        for mode in [
-            LayoutMode::MasterStack,
-            LayoutMode::Monocle,
-            LayoutMode::Grid,
-            LayoutMode::Columns,
-        ] {
+        for mode in LayoutMode::ALL {
             for n in 1..=9 {
-                assert_eq!(tile(SCREEN, n, &params(mode)).len(), n);
+                assert_eq!(tile(SCREEN, n, &params(mode)).len(), n, "modo {mode:?}");
             }
+        }
+    }
+
+    #[test]
+    fn rows_partition_the_height_exactly() {
+        let rects = tile(SCREEN, 3, &params(LayoutMode::Rows));
+        assert_eq!(rects.iter().map(|r| r.h).sum::<i32>(), 1080);
+        assert!(rects.iter().all(|r| r.w == 1920));
+    }
+
+    #[test]
+    fn spiral_tiles_cover_the_screen_without_overlap() {
+        for n in 1..=9 {
+            let total: i64 = tile(SCREEN, n, &params(LayoutMode::Spiral))
+                .iter()
+                .map(|r| r.area())
+                .sum();
+            assert_eq!(total, SCREEN.area(), "espiral con {n} ventanas");
+        }
+    }
+
+    #[test]
+    fn centered_master_centers_the_master_and_covers_the_screen() {
+        let rects = tile(SCREEN, 5, &params(LayoutMode::CenteredMaster));
+        let master = rects[0];
+        // Hueco a la izquierda y a la derecha de la maestra: iguales ±1px.
+        let left = master.x - SCREEN.x;
+        let right = (SCREEN.x + SCREEN.w) - (master.x + master.w);
+        assert!((left - right).abs() <= 1, "maestra no centrada: {left} vs {right}");
+        let total: i64 = rects.iter().map(|r| r.area()).sum();
+        assert_eq!(total, SCREEN.area());
+    }
+
+    #[test]
+    fn layout_mode_next_cycles_through_every_mode() {
+        let mut visited: Vec<LayoutMode> = Vec::new();
+        let mut m = LayoutMode::MasterStack;
+        for _ in 0..LayoutMode::ALL.len() {
+            assert!(!visited.contains(&m), "modo repetido en el ciclo: {m:?}");
+            visited.push(m);
+            m = m.next();
+        }
+        // Tras una vuelta completa, de vuelta al inicio.
+        assert_eq!(m, LayoutMode::MasterStack);
+        for mode in LayoutMode::ALL {
+            assert!(visited.contains(&mode), "el ciclo no pasa por {mode:?}");
         }
     }
 

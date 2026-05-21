@@ -20,9 +20,10 @@
 //!
 //! ```text
 //!   n            abre una ventana          tab / espacio  cicla layout
-//!   w            cierra la enfocada        t g c m        layout directo
-//!   j / k        foco siguiente/anterior   1..9           ir a escritorio
-//!   Shift+j / k  mueve la enfocada         Ctrl+1..9      enviar a escritorio
+//!   w            cierra la enfocada        t m g c r d s  layout directo
+//!   j / k        foco siguiente/anterior   h / l          área maestra −/+
+//!   Shift+j / k  mueve la enfocada         1..9           ir a escritorio
+//!                                          Ctrl+1..9      enviar a escritorio
 //! ```
 //!
 //! Los pips de escritorio y las ventanas del lienzo son **clicables**, y
@@ -285,6 +286,11 @@ impl Mirada {
             "m" => self.act(DesktopAction::SetLayout(LayoutMode::Monocle)),
             "g" => self.act(DesktopAction::SetLayout(LayoutMode::Grid)),
             "c" => self.act(DesktopAction::SetLayout(LayoutMode::Columns)),
+            "r" => self.act(DesktopAction::SetLayout(LayoutMode::Rows)),
+            "d" => self.act(DesktopAction::SetLayout(LayoutMode::CenteredMaster)),
+            "s" => self.act(DesktopAction::SetLayout(LayoutMode::Spiral)),
+            "h" => self.act(DesktopAction::ShrinkMaster),
+            "l" => self.act(DesktopAction::GrowMaster),
             d if d.len() == 1 && d.as_bytes()[0].is_ascii_digit() && d != "0" => {
                 let n = (d.as_bytes()[0] - b'1') as usize;
                 if ctrl {
@@ -312,6 +318,9 @@ fn mode_name(m: LayoutMode) -> &'static str {
         LayoutMode::Monocle => "monóculo",
         LayoutMode::Grid => "rejilla",
         LayoutMode::Columns => "columnas",
+        LayoutMode::Rows => "filas",
+        LayoutMode::CenteredMaster => "maestro centrado",
+        LayoutMode::Spiral => "espiral",
     }
 }
 

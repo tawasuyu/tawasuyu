@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use mirada_layout::{LayoutMode, LayoutParams, Rect, WindowId, Workspace};
+use mirada_layout::{LayoutParams, Rect, WindowId, Workspace};
 use mirada_protocol::{placements, BodyEvent, BrainCommand, OutputId};
 
 use crate::action::{DesktopAction, WORKSPACE_COUNT};
@@ -180,7 +180,7 @@ impl Desktop {
                 }
             }
             DesktopAction::CycleLayout => {
-                let next = cycle_mode(self.workspaces[self.active].params().mode);
+                let next = self.workspaces[self.active].params().mode.next();
                 self.workspaces[self.active].set_mode(next);
                 self.relayout()
             }
@@ -188,6 +188,8 @@ impl Desktop {
                 self.workspaces[self.active].set_mode(mode);
                 self.relayout()
             }
+            DesktopAction::GrowMaster => self.nudge_master(0.05),
+            DesktopAction::ShrinkMaster => self.nudge_master(-0.05),
             DesktopAction::SwitchWorkspace(n) => {
                 if n < self.workspaces.len() && n != self.active {
                     self.active = n;
@@ -211,6 +213,15 @@ impl Desktop {
             }
             DesktopAction::Quit => vec![BrainCommand::Shutdown],
         }
+    }
+
+    /// Ajusta la fracción del área maestra del escritorio activo (la usan
+    /// `MasterStack` y `CenteredMaster`), acotada a `0.05..=0.95`.
+    fn nudge_master(&mut self, delta: f32) -> Vec<BrainCommand> {
+        let ws = &mut self.workspaces[self.active];
+        let ratio = (ws.params().master_ratio + delta).clamp(0.05, 0.95);
+        ws.set_master_ratio(ratio);
+        self.relayout()
     }
 
     /// Recalcula la geometría del escritorio activo y la empaqueta en un
@@ -281,19 +292,10 @@ impl Desktop {
     }
 }
 
-/// El siguiente modo en el ciclo de [`DesktopAction::CycleLayout`].
-fn cycle_mode(mode: LayoutMode) -> LayoutMode {
-    match mode {
-        LayoutMode::MasterStack => LayoutMode::Monocle,
-        LayoutMode::Monocle => LayoutMode::Grid,
-        LayoutMode::Grid => LayoutMode::Columns,
-        LayoutMode::Columns => LayoutMode::MasterStack,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mirada_layout::LayoutMode;
 
     /// Un escritorio con una salida 1920×1080 ya conectada.
     fn desktop_with_screen() -> Desktop {
@@ -442,19 +444,42 @@ mod tests {
     }
 
     #[test]
-    fn cycle_layout_walks_the_four_modes() {
+    fn cycle_layout_walks_every_mode_and_returns() {
         let mut d = desktop_with_screen();
         open(&mut d, 1);
-        assert_eq!(d.active_workspace().params().mode, LayoutMode::MasterStack);
-        for expected in [
-            LayoutMode::Monocle,
-            LayoutMode::Grid,
-            LayoutMode::Columns,
-            LayoutMode::MasterStack,
-        ] {
+        let start = d.active_workspace().params().mode;
+        for _ in 0..LayoutMode::ALL.len() {
+            let before = d.active_workspace().params().mode;
             d.on_event(BodyEvent::Keybind("Super+space".into()));
-            assert_eq!(d.active_workspace().params().mode, expected);
+            assert_eq!(d.active_workspace().params().mode, before.next());
         }
+        // Una vuelta completa devuelve al modo inicial.
+        assert_eq!(d.active_workspace().params().mode, start);
+    }
+
+    #[test]
+    fn grow_and_shrink_master_adjust_the_ratio() {
+        let mut d = desktop_with_screen();
+        open(&mut d, 1);
+        let r0 = d.active_workspace().params().master_ratio;
+        d.apply(DesktopAction::GrowMaster);
+        assert!(d.active_workspace().params().master_ratio > r0);
+        d.apply(DesktopAction::ShrinkMaster);
+        assert!((d.active_workspace().params().master_ratio - r0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn master_ratio_stays_within_bounds() {
+        let mut d = desktop_with_screen();
+        open(&mut d, 1);
+        for _ in 0..50 {
+            d.apply(DesktopAction::GrowMaster);
+        }
+        assert!(d.active_workspace().params().master_ratio <= 0.95);
+        for _ in 0..50 {
+            d.apply(DesktopAction::ShrinkMaster);
+        }
+        assert!(d.active_workspace().params().master_ratio >= 0.05);
     }
 
     #[test]

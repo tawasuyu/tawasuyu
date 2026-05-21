@@ -238,7 +238,9 @@ const KEYMAP_HEADER: &str = "\
 //   move-forward / move-backward     reordena la ventana enfocada
 //   close-focused                    cierra la enfocada
 //   cycle-layout                     siguiente modo de teselado
-//   layout:master-stack | layout:monocle | layout:grid | layout:columns
+//   layout:<modo>                    master-stack | centered-master | spiral
+//                                    grid | columns | rows | monocle
+//   grow-master / shrink-master      redimensiona el área maestra
 //   workspace:N                      activa el escritorio N (1..9)
 //   send-to-workspace:N              manda la enfocada al escritorio N
 //   quit                             apaga el compositor

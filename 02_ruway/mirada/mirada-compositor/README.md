@@ -61,8 +61,9 @@ WAYLAND_DISPLAY=wayland-1 foot      # o weston-terminal, alacritty, …
 
 Las ventanas se teselan solas. El teclado, con la ventana del compositor
 enfocada, maneja el escritorio con atajos `Super+…`: foco `Super+j/k`,
-ciclar layout `Super+space`, escritorios `Super+1..9`, cerrar `Super+q`.
-Cierra la ventana del compositor para salir.
+los 7 layouts en `Super+t/m/g/c/r/d/s` (o ciclar con `Super+space`), área
+maestra `Super+h/l`, escritorios `Super+1..9`, cerrar `Super+q`. Cierra
+la ventana del compositor para salir.
 
 ## Atajos de teclado
 

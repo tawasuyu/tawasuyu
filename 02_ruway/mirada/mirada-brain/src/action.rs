@@ -42,6 +42,10 @@ pub enum DesktopAction {
     CycleLayout,
     /// Fija un modo de teselado concreto.
     SetLayout(LayoutMode),
+    /// Agranda el área de la ventana maestra (`MasterStack`/`CenteredMaster`).
+    GrowMaster,
+    /// Encoge el área de la ventana maestra.
+    ShrinkMaster,
     /// Activa el escritorio virtual `n` (índice 0-based).
     SwitchWorkspace(usize),
     /// Manda la ventana enfocada al escritorio virtual `n`.
@@ -58,6 +62,9 @@ fn layout_slug(mode: LayoutMode) -> &'static str {
         LayoutMode::Monocle => "monocle",
         LayoutMode::Grid => "grid",
         LayoutMode::Columns => "columns",
+        LayoutMode::Rows => "rows",
+        LayoutMode::CenteredMaster => "centered-master",
+        LayoutMode::Spiral => "spiral",
     }
 }
 
@@ -68,6 +75,9 @@ fn layout_from_slug(slug: &str) -> Option<LayoutMode> {
         "monocle" => LayoutMode::Monocle,
         "grid" => LayoutMode::Grid,
         "columns" => LayoutMode::Columns,
+        "rows" => LayoutMode::Rows,
+        "centered-master" => LayoutMode::CenteredMaster,
+        "spiral" => LayoutMode::Spiral,
         _ => return None,
     })
 }
@@ -84,6 +94,8 @@ impl fmt::Display for DesktopAction {
             DesktopAction::CloseFocused => f.write_str("close-focused"),
             DesktopAction::CycleLayout => f.write_str("cycle-layout"),
             DesktopAction::SetLayout(m) => write!(f, "layout:{}", layout_slug(*m)),
+            DesktopAction::GrowMaster => f.write_str("grow-master"),
+            DesktopAction::ShrinkMaster => f.write_str("shrink-master"),
             // Los escritorios se numeran 1-based de cara al usuario.
             DesktopAction::SwitchWorkspace(n) => write!(f, "workspace:{}", n + 1),
             DesktopAction::SendToWorkspace(n) => write!(f, "send-to-workspace:{}", n + 1),
@@ -105,6 +117,8 @@ impl FromStr for DesktopAction {
             "move-backward" => Self::MoveBackward,
             "close-focused" => Self::CloseFocused,
             "cycle-layout" => Self::CycleLayout,
+            "grow-master" => Self::GrowMaster,
+            "shrink-master" => Self::ShrinkMaster,
             "quit" => Self::Quit,
             _ => {
                 if let Some(slug) = s.strip_prefix("layout:") {
@@ -162,6 +176,11 @@ pub fn default_keymap() -> Vec<(String, DesktopAction)> {
         ("Super+m".into(), DesktopAction::SetLayout(LayoutMode::Monocle)),
         ("Super+g".into(), DesktopAction::SetLayout(LayoutMode::Grid)),
         ("Super+c".into(), DesktopAction::SetLayout(LayoutMode::Columns)),
+        ("Super+r".into(), DesktopAction::SetLayout(LayoutMode::Rows)),
+        ("Super+d".into(), DesktopAction::SetLayout(LayoutMode::CenteredMaster)),
+        ("Super+s".into(), DesktopAction::SetLayout(LayoutMode::Spiral)),
+        ("Super+h".into(), DesktopAction::ShrinkMaster),
+        ("Super+l".into(), DesktopAction::GrowMaster),
         ("Super+Shift+e".into(), DesktopAction::Quit),
     ];
     // Un escritorio por dígito: `Super+1`..`Super+9` lo activan,
@@ -214,12 +233,7 @@ mod tests {
 
     #[test]
     fn every_layout_mode_round_trips() {
-        for mode in [
-            LayoutMode::MasterStack,
-            LayoutMode::Monocle,
-            LayoutMode::Grid,
-            LayoutMode::Columns,
-        ] {
+        for mode in LayoutMode::ALL {
             let a = DesktopAction::SetLayout(mode);
             assert_eq!(a, a.to_string().parse().unwrap());
         }
