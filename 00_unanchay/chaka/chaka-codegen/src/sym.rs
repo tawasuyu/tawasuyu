@@ -1,8 +1,14 @@
-//! Tabla de símbolos: el modelo de datos COBOL traducido a campos Rust.
+//! Tabla de símbolos del código generado: los campos del `struct
+//! Program` y los nombres de condición, derivados del modelo de datos
+//! resuelto que entrega `charka-ir`.
 
 use std::collections::HashMap;
 
-use charka_ir::DataItem;
+use charka_ir::{ConditionName, DataModel};
+
+/// El tipo de campo lo aporta `charka-ir`; se reexporta para que el
+/// resto del crate lo nombre como `crate::sym::FieldKind`.
+pub(crate) use charka_ir::FieldKind;
 
 /// Un campo del struct `Program` generado.
 pub(crate) struct Field {
@@ -12,36 +18,46 @@ pub(crate) struct Field {
     pub ident: String,
     /// Numérico o alfanumérico.
     pub kind: FieldKind,
-    /// La cláusula `VALUE`, si la hay.
-    pub value: Option<String>,
+    /// Valor inicial normalizado (de la cláusula `VALUE`).
+    pub init: String,
 }
 
-/// El tipo de un campo elemental.
-pub(crate) enum FieldKind {
-    /// Campo numérico — se emite como `Num`.
-    Num { int: u8, frac: u8, signed: bool },
-    /// Campo alfanumérico — se emite como `Text`.
-    Text { len: usize },
-}
-
-/// El conjunto de campos del programa, indexado por nombre COBOL.
+/// Los campos del programa y sus nombres de condición, indexados.
 pub(crate) struct Symbols {
     pub fields: Vec<Field>,
     by_name: HashMap<String, usize>,
+    conditions: HashMap<String, ConditionName>,
 }
 
 impl Symbols {
-    /// Construye la tabla recorriendo el árbol de datos.
-    pub(crate) fn build(data: &[DataItem]) -> Self {
-        let mut fields = Vec::new();
-        collect(data, &mut fields);
+    /// Construye la tabla desde el modelo de datos resuelto.
+    pub(crate) fn build(model: &DataModel) -> Self {
+        let mut fields: Vec<Field> = model
+            .fields
+            .iter()
+            .map(|f| Field {
+                cobol: f.name.clone(),
+                ident: sanitize_ident(&f.name),
+                kind: f.kind,
+                init: f.init.clone(),
+            })
+            .collect();
         dedup_idents(&mut fields);
         let by_name = fields
             .iter()
             .enumerate()
             .map(|(i, f)| (f.cobol.clone(), i))
             .collect();
-        Self { fields, by_name }
+        let conditions = model
+            .conditions
+            .iter()
+            .map(|c| (c.name.clone(), c.clone()))
+            .collect();
+        Self {
+            fields,
+            by_name,
+            conditions,
+        }
     }
 
     /// Busca un campo por su nombre COBOL (sin distinguir mayúsculas).
@@ -50,31 +66,10 @@ impl Symbols {
             .get(&cobol.to_uppercase())
             .map(|&i| &self.fields[i])
     }
-}
 
-/// Recoge los datos elementales del árbol. Los grupos no son campos —
-/// se recurre en sus hijos. Se saltan niveles 88/66 y los `FILLER`.
-fn collect(items: &[DataItem], out: &mut Vec<Field>) {
-    for it in items {
-        if it.level == 88 || it.level == 66 {
-            continue;
-        }
-        if !it.children.is_empty() {
-            collect(&it.children, out);
-            continue;
-        }
-        if it.name == "FILLER" {
-            continue;
-        }
-        let Some(kind) = classify(it.picture.as_deref()) else {
-            continue;
-        };
-        out.push(Field {
-            cobol: it.name.clone(),
-            ident: sanitize_ident(&it.name),
-            kind,
-            value: it.value.clone(),
-        });
+    /// Busca un nombre de condición (un dato de nivel 88).
+    pub(crate) fn condition(&self, name: &str) -> Option<&ConditionName> {
+        self.conditions.get(&name.to_uppercase())
     }
 }
 
@@ -89,59 +84,6 @@ fn dedup_idents(fields: &mut [Field]) {
         }
         *n += 1;
     }
-}
-
-/// Clasifica una cláusula PICTURE: alfanumérica si tiene `X`/`A`,
-/// numérica si `charka-bcd` la parsea; una PICTURE de edición se trata
-/// como texto de presentación.
-fn classify(pic: Option<&str>) -> Option<FieldKind> {
-    let up = pic?.to_uppercase();
-    if up.contains('X') || up.contains('A') {
-        return Some(FieldKind::Text {
-            len: pic_width(&up).max(1),
-        });
-    }
-    if let Ok(p) = charka_bcd::Picture::parse(&up) {
-        return Some(FieldKind::Num {
-            int: p.integer_digits,
-            frac: p.fraction_digits,
-            signed: p.signed,
-        });
-    }
-    Some(FieldKind::Text {
-        len: pic_width(&up).max(1),
-    })
-}
-
-/// Cuenta las posiciones de presentación de una PICTURE, expandiendo
-/// la repetición `C(n)`. `S` y `V` no ocupan posición.
-fn pic_width(up: &str) -> usize {
-    let chars: Vec<char> = up.chars().collect();
-    let mut i = 0;
-    let mut total = 0usize;
-    while i < chars.len() {
-        let c = chars[i];
-        i += 1;
-        if c == 'S' || c == 'V' {
-            continue;
-        }
-        let mut count = 1usize;
-        if chars.get(i) == Some(&'(') {
-            i += 1;
-            let start = i;
-            while i < chars.len() && chars[i].is_ascii_digit() {
-                i += 1;
-            }
-            if let Ok(n) = chars[start..i].iter().collect::<String>().parse::<usize>() {
-                count = n;
-            }
-            if chars.get(i) == Some(&')') {
-                i += 1;
-            }
-        }
-        total += count;
-    }
-    total
 }
 
 /// Convierte un nombre COBOL en un identificador Rust válido.

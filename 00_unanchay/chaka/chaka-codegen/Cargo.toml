@@ -10,7 +10,6 @@ description = "charka-codegen — emisión de Rust desde el IR de charka: el mod
 
 [dependencies]
 charka-ir = { path = "../charka-ir" }
-charka-bcd = { path = "../charka-bcd" }
 
 [dev-dependencies]
 charka-parser = { path = "../charka-parser" }

@@ -27,10 +27,12 @@ mod ast;
 mod cursor;
 mod expr;
 mod kw;
+mod model;
 mod stmt;
 
 pub use ast::*;
 pub use charka_parser::Program;
+pub use model::{resolve_data, ConditionName, DataModel, Field, FieldKind};
 
 use cursor::Cursor;
 
@@ -55,6 +57,7 @@ pub fn lower(program: &Program) -> Ir {
     Ir {
         program_id: program.program_id.clone().unwrap_or_default(),
         data: program.data.clone(),
+        model: model::resolve_data(&program.data),
         procedures,
     }
 }

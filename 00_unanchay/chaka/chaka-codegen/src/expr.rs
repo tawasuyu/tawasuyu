@@ -114,9 +114,19 @@ pub(crate) fn emit_expr(sym: &Symbols, e: &Expr) -> String {
 pub(crate) fn emit_cond(sym: &Symbols, c: &Cond) -> String {
     match c {
         Cond::Compare { lhs, op, rhs } => emit_compare(sym, lhs, *op, rhs),
-        Cond::Named(name) => {
-            format!("false /* charka: condición 88 no soportada: {name} */")
-        }
+        Cond::Named(name) => match sym.condition(name) {
+            // Un nombre de condición (88) equivale a comparar su dato
+            // padre con el valor que la hace verdadera.
+            Some(cn) => emit_cond(
+                sym,
+                &Cond::Compare {
+                    lhs: Operand::Data(cn.parent.clone()),
+                    op: CmpOp::Eq,
+                    rhs: cn.value.clone(),
+                },
+            ),
+            None => format!("false /* charka: condición 88 no resuelta: {name} */"),
+        },
         Cond::Not(inner) => format!("!({})", emit_cond(sym, inner)),
         Cond::And(a, b) => format!("({}) && ({})", emit_cond(sym, a), emit_cond(sym, b)),
         Cond::Or(a, b) => format!("({}) || ({})", emit_cond(sym, a), emit_cond(sym, b)),

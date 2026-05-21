@@ -8,9 +8,12 @@ pub use charka_parser::{DataItem, Token};
 pub struct Ir {
     /// El `PROGRAM-ID` ("" si el programa no lo declara).
     pub program_id: String,
-    /// El modelo de datos — el árbol de [`DataItem`] tal cual lo
-    /// produjo `charka-parser`. Sirve de tabla de símbolos.
+    /// El árbol de [`DataItem`] tal cual lo produjo `charka-parser`,
+    /// con su estructura de grupos.
     pub data: Vec<DataItem>,
+    /// El modelo de datos resuelto: los datos elementales aplanados y
+    /// los nombres de condición (nivel 88).
+    pub model: crate::model::DataModel,
     /// Los párrafos del PROCEDURE, con sus statements ya tipados.
     pub procedures: Vec<Procedure>,
 }

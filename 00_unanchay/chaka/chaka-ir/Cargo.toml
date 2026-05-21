@@ -10,6 +10,7 @@ description = "charka-ir — representación intermedia: el AST de charka-parser
 
 [dependencies]
 charka-parser = { path = "../charka-parser" }
+charka-bcd = { path = "../charka-bcd" }
 
 [dev-dependencies]
 charka-lexer = { path = "../charka-lexer" }

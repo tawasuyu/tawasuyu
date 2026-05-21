@@ -39,7 +39,7 @@ use sym::{paragraph_method, Field, FieldKind, Symbols};
 
 /// Transpila un [`Ir`] a un fuente Rust completo (un `main.rs`).
 pub fn generate(ir: &Ir) -> String {
-    let sym = Symbols::build(&ir.data);
+    let sym = Symbols::build(&ir.model);
     let mut em = Emitter::new();
     emit_header(&mut em);
     emit_struct(&mut em, &sym);
@@ -142,53 +142,17 @@ fn emit_main(em: &mut Emitter) {
     em.line("}");
 }
 
-/// El inicializador de un campo, a partir de su cláusula `VALUE`.
+/// El inicializador de un campo, a partir de su `VALUE` ya
+/// normalizado por `charka-ir`.
 fn field_init(f: &Field) -> String {
     match &f.kind {
         FieldKind::Num { int, frac, signed } => format!(
             "Num::with_value(Picture::new({int}, {frac}, {signed}), {})",
-            rust_str(&numeric_value(f.value.as_deref()))
+            rust_str(&f.init)
         ),
-        FieldKind::Text { len } => format!(
-            "Text::with_value({len}, {})",
-            rust_str(&text_value(f.value.as_deref()))
-        ),
-    }
-}
-
-/// Normaliza el `VALUE` de un campo numérico a un literal parseable.
-fn numeric_value(v: Option<&str>) -> String {
-    let Some(raw) = v else {
-        return "0".to_string();
-    };
-    let up = raw.to_uppercase();
-    if matches!(up.as_str(), "ZERO" | "ZEROS" | "ZEROES") {
-        return "0".to_string();
-    }
-    if charka_bcd::Decimal::parse(raw).is_ok() {
-        raw.to_string()
-    } else {
-        "0".to_string()
-    }
-}
-
-/// Normaliza el `VALUE` de un campo de texto. El parser envuelve los
-/// literales de texto en comillas simples; aquí se desenvuelven.
-fn text_value(v: Option<&str>) -> String {
-    let Some(raw) = v else {
-        return String::new();
-    };
-    let up = raw.to_uppercase();
-    if matches!(up.as_str(), "SPACE" | "SPACES") {
-        return String::new();
-    }
-    if matches!(up.as_str(), "ZERO" | "ZEROS" | "ZEROES") {
-        return "0".to_string();
-    }
-    if raw.len() >= 2 && raw.starts_with('\'') && raw.ends_with('\'') {
-        raw[1..raw.len() - 1].to_string()
-    } else {
-        raw.to_string()
+        FieldKind::Text { len } => {
+            format!("Text::with_value({len}, {})", rust_str(&f.init))
+        }
     }
 }
 
@@ -363,6 +327,19 @@ mod tests {
                  END-EVALUATE.\n");
         assert!(out.contains("if ((self.ws_x.value()) == (dec(\"1\"))) {"));
         assert!(out.contains("} else {"));
+    }
+
+    #[test]
+    fn level_88_condition_resolves_to_a_comparison() {
+        let out = gen("DATA DIVISION.\n\
+             WORKING-STORAGE SECTION.\n\
+             01 WS-FLAG PIC X VALUE 'N'.\n\
+                88 ES-SI VALUE 'Y'.\n\
+             PROCEDURE DIVISION.\n\
+             MAIN.\n\
+                 IF ES-SI DISPLAY 'SI' END-IF.\n");
+        // ES-SI equivale a `WS-FLAG = 'Y'` (comparación de texto).
+        assert!(out.contains("cobol_text_cmp(self.ws_flag.display().as_str(), \"Y\").is_eq()"));
     }
 
     #[test]

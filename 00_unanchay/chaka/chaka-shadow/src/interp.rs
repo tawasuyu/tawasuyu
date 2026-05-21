@@ -8,7 +8,8 @@
 use std::collections::HashMap;
 
 use charka_ir::{
-    BinOp, CmpOp, Cond, Expr, Figurative, Ir, Operand, Perform, PerformControl, PerformTarget, Stmt,
+    BinOp, CmpOp, Cond, ConditionName, Expr, Figurative, Ir, Operand, Perform, PerformControl,
+    PerformTarget, Stmt,
 };
 use charka_runtime::{cobol_text_cmp, Decimal, Rounding};
 
@@ -37,6 +38,7 @@ pub(crate) struct Machine<'a> {
     ir: &'a Ir,
     fields: HashMap<String, Cell>,
     para_index: HashMap<String, usize>,
+    conditions: HashMap<String, ConditionName>,
     pub output: Vec<String>,
     budget: u64,
     pub step_limit_hit: bool,
@@ -50,10 +52,17 @@ impl<'a> Machine<'a> {
         for (i, proc) in ir.procedures.iter().enumerate() {
             para_index.entry(proc.name.to_uppercase()).or_insert(i);
         }
+        let conditions = ir
+            .model
+            .conditions
+            .iter()
+            .map(|c| (c.name.clone(), c.clone()))
+            .collect();
         Self {
             ir,
-            fields: build_fields(&ir.data),
+            fields: build_fields(&ir.model),
             para_index,
+            conditions,
             output: Vec::new(),
             budget: STEP_BUDGET,
             step_limit_hit: false,
@@ -437,7 +446,12 @@ impl<'a> Machine<'a> {
                     CmpOp::Ge => ord.is_ge(),
                 }
             }
-            Cond::Named(_) => false, // nombres de condición (88): no soportado
+            Cond::Named(name) => match self.conditions.get(&name.to_uppercase()) {
+                // Un nombre de condición (88): el dato padre igual al
+                // valor que la hace verdadera.
+                Some(cn) => self.operands_equal(&Operand::Data(cn.parent.clone()), &cn.value),
+                None => false,
+            },
             Cond::Not(inner) => !self.eval_cond(inner),
             Cond::And(a, b) => self.eval_cond(a) && self.eval_cond(b),
             Cond::Or(a, b) => self.eval_cond(a) || self.eval_cond(b),
