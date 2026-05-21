@@ -30,10 +30,10 @@ use gpui::{
 };
 
 use brahman_cards::CardBody;
-use nakui_core::executor::Executor;
 use nahual_meta_schema::Module;
 use nahual_theme::Theme;
 use nahual_widget_meta_form::MetaApp;
+use nakui_core::executor::Executor;
 
 use crate::backend::NakuiBackend;
 
@@ -110,8 +110,7 @@ fn main() {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(50);
-        let (backend, status) =
-            NakuiBackend::open(log_path, snapshot_threshold, executors);
+        let (backend, status) = NakuiBackend::open(log_path, snapshot_threshold, executors);
         let initial_toast = status.init_toast;
         if let Some(msg) = status.load_error {
             load_error = Some(match load_error {
@@ -131,11 +130,7 @@ fn main() {
                 }),
                 ..Default::default()
             },
-            |_w, cx| {
-                cx.new(|cx| {
-                    MetaApp::new(modules, backend, initial_toast, load_error, cx)
-                })
-            },
+            |_w, cx| cx.new(|cx| MetaApp::new(modules, backend, initial_toast, load_error, cx)),
         )
         .expect("open window");
         cx.activate(true);
@@ -153,11 +148,8 @@ fn main() {
 ///    los direcciona por id; duplicados serían ambiguos).
 ///
 /// Devuelve `(modules, skipped_ids)` ordenados por id.
-fn load_ui_modules(
-    dir: &std::path::Path,
-) -> Result<(Vec<Module>, Vec<String>), String> {
-    let cards = brahman_cards::load_cards_from_dir(dir)
-        .map_err(|e| e.to_string())?;
+fn load_ui_modules(dir: &std::path::Path) -> Result<(Vec<Module>, Vec<String>), String> {
+    let cards = brahman_cards::load_cards_from_dir(dir).map_err(|e| e.to_string())?;
     let mut modules: Vec<Module> = Vec::new();
     let mut skipped: Vec<String> = Vec::new();
     for c in cards {
@@ -237,10 +229,7 @@ mod tests {
         let mut store = MemoryStore::new();
         replay_into(&log, &mut store).unwrap();
 
-        assert_eq!(
-            store.load("customer", id_a),
-            Some(json!({"name": "Acme"}))
-        );
+        assert_eq!(store.load("customer", id_a), Some(json!({"name": "Acme"})));
         assert_eq!(
             store.load("customer", id_b),
             Some(json!({"name": "Globex"}))
@@ -314,12 +303,7 @@ mod tests {
         });
 
         let ops = execute_and_log_with_recovery(
-            &executor,
-            &mut store,
-            &mut log,
-            "vender",
-            &inputs,
-            params,
+            &executor, &mut store, &mut log, "vender", &inputs, params,
         )
         .expect("morphism vender debe ejecutar limpio");
 
@@ -420,5 +404,53 @@ mod tests {
         let err = load_ui_modules(root.path()).unwrap_err();
         assert!(err.contains("duplicado"));
         assert!(err.contains("dup"));
+    }
+
+    /// El UiModule del CRM (`examples/nakui-modules/crm`) debe parsear
+    /// como `Module` y pasar `validate()` — sino `nakui-ui` lo rechaza
+    /// al arrancar. Cubre que las 7 vistas del ERP existan y que
+    /// enganche el módulo-kernel.
+    #[test]
+    fn crm_example_module_parses_and_validates() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../examples/nakui-modules/crm/module.json");
+        let m = Module::from_path(&path).expect("crm/module.json debe parsear");
+        m.validate().expect("el módulo crm debe validar");
+
+        assert_eq!(m.id, "crm");
+        assert!(
+            m.nakui_module_dir.is_some(),
+            "el CRM debe enganchar el módulo-kernel"
+        );
+        for view in [
+            "cliente_list",
+            "cliente_form",
+            "oportunidad_list",
+            "abrir_form",
+            "mover_form",
+            "interaccion_list",
+            "interaccion_form",
+        ] {
+            assert!(m.views.contains_key(view), "falta la vista «{view}»");
+        }
+    }
+
+    /// Carga el módulo crm por el mismo camino que usa `nakui-ui`
+    /// (`load_ui_modules` → `brahman_cards::load_cards_from_dir`). Se
+    /// aísla en un tempdir para no acoplar el test a los otros módulos
+    /// de ejemplo.
+    #[test]
+    fn crm_module_loads_via_card_pipeline() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../examples/nakui-modules/crm/module.json");
+        let root = tempfile::tempdir().unwrap();
+        let crm_dir = root.path().join("crm");
+        std::fs::create_dir(&crm_dir).unwrap();
+        std::fs::copy(&src, crm_dir.join("module.json")).unwrap();
+
+        let (modules, skipped) = load_ui_modules(root.path()).expect("el módulo crm debe cargar");
+        assert!(skipped.is_empty(), "ninguna card debe saltarse");
+        assert_eq!(modules.len(), 1);
+        assert_eq!(modules[0].id, "crm");
     }
 }
