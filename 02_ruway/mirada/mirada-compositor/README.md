@@ -39,6 +39,10 @@ Corre directo sobre el hardware. Requiere una **TTY** (`Ctrl+Alt+F3`),
 una GPU con `/dev/dri`, y `seatd` o `logind` para la sesión. Toma la
 pantalla completa; sal con `Super+Shift+e` o `Ctrl+C`.
 
+Lleva teclado y ratón por `libinput`: el ratón mueve un cursor de
+software, el foco sigue al puntero y los clics y la rueda llegan a la
+ventana que tienes debajo.
+
 - `MIRADA_STARTUP=<cmd>` — lanza una app al arrancar (`MIRADA_STARTUP=foot`).
 - `MIRADA_DRM_TIMEOUT=<s>` — cierra el compositor solo tras N segundos
   (0 o sin definir = sin tope).
@@ -112,9 +116,9 @@ En modo enlazado el socket de control lo abre el Cerebro (la app
 ## Qué implementa
 
 `wl_compositor`, `xdg_shell` (toplevels y popups), `wl_shm`, `wl_seat`
-(teclado), `wl_output` y `wl_data_device` (selección). Composición con
-`GlesRenderer` — en `winit` sobre la ventana, en `drm` con un
-`DrmCompositor` por salida.
+(teclado, y ratón en el backend DRM), `wl_output` y `wl_data_device`
+(selección). Composición con `GlesRenderer` — en `winit` sobre la
+ventana, en `drm` con un `DrmCompositor` por salida.
 
 Reusa `mirada-body` para la contabilidad de salidas y superficies, y
 `mirada-link` para el cable hacia un Cerebro externo. Toda la lógica
@@ -123,7 +127,7 @@ espacial es agnóstica de Wayland y vive en los crates de
 
 ## Pendiente
 
-Del backend DRM: puntero/ratón (hoy sólo teclado), conmutación de VT,
-hotplug de monitores. Aislamiento de clientes. Ver el SDD.
+Del backend DRM: conmutación de VT, hotplug de monitores, multi-GPU.
+Puntero en el backend `winit`. Aislamiento de clientes. Ver el SDD.
 
 [`smithay`]: https://github.com/Smithay/smithay

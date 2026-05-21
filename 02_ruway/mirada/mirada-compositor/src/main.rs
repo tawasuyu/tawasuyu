@@ -32,6 +32,7 @@ use smithay::backend::renderer::utils::{
 use smithay::backend::renderer::{Color32F, Frame, Renderer};
 use smithay::backend::winit::{self, WinitEvent};
 use smithay::input::keyboard::{xkb, FilterResult, KeyboardHandle, Keysym, ModifiersState};
+use smithay::input::pointer::PointerHandle;
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
@@ -107,6 +108,9 @@ struct App {
     data_device_state: DataDeviceState,
     seat: Seat<Self>,
     keyboard: Option<KeyboardHandle<Self>>,
+    pointer: Option<PointerHandle<Self>>,
+    /// Posición del puntero en coordenadas globales.
+    pointer_loc: (f64, f64),
 
     /// Ventanas gestionadas, en orden de aparición.
     windows: Vec<ManagedWindow>,
@@ -534,6 +538,16 @@ fn render_loc(w: &ManagedWindow) -> (i32, i32) {
     }
 }
 
+/// El tamaño en píxeles de la superficie de una ventana, si el cliente
+/// ya presentó un buffer. `None` mientras no haya dibujado nada — la usa
+/// el backend DRM para acertar el rectángulo en el test de impacto del
+/// puntero.
+fn surface_px_size(w: &ManagedWindow) -> Option<(i32, i32)> {
+    with_renderer_surface_state(&w.surface, |s| s.surface_size())
+        .flatten()
+        .map(|s| (s.w, s.h))
+}
+
 /// Carga las reglas de ventana del usuario, o ninguna si no hay archivo.
 fn load_user_rules() -> Rules {
     match Rules::default_path() {
@@ -627,6 +641,8 @@ fn build_app() -> Result<Setup, Box<dyn std::error::Error>> {
         data_device_state: DataDeviceState::new::<App>(&dh),
         seat,
         keyboard: None,
+        pointer: None,
+        pointer_loc: (0.0, 0.0),
         windows: Vec::new(),
         body: BodyState::new(),
         brain,
@@ -638,6 +654,7 @@ fn build_app() -> Result<Setup, Box<dyn std::error::Error>> {
 
     let keyboard = app.seat.add_keyboard(Default::default(), 200, 25)?;
     app.keyboard = Some(keyboard);
+    app.pointer = Some(app.seat.add_pointer());
 
     // En modo embebido, el propio Desktop dicta los atajos a interceptar.
     if let Brain::Embedded(desktop) = &app.brain {

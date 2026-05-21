@@ -25,18 +25,24 @@ use smithay::backend::drm::compositor::{DrmCompositor, FrameFlags};
 use smithay::backend::drm::exporter::gbm::GbmFramebufferExporter;
 use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent};
 use smithay::backend::egl::{EGLContext, EGLDisplay};
-use smithay::backend::input::{InputEvent, KeyState, KeyboardKeyEvent};
+use smithay::backend::input::{
+    AbsolutePositionEvent, Axis, AxisSource, InputEvent, KeyState, KeyboardKeyEvent,
+    PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
+};
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
+use smithay::backend::renderer::element::solid::SolidColorRenderElement;
 use smithay::backend::renderer::element::surface::{
     render_elements_from_surface_tree, WaylandSurfaceRenderElement,
 };
-use smithay::backend::renderer::element::Kind;
+use smithay::backend::renderer::element::{render_elements, Id, Kind};
 use smithay::backend::renderer::gles::GlesRenderer;
-use smithay::backend::renderer::ImportDma;
+use smithay::backend::renderer::utils::CommitCounter;
+use smithay::backend::renderer::{ImportAll, ImportDma};
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::{Event as SessionEvent, Session};
 use smithay::backend::udev;
 use smithay::input::keyboard::FilterResult;
+use smithay::input::pointer::{AxisFrame, ButtonEvent, MotionEvent};
 use smithay::output::OutputModeSource;
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
@@ -46,7 +52,9 @@ use smithay::reexports::drm::control::{Device as ControlDevice, ModeTypeFlags};
 use smithay::reexports::input::Libinput;
 use smithay::reexports::rustix::fs::OFlags;
 use smithay::reexports::wayland_server::{Display, ListeningSocket};
-use smithay::utils::{DeviceFd, Scale, Size, Transform, SERIAL_COUNTER};
+use smithay::utils::{
+    DeviceFd, Logical, Physical, Point, Rectangle, Scale, Size, Transform, SERIAL_COUNTER,
+};
 
 use mirada_brain::{CtlReply, Keymap};
 
@@ -56,8 +64,22 @@ use crate::{combo_string, send_frames_surface_tree, App, Brain, ClientState, Set
 type Compositor =
     DrmCompositor<GbmAllocator<DrmDeviceFd>, GbmFramebufferExporter<DrmDeviceFd>, (), DrmDeviceFd>;
 
+render_elements! {
+    /// Lo que el backend DRM compone en un cuadro: las superficies de los
+    /// clientes y, encima de todo, el cursor de software.
+    Frame<R> where R: ImportAll;
+    Window = WaylandSurfaceRenderElement<R>,
+    Cursor = SolidColorRenderElement,
+}
+
 /// Color de fondo del escritorio cuando no hay nada que lo tape.
 const CLEAR_COLOR: [f32; 4] = [0.05, 0.05, 0.08, 1.0];
+
+/// Lado del cursor de software, en píxeles.
+const CURSOR_SIZE: i32 = 12;
+
+/// Color del cursor — un cuadrado casi blanco, opaco.
+const CURSOR_COLOR: [f32; 4] = [0.95, 0.95, 0.97, 1.0];
 
 /// El estado del bucle DRM — lo comparten todos los callbacks de `calloop`.
 struct DrmState {
@@ -74,31 +96,54 @@ struct DrmState {
     start: Instant,
     /// Nº de ventanas en el último `tick` — para registrar los cambios.
     last_windows: usize,
+    /// Identidad estable del cursor de software — el seguimiento de daño
+    /// la usa para no recomponer todo cuando el cursor sólo se mueve.
+    cursor_id: Id,
+    /// Ventana sobre la que estaba el puntero — para el foco-sigue-ratón.
+    last_pointer_window: Option<u64>,
+    /// Tamaño de la salida, en píxeles — los topes del puntero.
+    output_size: (f64, f64),
 }
 
 impl DrmState {
-    /// Compone las ventanas y, si hubo cambios, encola el cuadro.
+    /// Compone el cursor y las ventanas y, si hubo cambios, encola el cuadro.
     fn render(&mut self) {
         if self.pending_flip {
             return; // aún esperamos el VBlank del cuadro anterior
         }
-        // Elementos a pintar: las flotantes primero (lista front-to-back).
-        let elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = {
+        // Elementos a pintar — lista front-to-back (índice 0 = encima):
+        // primero el cursor, luego las flotantes, luego las teseladas.
+        let elements: Vec<Frame<GlesRenderer>> = {
+            let mut out: Vec<Frame<GlesRenderer>> = Vec::new();
+
+            let (cx, cy) = self.app.pointer_loc;
+            let cursor_rect = Rectangle::new(
+                Point::<i32, Physical>::from((cx.round() as i32, cy.round() as i32)),
+                Size::<i32, Physical>::from((CURSOR_SIZE, CURSOR_SIZE)),
+            );
+            out.push(Frame::Cursor(SolidColorRenderElement::new(
+                self.cursor_id.clone(),
+                cursor_rect,
+                CommitCounter::default(),
+                CURSOR_COLOR,
+                Kind::Cursor,
+            )));
+
             let mut shown: Vec<_> = self.app.windows.iter().filter(|w| w.visible).collect();
             shown.sort_by_key(|w| !w.floating);
-            shown
-                .iter()
-                .flat_map(|w| {
-                    render_elements_from_surface_tree(
-                        &mut self.renderer,
-                        &w.surface,
-                        crate::render_loc(w),
-                        1.0,
-                        1.0,
-                        Kind::Unspecified,
-                    )
-                })
-                .collect()
+            for w in &shown {
+                for el in render_elements_from_surface_tree(
+                    &mut self.renderer,
+                    &w.surface,
+                    crate::render_loc(w),
+                    1.0,
+                    1.0,
+                    Kind::Unspecified,
+                ) {
+                    out.push(Frame::Window(el));
+                }
+            }
+            out
         };
         match self.compositor.render_frame::<_, _>(
             &mut self.renderer,
@@ -168,41 +213,161 @@ impl DrmState {
         let _ = self.display.flush_clients();
     }
 
-    /// Procesa un evento de `libinput` — por ahora, sólo el teclado.
+    /// Procesa un evento de `libinput`: teclado y puntero.
     fn handle_input(&mut self, event: InputEvent<LibinputInputBackend>) {
-        let InputEvent::Keyboard { event } = event else {
-            return; // dispositivos, puntero, táctil: aún no
-        };
-        let Some(keyboard) = self.app.keyboard.clone() else {
-            return;
-        };
-        let code = event.key_code();
-        let key_state = event.state();
-        let pressed = key_state == KeyState::Pressed;
         let time = self.start.elapsed().as_millis() as u32;
-        keyboard.input::<(), _>(
-            &mut self.app,
-            code,
-            key_state,
-            SERIAL_COUNTER.next_serial(),
-            time,
-            |st, mods, handle| {
-                if !pressed {
-                    return FilterResult::Forward;
+        match event {
+            // --- Teclado: intercepta los atajos del Cerebro --------------
+            InputEvent::Keyboard { event } => {
+                let Some(keyboard) = self.app.keyboard.clone() else {
+                    return;
+                };
+                let code = event.key_code();
+                let key_state = event.state();
+                let pressed = key_state == KeyState::Pressed;
+                keyboard.input::<(), _>(
+                    &mut self.app,
+                    code,
+                    key_state,
+                    SERIAL_COUNTER.next_serial(),
+                    time,
+                    |st, mods, handle| {
+                        if !pressed {
+                            return FilterResult::Forward;
+                        }
+                        if let Some(combo) = combo_string(mods, handle.modified_sym()) {
+                            if st.grabs.contains(&combo) {
+                                st.pending_keybind = Some(combo);
+                                return FilterResult::Intercept(());
+                            }
+                        }
+                        FilterResult::Forward
+                    },
+                );
+                if let Some(combo) = self.app.pending_keybind.take() {
+                    let ev = self.app.body.keybind(combo);
+                    self.app.brain_feed(ev);
                 }
-                if let Some(combo) = combo_string(mods, handle.modified_sym()) {
-                    if st.grabs.contains(&combo) {
-                        st.pending_keybind = Some(combo);
-                        return FilterResult::Intercept(());
+            }
+
+            // --- Puntero: movimiento relativo (ratón, touchpad) ----------
+            InputEvent::PointerMotion { event } => {
+                let (mut x, mut y) = self.app.pointer_loc;
+                x = (x + event.delta_x()).clamp(0.0, self.output_size.0);
+                y = (y + event.delta_y()).clamp(0.0, self.output_size.1);
+                self.app.pointer_loc = (x, y);
+                self.pointer_motion(time);
+            }
+
+            // --- Puntero: movimiento absoluto (táctil, tableta) ----------
+            InputEvent::PointerMotionAbsolute { event } => {
+                let space = Size::<i32, Logical>::from((
+                    self.output_size.0 as i32,
+                    self.output_size.1 as i32,
+                ));
+                let pos = event.position_transformed(space);
+                self.app.pointer_loc = (
+                    pos.x.clamp(0.0, self.output_size.0),
+                    pos.y.clamp(0.0, self.output_size.1),
+                );
+                self.pointer_motion(time);
+            }
+
+            // --- Puntero: botones — se reenvían a la ventana enfocada ----
+            InputEvent::PointerButton { event } => {
+                let Some(pointer) = self.app.pointer.clone() else {
+                    return;
+                };
+                pointer.button(
+                    &mut self.app,
+                    &ButtonEvent {
+                        serial: SERIAL_COUNTER.next_serial(),
+                        time,
+                        button: event.button_code(),
+                        state: event.state(),
+                    },
+                );
+                pointer.frame(&mut self.app);
+            }
+
+            // --- Puntero: rueda / desplazamiento -------------------------
+            InputEvent::PointerAxis { event } => {
+                let Some(pointer) = self.app.pointer.clone() else {
+                    return;
+                };
+                let source = event.source();
+                let mut frame = AxisFrame::new(time).source(source);
+                for axis in [Axis::Horizontal, Axis::Vertical] {
+                    match event.amount(axis) {
+                        Some(v) if v != 0.0 => frame = frame.value(axis, v),
+                        Some(_) if source == AxisSource::Finger => {
+                            frame = frame.stop(axis);
+                        }
+                        _ => {}
+                    }
+                    if let Some(d) = event.amount_v120(axis) {
+                        frame = frame.v120(axis, d as i32);
                     }
                 }
-                FilterResult::Forward
+                pointer.axis(&mut self.app, frame);
+                pointer.frame(&mut self.app);
+            }
+
+            _ => {} // otros dispositivos: aún no
+        }
+    }
+
+    /// Reenvía el puntero a la ventana que tiene debajo y, si esa ventana
+    /// cambió, aplica el foco-sigue-ratón avisando al Cerebro.
+    fn pointer_motion(&mut self, time: u32) {
+        let Some(pointer) = self.app.pointer.clone() else {
+            return;
+        };
+        let (x, y) = self.app.pointer_loc;
+        let hit = self.window_at(x, y);
+        let focus = hit.map(|i| {
+            let w = &self.app.windows[i];
+            let (lx, ly) = crate::render_loc(w);
+            (
+                w.surface.clone(),
+                Point::<f64, Logical>::from((lx as f64, ly as f64)),
+            )
+        });
+        pointer.motion(
+            &mut self.app,
+            focus,
+            &MotionEvent {
+                location: Point::from((x, y)),
+                serial: SERIAL_COUNTER.next_serial(),
+                time,
             },
         );
-        if let Some(combo) = self.app.pending_keybind.take() {
-            let ev = self.app.body.keybind(combo);
-            self.app.brain_feed(ev);
+        pointer.frame(&mut self.app);
+
+        // Foco-sigue-ratón: al pasar a otra ventana, que el Cerebro la enfoque.
+        let hovered = hit.map(|i| self.app.windows[i].id);
+        if hovered != self.last_pointer_window {
+            self.last_pointer_window = hovered;
+            if let Some(id) = hovered {
+                let ev = self.app.body.pointer_enter(id);
+                self.app.brain_feed(ev);
+            }
         }
+    }
+
+    /// El índice de la ventana visible bajo el punto `(x, y)`, si la hay —
+    /// en orden front-to-back (las flotantes ganan a las teseladas).
+    fn window_at(&self, x: f64, y: f64) -> Option<usize> {
+        let mut idx: Vec<usize> = (0..self.app.windows.len())
+            .filter(|&i| self.app.windows[i].visible)
+            .collect();
+        idx.sort_by_key(|&i| !self.app.windows[i].floating);
+        idx.into_iter().find(|&i| {
+            let w = &self.app.windows[i];
+            let (lx, ly) = crate::render_loc(w);
+            let (sw, sh) = crate::surface_px_size(w).unwrap_or(w.size);
+            x >= lx as f64 && y >= ly as f64 && x < (lx + sw) as f64 && y < (ly + sh) as f64
+        })
     }
 }
 
@@ -339,6 +504,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     // La salida del Cerebro = el modo del monitor.
     let ev = app.body.add_output(0, mode_w as i32, mode_h as i32);
     app.brain_feed(ev);
+    // El puntero arranca en el centro de la pantalla.
+    app.pointer_loc = (mode_w as f64 / 2.0, mode_h as f64 / 2.0);
     // Anuncia el monitor en el protocolo Wayland — los clientes lo exigen.
     let _wl_output = crate::announce_output(
         &display.handle(),
@@ -475,6 +642,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         ctl,
         start: Instant::now(),
         last_windows: 0,
+        cursor_id: Id::new(),
+        last_pointer_window: None,
+        output_size: (mode_w as f64, mode_h as f64),
     };
 
     let signal = event_loop.get_signal();
