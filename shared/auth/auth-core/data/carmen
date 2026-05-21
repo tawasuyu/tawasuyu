@@ -1,0 +1,15 @@
+#%PAM-1.0
+#
+# Servicio PAM del greeter de carmen (mirada). Instalar como
+# /etc/pam.d/carmen.
+#
+# El `include` apunta a la pila de login de la distribución; ajustar
+# según corresponda:
+#   Arch         system-login
+#   Debian/Ubuntu  common-auth / common-account / ... (una por línea)
+#   Fedora/RHEL    system-auth  +  postlogin
+#
+auth       include   system-login
+account    include   system-login
+password   include   system-login
+session    include   system-login

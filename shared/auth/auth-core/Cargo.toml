@@ -1,0 +1,17 @@
+[package]
+name = "brahman-auth"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "brahman-auth — autenticación del escritorio: contrato Authenticator agnóstico + backend PAM + mock. Lo consume el greeter de carmen (mirada)."
+
+[dependencies]
+nix = { workspace = true }
+thiserror = { workspace = true }
+pam = { workspace = true }
+
+[dev-dependencies]
+rpassword = { workspace = true }
