@@ -27,10 +27,11 @@ use gpui::{
 };
 
 use nahual_meta_runtime::{
-    compute_clear_fields, compute_field_delta, format_value, human_label_for_record,
+    cmp_values, compute_clear_fields, compute_field_delta, format_value, human_label_for_record,
     parse_field_value, render_value, resolve_param_value, short_uuid, validate_entity_refs,
     value_to_input_text, MetaBackend, WriteOutcome,
 };
+
 use nahual_meta_schema::{
     Action, Column, DetailView, FieldKind, FieldSpec, FormView, ListView, Module, RelatedList,
     SelectOption, View,
@@ -41,6 +42,9 @@ use nahual_widget_text_input::TextInput;
 use nahual_widget_theme_switcher::theme_switcher;
 use serde_json::Value;
 use uuid::Uuid;
+
+/// Filas por página en las vistas de lista.
+const PAGE_SIZE: usize = 25;
 
 /// Estado del runtime de UI. Toda la persistencia/ejecución está
 /// detrás del trait [`MetaBackend`]; este struct sólo conoce GPUI
@@ -75,6 +79,13 @@ pub struct MetaApp<B: MetaBackend> {
     /// Key de la vista a la que vuelve el botón «← Volver» de una
     /// ficha — la lista desde la que se abrió.
     detail_return: Option<String>,
+    /// Estado de la vista de lista activa. Se reinician al navegar.
+    /// `list_search`: caja de búsqueda (sólo si la lista declara
+    /// `search_in`). `list_sort`: `(columna, ascendente)`.
+    /// `list_page`: página actual (0-based).
+    list_search: Option<Entity<TextInput>>,
+    list_sort: Option<(String, bool)>,
+    list_page: usize,
     /// Mensaje toast al pie (success de submit, error de carga, etc.).
     toast: Option<SharedString>,
     /// Si la carga de módulos falló al inicio.
@@ -108,6 +119,9 @@ impl<B: MetaBackend> MetaApp<B> {
             pending_delete: None,
             detail_target: None,
             detail_return: None,
+            list_search: None,
+            list_sort: None,
+            list_page: 0,
             toast: initial_toast.map(SharedString::from),
             load_error: initial_error.map(SharedString::from),
         }
@@ -126,38 +140,56 @@ impl<B: MetaBackend> MetaApp<B> {
         self.pending_delete = None;
         self.detail_target = None;
         self.form_inputs = BTreeMap::new();
+        self.list_search = None;
+        self.list_sort = None;
+        self.list_page = 0;
         if let Some(module) = self.modules.get(mod_idx) {
-            if let Some(View::Form(form)) = module.views.get(&view_key) {
-                // Snapshot del record si estamos editando esta entity.
-                let editing_record: Option<Value> = self.editing.as_ref().and_then(|(e, id)| {
-                    if e == &form.entity {
-                        self.backend.load_record(e, *id)
-                    } else {
-                        None
+            match module.views.get(&view_key) {
+                Some(View::Form(form)) => {
+                    // Snapshot del record si estamos editando esta entity.
+                    let editing_record: Option<Value> =
+                        self.editing.as_ref().and_then(|(e, id)| {
+                            if e == &form.entity {
+                                self.backend.load_record(e, *id)
+                            } else {
+                                None
+                            }
+                        });
+                    for f in &form.fields {
+                        let initial = if f.kind == FieldKind::AutoId {
+                            // Editando: conservar el id del record.
+                            // Alta: UUID nuevo, que el usuario no teclea.
+                            editing_record
+                                .as_ref()
+                                .and_then(|rec| rec.get(&f.name).map(value_to_input_text))
+                                .unwrap_or_else(|| Uuid::new_v4().to_string())
+                        } else if let Some(rec) = &editing_record {
+                            rec.get(&f.name)
+                                .map(value_to_input_text)
+                                .unwrap_or_else(|| f.default.clone().unwrap_or_default())
+                        } else {
+                            f.default.clone().unwrap_or_default()
+                        };
+                        let input = cx.new(|cx| TextInput::new(initial, cx));
+                        self.form_inputs.insert(f.name.clone(), input);
                     }
-                });
-                for f in &form.fields {
-                    let initial = if f.kind == FieldKind::AutoId {
-                        // Editando: conservar el id del record.
-                        // Alta: UUID nuevo, que el usuario no teclea.
-                        editing_record
-                            .as_ref()
-                            .and_then(|rec| rec.get(&f.name).map(value_to_input_text))
-                            .unwrap_or_else(|| Uuid::new_v4().to_string())
-                    } else if let Some(rec) = &editing_record {
-                        rec.get(&f.name)
-                            .map(value_to_input_text)
-                            .unwrap_or_else(|| f.default.clone().unwrap_or_default())
-                    } else {
-                        f.default.clone().unwrap_or_default()
-                    };
-                    let input = cx.new(|cx| TextInput::new(initial, cx));
-                    self.form_inputs.insert(f.name.clone(), input);
                 }
-            } else {
-                // Cambiar a una view que no es Form invalida el editing
-                // pendiente.
-                self.editing = None;
+                Some(View::List(lv)) => {
+                    // Caja de búsqueda viva si la lista declara search_in.
+                    if !lv.search_in.is_empty() {
+                        let input = cx.new(|cx| TextInput::new("", cx).with_placeholder("buscar…"));
+                        // Re-render del widget cuando el input cambia →
+                        // filtrado en vivo mientras se teclea.
+                        cx.observe(&input, |_this, _, cx| cx.notify()).detach();
+                        self.list_search = Some(input);
+                    }
+                    self.editing = None;
+                }
+                _ => {
+                    // Cambiar a una view que no es Form invalida el
+                    // editing pendiente.
+                    self.editing = None;
+                }
             }
         }
         cx.notify();
@@ -178,7 +210,18 @@ impl<B: MetaBackend> MetaApp<B> {
         self.editing = None;
         self.pending_delete = None;
         self.form_inputs = BTreeMap::new();
+        self.list_search = None;
+        self.list_sort = None;
+        self.list_page = 0;
         self.toast = None;
+        cx.notify();
+    }
+
+    /// Cambia el orden de la lista al hacer clic en un header: misma
+    /// columna cicla ascendente → descendente → sin orden.
+    fn toggle_sort(&mut self, field: &str, cx: &mut Context<Self>) {
+        self.list_sort = next_sort(self.list_sort.take(), field);
+        self.list_page = 0;
         cx.notify();
     }
 
@@ -455,6 +498,17 @@ fn lookup_field<'a>(v: &'a Value, path: &str) -> Option<&'a Value> {
         cur = cur.get(seg)?;
     }
     Some(cur)
+}
+
+/// Próximo estado de orden al hacer clic en el header `field`: la misma
+/// columna cicla ascendente → descendente → sin orden; otra columna
+/// arranca ascendente.
+fn next_sort(current: Option<(String, bool)>, field: &str) -> Option<(String, bool)> {
+    match current {
+        Some((f, true)) if f == field => Some((f, false)),
+        Some((f, false)) if f == field => None,
+        _ => Some((field.to_string(), true)),
+    }
 }
 
 impl<B: MetaBackend> Render for MetaApp<B> {
@@ -842,9 +896,54 @@ impl<B: MetaBackend> MetaApp<B> {
         }
         main = main.child(header);
 
-        let rows = self.list_rows(&lv.entity);
-        let total = rows.len();
+        // Caja de búsqueda (sólo si la lista declara `search_in`).
+        if let Some(search) = &self.list_search {
+            main = main.child(
+                div()
+                    .mb(px(8.))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(div().text_color(text_dim).text_size(px(12.)).child("🔍"))
+                    .child(search.clone()),
+            );
+        }
+
         let row_detail = lv.row_detail.clone();
+
+        // Filas: buscar → ordenar → paginar.
+        let mut all_rows = self.list_rows(&lv.entity);
+        let query = self
+            .list_search
+            .as_ref()
+            .map(|i| i.read(cx).text().trim().to_lowercase())
+            .unwrap_or_default();
+        if !query.is_empty() {
+            all_rows.retain(|(_, v)| {
+                lv.search_in.iter().any(|field| {
+                    lookup_field(v, field)
+                        .map(|cell| render_value(Some(cell)).to_lowercase().contains(&query))
+                        .unwrap_or(false)
+                })
+            });
+        }
+        if let Some((field, asc)) = &self.list_sort {
+            all_rows.sort_by(|(_, a), (_, b)| {
+                let ord = cmp_values(lookup_field(a, field), lookup_field(b, field));
+                if *asc {
+                    ord
+                } else {
+                    ord.reverse()
+                }
+            });
+        }
+        let total = all_rows.len();
+        let page_count = total.div_ceil(PAGE_SIZE).max(1);
+        let page = self.list_page.min(page_count - 1);
+        let start = page * PAGE_SIZE;
+        let end = (start + PAGE_SIZE).min(total);
+        let rows: Vec<(Uuid, Value)> = all_rows[start..end].to_vec();
 
         let total_weight: f32 = lv.columns.iter().map(|c| c.weight).sum::<f32>().max(0.01);
         let mut col_header = div()
@@ -857,11 +956,28 @@ impl<B: MetaBackend> MetaApp<B> {
             .text_size(px(11.));
         for c in &lv.columns {
             let frac = c.weight / total_weight;
+            // Indicador del orden activo + clic en el header para ordenar.
+            let arrow = match &self.list_sort {
+                Some((f, asc)) if f == &c.field => {
+                    if *asc {
+                        " ▲"
+                    } else {
+                        " ▼"
+                    }
+                }
+                _ => "",
+            };
+            let field = c.field.clone();
             col_header = col_header.child(
                 div()
+                    .id(SharedString::from(format!("col-{mod_idx}-{}", c.field)))
                     .flex_grow()
                     .flex_basis(px(100. * frac))
-                    .child(c.label.clone()),
+                    .hover(move |d| d.bg(action_hover))
+                    .child(format!("{}{arrow}", c.label))
+                    .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                        this.toggle_sort(&field, cx);
+                    })),
             );
         }
         col_header = col_header
@@ -952,22 +1068,64 @@ impl<B: MetaBackend> MetaApp<B> {
             main = main.child(row);
         }
 
-        if rows.is_empty() {
+        if total == 0 {
+            let msg = if query.is_empty() {
+                format!("(sin {})", lv.entity)
+            } else {
+                "(sin resultados para la búsqueda)".to_string()
+            };
             main = main.child(
                 div()
                     .py(px(12.))
                     .text_color(text_dim)
                     .text_size(px(12.))
-                    .child(format!("(sin {})", lv.entity)),
+                    .child(msg),
             );
         } else {
-            main = main.child(
-                div()
-                    .mt(px(8.))
-                    .text_color(text_dim)
-                    .text_size(px(11.))
-                    .child(format!("{total} fila(s)")),
-            );
+            let mut footer = div()
+                .mt(px(8.))
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(8.))
+                .text_color(text_dim)
+                .text_size(px(11.));
+            if page_count > 1 {
+                let last_page = page_count - 1;
+                footer = footer.child(
+                    div()
+                        .id("list-prev")
+                        .px(px(8.))
+                        .py(px(2.))
+                        .bg(action_bg)
+                        .rounded(px(3.))
+                        .text_color(if page == 0 { text_dim } else { accent })
+                        .hover(move |d| d.bg(action_hover))
+                        .child("◀")
+                        .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                            this.list_page = this.list_page.saturating_sub(1);
+                            cx.notify();
+                        })),
+                );
+                footer = footer.child(div().child(format!("página {}/{}", page + 1, page_count)));
+                footer = footer.child(
+                    div()
+                        .id("list-next")
+                        .px(px(8.))
+                        .py(px(2.))
+                        .bg(action_bg)
+                        .rounded(px(3.))
+                        .text_color(if page >= last_page { text_dim } else { accent })
+                        .hover(move |d| d.bg(action_hover))
+                        .child("▶")
+                        .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                            this.list_page = (this.list_page + 1).min(last_page);
+                            cx.notify();
+                        })),
+                );
+            }
+            footer = footer.child(div().child(format!("{total} fila(s)")));
+            main = main.child(footer);
         }
 
         main
@@ -1564,6 +1722,22 @@ mod tests {
         assert_eq!(lookup_field(&v, "address.city").unwrap(), &json!("Bogotá"));
         assert!(lookup_field(&v, "missing").is_none());
         assert!(lookup_field(&v, "address.zipcode").is_none());
+    }
+
+    #[test]
+    fn next_sort_cycles_asc_desc_off() {
+        // Sin orden → ascendente.
+        let s = next_sort(None, "monto");
+        assert_eq!(s, Some(("monto".to_string(), true)));
+        // Misma columna → descendente.
+        let s = next_sort(s, "monto");
+        assert_eq!(s, Some(("monto".to_string(), false)));
+        // Misma columna otra vez → sin orden.
+        let s = next_sort(s, "monto");
+        assert_eq!(s, None);
+        // Otra columna siempre arranca ascendente.
+        let s = next_sort(Some(("monto".to_string(), false)), "etapa");
+        assert_eq!(s, Some(("etapa".to_string(), true)));
     }
 
     #[test]

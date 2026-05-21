@@ -3,10 +3,37 @@
 //! Sin GPUI: devuelven `String`s. El widget renderer los wrap-ea
 //! en `div().child(...)` o equivalente.
 
+use std::cmp::Ordering;
+
 use serde_json::Value;
 use uuid::Uuid;
 
 use nahual_meta_schema::ValueFormat;
+
+/// Compara dos valores de celda para ordenar una lista. `None`/`null`
+/// ordenan antes que cualquier valor. Números por valor numérico,
+/// strings case-insensitive, bools `false < true`; tipos mixtos por su
+/// forma string (orden estable, no semántico).
+pub fn cmp_values(a: Option<&Value>, b: Option<&Value>) -> Ordering {
+    let nullish = |v: Option<&Value>| matches!(v, None | Some(Value::Null));
+    match (nullish(a), nullish(b)) {
+        (true, true) => return Ordering::Equal,
+        (true, false) => return Ordering::Less,
+        (false, true) => return Ordering::Greater,
+        (false, false) => {}
+    }
+    match (a, b) {
+        (Some(Value::Number(x)), Some(Value::Number(y))) => x
+            .as_f64()
+            .partial_cmp(&y.as_f64())
+            .unwrap_or(Ordering::Equal),
+        (Some(Value::String(x)), Some(Value::String(y))) => x.to_lowercase().cmp(&y.to_lowercase()),
+        (Some(Value::Bool(x)), Some(Value::Bool(y))) => x.cmp(y),
+        (Some(x), Some(y)) => x.to_string().cmp(&y.to_string()),
+        // Inalcanzable: el chequeo nullish de arriba cubre los None.
+        _ => Ordering::Equal,
+    }
+}
 
 /// Etiqueta humana para representar un record en el selector de
 /// EntityRef y en columnas de referencia. Heurística: prefiere campos
@@ -205,6 +232,35 @@ mod tests {
         assert_eq!(
             format_value(Some(&json!(1234.5)), &ValueFormat::Number),
             "1,234.50"
+        );
+    }
+
+    #[test]
+    fn cmp_values_orders_numbers_strings_nulls() {
+        // Números por valor, no lexicográfico.
+        assert_eq!(
+            cmp_values(Some(&json!(2)), Some(&json!(10))),
+            Ordering::Less
+        );
+        // Strings case-insensitive.
+        assert_eq!(
+            cmp_values(Some(&json!("banana")), Some(&json!("Apple"))),
+            Ordering::Greater
+        );
+        // null/None ordena primero.
+        assert_eq!(cmp_values(None, Some(&json!(1))), Ordering::Less);
+        assert_eq!(
+            cmp_values(Some(&Value::Null), Some(&json!("x"))),
+            Ordering::Less
+        );
+        assert_eq!(
+            cmp_values(Some(&json!(5)), Some(&json!(5))),
+            Ordering::Equal
+        );
+        // Bools.
+        assert_eq!(
+            cmp_values(Some(&json!(false)), Some(&json!(true))),
+            Ordering::Less
         );
     }
 

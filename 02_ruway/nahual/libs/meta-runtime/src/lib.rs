@@ -32,8 +32,8 @@ pub mod testing;
 pub use backend::{MetaBackend, WriteOutcome};
 pub use delta::{compute_clear_fields, compute_field_delta};
 pub use format::{
-    format_value, human_label_for_record, preview_value, render_value, short_hash, short_uuid,
-    value_to_input_text,
+    cmp_values, format_value, human_label_for_record, preview_value, render_value, short_hash,
+    short_uuid, value_to_input_text,
 };
 pub use parse::{infer_param_value, parse_field_value, resolve_param_value};
 pub use refs::validate_entity_refs;
