@@ -50,6 +50,9 @@ pub struct Desktop {
     keymap: Keymap,
     /// Reglas de ventana — escritorio/flotante por `app_id`/título.
     rules: Rules,
+    /// Ventanas del scratchpad: se invocan flotando y se ocultan a
+    /// voluntad; mientras están guardadas no viven en ningún escritorio.
+    scratchpad: Vec<WindowId>,
 }
 
 impl Default for Desktop {
@@ -78,6 +81,7 @@ impl Desktop {
             windows: HashMap::new(),
             keymap,
             rules: Rules::default(),
+            scratchpad: Vec::new(),
         }
     }
 
@@ -157,6 +161,7 @@ impl Desktop {
             }
             BodyEvent::WindowClosed { id } => {
                 self.windows.remove(&id);
+                self.scratchpad.retain(|&w| w != id);
                 for ws in &mut self.workspaces {
                     ws.remove(id);
                 }
@@ -256,6 +261,47 @@ impl Desktop {
                     ws.set_fullscreen(Some(id));
                 }
                 self.relayout()
+            }
+            DesktopAction::SendToScratchpad => {
+                let Some(id) = self.workspaces[active].focused() else {
+                    return Vec::new();
+                };
+                for ws in &mut self.workspaces {
+                    ws.remove(id);
+                }
+                if !self.scratchpad.contains(&id) {
+                    self.scratchpad.push(id);
+                }
+                self.relayout()
+            }
+            DesktopAction::ToggleScratchpad => {
+                // ¿Hay alguna ventana del scratchpad en el escritorio activo?
+                let shown: Vec<WindowId> = self.workspaces[active]
+                    .windows()
+                    .iter()
+                    .copied()
+                    .filter(|id| self.scratchpad.contains(id))
+                    .collect();
+                if !shown.is_empty() {
+                    for id in shown {
+                        self.workspaces[active].remove(id);
+                    }
+                    self.relayout()
+                } else if let Some(&id) = self.scratchpad.first() {
+                    // La traemos de donde esté y la mostramos flotando.
+                    for ws in &mut self.workspaces {
+                        ws.remove(id);
+                    }
+                    let rect = self
+                        .screen()
+                        .map(centered_float_rect)
+                        .unwrap_or_else(|| Rect::new(100, 100, 800, 600));
+                    self.workspaces[active].add(id);
+                    self.workspaces[active].set_floating(id, Some(rect));
+                    self.relayout()
+                } else {
+                    Vec::new()
+                }
             }
             DesktopAction::CycleLayout => {
                 let next = self.workspaces[active].params().mode.next();
@@ -432,6 +478,20 @@ impl Desktop {
                     title: info.map(|i| i.title.clone()).unwrap_or_default(),
                     workspace: n + 1,
                     focused: n == active && ws_focus == Some(id),
+                });
+            }
+        }
+        // Ventanas guardadas en el scratchpad — en ningún escritorio.
+        for &id in &self.scratchpad {
+            let stashed = !self.workspaces.iter().any(|ws| ws.windows().contains(&id));
+            if stashed {
+                let info = self.windows.get(&id);
+                lines.push(crate::ctl::WindowLine {
+                    id,
+                    app_id: info.map(|i| i.app_id.clone()).unwrap_or_default(),
+                    title: info.map(|i| i.title.clone()).unwrap_or_default(),
+                    workspace: 0, // 0 = guardada en el scratchpad
+                    focused: false,
                 });
             }
         }
@@ -872,5 +932,65 @@ mod tests {
         assert!(d.window_info(1).is_some());
         assert_eq!(d.workspace_loads()[1], 1);
         assert_eq!(d.outputs().len(), 1);
+    }
+
+    // --- Scratchpad ----------------------------------------------------
+
+    #[test]
+    fn send_to_scratchpad_hides_the_focused_window() {
+        let mut d = desktop_with_screen();
+        open(&mut d, 1);
+        open(&mut d, 2); // enfocada
+        d.apply(DesktopAction::SendToScratchpad);
+        assert_eq!(d.workspace_loads()[0], 1); // sólo queda la 1
+        assert!(d.window_info(2).is_some()); // sigue registrada
+    }
+
+    #[test]
+    fn toggle_scratchpad_shows_then_hides_the_stashed_window() {
+        let mut d = desktop_with_screen();
+        open(&mut d, 1);
+        open(&mut d, 2);
+        d.apply(DesktopAction::SendToScratchpad); // guarda la 2
+        assert_eq!(d.workspace_loads()[0], 1);
+        // Toggle la invoca, flotando.
+        let cmds = d.apply(DesktopAction::ToggleScratchpad);
+        assert!(places(&cmds).iter().find(|x| x.id == 2).unwrap().floating);
+        assert_eq!(d.workspace_loads()[0], 2);
+        // Toggle de nuevo la oculta.
+        d.apply(DesktopAction::ToggleScratchpad);
+        assert_eq!(d.workspace_loads()[0], 1);
+    }
+
+    #[test]
+    fn a_scratchpad_window_follows_you_across_workspaces() {
+        let mut d = desktop_with_screen();
+        open(&mut d, 1);
+        d.apply(DesktopAction::SendToScratchpad);
+        d.apply(DesktopAction::ToggleScratchpad); // mostrada en el escritorio 1
+        assert_eq!(d.workspace_loads()[0], 1);
+        d.apply(DesktopAction::SwitchWorkspace(1)); // al escritorio 2
+        d.apply(DesktopAction::ToggleScratchpad); // estaba en el 1 → la trae al 2
+        assert_eq!(d.workspace_loads()[1], 1);
+        assert_eq!(d.workspace_loads()[0], 0);
+    }
+
+    #[test]
+    fn closing_a_stashed_window_drops_it_from_the_scratchpad() {
+        let mut d = desktop_with_screen();
+        open(&mut d, 1);
+        d.apply(DesktopAction::SendToScratchpad);
+        d.on_event(BodyEvent::WindowClosed { id: 1 });
+        // Ya no hay nada que invocar.
+        assert!(d.apply(DesktopAction::ToggleScratchpad).is_empty());
+    }
+
+    #[test]
+    fn window_lines_show_a_stashed_window_as_workspace_zero() {
+        let mut d = desktop_with_screen();
+        open(&mut d, 1);
+        d.apply(DesktopAction::SendToScratchpad);
+        let line = d.window_lines().into_iter().find(|l| l.id == 1).unwrap();
+        assert_eq!(line.workspace, 0);
     }
 }

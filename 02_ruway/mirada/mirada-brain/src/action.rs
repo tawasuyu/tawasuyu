@@ -42,6 +42,10 @@ pub enum DesktopAction {
     ToggleFloat,
     /// Alterna pantalla completa en la ventana enfocada.
     ToggleFullscreen,
+    /// Guarda la ventana enfocada en el scratchpad (la oculta).
+    SendToScratchpad,
+    /// Invoca u oculta la ventana del scratchpad — aparece flotando.
+    ToggleScratchpad,
     /// Pasa al siguiente modo de teselado.
     CycleLayout,
     /// Fija un modo de teselado concreto.
@@ -106,6 +110,8 @@ impl fmt::Display for DesktopAction {
             DesktopAction::CloseFocused => f.write_str("close-focused"),
             DesktopAction::ToggleFloat => f.write_str("toggle-float"),
             DesktopAction::ToggleFullscreen => f.write_str("toggle-fullscreen"),
+            DesktopAction::SendToScratchpad => f.write_str("send-to-scratchpad"),
+            DesktopAction::ToggleScratchpad => f.write_str("toggle-scratchpad"),
             DesktopAction::CycleLayout => f.write_str("cycle-layout"),
             DesktopAction::SetLayout(m) => write!(f, "layout:{}", layout_slug(*m)),
             DesktopAction::GrowMaster => f.write_str("grow-master"),
@@ -136,6 +142,8 @@ impl FromStr for DesktopAction {
             "close-focused" => Self::CloseFocused,
             "toggle-float" => Self::ToggleFloat,
             "toggle-fullscreen" => Self::ToggleFullscreen,
+            "send-to-scratchpad" => Self::SendToScratchpad,
+            "toggle-scratchpad" => Self::ToggleScratchpad,
             "cycle-layout" => Self::CycleLayout,
             "grow-master" => Self::GrowMaster,
             "shrink-master" => Self::ShrinkMaster,
@@ -197,6 +205,7 @@ pub fn default_keymap() -> Vec<(String, DesktopAction)> {
         ("Super+q".into(), DesktopAction::CloseFocused),
         ("Super+f".into(), DesktopAction::ToggleFloat),
         ("Super+Shift+f".into(), DesktopAction::ToggleFullscreen),
+        ("Super+`".into(), DesktopAction::ToggleScratchpad),
         ("Super+space".into(), DesktopAction::CycleLayout),
         ("Super+t".into(), DesktopAction::SetLayout(LayoutMode::MasterStack)),
         ("Super+m".into(), DesktopAction::SetLayout(LayoutMode::Monocle)),

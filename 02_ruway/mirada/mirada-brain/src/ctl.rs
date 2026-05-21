@@ -52,7 +52,8 @@ pub struct WindowLine {
     pub id: WindowId,
     pub app_id: String,
     pub title: String,
-    /// Escritorio virtual donde está (1-based).
+    /// Escritorio virtual donde está (1-based); `0` = guardada en el
+    /// scratchpad, en ningún escritorio.
     pub workspace: usize,
     /// `true` si es la ventana enfocada del escritorio activo.
     pub focused: bool,

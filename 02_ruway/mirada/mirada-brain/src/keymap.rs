@@ -239,6 +239,8 @@ const KEYMAP_HEADER: &str = "\
 //   close-focused                    cierra la enfocada
 //   toggle-float                     alterna flotante / teselada
 //   toggle-fullscreen                alterna pantalla completa
+//   send-to-scratchpad               guarda la enfocada en el scratchpad
+//   toggle-scratchpad                invoca / oculta la del scratchpad
 //   cycle-layout                     siguiente modo de teselado
 //   layout:<modo>                    master-stack | centered-master | spiral
 //                                    grid | columns | rows | monocle

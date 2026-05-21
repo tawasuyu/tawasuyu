@@ -25,7 +25,7 @@
 //!   j / k        foco siguiente/anterior   , / .          nmaster −/+
 //!   Shift+j / k  mueve la enfocada         1..9           ir a escritorio
 //!   Enter        promueve a maestra        Ctrl+1..9      enviar a escritorio
-//!   o            siguiente monitor
+//!   o            siguiente monitor         ` / Shift+`    scratchpad ver/guardar
 //! ```
 //!
 //! Los pips de escritorio y las ventanas del lienzo son **clicables**, y
@@ -301,6 +301,8 @@ impl Mirada {
             "h" => self.act(DesktopAction::ShrinkMaster),
             "l" => self.act(DesktopAction::GrowMaster),
             "o" => self.act(DesktopAction::FocusOutputNext),
+            "`" if shift => self.act(DesktopAction::SendToScratchpad),
+            "`" => self.act(DesktopAction::ToggleScratchpad),
             "enter" => self.act(DesktopAction::PromoteToMaster),
             "," => self.act(DesktopAction::IncMaster),
             "." => self.act(DesktopAction::DecMaster),

@@ -84,10 +84,13 @@ fn print_windows(windows: &[WindowLine]) {
     }
     for w in windows {
         let mark = if w.focused { '*' } else { ' ' };
-        println!(
-            "{mark} id {:<4} esc {}  {:<24} {}",
-            w.id, w.workspace, w.app_id, w.title
-        );
+        // El escritorio 0 es el scratchpad (ventana guardada).
+        let ws = if w.workspace == 0 {
+            "scratch".to_string()
+        } else {
+            w.workspace.to_string()
+        };
+        println!("{mark} id {:<4} esc {:<7} {:<24} {}", w.id, ws, w.app_id, w.title);
     }
 }
 
@@ -122,6 +125,8 @@ Acciones de mirada-ctl:
   close-focused              cierra la ventana enfocada
   toggle-float               alterna flotante / teselada la enfocada
   toggle-fullscreen          alterna pantalla completa en la enfocada
+  send-to-scratchpad         guarda la ventana enfocada en el scratchpad
+  toggle-scratchpad          invoca u oculta la ventana del scratchpad
   cycle-layout               pasa al siguiente modo de teselado
   layout <modo>              master-stack · centered-master · spiral
                              grid · columns · rows · monocle
