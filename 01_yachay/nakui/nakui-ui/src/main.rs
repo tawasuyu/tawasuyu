@@ -461,6 +461,25 @@ mod tests {
             "el panorama debe tener al menos un breakdown",
         );
 
+        // Fase 7: el formulario «abrir_form» agrupa sus campos en
+        // secciones.
+        let nahual_meta_schema::View::Form(abrir) = &m.views["abrir_form"] else {
+            panic!("abrir_form debe ser un formulario");
+        };
+        assert!(
+            abrir.fields.iter().all(|f| f.section.is_some()),
+            "todos los campos de abrir_form deben tener sección",
+        );
+        let secciones: std::collections::BTreeSet<&str> = abrir
+            .fields
+            .iter()
+            .filter_map(|f| f.section.as_deref())
+            .collect();
+        assert!(
+            secciones.len() >= 2,
+            "abrir_form debe tener varias secciones"
+        );
+
         // Fase 2: la lista de oportunidades resuelve `cliente_id` al
         // label del cliente y formatea `monto` como moneda.
         let nahual_meta_schema::View::List(lv) = &m.views["oportunidad_list"] else {
