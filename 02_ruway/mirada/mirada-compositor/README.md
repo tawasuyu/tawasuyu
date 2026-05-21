@@ -51,6 +51,42 @@ fino: azul la que tiene el foco, gris las demás.
 - `MIRADA_DRM_TIMEOUT=<s>` — cierra el compositor solo tras N segundos
   (0 o sin definir = sin tope).
 
+## Como sesión de escritorio
+
+Para usar carmen como tu escritorio de verdad — entrar a una sesión, no
+sólo probarlo:
+
+1. Compila e instala los binarios en el `PATH`:
+
+   ```sh
+   cargo build --release -p mirada-compositor -p mirada-ctl
+   sudo install -m755 target/release/mirada-compositor \
+        target/release/mirada-ctl /usr/local/bin/
+   sudo install -m755 session/mirada-session /usr/local/bin/
+   ```
+
+2. Arranca desde una TTY:
+
+   ```sh
+   mirada-session
+   ```
+
+   O regístralo en un gestor de login copiando `session/carmen.desktop`
+   a `/usr/share/wayland-sessions/` — aparecerá carmen como sesión.
+
+3. **Autoarranque** — los programas que quieras al iniciar van en
+   `~/.config/mirada/autostart`, uno por línea (`#` comenta). Tienes un
+   ejemplo en `session/autostart.example`:
+
+   ```sh
+   mkdir -p ~/.config/mirada
+   cp crates/apps/mirada-compositor/session/autostart.example \
+      ~/.config/mirada/autostart
+   ```
+
+Dentro de la sesión, `Ctrl+Alt+F1…F12` salta a otra TTY y vuelve sin
+romper carmen.
+
 ## Dos modos
 
 - **Autónomo** (por defecto) — lleva un `Desktop` (de `mirada-brain`)

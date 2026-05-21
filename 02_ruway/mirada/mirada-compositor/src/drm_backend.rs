@@ -116,8 +116,15 @@ const BTN_RIGHT: u32 = 0x111;
 struct DrmState {
     app: App,
     display: Display<App>,
+    /// El dispositivo DRM — se conserva para pausarlo y reactivarlo al
+    /// conmutar de VT.
+    drm: DrmDevice,
     compositor: Compositor,
     renderer: GlesRenderer,
+    /// Contexto `libinput` — se suspende y reanuda al conmutar de VT.
+    libinput: Libinput,
+    /// `false` mientras la sesión está cedida a otra VT — no se compone.
+    active: bool,
     /// `true` entre que se encola un page-flip y llega su VBlank.
     pending_flip: bool,
     keymap_path: Option<std::path::PathBuf>,
@@ -139,6 +146,9 @@ struct DrmState {
 impl DrmState {
     /// Compone el cursor y las ventanas y, si hubo cambios, encola el cuadro.
     fn render(&mut self) {
+        if !self.active {
+            return; // la sesión está en otra VT — no tocamos la GPU
+        }
         if self.pending_flip {
             return; // aún esperamos el VBlank del cuadro anterior
         }
@@ -256,6 +266,34 @@ impl DrmState {
                 send_frames_surface_tree(surface, time);
             }
         }
+    }
+
+    /// La sesión se cede a otra VT (`Ctrl+Alt+Fn`): suelta la GPU y deja
+    /// de leer el ratón y el teclado, para no chocar con quien ahora
+    /// manda en la pantalla.
+    fn pause_session(&mut self) {
+        self.active = false;
+        self.drm.pause();
+        self.libinput.suspend();
+        println!("mirada-compositor · sesión cedida a otra VT.");
+    }
+
+    /// La sesión vuelve a esta VT: recupera la GPU y la entrada, reinicia
+    /// el estado del compositor y repinta.
+    fn resume_session(&mut self) {
+        if self.libinput.resume().is_err() {
+            eprintln!("mirada-compositor · libinput.resume falló.");
+        }
+        if let Err(e) = self.drm.activate(false) {
+            eprintln!("mirada-compositor · drm.activate falló: {e}");
+        }
+        if let Err(e) = self.compositor.reset_state() {
+            eprintln!("mirada-compositor · compositor.reset_state falló: {e}");
+        }
+        self.active = true;
+        self.pending_flip = false;
+        self.render();
+        println!("mirada-compositor · sesión recuperada.");
     }
 
     /// Tarea periódica: Cerebro enlazado, recarga del keymap, API de
@@ -696,6 +734,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     std::env::set_var("WAYLAND_DISPLAY", &socket_name);
     println!("      escuchando en WAYLAND_DISPLAY={socket_name}");
 
+    // Autoarranque: los programas de `~/.config/mirada/autostart`.
+    crate::spawn_autostart();
+
     // App de arranque: si `MIRADA_STARTUP` trae un comando, se lanza como
     // hijo (hereda `WAYLAND_DISPLAY`) — cómodo para probar sin saltar de VT.
     if let Ok(cmd) = std::env::var("MIRADA_STARTUP") {
@@ -708,11 +749,11 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         EventLoop::try_new().map_err(|e| format!("calloop falló: {e}"))?;
     let handle = event_loop.handle();
 
-    // Sesión: pausa/activación al cambiar de VT.
+    // Sesión: pausa/activación al conmutar de VT.
     handle
-        .insert_source(session_notifier, |event, _, _state| match event {
-            SessionEvent::PauseSession => println!("mirada-compositor · sesión en pausa."),
-            SessionEvent::ActivateSession => println!("mirada-compositor · sesión activa."),
+        .insert_source(session_notifier, |event, _, state: &mut DrmState| match event {
+            SessionEvent::PauseSession => state.pause_session(),
+            SessionEvent::ActivateSession => state.resume_session(),
         })
         .map_err(|e| format!("insert session: {e}"))?;
 
@@ -729,11 +770,14 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         })
         .map_err(|e| format!("insert drm: {e}"))?;
 
-    // Teclado y ratón vía libinput.
+    // Teclado y ratón vía libinput. Guardamos un clon del contexto (es
+    // un manejador con contador de referencias) para suspenderlo y
+    // reanudarlo al conmutar de VT.
     let mut libinput = Libinput::new_with_udev(LibinputSessionInterface::from(session.clone()));
     libinput
         .udev_assign_seat(&seat_name)
         .map_err(|()| "libinput: no pude asignar el seat")?;
+    let libinput_handle = libinput.clone();
     handle
         .insert_source(LibinputInputBackend::new(libinput), |event, _meta, state| {
             state.handle_input(event);
@@ -800,8 +844,11 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let mut state = DrmState {
         app,
         display,
+        drm,
         compositor,
         renderer,
+        libinput: libinput_handle,
+        active: true,
         pending_flip: false,
         keymap_path,
         keymap_watch,

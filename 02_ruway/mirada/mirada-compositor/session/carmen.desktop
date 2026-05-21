@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=carmen
+Comment=Compositor Wayland teselante (mirada)
+Exec=mirada-session
+Type=Application
+DesktopNames=carmen

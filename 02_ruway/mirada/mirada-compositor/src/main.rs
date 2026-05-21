@@ -630,8 +630,8 @@ fn cursor_hotspot(surface: &WlSurface) -> (i32, i32) {
 
 /// Lanza un comando como proceso hijo, vía `sh -c`. El hijo hereda el
 /// entorno —`WAYLAND_DISPLAY` incluido—, así que el cliente que abra se
-/// conecta a este compositor. Lo usan la acción `spawn:…` del keymap y
-/// la variable `MIRADA_STARTUP`.
+/// conecta a este compositor. Lo usan la acción `spawn:…` del keymap, la
+/// variable `MIRADA_STARTUP` y el autoarranque.
 fn spawn_command(cmd: &str) {
     let cmd = cmd.trim();
     if cmd.is_empty() {
@@ -640,6 +640,36 @@ fn spawn_command(cmd: &str) {
     match std::process::Command::new("sh").arg("-c").arg(cmd).spawn() {
         Ok(child) => println!("mirada-compositor · lanzado (pid {}): {cmd}", child.id()),
         Err(e) => eprintln!("mirada-compositor · no pude lanzar «{cmd}»: {e}"),
+    }
+}
+
+/// La ruta del archivo de autoarranque del usuario,
+/// `~/.config/mirada/autostart` — junto al keymap y las reglas.
+fn autostart_path() -> Option<std::path::PathBuf> {
+    Keymap::default_path().and_then(|p| p.parent().map(|d| d.join("autostart")))
+}
+
+/// Lanza los programas del archivo de autoarranque: un comando por
+/// línea, `#` comenta y las líneas en blanco se saltan. Sin archivo, no
+/// hace nada. Se llama una vez al arrancar, con el socket ya abierto.
+fn spawn_autostart() {
+    let Some(path) = autostart_path() else {
+        return;
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return; // no hay archivo de autoarranque
+    };
+    let mut n = 0;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        spawn_command(line);
+        n += 1;
+    }
+    if n > 0 {
+        println!("mirada-compositor · autoarranque: {n} programa(s) desde {}", path.display());
     }
 }
 
