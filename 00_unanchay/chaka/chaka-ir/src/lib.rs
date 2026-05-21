@@ -16,10 +16,10 @@
 //! Alcance v1 — los verbos parseados a fondo: `MOVE`, `DISPLAY`,
 //! `ACCEPT`, `COMPUTE` (con expresiones con precedencia), `ADD`,
 //! `SUBTRACT`, `MULTIPLY`, `DIVIDE`, `IF`/`ELSE`/`END-IF` (con
-//! condiciones `AND`/`OR`/`NOT`), `EVALUATE`/`WHEN`, `PERFORM` (fuera
-//! de línea, en línea, `TIMES`, `UNTIL`, `VARYING`), `GO TO`,
-//! `STOP RUN`, `GOBACK`, `EXIT`, `CONTINUE`. Fuera de alcance:
-//! `STRING`/`UNSTRING`, E/S de ficheros, CICS y SQL embebido.
+//! condiciones `AND`/`OR`/`NOT`), `EVALUATE`/`WHEN`, `STRING`,
+//! `UNSTRING`, `PERFORM` (fuera de línea, en línea, `TIMES`, `UNTIL`,
+//! `VARYING`), `GO TO`, `STOP RUN`, `GOBACK`, `EXIT`, `CONTINUE`.
+//! Fuera de alcance: E/S de ficheros, CICS y SQL embebido.
 
 #![forbid(unsafe_code)]
 
@@ -355,6 +355,31 @@ mod tests {
                 assert_eq!(other.len(), 1);
             }
             other => panic!("se esperaba EVALUATE, vino {other:?}"),
+        }
+    }
+
+    #[test]
+    fn string_and_unstring_parse() {
+        let b = body("STRING WS-A WS-B DELIMITED BY SIZE INTO WS-OUT END-STRING.");
+        match &b[0] {
+            Stmt::StringConcat { sources, into } => {
+                assert_eq!(sources.len(), 2);
+                assert_eq!(into, &Operand::Data("WS-OUT".into()));
+            }
+            other => panic!("se esperaba STRING, vino {other:?}"),
+        }
+        let b = body("UNSTRING WS-SRC DELIMITED BY ',' INTO WS-A WS-B END-UNSTRING.");
+        match &b[0] {
+            Stmt::Unstring {
+                source,
+                delimiter,
+                into,
+            } => {
+                assert_eq!(source, &Operand::Data("WS-SRC".into()));
+                assert_eq!(delimiter, &Operand::Str(",".into()));
+                assert_eq!(into.len(), 2);
+            }
+            other => panic!("se esperaba UNSTRING, vino {other:?}"),
         }
     }
 

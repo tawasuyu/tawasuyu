@@ -39,6 +39,8 @@ fn parse_one_stmt(c: &mut Cursor, stops: &[&str]) -> Stmt {
         "DIVIDE" => parse_divide(c),
         "IF" => parse_if(c),
         "EVALUATE" => parse_evaluate(c),
+        "STRING" => parse_string(c),
+        "UNSTRING" => parse_unstring(c),
         "PERFORM" => parse_perform(c),
         "GO" => parse_goto(c),
         "STOP" => parse_stop(c),
@@ -112,6 +114,16 @@ fn skip_to_stmt_boundary(c: &mut Cursor) {
             }
         }
         c.bump();
+    }
+}
+
+/// ¿El token actual puede iniciar un operando?
+fn is_operand_start(c: &Cursor) -> bool {
+    match c.peek().map(|t| t.kind) {
+        Some(TokenKind::Number | TokenKind::String) => true,
+        Some(TokenKind::Word) => c.peek_word().map(|w| !is_boundary(&w)).unwrap_or(false),
+        Some(TokenKind::Symbol) => c.at_sym("-") || c.at_sym("+"),
+        _ => false,
     }
 }
 
@@ -319,6 +331,50 @@ fn parse_evaluate(c: &mut Cursor) -> Stmt {
         subject,
         whens,
         other,
+    }
+}
+
+fn parse_string(c: &mut Cursor) -> Stmt {
+    c.bump(); // STRING
+    let mut sources = Vec::new();
+    while !c.done() && !c.at_word("INTO") && !c.at_word("END-STRING") {
+        if c.eat_word("DELIMITED") {
+            c.eat_word("BY");
+            if !c.eat_word("SIZE") {
+                let _ = parse_operand(c); // delimitador: la v1 lo ignora
+            }
+        } else if is_operand_start(c) {
+            sources.push(parse_operand(c));
+        } else {
+            break;
+        }
+    }
+    c.eat_word("INTO");
+    let into = parse_operand(c);
+    skip_to_stmt_boundary(c); // p. ej. `WITH POINTER`, `ON OVERFLOW`
+    c.eat_word("END-STRING");
+    Stmt::StringConcat { sources, into }
+}
+
+fn parse_unstring(c: &mut Cursor) -> Stmt {
+    c.bump(); // UNSTRING
+    let source = parse_operand(c);
+    let delimiter = if c.eat_word("DELIMITED") {
+        c.eat_word("BY");
+        c.eat_word("ALL");
+        parse_operand(c)
+    } else {
+        Operand::Str(" ".to_string())
+    };
+    c.eat_word("INTO");
+    let mut rounded = false;
+    let into = parse_targets(c, &mut rounded);
+    skip_to_stmt_boundary(c); // p. ej. `DELIMITER IN`, `COUNT IN`
+    c.eat_word("END-UNSTRING");
+    Stmt::Unstring {
+        source,
+        delimiter,
+        into,
     }
 }
 

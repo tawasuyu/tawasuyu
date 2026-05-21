@@ -368,6 +368,23 @@ mod tests {
     }
 
     #[test]
+    fn string_concatenates_and_unstring_splits() {
+        let out = gen("DATA DIVISION.\n\
+             WORKING-STORAGE SECTION.\n\
+             01 WS-A PIC X(4).\n\
+             01 WS-B PIC X(4).\n\
+             01 WS-OUT PIC X(10).\n\
+             01 WS-SRC PIC X(10).\n\
+             PROCEDURE DIVISION.\n\
+             MAIN.\n\
+                 STRING WS-A WS-B DELIMITED BY SIZE INTO WS-OUT END-STRING.\n\
+                 UNSTRING WS-SRC DELIMITED BY ',' INTO WS-A WS-B END-UNSTRING.\n");
+        assert!(out.contains("self.ws_out.store(&format!("));
+        assert!(out.contains("__src.split(__delim.as_str())"));
+        assert!(out.contains("__it.next().unwrap_or(\"\")"));
+    }
+
+    #[test]
     fn empty_program_still_compiles_shape() {
         let out = gen("");
         assert!(out.contains("struct Program {"));

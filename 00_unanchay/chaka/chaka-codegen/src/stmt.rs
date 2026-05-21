@@ -76,6 +76,12 @@ pub(crate) fn emit_stmt(em: &mut Emitter, sym: &Symbols, stmt: &Stmt) {
             whens,
             other,
         } => emit_evaluate(em, sym, subject, whens, other),
+        Stmt::StringConcat { sources, into } => emit_string(em, sym, sources, into),
+        Stmt::Unstring {
+            source,
+            delimiter,
+            into,
+        } => emit_unstring(em, sym, source, delimiter, into),
         Stmt::Perform(p) => emit_perform(em, sym, p),
         Stmt::GoTo { target } => {
             em.line(&format!(
@@ -364,6 +370,57 @@ fn branch_condition(sym: &Symbols, subject: &Operand, branch: &WhenBranch) -> St
         })
         .collect::<Vec<_>>()
         .join(" || ")
+}
+
+/// Almacena una expresión `&str` en un destino: directo si es de
+/// texto, parseado a `Decimal` si es numérico.
+fn emit_store_text(em: &mut Emitter, sym: &Symbols, target: &Operand, text: &str) {
+    match field_ref(sym, target) {
+        Some((lref, FieldKind::Text { .. })) => {
+            em.line(&format!("{lref}.store({text});"));
+        }
+        Some((lref, FieldKind::Num { .. })) => {
+            em.line(&format!(
+                "{lref}.store(Decimal::parse(({text}).trim())\
+                 .unwrap_or_else(|_| Decimal::zero()));"
+            ));
+        }
+        None => em.line("// charka: destino no resuelto"),
+    }
+}
+
+/// `STRING` — concatena el texto de las fuentes en el destino.
+fn emit_string(em: &mut Emitter, sym: &Symbols, sources: &[Operand], into: &Operand) {
+    let fmt = "{}".repeat(sources.len());
+    let args: Vec<String> = sources.iter().map(|s| operand_display(sym, s)).collect();
+    let concat = format!("&format!(\"{fmt}\", {})", args.join(", "));
+    emit_store_text(em, sym, into, &concat);
+}
+
+/// `UNSTRING` — parte el texto de la fuente y reparte los trozos.
+fn emit_unstring(
+    em: &mut Emitter,
+    sym: &Symbols,
+    source: &Operand,
+    delimiter: &Operand,
+    into: &[Operand],
+) {
+    em.line("{");
+    em.indent();
+    em.line(&format!(
+        "let __src = ({}).to_string();",
+        operand_display(sym, source)
+    ));
+    em.line(&format!(
+        "let __delim = ({}).to_string();",
+        operand_display(sym, delimiter)
+    ));
+    em.line("let mut __it = __src.split(__delim.as_str());");
+    for t in into {
+        emit_store_text(em, sym, t, "__it.next().unwrap_or(\"\")");
+    }
+    em.dedent();
+    em.line("}");
 }
 
 fn emit_perform(em: &mut Emitter, sym: &Symbols, p: &Perform) {

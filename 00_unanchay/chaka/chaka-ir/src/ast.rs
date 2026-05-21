@@ -170,6 +170,19 @@ pub enum Stmt {
         /// El cuerpo de `WHEN OTHER` (vacío si no hay).
         other: Vec<Stmt>,
     },
+    /// `STRING sources... DELIMITED BY SIZE INTO into` — concatena el
+    /// texto de los `sources` en `into`.
+    StringConcat {
+        sources: Vec<Operand>,
+        into: Operand,
+    },
+    /// `UNSTRING source DELIMITED BY delimiter INTO into...` — parte el
+    /// texto de `source` por `delimiter` y reparte los trozos.
+    Unstring {
+        source: Operand,
+        delimiter: Operand,
+        into: Vec<Operand>,
+    },
     /// `PERFORM ...` — ver [`Perform`].
     Perform(Perform),
     /// `GO TO target`

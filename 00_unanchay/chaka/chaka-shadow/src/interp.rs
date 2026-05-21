@@ -247,6 +247,29 @@ impl<'a> Machine<'a> {
                 }
                 self.exec_block(other)
             }
+            Stmt::StringConcat { sources, into } => {
+                let s: String = sources.iter().map(|o| self.eval_text(o)).collect();
+                self.store_text(into, &s);
+                Flow::Normal
+            }
+            Stmt::Unstring {
+                source,
+                delimiter,
+                into,
+            } => {
+                let src = self.eval_text(source);
+                let delim = self.eval_text(delimiter);
+                let parts: Vec<String> = if delim.is_empty() {
+                    vec![src]
+                } else {
+                    src.split(delim.as_str()).map(|p| p.to_string()).collect()
+                };
+                for (i, target) in into.iter().enumerate() {
+                    let piece = parts.get(i).cloned().unwrap_or_default();
+                    self.store_text(target, &piece);
+                }
+                Flow::Normal
+            }
             Stmt::Perform(p) => self.exec_perform(p),
             Stmt::GoTo { target } => {
                 // Aproximación: ejecuta el destino y sale del párrafo.
@@ -404,6 +427,26 @@ impl<'a> Machine<'a> {
             Some(Cell::Text(arr)) => {
                 if let Some(t) = arr.get_mut(idx) {
                     t.store(&value.to_string());
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// Almacena un texto en un destino, conformándolo a su tipo.
+    fn store_text(&mut self, target: &Operand, text: &str) {
+        let Some((key, idx)) = self.resolve(target) else {
+            return;
+        };
+        match self.fields.get_mut(&key) {
+            Some(Cell::Text(arr)) => {
+                if let Some(t) = arr.get_mut(idx) {
+                    t.store(text);
+                }
+            }
+            Some(Cell::Num(arr)) => {
+                if let Some(n) = arr.get_mut(idx) {
+                    n.store(Decimal::parse(text.trim()).unwrap_or_else(|_| Decimal::zero()));
                 }
             }
             None => {}
