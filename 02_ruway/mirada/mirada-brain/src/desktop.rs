@@ -5,7 +5,8 @@ use std::collections::HashMap;
 use mirada_layout::{LayoutMode, LayoutParams, Rect, WindowId, Workspace};
 use mirada_protocol::{placements, BodyEvent, BrainCommand, OutputId};
 
-use crate::action::{default_keymap, DesktopAction, WORKSPACE_COUNT};
+use crate::action::{DesktopAction, WORKSPACE_COUNT};
+use crate::keymap::Keymap;
 
 /// Lo que el Cerebro sabe de una ventana: su identidad de aplicación.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -32,8 +33,8 @@ pub struct Desktop {
     active: usize,
     /// Identidad de cada ventana conocida.
     windows: HashMap<WindowId, WindowInfo>,
-    /// Atajos globales → acción.
-    keymap: Vec<(String, DesktopAction)>,
+    /// Atajos globales → acción. Configurable, recargable en caliente.
+    keymap: Keymap,
 }
 
 impl Default for Desktop {
@@ -46,6 +47,12 @@ impl Desktop {
     /// Escritorio recién arrancado: sin salidas ni ventanas, con los
     /// escritorios virtuales vacíos y el mapa de teclas por defecto.
     pub fn new() -> Self {
+        Self::with_keymap(Keymap::default())
+    }
+
+    /// Como [`Desktop::new`], pero con un keymap dado — el que la app
+    /// cargó del archivo de configuración del usuario.
+    pub fn with_keymap(keymap: Keymap) -> Self {
         let workspaces = (0..WORKSPACE_COUNT)
             .map(|_| Workspace::new(LayoutParams::default()))
             .collect();
@@ -54,14 +61,26 @@ impl Desktop {
             workspaces,
             active: 0,
             windows: HashMap::new(),
-            keymap: default_keymap(),
+            keymap,
         }
     }
 
     /// El comando que registra los atajos globales en el Cuerpo. La app
-    /// GPUI lo envía una vez, al conectar.
+    /// lo envía al conectar, y de nuevo tras cada recarga del keymap.
     pub fn grab_keys(&self) -> BrainCommand {
-        BrainCommand::GrabKeys(self.keymap.iter().map(|(k, _)| k.clone()).collect())
+        BrainCommand::GrabKeys(self.keymap.grab_list())
+    }
+
+    /// Reemplaza el keymap en caliente. Devuelve el [`BrainCommand`] que
+    /// el dueño debe enviar al Cuerpo para reajustar qué teclas intercepta.
+    pub fn set_keymap(&mut self, keymap: Keymap) -> BrainCommand {
+        self.keymap = keymap;
+        self.grab_keys()
+    }
+
+    /// El keymap vigente — para un HUD o un editor visual de atajos.
+    pub fn keymap(&self) -> &Keymap {
+        &self.keymap
     }
 
     /// Geometría de la salida primaria, si hay alguna conectada.
@@ -111,12 +130,10 @@ impl Desktop {
                     Vec::new()
                 }
             }
-            BodyEvent::Keybind(key) => {
-                match self.keymap.iter().find(|(k, _)| *k == key).map(|(_, a)| *a) {
-                    Some(action) => self.apply(action),
-                    None => Vec::new(),
-                }
-            }
+            BodyEvent::Keybind(key) => match self.keymap.lookup(&key) {
+                Some(action) => self.apply(action),
+                None => Vec::new(),
+            },
         }
     }
 
@@ -277,6 +294,27 @@ mod tests {
             }
             other => panic!("se esperaba GrabKeys, no {other:?}"),
         }
+    }
+
+    #[test]
+    fn set_keymap_swaps_the_bindings_and_regrabs() {
+        let mut d = desktop_with_screen();
+        for id in [1, 2, 3] {
+            open(&mut d, id);
+        }
+        // El keymap por defecto no usa Alt.
+        assert!(d.on_event(BodyEvent::Keybind("Alt+x".into())).is_empty());
+        // Cargamos un keymap a medida; el comando devuelto re-registra grabs.
+        let custom = crate::Keymap::from_ron(r#"( bindings: { "Alt+x": "focus-prev" } )"#).unwrap();
+        match d.set_keymap(custom) {
+            BrainCommand::GrabKeys(keys) => assert_eq!(keys, vec!["Alt+x".to_string()]),
+            other => panic!("se esperaba GrabKeys, no {other:?}"),
+        }
+        // Ahora «Alt+x» sí mueve el foco, y «Super+j» ya no.
+        assert_eq!(d.focused_window(), Some(3));
+        d.on_event(BodyEvent::Keybind("Alt+x".into()));
+        assert_eq!(d.focused_window(), Some(2));
+        assert!(d.on_event(BodyEvent::Keybind("Super+j".into())).is_empty());
     }
 
     #[test]

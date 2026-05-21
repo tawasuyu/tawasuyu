@@ -60,9 +60,25 @@ WAYLAND_DISPLAY=wayland-1 foot      # o weston-terminal, alacritty, …
 ```
 
 Las ventanas se teselan solas. El teclado, con la ventana del compositor
-enfocada, maneja el escritorio con atajos `Super+…` (los que registra el
-Cerebro: foco `Super+j/k`, layout `Super+Tab`, escritorios `Super+1..9`).
+enfocada, maneja el escritorio con atajos `Super+…`: foco `Super+j/k`,
+ciclar layout `Super+space`, escritorios `Super+1..9`, cerrar `Super+q`.
 Cierra la ventana del compositor para salir.
+
+## Atajos de teclado
+
+Los atajos son configurables en RON: `~/.config/mirada/keymap.ron`. En
+modo autónomo, el Cuerpo lo carga al arrancar (si no existe, escribe uno
+por defecto documentado) y lo **recarga en caliente** — edita el archivo,
+guarda, y los atajos cambian sin reiniciar. En modo enlazado el keymap es
+asunto del Cerebro (la app `mirada`).
+
+```sh
+cargo run -p mirada-brain --example keymap-default   # ver el formato
+```
+
+El compositor en sí no interpreta atajos: sólo intercepta las
+combinaciones que el Cerebro le pide (`GrabKeys`) y le devuelve la
+pulsada. *Qué significa* cada una lo decide `mirada-brain`. Ver el SDD.
 
 ## Qué implementa
 

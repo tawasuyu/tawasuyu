@@ -59,7 +59,7 @@ use smithay::{
 };
 
 use mirada_body::{BodyOp, BodyState};
-use mirada_brain::{BodyEvent, BrainCommand, Desktop};
+use mirada_brain::{BodyEvent, BrainCommand, Desktop, Keymap};
 use mirada_link::BodyLink;
 
 // ---------------------------------------------------------------------
@@ -435,6 +435,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut seat_state = SeatState::new();
     let seat = seat_state.new_wl_seat(&dh, "mirada");
 
+    // El keymap del usuario (`~/.config/mirada/keymap.ron`). Sólo lo usa
+    // el Cerebro embebido; con un Cerebro enlazado, el keymap es asunto suyo.
+    let keymap_path = Keymap::default_path();
+
     // Elige el Cerebro: enlazado si `MIRADA_SOCKET` está puesto.
     let brain = match std::env::var("MIRADA_SOCKET") {
         Ok(path) => {
@@ -445,7 +449,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         Err(_) => {
             println!("mirada-compositor · modo autónomo (Cerebro embebido).");
-            Brain::Embedded(Desktop::new())
+            let keymap = match &keymap_path {
+                Some(p) => Keymap::load_or_init(p),
+                None => Keymap::default(),
+            };
+            Brain::Embedded(Desktop::with_keymap(keymap))
         }
     };
 
@@ -473,6 +481,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Brain::Embedded(desktop) = &state.brain {
         let grab = desktop.grab_keys();
         state.apply_commands(vec![grab]);
+    }
+
+    // Vigilancia del keymap para recargarlo en caliente — sólo tiene
+    // sentido con el Cerebro embebido.
+    let keymap_watch = match (&state.brain, &keymap_path) {
+        (Brain::Embedded(_), Some(p)) => Keymap::watch(p).ok(),
+        _ => None,
+    };
+    if keymap_watch.is_some() {
+        println!("mirada-compositor · vigilando el keymap (recarga en caliente).");
     }
 
     // El backend gráfico va primero. winit abre la ventana del compositor
@@ -570,6 +588,28 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
         // 2 · Comandos de un Cerebro enlazado.
         state.brain_poll();
+
+        // 2 bis · Recarga del keymap si el archivo cambió en disco.
+        if keymap_watch.as_ref().is_some_and(|w| w.changed()) {
+            if let Some(path) = &keymap_path {
+                match Keymap::load(path) {
+                    Ok(km) => {
+                        let cmd = if let Brain::Embedded(d) = &mut state.brain {
+                            Some(d.set_keymap(km))
+                        } else {
+                            None
+                        };
+                        if let Some(cmd) = cmd {
+                            state.apply_commands(vec![cmd]);
+                        }
+                        println!("mirada-compositor · keymap recargado.");
+                    }
+                    Err(e) => eprintln!(
+                        "mirada-compositor · keymap inválido, conservo el anterior: {e}"
+                    ),
+                }
+            }
+        }
 
         // 3 · Composición de las superficies en sus rectángulos.
         let size = backend.window_size();

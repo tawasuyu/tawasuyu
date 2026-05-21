@@ -25,6 +25,7 @@
 //!   Shift+j / k  mueve la enfocada         Ctrl+1..9      enviar a escritorio
 //! ```
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui::{
@@ -32,7 +33,8 @@ use gpui::{
     SharedString, Window,
 };
 use mirada_brain::{
-    BodyEvent, BrainCommand, Desktop, DesktopAction, LayoutMode, WindowId, WindowPlacement,
+    BodyEvent, BrainCommand, Desktop, DesktopAction, Keymap, KeymapWatch, LayoutMode, WindowId,
+    WindowPlacement,
 };
 use mirada_link::BrainLink;
 use nahual_launcher::launch_app;
@@ -62,18 +64,40 @@ struct Mirada {
     note: SharedString,
     focus: FocusHandle,
     focused_once: bool,
+    /// Ruta del keymap del usuario, para recargarlo en caliente.
+    keymap_path: Option<PathBuf>,
+    /// Vigía del keymap; `None` en simulación o si no hay archivo.
+    keymap_watch: Option<KeymapWatch>,
 }
 
 impl Mirada {
     fn new(cx: &mut Context<Self>) -> Self {
+        // Keymap del usuario (~/.config/mirada/keymap.ron): define los
+        // atajos que el Cuerpo intercepta y nos devuelve como `Keybind`.
+        let keymap_path = Keymap::default_path();
+        let keymap = match &keymap_path {
+            Some(p) => Keymap::load_or_init(p),
+            None => Keymap::default(),
+        };
+        let link = connect_body();
+        // Vigilar el keymap sólo tiene sentido con un Cuerpo conectado;
+        // en simulación, mirada usa las teclas de su propia ventana.
+        let keymap_watch = if link.is_some() {
+            keymap_path.as_deref().and_then(|p| Keymap::watch(p).ok())
+        } else {
+            None
+        };
+
         let mut app = Self {
-            desktop: Desktop::new(),
+            desktop: Desktop::with_keymap(keymap),
             placements: Vec::new(),
             next_id: 1,
-            link: connect_body(),
+            link,
             note: SharedString::from("listo"),
             focus: cx.focus_handle(),
             focused_once: false,
+            keymap_path,
+            keymap_watch,
         };
         if let Some(link) = app.link.as_mut() {
             // Registra los atajos globales en el Cuerpo.
@@ -102,10 +126,15 @@ impl Mirada {
                     Some(link) => link.drain(),
                     None => Vec::new(),
                 };
-                if !events.is_empty() {
-                    for ev in events {
-                        app.feed(ev);
-                    }
+                let had_events = !events.is_empty();
+                let keymap_changed = app.keymap_watch.as_ref().is_some_and(|w| w.changed());
+                if keymap_changed {
+                    app.reload_keymap();
+                }
+                for ev in events {
+                    app.feed(ev);
+                }
+                if had_events || keymap_changed {
                     cx.notify();
                 }
             });
@@ -139,6 +168,21 @@ impl Mirada {
     fn act(&mut self, action: DesktopAction) {
         let cmds = self.desktop.apply(action);
         self.dispatch(cmds);
+    }
+
+    /// Recarga el keymap del disco y re-registra los atajos en el Cuerpo.
+    fn reload_keymap(&mut self) {
+        let Some(path) = self.keymap_path.clone() else {
+            return;
+        };
+        match Keymap::load(&path) {
+            Ok(km) => {
+                let cmd = self.desktop.set_keymap(km);
+                self.dispatch(vec![cmd]);
+                self.note = SharedString::from("keymap recargado");
+            }
+            Err(e) => self.note = SharedString::from(format!("keymap inválido: {e}")),
+        }
     }
 
     /// Reparte los comandos del Cerebro: actualiza lo pintado y, o bien

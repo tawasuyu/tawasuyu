@@ -10,3 +10,7 @@ description = "mirada — orquestador de escritorio del compositor: mantiene sal
 [dependencies]
 mirada-layout = { path = "../mirada-layout" }
 mirada-protocol = { path = "../mirada-protocol" }
+serde = { workspace = true }
+ron = { workspace = true }
+directories = { workspace = true }
+notify = { workspace = true }
