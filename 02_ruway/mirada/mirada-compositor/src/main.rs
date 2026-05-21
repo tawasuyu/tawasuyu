@@ -34,6 +34,7 @@ use smithay::backend::winit::{self, WinitEvent};
 use smithay::input::keyboard::{xkb, FilterResult, KeyboardHandle, Keysym, ModifiersState};
 use smithay::input::pointer::PointerHandle;
 use smithay::input::{Seat, SeatHandler, SeatState};
+use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use smithay::reexports::wayland_server::protocol::wl_buffer;
@@ -53,6 +54,7 @@ use smithay::wayland::selection::data_device::{
     ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
 };
 use smithay::wayland::selection::SelectionHandler;
+use smithay::wayland::shell::xdg::decoration::{XdgDecorationHandler, XdgDecorationState};
 use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
     XdgToplevelSurfaceData,
@@ -61,7 +63,7 @@ use smithay::wayland::output::OutputHandler;
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::{
     delegate_compositor, delegate_data_device, delegate_output, delegate_seat, delegate_shm,
-    delegate_xdg_shell,
+    delegate_xdg_decoration, delegate_xdg_shell,
 };
 
 use mirada_body::{BodyOp, BodyState};
@@ -392,6 +394,28 @@ impl XdgShellHandler for App {
     }
 }
 
+/// Decoración de ventana: carmen tesela, así que las ventanas no llevan
+/// barra de título. Le decimos a todo cliente que la decoración la pone
+/// el servidor (`ServerSide`) — y como el servidor no dibuja ninguna, la
+/// ventana queda sin marco. Sin esto, clientes como `foot` se dibujan su
+/// propia barra (CSD), que estorba en un escritorio teselante.
+impl XdgDecorationHandler for App {
+    fn new_decoration(&mut self, toplevel: ToplevelSurface) {
+        toplevel.with_pending_state(|s| s.decoration_mode = Some(DecorationMode::ServerSide));
+        toplevel.send_configure();
+    }
+
+    fn request_mode(&mut self, toplevel: ToplevelSurface, _mode: DecorationMode) {
+        toplevel.with_pending_state(|s| s.decoration_mode = Some(DecorationMode::ServerSide));
+        toplevel.send_configure();
+    }
+
+    fn unset_mode(&mut self, toplevel: ToplevelSurface) {
+        toplevel.with_pending_state(|s| s.decoration_mode = Some(DecorationMode::ServerSide));
+        toplevel.send_configure();
+    }
+}
+
 impl SelectionHandler for App {
     type SelectionUserData = ();
 }
@@ -430,6 +454,7 @@ impl OutputHandler for App {}
 
 delegate_compositor!(App);
 delegate_xdg_shell!(App);
+delegate_xdg_decoration!(App);
 delegate_shm!(App);
 delegate_seat!(App);
 delegate_data_device!(App);
@@ -608,6 +633,11 @@ fn build_app() -> Result<Setup, Box<dyn std::error::Error>> {
 
     let mut seat_state = SeatState::new();
     let seat = seat_state.new_wl_seat(&dh, "mirada");
+
+    // Anuncia el gestor de decoración: las ventanas van sin marco (ver
+    // `XdgDecorationHandler`). El `XdgDecorationState` sólo serviría para
+    // retirar el global más tarde, cosa que nunca hacemos.
+    let _ = XdgDecorationState::new::<App>(&dh);
 
     // El keymap del usuario (`~/.config/mirada/keymap.ron`). Sólo lo usa
     // el Cerebro embebido; con un Cerebro enlazado, el keymap es asunto suyo.
