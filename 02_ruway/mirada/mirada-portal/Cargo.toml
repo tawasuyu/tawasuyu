@@ -1,0 +1,21 @@
+[package]
+name = "mirada-portal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "mirada-portal — backend xdg-desktop-portal de carmen: implementa org.freedesktop.impl.portal.Settings y publica el tema activo de nahual (claro/oscuro + acento + contraste) a GTK, Qt, Firefox y Chromium por protocolo."
+
+[[bin]]
+name = "mirada-portal"
+path = "src/main.rs"
+
+[dependencies]
+zbus = { workspace = true }
+notify = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
