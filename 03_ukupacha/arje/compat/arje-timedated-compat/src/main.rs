@@ -5,6 +5,7 @@
 
 use arje_bus::{BusClient, BusRequest, BusResponse};
 use arje_card::Capability;
+use arje_compat_common::atomic_write;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::signal::unix::{signal, SignalKind};
 use tracing::{info, warn};
@@ -68,10 +69,11 @@ impl TimedateManager {
     #[zbus(property)]
     async fn local_rtc(&self) -> bool { false }
 
-    /// Si NTP es soportado. Reportamos true (asumimos systemd-timesyncd
-    /// o chrony están disponibles en el host).
+    /// Si el sistema puede gestionar NTP. `false`: arje no administra un
+    /// daemon de sincronización propio, así que GNOME deja el toggle
+    /// «hora automática» deshabilitado en vez de fingir que funciona.
     #[zbus(property)]
-    async fn can_ntp(&self) -> bool { true }
+    async fn can_ntp(&self) -> bool { false }
 
     /// Si NTP está activo. Sin daemon real bajo nuestro control no podemos
     /// consultarlo con precisión — false como default seguro.
@@ -99,8 +101,33 @@ impl TimedateManager {
 
     // ----- Setters -----
 
-    async fn set_time(&self, usec_utc: i64, _relative: bool, _interactive: bool) -> fdo::Result<()> {
-        info!(usec_utc, "SetTime (stub: requiere CAP_SYS_TIME para aplicar)");
+    async fn set_time(&self, usec_utc: i64, relative: bool, _interactive: bool) -> fdo::Result<()> {
+        // `relative`: el valor es un delta sobre el reloj actual.
+        let target = if relative {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_micros() as i64)
+                .unwrap_or(0);
+            now + usec_utc
+        } else {
+            usec_utc
+        };
+        if target < 0 {
+            return Err(fdo::Error::InvalidArgs("el tiempo resultante es negativo".into()));
+        }
+        let ts = libc::timespec {
+            tv_sec: (target / 1_000_000) as libc::time_t,
+            tv_nsec: ((target % 1_000_000) * 1_000) as _,
+        };
+        // SEGURIDAD: `clock_settime` con un timespec válido vivo en la
+        // pila durante la llamada.
+        let r = unsafe { libc::clock_settime(libc::CLOCK_REALTIME, &ts) };
+        if r != 0 {
+            let e = std::io::Error::last_os_error();
+            warn!(%e, "clock_settime falló (¿falta CAP_SYS_TIME?)");
+            return Err(fdo::Error::Failed(format!("clock_settime: {e}")));
+        }
+        info!(target, "SetTime aplicado al reloj del sistema");
         Ok(())
     }
 
@@ -124,13 +151,27 @@ impl TimedateManager {
     }
 
     async fn set_local_rtc(&self, local_rtc: bool, _fix_system: bool, _interactive: bool) -> fdo::Result<()> {
-        info!(local_rtc, "SetLocalRTC (stub)");
+        let mode = if local_rtc { "LOCAL" } else { "UTC" };
+        // `/etc/adjtime` tiene tres líneas; sólo la tercera (UTC|LOCAL)
+        // nos concierne. Se conservan las dos primeras si ya existían.
+        let existing = std::fs::read_to_string("/etc/adjtime").unwrap_or_default();
+        let mut lines = existing.lines();
+        let l0 = lines.next().unwrap_or("0.0 0 0.0");
+        let l1 = lines.next().unwrap_or("0");
+        atomic_write("/etc/adjtime", format!("{l0}\n{l1}\n{mode}\n").as_bytes())
+            .map_err(|e| fdo::Error::Failed(format!("write /etc/adjtime: {e}")))?;
+        info!(local_rtc, "SetLocalRTC → /etc/adjtime");
         Ok(())
     }
 
     async fn set_ntp(&self, ntp: bool, _interactive: bool) -> fdo::Result<()> {
-        info!(ntp, "SetNTP (stub: no controlamos timesyncd)");
-        Ok(())
+        // arje no administra un daemon NTP propio. En vez de fingir
+        // éxito, se rechaza con honestidad — y como `can_ntp` es `false`,
+        // GNOME deja el toggle deshabilitado y normalmente no llega acá.
+        warn!(ntp, "SetNTP rechazado — arje no gestiona un daemon NTP");
+        Err(fdo::Error::NotSupported(
+            "arje no gestiona un daemon NTP (timesyncd/chrony)".into(),
+        ))
     }
 
     async fn list_timezones(&self) -> fdo::Result<Vec<String>> {

@@ -143,15 +143,20 @@ impl SystemdManager {
     }
 
     async fn stop_unit(&self, name: String, _mode: String) -> fdo::Result<OwnedObjectPath> {
-        warn!(%name, "StopUnit (stub: TODO via bus capability)");
-        // TODO: bus → graph → kill PID por label. Por ahora no-op.
-        let path = ObjectPath::try_from("/").unwrap();
-        Ok(path.into())
+        // No se finge éxito: detener una Card por nombre de unit exige
+        // una capability del bus del fractal que aún no existe. Hasta
+        // entonces, se rechaza con honestidad (igual que StartUnit).
+        warn!(%name, "StopUnit rechazado — el fractal no detiene Cards por nombre de unit");
+        Err(fdo::Error::NotSupported(
+            "StopUnit: el fractal supervisa Cards; no se detienen por nombre de unit".into(),
+        ))
     }
 
-    async fn restart_unit(&self, name: String, mode: String) -> fdo::Result<OwnedObjectPath> {
-        info!(%name, "RestartUnit (delega a StopUnit)");
-        self.stop_unit(name, mode).await
+    async fn restart_unit(&self, name: String, _mode: String) -> fdo::Result<OwnedObjectPath> {
+        warn!(%name, "RestartUnit rechazado — sin StopUnit honesto no hay reinicio");
+        Err(fdo::Error::NotSupported(
+            "RestartUnit: el fractal no reinicia Cards por nombre de unit".into(),
+        ))
     }
 
     async fn reload_unit(&self, name: String, _mode: String) -> fdo::Result<OwnedObjectPath> {
@@ -161,8 +166,10 @@ impl SystemdManager {
     }
 
     async fn kill_unit(&self, name: String, _who: String, _signal: i32) -> fdo::Result<()> {
-        warn!(%name, "KillUnit (stub)");
-        Ok(())
+        warn!(%name, "KillUnit rechazado — no implementado");
+        Err(fdo::Error::NotSupported(
+            "KillUnit: enviar señales a una Card por nombre de unit no está implementado".into(),
+        ))
     }
 
     async fn subscribe(&self) -> fdo::Result<()> { Ok(()) }
