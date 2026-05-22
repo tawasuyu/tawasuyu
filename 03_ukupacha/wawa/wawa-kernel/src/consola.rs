@@ -291,9 +291,15 @@ impl Consola {
         );
     }
 
-    /// Vuelca el lienzo sobre la pantalla fisica.
+    /// Vuelca el lienzo sobre la pantalla fisica y estampa el puntero del raton
+    /// como ultima capa, directamente sobre el framebuffer (Fase 13). El lienzo
+    /// permanece libre de puntero — es el «save-under» natural—; el framebuffer
+    /// lo recibe en cada volcado, asi que el puntero esta siempre encima.
     pub(crate) fn presentar(&mut self) {
         self.pantalla.presentar(&self.lienzo);
+        if let Some((x, y)) = crate::drivers::raton::posicion() {
+            self.pantalla.estampar_puntero(x, y);
+        }
     }
 }
 
@@ -336,5 +342,14 @@ pub(crate) fn recomponer(area: RegionPantalla, capas: &[Capa]) {
 pub(crate) fn pintar_desalojo(marco: RegionPantalla, color: Color, enfocada: bool) {
     if let Some(consola) = CONSOLA.get() {
         consola.lock().pintar_region(marco, color, enfocada);
+    }
+}
+
+/// Vuelve a volcar el lienzo a pantalla y estampar el puntero (Fase 13). Sirve
+/// para refrescar el puntero cuando el raton se mueve pero ninguna app pinta:
+/// el lienzo es el mismo, pero el puntero esta en otro sitio.
+pub(crate) fn refrescar() {
+    if let Some(consola) = CONSOLA.get() {
+        consola.lock().presentar();
     }
 }

@@ -29,6 +29,14 @@
 //  ventanas solo crece —los indices son la IDENTIDAD, jamas se reciclan—; una
 //  ventana cerrada queda como una ranura inerte, fuera del orden y del foco.
 //
+//  FASE 13 :: el raton entra en juego. Hay un PUNTERO en pantalla y el
+//  compositor gana dos gestos: clic-para-enfocar (sobre cualquier ventana viva)
+//  y ARRASTRAR una flotante con el boton izquierdo sostenido. Como el teclado
+//  y la bocina, los eventos del raton vienen del manejador de IRQ12 por una
+//  cola lock-free; `atender_raton` los drena cooperativamente y, al detectar
+//  un boton que baja o un arrastre en curso, mueve el foco o el marco. Los
+//  cuartos flotantes dejan, por fin, de estar clavados en su cascada.
+//
 //  EXCLUSION DE INTERRUPCIONES. El `ESCRITORIO` lo tocan SOLO tareas
 //  cooperativas (el `tick` de una app, la tarea del compositor): el manejador
 //  de IRQ1 jamas lo bloquea. La IRQ se comunica con el mundo cooperativo por
@@ -96,6 +104,16 @@ pub enum Mando {
     Lanzar,
 }
 
+/// Un arrastre EN CURSO (Fase 13): el indice de la ventana flotante asida con
+/// el raton y el desfase con que se asio —para que la ventana no salte al
+/// agarrarla, sino que siga al puntero como si lo llevara cogido por ahi—.
+#[derive(Clone, Copy)]
+struct Arrastre {
+    ventana: usize,
+    agarre_dx: usize,
+    agarre_dy: usize,
+}
+
 /// Una ventana del escritorio: una app, su geometria y su ultimo fotograma.
 struct Ventana {
     /// Tamaño natural del lienzo de la app — lo que sabe pintar, fijo.
@@ -139,6 +157,11 @@ struct Escritorio {
     /// en `flotantes`, jamas en ambos ni en ninguno: juntos son una particion
     /// de `0..ventanas.len()`.
     flotantes: Vec<usize>,
+    /// ¿Estaba el boton izquierdo del raton pulsado en el evento anterior?
+    /// Para detectar las transiciones —el momento exacto del clic o de soltar—.
+    raton_izq: bool,
+    /// Arrastre en curso, si lo hay (Fase 13).
+    arrastre: Option<Arrastre>,
 }
 
 /// El escritorio global. Se funda una sola vez, en el arranque.
@@ -201,6 +224,8 @@ pub fn fundar(ancho: usize, alto: usize, naturales: &[(usize, usize)]) {
         ventanas,
         orden,
         flotantes: Vec::new(),
+        raton_izq: false,
+        arrastre: None,
     };
     aplicar_teselado(&mut escritorio);
 
@@ -589,6 +614,10 @@ fn cerrar() {
     // indices son la identidad, jamas se reciclan—, pero ya nadie la dibuja.
     escritorio.orden.retain(|&v| v != foco);
     escritorio.flotantes.retain(|&v| v != foco);
+    // Si la estabamos arrastrando con el raton (Fase 13), soltarla.
+    if escritorio.arrastre.map(|a| a.ventana) == Some(foco) {
+        escritorio.arrastre = None;
+    }
     // El foco salta a la primera ventana viva que quede; si no queda ninguna,
     // se queda donde estaba —inofensivo: no hay a quien enrutar el teclado—.
     let nuevo = escritorio
@@ -659,6 +688,146 @@ pub fn ventana_cerrada(indice: usize) -> bool {
 /// sabe instanciar un WASM— en cada fotograma de la tarea del compositor.
 pub fn partos_pendientes() -> usize {
     PARTOS.swap(0, Ordering::Relaxed)
+}
+
+// =============================================================================
+//  FASE 13 — raton, puntero y arrastre de ventanas flotantes
+// =============================================================================
+
+/// La ultima posicion del puntero que el compositor REFRESCO. Si la posicion
+/// actual del raton coincide con esta, no hay nada nuevo que estampar; si
+/// difiere, la consola debe volver a presentar. Empacada como `y * 65536 + x`,
+/// con `usize::MAX` como centinela de «aun no he visto al raton».
+static PUNTERO_REFRESCADO: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+/// Drena los eventos del raton y los aplica: clic enfoca la ventana bajo el
+/// puntero (y, si flota, inicia un arrastre); el boton sostenido la arrastra;
+/// soltarlo termina el gesto. La invoca la tarea del compositor en cada
+/// fotograma, desde el reactor cooperativo.
+pub fn atender_raton() {
+    let Some(escritorio) = ESCRITORIO.get() else {
+        return;
+    };
+    let mut escritorio = escritorio.lock();
+    let mut cambio = false;
+    while let Some(evento) = crate::drivers::raton::siguiente_evento() {
+        let izq = evento.botones & 0b001 != 0;
+        let x = evento.x as usize;
+        let y = evento.y as usize;
+        let izq_antes = escritorio.raton_izq;
+        if izq && !izq_antes {
+            // Boton bajó: un CLIC sobre el punto (x, y).
+            if let Some(v) = ventana_en(&escritorio, x, y) {
+                let viva = {
+                    let w = &escritorio.ventanas[v];
+                    w.baliza.is_none() && !w.cerrada
+                };
+                if viva {
+                    // Enfocar como hace `mover_foco`: foco + bocina muda + alza
+                    // si flota.
+                    FOCO.store(v, Ordering::Relaxed);
+                    crate::drivers::altavoz::tono(0);
+                    alzar_si_flota(&mut escritorio, v);
+                    // Si la ventana flota, empezar a arrastrarla.
+                    if escritorio.flotantes.contains(&v) {
+                        let marco = escritorio.ventanas[v].marco;
+                        escritorio.arrastre = Some(Arrastre {
+                            ventana: v,
+                            agarre_dx: x.saturating_sub(marco.x),
+                            agarre_dy: y.saturating_sub(marco.y),
+                        });
+                    }
+                    cambio = true;
+                }
+            }
+        } else if izq && izq_antes {
+            // Boton sostenido: arrastrar la ventana asida, si la hay.
+            if let Some(arr) = escritorio.arrastre {
+                mover_arrastrada(&mut escritorio, arr, x, y);
+                cambio = true;
+            }
+        } else if !izq && izq_antes {
+            // Boton subió: fin del arrastre.
+            escritorio.arrastre = None;
+        }
+        escritorio.raton_izq = izq;
+    }
+    if cambio {
+        recomponer(&escritorio);
+        // El recomponer ya presento; sincronizar el centinela para no presentar
+        // dos veces en la misma vuelta.
+        PUNTERO_REFRESCADO.store(empacar_puntero(), Ordering::Relaxed);
+    }
+}
+
+/// La ventana topmost que contiene el punto (x, y), si la hay. Recorre el
+/// orden-Z de delante hacia atras: primero las flotantes (la ultima es la
+/// frontal), despues las teseladas.
+fn ventana_en(escritorio: &Escritorio, x: usize, y: usize) -> Option<usize> {
+    for &v in escritorio.flotantes.iter().rev() {
+        if contiene(escritorio.ventanas[v].marco, x, y) {
+            return Some(v);
+        }
+    }
+    for &v in escritorio.orden.iter().rev() {
+        if contiene(escritorio.ventanas[v].marco, x, y) {
+            return Some(v);
+        }
+    }
+    None
+}
+
+/// ¿Contiene el marco al punto (x, y)?
+fn contiene(marco: RegionPantalla, x: usize, y: usize) -> bool {
+    x >= marco.x && x < marco.x + marco.ancho && y >= marco.y && y < marco.y + marco.alto
+}
+
+/// Mueve la ventana arrastrada de modo que el punto del puntero —la asa— siga
+/// estando, dentro de la ventana, donde se asio. La ventana queda acotada al
+/// area de apps.
+fn mover_arrastrada(escritorio: &mut Escritorio, arr: Arrastre, x: usize, y: usize) {
+    let area = area_apps(escritorio.ancho, escritorio.alto);
+    let Some(ventana) = escritorio.ventanas.get_mut(arr.ventana) else {
+        return;
+    };
+    let ancho = ventana.marco.ancho;
+    let alto = ventana.marco.alto;
+    let mut nx = x.saturating_sub(arr.agarre_dx);
+    let mut ny = y.saturating_sub(arr.agarre_dy);
+    // Acotar al area de apps: la ventana entera ha de caber dentro.
+    if nx + ancho > area.x + area.ancho {
+        nx = (area.x + area.ancho).saturating_sub(ancho);
+    }
+    if ny + alto > area.y + area.alto {
+        ny = (area.y + area.alto).saturating_sub(alto);
+    }
+    nx = nx.max(area.x);
+    ny = ny.max(area.y);
+    ventana.marco.x = nx;
+    ventana.marco.y = ny;
+}
+
+/// Empaca la posicion actual del puntero en un solo `usize` —`y * 65536 + x`—
+/// para compararla atomicamente con la ultima refrescada. `usize::MAX` indica
+/// «el raton no esta vivo».
+fn empacar_puntero() -> usize {
+    match crate::drivers::raton::posicion() {
+        Some((x, y)) => (y << 16) | (x & 0xFFFF),
+        None => usize::MAX,
+    }
+}
+
+/// Si el puntero se ha movido desde la ultima presentacion del compositor, le
+/// pide a la consola un volcado fresco —para reestampar el puntero en su
+/// nuevo lugar—. La invoca la tarea del compositor cada fotograma.
+pub fn refrescar_puntero() {
+    let actual = empacar_puntero();
+    if actual == usize::MAX {
+        return;
+    }
+    if PUNTERO_REFRESCADO.swap(actual, Ordering::Relaxed) != actual {
+        crate::consola::refrescar();
+    }
 }
 
 // =============================================================================

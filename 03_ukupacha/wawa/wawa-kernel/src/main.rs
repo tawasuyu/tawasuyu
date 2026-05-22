@@ -143,6 +143,11 @@ async fn tarea_compositor() {
     loop {
         async_system::reloj::EsperaFrame::nueva().await;
         compositor::atender_mandos();
+        // FASE 13 :: atender los eventos del raton (clic-para-enfocar y
+        // arrastre de flotantes), y refrescar el puntero si se movio en una
+        // vuelta tranquila en que ninguna app pinto.
+        compositor::atender_raton();
+        compositor::refrescar_puntero();
         // FASE 10 :: atender las altas en vivo. Por cada `Alt+N` pendiente,
         // dar a luz una aplicacion nueva — el compositor solo conto la
         // peticion; instanciar el WASM es trabajo del orquestador.
@@ -454,6 +459,12 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             }
         }
     }
+
+    // --- 6.6. FASE 13 :: despertar el raton PS/2. El 8042 enciende su
+    //          dispositivo auxiliar, el raton empieza a reportar, y el PIC
+    //          desenmascara su IRQ12. Desde aqui hay un puntero en pantalla,
+    //          y los clics pueden alcanzar al compositor.
+    drivers::raton::init(ancho_lienzo, alto_lienzo);
 
     // --- 7. FASE 7 :: levantar el reactor y poblar el userspace DESDE EL
     //        GRAFO. El kernel ya no empotra los modulos WASM: lee el

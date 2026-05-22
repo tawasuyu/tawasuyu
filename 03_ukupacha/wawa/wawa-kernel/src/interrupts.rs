@@ -54,6 +54,7 @@ pub fn init() {
     // --- Interrupciones de hardware, ya remapeadas por el PIC ---
     idt[pic::VECTOR_TEMPORIZADOR].set_handler_fn(irq_temporizador);
     idt[pic::VECTOR_TECLADO].set_handler_fn(irq_teclado);
+    idt[pic::vector_irq(12)].set_handler_fn(irq_raton);
 
     let idt_estatica: &'static InterruptDescriptorTable = idt;
     idt_estatica.load();
@@ -134,6 +135,18 @@ extern "x86-interrupt" fn irq_teclado(_marco: InterruptStackFrame) {
     let scancode: u8 = unsafe { x86_64::instructions::port::Port::new(0x60).read() };
     crate::async_system::teclado::recibir_scancode(scancode);
     pic::fin_de_interrupcion(pic::VECTOR_TECLADO);
+}
+
+/// IRQ12 — Raton PS/2 (Fase 13). Lee un byte del puerto de datos del 8042 —el
+/// mismo que sirve al teclado—; el ensamblador de paquetes del raton se ocupa
+/// de juntar tres bytes y entregar el evento al compositor.
+extern "x86-interrupt" fn irq_raton(_marco: InterruptStackFrame) {
+    // SEGURIDAD: 0x60 es el puerto de datos del 8042 en la arquitectura PC.
+    // Que la IRQ12 ha disparado garantiza que el byte es del raton, no del
+    // teclado: el controlador alza una linea distinta para cada dispositivo.
+    let byte: u8 = unsafe { x86_64::instructions::port::Port::new(0x60).read() };
+    crate::drivers::raton::recibir_byte(byte);
+    pic::fin_de_interrupcion(pic::vector_irq(12));
 }
 
 /// IRQ del disco — virtio-blk (Fase 6.2). El disco ha terminado una

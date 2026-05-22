@@ -305,6 +305,9 @@ pub(crate) struct Pantalla {
     pub(crate) alto: usize,
     pub(crate) paso_bytes: usize,
     pub(crate) bytes_por_pixel: usize,
+    /// Formato de pixel — necesario para estampar capas que se pintan
+    /// DIRECTAMENTE sobre el framebuffer, no sobre el lienzo (Fase 13).
+    pub(crate) formato: PixelFormat,
 }
 
 impl Pantalla {
@@ -318,6 +321,7 @@ impl Pantalla {
             alto: info.height,
             paso_bytes: info.stride * info.bytes_per_pixel,
             bytes_por_pixel: info.bytes_per_pixel,
+            formato: info.pixel_format,
         }
     }
 
@@ -336,6 +340,92 @@ impl Pantalla {
                 unsafe {
                     let destino = self.base.add(fila_fisica + x * self.bytes_por_pixel);
                     escribir_pixel_volatil(destino, pixel, self.bytes_por_pixel);
+                }
+            }
+        }
+    }
+}
+
+// =============================================================================
+//  EL PUNTERO DEL RATON — un sprite estampado sobre el framebuffer (Fase 13)
+// -----------------------------------------------------------------------------
+//  El puntero NO vive en el lienzo: el lienzo es el escritorio limpio, y se
+//  recompone con frecuencia. El puntero es una capa de PRESENTACION que cada
+//  volcado vuelve a sellar sobre el framebuffer, despues de copiar el lienzo.
+//  Asi no hay save-under que mantener: el lienzo HACE de save-under, y el
+//  framebuffer recibe el puntero como ultimo gesto.
+// =============================================================================
+
+/// Ancho del sprite del puntero, en pixeles.
+const PUNTERO_ANCHO: usize = 12;
+/// El sprite del puntero — una flecha noroeste. `#` es el borde oscuro, `*` el
+/// relleno claro, `.` transparente.
+const PUNTERO: [&[u8; PUNTERO_ANCHO]; 18] = [
+    b"#...........",
+    b"##..........",
+    b"#*#.........",
+    b"#**#........",
+    b"#***#.......",
+    b"#****#......",
+    b"#*****#.....",
+    b"#******#....",
+    b"#*******#...",
+    b"#********#..",
+    b"#*********#.",
+    b"#*****#####.",
+    b"#**#**#.....",
+    b"#*#.#**#....",
+    b"##..#**#....",
+    b"#....#**#...",
+    b".....#**#...",
+    b"......###...",
+];
+
+impl Pantalla {
+    /// Estampa el sprite del puntero del raton sobre el framebuffer, con su
+    /// vertice en (x, y). El sprite se recorta con firmeza a los limites de la
+    /// pantalla. NO altera el lienzo: la proxima recomposicion lo deja intacto;
+    /// el siguiente volcado lo vuelve a estampar (Fase 13).
+    pub(crate) fn estampar_puntero(&mut self, x: usize, y: usize) {
+        let borde = codificar(
+            self.formato,
+            Color {
+                r: 0x10,
+                g: 0x12,
+                b: 0x18,
+            },
+        );
+        let relleno = codificar(
+            self.formato,
+            Color {
+                r: 0xF0,
+                g: 0xF2,
+                b: 0xF8,
+            },
+        );
+        for (fila, linea) in PUNTERO.iter().enumerate() {
+            let py = y + fila;
+            if py >= self.alto {
+                break;
+            }
+            for (col, &celda) in linea.iter().enumerate() {
+                let px = x + col;
+                if px >= self.ancho {
+                    continue;
+                }
+                let valor = match celda {
+                    b'#' => borde,
+                    b'*' => relleno,
+                    _ => continue,
+                };
+                // SEGURIDAD: (px, py) acotado a las dimensiones reales del
+                // framebuffer; el desplazamiento cae dentro de la memoria de
+                // video que el firmware nos entrego.
+                unsafe {
+                    let destino = self
+                        .base
+                        .add(py * self.paso_bytes + px * self.bytes_por_pixel);
+                    escribir_pixel_volatil(destino, valor, self.bytes_por_pixel);
                 }
             }
         }

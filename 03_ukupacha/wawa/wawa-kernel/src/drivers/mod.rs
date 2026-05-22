@@ -11,8 +11,11 @@
 //                  lectura, por sondeo, de su primer sector.
 //    * `altavoz` — la bocina del PC: el canal 2 del PIT como generador de tono
 //                  (Fase 12).
+//    * `raton`   — el raton PS/2: el dispositivo auxiliar del 8042 + IRQ12,
+//                  paquetes de 3 bytes (Fase 13).
 // =============================================================================
 
 pub mod altavoz;
 pub mod disco;
 pub mod pci;
+pub mod raton;
