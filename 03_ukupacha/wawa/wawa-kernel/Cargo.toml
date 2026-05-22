@@ -45,19 +45,14 @@ wasmi = { version = "1.0", default-features = false, features = ["hash-collectio
 # `virtio-drivers` bare-metal: el kernel implementa su `trait Hal` para el DMA.
 virtio-drivers = { version = "0.13", default-features = false, features = ["alloc"] }
 
-# --- Fase 6.1c :: el grafo de objetos direccionado por contenido ---
-# `serde` da el rasgo de (de)serializacion; `postcard` lo materializa en un
-# formato binario compacto, pensado para sistemas empotrados — el que viaja al
-# disco. Ambos `no_std`, apoyados en `alloc`.
-serde = { version = "1", default-features = false, features = ["alloc", "derive"] }
-postcard = { version = "1", default-features = false, features = ["alloc"] }
-# `blake3`: la funcion hash que da identidad a cada objeto. Se fuerza la
-# implementacion ESCALAR pura (`pure` + los cuatro `no_*`): el target del kernel
-# corre sin SSE, y un camino SIMD activado por deteccion en tiempo de ejecucion
-# ejecutaria instrucciones que la CPU, sin `CR4.OSFXSR`, rechazaria con un #UD.
-blake3 = { version = "1", default-features = false, features = [
-    "pure", "no_sse2", "no_sse41", "no_avx2", "no_avx512",
-] }
+# --- Fase 6.1c / 7b :: el grafo de objetos direccionado por contenido ---
+# El formato del grafo —tipos, (de)serializacion postcard, hash BLAKE3, trazado
+# de registros del log— vive en la crate `formato`, un nucleo `no_std`
+# COMPARTIDO con `boot` (que lo usa para sembrar la imagen de disco). El kernel
+# ya no declara `serde`/`postcard`/`blake3` por su cuenta: los hereda —con las
+# mismas features, BLAKE3 escalar puro incluido— a traves de `formato`. Una
+# sola verdad del formato de disco, imposible de divergir entre los dos lados.
+formato = { path = "../formato" }
 
 # --- Fase 8 (preparación) :: el compositor ---
 # `mirada-layout` es el motor de teselado del compositor de brahman —

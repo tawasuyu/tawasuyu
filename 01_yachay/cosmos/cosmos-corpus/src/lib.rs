@@ -28,15 +28,19 @@
 //!    un bloque tiene en 0 se queda en 0, no «se enciende»). Este crate
 //!    trae las capas 1-2 y deja la 3 sin resolver a propósito.
 //!
-//! La síntesis narrativa y la separación por dominios vivenciales se
-//! resuelven en capas superiores; este crate sólo modela el almacén y
-//! el JOIN.
+//! La **rebanada por dominio** —ver el cuerpo de la carta en tajadas—
+//! sí vive aquí ([`rebanar_por_dominio`]): es geometría sobre las
+//! claves, no síntesis. La carta es una sola configuración; cortarla
+//! por dominio vivencial no la promedia, la MIRA desde un plano. Lo
+//! único que queda fuera es la síntesis narrativa —tejer los pasajes
+//! recuperados en un texto continuo—, trabajo de una capa superior.
 
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeMap;
+use std::str::FromStr;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Perfil semántico: dimensiones psicológicas/vivenciales con un peso,
 /// por convención en `[-1.0, 1.0]`. Los **nombres** de las dimensiones
@@ -75,7 +79,7 @@ pub struct Arquetipo {
 /// contradicción «hiperdisciplinado vs. disperso» no se promedia: cada
 /// fuerza vive intacta en su dominio (general en la oficina, poeta
 /// disperso en la soledad).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Dominio {
     /// Cuerpo, salud, acción directa (casas 1/5/9).
@@ -102,7 +106,12 @@ impl Dominio {
 /// La «etiqueta de código de barras» de una combinación astrológica —
 /// la clave del JOIN. Respeta la gramática: cada variante es un tipo
 /// distinto de combinación, no una bolsa plana.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// Se (de)serializa como una **cadena** legible (`mars·virgo`,
+/// `mars@c6`, `mars square saturn`) para que el corpus se escriba a
+/// mano sin pelear con la sintaxis de enums. El punto medio `·` admite
+/// el alias ASCII `/` (`mars/virgo`), más fácil de teclear.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CombinacionId {
     /// Un planeta en un signo — `mars·virgo`.
     PlanetaSigno { planeta: String, signo: String },
@@ -156,6 +165,138 @@ impl std::fmt::Display for CombinacionId {
             CombinacionId::Aspecto { a, kind, b } => write!(f, "{a} {kind} {b}"),
         }
     }
+}
+
+impl FromStr for CombinacionId {
+    type Err = String;
+
+    /// Parsea el código de barras: `planeta·signo` (o `planeta/signo`),
+    /// `planeta@cN`, o `a kind b` (tres tokens separados por espacios).
+    fn from_str(s: &str) -> Result<Self, String> {
+        let s = s.trim();
+        if let Some((planeta, signo)) = s.split_once('·').or_else(|| s.split_once('/')) {
+            return Ok(CombinacionId::planeta_signo(planeta.trim(), signo.trim()));
+        }
+        if let Some((planeta, casa)) = s.split_once("@c") {
+            let casa: u8 = casa
+                .trim()
+                .parse()
+                .map_err(|_| format!("casa inválida en '{s}'"))?;
+            return Ok(CombinacionId::planeta_casa(planeta.trim(), casa));
+        }
+        let toks: Vec<&str> = s.split_whitespace().collect();
+        if toks.len() == 3 {
+            return Ok(CombinacionId::aspecto(toks[0], toks[1], toks[2]));
+        }
+        Err(format!("combinación no reconocida: '{s}'"))
+    }
+}
+
+impl Serialize for CombinacionId {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for CombinacionId {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        s.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+/// La posición de un planeta en una carta concreta: en qué signo y en
+/// qué casa cae. Es la materia prima desde la que se derivan las
+/// [`CombinacionId`] de la carta — el puente entre lo que el motor
+/// astronómico calcula y las claves del JOIN del corpus.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Colocacion {
+    pub planeta: String,
+    pub signo: String,
+    pub casa: u8,
+}
+
+/// Un aspecto medido en una carta: dos planetas y el ángulo que los une.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AspectoEnCarta {
+    pub a: String,
+    pub kind: String,
+    pub b: String,
+}
+
+/// Deriva TODAS las combinaciones de una carta: por cada planeta, su
+/// `planeta·signo` y su `planeta@cN`; por cada aspecto medido, su
+/// `a kind b`. El resultado es la lista que se le pasa a
+/// [`Corpus::interpretar`] para hacer el JOIN.
+pub fn combinaciones_de_carta(
+    colocaciones: &[Colocacion],
+    aspectos: &[AspectoEnCarta],
+) -> Vec<CombinacionId> {
+    let mut out = Vec::with_capacity(colocaciones.len() * 2 + aspectos.len());
+    for c in colocaciones {
+        out.push(CombinacionId::planeta_signo(&c.planeta, &c.signo));
+        out.push(CombinacionId::planeta_casa(&c.planeta, c.casa));
+    }
+    for a in aspectos {
+        out.push(CombinacionId::aspecto(&a.a, &a.kind, &a.b));
+    }
+    out
+}
+
+/// La **tomografía** de la carta: reparte cada combinación en el dominio
+/// —o dominios— vivencial donde descarga su energía.
+///
+/// La carta es UNA sola configuración; rebanarla por dominio no la
+/// promedia ni la mutila, la MIRA desde un plano —como ver un cuerpo en
+/// tajadas—. Las reglas del corte:
+///
+/// - un `planeta@cN` cae en el dominio de su casa;
+/// - un `planeta·signo` hereda el dominio de la casa donde ESE planeta
+///   está colocado en la carta;
+/// - un aspecto **puentea**: aparece en el dominio de cada uno de sus
+///   dos extremos. Que una misma combinación salga en dos rebanadas no
+///   es un error — es la conexión real entre dos planos.
+///
+/// Una combinación cuyo planeta no figura en `colocaciones` se omite (no
+/// hay forma de saber en qué dominio ubicarla).
+pub fn rebanar_por_dominio(
+    colocaciones: &[Colocacion],
+    combinaciones: &[CombinacionId],
+) -> BTreeMap<Dominio, Vec<CombinacionId>> {
+    let casa_de: BTreeMap<&str, u8> = colocaciones
+        .iter()
+        .map(|c| (c.planeta.as_str(), c.casa))
+        .collect();
+    let dominio_de = |planeta: &str| -> Option<Dominio> {
+        casa_de.get(planeta).copied().and_then(Dominio::de_casa)
+    };
+
+    let mut tajadas: BTreeMap<Dominio, Vec<CombinacionId>> = BTreeMap::new();
+    for id in combinaciones {
+        let dominios: Vec<Dominio> = match id {
+            CombinacionId::PlanetaCasa { casa, .. } => {
+                Dominio::de_casa(*casa).into_iter().collect()
+            }
+            CombinacionId::PlanetaSigno { planeta, .. } => {
+                dominio_de(planeta).into_iter().collect()
+            }
+            CombinacionId::Aspecto { a, b, .. } => {
+                let mut ds = Vec::new();
+                for p in [a.as_str(), b.as_str()] {
+                    if let Some(d) = dominio_de(p) {
+                        if !ds.contains(&d) {
+                            ds.push(d);
+                        }
+                    }
+                }
+                ds
+            }
+        };
+        for d in dominios {
+            tajadas.entry(d).or_default().push(id.clone());
+        }
+    }
+    tajadas
 }
 
 /// Un fragmento de interpretación: el texto de un autor (o del propio
@@ -220,6 +361,29 @@ impl Corpus {
             out.extend(self.pasajes_de(id));
         }
         out
+    }
+
+    /// El JOIN **rebanado por dominio**: para cada plano vivencial, los
+    /// pasajes que lo interpretan. Es la entrada directa de un gráfico
+    /// «por tajadas» — una rebanada, una vista del cuerpo de la carta.
+    /// Un aspecto que puentea dos dominios trae sus pasajes a las dos
+    /// rebanadas.
+    pub fn interpretar_por_dominio(
+        &self,
+        colocaciones: &[Colocacion],
+        aspectos: &[AspectoEnCarta],
+    ) -> BTreeMap<Dominio, Vec<&Pasaje>> {
+        let combinaciones = combinaciones_de_carta(colocaciones, aspectos);
+        rebanar_por_dominio(colocaciones, &combinaciones)
+            .into_iter()
+            .map(|(dominio, ids)| {
+                let mut pasajes = Vec::new();
+                for id in &ids {
+                    pasajes.extend(self.pasajes_de(id));
+                }
+                (dominio, pasajes)
+            })
+            .collect()
     }
 
     /// Combinaciones del corpus que NO tienen ni un solo pasaje — los
@@ -341,5 +505,107 @@ mod tests {
         assert_eq!(Dominio::de_casa(7), Some(Dominio::Social));
         assert_eq!(Dominio::de_casa(12), Some(Dominio::Psiquico));
         assert_eq!(Dominio::de_casa(13), None);
+    }
+
+    #[test]
+    fn combinacion_id_roundtrip_string() {
+        for id in [
+            CombinacionId::planeta_signo("venus", "leo"),
+            CombinacionId::planeta_casa("sun", 10),
+            CombinacionId::aspecto("moon", "trine", "jupiter"),
+        ] {
+            let s = id.to_string();
+            let vuelta: CombinacionId = s.parse().expect("parsea su propio Display");
+            assert_eq!(vuelta, id);
+        }
+    }
+
+    #[test]
+    fn barra_es_alias_ascii_del_punto_medio() {
+        assert_eq!(
+            "mars/virgo".parse::<CombinacionId>().unwrap(),
+            CombinacionId::planeta_signo("mars", "virgo"),
+        );
+    }
+
+    /// Una carta mínima: Marte en Virgo en casa 6 (Social), Saturno en
+    /// Aries en casa 1 (Vital), y una cuadratura que los une.
+    fn carta_de_prueba() -> (Vec<Colocacion>, Vec<AspectoEnCarta>) {
+        let colocaciones = vec![
+            Colocacion {
+                planeta: "mars".into(),
+                signo: "virgo".into(),
+                casa: 6,
+            },
+            Colocacion {
+                planeta: "saturn".into(),
+                signo: "aries".into(),
+                casa: 1,
+            },
+        ];
+        let aspectos = vec![AspectoEnCarta {
+            a: "mars".into(),
+            kind: "square".into(),
+            b: "saturn".into(),
+        }];
+        (colocaciones, aspectos)
+    }
+
+    #[test]
+    fn combinaciones_de_carta_deriva_signo_casa_y_aspectos() {
+        let (colocaciones, aspectos) = carta_de_prueba();
+        let combos = combinaciones_de_carta(&colocaciones, &aspectos);
+        // 2 planetas × (signo + casa) + 1 aspecto.
+        assert_eq!(combos.len(), 5);
+        assert!(combos.contains(&CombinacionId::planeta_signo("mars", "virgo")));
+        assert!(combos.contains(&CombinacionId::planeta_casa("saturn", 1)));
+        assert!(combos.contains(&CombinacionId::aspecto("mars", "square", "saturn")));
+    }
+
+    #[test]
+    fn rebanar_por_dominio_reparte_y_el_aspecto_puentea() {
+        let (colocaciones, aspectos) = carta_de_prueba();
+        let combos = combinaciones_de_carta(&colocaciones, &aspectos);
+        let tajadas = rebanar_por_dominio(&colocaciones, &combos);
+
+        // Marte en casa 6 → Social ; Saturno en casa 1 → Vital.
+        let social = tajadas.get(&Dominio::Social).expect("hay tajada social");
+        let vital = tajadas.get(&Dominio::Vital).expect("hay tajada vital");
+        assert_eq!(social.len(), 3);
+        assert_eq!(vital.len(), 3);
+
+        // El aspecto cruza los dos planos: sale en las dos tajadas.
+        let aspecto = CombinacionId::aspecto("mars", "square", "saturn");
+        assert!(social.contains(&aspecto));
+        assert!(vital.contains(&aspecto));
+    }
+
+    #[test]
+    fn interpretar_por_dominio_agrupa_pasajes() {
+        let (colocaciones, aspectos) = carta_de_prueba();
+        let corpus = Corpus {
+            arquetipos: Vec::new(),
+            pasajes: vec![
+                pasaje(CombinacionId::planeta_casa("mars", 6), "trabajo intenso"),
+                pasaje(CombinacionId::planeta_casa("saturn", 1), "cuerpo severo"),
+            ],
+        };
+        let por_dominio = corpus.interpretar_por_dominio(&colocaciones, &aspectos);
+        assert_eq!(por_dominio[&Dominio::Social].len(), 1);
+        assert_eq!(por_dominio[&Dominio::Vital].len(), 1);
+        assert_eq!(por_dominio[&Dominio::Social][0].texto, "trabajo intenso");
+    }
+
+    #[test]
+    fn ejemplo_ron_carga() {
+        let corpus = Corpus::desde_ron(include_str!("../ejemplo.ron"))
+            .expect("ejemplo.ron debe ser RON válido");
+        assert!(!corpus.arquetipos.is_empty(), "la plantilla trae arquetipos");
+        assert!(!corpus.pasajes.is_empty(), "la plantilla trae pasajes");
+        // El pasaje del aspecto fija su dominio explícitamente.
+        let aspecto = CombinacionId::aspecto("mars", "square", "saturn");
+        let p = corpus.pasajes_de(&aspecto);
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0].dominio, Some(Dominio::Psiquico));
     }
 }

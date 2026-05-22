@@ -1,0 +1,38 @@
+# =============================================================================
+#  renaser :: formato — el formato del grafo de objetos en disco
+# -----------------------------------------------------------------------------
+#  Nucleo `#![no_std]` COMPARTIDO: lo enlaza el kernel bare-metal (target
+#  `x86_64-unknown-none`) y, por ser no_std, tambien lo compila sin friccion el
+#  anfitrion `boot`. Es la unica verdad del formato del grafo —tipos,
+#  (de)serializacion postcard, hash BLAKE3, trazado de registros—, de modo que
+#  kernel y constructor de imagen hablen exactamente el mismo idioma de disco.
+#
+#  Queda EXCLUIDO del espacio de trabajo (ver el Cargo.toml raiz), como el
+#  kernel: lo consume un paquete bare-metal, asi que fija sus versiones de
+#  forma explicita, sin herencia del workspace.
+# =============================================================================
+
+[package]
+name = "formato"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+authors = ["JL Soltech <gerencia@jlsoltech.com>"]
+description = "renaser :: formato del grafo de objetos en disco — compartido kernel ↔ boot"
+
+[lib]
+bench = false
+doctest = false
+
+[dependencies]
+# `serde` da el rasgo de (de)serializacion; `postcard` lo materializa en un
+# formato binario compacto — el que viaja al disco. Ambos `no_std`, sobre `alloc`.
+serde = { version = "1", default-features = false, features = ["alloc", "derive"] }
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+# `blake3`: la funcion hash que da identidad a cada objeto. Se fuerza la
+# implementacion ESCALAR pura (`pure` + los cuatro `no_*`): el target del kernel
+# corre sin SSE, y un camino SIMD por deteccion en tiempo de ejecucion
+# ejecutaria instrucciones que la CPU, sin `CR4.OSFXSR`, rechazaria con un #UD.
+blake3 = { version = "1", default-features = false, features = [
+    "pure", "no_sse2", "no_sse41", "no_avx2", "no_avx512",
+] }
