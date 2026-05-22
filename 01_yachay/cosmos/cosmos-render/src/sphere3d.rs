@@ -89,6 +89,9 @@ pub struct SphereOpts {
     /// El cielo de fondo: campo de estrellas + Vía Láctea. Solo se
     /// dibuja en tema oscuro (en papel rompería la metáfora de imprenta).
     pub show_sky: bool,
+    /// La Tierra interior — un globo pequeño, transparente, con los
+    /// continentes esquemáticos y el observador marcado en su lugar.
+    pub show_earth: bool,
 }
 
 impl Default for SphereOpts {
@@ -103,6 +106,7 @@ impl Default for SphereOpts {
             show_signs: true,
             show_horizon: true,
             show_sky: true,
+            show_earth: true,
         }
     }
 }
@@ -392,16 +396,22 @@ fn great_circle_perp(normal: Vec3, n: usize) -> Vec<Vec3> {
         .collect()
 }
 
+/// RAMC — ascensión recta del Medio Cielo, en grados: la AR del punto
+/// eclíptico del MC (latitud eclíptica 0).
+fn ramc_deg(mc_deg: f32, eps_rad: f32) -> f32 {
+    let lmc = mc_deg.to_radians();
+    (lmc.sin() * eps_rad.cos())
+        .atan2(lmc.cos())
+        .to_degrees()
+}
+
 /// El cénit del observador en el marco eclíptico — el punto del cielo
-/// justo sobre su cabeza. Se deriva de la latitud geográfica `φ` y de
-/// la ascensión recta del Medio Cielo (RAMC): el cénit tiene
-/// declinación `φ` y AR `RAMC`, y eso se lleva del marco ecuatorial al
-/// eclíptico rotando por la oblicuidad.
+/// justo sobre su cabeza. Tiene declinación `φ` (la latitud geográfica)
+/// y AR `RAMC`, y eso se lleva del marco ecuatorial al eclíptico
+/// rotando por la oblicuidad.
 fn zenith_ecliptic(lat_deg: f32, mc_deg: f32, eps_rad: f32) -> Vec3 {
     let phi = lat_deg.to_radians();
-    let lmc = mc_deg.to_radians();
-    // RAMC: AR del punto eclíptico del MC (latitud eclíptica 0).
-    let ramc = (lmc.sin() * eps_rad.cos()).atan2(lmc.cos());
+    let ramc = ramc_deg(mc_deg, eps_rad).to_radians();
     let (sphi, cphi) = phi.sin_cos();
     let (sr, cr) = ramc.sin_cos();
     rot_x(Vec3::new(cphi * cr, cphi * sr, sphi), eps_rad)
@@ -635,6 +645,132 @@ fn add_fixed_star(
             color: dim(pal.fg_text, lp.depth),
             size: size * 0.017,
             anchor: TextAnchor::Middle,
+        },
+    ));
+}
+
+// --- Tierra interior ------------------------------------------------
+
+/// Contornos continentales **esquemáticos** (lat, lon en grados) — solo
+/// referenciales, trazos muy gruesos para la Tierra interior. NO son un
+/// mapa de precisión; dan el «ahí está tu continente» y nada más.
+const CONTINENTES: &[&[(f32, f32)]] = &[
+    // África
+    &[
+        (35.0, -6.0), (37.0, 10.0), (33.0, 22.0), (31.0, 32.0), (12.0, 43.0),
+        (11.0, 51.0), (-4.0, 40.0), (-26.0, 33.0), (-34.0, 26.0), (-34.0, 19.0),
+        (-18.0, 12.0), (0.0, 9.0), (5.0, -4.0), (11.0, -15.0), (21.0, -17.0),
+        (28.0, -13.0),
+    ],
+    // Sudamérica
+    &[
+        (12.0, -72.0), (11.0, -61.0), (5.0, -52.0), (-5.0, -35.0), (-23.0, -43.0),
+        (-34.0, -54.0), (-52.0, -69.0), (-55.0, -67.0), (-42.0, -74.0),
+        (-18.0, -70.0), (-5.0, -81.0), (2.0, -79.0), (8.0, -77.0),
+    ],
+    // Norteamérica
+    &[
+        (70.0, -160.0), (71.0, -125.0), (68.0, -95.0), (63.0, -78.0),
+        (47.0, -53.0), (45.0, -67.0), (30.0, -81.0), (25.0, -81.0),
+        (20.0, -97.0), (23.0, -110.0), (34.0, -120.0), (48.0, -125.0),
+        (60.0, -148.0),
+    ],
+    // Eurasia
+    &[
+        (36.0, -9.0), (43.0, -9.0), (58.0, 5.0), (71.0, 26.0), (73.0, 80.0),
+        (73.0, 140.0), (66.0, 180.0), (53.0, 141.0), (40.0, 130.0), (30.0, 122.0),
+        (22.0, 110.0), (9.0, 105.0), (8.0, 77.0), (21.0, 72.0), (25.0, 57.0),
+        (13.0, 45.0), (30.0, 33.0), (41.0, 28.0), (38.0, 15.0), (40.0, 0.0),
+    ],
+    // Australia
+    &[
+        (-11.0, 131.0), (-12.0, 142.0), (-25.0, 153.0), (-38.0, 147.0),
+        (-35.0, 138.0), (-32.0, 116.0), (-22.0, 114.0), (-14.0, 127.0),
+    ],
+    // Antártida (casquete polar aproximado)
+    &[
+        (-72.0, -180.0), (-70.0, -120.0), (-73.0, -60.0), (-70.0, 0.0),
+        (-73.0, 60.0), (-70.0, 120.0), (-72.0, 170.0),
+    ],
+];
+
+/// Dirección (marco eclíptico, unitaria) de un punto geográfico. La
+/// longitud del observador y el RAMC fijan la fase de rotación de la
+/// Tierra: el observador está en AR = RAMC, así que cualquier otra
+/// longitud geográfica `lon` está en AR = RAMC + (lon − lon_obs).
+fn geo_to_ecliptic(lat: f32, lon: f32, lon_obs: f32, ramc: f32, eps_rad: f32) -> Vec3 {
+    let ra = (ramc + lon - lon_obs).to_radians();
+    let dec = lat.to_radians();
+    let (sra, cra) = ra.sin_cos();
+    let (sd, cd) = dec.sin_cos();
+    rot_x(Vec3::new(cd * cra, cd * sra, sd), eps_rad)
+}
+
+/// La Tierra interior: un globo pequeño y transparente en el centro de
+/// la esfera celeste, con los continentes esquemáticos y el observador
+/// marcado en su lugar real. Orientada de modo que el punto geográfico
+/// del observador mira exactamente al cénit — y gira con la vista, así
+/// que delata la rotación.
+#[allow(clippy::too_many_arguments)]
+fn add_inner_earth(
+    items: &mut Vec<(f32, DrawCommand)>,
+    proj: &Projector,
+    model: &RenderModel,
+    eps: f32,
+    size: f32,
+    center: f32,
+    rad: f32,
+    pal: &Palette,
+) {
+    const R_EARTH: f32 = 0.26;
+    let ramc = ramc_deg(model.midheaven_deg, eps);
+    let lon_obs = model.geo_longitude_deg;
+    let geo = |lat: f32, lon: f32| -> Vec3 {
+        geo_to_ecliptic(lat, lon, lon_obs, ramc, eps).scale(R_EARTH)
+    };
+
+    // Limbo del globo — disco tenue.
+    items.push((
+        -0.9,
+        DrawCommand::Circle {
+            cx: center,
+            cy: center,
+            r: R_EARTH * rad,
+            stroke: Some(pal.fg_muted.with_alpha(0.30)),
+            fill: Some(pal.water.with_alpha(if pal.is_dark { 0.12 } else { 0.07 })),
+            stroke_w: 0.8,
+        },
+    ));
+
+    // Ecuador terrestre.
+    let equator: Vec<Vec3> = (0..72)
+        .map(|i| geo(0.0, (i as f32) / 72.0 * 360.0))
+        .collect();
+    add_loop(items, proj, &equator, pal.fg_muted.with_alpha(0.22), 0.5);
+
+    // Continentes — esquemáticos, muy transparentes.
+    let land = if pal.is_dark {
+        Rgba::opaque(0.50, 0.74, 0.58)
+    } else {
+        Rgba::opaque(0.26, 0.46, 0.32)
+    };
+    for outline in CONTINENTES {
+        let pts: Vec<Vec3> = outline.iter().map(|&(lat, lon)| geo(lat, lon)).collect();
+        add_loop(items, proj, &pts, land.with_alpha(0.36), 0.9);
+    }
+
+    // El observador, en su lugar real sobre la Tierra.
+    let p = proj.project(geo(model.geo_latitude_deg, lon_obs));
+    let oc = dim(pal.sun, p.depth);
+    items.push((
+        p.depth + 0.01,
+        DrawCommand::Circle {
+            cx: p.x,
+            cy: p.y,
+            r: size * 0.0075,
+            stroke: Some(oc),
+            fill: Some(oc.with_alpha(oc.a * 0.5)),
+            stroke_w: 1.2,
         },
     ));
 }
@@ -906,19 +1042,24 @@ pub fn compose_sphere(
         ));
     }
 
-    // --- Cuerpos natales sobre la eclíptica ---
+    // --- Cuerpos: natales (disco lleno) y topocéntricos (disco hueco
+    //     + conector a su par geocéntrico) ---
     if opts.show_bodies {
+        let halo = if pal.is_dark {
+            pal.bg_panel.with_alpha(0.92)
+        } else {
+            Rgba::opaque(1.0, 1.0, 1.0).with_alpha(0.92)
+        };
+        // 1) Cuerpos natales (geocéntricos). Se recuerdan sus posiciones
+        //    para poder tender el conector hacia los topocéntricos.
+        let mut natal_pos: Vec<(String, Vec3)> = Vec::new();
         for layer in &model.layers {
             if !matches!(layer.kind, LayerKind::Bodies) || layer.module_id != "natal" {
                 continue;
             }
-            let halo = if pal.is_dark {
-                pal.bg_panel.with_alpha(0.92)
-            } else {
-                Rgba::opaque(1.0, 1.0, 1.0).with_alpha(0.92)
-            };
             for g in &layer.glyphs {
                 let pos = eclip(g.deg);
+                natal_pos.push((g.symbol.clone(), pos));
                 let p = proj.project(pos);
                 let mut color = pal.planet(&g.symbol);
                 // Día/noche: un cuerpo bajo el horizonte se atenúa — de
@@ -953,6 +1094,47 @@ pub fn compose_sphere(
                 ));
             }
         }
+        // 2) Cuerpos topocéntricos — si la capa está activa. Disco hueco
+        //    (sin relleno, lo distingue del natal) + un conector hasta
+        //    su par geocéntrico: el LARGO del conector es la paralaje,
+        //    así no se miente sobre su magnitud (un cinturón aparte la
+        //    exageraría — la diferencia es sub-grado salvo la Luna).
+        for layer in &model.layers {
+            if !matches!(layer.kind, LayerKind::Bodies) || layer.module_id != "topocentric" {
+                continue;
+            }
+            for g in &layer.glyphs {
+                let pos = eclip(g.deg);
+                let p = proj.project(pos);
+                let color = dim(pal.planet(&g.symbol), p.depth);
+                if let Some((_, npos)) = natal_pos.iter().find(|(s, _)| s == &g.symbol) {
+                    let np = proj.project(*npos);
+                    items.push((
+                        p.depth - 0.001,
+                        DrawCommand::Line {
+                            x1: np.x,
+                            y1: np.y,
+                            x2: p.x,
+                            y2: p.y,
+                            color: color.with_alpha(color.a * 0.70),
+                            width: 1.0,
+                            dash: None,
+                        },
+                    ));
+                }
+                items.push((
+                    p.depth + 0.002,
+                    DrawCommand::Circle {
+                        cx: p.x,
+                        cy: p.y,
+                        r: size * 0.014,
+                        stroke: Some(color),
+                        fill: None,
+                        stroke_w: 1.3,
+                    },
+                ));
+            }
+        }
     }
 
     // --- Estrellas fijas notables (capa del motor, si está activa) ---
@@ -968,6 +1150,11 @@ pub fn compose_sphere(
             let pos = eclip_latlon(g.deg, fixed_star_latitude(name));
             add_fixed_star(&mut items, &proj, pos, size, name, pal);
         }
+    }
+
+    // --- Tierra interior: globo esquemático con el observador ---
+    if opts.show_earth {
+        add_inner_earth(&mut items, &proj, model, eps, size, center, rad, pal);
     }
 
     // Algoritmo del pintor: de la profundidad menor (fondo) a la mayor.
@@ -1021,6 +1208,7 @@ mod tests {
             descendant_deg: 280.0,
             imum_coeli_deg: 190.0,
             geo_latitude_deg: -34.6,
+            geo_longitude_deg: -58.4,
             layers: vec![Layer {
                 module_id: "natal".into(),
                 kind: LayerKind::Bodies,
@@ -1138,6 +1326,34 @@ mod tests {
             )),
             "la estrella fija de la capa aparece etiquetada en la esfera"
         );
+    }
+
+    #[test]
+    fn el_observador_sobre_la_tierra_coincide_con_el_cenit() {
+        let eps = OBLICUIDAD_DEG.to_radians();
+        for &(lat, lon, mc) in &[(-34.6_f32, -58.4, 10.0), (40.0, 14.0, 200.0), (51.5, 0.0, 280.0)] {
+            let ramc = ramc_deg(mc, eps);
+            // El punto geográfico del observador mira exactamente al
+            // cénit — eso ancla la orientación de la Tierra interior.
+            let obs = geo_to_ecliptic(lat, lon, lon, ramc, eps);
+            let zen = zenith_ecliptic(lat, mc, eps);
+            assert!(obs.dot(zen) > 0.9999, "obs·cénit = {}", obs.dot(zen));
+        }
+    }
+
+    #[test]
+    fn la_tierra_interior_dibuja_continentes() {
+        let modelo = modelo_demo();
+        let lineas = |c: &[DrawCommand]| {
+            c.iter().filter(|d| matches!(d, DrawCommand::Line { .. })).count()
+        };
+        let con = compose_sphere(&modelo, &SphereView::default(), &SphereOpts::default());
+        let sin = compose_sphere(
+            &modelo,
+            &SphereView::default(),
+            &SphereOpts { show_earth: false, ..Default::default() },
+        );
+        assert!(lineas(&con) > lineas(&sin), "los continentes agregan trazos");
     }
 
     #[test]

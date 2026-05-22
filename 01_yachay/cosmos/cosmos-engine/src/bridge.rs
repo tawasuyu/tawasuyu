@@ -1497,6 +1497,7 @@ fn build_render_model(
         descendant_deg,
         imum_coeli_deg,
         geo_latitude_deg: chart.birth_data.latitude_deg as f32,
+        geo_longitude_deg: chart.birth_data.longitude_deg as f32,
         layers: vec![sign_dial, houses, bodies, aspects_layer],
         overlays: Vec::new(),
         aspect_summary: Vec::new(),

@@ -389,6 +389,7 @@ pub fn compute_mock(chart: &Chart) -> RenderModel {
         descendant_deg: 180.0,
         imum_coeli_deg: 90.0,
         geo_latitude_deg: chart.birth_data.latitude_deg as f32,
+        geo_longitude_deg: chart.birth_data.longitude_deg as f32,
         layers: vec![sign_dial],
         overlays: Vec::new(),
         aspect_summary: Vec::new(),

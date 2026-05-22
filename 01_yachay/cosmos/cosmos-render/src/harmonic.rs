@@ -201,6 +201,7 @@ mod tests {
             descendant_deg: 180.0,
             imum_coeli_deg: 90.0,
             geo_latitude_deg: 0.0,
+            geo_longitude_deg: 0.0,
             layers: vec![
                 Layer {
                     module_id: "natal".into(),

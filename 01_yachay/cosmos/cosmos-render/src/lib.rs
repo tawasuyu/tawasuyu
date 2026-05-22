@@ -76,6 +76,11 @@ pub struct RenderModel {
     /// observador. `default` = 0.0 para compat serde con modelos viejos.
     #[serde(default)]
     pub geo_latitude_deg: f32,
+    /// Longitud geográfica del lugar, en grados (este positivo). La
+    /// esfera 3D la usa para orientar la Tierra interior — que el
+    /// observador caiga en su continente real. `default` = 0.0.
+    #[serde(default)]
+    pub geo_longitude_deg: f32,
 
     /// Capas a pintar. Orden = z-order ascendente.
     pub layers: Vec<Layer>,
