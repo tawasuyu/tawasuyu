@@ -10,6 +10,7 @@ pub mod commands;
 pub mod error;
 
 pub use commands::{
-    cmd_ingest, cmd_init, cmd_listen, cmd_status, cmd_sync, cmd_watch, IngestResult, RepoStatus,
+    cmd_ingest, cmd_init, cmd_listen, cmd_mount, cmd_status, cmd_sync, cmd_watch, IngestResult,
+    RepoStatus,
 };
 pub use error::CliError;

@@ -5,7 +5,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use minga_cli::{
-    cmd_ingest, cmd_init, cmd_listen, cmd_status, cmd_sync, cmd_watch, CliError,
+    cmd_ingest, cmd_init, cmd_listen, cmd_mount, cmd_status, cmd_sync, cmd_watch, CliError,
 };
 
 #[derive(Parser)]
@@ -58,6 +58,14 @@ enum Command {
     Watch {
         /// Directorio a vigilar.
         dir: PathBuf,
+    },
+
+    /// Monta el repositorio como filesystem FUSE de sólo lectura.
+    /// Cada hash del store se vuelve un archivo navegable con
+    /// `ls`/`cat`. Bloquea hasta `fusermount -u <punto>`.
+    Mount {
+        /// Punto de montaje: un directorio existente.
+        point: PathBuf,
     },
 }
 
@@ -115,6 +123,16 @@ fn run() -> Result<(), CliError> {
             let rt = tokio::runtime::Runtime::new()
                 .map_err(|e| CliError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
             rt.block_on(cmd_watch(&cli.repo, &pass, &dir))?;
+        }
+        Command::Mount { point } => {
+            let pass = prompt_passphrase()?;
+            println!(
+                "Montando {} en {}. `fusermount -u {}` para desmontar.",
+                cli.repo.display(),
+                point.display(),
+                point.display()
+            );
+            cmd_mount(&cli.repo, &pass, &point)?;
         }
     }
     Ok(())

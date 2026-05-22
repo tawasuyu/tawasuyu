@@ -97,6 +97,23 @@ pub fn cmd_ingest(
     })
 }
 
+/// `minga mount <punto>`: monta el repositorio como un filesystem FUSE
+/// de sólo lectura. Cada hash del store se vuelve un archivo
+/// navegable con `ls`/`cat`. Bloquea hasta que se desmonte el punto
+/// (`fusermount -u <punto>` o una señal al proceso).
+pub fn cmd_mount(
+    repo_path: &Path,
+    passphrase: &str,
+    mountpoint: &Path,
+) -> Result<(), CliError> {
+    // Cargar el keypair valida la passphrase: montar es navegar el
+    // repo, así que pedimos la misma credencial que `status`/`watch`.
+    let _keypair = keypair_file::load(repo_path.join(KEYPAIR_FILENAME), passphrase)?;
+    let repo = PersistentRepo::open(repo_path.join(REPO_DIRNAME))?;
+    minga_vfs::mount(minga_vfs::RepoSource::new(repo), mountpoint)?;
+    Ok(())
+}
+
 /// Detecta el dialecto desde la extensión del archivo. Error si la
 /// extensión no corresponde a un lenguaje soportado.
 fn detect_dialect(file: &Path) -> Result<parse::Dialect, CliError> {
