@@ -40,7 +40,9 @@ use gpui::{
     Window, canvas, div, hsla, point, prelude::*, px,
 };
 
-use cosmobiologia_engine::{Geometry, Layer, LayerKind, OUTER_RING_MODULES, RenderModel};
+use cosmobiologia_engine::{
+    Geometry, GrTrigger, Layer, LayerKind, OUTER_RING_MODULES, RenderModel,
+};
 use cosmobiologia_model::{ChartId, ContactId, GroupId};
 use cosmobiologia_theme::{AspectKind as TAspectKind, AstroPalette, Element, Planet};
 use nahual_theme::Theme;
@@ -949,6 +951,7 @@ fn render_wheel(
     let palette_paint = palette.clone();
     let theme_paint = theme.clone();
     let layers_paint: Vec<Layer> = render.layers.clone();
+    let gr_triggers_paint: Vec<GrTrigger> = render.gr_triggers.clone();
     let asc_for_paint = asc;
     let mc_for_paint = render.midheaven_deg;
     let visibility_for_paint = visible.clone();
@@ -975,6 +978,7 @@ fn render_wheel(
                 radii,
                 &visibility_for_paint,
                 hover_focus_paint.as_deref(),
+                &gr_triggers_paint,
             );
 
             // Handlers de mouse — se registran cada frame contra el
@@ -1749,14 +1753,148 @@ fn render_wheel(
         footer = footer.child(grid);
     }
 
+    // El wheel va solo, salvo en modo GR: ahí lo acompaña el HUD
+    // lateral de triggers de rectificación, anclado a su derecha.
+    let body = if render.gr_triggers.is_empty() {
+        div().child(wheel)
+    } else {
+        div()
+            .flex()
+            .flex_row()
+            .items_start()
+            .gap(px(14.0))
+            .child(wheel)
+            .child(render_gr_hud(theme, &render.gr_triggers))
+    };
+
     div()
         .flex()
         .flex_col()
         .items_center()
         .gap(px(8.0))
         .child(header)
-        .child(wheel)
+        .child(body)
         .child(footer)
+}
+
+/// HUD lateral de rectificación GR: lista los triggers de direcciones
+/// primarias ordenados por orbe (los más cerrados arriba). El color va
+/// de rojo (orbe apretado) a gris (orbe ancho); las convergencias
+/// directo+converso llevan un marcador ✦ y un fondo resaltado.
+fn render_gr_hud(theme: &Theme, triggers: &[GrTrigger]) -> gpui::Div {
+    const SHOWN: usize = 20;
+    let event_count = triggers.iter().filter(|t| t.event).count();
+
+    let mut col = div()
+        .flex()
+        .flex_col()
+        .gap(px(2.0))
+        .w(px(238.0))
+        .p(px(10.0))
+        .rounded(px(8.0))
+        .bg(theme.bg_panel_alt.clone())
+        .border_1()
+        .border_color(theme.border);
+
+    col = col.child(
+        div()
+            .flex()
+            .flex_row()
+            .justify_between()
+            .items_center()
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(theme.fg_text)
+                    .child("Triggers GR"),
+            )
+            .child(
+                div()
+                    .text_size(px(10.0))
+                    .text_color(theme.fg_muted)
+                    .child(SharedString::from(format!(
+                        "{} · {} conv.",
+                        triggers.len(),
+                        event_count
+                    ))),
+            ),
+    );
+    col = col.child(
+        div()
+            .text_size(px(9.0))
+            .text_color(theme.fg_disabled)
+            .mb(px(4.0))
+            .child("rectificación · orbe ascendente"),
+    );
+
+    for t in triggers.iter().take(SHOWN) {
+        let color = if t.event {
+            hsla(0.0, 0.88, 0.64, 1.0)
+        } else {
+            gr_orb_color(t.orb_deg)
+        };
+        let marker = if t.event { "✦" } else { "·" };
+        let line = format!(
+            "{} {}{} → {}  {}",
+            marker,
+            planet_unicode(&t.promissor),
+            t.direction.short(),
+            gr_target_glyph(&t.natal_target),
+            format_orb(t.orb_deg),
+        );
+        let mut row = div()
+            .px(px(5.0))
+            .py(px(2.0))
+            .rounded(px(3.0))
+            .text_size(px(11.0))
+            .text_color(color)
+            .child(SharedString::from(line));
+        if t.event {
+            row = row.bg(with_alpha(hsla(0.0, 0.80, 0.50, 1.0), 0.16));
+        }
+        col = col.child(row);
+    }
+    if triggers.len() > SHOWN {
+        col = col.child(
+            div()
+                .text_size(px(9.0))
+                .text_color(theme.fg_disabled)
+                .mt(px(3.0))
+                .child(SharedString::from(format!(
+                    "+{} más",
+                    triggers.len() - SHOWN
+                ))),
+        );
+    }
+    col
+}
+
+/// Color de un trigger GR según su orbe: rojo intenso (orbe cerrado,
+/// contacto fuerte) que se desatura hacia gris al ensancharse. El
+/// orbe de referencia (gris pleno) es el orbe del HUD, 2°.
+fn gr_orb_color(orb_deg: f32) -> Hsla {
+    let t = (orb_deg / 2.0).clamp(0.0, 1.0);
+    let s = 0.82 + (0.10 - 0.82) * t;
+    let l = 0.62 + (0.52 - 0.62) * t;
+    hsla(0.0, s, l, 1.0)
+}
+
+/// Orbe en grados → texto compacto `D°MM'`.
+fn format_orb(orb_deg: f32) -> String {
+    let total_min = (orb_deg.abs() * 60.0).round() as i64;
+    format!("{}°{:02}'", total_min / 60, total_min % 60)
+}
+
+/// Glyph corto de un punto natal objetivo: ángulos como texto,
+/// cuerpos vía [`planet_unicode`].
+fn gr_target_glyph(name: &str) -> String {
+    match name {
+        "asc" => "Asc".to_string(),
+        "mc" => "MC".to_string(),
+        "desc" => "Dsc".to_string(),
+        "ic" => "IC".to_string(),
+        other => planet_unicode(other).to_string(),
+    }
 }
 
 /// Pequeña pill con la etiqueta de un overlay activo. El borde toma
@@ -1831,6 +1969,7 @@ fn paint_wheel(
     radii: Radii,
     visibility: &HashMap<LayerKind, bool>,
     hover_focus: Option<&str>,
+    gr_triggers: &[GrTrigger],
 ) {
     let (cx, cy) = bounds_center(bounds);
     let show = |k: LayerKind| visibility.get(&k).copied().unwrap_or(true);
@@ -2033,6 +2172,41 @@ fn paint_wheel(
                     let y1 = cy + r * a1.sin();
                     paint_segment(window, x0, y0, x1, y1, pd_color, None, 0.6);
                 }
+            }
+        }
+
+        // Resaltado de convergencias GR: por cada punto natal donde un
+        // trigger directo y otro converso coinciden dentro del
+        // micro-orbe, un eje brillante atraviesa la zona del dual-ring
+        // hasta el cinturón natal. Es la señal de rectificación — si la
+        // hora natal es correcta, el evento real cae sobre este eje.
+        let mut event_degs: Vec<f32> = gr_triggers
+            .iter()
+            .filter(|t| t.event)
+            .map(|t| t.natal_deg)
+            .collect();
+        event_degs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        event_degs.dedup_by(|a, b| (*a - *b).abs() < 0.02);
+        if !event_degs.is_empty() {
+            let hot = hsla(0.0, 0.86, 0.60, 1.0);
+            let marker_r = (radii.sign_outer * 0.014).max(2.5);
+            for deg in event_degs {
+                paint_radial_line(
+                    window,
+                    cx,
+                    cy,
+                    deg,
+                    ascendant_deg,
+                    rot_offset_deg,
+                    radii.pd_converse,
+                    radii.houses_inner,
+                    with_alpha(hot, 0.92),
+                    2.6,
+                );
+                let (mx, my) =
+                    polar_to_screen(deg, ascendant_deg, rot_offset_deg, radii.bodies);
+                paint_glow(window, cx + mx, cy + my, marker_r * 2.0, hot);
+                fill_circle(window, cx + mx, cy + my, marker_r, hot);
             }
         }
     }
