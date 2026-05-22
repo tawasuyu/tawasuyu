@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 
 pub use cosmobiologia_model::{Chart, ChartId, ChartKind};
 
+mod constellations_data;
 pub mod draw;
 pub mod gr;
 pub mod harmonic;

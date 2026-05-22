@@ -92,6 +92,8 @@ pub struct SphereOpts {
     /// La Tierra interior — un globo pequeño, transparente, con los
     /// continentes esquemáticos y el observador marcado en su lugar.
     pub show_earth: bool,
+    /// Las figuras de las 88 constelaciones (catálogo d3-celestial).
+    pub show_constellations: bool,
 }
 
 impl Default for SphereOpts {
@@ -107,6 +109,7 @@ impl Default for SphereOpts {
             show_horizon: true,
             show_sky: true,
             show_earth: true,
+            show_constellations: true,
         }
     }
 }
@@ -373,6 +376,90 @@ fn add_loop(
                 dash: None,
             },
         ));
+    }
+}
+
+/// Proyecta una polilínea ABIERTA y empuja un `Line` por segmento.
+fn add_path(
+    items: &mut Vec<(f32, DrawCommand)>,
+    proj: &Projector,
+    pts: &[Vec3],
+    color: Rgba,
+    width: f32,
+) {
+    for i in 0..pts.len().saturating_sub(1) {
+        let a = proj.project(pts[i]);
+        let b = proj.project(pts[i + 1]);
+        let d = (a.depth + b.depth) * 0.5;
+        items.push((
+            d,
+            DrawCommand::Line {
+                x1: a.x,
+                y1: a.y,
+                x2: b.x,
+                y2: b.y,
+                color: dim(color, d),
+                width,
+                dash: None,
+            },
+        ));
+    }
+}
+
+/// Dibuja las figuras de las 88 constelaciones: cada trazo une estrellas
+/// reales del catálogo (un punto por vértice), y el nombre va en el
+/// centroide. Capa tenue — referencia, no protagonista.
+fn add_constellations(
+    items: &mut Vec<(f32, DrawCommand)>,
+    proj: &Projector,
+    eps: f32,
+    size: f32,
+    pal: &Palette,
+) {
+    let line_col = pal.fg_muted.with_alpha(0.42);
+    let star = Rgba::opaque(0.92, 0.95, 1.0);
+    for fig in crate::constellations_data::FIGURAS {
+        let (mut sx, mut sy, mut sz, mut n) = (0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32);
+        for path in fig.paths {
+            let pts: Vec<Vec3> = path
+                .iter()
+                .map(|&(ra, dec)| rot_x(equatorial_dir(ra, dec), eps))
+                .collect();
+            add_path(items, proj, &pts, line_col, 0.7);
+            for v in &pts {
+                sx += v.x;
+                sy += v.y;
+                sz += v.z;
+                n += 1.0;
+                let p = proj.project(*v);
+                items.push((
+                    p.depth - 0.01,
+                    DrawCommand::Circle {
+                        cx: p.x,
+                        cy: p.y,
+                        r: size * 0.0017,
+                        stroke: None,
+                        fill: Some(star.with_alpha(0.70 * depth_alpha(p.depth))),
+                        stroke_w: 0.0,
+                    },
+                ));
+            }
+        }
+        if n > 0.0 {
+            let c = Vec3::new(sx / n, sy / n, sz / n).normalized();
+            let lp = proj.project(c);
+            items.push((
+                lp.depth + 0.001,
+                DrawCommand::Text {
+                    x: lp.x,
+                    y: lp.y,
+                    content: fig.nombre.into(),
+                    color: pal.fg_muted.with_alpha(0.42 * depth_alpha(lp.depth)),
+                    size: size * 0.0135,
+                    anchor: TextAnchor::Middle,
+                },
+            ));
+        }
     }
 }
 
@@ -813,6 +900,11 @@ pub fn compose_sphere(
         add_starfield(&mut items, &proj, size, eps);
     }
 
+    // --- Figuras de las constelaciones ---
+    if opts.show_constellations {
+        add_constellations(&mut items, &proj, eps, size, pal);
+    }
+
     // --- Rejilla: meridianos + paralelos de la eclíptica ---
     if opts.show_grid {
         let grid = pal.fg_muted.with_alpha(0.16);
@@ -1231,7 +1323,12 @@ mod tests {
 
     #[test]
     fn compose_sphere_emite_esqueleto_y_cuerpos() {
-        let cmds = compose_sphere(&modelo_demo(), &SphereView::default(), &SphereOpts::default());
+        // Sin constelaciones, para contar solo el esqueleto base.
+        let cmds = compose_sphere(
+            &modelo_demo(),
+            &SphereView::default(),
+            &SphereOpts { show_constellations: false, ..Default::default() },
+        );
         assert!(!cmds.is_empty(), "la esfera produce comandos");
         let lineas = cmds.iter().filter(|c| matches!(c, DrawCommand::Line { .. })).count();
         let textos = cmds.iter().filter(|c| matches!(c, DrawCommand::Text { .. })).count();
@@ -1239,6 +1336,30 @@ mod tests {
         // 12 signos + 4 ángulos + 2 polos celestes + cénit + nadir + 2
         // cuerpos = 22 etiquetas de texto.
         assert_eq!(textos, 22, "glifos de signos, ángulos, polos y cuerpos: {textos}");
+    }
+
+    #[test]
+    fn las_constelaciones_dibujan_sus_figuras() {
+        assert!(
+            crate::constellations_data::FIGURAS.len() > 80,
+            "el catálogo trae las 88 constelaciones"
+        );
+        let modelo = modelo_demo();
+        let lineas = |c: &[DrawCommand]| {
+            c.iter().filter(|d| matches!(d, DrawCommand::Line { .. })).count()
+        };
+        let con = compose_sphere(&modelo, &SphereView::default(), &SphereOpts::default());
+        let sin = compose_sphere(
+            &modelo,
+            &SphereView::default(),
+            &SphereOpts { show_constellations: false, ..Default::default() },
+        );
+        assert!(
+            lineas(&con) > lineas(&sin) + 500,
+            "las figuras agregan cientos de trazos: {} vs {}",
+            lineas(&con),
+            lineas(&sin),
+        );
     }
 
     #[test]
