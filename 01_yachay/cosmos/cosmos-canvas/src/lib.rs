@@ -67,6 +67,10 @@ pub enum CanvasEvent {
     /// El usuario pidió exportar el render actual como SVG. El shell
     /// se encarga de escribir el archivo (la engine genera el string).
     ExportSvgRequested,
+    /// En modo GR (direcciones primarias activas) el jog-dial scrubea
+    /// la edad en vez del tiempo. Lleva el delta de edad en años; el
+    /// host lo acumula sobre `target_age_years` y recompone en vivo.
+    GrAgeDelta(f64),
 }
 
 // =====================================================================
@@ -236,7 +240,22 @@ impl CanvasState {
     pub fn is_layer_visible(&self, kind: LayerKind) -> bool {
         self.layer_visibility.get(&kind).copied().unwrap_or(true)
     }
+
+    /// `true` cuando hay un overlay de direcciones primarias activo.
+    /// En ese modo el jog-dial scrubea la edad GR en vez del tiempo.
+    fn gr_active(&self) -> bool {
+        matches!(
+            &self.mode,
+            CanvasMode::Wheel { render }
+                if render.layers.iter().any(|l| l.module_id == "pd_direct")
+        )
+    }
 }
+
+/// Sensibilidad del scrubbing GR: años de edad por grado de jog. A
+/// 0.1, una vuelta completa del dial barre 36 años — fino para
+/// explorar contactos sin perder rango.
+const GR_AGE_PER_DEG: f32 = 0.1;
 
 // =====================================================================
 // Widget
@@ -408,6 +427,7 @@ impl AstrologyCanvas {
         bounds: Bounds<Pixels>,
         cx: &mut Context<'_, Self>,
     ) {
+        let gr = self.state.gr_active();
         let Some(jog) = self.state.drag_jog.as_mut() else {
             return;
         };
@@ -426,9 +446,17 @@ impl AstrologyCanvas {
         }
         jog.accumulated_delta_deg += delta;
         jog.last_screen_angle_deg = angle;
-        // Reflejo visual durante el drag (sin recomputar).
-        self.state.view_rotation_deg = jog.accumulated_delta_deg;
-        cx.notify();
+        let accumulated = jog.accumulated_delta_deg;
+        if gr {
+            // Modo GR: el jog scrubea la edad. No rota el wheel — el
+            // feedback es el movimiento de los glifos dirigidos cuando
+            // el shell recompone con la edad nueva.
+            cx.emit(CanvasEvent::GrAgeDelta((-delta * GR_AGE_PER_DEG) as f64));
+        } else {
+            // Reflejo visual durante el drag (sin recomputar).
+            self.state.view_rotation_deg = accumulated;
+            cx.notify();
+        }
     }
 
     /// Hit-test sobre body glyphs + house cusps. Para bodies: distancia
@@ -662,9 +690,15 @@ impl AstrologyCanvas {
     }
 
     fn on_jog_up(&mut self, cx: &mut Context<'_, Self>) {
+        let gr = self.state.gr_active();
         let Some(jog) = self.state.drag_jog.take() else {
             return;
         };
+        if gr {
+            // El scrub GR se aplicó en vivo durante el drag; al soltar
+            // no queda nada que confirmar.
+            return;
+        }
         // 1° de arco ≈ 4 minutos de tiempo sideral (15°/hora).
         // CW visual (delta negativa en nuestra convención) → tiempo
         // hacia adelante.
@@ -1641,7 +1675,7 @@ fn render_wheel(
                 .text_size(px(10.0))
                 .text_color(theme.fg_disabled)
                 .child(
-                    "[D]ial [H]ouses as[X]pects [P]lanets [T]ransits [C]oords  ·  Ctrl+drag = tiempo  ·  [0] reset zoom  ·  [R] reset tiempo  ·  [S]vg",
+                    "[D]ial [H]ouses as[X]pects [P]lanets [T]ransits [C]oords  ·  Ctrl+drag = tiempo/edad GR  ·  [0] reset zoom  ·  [R] reset tiempo  ·  [S]vg",
                 ),
         );
 

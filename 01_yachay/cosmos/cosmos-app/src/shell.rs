@@ -1172,7 +1172,36 @@ impl Shell {
             CanvasEvent::ExportSvgRequested => {
                 self.export_current_to_svg();
             }
+            CanvasEvent::GrAgeDelta(delta) => {
+                self.scrub_gr_age(*delta, cx);
+            }
         }
+    }
+
+    /// Scrubbing en vivo de la edad GR vía jog-dial. Acumula `delta`
+    /// sobre `target_age_years` del módulo `primary_directions`,
+    /// clampa a [0,120], sincroniza el slider del panel y recompone.
+    fn scrub_gr_age(&mut self, delta_years: f64, cx: &mut Context<Self>) {
+        if !module_enabled(&self.module_configs, "primary_directions") {
+            return;
+        }
+        let current = self.module_age_or_current("primary_directions");
+        let next = (current + delta_years).clamp(0.0, 120.0);
+        if (next - current).abs() < 1e-6 {
+            return;
+        }
+        let entry = self
+            .module_configs
+            .entry("primary_directions".into())
+            .or_insert_with(|| serde_json::json!({}));
+        if let serde_json::Value::Object(map) = entry {
+            map.insert("target_age_years".into(), serde_json::json!(next));
+        }
+        self.panel.update(cx, |p, cx| {
+            p.set_slider("primary_directions", "target_age_years", next, cx)
+        });
+        self.persist_module("primary_directions");
+        self.render_current(cx);
     }
 
     /// Recompone la carta actual + escribe el SVG a un archivo en
