@@ -1,0 +1,29 @@
+# =============================================================================
+#  renaser :: apps/tonada — Fase 12 :: una melodia visual para estrenar la bocina
+# -----------------------------------------------------------------------------
+#  Un modulo WebAssembly puro que toca una escala —y la dibuja— gobernandose por
+#  dos capacidades del host: el reloj monotono (`sys_tiempo_mono`, Fase 11) que
+#  le marca el compas, y la bocina (`sys_tono`, Fase 12) por la que suena. Tiene
+#  su propio `[workspace]`: queda fuera del espacio de trabajo del kernel.
+# =============================================================================
+
+[package]
+name = "tonada"
+version = "0.1.0"
+edition = "2021"
+description = "renaser :: app WASM — una melodia visual: reloj del host + bocina"
+
+[workspace]
+
+# `cdylib` produce un modulo `.wasm` que exporta funciones — el formato que
+# wasmi instancia. La aplicacion solo habla con el kernel por funciones del host.
+[lib]
+crate-type = ["cdylib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true

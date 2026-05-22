@@ -6,10 +6,13 @@
 //  abren la primera via hacia hardware que el kernel debe DESCUBRIR y reclamar
 //  por si mismo:
 //
-//    * `pci`   — acceso al espacio de configuracion del bus PCI (0xCF8/0xCFC).
-//    * `disco` — el disco virtio-blk: asignador de marcos DMA, `Hal` y la
-//                lectura, por sondeo, de su primer sector.
+//    * `pci`     — acceso al espacio de configuracion del bus PCI (0xCF8/0xCFC).
+//    * `disco`   — el disco virtio-blk: asignador de marcos DMA, `Hal` y la
+//                  lectura, por sondeo, de su primer sector.
+//    * `altavoz` — la bocina del PC: el canal 2 del PIT como generador de tono
+//                  (Fase 12).
 // =============================================================================
 
+pub mod altavoz;
 pub mod disco;
 pub mod pci;

@@ -410,6 +410,9 @@ fn mover_foco(adelante: bool) {
         }
     }
     FOCO.store(nuevo, Ordering::Relaxed);
+    // La bocina pertenece a la ventana enfocada (Fase 12): al cambiar el foco,
+    // callar — la nueva dueña la reclamara en su proximo fotograma si quiere.
+    crate::drivers::altavoz::tono(0);
     // La ventana recien enfocada, si flota, al frente del orden-Z.
     alzar_si_flota(&mut escritorio, nuevo);
     recomponer(&escritorio);
@@ -599,6 +602,8 @@ fn cerrar() {
         })
         .unwrap_or(foco);
     FOCO.store(nuevo, Ordering::Relaxed);
+    // El foco cambia: callar la bocina (Fase 12) — ver `mover_foco`.
+    crate::drivers::altavoz::tono(0);
     alzar_si_flota(&mut escritorio, nuevo);
     aplicar_teselado(&mut escritorio);
     recomponer(&escritorio);

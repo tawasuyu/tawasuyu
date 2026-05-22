@@ -14,7 +14,8 @@
 //    * sys_object_fijar_raiz — coronar un objeto como raiz;
 //    * sys_estado_cargar     — leer el estado persistido de la app (Fase 7c);
 //    * sys_estado_guardar    — anclar el estado persistido de la app (Fase 7c);
-//    * sys_tiempo_mono       — leer el reloj monotono del sistema (Fase 11).
+//    * sys_tiempo_mono       — leer el reloj monotono del sistema (Fase 11);
+//    * sys_tono              — hacer sonar la bocina del PC (Fase 12).
 //
 //  GUARDARRAIL: el kernel valida MATEMATICAMENTE todo puntero que el modulo le
 //  entrega contra los limites reales de su memoria lineal. No se confia en que
@@ -454,6 +455,23 @@ pub(crate) fn enlazar_capacidades(
         "sys_tiempo_mono",
         |_caller: Caller<'_, ContextoCapacidades>| -> u64 {
             crate::async_system::reloj::milisegundos()
+        },
+    )?;
+
+    // --- CAPACIDAD 11 :: sys_tono(frecuencia_hz) ---
+    // Hace sonar la bocina del PC a `frecuencia_hz` (un 0 la silencia). La
+    // bocina es un recurso UNICO y global: para que dos apps no se la disputen,
+    // pertenece —como el teclado desde la Fase 8c— a la ventana ENFOCADA. Una
+    // app sin foco puede pedir un tono; sencillamente, no se oye. Y cuando el
+    // foco cambia, el compositor calla la bocina: la nueva dueña la reclamara
+    // en su proximo fotograma si quiere sonar.
+    enlazador.func_wrap(
+        "renaser",
+        "sys_tono",
+        |caller: Caller<'_, ContextoCapacidades>, frecuencia_hz: u32| {
+            if crate::compositor::foco() == caller.data().indice_app {
+                crate::drivers::altavoz::tono(frecuencia_hz);
+            }
         },
     )?;
 
