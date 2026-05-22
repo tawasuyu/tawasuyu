@@ -41,8 +41,8 @@ use gpui::{
 };
 
 use cosmobiologia_engine::{
-    Geometry, GrTrigger, Layer, LayerKind, Rectificacion, RenderModel, UranianGroup,
-    OUTER_RING_MODULES,
+    corpus_inputs, Corpus, Dominio, Geometry, GrTrigger, Layer, LayerKind, Pasaje,
+    Rectificacion, RenderModel, UranianGroup, OUTER_RING_MODULES,
 };
 use cosmobiologia_model::{ChartId, ContactId, GroupId};
 use cosmobiologia_render::{compose_sphere, DrawCommand, Palette, SphereOpts, SphereView};
@@ -173,6 +173,12 @@ pub struct CanvasState {
     pub sphere_view: SphereView,
     /// Si se dibujan las figuras de constelaciones en la esfera 3D.
     pub show_constellations: bool,
+    /// El corpus de interpretación cargado (corpus.ron del usuario, o la
+    /// plantilla de ejemplo). `None` si no se pudo cargar ninguno.
+    pub corpus: Option<Corpus>,
+    /// Tajada vivencial activa — al elegir una, la rueda resalta sus
+    /// cuerpos y al costado se listan sus pasajes. `None` = apagado.
+    pub corpus_domain: Option<Dominio>,
     drag_jog: Option<JogDragState>,
     drag_pan: Option<PanDragState>,
     drag_sphere: Option<SphereDragState>,
@@ -261,6 +267,8 @@ impl Default for CanvasState {
             sphere_3d: false,
             sphere_view: SphereView::default(),
             show_constellations: true,
+            corpus: None,
+            corpus_domain: None,
             drag_jog: None,
             drag_pan: None,
             drag_sphere: None,
@@ -309,10 +317,33 @@ impl Focusable for AstrologyCanvas {
 impl AstrologyCanvas {
     pub fn new(cx: &mut Context<'_, Self>) -> Self {
         cx.observe_global::<Theme>(|_, cx| cx.notify()).detach();
+        let mut state = CanvasState::default();
+        state.corpus = load_corpus();
         Self {
-            state: CanvasState::default(),
+            state,
             focus_handle: cx.focus_handle(),
         }
+    }
+
+    /// Elige (o apaga, si ya estaba) una tajada vivencial del corpus.
+    pub fn toggle_corpus_domain(&mut self, dom: Dominio, cx: &mut Context<'_, Self>) {
+        self.state.corpus_domain = if self.state.corpus_domain == Some(dom) {
+            None
+        } else {
+            Some(dom)
+        };
+        cx.notify();
+    }
+
+    /// Cicla la tajada activa: apagado → Vital → Social → Psíquico → …
+    pub fn cycle_corpus_domain(&mut self, cx: &mut Context<'_, Self>) {
+        self.state.corpus_domain = match self.state.corpus_domain {
+            None => Some(Dominio::Vital),
+            Some(Dominio::Vital) => Some(Dominio::Social),
+            Some(Dominio::Social) => Some(Dominio::Psiquico),
+            Some(Dominio::Psiquico) => None,
+        };
+        cx.notify();
     }
 
     pub fn state(&self) -> &CanvasState {
@@ -834,6 +865,10 @@ impl AstrologyCanvas {
                 self.toggle_constellations(cx);
                 return;
             }
+            "i" | "I" => {
+                self.cycle_corpus_domain(cx);
+                return;
+            }
             _ => return,
         };
         self.toggle_layer(kind, cx);
@@ -911,6 +946,143 @@ fn effective_r_outer(bounds: Bounds<Pixels>) -> f32 {
 }
 
 // =====================================================================
+// Corpus de interpretación — tajadas sobre la rueda
+// =====================================================================
+
+/// Carga el corpus: primero el `corpus.ron` del usuario en el
+/// directorio de datos; si no existe o falla, la plantilla `ejemplo.ron`
+/// embebida (así siempre hay algo que mostrar).
+fn load_corpus() -> Option<Corpus> {
+    let base = std::env::var("XDG_DATA_HOME")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            format!("{}/.local/share", std::env::var("HOME").unwrap_or_default())
+        });
+    let path = format!("{base}/cosmobiologia/corpus.ron");
+    if let Ok(txt) = std::fs::read_to_string(&path) {
+        match Corpus::desde_ron(&txt) {
+            Ok(c) => return Some(c),
+            Err(e) => eprintln!("[canvas] {path}: {e}"),
+        }
+    }
+    Corpus::desde_ron(include_str!("../../cosmobiologia-corpus/ejemplo.ron")).ok()
+}
+
+/// Color de cada tajada vivencial.
+fn domain_color(d: Dominio) -> Hsla {
+    match d {
+        Dominio::Vital => hsla(14.0 / 360.0, 0.72, 0.58, 1.0),
+        Dominio::Social => hsla(208.0 / 360.0, 0.62, 0.60, 1.0),
+        Dominio::Psiquico => hsla(280.0 / 360.0, 0.52, 0.64, 1.0),
+    }
+}
+
+fn domain_label(d: Dominio) -> &'static str {
+    match d {
+        Dominio::Vital => "Vital",
+        Dominio::Social => "Social",
+        Dominio::Psiquico => "Psíquico",
+    }
+}
+
+/// Capa transparente sobre la rueda que dibuja un anillo de resalte en
+/// cada cuerpo de la tajada activa.
+fn corpus_highlight_canvas(degs: Vec<f32>, asc: f32, rot: f32, color: Hsla) -> impl IntoElement {
+    canvas(
+        |_b, _w, _cx| (),
+        move |bounds: Bounds<Pixels>, _, window, _| {
+            let (cx, cy) = bounds_center(bounds);
+            let radii = Radii::from_outer(effective_r_outer(bounds));
+            for deg in &degs {
+                let (x, y) = polar_to_screen(*deg, asc, rot, radii.bodies);
+                stroke_circle(window, cx + x, cy + y, 19.0, 2.2, color);
+                stroke_circle(window, cx + x, cy + y, 24.0, 1.0, with_alpha(color, 0.35));
+            }
+        },
+    )
+    .absolute()
+    .size_full()
+}
+
+/// El panel lateral con los pasajes de la tajada activa.
+fn corpus_panel(theme: &Theme, dom: Dominio, pasajes: &[&Pasaje]) -> impl IntoElement {
+    let mut list = div()
+        .id("corpus-panel")
+        .flex()
+        .flex_col()
+        .gap(px(8.0))
+        .overflow_y_scroll()
+        .h_full()
+        .w(px(340.0))
+        .p(px(12.0))
+        .bg(theme.bg_panel_alt.clone())
+        .border_l_1()
+        .border_color(theme.border)
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(6.0))
+                .child(div().w(px(10.0)).h(px(10.0)).rounded_full().bg(domain_color(dom)))
+                .child(
+                    div()
+                        .text_size(px(13.0))
+                        .text_color(theme.fg_text)
+                        .child(SharedString::from(format!(
+                            "Tajada {} · {} pasajes",
+                            domain_label(dom),
+                            pasajes.len()
+                        ))),
+                ),
+        );
+    if pasajes.is_empty() {
+        list = list.child(
+            div()
+                .text_size(px(11.0))
+                .text_color(theme.fg_muted)
+                .child(
+                    "Sin pasajes para esta tajada todavía. Escribilos en \
+                     corpus.ron — ver la GUIA del corpus.",
+                ),
+        );
+    }
+    for p in pasajes {
+        list = list.child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(3.0))
+                .p(px(8.0))
+                .rounded(px(5.0))
+                .bg(theme.bg_panel.clone())
+                .border_1()
+                .border_color(theme.border)
+                .child(
+                    div()
+                        .text_size(px(9.0))
+                        .text_color(theme.fg_muted)
+                        .child(SharedString::from(p.combinacion.to_string())),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(theme.fg_text)
+                        .child(SharedString::from(p.texto.clone())),
+                )
+                .child(
+                    div()
+                        .text_size(px(9.0))
+                        .text_color(theme.fg_muted)
+                        .child(SharedString::from(format!("— {}", p.fuente))),
+                ),
+        );
+    }
+    list
+}
+
+// =====================================================================
 // Render
 // =====================================================================
 
@@ -920,6 +1092,34 @@ impl Render for AstrologyCanvas {
         let palette = AstroPalette::for_theme(&theme);
         let entity = cx.entity();
         let focus = self.focus_handle.clone();
+
+        // Vista del corpus: con una tajada elegida sobre la rueda 2D, se
+        // calcula la interpretación por dominio (pasajes + cuerpos a
+        // resaltar). Los `&Pasaje` toman prestado de `state.corpus`.
+        let corpus_view: Option<(Dominio, Vec<&Pasaje>, Vec<f32>)> =
+            match &self.state.mode {
+                CanvasMode::Wheel { render } if !self.state.sphere_3d => {
+                    self.state.corpus_domain.and_then(|dom| {
+                        let corpus = self.state.corpus.as_ref()?;
+                        let (col, asp) = corpus_inputs(render);
+                        let por_dom = corpus.interpretar_por_dominio(&col, &asp);
+                        let pasajes = por_dom.get(&dom).cloned().unwrap_or_default();
+                        let degs: Vec<f32> = render
+                            .layers
+                            .iter()
+                            .filter(|l| {
+                                matches!(l.kind, LayerKind::Bodies)
+                                    && l.module_id == "natal"
+                            })
+                            .flat_map(|l| l.glyphs.iter())
+                            .filter(|g| g.house.and_then(Dominio::de_casa) == Some(dom))
+                            .map(|g| g.deg)
+                            .collect();
+                        Some((dom, pasajes, degs))
+                    })
+                }
+                _ => None,
+            };
 
         let body = match &self.state.mode {
             CanvasMode::Empty => render_empty(&theme),
@@ -933,23 +1133,39 @@ impl Render for AstrologyCanvas {
                 self.state.view_pan_y,
                 entity,
             ),
-            CanvasMode::Wheel { render } => render_wheel(
-                &theme,
-                &palette,
-                render,
-                self.state.view_rotation_deg,
-                self.state.time_offset_minutes,
-                self.state.view_scale,
-                self.state.view_pan_x,
-                self.state.view_pan_y,
-                &self.state.layer_visibility,
-                self.state.show_coords,
-                self.state.hover.as_ref(),
-                self.state.rectificacion.as_ref(),
-                entity,
-            ),
+            CanvasMode::Wheel { render } => {
+                let wheel = render_wheel(
+                    &theme,
+                    &palette,
+                    render,
+                    self.state.view_rotation_deg,
+                    self.state.time_offset_minutes,
+                    self.state.view_scale,
+                    self.state.view_pan_x,
+                    self.state.view_pan_y,
+                    &self.state.layer_visibility,
+                    self.state.show_coords,
+                    self.state.hover.as_ref(),
+                    self.state.rectificacion.as_ref(),
+                    entity,
+                );
+                // Capa de resalte de la tajada activa, encima de la rueda.
+                match &corpus_view {
+                    Some((dom, _, degs)) => wheel.child(corpus_highlight_canvas(
+                        degs.clone(),
+                        render.ascendant_deg,
+                        self.state.view_rotation_deg,
+                        domain_color(*dom),
+                    )),
+                    None => wheel,
+                }
+            }
             CanvasMode::Thumbnails { items, .. } => render_thumbnails(&theme, items),
         };
+
+        let corpus_side = corpus_view
+            .as_ref()
+            .map(|(dom, pasajes, _)| corpus_panel(&theme, *dom, pasajes));
 
         // Botón flotante 2D ⇄ 3D — visible solo con una carta cargada.
         // Muestra el modo al que se cambiará, no el activo.
@@ -1009,6 +1225,50 @@ impl Render for AstrologyCanvas {
                     )
             });
 
+        // Selector de tajada del corpus — sobre la rueda 2D.
+        let corpus_selector = (matches!(self.state.mode, CanvasMode::Wheel { .. })
+            && !self.state.sphere_3d)
+            .then(|| {
+                let mut col = div()
+                    .absolute()
+                    .top(px(12.0))
+                    .left(px(12.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.0));
+                for d in [Dominio::Vital, Dominio::Social, Dominio::Psiquico] {
+                    let active = self.state.corpus_domain == Some(d);
+                    col = col.child(
+                        div()
+                            .px(px(10.0))
+                            .py(px(4.0))
+                            .rounded(px(5.0))
+                            .bg(if active {
+                                domain_color(d).into()
+                            } else {
+                                theme.bg_panel_alt.clone()
+                            })
+                            .border_1()
+                            .border_color(theme.border)
+                            .text_size(px(10.0))
+                            .text_color(if active {
+                                hsla(0.0, 0.0, 1.0, 0.95)
+                            } else {
+                                theme.fg_muted
+                            })
+                            .cursor_pointer()
+                            .child(domain_label(d))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, _w, cx| {
+                                    this.toggle_corpus_domain(d, cx)
+                                }),
+                            ),
+                    );
+                }
+                col
+            });
+
         // Depth field: capa absoluta detrás del body, ocupa todo el
         // canvas. Vignette radial — el centro queda claro y los
         // bordes se oscurecen, dando profundidad sin "ruido" de
@@ -1039,17 +1299,33 @@ impl Render for AstrologyCanvas {
             .relative()
             .overflow_hidden()
             .child(depth_field)
-            .child(
-                div()
+            .child(match corpus_side {
+                // Con el corpus activo: rueda a la izquierda, panel de
+                // pasajes a la derecha.
+                Some(panel) => div()
+                    .size_full()
+                    .flex()
+                    .flex_row()
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(body),
+                    )
+                    .child(panel),
+                None => div()
                     .size_full()
                     .flex()
                     .flex_col()
                     .items_center()
                     .justify_center()
                     .child(body),
-            )
+            })
             .children(sphere_toggle)
             .children(constellations_toggle)
+            .children(corpus_selector)
     }
 }
 
