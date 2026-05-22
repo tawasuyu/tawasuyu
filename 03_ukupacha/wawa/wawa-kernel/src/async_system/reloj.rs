@@ -54,6 +54,13 @@ fn pulsos() -> u64 {
     CONTADOR_PULSOS.load(Ordering::Acquire)
 }
 
+/// Milisegundos transcurridos desde el arranque (Fase 11). El temporizador late
+/// a 100 Hz —un pulso cada 10 ms—; esta es la lectura del reloj MONOTONO que el
+/// host ofrece al userspace como `sys_tiempo_mono`. Jamas retrocede.
+pub fn milisegundos() -> u64 {
+    pulsos().saturating_mul(10)
+}
+
 /// Inscribe un waker en el censo de espera del proximo fotograma.
 fn inscribir(waker: Waker) {
     if let Some(censo) = EN_ESPERA.get() {

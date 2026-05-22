@@ -107,11 +107,13 @@ struct AppGenesis {
     region: (u32, u32, u32, u32),
 }
 
-/// El userspace de genesis — las cinco aplicaciones que pueblan un disco recien
-/// forjado. Un saludo (`hola`), la `memoriosa` interactiva que recuerda entre
-/// sesiones (Fase 7c), y tres demos de los guardarrailes del kernel: `discola`
-/// (combustible), `glotona` (memoria) y `cronista` (la cronica de los arranques).
-const GENESIS: [AppGenesis; 5] = [
+/// El userspace de genesis — las seis aplicaciones que pueblan un disco recien
+/// forjado. El compas visual `pulso` (Fase 11), un saludo (`hola`), la
+/// `memoriosa` interactiva que recuerda entre sesiones (Fase 7c), y tres demos
+/// de los guardarrailes del kernel: `discola` (combustible), `glotona`
+/// (memoria) y `cronista` (la cronica de los arranques).
+const GENESIS: [AppGenesis; 6] = [
+    AppGenesis { nombre: "pulso", archivo: "pulso.wasm", region: (100, 120, 360, 120) },
     AppGenesis { nombre: "hola", archivo: "app.wasm", region: (100, 120, 480, 560) },
     AppGenesis { nombre: "memoriosa", archivo: "memoriosa.wasm", region: (700, 120, 360, 80) },
     AppGenesis { nombre: "discola", archivo: "discola.wasm", region: (60, 700, 360, 80) },

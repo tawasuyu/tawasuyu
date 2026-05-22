@@ -13,7 +13,8 @@
 //    * sys_object_raiz       — leer la raiz del grafo;
 //    * sys_object_fijar_raiz — coronar un objeto como raiz;
 //    * sys_estado_cargar     — leer el estado persistido de la app (Fase 7c);
-//    * sys_estado_guardar    — anclar el estado persistido de la app (Fase 7c).
+//    * sys_estado_guardar    — anclar el estado persistido de la app (Fase 7c);
+//    * sys_tiempo_mono       — leer el reloj monotono del sistema (Fase 11).
 //
 //  GUARDARRAIL: el kernel valida MATEMATICAMENTE todo puntero que el modulo le
 //  entrega contra los limites reales de su memoria lineal. No se confia en que
@@ -439,6 +440,20 @@ pub(crate) fn enlazar_capacidades(
                 Ok(()) => Ok(0),
                 Err(_) => Ok(-3),
             }
+        },
+    )?;
+
+    // --- CAPACIDAD 10 :: sys_tiempo_mono() -> u64 ---
+    // El reloj MONOTONO del sistema: milisegundos transcurridos desde el
+    // arranque. Le da al userspace un sentido del tiempo independiente del
+    // ritmo de los fotogramas — una app sabe CUANTO ha pasado, no solo CUANTAS
+    // veces la han llamado—. Jamas retrocede. No toca la memoria del modulo:
+    // es una lectura pura, sin puntero que validar.
+    enlazador.func_wrap(
+        "renaser",
+        "sys_tiempo_mono",
+        |_caller: Caller<'_, ContextoCapacidades>| -> u64 {
+            crate::async_system::reloj::milisegundos()
         },
     )?;
 
