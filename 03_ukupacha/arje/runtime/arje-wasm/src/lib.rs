@@ -15,7 +15,7 @@ use arje_card::EntityCard;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
 use tracing::{error, info, warn};
-use wasmi::{Caller, Engine, Linker, Memory, Module, Store};
+use wasmi::{Caller, CompilationMode, Config, Engine, Linker, Memory, Module, Store};
 
 /// Estado por instancia Wasm. Se accede tanto desde host imports (vía
 /// `Caller::data()`) como desde el thread runner para estado de salida.
@@ -45,7 +45,13 @@ pub fn incarnate_wasm(card: &EntityCard, module_bytes: Vec<u8>, entry: String) -
 }
 
 fn run_wasm(ente: WasmEnte, module_bytes: &[u8], entry: &str) -> anyhow::Result<()> {
-    let engine = Engine::default();
+    // Compilación ansiosa (Eager): el módulo se traduce entero ahora, no
+    // perezosamente bajo demanda. Da un comportamiento predecible y
+    // paridad con el motor wasmi del kernel de renaser — ambos en
+    // wasmi 1.0, mismo ABI de host en Linux y en bare-metal.
+    let mut config = Config::default();
+    config.compilation_mode(CompilationMode::Eager);
+    let engine = Engine::new(&config);
     let module = Module::new(&engine, module_bytes)
         .map_err(|e| anyhow::anyhow!("Wasm module compile: {e}"))?;
     let mut store = Store::new(&engine, ente);
@@ -59,10 +65,13 @@ fn run_wasm(ente: WasmEnte, module_bytes: &[u8], entry: &str) -> anyhow::Result<
         caller.data_mut().exit_code.store(code, Ordering::Relaxed);
     })?;
 
-    let pre = linker.instantiate(&mut store, &module)
+    // wasmi 1.0 fusiona instanciación y arranque: `instantiate_and_start`
+    // instancia el módulo y ejecuta su sección `(start)` si la tuviera
+    // (este módulo no la tiene — su `_start` es un export convencional
+    // que el caller invoca explícitamente más abajo).
+    let instance = linker
+        .instantiate_and_start(&mut store, &module)
         .map_err(|e| anyhow::anyhow!("Wasm instantiate: {e}"))?;
-    let instance = pre.start(&mut store)
-        .map_err(|e| anyhow::anyhow!("Wasm start: {e}"))?;
 
     let func = instance.get_typed_func::<(), ()>(&store, entry)
         .map_err(|e| anyhow::anyhow!("Wasm get_func {entry}: {e}"))?;
@@ -115,4 +124,30 @@ pub fn demo_module_bytes() -> anyhow::Result<Vec<u8>> {
 )
 "#;
     Ok(wat::parse_str(wat)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifica el runtime de punta a punta sobre wasmi 1.0: WAT → wasm,
+    /// motor Eager, `Module::new`, `Linker` + `func_wrap`,
+    /// `instantiate_and_start`, llamada a `_start`, y los host imports
+    /// `ente.log` / `ente.exit`. Que compile no basta — debe ejecutar.
+    #[test]
+    fn demo_corre_en_wasmi_1() {
+        let bytes = demo_module_bytes().expect("el WAT del demo compila a wasm");
+        let exit_code = Arc::new(AtomicI32::new(-99));
+        let ente = WasmEnte {
+            id: ulid::Ulid::new(),
+            label: "test".into(),
+            exit_code: exit_code.clone(),
+        };
+        run_wasm(ente, &bytes, "_start").expect("el módulo demo ejecuta sin error");
+        assert_eq!(
+            exit_code.load(Ordering::Relaxed),
+            0,
+            "el host import `ente.exit(0)` fijó el código de salida"
+        );
+    }
 }
