@@ -83,6 +83,9 @@ pub struct SphereOpts {
     pub show_bodies: bool,
     /// Los glifos y divisiones de los signos.
     pub show_signs: bool,
+    /// El horizonte local, el cénit del observador y el meridiano.
+    /// Necesita `RenderModel::geo_latitude_deg`.
+    pub show_horizon: bool,
 }
 
 impl Default for SphereOpts {
@@ -95,6 +98,7 @@ impl Default for SphereOpts {
             show_equator: true,
             show_bodies: true,
             show_signs: true,
+            show_horizon: true,
         }
     }
 }
@@ -116,6 +120,24 @@ impl Vec3 {
     }
     fn scale(self, k: f32) -> Self {
         Self::new(self.x * k, self.y * k, self.z * k)
+    }
+    fn dot(self, o: Vec3) -> f32 {
+        self.x * o.x + self.y * o.y + self.z * o.z
+    }
+    fn cross(self, o: Vec3) -> Vec3 {
+        Vec3::new(
+            self.y * o.z - self.z * o.y,
+            self.z * o.x - self.x * o.z,
+            self.x * o.y - self.y * o.x,
+        )
+    }
+    fn normalized(self) -> Vec3 {
+        let len = (self.x * self.x + self.y * self.y + self.z * self.z).sqrt();
+        if len < 1e-9 {
+            self
+        } else {
+            self.scale(1.0 / len)
+        }
     }
 }
 
@@ -226,6 +248,89 @@ fn parallel_points(beta: f32, n: usize) -> Vec<Vec3> {
         .collect()
 }
 
+/// Sombreado del cuerpo de la esfera: un disco base sólido, un
+/// degradado que aclara hacia el centro y un brillo especular
+/// desplazado hacia la luz (arriba-izquierda). Da volumen sin
+/// gradientes nativos — solo discos translúcidos que se acumulan.
+fn add_sphere_shading(
+    items: &mut Vec<(f32, DrawCommand)>,
+    pal: &Palette,
+    center: f32,
+    rad: f32,
+) {
+    let (base, glow, highlight) = if pal.is_dark {
+        (
+            Rgba::opaque(0.12, 0.14, 0.24),
+            Rgba::opaque(0.34, 0.40, 0.60),
+            Rgba::opaque(0.62, 0.68, 0.88),
+        )
+    } else {
+        (
+            Rgba::opaque(0.82, 0.86, 0.93),
+            Rgba::opaque(1.0, 1.0, 1.0),
+            Rgba::opaque(1.0, 1.0, 1.0),
+        )
+    };
+    // Disco base — uniforme, le da cuerpo sólido a la esfera.
+    items.push((
+        -99.0,
+        DrawCommand::Circle {
+            cx: center,
+            cy: center,
+            r: rad,
+            stroke: None,
+            fill: Some(base.with_alpha(0.55)),
+            stroke_w: 0.0,
+        },
+    ));
+    // Degradado: anillos concéntricos que se acumulan hacia el centro.
+    const GLOW: usize = 12;
+    for i in 0..GLOW {
+        let t = i as f32 / (GLOW - 1) as f32;
+        items.push((
+            -98.0 + t * 1.5,
+            DrawCommand::Circle {
+                cx: center,
+                cy: center,
+                r: rad * (0.95 - 0.95 * t),
+                stroke: None,
+                fill: Some(glow.with_alpha(0.04)),
+                stroke_w: 0.0,
+            },
+        ));
+    }
+    // Brillo especular desplazado hacia la luz.
+    let hx = center - rad * 0.34;
+    let hy = center - rad * 0.34;
+    const HALO: usize = 7;
+    for i in 0..HALO {
+        let t = i as f32 / (HALO - 1) as f32;
+        items.push((
+            -95.0 + t * 0.5,
+            DrawCommand::Circle {
+                cx: hx,
+                cy: hy,
+                r: rad * 0.5 * (1.0 - t),
+                stroke: None,
+                fill: Some(highlight.with_alpha(0.05)),
+                stroke_w: 0.0,
+            },
+        ));
+    }
+    // Contorno nítido del limbo, encima del sombreado.
+    items.push((
+        -94.0,
+        DrawCommand::Circle {
+            cx: center,
+            cy: center,
+            r: rad,
+            stroke: Some(pal.fg_muted.with_alpha(0.32)),
+            fill: None,
+            stroke_w: 1.0,
+        },
+    ));
+}
+
 /// Proyecta una polilínea cerrada y empuja un `Line` por segmento, con
 /// la profundidad como clave de orden y la atenuación ya aplicada.
 fn add_loop(
@@ -255,6 +360,93 @@ fn add_loop(
     }
 }
 
+/// Los `n` puntos de un círculo máximo perpendicular a `normal`.
+fn great_circle_perp(normal: Vec3, n: usize) -> Vec<Vec3> {
+    let z = normal.normalized();
+    // Una referencia que no sea casi-paralela a `z`.
+    let r = if z.z.abs() < 0.9 {
+        Vec3::new(0.0, 0.0, 1.0)
+    } else {
+        Vec3::new(1.0, 0.0, 0.0)
+    };
+    let u = z.cross(r).normalized();
+    let v = z.cross(u);
+    (0..n)
+        .map(|i| {
+            let t = (i as f32) / (n as f32) * std::f32::consts::TAU;
+            let (s, c) = t.sin_cos();
+            Vec3::new(u.x * c + v.x * s, u.y * c + v.y * s, u.z * c + v.z * s)
+        })
+        .collect()
+}
+
+/// El cénit del observador en el marco eclíptico — el punto del cielo
+/// justo sobre su cabeza. Se deriva de la latitud geográfica `φ` y de
+/// la ascensión recta del Medio Cielo (RAMC): el cénit tiene
+/// declinación `φ` y AR `RAMC`, y eso se lleva del marco ecuatorial al
+/// eclíptico rotando por la oblicuidad.
+fn zenith_ecliptic(lat_deg: f32, mc_deg: f32, eps_rad: f32) -> Vec3 {
+    let phi = lat_deg.to_radians();
+    let lmc = mc_deg.to_radians();
+    // RAMC: AR del punto eclíptico del MC (latitud eclíptica 0).
+    let ramc = (lmc.sin() * eps_rad.cos()).atan2(lmc.cos());
+    let (sphi, cphi) = phi.sin_cos();
+    let (sr, cr) = ramc.sin_cos();
+    rot_x(Vec3::new(cphi * cr, cphi * sr, sphi), eps_rad)
+}
+
+/// Marca un punto notable de la esfera: disco + etiqueta, y un anillo
+/// extra si es `prominent`.
+fn add_point_marker(
+    items: &mut Vec<(f32, DrawCommand)>,
+    proj: &Projector,
+    pos: Vec3,
+    color: Rgba,
+    size: f32,
+    label: &str,
+    prominent: bool,
+) {
+    let p = proj.project(pos);
+    let c = dim(color, p.depth);
+    let r = if prominent { size * 0.013 } else { size * 0.008 };
+    items.push((
+        p.depth + 0.001,
+        DrawCommand::Circle {
+            cx: p.x,
+            cy: p.y,
+            r,
+            stroke: Some(c),
+            fill: Some(c.with_alpha(c.a * 0.40)),
+            stroke_w: 1.4,
+        },
+    ));
+    if prominent {
+        items.push((
+            p.depth + 0.001,
+            DrawCommand::Circle {
+                cx: p.x,
+                cy: p.y,
+                r: r * 1.95,
+                stroke: Some(c.with_alpha(c.a * 0.55)),
+                fill: None,
+                stroke_w: 1.0,
+            },
+        ));
+    }
+    let lp = proj.project(pos.scale(1.13));
+    items.push((
+        lp.depth + 0.002,
+        DrawCommand::Text {
+            x: lp.x,
+            y: lp.y,
+            content: label.into(),
+            color: dim(color, lp.depth),
+            size: size * 0.019,
+            anchor: TextAnchor::Middle,
+        },
+    ));
+}
+
 // =====================================================================
 // Composición
 // =====================================================================
@@ -273,22 +465,20 @@ pub fn compose_sphere(
     let rad = size * 0.36;
     let proj = Projector::new(view, center, center, rad);
     let eps = opts.obliquity_deg.to_radians();
+    // El cénit del observador — disponible cuando se pide el horizonte.
+    // Lo usan tanto la sección del horizonte como el día/noche de los
+    // cuerpos.
+    let zenith = if opts.show_horizon {
+        Some(zenith_ecliptic(model.geo_latitude_deg, model.midheaven_deg, eps))
+    } else {
+        None
+    };
 
     // (profundidad, comando) — se ordena al final.
     let mut items: Vec<(f32, DrawCommand)> = Vec::new();
 
-    // --- Limbo: disco tenue de fondo + contorno (siempre al fondo) ---
-    items.push((
-        -100.0,
-        DrawCommand::Circle {
-            cx: center,
-            cy: center,
-            r: rad,
-            stroke: Some(pal.fg_muted.with_alpha(0.22)),
-            fill: Some(pal.water.with_alpha(if pal.is_dark { 0.07 } else { 0.05 })),
-            stroke_w: 1.0,
-        },
-    ));
+    // --- Cuerpo de la esfera: sombreado con volumen ---
+    add_sphere_shading(&mut items, pal, center, rad);
 
     // --- Rejilla: meridianos + paralelos de la eclíptica ---
     if opts.show_grid {
@@ -339,6 +529,112 @@ pub fn compose_sphere(
                 dash: None,
             },
         ));
+    }
+
+    // --- Polos: eclípticos (punto dorado) y celestes (anillo + cruz) ---
+    for z in [1.0_f32, -1.0] {
+        let p = proj.project(Vec3::new(0.0, 0.0, z));
+        items.push((
+            p.depth + 0.001,
+            DrawCommand::Circle {
+                cx: p.x,
+                cy: p.y,
+                r: size * 0.009,
+                stroke: None,
+                fill: Some(dim(pal.dial_ring, p.depth)),
+                stroke_w: 0.0,
+            },
+        ));
+    }
+    for (z, label) in [(1.0_f32, "PN"), (-1.0, "PS")] {
+        let pole = rot_x(Vec3::new(0.0, 0.0, z), eps);
+        let p = proj.project(pole);
+        let col = dim(pal.uranus, p.depth);
+        let arm = size * 0.013;
+        items.push((
+            p.depth + 0.001,
+            DrawCommand::Circle {
+                cx: p.x,
+                cy: p.y,
+                r: size * 0.012,
+                stroke: Some(col),
+                fill: None,
+                stroke_w: 1.2,
+            },
+        ));
+        items.push((
+            p.depth + 0.001,
+            DrawCommand::Line {
+                x1: p.x - arm,
+                y1: p.y,
+                x2: p.x + arm,
+                y2: p.y,
+                color: col,
+                width: 1.0,
+                dash: None,
+            },
+        ));
+        items.push((
+            p.depth + 0.001,
+            DrawCommand::Line {
+                x1: p.x,
+                y1: p.y - arm,
+                x2: p.x,
+                y2: p.y + arm,
+                color: col,
+                width: 1.0,
+                dash: None,
+            },
+        ));
+        let lp = proj.project(pole.scale(1.13));
+        items.push((
+            lp.depth + 0.002,
+            DrawCommand::Text {
+                x: lp.x,
+                y: lp.y,
+                content: label.into(),
+                color: dim(pal.uranus, lp.depth),
+                size: size * 0.018,
+                anchor: TextAnchor::Middle,
+            },
+        ));
+    }
+
+    // --- Horizonte local, cénit del observador y meridiano ---
+    if let Some(z) = zenith {
+        let horiz_color = if pal.is_dark {
+            Rgba::opaque(0.90, 0.58, 0.32)
+        } else {
+            Rgba::opaque(0.66, 0.38, 0.14)
+        };
+        add_loop(
+            &mut items,
+            &proj,
+            &great_circle_perp(z, 96),
+            horiz_color.with_alpha(0.90),
+            1.7,
+        );
+        // El meridiano local: círculo máximo por el cénit y el polo
+        // celeste — su normal es `z × NCP`.
+        let ncp = rot_x(Vec3::new(0.0, 0.0, 1.0), eps);
+        add_loop(
+            &mut items,
+            &proj,
+            &great_circle_perp(z.cross(ncp), 96),
+            pal.fg_muted.with_alpha(0.28),
+            0.7,
+        );
+        // Cénit — el punto geográfico del observador — y nadir.
+        add_point_marker(&mut items, &proj, z, pal.sun, size, "Cénit", true);
+        add_point_marker(
+            &mut items,
+            &proj,
+            z.scale(-1.0),
+            pal.fg_muted,
+            size,
+            "Nadir",
+            false,
+        );
     }
 
     // --- Signos: espolón en cada borde + glifo en el centro ---
@@ -425,8 +721,17 @@ pub fn compose_sphere(
                 Rgba::opaque(1.0, 1.0, 1.0).with_alpha(0.92)
             };
             for g in &layer.glyphs {
-                let p = proj.project(eclip(g.deg));
-                let color = pal.planet(&g.symbol);
+                let pos = eclip(g.deg);
+                let p = proj.project(pos);
+                let mut color = pal.planet(&g.symbol);
+                // Día/noche: un cuerpo bajo el horizonte se atenúa — de
+                // un vistazo se ve qué planetas estaban sobre la tierra
+                // en el momento de la carta.
+                if let Some(z) = zenith {
+                    if pos.dot(z) < 0.0 {
+                        color = color.with_alpha(color.a * 0.40);
+                    }
+                }
                 items.push((
                     p.depth,
                     DrawCommand::Circle {
@@ -503,6 +808,7 @@ mod tests {
             midheaven_deg: 10.0,
             descendant_deg: 280.0,
             imum_coeli_deg: 190.0,
+            geo_latitude_deg: -34.6,
             layers: vec![Layer {
                 module_id: "natal".into(),
                 kind: LayerKind::Bodies,
@@ -530,8 +836,40 @@ mod tests {
         let lineas = cmds.iter().filter(|c| matches!(c, DrawCommand::Line { .. })).count();
         let textos = cmds.iter().filter(|c| matches!(c, DrawCommand::Text { .. })).count();
         assert!(lineas > 100, "círculos máximos como polilíneas: {lineas}");
-        // 12 glifos de signo + 4 etiquetas de ángulo + 2 cuerpos.
-        assert_eq!(textos, 18, "glifos de signos, ángulos y cuerpos: {textos}");
+        // 12 signos + 4 ángulos + 2 polos celestes + cénit + nadir + 2
+        // cuerpos = 22 etiquetas de texto.
+        assert_eq!(textos, 22, "glifos de signos, ángulos, polos y cuerpos: {textos}");
+    }
+
+    #[test]
+    fn el_cenit_esta_a_la_colatitud_del_polo_celeste() {
+        let eps = OBLICUIDAD_DEG.to_radians();
+        for &(lat, mc) in &[(-34.6_f32, 10.0_f32), (40.0, 200.0), (0.0, 95.0), (60.0, 300.0)] {
+            let z = zenith_ecliptic(lat, mc, eps);
+            let ncp = rot_x(Vec3::new(0.0, 0.0, 1.0), eps);
+            // El ángulo cénit↔polo celeste es la colatitud (90°−φ): su
+            // coseno —el producto punto de dos unitarios— es sin φ.
+            assert!(
+                (z.dot(ncp) - lat.to_radians().sin()).abs() < 1e-4,
+                "lat {lat}: z·NCP = {} vs sin φ = {}",
+                z.dot(ncp),
+                lat.to_radians().sin(),
+            );
+        }
+    }
+
+    #[test]
+    fn el_meridiano_contiene_cenit_polo_y_medio_cielo() {
+        let eps = OBLICUIDAD_DEG.to_radians();
+        for &(lat, mc) in &[(-34.6_f32, 10.0_f32), (40.0, 200.0), (51.5, 280.0)] {
+            let z = zenith_ecliptic(lat, mc, eps);
+            let ncp = rot_x(Vec3::new(0.0, 0.0, 1.0), eps);
+            // Cénit, polo celeste y MC son coplanares (el plano del
+            // meridiano) → su producto mixto se anula. Esto verifica
+            // que el RAMC se derivó bien del Medio Cielo.
+            let triple = z.cross(ncp).dot(eclip(mc));
+            assert!(triple.abs() < 1e-4, "lat {lat}, mc {mc}: triple = {triple}");
+        }
     }
 
     #[test]

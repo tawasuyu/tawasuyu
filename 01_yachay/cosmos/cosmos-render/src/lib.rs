@@ -71,6 +71,11 @@ pub struct RenderModel {
     pub midheaven_deg: f32,
     pub descendant_deg: f32,
     pub imum_coeli_deg: f32,
+    /// Latitud geográfica del lugar, en grados. La vista de esfera 3D
+    /// la usa para construir el horizonte local y el cénit del
+    /// observador. `default` = 0.0 para compat serde con modelos viejos.
+    #[serde(default)]
+    pub geo_latitude_deg: f32,
 
     /// Capas a pintar. Orden = z-order ascendente.
     pub layers: Vec<Layer>,
