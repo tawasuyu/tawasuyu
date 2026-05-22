@@ -1,32 +1,65 @@
-//! Bootstrap del entorno kernel para PID 1: monta procfs/sysfs/devtmpfs/cgroup2
-//! y registra al proceso como subreaper para adoptar huérfanos.
+//! Bootstrap del entorno kernel para PID 1: remonta `/` rw, monta
+//! procfs/sysfs/devtmpfs/cgroup2 y las superficies escribibles volátiles
+//! (`/run`, `/tmp`, `/dev/pts`, `/dev/shm`), y registra al proceso como
+//! subreaper para adoptar huérfanos.
 //!
-//! Idempotente: si los puntos de montaje ya existen (initramfs los montó),
-//! el segundo mount falla con EBUSY y simplemente lo ignoramos.
+//! Idempotente: si un punto de montaje ya existe (lo montó el initramfs),
+//! el segundo mount falla con EBUSY y simplemente se ignora.
+//!
+//! **Por qué importa `/run`:** el cmdline de arranque suele traer `ro`
+//! (systemd remonta rw temprano; nosotros también debemos). Sin remontar
+//! `/` y sin `/run` como tmpfs, crear el socket del bus interno falla con
+//! EROFS — y PID 1 moriría, provocando un kernel panic. Esta función es
+//! infalible a propósito: devuelve `Ok` siempre y sólo loggea los fallos.
 
 use nix::mount::{mount, MsFlags};
-use tracing::debug;
+use tracing::{debug, warn};
 
-/// Monta los pseudo-filesystems esenciales. Errores benignos (ya montados)
-/// se ignoran; errores serios se propagan.
+/// Prepara el entorno del kernel para PID 1. Nunca falla de forma dura:
+/// cada paso es best-effort y los problemas se loggean, porque un `Err`
+/// que llegue hasta `main` terminaría PID 1.
 pub fn bootstrap_kernel_surface() -> anyhow::Result<()> {
-    // Cada uno con sus flags estándar — NOSUID/NOEXEC/NODEV donde aplica.
-    mount::<str, str, str, str>(
-        Some("proc"), "/proc", Some("proc"),
-        MsFlags::MS_NOSUID | MsFlags::MS_NOEXEC | MsFlags::MS_NODEV, None,
-    ).ok();
-    mount::<str, str, str, str>(
-        Some("sysfs"), "/sys", Some("sysfs"),
-        MsFlags::MS_NOSUID | MsFlags::MS_NOEXEC | MsFlags::MS_NODEV, None,
-    ).ok();
-    mount::<str, str, str, str>(
-        Some("devtmpfs"), "/dev", Some("devtmpfs"),
-        MsFlags::MS_NOSUID, None,
-    ).ok();
-    mount::<str, str, str, str>(
-        Some("cgroup2"), "/sys/fs/cgroup", Some("cgroup2"),
-        MsFlags::MS_NOSUID | MsFlags::MS_NOEXEC | MsFlags::MS_NODEV, None,
-    ).ok();
+    // 1) Remontar `/` lectura-escritura. El cmdline casi siempre trae
+    //    `ro`; sin esto el resto del sistema queda de sólo lectura.
+    if let Err(e) = mount::<str, str, str, str>(
+        None, "/", None, MsFlags::MS_REMOUNT, None,
+    ) {
+        warn!(?e, "remount / rw falló — el sistema puede quedar de sólo lectura");
+    }
+
+    // 2) Pseudo-filesystems del kernel. NOSUID/NOEXEC/NODEV donde aplica.
+    let pseudo: [(&str, &str, &str, MsFlags); 4] = [
+        ("proc", "/proc", "proc",
+            MsFlags::MS_NOSUID.union(MsFlags::MS_NOEXEC).union(MsFlags::MS_NODEV)),
+        ("sysfs", "/sys", "sysfs",
+            MsFlags::MS_NOSUID.union(MsFlags::MS_NOEXEC).union(MsFlags::MS_NODEV)),
+        ("devtmpfs", "/dev", "devtmpfs", MsFlags::MS_NOSUID),
+        ("cgroup2", "/sys/fs/cgroup", "cgroup2",
+            MsFlags::MS_NOSUID.union(MsFlags::MS_NOEXEC).union(MsFlags::MS_NODEV)),
+    ];
+    for (src, dst, fstype, flags) in pseudo {
+        let _ = mount::<str, str, str, str>(Some(src), dst, Some(fstype), flags, None);
+    }
+
+    // 3) Superficies escribibles volátiles. `/run` como tmpfs es lo que
+    //    permite crear el socket del bus interno aun con `/` de sólo
+    //    lectura. `mkdir` best-effort antes de cada montaje.
+    let volatile: [(&str, &str, &str, MsFlags, &str); 4] = [
+        ("tmpfs", "/run", "tmpfs",
+            MsFlags::MS_NOSUID.union(MsFlags::MS_NODEV), "mode=0755"),
+        ("tmpfs", "/tmp", "tmpfs",
+            MsFlags::MS_NOSUID.union(MsFlags::MS_NODEV), "mode=1777"),
+        ("devpts", "/dev/pts", "devpts",
+            MsFlags::MS_NOSUID.union(MsFlags::MS_NOEXEC), "mode=0620,gid=5"),
+        ("tmpfs", "/dev/shm", "tmpfs",
+            MsFlags::MS_NOSUID.union(MsFlags::MS_NODEV), "mode=1777"),
+    ];
+    for (src, dst, fstype, flags, data) in volatile {
+        let _ = std::fs::create_dir_all(dst);
+        let _ = mount::<str, str, str, str>(Some(src), dst, Some(fstype), flags, Some(data));
+    }
+    let _ = std::fs::create_dir_all("/run/lock");
+
     debug!("kernel surface bootstrap completo");
     Ok(())
 }

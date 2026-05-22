@@ -83,8 +83,27 @@ fn main() -> anyhow::Result<()> {
 
     if dev_mode {
         warn!(?pid, "ente-zero corriendo en DEV MODE (no PID 1) — kernel surface no se monta");
-    } else {
-        info!("ente-zero despierta como PID 1");
+        return run(cli, true);
+    }
+
+    info!("ente-zero despierta como PID 1");
+    // Doctrina dura: PID 1 NUNCA puede salir — el kernel haría panic
+    // ("Attempted to kill init") y, con `panic=N` en el cmdline, la
+    // máquina cae en un reboot-loop. Por eso cualquier fallo de arranque
+    // se desvía a una shell de rescate: deja diagnosticar y reparar en
+    // vez de reiniciar a ciegas cada diez segundos.
+    match run(cli, false) {
+        Ok(()) => emergency_shell(
+            "el bucle primordial terminó — el fractal pidió shutdown",
+        ),
+        Err(e) => emergency_shell(&format!("{e:#}")),
+    }
+}
+
+/// Arranque + bucle primordial. En PID 1, cualquier `Err` que devuelva
+/// lo intercepta `main` y lo convierte en shell de rescate.
+fn run(cli: CliArgs, dev_mode: bool) -> anyhow::Result<()> {
+    if !dev_mode {
         bootstrap_kernel_surface().context("bootstrap kernel surface")?;
         become_child_subreaper().context("PR_SET_CHILD_SUBREAPER")?;
     }
@@ -103,6 +122,75 @@ fn main() -> anyhow::Result<()> {
         cli.audit_head, cli.metrics_addr, cli.brain_half_life,
         cli.autopromote_secs,
     ))
+}
+
+/// Último recurso de PID 1: imprime el diagnóstico en la consola y abre
+/// una shell de rescate. **Nunca retorna** — si lo hiciera, el proceso
+/// saldría y el kernel haría panic.
+fn emergency_shell(reason: &str) -> ! {
+    let banner = format!(
+        "\n\n\
+         ===============  arje-zero — ARRANQUE FALLIDO  ================\n\
+         {reason}\n\
+         ---------------------------------------------------------------\n\
+         Se abre una shell de rescate sobre la consola. Revisá el sistema\n\
+         (p. ej. /ente/seed.card.json y los binarios en /usr/sbin) y\n\
+         reiniciá con `reboot -f`. Salir de la shell la vuelve a abrir.\n\n",
+    );
+    write_to_console(&banner);
+    error!(reason = %reason.replace('\n', " "), "arranque de PID 1 fallido");
+    loop {
+        match spawn_console_shell() {
+            Ok(status) => write_to_console(&format!(
+                "\n[arje-zero] la shell de rescate terminó ({status}) — reabriendo.\n",
+            )),
+            Err(e) => {
+                write_to_console(&format!(
+                    "\n[arje-zero] no hay shell de rescate disponible: {e}\n\
+                     PID 1 queda en espera pasiva — usá la consola del proveedor.\n",
+                ));
+                loop {
+                    std::thread::sleep(Duration::from_secs(3600));
+                }
+            }
+        }
+    }
+}
+
+/// Abre una shell interactiva con stdin/stdout/stderr sobre
+/// `/dev/console` y espera a que termine.
+fn spawn_console_shell() -> std::io::Result<std::process::ExitStatus> {
+    let shell = ["/bin/sh", "/bin/bash", "/usr/bin/sh", "/usr/bin/bash"]
+        .into_iter()
+        .find(|p| std::path::Path::new(p).exists())
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "ninguna shell en /bin ni /usr/bin",
+            )
+        })?;
+    let console = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/console")?;
+    std::process::Command::new(shell)
+        .stdin(console.try_clone()?)
+        .stdout(console.try_clone()?)
+        .stderr(console)
+        .env("HOME", "/root")
+        .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+        .env("PS1", "arje-rescate# ")
+        .env("TERM", "linux")
+        .status()
+}
+
+/// Escribe un mensaje directo a `/dev/console`, con stderr de respaldo.
+fn write_to_console(msg: &str) {
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().write(true).open("/dev/console") {
+        let _ = f.write_all(msg.as_bytes());
+    }
+    eprint!("{msg}");
 }
 
 async fn primordial_loop(
