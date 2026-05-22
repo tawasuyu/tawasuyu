@@ -1,0 +1,18 @@
+[package]
+name = "arje-absorb"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "arje-absorb — lee la configuración de otro init (sysvinit/runit/dinit/openrc) y la traduce a una Tarjeta Semilla brahman."
+
+[[bin]]
+name = "arje-absorb"
+path = "src/main.rs"
+
+[dependencies]
+brahman-card = { path = "../../protocol/brahman-card" }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
