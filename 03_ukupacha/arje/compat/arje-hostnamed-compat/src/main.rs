@@ -10,6 +10,7 @@
 
 use arje_bus::{BusClient, BusRequest, BusResponse};
 use arje_card::Capability;
+use arje_compat_common::{atomic_write, is_valid_hostname, merge_kv, parse_kv};
 use std::sync::Mutex;
 use tokio::signal::unix::{signal, SignalKind};
 use tracing::{info, warn};
@@ -230,23 +231,11 @@ fn gethostname_libc() -> Option<String> {
 }
 
 fn read_os_release_field(field: &str) -> Option<String> {
-    parse_kv_file("/etc/os-release", field)
+    parse_kv(&std::fs::read_to_string("/etc/os-release").ok()?, field)
 }
 
 fn read_machine_info_field(field: &str) -> Option<String> {
-    parse_kv_file("/etc/machine-info", field)
-}
-
-fn parse_kv_file(path: &str, field: &str) -> Option<String> {
-    let content = std::fs::read_to_string(path).ok()?;
-    for line in content.lines() {
-        if let Some((k, v)) = line.split_once('=') {
-            if k.trim() == field {
-                return Some(v.trim().trim_matches('"').to_string());
-            }
-        }
-    }
-    None
+    parse_kv(&std::fs::read_to_string("/etc/machine-info").ok()?, field)
 }
 
 fn read_dmi(path: &str) -> String {
@@ -255,56 +244,12 @@ fn read_dmi(path: &str) -> String {
         .unwrap_or_default()
 }
 
-/// RFC 1123 + extra: ASCII alfanumérico, dash, dot. Longitud 1..253.
-/// Rechaza vacíos, espacios, control chars.
-fn is_valid_hostname(s: &str) -> bool {
-    if s.is_empty() || s.len() > 253 { return false; }
-    s.chars().all(|c|
-        c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '_'
-    )
-}
-
-/// Escritura atómica via tmp + rename. fsync del directorio para
-/// garantizar durabilidad post-crash. Permisos 0644.
-fn atomic_write(path: &str, content: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let p = std::path::Path::new(path);
-    if let Some(parent) = p.parent() { let _ = std::fs::create_dir_all(parent); }
-    let tmp = p.with_extension("tmp");
-    {
-        let mut f = std::fs::OpenOptions::new()
-            .create(true).write(true).truncate(true)
-            .mode(0o644)
-            .open(&tmp)?;
-        f.write_all(content)?;
-        f.sync_all()?;
-    }
-    std::fs::rename(&tmp, p)?;
-    Ok(())
-}
-
-/// Lee /etc/machine-info, actualiza/inserta una clave, escribe atómico.
+/// Lee `/etc/machine-info`, actualiza/inserta una clave y reescribe el
+/// archivo de forma atómica.
 fn update_machine_info(key: &str, value: &str) -> std::io::Result<()> {
     let path = "/etc/machine-info";
     let existing = std::fs::read_to_string(path).unwrap_or_default();
-    let mut found = false;
-    let mut out = String::new();
-    for line in existing.lines() {
-        if let Some((k, _)) = line.split_once('=') {
-            if k.trim() == key {
-                out.push_str(&format!("{key}={value}\n"));
-                found = true;
-                continue;
-            }
-        }
-        out.push_str(line);
-        out.push('\n');
-    }
-    if !found {
-        out.push_str(&format!("{key}={value}\n"));
-    }
-    atomic_write(path, out.as_bytes())
+    atomic_write(path, merge_kv(&existing, key, value).as_bytes())
 }
 
 async fn announce_to_fractal() {

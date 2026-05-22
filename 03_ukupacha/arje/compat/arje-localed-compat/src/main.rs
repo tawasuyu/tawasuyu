@@ -5,6 +5,7 @@
 
 use arje_bus::{BusClient, BusRequest, BusResponse};
 use arje_card::Capability;
+use arje_compat_common::{atomic_write, conf_entries, merge_kv, parse_kv};
 use std::sync::Mutex;
 use tokio::signal::unix::{signal, SignalKind};
 use tracing::{info, warn};
@@ -57,10 +58,7 @@ impl LocaleManager {
             return v;
         }
         match std::fs::read_to_string("/etc/locale.conf") {
-            Ok(c) => c.lines()
-                .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
-                .map(|s| s.trim().to_string())
-                .collect(),
+            Ok(c) => conf_entries(&c),
             Err(_) => vec!["LANG=C.UTF-8".into()],
         }
     }
@@ -121,7 +119,14 @@ impl LocaleManager {
         _convert: bool,
         _interactive: bool,
     ) -> fdo::Result<()> {
-        info!(%keymap, %keymap_toggle, "SetVConsoleKeymap (stub)");
+        let existing = std::fs::read_to_string("/etc/vconsole.conf").unwrap_or_default();
+        let mut out = merge_kv(&existing, "KEYMAP", &keymap);
+        if !keymap_toggle.is_empty() {
+            out = merge_kv(&out, "KEYMAP_TOGGLE", &keymap_toggle);
+        }
+        atomic_write("/etc/vconsole.conf", out.as_bytes())
+            .map_err(|e| fdo::Error::Failed(format!("write /etc/vconsole.conf: {e}")))?;
+        info!(%keymap, %keymap_toggle, "SetVConsoleKeymap → /etc/vconsole.conf");
         Ok(())
     }
 
@@ -134,56 +139,53 @@ impl LocaleManager {
         _convert: bool,
         _interactive: bool,
     ) -> fdo::Result<()> {
-        info!(%layout, %model, %variant, %options, "SetX11Keyboard (stub)");
+        let conf = format_x11_keyboard_conf(&layout, &model, &variant, &options);
+        atomic_write("/etc/X11/xorg.conf.d/00-keyboard.conf", conf.as_bytes())
+            .map_err(|e| fdo::Error::Failed(format!("write 00-keyboard.conf: {e}")))?;
+        info!(%layout, %model, %variant, %options, "SetX11Keyboard → 00-keyboard.conf");
         Ok(())
     }
 }
 
-fn atomic_write(path: &str, content: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let p = std::path::Path::new(path);
-    if let Some(parent) = p.parent() { let _ = std::fs::create_dir_all(parent); }
-    let tmp = p.with_extension("tmp");
-    {
-        let mut f = std::fs::OpenOptions::new()
-            .create(true).write(true).truncate(true)
-            .mode(0o644)
-            .open(&tmp)?;
-        f.write_all(content)?;
-        f.sync_all()?;
+/// Lee el valor de un `Option "Clave" "valor"` de un snippet
+/// `xorg.conf.d` — el valor es la SEGUNDA cadena entre comillas.
+fn parse_xorg_option(content: &str, key: &str) -> Option<String> {
+    for line in content.lines() {
+        let t = line.trim();
+        if t.starts_with(&format!("Option \"{key}\"")) {
+            return t.split('"').nth(3).map(str::to_string);
+        }
     }
-    std::fs::rename(&tmp, p)?;
-    Ok(())
+    None
+}
+
+/// Genera el snippet `xorg.conf.d` que fija el teclado X11 — el mismo
+/// `InputClass` que escribe systemd-localed. Omite los campos vacíos.
+fn format_x11_keyboard_conf(layout: &str, model: &str, variant: &str, options: &str) -> String {
+    let mut s = String::from("# Generado por arje-localed-compat\n");
+    s.push_str("Section \"InputClass\"\n");
+    s.push_str("        Identifier \"system-keyboard\"\n");
+    s.push_str("        MatchIsKeyboard \"on\"\n");
+    for (opt, val) in [
+        ("XkbLayout", layout),
+        ("XkbModel", model),
+        ("XkbVariant", variant),
+        ("XkbOptions", options),
+    ] {
+        if !val.is_empty() {
+            s.push_str(&format!("        Option \"{opt}\" \"{val}\"\n"));
+        }
+    }
+    s.push_str("EndSection\n");
+    s
 }
 
 fn read_kv(path: &str, key: &str) -> Option<String> {
-    let content = std::fs::read_to_string(path).ok()?;
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with(&format!("Option \"{key}\"")) || trimmed.starts_with(key) {
-            // Best-effort parse: tomar lo que está entre comillas.
-            if let Some(start) = trimmed.find('"') {
-                let rest = &trimmed[start + 1..];
-                if let Some(end) = rest.find('"') {
-                    return Some(rest[..end].to_string());
-                }
-            }
-        }
-    }
-    None
+    parse_xorg_option(&std::fs::read_to_string(path).ok()?, key)
 }
 
 fn read_vconsole(key: &str) -> Option<String> {
-    let content = std::fs::read_to_string("/etc/vconsole.conf").ok()?;
-    for line in content.lines() {
-        if let Some((k, v)) = line.split_once('=') {
-            if k.trim() == key {
-                return Some(v.trim().trim_matches('"').to_string());
-            }
-        }
-    }
-    None
+    parse_kv(&std::fs::read_to_string("/etc/vconsole.conf").ok()?, key)
 }
 
 async fn announce_to_fractal() {
@@ -216,4 +218,27 @@ fn init_tracing() {
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("arje_localed_compat=info"));
     tracing_subscriber::fmt().with_env_filter(filter).with_target(true).init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_xorg_option_toma_la_segunda_cadena() {
+        let c = "Section \"InputClass\"\n        Option \"XkbLayout\" \"us\"\n        Option \"XkbVariant\" \"intl\"\nEndSection\n";
+        assert_eq!(parse_xorg_option(c, "XkbLayout").as_deref(), Some("us"));
+        assert_eq!(parse_xorg_option(c, "XkbVariant").as_deref(), Some("intl"));
+        assert_eq!(parse_xorg_option(c, "XkbModel"), None);
+    }
+
+    #[test]
+    fn format_x11_keyboard_conf_omite_los_campos_vacios() {
+        let conf = format_x11_keyboard_conf("us", "pc105", "", "");
+        assert!(conf.contains("Option \"XkbLayout\" \"us\""));
+        assert!(conf.contains("Option \"XkbModel\" \"pc105\""));
+        assert!(!conf.contains("XkbVariant"), "el variant vacío se omite");
+        assert!(conf.contains("Section \"InputClass\""));
+        assert!(conf.contains("EndSection"));
+    }
 }

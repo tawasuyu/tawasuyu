@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 arje-card = { path = "../../protocol/arje-card" }
 arje-bus = { path = "../../runtime/arje-bus" }
+arje-compat-common = { path = "../arje-compat-common" }
 nix = { workspace = true }
 libc = { workspace = true }
 anyhow = { workspace = true }
