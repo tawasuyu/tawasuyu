@@ -171,6 +171,8 @@ pub struct CanvasState {
     pub sphere_3d: bool,
     /// Orientación de la esfera 3D — la muta el drag.
     pub sphere_view: SphereView,
+    /// Si se dibujan las figuras de constelaciones en la esfera 3D.
+    pub show_constellations: bool,
     drag_jog: Option<JogDragState>,
     drag_pan: Option<PanDragState>,
     drag_sphere: Option<SphereDragState>,
@@ -258,6 +260,7 @@ impl Default for CanvasState {
             rectificacion: None,
             sphere_3d: false,
             sphere_view: SphereView::default(),
+            show_constellations: true,
             drag_jog: None,
             drag_pan: None,
             drag_sphere: None,
@@ -380,6 +383,12 @@ impl AstrologyCanvas {
     /// efecto visible cuando hay una carta cargada (`CanvasMode::Wheel`).
     pub fn toggle_sphere(&mut self, cx: &mut Context<'_, Self>) {
         self.state.sphere_3d = !self.state.sphere_3d;
+        cx.notify();
+    }
+
+    /// Enciende o apaga las figuras de constelaciones en la esfera 3D.
+    pub fn toggle_constellations(&mut self, cx: &mut Context<'_, Self>) {
+        self.state.show_constellations = !self.state.show_constellations;
         cx.notify();
     }
 
@@ -821,6 +830,10 @@ impl AstrologyCanvas {
                 self.toggle_sphere(cx);
                 return;
             }
+            "b" | "B" => {
+                self.toggle_constellations(cx);
+                return;
+            }
             _ => return,
         };
         self.toggle_layer(kind, cx);
@@ -914,6 +927,7 @@ impl Render for AstrologyCanvas {
                 &theme,
                 render,
                 self.state.sphere_view,
+                self.state.show_constellations,
                 self.state.view_scale,
                 self.state.view_pan_x,
                 self.state.view_pan_y,
@@ -965,6 +979,36 @@ impl Render for AstrologyCanvas {
                 )
         });
 
+        // Switch de constelaciones — solo en modo esfera 3D.
+        let constellations_toggle = (matches!(self.state.mode, CanvasMode::Wheel { .. })
+            && self.state.sphere_3d)
+            .then(|| {
+                let on = self.state.show_constellations;
+                let label = if on {
+                    "● Constelaciones"
+                } else {
+                    "○ Constelaciones"
+                };
+                div()
+                    .absolute()
+                    .top(px(44.0))
+                    .right(px(12.0))
+                    .px(px(11.0))
+                    .py(px(5.0))
+                    .rounded(px(6.0))
+                    .bg(theme.bg_panel_alt.clone())
+                    .border_1()
+                    .border_color(theme.border)
+                    .text_size(px(11.0))
+                    .text_color(if on { theme.fg_text } else { theme.fg_muted })
+                    .cursor_pointer()
+                    .child(label)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _w, cx| this.toggle_constellations(cx)),
+                    )
+            });
+
         // Depth field: capa absoluta detrás del body, ocupa todo el
         // canvas. Vignette radial — el centro queda claro y los
         // bordes se oscurecen, dando profundidad sin "ruido" de
@@ -1005,6 +1049,7 @@ impl Render for AstrologyCanvas {
                     .child(body),
             )
             .children(sphere_toggle)
+            .children(constellations_toggle)
     }
 }
 
@@ -1080,6 +1125,7 @@ fn render_sphere(
     theme: &Theme,
     render: &RenderModel,
     view: SphereView,
+    show_constellations: bool,
     view_scale: f32,
     view_pan_x: f32,
     view_pan_y: f32,
@@ -1093,6 +1139,7 @@ fn render_sphere(
         } else {
             Palette::light()
         },
+        show_constellations,
         ..Default::default()
     };
     let commands = compose_sphere(render, &view, &opts);

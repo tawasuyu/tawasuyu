@@ -313,15 +313,16 @@ fn add_sphere_shading(
                 cy: center,
                 r: rad * (0.95 - 0.95 * t),
                 stroke: None,
-                fill: Some(glow.with_alpha(0.04)),
+                fill: Some(glow.with_alpha(0.028)),
                 stroke_w: 0.0,
             },
         ));
     }
-    // Brillo especular desplazado hacia la luz.
+    // Brillo especular desplazado hacia la luz — tenue: la luminosidad
+    // viva la reparte la Vía Láctea, que sí gira con la esfera.
     let hx = center - rad * 0.34;
     let hy = center - rad * 0.34;
-    const HALO: usize = 7;
+    const HALO: usize = 6;
     for i in 0..HALO {
         let t = i as f32 / (HALO - 1) as f32;
         items.push((
@@ -331,7 +332,7 @@ fn add_sphere_shading(
                 cy: hy,
                 r: rad * 0.5 * (1.0 - t),
                 stroke: None,
-                fill: Some(highlight.with_alpha(0.05)),
+                fill: Some(highlight.with_alpha(0.018)),
                 stroke_w: 0.0,
             },
         ));
@@ -562,6 +563,10 @@ fn add_point_marker(
 /// estándar IAU que fija el plano de la Vía Láctea.
 const GAL_POLE_RA: f32 = 192.859;
 const GAL_POLE_DEC: f32 = 27.128;
+/// Centro galáctico (Sgr A*, J2000): AR 266.405°, Dec −28.936°. Hacia
+/// ahí la Vía Láctea es más brillante.
+const GAL_CENTER_RA: f32 = 266.405;
+const GAL_CENTER_DEC: f32 = -28.936;
 
 /// Hash entero → f32 en [0,1). Determinista (variante de splitmix32):
 /// la misma entrada da siempre el mismo valor, así el campo de
@@ -656,6 +661,46 @@ fn add_starfield(items: &mut Vec<(f32, DrawCommand)>, proj: &Projector, size: f3
             on_eq.z * cb + gpole.z * sb,
         );
         push_star(items, proj, size, pos, hash01(s * 5 + 3) * 0.55, hash01(s * 5 + 4));
+    }
+}
+
+/// El resplandor difuso de la Vía Láctea — una luminosidad repartida a
+/// lo largo del plano galáctico, no un brillo fijo a la pantalla. Gira
+/// con la esfera. Es más intensa hacia el centro galáctico (en
+/// Sagitario, como en el cielo real) y, si hay horizonte, se atenúa en
+/// la parte que queda bajo tierra esa noche — la franja como se ve
+/// desde la Tierra ese día.
+fn add_milky_way_glow(
+    items: &mut Vec<(f32, DrawCommand)>,
+    proj: &Projector,
+    eps: f32,
+    size: f32,
+    zenith: Option<Vec3>,
+) {
+    let gpole = rot_x(equatorial_dir(GAL_POLE_RA, GAL_POLE_DEC), eps);
+    let gcenter = rot_x(equatorial_dir(GAL_CENTER_RA, GAL_CENTER_DEC), eps);
+    let band = Rgba::opaque(0.78, 0.82, 0.96);
+    for p3 in great_circle_perp(gpole, 54) {
+        // Más brillo hacia el centro galáctico.
+        let toward = (p3.dot(gcenter) * 0.5 + 0.5).clamp(0.0, 1.0);
+        let bright = 0.28 + 0.72 * toward * toward;
+        // Atenuada bajo el horizonte local (no se ve esa noche).
+        let vis = match zenith {
+            Some(z) if p3.dot(z) < 0.0 => 0.40,
+            _ => 1.0,
+        };
+        let p = proj.project(p3);
+        items.push((
+            p.depth - 4.0,
+            DrawCommand::Circle {
+                cx: p.x,
+                cy: p.y,
+                r: size * 0.045,
+                stroke: None,
+                fill: Some(band.with_alpha(0.030 * bright * vis * depth_alpha(p.depth))),
+                stroke_w: 0.0,
+            },
+        ));
     }
 }
 
@@ -982,8 +1027,9 @@ pub fn compose_sphere(
     // --- Cuerpo de la esfera: sombreado con volumen ---
     add_sphere_shading(&mut items, pal, center, rad);
 
-    // --- Cielo de fondo: estrellas + Vía Láctea (solo tema oscuro) ---
+    // --- Cielo de fondo: Vía Láctea + estrellas (solo tema oscuro) ---
     if opts.show_sky && pal.is_dark {
+        add_milky_way_glow(&mut items, &proj, eps, size, zenith);
         add_starfield(&mut items, &proj, size, eps);
     }
 
