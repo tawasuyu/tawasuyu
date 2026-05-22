@@ -186,7 +186,7 @@ fn aspect_kind_id(k: EAspectKind) -> &'static str {
 /// (transits, sinastría) sin re-traducir.
 fn build_eternal_inputs(
     chart: &Chart,
-    offset_minutes: i64,
+    offset_seconds: i64,
 ) -> Result<(BirthData, ChartConfig, Observer), EngineError> {
     chart.validate()?;
     let bd = &chart.birth_data;
@@ -209,10 +209,12 @@ fn build_eternal_inputs(
     )
     .map_err(|e| EngineError::Eternal(format!("Instant::from_civil_local: {:?}", e)))?;
 
-    let instant = if offset_minutes == 0 {
+    // Microajuste temporal en SEGUNDOS — el rectificador automático
+    // barre la hora candidata con resolución de segundo.
+    let instant = if offset_seconds == 0 {
         base_instant
     } else {
-        let shifted_utc = base_instant.utc().add_seconds((offset_minutes as f64) * 60.0);
+        let shifted_utc = base_instant.utc().add_seconds(offset_seconds as f64);
         ESInstant::from_utc(shifted_utc)
     };
 
@@ -241,10 +243,10 @@ fn build_eternal_inputs(
 /// automáticamente la entrada.
 pub(crate) fn compute_natal_chart(
     chart: &Chart,
-    offset_minutes: i64,
+    offset_seconds: i64,
 ) -> Result<(Arc<NatalChart>, ChartConfig, Observer), EngineError> {
-    let (birth_e, config_e, observer) = build_eternal_inputs(chart, offset_minutes)?;
-    let key = crate::natal_cache::key_for(&chart.birth_data, &chart.config, offset_minutes);
+    let (birth_e, config_e, observer) = build_eternal_inputs(chart, offset_seconds)?;
+    let key = crate::natal_cache::key_for(&chart.birth_data, &chart.config, offset_seconds);
     if let Some(cached) = crate::natal_cache::get(key) {
         return Ok((cached, config_e, observer));
     }
@@ -265,7 +267,9 @@ pub fn compose(
     natal_options: &crate::NatalOptions,
 ) -> Result<RenderModel, EngineError> {
     let t0 = Instant::now();
-    let (natal, config_e, observer) = compute_natal_chart(chart, offset_minutes)?;
+    // `compute_natal_chart` trabaja en segundos; `compose` recibe el
+    // offset en minutos (el scrub del jog-dial, la API pública).
+    let (natal, config_e, observer) = compute_natal_chart(chart, offset_minutes * 60)?;
     let orb_table = build_orb_table(natal_options.orb_multiplier);
     let all_aspects = find_aspects(&natal, &orb_table);
     let aspects: Vec<Aspect> = all_aspects

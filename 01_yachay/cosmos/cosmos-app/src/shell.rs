@@ -1410,12 +1410,18 @@ impl Shell {
             .unwrap_or("naibod")
             .to_string();
 
-        // Ventana ±15 min, paso 1 min — el barrido GR estándar.
-        match cosmobiologia_engine::rectificar(&chart, &eventos, 15, 1, &key_gr) {
+        // Ventana ±15 min — dos pasadas (minuto grueso, segundo fino).
+        match cosmobiologia_engine::rectificar(&chart, &eventos, 15, &key_gr) {
             Ok(r) => {
+                // Offset en segundos → texto «±Xm Ys».
+                let seg = r.mejor_offset_segundos;
+                let signo = if seg < 0 { "-" } else { "+" };
+                let abs = seg.abs();
                 let resumen = format!(
-                    "{:+} min · puntaje {:.2}",
-                    r.mejor_offset_minutos, r.mejor_puntaje
+                    "{signo}{}m {:02}s · error {:.2}a",
+                    abs / 60,
+                    abs % 60,
+                    r.mejor_puntaje
                 );
                 self.panel.update(cx, |p, cx| {
                     p.set_string("primary_directions", "resultado", Some(resumen), cx)

@@ -2064,24 +2064,28 @@ fn render_rectify_profile(
     let rango = (max_p - min_p).max(1e-3);
     let primero = r.perfil.first().map(|&(o, _)| o).unwrap_or(0);
     let ultimo = r.perfil.last().map(|&(o, _)| o).unwrap_or(0);
+    // El perfil va en segundos a paso de minuto; el mejor offset es
+    // fino (segundos). La barra resaltada es la del minuto más cercano.
+    let mejor_barra = (r.mejor_offset_segundos as f64 / 60.0).round() as i64 * 60;
 
     let mut bars = div().flex().flex_row().items_end().gap(px(2.0));
     for &(offset, puntaje) in &r.perfil {
         // Fitness: el mejor candidato (puntaje mínimo) → barra más alta.
         let fitness = ((max_p - puntaje) / rango).clamp(0.0, 1.0);
         let bar_h = (fitness * BAR_AREA_H).max(2.0);
-        let es_mejor = offset == r.mejor_offset_minutos;
+        let es_mejor = offset == mejor_barra;
         let color = if es_mejor {
             palette.angle_highlight
         } else {
             with_alpha(palette.angle_highlight, 0.25 + fitness * 0.45)
         };
         // Etiquetar sólo los hitos: el mejor, el 0 y los dos extremos.
+        // El offset va en segundos; la etiqueta lo muestra en minutos.
         let label = if es_mejor || offset == 0 || offset == primero || offset == ultimo {
             if offset == 0 {
                 "0".to_string()
             } else {
-                format!("{offset:+}")
+                format!("{:+}", offset / 60)
             }
         } else {
             String::new()
@@ -2113,16 +2117,22 @@ fn render_rectify_profile(
             )
             .on_click({
                 // Un clic lleva la carta a esta hora candidata reusando
-                // el scrub de tiempo del jog-dial (`TimeOffsetChanged`).
+                // el scrub de tiempo del jog-dial (`TimeOffsetChanged`,
+                // en minutos — el offset del perfil va en segundos).
                 let entity = entity.clone();
                 move |_: &gpui::ClickEvent, _w, cx: &mut gpui::App| {
                     entity.update(cx, |_this, cx| {
-                        cx.emit(CanvasEvent::TimeOffsetChanged(offset));
+                        cx.emit(CanvasEvent::TimeOffsetChanged(offset / 60));
                     });
                 }
             });
         bars = bars.child(column);
     }
+
+    // La hora rectificada, fina: «±Xm Ys».
+    let seg = r.mejor_offset_segundos;
+    let signo = if seg < 0 { "-" } else { "+" };
+    let abs = seg.abs();
 
     div()
         .flex()
@@ -2134,8 +2144,11 @@ fn render_rectify_profile(
                 .text_size(px(10.0))
                 .text_color(theme.fg_muted)
                 .child(SharedString::from(format!(
-                    "Rectificación · hora {:+} min · puntaje {:.2} · el valle es la hora",
-                    r.mejor_offset_minutos, r.mejor_puntaje
+                    "Rectificación · hora {}{}m {:02}s · error {:.2}a · el valle es la hora",
+                    signo,
+                    abs / 60,
+                    abs % 60,
+                    r.mejor_puntaje
                 ))),
         )
         .child(bars)

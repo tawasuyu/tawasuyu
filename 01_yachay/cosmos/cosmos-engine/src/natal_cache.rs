@@ -9,7 +9,7 @@
 //! Este cache de 8 entradas es suficiente: el usuario rara vez tiene
 //! más de 2 cartas activas a la vez (natal + partner) y el LRU bota la
 //! más vieja cuando se llena. La clave es el **contenido** de
-//! `StoredBirthData + StoredChartConfig + offset_minutes`, así que
+//! `StoredBirthData + StoredChartConfig + offset_seconds`, así que
 //! editar una carta invalida automáticamente su entrada.
 
 use std::collections::hash_map::DefaultHasher;
@@ -70,7 +70,7 @@ fn cache() -> &'static Mutex<Cache> {
 pub fn key_for(
     birth: &StoredBirthData,
     config: &StoredChartConfig,
-    offset_minutes: i64,
+    offset_seconds: i64,
 ) -> u64 {
     let mut h = DefaultHasher::new();
     // Birth data — fecha/hora/lugar.
@@ -95,8 +95,8 @@ pub fn key_for(
     config.include_lilith.hash(&mut h);
     config.include_main_belt_asteroids.hash(&mut h);
     config.include_fixed_stars.hash(&mut h);
-    // Offset temporal (rectificación rápida).
-    offset_minutes.hash(&mut h);
+    // Offset temporal en segundos (microajuste de rectificación).
+    offset_seconds.hash(&mut h);
     h.finish()
 }
 
