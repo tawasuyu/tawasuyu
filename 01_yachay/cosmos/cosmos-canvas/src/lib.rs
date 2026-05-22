@@ -1797,7 +1797,7 @@ fn render_wheel(
     // la hora de nacimiento que mejor explica los eventos conocidos.
     if let Some(r) = rectificacion {
         if !r.perfil.is_empty() {
-            footer = footer.child(render_rectify_profile(theme, palette, r));
+            footer = footer.child(render_rectify_profile(theme, palette, r, entity.clone()));
         }
     }
 
@@ -2046,10 +2046,14 @@ fn render_harmonic_spectrum(
 /// de nacimiento candidata; su altura crece cuanto MEJOR explica los
 /// eventos conocidos (menor puntaje de convergencia). La barra más alta
 /// —el valle del puntaje— es la hora rectificada, y va resaltada.
+///
+/// Cada barra es clicable: un clic lleva la carta a esa hora candidata
+/// (emite `TimeOffsetChanged`), para inspeccionarla sobre el wheel.
 fn render_rectify_profile(
     theme: &Theme,
     palette: &AstroPalette,
     r: &Rectificacion,
+    entity: gpui::Entity<AstrologyCanvas>,
 ) -> gpui::Div {
     const BAR_AREA_H: f32 = 46.0;
 
@@ -2083,10 +2087,12 @@ fn render_rectify_profile(
             String::new()
         };
         let column = div()
+            .id(SharedString::from(format!("tts-rectify-bar-{offset}")))
             .flex()
             .flex_col()
             .items_center()
             .gap(px(2.0))
+            .cursor_pointer()
             .child(
                 div()
                     .h(px(BAR_AREA_H))
@@ -2104,7 +2110,17 @@ fn render_rectify_profile(
                         theme.fg_disabled
                     })
                     .child(SharedString::from(label)),
-            );
+            )
+            .on_click({
+                // Un clic lleva la carta a esta hora candidata reusando
+                // el scrub de tiempo del jog-dial (`TimeOffsetChanged`).
+                let entity = entity.clone();
+                move |_: &gpui::ClickEvent, _w, cx: &mut gpui::App| {
+                    entity.update(cx, |_this, cx| {
+                        cx.emit(CanvasEvent::TimeOffsetChanged(offset));
+                    });
+                }
+            });
         bars = bars.child(column);
     }
 
