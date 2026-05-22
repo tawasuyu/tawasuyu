@@ -36,8 +36,9 @@ pub use cosmobiologia_model::{Chart, ChartId, ChartKind};
 // (`cosmobiologia_engine::Layer`, etc.) sin tener que cambiar
 // imports en el shell, canvas, modules, tree, panel...
 pub use cosmobiologia_render::{
-    compute_gr_triggers, AspectSummary, Geometry, Glyph, GrDirection, GrTrigger, Layer, LayerKind,
-    LineSeg, OverlayMeta, PointMark, RenderModel, UranianGroup, OUTER_RING_MODULES,
+    apply_harmonic, compute_gr_triggers, AspectSummary, Geometry, Glyph, GrDirection, GrTrigger,
+    Layer, LayerKind, LineSeg, OverlayMeta, PointMark, RenderModel, UranianGroup,
+    OUTER_RING_MODULES,
 };
 
 // `Chart` reexportado arriba es lo que `PipelineRequest::Synastry`
@@ -191,6 +192,10 @@ pub struct NatalOptions {
     /// (domicilio +, exaltación ·, exilio −, caída *). El canvas lo
     /// renderea como sufijo del glifo.
     pub show_dignities: bool,
+    /// Orden de la carta armónica. `1` = carta natal sin transformar;
+    /// `N > 1` re-renderiza los cuerpos en `(longitud · N) mod 360` y
+    /// recomputa los aspectos sobre esas posiciones.
+    pub harmonic: u32,
 }
 
 impl Default for NatalOptions {
@@ -200,6 +205,7 @@ impl Default for NatalOptions {
             show_minors: false,
             orb_multiplier: 1.0,
             show_dignities: false,
+            harmonic: 1,
         }
     }
 }
@@ -488,5 +494,43 @@ mod tests {
                 assert!(t.orb_deg <= 5.0 / 60.0 + 1e-3, "evento con orbe ancho");
             }
         }
+    }
+
+    /// La carta armónica debe mover los cuerpos respecto de la natal y
+    /// anotar el orden en el título.
+    #[cfg(feature = "eternal-bridge")]
+    #[test]
+    fn harmonic_chart_transforms_bodies_and_title() {
+        let chart = sample_chart();
+        let natal = compose_with_options(&chart, 0, &[], &NatalOptions::default())
+            .expect("compose natal");
+        let h5 = compose_with_options(
+            &chart,
+            0,
+            &[],
+            &NatalOptions {
+                harmonic: 5,
+                ..NatalOptions::default()
+            },
+        )
+        .expect("compose H5");
+
+        assert!(h5.title.ends_with("· H5"), "título anota el armónico");
+
+        let pick = |m: &RenderModel| -> Vec<f32> {
+            m.layers
+                .iter()
+                .find(|l| matches!(l.kind, LayerKind::Bodies))
+                .map(|l| l.glyphs.iter().map(|g| g.deg).collect())
+                .unwrap_or_default()
+        };
+        let natal_degs = pick(&natal);
+        let h5_degs = pick(&h5);
+        assert_eq!(natal_degs.len(), h5_degs.len());
+        let moved = natal_degs
+            .iter()
+            .zip(&h5_degs)
+            .any(|(a, b)| (a - b).abs() > 0.01);
+        assert!(moved, "el armónico debe mover los cuerpos");
     }
 }

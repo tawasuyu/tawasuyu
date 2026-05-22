@@ -282,6 +282,12 @@ pub fn compose(
     }
     populate_natal_aspect_summary(&aspects, &mut render);
 
+    // Carta armónica: re-renderiza los cuerpos natales en su armónico
+    // de orden N y recomputa sus aspectos. Se aplica antes de los
+    // overlays — éstos quedan en coordenadas natales (la armónica es
+    // un análisis de la carta natal pura).
+    crate::apply_harmonic(&mut render, natal_options.harmonic);
+
     for req in requests {
         match req {
             crate::PipelineRequest::Transit => {

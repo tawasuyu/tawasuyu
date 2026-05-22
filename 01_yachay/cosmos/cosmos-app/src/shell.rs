@@ -945,6 +945,7 @@ impl Shell {
             show_minors: read_bool("aspect_minors", false),
             orb_multiplier: read_f64("orb_multiplier", 1.0),
             show_dignities: read_bool("show_dignities", false),
+            harmonic: read_f64("harmonic", 1.0).round().clamp(1.0, 64.0) as u32,
         }
     }
 
