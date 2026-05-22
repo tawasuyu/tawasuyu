@@ -86,6 +86,9 @@ pub struct SphereOpts {
     /// El horizonte local, el cénit del observador y el meridiano.
     /// Necesita `RenderModel::geo_latitude_deg`.
     pub show_horizon: bool,
+    /// El cielo de fondo: campo de estrellas + Vía Láctea. Solo se
+    /// dibuja en tema oscuro (en papel rompería la metáfora de imprenta).
+    pub show_sky: bool,
 }
 
 impl Default for SphereOpts {
@@ -99,6 +102,7 @@ impl Default for SphereOpts {
             show_bodies: true,
             show_signs: true,
             show_horizon: true,
+            show_sky: true,
         }
     }
 }
@@ -447,6 +451,109 @@ fn add_point_marker(
     ));
 }
 
+// --- Cielo de fondo: estrellas decorativas + Vía Láctea --------------
+
+/// Polo norte galáctico (J2000): AR 192.859°, Dec +27.128° — constante
+/// estándar IAU que fija el plano de la Vía Láctea.
+const GAL_POLE_RA: f32 = 192.859;
+const GAL_POLE_DEC: f32 = 27.128;
+
+/// Hash entero → f32 en [0,1). Determinista (variante de splitmix32):
+/// la misma entrada da siempre el mismo valor, así el campo de
+/// estrellas no titila ni salta entre frames.
+fn hash01(n: u32) -> f32 {
+    let mut x = n.wrapping_mul(0x9E37_79B9);
+    x ^= x >> 16;
+    x = x.wrapping_mul(0x85EB_CA6B);
+    x ^= x >> 13;
+    x = x.wrapping_mul(0xC2B2_AE35);
+    x ^= x >> 16;
+    (x as f32) / (u32::MAX as f32)
+}
+
+/// Punto uniforme sobre la esfera unidad a partir de dos uniformes.
+fn sphere_point(u1: f32, u2: f32) -> Vec3 {
+    let z = 2.0 * u1 - 1.0;
+    let rho = (1.0 - z * z).max(0.0).sqrt();
+    let theta = std::f32::consts::TAU * u2;
+    Vec3::new(rho * theta.cos(), rho * theta.sin(), z)
+}
+
+/// Vector unitario de una dirección ecuatorial (AR, Dec en grados).
+fn equatorial_dir(ra_deg: f32, dec_deg: f32) -> Vec3 {
+    let (sr, cr) = ra_deg.to_radians().sin_cos();
+    let (sd, cd) = dec_deg.to_radians().sin_cos();
+    Vec3::new(cd * cr, cd * sr, sd)
+}
+
+/// Empuja una estrella: un disco diminuto con brillo y un leve tinte
+/// (azulado o cálido). Va detrás de la rejilla pero delante del
+/// sombreado — un fondo de planetario.
+fn push_star(
+    items: &mut Vec<(f32, DrawCommand)>,
+    proj: &Projector,
+    size: f32,
+    pos: Vec3,
+    brightness: f32,
+    tint: f32,
+) {
+    let p = proj.project(pos);
+    let bright = brightness * brightness; // sesga hacia las tenues
+    let r = size * (0.0011 + 0.0026 * bright);
+    let alpha = (0.20 + 0.62 * bright) * depth_alpha(p.depth);
+    let col = if tint < 0.22 {
+        Rgba { r: 0.74, g: 0.81, b: 1.0, a: alpha }
+    } else if tint > 0.86 {
+        Rgba { r: 1.0, g: 0.86, b: 0.72, a: alpha }
+    } else {
+        Rgba { r: 0.95, g: 0.96, b: 1.0, a: alpha }
+    };
+    items.push((
+        p.depth - 3.0,
+        DrawCommand::Circle {
+            cx: p.x,
+            cy: p.y,
+            r,
+            stroke: None,
+            fill: Some(col),
+            stroke_w: 0.0,
+        },
+    ));
+}
+
+/// El cielo de fondo: un campo de estrellas isótropo —decorativo, no un
+/// catálogo real— más una sobredensidad de estrellas tenues a lo largo
+/// del plano galáctico, que dibuja la Vía Láctea. Ambos giran con la
+/// esfera, así que delatan su rotación de un vistazo.
+fn add_starfield(items: &mut Vec<(f32, DrawCommand)>, proj: &Projector, size: f32, eps: f32) {
+    const FONDO: u32 = 210;
+    for i in 0..FONDO {
+        let pos = sphere_point(hash01(i * 3), hash01(i * 3 + 1));
+        push_star(items, proj, size, pos, hash01(i * 3 + 2), hash01(i * 7 + 1));
+    }
+    // Vía Láctea — el plano galáctico ubicado con el polo galáctico real.
+    let gpole = rot_x(equatorial_dir(GAL_POLE_RA, GAL_POLE_DEC), eps);
+    let geq = great_circle_perp(gpole, 256);
+    const VIA: u32 = 240;
+    for i in 0..VIA {
+        let s = 9001 + i;
+        let idx = (hash01(s * 5) * geq.len() as f32) as usize % geq.len();
+        let on_eq = geq[idx];
+        // Latitud galáctica pequeña, concentrada cerca de 0 — producto
+        // de dos uniformes centrados → densa en el plano.
+        let u = hash01(s * 5 + 1) - 0.5;
+        let v = hash01(s * 5 + 2) - 0.5;
+        let b = (u * v * 4.0 * 13.0).to_radians();
+        let (sb, cb) = b.sin_cos();
+        let pos = Vec3::new(
+            on_eq.x * cb + gpole.x * sb,
+            on_eq.y * cb + gpole.y * sb,
+            on_eq.z * cb + gpole.z * sb,
+        );
+        push_star(items, proj, size, pos, hash01(s * 5 + 3) * 0.55, hash01(s * 5 + 4));
+    }
+}
+
 // =====================================================================
 // Composición
 // =====================================================================
@@ -479,6 +586,11 @@ pub fn compose_sphere(
 
     // --- Cuerpo de la esfera: sombreado con volumen ---
     add_sphere_shading(&mut items, pal, center, rad);
+
+    // --- Cielo de fondo: estrellas + Vía Láctea (solo tema oscuro) ---
+    if opts.show_sky && pal.is_dark {
+        add_starfield(&mut items, &proj, size, eps);
+    }
 
     // --- Rejilla: meridianos + paralelos de la eclíptica ---
     if opts.show_grid {
@@ -856,6 +968,30 @@ mod tests {
                 lat.to_radians().sin(),
             );
         }
+    }
+
+    #[test]
+    fn el_cielo_dibuja_un_campo_de_estrellas() {
+        let modelo = modelo_demo();
+        let con = compose_sphere(
+            &modelo,
+            &SphereView::default(),
+            &SphereOpts { show_sky: true, ..Default::default() },
+        );
+        let sin = compose_sphere(
+            &modelo,
+            &SphereView::default(),
+            &SphereOpts { show_sky: false, ..Default::default() },
+        );
+        let discos = |c: &[DrawCommand]| {
+            c.iter().filter(|d| matches!(d, DrawCommand::Circle { .. })).count()
+        };
+        assert!(
+            discos(&con) > discos(&sin) + 300,
+            "el cielo agrega cientos de estrellas: {} vs {}",
+            discos(&con),
+            discos(&sin),
+        );
     }
 
     #[test]
