@@ -29,18 +29,15 @@ use wasmi::{Caller, Error, Extern, Linker, Memory, StoreLimits};
 
 use crate::almacen::Hash;
 use crate::async_system::teclado::CanalTeclado;
-use crate::grafico::RegionPantalla;
 
 /// El estado del host adscrito al `Store` de una aplicacion: cuanto necesita
 /// una capacidad para servir a ESA app y a ninguna otra — su region de pantalla,
 /// su canal de teclado y sus cuotas de recursos. Dos apps jamas comparten nada.
 pub(crate) struct ContextoCapacidades {
-    /// El marco que el compositor (Fase 8) asigno a la app — el rectangulo de
-    /// pantalla donde vive. El kernel centra en el el fotograma de la app.
-    pub(crate) marco: RegionPantalla,
     /// El tamaño natural del lienzo de la app, en pixeles. El fotograma que
     /// entrega `sys_render_frame` mide exactamente `natural_ancho × natural_alto`;
-    /// el compositor lo coloca, sin deformarlo, dentro del `marco`.
+    /// el compositor lo cachea y lo compone, sin deformarlo, en el marco que el
+    /// teselado le asigno.
     pub(crate) natural_ancho: usize,
     pub(crate) natural_alto: usize,
     /// El canal de teclado propio de la aplicacion.
@@ -48,9 +45,9 @@ pub(crate) struct ContextoCapacidades {
     /// El techo de recursos de la aplicacion — hoy, su memoria lineal maxima.
     /// `wasmi` lo consulta en cada `memory.grow` via `Store::limiter`.
     pub(crate) limites: StoreLimits,
-    /// El indice de esta app en el Manifiesto de Genesis — su identidad. Las
-    /// capacidades de estado (Fase 7c) lo usan para hallar la `EntradaApp`
-    /// correcta: cada app persiste en SU ranura, jamas en la de otra.
+    /// El indice de esta app — su identidad. La usan las capacidades de estado
+    /// (Fase 7c) para hallar su `EntradaApp` del manifiesto, y el compositor
+    /// (Fase 8) para hallar su ventana en el escritorio: jamas la de otra.
     pub(crate) indice_app: usize,
 }
 
@@ -98,7 +95,7 @@ pub(crate) fn enlazar_capacidades(
         "renaser",
         "sys_render_frame",
         |caller: Caller<'_, ContextoCapacidades>, ptr: u32, len: u32| -> Result<(), Error> {
-            let marco = caller.data().marco;
+            let indice = caller.data().indice_app;
             let nat_ancho = caller.data().natural_ancho;
             let nat_alto = caller.data().natural_alto;
 
@@ -124,9 +121,10 @@ pub(crate) fn enlazar_capacidades(
                 "WASM :: sys_render_frame desbordo la memoria lineal del modulo",
             )?;
 
-            // Limites verificados: el compositor centra el fotograma natural
-            // de la app dentro del marco que el teselado le asigno.
-            crate::volcar_marco_wasm(marco, nat_ancho, nat_alto, fotograma);
+            // Limites verificados: el compositor cachea el fotograma —para
+            // poder recomponerlo si el escritorio se re-tesela— y lo compone,
+            // centrado, en el marco que el teselado asigno a esta app.
+            crate::compositor::presentar_fotograma(indice, fotograma);
             Ok(())
         },
     )?;

@@ -1,15 +1,27 @@
 // =============================================================================
 //  renaser :: async_system/teclado.rs — el canal de scancodes del teclado
 // -----------------------------------------------------------------------------
-//  El manejador de IRQ1 es un mero PRODUCTOR: deposita cada scancode en colas
+//  El manejador de IRQ1 es el PRODUCTOR: deposita cada scancode en colas
 //  lock-free, seguras frente a interrupciones. Los consumidores —las apps WASM,
 //  via la capacidad `sys_get_scancode`— las drenan sin bloquear.
 //
-//  FASE 5 :: con varias apps concurrentes, una sola cola compartida no sirve:
-//  la primera en sondear le robaria la pulsacion a las demas. Por eso cada
-//  aplicacion abre su PROPIO canal y la IRQ1 DIFUNDE cada scancode a todos —
-//  cada app recibe su copia integra del flujo de entrada.
+//  FASE 5 :: cada app abre su PROPIO canal; la primera en sondear no le roba la
+//  pulsacion a las demas.
+//
+//  FASE 8c :: el teclado deja de DIFUNDIR a ciegas. Ahora discrimina:
+//
+//    * La tecla Alt es el MODIFICADOR del sistema. Con Alt pulsada, los make
+//      codes son MANDOS del compositor (ciclar el teselado, mover el foco): se
+//      consumen aqui, jamas llegan a una app.
+//    * Una tecla ordinaria se entrega SOLO a la app ENFOCADA — la que el
+//      compositor senala. El censo de canales se indexa por el `indice_app`,
+//      de modo que el foco —un atomico— elija el canal exacto.
+//
+//  Todo esto corre en contexto de IRQ y NO bloquea ningun cerrojo cooperativo:
+//  el modificador es un atomico, los mandos van a una cola lock-free.
 // =============================================================================
+
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -18,16 +30,33 @@ use crossbeam_queue::ArrayQueue;
 use spin::{Mutex, Once};
 use x86_64::instructions::interrupts;
 
+use crate::compositor::{self, Mando};
+
 /// Capacidad de la cola de scancodes de cada app. Holgada: nadie teclea tanto.
 const CAPACIDAD_COLA: usize = 256;
+
+// --- Scancodes del set 1 que el teclado interpreta como mandos del sistema. ---
+/// Alt izquierda — make (pulsada) y break (soltada).
+const ALT_MAKE: u8 = 0x38;
+const ALT_BREAK: u8 = 0xB8;
+/// Barra espaciadora — `Alt + Espacio` cicla el modo de teselado.
+const ESPACIO: u8 = 0x39;
+/// Tecla J — `Alt + J` mueve el foco a la ventana siguiente.
+const TECLA_J: u8 = 0x24;
+/// Tecla K — `Alt + K` mueve el foco a la ventana anterior.
+const TECLA_K: u8 = 0x25;
 
 /// Un canal de teclado: la cola lock-free de scancodes de UNA aplicacion.
 pub type CanalTeclado = Arc<ArrayQueue<u8>>;
 
-/// Censo de canales — uno por aplicacion del userspace. El manejador de IRQ1
-/// difunde cada scancode a TODOS: asi cada app recibe su propia copia del
-/// evento, sin que una le arrebate la pulsacion a otra.
-static CANALES: Once<Mutex<Vec<CanalTeclado>>> = Once::new();
+/// Censo de canales, INDEXADO por el `indice_app` de cada aplicacion. Una
+/// ranura `None` es una app que no abrio canal o que fue desalojada. El
+/// indexado estable permite que el foco —un simple indice— elija el canal.
+static CANALES: Once<Mutex<Vec<Option<CanalTeclado>>>> = Once::new();
+
+/// ¿Esta la tecla Alt pulsada? El modificador de los mandos del sistema. Lo
+/// escribe y lo lee SOLO el manejador de IRQ1 — un atomico, sin cerrojo.
+static ALT_PULSADO: AtomicBool = AtomicBool::new(false);
 
 /// Funda el censo de canales del teclado. Requiere el heap ya activo; debe
 /// invocarse una sola vez, antes de habilitar las interrupciones.
@@ -35,40 +64,79 @@ pub fn init() {
     CANALES.call_once(|| Mutex::new(Vec::new()));
 }
 
-/// Crea un canal de teclado nuevo, AUN sin inscribir en la difusion. Cada
+/// Crea un canal de teclado nuevo, AUN sin inscribir en el censo. Cada
 /// aplicacion reclama el suyo al empezar a cargarse.
 pub fn crear_canal() -> CanalTeclado {
     Arc::new(ArrayQueue::new(CAPACIDAD_COLA))
 }
 
-/// Inscribe un canal en el censo de difusion. Desde este instante, la IRQ1
-/// empuja cada scancode tambien a este canal. Se invoca al final de la carga
-/// de una app: una carga fallida no debe dejar canales huerfanos.
-pub fn registrar_canal(canal: &CanalTeclado) {
+/// Inscribe el canal de la app `indice` en el censo. Desde este instante, una
+/// tecla ordinaria llega a esta app cuando tiene el foco. Se invoca al final de
+/// la carga de una app: una carga fallida no debe dejar canales huerfanos.
+pub fn registrar_canal(indice: usize, canal: &CanalTeclado) {
     if let Some(censo) = CANALES.get() {
         // El cerrojo lo disputa el manejador de IRQ1: tomarlo con las
         // interrupciones acalladas hace imposible el interbloqueo.
-        interrupts::without_interrupts(|| censo.lock().push(canal.clone()));
-    }
-}
-
-/// Da de baja un canal del censo de difusion. Lo invoca el `Drop` de una
-/// aplicacion desalojada: la IRQ1 deja, de inmediato, de empujarle scancodes.
-pub fn cerrar_canal(canal: &CanalTeclado) {
-    if let Some(censo) = CANALES.get() {
         interrupts::without_interrupts(|| {
-            censo.lock().retain(|inscrito| !Arc::ptr_eq(inscrito, canal));
+            let mut censo = censo.lock();
+            while censo.len() <= indice {
+                censo.push(None);
+            }
+            censo[indice] = Some(canal.clone());
         });
     }
 }
 
-/// Punto de entrada DESDE el manejador de IRQ1. DIFUNDE el scancode a cuantos
-/// canales haya abiertos. Deliberadamente breve y libre de panicos: corre en
-/// contexto de interrupcion.
-pub fn recibir_scancode(scancode: u8) {
+/// Da de baja el canal de la app `indice`. Lo invoca el `Drop` de una
+/// aplicacion desalojada: la ranura queda en `None` y la IRQ deja de enrutarle
+/// teclas, sin desplazar los indices de las demas.
+pub fn cerrar_canal(indice: usize) {
     if let Some(censo) = CANALES.get() {
-        for canal in censo.lock().iter() {
-            // Si un canal desborda, se descarta el scancode en silencio: mas
+        interrupts::without_interrupts(|| {
+            let mut censo = censo.lock();
+            if let Some(ranura) = censo.get_mut(indice) {
+                *ranura = None;
+            }
+        });
+    }
+}
+
+/// Punto de entrada DESDE el manejador de IRQ1. Rastrea el modificador Alt,
+/// intercepta los mandos del sistema y enruta la tecla ordinaria a la app
+/// enfocada. Deliberadamente breve y libre de panicos: corre en contexto de
+/// interrupcion y no bloquea ningun cerrojo cooperativo.
+pub fn recibir_scancode(scancode: u8) {
+    // 1. Rastrear la tecla Alt — el modificador de los mandos del sistema. Se
+    //    consume: el modificador nunca se difunde a una app.
+    match scancode {
+        ALT_MAKE => {
+            ALT_PULSADO.store(true, Ordering::Relaxed);
+            return;
+        }
+        ALT_BREAK => {
+            ALT_PULSADO.store(false, Ordering::Relaxed);
+            return;
+        }
+        _ => {}
+    }
+
+    // 2. Con Alt pulsada, los make codes son MANDOS del compositor. Se traducen
+    //    a una orden en la cola lock-free y se consumen — jamas llegan a una app.
+    if ALT_PULSADO.load(Ordering::Relaxed) {
+        match scancode {
+            ESPACIO => compositor::solicitar(Mando::CiclarLayout),
+            TECLA_J => compositor::solicitar(Mando::FocoSiguiente),
+            TECLA_K => compositor::solicitar(Mando::FocoAnterior),
+            _ => {}
+        }
+        return;
+    }
+
+    // 3. Tecla ordinaria: se entrega SOLO a la app que tiene el foco. El foco
+    //    es un indice atomico; el censo, un vector indexado por `indice_app`.
+    if let Some(censo) = CANALES.get() {
+        if let Some(Some(canal)) = censo.lock().get(compositor::foco()) {
+            // Si el canal desborda, se descarta el scancode en silencio: mas
             // vale perder una tecla que colapsar dentro de una interrupcion.
             let _ = canal.push(scancode);
         }

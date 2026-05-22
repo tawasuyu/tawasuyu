@@ -130,6 +130,7 @@ impl Consola {
         nat_ancho: usize,
         nat_alto: usize,
         datos: &[u8],
+        enfocada: bool,
     ) {
         if nat_ancho == 0 || nat_alto == 0 {
             return;
@@ -165,15 +166,45 @@ impl Consola {
             self.lienzo.pixeles[y * self.lienzo.ancho + x] =
                 codificar(self.lienzo.formato, color);
         }
+        // El borde del compositor: delata, de un vistazo, quien tiene el foco.
+        self.dibujar_borde(marco, enfocada);
         self.presentar();
     }
 
-    /// Inunda una region entera con un color plano y la presenta. Es la baliza
-    /// de desalojo: cuando una aplicacion falla, su marco se tatua de purpura.
-    fn pintar_region(&mut self, region: RegionPantalla, color: Color) {
+    /// Inunda una region entera con un color plano —la baliza de desalojo: una
+    /// app que falla tatua su marco de purpura— y le traza su borde de foco.
+    fn pintar_region(&mut self, region: RegionPantalla, color: Color, enfocada: bool) {
         self.lienzo
             .rellenar_rect(region.x, region.y, region.ancho, region.alto, color);
+        self.dibujar_borde(region, enfocada);
         self.presentar();
+    }
+
+    /// Traza un borde de 3 px alrededor de un marco: indigo brillante si la
+    /// ventana tiene el foco del compositor, gris mate si no (Fase 8c).
+    fn dibujar_borde(&mut self, marco: RegionPantalla, enfocada: bool) {
+        const GROSOR: usize = 3;
+        let color = if enfocada { Color::FOCO } else { Color::SIN_FOCO };
+        // Lados superior e inferior.
+        self.lienzo
+            .rellenar_rect(marco.x, marco.y, marco.ancho, GROSOR, color);
+        self.lienzo.rellenar_rect(
+            marco.x,
+            marco.y + marco.alto.saturating_sub(GROSOR),
+            marco.ancho,
+            GROSOR,
+            color,
+        );
+        // Lados izquierdo y derecho.
+        self.lienzo
+            .rellenar_rect(marco.x, marco.y, GROSOR, marco.alto, color);
+        self.lienzo.rellenar_rect(
+            marco.x + marco.ancho.saturating_sub(GROSOR),
+            marco.y,
+            GROSOR,
+            marco.alto,
+            color,
+        );
     }
 
     /// Pinta el escenario del compositor (Fase 8): inunda el area de apps con
@@ -205,36 +236,38 @@ impl Consola {
 /// asincronas y las capacidades del userspace escriben en ella tras su `Mutex`.
 pub(crate) static CONSOLA: Once<Mutex<Consola>> = Once::new();
 
-/// Puerta del kernel para la capacidad `sys_render_frame` del userspace WASM:
-/// compone sobre la consola global un fotograma —cuyos limites el host ya
-/// verifico matematicamente contra la memoria lineal del modulo— centrado en
-/// el marco que el compositor asigno a esa aplicacion. `nat_ancho`/`nat_alto`
-/// son el tamaño natural del lienzo de la app.
-pub(crate) fn volcar_marco_wasm(
+/// Compone un fotograma del userspace —ya cacheado por el compositor— centrado
+/// en su marco teselado, con su borde de foco. La invoca `compositor` al
+/// recibir un `sys_render_frame` y al recomponer el escritorio tras un mando.
+pub(crate) fn volcar_marco(
     marco: RegionPantalla,
     nat_ancho: usize,
     nat_alto: usize,
     datos: &[u8],
+    enfocada: bool,
 ) {
     if let Some(consola) = CONSOLA.get() {
-        consola.lock().volcar_marco(marco, nat_ancho, nat_alto, datos);
+        consola
+            .lock()
+            .volcar_marco(marco, nat_ancho, nat_alto, datos, enfocada);
     }
 }
 
 /// Pinta el escenario del compositor (Fase 8): el area de apps y, sobre ella,
-/// cada marco teselado. Se invoca una vez, en el arranque, tras teselar.
+/// cada marco teselado. La invoca `compositor` al arrancar y al re-teselar.
 pub(crate) fn pintar_escenario(area: RegionPantalla, marcos: &[RegionPantalla]) {
     if let Some(consola) = CONSOLA.get() {
         consola.lock().pintar_escenario(area, marcos);
     }
 }
 
-/// Tatua la baliza de desalojo sobre la region de una aplicacion que el kernel
-/// ha dado por terminada. El color delata la causa —purpura para una falla de
-/// ejecucion o de combustible, amarillo palido para un desbordo de memoria—. Es
-/// una advertencia NO fatal: la app muere, el kernel y sus vecinas siguen vivos.
-pub(crate) fn pintar_desalojo(region: RegionPantalla, color: Color) {
+/// Tatua la baliza de desalojo sobre el marco de una aplicacion que el kernel
+/// ha dado por terminada, con su borde de foco. El color delata la causa
+/// —purpura para una falla de ejecucion o de combustible, amarillo palido para
+/// un desbordo de memoria—. Es una advertencia NO fatal: la app muere, el
+/// kernel y sus vecinas siguen vivos.
+pub(crate) fn pintar_desalojo(marco: RegionPantalla, color: Color, enfocada: bool) {
     if let Some(consola) = CONSOLA.get() {
-        consola.lock().pintar_region(region, color);
+        consola.lock().pintar_region(marco, color, enfocada);
     }
 }

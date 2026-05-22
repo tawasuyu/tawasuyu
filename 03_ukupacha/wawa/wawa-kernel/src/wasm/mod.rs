@@ -20,7 +20,7 @@ use wasmi::{
     CompilationMode, Config, Engine, Linker, Module, Store, StoreLimitsBuilder, TrapCode, TypedFunc,
 };
 
-use crate::grafico::{Color, RegionPantalla};
+use crate::grafico::Color;
 use env::ContextoCapacidades;
 
 /// Combustible concedido a `init`. Cubre con holgura el pintado inicial del
@@ -64,34 +64,28 @@ impl FallaApp {
 /// aqui la instancia se conserva y el kernel la hace avanzar `tick` a `tick`.
 pub struct AplicacionWasm {
     /// El almacen: todo el estado de ESTA instancia — su memoria lineal, sus
-    /// globales y el contexto de capacidades con su region de pantalla.
+    /// globales y el contexto de capacidades con su identidad e indice.
     almacen: Store<ContextoCapacidades>,
     /// El punto de entrada de fotograma, ya resuelto y con seguridad de tipos.
     /// `TypedFunc` es un asa autosuficiente dentro del `Store`: conservada esta,
     /// el handle de la `Instance` no aporta nada y no se retiene.
     func_tick: TypedFunc<(), ()>,
-    /// El marco que el compositor asigno a la app — su ventana en pantalla, y
-    /// donde se tatua su baliza de desalojo si llega a fallar.
-    marco: RegionPantalla,
 }
 
 impl AplicacionWasm {
-    /// Carga, valida, instancia y arranca una aplicacion WASM aislada, ligada a
-    /// una region de pantalla. Si algo falla en el camino, se devuelve la falla
-    /// en lugar de incendiar el kernel.
+    /// Carga, valida, instancia y arranca una aplicacion WASM aislada. Si algo
+    /// falla en el camino, se devuelve la falla en lugar de incendiar el kernel.
     ///
-    /// El nuevo ABI del userspace exige dos exportaciones: `init` —invocada una
-    /// sola vez, aqui— y `tick` —un fotograma de trabajo, invocada despues por
-    /// el reactor en cada pulso del reloj.
+    /// El ABI del userspace exige dos exportaciones: `init` —invocada una sola
+    /// vez, aqui— y `tick` —un fotograma de trabajo, invocada despues por el
+    /// reactor en cada pulso del reloj.
     ///
-    /// `marco` es el rectangulo que el compositor (Fase 8) asigno a la app;
-    /// `natural_ancho`/`natural_alto`, el tamaño de su lienzo. `techo_memoria`
-    /// es su cuota de memoria lineal —la dicta su `EntradaApp` del manifiesto—,
-    /// e `indice_app` su posicion en el: su identidad para las capacidades de
-    /// estado persistido (Fase 7c).
+    /// `natural_ancho`/`natural_alto` son el tamaño del lienzo de la app;
+    /// `techo_memoria`, su cuota de memoria lineal —la dicta su `EntradaApp` del
+    /// manifiesto—; e `indice_app`, su identidad: la posicion con que el
+    /// compositor halla su ventana y las capacidades de estado su ranura.
     pub fn cargar(
         bytecode: &[u8],
-        marco: RegionPantalla,
         natural_ancho: usize,
         natural_alto: usize,
         techo_memoria: usize,
@@ -108,10 +102,10 @@ impl AplicacionWasm {
         // 2. Validar y traducir el modulo — ya instrumentado con fuel.
         let modulo = Module::new(&motor, bytecode).map_err(|_| FallaApp::Carga)?;
 
-        // 3. El almacen, con el contexto de capacidades de ESTA app: su region
-        //    de pantalla, su canal de teclado y su techo de memoria. El canal
-        //    se crea ahora pero se inscribe en la difusion de la IRQ1 al final,
-        //    ya con la app cargada: una carga fallida no deja canales huerfanos.
+        // 3. El almacen, con el contexto de capacidades de ESTA app: su lienzo
+        //    natural, su canal de teclado y su techo de memoria. El canal se
+        //    crea ahora pero se inscribe en el censo de la IRQ1 al final, ya con
+        //    la app cargada: una carga fallida no deja canales huerfanos.
         let canal = crate::async_system::teclado::crear_canal();
         let limites = StoreLimitsBuilder::new()
             .memory_size(techo_memoria)
@@ -122,7 +116,6 @@ impl AplicacionWasm {
         let mut almacen = Store::new(
             &motor,
             ContextoCapacidades {
-                marco,
                 natural_ancho,
                 natural_alto,
                 canal,
@@ -161,14 +154,11 @@ impl AplicacionWasm {
             .map_err(|_| FallaApp::Carga)?;
 
         // 8. Con la app ya cargada e instanciada, inscribir su canal de teclado
-        //    en la difusion de la IRQ1: desde aqui recibe cada pulsacion.
-        crate::async_system::teclado::registrar_canal(&almacen.data().canal);
+        //    en el censo de la IRQ1, en la ranura de su `indice_app`: desde
+        //    aqui recibe las teclas cuando el compositor le da el foco.
+        crate::async_system::teclado::registrar_canal(indice_app, &almacen.data().canal);
 
-        Ok(AplicacionWasm {
-            almacen,
-            func_tick,
-            marco,
-        })
+        Ok(AplicacionWasm { almacen, func_tick })
     }
 
     /// Hace avanzar la aplicacion un fotograma. Recarga su presupuesto de
@@ -194,10 +184,11 @@ impl AplicacionWasm {
         }
     }
 
-    /// El marco de pantalla que el compositor asigno a la aplicacion — donde
-    /// se tatua su baliza si el kernel llega a desalojarla.
-    pub fn marco(&self) -> RegionPantalla {
-        self.marco
+    /// El indice de la aplicacion — su identidad en el escritorio del
+    /// compositor. Lo usa la tarea de la app para decirle al compositor que
+    /// ventana desalojar si la app llega a fallar.
+    pub fn indice(&self) -> usize {
+        self.almacen.data().indice_app
     }
 }
 
@@ -207,6 +198,6 @@ impl AplicacionWasm {
 /// empujando scancodes a una cola muerta: una fuga lenta pero segura.
 impl Drop for AplicacionWasm {
     fn drop(&mut self) {
-        crate::async_system::teclado::cerrar_canal(&self.almacen.data().canal);
+        crate::async_system::teclado::cerrar_canal(self.almacen.data().indice_app);
     }
 }

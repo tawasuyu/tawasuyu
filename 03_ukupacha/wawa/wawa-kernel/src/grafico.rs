@@ -52,6 +52,22 @@ impl Color {
         b: 0x30,
     };
 
+    /// Borde de la ventana ENFOCADA (Fase 8c): un indigo brillante. Delata, de
+    /// un vistazo, a quien recibe el teclado.
+    pub(crate) const FOCO: Color = Color {
+        r: 0x4B,
+        g: 0x00,
+        b: 0x82,
+    };
+
+    /// Borde de una ventana sin foco (Fase 8c): un gris mate, discreto — marca
+    /// el marco sin reclamar la atencion.
+    pub(crate) const SIN_FOCO: Color = Color {
+        r: 0x3A,
+        g: 0x40,
+        b: 0x4E,
+    };
+
     /// Alerta de colapso: un rojo saturado, imposible de ignorar.
     pub(crate) const ALERTA: Color = Color {
         r: 0xD4,

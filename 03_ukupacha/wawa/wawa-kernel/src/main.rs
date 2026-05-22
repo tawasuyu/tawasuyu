@@ -60,16 +60,16 @@ mod sync;
 mod texto;
 mod wasm;
 
-// Reexportaciones para que los submodulos conserven rutas `crate::` estables.
-pub(crate) use consola::volcar_marco_wasm;
+// Reexportacion para que los submodulos conserven rutas `crate::` estables.
 pub(crate) use sync::CeldaSync;
+
+use alloc::vec::Vec;
 
 use async_system::executor::Executor;
 use baliza::BALIZA_PANICO;
 use consola::{Consola, CONSOLA};
 use grafico::{
-    codificar, reclamar_memoria_lienzo, Color, Lienzo, Pantalla, RegionPantalla, ALTO_MAX,
-    ANCHO_MAX,
+    codificar, reclamar_memoria_lienzo, Color, Lienzo, Pantalla, ALTO_MAX, ANCHO_MAX,
 };
 
 /// Configuracion que el cargador `bootloader` aplicara antes de cedernos la CPU.
@@ -94,17 +94,29 @@ pub(crate) fn detener() -> ! {
 /// Tarea cooperativa de una aplicacion WASM. En cada pulso del reloj le concede
 /// un `tick` —un fotograma de trabajo— y cede la CPU hasta el siguiente; entre
 /// medias corren sus vecinas. Si la app falla o agota su combustible, se la
-/// DESALOJA: se tatua su region con la baliza de purpura y la tarea concluye.
+/// DESALOJA: el compositor tatua su ventana con la baliza y la tarea concluye.
 /// El ejecutor la retira del censo, su memoria se libera, el kernel sigue vivo.
 async fn tarea_aplicacion(mut app: wasm::AplicacionWasm) {
     loop {
         async_system::reloj::EsperaFrame::nueva().await;
         if let Err(falla) = app.tick() {
             // El color de la baliza delata la causa: purpura si agoto su tiempo
-            // o aborto, amarillo si reviento su techo de memoria.
-            consola::pintar_desalojo(app.marco(), falla.color_baliza());
+            // o aborto, amarillo si reviento su techo de memoria. El compositor
+            // la pinta en el marco actual de la ventana y la marca como muerta.
+            compositor::desalojar(app.indice(), falla.color_baliza());
             return;
         }
+    }
+}
+
+/// FASE 8 :: la tarea del compositor. En cada fotograma drena la cola de mandos
+/// que el teclado dejo —ciclar el modo de teselado, mover el foco— y los
+/// aplica. Corre en el reactor cooperativo: el unico contexto donde es seguro
+/// re-teselar el escritorio y recomponer el lienzo desde las caches.
+async fn tarea_compositor() {
+    loop {
+        async_system::reloj::EsperaFrame::nueva().await;
+        compositor::atender_mandos();
     }
 }
 
@@ -132,19 +144,13 @@ async fn tarea_sonda_disco() {
 }
 
 /// Da vida a una aplicacion del userspace a partir de su `EntradaApp` del
-/// manifiesto: recupera su bytecode del grafo, la carga en el `marco` que el
-/// compositor le teselo y la despacha como tarea cooperativa del reactor. Si
-/// el bytecode falta, esta corrupto, o la carga fracasa, se salda pintando el
-/// marco con la baliza de desalojo — el kernel no se inmuta y sigue con las
-/// demas.
-fn encender_app(
-    ejecutor: &mut Executor,
-    indice: usize,
-    entrada: &manifiesto::EntradaApp,
-    marco: RegionPantalla,
-) {
+/// manifiesto: recupera su bytecode del grafo, lo carga en la ventana `indice`
+/// del escritorio del compositor y despacha la app como tarea cooperativa del
+/// reactor. Si el bytecode falta, esta corrupto, o la carga fracasa, el
+/// compositor desaloja esa ventana — el kernel sigue con las demas.
+fn encender_app(ejecutor: &mut Executor, indice: usize, entrada: &manifiesto::EntradaApp) {
     // El tamaño NATURAL del lienzo de la app —lo que sabe pintar, fijo— lo
-    // dicta su `EntradaApp`; el compositor le asigno `marco` como ventana.
+    // dicta su `EntradaApp`; el compositor decide en que marco lo coloca.
     let natural = manifiesto::region(entrada);
     // Recuperar el bytecode del grafo. `recuperar` recomputa el hash del
     // objeto y verifica su integridad: un bytecode corrupto se delata aqui
@@ -152,22 +158,21 @@ fn encender_app(
     let bytecode = match almacen::recuperar(&entrada.bytecode) {
         Ok(Some(objeto)) => objeto.datos,
         _ => {
-            consola::pintar_desalojo(marco, Color::DESALOJO);
+            compositor::desalojar(indice, Color::DESALOJO);
             return;
         }
     };
-    // `indice` es la identidad de la app en el manifiesto: las capacidades de
-    // estado persistido (Fase 7c) la usan para hallar SU ranura `estado`.
+    // `indice` es la identidad de la app: su ventana en el escritorio del
+    // compositor y su ranura de estado persistido (Fase 7c).
     match wasm::AplicacionWasm::cargar(
         &bytecode,
-        marco,
         natural.ancho,
         natural.alto,
         entrada.techo_memoria as usize,
         indice,
     ) {
         Ok(app) => ejecutor.spawn(tarea_aplicacion(app)),
-        Err(_) => consola::pintar_desalojo(marco, Color::DESALOJO),
+        Err(_) => compositor::desalojar(indice, Color::DESALOJO),
     }
 }
 
@@ -218,18 +223,25 @@ fn cargar_userspace(ejecutor: &mut Executor, ancho_pantalla: usize, alto_pantall
         // consulta lee del manifiesto vivo.
         manifiesto::instalar(m.clone());
 
-        // FASE 8 :: el compositor tesela el area de apps — un marco por
-        // ventana, calculado por `mirada-layout`. Se pinta el escenario (el
-        // area y sus marcos) antes de encender las apps: el teselado se ve
-        // aunque alguna app no llegue siquiera a pintar su primer fotograma.
-        let marcos = compositor::disponer(m.apps.len(), ancho_pantalla, alto_pantalla);
-        consola::pintar_escenario(
-            compositor::area_apps(ancho_pantalla, alto_pantalla),
-            &marcos,
-        );
-        for (indice, (entrada, marco)) in m.apps.iter().zip(marcos).enumerate() {
-            encender_app(ejecutor, indice, entrada, marco);
+        // FASE 8 :: fundar el escritorio del compositor — una ventana por app,
+        // con su cache de respaldo y su marco teselado por `mirada-layout`— y
+        // pintar el escenario antes de encender las apps: el teselado se ve
+        // aunque alguna app no llegue a pintar su primer fotograma.
+        let naturales: Vec<(usize, usize)> = m
+            .apps
+            .iter()
+            .map(|e| (e.region_ancho as usize, e.region_alto as usize))
+            .collect();
+        compositor::fundar(ancho_pantalla, alto_pantalla, &naturales);
+        compositor::componer_escenario();
+
+        for (indice, entrada) in m.apps.iter().enumerate() {
+            encender_app(ejecutor, indice, entrada);
         }
+
+        // La tarea del compositor: atiende los mandos del teclado —ciclar el
+        // teselado, mover el foco— en cada fotograma del reactor.
+        ejecutor.spawn(tarea_compositor());
     }
 }
 
