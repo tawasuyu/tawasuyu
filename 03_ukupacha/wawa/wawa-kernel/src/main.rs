@@ -36,12 +36,13 @@
 
 extern crate alloc; // El heap esta vivo: `alloc::*` queda disponible (Fase 3).
 
+use alloc::boxed::Box;
 use alloc::format;
 
 use bootloader_api::config::{BootloaderConfig, Mapping};
 use bootloader_api::info::{FrameBufferInfo, MemoryRegionKind, MemoryRegions, PixelFormat};
 use bootloader_api::{entry_point, BootInfo};
-use spin::Mutex;
+use spin::{Mutex, Once};
 
 // --- Subsistemas del kernel ---
 mod almacen;
@@ -64,6 +65,7 @@ mod wasm;
 pub(crate) use sync::CeldaSync;
 
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use async_system::executor::Executor;
 use baliza::BALIZA_PANICO;
@@ -91,6 +93,23 @@ pub(crate) fn detener() -> ! {
     }
 }
 
+/// FASE 10 :: el molde de una aplicacion para los lanzamientos EN VIVO. Guarda
+/// su bytecode —cacheado en RAM al arrancar, para no volver al disco despues—
+/// y la geometria y la cuota de memoria con que instanciarla.
+struct Plantilla {
+    bytecode: Vec<u8>,
+    nat_ancho: usize,
+    nat_alto: usize,
+    techo: usize,
+}
+
+/// Las plantillas de las apps de genesis. Se fijan una vez, en el arranque;
+/// cada `Alt+N` instancia la siguiente en rotacion.
+static PLANTILLAS: Once<Vec<Plantilla>> = Once::new();
+
+/// El cursor rotatorio sobre `PLANTILLAS`: que app nace en el proximo `Alt+N`.
+static CURSOR_PLANTILLA: AtomicUsize = AtomicUsize::new(0);
+
 /// Tarea cooperativa de una aplicacion WASM. En cada pulso del reloj le concede
 /// un `tick` —un fotograma de trabajo— y cede la CPU hasta el siguiente; entre
 /// medias corren sus vecinas. Si la app falla o agota su combustible, se la
@@ -99,6 +118,13 @@ pub(crate) fn detener() -> ! {
 async fn tarea_aplicacion(mut app: wasm::AplicacionWasm) {
     loop {
         async_system::reloj::EsperaFrame::nueva().await;
+        // ¿El compositor pidio cerrar esta ventana (`Alt+Q`)? La tarea concluye
+        // por su propia voluntad: al retornar, `AplicacionWasm` se libera —su
+        // memoria lineal, su combustible, su canal de teclado— y el ejecutor la
+        // retira del censo. Una baja LIMPIA, sin baliza (Fase 10).
+        if compositor::ventana_cerrada(app.indice()) {
+            return;
+        }
         if let Err(falla) = app.tick() {
             // El color de la baliza delata la causa: purpura si agoto su tiempo
             // o aborto, amarillo si reviento su techo de memoria. El compositor
@@ -117,6 +143,12 @@ async fn tarea_compositor() {
     loop {
         async_system::reloj::EsperaFrame::nueva().await;
         compositor::atender_mandos();
+        // FASE 10 :: atender las altas en vivo. Por cada `Alt+N` pendiente,
+        // dar a luz una aplicacion nueva — el compositor solo conto la
+        // peticion; instanciar el WASM es trabajo del orquestador.
+        for _ in 0..compositor::partos_pendientes() {
+            lanzar_app();
+        }
     }
 }
 
@@ -148,7 +180,11 @@ async fn tarea_sonda_disco() {
 /// del escritorio del compositor y despacha la app como tarea cooperativa del
 /// reactor. Si el bytecode falta, esta corrupto, o la carga fracasa, el
 /// compositor desaloja esa ventana — el kernel sigue con las demas.
-fn encender_app(ejecutor: &mut Executor, indice: usize, entrada: &manifiesto::EntradaApp) {
+fn encender_app(
+    ejecutor: &mut Executor,
+    indice: usize,
+    entrada: &manifiesto::EntradaApp,
+) -> Option<Plantilla> {
     // El tamaño NATURAL del lienzo de la app —lo que sabe pintar, fijo— lo
     // dicta su `EntradaApp`; el compositor decide en que marco lo coloca.
     let natural = manifiesto::region(entrada);
@@ -159,7 +195,7 @@ fn encender_app(ejecutor: &mut Executor, indice: usize, entrada: &manifiesto::En
         Ok(Some(objeto)) => objeto.datos,
         _ => {
             compositor::desalojar(indice, Color::DESALOJO);
-            return;
+            return None;
         }
     };
     // `indice` es la identidad de la app: su ventana en el escritorio del
@@ -172,6 +208,48 @@ fn encender_app(ejecutor: &mut Executor, indice: usize, entrada: &manifiesto::En
         indice,
     ) {
         Ok(app) => ejecutor.spawn(tarea_aplicacion(app)),
+        Err(_) => compositor::desalojar(indice, Color::DESALOJO),
+    }
+    // FASE 10 :: el bytecode, ya recuperado y verificado, queda como PLANTILLA:
+    // un molde en RAM con que `Alt+N` instanciara copias en vivo, sin volver al
+    // disco —que la E/S por sondeo en mitad del reactor seria un mal vecino—.
+    Some(Plantilla {
+        bytecode,
+        nat_ancho: natural.ancho,
+        nat_alto: natural.alto,
+        techo: entrada.techo_memoria as usize,
+    })
+}
+
+/// FASE 10 :: da a luz una aplicacion EN VIVO. Elige la siguiente plantilla en
+/// rotacion, abre su ventana en el compositor —que le asigna su indice—,
+/// instancia su WASM con ese indice y engendra su tarea en el reactor ya en
+/// marcha. Si la carga falla, la ventana recien nacida se desaloja; el kernel
+/// sigue. La invoca la tarea del compositor al atender un `Alt+N`.
+fn lanzar_app() {
+    let Some(plantillas) = PLANTILLAS.get() else {
+        return;
+    };
+    if plantillas.is_empty() {
+        return;
+    }
+    // El cursor rota sobre las plantillas: cada `Alt+N` engendra la siguiente.
+    let cursor = CURSOR_PLANTILLA.fetch_add(1, Ordering::Relaxed);
+    let plantilla = &plantillas[cursor % plantillas.len()];
+
+    // La ventana nace primero: el compositor le entrega su indice —su
+    // identidad—, que el WASM necesita para hallar su ventana y su canal.
+    let indice = compositor::nacer_ventana(plantilla.nat_ancho, plantilla.nat_alto);
+    match wasm::AplicacionWasm::cargar(
+        &plantilla.bytecode,
+        plantilla.nat_ancho,
+        plantilla.nat_alto,
+        plantilla.techo,
+        indice,
+    ) {
+        // La tarea se ENGENDRA, no se hace `spawn`: el reactor ya corre y el
+        // ejecutor la adoptara en su proxima vuelta (Fase 10).
+        Ok(app) => async_system::executor::engendrar(Box::pin(tarea_aplicacion(app))),
         Err(_) => compositor::desalojar(indice, Color::DESALOJO),
     }
 }
@@ -235,12 +313,18 @@ fn cargar_userspace(ejecutor: &mut Executor, ancho_pantalla: usize, alto_pantall
         compositor::fundar(ancho_pantalla, alto_pantalla, &naturales);
         compositor::componer_escenario();
 
+        let mut plantillas: Vec<Plantilla> = Vec::new();
         for (indice, entrada) in m.apps.iter().enumerate() {
-            encender_app(ejecutor, indice, entrada);
+            if let Some(plantilla) = encender_app(ejecutor, indice, entrada) {
+                plantillas.push(plantilla);
+            }
         }
+        // FASE 10 :: fijar las plantillas de las apps. A partir de aqui, cada
+        // `Alt+N` instancia una copia viva, en rotacion.
+        PLANTILLAS.call_once(|| plantillas);
 
         // La tarea del compositor: atiende los mandos del teclado —ciclar el
-        // teselado, mover el foco— en cada fotograma del reactor.
+        // teselado, mover el foco, cerrar y lanzar apps— en cada fotograma.
         ejecutor.spawn(tarea_compositor());
     }
 }

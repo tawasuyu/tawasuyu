@@ -21,6 +21,14 @@
 //  RECOMPONE el escritorio entero, capa a capa, de modo que el solapamiento se
 //  resuelva por el orden del pintado, sin recortes ni mascaras.
 //
+//  FASE 10 :: el escritorio deja de ser un censo fijo. Una ventana puede
+//  CERRARSE en vivo (`Alt+Q`): se la marca, su app concluye su tarea por su
+//  voluntad y el teselado reclama su espacio. Y puede NACER una ventana nueva
+//  (`Alt+N`): `nacer_ventana` la añade al censo y devuelve su indice al
+//  orquestador, que instancia su WASM y engendra su tarea. El censo de
+//  ventanas solo crece —los indices son la IDENTIDAD, jamas se reciclan—; una
+//  ventana cerrada queda como una ranura inerte, fuera del orden y del foco.
+//
 //  EXCLUSION DE INTERRUPCIONES. El `ESCRITORIO` lo tocan SOLO tareas
 //  cooperativas (el `tick` de una app, la tarea del compositor): el manejador
 //  de IRQ1 jamas lo bloquea. La IRQ se comunica con el mundo cooperativo por
@@ -82,6 +90,10 @@ pub enum Mando {
     MoverAtras,
     /// Alternar la ventana enfocada entre teselada y flotante (Fase 9).
     Flotar,
+    /// Cerrar la aplicacion enfocada — una baja limpia, en vivo (Fase 10).
+    Cerrar,
+    /// Lanzar una aplicacion nueva — un alta en vivo (Fase 10).
+    Lanzar,
 }
 
 /// Una ventana del escritorio: una app, su geometria y su ultimo fotograma.
@@ -103,6 +115,10 @@ struct Ventana {
     /// Si el kernel desalojo la app, el color de su baliza. `None` mientras
     /// vive; `Some(color)` la marca como muerta y la excluye del foco.
     baliza: Option<Color>,
+    /// ¿Se ha pedido cerrar esta ventana en vivo (Fase 10)? Una vez `true`, su
+    /// app concluye su tarea, la ranura queda inerte —fuera del orden, del
+    /// orden-Z y del foco— y el teselado reclama su espacio.
+    cerrada: bool,
 }
 
 /// El escritorio: el registro de todas las ventanas y el modo de teselado.
@@ -138,6 +154,12 @@ static FOCO: AtomicUsize = AtomicUsize::new(0);
 /// compositor las drena desde el reactor cooperativo.
 static MANDOS: Once<ArrayQueue<Mando>> = Once::new();
 
+/// Cuantos lanzamientos de aplicacion (Fase 10) aguardan. Lo incrementa
+/// `atender_mandos` al recibir un `Mando::Lanzar`; lo drena `partos_pendientes`,
+/// que lo lee el orquestador del kernel —el unico que sabe instanciar un WASM—.
+/// Atomico: el compositor lo escribe, el orquestador lo lee y lo pone a cero.
+static PARTOS: AtomicUsize = AtomicUsize::new(0);
+
 // =============================================================================
 //  Fundacion y consulta — el arranque
 // =============================================================================
@@ -164,6 +186,7 @@ pub fn fundar(ancho: usize, alto: usize, naturales: &[(usize, usize)]) {
             cache: vec![0u8; nat_ancho.saturating_mul(nat_alto).saturating_mul(4)],
             pintada: false,
             baliza: None,
+            cerrada: false,
         });
     }
 
@@ -246,6 +269,11 @@ pub fn presentar_fotograma(indice: usize, datos: &[u8]) {
         let Some(ventana) = escritorio.ventanas.get_mut(indice) else {
             return;
         };
+        // Una ventana cerrada (Fase 10) ya no se pinta: su app pudo emitir un
+        // ultimo fotograma antes de que su tarea advirtiera la baja.
+        if ventana.cerrada {
+            return;
+        }
         // Cachear el fotograma. El destino esta acotado al lienzo natural; se
         // copia el minimo de ambas longitudes — jamas se desborda la cache.
         let n = ventana.cache.len().min(datos.len());
@@ -280,6 +308,11 @@ pub fn desalojar(indice: usize, color: Color) {
         let Some(ventana) = escritorio.ventanas.get_mut(indice) else {
             return;
         };
+        // Una ventana ya cerrada (Fase 10) no recibe baliza: la baja limpia
+        // gana a un desalojo que llegue tarde, en la misma vuelta.
+        if ventana.cerrada {
+            return;
+        }
         ventana.baliza = Some(color);
     }
 
@@ -313,6 +346,13 @@ pub fn atender_mandos() {
             Mando::MoverAdelante => mover_ventana(true),
             Mando::MoverAtras => mover_ventana(false),
             Mando::Flotar => flotar(),
+            Mando::Cerrar => cerrar(),
+            // El alta de una app necesita instanciar un WASM — algo que el
+            // compositor no sabe hacer—. Solo se cuenta la peticion; el
+            // orquestador del kernel la atendera (ver `partos_pendientes`).
+            Mando::Lanzar => {
+                PARTOS.fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
 }
@@ -514,6 +554,106 @@ fn recomponer(escritorio: &Escritorio) {
         });
     }
     consola::recomponer(area, &capas);
+}
+
+// =============================================================================
+//  FASE 10 — alta y baja de aplicaciones en vivo
+// =============================================================================
+
+/// Cierra la aplicacion enfocada (`Alt+Q`): una baja LIMPIA, distinta del
+/// desalojo por falla. Marca la ventana como cerrada, libera su cache de
+/// respaldo, la saca del teselado y del orden-Z, y traslada el foco a una
+/// ventana viva contigua. La app, en su tarea, advertira la baja y concluira.
+fn cerrar() {
+    let Some(escritorio) = ESCRITORIO.get() else {
+        return;
+    };
+    let mut escritorio = escritorio.lock();
+    let foco = FOCO.load(Ordering::Relaxed);
+    // Solo se cierra una ventana viva. El foco jamas se posa en una muerta o
+    // cerrada, pero la guarda lo deja explicito.
+    match escritorio.ventanas.get(foco) {
+        Some(v) if v.baliza.is_none() && !v.cerrada => {}
+        _ => return,
+    }
+    // Marcar la baja y liberar el respaldo: la cache de un fotograma puede
+    // pesar un megabyte — no tiene sentido retenerla en una ranura inerte.
+    let ventana = &mut escritorio.ventanas[foco];
+    ventana.cerrada = true;
+    ventana.pintada = false;
+    ventana.cache = Vec::new();
+    // Sacarla del teselado y del orden-Z. El censo conserva la ranura —los
+    // indices son la identidad, jamas se reciclan—, pero ya nadie la dibuja.
+    escritorio.orden.retain(|&v| v != foco);
+    escritorio.flotantes.retain(|&v| v != foco);
+    // El foco salta a la primera ventana viva que quede; si no queda ninguna,
+    // se queda donde estaba —inofensivo: no hay a quien enrutar el teclado—.
+    let nuevo = escritorio
+        .orden
+        .iter()
+        .chain(escritorio.flotantes.iter())
+        .copied()
+        .find(|&v| {
+            let w = &escritorio.ventanas[v];
+            w.baliza.is_none() && !w.cerrada
+        })
+        .unwrap_or(foco);
+    FOCO.store(nuevo, Ordering::Relaxed);
+    alzar_si_flota(&mut escritorio, nuevo);
+    aplicar_teselado(&mut escritorio);
+    recomponer(&escritorio);
+}
+
+/// Da de alta una ventana NUEVA y devuelve su indice —su identidad—. La crea
+/// con su cache de respaldo al tamaño natural, la añade al final del orden de
+/// teselado, recalcula el teselado y recompone. La invoca el orquestador del
+/// kernel justo antes de instanciar el WASM de la app, que necesita ese indice.
+pub fn nacer_ventana(nat_ancho: usize, nat_alto: usize) -> usize {
+    let Some(escritorio) = ESCRITORIO.get() else {
+        return 0;
+    };
+    let mut escritorio = escritorio.lock();
+    let indice = escritorio.ventanas.len();
+    escritorio.ventanas.push(Ventana {
+        natural_ancho: nat_ancho,
+        natural_alto: nat_alto,
+        marco: RegionPantalla {
+            x: 0,
+            y: 0,
+            ancho: 0,
+            alto: 0,
+        },
+        cache: vec![0u8; nat_ancho.saturating_mul(nat_alto).saturating_mul(4)],
+        pintada: false,
+        baliza: None,
+        cerrada: false,
+    });
+    escritorio.orden.push(indice);
+    aplicar_teselado(&mut escritorio);
+    recomponer(&escritorio);
+    indice
+}
+
+/// ¿Se ha pedido cerrar la ventana `indice`? Cada app la consulta en su tarea,
+/// fotograma a fotograma: cuando es `true`, concluye su tarea y se libera. Una
+/// ventana inexistente cuenta como cerrada.
+pub fn ventana_cerrada(indice: usize) -> bool {
+    let Some(escritorio) = ESCRITORIO.get() else {
+        return false;
+    };
+    escritorio
+        .lock()
+        .ventanas
+        .get(indice)
+        .map(|ventana| ventana.cerrada)
+        .unwrap_or(true)
+}
+
+/// Cuantas aplicaciones nuevas se han pedido lanzar desde la ultima consulta —y
+/// pone el contador a cero—. La invoca el orquestador del kernel —el unico que
+/// sabe instanciar un WASM— en cada fotograma de la tarea del compositor.
+pub fn partos_pendientes() -> usize {
+    PARTOS.swap(0, Ordering::Relaxed)
 }
 
 // =============================================================================

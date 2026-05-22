@@ -38,6 +38,16 @@ impl Task {
         }
     }
 
+    /// Adopta un `Future` ya anclado en el heap como una tarea con identidad
+    /// propia. Es la via de los nacimientos en vivo (Fase 10): el orquestador
+    /// entrega el futuro ya empaquetado y el ejecutor lo acoge sin tocarlo.
+    pub fn adoptar(futuro: Pin<Box<dyn Future<Output = ()> + Send + 'static>>) -> Task {
+        Task {
+            id: TaskId::nuevo(),
+            futuro,
+        }
+    }
+
     /// Hace avanzar la tarea un paso. `Poll::Ready` significa que concluyo.
     pub fn poll(&mut self, contexto: &mut Context) -> Poll<()> {
         self.futuro.as_mut().poll(contexto)

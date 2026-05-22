@@ -5,18 +5,45 @@
 //  vivas y una cola de las que estan listas para avanzar. Cuando no queda nada
 //  por hacer, no malgasta la CPU en un bucle ocupado: la duerme con `hlt`
 //  hasta que el proximo impulso de hardware la despierte.
+//
+//  FASE 10 :: el censo deja de ser inmutable tras el arranque. Una cola de
+//  NACIMIENTOS permite engendrar tareas EN VIVO —con el reactor ya en marcha—:
+//  el orquestador deposita un futuro y el ejecutor lo adopta en su proxima
+//  vuelta. Asi el userspace puede crecer despues del arranque.
 // =============================================================================
 
+use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::future::Future;
+use core::pin::Pin;
 use core::task::{Context, Poll, Waker};
 
-use spin::Mutex;
+use spin::{Mutex, Once};
 use x86_64::instructions::interrupts;
 
 use super::task::{Task, TaskId};
 use super::waker::{self, ColaListas};
+
+/// Un futuro de tarea ya anclado en el heap: la moneda de los nacimientos.
+pub type FuturoTarea = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+
+/// Cola de NACIMIENTOS: tareas engendradas EN VIVO, mientras el reactor ya
+/// corre. Una tarea cooperativa deposita aqui un futuro; el ejecutor lo recoge
+/// al inicio de su proxima vuelta y lo da de alta. No la toca ningun manejador
+/// de IRQ —solo tareas cooperativas y el propio ejecutor—, asi que un `Mutex`
+/// llano basta: en un solo nucleo cooperativo nadie disputa el cerrojo.
+static NACIMIENTOS: Once<Mutex<Vec<FuturoTarea>>> = Once::new();
+
+/// Engendra una tarea nueva mientras el reactor ya corre (Fase 10). El ejecutor
+/// la adoptara en su proxima vuelta. La invocan los orquestadores del kernel
+/// —jamas una IRQ—.
+pub fn engendrar(futuro: FuturoTarea) {
+    if let Some(nacimientos) = NACIMIENTOS.get() {
+        nacimientos.lock().push(futuro);
+    }
+}
 
 /// El ejecutor cooperativo de renaser.
 pub struct Executor {
@@ -31,6 +58,7 @@ pub struct Executor {
 impl Executor {
     /// Crea un ejecutor vacio. Requiere que el heap ya este fundado.
     pub fn nuevo() -> Executor {
+        NACIMIENTOS.call_once(|| Mutex::new(Vec::new()));
         Executor {
             tareas: BTreeMap::new(),
             cola_listas: Arc::new(Mutex::new(VecDeque::new())),
@@ -40,12 +68,35 @@ impl Executor {
 
     /// Da de alta una tarea nueva y la marca como lista para su primer avance.
     pub fn spawn(&mut self, futuro: impl Future<Output = ()> + Send + 'static) {
-        let tarea = Task::nueva(futuro);
+        self.alistar(Task::nueva(futuro));
+    }
+
+    /// Inscribe una tarea ya construida en el censo y la encola para su primer
+    /// avance. Es la via comun de `spawn` y de la recoleccion de nacimientos.
+    fn alistar(&mut self, tarea: Task) {
         let id = tarea.id;
         if self.tareas.insert(id, tarea).is_some() {
             panic!("renaser :: TaskId duplicado — lo imposible ha ocurrido");
         }
         interrupts::without_interrupts(|| self.cola_listas.lock().push_back(id));
+    }
+
+    /// Recoge las tareas engendradas EN VIVO desde la ultima vuelta y las da de
+    /// alta. Se invoca al inicio de cada ciclo del reactor (Fase 10).
+    fn recoger_nacimientos(&mut self) {
+        let Some(nacimientos) = NACIMIENTOS.get() else {
+            return;
+        };
+        let recien: Vec<FuturoTarea> = {
+            let mut cola = nacimientos.lock();
+            if cola.is_empty() {
+                return;
+            }
+            core::mem::take(&mut *cola)
+        };
+        for futuro in recien {
+            self.alistar(Task::adoptar(futuro));
+        }
     }
 
     /// Avanza, hasta agotarla, la cola de tareas listas.
@@ -79,11 +130,17 @@ impl Executor {
 
     /// Si no queda trabajo, duerme la CPU hasta la proxima interrupcion. El
     /// chequeo y el `hlt` se hacen con las interrupciones acalladas para que
-    /// ningun despertar se pierda en la rendija entre uno y otro.
+    /// ningun despertar se pierda en la rendija entre uno y otro. Una tarea
+    /// recien engendrada cuenta como trabajo: no se duerme con nacimientos
+    /// pendientes de adoptar.
     fn dormir_si_inactivo(&self) {
         interrupts::disable();
-        let hay_trabajo = !self.cola_listas.lock().is_empty();
-        if hay_trabajo {
+        let hay_listas = !self.cola_listas.lock().is_empty();
+        let hay_nacimientos = NACIMIENTOS
+            .get()
+            .map(|nacimientos| !nacimientos.lock().is_empty())
+            .unwrap_or(false);
+        if hay_listas || hay_nacimientos {
             // Llego trabajo justo ahora: reactivar y seguir sin dormir.
             interrupts::enable();
         } else {
@@ -96,6 +153,7 @@ impl Executor {
     /// vive del latir de sus interrupciones.
     pub fn run(&mut self) -> ! {
         loop {
+            self.recoger_nacimientos();
             self.avanzar_listas();
             self.dormir_si_inactivo();
         }
