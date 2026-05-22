@@ -173,6 +173,14 @@ impl ControlPanel {
                                     .entry((m.id().to_string(), key))
                                     .or_insert(Some(default));
                             }
+                            // `TextInput` es un campo de sólo-display que el
+                            // shell escribe (resultados, etiquetas) vía
+                            // `set_string`; su estado vive en `string_state`.
+                            Control::TextInput { key, default, .. } => {
+                                self.string_state
+                                    .entry((m.id().to_string(), key))
+                                    .or_insert(Some(default));
+                            }
                             _ => {}
                         }
                     }
@@ -550,7 +558,16 @@ impl ControlPanel {
                 options,
                 default,
             } => self.render_select(theme, module_id, key, label, options, default, cx),
-            Control::TextInput { label, default, .. } => display_row(theme, label, default),
+            Control::TextInput { key, label, default } => {
+                // Sólo-display: muestra lo último que el shell escribió
+                // con `set_string`, o el `default` si nada se escribió.
+                let valor = self
+                    .string_state
+                    .get(&(module_id.to_string(), key.to_string()))
+                    .and_then(|o| o.clone())
+                    .unwrap_or_else(|| default.clone());
+                display_row(theme, label, &valor)
+            }
             Control::Action { key, label } => {
                 self.render_action(theme, module_id, key, label, cx)
             }

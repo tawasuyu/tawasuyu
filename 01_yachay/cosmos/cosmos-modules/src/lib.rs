@@ -947,6 +947,43 @@ pub mod primary_directions {
                         },
                     ],
                 },
+                // --- Rectificador automático ---
+                // Tres edades de eventos conocidos de la vida del
+                // sujeto; `0` = ranura sin usar. El barrido GR busca la
+                // hora de nacimiento que mejor las explica.
+                Control::Slider {
+                    key: "evento_1".into(),
+                    label: "Evento 1 · edad".into(),
+                    min: 0.0,
+                    max: 90.0,
+                    step: 1.0,
+                    default: 0.0,
+                },
+                Control::Slider {
+                    key: "evento_2".into(),
+                    label: "Evento 2 · edad".into(),
+                    min: 0.0,
+                    max: 90.0,
+                    step: 1.0,
+                    default: 0.0,
+                },
+                Control::Slider {
+                    key: "evento_3".into(),
+                    label: "Evento 3 · edad".into(),
+                    min: 0.0,
+                    max: 90.0,
+                    step: 1.0,
+                    default: 0.0,
+                },
+                Control::Action {
+                    key: "rectificar".into(),
+                    label: "Rectificar hora".into(),
+                },
+                Control::TextInput {
+                    key: "resultado".into(),
+                    label: "Resultado".into(),
+                    default: "—".into(),
+                },
             ]
         }
         fn compute_layers(&self, _chart: &Chart, _cfg: &serde_json::Value) -> Vec<Layer> {

@@ -32,8 +32,8 @@ use cosmobiologia_canvas::{
     AstrologyCanvas, CanvasEvent, CanvasMode, ThumbnailItem, ThumbnailScope,
 };
 use cosmobiologia_engine::{
-    LayerKind, NatalOptions, OUTER_RING_MODULES, PipelineRequest, compose_with_options,
-    svg_export,
+    EventoConocido, LayerKind, NatalOptions, OUTER_RING_MODULES, PipelineRequest,
+    compose_with_options, svg_export,
 };
 use cosmobiologia_model::{
     Chart, ChartId, ChartKind, ContactId, FreeChartId, ModuleState, StoredBirthData,
@@ -1365,22 +1365,62 @@ impl Shell {
     /// Otros módulos overlay (progression, solar_arc, primary_directions)
     /// son extensión natural — TODO.
     fn on_panel_action(&mut self, module_id: String, key: String, cx: &mut Context<Self>) {
-        if key != "save_as_free" {
-            return;
-        }
-        match module_id.as_str() {
-            "planetary_return" => self.save_planetary_return_as_free(cx),
-            "transit" => self.save_transit_as_free(cx),
-            "progression" => self.save_progression_as_free(cx),
-            // Solar arc y direcciones primarias son transformaciones
-            // matemáticas puras (no tienen un birth_data real
-            // equivalente — un Chart natal computado en el "momento
-            // SA" daría posiciones distintas a las dirigidas). Para
-            // guardarlas haría falta extender Chart con un kind
-            // `Derived { source, transform, params }` que el engine
-            // sepa rehidratar. TODO.
+        match key.as_str() {
+            "save_as_free" => match module_id.as_str() {
+                "planetary_return" => self.save_planetary_return_as_free(cx),
+                "transit" => self.save_transit_as_free(cx),
+                "progression" => self.save_progression_as_free(cx),
+                // Solar arc y direcciones primarias son transformaciones
+                // matemáticas puras (no tienen un birth_data real
+                // equivalente). Guardarlas exigiría un `ChartKind`
+                // `Derived { source, transform, params }`. TODO.
+                _ => {}
+            },
+            "rectificar" => self.run_rectificacion(cx),
             _ => {}
         }
+    }
+
+    /// Lanza el rectificador automático (Sistema GR): lee las edades de
+    /// los eventos conocidos de los sliders del módulo, barre las horas
+    /// candidatas y escribe el resultado en el campo «Resultado» del
+    /// panel. El barrido es síncrono — para ±15 min son ~31 cartas.
+    fn run_rectificacion(&mut self, cx: &mut Context<Self>) {
+        // Clonamos la carta: `rectificar` necesita `&Chart` y luego
+        // `panel.update` toma `&mut self` — no pueden solaparse.
+        let Some(chart) = self.current_chart.clone() else {
+            return;
+        };
+        let cfg = self.module_configs.get("primary_directions");
+        let read_age = |key: &str| -> f64 {
+            cfg.and_then(|c| c.get(key))
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0)
+        };
+        // Edades > 0 — una ranura en 0 es "sin usar".
+        let eventos: Vec<EventoConocido> = ["evento_1", "evento_2", "evento_3"]
+            .iter()
+            .map(|k| read_age(k))
+            .filter(|edad| *edad > 0.5)
+            .map(|edad| EventoConocido { edad_years: edad })
+            .collect();
+        let key_gr = cfg
+            .and_then(|c| c.get("key"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("naibod")
+            .to_string();
+
+        // Ventana ±15 min, paso 1 min — el barrido GR estándar.
+        let resultado = match cosmobiologia_engine::rectificar(&chart, &eventos, 15, 1, &key_gr) {
+            Ok(r) => format!(
+                "{:+} min · puntaje {:.2}",
+                r.mejor_offset_minutos, r.mejor_puntaje
+            ),
+            Err(_) => "define al menos un evento (edad > 0)".to_string(),
+        };
+        self.panel.update(cx, |p, cx| {
+            p.set_string("primary_directions", "resultado", Some(resultado), cx)
+        });
     }
 
     /// Snapshot del cielo en este instante anclado al lugar del
