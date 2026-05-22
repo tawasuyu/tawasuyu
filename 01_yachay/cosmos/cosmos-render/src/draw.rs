@@ -582,7 +582,7 @@ fn svg_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-fn sign_unicode(name: &str) -> &'static str {
+pub(crate) fn sign_unicode(name: &str) -> &'static str {
     match name {
         "aries" => "♈",
         "taurus" => "♉",
@@ -622,7 +622,7 @@ fn planet_unicode(name: &str) -> &'static str {
 
 /// Glyph del cuerpo con sufijo "℞" si está retrógrado — concatenación
 /// directa en el text para no agregar más comandos por planeta.
-fn planet_unicode_with_retro(name: &str, retrograde: bool) -> String {
+pub(crate) fn planet_unicode_with_retro(name: &str, retrograde: bool) -> String {
     if retrograde {
         format!("{}℞", planet_unicode(name))
     } else {

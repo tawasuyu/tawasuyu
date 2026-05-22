@@ -35,6 +35,7 @@ pub mod gr;
 pub mod harmonic;
 pub mod math;
 pub mod palette;
+pub mod sphere3d;
 
 pub use draw::{
     compose_wheel, draw_commands_to_svg, CompositionOpts, DrawCommand, Rgba, TextAnchor,
@@ -45,6 +46,7 @@ pub use math::{
     find_clusters, format_coord_compact, polar_to_screen, spread_angles, Radii,
 };
 pub use palette::Palette;
+pub use sphere3d::{compose_sphere, SphereOpts, SphereView, OBLICUIDAD_DEG};
 
 // =====================================================================
 // RenderModel — lo que el client renderea

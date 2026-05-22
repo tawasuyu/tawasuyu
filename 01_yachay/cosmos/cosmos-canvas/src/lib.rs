@@ -45,6 +45,7 @@ use cosmobiologia_engine::{
     OUTER_RING_MODULES,
 };
 use cosmobiologia_model::{ChartId, ContactId, GroupId};
+use cosmobiologia_render::{compose_sphere, DrawCommand, Palette, SphereOpts, SphereView};
 use cosmobiologia_theme::{AspectKind as TAspectKind, AstroPalette, Element, Planet};
 use nahual_theme::Theme;
 
@@ -125,6 +126,15 @@ struct PanDragState {
     pan_y_start: f32,
 }
 
+/// Drag activo de rotación de la esfera 3D. El delta del cursor desde
+/// `start` se suma a `yaw`/`pitch` de partida — arrastrar = orbitar.
+#[derive(Clone, Copy, Debug)]
+struct SphereDragState {
+    start: Point<Pixels>,
+    yaw_start: f32,
+    pitch_start: f32,
+}
+
 #[derive(Clone, Debug)]
 pub struct CanvasState {
     pub mode: CanvasMode,
@@ -156,8 +166,14 @@ pub struct CanvasState {
     /// El canvas dibuja su perfil como una curva en el footer; el valle
     /// marca la hora de nacimiento que mejor explica los eventos.
     pub rectificacion: Option<Rectificacion>,
+    /// `true` cuando la carta se muestra como esfera celeste 3D en vez
+    /// de la rueda 2D. Solo aplica al modo `Wheel`.
+    pub sphere_3d: bool,
+    /// Orientación de la esfera 3D — la muta el drag.
+    pub sphere_view: SphereView,
     drag_jog: Option<JogDragState>,
     drag_pan: Option<PanDragState>,
+    drag_sphere: Option<SphereDragState>,
 }
 
 /// Límites del zoom — bajo 0.5 los glyphs se vuelven ilegibles; sobre
@@ -240,8 +256,11 @@ impl Default for CanvasState {
             show_coords: true,
             hover: None,
             rectificacion: None,
+            sphere_3d: false,
+            sphere_view: SphereView::default(),
             drag_jog: None,
             drag_pan: None,
+            drag_sphere: None,
         }
     }
 }
@@ -354,6 +373,13 @@ impl AstrologyCanvas {
         cx: &mut Context<'_, Self>,
     ) {
         self.state.rectificacion = rectificacion;
+        cx.notify();
+    }
+
+    /// Alterna entre la rueda 2D y la esfera celeste 3D. Solo tiene
+    /// efecto visible cuando hay una carta cargada (`CanvasMode::Wheel`).
+    pub fn toggle_sphere(&mut self, cx: &mut Context<'_, Self>) {
+        self.state.sphere_3d = !self.state.sphere_3d;
         cx.notify();
     }
 
@@ -694,6 +720,35 @@ impl AstrologyCanvas {
         }
     }
 
+    // ----- Internos: rotación de la esfera 3D -----
+
+    fn on_sphere_down(&mut self, position: Point<Pixels>) {
+        self.state.drag_sphere = Some(SphereDragState {
+            start: position,
+            yaw_start: self.state.sphere_view.yaw_deg,
+            pitch_start: self.state.sphere_view.pitch_deg,
+        });
+    }
+
+    fn on_sphere_move(&mut self, position: Point<Pixels>, cx: &mut Context<'_, Self>) {
+        let Some(drag) = self.state.drag_sphere else {
+            return;
+        };
+        let dx: f32 = (position.x - drag.start.x).into();
+        let dy: f32 = (position.y - drag.start.y).into();
+        // 0.4°/px da una rotación cómoda. El pitch se clampea para no
+        // dar vuelta la esfera de adentro hacia afuera.
+        self.state.sphere_view.yaw_deg = (drag.yaw_start + dx * 0.4).rem_euclid(360.0);
+        self.state.sphere_view.pitch_deg = (drag.pitch_start + dy * 0.4).clamp(-89.0, 89.0);
+        cx.notify();
+    }
+
+    fn on_sphere_up(&mut self, cx: &mut Context<'_, Self>) {
+        if self.state.drag_sphere.take().is_some() {
+            cx.notify();
+        }
+    }
+
     fn on_scroll(
         &mut self,
         event: &ScrollWheelEvent,
@@ -760,6 +815,10 @@ impl AstrologyCanvas {
             }
             "s" | "S" => {
                 cx.emit(CanvasEvent::ExportSvgRequested);
+                return;
+            }
+            "v" | "V" => {
+                self.toggle_sphere(cx);
                 return;
             }
             _ => return,
@@ -851,6 +910,15 @@ impl Render for AstrologyCanvas {
 
         let body = match &self.state.mode {
             CanvasMode::Empty => render_empty(&theme),
+            CanvasMode::Wheel { render } if self.state.sphere_3d => render_sphere(
+                &theme,
+                render,
+                self.state.sphere_view,
+                self.state.view_scale,
+                self.state.view_pan_x,
+                self.state.view_pan_y,
+                entity,
+            ),
             CanvasMode::Wheel { render } => render_wheel(
                 &theme,
                 &palette,
@@ -868,6 +936,34 @@ impl Render for AstrologyCanvas {
             ),
             CanvasMode::Thumbnails { items, .. } => render_thumbnails(&theme, items),
         };
+
+        // Botón flotante 2D ⇄ 3D — visible solo con una carta cargada.
+        // Muestra el modo al que se cambiará, no el activo.
+        let sphere_toggle = matches!(self.state.mode, CanvasMode::Wheel { .. }).then(|| {
+            let label = if self.state.sphere_3d {
+                "Rueda 2D"
+            } else {
+                "Esfera 3D"
+            };
+            div()
+                .absolute()
+                .top(px(12.0))
+                .right(px(12.0))
+                .px(px(11.0))
+                .py(px(5.0))
+                .rounded(px(6.0))
+                .bg(theme.bg_panel_alt.clone())
+                .border_1()
+                .border_color(theme.border)
+                .text_size(px(11.0))
+                .text_color(theme.fg_text)
+                .cursor_pointer()
+                .child(label)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _w, cx| this.toggle_sphere(cx)),
+                )
+        });
 
         // Depth field: capa absoluta detrás del body, ocupa todo el
         // canvas. Vignette radial — el centro queda claro y los
@@ -908,6 +1004,7 @@ impl Render for AstrologyCanvas {
                     .justify_center()
                     .child(body),
             )
+            .children(sphere_toggle)
     }
 }
 
@@ -967,6 +1064,169 @@ fn render_thumbnails(theme: &Theme, items: &[ThumbnailItem]) -> gpui::Div {
         );
     }
     row
+}
+
+// =====================================================================
+// Esfera celeste 3D
+// =====================================================================
+
+/// Render del modo esfera 3D. Compone la escena agnóstica con
+/// `compose_sphere` (en `cosmobiologia-render`) y traduce sus
+/// `DrawCommand`s a primitivas GPUI: las líneas y discos se pintan en
+/// el `canvas`; los glifos van como hijos DOM sobre las coordenadas ya
+/// proyectadas. El drag rota la esfera.
+#[allow(clippy::too_many_arguments)]
+fn render_sphere(
+    theme: &Theme,
+    render: &RenderModel,
+    view: SphereView,
+    view_scale: f32,
+    view_pan_x: f32,
+    view_pan_y: f32,
+    entity: gpui::Entity<AstrologyCanvas>,
+) -> gpui::Div {
+    let sphere_size = WHEEL_SIZE * view_scale;
+    let opts = SphereOpts {
+        size: sphere_size,
+        palette: if theme.is_dark {
+            Palette::dark()
+        } else {
+            Palette::light()
+        },
+        ..Default::default()
+    };
+    let commands = compose_sphere(render, &view, &opts);
+    // Las líneas y círculos se pintan en el canvas; el texto va al DOM.
+    let paint_cmds: Vec<DrawCommand> = commands
+        .iter()
+        .filter(|c| !matches!(c, DrawCommand::Text { .. }))
+        .cloned()
+        .collect();
+
+    let entity_for_canvas = entity.clone();
+    let canvas_element = canvas(
+        move |_b: Bounds<Pixels>, _w, _cx| (),
+        move |bounds: Bounds<Pixels>, _, window, _| {
+            let ox: f32 = bounds.origin.x.into();
+            let oy: f32 = bounds.origin.y.into();
+            for cmd in &paint_cmds {
+                match cmd {
+                    DrawCommand::Line { x1, y1, x2, y2, color, width, dash } => {
+                        paint_segment(
+                            window,
+                            ox + *x1,
+                            oy + *y1,
+                            ox + *x2,
+                            oy + *y2,
+                            rgba_to_hsla(*color),
+                            *dash,
+                            *width,
+                        );
+                    }
+                    DrawCommand::Circle { cx, cy, r, stroke, fill, stroke_w } => {
+                        if let Some(f) = fill {
+                            fill_circle(window, ox + *cx, oy + *cy, *r, rgba_to_hsla(*f));
+                        }
+                        if let Some(s) = stroke {
+                            stroke_circle(
+                                window,
+                                ox + *cx,
+                                oy + *cy,
+                                *r,
+                                *stroke_w,
+                                rgba_to_hsla(*s),
+                            );
+                        }
+                    }
+                    DrawCommand::Text { .. } => {}
+                }
+            }
+
+            // Drag para orbitar la esfera.
+            let ent = entity_for_canvas.clone();
+            window.on_mouse_event(move |ev: &MouseDownEvent, _, _w, cx| {
+                if ev.button == MouseButton::Left && bounds.contains(&ev.position) {
+                    ent.update(cx, |this, _cx| this.on_sphere_down(ev.position));
+                }
+            });
+            let ent = entity_for_canvas.clone();
+            window.on_mouse_event(move |ev: &MouseMoveEvent, _, _w, cx| {
+                if ev.dragging() {
+                    ent.update(cx, |this, cx| this.on_sphere_move(ev.position, cx));
+                }
+            });
+            let ent = entity_for_canvas.clone();
+            window.on_mouse_event(move |_: &MouseUpEvent, _, _w, cx| {
+                ent.update(cx, |this, cx| this.on_sphere_up(cx));
+            });
+        },
+    )
+    .absolute()
+    .w(px(sphere_size))
+    .h(px(sphere_size));
+
+    let mut sphere = div()
+        .relative()
+        .w(px(sphere_size))
+        .h(px(sphere_size))
+        .ml(px(view_pan_x))
+        .mt(px(view_pan_y))
+        .child(canvas_element);
+
+    // Glifos (signos, ángulos, cuerpos) como hijos DOM, ubicados sobre
+    // las coordenadas que ya proyectó `compose_sphere`.
+    for cmd in &commands {
+        if let DrawCommand::Text { x, y, content, color, size, .. } = cmd {
+            sphere = sphere.child(centered_glyph(
+                *x,
+                *y,
+                size * 1.9,
+                *size,
+                content.clone().into(),
+                rgba_to_hsla(*color),
+            ));
+        }
+    }
+
+    // Pista de interacción al pie.
+    sphere.child(
+        div()
+            .absolute()
+            .bottom(px(6.0))
+            .left(px(0.0))
+            .w(px(sphere_size))
+            .flex()
+            .justify_center()
+            .text_size(px(10.0))
+            .text_color(theme.fg_disabled)
+            .child("Arrastrá para rotar la esfera"),
+    )
+}
+
+/// Convierte un `Rgba` agnóstico (`[0,1]^4`) al `Hsla` de gpui.
+fn rgba_to_hsla(c: cosmobiologia_render::Rgba) -> Hsla {
+    let (r, g, b) = (c.r, c.g, c.b);
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let l = (max + min) / 2.0;
+    let d = max - min;
+    if d < 1e-6 {
+        return hsla(0.0, 0.0, l.clamp(0.0, 1.0), c.a.clamp(0.0, 1.0));
+    }
+    let s = d / (1.0 - (2.0 * l - 1.0).abs());
+    let h = (if max == r {
+        ((g - b) / d).rem_euclid(6.0)
+    } else if max == g {
+        (b - r) / d + 2.0
+    } else {
+        (r - g) / d + 4.0
+    }) * 60.0;
+    hsla(
+        h.rem_euclid(360.0) / 360.0,
+        s.clamp(0.0, 1.0),
+        l.clamp(0.0, 1.0),
+        c.a.clamp(0.0, 1.0),
+    )
 }
 
 // =====================================================================

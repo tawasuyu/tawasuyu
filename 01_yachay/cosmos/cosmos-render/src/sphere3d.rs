@@ -1,0 +1,545 @@
+//! `sphere3d` — la esfera celeste en 3D, proyectada a primitivas 2D.
+//!
+//! GPUI no es un motor 3D y empotrar wgpu sería frágil. La estrategia
+//! es otra: la esfera celeste es un objeto de **alambre** —círculos
+//! máximos y puntos—, y eso se proyecta a software con trigonometría
+//! pura. Cada superficie (canvas gpui nativo, SVG del cliente web) ya
+//! sabe traducir un [`DrawCommand`] (línea, círculo, texto); este
+//! módulo solo decide DÓNDE cae cada trazo. Resultado: una esfera
+//! celeste real, rotable, sin una sola línea de GPU.
+//!
+//! ## Marco de coordenadas — la eclíptica como plano de referencia
+//!
+//! El plano de la eclíptica es el plano `z = 0`. El eje `x` apunta al
+//! 0° de Aries (el punto vernal). Una longitud eclíptica `λ` —con
+//! latitud eclíptica ≈ 0, lo cual vale para los planetas— es el punto
+//! unitario `(cos λ, sin λ, 0)`. El polo norte de la eclíptica es
+//! `(0, 0, 1)`.
+//!
+//! El **ecuador celeste** es ese mismo círculo inclinado por la
+//! oblicuidad ε ≈ 23.44° alrededor del eje `x`: los dos se cruzan en
+//! los equinoccios, exactamente como en el cielo. Ver esa inclinación
+//! —imposible en la rueda 2D— es el corazón de esta vista.
+//!
+//! ## Lo que esta primera entrega NO hace todavía
+//!
+//! El **horizonte local** (y con él el día/noche: qué planetas están
+//! sobre el horizonte) necesita la latitud geográfica del lugar, que
+//! hoy no viaja en el [`RenderModel`]. Queda para una segunda capa.
+
+use serde::{Deserialize, Serialize};
+
+use crate::draw::{planet_unicode_with_retro, sign_unicode, DrawCommand, Rgba, TextAnchor};
+use crate::palette::Palette;
+use crate::{LayerKind, RenderModel};
+
+/// Oblicuidad media de la eclíptica, en grados. Varía ~0.013°/siglo —
+/// despreciable para una vista de alambre, así que se fija.
+pub const OBLICUIDAD_DEG: f32 = 23.4393;
+
+const SIGN_NAMES: [&str; 12] = [
+    "aries", "taurus", "gemini", "cancer", "leo", "virgo", "libra",
+    "scorpio", "sagittarius", "capricorn", "aquarius", "pisces",
+];
+
+// =====================================================================
+// Cámara — cómo se orienta la esfera frente al observador
+// =====================================================================
+
+/// Orientación de la esfera frente a la cámara. El usuario la muta
+/// arrastrando: `yaw` gira alrededor del eje polar de la eclíptica,
+/// `pitch` inclina la cámara hacia arriba o abajo.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct SphereView {
+    /// Giro alrededor del eje polar de la eclíptica, en grados.
+    pub yaw_deg: f32,
+    /// Inclinación de la cámara, en grados. Un `pitch` negativo mira la
+    /// esfera desde el norte hacia abajo, dejando la eclíptica como una
+    /// elipse abierta en vez de una raya de canto.
+    pub pitch_deg: f32,
+}
+
+impl Default for SphereView {
+    fn default() -> Self {
+        // Tres-cuartos desde arriba: la eclíptica se ve como un aro
+        // ancho y la inclinación del ecuador se lee de inmediato.
+        Self { yaw_deg: 26.0, pitch_deg: -64.0 }
+    }
+}
+
+/// Opciones de composición de la esfera.
+#[derive(Debug, Clone)]
+pub struct SphereOpts {
+    /// Lado en px del cuadrado contenedor.
+    pub size: f32,
+    pub palette: Palette,
+    /// Oblicuidad de la eclíptica en grados (ver [`OBLICUIDAD_DEG`]).
+    pub obliquity_deg: f32,
+    /// Rejilla de meridianos y paralelos eclípticos.
+    pub show_grid: bool,
+    /// El ecuador celeste y el eje de la Tierra.
+    pub show_equator: bool,
+    /// Los cuerpos natales sobre la eclíptica.
+    pub show_bodies: bool,
+    /// Los glifos y divisiones de los signos.
+    pub show_signs: bool,
+}
+
+impl Default for SphereOpts {
+    fn default() -> Self {
+        Self {
+            size: 600.0,
+            palette: Palette::dark(),
+            obliquity_deg: OBLICUIDAD_DEG,
+            show_grid: true,
+            show_equator: true,
+            show_bodies: true,
+            show_signs: true,
+        }
+    }
+}
+
+// =====================================================================
+// Vector 3D y proyección
+// =====================================================================
+
+#[derive(Debug, Clone, Copy)]
+struct Vec3 {
+    x: f32,
+    y: f32,
+    z: f32,
+}
+
+impl Vec3 {
+    fn new(x: f32, y: f32, z: f32) -> Self {
+        Self { x, y, z }
+    }
+    fn scale(self, k: f32) -> Self {
+        Self::new(self.x * k, self.y * k, self.z * k)
+    }
+}
+
+/// Un punto ya proyectado a la pantalla, con su profundidad conservada
+/// para ordenar de atrás hacia adelante y atenuar el hemisferio lejano.
+#[derive(Debug, Clone, Copy)]
+struct Projected {
+    x: f32,
+    y: f32,
+    /// `+` hacia el observador (frente), `−` lejos (fondo).
+    depth: f32,
+}
+
+/// Proyector ortográfico: gira un punto por la cámara (`yaw` alrededor
+/// del eje polar, `pitch` alrededor del eje horizontal de pantalla) y
+/// lo aplana a coordenadas de pantalla.
+struct Projector {
+    ys: f32,
+    yc: f32,
+    ps: f32,
+    pc: f32,
+    ox: f32,
+    oy: f32,
+    rad: f32,
+}
+
+impl Projector {
+    fn new(view: &SphereView, ox: f32, oy: f32, rad: f32) -> Self {
+        let (ys, yc) = view.yaw_deg.to_radians().sin_cos();
+        let (ps, pc) = view.pitch_deg.to_radians().sin_cos();
+        Self { ys, yc, ps, pc, ox, oy, rad }
+    }
+
+    fn project(&self, p: Vec3) -> Projected {
+        // 1) yaw alrededor del eje Z (polar de la eclíptica).
+        let x1 = p.x * self.yc - p.y * self.ys;
+        let y1 = p.x * self.ys + p.y * self.yc;
+        let z1 = p.z;
+        // 2) pitch alrededor del eje X (horizontal de pantalla).
+        let x2 = x1;
+        let y2 = y1 * self.pc - z1 * self.ps;
+        let z2 = y1 * self.ps + z1 * self.pc;
+        // 3) ortográfica: la pantalla tiene la Y hacia abajo.
+        Projected {
+            x: self.ox + self.rad * x2,
+            y: self.oy - self.rad * y2,
+            depth: z2,
+        }
+    }
+}
+
+/// Punto unitario sobre la eclíptica a la longitud `deg`.
+fn eclip(deg: f32) -> Vec3 {
+    let (s, c) = deg.to_radians().sin_cos();
+    Vec3::new(c, s, 0.0)
+}
+
+/// Rota `p` alrededor del eje X (la línea de los equinoccios).
+fn rot_x(p: Vec3, ang_rad: f32) -> Vec3 {
+    let (s, c) = ang_rad.sin_cos();
+    Vec3::new(p.x, p.y * c - p.z * s, p.y * s + p.z * c)
+}
+
+/// Atenuación por profundidad: el frente brilla pleno, el fondo se
+/// apaga hasta ~0.30 para que el ojo lea el volumen de la esfera.
+fn depth_alpha(depth: f32) -> f32 {
+    0.30 + 0.70 * ((depth + 1.0) * 0.5).clamp(0.0, 1.0)
+}
+
+/// `color` con su alpha modulada por la profundidad.
+fn dim(color: Rgba, depth: f32) -> Rgba {
+    color.with_alpha(color.a * depth_alpha(depth))
+}
+
+// =====================================================================
+// Generadores de círculos
+// =====================================================================
+
+/// El círculo de la eclíptica (z = 0), `n` puntos.
+fn ring_points(n: usize) -> Vec<Vec3> {
+    (0..n)
+        .map(|i| eclip((i as f32) / (n as f32) * 360.0))
+        .collect()
+}
+
+/// Un meridiano eclíptico: círculo máximo por ambos polos a la
+/// longitud `lon0`.
+fn meridian_points(lon0: f32, n: usize) -> Vec<Vec3> {
+    let (ls, lc) = lon0.to_radians().sin_cos();
+    (0..n)
+        .map(|i| {
+            let a = (i as f32) / (n as f32) * std::f32::consts::TAU;
+            let (asin, acos) = a.sin_cos();
+            Vec3::new(acos * lc, acos * ls, asin)
+        })
+        .collect()
+}
+
+/// Un paralelo eclíptico: círculo menor a la latitud `beta`.
+fn parallel_points(beta: f32, n: usize) -> Vec<Vec3> {
+    let (bs, bc) = beta.to_radians().sin_cos();
+    (0..n)
+        .map(|i| {
+            let lon = (i as f32) / (n as f32) * 360.0;
+            let (ls, lc) = lon.to_radians().sin_cos();
+            Vec3::new(bc * lc, bc * ls, bs)
+        })
+        .collect()
+}
+
+/// Proyecta una polilínea cerrada y empuja un `Line` por segmento, con
+/// la profundidad como clave de orden y la atenuación ya aplicada.
+fn add_loop(
+    items: &mut Vec<(f32, DrawCommand)>,
+    proj: &Projector,
+    pts: &[Vec3],
+    color: Rgba,
+    width: f32,
+) {
+    let n = pts.len();
+    for i in 0..n {
+        let a = proj.project(pts[i]);
+        let b = proj.project(pts[(i + 1) % n]);
+        let d = (a.depth + b.depth) * 0.5;
+        items.push((
+            d,
+            DrawCommand::Line {
+                x1: a.x,
+                y1: a.y,
+                x2: b.x,
+                y2: b.y,
+                color: dim(color, d),
+                width,
+                dash: None,
+            },
+        ));
+    }
+}
+
+// =====================================================================
+// Composición
+// =====================================================================
+
+/// Compone la esfera celeste como una lista de [`DrawCommand`]s, ya
+/// ordenada de atrás hacia adelante (algoritmo del pintor). El canvas
+/// nativo y el cliente web la consumen igual que la rueda 2D.
+pub fn compose_sphere(
+    model: &RenderModel,
+    view: &SphereView,
+    opts: &SphereOpts,
+) -> Vec<DrawCommand> {
+    let pal = &opts.palette;
+    let size = opts.size;
+    let center = size * 0.5;
+    let rad = size * 0.36;
+    let proj = Projector::new(view, center, center, rad);
+    let eps = opts.obliquity_deg.to_radians();
+
+    // (profundidad, comando) — se ordena al final.
+    let mut items: Vec<(f32, DrawCommand)> = Vec::new();
+
+    // --- Limbo: disco tenue de fondo + contorno (siempre al fondo) ---
+    items.push((
+        -100.0,
+        DrawCommand::Circle {
+            cx: center,
+            cy: center,
+            r: rad,
+            stroke: Some(pal.fg_muted.with_alpha(0.22)),
+            fill: Some(pal.water.with_alpha(if pal.is_dark { 0.07 } else { 0.05 })),
+            stroke_w: 1.0,
+        },
+    ));
+
+    // --- Rejilla: meridianos + paralelos de la eclíptica ---
+    if opts.show_grid {
+        let grid = pal.fg_muted.with_alpha(0.16);
+        for k in 0..6 {
+            add_loop(&mut items, &proj, &meridian_points((k as f32) * 30.0, 64), grid, 0.5);
+        }
+        for &beta in &[-60.0_f32, -30.0, 30.0, 60.0] {
+            add_loop(&mut items, &proj, &parallel_points(beta, 64), grid, 0.5);
+        }
+    }
+
+    // --- Ecuador celeste + eje de la Tierra ---
+    if opts.show_equator {
+        let equator: Vec<Vec3> = ring_points(96).iter().map(|p| rot_x(*p, eps)).collect();
+        add_loop(&mut items, &proj, &equator, pal.uranus.with_alpha(0.85), 1.3);
+        let n = proj.project(rot_x(Vec3::new(0.0, 0.0, 1.0), eps));
+        let s = proj.project(rot_x(Vec3::new(0.0, 0.0, -1.0), eps));
+        items.push((
+            (n.depth + s.depth) * 0.5,
+            DrawCommand::Line {
+                x1: s.x,
+                y1: s.y,
+                x2: n.x,
+                y2: n.y,
+                color: pal.uranus.with_alpha(0.45),
+                width: 0.8,
+                dash: Some((4.0, 4.0)),
+            },
+        ));
+    }
+
+    // --- Eclíptica: el camino del zodíaco, el aro prominente ---
+    add_loop(&mut items, &proj, &ring_points(96), pal.dial_ring, 2.0);
+    {
+        // Eje polar de la eclíptica, tenue.
+        let n = proj.project(Vec3::new(0.0, 0.0, 1.0));
+        let s = proj.project(Vec3::new(0.0, 0.0, -1.0));
+        items.push((
+            (n.depth + s.depth) * 0.5,
+            DrawCommand::Line {
+                x1: s.x,
+                y1: s.y,
+                x2: n.x,
+                y2: n.y,
+                color: pal.fg_muted.with_alpha(0.30),
+                width: 0.6,
+                dash: None,
+            },
+        ));
+    }
+
+    // --- Signos: espolón en cada borde + glifo en el centro ---
+    if opts.show_signs {
+        for i in 0..12 {
+            let boundary = (i as f32) * 30.0;
+            let a = proj.project(eclip(boundary));
+            let b = proj.project(eclip(boundary).scale(1.09));
+            let d = (a.depth + b.depth) * 0.5;
+            items.push((
+                d,
+                DrawCommand::Line {
+                    x1: a.x,
+                    y1: a.y,
+                    x2: b.x,
+                    y2: b.y,
+                    color: dim(pal.dial_ring, d),
+                    width: 1.0,
+                    dash: None,
+                },
+            ));
+            let mid = boundary + 15.0;
+            let g = proj.project(eclip(mid).scale(1.17));
+            let name = SIGN_NAMES[i];
+            items.push((
+                g.depth + 0.002,
+                DrawCommand::Text {
+                    x: g.x,
+                    y: g.y,
+                    content: sign_unicode(name).into(),
+                    color: dim(pal.sign(name), g.depth),
+                    size: size * 0.030,
+                    anchor: TextAnchor::Middle,
+                },
+            ));
+        }
+    }
+
+    // --- Ángulos ASC / MC / DSC / IC ---
+    for (deg, label) in [
+        (model.ascendant_deg, "Asc"),
+        (model.midheaven_deg, "MC"),
+        (model.descendant_deg, "Dsc"),
+        (model.imum_coeli_deg, "IC"),
+    ] {
+        let a = proj.project(eclip(deg));
+        let b = proj.project(eclip(deg).scale(1.14));
+        let d = (a.depth + b.depth) * 0.5;
+        items.push((
+            d,
+            DrawCommand::Line {
+                x1: a.x,
+                y1: a.y,
+                x2: b.x,
+                y2: b.y,
+                color: dim(pal.angle_highlight, d),
+                width: 1.6,
+                dash: None,
+            },
+        ));
+        let lbl = proj.project(eclip(deg).scale(1.30));
+        items.push((
+            lbl.depth + 0.002,
+            DrawCommand::Text {
+                x: lbl.x,
+                y: lbl.y,
+                content: label.into(),
+                color: dim(pal.angle_highlight, lbl.depth),
+                size: size * 0.021,
+                anchor: TextAnchor::Middle,
+            },
+        ));
+    }
+
+    // --- Cuerpos natales sobre la eclíptica ---
+    if opts.show_bodies {
+        for layer in &model.layers {
+            if !matches!(layer.kind, LayerKind::Bodies) || layer.module_id != "natal" {
+                continue;
+            }
+            let halo = if pal.is_dark {
+                pal.bg_panel.with_alpha(0.92)
+            } else {
+                Rgba::opaque(1.0, 1.0, 1.0).with_alpha(0.92)
+            };
+            for g in &layer.glyphs {
+                let p = proj.project(eclip(g.deg));
+                let color = pal.planet(&g.symbol);
+                items.push((
+                    p.depth,
+                    DrawCommand::Circle {
+                        cx: p.x,
+                        cy: p.y,
+                        r: size * 0.020,
+                        stroke: Some(dim(color, p.depth)),
+                        fill: Some(halo),
+                        stroke_w: 1.3,
+                    },
+                ));
+                items.push((
+                    p.depth + 0.003,
+                    DrawCommand::Text {
+                        x: p.x,
+                        y: p.y,
+                        content: planet_unicode_with_retro(&g.symbol, g.retrograde),
+                        color: dim(color, p.depth),
+                        size: size * 0.026,
+                        anchor: TextAnchor::Middle,
+                    },
+                ));
+            }
+        }
+    }
+
+    // Algoritmo del pintor: de la profundidad menor (fondo) a la mayor.
+    items.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(core::cmp::Ordering::Equal));
+    items.into_iter().map(|(_, cmd)| cmd).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ChartId, ChartKind, Geometry, Glyph, Layer};
+
+    #[test]
+    fn vernal_point_y_cuadratura_sobre_la_eclyptica() {
+        let v = eclip(0.0);
+        assert!((v.x - 1.0).abs() < 1e-5 && v.y.abs() < 1e-5 && v.z.abs() < 1e-5);
+        let q = eclip(90.0);
+        assert!(q.x.abs() < 1e-5 && (q.y - 1.0).abs() < 1e-5 && q.z.abs() < 1e-5);
+    }
+
+    #[test]
+    fn la_oblicuidad_inclina_el_polo_celeste() {
+        // El polo norte celeste = polo eclíptico rotado por ε. El
+        // ángulo entre ambos debe ser exactamente ε.
+        let ncp = rot_x(Vec3::new(0.0, 0.0, 1.0), OBLICUIDAD_DEG.to_radians());
+        let cos_ang = ncp.z; // producto punto con (0,0,1).
+        let ang = cos_ang.acos().to_degrees();
+        assert!((ang - OBLICUIDAD_DEG).abs() < 1e-3, "ángulo {ang}");
+    }
+
+    #[test]
+    fn la_proyeccion_no_se_sale_del_cuadro() {
+        let view = SphereView::default();
+        let proj = Projector::new(&view, 300.0, 300.0, 108.0);
+        for i in 0..360 {
+            let p = proj.project(eclip(i as f32));
+            assert!(p.x >= 300.0 - 109.0 && p.x <= 300.0 + 109.0);
+            assert!(p.y >= 300.0 - 109.0 && p.y <= 300.0 + 109.0);
+        }
+    }
+
+    fn modelo_demo() -> RenderModel {
+        RenderModel {
+            chart_id: ChartId::default(),
+            chart_kind: ChartKind::Natal,
+            title: "demo".into(),
+            subtitle: None,
+            compute_ms: 0,
+            ascendant_deg: 100.0,
+            midheaven_deg: 10.0,
+            descendant_deg: 280.0,
+            imum_coeli_deg: 190.0,
+            layers: vec![Layer {
+                module_id: "natal".into(),
+                kind: LayerKind::Bodies,
+                ring: 0.0,
+                z: 0,
+                geometry: Geometry::GlyphsOnly,
+                glyphs: vec![
+                    Glyph { deg: 12.0, symbol: "sun".into(), ..Default::default() },
+                    Glyph { deg: 200.0, symbol: "moon".into(), ..Default::default() },
+                ],
+            }],
+            overlays: vec![],
+            aspect_summary: vec![],
+            uranian_groups: vec![],
+            gr_triggers: vec![],
+            harmonic: 1,
+            harmonic_spectrum: vec![],
+        }
+    }
+
+    #[test]
+    fn compose_sphere_emite_esqueleto_y_cuerpos() {
+        let cmds = compose_sphere(&modelo_demo(), &SphereView::default(), &SphereOpts::default());
+        assert!(!cmds.is_empty(), "la esfera produce comandos");
+        let lineas = cmds.iter().filter(|c| matches!(c, DrawCommand::Line { .. })).count();
+        let textos = cmds.iter().filter(|c| matches!(c, DrawCommand::Text { .. })).count();
+        assert!(lineas > 100, "círculos máximos como polilíneas: {lineas}");
+        // 12 glifos de signo + 4 etiquetas de ángulo + 2 cuerpos.
+        assert_eq!(textos, 18, "glifos de signos, ángulos y cuerpos: {textos}");
+    }
+
+    #[test]
+    fn el_primer_comando_es_el_limbo_de_fondo() {
+        let cmds = compose_sphere(&modelo_demo(), &SphereView::default(), &SphereOpts::default());
+        assert!(
+            matches!(cmds.first(), Some(DrawCommand::Circle { .. })),
+            "el limbo (profundidad −100) se pinta primero"
+        );
+    }
+}
