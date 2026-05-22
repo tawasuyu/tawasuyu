@@ -199,6 +199,14 @@ fn eclip(deg: f32) -> Vec3 {
     Vec3::new(c, s, 0.0)
 }
 
+/// Punto unitario a longitud y latitud eclípticas (grados) — para los
+/// cuerpos que NO yacen sobre la eclíptica, como las estrellas fijas.
+fn eclip_latlon(lon_deg: f32, lat_deg: f32) -> Vec3 {
+    let (sl, cl) = lon_deg.to_radians().sin_cos();
+    let (sb, cb) = lat_deg.to_radians().sin_cos();
+    Vec3::new(cb * cl, cb * sl, sb)
+}
+
 /// Rota `p` alrededor del eje X (la línea de los equinoccios).
 fn rot_x(p: Vec3, ang_rad: f32) -> Vec3 {
     let (s, c) = ang_rad.sin_cos();
@@ -554,6 +562,83 @@ fn add_starfield(items: &mut Vec<(f32, DrawCommand)>, proj: &Projector, size: f3
     }
 }
 
+// --- Estrellas fijas notables ----------------------------------------
+
+/// Latitud eclíptica (grados, J2000) de las estrellas fijas notables
+/// que emite el motor. La latitud apenas cambia con la precesión, así
+/// que se fija aquí; la **longitud** —la coordenada astrológicamente
+/// viva, que sí precesiona— la calcula el motor
+/// (`build_fixed_stars_overlay`) y llega en el `Glyph`. Valores de
+/// catálogo estándar, precisión ~0.5° (de sobra para el alambre).
+fn fixed_star_latitude(name: &str) -> f32 {
+    match name {
+        "Regulus" => 0.47,
+        "Spica" => -2.06,
+        "Antares" => -4.57,
+        "Aldebaran" => -5.47,
+        "Pollux" => 6.68,
+        "Algol" => 22.43,
+        "Fomalhaut" => -21.14,
+        "Sirius" => -39.61,
+        "Vega" => 61.73,
+        _ => 0.0,
+    }
+}
+
+/// Dibuja una estrella fija: un disco brillante con destello de cuatro
+/// rayos y su nombre.
+fn add_fixed_star(
+    items: &mut Vec<(f32, DrawCommand)>,
+    proj: &Projector,
+    pos: Vec3,
+    size: f32,
+    name: &str,
+    pal: &Palette,
+) {
+    let p = proj.project(pos);
+    let glow = Rgba::opaque(1.0, 0.96, 0.84);
+    let c = dim(glow, p.depth);
+    items.push((
+        p.depth + 0.004,
+        DrawCommand::Circle {
+            cx: p.x,
+            cy: p.y,
+            r: size * 0.006,
+            stroke: None,
+            fill: Some(c),
+            stroke_w: 0.0,
+        },
+    ));
+    let ray = size * 0.018;
+    let thin = c.with_alpha(c.a * 0.8);
+    for (dx, dy) in [(ray, 0.0), (-ray, 0.0), (0.0, ray), (0.0, -ray)] {
+        items.push((
+            p.depth + 0.004,
+            DrawCommand::Line {
+                x1: p.x,
+                y1: p.y,
+                x2: p.x + dx,
+                y2: p.y + dy,
+                color: thin,
+                width: 0.9,
+                dash: None,
+            },
+        ));
+    }
+    let lp = proj.project(pos.scale(1.10));
+    items.push((
+        lp.depth + 0.005,
+        DrawCommand::Text {
+            x: lp.x,
+            y: lp.y,
+            content: name.into(),
+            color: dim(pal.fg_text, lp.depth),
+            size: size * 0.017,
+            anchor: TextAnchor::Middle,
+        },
+    ));
+}
+
 // =====================================================================
 // Composición
 // =====================================================================
@@ -870,6 +955,21 @@ pub fn compose_sphere(
         }
     }
 
+    // --- Estrellas fijas notables (capa del motor, si está activa) ---
+    // El motor emite la capa `FixedStars` con la longitud eclíptica ya
+    // precesionada; aquí se le suma la latitud para situarla en su
+    // lugar real de la esfera, no aplastada sobre la eclíptica.
+    for layer in &model.layers {
+        if !matches!(layer.kind, LayerKind::FixedStars) {
+            continue;
+        }
+        for g in &layer.glyphs {
+            let name = g.annotation.as_deref().unwrap_or("");
+            let pos = eclip_latlon(g.deg, fixed_star_latitude(name));
+            add_fixed_star(&mut items, &proj, pos, size, name, pal);
+        }
+    }
+
     // Algoritmo del pintor: de la profundidad menor (fondo) a la mayor.
     items.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(core::cmp::Ordering::Equal));
     items.into_iter().map(|(_, cmd)| cmd).collect()
@@ -991,6 +1091,52 @@ mod tests {
             "el cielo agrega cientos de estrellas: {} vs {}",
             discos(&con),
             discos(&sin),
+        );
+    }
+
+    #[test]
+    fn eclip_latlon_respeta_la_latitud() {
+        let sobre = eclip_latlon(123.0, 0.0);
+        assert!(sobre.z.abs() < 1e-5, "latitud 0 → sobre la eclíptica");
+        let polo = eclip_latlon(45.0, 90.0);
+        assert!((polo.z - 1.0).abs() < 1e-5, "latitud 90 → polo eclíptico");
+        let sirio = eclip_latlon(200.0, -39.61);
+        assert!((sirio.z - (-39.61_f32).to_radians().sin()).abs() < 1e-5);
+    }
+
+    #[test]
+    fn las_latitudes_de_estrellas_fijas_son_coherentes() {
+        // Sirio es la más austral; Vega la más boreal; Régulo casi
+        // sobre la eclíptica; una desconocida cae a latitud 0.
+        assert!(fixed_star_latitude("Sirius") < -30.0);
+        assert!(fixed_star_latitude("Vega") > 55.0);
+        assert!(fixed_star_latitude("Regulus").abs() < 1.0);
+        assert_eq!(fixed_star_latitude("Inexistente"), 0.0);
+    }
+
+    #[test]
+    fn compose_sphere_dibuja_las_estrellas_fijas_de_la_capa() {
+        let mut modelo = modelo_demo();
+        modelo.layers.push(Layer {
+            module_id: "fixed_stars".into(),
+            kind: LayerKind::FixedStars,
+            ring: 1.04,
+            z: 16,
+            geometry: Geometry::GlyphsOnly,
+            glyphs: vec![Glyph {
+                deg: 104.0,
+                symbol: "✦Sir".into(),
+                annotation: Some("Sirius".into()),
+                ..Default::default()
+            }],
+        });
+        let cmds = compose_sphere(&modelo, &SphereView::default(), &SphereOpts::default());
+        assert!(
+            cmds.iter().any(|c| matches!(
+                c,
+                DrawCommand::Text { content, .. } if content == "Sirius"
+            )),
+            "la estrella fija de la capa aparece etiquetada en la esfera"
         );
     }
 
