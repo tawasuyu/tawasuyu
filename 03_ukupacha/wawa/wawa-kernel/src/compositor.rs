@@ -1,5 +1,5 @@
 // =============================================================================
-//  renaser :: kernel/src/compositor.rs — Fase 8 :: el compositor teselante
+//  renaser :: kernel/src/compositor.rs — el compositor: teselado y flotantes
 // -----------------------------------------------------------------------------
 //  El kernel no coloca las ventanas a mano: las TESELA. El motor es
 //  `mirada-layout` —el mismo nucleo `no_std` que ordena el compositor Wayland
@@ -11,6 +11,15 @@
 //  caliente —o mover el foco— y el kernel recompone cada ventana en su marco
 //  nuevo SIN despertar a las apps: una app que solo pinto en su `init` conserva
 //  su imagen intacta a traves de cualquier reordenacion.
+//
+//  FASE 9 :: orden-Z y ventanas flotantes. Una ventana puede ABANDONAR el
+//  teselado y FLOTAR —un marco propio, libre, que SOLAPA a las demas—. El
+//  escritorio separa entonces dos capas: las TESELADAS, al fondo, sin
+//  solapamiento entre si; y las FLOTANTES, encima, apiladas por un orden-Z
+//  —`flotantes` ES esa pila, de atras hacia adelante; la ultima es la frontal—.
+//  Con flotantes vivas el kernel deja de pintar cada ventana por separado:
+//  RECOMPONE el escritorio entero, capa a capa, de modo que el solapamiento se
+//  resuelva por el orden del pintado, sin recortes ni mascaras.
 //
 //  EXCLUSION DE INTERRUPCIONES. El `ESCRITORIO` lo tocan SOLO tareas
 //  cooperativas (el `tick` de una app, la tarea del compositor): el manejador
@@ -29,6 +38,7 @@ use crossbeam_queue::ArrayQueue;
 use mirada_layout::{tile, LayoutMode, LayoutParams, Rect};
 use spin::{Mutex, Once};
 
+use crate::consola::{self, Capa, Contenido};
 use crate::grafico::{Color, RegionPantalla};
 
 /// Altura del strip superior reservado a la consola; las apps teselan debajo.
@@ -44,6 +54,15 @@ const MARGEN: i32 = 14;
 
 /// Capacidad de la cola de mandos del compositor — holgada: nadie pulsa tanto.
 const CAPACIDAD_MANDOS: usize = 32;
+
+/// Reborde de cromo de una ventana flotante: el panel que rodea su lienzo
+/// natural, donde se asienta el borde de foco sin tapar el dibujo de la app.
+const CROMO_FLOTANTE: usize = 8;
+
+/// Paso de la cascada con que se colocan las ventanas flotantes nuevas, en
+/// pixeles. Cada flotante se desplaza un paso respecto a la anterior, de modo
+/// que varias no se tapen por completo.
+const PASO_CASCADA: usize = 44;
 
 /// Un mando del compositor — lo emite el teclado desde el contexto de IRQ, lo
 /// atiende la tarea del compositor desde el reactor cooperativo.
@@ -61,6 +80,8 @@ pub enum Mando {
     MoverAdelante,
     /// Mover la ventana enfocada una posicion atras en el orden de teselado.
     MoverAtras,
+    /// Alternar la ventana enfocada entre teselada y flotante (Fase 9).
+    Flotar,
 }
 
 /// Una ventana del escritorio: una app, su geometria y su ultimo fotograma.
@@ -68,8 +89,8 @@ struct Ventana {
     /// Tamaño natural del lienzo de la app — lo que sabe pintar, fijo.
     natural_ancho: usize,
     natural_alto: usize,
-    /// El marco teselado actual — donde la app vive en pantalla. Cambia con
-    /// cada re-teselado.
+    /// El marco actual — donde la app vive en pantalla. Si la ventana esta
+    /// teselada, lo fija el teselado; si flota, es un marco propio y libre.
     marco: RegionPantalla,
     /// CACHE de respaldo: el ultimo fotograma exitoso que la app envio. Su
     /// tamaño esta acotado al lienzo natural —`natural_ancho × natural_alto ×
@@ -93,10 +114,15 @@ struct Escritorio {
     /// Las ventanas, indexadas por `indice_app` — su IDENTIDAD, inmutable.
     ventanas: Vec<Ventana>,
     /// El ORDEN de teselado: `orden[slot]` es el `indice_app` de la ventana que
-    /// ocupa esa celda del teselado. Una permutacion de `0..ventanas.len()`.
-    /// Separar el orden de la identidad permite promover y reordenar ventanas
-    /// sin tocar su `indice_app` —su canal de teclado, su ranura de estado—.
+    /// ocupa esa celda del teselado. Contiene SOLO las ventanas teseladas —las
+    /// flotantes salen de aqui—. Separar el orden de la identidad permite
+    /// promover y reordenar ventanas sin tocar su `indice_app`.
     orden: Vec<usize>,
+    /// Las ventanas FLOTANTES, en orden-Z (Fase 9): de atras hacia adelante.
+    /// `flotantes.last()` es la ventana frontal. Una ventana esta en `orden` o
+    /// en `flotantes`, jamas en ambos ni en ninguno: juntos son una particion
+    /// de `0..ventanas.len()`.
+    flotantes: Vec<usize>,
 }
 
 /// El escritorio global. Se funda una sola vez, en el arranque.
@@ -142,7 +168,8 @@ pub fn fundar(ancho: usize, alto: usize, naturales: &[(usize, usize)]) {
     }
 
     // El orden de teselado arranca como la identidad: la ventana `i` ocupa la
-    // celda `i`. Los mandos del teclado lo permutaran.
+    // celda `i`. Ninguna ventana flota al nacer — el escritorio es puro
+    // teselado hasta que el teclado lo decida (`Alt+F`).
     let orden = (0..ventanas.len()).collect();
     let mut escritorio = Escritorio {
         modo: MODO_INICIAL,
@@ -150,14 +177,16 @@ pub fn fundar(ancho: usize, alto: usize, naturales: &[(usize, usize)]) {
         alto,
         ventanas,
         orden,
+        flotantes: Vec::new(),
     };
     aplicar_teselado(&mut escritorio);
 
     ESCRITORIO.call_once(|| Mutex::new(escritorio));
 }
 
-/// Recalcula el teselado y asigna a cada ventana su marco. La celda `slot` del
-/// teselado va a la ventana `orden[slot]`: manda el orden, no la identidad.
+/// Recalcula el teselado y asigna a cada ventana TESELADA su marco. La celda
+/// `slot` del teselado va a la ventana `orden[slot]`: manda el orden, no la
+/// identidad. Las ventanas flotantes no estan en `orden` y conservan su marco.
 fn aplicar_teselado(escritorio: &mut Escritorio) {
     let marcos = teselar(
         escritorio.orden.len(),
@@ -171,16 +200,15 @@ fn aplicar_teselado(escritorio: &mut Escritorio) {
     }
 }
 
-/// Pinta el escenario inicial del compositor: el area de apps y sus marcos
-/// teselados. Se invoca una vez, tras `fundar`, antes de encender las apps.
+/// Pinta el escenario inicial del compositor. Se invoca una vez, tras `fundar`,
+/// antes de encender las apps: recompone el escritorio con todas las ventanas
+/// aun sin pintar — el teselado se ve como una rejilla de paneles.
 pub fn componer_escenario() {
     let Some(escritorio) = ESCRITORIO.get() else {
         return;
     };
     let escritorio = escritorio.lock();
-    let area = area_apps(escritorio.ancho, escritorio.alto);
-    let marcos: Vec<RegionPantalla> = escritorio.ventanas.iter().map(|v| v.marco).collect();
-    crate::consola::pintar_escenario(area, &marcos);
+    recomponer(&escritorio);
 }
 
 /// El indice de la ventana enfocada. Lo LEE el manejador de IRQ1 para enrutar
@@ -204,14 +232,17 @@ pub fn solicitar(mando: Mando) {
 // =============================================================================
 
 /// Recibe el fotograma de la app `indice`: lo copia a su CACHE de respaldo —el
-/// kernel asume la persistencia visual— y lo compone, centrado, en su marco.
-/// Lo invoca la capacidad `sys_render_frame` desde el `tick` cooperativo.
+/// kernel asume la persistencia visual— y lo lleva a pantalla. Sin ventanas
+/// flotantes ninguna ventana solapa a otra: basta repintar la que cambio —el
+/// camino RAPIDO—. Con flotantes vivas el solapamiento obliga a RECOMPONER el
+/// escritorio entero, respetando el orden-Z. Lo invoca la capacidad
+/// `sys_render_frame` desde el `tick` cooperativo.
 pub fn presentar_fotograma(indice: usize, datos: &[u8]) {
     let Some(escritorio) = ESCRITORIO.get() else {
         return;
     };
-    let (marco, nat_ancho, nat_alto) = {
-        let mut escritorio = escritorio.lock();
+    let mut escritorio = escritorio.lock();
+    {
         let Some(ventana) = escritorio.ventanas.get_mut(indice) else {
             return;
         };
@@ -220,10 +251,22 @@ pub fn presentar_fotograma(indice: usize, datos: &[u8]) {
         let n = ventana.cache.len().min(datos.len());
         ventana.cache[..n].copy_from_slice(&datos[..n]);
         ventana.pintada = true;
-        (ventana.marco, ventana.natural_ancho, ventana.natural_alto)
-    };
-    let enfocada = FOCO.load(Ordering::Relaxed) == indice;
-    crate::consola::volcar_marco(marco, nat_ancho, nat_alto, datos, enfocada);
+    }
+
+    if escritorio.flotantes.is_empty() {
+        // Camino RAPIDO: sin flotantes el escritorio es puro teselado y la app
+        // pinta directamente en su marco, como en la Fase 8.
+        let ventana = &escritorio.ventanas[indice];
+        let marco = ventana.marco;
+        let nat_ancho = ventana.natural_ancho;
+        let nat_alto = ventana.natural_alto;
+        let enfocada = FOCO.load(Ordering::Relaxed) == indice;
+        drop(escritorio);
+        consola::volcar_marco(marco, nat_ancho, nat_alto, datos, enfocada);
+    } else {
+        // Hay ventanas flotantes: el solapamiento obliga a recomponer.
+        recomponer(&escritorio);
+    }
 }
 
 /// Marca la ventana `indice` como desalojada y tatua su marco con la baliza.
@@ -232,16 +275,22 @@ pub fn desalojar(indice: usize, color: Color) {
     let Some(escritorio) = ESCRITORIO.get() else {
         return;
     };
-    let marco = {
-        let mut escritorio = escritorio.lock();
+    let mut escritorio = escritorio.lock();
+    {
         let Some(ventana) = escritorio.ventanas.get_mut(indice) else {
             return;
         };
         ventana.baliza = Some(color);
-        ventana.marco
-    };
-    let enfocada = FOCO.load(Ordering::Relaxed) == indice;
-    crate::consola::pintar_desalojo(marco, color, enfocada);
+    }
+
+    if escritorio.flotantes.is_empty() {
+        let marco = escritorio.ventanas[indice].marco;
+        let enfocada = FOCO.load(Ordering::Relaxed) == indice;
+        drop(escritorio);
+        consola::pintar_desalojo(marco, color, enfocada);
+    } else {
+        recomponer(&escritorio);
+    }
 }
 
 // =============================================================================
@@ -263,12 +312,13 @@ pub fn atender_mandos() {
             Mando::Promover => promover(),
             Mando::MoverAdelante => mover_ventana(true),
             Mando::MoverAtras => mover_ventana(false),
+            Mando::Flotar => flotar(),
         }
     }
 }
 
-/// Cicla al siguiente modo de teselado: recalcula los marcos de todas las
-/// ventanas y recompone el escritorio entero desde las caches de respaldo.
+/// Cicla al siguiente modo de teselado: recalcula los marcos de las ventanas
+/// teseladas y recompone el escritorio entero desde las caches de respaldo.
 fn ciclar_layout() {
     let Some(escritorio) = ESCRITORIO.get() else {
         return;
@@ -276,28 +326,32 @@ fn ciclar_layout() {
     let mut escritorio = escritorio.lock();
     escritorio.modo = escritorio.modo.next();
     aplicar_teselado(&mut escritorio);
-    redibujar_todo(&escritorio);
+    recomponer(&escritorio);
 }
 
-/// Mueve el foco a la siguiente ventana VIVA, recorriendo el ORDEN de teselado
-/// —de modo que el foco salte entre ventanas visualmente contiguas— y saltando
-/// las desalojadas. Redibuja la ventana que pierde el foco y la que lo gana.
+/// Mueve el foco a la siguiente ventana VIVA. El recorrido abarca TODAS las
+/// ventanas —las teseladas y, tras ellas, las flotantes— saltando las
+/// desalojadas. Si la ventana recien enfocada flota, sube al frente del
+/// orden-Z: la flotante con el foco esta SIEMPRE delante.
 fn mover_foco(adelante: bool) {
     let Some(escritorio) = ESCRITORIO.get() else {
         return;
     };
-    let escritorio = escritorio.lock();
-    let n = escritorio.orden.len();
+    let mut escritorio = escritorio.lock();
+    // El recorrido del foco: las teseladas, luego las flotantes — un orden
+    // estable y visualmente coherente.
+    let recorrido: Vec<usize> = escritorio
+        .orden
+        .iter()
+        .chain(escritorio.flotantes.iter())
+        .copied()
+        .collect();
+    let n = recorrido.len();
     if n == 0 {
         return;
     }
     let anterior = FOCO.load(Ordering::Relaxed);
-    // La posicion del foco en el orden de teselado — el punto de partida.
-    let pos = escritorio
-        .orden
-        .iter()
-        .position(|&v| v == anterior)
-        .unwrap_or(0);
+    let pos = recorrido.iter().position(|&v| v == anterior).unwrap_or(0);
 
     // Avanzar saltando las ventanas desalojadas. Si no hay ninguna viva, tras
     // `n` pasos se vuelve al punto de partida y el foco no cambia.
@@ -309,23 +363,21 @@ fn mover_foco(adelante: bool) {
         } else {
             (nueva_pos + n - 1) % n
         };
-        let candidata = escritorio.orden[nueva_pos];
+        let candidata = recorrido[nueva_pos];
         if escritorio.ventanas[candidata].baliza.is_none() {
             nuevo = candidata;
             break;
         }
     }
     FOCO.store(nuevo, Ordering::Relaxed);
-
-    if let Some(ventana) = escritorio.ventanas.get(anterior) {
-        redibujar_ventana(ventana, false);
-    }
-    redibujar_ventana(&escritorio.ventanas[nuevo], true);
+    // La ventana recien enfocada, si flota, al frente del orden-Z.
+    alzar_si_flota(&mut escritorio, nuevo);
+    recomponer(&escritorio);
 }
 
 /// Promueve la ventana enfocada a la posicion maestra —la celda 0— del
-/// teselado: la saca de su lugar en el orden y la inserta al frente. Las demas
-/// se desplazan una posicion. El escritorio entero se recompone.
+/// teselado. Si la ventana enfocada flota, no esta en el orden de teselado y
+/// el mando no hace nada — promover es una operacion del teselado.
 fn promover() {
     let Some(escritorio) = ESCRITORIO.get() else {
         return;
@@ -336,13 +388,13 @@ fn promover() {
         let ventana = escritorio.orden.remove(pos);
         escritorio.orden.insert(0, ventana);
         aplicar_teselado(&mut escritorio);
-        redibujar_todo(&escritorio);
+        recomponer(&escritorio);
     }
 }
 
 /// Mueve la ventana enfocada una posicion en el orden de teselado,
-/// intercambiandola con su vecina. El foco viaja con la ventana — el indice no
-/// cambia, solo su lugar en el orden.
+/// intercambiandola con su vecina. Una ventana flotante no esta en el orden:
+/// el mando no la afecta.
 fn mover_ventana(adelante: bool) {
     let Some(escritorio) = ESCRITORIO.get() else {
         return;
@@ -361,41 +413,107 @@ fn mover_ventana(adelante: bool) {
         };
         escritorio.orden.swap(pos, destino);
         aplicar_teselado(&mut escritorio);
-        redibujar_todo(&escritorio);
+        recomponer(&escritorio);
     }
 }
 
-/// Recompone el escritorio entero: repinta el escenario —area y paneles— con
-/// los marcos nuevos y, sobre el, cada ventana desde su cache de respaldo.
-fn redibujar_todo(escritorio: &Escritorio) {
-    let area = area_apps(escritorio.ancho, escritorio.alto);
-    let marcos: Vec<RegionPantalla> = escritorio.ventanas.iter().map(|v| v.marco).collect();
-    crate::consola::pintar_escenario(area, &marcos);
+// =============================================================================
+//  FASE 9 — orden-Z y ventanas flotantes
+// =============================================================================
 
+/// Alterna la ventana enfocada entre TESELADA y FLOTANTE. Al flotar, la ventana
+/// abandona el teselado —que se recalcula para las que quedan—, recibe un marco
+/// propio en cascada y sube al frente del orden-Z. Al volver al teselado, se
+/// reincorpora al final del orden. El foco no cambia: viaja con la ventana.
+fn flotar() {
+    let Some(escritorio) = ESCRITORIO.get() else {
+        return;
+    };
+    let mut escritorio = escritorio.lock();
     let foco = FOCO.load(Ordering::Relaxed);
-    for (i, ventana) in escritorio.ventanas.iter().enumerate() {
-        redibujar_ventana(ventana, i == foco);
+
+    if let Some(pos) = escritorio.orden.iter().position(|&v| v == foco) {
+        // Teselada -> flotante: se desliga del teselado, recibe su marco
+        // propio en cascada y sube al frente del orden-Z.
+        escritorio.orden.remove(pos);
+        let marco = marco_flotante(&escritorio, foco);
+        escritorio.ventanas[foco].marco = marco;
+        escritorio.flotantes.push(foco);
+        aplicar_teselado(&mut escritorio);
+        recomponer(&escritorio);
+    } else if let Some(pos) = escritorio.flotantes.iter().position(|&v| v == foco) {
+        // Flotante -> teselada: vuelve a la rejilla, al final del orden.
+        escritorio.flotantes.remove(pos);
+        escritorio.orden.push(foco);
+        aplicar_teselado(&mut escritorio);
+        recomponer(&escritorio);
     }
 }
 
-/// Redibuja UNA ventana en su marco actual: si fue desalojada, su baliza; si ya
-/// pinto, su ultimo fotograma desde la cache; si aun no pinto, nada —el panel
-/// del escenario ya esta puesto—.
-fn redibujar_ventana(ventana: &Ventana, enfocada: bool) {
-    match ventana.baliza {
-        Some(color) => crate::consola::pintar_desalojo(ventana.marco, color, enfocada),
-        None => {
-            if ventana.pintada {
-                crate::consola::volcar_marco(
-                    ventana.marco,
-                    ventana.natural_ancho,
-                    ventana.natural_alto,
-                    &ventana.cache,
-                    enfocada,
-                );
-            }
-        }
+/// Si la ventana `indice` es flotante, la lleva al frente del orden-Z —al final
+/// de `flotantes`—. Si esta teselada, no hace nada.
+fn alzar_si_flota(escritorio: &mut Escritorio, indice: usize) {
+    if let Some(pos) = escritorio.flotantes.iter().position(|&v| v == indice) {
+        let ventana = escritorio.flotantes.remove(pos);
+        escritorio.flotantes.push(ventana);
     }
+}
+
+/// El marco de una ventana recien hecha flotante: su lienzo natural mas un
+/// reborde de cromo, colocado en cascada —para que varias flotantes no se
+/// tapen del todo— y acotado al area de apps. Se invoca ANTES de inscribir la
+/// ventana en `flotantes`: su longitud da el escalon de la cascada.
+fn marco_flotante(escritorio: &Escritorio, indice: usize) -> RegionPantalla {
+    let area = area_apps(escritorio.ancho, escritorio.alto);
+    let ventana = &escritorio.ventanas[indice];
+    let ancho = (ventana.natural_ancho + 2 * CROMO_FLOTANTE).min(area.ancho);
+    let alto = (ventana.natural_alto + 2 * CROMO_FLOTANTE).min(area.alto);
+
+    // La cascada: un escalon por cada flotante ya existente.
+    let escalon = escritorio.flotantes.len().saturating_mul(PASO_CASCADA);
+    let mut x = area.x + 48 + escalon;
+    let mut y = area.y + 40 + escalon;
+    // Acotar: la ventana entera ha de caber dentro del area de apps.
+    if x + ancho > area.x + area.ancho {
+        x = area.x + area.ancho.saturating_sub(ancho);
+    }
+    if y + alto > area.y + area.alto {
+        y = area.y + area.alto.saturating_sub(alto);
+    }
+    RegionPantalla {
+        x,
+        y,
+        ancho,
+        alto,
+    }
+}
+
+/// Recompone el escritorio entero respetando el orden-Z. Arma la lista de capas
+/// —primero las ventanas TESELADAS, la capa de fondo; despues las FLOTANTES, de
+/// atras hacia adelante— y se la entrega a la consola, que las funde en ese
+/// orden de una sola pasada. El solapamiento se resuelve por el orden del
+/// pintado. La invocan los mandos del teclado y `presentar_fotograma` cuando
+/// hay flotantes vivas. El llamante sostiene ya el cerrojo del `ESCRITORIO`.
+fn recomponer(escritorio: &Escritorio) {
+    let area = area_apps(escritorio.ancho, escritorio.alto);
+    let foco = FOCO.load(Ordering::Relaxed);
+    let mut capas: Vec<Capa> = Vec::with_capacity(escritorio.ventanas.len());
+    for &indice in escritorio.orden.iter().chain(escritorio.flotantes.iter()) {
+        let ventana = &escritorio.ventanas[indice];
+        let contenido = match ventana.baliza {
+            Some(color) => Contenido::Baliza(color),
+            None if ventana.pintada => Contenido::Fotograma(&ventana.cache),
+            None => Contenido::Panel,
+        };
+        capas.push(Capa {
+            marco: ventana.marco,
+            nat_ancho: ventana.natural_ancho,
+            nat_alto: ventana.natural_alto,
+            contenido,
+            enfocada: indice == foco,
+        });
+    }
+    consola::recomponer(area, &capas);
 }
 
 // =============================================================================
@@ -414,7 +532,7 @@ pub fn area_apps(ancho_pantalla: usize, alto_pantalla: usize) -> RegionPantalla 
 }
 
 /// Tesela el area de apps en `n` marcos con el modo dado. El vector resultante
-/// tiene exactamente `n` elementos, en el orden de las apps del manifiesto.
+/// tiene exactamente `n` elementos, en el orden de las celdas del teselado.
 fn teselar(n: usize, ancho: usize, alto: usize, modo: LayoutMode) -> Vec<RegionPantalla> {
     let area = area_apps(ancho, alto);
     let pantalla = Rect::new(

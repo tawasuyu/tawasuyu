@@ -12,7 +12,8 @@
 //
 //    * La tecla Alt es el MODIFICADOR del sistema. Con Alt pulsada, los make
 //      codes son MANDOS del compositor (ciclar el teselado, mover el foco,
-//      promover y reordenar ventanas): se consumen aqui, jamas llegan a una app.
+//      promover, reordenar y hacer flotar ventanas): se consumen aqui, jamas
+//      llegan a una app.
 //    * Una tecla ordinaria se entrega SOLO a la app ENFOCADA — la que el
 //      compositor senala. El censo de canales se indexa por el `indice_app`,
 //      de modo que el foco —un atomico— elija el canal exacto.
@@ -51,6 +52,8 @@ const TECLA_H: u8 = 0x23;
 const TECLA_L: u8 = 0x26;
 /// Tecla Enter — `Alt + Enter` promueve la ventana enfocada a maestra.
 const ENTER: u8 = 0x1C;
+/// Tecla F — `Alt + F` alterna la ventana enfocada entre teselada y flotante.
+const TECLA_F: u8 = 0x21;
 
 /// Un canal de teclado: la cola lock-free de scancodes de UNA aplicacion.
 pub type CanalTeclado = Arc<ArrayQueue<u8>>;
@@ -136,6 +139,7 @@ pub fn recibir_scancode(scancode: u8) {
             ENTER => compositor::solicitar(Mando::Promover),
             TECLA_L => compositor::solicitar(Mando::MoverAdelante),
             TECLA_H => compositor::solicitar(Mando::MoverAtras),
+            TECLA_F => compositor::solicitar(Mando::Flotar),
             _ => {}
         }
         return;

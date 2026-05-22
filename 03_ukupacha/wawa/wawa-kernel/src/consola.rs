@@ -34,6 +34,39 @@ fn mezclar(fondo: Color, tinta: Color, cobertura: u8) -> Color {
     }
 }
 
+// =============================================================================
+//  CAPAS — la descripcion de una recomposicion del escritorio (Fase 9)
+// -----------------------------------------------------------------------------
+//  Cuando hay ventanas flotantes, el escritorio no se pinta ventana a ventana:
+//  el compositor entrega la lista de CAPAS —ordenada de atras hacia adelante— y
+//  la consola las funde en ese orden de una sola pasada. El solapamiento de las
+//  ventanas se resuelve solo, por el orden del pintado.
+// =============================================================================
+
+/// El contenido visible de una capa al recomponer el escritorio.
+pub(crate) enum Contenido<'a> {
+    /// La ventana aun no ha pintado: solo se ve su panel de reposo.
+    Panel,
+    /// El ultimo fotograma de la ventana — su lienzo natural crudo.
+    Fotograma(&'a [u8]),
+    /// La ventana fue desalojada: su baliza, un color plano.
+    Baliza(Color),
+}
+
+/// Una capa del escritorio: una ventana, su marco y lo que muestra. El
+/// compositor arma con ellas una lista ordenada de atras hacia adelante.
+pub(crate) struct Capa<'a> {
+    /// El marco donde la ventana vive en pantalla.
+    pub(crate) marco: RegionPantalla,
+    /// El tamaño natural del lienzo de la app — su fotograma mide esto.
+    pub(crate) nat_ancho: usize,
+    pub(crate) nat_alto: usize,
+    /// Lo que la capa muestra.
+    pub(crate) contenido: Contenido<'a>,
+    /// ¿Tiene esta ventana el foco del compositor?
+    pub(crate) enfocada: bool,
+}
+
 /// La consola grafica de renaser: doble bufer, pantalla fisica y pluma.
 pub(crate) struct Consola {
     lienzo: Lienzo,
@@ -120,17 +153,17 @@ impl Consola {
 
     /// Compone un fotograma crudo del userspace WASM —pixeles `0x00RRGGBB`, con
     /// sus limites ya verificados por el host— dentro del MARCO que el
-    /// compositor (Fase 8) asigno a su aplicacion. El fotograma mide el tamaño
-    /// NATURAL de la app (`nat_ancho × nat_alto`); se CENTRA en el marco —que el
-    /// teselado pudo hacer mayor o menor que ese natural— y se recorta con
-    /// firmeza a sus bordes. Una app jamas pinta un pixel fuera de su marco.
-    fn volcar_marco(
+    /// compositor asigno a su aplicacion. El fotograma mide el tamaño NATURAL
+    /// de la app (`nat_ancho × nat_alto`); se CENTRA en el marco —que pudo
+    /// hacerse mayor o menor que ese natural— y se recorta con firmeza a sus
+    /// bordes. Una app jamas pinta un pixel fuera de su marco. NO traza borde
+    /// ni presenta: de eso se encargan `volcar_marco` y `recomponer`.
+    fn componer_fotograma(
         &mut self,
         marco: RegionPantalla,
         nat_ancho: usize,
         nat_alto: usize,
         datos: &[u8],
-        enfocada: bool,
     ) {
         if nat_ancho == 0 || nat_alto == 0 {
             return;
@@ -166,8 +199,59 @@ impl Consola {
             self.lienzo.pixeles[y * self.lienzo.ancho + x] =
                 codificar(self.lienzo.formato, color);
         }
+    }
+
+    /// Compone el fotograma de una app en su marco, le traza el borde de foco y
+    /// presenta. El camino RAPIDO del compositor: sin ventanas flotantes
+    /// ninguna ventana solapa a otra y basta repintar la que cambia.
+    fn volcar_marco(
+        &mut self,
+        marco: RegionPantalla,
+        nat_ancho: usize,
+        nat_alto: usize,
+        datos: &[u8],
+        enfocada: bool,
+    ) {
+        self.componer_fotograma(marco, nat_ancho, nat_alto, datos);
         // El borde del compositor: delata, de un vistazo, quien tiene el foco.
         self.dibujar_borde(marco, enfocada);
+        self.presentar();
+    }
+
+    /// Recompone el escritorio entero de una sola pasada (Fase 9). Inunda el
+    /// area de apps con el reposo del lienzo y funde sobre ella cada capa, EN
+    /// ORDEN —de atras hacia adelante—: asi el solapamiento de las ventanas
+    /// flotantes se resuelve por si solo, sin recortes ni mascaras. Cada capa
+    /// pinta primero su panel —el cromo de la ventana— y, encima, su contenido;
+    /// una sola presentacion cierra la pasada.
+    fn recomponer(&mut self, area: RegionPantalla, capas: &[Capa]) {
+        self.lienzo.rellenar_rect(
+            area.x,
+            area.y,
+            area.ancho,
+            area.alto,
+            Color::LIENZO_EN_REPOSO,
+        );
+        for capa in capas {
+            let m = capa.marco;
+            match &capa.contenido {
+                Contenido::Panel => {
+                    self.lienzo
+                        .rellenar_rect(m.x, m.y, m.ancho, m.alto, Color::PANEL);
+                }
+                Contenido::Fotograma(datos) => {
+                    // El panel primero —el cromo que rodea el lienzo— y el
+                    // fotograma natural centrado encima.
+                    self.lienzo
+                        .rellenar_rect(m.x, m.y, m.ancho, m.alto, Color::PANEL);
+                    self.componer_fotograma(m, capa.nat_ancho, capa.nat_alto, datos);
+                }
+                Contenido::Baliza(color) => {
+                    self.lienzo.rellenar_rect(m.x, m.y, m.ancho, m.alto, *color);
+                }
+            }
+            self.dibujar_borde(m, capa.enfocada);
+        }
         self.presentar();
     }
 
@@ -207,25 +291,6 @@ impl Consola {
         );
     }
 
-    /// Pinta el escenario del compositor (Fase 8): inunda el area de apps con
-    /// el reposo del lienzo —borrando cuanto hubiera debajo— y, sobre ella,
-    /// tiñe cada marco teselado con el color de panel. Asi el teselado se ve
-    /// como una rejilla de paneles aun antes de que sus apps pinten nada.
-    fn pintar_escenario(&mut self, area: RegionPantalla, marcos: &[RegionPantalla]) {
-        self.lienzo.rellenar_rect(
-            area.x,
-            area.y,
-            area.ancho,
-            area.alto,
-            Color::LIENZO_EN_REPOSO,
-        );
-        for marco in marcos {
-            self.lienzo
-                .rellenar_rect(marco.x, marco.y, marco.ancho, marco.alto, Color::PANEL);
-        }
-        self.presentar();
-    }
-
     /// Vuelca el lienzo sobre la pantalla fisica.
     pub(crate) fn presentar(&mut self) {
         self.pantalla.presentar(&self.lienzo);
@@ -253,11 +318,13 @@ pub(crate) fn volcar_marco(
     }
 }
 
-/// Pinta el escenario del compositor (Fase 8): el area de apps y, sobre ella,
-/// cada marco teselado. La invoca `compositor` al arrancar y al re-teselar.
-pub(crate) fn pintar_escenario(area: RegionPantalla, marcos: &[RegionPantalla]) {
+/// Recompone el escritorio entero respetando el orden-Z de sus capas (Fase 9).
+/// La invoca `compositor` al arrancar y siempre que hay ventanas flotantes: el
+/// solapamiento obliga a repintar el escritorio en bloque, no ventana a
+/// ventana. Las capas llegan ya ordenadas de atras hacia adelante.
+pub(crate) fn recomponer(area: RegionPantalla, capas: &[Capa]) {
     if let Some(consola) = CONSOLA.get() {
-        consola.lock().pintar_escenario(area, marcos);
+        consola.lock().recomponer(area, capas);
     }
 }
 
