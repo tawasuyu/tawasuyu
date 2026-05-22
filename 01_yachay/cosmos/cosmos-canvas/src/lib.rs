@@ -41,7 +41,7 @@ use gpui::{
 };
 
 use cosmobiologia_engine::{
-    Geometry, GrTrigger, Layer, LayerKind, OUTER_RING_MODULES, RenderModel,
+    Geometry, GrTrigger, Layer, LayerKind, RenderModel, UranianGroup, OUTER_RING_MODULES,
 };
 use cosmobiologia_model::{ChartId, ContactId, GroupId};
 use cosmobiologia_theme::{AspectKind as TAspectKind, AstroPalette, Element, Planet};
@@ -1704,49 +1704,61 @@ fn render_wheel(
         footer = footer.child(b);
     }
 
-    // Ejes uranianos detectados (cuerpos en la misma posición mod 90).
-    // Aparece sólo cuando el módulo Uranian está activo y hay
-    // grupos. Cada grupo se muestra como pill con los unicode de los
-    // cuerpos + el grado dial-90.
-    if !render.uranian_groups.is_empty() {
-        let mut row = div().flex().flex_row().flex_wrap().gap(px(6.0));
-        for group in &render.uranian_groups {
-            let bodies_text: String = group
-                .bodies
-                .iter()
-                .map(|b| planet_unicode(b))
-                .collect::<Vec<_>>()
-                .join(" ");
-            row = row.child(
+    // Dial uraniano de 90°. Aparece cuando el módulo Uranian está
+    // activo: una proyección geométrica de los cuerpos sobre el eje
+    // 0-90° + la lista de fórmulas (cuerpos en el mismo grado dial).
+    if render.overlays.iter().any(|o| o.module_id == "uranian") {
+        let mut section = div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(4.0))
+            .child(
                 div()
-                    .px(px(8.0))
-                    .py(px(2.0))
-                    .rounded(px(10.0))
-                    .bg(theme.bg_panel_alt.clone())
-                    .border_1()
-                    .border_color(with_alpha(palette.angle_highlight, 0.6))
-                    .text_size(px(11.0))
-                    .text_color(theme.fg_text)
-                    .child(SharedString::from(format!(
-                        "{}  ·  {:.1}°",
-                        bodies_text, group.mod90_deg
-                    ))),
-            );
-        }
-        footer = footer.child(
-            div()
+                    .text_size(px(10.0))
+                    .text_color(theme.fg_muted)
+                    .child("Dial 90° (uraniano)"),
+            )
+            .child(render_uranian_dial(
+                theme,
+                palette,
+                &render.layers,
+                &render.uranian_groups,
+            ));
+        // Pills de fórmulas, sólo si se detectó algún eje.
+        if !render.uranian_groups.is_empty() {
+            let mut row = div()
                 .flex()
-                .flex_col()
-                .items_center()
-                .gap(px(3.0))
-                .child(
+                .flex_row()
+                .flex_wrap()
+                .justify_center()
+                .gap(px(6.0));
+            for group in &render.uranian_groups {
+                let bodies_text: String = group
+                    .bodies
+                    .iter()
+                    .map(|b| planet_unicode(b))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                row = row.child(
                     div()
-                        .text_size(px(10.0))
-                        .text_color(theme.fg_muted)
-                        .child("Ejes uranianos (90°)"),
-                )
-                .child(row),
-        );
+                        .px(px(8.0))
+                        .py(px(2.0))
+                        .rounded(px(10.0))
+                        .bg(theme.bg_panel_alt.clone())
+                        .border_1()
+                        .border_color(with_alpha(palette.angle_highlight, 0.6))
+                        .text_size(px(11.0))
+                        .text_color(theme.fg_text)
+                        .child(SharedString::from(format!(
+                            "{}  ·  {:.1}°",
+                            bodies_text, group.mod90_deg
+                        ))),
+                );
+            }
+            section = section.child(row);
+        }
+        footer = footer.child(section);
     }
 
     // Espectro de fuerza armónica — histograma clicable. Aparece sólo
@@ -2000,6 +2012,122 @@ fn render_harmonic_spectrum(
                 ))),
         )
         .child(bars)
+}
+
+/// Dial uraniano de 90°: proyección geométrica de los cuerpos natales
+/// sobre un eje horizontal 0-90° (longitud mod 90). Los cuerpos que
+/// forman una fórmula uraniana (mismo grado dial) caen agrupados y se
+/// resaltan; clusters densos se escalonan en filas para legibilidad.
+fn render_uranian_dial(
+    theme: &Theme,
+    palette: &AstroPalette,
+    layers: &[Layer],
+    groups: &[UranianGroup],
+) -> gpui::Div {
+    const DIAL_W: f32 = 560.0;
+    const ROW_H: f32 = 18.0;
+    const MAX_ROWS: usize = 4;
+    const AXIS_Y: f32 = ROW_H * MAX_ROWS as f32;
+    const MIN_GAP: f32 = 17.0;
+
+    let Some(layer) = layers
+        .iter()
+        .find(|l| l.module_id == "natal" && matches!(l.kind, LayerKind::Bodies))
+    else {
+        return div();
+    };
+
+    // `(símbolo, x, agrupado)` ordenados por posición en el dial.
+    let mut marks: Vec<(String, f32, bool)> = layer
+        .glyphs
+        .iter()
+        .map(|g| {
+            let x = g.deg.rem_euclid(90.0) / 90.0 * DIAL_W;
+            let grouped = groups
+                .iter()
+                .any(|gr| gr.bodies.iter().any(|b| b == &g.symbol));
+            (g.symbol.clone(), x, grouped)
+        })
+        .collect();
+    marks.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut track = div().relative().w(px(DIAL_W)).h(px(AXIS_Y + 22.0));
+
+    // Eje base.
+    track = track.child(
+        div()
+            .absolute()
+            .left(px(0.0))
+            .top(px(AXIS_Y))
+            .w(px(DIAL_W))
+            .h(px(1.0))
+            .bg(with_alpha(palette.dial_ring, 0.7)),
+    );
+    // Ticks 0 / 22½ / 45 / 67½ / 90 — las divisiones duras del dial.
+    for (deg, label) in [
+        (0.0_f32, "0°"),
+        (22.5, "22½°"),
+        (45.0, "45°"),
+        (67.5, "67½°"),
+        (90.0, "90°"),
+    ] {
+        let x = deg / 90.0 * DIAL_W;
+        track = track
+            .child(
+                div()
+                    .absolute()
+                    .left(px(x))
+                    .top(px(AXIS_Y))
+                    .w(px(1.0))
+                    .h(px(6.0))
+                    .bg(with_alpha(palette.dial_ring, 0.85)),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left(px(x - 14.0))
+                    .top(px(AXIS_Y + 8.0))
+                    .w(px(28.0))
+                    .flex()
+                    .justify_center()
+                    .text_size(px(8.0))
+                    .text_color(theme.fg_disabled)
+                    .child(SharedString::from(label)),
+            );
+    }
+
+    // Glyphs, con escalonado vertical para los clusters.
+    let mut last_x = f32::NEG_INFINITY;
+    let mut row = 0usize;
+    for (symbol, x, grouped) in &marks {
+        if x - last_x < MIN_GAP {
+            row = (row + 1).min(MAX_ROWS - 1);
+        } else {
+            row = 0;
+        }
+        last_x = *x;
+        let color = if *grouped {
+            palette.angle_highlight
+        } else {
+            with_alpha(planet_color(palette, symbol), 0.55)
+        };
+        track = track.child(
+            div()
+                .absolute()
+                .left(px(x - 8.0))
+                .top(px(row as f32 * ROW_H))
+                .w(px(16.0))
+                .h(px(16.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(px(13.0))
+                .text_color(color)
+                .child(SharedString::from(planet_unicode(symbol).to_string())),
+        );
+    }
+
+    track
 }
 
 /// Color de un trigger GR según su orbe: rojo intenso (orbe cerrado,

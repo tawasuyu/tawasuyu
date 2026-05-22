@@ -141,9 +141,9 @@ pub enum PipelineRequest {
     /// `module_id = "uranian"` — calcula los "ejes" del dial uraniano
     /// de 90°: agrupa los cuerpos natales cuya longitud módulo 90 cae
     /// dentro de una tolerancia (~2°). El resultado se publica en
-    /// `RenderModel.uranian_groups` para que la UI lo liste como
-    /// fórmulas analíticas. La visualización geométrica completa del
-    /// dial de 90° queda pendiente para una fase posterior.
+    /// `RenderModel.uranian_groups`; la UI lo pinta como un dial
+    /// geométrico de 90° (proyección sobre el eje 0-90°) más la lista
+    /// de fórmulas.
     Uranian,
     /// `module_id = "lots"` — Lots arábigos (helenísticos) calculados
     /// via `eternal_astrology::compute_lot`: Fortune, Spirit, Eros,
