@@ -71,6 +71,10 @@ pub enum CanvasEvent {
     /// la edad en vez del tiempo. Lleva el delta de edad en años; el
     /// host lo acumula sobre `target_age_years` y recompone en vivo.
     GrAgeDelta(f64),
+    /// El usuario hizo clic en una barra del espectro armónico. Lleva
+    /// el orden de armónica elegido; el host fija el slider `harmonic`
+    /// del módulo natal y recompone.
+    HarmonicSelected(u32),
 }
 
 // =====================================================================
@@ -1745,6 +1749,18 @@ fn render_wheel(
         );
     }
 
+    // Espectro de fuerza armónica — histograma clicable. Aparece sólo
+    // en modo armónico (harmonic > 1) y guía qué armónico mirar.
+    if !render.harmonic_spectrum.is_empty() {
+        footer = footer.child(render_harmonic_spectrum(
+            theme,
+            palette,
+            &render.harmonic_spectrum,
+            render.harmonic,
+            entity.clone(),
+        ));
+    }
+
     // Lista textual de aspectos (top 12 por orb). Compacta, en grid
     // de 3 columnas, fonts pequeños. Solo aparece cuando hay aspectos
     // computados.
@@ -1901,6 +1917,89 @@ fn render_gr_hud(theme: &Theme, triggers: &[GrTrigger]) -> gpui::Div {
         );
     }
     col
+}
+
+/// Histograma del espectro de fuerza armónica. Cada barra es clicable:
+/// un clic salta el slider de armónico a esa armónica. La barra de la
+/// armónica activa va resaltada.
+fn render_harmonic_spectrum(
+    theme: &Theme,
+    palette: &AstroPalette,
+    spectrum: &[f32],
+    current: u32,
+    entity: gpui::Entity<AstrologyCanvas>,
+) -> gpui::Div {
+    const BAR_AREA_H: f32 = 46.0;
+    let max = spectrum.iter().copied().fold(0.0_f32, f32::max).max(1e-3);
+
+    let mut bars = div().flex().flex_row().items_end().gap(px(2.0));
+    for (i, &strength) in spectrum.iter().enumerate() {
+        let h = (i as u32) + 1;
+        let norm = (strength / max).clamp(0.0, 1.0);
+        let bar_h = (norm * BAR_AREA_H).max(2.0);
+        let is_current = h == current;
+        let color = if is_current {
+            palette.angle_highlight
+        } else {
+            with_alpha(palette.angle_highlight, 0.28 + norm * 0.45)
+        };
+        // Etiqueta cada 4 armónicas (+ la primera y la activa) para no
+        // saturar la tira.
+        let label = if h == current || h == 1 || h % 4 == 0 {
+            format!("{h}")
+        } else {
+            String::new()
+        };
+        let column = div()
+            .id(SharedString::from(format!("tts-harmonic-bar-{h}")))
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(2.0))
+            .cursor_pointer()
+            .child(
+                div()
+                    .h(px(BAR_AREA_H))
+                    .flex()
+                    .flex_col()
+                    .justify_end()
+                    .child(div().w(px(11.0)).h(px(bar_h)).rounded(px(1.5)).bg(color)),
+            )
+            .child(
+                div()
+                    .text_size(px(7.0))
+                    .text_color(if is_current {
+                        palette.angle_highlight
+                    } else {
+                        theme.fg_disabled
+                    })
+                    .child(SharedString::from(label)),
+            )
+            .on_click({
+                let entity = entity.clone();
+                move |_: &gpui::ClickEvent, _w, cx: &mut gpui::App| {
+                    entity.update(cx, |_this, cx| {
+                        cx.emit(CanvasEvent::HarmonicSelected(h));
+                    });
+                }
+            });
+        bars = bars.child(column);
+    }
+
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(px(3.0))
+        .child(
+            div()
+                .text_size(px(10.0))
+                .text_color(theme.fg_muted)
+                .child(SharedString::from(format!(
+                    "Espectro armónico · H{current} activo · clic para saltar"
+                ))),
+        )
+        .child(bars)
 }
 
 /// Color de un trigger GR según su orbe: rojo intenso (orbe cerrado,

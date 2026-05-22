@@ -1176,7 +1176,28 @@ impl Shell {
             CanvasEvent::GrAgeDelta(delta) => {
                 self.scrub_gr_age(*delta, cx);
             }
+            CanvasEvent::HarmonicSelected(n) => {
+                self.select_harmonic(*n, cx);
+            }
         }
+    }
+
+    /// Fija el armónico de la carta natal (clic en una barra del
+    /// espectro): escribe `harmonic` en `module_configs["natal"]`,
+    /// sincroniza el slider del panel y recompone.
+    fn select_harmonic(&mut self, n: u32, cx: &mut Context<Self>) {
+        let entry = self
+            .module_configs
+            .entry("natal".into())
+            .or_insert_with(|| serde_json::json!({}));
+        if let serde_json::Value::Object(map) = entry {
+            map.insert("harmonic".into(), serde_json::json!(n));
+        }
+        self.panel.update(cx, |p, cx| {
+            p.set_slider("natal", "harmonic", n as f64, cx)
+        });
+        self.persist_module("natal");
+        self.render_current(cx);
     }
 
     /// Scrubbing en vivo de la edad GR vía jog-dial. Acumula `delta`

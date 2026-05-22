@@ -270,7 +270,8 @@ pub mod natal {
                     key: "harmonic".into(),
                     label: "Armónico".into(),
                     min: 1.0,
-                    max: 20.0,
+                    // 1-32: el rango del espectro de fuerza armónica.
+                    max: 32.0,
                     step: 1.0,
                     default: 1.0,
                 },

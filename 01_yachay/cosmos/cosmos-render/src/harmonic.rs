@@ -14,6 +14,9 @@
 
 use crate::{AspectSummary, Geometry, LayerKind, LineSeg, RenderModel};
 
+/// Máxima armónica que cubre el espectro de fuerza.
+pub const HARMONIC_SPECTRUM_MAX: u32 = 32;
+
 /// Aspectos que se buscan en la carta armónica: `(id, ángulo, orbe)`.
 /// Conjunción y oposición llevan orbe más amplio, como es convención.
 const HARMONIC_ASPECTS: &[(&str, f32, f32)] = &[
@@ -37,6 +40,14 @@ pub fn apply_harmonic(model: &mut RenderModel, n: u32) {
         return;
     }
     let nf = n as f32;
+
+    // 0. Longitudes natales (pre-transformación) para el espectro.
+    let natal_longitudes: Vec<f32> = model
+        .layers
+        .iter()
+        .filter(|l| l.module_id == "natal" && l.kind == LayerKind::Bodies)
+        .flat_map(|l| l.glyphs.iter().map(|g| g.deg))
+        .collect();
 
     // 1. Transformar los cuerpos natales; recolectar `(símbolo, lon)`.
     let mut bodies: Vec<(String, f32)> = Vec::new();
@@ -79,8 +90,41 @@ pub fn apply_harmonic(model: &mut RenderModel, n: u32) {
         })
         .collect();
 
-    // 4. Anotar el armónico en el título.
+    // 4. Espectro de fuerza armónica + armónico activo + título.
+    model.harmonic = n;
+    model.harmonic_spectrum = harmonic_spectrum(&natal_longitudes, HARMONIC_SPECTRUM_MAX);
     model.title = format!("{} · H{}", model.title, n);
+}
+
+/// Espectro de fuerza armónica: para cada armónica `1..=max`, cuánto
+/// resuena la carta — la suma de la cercanía a conjunción exacta de
+/// todos los pares de cuerpos en esa armónica. Un pico en H marca que
+/// la carta tiene un patrón fuerte de la N-ésima armónica; es la guía
+/// para elegir qué armónico mirar.
+pub fn harmonic_spectrum(natal_longitudes: &[f32], max: u32) -> Vec<f32> {
+    (1..=max)
+        .map(|h| harmonic_strength(natal_longitudes, h))
+        .collect()
+}
+
+/// Fuerza de una sola armónica: suma sobre pares de cuerpos de
+/// `1 - sep/orb` para los pares que caen a menos de `RESONANCE_ORB`
+/// de la conjunción en esa armónica.
+fn harmonic_strength(longitudes: &[f32], h: u32) -> f32 {
+    const RESONANCE_ORB: f32 = 10.0;
+    let hf = h as f32;
+    let mut score = 0.0;
+    for i in 0..longitudes.len() {
+        for j in (i + 1)..longitudes.len() {
+            let a = (longitudes[i] * hf).rem_euclid(360.0);
+            let b = (longitudes[j] * hf).rem_euclid(360.0);
+            let sep = circular_sep(a, b);
+            if sep < RESONANCE_ORB {
+                score += 1.0 - sep / RESONANCE_ORB;
+            }
+        }
+    }
+    score
 }
 
 /// Separación circular mínima entre dos longitudes (rango `0..=180`).
@@ -188,6 +232,8 @@ mod tests {
             aspect_summary: Vec::new(),
             uranian_groups: Vec::new(),
             gr_triggers: Vec::new(),
+            harmonic: 1,
+            harmonic_spectrum: Vec::new(),
         }
     }
 
@@ -254,6 +300,28 @@ mod tests {
         assert_eq!(model.title, "Test · H5");
         assert_eq!(model.aspect_summary.len(), 1);
         assert_eq!(model.aspect_summary[0].kind, "conjunction");
+    }
+
+    #[test]
+    fn spectrum_peaks_at_the_resonant_harmonic() {
+        // 0° y 72° son conjuntos en H5 (72·5 = 360 ≡ 0).
+        let spectrum = harmonic_spectrum(&[0.0, 72.0], HARMONIC_SPECTRUM_MAX);
+        assert_eq!(spectrum.len(), HARMONIC_SPECTRUM_MAX as usize);
+        let h5 = spectrum[4]; // índice 4 = H5
+        assert!(h5 > 0.99, "H5 resuena al máximo: {h5}");
+        let max = spectrum.iter().copied().fold(0.0_f32, f32::max);
+        assert!((h5 - max).abs() < 1e-4, "H5 es el pico del espectro");
+    }
+
+    #[test]
+    fn apply_harmonic_populates_spectrum_and_current_order() {
+        let mut model = natal_model(&[("sun", 0.0), ("venus", 72.0)]);
+        apply_harmonic(&mut model, 5);
+        assert_eq!(model.harmonic, 5);
+        assert_eq!(
+            model.harmonic_spectrum.len(),
+            HARMONIC_SPECTRUM_MAX as usize
+        );
     }
 
     #[test]

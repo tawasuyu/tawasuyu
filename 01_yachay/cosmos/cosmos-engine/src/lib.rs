@@ -343,6 +343,8 @@ pub fn compute_mock(chart: &Chart) -> RenderModel {
         aspect_summary: Vec::new(),
         uranian_groups: Vec::new(),
         gr_triggers: Vec::new(),
+        harmonic: 1,
+        harmonic_spectrum: Vec::new(),
     }
 }
 

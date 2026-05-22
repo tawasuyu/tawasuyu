@@ -1497,6 +1497,8 @@ fn build_render_model(
         aspect_summary: Vec::new(),
         uranian_groups: Vec::new(),
         gr_triggers: Vec::new(),
+        harmonic: 1,
+        harmonic_spectrum: Vec::new(),
     }
 }
 

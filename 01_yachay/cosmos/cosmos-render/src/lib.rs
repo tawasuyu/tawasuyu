@@ -92,6 +92,19 @@ pub struct RenderModel {
     /// y resalta los `event = true` (convergencias directo+converso).
     #[serde(default)]
     pub gr_triggers: Vec<GrTrigger>,
+    /// Orden de la carta armónica activa. `1` = carta natal pura.
+    #[serde(default = "default_harmonic")]
+    pub harmonic: u32,
+    /// Espectro de fuerza armónica: índice `i` = fuerza de la armónica
+    /// `i + 1`. Vacío salvo en modo armónico (`harmonic > 1`). La UI
+    /// lo pinta como histograma para guiar qué armónico mirar.
+    #[serde(default)]
+    pub harmonic_spectrum: Vec<f32>,
+}
+
+/// Default serde del campo `harmonic`: 1 (carta natal sin transformar).
+fn default_harmonic() -> u32 {
+    1
 }
 
 /// Etiqueta legible de un overlay para el footer del canvas. La engine
