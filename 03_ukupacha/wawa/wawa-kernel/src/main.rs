@@ -66,32 +66,8 @@ use async_system::executor::Executor;
 use baliza::BALIZA_PANICO;
 use consola::{Consola, CONSOLA};
 use grafico::{
-    codificar, reclamar_memoria_lienzo, Color, Lienzo, Pantalla, RegionPantalla, ALTO_MAX,
-    ANCHO_MAX,
+    codificar, reclamar_memoria_lienzo, Color, Lienzo, Pantalla, ALTO_MAX, ANCHO_MAX,
 };
-
-/// El modulo WASM del userspace, empotrado en el binario del kernel para esta
-/// fase de pruebas. Es un `.wasm` puro, compilado aparte para `wasm32`. La
-/// Fase 5 lo instancia DOS veces —el mismo bytecode, dos regiones distintas—
-/// para demostrar la multitarea cooperativa sobre el espacio unico.
-static APP_WASM: &[u8] = include_bytes!("../assets/app.wasm");
-
-/// La aplicacion DISCOLA: un modulo WASM cuyo `tick` cae en un bucle cerrado y
-/// jamas retorna. Existe para una sola cosa — demostrar que el guardarrail de
-/// combustible la fulmina sin despeinar al kernel ni a sus vecinas.
-static DISCOLA_WASM: &[u8] = include_bytes!("../assets/discola.wasm");
-
-/// La aplicacion GLOTONA: un modulo WASM que reclama memoria lineal sin freno.
-/// Demuestra el guardarrail ESPACIAL — el techo de memoria la desaloja con la
-/// baliza amarilla, gemela de la purpura del desalojo por combustible.
-static GLOTONA_WASM: &[u8] = include_bytes!("../assets/glotona.wasm");
-
-/// La aplicacion CRONISTA: la primera ciudadana del userspace que escribe en el
-/// almacenamiento PERSISTENTE. En cada arranque graba un objeto en el grafo
-/// —enlazado al del arranque anterior—, lo corona como raiz y pinta una celda
-/// por cada arranque registrado. El disco recuerda; la cuenta sobrevive a los
-/// reinicios. Demuestra las capacidades `sys_object_*` de la Fase 6.1c.
-static CRONISTA_WASM: &[u8] = include_bytes!("../assets/cronista.wasm");
 
 /// Configuracion que el cargador `bootloader` aplicara antes de cedernos la CPU.
 static CONFIG_ARRANQUE: BootloaderConfig = {
@@ -152,13 +128,77 @@ async fn tarea_sonda_disco() {
     consola.presentar();
 }
 
-/// Da vida a una aplicacion del userspace: la carga en su region y, si lo
-/// logra, la despacha como tarea cooperativa del reactor. Una carga fallida se
-/// salda pintando su region con la baliza de desalojo — el kernel no se inmuta.
-fn encender_app(ejecutor: &mut Executor, bytecode: &'static [u8], region: RegionPantalla) {
-    match wasm::AplicacionWasm::cargar(bytecode, region) {
+/// Da vida a una aplicacion del userspace a partir de su `EntradaApp` del
+/// manifiesto: recupera su bytecode del grafo, la carga en su region y la
+/// despacha como tarea cooperativa del reactor. Si el bytecode falta, esta
+/// corrupto, o la carga fracasa, se salda pintando la region de la app con
+/// la baliza de desalojo — el kernel no se inmuta y sigue con las demas.
+fn encender_app(ejecutor: &mut Executor, entrada: &manifiesto::EntradaApp) {
+    let region = entrada.region();
+    // Recuperar el bytecode del grafo. `recuperar` recomputa el hash del
+    // objeto y verifica su integridad: un bytecode corrupto se delata aqui
+    // —y la app se niega, no se instancia un modulo en el que no se confia.
+    let bytecode = match almacen::recuperar(&entrada.bytecode) {
+        Ok(Some(objeto)) => objeto.datos,
+        _ => {
+            consola::pintar_desalojo(region, Color::DESALOJO);
+            return;
+        }
+    };
+    match wasm::AplicacionWasm::cargar(&bytecode, region, entrada.techo_memoria as usize) {
         Ok(app) => ejecutor.spawn(tarea_aplicacion(app)),
         Err(_) => consola::pintar_desalojo(region, Color::DESALOJO),
+    }
+}
+
+/// Escribe una linea en la consola global y la presenta. Atajo para los
+/// informes de arranque; no hace nada si la consola aun no existe.
+fn reportar(linea: &str) {
+    if let Some(consola) = CONSOLA.get() {
+        let mut consola = consola.lock();
+        consola.escribir(linea);
+        consola.escribir("\n");
+        consola.presentar();
+    }
+}
+
+/// FASE 7 :: puebla el userspace DESDE EL GRAFO. Carga el Manifiesto de
+/// Genesis; si el disco no tiene uno —disco virgen—, lo siembra y lo vuelve a
+/// cargar. Por cada `EntradaApp`, enciende su aplicacion. Toda falla se
+/// reporta a la consola y NO detiene el arranque: el kernel se levanta con
+/// las apps que pueda — o con ninguna, si el grafo no tiene userspace.
+fn cargar_userspace(ejecutor: &mut Executor) {
+    let manifiesto = match manifiesto::cargar() {
+        Ok(Some(m)) => Some(m),
+        // Disco sin manifiesto: sembrar la genesis y volver a cargarlo.
+        Ok(None) => match manifiesto::sembrar_genesis() {
+            Ok(_) => {
+                reportar("manifiesto :: genesis sembrada en disco virgen");
+                manifiesto::cargar().ok().flatten()
+            }
+            Err(motivo) => {
+                reportar(&format!("manifiesto :: siembra fallida -- {motivo}"));
+                None
+            }
+        },
+        Err(motivo) => {
+            reportar(&format!("manifiesto :: carga fallida -- {motivo}"));
+            None
+        }
+    };
+
+    match &manifiesto {
+        Some(m) => reportar(&format!(
+            "manifiesto :: {} apps nacidas del grafo",
+            m.apps.len(),
+        )),
+        None => reportar("manifiesto :: sin userspace -- el kernel se levanta solo"),
+    }
+
+    if let Some(m) = manifiesto {
+        for entrada in &m.apps {
+            encender_app(ejecutor, entrada);
+        }
     }
 }
 
@@ -291,50 +331,19 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         }
     }
 
-    // --- 7. FASE 5/6 :: levantar el reactor y poblar el userspace con CINCO
-    //        aplicaciones WASM concurrentes, cada una en su propia region:
-    //
-    //          * App 1 — instancia de hello_wasm, a la izquierda, gobernada
-    //            por el teclado.
-    //          * App 2 — segunda instancia del MISMO bytecode, a la derecha:
-    //            un unico modulo en la RAM unificada, dos vidas aisladas.
-    //          * App discola — su `tick` es un bucle cerrado: el escudo de
-    //            COMBUSTIBLE la desaloja (baliza purpura) en su 1er fotograma.
-    //          * App glotona — reclama memoria sin freno: el escudo ESPACIAL
-    //            la desaloja (baliza amarilla) en su 1er fotograma.
-    //          * App cronista — escribe en el GRAFO DE OBJETOS persistente:
-    //            cada arranque deja un objeto enlazado al anterior y pinta una
-    //            celda por arranque. El disco recuerda entre reinicios.
+    // --- 7. FASE 7 :: levantar el reactor y poblar el userspace DESDE EL
+    //        GRAFO. El kernel ya no empotra los modulos WASM: lee el
+    //        Manifiesto de Genesis —si el disco esta virgen, lo siembra— e
+    //        instancia cada `EntradaApp` recuperando su bytecode del grafo de
+    //        objetos. Las cinco apps de genesis (dos instancias de hello, la
+    //        discola, la glotona y la cronista) nacen ahora del disco, no del
+    //        binario del kernel.
     //
     //        Las interrupciones se habilitan AHORA: el temporizador marcara el
     //        compas de los fotogramas y la IRQ del teclado difundira cada
     //        scancode a los canales que las apps consultan. ---
     let mut ejecutor = Executor::nuevo();
-    encender_app(
-        &mut ejecutor,
-        APP_WASM,
-        RegionPantalla { x: 100, y: 120, ancho: 480, alto: 560 },
-    );
-    encender_app(
-        &mut ejecutor,
-        APP_WASM,
-        RegionPantalla { x: 700, y: 120, ancho: 480, alto: 560 },
-    );
-    encender_app(
-        &mut ejecutor,
-        DISCOLA_WASM,
-        RegionPantalla { x: 60, y: 700, ancho: 360, alto: 80 },
-    );
-    encender_app(
-        &mut ejecutor,
-        GLOTONA_WASM,
-        RegionPantalla { x: 460, y: 700, ancho: 360, alto: 80 },
-    );
-    encender_app(
-        &mut ejecutor,
-        CRONISTA_WASM,
-        RegionPantalla { x: 860, y: 700, ancho: 360, alto: 80 },
-    );
+    cargar_userspace(&mut ejecutor);
     // FASE 6.2 :: una tarea mas del reactor — no una app WASM— que sondea el
     // disco de forma ASINCRONA: la demostracion de que la IRQ del disco
     // conduce la E/S sin detener a las aplicaciones visuales.

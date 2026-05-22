@@ -33,7 +33,9 @@ use crate::drivers::disco::{self, TAM_SECTOR};
 const MAGIA: [u8; 8] = *b"RENASGRF";
 
 /// Version del formato en disco. Un disco con otra version se reformatea.
-const VERSION: u32 = 1;
+/// v2 (Fase 7) — el superbloque gana el ancla `manifiesto`; un disco v1 se
+/// reformatea al arrancar, como cualquier disco ajeno.
+const VERSION: u32 = 2;
 
 /// Techo del tamaño de un objeto serializado: 1 MiB. Acota los buferes de E/S
 /// y permite descartar un registro corrupto sin intentar leer un disparate.
@@ -56,7 +58,7 @@ pub struct Objeto {
 }
 
 /// El superbloque: el sector 0 del disco. Ancla el grafo entero — dice por
-/// donde continua el log y cual es el objeto raiz.
+/// donde continua el log, cual es el objeto raiz y cual el manifiesto.
 #[derive(Serialize, Deserialize)]
 struct SuperBloque {
     /// Firma magica: debe ser [`MAGIA`].
@@ -67,15 +69,20 @@ struct SuperBloque {
     cursor: u64,
     /// El objeto raiz del DAG: el punto de entrada que el userspace fija y lee.
     raiz: Option<Hash>,
+    /// El Manifiesto de Genesis (Fase 7): el objeto que dicta que apps nacen
+    /// del grafo al arrancar. Ancla del kernel, gemela de `raiz` (del userspace).
+    manifiesto: Option<Hash>,
 }
 
-/// El estado vivo del almacen: el cursor del log, la raiz y el indice en
-/// memoria que traduce cada hash al sector donde habita su registro.
+/// El estado vivo del almacen: el cursor del log, la raiz, el manifiesto y el
+/// indice en memoria que traduce cada hash al sector donde habita su registro.
 struct Almacen {
     /// Proximo sector libre del log.
     cursor: u64,
     /// El objeto raiz del DAG.
     raiz: Option<Hash>,
+    /// El objeto del Manifiesto de Genesis (Fase 7).
+    manifiesto: Option<Hash>,
     /// Indice hash -> sector del registro. Se reconstruye al arrancar.
     indice: BTreeMap<Hash, u64>,
     /// Capacidad del disco, en sectores.
@@ -116,16 +123,16 @@ pub fn init() -> Result<Resumen, &'static str> {
     let mut sector0 = [0u8; TAM_SECTOR];
     disco::leer_sectores(0, &mut sector0)?;
 
-    let (cursor, raiz, indice, formateado) =
+    let (cursor, raiz, manifiesto, indice, formateado) =
         match postcard::take_from_bytes::<SuperBloque>(&sector0) {
             // Disco de renaser, con la version corriente: adoptar su grafo.
             Ok((sb, _)) if sb.magia == MAGIA && sb.version == VERSION => {
                 let indice = reconstruir_indice(sb.cursor)?;
-                (sb.cursor, sb.raiz, indice, false)
+                (sb.cursor, sb.raiz, sb.manifiesto, indice, false)
             }
             // Disco virgen, ajeno o de otra version: empezar de cero. El log
             // arranca en el sector 1, justo despues del superbloque.
-            _ => (1, None, BTreeMap::new(), true),
+            _ => (1, None, None, BTreeMap::new(), true),
         };
 
     let objetos = indice.len();
@@ -133,6 +140,7 @@ pub fn init() -> Result<Resumen, &'static str> {
     let almacen = Almacen {
         cursor,
         raiz,
+        manifiesto,
         indice,
         capacidad,
     };
@@ -204,6 +212,7 @@ fn persistir(almacen: &Almacen) -> Result<(), &'static str> {
         version: VERSION,
         cursor: almacen.cursor,
         raiz: almacen.raiz,
+        manifiesto: almacen.manifiesto,
     };
     let bytes = postcard::to_allocvec(&sb).map_err(|_| "no se pudo serializar el superbloque")?;
     if bytes.len() > TAM_SECTOR {
@@ -288,5 +297,21 @@ pub fn fijar_raiz(hash: Hash) -> Result<(), &'static str> {
     let mutex = ALMACEN.get().ok_or("almacen no inicializado")?;
     let mut almacen = mutex.lock();
     almacen.raiz = Some(hash);
+    persistir(&almacen)
+}
+
+/// El hash del objeto del Manifiesto de Genesis, si el disco tiene uno
+/// anclado. Gemelo de [`raiz`], pero del lado del kernel: lo lee la Fase 7
+/// para descubrir que apps poblar al arrancar.
+pub fn manifiesto() -> Option<Hash> {
+    ALMACEN.get().and_then(|mutex| mutex.lock().manifiesto)
+}
+
+/// Ancla un objeto como el Manifiesto de Genesis y graba el cambio en el
+/// superbloque. Gemelo de [`fijar_raiz`].
+pub fn fijar_manifiesto(hash: Hash) -> Result<(), &'static str> {
+    let mutex = ALMACEN.get().ok_or("almacen no inicializado")?;
+    let mut almacen = mutex.lock();
+    almacen.manifiesto = Some(hash);
     persistir(&almacen)
 }

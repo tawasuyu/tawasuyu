@@ -35,7 +35,11 @@ const FUEL_FOTOGRAMA: u64 = 2_000_000;
 /// Techo de memoria lineal por aplicacion: 4 MiB. Un modulo que intente crecer
 /// su memoria mas alla es desalojado — el aislamiento ESPACIAL del userspace,
 /// gemelo del techo TEMPORAL que impone el combustible.
-const TECHO_MEMORIA: usize = 4 * 1024 * 1024;
+///
+/// Desde la Fase 7 el techo es POR-APP: cada `EntradaApp` del manifiesto
+/// lleva el suyo. Esta constante es el valor por DEFECTO — el que usan las
+/// apps de genesis (ver `manifiesto::genesis`).
+pub(crate) const TECHO_MEMORIA: usize = 4 * 1024 * 1024;
 
 /// Por que el kernel da por terminada —desaloja— una aplicacion WASM.
 #[derive(Clone, Copy)]
@@ -88,7 +92,14 @@ impl AplicacionWasm {
     /// El nuevo ABI del userspace exige dos exportaciones: `init` —invocada una
     /// sola vez, aqui— y `tick` —un fotograma de trabajo, invocada despues por
     /// el reactor en cada pulso del reloj.
-    pub fn cargar(bytecode: &[u8], region: RegionPantalla) -> Result<AplicacionWasm, FallaApp> {
+    ///
+    /// `techo_memoria` es la cuota de memoria lineal de ESTA app, en bytes —
+    /// desde la Fase 7 la dicta su `EntradaApp` del manifiesto.
+    pub fn cargar(
+        bytecode: &[u8],
+        region: RegionPantalla,
+        techo_memoria: usize,
+    ) -> Result<AplicacionWasm, FallaApp> {
         // 1. El motor, con metricas de combustible y compilacion ANTICIPADA: la
         //    traduccion del modulo ocurre ahora, de modo que el `fuel` mida
         //    despues solo EJECUCION, jamas compilacion diferida.
@@ -106,7 +117,7 @@ impl AplicacionWasm {
         //    ya con la app cargada: una carga fallida no deja canales huerfanos.
         let canal = crate::async_system::teclado::crear_canal();
         let limites = StoreLimitsBuilder::new()
-            .memory_size(TECHO_MEMORIA)
+            .memory_size(techo_memoria)
             // Una expansion denegada se convierte en TRAMPA, no en un -1 que la
             // app pudiera ignorar: asi el kernel la captura y la desaloja.
             .trap_on_grow_failure(true)
