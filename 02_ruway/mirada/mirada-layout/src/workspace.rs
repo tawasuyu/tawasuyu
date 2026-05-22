@@ -1,7 +1,12 @@
 //! `Workspace` — un conjunto de ventanas, su foco y su modo de teselado.
 
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
+// El macro `vec!` sólo lo usan los tests de este módulo.
+#[cfg(test)]
+use alloc::vec;
 
+#[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
 use crate::geometry::Rect;
@@ -11,7 +16,8 @@ use crate::layout::{tile, LayoutMode, LayoutParams};
 pub type WindowId = u64;
 
 /// Un escritorio: ventanas en orden de teselado + la enfocada + el modo.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Workspace {
     /// Ventanas en orden de teselado (la 0 es la maestra en `MasterStack`).
     windows: Vec<WindowId>,

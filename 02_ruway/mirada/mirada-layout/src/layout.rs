@@ -1,5 +1,8 @@
 //! Modos de teselado — cómo se reparte la pantalla entre ventanas.
 
+use alloc::{vec, vec::Vec};
+
+#[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
 use crate::geometry::{split, Rect};
@@ -8,8 +11,9 @@ use crate::geometry::{split, Rect};
 ///
 /// Las variantes nuevas se añaden **al final** para no mover los índices
 /// con que `postcard` las serializa en el API de control.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
 pub enum LayoutMode {
     /// Una ventana maestra a la izquierda; el resto apiladas a la derecha.
     MasterStack,
@@ -49,7 +53,8 @@ impl LayoutMode {
 }
 
 /// Parámetros del teselado.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct LayoutParams {
     pub mode: LayoutMode,
     /// Fracción del ancho para la ventana maestra en `MasterStack` y
@@ -108,7 +113,9 @@ fn columns(screen: Rect, count: usize) -> Vec<Rect> {
 
 /// Rejilla `cols × rows` lo más cuadrada posible.
 fn grid(screen: Rect, count: usize) -> Vec<Rect> {
-    let cols = (count as f64).sqrt().ceil() as usize;
+    // `libm` en vez de los métodos de `f64`: `sqrt`/`ceil` viven en
+    // `std`, no en `core` — y este crate es `no_std`.
+    let cols = libm::ceil(libm::sqrt(count as f64)) as usize;
     let rows = count.div_ceil(cols);
     let col_parts = split(screen.w, cols);
     let row_parts = split(screen.h, rows);
@@ -162,7 +169,7 @@ fn centered_master(screen: Rect, count: usize, ratio: f32, master_count: usize) 
         return master_stack(screen, count, ratio, master_count);
     }
     let ratio = ratio.clamp(0.05, 0.95);
-    let master_w = (screen.w as f32 * ratio).round() as i32;
+    let master_w = libm::roundf(screen.w as f32 * ratio) as i32;
     let sides = split(screen.w - master_w, 2);
     let (left_w, right_w) = (sides[0].1, sides[1].1);
     let left_n = stack / 2;
@@ -194,7 +201,7 @@ fn master_stack(screen: Rect, count: usize, ratio: f32, master_count: usize) -> 
             .collect();
     }
     let ratio = ratio.clamp(0.05, 0.95);
-    let master_w = (screen.w as f32 * ratio).round() as i32;
+    let master_w = libm::roundf(screen.w as f32 * ratio) as i32;
     let stack_x = screen.x + master_w;
     let stack_w = screen.w - master_w;
 

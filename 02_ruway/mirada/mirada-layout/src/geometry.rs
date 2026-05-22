@@ -1,10 +1,14 @@
 //! Geometría — el rectángulo en coordenadas de pantalla.
 
+use alloc::vec::Vec;
+
+#[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
 /// Un rectángulo en píxeles de pantalla. El origen `(0,0)` es la
 /// esquina superior-izquierda; `x` crece a la derecha, `y` hacia abajo.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Rect {
     pub x: i32,
     pub y: i32,

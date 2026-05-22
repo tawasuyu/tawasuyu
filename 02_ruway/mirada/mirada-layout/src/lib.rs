@@ -12,7 +12,13 @@
 //! Todo es determinista y testeable sin un servidor gráfico: la misma
 //! pantalla y las mismas ventanas dan siempre la misma distribución.
 
+#![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
+
+// Lógica pura sobre `core` + `alloc`: sin `std`. Así el mismo motor de
+// teselado compila para Linux y para el kernel bare-metal de renaser
+// (`x86_64-unknown-none`); el allocator lo aporta el consumidor.
+extern crate alloc;
 
 pub mod geometry;
 pub mod layout;

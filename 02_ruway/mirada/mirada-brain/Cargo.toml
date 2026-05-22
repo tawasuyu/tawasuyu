@@ -8,7 +8,9 @@ publish.workspace = true
 description = "mirada — orquestador de escritorio del compositor: mantiene salidas, escritorios virtuales, ventanas y foco; consume BodyEvent y produce BrainCommand. Agnóstico de GPUI y de smithay."
 
 [dependencies]
-mirada-layout = { path = "../mirada-layout" }
+# `serde` activa los `derive` de los tipos de layout (este crate
+# serializa el estado del escritorio a RON).
+mirada-layout = { path = "../mirada-layout", features = ["serde"] }
 mirada-protocol = { path = "../mirada-protocol" }
 serde = { workspace = true }
 ron = { workspace = true }
