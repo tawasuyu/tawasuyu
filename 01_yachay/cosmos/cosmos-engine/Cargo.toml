@@ -8,6 +8,7 @@ description = "Tahuantinsuyu — bridge entre el modelo agnóstico y eternal-ast
 [dependencies]
 cosmobiologia-model = { path = "../cosmobiologia-model" }
 cosmobiologia-render = { path = "../cosmobiologia-render" }
+cosmobiologia-corpus = { path = "../cosmobiologia-corpus" }
 serde = { workspace = true }
 thiserror = { workspace = true }
 

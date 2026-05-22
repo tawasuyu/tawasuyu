@@ -41,6 +41,13 @@ pub use cosmobiologia_render::{
     UranianGroup, OUTER_RING_MODULES,
 };
 
+// El corpus de interpretación es agnóstico (no conoce eternal ni gpui).
+// El engine lo reexporta para que el shell y el canvas trabajen los
+// pasajes sin importar el crate aparte.
+pub use cosmobiologia_corpus::{
+    AspectoEnCarta, Colocacion, CombinacionId, Corpus, Dominio, Pasaje,
+};
+
 // `Chart` reexportado arriba es lo que `PipelineRequest::Synastry`
 // transporta — el caller (shell) lee del Store y pasa el Chart entero
 // para que el bridge construya su NatalChart en eternal.
@@ -416,6 +423,59 @@ const ZODIAC_GLYPHS: [&str; 12] = [
 ];
 
 // =====================================================================
+// Corpus de interpretación — puente carta → pasajes
+// =====================================================================
+
+/// Deriva las colocaciones y aspectos natales de un [`RenderModel`]
+/// para alimentar el corpus de interpretación: cada cuerpo natal se
+/// traduce a su `planeta·signo` + `planeta@casa`, y cada aspecto a su
+/// terna. El caller hace luego `Corpus::interpretar_por_dominio`.
+pub fn corpus_inputs(render: &RenderModel) -> (Vec<Colocacion>, Vec<AspectoEnCarta>) {
+    let mut colocaciones = Vec::new();
+    let mut aspectos = Vec::new();
+    for layer in &render.layers {
+        if layer.module_id != "natal" {
+            continue;
+        }
+        match layer.kind {
+            LayerKind::Bodies => {
+                for g in &layer.glyphs {
+                    colocaciones.push(Colocacion {
+                        planeta: g.symbol.clone(),
+                        signo: signo_de_longitud(g.deg).to_string(),
+                        casa: g.house.unwrap_or(0),
+                    });
+                }
+            }
+            LayerKind::Aspects => {
+                if let Geometry::Lines(segs) = &layer.geometry {
+                    for s in segs {
+                        if !s.from_body.is_empty() && !s.to_body.is_empty() {
+                            aspectos.push(AspectoEnCarta {
+                                a: s.from_body.clone(),
+                                kind: s.kind.clone(),
+                                b: s.to_body.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    (colocaciones, aspectos)
+}
+
+/// El signo zodiacal (id agnóstico) de una longitud eclíptica.
+fn signo_de_longitud(deg: f32) -> &'static str {
+    const SIGNOS: [&str; 12] = [
+        "aries", "taurus", "gemini", "cancer", "leo", "virgo", "libra",
+        "scorpio", "sagittarius", "capricorn", "aquarius", "pisces",
+    ];
+    SIGNOS[(deg.rem_euclid(360.0) / 30.0) as usize % 12]
+}
+
+// =====================================================================
 // Tests
 // =====================================================================
 
@@ -459,6 +519,65 @@ mod tests {
         assert_eq!(model.layers.len(), 1);
         assert!(matches!(model.layers[0].kind, LayerKind::SignDial));
         assert_eq!(model.layers[0].glyphs.len(), 12);
+    }
+
+    #[test]
+    fn corpus_inputs_extrae_colocaciones_y_aspectos() {
+        let render = RenderModel {
+            chart_id: ChartId::new(),
+            chart_kind: ChartKind::Natal,
+            title: "x".into(),
+            subtitle: None,
+            compute_ms: 0,
+            ascendant_deg: 0.0,
+            midheaven_deg: 270.0,
+            descendant_deg: 180.0,
+            imum_coeli_deg: 90.0,
+            geo_latitude_deg: 0.0,
+            geo_longitude_deg: 0.0,
+            layers: vec![
+                Layer {
+                    module_id: "natal".into(),
+                    kind: LayerKind::Bodies,
+                    ring: 0.0,
+                    z: 0,
+                    geometry: Geometry::GlyphsOnly,
+                    glyphs: vec![
+                        Glyph { deg: 12.0, symbol: "mars".into(), house: Some(6), ..Default::default() },
+                        Glyph { deg: 200.0, symbol: "venus".into(), house: Some(1), ..Default::default() },
+                    ],
+                },
+                Layer {
+                    module_id: "natal".into(),
+                    kind: LayerKind::Aspects,
+                    ring: 0.0,
+                    z: 0,
+                    geometry: Geometry::Lines(vec![LineSeg {
+                        from_deg: 12.0,
+                        to_deg: 200.0,
+                        kind: "square".into(),
+                        opacity: 1.0,
+                        from_body: "mars".into(),
+                        to_body: "venus".into(),
+                        orb_deg: 1.0,
+                    }]),
+                    glyphs: vec![],
+                },
+            ],
+            overlays: vec![],
+            aspect_summary: vec![],
+            uranian_groups: vec![],
+            gr_triggers: vec![],
+            harmonic: 1,
+            harmonic_spectrum: vec![],
+        };
+        let (col, asp) = corpus_inputs(&render);
+        assert_eq!(col.len(), 2);
+        assert_eq!(col[0].planeta, "mars");
+        assert_eq!(col[0].signo, "aries", "12° cae en Aries");
+        assert_eq!(col[0].casa, 6);
+        assert_eq!(asp.len(), 1);
+        assert_eq!(asp[0].kind, "square");
     }
 
     #[cfg(feature = "eternal-bridge")]
