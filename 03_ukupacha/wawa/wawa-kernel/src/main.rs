@@ -1,0 +1,342 @@
+// =============================================================================
+//  renaser :: kernel/src/main.rs — el punto de entrada y la orquestacion
+// -----------------------------------------------------------------------------
+//  Aqui no nace una terminal: nace una superficie. renaser es un kernel
+//  asincrono de Espacio de Direccionamiento Unico (SASOS) que rompe con el
+//  paradigma POSIX — sin TTYs, sin archivos planos, sin capas GNU.
+//
+//  Este archivo es deliberadamente delgado: solo el arranque y el cableado.
+//  Cada subsistema vive en su propio modulo (ver `ARCHITECTURE.md`):
+//
+//    grafico      — color, framebuffer fisico y lienzo de doble bufer.
+//    consola      — superficie de texto/imagen; rasteriza glifos con fontdue.
+//    baliza       — red de seguridad visual; manejadores de panico y de OOM.
+//    sync         — `CeldaSync`, la celda de inicializacion unica.
+//    gdt          — GDT + TSS + stack de emergencia del doble fallo.
+//    interrupts   — IDT, excepciones de CPU e interrupciones de hardware.
+//    pic          — el par 8259 remapeado y el temporizador (PIT).
+//    drivers      — descubrimiento de hardware y E/S de disco asincrona por
+//                   interrupcion: el bus PCI y el virtio-blk (Fases 6.1, 6.2).
+//    almacen      — el grafo de objetos direccionado por contenido (Fase 6.1c).
+//    memory       — el heap dinamico del kernel (`#[global_allocator]`).
+//    async_system — el reactor cooperativo: ejecutor, tareas, wakers, teclado
+//                   y el reloj que marca el compas de los fotogramas (Fase 5).
+//    texto        — rasterizacion de tipografia vectorial (fontdue).
+//    wasm         — el runtime WebAssembly, la matriz de capacidades y el
+//                   escudo de combustible que acota el tiempo de cada app.
+// =============================================================================
+
+#![no_std] // Prohibido `std`: bajo nosotros no hay sistema operativo alguno.
+#![no_main] // El punto de entrada lo define el cargador, no la convencion C.
+#![feature(abi_x86_interrupt)] // ABI de las rutinas de excepcion (Fase 2).
+#![feature(alloc_error_handler)] // Manejador propio de agotamiento de heap (Fase 3).
+#![deny(unsafe_op_in_unsafe_fn)] // Cada operacion `unsafe` se justifica explicitamente.
+
+extern crate alloc; // El heap esta vivo: `alloc::*` queda disponible (Fase 3).
+
+use alloc::format;
+
+use bootloader_api::config::{BootloaderConfig, Mapping};
+use bootloader_api::info::{FrameBufferInfo, MemoryRegionKind, MemoryRegions, PixelFormat};
+use bootloader_api::{entry_point, BootInfo};
+use spin::Mutex;
+
+// --- Subsistemas del kernel ---
+mod almacen;
+mod async_system;
+mod baliza;
+mod consola;
+mod drivers;
+mod gdt;
+mod grafico;
+mod interrupts;
+mod memory;
+mod pic;
+mod sync;
+mod texto;
+mod wasm;
+
+// Reexportaciones para que los submodulos conserven rutas `crate::` estables.
+pub(crate) use consola::volcar_marco_wasm;
+pub(crate) use sync::CeldaSync;
+
+use async_system::executor::Executor;
+use baliza::BALIZA_PANICO;
+use consola::{Consola, CONSOLA};
+use grafico::{
+    codificar, reclamar_memoria_lienzo, Color, Lienzo, Pantalla, RegionPantalla, ALTO_MAX,
+    ANCHO_MAX,
+};
+
+/// El modulo WASM del userspace, empotrado en el binario del kernel para esta
+/// fase de pruebas. Es un `.wasm` puro, compilado aparte para `wasm32`. La
+/// Fase 5 lo instancia DOS veces —el mismo bytecode, dos regiones distintas—
+/// para demostrar la multitarea cooperativa sobre el espacio unico.
+static APP_WASM: &[u8] = include_bytes!("../assets/app.wasm");
+
+/// La aplicacion DISCOLA: un modulo WASM cuyo `tick` cae en un bucle cerrado y
+/// jamas retorna. Existe para una sola cosa — demostrar que el guardarrail de
+/// combustible la fulmina sin despeinar al kernel ni a sus vecinas.
+static DISCOLA_WASM: &[u8] = include_bytes!("../assets/discola.wasm");
+
+/// La aplicacion GLOTONA: un modulo WASM que reclama memoria lineal sin freno.
+/// Demuestra el guardarrail ESPACIAL — el techo de memoria la desaloja con la
+/// baliza amarilla, gemela de la purpura del desalojo por combustible.
+static GLOTONA_WASM: &[u8] = include_bytes!("../assets/glotona.wasm");
+
+/// La aplicacion CRONISTA: la primera ciudadana del userspace que escribe en el
+/// almacenamiento PERSISTENTE. En cada arranque graba un objeto en el grafo
+/// —enlazado al del arranque anterior—, lo corona como raiz y pinta una celda
+/// por cada arranque registrado. El disco recuerda; la cuenta sobrevive a los
+/// reinicios. Demuestra las capacidades `sys_object_*` de la Fase 6.1c.
+static CRONISTA_WASM: &[u8] = include_bytes!("../assets/cronista.wasm");
+
+/// Configuracion que el cargador `bootloader` aplicara antes de cedernos la CPU.
+static CONFIG_ARRANQUE: BootloaderConfig = {
+    let mut config = BootloaderConfig::new_default();
+    // Pedimos la memoria fisica mapeada: cimiento para futuras fases.
+    config.mappings.physical_memory = Some(Mapping::Dynamic);
+    config
+};
+
+// `entry_point!` genera el simbolo `_start`, valida la firma de `kernel_main`
+// y nos transfiere el control con seguridad de tipos.
+entry_point!(kernel_main, config = &CONFIG_ARRANQUE);
+
+/// Detiene la CPU de forma definitiva: `hlt` la duerme hasta una interrupcion.
+pub(crate) fn detener() -> ! {
+    loop {
+        x86_64::instructions::hlt();
+    }
+}
+
+/// Tarea cooperativa de una aplicacion WASM. En cada pulso del reloj le concede
+/// un `tick` —un fotograma de trabajo— y cede la CPU hasta el siguiente; entre
+/// medias corren sus vecinas. Si la app falla o agota su combustible, se la
+/// DESALOJA: se tatua su region con la baliza de purpura y la tarea concluye.
+/// El ejecutor la retira del censo, su memoria se libera, el kernel sigue vivo.
+async fn tarea_aplicacion(mut app: wasm::AplicacionWasm) {
+    loop {
+        async_system::reloj::EsperaFrame::nueva().await;
+        if let Err(falla) = app.tick() {
+            // El color de la baliza delata la causa: purpura si agoto su tiempo
+            // o aborto, amarillo si reviento su techo de memoria.
+            consola::pintar_desalojo(app.region(), falla.color_baliza());
+            return;
+        }
+    }
+}
+
+/// FASE 6.2 — la prueba viva de la E/S asincrona. Esta tarea del reactor lee el
+/// sector 0 del disco SIN bloquear: cede la CPU mientras el disco trabaja —las
+/// apps siguen pintando entre tanto— y la IRQ del disco la reanuda cuando el
+/// bloque esta listo. Deja en la consola el resultado y cuantas interrupciones
+/// de disco se atendieron — el testigo de que la E/S por sondeo quedo atras.
+async fn tarea_sonda_disco() {
+    let resultado = drivers::disco::leer_bloques(0, 1).await;
+    let Some(consola) = CONSOLA.get() else {
+        return;
+    };
+    let mut consola = consola.lock();
+    match resultado {
+        Ok(_) => consola.escribir(&format!(
+            "disco :: sonda asincrona OK -- {} IRQ de disco atendidas\n",
+            drivers::disco::pulsos_disco(),
+        )),
+        Err(motivo) => {
+            consola.escribir(&format!("disco :: sonda asincrona fallida -- {motivo}\n"))
+        }
+    }
+    consola.presentar();
+}
+
+/// Da vida a una aplicacion del userspace: la carga en su region y, si lo
+/// logra, la despacha como tarea cooperativa del reactor. Una carga fallida se
+/// salda pintando su region con la baliza de desalojo — el kernel no se inmuta.
+fn encender_app(ejecutor: &mut Executor, bytecode: &'static [u8], region: RegionPantalla) {
+    match wasm::AplicacionWasm::cargar(bytecode, region) {
+        Ok(app) => ejecutor.spawn(tarea_aplicacion(app)),
+        Err(_) => consola::pintar_desalojo(region, Color::DESALOJO),
+    }
+}
+
+/// Localiza la mayor region de RAM libre que el cargador reporto — la cantera
+/// de la que el DMA del disco tomara sus marcos fisicos.
+fn mayor_region_usable(regiones: &MemoryRegions) -> Option<(u64, u64)> {
+    regiones
+        .iter()
+        .filter(|region| matches!(region.kind, MemoryRegionKind::Usable))
+        .map(|region| (region.start, region.end))
+        .max_by_key(|&(inicio, fin)| fin - inicio)
+}
+
+/// FASE 6.1c — funda el grafo de objetos. Monta el disco virtio-blk, lee o
+/// forja el superbloque, reconstruye el indice recorriendo el log y deja
+/// constancia visual: cuantos sectores tiene el disco, cuantos objetos viven
+/// ya en el grafo y si el arranque encontro —o no— una raiz de la que tirar.
+fn informar_almacen() {
+    // Fundar el almacen ANTES de tomar el cerrojo de la consola: el montaje
+    // del disco hace E/S por sondeo y nada de ello reclama la consola.
+    let resultado = almacen::init();
+    let Some(consola) = CONSOLA.get() else {
+        return;
+    };
+    let mut consola = consola.lock();
+    match resultado {
+        Ok(resumen) => {
+            let estado = if resumen.formateado {
+                "disco formateado"
+            } else {
+                "grafo montado"
+            };
+            consola.escribir(&format!(
+                "almacen :: {} :: {} sectores :: {} objetos :: raiz {}\n",
+                estado,
+                resumen.capacidad,
+                resumen.objetos,
+                if resumen.raiz { "presente" } else { "ausente" },
+            ));
+        }
+        Err(motivo) => {
+            consola.escribir(&format!("almacen :: fallo :: {motivo}\n"));
+        }
+    }
+    // FASE 6.2 — dejar constancia de la linea de IRQ por la que el disco
+    // anunciara, ya sin sondeo, el fin de cada transferencia.
+    match drivers::disco::irq() {
+        Some(irq) => {
+            consola.escribir(&format!("disco :: virtio-blk en IRQ {irq} -- E/S asincrona\n"))
+        }
+        None => consola.escribir("disco :: IRQ no enrutada -- E/S por sondeo\n"),
+    }
+    consola.presentar();
+}
+
+// =============================================================================
+//  PUNTO DE ENTRADA DEL KERNEL
+// =============================================================================
+
+fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
+    // --- 1. Recuperar el framebuffer GOP que el firmware nos confio. ---
+    let framebuffer = match boot_info.framebuffer.as_mut() {
+        Some(fb) => fb,
+        None => detener(),
+    };
+    let info: FrameBufferInfo = framebuffer.info();
+    let formato: PixelFormat = info.pixel_format;
+    let pantalla = Pantalla::adoptar(framebuffer, info);
+
+    // Datos para la sonda de disco (Fase 6.1b): el offset al que el cargador
+    // mapeo la memoria fisica y la mayor region de RAM libre para el DMA.
+    let offset_fisico = boot_info.physical_memory_offset.into_option();
+    let region_dma = mayor_region_usable(&boot_info.memory_regions);
+
+    // --- 2. Encender la baliza: la red de seguridad visual va primero. ---
+    BALIZA_PANICO.encender(
+        &pantalla,
+        codificar(formato, Color::ALERTA),
+        codificar(formato, Color::OOM),
+    );
+
+    // --- 3. Cimientos de fallos e interrupciones (Fases 2.0 y 2.1). ---
+    gdt::init();
+    interrupts::init();
+    pic::init();
+
+    // --- 4. FASE 3 :: fundar el heap. A partir de aqui, `alloc` esta vivo. ---
+    memory::init();
+
+    // --- 5. Con el heap activo, fundar lo que depende de el: el canal de
+    //        scancodes, el reloj de fotogramas y la tipografia vectorial. ---
+    async_system::teclado::init();
+    async_system::reloj::init();
+    texto::init();
+
+    // --- 6. Construir el lienzo y la consola; pintar el rotulo inicial,
+    //        ya rasterizado por fontdue, y publicar la consola globalmente. ---
+    let memoria = match reclamar_memoria_lienzo() {
+        Some(m) => m,
+        None => detener(),
+    };
+    let mut lienzo = Lienzo::nuevo(
+        memoria,
+        info.width.min(ANCHO_MAX),
+        info.height.min(ALTO_MAX),
+        formato,
+    );
+    lienzo.limpiar(Color::LIENZO_EN_REPOSO);
+
+    let mut consola = Consola::nueva(lienzo, pantalla);
+    consola.escribir("renaser :: fase 6.2 -- E/S de disco asincrona por interrupcion\n");
+    consola.presentar();
+    CONSOLA.call_once(|| Mutex::new(consola));
+
+    // --- 6.5. FASE 6.1c :: fundar el subsistema de disco y, sobre el, el grafo
+    //          de objetos: enumerar el bus PCI, montar el transporte virtio-blk,
+    //          y leer o forjar el superbloque del almacen direccionado por
+    //          contenido. El kernel adquiere, por fin, una memoria que perdura. ---
+    match (offset_fisico, region_dma) {
+        (Some(offset), Some((inicio, fin))) => {
+            drivers::disco::init(offset, inicio, fin);
+            informar_almacen();
+        }
+        _ => {
+            if let Some(consola) = CONSOLA.get() {
+                let mut consola = consola.lock();
+                consola.escribir("virtio-blk :: omitido -- memoria fisica sin mapear\n");
+                consola.presentar();
+            }
+        }
+    }
+
+    // --- 7. FASE 5/6 :: levantar el reactor y poblar el userspace con CINCO
+    //        aplicaciones WASM concurrentes, cada una en su propia region:
+    //
+    //          * App 1 — instancia de hello_wasm, a la izquierda, gobernada
+    //            por el teclado.
+    //          * App 2 — segunda instancia del MISMO bytecode, a la derecha:
+    //            un unico modulo en la RAM unificada, dos vidas aisladas.
+    //          * App discola — su `tick` es un bucle cerrado: el escudo de
+    //            COMBUSTIBLE la desaloja (baliza purpura) en su 1er fotograma.
+    //          * App glotona — reclama memoria sin freno: el escudo ESPACIAL
+    //            la desaloja (baliza amarilla) en su 1er fotograma.
+    //          * App cronista — escribe en el GRAFO DE OBJETOS persistente:
+    //            cada arranque deja un objeto enlazado al anterior y pinta una
+    //            celda por arranque. El disco recuerda entre reinicios.
+    //
+    //        Las interrupciones se habilitan AHORA: el temporizador marcara el
+    //        compas de los fotogramas y la IRQ del teclado difundira cada
+    //        scancode a los canales que las apps consultan. ---
+    let mut ejecutor = Executor::nuevo();
+    encender_app(
+        &mut ejecutor,
+        APP_WASM,
+        RegionPantalla { x: 100, y: 120, ancho: 480, alto: 560 },
+    );
+    encender_app(
+        &mut ejecutor,
+        APP_WASM,
+        RegionPantalla { x: 700, y: 120, ancho: 480, alto: 560 },
+    );
+    encender_app(
+        &mut ejecutor,
+        DISCOLA_WASM,
+        RegionPantalla { x: 60, y: 700, ancho: 360, alto: 80 },
+    );
+    encender_app(
+        &mut ejecutor,
+        GLOTONA_WASM,
+        RegionPantalla { x: 460, y: 700, ancho: 360, alto: 80 },
+    );
+    encender_app(
+        &mut ejecutor,
+        CRONISTA_WASM,
+        RegionPantalla { x: 860, y: 700, ancho: 360, alto: 80 },
+    );
+    // FASE 6.2 :: una tarea mas del reactor — no una app WASM— que sondea el
+    // disco de forma ASINCRONA: la demostracion de que la IRQ del disco
+    // conduce la E/S sin detener a las aplicaciones visuales.
+    ejecutor.spawn(tarea_sonda_disco());
+    x86_64::instructions::interrupts::enable();
+    ejecutor.run();
+}

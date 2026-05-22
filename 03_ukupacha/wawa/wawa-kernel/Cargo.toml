@@ -1,0 +1,68 @@
+# =============================================================================
+#  renaser :: kernel — el corazon bare-metal que late en el espacio unico
+# -----------------------------------------------------------------------------
+#  Este paquete esta EXCLUIDO del espacio de trabajo (ver el Cargo.toml raiz):
+#  es codigo puramente bare-metal y solo se compila como dependencia de
+#  artefacto de `boot`, que le impone el target `x86_64-unknown-none`. Por eso
+#  fija sus versiones de forma explicita, sin herencia del workspace.
+# =============================================================================
+
+[package]
+name = "kernel"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+authors = ["JL Soltech <gerencia@jlsoltech.com>"]
+description = "renaser :: kernel asincrono SASOS — entrada, framebuffer y reactor"
+
+# El kernel es un binario freestanding: sin arnes de pruebas ni de benchmarks.
+[[bin]]
+name = "kernel"
+path = "src/main.rs"
+test = false
+bench = false
+doctest = false
+
+[dependencies]
+# --- Fase 1-2 :: arranque, framebuffer e interrupciones ---
+bootloader_api = "0.11"
+x86_64 = "0.15"
+embedded-graphics = "0.8"
+
+# --- Fase 3 :: heap dinamico, reactor asincrono y texto vectorial ---
+linked_list_allocator = "0.10"
+spin = "0.9"
+crossbeam-queue = { version = "0.3", default-features = false, features = ["alloc"] }
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
+# `hashbrown` ACTIVA el modo `no_std` de fontdue; sin el recae en `std`.
+fontdue = { version = "0.9", default-features = false, features = ["hashbrown"] }
+
+# --- Fase 4 :: interprete WebAssembly del userspace aislado ---
+# `wasmi` bare-metal: sin `std`, sin `wat`, sin `simd` (el target no tiene SSE).
+wasmi = { version = "1.0", default-features = false, features = ["hash-collections"] }
+
+# --- Fase 6 :: drivers de hardware — el disco virtio-blk sobre el bus PCI ---
+# `virtio-drivers` bare-metal: el kernel implementa su `trait Hal` para el DMA.
+virtio-drivers = { version = "0.13", default-features = false, features = ["alloc"] }
+
+# --- Fase 6.1c :: el grafo de objetos direccionado por contenido ---
+# `serde` da el rasgo de (de)serializacion; `postcard` lo materializa en un
+# formato binario compacto, pensado para sistemas empotrados — el que viaja al
+# disco. Ambos `no_std`, apoyados en `alloc`.
+serde = { version = "1", default-features = false, features = ["alloc", "derive"] }
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+# `blake3`: la funcion hash que da identidad a cada objeto. Se fuerza la
+# implementacion ESCALAR pura (`pure` + los cuatro `no_*`): el target del kernel
+# corre sin SSE, y un camino SIMD activado por deteccion en tiempo de ejecucion
+# ejecutaria instrucciones que la CPU, sin `CR4.OSFXSR`, rechazaria con un #UD.
+blake3 = { version = "1", default-features = false, features = [
+    "pure", "no_sse2", "no_sse41", "no_avx2", "no_avx512",
+] }
+
+# --- Fase 8 (preparación) :: el compositor ---
+# `mirada-layout` es el motor de teselado del compositor de brahman —
+# geometría pura (rectángulos, foco, Z-order), `no_std`, sin smithay ni
+# Wayland. Vive en el monorepo brahman, en su PROPIO workspace; renaser
+# lo enlaza por `path` cruzando la frontera. La feature `serde` queda
+# APAGADA: el kernel computa el layout en memoria, no lo serializa.
+mirada-layout = { path = "../../crates/modules/mirada/mirada-layout" }

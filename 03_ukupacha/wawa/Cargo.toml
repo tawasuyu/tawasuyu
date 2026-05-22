@@ -1,0 +1,89 @@
+# =============================================================================
+#  renaser :: manifiesto raíz del espacio de trabajo
+# -----------------------------------------------------------------------------
+#  Un único espacio de direccionamiento, una única verdad de versiones.
+#  Las dependencias se declaran aqui una sola vez y persisten, coherentes,
+#  a traves de todos los miembros del sistema.
+# =============================================================================
+
+[workspace]
+resolver = "2"
+# Solo `boot` es miembro del espacio de trabajo: corre en el anfitrion. El
+# kernel queda EXCLUIDO a proposito —es bare-metal puro y jamas debe compilarse
+# para el anfitrion— y se construye unica y exclusivamente como dependencia de
+# artefacto de `boot`, que le fija el target `x86_64-unknown-none`.
+members = ["boot"]
+# El kernel (bare-metal) y las apps WASM (target wasm32) se compilan aparte,
+# cada cual con su propio target; quedan fuera del espacio de trabajo.
+exclude = ["kernel", "apps"]
+
+# -----------------------------------------------------------------------------
+#  Metadatos compartidos: cada miembro hereda esta identidad con `*.workspace`.
+# -----------------------------------------------------------------------------
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+authors = ["JL Soltech <gerencia@jlsoltech.com>"]
+description = "renaser :: kernel asincrono SASOS basado en aislamiento por software"
+
+# -----------------------------------------------------------------------------
+#  Dependencias del ecosistema. Reutilizamos infraestructura madura en lugar
+#  de reinventar boilerplate. `default-features = false` se aplica con bisturi,
+#  unicamente alli donde las features por defecto arrastrarian `std`.
+# -----------------------------------------------------------------------------
+[workspace.dependencies]
+# Constructor de la imagen de disco UEFI/BIOS. Es una herramienta de ANFITRION
+# (usa std), la consume el miembro `boot` y NO debe enlazarse jamas en el kernel.
+bootloader = "0.11"
+
+# API `#![no_std]` que el kernel SI consume: expone `entry_point!`, `BootInfo`
+# y la descripcion del framebuffer GOP. Su version debe acompasar a `bootloader`.
+bootloader_api = "0.11"
+
+# Abstraccion de la CPU x86_64: registros de control, GDT, IDT e instrucciones
+# privilegiadas sin ensamblador inline. Es `#![no_std]` de nacimiento; su
+# feature `instructions` (activa por defecto) nos da `hlt` y el control de IRQ.
+x86_64 = "0.15"
+
+# Rasterizacion de primitivas vectoriales sobre el framebuffer. `#![no_std]`,
+# sin heap: en la Fase 1 solo aporta el rasgo `DrawTarget` del lienzo.
+embedded-graphics = "0.8"
+
+# Rasterizador de tipografias. REQUIERE `alloc`, de modo que solo se teje en el
+# kernel una vez exista el asignador (Fase 2). `default-features = false`
+# silencia su feature `std`. Se declara ya para congelar la version.
+# `hashbrown` es lo que ACTIVA el modo `no_std` de fontdue; sin el, la crate
+# recae en `std::collections` y no compila para bare-metal. `simd` queda fuera:
+# nuestro target no tiene SSE.
+fontdue = { version = "0.9", default-features = false, features = ["hashbrown"] }
+
+# --- Fase 3 :: heap dinamico y reactor asincrono ---
+# Asignador del heap del kernel — algoritmo probado, configurado `no_std`.
+linked_list_allocator = "0.10"
+# Exclusion mutua sin sistema operativo: `Mutex` e inicializacion unica `Once`.
+spin = "0.9"
+# Cola lock-free, segura frente a interrupciones, para el canal de scancodes.
+crossbeam-queue = { version = "0.3", default-features = false, features = ["alloc"] }
+# Combinadores `Future`/`Stream` y `AtomicWaker`. Sin ejecutor ni I/O: solo
+# las piezas que renaser teje en su propio reactor.
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
+
+# --- Fase 4 :: interprete WebAssembly para el userspace aislado ---
+# `wasmi` en modo bare-metal: sin `std`, sin `wat`, sin `simd` (el target no
+# tiene SSE). `hash-collections` le da mapas basados en hashbrown, `no_std`.
+wasmi = { version = "1.0", default-features = false, features = ["hash-collections"] }
+
+# -----------------------------------------------------------------------------
+#  Perfiles de compilacion. Cargo exige que los perfiles vivan en la RAIZ del
+#  espacio de trabajo. `panic = "abort"` es obligatorio: sin sistema operativo
+#  subyacente no hay desenrollado de pila (`unwinding`) posible.
+# -----------------------------------------------------------------------------
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"   # codigo compacto: cada byte cuenta en bare-metal
+lto = true        # el optimizador cruza fronteras de crate
+codegen-units = 1 # una sola unidad => maxima oportunidad de optimizacion
