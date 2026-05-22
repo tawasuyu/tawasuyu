@@ -1411,16 +1411,31 @@ impl Shell {
             .to_string();
 
         // Ventana ±15 min, paso 1 min — el barrido GR estándar.
-        let resultado = match cosmobiologia_engine::rectificar(&chart, &eventos, 15, 1, &key_gr) {
-            Ok(r) => format!(
-                "{:+} min · puntaje {:.2}",
-                r.mejor_offset_minutos, r.mejor_puntaje
-            ),
-            Err(_) => "define al menos un evento (edad > 0)".to_string(),
-        };
-        self.panel.update(cx, |p, cx| {
-            p.set_string("primary_directions", "resultado", Some(resultado), cx)
-        });
+        match cosmobiologia_engine::rectificar(&chart, &eventos, 15, 1, &key_gr) {
+            Ok(r) => {
+                let resumen = format!(
+                    "{:+} min · puntaje {:.2}",
+                    r.mejor_offset_minutos, r.mejor_puntaje
+                );
+                self.panel.update(cx, |p, cx| {
+                    p.set_string("primary_directions", "resultado", Some(resumen), cx)
+                });
+                // Publicar el perfil al canvas: dibuja la curva del
+                // barrido, cuyo valle marca la hora rectificada.
+                self.canvas
+                    .update(cx, |c, cx| c.set_rectificacion(Some(r), cx));
+            }
+            Err(_) => {
+                self.panel.update(cx, |p, cx| {
+                    p.set_string(
+                        "primary_directions",
+                        "resultado",
+                        Some("define al menos un evento (edad > 0)".to_string()),
+                        cx,
+                    )
+                });
+            }
+        }
     }
 
     /// Snapshot del cielo en este instante anclado al lugar del

@@ -41,7 +41,8 @@ use gpui::{
 };
 
 use cosmobiologia_engine::{
-    Geometry, GrTrigger, Layer, LayerKind, RenderModel, UranianGroup, OUTER_RING_MODULES,
+    Geometry, GrTrigger, Layer, LayerKind, Rectificacion, RenderModel, UranianGroup,
+    OUTER_RING_MODULES,
 };
 use cosmobiologia_model::{ChartId, ContactId, GroupId};
 use cosmobiologia_theme::{AspectKind as TAspectKind, AstroPalette, Element, Planet};
@@ -151,6 +152,10 @@ pub struct CanvasState {
     /// Planeta hovered actualmente (para tooltip). `None` cuando el
     /// mouse no está sobre ningún cuerpo.
     pub hover: Option<HoverInfo>,
+    /// Último resultado del rectificador automático, si se corrió uno.
+    /// El canvas dibuja su perfil como una curva en el footer; el valle
+    /// marca la hora de nacimiento que mejor explica los eventos.
+    pub rectificacion: Option<Rectificacion>,
     drag_jog: Option<JogDragState>,
     drag_pan: Option<PanDragState>,
 }
@@ -234,6 +239,7 @@ impl Default for CanvasState {
             layer_visibility: HashMap::new(),
             show_coords: true,
             hover: None,
+            rectificacion: None,
             drag_jog: None,
             drag_pan: None,
         }
@@ -338,6 +344,17 @@ impl AstrologyCanvas {
             self.state.show_coords = value;
             cx.notify();
         }
+    }
+
+    /// Publica el resultado de un barrido de rectificación: el canvas
+    /// dibuja su perfil como una curva en el footer. `None` lo borra.
+    pub fn set_rectificacion(
+        &mut self,
+        rectificacion: Option<Rectificacion>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.state.rectificacion = rectificacion;
+        cx.notify();
     }
 
     /// Resetea zoom y pan a sus defaults (1.0 y 0,0). No toca rotation
@@ -846,6 +863,7 @@ impl Render for AstrologyCanvas {
                 &self.state.layer_visibility,
                 self.state.show_coords,
                 self.state.hover.as_ref(),
+                self.state.rectificacion.as_ref(),
                 entity,
             ),
             CanvasMode::Thumbnails { items, .. } => render_thumbnails(&theme, items),
@@ -968,6 +986,7 @@ fn render_wheel(
     layer_visibility: &HashMap<LayerKind, bool>,
     show_coords: bool,
     hover: Option<&HoverInfo>,
+    rectificacion: Option<&Rectificacion>,
     entity: gpui::Entity<AstrologyCanvas>,
 ) -> gpui::Div {
     let asc = render.ascendant_deg;
@@ -1773,6 +1792,15 @@ fn render_wheel(
         ));
     }
 
+    // Perfil del rectificador automático — la curva del barrido de horas
+    // candidatas. Aparece tras correr una rectificación; su valle marca
+    // la hora de nacimiento que mejor explica los eventos conocidos.
+    if let Some(r) = rectificacion {
+        if !r.perfil.is_empty() {
+            footer = footer.child(render_rectify_profile(theme, palette, r));
+        }
+    }
+
     // Lista textual de aspectos (top 12 por orb). Compacta, en grid
     // de 3 columnas, fonts pequeños. Solo aparece cuando hay aspectos
     // computados.
@@ -2009,6 +2037,89 @@ fn render_harmonic_spectrum(
                 .text_color(theme.fg_muted)
                 .child(SharedString::from(format!(
                     "Espectro armónico · H{current} activo · clic para saltar"
+                ))),
+        )
+        .child(bars)
+}
+
+/// Curva del barrido del rectificador automático. Cada barra es una hora
+/// de nacimiento candidata; su altura crece cuanto MEJOR explica los
+/// eventos conocidos (menor puntaje de convergencia). La barra más alta
+/// —el valle del puntaje— es la hora rectificada, y va resaltada.
+fn render_rectify_profile(
+    theme: &Theme,
+    palette: &AstroPalette,
+    r: &Rectificacion,
+) -> gpui::Div {
+    const BAR_AREA_H: f32 = 46.0;
+
+    let (min_p, max_p) = r.perfil.iter().fold(
+        (f32::INFINITY, f32::NEG_INFINITY),
+        |(lo, hi), &(_, p)| (lo.min(p), hi.max(p)),
+    );
+    let rango = (max_p - min_p).max(1e-3);
+    let primero = r.perfil.first().map(|&(o, _)| o).unwrap_or(0);
+    let ultimo = r.perfil.last().map(|&(o, _)| o).unwrap_or(0);
+
+    let mut bars = div().flex().flex_row().items_end().gap(px(2.0));
+    for &(offset, puntaje) in &r.perfil {
+        // Fitness: el mejor candidato (puntaje mínimo) → barra más alta.
+        let fitness = ((max_p - puntaje) / rango).clamp(0.0, 1.0);
+        let bar_h = (fitness * BAR_AREA_H).max(2.0);
+        let es_mejor = offset == r.mejor_offset_minutos;
+        let color = if es_mejor {
+            palette.angle_highlight
+        } else {
+            with_alpha(palette.angle_highlight, 0.25 + fitness * 0.45)
+        };
+        // Etiquetar sólo los hitos: el mejor, el 0 y los dos extremos.
+        let label = if es_mejor || offset == 0 || offset == primero || offset == ultimo {
+            if offset == 0 {
+                "0".to_string()
+            } else {
+                format!("{offset:+}")
+            }
+        } else {
+            String::new()
+        };
+        let column = div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap(px(2.0))
+            .child(
+                div()
+                    .h(px(BAR_AREA_H))
+                    .flex()
+                    .flex_col()
+                    .justify_end()
+                    .child(div().w(px(9.0)).h(px(bar_h)).rounded(px(1.5)).bg(color)),
+            )
+            .child(
+                div()
+                    .text_size(px(7.0))
+                    .text_color(if es_mejor {
+                        palette.angle_highlight
+                    } else {
+                        theme.fg_disabled
+                    })
+                    .child(SharedString::from(label)),
+            );
+        bars = bars.child(column);
+    }
+
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(px(3.0))
+        .child(
+            div()
+                .text_size(px(10.0))
+                .text_color(theme.fg_muted)
+                .child(SharedString::from(format!(
+                    "Rectificación · hora {:+} min · puntaje {:.2} · el valle es la hora",
+                    r.mejor_offset_minutos, r.mejor_puntaje
                 ))),
         )
         .child(bars)
