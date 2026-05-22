@@ -11,7 +11,9 @@
 //    * sys_object_datos      — leer la carga util de un objeto;
 //    * sys_object_hijo       — recorrer las aristas del DAG;
 //    * sys_object_raiz       — leer la raiz del grafo;
-//    * sys_object_fijar_raiz — coronar un objeto como raiz.
+//    * sys_object_fijar_raiz — coronar un objeto como raiz;
+//    * sys_estado_cargar     — leer el estado persistido de la app (Fase 7c);
+//    * sys_estado_guardar    — anclar el estado persistido de la app (Fase 7c).
 //
 //  GUARDARRAIL: el kernel valida MATEMATICAMENTE todo puntero que el modulo le
 //  entrega contra los limites reales de su memoria lineal. No se confia en que
@@ -40,6 +42,10 @@ pub(crate) struct ContextoCapacidades {
     /// El techo de recursos de la aplicacion — hoy, su memoria lineal maxima.
     /// `wasmi` lo consulta en cada `memory.grow` via `Store::limiter`.
     pub(crate) limites: StoreLimits,
+    /// El indice de esta app en el Manifiesto de Genesis — su identidad. Las
+    /// capacidades de estado (Fase 7c) lo usan para hallar la `EntradaApp`
+    /// correcta: cada app persiste en SU ranura, jamas en la de otra.
+    pub(crate) indice_app: usize,
 }
 
 /// Recupera la memoria lineal exportada por el modulo. Que no la exporte es un
@@ -339,6 +345,90 @@ pub(crate) fn enlazar_capacidades(
                 )?
             };
             match crate::almacen::fijar_raiz(hash) {
+                Ok(()) => Ok(0),
+                Err(_) => Ok(-3),
+            }
+        },
+    )?;
+
+    // --- CAPACIDAD 8 :: sys_estado_cargar(salida, capacidad) -> i32 ---
+    // Copia el estado persistido de ESTA app —el objeto que su `EntradaApp` del
+    // manifiesto tiene anclado— en `salida`. Devuelve el numero de bytes
+    // copiados, 0 si la app no tiene estado previo, -1 si el objeto anclado no
+    // existe, -2 si `capacidad` no basta, -3 si el almacenamiento fallo.
+    enlazador.func_wrap(
+        "renaser",
+        "sys_estado_cargar",
+        |mut caller: Caller<'_, ContextoCapacidades>,
+         salida: u32,
+         capacidad: u32|
+         -> Result<i32, Error> {
+            let indice = caller.data().indice_app;
+            // El hash del estado de esta app, segun el manifiesto vivo.
+            let hash = match crate::manifiesto::estado_de(indice) {
+                Some(hash) => hash,
+                None => return Ok(0), // Sin estado previo: nada que cargar.
+            };
+            let objeto = match crate::almacen::recuperar(&hash) {
+                Ok(Some(objeto)) => objeto,
+                Ok(None) => return Ok(-1),
+                Err(_) => return Ok(-3),
+            };
+            if objeto.datos.len() > capacidad as usize {
+                return Ok(-2);
+            }
+
+            let memoria = obtener_memoria(&caller)?;
+            // Verificar que el destino cabe, y solo entonces copiar.
+            {
+                let m = memoria.data(&caller);
+                rango(
+                    m,
+                    salida,
+                    objeto.datos.len(),
+                    "WASM :: sys_estado_cargar desbordo la memoria lineal (salida)",
+                )?;
+            }
+            let n = objeto.datos.len();
+            let m = memoria.data_mut(&mut caller);
+            m[salida as usize..salida as usize + n].copy_from_slice(&objeto.datos);
+            Ok(n as i32)
+        },
+    )?;
+
+    // --- CAPACIDAD 9 :: sys_estado_guardar(datos, datos_len) -> i32 ---
+    // Graba `datos` como el estado persistido de ESTA app: el kernel lo
+    // almacena como un objeto del grafo y ancla su hash en la `EntradaApp` de
+    // la app, re-grabando y re-anclando el manifiesto. El estado sobrevivira al
+    // reinicio. Devuelve 0 si se logro, -3 si el almacenamiento fallo.
+    enlazador.func_wrap(
+        "renaser",
+        "sys_estado_guardar",
+        |caller: Caller<'_, ContextoCapacidades>,
+         datos_ptr: u32,
+         datos_len: u32|
+         -> Result<i32, Error> {
+            let indice = caller.data().indice_app;
+            let memoria = obtener_memoria(&caller)?;
+            // Leer el estado de la memoria lineal, con limites firmes.
+            let datos = {
+                let m = memoria.data(&caller);
+                rango(
+                    m,
+                    datos_ptr,
+                    datos_len as usize,
+                    "WASM :: sys_estado_guardar desbordo la memoria lineal (datos)",
+                )?
+                .to_vec()
+            };
+            // Grabar el objeto de estado. Un fallo del almacen NO es culpa de
+            // la app: se le devuelve -3, y ella decide que hacer.
+            let hash = match crate::almacen::almacenar(datos, alloc::vec::Vec::new()) {
+                Ok(hash) => hash,
+                Err(_) => return Ok(-3),
+            };
+            // Anclarlo: muta el manifiesto vivo, lo re-graba y lo re-ancla.
+            match crate::manifiesto::fijar_estado(indice, hash) {
                 Ok(()) => Ok(0),
                 Err(_) => Ok(-3),
             }

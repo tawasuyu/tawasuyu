@@ -108,12 +108,12 @@ struct AppGenesis {
 }
 
 /// El userspace de genesis — las cinco aplicaciones que pueblan un disco recien
-/// forjado, con las regiones de la Fase 6.2. `app.wasm` aparece dos veces —dos
-/// instancias del mismo bytecode—; el grafo, direccionado por contenido, guarda
-/// su objeto una sola vez.
+/// forjado. Un saludo (`hola`), la `memoriosa` interactiva que recuerda entre
+/// sesiones (Fase 7c), y tres demos de los guardarrailes del kernel: `discola`
+/// (combustible), `glotona` (memoria) y `cronista` (la cronica de los arranques).
 const GENESIS: [AppGenesis; 5] = [
-    AppGenesis { nombre: "hola-izq", archivo: "app.wasm", region: (100, 120, 480, 560) },
-    AppGenesis { nombre: "hola-der", archivo: "app.wasm", region: (700, 120, 480, 560) },
+    AppGenesis { nombre: "hola", archivo: "app.wasm", region: (100, 120, 480, 560) },
+    AppGenesis { nombre: "memoriosa", archivo: "memoriosa.wasm", region: (700, 120, 360, 80) },
     AppGenesis { nombre: "discola", archivo: "discola.wasm", region: (60, 700, 360, 80) },
     AppGenesis { nombre: "glotona", archivo: "glotona.wasm", region: (460, 700, 360, 80) },
     AppGenesis { nombre: "cronista", archivo: "cronista.wasm", region: (860, 700, 360, 80) },

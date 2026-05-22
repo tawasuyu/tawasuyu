@@ -85,11 +85,14 @@ impl AplicacionWasm {
     /// el reactor en cada pulso del reloj.
     ///
     /// `techo_memoria` es la cuota de memoria lineal de ESTA app, en bytes —
-    /// desde la Fase 7 la dicta su `EntradaApp` del manifiesto.
+    /// desde la Fase 7 la dicta su `EntradaApp` del manifiesto. `indice_app` es
+    /// su posicion en el manifiesto: su identidad para las capacidades de
+    /// estado persistido (Fase 7c).
     pub fn cargar(
         bytecode: &[u8],
         region: RegionPantalla,
         techo_memoria: usize,
+        indice_app: usize,
     ) -> Result<AplicacionWasm, FallaApp> {
         // 1. El motor, con metricas de combustible y compilacion ANTICIPADA: la
         //    traduccion del modulo ocurre ahora, de modo que el `fuel` mida
@@ -119,6 +122,7 @@ impl AplicacionWasm {
                 region,
                 canal,
                 limites,
+                indice_app,
             },
         );
         // Ligar el limitador de recursos: `wasmi` lo consultara en cada

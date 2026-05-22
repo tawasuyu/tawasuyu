@@ -133,7 +133,7 @@ async fn tarea_sonda_disco() {
 /// despacha como tarea cooperativa del reactor. Si el bytecode falta, esta
 /// corrupto, o la carga fracasa, se salda pintando la region de la app con
 /// la baliza de desalojo — el kernel no se inmuta y sigue con las demas.
-fn encender_app(ejecutor: &mut Executor, entrada: &manifiesto::EntradaApp) {
+fn encender_app(ejecutor: &mut Executor, indice: usize, entrada: &manifiesto::EntradaApp) {
     let region = manifiesto::region(entrada);
     // Recuperar el bytecode del grafo. `recuperar` recomputa el hash del
     // objeto y verifica su integridad: un bytecode corrupto se delata aqui
@@ -145,7 +145,9 @@ fn encender_app(ejecutor: &mut Executor, entrada: &manifiesto::EntradaApp) {
             return;
         }
     };
-    match wasm::AplicacionWasm::cargar(&bytecode, region, entrada.techo_memoria as usize) {
+    // `indice` es la identidad de la app en el manifiesto: las capacidades de
+    // estado persistido (Fase 7c) la usan para hallar SU ranura `estado`.
+    match wasm::AplicacionWasm::cargar(&bytecode, region, entrada.techo_memoria as usize, indice) {
         Ok(app) => ejecutor.spawn(tarea_aplicacion(app)),
         Err(_) => consola::pintar_desalojo(region, Color::DESALOJO),
     }
@@ -163,10 +165,11 @@ fn reportar(linea: &str) {
 }
 
 /// FASE 7 :: puebla el userspace DESDE EL GRAFO. Carga el Manifiesto de
-/// Genesis que `boot` sembro en la imagen de disco y, por cada `EntradaApp`,
-/// enciende su aplicacion. Toda falla se reporta a la consola y NO detiene el
-/// arranque: el kernel se levanta con las apps que pueda — o con ninguna, si
-/// el grafo no tiene userspace.
+/// Genesis que `boot` sembro en la imagen de disco, lo instala como el
+/// manifiesto VIVO del kernel y, por cada `EntradaApp`, enciende su
+/// aplicacion. Toda falla se reporta a la consola y NO detiene el arranque: el
+/// kernel se levanta con las apps que pueda — o con ninguna, si el grafo no
+/// tiene userspace.
 fn cargar_userspace(ejecutor: &mut Executor) {
     let manifiesto = match manifiesto::cargar() {
         Ok(Some(m)) => Some(m),
@@ -192,8 +195,13 @@ fn cargar_userspace(ejecutor: &mut Executor) {
     }
 
     if let Some(m) = manifiesto {
-        for entrada in &m.apps {
-            encender_app(ejecutor, entrada);
+        // Instalar el manifiesto VIVO ANTES de instanciar las apps: el `init`
+        // de cada app puede consultar su estado persistido (Fase 7c), y esa
+        // consulta lee del manifiesto vivo. Se instala una copia; la otra se
+        // itera para encender cada app con su indice — su identidad.
+        manifiesto::instalar(m.clone());
+        for (indice, entrada) in m.apps.iter().enumerate() {
+            encender_app(ejecutor, indice, entrada);
         }
     }
 }

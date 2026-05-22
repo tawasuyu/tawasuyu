@@ -258,8 +258,8 @@ pub fn manifiesto() -> Option<Hash> {
 }
 
 /// Ancla un objeto como el Manifiesto de Genesis y graba el cambio en el
-/// superbloque. Gemelo de [`fijar_raiz`].
-#[allow(dead_code)] // Lo usara la Fase 7c (persistencia inter-sesion).
+/// superbloque. Gemelo de [`fijar_raiz`]. La Fase 7c lo invoca cada vez que una
+/// app persiste su estado y el manifiesto debe re-anclarse.
 pub fn fijar_manifiesto(hash: Hash) -> Result<(), &'static str> {
     let mutex = ALMACEN.get().ok_or("almacen no inicializado")?;
     let mut almacen = mutex.lock();
