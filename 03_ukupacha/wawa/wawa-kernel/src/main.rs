@@ -18,6 +18,7 @@
 //    drivers      — descubrimiento de hardware y E/S de disco asincrona por
 //                   interrupcion: el bus PCI y el virtio-blk (Fases 6.1, 6.2).
 //    almacen      — el grafo de objetos direccionado por contenido (Fase 6.1c).
+//    manifiesto   — el Manifiesto de Genesis: que apps nacen del grafo (Fase 7).
 //    memory       — el heap dinamico del kernel (`#[global_allocator]`).
 //    async_system — el reactor cooperativo: ejecutor, tareas, wakers, teclado
 //                   y el reloj que marca el compas de los fotogramas (Fase 5).
@@ -50,6 +51,7 @@ mod drivers;
 mod gdt;
 mod grafico;
 mod interrupts;
+mod manifiesto;
 mod memory;
 mod pic;
 mod sync;
