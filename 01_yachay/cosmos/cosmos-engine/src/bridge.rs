@@ -21,8 +21,8 @@ use cosmobiologia_model::{Chart, HouseSystem, StoredChartConfig, Zodiac};
 
 use crate::dignity::essential_dignity;
 use crate::{
-    AspectSummary, EngineError, Geometry, Glyph, Layer, LayerKind, LineSeg, OverlayMeta,
-    RenderModel, UranianGroup,
+    compute_gr_triggers, AspectSummary, EngineError, Geometry, Glyph, GrDirection, Layer,
+    LayerKind, LineSeg, OverlayMeta, RenderModel, UranianGroup,
 };
 
 // =====================================================================
@@ -586,12 +586,27 @@ fn build_topocentric_overlay(
     Ok(())
 }
 
+/// Orbe máximo (grados) para que una proyección primaria entre al HUD
+/// de triggers. ~2° ≈ 2 años de vida con el key Naibod.
+const GR_HUD_ORB_DEG: f32 = 2.0;
+/// Micro-orbe de convergencia GR: 5 minutos de arco. Un punto natal
+/// tocado a la vez por un directo y un converso dentro de este orbe
+/// es un evento de rectificación.
+const GR_EVENT_ORB_DEG: f32 = 5.0 / 60.0;
+/// Tope de triggers en el HUD tras ordenar por orbe.
+const GR_MAX_TRIGGERS: usize = 60;
+
 /// GR dual-ring de Direcciones Primarias: a la edad pedida, cada
 /// cuerpo natal se proyecta dos veces — directa (rotación diurna
 /// forward, anillo afuera) y conversa (rotación inversa, anillo
 /// dentro). En rectificación, los dos rings se ven simultáneamente
-/// y si un evento real cayó cerca de un ángulo, debe aparecer
+/// y si un evento real cayó cerca de un punto natal, debe aparecer
 /// "cruzado" con ambos arcos coincidentes — eso valida la hora.
+///
+/// Además de los dos rings, computa `render.gr_triggers`: cada
+/// proyección que cae cerca de un punto natal (cuerpo o ángulo), y
+/// marca las convergencias directo+converso. La UI lo usa para el
+/// HUD de rectificación y el resaltado de eventos.
 ///
 /// Usa el key Naibod (0°59'08″/año) como default — convención GR.
 fn build_primary_directions_overlay(
@@ -602,8 +617,17 @@ fn build_primary_directions_overlay(
 ) {
     let eps = natal.obliquity_rad;
 
-    let project = |dir: PrimaryDirection| -> Vec<Glyph> {
-        natal
+    let directions = [
+        (GrDirection::Direct, PrimaryDirection::Direct),
+        (GrDirection::Converse, PrimaryDirection::Converse),
+    ];
+
+    // Posiciones dirigidas acumuladas para el emparejamiento posterior:
+    // `(promisor, dirección, longitud)`.
+    let mut directed: Vec<(String, GrDirection, f32)> = Vec::new();
+
+    for (gr_dir, pd_dir) in directions {
+        let glyphs: Vec<Glyph> = natal
             .placements
             .iter()
             .map(|p| {
@@ -611,42 +635,62 @@ fn build_primary_directions_overlay(
                     p.right_ascension_rad,
                     p.declination_rad,
                     target_age_years,
-                    dir,
+                    pd_dir,
                     key,
                     eps,
                 );
-                let new_lon_deg = new_lon_rad.to_degrees() as f32;
+                let directed_deg = (new_lon_rad.to_degrees() as f32).rem_euclid(360.0);
+                let symbol = body_symbol(p.body);
+                directed.push((symbol.to_string(), gr_dir, directed_deg));
                 Glyph {
-                    deg: new_lon_deg,
-                    symbol: body_symbol(p.body).into(),
-                    annotation: Some(format!("{:.2}°", new_lon_deg)),
+                    deg: directed_deg,
+                    symbol: symbol.into(),
+                    annotation: Some(format!("{:.2}°", directed_deg)),
                     retrograde: p.longitude_rate_rad_per_day < 0.0,
                     house: None,
                     dignity_marker: None,
                 }
             })
-            .collect()
-    };
+            .collect();
 
-    let direct_glyphs = project(PrimaryDirection::Direct);
-    let converse_glyphs = project(PrimaryDirection::Converse);
+        let (module_id, z) = match gr_dir {
+            GrDirection::Direct => ("pd_direct", 10),
+            GrDirection::Converse => ("pd_converse", 11),
+        };
+        render.layers.push(Layer {
+            module_id: module_id.into(),
+            kind: LayerKind::Bodies,
+            ring: 0.0,
+            z,
+            geometry: Geometry::GlyphsOnly,
+            glyphs,
+        });
+    }
 
-    render.layers.push(Layer {
-        module_id: "pd_direct".into(),
-        kind: LayerKind::Bodies,
-        ring: 0.0,
-        z: 10,
-        geometry: Geometry::GlyphsOnly,
-        glyphs: direct_glyphs,
-    });
-    render.layers.push(Layer {
-        module_id: "pd_converse".into(),
-        kind: LayerKind::Bodies,
-        ring: 0.0,
-        z: 11,
-        geometry: Geometry::GlyphsOnly,
-        glyphs: converse_glyphs,
-    });
+    // Puntos natales objetivo: los cuerpos + los cuatro ángulos. Los
+    // ángulos son los anclajes clave de la rectificación.
+    let mut natal_targets: Vec<(String, f32)> = natal
+        .placements
+        .iter()
+        .map(|p| {
+            (
+                body_symbol(p.body).to_string(),
+                p.longitude.longitude_deg() as f32,
+            )
+        })
+        .collect();
+    natal_targets.push(("asc".into(), render.ascendant_deg));
+    natal_targets.push(("mc".into(), render.midheaven_deg));
+    natal_targets.push(("desc".into(), render.descendant_deg));
+    natal_targets.push(("ic".into(), render.imum_coeli_deg));
+
+    render.gr_triggers = compute_gr_triggers(
+        &directed,
+        &natal_targets,
+        GR_HUD_ORB_DEG,
+        GR_EVENT_ORB_DEG,
+        GR_MAX_TRIGGERS,
+    );
 }
 
 fn build_progression_overlay(
@@ -1446,6 +1490,7 @@ fn build_render_model(
         overlays: Vec::new(),
         aspect_summary: Vec::new(),
         uranian_groups: Vec::new(),
+        gr_triggers: Vec::new(),
     }
 }
 

@@ -36,8 +36,8 @@ pub use cosmobiologia_model::{Chart, ChartId, ChartKind};
 // (`cosmobiologia_engine::Layer`, etc.) sin tener que cambiar
 // imports en el shell, canvas, modules, tree, panel...
 pub use cosmobiologia_render::{
-    AspectSummary, Geometry, Glyph, Layer, LayerKind, LineSeg, OverlayMeta, PointMark,
-    RenderModel, UranianGroup, OUTER_RING_MODULES,
+    compute_gr_triggers, AspectSummary, Geometry, Glyph, GrDirection, GrTrigger, Layer, LayerKind,
+    LineSeg, OverlayMeta, PointMark, RenderModel, UranianGroup, OUTER_RING_MODULES,
 };
 
 // `Chart` reexportado arriba es lo que `PipelineRequest::Synastry`
@@ -336,6 +336,7 @@ pub fn compute_mock(chart: &Chart) -> RenderModel {
         overlays: Vec::new(),
         aspect_summary: Vec::new(),
         uranian_groups: Vec::new(),
+        gr_triggers: Vec::new(),
     }
 }
 
@@ -455,5 +456,37 @@ mod tests {
              warmup={:?}, repeat={:?}",
             hit, miss, cold_or_hot_1, hot
         );
+    }
+
+    /// El overlay GR debe emitir el dual-ring (`pd_direct` +
+    /// `pd_converse`) y una lista de triggers ordenada por orbe y
+    /// acotada al orbe del HUD.
+    #[cfg(feature = "eternal-bridge")]
+    #[test]
+    fn primary_directions_emit_dual_ring_and_triggers() {
+        use crate::PipelineRequest;
+        let model = compose(
+            &sample_chart(),
+            0,
+            &[PipelineRequest::PrimaryDirections {
+                target_age_years: 30.0,
+                key: "naibod".into(),
+            }],
+        )
+        .expect("compose con overlay GR");
+
+        assert!(model.layers.iter().any(|l| l.module_id == "pd_direct"));
+        assert!(model.layers.iter().any(|l| l.module_id == "pd_converse"));
+
+        let mut prev = 0.0_f32;
+        for t in &model.gr_triggers {
+            assert!(t.orb_deg <= 2.0 + 1e-3, "orbe {} fuera del HUD", t.orb_deg);
+            assert!(t.orb_deg + 1e-3 >= prev, "triggers desordenados");
+            prev = t.orb_deg;
+            if t.event {
+                // Un evento exige orbe de micro-escala (≤ 5').
+                assert!(t.orb_deg <= 5.0 / 60.0 + 1e-3, "evento con orbe ancho");
+            }
+        }
     }
 }

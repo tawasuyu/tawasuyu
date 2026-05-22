@@ -31,12 +31,14 @@ use serde::{Deserialize, Serialize};
 pub use cosmobiologia_model::{Chart, ChartId, ChartKind};
 
 pub mod draw;
+pub mod gr;
 pub mod math;
 pub mod palette;
 
 pub use draw::{
     compose_wheel, draw_commands_to_svg, CompositionOpts, DrawCommand, Rgba, TextAnchor,
 };
+pub use gr::{compute_gr_triggers, GrDirection, GrTrigger};
 pub use math::{
     find_clusters, format_coord_compact, polar_to_screen, spread_angles, Radii,
 };
@@ -82,6 +84,12 @@ pub struct RenderModel {
     /// Vacío sino se activó el módulo Uranian.
     #[serde(default)]
     pub uranian_groups: Vec<UranianGroup>,
+    /// Triggers del Sistema GR (direcciones primarias). Poblado sólo
+    /// cuando el módulo `primary_directions` está activo; ordenado por
+    /// `orb_deg` ascendente. La UI lo lista en el HUD de rectificación
+    /// y resalta los `event = true` (convergencias directo+converso).
+    #[serde(default)]
+    pub gr_triggers: Vec<GrTrigger>,
 }
 
 /// Etiqueta legible de un overlay para el footer del canvas. La engine
