@@ -1138,6 +1138,16 @@ fn render_sphere(
                             );
                         }
                     }
+                    DrawCommand::Polygon { points, fill, stroke, stroke_w } => {
+                        paint_polygon(
+                            window,
+                            points,
+                            ox,
+                            oy,
+                            (*fill).map(rgba_to_hsla),
+                            (*stroke).map(|c| (rgba_to_hsla(c), *stroke_w)),
+                        );
+                    }
                     DrawCommand::Text { .. } => {}
                 }
             }
@@ -3110,6 +3120,43 @@ fn paint_glow(window: &mut Window, cx: f32, cy: f32, base_r: f32, color: Hsla) {
         let r = base_r * mult;
         let halo = hsla(color.h, color.s, color.l, alpha);
         fill_circle(window, cx, cy, r, halo);
+    }
+}
+
+/// Pinta un polígono cerrado: relleno y/o trazo. `points` en coords del
+/// lienzo (sin el offset del bounds — se le suma `ox`/`oy`).
+fn paint_polygon(
+    window: &mut Window,
+    points: &[(f32, f32)],
+    ox: f32,
+    oy: f32,
+    fill: Option<Hsla>,
+    stroke: Option<(Hsla, f32)>,
+) {
+    if points.len() < 3 {
+        return;
+    }
+    if let Some(color) = fill {
+        let mut b = PathBuilder::fill();
+        b.move_to(point(px(ox + points[0].0), px(oy + points[0].1)));
+        for p in &points[1..] {
+            b.line_to(point(px(ox + p.0), px(oy + p.1)));
+        }
+        b.close();
+        if let Ok(path) = b.build() {
+            window.paint_path(path, color);
+        }
+    }
+    if let Some((color, w)) = stroke {
+        let mut b = PathBuilder::stroke(px(w));
+        b.move_to(point(px(ox + points[0].0), px(oy + points[0].1)));
+        for p in &points[1..] {
+            b.line_to(point(px(ox + p.0), px(oy + p.1)));
+        }
+        b.line_to(point(px(ox + points[0].0), px(oy + points[0].1)));
+        if let Ok(path) = b.build() {
+            window.paint_path(path, color);
+        }
     }
 }
 

@@ -85,6 +85,16 @@ pub enum DrawCommand {
         #[serde(default = "default_anchor")]
         anchor: TextAnchor,
     },
+    /// Polígono cerrado — lista de vértices, con relleno y/o trazo.
+    Polygon {
+        points: Vec<(f32, f32)>,
+        #[serde(default)]
+        fill: Option<Rgba>,
+        #[serde(default)]
+        stroke: Option<Rgba>,
+        #[serde(default = "default_stroke_width")]
+        stroke_w: f32,
+    },
 }
 
 fn default_stroke_width() -> f32 {
@@ -555,6 +565,25 @@ pub fn draw_commands_to_svg(commands: &[DrawCommand], size: f32) -> String {
                 s.push_str(&format!(
                     "<line x1=\"{:.2}\" y1=\"{:.2}\" x2=\"{:.2}\" y2=\"{:.2}\" stroke=\"{}\" stroke-width=\"{}\"{}/>",
                     x1, y1, x2, y2, color.to_css(), width, dash_attr
+                ));
+            }
+            DrawCommand::Polygon { points, fill, stroke, stroke_w } => {
+                let pts: String = points
+                    .iter()
+                    .map(|(x, y)| format!("{:.2},{:.2} ", x, y))
+                    .collect();
+                let fill_attr = match fill {
+                    Some(c) => format!(" fill=\"{}\"", c.to_css()),
+                    None => " fill=\"none\"".into(),
+                };
+                let stroke_attr = stroke
+                    .map(|c| format!(" stroke=\"{}\" stroke-width=\"{}\"", c.to_css(), stroke_w))
+                    .unwrap_or_default();
+                s.push_str(&format!(
+                    "<polygon points=\"{}\"{}{}/>",
+                    pts.trim_end(),
+                    fill_attr,
+                    stroke_attr
                 ));
             }
             DrawCommand::Text { x, y, content, color, size: sz, anchor } => {

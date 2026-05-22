@@ -793,11 +793,11 @@ fn geo_to_ecliptic(lat: f32, lon: f32, lon_obs: f32, ramc: f32, eps_rad: f32) ->
     rot_x(Vec3::new(cd * cra, cd * sra, sd), eps_rad)
 }
 
-/// La Tierra interior: un globo pequeño y transparente en el centro de
-/// la esfera celeste, con los continentes esquemáticos y el observador
+/// La Tierra interior: un globo pequeño en el centro de la esfera
+/// celeste, con el **mar** y los **continentes** teñidos distinto, un
+/// **sombreado día/noche** según la posición del Sol, y el observador
 /// marcado en su lugar real. Orientada de modo que el punto geográfico
-/// del observador mira exactamente al cénit — y gira con la vista, así
-/// que delata la rotación.
+/// del observador mira al cénit — y gira con la vista.
 #[allow(clippy::too_many_arguments)]
 fn add_inner_earth(
     items: &mut Vec<(f32, DrawCommand)>,
@@ -812,42 +812,129 @@ fn add_inner_earth(
     const R_EARTH: f32 = 0.26;
     let ramc = ramc_deg(model.midheaven_deg, eps);
     let lon_obs = model.geo_longitude_deg;
-    let geo = |lat: f32, lon: f32| -> Vec3 {
-        geo_to_ecliptic(lat, lon, lon_obs, ramc, eps).scale(R_EARTH)
-    };
+    // Dirección unitaria de un punto geográfico (sin escalar).
+    let dir = |lat: f32, lon: f32| geo_to_ecliptic(lat, lon, lon_obs, ramc, eps);
+    // El mismo punto, escalado al radio de la Tierra interior.
+    let geo = |lat: f32, lon: f32| dir(lat, lon).scale(R_EARTH);
 
-    // Limbo del globo — disco tenue.
+    // El Sol de la carta (si está) — para el día/noche. El lado de la
+    // Tierra que mira al Sol es el día: un punto `d` está de día si
+    // `d · sol > 0`.
+    let sun_dir: Option<Vec3> = model
+        .layers
+        .iter()
+        .filter(|l| matches!(l.kind, LayerKind::Bodies) && l.module_id == "natal")
+        .flat_map(|l| l.glyphs.iter())
+        .find(|g| g.symbol == "sun")
+        .map(|g| eclip(g.deg));
+    let es_dia = |d: Vec3| -> bool { sun_dir.map(|s| d.dot(s) > 0.0).unwrap_or(true) };
+
+    // Mar — disco base teñido de azul.
+    let sea = if pal.is_dark {
+        Rgba::opaque(0.10, 0.21, 0.39)
+    } else {
+        Rgba::opaque(0.58, 0.72, 0.86)
+    };
     items.push((
-        -0.9,
+        -0.95,
         DrawCommand::Circle {
             cx: center,
             cy: center,
             r: R_EARTH * rad,
             stroke: Some(pal.fg_muted.with_alpha(0.30)),
-            fill: Some(pal.water.with_alpha(if pal.is_dark { 0.12 } else { 0.07 })),
+            fill: Some(sea.with_alpha(0.55)),
             stroke_w: 0.8,
         },
     ));
+
+    // Resplandor diurno — el hemisferio iluminado. Discos concéntricos
+    // sobre el punto subsolar; se apagan si el Sol queda detrás de la
+    // Tierra (entonces vemos su cara nocturna).
+    if let Some(s) = sun_dir {
+        let sub = proj.project(s.scale(R_EARTH));
+        let face = ((sub.depth / R_EARTH) * 0.5 + 0.5).clamp(0.0, 1.0);
+        let day = if pal.is_dark {
+            Rgba::opaque(0.40, 0.60, 0.85)
+        } else {
+            Rgba::opaque(1.0, 0.98, 0.88)
+        };
+        for i in 0..10 {
+            let t = i as f32 / 9.0;
+            items.push((
+                -0.93 + t * 0.04,
+                DrawCommand::Circle {
+                    cx: sub.x,
+                    cy: sub.y,
+                    r: R_EARTH * rad * (1.0 - 0.92 * t),
+                    stroke: None,
+                    fill: Some(day.with_alpha(0.07 * face)),
+                    stroke_w: 0.0,
+                },
+            ));
+        }
+    }
 
     // Ecuador terrestre.
     let equator: Vec<Vec3> = (0..72)
         .map(|i| geo(0.0, (i as f32) / 72.0 * 360.0))
         .collect();
-    add_loop(items, proj, &equator, pal.fg_muted.with_alpha(0.22), 0.5);
+    add_loop(items, proj, &equator, pal.fg_muted.with_alpha(0.20), 0.5);
 
-    // Continentes — esquemáticos, muy transparentes.
-    let land = if pal.is_dark {
-        Rgba::opaque(0.50, 0.74, 0.58)
+    // Terminador — la línea día/noche, círculo máximo ⊥ al Sol.
+    if let Some(s) = sun_dir {
+        let term: Vec<Vec3> = great_circle_perp(s, 72)
+            .iter()
+            .map(|p| p.scale(R_EARTH))
+            .collect();
+        add_loop(items, proj, &term, pal.angle_highlight.with_alpha(0.45), 0.7);
+    }
+
+    // Continentes — polígonos rellenos, teñidos de verde; el tono
+    // depende de si la masa está de día o de noche.
+    let land_day = if pal.is_dark {
+        Rgba::opaque(0.38, 0.60, 0.34)
     } else {
-        Rgba::opaque(0.26, 0.46, 0.32)
+        Rgba::opaque(0.52, 0.66, 0.40)
+    };
+    let land_night = if pal.is_dark {
+        Rgba::opaque(0.13, 0.25, 0.19)
+    } else {
+        Rgba::opaque(0.40, 0.50, 0.40)
     };
     for outline in CONTINENTES {
-        let pts: Vec<Vec3> = outline.iter().map(|&(lat, lon)| geo(lat, lon)).collect();
-        add_loop(items, proj, &pts, land.with_alpha(0.36), 0.9);
+        let pts3: Vec<Vec3> = outline.iter().map(|&(lat, lon)| geo(lat, lon)).collect();
+        let mut cen = Vec3::new(0.0, 0.0, 0.0);
+        let mut depth_sum = 0.0_f32;
+        let pts2: Vec<(f32, f32)> = pts3
+            .iter()
+            .map(|v| {
+                cen = Vec3::new(cen.x + v.x, cen.y + v.y, cen.z + v.z);
+                let p = proj.project(*v);
+                depth_sum += p.depth;
+                (p.x, p.y)
+            })
+            .collect();
+        let n = pts3.len().max(1) as f32;
+        let depth = depth_sum / n;
+        let base = if es_dia(cen.scale(1.0 / n)) {
+            land_day
+        } else {
+            land_night
+        };
+        items.push((
+            depth,
+            DrawCommand::Polygon {
+                points: pts2,
+                fill: Some(dim(base, depth).with_alpha(0.62 * depth_alpha(depth))),
+                stroke: Some(dim(base, depth)),
+                stroke_w: 0.7,
+            },
+        ));
     }
 
     // El observador, en su lugar real sobre la Tierra.
-    let p = proj.project(geo(model.geo_latitude_deg, lon_obs));
+    let obs_dir = dir(model.geo_latitude_deg, lon_obs);
+    let p = proj.project(obs_dir.scale(R_EARTH));
     let oc = dim(pal.sun, p.depth);
     items.push((
         p.depth + 0.01,
@@ -856,7 +943,7 @@ fn add_inner_earth(
             cy: p.y,
             r: size * 0.0075,
             stroke: Some(oc),
-            fill: Some(oc.with_alpha(oc.a * 0.5)),
+            fill: Some(oc.with_alpha(oc.a * if es_dia(obs_dir) { 0.6 } else { 0.15 })),
             stroke_w: 1.2,
         },
     ));
@@ -1463,10 +1550,10 @@ mod tests {
     }
 
     #[test]
-    fn la_tierra_interior_dibuja_continentes() {
+    fn la_tierra_interior_dibuja_continentes_rellenos() {
         let modelo = modelo_demo();
-        let lineas = |c: &[DrawCommand]| {
-            c.iter().filter(|d| matches!(d, DrawCommand::Line { .. })).count()
+        let poligonos = |c: &[DrawCommand]| {
+            c.iter().filter(|d| matches!(d, DrawCommand::Polygon { .. })).count()
         };
         let con = compose_sphere(&modelo, &SphereView::default(), &SphereOpts::default());
         let sin = compose_sphere(
@@ -1474,7 +1561,11 @@ mod tests {
             &SphereView::default(),
             &SphereOpts { show_earth: false, ..Default::default() },
         );
-        assert!(lineas(&con) > lineas(&sin), "los continentes agregan trazos");
+        assert_eq!(poligonos(&sin), 0, "sin Tierra no hay continentes");
+        assert!(
+            poligonos(&con) >= 6,
+            "la Tierra interior rellena cada continente como polígono"
+        );
     }
 
     #[test]
