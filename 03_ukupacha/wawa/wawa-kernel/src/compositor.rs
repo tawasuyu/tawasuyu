@@ -55,6 +55,12 @@ pub enum Mando {
     FocoSiguiente,
     /// Mover el foco a la ventana viva anterior.
     FocoAnterior,
+    /// Promover la ventana enfocada a la posicion maestra del teselado.
+    Promover,
+    /// Mover la ventana enfocada una posicion adelante en el orden de teselado.
+    MoverAdelante,
+    /// Mover la ventana enfocada una posicion atras en el orden de teselado.
+    MoverAtras,
 }
 
 /// Una ventana del escritorio: una app, su geometria y su ultimo fotograma.
@@ -84,7 +90,13 @@ struct Escritorio {
     modo: LayoutMode,
     ancho: usize,
     alto: usize,
+    /// Las ventanas, indexadas por `indice_app` — su IDENTIDAD, inmutable.
     ventanas: Vec<Ventana>,
+    /// El ORDEN de teselado: `orden[slot]` es el `indice_app` de la ventana que
+    /// ocupa esa celda del teselado. Una permutacion de `0..ventanas.len()`.
+    /// Separar el orden de la identidad permite promover y reordenar ventanas
+    /// sin tocar su `indice_app` —su canal de teclado, su ranura de estado—.
+    orden: Vec<usize>,
 }
 
 /// El escritorio global. Se funda una sola vez, en el arranque.
@@ -110,13 +122,18 @@ static MANDOS: Once<ArrayQueue<Mando>> = Once::new();
 pub fn fundar(ancho: usize, alto: usize, naturales: &[(usize, usize)]) {
     MANDOS.call_once(|| ArrayQueue::new(CAPACIDAD_MANDOS));
 
-    let marcos = teselar(naturales.len(), ancho, alto, MODO_INICIAL);
     let mut ventanas = Vec::with_capacity(naturales.len());
-    for (i, &(nat_ancho, nat_alto)) in naturales.iter().enumerate() {
+    for &(nat_ancho, nat_alto) in naturales {
         ventanas.push(Ventana {
             natural_ancho: nat_ancho,
             natural_alto: nat_alto,
-            marco: marcos[i],
+            // Marco provisional; `aplicar_teselado` lo fija enseguida.
+            marco: RegionPantalla {
+                x: 0,
+                y: 0,
+                ancho: 0,
+                alto: 0,
+            },
             // La cache: reservada UNA vez, acotada al lienzo natural.
             cache: vec![0u8; nat_ancho.saturating_mul(nat_alto).saturating_mul(4)],
             pintada: false,
@@ -124,14 +141,34 @@ pub fn fundar(ancho: usize, alto: usize, naturales: &[(usize, usize)]) {
         });
     }
 
-    ESCRITORIO.call_once(|| {
-        Mutex::new(Escritorio {
-            modo: MODO_INICIAL,
-            ancho,
-            alto,
-            ventanas,
-        })
-    });
+    // El orden de teselado arranca como la identidad: la ventana `i` ocupa la
+    // celda `i`. Los mandos del teclado lo permutaran.
+    let orden = (0..ventanas.len()).collect();
+    let mut escritorio = Escritorio {
+        modo: MODO_INICIAL,
+        ancho,
+        alto,
+        ventanas,
+        orden,
+    };
+    aplicar_teselado(&mut escritorio);
+
+    ESCRITORIO.call_once(|| Mutex::new(escritorio));
+}
+
+/// Recalcula el teselado y asigna a cada ventana su marco. La celda `slot` del
+/// teselado va a la ventana `orden[slot]`: manda el orden, no la identidad.
+fn aplicar_teselado(escritorio: &mut Escritorio) {
+    let marcos = teselar(
+        escritorio.orden.len(),
+        escritorio.ancho,
+        escritorio.alto,
+        escritorio.modo,
+    );
+    for (slot, marco) in marcos.into_iter().enumerate() {
+        let ventana = escritorio.orden[slot];
+        escritorio.ventanas[ventana].marco = marco;
+    }
 }
 
 /// Pinta el escenario inicial del compositor: el area de apps y sus marcos
@@ -223,6 +260,9 @@ pub fn atender_mandos() {
             Mando::CiclarLayout => ciclar_layout(),
             Mando::FocoSiguiente => mover_foco(true),
             Mando::FocoAnterior => mover_foco(false),
+            Mando::Promover => promover(),
+            Mando::MoverAdelante => mover_ventana(true),
+            Mando::MoverAtras => mover_ventana(false),
         }
     }
 }
@@ -235,50 +275,94 @@ fn ciclar_layout() {
     };
     let mut escritorio = escritorio.lock();
     escritorio.modo = escritorio.modo.next();
-
-    let marcos = teselar(
-        escritorio.ventanas.len(),
-        escritorio.ancho,
-        escritorio.alto,
-        escritorio.modo,
-    );
-    for (ventana, marco) in escritorio.ventanas.iter_mut().zip(marcos) {
-        ventana.marco = marco;
-    }
+    aplicar_teselado(&mut escritorio);
     redibujar_todo(&escritorio);
 }
 
-/// Mueve el foco a la siguiente ventana VIVA —saltando las desalojadas—; tras
-/// el salto, redibuja la ventana que pierde el foco y la que lo gana, para que
-/// el borde de cada una cambie de color.
+/// Mueve el foco a la siguiente ventana VIVA, recorriendo el ORDEN de teselado
+/// —de modo que el foco salte entre ventanas visualmente contiguas— y saltando
+/// las desalojadas. Redibuja la ventana que pierde el foco y la que lo gana.
 fn mover_foco(adelante: bool) {
     let Some(escritorio) = ESCRITORIO.get() else {
         return;
     };
     let escritorio = escritorio.lock();
-    let n = escritorio.ventanas.len();
+    let n = escritorio.orden.len();
     if n == 0 {
         return;
     }
-    let anterior = FOCO.load(Ordering::Relaxed).min(n - 1);
+    let anterior = FOCO.load(Ordering::Relaxed);
+    // La posicion del foco en el orden de teselado — el punto de partida.
+    let pos = escritorio
+        .orden
+        .iter()
+        .position(|&v| v == anterior)
+        .unwrap_or(0);
 
     // Avanzar saltando las ventanas desalojadas. Si no hay ninguna viva, tras
     // `n` pasos se vuelve al punto de partida y el foco no cambia.
+    let mut nueva_pos = pos;
     let mut nuevo = anterior;
     for _ in 0..n {
-        nuevo = if adelante {
-            (nuevo + 1) % n
+        nueva_pos = if adelante {
+            (nueva_pos + 1) % n
         } else {
-            (nuevo + n - 1) % n
+            (nueva_pos + n - 1) % n
         };
-        if escritorio.ventanas[nuevo].baliza.is_none() {
+        let candidata = escritorio.orden[nueva_pos];
+        if escritorio.ventanas[candidata].baliza.is_none() {
+            nuevo = candidata;
             break;
         }
     }
     FOCO.store(nuevo, Ordering::Relaxed);
 
-    redibujar_ventana(&escritorio.ventanas[anterior], false);
+    if let Some(ventana) = escritorio.ventanas.get(anterior) {
+        redibujar_ventana(ventana, false);
+    }
     redibujar_ventana(&escritorio.ventanas[nuevo], true);
+}
+
+/// Promueve la ventana enfocada a la posicion maestra —la celda 0— del
+/// teselado: la saca de su lugar en el orden y la inserta al frente. Las demas
+/// se desplazan una posicion. El escritorio entero se recompone.
+fn promover() {
+    let Some(escritorio) = ESCRITORIO.get() else {
+        return;
+    };
+    let mut escritorio = escritorio.lock();
+    let foco = FOCO.load(Ordering::Relaxed);
+    if let Some(pos) = escritorio.orden.iter().position(|&v| v == foco) {
+        let ventana = escritorio.orden.remove(pos);
+        escritorio.orden.insert(0, ventana);
+        aplicar_teselado(&mut escritorio);
+        redibujar_todo(&escritorio);
+    }
+}
+
+/// Mueve la ventana enfocada una posicion en el orden de teselado,
+/// intercambiandola con su vecina. El foco viaja con la ventana — el indice no
+/// cambia, solo su lugar en el orden.
+fn mover_ventana(adelante: bool) {
+    let Some(escritorio) = ESCRITORIO.get() else {
+        return;
+    };
+    let mut escritorio = escritorio.lock();
+    let n = escritorio.orden.len();
+    if n < 2 {
+        return;
+    }
+    let foco = FOCO.load(Ordering::Relaxed);
+    if let Some(pos) = escritorio.orden.iter().position(|&v| v == foco) {
+        let destino = if adelante {
+            (pos + 1) % n
+        } else {
+            (pos + n - 1) % n
+        };
+        escritorio.orden.swap(pos, destino);
+        aplicar_teselado(&mut escritorio);
+        redibujar_todo(&escritorio);
+    }
 }
 
 /// Recompone el escritorio entero: repinta el escenario —area y paneles— con

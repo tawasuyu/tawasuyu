@@ -11,8 +11,8 @@
 //  FASE 8c :: el teclado deja de DIFUNDIR a ciegas. Ahora discrimina:
 //
 //    * La tecla Alt es el MODIFICADOR del sistema. Con Alt pulsada, los make
-//      codes son MANDOS del compositor (ciclar el teselado, mover el foco): se
-//      consumen aqui, jamas llegan a una app.
+//      codes son MANDOS del compositor (ciclar el teselado, mover el foco,
+//      promover y reordenar ventanas): se consumen aqui, jamas llegan a una app.
 //    * Una tecla ordinaria se entrega SOLO a la app ENFOCADA — la que el
 //      compositor senala. El censo de canales se indexa por el `indice_app`,
 //      de modo que el foco —un atomico— elija el canal exacto.
@@ -45,6 +45,12 @@ const ESPACIO: u8 = 0x39;
 const TECLA_J: u8 = 0x24;
 /// Tecla K — `Alt + K` mueve el foco a la ventana anterior.
 const TECLA_K: u8 = 0x25;
+/// Tecla H — `Alt + H` mueve la ventana enfocada atras en el orden.
+const TECLA_H: u8 = 0x23;
+/// Tecla L — `Alt + L` mueve la ventana enfocada adelante en el orden.
+const TECLA_L: u8 = 0x26;
+/// Tecla Enter — `Alt + Enter` promueve la ventana enfocada a maestra.
+const ENTER: u8 = 0x1C;
 
 /// Un canal de teclado: la cola lock-free de scancodes de UNA aplicacion.
 pub type CanalTeclado = Arc<ArrayQueue<u8>>;
@@ -127,6 +133,9 @@ pub fn recibir_scancode(scancode: u8) {
             ESPACIO => compositor::solicitar(Mando::CiclarLayout),
             TECLA_J => compositor::solicitar(Mando::FocoSiguiente),
             TECLA_K => compositor::solicitar(Mando::FocoAnterior),
+            ENTER => compositor::solicitar(Mando::Promover),
+            TECLA_L => compositor::solicitar(Mando::MoverAdelante),
+            TECLA_H => compositor::solicitar(Mando::MoverAtras),
             _ => {}
         }
         return;
