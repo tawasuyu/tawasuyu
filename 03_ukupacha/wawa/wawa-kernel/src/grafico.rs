@@ -43,6 +43,15 @@ impl Color {
         b: 0x20,
     };
 
+    /// Panel del compositor (Fase 8): un slate apenas mas claro que el reposo.
+    /// Tiñe cada marco teselado, de modo que el teselado se vea —como una
+    /// rejilla de paneles— aunque sus apps aun no hayan pintado nada.
+    pub(crate) const PANEL: Color = Color {
+        r: 0x1B,
+        g: 0x21,
+        b: 0x30,
+    };
+
     /// Alerta de colapso: un rojo saturado, imposible de ignorar.
     pub(crate) const ALERTA: Color = Color {
         r: 0xD4,
@@ -99,13 +108,6 @@ pub(crate) struct RegionPantalla {
     pub(crate) ancho: usize,
     /// Alto de la region, en pixeles.
     pub(crate) alto: usize,
-}
-
-impl RegionPantalla {
-    /// Numero total de pixeles que abarca la region.
-    pub(crate) const fn pixeles(&self) -> usize {
-        self.ancho * self.alto
-    }
 }
 
 /// Traduce un [`Color`] logico al valor nativo de 32 bits que el framebuffer

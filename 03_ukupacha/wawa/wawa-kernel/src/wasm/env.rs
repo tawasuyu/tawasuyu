@@ -35,8 +35,14 @@ use crate::grafico::RegionPantalla;
 /// una capacidad para servir a ESA app y a ninguna otra — su region de pantalla,
 /// su canal de teclado y sus cuotas de recursos. Dos apps jamas comparten nada.
 pub(crate) struct ContextoCapacidades {
-    /// La sub-region de pantalla asignada a la aplicacion.
-    pub(crate) region: RegionPantalla,
+    /// El marco que el compositor (Fase 8) asigno a la app — el rectangulo de
+    /// pantalla donde vive. El kernel centra en el el fotograma de la app.
+    pub(crate) marco: RegionPantalla,
+    /// El tamaño natural del lienzo de la app, en pixeles. El fotograma que
+    /// entrega `sys_render_frame` mide exactamente `natural_ancho × natural_alto`;
+    /// el compositor lo coloca, sin deformarlo, dentro del `marco`.
+    pub(crate) natural_ancho: usize,
+    pub(crate) natural_alto: usize,
     /// El canal de teclado propio de la aplicacion.
     pub(crate) canal: CanalTeclado,
     /// El techo de recursos de la aplicacion — hoy, su memoria lineal maxima.
@@ -92,15 +98,17 @@ pub(crate) fn enlazar_capacidades(
         "renaser",
         "sys_render_frame",
         |caller: Caller<'_, ContextoCapacidades>, ptr: u32, len: u32| -> Result<(), Error> {
-            let region = caller.data().region;
+            let marco = caller.data().marco;
+            let nat_ancho = caller.data().natural_ancho;
+            let nat_alto = caller.data().natural_alto;
 
-            // El fotograma debe medir EXACTAMENTE los pixeles de la region. Un
-            // tamaño distinto delata a una app que pinta fuera de su ventana:
+            // El fotograma debe medir EXACTAMENTE el lienzo natural de la app.
+            // Un tamaño distinto delata a una app que pinta fuera de su lienzo:
             // se aborta antes de tocar un byte.
-            let esperado = region.pixeles() * 4;
+            let esperado = nat_ancho * nat_alto * 4;
             if len as usize != esperado {
                 return Err(Error::new(
-                    "WASM :: sys_render_frame con un fotograma ajeno a la region asignada",
+                    "WASM :: sys_render_frame con un fotograma ajeno al lienzo natural",
                 ));
             }
 
@@ -109,15 +117,16 @@ pub(crate) fn enlazar_capacidades(
 
             // VALIDACION INFRANQUEABLE: si (ptr, len) se sale de la memoria
             // lineal del modulo, se aborta la app —no el kernel—.
-            let marco = rango(
+            let fotograma = rango(
                 datos,
                 ptr,
                 len as usize,
                 "WASM :: sys_render_frame desbordo la memoria lineal del modulo",
             )?;
 
-            // Limites verificados: la region es segura de leer y componer.
-            crate::volcar_marco_wasm(region, marco);
+            // Limites verificados: el compositor centra el fotograma natural
+            // de la app dentro del marco que el teselado le asigno.
+            crate::volcar_marco_wasm(marco, nat_ancho, nat_alto, fotograma);
             Ok(())
         },
     )?;

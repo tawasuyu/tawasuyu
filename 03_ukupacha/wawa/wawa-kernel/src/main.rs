@@ -19,6 +19,7 @@
 //                   interrupcion: el bus PCI y el virtio-blk (Fases 6.1, 6.2).
 //    almacen      — el grafo de objetos direccionado por contenido (Fase 6.1c).
 //    manifiesto   — el Manifiesto de Genesis: que apps nacen del grafo (Fase 7).
+//    compositor   — el teselado de las ventanas con `mirada-layout` (Fase 8).
 //    memory       — el heap dinamico del kernel (`#[global_allocator]`).
 //    async_system — el reactor cooperativo: ejecutor, tareas, wakers, teclado
 //                   y el reloj que marca el compas de los fotogramas (Fase 5).
@@ -46,6 +47,7 @@ use spin::Mutex;
 mod almacen;
 mod async_system;
 mod baliza;
+mod compositor;
 mod consola;
 mod drivers;
 mod gdt;
@@ -66,7 +68,8 @@ use async_system::executor::Executor;
 use baliza::BALIZA_PANICO;
 use consola::{Consola, CONSOLA};
 use grafico::{
-    codificar, reclamar_memoria_lienzo, Color, Lienzo, Pantalla, ALTO_MAX, ANCHO_MAX,
+    codificar, reclamar_memoria_lienzo, Color, Lienzo, Pantalla, RegionPantalla, ALTO_MAX,
+    ANCHO_MAX,
 };
 
 /// Configuracion que el cargador `bootloader` aplicara antes de cedernos la CPU.
@@ -99,7 +102,7 @@ async fn tarea_aplicacion(mut app: wasm::AplicacionWasm) {
         if let Err(falla) = app.tick() {
             // El color de la baliza delata la causa: purpura si agoto su tiempo
             // o aborto, amarillo si reviento su techo de memoria.
-            consola::pintar_desalojo(app.region(), falla.color_baliza());
+            consola::pintar_desalojo(app.marco(), falla.color_baliza());
             return;
         }
     }
@@ -129,27 +132,42 @@ async fn tarea_sonda_disco() {
 }
 
 /// Da vida a una aplicacion del userspace a partir de su `EntradaApp` del
-/// manifiesto: recupera su bytecode del grafo, la carga en su region y la
-/// despacha como tarea cooperativa del reactor. Si el bytecode falta, esta
-/// corrupto, o la carga fracasa, se salda pintando la region de la app con
-/// la baliza de desalojo — el kernel no se inmuta y sigue con las demas.
-fn encender_app(ejecutor: &mut Executor, indice: usize, entrada: &manifiesto::EntradaApp) {
-    let region = manifiesto::region(entrada);
+/// manifiesto: recupera su bytecode del grafo, la carga en el `marco` que el
+/// compositor le teselo y la despacha como tarea cooperativa del reactor. Si
+/// el bytecode falta, esta corrupto, o la carga fracasa, se salda pintando el
+/// marco con la baliza de desalojo — el kernel no se inmuta y sigue con las
+/// demas.
+fn encender_app(
+    ejecutor: &mut Executor,
+    indice: usize,
+    entrada: &manifiesto::EntradaApp,
+    marco: RegionPantalla,
+) {
+    // El tamaño NATURAL del lienzo de la app —lo que sabe pintar, fijo— lo
+    // dicta su `EntradaApp`; el compositor le asigno `marco` como ventana.
+    let natural = manifiesto::region(entrada);
     // Recuperar el bytecode del grafo. `recuperar` recomputa el hash del
     // objeto y verifica su integridad: un bytecode corrupto se delata aqui
     // —y la app se niega, no se instancia un modulo en el que no se confia.
     let bytecode = match almacen::recuperar(&entrada.bytecode) {
         Ok(Some(objeto)) => objeto.datos,
         _ => {
-            consola::pintar_desalojo(region, Color::DESALOJO);
+            consola::pintar_desalojo(marco, Color::DESALOJO);
             return;
         }
     };
     // `indice` es la identidad de la app en el manifiesto: las capacidades de
     // estado persistido (Fase 7c) la usan para hallar SU ranura `estado`.
-    match wasm::AplicacionWasm::cargar(&bytecode, region, entrada.techo_memoria as usize, indice) {
+    match wasm::AplicacionWasm::cargar(
+        &bytecode,
+        marco,
+        natural.ancho,
+        natural.alto,
+        entrada.techo_memoria as usize,
+        indice,
+    ) {
         Ok(app) => ejecutor.spawn(tarea_aplicacion(app)),
-        Err(_) => consola::pintar_desalojo(region, Color::DESALOJO),
+        Err(_) => consola::pintar_desalojo(marco, Color::DESALOJO),
     }
 }
 
@@ -170,7 +188,7 @@ fn reportar(linea: &str) {
 /// aplicacion. Toda falla se reporta a la consola y NO detiene el arranque: el
 /// kernel se levanta con las apps que pueda — o con ninguna, si el grafo no
 /// tiene userspace.
-fn cargar_userspace(ejecutor: &mut Executor) {
+fn cargar_userspace(ejecutor: &mut Executor, ancho_pantalla: usize, alto_pantalla: usize) {
     let manifiesto = match manifiesto::cargar() {
         Ok(Some(m)) => Some(m),
         // Disco sin manifiesto anclado: `boot` no lo sembro. El kernel se
@@ -197,11 +215,20 @@ fn cargar_userspace(ejecutor: &mut Executor) {
     if let Some(m) = manifiesto {
         // Instalar el manifiesto VIVO ANTES de instanciar las apps: el `init`
         // de cada app puede consultar su estado persistido (Fase 7c), y esa
-        // consulta lee del manifiesto vivo. Se instala una copia; la otra se
-        // itera para encender cada app con su indice — su identidad.
+        // consulta lee del manifiesto vivo.
         manifiesto::instalar(m.clone());
-        for (indice, entrada) in m.apps.iter().enumerate() {
-            encender_app(ejecutor, indice, entrada);
+
+        // FASE 8 :: el compositor tesela el area de apps — un marco por
+        // ventana, calculado por `mirada-layout`. Se pinta el escenario (el
+        // area y sus marcos) antes de encender las apps: el teselado se ve
+        // aunque alguna app no llegue siquiera a pintar su primer fotograma.
+        let marcos = compositor::disponer(m.apps.len(), ancho_pantalla, alto_pantalla);
+        consola::pintar_escenario(
+            compositor::area_apps(ancho_pantalla, alto_pantalla),
+            &marcos,
+        );
+        for (indice, (entrada, marco)) in m.apps.iter().zip(marcos).enumerate() {
+            encender_app(ejecutor, indice, entrada, marco);
         }
     }
 }
@@ -304,12 +331,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         Some(m) => m,
         None => detener(),
     };
-    let mut lienzo = Lienzo::nuevo(
-        memoria,
-        info.width.min(ANCHO_MAX),
-        info.height.min(ALTO_MAX),
-        formato,
-    );
+    let ancho_lienzo = info.width.min(ANCHO_MAX);
+    let alto_lienzo = info.height.min(ALTO_MAX);
+    let mut lienzo = Lienzo::nuevo(memoria, ancho_lienzo, alto_lienzo, formato);
     lienzo.limpiar(Color::LIENZO_EN_REPOSO);
 
     let mut consola = Consola::nueva(lienzo, pantalla);
@@ -347,7 +371,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     //        compas de los fotogramas y la IRQ del teclado difundira cada
     //        scancode a los canales que las apps consultan. ---
     let mut ejecutor = Executor::nuevo();
-    cargar_userspace(&mut ejecutor);
+    cargar_userspace(&mut ejecutor, ancho_lienzo, alto_lienzo);
     // FASE 6.2 :: una tarea mas del reactor — no una app WASM— que sondea el
     // disco de forma ASINCRONA: la demostracion de que la IRQ del disco
     // conduce la E/S sin detener a las aplicaciones visuales.

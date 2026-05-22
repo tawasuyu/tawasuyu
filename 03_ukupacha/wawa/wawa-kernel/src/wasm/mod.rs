@@ -70,9 +70,9 @@ pub struct AplicacionWasm {
     /// `TypedFunc` es un asa autosuficiente dentro del `Store`: conservada esta,
     /// el handle de la `Instance` no aporta nada y no se retiene.
     func_tick: TypedFunc<(), ()>,
-    /// La region de pantalla de la app — su ventana, y donde se tatua su baliza
-    /// de desalojo si llega a fallar.
-    region: RegionPantalla,
+    /// El marco que el compositor asigno a la app — su ventana en pantalla, y
+    /// donde se tatua su baliza de desalojo si llega a fallar.
+    marco: RegionPantalla,
 }
 
 impl AplicacionWasm {
@@ -84,13 +84,16 @@ impl AplicacionWasm {
     /// sola vez, aqui— y `tick` —un fotograma de trabajo, invocada despues por
     /// el reactor en cada pulso del reloj.
     ///
-    /// `techo_memoria` es la cuota de memoria lineal de ESTA app, en bytes —
-    /// desde la Fase 7 la dicta su `EntradaApp` del manifiesto. `indice_app` es
-    /// su posicion en el manifiesto: su identidad para las capacidades de
+    /// `marco` es el rectangulo que el compositor (Fase 8) asigno a la app;
+    /// `natural_ancho`/`natural_alto`, el tamaño de su lienzo. `techo_memoria`
+    /// es su cuota de memoria lineal —la dicta su `EntradaApp` del manifiesto—,
+    /// e `indice_app` su posicion en el: su identidad para las capacidades de
     /// estado persistido (Fase 7c).
     pub fn cargar(
         bytecode: &[u8],
-        region: RegionPantalla,
+        marco: RegionPantalla,
+        natural_ancho: usize,
+        natural_alto: usize,
         techo_memoria: usize,
         indice_app: usize,
     ) -> Result<AplicacionWasm, FallaApp> {
@@ -119,7 +122,9 @@ impl AplicacionWasm {
         let mut almacen = Store::new(
             &motor,
             ContextoCapacidades {
-                region,
+                marco,
+                natural_ancho,
+                natural_alto,
                 canal,
                 limites,
                 indice_app,
@@ -162,7 +167,7 @@ impl AplicacionWasm {
         Ok(AplicacionWasm {
             almacen,
             func_tick,
-            region,
+            marco,
         })
     }
 
@@ -189,9 +194,10 @@ impl AplicacionWasm {
         }
     }
 
-    /// La region de pantalla asignada a la aplicacion.
-    pub fn region(&self) -> RegionPantalla {
-        self.region
+    /// El marco de pantalla que el compositor asigno a la aplicacion — donde
+    /// se tatua su baliza si el kernel llega a desalojarla.
+    pub fn marco(&self) -> RegionPantalla {
+        self.marco
     }
 }
 

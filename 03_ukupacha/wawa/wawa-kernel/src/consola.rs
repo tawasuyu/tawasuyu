@@ -119,21 +119,42 @@ impl Consola {
     }
 
     /// Compone un fotograma crudo del userspace WASM —pixeles `0x00RRGGBB`, con
-    /// sus limites ya verificados por el host— sobre la SUB-REGION asignada a su
-    /// aplicacion. Cada pixel se recodifica al formato nativo del framebuffer y
-    /// se deposita desplazado por `(region.x, region.y)`: una app jamas escribe
-    /// fuera de su ventana, y varias cohabitan el lienzo sin pisarse.
-    fn volcar_marco(&mut self, region: RegionPantalla, datos: &[u8]) {
+    /// sus limites ya verificados por el host— dentro del MARCO que el
+    /// compositor (Fase 8) asigno a su aplicacion. El fotograma mide el tamaño
+    /// NATURAL de la app (`nat_ancho × nat_alto`); se CENTRA en el marco —que el
+    /// teselado pudo hacer mayor o menor que ese natural— y se recorta con
+    /// firmeza a sus bordes. Una app jamas pinta un pixel fuera de su marco.
+    fn volcar_marco(
+        &mut self,
+        marco: RegionPantalla,
+        nat_ancho: usize,
+        nat_alto: usize,
+        datos: &[u8],
+    ) {
+        if nat_ancho == 0 || nat_alto == 0 {
+            return;
+        }
+        // Centrar el fotograma natural dentro del marco. Si el natural excede
+        // al marco, el desplazamiento queda en cero y el sobrante se recorta.
+        let off_x = marco.x + marco.ancho.saturating_sub(nat_ancho) / 2;
+        let off_y = marco.y + marco.alto.saturating_sub(nat_alto) / 2;
+        let marco_x_fin = marco.x + marco.ancho;
+        let marco_y_fin = marco.y + marco.alto;
+
         for (indice, trozo) in datos.chunks_exact(4).enumerate() {
-            let columna = indice % region.ancho;
-            let fila = indice / region.ancho;
-            if fila >= region.alto {
-                break; // el fotograma excede el alto de la region: se ignora el resto
+            let columna = indice % nat_ancho;
+            let fila = indice / nat_ancho;
+            if fila >= nat_alto {
+                break; // el fotograma excede su alto natural: se ignora el resto
             }
-            let x = region.x + columna;
-            let y = region.y + fila;
+            let x = off_x + columna;
+            let y = off_y + fila;
+            // Recorte firme: al marco —el confinamiento de la app— y al lienzo.
+            if x >= marco_x_fin || y >= marco_y_fin {
+                continue;
+            }
             if x >= self.lienzo.ancho || y >= self.lienzo.alto {
-                continue; // recorte firme: nada se pinta fuera del lienzo
+                continue;
             }
             let p = u32::from_le_bytes([trozo[0], trozo[1], trozo[2], trozo[3]]);
             let color = Color {
@@ -148,10 +169,29 @@ impl Consola {
     }
 
     /// Inunda una region entera con un color plano y la presenta. Es la baliza
-    /// de desalojo: cuando una aplicacion falla, su ventana se tatua de purpura.
+    /// de desalojo: cuando una aplicacion falla, su marco se tatua de purpura.
     fn pintar_region(&mut self, region: RegionPantalla, color: Color) {
         self.lienzo
             .rellenar_rect(region.x, region.y, region.ancho, region.alto, color);
+        self.presentar();
+    }
+
+    /// Pinta el escenario del compositor (Fase 8): inunda el area de apps con
+    /// el reposo del lienzo —borrando cuanto hubiera debajo— y, sobre ella,
+    /// tiñe cada marco teselado con el color de panel. Asi el teselado se ve
+    /// como una rejilla de paneles aun antes de que sus apps pinten nada.
+    fn pintar_escenario(&mut self, area: RegionPantalla, marcos: &[RegionPantalla]) {
+        self.lienzo.rellenar_rect(
+            area.x,
+            area.y,
+            area.ancho,
+            area.alto,
+            Color::LIENZO_EN_REPOSO,
+        );
+        for marco in marcos {
+            self.lienzo
+                .rellenar_rect(marco.x, marco.y, marco.ancho, marco.alto, Color::PANEL);
+        }
         self.presentar();
     }
 
@@ -167,11 +207,25 @@ pub(crate) static CONSOLA: Once<Mutex<Consola>> = Once::new();
 
 /// Puerta del kernel para la capacidad `sys_render_frame` del userspace WASM:
 /// compone sobre la consola global un fotograma —cuyos limites el host ya
-/// verifico matematicamente contra la memoria lineal del modulo— dentro de la
-/// region de pantalla que el kernel asigno a esa aplicacion.
-pub(crate) fn volcar_marco_wasm(region: RegionPantalla, datos: &[u8]) {
+/// verifico matematicamente contra la memoria lineal del modulo— centrado en
+/// el marco que el compositor asigno a esa aplicacion. `nat_ancho`/`nat_alto`
+/// son el tamaño natural del lienzo de la app.
+pub(crate) fn volcar_marco_wasm(
+    marco: RegionPantalla,
+    nat_ancho: usize,
+    nat_alto: usize,
+    datos: &[u8],
+) {
     if let Some(consola) = CONSOLA.get() {
-        consola.lock().volcar_marco(region, datos);
+        consola.lock().volcar_marco(marco, nat_ancho, nat_alto, datos);
+    }
+}
+
+/// Pinta el escenario del compositor (Fase 8): el area de apps y, sobre ella,
+/// cada marco teselado. Se invoca una vez, en el arranque, tras teselar.
+pub(crate) fn pintar_escenario(area: RegionPantalla, marcos: &[RegionPantalla]) {
+    if let Some(consola) = CONSOLA.get() {
+        consola.lock().pintar_escenario(area, marcos);
     }
 }
 
