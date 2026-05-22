@@ -36,9 +36,9 @@ pub use cosmobiologia_model::{Chart, ChartId, ChartKind};
 // (`cosmobiologia_engine::Layer`, etc.) sin tener que cambiar
 // imports en el shell, canvas, modules, tree, panel...
 pub use cosmobiologia_render::{
-    apply_harmonic, compute_gr_triggers, AspectSummary, Geometry, Glyph, GrDirection, GrTrigger,
-    Layer, LayerKind, LineSeg, OverlayMeta, PointMark, RenderModel, UranianGroup,
-    OUTER_RING_MODULES,
+    apply_harmonic, compute_gr_triggers, convergencia_minima, AspectSummary, Geometry, Glyph,
+    GrDirection, GrTrigger, Layer, LayerKind, LineSeg, OverlayMeta, PointMark, RenderModel,
+    UranianGroup, OUTER_RING_MODULES,
 };
 
 // `Chart` reexportado arriba es lo que `PipelineRequest::Synastry`
@@ -51,6 +51,8 @@ mod bridge;
 mod dignity;
 #[cfg(feature = "eternal-bridge")]
 mod natal_cache;
+#[cfg(feature = "eternal-bridge")]
+mod rectify;
 #[cfg(feature = "eternal-bridge")]
 pub mod svg_export;
 
@@ -208,6 +210,53 @@ impl Default for NatalOptions {
             harmonic: 1,
         }
     }
+}
+
+// =====================================================================
+// Rectificador automático (Sistema GR)
+// =====================================================================
+
+/// Un evento conocido de la vida del sujeto — el ancla de la
+/// rectificación. La hora de nacimiento verdadera es la que hace caer
+/// los eventos reales sobre convergencias GR cerradas.
+#[derive(Debug, Clone, Copy)]
+pub struct EventoConocido {
+    /// Edad del sujeto, en años, cuando ocurrió el evento.
+    pub edad_years: f64,
+}
+
+/// Resultado de un barrido de rectificación (ver [`rectificar`]).
+#[derive(Debug, Clone)]
+pub struct Rectificacion {
+    /// Desplazamiento, en minutos, sobre la hora registrada, que mejor
+    /// explica los eventos. `0` = la hora registrada ya es la mejor.
+    pub mejor_offset_minutos: i64,
+    /// Puntaje del mejor candidato: la suma de orbes de convergencia GR
+    /// sobre todos los eventos. Menor = mejor; es la «tensión» residual.
+    pub mejor_puntaje: f32,
+    /// El barrido completo: `(offset_minutos, puntaje)` por candidato,
+    /// ordenado por offset ascendente. La UI lo dibuja como una curva —
+    /// su valle marca la hora rectificada.
+    pub perfil: Vec<(i64, f32)>,
+}
+
+/// Rectifica la hora de nacimiento por el Sistema GR. Barre las horas
+/// candidatas en `[-ventana_min, +ventana_min]` minutos sobre la
+/// registrada, paso a paso (`paso_min`); para cada candidata computa la
+/// carta y, por cada evento conocido, mide la convergencia GR más
+/// cerrada a esa edad. La hora del puntaje mínimo es la rectificada.
+///
+/// `key` es la clave arco↔año: `"naibod"` (default) o `"ptolemy"`.
+/// `Err` si la lista de eventos está vacía — sin anclas no hay búsqueda.
+#[cfg(feature = "eternal-bridge")]
+pub fn rectificar(
+    chart: &Chart,
+    eventos: &[EventoConocido],
+    ventana_min: i64,
+    paso_min: i64,
+    key: &str,
+) -> Result<Rectificacion, EngineError> {
+    rectify::rectificar(chart, eventos, ventana_min, paso_min, key)
 }
 
 /// Composición canónica: carta natal + todos los overlays pedidos.
@@ -534,5 +583,33 @@ mod tests {
             .zip(&h5_degs)
             .any(|(a, b)| (a - b).abs() > 0.01);
         assert!(moved, "el armónico debe mover los cuerpos");
+    }
+
+    /// El rectificador barre la ventana entera, devuelve un perfil
+    /// ordenado y elige como mejor el candidato de puntaje mínimo.
+    #[cfg(feature = "eternal-bridge")]
+    #[test]
+    fn rectificar_barre_la_ventana_y_elige_el_minimo() {
+        let chart = sample_chart();
+        let eventos = [
+            EventoConocido { edad_years: 20.0 },
+            EventoConocido { edad_years: 35.0 },
+        ];
+        let r = rectificar(&chart, &eventos, 10, 2, "naibod").expect("rectificar");
+
+        // Ventana ±10 min, paso 2 → offsets -10,-8,…,10 = 11 candidatos.
+        assert_eq!(r.perfil.len(), 11);
+        // El perfil va ordenado por offset ascendente.
+        for par in r.perfil.windows(2) {
+            assert!(par[0].0 < par[1].0, "perfil desordenado");
+        }
+        // El mejor offset cae dentro de la ventana.
+        assert!(r.mejor_offset_minutos.abs() <= 10);
+        // Y su puntaje es, en efecto, el mínimo del perfil.
+        let minimo = r.perfil.iter().map(|(_, p)| *p).fold(f32::INFINITY, f32::min);
+        assert!((r.mejor_puntaje - minimo).abs() < 1e-4);
+
+        // Sin eventos no hay ancla — debe ser un error.
+        assert!(rectificar(&chart, &[], 10, 2, "naibod").is_err());
     }
 }

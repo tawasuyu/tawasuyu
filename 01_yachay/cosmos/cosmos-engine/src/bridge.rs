@@ -129,7 +129,7 @@ fn map_body(name: &str) -> Option<Body> {
     })
 }
 
-fn body_symbol(b: Body) -> &'static str {
+pub(crate) fn body_symbol(b: Body) -> &'static str {
     match b {
         Body::Sun => "sun",
         Body::Moon => "moon",
@@ -239,7 +239,7 @@ fn build_eternal_inputs(
 /// La clave incluye todos los campos de `StoredBirthData` y
 /// `StoredChartConfig` que afectan el cómputo; editar la carta invalida
 /// automáticamente la entrada.
-fn compute_natal_chart(
+pub(crate) fn compute_natal_chart(
     chart: &Chart,
     offset_minutes: i64,
 ) -> Result<(Arc<NatalChart>, ChartConfig, Observer), EngineError> {
@@ -594,13 +594,13 @@ fn build_topocentric_overlay(
 
 /// Orbe máximo (grados) para que una proyección primaria entre al HUD
 /// de triggers. ~2° ≈ 2 años de vida con el key Naibod.
-const GR_HUD_ORB_DEG: f32 = 2.0;
+pub(crate) const GR_HUD_ORB_DEG: f32 = 2.0;
 /// Micro-orbe de convergencia GR: 5 minutos de arco. Un punto natal
 /// tocado a la vez por un directo y un converso dentro de este orbe
 /// es un evento de rectificación.
-const GR_EVENT_ORB_DEG: f32 = 5.0 / 60.0;
+pub(crate) const GR_EVENT_ORB_DEG: f32 = 5.0 / 60.0;
 /// Tope de triggers en el HUD tras ordenar por orbe.
-const GR_MAX_TRIGGERS: usize = 60;
+pub(crate) const GR_MAX_TRIGGERS: usize = 60;
 
 /// GR dual-ring de Direcciones Primarias: a la edad pedida, cada
 /// cuerpo natal se proyecta dos veces — directa (rotación diurna

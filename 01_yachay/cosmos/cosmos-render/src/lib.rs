@@ -39,7 +39,7 @@ pub mod palette;
 pub use draw::{
     compose_wheel, draw_commands_to_svg, CompositionOpts, DrawCommand, Rgba, TextAnchor,
 };
-pub use gr::{compute_gr_triggers, GrDirection, GrTrigger};
+pub use gr::{compute_gr_triggers, convergencia_minima, GrDirection, GrTrigger};
 pub use harmonic::apply_harmonic;
 pub use math::{
     find_clusters, format_coord_compact, polar_to_screen, spread_angles, Radii,

@@ -154,6 +154,40 @@ fn mark_events(triggers: &mut [GrTrigger], event_orb_deg: f32) {
     }
 }
 
+/// Orbe de la convergencia GR más cerrada de un conjunto de triggers
+/// computado a una edad dada: por cada punto natal tocado a la vez por
+/// un trigger directo y otro converso, la suma de los dos orbes; se
+/// devuelve la MENOR de esas sumas. `None` si ningún punto natal recibe
+/// ambas direcciones — no hubo convergencia.
+///
+/// Es la medida **continua** de «qué tan bien una carta explica un
+/// evento»: a diferencia del flag binario `event` (dentro o fuera del
+/// micro-orbe), esta suma decrece de forma suave a medida que la hora
+/// candidata acerca el directo y el converso al punto natal. El
+/// rectificador automático la minimiza barriendo horas de nacimiento.
+pub fn convergencia_minima(triggers: &[GrTrigger]) -> Option<f32> {
+    use std::collections::HashMap;
+    // Por punto natal: el mejor orbe directo y el mejor orbe converso.
+    let mut por_objetivo: HashMap<&str, (Option<f32>, Option<f32>)> = HashMap::new();
+    for t in triggers {
+        let (directo, converso) = por_objetivo
+            .entry(t.natal_target.as_str())
+            .or_insert((None, None));
+        let ranura = match t.direction {
+            GrDirection::Direct => directo,
+            GrDirection::Converse => converso,
+        };
+        *ranura = Some(ranura.map_or(t.orb_deg, |previo| previo.min(t.orb_deg)));
+    }
+    por_objetivo
+        .values()
+        .filter_map(|par| match par {
+            (Some(directo), Some(converso)) => Some(directo + converso),
+            _ => None,
+        })
+        .reduce(f32::min)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,5 +275,46 @@ mod tests {
         let out = compute_gr_triggers(&directed, &targets, 3.0, 0.083, 60);
         assert_eq!(out.len(), 1);
         assert!((out[0].orb_deg - 2.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn convergencia_minima_suma_directo_y_converso() {
+        // Marte directo a 0.1° del Sol, Venus converso a 0.2°.
+        let directed = vec![
+            d("mars", GrDirection::Direct, 100.1),
+            d("venus", GrDirection::Converse, 99.8),
+        ];
+        let targets = vec![("sun".to_string(), 100.0)];
+        let triggers = compute_gr_triggers(&directed, &targets, 2.0, 0.083, 60);
+        let conv = convergencia_minima(&triggers).expect("hay convergencia");
+        assert!((conv - 0.3).abs() < 1e-3, "0.1 directo + 0.2 converso: {conv}");
+    }
+
+    #[test]
+    fn convergencia_minima_none_sin_ambas_direcciones() {
+        // Sólo toques directos sobre el Sol: no hay convergencia.
+        let directed = vec![
+            d("mars", GrDirection::Direct, 100.1),
+            d("venus", GrDirection::Direct, 99.9),
+        ];
+        let targets = vec![("sun".to_string(), 100.0)];
+        let triggers = compute_gr_triggers(&directed, &targets, 2.0, 0.083, 60);
+        assert!(convergencia_minima(&triggers).is_none());
+    }
+
+    #[test]
+    fn convergencia_minima_elige_el_punto_natal_mas_cerrado() {
+        // Convergencia floja sobre el Sol (0.5+0.5), cerrada sobre la
+        // Luna (0.05+0.05): gana la de la Luna.
+        let directed = vec![
+            d("mars", GrDirection::Direct, 100.5),
+            d("venus", GrDirection::Converse, 99.5),
+            d("jupiter", GrDirection::Direct, 200.05),
+            d("saturn", GrDirection::Converse, 199.95),
+        ];
+        let targets = vec![("sun".to_string(), 100.0), ("moon".to_string(), 200.0)];
+        let triggers = compute_gr_triggers(&directed, &targets, 2.0, 0.083, 60);
+        let conv = convergencia_minima(&triggers).expect("hay convergencia");
+        assert!((conv - 0.1).abs() < 1e-3, "gana la Luna (0.05+0.05): {conv}");
     }
 }
