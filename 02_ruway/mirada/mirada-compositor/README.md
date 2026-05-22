@@ -18,6 +18,9 @@ Tiene **dos backends gráficos**:
 Sin argumentos elige solo: con `DISPLAY`/`WAYLAND_DISPLAY` → `winit`;
 sin ellos → `drm`. O fuérzalo: `mirada-compositor --winit` / `--drm`.
 
+La bandera `--greeter` (ortogonal al backend) arranca el compositor como
+gestor de login — ver **Modo greeter (DM)** más abajo.
+
 ## Backends
 
 ### winit — anidado
@@ -86,6 +89,35 @@ sólo probarlo:
 
 Dentro de la sesión, `Ctrl+Alt+F1…F12` salta a otra TTY y vuelve sin
 romper carmen.
+
+## Modo greeter (DM)
+
+`mirada-compositor --greeter` arranca el compositor como **gestor de
+login**: en vez de la sesión, compone el greeter (`mirada-greeter`),
+que lanza como proceso hijo. El usuario teclea sus credenciales; cuando
+el login es válido el greeter emite un `SessionTicket` por su stdout y
+el compositor **muta a modo sesión sin reiniciar el servidor Wayland**
+— el mismo proceso, la misma GPU, las mismas ventanas («mutación
+atómica»). Desde ahí baja privilegios al usuario autenticado
+(`setuid`/`setgid` + grupos) para todo lo que lanza.
+
+La bandera es ortogonal al backend: `--greeter` solo (auto), o
+`--greeter --drm` / `--greeter --winit`.
+
+```sh
+# DM real, sobre una TTY — el compositor corre como root: PAM lo exige
+sudo mirada-compositor --greeter --drm
+
+# iterar el greeter anidado, con credenciales de prueba
+MIRADA_GREETER_MOCK=demo:demo \
+  cargo run -p mirada-compositor -- --greeter --winit
+```
+
+En modo greeter no se registran atajos (todas las teclas van al
+greeter — que el usuario no pueda lanzar nada ni cerrar el compositor),
+se rechaza `spawn:` y no corre el autoarranque; los atajos y la sesión
+arrancan sólo tras el traspaso. `MIRADA_GREETER_BIN` apunta a otro
+binario de greeter (cómodo para señalar a `target/…` en desarrollo).
 
 ## Lanzador de aplicaciones
 

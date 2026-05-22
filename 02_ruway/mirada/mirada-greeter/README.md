@@ -35,8 +35,10 @@ anidado dentro de otro escritorio:
 MIRADA_GREETER_MOCK=demo:demo cargo run -p mirada-greeter
 ```
 
-## Pendiente
+## Integración con el compositor
 
-El consumo del tiquet en `mirada-compositor` (modo greeter +
-`BodyMode::Session` + arranque de la sesión con setuid) — siguiente
-slice del DM.
+El consumo del tiquet ya está cableado. `mirada-compositor --greeter`
+lanza este greeter, lee su stdout y, al recibir el `SessionTicket`,
+muta de `BodyMode::Greeter` a `BodyMode::Session` y arranca la sesión
+del usuario con `setuid`/`setgid` — sin reiniciar el servidor Wayland.
+Ver el README de `mirada-compositor`, sección **Modo greeter (DM)**.

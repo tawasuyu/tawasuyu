@@ -69,6 +69,7 @@ use smithay::{
     delegate_shm, delegate_xdg_decoration, delegate_xdg_shell,
 };
 
+use brahman_auth::{SessionTicket, UserInfo};
 use mirada_body::{BodyOp, BodyState};
 use mirada_brain::{
     BodyEvent, BrainCommand, CtlReply, CtlRequest, CtlServer, Desktop, Keymap, Rules,
@@ -87,6 +88,21 @@ enum Brain {
     Embedded(Desktop),
     /// Un Cerebro externo (la app `mirada`) por socket.
     Linked(BodyLink),
+}
+
+/// La fase del ciclo de vida del Cuerpo. Es un eje **ortogonal** a
+/// [`Brain`]: `Brain` dice de dónde sale la geometría; `BodyMode` dice
+/// si el compositor está pidiendo credenciales o sirviendo una sesión.
+/// Un arranque normal nace ya en [`BodyMode::Session`]; un arranque de
+/// DM (`--greeter`) nace en [`BodyMode::Greeter`] y muta una sola vez,
+/// al recibir el tiquet de un login válido — la «mutación atómica».
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BodyMode {
+    /// Pantalla de login: el único cliente es el greeter, no se
+    /// registran atajos, se rechaza `Spawn` y no hay autoarranque.
+    Greeter,
+    /// Sesión de usuario: el compositor funciona con normalidad.
+    Session,
 }
 
 /// `app_id` que distingue a la ventana del shell del escritorio. carmen
@@ -169,6 +185,12 @@ struct App {
     body: BodyState,
     /// El Cerebro: embebido o enlazado.
     brain: Brain,
+    /// Fase del ciclo de vida — login o sesión (ver [`BodyMode`]).
+    mode: BodyMode,
+    /// Identidad a la que rebajar privilegios al lanzar procesos de
+    /// sesión. `None` salvo tras el traspaso del DM — entonces cada
+    /// `spawn` hace `setuid`/`setgid` a este usuario (si somos root).
+    session_user: Option<UserInfo>,
     /// Atajos globales a interceptar (los registra el Cerebro).
     grabs: Vec<String>,
     /// Atajo capturado en el último evento de teclado, pendiente de enviar.
@@ -292,7 +314,15 @@ impl App {
             }
             BodyOp::SetGrabs(keys) => self.grabs = keys,
             BodyOp::SetCursor(_) => {}
-            BodyOp::Spawn(cmd) => spawn_command(&cmd),
+            BodyOp::Spawn(cmd) => {
+                // En modo greeter no se lanza nada: la pantalla de login
+                // no es un sitio desde donde abrir programas.
+                if self.mode == BodyMode::Greeter {
+                    eprintln!("mirada-compositor · «{cmd}» rechazado — modo greeter.");
+                } else {
+                    spawn_command(&cmd, self.session_user.as_ref());
+                }
+            }
             BodyOp::Shutdown => self.running = false,
         }
     }
@@ -376,6 +406,45 @@ impl App {
         } else {
             let ev = self.body.resize_output(0, width, height);
             self.brain_feed(ev);
+        }
+    }
+
+    /// El traspaso del DM — la «mutación atómica». Llega el tiquet de un
+    /// login válido y el compositor pasa de la pantalla de greeter a la
+    /// sesión del usuario **sin reiniciar el servidor Wayland**: el mismo
+    /// proceso, la misma GPU, las mismas ventanas. Idempotente — un
+    /// segundo tiquet (no debería llegar) se ignora.
+    fn complete_greeter_handoff(&mut self, ticket: SessionTicket) {
+        if self.mode == BodyMode::Session {
+            return; // ya en sesión — un tiquet de más, se ignora
+        }
+        println!(
+            "mirada-compositor · traspaso a la sesión de «{}» (uid {}).",
+            ticket.user.name, ticket.user.uid
+        );
+        if !nix::unistd::geteuid().is_root() {
+            eprintln!(
+                "mirada-compositor · aviso: no corro como root — la sesión \
+                 heredará mis privilegios, sin setuid al usuario."
+            );
+        }
+        self.mode = BodyMode::Session;
+        self.session_user = Some(ticket.user.clone());
+
+        // Ya en sesión: registra los atajos del escritorio (en modo
+        // greeter se omitieron a propósito — ver `build_app`).
+        if let Brain::Embedded(desktop) = &self.brain {
+            let grab = desktop.grab_keys();
+            self.apply_commands(vec![grab]);
+        }
+
+        // Arranca la sesión: el comando del tiquet, o el autoarranque
+        // del usuario si el tiquet no trae ninguno.
+        let user = self.session_user.clone();
+        if ticket.session.trim().is_empty() {
+            spawn_autostart(user.as_ref());
+        } else {
+            spawn_command(&ticket.session, user.as_ref());
         }
     }
 }
@@ -738,33 +807,85 @@ const THEME_ENV: &[(&str, &str)] = &[
 /// conecta a este compositor; además se le inyecta [`THEME_ENV`] para
 /// que GTK y Qt adopten el tema del escritorio. Lo usan la acción
 /// `spawn:…` del keymap, la variable `MIRADA_STARTUP` y el autoarranque.
-fn spawn_command(cmd: &str) {
+///
+/// `as_user`: si viene una identidad y el compositor corre como root
+/// (modo DM, tras el traspaso), el hijo baja a ese usuario — ver
+/// [`apply_user`]. Con `None`, o sin ser root, lanza con la identidad
+/// actual del compositor.
+fn spawn_command(cmd: &str, as_user: Option<&UserInfo>) {
     let cmd = cmd.trim();
     if cmd.is_empty() {
         return;
     }
-    match std::process::Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
-        .envs(THEME_ENV.iter().copied())
-        .spawn()
-    {
+    let mut command = std::process::Command::new("sh");
+    command.arg("-c").arg(cmd).envs(THEME_ENV.iter().copied());
+    if let Some(user) = as_user {
+        if nix::unistd::geteuid().is_root() {
+            apply_user(&mut command, user);
+        }
+    }
+    match command.spawn() {
         Ok(child) => println!("mirada-compositor · lanzado (pid {}): {cmd}", child.id()),
         Err(e) => eprintln!("mirada-compositor · no pude lanzar «{cmd}»: {e}"),
     }
 }
 
-/// La ruta del archivo de autoarranque del usuario,
-/// `~/.config/mirada/autostart` — junto al keymap y las reglas.
-fn autostart_path() -> Option<std::path::PathBuf> {
-    Keymap::default_path().and_then(|p| p.parent().map(|d| d.join("autostart")))
+/// Prepara un `Command` para que el hijo corra como `user`: fija grupos
+/// suplementarios, gid, uid y una sesión propia, hace `cd` a su home e
+/// inyecta las variables de identidad. Sólo se llama tras comprobar que
+/// el compositor es root.
+///
+/// La lista de grupos se calcula **en el padre**: `getgrouplist`
+/// consulta NSS (abre `/etc/group`), y eso no es seguro entre `fork` y
+/// `exec`; en `pre_exec` quedan sólo syscalls async-signal-safe.
+fn apply_user(command: &mut std::process::Command, user: &UserInfo) {
+    use nix::unistd::{setgid, setgroups, setuid, Gid, Uid};
+    use std::os::unix::process::CommandExt;
+
+    let uid = Uid::from_raw(user.uid);
+    let gid = Gid::from_raw(user.gid);
+    let groups: Vec<Gid> = std::ffi::CString::new(user.name.as_bytes())
+        .ok()
+        .and_then(|name| nix::unistd::getgrouplist(&name, gid).ok())
+        .unwrap_or_else(|| vec![gid]);
+
+    command
+        .env("HOME", &user.home)
+        .env("USER", &user.name)
+        .env("LOGNAME", &user.name)
+        .env("SHELL", &user.shell)
+        .current_dir(&user.home);
+
+    // SAFETY: corre en el hijo, entre `fork` y `exec`. Sólo syscalls
+    // async-signal-safe. El orden es obligatorio: grupos y gid ANTES que
+    // uid — al rebajar el uid se pierde el privilegio para fijarlos.
+    unsafe {
+        command.pre_exec(move || {
+            setgroups(&groups)?;
+            setgid(gid)?;
+            setuid(uid)?;
+            let _ = nix::unistd::setsid(); // sesión propia; no es crítico
+            Ok(())
+        });
+    }
+}
+
+/// La ruta del archivo de autoarranque, `…/mirada/autostart` — junto al
+/// keymap y las reglas. Con un usuario (tras el traspaso del DM) se
+/// resuelve bajo su home; sin él, bajo la config del proceso actual.
+fn autostart_path(user: Option<&UserInfo>) -> Option<std::path::PathBuf> {
+    match user {
+        Some(u) => Some(u.home.join(".config/mirada/autostart")),
+        None => Keymap::default_path().and_then(|p| p.parent().map(|d| d.join("autostart"))),
+    }
 }
 
 /// Lanza los programas del archivo de autoarranque: un comando por
 /// línea, `#` comenta y las líneas en blanco se saltan. Sin archivo, no
-/// hace nada. Se llama una vez al arrancar, con el socket ya abierto.
-fn spawn_autostart() {
-    let Some(path) = autostart_path() else {
+/// hace nada. Se llama una vez al arrancar (o tras el traspaso del DM),
+/// con el socket ya abierto. `as_user` se propaga a [`spawn_command`].
+fn spawn_autostart(as_user: Option<&UserInfo>) {
+    let Some(path) = autostart_path(as_user) else {
         return;
     };
     let Ok(text) = std::fs::read_to_string(&path) else {
@@ -776,12 +897,55 @@ fn spawn_autostart() {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        spawn_command(line);
+        spawn_command(line, as_user);
         n += 1;
     }
     if n > 0 {
         println!("mirada-compositor · autoarranque: {n} programa(s) desde {}", path.display());
     }
+}
+
+/// Nombre o ruta del binario del greeter. `MIRADA_GREETER_BIN` lo
+/// sobreescribe — cómodo en desarrollo para apuntar a `target/…`.
+fn greeter_bin() -> String {
+    std::env::var("MIRADA_GREETER_BIN").unwrap_or_else(|_| "mirada-greeter".to_string())
+}
+
+/// Lanza `mirada-greeter` como proceso hijo, en modo DM, con el stdout
+/// capturado. Un hilo lee sus líneas: la que sea un [`SessionTicket`] se
+/// entrega por `send` (el bucle de eventos hará el traspaso); el resto
+/// del stdout se reenvía a la consola con el prefijo `greeter ·`. El
+/// hilo es dueño del `Child` y lo cosecha cuando el greeter termina.
+fn spawn_greeter<S>(send: S) -> std::io::Result<()>
+where
+    S: Fn(SessionTicket) + Send + 'static,
+{
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(greeter_bin())
+        .envs(THEME_ENV.iter().copied())
+        .stdout(Stdio::piped())
+        .spawn()?;
+    let stdout = child.stdout.take().expect("stdout pedido con Stdio::piped");
+    println!("mirada-compositor · greeter lanzado (pid {}).", child.id());
+
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            match SessionTicket::from_line(&line) {
+                Some(ticket) => {
+                    println!("mirada-compositor · tiquet de sesión recibido del greeter.");
+                    send(ticket);
+                }
+                None => println!("greeter · {line}"),
+            }
+        }
+        match child.wait() {
+            Ok(status) => println!("mirada-compositor · el greeter terminó ({status})."),
+            Err(e) => eprintln!("mirada-compositor · wait(greeter): {e}"),
+        }
+    });
+    Ok(())
 }
 
 /// Carga las reglas de ventana del usuario, o ninguna si no hay archivo.
@@ -790,6 +954,20 @@ fn load_user_rules() -> Rules {
         Some(p) => Rules::load_or_default(&p),
         None => Rules::default(),
     }
+}
+
+/// Arma un Cerebro embebido: un `Desktop` con el keymap del usuario y
+/// sus reglas de ventana. Lo usan tanto el modo autónomo como el modo
+/// greeter (el DM es siempre autónomo — un Cerebro externo no tiene
+/// sentido en la pantalla de login).
+fn embedded_brain(keymap_path: &Option<std::path::PathBuf>) -> Brain {
+    let keymap = match keymap_path {
+        Some(p) => Keymap::load_or_init(p),
+        None => Keymap::default(),
+    };
+    let mut desktop = Desktop::with_keymap(keymap);
+    desktop.set_rules(load_user_rules());
+    Brain::Embedded(desktop)
 }
 
 /// Crea y anuncia un `wl_output` (un monitor) en el protocolo Wayland —
@@ -851,7 +1029,7 @@ struct Setup {
 /// Arma el estado del compositor — todo lo independiente del backend
 /// gráfico (Wayland, Cerebro, teclado, keymap, control). Cada backend
 /// (winit o DRM) registra luego su propia salida y monta su bucle.
-fn build_app() -> Result<Setup, Box<dyn std::error::Error>> {
+fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Error>> {
     let display: Display<App> = Display::new()?;
     let dh = display.handle();
 
@@ -867,23 +1045,23 @@ fn build_app() -> Result<Setup, Box<dyn std::error::Error>> {
     // el Cerebro embebido; con un Cerebro enlazado, el keymap es asunto suyo.
     let keymap_path = Keymap::default_path();
 
-    // Elige el Cerebro: enlazado si `MIRADA_SOCKET` está puesto.
-    let brain = match std::env::var("MIRADA_SOCKET") {
-        Ok(path) => {
-            println!("mirada-compositor · esperando al Cerebro en {path} …");
-            let link = BodyLink::listen(&path)?;
-            println!("mirada-compositor · Cerebro conectado.");
-            Brain::Linked(link)
-        }
-        Err(_) => {
-            println!("mirada-compositor · modo autónomo (Cerebro embebido).");
-            let keymap = match &keymap_path {
-                Some(p) => Keymap::load_or_init(p),
-                None => Keymap::default(),
-            };
-            let mut desktop = Desktop::with_keymap(keymap);
-            desktop.set_rules(load_user_rules());
-            Brain::Embedded(desktop)
+    // Elige el Cerebro. El modo greeter (DM) fuerza Cerebro embebido;
+    // si no, enlazado cuando `MIRADA_SOCKET` está puesto, autónomo si no.
+    let brain = if greeter {
+        println!("mirada-compositor · modo greeter (DM) — Cerebro embebido.");
+        embedded_brain(&keymap_path)
+    } else {
+        match std::env::var("MIRADA_SOCKET") {
+            Ok(path) => {
+                println!("mirada-compositor · esperando al Cerebro en {path} …");
+                let link = BodyLink::listen(&path)?;
+                println!("mirada-compositor · Cerebro conectado.");
+                Brain::Linked(link)
+            }
+            Err(_) => {
+                println!("mirada-compositor · modo autónomo (Cerebro embebido).");
+                embedded_brain(&keymap_path)
+            }
         }
     };
 
@@ -904,6 +1082,8 @@ fn build_app() -> Result<Setup, Box<dyn std::error::Error>> {
         windows: Vec::new(),
         body: BodyState::new(),
         brain,
+        mode: if greeter { BodyMode::Greeter } else { BodyMode::Session },
+        session_user: None,
         grabs: Vec::new(),
         pending_keybind: None,
         next_id: 1,
@@ -914,16 +1094,23 @@ fn build_app() -> Result<Setup, Box<dyn std::error::Error>> {
     app.keyboard = Some(keyboard);
     app.pointer = Some(app.seat.add_pointer());
 
-    // En modo embebido, el propio Desktop dicta los atajos a interceptar.
-    if let Brain::Embedded(desktop) = &app.brain {
-        let grab = desktop.grab_keys();
-        app.apply_commands(vec![grab]);
+    // En modo embebido, el propio Desktop dicta los atajos a
+    // interceptar — salvo en modo greeter: en la pantalla de login
+    // todas las teclas van al greeter (que el usuario no pueda lanzar
+    // nada ni cerrar el compositor). Los atajos se registran luego, en
+    // el traspaso a la sesión (`complete_greeter_handoff`).
+    if !greeter {
+        if let Brain::Embedded(desktop) = &app.brain {
+            let grab = desktop.grab_keys();
+            app.apply_commands(vec![grab]);
+        }
     }
 
     // Vigilancia del keymap para recargarlo en caliente — sólo tiene
-    // sentido con el Cerebro embebido.
+    // sentido con el Cerebro embebido y fuera del modo greeter (donde
+    // no hay atajos registrados que recargar).
     let keymap_watch = match (&app.brain, &keymap_path) {
-        (Brain::Embedded(_), Some(p)) => Keymap::watch(p).ok(),
+        (Brain::Embedded(_), Some(p)) if !greeter => Keymap::watch(p).ok(),
         _ => None,
     };
     if keymap_watch.is_some() {
@@ -953,14 +1140,14 @@ fn build_app() -> Result<Setup, Box<dyn std::error::Error>> {
 }
 
 /// El backend `winit`: corre anidado dentro de una sesión gráfica.
-fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
+fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>> {
     let Setup {
         mut display,
         app: mut state,
         keymap_path,
         keymap_watch,
         ctl,
-    } = build_app()?;
+    } = build_app(greeter)?;
     let keyboard = state.keyboard.clone().expect("teclado inicializado");
 
     // El backend gráfico va primero. winit abre la ventana del compositor
@@ -1016,6 +1203,18 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
         state.output_size = (win_size.w, win_size.h);
     }
 
+    // Modo greeter (DM anidado — útil para iterar la UI del login):
+    // lanza el greeter y recibe su tiquet por un canal que el bucle sondea.
+    let greeter_rx = if state.mode == BodyMode::Greeter {
+        let (tx, rx) = std::sync::mpsc::channel::<SessionTicket>();
+        spawn_greeter(move |ticket| {
+            let _ = tx.send(ticket);
+        })?;
+        Some(rx)
+    } else {
+        None
+    };
+
     while state.running {
         // 1 · Eventos del backend (teclado, redimensión, cierre).
         let status = winit.dispatch_new_events(|event| match event {
@@ -1061,7 +1260,14 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
         // 2 · Comandos de un Cerebro enlazado.
         state.brain_poll();
 
-        // 2 bis · Recarga del keymap si el archivo cambió en disco.
+        // 2 bis · El tiquet del greeter (modo DM): dispara el traspaso.
+        if let Some(rx) = &greeter_rx {
+            while let Ok(ticket) = rx.try_recv() {
+                state.complete_greeter_handoff(ticket);
+            }
+        }
+
+        // 2 ter · Recarga del keymap si el archivo cambió en disco.
         if keymap_watch.as_ref().is_some_and(|w| w.changed()) {
             if let Some(path) = &keymap_path {
                 match Keymap::load(path) {
@@ -1083,7 +1289,7 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // 2 ter · Peticiones del API de control (mirada-ctl).
+        // 2 quater · Peticiones del API de control (mirada-ctl).
         if let Some(ctl) = &ctl {
             while let Some(mut conn) = ctl.poll() {
                 let reply = match conn.read_request() {
@@ -1154,25 +1360,34 @@ fn run_winit() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn main() {
-    let arg = std::env::args().nth(1);
-    let result = match arg.as_deref() {
-        Some("--drm") => drm_backend::run(),
-        Some("--winit") => run_winit(),
-        Some(other) => {
-            eprintln!("mirada-compositor: opción desconocida «{other}» — usa --drm o --winit");
+    // Banderas en cualquier orden: `--greeter` (modo DM) es ortogonal
+    // al backend (`--winit` anidado · `--drm` nativo · auto si falta).
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    for a in &args {
+        if !matches!(a.as_str(), "--greeter" | "--winit" | "--drm") {
+            eprintln!(
+                "mirada-compositor: opción desconocida «{a}» — usa --greeter, --winit o --drm"
+            );
             std::process::exit(2);
         }
-        None => {
+    }
+    let greeter = args.iter().any(|a| a == "--greeter");
+    let backend = args.iter().find(|a| matches!(a.as_str(), "--winit" | "--drm"));
+
+    let result = match backend.map(String::as_str) {
+        Some("--drm") => drm_backend::run(greeter),
+        Some("--winit") => run_winit(greeter),
+        _ => {
             // Auto: con sesión gráfica anfitriona → winit (anidado);
             // sin ella (una TTY pelada) → backend DRM.
             let nested = std::env::var_os("WAYLAND_DISPLAY").is_some()
                 || std::env::var_os("DISPLAY").is_some();
             if nested {
                 println!("mirada-compositor · sesión gráfica detectada → backend winit.");
-                run_winit()
+                run_winit(greeter)
             } else {
                 println!("mirada-compositor · sin sesión gráfica → backend DRM.");
-                drm_backend::run()
+                drm_backend::run(greeter)
             }
         }
     };

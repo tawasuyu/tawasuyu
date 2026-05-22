@@ -44,6 +44,7 @@ use smithay::backend::udev;
 use smithay::input::keyboard::FilterResult;
 use smithay::input::pointer::{AxisFrame, ButtonEvent, CursorImageStatus, MotionEvent};
 use smithay::output::OutputModeSource;
+use smithay::reexports::calloop::channel::{channel as ticket_channel, Event as TicketEvent};
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{EventLoop, Interest, Mode as CalloopMode, PostAction};
@@ -56,9 +57,13 @@ use smithay::utils::{
     DeviceFd, IsAlive, Logical, Physical, Point, Rectangle, Scale, Size, Transform, SERIAL_COUNTER,
 };
 
+use brahman_auth::SessionTicket;
 use mirada_brain::{BodyEvent, CtlReply, Keymap, Rect};
 
-use crate::{combo_string, send_frames_surface_tree, App, Brain, ClientState, DragGrab, DragMode, Setup};
+use crate::{
+    combo_string, send_frames_surface_tree, App, BodyMode, Brain, ClientState, DragGrab, DragMode,
+    Setup,
+};
 
 /// El `DrmCompositor` concreto para la salida (un solo GPU).
 type Compositor =
@@ -604,8 +609,9 @@ impl DrmState {
     }
 }
 
-/// Arranca el Cuerpo sobre DRM/KMS — fases 1, 2a y 2b.
-pub fn run() -> Result<(), Box<dyn Error>> {
+/// Arranca el Cuerpo sobre DRM/KMS — fases 1, 2a y 2b. Con `greeter`,
+/// el compositor nace en modo DM: ver [`BodyMode`].
+pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     println!("mirada-compositor · backend DRM.");
     println!("──────────────────────────────────────────────────");
 
@@ -733,7 +739,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
 
     // 7 · El estado Wayland (Cerebro, teclado, keymap, control).
     println!("[7/8] armando el estado Wayland …");
-    let Setup { mut display, mut app, keymap_path, keymap_watch, ctl } = crate::build_app()?;
+    let Setup { mut display, mut app, keymap_path, keymap_watch, ctl } =
+        crate::build_app(greeter)?;
     // Con el renderer ya creado, anuncia dmabuf — sin esto las apps que
     // pintan por GPU (GPUI, navegadores acelerados) no pueden conectarse.
     crate::announce_dmabuf(&mut app, &display.handle(), &renderer);
@@ -762,14 +769,25 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     std::env::set_var("WAYLAND_DISPLAY", &socket_name);
     println!("      escuchando en WAYLAND_DISPLAY={socket_name}");
 
-    // Autoarranque: los programas de `~/.config/mirada/autostart`.
-    crate::spawn_autostart();
-
-    // App de arranque: si `MIRADA_STARTUP` trae un comando, se lanza como
-    // hijo (hereda `WAYLAND_DISPLAY`) — cómodo para probar sin saltar de VT.
-    if let Ok(cmd) = std::env::var("MIRADA_STARTUP") {
-        crate::spawn_command(&cmd);
-    }
+    // Modo DM: lanza el greeter y recibe su tiquet por un canal de
+    // `calloop`. Modo normal: autoarranque + `MIRADA_STARTUP`.
+    let greeter_rx = if app.mode == BodyMode::Greeter {
+        let (tx, rx) = ticket_channel::<SessionTicket>();
+        crate::spawn_greeter(move |ticket| {
+            let _ = tx.send(ticket);
+        })?;
+        Some(rx)
+    } else {
+        // Autoarranque: los programas de `~/.config/mirada/autostart`.
+        crate::spawn_autostart(None);
+        // App de arranque: si `MIRADA_STARTUP` trae un comando, se lanza
+        // como hijo (hereda `WAYLAND_DISPLAY`) — cómodo para probar sin
+        // saltar de VT.
+        if let Ok(cmd) = std::env::var("MIRADA_STARTUP") {
+            crate::spawn_command(&cmd, None);
+        }
+        None
+    };
 
     // 8 · El bucle `calloop`: VBlank, teclado, clientes y un timer.
     println!("[8/8] montando el bucle de eventos …");
@@ -852,6 +870,18 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             TimeoutAction::ToDuration(Duration::from_millis(16))
         })
         .map_err(|e| format!("insert timer: {e}"))?;
+
+    // Tiquet del greeter (modo DM): al llegar, el traspaso a la sesión.
+    // El hilo lector del greeter despierta el bucle por este canal.
+    if let Some(rx) = greeter_rx {
+        handle
+            .insert_source(rx, |event, _, state: &mut DrmState| {
+                if let TicketEvent::Msg(ticket) = event {
+                    state.app.complete_greeter_handoff(ticket);
+                }
+            })
+            .map_err(|e| format!("insert greeter: {e}"))?;
+    }
 
     // Tope de tiempo opcional: `MIRADA_DRM_TIMEOUT=<segundos>` cierra el
     // compositor solo (0 o sin definir = sin tope). El teclado ya
