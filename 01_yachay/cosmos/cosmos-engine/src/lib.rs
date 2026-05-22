@@ -45,7 +45,8 @@ pub use cosmobiologia_render::{
 // El engine lo reexporta para que el shell y el canvas trabajen los
 // pasajes sin importar el crate aparte.
 pub use cosmobiologia_corpus::{
-    AspectoEnCarta, Colocacion, CombinacionId, Corpus, Dominio, Pasaje,
+    combinaciones_de_carta, rebanar_por_dominio, AspectoEnCarta, Colocacion, CombinacionId,
+    Corpus, Dominio, EvidenciaVecina, Pasaje,
 };
 
 // `Chart` reexportado arriba es lo que `PipelineRequest::Synastry`

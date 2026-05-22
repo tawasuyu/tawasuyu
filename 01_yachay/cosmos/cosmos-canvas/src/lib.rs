@@ -41,8 +41,9 @@ use gpui::{
 };
 
 use cosmobiologia_engine::{
-    corpus_inputs, Corpus, Dominio, Geometry, GrTrigger, Layer, LayerKind, Pasaje,
-    Rectificacion, RenderModel, UranianGroup, OUTER_RING_MODULES,
+    combinaciones_de_carta, corpus_inputs, rebanar_por_dominio, CombinacionId, Corpus,
+    Dominio, EvidenciaVecina, Geometry, GrTrigger, Layer, LayerKind, Pasaje, Rectificacion,
+    RenderModel, UranianGroup, OUTER_RING_MODULES,
 };
 use cosmobiologia_model::{ChartId, ContactId, GroupId};
 use cosmobiologia_render::{compose_sphere, DrawCommand, Palette, SphereOpts, SphereView};
@@ -986,6 +987,17 @@ fn domain_label(d: Dominio) -> &'static str {
     }
 }
 
+/// Lo computado del corpus para la tajada activa: los pasajes con texto
+/// propio (`directos`), las combinaciones sin texto con su evidencia
+/// vecina (`compuestos` — la capa de composición), y los grados de los
+/// cuerpos a resaltar en la rueda.
+struct CorpusView<'a> {
+    dominio: Dominio,
+    directos: Vec<&'a Pasaje>,
+    compuestos: Vec<(CombinacionId, Vec<EvidenciaVecina<'a>>)>,
+    degs: Vec<f32>,
+}
+
 /// Capa transparente sobre la rueda que dibuja un anillo de resalte en
 /// cada cuerpo de la tajada activa.
 fn corpus_highlight_canvas(degs: Vec<f32>, asc: f32, rot: f32, color: Hsla) -> impl IntoElement {
@@ -1005,8 +1017,41 @@ fn corpus_highlight_canvas(degs: Vec<f32>, asc: f32, rot: f32, color: Hsla) -> i
     .size_full()
 }
 
-/// El panel lateral con los pasajes de la tajada activa.
-fn corpus_panel(theme: &Theme, dom: Dominio, pasajes: &[&Pasaje]) -> impl IntoElement {
+/// Una tarjeta de pasaje: combinación, texto citado y fuente.
+fn passage_card(theme: &Theme, p: &Pasaje) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(3.0))
+        .p(px(8.0))
+        .rounded(px(5.0))
+        .bg(theme.bg_panel.clone())
+        .border_1()
+        .border_color(theme.border)
+        .child(
+            div()
+                .text_size(px(9.0))
+                .text_color(theme.fg_muted)
+                .child(SharedString::from(p.combinacion.to_string())),
+        )
+        .child(
+            div()
+                .text_size(px(11.0))
+                .text_color(theme.fg_text)
+                .child(SharedString::from(p.texto.clone())),
+        )
+        .child(
+            div()
+                .text_size(px(9.0))
+                .text_color(theme.fg_muted)
+                .child(SharedString::from(format!("— {}", p.fuente))),
+        )
+}
+
+/// El panel lateral de la tajada activa: los pasajes con texto propio
+/// y, debajo, la composición — evidencia vecina de las combinaciones
+/// sin pasaje.
+fn corpus_panel(theme: &Theme, cv: &CorpusView<'_>) -> impl IntoElement {
     let mut list = div()
         .id("corpus-panel")
         .flex()
@@ -1025,59 +1070,87 @@ fn corpus_panel(theme: &Theme, dom: Dominio, pasajes: &[&Pasaje]) -> impl IntoEl
                 .flex_row()
                 .items_center()
                 .gap(px(6.0))
-                .child(div().w(px(10.0)).h(px(10.0)).rounded_full().bg(domain_color(dom)))
+                .child(
+                    div()
+                        .w(px(10.0))
+                        .h(px(10.0))
+                        .rounded_full()
+                        .bg(domain_color(cv.dominio)),
+                )
                 .child(
                     div()
                         .text_size(px(13.0))
                         .text_color(theme.fg_text)
                         .child(SharedString::from(format!(
                             "Tajada {} · {} pasajes",
-                            domain_label(dom),
-                            pasajes.len()
+                            domain_label(cv.dominio),
+                            cv.directos.len()
                         ))),
                 ),
         );
-    if pasajes.is_empty() {
+
+    if cv.directos.is_empty() && cv.compuestos.is_empty() {
         list = list.child(
             div()
                 .text_size(px(11.0))
                 .text_color(theme.fg_muted)
                 .child(
-                    "Sin pasajes para esta tajada todavía. Escribilos en \
+                    "Sin nada del corpus para esta tajada. Escribí pasajes en \
                      corpus.ron — ver la GUIA del corpus.",
                 ),
         );
     }
-    for p in pasajes {
-        list = list.child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(3.0))
-                .p(px(8.0))
-                .rounded(px(5.0))
-                .bg(theme.bg_panel.clone())
-                .border_1()
-                .border_color(theme.border)
-                .child(
+    for p in &cv.directos {
+        list = list.child(passage_card(theme, p));
+    }
+
+    // Capa de composición: evidencia vecina, citada. NO sintetizada.
+    if !cv.compuestos.is_empty() {
+        list = list
+            .child(
+                div()
+                    .mt(px(6.0))
+                    .text_size(px(11.0))
+                    .text_color(theme.fg_text)
+                    .child("Composición — combinaciones sin pasaje propio"),
+            )
+            .child(
+                div()
+                    .text_size(px(9.0))
+                    .text_color(theme.fg_muted)
+                    .child("Evidencia vecina, citada — el corpus no sintetiza; componés vos."),
+            );
+        for (combo, evs) in &cv.compuestos {
+            list = list.child(
+                div()
+                    .mt(px(3.0))
+                    .text_size(px(10.0))
+                    .text_color(theme.fg_text)
+                    .child(SharedString::from(combo.to_string())),
+            );
+            for ev in evs {
+                list = list.child(
                     div()
                         .text_size(px(9.0))
                         .text_color(theme.fg_muted)
-                        .child(SharedString::from(p.combinacion.to_string())),
-                )
-                .child(
-                    div()
-                        .text_size(px(11.0))
-                        .text_color(theme.fg_text)
-                        .child(SharedString::from(p.texto.clone())),
-                )
-                .child(
-                    div()
-                        .text_size(px(9.0))
-                        .text_color(theme.fg_muted)
-                        .child(SharedString::from(format!("— {}", p.fuente))),
-                ),
-        );
+                        .child(SharedString::from(format!("vecinos · comparte {}", ev.comparte))),
+                );
+                for p in ev.pasajes.iter().take(3) {
+                    list = list.child(passage_card(theme, p));
+                }
+                if ev.pasajes.len() > 3 {
+                    list = list.child(
+                        div()
+                            .text_size(px(9.0))
+                            .text_color(theme.fg_muted)
+                            .child(SharedString::from(format!(
+                                "… +{} más",
+                                ev.pasajes.len() - 3
+                            ))),
+                    );
+                }
+            }
+        }
     }
     list
 }
@@ -1094,32 +1167,45 @@ impl Render for AstrologyCanvas {
         let focus = self.focus_handle.clone();
 
         // Vista del corpus: con una tajada elegida sobre la rueda 2D, se
-        // calcula la interpretación por dominio (pasajes + cuerpos a
-        // resaltar). Los `&Pasaje` toman prestado de `state.corpus`.
-        let corpus_view: Option<(Dominio, Vec<&Pasaje>, Vec<f32>)> =
-            match &self.state.mode {
-                CanvasMode::Wheel { render } if !self.state.sphere_3d => {
-                    self.state.corpus_domain.and_then(|dom| {
-                        let corpus = self.state.corpus.as_ref()?;
-                        let (col, asp) = corpus_inputs(render);
-                        let por_dom = corpus.interpretar_por_dominio(&col, &asp);
-                        let pasajes = por_dom.get(&dom).cloned().unwrap_or_default();
-                        let degs: Vec<f32> = render
-                            .layers
-                            .iter()
-                            .filter(|l| {
-                                matches!(l.kind, LayerKind::Bodies)
-                                    && l.module_id == "natal"
-                            })
-                            .flat_map(|l| l.glyphs.iter())
-                            .filter(|g| g.house.and_then(Dominio::de_casa) == Some(dom))
-                            .map(|g| g.deg)
-                            .collect();
-                        Some((dom, pasajes, degs))
-                    })
-                }
-                _ => None,
-            };
+        // separan las combinaciones del dominio en las que tienen pasaje
+        // propio y las que sólo tienen evidencia vecina (composición).
+        // Todo toma prestado de `state.corpus`.
+        let corpus_view: Option<CorpusView<'_>> = match &self.state.mode {
+            CanvasMode::Wheel { render } if !self.state.sphere_3d => {
+                self.state.corpus_domain.and_then(|dom| {
+                    let corpus = self.state.corpus.as_ref()?;
+                    let (col, asp) = corpus_inputs(render);
+                    let combos = combinaciones_de_carta(&col, &asp);
+                    let tajadas = rebanar_por_dominio(&col, &combos);
+                    let dom_combos = tajadas.get(&dom).cloned().unwrap_or_default();
+                    let mut directos = Vec::new();
+                    let mut compuestos = Vec::new();
+                    for c in &dom_combos {
+                        let p = corpus.pasajes_de(c);
+                        if p.is_empty() {
+                            let ev = corpus.evidencia_relacionada(c);
+                            if !ev.is_empty() {
+                                compuestos.push((c.clone(), ev));
+                            }
+                        } else {
+                            directos.extend(p);
+                        }
+                    }
+                    let degs: Vec<f32> = render
+                        .layers
+                        .iter()
+                        .filter(|l| {
+                            matches!(l.kind, LayerKind::Bodies) && l.module_id == "natal"
+                        })
+                        .flat_map(|l| l.glyphs.iter())
+                        .filter(|g| g.house.and_then(Dominio::de_casa) == Some(dom))
+                        .map(|g| g.deg)
+                        .collect();
+                    Some(CorpusView { dominio: dom, directos, compuestos, degs })
+                })
+            }
+            _ => None,
+        };
 
         let body = match &self.state.mode {
             CanvasMode::Empty => render_empty(&theme),
@@ -1151,11 +1237,11 @@ impl Render for AstrologyCanvas {
                 );
                 // Capa de resalte de la tajada activa, encima de la rueda.
                 match &corpus_view {
-                    Some((dom, _, degs)) => wheel.child(corpus_highlight_canvas(
-                        degs.clone(),
+                    Some(cv) => wheel.child(corpus_highlight_canvas(
+                        cv.degs.clone(),
                         render.ascendant_deg,
                         self.state.view_rotation_deg,
-                        domain_color(*dom),
+                        domain_color(cv.dominio),
                     )),
                     None => wheel,
                 }
@@ -1163,9 +1249,7 @@ impl Render for AstrologyCanvas {
             CanvasMode::Thumbnails { items, .. } => render_thumbnails(&theme, items),
         };
 
-        let corpus_side = corpus_view
-            .as_ref()
-            .map(|(dom, pasajes, _)| corpus_panel(&theme, *dom, pasajes));
+        let corpus_side = corpus_view.as_ref().map(|cv| corpus_panel(&theme, cv));
 
         // Botón flotante 2D ⇄ 3D — visible solo con una carta cargada.
         // Muestra el modo al que se cambiará, no el activo.

@@ -319,6 +319,34 @@ pub struct Pasaje {
     pub dominio: Option<Dominio>,
 }
 
+/// Evidencia **vecina** de una combinación que no tiene pasaje propio:
+/// pasajes del corpus que comparten uno de sus componentes (el planeta,
+/// el signo, la casa, o el tipo de aspecto).
+///
+/// Es la respuesta honesta al problema de la «composición». El corpus
+/// **no sintetiza** un texto para una combinación no escrita —eso sería
+/// inventar—. Tampoco multiplica perfiles numéricos: el producto
+/// Hadamard (y parientes) se descartó porque da falsos (una dimensión
+/// en 0 nunca «se enciende») y, sobre todo, porque un perfil compuesto
+/// es una conjetura, no evidencia. Lo que sí es honesto: traer las
+/// citas reales de contextos parecidos y que el astrólogo componga él.
+#[derive(Debug, Clone)]
+pub struct EvidenciaVecina<'a> {
+    /// Qué componente comparten — `"planeta mars"`, `"signo virgo"`,
+    /// `"casa 6"`, `"aspecto square"`.
+    pub comparte: String,
+    pub pasajes: Vec<&'a Pasaje>,
+}
+
+/// `true` si la combinación involucra a ese planeta, en cualquier rol.
+fn combinacion_usa_planeta(c: &CombinacionId, planeta: &str) -> bool {
+    match c {
+        CombinacionId::PlanetaSigno { planeta: p, .. } => p == planeta,
+        CombinacionId::PlanetaCasa { planeta: p, .. } => p == planeta,
+        CombinacionId::Aspecto { a, b, .. } => a == planeta || b == planeta,
+    }
+}
+
 /// El corpus completo: la ontología de arquetipos + los pasajes.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Corpus {
@@ -394,6 +422,69 @@ impl Corpus {
             .filter(|id| self.pasajes_de(id).is_empty())
             .cloned()
             .collect()
+    }
+
+    /// Pasajes cuya combinación cumple un predicado.
+    fn pasajes_donde(&self, pred: impl Fn(&CombinacionId) -> bool) -> Vec<&Pasaje> {
+        self.pasajes.iter().filter(|p| pred(&p.combinacion)).collect()
+    }
+
+    /// La **capa de composición**, hecha con honestidad: para una
+    /// combinación SIN pasaje propio, junta la evidencia vecina —
+    /// pasajes que comparten uno de sus componentes—. No sintetiza un
+    /// texto ni compone perfiles; son citas reales de contextos
+    /// parecidos, agrupadas por el componente que comparten, para que
+    /// el astrólogo componga. Si la combinación SÍ tiene pasaje propio,
+    /// devuelve vacío — no hace falta. Ver [`EvidenciaVecina`].
+    pub fn evidencia_relacionada(&self, id: &CombinacionId) -> Vec<EvidenciaVecina<'_>> {
+        if !self.pasajes_de(id).is_empty() {
+            return Vec::new();
+        }
+        let mut grupos: Vec<EvidenciaVecina<'_>> = Vec::new();
+        match id {
+            CombinacionId::PlanetaSigno { planeta, signo } => {
+                grupos.push(EvidenciaVecina {
+                    comparte: format!("planeta {planeta}"),
+                    pasajes: self.pasajes_donde(|c| combinacion_usa_planeta(c, planeta)),
+                });
+                grupos.push(EvidenciaVecina {
+                    comparte: format!("signo {signo}"),
+                    pasajes: self.pasajes_donde(|c| {
+                        matches!(c, CombinacionId::PlanetaSigno { signo: s, .. } if s == signo)
+                    }),
+                });
+            }
+            CombinacionId::PlanetaCasa { planeta, casa } => {
+                grupos.push(EvidenciaVecina {
+                    comparte: format!("planeta {planeta}"),
+                    pasajes: self.pasajes_donde(|c| combinacion_usa_planeta(c, planeta)),
+                });
+                grupos.push(EvidenciaVecina {
+                    comparte: format!("casa {casa}"),
+                    pasajes: self.pasajes_donde(|c| {
+                        matches!(c, CombinacionId::PlanetaCasa { casa: k, .. } if k == casa)
+                    }),
+                });
+            }
+            CombinacionId::Aspecto { a, kind, b } => {
+                grupos.push(EvidenciaVecina {
+                    comparte: format!("aspecto {kind}"),
+                    pasajes: self.pasajes_donde(|c| {
+                        matches!(c, CombinacionId::Aspecto { kind: k, .. } if k == kind)
+                    }),
+                });
+                grupos.push(EvidenciaVecina {
+                    comparte: format!("planeta {a}"),
+                    pasajes: self.pasajes_donde(|c| combinacion_usa_planeta(c, a)),
+                });
+                grupos.push(EvidenciaVecina {
+                    comparte: format!("planeta {b}"),
+                    pasajes: self.pasajes_donde(|c| combinacion_usa_planeta(c, b)),
+                });
+            }
+        }
+        grupos.retain(|g| !g.pasajes.is_empty());
+        grupos
     }
 }
 
@@ -607,5 +698,33 @@ mod tests {
         let p = corpus.pasajes_de(&aspecto);
         assert_eq!(p.len(), 1);
         assert_eq!(p[0].dominio, Some(Dominio::Psiquico));
+    }
+
+    #[test]
+    fn evidencia_relacionada_junta_vecinos_por_componente() {
+        let corpus = Corpus {
+            arquetipos: Vec::new(),
+            pasajes: vec![
+                pasaje(CombinacionId::planeta_signo("mars", "virgo"), "marte cirujano"),
+                pasaje(CombinacionId::planeta_signo("mars", "aries"), "marte crudo"),
+                pasaje(CombinacionId::planeta_signo("venus", "gemini"), "venus locuaz"),
+            ],
+        };
+        // mars·gemini no tiene pasaje propio → evidencia vecina.
+        let ev = corpus.evidencia_relacionada(&CombinacionId::planeta_signo("mars", "gemini"));
+        let mars = ev.iter().find(|g| g.comparte == "planeta mars").unwrap();
+        assert_eq!(mars.pasajes.len(), 2, "marte en otros signos");
+        let gem = ev.iter().find(|g| g.comparte == "signo gemini").unwrap();
+        assert_eq!(gem.pasajes.len(), 1, "otros planetas en géminis");
+    }
+
+    #[test]
+    fn evidencia_relacionada_vacia_si_hay_pasaje_propio() {
+        let corpus = Corpus {
+            arquetipos: Vec::new(),
+            pasajes: vec![pasaje(CombinacionId::planeta_signo("mars", "virgo"), "x")],
+        };
+        let ev = corpus.evidencia_relacionada(&CombinacionId::planeta_signo("mars", "virgo"));
+        assert!(ev.is_empty(), "con pasaje propio no se busca evidencia vecina");
     }
 }
