@@ -32,15 +32,6 @@ const FUEL_ARRANQUE: u64 = 20_000_000;
 /// milisegundos y es desalojada. Este numero ES el techo temporal del userspace.
 const FUEL_FOTOGRAMA: u64 = 2_000_000;
 
-/// Techo de memoria lineal por aplicacion: 4 MiB. Un modulo que intente crecer
-/// su memoria mas alla es desalojado — el aislamiento ESPACIAL del userspace,
-/// gemelo del techo TEMPORAL que impone el combustible.
-///
-/// Desde la Fase 7 el techo es POR-APP: cada `EntradaApp` del manifiesto
-/// lleva el suyo. Esta constante es el valor por DEFECTO — el que usan las
-/// apps de genesis (ver `manifiesto::genesis`).
-pub(crate) const TECHO_MEMORIA: usize = 4 * 1024 * 1024;
-
 /// Por que el kernel da por terminada —desaloja— una aplicacion WASM.
 #[derive(Clone, Copy)]
 pub enum FallaApp {

@@ -134,7 +134,7 @@ async fn tarea_sonda_disco() {
 /// corrupto, o la carga fracasa, se salda pintando la region de la app con
 /// la baliza de desalojo — el kernel no se inmuta y sigue con las demas.
 fn encender_app(ejecutor: &mut Executor, entrada: &manifiesto::EntradaApp) {
-    let region = entrada.region();
+    let region = manifiesto::region(entrada);
     // Recuperar el bytecode del grafo. `recuperar` recomputa el hash del
     // objeto y verifica su integridad: un bytecode corrupto se delata aqui
     // —y la app se niega, no se instancia un modulo en el que no se confia.
@@ -163,24 +163,20 @@ fn reportar(linea: &str) {
 }
 
 /// FASE 7 :: puebla el userspace DESDE EL GRAFO. Carga el Manifiesto de
-/// Genesis; si el disco no tiene uno —disco virgen—, lo siembra y lo vuelve a
-/// cargar. Por cada `EntradaApp`, enciende su aplicacion. Toda falla se
-/// reporta a la consola y NO detiene el arranque: el kernel se levanta con
-/// las apps que pueda — o con ninguna, si el grafo no tiene userspace.
+/// Genesis que `boot` sembro en la imagen de disco y, por cada `EntradaApp`,
+/// enciende su aplicacion. Toda falla se reporta a la consola y NO detiene el
+/// arranque: el kernel se levanta con las apps que pueda — o con ninguna, si
+/// el grafo no tiene userspace.
 fn cargar_userspace(ejecutor: &mut Executor) {
     let manifiesto = match manifiesto::cargar() {
         Ok(Some(m)) => Some(m),
-        // Disco sin manifiesto: sembrar la genesis y volver a cargarlo.
-        Ok(None) => match manifiesto::sembrar_genesis() {
-            Ok(_) => {
-                reportar("manifiesto :: genesis sembrada en disco virgen");
-                manifiesto::cargar().ok().flatten()
-            }
-            Err(motivo) => {
-                reportar(&format!("manifiesto :: siembra fallida -- {motivo}"));
-                None
-            }
-        },
+        // Disco sin manifiesto anclado: `boot` no lo sembro. El kernel se
+        // levanta sin userspace —pero se levanta—; en la practica, ninguna
+        // imagen forjada por `boot` llega aqui sin su Manifiesto de Genesis.
+        Ok(None) => {
+            reportar("manifiesto :: el disco no trae uno -- el kernel se levanta solo");
+            None
+        }
         Err(motivo) => {
             reportar(&format!("manifiesto :: carga fallida -- {motivo}"));
             None
@@ -333,10 +329,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     // --- 7. FASE 7 :: levantar el reactor y poblar el userspace DESDE EL
     //        GRAFO. El kernel ya no empotra los modulos WASM: lee el
-    //        Manifiesto de Genesis —si el disco esta virgen, lo siembra— e
+    //        Manifiesto de Genesis que `boot` sembro en la imagen de disco e
     //        instancia cada `EntradaApp` recuperando su bytecode del grafo de
     //        objetos. Las cinco apps de genesis (dos instancias de hello, la
-    //        discola, la glotona y la cronista) nacen ahora del disco, no del
+    //        discola, la glotona y la cronista) nacen del disco, no del
     //        binario del kernel.
     //
     //        Las interrupciones se habilitan AHORA: el temporizador marcara el
