@@ -21,6 +21,7 @@
 use arje_bus::{BusClient, BusRequest, BusResponse};
 use arje_card::Capability;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::signal::unix::{signal, SignalKind};
 use tracing::{info, warn};
@@ -124,11 +125,40 @@ fn init_tracing() {
     tracing_subscriber::fmt().with_env_filter(filter).with_target(true).init();
 }
 
+/// Un inhibidor activo: el cliente sostiene un fd vivo; mientras no lo
+/// cierre, esta entrada permanece en la tabla.
+struct Inhibitor {
+    id: u32,
+    what: String,
+    who: String,
+    why: String,
+    mode: String,
+    uid: u32,
+    pid: u32,
+}
+
+/// Une los `what` de los inhibidores de un `mode` dado en una lista de
+/// tokens únicos separados por `:` — el formato de las propiedades
+/// `BlockInhibited` / `DelayInhibited`.
+fn inhibited_what(inhibitors: &[Inhibitor], mode: &str) -> String {
+    let mut tokens: Vec<&str> = Vec::new();
+    for inh in inhibitors.iter().filter(|i| i.mode == mode) {
+        for t in inh.what.split(':').filter(|t| !t.is_empty()) {
+            if !tokens.contains(&t) {
+                tokens.push(t);
+            }
+        }
+    }
+    tokens.join(":")
+}
+
 #[derive(Default)]
 struct LogindManager {
-    /// Contador monótono de inhibits. Real impl mantendría una tabla con
-    /// el fd vivo de cada uno y los enrutaría al bus interno del fractal.
+    /// Contador monótono — fuente de ids de inhibidores.
     inhibit_counter: AtomicU32,
+    /// Inhibidores activos. La tarea guardiana del fd de cada uno quita
+    /// su entrada cuando el cliente cierra el descriptor.
+    inhibitors: Arc<Mutex<Vec<Inhibitor>>>,
 }
 
 /// Tipos del wire format de `org.freedesktop.login1.Manager`.
@@ -165,9 +195,11 @@ impl LogindManager {
 
     // ---- Inhibit ----
     //
-    // Real: devuelve un fd que el cliente mantiene abierto mientras quiere
-    // inhibir. Cuando lo cierra, sabemos que terminó. Aquí: stub que falla
-    // con NotSupported — GNOME registra warning pero continúa el arranque.
+    // Devuelve un fd que el cliente mantiene abierto mientras quiere
+    // inhibir. Un pipe: el cliente se queda el extremo de escritura;
+    // este shim, el de lectura. Cuando el cliente cierra el suyo —o
+    // muere—, nuestra lectura ve EOF y la tarea guardiana retira el
+    // inhibidor de la tabla.
 
     async fn inhibit(
         &self,
@@ -176,9 +208,60 @@ impl LogindManager {
         why: String,
         mode: String,
     ) -> fdo::Result<zbus::zvariant::OwnedFd> {
-        let n = self.inhibit_counter.fetch_add(1, Ordering::Relaxed);
-        info!(n, %what, %who, %why, %mode, "Inhibit (stub)");
-        Err(fdo::Error::NotSupported("Inhibit todavía no enruta al bus interno".into()))
+        let (reader, writer) = std::io::pipe()
+            .map_err(|e| fdo::Error::Failed(format!("pipe: {e}")))?;
+        let id = self.inhibit_counter.fetch_add(1, Ordering::Relaxed);
+        // uid/pid del llamante quedan en 0/0: obtenerlos exige consultar
+        // las credenciales de la conexión D-Bus, y para el shim no es
+        // crítico (ListInhibitors los expone sólo de forma informativa).
+        self.inhibitors.lock().unwrap().push(Inhibitor {
+            id,
+            what: what.clone(),
+            who: who.clone(),
+            why: why.clone(),
+            mode: mode.clone(),
+            uid: 0,
+            pid: 0,
+        });
+        info!(id, %what, %who, %why, %mode, "Inhibit registrado");
+        let inhibitors = self.inhibitors.clone();
+        tokio::task::spawn_blocking(move || {
+            use std::io::Read;
+            let mut reader = reader;
+            let mut buf = [0u8; 64];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) | Err(_) => break, // EOF: el cliente soltó el fd
+                    Ok(_) => continue,       // datos espurios: seguir
+                }
+            }
+            inhibitors.lock().unwrap().retain(|i| i.id != id);
+            info!(id, "inhibidor liberado (el cliente cerró el fd)");
+        });
+        let raw: std::os::fd::OwnedFd = writer.into();
+        Ok(raw.into())
+    }
+
+    /// Los inhibidores activos: `(what, who, why, mode, uid, pid)`.
+    async fn list_inhibitors(
+        &self,
+    ) -> fdo::Result<Vec<(String, String, String, String, u32, u32)>> {
+        Ok(self
+            .inhibitors
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|i| {
+                (
+                    i.what.clone(),
+                    i.who.clone(),
+                    i.why.clone(),
+                    i.mode.clone(),
+                    i.uid,
+                    i.pid,
+                )
+            })
+            .collect())
     }
 
     // ---- Power management ----
@@ -233,10 +316,14 @@ impl LogindManager {
     async fn idle_since_hint_monotonic(&self) -> u64 { 0 }
 
     #[zbus(property)]
-    async fn block_inhibited(&self) -> String { String::new() }
+    async fn block_inhibited(&self) -> String {
+        inhibited_what(&self.inhibitors.lock().unwrap(), "block")
+    }
 
     #[zbus(property)]
-    async fn delay_inhibited(&self) -> String { String::new() }
+    async fn delay_inhibited(&self) -> String {
+        inhibited_what(&self.inhibitors.lock().unwrap(), "delay")
+    }
 
     #[zbus(property)]
     async fn docked(&self) -> bool { false }
@@ -246,4 +333,37 @@ impl LogindManager {
 
     #[zbus(property)]
     async fn on_external_power(&self) -> bool { true }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn inh(what: &str, mode: &str) -> Inhibitor {
+        Inhibitor {
+            id: 0,
+            what: what.into(),
+            who: "app".into(),
+            why: "test".into(),
+            mode: mode.into(),
+            uid: 0,
+            pid: 0,
+        }
+    }
+
+    #[test]
+    fn inhibited_what_une_tokens_unicos_por_modo() {
+        let v = vec![
+            inh("sleep:shutdown", "block"),
+            inh("idle", "delay"),
+            inh("shutdown:handle-lid-switch", "block"),
+        ];
+        let block = inhibited_what(&v, "block");
+        // sleep, shutdown, handle-lid-switch — `shutdown` no se duplica.
+        assert_eq!(block.split(':').count(), 3, "block = {block}");
+        assert!(block.contains("sleep"));
+        assert!(block.contains("handle-lid-switch"));
+        assert_eq!(inhibited_what(&v, "delay"), "idle");
+        assert_eq!(inhibited_what(&[], "block"), "");
+    }
 }
