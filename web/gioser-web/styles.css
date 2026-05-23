@@ -268,7 +268,7 @@ body.deck-active-tierra .deck { --deck-glow: rgba(212, 152, 115, 0.24); }
   pointer-events: none;
   transition: opacity 0.3s ease;
 }
-.deck--visible .page-controls {
+body.deck-visible .page-controls {
   opacity: 1;
   pointer-events: auto;
 }

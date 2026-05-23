@@ -341,8 +341,8 @@ impl AppState {
             wrapper.append_child(&label).ok();
             content_clone.append_child(&wrapper).ok();
             // Callback: recibe 'camino' del nodo clickeado y navega
+            // usando el método nativo .click() del elemento
             let cb: Box<dyn FnMut(String)> = Box::new(move |target| {
-                // Mapa camino → elemento HTML
                 let el = match target.as_str() {
                     "logos" | "aire" => "logos",
                     "nomos" | "fuego" => "nomos",
@@ -350,15 +350,16 @@ impl AppState {
                     "uku" | "agua" => "uku",
                     _ => "logos",
                 };
-                // Disparar evento click en el tip (el listener de
-                // install_tip_clicks lo captura y llama open_or_switch)
                 if let Some(tip) = document_clone.query_selector(
                     &format!(".tip[data-md][id='tip-{}']", el)
                 ).ok().flatten() {
-                    // Crear MouseEvent con coordenadas (necesario para
-                    // que prevent_default y open_or_switch tengan contexto)
-                    let ev = web_sys::MouseEvent::new("click").unwrap();
-                    let _ = tip.dispatch_event(&ev);
+                    // HTMLElement.click() es el método nativo que dispara
+                    // un evento de click real (trusted) con todas las
+                    // coordenadas — el listener en install_tip_clicks lo detecta.
+                    let tip_el: Option<&HtmlElement> = tip.dyn_ref();
+                    if let Some(html_el) = tip_el {
+                        html_el.click();
+                    }
                 }
             });
             let mut graph = GraphWidget::new(
