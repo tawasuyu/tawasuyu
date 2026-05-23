@@ -2,13 +2,14 @@
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
 export const boot: () => void;
-export const __wasm_bindgen_func_elem_175: (a: number, b: number, c: number) => void;
-export const __wasm_bindgen_func_elem_1203: (a: number, b: number, c: number, d: number) => void;
-export const __wasm_bindgen_func_elem_174: (a: number, b: number, c: number) => void;
-export const __wasm_bindgen_func_elem_174_3: (a: number, b: number, c: number) => void;
-export const __wasm_bindgen_func_elem_442: (a: number, b: number, c: number) => void;
-export const __wasm_bindgen_func_elem_219: (a: number, b: number, c: number) => void;
-export const __wasm_bindgen_func_elem_220: (a: number, b: number) => void;
+export const __wasm_bindgen_func_elem_218: (a: number, b: number, c: number) => void;
+export const __wasm_bindgen_func_elem_1398: (a: number, b: number, c: number, d: number) => void;
+export const __wasm_bindgen_func_elem_217: (a: number, b: number, c: number) => void;
+export const __wasm_bindgen_func_elem_217_3: (a: number, b: number, c: number) => void;
+export const __wasm_bindgen_func_elem_494: (a: number, b: number, c: number) => void;
+export const __wasm_bindgen_func_elem_593: (a: number, b: number, c: number) => void;
+export const __wasm_bindgen_func_elem_289: (a: number, b: number, c: number) => void;
+export const __wasm_bindgen_func_elem_288: (a: number, b: number) => void;
 export const __wbindgen_export: (a: number, b: number) => number;
 export const __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;
 export const __wbindgen_export3: (a: number) => void;
