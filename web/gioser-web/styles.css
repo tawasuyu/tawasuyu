@@ -237,21 +237,21 @@ body.deck-active-tierra .deck { --deck-glow: rgba(212, 152, 115, 0.24); }
     radial-gradient(circle at 18% 22%, rgba(208, 219, 255, 0.20), transparent 38%),
     radial-gradient(circle at 78% 68%, rgba(208, 219, 255, 0.14), transparent 40%),
     radial-gradient(circle at 45% 90%, rgba(180, 200, 255, 0.10), transparent 45%);
-  animation: aire-drift 28s ease-in-out infinite alternate;
+  animation: aire-drift 45s ease-in-out infinite alternate;
 }
 .deck-page[data-element="fuego"] .page-ambience {
   background:
     radial-gradient(circle at 50% 100%, rgba(245, 144, 86, 0.35), transparent 55%),
     radial-gradient(circle at 25% 80%, rgba(255, 90, 40, 0.18), transparent 35%),
     radial-gradient(circle at 80% 85%, rgba(255, 140, 60, 0.18), transparent 35%);
-  animation: fuego-flicker 5s ease-in-out infinite;
+  animation: fuego-flicker 12s ease-in-out infinite;
 }
 .deck-page[data-element="agua"] .page-ambience {
   background:
     radial-gradient(ellipse at 50% 95%, rgba(60, 160, 230, 0.30), transparent 60%),
     radial-gradient(ellipse at 20% 70%, rgba(108, 208, 243, 0.15), transparent 50%),
     radial-gradient(ellipse at 80% 75%, rgba(108, 208, 243, 0.12), transparent 50%);
-  animation: agua-tide 14s ease-in-out infinite alternate;
+  animation: agua-tide 30s ease-in-out infinite alternate;
 }
 .deck-page[data-element="tierra"] .page-ambience {
   background:
@@ -259,18 +259,21 @@ body.deck-active-tierra .deck { --deck-glow: rgba(212, 152, 115, 0.24); }
     radial-gradient(ellipse at 22% 88%, rgba(180, 130, 80, 0.20), transparent 45%),
     radial-gradient(ellipse at 78% 88%, rgba(150, 100, 60, 0.22), transparent 45%);
 }
+/* Animaciones sutiles — solo opacidad, sin desplazamiento visible.
+   El movimiento (transform) del fondo causaba un "respiro" molesto
+   al abrir el deck. */
 @keyframes aire-drift {
-  from { transform: translate(-4%, -1%); }
-  to   { transform: translate(4%, 2%); }
+  from { opacity: 0.60; }
+  to   { opacity: 0.90; }
 }
 @keyframes fuego-flicker {
-  0%, 100% { opacity: 0.85; transform: scaleY(1.00); }
-  35%      { opacity: 1.00; transform: scaleY(1.04); }
-  60%      { opacity: 0.92; transform: scaleY(0.98); }
+  0%, 100% { opacity: 0.65; }
+  35%      { opacity: 0.90; }
+  60%      { opacity: 0.75; }
 }
 @keyframes agua-tide {
-  from { transform: translateY(0); }
-  to   { transform: translateY(-3%); }
+  from { opacity: 0.55; }
+  to   { opacity: 0.85; }
 }
 
 /* Head + controls */

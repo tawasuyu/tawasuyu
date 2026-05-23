@@ -27,6 +27,7 @@ features = [
     "SvgTextElement",
     "SvgTextContentElement",
     "SvgGraphicsElement",
+    "SvgRectElement",
     "Node",
     "Response",
     "CssStyleDeclaration",
