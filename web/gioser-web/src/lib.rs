@@ -341,7 +341,6 @@ impl AppState {
             wrapper.append_child(&label).ok();
             content_clone.append_child(&wrapper).ok();
             // Callback: recibe 'camino' del nodo clickeado y navega
-            // usando el método nativo .click() del elemento
             let cb: Box<dyn FnMut(String)> = Box::new(move |target| {
                 let el = match target.as_str() {
                     "logos" | "aire" => "logos",
@@ -350,16 +349,11 @@ impl AppState {
                     "uku" | "agua" => "uku",
                     _ => "logos",
                 };
+                // Click nativo en el anchor — funciona con <a> también
                 if let Some(tip) = document_clone.query_selector(
                     &format!(".tip[data-md][id='tip-{}']", el)
                 ).ok().flatten() {
-                    // HTMLElement.click() es el método nativo que dispara
-                    // un evento de click real (trusted) con todas las
-                    // coordenadas — el listener en install_tip_clicks lo detecta.
-                    let tip_el: Option<&HtmlElement> = tip.dyn_ref();
-                    if let Some(html_el) = tip_el {
-                        html_el.click();
-                    }
+                    let _ = tip.dyn_into::<HtmlElement>().map(|e| e.click());
                 }
             });
             let mut graph = GraphWidget::new(
@@ -466,7 +460,7 @@ pub fn boot() -> Result<(), JsValue> {
     install_canvas_pointer(&canvas, &renderer)?;
     install_canvas_leave(&canvas, &renderer)?;
     install_tip_clicks(&document, &app)?;
-    install_deck_delegation(&document, &app)?;
+    install_controls_delegation(&document, &app)?;
     install_taskbar(&document, &app)?;
     install_keyboard(&document, &app)?;
     install_popstate_listener(&window, &app)?;
@@ -622,10 +616,7 @@ fn install_tip_clicks(document: &Document, app: &Rc<AppState>) -> Result<(), JsV
 /// Un listener en el deck delega clicks de minimize y close en cada página.
 /// Las páginas se crean dinámicamente, así que no podemos adjuntar listeners
 /// por botón en boot.
-fn install_deck_delegation(document: &Document, app: &Rc<AppState>) -> Result<(), JsValue> {
-    let Some(deck_el) = document.get_element_by_id("deck") else {
-        return Ok(());
-    };
+fn install_controls_delegation(document: &Document, app: &Rc<AppState>) -> Result<(), JsValue> {
     let app2 = app.clone();
     let cb = Closure::<dyn FnMut(MouseEvent)>::new(move |e: MouseEvent| {
         let Some(target) = e.target() else { return };
@@ -667,7 +658,7 @@ fn install_deck_delegation(document: &Document, app: &Rc<AppState>) -> Result<()
             }
         }
     });
-    deck_el.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
+    document.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
     cb.forget();
     Ok(())
 }
