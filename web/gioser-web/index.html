@@ -75,6 +75,15 @@
     <div id="deck-strip" class="deck-strip vista-strip" role="region" aria-label="Vistas abiertas"></div>
   </div>
 
+  <!-- Controles fijos de página: minimizar y cerrar (siempre en el DOM,
+       ocultos por CSS hasta que el deck se abre) -->
+  <div class="page-controls" id="global-page-controls" style="opacity:0;pointer-events:none;">
+    <button class="page-control-btn page-minimize" data-minimize="" type="button" aria-label="Minimizar">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19 H19" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+    </button>
+    <button class="page-control-btn page-close" data-close-page="" type="button" aria-label="Cerrar">×</button>
+  </div>
+
   <!-- TASKBAR estilo Windows: home + GioSer + tabs + copyleft -->
   <nav class="taskbar" aria-label="Barra de vistas">
     <button class="taskbar-home" data-home aria-label="Volver al home" type="button">

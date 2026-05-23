@@ -193,30 +193,13 @@ impl AppState {
     }
 
     fn sync_page_controls(&self) {
-        let exists = self.document.get_element_by_id("global-page-controls");
-        let is_visible = self.state.borrow().active.is_some();
-        if let Some(ctl) = exists {
+        if let Some(ctl) = self.document.get_element_by_id("global-page-controls") {
+            let is_visible = self.state.borrow().active.is_some();
             ctl.set_attribute("style", if is_visible {
                 "opacity:1;pointer-events:auto;"
             } else {
                 "opacity:0;pointer-events:none;"
             }).ok();
-        } else if is_visible {
-            let Some(body) = self.document.body() else { return };
-            let div: HtmlElement = self.document
-                .create_element("div")
-                .ok()
-                .and_then(|e| e.dyn_into().ok())
-                .unwrap();
-            div.set_id("global-page-controls");
-            div.set_attribute("class", "page-controls").ok();
-            div.set_inner_html(
-                "<button class=\"page-control-btn page-minimize\" data-minimize=\"\" type=\"button\" aria-label=\"Minimizar\">\
-                    <svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 19 H19\" stroke=\"currentColor\" stroke-width=\"2\" fill=\"none\" stroke-linecap=\"round\"/></svg>\
-                </button>\
-                <button class=\"page-control-btn page-close\" data-close-page=\"\" type=\"button\" aria-label=\"Cerrar\">×</button>"
-            );
-            body.append_child(&div).ok();
         }
     }
 
