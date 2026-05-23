@@ -11,7 +11,7 @@
 (function () {
   'use strict';
 
-  const COLORS = {
+  var COLORS = {
     logos:  '#d0dbff',
     aire:   '#d0dbff',
     nomos:  '#f59056',
@@ -25,12 +25,11 @@
   function caminoColor(c) { return COLORS[c] || '#888'; }
 
   function initGraph(container) {
-    const apiUrl = container.getAttribute('data-api-url') || 'https://api.gioser.net';
-    const onNavigate = window.__gioserGraphNavigate || null;
+    var apiUrl = container.getAttribute('data-api-url') || 'https://api.gioser.net';
+    var onNavigate = window.__gioserGraphNavigate || null;
 
-    // Si cytoscape no ha cargado, esperar
     if (typeof cytoscape === 'undefined') {
-      const check = setInterval(() => {
+      var check = setInterval(function () {
         if (typeof cytoscape !== 'undefined') {
           clearInterval(check);
           initGraph(container);
@@ -38,6 +37,10 @@
       }, 100);
       return;
     }
+
+    // Esperar un frame antes de fetch — el deck puede estar oculto
+    // y Cytoscape necesita tamaño real para el layout cose.
+    requestAnimationFrame(function () {
 
     fetch(apiUrl + '/graph?limit=500')
       .then(function (r) { return r.json(); })
@@ -55,7 +58,7 @@
             data: {
               id: d.id,
               doc_id: d.doc_id,
-              label: d.name.length > 24 ? d.name.slice(0, 22) + '…' : d.name,
+              label: d.name.length > 24 ? d.name.slice(0, 22) + '\u2026' : d.name,
               camino: d.camino.toUpperCase(),
               color: color,
             },
@@ -70,25 +73,25 @@
         for (var i = 0; i < data.edges.length; i++) {
           var ed = data.edges[i].data;
           if (!nodeIds[ed.source] || !nodeIds[ed.target]) continue;
-          var weight = ed.weight || 0.7;
           elements.push({
             group: 'edges',
             data: {
               id: ed.id,
               source: ed.source,
               target: ed.target,
-              weight: weight,
+              weight: ed.weight || 0.7,
             },
           });
         }
 
-        // Guardar payload completo para tooltip
         var tipMap = {};
         for (var i = 0; i < data.nodes.length; i++) {
           var d = data.nodes[i].data;
           if (d.doc_id) tipMap[d.id] = d;
         }
 
+        // Layout: 'preset' primero con posiciones aleatorias para
+        // que el contenedor tome tamaño, luego cose cuando visible.
         var cy = cytoscape({
           container: container,
           elements: elements,
@@ -128,16 +131,24 @@
             },
           ],
           layout: {
-            name: 'cose',
-            animate: false,
-            idealEdgeLength: 150,
-            nodeRepulsion: 7000,
-            gravity: 0.2,
-            numIter: 800,
-            fit: true,
-            padding: 25,
+            name: 'preset',
+            fit: false,
           },
         });
+
+        // Ahora aplicar layout cose con animación (se adaptará al tamaño real)
+        cy.layout({
+          name: 'cose',
+          animate: 'end',
+          animationEasing: 'ease-out',
+          animationDuration: 600,
+          idealEdgeLength: 150,
+          nodeRepulsion: 7000,
+          gravity: 0.2,
+          numIter: 800,
+          fit: true,
+          padding: 25,
+        }).run();
 
         // Tooltip
         var tooltipEl = document.createElement('div');
@@ -177,10 +188,8 @@
           }
         });
 
-        // Click nodo: centrar + desvanecer resto
         cy.on('click', 'node', function (ev) {
           var node = ev.target;
-          // Vecinos
           cy.nodes().not(node).not(node.neighborhood()).forEach(function (n) {
             n.style({ 'opacity': 0.12 });
           });
@@ -201,13 +210,11 @@
           });
         });
 
-        // Doble clic: callback de navegación
         cy.on('dblclick', 'node', function (ev) {
           var docId = ev.target.data('doc_id');
           if (onNavigate && docId) onNavigate(docId);
         });
 
-        // Clic en fondo: restaurar todo
         cy.on('click', function (ev) {
           if (ev.target === cy) {
             cy.nodes().forEach(function (n) {
@@ -220,19 +227,10 @@
           }
         });
 
-        // ResizeObserver para redimensionar con el contenedor
         var ro = new ResizeObserver(function () {
           cy.resize().fit(25);
         });
         ro.observe(container);
-
-        // Scroll del deck: pausar interacciones del grafo
-        var deckEl = container.closest('.deck');
-        if (deckEl) {
-          deckEl.addEventListener('scroll', function () {
-            // No hacemos nada especial, el grafo se redimensiona solo
-          });
-        }
       })
       .catch(function (err) {
         console.warn('gioser-graph: error:', err);
@@ -241,9 +239,11 @@
           'font-size:0.8rem;font-family:Inter,sans-serif;">' +
           '· grafo no disponible ·</div>';
       });
+
+    }); // requestAnimationFrame
   }
 
-  // MutationObserver: detecta <gioser-graph> agregados en cualquier momento
+  // MutationObserver: detecta <gioser-graph> agregados dinámicamente
   var observer = new MutationObserver(function (mutations) {
     for (var m = 0; m < mutations.length; m++) {
       var added = mutations[m].addedNodes;
@@ -252,7 +252,6 @@
         if (el.tagName && el.tagName.toLowerCase() === 'gioser-graph') {
           initGraph(el);
         }
-        // También revisar hijos
         var graphs = el.querySelectorAll ? el.querySelectorAll('gioser-graph') : [];
         for (var j = 0; j < graphs.length; j++) {
           initGraph(graphs[j]);
@@ -266,7 +265,7 @@
     subtree: true,
   });
 
-  // También inicializar los que ya existen (si el DOM ya está listo)
+  // Inicializar los que ya existen
   var existing = document.querySelectorAll('gioser-graph');
   for (var i = 0; i < existing.length; i++) {
     initGraph(existing[i]);
