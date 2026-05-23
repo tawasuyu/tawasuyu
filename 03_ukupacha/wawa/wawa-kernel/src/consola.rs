@@ -79,10 +79,15 @@ pub(crate) struct CeldaTaskbar<'a> {
     pub(crate) tinta: Color,
 }
 
-/// La barra de tareas del escritorio (Fase 14): su area y sus pestañas.
+/// La barra de tareas del escritorio (Fase 14): el area entera, el boton
+/// lanzador a la izquierda («+», Fase 16), las pestañas y el reloj a la
+/// derecha (Fase 16).
 pub(crate) struct Taskbar<'a> {
     pub(crate) area: RegionPantalla,
+    pub(crate) launcher: RegionPantalla,
     pub(crate) celdas: &'a [CeldaTaskbar<'a>],
+    pub(crate) reloj: &'a str,
+    pub(crate) reloj_region: RegionPantalla,
 }
 
 /// La consola grafica de renaser: doble bufer, pantalla fisica y pluma.
@@ -274,9 +279,10 @@ impl Consola {
         self.presentar();
     }
 
-    /// Pinta la barra de tareas como ultima capa del escritorio (Fase 14): el
-    /// fondo de la franja, una linea fina arriba que la separa de las apps, y
-    /// las pestañas —cada una su rectángulo y su nombre—.
+    /// Pinta la barra de tareas como ultima capa del escritorio (Fase 14/16):
+    /// el fondo de la franja, una linea fina arriba que la separa de las apps,
+    /// el lanzador a la izquierda, las pestañas en el medio y el reloj a la
+    /// derecha.
     fn pintar_taskbar(&mut self, taskbar: &Taskbar) {
         // Fondo de la barra y linea de separacion.
         self.lienzo.rellenar_rect(
@@ -286,18 +292,53 @@ impl Consola {
             taskbar.area.alto,
             Color::PANEL,
         );
+        self.lienzo.rellenar_rect(
+            taskbar.area.x,
+            taskbar.area.y,
+            taskbar.area.ancho,
+            1,
+            Color::SIN_FOCO,
+        );
+        // El boton lanzador: un cuadrado indigo con un «+» centrado. Invita a
+        // pulsar — al hacerlo, el compositor solicita un parto (igual que Alt+N).
+        let l = taskbar.launcher;
         self.lienzo
-            .rellenar_rect(taskbar.area.x, taskbar.area.y, taskbar.area.ancho, 1, Color::SIN_FOCO);
+            .rellenar_rect(l.x, l.y, l.ancho, l.alto, Color::FOCO);
+        // El «+»: dos barras estrechas cruzadas en el centro. Mas legible que
+        // una sola hace una cruz limpia, sin depender de la tipografia.
+        let cx = l.x + l.ancho / 2;
+        let cy = l.y + l.alto / 2;
+        let radio: usize = 8;
+        let grosor: usize = 2;
+        // Barra horizontal.
+        self.lienzo.rellenar_rect(
+            cx.saturating_sub(radio),
+            cy.saturating_sub(grosor / 2),
+            radio * 2,
+            grosor,
+            Color::TEXTO,
+        );
+        // Barra vertical.
+        self.lienzo.rellenar_rect(
+            cx.saturating_sub(grosor / 2),
+            cy.saturating_sub(radio),
+            grosor,
+            radio * 2,
+            Color::TEXTO,
+        );
         // Las pestañas.
         for celda in taskbar.celdas {
             let r = celda.region;
             self.lienzo
                 .rellenar_rect(r.x, r.y, r.ancho, r.alto, celda.fondo);
-            // El nombre, alineado a la izquierda de la pestaña, vertical-
-            // centrado a la altura visible de la franja.
             let base_y = r.y + (r.alto + 14) / 2;
             self.pintar_etiqueta(r.x + 10, base_y, celda.nombre, 16.0, celda.fondo, celda.tinta);
         }
+        // El reloj a la derecha: alineado a la izquierda de su region, sobre
+        // el fondo del panel (sin caja propia — la barra es su lienzo).
+        let r = taskbar.reloj_region;
+        let base_y = r.y + (r.alto + 14) / 2;
+        self.pintar_etiqueta(r.x, base_y, taskbar.reloj, 16.0, Color::PANEL, Color::TEXTO);
     }
 
     /// Rasteriza una cadena de texto a un tamaño dado, en (x, base_y), sobre

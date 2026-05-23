@@ -45,7 +45,7 @@
 //  pudiera disputar a una tarea cooperativa.
 // =============================================================================
 
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -68,11 +68,19 @@ const FRANJA_CONSOLA: usize = 296;
 const FRANJA_TASKBAR: usize = 40;
 
 /// Anchura de cada celda de la barra de tareas, en pixeles.
-const CELDA_TASKBAR_ANCHO: usize = 156;
+const CELDA_TASKBAR_ANCHO: usize = 150;
 /// Hueco entre celdas adyacentes de la barra.
 const CELDA_TASKBAR_HUECO: usize = 6;
-/// Margen izquierdo de la primera celda.
-const CELDA_TASKBAR_MARGEN: usize = 16;
+/// Margen izquierdo y derecho de la barra de tareas.
+const CELDA_TASKBAR_MARGEN: usize = 12;
+/// Anchura del boton lanzador («+» a la izquierda de la barra, Fase 16).
+const LAUNCHER_ANCHO: usize = 36;
+/// Hueco entre el lanzador y la primera pestaña.
+const LAUNCHER_HUECO: usize = 8;
+/// Anchura reservada para el reloj a la derecha de la barra (Fase 16).
+const RELOJ_ANCHO: usize = 80;
+/// Hueco entre la ultima pestaña y el reloj.
+const RELOJ_HUECO: usize = 8;
 
 /// El modo de teselado con que arranca el escritorio. El teclado lo cicla.
 const MODO_INICIAL: LayoutMode = LayoutMode::MasterStack;
@@ -197,6 +205,12 @@ static MANDOS: Once<ArrayQueue<Mando>> = Once::new();
 /// que lo lee el orquestador del kernel —el unico que sabe instanciar un WASM—.
 /// Atomico: el compositor lo escribe, el orquestador lo lee y lo pone a cero.
 static PARTOS: AtomicUsize = AtomicUsize::new(0);
+
+/// El ultimo segundo del reloj monotono que la barra de tareas ha mostrado.
+/// `tick_reloj` lo compara con el actual: si difiere, recompone para pintar el
+/// nuevo. Centinela `u64::MAX` para garantizar que el primer tick fuerza un
+/// repintado y la barra arranca con su reloj a 0:00.
+static ULTIMO_SEGUNDO: AtomicU64 = AtomicU64::new(u64::MAX);
 
 // =============================================================================
 //  Fundacion y consulta — el arranque
@@ -600,21 +614,27 @@ fn recomponer(escritorio: &Escritorio) {
         });
     }
 
-    // FASE 14 :: armar las celdas de la barra de tareas. Una pestaña por
-    // ventana viva (no cerrada), de izquierda a derecha, con el nombre de la
-    // app; la enfocada lleva el color indigo del foco, las desalojadas su
-    // baliza, las demas el slate del panel. El clic sobre una pestaña enfoca
-    // su ventana.
+    // FASE 14/16 :: armar la barra de tareas. A la izquierda un boton lanzador
+    // («+»); en el medio una pestaña por ventana viva; a la derecha el reloj.
     let area_bar = area_taskbar(escritorio.ancho, escritorio.alto);
-    let mut celdas: Vec<CeldaTaskbar> = Vec::new();
-    let mut cx = area_bar.x + CELDA_TASKBAR_MARGEN;
     let cy = area_bar.y + 4;
     let calto = area_bar.alto.saturating_sub(8);
+    let launcher = RegionPantalla {
+        x: area_bar.x + CELDA_TASKBAR_MARGEN,
+        y: cy,
+        ancho: LAUNCHER_ANCHO,
+        alto: calto,
+    };
+    let cells_x0 = launcher.x + launcher.ancho + LAUNCHER_HUECO;
+    let cells_x_max =
+        area_bar.x + area_bar.ancho - CELDA_TASKBAR_MARGEN - RELOJ_ANCHO - RELOJ_HUECO;
+    let mut celdas: Vec<CeldaTaskbar> = Vec::new();
+    let mut cx = cells_x0;
     for (indice, ventana) in escritorio.ventanas.iter().enumerate() {
         if ventana.cerrada {
             continue;
         }
-        if cx + CELDA_TASKBAR_ANCHO > area_bar.x + area_bar.ancho {
+        if cx + CELDA_TASKBAR_ANCHO > cells_x_max {
             break;
         }
         let fondo = match ventana.baliza {
@@ -635,24 +655,43 @@ fn recomponer(escritorio: &Escritorio) {
         });
         cx += CELDA_TASKBAR_ANCHO + CELDA_TASKBAR_HUECO;
     }
+    // El reloj: minutos:segundos desde el arranque, alineado a la derecha.
+    let ms = crate::async_system::reloj::milisegundos();
+    let segs = ms / 1000;
+    let reloj_texto = alloc::format!("{}:{:02}", segs / 60, segs % 60);
+    let reloj_region = RegionPantalla {
+        x: area_bar.x + area_bar.ancho - CELDA_TASKBAR_MARGEN - RELOJ_ANCHO,
+        y: cy,
+        ancho: RELOJ_ANCHO,
+        alto: calto,
+    };
     let taskbar = Taskbar {
         area: area_bar,
+        launcher,
         celdas: &celdas,
+        reloj: &reloj_texto,
+        reloj_region,
     };
     consola::recomponer(area, &capas, &taskbar);
+    // Recordar el segundo recien mostrado: `tick_reloj` evita repintar de mas
+    // mientras dure este mismo segundo.
+    ULTIMO_SEGUNDO.store(segs, Ordering::Relaxed);
 }
 
 /// Localiza la celda de la barra de tareas bajo la coordenada x: itera las
 /// ventanas vivas en orden de creacion y devuelve la N-esima donde la N es la
-/// posicion en la barra. `None` si el clic cae en un hueco entre celdas, antes
-/// del margen, o pasada la ultima.
+/// posicion en la barra. `None` si el clic cae en el lanzador, en el reloj, en
+/// un hueco entre celdas, o fuera del rango de las pestañas.
 fn celda_taskbar_en(escritorio: &Escritorio, x: usize) -> Option<usize> {
     let area_bar = area_taskbar(escritorio.ancho, escritorio.alto);
-    let margen_izq = area_bar.x + CELDA_TASKBAR_MARGEN;
-    if x < margen_izq {
+    // Las pestañas empiezan despues del lanzador.
+    let cells_x0 = area_bar.x + CELDA_TASKBAR_MARGEN + LAUNCHER_ANCHO + LAUNCHER_HUECO;
+    let cells_x_max =
+        area_bar.x + area_bar.ancho - CELDA_TASKBAR_MARGEN - RELOJ_ANCHO - RELOJ_HUECO;
+    if x < cells_x0 || x >= cells_x_max {
         return None;
     }
-    let rel = x - margen_izq;
+    let rel = x - cells_x0;
     let paso = CELDA_TASKBAR_ANCHO + CELDA_TASKBAR_HUECO;
     let posicion = rel / paso;
     let offset = rel % paso;
@@ -670,6 +709,14 @@ fn celda_taskbar_en(escritorio: &Escritorio, x: usize) -> Option<usize> {
         k += 1;
     }
     None
+}
+
+/// ¿Cae la coordenada x en el boton lanzador («+»)?
+fn clic_en_launcher(escritorio: &Escritorio, x: usize) -> bool {
+    let area_bar = area_taskbar(escritorio.ancho, escritorio.alto);
+    let x0 = area_bar.x + CELDA_TASKBAR_MARGEN;
+    let x1 = x0 + LAUNCHER_ANCHO;
+    x >= x0 && x < x1
 }
 
 // =============================================================================
@@ -783,6 +830,22 @@ pub fn partos_pendientes() -> usize {
     PARTOS.swap(0, Ordering::Relaxed)
 }
 
+/// Avanza el reloj de la barra de tareas (Fase 16): si el segundo del reloj
+/// monotono cambio respecto al ultimo mostrado, recompone para refrescar la
+/// pantalla. Si el segundo es el mismo, vuelve sin hacer nada — un fotograma
+/// barato—. La invoca la tarea del compositor cada fotograma.
+pub fn tick_reloj() {
+    let actual = crate::async_system::reloj::milisegundos() / 1000;
+    if ULTIMO_SEGUNDO.load(Ordering::Relaxed) == actual {
+        return;
+    }
+    let Some(escritorio) = ESCRITORIO.get() else {
+        return;
+    };
+    let escritorio = escritorio.lock();
+    recomponer(&escritorio);
+}
+
 // =============================================================================
 //  FASE 13 — raton, puntero y arrastre de ventanas flotantes
 // =============================================================================
@@ -814,7 +877,11 @@ pub fn atender_raton() {
             // habitual: enfocar la ventana topmost bajo el puntero.
             let area_bar = area_taskbar(escritorio.ancho, escritorio.alto);
             if y >= area_bar.y && y < area_bar.y + area_bar.alto {
-                if let Some(v) = celda_taskbar_en(&escritorio, x) {
+                if clic_en_launcher(&escritorio, x) {
+                    // El boton «+» equivale a `Alt+N`: solicita un parto. La
+                    // tarea del compositor lo recogera en su proxima vuelta.
+                    PARTOS.fetch_add(1, Ordering::Relaxed);
+                } else if let Some(v) = celda_taskbar_en(&escritorio, x) {
                     let viva = {
                         let w = &escritorio.ventanas[v];
                         w.baliza.is_none() && !w.cerrada

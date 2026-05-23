@@ -162,6 +162,9 @@ async fn tarea_compositor() {
         // FASE 15 :: atender la voz del kernel — pasar a la nota siguiente
         // de la secuencia agendada, o silenciar al acabar.
         drivers::altavoz::atender();
+        // FASE 16 :: avanzar el reloj de la barra de tareas — recompone si el
+        // segundo cambio respecto al ultimo mostrado. Si no, vuelve enseguida.
+        compositor::tick_reloj();
         // FASE 10 :: atender las altas en vivo. Por cada `Alt+N` pendiente,
         // dar a luz una aplicacion nueva — el compositor solo conto la
         // peticion; instanciar el WASM es trabajo del orquestador.
