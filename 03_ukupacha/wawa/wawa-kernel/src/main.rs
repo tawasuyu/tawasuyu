@@ -439,6 +439,15 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     memory::init();
     traza("heap fundado");
 
+    // --- 4.5. Mapeador de MMIO: envuelve la tabla L4 activa para abrir paginas
+    //          nuevas hacia los BAR MMIO de virtio (que pueden caer fuera de
+    //          lo que el cargador mapeo). Necesita `physical_memory_offset`
+    //          para alcanzar la L4 via el mapeo de memoria fisica. ---
+    if let Some(offset) = offset_fisico {
+        memory::mmio::init(offset);
+        traza("mmio :: mapeador fundado");
+    }
+
     // --- 5. Con el heap activo, fundar lo que depende de el: el canal de
     //        scancodes, el reloj de fotogramas y la tipografia vectorial. ---
     async_system::teclado::init();

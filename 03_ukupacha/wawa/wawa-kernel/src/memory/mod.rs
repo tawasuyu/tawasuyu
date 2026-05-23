@@ -7,5 +7,6 @@
 // =============================================================================
 
 pub mod allocator;
+pub mod mmio;
 
 pub use allocator::init;

@@ -181,6 +181,14 @@ fn liberar_marcos(fisica: u64, paginas: usize) {
     }
 }
 
+/// Asigna UN marco para servir de tabla de paginas. Sin pánico: si la arena
+/// esta exhausta, devuelve `None` y deja al mapeador decidir como reaccionar
+/// — el kernel no puede caerse por no poder añadir una tabla intermedia, ya
+/// se delatara en cuanto el dispositivo lea su propio MMIO no mapeado.
+pub fn asignar_marco_para_tabla() -> Option<u64> {
+    ASIGNADOR.get()?.lock().asignar(1)
+}
+
 /// Traduce una direccion fisica a la virtual que el kernel puede desreferenciar.
 fn a_virtual(fisica: u64) -> *mut u8 {
     (fisica + OFFSET_FISICO.load(Ordering::Relaxed)) as *mut u8
@@ -218,9 +226,12 @@ unsafe impl Hal for KernelHal {
         0
     }
 
-    unsafe fn mmio_phys_to_virt(fisica: PhysAddr, _tam: usize) -> NonNull<u8> {
-        // El cargador mapeo, como minimo, los primeros 4 GiB de memoria fisica;
-        // todo BAR MMIO de PCI cae dentro y es accesible en `fisica + offset`.
+    unsafe fn mmio_phys_to_virt(fisica: PhysAddr, tam: usize) -> NonNull<u8> {
+        // OVMF aloja los BAR prefetchables 64-bit de virtio en la «ventana PCI
+        // de 64 bits» —decenas o cientos de GiB de phys—, que el cargador NO
+        // mapea. Antes de devolver el puntero virtual, abrimos en la tabla L4
+        // las paginas que cubren la region pedida; si ya estaban, no pasa nada.
+        crate::memory::mmio::mapear(fisica as u64, tam);
         NonNull::new(a_virtual(fisica)).expect("MMIO :: direccion fisica nula")
     }
 
