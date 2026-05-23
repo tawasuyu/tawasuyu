@@ -36,7 +36,7 @@ const TASKBAR_HEIGHT_PX: f32 = 52.0;
 const BUTTON_HALF_W_PX: f32 = 90.0;
 const BUTTON_HALF_H_PX: f32 = 64.0;
 const VIEWPORT_MARGIN_PX: f32 = 14.0;
-const ELEMENTS: [&str; 4] = ["aire", "fuego", "tierra", "agua"];
+const ELEMENTS: [&str; 9] = ["aire", "fuego", "tierra", "agua", "cuerpo", "sombra", "cosmos", "practica", "olvido"];
 
 #[derive(Default)]
 struct DeckState {
@@ -265,6 +265,11 @@ impl AppState {
             "fuego" => ("Quién Soy", "Bitácora · Crónica"),
             "tierra" => ("Manifiesto", "Invariantes · Piedra de toque"),
             "agua" => ("Mística", "Espiritualidad aplicada"),
+            "cuerpo" => ("El Cuerpo", "Somática · Respiración · Portal"),
+            "sombra" => ("La Sombra", "Integración · Patrones · Acecho"),
+            "cosmos" => ("Cosmovisión", "4 Elementos · Arquetipos"),
+            "practica" => ("Prácticas", "Ejercicios · Transformación"),
+            "olvido" => ("El Olvido", "Desaprender · Soltar · Vaciar"),
             _ => return,
         };
         let html = format!(
@@ -343,12 +348,17 @@ impl AppState {
             // Callback: recibe 'camino' del nodo clickeado y navega
             let cb: Box<dyn FnMut(String)> = Box::new(move |target| {
                 web_sys::console::log_1(&format!("DEBUG grafo: click target={}", target).into());
-                // Mapa: camino → id del tip en HTML (aire, fuego, tierra, agua)
+                // Mapa: camino → id del tip en HTML
                 let el = match target.as_str() {
                     "logos" | "aire" => "aire",
                     "nomos" | "fuego" => "fuego",
                     "kay" | "tierra" => "tierra",
                     "uku" | "agua" => "agua",
+                    "cuerpo" => "cuerpo",
+                    "sombra" => "sombra",
+                    "cosmos" => "cosmos",
+                    "practica" => "practica",
+                    "olvido" => "olvido",
                     _ => "aire",
                 };
                 web_sys::console::log_1(&format!("DEBUG grafo: el={}", el).into());
@@ -801,6 +811,16 @@ fn map_doc_id_to_element(doc_id: &str) -> (String, String) {
         "tierra"
     } else if doc_id.contains("agua") || doc_id.contains("uku") {
         "agua"
+    } else if doc_id.contains("cuerpo") {
+        "cuerpo"
+    } else if doc_id.contains("sombra") {
+        "sombra"
+    } else if doc_id.contains("cosmos") {
+        "cosmos"
+    } else if doc_id.contains("practica") {
+        "practica"
+    } else if doc_id.contains("olvido") {
+        "olvido"
     } else {
         "aire"
     };

@@ -73,16 +73,21 @@ struct GraphStats {
 type NavCallback = Rc<RefCell<Option<Box<dyn FnMut(String)>>>>;
 
 const CANVAS_W: f64 = 800.0;
-const CANVAS_H: f64 = 420.0;
+const CANVAS_H: f64 = 480.0;
 const NODE_W: f64 = 170.0;
 const NODE_H: f64 = 44.0;
 const COLS: usize = 3;
 
 const CAMINO_COLORS: &[(&str, &str)] = &[
-    ("logos", "#d0dbff"), ("aire",   "#d0dbff"),
-    ("nomos", "#f59056"), ("fuego",  "#f59056"),
-    ("kay",   "#d49873"), ("tierra", "#d49873"),
-    ("uku",   "#6cd0f3"), ("agua",   "#6cd0f3"),
+    ("logos",    "#d0dbff"), ("aire",   "#d0dbff"),
+    ("nomos",    "#f59056"), ("fuego",  "#f59056"),
+    ("kay",      "#d49873"), ("tierra", "#d49873"),
+    ("uku",      "#6cd0f3"), ("agua",   "#6cd0f3"),
+    ("cuerpo",   "#e07a5f"),
+    ("sombra",   "#6a6a7a"),
+    ("cosmos",   "#d4a843"),
+    ("practica", "#2d936c"),
+    ("olvido",   "#b0b8c0"),
 ];
 
 fn camino_color(camino: &str) -> &str {

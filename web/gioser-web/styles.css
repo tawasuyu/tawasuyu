@@ -8,6 +8,11 @@
   --agua:   #6cd0f3;
   --fuego:  #f59056;
   --tierra: #d49873;
+  --cuerpo: #e07a5f;
+  --sombra: #4a4a5a;
+  --cosmos: #d4a843;
+  --practica: #2d936c;
+  --olvido: #b0b8c0;
 
   --ease-emerge: cubic-bezier(0.22, 0.61, 0.20, 1);
   --ease-magma: cubic-bezier(0.32, 0, 0.05, 1);
@@ -143,6 +148,11 @@ body.deck-visible #tips {
 .tip-fuego  { color: var(--fuego); }
 .tip-agua   { color: var(--agua); }
 .tip-tierra { color: var(--tierra); }
+.tip-cuerpo   { color: var(--cuerpo); }
+.tip-sombra   { color: var(--sombra); }
+.tip-cosmos   { color: var(--cosmos); }
+.tip-practica { color: var(--practica); }
+.tip-olvido   { color: var(--olvido); }
 
 /* === DECK: contenedor único de páginas swipeable === */
 .deck {
@@ -654,4 +664,16 @@ body.deck-visible .page-controls {
   .taskbar-credit-text { display: none; }
   .deck { bottom: 46px; }
   :root { --taskbar-height: 46px; }
+}
+
+/* Los tips nuevos (cuerpo, sombra, cosmos, practica, olvido) existen
+   en el DOM para navegación JS (popstate, grafo), pero no se ven en
+   la chacana — no hay canvas-glyph para ellos. Se ocultan por defecto. */
+.tip-hidden {
+  position: absolute;
+  visibility: hidden;
+  pointer-events: none;
+  width: 0;
+  height: 0;
+  overflow: hidden;
 }
