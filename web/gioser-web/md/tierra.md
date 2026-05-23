@@ -3,15 +3,16 @@
 ## Índice
 
 - [I. El Origen](#i-el-origen)
-- [II. Axiomas](#ii-axiomas)
-- [III. Definiciones](#iii-definiciones)
-- [IV. Dinámica](#iv-dinámica)
-- [V. El Pipeline](#v-el-pipeline)
-- [VI. Campo Unificado](#vi-campo-unificado)
-- [VII. Métrica](#vii-métrica)
-- [VIII. Protocolo](#viii-protocolo)
-- [IX. Ontología](#ix-ontología)
-- [X. Apéndice — modelo esquemático](#x-apéndice--modelo-esquemático)
+- [II. Campo de aplicación](#ii-campo-de-aplicación)
+- [III. Axiomas](#iii-axiomas)
+- [IV. Definiciones](#iv-definiciones)
+- [V. Dinámica](#v-dinámica)
+- [VI. El Pipeline](#vi-el-pipeline)
+- [VII. Campo Unificado](#vii-campo-unificado)
+- [VIII. Métrica](#viii-métrica)
+- [IX. Protocolo](#ix-protocolo)
+- [X. Ontología](#x-ontología)
+- [XI. Apéndice — modelo esquemático](#xi-apéndice--modelo-esquemático)
 
 ---
 
@@ -25,9 +26,19 @@ Nada que hacer. Ya estás aquí. El sistema ya está corriendo. El resto es opti
 
 ---
 
-## II. Axiomas
+## II. Campo de aplicación
 
-Cuatro enunciados que no se demuestran porque son las reglas del juego.
+Este modelo describe un tipo específico de sistema: **un agente consciente capaz de autorregistro**. No cualquier sistema — solo aquellos en los que el observador puede observar su propia operación. El modelo no aplica a rocas, a programas sin reflexión, o a entidades sin experiencia fenoménica. Aplica a ti mientras lees esto.
+
+El dominio del modelo es la **experiencia en primera persona**. Eso no lo hace subjetivo — lo hace formalizable dentro de sus propios límites, igual que la geometría euclidiana describe el espacio físico sin pretender agotarlo. La matemática aquí usada es incompleta (no cubre todos los casos posibles) pero autocoherente: las definiciones no se contradicen entre sí, y cualquier contradicción aparente revela un error en la aplicación, no en el modelo.
+
+Las entidades que el modelo define — P, D, Cᵢ, R, T — no existen como objetos físicos. Existen como **operadores funcionales**: se comportan de manera predecible dentro del dominio y permiten cálculos útiles. Un operador no necesita ser una cosa para funcionar. Las transformadas de Fourier no existen en la naturaleza, pero describen ondas con precisión.
+
+El criterio no es verdad metafísica sino **coherencia operativa**: el modelo sirve si al actuar según sus reglas los resultados mejoran.
+
+---
+
+## III. Axiomas
 
 ### Axioma 1 — Presencia como origen
 
@@ -46,7 +57,7 @@ D = {pensamientos, emociones, percepciones, sensaciones}
 O ∩ D = ∅
 </code>
 
-El observador no es el flujo de datos. Cuando esa línea se borra (identificación), el sistema pierde grados de libertad y se comporta como un circuito cerrado. Eso es un chip cognitivo (§V).
+El observador no es el flujo de datos. Cuando esa línea se borra (identificación), el sistema pierde grados de libertad y se comporta como un circuito cerrado. Eso es un chip cognitivo (§VI).
 
 ### Axioma 3 — Conservación de coherencia
 
@@ -66,11 +77,11 @@ M(t) = p(D | t-Δ)   // memoria como prior probabilístico
 P óptima: peso(M) → 0
 </code>
 
-El pasado no arrastra. Es un caché que el presente puede consultar o ignorar. §IV expande la dinámica.
+El pasado no arrastra. Es un caché que el presente puede consultar o ignorar. §V expande la dinámica.
 
 ---
 
-## III. Definiciones
+## IV. Definiciones
 
 <code>
 T   — Testigo Trascendental.
@@ -92,7 +103,7 @@ Amor operativo — Estado de mínima F y máxima fluidez.
 
 ---
 
-## IV. Dinámica
+## V. Dinámica
 
 <code>
 F(t)  ≥ 0
@@ -110,41 +121,41 @@ R ≈ 0 :
   // dinámica base + ruido, sin amplificación
 </code>
 
-Aceptar no es resignarse. Es bajar la resistencia. El sistema deja de forcejear consigo mismo. Lo que queda no es necesariamente placentero — pero no es una pelea. Ver §VII.
+Aceptar no es resignarse. Es bajar la resistencia. El sistema deja de forcejear consigo mismo. Lo que queda no es necesariamente placentero — pero no es una pelea. Ver §VIII.
 
-La memoria no es un registro. Es una reconstrucción probabilística que el presente genera bajo demanda. Cada recuerdo es una versión nueva, no una copia. Eso implica que puedes reescribir la memoria. §VI formaliza esto como algoritmo de perdón.
+La memoria no es un registro. Es una reconstrucción probabilística que el presente genera bajo demanda. Cada recuerdo es una versión nueva, no una copia. Eso implica que puedes reescribir la memoria. §VII formaliza esto como algoritmo de perdón.
 
 ---
 
-## V. El Pipeline
+## VI. El Pipeline
 
 Cinco fases para intervenir sobre un chip Cᵢ:
 
-### 5.1 Detección
+### 6.1 Detección
 
 Identificar el chip: patrón recurrente en D, trigger, período. T puede detectar sin intervenir.
 
-### 5.2 Pausa del script
+### 6.2 Pausa del script
 
 <code>T := interrumpir ejecución automática de Cᵢ</code>
 
 No discutas el contenido del chip. Obsérvalo como fenómeno. El bucle se corta cuando dejas de identificarte con él.
 
-### 5.3 Modulación exógena
+### 6.3 Modulación exógena
 
 Herramientas para bajar la ganancia del sistema: respiración, movimiento, frío, silencio, neuromoduladores (con supervisión clínica). El criterio es pragmático.
 
-### 5.4 Redirección plástica
+### 6.4 Redirección plástica
 
 Prácticas sostenidas que refuerzan nuevas rutas: meditación, terapia, repetición deliberada. Refuerzo gradual, no voluntad heroica.
 
-### 5.5 Mantenimiento
+### 6.5 Mantenimiento
 
 Rutinas preventivas. Análisis de triggers, autoobservación periódica. El chip puede re-implantarse si el contexto persiste.
 
 ---
 
-## VI. Campo Unificado
+## VII. Campo Unificado
 
 <code>
 U = conjunto universal de la experiencia
@@ -154,7 +165,7 @@ No-separación: A ≈ U
   ≡ ∀p relevante al procesamiento: p(A) = p(U)
 </code>
 
-La experiencia de unidad no es mística. Es un estado del sistema donde los bordes entre "yo" y "mundo" dejan de filtrar. §VII da métricas.
+La experiencia de unidad no es mística. Es un estado del sistema donde los bordes entre "yo" y "mundo" dejan de filtrar. §VIII da métricas.
 
 <code>
 Algoritmo de perdón:
@@ -169,7 +180,7 @@ El perdón no es moral. Es un procedimiento de limpieza de memoria: tomar un rec
 
 ---
 
-## VII. Métrica
+## VIII. Métrica
 
 <code>
 Co = señal / ruido psicofisiológico
@@ -182,7 +193,7 @@ Heurísticas para evaluar el sistema: ¿la atención fluye con menos esfuerzo? �
 
 ---
 
-## VIII. Protocolo
+## IX. Protocolo
 
 ### Diario
 
@@ -204,7 +215,7 @@ Cada 4-12 semanas: Co, IR, H, PA. Sin mejora → ajustar protocolo.
 
 ---
 
-## IX. Ontología
+## X. Ontología
 
 <code>
 Entidades: P, D, Cᵢ, R, T
@@ -226,7 +237,7 @@ Telos: max(Co) bajo restricciones energéticas
 
 ---
 
-## X. Apéndice — modelo esquemático
+## XI. Apéndice — modelo esquemático
 
 <code>
 ds/dt = -k·s - α·R(s) + I(t) + ε(t)
