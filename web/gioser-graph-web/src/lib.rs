@@ -92,6 +92,27 @@ fn camino_color(camino: &str) -> &str {
     "#888888"
 }
 
+fn parse_hex(hex: &str) -> (u8, u8, u8) {
+    let h = hex.trim_start_matches('#');
+    if h.len() == 6 {
+        let r = u8::from_str_radix(&h[0..2], 16).unwrap_or(128);
+        let g = u8::from_str_radix(&h[2..4], 16).unwrap_or(128);
+        let b = u8::from_str_radix(&h[4..6], 16).unwrap_or(128);
+        (r, g, b)
+    } else {
+        (136, 136, 136)
+    }
+}
+
+fn blend_colors(c1: &str, c2: &str, t: f64) -> String {
+    let (r1, g1, b1) = parse_hex(c1);
+    let (r2, g2, b2) = parse_hex(c2);
+    let r = (r1 as f64 * (1.0 - t) + r2 as f64 * t) as u32;
+    let g = (g1 as f64 * (1.0 - t) + g2 as f64 * t) as u32;
+    let b = (b1 as f64 * (1.0 - t) + b2 as f64 * t) as u32;
+    format!("#{:02x}{:02x}{:02x}", r, g, b)
+}
+
 pub struct GraphWidget {
     container: HtmlElement,
     api_url: String,
@@ -194,10 +215,14 @@ impl GraphWidget {
             .unwrap();
         breathe_group.set_attribute("class", "gb-svg").ok();
 
-        // Mapa: node.id → (x, y)  — usamos UUID, no doc_id
+        // Mapas: UUID → posición y color
         let pos_map: std::collections::HashMap<&str, (f64, f64)> = positions
             .iter()
             .map(|(id, p)| (id.as_str(), *p))
+            .collect();
+        let color_map: std::collections::HashMap<&str, &str> = self.nodes
+            .iter()
+            .map(|n| (n.id.as_str(), camino_color(&n.camino)))
             .collect();
 
         let max_w = self.edges.iter()
@@ -205,7 +230,7 @@ impl GraphWidget {
             .fold(0.0_f64, f64::max)
             .max(0.5);
 
-        // ── Aristas ──
+        // ── Aristas: mezcla de colores de los nodos que conecta ──
         let mut drawn = std::collections::HashSet::new();
         for edge in &self.edges {
             let key = if edge.source < edge.target {
@@ -218,13 +243,23 @@ impl GraphWidget {
             let Some((x1, y1)) = pos_map.get(edge.source.as_str()) else { continue; };
             let Some((x2, y2)) = pos_map.get(edge.target.as_str()) else { continue; };
 
+            let c1 = color_map.get(edge.source.as_str()).copied().unwrap_or("#888");
+            let c2 = color_map.get(edge.target.as_str()).copied().unwrap_or("#888");
+
             let w = edge.weight.unwrap_or(0.7);
             let norm_w = (w / max_w).clamp(0.0, 1.0);
-            let alpha = 0.15 + norm_w * 0.70;
-            let sw = 1.0 + norm_w * 4.0;
-            let r = (255.0 - (1.0 - norm_w) * 80.0) as u32;
-            let g = (255.0 - (1.0 - norm_w) * 60.0) as u32;
-            let b = (255.0 - (1.0 - norm_w) * 40.0) as u32;
+
+            // Mezclar colores: 50/50 + brillo según weight
+            let blended = blend_colors(c1, c2, 0.5);
+
+            // Brillo extra según el peso (acercar a blanco)
+            let (br, bg, bb) = parse_hex(&blended);
+            let r = (br as f64 + (255.0 - br as f64) * norm_w * 0.4) as u32;
+            let g = (bg as f64 + (255.0 - bg as f64) * norm_w * 0.4) as u32;
+            let b = (bb as f64 + (255.0 - bb as f64) * norm_w * 0.4) as u32;
+
+            let alpha = 0.20 + norm_w * 0.65;
+            let sw = 1.0 + norm_w * 4.5;
 
             let line: SvgLineElement = self
                 .document
