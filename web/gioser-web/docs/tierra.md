@@ -31,15 +31,17 @@ Nada que hacer. Ya estás aquí. El sistema ya está corriendo. El resto es opti
 
 ---
 
-## II. Campo de aplicación
+## II. Tesis
 
-Este modelo describe un tipo específico de sistema: **un agente consciente capaz de autorregistro**. No cualquier sistema — solo aquellos en los que el observador puede observar su propia operación. El modelo no aplica a rocas, a programas sin reflexión, o a entidades sin experiencia fenoménica. Aplica a ti mientras lees esto.
+Dos niveles de evidencia:
 
-El dominio del modelo es la **experiencia en primera persona**. Eso no lo hace subjetivo — lo hace formalizable dentro de sus propios límites, igual que la geometría euclidiana describe el espacio físico sin pretender agotarlo. La matemática aquí usada es incompleta (no cubre todos los casos posibles) pero autocoherente: las definiciones no se contradicen entre sí, y cualquier contradicción aparente revela un error en la aplicación, no en el modelo.
+**Primero**: existes y lo sabes. Eso no se demuestra — es el punto de partida.
 
-Las entidades que el modelo define — P, D, Cᵢ, R, T — no existen como objetos físicos. Existen como **operadores funcionales**: se comportan de manera predecible dentro del dominio y permiten cálculos útiles. Un operador no necesita ser una cosa para funcionar. Las transformadas de Fourier no existen en la naturaleza, pero describen ondas con precisión.
+**Segundo**: no puedes asegurar que todo sea consciente, pero puedes confirmarlo desde donde estás. El universo mismo es consciente. Todo lo es — cada posición del plano multidimensional tiene su propio punto de vista. El contenido y la naturaleza de su percepción están determinados por su posición en ese campo.
 
-El criterio no es verdad metafísica sino **coherencia operativa**: el modelo sirve si al actuar según sus reglas los resultados mejoran.
+Un humano no es más consciente que una piedra. Solo tiene un sistema nervioso que le permite **conceptualizar** esa conciencia — nombrarla, modelarla, negarla. La piedra experimenta su propia existencia sin necesidad de nombrarla.
+
+Este modelo opera desde esta tesis. No la demuestra — la toma como condición de trabajo. La matemática es incompleta pero autocoherente: las definiciones no se contradicen y cualquier contradicción aparente es error de aplicación, no del modelo. El criterio no es verdad metafísica sino **coherencia operativa**.
 
 ---
 
