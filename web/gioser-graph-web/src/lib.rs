@@ -248,8 +248,9 @@ impl GraphWidget {
         for (i, node) in self.nodes.iter().enumerate() {
             let Some((cx, cy)) = positions.get(i).map(|(_, p)| *p) else { continue; };
             let color = camino_color(&node.camino).to_string();
-            let label = if node.name.len() > 20 {
-                format!("{}…", &node.name[..18])
+            let label = if node.name.chars().count() > 20 {
+                let cutoff: String = node.name.chars().take(18).collect();
+                format!("{}…", cutoff)
             } else {
                 node.name.clone()
             };
