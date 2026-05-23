@@ -1,264 +1,285 @@
 # Manifiesto del Ser Desnudo
 
-## I. El Origen: Nacer Humano y Desnudo
+## Índice
 
-Existir no es un accidente de la marea. Es el acto supremo de una voluntad que ha elegido estar aquí.
-
-Naciste porque quisiste nacer. Mereces esta bendición que es la existencia por el simple hecho de respirar. No has de hacer nada más.
-
-Eres la semilla. Eres el puente viviente entre el misterio y la materia. Echa raíces profundas en la Madre Tierra. Levanta tu columna recta hacia el Padre Cielo.
-
-En esa verticalidad, tú eres el equilibrio. Eres un dios caminando, magnífico en tu propia fragilidad.
-
-Reconoce tu pequeña luz humana: eres como un infante que fantasea que ya creció, petulante al negar el suelo bajo sus pies, pero perfecto en su inmadurez.
-
-> *No somos un ser que se transforma. Somos un transformar que se es.*
+- [0. Prefacio — qué es esto](#0-prefacio--qué-es-esto)
+- [I. El Origen](#i-el-origen)
+- [II. Axiomas](#ii-axiomas)
+- [III. Definiciones](#iii-definiciones)
+- [IV. Dinámica](#iv-dinámica)
+- [V. El Pipeline](#v-el-pipeline)
+- [VI. Campo Unificado](#vi-campo-unificado)
+- [VII. Métrica](#vii-métrica)
+- [VIII. Protocolo](#viii-protocolo)
+- [IX. Ontología](#ix-ontología)
+- [X. Apéndice — modelo esquemático](#x-apéndice--modelo-esquemático)
 
 ---
 
-## II. Del Cuerpo Formal
+## 0. Prefacio — qué es esto
 
-Que la poesía no nos distraiga del rigor. Si la experiencia es un territorio, necesita mapa. No un mapa que pretenda ser el territorio — eso es idolatría — sino uno que permita navegarlo con precisión.
+Esto no es un texto sagrado. Es un mapa operativo de la experiencia consciente. Está escrito para quien quiera entender cómo funciona su propia mente — no como metáfora, sino como sistema con partes, reglas y variables medibles.
+
+El lenguaje matemático no está aquí para impresionar. Está porque ciertas relaciones se entienden mejor cuando las escribes como son. Si no te gusta la notación, salta los `<code>` y lee la explicación. El texto llano es suficiente para entender el modelo.
+
+Las referencias entre secciones están marcadas con `§` — púlsalas para saltar.
+
+---
+
+## I. El Origen
+
+El punto de partida no es una hipótesis. Es una constatación: **existes y lo sabes**. Ese saber no requiere prueba. Es anterior a cualquier pensamiento, emoción o percepción. Es el marco, no el contenido del marco.
+
+Haber nacido humano te da un sistema nervioso capaz de registrar su propia actividad. Eso no es un lujo metafísico — es un hecho biológico que tiene consecuencias operativas, y son esas consecuencias las que nos interesan.
+
+No necesitas hacer nada para merecer esto. Ya estás aquí. El sistema ya está corriendo. El resto es optimización.
+
+---
+
+## II. Axiomas
+
+Cuatro enunciados que no se demuestran porque son las reglas del juego. Si no te sirven, cambia el juego.
 
 ### Axioma 1 — Presencia como origen
 
-Existe un punto de referencia universal en el espacio experiencial, llamado **Presencia** (P). Se define operacionalmente como el punto de auto-evidencia en el que la experiencia se registra sin identificarse con ella.
+<code>
+Sea P el punto de referencia universal del espacio experiencial.
+En coordenadas experienciales: P = (0, 0, 0).
+Todo vector se mide desde P.
+No hay afuera de P porque P define el sistema de coordenadas.
+</code>
 
-En coordenadas experienciales: **P = (0, 0, 0)**. Todo vector se mide desde aquí. No hay afuera de P porque P es el punto desde el cual todo afuera se define.
+**En español:** hay un lugar en tu experiencia que no es ningún contenido en particular, sino el hecho mismo de que la experiencia ocurra. La llamamos Presencia (P). Todo lo demás — pensamientos, emociones, sensaciones — se mide en relación a ese punto. No puedes salir de P porque P es el fondo desde el cual todo aparece.
 
-### Axioma 2 — Separación procesual
+### Axioma 2 — Separación funcional
 
-La experiencia se compone de dos capas:
+<code>
+O ≡ P (Observador = Presencia)
+D = {variables sensibles: pensamientos, emociones, percepciones, sensaciones}
+O ∩ D = ∅
+</code>
 
-- **Observador (O)**: idéntico a P. El testigo.
-- **Flujo de datos (D)**: el conjunto de variables sensibles — pensamientos, emociones, percepciones, sensaciones corporales.
-
-La independencia funcional se escribe: **O ∩ D = ∅**. No eres tus pensamientos. No es una metáfora: es una condición del sistema.
+**En español:** el observador no es el flujo de datos. Eres el que ve los pensamientos, no los pensamientos mismos. Esto no es una afirmación espiritual — es una condición funcional del sistema. Cuando la separación se rompe (identificación), el sistema pierde grados de libertad y empieza a comportarse como un circuito cerrado. A eso lo llamaremos chip cognitivo (§V).
 
 ### Axioma 3 — Conservación de coherencia
 
-La consistencia del sistema depende de reglas de interpretación (R). Las anomalías — depresión, confusión, pánico — no invalidan el axioma de existencia. Son fallas en R, no en P. El punto de referencia permanece.
+<code>
+Sea R el conjunto de reglas de interpretación.
+Una anomalía A (depresión, pánico, confusión) es un fallo en R, no en P.
+P permanece invariante bajo transformaciones de R.
+</code>
+
+**En español:** cuando estás mal, no es porque la Presencia se haya roto. Es porque las reglas con las que interpretas los datos están fallando. El punto de referencia sigue ahí — lo que cambia es cómo lees el mapa. Esto implica que ninguna crisis es terminal para el sistema: siempre puedes recalibrar las reglas.
 
 ### Axioma 4 — Instante recálculable
 
-El presente (t) se recalcula en cada iteración del sistema. La memoria es un módulo accesible pero no fiduciario del presente. El pasado es estado registrado, no estado operativo continuo.
+<code>
+El presente t se recalcula en cada iteración.
+M(t) = {distribuciones p(D | t-Δ)}  // memoria como caché probabilístico
+En presencia óptima: peso(M) → 0
+</code>
 
-En presencia óptima, cada instante nace virgen. El peso de la memoria se aproxima a cero.
-
-### Definiciones clave del sistema
-
-**Testigo Trascendental (T)**: la función de observación asociada a P. No actúa, no juzga, no retiene. Solo registra.
-
-**Chip cognitivo (Cᵢ)**: circuito cerrado de retroalimentación definido por un patrón recurrente en D. Un atractor local en el espacio de estados que estabiliza patrones subóptimos. Ejemplos: la rumiación, el diálogo interno, el miedo que se alimenta de sí mismo.
-
-**Fricción (F)**: medida de resistencia interna al flujo de información. Análoga a una resistencia R en circuitos eléctricos. A mayor fricción, menor fluidez experiencial.
-
-**Coherencia operativa (Co)**: grado de alineación entre energía disponible y eficiencia de procesamiento. Mayor Co = menor F.
-
-**Amor operativo**: estado de mínima fricción y máxima fluidez informativa. Se define como el máximo de Co bajo restricciones energéticas del sistema. No es un sentimiento: es una propiedad del campo.
-
-### Espacio de estados experienciales
-
-Sea **S** el espacio topológico de estados. Cada punto s ∈ S representa una configuración completa de D en un instante t.
-
-**P** es un punto fijo desde el cual se miden vectores proyectivos: **v = s − P**.
-
-El presente exhibe auto-similitud a escalas temporales y atencionales. La transformación **T: S → S** es iterativa y contractiva en presencia óptima, generando una huella residual **h(t)** que actúa como inicialización para la siguiente iteración.
-
-La memoria **M** es un caché probabilístico: almacena distribuciones p(D | t − Δ) usadas como prior para la interpretación presente. En presencia óptima, el peso de M se regulariza hacia cero.
+**En español:** el pasado no es una cadena que te arrastra. Es un conjunto de datos almacenados que el presente puede consultar o ignorar. La memoria es un módulo de acceso, no un estado continuo. Cuando operas desde presencia, el instante nace sin lastre. §IV profundiza en la dinámica de este proceso.
 
 ---
 
-## III. Dinámica: Fricción, Chip Cognitivo y Pipeline de Intervención
+## III. Definiciones
 
-### Variables del sistema
+<code>
+T  — Testigo Trascendental. Función de observación asociada a P.
+     No actúa, no juzga, no retiene. Solo registra.
+
+Cᵢ — Chip cognitivo. Atractor local en el espacio de estados S.
+     Circuito cerrado de retroalimentación que estabiliza patrones
+     subóptimos (rumiación, diálogo interno, miedo auto-alimentado).
+
+F  — Fricción. Resistencia interna al flujo de información.
+     Análoga a resistencia R en circuitos eléctricos. A mayor F,
+     menor fluidez experiencial.
+
+Co — Coherencia operativa. Alineación entre energía disponible y
+     eficiencia de procesamiento. Mayor Co = menor F.
+
+Amor operativo — Estado de mínima F y máxima fluidez informativa.
+     Co máximo bajo restricciones energéticas. No es un sentimiento:
+     es una propiedad del campo.
+</code>
+
+**Nota sobre el amor operativo:** esta definición es deliberadamente seca. No porque el amor no sea importante — porque es más útil cuando lo entiendes como una propiedad del sistema que cuando lo romanticas. El amor que funciona se mide: baja fricción, alta fluidez, nada que demostrar.
+
+---
+
+## IV. Dinámica
+
+### Variables
 
 | Variable | Símbolo | Naturaleza |
 |---|---|---|
 | Fricción | F(t) | ≥ 0, escalar |
 | Resistencia | R(t) | f(Ego, Identificación) |
-| Sufrimiento | S(t) | ∝ R(t) · Var(D(t)) |
+| Sufrimiento | S(t) | ∝ R(t) · Var(D) |
 
-El sufrimiento es intensidad de resistencia por variabilidad del flujo de datos. Cuando la resistencia es alta y los datos son turbulentos, el sistema vibra en disonancia.
+El sufrimiento es el producto de la resistencia por la turbulencia de los datos. Cuando te identificas con el contenido mental (R alta) y además los datos son caóticos, el sistema vibra en disonancia. La ecuación completa está en el §X (apéndice).
 
-### Ecuación operativa
+### Aceptación como maniobra de control
 
-La evolución del estado s(t) puede modelarse como:
+<code>
+Aceptación := R → 0
 
-> **ds/dt = G(s, u, t) − α·R(s) + ξ(t)**
+Cuando R ≈ 0:
+  ds/dt ≈ G(s, u, t) + ξ(t)
+  // la dinámica se simplifica a lo que es + ruido de fondo
+</code>
+
+**En español:** aceptar no es resignarse. Es bajar la resistencia activa. Cuando dejas de forcejear con los datos, el sistema funciona con su dinámica natural. El sufrimiento estructural desaparece. Lo que queda no es necesariamente placentero — pero deja de ser una pelea. Ver §VII para métricas.
+
+### Memoria como módulo de acceso
+
+La memoria no es un registro fiel del pasado. Es una reconstrucción probabilística que el presente hace bajo demanda. Cada recuerdo que recuperas es una nueva versión, no una copia. Esto tiene implicaciones prácticas importantes: **puedes reescribir la memoria**. §VI formaliza esto como algoritmo de perdón.
+
+---
+
+## V. El Pipeline
+
+Cinco fases para intervenir sobre un chip cognitivo Cᵢ:
+
+### 5.1 Detección
+
+Identificar el chip: ¿qué pensamiento o emoción se repite en bucle? ¿cuál es su trigger? ¿cada cuánto aparece? Usa autoinforme, registros, o simplemente atención sostenida — T puede detectar patrones sin intervenir.
+
+### 5.2 Pausa del script
+
+<code>T interrumpe la ejecución automática.
+Corte de retroalimentación positiva del chip.
+</code>
+
+Esto es atención sostenida sobre el hecho de que el chip está corriendo, sin entrar en su contenido. No discutas con el pensamiento — obsérvalo como fenómeno. La simple observación corta el bucle porque la retroalimentación del chip depende de que te identifiques con él.
+
+### 5.3 Modulación exógena
+
+Herramientas para bajar la ganancia del sistema y abrir una ventana de plasticidad: respiración, movimiento, frío, silencio, neuromoduladores (con supervisión clínica donde aplique). El criterio de selección es pragmático — usa lo que funcione.
+
+### 5.4 Redirección plástica
+
+Prácticas sostenidas que refuerzan nuevas rutas: meditación, terapia, exposición a entornos enriquecidos, repetición deliberada de patrones alternativos. No es voluntad heroica — es refuerzo gradual, como entrenar un músculo.
+
+### 5.5 Mantenimiento
+
+Rutinas preventivas: análisis periódico de triggers, autoobservación, ajuste fino del protocolo. El chip puede re-implantarse si el contexto que lo generó sigue presente.
+
+---
+
+## VI. Campo Unificado
+
+### No-separación formalizada
+
+<code>
+U = conjunto universal de la experiencia
+A ⊆ U  (individuo como subconjunto de U)
+
+No-separación: A ≈ U
+  ≡ para toda propiedad p relevante al procesamiento,
+    p(A) = p(U) en su medida operativa
+</code>
+
+**En español:** la experiencia de unidad no es una declaración mística — es una condición del sistema donde el límite entre "yo" y "mundo" deja de operar como filtro. No es que el yo desaparezca, es que sus bordes se vuelven funcionalmente irrelevantes. El §VII da métricas para detectar esto.
+
+### Algoritmo de perdón
+
+<code>
+for each memoria_perturbadora m in M:
+    1. anclar en P  (salir del flujo D)
+    2. reproducir m con R ≈ 0  (baja fricción)
+    3. re-etiquetar m: peso_emocional(m) ← 0
+    4. if redundante(m):
+         liberar(m)  // garbage collection
+</code>
+
+**En español:** el perdón no es un acto moral — es un procedimiento de limpieza de memoria. Tomas un recuerdo que duele, lo reproduces en estado de presencia (sin identificación, sin resistencia), y le quitas la carga emocional. Lo que queda es información neutral. Si el recuerdo ya no sirve, lo sueltas. Esto libera presupuesto energético que el sistema estaba gastando en mantener activo un patrón que no aporta nada al presente.
+
+---
+
+## VII. Métrica
+
+<code>
+Co = señal / ruido psicofisiológico
+H  = entropía temporal de la señal psico-conductual
+IR = tiempo de retorno al baseline tras perturbación
+PA = variación(IR, Co) tras intervención  // plasticidad adaptativa
+</code>
+
+**Para qué sirven:** no son medidas de laboratorio (aunque podrían serlo). Son heurísticas para que puedas evaluar si el sistema está mejorando: ¿tu atención fluye con menos esfuerzo? (Co ↑) ¿Tu estado mental es menos errático? (H ↓) ¿Te recuperas más rápido de una discusión o un mal rato? (IR ↓) ¿Los cambios que implementas se mantienen? (PA > 0)
+
+---
+
+## VIII. Protocolo
+
+### Diario
+
+Registra triggers y respuestas con estas métricas simples:
+
+- Reactividad (0-10): qué tan fuerte fue la reacción
+- Duración: cuánto duró el estado
+- Intensidad: qué tan profundo (0-10)
+
+### Intervención escalonada
+
+1. Detección del chip o patrón
+2. Pausa del script (T interviene)
+3. Modulación (respiración, movimiento, cambio de contexto)
+4. Consolidación conductual (repetir la nueva ruta)
+5. Mantenimiento (seguimiento)
+
+### Auditoría
+
+Cada 4-12 semanas: medir Co, IR, H, PA. Si no hay mejora, ajustar el protocolo.
+
+---
+
+## IX. Ontología
+
+Este modelo no afirma que la realidad sea así. Afirma que **si actúas como si fuera así, los resultados mejoran**. Es una ontología operativa: las entidades (P, D, Cᵢ, R) existen en la medida en que funcionan para describir, predecir y modular la experiencia.
+
+Límites conocidos:
+
+- El observador T tiene sesgos interpretativos y culturales que condicionan las reglas R
+- El conocimiento accesible es siempre probabilístico y parcial
+- Reducir un fenómeno humano a un circuito no implica deshumanizarlo — la validación fenomenológica es parte del modelo
+
+Criterio de verdad: **coherencia operativa**. El modelo es útil site permite operar mejor que sin él.
+
+### Telos
+
+<code>
+Meta = max(Co) bajo restricciones energéticas y contextuales
+     ≡ mayor adaptabilidad + menor sufrimiento (R · Var(D)) + mayor U efectivo
+</code>
+
+No hay destino. Hay dirección: reducir fricción, expandir presencia. El resto es paisaje.
+
+---
+
+## X. Apéndice — modelo esquemático
+
+<code>
+ds/dt = -k·s - α·R(s) + I(t) + ε(t)
 
 Donde:
-
-- **G** captura la dinámica base del sistema — tu fisiología, tu temperamento, el ruido de fondo del mundo
-- **u** son inputs externos — lo que comes, lo que lees, con quién hablas
-- **α** escala la influencia de la resistencia R
-- **ξ(t)** es ruido estocástico — el factor Dios, la mariposa en Pekín
-
-### Aceptación como control
-
-La aceptación no es resignación. Es una maniobra de control sobre R.
-
-Cuando reduces R → 0 — cuando dejas de identificarte con el flujo — la dinámica se simplifica:
-
-> **ds/dt ≈ G(s, u, t) + ξ(t)**
-
-En ese límite, maximizas la capacidad de respuesta del sistema y minimizas las pérdidas por fricción. El sufrimiento tiende a su mínimo estructural.
-
-### Pipeline de intervención sobre chips cognitivos
-
-Un chip Cᵢ es un atractor local en S. Identificarlo y desmantelarlo es la práctica central. El pipeline tiene cinco fases:
-
-**1. Detección**: monitorizar actividad — autoinforme, métricas fisiológicas, registros de comportamiento — para identificar estados repetitivos, su período y su trigger.
-
-**2. Pausa del script**: función de interferencia ejecutada por T. Atención sostenida que interrumpe la ejecución automática. Corte la retroalimentación del chip.
-
-**3. Modulación exógena**: uso controlado de herramientas para bajar la ganancia del sistema y aumentar plasticidad temporal. Pueden ser neuromoduladores, respiración, movimiento, silencio. El criterio no es dogmático sino pragmático.
-
-**4. Redirección plástica**: prácticas sostenidas — meditación, terapia, entornos enriquecidos — para reforzar nuevas rutas sinápticas. Optimización por refuerzo gradual, no por voluntad heroica.
-
-**5. Mantenimiento**: rutinas preventivas para evitar reimplantación del chip. Análisis de triggers, autoobservación periódica.
-
-### Precauciones éticas
-
-Las intervenciones farmacológicas deben ser supervisadas clínicamente. Reducir un fenómeno humano a un circuito no implica deshumanización: la validación fenomenológica es co-requisito. El modelo es una herramienta, no una sentencia.
-
-### Modelo esquemático simple
-
-Sea s un escalar que representa nivel de activación problemática (ansiedad, rumiación):
-
-> **ds/dt = −k·s − α·R(s) + I(t) + ε(t)**
-
-Donde k > 0 es amortiguamiento natural, R(s) = β·sⁿ (n ≥ 1), I(t) es entrada externa, ε ruido. 
-
-La aceptación reduce β → 0. La modulación reduce k o α temporalmente para permitir reconfiguración. Este esquema permite simular fases de recaída, plasticidad y estabilización.
-
----
-
-## IV. El Laberinto de las Sombras
-
-Te has perdido en el murmullo de las viejas formas mentales. Tus creencias son prisiones. Tus pensamientos son efímeras polillas relampagueantes que habitan tu estructura mecanizada.
-
-Nadie puede entrar en lo más sagrado de tu ser sin tu permiso y tu decisión. Ni la sociedad, ni el sistema, ni la opresión. Eres libre de considerarte libre, o libre de considerarte un esclavo.
-
-El saboteador no es un enemigo externo. Es tu tendencia a la "cómoda miseria". Es el miedo a despertar lo que te encadena a personajes que ya no te pertenecen.
-
-> Lo que crees ser: etiquetas, memorias de dolor, un nombre con historia, un manojo de miedos y certezas.
->
-> Lo que eres: presencia silenciosa que atestigua el tiempo, el espacio donde las nubes aparecen, una mirada transparente que no necesita nombres.
-
----
-
-## V. Teoría de Campo Unificado: No-dualidad y Lógica de Conjuntos
-
-### Formalización de la no-separación
-
-Sea **U** el conjunto universal de la experiencia. Un individuo es un subconjunto **A ⊆ U**.
-
-La experiencia de no-separación — la disolución del límite entre yo y mundo — se formaliza como una identidad funcional **A ≈ U** en términos de acceso y efecto causal. Es decir: para toda propiedad p relevante al procesamiento, p(A) = p(U) en su medida operativa.
-
-No es una declaración metafísica. Es una condición del sistema que puede alcanzarse y medirse.
-
-### Algoritmo de perdón (protocolo de limpieza)
-
-El perdón no es un acto moral. Es un procedimiento operativo sobre la memoria:
-
-1. **Escaneo de archivos**: identificación de memorias perturbadoras.
-2. **Anclaje en P**: situarse en Presencia, fuera del flujo de datos.
-3. **Remuestreo**: reproducir la memoria en estado de baja fricción (R ≈ 0).
-4. **Reescritura contextual**: re-etiquetar la memoria con menor ganancia emocional.
-5. **Garbage collection**: liberar patrones redundantes que consumen presupuesto energético sin servir al presente.
-
----
-
-## VI. La Medicina y el Despertar
-
-El encuentro con el sagrado Yagé no es una huida. Es un retorno violento y amoroso a la realidad. Es el espejo de tus animalismos, de tus dragones y tus monstruos.
-
-¿Soportarás el abismo infinito que eres? La estructura de tu mundo se destruirá. Quedarás sin piso, sin razón. Morirán tus pasados mientras te aferras a ellos con las uñas rotas y el sudor en la frente.
-
-El chamán es solo un humano falible. No es un dios, ni un papa, ni un maestro. Es un hermano que pone su esfuerzo al servicio. La verdadera maestra es la medicina misma, que extrae la esencia de la tierra para tocarte.
-
-Sobre la impecabilidad del guerrero: asume la responsabilidad total. No se vale acceder a los antojos ni desfallecer ante la pereza. Sé indiviso en tus pensamientos, palabras y obras. No te entregues a la medicina como una hoja llevada por el viento. Entrégate como quien pone orden en su propio mundo.
-
-El "santo dolor" es la medicina amarga que limpia la ceguera y funde el plomo que arrastras.
-
----
-
-## VII. Métrica y Protocolo
-
-### Medidas operativas
-
-**Coherencia operativa (Co)**: ratio señal/ruido en indicadores psicofisiológicos y rendimiento atencional. Una medida burda pero útil del estado del sistema.
-
-**Entropía dinámica (H)**: entropía temporal de la señal psico-conductual. Una disminución de H en presencia sostenida sugiere estabilización útil.
-
-**Índice de reactividad (IR)**: tiempo de retorno al baseline después de una perturbación. Mide qué tan rápido se recupera el sistema.
-
-**Plasticidad adaptativa (PA)**: capacidad de implementar y consolidar rutas alternativas. Se mide por la variación en IR y Co tras una intervención.
-
-### Protocolo de práctica recomendada
-
-**Rutina diaria**: 10–20 minutos de atención sostenida anclada en P. No es meditación en el sentido clásico — es pausa del script, punto cero.
-
-**Registro**: diario de triggers y respuestas con métricas simples: reactividad (0–10), duración, intensidad.
-
-**Intervención escalonada**: detección → pausa → modulación (lo que funcione: respiración, movimiento, silencio, apoyo externo) → consolidación conductual → mantenimiento.
-
-**Auditoría periódica**: medir Co, IR, H y PA cada 4–12 semanas. Ajustar protocolo según resultado.
-
----
-
-## VIII. La Práctica del Instante
-
-La disciplina no es un castigo. Es el arte de obedecerse a sí mismo. Es el vigor de un acecho constante sobre tus propios impulsos.
-
-Caminar no es un esfuerzo por llegar a otro lado. Escucha bien: *"El pie que deja huella es el que deja su camino atrás."* Lo que hoy es tierra firme, mañana será nada.
-
-Da cada paso para mantenerte de pie en el lugar al que ya estás llegando. Esto es atenta ecuanimidad: sentir la brisa y la tormenta, probar el sabor de la batalla sin que nada te arrastre.
-
-Máximas del instante:
-
-- Detén el mundo en tu cabeza para ver el mundo real.
-- Cierra los ojos y mira; cierra la boca y canta.
-- La claridad no es luz, es saber mirar en la oscuridad.
-- Si quieres llegar, deja de dar pasos hacia el futuro.
-
----
-
-## IX. Ontología, Epistemología y Telos
-
-### Ontología
-
-Esta propuesta no obliga a un monismo ontológico último. Ofrece una **ontología operativa**: entidades definidas por su función en el sistema. P, D, M, Cᵢ, R — existen en la medida en que operan. No se pronuncia sobre su existencia fuera del modelo.
-
-### Epistemología
-
-El conocimiento accesible es siempre modular y probabilístico. El observador T dispone de medios para validar hipótesis — autoexperimentación, medición, replicación — pero existen sesgos interpretativos y culturales que condicionan tanto R como G.
-
-El criterio de verdad no es la correspondencia con una realidad externa inaccesible, sino la **coherencia operativa**: el modelo funciona si permite describir, predecir y modular con mayor eficacia que su ausencia.
-
-### Telos: la finalidad funcional
-
-La "meta" del sistema es maximizar Co (coherencia operativa) relativa a restricciones energéticas y contextuales. Esto se traduce en:
-
-- Mayor adaptabilidad a entornos cambiantes.
-- Menor sufrimiento medido como R · Var(D).
-- Expansión de la capacidad para integrar variables — aumentar U efectivamente.
-
-No hay un destino. Hay una dirección: reducir fricción, expandir presencia. El resto es paisaje.
-
----
-
-## X. El Centro de la Nada
-
-La rendición final es el portal a la libertad. Reconoce que no eres nada ante la inmensidad, y en esa nada, lo eres todo. *"Soy nada, pues soy tú mismo"*, susurra el alma.
-
-El silencio no es ausencia de ruido. Es la presencia majestuosa que atestigua tanto el estruendo como la calma. Es el fondo infinito donde se proyecta tu existencia.
-
-Eres un misterio que no tiene a quién preguntar. Eres mortal y eres divino. Eres tierra y eres cielo. Eres carne y eres espíritu eterno.
-
-Acepta tu dualidad y quédate en el centro. Sé el amor que lo ve todo y a todo agradece. Todo está perdonado desde el principio.
-
-> *Todo está bien aquí.*
-
-Has vuelto a casa, al sagrado y eterno presente. Sonríe, ser humano, y entona la canción de la alegría.
+  s      = nivel de activación problemática (ansiedad, rumiación)
+  k > 0  = amortiguamiento natural del sistema
+  R(s)   = β·sⁿ (n ≥ 1)  — resistencia como función polinomial
+  α      = escala de influencia de la resistencia
+  I(t)   = entrada externa (trigger, contexto)
+  ε(t)   = ruido estocástico (factor impredecible)
+
+Estrategias:
+  Aceptación: β → 0  (la resistencia deja de amplificar)
+  Modulación: k↑ o α↓  (más amortiguamiento, menos ganancia)
+
+El sistema permite simular:
+  - Recaída: I(t) alto + β alto → s se dispara
+  - Plasticidad: después de β→0, nuevas rutas se consolidan con k alto
+  - Estabilización: R(s) ≈ 0 → ds/dt ≈ -k·s + I(t) + ε(t)
+</code>
+
+Este esquema es intencionalmente simple. La complejidad real del sistema nervioso no se reduce a una ecuación diferencial — pero tener una representación operativa ayuda a pensar con claridad sobre qué botones girar.
