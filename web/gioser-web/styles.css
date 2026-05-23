@@ -231,49 +231,27 @@ body.deck-active-tierra .deck { --deck-glow: rgba(212, 152, 115, 0.24); }
   inset: 0;
   pointer-events: none;
   z-index: 0;
+  transition: opacity 2s ease;
 }
 .deck-page[data-element="aire"] .page-ambience {
-  background:
-    radial-gradient(circle at 18% 22%, rgba(208, 219, 255, 0.20), transparent 38%),
-    radial-gradient(circle at 78% 68%, rgba(208, 219, 255, 0.14), transparent 40%),
-    radial-gradient(circle at 45% 90%, rgba(180, 200, 255, 0.10), transparent 45%);
-  animation: aire-drift 45s ease-in-out infinite alternate;
+  background: radial-gradient(circle at 50% 60%, rgba(208,219,255,0.18), transparent 70%);
+  animation: page-breathe 8s ease-in-out infinite alternate;
 }
 .deck-page[data-element="fuego"] .page-ambience {
-  background:
-    radial-gradient(circle at 50% 100%, rgba(245, 144, 86, 0.35), transparent 55%),
-    radial-gradient(circle at 25% 80%, rgba(255, 90, 40, 0.18), transparent 35%),
-    radial-gradient(circle at 80% 85%, rgba(255, 140, 60, 0.18), transparent 35%);
-  animation: fuego-flicker 12s ease-in-out infinite;
+  background: radial-gradient(circle at 50% 80%, rgba(245,144,86,0.22), transparent 70%);
+  animation: page-breathe 6s ease-in-out infinite alternate;
 }
 .deck-page[data-element="agua"] .page-ambience {
-  background:
-    radial-gradient(ellipse at 50% 95%, rgba(60, 160, 230, 0.30), transparent 60%),
-    radial-gradient(ellipse at 20% 70%, rgba(108, 208, 243, 0.15), transparent 50%),
-    radial-gradient(ellipse at 80% 75%, rgba(108, 208, 243, 0.12), transparent 50%);
-  animation: agua-tide 30s ease-in-out infinite alternate;
+  background: radial-gradient(circle at 50% 80%, rgba(108,208,243,0.18), transparent 70%);
+  animation: page-breathe 10s ease-in-out infinite alternate;
 }
 .deck-page[data-element="tierra"] .page-ambience {
-  background:
-    radial-gradient(ellipse at 50% 100%, rgba(120, 80, 40, 0.40), transparent 60%),
-    radial-gradient(ellipse at 22% 88%, rgba(180, 130, 80, 0.20), transparent 45%),
-    radial-gradient(ellipse at 78% 88%, rgba(150, 100, 60, 0.22), transparent 45%);
+  background: radial-gradient(circle at 50% 85%, rgba(140,100,60,0.22), transparent 70%);
+  animation: page-breathe 7s ease-in-out infinite alternate;
 }
-/* Animaciones sutiles — solo opacidad, sin desplazamiento visible.
-   El movimiento (transform) del fondo causaba un "respiro" molesto
-   al abrir el deck. */
-@keyframes aire-drift {
-  from { opacity: 0.60; }
-  to   { opacity: 0.90; }
-}
-@keyframes fuego-flicker {
-  0%, 100% { opacity: 0.65; }
-  35%      { opacity: 0.90; }
-  60%      { opacity: 0.75; }
-}
-@keyframes agua-tide {
-  from { opacity: 0.55; }
-  to   { opacity: 0.85; }
+@keyframes page-breathe {
+  from { opacity: 0.35; }
+  to   { opacity: 0.80; }
 }
 
 /* Head + controls */

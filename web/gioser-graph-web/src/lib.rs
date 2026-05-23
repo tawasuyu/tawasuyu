@@ -1,11 +1,11 @@
-//! `gioser-graph-web` — widget de grafo semántico SVG inline.
+//! `gioser-graph-web` — grafo semántico SVG inline.
 //!
-//! Layout grid: 3 columnas, filas según la cantidad de nodos.
-//! Los nodos son rectángulos redondeados con texto + subtexto (camino).
-//! Aristas se dibujan entre todos los pares con líneas semitransparentes:
-//! mientras mayor el weight, más opaca y brillante la línea.
-//! Animación CSS de respiración suave en el SVG.
+//! Layout grid: 3 columnas, filas según cantidad de nodos.
+//! Nodos: rectángulos redondeados 170×44px con texto + subtexto (camino).
+//! Aristas: opacidad/brillo según weight (más peso = más blanca y opaca).
+//! Respiración CSS suave en el SVG (opacity oscila perpetua).
 //! Hover: glow + opacidad.
+//! Las aristas conectan por ID (UUID), no por doc_id.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -43,8 +43,6 @@ struct NodeData {
     name: String,
     camino: String,
     doc_id: Option<String>,
-    chunk: Option<u32>,
-    tags: Option<Vec<String>>,
     #[allow(dead_code)]
     preview: Option<String>,
 }
@@ -76,8 +74,8 @@ type NavCallback = Rc<RefCell<Option<Box<dyn FnMut(String)>>>>;
 
 const CANVAS_W: f64 = 800.0;
 const CANVAS_H: f64 = 420.0;
-const NODE_W: f64 = 170.0;   // más grandes
-const NODE_H: f64 = 44.0;    // más grandes
+const NODE_W: f64 = 170.0;
+const NODE_H: f64 = 44.0;
 const COLS: usize = 3;
 
 const CAMINO_COLORS: &[(&str, &str)] = &[
@@ -92,26 +90,6 @@ fn camino_color(camino: &str) -> &str {
         if *k == camino { return v; }
     }
     "#888888"
-}
-
-fn weight_alpha(w: Option<f64>) -> f64 {
-    // weight 0.5 → 0.40, weight 1.0 → 0.85
-    match w {
-        Some(v) => 0.40 + (v - 0.5).max(0.0) * 0.9,
-        None => 0.35,
-    }
-    .clamp(0.15, 0.95)
-}
-
-fn weight_stroke_color(w: Option<f64>, base: &str) -> String {
-    let alpha = weight_alpha(w);
-    // Extraer color base, añadir alpha
-    // Asumimos formato #rrggbb
-    if base.len() >= 7 && alpha < 1.0 {
-        format!("{}", base) // se sobreescribe con stroke-opacity
-    } else {
-        base.to_string()
-    }
 }
 
 pub struct GraphWidget {
@@ -147,7 +125,6 @@ impl GraphWidget {
     pub async fn load(&mut self) -> Result<(), JsValue> {
         let url = format!("{}/graph?limit=500", self.api_url);
         let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window"))?;
-
         let resp_value = JsFuture::from(window.fetch_with_str(&url)).await?;
         let resp: Response = resp_value.dyn_into()?;
         if !resp.ok() {
@@ -159,17 +136,11 @@ impl GraphWidget {
         let graph: GraphResponse =
             serde_json::from_str(&body).map_err(|e| JsValue::from_str(&format!("JSON: {e}")))?;
 
-        let nodes: Vec<NodeData> = graph
-            .nodes
-            .into_iter()
-            .map(|n| n.data)
-            .filter(|n| n.doc_id.is_some())
-            .collect();
+        let nodes: Vec<NodeData> = graph.nodes.into_iter().map(|n| n.data).collect();
         let edges: Vec<EdgeData> = graph.edges.into_iter().map(|e| e.data).collect();
 
         self.nodes = nodes;
         self.edges = edges;
-
         self.render();
         Ok(())
     }
@@ -192,7 +163,6 @@ impl GraphWidget {
             .unwrap();
         svg.set_attribute("viewBox", &format!("0 0 {} {}", CANVAS_W as u32, CANVAS_H as u32)).ok();
         svg.set_attribute("width", "100%").ok();
-        svg.set_attribute("height", &format!("{}px", CANVAS_H as u32)).ok();
         svg.set_attribute("preserveAspectRatio", "xMidYMid meet").ok();
         svg.style().set_property("display", "block").ok();
         svg.style().set_property("margin", "1.5rem auto 0").ok();
@@ -202,33 +172,20 @@ impl GraphWidget {
         svg.style().set_property("border-radius", "12px").ok();
         svg.style().set_property("border", "1px solid rgba(216,168,93,0.15)").ok();
 
-        // Estilo para animación de respiración en el SVG
-        // Se añade un <style> dentro del SVG
+        // Estilo inline en SVG: respiración y transiciones
         let style_el = self.document.create_element_ns(Some(ns), "style").unwrap();
         style_el.set_text_content(Some(
             "@keyframes graph-breathe {\
               0%, 100% { opacity: 1; }\
-              50% { opacity: 0.94; }\
+              50% { opacity: 0.92; }\
             }\
-            .gb-svg {\
-              animation: graph-breathe 4.2s ease-in-out infinite;\
-            }\
-            .gb-node {\
-              transition: filter 250ms ease, opacity 200ms ease;\
-            }\
-            .gb-node:hover {\
-              filter: drop-shadow(0 0 14px rgba(255,255,255,0.2));\
-            }\
-            .gb-line {\
-              transition: opacity 300ms ease;\
-            }\
-            .gb-line:hover {\
-              opacity: 0.9 !important;\
-            }",
+            .gb-svg { animation: graph-breathe 5s ease-in-out infinite; }\
+            .gb-node { transition: filter 250ms ease, opacity 200ms ease; }\
+            .gb-node:hover { filter: drop-shadow(0 0 14px rgba(255,255,255,0.2)); }\
+            .gb-line { transition: opacity 400ms ease; }",
         ));
         svg.append_child(&style_el).ok();
 
-        // Grupo con animación de respiración
         let breathe_group: web_sys::SvgElement = self
             .document
             .create_element_ns(Some(ns), "g")
@@ -237,20 +194,18 @@ impl GraphWidget {
             .unwrap();
         breathe_group.set_attribute("class", "gb-svg").ok();
 
-        // Mapa: doc_id → (x, y)
+        // Mapa: node.id → (x, y)  — usamos UUID, no doc_id
         let pos_map: std::collections::HashMap<&str, (f64, f64)> = positions
             .iter()
             .map(|(id, p)| (id.as_str(), *p))
             .collect();
 
-        // Calcular max weight para normalizar
         let max_w = self.edges.iter()
             .filter_map(|e| e.weight)
             .fold(0.0_f64, f64::max)
             .max(0.5);
 
         // ── Aristas ──
-        // Agrupar por par no dirigido (source, target) para no duplicar
         let mut drawn = std::collections::HashSet::new();
         for edge in &self.edges {
             let key = if edge.source < edge.target {
@@ -260,40 +215,32 @@ impl GraphWidget {
             };
             if !drawn.insert(key) { continue; }
 
-            let src_pos = pos_map.get(edge.source.as_str());
-            let tgt_pos = pos_map.get(edge.target.as_str());
-            if let (Some((x1, y1)), Some((x2, y2))) = (src_pos, tgt_pos) {
-                let line: SvgLineElement = self
-                    .document
-                    .create_element_ns(Some(ns), "line")
-                    .unwrap()
-                    .dyn_into()
-                    .unwrap();
+            let Some((x1, y1)) = pos_map.get(edge.source.as_str()) else { continue; };
+            let Some((x2, y2)) = pos_map.get(edge.target.as_str()) else { continue; };
 
-                // Calcular opacidad basada en weight
-                let w = edge.weight.unwrap_or(0.7);
-                let norm_w = (w / max_w).clamp(0.0, 1.0);
-                let alpha = 0.15 + norm_w * 0.70; // 0.15 a 0.85
+            let w = edge.weight.unwrap_or(0.7);
+            let norm_w = (w / max_w).clamp(0.0, 1.0);
+            let alpha = 0.15 + norm_w * 0.70;
+            let sw = 1.0 + norm_w * 4.0;
+            let r = (255.0 - (1.0 - norm_w) * 80.0) as u32;
+            let g = (255.0 - (1.0 - norm_w) * 60.0) as u32;
+            let b = (255.0 - (1.0 - norm_w) * 40.0) as u32;
 
-                // Calcular grosor: 1 a 5 según weight normalizado
-                let sw = 1.0 + norm_w * 4.0;
-
-                // Color: más brillante = más blanco
-                let r = (255.0 - (1.0 - norm_w) * 80.0) as u32;
-                let g = (255.0 - (1.0 - norm_w) * 60.0) as u32;
-                let b = (255.0 - (1.0 - norm_w) * 40.0) as u32;
-
-                line.set_attribute("x1", &format!("{:.1}", x1)).ok();
-                line.set_attribute("y1", &format!("{:.1}", y1)).ok();
-                line.set_attribute("x2", &format!("{:.1}", x2)).ok();
-                line.set_attribute("y2", &format!("{:.1}", y2)).ok();
-                line.set_attribute("stroke", &format!("#{:02x}{:02x}{:02x}", r, g, b)).ok();
-                line.set_attribute("stroke-width", &format!("{:.1}", sw)).ok();
-                line.set_attribute("stroke-opacity", &format!("{:.2}", alpha)).ok();
-                line.set_attribute("class", "gb-line").ok();
-
-                breathe_group.append_child(&line).ok();
-            }
+            let line: SvgLineElement = self
+                .document
+                .create_element_ns(Some(ns), "line")
+                .unwrap()
+                .dyn_into()
+                .unwrap();
+            line.set_attribute("x1", &format!("{:.1}", x1)).ok();
+            line.set_attribute("y1", &format!("{:.1}", y1)).ok();
+            line.set_attribute("x2", &format!("{:.1}", x2)).ok();
+            line.set_attribute("y2", &format!("{:.1}", y2)).ok();
+            line.set_attribute("stroke", &format!("#{:02x}{:02x}{:02x}", r, g, b)).ok();
+            line.set_attribute("stroke-width", &format!("{:.1}", sw)).ok();
+            line.set_attribute("stroke-opacity", &format!("{:.2}", alpha)).ok();
+            line.set_attribute("class", "gb-line").ok();
+            breathe_group.append_child(&line).ok();
         }
 
         // ── Nodos ──
@@ -321,7 +268,6 @@ impl GraphWidget {
             let rx = cx - NODE_W / 2.0;
             let ry = cy - NODE_H / 2.0;
 
-            // Sombra suave de fondo (círculo/glow detrás del rect)
             let glow: SvgCircleElement = self
                 .document
                 .create_element_ns(Some(ns), "circle")
@@ -330,9 +276,9 @@ impl GraphWidget {
                 .unwrap();
             glow.set_attribute("cx", &format!("{:.1}", cx)).ok();
             glow.set_attribute("cy", &format!("{:.1}", cy)).ok();
-            glow.set_attribute("r", "30").ok();
+            glow.set_attribute("r", "32").ok();
             glow.set_attribute("fill", &color).ok();
-            glow.set_attribute("fill-opacity", "0.06").ok();
+            glow.set_attribute("fill-opacity", "0.05").ok();
             g.append_child(&glow).ok();
 
             let rect: SvgRectElement = self
@@ -390,15 +336,14 @@ impl GraphWidget {
             g.append_child(&text).ok();
             g.append_child(&sub).ok();
 
-            // Hover glow
+            // Hover
             let rect_clone = rect.clone();
             let color_c = color.clone();
             let glow_clone = glow.clone();
             let enter = Closure::<dyn FnMut(MouseEvent)>::new(move |_| {
                 rect_clone.set_attribute("fill-opacity", "0.55").ok();
                 rect_clone.set_attribute("stroke-opacity", "1").ok();
-                rect_clone
-                    .style()
+                rect_clone.style()
                     .set_property("filter", &format!("drop-shadow(0 0 12px {})", color_c))
                     .ok();
                 glow_clone.set_attribute("fill-opacity", "0.20").ok();
@@ -412,7 +357,7 @@ impl GraphWidget {
                 rect_clone2.set_attribute("fill-opacity", "0.28").ok();
                 rect_clone2.set_attribute("stroke-opacity", "0.7").ok();
                 rect_clone2.style().set_property("filter", "none").ok();
-                glow_clone2.set_attribute("fill-opacity", "0.06").ok();
+                glow_clone2.set_attribute("fill-opacity", "0.05").ok();
             });
             g.add_event_listener_with_callback("mouseleave", leave.as_ref().unchecked_ref()).ok();
             leave.forget();
@@ -434,41 +379,32 @@ impl GraphWidget {
     }
 }
 
-// ─── Layout grid: 3 columnas, filas según número de nodos ──────────
+// ─── Layout grid: 3 columnas ─────────────────────────────────────
 
 fn grid_layout(nodes: &[NodeData], w: f64, h: f64) -> Vec<(String, (f64, f64))> {
     let n = nodes.len();
     if n == 0 { return vec![]; }
 
-    let rows = (n + COLS - 1) / COLS;  // ceiling div
-    let actual_rows = rows.max(3); // mínimo 3 filas visuales
+    let rows = (n + COLS - 1) / COLS;
+    let actual_rows = rows.max(3);
     let margin_x = NODE_W / 2.0 + 20.0;
-    let margin_y = NODE_H / 2.0 + 16.0;
-
+    let margin_y = NODE_H / 2.0 + 20.0;
     let usable_w = w - margin_x * 2.0;
     let usable_h = h - margin_y * 2.0;
     let col_gap = usable_w / (COLS as f64);
     let row_gap = usable_h / (actual_rows as f64);
 
-    let mut positions = Vec::with_capacity(n);
+    let mut out = Vec::with_capacity(n);
     for (i, node) in nodes.iter().enumerate() {
         let col = i % COLS;
         let row = i / COLS;
-        // Centrar si en última fila hay menos de 3
         let offset_x = if row == rows - 1 && n % COLS != 0 {
-            // centrar fila
             let remaining = n - row * COLS;
             (usable_w - remaining as f64 * col_gap) / 2.0
-        } else {
-            0.0
-        };
+        } else { 0.0 };
         let x = margin_x + offset_x + col as f64 * col_gap + col_gap / 2.0;
         let y = margin_y + row as f64 * row_gap + row_gap / 2.0;
-        // Desplazar cada fila un tercio para dar sensación de expansión vertical
-        let y_adj = y; // ya está bien con el grid
-
-        positions.push((node.doc_id.clone().unwrap_or_default(), (x, y_adj)));
+        out.push((node.id.clone(), (x, y)));
     }
-
-    positions
+    out
 }
