@@ -306,12 +306,9 @@ impl AppState {
             wrapper.style().set_property("border-top", "1px solid rgba(255,255,255,0.06)").ok();
             wrapper.style().set_property("min-height", "220px").ok();
             content_clone.append_child(&wrapper).ok();
-            // Disparar el script de Cytoscape si ya está en la página
-            if let Some(win) = web_sys::window() {
-                let _ = win.dispatch_event(
-                    &web_sys::Event::new("gioser-graph-ready").unwrap()
-                );
-            }
+            // El script cytoscape-graph.js usa MutationObserver
+            // para detectar <gioser-graph> dinámicos. No hace falta
+            // disparar nada acá.
         });
     }
 
