@@ -65,6 +65,7 @@ mod wasm;
 pub(crate) use sync::CeldaSync;
 
 use alloc::vec::Vec;
+use core::fmt::Write;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use async_system::executor::Executor;
@@ -91,6 +92,13 @@ pub(crate) fn detener() -> ! {
     loop {
         x86_64::instructions::hlt();
     }
+}
+
+/// Deja una traza por el puerto serie (COM1) — la enruta QEMU a la terminal
+/// donde se ejecuto `cargo run`. Diagnostico barato del arranque: cada hito del
+/// `kernel_main` deja una linea, asi una caida muestra HASTA DONDE llego.
+fn traza(rotulo: &str) {
+    let _ = writeln!(baliza::Serie, "boot :: {rotulo}");
 }
 
 /// FASE 10 :: el molde de una aplicacion para los lanzamientos EN VIVO. Guarda
@@ -391,6 +399,7 @@ fn informar_almacen() {
 // =============================================================================
 
 fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
+    traza("kernel_main entrado");
     // --- 1. Recuperar el framebuffer GOP que el firmware nos confio. ---
     let framebuffer = match boot_info.framebuffer.as_mut() {
         Some(fb) => fb,
@@ -399,11 +408,18 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let info: FrameBufferInfo = framebuffer.info();
     let formato: PixelFormat = info.pixel_format;
     let pantalla = Pantalla::adoptar(framebuffer, info);
+    traza("framebuffer adoptado");
 
     // Datos para la sonda de disco (Fase 6.1b): el offset al que el cargador
     // mapeo la memoria fisica y la mayor region de RAM libre para el DMA.
     let offset_fisico = boot_info.physical_memory_offset.into_option();
     let region_dma = mayor_region_usable(&boot_info.memory_regions);
+    let _ = writeln!(
+        baliza::Serie,
+        "boot :: physical_memory_offset={:#x?} region_dma={:#x?}",
+        offset_fisico,
+        region_dma,
+    );
 
     // --- 2. Encender la baliza: la red de seguridad visual va primero. ---
     BALIZA_PANICO.encender(
@@ -411,20 +427,24 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         codificar(formato, Color::ALERTA),
         codificar(formato, Color::OOM),
     );
+    traza("baliza encendida");
 
     // --- 3. Cimientos de fallos e interrupciones (Fases 2.0 y 2.1). ---
     gdt::init();
     interrupts::init();
     pic::init();
+    traza("gdt + idt + pic");
 
     // --- 4. FASE 3 :: fundar el heap. A partir de aqui, `alloc` esta vivo. ---
     memory::init();
+    traza("heap fundado");
 
     // --- 5. Con el heap activo, fundar lo que depende de el: el canal de
     //        scancodes, el reloj de fotogramas y la tipografia vectorial. ---
     async_system::teclado::init();
     async_system::reloj::init();
     texto::init();
+    traza("teclado + reloj + texto");
 
     // --- 6. Construir el lienzo y la consola; pintar el rotulo inicial,
     //        ya rasterizado por fontdue, y publicar la consola globalmente. ---
@@ -441,6 +461,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     consola.escribir("renaser :: fase 6.2 -- E/S de disco asincrona por interrupcion\n");
     consola.presentar();
     CONSOLA.call_once(|| Mutex::new(consola));
+    traza("consola publicada");
 
     // --- 6.5. FASE 6.1c :: fundar el subsistema de disco y, sobre el, el grafo
     //          de objetos: enumerar el bus PCI, montar el transporte virtio-blk,
@@ -448,8 +469,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     //          contenido. El kernel adquiere, por fin, una memoria que perdura. ---
     match (offset_fisico, region_dma) {
         (Some(offset), Some((inicio, fin))) => {
+            traza("disco :: init");
             drivers::disco::init(offset, inicio, fin);
+            traza("almacen :: init");
             informar_almacen();
+            traza("almacen :: listo");
         }
         _ => {
             if let Some(consola) = CONSOLA.get() {
@@ -457,6 +481,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                 consola.escribir("virtio-blk :: omitido -- memoria fisica sin mapear\n");
                 consola.presentar();
             }
+            traza("disco :: OMITIDO (sin offset/region)");
         }
     }
 
@@ -465,6 +490,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     //          desenmascara su IRQ12. Desde aqui hay un puntero en pantalla,
     //          y los clics pueden alcanzar al compositor.
     drivers::raton::init(ancho_lienzo, alto_lienzo);
+    traza("raton :: listo");
 
     // --- 7. FASE 7 :: levantar el reactor y poblar el userspace DESDE EL
     //        GRAFO. El kernel ya no empotra los modulos WASM: lee el
@@ -478,11 +504,14 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     //        compas de los fotogramas y la IRQ del teclado difundira cada
     //        scancode a los canales que las apps consultan. ---
     let mut ejecutor = Executor::nuevo();
+    traza("ejecutor :: creado");
     cargar_userspace(&mut ejecutor, ancho_lienzo, alto_lienzo);
+    traza("userspace :: cargado");
     // FASE 6.2 :: una tarea mas del reactor — no una app WASM— que sondea el
     // disco de forma ASINCRONA: la demostracion de que la IRQ del disco
     // conduce la E/S sin detener a las aplicaciones visuales.
     ejecutor.spawn(tarea_sonda_disco());
+    traza("ejecutor :: arrancando reactor");
     x86_64::instructions::interrupts::enable();
     ejecutor.run();
 }

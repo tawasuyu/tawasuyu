@@ -43,8 +43,10 @@ fn serie_escribir(byte: u8) {
     }
 }
 
-/// Sumidero de impresion al puerto serie — formatea sin tocar el heap.
-struct Serie;
+/// Sumidero de impresion al puerto serie — formatea sin tocar el heap. Publico
+/// para que cualquier modulo del kernel pueda dejar trazas en COM1 con un
+/// simple `writeln!(crate::baliza::Serie, "...", ...)`.
+pub(crate) struct Serie;
 
 impl Write for Serie {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {

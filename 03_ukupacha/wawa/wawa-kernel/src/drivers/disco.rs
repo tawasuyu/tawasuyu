@@ -131,10 +131,23 @@ static ASIGNADOR: Once<Mutex<AsignadorMarcos>> = Once::new();
 /// el asignador de marcos sobre la region de RAM libre que el cargador reporto.
 /// Una sola vez, antes de montar el disco.
 pub fn init(offset_fisico: u64, region_inicio: u64, region_fin: u64) {
+    use core::fmt::Write;
     OFFSET_FISICO.store(offset_fisico, Ordering::Relaxed);
-    let base = alinear_arriba(region_inicio, PAGINA);
+    // Saltar SIEMPRE la primera pagina fisica: algunos cargadores la dejan sin
+    // mapear como proteccion contra punteros NULL — un marco DMA ahi seria una
+    // bomba en cuanto el driver lo desreferenciase via el mapeo alto.
+    let base = alinear_arriba(region_inicio.max(PAGINA), PAGINA);
     let disponibles = region_fin.saturating_sub(base) / PAGINA;
     let total = (disponibles as usize).min(MAX_MARCOS);
+    let _ = writeln!(
+        crate::baliza::Serie,
+        "disco :: init offset={:#x} region=[{:#x}, {:#x}) base={:#x} marcos={}",
+        offset_fisico,
+        region_inicio,
+        region_fin,
+        base,
+        total,
+    );
     ASIGNADOR.call_once(|| {
         Mutex::new(AsignadorMarcos {
             base,
