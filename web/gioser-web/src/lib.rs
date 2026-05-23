@@ -353,7 +353,9 @@ impl AppState {
                 if let Some(tip) = document_clone.query_selector(
                     &format!(".tip[data-md][id='tip-{}']", el)
                 ).ok().flatten() {
-                    let _ = tip.dyn_into::<HtmlElement>().map(|e| e.click());
+                    // Clonar referencia antes de dyn_into (consume)
+                    let tip_html: HtmlElement = tip.clone().dyn_into().unwrap();
+                    tip_html.click();
                 }
             });
             let mut graph = GraphWidget::new(
