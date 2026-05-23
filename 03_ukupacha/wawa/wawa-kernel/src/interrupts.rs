@@ -26,6 +26,9 @@ static IDT: CeldaSync<InterruptDescriptorTable> =
 /// legitima del disco vive en el vector 0 (reservado a las excepciones).
 static VECTOR_DISCO: AtomicU8 = AtomicU8::new(0);
 
+/// Vector de la IDT asignado a la IRQ de la red (Fase 18). Mismo patron.
+static VECTOR_RED: AtomicU8 = AtomicU8::new(0);
+
 /// Construye y activa la Interrupt Descriptor Table.
 ///
 /// Debe invocarse una sola vez, durante el arranque, DESPUES de [`gdt::init`].
@@ -76,6 +79,17 @@ pub fn registrar_irq_disco(irq: u8) {
     // interrupcion: modificar esta entrada en memoria surte efecto de inmediato.
     let idt: &'static mut InterruptDescriptorTable = unsafe { &mut *IDT.puntero() };
     idt[vector].set_handler_fn(irq_disco);
+}
+
+/// Registra el manejador de la IRQ de la red virtio-net en la IDT (Fase 18).
+/// Gemelo de [`registrar_irq_disco`]: las mismas condiciones de arranque
+/// secuencial garantizan la mutacion segura.
+pub fn registrar_irq_red(irq: u8) {
+    let vector = pic::vector_irq(irq);
+    VECTOR_RED.store(vector, Ordering::SeqCst);
+    // SEGURIDAD: ver `registrar_irq_disco`.
+    let idt: &'static mut InterruptDescriptorTable = unsafe { &mut *IDT.puntero() };
+    idt[vector].set_handler_fn(irq_red);
 }
 
 // =============================================================================
@@ -158,4 +172,12 @@ extern "x86-interrupt" fn irq_disco(_marco: InterruptStackFrame) {
     // El EOI se cierra DESPUES de reconocer al dispositivo: una IRQ legada de
     // PCI es de nivel — anunciar el fin sin haber bajado la linea la reavivaria.
     pic::fin_de_interrupcion(VECTOR_DISCO.load(Ordering::SeqCst));
+}
+
+/// IRQ de la red — virtio-net (Fase 18). Llego un paquete (o un envio termino):
+/// acknowledge en el dispositivo —que baja la linea— y EOI al PIC. Las tareas
+/// cooperativas drenan despues la cola RX y consumen los paquetes.
+extern "x86-interrupt" fn irq_red(_marco: InterruptStackFrame) {
+    crate::drivers::red::atender_irq();
+    pic::fin_de_interrupcion(VECTOR_RED.load(Ordering::SeqCst));
 }

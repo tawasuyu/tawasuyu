@@ -174,6 +174,54 @@ async fn tarea_compositor() {
     }
 }
 
+/// FASE 18 — la prueba viva del enlace de red. Envia un ARP request al
+/// gateway de QEMU (10.0.2.2) y registra por COM1 cada paquete que llegue de
+/// vuelta. El primer "hola" de renaser hacia el exterior.
+async fn tarea_red(mac: drivers::red::Mac) {
+    // Dejar un par de fotogramas para que la cola RX se estabilice.
+    for _ in 0..10 {
+        async_system::reloj::EsperaFrame::nueva().await;
+    }
+    // Componer y enviar el ARP request: «¿quien tiene 10.0.2.2?».
+    let frame = drivers::red::componer_arp_request(
+        mac,
+        drivers::red::IP_RENASER,
+        drivers::red::IP_GATEWAY,
+    );
+    match drivers::red::enviar(&frame) {
+        Ok(()) => {
+            let _ = writeln!(
+                baliza::Serie,
+                "red :: ARP REQUEST enviado :: ¿quien tiene 10.0.2.2?"
+            );
+        }
+        Err(motivo) => {
+            let _ = writeln!(baliza::Serie, "red :: envio fallido :: {motivo}");
+        }
+    }
+    // Loop perpetuo: drenar la cola RX y registrar cada paquete en COM1.
+    loop {
+        async_system::reloj::EsperaFrame::nueva().await;
+        drivers::red::drenar_rx(|payload| {
+            if payload.len() < 14 {
+                return;
+            }
+            let etype = u16::from_be_bytes([payload[12], payload[13]]);
+            let src = &payload[6..12];
+            let dst = &payload[0..6];
+            let _ = writeln!(
+                baliza::Serie,
+                "red :: RX {} bytes :: dst={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} \
+                 src={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} type={:#06x}",
+                payload.len(),
+                dst[0], dst[1], dst[2], dst[3], dst[4], dst[5],
+                src[0], src[1], src[2], src[3], src[4], src[5],
+                etype,
+            );
+        });
+    }
+}
+
 /// FASE 6.2 — la prueba viva de la E/S asincrona. Esta tarea del reactor lee el
 /// sector 0 del disco SIN bloquear: cede la CPU mientras el disco trabaja —las
 /// apps siguen pintando entre tanto— y la IRQ del disco la reanuda cuando el
@@ -511,6 +559,25 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     drivers::raton::init(ancho_lienzo, alto_lienzo);
     traza("raton :: listo");
 
+    // --- 6.7. FASE 18 :: montar la tarjeta virtio-net. Si el firmware no
+    //          enruta una linea de IRQ util o no hay dispositivo, el resto
+    //          del arranque sigue — la red NO es critica.
+    let mac_red = drivers::red::montar();
+    match mac_red {
+        Ok(mac) => {
+            let _ = writeln!(
+                baliza::Serie,
+                "red :: virtio-net :: MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} :: IRQ {:?}",
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+                drivers::red::irq(),
+            );
+        }
+        Err(motivo) => {
+            let _ = writeln!(baliza::Serie, "red :: virtio-net :: {motivo}");
+        }
+    }
+    traza("red :: listo");
+
     // --- 7. FASE 7 :: levantar el reactor y poblar el userspace DESDE EL
     //        GRAFO. El kernel ya no empotra los modulos WASM: lee el
     //        Manifiesto de Genesis que `boot` sembro en la imagen de disco e
@@ -530,6 +597,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // disco de forma ASINCRONA: la demostracion de que la IRQ del disco
     // conduce la E/S sin detener a las aplicaciones visuales.
     ejecutor.spawn(tarea_sonda_disco());
+    // FASE 18 :: si la tarjeta de red se monto, una tarea le envia un ARP
+    // request al gateway y registra por COM1 los paquetes entrantes.
+    if let Ok(mac) = mac_red {
+        ejecutor.spawn(tarea_red(mac));
+    }
     // FASE 15 :: la voz del sistema da los buenos dias con un acorde de Do
     // mayor. La tarea del compositor lo hara sonar nota a nota una vez que
     // el reactor arranque y las interrupciones empiecen a llegar.

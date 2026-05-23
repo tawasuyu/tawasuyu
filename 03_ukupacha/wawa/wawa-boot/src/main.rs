@@ -327,7 +327,13 @@ fn lanzar_qemu(imagen: &Path, ovmf: &str) -> Result<(), String> {
         .arg("--no-reboot")
         // El disco de objetos, como dispositivo virtio-blk sobre el bus PCI.
         .arg("-drive").arg(format!("format=raw,file={NOMBRE_DISCO},if=none,id=drv0"))
-        .arg("-device").arg("virtio-blk-pci,drive=drv0");
+        .arg("-device").arg("virtio-blk-pci,drive=drv0")
+        // FASE 18 :: la tarjeta de red — `user mode networking` de QEMU, un
+        // NAT virtual hacia el host. Sin opciones extra: gateway en 10.0.2.2,
+        // DHCP/DNS en 10.0.2.3, el invitado en 10.0.2.15. El kernel envia un
+        // ARP request al gateway en cuanto arranca como prueba de vida.
+        .arg("-netdev").arg("user,id=net0")
+        .arg("-device").arg("virtio-net-pci,netdev=net0");
 
     // Cualquier argumento extra tras `--` se reenvia a QEMU intacto.
     // Ejemplo: `cargo run -p boot -- -display none -d int`.
