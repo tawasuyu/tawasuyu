@@ -84,6 +84,15 @@ wasmi = { version = "1.0", default-features = false, features = ["hash-collectio
 # -----------------------------------------------------------------------------
 [profile.dev]
 panic = "abort"
+# En bare-metal, las verificaciones UB de la stdlib —el `precondition_check`
+# de `unchecked_mul`, p.ej.— inyectan un panico cuyo propio camino de
+# propagacion termina escribiendo en regiones que el cargador no mapeo: un
+# colapso DENTRO de la red de seguridad del propio colapso, imposible de
+# diagnosticar. Desactivar las aserciones de depuracion y las comprobaciones
+# de overflow las elimina del binario sin cambiar la semantica del codigo
+# correcto. Es practica habitual de los kernels y el de renaser no es excepcion.
+debug-assertions = false
+overflow-checks = false
 
 [profile.release]
 panic = "abort"

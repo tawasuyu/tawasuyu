@@ -23,6 +23,28 @@ test = false
 bench = false
 doctest = false
 
+# -----------------------------------------------------------------------------
+#  Perfiles. El kernel esta EXCLUIDO del workspace; los `[profile]` del raiz
+#  no le alcanzan, asi que se declaran aqui. En bare-metal, las verificaciones
+#  UB de la stdlib —`unchecked_mul::precondition_check`, etc.— inyectan un
+#  panico cuyo propio camino de propagacion suele escribir en regiones que el
+#  cargador no mapeo: un colapso DENTRO de la red de seguridad del colapso,
+#  imposible de diagnosticar. Desactivar `debug-assertions` y `overflow-checks`
+#  las saca del binario sin cambiar la semantica del codigo correcto.
+# -----------------------------------------------------------------------------
+[profile.dev]
+panic = "abort"
+debug-assertions = false
+overflow-checks = false
+
+[profile.release]
+panic = "abort"
+debug-assertions = false
+overflow-checks = false
+opt-level = "s"
+lto = true
+codegen-units = 1
+
 [dependencies]
 # --- Fase 1-2 :: arranque, framebuffer e interrupciones ---
 bootloader_api = "0.11"
