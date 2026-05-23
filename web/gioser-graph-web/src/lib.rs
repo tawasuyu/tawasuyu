@@ -207,13 +207,22 @@ impl GraphWidget {
         ));
         svg.append_child(&style_el).ok();
 
-        let breathe_group: web_sys::SvgElement = self
+        // Grupo para aristas (sin animación de respiración, están detrás)
+        let edges_group: web_sys::SvgElement = self
             .document
             .create_element_ns(Some(ns), "g")
             .unwrap()
             .dyn_into()
             .unwrap();
-        breathe_group.set_attribute("class", "gb-svg").ok();
+
+        // Grupo para nodos (con respiración, encima)
+        let nodes_group: web_sys::SvgElement = self
+            .document
+            .create_element_ns(Some(ns), "g")
+            .unwrap()
+            .dyn_into()
+            .unwrap();
+        nodes_group.set_attribute("class", "gb-svg").ok();
 
         // Mapas: UUID → posición y color
         let pos_map: std::collections::HashMap<&str, (f64, f64)> = positions
@@ -224,11 +233,6 @@ impl GraphWidget {
             .iter()
             .map(|n| (n.id.as_str(), camino_color(&n.camino)))
             .collect();
-
-        let max_w = self.edges.iter()
-            .filter_map(|e| e.weight)
-            .fold(0.0_f64, f64::max)
-            .max(0.5);
 
         // ── Aristas: mezcla de colores de los nodos que conecta ──
         let mut drawn = std::collections::HashSet::new();
@@ -247,19 +251,19 @@ impl GraphWidget {
             let c2 = color_map.get(edge.target.as_str()).copied().unwrap_or("#888");
 
             let w = edge.weight.unwrap_or(0.7);
-            let norm_w = (w / max_w).clamp(0.0, 1.0);
+            // Sin normalización por max — usar weight directamente con más rango
+            // weight 0.5→0.8 suele ser el rango real; mapeamos a grosor visible
+            let thick = 0.6 + w * 4.0;  // w=0.5→2.6, w=0.9→4.2, w=1.0→4.6
 
             // Mezclar colores: 50/50 + brillo según weight
             let blended = blend_colors(c1, c2, 0.5);
-
-            // Brillo extra según el peso (acercar a blanco)
             let (br, bg, bb) = parse_hex(&blended);
-            let r = (br as f64 + (255.0 - br as f64) * norm_w * 0.4) as u32;
-            let g = (bg as f64 + (255.0 - bg as f64) * norm_w * 0.4) as u32;
-            let b = (bb as f64 + (255.0 - bb as f64) * norm_w * 0.4) as u32;
+            let bright_factor = 0.2 + w * 0.5;  // más brillo directo
+            let r = (br as f64 + (255.0 - br as f64) * bright_factor) as u32;
+            let g = (bg as f64 + (255.0 - bg as f64) * bright_factor) as u32;
+            let b = (bb as f64 + (255.0 - bb as f64) * bright_factor) as u32;
 
-            let alpha = 0.20 + norm_w * 0.65;
-            let sw = 1.0 + norm_w * 4.5;
+            let alpha = 0.15 + w * 0.75;
 
             let line: SvgLineElement = self
                 .document
@@ -272,10 +276,10 @@ impl GraphWidget {
             line.set_attribute("x2", &format!("{:.1}", x2)).ok();
             line.set_attribute("y2", &format!("{:.1}", y2)).ok();
             line.set_attribute("stroke", &format!("#{:02x}{:02x}{:02x}", r, g, b)).ok();
-            line.set_attribute("stroke-width", &format!("{:.1}", sw)).ok();
+            line.set_attribute("stroke-width", &format!("{:.1}", thick)).ok();
             line.set_attribute("stroke-opacity", &format!("{:.2}", alpha)).ok();
             line.set_attribute("class", "gb-line").ok();
-            breathe_group.append_child(&line).ok();
+            edges_group.append_child(&line).ok();
         }
 
         // ── Nodos ──
@@ -407,10 +411,11 @@ impl GraphWidget {
             g.add_event_listener_with_callback("click", click.as_ref().unchecked_ref()).ok();
             click.forget();
 
-            breathe_group.append_child(&g).ok();
+            nodes_group.append_child(&g).ok();
         }
 
-        svg.append_child(&breathe_group).ok();
+        svg.append_child(&edges_group).ok();
+        svg.append_child(&nodes_group).ok();
         self.container.append_child(&svg).ok();
     }
 }
