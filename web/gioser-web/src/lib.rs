@@ -276,6 +276,7 @@ impl AppState {
         let document_clone = self.document.clone();
         let element_owned = element.to_string();
         let url_owned = md_url.to_string();
+        let reader = fana_md_reader_web::Reader::new(content.clone());
         wasm_bindgen_futures::spawn_local(async move {
             let content_clone = content.clone();
             if let Err(e) = reader.open_url(&url_owned, &element_owned).await {
@@ -318,7 +319,8 @@ impl AppState {
                 None, // callback simplificado por ahora
             );
             if let Err(e) = graph.load().await {
-                web_sys::console::warn_1(&format!("grafo: error al cargar: {:?}", e));
+                web_sys::console::warn_1(&format!("grafo: error al cargar: {:?}", e).into());
+                return;
             }
         });
     }
