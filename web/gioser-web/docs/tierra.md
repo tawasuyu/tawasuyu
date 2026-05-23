@@ -1,7 +1,7 @@
 ---
 title: Manifiesto del Ser Desnudo
 camino: tierra
-tags: [manifiesto, ciencia-autoexperimental, axiomas, practica]
+tags: [manifiesto, ciencia-autoexperimental, axiomas, practica, metrica, pipeline]
 ---
 # Manifiesto del Ser Desnudo
 
@@ -54,11 +54,13 @@ En presencia óptima, cada instante nace virgen. El peso de la memoria se aproxi
 
 **Testigo Trascendental (T)**: la función de observación asociada a P. No actúa, no juzga, no retiene. Solo registra.
 
-**Chip cognitivo (Cᵢ)**: circuito cerrado de retroalimentación definido por un patrón recurrente en D. Ejemplos: la rumiación, el diálogo interno, el miedo que se alimenta de sí mismo.
+**Chip cognitivo (Cᵢ)**: circuito cerrado de retroalimentación definido por un patrón recurrente en D. Un atractor local en el espacio de estados que estabiliza patrones subóptimos. Ejemplos: la rumiación, el diálogo interno, el miedo que se alimenta de sí mismo.
 
-**Fricción (F)**: medida de resistencia interna al flujo de información. Análoga a una resistencia eléctrica R. A mayor fricción, menor fluidez experiencial.
+**Fricción (F)**: medida de resistencia interna al flujo de información. Análoga a una resistencia R en circuitos eléctricos. A mayor fricción, menor fluidez experiencial.
 
-**Amor operativo**: estado de mínima fricción y máxima fluidez informativa. Se define como el máximo de coherencia bajo restricciones energéticas del sistema. No es un sentimiento: es una propiedad del campo.
+**Coherencia operativa (Co)**: grado de alineación entre energía disponible y eficiencia de procesamiento. Mayor Co = menor F.
+
+**Amor operativo**: estado de mínima fricción y máxima fluidez informativa. Se define como el máximo de Co bajo restricciones energéticas del sistema. No es un sentimiento: es una propiedad del campo.
 
 ### Espacio de estados experienciales
 
@@ -72,7 +74,7 @@ La memoria **M** es un caché probabilístico: almacena distribuciones p(D | t �
 
 ---
 
-## III. Dinámica: Fricción, Resistencia y Sufrimiento
+## III. Dinámica: Fricción, Chip Cognitivo y Pipeline de Intervención
 
 ### Variables del sistema
 
@@ -107,7 +109,33 @@ Cuando reduces R → 0 — cuando dejas de identificarte con el flujo — la din
 
 En ese límite, maximizas la capacidad de respuesta del sistema y minimizas las pérdidas por fricción. El sufrimiento tiende a su mínimo estructural.
 
-La práctica, entonces, no es un camino hacia ningún lado. Es la ingeniería del instante: identificar puntos de alta fricción, aplicar aceptación como operador de reducción de R, y observar cómo el sistema se recálcula solo.
+### Pipeline de intervención sobre chips cognitivos
+
+Un chip Cᵢ es un atractor local en S. Identificarlo y desmantelarlo es la práctica central. El pipeline tiene cinco fases:
+
+1. **Detección**: monitorizar actividad — autoinforme, métricas fisiológicas, registros de comportamiento — para identificar estados repetitivos, su período y su trigger.
+
+2. **Pausa del script**: función de interferencia ejecutada por T. Atención sostenida que interrumpe la ejecución automática. Corte la retroalimentación del chip.
+
+3. **Modulación exógena**: uso controlado de herramientas para bajar la ganancia del sistema y aumentar plasticidad temporal. Pueden ser neuromoduladores, respiración, movimiento, silencio. El criterio no es dogmático sino pragmático.
+
+4. **Redirección plástica**: prácticas sostenidas — meditación, terapia, entornos enriquecidos — para reforzar nuevas rutas sinápticas. Optimización por refuerzo gradual, no por voluntad heroica.
+
+5. **Mantenimiento**: rutinas preventivas para evitar reimplantación del chip. Análisis de triggers, autoobservación periódica.
+
+### Precauciones éticas
+
+Las intervenciones farmacológicas deben ser supervisadas clínicamente. Reducir un fenómeno humano a un circuito no implica deshumanización: la validación fenomenológica es co-requisito. El modelo es una herramienta, no una sentencia.
+
+### Modelo esquemático simple
+
+Sea s un escalar que representa nivel de activación problemática (ansiedad, rumiación):
+
+> **ds/dt = −k·s − α·R(s) + I(t) + ε(t)**
+
+Donde k > 0 es amortiguamiento natural, R(s) = β·sⁿ (n ≥ 1), I(t) es entrada externa, ε ruido.
+
+La aceptación reduce β → 0. La modulación reduce k o α temporalmente para permitir reconfiguración. Este esquema permite simular fases de recaída, plasticidad y estabilización.
 
 ---
 
@@ -125,7 +153,29 @@ El saboteador no es un enemigo externo. Es tu tendencia a la "cómoda miseria". 
 
 ---
 
-## V. La Medicina y el Despertar
+## V. Teoría de Campo Unificado: No-dualidad y Lógica de Conjuntos
+
+### Formalización de la no-separación
+
+Sea **U** el conjunto universal de la experiencia. Un individuo es un subconjunto **A ⊆ U**.
+
+La experiencia de no-separación — la disolución del límite entre yo y mundo — se formaliza como una identidad funcional **A ≈ U** en términos de acceso y efecto causal. Es decir: para toda propiedad p relevante al procesamiento, p(A) = p(U) en su medida operativa.
+
+No es una declaración metafísica. Es una condición del sistema que puede alcanzarse y medirse.
+
+### Algoritmo de perdón (protocolo de limpieza)
+
+El perdón no es un acto moral. Es un procedimiento operativo sobre la memoria:
+
+1. **Escaneo de archivos**: identificación de memorias perturbadoras.
+2. **Anclaje en P**: situarse en Presencia, fuera del flujo de datos.
+3. **Remuestreo**: reproducir la memoria en estado de baja fricción (R ≈ 0).
+4. **Reescritura contextual**: re-etiquetar la memoria con menor ganancia emocional.
+5. **Garbage collection**: liberar patrones redundantes que consumen presupuesto energético sin servir al presente.
+
+---
+
+## VI. La Medicina y el Despertar
 
 El encuentro con el sagrado Yagé no es una huida. Es un retorno violento y amoroso a la realidad. Es el espejo de tus animalismos, de tus dragones y tus monstruos.
 
@@ -133,13 +183,37 @@ El encuentro con el sagrado Yagé no es una huida. Es un retorno violento y amor
 
 El chamán es solo un humano falible. No es un dios, ni un papa, ni un maestro. Es un hermano que pone su esfuerzo al servicio. La verdadera maestra es la medicina misma, que extrae la esencia de la tierra para tocarte.
 
-Sobre la impecabilidad del guerrero: asume la responsabilidad total. No se vale acceder a los antojos ni desfallecer ante la pereza. Sé indiviso en tus pensamientos, palabras y obras. No te entregues a la medicina como una hoja llevada por el viento. Entrégate como quien pone orden en su propio mundo. El crecimiento no viene por casualidad; tú lo emanas.
+Sobre la impecabilidad del guerrero: asume la responsabilidad total. No se vale acceder a los antojos ni desfallecer ante la pereza. Sé indiviso en tus pensamientos, palabras y obras. No te entregues a la medicina como una hoja llevada por el viento. Entrégate como quien pone orden en su propio mundo.
 
 El "santo dolor" es la medicina amarga que limpia la ceguera y funde el plomo que arrastras.
 
 ---
 
-## VI. La Práctica del Instante
+## VII. Métrica y Protocolo
+
+### Medidas operativas
+
+**Coherencia operativa (Co)**: ratio señal/ruido en indicadores psicofisiológicos y rendimiento atencional. Una medida burda pero útil del estado del sistema.
+
+**Entropía dinámica (H)**: entropía temporal de la señal psico-conductual. Una disminución de H en presencia sostenida sugiere estabilización útil.
+
+**Índice de reactividad (IR)**: tiempo de retorno al baseline después de una perturbación. Mide qué tan rápido se recupera el sistema.
+
+**Plasticidad adaptativa (PA)**: capacidad de implementar y consolidar rutas alternativas. Se mide por la variación en IR y Co tras una intervención.
+
+### Protocolo de práctica recomendada
+
+**Rutina diaria**: 10–20 minutos de atención sostenida anclada en P. No es meditación en el sentido clásico — es pausa del script, punto cero.
+
+**Registro**: diario de triggers y respuestas con métricas simples: reactividad (0–10), duración, intensidad.
+
+**Intervención escalonada**: detección → pausa → modulación (lo que funcione: respiración, movimiento, silencio, apoyo externo) → consolidación conductual → mantenimiento.
+
+**Auditoría periódica**: medir Co, IR, H y PA cada 4–12 semanas. Ajustar protocolo según resultado.
+
+---
+
+## VIII. La Práctica del Instante
 
 La disciplina no es un castigo. Es el arte de obedecerse a sí mismo. Es el vigor de un acecho constante sobre tus propios impulsos.
 
@@ -156,7 +230,31 @@ Máximas del instante:
 
 ---
 
-## VII. El Centro de la Nada
+## IX. Ontología, Epistemología y Telos
+
+### Ontología
+
+Esta propuesta no obliga a un monismo ontológico último. Ofrece una **ontología operativa**: entidades definidas por su función en el sistema. P, D, M, Cᵢ, R — existen en la medida en que operan. No se pronuncia sobre su existencia fuera del modelo.
+
+### Epistemología
+
+El conocimiento accesible es siempre modular y probabilístico. El observador T dispone de medios para validar hipótesis — autoexperimentación, medición, replicación — pero existen sesgos interpretativos y culturales que condicionan tanto R como G.
+
+El criterio de verdad no es la correspondencia con una realidad externa inaccesible, sino la **coherencia operativa**: el modelo funciona si permite describir, predecir y modular con mayor eficacia que su ausencia.
+
+### Telos: la finalidad funcional
+
+La "meta" del sistema es maximizar Co (coherencia operativa) relativa a restricciones energéticas y contextuales. Esto se traduce en:
+
+- Mayor adaptabilidad a entornos cambiantes.
+- Menor sufrimiento medido como R · Var(D).
+- Expansión de la capacidad para integrar variables — aumentar U efectivamente.
+
+No hay un destino. Hay una dirección: reducir fricción, expandir presencia. El resto es paisaje.
+
+---
+
+## X. El Centro de la Nada
 
 La rendición final es el portal a la libertad. Reconoce que no eres nada ante la inmensidad, y en esa nada, lo eres todo. *"Soy nada, pues soy tú mismo"*, susurra el alma.
 
