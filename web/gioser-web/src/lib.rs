@@ -342,20 +342,28 @@ impl AppState {
             content_clone.append_child(&wrapper).ok();
             // Callback: recibe 'camino' del nodo clickeado y navega
             let cb: Box<dyn FnMut(String)> = Box::new(move |target| {
+                web_sys::console::log_1(&format!("DEBUG grafo: click target={}", target).into());
+                // Mapa: camino → id del tip en HTML (aire, fuego, tierra, agua)
                 let el = match target.as_str() {
-                    "logos" | "aire" => "logos",
-                    "nomos" | "fuego" => "nomos",
-                    "kay" | "tierra" => "kay",
-                    "uku" | "agua" => "uku",
-                    _ => "logos",
+                    "logos" | "aire" => "aire",
+                    "nomos" | "fuego" => "fuego",
+                    "kay" | "tierra" => "tierra",
+                    "uku" | "agua" => "agua",
+                    _ => "aire",
                 };
-                // Click nativo en el anchor — funciona con <a> también
-                if let Some(tip) = document_clone.query_selector(
-                    &format!(".tip[data-md][id='tip-{}']", el)
-                ).ok().flatten() {
-                    // Clonar referencia antes de dyn_into (consume)
-                    let tip_html: HtmlElement = tip.clone().dyn_into().unwrap();
-                    tip_html.click();
+                web_sys::console::log_1(&format!("DEBUG grafo: el={}", el).into());
+                let sel = format!(".tip[data-md][id='tip-{}']", el);
+                web_sys::console::log_1(&format!("DEBUG grafo: selector={}", sel).into());
+                match document_clone.query_selector(&sel).ok().flatten() {
+                    Some(tip) => {
+                        web_sys::console::log_1(&"DEBUG grafo: tip encontrado, llamando click()".into());
+                        let tip_html: HtmlElement = tip.clone().dyn_into().unwrap();
+                        tip_html.click();
+                        web_sys::console::log_1(&"DEBUG grafo: click() ejecutado".into());
+                    }
+                    None => {
+                        web_sys::console::log_1(&"DEBUG grafo: tip NO encontrado".into());
+                    }
                 }
             });
             let mut graph = GraphWidget::new(
@@ -602,11 +610,14 @@ fn install_tip_clicks(document: &Document, app: &Rc<AppState>) -> Result<(), JsV
         let md_url = el.get_attribute("data-md").unwrap_or_default();
         let app2 = app.clone();
         let el_for_rect = el.clone();
+        let el_name = element.clone();
         let cb = Closure::<dyn FnMut(Event)>::new(move |e: Event| {
+            web_sys::console::log_1(&format!("DEBUG tip: click en {} isTrusted={}", el_name, e.is_trusted()).into());
             e.prevent_default();
             let rect = el_for_rect.get_bounding_client_rect();
             let cx = rect.left() + rect.width() / 2.0;
             let cy = rect.top() + rect.height() / 2.0;
+            web_sys::console::log_1(&format!("DEBUG tip: llamando open_or_switch({}, {}, {})", el_name, cx, cy).into());
             app2.open_or_switch(&element, cx, cy, &md_url);
         });
         el.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;
