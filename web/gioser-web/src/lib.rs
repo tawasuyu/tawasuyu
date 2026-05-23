@@ -21,6 +21,7 @@ use std::rc::Rc;
 
 use barra_web::{Task, TaskList};
 use gioser_canvas_web::{tips, Renderer};
+use gioser_graph_web::GraphWidget;
 use fana_md_reader_web::Reader;
 use revista_web::Deck;
 use wasm_bindgen::prelude::*;
@@ -272,12 +273,52 @@ impl AppState {
         if inner.contains("pluma-doc") {
             return; // ya hidratado
         }
-        let reader = Reader::new(content);
+        let document_clone = self.document.clone();
         let element_owned = element.to_string();
         let url_owned = md_url.to_string();
         wasm_bindgen_futures::spawn_local(async move {
+            let content_clone = content.clone();
             if let Err(e) = reader.open_url(&url_owned, &element_owned).await {
                 web_sys::console::warn_1(&e);
+            }
+            // Después de cargar el md, montar el grafo debajo
+            let graph_container_id = format!("graph-{}-container", element_owned);
+            // Si ya existe, no lo duplicamos
+            if document_clone.get_element_by_id(&graph_container_id).is_some() {
+                return;
+            }
+            // Crear contenedor debajo del content
+            let wrapper: HtmlElement = document_clone
+                .create_element("div")
+                .ok()
+                .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+                .unwrap();
+            wrapper.set_id(&graph_container_id);
+            wrapper.style().set_property("margin-top", "1rem").ok();
+            wrapper.style().set_property("padding-top", "1rem").ok();
+            wrapper.style().set_property("border-top", "1px solid rgba(255,255,255,0.08)").ok();
+            // Label
+            let label: HtmlElement = document_clone
+                .create_element("div")
+                .ok()
+                .and_then(|e| e.dyn_into::<HtmlElement>().ok())
+                .unwrap();
+            label.set_inner_html(
+                "<span style=\"font-family: Inter, sans-serif; font-size: 0.75rem; \
+                 letter-spacing: 0.3em; text-transform: uppercase; color: rgba(232,234,245,0.45);\">
+                 · grafo semántico ·
+                 </span>"
+            );
+            wrapper.append_child(&label).ok();
+            content_clone.append_child(&wrapper).ok();
+            // Cargar el grafo
+            let mut graph = GraphWidget::new(
+                wrapper,
+                "https://api.gioser.net",
+                None, // callback simplificado por ahora
+            );
+            if let Err(e) = graph.load().await {
+                web_sys::console::warn_1(&format!("grafo: error al cargar: {:?}", e));
             }
         });
     }
@@ -637,6 +678,25 @@ fn position_tips(document: &Document, canvas: &HtmlCanvasElement, renderer: &Ren
             }
         }
     }
+}
+
+/// Mapea un doc_id de Qdrant al nombre del elemento (aire/fuego/tierra/agua)
+/// y su ruta md. Los doc_ids se generan con uuid5 en el indexador, pero
+/// podemos inferir por el nombre del camino o del elemento.
+fn map_doc_id_to_element(doc_id: &str) -> (String, String) {
+    // Inferir del doc_id: contiene el nombre del elemento
+    let el = if doc_id.contains("aire") || doc_id.contains("logos") {
+        "aire"
+    } else if doc_id.contains("fuego") || doc_id.contains("nomos") {
+        "fuego"
+    } else if doc_id.contains("tierra") || doc_id.contains("kay") {
+        "tierra"
+    } else if doc_id.contains("agua") || doc_id.contains("uku") {
+        "agua"
+    } else {
+        "aire"
+    };
+    (el.to_string(), format!("./md/{}.md", el))
 }
 
 fn install_panic_hook() {
