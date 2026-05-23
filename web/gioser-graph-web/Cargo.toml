@@ -35,5 +35,6 @@ features = [
     "Event",
     "EventTarget",
     "MouseEvent",
+    "PointerEvent",
     "console",
 ]

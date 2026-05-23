@@ -40,4 +40,5 @@ features = [
     "Performance",
     "console",
     "Location",
+    "History",
 ]

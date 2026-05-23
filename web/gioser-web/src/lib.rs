@@ -79,9 +79,16 @@ impl AppState {
         self.sync_active_class();
         self.sync_taskbar();
         self.load_md_if_empty(element, md_url);
-        // Actualizar hash sin disparar evento (evitar loop)
+        // Actualizar URL con history.pushState (sin #)
         if let Some(win) = web_sys::window() {
-            let _ = win.location().set_hash(&format!("/{}", element));
+            if let Ok(hist) = win.history() {
+                let path = format!("/estudio/{}", element);
+                let _ = hist.push_state_with_url(
+                    &wasm_bindgen::JsValue::NULL,
+                    "",
+                    Some(&path),
+                );
+            }
         }
     }
 
@@ -110,9 +117,15 @@ impl AppState {
         self.sync_active_class();
         self.sync_taskbar();
         self.hide_deck(origin_x, origin_y);
-        // Limpiar hash
+        // Restaurar URL
         if let Some(win) = web_sys::window() {
-            let _ = win.location().set_hash("");
+            if let Ok(hist) = win.history() {
+                let _ = hist.push_state_with_url(
+                    &wasm_bindgen::JsValue::NULL,
+                    "",
+                    Some("/"),
+                );
+            }
         }
     }
 
@@ -164,6 +177,7 @@ impl AppState {
         if let Some(body) = self.document.body() {
             let _ = body.class_list().add_1("deck-visible");
         }
+        self.sync_page_controls();
     }
 
     fn hide_deck(&self, x: f64, y: f64) {
@@ -174,6 +188,35 @@ impl AppState {
         }
         if let Some(body) = self.document.body() {
             let _ = body.class_list().remove_1("deck-visible");
+        }
+        self.sync_page_controls();
+    }
+
+    fn sync_page_controls(&self) {
+        let exists = self.document.get_element_by_id("global-page-controls");
+        let is_visible = self.state.borrow().active.is_some();
+        if let Some(ctl) = exists {
+            ctl.set_attribute("style", if is_visible {
+                "opacity:1;pointer-events:auto;"
+            } else {
+                "opacity:0;pointer-events:none;"
+            }).ok();
+        } else if is_visible {
+            let Some(body) = self.document.body() else { return };
+            let div: HtmlElement = self.document
+                .create_element("div")
+                .ok()
+                .and_then(|e| e.dyn_into().ok())
+                .unwrap();
+            div.set_id("global-page-controls");
+            div.set_attribute("class", "page-controls").ok();
+            div.set_inner_html(
+                "<button class=\"page-control-btn page-minimize\" data-minimize=\"\" type=\"button\" aria-label=\"Minimizar\">\
+                    <svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 19 H19\" stroke=\"currentColor\" stroke-width=\"2\" fill=\"none\" stroke-linecap=\"round\"/></svg>\
+                </button>\
+                <button class=\"page-control-btn page-close\" data-close-page=\"\" type=\"button\" aria-label=\"Cerrar\">×</button>"
+            );
+            body.append_child(&div).ok();
         }
     }
 
@@ -243,12 +286,6 @@ impl AppState {
         };
         let html = format!(
             "<article class=\"deck-page\" data-element=\"{el}\" id=\"deck-page-{el}\">\
-                <div class=\"page-controls\">\
-                    <button class=\"page-control-btn page-minimize\" data-minimize=\"{el}\" type=\"button\" aria-label=\"Minimizar {title}\">\
-                        <svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M5 19 H19\" stroke=\"currentColor\" stroke-width=\"2\" fill=\"none\" stroke-linecap=\"round\"/></svg>\
-                    </button>\
-                    <button class=\"page-control-btn page-close\" data-close-page=\"{el}\" type=\"button\" aria-label=\"Cerrar {title}\">×</button>\
-                </div>\
                 <div class=\"page-ambience\" aria-hidden=\"true\"></div>\
                 <header class=\"page-head\">\
                     <span class=\"page-mark\">{el}</span>\
@@ -448,13 +485,13 @@ pub fn boot() -> Result<(), JsValue> {
     install_deck_delegation(&document, &app)?;
     install_taskbar(&document, &app)?;
     install_keyboard(&document, &app)?;
-    install_hash_listener(&window, &app)?;
+    install_popstate_listener(&window, &app)?;
     install_raf(&window, &document, &canvas, &renderer);
 
-    // Leer hash inicial para abrir página directa
-    if let Ok(hash) = window.location().hash() {
-        let clean = hash.trim_start_matches('#').trim_start_matches('/');
-        if !clean.is_empty() && clean != "" {
+    // Leer ruta inicial para abrir página directa
+    if let Ok(pathname) = window.location().pathname() {
+        let clean = pathname.trim_start_matches('/').trim_start_matches("estudio/");
+        if !clean.is_empty() {
             if let Some(el) = document.query_selector(&format!(".tip[data-md][id='tip-{}']", clean)).ok().flatten() {
                 let rect = el.get_bounding_client_rect();
                 let cx = rect.left() + rect.width() / 2.0;
@@ -469,14 +506,14 @@ pub fn boot() -> Result<(), JsValue> {
     Ok(())
 }
 
-fn install_hash_listener(window: &Window, app: &Rc<AppState>) -> Result<(), JsValue> {
+fn install_popstate_listener(window: &Window, app: &Rc<AppState>) -> Result<(), JsValue> {
     let app2 = app.clone();
     let doc = app.document.clone();
     let win2 = window.clone();
     let cb = Closure::<dyn FnMut(Event)>::new(move |_e: Event| {
-        if let Ok(hash) = win2.location().hash() {
-            let clean = hash.trim_start_matches('#').trim_start_matches('/');
-            if clean.is_empty() {
+        if let Ok(pathname) = win2.location().pathname() {
+            let clean = pathname.trim_start_matches('/').trim_start_matches("estudio/");
+            if clean.is_empty() || clean == "/" {
                 app2.home();
             } else if let Some(el) = doc.query_selector(&format!(".tip[data-md][id='tip-{}']", clean)).ok().flatten() {
                 let rect = el.get_bounding_client_rect();
@@ -488,7 +525,7 @@ fn install_hash_listener(window: &Window, app: &Rc<AppState>) -> Result<(), JsVa
             }
         }
     });
-    window.add_event_listener_with_callback("hashchange", cb.as_ref().unchecked_ref())?;
+    window.add_event_listener_with_callback("popstate", cb.as_ref().unchecked_ref())?;
     cb.forget();
     Ok(())
 }
@@ -615,22 +652,35 @@ fn install_deck_delegation(document: &Document, app: &Rc<AppState>) -> Result<()
         if let Ok(Some(btn)) = target_el.closest("[data-minimize]") {
             e.stop_propagation();
             let element = btn.get_attribute("data-minimize").unwrap_or_default();
-            // Origin = la cajita correspondiente en la taskbar (efecto
-            // visual: la página se "encoge" hacia su entrada del taskbar).
-            let origin = app2
-                .taskbar_item_center(&element)
-                .unwrap_or_else(|| center_of_element(&btn));
-            app2.minimize(origin.0, origin.1);
+            // Si el data-minimize está vacío, usar el elemento activo
+            let el = if element.is_empty() {
+                app2.state.borrow().active.clone().unwrap_or_default()
+            } else {
+                element
+            };
+            if !el.is_empty() {
+                let origin = app2
+                    .taskbar_item_center(&el)
+                    .unwrap_or_else(|| center_of_element(&btn));
+                app2.minimize(origin.0, origin.1);
+            }
             return;
         }
         // Close
         if let Ok(Some(btn)) = target_el.closest("[data-close-page]") {
             e.stop_propagation();
             let element = btn.get_attribute("data-close-page").unwrap_or_default();
-            let origin = app2
-                .taskbar_item_center(&element)
-                .unwrap_or_else(|| center_of_element(&btn));
-            app2.close(&element, origin.0, origin.1);
+            let el = if element.is_empty() {
+                app2.state.borrow().active.clone().unwrap_or_default()
+            } else {
+                element
+            };
+            if !el.is_empty() {
+                let origin = app2
+                    .taskbar_item_center(&el)
+                    .unwrap_or_else(|| center_of_element(&btn));
+                app2.close(&el, origin.0, origin.1);
+            }
         }
     });
     deck_el.add_event_listener_with_callback("click", cb.as_ref().unchecked_ref())?;

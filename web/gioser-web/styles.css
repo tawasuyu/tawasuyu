@@ -254,14 +254,21 @@ body.deck-active-tierra .deck { --deck-glow: rgba(212, 152, 115, 0.24); }
   to   { opacity: 0.80; }
 }
 
-/* Head + controls */
+/* Head + controls — fijos en el deck, no dentro de la página */
 .page-controls {
-  position: absolute;
-  top: 1.8vh;
-  right: 1.8vw;
-  z-index: 5;
+  position: fixed;
+  top: 1.2rem;
+  right: 1.2rem;
+  z-index: 100;
   display: flex;
   gap: 0.5rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+.deck--visible .page-controls {
+  opacity: 1;
+  pointer-events: auto;
 }
 .page-control-btn {
   width: 40px;

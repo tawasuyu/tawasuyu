@@ -15,7 +15,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
-    Document, HtmlElement, MouseEvent, Response, SvgLineElement, SvgRectElement,
+    Document, HtmlElement, MouseEvent, PointerEvent, Response, SvgLineElement, SvgRectElement,
     SvgsvgElement, SvgTextElement, SvgCircleElement,
 };
 
@@ -204,13 +204,6 @@ impl GraphWidget {
             .gb-node { transition: filter 250ms ease, opacity 200ms ease; }\
             .gb-node:hover {\
               filter: drop-shadow(0 0 14px rgba(255,255,255,0.2));\
-              animation: node-bounce 0.4s ease-out;\
-            }\
-            @keyframes node-bounce {\
-              0% { transform: scale(1); }\
-              40% { transform: scale(1.08); }\
-              70% { transform: scale(0.96); }\
-              100% { transform: scale(1); }\
             }\
             .gb-edge-group { pointer-events: none; }\
             .gb-line { transition: opacity 400ms ease; }",
@@ -395,33 +388,37 @@ impl GraphWidget {
             g.append_child(&text).ok();
             g.append_child(&sub).ok();
 
-            // Hover
-            let rect_clone = rect.clone();
-            let color_c = color.clone();
-            let glow_clone = glow.clone();
+            // Hover + drag
+            let rect_h = rect.clone();
+            let col_h = color.clone();
+            let glow_h = glow.clone();
+            let g_hover = g.clone();
+            let g_clone_for_drag = g.clone();
+
             let enter = Closure::<dyn FnMut(MouseEvent)>::new(move |_| {
-                rect_clone.set_attribute("fill-opacity", "0.55").ok();
-                rect_clone.set_attribute("stroke-opacity", "1").ok();
-                rect_clone.style()
-                    .set_property("filter", &format!("drop-shadow(0 0 12px {})", color_c))
+                rect_h.set_attribute("fill-opacity", "0.55").ok();
+                rect_h.set_attribute("stroke-opacity", "1").ok();
+                rect_h.style()
+                    .set_property("filter", &format!("drop-shadow(0 0 12px {})", col_h))
                     .ok();
-                glow_clone.set_attribute("fill-opacity", "0.20").ok();
+                glow_h.set_attribute("fill-opacity", "0.20").ok();
             });
-            g.add_event_listener_with_callback("mouseenter", enter.as_ref().unchecked_ref()).ok();
+            g_hover.add_event_listener_with_callback("mouseenter", enter.as_ref().unchecked_ref()).ok();
             enter.forget();
 
-            let rect_clone2 = rect.clone();
-            let glow_clone2 = glow.clone();
+            let rect_l = rect.clone();
+            let glow_l = glow.clone();
             let leave = Closure::<dyn FnMut(MouseEvent)>::new(move |_| {
-                rect_clone2.set_attribute("fill-opacity", "0.28").ok();
-                rect_clone2.set_attribute("stroke-opacity", "0.7").ok();
-                rect_clone2.style().set_property("filter", "none").ok();
-                glow_clone2.set_attribute("fill-opacity", "0.05").ok();
+                rect_l.set_attribute("fill-opacity", "0.28").ok();
+                rect_l.set_attribute("stroke-opacity", "0.7").ok();
+                rect_l.style().set_property("filter", "none").ok();
+                glow_l.set_attribute("fill-opacity", "0.05").ok();
             });
             g.add_event_listener_with_callback("mouseleave", leave.as_ref().unchecked_ref()).ok();
             leave.forget();
 
-            let nav_target = node.camino.clone(); // pasamos el camino (logos, nomos, etc)
+            // Click → navegar
+            let nav_target = node.camino.clone();
             let on_nav2 = on_nav.clone();
             let click = Closure::<dyn FnMut(MouseEvent)>::new(move |_| {
                 let mut cb = on_nav2.borrow_mut();
@@ -429,6 +426,50 @@ impl GraphWidget {
             });
             g.add_event_listener_with_callback("click", click.as_ref().unchecked_ref()).ok();
             click.forget();
+
+            // Drag: pointerdown → move → up (reacomodar al soltar)
+            let g_drag = g.clone();
+            let g_move = g.clone();
+            let g_up = g.clone();
+            let drag_start = Rc::new(RefCell::new(None::<(f64, f64, f64, f64)>));
+            let drag_start2 = drag_start.clone();
+            let drag_start3 = drag_start.clone();
+
+            let pdown = Closure::<dyn FnMut(PointerEvent)>::new(move |e: PointerEvent| {
+                e.prevent_default();
+                let g_rect = g_drag.get_bounding_client_rect();
+                *drag_start.borrow_mut() = Some((
+                    e.client_x() as f64,
+                    e.client_y() as f64,
+                    g_rect.left() + g_rect.width() / 2.0,
+                    g_rect.top() + g_rect.height() / 2.0,
+                ));
+                g_drag.set_pointer_capture(e.pointer_id()).ok();
+            });
+            g.add_event_listener_with_callback("pointerdown", pdown.as_ref().unchecked_ref()).ok();
+            pdown.forget();
+
+            let pmove = Closure::<dyn FnMut(PointerEvent)>::new(move |e: PointerEvent| {
+                if let Some((start_cx, start_cy, _, _)) = *drag_start2.borrow() {
+                    let dx = e.client_x() as f64 - start_cx;
+                    let dy = e.client_y() as f64 - start_cy;
+                    g_move.set_attribute(
+                        "transform",
+                        &format!("translate({:.1},{:.1})", dx, dy),
+                    ).ok();
+                }
+            });
+            g.add_event_listener_with_callback("pointermove", pmove.as_ref().unchecked_ref()).ok();
+            pmove.forget();
+
+            let pup = Closure::<dyn FnMut(PointerEvent)>::new(move |_e: PointerEvent| {
+                *drag_start3.borrow_mut() = None;
+                g_up.set_attribute("transform", "translate(0,0)").ok();
+            });
+            g.add_event_listener_with_callback("pointerup", pup.as_ref().unchecked_ref()).ok();
+            pup.forget();
+
+            g.style().set_property("transition", "transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1)").ok();
 
             nodes_group.append_child(&g).ok();
         }
