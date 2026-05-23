@@ -99,6 +99,9 @@
     </a>
   </nav>
 
+  <!-- Cytoscape.js para el grafo semántico -->
+  <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
+
   <script type="module">
     import init from "./pkg/gioser_web.js";
     init().catch(err => {
@@ -108,5 +111,8 @@
         String(err) + '</pre>');
     });
   </script>
+
+  <!-- Grafo semántico (Cytoscape) — se auto-inicializa en <gioser-graph> -->
+  <script src="./cytoscape-graph.js" defer></script>
 </body>
 </html>

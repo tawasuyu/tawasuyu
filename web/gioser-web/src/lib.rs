@@ -21,7 +21,6 @@ use std::rc::Rc;
 
 use barra_web::{Task, TaskList};
 use gioser_canvas_web::{tips, Renderer};
-use gioser_graph_web::GraphWidget;
 use fana_md_reader_web::Reader;
 use revista_web::Deck;
 use wasm_bindgen::prelude::*;
@@ -282,45 +281,36 @@ impl AppState {
             if let Err(e) = reader.open_url(&url_owned, &element_owned).await {
                 web_sys::console::warn_1(&e);
             }
-            // Después de cargar el md, montar el grafo debajo
+            // Montar contenedor del grafo (Cytoscape.js) debajo del md
             let graph_container_id = format!("graph-{}-container", element_owned);
-            // Si ya existe, no lo duplicamos
             if document_clone.get_element_by_id(&graph_container_id).is_some() {
                 return;
             }
-            // Crear contenedor debajo del content
             let wrapper: HtmlElement = document_clone
-                .create_element("div")
+                .create_element("gioser-graph")
                 .ok()
                 .and_then(|e| e.dyn_into::<HtmlElement>().ok())
-                .unwrap();
+                .unwrap_or_else(|| {
+                    // fallback: div normal
+                    let d: HtmlElement = document_clone
+                        .create_element("div")
+                        .ok()
+                        .and_then(|e| e.dyn_into().ok())
+                        .unwrap();
+                    d
+                });
             wrapper.set_id(&graph_container_id);
-            wrapper.style().set_property("margin-top", "1rem").ok();
+            wrapper.set_attribute("data-api-url", "https://api.gioser.net").ok();
+            wrapper.style().set_property("margin-top", "1.5rem").ok();
             wrapper.style().set_property("padding-top", "1rem").ok();
-            wrapper.style().set_property("border-top", "1px solid rgba(255,255,255,0.08)").ok();
-            // Label
-            let label: HtmlElement = document_clone
-                .create_element("div")
-                .ok()
-                .and_then(|e| e.dyn_into::<HtmlElement>().ok())
-                .unwrap();
-            label.set_inner_html(
-                "<span style=\"font-family: Inter, sans-serif; font-size: 0.75rem; \
-                 letter-spacing: 0.3em; text-transform: uppercase; color: rgba(232,234,245,0.45);\">
-                 · grafo semántico ·
-                 </span>"
-            );
-            wrapper.append_child(&label).ok();
+            wrapper.style().set_property("border-top", "1px solid rgba(255,255,255,0.06)").ok();
+            wrapper.style().set_property("min-height", "220px").ok();
             content_clone.append_child(&wrapper).ok();
-            // Cargar el grafo
-            let mut graph = GraphWidget::new(
-                wrapper,
-                "https://api.gioser.net",
-                None, // callback simplificado por ahora
-            );
-            if let Err(e) = graph.load().await {
-                web_sys::console::warn_1(&format!("grafo: error al cargar: {:?}", e).into());
-                return;
+            // Disparar el script de Cytoscape si ya está en la página
+            if let Some(win) = web_sys::window() {
+                let _ = win.dispatch_event(
+                    &web_sys::Event::new("gioser-graph-ready").unwrap()
+                );
             }
         });
     }
