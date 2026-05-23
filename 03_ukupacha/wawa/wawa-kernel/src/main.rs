@@ -45,6 +45,7 @@ use bootloader_api::{entry_point, BootInfo};
 use spin::{Mutex, Once};
 
 // --- Subsistemas del kernel ---
+mod akasha;
 mod almacen;
 mod async_system;
 mod baliza;
@@ -165,6 +166,10 @@ async fn tarea_compositor() {
         // FASE 16 :: avanzar el reloj de la barra de tareas — recompone si el
         // segundo cambio respecto al ultimo mostrado. Si no, vuelve enseguida.
         compositor::tick_reloj();
+        // FASE 20 :: pulso del oficio AoE — el demultiplexor de RX en cada
+        // tic (cero coste sin trafico), y el faro `AnunciarRaiz` cada 5 s
+        // (medido contra el reloj monotono, no contra los awaits).
+        akasha::tic_compositor();
         // FASE 10 :: atender las altas en vivo. Por cada `Alt+N` pendiente,
         // dar a luz una aplicacion nueva — el compositor solo conto la
         // peticion; instanciar el WASM es trabajo del orquestador.
@@ -174,16 +179,14 @@ async fn tarea_compositor() {
     }
 }
 
-/// FASE 18/19 — la primera voz del kernel hacia la red. Envia un ARP request
-/// al gateway de QEMU para anunciarse, y termina: a partir de la Fase 19, los
-/// apps drenan la cola RX por su cuenta via `sys_net_recibir`, asi que el
-/// kernel no le quita paquetes a nadie.
+/// FASE 18 — saludo inicial a la red. La tarea es CORTA y de un solo tiro:
+/// deja estabilizarse la cola RX del dispositivo y envia un ARP request al
+/// gateway de QEMU para anunciarse en capa-3. El demuxer Akasha (Fase 20)
+/// vive en el tic del compositor; el faro periodico, en `tarea_akasha_faro`.
 async fn tarea_red(mac: drivers::red::Mac) {
-    // Dejar un par de fotogramas para que la cola RX se estabilice.
     for _ in 0..10 {
         async_system::reloj::EsperaFrame::nueva().await;
     }
-    // Componer y enviar el ARP request: «¿quien tiene 10.0.2.2?».
     let frame = drivers::red::componer_arp_request(
         mac,
         drivers::red::IP_RENASER,
@@ -200,9 +203,14 @@ async fn tarea_red(mac: drivers::red::Mac) {
             let _ = writeln!(baliza::Serie, "red :: envio fallido :: {motivo}");
         }
     }
-    // La tarea termina aqui. Los apps se encargan del trafico desde ahora.
 }
 
+/// FASE 20 — el faro Akasha. Cada `INTERVALO_FARO` fotogramas (= 5 s a
+/// 100 Hz) difunde por broadcast `AnunciarRaiz(manifiesto)`. La primera
+/// difusion se demora unos pocos fotogramas para que el grafo termine de
+/// montarse — si `manifiesto()` aun es `None`, el envio es no-op y el
+/// siguiente faro lo reintentara. Tarea sin fin, con la misma forma que
+/// `tarea_compositor` (probada y latiente).
 /// FASE 6.2 — la prueba viva de la E/S asincrona. Esta tarea del reactor lee el
 /// sector 0 del disco SIN bloquear: cede la CPU mientras el disco trabaja —las
 /// apps siguen pintando entre tanto— y la IRQ del disco la reanuda cuando el
@@ -552,6 +560,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
                 drivers::red::irq(),
             );
+            // FASE 20 :: registrar la MAC en el respondedor Akasha, para que
+            // pueda firmar sus frames AoE.
+            akasha::montar(mac);
         }
         Err(motivo) => {
             let _ = writeln!(baliza::Serie, "red :: virtio-net :: {motivo}");
@@ -578,8 +589,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // disco de forma ASINCRONA: la demostracion de que la IRQ del disco
     // conduce la E/S sin detener a las aplicaciones visuales.
     ejecutor.spawn(tarea_sonda_disco());
-    // FASE 18 :: si la tarjeta de red se monto, una tarea le envia un ARP
-    // request al gateway y registra por COM1 los paquetes entrantes.
+    // FASE 18 :: si la tarjeta de red se monto, una tarea corta envia un ARP
+    // al gateway para anunciarse en capa-3. El oficio AoE (Fase 20) — demuxer
+    // de entrada + faro periodico — va clavado al tic del compositor.
     if let Ok(mac) = mac_red {
         ejecutor.spawn(tarea_red(mac));
     }

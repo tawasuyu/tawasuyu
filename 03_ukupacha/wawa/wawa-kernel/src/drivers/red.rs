@@ -217,7 +217,12 @@ pub fn drenar_rx<F: FnMut(&[u8])>(mut callback: F) {
 
 /// Recibe UN paquete: copia su contenido en `buf` y devuelve los bytes
 /// copiados, o `0` si no hay paquete pendiente. La interfaz que el host
-/// expone a los apps via `sys_net_recibir` — un paquete por llamada (Fase 19).
+/// expuso a los apps via `sys_net_recibir` en la Fase 19. Desde la Fase 20
+/// el kernel toma la cola RX para FILTRAR Akasha (`akasha::drenar_y_demultiplexar`
+/// + `akasha::pop_usuario`); `recibir_en` queda como primitiva del driver,
+/// disponible para futuros consumidores directos (p. ej., una herramienta de
+/// diagnostico que quiera leer la cola RX sin demultiplexar).
+#[allow(dead_code)]
 pub fn recibir_en(buf: &mut [u8]) -> usize {
     let Some(tarjeta) = TARJETA.get() else {
         return 0;

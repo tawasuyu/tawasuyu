@@ -76,6 +76,14 @@ virtio-drivers = { version = "0.13", default-features = false, features = ["allo
 # sola verdad del formato de disco, imposible de divergir entre los dos lados.
 formato = { path = "../formato" }
 
+# --- Fase 20 :: Akasha Over Ether ---
+# El protocolo nativo de red de renaser: mensajes `MensajeAkasha` serializados
+# con `postcard`, sobre Ethernet crudo. Mismo patron que `formato`: nucleo
+# `no_std` compartido, no miembro del workspace anfitrion. El kernel y boot lo
+# enlazan, y cualquier app o daemon que quiera hablar AoE en el futuro tomara
+# la misma crate — una sola verdad del protocolo.
+akasha = { path = "../akasha" }
+
 # --- Fase 8 (preparación) :: el compositor ---
 # `mirada-layout` es el motor de teselado del compositor de brahman —
 # geometría pura (rectángulos, foco, Z-order), `no_std`, sin smithay ni

@@ -18,7 +18,9 @@
 //    * sys_tono              — hacer sonar la bocina del PC (Fase 12);
 //    * sys_net_mac           — leer la MAC de la tarjeta de red (Fase 19);
 //    * sys_net_enviar        — enviar un frame Ethernet crudo (Fase 19);
-//    * sys_net_recibir       — leer el siguiente frame recibido (Fase 19).
+//    * sys_net_recibir       — leer el siguiente frame recibido (Fase 19;
+//                              desde la Fase 20, los frames Akasha se filtran
+//                              en el kernel y no llegan al userspace).
 //
 //  GUARDARRAIL: el kernel valida MATEMATICAMENTE todo puntero que el modulo le
 //  entrega contra los limites reales de su memoria lineal. No se confia en que
@@ -530,10 +532,14 @@ pub(crate) fn enlazar_capacidades(
     )?;
 
     // --- CAPACIDAD 14 :: sys_net_recibir(salida, capacidad) -> i32 ---
-    // Saca el siguiente frame de la cola RX del dispositivo y lo copia en
-    // `salida`. Devuelve los bytes copiados (>0), 0 si no hay frame pendiente,
-    // o -1 si no hay red montada. La cola RX es del dispositivo y se comparte
-    // entre los apps: el primero que pregunte se lleva el paquete.
+    // Saca el siguiente frame de la cola del USUARIO y lo copia en `salida`.
+    // Desde la Fase 20, esa cola la rellena el demultiplexor del kernel
+    // (`akasha::drenar_y_demultiplexar`): los frames Akasha (`0x88B5` con
+    // payload valido) se procesan en el nucleo y NO llegan aqui; el resto
+    // del trafico —ARP, IPv4 de QEMU, futuros protocolos— si. Devuelve los
+    // bytes copiados (>0), 0 si no hay frame pendiente, o -1 si no hay red
+    // montada. La cola se vacia FIFO; si un app no llama nunca, los frames
+    // mas antiguos se descartan al desbordar (ver `akasha::COLA_USUARIO`).
     enlazador.func_wrap(
         "renaser",
         "sys_net_recibir",
@@ -555,10 +561,10 @@ pub(crate) fn enlazar_capacidades(
                     "WASM :: sys_net_recibir desbordo la memoria lineal",
                 )?;
             }
-            // Bufer kernel-side donde el driver vuelca el frame; luego se copia
-            // a la memoria del app en una sola pasada.
+            // Bufer kernel-side donde la cola del usuario vuelca el frame; luego
+            // se copia a la memoria del app en una sola pasada.
             let mut buf: alloc::vec::Vec<u8> = alloc::vec![0u8; capacidad as usize];
-            let n = crate::drivers::red::recibir_en(&mut buf);
+            let n = crate::akasha::pop_usuario(&mut buf);
             if n == 0 {
                 return Ok(0);
             }
