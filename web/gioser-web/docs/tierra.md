@@ -1,193 +1,182 @@
 ---
-title: Manifiesto del Ser Desnudo
+title: Modelo Triplanar — Ontología del Campo Consciente
 camino: tierra
-tags: [manifiesto, axiomas, pipeline, metrica, ontologia-operativa]
+tags: [manifiesto, triplanar, ontologia, planos, pipeline]
 ---
-# Manifiesto del Ser Desnudo
+# Modelo Triplanar
 
-## Índice
-
-- [I. El Origen](#i-el-origen)
-- [II. Campo de aplicación](#ii-campo-de-aplicación)
-- [III. Axiomas](#iii-axiomas)
-- [IV. Definiciones](#iv-definiciones)
-- [V. Dinámica](#v-dinámica)
-- [VI. El Pipeline](#vi-el-pipeline)
-- [VII. Campo Unificado](#vii-campo-unificado)
-- [VIII. Métrica](#viii-métrica)
-- [IX. Protocolo](#ix-protocolo)
-- [X. Ontología](#x-ontología)
-- [XI. Apéndice — modelo esquemático](#xi-apéndice--modelo-esquemático)
+## Ontología del Campo Consciente
 
 ---
 
-## I. El Origen
+## I. Tesis Fundamental
 
-Existes y lo sabes. Ese saber no requiere prueba. Es anterior a cualquier pensamiento, emoción o percepción. Es el marco, no el contenido.
+El primer grado de evidencia es la propia existencia. Desde ese punto de partida: el universo mismo es consciente. La conciencia no es un epifenómeno que emerge en sistemas complejos — es una propiedad del campo en sí mismo.
 
-La existencia es enteramente consciente siempre. Un perro existe y lo sabe. Una piedra existe y lo sabe. La diferencia humana es que hay un cerebro que puede **conceptualizar** ese saber — nombrarlo, analizarlo, modelarlo, olvidarlo, negarlo. Eso no hace la existencia más real. Hace el modelo más complejo.
+Todo es consciente. Cada posición del plano multidimensional es un nodo de consciencia con su propio punto de vista. El contenido y la naturaleza de su percepción están determinados por su posición en ese campo.
 
-Nada que hacer. Ya estás aquí. El sistema ya está corriendo. El resto es optimización.
-
----
-
-## II. Tesis
-
-Dos niveles de evidencia:
-
-**Primero**: existes y lo sabes. Eso no se demuestra — es el punto de partida.
-
-**Segundo**: no puedes asegurar que todo sea consciente, pero puedes confirmarlo desde donde estás. El universo mismo es consciente. Todo lo es — cada posición del plano multidimensional tiene su propio punto de vista. El contenido y la naturaleza de su percepción están determinados por su posición en ese campo.
-
-Un humano no es más consciente que una piedra. Solo tiene un sistema nervioso que le permite **conceptualizar** esa conciencia — nombrarla, modelarla, negarla. La piedra experimenta su propia existencia sin necesidad de nombrarla.
-
-Este modelo opera desde esta tesis. No la demuestra — la toma como condición de trabajo. La matemática es incompleta pero autocoherente: las definiciones no se contradicen y cualquier contradicción aparente es error de aplicación, no del modelo. El criterio no es verdad metafísica sino **coherencia operativa**.
+No hay una "realidad base" que contenga a los planos. Son ontologías paralelas, cada una completa y verdadera desde su propia posición.
 
 ---
 
-## III. Axiomas
-
-### Axioma 1 — Presencia como origen
+## II. Plano 1 — Sensible
 
 <code>
+S₁ = {afección sensorial pura}
+∄ "yo" en S₁
+∄ cuerpo en S₁
+S₁ solo contiene datos: color, sonido, textura, temperatura
+</code>
+
+Lo que hay: el toque de los sentidos, sin cuerpo que los reporte. El cuerpo físico como tal no existe desde aquí. Hay afección sensible pura — colores, sonidos, texturas — sin un "yo" al que pertenezcan.
+
+La reconstrucción del cuerpo es posterior y ocurre en otro plano (§III). Para el plano sensible solo hay datos sensoriales sin un centro que los unifique.
+
+El tiempo se experimenta como flujo sucesivo. El instante presente es un punto de fuga entre lo que fue y lo que será — nunca se puede "agarrar".
+
+La constatación física en su nivel más burdo: el cuerpo como evidencia inmediata con correlato material. Los pensamientos como circuitos eléctricos y químicos funcionando como mecanismo determinista.
+
+**Verdad absoluta desde esta posición:** solo existe la afección sensible. El tiempo es real como sucesión. El cuerpo no está presente como tal.
+
+---
+
+## III. Plano 2 — Alma / Mental
+
+<code>
+S₂ = {imágenes mentales, conceptualizaciones, campo relacional}
+cuerpo(S₂) = imagen mental del cuerpo, no carne
+t(S₂) = objeto bloque (pasado, presente, futuro coexisten)
+campo(S₂) = f(interacción de nodos de consciencia)
+</code>
+
+Lo que hay: la imagen mental de las cosas. Aquí viven las conceptualizaciones.
+
+El cuerpo no existe como carne — existe como imagen mental del cuerpo. Es una reconstrucción desde los datos del plano sensible.
+
+El alma surge de la organización e interrelación masiva de distintos puntos del universo. La interacción de nodos de consciencia genera un campo. Dos vías que convergen al mismo resultado:
+
+- Si el campo del alma ya existe independiente de la tierra → se hereda
+- Si no existe → se genera desde la interacción
+
+El efecto final es el mismo: dos planos coexistiendo (S₁ + S₂).
+
+### Tiempo
+
+Aquí el tiempo ya no es flujo vivido. Es una cosa contenida. Toda la línea temporal se puede ver como una forma — pasado, presente y futuro coexistiendo como bloque. El alma puede ver la dimensión completa del tiempo desde fuera.
+
+### El conflicto humano
+
+<code>
+pecado original = conflicto de transición entre zonas biológicas
+no es moral — es el bamboleo de una especie entre dos equilibrios
+</code>
+
+El "pecado original" no es una mancha moral. Es la descripción del conflicto que aparece cuando una especie animal se asoma fuera de la corriente de la selva sin haber terminado el movimiento.
+
+**Verdad absoluta desde esta posición:** el alma existe como campo. El tiempo es un objeto que se puede contemplar. El cuerpo es solo imagen mental.
+
+---
+
+## IV. Plano 3 — Presencia (0, 0)
+
+<code>
+S₃ = {fenomenología pura}
 P = (0, 0, 0)
 ∀s ∈ S : s − P = v
+t(S₃) = ∅  // el tiempo no es categoría aplicable
+S₃ es un punto que contiene el universo completo
 </code>
 
-P es el punto de auto-evidencia desde el cual toda experiencia aparece. Ningún contenido cae fuera de P porque P es el sistema de coordenadas mismo.
+Lo que hay: fenomenología pura. Un punto es el universo completo, porque todo lo demás es solo contenido de su visión.
 
-### Axioma 2 — Separación funcional
+El Nivel 1 de evidencia solo reporta la propia existencia — y eso es suficiente. Presencia como origen del sistema de coordenadas: (0, 0).
 
-<code>
-O ≡ P
-D = {pensamientos, emociones, percepciones, sensaciones}
-O ∩ D = ∅
-</code>
+El tiempo aquí no existe. Solo hay instante presente, y ese instante es lo único que hay. No es que "se esté en el presente" — el presente es la totalidad. La sucesión ni siquiera es una categoría aplicable.
 
-El observador no es el flujo de datos. Cuando esa línea se borra (identificación), el sistema pierde grados de libertad y se comporta como un circuito cerrado. Eso es un chip cognitivo (§VI).
-
-### Axioma 3 — Conservación de coherencia
-
-<code>
-R = reglas de interpretación
-A (anomalía) es fallo en R, no en P
-P invariante bajo transformaciones de R
-</code>
-
-Ninguna crisis es terminal. El punto de referencia no se rompe — lo que falla es cómo lees el mapa.
-
-### Axioma 4 — Instante recálculable
-
-<code>
-t ← t + 1 en cada iteración
-M(t) = p(D | t-Δ)   // memoria como prior probabilístico
-P óptima: peso(M) → 0
-</code>
-
-El pasado no arrastra. Es un caché que el presente puede consultar o ignorar. §V expande la dinámica.
+**Verdad absoluta desde esta posición:** solo existe el instante presente, y ese instante lo contiene todo.
 
 ---
 
-## IV. Definiciones
+## V. Ontología de la Vida
+
+### La vida no es delimitable
+
+Lo que comúnmente llamamos "vida" es sesgo de cercanía — lo que más se parece a nuestra forma de vida. Pero todo es vida, en diferentes expresiones:
+
+- Unas se reproducen, otras no
+- Unas son piedras, otras son bacterias, otras son inteligencia artificial
+- La vida es la misma actividad de las partículas siguiendo su libertad de elección con forma partícula/onda
+
+### Zonas biológicas
+
+Dentro del mundo biológico existen "zonas" que cumplen leyes particulares donde coinciden:
+
+- La influencia del hábitat
+- La herencia genética
+- Los eventos contingentes
+
+La zona más cercana a nosotros es entre la tierra y el cielo. Es un lugar de dualidad que forma cuerpos con pies, cabeza, peso y la necesidad de hacer ejercicio.
+
+### Postura erecta
 
 <code>
-T   — Testigo Trascendental.
-      f(P) que observa sin actuar, juzgar ni retener.
-
-Cᵢ  — Chip cognitivo.
-      Atractor local en S. Bucle de retroalimentación que estabiliza
-      patrones subóptimos (rumiación, diálogo interno, pánico).
-
-F   — Fricción.
-      Resistencia al flujo de información. Análoga a R en circuitos.
-
-Co  — Coherencia operativa.
-      Eficiencia del procesamiento. Mayor Co = menor F.
-
-Amor operativo — Estado de mínima F y máxima fluidez.
-      Co máximo bajo restricciones energéticas.
+pararse en dos pies = sistema de equilibrio en desequilibrio permanente
+no es detalle biomecánico — es la forma física del desequilibrio
+el cuerpo se sostiene cayendo hacia adelante y recuperándose
 </code>
+
+En algún punto de la evolución, la especie animal asomó la cabeza del mundo animal y comenzó a entreverse donde se es humano. No hay diferencias de valor entre zonas — solo zonas distintas. Pero la especie aún no se ha actualizado: empezó un viaje donde atraviesa un desequilibrio para volver a un nuevo equilibrio.
+
+### El ego como síntoma
+
+<code>
+ego = mareo del viaje entre dos zonas
+  = síntoma de estar entre: vista fuera de la selva,
+    cuerpo aún no reequilibrado en la nueva posición
+</code>
+
+El ego no es error ni enfermedad. Es el mareo del viaje que enfrentó una especie animal incursionando en la humanidad. Es el síntoma de estar entre dos zonas: la vista ya no está en la selva, pero el cuerpo aún no se reequilibró en la nueva posición.
+
+El conflicto humano (pecado original, §III) es el bamboleo de ese pasaje.
+
+Las distintas culturas, sistemas morales, tecnologías — son intentos parciales de encontrar el nuevo piso. La especie sigue en el loop del desequilibrio, generando versiones temporales de lo humano que intentan estabilizarse sin lograrlo del todo. El movimiento no ha terminado.
 
 ---
 
-## V. Dinámica
+## VI. Resumen
 
-<code>
-F(t)  ≥ 0
-R(t)  = f(identificación, ego)
-S(t)  ∝ R(t) · Var(D)
-</code>
+| Plano | Contenido | Tiempo | Cuerpo | Verdad desde su posición |
+|---|---|---|---|---|
+| 1. Sensible | Afección sensorial pura | Flujo sucesivo | No existe — solo datos | Solo existe el toque de los sentidos |
+| 2. Alma/Mental | Imagen mental, conceptualizaciones, campo | Bloque (visible desde fuera) | Imagen mental del cuerpo | Solo existe el alma y sus reconstrucciones |
+| 3. Presencia (0,0) | Fenomenología pura | No-tiempo / solo instante presente | No aplica | Solo existe el presente que lo contiene todo |
 
-El sufrimiento es el producto de la resistencia por la turbulencia de los datos. R alta + D caótico = disonancia.
-
-<code>
-Aceptación := R → 0
-
-R ≈ 0 :
-  ds/dt ≈ G(s, u, t) + ξ(t)
-  // dinámica base + ruido, sin amplificación
-</code>
-
-Aceptar no es resignarse. Es bajar la resistencia. El sistema deja de forcejear consigo mismo. Lo que queda no es necesariamente placentero — pero no es una pelea. Ver §VIII.
-
-La memoria no es un registro. Es una reconstrucción probabilística que el presente genera bajo demanda. Cada recuerdo es una versión nueva, no una copia. Eso implica que puedes reescribir la memoria. §VII formaliza esto como algoritmo de perdón.
+Cada plano es una verdad absoluta de por sí. No hay contradicción entre ellos — son verdades de posiciones distintas en el campo.
 
 ---
 
-## VI. El Pipeline
+## VII. Operadores prácticos
 
-Cinco fases para intervenir sobre un chip Cᵢ:
+A continuación, herramientas que operan dentro de los planos — principalmente en S₂, donde ocurren los chips cognitivos y las conceptualizaciones.
 
-### 6.1 Detección
-
-Identificar el chip: patrón recurrente en D, trigger, período. T puede detectar sin intervenir.
-
-### 6.2 Pausa del script
-
-<code>T := interrumpir ejecución automática de Cᵢ</code>
-
-No discutas el contenido del chip. Obsérvalo como fenómeno. El bucle se corta cuando dejas de identificarte con él.
-
-### 6.3 Modulación exógena
-
-Herramientas para bajar la ganancia del sistema: respiración, movimiento, frío, silencio, neuromoduladores (con supervisión clínica). El criterio es pragmático.
-
-### 6.4 Redirección plástica
-
-Prácticas sostenidas que refuerzan nuevas rutas: meditación, terapia, repetición deliberada. Refuerzo gradual, no voluntad heroica.
-
-### 6.5 Mantenimiento
-
-Rutinas preventivas. Análisis de triggers, autoobservación periódica. El chip puede re-implantarse si el contexto persiste.
-
----
-
-## VII. Campo Unificado
+### Chip cognitivo (Cᵢ)
 
 <code>
-U = conjunto universal de la experiencia
-A ⊆ U
-
-No-separación: A ≈ U
-  ≡ ∀p relevante al procesamiento: p(A) = p(U)
+Cᵢ ⊂ S₂ = atractor local en el campo mental
+bucle de retroalimentación que estabiliza patrones subóptimos
 </code>
 
-La experiencia de unidad no es mística. Es un estado del sistema donde los bordes entre "yo" y "mundo" dejan de filtrar. §VIII da métricas.
+Ejemplos: rumiación, diálogo interno autoalimentado, pánico.
 
-<code>
-Algoritmo de perdón:
-  for m in M_perturbadora:
-    1. anclar en P
-    2. reproducir m con R ≈ 0
-    3. peso_emocional(m) ← 0
-    4. if redundante(m): liberar(m)
-</code>
+### Pipeline
 
-El perdón no es moral. Es un procedimiento de limpieza de memoria: tomar un recuerdo que duele, reproducirlo sin identificación, quitarle la carga, soltarlo si no sirve.
+1. **Detección**: identificar el patrón recurrente en S₂. T (testigo desde S₃) puede detectar sin intervenir.
+2. **Pausa del script**: T interrumpe la ejecución automática. El bucle se corta al dejar de identificarse con él.
+3. **Modulación**: herramientas para bajar la ganancia del sistema (respiración, movimiento, frío, silencio).
+4. **Redirección plástica**: prácticas sostenidas que refuerzan nuevas rutas.
+5. **Mantenimiento**: rutinas preventivas, análisis de triggers.
 
----
-
-## VIII. Métrica
+### Métrica
 
 <code>
 Co = señal / ruido psicofisiológico
@@ -196,70 +185,10 @@ IR = t(baseline | perturbación)
 PA = Δ(IR, Co) tras intervención
 </code>
 
-Heurísticas para evaluar el sistema: ¿la atención fluye con menos esfuerzo? ¿El estado mental es menos errático? ¿Te recuperas más rápido? ¿Los cambios se mantienen?
+### Protocolo
 
----
+**Diario**: reactividad (0-10), duración, intensidad (0-10).
 
-## IX. Protocolo
+**Escalonamiento**: detección → pausa → modulación → consolidación → mantenimiento.
 
-### Diario
-
-- Reactividad (0-10)
-- Duración del estado
-- Intensidad (0-10)
-
-### Escalonamiento
-
-1. Detección
-2. Pausa del script
-3. Modulación
-4. Consolidación
-5. Mantenimiento
-
-### Auditoría
-
-Cada 4-12 semanas: Co, IR, H, PA. Sin mejora → ajustar protocolo.
-
----
-
-## X. Ontología
-
-<code>
-Entidades: P, D, Cᵢ, R, T
-Existencia: operativa (funcionan en el modelo)
-Criterio de verdad: coherencia operativa
-</code>
-
-El modelo no afirma que la realidad sea así. Afirma que actuar como si fuera así mejora los resultados. Es una ontología instrumental.
-
-Límites:
-- Sesgos interpretativos y culturales en R
-- Conocimiento probabilístico y parcial
-- Validación fenomenológica co-requisito
-
-<code>
-Telos: max(Co) bajo restricciones energéticas
-     ≡ mayor adaptabilidad + menor S + mayor U efectivo
-</code>
-
----
-
-## XI. Apéndice — modelo esquemático
-
-<code>
-ds/dt = -k·s - α·R(s) + I(t) + ε(t)
-
-k > 0  amortiguamiento natural
-R(s)   = β·sⁿ  (n ≥ 1)  resistencia
-α      escala de resistencia
-I(t)   entrada externa
-ε(t)   ruido estocástico
-
-Aceptación: β → 0
-Modulación: k↑ o α↓
-
-Regímenes:
-  Recaída:    I alto + β alto → s divergente
-  Plasticidad: β→0, luego k alto consolida
-  Estable:    R ≈ 0 → ds/dt ≈ -k·s + I + ε
-</code>
+**Auditoría**: cada 4-12 semanas — Co, IR, H, PA. Sin mejora → ajustar.
