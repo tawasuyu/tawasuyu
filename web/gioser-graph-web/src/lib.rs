@@ -203,6 +203,7 @@ impl GraphWidget {
             .gb-svg { animation: graph-breathe 5s ease-in-out infinite; }\
             .gb-node { transition: filter 250ms ease, opacity 200ms ease; }\
             .gb-node:hover { filter: drop-shadow(0 0 14px rgba(255,255,255,0.2)); }\
+            .gb-edge-group { pointer-events: none; }\
             .gb-line { transition: opacity 400ms ease; }",
         ));
         svg.append_child(&style_el).ok();
@@ -214,6 +215,7 @@ impl GraphWidget {
             .unwrap()
             .dyn_into()
             .unwrap();
+        edges_group.set_attribute("class", "gb-edge-group").ok();
 
         // Grupo para nodos (con respiración, encima)
         let nodes_group: web_sys::SvgElement = self
@@ -251,19 +253,21 @@ impl GraphWidget {
             let c2 = color_map.get(edge.target.as_str()).copied().unwrap_or("#888");
 
             let w = edge.weight.unwrap_or(0.7);
-            // Sin normalización por max — usar weight directamente con más rango
-            // weight 0.5→0.8 suele ser el rango real; mapeamos a grosor visible
-            let thick = 0.6 + w * 4.0;  // w=0.5→2.6, w=0.9→4.2, w=1.0→4.6
+            // EXAGERADO: grosor 1 a 10px, máximo contraste
+            // weight 0.50 → 3px, weight 0.95 → 9px
+            let thick = 1.5 + w * 8.0;
 
-            // Mezclar colores: 50/50 + brillo según weight
+            // Color más saturado: mezcla sin gris, cada canal al extremo
             let blended = blend_colors(c1, c2, 0.5);
             let (br, bg, bb) = parse_hex(&blended);
-            let bright_factor = 0.2 + w * 0.5;  // más brillo directo
-            let r = (br as f64 + (255.0 - br as f64) * bright_factor) as u32;
-            let g = (bg as f64 + (255.0 - bg as f64) * bright_factor) as u32;
-            let b = (bb as f64 + (255.0 - bb as f64) * bright_factor) as u32;
+            // Brillo exagerado: peso bajo = color puro; peso alto → blanco
+            let bright_factor = w * 0.7;
+            let r = (br as f64 + (255.0 - br as f64) * bright_factor).min(255.0) as u32;
+            let g = (bg as f64 + (255.0 - bg as f64) * bright_factor).min(255.0) as u32;
+            let b = (bb as f64 + (255.0 - bb as f64) * bright_factor).min(255.0) as u32;
 
-            let alpha = 0.15 + w * 0.75;
+            // Opacidad: peso bajo = 40%, peso alto = 95%
+            let alpha = 0.40 + w * 0.55;
 
             let line: SvgLineElement = self
                 .document
