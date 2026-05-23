@@ -87,6 +87,10 @@ fn main() -> anyhow::Result<()> {
     }
 
     info!("ente-zero despierta como PID 1");
+    // Eco temprano al ring buffer del kernel: garantiza que el «estoy
+    // vivo» aparezca en TODAS las consolas (VGA + serial), no sólo en
+    // el `/dev/console` apuntado por el último `console=` del cmdline.
+    write_to_kmsg("despierta como PID 1");
     // Doctrina dura: PID 1 NUNCA puede salir — el kernel haría panic
     // ("Attempted to kill init") y, con `panic=N` en el cmdline, la
     // máquina cae en un reboot-loop. Por eso cualquier fallo de arranque
@@ -184,13 +188,35 @@ fn spawn_console_shell() -> std::io::Result<std::process::ExitStatus> {
         .status()
 }
 
-/// Escribe un mensaje directo a `/dev/console`, con stderr de respaldo.
+/// Escribe un mensaje directo a `/dev/console`, **a `/dev/kmsg`**
+/// (ring buffer del kernel, que se hace eco a todas las consolas
+/// registradas), y a stderr de respaldo. Así el banner se ve en VGA y
+/// serial sin importar cuál sea el último `console=` del cmdline.
 fn write_to_console(msg: &str) {
     use std::io::Write;
     if let Ok(mut f) = std::fs::OpenOptions::new().write(true).open("/dev/console") {
         let _ = f.write_all(msg.as_bytes());
     }
+    write_to_kmsg(msg);
     eprint!("{msg}");
+}
+
+/// Escribe un mensaje al `/dev/kmsg` del kernel — éste lo replica a
+/// todas las consolas registradas (`console=` del cmdline). Es el
+/// canal que usa systemd para que sus avisos se vean tanto en la VGA
+/// como en el serial.
+fn write_to_kmsg(msg: &str) {
+    use std::io::Write;
+    let Ok(mut f) = std::fs::OpenOptions::new().write(true).open("/dev/kmsg") else {
+        return;
+    };
+    // `<1>` = ALERT, prioridad alta — aparece incluso con loglevel bajo.
+    for line in msg.lines() {
+        let trimmed = line.trim_end();
+        if !trimmed.is_empty() {
+            let _ = writeln!(f, "<1>arje-zero: {trimmed}");
+        }
+    }
 }
 
 async fn primordial_loop(
