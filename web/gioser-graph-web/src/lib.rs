@@ -253,21 +253,27 @@ impl GraphWidget {
             let c2 = color_map.get(edge.target.as_str()).copied().unwrap_or("#888");
 
             let w = edge.weight.unwrap_or(0.7);
-            // EXAGERADO: grosor 1 a 10px, máximo contraste
-            // weight 0.50 → 3px, weight 0.95 → 9px
-            let thick = 1.5 + w * 8.0;
 
-            // Color más saturado: mezcla sin gris, cada canal al extremo
+            // Min-max scaling: expandir el rango real (0.83-0.93) a 0.0-1.0
+            // Con un mínimo global de 0.80 para capturar todo
+            let norm = ((w - 0.80) / 0.15).clamp(0.0, 1.0);
+            // Curva cuadrática para exagerar diferencias: norm²
+            let expanded = norm * norm;
+
+            // Grosor sutil: 0.5px a 3.5px (no grueso, diferenciado)
+            let thick = 0.8 + expanded * 3.0;
+
+            // Color mezclado
             let blended = blend_colors(c1, c2, 0.5);
             let (br, bg, bb) = parse_hex(&blended);
-            // Brillo exagerado: peso bajo = color puro; peso alto → blanco
-            let bright_factor = w * 0.7;
+            // Brillo: sin expander, normal 0-1, sútil
+            let bright_factor = norm * 0.5;
             let r = (br as f64 + (255.0 - br as f64) * bright_factor).min(255.0) as u32;
             let g = (bg as f64 + (255.0 - bg as f64) * bright_factor).min(255.0) as u32;
             let b = (bb as f64 + (255.0 - bb as f64) * bright_factor).min(255.0) as u32;
 
-            // Opacidad: peso bajo = 40%, peso alto = 95%
-            let alpha = 0.40 + w * 0.55;
+            // Opacidad baja y sutil: 15% a 40%
+            let alpha = 0.12 + expanded * 0.30;
 
             let line: SvgLineElement = self
                 .document
