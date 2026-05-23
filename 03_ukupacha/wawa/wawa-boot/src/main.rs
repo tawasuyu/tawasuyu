@@ -323,6 +323,13 @@ fn lanzar_qemu(imagen: &Path, ovmf: &str) -> Result<(), String> {
         .arg("-vga").arg("std")
         .arg("-serial").arg("stdio")
         .arg("--no-reboot")
+        // El cargador `bootloader` 0.11 mapea la memoria fisica que ve, pero NO
+        // las regiones MMIO en el agujero PCI de 64 bits (por encima de 4 GiB),
+        // donde OVMF coloca los BAR de virtio-blk en QEMU q35 modernos con
+        // KVM. Sin mapeo, leer un registro MMIO del disco era un #PF
+        // inevitable. Apagar `pci-hole64-size` fuerza a OVMF a alojar todos
+        // los BAR en los primeros 4 GiB, que el cargador si mapea.
+        .arg("-global").arg("q35-pcihost.pci-hole64-size=0")
         // El disco de objetos, como dispositivo virtio-blk sobre el bus PCI.
         .arg("-drive").arg(format!("format=raw,file={NOMBRE_DISCO},if=none,id=drv0"))
         .arg("-device").arg("virtio-blk-pci,drive=drv0");
