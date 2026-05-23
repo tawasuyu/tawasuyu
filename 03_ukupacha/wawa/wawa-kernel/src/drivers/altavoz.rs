@@ -12,6 +12,10 @@
 //  ofrece al userspace, gobernada por el foco del compositor.
 // =============================================================================
 
+use core::sync::atomic::{AtomicU64, Ordering};
+
+use alloc::collections::VecDeque;
+use spin::Mutex;
 use x86_64::instructions::port::Port;
 
 /// Frecuencia del cristal del PIT, en Hz — el divisor se calcula contra ella.
@@ -71,3 +75,81 @@ fn silenciar() {
         control.write(estado & !0b11);
     }
 }
+
+// =============================================================================
+//  SECUENCIAS DEL KERNEL — la voz propia del sistema (Fase 15)
+// -----------------------------------------------------------------------------
+//  La bocina es de la ventana enfocada (Fase 12), pero el kernel tambien
+//  necesita hablar: un acorde al arrancar, un repique al lanzar una app, un
+//  bajo al desalojarla. Una cola de notas pendientes —`(frecuencia, ms)`— y
+//  un reloj de fin —`FIN_NOTA`— que la tarea del compositor consulta cada
+//  fotograma: si la nota actual ya termino, pasa a la siguiente. Mientras el
+//  kernel suena, las llamadas de los apps a `sys_tono` se ignoran — el
+//  kernel manda en su propia voz.
+// =============================================================================
+
+/// La cola de notas pendientes — `(frecuencia_hz, duracion_ms)`. Solo la
+/// tocan tareas cooperativas: agendar (desde los hitos del kernel) y atender
+/// (desde la tarea del compositor). Ninguna IRQ se la disputa.
+static SECUENCIA: Mutex<VecDeque<(u32, u32)>> = Mutex::new(VecDeque::new());
+
+/// Milisegundo (lectura del reloj monotono) en que la nota actual acaba. Lo
+/// consulta `kernel_sonando` para gatear a las apps.
+static FIN_NOTA: AtomicU64 = AtomicU64::new(0);
+
+/// Agenda una secuencia de notas: cada `(frecuencia_hz, duracion_ms)` se hara
+/// sonar en orden. Un `frecuencia_hz=0` es una pausa silenciosa. Si ya habia
+/// una secuencia sonando, las nuevas notas se encolan al final.
+pub fn agendar(secuencia: &[(u32, u32)]) {
+    let mut cola = SECUENCIA.lock();
+    for &(frec, dur) in secuencia {
+        cola.push_back((frec, dur));
+    }
+}
+
+/// ¿Esta el kernel sonando una nota suya? Mientras dure, las llamadas de los
+/// apps a `sys_tono` quedan silenciadas — el kernel no se interrumpe a si
+/// mismo.
+pub fn kernel_sonando() -> bool {
+    crate::async_system::reloj::milisegundos() < FIN_NOTA.load(Ordering::Relaxed)
+}
+
+/// Atiende el reloj de la secuencia: si la nota actual ya termino, saca la
+/// siguiente de la cola y la hace sonar; si la cola esta vacia, calla la
+/// bocina. La invoca la tarea del compositor cada fotograma.
+pub fn atender() {
+    let ahora = crate::async_system::reloj::milisegundos();
+    if ahora < FIN_NOTA.load(Ordering::Relaxed) {
+        return; // la nota actual sigue sonando
+    }
+    let siguiente = SECUENCIA.lock().pop_front();
+    match siguiente {
+        Some((frec, dur)) => {
+            tono(frec);
+            FIN_NOTA.store(ahora + dur as u64, Ordering::Relaxed);
+        }
+        None => {
+            // Sin notas que sonar: silenciar. Las apps recuperaran la bocina
+            // en cuanto su proxima llamada a `sys_tono` vea `kernel_sonando`
+            // ya en `false`.
+            tono(0);
+        }
+    }
+}
+
+// =============================================================================
+//  CATALOGO DE VOCES — los hitos del sistema y su sonido
+// =============================================================================
+
+/// Acorde de bienvenida: Do — Mi — Sol del Do mayor. Suena una vez, al
+/// completarse el arranque del kernel.
+pub const VOZ_BIENVENIDA: [(u32, u32); 3] = [(523, 130), (659, 130), (784, 240)];
+
+/// Llamada al lanzar una app NUEVA en vivo: dos notas ascendentes.
+pub const VOZ_LANZAR: [(u32, u32); 2] = [(700, 70), (1050, 90)];
+
+/// Llamada al cerrar una app LIMPIAMENTE (`Alt+Q`): dos notas descendentes.
+pub const VOZ_CERRAR: [(u32, u32); 2] = [(900, 70), (520, 100)];
+
+/// Llamada al DESALOJAR una app por falla: un bajo de aviso.
+pub const VOZ_DESALOJO: [(u32, u32); 1] = [(180, 260)];

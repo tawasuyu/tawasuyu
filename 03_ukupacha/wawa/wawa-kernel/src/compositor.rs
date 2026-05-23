@@ -356,6 +356,8 @@ pub fn desalojar(indice: usize, color: Color) {
         }
         ventana.baliza = Some(color);
     }
+    // Fase 15: la voz del kernel anuncia el desalojo.
+    crate::drivers::altavoz::agendar(&crate::drivers::altavoz::VOZ_DESALOJO);
 
     if escritorio.flotantes.is_empty() {
         let marco = escritorio.ventanas[indice].marco;
@@ -629,7 +631,7 @@ fn recomponer(escritorio: &Escritorio) {
             },
             nombre: &ventana.nombre,
             fondo,
-            tinta: Color::TEXTO,
+            tinta: tinta_para(fondo),
         });
         cx += CELDA_TASKBAR_ANCHO + CELDA_TASKBAR_HUECO;
     }
@@ -690,6 +692,8 @@ fn cerrar() {
         Some(v) if v.baliza.is_none() && !v.cerrada => {}
         _ => return,
     }
+    // Fase 15: el kernel se despide de la app con un repique descendente.
+    crate::drivers::altavoz::agendar(&crate::drivers::altavoz::VOZ_CERRAR);
     // Marcar la baja y liberar el respaldo: la cache de un fotograma puede
     // pesar un megabyte — no tiene sentido retenerla en una ranura inerte.
     let ventana = &mut escritorio.ventanas[foco];
@@ -752,6 +756,8 @@ pub fn nacer_ventana(nat_ancho: usize, nat_alto: usize, nombre: &str) -> usize {
     escritorio.orden.push(indice);
     aplicar_teselado(&mut escritorio);
     recomponer(&escritorio);
+    // Fase 15: el kernel saluda al nacimiento con un repique ascendente.
+    crate::drivers::altavoz::agendar(&crate::drivers::altavoz::VOZ_LANZAR);
     indice
 }
 
@@ -958,6 +964,21 @@ fn area_taskbar(ancho_pantalla: usize, alto_pantalla: usize) -> RegionPantalla {
         y: alto_pantalla.saturating_sub(pie),
         ancho: ancho_pantalla,
         alto: pie,
+    }
+}
+
+/// El color de tinta —oscuro o claro— que da contraste legible sobre `fondo`.
+/// Sin esto, la pestaña amarilla palida del desalojo por memoria quedaba con
+/// texto blanco sobre crema: ilegible. La regla de luminancia ITU-R BT.601 fija
+/// el umbral: fondos claros llevan tinta oscura, fondos oscuros la clara.
+fn tinta_para(fondo: Color) -> Color {
+    let brillo =
+        (fondo.r as u32 * 299 + fondo.g as u32 * 587 + fondo.b as u32 * 114) / 1000;
+    if brillo > 160 {
+        // Fondo claro: tinta del reposo del lienzo, casi negra.
+        Color::LIENZO_EN_REPOSO
+    } else {
+        Color::TEXTO
     }
 }
 

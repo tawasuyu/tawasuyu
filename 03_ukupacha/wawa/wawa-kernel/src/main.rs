@@ -159,6 +159,9 @@ async fn tarea_compositor() {
         // vuelta tranquila en que ninguna app pinto.
         compositor::atender_raton();
         compositor::refrescar_puntero();
+        // FASE 15 :: atender la voz del kernel — pasar a la nota siguiente
+        // de la secuencia agendada, o silenciar al acabar.
+        drivers::altavoz::atender();
         // FASE 10 :: atender las altas en vivo. Por cada `Alt+N` pendiente,
         // dar a luz una aplicacion nueva — el compositor solo conto la
         // peticion; instanciar el WASM es trabajo del orquestador.
@@ -524,6 +527,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // disco de forma ASINCRONA: la demostracion de que la IRQ del disco
     // conduce la E/S sin detener a las aplicaciones visuales.
     ejecutor.spawn(tarea_sonda_disco());
+    // FASE 15 :: la voz del sistema da los buenos dias con un acorde de Do
+    // mayor. La tarea del compositor lo hara sonar nota a nota una vez que
+    // el reactor arranque y las interrupciones empiecen a llegar.
+    drivers::altavoz::agendar(&drivers::altavoz::VOZ_BIENVENIDA);
     traza("ejecutor :: arrancando reactor");
     x86_64::instructions::interrupts::enable();
     ejecutor.run();

@@ -469,6 +469,13 @@ pub(crate) fn enlazar_capacidades(
         "renaser",
         "sys_tono",
         |caller: Caller<'_, ContextoCapacidades>, frecuencia_hz: u32| {
+            // Prioridad del kernel: mientras suena una nota agendada por el
+            // sistema (acorde de bienvenida, repique al lanzar o cerrar una
+            // app, bajo de desalojo), las llamadas de los apps se ignoran. El
+            // kernel no se interrumpe a si mismo en mitad de su voz propia.
+            if crate::drivers::altavoz::kernel_sonando() {
+                return;
+            }
             if crate::compositor::foco() == caller.data().indice_app {
                 crate::drivers::altavoz::tono(frecuencia_hz);
             }
