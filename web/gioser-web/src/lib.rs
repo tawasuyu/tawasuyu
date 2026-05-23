@@ -357,8 +357,7 @@ impl AppState {
             );
             wrapper.append_child(&label).ok();
             content_clone.append_child(&wrapper).ok();
-            // Callback: recibe 'camino' del nodo clickeado y dispara click
-            // en el tip correspondiente (simula apertura de página)
+            // Callback: recibe 'camino' del nodo clickeado y navega
             let cb: Box<dyn FnMut(String)> = Box::new(move |target| {
                 // Mapa camino → elemento HTML
                 let el = match target.as_str() {
@@ -368,14 +367,15 @@ impl AppState {
                     "uku" | "agua" => "uku",
                     _ => "logos",
                 };
+                // Disparar evento click en el tip (el listener de
+                // install_tip_clicks lo captura y llama open_or_switch)
                 if let Some(tip) = document_clone.query_selector(
                     &format!(".tip[data-md][id='tip-{}']", el)
                 ).ok().flatten() {
-                    // Simular click real en el tip — la animación de
-                    // expansión la maneja AppState::open_or_switch
-                    let _ = tip.dispatch_event(
-                        &web_sys::MouseEvent::new("click").unwrap()
-                    );
+                    // Crear MouseEvent con coordenadas (necesario para
+                    // que prevent_default y open_or_switch tengan contexto)
+                    let ev = web_sys::MouseEvent::new("click").unwrap();
+                    let _ = tip.dispatch_event(&ev);
                 }
             });
             let mut graph = GraphWidget::new(
