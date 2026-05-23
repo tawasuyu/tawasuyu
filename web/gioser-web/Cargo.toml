@@ -39,4 +39,5 @@ features = [
     "NodeList",
     "Performance",
     "console",
+    "Location",
 ]

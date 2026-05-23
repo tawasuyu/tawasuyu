@@ -79,6 +79,10 @@ impl AppState {
         self.sync_active_class();
         self.sync_taskbar();
         self.load_md_if_empty(element, md_url);
+        // Actualizar hash sin disparar evento (evitar loop)
+        if let Some(win) = web_sys::window() {
+            let _ = win.location().set_hash(&format!("/{}", element));
+        }
     }
 
     fn restore_from_tab(&self, element: &str, origin_x: f64, origin_y: f64) {
@@ -106,6 +110,10 @@ impl AppState {
         self.sync_active_class();
         self.sync_taskbar();
         self.hide_deck(origin_x, origin_y);
+        // Limpiar hash
+        if let Some(win) = web_sys::window() {
+            let _ = win.location().set_hash("");
+        }
     }
 
     fn close(&self, element: &str, origin_x: f64, origin_y: f64) {
@@ -312,11 +320,31 @@ impl AppState {
             );
             wrapper.append_child(&label).ok();
             content_clone.append_child(&wrapper).ok();
-            // Cargar el grafo
+            // Callback: recibe 'camino' del nodo clickeado y dispara click
+            // en el tip correspondiente (simula apertura de página)
+            let cb: Box<dyn FnMut(String)> = Box::new(move |target| {
+                // Mapa camino → elemento HTML
+                let el = match target.as_str() {
+                    "logos" | "aire" => "logos",
+                    "nomos" | "fuego" => "nomos",
+                    "kay" | "tierra" => "kay",
+                    "uku" | "agua" => "uku",
+                    _ => "logos",
+                };
+                if let Some(tip) = document_clone.query_selector(
+                    &format!(".tip[data-md][id='tip-{}']", el)
+                ).ok().flatten() {
+                    // Simular click real en el tip — la animación de
+                    // expansión la maneja AppState::open_or_switch
+                    let _ = tip.dispatch_event(
+                        &web_sys::MouseEvent::new("click").unwrap()
+                    );
+                }
+            });
             let mut graph = GraphWidget::new(
                 wrapper,
                 "https://api.gioser.net",
-                None, // callback simplificado por ahora
+                Some(cb),
             );
             if let Err(e) = graph.load().await {
                 web_sys::console::warn_1(&format!("grafo: error al cargar: {:?}", e).into());
@@ -420,8 +448,48 @@ pub fn boot() -> Result<(), JsValue> {
     install_deck_delegation(&document, &app)?;
     install_taskbar(&document, &app)?;
     install_keyboard(&document, &app)?;
+    install_hash_listener(&window, &app)?;
     install_raf(&window, &document, &canvas, &renderer);
 
+    // Leer hash inicial para abrir página directa
+    if let Ok(hash) = window.location().hash() {
+        let clean = hash.trim_start_matches('#').trim_start_matches('/');
+        if !clean.is_empty() && clean != "" {
+            if let Some(el) = document.query_selector(&format!(".tip[data-md][id='tip-{}']", clean)).ok().flatten() {
+                let rect = el.get_bounding_client_rect();
+                let cx = rect.left() + rect.width() / 2.0;
+                let cy = rect.top() + rect.height() / 2.0;
+                if let Some(md_url) = el.get_attribute("data-md") {
+                    app.open_or_switch(clean, cx, cy, &md_url);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn install_hash_listener(window: &Window, app: &Rc<AppState>) -> Result<(), JsValue> {
+    let app2 = app.clone();
+    let doc = app.document.clone();
+    let win2 = window.clone();
+    let cb = Closure::<dyn FnMut(Event)>::new(move |_e: Event| {
+        if let Ok(hash) = win2.location().hash() {
+            let clean = hash.trim_start_matches('#').trim_start_matches('/');
+            if clean.is_empty() {
+                app2.home();
+            } else if let Some(el) = doc.query_selector(&format!(".tip[data-md][id='tip-{}']", clean)).ok().flatten() {
+                let rect = el.get_bounding_client_rect();
+                let cx = rect.left() + rect.width() / 2.0;
+                let cy = rect.top() + rect.height() / 2.0;
+                if let Some(md_url) = el.get_attribute("data-md") {
+                    app2.open_or_switch(clean, cx, cy, &md_url);
+                }
+            }
+        }
+    });
+    window.add_event_listener_with_callback("hashchange", cb.as_ref().unchecked_ref())?;
+    cb.forget();
     Ok(())
 }
 

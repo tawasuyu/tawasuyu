@@ -202,7 +202,16 @@ impl GraphWidget {
             }\
             .gb-svg { animation: graph-breathe 5s ease-in-out infinite; }\
             .gb-node { transition: filter 250ms ease, opacity 200ms ease; }\
-            .gb-node:hover { filter: drop-shadow(0 0 14px rgba(255,255,255,0.2)); }\
+            .gb-node:hover {\
+              filter: drop-shadow(0 0 14px rgba(255,255,255,0.2));\
+              animation: node-bounce 0.4s ease-out;\
+            }\
+            @keyframes node-bounce {\
+              0% { transform: scale(1); }\
+              40% { transform: scale(1.08); }\
+              70% { transform: scale(0.96); }\
+              100% { transform: scale(1); }\
+            }\
             .gb-edge-group { pointer-events: none; }\
             .gb-line { transition: opacity 400ms ease; }",
         ));
@@ -412,11 +421,11 @@ impl GraphWidget {
             g.add_event_listener_with_callback("mouseleave", leave.as_ref().unchecked_ref()).ok();
             leave.forget();
 
-            let doc_id = node.doc_id.clone().unwrap_or_default();
+            let nav_target = node.camino.clone(); // pasamos el camino (logos, nomos, etc)
             let on_nav2 = on_nav.clone();
             let click = Closure::<dyn FnMut(MouseEvent)>::new(move |_| {
                 let mut cb = on_nav2.borrow_mut();
-                if let Some(ref mut f) = *cb { f(doc_id.clone()); }
+                if let Some(ref mut f) = *cb { f(nav_target.clone()); }
             });
             g.add_event_listener_with_callback("click", click.as_ref().unchecked_ref()).ok();
             click.forget();
