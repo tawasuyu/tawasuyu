@@ -15,7 +15,10 @@
 //    * sys_estado_cargar     — leer el estado persistido de la app (Fase 7c);
 //    * sys_estado_guardar    — anclar el estado persistido de la app (Fase 7c);
 //    * sys_tiempo_mono       — leer el reloj monotono del sistema (Fase 11);
-//    * sys_tono              — hacer sonar la bocina del PC (Fase 12).
+//    * sys_tono              — hacer sonar la bocina del PC (Fase 12);
+//    * sys_net_mac           — leer la MAC de la tarjeta de red (Fase 19);
+//    * sys_net_enviar        — enviar un frame Ethernet crudo (Fase 19);
+//    * sys_net_recibir       — leer el siguiente frame recibido (Fase 19).
 //
 //  GUARDARRAIL: el kernel valida MATEMATICAMENTE todo puntero que el modulo le
 //  entrega contra los limites reales de su memoria lineal. No se confia en que
@@ -479,6 +482,89 @@ pub(crate) fn enlazar_capacidades(
             if crate::compositor::foco() == caller.data().indice_app {
                 crate::drivers::altavoz::tono(frecuencia_hz);
             }
+        },
+    )?;
+
+    // --- CAPACIDAD 12 :: sys_net_mac(salida) -> i32 ---
+    // Copia los 6 bytes de la MAC de la tarjeta de red en `salida`. Devuelve 0
+    // si la red esta montada; -1 si no hay tarjeta o aun no se monto.
+    enlazador.func_wrap(
+        "renaser",
+        "sys_net_mac",
+        |mut caller: Caller<'_, ContextoCapacidades>, salida: u32| -> Result<i32, Error> {
+            let Some(mac) = crate::drivers::red::mac() else {
+                return Ok(-1);
+            };
+            let memoria = obtener_memoria(&caller)?;
+            {
+                let m = memoria.data(&caller);
+                rango(m, salida, 6, "WASM :: sys_net_mac desbordo la memoria lineal")?;
+            }
+            let m = memoria.data_mut(&mut caller);
+            m[salida as usize..salida as usize + 6].copy_from_slice(&mac);
+            Ok(0)
+        },
+    )?;
+
+    // --- CAPACIDAD 13 :: sys_net_enviar(ptr, len) -> i32 ---
+    // Envia un frame Ethernet crudo (cabecera + payload, sin CRC). El app
+    // construye el frame entero en su memoria lineal. Devuelve 0 si el
+    // envio se entrego al dispositivo; -1 si fallo el envio o no hay red.
+    enlazador.func_wrap(
+        "renaser",
+        "sys_net_enviar",
+        |caller: Caller<'_, ContextoCapacidades>, ptr: u32, len: u32| -> Result<i32, Error> {
+            let memoria = obtener_memoria(&caller)?;
+            let datos = memoria.data(&caller);
+            let frame = rango(
+                datos,
+                ptr,
+                len as usize,
+                "WASM :: sys_net_enviar desbordo la memoria lineal",
+            )?;
+            match crate::drivers::red::enviar(frame) {
+                Ok(()) => Ok(0),
+                Err(_) => Ok(-1),
+            }
+        },
+    )?;
+
+    // --- CAPACIDAD 14 :: sys_net_recibir(salida, capacidad) -> i32 ---
+    // Saca el siguiente frame de la cola RX del dispositivo y lo copia en
+    // `salida`. Devuelve los bytes copiados (>0), 0 si no hay frame pendiente,
+    // o -1 si no hay red montada. La cola RX es del dispositivo y se comparte
+    // entre los apps: el primero que pregunte se lleva el paquete.
+    enlazador.func_wrap(
+        "renaser",
+        "sys_net_recibir",
+        |mut caller: Caller<'_, ContextoCapacidades>,
+         salida: u32,
+         capacidad: u32|
+         -> Result<i32, Error> {
+            if crate::drivers::red::mac().is_none() {
+                return Ok(-1);
+            }
+            let memoria = obtener_memoria(&caller)?;
+            // Verificar que el destino cabe ANTES de tocar la cola.
+            {
+                let m = memoria.data(&caller);
+                rango(
+                    m,
+                    salida,
+                    capacidad as usize,
+                    "WASM :: sys_net_recibir desbordo la memoria lineal",
+                )?;
+            }
+            // Bufer kernel-side donde el driver vuelca el frame; luego se copia
+            // a la memoria del app en una sola pasada.
+            let mut buf: alloc::vec::Vec<u8> = alloc::vec![0u8; capacidad as usize];
+            let n = crate::drivers::red::recibir_en(&mut buf);
+            if n == 0 {
+                return Ok(0);
+            }
+            let m = memoria.data_mut(&mut caller);
+            m[salida as usize..salida as usize + n].copy_from_slice(&buf[..n]);
+            Ok(n as i32)
         },
     )?;
 

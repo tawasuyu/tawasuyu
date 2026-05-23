@@ -37,7 +37,10 @@ const PAQUETE_MAX: usize = 1600;
 const PROFUNDIDAD_COLA: usize = 16;
 
 /// EtherType experimental (rango 0x88B5-0x88B6, reservado por IEEE para uso
-/// local). renaser lo usaria si quisiera definir su propio protocolo.
+/// local). renaser lo usaria si quisiera definir su propio protocolo. Desde
+/// la Fase 19 lo usa `pregon` desde el userspace; el kernel lo conserva como
+/// referencia para diagnosticos y futuros protocolos nativos.
+#[allow(dead_code)]
 pub const ETHER_TYPE_RENASER: u16 = 0x88B5;
 /// EtherType de ARP.
 pub const ETHER_TYPE_ARP: u16 = 0x0806;
@@ -190,6 +193,7 @@ pub fn enviar(frame: &[u8]) -> Result<(), &'static str> {
 /// Drena los paquetes RX pendientes y aplica `callback` a cada uno. Cada
 /// bufer se recicla a la cola RX al terminar — el dispositivo tiene siempre
 /// receptores listos para la proxima IRQ.
+#[allow(dead_code)]
 pub fn drenar_rx<F: FnMut(&[u8])>(mut callback: F) {
     let Some(tarjeta) = TARJETA.get() else {
         return;
@@ -209,6 +213,31 @@ pub fn drenar_rx<F: FnMut(&[u8])>(mut callback: F) {
             PAQUETES_RX.fetch_add(1, Ordering::Relaxed);
         }
     });
+}
+
+/// Recibe UN paquete: copia su contenido en `buf` y devuelve los bytes
+/// copiados, o `0` si no hay paquete pendiente. La interfaz que el host
+/// expone a los apps via `sys_net_recibir` — un paquete por llamada (Fase 19).
+pub fn recibir_en(buf: &mut [u8]) -> usize {
+    let Some(tarjeta) = TARJETA.get() else {
+        return 0;
+    };
+    interrupts::without_interrupts(|| {
+        let mut tarjeta = tarjeta.lock();
+        if !tarjeta.0.can_recv() {
+            return 0;
+        }
+        let rx = match tarjeta.0.receive() {
+            Ok(r) => r,
+            Err(_) => return 0,
+        };
+        let pkt = rx.packet();
+        let n = pkt.len().min(buf.len());
+        buf[..n].copy_from_slice(&pkt[..n]);
+        let _ = tarjeta.0.recycle_rx_buffer(rx);
+        PAQUETES_RX.fetch_add(1, Ordering::Relaxed);
+        n
+    })
 }
 
 // =============================================================================

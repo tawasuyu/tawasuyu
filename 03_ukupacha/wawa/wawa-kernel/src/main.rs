@@ -174,9 +174,10 @@ async fn tarea_compositor() {
     }
 }
 
-/// FASE 18 — la prueba viva del enlace de red. Envia un ARP request al
-/// gateway de QEMU (10.0.2.2) y registra por COM1 cada paquete que llegue de
-/// vuelta. El primer "hola" de renaser hacia el exterior.
+/// FASE 18/19 — la primera voz del kernel hacia la red. Envia un ARP request
+/// al gateway de QEMU para anunciarse, y termina: a partir de la Fase 19, los
+/// apps drenan la cola RX por su cuenta via `sys_net_recibir`, asi que el
+/// kernel no le quita paquetes a nadie.
 async fn tarea_red(mac: drivers::red::Mac) {
     // Dejar un par de fotogramas para que la cola RX se estabilice.
     for _ in 0..10 {
@@ -199,27 +200,7 @@ async fn tarea_red(mac: drivers::red::Mac) {
             let _ = writeln!(baliza::Serie, "red :: envio fallido :: {motivo}");
         }
     }
-    // Loop perpetuo: drenar la cola RX y registrar cada paquete en COM1.
-    loop {
-        async_system::reloj::EsperaFrame::nueva().await;
-        drivers::red::drenar_rx(|payload| {
-            if payload.len() < 14 {
-                return;
-            }
-            let etype = u16::from_be_bytes([payload[12], payload[13]]);
-            let src = &payload[6..12];
-            let dst = &payload[0..6];
-            let _ = writeln!(
-                baliza::Serie,
-                "red :: RX {} bytes :: dst={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} \
-                 src={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} type={:#06x}",
-                payload.len(),
-                dst[0], dst[1], dst[2], dst[3], dst[4], dst[5],
-                src[0], src[1], src[2], src[3], src[4], src[5],
-                etype,
-            );
-        });
-    }
+    // La tarea termina aqui. Los apps se encargan del trafico desde ahora.
 }
 
 /// FASE 6.2 — la prueba viva de la E/S asincrona. Esta tarea del reactor lee el

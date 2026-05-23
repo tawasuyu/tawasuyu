@@ -68,9 +68,9 @@ const FRANJA_CONSOLA: usize = 296;
 const FRANJA_TASKBAR: usize = 40;
 
 /// Anchura de cada celda de la barra de tareas, en pixeles. Dimensionada para
-/// que las ocho apps de genesis + el lanzador + el reloj caben holgados en una
-/// pantalla de 1280 px.
-const CELDA_TASKBAR_ANCHO: usize = 130;
+/// que las nueve apps de genesis (Fase 19 anexa `pregon`) + el lanzador + el
+/// reloj caben holgados en una pantalla de 1280 px.
+const CELDA_TASKBAR_ANCHO: usize = 116;
 /// Hueco entre celdas adyacentes de la barra.
 const CELDA_TASKBAR_HUECO: usize = 6;
 /// Margen izquierdo y derecho de la barra de tareas.
