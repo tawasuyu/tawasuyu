@@ -34,9 +34,15 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
-    Document, Element, HtmlElement, MouseEvent, SvgCircleElement, SvgElement, SvgLineElement,
-    SvgSvgElement, SvgTextElement, Window,
+    Document, HtmlElement, MouseEvent, Response, SvgCircleElement, SvgLineElement,
+    SvgsvgElement, SvgTextElement,
 };
+
+/// Helper para obtener el document desde web-sys. Se llama desde los métodos
+/// de GraphWidget sin depender de la referencia pasada (aunque la tenemos).
+pub(crate) fn document() -> Option<Document> {
+    web_sys::window().and_then(|w| w.document())
+}
 
 // ─── Tipos de respuesta de `/graph` ──────────────────────────────
 
@@ -116,7 +122,7 @@ fn camino_color(camino: &str) -> &str {
 pub struct GraphWidget {
     container: HtmlElement,
     api_url: String,
-    svg: Option<SvgSvgElement>,
+    svg: Option<SvgsvgElement>,
     nodes: Vec<NodeData>,
     edges: Vec<EdgeData>,
     on_navigate: NavCallback,
@@ -195,7 +201,7 @@ impl GraphWidget {
         let positions = force_layout(&self.nodes, &self.edges, CANVAS_W, CANVAS_H);
 
         let ns = "http://www.w3.org/2000/svg";
-        let svg: SvgSvgElement = self
+        let svg: SvgsvgElement = self
             .document
             .create_element_ns(Some(ns), "svg")
             .unwrap()
@@ -255,7 +261,7 @@ impl GraphWidget {
         let on_nav = self.on_navigate.clone();
         for (i, node) in self.nodes.iter().enumerate() {
             let (x, y) = positions.get(i).map(|(_, p)| *p).unwrap_or((100.0, 100.0));
-            let color = camino_color(&node.camino);
+            let color = camino_color(&node.camino).to_string();
 
             // Círculo
             let circle: SvgCircleElement = self
@@ -267,9 +273,9 @@ impl GraphWidget {
             circle.set_attribute("cx", &format!("{:.1}", x)).ok();
             circle.set_attribute("cy", &format!("{:.1}", y)).ok();
             circle.set_attribute("r", &format!("{:.1}", NODE_RADIUS)).ok();
-            circle.set_attribute("fill", color).ok();
+            circle.set_attribute("fill", &color).ok();
             circle.set_attribute("fill-opacity", "0.35").ok();
-            circle.set_attribute("stroke", color).ok();
+            circle.set_attribute("stroke", &color).ok();
             circle.set_attribute("stroke-width", "2").ok();
             circle.set_attribute("cursor", "pointer").ok();
 
