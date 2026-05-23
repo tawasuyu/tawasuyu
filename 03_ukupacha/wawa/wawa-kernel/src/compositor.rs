@@ -47,6 +47,7 @@
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
+use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -54,13 +55,24 @@ use crossbeam_queue::ArrayQueue;
 use mirada_layout::{tile, LayoutMode, LayoutParams, Rect};
 use spin::{Mutex, Once};
 
-use crate::consola::{self, Capa, Contenido};
+use crate::consola::{self, Capa, CeldaTaskbar, Contenido, Taskbar};
 use crate::grafico::{Color, RegionPantalla};
 
 /// Altura del strip superior reservado a la consola; las apps teselan debajo.
 /// La consola conserva ahi su registro de arranque completo —seis lineas,
 /// hasta la sonda asincrona de disco— legible sobre el teselado.
 const FRANJA_CONSOLA: usize = 296;
+
+/// Altura de la barra de tareas inferior (Fase 14): cada ventana viva tiene
+/// ahi una pestaña con su nombre, que el clic enfoca.
+const FRANJA_TASKBAR: usize = 40;
+
+/// Anchura de cada celda de la barra de tareas, en pixeles.
+const CELDA_TASKBAR_ANCHO: usize = 156;
+/// Hueco entre celdas adyacentes de la barra.
+const CELDA_TASKBAR_HUECO: usize = 6;
+/// Margen izquierdo de la primera celda.
+const CELDA_TASKBAR_MARGEN: usize = 16;
 
 /// El modo de teselado con que arranca el escritorio. El teclado lo cicla.
 const MODO_INICIAL: LayoutMode = LayoutMode::MasterStack;
@@ -116,6 +128,9 @@ struct Arrastre {
 
 /// Una ventana del escritorio: una app, su geometria y su ultimo fotograma.
 struct Ventana {
+    /// Nombre legible de la app — el que dicta su `EntradaApp` del manifiesto.
+    /// Aparece en la pestaña de la barra de tareas (Fase 14).
+    nombre: String,
     /// Tamaño natural del lienzo de la app — lo que sabe pintar, fijo.
     natural_ancho: usize,
     natural_alto: usize,
@@ -190,12 +205,13 @@ static PARTOS: AtomicUsize = AtomicUsize::new(0);
 /// Funda el escritorio: crea una ventana por app, con su marco teselado inicial
 /// y su cache de respaldo ya reservada al tamaño natural. `naturales` da el
 /// `(ancho, alto)` del lienzo de cada app, en el orden del manifiesto.
-pub fn fundar(ancho: usize, alto: usize, naturales: &[(usize, usize)]) {
+pub fn fundar(ancho: usize, alto: usize, naturales: &[(usize, usize, &str)]) {
     MANDOS.call_once(|| ArrayQueue::new(CAPACIDAD_MANDOS));
 
     let mut ventanas = Vec::with_capacity(naturales.len());
-    for &(nat_ancho, nat_alto) in naturales {
+    for &(nat_ancho, nat_alto, nombre) in naturales {
         ventanas.push(Ventana {
+            nombre: nombre.to_string(),
             natural_ancho: nat_ancho,
             natural_alto: nat_alto,
             // Marco provisional; `aplicar_teselado` lo fija enseguida.
@@ -581,7 +597,77 @@ fn recomponer(escritorio: &Escritorio) {
             enfocada: indice == foco,
         });
     }
-    consola::recomponer(area, &capas);
+
+    // FASE 14 :: armar las celdas de la barra de tareas. Una pestaña por
+    // ventana viva (no cerrada), de izquierda a derecha, con el nombre de la
+    // app; la enfocada lleva el color indigo del foco, las desalojadas su
+    // baliza, las demas el slate del panel. El clic sobre una pestaña enfoca
+    // su ventana.
+    let area_bar = area_taskbar(escritorio.ancho, escritorio.alto);
+    let mut celdas: Vec<CeldaTaskbar> = Vec::new();
+    let mut cx = area_bar.x + CELDA_TASKBAR_MARGEN;
+    let cy = area_bar.y + 4;
+    let calto = area_bar.alto.saturating_sub(8);
+    for (indice, ventana) in escritorio.ventanas.iter().enumerate() {
+        if ventana.cerrada {
+            continue;
+        }
+        if cx + CELDA_TASKBAR_ANCHO > area_bar.x + area_bar.ancho {
+            break;
+        }
+        let fondo = match ventana.baliza {
+            Some(color) => color,
+            None if indice == foco => Color::FOCO,
+            None => Color::PANEL,
+        };
+        celdas.push(CeldaTaskbar {
+            region: RegionPantalla {
+                x: cx,
+                y: cy,
+                ancho: CELDA_TASKBAR_ANCHO,
+                alto: calto,
+            },
+            nombre: &ventana.nombre,
+            fondo,
+            tinta: Color::TEXTO,
+        });
+        cx += CELDA_TASKBAR_ANCHO + CELDA_TASKBAR_HUECO;
+    }
+    let taskbar = Taskbar {
+        area: area_bar,
+        celdas: &celdas,
+    };
+    consola::recomponer(area, &capas, &taskbar);
+}
+
+/// Localiza la celda de la barra de tareas bajo la coordenada x: itera las
+/// ventanas vivas en orden de creacion y devuelve la N-esima donde la N es la
+/// posicion en la barra. `None` si el clic cae en un hueco entre celdas, antes
+/// del margen, o pasada la ultima.
+fn celda_taskbar_en(escritorio: &Escritorio, x: usize) -> Option<usize> {
+    let area_bar = area_taskbar(escritorio.ancho, escritorio.alto);
+    let margen_izq = area_bar.x + CELDA_TASKBAR_MARGEN;
+    if x < margen_izq {
+        return None;
+    }
+    let rel = x - margen_izq;
+    let paso = CELDA_TASKBAR_ANCHO + CELDA_TASKBAR_HUECO;
+    let posicion = rel / paso;
+    let offset = rel % paso;
+    if offset >= CELDA_TASKBAR_ANCHO {
+        return None;
+    }
+    let mut k = 0;
+    for (indice, ventana) in escritorio.ventanas.iter().enumerate() {
+        if ventana.cerrada {
+            continue;
+        }
+        if k == posicion {
+            return Some(indice);
+        }
+        k += 1;
+    }
+    None
 }
 
 // =============================================================================
@@ -642,13 +728,14 @@ fn cerrar() {
 /// con su cache de respaldo al tamaño natural, la añade al final del orden de
 /// teselado, recalcula el teselado y recompone. La invoca el orquestador del
 /// kernel justo antes de instanciar el WASM de la app, que necesita ese indice.
-pub fn nacer_ventana(nat_ancho: usize, nat_alto: usize) -> usize {
+pub fn nacer_ventana(nat_ancho: usize, nat_alto: usize, nombre: &str) -> usize {
     let Some(escritorio) = ESCRITORIO.get() else {
         return 0;
     };
     let mut escritorio = escritorio.lock();
     let indice = escritorio.ventanas.len();
     escritorio.ventanas.push(Ventana {
+        nombre: nombre.to_string(),
         natural_ancho: nat_ancho,
         natural_alto: nat_alto,
         marco: RegionPantalla {
@@ -716,8 +803,24 @@ pub fn atender_raton() {
         let y = evento.y as usize;
         let izq_antes = escritorio.raton_izq;
         if izq && !izq_antes {
-            // Boton bajó: un CLIC sobre el punto (x, y).
-            if let Some(v) = ventana_en(&escritorio, x, y) {
+            // Boton bajó: un CLIC. Si cae en la barra de tareas, enfocar la
+            // pestaña pulsada SIN iniciar arrastre. Si no, comportamiento
+            // habitual: enfocar la ventana topmost bajo el puntero.
+            let area_bar = area_taskbar(escritorio.ancho, escritorio.alto);
+            if y >= area_bar.y && y < area_bar.y + area_bar.alto {
+                if let Some(v) = celda_taskbar_en(&escritorio, x) {
+                    let viva = {
+                        let w = &escritorio.ventanas[v];
+                        w.baliza.is_none() && !w.cerrada
+                    };
+                    if viva {
+                        FOCO.store(v, Ordering::Relaxed);
+                        crate::drivers::altavoz::tono(0);
+                        alzar_si_flota(&mut escritorio, v);
+                        cambio = true;
+                    }
+                }
+            } else if let Some(v) = ventana_en(&escritorio, x, y) {
                 let viva = {
                     let w = &escritorio.ventanas[v];
                     w.baliza.is_none() && !w.cerrada
@@ -835,13 +938,26 @@ pub fn refrescar_puntero() {
 // =============================================================================
 
 /// El area de pantalla que el compositor tesela: toda la pantalla menos la
-/// franja de la consola en la cima.
+/// franja de la consola en la cima y la barra de tareas al pie.
 pub fn area_apps(ancho_pantalla: usize, alto_pantalla: usize) -> RegionPantalla {
+    let cabeza = FRANJA_CONSOLA.min(alto_pantalla);
+    let pie = FRANJA_TASKBAR.min(alto_pantalla.saturating_sub(cabeza));
     RegionPantalla {
         x: 0,
-        y: FRANJA_CONSOLA.min(alto_pantalla),
+        y: cabeza,
         ancho: ancho_pantalla,
-        alto: alto_pantalla.saturating_sub(FRANJA_CONSOLA),
+        alto: alto_pantalla.saturating_sub(cabeza).saturating_sub(pie),
+    }
+}
+
+/// El area de la barra de tareas: una franja al pie de la pantalla.
+fn area_taskbar(ancho_pantalla: usize, alto_pantalla: usize) -> RegionPantalla {
+    let pie = FRANJA_TASKBAR.min(alto_pantalla);
+    RegionPantalla {
+        x: 0,
+        y: alto_pantalla.saturating_sub(pie),
+        ancho: ancho_pantalla,
+        alto: pie,
     }
 }
 

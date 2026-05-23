@@ -67,6 +67,24 @@ pub(crate) struct Capa<'a> {
     pub(crate) enfocada: bool,
 }
 
+/// Una pestaña de la barra de tareas (Fase 14): una región de pantalla, el
+/// nombre de la app y los colores con que pintarla. Las arma el compositor
+/// con una pestaña por ventana viva.
+pub(crate) struct CeldaTaskbar<'a> {
+    pub(crate) region: RegionPantalla,
+    pub(crate) nombre: &'a str,
+    /// Color de fondo: indigo del foco, slate del panel, o color de baliza.
+    pub(crate) fondo: Color,
+    /// Color de la tinta del texto.
+    pub(crate) tinta: Color,
+}
+
+/// La barra de tareas del escritorio (Fase 14): su area y sus pestañas.
+pub(crate) struct Taskbar<'a> {
+    pub(crate) area: RegionPantalla,
+    pub(crate) celdas: &'a [CeldaTaskbar<'a>],
+}
+
 /// La consola grafica de renaser: doble bufer, pantalla fisica y pluma.
 pub(crate) struct Consola {
     lienzo: Lienzo,
@@ -224,7 +242,7 @@ impl Consola {
     /// flotantes se resuelve por si solo, sin recortes ni mascaras. Cada capa
     /// pinta primero su panel —el cromo de la ventana— y, encima, su contenido;
     /// una sola presentacion cierra la pasada.
-    fn recomponer(&mut self, area: RegionPantalla, capas: &[Capa]) {
+    fn recomponer(&mut self, area: RegionPantalla, capas: &[Capa], taskbar: &Taskbar) {
         self.lienzo.rellenar_rect(
             area.x,
             area.y,
@@ -252,7 +270,70 @@ impl Consola {
             }
             self.dibujar_borde(m, capa.enfocada);
         }
+        self.pintar_taskbar(taskbar);
         self.presentar();
+    }
+
+    /// Pinta la barra de tareas como ultima capa del escritorio (Fase 14): el
+    /// fondo de la franja, una linea fina arriba que la separa de las apps, y
+    /// las pestañas —cada una su rectángulo y su nombre—.
+    fn pintar_taskbar(&mut self, taskbar: &Taskbar) {
+        // Fondo de la barra y linea de separacion.
+        self.lienzo.rellenar_rect(
+            taskbar.area.x,
+            taskbar.area.y,
+            taskbar.area.ancho,
+            taskbar.area.alto,
+            Color::PANEL,
+        );
+        self.lienzo
+            .rellenar_rect(taskbar.area.x, taskbar.area.y, taskbar.area.ancho, 1, Color::SIN_FOCO);
+        // Las pestañas.
+        for celda in taskbar.celdas {
+            let r = celda.region;
+            self.lienzo
+                .rellenar_rect(r.x, r.y, r.ancho, r.alto, celda.fondo);
+            // El nombre, alineado a la izquierda de la pestaña, vertical-
+            // centrado a la altura visible de la franja.
+            let base_y = r.y + (r.alto + 14) / 2;
+            self.pintar_etiqueta(r.x + 10, base_y, celda.nombre, 16.0, celda.fondo, celda.tinta);
+        }
+    }
+
+    /// Rasteriza una cadena de texto a un tamaño dado, en (x, base_y), sobre
+    /// un fondo conocido —del que toma la mezcla por cobertura del glifo—. Es
+    /// la version sin estado de la pluma: el llamante decide donde escribir.
+    fn pintar_etiqueta(
+        &mut self,
+        x: usize,
+        base_y: usize,
+        texto: &str,
+        tamaño: f32,
+        fondo: Color,
+        tinta: Color,
+    ) {
+        let mut cursor = x;
+        for caracter in texto.chars() {
+            let (metricas, cobertura) = texto::rasterizar(caracter, tamaño);
+            let inicio_x = cursor as isize + metricas.xmin as isize;
+            let inicio_y = base_y as isize - metricas.ymin as isize - metricas.height as isize;
+            for fila in 0..metricas.height {
+                for col in 0..metricas.width {
+                    let opacidad = cobertura[fila * metricas.width + col];
+                    if opacidad == 0 {
+                        continue;
+                    }
+                    let px = inicio_x + col as isize;
+                    let py = inicio_y + fila as isize;
+                    if px < 0 || py < 0 {
+                        continue;
+                    }
+                    let color = mezclar(fondo, tinta, opacidad);
+                    self.lienzo.pintar_pixel(px as usize, py as usize, color);
+                }
+            }
+            cursor += metricas.advance_width as usize;
+        }
     }
 
     /// Inunda una region entera con un color plano —la baliza de desalojo: una
@@ -328,9 +409,9 @@ pub(crate) fn volcar_marco(
 /// La invoca `compositor` al arrancar y siempre que hay ventanas flotantes: el
 /// solapamiento obliga a repintar el escritorio en bloque, no ventana a
 /// ventana. Las capas llegan ya ordenadas de atras hacia adelante.
-pub(crate) fn recomponer(area: RegionPantalla, capas: &[Capa]) {
+pub(crate) fn recomponer(area: RegionPantalla, capas: &[Capa], taskbar: &Taskbar) {
     if let Some(consola) = CONSOLA.get() {
-        consola.lock().recomponer(area, capas);
+        consola.lock().recomponer(area, capas, taskbar);
     }
 }
 

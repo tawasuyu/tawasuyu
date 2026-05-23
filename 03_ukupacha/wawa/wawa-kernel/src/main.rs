@@ -105,6 +105,9 @@ fn traza(rotulo: &str) {
 /// su bytecode —cacheado en RAM al arrancar, para no volver al disco despues—
 /// y la geometria y la cuota de memoria con que instanciarla.
 struct Plantilla {
+    /// Nombre legible de la app — el del manifiesto, que la barra de tareas
+    /// (Fase 14) muestra en la pestaña.
+    nombre: alloc::string::String,
     bytecode: Vec<u8>,
     nat_ancho: usize,
     nat_alto: usize,
@@ -227,6 +230,7 @@ fn encender_app(
     // un molde en RAM con que `Alt+N` instanciara copias en vivo, sin volver al
     // disco —que la E/S por sondeo en mitad del reactor seria un mal vecino—.
     Some(Plantilla {
+        nombre: entrada.nombre.clone(),
         bytecode,
         nat_ancho: natural.ancho,
         nat_alto: natural.alto,
@@ -252,7 +256,7 @@ fn lanzar_app() {
 
     // La ventana nace primero: el compositor le entrega su indice —su
     // identidad—, que el WASM necesita para hallar su ventana y su canal.
-    let indice = compositor::nacer_ventana(plantilla.nat_ancho, plantilla.nat_alto);
+    let indice = compositor::nacer_ventana(plantilla.nat_ancho, plantilla.nat_alto, &plantilla.nombre);
     match wasm::AplicacionWasm::cargar(
         &plantilla.bytecode,
         plantilla.nat_ancho,
@@ -318,10 +322,10 @@ fn cargar_userspace(ejecutor: &mut Executor, ancho_pantalla: usize, alto_pantall
         // con su cache de respaldo y su marco teselado por `mirada-layout`— y
         // pintar el escenario antes de encender las apps: el teselado se ve
         // aunque alguna app no llegue a pintar su primer fotograma.
-        let naturales: Vec<(usize, usize)> = m
+        let naturales: Vec<(usize, usize, &str)> = m
             .apps
             .iter()
-            .map(|e| (e.region_ancho as usize, e.region_alto as usize))
+            .map(|e| (e.region_ancho as usize, e.region_alto as usize, e.nombre.as_str()))
             .collect();
         compositor::fundar(ancho_pantalla, alto_pantalla, &naturales);
         compositor::componer_escenario();
