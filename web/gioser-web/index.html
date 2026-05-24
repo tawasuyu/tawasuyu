@@ -85,11 +85,6 @@
         </ul>
       </div>
     </button>
-
-    <!-- Líneas de retícula (después de cuadrantes para hover via JS) -->
-    <div class="reticula-v" aria-hidden="true"></div>
-    <div class="reticula-h" aria-hidden="true"></div>
-    <div class="reticula-center" aria-hidden="true"></div>
   </div>
 
   <!-- DECK: contenedor para páginas md (oculto hasta expandir cuadrante) -->
@@ -156,17 +151,13 @@
     const reticulaH = document.querySelector('.reticula-h');
     const reticulaC = document.querySelector('.reticula-center');
 
-    // Hover en cuadrantes ilumina retícula
+    // Hover en cuadrantes ilumina portada
     document.querySelectorAll('.cuadrante').forEach(q => {
       q.addEventListener('mouseenter', () => {
-        reticulaV.classList.add('reticula-lit');
-        reticulaH.classList.add('reticula-lit');
-        reticulaC.classList.add('reticula-lit');
+        portada.classList.add('portada-hover');
       });
       q.addEventListener('mouseleave', () => {
-        reticulaV.classList.remove('reticula-lit');
-        reticulaH.classList.remove('reticula-lit');
-        reticulaC.classList.remove('reticula-lit');
+        portada.classList.remove('portada-hover');
       });
       q.addEventListener('click', function(e) {
         const hex = this.dataset.q;

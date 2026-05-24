@@ -17,11 +17,6 @@
   --fg-dim: #666;
   --fg-bright: #e0e0e0;
   --accent: #a0a0a0;
-  --accent-glow: #c0c0c0;
-  --reticula: #3a3a3a;
-  --reticula-hover: rgba(192, 192, 192, 0.15);
-  --border: #333;
-  --border-hover: #666;
   --font: 'SF Mono', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
   --font-ui: -apple-system, 'Inter', 'Segoe UI', sans-serif;
 }
@@ -39,7 +34,7 @@ html, body {
 }
 
 /* ===================================================
-   PORTADA — retícula 2×2
+   PORTADA — grid 2×2
    =================================================== */
 
 .portada {
@@ -52,54 +47,32 @@ html, body {
   background: var(--bg);
 }
 
-/* Líneas de retícula — sobre todo */
-.reticula-v {
+/* ===================================================
+   RETÍCULA — pseudoelemento con líneas + círculo
+   =================================================== */
+
+.portada::before {
+  content: '';
   position: absolute;
-  top: 0;
-  left: 50%;
-  width: 3px;
-  height: 100%;
-  background: #777;
+  top: 0; left: 0; right: 0; bottom: 0;
   z-index: 30;
   pointer-events: none;
-  transform: translateX(-1.5px);
+  transition: all 0.35s ease;
+  background:
+    /* línea vertical */
+    linear-gradient(90deg, transparent calc(50% - 1.5px), #666 calc(50% - 1.5px), #777 calc(50% + 1.5px), transparent calc(50% + 1.5px)),
+    /* línea horizontal */
+    linear-gradient(0deg, transparent calc(50% - 1.5px), #666 calc(50% - 1.5px), #777 calc(50% + 1.5px), transparent calc(50% + 1.5px)),
+    /* círculo centro */
+    radial-gradient(circle at 50% 50%, transparent calc(14px), #888 calc(14px), #888 calc(17px), transparent calc(17px));
 }
 
-.reticula-h {
-  position: absolute;
-  top: 50%;
-  left: 0;
-  width: 100%;
-  height: 3px;
-  background: #777;
-  z-index: 30;
-  pointer-events: none;
-  transform: translateY(-1.5px);
-}
-
-.reticula-center {
-  position: absolute;
-  top: calc(50% - 16px);
-  left: calc(50% - 16px);
-  width: 32px;
-  height: 32px;
-  border: 3px solid #777;
-  border-radius: 50%;
-  z-index: 30;
-  pointer-events: none;
-  background: transparent;
-}
-
-/* Iluminación en hover via JS */
-.reticula-lit {
-  background: rgba(200, 200, 200, 0.5) !important;
-  box-shadow: 0 0 12px rgba(200, 200, 200, 0.3) !important;
-}
-
-.reticula-center.reticula-lit {
-  border-color: rgba(200, 200, 200, 0.6) !important;
-  box-shadow: 0 0 14px rgba(200, 200, 200, 0.35) !important;
-  background: rgba(200, 200, 200, 0.06) !important;
+.portada-hover::before {
+  background:
+    linear-gradient(90deg, transparent calc(50% - 1.5px), rgba(200,200,200,0.5) calc(50% - 1.5px), rgba(200,200,200,0.5) calc(50% + 1.5px), transparent calc(50% + 1.5px)),
+    linear-gradient(0deg, transparent calc(50% - 1.5px), rgba(200,200,200,0.5) calc(50% - 1.5px), rgba(200,200,200,0.5) calc(50% + 1.5px), transparent calc(50% + 1.5px)),
+    radial-gradient(circle at 50% 50%, transparent calc(14px), rgba(200,200,200,0.6) calc(14px), rgba(200,200,200,0.6) calc(17px), transparent calc(17px)),
+    radial-gradient(circle at 50% 50%, rgba(200,200,200,0.06) 40%, transparent 70%);
 }
 
 /* ===================================================
@@ -121,7 +94,7 @@ html, body {
 }
 
 .cuadrante:hover {
-  background: var(--reticula-hover);
+  background: rgba(192, 192, 192, 0.15);
 }
 
 /* Borde iluminado en hover */
@@ -134,7 +107,7 @@ html, body {
 }
 
 .cuadrante:hover .cuadrante-border {
-  border-color: var(--border-hover);
+  border-color: #666;
 }
 
 /* Contenido */
@@ -147,6 +120,10 @@ html, body {
   padding: 40px 32px;
   opacity: 0.7;
   transition: opacity 0.3s ease;
+}
+
+.cuadrante:hover .cuadrante-content {
+  opacity: 1;
 }
 
 /* Alineación: izquierda mira a la derecha, derecha mira a la izquierda */
@@ -164,10 +141,6 @@ html, body {
   text-align: left;
   padding-left: 40px;
   padding-right: 20px;
-}
-
-.cuadrante:hover .cuadrante-content {
-  opacity: 1;
 }
 
 .cuadrante-hex {
@@ -230,14 +203,14 @@ html, body {
   color: var(--accent);
   font-family: var(--font);
   letter-spacing: 0.05em;
-  border: 1px solid var(--border);
+  border: 1px solid #333;
   padding: 2px 8px;
   border-radius: 2px;
   transition: border-color 0.3s ease, color 0.3s ease;
 }
 
 .cuadrante:hover .meta-cta {
-  border-color: var(--accent-glow);
+  border-color: var(--fg-bright);
   color: var(--fg-bright);
 }
 
@@ -340,7 +313,7 @@ html, body {
   width: 32px;
   height: 32px;
   background: rgba(255,255,255,0.04);
-  border: 1px solid var(--border);
+  border: 1px solid #333;
   border-radius: 4px;
   color: var(--fg);
   cursor: pointer;
@@ -352,7 +325,7 @@ html, body {
 
 .page-control-btn:hover {
   background: rgba(255,255,255,0.08);
-  border-color: var(--border-hover);
+  border-color: #666;
 }
 
 .page-close {
@@ -372,7 +345,7 @@ html, body {
   right: 0;
   height: 40px;
   background: rgba(12, 12, 12, 0.92);
-  border-top: 1px solid var(--border);
+  border-top: 1px solid #333;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -419,7 +392,7 @@ html, body {
 .taskbar-divider {
   width: 1px;
   height: 20px;
-  background: var(--border);
+  background: #333;
   margin: 0 4px;
 }
 
@@ -475,10 +448,10 @@ html, body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--border);
+  background: #333;
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--border-hover);
+  background: #666;
 }
