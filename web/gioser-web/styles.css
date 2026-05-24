@@ -62,7 +62,12 @@ html, body {
   background: var(--reticula);
   z-index: 1;
   pointer-events: none;
-  transition: background 0.4s ease;
+  transition: background 0.4s ease, box-shadow 0.4s ease;
+}
+
+.reticula-v.brighter {
+  background: rgba(192, 192, 192, 0.35);
+  box-shadow: 0 0 6px rgba(192, 192, 192, 0.2);
 }
 
 .reticula-h {
@@ -74,7 +79,12 @@ html, body {
   background: var(--reticula);
   z-index: 1;
   pointer-events: none;
-  transition: background 0.4s ease;
+  transition: background 0.4s ease, box-shadow 0.4s ease;
+}
+
+.reticula-h.brighter {
+  background: rgba(192, 192, 192, 0.35);
+  box-shadow: 0 0 6px rgba(192, 192, 192, 0.2);
 }
 
 .reticula-center {
@@ -87,7 +97,12 @@ html, body {
   border-radius: 50%;
   z-index: 2;
   pointer-events: none;
-  transition: border-color 0.4s ease;
+  transition: border-color 0.4s ease, box-shadow 0.4s ease;
+}
+
+.reticula-center.brighter {
+  border-color: rgba(192, 192, 192, 0.3);
+  box-shadow: 0 0 8px rgba(192, 192, 192, 0.15);
 }
 
 /* ===================================================
@@ -112,11 +127,6 @@ html, body {
   background: var(--reticula-hover);
 }
 
-.cuadrante:hover ~ .reticula-v,
-.cuadrante:hover ~ .reticula-h {
-  background: var(--accent-glow);
-}
-
 /* Borde iluminado en hover */
 .cuadrante-border {
   position: absolute;
@@ -137,7 +147,9 @@ html, body {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  padding: 24px 28px;
+  align-items: center;
+  text-align: center;
+  padding: 32px 20px;
   opacity: 0.7;
   transition: opacity 0.3s ease;
 }
@@ -169,8 +181,9 @@ html, body {
   color: var(--fg-dim);
   line-height: 1.5;
   margin-bottom: 12px;
-  max-width: 80%;
+  max-width: 75%;
   font-family: var(--font-ui);
+  text-align: center;
 }
 
 .cuadrante-meta {

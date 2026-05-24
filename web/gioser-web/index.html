@@ -13,29 +13,7 @@
 
   <!-- Portada: retícula 2×2 tipo chakana -->
   <div id="portada" class="portada">
-    <!-- Líneas de la retícula -->
-    <div class="reticula-v" aria-hidden="true"></div>
-    <div class="reticula-h" aria-hidden="true"></div>
-    <div class="reticula-center" aria-hidden="true"></div>
-
-    <!-- Cuadrante I: 0x00 - Bare-Metal OS (sup-der) -->
-    <button class="cuadrante cuadrante-00" data-q="00" aria-label="0x00 Bare-Metal OS">
-      <div class="cuadrante-border"></div>
-      <div class="cuadrante-content">
-        <span class="cuadrante-hex">0x00</span>
-        <span class="cuadrante-title">Bare-Metal OS</span>
-        <span class="cuadrante-context">El control directo sobre el silicio y la secuencia de arranque.</span>
-        <div class="cuadrante-meta">
-          <span class="meta-cta">⏎ init</span>
-          <span class="meta-stat">init · boot · sovereign</span>
-        </div>
-        <ul class="cuadrante-crates">
-          <li>arjé (Init/Nivel 0)</li>
-        </ul>
-      </div>
-    </button>
-
-    <!-- Cuadrante II: 0x01 - Systems & Compositors (sup-izq) -->
+    <!-- Cuadrante I: 0x01 - Systems & Compositors (sup-izq) -->
     <button class="cuadrante cuadrante-01" data-q="01" aria-label="0x01 Systems & Compositors">
       <div class="cuadrante-border"></div>
       <div class="cuadrante-content">
@@ -49,6 +27,23 @@
         <ul class="cuadrante-crates">
           <li>eidolon (Compositor Wayland)</li>
           <li>shimi (Shell/Launcher)</li>
+        </ul>
+      </div>
+    </button>
+
+    <!-- Cuadrante II: 0x00 - Bare-Metal OS (sup-der) -->
+    <button class="cuadrante cuadrante-00" data-q="00" aria-label="0x00 Bare-Metal OS">
+      <div class="cuadrante-border"></div>
+      <div class="cuadrante-content">
+        <span class="cuadrante-hex">0x00</span>
+        <span class="cuadrante-title">Bare-Metal OS</span>
+        <span class="cuadrante-context">El control directo sobre el silicio y la secuencia de arranque.</span>
+        <div class="cuadrante-meta">
+          <span class="meta-cta">⏎ init</span>
+          <span class="meta-stat">init · boot · sovereign</span>
+        </div>
+        <ul class="cuadrante-crates">
+          <li>arjé (Init/Nivel 0)</li>
         </ul>
       </div>
     </button>
@@ -90,6 +85,11 @@
         </ul>
       </div>
     </button>
+
+    <!-- Líneas de retícula (después de cuadrantes para hover via JS) -->
+    <div class="reticula-v" aria-hidden="true"></div>
+    <div class="reticula-h" aria-hidden="true"></div>
+    <div class="reticula-center" aria-hidden="true"></div>
   </div>
 
   <!-- DECK: contenedor para páginas md (oculto hasta expandir cuadrante) -->
@@ -152,8 +152,22 @@
     const portada = document.getElementById('portada');
     const deck = document.getElementById('deck');
     const controls = document.getElementById('global-page-controls');
+    const reticulaV = document.querySelector('.reticula-v');
+    const reticulaH = document.querySelector('.reticula-h');
+    const reticulaC = document.querySelector('.reticula-center');
 
+    // Hover en cuadrantes ilumina retícula
     document.querySelectorAll('.cuadrante').forEach(q => {
+      q.addEventListener('mouseenter', () => {
+        reticulaV.classList.add('brighter');
+        reticulaH.classList.add('brighter');
+        reticulaC.classList.add('brighter');
+      });
+      q.addEventListener('mouseleave', () => {
+        reticulaV.classList.remove('brighter');
+        reticulaH.classList.remove('brighter');
+        reticulaC.classList.remove('brighter');
+      });
       q.addEventListener('click', function(e) {
         const hex = this.dataset.q;
         const camino = Q_TO_CAMINO[hex] || 'aire';
@@ -164,7 +178,6 @@
         controls.style.opacity = '1';
         controls.style.pointerEvents = 'auto';
         // navegar vía hash para que el WASM lo atrape
-        // (el WASM escucha popstate + lee hash al boot)
         history.pushState({}, '', '/estudio/' + camino);
         window.dispatchEvent(new PopStateEvent('popstate'));
       });
