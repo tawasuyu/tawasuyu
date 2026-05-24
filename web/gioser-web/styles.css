@@ -18,10 +18,10 @@
   --fg-bright: #e0e0e0;
   --accent: #a0a0a0;
   --accent-glow: #c0c0c0;
-  --reticula: #2a2a2a;
-  --reticula-hover: rgba(192, 192, 192, 0.12);
-  --border: #2a2a2a;
-  --border-hover: #555;
+  --reticula: #3a3a3a;
+  --reticula-hover: rgba(192, 192, 192, 0.15);
+  --border: #333;
+  --border-hover: #666;
   --font: 'SF Mono', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
   --font-ui: -apple-system, 'Inter', 'Segoe UI', sans-serif;
 }
@@ -154,17 +154,21 @@ html, body {
   transition: opacity 0.3s ease;
 }
 
-/* Alineación: cuadrantes izquierda miran a la izquierda, derecha a la derecha */
+/* Alineación: izquierda mira a la derecha, derecha mira a la izquierda */
 .cuadrante-01 .cuadrante-content,
 .cuadrante-02 .cuadrante-content {
-  align-items: flex-start;
-  text-align: left;
+  align-items: flex-end;
+  text-align: right;
+  padding-right: 40px;
+  padding-left: 20px;
 }
 
 .cuadrante-00 .cuadrante-content,
 .cuadrante-03 .cuadrante-content {
-  align-items: flex-end;
-  text-align: right;
+  align-items: flex-start;
+  text-align: left;
+  padding-left: 40px;
+  padding-right: 20px;
 }
 
 .cuadrante:hover .cuadrante-content {
@@ -200,12 +204,12 @@ html, body {
 
 .cuadrante-01 .cuadrante-context,
 .cuadrante-02 .cuadrante-context {
-  text-align: left;
+  text-align: right;
 }
 
 .cuadrante-00 .cuadrante-context,
 .cuadrante-03 .cuadrante-context {
-  text-align: right;
+  text-align: left;
 }
 
 .cuadrante-meta {
@@ -217,12 +221,12 @@ html, body {
 
 .cuadrante-01 .cuadrante-meta,
 .cuadrante-02 .cuadrante-meta {
-  flex-direction: row;
+  flex-direction: row-reverse;
 }
 
 .cuadrante-00 .cuadrante-meta,
 .cuadrante-03 .cuadrante-meta {
-  flex-direction: row-reverse;
+  flex-direction: row;
 }
 
 .meta-cta {
