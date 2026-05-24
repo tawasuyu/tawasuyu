@@ -9,7 +9,7 @@
 </head>
 <body>
   <!-- Canvas de fondo (opcional para portada, necesario para WASM) -->
-  <canvas id="gioser-canvas" style="position:fixed;inset:0;width:100%;height:100%;pointer-events:none;opacity:0;z-index:0;" aria-hidden="true"></canvas>
+  <canvas id="gioser-canvas" style="position:fixed;inset:0;width:1px;height:1px;pointer-events:none;z-index:-1;" aria-hidden="true"></canvas>
 
   <!-- Portada: retícula 2×2 tipo chakana -->
   <div id="portada" class="portada">
@@ -159,14 +159,14 @@
     // Hover en cuadrantes ilumina retícula
     document.querySelectorAll('.cuadrante').forEach(q => {
       q.addEventListener('mouseenter', () => {
-        reticulaV.classList.add('brighter');
-        reticulaH.classList.add('brighter');
-        reticulaC.classList.add('brighter');
+        reticulaV.classList.add('reticula-lit');
+        reticulaH.classList.add('reticula-lit');
+        reticulaC.classList.add('reticula-lit');
       });
       q.addEventListener('mouseleave', () => {
-        reticulaV.classList.remove('brighter');
-        reticulaH.classList.remove('brighter');
-        reticulaC.classList.remove('brighter');
+        reticulaV.classList.remove('reticula-lit');
+        reticulaH.classList.remove('reticula-lit');
+        reticulaC.classList.remove('reticula-lit');
       });
       q.addEventListener('click', function(e) {
         const hex = this.dataset.q;
