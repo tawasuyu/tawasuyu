@@ -48,7 +48,7 @@ html, body {
 }
 
 /* ===================================================
-   RETÍCULA — pseudoelemento con líneas + círculo
+   RETÍCULA — líneas + círculo sutiles, brillan en hover
    =================================================== */
 
 .portada::before {
@@ -57,22 +57,19 @@ html, body {
   top: 0; left: 0; right: 0; bottom: 0;
   z-index: 30;
   pointer-events: none;
-  transition: all 0.35s ease;
+  transition: all 0.4s ease;
   background:
-    /* línea vertical */
-    linear-gradient(90deg, transparent calc(50% - 1.5px), #666 calc(50% - 1.5px), #777 calc(50% + 1.5px), transparent calc(50% + 1.5px)),
-    /* línea horizontal */
-    linear-gradient(0deg, transparent calc(50% - 1.5px), #666 calc(50% - 1.5px), #777 calc(50% + 1.5px), transparent calc(50% + 1.5px)),
-    /* círculo centro */
-    radial-gradient(circle at 50% 50%, transparent calc(14px), #888 calc(14px), #888 calc(17px), transparent calc(17px));
+    linear-gradient(90deg, transparent calc(50% - 0.5px), rgba(150,150,150,0.25) calc(50% - 0.5px), rgba(150,150,150,0.35) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
+    linear-gradient(0deg, transparent calc(50% - 0.5px), rgba(150,150,150,0.25) calc(50% - 0.5px), rgba(150,150,150,0.35) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
+    radial-gradient(circle at 50% 50%, transparent calc(11px), rgba(150,150,150,0.35) calc(11px), rgba(150,150,150,0.35) calc(13px), transparent calc(13px));
 }
 
 .portada-hover::before {
   background:
-    linear-gradient(90deg, transparent calc(50% - 1.5px), rgba(200,200,200,0.5) calc(50% - 1.5px), rgba(200,200,200,0.5) calc(50% + 1.5px), transparent calc(50% + 1.5px)),
-    linear-gradient(0deg, transparent calc(50% - 1.5px), rgba(200,200,200,0.5) calc(50% - 1.5px), rgba(200,200,200,0.5) calc(50% + 1.5px), transparent calc(50% + 1.5px)),
-    radial-gradient(circle at 50% 50%, transparent calc(14px), rgba(200,200,200,0.6) calc(14px), rgba(200,200,200,0.6) calc(17px), transparent calc(17px)),
-    radial-gradient(circle at 50% 50%, rgba(200,200,200,0.06) 40%, transparent 70%);
+    linear-gradient(90deg, transparent calc(50% - 0.5px), rgba(200,200,200,0.5) calc(50% - 0.5px), rgba(200,200,200,0.6) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
+    linear-gradient(0deg, transparent calc(50% - 0.5px), rgba(200,200,200,0.5) calc(50% - 0.5px), rgba(200,200,200,0.6) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
+    radial-gradient(circle at 50% 50%, transparent calc(11px), rgba(200,200,200,0.7) calc(11px), rgba(200,200,200,0.7) calc(13px), transparent calc(13px)),
+    radial-gradient(circle at 50% 50%, rgba(200,200,200,0.08) 30%, transparent 65%);
 }
 
 /* ===================================================
