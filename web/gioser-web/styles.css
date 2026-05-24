@@ -18,10 +18,10 @@
   --fg-bright: #e0e0e0;
   --accent: #a0a0a0;
   --accent-glow: #c0c0c0;
-  --reticula: #1a1a1a;
-  --reticula-hover: rgba(192, 192, 192, 0.15);
-  --border: #222;
-  --border-hover: #444;
+  --reticula: #2a2a2a;
+  --reticula-hover: rgba(192, 192, 192, 0.12);
+  --border: #2a2a2a;
+  --border-hover: #555;
   --font: 'SF Mono', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
   --font-ui: -apple-system, 'Inter', 'Segoe UI', sans-serif;
 }
@@ -67,7 +67,7 @@ html, body {
 
 .reticula-v.brighter {
   background: rgba(192, 192, 192, 0.35);
-  box-shadow: 0 0 6px rgba(192, 192, 192, 0.2);
+  box-shadow: -2px 0 8px rgba(192, 192, 192, 0.18), 2px 0 8px rgba(192, 192, 192, 0.18);
 }
 
 .reticula-h {
@@ -84,7 +84,7 @@ html, body {
 
 .reticula-h.brighter {
   background: rgba(192, 192, 192, 0.35);
-  box-shadow: 0 0 6px rgba(192, 192, 192, 0.2);
+  box-shadow: 0 -2px 8px rgba(192, 192, 192, 0.18), 0 2px 8px rgba(192, 192, 192, 0.18);
 }
 
 .reticula-center {
@@ -97,12 +97,14 @@ html, body {
   border-radius: 50%;
   z-index: 2;
   pointer-events: none;
-  transition: border-color 0.4s ease, box-shadow 0.4s ease;
+  transition: border-color 0.4s ease, box-shadow 0.4s ease, background 0.4s ease;
+  background: transparent;
 }
 
 .reticula-center.brighter {
-  border-color: rgba(192, 192, 192, 0.3);
-  box-shadow: 0 0 8px rgba(192, 192, 192, 0.15);
+  border-color: rgba(192, 192, 192, 0.35);
+  box-shadow: 0 0 10px rgba(192, 192, 192, 0.2);
+  background: rgba(192, 192, 192, 0.04);
 }
 
 /* ===================================================
@@ -147,11 +149,22 @@ html, body {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  align-items: center;
-  text-align: center;
-  padding: 32px 20px;
+  padding: 40px 32px;
   opacity: 0.7;
   transition: opacity 0.3s ease;
+}
+
+/* Alineación: cuadrantes izquierda miran a la izquierda, derecha a la derecha */
+.cuadrante-01 .cuadrante-content,
+.cuadrante-02 .cuadrante-content {
+  align-items: flex-start;
+  text-align: left;
+}
+
+.cuadrante-00 .cuadrante-content,
+.cuadrante-03 .cuadrante-content {
+  align-items: flex-end;
+  text-align: right;
 }
 
 .cuadrante:hover .cuadrante-content {
@@ -168,29 +181,48 @@ html, body {
 }
 
 .cuadrante-title {
-  font-size: 15px;
+  font-size: 17px;
   font-weight: 600;
   color: var(--fg-bright);
-  letter-spacing: 0.05em;
-  margin-bottom: 8px;
+  letter-spacing: 0.06em;
+  margin-bottom: 12px;
   font-family: var(--font-ui);
 }
 
 .cuadrante-context {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--fg-dim);
-  line-height: 1.5;
-  margin-bottom: 12px;
-  max-width: 75%;
+  line-height: 1.6;
+  margin-bottom: 16px;
+  max-width: 70%;
   font-family: var(--font-ui);
-  text-align: center;
+}
+
+.cuadrante-01 .cuadrante-context,
+.cuadrante-02 .cuadrante-context {
+  text-align: left;
+}
+
+.cuadrante-00 .cuadrante-context,
+.cuadrante-03 .cuadrante-context {
+  text-align: right;
 }
 
 .cuadrante-meta {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 8px;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.cuadrante-01 .cuadrante-meta,
+.cuadrante-02 .cuadrante-meta {
+  flex-direction: row;
+}
+
+.cuadrante-00 .cuadrante-meta,
+.cuadrante-03 .cuadrante-meta {
+  flex-direction: row-reverse;
 }
 
 .meta-cta {
