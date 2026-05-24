@@ -1,679 +1,440 @@
-/* === Tokens === */
-:root {
-  --bg: #06050d;
-  --fg: #e8eaf5;
-  --gold: #d8a85d;
-  --gold-deep: #b77e34;
-  --aire:   #d0dbff;
-  --agua:   #6cd0f3;
-  --fuego:  #f59056;
-  --tierra: #d49873;
-  --cuerpo: #e07a5f;
-  --sombra: #4a4a5a;
-  --cosmos: #d4a843;
-  --practica: #2d936c;
-  --olvido: #b0b8c0;
+/* ===================================================
+   GioSer · Estilos de Portada (Chakana 2×2)
+   =================================================== */
 
-  --ease-emerge: cubic-bezier(0.22, 0.61, 0.20, 1);
-  --ease-magma: cubic-bezier(0.32, 0, 0.05, 1);
-  --ease-page: cubic-bezier(0.22, 0.61, 0.36, 1);
-
-  --taskbar-height: 52px;
+*,
+*::before,
+*::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
 }
 
-* { box-sizing: border-box; }
+:root {
+  --bg: #0c0c0c;
+  --bg-alt: #111;
+  --fg: #c8c8c8;
+  --fg-dim: #666;
+  --fg-bright: #e0e0e0;
+  --accent: #a0a0a0;
+  --accent-glow: #c0c0c0;
+  --reticula: #1a1a1a;
+  --reticula-hover: rgba(192, 192, 192, 0.15);
+  --border: #222;
+  --border-hover: #444;
+  --font: 'SF Mono', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  --font-ui: -apple-system, 'Inter', 'Segoe UI', sans-serif;
+}
 
 html, body {
-  margin: 0;
-  padding: 0;
-  width: 100%;
   height: 100%;
+  width: 100%;
+  overflow: hidden;
   background: var(--bg);
   color: var(--fg);
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
-  font-weight: 300;
-  overflow: hidden;
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* === Canvas WebGL === */
-#gioser-canvas {
+/* ===================================================
+   PORTADA — retícula 2×2
+   =================================================== */
+
+.portada {
   position: fixed;
   inset: 0;
-  width: 100vw;
-  height: 100vh;
-  display: block;
-  z-index: 0;
-  transition: opacity 600ms var(--ease-emerge), filter 600ms var(--ease-emerge);
-}
-body.deck-visible #gioser-canvas {
-  opacity: 0.30;
-  filter: blur(4px) saturate(80%);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  z-index: 10;
+  background: var(--bg);
 }
 
-/* === Tips (botones cardinales sobre el aro) === */
-#tips {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 5;
-  transition: opacity 250ms ease;
-}
-body.deck-visible #tips {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.tip {
+/* Líneas de retícula */
+.reticula-v {
   position: absolute;
-  top: 0; left: 0;
-  pointer-events: auto;
-  text-decoration: none;
-  color: var(--fg);
-  user-select: none;
-  cursor: pointer;
+  top: 0;
+  left: 50%;
+  width: 1px;
+  height: 100%;
+  background: var(--reticula);
+  z-index: 1;
+  pointer-events: none;
+  transition: background 0.4s ease;
+}
 
+.reticula-h {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 100%;
+  height: 1px;
+  background: var(--reticula);
+  z-index: 1;
+  pointer-events: none;
+  transition: background 0.4s ease;
+}
+
+.reticula-center {
+  position: absolute;
+  top: calc(50% - 12px);
+  left: calc(50% - 12px);
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  z-index: 2;
+  pointer-events: none;
+  transition: border-color 0.4s ease;
+}
+
+/* ===================================================
+   CUADRANTES
+   =================================================== */
+
+.cuadrante {
+  position: relative;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  z-index: 5;
+  overflow: hidden;
+  transition: background 0.3s ease;
+  text-align: left;
+  font-family: var(--font);
+  color: var(--fg);
+  padding: 0;
+}
+
+.cuadrante:hover {
+  background: var(--reticula-hover);
+}
+
+.cuadrante:hover ~ .reticula-v,
+.cuadrante:hover ~ .reticula-h {
+  background: var(--accent-glow);
+}
+
+/* Borde iluminado en hover */
+.cuadrante-border {
+  position: absolute;
+  inset: -1px;
+  border: 1px solid transparent;
+  transition: border-color 0.3s ease;
+  pointer-events: none;
+}
+
+.cuadrante:hover .cuadrante-border {
+  border-color: var(--border-hover);
+}
+
+/* Contenido */
+.cuadrante-content {
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 0.55rem;
-  padding: 1.1rem 1.6rem 0.95rem;
-  min-width: 168px;
-
-  background:
-    radial-gradient(ellipse at top, rgba(255, 255, 255, 0.04), transparent 65%),
-    rgba(8, 6, 22, 0.55);
-  backdrop-filter: blur(12px) saturate(140%);
-  -webkit-backdrop-filter: blur(12px) saturate(140%);
-  border-radius: 20px;
-  border: 1px solid rgba(216, 168, 93, 0.25);
-
-  box-shadow:
-    0 12px 36px rgba(0, 0, 0, 0.40),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.04);
-
-  transition:
-    box-shadow 350ms var(--ease-emerge),
-    border-color 350ms var(--ease-emerge),
-    background  350ms var(--ease-emerge);
-}
-.tip::before {
-  content: "";
-  position: absolute;
-  inset: -10px;
-  border-radius: 26px;
-  border: 1px solid currentColor;
-  opacity: 0;
-  transition: opacity 400ms ease, inset 400ms var(--ease-emerge);
-  pointer-events: none;
-}
-.tip:hover {
-  border-color: currentColor;
-  background:
-    radial-gradient(ellipse at top, rgba(255, 255, 255, 0.07), transparent 65%),
-    rgba(20, 14, 40, 0.72);
-}
-.tip:hover::before {
-  opacity: 0.45;
-  inset: -16px;
-}
-.tip-glyph {
-  width: 54px;
-  height: 54px;
-  color: currentColor;
-  filter: drop-shadow(0 0 6px currentColor) drop-shadow(0 0 16px currentColor);
-  transition: filter 320ms ease, transform 350ms var(--ease-emerge);
-}
-.tip:hover .tip-glyph {
-  filter: drop-shadow(0 0 14px currentColor) drop-shadow(0 0 28px currentColor);
-  transform: translateY(-3px);
-}
-.tip-label {
-  font-family: 'Cinzel', serif;
-  font-size: 0.95rem;
-  letter-spacing: 0.42em;
-  font-weight: 600;
-  text-indent: 0.42em;
-  margin-top: 0.15rem;
-}
-.tip-sub {
-  font-family: 'Inter', sans-serif;
-  font-size: 0.7rem;
-  letter-spacing: 0.22em;
-  font-weight: 300;
-  color: rgba(232, 234, 245, 0.62);
-  text-transform: uppercase;
-  text-indent: 0.22em;
-}
-.tip-aire   { color: var(--aire); }
-.tip-fuego  { color: var(--fuego); }
-.tip-agua   { color: var(--agua); }
-.tip-tierra { color: var(--tierra); }
-.tip-cuerpo   { color: var(--cuerpo); }
-.tip-sombra   { color: var(--sombra); }
-.tip-cosmos   { color: var(--cosmos); }
-.tip-practica { color: var(--practica); }
-.tip-olvido   { color: var(--olvido); }
-
-/* === DECK: contenedor único de páginas swipeable === */
-.deck {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: var(--taskbar-height);
-  z-index: 100;
-  pointer-events: none;
-  opacity: 0;
-  visibility: hidden;
-  transform-origin: var(--origin-x, 50%) var(--origin-y, 50%);
-  transform: scale(0.0);
-  overflow: hidden;
-  touch-action: pan-y;
-  background:
-    radial-gradient(ellipse at center, var(--deck-glow, rgba(216, 168, 93, 0.15)), transparent 65%),
-    rgba(6, 5, 13, 0.96);
-  backdrop-filter: blur(28px) saturate(140%);
-  -webkit-backdrop-filter: blur(28px) saturate(140%);
-  transition:
-    transform 600ms var(--ease-magma),
-    opacity 450ms ease,
-    visibility 0s 600ms;
-}
-.deck.open {
-  pointer-events: auto;
-  opacity: 1;
-  visibility: visible;
-  transform: scale(1);
-  transition:
-    transform 600ms var(--ease-magma),
-    opacity 450ms ease,
-    visibility 0s;
-}
-/* Acento del deck según elemento activo: glow radial del color. */
-body.deck-active-aire   .deck { --deck-glow: rgba(208, 219, 255, 0.22); }
-body.deck-active-fuego  .deck { --deck-glow: rgba(245, 144, 86, 0.28); }
-body.deck-active-agua   .deck { --deck-glow: rgba(108, 208, 243, 0.22); }
-body.deck-active-tierra .deck { --deck-glow: rgba(212, 152, 115, 0.24); }
-
-/* Strip horizontal con páginas — vista-web traslada esto.
-   touch-action: pan-y declara al browser "yo manejo horizontal, el
-   vertical (scroll interno de cada página) lo dejas pasar". Sin esto
-   el navegador móvil se traga el gesto horizontal antes de que JS
-   pueda capturarlo. */
-.deck-strip {
-  display: flex;
-  flex-direction: row;
-  width: 100%;
-  height: 100%;
-  transform: translate3d(var(--vista-offset, 0px), 0, 0);
-  transition: transform 360ms var(--ease-page);
-  will-change: transform;
-  touch-action: pan-y;
-}
-/* Asegurar que TODOS los descendientes del strip hereden el contrato
-   touch-action — si el toque llega a un párrafo o <a>, el browser
-   chequea el touch-action del target, no del padre. */
-.deck-strip * {
-  touch-action: pan-y;
-}
-.deck-strip.vista-dragging,
-.deck-strip.vista-instant {
-  transition: none;
-}
-
-.deck-page {
-  flex: 0 0 100%;
-  width: 100%;
-  height: 100%;
-  position: relative;
-  overflow-y: auto;
-  overflow-x: hidden;
-  touch-action: pan-y;
-}
-.deck-page[data-element="aire"]   { --page-accent: var(--aire); }
-.deck-page[data-element="fuego"]  { --page-accent: var(--fuego); }
-.deck-page[data-element="agua"]   { --page-accent: var(--agua); }
-.deck-page[data-element="tierra"] { --page-accent: var(--tierra); }
-
-/* Ambience por página */
-.page-ambience {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 0;
-  transition: opacity 2s ease;
-  filter: blur(60px);
-  opacity: 0.5;
-}
-.deck-page[data-element="aire"] .page-ambience {
-  background: radial-gradient(circle at 50% 50%, rgba(208,219,255,0.22), transparent 60%);
-  animation: page-breathe 8s ease-in-out infinite alternate;
-}
-.deck-page[data-element="fuego"] .page-ambience {
-  background: radial-gradient(circle at 50% 50%, rgba(245,144,86,0.22), transparent 60%);
-  animation: page-breathe 6s ease-in-out infinite alternate;
-}
-.deck-page[data-element="agua"] .page-ambience {
-  background: radial-gradient(circle at 50% 50%, rgba(108,208,243,0.22), transparent 60%);
-  animation: page-breathe 10s ease-in-out infinite alternate;
-}
-.deck-page[data-element="tierra"] .page-ambience {
-  background: radial-gradient(circle at 50% 50%, rgba(140,100,60,0.22), transparent 60%);
-  animation: page-breathe 7s ease-in-out infinite alternate;
-}
-@keyframes page-breathe {
-  from { opacity: 0.30; }
-  to   { opacity: 0.60; }
-}
-
-/* Head + controls — fijos en el deck, no dentro de la página */
-.page-controls {
-  position: fixed;
-  top: 1.2rem;
-  right: 1.2rem;
-  z-index: 100;
-  display: flex;
-  gap: 0.5rem;
-  opacity: 0;
-  pointer-events: none;
+  justify-content: center;
+  padding: 24px 28px;
+  opacity: 0.7;
   transition: opacity 0.3s ease;
 }
-body.deck-visible .page-controls {
+
+.cuadrante:hover .cuadrante-content {
   opacity: 1;
-  pointer-events: auto;
 }
-.page-control-btn {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  color: var(--page-accent, var(--gold));
-  font-size: 1.2rem;
-  line-height: 1;
-  cursor: pointer;
-  display: inline-flex;
+
+.cuadrante-hex {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-dim);
+  letter-spacing: 0.15em;
+  margin-bottom: 6px;
+  font-family: var(--font);
+}
+
+.cuadrante-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg-bright);
+  letter-spacing: 0.05em;
+  margin-bottom: 8px;
+  font-family: var(--font-ui);
+}
+
+.cuadrante-context {
+  font-size: 12px;
+  color: var(--fg-dim);
+  line-height: 1.5;
+  margin-bottom: 12px;
+  max-width: 80%;
+  font-family: var(--font-ui);
+}
+
+.cuadrante-meta {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  padding: 0;
-  font-family: 'Inter', sans-serif;
-  transition:
-    background 200ms ease,
-    border-color 200ms ease,
-    transform 250ms var(--ease-emerge);
+  gap: 12px;
+  margin-bottom: 8px;
 }
-.page-control-btn:hover {
-  background: rgba(255, 255, 255, 0.10);
-  border-color: currentColor;
-}
-.page-minimize svg {
-  width: 18px;
-  height: 18px;
-}
-.page-close {
-  font-size: 1.6rem;
-}
-.page-close:hover { transform: rotate(90deg); }
 
-.page-head {
-  position: relative;
-  z-index: 2;
-  text-align: center;
-  padding: 7vh 8vw 2vh;
-  color: var(--page-accent, var(--gold));
+.meta-cta {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  font-family: var(--font);
+  letter-spacing: 0.05em;
+  border: 1px solid var(--border);
+  padding: 2px 8px;
+  border-radius: 2px;
+  transition: border-color 0.3s ease, color 0.3s ease;
 }
-.page-mark {
-  display: inline-block;
-  font-family: 'Inter', sans-serif;
-  font-size: 0.7rem;
-  letter-spacing: 0.55em;
-  text-transform: uppercase;
-  color: rgba(232, 234, 245, 0.6);
-  margin-bottom: 0.4rem;
-  text-indent: 0.55em;
+
+.cuadrante:hover .meta-cta {
+  border-color: var(--accent-glow);
+  color: var(--fg-bright);
 }
-.page-title {
-  font-family: 'Cinzel', serif;
-  font-weight: 700;
-  font-size: clamp(2.4rem, 6vw, 4.6rem);
-  margin: 0;
+
+.meta-stat {
+  font-size: 10px;
+  color: var(--fg-dim);
   letter-spacing: 0.08em;
-  color: var(--page-accent, var(--gold));
-  text-shadow: 0 0 28px currentColor, 0 0 56px rgba(255, 255, 255, 0.10);
-}
-.page-tag {
-  display: block;
-  font-family: 'Inter', sans-serif;
-  font-size: 0.78rem;
-  letter-spacing: 0.32em;
-  text-transform: uppercase;
-  color: rgba(232, 234, 245, 0.55);
-  margin-top: 0.7rem;
-  text-indent: 0.32em;
-}
-.page-content {
-  position: relative;
-  z-index: 2;
-  padding: 1vh 10vw 8vh;
+  font-family: var(--font);
   opacity: 0;
-  transition: opacity 400ms ease 250ms;
+  transition: opacity 0.4s ease;
 }
-.deck.open .deck-page .page-content {
+
+.cuadrante:hover .meta-stat {
+  opacity: 0.7;
+}
+
+.cuadrante-crates {
+  list-style: none;
+  font-size: 11px;
+  color: var(--fg-dim);
+  font-family: var(--font);
+  line-height: 1.6;
+  margin: 0;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+}
+
+.cuadrante:hover .cuadrante-crates {
+  opacity: 0.6;
+}
+
+.cuadrante-crates li::before {
+  content: '◆ ';
+  color: var(--fg-dim);
+  font-size: 7px;
+  opacity: 0.4;
+}
+
+/* ===================================================
+   TRANSICIÓN CIERRE PORTADA
+   =================================================== */
+
+.portada-closing {
+  animation: portadaFade 0.6s ease forwards;
+}
+
+@keyframes portadaFade {
+  0% {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  100% {
+    opacity: 0;
+    pointer-events: none;
+  }
+}
+
+/* ===================================================
+   DECK (páginas md, mismo estilo de antes)
+   =================================================== */
+
+.deck {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: var(--bg);
+  opacity: 0;
+  transition: opacity 0.5s ease;
+}
+
+.deck:not([aria-hidden]) {
   opacity: 1;
 }
 
-/* === pluma-doc dentro de la página === */
-.pluma-doc {
-  max-width: 760px;
-  margin: 0 auto;
-  font-family: 'Inter', sans-serif;
-  font-weight: 300;
-  font-size: 1.05rem;
-  line-height: 1.78;
-  color: rgba(232, 234, 245, 0.92);
-}
-.pluma-doc > * + * { margin-top: 1.0em; }
-.pluma-doc h1 {
-  font-family: 'Cinzel', serif;
-  font-weight: 700;
-  font-size: clamp(1.7rem, 3vw, 2.4rem);
-  color: var(--page-accent);
-  text-shadow: 0 0 18px currentColor;
-  letter-spacing: 0.04em;
-  margin-top: 1.4em;
-}
-.pluma-doc h2 {
-  font-family: 'Cinzel', serif;
-  font-weight: 500;
-  font-size: 1.5rem;
-  color: var(--page-accent);
-  letter-spacing: 0.04em;
-  margin-top: 1.6em;
-  padding-bottom: 0.3em;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.10);
-}
-.pluma-doc h3 {
-  font-family: 'Inter', sans-serif;
-  font-weight: 600;
-  font-size: 1.18rem;
-  color: rgba(255, 255, 255, 0.92);
-  letter-spacing: 0.03em;
-  margin-top: 1.6em;
-}
-.pluma-doc p { margin: 0; }
-.pluma-doc a {
-  color: var(--page-accent);
-  text-decoration: none;
-  border-bottom: 1px solid currentColor;
-  transition: opacity 200ms ease;
-}
-.pluma-doc a:hover { opacity: 0.7; }
-.pluma-doc strong { color: rgba(255, 255, 255, 0.98); font-weight: 600; }
-.pluma-doc em { color: rgba(255, 255, 255, 0.92); }
-.pluma-doc code {
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
-  background: rgba(255, 255, 255, 0.06);
-  padding: 0.12em 0.45em;
-  border-radius: 4px;
-  font-size: 0.92em;
-  color: var(--page-accent);
-}
-.pluma-doc pre {
-  background: rgba(0, 0, 0, 0.45);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-left: 3px solid var(--page-accent);
-  border-radius: 8px;
-  padding: 1rem 1.2rem;
-  overflow-x: auto;
-  font-size: 0.92rem;
-}
-.pluma-doc pre code {
-  background: transparent;
-  color: rgba(232, 234, 245, 0.92);
-  padding: 0;
-}
-.pluma-doc blockquote {
-  border-left: 3px solid var(--page-accent);
-  padding: 0.4em 1.2em;
-  color: rgba(232, 234, 245, 0.75);
-  font-style: italic;
-  background: rgba(255, 255, 255, 0.03);
-  border-radius: 0 6px 6px 0;
-}
-.pluma-doc ul, .pluma-doc ol { padding-left: 1.6em; }
-.pluma-doc li { margin: 0.4em 0; }
-.pluma-doc li::marker { color: var(--page-accent); }
-.pluma-doc hr {
-  border: none;
-  height: 1px;
-  background: linear-gradient(to right, transparent, var(--page-accent), transparent);
-  margin: 2em 0;
-}
-.pluma-doc table {
-  border-collapse: collapse;
+.deck-strip {
+  height: 100%;
   width: 100%;
-  font-size: 0.95rem;
+  display: flex;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
 }
-.pluma-doc th, .pluma-doc td {
-  padding: 0.55em 0.9em;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  text-align: left;
+
+/* ===================================================
+   CONTROLES DE PÁGINA
+   =================================================== */
+
+.page-controls {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 8px;
+  z-index: 100;
+  transition: opacity 0.3s ease;
 }
-.pluma-doc th {
-  color: var(--page-accent);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-}
-.pluma-loading, .pluma-error {
+
+.page-control-btn {
+  width: 32px;
+  height: 32px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg);
+  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 30vh;
-  color: rgba(232, 234, 245, 0.55);
-  font-family: 'Cinzel', serif;
-  letter-spacing: 0.4em;
-  font-size: 0.9rem;
+  transition: background 0.2s ease, border-color 0.2s ease;
 }
-.pluma-loading::before {
-  content: "";
-  width: 28px;
-  height: 28px;
-  margin-right: 1rem;
-  border: 1px solid var(--page-accent);
-  border-top-color: transparent;
-  border-radius: 50%;
-  animation: pluma-spin 1s linear infinite;
-}
-.pluma-error { color: var(--fuego); font-style: italic; }
-@keyframes pluma-spin { to { transform: rotate(360deg); } }
 
-/* === Taskbar estilo Windows === */
+.page-control-btn:hover {
+  background: rgba(255,255,255,0.08);
+  border-color: var(--border-hover);
+}
+
+.page-close {
+  font-size: 18px;
+  font-family: var(--font-ui);
+  font-weight: 300;
+}
+
+/* ===================================================
+   TASKBAR
+   =================================================== */
+
 .taskbar {
   position: fixed;
+  bottom: 0;
   left: 0;
   right: 0;
-  bottom: 0;
-  height: var(--taskbar-height);
-  z-index: 200;
+  height: 40px;
+  background: rgba(12, 12, 12, 0.92);
+  border-top: 1px solid var(--border);
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0 0.8rem;
-  background: linear-gradient(to top, rgba(6, 5, 13, 0.94), rgba(8, 6, 22, 0.80));
-  backdrop-filter: blur(24px) saturate(140%);
-  -webkit-backdrop-filter: blur(24px) saturate(140%);
-  border-top: 1px solid rgba(216, 168, 93, 0.22);
-  box-shadow: 0 -10px 36px rgba(0, 0, 0, 0.45);
+  gap: 6px;
+  padding: 0 10px;
+  z-index: 200;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  font-family: var(--font);
+  font-size: 12px;
 }
 
-.taskbar-home {
-  width: 40px;
-  height: 40px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: 1px solid rgba(216, 168, 93, 0.32);
-  color: var(--gold);
-  border-radius: 9px;
-  cursor: pointer;
-  padding: 0;
-  transition: all 220ms var(--ease-emerge);
-}
-.taskbar-home:hover {
-  border-color: var(--gold);
-  background: rgba(216, 168, 93, 0.12);
-  box-shadow: 0 0 16px rgba(216, 168, 93, 0.35);
-  transform: translateY(-1px);
-}
-.taskbar-home-glyph {
-  width: 22px;
-  height: 22px;
-  filter: drop-shadow(0 0 6px currentColor);
-}
-
+.taskbar-home,
 .taskbar-brand {
-  font-family: 'Cinzel', serif;
-  font-weight: 700;
-  font-size: 1.30rem;
-  letter-spacing: 0.07em;
-  color: #f4eedf;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--fg);
+  cursor: pointer;
   text-decoration: none;
-  text-shadow: 0 0 14px rgba(216, 168, 93, 0.45);
-  padding: 0 0.55rem;
-  user-select: none;
-  transition: text-shadow 220ms ease, color 220ms ease;
-  white-space: nowrap;
+  background: transparent;
+  border: none;
+  font-family: var(--font);
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 3px;
+  transition: background 0.2s ease;
 }
+
+.taskbar-home:hover,
 .taskbar-brand:hover {
-  color: #ffffff;
-  text-shadow: 0 0 20px rgba(216, 168, 93, 0.7), 0 0 36px rgba(245, 144, 86, 0.30);
+  background: rgba(255,255,255,0.06);
 }
-.taskbar-brand .brand-dot {
-  color: var(--gold);
-  margin: 0 0.05em;
+
+.taskbar-home-glyph {
+  width: 16px;
+  height: 16px;
+}
+
+.brand-dot {
+  color: var(--fg-dim);
+  margin: 0 1px;
 }
 
 .taskbar-divider {
-  display: inline-block;
   width: 1px;
-  height: 26px;
-  background: rgba(255, 255, 255, 0.12);
-  margin: 0 0.25rem;
+  height: 20px;
+  background: var(--border);
+  margin: 0 4px;
 }
 
 .taskbar-list {
+  display: flex;
+  gap: 2px;
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  gap: 0.4rem;
+  max-width: 60vw;
   overflow-x: auto;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
 }
-.taskbar-list::-webkit-scrollbar { display: none; }
 
-.taskbar-item {
-  height: 38px;
-  padding: 0 1.0rem;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.55rem;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  border-radius: 9px;
-  color: var(--task-color, var(--fg));
-  font-family: 'Cinzel', serif;
-  font-size: 0.72rem;
-  letter-spacing: 0.36em;
-  text-indent: 0.36em;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 260ms var(--ease-emerge);
-  white-space: nowrap;
+.taskbar-list::-webkit-scrollbar {
+  height: 0;
 }
-.taskbar-item:hover {
-  background: rgba(255, 255, 255, 0.09);
-  border-color: var(--task-color, currentColor);
-  transform: translateY(-1px);
-}
-.taskbar-item.active {
-  background: rgba(255, 255, 255, 0.11);
-  border-color: var(--task-color);
-  box-shadow:
-    0 0 18px var(--task-color),
-    inset 0 -2px 0 0 var(--task-color);
-}
-.taskbar-item-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--task-color, var(--gold));
-  box-shadow: 0 0 8px currentColor;
-}
-.taskbar-item[data-task="aire"]   { --task-color: var(--aire); }
-.taskbar-item[data-task="fuego"]  { --task-color: var(--fuego); }
-.taskbar-item[data-task="tierra"] { --task-color: var(--tierra); }
-.taskbar-item[data-task="agua"]   { --task-color: var(--agua); }
 
 .taskbar-spacer {
   flex: 1;
-  min-width: 0.6rem;
 }
 
 .taskbar-credit {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-family: 'Inter', sans-serif;
-  font-size: 0.78rem;
-  letter-spacing: 0.04em;
-  color: rgba(216, 168, 93, 0.75);
+  color: var(--fg-dim);
   text-decoration: none;
-  padding: 0.35rem 0.7rem;
-  border-radius: 8px;
-  border: 1px solid transparent;
-  transition: all 220ms var(--ease-emerge);
-  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 3px;
+  transition: color 0.2s ease;
+  font-size: 11px;
 }
+
 .taskbar-credit:hover {
-  color: var(--gold);
-  border-color: rgba(216, 168, 93, 0.25);
-  background: rgba(216, 168, 93, 0.06);
+  color: var(--fg);
 }
+
 .copyleft-mark {
-  display: inline-block;
-  font-size: 1rem;
-  /* © con escala horizontal -1 = copyleft visual. */
-  transform: scaleX(-1);
-  color: currentColor;
+  font-size: 11px;
 }
 
-@media (max-width: 720px) {
-  .tip { min-width: 110px; padding: 0.7rem 0.9rem; }
-  .tip-glyph { width: 36px; height: 36px; }
-  .tip-label { font-size: 0.72rem; }
-  .tip-sub { display: none; }
-  .page-head { padding: 5vh 5vw 1vh; }
-  .page-content { padding: 0 5vw 5vh; }
-  .taskbar { height: 46px; padding: 0 0.4rem; gap: 0.3rem; }
-  .taskbar-home { width: 36px; height: 36px; }
-  .taskbar-item { height: 34px; padding: 0 0.7rem; font-size: 0.65rem; }
-  .taskbar-brand { font-size: 1.05rem; padding: 0 0.3rem; }
-  .taskbar-credit-text { display: none; }
-  .deck { bottom: 46px; }
-  :root { --taskbar-height: 46px; }
+/* ===================================================
+   SCROLLBAR
+   =================================================== */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
 }
 
-/* Los tips nuevos (cuerpo, sombra, cosmos, practica, olvido) existen
-   en el DOM para navegación JS (popstate, grafo), pero no se ven en
-   la chacana — no hay canvas-glyph para ellos. Se ocultan por defecto. */
-.tip-hidden {
-  position: absolute;
-  visibility: hidden;
-  pointer-events: none;
-  width: 0;
-  height: 0;
-  overflow: hidden;
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-hover);
 }
