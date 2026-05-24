@@ -1,5 +1,3 @@
-/* @ts-self-types="./gioser_web.d.ts" */
-
 export function boot() {
     wasm.boot();
 }
