@@ -41,6 +41,8 @@
 
 #![forbid(unsafe_code)]
 
+mod config;
+
 use std::time::Duration;
 
 use llimphi_ui::llimphi_layout::taffy::{
@@ -241,22 +243,41 @@ impl App for Shell {
     fn init(handle: &Handle<Self::Msg>) -> Self::Model {
         handle.spawn_periodic(TICK, || Msg::Tick);
 
-        // Default sin shumarc: launcher + command-bar + shell en drawer.
-        // El bloque 5 reemplaza esto por lectura de `[[modules]]`.
-        Model {
-            theme: Theme::dark(),
-            topbar: Some(Instance::launcher(shuma_module_launcher::State::demo())),
-            bottombar: Some(Instance::command_bar(
+        let cfg = config::ShumaConfig::load_default();
+        let topbar = resolve_slot(cfg.topbar.as_ref())
+            .or_else(|| Some(Instance::launcher(shuma_module_launcher::State::demo())));
+        let bottombar = resolve_slot(cfg.bottombar.as_ref()).or_else(|| {
+            Some(Instance::command_bar(
                 shuma_module_commandbar::State::default(),
-            )),
-            main: None,
-            drawer_tabs: vec![
+            ))
+        });
+        let main = resolve_slot(cfg.main.as_ref());
+
+        let drawer_tabs = if cfg.drawer.tabs.is_empty() {
+            // Default cuando no hay `[[drawer.tabs]]`: shell + matilda
+            // locales para que el chasis sea exploratorio desde el día
+            // uno sin que el usuario tenga que escribir un shumarc.
+            vec![
                 Instance::shell("Shell".into(), Source::Local),
                 Instance::matilda("Matilda".into(), Source::Local),
-            ],
+            ]
+        } else {
+            cfg.drawer
+                .tabs
+                .iter()
+                .filter_map(resolve_drawer_tab)
+                .collect()
+        };
+
+        Model {
+            theme: Theme::dark(),
+            topbar,
+            bottombar,
+            main,
+            drawer_tabs,
             drawer_open: false,
             active_drawer_tab: 0,
-            drawer_trigger: DrawerTrigger::default(),
+            drawer_trigger: cfg.drawer.trigger.unwrap_or_default(),
             sysmon: SystemSampler::new(HISTORY),
             last_snapshot: None,
             monitors_width: MONITORS_INITIAL_WIDTH,
@@ -380,6 +401,36 @@ fn apply_module_msg(mut m: Model, slot: Slot, msg: ModuleMsg) -> Model {
         }
     }
     m
+}
+
+/// Mapea una entrada genérica `SlotEntry` del shumarc a una `Instance`.
+/// `None` si el `module` no matchea ningún `Kind` compilado — se
+/// imprime warning en lugar de fallar para no romper el arranque.
+fn resolve_slot(entry: Option<&config::SlotEntry>) -> Option<Instance> {
+    let entry = entry?;
+    resolve_instance(&entry.module, entry.source.clone(), entry.label.clone())
+}
+
+fn resolve_drawer_tab(entry: &config::DrawerTabEntry) -> Option<Instance> {
+    resolve_instance(&entry.id, entry.source.clone(), entry.label.clone())
+}
+
+fn resolve_instance(id: &str, source: Source, label: Option<String>) -> Option<Instance> {
+    let label = label.unwrap_or_else(|| source.label());
+    match id {
+        shuma_module_launcher::ID => {
+            Some(Instance::launcher(shuma_module_launcher::State::demo()))
+        }
+        shuma_module_commandbar::ID => Some(Instance::command_bar(
+            shuma_module_commandbar::State::default(),
+        )),
+        shuma_module_shell::ID => Some(Instance::shell(label, source)),
+        shuma_module_matilda::ID => Some(Instance::matilda(label, source)),
+        unknown => {
+            eprintln!("shuma: módulo desconocido «{unknown}» — se ignora");
+            None
+        }
+    }
 }
 
 /// Recolecta las `ModuleContributions` de todas las instancias vivas.
