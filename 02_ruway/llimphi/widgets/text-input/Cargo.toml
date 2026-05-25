@@ -9,3 +9,4 @@ description = "llimphi-widget-text-input — input de texto single-line para Lli
 
 [dependencies]
 llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }

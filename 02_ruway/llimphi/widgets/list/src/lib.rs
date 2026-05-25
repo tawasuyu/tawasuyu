@@ -57,11 +57,18 @@ pub struct ListPalette {
 
 impl Default for ListPalette {
     fn default() -> Self {
+        Self::from_theme(&llimphi_theme::Theme::dark())
+    }
+}
+
+impl ListPalette {
+    /// Construye la paleta desde un `Theme` semántico.
+    pub fn from_theme(t: &llimphi_theme::Theme) -> Self {
         Self {
-            bg_panel: Color::from_rgba8(22, 26, 36, 255),
-            bg_selected: Color::from_rgba8(58, 78, 128, 255),
-            fg_text: Color::from_rgba8(214, 222, 232, 255),
-            fg_muted: Color::from_rgba8(140, 152, 170, 255),
+            bg_panel: t.bg_panel,
+            bg_selected: t.bg_selected,
+            fg_text: t.fg_text,
+            fg_muted: t.fg_muted,
         }
     }
 }

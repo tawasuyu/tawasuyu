@@ -28,9 +28,9 @@ use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, FlexDirection, Size, Style},
     AlignItems, Rect,
 };
-use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
+use llimphi_theme::Theme;
 use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
 use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
 
@@ -245,15 +245,11 @@ impl App for Shell {
     }
 
     fn view(model: &Self::Model) -> View<Self::Msg> {
-        let palette = Palette::default();
-        let splitter_palette = SplitterPalette {
-            divider: Color::from_rgba8(34, 40, 54, 255),
-            divider_hover: Color::from_rgba8(110, 140, 220, 255),
-            thickness: 6.0,
-        };
-        let header = header_bar(model, &palette);
-        let list_pane = build_list_pane(model, &palette);
-        let viewer_pane = viewer_pane_view(model, &palette);
+        let theme = Theme::dark();
+        let splitter_palette = SplitterPalette::from_theme(&theme);
+        let header = header_bar(model, &theme);
+        let list_pane = build_list_pane(model, &theme);
+        let viewer_pane = viewer_pane_view(model, &theme);
 
         let body = splitter_two(
             Direction::Row,
@@ -276,7 +272,7 @@ impl App for Shell {
             },
             ..Default::default()
         })
-        .fill(palette.bg_app)
+        .fill(theme.bg_app)
         .children(vec![header, body])
     }
 }
@@ -285,7 +281,7 @@ impl App for Shell {
 // Vistas
 // ---------------------------------------------------------------------
 
-fn header_bar(model: &Model, palette: &Palette) -> View<Msg> {
+fn header_bar(model: &Model, theme: &Theme) -> View<Msg> {
     View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -300,16 +296,16 @@ fn header_bar(model: &Model, palette: &Palette) -> View<Msg> {
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .fill(palette.bg_panel)
+    .fill(theme.bg_panel)
     .text_aligned(
         format!("nahual · {}", model.cwd.display()),
         12.0,
-        palette.fg_text,
+        theme.fg_text,
         Alignment::Start,
     )
 }
 
-fn build_list_pane(model: &Model, palette: &Palette) -> View<Msg> {
+fn build_list_pane(model: &Model, theme: &Theme) -> View<Msg> {
     let start = model.visible_offset;
     let end = min(model.entries.len(), start + VISIBLE_ROWS);
     let rows: Vec<ListRow<Msg>> = (start..end)
@@ -348,19 +344,14 @@ fn build_list_pane(model: &Model, palette: &Palette) -> View<Msg> {
         caption: Some(caption),
         truncated_hint,
         row_height: ROW_HEIGHT,
-        palette: ListPalette {
-            bg_panel: palette.bg_panel,
-            bg_selected: palette.bg_sel,
-            fg_text: palette.fg_text,
-            fg_muted: palette.fg_muted,
-        },
+        palette: ListPalette::from_theme(theme),
     });
 
     // El splitter envuelve esto en un pane con el ancho del Model.
     list
 }
 
-fn viewer_pane_view(model: &Model, palette: &Palette) -> View<Msg> {
+fn viewer_pane_view(model: &Model, theme: &Theme) -> View<Msg> {
     let header_text = match &model.preview_of {
         Some(p) => p
             .file_name()
@@ -383,20 +374,20 @@ fn viewer_pane_view(model: &Model, palette: &Palette) -> View<Msg> {
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .text_aligned(header_text, 10.0, palette.fg_muted, Alignment::Start);
+    .text_aligned(header_text, 10.0, theme.fg_muted, Alignment::Start);
 
     let (body_text, body_color) = match &model.preview {
-        Preview::Empty => ("—".to_string(), palette.fg_muted),
-        Preview::Text(s) => (s.clone(), palette.fg_text),
+        Preview::Empty => ("—".to_string(), theme.fg_muted),
+        Preview::Text(s) => (s.clone(), theme.fg_text),
         Preview::Binary => (
             "(archivo binario — sin preview)".to_string(),
-            palette.fg_muted,
+            theme.fg_muted,
         ),
         Preview::TooBig(n) => (
             format!("(archivo muy grande: {} bytes — sin preview)", n),
-            palette.fg_muted,
+            theme.fg_muted,
         ),
-        Preview::Error(e) => (format!("(error: {e})"), palette.fg_destructive),
+        Preview::Error(e) => (format!("(error: {e})"), theme.fg_destructive),
     };
 
     let body = View::new(Style {
@@ -430,7 +421,7 @@ fn viewer_pane_view(model: &Model, palette: &Palette) -> View<Msg> {
         },
         ..Default::default()
     })
-    .fill(palette.bg_app)
+    .fill(theme.bg_app)
     .clip(true) // recorta texto largo al pane.
     .children(vec![cap, body])
 }
@@ -529,29 +520,3 @@ fn truncate_preview(s: &str) -> String {
     out
 }
 
-// ---------------------------------------------------------------------
-// Paleta
-// ---------------------------------------------------------------------
-
-#[derive(Clone, Copy)]
-struct Palette {
-    bg_app: Color,
-    bg_panel: Color,
-    bg_sel: Color,
-    fg_text: Color,
-    fg_muted: Color,
-    fg_destructive: Color,
-}
-
-impl Default for Palette {
-    fn default() -> Self {
-        Self {
-            bg_app: Color::from_rgba8(14, 16, 22, 255),
-            bg_panel: Color::from_rgba8(22, 26, 36, 255),
-            bg_sel: Color::from_rgba8(58, 78, 128, 255),
-            fg_text: Color::from_rgba8(214, 222, 232, 255),
-            fg_muted: Color::from_rgba8(140, 152, 170, 255),
-            fg_destructive: Color::from_rgba8(220, 110, 110, 255),
-        }
-    }
-}

@@ -28,6 +28,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
+use llimphi_theme::Theme;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
@@ -196,13 +197,13 @@ impl App for Greeter {
     }
 
     fn view(model: &Self::Model) -> View<Self::Msg> {
-        let palette = Palette::default();
-        let input_palette = TextInputPalette::default();
+        let theme = Theme::dark();
+        let input_palette = TextInputPalette::from_theme(&theme);
 
-        let title = row(28.0, "carmen", 22.0, palette.fg_text);
-        let subtitle = row(16.0, "iniciá tu sesión", 12.0, palette.fg_muted);
+        let title = row(28.0, "carmen", 22.0, theme.fg_text);
+        let subtitle = row(16.0, "iniciá tu sesión", 12.0, theme.fg_muted);
 
-        let user_cap = row(14.0, "usuario", 10.0, palette.fg_muted);
+        let user_cap = row(14.0, "usuario", 10.0, theme.fg_muted);
         let user_box = text_input_view(
             &model.user,
             "ingresá tu usuario",
@@ -211,7 +212,7 @@ impl App for Greeter {
             Msg::Focus(Field::User),
         );
 
-        let pass_cap = row(14.0, "contraseña", 10.0, palette.fg_muted);
+        let pass_cap = row(14.0, "contraseña", 10.0, theme.fg_muted);
         let pass_box = text_input_view(
             &model.pass,
             "·······",
@@ -221,9 +222,9 @@ impl App for Greeter {
         );
 
         let (status_msg, status_color) = match &model.status {
-            Status::Idle => (String::new(), palette.fg_muted),
-            Status::Authenticating => ("verificando…".to_string(), palette.fg_muted),
-            Status::Failed(m) => (m.clone(), palette.destructive),
+            Status::Idle => (String::new(), theme.fg_muted),
+            Status::Authenticating => ("verificando…".to_string(), theme.fg_muted),
+            Status::Failed(m) => (m.clone(), theme.fg_destructive),
         };
         let status_line = row(16.0, &status_msg, 11.0, status_color);
 
@@ -245,7 +246,7 @@ impl App for Greeter {
             },
             ..Default::default()
         })
-        .fill(palette.bg_panel)
+        .fill(theme.bg_panel)
         .radius(12.0)
         .children(vec![
             title,
@@ -266,7 +267,7 @@ impl App for Greeter {
             justify_content: Some(JustifyContent::Center),
             ..Default::default()
         })
-        .fill(palette.bg_app)
+        .fill(theme.bg_app)
         .children(vec![card])
     }
 }
@@ -294,27 +295,3 @@ fn row(height: f32, text: &str, size: f32, color: Color) -> View<Msg> {
     .text_aligned(text.to_string(), size, color, Alignment::Start)
 }
 
-// ---------------------------------------------------------------------
-// Paleta
-// ---------------------------------------------------------------------
-
-#[derive(Clone, Copy)]
-struct Palette {
-    bg_app: Color,
-    bg_panel: Color,
-    fg_text: Color,
-    fg_muted: Color,
-    destructive: Color,
-}
-
-impl Default for Palette {
-    fn default() -> Self {
-        Self {
-            bg_app: Color::from_rgba8(14, 16, 22, 255),
-            bg_panel: Color::from_rgba8(22, 26, 36, 255),
-            fg_text: Color::from_rgba8(214, 222, 232, 255),
-            fg_muted: Color::from_rgba8(140, 152, 170, 255),
-            destructive: Color::from_rgba8(220, 110, 110, 255),
-        }
-    }
-}

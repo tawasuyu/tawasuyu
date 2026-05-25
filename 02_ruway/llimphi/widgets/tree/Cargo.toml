@@ -1,0 +1,12 @@
+[package]
+name = "llimphi-widget-tree"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-tree — árbol con expand/collapse y selección. Análogo Llimphi al `nahual-widget-tree` GPUI. El caller mantiene el set de nodos expandidos y el seleccionado en su Model; el widget aplana el árbol en filas con indentación y emite Msg al togglear o seleccionar."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }

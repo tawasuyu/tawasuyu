@@ -32,10 +32,17 @@ pub struct ButtonPalette {
 
 impl Default for ButtonPalette {
     fn default() -> Self {
+        Self::from_theme(&llimphi_theme::Theme::dark())
+    }
+}
+
+impl ButtonPalette {
+    /// Construye la paleta desde un `Theme` semántico.
+    pub fn from_theme(t: &llimphi_theme::Theme) -> Self {
         Self {
-            bg: Color::from_rgba8(36, 42, 56, 255),
-            bg_hover: Color::from_rgba8(54, 64, 86, 255),
-            fg: Color::from_rgba8(214, 222, 232, 255),
+            bg: t.bg_button,
+            bg_hover: t.bg_button_hover,
+            fg: t.fg_text,
             radius: 5.0,
         }
     }

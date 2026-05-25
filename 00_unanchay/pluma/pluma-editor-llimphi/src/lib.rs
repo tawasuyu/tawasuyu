@@ -34,12 +34,19 @@ pub struct Palette {
 /// Tema oscuro por defecto — análogo al `nahual-theme` dark default.
 impl Default for Palette {
     fn default() -> Self {
+        Self::from_theme(&llimphi_theme::Theme::dark())
+    }
+}
+
+impl Palette {
+    /// Construye la paleta desde un `Theme` semántico.
+    pub fn from_theme(t: &llimphi_theme::Theme) -> Self {
         Self {
-            bg_app: Color::from_rgba8(14, 16, 22, 255),
-            bg_panel: Color::from_rgba8(22, 26, 36, 255),
-            fg_text: Color::from_rgba8(214, 222, 232, 255),
-            fg_muted: Color::from_rgba8(140, 152, 170, 255),
-            border_strong: Color::from_rgba8(70, 84, 110, 255),
+            bg_app: t.bg_app,
+            bg_panel: t.bg_panel,
+            fg_text: t.fg_text,
+            fg_muted: t.fg_muted,
+            border_strong: t.accent,
         }
     }
 }

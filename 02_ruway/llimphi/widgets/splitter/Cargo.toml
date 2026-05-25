@@ -9,3 +9,4 @@ description = "llimphi-widget-splitter — split container con divisor draggable
 
 [dependencies]
 llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }

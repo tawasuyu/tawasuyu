@@ -44,14 +44,21 @@ pub struct TabsPalette {
 
 impl Default for TabsPalette {
     fn default() -> Self {
+        Self::from_theme(&llimphi_theme::Theme::dark())
+    }
+}
+
+impl TabsPalette {
+    /// Construye la paleta desde un `Theme` semántico.
+    pub fn from_theme(t: &llimphi_theme::Theme) -> Self {
         Self {
-            bg_bar: Color::from_rgba8(18, 22, 30, 255),
-            bg_tab_inactive: Color::from_rgba8(22, 26, 36, 255),
-            bg_tab_hover: Color::from_rgba8(36, 44, 60, 255),
-            bg_tab_active: Color::from_rgba8(28, 36, 50, 255),
-            fg_text: Color::from_rgba8(170, 180, 195, 255),
-            fg_text_active: Color::from_rgba8(220, 230, 245, 255),
-            accent: Some(Color::from_rgba8(110, 140, 220, 255)),
+            bg_bar: t.bg_panel_alt,
+            bg_tab_inactive: t.bg_panel,
+            bg_tab_hover: t.bg_row_hover,
+            bg_tab_active: t.bg_app,
+            fg_text: t.fg_muted,
+            fg_text_active: t.fg_text,
+            accent: Some(t.accent),
         }
     }
 }

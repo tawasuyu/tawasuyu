@@ -62,9 +62,16 @@ pub struct SplitterPalette {
 
 impl Default for SplitterPalette {
     fn default() -> Self {
+        Self::from_theme(&llimphi_theme::Theme::dark())
+    }
+}
+
+impl SplitterPalette {
+    /// Construye la paleta desde un `Theme` semántico.
+    pub fn from_theme(t: &llimphi_theme::Theme) -> Self {
         Self {
-            divider: Color::from_rgba8(46, 54, 70, 255),
-            divider_hover: Color::from_rgba8(110, 140, 220, 255),
+            divider: t.border,
+            divider_hover: t.accent,
             thickness: 6.0,
         }
     }

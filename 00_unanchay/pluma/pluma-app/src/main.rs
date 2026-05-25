@@ -19,11 +19,12 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
+use llimphi_theme::Theme;
 use llimphi_ui::{App, DragPhase, Handle, View};
 use llimphi_widget_button::{button_view, ButtonPalette};
 use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
 use pluma_core::{CoherenceState, NarrativeAtom};
-use pluma_editor_llimphi::{editor_view, tone_color, tone_label, Palette};
+use pluma_editor_llimphi::{editor_view, tone_color, tone_label, Palette as EditorPalette};
 use pluma_graph::NarrativeGraph;
 use pluma_render_plan::{build_plan, CoherenceTone, LayoutConfig};
 use uuid::Uuid;
@@ -113,19 +114,10 @@ impl App for Pluma {
     }
 
     fn view(model: &Self::Model) -> View<Self::Msg> {
-        let palette = Palette::default();
-        let border = Color::from_rgba8(46, 54, 70, 255);
-        let chip_palette = ButtonPalette {
-            bg: Color::from_rgba8(36, 42, 56, 255),
-            bg_hover: Color::from_rgba8(54, 64, 86, 255),
-            fg: palette.fg_text,
-            radius: 5.0,
-        };
-        let splitter_palette = SplitterPalette {
-            divider: border,
-            divider_hover: Color::from_rgba8(110, 140, 220, 255),
-            thickness: 6.0,
-        };
+        let theme = Theme::dark();
+        let editor_palette = EditorPalette::from_theme(&theme);
+        let chip_palette = ButtonPalette::from_theme(&theme);
+        let splitter_palette = SplitterPalette::from_theme(&theme);
 
         let plan = build_plan(&model.graph, &LayoutConfig::default());
         let (pending, conflict) = coherence_counts(&model.graph);
@@ -145,14 +137,14 @@ impl App for Pluma {
             align_items: Some(AlignItems::Center),
             ..Default::default()
         })
-        .fill(palette.bg_panel)
+        .fill(theme.bg_panel)
         .text_aligned(
             format!(
                 "pluma · editor de escritura DAG    ·    {} átomos",
                 model.graph.len()
             ),
             13.0,
-            palette.fg_text,
+            theme.fg_text,
             Alignment::Start,
         );
 
@@ -169,8 +161,8 @@ impl App for Pluma {
             },
             ..Default::default()
         })
-        .fill(palette.bg_app)
-        .children(vec![editor_view::<Msg>(&plan, &palette)]);
+        .fill(theme.bg_app)
+        .children(vec![editor_view::<Msg>(&plan, &editor_palette)]);
 
         // --- Panel lateral ----------------------------------------------------
         let side = View::new(Style {
@@ -192,25 +184,25 @@ impl App for Pluma {
             },
             ..Default::default()
         })
-        .fill(palette.bg_panel)
+        .fill(theme.bg_panel)
         .children(vec![
-            label("[DOCUMENTO]", 11.0, palette.fg_muted),
+            label("[DOCUMENTO]", 11.0, theme.fg_muted),
             button_view("⚡  Mutar raíz", &chip_palette, Msg::MutateRoot),
             button_view("✓  Re-validar todo", &chip_palette, Msg::Revalidate),
-            divider(border),
-            stat_row("Átomos", format!("{}", model.graph.len()), &palette),
-            stat_row("Por evaluar", format!("{pending}"), &palette),
-            stat_row("En conflicto", format!("{conflict}"), &palette),
-            divider(border),
-            label("coherencia", 11.0, palette.fg_muted),
-            legend_row(CoherenceTone::Valid, &palette),
-            legend_row(CoherenceTone::Pending, &palette),
-            legend_row(CoherenceTone::Conflict, &palette),
-            divider(border),
+            divider(theme.border),
+            stat_row("Átomos", format!("{}", model.graph.len()), &theme),
+            stat_row("Por evaluar", format!("{pending}"), &theme),
+            stat_row("En conflicto", format!("{conflict}"), &theme),
+            divider(theme.border),
+            label("coherencia", 11.0, theme.fg_muted),
+            legend_row(CoherenceTone::Valid, &theme),
+            legend_row(CoherenceTone::Pending, &theme),
+            legend_row(CoherenceTone::Conflict, &theme),
+            divider(theme.border),
             description(
                 "«Mutar raíz» reescribe el átomo origen: la onda de choque marca \
                  cada descendiente como «por evaluar».",
-                palette.fg_muted,
+                theme.fg_muted,
             ),
         ]);
 
@@ -236,7 +228,7 @@ impl App for Pluma {
             },
             ..Default::default()
         })
-        .fill(palette.bg_app)
+        .fill(theme.bg_app)
         .children(vec![status_bar, body])
     }
 }
@@ -279,7 +271,7 @@ fn divider(color: Color) -> View<Msg> {
 }
 
 /// Fila «etiqueta · valor» con justify_between.
-fn stat_row(label_text: &str, value: String, palette: &Palette) -> View<Msg> {
+fn stat_row(label_text: &str, value: String, theme: &Theme) -> View<Msg> {
     let left = View::new(Style {
         size: Size {
             width: length(120.0_f32),
@@ -290,7 +282,7 @@ fn stat_row(label_text: &str, value: String, palette: &Palette) -> View<Msg> {
     .text_aligned(
         label_text.to_string(),
         12.0,
-        palette.fg_muted,
+        theme.fg_muted,
         Alignment::Start,
     );
     let right = View::new(Style {
@@ -300,7 +292,7 @@ fn stat_row(label_text: &str, value: String, palette: &Palette) -> View<Msg> {
         },
         ..Default::default()
     })
-    .text_aligned(value, 12.0, palette.fg_text, Alignment::End);
+    .text_aligned(value, 12.0, theme.fg_text, Alignment::End);
 
     View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -315,7 +307,7 @@ fn stat_row(label_text: &str, value: String, palette: &Palette) -> View<Msg> {
 }
 
 /// Fila de la leyenda: un cuadradito tonal + la etiqueta.
-fn legend_row(tone: CoherenceTone, palette: &Palette) -> View<Msg> {
+fn legend_row(tone: CoherenceTone, theme: &Theme) -> View<Msg> {
     let chip = View::new(Style {
         size: Size {
             width: length(12.0_f32),
@@ -336,7 +328,7 @@ fn legend_row(tone: CoherenceTone, palette: &Palette) -> View<Msg> {
     .text_aligned(
         tone_label(tone).to_string(),
         12.0,
-        palette.fg_muted,
+        theme.fg_muted,
         Alignment::Start,
     );
 

@@ -9,3 +9,4 @@ description = "llimphi-widget-button — botón clicable con estado hover. Reusa
 
 [dependencies]
 llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }

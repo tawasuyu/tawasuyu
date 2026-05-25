@@ -43,13 +43,20 @@ pub struct TextInputPalette {
 
 impl Default for TextInputPalette {
     fn default() -> Self {
+        Self::from_theme(&llimphi_theme::Theme::dark())
+    }
+}
+
+impl TextInputPalette {
+    /// Construye la paleta desde un `Theme` semántico.
+    pub fn from_theme(t: &llimphi_theme::Theme) -> Self {
         Self {
-            bg: Color::from_rgba8(16, 20, 28, 255),
-            bg_focus: Color::from_rgba8(20, 26, 38, 255),
-            border: Color::from_rgba8(46, 54, 70, 255),
-            border_focus: Color::from_rgba8(110, 140, 220, 255),
-            fg_text: Color::from_rgba8(214, 222, 232, 255),
-            fg_placeholder: Color::from_rgba8(95, 105, 122, 255),
+            bg: t.bg_input,
+            bg_focus: t.bg_input_focus,
+            border: t.border,
+            border_focus: t.border_focus,
+            fg_text: t.fg_text,
+            fg_placeholder: t.fg_placeholder,
         }
     }
 }

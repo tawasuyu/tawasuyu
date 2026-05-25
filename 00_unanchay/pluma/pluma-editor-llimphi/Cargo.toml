@@ -10,3 +10,4 @@ description = "pluma — backend Llimphi del editor DAG: pinta un RenderPlan com
 [dependencies]
 pluma-render-plan = { path = "../pluma-render-plan" }
 llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }

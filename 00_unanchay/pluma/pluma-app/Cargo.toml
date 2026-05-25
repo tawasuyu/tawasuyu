@@ -18,6 +18,7 @@ pluma-graph = { path = "../pluma-graph" }
 pluma-render-plan = { path = "../pluma-render-plan" }
 pluma-editor-llimphi = { path = "../pluma-editor-llimphi" }
 llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
 llimphi-widget-button = { workspace = true }
 llimphi-widget-splitter = { workspace = true }
 uuid = { workspace = true }
