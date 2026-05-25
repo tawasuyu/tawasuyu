@@ -1,0 +1,20 @@
+[package]
+name = "wawa-explorer-llimphi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "wawa-explorer — visor Llimphi de imágenes Wawa: tree del DAG a la izquierda, detalle del objeto seleccionado a la derecha (hex preview + hijos + tamaño), header con info del superbloque."
+
+[[bin]]
+name = "wawa-explorer-llimphi"
+path = "src/main.rs"
+
+[dependencies]
+wawa-explorer-core = { path = "../wawa-explorer-core" }
+format = { path = "../../../shared/format" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-tree = { workspace = true }

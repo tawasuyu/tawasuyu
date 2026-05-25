@@ -251,6 +251,7 @@ members = [
     "03_ukupacha/minga/minga-vfs",
     "03_ukupacha/wawa-explorer/wawa-explorer-aoe",
     "03_ukupacha/wawa-explorer/wawa-explorer-core",
+    "03_ukupacha/wawa-explorer/wawa-explorer-llimphi",
     "shared/auth/auth-core",
     "shared/card/card-admin",
     "shared/card/card-core",
