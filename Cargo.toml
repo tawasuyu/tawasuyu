@@ -106,6 +106,7 @@ members = [
     "02_ruway/llimphi/llimphi-layout",
     "02_ruway/llimphi/llimphi-text",
     "02_ruway/llimphi/llimphi-ui",
+    "02_ruway/llimphi/widgets/list",
     "02_ruway/nahual/nahual-shell-llimphi",
     "02_ruway/mirada/mirada-app",
     "02_ruway/mirada/mirada-bar-core",
@@ -359,6 +360,9 @@ taffy = "0.9"
 parley = "0.4"
 # Bucle Elm (input→update→view→layout→raster→present). Lo consumen las apps.
 llimphi-ui = { path = "02_ruway/llimphi/llimphi-ui" }
+# Widgets reusables sobre llimphi-ui — uno por crate, paralelo al
+# patrón de `02_ruway/nahual/widgets/*`.
+llimphi-widget-list = { path = "02_ruway/llimphi/widgets/list" }
 
 # === Filesystem helpers ===
 directories = "5"

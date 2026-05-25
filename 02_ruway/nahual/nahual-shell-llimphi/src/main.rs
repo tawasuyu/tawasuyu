@@ -2,22 +2,23 @@
 //!
 //! Composición mínima: barra superior con la ruta + split horizontal con
 //! lista de entradas a la izquierda y previsualización de texto a la
-//! derecha. Foco en validar la composición Llimphi, no en paridad con el
-//! shell GPUI.
+//! derecha. Foco en validar la composición Llimphi y consumir widgets
+//! reusables (`llimphi-widget-list`), no en paridad con el shell GPUI.
 //!
 //! Lo que **sí** hace este MVP:
-//! - Navegación con teclado: ↑/↓ mueven la selección; Enter entra a un
-//!   directorio o abre un archivo; Backspace sube al padre.
+//! - Navegación con teclado: ↑/↓ y rueda mueven la selección/scroll;
+//!   Enter entra a un directorio o abre un archivo; Backspace sube al
+//!   padre.
 //! - Click en una fila: selecciona; si es archivo, lo previsualiza.
 //! - Preview de archivos texto pequeños (≤ 256 KB, sólo UTF-8 sin null
 //!   bytes). El resto se etiqueta como "binario" o "muy grande".
+//! - Recorte real de paneles (`clip = true`): contenido virtualizado o
+//!   texto largo no sangra a vecinos.
 //!
 //! Lo que **todavía** no:
 //! - `layout.json` / `Persister` / hot-reload.
 //! - Otros containers (Tabs, Tiled) y otros viewers (Image, Database).
-//! - Scroll container real: la lista se virtualiza (ventana deslizante
-//!   a partir de la selección). Llimphi-ui aún no implementa clipping ni
-//!   wheel events; usar teclado.
+//! - Splitter draggable (necesita tracking de drag en llimphi-ui).
 
 use std::cmp::min;
 use std::fs;
@@ -25,11 +26,12 @@ use std::path::{Path, PathBuf};
 
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, FlexDirection, Size, Style},
-    AlignItems, JustifyContent, Rect,
+    AlignItems, Rect,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
+use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
+use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
 
 fn main() {
     llimphi_ui::run::<Shell>();
@@ -44,6 +46,9 @@ const ROW_HEIGHT: f32 = 22.0;
 /// Cuántas filas mostramos a la vez en el panel de la lista. Calibrado
 /// para un viewport de 1200×800 (alto del panel ≈ 760, header ≈ 24).
 const VISIBLE_ROWS: usize = 32;
+/// "Líneas" de la rueda que equivalen a una fila. Touchpads suelen mandar
+/// fracciones; sumamos hasta tener ±1 fila para mover.
+const WHEEL_LINES_PER_ROW: f32 = 1.0;
 
 #[derive(Clone)]
 struct Entry {
@@ -66,6 +71,10 @@ struct Model {
     /// Índice del primer entry visible en el panel. Se ajusta al mover
     /// la selección para mantenerla dentro de la ventana.
     visible_offset: usize,
+    /// Acumulador fraccional de la rueda — para touchpads que mandan
+    /// deltas chicos. Cuando supera ±WHEEL_LINES_PER_ROW se materializa
+    /// como un step de scroll y se vacía.
+    wheel_accum: f32,
     preview: Preview,
     /// Path del archivo que está previsualizado (si lo hay), para mostrar
     /// el nombre en el header del panel derecho.
@@ -79,6 +88,8 @@ enum Msg {
     OpenSelected,
     Parent,
     Select(usize),
+    /// Scroll en filas — positivo abajo, negativo arriba.
+    Scroll(i32),
 }
 
 // ---------------------------------------------------------------------
@@ -107,12 +118,13 @@ impl App for Shell {
             entries,
             selected: 0,
             visible_offset: 0,
+            wheel_accum: 0.0,
             preview: Preview::Empty,
             preview_of: None,
         }
     }
 
-    fn on_key(model: &Self::Model, e: &KeyEvent) -> Option<Self::Msg> {
+    fn on_key(_model: &Self::Model, e: &KeyEvent) -> Option<Self::Msg> {
         if e.state != KeyState::Pressed {
             return None;
         }
@@ -121,12 +133,26 @@ impl App for Shell {
             Key::Named(NamedKey::ArrowDown) => Some(Msg::Down),
             Key::Named(NamedKey::Enter) => Some(Msg::OpenSelected),
             Key::Named(NamedKey::Backspace) => Some(Msg::Parent),
-            _ => {
-                // Sin selección, ignorar.
-                let _ = model;
-                None
-            }
+            _ => None,
         }
+    }
+
+    fn on_wheel(
+        model: &Self::Model,
+        delta: WheelDelta,
+        _cursor: (f32, f32),
+        _mods: Modifiers,
+    ) -> Option<Self::Msg> {
+        // Acumulamos en `wheel_accum` desde `update`. Acá calculamos cuántas
+        // filas mover según el delta de **este** evento sumado al acumulado.
+        let total = model.wheel_accum + delta.y;
+        let steps = (total / WHEEL_LINES_PER_ROW).trunc() as i32;
+        if steps == 0 {
+            // Sigue siendo sub-fila — emitimos un Scroll(0) para que el
+            // update guarde el delta en el acumulador.
+            return Some(Msg::Scroll(0));
+        }
+        Some(Msg::Scroll(steps))
     }
 
     fn update(model: Self::Model, msg: Self::Msg, _: &Handle<Self::Msg>) -> Self::Model {
@@ -169,10 +195,6 @@ impl App for Shell {
                     m.visible_offset = 0;
                     m.preview = Preview::Empty;
                     m.preview_of = None;
-                } else {
-                    // Archivos ya se previsualizan al seleccionar; Enter
-                    // no agrega nada extra por ahora — placeholder para
-                    // futuros "abrir en viewer dedicado".
                 }
             }
             Msg::Parent => {
@@ -185,7 +207,6 @@ impl App for Shell {
                     .map(|s| s.to_string_lossy().to_string());
                 m.cwd = parent;
                 m.entries = scan_dir(&m.cwd);
-                // Selecciona el directorio del que volvimos, si está.
                 m.selected = prev_name
                     .and_then(|n| m.entries.iter().position(|e| e.name == n))
                     .unwrap_or(0);
@@ -195,36 +216,29 @@ impl App for Shell {
                 m.preview_of = None;
                 preview_selected(&mut m);
             }
+            Msg::Scroll(steps) => {
+                // Convertimos pasos en un nuevo offset; el acumulador se
+                // ajusta para quedarse con la fracción residual.
+                m.wheel_accum -= steps as f32 * WHEEL_LINES_PER_ROW;
+                if steps != 0 {
+                    let len = m.entries.len();
+                    let max_offset = len.saturating_sub(VISIBLE_ROWS);
+                    if steps > 0 {
+                        m.visible_offset = min(m.visible_offset + steps as usize, max_offset);
+                    } else {
+                        let drop = (-steps) as usize;
+                        m.visible_offset = m.visible_offset.saturating_sub(drop);
+                    }
+                }
+            }
         }
         m
     }
 
     fn view(model: &Self::Model) -> View<Self::Msg> {
         let palette = Palette::default();
-
-        let header = View::new(Style {
-            size: Size {
-                width: percent(1.0_f32),
-                height: length(28.0_f32),
-            },
-            padding: Rect {
-                left: length(14.0_f32),
-                right: length(14.0_f32),
-                top: length(0.0_f32),
-                bottom: length(0.0_f32),
-            },
-            align_items: Some(AlignItems::Center),
-            ..Default::default()
-        })
-        .fill(palette.bg_panel)
-        .text_aligned(
-            format!("nahual · {}", model.cwd.display()),
-            12.0,
-            palette.fg_text,
-            Alignment::Start,
-        );
-
-        let list_pane = list_pane_view(model, &palette);
+        let header = header_bar(model, &palette);
+        let list_pane = build_list_pane(model, &palette);
         let viewer_pane = viewer_pane_view(model, &palette);
 
         let body = View::new(Style {
@@ -255,127 +269,96 @@ impl App for Shell {
 // Vistas
 // ---------------------------------------------------------------------
 
-fn list_pane_view(model: &Model, palette: &Palette) -> View<Msg> {
-    let cap = View::new(Style {
+fn header_bar(model: &Model, palette: &Palette) -> View<Msg> {
+    View::new(Style {
         size: Size {
             width: percent(1.0_f32),
-            height: length(20.0_f32),
+            height: length(28.0_f32),
         },
         padding: Rect {
-            left: length(10.0_f32),
-            right: length(10.0_f32),
+            left: length(14.0_f32),
+            right: length(14.0_f32),
             top: length(0.0_f32),
             bottom: length(0.0_f32),
         },
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
+    .fill(palette.bg_panel)
     .text_aligned(
-        format!(
-            "{} entradas · ↑↓ navega · Enter entra · ⌫ sube",
-            model.entries.len()
-        ),
-        10.0,
-        palette.fg_muted,
+        format!("nahual · {}", model.cwd.display()),
+        12.0,
+        palette.fg_text,
         Alignment::Start,
-    );
+    )
+}
 
-    let mut rows: Vec<View<Msg>> = Vec::with_capacity(VISIBLE_ROWS + 1);
-    rows.push(cap);
-
+fn build_list_pane(model: &Model, palette: &Palette) -> View<Msg> {
     let start = model.visible_offset;
     let end = min(model.entries.len(), start + VISIBLE_ROWS);
-    for (visible_i, idx) in (start..end).enumerate() {
-        let entry = &model.entries[idx];
-        let is_sel = idx == model.selected;
-        rows.push(entry_row(entry, idx, is_sel, palette));
-        let _ = visible_i;
-    }
+    let rows: Vec<ListRow<Msg>> = (start..end)
+        .map(|idx| {
+            let entry = &model.entries[idx];
+            let icon = if entry.is_dir { "▸ " } else { "  " };
+            let label = if entry.is_dir {
+                format!("{}{}/", icon, entry.name)
+            } else {
+                format!("{}{}", icon, entry.name)
+            };
+            ListRow {
+                label,
+                selected: idx == model.selected,
+                on_click: Msg::Select(idx),
+            }
+        })
+        .collect();
 
-    if model.entries.len() > end {
-        rows.push(
-            View::new(Style {
-                size: Size {
-                    width: percent(1.0_f32),
-                    height: length(16.0_f32),
-                },
-                padding: Rect {
-                    left: length(10.0_f32),
-                    right: length(10.0_f32),
-                    top: length(0.0_f32),
-                    bottom: length(0.0_f32),
-                },
-                ..Default::default()
-            })
-            .text_aligned(
-                format!("… y {} más (afina con ↓)", model.entries.len() - end),
-                10.0,
-                palette.fg_muted,
-                Alignment::Start,
-            ),
-        );
-    }
+    let caption = format!(
+        "{} entradas · ↑↓ navega · Enter entra · ⌫ sube",
+        model.entries.len()
+    );
+    let truncated_hint = if model.entries.len() > end {
+        Some(format!(
+            "… y {} más (rueda o ↓ para ver más)",
+            model.entries.len() - end
+        ))
+    } else {
+        None
+    };
 
+    let list = list_view(ListSpec {
+        rows,
+        total: model.entries.len(),
+        caption: Some(caption),
+        truncated_hint,
+        row_height: ROW_HEIGHT,
+        palette: ListPalette {
+            bg_panel: palette.bg_panel,
+            bg_selected: palette.bg_sel,
+            fg_text: palette.fg_text,
+            fg_muted: palette.fg_muted,
+        },
+    });
+
+    // Envolvemos en un contenedor de ancho fijo para el split — el widget
+    // de lista en sí ocupa 100% del padre.
     View::new(Style {
-        flex_direction: FlexDirection::Column,
         size: Size {
             width: length(400.0_f32),
             height: percent(1.0_f32),
         },
         flex_shrink: 0.0,
-        padding: Rect {
-            left: length(0.0_f32),
-            right: length(0.0_f32),
-            top: length(6.0_f32),
-            bottom: length(6.0_f32),
-        },
         ..Default::default()
     })
-    .fill(palette.bg_panel)
-    .children(rows)
-}
-
-fn entry_row(entry: &Entry, idx: usize, is_sel: bool, palette: &Palette) -> View<Msg> {
-    let (bg, fg) = if is_sel {
-        (palette.bg_sel, palette.fg_text)
-    } else {
-        (palette.bg_panel, palette.fg_text)
-    };
-    let icon = if entry.is_dir { "▸ " } else { "  " };
-    let name = if entry.is_dir {
-        format!("{}{}/", icon, entry.name)
-    } else {
-        format!("{}{}", icon, entry.name)
-    };
-
-    View::new(Style {
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(ROW_HEIGHT),
-        },
-        padding: Rect {
-            left: length(10.0_f32),
-            right: length(10.0_f32),
-            top: length(0.0_f32),
-            bottom: length(0.0_f32),
-        },
-        align_items: Some(AlignItems::Center),
-        justify_content: Some(JustifyContent::Center),
-        ..Default::default()
-    })
-    .fill(bg)
-    .text_aligned(name, 12.0, fg, Alignment::Start)
-    .on_click(Msg::Select(idx))
+    .children(vec![list])
 }
 
 fn viewer_pane_view(model: &Model, palette: &Palette) -> View<Msg> {
     let header_text = match &model.preview_of {
-        Some(p) => format!(
-            "{}",
-            p.file_name()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_default()
-        ),
+        Some(p) => p
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default(),
         None => "(seleccioná un archivo)".to_string(),
     };
 
@@ -396,10 +379,7 @@ fn viewer_pane_view(model: &Model, palette: &Palette) -> View<Msg> {
     .text_aligned(header_text, 10.0, palette.fg_muted, Alignment::Start);
 
     let (body_text, body_color) = match &model.preview {
-        Preview::Empty => (
-            "—".to_string(),
-            palette.fg_muted,
-        ),
+        Preview::Empty => ("—".to_string(), palette.fg_muted),
         Preview::Text(s) => (s.clone(), palette.fg_text),
         Preview::Binary => (
             "(archivo binario — sin preview)".to_string(),
@@ -444,6 +424,7 @@ fn viewer_pane_view(model: &Model, palette: &Palette) -> View<Msg> {
         ..Default::default()
     })
     .fill(palette.bg_app)
+    .clip(true) // recorta texto largo al pane.
     .children(vec![cap, body])
 }
 
@@ -457,10 +438,10 @@ fn scan_dir(path: &Path) -> Vec<Entry> {
     };
     let mut entries: Vec<Entry> = it
         .flatten()
-        .filter_map(|e| {
+        .map(|e| {
             let name = e.file_name().to_string_lossy().to_string();
             let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
-            Some(Entry { name, is_dir })
+            Entry { name, is_dir }
         })
         .collect();
     // Directorios primero, después por nombre (case-insensitive).
@@ -510,7 +491,6 @@ fn preview_selected(m: &mut Model) {
     }
     match fs::read(&path) {
         Ok(bytes) => {
-            // Heurística simple para "texto": sin null bytes y UTF-8 válido.
             if bytes.contains(&0) {
                 m.preview = Preview::Binary;
             } else {

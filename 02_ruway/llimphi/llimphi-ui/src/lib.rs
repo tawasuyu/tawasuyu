@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use llimphi_hal::winit::application::ApplicationHandler;
 use llimphi_hal::winit::dpi::{LogicalSize, PhysicalPosition};
-use llimphi_hal::winit::event::{ElementState, MouseButton, WindowEvent};
+use llimphi_hal::winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use llimphi_hal::winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use llimphi_hal::winit::keyboard::ModifiersState;
 use llimphi_hal::winit::window::{Window, WindowAttributes, WindowId};
@@ -22,8 +22,8 @@ use llimphi_hal::{Hal, Surface, WinitSurface};
 pub use llimphi_hal::winit::keyboard::{Key, NamedKey};
 use llimphi_layout::taffy::NodeId;
 use llimphi_layout::{ComputedLayout, LayoutTree, Style};
-use llimphi_raster::kurbo::{Affine, RoundedRect};
-use llimphi_raster::peniko::{color::palette, Color, Fill};
+use llimphi_raster::kurbo::{Affine, Rect as KurboRect, RoundedRect};
+use llimphi_raster::peniko::{color::palette, Color, Fill, Mix};
 use llimphi_raster::{vello, Renderer};
 
 pub use llimphi_hal;
@@ -48,6 +48,18 @@ pub trait App: 'static {
     /// Maneja una pulsación de tecla. Devuelve `Some(Msg)` para disparar
     /// una transición; `None` (default) ignora la tecla.
     fn on_key(_model: &Self::Model, _event: &KeyEvent) -> Option<Self::Msg> {
+        None
+    }
+
+    /// Maneja una rueda del mouse. `delta` está normalizado a "líneas"
+    /// (positivo arriba/izquierda, negativo abajo/derecha). En backends
+    /// que reportan píxeles, llimphi-ui divide por 20 para aproximar.
+    fn on_wheel(
+        _model: &Self::Model,
+        _delta: WheelDelta,
+        _cursor: (f32, f32),
+        _modifiers: Modifiers,
+    ) -> Option<Self::Msg> {
         None
     }
 
@@ -147,6 +159,15 @@ pub struct Modifiers {
     pub meta: bool,
 }
 
+/// Delta de rueda en "líneas" lógicas (normalizado a través de backends).
+/// Convención CSS: positivo = scroll **hacia abajo** (contenido sube).
+/// `x` similar para scroll horizontal (touchpads, ratones de 2 ejes).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WheelDelta {
+    pub x: f32,
+    pub y: f32,
+}
+
 impl From<ModifiersState> for Modifiers {
     fn from(m: ModifiersState) -> Self {
         Self {
@@ -176,6 +197,10 @@ pub struct View<Msg> {
     pub radius: f64,
     pub text: Option<TextSpec>,
     pub on_click: Option<Msg>,
+    /// Si `true`, los descendientes se recortan al rect del nodo (vía
+    /// `scene.push_layer` con `Mix::Clip`). El hit-test también respeta
+    /// el recorte: clicks fuera del rect ignoran a los hijos.
+    pub clip: bool,
     pub children: Vec<View<Msg>>,
 }
 
@@ -187,6 +212,7 @@ impl<Msg> View<Msg> {
             radius: 0.0,
             text: None,
             on_click: None,
+            clip: false,
             children: Vec::new(),
         }
     }
@@ -232,6 +258,14 @@ impl<Msg> View<Msg> {
         self
     }
 
+    /// Recorta los hijos al rect de este nodo (paint y hit-test). Útil
+    /// para paneles con contenido virtualizado que no debe sangrar a
+    /// vecinos (listas, scrollers, viewers).
+    pub fn clip(mut self, enabled: bool) -> Self {
+        self.clip = enabled;
+        self
+    }
+
     pub fn children(mut self, children: Vec<View<Msg>>) -> Self {
         self.children = children;
         self
@@ -252,50 +286,58 @@ struct MountedNode<Msg> {
     radius: f64,
     text: Option<TextSpec>,
     on_click: Option<Msg>,
+    clip: bool,
+    /// Índice (exclusivo) del fin del subárbol en `Mounted::nodes`. Los
+    /// descendientes ocupan `[idx + 1, subtree_end)`. Hace de "barrera" en
+    /// paint/hit_test para `pop_layer` y para saltar subárboles enteros.
+    subtree_end: usize,
 }
 
 fn mount<Msg: Clone>(layout: &mut LayoutTree, v: View<Msg>) -> Mounted<Msg> {
-    let (root, nodes) = mount_recursive(layout, v);
+    let mut nodes = Vec::new();
+    let root = mount_recursive(layout, v, &mut nodes);
     Mounted { root, nodes }
 }
 
-/// Devuelve `(NodeId del subárbol, lista de MountedNode en pre-orden)`.
-/// Pre-orden = padre antes que hijos, así `paint` recorre en orden e imita
-/// painter's algorithm (padre = background, hijos encima).
+/// Mount en pre-orden directo sobre `out`: pusheamos el padre como
+/// placeholder (id real desconocido hasta crear el taffy node), recursamos
+/// hijos sobre el mismo `out`, y al volver completamos `id` + `subtree_end`.
 fn mount_recursive<Msg: Clone>(
     layout: &mut LayoutTree,
     v: View<Msg>,
-) -> (NodeId, Vec<MountedNode<Msg>>) {
+    out: &mut Vec<MountedNode<Msg>>,
+) -> NodeId {
     let View {
         style,
         fill,
         radius,
         text,
         on_click,
+        clip,
         children,
     } = v;
-    let children_results: Vec<(NodeId, Vec<MountedNode<Msg>>)> = children
-        .into_iter()
-        .map(|c| mount_recursive(layout, c))
-        .collect();
-    let child_ids: Vec<NodeId> = children_results.iter().map(|(id, _)| *id).collect();
+    let parent_idx = out.len();
+    out.push(MountedNode {
+        id: NodeId::new(0), // placeholder, lo sobreescribimos abajo
+        fill,
+        radius,
+        text,
+        on_click,
+        clip,
+        subtree_end: 0,
+    });
+    let mut child_ids = Vec::with_capacity(children.len());
+    for child in children {
+        child_ids.push(mount_recursive(layout, child, out));
+    }
     let id = if child_ids.is_empty() {
         layout.leaf(style).expect("layout leaf")
     } else {
         layout.node(style, &child_ids).expect("layout node")
     };
-    let mut nodes = Vec::with_capacity(1 + children_results.iter().map(|(_, n)| n.len()).sum::<usize>());
-    nodes.push(MountedNode {
-        id,
-        fill,
-        radius,
-        text,
-        on_click,
-    });
-    for (_, child_nodes) in children_results {
-        nodes.extend(child_nodes);
-    }
-    (id, nodes)
+    out[parent_idx].id = id;
+    out[parent_idx].subtree_end = out.len();
+    id
 }
 
 fn paint<Msg>(
@@ -304,7 +346,19 @@ fn paint<Msg>(
     computed: &ComputedLayout,
     typesetter: &mut llimphi_text::Typesetter,
 ) {
-    for node in &mounted.nodes {
+    // Stack de subtree_end de los nodos con `clip = true` que están
+    // activos. Cuando el índice del próximo nodo cruza el top, pop_layer.
+    let mut clip_stack: Vec<usize> = Vec::new();
+    for (idx, node) in mounted.nodes.iter().enumerate() {
+        // Cierre de clips que ya quedaron atrás (idx ≥ subtree_end).
+        while let Some(&end) = clip_stack.last() {
+            if idx >= end {
+                scene.pop_layer();
+                clip_stack.pop();
+            } else {
+                break;
+            }
+        }
         let Some(r) = computed.get(node.id) else {
             continue;
         };
@@ -345,28 +399,63 @@ fn paint<Msg>(
             };
             llimphi_text::draw_layout(scene, &layout, text.color, origin);
         }
+        if node.clip {
+            let clip_rect = KurboRect::new(
+                r.x as f64,
+                r.y as f64,
+                (r.x + r.w) as f64,
+                (r.y + r.h) as f64,
+            );
+            scene.push_layer(Mix::Clip, 1.0, Affine::IDENTITY, &clip_rect);
+            clip_stack.push(node.subtree_end);
+        }
+    }
+    // Cerrá clips que llegaron al final de la lista sin pop intermedio.
+    while clip_stack.pop().is_some() {
+        scene.pop_layer();
     }
 }
 
-/// Hit-test: devuelve el Msg del nodo más al frente cuyo rect contiene (x, y).
+/// Hit-test: devuelve el Msg del nodo más al frente cuyo rect contiene
+/// (x, y), respetando recortes (`clip`). Si el punto cae afuera de un
+/// nodo con clip, salta su subárbol entero — los hijos no son alcanzables.
 fn hit_test<Msg: Clone>(
     mounted: &Mounted<Msg>,
     computed: &ComputedLayout,
     x: f32,
     y: f32,
 ) -> Option<Msg> {
-    for node in mounted.nodes.iter().rev() {
-        let Some(msg) = node.on_click.as_ref() else {
-            continue;
-        };
-        let Some(r) = computed.get(node.id) else {
-            continue;
-        };
-        if x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h {
-            return Some(msg.clone());
+    let mut hit: Option<usize> = None;
+    let mut clip_stack: Vec<usize> = Vec::new();
+    let mut idx = 0;
+    while idx < mounted.nodes.len() {
+        while let Some(&end) = clip_stack.last() {
+            if idx >= end {
+                clip_stack.pop();
+            } else {
+                break;
+            }
         }
+        let node = &mounted.nodes[idx];
+        let Some(r) = computed.get(node.id) else {
+            idx += 1;
+            continue;
+        };
+        let inside = x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
+        if node.clip {
+            if !inside {
+                // Punto fuera del clip → todo el subárbol es invisible.
+                idx = node.subtree_end;
+                continue;
+            }
+            clip_stack.push(node.subtree_end);
+        }
+        if inside && node.on_click.is_some() {
+            hit = Some(idx);
+        }
+        idx += 1;
     }
-    None
+    hit.and_then(|i| mounted.nodes[i].on_click.clone())
 }
 
 struct Runtime<A: App> {
@@ -489,6 +578,33 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     repeat: event.repeat,
                 };
                 if let Some(msg) = A::on_key(state.model.as_ref().expect("model"), &ev) {
+                    let model = state.model.take().expect("model");
+                    state.model = Some(A::update(model, msg, &self.handle));
+                    state.last_render = None;
+                    state.window.request_redraw();
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                // Convención winit: LineDelta es líneas; PixelDelta es
+                // píxeles físicos (touchpads). En CSS y aquí, positivo
+                // (rueda hacia adelante / dos dedos arriba) = scroll
+                // hacia arriba, así que invertimos `y` para que el
+                // contenido "siga al dedo" en y positivo. `x` queda
+                // como llega.
+                let wd = match delta {
+                    MouseScrollDelta::LineDelta(x, y) => WheelDelta { x, y: -y },
+                    MouseScrollDelta::PixelDelta(p) => WheelDelta {
+                        x: (p.x as f32) / 20.0,
+                        y: -(p.y as f32) / 20.0,
+                    },
+                };
+                let cursor = (state.cursor.x as f32, state.cursor.y as f32);
+                if let Some(msg) = A::on_wheel(
+                    state.model.as_ref().expect("model"),
+                    wd,
+                    cursor,
+                    state.modifiers,
+                ) {
                     let model = state.model.take().expect("model");
                     state.model = Some(A::update(model, msg, &self.handle));
                     state.last_render = None;

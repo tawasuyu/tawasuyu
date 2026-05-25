@@ -14,3 +14,4 @@ path = "src/main.rs"
 
 [dependencies]
 llimphi-ui = { workspace = true }
+llimphi-widget-list = { workspace = true }

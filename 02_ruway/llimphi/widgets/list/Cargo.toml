@@ -1,0 +1,11 @@
+[package]
+name = "llimphi-widget-list"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-list — lista vertical virtualizada para Llimphi: filas clicables, selección, caption opcional, recorte de overflow. El caller hace la virtualización (pasa sólo las filas visibles) y el widget las compone."
+
+[dependencies]
+llimphi-ui = { workspace = true }
