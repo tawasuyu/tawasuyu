@@ -189,14 +189,35 @@ pub struct TextSpec {
     pub alignment: llimphi_text::Alignment,
 }
 
+/// Fase de un drag activo. `Move` se emite por cada `CursorMoved` con el
+/// delta desde el evento anterior; `End` se emite al soltar el botón.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DragPhase {
+    Move,
+    End,
+}
+
+/// Handler de drag. Recibe la fase + delta (`dx`, `dy`) **desde el evento
+/// anterior** (no acumulado desde el press). Devolver `None` deja el drag
+/// activo sin disparar Msg. `Arc<dyn Fn>` para que el runtime pueda
+/// clonarlo barato al iniciar el drag y mantenerlo vivo aunque el cache
+/// de la vista se regenere mientras tanto.
+pub type DragFn<Msg> = Arc<dyn Fn(DragPhase, f32, f32) -> Option<Msg> + Send + Sync>;
+
 /// Nodo de la vista declarativa. Estilo de layout (taffy) + relleno opcional
 /// (vello) + texto opcional (skrifa+vello) + Msg al click opcional + hijos.
 pub struct View<Msg> {
     pub style: Style,
     pub fill: Option<Color>,
+    /// Relleno cuando el cursor está sobre este nodo. Sin valor (`None`)
+    /// = no se reacciona al hover.
+    pub hover_fill: Option<Color>,
     pub radius: f64,
     pub text: Option<TextSpec>,
     pub on_click: Option<Msg>,
+    /// Handler de drag. Si está presente, este nodo arrastra (y NO emite
+    /// `on_click` al presionar — un nodo es uno u otro).
+    pub drag: Option<DragFn<Msg>>,
     /// Si `true`, los descendientes se recortan al rect del nodo (vía
     /// `scene.push_layer` con `Mix::Clip`). El hit-test también respeta
     /// el recorte: clicks fuera del rect ignoran a los hijos.
@@ -209,9 +230,11 @@ impl<Msg> View<Msg> {
         Self {
             style,
             fill: None,
+            hover_fill: None,
             radius: 0.0,
             text: None,
             on_click: None,
+            drag: None,
             clip: false,
             children: Vec::new(),
         }
@@ -219,6 +242,26 @@ impl<Msg> View<Msg> {
 
     pub fn fill(mut self, color: Color) -> Self {
         self.fill = Some(color);
+        self
+    }
+
+    /// Color a usar cuando el cursor está sobre este nodo. Habilita
+    /// el hit-test de hover sobre el nodo.
+    pub fn hover_fill(mut self, color: Color) -> Self {
+        self.hover_fill = Some(color);
+        self
+    }
+
+    /// Marca este nodo como draggable. Mientras el usuario sostenga el
+    /// botón izquierdo sobre él, el runtime llama `handler(Move, dx, dy)`
+    /// por cada `CursorMoved` (dx/dy = delta desde el evento anterior) y
+    /// `handler(End, 0, 0)` al soltar. Sobreescribe `on_click` para este
+    /// nodo: un nodo es draggable **o** clickable.
+    pub fn draggable<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(DragPhase, f32, f32) -> Option<Msg> + Send + Sync + 'static,
+    {
+        self.drag = Some(Arc::new(handler));
         self
     }
 
@@ -283,9 +326,11 @@ struct Mounted<Msg> {
 struct MountedNode<Msg> {
     id: NodeId,
     fill: Option<Color>,
+    hover_fill: Option<Color>,
     radius: f64,
     text: Option<TextSpec>,
     on_click: Option<Msg>,
+    drag: Option<DragFn<Msg>>,
     clip: bool,
     /// Índice (exclusivo) del fin del subárbol en `Mounted::nodes`. Los
     /// descendientes ocupan `[idx + 1, subtree_end)`. Hace de "barrera" en
@@ -310,9 +355,11 @@ fn mount_recursive<Msg: Clone>(
     let View {
         style,
         fill,
+        hover_fill,
         radius,
         text,
         on_click,
+        drag,
         clip,
         children,
     } = v;
@@ -320,9 +367,11 @@ fn mount_recursive<Msg: Clone>(
     out.push(MountedNode {
         id: NodeId::new(0), // placeholder, lo sobreescribimos abajo
         fill,
+        hover_fill,
         radius,
         text,
         on_click,
+        drag,
         clip,
         subtree_end: 0,
     });
@@ -345,6 +394,7 @@ fn paint<Msg>(
     mounted: &Mounted<Msg>,
     computed: &ComputedLayout,
     typesetter: &mut llimphi_text::Typesetter,
+    hover_idx: Option<usize>,
 ) {
     // Stack de subtree_end de los nodos con `clip = true` que están
     // activos. Cuando el índice del próximo nodo cruza el top, pop_layer.
@@ -362,7 +412,13 @@ fn paint<Msg>(
         let Some(r) = computed.get(node.id) else {
             continue;
         };
-        if let Some(color) = node.fill {
+        // Hover overrides fill cuando el cursor está sobre este nodo.
+        let effective_fill = if Some(idx) == hover_idx {
+            node.hover_fill.or(node.fill)
+        } else {
+            node.fill
+        };
+        if let Some(color) = effective_fill {
             let rr = RoundedRect::new(
                 r.x as f64,
                 r.y as f64,
@@ -416,15 +472,20 @@ fn paint<Msg>(
     }
 }
 
-/// Hit-test: devuelve el Msg del nodo más al frente cuyo rect contiene
-/// (x, y), respetando recortes (`clip`). Si el punto cae afuera de un
-/// nodo con clip, salta su subárbol entero — los hijos no son alcanzables.
-fn hit_test<Msg: Clone>(
+/// Hit-test parametrizado por elegibilidad. Devuelve el índice del nodo
+/// más al frente (último en pre-orden) cuyo rect contiene `(x, y)` y para
+/// el cual `pred` devuelve `true`, respetando `clip`: si el punto cae
+/// afuera de un nodo con clip, el subárbol entero es invisible.
+fn hit_test_pred<Msg, F>(
     mounted: &Mounted<Msg>,
     computed: &ComputedLayout,
     x: f32,
     y: f32,
-) -> Option<Msg> {
+    pred: F,
+) -> Option<usize>
+where
+    F: Fn(&MountedNode<Msg>) -> bool,
+{
     let mut hit: Option<usize> = None;
     let mut clip_stack: Vec<usize> = Vec::new();
     let mut idx = 0;
@@ -444,18 +505,39 @@ fn hit_test<Msg: Clone>(
         let inside = x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
         if node.clip {
             if !inside {
-                // Punto fuera del clip → todo el subárbol es invisible.
                 idx = node.subtree_end;
                 continue;
             }
             clip_stack.push(node.subtree_end);
         }
-        if inside && node.on_click.is_some() {
+        if inside && pred(node) {
             hit = Some(idx);
         }
         idx += 1;
     }
-    hit.and_then(|i| mounted.nodes[i].on_click.clone())
+    hit
+}
+
+/// Hit-test específico para clicks (incluye nodos draggables).
+fn hit_test_click<Msg>(
+    mounted: &Mounted<Msg>,
+    computed: &ComputedLayout,
+    x: f32,
+    y: f32,
+) -> Option<usize> {
+    hit_test_pred(mounted, computed, x, y, |n| {
+        n.on_click.is_some() || n.drag.is_some()
+    })
+}
+
+/// Hit-test específico para hover (nodos con `hover_fill`).
+fn hit_test_hover<Msg>(
+    mounted: &Mounted<Msg>,
+    computed: &ComputedLayout,
+    x: f32,
+    y: f32,
+) -> Option<usize> {
+    hit_test_pred(mounted, computed, x, y, |n| n.hover_fill.is_some())
 }
 
 struct Runtime<A: App> {
@@ -473,15 +555,31 @@ struct RuntimeState<A: App> {
     cursor: PhysicalPosition<f64>,
     modifiers: Modifiers,
     typesetter: llimphi_text::Typesetter,
-    /// Último frame renderizado: árbol montado + rects absolutos. Lo
-    /// consume el handler de click para hit-testear sin reconstruir
-    /// `view` + layout (que ya hizo el redraw anterior).
+    /// Último frame renderizado: árbol montado + rects absolutos +
+    /// nodo con hover. Lo consume el handler de click para hit-testear
+    /// sin reconstruir `view` + layout, y CursorMoved para detectar si
+    /// el hover cambió y disparar redraw.
     last_render: Option<RenderCache<A::Msg>>,
+    /// Drag activo. Mantiene su propio handler clonado del MountedNode
+    /// — así el drag sobrevive aunque el cache se invalide entre
+    /// eventos.
+    drag: Option<DragState<A::Msg>>,
 }
 
 struct RenderCache<Msg> {
     mounted: Mounted<Msg>,
     computed: ComputedLayout,
+    /// Índice del nodo en hover en el frame ya pintado. `None` si el
+    /// cursor no toca ningún `hover_fill`.
+    hover_idx: Option<usize>,
+}
+
+struct DragState<Msg> {
+    handler: DragFn<Msg>,
+    /// Cursor en el último evento (Press o CursorMoved). El delta del
+    /// próximo Move se calcula contra este, no contra el inicio del
+    /// drag — el caller acumula los deltas en su modelo si los necesita.
+    last_cursor: PhysicalPosition<f64>,
 }
 
 fn build_window_attributes<A: App>() -> WindowAttributes {
@@ -527,6 +625,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
             modifiers: Modifiers::default(),
             typesetter,
             last_render: None,
+            drag: None,
         });
     }
 
@@ -561,7 +660,35 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 state.window.request_redraw();
             }
             WindowEvent::CursorMoved { position, .. } => {
+                let prev_cursor = state.cursor;
                 state.cursor = position;
+                // Drag activo: dispatchear delta al handler.
+                if let Some(drag) = state.drag.as_mut() {
+                    let dx = (position.x - drag.last_cursor.x) as f32;
+                    let dy = (position.y - drag.last_cursor.y) as f32;
+                    drag.last_cursor = position;
+                    if dx != 0.0 || dy != 0.0 {
+                        if let Some(msg) = (drag.handler)(DragPhase::Move, dx, dy) {
+                            let model = state.model.take().expect("model");
+                            state.model = Some(A::update(model, msg, &self.handle));
+                            // Durante drag NO invalidamos el cache —
+                            // queda válido para el próximo Move.
+                            state.window.request_redraw();
+                        }
+                    }
+                } else if let Some(cache) = state.last_render.as_ref() {
+                    // Sin drag: chequear hover. Si cambió, pedir redraw.
+                    let new_hover = hit_test_hover(
+                        &cache.mounted,
+                        &cache.computed,
+                        position.x as f32,
+                        position.y as f32,
+                    );
+                    if new_hover != cache.hover_idx {
+                        state.window.request_redraw();
+                    }
+                    let _ = prev_cursor;
+                }
             }
             WindowEvent::ModifiersChanged(mods) => {
                 state.modifiers = mods.state().into();
@@ -616,17 +743,20 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 button: MouseButton::Left,
                 ..
             } => {
-                // Camino normal: reusa el `mounted` + `computed` del último
-                // redraw — siempre representa lo que el usuario está viendo.
-                // Fallback (raro): no hubo redraw aún o el cache se invalidó
-                // por un Msg sin redraw intermedio; rehacé view + layout.
-                let msg = if let Some(cache) = state.last_render.as_ref() {
-                    hit_test(
+                // Hit-test contra el cache del último redraw (siempre
+                // representa lo visible). Fallback raro: cache vacío.
+                let cursor = state.cursor;
+                let idx_and_action = if let Some(cache) = state.last_render.as_ref() {
+                    hit_test_click(
                         &cache.mounted,
                         &cache.computed,
-                        state.cursor.x as f32,
-                        state.cursor.y as f32,
+                        cursor.x as f32,
+                        cursor.y as f32,
                     )
+                    .map(|i| {
+                        let node = &cache.mounted.nodes[i];
+                        (node.drag.clone(), node.on_click.clone())
+                    })
                 } else {
                     let view = A::view(state.model.as_ref().expect("model"));
                     let mut layout = LayoutTree::new();
@@ -635,18 +765,43 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     let computed = layout
                         .compute(mounted.root, (w as f32, h as f32))
                         .expect("layout");
-                    hit_test(
-                        &mounted,
-                        &computed,
-                        state.cursor.x as f32,
-                        state.cursor.y as f32,
+                    hit_test_click(&mounted, &computed, cursor.x as f32, cursor.y as f32).map(
+                        |i| {
+                            let node = &mounted.nodes[i];
+                            (node.drag.clone(), node.on_click.clone())
+                        },
                     )
                 };
-                if let Some(msg) = msg {
+                if let Some((Some(handler), _)) = idx_and_action {
+                    // Drag wins sobre click cuando ambos están presentes.
+                    state.drag = Some(DragState {
+                        handler,
+                        last_cursor: cursor,
+                    });
+                } else if let Some((_, Some(msg))) = idx_and_action {
                     let model = state.model.take().expect("model");
                     state.model = Some(A::update(model, msg, &self.handle));
                     state.last_render = None;
                     state.window.request_redraw();
+                }
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Left,
+                ..
+            } => {
+                if let Some(drag) = state.drag.take() {
+                    if let Some(msg) = (drag.handler)(DragPhase::End, 0.0, 0.0) {
+                        let model = state.model.take().expect("model");
+                        state.model = Some(A::update(model, msg, &self.handle));
+                        state.last_render = None;
+                        state.window.request_redraw();
+                    } else {
+                        // Sin Msg de end: igual invalidamos cache + redraw
+                        // por si el hover cambió tras el drag.
+                        state.last_render = None;
+                        state.window.request_redraw();
+                    }
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -666,8 +821,22 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 let computed = layout
                     .compute(mounted.root, (w as f32, h as f32))
                     .expect("layout");
+                // Hover fresco contra el árbol recién montado (los
+                // índices del cache anterior pueden no ser válidos).
+                let hover_idx = hit_test_hover(
+                    &mounted,
+                    &computed,
+                    state.cursor.x as f32,
+                    state.cursor.y as f32,
+                );
                 state.scene.reset();
-                paint(&mut state.scene, &mounted, &computed, &mut state.typesetter);
+                paint(
+                    &mut state.scene,
+                    &mounted,
+                    &computed,
+                    &mut state.typesetter,
+                    hover_idx,
+                );
                 if let Err(e) = state.renderer.render(
                     &state.hal,
                     &state.scene,
@@ -677,9 +846,11 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     eprintln!("render error: {e}");
                 }
                 state.surface.present(frame, &state.hal);
-                // Guardá el árbol pintado para que el próximo click haga
-                // hit-test sin repetir `view` + layout.
-                state.last_render = Some(RenderCache { mounted, computed });
+                state.last_render = Some(RenderCache {
+                    mounted,
+                    computed,
+                    hover_idx,
+                });
             }
             _ => {}
         }

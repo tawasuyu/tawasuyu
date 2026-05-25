@@ -1,0 +1,11 @@
+[package]
+name = "llimphi-widget-splitter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-splitter — split container con divisor draggable. Análogo Llimphi al `nahual-widget-splitter` GPUI: dos panes, divisor sólido del ancho del thickness configurable, drag emite Msg con el delta del eje principal."
+
+[dependencies]
+llimphi-ui = { workspace = true }

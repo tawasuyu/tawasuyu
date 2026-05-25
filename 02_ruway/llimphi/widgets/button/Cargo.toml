@@ -1,0 +1,11 @@
+[package]
+name = "llimphi-widget-button"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-button — botón clicable con estado hover. Reusable entre apps Llimphi; cambia el bg cuando el cursor pasa por encima. Compuesto de `View::fill().hover_fill().on_click()` con una paleta tematizable."
+
+[dependencies]
+llimphi-ui = { workspace = true }

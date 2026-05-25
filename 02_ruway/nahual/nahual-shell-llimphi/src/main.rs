@@ -30,8 +30,9 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
+use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
 use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
+use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
 
 fn main() {
     llimphi_ui::run::<Shell>();
@@ -75,6 +76,8 @@ struct Model {
     /// deltas chicos. Cuando supera ±WHEEL_LINES_PER_ROW se materializa
     /// como un step de scroll y se vacía.
     wheel_accum: f32,
+    /// Ancho del panel izquierdo en px. Lo muta el drag del splitter.
+    list_width: f32,
     preview: Preview,
     /// Path del archivo que está previsualizado (si lo hay), para mostrar
     /// el nombre en el header del panel derecho.
@@ -90,6 +93,8 @@ enum Msg {
     Select(usize),
     /// Scroll en filas — positivo abajo, negativo arriba.
     Scroll(i32),
+    /// Drag del divisor — positivo = lista crece.
+    ResizeList(f32),
 }
 
 // ---------------------------------------------------------------------
@@ -119,6 +124,7 @@ impl App for Shell {
             selected: 0,
             visible_offset: 0,
             wheel_accum: 0.0,
+            list_width: 400.0,
             preview: Preview::Empty,
             preview_of: None,
         }
@@ -216,6 +222,9 @@ impl App for Shell {
                 m.preview_of = None;
                 preview_selected(&mut m);
             }
+            Msg::ResizeList(dx) => {
+                m.list_width = (m.list_width + dx).clamp(220.0, 900.0);
+            }
             Msg::Scroll(steps) => {
                 // Convertimos pasos en un nuevo offset; el acumulador se
                 // ajusta para quedarse con la fracción residual.
@@ -237,20 +246,27 @@ impl App for Shell {
 
     fn view(model: &Self::Model) -> View<Self::Msg> {
         let palette = Palette::default();
+        let splitter_palette = SplitterPalette {
+            divider: Color::from_rgba8(34, 40, 54, 255),
+            divider_hover: Color::from_rgba8(110, 140, 220, 255),
+            thickness: 6.0,
+        };
         let header = header_bar(model, &palette);
         let list_pane = build_list_pane(model, &palette);
         let viewer_pane = viewer_pane_view(model, &palette);
 
-        let body = View::new(Style {
-            flex_direction: FlexDirection::Row,
-            flex_grow: 1.0,
-            size: Size {
-                width: percent(1.0_f32),
-                height: percent(1.0_f32),
+        let body = splitter_two(
+            Direction::Row,
+            list_pane,
+            PaneSize::Fixed(model.list_width),
+            viewer_pane,
+            PaneSize::Flex,
+            |phase, dx| match phase {
+                DragPhase::Move => Some(Msg::ResizeList(dx)),
+                DragPhase::End => None,
             },
-            ..Default::default()
-        })
-        .children(vec![list_pane, viewer_pane]);
+            &splitter_palette,
+        );
 
         View::new(Style {
             flex_direction: FlexDirection::Column,
@@ -340,17 +356,8 @@ fn build_list_pane(model: &Model, palette: &Palette) -> View<Msg> {
         },
     });
 
-    // Envolvemos en un contenedor de ancho fijo para el split — el widget
-    // de lista en sí ocupa 100% del padre.
-    View::new(Style {
-        size: Size {
-            width: length(400.0_f32),
-            height: percent(1.0_f32),
-        },
-        flex_shrink: 0.0,
-        ..Default::default()
-    })
-    .children(vec![list])
+    // El splitter envuelve esto en un pane con el ancho del Model.
+    list
 }
 
 fn viewer_pane_view(model: &Model, palette: &Palette) -> View<Msg> {

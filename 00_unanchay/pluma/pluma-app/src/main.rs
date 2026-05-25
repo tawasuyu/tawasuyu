@@ -19,7 +19,9 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, Handle, View};
+use llimphi_ui::{App, DragPhase, Handle, View};
+use llimphi_widget_button::{button_view, ButtonPalette};
+use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
 use pluma_core::{CoherenceState, NarrativeAtom};
 use pluma_editor_llimphi::{editor_view, tone_color, tone_label, Palette};
 use pluma_graph::NarrativeGraph;
@@ -40,6 +42,8 @@ struct Model {
     root: Uuid,
     /// Cuántas veces se mutó la raíz (para variar el texto nuevo).
     mutations: u32,
+    /// Ancho del panel lateral en px. Lo muta el drag del splitter.
+    side_width: f32,
 }
 
 #[derive(Clone)]
@@ -48,6 +52,8 @@ enum Msg {
     MutateRoot,
     /// Devuelve todos los átomos a estado coherente.
     Revalidate,
+    /// Delta del divisor: positivo = divisor a la derecha = side encoge.
+    ResizeSide(f32),
 }
 
 struct Pluma;
@@ -70,6 +76,7 @@ impl App for Pluma {
             graph,
             root,
             mutations: 0,
+            side_width: 240.0,
         }
     }
 
@@ -96,14 +103,29 @@ impl App for Pluma {
                     }
                 }
             }
+            Msg::ResizeSide(dx) => {
+                // El side está a la derecha: divisor a la derecha (dx>0)
+                // significa side encoge.
+                m.side_width = (m.side_width - dx).clamp(180.0, 600.0);
+            }
         }
         m
     }
 
     fn view(model: &Self::Model) -> View<Self::Msg> {
         let palette = Palette::default();
-        let chip = Color::from_rgba8(36, 42, 56, 255);
         let border = Color::from_rgba8(46, 54, 70, 255);
+        let chip_palette = ButtonPalette {
+            bg: Color::from_rgba8(36, 42, 56, 255),
+            bg_hover: Color::from_rgba8(54, 64, 86, 255),
+            fg: palette.fg_text,
+            radius: 5.0,
+        };
+        let splitter_palette = SplitterPalette {
+            divider: border,
+            divider_hover: Color::from_rgba8(110, 140, 220, 255),
+            thickness: 6.0,
+        };
 
         let plan = build_plan(&model.graph, &LayoutConfig::default());
         let (pending, conflict) = coherence_counts(&model.graph);
@@ -173,13 +195,8 @@ impl App for Pluma {
         .fill(palette.bg_panel)
         .children(vec![
             label("[DOCUMENTO]", 11.0, palette.fg_muted),
-            button("⚡  Mutar raíz", chip, palette.fg_text, Msg::MutateRoot),
-            button(
-                "✓  Re-validar todo",
-                chip,
-                palette.fg_text,
-                Msg::Revalidate,
-            ),
+            button_view("⚡  Mutar raíz", &chip_palette, Msg::MutateRoot),
+            button_view("✓  Re-validar todo", &chip_palette, Msg::Revalidate),
             divider(border),
             stat_row("Átomos", format!("{}", model.graph.len()), &palette),
             stat_row("Por evaluar", format!("{pending}"), &palette),
@@ -197,16 +214,19 @@ impl App for Pluma {
             ),
         ]);
 
-        let body = View::new(Style {
-            flex_direction: FlexDirection::Row,
-            size: Size {
-                width: percent(1.0_f32),
-                height: percent(1.0_f32),
+        // Canvas a la izquierda (flex), side a la derecha (fijo + drag).
+        let body = splitter_two(
+            Direction::Row,
+            canvas,
+            PaneSize::Flex,
+            side,
+            PaneSize::Fixed(model.side_width),
+            |phase, dx| match phase {
+                DragPhase::Move => Some(Msg::ResizeSide(dx)),
+                DragPhase::End => None,
             },
-            flex_grow: 1.0,
-            ..Default::default()
-        })
-        .children(vec![canvas, side]);
+            &splitter_palette,
+        );
 
         View::new(Style {
             flex_direction: FlexDirection::Column,
@@ -256,27 +276,6 @@ fn divider(color: Color) -> View<Msg> {
         ..Default::default()
     })
     .fill(color)
-}
-
-fn button(label: &str, bg: Color, fg: Color, on_click: Msg) -> View<Msg> {
-    View::new(Style {
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(30.0_f32),
-        },
-        padding: Rect {
-            left: length(10.0_f32),
-            right: length(10.0_f32),
-            top: length(0.0_f32),
-            bottom: length(0.0_f32),
-        },
-        align_items: Some(AlignItems::Center),
-        ..Default::default()
-    })
-    .fill(bg)
-    .radius(5.0)
-    .text_aligned(label.to_string(), 13.0, fg, Alignment::Start)
-    .on_click(on_click)
 }
 
 /// Fila «etiqueta · valor» con justify_between.
