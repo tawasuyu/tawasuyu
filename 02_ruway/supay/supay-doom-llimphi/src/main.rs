@@ -29,7 +29,7 @@
 //! En modo stub (sin vendor), la app arranca igual y pinta un mensaje
 //! explicando qué falta — útil para verificar el plumbing Llimphi.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
@@ -40,9 +40,28 @@ use llimphi_ui::llimphi_raster::peniko::{Blob, Color, Image, ImageFormat};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use supay_core::{keys, DoomEngine, SnapshotPair, DOOM_HEIGHT, DOOM_PIXELS, DOOM_WIDTH};
+use supay_render_llimphi::{scene_view, RenderConfig};
 
 const TICK_HZ: u64 = 35; // canónico de Doom
 const TICK_MS: u64 = 1_000 / TICK_HZ;
+const TICK_PERIOD: Duration = Duration::from_millis(TICK_MS);
+/// Frame rate del renderer 3D — desacoplado del tick del motor. A 60 Hz
+/// la interpolación entre snapshots se vuelve visible (cada tick de
+/// 28.5 ms cubre ~1.7 frames de 16.6 ms, así el alpha barre 0→1 en pasos
+/// de ~0.58). En Framebuffer mode el redraw también ayuda al smoothing
+/// del scaling del FB.
+const FRAME_MS: u64 = 1_000 / 60;
+
+/// Modo de visualización. Toggleable con F3 — Fase 1 vs Fase 3.0.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ViewMode {
+    /// Pinta el framebuffer 320×200 ARGB del motor original
+    /// (renderer software clásico de Doom).
+    Framebuffer,
+    /// Renderer 3D moderno consumiendo snapshots interpolados
+    /// (Fase 3.0 — supay-render-llimphi sobre vello).
+    Scene3d,
+}
 
 struct Model {
     engine: DoomEngine,
@@ -51,16 +70,26 @@ struct Model {
     /// (lo que `View::image` espera).
     framebuffer_rgba: Vec<u8>,
     /// Fase 2: par de snapshots (prev + next) capturados desde
-    /// doomgeneric — el renderer 3D futuro interpolará entre los dos
-    /// para correr más rápido que 35 Hz. Por ahora sólo lo mantenemos
-    /// vivo para validar el plumbing y mostrar conteos en el header.
+    /// doomgeneric — el renderer 3D (Fase 3) interpola entre los dos
+    /// para correr más rápido que 35 Hz.
     snapshots: SnapshotPair,
+    /// Instante real del último `Msg::Tick` — el renderer 3D lo usa
+    /// para calcular `alpha = elapsed / TICK_PERIOD` al pintar.
+    last_tick_at: Instant,
+    view_mode: ViewMode,
 }
 
 #[derive(Clone)]
 enum Msg {
+    /// Tick del motor Doom (35 Hz). Avanza la simulación + captura
+    /// snapshot.
     Tick,
+    /// Redraw a 60 Hz para que el closure de paint_with recompute
+    /// `alpha = elapsed / TICK_PERIOD` y la interpolación entre
+    /// snapshots sea visible. No toca el model más allá del rebuild.
+    Frame,
     Key(KeyEvent),
+    ToggleViewMode,
     Quit,
 }
 
@@ -83,6 +112,7 @@ impl App for Supay {
 
     fn init(handle: &Handle<Msg>) -> Model {
         handle.spawn_periodic(Duration::from_millis(TICK_MS), || Msg::Tick);
+        handle.spawn_periodic(Duration::from_millis(FRAME_MS), || Msg::Frame);
         // Args estilo argv. `-iwad doom1.wad` busca el WAD en cwd.
         // `-nosound` apaga el subsistema de audio entero: nuestros
         // stubs devuelven 0 / NULL y eso confunde a `S_StartSound`
@@ -99,13 +129,21 @@ impl App for Supay {
             tick: 0,
             framebuffer_rgba: vec![0; DOOM_PIXELS * 4],
             snapshots: SnapshotPair::new(),
+            last_tick_at: Instant::now(),
+            view_mode: ViewMode::Framebuffer,
         }
     }
 
     fn on_key(_: &Model, e: &KeyEvent) -> Option<Msg> {
-        if matches!(&e.key, Key::Named(NamedKey::F12)) && e.state == KeyState::Pressed {
-            // F12 cierra la ventana — Esc lo manejamos como KEY_ESCAPE del juego.
-            return Some(Msg::Quit);
+        if e.state == KeyState::Pressed {
+            if matches!(&e.key, Key::Named(NamedKey::F12)) {
+                // F12 cierra la ventana — Esc lo manejamos como KEY_ESCAPE del juego.
+                return Some(Msg::Quit);
+            }
+            if matches!(&e.key, Key::Named(NamedKey::F3)) {
+                // F3 alterna framebuffer ↔ renderer 3D (Fase 1 ↔ Fase 3.0).
+                return Some(Msg::ToggleViewMode);
+            }
         }
         Some(Msg::Key(e.clone()))
     }
@@ -118,17 +156,29 @@ impl App for Supay {
                 m.tick = m.tick.wrapping_add(1);
                 m.engine.tick();
                 refresh_framebuffer(&mut m);
-                // Fase 2: capturamos snapshot tras el tick. El renderer
-                // de Fase 3 lo consumirá; por ahora vive como evidencia
-                // de que el plumbing funciona.
+                // Fase 2: snapshot tras cada tick.
                 let snap = m.engine.capture_scene(m.tick);
                 m.snapshots.push(snap);
+                m.last_tick_at = Instant::now();
+            }
+            Msg::Frame => {
+                // No-op a nivel de modelo. Existe sólo para que Llimphi
+                // dispare un view rebuild + redraw y el closure de
+                // paint_with recompute `alpha` desde Instant::now() —
+                // así la interpolación entre snapshots se vuelve
+                // visible aún cuando no haya entrada del usuario.
             }
             Msg::Key(e) => {
                 if let Some(doom_key) = translate_key(&e.key, e.text.as_deref()) {
                     let pressed = e.state == KeyState::Pressed;
                     m.engine.push_key(pressed, doom_key);
                 }
+            }
+            Msg::ToggleViewMode => {
+                m.view_mode = match m.view_mode {
+                    ViewMode::Framebuffer => ViewMode::Scene3d,
+                    ViewMode::Scene3d => ViewMode::Framebuffer,
+                };
             }
         }
         m
@@ -137,10 +187,20 @@ impl App for Supay {
     fn view(model: &Model) -> View<Msg> {
         let theme = Theme::dark();
         let header = header_bar(model, &theme);
-        let body = if model.engine.real {
-            game_pane(model)
-        } else {
-            stub_message_pane(&theme)
+        let body = match model.view_mode {
+            ViewMode::Framebuffer => {
+                if model.engine.real {
+                    game_pane(model)
+                } else {
+                    stub_message_pane(&theme)
+                }
+            }
+            ViewMode::Scene3d => scene_view(
+                &model.snapshots,
+                model.last_tick_at,
+                TICK_PERIOD,
+                RenderConfig::default(),
+            ),
         };
         View::new(Style {
             flex_direction: FlexDirection::Column,
@@ -172,6 +232,10 @@ fn header_bar(model: &Model, theme: &Theme) -> View<Msg> {
             )
         })
         .unwrap_or_else(|| "scene[—]".to_string());
+    let view_tag = match model.view_mode {
+        ViewMode::Framebuffer => "view=FB (F3→3D)",
+        ViewMode::Scene3d => "view=3D (F3→FB)",
+    };
     View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -188,7 +252,10 @@ fn header_bar(model: &Model, theme: &Theme) -> View<Msg> {
     })
     .fill(theme.bg_panel)
     .text_aligned(
-        format!("{title}  ·  tick {}  ·  {}  ·  {}", model.tick, mode, scene),
+        format!(
+            "{title}  ·  tick {}  ·  {}  ·  {}  ·  {}",
+            model.tick, mode, view_tag, scene
+        ),
         11.0,
         theme.fg_muted,
         Alignment::Start,

@@ -177,6 +177,7 @@ members = [
     "02_ruway/shuma/sandbox/shuma-core",
     "02_ruway/shuma/sandbox/shuma-discern",
     "02_ruway/shuma/sandbox/shuma-exec",
+    "02_ruway/shuma/sandbox/shuma-history",
     "02_ruway/shuma/sandbox/shuma-infer",
     "02_ruway/shuma/sandbox/shuma-intent",
     "02_ruway/shuma/sandbox/shuma-line",
@@ -188,6 +189,7 @@ members = [
     "02_ruway/supay/supay-app-llimphi",
     "02_ruway/supay/supay-core",
     "02_ruway/supay/supay-doom-llimphi",
+    "02_ruway/supay/supay-render-llimphi",
     "02_ruway/supay/supay-scene",
     "02_ruway/shuma/shuma-daemon",
     "02_ruway/shuma/shuma-gateway",
@@ -407,6 +409,12 @@ llimphi-widget-tree = { path = "02_ruway/llimphi/widgets/tree" }
 
 # === Filesystem helpers ===
 directories = "5"
+
+# === Fuzzy matching (shuma-history) ===
+# nucleo-matcher = mismo matcher que helix-editor: rápido, Unicode-correct,
+# bonus por prefijos, ranking estable. La versión 0.3 expone el API simple
+# que necesitamos (Matcher + Pattern + score).
+nucleo-matcher = "0.3"
 
 # === WASM web (gioser) ===
 wasm-bindgen = "0.2"

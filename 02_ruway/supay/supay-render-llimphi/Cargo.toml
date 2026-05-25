@@ -1,0 +1,13 @@
+[package]
+name = "supay-render-llimphi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "supay-render-llimphi — Fase 3 de supay. Renderer 3D moderno que consume snapshots de supay-scene (Fase 2) y los pinta como `View::paint_with` de Llimphi. Cámara perspectiva CPU + clipping near-plane + back-face cull + painter's algorithm + shading por sector light + fog distante. Fase 3.0 vive sobre vello (rasterizador vectorial sobre wgpu); Fase 3.1+ migrará a un pase wgpu directo cuando llimphi-ui gane `View::custom_pass`."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+supay-scene = { path = "../supay-scene" }

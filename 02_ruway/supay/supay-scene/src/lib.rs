@@ -156,7 +156,7 @@ impl SceneSnapshot {
 ///     let _frame = interpolate(p, n, 0.5);
 /// }
 /// ```
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct SnapshotPair {
     prev: Option<SceneSnapshot>,
     next: Option<SceneSnapshot>,

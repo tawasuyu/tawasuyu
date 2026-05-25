@@ -504,16 +504,18 @@ fn capture_scene_real(tick: u64) -> SceneSnapshot {
 // Captura sintética para modo stub (Fase 2)
 // =====================================================================
 
-/// Snapshot sintético: una sala cuadrada 8×8 con el jugador caminando
-/// en círculo y un sprite siguiéndolo. Permite desarrollar el renderer
-/// (Fase 3) y el plumbing host sin vendor doomgeneric.
+/// Snapshot sintético: una sala 256×256 (≈ 4 celdas Doom de 64) con
+/// el jugador caminando en círculo de radio 64 y un sprite trailing
+/// 96 unidades por detrás. Unidades Doom-realistas para que el near
+/// plane (4.0) del renderer no recorte paredes — Fase 3 lo consume sin
+/// modificaciones.
 #[cfg(doomgeneric_stub)]
 fn synth_snapshot(tick: u64) -> SceneSnapshot {
     use std::sync::Arc;
     // 35 Hz → 1 vuelta cada ~6 s con coef 0.03.
     let t = tick as f32 * 0.03;
-    let center = 4.0_f32;
-    let r = 1.5_f32;
+    let center = 128.0_f32;
+    let r = 64.0_f32;
     let player = PlayerSnap {
         x: center + t.cos() * r,
         y: center + t.sin() * r,
@@ -522,39 +524,45 @@ fn synth_snapshot(tick: u64) -> SceneSnapshot {
         angle: t + std::f32::consts::FRAC_PI_2,
         view_height: 41.0,
     };
-    // Cuatro paredes de la sala (sentido antihorario para que la cara
-    // normal apunte hacia adentro).
+    // Cuatro paredes de la sala. Winding CW (mirando desde +Z): así
+    // el "front side" de cada linedef en convención Doom — donde
+    // `(v2-v1) × (pt-v1)_z < 0` — queda hacia adentro de la sala, y
+    // el jugador parado en (128, 128) ve `front_sector = 0`.
     let walls: Vec<WallSeg> = vec![
+        // Oeste: (0,0)→(0,256).
         WallSeg {
             x1: 0.0,
             y1: 0.0,
-            x2: 8.0,
+            x2: 0.0,
+            y2: 256.0,
+            front_sector: 0,
+            back_sector: NO_SECTOR,
+            flags: 0,
+        },
+        // Norte: (0,256)→(256,256).
+        WallSeg {
+            x1: 0.0,
+            y1: 256.0,
+            x2: 256.0,
+            y2: 256.0,
+            front_sector: 0,
+            back_sector: NO_SECTOR,
+            flags: 0,
+        },
+        // Este: (256,256)→(256,0).
+        WallSeg {
+            x1: 256.0,
+            y1: 256.0,
+            x2: 256.0,
             y2: 0.0,
             front_sector: 0,
             back_sector: NO_SECTOR,
             flags: 0,
         },
+        // Sur: (256,0)→(0,0).
         WallSeg {
-            x1: 8.0,
+            x1: 256.0,
             y1: 0.0,
-            x2: 8.0,
-            y2: 8.0,
-            front_sector: 0,
-            back_sector: NO_SECTOR,
-            flags: 0,
-        },
-        WallSeg {
-            x1: 8.0,
-            y1: 8.0,
-            x2: 0.0,
-            y2: 8.0,
-            front_sector: 0,
-            back_sector: NO_SECTOR,
-            flags: 0,
-        },
-        WallSeg {
-            x1: 0.0,
-            y1: 8.0,
             x2: 0.0,
             y2: 0.0,
             front_sector: 0,
@@ -564,18 +572,18 @@ fn synth_snapshot(tick: u64) -> SceneSnapshot {
     ];
     let sectors: Vec<SectorSnap> = vec![SectorSnap {
         floor_height: 0.0,
-        ceiling_height: 128.0,
+        ceiling_height: 192.0,
         // Brightness pulsando suave — sirve para probar interpolación
         // de luz en el renderer.
         light_level: (192.0 + (t * 0.5).sin() * 32.0).clamp(0.0, 255.0) as u8,
         floor_pic: 0,
         ceiling_pic: 0,
     }];
-    // Un sprite siguiendo al jugador a 2 unidades por detrás.
+    // Un sprite siguiendo al jugador a 96 unidades por detrás.
     let trail_angle = t - std::f32::consts::FRAC_PI_2;
     let sprites: Vec<SpriteSnap> = vec![SpriteSnap {
-        x: player.x - trail_angle.cos() * 2.0,
-        y: player.y - trail_angle.sin() * 2.0,
+        x: player.x - trail_angle.cos() * 96.0,
+        y: player.y - trail_angle.sin() * 96.0,
         z: 0.0,
         angle: trail_angle,
         sprite: 0,
