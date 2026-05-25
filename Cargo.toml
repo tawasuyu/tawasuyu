@@ -61,10 +61,8 @@ members = [
     "00_unanchay/puriy/puriy-core",
     "00_unanchay/puriy/puriy-engine",
     "00_unanchay/puriy/puriy-llimphi",
-    "01_yachay/cosmos/cosmos-app",
     "01_yachay/cosmos/cosmos-app-llimphi",
     "01_yachay/cosmos/cosmos-astrology",
-    "01_yachay/cosmos/cosmos-canvas",
     "01_yachay/cosmos/cosmos-canvas-llimphi",
     "01_yachay/cosmos/cosmos-card",
     "01_yachay/cosmos/cosmos-catalog",
@@ -89,9 +87,7 @@ members = [
     "01_yachay/cosmos/cosmos-validation",
     "01_yachay/cosmos/cosmos-wcs",
     "01_yachay/cosmos/cosmos-web",
-    "01_yachay/dominium/dominium-app",
     "01_yachay/dominium/dominium-app-llimphi",
-    "01_yachay/dominium/dominium-canvas-gpui",
     "01_yachay/dominium/dominium-canvas-llimphi",
     "01_yachay/dominium/dominium-core",
     "01_yachay/dominium/dominium-iso",
@@ -159,21 +155,13 @@ members = [
     "02_ruway/nahual/libs/providers/sqlite",
     "02_ruway/nahual/libs/theme",
     "02_ruway/nahual/nahual-database-explorer",
-    "02_ruway/nahual/nahual-file-explorer",
-    "02_ruway/nahual/nahual-image-viewer",
-    "02_ruway/nahual/nahual-shell",
-    "02_ruway/nahual/nahual-text-viewer",
     "02_ruway/nahual/widgets/app-header",
     "02_ruway/nahual/widgets/banner",
     "02_ruway/nahual/widgets/card",
-    "02_ruway/nahual/widgets/container_core",
     "02_ruway/nahual/widgets/meta-form",
-    "02_ruway/nahual/widgets/splitter",
     "02_ruway/nahual/widgets/stat-card",
-    "02_ruway/nahual/widgets/tabs",
     "02_ruway/nahual/widgets/text_input",
     "02_ruway/nahual/widgets/theme-switcher",
-    "02_ruway/nahual/widgets/tiled",
     "02_ruway/nahual/widgets/tree",
     "02_ruway/shuma/baremetal/matilda-app",
     "02_ruway/shuma/baremetal/matilda-apply",
@@ -200,6 +188,7 @@ members = [
     "02_ruway/shuma/sandbox/shuma-shell-render",
     "02_ruway/shuma/sandbox/shuma-sysmon",
     "02_ruway/shuma/shuma-cli",
+    "02_ruway/shuma/shuma-shell-llimphi",
     "02_ruway/supay/supay-app-llimphi",
     "02_ruway/supay/supay-core",
     "02_ruway/supay/supay-doom-llimphi",
@@ -473,16 +462,9 @@ nahual-bus = { path = "02_ruway/nahual/libs/bus" }
 nahual-provider-fs = { path = "02_ruway/nahual/libs/providers/fs" }
 nahual-provider-sqlite = { path = "02_ruway/nahual/libs/providers/sqlite" }
 nahual-widget-tree = { path = "02_ruway/nahual/widgets/tree" }
-nahual-widget-container-core = { path = "02_ruway/nahual/widgets/container_core" }
-nahual-widget-splitter = { path = "02_ruway/nahual/widgets/splitter" }
-nahual-widget-tabs = { path = "02_ruway/nahual/widgets/tabs" }
-nahual-widget-tiled = { path = "02_ruway/nahual/widgets/tiled" }
 nahual-widget-text-input = { path = "02_ruway/nahual/widgets/text_input" }
-nahual-file-explorer = { path = "02_ruway/nahual/nahual-file-explorer" }
 nahual-database-explorer = { path = "02_ruway/nahual/nahual-database-explorer" }
-nahual-text-viewer = { path = "02_ruway/nahual/nahual-text-viewer" }
 nahual-text-viewer-llimphi = { path = "02_ruway/nahual/nahual-text-viewer-llimphi" }
-nahual-image-viewer = { path = "02_ruway/nahual/nahual-image-viewer" }
 nahual-image-viewer-llimphi = { path = "02_ruway/nahual/nahual-image-viewer-llimphi" }
 nahual-file-explorer-llimphi = { path = "02_ruway/nahual/nahual-file-explorer-llimphi" }
 
