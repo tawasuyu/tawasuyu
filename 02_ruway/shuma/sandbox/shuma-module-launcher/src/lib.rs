@@ -86,6 +86,14 @@ pub fn update(state: State, _msg: Msg) -> State {
     state
 }
 
+/// Mapea `action_id` a `Msg`. El launcher expone `launcher.toggle` como
+/// acción global que el chasis consume directamente (toggle de la
+/// TopBar autohide); ningún `action_id` produce un `Msg` propio del
+/// launcher todavía.
+pub fn dispatch(_action_id: &str) -> Option<Msg> {
+    None
+}
+
 /// Renderiza la barra superior: el label "shuma" a la izquierda y los
 /// botones de entries a la derecha (compactos, alto fijo). Aplica el
 /// alto de la app-header global (40 px) para que cuadre con el resto

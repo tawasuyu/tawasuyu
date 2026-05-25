@@ -87,6 +87,12 @@ pub enum Msg {
     Submit,
 }
 
+/// Mapea `action_id` a `Msg`. La command bar no expone shortcuts
+/// hoy, así que cualquier `action_id` da `None`.
+pub fn dispatch(_action_id: &str) -> Option<Msg> {
+    None
+}
+
 pub fn update(state: State, msg: Msg) -> State {
     let mut s = state;
     match msg {

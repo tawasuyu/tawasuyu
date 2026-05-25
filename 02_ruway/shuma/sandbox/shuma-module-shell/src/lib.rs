@@ -55,6 +55,11 @@ pub fn update(state: State, _msg: Msg) -> State {
     state
 }
 
+/// El shell placeholder no expone shortcuts todavía.
+pub fn dispatch(_action_id: &str) -> Option<Msg> {
+    None
+}
+
 /// Vista del tab del shell. Recibe `lift: Fn(Msg) -> HostMsg` para que
 /// el módulo pueda emitir Msgs que el chasis enruta al `update` del
 /// host. Como Msg está vacío, el placeholder no usa `lift` todavía —

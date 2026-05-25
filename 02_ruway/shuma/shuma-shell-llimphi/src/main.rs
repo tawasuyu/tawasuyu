@@ -56,7 +56,10 @@ use llimphi_theme::Theme;
 use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
 use llimphi_widget_stat_card::{stat_card_view, StatCardPalette};
 use llimphi_widget_tabs::{tabs_view, TabsPalette, TabsSpec};
-use shuma_module::{DrawerTrigger, Source};
+use shuma_module::{
+    DrawerTrigger, ModuleContributions, MonitorSpec, ShortcutAction, ShortcutSpec, Source,
+};
+use std::collections::HashMap;
 use shuma_sysmon::{Snapshot, SystemSampler};
 
 const HISTORY: usize = 60;
@@ -190,6 +193,13 @@ struct Model {
     sysmon: SystemSampler,
     last_snapshot: Option<Snapshot>,
     monitors_width: f32,
+    /// Historial por monitor extra (los que aportan los módulos vía
+    /// `contributions()`). La clave es `"<slot>/<spec.id>"`. El chasis
+    /// los muestrea en cada `Tick` y los acumula como `f32`.
+    extra_history: HashMap<String, Vec<f32>>,
+    /// Último `Sample::display` por monitor — se pinta como subtítulo
+    /// de la stat-card.
+    extra_display: HashMap<String, String>,
 }
 
 #[derive(Clone)]
@@ -205,6 +215,9 @@ enum Msg {
     ResizeMonitors(f32),
     /// Msg de un módulo. El chasis lo enruta a `update` según `slot`.
     Module(Slot, ModuleMsg),
+    /// Click en un shortcut de la toolbar. `slot` es el módulo emisor
+    /// (a quien se le enruta la `ModuleAction`).
+    ShortcutClicked(Slot, ShortcutAction),
 }
 
 struct Shell;
@@ -247,6 +260,8 @@ impl App for Shell {
             sysmon: SystemSampler::new(HISTORY),
             last_snapshot: None,
             monitors_width: MONITORS_INITIAL_WIDTH,
+            extra_history: HashMap::new(),
+            extra_display: HashMap::new(),
         }
     }
 
@@ -277,6 +292,7 @@ impl App for Shell {
         match msg {
             Msg::Tick => {
                 m.last_snapshot = Some(m.sysmon.sample());
+                sample_extra_monitors(&mut m);
             }
             Msg::ToggleDrawer => {
                 m.drawer_open = !m.drawer_open;
@@ -294,6 +310,9 @@ impl App for Shell {
             }
             Msg::Module(slot, mmsg) => {
                 m = apply_module_msg(m, slot, mmsg);
+            }
+            Msg::ShortcutClicked(slot, action) => {
+                m = handle_shortcut(m, slot, action);
             }
         }
         m
@@ -361,6 +380,129 @@ fn apply_module_msg(mut m: Model, slot: Slot, msg: ModuleMsg) -> Model {
         }
     }
     m
+}
+
+/// Recolecta las `ModuleContributions` de todas las instancias vivas.
+/// Devuelve un `Vec<(Slot, ModuleContributions)>` para que el caller
+/// sepa de qué módulo viene cada monitor/shortcut.
+fn collect_contributions(model: &Model) -> Vec<(Slot, ModuleContributions)> {
+    let mut out: Vec<(Slot, ModuleContributions)> = Vec::new();
+
+    let push = |out: &mut Vec<(Slot, ModuleContributions)>, slot: Slot, inst: &Instance| {
+        let c = match &inst.state {
+            ModuleState::Launcher(s) => shuma_module_launcher::contributions(s),
+            ModuleState::CommandBar(s) => shuma_module_commandbar::contributions(s),
+            ModuleState::Shell(s) => shuma_module_shell::contributions(s),
+            ModuleState::Matilda(s) => shuma_module_matilda::contributions(s),
+        };
+        out.push((slot, c));
+    };
+
+    if let Some(inst) = &model.topbar {
+        push(&mut out, Slot::TopBar, inst);
+    }
+    if let Some(inst) = &model.bottombar {
+        push(&mut out, Slot::BottomBar, inst);
+    }
+    if let Some(inst) = &model.main {
+        push(&mut out, Slot::Main, inst);
+    }
+    for (i, inst) in model.drawer_tabs.iter().enumerate() {
+        push(&mut out, Slot::DrawerTab(i), inst);
+    }
+    out
+}
+
+/// Muestrea **todos** los monitores extra (los aporta cada módulo
+/// activo) e inserta el último valor en su buffer del modelo.
+/// Recorta cada buffer a `HISTORY` muestras.
+fn sample_extra_monitors(m: &mut Model) {
+    let contribs = collect_contributions(m);
+    for (slot, c) in contribs {
+        for spec in &c.monitors {
+            let key = monitor_key(&slot, spec);
+            let sample = (spec.sampler)();
+            let entry = m.extra_history.entry(key.clone()).or_default();
+            entry.push(sample.value);
+            if entry.len() > HISTORY {
+                let excess = entry.len() - HISTORY;
+                entry.drain(0..excess);
+            }
+            m.extra_display.insert(key, sample.display);
+        }
+    }
+}
+
+fn monitor_key(slot: &Slot, spec: &MonitorSpec) -> String {
+    let slot_label = match slot {
+        Slot::TopBar => "topbar",
+        Slot::BottomBar => "bottombar",
+        Slot::Main => "main",
+        Slot::DrawerTab(i) => return format!("drawer:{i}/{}", spec.id),
+    };
+    format!("{slot_label}/{}", spec.id)
+}
+
+/// Resuelve un `ShortcutClicked` en una transición concreta del
+/// modelo. Las tres variantes:
+///
+/// - `Command(line)` — por ahora, sólo se loguea en el log de Matilda
+///   si está disponible; la ejecución real va con la integración del
+///   REPL.
+/// - `FocusTab(target)` — busca un `DrawerTab` con `Kind::id() == target`
+///   y lo enfoca. Si el drawer está cerrado, también lo abre.
+/// - `ModuleAction(action_id)` — dispatcha al módulo emisor vía su
+///   `dispatch(action_id) -> Option<Msg>`.
+fn handle_shortcut(mut m: Model, slot: Slot, action: ShortcutAction) -> Model {
+    match action {
+        ShortcutAction::Command { line } => {
+            // Hack temporario: lo agregamos al log del primer matilda
+            // que encontremos para que el usuario vea feedback.
+            if let Some(inst) = m
+                .drawer_tabs
+                .iter_mut()
+                .find(|i| matches!(i.state, ModuleState::Matilda(_)))
+            {
+                if let ModuleState::Matilda(s) = &mut inst.state {
+                    s.log.push(format!("? command: {line}"));
+                }
+            }
+        }
+        ShortcutAction::FocusTab { target } => {
+            if let Some(i) = m
+                .drawer_tabs
+                .iter()
+                .position(|inst| inst.kind.id() == target)
+            {
+                m.active_drawer_tab = i;
+                m.drawer_open = true;
+            }
+        }
+        ShortcutAction::ModuleAction { action_id } => {
+            let msg = dispatch_to_module(&slot, &m, action_id);
+            if let Some(mmsg) = msg {
+                m = apply_module_msg(m, slot, mmsg);
+            }
+        }
+    }
+    m
+}
+
+fn dispatch_to_module(slot: &Slot, model: &Model, action_id: &str) -> Option<ModuleMsg> {
+    let inst = match slot {
+        Slot::TopBar => model.topbar.as_ref()?,
+        Slot::BottomBar => model.bottombar.as_ref()?,
+        Slot::Main => model.main.as_ref()?,
+        Slot::DrawerTab(i) => model.drawer_tabs.get(*i)?,
+    };
+    match inst.kind {
+        Kind::Launcher => shuma_module_launcher::dispatch(action_id).map(ModuleMsg::Launcher),
+        Kind::CommandBar => {
+            shuma_module_commandbar::dispatch(action_id).map(ModuleMsg::CommandBar)
+        }
+        Kind::Shell => shuma_module_shell::dispatch(action_id).map(ModuleMsg::Shell),
+        Kind::Matilda => shuma_module_matilda::dispatch(action_id).map(ModuleMsg::Matilda),
+    }
 }
 
 fn route_to_instance(inst: &mut Instance, msg: ModuleMsg) {
@@ -497,6 +639,7 @@ fn render_drawer_overlay(model: &Model, theme: &Theme) -> View<Msg> {
     let tabs_palette = TabsPalette::from_theme(theme);
     let splitter_palette = SplitterPalette::from_theme(theme);
 
+    let toolbar = drawer_toolbar(model, theme);
     let content = drawer_tab_content(model, theme);
     let monitors = monitor_stack(model, theme);
 
@@ -506,7 +649,7 @@ fn render_drawer_overlay(model: &Model, theme: &Theme) -> View<Msg> {
         .map(|inst| inst.label.clone())
         .collect();
 
-    let body = tabs_view(TabsSpec {
+    let tabs = tabs_view(TabsSpec {
         labels,
         active: model.active_drawer_tab,
         on_select: Msg::SelectDrawerTab,
@@ -527,6 +670,16 @@ fn render_drawer_overlay(model: &Model, theme: &Theme) -> View<Msg> {
         tab_width: None,
     });
 
+    let body = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![toolbar, tabs]);
+
     View::new(Style {
         position: Position::Absolute,
         inset: Rect {
@@ -543,6 +696,106 @@ fn render_drawer_overlay(model: &Model, theme: &Theme) -> View<Msg> {
     })
     .fill(theme.bg_app)
     .children(vec![body])
+}
+
+/// Toolbar del drawer: pinta los `ShortcutSpec` del tab activo como
+/// botones que disparan `Msg::ShortcutClicked`. Si el tab activo no
+/// aporta shortcuts, la barra queda vacía (alto 0 — colapsa).
+fn drawer_toolbar(model: &Model, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::prelude::Dimension;
+    use llimphi_ui::llimphi_text::Alignment;
+
+    let Some(inst) = model.drawer_tabs.get(model.active_drawer_tab) else {
+        return empty_bar(theme, 0.0);
+    };
+    let slot = Slot::DrawerTab(model.active_drawer_tab);
+    let contribs = match &inst.state {
+        ModuleState::Launcher(s) => shuma_module_launcher::contributions(s),
+        ModuleState::CommandBar(s) => shuma_module_commandbar::contributions(s),
+        ModuleState::Shell(s) => shuma_module_shell::contributions(s),
+        ModuleState::Matilda(s) => shuma_module_matilda::contributions(s),
+    };
+
+    if contribs.shortcuts.is_empty() {
+        return empty_bar(theme, 0.0);
+    }
+
+    let mut buttons: Vec<View<Msg>> = contribs
+        .shortcuts
+        .into_iter()
+        .map(|spec| shortcut_button(slot.clone(), spec, theme))
+        .collect();
+
+    // Label izquierdo: el nombre del tab activo.
+    let label = View::new(Style {
+        size: Size {
+            width: Dimension::auto(),
+            height: percent(1.0_f32),
+        },
+        flex_grow: 1.0,
+        padding: Rect {
+            left: length(14.0_f32),
+            right: length(8.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(llimphi_ui::llimphi_layout::taffy::AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(inst.label.clone(), 12.0, theme.fg_text, Alignment::Start);
+
+    let mut row = vec![label];
+    row.append(&mut buttons);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(34.0_f32),
+        },
+        padding: Rect {
+            left: length(4.0_f32),
+            right: length(8.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(llimphi_ui::llimphi_layout::taffy::AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(row)
+}
+
+fn shortcut_button(slot: Slot, spec: ShortcutSpec, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::{prelude::Dimension, AlignItems, JustifyContent};
+    use llimphi_ui::llimphi_text::Alignment;
+
+    View::new(Style {
+        size: Size {
+            width: Dimension::auto(),
+            height: length(26.0_f32),
+        },
+        padding: Rect {
+            left: length(12.0_f32),
+            right: length(12.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        margin: Rect {
+            left: length(4.0_f32),
+            right: length(0.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_button)
+    .hover_fill(theme.bg_button_hover)
+    .radius(4.0)
+    .text_aligned(spec.label.clone(), 12.0, theme.fg_text, Alignment::Center)
+    .on_click(Msg::ShortcutClicked(slot, spec.action))
 }
 
 fn drawer_tab_content(model: &Model, theme: &Theme) -> View<Msg> {
@@ -605,6 +858,35 @@ fn monitor_stack(model: &Model, theme: &Theme) -> View<Msg> {
         &palette,
     );
 
+    let mut children = vec![cpu_card, mem_card];
+
+    // Stat-cards extra: una por cada `MonitorSpec` aportado por los
+    // módulos vivos. El historial vive en `model.extra_history`.
+    for (slot, contribs) in collect_contributions(model) {
+        for spec in &contribs.monitors {
+            let key = monitor_key(&slot, spec);
+            let history = model
+                .extra_history
+                .get(&key)
+                .cloned()
+                .unwrap_or_default();
+            let display = model
+                .extra_display
+                .get(&key)
+                .cloned()
+                .unwrap_or_else(|| "—".into());
+            let accent = Color::from_rgb8(spec.accent.r, spec.accent.g, spec.accent.b);
+            children.push(monitor_card(
+                spec.label.as_str(),
+                display,
+                format!("muestras: {} / {}", history.len(), HISTORY),
+                accent,
+                history,
+                &palette,
+            ));
+        }
+    }
+
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
@@ -624,7 +906,7 @@ fn monitor_stack(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_panel_alt)
-    .children(vec![cpu_card, mem_card])
+    .children(children)
 }
 
 fn monitor_card(

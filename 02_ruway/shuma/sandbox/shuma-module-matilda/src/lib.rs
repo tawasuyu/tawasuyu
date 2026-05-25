@@ -105,6 +105,18 @@ pub enum Msg {
     ResizeSplit(f32),
 }
 
+/// Mapea el `action_id` de un `ShortcutAction::ModuleAction` al `Msg`
+/// que corresponde. Retorna `None` si el action_id no pertenece a este
+/// módulo — el chasis simplemente lo ignora.
+pub fn dispatch(action_id: &str) -> Option<Msg> {
+    match action_id {
+        "matilda.discover" => Some(Msg::Discover),
+        "matilda.plan" => Some(Msg::MakePlan),
+        "matilda.dry_run" => Some(Msg::DryRun),
+        _ => None,
+    }
+}
+
 pub fn update(state: State, msg: Msg) -> State {
     let mut s = state;
     match msg {
@@ -518,6 +530,14 @@ mod tests {
         assert!(s.split_width >= 220.0);
         let s = update(s, Msg::ResizeSplit(10000.0));
         assert!(s.split_width <= 720.0);
+    }
+
+    #[test]
+    fn dispatch_maps_action_ids() {
+        assert!(matches!(dispatch("matilda.discover"), Some(Msg::Discover)));
+        assert!(matches!(dispatch("matilda.plan"), Some(Msg::MakePlan)));
+        assert!(matches!(dispatch("matilda.dry_run"), Some(Msg::DryRun)));
+        assert!(dispatch("desconocido").is_none());
     }
 
     #[test]
