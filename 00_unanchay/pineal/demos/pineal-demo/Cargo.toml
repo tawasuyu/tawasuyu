@@ -8,9 +8,8 @@ publish = { workspace = true }
 description = "Lapaloma — demo app: una serie sin(x) sobre ChartViewport rendereada con LapalomaChartElement. Valida la cadena core → render → cartesian → gpui en vivo."
 
 [dependencies]
-gpui = { workspace = true }
-nahual-launcher = { path = "../../../../02_ruway/nahual/libs/launcher" }
-nahual-theme = { path = "../../../../02_ruway/nahual/libs/theme" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
 pineal-core = { path = "../../pineal-core" }
-pineal-render = { path = "../../pineal-render", features = ["gpui"] }
-pineal-cartesian = { path = "../../pineal-cartesian" }
+pineal-render = { path = "../../pineal-render", features = ["llimphi"] }
+pineal-cartesian = { path = "../../pineal-cartesian", default-features = false, features = ["llimphi"] }

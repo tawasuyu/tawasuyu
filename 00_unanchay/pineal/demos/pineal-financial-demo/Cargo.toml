@@ -8,9 +8,8 @@ publish = { workspace = true }
 description = "Lapaloma — demo de candlesticks OHLC. Random walk sintético de 120 días con pan + zoom."
 
 [dependencies]
-gpui = { workspace = true }
-nahual-launcher = { path = "../../../../02_ruway/nahual/libs/launcher" }
-nahual-theme = { path = "../../../../02_ruway/nahual/libs/theme" }
-pineal-render = { path = "../../pineal-render", features = ["gpui"] }
-pineal-cartesian = { path = "../../pineal-cartesian" }
-pineal-financial = { path = "../../pineal-financial" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+pineal-render = { path = "../../pineal-render", features = ["llimphi"] }
+pineal-cartesian = { path = "../../pineal-cartesian", default-features = false, features = ["llimphi"] }
+pineal-financial = { path = "../../pineal-financial", default-features = false, features = ["llimphi"] }

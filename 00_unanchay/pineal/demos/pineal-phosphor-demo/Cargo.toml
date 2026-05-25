@@ -8,9 +8,8 @@ publish = { workspace = true }
 description = "Lapaloma — demo del trail CRT (phosphor) sobre un RingBuffer streaming a 60Hz. Compará con lapaloma-stream-demo para ver el contraste."
 
 [dependencies]
-gpui = { workspace = true }
-nahual-launcher = { path = "../../../../02_ruway/nahual/libs/launcher" }
-nahual-theme = { path = "../../../../02_ruway/nahual/libs/theme" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
 pineal-core = { path = "../../pineal-core" }
-pineal-render = { path = "../../pineal-render", features = ["gpui"] }
-pineal-phosphor = { path = "../../pineal-phosphor" }
+pineal-render = { path = "../../pineal-render", features = ["llimphi"] }
+pineal-phosphor = { path = "../../pineal-phosphor", default-features = false, features = ["llimphi"] }

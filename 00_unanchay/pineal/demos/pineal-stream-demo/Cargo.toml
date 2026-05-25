@@ -8,9 +8,8 @@ publish = { workspace = true }
 description = "Lapaloma — demo de streaming: RingBuffer + timer 60 Hz + sweep render. Showcase del zero-alloc en hot path."
 
 [dependencies]
-gpui = { workspace = true }
-nahual-launcher = { path = "../../../../02_ruway/nahual/libs/launcher" }
-nahual-theme = { path = "../../../../02_ruway/nahual/libs/theme" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
 pineal-core = { path = "../../pineal-core" }
-pineal-render = { path = "../../pineal-render", features = ["gpui"] }
-pineal-stream = { path = "../../pineal-stream" }
+pineal-render = { path = "../../pineal-render", features = ["llimphi"] }
+pineal-stream = { path = "../../pineal-stream", default-features = false, features = ["llimphi"] }

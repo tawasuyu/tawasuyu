@@ -1,80 +1,139 @@
-//! `pineal-stream-demo` — osciloscopio sintético.
+//! `pineal-stream-demo` — osciloscopio sintético sobre Llimphi.
 //!
-//! Ventana con un `LapalomaStreamElement` montado sobre un
-//! `RingBuffer` de 512 slots. Un timer en el background executor
-//! empuja un sample cada **16 ms** (≈ 60 Hz) y dispara
-//! `cx.notify()`. El sample es la suma de dos sinusoides desfasadas
-//! más un poquito de ruido determinístico.
+//! Ventana con un `StreamView` montado sobre un `RingBuffer` de 512
+//! slots. Un thread periódico empuja un sample cada **16 ms** (≈ 60 Hz)
+//! vía `Handle::spawn_periodic` y dispatcha `Msg::Tick` al update.
 //!
-//! El efecto visual: la traza barre la ventana como en un
-//! osciloscopio CRT — split-at-head deja un "cursor" donde
-//! arranca la traza fresca, la traza vieja se mantiene a la
-//! derecha hasta que el cursor la sobrescriba.
+//! El efecto visual: la traza barre la ventana como en un osciloscopio
+//! CRT — split-at-head deja un "cursor" donde arranca la traza fresca,
+//! la traza vieja se mantiene a la derecha hasta que el cursor la
+//! sobrescriba.
 //!
 //! Showcase del **P2 zero-alloc en hot path**: el `push(v)` del
-//! RingBuffer son 2 escrituras + 2 increments. Cero allocations
-//! por frame, ningún `Vec` se reasigna.
+//! RingBuffer son 2 escrituras + 2 increments. Cero allocations por
+//! frame, ningún `Vec` se reasigna en el sampler.
 
 use std::time::Duration;
 
-use gpui::{div, prelude::*, px, Context, IntoElement, Render, Window};
+use llimphi_theme::Theme;
+use llimphi_ui::llimphi_layout::taffy::prelude::{length, percent, FlexDirection, Size, Style};
+use llimphi_ui::llimphi_layout::taffy::Rect;
+use llimphi_ui::llimphi_text::Alignment;
+use llimphi_ui::{App, Handle, View};
 
 use pineal_core::ring::RingBuffer;
 use pineal_render::{Color, StrokeStyle};
-use pineal_stream::pineal_stream;
-use nahual_launcher::launch_app;
-use nahual_theme::Theme;
+use pineal_stream::pineal_stream_view;
 
 const RING_CAPACITY: usize = 512;
 const SAMPLE_PERIOD: Duration = Duration::from_millis(16);
 
-fn main() {
-    launch_app(
-        "Lapaloma — stream (osciloscopio sintético 60 Hz)",
-        (900., 480.),
-        StreamDemo::new,
-    );
+#[derive(Clone)]
+enum Msg {
+    Tick,
 }
 
-struct StreamDemo {
+struct Model {
     buffer: RingBuffer,
-    /// Tick count global. Sirve de fase para la señal sintética y
-    /// se muestra en el header para verificar que el timer corre.
+    /// Tick count global. Sirve de fase para la señal sintética y se
+    /// muestra en el header para verificar que el timer corre.
     t: u64,
 }
 
-impl StreamDemo {
-    fn new(cx: &mut Context<Self>) -> Self {
-        cx.spawn(async move |this, cx| {
-            let timer = cx.background_executor().clone();
-            loop {
-                timer.timer(SAMPLE_PERIOD).await;
-                let r = this.update(cx, |me, cx| {
-                    me.tick();
-                    cx.notify();
-                });
-                if r.is_err() {
-                    break;
-                }
-            }
-        })
-        .detach();
+struct StreamDemo;
 
-        Self {
-            buffer: RingBuffer::new(RING_CAPACITY),
-            t: 0,
-        }
+impl App for StreamDemo {
+    type Model = Model;
+    type Msg = Msg;
+
+    fn title() -> &'static str {
+        "Lapaloma — stream (osciloscopio sintético 60 Hz)"
     }
 
-    fn tick(&mut self) {
-        let v = synthesize(self.t);
-        self.buffer.push(v);
-        self.t = self.t.wrapping_add(1);
+    fn initial_size() -> (u32, u32) {
+        (900, 480)
+    }
+
+    fn init(handle: &Handle<Msg>) -> Model {
+        handle.spawn_periodic(SAMPLE_PERIOD, || Msg::Tick);
+        Model { buffer: RingBuffer::new(RING_CAPACITY), t: 0 }
+    }
+
+    fn update(mut model: Model, msg: Msg, _: &Handle<Msg>) -> Model {
+        match msg {
+            Msg::Tick => {
+                let v = synthesize(model.t);
+                model.buffer.push(v);
+                model.t = model.t.wrapping_add(1);
+            }
+        }
+        model
+    }
+
+    fn view(model: &Model) -> View<Msg> {
+        let theme = Theme::dark();
+        let plot_bg = Color::rgba(0.08, 0.10, 0.13, 1.0);
+        let stroke = StrokeStyle::new(1.8, Color::rgb(0.639, 0.745, 0.549));
+
+        let header = View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+            padding: Rect {
+                left: length(2.0_f32),
+                right: length(2.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            ..Default::default()
+        })
+        .text_aligned("Lapaloma — stream".to_string(), 18.0, theme.fg_text, Alignment::Start);
+
+        let fill_pct = (model.buffer.filled_len() * 100) / RING_CAPACITY;
+        let stats = format!(
+            "cap = {}    head = {}    filled = {}%    t = {}    rev = {}",
+            RING_CAPACITY,
+            model.buffer.head(),
+            fill_pct,
+            model.t,
+            model.buffer.revision(),
+        );
+        let stats_row = View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(20.0_f32) },
+            ..Default::default()
+        })
+        .text_aligned(stats, 11.0, theme.fg_muted, Alignment::Start);
+
+        let stream = pineal_stream_view(model.buffer.clone(), stroke)
+            .background(plot_bg)
+            .y_range(-1.2, 1.2)
+            .view::<Msg>();
+
+        let plot_panel = View::new(Style {
+            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+            flex_grow: 1.0,
+            ..Default::default()
+        })
+        .clip(true)
+        .children(vec![stream]);
+
+        View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+            padding: Rect {
+                left: length(16.0_f32),
+                right: length(16.0_f32),
+                top: length(16.0_f32),
+                bottom: length(16.0_f32),
+            },
+            gap: Size { width: length(0.0_f32), height: length(10.0_f32) },
+            ..Default::default()
+        })
+        .fill(theme.bg_app)
+        .children(vec![header, stats_row, plot_panel])
     }
 }
 
-/// Señal sintética: suma de dos sinusoides + jitter determinístico.
-/// El rango efectivo queda en `[-1, 1]` aproximadamente.
+/// Señal sintética: suma de dos sinusoides + jitter determinístico. El
+/// rango efectivo queda en `[-1, 1]` aproximadamente.
 fn synthesize(t: u64) -> f32 {
     let phase = t as f32;
     let signal = (phase * 0.07).sin() * 0.75 + (phase * 0.19).sin() * 0.22;
@@ -82,44 +141,6 @@ fn synthesize(t: u64) -> f32 {
     signal + jitter
 }
 
-impl Render for StreamDemo {
-    fn render(&mut self, _w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::global(cx).clone();
-
-        let plot_bg = Color::rgba(0.08, 0.10, 0.13, 1.0);
-        let stroke = StrokeStyle::new(1.8, Color::from_hex(0xa3be8c));
-
-        let stream = pineal_stream(self.buffer.clone(), stroke)
-            .background(plot_bg)
-            .y_range(-1.2, 1.2);
-
-        let fill_pct = (self.buffer.filled_len() * 100) / RING_CAPACITY;
-
-        div()
-            .size_full()
-            .bg(theme.bg_app.clone())
-            .p(px(16.))
-            .flex()
-            .flex_col()
-            .gap(px(10.))
-            .child(
-                div()
-                    .text_color(theme.fg_text)
-                    .text_size(px(18.))
-                    .child("Lapaloma — stream"),
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap(px(16.))
-                    .text_size(px(11.))
-                    .text_color(theme.fg_muted)
-                    .child(format!("cap = {}", RING_CAPACITY))
-                    .child(format!("head = {}", self.buffer.head()))
-                    .child(format!("filled = {}%", fill_pct))
-                    .child(format!("t = {}", self.t))
-                    .child(format!("rev = {}", self.buffer.revision())),
-            )
-            .child(div().w_full().flex_grow().child(stream))
-    }
+fn main() {
+    llimphi_ui::run::<StreamDemo>();
 }
