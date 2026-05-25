@@ -1,4 +1,4 @@
-//! El modelo `Note` — la unidad de badu.
+//! El modelo `Note` — la unidad de khipu_app.
 
 use serde::{Deserialize, Serialize};
 

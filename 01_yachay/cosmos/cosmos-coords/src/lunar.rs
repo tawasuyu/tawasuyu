@@ -1,8 +1,8 @@
 use crate::{CoordResult, ICRSPosition};
-use eternal_core::constants::{DEG_TO_RAD, J2000_JD};
-use eternal_core::utils::{normalize_angle_rad, normalize_angle_to_positive};
-use eternal_core::Angle;
-use eternal_time::TT;
+use cosmos_core::constants::{DEG_TO_RAD, J2000_JD};
+use cosmos_core::utils::{normalize_angle_rad, normalize_angle_to_positive};
+use cosmos_core::Angle;
+use cosmos_time::TT;
 
 const LUNAR_AXIAL_INCLINATION_DEG: f64 = 1.5424;
 const LUNAR_AXIAL_INCLINATION_RAD: f64 = LUNAR_AXIAL_INCLINATION_DEG * DEG_TO_RAD;
@@ -47,7 +47,7 @@ pub fn compute_sub_earth_point(epoch: &TT) -> (Angle, Angle) {
 fn compute_optical_libration_internal(epoch: &TT) -> (f64, f64) {
     let jd = epoch.to_julian_date();
     let d = (jd.jd1() - J2000_JD) + jd.jd2();
-    let t = d / eternal_core::constants::DAYS_PER_JULIAN_CENTURY;
+    let t = d / cosmos_core::constants::DAYS_PER_JULIAN_CENTURY;
 
     let _mean_anomaly = moon_mean_anomaly(t);
     let mean_argument_latitude = moon_argument_latitude(t);
@@ -85,7 +85,7 @@ fn compute_optical_libration_internal(epoch: &TT) -> (f64, f64) {
 fn compute_position_angle_internal(epoch: &TT) -> f64 {
     let jd = epoch.to_julian_date();
     let d = (jd.jd1() - J2000_JD) + jd.jd2();
-    let t = d / eternal_core::constants::DAYS_PER_JULIAN_CENTURY;
+    let t = d / cosmos_core::constants::DAYS_PER_JULIAN_CENTURY;
 
     let ascending_node = moon_ascending_node(t);
     let obliquity = mean_obliquity(t);
@@ -135,7 +135,7 @@ fn mean_obliquity(t: f64) -> f64 {
 pub(crate) fn get_moon_icrs(epoch: &TT) -> CoordResult<ICRSPosition> {
     let jd = epoch.to_julian_date();
     let d = (jd.jd1() - J2000_JD) + jd.jd2();
-    let t = d / eternal_core::constants::DAYS_PER_JULIAN_CENTURY;
+    let t = d / cosmos_core::constants::DAYS_PER_JULIAN_CENTURY;
 
     let l_prime = 218.3164477 + 481267.88123421 * t;
     let l_prime = normalize_angle_to_positive(l_prime * DEG_TO_RAD);
@@ -183,7 +183,7 @@ pub(crate) fn get_moon_icrs(epoch: &TT) -> CoordResult<ICRSPosition> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eternal_time::julian::JulianDate;
+    use cosmos_time::julian::JulianDate;
 
     #[test]
     fn test_optical_libration_longitude_range() {

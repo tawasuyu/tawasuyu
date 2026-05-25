@@ -1,7 +1,7 @@
 use crate::{frames::ITRSPosition, CoordResult};
-use eternal_core::constants::ARCSEC_TO_RAD;
-use eternal_core::Vector3;
-use eternal_time::{scales::conversions::ToUT1WithDeltaT, transforms::earth_rotation_angle, TT};
+use cosmos_core::constants::ARCSEC_TO_RAD;
+use cosmos_core::Vector3;
+use cosmos_time::{scales::conversions::ToUT1WithDeltaT, transforms::earth_rotation_angle, TT};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -109,10 +109,10 @@ impl TIRSPosition {
     ///
     /// Typical use cases handle this via interpolation, so sparse raw data should be rare.
     pub fn compute_delta_t(epoch: &TT, eop: &crate::eop::EopParameters) -> CoordResult<f64> {
-        use eternal_time::scales::conversions::{ToTAI, ToUTC};
+        use cosmos_time::scales::conversions::{ToTAI, ToUTC};
 
         let epoch_jd = epoch.to_julian_date().to_f64();
-        let eop_jd = eop.mjd + eternal_core::constants::MJD_ZERO_POINT;
+        let eop_jd = eop.mjd + cosmos_core::constants::MJD_ZERO_POINT;
 
         if (epoch_jd - eop_jd).abs() > 1.0 {
             return Err(crate::CoordError::data_unavailable(
@@ -128,10 +128,10 @@ impl TIRSPosition {
             .map_err(|e| crate::CoordError::external_library("TAI to UTC", &e.to_string()))?;
 
         let utc_jd = utc.to_julian_date().to_f64();
-        let ut1_jd = utc_jd + eop.ut1_utc / eternal_core::constants::SECONDS_PER_DAY_F64;
+        let ut1_jd = utc_jd + eop.ut1_utc / cosmos_core::constants::SECONDS_PER_DAY_F64;
 
         let delta_t_days = epoch_jd - ut1_jd;
-        let delta_t_seconds = delta_t_days * eternal_core::constants::SECONDS_PER_DAY_F64;
+        let delta_t_seconds = delta_t_days * cosmos_core::constants::SECONDS_PER_DAY_F64;
 
         Ok(delta_t_seconds)
     }
@@ -257,7 +257,7 @@ impl std::fmt::Display for TIRSPosition {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eternal_core::constants::TWOPI;
+    use cosmos_core::constants::TWOPI;
 
     #[test]
     fn test_tirs_creation() {
@@ -319,19 +319,19 @@ mod tests {
 
         // Should roundtrip with floating-point precision (rotation with EOP-based Delta-T)
         // Allow 2 ULP due to additional operations in Delta-T calculation
-        eternal_core::test_helpers::assert_ulp_le(
+        cosmos_core::test_helpers::assert_ulp_le(
             recovered_tirs.x(),
             original_tirs.x(),
             2,
             "X roundtrip",
         );
-        eternal_core::test_helpers::assert_ulp_le(
+        cosmos_core::test_helpers::assert_ulp_le(
             recovered_tirs.y(),
             original_tirs.y(),
             2,
             "Y roundtrip",
         );
-        eternal_core::test_helpers::assert_ulp_le(
+        cosmos_core::test_helpers::assert_ulp_le(
             recovered_tirs.z(),
             original_tirs.z(),
             2,
@@ -356,7 +356,7 @@ mod tests {
         assert_eq!(itrs.z(), tirs.z());
 
         // Distance from origin should be preserved
-        eternal_core::test_helpers::assert_ulp_le(
+        cosmos_core::test_helpers::assert_ulp_le(
             itrs.geocentric_distance(),
             tirs.geocentric_distance(),
             1,
@@ -402,19 +402,19 @@ mod tests {
         let itrs_recovered = tirs.to_itrs(&epoch, &eop).unwrap();
 
         // Should roundtrip with floating-point precision
-        eternal_core::test_helpers::assert_ulp_le(
+        cosmos_core::test_helpers::assert_ulp_le(
             itrs_recovered.x(),
             itrs_original.x(),
             1,
             "ITRS X roundtrip",
         );
-        eternal_core::test_helpers::assert_ulp_le(
+        cosmos_core::test_helpers::assert_ulp_le(
             itrs_recovered.y(),
             itrs_original.y(),
             1,
             "ITRS Y roundtrip",
         );
-        eternal_core::test_helpers::assert_ulp_le(
+        cosmos_core::test_helpers::assert_ulp_le(
             itrs_recovered.z(),
             itrs_original.z(),
             1,
@@ -445,13 +445,13 @@ mod tests {
         let expected_x = 6378137.0 * libm::cos(era);
         let expected_y = -6378137.0 * libm::sin(era);
 
-        eternal_core::test_helpers::assert_ulp_le(
+        cosmos_core::test_helpers::assert_ulp_le(
             itrs.x(),
             expected_x,
             1,
             "ERA X transformation",
         );
-        eternal_core::test_helpers::assert_ulp_le(
+        cosmos_core::test_helpers::assert_ulp_le(
             itrs.y(),
             expected_y,
             1,

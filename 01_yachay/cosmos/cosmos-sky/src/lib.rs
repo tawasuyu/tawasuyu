@@ -12,7 +12,7 @@
 //!   [`ApparentPosition`]s for any supported [`Body`].
 //!
 //! ```no_run
-//! use eternal_sky::{Body, EphemerisSession, Instant, Observer, SessionConfig};
+//! use cosmos_sky::{Body, EphemerisSession, Instant, Observer, SessionConfig};
 //!
 //! let session = EphemerisSession::open(SessionConfig::vsop2013())?;
 //! let observer = Observer::from_degrees(10.4806, -66.9036, 900.0);
@@ -24,7 +24,7 @@
 //!     mars.ecliptic_of_date.latitude_deg(),
 //!     mars.topocentric_horizon.unwrap().altitude_deg(),
 //! );
-//! # Ok::<_, eternal_sky::SkyError>(())
+//! # Ok::<_, cosmos_sky::SkyError>(())
 //! ```
 //!
 //! The crate is a *thin* layer: every computation forwards to the same
@@ -53,5 +53,5 @@ pub use session::{EphemerisSession, GeometricState, SessionBackend, SessionConfi
 
 // Direct re-exports of useful underlying types so callers don't need to
 // import the lower-level crates for routine use.
-pub use eternal_time::{TDB, TT, UT1, UTC};
-pub use eternal_validation::sidereal::Ayanamsha;
+pub use cosmos_time::{TDB, TT, UT1, UTC};
+pub use cosmos_validation::sidereal::Ayanamsha;

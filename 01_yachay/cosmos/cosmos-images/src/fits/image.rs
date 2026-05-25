@@ -3,7 +3,7 @@ use crate::fits::data::array::DataArray;
 use crate::fits::header::Keyword;
 use crate::fits::io::writer::FitsWriter;
 use crate::fits::Result;
-use eternal_wcs::{Wcs, WcsKeyword, WcsKeywordValue};
+use cosmos_wcs::{Wcs, WcsKeyword, WcsKeywordValue};
 use std::path::Path;
 
 const DEFAULT_TILE_SIZE: usize = 32;
@@ -137,7 +137,7 @@ fn wcs_keyword_to_fits(wk: WcsKeyword) -> Keyword {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eternal_wcs::{Projection, WcsBuilder};
+    use cosmos_wcs::{Projection, WcsBuilder};
     use tempfile::NamedTempFile;
 
     #[test]

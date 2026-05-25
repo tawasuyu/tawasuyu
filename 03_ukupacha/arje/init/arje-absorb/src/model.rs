@@ -1,5 +1,5 @@
 //! El modelo intermedio: un servicio descubierto en el init ajeno,
-//! independiente de su formato de origen. Cada absorber
+//! independiente de su format de origen. Cada absorber
 //! (`sysvinit`, `runit`, `dinit`, `openrc`) produce [`ForeignService`]s;
 //! `card` los traduce a Cards brahman.
 

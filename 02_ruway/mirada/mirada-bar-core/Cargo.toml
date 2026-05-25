@@ -1,5 +1,5 @@
 [package]
-name = "barra-core"
+name = "mirada-bar-core"
 description = "Barra — modelo de taskbar agnóstico: Task + render-to-html + sanitizadores. Sin dependencias web/DOM."
 version.workspace = true
 edition.workspace = true

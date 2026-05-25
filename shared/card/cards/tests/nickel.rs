@@ -12,7 +12,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use brahman_cards::{
+use cards::{
     eval_nickel_file, load_card, CardBody, CardLoadError, NickelEvalError,
     BRAHMAN_CARDS_TEMPLATES_ENV,
 };

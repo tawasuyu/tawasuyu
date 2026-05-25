@@ -94,7 +94,7 @@ impl LocaleManager {
     }
 
     async fn set_locale(&self, locale: Vec<String>, _interactive: bool) -> fdo::Result<()> {
-        // Validar formato KEY=value en cada entry.
+        // Validar format KEY=value en cada entry.
         for entry in &locale {
             if !entry.contains('=') {
                 return Err(fdo::Error::InvalidArgs(

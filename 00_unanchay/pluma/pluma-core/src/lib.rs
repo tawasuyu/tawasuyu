@@ -1,6 +1,6 @@
-//! `fana-core` — el átomo narrativo y su estado de coherencia.
+//! `pluma_app-core` — el átomo narrativo y su estado de coherencia.
 //!
-//! Tipos puros del editor DAG de fana: sin UI, sin storage, sin red. El
+//! Tipos puros del editor DAG de pluma_app: sin UI, sin storage, sin red. El
 //! documento es un grafo de [`NarrativeAtom`]s; cada átomo comparte su
 //! texto vía `Arc<String>` para que ramificar una línea temporal sea
 //! O(1) (structural sharing).
@@ -34,7 +34,7 @@ pub struct NarrativeAtom {
     pub content_hash: [u8; 32],
     /// Texto compartido. Clonar una rama no duplica el texto.
     pub content: Arc<String>,
-    /// Concepto → intensidad. Lo puebla `fana-semantic`.
+    /// Concepto → intensidad. Lo puebla `pluma_app-semantic`.
     pub semantic_vectors: HashMap<String, f32>,
     /// Átomos prerrequisito (sus "padres" lógicos).
     pub dependencies: Vec<Uuid>,

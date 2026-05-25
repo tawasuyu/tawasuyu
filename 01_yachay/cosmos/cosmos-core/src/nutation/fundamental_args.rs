@@ -32,7 +32,7 @@ use crate::math::fmod;
 /// # Usage
 ///
 /// ```
-/// use eternal_core::nutation::IERS2010FundamentalArgs;
+/// use cosmos_core::nutation::IERS2010FundamentalArgs;
 ///
 /// let t: f64 = 0.1; // Julian centuries from J2000.0
 /// let l = t.moon_mean_anomaly();
@@ -157,7 +157,7 @@ impl IERS2010FundamentalArgs for f64 {
 /// # Usage
 ///
 /// ```
-/// use eternal_core::nutation::MHB2000FundamentalArgs;
+/// use cosmos_core::nutation::MHB2000FundamentalArgs;
 ///
 /// let t: f64 = 0.1; // Julian centuries from J2000.0
 /// let lp = t.sun_mean_anomaly_mhb();

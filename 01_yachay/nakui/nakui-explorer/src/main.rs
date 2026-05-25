@@ -4,7 +4,7 @@
 //!
 //! ## Diseño
 //!
-//! Standalone, lee un archivo `.jsonl` (formato append-only del
+//! Standalone, lee un archivo `.jsonl` (format append-only del
 //! `nakui_core::event_log::EventLog`). Refresh por polling cada 2s
 //! para detectar nuevos eventos appended (típico de un nakui ERP en
 //! producción que va escribiendo). Sin discovery dinámico vía broker
@@ -360,7 +360,7 @@ mod tests {
 
     fn write_sample_log() -> tempfile::NamedTempFile {
         let mut f = tempfile::NamedTempFile::new().unwrap();
-        // 3 seeds + 2 morphisms, formato canónico de event_log.
+        // 3 seeds + 2 morphisms, format canónico de event_log.
         let lines = [
             r#"{"kind":"seed","seq":0,"entity":"product","id":"00000000-0000-0000-0000-000000000001","data":{"sku":"A"}}"#,
             r#"{"kind":"seed","seq":1,"entity":"product","id":"00000000-0000-0000-0000-000000000002","data":{"sku":"B"}}"#,

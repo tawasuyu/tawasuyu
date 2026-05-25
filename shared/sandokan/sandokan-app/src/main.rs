@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use brahman_card::{Card, Payload};
+use card_core::{Card, Payload};
 use clap::{Parser, Subcommand};
 use sandokan::{auto, default_socket_path, serve, Intent, LocalEngine};
 use ulid::Ulid;

@@ -21,8 +21,8 @@
 //! # Usage
 //!
 //! ```
-//! use eternal_time::{JulianDate, TAI};
-//! use eternal_time::scales::tai::tai_from_calendar;
+//! use cosmos_time::{JulianDate, TAI};
+//! use cosmos_time::scales::tai::tai_from_calendar;
 //!
 //! // From Julian Date
 //! let tai = TAI::j2000();
@@ -45,7 +45,7 @@ use crate::constants::UNIX_EPOCH_JD;
 use crate::julian::JulianDate;
 use crate::parsing::parse_iso8601;
 use crate::{TimeError, TimeResult};
-use eternal_core::constants::SECONDS_PER_DAY_F64;
+use cosmos_core::constants::SECONDS_PER_DAY_F64;
 use std::fmt;
 use std::str::FromStr;
 
@@ -64,7 +64,7 @@ impl TAI {
     /// Note: This assumes the input is already in TAI, not UTC.
     pub fn new(seconds: i64, nanos: u32) -> Self {
         let total_seconds =
-            seconds as f64 + nanos as f64 / eternal_core::constants::NANOSECONDS_PER_SECOND_F64;
+            seconds as f64 + nanos as f64 / cosmos_core::constants::NANOSECONDS_PER_SECOND_F64;
         let jd = JulianDate::from_f64(UNIX_EPOCH_JD + total_seconds / SECONDS_PER_DAY_F64);
         Self(jd)
     }
@@ -153,7 +153,7 @@ pub fn tai_from_calendar(year: i32, month: u8, day: u8, hour: u8, minute: u8, se
 mod tests {
     use super::*;
     use crate::constants::UNIX_EPOCH_JD;
-    use eternal_core::constants::J2000_JD;
+    use cosmos_core::constants::J2000_JD;
 
     #[test]
     fn test_tai_constructors() {

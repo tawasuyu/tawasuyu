@@ -16,7 +16,7 @@
 //! placements to align by index. The standard
 //! [`crate::ChartConfig::default()`] is fine.
 
-use eternal_sky::Body;
+use cosmos_sky::Body;
 
 use crate::angles::wrap_two_pi;
 use crate::birth_data::BirthData;

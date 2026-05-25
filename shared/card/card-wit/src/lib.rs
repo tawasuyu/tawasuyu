@@ -2,8 +2,8 @@
 //!
 //! Crate **opcional** (no es dep de `brahman-card`). Parsea texto WIT
 //! mediante [`wit-parser`] y devuelve una lista de [`WitInterface`]
-//! (uno por `world`) lista para acoplarse a una [`brahman_card::Card`]
-//! cuando se construye una [`brahman_card::ResolvedCard`].
+//! (uno por `world`) lista para acoplarse a una [`card_core::Card`]
+//! cuando se construye una [`card_core::ResolvedCard`].
 //!
 //! Casos de uso:
 //!
@@ -20,7 +20,7 @@
 
 use std::path::{Path, PathBuf};
 
-use brahman_card::WitInterface;
+use card_core::WitInterface;
 use thiserror::Error;
 use wit_parser::{Resolve, WorldKey};
 

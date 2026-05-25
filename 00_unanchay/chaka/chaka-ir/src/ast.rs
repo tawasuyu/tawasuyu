@@ -1,14 +1,14 @@
 //! Los tipos del IR: el programa COBOL con su PROCEDURE division ya
 //! parseada a instrucciones tipadas.
 
-pub use charka_parser::{DataItem, FileEntry, Token};
+pub use chaka_parser::{DataItem, FileEntry, Token};
 
 /// Un programa COBOL en representación intermedia.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Ir {
     /// El `PROGRAM-ID` ("" si el programa no lo declara).
     pub program_id: String,
-    /// El árbol de [`DataItem`] tal cual lo produjo `charka-parser`,
+    /// El árbol de [`DataItem`] tal cual lo produjo `chaka_app-parser`,
     /// con su estructura de grupos.
     pub data: Vec<DataItem>,
     /// El modelo de datos resuelto: los datos elementales aplanados y

@@ -1,11 +1,11 @@
 //! Tests for Arabic Parts (Lots) and Hellenistic profections.
 
-use eternal_astrology::{
+use cosmos_astrology::{
     all_lots, annual_profection, compute_lot, modern_ruler, monthly_profection,
     profection_at, traditional_ruler, BirthData, ChartConfig, LotName, NatalChart,
     ProfectionHouses, Sect, Sign,
 };
-use eternal_sky::{Body, EphemerisSession, Instant, Observer, SessionConfig};
+use cosmos_sky::{Body, EphemerisSession, Instant, Observer, SessionConfig};
 
 fn session() -> EphemerisSession {
     EphemerisSession::open(SessionConfig::vsop2013()).unwrap()

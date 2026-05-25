@@ -7,7 +7,7 @@
 //!   - no Drop con efectos
 //!   - capturar sólo Copy o datos pre-construidos
 
-use brahman_card::ResourceLimits;
+use card_core::ResourceLimits;
 
 /// SAFETY: invocada en el hijo post-clone, sólo libc.
 pub unsafe fn apply_rlimits(rl: &ResourceLimits) {

@@ -137,7 +137,7 @@ fn detect_cgroup_status() -> CgroupStatus {
     let mut has_v2 = false;
     let mut has_v1 = false;
     for line in mounts.lines() {
-        // formato: ... - <fstype> <source> <opts>
+        // format: ... - <fstype> <source> <opts>
         let parts: Vec<&str> = line.split(" - ").collect();
         if parts.len() < 2 {
             continue;

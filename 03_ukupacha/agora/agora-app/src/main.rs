@@ -1,4 +1,4 @@
-//! `agorapura` — demostración narrada del ágora de identidad.
+//! `agora_app` — demostración narrada del ágora de identidad.
 //!
 //! Recorre el escenario canónico de extremo a extremo: la institución
 //! *Venezuela* atestigua la nacionalidad de la persona *Yumaira*, y
@@ -6,10 +6,10 @@
 //! cómo distintas políticas *negociadas* la aceptan o no.
 //!
 //! No es la app definitiva — es un smoke test legible y la mejor forma
-//! de ver el módulo funcionando: `cargo run -p agorapura`.
+//! de ver el módulo funcionando: `cargo run -p agora_app`.
 
-use agorapura_core::{Attestation, Claim, IdentityKind, Keypair};
-use agorapura_graph::{TrustGraph, TrustPolicy};
+use agora_core::{Attestation, Claim, IdentityKind, Keypair};
+use agora_graph::{TrustGraph, TrustPolicy};
 
 /// Segundo Unix fijo para que la demo sea reproducible.
 const T0: u64 = 1_700_000_000;

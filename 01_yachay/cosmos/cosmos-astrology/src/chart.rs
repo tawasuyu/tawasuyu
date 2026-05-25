@@ -1,10 +1,10 @@
 //! The `NatalChart`: assembly of birth data → angles → houses → placements.
 
-use eternal_core::Location;
-use eternal_sky::{ApparentPosition, Body, EphemerisSession, HorizonCoord, Instant, Observer};
-use eternal_time::sidereal::GAST;
-use eternal_time::scales::conversions::ToUT1WithDeltaT;
-use eternal_validation::sidereal::{ayanamsha as ayanamsha_value, true_obliquity_iau2006a};
+use cosmos_core::Location;
+use cosmos_sky::{ApparentPosition, Body, EphemerisSession, HorizonCoord, Instant, Observer};
+use cosmos_time::sidereal::GAST;
+use cosmos_time::scales::conversions::ToUT1WithDeltaT;
+use cosmos_validation::sidereal::{ayanamsha as ayanamsha_value, true_obliquity_iau2006a};
 
 use crate::birth_data::BirthData;
 use crate::chart_config::ChartConfig;
@@ -136,8 +136,8 @@ impl NatalChart {
         let last_rad = compute_last_rad(&birth.instant, &birth.observer)?;
         let tt = birth.instant.tt()?;
         let obliquity_rad = true_obliquity_iau2006a(&tt).map_err(|e| {
-            AstrologyError::Sky(eternal_sky::SkyError::Ephemeris(
-                eternal_validation::oracle::OracleError::Inner(format!("obliquity: {}", e)),
+            AstrologyError::Sky(cosmos_sky::SkyError::Ephemeris(
+                cosmos_validation::oracle::OracleError::Inner(format!("obliquity: {}", e)),
             ))
         })?;
 
@@ -273,20 +273,20 @@ fn compute_last_rad(instant: &Instant, observer: &Observer) -> AstrologyResult<f
     let tt = instant.tt()?;
     let ut1 = tt
         .to_ut1_with_delta_t(instant.delta_t_seconds())
-        .map_err(|e| AstrologyError::Sky(eternal_sky::SkyError::Time(e)))?;
+        .map_err(|e| AstrologyError::Sky(cosmos_sky::SkyError::Time(e)))?;
     let location = Location::from_degrees(
         observer.lat_rad.to_degrees(),
         observer.lon_rad.to_degrees(),
         observer.elev_m,
     )
     .map_err(|e| {
-        AstrologyError::Sky(eternal_sky::SkyError::Ephemeris(
-            eternal_validation::oracle::OracleError::Inner(format!("Location: {:?}", e)),
+        AstrologyError::Sky(cosmos_sky::SkyError::Ephemeris(
+            cosmos_validation::oracle::OracleError::Inner(format!("Location: {:?}", e)),
         ))
     })?;
     let gast = GAST::from_ut1_and_tt(&ut1, &tt).map_err(|e| {
-        AstrologyError::Sky(eternal_sky::SkyError::Ephemeris(
-            eternal_validation::oracle::OracleError::Inner(format!("GAST: {:?}", e)),
+        AstrologyError::Sky(cosmos_sky::SkyError::Ephemeris(
+            cosmos_validation::oracle::OracleError::Inner(format!("GAST: {:?}", e)),
         ))
     })?;
     Ok(gast.to_last(&location).angle().radians())

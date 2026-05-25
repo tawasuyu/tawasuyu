@@ -1,6 +1,6 @@
 //! Qué orquestar: la intención de ejecución y su contexto.
 
-use brahman_card::Card;
+use card_core::Card;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime};
 use ulid::Ulid;
@@ -44,7 +44,7 @@ pub struct Intent {
 /// Serde adapter: `Card` ↔ `WireCard` en el límite de serialización.
 /// Las `extensions` locales de la Card se descartan al cruzar el wire.
 mod card_wire {
-    use brahman_card::{Card, WireCard};
+    use card_core::{Card, WireCard};
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     pub fn serialize<S: Serializer>(card: &Card, s: S) -> Result<S::Ok, S::Error> {

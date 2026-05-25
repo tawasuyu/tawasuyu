@@ -100,7 +100,7 @@ mod tests {
 
     fn build_session_with_obs() -> Session {
         use crate::observation::{Observation, PierSide};
-        use eternal_core::Angle;
+        use cosmos_core::Angle;
 
         let mut session = Session::new();
         session.last_fit = Some(crate::solver::FitResult {

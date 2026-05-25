@@ -2,7 +2,7 @@
 //!
 //! Estrategia: el painter dibuja contra el trait `Canvas`; un
 //! `PlanRecorder` (en `pineal-render`) lo graba como `RenderPlan`; este
-//! crate consume el plan y emite el formato destino. Un solo camino de
+//! crate consume el plan y emite el format destino. Un solo camino de
 //! código para screen y export.
 //!
 //! - [`svg`] — exporter SVG (implementado).

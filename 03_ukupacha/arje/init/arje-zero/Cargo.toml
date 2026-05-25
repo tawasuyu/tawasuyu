@@ -22,10 +22,10 @@ arje-brain = { path = "../../runtime/arje-brain" }
 arje-echo = { path = "../../runtime/arje-echo" }   # solo para constantes del demo
 
 # Brahman protocol — handshake para módulos brahman conscientes
-brahman-handshake = { path = "../../../../shared/card/card-handshake" }
-brahman-broker = { path = "../../../../02_ruway/chasqui/chasqui-broker" }
-brahman-admin = { path = "../../../../shared/card/card-admin" }
-brahman-net = { path = "../../../../shared/card/card-net" }
+card-handshake = { path = "../../../../shared/card/card-handshake" }
+chasqui-broker = { path = "../../../../02_ruway/chasqui/chasqui-broker" }
+card-admin = { path = "../../../../shared/card/card-admin" }
+card-net = { path = "../../../../shared/card/card-net" }
 
 # Runtime / utilidades de PID 1
 serde = { workspace = true }

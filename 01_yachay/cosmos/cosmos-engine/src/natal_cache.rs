@@ -16,8 +16,8 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use eternal_astrology::NatalChart;
-use cosmobiologia_model::{StoredBirthData, StoredChartConfig};
+use cosmos_astrology::NatalChart;
+use cosmos_model::{StoredBirthData, StoredChartConfig};
 
 const CAPACITY: usize = 8;
 

@@ -1,11 +1,11 @@
 [package]
-name = "yachay-core"
+name = "pluma-notebook-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "yachay — núcleo de notebooks reproducibles: celdas en DAG, propagación de staleness y digest Merkle que certifica reproducibilidad."
+description = "pluma-notebook-app — núcleo de notebooks reproducibles: celdas en DAG, propagación de staleness y digest Merkle que certifica reproducibilidad."
 
 [dependencies]
 blake3 = { workspace = true }

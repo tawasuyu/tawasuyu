@@ -25,7 +25,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use brahman_net::Keypair;
+use card_net::Keypair;
 
 /// Tamaño exacto del secret Ed25519.
 const SECRET_LEN: usize = 32;

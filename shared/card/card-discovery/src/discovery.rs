@@ -1,7 +1,7 @@
 //! `CardDiscovery` — une el índice local de Cards con el DHT.
 
 use crate::index::CardIndex;
-use brahman_dht::{Dht, DhtKey};
+use minga_dht::{Dht, DhtKey};
 use libp2p::PeerId;
 
 /// Búsqueda de Cards: siempre local, opcionalmente sobre la malla P2P.
@@ -49,7 +49,7 @@ impl CardDiscovery {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use brahman_card::Card;
+    use card_core::Card;
 
     #[tokio::test]
     async fn local_only_discovery_has_no_dht() {

@@ -19,7 +19,7 @@
 //! [`SolarArcMethod::TrueProgressedSun`] by default — that is what
 //! Swiss Ephemeris reports.
 
-use eternal_sky::{Body, EphemerisSession};
+use cosmos_sky::{Body, EphemerisSession};
 
 use crate::angles::signed_delta_rad;
 use crate::chart::{Angle, NatalChart};

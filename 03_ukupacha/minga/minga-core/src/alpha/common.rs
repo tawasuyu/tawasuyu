@@ -2,7 +2,7 @@
 //!
 //! Cada profile per-language (rust, python, ecmascript, go) tiene su
 //! propia lógica de "qué nodos introducen binders" y "cómo distinguir
-//! binders de constructors". Pero el formato del wire del hash
+//! binders de constructors". Pero el format del wire del hash
 //! (TAG_LEAF, TAG_BINDER, índice de Bruijn) es universal: lo emitimos
 //! desde acá para garantizar que dos lenguajes con la misma
 //! estructura semántica produzcan hashes comparables a nivel de bits.

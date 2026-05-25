@@ -56,9 +56,9 @@
 //! Simple fixed-offset conversions work directly:
 //!
 //! ```
-//! use eternal_time::scales::{TAI, TT, GPS};
-//! use eternal_time::scales::conversions::{ToTAI, ToTT};
-//! use eternal_time::julian::JulianDate;
+//! use cosmos_time::scales::{TAI, TT, GPS};
+//! use cosmos_time::scales::conversions::{ToTAI, ToTT};
+//! use cosmos_time::julian::JulianDate;
 //!
 //! let tai = TAI::from_julian_date(JulianDate::new(2451545.0, 0.0));
 //! let tt = tai.to_tt().unwrap();   // TAI + 32.184s
@@ -67,9 +67,9 @@
 //! Conversions requiring external data take parameters:
 //!
 //! ```
-//! use eternal_time::scales::{TAI, UT1};
-//! use eternal_time::scales::conversions::{ToUT1WithOffset, ToTAIWithOffset};
-//! use eternal_time::julian::JulianDate;
+//! use cosmos_time::scales::{TAI, UT1};
+//! use cosmos_time::scales::conversions::{ToUT1WithOffset, ToTAIWithOffset};
+//! use cosmos_time::julian::JulianDate;
 //!
 //! // UT1-TAI offset from IERS Bulletin A
 //! let ut1_tai_offset = -37.0;  // seconds

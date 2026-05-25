@@ -16,7 +16,7 @@ description = "renaser :: app WASM glotona — devora memoria; el techo espacial
 
 [workspace]
 
-# `cdylib` produce un modulo `.wasm` que exporta funciones — el formato que
+# `cdylib` produce un modulo `.wasm` que exporta funciones — el format que
 # wasmi instancia.
 [lib]
 crate-type = ["cdylib"]

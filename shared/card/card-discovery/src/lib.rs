@@ -6,7 +6,7 @@
 //! - [`discovery`] — `CardDiscovery`: une el índice local con la malla
 //!   P2P vía `brahman-dht`.
 //!
-//! Lo consume el widget card-browser de `nahual-shell` y `agorapura`.
+//! Lo consume el widget card-browser de `nahual-shell` y `agora_app`.
 
 #![forbid(unsafe_code)]
 

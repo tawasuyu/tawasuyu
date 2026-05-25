@@ -1,5 +1,5 @@
 [package]
-name = "eternal-ephemeris"
+name = "cosmos-ephemeris"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -11,13 +11,13 @@ categories = ["science"]
 exclude = ["tests/data/de432s.bsp"]
 
 [features]
-serde = ["dep:serde", "eternal-time/serde", "eternal-core/serde", "eternal-coords/serde"]
+serde = ["dep:serde", "cosmos-time/serde", "cosmos-core/serde", "cosmos-coords/serde"]
 cli = ["dep:clap", "dep:reqwest", "dep:chrono"]
 
 [dependencies]
-eternal-coords.workspace = true
-eternal-core.workspace = true
-eternal-time.workspace = true
+cosmos-coords.workspace = true
+cosmos-core.workspace = true
+cosmos-time.workspace = true
 libm.workspace = true
 chrono = { workspace = true, optional = true }
 clap = { workspace = true, optional = true }

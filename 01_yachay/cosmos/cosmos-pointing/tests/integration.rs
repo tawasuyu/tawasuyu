@@ -1,8 +1,8 @@
-use eternal_core::Angle;
-use eternal_pointing::commands::{dispatch, CommandOutput};
-use eternal_pointing::observation::{MountType, PierSide};
-use eternal_pointing::parser::parse_indat;
-use eternal_pointing::session::{AdjustDirection, Session};
+use cosmos_core::Angle;
+use cosmos_pointing::commands::{dispatch, CommandOutput};
+use cosmos_pointing::observation::{MountType, PierSide};
+use cosmos_pointing::parser::parse_indat;
+use cosmos_pointing::session::{AdjustDirection, Session};
 
 const SIMPLE_DAT: &str = "\
 !TheSky Version 10.5.0 Build 13572 (64 bit)

@@ -1,7 +1,7 @@
 //! A single body's placement in a chart: its zodiac position, house,
 //! retrograde flag, and (optionally) topocentric horizon coordinates.
 
-use eternal_sky::{ApparentPosition, Body, HorizonCoord};
+use cosmos_sky::{ApparentPosition, Body, HorizonCoord};
 
 use crate::zodiac::SignedLongitude;
 

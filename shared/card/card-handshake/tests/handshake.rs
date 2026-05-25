@@ -5,12 +5,12 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use brahman_broker::{Broker, BrokerConfig};
-use brahman_card::{
+use chasqui_broker::{Broker, BrokerConfig};
+use card_core::{
     Card, CgroupSpec, Flow, Flows, NamespaceSet, Payload, ResourceLimits, SomaSpec, Supervision,
     TypeRef, CARD_SCHEMA_VERSION,
 };
-use brahman_handshake::{
+use card_handshake::{
     client::{Client, ClientError},
     codec::{read_frame, write_frame},
     messages::{Frame, HandshakeError, Hello, Ping},
@@ -71,7 +71,7 @@ async fn full_handshake_roundtrip() {
     assert!(client.server_info().init_attached);
     assert_eq!(
         client.server_info().protocol_version,
-        brahman_card::PROTOCOL_VERSION
+        card_core::PROTOCOL_VERSION
     );
 
     let mut last = 0u64;
@@ -145,7 +145,7 @@ async fn list_sessions_returns_currently_registered() {
         .iter()
         .find(|e| e.label == "observer")
         .unwrap();
-    assert_eq!(me.schema_version, brahman_card::CARD_SCHEMA_VERSION);
+    assert_eq!(me.schema_version, card_core::CARD_SCHEMA_VERSION);
     assert!(!me.conscious, "observer no envió WIT — debería ser agnostic");
 
     alpha.farewell().await.unwrap();
@@ -372,7 +372,7 @@ async fn broker_matches_two_live_modules() {
 
 #[tokio::test]
 async fn match_event_pushed_on_producer_arrival() {
-    use brahman_handshake::messages::MatchEventKind;
+    use card_handshake::messages::MatchEventKind;
 
     let path = sock_path("push-match");
     let broker = Arc::new(Mutex::new(Broker::new(BrokerConfig::default())));

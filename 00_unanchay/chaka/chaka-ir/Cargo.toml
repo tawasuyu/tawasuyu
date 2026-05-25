@@ -1,16 +1,16 @@
 [package]
-name = "charka-ir"
+name = "chaka-ir"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "charka-ir — representación intermedia: el AST de charka-parser con los statements del PROCEDURE ya parseados a instrucciones tipadas (MOVE, IF, PERFORM, COMPUTE...)."
+description = "chaka-ir — representación intermedia: el AST de chaka-parser con los statements del PROCEDURE ya parseados a instrucciones tipadas (MOVE, IF, PERFORM, COMPUTE...)."
 
 [dependencies]
-charka-parser = { path = "../chaka-parser" }
-charka-bcd = { path = "../chaka-bcd" }
+chaka-parser = { path = "../chaka-parser" }
+chaka-bcd = { path = "../chaka-bcd" }
 
 [dev-dependencies]
-charka-lexer = { path = "../chaka-lexer" }
+chaka-lexer = { path = "../chaka-lexer" }

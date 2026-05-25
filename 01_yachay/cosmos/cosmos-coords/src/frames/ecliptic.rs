@@ -1,6 +1,6 @@
 use crate::{transforms::CoordinateFrame, CoordResult, Distance, ICRSPosition};
-use eternal_core::{matrix::RotationMatrix3, Angle};
-use eternal_time::{transforms::PrecessionCalculator, TT};
+use cosmos_core::{matrix::RotationMatrix3, Angle};
+use cosmos_time::{transforms::PrecessionCalculator, TT};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -68,14 +68,14 @@ impl EclipticPosition {
 
     pub fn mean_obliquity(&self) -> Angle {
         let jd = self.epoch.to_julian_date();
-        Angle::from_radians(eternal_core::obliquity::iau_2006_mean_obliquity(
+        Angle::from_radians(cosmos_core::obliquity::iau_2006_mean_obliquity(
             jd.jd1(),
             jd.jd2(),
         ))
     }
 
     pub fn true_obliquity(&self) -> CoordResult<Angle> {
-        use eternal_time::transforms::nutation::NutationCalculator;
+        use cosmos_time::transforms::nutation::NutationCalculator;
 
         let nutation =
             self.epoch
@@ -85,7 +85,7 @@ impl EclipticPosition {
                 })?;
 
         let jd = self.epoch.to_julian_date();
-        let mean_obliquity = eternal_core::obliquity::iau_2006_mean_obliquity(jd.jd1(), jd.jd2());
+        let mean_obliquity = cosmos_core::obliquity::iau_2006_mean_obliquity(jd.jd1(), jd.jd2());
 
         let true_obliquity = mean_obliquity + nutation.nutation_obliquity();
 
@@ -172,7 +172,7 @@ impl EclipticPosition {
         let (sin_b2, cos_b2) = other.beta.sin_cos();
         let delta_lambda = (self.lambda - other.lambda).radians();
 
-        let angle_rad = eternal_core::math::vincenty_angular_separation(
+        let angle_rad = cosmos_core::math::vincenty_angular_separation(
             sin_b1,
             cos_b1,
             sin_b2,
@@ -189,7 +189,7 @@ fn ecm06_matrix(epoch: &TT) -> CoordResult<RotationMatrix3> {
     let bias_precession_matrix = precession.bias_precession_matrix;
 
     let jd = epoch.to_julian_date();
-    let mean_obliquity = eternal_core::obliquity::iau_2006_mean_obliquity(jd.jd1(), jd.jd2());
+    let mean_obliquity = cosmos_core::obliquity::iau_2006_mean_obliquity(jd.jd1(), jd.jd2());
 
     let mut ecliptic_rotation = RotationMatrix3::identity();
     ecliptic_rotation.rotate_x(mean_obliquity);
@@ -224,13 +224,13 @@ impl CoordinateFrame for EclipticPosition {
             libm::atan2(z, libm::sqrt(rxy2))
         };
 
-        let d2pi = eternal_core::constants::TWOPI;
+        let d2pi = cosmos_core::constants::TWOPI;
         let mut ra_normalized = ra % d2pi;
         if ra_normalized < 0.0 {
             ra_normalized += d2pi;
         }
 
-        let dpi = eternal_core::constants::PI;
+        let dpi = cosmos_core::constants::PI;
         let mut dec_normalized = dec % d2pi;
         if dec_normalized.abs() >= dpi {
             dec_normalized -= libm::copysign(d2pi, dec);
@@ -272,7 +272,7 @@ impl CoordinateFrame for EclipticPosition {
             0.0
         };
 
-        let d2pi = eternal_core::constants::TWOPI;
+        let d2pi = cosmos_core::constants::TWOPI;
         let mut lambda_normalized = lambda % d2pi;
         if lambda_normalized < 0.0 {
             lambda_normalized += d2pi;

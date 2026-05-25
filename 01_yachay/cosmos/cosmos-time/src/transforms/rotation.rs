@@ -1,7 +1,7 @@
 use crate::{JulianDate, TimeResult};
-use eternal_core::angle::wrap_0_2pi;
-use eternal_core::constants::{J2000_JD, TWOPI};
-use eternal_core::math::fmod;
+use cosmos_core::angle::wrap_0_2pi;
+use cosmos_core::constants::{J2000_JD, TWOPI};
+use cosmos_core::math::fmod;
 
 pub fn earth_rotation_angle(ut1_jd: &JulianDate) -> TimeResult<f64> {
     let ut1_jd1 = ut1_jd.jd1();
@@ -26,7 +26,7 @@ pub fn earth_rotation_angle(ut1_jd: &JulianDate) -> TimeResult<f64> {
 mod tests {
     use super::*;
     use crate::UT1;
-    use eternal_core::constants::J2000_JD;
+    use cosmos_core::constants::J2000_JD;
 
     #[test]
     fn test_era_j2000() {
@@ -49,7 +49,7 @@ mod tests {
             let ut1 = UT1::from_julian_date(JulianDate::new(jd1, jd2));
             let era = earth_rotation_angle(&ut1.to_julian_date()).unwrap();
 
-            assert!((0.0..2.0 * eternal_core::constants::PI).contains(&era));
+            assert!((0.0..2.0 * cosmos_core::constants::PI).contains(&era));
         }
     }
 }

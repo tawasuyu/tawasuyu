@@ -6,7 +6,7 @@
 //! 3. Sort each pixel's stars by magnitude in-place
 
 use crate::cli::{BuildIndexArgs, Cli};
-use eternal_catalog::query::healpix::ang2pix_nest;
+use cosmos_catalog::query::healpix::ang2pix_nest;
 use memmap2::{Mmap, MmapMut};
 use std::fs::{self, File, OpenOptions};
 use std::io::Read;

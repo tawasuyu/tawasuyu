@@ -1,10 +1,10 @@
 //! Tests for the aspect engine and the planetary-return finder.
 
-use eternal_astrology::{
+use cosmos_astrology::{
     aspect, find_aspects, find_aspects_filtered, next_return, AspectKind, BirthData,
     ChartConfig, NatalChart, OrbTable,
 };
-use eternal_sky::{Body, EphemerisSession, Instant, Observer, SessionConfig};
+use cosmos_sky::{Body, EphemerisSession, Instant, Observer, SessionConfig};
 
 fn session() -> EphemerisSession {
     EphemerisSession::open(SessionConfig::vsop2013()).unwrap()
@@ -85,7 +85,7 @@ fn applying_flag_is_consistent_with_signed_orb() {
     // Construct a synthetic 2-body chart by computing aspects manually
     // on two crafted placements. Easier than reasoning about a real
     // birth-chart's velocities.
-    use eternal_astrology::{BodyPlacement, Sign, SignedLongitude};
+    use cosmos_astrology::{BodyPlacement, Sign, SignedLongitude};
 
     let mercury = BodyPlacement {
         body: Body::Mercury,
@@ -125,11 +125,11 @@ fn applying_flag_is_consistent_with_signed_orb() {
 /// Helper that reproduces `find_aspects` for a single pair so the
 /// applying-test can hand-craft placements.
 fn aspect_test_pair_helper(
-    a: &eternal_astrology::BodyPlacement,
-    b: &eternal_astrology::BodyPlacement,
+    a: &cosmos_astrology::BodyPlacement,
+    b: &cosmos_astrology::BodyPlacement,
     kind: AspectKind,
     orbs: &OrbTable,
-) -> Option<eternal_astrology::Aspect> {
+) -> Option<cosmos_astrology::Aspect> {
     // We call into find_aspects through a tiny NatalChart shim:
     // simplest is to do the math directly via the public types.
     let placements = vec![*a, *b];
@@ -141,7 +141,7 @@ fn aspect_test_pair_helper(
 /// Cheap NatalChart shim for unit testing — builds a chart with empty
 /// houses + only the supplied placements. We compute one real chart and
 /// then swap its placements vector.
-fn synth_chart(placements: Vec<eternal_astrology::BodyPlacement>) -> NatalChart {
+fn synth_chart(placements: Vec<cosmos_astrology::BodyPlacement>) -> NatalChart {
     let s = session();
     let birth = fixture_birth();
     let mut chart = NatalChart::compute(&birth, &ChartConfig::default(), &s).unwrap();
@@ -203,7 +203,7 @@ fn lunar_return_brackets_one_sidereal_month() {
 
 #[test]
 fn find_root_handles_no_sign_change_gracefully() {
-    use eternal_sky::{find_root, SearchOptions};
+    use cosmos_sky::{find_root, SearchOptions};
     let t0 = Instant::from_civil_utc(2025, 1, 1, 0, 0, 0.0).unwrap();
     let t1 = Instant::from_civil_utc(2025, 1, 2, 0, 0, 0.0).unwrap();
     // f never changes sign.
@@ -213,7 +213,7 @@ fn find_root_handles_no_sign_change_gracefully() {
 
 #[test]
 fn find_root_locates_a_simple_zero_at_midpoint() {
-    use eternal_sky::{find_root, SearchOptions};
+    use cosmos_sky::{find_root, SearchOptions};
     let t0 = Instant::from_civil_utc(2025, 1, 1, 0, 0, 0.0).unwrap();
     let t1 = Instant::from_civil_utc(2025, 1, 2, 0, 0, 0.0).unwrap();
     let mid_jd = 0.5 * (t0.jd_utc() + t1.jd_utc());

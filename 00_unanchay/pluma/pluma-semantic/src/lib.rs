@@ -1,18 +1,18 @@
-//! `fana-semantic` — scoring de intensidad semántica de los átomos.
+//! `pluma_app-semantic` — scoring de intensidad semántica de los átomos.
 //!
 //! Un [`ConceptSet`] embebe el texto de referencia de cada concepto como
 //! su vector ancla. El [`SemanticScorer`] embebe el contenido de un
 //! [`NarrativeAtom`] y mide su similitud coseno contra cada ancla,
 //! llenando `atom.semantic_vectors` con el gradiente concepto→intensidad.
 //!
-//! Agnóstico del backend: opera contra cualquier `verbo_core::Provider`
+//! Agnóstico del backend: opera contra cualquier `rimay_verbo_core::Provider`
 //! (mock para tests, bge/cohere en producción).
 
 #![forbid(unsafe_code)]
 
-use fana_core::NarrativeAtom;
+use pluma_core::NarrativeAtom;
 use std::collections::HashMap;
-use verbo_core::{EmbedError, EmbeddingVector, Provider};
+use rimay_verbo_core::{EmbedError, EmbeddingVector, Provider};
 
 /// Conjunto de conceptos, cada uno con su vector ancla.
 pub struct ConceptSet {
@@ -79,7 +79,7 @@ impl SemanticScorer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use verbo_mock::MockProvider;
+    use rimay_verbo_mock::MockProvider;
 
     fn concept_list() -> Vec<(String, String)> {
         vec![

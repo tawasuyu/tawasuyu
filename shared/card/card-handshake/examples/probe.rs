@@ -2,7 +2,7 @@
 //!
 //! Conecta a un Init brahman vivo, hace handshake, un ping, y se va.
 //! Ruta del socket: `$BRAHMAN_INIT_SOCKET` o el default
-//! ([`brahman_handshake::transport::default_socket_path`]).
+//! ([`card_handshake::transport::default_socket_path`]).
 //!
 //! Uso:
 //! ```sh
@@ -11,8 +11,8 @@
 
 use std::collections::BTreeSet;
 
-use brahman_card::{Card, Payload, Supervision, CARD_SCHEMA_VERSION};
-use brahman_handshake::{client::Client, transport};
+use card_core::{Card, Payload, Supervision, CARD_SCHEMA_VERSION};
+use card_handshake::{client::Client, transport};
 use ulid::Ulid;
 
 #[tokio::main(flavor = "current_thread")]

@@ -1,6 +1,6 @@
 use super::{NutationModel, NutationResult};
 use crate::{TimeError, TimeResult, TT};
-use eternal_core::nutation::NutationIAU2006A as CoreCalculator;
+use cosmos_core::nutation::NutationIAU2006A as CoreCalculator;
 
 pub fn calculate(tt: &TT) -> TimeResult<NutationResult> {
     let _ = super::tt_to_centuries(tt)?;

@@ -314,7 +314,7 @@ fn cmd_run(args: &[String]) -> Result<(), CliError> {
 
     // Sidecar brahman: nakui se presenta al Init mientras el daemon vive.
     // No bloquea; si el Init no está, el sidecar termina silenciosamente.
-    brahman_sidecar::spawn(brahman_card_for_nakui());
+    card_sidecar::spawn(brahman_card_for_nakui());
 
     let executor = Executor::load_module(&module_dir)
         .map_err(|e| CliError::Op(format!("load module {}: {}", module_dir.display(), e)))?;
@@ -465,8 +465,8 @@ fn cmd_verify_log(args: &[String]) -> Result<(), CliError> {
 /// nombres están escogidos para que el broker pueda matchearlos contra
 /// `user-intent` / `render-data` de nahual-shell por compatibilidad de
 /// tipo (todos `json`).
-fn brahman_card_for_nakui() -> brahman_card::Card {
-    use brahman_card::{
+fn brahman_card_for_nakui() -> card_core::Card {
+    use card_core::{
         Card, Flow, Flows, FsPolicy, IpcPolicy, Lifecycle, Payload, Permissions, Priority,
         Supervision, TypeRef, CARD_SCHEMA_VERSION,
     };

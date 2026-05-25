@@ -176,7 +176,7 @@ fn cmd_daemon(args: &[String]) -> Cmd {
     let dir = require_dir(args)?;
 
     let pool = std::sync::Arc::new(
-        brahman_sidecar::SidecarPool::new().map_err(|e| format!("crear pool: {e}"))?,
+        card_sidecar::SidecarPool::new().map_err(|e| format!("crear pool: {e}"))?,
     );
 
     // 1. Decidir el path del query socket ANTES de armar el engine
@@ -218,8 +218,8 @@ fn cmd_daemon(args: &[String]) -> Cmd {
                 continue;
             }
             let mut card = monad.to_brahman_card();
-            card.references.push(brahman_card::CardReference {
-                kind: brahman_card::RelationshipKind::OwnedBy,
+            card.references.push(card_core::CardReference {
+                kind: card_core::RelationshipKind::OwnedBy,
                 target_id: engine_id,
                 target_label: engine_label.clone(),
             });
@@ -261,8 +261,8 @@ fn cmd_daemon(args: &[String]) -> Cmd {
             continue; // ya publicada en hidratación
         }
         let mut card = monad.to_brahman_card();
-        card.references.push(brahman_card::CardReference {
-            kind: brahman_card::RelationshipKind::OwnedBy,
+        card.references.push(card_core::CardReference {
+            kind: card_core::RelationshipKind::OwnedBy,
             target_id: engine_id,
             target_label: engine_label.clone(),
         });
@@ -368,8 +368,8 @@ const WATCHER_DEBOUNCE_MS: u64 = 150;
 fn spawn_fs_watcher(
     dir: std::path::PathBuf,
     db: std::sync::Arc<std::sync::Mutex<db::MonadDb>>,
-    pool: std::sync::Arc<brahman_sidecar::SidecarPool>,
-    engine_id: brahman_card::ulid::Ulid,
+    pool: std::sync::Arc<card_sidecar::SidecarPool>,
+    engine_id: card_core::ulid::Ulid,
     engine_label: String,
 ) -> Result<notify::RecommendedWatcher, Box<dyn std::error::Error>> {
     use notify::{Event, EventKind, RecursiveMode, Watcher};
@@ -469,8 +469,8 @@ fn process_change_batch(
     paths: &[std::path::PathBuf],
     dir: &std::path::Path,
     db: &std::sync::Arc<std::sync::Mutex<db::MonadDb>>,
-    pool: &std::sync::Arc<brahman_sidecar::SidecarPool>,
-    engine_id: brahman_card::ulid::Ulid,
+    pool: &std::sync::Arc<card_sidecar::SidecarPool>,
+    engine_id: card_core::ulid::Ulid,
     engine_label: &str,
 ) {
     eprintln!(
@@ -532,8 +532,8 @@ fn process_change_batch(
             continue;
         }
         let mut card = monad.to_brahman_card();
-        card.references.push(brahman_card::CardReference {
-            kind: brahman_card::RelationshipKind::OwnedBy,
+        card.references.push(card_core::CardReference {
+            kind: card_core::RelationshipKind::OwnedBy,
             target_id: engine_id,
             target_label: engine_label.to_string(),
         });
@@ -689,7 +689,7 @@ fn cmd_attract(args: &[String]) -> Cmd {
 /// Pipeline completo del modo `--remote`:
 /// 1. Si `NOUSER_NOUS_SOCKET` está set, lo usa directo (override
 ///    explícito, atajo para tests).
-/// 2. Si no, delega en `brahman_sidecar::await_provider_blocking` —
+/// 2. Si no, delega en `card_sidecar::await_provider_blocking` —
 ///    el sidecar se conecta al broker, registra un consumer Card con
 ///    `flow.input = embed-result:json`, espera el primer
 ///    `MatchEvent::Available` y devuelve el socket. Esto activa la
@@ -707,12 +707,12 @@ fn remote_embed(
         return embed_via(&sock, file);
     }
 
-    let consumer = brahman_sidecar::build_consumer_card(
+    let consumer = card_sidecar::build_consumer_card(
         "chasqui.attract-cli",
         chasqui_nous::FLOW_EMBED_RESULT,
         chasqui_nous::FLOW_TYPE_NAME,
     );
-    let producer_sock = brahman_sidecar::await_provider_blocking(
+    let producer_sock = card_sidecar::await_provider_blocking(
         consumer,
         std::time::Duration::from_secs(3),
     )?;
@@ -769,8 +769,8 @@ fn embed_via(
 /// que un consumer (UI, CLI) pueda descubrir al daemon vía broker
 /// MatchEvent y consultarle por sus Mónadas sin pasar por
 /// brahman-admin.
-fn build_engine_card(service_socket: std::path::PathBuf) -> brahman_card::Card {
-    use brahman_card::{Card, CardKind, Flow, Flows, Lifecycle, Payload, Priority, Supervision, TypeRef};
+fn build_engine_card(service_socket: std::path::PathBuf) -> card_core::Card {
+    use card_core::{Card, CardKind, Flow, Flows, Lifecycle, Payload, Priority, Supervision, TypeRef};
     use chasqui_card::query::{FLOW_MONAD_LIST, FLOW_TYPE_NAME};
 
     Card {

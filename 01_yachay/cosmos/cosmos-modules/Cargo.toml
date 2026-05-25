@@ -1,12 +1,12 @@
 [package]
-name = "cosmobiologia-modules"
+name = "cosmos-modules"
 version = { workspace = true }
 edition = { workspace = true }
 license = { workspace = true }
 description = "Tahuantinsuyu — registry de módulos astrológicos (Natal, Transit, Synastry, Uranian, …)."
 
 [dependencies]
-cosmobiologia-model = { path = "../cosmos-model" }
-cosmobiologia-engine = { path = "../cosmos-engine" }
+cosmos-model = { path = "../cosmos-model" }
+cosmos-engine = { path = "../cosmos-engine" }
 serde = { workspace = true }
 serde_json = { workspace = true }

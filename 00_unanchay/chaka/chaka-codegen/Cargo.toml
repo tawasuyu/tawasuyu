@@ -1,16 +1,16 @@
 [package]
-name = "charka-codegen"
+name = "chaka-codegen"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "charka-codegen — emisión de Rust desde el IR de charka: el modelo de datos COBOL y los statements del PROCEDURE a código que enlaza con charka-runtime."
+description = "chaka-codegen — emisión de Rust desde el IR de chaka-app: el modelo de datos COBOL y los statements del PROCEDURE a código que enlaza con chaka-runtime."
 
 [dependencies]
-charka-ir = { path = "../chaka-ir" }
+chaka-ir = { path = "../chaka-ir" }
 
 [dev-dependencies]
-charka-parser = { path = "../chaka-parser" }
-charka-lexer = { path = "../chaka-lexer" }
+chaka-parser = { path = "../chaka-parser" }
+chaka-lexer = { path = "../chaka-lexer" }

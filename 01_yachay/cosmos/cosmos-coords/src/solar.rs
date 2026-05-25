@@ -1,8 +1,8 @@
 use crate::{CoordResult, ICRSPosition};
-use eternal_core::constants::{ARCSEC_TO_RAD, DEG_TO_RAD, J2000_JD, TWOPI};
-use eternal_core::utils::{normalize_angle_rad, normalize_angle_to_positive};
-use eternal_core::Angle;
-use eternal_time::TT;
+use cosmos_core::constants::{ARCSEC_TO_RAD, DEG_TO_RAD, J2000_JD, TWOPI};
+use cosmos_core::utils::{normalize_angle_rad, normalize_angle_to_positive};
+use cosmos_core::Angle;
+use cosmos_time::TT;
 
 const SOLAR_EQUATOR_INCLINATION_DEG: f64 = 7.25;
 const SOLAR_EQUATOR_INCLINATION_RAD: f64 = SOLAR_EQUATOR_INCLINATION_DEG * DEG_TO_RAD;
@@ -21,7 +21,7 @@ pub struct SolarOrientation {
 pub fn compute_solar_orientation(epoch: &TT) -> SolarOrientation {
     let jd = epoch.to_julian_date();
     let d = (jd.jd1() - J2000_JD) + jd.jd2();
-    let t = d / eternal_core::constants::DAYS_PER_JULIAN_CENTURY;
+    let t = d / cosmos_core::constants::DAYS_PER_JULIAN_CENTURY;
 
     let (sun_lon, sun_lat, obliquity) = solar_ecliptic_coords(t);
     let (b0, l0, p) = heliographic_coords(t, sun_lon, sun_lat, obliquity);
@@ -54,7 +54,7 @@ pub fn carrington_rotation_number(epoch: &TT) -> u32 {
 pub fn sun_earth_distance(epoch: &TT) -> f64 {
     let jd = epoch.to_julian_date();
     let d = (jd.jd1() - J2000_JD) + jd.jd2();
-    let t = d / eternal_core::constants::DAYS_PER_JULIAN_CENTURY;
+    let t = d / cosmos_core::constants::DAYS_PER_JULIAN_CENTURY;
 
     let m = (357.52911 + 35999.05029 * t - 0.0001537 * t * t) * DEG_TO_RAD;
     let e = 0.016708634 - 0.000042037 * t - 0.0000001267 * t * t;
@@ -83,7 +83,7 @@ fn heliographic_coords(t: f64, sun_lon: f64, _sun_lat: f64, obliquity: f64) -> (
 
     let eta = libm::atan2(sin_i * cos_theta, cos_i);
     let jd_days =
-        t * eternal_core::constants::DAYS_PER_JULIAN_CENTURY + J2000_JD - CARRINGTON_EPOCH_JD;
+        t * cosmos_core::constants::DAYS_PER_JULIAN_CENTURY + J2000_JD - CARRINGTON_EPOCH_JD;
     let l0_raw = 360.0 / CARRINGTON_SYNODIC_PERIOD * jd_days;
     let l0 = normalize_angle_to_positive((l0_raw * DEG_TO_RAD - eta) % TWOPI);
 
@@ -126,7 +126,7 @@ fn mean_obliquity(t: f64) -> f64 {
 pub(crate) fn get_sun_icrs(epoch: &TT) -> CoordResult<ICRSPosition> {
     let jd = epoch.to_julian_date();
     let d = (jd.jd1() - J2000_JD) + jd.jd2();
-    let t = d / eternal_core::constants::DAYS_PER_JULIAN_CENTURY;
+    let t = d / cosmos_core::constants::DAYS_PER_JULIAN_CENTURY;
 
     let l0 = 280.46646 + 36000.76983 * t + 0.0003032 * t * t;
     let m = 357.52911 + 35999.05029 * t - 0.0001537 * t * t;
@@ -159,7 +159,7 @@ pub(crate) fn get_sun_icrs(epoch: &TT) -> CoordResult<ICRSPosition> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eternal_time::julian::JulianDate;
+    use cosmos_time::julian::JulianDate;
 
     #[test]
     fn test_b0_range() {

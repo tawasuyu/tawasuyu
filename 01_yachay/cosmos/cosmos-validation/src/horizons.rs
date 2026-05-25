@@ -10,10 +10,10 @@
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 
-use eternal_core::constants::{AU_KM, SECONDS_PER_DAY_F64};
-use eternal_time::julian::JulianDate;
-use eternal_time::scales::ToTTFromTDB;
-use eternal_time::TDB;
+use cosmos_core::constants::{AU_KM, SECONDS_PER_DAY_F64};
+use cosmos_time::julian::JulianDate;
+use cosmos_time::scales::ToTTFromTDB;
+use cosmos_time::TDB;
 
 use crate::fixture::{Corrections, Fixture, Frame, Source, Tolerance};
 

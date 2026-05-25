@@ -23,8 +23,8 @@
 //! # Example
 //!
 //! ```
-//! use eternal_core::obliquity::iau_2006_mean_obliquity;
-//! use eternal_core::constants::J2000_JD;
+//! use cosmos_core::obliquity::iau_2006_mean_obliquity;
+//! use cosmos_core::constants::J2000_JD;
 //!
 //! // At J2000.0
 //! let eps = iau_2006_mean_obliquity(J2000_JD, 0.0);

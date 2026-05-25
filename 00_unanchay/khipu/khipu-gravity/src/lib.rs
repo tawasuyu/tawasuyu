@@ -1,4 +1,4 @@
-//! `badu-gravity` — la gravedad semántica de las notas.
+//! `khipu_app-gravity` — la gravedad semántica de las notas.
 //!
 //! Cada nota tiene un vector semántico (lo produce `verbo`; aquí entra
 //! ya calculado, sin acoplar a ningún backend). La afinidad entre dos
@@ -7,14 +7,14 @@
 //! - encuentra los **vecinos** más afines de una nota;
 //! - agrupa las notas en **clústeres** por encima de un umbral;
 //! - calcula un **layout 2D** donde las notas afines se atraen y todas
-//!   se repelen — la «gravedad» literal de la lente espacial de badu.
+//!   se repelen — la «gravedad» literal de la lente espacial de khipu_app.
 //!
 //! Todo es determinista: posiciones iniciales fijas, sin RNG, iteración
 //! en orden estable.
 
 #![forbid(unsafe_code)]
 
-use badu_core::NoteId;
+use khipu_core::NoteId;
 use serde::{Deserialize, Serialize};
 
 /// Una nube de notas con su vector semántico — el dominio de la gravedad.

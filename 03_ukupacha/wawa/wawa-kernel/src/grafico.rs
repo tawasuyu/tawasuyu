@@ -27,7 +27,7 @@ const PIXELES_MAX: usize = ANCHO_MAX * ALTO_MAX;
 //  COLOR — la unidad indivisible del lenguaje visual de renaser
 // =============================================================================
 
-/// Color de 24 bits, independiente del formato fisico del framebuffer.
+/// Color de 24 bits, independiente del format fisico del framebuffer.
 #[derive(Clone, Copy)]
 pub(crate) struct Color {
     pub(crate) r: u8,
@@ -128,9 +128,9 @@ pub(crate) struct RegionPantalla {
 
 /// Traduce un [`Color`] logico al valor nativo de 32 bits que el framebuffer
 /// espera, respetando el orden de canales que reporta el firmware UEFI.
-pub(crate) fn codificar(formato: PixelFormat, color: Color) -> u32 {
+pub(crate) fn codificar(format: PixelFormat, color: Color) -> u32 {
     let (r, g, b) = (color.r as u32, color.g as u32, color.b as u32);
-    match formato {
+    match format {
         PixelFormat::Rgb => r | (g << 8) | (b << 16),
         PixelFormat::Bgr => b | (g << 8) | (r << 16),
         PixelFormat::U8 => (r * 54 + g * 183 + b * 19) >> 8,
@@ -202,7 +202,7 @@ pub(crate) struct Lienzo {
     pub(crate) pixeles: &'static mut [u32],
     pub(crate) ancho: usize,
     pub(crate) alto: usize,
-    pub(crate) formato: PixelFormat,
+    pub(crate) format: PixelFormat,
 }
 
 impl Lienzo {
@@ -211,20 +211,20 @@ impl Lienzo {
         memoria: &'static mut [u32],
         ancho: usize,
         alto: usize,
-        formato: PixelFormat,
+        format: PixelFormat,
     ) -> Lienzo {
         Lienzo {
             pixeles: memoria,
             ancho,
             alto,
-            formato,
+            format,
         }
     }
 
     /// Pinta un unico pixel. Las coordenadas fuera del lienzo se ignoran.
     pub(crate) fn pintar_pixel(&mut self, x: usize, y: usize, color: Color) {
         if x < self.ancho && y < self.alto {
-            self.pixeles[y * self.ancho + x] = codificar(self.formato, color);
+            self.pixeles[y * self.ancho + x] = codificar(self.format, color);
         }
     }
 
@@ -237,7 +237,7 @@ impl Lienzo {
         alto: usize,
         color: Color,
     ) {
-        let valor = codificar(self.formato, color);
+        let valor = codificar(self.format, color);
         let x_ini = x0.min(self.ancho);
         let y_ini = y0.min(self.alto);
         let x_fin = (x0 + ancho).min(self.ancho);
@@ -307,7 +307,7 @@ pub(crate) struct Pantalla {
     pub(crate) bytes_por_pixel: usize,
     /// Formato de pixel — necesario para estampar capas que se pintan
     /// DIRECTAMENTE sobre el framebuffer, no sobre el lienzo (Fase 13).
-    pub(crate) formato: PixelFormat,
+    pub(crate) format: PixelFormat,
 }
 
 impl Pantalla {
@@ -321,7 +321,7 @@ impl Pantalla {
             alto: info.height,
             paso_bytes: info.stride * info.bytes_per_pixel,
             bytes_por_pixel: info.bytes_per_pixel,
-            formato: info.pixel_format,
+            format: info.pixel_format,
         }
     }
 
@@ -388,7 +388,7 @@ impl Pantalla {
     /// el siguiente volcado lo vuelve a estampar (Fase 13).
     pub(crate) fn estampar_puntero(&mut self, x: usize, y: usize) {
         let borde = codificar(
-            self.formato,
+            self.format,
             Color {
                 r: 0x10,
                 g: 0x12,
@@ -396,7 +396,7 @@ impl Pantalla {
             },
         );
         let relleno = codificar(
-            self.formato,
+            self.format,
             Color {
                 r: 0xF0,
                 g: 0xF2,

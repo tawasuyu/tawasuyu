@@ -1,7 +1,7 @@
 //! `Cursor` — un cursor de avance sobre la lista de tokens de una
 //! sentencia, más las primitivas para leer un operando.
 
-use charka_parser::{Token, TokenKind};
+use chaka_parser::{Token, TokenKind};
 
 use crate::ast::{Figurative, Operand};
 

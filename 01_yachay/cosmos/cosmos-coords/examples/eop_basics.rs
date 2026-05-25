@@ -1,5 +1,5 @@
-use eternal_coords::eop::record::EopRecord;
-use eternal_coords::EopProvider;
+use cosmos_coords::eop::record::EopRecord;
+use cosmos_coords::EopProvider;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- Bundled IERS data ---

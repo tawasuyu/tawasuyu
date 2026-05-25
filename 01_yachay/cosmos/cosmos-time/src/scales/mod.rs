@@ -22,8 +22,8 @@
 //! `from_julian_date` or `*_from_calendar` helper functions:
 //!
 //! ```
-//! use eternal_time::{JulianDate, TAI, TT, UTC};
-//! use eternal_time::scales::{tai_from_calendar, tt_from_calendar};
+//! use cosmos_time::{JulianDate, TAI, TT, UTC};
+//! use cosmos_time::scales::{tai_from_calendar, tt_from_calendar};
 //!
 //! // From Julian Date
 //! let tai = TAI::from_julian_date(JulianDate::new(2451545.0, 0.0));
@@ -37,8 +37,8 @@
 //! Convert between scales using traits from the [`conversions`] submodule:
 //!
 //! ```
-//! use eternal_time::{JulianDate, GPS, TAI, TT};
-//! use eternal_time::scales::conversions::{ToTAI, ToTT, ToGPS};
+//! use cosmos_time::{JulianDate, GPS, TAI, TT};
+//! use cosmos_time::scales::conversions::{ToTAI, ToTT, ToGPS};
 //!
 //! let tai = TAI::from_julian_date(JulianDate::new(2451545.0, 0.0));
 //! let tt = tai.to_tt().unwrap();

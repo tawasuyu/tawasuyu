@@ -1,4 +1,4 @@
-//! `cosmobiologia-model` — tipos agnósticos del estudio astrológico.
+//! `cosmos_app-model` — tipos agnósticos del estudio astrológico.
 //!
 //! Esta es la capa de **datos puros**: no conoce GPUI, ni rusqlite, ni
 //! `eternal-astrology`. Solo tipos `serde`-able que viajan entre la
@@ -107,11 +107,11 @@ pub struct Contact {
 }
 
 // =====================================================================
-// Datos de nacimiento (espejo agnóstico de eternal_astrology::BirthData)
+// Datos de nacimiento (espejo agnóstico de cosmos_astrology::BirthData)
 // =====================================================================
 
 /// Datos crudos de nacimiento. La engine los traduce a
-/// `eternal_astrology::BirthData` cuando hay que computar.
+/// `cosmos_astrology::BirthData` cuando hay que computar.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredBirthData {
     /// Calendario civil local.
@@ -151,7 +151,7 @@ pub enum TimeCertainty {
 }
 
 // =====================================================================
-// Configuración de carta (espejo agnóstico de eternal_astrology::ChartConfig)
+// Configuración de carta (espejo agnóstico de cosmos_astrology::ChartConfig)
 // =====================================================================
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

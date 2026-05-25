@@ -89,10 +89,10 @@
 //! # Usage
 //!
 //! ```
-//! use eternal_time::scales::{UTC, TAI};
-//! use eternal_time::scales::conversions::{ToTAI, ToUTC};
-//! use eternal_time::julian::JulianDate;
-//! use eternal_core::constants::J2000_JD;
+//! use cosmos_time::scales::{UTC, TAI};
+//! use cosmos_time::scales::conversions::{ToTAI, ToUTC};
+//! use cosmos_time::julian::JulianDate;
+//! use cosmos_core::constants::J2000_JD;
 //!
 //! // At J2000.0 (2000-01-01 12:00 TT), TAI-UTC = 32 seconds
 //! let utc = UTC::from_julian_date(JulianDate::new(J2000_JD, 0.0));
@@ -125,7 +125,7 @@ use super::{ToTAI, ToUTC};
 use crate::julian::JulianDate;
 use crate::scales::{TAI, UTC};
 use crate::{TimeError, TimeResult};
-use eternal_core::constants::{MJD_ZERO_POINT, SECONDS_PER_DAY_F64};
+use cosmos_core::constants::{MJD_ZERO_POINT, SECONDS_PER_DAY_F64};
 
 impl ToTAI for UTC {
     /// Convert UTC to TAI by adding the accumulated leap seconds.
@@ -436,7 +436,7 @@ pub fn calendar_to_julian(year: i32, month: i32, day: i32) -> (f64, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eternal_core::constants::J2000_JD;
+    use cosmos_core::constants::J2000_JD;
 
     #[test]
     fn test_identity_conversions() {
@@ -476,7 +476,7 @@ mod tests {
             (J2000_JD, 0.0),
             (J2000_JD, 0.999999),
             (0.5, J2000_JD), // jd2 > jd1 (alternate split in utc_to_tai)
-            (0.1, eternal_core::constants::J2000_JD), // jd2 > jd1 (alternate split in tai_to_utc)
+            (0.1, cosmos_core::constants::J2000_JD), // jd2 > jd1 (alternate split in tai_to_utc)
         ];
 
         for &(jd1, jd2) in test_cases {
@@ -538,7 +538,7 @@ mod tests {
 
         // julian_to_calendar: negative fraction correction path
         let (y, m, d, frac) =
-            julian_to_calendar(eternal_core::constants::J2000_JD, -0.6).unwrap();
+            julian_to_calendar(cosmos_core::constants::J2000_JD, -0.6).unwrap();
         assert!(y > 0 && (1..=12).contains(&m) && (1..=31).contains(&d) && frac >= 0.0);
 
         // julian_to_calendar: Kahan summation else branch (|frac_2| > |sum|)

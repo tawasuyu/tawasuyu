@@ -47,10 +47,10 @@
 //! # Usage
 //!
 //! ```
-//! use eternal_time::scales::{UTC, UT1};
-//! use eternal_time::scales::conversions::{ToUT1WithDUT1, ToUTCWithDUT1};
-//! use eternal_time::julian::JulianDate;
-//! use eternal_core::constants::J2000_JD;
+//! use cosmos_time::scales::{UTC, UT1};
+//! use cosmos_time::scales::conversions::{ToUT1WithDUT1, ToUTCWithDUT1};
+//! use cosmos_time::julian::JulianDate;
+//! use cosmos_core::constants::J2000_JD;
 //!
 //! // DUT1 for 2000-01-01 was approximately +0.3 seconds (from IERS Bulletin A)
 //! let dut1 = 0.3;
@@ -83,7 +83,7 @@ use super::{ToTAI, ToUTC};
 use crate::julian::JulianDate;
 use crate::scales::{UT1, UTC};
 use crate::TimeResult;
-use eternal_core::constants::SECONDS_PER_DAY_F64;
+use cosmos_core::constants::SECONDS_PER_DAY_F64;
 
 /// Convert to UT1 using a known DUT1 (UT1-UTC) offset.
 ///
@@ -284,7 +284,7 @@ impl ToUTCViaTAI for UT1 {
 mod tests {
     use super::super::{ToUT1, ToUTC};
     use super::*;
-    use eternal_core::constants::J2000_JD;
+    use cosmos_core::constants::J2000_JD;
 
     #[test]
     fn test_identity_conversions() {

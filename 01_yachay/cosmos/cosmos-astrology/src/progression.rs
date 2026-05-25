@@ -20,7 +20,7 @@
 //! Swiss / Astrodienst convention). Pass [`ProgressedHouses::Natal`] to
 //! freeze the natal cusps and only progress the bodies.
 
-use eternal_sky::{EphemerisSession, Instant};
+use cosmos_sky::{EphemerisSession, Instant};
 
 use crate::birth_data::BirthData;
 use crate::chart::NatalChart;

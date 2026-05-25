@@ -665,7 +665,7 @@ impl XisfDataType for f64 {
     }
 }
 
-pub fn wcs_to_xisf_properties(wcs_keywords: &[eternal_wcs::WcsKeyword]) -> Vec<XisfProperty> {
+pub fn wcs_to_xisf_properties(wcs_keywords: &[cosmos_wcs::WcsKeyword]) -> Vec<XisfProperty> {
     let mut properties = Vec::new();
     let mut crval1: Option<f64> = None;
     let mut crval2: Option<f64> = None;
@@ -682,57 +682,57 @@ pub fn wcs_to_xisf_properties(wcs_keywords: &[eternal_wcs::WcsKeyword]) -> Vec<X
     for kw in wcs_keywords {
         match kw.name.as_str() {
             "CTYPE1" => {
-                if let eternal_wcs::WcsKeywordValue::String(s) = &kw.value {
+                if let cosmos_wcs::WcsKeywordValue::String(s) = &kw.value {
                     proj_code = extract_projection_code(s);
                 }
             }
             "CRVAL1" => {
-                if let eternal_wcs::WcsKeywordValue::Real(v) = &kw.value {
+                if let cosmos_wcs::WcsKeywordValue::Real(v) = &kw.value {
                     crval1 = Some(*v);
                 }
             }
             "CRVAL2" => {
-                if let eternal_wcs::WcsKeywordValue::Real(v) = &kw.value {
+                if let cosmos_wcs::WcsKeywordValue::Real(v) = &kw.value {
                     crval2 = Some(*v);
                 }
             }
             "CRPIX1" => {
-                if let eternal_wcs::WcsKeywordValue::Real(v) = &kw.value {
+                if let cosmos_wcs::WcsKeywordValue::Real(v) = &kw.value {
                     crpix1 = Some(*v);
                 }
             }
             "CRPIX2" => {
-                if let eternal_wcs::WcsKeywordValue::Real(v) = &kw.value {
+                if let cosmos_wcs::WcsKeywordValue::Real(v) = &kw.value {
                     crpix2 = Some(*v);
                 }
             }
             "CD1_1" => {
-                if let eternal_wcs::WcsKeywordValue::Real(v) = &kw.value {
+                if let cosmos_wcs::WcsKeywordValue::Real(v) = &kw.value {
                     cd1_1 = Some(*v);
                 }
             }
             "CD1_2" => {
-                if let eternal_wcs::WcsKeywordValue::Real(v) = &kw.value {
+                if let cosmos_wcs::WcsKeywordValue::Real(v) = &kw.value {
                     cd1_2 = Some(*v);
                 }
             }
             "CD2_1" => {
-                if let eternal_wcs::WcsKeywordValue::Real(v) = &kw.value {
+                if let cosmos_wcs::WcsKeywordValue::Real(v) = &kw.value {
                     cd2_1 = Some(*v);
                 }
             }
             "CD2_2" => {
-                if let eternal_wcs::WcsKeywordValue::Real(v) = &kw.value {
+                if let cosmos_wcs::WcsKeywordValue::Real(v) = &kw.value {
                     cd2_2 = Some(*v);
                 }
             }
             "LONPOLE" => {
-                if let eternal_wcs::WcsKeywordValue::Real(v) = &kw.value {
+                if let cosmos_wcs::WcsKeywordValue::Real(v) = &kw.value {
                     lonpole = Some(*v);
                 }
             }
             "LATPOLE" => {
-                if let eternal_wcs::WcsKeywordValue::Real(v) = &kw.value {
+                if let cosmos_wcs::WcsKeywordValue::Real(v) = &kw.value {
                     latpole = Some(*v);
                 }
             }
@@ -1408,7 +1408,7 @@ mod tests {
 
     #[test]
     fn wcs_keywords_to_properties() {
-        use eternal_wcs::WcsKeyword;
+        use cosmos_wcs::WcsKeyword;
 
         let wcs_keywords = vec![
             WcsKeyword::string("CTYPE1", "RA---TAN"),

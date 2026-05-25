@@ -1,5 +1,5 @@
 [package]
-name = "eternal-catalog"
+name = "cosmos-catalog"
 version = "0.1.0-alpha.1"
 authors.workspace = true
 edition.workspace = true
@@ -20,9 +20,9 @@ path = "src/bin/query.rs"
 required-features = ["cli"]
 
 [dependencies]
-eternal-core.workspace = true
-eternal-time.workspace = true
-eternal-coords.workspace = true
+cosmos-core.workspace = true
+cosmos-time.workspace = true
+cosmos-coords.workspace = true
 libm.workspace = true
 memmap2.workspace = true
 

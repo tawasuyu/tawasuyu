@@ -1,4 +1,4 @@
-use eternal_coords::EopProvider;
+use cosmos_coords::EopProvider;
 use std::path::PathBuf;
 
 const FINALS_URL: &str = "https://datacenter.iers.org/data/9/finals2000A.all";

@@ -1,11 +1,11 @@
 //! `brahman-broker` — empareja productores y consumidores por tipo de flujo.
 //!
-//! El broker indexa [`brahman_card::Card`]s registradas por `SessionId` y,
+//! El broker indexa [`card_core::Card`]s registradas por `SessionId` y,
 //! para cada `flow.input` de un consumidor, busca el `flow.output`
 //! compatible de mejor calidad entre los demás. Tres ejes:
 //!
 //! 1. **Estrategia de matching** ([`MatchStrategy`]):
-//!    - `Exact`: igualdad estricta de [`brahman_card::TypeRef`].
+//!    - `Exact`: igualdad estricta de [`card_core::TypeRef`].
 //!    - `Structural`: misma forma (mismo `package` + `name` para Wit;
 //!      ignora `interface`).
 //!    - `ExactThenStructural`: prefiere exact; cae en structural si no hay.
@@ -16,7 +16,7 @@
 //!    matching por tipo normal.
 //!
 //! 3. **Prioridad**: empate de tipo se resuelve por
-//!    [`brahman_card::Priority`] del productor (mayor gana). Empate de
+//!    [`card_core::Priority`] del productor (mayor gana). Empate de
 //!    prioridad se resuelve lexicográficamente por `label` (estable y
 //!    determinista).
 //!
@@ -31,7 +31,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use brahman_card::{
+use card_core::{
     Card, CardKind, CardReference, ContextBias, DataFacet, Flow, Lifecycle, Priority, TypeRef,
     WitInterface,
 };
@@ -370,7 +370,7 @@ fn structural_match(a: &TypeRef, b: &TypeRef) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use brahman_card::{Card, Flows, Payload, Supervision, CARD_SCHEMA_VERSION};
+    use card_core::{Card, Flows, Payload, Supervision, CARD_SCHEMA_VERSION};
 
     fn card(label: &str, priority: Priority, flows: Flows) -> Card {
         Card {

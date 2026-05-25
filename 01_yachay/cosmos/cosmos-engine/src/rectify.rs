@@ -20,8 +20,8 @@
 //! segundo a segundo alrededor del mejor minuto — de ahí la precisión
 //! de segundo del microajuste.
 
-use eternal_astrology::primary_direction::{all_directions, DirectionMethod};
-use eternal_astrology::{DirectionKey as EDirectionKey, NatalChart};
+use cosmos_astrology::primary_direction::{all_directions, DirectionMethod};
+use cosmos_astrology::{DirectionKey as EDirectionKey, NatalChart};
 
 use crate::bridge::compute_natal_chart;
 use crate::{Chart, EngineError, EventoConocido, Rectificacion};

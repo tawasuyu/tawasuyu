@@ -54,7 +54,7 @@ use crate::message::Message;
 /// `verifier_nonce(32) || peer_did(32) || root_subtree_hash(32) = 96 bytes`.
 /// El `verifier_nonce` es el nonce que emitió el peer que verificará
 /// la firma; al firmar sobre él se vincula la firma a esta sesión.
-/// Cualquier cambio al formato es incompatible al protocolo.
+/// Cualquier cambio al format es incompatible al protocolo.
 pub(crate) fn hello_payload(
     verifier_nonce: &[u8; 32],
     did: &Did,

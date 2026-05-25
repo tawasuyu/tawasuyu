@@ -1,4 +1,4 @@
-//! `cosmobiologia-theme` — paleta simbólica + presets místicos.
+//! `cosmos_app-theme` — paleta simbólica + presets místicos.
 //!
 //! Una capa fina sobre [`nahual_theme::Theme`]: el theme base aporta los
 //! slots de panel/foreground/accent; nosotros agregamos paletas

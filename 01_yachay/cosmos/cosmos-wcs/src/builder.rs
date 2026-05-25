@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use eternal_core::Angle;
+use cosmos_core::Angle;
 
 use crate::coordinate::{CelestialCoord, IntermediateCoord, PixelCoord};
 use crate::distortion::DistortionModel;
@@ -968,7 +968,7 @@ mod tests {
     #[test]
     fn test_wcs_pixel_to_eternal_at_crpix() {
         use crate::PixelCoord;
-        use eternal_core::assert_ulp_lt;
+        use cosmos_core::assert_ulp_lt;
 
         let wcs = create_simple_tan_wcs().unwrap();
         let pixel = PixelCoord::new(512.0, 512.0);
@@ -981,7 +981,7 @@ mod tests {
     #[test]
     fn test_wcs_roundtrip_at_crpix() {
         use crate::PixelCoord;
-        use eternal_core::assert_ulp_lt;
+        use cosmos_core::assert_ulp_lt;
 
         let wcs = create_simple_tan_wcs().unwrap();
         let original = PixelCoord::new(512.0, 512.0);

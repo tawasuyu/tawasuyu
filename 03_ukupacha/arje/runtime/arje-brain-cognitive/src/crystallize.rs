@@ -72,7 +72,7 @@ pub fn detect_crystals(obs: &Observer, params: &CrystallizationParams) -> Vec<Cr
 }
 
 /// Serializa la `Rule` derivada del cristal como JSON pretty-printed. Ese
-/// JSON es el formato canónico de persistencia: el loader lo lee como una
+/// JSON es el format canónico de persistencia: el loader lo lee como una
 /// línea de JSONL o como elemento de un array. Los stats del cristal (P, PMI,
 /// support) viven en el audit log vía `AuditAction::PromoteCrystal`, no se
 /// duplican aquí.

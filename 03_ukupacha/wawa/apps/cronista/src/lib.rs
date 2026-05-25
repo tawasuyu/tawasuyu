@@ -17,7 +17,7 @@
 //  cronista añade un eslabon a la cadena y una celda a su rejilla.
 //
 //  Sus unicas vias hacia el mundo son las capacidades `sys_object_*` que el
-//  kernel le inyecta. No conoce el disco, ni el bus PCI, ni el formato en
+//  kernel le inyecta. No conoce el disco, ni el bus PCI, ni el format en
 //  sectores: solo objetos, hashes y aristas.
 // =============================================================================
 

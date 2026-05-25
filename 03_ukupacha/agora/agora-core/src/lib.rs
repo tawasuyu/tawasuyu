@@ -1,4 +1,4 @@
-//! `agorapura-core` — identidad humana federada, sin autoridad central.
+//! `agora_app-core` — identidad humana federada, sin autoridad central.
 //!
 //! El ágora no tiene un registro maestro. Cada identidad —persona,
 //! comunidad, alianza, institución— es una clave pública; cada afirmación
@@ -12,7 +12,7 @@
 //! - [`attest`] — claims firmados, autoverificables.
 //!
 //! Cero estado global, cero red: tipos puros. La red de confianza vive
-//! en `agorapura-graph`; el transporte, en capas superiores.
+//! en `agora_app-graph`; el transporte, en capas superiores.
 
 #![forbid(unsafe_code)]
 

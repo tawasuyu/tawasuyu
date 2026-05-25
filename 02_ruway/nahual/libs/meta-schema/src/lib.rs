@@ -248,7 +248,7 @@ fn default_weight() -> f32 {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ValueFormat {
-    /// Sin formato — el valor se muestra crudo. Default.
+    /// Sin format — el valor se muestra crudo. Default.
     #[default]
     Plain,
     /// Entero/decimal con separador de miles (`12000` → `12,000`).
@@ -314,7 +314,7 @@ pub enum FieldKind {
     Number,
     /// Booleano (renderizado como checkbox).
     Boolean,
-    /// Fecha (formato ISO YYYY-MM-DD; almacenada como string).
+    /// Fecha (format ISO YYYY-MM-DD; almacenada como string).
     Date,
     /// Referencia a otro record. El runtime renderiza un selector
     /// clickable de records existentes de la entity declarada en

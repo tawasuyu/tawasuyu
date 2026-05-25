@@ -10,9 +10,9 @@
 
 use std::path::{Path, PathBuf};
 
-use eternal_validation::fixture::{BackendKind, FixtureSet};
-use eternal_validation::oracle::{Backend, Oracle};
-use eternal_validation::report::ErrorReport;
+use cosmos_validation::fixture::{BackendKind, FixtureSet};
+use cosmos_validation::oracle::{Backend, Oracle};
+use cosmos_validation::report::ErrorReport;
 
 fn locate_kernel() -> Option<PathBuf> {
     if let Ok(path) = std::env::var("CELESTIAL_VALIDATION_SPK") {

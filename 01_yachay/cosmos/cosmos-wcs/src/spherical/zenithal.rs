@@ -1,4 +1,4 @@
-use eternal_core::constants::{DEG_TO_RAD, HALF_PI, RAD_TO_DEG};
+use cosmos_core::constants::{DEG_TO_RAD, HALF_PI, RAD_TO_DEG};
 
 use crate::common::{
     intermediate_to_polar, native_coord_from_radians, newton_raphson_1d, pole_native_coord,
@@ -555,8 +555,8 @@ fn solve_air_inverse(r: f64, theta_b: f64) -> WcsResult<f64> {
 mod tests {
     use super::*;
     use crate::Projection;
-    use eternal_core::assert_ulp_lt;
-    use eternal_core::Angle;
+    use cosmos_core::assert_ulp_lt;
+    use cosmos_core::Angle;
 
     #[test]
     fn test_tan_reference_point() {

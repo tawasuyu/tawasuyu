@@ -1,11 +1,11 @@
 //! Tests for the transit engine and the synastry aspect grid.
 
-use eternal_astrology::{
+use cosmos_astrology::{
     aspect::AspectKind, default_natal_targets, find_current_transits,
     find_next_exact_transit, find_synastry_aspects, BirthData, ChartConfig, NatalChart,
     OrbTable, Significator,
 };
-use eternal_sky::{Body, EphemerisSession, Instant, Observer, SessionConfig};
+use cosmos_sky::{Body, EphemerisSession, Instant, Observer, SessionConfig};
 
 fn session() -> EphemerisSession {
     EphemerisSession::open(SessionConfig::vsop2013()).unwrap()

@@ -1,9 +1,9 @@
 //! Tests for the midpoint composite chart.
 
-use eternal_astrology::{
+use cosmos_astrology::{
     angular_midpoint_rad, composite, BirthData, ChartConfig, NatalChart,
 };
-use eternal_sky::{Body, EphemerisSession, Instant, Observer, SessionConfig};
+use cosmos_sky::{Body, EphemerisSession, Instant, Observer, SessionConfig};
 
 fn session() -> EphemerisSession {
     EphemerisSession::open(SessionConfig::vsop2013()).unwrap()

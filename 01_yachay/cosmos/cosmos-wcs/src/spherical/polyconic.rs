@@ -1,5 +1,5 @@
-use eternal_core::constants::{DEG_TO_RAD, HALF_PI, RAD_TO_DEG};
-use eternal_core::Angle;
+use cosmos_core::constants::{DEG_TO_RAD, HALF_PI, RAD_TO_DEG};
+use cosmos_core::Angle;
 
 use crate::common::{check_nonzero_param, native_coord_from_radians};
 use crate::coordinate::{IntermediateCoord, NativeCoord};
@@ -184,8 +184,8 @@ fn solve_pco_inverse(x: f64, y: f64) -> WcsResult<f64> {
 mod tests {
     use super::*;
     use crate::Projection;
-    use eternal_core::assert_ulp_lt;
-    use eternal_core::Angle;
+    use cosmos_core::assert_ulp_lt;
+    use cosmos_core::Angle;
 
     #[test]
     fn test_bon_reference_point() {

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tokio::net::{UnixListener, UnixStream};
-use verbo_core::Provider;
+use rimay_verbo_core::Provider;
 
 use crate::wire::{read_frame, write_frame, Request, Response};
 

@@ -27,7 +27,7 @@
 //! - [`ParseAngle`]: Auto-detection via `.to_angle()` (tries HMS, then DMS, then decimal degrees)
 //!
 //! ```
-//! use eternal_core::angle::{AngleUnits, ParseAngle};
+//! use cosmos_core::angle::{AngleUnits, ParseAngle};
 //!
 //! // Explicit unit - you know what format you have
 //! let ra = "12:34:56".hms().unwrap();      // Right ascension

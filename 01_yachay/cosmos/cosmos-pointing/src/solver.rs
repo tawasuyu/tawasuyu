@@ -202,7 +202,7 @@ mod tests {
     use super::*;
     use crate::observation::PierSide;
     use crate::terms::create_term;
-    use eternal_core::Angle;
+    use cosmos_core::Angle;
 
     fn make_obs(cmd_ha_arcsec: f64, act_ha_arcsec: f64, dec_deg: f64) -> Observation {
         Observation {

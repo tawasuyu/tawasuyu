@@ -638,7 +638,7 @@ mod tests {
     use super::*;
     use crate::fits::header::{Header, Keyword};
     use crate::fits::io::reader::HduInfo;
-    use eternal_core::constants::PI;
+    use cosmos_core::constants::PI;
     use std::io::Cursor;
 
     fn create_test_header() -> Header {

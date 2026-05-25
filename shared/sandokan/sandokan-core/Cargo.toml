@@ -8,7 +8,7 @@ authors.workspace = true
 publish.workspace = true
 
 [dependencies]
-brahman-card = { path = "../../card/card-core" }
+card-core = { path = "../../card/card-core" }
 sandokan-lifecycle = { path = "../sandokan-lifecycle" }
 serde = { workspace = true }
 ulid = { workspace = true }

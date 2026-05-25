@@ -7,13 +7,13 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use serde::Deserialize;
 
-use eternal_ephemeris::jpl::SpkFile;
-use eternal_time::julian::JulianDate;
-use eternal_time::scales::ToTTFromTDB;
-use eternal_time::TDB;
+use cosmos_ephemeris::jpl::SpkFile;
+use cosmos_time::julian::JulianDate;
+use cosmos_time::scales::ToTTFromTDB;
+use cosmos_time::TDB;
 
-use eternal_validation::delta_t::delta_t_seconds;
-use eternal_validation::eclipses::{
+use cosmos_validation::delta_t::delta_t_seconds;
+use cosmos_validation::eclipses::{
     next_lunar_eclipse, next_solar_eclipse, LunarEclipseKind, SolarEclipseKind,
 };
 

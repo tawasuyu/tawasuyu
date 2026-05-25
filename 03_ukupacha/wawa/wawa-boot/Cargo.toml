@@ -17,11 +17,11 @@ description = "renaser :: constructor de imagen de disco UEFI y lanzador de QEMU
 # Constructor de la imagen de disco UEFI. Corre en el anfitrion, usa `std`.
 bootloader.workspace = true
 
-# El formato del grafo de objetos en disco (Fase 7b). Es el MISMO nucleo
+# El format del grafo de objetos en disco (Fase 7b). Es el MISMO nucleo
 # `no_std` que enlaza el kernel: gracias a el, `boot` siembra la imagen de
 # disco con el grafo ya poblado —objetos de bytecode y Manifiesto de Genesis—
 # hablando byte a byte el idioma que el kernel leera.
-formato = { path = "../formato" }
+format = { path = "../format" }
 
 # Dependencia de ARTEFACTO (RFC 3028). Cargo compila el kernel para
 # `x86_64-unknown-none` —en aislamiento total de arquitectura— y nos inyecta la

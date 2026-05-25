@@ -10,7 +10,7 @@ pub fn scan_dir(dir: &Path) -> std::io::Result<CardIndex> {
     for entry in std::fs::read_dir(dir)? {
         let path = entry?.path();
         if path.extension().and_then(|e| e.to_str()) == Some("json") {
-            if let Ok(card) = brahman_cards::load_card_file(&path) {
+            if let Ok(card) = cards::load_card_file(&path) {
                 index.insert(card);
             }
         }
@@ -21,7 +21,7 @@ pub fn scan_dir(dir: &Path) -> std::io::Result<CardIndex> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use brahman_card::Card;
+    use card_core::Card;
 
     #[test]
     fn scans_only_valid_json_cards() {

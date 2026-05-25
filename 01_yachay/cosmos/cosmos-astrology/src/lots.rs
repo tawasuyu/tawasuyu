@@ -10,7 +10,7 @@
 //! The seven shipped here cover the bulk of practical Hellenistic
 //! work; new ones can be expressed via [`custom_lot`].
 
-use eternal_sky::Body;
+use cosmos_sky::Body;
 
 use crate::chart::NatalChart;
 use crate::error::{AstrologyError, AstrologyResult};

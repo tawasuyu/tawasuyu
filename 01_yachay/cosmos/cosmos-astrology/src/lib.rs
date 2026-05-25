@@ -1,6 +1,6 @@
 //! # eternal-astrology
 //!
-//! The astrology-specific layer built on top of [`eternal-sky`](`eternal_sky`).
+//! The astrology-specific layer built on top of [`eternal-sky`](`cosmos_sky`).
 //!
 //! ## What this crate is
 //!
@@ -29,8 +29,8 @@
 //! ## Quick start
 //!
 //! ```no_run
-//! use eternal_astrology::{BirthData, ChartConfig, HouseSystem, NatalChart, Zodiac};
-//! use eternal_sky::{EphemerisSession, Instant, Observer, SessionConfig};
+//! use cosmos_astrology::{BirthData, ChartConfig, HouseSystem, NatalChart, Zodiac};
+//! use cosmos_sky::{EphemerisSession, Instant, Observer, SessionConfig};
 //!
 //! let session = EphemerisSession::open(SessionConfig::vsop2013())?;
 //! let birth = BirthData::new(
@@ -49,7 +49,7 @@
 //!     chart.ascendant().sign(),
 //!     chart.ascendant().degree_in_sign(),
 //! );
-//! # Ok::<_, eternal_astrology::AstrologyError>(())
+//! # Ok::<_, cosmos_astrology::AstrologyError>(())
 //! ```
 
 pub mod angles;
@@ -115,4 +115,4 @@ pub use transits::{
 };
 pub use zodiac::{Sign, SignedLongitude, Zodiac};
 
-pub use eternal_sky::Ayanamsha;
+pub use cosmos_sky::Ayanamsha;

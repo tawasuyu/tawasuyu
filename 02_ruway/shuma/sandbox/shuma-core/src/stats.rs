@@ -147,7 +147,7 @@ fn read_proc_pid(pid: i32) -> Option<(u64, u64, u64)> {
     };
     let cpu_usec = {
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-        // formato: pid (comm) state ppid pgrp ... utime stime cutime cstime
+        // format: pid (comm) state ppid pgrp ... utime stime cutime cstime
         // Cuidado: comm puede tener espacios y paréntesis. Buscamos la última `)`.
         let end_comm = stat.rfind(')')?;
         let after = &stat[end_comm + 1..];

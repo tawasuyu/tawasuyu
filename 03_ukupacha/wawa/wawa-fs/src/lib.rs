@@ -11,7 +11,7 @@
 //  AoE viaja DIRECTAMENTE sobre Ethernet (`EtherType = 0x88B5`, rango
 //  experimental reservado por IEEE para uso local). Cada frame transporta un
 //  `MensajeAkasha` serializado con `postcard` —el mismo codec que ya usa
-//  `formato` para el grafo en disco—. Tres mensajes bastan:
+//  `format` para el grafo en disco—. Tres mensajes bastan:
 //
 //    1. `SolicitarObjeto(id)`   — pide un nodo del grafo por su hash BLAKE3.
 //    2. `ProveedorObjeto(id, d)` — responde con el payload binario del nodo.
@@ -63,7 +63,7 @@ pub const MAC_BROADCAST: [u8; 6] = [0xff; 6];
 
 /// El identificador de un objeto del grafo: el hash BLAKE3 de su forma
 /// serializada. En un almacen direccionado por contenido, la identidad ES el
-/// contenido. Coincide byte a byte con `formato::Hash` —AoE habla el mismo
+/// contenido. Coincide byte a byte con `format::Hash` —AoE habla el mismo
 /// idioma de identidad que el grafo en disco—.
 pub type ObjectId = [u8; 32];
 
@@ -79,7 +79,7 @@ pub type Mac = [u8; 6];
 ///
 /// - `SolicitarObjeto`  pregunta por un objeto identificado por su hash.
 /// - `ProveedorObjeto`  responde con el payload binario del objeto. El
-///   receptor recompone el `formato::Objeto` aplicando su deserializador a
+///   receptor recompone el `format::Objeto` aplicando su deserializador a
 ///   `payload` y verificando que `blake3(payload) == id`.
 /// - `AnunciarRaiz`     difunde el hash de la raiz —el ancla del sistema
 ///   actual—. Sirve como faro: quien escuche y carezca de ese nodo en su
@@ -92,7 +92,7 @@ pub enum MensajeAkasha {
     /// Solicito el objeto identificado por este hash.
     SolicitarObjeto(ObjectId),
     /// Aqui esta el payload binario del objeto identificado por este hash.
-    /// El payload es la forma serializada `postcard` de un `formato::Objeto`,
+    /// El payload es la forma serializada `postcard` de un `format::Objeto`,
     /// y el receptor DEBE verificar que `blake3(payload) == id` antes de
     /// confiar en el contenido.
     ProveedorObjeto(ObjectId, Vec<u8>),

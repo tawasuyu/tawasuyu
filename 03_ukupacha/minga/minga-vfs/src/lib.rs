@@ -13,7 +13,7 @@
 //! <punto-de-montaje>/
 //! ├── README          explicación del propio VFS
 //! ├── roots/          un archivo por raíz del MST (cada archivo ingerido)
-//! │   └── <hash64>    código fuente reconstruido, formato normalizado
+//! │   └── <hash64>    código fuente reconstruido, format normalizado
 //! └── cas/            cualquier nodo del store, resuelto bajo demanda
 //!     └── <hash64>    S-expression del subárbol con ese hash
 //! ```

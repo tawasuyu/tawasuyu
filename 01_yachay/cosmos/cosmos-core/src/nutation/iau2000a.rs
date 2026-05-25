@@ -43,7 +43,7 @@ use crate::math::fmod;
 /// # Example
 ///
 /// ```
-/// use eternal_core::nutation::iau2000a::NutationIAU2000A;
+/// use cosmos_core::nutation::iau2000a::NutationIAU2000A;
 ///
 /// let nut = NutationIAU2000A::new();
 ///

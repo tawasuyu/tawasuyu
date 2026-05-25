@@ -3,7 +3,7 @@ pub mod iau2000;
 pub mod iau2006;
 
 use crate::{TimeResult, TT};
-use eternal_core::matrix::RotationMatrix3;
+use cosmos_core::matrix::RotationMatrix3;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PrecessionResult {

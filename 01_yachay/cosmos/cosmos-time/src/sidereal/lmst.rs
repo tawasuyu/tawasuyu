@@ -2,7 +2,7 @@ use super::angle::SiderealAngle;
 use super::gmst::GMST;
 use crate::scales::{TT, UT1};
 use crate::TimeResult;
-use eternal_core::Location;
+use cosmos_core::Location;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,7 @@ impl LMST {
 
         let lmst_rad = gmst.radians() + location.longitude;
 
-        use eternal_core::angle::wrap_0_2pi;
+        use cosmos_core::angle::wrap_0_2pi;
         let lmst_normalized = wrap_0_2pi(lmst_rad);
 
         let angle = SiderealAngle::from_radians_exact(lmst_normalized);
@@ -83,7 +83,7 @@ impl LMST {
     }
 
     pub fn to_gmst(&self) -> GMST {
-        let longitude_hours = self.location.longitude * 12.0 / eternal_core::constants::PI;
+        let longitude_hours = self.location.longitude * 12.0 / cosmos_core::constants::PI;
 
         let gmst_hours = self.hours() - longitude_hours;
 
@@ -93,8 +93,8 @@ impl LMST {
 
 impl std::fmt::Display for LMST {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let lat_deg = self.location.latitude * eternal_core::constants::RAD_TO_DEG;
-        let lon_deg = self.location.longitude * eternal_core::constants::RAD_TO_DEG;
+        let lat_deg = self.location.latitude * cosmos_core::constants::RAD_TO_DEG;
+        let lon_deg = self.location.longitude * cosmos_core::constants::RAD_TO_DEG;
         write!(
             f,
             "LMST {} at ({:.4}°, {:.4}°)",
@@ -216,7 +216,7 @@ mod tests {
         let original_gmst = GMST::from_hours(15.5);
 
         // Convert GMST -> LMST -> GMST
-        let longitude_hours = location.longitude * 12.0 / eternal_core::constants::PI;
+        let longitude_hours = location.longitude * 12.0 / cosmos_core::constants::PI;
         let lmst_hours = original_gmst.hours() + longitude_hours;
         let lmst = LMST::from_hours(lmst_hours, &location);
         let recovered_gmst = lmst.to_gmst();
@@ -236,7 +236,7 @@ mod tests {
         // Test all constructor methods produce equivalent results
         let hours = 14.5;
         let degrees = hours * 15.0;
-        let radians = hours * eternal_core::constants::PI / 12.0;
+        let radians = hours * cosmos_core::constants::PI / 12.0;
 
         let lmst_hours = LMST::from_hours(hours, &location);
         let lmst_degrees = LMST::from_degrees(degrees, &location);
@@ -322,8 +322,8 @@ mod tests {
         assert_eq!(lmst_deg.hours(), 6.0);
 
         // Test from_radians constructor
-        let lmst_rad = LMST::from_radians(eternal_core::constants::PI * 1.5, &location);
-        assert!((lmst_rad.radians() - eternal_core::constants::PI * 1.5).abs() < 1e-15);
+        let lmst_rad = LMST::from_radians(cosmos_core::constants::PI * 1.5, &location);
+        assert!((lmst_rad.radians() - cosmos_core::constants::PI * 1.5).abs() < 1e-15);
         assert_eq!(lmst_rad.hours(), 18.0);
 
         // Test angle() accessor

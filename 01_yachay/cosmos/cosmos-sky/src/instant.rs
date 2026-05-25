@@ -7,18 +7,18 @@
 //! progressions, returns) consumes the same instant.
 //!
 //! The internal representation is **UTC** with sub-nanosecond split-JD
-//! precision (inherited from `eternal_time::UTC`). Conversion to TT / TDB
+//! precision (inherited from `cosmos_time::UTC`). Conversion to TT / TDB
 //! / UT1 happens on demand and is cheap (`<1 µs` for TT, `~ms` for TDB
 //! because of the Fairhead-Bretagnon series).
 
 use std::str::FromStr;
 
-use eternal_time::julian::JulianDate;
-use eternal_time::scales::conversions::{
+use cosmos_time::julian::JulianDate;
+use cosmos_time::scales::conversions::{
     ToTAI, ToTDB, ToTT, ToTTFromTDB, ToUT1WithDeltaT,
 };
-use eternal_time::scales::utc::utc_from_calendar;
-use eternal_time::{TDB, TT, UT1, UTC};
+use cosmos_time::scales::utc::utc_from_calendar;
+use cosmos_time::{TDB, TT, UT1, UTC};
 
 use crate::delta_t::delta_t_seconds;
 use crate::error::{SkyError, SkyResult};
@@ -102,7 +102,7 @@ impl Instant {
             .map_err(SkyError::Time)?;
         // TT → TAI → UTC.
         let tai = tt.to_tai().map_err(SkyError::Time)?;
-        use eternal_time::scales::conversions::ToUTC;
+        use cosmos_time::scales::conversions::ToUTC;
         let utc = tai.to_utc().map_err(SkyError::Time)?;
         Ok(Self { utc })
     }

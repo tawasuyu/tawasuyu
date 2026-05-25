@@ -1,7 +1,7 @@
 //! `brahman-broker-explorer` — probe GUI del broker brahman.
 //!
 //! Cada [`POLL_INTERVAL`] arma un Card observer agnóstico y lo
-//! manda al broker via `brahman_sidecar::await_provider_blocking`
+//! manda al broker via `card_sidecar::await_provider_blocking`
 //! (que internamente abre tokio runtime + Unix socket + handshake).
 //! Reporta 3 estados:
 //!
@@ -13,7 +13,7 @@
 //!
 //! Configuración via env:
 //! - `BRAHMAN_INIT_SOCKET` — path del socket del broker (default
-//!   resuelto por `brahman_handshake::transport`).
+//!   resuelto por `card_handshake::transport`).
 //! - `BRAHMAN_BROKER_PROBE_FLOW` — nombre del flow probe (default
 //!   `broker-health`).
 //! - `BRAHMAN_BROKER_PROBE_TYPE` — type name del flow probe
@@ -28,9 +28,9 @@ use std::time::{Duration, Instant};
 
 use std::collections::HashSet;
 
-use brahman_handshake::messages::SessionList;
-use brahman_handshake::transport;
-use brahman_sidecar::{
+use card_handshake::messages::SessionList;
+use card_handshake::transport;
+use card_sidecar::{
     await_provider_blocking, build_consumer_card, list_matches_blocking, list_sessions_blocking,
     ConsumerError,
 };
@@ -107,12 +107,12 @@ struct TimelineEntry {
     at: std::time::SystemTime,
     /// Available = nuevo en este tick. Lost = estaba en el tick
     /// anterior y desapareció.
-    kind: brahman_handshake::messages::MatchEventKind,
+    kind: card_handshake::messages::MatchEventKind,
     consumer_label: String,
     consumer_flow: String,
     producer_label: String,
     producer_flow: String,
-    via: brahman_broker::MatchStrategy,
+    via: chasqui_broker::MatchStrategy,
     pinned: bool,
 }
 
@@ -218,7 +218,7 @@ impl Explorer {
     /// estado al boot sin que parezca "no pasa nada").
     fn diff_matches_into_timeline(
         &mut self,
-        list: &brahman_handshake::messages::MatchList,
+        list: &card_handshake::messages::MatchList,
     ) {
         let (new_entries, new_keys) = diff_matches(&self.last_match_keys, list);
         for entry in new_entries {
@@ -425,9 +425,9 @@ fn state_card(
 /// como "todo recién apareció" en vez de quedarse vacía.
 fn diff_matches(
     last_keys: &HashSet<MatchKey>,
-    list: &brahman_handshake::messages::MatchList,
+    list: &card_handshake::messages::MatchList,
 ) -> (Vec<TimelineEntry>, HashSet<MatchKey>) {
-    use brahman_handshake::messages::MatchEventKind;
+    use card_handshake::messages::MatchEventKind;
     let now = std::time::SystemTime::now();
     let current_keys: HashSet<MatchKey> = list
         .matches
@@ -472,7 +472,7 @@ fn diff_matches(
                 consumer_flow: key.1.clone(),
                 producer_label: String::new(),
                 producer_flow: key.3.clone(),
-                via: brahman_broker::MatchStrategy::Exact,
+                via: chasqui_broker::MatchStrategy::Exact,
                 pinned: false,
             });
         }
@@ -484,7 +484,7 @@ fn diff_matches(
 /// {kind} consumer.flow ← producer.flow [via]`. Compact por diseño
 /// — el panel es vertical y las líneas largas se cortan.
 fn format_timeline_entry(e: &TimelineEntry) -> String {
-    use brahman_handshake::messages::MatchEventKind;
+    use card_handshake::messages::MatchEventKind;
     // Wall-clock local en HH:MM:SS — sin zoneinfo (chrono es heavy).
     // Aproximación: total_seconds % 86400 → hora del día UTC.
     let secs_today = e
@@ -542,9 +542,9 @@ mod tests {
         consumer_flow: &str,
         producer_label: &str,
         producer_flow: &str,
-    ) -> brahman_broker::Match {
-        use brahman_broker::{Endpoint, Match, MatchStrategy};
-        use brahman_card::TypeRef;
+    ) -> chasqui_broker::Match {
+        use chasqui_broker::{Endpoint, Match, MatchStrategy};
+        use card_core::TypeRef;
         Match {
             consumer: Endpoint {
                 session: Ulid::new(),
@@ -564,7 +564,7 @@ mod tests {
 
     #[test]
     fn diff_matches_first_snapshot_marks_everything_available() {
-        use brahman_handshake::messages::{MatchEventKind, MatchList};
+        use card_handshake::messages::{MatchEventKind, MatchList};
         let list = MatchList {
             matches: vec![
                 synth_match("a", "x", "b", "x"),
@@ -582,7 +582,7 @@ mod tests {
 
     #[test]
     fn diff_matches_emits_lost_when_match_disappears() {
-        use brahman_handshake::messages::{MatchEventKind, MatchList};
+        use card_handshake::messages::{MatchEventKind, MatchList};
         let m = synth_match("a", "x", "b", "x");
         let prev_key = (
             m.consumer.session,
@@ -602,7 +602,7 @@ mod tests {
 
     #[test]
     fn diff_matches_no_change_emits_nothing() {
-        use brahman_handshake::messages::MatchList;
+        use card_handshake::messages::MatchList;
         let m = synth_match("a", "x", "b", "x");
         let key = (
             m.consumer.session,

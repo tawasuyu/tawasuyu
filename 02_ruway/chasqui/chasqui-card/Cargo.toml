@@ -6,10 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "Nouser — manifiesto de Mónada (agrupación semántica de archivos). Espejo de brahman-card pero para datos."
+description = "Nouser — manifiesto de Mónada (agrupación semántica de archivos). Espejo de card-core pero para datos."
 
 [dependencies]
-brahman-card = { path = "../../../shared/card/card-core" }
+card-core = { path = "../../../shared/card/card-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

@@ -1,12 +1,12 @@
-//! `charka-shadow` — el validador en sombra del transpilador.
+//! `chaka_app-shadow` — el validador en sombra del transpilador.
 //!
-//! Certifica que el pipeline de charka (lexer → parser → IR → codegen)
+//! Certifica que el pipeline de chaka_app (lexer → parser → IR → codegen)
 //! preserva la semántica del programa COBOL original. Lo hace con una
 //! **ejecución sombra**: un intérprete que corre el [`Ir`] directamente
-//! sobre los tipos de `charka-runtime`, sin compilar nada.
+//! sobre los tipos de `chaka_app-runtime`, sin compilar nada.
 //!
 //! El intérprete es una segunda ruta de ejecución, independiente del
-//! código que emite `charka-codegen`. Si la sombra y el transpilado
+//! código que emite `chaka_app-codegen`. Si la sombra y el transpilado
 //! produjeran salidas distintas, eso delataría un bug del codegen.
 //!
 //! - [`interpret`] — ejecuta un `Ir` y devuelve su salida.
@@ -14,7 +14,7 @@
 //!
 //! La referencia contra la que se comparan los resultados es, en la
 //! v1, un conjunto de salidas esperadas verificadas a mano (el corpus
-//! en `crates/modules/charka/corpus/`). Cuando haya un GnuCOBOL
+//! en `crates/modules/chaka_app/corpus/`). Cuando haya un GnuCOBOL
 //! disponible, un modo futuro podrá diferenciar contra el compilador
 //! de COBOL real — la validación «original vs transpilado» plena.
 //!
@@ -26,7 +26,7 @@
 mod field;
 mod interp;
 
-use charka_ir::Ir;
+use chaka_ir::Ir;
 use interp::Machine;
 
 /// Cómo terminó una ejecución sombra.
@@ -53,9 +53,9 @@ pub struct Outcome {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ShadowError {
     #[error("error de léxico: {0}")]
-    Lex(#[from] charka_lexer::LexError),
+    Lex(#[from] chaka_lexer::LexError),
     #[error("error de parseo: {0}")]
-    Parse(#[from] charka_parser::ParseError),
+    Parse(#[from] chaka_parser::ParseError),
 }
 
 /// Ejecuta un [`Ir`] en sombra y captura su salida.
@@ -75,11 +75,11 @@ pub fn interpret(ir: &Ir) -> Outcome {
     }
 }
 
-/// Corre el pipeline completo: fuente COBOL (formato libre) → salida.
+/// Corre el pipeline completo: fuente COBOL (format libre) → salida.
 pub fn run_source(cobol: &str) -> Result<Outcome, ShadowError> {
-    let tokens = charka_lexer::lex(cobol, charka_lexer::SourceFormat::Free)?;
-    let program = charka_parser::parse(&tokens)?;
-    let ir = charka_ir::lower(&program);
+    let tokens = chaka_lexer::lex(cobol, chaka_lexer::SourceFormat::Free)?;
+    let program = chaka_parser::parse(&tokens)?;
+    let ir = chaka_ir::lower(&program);
     Ok(interpret(&ir))
 }
 

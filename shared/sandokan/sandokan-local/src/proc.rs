@@ -10,7 +10,7 @@ pub fn read_mem_bytes(pid: i32) -> u64 {
     };
     for line in content.lines() {
         if let Some(rest) = line.strip_prefix("VmRSS:") {
-            // formato: "VmRSS:\t   1234 kB"
+            // format: "VmRSS:\t   1234 kB"
             let kb: u64 = rest
                 .split_whitespace()
                 .next()

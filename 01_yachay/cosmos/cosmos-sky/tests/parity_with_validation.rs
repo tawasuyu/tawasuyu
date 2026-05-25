@@ -9,10 +9,10 @@
 //! validation CLI in the broader regression suite; here we focus on
 //! geometric ICRF parity which the façade itself implements end-to-end.
 
-use eternal_sky::{Body, EphemerisSession, Instant, SessionConfig};
+use cosmos_sky::{Body, EphemerisSession, Instant, SessionConfig};
 
-use eternal_validation::fixture::Frame;
-use eternal_validation::oracle::{Backend, Oracle};
+use cosmos_validation::fixture::Frame;
+use cosmos_validation::oracle::{Backend, Oracle};
 
 #[test]
 fn geometric_mars_matches_oracle_exactly() {
@@ -78,7 +78,7 @@ fn apparent_planetary_pipeline_returns_self_consistent_ecliptic() {
 fn observer_topocentric_field_is_populated_when_observer_supplied() {
     let session = EphemerisSession::open(SessionConfig::vsop2013()).unwrap();
     let instant = Instant::from_civil_utc(2025, 6, 21, 16, 0, 0.0).unwrap();
-    let caracas = eternal_sky::Observer::from_degrees(10.4806, -66.9036, 900.0);
+    let caracas = cosmos_sky::Observer::from_degrees(10.4806, -66.9036, 900.0);
 
     let with_obs = session
         .body_apparent(Body::Sun, instant, Some(&caracas))
@@ -110,7 +110,7 @@ fn mean_node_matches_validation_module_exactly() {
     let t = Instant::from_civil_utc(2025, 1, 1, 0, 0, 0.0).unwrap();
     let tt = t.tt().unwrap();
     let from_sky = session.body_apparent(Body::MeanNode, t, None).unwrap();
-    let from_val = eternal_validation::lunar::mean_lunar_node(&tt);
+    let from_val = cosmos_validation::lunar::mean_lunar_node(&tt);
     assert_eq!(from_sky.ecliptic_of_date.longitude_rad, from_val);
     assert_eq!(from_sky.ecliptic_of_date.latitude_rad, 0.0);
 }
@@ -121,7 +121,7 @@ fn mean_lilith_matches_validation_module_exactly() {
     let t = Instant::from_civil_utc(2025, 1, 1, 0, 0, 0.0).unwrap();
     let tt = t.tt().unwrap();
     let from_sky = session.body_apparent(Body::MeanLilith, t, None).unwrap();
-    let from_val = eternal_validation::lunar::mean_lilith(&tt);
+    let from_val = cosmos_validation::lunar::mean_lilith(&tt);
     assert_eq!(from_sky.ecliptic_of_date.longitude_rad, from_val);
 }
 
@@ -130,7 +130,7 @@ fn true_node_without_spk_yields_unsupported_body_error() {
     let session = EphemerisSession::open(SessionConfig::vsop2013()).unwrap();
     let t = Instant::from_civil_utc(2025, 1, 1, 0, 0, 0.0).unwrap();
     let err = session.body_apparent(Body::TrueNode, t, None).unwrap_err();
-    matches!(err, eternal_sky::SkyError::UnsupportedBody { .. });
+    matches!(err, cosmos_sky::SkyError::UnsupportedBody { .. });
 }
 
 #[test]
@@ -138,7 +138,7 @@ fn asteroid_without_kernel_yields_unsupported_body_error() {
     let session = EphemerisSession::open(SessionConfig::vsop2013()).unwrap();
     let t = Instant::from_civil_utc(2025, 1, 1, 0, 0, 0.0).unwrap();
     let err = session.body_apparent(Body::Ceres, t, None).unwrap_err();
-    matches!(err, eternal_sky::SkyError::UnsupportedBody { .. });
+    matches!(err, cosmos_sky::SkyError::UnsupportedBody { .. });
 }
 
 #[test]

@@ -12,11 +12,11 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use brahman_card::{
+use card_core::{
     ulid::Ulid, Card, Flow, Flows, Lifecycle, Payload, Priority, Supervision, TypeRef,
     CARD_SCHEMA_VERSION,
 };
-use brahman_handshake::{client::Client, transport};
+use card_handshake::{client::Client, transport};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {

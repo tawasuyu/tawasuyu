@@ -24,12 +24,12 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use brahman_card::{
+use card_core::{
     Card, CardKind, Flow, Flows, Lifecycle, Payload, Priority, Supervision, TypeRef,
 };
-use brahman_handshake::client::{Client, ClientError};
-use brahman_handshake::messages::MatchEventKind;
-use brahman_handshake::transport;
+use card_handshake::client::{Client, ClientError};
+use card_handshake::messages::MatchEventKind;
+use card_handshake::transport;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConsumerError {
@@ -154,7 +154,7 @@ pub fn await_provider_blocking(
 /// cierra con Farewell antes de retornar (best-effort).
 pub async fn list_sessions(
     observer_label: impl Into<String>,
-) -> Result<brahman_handshake::messages::SessionList, ConsumerError> {
+) -> Result<card_handshake::messages::SessionList, ConsumerError> {
     let init_path = transport::default_socket_path();
     // Card mínima sin flow.input/output: el observer no participa en
     // matching, sólo establece sesión para poder consultar.
@@ -187,7 +187,7 @@ pub async fn list_sessions(
 /// `await_provider_blocking`: runtime current_thread efímero.
 pub fn list_sessions_blocking(
     observer_label: impl Into<String>,
-) -> Result<brahman_handshake::messages::SessionList, ConsumerError> {
+) -> Result<card_handshake::messages::SessionList, ConsumerError> {
     let label = observer_label.into();
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_io()
@@ -203,7 +203,7 @@ pub fn list_sessions_blocking(
 /// matching.
 pub async fn list_matches(
     observer_label: impl Into<String>,
-) -> Result<brahman_handshake::messages::MatchList, ConsumerError> {
+) -> Result<card_handshake::messages::MatchList, ConsumerError> {
     let init_path = transport::default_socket_path();
     let card = Card {
         payload: Payload::Virtual,
@@ -233,7 +233,7 @@ pub async fn list_matches(
 /// Wrapper bloqueante de [`list_matches`].
 pub fn list_matches_blocking(
     observer_label: impl Into<String>,
-) -> Result<brahman_handshake::messages::MatchList, ConsumerError> {
+) -> Result<card_handshake::messages::MatchList, ConsumerError> {
     let label = observer_label.into();
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_io()
@@ -259,7 +259,7 @@ fn describe_first_input(card: &Card) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use brahman_card::ulid::Ulid;
+    use card_core::ulid::Ulid;
 
     #[test]
     fn builder_sets_input_flow_with_primitive_type() {

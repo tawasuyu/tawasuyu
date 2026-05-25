@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::note::{Note, NoteId};
 
-/// El almacén de notas de badu.
+/// El almacén de notas de khipu_app.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NoteStore {
     notes: BTreeMap<NoteId, Note>,

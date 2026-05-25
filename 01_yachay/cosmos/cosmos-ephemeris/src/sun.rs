@@ -1,11 +1,11 @@
-use eternal_coords::Vector3;
-use eternal_core::AstroResult;
-use eternal_time::julian::JulianDate;
-use eternal_time::TDB;
+use cosmos_coords::Vector3;
+use cosmos_core::AstroResult;
+use cosmos_time::julian::JulianDate;
+use cosmos_time::TDB;
 
 use crate::earth::Vsop2013Earth;
 
-const DT_DAYS: f64 = 1.0 / eternal_core::constants::SECONDS_PER_DAY_F64;
+const DT_DAYS: f64 = 1.0 / cosmos_core::constants::SECONDS_PER_DAY_F64;
 
 pub struct Vsop2013Sun;
 
@@ -40,8 +40,8 @@ impl Vsop2013Sun {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eternal_core::constants::J2000_JD;
-    use eternal_time::julian::JulianDate;
+    use cosmos_core::constants::J2000_JD;
+    use cosmos_time::julian::JulianDate;
 
     #[test]
     fn sun_heliocentric_is_origin() {

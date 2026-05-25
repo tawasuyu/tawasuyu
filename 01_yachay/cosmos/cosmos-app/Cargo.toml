@@ -1,21 +1,21 @@
 [package]
-name = "cosmobiologia"
+name = "cosmos-app"
 version = { workspace = true }
 edition = { workspace = true }
 license = { workspace = true }
-description = "Tahuantinsuyu — estudio profesional de astrología. Tree + canvas + panel sobre yahweh + eternal-astrology."
+description = "Tahuantinsuyu — estudio profesional de astrología. Tree + canvas + panel sobre yahweh + cosmos-astrology."
 
 [dependencies]
-cosmobiologia-card = { path = "../cosmos-card" }
-cosmobiologia-canvas = { path = "../cosmos-canvas" }
-cosmobiologia-engine = { path = "../cosmos-engine" }
-cosmobiologia-model = { path = "../cosmos-model" }
-cosmobiologia-modules = { path = "../cosmos-modules" }
-cosmobiologia-panel = { path = "../cosmos-panel" }
-cosmobiologia-store = { path = "../cosmos-store" }
-cosmobiologia-theme = { path = "../cosmos-theme" }
-cosmobiologia-tree = { path = "../cosmos-tree" }
-brahman-sidecar = { path = "../../../shared/card/card-sidecar" }
+cosmos-card = { path = "../cosmos-card" }
+cosmos-canvas = { path = "../cosmos-canvas" }
+cosmos-engine = { path = "../cosmos-engine" }
+cosmos-model = { path = "../cosmos-model" }
+cosmos-modules = { path = "../cosmos-modules" }
+cosmos-panel = { path = "../cosmos-panel" }
+cosmos-store = { path = "../cosmos-store" }
+cosmos-theme = { path = "../cosmos-theme" }
+cosmos-tree = { path = "../cosmos-tree" }
+card-sidecar = { path = "../../../shared/card/card-sidecar" }
 
 nahual-core = { workspace = true }
 nahual-theme = { workspace = true }
@@ -31,5 +31,5 @@ serde_json = { workspace = true }
 gpui = { workspace = true, features = ["test-support"] }
 
 [[bin]]
-name = "cosmobiologia"
+name = "cosmos-app"
 path = "src/main.rs"

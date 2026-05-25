@@ -15,7 +15,7 @@ path = "src/main.rs"
 [dependencies]
 shuma-card = { path = "../sandbox/shuma-card" }
 shuma-protocol = { path = "../sandbox/shuma-protocol" }
-brahman-card = { path = "../../../shared/card/card-core" }
+card-core = { path = "../../../shared/card/card-core" }
 anyhow = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }

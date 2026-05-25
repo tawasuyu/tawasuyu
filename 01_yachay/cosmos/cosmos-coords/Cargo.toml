@@ -1,5 +1,5 @@
 [package]
-name = "eternal-coords"
+name = "cosmos-coords"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -10,9 +10,9 @@ keywords = ["astronomy", "coordinates", "celestial", "astrometry", "icrs"]
 categories = ["science"]
 
 [dependencies]
-eternal-core.workspace = true
+cosmos-core.workspace = true
 celestial-eop-data.workspace = true
-eternal-time.workspace = true
+cosmos-time.workspace = true
 libm.workspace = true
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
@@ -20,7 +20,7 @@ thiserror.workspace = true
 
 [features]
 default = []
-serde = ["dep:serde", "dep:serde_json", "eternal-core/serde", "eternal-time/serde"]
+serde = ["dep:serde", "dep:serde_json", "cosmos-core/serde", "cosmos-time/serde"]
 
 [dev-dependencies]
 criterion.workspace = true

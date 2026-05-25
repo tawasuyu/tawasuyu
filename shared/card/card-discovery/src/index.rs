@@ -1,6 +1,6 @@
 //! Índice en memoria de Cards, con filtros de búsqueda.
 
-use brahman_card::{Capability, Card, CardKind};
+use card_core::{Capability, Card, CardKind};
 use ulid::Ulid;
 
 /// Colección consultable de Cards.

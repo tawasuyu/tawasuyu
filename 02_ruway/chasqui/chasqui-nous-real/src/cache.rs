@@ -22,7 +22,7 @@
 //! ## Versionado
 //!
 //! El nombre del tree (`embed_cache_v1`) es el "schema version" del
-//! formato value. Si bumpeamos a (p. ej.) almacenar también el
+//! format value. Si bumpeamos a (p. ej.) almacenar también el
 //! tiempo de cómputo o el ONNX session id, creamos `embed_cache_v2`
 //! y el viejo queda como dato muerto que sled puede limpiar.
 //!

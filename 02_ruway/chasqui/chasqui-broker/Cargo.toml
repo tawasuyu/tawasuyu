@@ -1,5 +1,5 @@
 [package]
-name = "brahman-broker"
+name = "chasqui-broker"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,7 +9,7 @@ publish.workspace = true
 description = "Brahman — broker de tipos: empareja productores↔consumidores por TypeRef con matching híbrido (exact + structural) y prioridad."
 
 [dependencies]
-brahman-card = { path = "../../../shared/card/card-core" }
+card-core = { path = "../../../shared/card/card-core" }
 serde = { workspace = true }
 thiserror = { workspace = true }
 ulid = { workspace = true }

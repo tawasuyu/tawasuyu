@@ -7,18 +7,18 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use serde::Deserialize;
 
-use eternal_core::Location;
-use eternal_time::julian::JulianDate;
-use eternal_time::scales::conversions::ToUT1WithDeltaT;
-use eternal_time::scales::ToTTFromTDB;
-use eternal_time::sidereal::GAST;
-use eternal_time::TDB;
+use cosmos_core::Location;
+use cosmos_time::julian::JulianDate;
+use cosmos_time::scales::conversions::ToUT1WithDeltaT;
+use cosmos_time::scales::ToTTFromTDB;
+use cosmos_time::sidereal::GAST;
+use cosmos_time::TDB;
 
-use eternal_validation::houses::{
+use cosmos_validation::houses::{
     ascendant, campanus_houses, equal_houses, koch_houses, midheaven, placidus_houses,
     porphyry_houses, regiomontanus_houses, whole_sign_houses,
 };
-use eternal_validation::sidereal::true_obliquity_iau2006a;
+use cosmos_validation::sidereal::true_obliquity_iau2006a;
 
 #[derive(Parser)]
 #[command(version, about = "compare oracle Asc/MC and house cusps vs Swiss reference")]

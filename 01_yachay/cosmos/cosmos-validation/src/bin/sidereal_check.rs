@@ -16,17 +16,17 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use serde::Deserialize;
 
-use eternal_time::julian::JulianDate;
-use eternal_time::scales::ToTTFromTDB;
-use eternal_time::TDB;
+use cosmos_time::julian::JulianDate;
+use cosmos_time::scales::ToTTFromTDB;
+use cosmos_time::TDB;
 
-use eternal_validation::fixture::{Corrections, Fixture, Frame};
-use eternal_validation::oracle::{Backend, Oracle};
-use eternal_validation::sidereal::{
+use cosmos_validation::fixture::{Corrections, Fixture, Frame};
+use cosmos_validation::oracle::{Backend, Oracle};
+use cosmos_validation::sidereal::{
     ecliptic_lon_lat, lahiri_ayanamsha, lahiri_sidereal_longitude,
     tet_equatorial_to_ecliptic_of_date,
 };
-use eternal_coords::Vector3;
+use cosmos_coords::Vector3;
 
 #[derive(Parser)]
 #[command(version, about = "compare oracle Lahiri sidereal vs Swiss reference values")]

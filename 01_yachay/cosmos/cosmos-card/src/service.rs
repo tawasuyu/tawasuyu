@@ -24,17 +24,17 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use cosmobiologia_engine::{compose_with_options, NatalOptions, RenderModel};
-use cosmobiologia_model::{Chart, ChartId, ChartKind, ContactId, StoredBirthData, StoredChartConfig};
+use cosmos_engine::{compose_with_options, NatalOptions, RenderModel};
+use cosmos_model::{Chart, ChartId, ChartKind, ContactId, StoredBirthData, StoredChartConfig};
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tracing::{debug, error, info, warn};
 
 /// Path canónico del service socket. Usa `XDG_RUNTIME_DIR` si está
-/// (por usuario, no persistente), sino cae a `/tmp/cosmobiologia.sock`.
+/// (por usuario, no persistente), sino cae a `/tmp/cosmos_app.sock`.
 pub fn default_service_socket() -> PathBuf {
-    if let Some(rt) = directories::ProjectDirs::from("net", "gioser", "cosmobiologia") {
+    if let Some(rt) = directories::ProjectDirs::from("net", "gioser", "cosmos_app") {
         // ProjectDirs no expone runtime_dir directo en todas las
         // plataformas — usamos cache_dir como fallback estable.
         let mut p = rt.cache_dir().to_path_buf();
@@ -42,7 +42,7 @@ pub fn default_service_socket() -> PathBuf {
         p.push("service.sock");
         return p;
     }
-    PathBuf::from("/tmp/cosmobiologia.sock")
+    PathBuf::from("/tmp/cosmos_app.sock")
 }
 
 // =====================================================================
@@ -107,7 +107,7 @@ pub async fn serve(socket_path: PathBuf) -> Result<(), ServiceError> {
     let _ = std::fs::remove_file(&socket_path);
 
     let listener = UnixListener::bind(&socket_path)?;
-    info!(socket = %socket_path.display(), "cosmobiologia service socket arriba");
+    info!(socket = %socket_path.display(), "cosmos_app service socket arriba");
 
     loop {
         let (stream, _addr) = listener.accept().await?;
@@ -221,7 +221,7 @@ async fn read_frame<T: for<'de> Deserialize<'de>>(
 /// thread termina. El binario GUI sigue funcionando standalone.
 pub fn spawn_service_thread(socket_path: PathBuf) {
     std::thread::Builder::new()
-        .name("cosmobiologia-service".into())
+        .name("cosmos_app-service".into())
         .spawn(move || {
             let rt = match tokio::runtime::Builder::new_current_thread()
                 .enable_io()

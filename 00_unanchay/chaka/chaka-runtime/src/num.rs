@@ -1,6 +1,6 @@
 //! `Num` — un campo numérico COBOL en tiempo de ejecución.
 
-use charka_bcd::{Decimal, Picture, Rounding};
+use chaka_bcd::{Decimal, Picture, Rounding};
 
 /// Un campo numérico: un valor [`Decimal`] más la [`Picture`] que lo
 /// conforma. Toda asignación pasa por la PICTURE — ese es el `MOVE` de

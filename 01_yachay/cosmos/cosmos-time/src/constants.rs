@@ -1,12 +1,12 @@
 pub const UNIX_EPOCH_JD: f64 = 2440587.5;
 
-pub const MODIFIED_JULIAN_DATE_EPOCH: f64 = eternal_core::constants::MJD_ZERO_POINT;
+pub const MODIFIED_JULIAN_DATE_EPOCH: f64 = cosmos_core::constants::MJD_ZERO_POINT;
 
 pub const TAI_TO_TT_OFFSET_SECONDS: f64 = 32.184;
 
 pub const GPS_TO_TAI_OFFSET_SECONDS: f64 = 19.0;
 
-pub const SECONDS_TO_DAYS: f64 = 1.0 / eternal_core::constants::SECONDS_PER_DAY_F64;
+pub const SECONDS_TO_DAYS: f64 = 1.0 / cosmos_core::constants::SECONDS_PER_DAY_F64;
 
 pub const TT_MINUS_TAI_SECONDS: f64 = TAI_TO_TT_OFFSET_SECONDS;
 
@@ -23,7 +23,7 @@ pub const TDB_OFFSET_1977: f64 = -6.55e-5;
 pub const MJD_1977_JAN_1: f64 = 43144.0;
 
 pub const TCG_REFERENCE_EPOCH: f64 =
-    MJD_1977_JAN_1 + TT_TAI_OFFSET / eternal_core::constants::SECONDS_PER_DAY_F64;
+    MJD_1977_JAN_1 + TT_TAI_OFFSET / cosmos_core::constants::SECONDS_PER_DAY_F64;
 
 pub const TCG_RATE_RATIO: f64 = TCG_RATE_LG / (1.0 - TCG_RATE_LG);
 

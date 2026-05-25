@@ -1,4 +1,4 @@
-//! `cosmobiologia-store` — persistencia SQLite del estudio astrológico.
+//! `cosmos_app-store` — persistencia SQLite del estudio astrológico.
 //!
 //! Una sola conexión `rusqlite` envuelta en `Arc<Mutex>` para que la app
 //! GPUI la comparta entre threads sin pelearse con el ownership. La
@@ -7,7 +7,7 @@
 //!
 //! Patrón inspirado en `nahual_provider_sqlite::SqliteDataProvider` pero
 //! con dominio propio (no extiende el `DataProvider` agnóstico — esa
-//! integración viene en `cosmobiologia-tree` que envuelve este store
+//! integración viene en `cosmos_app-tree` que envuelve este store
 //! detrás del trait de nahual).
 
 #![forbid(unsafe_code)]
@@ -20,7 +20,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension, params};
 use thiserror::Error;
 
-use cosmobiologia_model::{
+use cosmos_model::{
     Chart, ChartId, ChartKind, Contact, ContactId, Group, GroupId, ModuleState, StoredBirthData,
     StoredChartConfig,
 };
@@ -38,7 +38,7 @@ pub enum StoreError {
     #[error("ulid decode: {0}")]
     UlidDecode(#[from] ulid::DecodeError),
     #[error("model invariant: {0}")]
-    Model(#[from] cosmobiologia_model::ModelError),
+    Model(#[from] cosmos_model::ModelError),
     #[error("not found: {0}")]
     NotFound(String),
 }
@@ -622,7 +622,7 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cosmobiologia_model::{ModuleState, StoredBirthData, StoredChartConfig};
+    use cosmos_model::{ModuleState, StoredBirthData, StoredChartConfig};
 
     #[test]
     fn open_and_migrate() {

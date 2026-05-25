@@ -138,7 +138,7 @@ struct Inhibitor {
 }
 
 /// Une los `what` de los inhibidores de un `mode` dado en una lista de
-/// tokens únicos separados por `:` — el formato de las propiedades
+/// tokens únicos separados por `:` — el format de las propiedades
 /// `BlockInhibited` / `DelayInhibited`.
 fn inhibited_what(inhibitors: &[Inhibitor], mode: &str) -> String {
     let mut tokens: Vec<&str> = Vec::new();

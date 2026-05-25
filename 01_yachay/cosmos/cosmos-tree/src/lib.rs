@@ -1,4 +1,4 @@
-//! `cosmobiologia-tree` — explorador jerárquico Groups → Contacts → Charts.
+//! `cosmos_app-tree` — explorador jerárquico Groups → Contacts → Charts.
 //!
 //! Envuelve [`nahual_widget_tree::TreeView`] con la lógica de dominio
 //! de Tahuantinsuyu. Los `RowId` codifican el tipo con prefijo:
@@ -29,11 +29,11 @@ use gpui::{
     SharedString, Window, div, hsla, prelude::*, px,
 };
 
-use cosmobiologia_model::{
+use cosmos_model::{
     ChartId, ChartKind, ContactId, FreeChartId, GroupId, StoredBirthData, StoredChartConfig,
     TimeCertainty, TreeSelection,
 };
-use cosmobiologia_store::Store;
+use cosmos_store::Store;
 use nahual_theme::Theme;
 use nahual_widget_text_input::{TextInput, TextInputEvent};
 use nahual_widget_tree::{RowId, RowKind, TreeEvent as InnerTreeEvent, TreeRow, TreeView};
@@ -270,7 +270,7 @@ pub struct CityPreset {
 /// Atlas hardcoded — 90 ciudades canónicas que cubren la mayoría de
 /// casos de uso. El usuario puede sobrescribirlas pasando un atlas
 /// custom vía [`TahuantinsuyuTree::set_city_atlas`] (típicamente
-/// cargado desde `$XDG_DATA_HOME/cosmobiologia/atlas.tsv`).
+/// cargado desde `$XDG_DATA_HOME/cosmos_app/atlas.tsv`).
 pub fn default_city_presets() -> Vec<CityPreset> {
     vec![
         // Latinoamérica
@@ -421,7 +421,7 @@ impl TahuantinsuyuTree {
     pub fn new(store: Store, cx: &mut Context<'_, Self>) -> Self {
         cx.observe_global::<Theme>(|_, cx| cx.notify()).detach();
 
-        let inner = cx.new(|cx| TreeView::new("cosmobiologia-tree", cx));
+        let inner = cx.new(|cx| TreeView::new("cosmos_app-tree", cx));
         cx.subscribe(&inner, |this: &mut Self, _, ev, cx| {
             this.on_inner(ev, cx);
         })
@@ -1507,7 +1507,7 @@ fn parse_field<T: std::str::FromStr>(s: &str, field: &str) -> Result<T, String> 
 // Lookups auxiliares (DFS por la jerarquía)
 // =====================================================================
 
-fn find_group_name(roots: &[cosmobiologia_model::Group], store: &Store, id: GroupId) -> Option<String> {
+fn find_group_name(roots: &[cosmos_model::Group], store: &Store, id: GroupId) -> Option<String> {
     for g in roots {
         if g.id == id {
             return Some(g.name.clone());
@@ -1522,7 +1522,7 @@ fn find_group_name(roots: &[cosmobiologia_model::Group], store: &Store, id: Grou
 }
 
 fn find_contact_name(
-    in_group: &[cosmobiologia_model::Contact],
+    in_group: &[cosmos_model::Contact],
     store: &Store,
     id: ContactId,
 ) -> Option<String> {
@@ -1541,7 +1541,7 @@ fn find_contact_name(
 }
 
 fn find_contact_in_groups(
-    groups: &[cosmobiologia_model::Group],
+    groups: &[cosmos_model::Group],
     store: &Store,
     id: ContactId,
 ) -> Option<String> {
@@ -1602,7 +1602,7 @@ impl Render for TahuantinsuyuTree {
             .child(self.search_input.clone());
 
         let mut root = div()
-            .id("cosmobiologia-tree-root")
+            .id("cosmos_app-tree-root")
             .size_full()
             .relative()
             .bg(theme.bg_panel.clone())

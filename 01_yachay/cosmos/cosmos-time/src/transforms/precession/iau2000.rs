@@ -1,7 +1,7 @@
 use super::{PrecessionModel, PrecessionResult};
 use crate::{TimeError, TimeResult, TT};
-use eternal_core::constants::{DAYS_PER_JULIAN_CENTURY, J2000_JD};
-use eternal_core::precession::iau2000::PrecessionIAU2000 as CoreCalculator;
+use cosmos_core::constants::{DAYS_PER_JULIAN_CENTURY, J2000_JD};
+use cosmos_core::precession::iau2000::PrecessionIAU2000 as CoreCalculator;
 
 pub fn calculate(tt: &TT) -> TimeResult<PrecessionResult> {
     let jd = tt.to_julian_date();

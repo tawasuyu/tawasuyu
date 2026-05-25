@@ -1,4 +1,4 @@
-//! Imprime el keymap por defecto de mirada en formato RON — exactamente
+//! Imprime el keymap por defecto de mirada en format RON — exactamente
 //! lo que la app escribe la primera vez en `~/.config/mirada/keymap.ron`.
 //!
 //! ```sh

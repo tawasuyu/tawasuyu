@@ -295,7 +295,7 @@ libp2p = { version = "0.56", features = ["tokio", "tcp", "noise", "yamux", "macr
 libp2p-stream = "=0.4.0-alpha"
 libp2p-allow-block-list = "0.6"
 
-# === SSH (brahman-ssh-multiplex, sandokan RemoteEngine, matilda) ===
+# === SSH (ssh, sandokan RemoteEngine, matilda) ===
 russh = "0.54"
 
 # === Math determinista cross-platform (dominium) ===
@@ -321,7 +321,7 @@ fuser = { version = "0.15", default-features = false }
 clap = { version = "4", features = ["derive"] }
 rpassword = "7"
 
-# === PAM (brahman-auth) ===
+# === PAM (auth-core) ===
 pam = "0.8"
 
 # === D-Bus (arje compat) ===
@@ -383,11 +383,11 @@ pineal-export = { path = "00_unanchay/pineal/pineal-export" }
 pineal = { path = "00_unanchay/pineal/pineal-umbrella" }
 
 # === auto: declarados por crates internos faltantes ===
-eternal-coords = { path = "01_yachay/cosmos/cosmos-coords" }
-eternal-core = { path = "01_yachay/cosmos/cosmos-core" }
-eternal-ephemeris = { path = "01_yachay/cosmos/cosmos-ephemeris" }
-eternal-time = { path = "01_yachay/cosmos/cosmos-time" }
-eternal-wcs = { path = "01_yachay/cosmos/cosmos-wcs" }
+cosmos-coords = { path = "01_yachay/cosmos/cosmos-coords" }
+cosmos-core = { path = "01_yachay/cosmos/cosmos-core" }
+cosmos-ephemeris = { path = "01_yachay/cosmos/cosmos-ephemeris" }
+cosmos-time = { path = "01_yachay/cosmos/cosmos-time" }
+cosmos-wcs = { path = "01_yachay/cosmos/cosmos-wcs" }
 
 # === auto: externas de eternal ===
 celestial-eop-data = { version = "0.1"}

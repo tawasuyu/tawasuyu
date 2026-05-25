@@ -15,10 +15,10 @@
 //! sub-arcsec agreement with Swiss; without it Rigil Kentaurus would
 //! drift by ~0.95″.
 
-use eternal_core::utils::jd_to_centuries;
-use eternal_core::Vector3;
-use eternal_ephemeris::jpl::SpkFile;
-use eternal_time::{NutationCalculator, TT};
+use cosmos_core::utils::jd_to_centuries;
+use cosmos_core::Vector3;
+use cosmos_ephemeris::jpl::SpkFile;
+use cosmos_time::{NutationCalculator, TT};
 
 use crate::oracle::OracleError;
 use crate::sidereal::{ecliptic_lon_lat, tet_equatorial_to_ecliptic_of_date};
@@ -81,7 +81,7 @@ pub fn by_name(name: &str) -> Option<&'static Star> {
 }
 
 /// 1 parsec in km: AU_KM × (180·3600/π).
-const PARSEC_KM: f64 = eternal_core::constants::AU_KM * 206_264.806_247_096_36;
+const PARSEC_KM: f64 = cosmos_core::constants::AU_KM * 206_264.806_247_096_36;
 
 /// ICRS unit direction at the given epoch, after applying space motion
 /// linearly (proper motion). The radial-velocity term has a sub-µas
@@ -120,7 +120,7 @@ pub fn apparent_ecliptic_of_date(
     tt: &TT,
     jd_tdb: f64,
 ) -> Result<(f64, f64), OracleError> {
-    use eternal_core::constants::{AU_KM, SECONDS_PER_DAY_F64};
+    use cosmos_core::constants::{AU_KM, SECONDS_PER_DAY_F64};
 
     // Earth state in ICRF for aberration + LD geometry.
     // We use 399 wrt 3 + 3 wrt 0 chain since we don't have a direct
@@ -187,12 +187,12 @@ pub fn apparent_ecliptic_of_date(
         }
         None => dir_icrs,
     };
-    let dir_after_ld = eternal_coords::aberration::apply_light_deflection(
+    let dir_after_ld = cosmos_coords::aberration::apply_light_deflection(
         dir_geocentric,
         sun_to_earth_unit,
         sun_earth_dist_au,
     );
-    let dir_after_ab = eternal_coords::aberration::apply_aberration(
+    let dir_after_ab = cosmos_coords::aberration::apply_aberration(
         dir_after_ld,
         earth_vel_au_day,
         sun_earth_dist_au,
@@ -204,7 +204,7 @@ pub fn apparent_ecliptic_of_date(
         .map_err(|e| OracleError::Inner(format!("nutation: {:?}", e)))?;
     let tt_jd = tt.to_julian_date();
     let t_centuries = jd_to_centuries(tt_jd.jd1(), tt_jd.jd2());
-    let npb = eternal_core::precession::PrecessionIAU2006::new().npb_matrix_iau2006a(
+    let npb = cosmos_core::precession::PrecessionIAU2006::new().npb_matrix_iau2006a(
         t_centuries,
         nut.nutation_longitude(),
         nut.nutation_obliquity(),

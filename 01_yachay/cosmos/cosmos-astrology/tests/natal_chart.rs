@@ -7,10 +7,10 @@
 //! 4. Houses with closed-form definitions (Whole-Sign, Equal) match
 //!    the canonical formulas exactly.
 
-use eternal_astrology::{
+use cosmos_astrology::{
     Ayanamsha, BirthData, ChartConfig, HouseSystem, NatalChart, Sign, Zodiac,
 };
-use eternal_sky::{Body, EphemerisSession, Instant, Observer, SessionConfig};
+use cosmos_sky::{Body, EphemerisSession, Instant, Observer, SessionConfig};
 
 fn fixture_session() -> EphemerisSession {
     EphemerisSession::open(SessionConfig::vsop2013()).unwrap()

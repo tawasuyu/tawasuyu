@@ -1,5 +1,5 @@
 //! Paleta astrológica agnóstica (`Rgba`, no `Hsla` de gpui). Replica
-//! los slots de `cosmobiologia-theme::AstroPalette` con `dark()` y
+//! los slots de `cosmos_app-theme::AstroPalette` con `dark()` y
 //! `light()`, sin arrastrar dependencia de gpui. El canvas nativo
 //! traduce desde su `AstroPalette` Hsla; el cliente WASM usa esta
 //! palette directamente.

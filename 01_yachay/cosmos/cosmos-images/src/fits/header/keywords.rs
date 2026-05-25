@@ -272,11 +272,11 @@ impl KeywordBuilder {
         self
     }
 
-    pub fn date_from_utc(&mut self, utc: &eternal_time::UTC) -> &mut Self {
+    pub fn date_from_utc(&mut self, utc: &cosmos_time::UTC) -> &mut Self {
         self.date(utc.to_iso8601())
     }
 
-    pub fn date_obs_from_utc(&mut self, utc: &eternal_time::UTC) -> &mut Self {
+    pub fn date_obs_from_utc(&mut self, utc: &cosmos_time::UTC) -> &mut Self {
         self.date_obs(utc.to_iso8601())
     }
 
@@ -501,12 +501,12 @@ mod tests {
 
     #[test]
     fn keyword_real_creates_real_keyword() {
-        let keyword = Keyword::real("CRVAL1", eternal_core::constants::PI);
+        let keyword = Keyword::real("CRVAL1", cosmos_core::constants::PI);
 
         assert_eq!(keyword.name, "CRVAL1");
         assert_eq!(
             keyword.value,
-            Some(KeywordValue::Real(eternal_core::constants::PI))
+            Some(KeywordValue::Real(cosmos_core::constants::PI))
         );
         assert_eq!(keyword.comment, None);
     }
@@ -623,14 +623,14 @@ mod tests {
         let value = KeywordValue::Logical(true);
         assert_eq!(value.as_integer(), None);
 
-        let value = KeywordValue::Real(eternal_core::constants::PI);
+        let value = KeywordValue::Real(cosmos_core::constants::PI);
         assert_eq!(value.as_integer(), None);
     }
 
     #[test]
     fn keyword_value_as_real_returns_real() {
-        let value = KeywordValue::Real(eternal_core::constants::PI);
-        assert_eq!(value.as_real(), Some(eternal_core::constants::PI));
+        let value = KeywordValue::Real(cosmos_core::constants::PI);
+        assert_eq!(value.as_real(), Some(cosmos_core::constants::PI));
 
         let value = KeywordValue::Real(-2.71);
         assert_eq!(value.as_real(), Some(-2.71));
@@ -695,10 +695,10 @@ mod tests {
 
     #[test]
     fn keyword_value_display_real() {
-        let value = KeywordValue::Real(eternal_core::constants::PI);
+        let value = KeywordValue::Real(cosmos_core::constants::PI);
         assert_eq!(
             format!("{}", value),
-            format!("{}", eternal_core::constants::PI)
+            format!("{}", cosmos_core::constants::PI)
         );
 
         let value = KeywordValue::Real(-2.71);
@@ -725,10 +725,10 @@ mod tests {
         let value = KeywordValue::Complex(1.0, 2.0);
         assert_eq!(format!("{}", value), "(1, 2)");
 
-        let value = KeywordValue::Complex(-1.5, eternal_core::constants::PI);
+        let value = KeywordValue::Complex(-1.5, cosmos_core::constants::PI);
         assert_eq!(
             format!("{}", value),
-            format!("(-1.5, {})", eternal_core::constants::PI)
+            format!("(-1.5, {})", cosmos_core::constants::PI)
         );
 
         let value = KeywordValue::Complex(0.0, 0.0);
@@ -844,7 +844,7 @@ mod tests {
     #[test]
     fn keyword_builder_date_from_utc() {
         use crate::core::BitPix;
-        let utc = eternal_time::UTC::j2000();
+        let utc = cosmos_time::UTC::j2000();
         let mut builder = KeywordBuilder::from_image(&[100, 100], BitPix::F32);
         builder.date_from_utc(&utc);
         let keywords = builder.build();

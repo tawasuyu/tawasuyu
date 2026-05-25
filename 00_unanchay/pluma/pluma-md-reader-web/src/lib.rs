@@ -53,7 +53,7 @@ impl Reader {
 
     /// Renderea un string markdown directamente, sin fetch.
     pub fn render_md(&self, md: &str, theme: &str) {
-        let html = fana_md::to_themed_html(md, theme);
+        let html = pluma_md::to_themed_html(md, theme);
         self.container.set_inner_html(&html);
     }
 

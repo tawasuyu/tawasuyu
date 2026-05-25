@@ -5,10 +5,10 @@
 //! For sub-mas precision you would swap in a JPL SPK kernel via
 //! `SessionConfig::with_spk(...)`.
 
-use eternal_astrology::{
+use cosmos_astrology::{
     find_aspects, AspectKind, BirthData, ChartConfig, HouseSystem, NatalChart, OrbTable, Zodiac,
 };
-use eternal_sky::{EphemerisSession, Instant, Observer, SessionConfig};
+use cosmos_sky::{EphemerisSession, Instant, Observer, SessionConfig};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── Birth data ────────────────────────────────────────────────────
@@ -52,7 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── Houses ────────────────────────────────────────────────────────
     println!("House Cusps");
     for (i, cusp) in chart.houses.cusps.iter().enumerate() {
-        let sl = eternal_astrology::SignedLongitude::from_radians(*cusp);
+        let sl = cosmos_astrology::SignedLongitude::from_radians(*cusp);
         println!("  H{:>2}: {}", i + 1, sl.to_chart_format());
     }
     println!();

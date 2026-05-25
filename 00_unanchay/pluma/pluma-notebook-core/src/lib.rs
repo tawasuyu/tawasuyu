@@ -1,6 +1,6 @@
-//! `yachay-core` — el núcleo de los notebooks reproducibles.
+//! `pluma_notebook_app-core` — el núcleo de los notebooks reproducibles.
 //!
-//! Un notebook de yachay es a la vez una secuencia de celdas (el orden
+//! Un notebook de pluma_notebook_app es a la vez una secuencia de celdas (el orden
 //! de lectura) y un DAG de dependencias (el orden de ejecución). Editar
 //! una celda marca obsoletas a sus descendientes; un digest Merkle
 //! certifica que dos corridas del mismo notebook producen lo mismo —

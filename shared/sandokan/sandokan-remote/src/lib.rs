@@ -11,7 +11,7 @@
 #![forbid(unsafe_code)]
 
 use async_trait::async_trait;
-use brahman_ssh_multiplex::{SshConfig, SshSession};
+use ssh::{SshConfig, SshSession};
 use sandokan_core::{Engine, EngineError, ExecHandle, Intent, TelemetryFrame};
 use sandokan_daemon::{read_frame, write_frame, DaemonRequest, DaemonResponse};
 use sandokan_lifecycle::LifecycleState;

@@ -1,10 +1,10 @@
 //! Tahuantinsuyu — binario standalone.
 //!
 //! Boot:
-//! 1. `cosmobiologia_card::spawn_sidecar()` se presenta al Init brahman
+//! 1. `cosmos_card::spawn_sidecar()` se presenta al Init brahman
 //!    (fire-and-forget; si no hay Init, la app sigue standalone).
-//! 2. Abre la DB SQLite en `$XDG_DATA_HOME/cosmobiologia/charts.db`
-//!    (fallback a `~/.local/share/cosmobiologia/charts.db`).
+//! 2. Abre la DB SQLite en `$XDG_DATA_HOME/cosmos_app/charts.db`
+//!    (fallback a `~/.local/share/cosmos_app/charts.db`).
 //! 3. Levanta GPUI con [`nahual_theme::Theme::install_default`].
 //! 4. Compone el shell: [`Shell`] dueño del tree (izq), canvas (centro)
 //!    y panel (abajo). Cablea las suscripciones cross-widget.
@@ -33,7 +33,7 @@ use gpui::{
     WindowOptions, px, size,
 };
 
-use cosmobiologia_store::Store;
+use cosmos_store::Store;
 use nahual_theme::Theme;
 
 use crate::shell::Shell;
@@ -43,14 +43,14 @@ const APP_TITLE: &str = "Tahuantinsuyu";
 
 fn main() {
     // Sidecar brahman primero — si el Init está corriendo, nos presentamos.
-    cosmobiologia_card::spawn_sidecar();
+    cosmos_card::spawn_sidecar();
     // Service socket: thread separado escuchando ComputeRequest. Otros
     // módulos brahman pueden conectar y pedir cómputos de cartas
     // natales sin GUI. Si el bind falla (socket ya tomado, sin
     // permisos), loggea warn y la app sigue corriendo standalone.
-    let service_socket = cosmobiologia_card::service::default_service_socket();
-    eprintln!("[cosmobiologia] service socket → {}", service_socket.display());
-    cosmobiologia_card::service::spawn_service_thread(service_socket);
+    let service_socket = cosmos_card::service::default_service_socket();
+    eprintln!("[cosmos_app] service socket → {}", service_socket.display());
+    cosmos_card::service::spawn_service_thread(service_socket);
 
     // DB en directorio de datos del usuario.
     let db_path = resolve_db_path();
@@ -58,7 +58,7 @@ fn main() {
         Ok(s) => s,
         Err(e) => {
             eprintln!(
-                "[cosmobiologia] no se pudo abrir la DB en {:?}: {} — usando memoria",
+                "[cosmos_app] no se pudo abrir la DB en {:?}: {} — usando memoria",
                 db_path, e
             );
             Store::in_memory().expect("in-memory store")
@@ -86,7 +86,7 @@ fn main() {
 }
 
 fn resolve_db_path() -> PathBuf {
-    if let Some(dirs) = directories::ProjectDirs::from("net", "gioser", "cosmobiologia") {
+    if let Some(dirs) = directories::ProjectDirs::from("net", "gioser", "cosmos_app") {
         let dir = dirs.data_dir().to_path_buf();
         let _ = std::fs::create_dir_all(&dir);
         return dir.join(DB_FILENAME);

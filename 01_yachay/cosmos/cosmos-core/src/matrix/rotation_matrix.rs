@@ -24,7 +24,7 @@
 //! you compute `B * A` (note the order -- the rightmost matrix acts first on the vector).
 //!
 //! ```
-//! use eternal_core::RotationMatrix3;
+//! use cosmos_core::RotationMatrix3;
 //!
 //! // Build up a combined precession-nutation-bias transformation
 //! let mut bias = RotationMatrix3::identity();
@@ -75,7 +75,7 @@
 //! to compute than a general matrix inverse and is numerically stable:
 //!
 //! ```
-//! use eternal_core::RotationMatrix3;
+//! use cosmos_core::RotationMatrix3;
 //!
 //! let mut m = RotationMatrix3::identity();
 //! m.rotate_z(0.5);
@@ -93,7 +93,7 @@
 //! and latitude), use [`transform_spherical`](RotationMatrix3::transform_spherical):
 //!
 //! ```
-//! use eternal_core::RotationMatrix3;
+//! use cosmos_core::RotationMatrix3;
 //! use std::f64::consts::PI;
 //!
 //! let mut frame_rotation = RotationMatrix3::identity();
@@ -113,7 +113,7 @@ use std::fmt;
 /// # Construction
 ///
 /// ```
-/// use eternal_core::RotationMatrix3;
+/// use cosmos_core::RotationMatrix3;
 ///
 /// // Start with identity and build up rotations
 /// let mut m = RotationMatrix3::identity();
@@ -140,7 +140,7 @@ impl RotationMatrix3 {
     /// the starting point for building up rotation sequences.
     ///
     /// ```
-    /// use eternal_core::RotationMatrix3;
+    /// use cosmos_core::RotationMatrix3;
     ///
     /// let m = RotationMatrix3::identity();
     /// let v = [1.0, 2.0, 3.0];
@@ -161,7 +161,7 @@ impl RotationMatrix3 {
     /// [`is_rotation_matrix`](Self::is_rotation_matrix) to check if needed.
     ///
     /// ```
-    /// use eternal_core::RotationMatrix3;
+    /// use cosmos_core::RotationMatrix3;
     ///
     /// // A rotation by 90 degrees about Z
     /// let m = RotationMatrix3::from_array([
@@ -218,7 +218,7 @@ impl RotationMatrix3 {
     /// nutation models.
     ///
     /// ```
-    /// use eternal_core::RotationMatrix3;
+    /// use cosmos_core::RotationMatrix3;
     /// use std::f64::consts::FRAC_PI_2;
     ///
     /// let mut m = RotationMatrix3::identity();
@@ -266,7 +266,7 @@ impl RotationMatrix3 {
     /// precession in right ascension, and rotations in longitude all use Rz.
     ///
     /// ```
-    /// use eternal_core::RotationMatrix3;
+    /// use cosmos_core::RotationMatrix3;
     /// use std::f64::consts::FRAC_PI_2;
     ///
     /// let mut m = RotationMatrix3::identity();
@@ -313,7 +313,7 @@ impl RotationMatrix3 {
     /// Y-axis rotations appear in obliquity of the ecliptic and some precession models.
     ///
     /// ```
-    /// use eternal_core::RotationMatrix3;
+    /// use cosmos_core::RotationMatrix3;
     /// use std::f64::consts::FRAC_PI_2;
     ///
     /// let mut m = RotationMatrix3::identity();
@@ -352,7 +352,7 @@ impl RotationMatrix3 {
     /// You can also use the `*` operator: `a * b` or `&a * &b`.
     ///
     /// ```
-    /// use eternal_core::RotationMatrix3;
+    /// use cosmos_core::RotationMatrix3;
     ///
     /// let mut rx = RotationMatrix3::identity();
     /// rx.rotate_x(0.1);
@@ -388,7 +388,7 @@ impl RotationMatrix3 {
     /// `matrix * vector`.
     ///
     /// ```
-    /// use eternal_core::RotationMatrix3;
+    /// use cosmos_core::RotationMatrix3;
     ///
     /// let mut m = RotationMatrix3::identity();
     /// m.rotate_z(std::f64::consts::FRAC_PI_2);  // 90 degrees
@@ -433,7 +433,7 @@ impl RotationMatrix3 {
     /// general matrix inversion.
     ///
     /// ```
-    /// use eternal_core::RotationMatrix3;
+    /// use cosmos_core::RotationMatrix3;
     ///
     /// let mut m = RotationMatrix3::identity();
     /// m.rotate_z(0.5);
@@ -480,7 +480,7 @@ impl RotationMatrix3 {
     /// the specified tolerance.
     ///
     /// ```
-    /// use eternal_core::RotationMatrix3;
+    /// use cosmos_core::RotationMatrix3;
     ///
     /// let mut m = RotationMatrix3::identity();
     /// m.rotate_z(0.5);
@@ -522,7 +522,7 @@ impl RotationMatrix3 {
     /// implementations like ERFA.
     ///
     /// ```
-    /// use eternal_core::RotationMatrix3;
+    /// use cosmos_core::RotationMatrix3;
     ///
     /// let a = RotationMatrix3::identity();
     /// let b = RotationMatrix3::from_array([
@@ -561,7 +561,7 @@ impl RotationMatrix3 {
     /// The output RA is in the range `(-pi, pi]`. The output Dec is in `[-pi/2, pi/2]`.
     ///
     /// ```
-    /// use eternal_core::RotationMatrix3;
+    /// use cosmos_core::RotationMatrix3;
     /// use std::f64::consts::FRAC_PI_4;
     ///
     /// // Rotate the equatorial coordinate system by 45 degrees in RA

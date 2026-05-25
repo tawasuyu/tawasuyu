@@ -1,9 +1,9 @@
 use crate::{solar, transforms::CoordinateFrame, CoordResult, Distance, ICRSPosition};
-use eternal_core::constants::HALF_PI;
-use eternal_core::matrix::RotationMatrix3;
-use eternal_core::utils::normalize_angle_to_positive;
-use eternal_core::Angle;
-use eternal_time::TT;
+use cosmos_core::constants::HALF_PI;
+use cosmos_core::matrix::RotationMatrix3;
+use cosmos_core::utils::normalize_angle_to_positive;
+use cosmos_core::Angle;
+use cosmos_time::TT;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -287,7 +287,7 @@ mod tests {
         let l0 = solar::compute_l0(&epoch);
         let expected_carr_lon =
             normalize_angle_to_positive((stonyhurst.longitude() + l0).radians())
-                * eternal_core::constants::RAD_TO_DEG;
+                * cosmos_core::constants::RAD_TO_DEG;
 
         assert!((carrington.longitude().degrees() - expected_carr_lon).abs() < 1e-10);
     }
@@ -347,7 +347,7 @@ mod tests {
                 std::f64::consts::TAU - lon_diff
             } else {
                 lon_diff
-            } * eternal_core::constants::RAD_TO_DEG;
+            } * cosmos_core::constants::RAD_TO_DEG;
 
             assert!(
                 lat_err < 1.0 / 3600.0,

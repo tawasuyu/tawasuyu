@@ -3,7 +3,7 @@ use crate::error::Result;
 use crate::observation::PierSide;
 use crate::parser::parse_coordinates;
 use crate::session::Session;
-use eternal_core::Angle;
+use cosmos_core::Angle;
 
 pub struct Predict;
 

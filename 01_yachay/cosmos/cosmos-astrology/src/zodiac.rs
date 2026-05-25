@@ -8,7 +8,7 @@
 //! sectors of the ecliptic; what changes between the two zodiacs is
 //! the zero point.
 
-use eternal_sky::Ayanamsha;
+use cosmos_sky::Ayanamsha;
 
 /// The twelve zodiac signs, in chart order starting from Aries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

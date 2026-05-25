@@ -1,5 +1,5 @@
 [package]
-name = "revista-core"
+name = "pluma-deck-core"
 description = "Vista — máquina de estados agnóstica para deck horizontal con snap. Sin dependencias web/DOM."
 version.workspace = true
 edition.workspace = true

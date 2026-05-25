@@ -67,7 +67,7 @@ pub enum CardError {
     Toml(#[from] toml::de::Error),
     #[error("E/S leyendo card: {0}")]
     Io(#[from] std::io::Error),
-    #[error("formato desconocido (extensiones esperadas: .json, .toml)")]
+    #[error("format desconocido (extensiones esperadas: .json, .toml)")]
     UnknownFormat,
 }
 
@@ -638,7 +638,7 @@ impl Card {
         Ok(c)
     }
 
-    /// Carga una Card desde disco. Auto-detecta formato por extensión
+    /// Carga una Card desde disco. Auto-detecta format por extensión
     /// (`.json` o `.toml`).
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self, CardError> {
         let p = path.as_ref();
@@ -1104,7 +1104,7 @@ mod tests {
 
     #[test]
     fn arje_seed_format_compatible() {
-        // Reproduce el formato canónico de arje (sin lifecycle/priority/flow,
+        // Reproduce el format canónico de arje (sin lifecycle/priority/flow,
         // que son aditivos brahman). Debe parsear con defaults.
         let src = r#"{
             "schema_version": 1,

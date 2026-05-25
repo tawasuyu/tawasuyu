@@ -1,11 +1,11 @@
 //! Tests for the mundane helpers and the Placidus primary-direction
 //! engine.
 
-use eternal_astrology::{
+use cosmos_astrology::{
     all_directions, direct, directions_to_angles, mundane, BirthData, ChartConfig,
     DirectionKey, DirectionMethod, NatalChart, Significator,
 };
-use eternal_sky::{Body, EphemerisSession, Instant, Observer, SessionConfig};
+use cosmos_sky::{Body, EphemerisSession, Instant, Observer, SessionConfig};
 
 fn session() -> EphemerisSession {
     EphemerisSession::open(SessionConfig::vsop2013()).unwrap()

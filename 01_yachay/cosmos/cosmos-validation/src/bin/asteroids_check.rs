@@ -8,12 +8,12 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use serde::Deserialize;
 
-use eternal_ephemeris::jpl::SpkFile;
-use eternal_time::julian::JulianDate;
-use eternal_time::scales::ToTTFromTDB;
-use eternal_time::TDB;
+use cosmos_ephemeris::jpl::SpkFile;
+use cosmos_time::julian::JulianDate;
+use cosmos_time::scales::ToTTFromTDB;
+use cosmos_time::TDB;
 
-use eternal_validation::asteroids::{apparent_ecliptic_of_date, naif_id_by_name};
+use cosmos_validation::asteroids::{apparent_ecliptic_of_date, naif_id_by_name};
 
 #[derive(Parser)]
 #[command(version, about = "compare oracle apparent asteroid positions vs Swiss")]

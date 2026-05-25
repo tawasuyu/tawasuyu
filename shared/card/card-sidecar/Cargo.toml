@@ -1,5 +1,5 @@
 [package]
-name = "brahman-sidecar"
+name = "card-sidecar"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,15 +9,15 @@ publish.workspace = true
 description = "Brahman — sidecar reusable: thread + tokio runtime que mantiene viva la sesión de un módulo contra el Init."
 
 [dependencies]
-brahman-card = { path = "../card-core" }
-brahman-handshake = { path = "../card-handshake" }
+card-core = { path = "../card-core" }
+card-handshake = { path = "../card-handshake" }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true }
-brahman-card-wit = { path = "../card-wit" }
+card-wit = { path = "../card-wit" }
 
 [[example]]
 name = "presence"

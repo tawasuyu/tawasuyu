@@ -1,5 +1,5 @@
 [package]
-name = "verbo-mock"
+name = "rimay-verbo-mock"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,7 +8,7 @@ publish.workspace = true
 description = "verbo — backend de embeddings determinista (sin modelo real). Mismo texto → mismo vector. Para desarrollar y testear consumidores sin descargar modelos."
 
 [dependencies]
-verbo-core = { path = "../rimay-verbo-core" }
+rimay-verbo-core = { path = "../rimay-verbo-core" }
 async-trait = { workspace = true }
 
 [dev-dependencies]

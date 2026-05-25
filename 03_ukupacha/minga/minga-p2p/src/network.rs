@@ -11,10 +11,10 @@
 //!   (`/minga/sync/1.0.0`).
 //!
 //! Cualquier consumer que necesite armar un nodo P2P puede importar
-//! `brahman_net::BrahmanNet` directo y registrar sus propios protocolos
+//! `card_net::BrahmanNet` directo y registrar sus propios protocolos
 //! sin pasar por minga.
 
-pub use brahman_net::{BrahmanNet as LibP2pNode, DiscoveredPeer, NodeError};
+pub use card_net::{BrahmanNet as LibP2pNode, DiscoveredPeer, NodeError};
 
 use libp2p::StreamProtocol;
 

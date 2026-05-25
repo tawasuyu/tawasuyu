@@ -16,7 +16,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let worlds = match brahman_card_wit::parse_wit_file(&path) {
+    let worlds = match card_wit::parse_wit_file(&path) {
         Ok(w) => w,
         Err(e) => {
             eprintln!("error parseando {path}: {e}");

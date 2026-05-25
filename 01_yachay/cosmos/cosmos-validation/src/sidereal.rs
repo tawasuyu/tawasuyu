@@ -15,8 +15,8 @@
 //! Spica's mean longitude that we don't model here). Phase 5 of the v1
 //! roadmap is the natural home for tightening this.
 
-use eternal_core::Vector3;
-use eternal_time::{NutationCalculator, TT};
+use cosmos_core::Vector3;
+use cosmos_time::{NutationCalculator, TT};
 
 /// IAU 2006 mean obliquity epsa(t), in radians. Same series as
 /// `eternal-core::precession::PrecessionIAU2006::obliquity_from_t`,
@@ -161,7 +161,7 @@ pub fn lahiri_sidereal_longitude(v_tet: Vector3, tt: &TT) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eternal_time::julian::JulianDate;
+    use cosmos_time::julian::JulianDate;
 
     fn tt_from_jd(jd: f64) -> TT {
         TT::from_julian_date(JulianDate::new(jd, 0.0))

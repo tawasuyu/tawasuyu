@@ -7,14 +7,14 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use serde::Deserialize;
 
-use eternal_ephemeris::jpl::SpkFile;
-use eternal_time::julian::JulianDate;
-use eternal_time::scales::ToTTFromTDB;
-use eternal_time::TDB;
+use cosmos_ephemeris::jpl::SpkFile;
+use cosmos_time::julian::JulianDate;
+use cosmos_time::scales::ToTTFromTDB;
+use cosmos_time::TDB;
 
-use eternal_validation::delta_t::delta_t_seconds;
-use eternal_validation::eclipses::{next_local_solar_eclipse, SolarEclipseKind};
-use eternal_validation::topocentric::Observer;
+use cosmos_validation::delta_t::delta_t_seconds;
+use cosmos_validation::eclipses::{next_local_solar_eclipse, SolarEclipseKind};
+use cosmos_validation::topocentric::Observer;
 
 const SECONDS_PER_DAY: f64 = 86_400.0;
 

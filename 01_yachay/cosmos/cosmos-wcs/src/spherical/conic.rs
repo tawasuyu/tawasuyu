@@ -1,5 +1,5 @@
-use eternal_core::constants::{DEG_TO_RAD, HALF_PI};
-use eternal_core::Angle;
+use cosmos_core::constants::{DEG_TO_RAD, HALF_PI};
+use cosmos_core::Angle;
 
 use crate::common::{
     check_nonzero_param, deproject_conic_polar, native_coord_from_radians, project_conic_xy,
@@ -222,8 +222,8 @@ pub(crate) fn deproject_coo(inter: IntermediateCoord, theta_a_deg: f64) -> WcsRe
 mod tests {
     use super::*;
     use crate::Projection;
-    use eternal_core::assert_ulp_lt;
-    use eternal_core::Angle;
+    use cosmos_core::assert_ulp_lt;
+    use cosmos_core::Angle;
 
     #[test]
     fn test_cop_reference_point() {

@@ -1,6 +1,6 @@
 use crate::fits::header::Header;
 use crate::fits::{FitsError, Result};
-use eternal_wcs::{KeywordProvider, Wcs, WcsBuilder};
+use cosmos_wcs::{KeywordProvider, Wcs, WcsBuilder};
 
 struct FitsKeywordAdapter<'a> {
     header: &'a Header,

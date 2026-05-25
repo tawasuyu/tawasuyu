@@ -631,7 +631,7 @@ mod tests {
             0.0,
             1.0,
             -1.0,
-            eternal_core::constants::PI,
+            cosmos_core::constants::PI,
             f64::INFINITY,
             f64::NEG_INFINITY,
         ];

@@ -1,5 +1,5 @@
 [package]
-name = "brahman-card-wit"
+name = "card-wit"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,7 +9,7 @@ publish.workspace = true
 description = "Brahman — extractor opcional: parsea contratos WIT y devuelve `WitInterface` listo para acoplar a una `Card`."
 
 [dependencies]
-brahman-card = { path = "../card-core" }
+card-core = { path = "../card-core" }
 wit-parser = "0.230"
 thiserror = { workspace = true }
 

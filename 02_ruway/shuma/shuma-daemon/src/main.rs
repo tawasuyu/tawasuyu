@@ -11,7 +11,7 @@
 //! - GUI (futuro `shuma-shell` con nahual_launcher).
 
 use anyhow::Context;
-use brahman_card::{Card, CardKind, Flow, Flows, Lifecycle, Payload, Supervision, TypeRef};
+use card_core::{Card, CardKind, Flow, Flows, Lifecycle, Payload, Supervision, TypeRef};
 use arje_incarnate::IncarnatorConfig;
 use shuma_core::WorkspaceManager;
 use shuma_discern::{DiscernPipeline, Hint};
@@ -42,7 +42,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Sidecar pool: una sesión global del daemon + N sesiones efímeras
     // por edge enriquecido tras cada pipeline tap.
-    let sidecar_pool = match brahman_sidecar::SidecarPool::new() {
+    let sidecar_pool = match card_sidecar::SidecarPool::new() {
         Ok(p) => Some(Arc::new(p)),
         Err(e) => {
             warn!(?e, "SidecarPool falló — broker integration disabled");
@@ -280,7 +280,7 @@ async fn handle_client(
     mut stream: UnixStream,
     mgr: Arc<WorkspaceManager>,
     disc: Arc<DiscernPipeline>,
-    pool: Option<Arc<brahman_sidecar::SidecarPool>>,
+    pool: Option<Arc<card_sidecar::SidecarPool>>,
     daemon_started: std::time::Instant,
 ) -> anyhow::Result<()> {
     // Audit: peer uid lo leemos una vez aquí (no cambia durante la conexión).
@@ -384,7 +384,7 @@ fn audit_request(peer_uid: u32, req: &Request) {
 async fn dispatch(
     mgr: &Arc<WorkspaceManager>,
     disc: &DiscernPipeline,
-    pool: &Option<Arc<brahman_sidecar::SidecarPool>>,
+    pool: &Option<Arc<card_sidecar::SidecarPool>>,
     daemon_started: std::time::Instant,
     req: Request,
 ) -> Response {
@@ -759,7 +759,7 @@ fn map_edge_to_info(e: shuma_core::pipeline::EdgeDiscernment) -> EdgeDiscernment
 /// enriquecido. Esto permite a otros explorers (broker-explorer, etc.)
 /// ver que shuma vio JSON/text/wasm/etc. saliendo de un pipeline.
 fn announce_edges_to_broker(
-    pool: Option<&brahman_sidecar::SidecarPool>,
+    pool: Option<&card_sidecar::SidecarPool>,
     pipeline: &ulid::Ulid,
     edges: &[shuma_core::pipeline::EdgeDiscernment],
 ) {

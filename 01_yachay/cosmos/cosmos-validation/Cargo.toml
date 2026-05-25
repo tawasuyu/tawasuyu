@@ -1,11 +1,11 @@
 [package]
-name = "eternal-validation"
+name = "cosmos-validation"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Internal validation harness: compare eternal-ephemeris output against external ground truth (JPL Horizons, Swiss Ephemeris)."
+description = "Internal validation harness: compare cosmos-ephemeris output against external ground truth (JPL Horizons, Swiss Ephemeris)."
 publish = false
 
 [features]
@@ -13,10 +13,10 @@ default = []
 fetch = ["dep:reqwest", "dep:tokio"]
 
 [dependencies]
-eternal-ephemeris.workspace = true
-eternal-core.workspace = true
-eternal-coords.workspace = true
-eternal-time.workspace = true
+cosmos-ephemeris.workspace = true
+cosmos-core.workspace = true
+cosmos-coords.workspace = true
+cosmos-time.workspace = true
 libm.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

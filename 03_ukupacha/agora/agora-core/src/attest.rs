@@ -1,6 +1,6 @@
 //! Atestaciones — un claim respaldado por la firma de una identidad.
 //!
-//! La atestación es la unidad de confianza de agorapura: «la institución
+//! La atestación es la unidad de confianza de agora_app: «la institución
 //! *Venezuela* atestigua que el claim *nacionalidad = venezolana* sobre
 //! *Yumaira* es cierto». Cualquiera puede verificar la firma sin
 //! consultar a nadie — la prueba viaja con el dato.

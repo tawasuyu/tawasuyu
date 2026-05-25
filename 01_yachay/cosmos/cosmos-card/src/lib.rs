@@ -1,4 +1,4 @@
-//! `cosmobiologia-card` — Tarjeta de Presentación + sidecar de la app.
+//! `cosmos_app-card` — Tarjeta de Presentación + sidecar de la app.
 //!
 //! Cualquier binario que levante Tahuantinsuyu llama [`spawn_sidecar`]
 //! antes de abrir la ventana GPUI. La lógica de thread / tokio /
@@ -12,19 +12,19 @@ pub mod service;
 
 use std::collections::BTreeSet;
 
-use brahman_card::{
+use card_core::{
     Card, Flow, Flows, FsPolicy, IpcPolicy, Lifecycle, Payload, Permissions, Priority, Supervision,
     TypeRef, CARD_SCHEMA_VERSION,
 };
 use ulid::Ulid;
 
 /// Label canónico — coincide con el binario y aparece en `ListEntes`.
-pub const LABEL: &str = "brahman.cosmobiologia";
+pub const LABEL: &str = "brahman.cosmos_app";
 
 /// Spawn fire-and-forget. Si el Init no está corriendo, el sidecar
 /// loggea y termina; la app sigue ejecutándose standalone.
 pub fn spawn_sidecar() {
-    brahman_sidecar::spawn(build_card());
+    card_sidecar::spawn(build_card());
 }
 
 /// Construye la Card. Expuesto público para tests + para shells que
@@ -56,7 +56,7 @@ pub fn build_card() -> Card {
         flow: Flows {
             // Recibe peticiones de cómputo (carta natal, transit, etc.)
             // serializadas como JSON. La forma exacta la define
-            // `cosmobiologia-engine`.
+            // `cosmos_app-engine`.
             input: vec![Flow {
                 name: "chart-request".into(),
                 ty: TypeRef::Primitive {

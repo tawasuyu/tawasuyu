@@ -1,6 +1,6 @@
 //! Matemática agnóstica de surface — radios canónicos del wheel,
 //! conversión polar → pantalla, spread anti-solapamiento, detección
-//! de clusters, formato de coordenadas.
+//! de clusters, format de coordenadas.
 //!
 //! Vive aquí (no en el canvas gpui) porque exactamente la misma
 //! lógica corre en el cliente web (WASM) y en la app desktop. Cualquier

@@ -1,4 +1,4 @@
-//! `cosmobiologia-web` — cdylib WASM que renderiza la rueda
+//! `cosmos_app-web` — cdylib WASM que renderiza la rueda
 //! astrológica desde el browser, sin round-trip al server por cada
 //! interacción.
 //!
@@ -7,7 +7,7 @@
 //! 1. El cliente JS hace `await fetch('/api/sky')` o
 //!    `/api/charts/:id/render?...` y recibe un `RenderModel` JSON.
 //! 2. JS llama `render_model_to_svg(json)` (exportado desde WASM) que
-//!    deserializa + corre `cosmobiologia_render::compose_wheel` +
+//!    deserializa + corre `cosmos_render::compose_wheel` +
 //!    serializa SVG.
 //! 3. JS hace `wheelContainer.innerHTML = svg`.
 //!
@@ -15,14 +15,14 @@
 //!
 //! ```bash
 //! cargo install wasm-pack          # una vez
-//! cd crates/modules/cosmobiologia/cosmobiologia-web
-//! wasm-pack build --target web --out-dir ../../../../apps/cosmobiologia-server/static/wasm
+//! cd crates/modules/cosmos_app/cosmos_app-web
+//! wasm-pack build --target web --out-dir ../../../../apps/cosmos_app-server/static/wasm
 //! ```
 //!
-//! Esto produce un módulo ES6 (`cosmobiologia_web.js` +
+//! Esto produce un módulo ES6 (`cosmos_web.js` +
 //! `cosmobiologia_web_bg.wasm`) que el `index.html` del server
 //! importa con `import init, { render_model_to_svg } from
-//! '/static/wasm/cosmobiologia_web.js';`.
+//! '/static/wasm/cosmos_web.js';`.
 
 #![forbid(unsafe_code)]
 #![warn(rust_2018_idioms)]
@@ -30,10 +30,10 @@
 // La API pública SOLO se expone con `wasm-bindgen` en target
 // wasm32. En nativo (rlib) el crate compila para validar la
 // signature pero no exporta nada — los tests del render ya viven
-// en `cosmobiologia-render::math`.
+// en `cosmos_app-render::math`.
 #[cfg(target_arch = "wasm32")]
 mod wasm {
-    use cosmobiologia_render::{
+    use cosmos_render::{
         compose_wheel, draw_commands_to_svg, CompositionOpts, Palette, RenderModel,
     };
     use wasm_bindgen::prelude::*;
@@ -93,7 +93,7 @@ mod wasm {
 pub fn _native_marker() {
     // Sin target wasm32, el crate solo expone el render como
     // transitivo. Esta función vive para que `cargo check -p
-    // cosmobiologia-web` valide la compilación nativa sin
+    // cosmos_app-web` valide la compilación nativa sin
     // wasm-bindgen — útil en CI y en desarrollo desktop.
-    let _ = std::any::type_name::<cosmobiologia_render::RenderModel>();
+    let _ = std::any::type_name::<cosmos_render::RenderModel>();
 }

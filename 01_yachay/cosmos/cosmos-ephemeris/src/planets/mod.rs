@@ -1,17 +1,17 @@
 #[cfg(test)]
 mod tests;
 
-use eternal_coords::{CartesianFrame, EclipticCartesian, Vector3};
-use eternal_core::constants::{DAYS_PER_JULIAN_MILLENNIUM, J2000_JD, TWOPI};
-use eternal_core::AstroResult;
+use cosmos_coords::{CartesianFrame, EclipticCartesian, Vector3};
+use cosmos_core::constants::{DAYS_PER_JULIAN_MILLENNIUM, J2000_JD, TWOPI};
+use cosmos_core::AstroResult;
 
 use crate::earth::Vsop2013Earth;
 use crate::planetary_coefficients::*;
 
-use eternal_time::julian::JulianDate;
-use eternal_time::TDB;
+use cosmos_time::julian::JulianDate;
+use cosmos_time::TDB;
 
-const DT_DAYS: f64 = 1.0 / eternal_core::constants::SECONDS_PER_DAY_F64;
+const DT_DAYS: f64 = 1.0 / cosmos_core::constants::SECONDS_PER_DAY_F64;
 
 #[allow(clippy::excessive_precision)]
 const LAMBDA0: [f64; 17] = [
@@ -236,7 +236,7 @@ struct OrbitalElements {
 #[cfg(test)]
 mod test {
     use super::*;
-    use eternal_core::constants::J2000_JD;
+    use cosmos_core::constants::J2000_JD;
 
     #[test]
     fn test_elements_to_cartesian() {
@@ -308,7 +308,7 @@ mod test {
         use crate::jpl::{bodies, SpkFile};
 
         const AU_KM: f64 = 149597870.7;
-        const SECONDS_PER_DAY: f64 = eternal_core::constants::SECONDS_PER_DAY_F64;
+        const SECONDS_PER_DAY: f64 = cosmos_core::constants::SECONDS_PER_DAY_F64;
 
         let spk_path =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/de432s.bsp");

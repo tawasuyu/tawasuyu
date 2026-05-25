@@ -3,7 +3,7 @@ name = "nahual-widget-stat-card"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Yahweh — widget stat card: tarjeta de dashboard con border-l accent + label + valor grande + descripción + listing opcional de items recientes. Patrón compartido entre minga-explorer y brahman-broker-explorer."
+description = "Yahweh — widget stat card: tarjeta de dashboard con border-l accent + label + valor grande + descripción + listing opcional de items recientes. Patrón compartido entre minga-explorer y chasqui-broker-explorer."
 
 [dependencies]
 gpui = { workspace = true }

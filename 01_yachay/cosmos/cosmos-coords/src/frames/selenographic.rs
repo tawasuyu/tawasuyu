@@ -1,9 +1,9 @@
 use crate::{lunar, transforms::CoordinateFrame, CoordResult, Distance, ICRSPosition};
-use eternal_core::constants::HALF_PI;
-use eternal_core::matrix::RotationMatrix3;
-use eternal_core::utils::normalize_angle_to_positive;
-use eternal_core::Angle;
-use eternal_time::TT;
+use cosmos_core::constants::HALF_PI;
+use cosmos_core::matrix::RotationMatrix3;
+use cosmos_core::utils::normalize_angle_to_positive;
+use cosmos_core::Angle;
+use cosmos_time::TT;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -96,7 +96,7 @@ impl SelenographicPosition {
         let (sin_lat2, cos_lat2) = other.latitude.sin_cos();
         let delta_lon = (self.longitude - other.longitude).radians();
 
-        let angle_rad = eternal_core::math::vincenty_angular_separation(
+        let angle_rad = cosmos_core::math::vincenty_angular_separation(
             sin_lat1, cos_lat1, sin_lat2, cos_lat2, delta_lon,
         );
 
@@ -290,7 +290,7 @@ mod tests {
                 std::f64::consts::TAU - lon_diff
             } else {
                 lon_diff
-            } * eternal_core::constants::RAD_TO_DEG;
+            } * cosmos_core::constants::RAD_TO_DEG;
 
             assert!(
                 lat_err < 1.0 / 3600.0,

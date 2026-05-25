@@ -13,7 +13,7 @@ pub enum CellKind {
     /// Código ejecutable en un lenguaje.
     Code { language: String },
     /// Una visualización de un módulo brahman (`"dominium"`, `"pineal"`,
-    /// `"takiy"`) — yachay integra el ecosistema.
+    /// `"takiy"`) — pluma_notebook_app integra el ecosistema.
     Embed { module: String },
 }
 

@@ -1,4 +1,4 @@
-//! `fana-graph` — el grafo narrativo (DAG de `NarrativeAtom`s).
+//! `pluma_app-graph` — el grafo narrativo (DAG de `NarrativeAtom`s).
 //!
 //! Mantiene los átomos + una adjacency list `dependencia → dependientes`.
 //! Cuando un átomo muta, [`NarrativeGraph::propagate_mutation`] marca en
@@ -8,7 +8,7 @@
 
 #![forbid(unsafe_code)]
 
-use fana_core::{CoherenceState, NarrativeAtom};
+use pluma_core::{CoherenceState, NarrativeAtom};
 use std::collections::{HashMap, HashSet, VecDeque};
 use uuid::Uuid;
 

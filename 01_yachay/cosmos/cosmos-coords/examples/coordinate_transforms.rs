@@ -1,8 +1,8 @@
-use eternal_coords::eop::record::EopRecord;
-use eternal_coords::frames::{CIRSPosition, ICRSPosition};
-use eternal_coords::transforms::CoordinateFrame;
-use eternal_coords::{Distance, EopProvider, Location};
-use eternal_time::{tt_from_calendar, ToTAI, ToUTC};
+use cosmos_coords::eop::record::EopRecord;
+use cosmos_coords::frames::{CIRSPosition, ICRSPosition};
+use cosmos_coords::transforms::CoordinateFrame;
+use cosmos_coords::{Distance, EopProvider, Location};
+use cosmos_time::{tt_from_calendar, ToTAI, ToUTC};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- Setup: observer, time, EOP ---

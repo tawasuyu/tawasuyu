@@ -1,5 +1,5 @@
 [package]
-name = "eternal-wcs"
+name = "cosmos-wcs"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -10,8 +10,8 @@ keywords = ["astronomy", "wcs", "coordinates", "fits", "celestial"]
 categories = ["science", "algorithms"]
 
 [dependencies]
-eternal-core.workspace = true
-eternal-coords.workspace = true
+cosmos-core.workspace = true
+cosmos-coords.workspace = true
 thiserror.workspace = true
 libm.workspace = true
 

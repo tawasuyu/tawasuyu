@@ -41,7 +41,7 @@ const README: &str = "\
 Minga VFS — proyección de sólo lectura de un repositorio Minga.
 
 Layout:
-  roots/<hash>   Código fuente reconstruido (formato normalizado) de
+  roots/<hash>   Código fuente reconstruido (format normalizado) de
                  cada archivo ingerido. `ls roots/` los lista todos.
   cas/<hash>     S-expression del subárbol con ese hash. Este
                  directorio NO se lista (son demasiados nodos), pero
@@ -297,7 +297,7 @@ impl<S: NodeSource> Filesystem for MingaFs<S> {
 }
 
 /// Parsea un nombre de archivo como un `ContentHash`: exactamente 64
-/// dígitos hex en minúsculas (el formato que produce `Display`).
+/// dígitos hex en minúsculas (el format que produce `Display`).
 fn parse_hash(name: &str) -> Option<ContentHash> {
     if name.len() != 64 {
         return None;

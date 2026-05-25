@@ -7,8 +7,8 @@ use crate::{
     transforms::CoordinateFrame,
     CoordError, CoordResult, Distance,
 };
-use eternal_core::{matrix::RotationMatrix3, Angle, Vector3};
-use eternal_time::{
+use cosmos_core::{matrix::RotationMatrix3, Angle, Vector3};
+use cosmos_time::{
     scales::conversions::ToUT1WithDeltaT, sidereal::GAST, transforms::NutationCalculator, TT,
 };
 
@@ -119,7 +119,7 @@ impl CIRSPosition {
         eop: Option<&crate::eop::EopParameters>,
     ) -> CoordResult<RotationMatrix3> {
         let jd = epoch.to_julian_date();
-        let t = eternal_core::utils::jd_to_centuries(jd.jd1(), jd.jd2());
+        let t = cosmos_core::utils::jd_to_centuries(jd.jd1(), jd.jd2());
 
         let nutation = epoch
             .nutation_iau2006a()
@@ -127,14 +127,14 @@ impl CIRSPosition {
                 message: format!("Nutation calculation failed: {}", e),
             })?;
 
-        let precession_calc = eternal_core::precession::PrecessionIAU2006::new();
+        let precession_calc = cosmos_core::precession::PrecessionIAU2006::new();
         let npb_matrix = precession_calc.npb_matrix_iau2006a(
             t,
             nutation.nutation_longitude(),
             nutation.nutation_obliquity(),
         );
 
-        let cio_solution = eternal_core::CioSolution::calculate(&npb_matrix, t).map_err(|e| {
+        let cio_solution = cosmos_core::CioSolution::calculate(&npb_matrix, t).map_err(|e| {
             CoordError::CoreError {
                 message: format!("CIO calculation failed: {}", e),
             }
@@ -148,7 +148,7 @@ impl CIRSPosition {
             None => (cio_solution.cip.x, cio_solution.cip.y),
         };
 
-        Ok(eternal_core::gcrs_to_cirs_matrix(x, y, cio_solution.s))
+        Ok(cosmos_core::gcrs_to_cirs_matrix(x, y, cio_solution.s))
     }
 
     /// Transforms this CIRS position to Terrestrial Intermediate Reference System (TIRS).
@@ -168,7 +168,7 @@ impl CIRSPosition {
 
     pub fn to_hour_angle(
         &self,
-        observer: &eternal_core::Location,
+        observer: &cosmos_core::Location,
         delta_t: f64,
     ) -> CoordResult<crate::frames::HourAnglePosition> {
         let ut1 = self.epoch.to_ut1_with_delta_t(delta_t)?;
@@ -177,7 +177,7 @@ impl CIRSPosition {
         let last = gast.to_last(observer);
 
         let ha_rad = last.radians() - self.ra.radians();
-        let ha = eternal_core::angle::wrap_pm_pi(ha_rad);
+        let ha = cosmos_core::angle::wrap_pm_pi(ha_rad);
 
         crate::frames::HourAnglePosition::new(
             Angle::from_radians(ha),
@@ -431,8 +431,8 @@ mod tests {
     fn test_aberration_varies_with_epoch() {
         let icrs = ICRSPosition::from_degrees(180.0, 45.0).unwrap();
 
-        let epoch_jan = TT::from_julian_date(eternal_time::JulianDate::new(2451545.0, 0.0));
-        let epoch_jul = TT::from_julian_date(eternal_time::JulianDate::new(2451545.0, 182.5));
+        let epoch_jan = TT::from_julian_date(cosmos_time::JulianDate::new(2451545.0, 0.0));
+        let epoch_jul = TT::from_julian_date(cosmos_time::JulianDate::new(2451545.0, 182.5));
 
         let cirs_jan = CIRSPosition::from_icrs(&icrs, &epoch_jan).unwrap();
         let cirs_jul = CIRSPosition::from_icrs(&icrs, &epoch_jul).unwrap();

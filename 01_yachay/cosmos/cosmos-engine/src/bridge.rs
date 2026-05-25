@@ -1,4 +1,4 @@
-//! Bridge real: `cosmobiologia_model::Chart` → eternal_astrology → [`RenderModel`].
+//! Bridge real: `cosmos_model::Chart` → cosmos_astrology → [`RenderModel`].
 //!
 //! La sesión de efemérides VSOP2013 es **compartida globalmente** vía
 //! `OnceLock` — abrirla cuesta unos cuantos ms (carga de las series en
@@ -8,16 +8,16 @@
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
-use eternal_astrology::{
+use cosmos_astrology::{
     all_lots, composite, directed_longitude, find_aspects, find_synastry_aspects, next_return,
     primary_direction::PrimaryDirection, secondary_progression, solar_arc_true, topocentric_ecliptic,
     Aspect, AspectKind as EAspectKind, BirthData, BodySet, ChartConfig,
     DirectionKey as EDirectionKey, HouseSystem as EHouseSystem, Houses as EHouses, NatalChart,
     OrbTable, Zodiac as EZodiac,
 };
-use eternal_sky::{Ayanamsha, Body, EphemerisSession, Instant as ESInstant, Observer, SessionConfig};
+use cosmos_sky::{Ayanamsha, Body, EphemerisSession, Instant as ESInstant, Observer, SessionConfig};
 
-use cosmobiologia_model::{Chart, HouseSystem, StoredChartConfig, Zodiac};
+use cosmos_model::{Chart, HouseSystem, StoredChartConfig, Zodiac};
 
 use crate::dignity::essential_dignity;
 use crate::{
@@ -1078,14 +1078,14 @@ fn build_synastry_overlay(
 /// Devuelve `(StoredBirthData, instant_label)`:
 /// - `StoredBirthData` con birth_data del retorno (year/month/day/...
 ///   del instante del retorno, mismas coordenadas que el natal).
-/// - `instant_label` formato corto del momento (ej. "2024-03-14
+/// - `instant_label` format corto del momento (ej. "2024-03-14
 ///   05:22 UTC") — el shell lo concatena en el label final.
 pub fn compute_planetary_return_chart(
     chart: &Chart,
     body_str: &str,
     target_age_years: f64,
     shift_days: i64,
-) -> Result<(cosmobiologia_model::StoredBirthData, String), EngineError> {
+) -> Result<(cosmos_model::StoredBirthData, String), EngineError> {
     let (birth_e, config_e, _observer) = build_eternal_inputs(chart, 0)?;
     let session = session()?;
     let natal = NatalChart::compute(&birth_e, &config_e, session)
@@ -1122,7 +1122,7 @@ pub fn compute_planetary_return_chart(
     let (year, month, day, hour, minute, second) = parse_iso8601_components(&iso)
         .ok_or_else(|| EngineError::Eternal(format!("iso8601 inválido: {}", iso)))?;
 
-    let stored = cosmobiologia_model::StoredBirthData {
+    let stored = cosmos_model::StoredBirthData {
         year,
         month,
         day,
@@ -1153,13 +1153,13 @@ pub fn compute_planetary_return_chart(
 /// en este instante anclado al lugar de nacimiento del sujeto.
 pub fn compute_transit_chart(
     chart: &Chart,
-) -> Result<(cosmobiologia_model::StoredBirthData, String), EngineError> {
+) -> Result<(cosmos_model::StoredBirthData, String), EngineError> {
     let now_iso = ESInstant::now().utc().to_iso8601();
     let (year, month, day, hour, minute, second) =
         parse_iso8601_components(&now_iso).ok_or_else(|| {
             EngineError::Eternal(format!("iso8601 inválido para now(): {}", now_iso))
         })?;
-    let stored = cosmobiologia_model::StoredBirthData {
+    let stored = cosmos_model::StoredBirthData {
         year,
         month,
         day,
@@ -1187,7 +1187,7 @@ pub fn compute_transit_chart(
 pub fn compute_progression_chart(
     chart: &Chart,
     target_age_years: f64,
-) -> Result<(cosmobiologia_model::StoredBirthData, String), EngineError> {
+) -> Result<(cosmos_model::StoredBirthData, String), EngineError> {
     let (birth_e, _config_e, _observer) = build_eternal_inputs(chart, 0)?;
     let advance_seconds = target_age_years * 86400.0; // 1 día / año
     let advanced_utc = birth_e.instant.utc().add_seconds(advance_seconds);
@@ -1196,7 +1196,7 @@ pub fn compute_progression_chart(
         parse_iso8601_components(&iso).ok_or_else(|| {
             EngineError::Eternal(format!("iso8601 inválido: {}", iso))
         })?;
-    let stored = cosmobiologia_model::StoredBirthData {
+    let stored = cosmos_model::StoredBirthData {
         year,
         month,
         day,
@@ -1216,7 +1216,7 @@ pub fn compute_progression_chart(
 }
 
 /// Parsea "YYYY-MM-DDTHH:MM:SS[.fff]" a `(year, month, day, hour,
-/// minute, second_float)`. Retorna `None` si el formato no encaja.
+/// minute, second_float)`. Retorna `None` si el format no encaja.
 fn parse_iso8601_components(s: &str) -> Option<(i32, u32, u32, u32, u32, f64)> {
     // Split en T y luego campo por campo.
     let mut parts = s.splitn(2, 'T');
@@ -1659,7 +1659,7 @@ fn populate_natal_aspect_summary(aspects: &[Aspect], render: &mut RenderModel) {
 }
 
 fn populate_cross_aspect_summary(
-    cross: &[eternal_astrology::SynastryAspect],
+    cross: &[cosmos_astrology::SynastryAspect],
     module_id: &str,
     render: &mut RenderModel,
 ) {

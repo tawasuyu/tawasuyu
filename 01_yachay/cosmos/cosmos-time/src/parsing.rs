@@ -301,7 +301,7 @@ mod tests {
     fn test_to_julian_date() {
         let dt = parse_iso8601("2000-01-01T12:00:00").unwrap();
         let jd = dt.to_julian_date();
-        assert_eq!(jd.to_f64(), eternal_core::constants::J2000_JD);
+        assert_eq!(jd.to_f64(), cosmos_core::constants::J2000_JD);
     }
 
     #[test]

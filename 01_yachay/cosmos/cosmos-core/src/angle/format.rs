@@ -25,8 +25,8 @@
 //! # Formatting Examples
 //!
 //! ```
-//! use eternal_core::Angle;
-//! use eternal_core::angle::{DmsFmt, HmsFmt};
+//! use cosmos_core::Angle;
+//! use cosmos_core::angle::{DmsFmt, HmsFmt};
 //!
 //! // Declination of Vega: +38° 47' 01"
 //! let dec = Angle::from_degrees(38.783611);
@@ -48,7 +48,7 @@
 //! The [`parse_angle`] function handles common formats:
 //!
 //! ```
-//! use eternal_core::angle::parse_angle;
+//! use cosmos_core::angle::parse_angle;
 //!
 //! // HMS formats (tries HMS first, then DMS)
 //! let ra = parse_angle("12h30m15s").unwrap();
@@ -70,7 +70,7 @@
 //! The `Display` trait formats angles as decimal degrees with 6 decimal places:
 //!
 //! ```
-//! use eternal_core::Angle;
+//! use cosmos_core::Angle;
 //!
 //! let a = Angle::from_degrees(45.123456789);
 //! assert_eq!(format!("{}", a), "45.123457°");
@@ -98,8 +98,8 @@ use core::fmt;
 /// # Example
 ///
 /// ```
-/// use eternal_core::Angle;
-/// use eternal_core::angle::DmsFmt;
+/// use cosmos_core::Angle;
+/// use cosmos_core::angle::DmsFmt;
 ///
 /// let dec = Angle::from_degrees(-23.4392);
 ///
@@ -136,8 +136,8 @@ pub struct DmsFmt {
 /// # Example
 ///
 /// ```
-/// use eternal_core::Angle;
-/// use eternal_core::angle::HmsFmt;
+/// use cosmos_core::Angle;
+/// use cosmos_core::angle::HmsFmt;
 ///
 /// let ra = Angle::from_hours(14.5);  // 14h 30m 00s
 ///
@@ -224,7 +224,7 @@ impl fmt::Display for Angle {
 /// # Example
 ///
 /// ```
-/// use eternal_core::angle::parse_angle;
+/// use cosmos_core::angle::parse_angle;
 ///
 /// let parsed = parse_angle("12h30m15s").unwrap();
 /// let angle = parsed.angle;  // Extract the Angle
@@ -272,7 +272,7 @@ pub struct ParsedAngle {
 /// # Example
 ///
 /// ```
-/// use eternal_core::angle::parse_angle;
+/// use cosmos_core::angle::parse_angle;
 ///
 /// // Right ascension
 /// let ra = parse_angle("05h14m32.27s").unwrap();

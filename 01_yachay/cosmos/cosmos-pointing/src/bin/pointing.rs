@@ -1,5 +1,5 @@
-use eternal_pointing::commands::{self, CommandOutput};
-use eternal_pointing::session::Session;
+use cosmos_pointing::commands::{self, CommandOutput};
+use cosmos_pointing::session::Session;
 use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter;

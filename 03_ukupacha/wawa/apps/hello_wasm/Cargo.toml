@@ -14,7 +14,7 @@ description = "renaser :: app WASM de prueba — un cuadrado movil dirigido por 
 
 [workspace]
 
-# `cdylib` produce un modulo `.wasm` que exporta funciones — el formato que
+# `cdylib` produce un modulo `.wasm` que exporta funciones — el format que
 # wasmi instancia. La aplicacion solo habla con el kernel por funciones del host.
 [lib]
 crate-type = ["cdylib"]

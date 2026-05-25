@@ -6,7 +6,7 @@
 
 #![forbid(unsafe_code)]
 
-use brahman_card::TypeRef;
+use card_core::TypeRef;
 
 #[derive(Debug, Clone)]
 pub struct Hint<'a> {

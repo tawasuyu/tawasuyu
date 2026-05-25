@@ -4,7 +4,7 @@
 //! Diseño: ventana standalone que cada N segundos consulta el query
 //! socket del daemon (`chasqui_core::engine_socket::client::list_monads`).
 //! El path del socket NO está hardcoded — se descubre vía
-//! `brahman_sidecar::await_provider_blocking` para el flow
+//! `card_sidecar::await_provider_blocking` para el flow
 //! `monad-list:json`. Si el daemon cae, el socket cacheado se invalida
 //! y la próxima iteración re-descubre.
 //!
@@ -21,7 +21,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use brahman_sidecar::{await_provider_blocking, build_consumer_card, ConsumerError};
+use card_sidecar::{await_provider_blocking, build_consumer_card, ConsumerError};
 use gpui::{
     div, prelude::*, px, rgb, Context, IntoElement, Render, SharedString, Window,
 };

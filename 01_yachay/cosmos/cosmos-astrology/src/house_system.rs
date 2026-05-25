@@ -5,7 +5,7 @@
 //! are always in radians, indexed `0..12` where index `i` is the start
 //! of house `i+1` (house 1 = Ascendant by convention).
 
-use eternal_validation::houses as ev_houses;
+use cosmos_validation::houses as ev_houses;
 
 use crate::error::{AstrologyError, AstrologyResult};
 

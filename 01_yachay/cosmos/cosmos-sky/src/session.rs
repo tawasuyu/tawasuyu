@@ -7,12 +7,12 @@
 
 use std::path::{Path, PathBuf};
 
-use eternal_core::Vector3;
-use eternal_ephemeris::jpl::SpkFile;
-use eternal_validation::fixture::{Corrections, Frame};
-use eternal_validation::oracle::{Backend, Oracle, OracleError};
-use eternal_validation::sidereal::{tet_equatorial_to_ecliptic_of_date, true_obliquity_iau2006a};
-use eternal_validation::topocentric::{alt_az_from_topocentric, observer_position_tet_km};
+use cosmos_core::Vector3;
+use cosmos_ephemeris::jpl::SpkFile;
+use cosmos_validation::fixture::{Corrections, Frame};
+use cosmos_validation::oracle::{Backend, Oracle, OracleError};
+use cosmos_validation::sidereal::{tet_equatorial_to_ecliptic_of_date, true_obliquity_iau2006a};
+use cosmos_validation::topocentric::{alt_az_from_topocentric, observer_position_tet_km};
 
 use crate::apparent::{
     wrap_two_pi, ApparentPosition, EclipticCoord, EclipticVelocity, EquatorialCoord,
@@ -130,7 +130,7 @@ impl EphemerisSession {
     /// Used by higher-level crates (e.g. `eternal-astrology` for
     /// eclipses) that need direct access to the JPL kernel without
     /// reaching into the validation crate's `Oracle` API.
-    pub fn require_spk(&self) -> SkyResult<&eternal_ephemeris::jpl::SpkFile> {
+    pub fn require_spk(&self) -> SkyResult<&cosmos_ephemeris::jpl::SpkFile> {
         self.oracle.spk().ok_or(SkyError::SpkRequired)
     }
 
@@ -256,8 +256,8 @@ impl EphemerisSession {
         let jd_tdb = t.jd_tdb()?;
 
         let longitude_rad = match body {
-            Body::MeanNode => eternal_validation::lunar::mean_lunar_node(&tt),
-            Body::MeanLilith => eternal_validation::lunar::mean_lilith(&tt),
+            Body::MeanNode => cosmos_validation::lunar::mean_lunar_node(&tt),
+            Body::MeanLilith => cosmos_validation::lunar::mean_lilith(&tt),
             Body::TrueNode | Body::TrueLilith => {
                 let spk = self.oracle.spk().ok_or(SkyError::UnsupportedBody {
                     body,
@@ -265,10 +265,10 @@ impl EphemerisSession {
                 })?;
                 match body {
                     Body::TrueNode => {
-                        eternal_validation::lunar::true_lunar_node_geocentric(spk, &tt, jd_tdb)?
+                        cosmos_validation::lunar::true_lunar_node_geocentric(spk, &tt, jd_tdb)?
                     }
                     Body::TrueLilith => {
-                        eternal_validation::lunar::true_lilith_geocentric(spk, &tt, jd_tdb)?
+                        cosmos_validation::lunar::true_lilith_geocentric(spk, &tt, jd_tdb)?
                     }
                     _ => unreachable!(),
                 }
@@ -352,14 +352,14 @@ impl EphemerisSession {
         let tt = t.tt()?;
         let jd_tdb = t.jd_tdb()?;
 
-        let (lon, lat, dist_au) = eternal_validation::asteroids::apparent_ecliptic_of_date(
+        let (lon, lat, dist_au) = cosmos_validation::asteroids::apparent_ecliptic_of_date(
             naif,
             asteroid_spk,
             planet_spk,
             &tt,
             jd_tdb,
         )?;
-        let distance_km = dist_au * eternal_core::constants::AU_KM;
+        let distance_km = dist_au * cosmos_core::constants::AU_KM;
 
         let ecliptic_coord = EclipticCoord {
             longitude_rad: lon,
@@ -412,8 +412,8 @@ impl EphemerisSession {
             geocentric_tet_km.z - obs_tet.z,
         ];
 
-        use eternal_core::Location;
-        use eternal_time::sidereal::GAST;
+        use cosmos_core::Location;
+        use cosmos_time::sidereal::GAST;
         let location = Location::from_degrees(
             observer.lat_rad.to_degrees(),
             observer.lon_rad.to_degrees(),
@@ -460,7 +460,7 @@ fn equatorial_from_tet(v: Vector3) -> ((f64, f64), f64) {
 fn equatorial_from_ecliptic_angles(
     lon: f64,
     lat: f64,
-    tt: &eternal_time::TT,
+    tt: &cosmos_time::TT,
 ) -> SkyResult<EquatorialCoord> {
     equatorial_from_ecliptic_angles_with_distance(lon, lat, 0.0, tt)
 }
@@ -469,7 +469,7 @@ fn equatorial_from_ecliptic_angles_with_distance(
     lon: f64,
     lat: f64,
     distance_km: f64,
-    tt: &eternal_time::TT,
+    tt: &cosmos_time::TT,
 ) -> SkyResult<EquatorialCoord> {
     let v_tet = tet_from_ecliptic(lon, lat, distance_km.max(1.0), tt)?;
     let dec = libm::asin(v_tet.z / libm::sqrt(v_tet.x * v_tet.x + v_tet.y * v_tet.y + v_tet.z * v_tet.z));
@@ -486,7 +486,7 @@ fn tet_from_ecliptic(
     lon: f64,
     lat: f64,
     distance_km: f64,
-    tt: &eternal_time::TT,
+    tt: &cosmos_time::TT,
 ) -> SkyResult<Vector3> {
     let (sin_lon, cos_lon) = libm::sincos(lon);
     let (sin_lat, cos_lat) = libm::sincos(lat);
@@ -512,7 +512,7 @@ fn tet_from_ecliptic(
 fn ecliptic_from_tet(
     pos_tet: Vector3,
     vel_tet: Vector3,
-    tt: &eternal_time::TT,
+    tt: &cosmos_time::TT,
 ) -> ((f64, f64), EclipticVelocity) {
     let pos_ecl = tet_equatorial_to_ecliptic_of_date(pos_tet, tt);
     let vel_ecl = tet_equatorial_to_ecliptic_of_date(vel_tet, tt);

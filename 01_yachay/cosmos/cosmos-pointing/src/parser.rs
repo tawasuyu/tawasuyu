@@ -2,8 +2,8 @@ use crate::error::{Error, Result};
 use crate::observation::{
     decode_pier_side, IndatFile, IndatOption, MountType, Observation, PierSide, SiteParams,
 };
-use eternal_core::Angle;
-use eternal_time::JulianDate;
+use cosmos_core::Angle;
+use cosmos_time::JulianDate;
 
 pub fn parse_indat(content: &str) -> Result<IndatFile> {
     let mut header_lines = Vec::new();

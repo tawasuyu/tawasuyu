@@ -1,5 +1,5 @@
-use eternal_core::Angle;
-use eternal_time::JulianDate;
+use cosmos_core::Angle;
+use cosmos_time::JulianDate;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MountType {

@@ -14,20 +14,20 @@
 
 use std::path::{Path, PathBuf};
 
-use eternal_coords::Vector3;
-use eternal_core::constants::{AU_KM, SECONDS_PER_DAY_F64};
-use eternal_ephemeris::jpl::{SpkError, SpkFile};
-use eternal_ephemeris::moon::ElpMpp02Moon;
-use eternal_ephemeris::planets::{
+use cosmos_coords::Vector3;
+use cosmos_core::constants::{AU_KM, SECONDS_PER_DAY_F64};
+use cosmos_ephemeris::jpl::{SpkError, SpkFile};
+use cosmos_ephemeris::moon::ElpMpp02Moon;
+use cosmos_ephemeris::planets::{
     Vsop2013Emb, Vsop2013Jupiter, Vsop2013Mars, Vsop2013Mercury, Vsop2013Neptune, Vsop2013Pluto,
     Vsop2013Saturn, Vsop2013Uranus, Vsop2013Venus,
 };
-use eternal_ephemeris::sun::Vsop2013Sun;
-use eternal_ephemeris::Vsop2013Earth;
-use eternal_core::utils::jd_to_centuries;
-use eternal_time::julian::JulianDate;
-use eternal_time::scales::ToTTFromTDB;
-use eternal_time::{NutationCalculator, TDB, TT};
+use cosmos_ephemeris::sun::Vsop2013Sun;
+use cosmos_ephemeris::Vsop2013Earth;
+use cosmos_core::utils::jd_to_centuries;
+use cosmos_time::julian::JulianDate;
+use cosmos_time::scales::ToTTFromTDB;
+use cosmos_time::{NutationCalculator, TDB, TT};
 
 use crate::fixture::{Corrections, Frame};
 
@@ -299,13 +299,13 @@ impl Oracle {
         );
 
         // 1. Gravitational light deflection by the Sun.
-        let dir_after_ld = eternal_coords::aberration::apply_light_deflection(
+        let dir_after_ld = cosmos_coords::aberration::apply_light_deflection(
             dir_icrs,
             sun_to_observer_unit,
             sun_obs_dist_au,
         );
         // 2. Stellar aberration (relativistic, IAU 2000A).
-        let dir_after_ab = eternal_coords::aberration::apply_aberration(
+        let dir_after_ab = cosmos_coords::aberration::apply_aberration(
             dir_after_ld,
             v_obs_au_day,
             sun_obs_dist_au,
@@ -317,7 +317,7 @@ impl Oracle {
             .map_err(|e| OracleError::Inner(format!("nutation failed: {:?}", e)))?;
         let tt_jd = tt.to_julian_date();
         let t_centuries = jd_to_centuries(tt_jd.jd1(), tt_jd.jd2());
-        let npb = eternal_core::precession::PrecessionIAU2006::new().npb_matrix_iau2006a(
+        let npb = cosmos_core::precession::PrecessionIAU2006::new().npb_matrix_iau2006a(
             t_centuries,
             nutation.nutation_longitude(),
             nutation.nutation_obliquity(),
@@ -338,7 +338,7 @@ impl Oracle {
     }
 
     /// Apply stellar aberration on top of the astrometric vector. Uses
-    /// `eternal_coords::aberration::apply_aberration`, which encodes
+    /// `cosmos_coords::aberration::apply_aberration`, which encodes
     /// the IAU 2000A relativistic transformation (stellar aberration with
     /// a small gravitational-correction `w2` term proportional to
     /// `GM_sun / (r_observer-sun · c²)`). Velocity is propagated by
@@ -465,7 +465,7 @@ fn aberrate_position(pos_km: [f64; 3], v_obs_au_day: Vector3, sun_obs_dist_au: f
         pos_km[2] / distance_km,
     );
     let aberrated =
-        eternal_coords::aberration::apply_aberration(direction, v_obs_au_day, sun_obs_dist_au);
+        cosmos_coords::aberration::apply_aberration(direction, v_obs_au_day, sun_obs_dist_au);
     [
         aberrated.x * distance_km,
         aberrated.y * distance_km,

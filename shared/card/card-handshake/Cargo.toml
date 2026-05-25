@@ -1,17 +1,17 @@
 [package]
-name = "brahman-handshake"
+name = "card-handshake"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "Brahman — handshake runtime Init↔módulo. Local sobre Unix socket; remoto sobre stream libp2p (brahman-net)."
+description = "Brahman — handshake runtime Init↔módulo. Local sobre Unix socket; remoto sobre stream libp2p (card-net)."
 
 [dependencies]
-brahman-card = { path = "../card-core" }
-brahman-broker = { path = "../../../02_ruway/chasqui/chasqui-broker" }
-brahman-net = { path = "../card-net" }
+card-core = { path = "../card-core" }
+chasqui-broker = { path = "../../../02_ruway/chasqui/chasqui-broker" }
+card-net = { path = "../card-net" }
 blake3 = { workspace = true }
 futures = { workspace = true }
 notify = { workspace = true }

@@ -17,7 +17,7 @@ pub mod persist;
 pub mod pipeline;
 pub mod stats;
 
-use brahman_card::{Card, Payload, Supervision};
+use card_core::{Card, Payload, Supervision};
 use arje_incarnate::{Incarnator, IncarnatorConfig};
 use nix::sys::signal::{kill, Signal};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
@@ -1383,14 +1383,14 @@ mod tests {
             workspace: ws_id,
             nodes: vec![CommandRef {
                 label: "boom".into(),
-                payload: brahman_card::Payload::Native {
+                payload: card_core::Payload::Native {
                     exec: "/bin/false".into(),
                     argv: vec![],
                     envp: vec![],
                 },
                 soma: Default::default(),
                 flows: Default::default(),
-                supervision: brahman_card::Supervision::OneShot,
+                supervision: card_core::Supervision::OneShot,
             }],
             edges: vec![],
             discern: DiscernPolicy::default(),

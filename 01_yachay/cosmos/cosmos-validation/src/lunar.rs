@@ -7,10 +7,10 @@
 //! the public API names use the explicit `mean_` prefix to leave room
 //! for the true variants.
 
-use eternal_core::nutation::IERS2010FundamentalArgs;
-use eternal_core::Vector3;
-use eternal_ephemeris::jpl::SpkFile;
-use eternal_time::{NutationCalculator, TT};
+use cosmos_core::nutation::IERS2010FundamentalArgs;
+use cosmos_core::Vector3;
+use cosmos_ephemeris::jpl::SpkFile;
+use cosmos_time::{NutationCalculator, TT};
 
 use crate::oracle::OracleError;
 use crate::sidereal::{ecliptic_lon_lat, tet_equatorial_to_ecliptic_of_date};
@@ -124,7 +124,7 @@ fn nutation_longitude(tt: &TT) -> f64 {
 /// Constant μ = G(M_earth + M_moon) in km³/s², used by the osculating
 /// Keplerian element extraction.
 const MU_EARTH_MOON_KM3_S2: f64 =
-    eternal_core::constants::GM_EARTH_KM3S2 + eternal_core::constants::GM_MOON_KM3S2;
+    cosmos_core::constants::GM_EARTH_KM3S2 + cosmos_core::constants::GM_MOON_KM3S2;
 
 /// Compute the Moon's geocentric state in the **ecliptic-of-date frame**
 /// from a DE-class SPK kernel, in km and km/s. Internally uses the
@@ -136,8 +136,8 @@ fn moon_state_ecl_of_date(
     tt: &TT,
     jd_tdb: f64,
 ) -> Result<(Vector3, Vector3), OracleError> {
-    use eternal_core::utils::jd_to_centuries;
-    use eternal_time::NutationCalculator;
+    use cosmos_core::utils::jd_to_centuries;
+    use cosmos_time::NutationCalculator;
 
     let (moon_emb_pos, moon_emb_vel) = spk
         .compute_state(301, 3, jd_tdb)
@@ -163,7 +163,7 @@ fn moon_state_ecl_of_date(
         .map_err(|e| OracleError::Inner(format!("nutation: {:?}", e)))?;
     let tt_jd = tt.to_julian_date();
     let t_centuries = jd_to_centuries(tt_jd.jd1(), tt_jd.jd2());
-    let npb = eternal_core::precession::PrecessionIAU2006::new().npb_matrix_iau2006a(
+    let npb = cosmos_core::precession::PrecessionIAU2006::new().npb_matrix_iau2006a(
         t_centuries,
         nut.nutation_longitude(),
         nut.nutation_obliquity(),
@@ -249,7 +249,7 @@ pub fn ecliptic_lon_of_date(v_tet: Vector3, tt: &TT) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eternal_time::julian::JulianDate;
+    use cosmos_time::julian::JulianDate;
 
     fn tt_from_jd(jd: f64) -> TT {
         TT::from_julian_date(JulianDate::new(jd, 0.0))

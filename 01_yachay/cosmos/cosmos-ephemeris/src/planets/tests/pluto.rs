@@ -1,7 +1,7 @@
 use crate::planets::Vsop2013Pluto;
-use eternal_core::constants::{AU_KM, J2000_JD};
-use eternal_time::julian::JulianDate;
-use eternal_time::TDB;
+use cosmos_core::constants::{AU_KM, J2000_JD};
+use cosmos_time::julian::JulianDate;
+use cosmos_time::TDB;
 
 const PLUTO_VSOP2013_REF: &[(f64, f64, f64, f64)] = &[
     (2411545.0, 17.6213054610, 43.9412232438, 8.4004533071),
@@ -65,7 +65,7 @@ fn vsop2013_j2000() {
 #[test]
 fn geocentric_distance_range() {
     let pluto = Vsop2013Pluto;
-    let start_jd = eternal_core::constants::J2000_JD;
+    let start_jd = cosmos_core::constants::J2000_JD;
 
     let (min_dist, max_dist) = (0..12 * 20).fold((f64::MAX, 0.0f64), |(min, max), i| {
         let jd = start_jd + (i * 30) as f64;

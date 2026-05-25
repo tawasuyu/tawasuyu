@@ -44,7 +44,7 @@ impl Claim {
     /// ambigüedad de fronteras entre `predicate` y `value`.
     pub fn canonical_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(64 + self.predicate.len() + self.value.len());
-        out.extend_from_slice(b"agorapura-claim\x01");
+        out.extend_from_slice(b"agora_app-claim\x01");
         out.extend_from_slice(self.subject.as_bytes());
         out.extend_from_slice(&self.issued_at.to_le_bytes());
         out.extend_from_slice(&(self.predicate.len() as u64).to_le_bytes());

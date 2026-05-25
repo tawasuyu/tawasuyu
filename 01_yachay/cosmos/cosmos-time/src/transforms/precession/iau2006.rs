@@ -1,6 +1,6 @@
 use super::{PrecessionModel, PrecessionResult};
 use crate::{TimeError, TimeResult, TT};
-use eternal_core::precession::iau2006::PrecessionIAU2006 as CoreCalculator;
+use cosmos_core::precession::iau2006::PrecessionIAU2006 as CoreCalculator;
 
 pub fn calculate(tt: &TT) -> TimeResult<PrecessionResult> {
     let jd = tt.to_julian_date();
@@ -21,7 +21,7 @@ pub fn calculate(tt: &TT) -> TimeResult<PrecessionResult> {
 mod tests {
     use super::*;
     use crate::TT;
-    use eternal_core::constants::J2000_JD;
+    use cosmos_core::constants::J2000_JD;
 
     #[test]
     fn test_iau2006_precession_calculation() {

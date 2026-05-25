@@ -267,9 +267,9 @@ async fn primordial_loop(
     if let Some(ctx) = &broker_context {
         info!(context = %ctx, "brahman broker bajo contexto operativo");
     }
-    let brahman_broker = std::sync::Arc::new(tokio::sync::Mutex::new(
-        brahman_broker::Broker::new(brahman_broker::BrokerConfig {
-            strategy: brahman_broker::MatchStrategy::default(),
+    let chasqui_broker = std::sync::Arc::new(tokio::sync::Mutex::new(
+        chasqui_broker::Broker::new(chasqui_broker::BrokerConfig {
+            strategy: chasqui_broker::MatchStrategy::default(),
             current_context: broker_context.clone(),
         }),
     ));
@@ -280,7 +280,7 @@ async fn primordial_loop(
     // pueda ser descubierta por nodos remotos. Identidad libp2p
     // persistida en disco vía keypair_store (peer_id estable across
     // reboots).
-    let brahman_net = setup_brahman_net(dev_mode).await;
+    let card_net = setup_brahman_net(dev_mode).await;
 
     // Política opcional de peers libp2p: allowlist + denylist + hot
     // reload. Activada si BRAHMAN_PEER_ALLOWLIST o BRAHMAN_PEER_DENYLIST
@@ -294,7 +294,7 @@ async fn primordial_loop(
     // conexiones ANTES del Noise handshake (más eficiente que
     // rechazar en el handshake brahman). Cada hot-reload de la
     // policy también re-sincroniza vía diff.
-    if let (Some(net), Some(policy)) = (&brahman_net, &brahman_policy) {
+    if let (Some(net), Some(policy)) = (&card_net, &brahman_policy) {
         policy.attach_to_net(net.clone());
         let (allow, deny) = policy.sizes();
         info!(
@@ -304,13 +304,13 @@ async fn primordial_loop(
         );
     }
 
-    let brahman_sock = brahman_handshake::transport::default_socket_path();
-    match brahman_handshake::server::Server::bind(
+    let brahman_sock = card_handshake::transport::default_socket_path();
+    match card_handshake::server::Server::bind(
         &brahman_sock,
-        brahman_handshake::server::ServerConfig {
+        card_handshake::server::ServerConfig {
             init_attached: true,
-            broker: Some(brahman_broker.clone()),
-            net: brahman_net.clone(),
+            broker: Some(chasqui_broker.clone()),
+            net: card_net.clone(),
             policy: brahman_policy.clone(),
         },
     ) {
@@ -321,11 +321,11 @@ async fn primordial_loop(
             // Las sesiones locales y remotas conviven en las mismas
             // tablas (sessions, push_table, broker).
             let server = std::sync::Arc::new(server);
-            if let Some(net) = brahman_net.clone() {
+            if let Some(net) = card_net.clone() {
                 let s_libp2p = server.clone();
                 let n_libp2p = net.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = brahman_handshake::network::run_libp2p_accept_loop(
+                    if let Err(e) = card_handshake::network::run_libp2p_accept_loop(
                         s_libp2p, n_libp2p,
                     )
                     .await
@@ -366,11 +366,11 @@ async fn primordial_loop(
 
     // Brahman admin: socket separado para snapshots de estado (sesiones +
     // matches del broker). Misma política de degradación grácil.
-    let admin_sock = brahman_admin::transport::default_socket_path();
-    match brahman_admin::server::AdminServer::bind(
+    let admin_sock = card_admin::transport::default_socket_path();
+    match card_admin::server::AdminServer::bind(
         &admin_sock,
-        brahman_broker.clone(),
-        brahman_admin::server::AdminConfig {
+        chasqui_broker.clone(),
+        card_admin::server::AdminConfig {
             init_attached: true,
             current_context: broker_context.clone(),
         },
@@ -765,7 +765,7 @@ async fn feed_brain(
 /// `None`. El Init sigue funcionando en modo Unix-only.
 async fn setup_brahman_net(
     dev_mode: bool,
-) -> Option<std::sync::Arc<brahman_net::BrahmanNet>> {
+) -> Option<std::sync::Arc<card_net::BrahmanNet>> {
     let listen_addr = match std::env::var("BRAHMAN_LISTEN_MULTIADDR") {
         Ok(s) if !s.is_empty() => s,
         _ => {
@@ -776,7 +776,7 @@ async fn setup_brahman_net(
         }
     };
 
-    let multiaddr: brahman_net::Multiaddr = match listen_addr.parse() {
+    let multiaddr: card_net::Multiaddr = match listen_addr.parse() {
         Ok(m) => m,
         Err(e) => {
             warn!(addr = %listen_addr, ?e, "BRAHMAN_LISTEN_MULTIADDR inválido — net deshabilitado");
@@ -800,7 +800,7 @@ async fn setup_brahman_net(
         if loaded { "cargada" } else { "generada y persistida" }
     );
 
-    let net = match brahman_net::BrahmanNet::with_keypair(keypair) {
+    let net = match card_net::BrahmanNet::with_keypair(keypair) {
         Ok(n) => std::sync::Arc::new(n),
         Err(e) => {
             warn!(?e, "BrahmanNet::with_keypair falló — net deshabilitado");
@@ -817,7 +817,7 @@ async fn setup_brahman_net(
     if let Ok(bootstrap) = std::env::var("BRAHMAN_BOOTSTRAP_PEERS") {
         let mut dialed = 0usize;
         for entry in bootstrap.split(',').filter(|s| !s.is_empty()) {
-            match entry.parse::<brahman_net::Multiaddr>() {
+            match entry.parse::<card_net::Multiaddr>() {
                 Ok(addr) => {
                     net.dial(addr.clone());
                     dialed += 1;
@@ -849,7 +849,7 @@ async fn setup_brahman_net(
 /// debe mantener para que el thread no se aborte). Si no hay paths,
 /// el watcher es un no-op que termina inmediato.
 fn setup_brahman_policy() -> (
-    Option<brahman_handshake::peer_policy::PeerPolicy>,
+    Option<card_handshake::peer_policy::PeerPolicy>,
     Option<std::thread::JoinHandle<()>>,
 ) {
     let allow_path = std::env::var("BRAHMAN_PEER_ALLOWLIST")
@@ -869,7 +869,7 @@ fn setup_brahman_policy() -> (
     let allow_pb = allow_path.as_deref().map(std::path::Path::new);
     let deny_pb = deny_path.as_deref().map(std::path::Path::new);
 
-    let policy = match brahman_handshake::peer_policy::PeerPolicy::from_files(allow_pb, deny_pb) {
+    let policy = match card_handshake::peer_policy::PeerPolicy::from_files(allow_pb, deny_pb) {
         Ok(p) => p,
         Err(e) => {
             warn!(

@@ -29,7 +29,7 @@ impl EclipticCoord {
         self.latitude_rad.to_degrees()
     }
     pub fn distance_au(&self) -> f64 {
-        self.distance_km / eternal_core::constants::AU_KM
+        self.distance_km / cosmos_core::constants::AU_KM
     }
 }
 
@@ -60,7 +60,7 @@ impl EquatorialCoord {
 /// Topocentric horizon coordinates (altitude / azimuth) at the supplied
 /// observer's local clock. Geometric — atmospheric refraction is *not*
 /// applied; callers who want refracted altitude can use
-/// `eternal_coords::refraction`.
+/// `cosmos_coords::refraction`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HorizonCoord {
     /// Altitude (elevation above horizon), radians.

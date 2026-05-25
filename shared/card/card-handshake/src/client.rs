@@ -4,8 +4,8 @@ use std::collections::VecDeque;
 use std::path::Path;
 use std::time::Duration;
 
-use brahman_card::{Card, WitInterface, CARD_SCHEMA_VERSION};
-use brahman_net::Keypair;
+use card_core::{Card, WitInterface, CARD_SCHEMA_VERSION};
+use card_net::Keypair;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::UnixStream;
@@ -47,7 +47,7 @@ pub enum ClientError {
 /// Genérico sobre el transport (`AsyncRead + AsyncWrite + Unpin + Send`):
 /// funciona indistintamente sobre `UnixStream` (path local) o sobre un
 /// stream libp2p wrapped con `tokio_util::compat` (path remoto, vía
-/// `brahman_handshake::network`).
+/// `card_handshake::network`).
 #[derive(Debug)]
 pub struct Client<S = UnixStream> {
     stream: S,
@@ -97,7 +97,7 @@ where
     /// `keypair`. Usar para conexiones libp2p donde el server exige
     /// firma. La public key derivada de `keypair` debe coincidir con
     /// el `peer_id` libp2p autenticado por Noise — típicamente la
-    /// keypair pasada a [`brahman_net::BrahmanNet::with_keypair`].
+    /// keypair pasada a [`card_net::BrahmanNet::with_keypair`].
     pub async fn connect_with_stream_signed(
         stream: S,
         card: Card,
@@ -133,7 +133,7 @@ where
         card.validate()
             .map_err(|e| ClientError::InvalidCard(e.to_string()))?;
 
-        let wire_card = brahman_card::WireCard::from(card);
+        let wire_card = card_core::WireCard::from(card);
         let signature = match keypair {
             Some(kp) => Some(sign_hello(kp, &wire_card, &wit)?),
             None => None,
@@ -141,7 +141,7 @@ where
 
         let hello = Hello {
             schema_version: CARD_SCHEMA_VERSION,
-            protocol_version: brahman_card::PROTOCOL_VERSION.to_string(),
+            protocol_version: card_core::PROTOCOL_VERSION.to_string(),
             card: wire_card,
             wit,
             signature,

@@ -1,4 +1,4 @@
-//! `cosmobiologia-render` — modelo y matemática de render
+//! `cosmos_app-render` — modelo y matemática de render
 //! **agnósticos de surface**. Lo consumen tanto el canvas gpui
 //! (nativo, render Vulkan/Metal) como el cliente web (WASM, render
 //! SVG / Canvas2D). Cualquier mejora del layout / spread / cluster /
@@ -6,7 +6,7 @@
 //!
 //! ## Por qué un crate aparte
 //!
-//! `cosmobiologia-engine` arrastra `eternal-sky` (VSOP2013 + I/O de
+//! `cosmos_app-engine` arrastra `eternal-sky` (VSOP2013 + I/O de
 //! tablas) que **no compila a WASM** sin empaquetar 30+ MB de
 //! efemérides. Los tipos del `RenderModel` en sí son serde puro y
 //! sí compilan a WASM — extraerlos a este crate libera al cliente
@@ -28,7 +28,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub use cosmobiologia_model::{Chart, ChartId, ChartKind};
+pub use cosmos_model::{Chart, ChartId, ChartKind};
 
 mod constellations_data;
 pub mod draw;

@@ -11,13 +11,13 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use serde::Deserialize;
 
-use eternal_time::julian::JulianDate;
-use eternal_time::scales::ToTTFromTDB;
-use eternal_time::TDB;
+use cosmos_time::julian::JulianDate;
+use cosmos_time::scales::ToTTFromTDB;
+use cosmos_time::TDB;
 
-use eternal_validation::oracle::{Backend, Oracle};
-use eternal_validation::rise_set::{find_next_event, Event, HorizonTarget};
-use eternal_validation::topocentric::Observer;
+use cosmos_validation::oracle::{Backend, Oracle};
+use cosmos_validation::rise_set::{find_next_event, Event, HorizonTarget};
+use cosmos_validation::topocentric::Observer;
 
 const MOON: i32 = 301;
 const SUN: i32 = 10;

@@ -42,7 +42,7 @@ impl ThemeFacts {
         u32::from(self.high_contrast)
     }
 
-    /// Acento como RGB en 0..1, el formato `(ddd)` que pide el portal.
+    /// Acento como RGB en 0..1, el format `(ddd)` que pide el portal.
     pub fn accent_rgb(&self) -> (f64, f64, f64) {
         let (h, s, l) = self.accent_hsl;
         hsl_to_rgb(h, s, l)

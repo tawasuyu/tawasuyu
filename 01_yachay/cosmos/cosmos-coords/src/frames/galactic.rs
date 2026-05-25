@@ -1,8 +1,8 @@
 use crate::{
     constants::GALACTIC_TO_ICRS, transforms::CoordinateFrame, CoordResult, Distance, ICRSPosition,
 };
-use eternal_core::Angle;
-use eternal_time::TT;
+use cosmos_core::Angle;
+use cosmos_time::TT;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -107,7 +107,7 @@ impl GalacticPosition {
         let (sin_b2, cos_b2) = other.b.sin_cos();
         let delta_l = (self.l - other.l).radians();
 
-        let angle_rad = eternal_core::math::vincenty_angular_separation(
+        let angle_rad = cosmos_core::math::vincenty_angular_separation(
             sin_b1, cos_b1, sin_b2, cos_b2, delta_l,
         );
 

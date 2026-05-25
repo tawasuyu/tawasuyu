@@ -1,33 +1,33 @@
 [package]
-name = "cosmobiologia-engine"
+name = "cosmos-engine"
 version = { workspace = true }
 edition = { workspace = true }
 license = { workspace = true }
-description = "Tahuantinsuyu — bridge entre el modelo agnóstico y eternal-astrology. Produce RenderModel agnóstico para el canvas."
+description = "Tahuantinsuyu — bridge entre el modelo agnóstico y cosmos-astrology. Produce RenderModel agnóstico para el canvas."
 
 [dependencies]
-cosmobiologia-model = { path = "../cosmos-model" }
-cosmobiologia-render = { path = "../cosmos-render" }
-cosmobiologia-corpus = { path = "../cosmos-corpus" }
+cosmos-model = { path = "../cosmos-model" }
+cosmos-render = { path = "../cosmos-render" }
+cosmos-corpus = { path = "../cosmos-corpus" }
 serde = { workspace = true }
 thiserror = { workspace = true }
 
-# eternal-astrology vive en otro workspace (~/eternal). Lo enlazamos por
+# cosmos-astrology vive en otro workspace (~/eternal). Lo enlazamos por
 # path para que el bridge use la misma lógica validada que el harness de
 # Sergio. Si el path no existe (CI sin eternal checked out), el feature
 # `eternal-bridge` se apaga.
-[dependencies.eternal-astrology]
+[dependencies.cosmos-astrology]
 path = "../cosmos-astrology"
 optional = true
 
-[dependencies.eternal-sky]
+[dependencies.cosmos-sky]
 path = "../cosmos-sky"
 optional = true
 
 [features]
-# El bridge real contra eternal-astrology está prendido por default
+# El bridge real contra cosmos-astrology está prendido por default
 # porque la app sin eternal no muestra cartas reales. Si necesitás
 # compilar sin eternal checked out (CI, builds aisladas), `--no-default-features`
 # lo apaga y `compute()` cae a `compute_mock()`.
 default = ["eternal-bridge"]
-eternal-bridge = ["dep:eternal-astrology", "dep:eternal-sky"]
+eternal-bridge = ["dep:cosmos-astrology", "dep:cosmos-sky"]

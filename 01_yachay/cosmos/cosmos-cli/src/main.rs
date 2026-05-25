@@ -1,9 +1,9 @@
-//! `cosmobiologia-cli` — cliente del service socket de Tahuantinsuyu.
+//! `cosmos_app-cli` — cliente del service socket de Tahuantinsuyu.
 //!
 //! Pide cómputos de cartas sin abrir la GUI. Útil para integraciones,
 //! scripts y para verificar end-to-end que el data plane brahman está
 //! sirviendo. Conecta al socket que la app GUI expone (default
-//! `$XDG_CACHE_HOME/cosmobiologia/service.sock`).
+//! `$XDG_CACHE_HOME/cosmos_app/service.sock`).
 //!
 //! ## Comandos
 //!
@@ -15,7 +15,7 @@
 //! ## Ejemplo
 //!
 //! ```bash
-//! cargo run -p cosmobiologia-cli -- natal \
+//! cargo run -p cosmos_app-cli -- natal \
 //!     --year 1987 --month 3 --day 14 \
 //!     --hour 5 --minute 22 --tz-min -240 \
 //!     --lat 10.4806 --lon -66.9036 \
@@ -26,12 +26,12 @@ use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
-use cosmobiologia_card::service::{self, ComputeRequest, ComputeResponse};
-use cosmobiologia_model::{StoredBirthData, StoredChartConfig};
+use cosmos_card::service::{self, ComputeRequest, ComputeResponse};
+use cosmos_model::{StoredBirthData, StoredChartConfig};
 
 #[derive(Parser)]
 #[command(
-    name = "cosmobiologia-cli",
+    name = "cosmos_app-cli",
     version,
     about = "Cliente del service socket de Tahuantinsuyu."
 )]

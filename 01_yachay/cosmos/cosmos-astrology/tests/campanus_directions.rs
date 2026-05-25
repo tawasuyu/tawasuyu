@@ -11,11 +11,11 @@
 //! 3. Campanus differs from both Placidus and Regiomontanus on
 //!    body-to-body directions.
 
-use eternal_astrology::{
+use cosmos_astrology::{
     direct_to_aspect, AspectKind, BirthData, ChartConfig, DirectionKey, DirectionMethod,
     NatalChart, Significator,
 };
-use eternal_sky::{Body, EphemerisSession, Instant, Observer, SessionConfig};
+use cosmos_sky::{Body, EphemerisSession, Instant, Observer, SessionConfig};
 
 fn session() -> EphemerisSession {
     EphemerisSession::open(SessionConfig::vsop2013()).unwrap()

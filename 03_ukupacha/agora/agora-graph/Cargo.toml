@@ -1,12 +1,12 @@
 [package]
-name = "agorapura-graph"
+name = "agora-graph"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "agorapura — red de confianza: almacena atestaciones verificadas y responde corroboración de claims; la validez la decide una política negociada, no el grafo."
+description = "agora-app — red de confianza: almacena atestaciones verificadas y responde corroboración de claims; la validez la decide una política negociada, no el grafo."
 
 [dependencies]
-agorapura-core = { path = "../agora-core" }
+agora-core = { path = "../agora-core" }
 serde = { workspace = true }

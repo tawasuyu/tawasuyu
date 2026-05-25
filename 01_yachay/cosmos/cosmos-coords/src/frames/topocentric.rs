@@ -1,7 +1,7 @@
 use crate::{CoordResult, Distance};
-use eternal_core::constants::{HALF_PI, TWOPI};
-use eternal_core::{Angle, Location};
-use eternal_time::TT;
+use cosmos_core::constants::{HALF_PI, TWOPI};
+use cosmos_core::{Angle, Location};
+use cosmos_time::TT;
 
 const EARTH_RADIUS_AU: f64 = 4.2635e-5; // 6378.137 km
 
@@ -136,7 +136,7 @@ impl TopocentricPosition {
         }
         let h_term = 244.0 / (165.0 + 47.0 * h.abs().powf(1.1));
         let sin_arg = h + h_term;
-        1.0 / libm::sin(sin_arg * eternal_core::constants::DEG_TO_RAD)
+        1.0 / libm::sin(sin_arg * cosmos_core::constants::DEG_TO_RAD)
     }
 
     pub fn air_mass_kasten_young(&self) -> f64 {
@@ -537,15 +537,15 @@ impl HourAnglePosition {
     }
 
     pub fn to_cirs(&self, delta_t: f64) -> CoordResult<crate::frames::CIRSPosition> {
-        use eternal_time::scales::conversions::ToUT1WithDeltaT;
-        use eternal_time::sidereal::GAST;
+        use cosmos_time::scales::conversions::ToUT1WithDeltaT;
+        use cosmos_time::sidereal::GAST;
 
         let ut1 = self.epoch.to_ut1_with_delta_t(delta_t)?;
         let gast = GAST::from_ut1_and_tt(&ut1, &self.epoch)?;
         let last = gast.to_last(&self.observer);
 
         let ra_rad = last.radians() - self.hour_angle.radians();
-        let ra = eternal_core::angle::wrap_0_2pi(ra_rad);
+        let ra = cosmos_core::angle::wrap_0_2pi(ra_rad);
 
         let mut cirs = crate::frames::CIRSPosition::new(
             Angle::from_radians(ra),

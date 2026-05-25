@@ -1,15 +1,15 @@
 [package]
-name = "brahman-dht"
+name = "minga-dht"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "Brahman — capa de discovery typed sobre el Kademlia compartido de brahman-net. Claves namespaced por kind (Code/Card/Persona/Service) sin colisión en una sola malla."
+description = "Brahman — capa de discovery typed sobre el Kademlia compartido de card-net. Claves namespaced por kind (Code/Card/Persona/Service) sin colisión en una sola malla."
 
 [dependencies]
-brahman-net = { path = "../../../shared/card/card-net" }
+card-net = { path = "../../../shared/card/card-net" }
 libp2p = { workspace = true }
 blake3 = { workspace = true }
 serde = { workspace = true }

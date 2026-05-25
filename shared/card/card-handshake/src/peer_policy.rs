@@ -38,7 +38,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-use brahman_net::{BrahmanNet, PeerId};
+use card_net::{BrahmanNet, PeerId};
 use tracing::{debug, info, warn};
 
 /// Política de admisión combinada (allow + deny). Clone barato (todos
@@ -416,7 +416,7 @@ fn run_watcher(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use brahman_net::Keypair;
+    use card_net::Keypair;
     use tempfile::TempDir;
 
     fn fresh_peer() -> PeerId {

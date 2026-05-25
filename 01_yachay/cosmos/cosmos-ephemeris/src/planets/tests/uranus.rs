@@ -1,7 +1,7 @@
 use crate::planets::Vsop2013Uranus;
-use eternal_core::constants::{AU_KM, J2000_JD};
-use eternal_time::julian::JulianDate;
-use eternal_time::TDB;
+use cosmos_core::constants::{AU_KM, J2000_JD};
+use cosmos_time::julian::JulianDate;
+use cosmos_time::TDB;
 
 const URANUS_VSOP2013_REF: &[(f64, f64, f64, f64)] = &[
     (2411545.0, -16.4159097008, -7.7936503250, -3.1804126500),
@@ -65,7 +65,7 @@ fn vsop2013_j2000() {
 #[test]
 fn geocentric_distance_range() {
     let uranus = Vsop2013Uranus;
-    let start_jd = eternal_core::constants::J2000_JD;
+    let start_jd = cosmos_core::constants::J2000_JD;
 
     let (min_dist, max_dist) = (0..12 * 20).fold((f64::MAX, 0.0f64), |(min, max), i| {
         let jd = start_jd + (i * 30) as f64;

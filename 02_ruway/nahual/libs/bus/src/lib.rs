@@ -6,7 +6,7 @@
 //!
 //! - **Productores** (FileExplorer, DatabaseExplorer): el LayoutHost los
 //!   subscribe individualmente y reenvía sus eventos tipados al bus,
-//!   normalizando al formato `{provider, id, …}` agnóstico.
+//!   normalizando al format `{provider, id, …}` agnóstico.
 //! - **Consumidores** (TextViewer, ImageViewer, …): reciben el handle del
 //!   bus en su constructor y se subscriben directo.
 //!

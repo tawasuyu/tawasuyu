@@ -18,8 +18,8 @@
 //! # Usage
 //!
 //! ```
-//! use eternal_time::{JulianDate, UT1};
-//! use eternal_time::scales::ut1::ut1_from_calendar;
+//! use cosmos_time::{JulianDate, UT1};
+//! use cosmos_time::scales::ut1::ut1_from_calendar;
 //!
 //! // From Unix timestamp components
 //! let ut1 = UT1::new(0, 0);  // Unix epoch in UT1
@@ -42,11 +42,11 @@
 
 use crate::constants::UNIX_EPOCH_JD;
 use crate::julian::JulianDate;
-use eternal_core::constants::MJD_ZERO_POINT;
+use cosmos_core::constants::MJD_ZERO_POINT;
 
 use crate::parsing::parse_iso8601;
 use crate::{TimeError, TimeResult};
-use eternal_core::constants::{NANOSECONDS_PER_SECOND_F64, SECONDS_PER_DAY, SECONDS_PER_DAY_F64};
+use cosmos_core::constants::{NANOSECONDS_PER_SECOND_F64, SECONDS_PER_DAY, SECONDS_PER_DAY_F64};
 use std::fmt;
 use std::str::FromStr;
 
@@ -160,7 +160,7 @@ impl FromStr for UT1 {
 mod tests {
     use super::*;
     use crate::constants::UNIX_EPOCH_JD;
-    use eternal_core::constants::J2000_JD;
+    use cosmos_core::constants::J2000_JD;
 
     #[test]
     fn test_ut1_constructors() {

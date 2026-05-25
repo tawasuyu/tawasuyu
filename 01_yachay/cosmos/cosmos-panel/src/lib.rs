@@ -1,7 +1,7 @@
-//! `cosmobiologia-panel` — control panel inferior de la app.
+//! `cosmos_app-panel` — control panel inferior de la app.
 //!
 //! Lee los módulos disponibles para la carta activa (vía
-//! [`cosmobiologia_modules::Registry::for_kind`]) y pinta sus
+//! [`cosmos_modules::Registry::for_kind`]) y pinta sus
 //! [`Control`]s como toggles / sliders / selects. Cada cambio emite
 //! [`PanelEvent`] que la app traduce a mutaciones de visibilidad sobre
 //! el canvas y al `module_configs` del shell.
@@ -29,8 +29,8 @@ use gpui::{
     Window, canvas, div, prelude::*, px,
 };
 
-use cosmobiologia_model::ChartKind;
-use cosmobiologia_modules::{Control, Registry, SelectOption};
+use cosmos_model::ChartKind;
+use cosmos_modules::{Control, Registry, SelectOption};
 use nahual_theme::Theme;
 
 // =====================================================================

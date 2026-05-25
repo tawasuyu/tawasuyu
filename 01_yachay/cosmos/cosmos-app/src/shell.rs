@@ -28,20 +28,20 @@ use gpui::{
     Window, div, prelude::*, px,
 };
 
-use cosmobiologia_canvas::{
+use cosmos_canvas::{
     AstrologyCanvas, CanvasEvent, CanvasMode, ThumbnailItem, ThumbnailScope,
 };
-use cosmobiologia_engine::{
+use cosmos_engine::{
     EventoConocido, LayerKind, NatalOptions, OUTER_RING_MODULES, PipelineRequest,
     compose_with_options, svg_export,
 };
-use cosmobiologia_model::{
+use cosmos_model::{
     Chart, ChartId, ChartKind, ContactId, FreeChartId, ModuleState, StoredBirthData,
     StoredChartConfig, TreeSelection,
 };
-use cosmobiologia_panel::{ChartOption, ControlPanel, PanelEvent};
-use cosmobiologia_store::Store;
-use cosmobiologia_tree::{
+use cosmos_panel::{ChartOption, ControlPanel, PanelEvent};
+use cosmos_store::Store;
+use cosmos_tree::{
     parse_city_atlas_tsv, FreeChartEntry, TahuantinsuyuTree, TreeEvent,
 };
 use nahual_core::{LayoutDirection, NodeId};
@@ -147,7 +147,7 @@ impl Shell {
 
         let tree = cx.new(|cx| {
             let mut t = TahuantinsuyuTree::new(store.clone(), cx);
-            // Si hay un atlas custom en $XDG_DATA_HOME/cosmobiologia/
+            // Si hay un atlas custom en $XDG_DATA_HOME/cosmos_app/
             // atlas.tsv, lo cargamos y reemplazamos el atlas hardcoded
             // de 90 ciudades. Formato TSV: name<TAB>lat<TAB>lon<TAB>tz_min.
             if let Some(atlas) = load_city_atlas_from_xdg() {
@@ -419,7 +419,7 @@ impl Shell {
                 let result = cx
                     .background_executor()
                     .spawn(async {
-                        brahman_sidecar::list_sessions_blocking("cosmobiologia-observer")
+                        card_sidecar::list_sessions_blocking("cosmos_app-observer")
                     })
                     .await;
                 let _ = this.update(cx, |this, cx| {
@@ -900,7 +900,7 @@ impl Shell {
             .get("synastry")
             .and_then(|c| c.get("partner_chart_id"))
             .and_then(|v| v.as_str())
-            .and_then(|s| s.parse::<cosmobiologia_model::ChartId>().ok())
+            .and_then(|s| s.parse::<cosmos_model::ChartId>().ok())
             .and_then(|id| self.store.get_chart(id).ok());
         manual.or_else(|| self.find_synastry_partner_auto())
     }
@@ -920,7 +920,7 @@ impl Shell {
             .get("composite")
             .and_then(|c| c.get("partner_chart_id"))
             .and_then(|v| v.as_str())
-            .and_then(|s| s.parse::<cosmobiologia_model::ChartId>().ok())
+            .and_then(|s| s.parse::<cosmos_model::ChartId>().ok())
             .and_then(|id| self.store.get_chart(id).ok());
         manual.or_else(|| self.find_synastry_partner_auto())
     }
@@ -1227,7 +1227,7 @@ impl Shell {
     }
 
     /// Recompone la carta actual + escribe el SVG a un archivo en
-    /// `$XDG_DATA_HOME/cosmobiologia/exports/<label>_<short_id>.svg`.
+    /// `$XDG_DATA_HOME/cosmos_app/exports/<label>_<short_id>.svg`.
     /// Logea la ruta a stderr — futuro: file save dialog GPUI.
     fn export_current_to_svg(&self) {
         let Some(chart) = self.current_chart.as_ref() else {
@@ -1249,7 +1249,7 @@ impl Shell {
             }
         };
         let svg = svg_export::render_to_svg(&render);
-        let dir = directories::ProjectDirs::from("net", "gioser", "cosmobiologia")
+        let dir = directories::ProjectDirs::from("net", "gioser", "cosmos_app")
             .map(|d| d.data_dir().join("exports"))
             .unwrap_or_else(|| std::path::PathBuf::from("."));
         if let Err(e) = std::fs::create_dir_all(&dir) {
@@ -1411,7 +1411,7 @@ impl Shell {
             .to_string();
 
         // Ventana ±15 min — dos pasadas (minuto grueso, segundo fino).
-        match cosmobiologia_engine::rectificar(&chart, &eventos, 15, &key_gr) {
+        match cosmos_engine::rectificar(&chart, &eventos, 15, &key_gr) {
             Ok(r) => {
                 // Offset en segundos → texto «±Xm Ys».
                 let seg = r.mejor_offset_segundos;
@@ -1456,7 +1456,7 @@ impl Shell {
             eprintln!("[shell] save_transit: la carta activa es libre");
             return;
         }
-        match cosmobiologia_engine::compute_transit_chart(natal) {
+        match cosmos_engine::compute_transit_chart(natal) {
             Ok((birth, instant_label)) => {
                 let label = format!("{} transito · {}", natal.label, instant_label);
                 self.insert_derived_free_chart(natal.clone(), birth, label, cx);
@@ -1480,7 +1480,7 @@ impl Shell {
             return;
         }
         let age = self.module_age_or_current("progression");
-        match cosmobiologia_engine::compute_progression_chart(natal, age) {
+        match cosmos_engine::compute_progression_chart(natal, age) {
             Ok((birth, instant_label)) => {
                 let label = format!(
                     "{} prog-{:.0}a · {}",
@@ -1546,7 +1546,7 @@ impl Shell {
         // Pedimos al engine la fecha exacta del retorno. La engine
         // expone `compute_planetary_return_chart` que devuelve un
         // `StoredBirthData` listo para reusar como carta natal.
-        match cosmobiologia_engine::compute_planetary_return_chart(
+        match cosmos_engine::compute_planetary_return_chart(
             natal, &body, age, shift_days,
         ) {
             Ok((birth, instant_label)) => {
@@ -1572,15 +1572,15 @@ impl Shell {
 // Helpers de module_configs
 // =====================================================================
 
-// OUTER_RING_MODULES viene de cosmobiologia_engine — single source of
+// OUTER_RING_MODULES viene de cosmos_engine — single source of
 // truth. Shell y canvas leen del mismo slice.
 
 
-/// Lee `$XDG_DATA_HOME/cosmobiologia/atlas.tsv` si existe y lo parsea
+/// Lee `$XDG_DATA_HOME/cosmos_app/atlas.tsv` si existe y lo parsea
 /// como atlas de ciudades. Devuelve `None` cuando no hay archivo o
 /// quedó vacío después del parse — el tree cae al atlas hardcoded.
-fn load_city_atlas_from_xdg() -> Option<Vec<cosmobiologia_tree::CityPreset>> {
-    let path = directories::ProjectDirs::from("net", "gioser", "cosmobiologia")
+fn load_city_atlas_from_xdg() -> Option<Vec<cosmos_tree::CityPreset>> {
+    let path = directories::ProjectDirs::from("net", "gioser", "cosmos_app")
         .map(|d| d.data_dir().join("atlas.tsv"))?;
     if !path.exists() {
         return None;
@@ -1670,7 +1670,7 @@ fn unix_to_civil_utc(secs: i64) -> (i32, u32, u32, u32, u32, u32) {
 
 /// Etiqueta breve para mostrar al elegir una carta en el picker:
 /// `"YYYY-MM-DD · Lugar"` cuando hay lugar, sino solo la fecha.
-fn format_birth_brief(birth: &cosmobiologia_model::StoredBirthData) -> String {
+fn format_birth_brief(birth: &cosmos_model::StoredBirthData) -> String {
     let date = format!("{:04}-{:02}-{:02}", birth.year, birth.month, birth.day);
     match &birth.birthplace_label {
         Some(p) if !p.is_empty() => format!("{} · {}", date, p),
@@ -1681,7 +1681,7 @@ fn format_birth_brief(birth: &cosmobiologia_model::StoredBirthData) -> String {
 /// Edad en años decimales desde el nacimiento hasta el reloj actual.
 /// Aproximación: ignora la TZ de nacimiento (no afecta a resolución de
 /// año) y usa una fracción de año tropical sobre los segundos Unix.
-fn current_age_years(birth: &cosmobiologia_model::StoredBirthData) -> f64 {
+fn current_age_years(birth: &cosmos_model::StoredBirthData) -> f64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     let now_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1714,7 +1714,7 @@ fn set_module_enabled(
     }
 }
 
-/// Lee del `settings` el flex de un splitter en formato "f0,f1,..." y
+/// Lee del `settings` el flex de un splitter en format "f0,f1,..." y
 /// lo devuelve como `Vec<f32>` con la misma longitud que `defaults`.
 /// Si no hay nada persistido, faltan campos, o algún flex es ≤0, cae a
 /// `defaults`. Validación estricta porque un flex 0 colapsa al panel.

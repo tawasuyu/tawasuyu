@@ -46,8 +46,8 @@ use crate::matrix::RotationMatrix3;
 /// # Example
 ///
 /// ```
-/// use eternal_core::precession::PrecessionIAU2006;
-/// use eternal_core::constants::J2000_JD;
+/// use cosmos_core::precession::PrecessionIAU2006;
+/// use cosmos_core::constants::J2000_JD;
 ///
 /// let precession = PrecessionIAU2006::new();
 /// let result = precession.compute(J2000_JD, 3652.5).unwrap(); // ~10 years after J2000

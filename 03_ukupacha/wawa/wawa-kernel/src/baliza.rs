@@ -65,7 +65,7 @@ pub(crate) struct BalizaPanico {
     ancho: AtomicUsize,
     alto: AtomicUsize,
     bytes_por_pixel: AtomicUsize,
-    /// Rojo de alerta de colapso, ya codificado al formato de la pantalla.
+    /// Rojo de alerta de colapso, ya codificado al format de la pantalla.
     pixel_alerta: AtomicU32,
     /// Naranja de agotamiento de memoria, ya codificado.
     pixel_oom: AtomicU32,

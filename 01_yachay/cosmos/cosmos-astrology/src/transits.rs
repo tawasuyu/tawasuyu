@@ -16,7 +16,7 @@
 //!   transiting body's longitude is exactly N degrees from a specific
 //!   natal longitude, where N is the [`AspectKind`]'s exact angle.
 
-use eternal_sky::{find_root, Body, EphemerisSession, Instant, SearchOptions};
+use cosmos_sky::{find_root, Body, EphemerisSession, Instant, SearchOptions};
 
 use crate::angles::signed_delta_deg;
 use crate::aspect::{AspectKind, OrbTable};
@@ -170,7 +170,7 @@ pub fn find_next_exact_transit(
     let target_rad = natal_target_longitude_rad;
     let exact_offset_rad = aspect_kind.exact_angle_deg().to_radians();
 
-    let f = |t: Instant| -> eternal_sky::SkyResult<f64> {
+    let f = |t: Instant| -> cosmos_sky::SkyResult<f64> {
         let pos = session.body_apparent(transiting, t, None)?;
         let lon = pos.ecliptic_of_date.longitude_rad;
         // The aspect can perfect on either side of the target by the

@@ -6,11 +6,11 @@
 //! is checked structurally: every body shifts by the same arc, and
 //! house numbers are preserved.
 
-use eternal_astrology::{
+use cosmos_astrology::{
     progress, progressed_instant, secondary_progression, solar_arc_naibod, solar_arc_true,
     BirthData, ChartConfig, NatalChart, ProgressedHouses, ProgressionMethod,
 };
-use eternal_sky::{Body, EphemerisSession, Instant, Observer, SessionConfig};
+use cosmos_sky::{Body, EphemerisSession, Instant, Observer, SessionConfig};
 
 fn session() -> EphemerisSession {
     EphemerisSession::open(SessionConfig::vsop2013()).unwrap()

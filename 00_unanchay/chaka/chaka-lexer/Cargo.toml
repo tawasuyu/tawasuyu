@@ -1,12 +1,12 @@
 [package]
-name = "charka-lexer"
+name = "chaka-lexer"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "charka-lexer — tokenizador de COBOL (formato fijo de columnas y libre) para el transpilador COBOL→Rust."
+description = "chaka-lexer — tokenizador de COBOL (format fijo de columnas y libre) para el transpilador COBOL→Rust."
 
 [dependencies]
 thiserror = { workspace = true }

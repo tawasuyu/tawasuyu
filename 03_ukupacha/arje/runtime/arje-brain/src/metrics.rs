@@ -1,7 +1,7 @@
 //! Endpoint Prometheus en TCP. Formato text/plain (exposition format 0.0.4).
 //!
 //! Sin dependencias adicionales — la cardinalidad de nuestras métricas es
-//! pequeña y el formato es trivial. Si crece, sustituir por la crate
+//! pequeña y el format es trivial. Si crece, sustituir por la crate
 //! `prometheus` con su Registry + encoders.
 
 use crate::introspect::BrainState;

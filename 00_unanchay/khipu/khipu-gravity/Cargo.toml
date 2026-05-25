@@ -1,12 +1,12 @@
 [package]
-name = "badu-gravity"
+name = "khipu-gravity"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "badu — gravedad semántica: afinidad coseno entre notas, vecinos más cercanos, clústeres por umbral y layout 2D dirigido por fuerzas."
+description = "khipu-app — gravedad semántica: afinidad coseno entre notas, vecinos más cercanos, clústeres por umbral y layout 2D dirigido por fuerzas."
 
 [dependencies]
-badu-core = { path = "../khipu-core" }
+khipu-core = { path = "../khipu-core" }
 serde = { workspace = true }

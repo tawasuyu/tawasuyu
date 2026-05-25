@@ -1,6 +1,6 @@
 //! Geodetic observer location on the WGS-84 ellipsoid.
 //!
-//! Thin re-export of `eternal_validation::topocentric::Observer` with an
+//! Thin re-export of `cosmos_validation::topocentric::Observer` with an
 //! optional human-readable `name` attached. The underlying struct already
 //! stores latitude/longitude in radians plus elevation in metres.
 //!
@@ -10,7 +10,7 @@
 //! existing struct so behaviour stays bit-identical to the validation
 //! pipeline.
 
-pub use eternal_validation::topocentric::Observer;
+pub use cosmos_validation::topocentric::Observer;
 
 /// Named observer, useful for logs and chart metadata. Wraps an
 /// `Observer` with a free-form label.

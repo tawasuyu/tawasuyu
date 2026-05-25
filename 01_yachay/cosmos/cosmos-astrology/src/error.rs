@@ -1,6 +1,6 @@
 //! Unified error type.
 
-use eternal_sky::SkyError;
+use cosmos_sky::SkyError;
 use thiserror::Error;
 
 pub type AstrologyResult<T> = Result<T, AstrologyError>;

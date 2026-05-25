@@ -1,11 +1,11 @@
-//! `yachay` — demostración de notebooks reproducibles.
+//! `pluma_notebook_app` — demostración de notebooks reproducibles.
 //!
 //! Arma un notebook con prosa, código y un embed de otro módulo
 //! brahman; imprime el orden de ejecución y el digest Merkle; luego
 //! edita una celda intermedia y muestra cómo la obsolescencia y el
-//! digest se propagan. `cargo run -p yachay`.
+//! digest se propagan. `cargo run -p pluma_notebook_app`.
 
-use yachay_core::{CellId, CellKind, CellState, Notebook};
+use pluma_notebook_core::{CellId, CellKind, CellState, Notebook};
 
 /// Etiqueta de la clase de una celda.
 fn label(nb: &Notebook, id: CellId) -> &'static str {
@@ -47,7 +47,7 @@ fn main() {
     nb.add_dependency(grafico, datos);
     nb.add_dependency(grafico, media);
 
-    println!("\n  yachay · notebook reproducible — {} celdas\n", nb.len());
+    println!("\n  pluma_notebook_app · notebook reproducible — {} celdas\n", nb.len());
 
     println!("  orden de ejecución (según el DAG de dependencias):");
     if let Some(order) = nb.execution_order() {

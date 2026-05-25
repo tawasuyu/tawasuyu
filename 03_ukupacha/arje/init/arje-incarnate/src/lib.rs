@@ -31,7 +31,7 @@ pub mod namespaced;
 pub mod plain;
 pub mod pre_exec;
 
-pub use brahman_card::Card;
+pub use card_core::Card;
 pub use caps::{CapabilitySet, CgroupStatus, NsKind, UserNsStatus};
 pub use env::{EnvSpec, ENV_BUS_SOCK, ENV_ENTE_ID};
 pub use error::{Degradation, IncarnateError};
@@ -181,7 +181,7 @@ impl Incarnator {
         }
 
         // Payload ejecutable.
-        use brahman_card::Payload;
+        use card_core::Payload;
         if !matches!(card.payload, Payload::Native { .. } | Payload::Legacy { .. }) {
             r.blocking
                 .push("payload is not Native/Legacy (use ente-wasm for Wasm)".into());
@@ -272,7 +272,7 @@ fn which_ns_blocking(msg: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use brahman_card::{Card, NamespaceSet, Payload};
+    use card_core::{Card, NamespaceSet, Payload};
 
     fn make_card(payload: Payload, ns: NamespaceSet) -> Card {
         let mut c = Card::new("test");

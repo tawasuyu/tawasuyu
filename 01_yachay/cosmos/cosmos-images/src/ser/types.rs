@@ -1,7 +1,7 @@
 use crate::ser::SerError;
 use byteorder::{ByteOrder, LittleEndian};
-use eternal_core::constants::SECONDS_PER_DAY_F64;
-use eternal_time::{constants::UNIX_EPOCH_JD, TimeError, TimeResult, UTC};
+use cosmos_core::constants::SECONDS_PER_DAY_F64;
+use cosmos_time::{constants::UNIX_EPOCH_JD, TimeError, TimeResult, UTC};
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -267,7 +267,7 @@ impl SerFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eternal_time::UTC;
+    use cosmos_time::UTC;
 
     #[test]
     fn color_id_from_u32_all_variants() {

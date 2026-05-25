@@ -1,7 +1,7 @@
 use super::chebyshev::evaluate_position_velocity;
 use super::daf::{DafFile, DafSummary};
 use super::SpkError;
-use eternal_core::constants::{J2000_JD, SECONDS_PER_DAY_F64};
+use cosmos_core::constants::{J2000_JD, SECONDS_PER_DAY_F64};
 use std::path::Path;
 
 fn jd_to_seconds_from_j2000(jd: f64) -> f64 {
@@ -389,7 +389,7 @@ mod tests {
 
     #[test]
     fn test_segment_contains_epoch() {
-        let start_jd = eternal_core::constants::J2000_JD;
+        let start_jd = cosmos_core::constants::J2000_JD;
         let end_jd = 2451645.0;
         let segment = SpkSegment {
             body_id: 3,
@@ -426,7 +426,7 @@ mod tests {
     #[test]
     fn test_spk_segment_from_summary() {
         let summary = DafSummary {
-            doubles: vec![0.0, eternal_core::constants::SECONDS_PER_DAY_F64], // start and end epoch
+            doubles: vec![0.0, cosmos_core::constants::SECONDS_PER_DAY_F64], // start and end epoch
             ints: vec![399, 0, 1, 2, 100, 200], // body, center, frame, type, start_idx, end_idx
         };
 
@@ -438,7 +438,7 @@ mod tests {
         assert_eq!(segment.start_index, 100);
         assert_eq!(segment.end_index, 200);
         assert!((segment.start_epoch - 0.0).abs() < 1e-10);
-        assert!((segment.end_epoch - eternal_core::constants::SECONDS_PER_DAY_F64).abs() < 1e-10);
+        assert!((segment.end_epoch - cosmos_core::constants::SECONDS_PER_DAY_F64).abs() < 1e-10);
     }
 
     #[test]
@@ -459,7 +459,7 @@ mod tests {
     #[test]
     fn test_spk_segment_from_summary_insufficient_ints() {
         let summary = DafSummary {
-            doubles: vec![0.0, eternal_core::constants::SECONDS_PER_DAY_F64],
+            doubles: vec![0.0, cosmos_core::constants::SECONDS_PER_DAY_F64],
             ints: vec![399, 0, 1, 2, 100], // only 5 ints, need 6
         };
 
@@ -479,7 +479,7 @@ mod tests {
             frame_id: 1,
             data_type: 2,
             start_epoch: 0.0,
-            end_epoch: eternal_core::constants::SECONDS_PER_DAY_F64,
+            end_epoch: cosmos_core::constants::SECONDS_PER_DAY_F64,
             start_index: 100,
             end_index: 200,
         };
@@ -499,7 +499,7 @@ mod tests {
             frame_id: 1,
             data_type: 2,
             start_epoch: 0.0,
-            end_epoch: eternal_core::constants::SECONDS_PER_DAY_F64,
+            end_epoch: cosmos_core::constants::SECONDS_PER_DAY_F64,
             start_index: 100,
             end_index: 200,
         };
@@ -546,14 +546,14 @@ mod tests {
     fn test_type2_metadata_struct() {
         let meta = Type2Metadata {
             init: 0.0,
-            intlen: eternal_core::constants::SECONDS_PER_DAY_F64,
+            intlen: cosmos_core::constants::SECONDS_PER_DAY_F64,
             rsize: 50,
             n_records: 100,
             n_coeffs: 16,
         };
 
         assert_eq!(meta.init, 0.0);
-        assert_eq!(meta.intlen, eternal_core::constants::SECONDS_PER_DAY_F64);
+        assert_eq!(meta.intlen, cosmos_core::constants::SECONDS_PER_DAY_F64);
         assert_eq!(meta.rsize, 50);
         assert_eq!(meta.n_records, 100);
         assert_eq!(meta.n_coeffs, 16);

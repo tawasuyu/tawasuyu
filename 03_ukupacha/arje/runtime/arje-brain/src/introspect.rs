@@ -56,7 +56,7 @@ impl BrainState {
     }
 }
 
-/// Append-only writer de una `Rule` serializada a `rules_out` en formato
+/// Append-only writer de una `Rule` serializada a `rules_out` en format
 /// JSONL: una línea = un Rule JSON. Idempotente respecto a re-flushes
 /// porque el caller se encarga de no apendar la misma rule dos veces.
 /// El loader (`loader::extract_rules_from_json`) acepta tanto JSONL como

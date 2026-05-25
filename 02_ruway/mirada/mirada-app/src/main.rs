@@ -55,7 +55,7 @@ const POLL_MS: u64 = 16;
 
 /// Nombres de app ficticios para las ventanas de simulación.
 const APPS: &[&str] = &[
-    "shuma", "fana", "revista", "cosmobiología", "matilda", "yachay", "barra",
+    "shuma", "pluma_app", "revista", "cosmobiología", "matilda", "pluma_notebook_app", "barra",
 ];
 
 /// El Cerebro: el estado del escritorio + lo último colocado + el cable.

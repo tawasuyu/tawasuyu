@@ -1,5 +1,5 @@
 [package]
-name = "eternal-time"
+name = "cosmos-time"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -10,14 +10,14 @@ keywords = ["astronomy", "time", "julian-date", "utc", "tai"]
 categories = ["science", "date-and-time"]
 
 [dependencies]
-eternal-core.workspace = true
+cosmos-core.workspace = true
 libm.workspace = true
 serde = { workspace = true, optional = true }
 thiserror.workspace = true
 
 [features]
 default = []
-serde = ["dep:serde", "eternal-core/serde"]
+serde = ["dep:serde", "cosmos-core/serde"]
 
 [dev-dependencies]
 criterion.workspace = true

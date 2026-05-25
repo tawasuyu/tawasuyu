@@ -1,7 +1,7 @@
-//! `fana-render-plan` — el plan de dibujo del editor DAG, agnóstico.
+//! `pluma_app-render-plan` — el plan de dibujo del editor DAG, agnóstico.
 //!
 //! Traduce un [`NarrativeGraph`] a una geometría 2D lista para pintar
-//! sin saber nada del backend (`fana-editor-gpui`, `fana-editor-web`):
+//! sin saber nada del backend (`pluma_app-editor-gpui`, `pluma_app-editor-web`):
 //!
 //! - **Editor** — un [`AtomBlock`] por átomo, apilados verticalmente en
 //!   orden topológico; cada rama ocupa su propia columna.
@@ -19,8 +19,8 @@
 
 use std::collections::HashMap;
 
-use fana_core::CoherenceState;
-use fana_graph::NarrativeGraph;
+use pluma_core::CoherenceState;
+use pluma_graph::NarrativeGraph;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -163,7 +163,7 @@ fn preview(content: &str, max: usize) -> String {
 
 /// Intensidad semántica de un átomo: suma de los valores absolutos de
 /// sus vectores concepto→intensidad.
-fn raw_intensity(atom: &fana_core::NarrativeAtom) -> f32 {
+fn raw_intensity(atom: &pluma_core::NarrativeAtom) -> f32 {
     atom.semantic_vectors.values().map(|v| v.abs()).sum()
 }
 
@@ -183,7 +183,7 @@ pub fn build_plan(graph: &NarrativeGraph, cfg: &LayoutConfig) -> RenderPlan {
         branches.iter().enumerate().map(|(i, &b)| (b, i)).collect();
 
     // Orden de layout determinista: (profundidad, columna, id).
-    let mut order: Vec<&fana_core::NarrativeAtom> = graph.atoms().collect();
+    let mut order: Vec<&pluma_core::NarrativeAtom> = graph.atoms().collect();
     order.sort_by(|a, b| {
         let da = depth.get(&a.id).copied().unwrap_or(0);
         let db = depth.get(&b.id).copied().unwrap_or(0);
@@ -264,7 +264,7 @@ pub fn build_plan(graph: &NarrativeGraph, cfg: &LayoutConfig) -> RenderPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fana_core::NarrativeAtom;
+    use pluma_core::NarrativeAtom;
 
     /// Cadena a → b → c en la rama `main`.
     fn chain() -> (NarrativeGraph, Uuid, Uuid, Uuid) {

@@ -1,22 +1,22 @@
 [package]
-name = "fana"
+name = "pluma-app"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "fana — editor de escritura DAG: ventana GPUI con el documento como grafo de átomos narrativos, conectores de dependencia y osciloscopio de coherencia."
+description = "pluma-app — editor de escritura DAG: ventana GPUI con el documento como grafo de átomos narrativos, conectores de dependencia y osciloscopio de coherencia."
 
 [[bin]]
-name = "fana"
+name = "pluma-app"
 path = "src/main.rs"
 
 [dependencies]
-fana-core = { path = "../pluma-core" }
-fana-graph = { path = "../pluma-graph" }
-fana-render-plan = { path = "../pluma-render-plan" }
-fana-editor-gpui = { path = "../pluma-editor-gpui" }
+pluma-core = { path = "../pluma-core" }
+pluma-graph = { path = "../pluma-graph" }
+pluma-render-plan = { path = "../pluma-render-plan" }
+pluma-editor-gpui = { path = "../pluma-editor-gpui" }
 nahual-theme = { path = "../../../02_ruway/nahual/libs/theme" }
 nahual-launcher = { path = "../../../02_ruway/nahual/libs/launcher" }
 gpui = { workspace = true }

@@ -1,6 +1,6 @@
 use crate::transforms::CartesianFrame;
-use eternal_core::constants::{FRAME_BIAS_PHI_RAD, J2000_OBLIQUITY_RAD};
-use eternal_core::Vector3;
+use cosmos_core::constants::{FRAME_BIAS_PHI_RAD, J2000_OBLIQUITY_RAD};
+use cosmos_core::Vector3;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EclipticCartesian {

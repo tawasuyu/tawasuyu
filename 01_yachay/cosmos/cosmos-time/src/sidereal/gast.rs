@@ -4,8 +4,8 @@ use crate::sidereal::LAST;
 use crate::transforms::earth_rotation_angle;
 use crate::transforms::nutation::NutationCalculator;
 use crate::TimeResult;
-use eternal_core::angle::wrap_0_2pi;
-use eternal_core::cio::CioSolution;
+use cosmos_core::angle::wrap_0_2pi;
+use cosmos_core::cio::CioSolution;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -59,7 +59,7 @@ impl GAST {
         self.0.hour_angle_to_target(target_ra_hours)
     }
 
-    pub fn to_last(&self, location: &eternal_core::Location) -> crate::sidereal::LAST {
+    pub fn to_last(&self, location: &cosmos_core::Location) -> crate::sidereal::LAST {
         let gast_rad = self.radians();
         let last_rad = gast_rad + location.longitude;
 
@@ -91,15 +91,15 @@ fn calculate_gast_iau2006a(ut1: &UT1, tt: &TT) -> TimeResult<f64> {
     Ok(wrap_0_2pi(gast))
 }
 
-fn calculate_npb_matrix_iau2006a(tt: &TT) -> TimeResult<eternal_core::RotationMatrix3> {
+fn calculate_npb_matrix_iau2006a(tt: &TT) -> TimeResult<cosmos_core::RotationMatrix3> {
     let tt_jd = tt.to_julian_date();
-    let t = eternal_core::utils::jd_to_centuries(tt_jd.jd1(), tt_jd.jd2());
+    let t = cosmos_core::utils::jd_to_centuries(tt_jd.jd1(), tt_jd.jd2());
 
     let nutation_result = tt.nutation_iau2006a()?;
     let dpsi = nutation_result.nutation_longitude();
     let deps = nutation_result.nutation_obliquity();
 
-    let precession_calc = eternal_core::precession::PrecessionIAU2006::new();
+    let precession_calc = cosmos_core::precession::PrecessionIAU2006::new();
     let npb_matrix = precession_calc.npb_matrix_iau2006a(t, dpsi, deps);
 
     Ok(npb_matrix)
@@ -154,8 +154,8 @@ mod tests {
         assert_eq!(gast_deg.degrees(), 270.0);
         assert_eq!(gast_deg.hours(), 18.0);
 
-        let gast_rad = GAST::from_radians(eternal_core::constants::HALF_PI);
-        assert!((gast_rad.radians() - eternal_core::constants::HALF_PI).abs() < 1e-15);
+        let gast_rad = GAST::from_radians(cosmos_core::constants::HALF_PI);
+        assert!((gast_rad.radians() - cosmos_core::constants::HALF_PI).abs() < 1e-15);
         assert_eq!(gast_rad.hours(), 6.0);
 
         let angle = gast_deg.angle();

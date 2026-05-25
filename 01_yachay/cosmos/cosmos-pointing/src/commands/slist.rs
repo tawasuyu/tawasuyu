@@ -3,8 +3,8 @@ use crate::error::Result;
 use crate::model::PointingModel;
 use crate::observation::{Observation, PierSide};
 use crate::session::Session;
-use eternal_core::constants::{DEG_TO_RAD, RAD_TO_DEG};
-use eternal_core::Angle;
+use cosmos_core::constants::{DEG_TO_RAD, RAD_TO_DEG};
+use cosmos_core::Angle;
 
 pub struct Slist;
 

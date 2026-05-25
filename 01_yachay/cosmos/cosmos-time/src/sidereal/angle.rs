@@ -1,4 +1,4 @@
-use eternal_core::math::fmod;
+use cosmos_core::math::fmod;
 use std::fmt;
 
 #[cfg(feature = "serde")]
@@ -24,11 +24,11 @@ impl SiderealAngle {
     }
 
     pub fn from_radians(radians: f64) -> Self {
-        Self::from_hours(radians * 12.0 / eternal_core::constants::PI)
+        Self::from_hours(radians * 12.0 / cosmos_core::constants::PI)
     }
 
     pub(crate) fn from_radians_exact(radians: f64) -> Self {
-        let hours = radians * 12.0 / eternal_core::constants::PI;
+        let hours = radians * 12.0 / cosmos_core::constants::PI;
         Self {
             angle_hours: Self::normalize_hours(hours),
             exact_radians: Some(radians),
@@ -47,7 +47,7 @@ impl SiderealAngle {
         if let Some(exact) = self.exact_radians {
             exact
         } else {
-            self.angle_hours * eternal_core::constants::PI / 12.0
+            self.angle_hours * cosmos_core::constants::PI / 12.0
         }
     }
 
@@ -80,7 +80,7 @@ mod tests {
 
         assert_eq!(angle.hours(), 6.0);
         assert_eq!(angle.degrees(), 90.0);
-        assert!((angle.radians() - eternal_core::constants::HALF_PI).abs() < 1e-15);
+        assert!((angle.radians() - cosmos_core::constants::HALF_PI).abs() < 1e-15);
     }
 
     #[test]

@@ -9,14 +9,14 @@
 //!
 //! Bytes postcard de la tupla `(WireCard, Option<WitInterface>)`. Se
 //! eligió postcard porque ya es el wire format del resto del protocolo:
-//! mismo determinismo, sin convertir a otro formato sólo para firmar.
+//! mismo determinismo, sin convertir a otro format sólo para firmar.
 //!
 //! Cualquier campo que entre al payload firmado en el futuro debe
 //! añadirse al final de la tupla (postcard es position-dependent), o
 //! bumpearse el [`SIGNATURE_VERSION`] para distinguir esquemas.
 
-use brahman_card::{WireCard, WitInterface};
-use brahman_net::{Keypair, PeerId, PublicKey};
+use card_core::{WireCard, WitInterface};
+use card_net::{Keypair, PeerId, PublicKey};
 
 use crate::messages::HelloSignature;
 
@@ -97,7 +97,7 @@ pub fn verify_hello(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use brahman_card::Card;
+    use card_core::Card;
 
     fn sample_card() -> WireCard {
         Card::new("test.signed").into()

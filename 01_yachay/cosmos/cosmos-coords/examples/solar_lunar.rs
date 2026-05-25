@@ -1,11 +1,11 @@
-use eternal_coords::frames::{
+use cosmos_coords::frames::{
     HeliographicCarrington, HeliographicStonyhurst, SelenographicPosition,
 };
-use eternal_coords::lunar::compute_lunar_orientation;
-use eternal_coords::solar::{
+use cosmos_coords::lunar::compute_lunar_orientation;
+use cosmos_coords::solar::{
     carrington_rotation_number, compute_solar_orientation, sun_earth_distance,
 };
-use eternal_time::tt_from_calendar;
+use cosmos_time::tt_from_calendar;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- Solar orientation ---

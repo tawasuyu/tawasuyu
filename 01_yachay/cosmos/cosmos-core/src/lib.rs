@@ -40,8 +40,8 @@
 //! Common types are re-exported at the crate root for convenience:
 //!
 //! ```
-//! use eternal_core::{Angle, Vector3, RotationMatrix3, Location};
-//! use eternal_core::{AstroError, AstroResult, MathErrorKind};
+//! use cosmos_core::{Angle, Vector3, RotationMatrix3, Location};
+//! use cosmos_core::{AstroError, AstroResult, MathErrorKind};
 //! ```
 //!
 //! # Design Notes

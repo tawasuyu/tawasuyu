@@ -1,7 +1,7 @@
 //! Input for a natal-chart computation: a moment in time and a place,
 //! plus a small bag of metadata so the chart can carry its provenance.
 
-use eternal_sky::{Instant, Observer};
+use cosmos_sky::{Instant, Observer};
 
 /// How confident the astrologer is in the recorded birth time. Carried
 /// forward into the chart metadata so rectification work can mark its

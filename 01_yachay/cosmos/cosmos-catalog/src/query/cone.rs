@@ -7,7 +7,7 @@
 //! Proper motion can be propagated from the catalog epoch (J2016.0) to an
 //! arbitrary observation epoch before matching.
 
-use eternal_time::JulianDate;
+use cosmos_time::JulianDate;
 
 use super::catalog::{Catalog, StarRecord};
 use super::healpix::{angular_separation_deg, query_disc_nest};
@@ -133,7 +133,7 @@ fn apply_proper_motion(star: &StarRecord, epoch_jd: JulianDate) -> (f64, f64) {
     let dt_years = (epoch_jd - JulianDate::new(J2016_JD, 0.0)).to_f64() / 365.25;
 
     let dec_obs = star.dec + star.pmdec * dt_years / MAS_PER_DEGREE;
-    let cos_dec = libm::cos(star.dec * eternal_core::constants::PI / 180.0);
+    let cos_dec = libm::cos(star.dec * cosmos_core::constants::PI / 180.0);
     let ra_obs = star.ra + star.pmra * dt_years / MAS_PER_DEGREE / cos_dec;
 
     (ra_obs, dec_obs)
@@ -207,7 +207,7 @@ mod tests {
         assert!((dec - expected_dec).abs() < 1e-10);
 
         // pmra is μα* = μα·cos(δ), so ΔRA = μα*/cos(δ) · Δt
-        let cos_dec = libm::cos(45.0_f64 * eternal_core::constants::PI / 180.0);
+        let cos_dec = libm::cos(45.0_f64 * cosmos_core::constants::PI / 180.0);
         let expected_ra = 100.0 + (3600.0 / 3_600_000.0) / cos_dec;
         assert!((ra - expected_ra).abs() < 1e-10);
     }

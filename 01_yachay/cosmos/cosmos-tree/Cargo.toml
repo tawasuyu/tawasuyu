@@ -1,13 +1,13 @@
 [package]
-name = "cosmobiologia-tree"
+name = "cosmos-tree"
 version = { workspace = true }
 edition = { workspace = true }
 license = { workspace = true }
 description = "Tahuantinsuyu — explorador izquierdo (Groups/Contacts/Charts) sobre yahweh-widget-tree."
 
 [dependencies]
-cosmobiologia-model = { path = "../cosmos-model" }
-cosmobiologia-store = { path = "../cosmos-store" }
+cosmos-model = { path = "../cosmos-model" }
+cosmos-store = { path = "../cosmos-store" }
 nahual-theme = { workspace = true }
 nahual-widget-tree = { workspace = true }
 nahual-widget-text-input = { path = "../../../02_ruway/nahual/widgets/text_input" }

@@ -14,8 +14,8 @@
 use matilda_apply::{ApplyStep, FileWrite};
 use matilda_ghost::{ApplyReport, StepResult};
 
-pub use brahman_ssh_multiplex::{SshAuth, SshConfig, SshError};
-use brahman_ssh_multiplex::SshSession;
+pub use ssh::{SshAuth, SshConfig, SshError};
+use ssh::SshSession;
 
 /// Marcador de heredoc para escribir archivos remotos.
 const HEREDOC: &str = "MATILDA_LINKER_EOF";

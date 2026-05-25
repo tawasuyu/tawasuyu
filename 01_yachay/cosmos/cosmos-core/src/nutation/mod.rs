@@ -29,7 +29,7 @@
 //! # Example
 //!
 //! ```
-//! use eternal_core::nutation::NutationIAU2006A;
+//! use cosmos_core::nutation::NutationIAU2006A;
 //!
 //! let nutation = NutationIAU2006A::new();
 //! let result = nutation.compute(2451545.0, 0.0).unwrap();

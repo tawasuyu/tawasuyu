@@ -26,7 +26,7 @@ use crate::env::{build_env, EnvSpec};
 use crate::error::{Degradation, IncarnateError};
 use crate::pre_exec::{apply_unchecked, ChildSetup};
 use crate::ChildStdio;
-use brahman_card::{Card, NamespaceSet, Payload};
+use card_core::{Card, NamespaceSet, Payload};
 use nix::fcntl::OFlag;
 use nix::sched::CloneFlags;
 use nix::unistd::{pipe2, Pid};
@@ -285,7 +285,7 @@ fn set_cpu_affinity(pid: Pid, cpus: &[u32]) -> Result<(), std::io::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use brahman_card::NamespaceSet;
+    use card_core::NamespaceSet;
 
     #[test]
     fn empty_ns_does_not_need_namespacing() {

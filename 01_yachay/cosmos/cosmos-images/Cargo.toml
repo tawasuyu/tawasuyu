@@ -1,5 +1,5 @@
 [package]
-name = "eternal-images"
+name = "cosmos-images"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -10,9 +10,9 @@ keywords = ["astronomy", "fits", "xisf", "image", "scientific"]
 categories = ["science", "parser-implementations"]
 
 [dependencies]
-eternal-core.workspace = true
-eternal-time.workspace = true
-eternal-wcs.workspace = true
+cosmos-core.workspace = true
+cosmos-time.workspace = true
+cosmos-wcs.workspace = true
 byteorder.workspace = true
 libm.workspace = true
 crc32fast.workspace = true

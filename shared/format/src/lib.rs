@@ -1,7 +1,7 @@
 // =============================================================================
-//  renaser :: formato — el formato del grafo de objetos en disco
+//  renaser :: format — el format del grafo de objetos en disco
 // -----------------------------------------------------------------------------
-//  Hasta la Fase 7a, el formato del grafo de objetos —el superbloque, los
+//  Hasta la Fase 7a, el format del grafo de objetos —el superbloque, los
 //  registros del log, el manifiesto— vivia disperso entre `kernel/almacen.rs`
 //  y `kernel/manifiesto.rs`. Lo conocia solo el kernel.
 //
@@ -9,7 +9,7 @@
 //  ANFITRION debe sembrar el disco con el grafo ya poblado —los objetos de
 //  bytecode y el Manifiesto de Genesis— para que el kernel jamas vuelva a
 //  empotrar una sola app. Para ello, kernel y boot han de hablar EXACTAMENTE
-//  el mismo formato: la misma serializacion, el mismo hash, el mismo trazado
+//  el mismo format: la misma serializacion, el mismo hash, el mismo trazado
 //  de registros en el log.
 //
 //  Esta crate es esa unica verdad. Es un nucleo `#![no_std]` —el kernel
@@ -30,19 +30,19 @@ use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
 
 // =============================================================================
-//  Constantes del formato en disco
+//  Constantes del format en disco
 // =============================================================================
 
 /// Firma magica del superbloque — «RENASer GRaFo». Distingue un disco de
 /// renaser de uno virgen o ajeno.
 pub const MAGIA: [u8; 8] = *b"RENASGRF";
 
-/// Version del formato del superbloque en disco. Un disco con otra version se
+/// Version del format del superbloque en disco. Un disco con otra version se
 /// reformatea al arrancar. v2 (Fase 7) — el superbloque porta el ancla
 /// `manifiesto`, gemela de `raiz`.
 pub const VERSION_SUPERBLOQUE: u32 = 2;
 
-/// Version del formato del manifiesto serializado. Independiente de la del
+/// Version del format del manifiesto serializado. Independiente de la del
 /// superbloque: el manifiesto es un objeto del grafo, no una estructura fija
 /// del disco.
 pub const VERSION_MANIFIESTO: u32 = 1;
@@ -81,7 +81,7 @@ pub struct Objeto {
 pub struct SuperBloque {
     /// Firma magica: debe ser [`MAGIA`].
     pub magia: [u8; 8],
-    /// Version del formato: debe ser [`VERSION_SUPERBLOQUE`].
+    /// Version del format: debe ser [`VERSION_SUPERBLOQUE`].
     pub version: u32,
     /// Proximo sector libre del log — donde se anexara el siguiente objeto.
     pub cursor: u64,
@@ -96,7 +96,7 @@ pub struct SuperBloque {
 /// al arrancar. Vive como un objeto del grafo; el superbloque guarda su hash.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct Manifiesto {
-    /// Version del formato — debe ser [`VERSION_MANIFIESTO`].
+    /// Version del format — debe ser [`VERSION_MANIFIESTO`].
     pub version: u32,
     /// Las aplicaciones del userspace, en orden de arranque.
     pub apps: Vec<EntradaApp>,
@@ -112,7 +112,7 @@ pub struct EntradaApp {
     /// Hash del objeto del grafo que contiene el bytecode WASM de la app.
     pub bytecode: Hash,
     /// Sub-region del framebuffer asignada a la app. Campos de ancho fijo
-    /// `u32` A PROPOSITO: esto es un formato EN DISCO. La `RegionPantalla` del
+    /// `u32` A PROPOSITO: esto es un format EN DISCO. La `RegionPantalla` del
     /// kernel usa `usize` (ancho dependiente de plataforma) y no serializa.
     pub region_x: u32,
     pub region_y: u32,
@@ -167,12 +167,12 @@ impl Manifiesto {
     }
 
     /// Reconstruye un manifiesto desde la carga util de su objeto. Rechaza un
-    /// formato de version desconocida en lugar de malinterpretarlo.
+    /// format de version desconocida en lugar de malinterpretarlo.
     pub fn deserializar(bytes: &[u8]) -> Result<Manifiesto, &'static str> {
         let (manifiesto, _) = postcard::take_from_bytes::<Manifiesto>(bytes)
             .map_err(|_| "manifiesto :: deserializacion fallida")?;
         if manifiesto.version != VERSION_MANIFIESTO {
-            return Err("manifiesto :: version de formato desconocida");
+            return Err("manifiesto :: version de format desconocida");
         }
         Ok(manifiesto)
     }
@@ -223,7 +223,7 @@ pub fn longitud_registro(cabecera: &[u8]) -> Option<usize> {
 }
 
 // =============================================================================
-//  Pruebas — el formato debe ser un espejo perfecto: lo escrito se relee igual
+//  Pruebas — el format debe ser un espejo perfecto: lo escrito se relee igual
 // =============================================================================
 
 #[cfg(test)]

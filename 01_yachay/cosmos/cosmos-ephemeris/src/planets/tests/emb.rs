@@ -1,7 +1,7 @@
 use crate::planets::Vsop2013Emb;
-use eternal_core::constants::{AU_KM, J2000_JD};
-use eternal_time::julian::JulianDate;
-use eternal_time::TDB;
+use cosmos_core::constants::{AU_KM, J2000_JD};
+use cosmos_time::julian::JulianDate;
+use cosmos_time::TDB;
 
 // VSOP2013.ctl reference values (ICRS, from official Fortran output)
 // Line 3 for each epoch: Equatorial Heliocentric Coordinates X,Y,Z (au) - ICRS Frame J2000

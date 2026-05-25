@@ -453,7 +453,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         None => detener(),
     };
     let info: FrameBufferInfo = framebuffer.info();
-    let formato: PixelFormat = info.pixel_format;
+    let format: PixelFormat = info.pixel_format;
     let pantalla = Pantalla::adoptar(framebuffer, info);
     traza("framebuffer adoptado");
 
@@ -471,8 +471,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // --- 2. Encender la baliza: la red de seguridad visual va primero. ---
     BALIZA_PANICO.encender(
         &pantalla,
-        codificar(formato, Color::ALERTA),
-        codificar(formato, Color::OOM),
+        codificar(format, Color::ALERTA),
+        codificar(format, Color::OOM),
     );
     traza("baliza encendida");
 
@@ -510,7 +510,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     };
     let ancho_lienzo = info.width.min(ANCHO_MAX);
     let alto_lienzo = info.height.min(ALTO_MAX);
-    let mut lienzo = Lienzo::nuevo(memoria, ancho_lienzo, alto_lienzo, formato);
+    let mut lienzo = Lienzo::nuevo(memoria, ancho_lienzo, alto_lienzo, format);
     lienzo.limpiar(Color::LIENZO_EN_REPOSO);
 
     let mut consola = Consola::nueva(lienzo, pantalla);

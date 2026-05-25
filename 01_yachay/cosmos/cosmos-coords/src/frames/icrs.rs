@@ -1,6 +1,6 @@
 use crate::{transforms::CoordinateFrame, CoordError, CoordResult, Distance};
-use eternal_core::{Angle, Vector3};
-use eternal_time::TT;
+use cosmos_core::{Angle, Vector3};
+use cosmos_time::TT;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -139,7 +139,7 @@ impl ICRSPosition {
         let (sin_dec2, cos_dec2) = other.dec.sin_cos();
         let delta_ra = (self.ra - other.ra).radians();
 
-        let angle_rad = eternal_core::math::vincenty_angular_separation(
+        let angle_rad = cosmos_core::math::vincenty_angular_separation(
             sin_dec1, cos_dec1, sin_dec2, cos_dec2, delta_ra,
         );
 
@@ -476,11 +476,11 @@ mod tests {
 
         // Test 90° separation (allow ULP tolerance for haversine formula)
         let sep_90 = pos1.angular_separation(&pos2);
-        eternal_core::test_helpers::assert_ulp_le(sep_90.degrees(), 90.0, 2, "90° separation");
+        cosmos_core::test_helpers::assert_ulp_le(sep_90.degrees(), 90.0, 2, "90° separation");
 
         // Test pole separation
         let sep_pole = pos1.angular_separation(&pos3);
-        eternal_core::test_helpers::assert_ulp_le(sep_pole.degrees(), 90.0, 2, "Pole separation");
+        cosmos_core::test_helpers::assert_ulp_le(sep_pole.degrees(), 90.0, 2, "Pole separation");
 
         // Test self separation
         let sep_self = pos1.angular_separation(&pos1);

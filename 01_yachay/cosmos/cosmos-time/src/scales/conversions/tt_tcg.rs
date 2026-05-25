@@ -33,10 +33,10 @@
 //! # Usage
 //!
 //! ```
-//! use eternal_time::scales::{TT, TCG};
-//! use eternal_time::scales::conversions::{ToTT, ToTCG};
-//! use eternal_time::julian::JulianDate;
-//! use eternal_core::constants::J2000_JD;
+//! use cosmos_time::scales::{TT, TCG};
+//! use cosmos_time::scales::conversions::{ToTT, ToTCG};
+//! use cosmos_time::julian::JulianDate;
+//! use cosmos_core::constants::J2000_JD;
 //!
 //! let tt = TT::from_julian_date(JulianDate::new(J2000_JD, 0.0));
 //! let tcg = tt.to_tcg().unwrap();
@@ -50,7 +50,7 @@ use crate::constants::{TCG_RATE_LG, TCG_RATE_RATIO, TCG_REFERENCE_EPOCH};
 use crate::julian::JulianDate;
 use crate::scales::{TCG, TT};
 use crate::TimeResult;
-use eternal_core::constants::MJD_ZERO_POINT;
+use cosmos_core::constants::MJD_ZERO_POINT;
 
 impl ToTCG for TCG {
     /// Identity conversion. Returns self unchanged.
@@ -114,7 +114,7 @@ impl ToTCG for TT {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eternal_core::constants::{J2000_JD, MJD_ZERO_POINT, SECONDS_PER_DAY_F64};
+    use cosmos_core::constants::{J2000_JD, MJD_ZERO_POINT, SECONDS_PER_DAY_F64};
 
     #[test]
     fn test_tcg_identity_conversion() {

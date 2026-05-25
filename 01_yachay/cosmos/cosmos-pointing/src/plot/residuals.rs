@@ -64,7 +64,7 @@ pub fn require_fit(session: &Session) -> crate::error::Result<()> {
 mod tests {
     use super::*;
     use crate::observation::{Observation, PierSide};
-    use eternal_core::Angle;
+    use cosmos_core::Angle;
 
     fn make_obs(
         cmd_ha_arcsec: f64,

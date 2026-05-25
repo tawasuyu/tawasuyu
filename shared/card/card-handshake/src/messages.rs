@@ -4,8 +4,8 @@
 
 use std::path::PathBuf;
 
-use brahman_broker::MatchStrategy;
-use brahman_card::{TypeRef, WireCard, WitInterface};
+use chasqui_broker::MatchStrategy;
+use card_core::{TypeRef, WireCard, WitInterface};
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
@@ -55,7 +55,7 @@ pub struct Hello {
     pub identity_cert: Option<crate::identity::SessionCert>,
 }
 
-/// Firma de un Hello. La `public_key` viaja en el formato canónico
+/// Firma de un Hello. La `public_key` viaja en el format canónico
 /// libp2p (protobuf) — el verificador la decodifica y compara su
 /// `peer_id` derivado con la identidad libp2p autenticada por Noise.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -207,7 +207,7 @@ pub struct ListMatches {
 /// actualmente computados por el broker.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatchList {
-    pub matches: Vec<brahman_broker::Match>,
+    pub matches: Vec<chasqui_broker::Match>,
 }
 
 /// Frame único de wire — discriminada por variante. Cada conexión es un

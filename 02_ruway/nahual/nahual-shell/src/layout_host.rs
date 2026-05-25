@@ -353,7 +353,7 @@ impl LayoutHost {
             _ => {
                 let e = cx.new(|cx| FileExplorer::new(root, cx));
                 // Forwarder: cuando el explorer emite eventos tipados, los
-                // traducimos al formato agnóstico del AppBus.
+                // traducimos al format agnóstico del AppBus.
                 let bus = self.bus.clone();
                 cx.subscribe(&e, move |_, _, ev: &FileExplorerEvent, cx| {
                     let app_ev = match ev {

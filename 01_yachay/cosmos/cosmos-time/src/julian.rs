@@ -1,5 +1,5 @@
 use crate::constants::{SECONDS_TO_DAYS, UNIX_EPOCH_JD};
-use eternal_core::constants::{J2000_JD, MJD_ZERO_POINT, SECONDS_PER_DAY_F64};
+use cosmos_core::constants::{J2000_JD, MJD_ZERO_POINT, SECONDS_PER_DAY_F64};
 use std::fmt;
 use std::ops::{Add, Sub};
 

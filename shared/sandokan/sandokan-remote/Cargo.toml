@@ -11,6 +11,6 @@ description = "sandokan RemoteEngine — orquesta en un host remoto tunelando el
 sandokan-core = { path = "../sandokan-core" }
 sandokan-daemon = { path = "../sandokan-daemon" }
 sandokan-lifecycle = { path = "../sandokan-lifecycle" }
-brahman-ssh-multiplex = { path = "../../ssh" }
+ssh = { path = "../../ssh" }
 async-trait = { workspace = true }
 ulid = { workspace = true }

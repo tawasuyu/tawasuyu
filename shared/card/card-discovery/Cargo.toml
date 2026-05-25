@@ -1,17 +1,17 @@
 [package]
-name = "brahman-card-discovery"
+name = "card-discovery"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "Brahman — búsqueda de Cards: índice local con filtros + escaneo de directorios + discovery P2P sobre brahman-dht."
+description = "Brahman — búsqueda de Cards: índice local con filtros + escaneo de directorios + discovery P2P sobre minga-dht."
 
 [dependencies]
-brahman-card = { path = "../card-core" }
-brahman-cards = { path = "../cards" }
-brahman-dht = { path = "../../../03_ukupacha/minga/minga-dht" }
+card-core = { path = "../card-core" }
+cards = { path = "../cards" }
+minga-dht = { path = "../../../03_ukupacha/minga/minga-dht" }
 libp2p = { workspace = true }
 ulid = { workspace = true }
 

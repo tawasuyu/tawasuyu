@@ -22,7 +22,7 @@
 //! sign. Callers who prefer to align profections with their natal
 //! chart's actual house system can pass `ProfectionHouses::Quadrant`.
 
-use eternal_sky::{Body, Instant};
+use cosmos_sky::{Body, Instant};
 
 use crate::chart::NatalChart;
 use crate::zodiac::Sign;

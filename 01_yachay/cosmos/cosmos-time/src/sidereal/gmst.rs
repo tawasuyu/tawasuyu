@@ -2,9 +2,9 @@ use super::angle::SiderealAngle;
 use crate::scales::{TT, UT1};
 use crate::JulianDate;
 use crate::TimeResult;
-use eternal_core::angle::wrap_0_2pi;
-use eternal_core::constants::{J2000_JD, TWOPI};
-use eternal_core::math::fmod;
+use cosmos_core::angle::wrap_0_2pi;
+use cosmos_core::constants::{J2000_JD, TWOPI};
+use cosmos_core::math::fmod;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -58,7 +58,7 @@ impl GMST {
         self.0.hour_angle_to_target(target_ra_hours)
     }
 
-    pub fn to_lmst(&self, location: &eternal_core::Location) -> crate::sidereal::LMST {
+    pub fn to_lmst(&self, location: &cosmos_core::Location) -> crate::sidereal::LMST {
         use super::angle::SiderealAngle;
         use crate::sidereal::LMST;
 
@@ -91,7 +91,7 @@ fn calculate_gmst_iau2006(ut1: &UT1, tt: &TT) -> TimeResult<f64> {
         jd2: tt_jd2,
     } = tt_jd;
 
-    let t = ((tt_jd1 - J2000_JD) + tt_jd2) / eternal_core::constants::DAYS_PER_JULIAN_CENTURY;
+    let t = ((tt_jd1 - J2000_JD) + tt_jd2) / cosmos_core::constants::DAYS_PER_JULIAN_CENTURY;
 
     let era = calculate_era00(ut1_jd1, ut1_jd2)?;
 
@@ -100,7 +100,7 @@ fn calculate_gmst_iau2006(ut1: &UT1, tt: &TT) -> TimeResult<f64> {
         + t * (4612.156534
             + t * (1.3915817 + t * (-0.00000044 + t * (-0.000029956 + t * (-0.0000000368)))));
 
-    let gmst = era + polynomial_arcsec * eternal_core::constants::ARCSEC_TO_RAD;
+    let gmst = era + polynomial_arcsec * cosmos_core::constants::ARCSEC_TO_RAD;
 
     Ok(wrap_0_2pi(gmst))
 }
@@ -181,8 +181,8 @@ mod tests {
         assert_eq!(gmst_deg.degrees(), 180.0);
         assert_eq!(gmst_deg.hours(), 12.0);
 
-        let gmst_rad = GMST::from_radians(eternal_core::constants::PI);
-        assert!((gmst_rad.radians() - eternal_core::constants::PI).abs() < 1e-15);
+        let gmst_rad = GMST::from_radians(cosmos_core::constants::PI);
+        assert!((gmst_rad.radians() - cosmos_core::constants::PI).abs() < 1e-15);
         assert_eq!(gmst_rad.hours(), 12.0);
 
         let angle = gmst_deg.angle();

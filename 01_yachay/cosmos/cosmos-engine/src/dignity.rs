@@ -14,7 +14,7 @@
 //! En una fase futura podemos exponer un toggle "regencias modernas"
 //! que mapee Escorpio→Plutón, Acuario→Urano, Piscis→Neptuno.
 
-use eternal_sky::Body;
+use cosmos_sky::Body;
 
 /// Status de dignidad esencial de un cuerpo en un signo dado.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

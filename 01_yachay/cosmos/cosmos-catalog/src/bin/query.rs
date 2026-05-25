@@ -1,8 +1,8 @@
-use eternal_catalog::query::catalog::FLAG_SOURCE_HIPPARCOS;
-use eternal_catalog::query::{cone_search, Catalog, ConeSearchParams, ConeSearchResult};
-use eternal_core::angle::{AngleUnits, DmsFmt, HmsFmt};
-use eternal_core::Angle;
-use eternal_time::JulianDate;
+use cosmos_catalog::query::catalog::FLAG_SOURCE_HIPPARCOS;
+use cosmos_catalog::query::{cone_search, Catalog, ConeSearchParams, ConeSearchResult};
+use cosmos_core::angle::{AngleUnits, DmsFmt, HmsFmt};
+use cosmos_core::Angle;
+use cosmos_time::JulianDate;
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use std::time::Instant;

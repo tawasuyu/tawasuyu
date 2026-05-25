@@ -13,7 +13,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use brahman_cards::{
+use cards::{
     canonical_templates_dir, load_card, CardBody, BRAHMAN_CARDS_TEMPLATES_ENV,
 };
 
@@ -87,7 +87,7 @@ fn ente_basic_template_overridden_loads_as_ente_card() {
                 assert_eq!(e.schema_version, 1);
                 // Payload es el "Virtual" del template default.
                 assert!(
-                    matches!(e.payload, brahman_card::Payload::Virtual),
+                    matches!(e.payload, card_core::Payload::Virtual),
                     "payload debería ser Virtual, got {:?}",
                     e.payload
                 );

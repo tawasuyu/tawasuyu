@@ -1,13 +1,13 @@
 [package]
-name = "fana-editor-gpui"
+name = "pluma-editor-gpui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "fana — backend GPUI del editor DAG: pinta un RenderPlan como bloques de átomo, conectores de dependencia y osciloscopio de coherencia."
+description = "pluma-app — backend GPUI del editor DAG: pinta un RenderPlan como bloques de átomo, conectores de dependencia y osciloscopio de coherencia."
 
 [dependencies]
-fana-render-plan = { path = "../pluma-render-plan" }
+pluma-render-plan = { path = "../pluma-render-plan" }
 nahual-theme = { path = "../../../02_ruway/nahual/libs/theme" }
 gpui = { workspace = true }

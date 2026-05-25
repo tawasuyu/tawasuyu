@@ -50,8 +50,8 @@ impl std::fmt::Display for TimeError {
 
 impl std::error::Error for TimeError {}
 
-impl From<eternal_core::AstroError> for TimeError {
-    fn from(err: eternal_core::AstroError) -> Self {
+impl From<cosmos_core::AstroError> for TimeError {
+    fn from(err: cosmos_core::AstroError) -> Self {
         TimeError::CalculationError(err.to_string())
     }
 }

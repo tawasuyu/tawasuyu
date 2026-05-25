@@ -220,7 +220,7 @@ impl Consola {
                 b: p as u8,
             };
             self.lienzo.pixeles[y * self.lienzo.ancho + x] =
-                codificar(self.lienzo.formato, color);
+                codificar(self.lienzo.format, color);
         }
     }
 

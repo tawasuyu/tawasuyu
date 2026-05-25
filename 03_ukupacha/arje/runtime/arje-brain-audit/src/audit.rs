@@ -133,7 +133,7 @@ impl AuditLog {
     /// Idempotente: re-flushar dos veces da los mismos SHAs (CAS dedup).
     /// Devuelve cuántas entries se flushearon en esta pasada.
     ///
-    /// Forma canónica: serializamos `entry` con `sha = [0; 32]` (formato
+    /// Forma canónica: serializamos `entry` con `sha = [0; 32]` (format
     /// pre-hash). El CAS computa sha256 sobre esos bytes y devuelve un SHA
     /// que por construcción coincide con `entry.sha` calculado al append.
     pub fn flush_to_cas(&mut self) -> anyhow::Result<usize> {

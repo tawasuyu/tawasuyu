@@ -3,7 +3,7 @@
 //! Implementa la versión concreta de `shared_wit/protocol.wit` (handshake +
 //! lifecycle): un servidor que vive en el Init (o un Admin proxy) y clientes
 //! que son los módulos Brahman. Cada conexión arranca con un `Hello` que
-//! lleva una [`brahman_card::Card`]; el servidor valida la Card, deriva el
+//! lleva una [`card_core::Card`]; el servidor valida la Card, deriva el
 //! [`TrustLevel`], emite un `HelloAck` con `session-id` ULID, y a partir de
 //! ahí acepta `Ping`/`Farewell`.
 //!
@@ -27,7 +27,7 @@ pub mod peer_policy;
 pub mod signature;
 pub mod transport;
 
-pub use brahman_card::PROTOCOL_VERSION;
+pub use card_core::PROTOCOL_VERSION;
 
 /// Versión del crate de handshake (independiente de `PROTOCOL_VERSION`).
 pub const HANDSHAKE_VERSION: &str = env!("CARGO_PKG_VERSION");

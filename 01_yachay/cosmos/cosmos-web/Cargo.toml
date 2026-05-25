@@ -1,12 +1,12 @@
 [package]
-name = "cosmobiologia-web"
+name = "cosmos-web"
 version = { workspace = true }
 edition = { workspace = true }
 license = { workspace = true }
-description = "Cosmobiología — cliente WASM. Reusa cosmobiologia-render para componer la rueda en SVG localmente, sin round-trip al server por cada interacción."
+description = "Cosmobiología — cliente WASM. Reusa cosmos-render para componer la rueda en SVG localmente, sin round-trip al server por cada interacción."
 
 [dependencies]
-cosmobiologia-render = { path = "../cosmos-render" }
+cosmos-render = { path = "../cosmos-render" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

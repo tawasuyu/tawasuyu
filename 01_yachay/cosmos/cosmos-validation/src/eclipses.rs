@@ -10,9 +10,9 @@
 //! point on Earth's night side. Solar eclipses (which need a topocentric
 //! treatment) are a separate piece.
 
-use eternal_core::constants::AU_KM;
-use eternal_core::Vector3;
-use eternal_ephemeris::jpl::SpkFile;
+use cosmos_core::constants::AU_KM;
+use cosmos_core::Vector3;
+use cosmos_ephemeris::jpl::SpkFile;
 
 use crate::oracle::OracleError;
 
@@ -488,11 +488,11 @@ fn sun_is_above_horizon(
     observer: &Observer,
     delta_t_seconds: f64,
 ) -> Result<bool, OracleError> {
-    use eternal_time::julian::JulianDate;
-    use eternal_time::scales::conversions::ToUT1WithDeltaT;
-    use eternal_time::scales::ToTTFromTDB;
-    use eternal_time::sidereal::GAST;
-    use eternal_time::TDB;
+    use cosmos_time::julian::JulianDate;
+    use cosmos_time::scales::conversions::ToUT1WithDeltaT;
+    use cosmos_time::scales::ToTTFromTDB;
+    use cosmos_time::sidereal::GAST;
+    use cosmos_time::TDB;
 
     let (sun_topo_tet, _) = topocentric_sun_moon_tet(spk, jd_tdb, observer, delta_t_seconds)?;
 
@@ -502,7 +502,7 @@ fn sun_is_above_horizon(
     let ut1 = tt
         .to_ut1_with_delta_t(delta_t_seconds)
         .map_err(|e| OracleError::Inner(format!("TT→UT1: {:?}", e)))?;
-    let location = eternal_core::Location::from_degrees(
+    let location = cosmos_core::Location::from_degrees(
         observer.lat_rad.to_degrees(),
         observer.lon_rad.to_degrees(),
         observer.elev_m,
@@ -585,10 +585,10 @@ fn topocentric_sun_moon_tet(
     observer: &Observer,
     delta_t_seconds: f64,
 ) -> Result<(Vector3, Vector3), OracleError> {
-    use eternal_time::julian::JulianDate;
-    use eternal_time::scales::conversions::ToUT1WithDeltaT;
-    use eternal_time::scales::ToTTFromTDB;
-    use eternal_time::{NutationCalculator, TDB};
+    use cosmos_time::julian::JulianDate;
+    use cosmos_time::scales::conversions::ToUT1WithDeltaT;
+    use cosmos_time::scales::ToTTFromTDB;
+    use cosmos_time::{NutationCalculator, TDB};
 
     // Apparent geocentric Sun and Moon in ICRF (km).
     let sun_geo_icrf = astrometric_geocentric_km(spk, 10, jd_tdb)?;
@@ -608,8 +608,8 @@ fn topocentric_sun_moon_tet(
         .map_err(|e| OracleError::Inner(format!("nutation: {:?}", e)))?;
     let tt_jd = tt.to_julian_date();
     let t_centuries =
-        eternal_core::utils::jd_to_centuries(tt_jd.jd1(), tt_jd.jd2());
-    let npb = eternal_core::precession::PrecessionIAU2006::new().npb_matrix_iau2006a(
+        cosmos_core::utils::jd_to_centuries(tt_jd.jd1(), tt_jd.jd2());
+    let npb = cosmos_core::precession::PrecessionIAU2006::new().npb_matrix_iau2006a(
         t_centuries,
         nut.nutation_longitude(),
         nut.nutation_obliquity(),

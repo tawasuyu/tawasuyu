@@ -5,11 +5,11 @@
 //! exercise the error path; the underlying eclipse code itself is
 //! already validated by `eternal-validation`.
 
-use eternal_astrology::{
+use cosmos_astrology::{
     classify_lunation_phase, eclipses_on_natal, next_canonical_phase, next_lunar_phase,
     phase_angle_at_deg, BirthData, ChartConfig, LunarPhase, LunationPhase, NatalChart,
 };
-use eternal_sky::{EphemerisSession, Instant, Observer, SessionConfig};
+use cosmos_sky::{EphemerisSession, Instant, Observer, SessionConfig};
 
 fn session() -> EphemerisSession {
     EphemerisSession::open(SessionConfig::vsop2013()).unwrap()

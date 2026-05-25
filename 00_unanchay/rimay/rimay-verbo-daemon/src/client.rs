@@ -1,7 +1,7 @@
 //! El cliente: consume un daemon presentándose como un `Provider`.
 //!
-//! Un [`DaemonClient`] implementa `verbo_core::Provider`, así que
-//! cualquier consumidor (`fana-semantic`, `badu`, `chasqui`) lo usa sin
+//! Un [`DaemonClient`] implementa `rimay_verbo_core::Provider`, así que
+//! cualquier consumidor (`pluma_app-semantic`, `khipu_app`, `chasqui`) lo usa sin
 //! saber que el modelo vive en otro proceso. Cada llamada es un
 //! round-trip independiente: sin estado de conexión que reparar.
 
@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use tokio::net::UnixStream;
-use verbo_core::{EmbedError, EmbeddingVector, ModelId, Provider};
+use rimay_verbo_core::{EmbedError, EmbeddingVector, ModelId, Provider};
 
 use crate::wire::{read_frame, write_frame, Request, Response};
 

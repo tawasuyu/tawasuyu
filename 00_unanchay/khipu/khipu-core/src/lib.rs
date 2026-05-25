@@ -1,4 +1,4 @@
-//! `badu-core` — el núcleo agnóstico de la toma de notas.
+//! `khipu_app-core` — el núcleo agnóstico de la toma de notas.
 //!
 //! Una nota es texto con título, etiquetas y enlaces `[[...]]`. El
 //! [`NoteStore`] las guarda y deriva el grafo: forward-links, backlinks,
@@ -10,7 +10,7 @@
 //! - [`store`] — el [`NoteStore`] y el grafo de enlaces.
 //!
 //! La gravedad semántica (clustering por afinidad de embeddings) vive en
-//! `badu-gravity`; las lentes visuales, en los crates de frontend.
+//! `khipu_app-gravity`; las lentes visuales, en los crates de frontend.
 
 #![forbid(unsafe_code)]
 

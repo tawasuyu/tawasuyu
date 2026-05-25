@@ -20,7 +20,7 @@
 //
 //  El FORMATO en disco —los tipos `Objeto`/`SuperBloque`, su (de)serializacion
 //  `postcard`, el hash BLAKE3 y el trazado de cada registro— ya no vive aqui:
-//  habita la crate `formato` (Fase 7b), un nucleo `no_std` COMPARTIDO con el
+//  habita la crate `format` (Fase 7b), un nucleo `no_std` COMPARTIDO con el
 //  constructor de imagen `boot`. Este modulo es solo el almacen VIVO: el
 //  cursor, el indice y la E/S contra el disco virtio-blk.
 // =============================================================================
@@ -33,10 +33,10 @@ use spin::{Mutex, Once};
 
 use crate::drivers::disco;
 
-// El identificador y el objeto del grafo los define `formato`; se reexportan
+// El identificador y el objeto del grafo los define `format`; se reexportan
 // para que el resto del kernel siga nombrandolos `almacen::Hash` y
 // `almacen::Objeto`, sin enterarse de donde viven realmente.
-pub use formato::{Hash, Objeto};
+pub use format::{Hash, Objeto};
 
 /// El estado vivo del almacen: el cursor del log, la raiz, el manifiesto y el
 /// indice en memoria que traduce cada hash al sector donde habita su registro.
@@ -78,13 +78,13 @@ pub fn init() -> Result<Resumen, &'static str> {
     }
 
     // Leer el sector 0 e intentar interpretarlo como superbloque de renaser.
-    let mut sector0 = [0u8; formato::TAM_SECTOR];
+    let mut sector0 = [0u8; format::TAM_SECTOR];
     disco::leer_sectores(0, &mut sector0)?;
 
     let (cursor, raiz, manifiesto, indice, formateado) =
-        match formato::SuperBloque::deserializar(&sector0) {
+        match format::SuperBloque::deserializar(&sector0) {
             // Disco de renaser, con la version corriente: adoptar su grafo.
-            Ok(sb) if sb.magia == formato::MAGIA && sb.version == formato::VERSION_SUPERBLOQUE => {
+            Ok(sb) if sb.magia == format::MAGIA && sb.version == format::VERSION_SUPERBLOQUE => {
                 let indice = reconstruir_indice(sb.cursor)?;
                 (sb.cursor, sb.raiz, sb.manifiesto, indice, false)
             }
@@ -127,8 +127,8 @@ fn reconstruir_indice(cursor: u64) -> Result<BTreeMap<Hash, u64>, &'static str> 
         match leer_registro(sector)? {
             // Un payload valido: hashearlo e indexarlo.
             Some(payload) => {
-                let n = formato::sectores_registro(payload.len());
-                indice.insert(formato::hash(&payload), sector);
+                let n = format::sectores_registro(payload.len());
+                indice.insert(format::hash(&payload), sector);
                 sector += n;
             }
             // Cabecera a cero o longitud imposible: fin (o corrupcion) del log.
@@ -142,18 +142,18 @@ fn reconstruir_indice(cursor: u64) -> Result<BTreeMap<Hash, u64>, &'static str> 
 /// (sin la cabecera de longitud ni el relleno). `None` si la cabecera dice
 /// longitud cero —fin del log— o una longitud imposible —corrupcion—.
 fn leer_registro(sector: u64) -> Result<Option<Vec<u8>>, &'static str> {
-    let mut cabecera = [0u8; formato::TAM_SECTOR];
+    let mut cabecera = [0u8; format::TAM_SECTOR];
     disco::leer_sectores(sector, &mut cabecera)?;
-    let longitud = match formato::longitud_registro(&cabecera) {
+    let longitud = match format::longitud_registro(&cabecera) {
         Some(longitud) => longitud,
         None => return Ok(None),
     };
-    let n = formato::sectores_registro(longitud) as usize;
+    let n = format::sectores_registro(longitud) as usize;
     // Si el registro cabe en el sector ya leido, evitar una segunda lectura.
     let payload = if n == 1 {
         cabecera[4..4 + longitud].to_vec()
     } else {
-        let mut buf = vec![0u8; n * formato::TAM_SECTOR];
+        let mut buf = vec![0u8; n * format::TAM_SECTOR];
         disco::leer_sectores(sector, &mut buf)?;
         buf[4..4 + longitud].to_vec()
     };
@@ -162,18 +162,18 @@ fn leer_registro(sector: u64) -> Result<Option<Vec<u8>>, &'static str> {
 
 /// Graba el superbloque —el ancla del grafo— en el sector 0.
 fn persistir(almacen: &Almacen) -> Result<(), &'static str> {
-    let sb = formato::SuperBloque {
-        magia: formato::MAGIA,
-        version: formato::VERSION_SUPERBLOQUE,
+    let sb = format::SuperBloque {
+        magia: format::MAGIA,
+        version: format::VERSION_SUPERBLOQUE,
         cursor: almacen.cursor,
         raiz: almacen.raiz,
         manifiesto: almacen.manifiesto,
     };
     let bytes = sb.serializar()?;
-    if bytes.len() > formato::TAM_SECTOR {
+    if bytes.len() > format::TAM_SECTOR {
         return Err("el superbloque no cabe en un sector");
     }
-    let mut sector0 = [0u8; formato::TAM_SECTOR];
+    let mut sector0 = [0u8; format::TAM_SECTOR];
     sector0[..bytes.len()].copy_from_slice(&bytes);
     disco::escribir_sectores(0, &sector0)
 }
@@ -184,11 +184,11 @@ fn persistir(almacen: &Almacen) -> Result<(), &'static str> {
 pub fn almacenar(datos: Vec<u8>, hijos: Vec<Hash>) -> Result<Hash, &'static str> {
     let objeto = Objeto { datos, hijos };
     let bytes = objeto.serializar()?;
-    if bytes.is_empty() || bytes.len() > formato::MAX_OBJETO {
+    if bytes.is_empty() || bytes.len() > format::MAX_OBJETO {
         return Err("el objeto tiene un tamaño invalido");
     }
     // La identidad del objeto: el hash de su forma serializada.
-    let hash = formato::hash(&bytes);
+    let hash = format::hash(&bytes);
 
     let mutex = ALMACEN.get().ok_or("almacen no inicializado")?;
     let mut almacen = mutex.lock();
@@ -199,14 +199,14 @@ pub fn almacenar(datos: Vec<u8>, hijos: Vec<Hash>) -> Result<Hash, &'static str>
     }
 
     // Reservar los sectores del registro al final del log.
-    let n = formato::sectores_registro(bytes.len());
+    let n = format::sectores_registro(bytes.len());
     if almacen.cursor + n > almacen.capacidad {
         return Err("el grafo de objetos esta lleno");
     }
     let sector = almacen.cursor;
 
     // Componer el registro —[longitud][payload][relleno]— y grabarlo.
-    let registro = formato::componer_registro(&bytes);
+    let registro = format::componer_registro(&bytes);
     disco::escribir_sectores(sector, &registro)?;
 
     // El objeto ya esta en disco: avanzar el cursor, indexarlo y RE-anclar el
@@ -231,7 +231,7 @@ pub fn recuperar(hash: &Hash) -> Result<Option<Objeto>, &'static str> {
     let payload = leer_registro(sector)?.ok_or("registro de objeto corrupto")?;
     // Verificacion de integridad: el contenido leido DEBE rehashear al hash
     // pedido. Si no, el disco ha mentido — y se delata.
-    if formato::hash(&payload) != *hash {
+    if format::hash(&payload) != *hash {
         return Err("el objeto no supero la verificacion de integridad");
     }
     Ok(Some(Objeto::deserializar(&payload)?))

@@ -14,7 +14,7 @@
 //  re-ancla. Asi el estado de cada app sobrevive, por separado, a un reinicio.
 //
 //  Los tipos `Manifiesto` / `EntradaApp` y su (de)serializacion viven en la
-//  crate `formato`, el nucleo `no_std` compartido con `boot`. Aqui solo queda
+//  crate `format`, el nucleo `no_std` compartido con `boot`. Aqui solo queda
 //  lo que es del kernel: cargar el manifiesto, traducir regiones, custodiar la
 //  copia viva y mutarla cuando una app graba su estado.
 // =============================================================================
@@ -23,14 +23,14 @@ use alloc::vec::Vec;
 
 use spin::{Mutex, Once};
 
-use formato::Hash;
+use format::Hash;
 
 use crate::almacen;
 use crate::grafico::RegionPantalla;
 
-// Los tipos del manifiesto los define `formato`; se reexportan para que el
+// Los tipos del manifiesto los define `format`; se reexportan para que el
 // resto del kernel los nombre `manifiesto::EntradaApp` / `manifiesto::Manifiesto`.
-pub use formato::{EntradaApp, Manifiesto};
+pub use format::{EntradaApp, Manifiesto};
 
 /// El manifiesto VIVO del kernel: la copia en memoria, mutable, del Manifiesto
 /// de Genesis. Las apps la actualizan al persistir su estado (Fase 7c); el
@@ -39,7 +39,7 @@ pub use formato::{EntradaApp, Manifiesto};
 static VIVO: Once<Mutex<Manifiesto>> = Once::new();
 
 /// Traduce la sub-region de una `EntradaApp` —campos `u32` de ancho fijo, el
-/// formato en disco— a la `RegionPantalla` que el kernel entiende (`usize`,
+/// format en disco— a la `RegionPantalla` que el kernel entiende (`usize`,
 /// ancho de plataforma). El puente entre lo que el disco guarda y lo que el
 /// compositor dibuja.
 pub fn region(entrada: &EntradaApp) -> RegionPantalla {

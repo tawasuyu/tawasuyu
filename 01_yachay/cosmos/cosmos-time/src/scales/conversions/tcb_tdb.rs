@@ -50,10 +50,10 @@
 //! # Usage
 //!
 //! ```
-//! use eternal_time::scales::{TCB, TDB};
-//! use eternal_time::scales::conversions::{TcbToTdb, TdbToTcb};
-//! use eternal_time::julian::JulianDate;
-//! use eternal_core::constants::J2000_JD;
+//! use cosmos_time::scales::{TCB, TDB};
+//! use cosmos_time::scales::conversions::{TcbToTdb, TdbToTcb};
+//! use cosmos_time::julian::JulianDate;
+//! use cosmos_core::constants::J2000_JD;
 //!
 //! let tcb = TCB::from_julian_date(JulianDate::new(J2000_JD, 0.0));
 //! let tdb = tcb.tcb_to_tdb().unwrap();
@@ -73,7 +73,7 @@ use crate::constants::TT_TAI_OFFSET;
 use crate::julian::JulianDate;
 use crate::scales::{TCB, TDB};
 use crate::TimeResult;
-use eternal_core::constants::{MJD_ZERO_POINT, SECONDS_PER_DAY_F64};
+use cosmos_core::constants::{MJD_ZERO_POINT, SECONDS_PER_DAY_F64};
 
 /// L_B rate factor from IAU 2006 Resolution B3.
 /// Represents the fractional rate difference: TCB runs faster than TDB by this amount.
@@ -184,7 +184,7 @@ impl TdbToTcb for TDB {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eternal_core::constants::J2000_JD;
+    use cosmos_core::constants::J2000_JD;
 
     #[test]
     fn test_tcb_tdb_relationship() {

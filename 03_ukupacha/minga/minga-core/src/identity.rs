@@ -22,7 +22,7 @@ use ed25519_dalek::{
 use rand::rngs::OsRng;
 use rand::RngCore;
 
-/// Cabecera del formato de keypair cifrado en disco.
+/// Cabecera del format de keypair cifrado en disco.
 const KEYPAIR_MAGIC: &[u8; 8] = b"MINGAKEY";
 const KEYPAIR_VERSION: u8 = 1;
 const ARGON2_SALT_LEN: usize = 16;
@@ -31,7 +31,7 @@ const KEYPAIR_HEADER_LEN: usize = 8 + 1 + ARGON2_SALT_LEN + AES_NONCE_LEN;
 
 #[derive(Debug, thiserror::Error)]
 pub enum KeypairCryptoError {
-    #[error("formato inválido: faltan magic / versión / longitud")]
+    #[error("format inválido: faltan magic / versión / longitud")]
     InvalidFormat,
 
     #[error("passphrase incorrecta o cifrado manipulado")]

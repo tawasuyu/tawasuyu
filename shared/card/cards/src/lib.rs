@@ -2,7 +2,7 @@
 //!
 //! Brahman maneja varios formatos legítimos de "Card" (la unidad
 //! declarativa que describe identidad, datos, módulos, widgets, ...).
-//! Cada formato vive en su propio crate de origen y conserva su shape
+//! Cada format vive en su propio crate de origen y conserva su shape
 //! público; lo que este crate aporta es **un único punto de entrada**
 //! que sabe interpretar cada uno de ellos y proyectarlos a una sola
 //! estructura interna canónica [`Card`].
@@ -31,7 +31,7 @@
 //! ```
 //!
 //! Los formatos NO se disuelven. Si en el futuro hay que soportar un
-//! formato simplificado nuevo, se agrega un reader acá y nadie aguas
+//! format simplificado nuevo, se agrega un reader acá y nadie aguas
 //! abajo se entera — siguen recibiendo `Card`.
 //!
 //! V1 (este commit) sólo soporta inputs JSON. La extensión a Nickel
@@ -47,12 +47,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-pub use brahman_card::Card as EnteCard;
+pub use card_core::Card as EnteCard;
 pub use chasqui_card::MonadManifest;
 pub use nahual_meta_schema::Module as UiModuleSpec;
 
 /// Estructura canónica única que consumen los downstream del sistema
-/// (UI runtime, storage, DHT, wire). Cada formato input se proyecta
+/// (UI runtime, storage, DHT, wire). Cada format input se proyecta
 /// a ésta vía un reader del brazo.
 ///
 /// El wrapper común agrupa lo que TODOS los formatos comparten
@@ -67,7 +67,7 @@ pub struct Card {
     /// Identificador opaco. String en el wrapper para no obligar a
     /// los formatos a un mismo tipo concreto (Ente/Monad usan ULID,
     /// UiModule usa slug human-friendly como `"sales_engine"`).
-    /// Cada reader documenta qué formato exige.
+    /// Cada reader documenta qué format exige.
     pub id: String,
 
     /// Versión del schema canónico de este wrapper. Bump = romper
@@ -111,7 +111,7 @@ pub const CARD_SCHEMA_VERSION: u16 = 1;
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CardBody {
     /// Entidad runtime con proceso/payload/supervision (lo que era
-    /// `brahman_card::Card` directo).
+    /// `card_core::Card` directo).
     Ente(EnteCard),
 
     /// Agrupación semántica de archivos (Mónada de Nouser). No tiene
@@ -152,7 +152,7 @@ pub enum CardLoadError {
     #[error("reader '{reader}' falló: {message}")]
     ReaderFailed { reader: &'static str, message: String },
 
-    #[error("formato no soportado: extensión '{ext}'. Soportadas: {supported:?}")]
+    #[error("format no soportado: extensión '{ext}'. Soportadas: {supported:?}")]
     UnsupportedExtension {
         ext: String,
         supported: Vec<&'static str>,
@@ -162,7 +162,7 @@ pub enum CardLoadError {
     Nickel(#[from] NickelEvalError),
 }
 
-/// Trait de reader. Cada formato implementa una instancia.
+/// Trait de reader. Cada format implementa una instancia.
 ///
 /// El dispatcher del brazo (`load_card`) prueba los readers en el
 /// orden registrado y se queda con el primero cuyo `can_read`
@@ -174,7 +174,7 @@ pub trait CardReader: Send + Sync {
 
     /// Dado un JSON Value (el input ya parseado a serde Value),
     /// decide si este reader puede manejarlo. Heurística estructural
-    /// — el shape del input identifica el formato, no flags
+    /// — el shape del input identifica el format, no flags
     /// explícitos (los inputs legacy no los tienen).
     fn can_read(&self, input: &Value) -> bool;
 
@@ -220,7 +220,7 @@ pub fn default_readers() -> Vec<Box<dyn CardReader>> {
     ]
 }
 
-/// Carga un Card desde una ruta. Detecta formato por extensión, y
+/// Carga un Card desde una ruta. Detecta format por extensión, y
 /// dentro de JSON detecta el shape probando los readers default en
 /// orden.
 ///

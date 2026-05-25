@@ -35,14 +35,14 @@ use crate::constants::{DAYS_PER_JULIAN_CENTURY, J2000_JD, PI, TWOPI};
 /// # Example
 ///
 /// ```
-/// use eternal_core::utils::jd_to_centuries;
-/// use eternal_core::constants::J2000_JD;
+/// use cosmos_core::utils::jd_to_centuries;
+/// use cosmos_core::constants::J2000_JD;
 ///
 /// // At J2000.0 → t = 0
 /// assert_eq!(jd_to_centuries(J2000_JD, 0.0), 0.0);
 ///
 /// // One century later → t = 1
-/// assert_eq!(jd_to_centuries(J2000_JD, eternal_core::constants::DAYS_PER_JULIAN_CENTURY), 1.0);
+/// assert_eq!(jd_to_centuries(J2000_JD, cosmos_core::constants::DAYS_PER_JULIAN_CENTURY), 1.0);
 /// ```
 #[inline]
 pub fn jd_to_centuries(jd1: f64, jd2: f64) -> f64 {
@@ -100,7 +100,7 @@ pub fn normalize_angle_to_positive(angle: f64) -> f64 {
 /// # Example
 ///
 /// ```
-/// use eternal_core::utils::angular_difference;
+/// use cosmos_core::utils::angular_difference;
 ///
 /// // Simple case
 /// assert_eq!(angular_difference(90.0, 45.0), 45.0);

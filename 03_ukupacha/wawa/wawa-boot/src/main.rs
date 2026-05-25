@@ -9,8 +9,8 @@
 //  el userspace —ni un solo `include_bytes!` de un `.wasm`—; en su lugar, este
 //  constructor pre-puebla el disco de objetos con el bytecode de las apps de
 //  genesis y el Manifiesto de Genesis que dicta cuales arrancan, en que region
-//  y con que cuota. Para ello habla el MISMO formato del grafo que el kernel,
-//  a traves de la crate compartida `formato`.
+//  y con que cuota. Para ello habla el MISMO format del grafo que el kernel,
+//  a traves de la crate compartida `format`.
 //
 //  El flujo es deliberadamente lineal y sin ambiguedad:
 //
@@ -29,10 +29,10 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-// El formato del grafo de objetos en disco — el MISMO nucleo `no_std` que
+// El format del grafo de objetos en disco — el MISMO nucleo `no_std` que
 // enlaza el kernel. Gracias a el, lo que `boot` siembra y lo que el kernel lee
 // es, byte a byte, el mismo idioma.
-use formato::{
+use format::{
     EntradaApp, Hash, Manifiesto, Objeto, SuperBloque, MAGIA, MAX_OBJETO, TAM_SECTOR,
     VERSION_MANIFIESTO, VERSION_SUPERBLOQUE,
 };
@@ -196,9 +196,9 @@ fn anexar_objeto(log: &mut Vec<u8>, cursor: &mut u64, payload: &[u8]) -> Result<
             payload.len()
         ));
     }
-    let hash = formato::hash(payload);
-    log.extend_from_slice(&formato::componer_registro(payload));
-    *cursor += formato::sectores_registro(payload.len());
+    let hash = format::hash(payload);
+    log.extend_from_slice(&format::componer_registro(payload));
+    *cursor += format::sectores_registro(payload.len());
     Ok(hash)
 }
 
@@ -207,7 +207,7 @@ fn anexar_objeto(log: &mut Vec<u8>, cursor: &mut u64, payload: &[u8]) -> Result<
 /// —con sus regiones y cuotas—, lo graba con las aristas hacia los objetos de
 /// bytecode, y forja el superbloque que lo ancla. Devuelve la imagen del disco
 /// (superbloque en el sector 0 + el log de registros) y el numero de objetos
-/// sembrados. Habla, byte a byte, el formato que el kernel leera al montar.
+/// sembrados. Habla, byte a byte, el format que el kernel leera al montar.
 fn sembrar_grafo() -> Result<(Vec<u8>, usize), String> {
     // El log de registros: del sector 1 en adelante. El sector 0 es el
     // superbloque, que aun no podemos escribir —no conocemos el cursor final—.

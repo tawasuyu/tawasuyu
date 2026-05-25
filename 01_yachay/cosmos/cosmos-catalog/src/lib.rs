@@ -16,7 +16,7 @@
 //! # Quick Start
 //!
 //! ```ignore
-//! use eternal_catalog::query::{Catalog, cone_search, ConeSearchParams};
+//! use cosmos_catalog::query::{Catalog, cone_search, ConeSearchParams};
 //!
 //! let catalog = Catalog::open("catalog.bin")?;
 //!

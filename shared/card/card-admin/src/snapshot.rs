@@ -1,6 +1,6 @@
 //! Tipos del snapshot que el admin server emite.
 
-use brahman_broker::{BrokeredCard, Match};
+use chasqui_broker::{BrokeredCard, Match};
 use serde::{Deserialize, Serialize};
 
 /// Snapshot completo del estado del Init en un instante.

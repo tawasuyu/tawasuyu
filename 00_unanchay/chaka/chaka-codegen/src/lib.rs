@@ -1,8 +1,8 @@
-//! `charka-codegen` — emisión de Rust desde el IR del transpilador.
+//! `chaka_app-codegen` — emisión de Rust desde el IR del transpilador.
 //!
-//! Etapa final del pipeline COBOL→Rust: toma el [`Ir`] de `charka-ir`
+//! Etapa final del pipeline COBOL→Rust: toma el [`Ir`] de `chaka_app-ir`
 //! y produce un fuente Rust (un `String`) que, compilado contra
-//! `charka-runtime`, ejecuta la lógica del programa COBOL original.
+//! `chaka_app-runtime`, ejecuta la lógica del programa COBOL original.
 //!
 //! La forma del código emitido:
 //!
@@ -14,7 +14,7 @@
 //!   construye el `Program` y lo corre.
 //!
 //! Es **tolerante**: lo que no sabe transpilar (un `Stmt::Unknown`, un
-//! dato sin resolver, `**`) se emite como un comentario `// charka:` —
+//! dato sin resolver, `**`) se emite como un comentario `// chaka_app:` —
 //! el código generado siempre compila.
 //!
 //! Alcance v1 — fuera: grupos como campo propio, `REDEFINES`,
@@ -28,7 +28,7 @@ mod expr;
 mod stmt;
 mod sym;
 
-use charka_ir::Ir;
+use chaka_ir::Ir;
 
 use emit::Emitter;
 use expr::rust_str;
@@ -48,7 +48,7 @@ pub fn generate(ir: &Ir) -> String {
 
 /// El preámbulo: doc, `allow`s, el `use` del runtime y el helper `dec`.
 fn emit_header(em: &mut Emitter) {
-    em.line("//! Generado por charka — transpilador COBOL → Rust.");
+    em.line("//! Generado por chaka_app — transpilador COBOL → Rust.");
     em.line("//! No editar a mano: regenerar desde el fuente COBOL.");
     em.blank();
     em.line(
@@ -56,11 +56,11 @@ fn emit_header(em: &mut Emitter) {
 unreachable_code, clippy::all)]",
     );
     em.blank();
-    em.line("use charka_runtime::*;");
+    em.line("use chaka_runtime::*;");
     em.blank();
     em.line("/// Construye un `Decimal` desde un literal numérico COBOL.");
     em.line("fn dec(s: &str) -> Decimal {");
-    em.line("    Decimal::parse(s).expect(\"charka: literal numérico inválido\")");
+    em.line("    Decimal::parse(s).expect(\"chaka_app: literal numérico inválido\")");
     em.line("}");
     em.blank();
 }
@@ -154,7 +154,7 @@ fn emit_main(em: &mut Emitter) {
 }
 
 /// El inicializador de un campo, a partir de su `VALUE` ya
-/// normalizado por `charka-ir`. Una tabla (`OCCURS n`) se inicializa
+/// normalizado por `chaka_app-ir`. Una tabla (`OCCURS n`) se inicializa
 /// como un `Vec` de `n` copias del valor inicial.
 fn field_init(f: &Field) -> String {
     let scalar = match &f.kind {
@@ -178,9 +178,9 @@ mod tests {
 
     /// Helper: lexa, parsea, baja a IR y transpila un fuente COBOL.
     fn gen(src: &str) -> String {
-        let toks = charka_lexer::lex(src, charka_lexer::SourceFormat::Free).expect("lex");
-        let prog = charka_parser::parse(&toks).expect("parse");
-        let ir = charka_ir::lower(&prog);
+        let toks = chaka_lexer::lex(src, chaka_lexer::SourceFormat::Free).expect("lex");
+        let prog = chaka_parser::parse(&toks).expect("parse");
+        let ir = chaka_ir::lower(&prog);
         generate(&ir)
     }
 
@@ -206,7 +206,7 @@ mod tests {
     #[test]
     fn header_and_main_are_emitted() {
         let out = gen(DEMO);
-        assert!(out.contains("use charka_runtime::*;"));
+        assert!(out.contains("use chaka_runtime::*;"));
         assert!(out.contains("fn dec(s: &str) -> Decimal {"));
         assert!(out.contains("fn main() {"));
         assert!(out.contains("Program::new().run();"));
@@ -274,7 +274,7 @@ mod tests {
         let out = gen("PROCEDURE DIVISION.\n\
              MAIN.\n\
                  CALL 'SUBPROG'.\n");
-        assert!(out.contains("// charka: verbo no transpilado — CALL"));
+        assert!(out.contains("// chaka_app: verbo no transpilado — CALL"));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! `charka` — la CLI del transpilador COBOL → Rust.
+//! `chaka_app` — la CLI del transpilador COBOL → Rust.
 //!
 //! Envuelve el pipeline (lexer → parser → IR → codegen) y el validador
 //! en sombra en cuatro comandos:
@@ -13,19 +13,19 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
-use charka_ir::{Ir, PerformTarget, Stmt};
+use chaka_ir::{Ir, PerformTarget, Stmt};
 use clap::{Parser, Subcommand};
 
-/// Ruta a `charka-runtime`, fijada al compilar — el crate generado por
+/// Ruta a `chaka_app-runtime`, fijada al compilar — el crate generado por
 /// `scaffold` la usa como dependencia.
 const RUNTIME_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../modules/charka/charka-runtime"
+    "/../../modules/chaka_app/chaka_app-runtime"
 );
 
 /// El transpilador de COBOL a Rust.
 #[derive(Parser)]
-#[command(name = "charka", version, about = "Transpilador COBOL → Rust")]
+#[command(name = "chaka_app", version, about = "Transpilador COBOL → Rust")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -35,7 +35,7 @@ struct Cli {
 enum Command {
     /// Transpila un fuente COBOL a código Rust.
     Transpile {
-        /// El fuente COBOL (.cob), en formato libre.
+        /// El fuente COBOL (.cob), en format libre.
         input: PathBuf,
         /// Archivo de salida; si se omite, va a la salida estándar.
         #[arg(short, long)]
@@ -68,7 +68,7 @@ fn main() -> ExitCode {
     match dispatch(Cli::parse().command) {
         Ok(code) => code,
         Err(err) => {
-            eprintln!("charka: {err:#}");
+            eprintln!("chaka_app: {err:#}");
             ExitCode::FAILURE
         }
     }
@@ -86,12 +86,12 @@ fn dispatch(command: Command) -> Result<ExitCode> {
 // ── Comandos ──────────────────────────────────────────────────────
 
 fn transpile(input: &Path, output: Option<&Path>) -> Result<ExitCode> {
-    let rust = charka_codegen::generate(&load_ir(input)?);
+    let rust = chaka_codegen::generate(&load_ir(input)?);
     match output {
         Some(path) => {
             fs::write(path, rust)
                 .with_context(|| format!("no se pudo escribir {}", path.display()))?;
-            eprintln!("charka: escrito {}", path.display());
+            eprintln!("chaka_app: escrito {}", path.display());
         }
         None => print!("{rust}"),
     }
@@ -100,7 +100,7 @@ fn transpile(input: &Path, output: Option<&Path>) -> Result<ExitCode> {
 
 fn scaffold(input: &Path, output: &Path) -> Result<ExitCode> {
     let ir = load_ir(input)?;
-    let rust = charka_codegen::generate(&ir);
+    let rust = chaka_codegen::generate(&ir);
     let name = crate_name(input);
 
     fs::create_dir_all(output.join("src"))
@@ -108,7 +108,7 @@ fn scaffold(input: &Path, output: &Path) -> Result<ExitCode> {
     fs::write(output.join("src/main.rs"), rust)?;
     fs::write(output.join("Cargo.toml"), cargo_toml(&name))?;
 
-    eprintln!("charka: crate «{name}» generado en {}", output.display());
+    eprintln!("chaka_app: crate «{name}» generado en {}", output.display());
     eprintln!(
         "  cargo run --manifest-path {}",
         output.join("Cargo.toml").display()
@@ -119,13 +119,13 @@ fn scaffold(input: &Path, output: &Path) -> Result<ExitCode> {
 
 fn run(input: &Path) -> Result<ExitCode> {
     let ir = load_ir(input)?;
-    let outcome = charka_shadow::interpret(&ir);
+    let outcome = chaka_shadow::interpret(&ir);
     for line in &outcome.lines {
         println!("{line}");
     }
     warn_unknowns(&ir);
-    if outcome.halt == charka_shadow::Halt::StepLimit {
-        eprintln!("charka: aviso — se agotó el tope de pasos (¿un bucle sin fin?)");
+    if outcome.halt == chaka_shadow::Halt::StepLimit {
+        eprintln!("chaka_app: aviso — se agotó el tope de pasos (¿un bucle sin fin?)");
         return Ok(ExitCode::FAILURE);
     }
     Ok(ExitCode::SUCCESS)
@@ -133,7 +133,7 @@ fn run(input: &Path) -> Result<ExitCode> {
 
 fn check(input: &Path, expect: &Path) -> Result<ExitCode> {
     let ir = load_ir(input)?;
-    let outcome = charka_shadow::interpret(&ir);
+    let outcome = chaka_shadow::interpret(&ir);
     let expected = fs::read_to_string(expect)
         .with_context(|| format!("no se pudo leer {}", expect.display()))?;
 
@@ -141,10 +141,10 @@ fn check(input: &Path, expect: &Path) -> Result<ExitCode> {
     let want: Vec<&str> = expected.lines().map(|l| l.trim_end()).collect();
 
     if got == want {
-        println!("charka: OK — {} líneas coinciden", got.len());
+        println!("chaka_app: OK — {} líneas coinciden", got.len());
         Ok(ExitCode::SUCCESS)
     } else {
-        eprintln!("charka: FALLA — la salida difiere de {}", expect.display());
+        eprintln!("chaka_app: FALLA — la salida difiere de {}", expect.display());
         report_diff(&got, &want);
         Ok(ExitCode::FAILURE)
     }
@@ -157,9 +157,9 @@ fn load_ir(input: &Path) -> Result<Ir> {
     let source = fs::read_to_string(input)
         .with_context(|| format!("no se pudo leer {}", input.display()))?;
     let tokens =
-        charka_lexer::lex(&source, charka_lexer::SourceFormat::Free).context("error de léxico")?;
-    let program = charka_parser::parse(&tokens).context("error de parseo")?;
-    Ok(charka_ir::lower(&program))
+        chaka_lexer::lex(&source, chaka_lexer::SourceFormat::Free).context("error de léxico")?;
+    let program = chaka_parser::parse(&tokens).context("error de parseo")?;
+    Ok(chaka_ir::lower(&program))
 }
 
 /// El `Cargo.toml` de un crate generado por `scaffold`.
@@ -175,7 +175,7 @@ fn cargo_toml(name: &str) -> String {
          path = \"src/main.rs\"\n\
          \n\
          [dependencies]\n\
-         charka-runtime = {{ path = \"{RUNTIME_PATH}\" }}\n\
+         chaka_app-runtime = {{ path = \"{RUNTIME_PATH}\" }}\n\
          \n\
          [workspace]\n"
     )
@@ -215,7 +215,7 @@ fn warn_unknowns(ir: &Ir) {
     verbs.sort();
     verbs.dedup();
     eprintln!(
-        "charka: aviso — verbos no transpilados (se omitieron): {}",
+        "chaka_app: aviso — verbos no transpilados (se omitieron): {}",
         verbs.join(", ")
     );
 }
@@ -273,8 +273,8 @@ mod tests {
     use super::*;
 
     fn ir_of(src: &str) -> Ir {
-        let toks = charka_lexer::lex(src, charka_lexer::SourceFormat::Free).unwrap();
-        charka_ir::lower(&charka_parser::parse(&toks).unwrap())
+        let toks = chaka_lexer::lex(src, chaka_lexer::SourceFormat::Free).unwrap();
+        chaka_ir::lower(&chaka_parser::parse(&toks).unwrap())
     }
 
     #[test]
@@ -287,7 +287,7 @@ mod tests {
     fn cargo_toml_names_the_crate_and_the_runtime() {
         let toml = cargo_toml("demo");
         assert!(toml.contains("name = \"demo\""));
-        assert!(toml.contains("charka-runtime"));
+        assert!(toml.contains("chaka_app-runtime"));
         assert!(toml.contains("[workspace]"));
     }
 

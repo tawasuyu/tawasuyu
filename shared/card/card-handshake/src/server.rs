@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use brahman_broker::{Broker, Endpoint};
-use brahman_card::{Card, ResolvedCard, WitInterface, CARD_SCHEMA_VERSION};
-use brahman_net::{BrahmanNet, PeerId};
+use chasqui_broker::{Broker, Endpoint};
+use card_core::{Card, ResolvedCard, WitInterface, CARD_SCHEMA_VERSION};
+use card_net::{BrahmanNet, PeerId};
 use tokio::io::{split, AsyncRead, AsyncWrite, WriteHalf};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, Mutex};
@@ -50,9 +50,9 @@ pub struct ServerConfig {
     pub broker: Option<SharedBroker>,
     /// Capa P2P compartida. Si está presente, cada Card registrada
     /// con outputs se anuncia automáticamente al DHT vía
-    /// [`brahman_handshake::network::announce_outputs`], permitiendo
+    /// [`card_handshake::network::announce_outputs`], permitiendo
     /// que un consumer remoto los descubra con
-    /// [`brahman_handshake::network::find_remote_providers`]. Si es
+    /// [`card_handshake::network::find_remote_providers`]. Si es
     /// `None`, el server queda "ciego al DHT" — sólo matchea sesiones
     /// locales (lo cual es correcto cuando no hay conectividad o no
     /// se desea exponer al exterior).
@@ -530,7 +530,7 @@ async fn broadcast_match_diffs(
     let mut last = last_matches.lock().await;
 
     debug!(
-        target: "brahman_handshake::broadcast",
+        target: "card_handshake::broadcast",
         cards = b.len(),
         push_subscribers = push_table.len(),
         "broadcast_match_diffs"
@@ -573,7 +573,7 @@ async fn broadcast_match_diffs(
                 };
                 let send_res = tx.try_send(Frame::MatchEvent(event));
                 debug!(
-                    target: "brahman_handshake::broadcast",
+                    target: "card_handshake::broadcast",
                     consumer = %cons_session,
                     flow = %input.name,
                     producer = %m.producer_label,
@@ -591,7 +591,7 @@ async fn broadcast_match_diffs(
                     producer_label: String::new(),
                     producer_flow: String::new(),
                     ty: input.ty.clone(),
-                    via: brahman_broker::MatchStrategy::Exact,
+                    via: chasqui_broker::MatchStrategy::Exact,
                     pinned: false,
                     producer_service_socket: None,
                 };
@@ -742,7 +742,7 @@ where
         // Para Unix no tenemos peer_id contra el cual comparar; se
         // verifica sólo la consistencia interna (firma sobre payload
         // con la public_key declarada).
-        match brahman_net::PublicKey::try_decode_protobuf(&sig.public_key) {
+        match card_net::PublicKey::try_decode_protobuf(&sig.public_key) {
             Ok(pk) => {
                 let payload = match postcard::to_allocvec(&(
                     crate::signature::SIGNATURE_VERSION,
@@ -791,7 +791,7 @@ where
 
     let ack = HelloAck {
         server_version: crate::HANDSHAKE_VERSION.to_string(),
-        protocol_version: brahman_card::PROTOCOL_VERSION.to_string(),
+        protocol_version: card_core::PROTOCOL_VERSION.to_string(),
         session: session_id,
         init_attached: config.init_attached,
     };
@@ -833,11 +833,11 @@ fn validate_hello(hello: &Hello) -> Option<HandshakeError> {
             server: CARD_SCHEMA_VERSION,
         });
     }
-    if hello.protocol_version != brahman_card::PROTOCOL_VERSION {
+    if hello.protocol_version != card_core::PROTOCOL_VERSION {
         return Some(HandshakeError::ProtocolMismatch(format!(
             "cliente={}, servidor={}",
             hello.protocol_version,
-            brahman_card::PROTOCOL_VERSION
+            card_core::PROTOCOL_VERSION
         )));
     }
     let as_card: Card = Card::from(hello.card.clone());

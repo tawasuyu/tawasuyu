@@ -7,7 +7,7 @@
 //! reports the same. The convention used here is that `person_a_body`
 //! always sits in chart A and `person_b_body` always sits in chart B.
 
-use eternal_sky::Body;
+use cosmos_sky::Body;
 
 use crate::angles::signed_delta_deg;
 use crate::aspect::{AspectKind, OrbTable};

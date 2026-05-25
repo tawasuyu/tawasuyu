@@ -1,13 +1,13 @@
 [package]
-name = "charka-parser"
+name = "chaka-parser"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "charka-parser — parser de COBOL'85 (subconjunto) a AST: divisiones, modelo de datos (DATA division) y párrafos del PROCEDURE."
+description = "chaka-parser — parser de COBOL'85 (subconjunto) a AST: divisiones, modelo de datos (DATA division) y párrafos del PROCEDURE."
 
 [dependencies]
-charka-lexer = { path = "../chaka-lexer" }
+chaka-lexer = { path = "../chaka-lexer" }
 thiserror = { workspace = true }

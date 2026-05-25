@@ -1,4 +1,4 @@
-use eternal_core::constants::{DEG_TO_RAD, HALF_PI, PI, RAD_TO_DEG, SQRT2};
+use cosmos_core::constants::{DEG_TO_RAD, HALF_PI, PI, RAD_TO_DEG, SQRT2};
 
 use crate::common::{asin_safe, native_coord_from_radians, newton_raphson_1d, NewtonConfig};
 use crate::coordinate::{IntermediateCoord, NativeCoord};
@@ -177,8 +177,8 @@ pub(crate) fn deproject_ait(inter: IntermediateCoord) -> WcsResult<NativeCoord> 
 mod tests {
     use super::*;
     use crate::Projection;
-    use eternal_core::assert_ulp_lt;
-    use eternal_core::Angle;
+    use cosmos_core::assert_ulp_lt;
+    use cosmos_core::Angle;
 
     #[test]
     fn test_sfl_reference_point() {

@@ -2,7 +2,7 @@
 //!
 //! Cualquier módulo que quiera presentarse al Init brahman pero que tenga
 //! su propio runtime (GPUI, current_thread tokio, std-thread loop, etc.)
-//! puede llamar [`spawn`] con su [`brahman_card::Card`]. Eso arma un
+//! puede llamar [`spawn`] con su [`card_core::Card`]. Eso arma un
 //! thread aparte con un runtime tokio current_thread, conecta al Init,
 //! y mantiene la sesión viva con pings periódicos.
 //!
@@ -27,8 +27,8 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use brahman_card::{ulid::Ulid, Card, WitInterface};
-use brahman_handshake::{client::Client, transport};
+use card_core::{ulid::Ulid, Card, WitInterface};
+use card_handshake::{client::Client, transport};
 use tokio::task::AbortHandle;
 use tracing::{info, warn};
 
@@ -224,7 +224,7 @@ pub async fn run_client(config: SidecarConfig) {
     let mut client = match Client::connect_with(&path, config.card, config.wit).await {
         Ok(c) => {
             info!(
-                target: "brahman_sidecar",
+                target: "card_sidecar",
                 session = %c.session(),
                 init_attached = c.server_info().init_attached,
                 server = %c.server_info().server_version,
@@ -235,7 +235,7 @@ pub async fn run_client(config: SidecarConfig) {
         }
         Err(e) => {
             warn!(
-                target: "brahman_sidecar",
+                target: "card_sidecar",
                 error = %e,
                 socket = %path.display(),
                 "no conectado"
@@ -247,7 +247,7 @@ pub async fn run_client(config: SidecarConfig) {
     loop {
         tokio::time::sleep(config.ping_interval).await;
         if let Err(e) = client.ping().await {
-            warn!(target: "brahman_sidecar", error = %e, "ping falló — terminando sidecar");
+            warn!(target: "card_sidecar", error = %e, "ping falló — terminando sidecar");
             return;
         }
     }

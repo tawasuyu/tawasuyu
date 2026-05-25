@@ -14,7 +14,7 @@
 #  viaja en frames de EtherType experimental `0x88B5`.
 #
 #  Queda EXCLUIDO del espacio de trabajo (ver el Cargo.toml raiz), como el
-#  kernel y como `formato`: lo consume un paquete bare-metal, asi que fija
+#  kernel y como `format`: lo consume un paquete bare-metal, asi que fija
 #  sus versiones de forma explicita.
 # =============================================================================
 
@@ -32,7 +32,7 @@ doctest = false
 
 [dependencies]
 # `serde` aporta los rasgos de (de)serializacion; `postcard` los materializa en
-# un formato binario compacto, el mismo que ya usa `formato` para el disco.
+# un format binario compacto, el mismo que ya usa `format` para el disco.
 # Asi el grafo habla el mismo idioma en el disco y en el cable.
 serde = { version = "1", default-features = false, features = ["alloc", "derive"] }
 postcard = { version = "1", default-features = false, features = ["alloc"] }

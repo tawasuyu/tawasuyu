@@ -52,7 +52,7 @@ use crate::errors::{AstroError, AstroResult};
 /// # Example
 ///
 /// ```
-/// use eternal_core::cio::CioLocator;
+/// use cosmos_core::cio::CioLocator;
 ///
 /// // Compute s for J2000.0 + 0.5 centuries (year ~2050)
 /// let locator = CioLocator::iau2006a(0.5);
@@ -546,7 +546,7 @@ impl CioLocator {
     /// # Parameters
     ///
     /// * `tt_centuries` - TT (Terrestrial Time) as Julian centuries from J2000.0.
-    ///   Computed as `(JD_TT - 2451545.0) / eternal_core::constants::DAYS_PER_JULIAN_CENTURY`.
+    ///   Computed as `(JD_TT - 2451545.0) / cosmos_core::constants::DAYS_PER_JULIAN_CENTURY`.
     pub fn iau2006a(tt_centuries: f64) -> Self {
         Self {
             tt_centuries,

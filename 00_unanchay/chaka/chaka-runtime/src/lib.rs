@@ -1,7 +1,7 @@
-//! `charka-runtime` — el soporte de ejecución de los programas COBOL
+//! `chaka_app-runtime` — el soporte de ejecución de los programas COBOL
 //! transpilados.
 //!
-//! Lo que `charka-codegen` emite no es Rust autónomo: es Rust que
+//! Lo que `chaka_app-codegen` emite no es Rust autónomo: es Rust que
 //! enlaza contra esta biblioteca. Aquí viven los tipos que dan a un
 //! programa transpilado la semántica de COBOL en tiempo de ejecución:
 //!
@@ -11,9 +11,9 @@
 //! - [`Text`] — un campo alfanumérico (`PIC X(20)`) de longitud fija:
 //!   toda asignación justifica a la izquierda y rellena o trunca.
 //!
-//! La aritmética decimal exacta la aporta `charka-bcd`, cuyos tipos
+//! La aritmética decimal exacta la aporta `chaka_app-bcd`, cuyos tipos
 //! ([`Decimal`], [`Picture`], [`Rounding`]) se reexportan para que el
-//! código generado sólo necesite `use charka_runtime::*;`.
+//! código generado sólo necesite `use chaka_runtime::*;`.
 
 #![forbid(unsafe_code)]
 
@@ -22,7 +22,7 @@ mod file;
 mod num;
 mod text;
 
-pub use charka_bcd::{Decimal, Picture, Rounding};
+pub use chaka_bcd::{Decimal, Picture, Rounding};
 pub use edited::format_edited;
 pub use file::CobFile;
 pub use num::Num;

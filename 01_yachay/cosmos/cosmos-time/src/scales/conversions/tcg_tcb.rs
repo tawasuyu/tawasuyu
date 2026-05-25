@@ -60,10 +60,10 @@
 //! # Usage
 //!
 //! ```
-//! use eternal_time::scales::{TCG, TCB};
-//! use eternal_time::scales::conversions::{ToTCB, ToTCGFromTCB};
-//! use eternal_time::julian::JulianDate;
-//! use eternal_core::constants::J2000_JD;
+//! use cosmos_time::scales::{TCG, TCB};
+//! use cosmos_time::scales::conversions::{ToTCB, ToTCGFromTCB};
+//! use cosmos_time::julian::JulianDate;
+//! use cosmos_core::constants::J2000_JD;
 //!
 //! let tcg = TCG::from_julian_date(JulianDate::new(J2000_JD, 0.0));
 //! let tcb = tcg.to_tcb().unwrap();
@@ -84,7 +84,7 @@ use crate::constants::{TCB_RATE_LB, TCB_RATE_RATIO, TCB_REFERENCE_EPOCH};
 use crate::julian::JulianDate;
 use crate::scales::{TCB, TCG};
 use crate::TimeResult;
-use eternal_core::constants::MJD_ZERO_POINT;
+use cosmos_core::constants::MJD_ZERO_POINT;
 
 /// Convert Geocentric Coordinate Time (TCG) to Barycentric Coordinate Time (TCB).
 ///
@@ -181,7 +181,7 @@ impl ToTCGFromTCB for TCB {
 mod tests {
     use super::*;
     use crate::constants::MJD_1977_JAN_1;
-    use eternal_core::constants::{J2000_JD, MJD_ZERO_POINT, SECONDS_PER_DAY_F64};
+    use cosmos_core::constants::{J2000_JD, MJD_ZERO_POINT, SECONDS_PER_DAY_F64};
 
     #[test]
     fn test_identity_conversions() {

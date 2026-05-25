@@ -1,19 +1,19 @@
-//! `fana-editor-gpui` — el backend GPUI del editor DAG.
+//! `pluma_app-editor-gpui` — el backend GPUI del editor DAG.
 //!
-//! Consume un [`RenderPlan`] de `fana-render-plan` y lo vuelca a la
+//! Consume un [`RenderPlan`] de `pluma_app-render-plan` y lo vuelca a la
 //! pantalla: los bloques de átomo y las marcas del osciloscopio son
 //! `div`s posicionados en absoluto (texto y estilo nativos); los
 //! conectores de dependencia van por un [`EdgesElement`] que pinta
 //! paths debajo de todo.
 //!
-//! Es el único crate de fana visual que toca `gpui` — el resto de la
+//! Es el único crate de pluma_app visual que toca `gpui` — el resto de la
 //! cadena (`core`, `graph`, `render-plan`) es agnóstico.
 
 #![forbid(unsafe_code)]
 
 use std::panic;
 
-use fana_render_plan::{CoherenceTone, Edge, RenderPlan};
+use pluma_render_plan::{CoherenceTone, Edge, RenderPlan};
 use gpui::{
     div, point, prelude::*, px, App, Bounds, Element, ElementId, GlobalElementId, Hsla,
     InspectorElementId, IntoElement, LayoutId, PathBuilder, Pixels, SharedString, Style, Window,
@@ -127,7 +127,7 @@ impl Element for EdgesElement {
 }
 
 /// Bloque de un átomo: caja posicionada en absoluto con su preview.
-fn block_div(b: &fana_render_plan::AtomBlock, theme: &Theme) -> impl IntoElement {
+fn block_div(b: &pluma_render_plan::AtomBlock, theme: &Theme) -> impl IntoElement {
     div()
         .absolute()
         .left(px(b.x))
@@ -162,7 +162,7 @@ fn block_div(b: &fana_render_plan::AtomBlock, theme: &Theme) -> impl IntoElement
 }
 
 /// Marca del osciloscopio de coherencia en el sidepane.
-fn mark_div(m: &fana_render_plan::SidepaneMark, cfg: &fana_render_plan::LayoutConfig) -> impl IntoElement {
+fn mark_div(m: &pluma_render_plan::SidepaneMark, cfg: &pluma_render_plan::LayoutConfig) -> impl IntoElement {
     let usable = (cfg.sidepane_width - 8.0).max(4.0);
     let w = (m.intensity * usable).max(3.0);
     div()

@@ -1,5 +1,5 @@
 [package]
-name = "cosmobiologia-corpus"
+name = "cosmos-corpus"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

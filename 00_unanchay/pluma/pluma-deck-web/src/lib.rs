@@ -20,7 +20,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use revista_core::{DeckState, DragOutcome};
+use pluma_deck_core::{DeckState, DragOutcome};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{Event, HtmlElement, PointerEvent};

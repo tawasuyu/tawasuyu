@@ -17,14 +17,14 @@
 //! # Example
 //!
 //! ```
-//! use eternal_core::Location;
+//! use cosmos_core::Location;
 //!
 //! // Mauna Kea summit
 //! let obs = Location::from_degrees(19.8207, -155.4681, 4205.0)?;
 //!
 //! // Access coordinates
 //! assert!((obs.latitude_degrees() - 19.8207).abs() < 1e-10);
-//! # Ok::<(), eternal_core::AstroError>(())
+//! # Ok::<(), cosmos_core::AstroError>(())
 //! ```
 
 use crate::errors::{AstroError, AstroResult, MathErrorKind};
@@ -126,11 +126,11 @@ impl Location {
     /// # Example
     ///
     /// ```
-    /// use eternal_core::Location;
+    /// use cosmos_core::Location;
     ///
     /// // La Silla Observatory, Chile
     /// let la_silla = Location::from_degrees(-29.2563, -70.7380, 2400.0)?;
-    /// # Ok::<(), eternal_core::AstroError>(())
+    /// # Ok::<(), cosmos_core::AstroError>(())
     /// ```
     pub fn from_degrees(lat_deg: f64, lon_deg: f64, height_m: f64) -> AstroResult<Self> {
         if !lat_deg.is_finite() {

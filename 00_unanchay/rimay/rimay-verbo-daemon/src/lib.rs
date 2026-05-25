@@ -4,7 +4,7 @@
 //! copia del modelo (cientos de MB de RAM, descargas duplicadas). La
 //! solución: un [`Daemon`] carga el modelo una vez y lo sirve sobre un
 //! socket Unix; cada proceso usa un [`DaemonClient`] que, por
-//! implementar `verbo_core::Provider`, es indistinguible de un backend
+//! implementar `rimay_verbo_core::Provider`, es indistinguible de un backend
 //! local.
 //!
 //! ```text

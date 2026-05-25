@@ -28,10 +28,10 @@
 //! # Usage
 //!
 //! ```
-//! use eternal_time::scales::{TAI, TT, UT1};
-//! use eternal_time::scales::conversions::{ToUT1WithOffset, ToTAIWithOffset};
-//! use eternal_time::scales::conversions::{ToUT1WithDeltaT, ToTTWithDeltaT};
-//! use eternal_time::julian::JulianDate;
+//! use cosmos_time::scales::{TAI, TT, UT1};
+//! use cosmos_time::scales::conversions::{ToUT1WithOffset, ToTAIWithOffset};
+//! use cosmos_time::scales::conversions::{ToUT1WithDeltaT, ToTTWithDeltaT};
+//! use cosmos_time::julian::JulianDate;
 //!
 //! // UT1-TAI offset from IERS Bulletin A (example: -37.0 seconds)
 //! let ut1_tai_offset = -37.0;
@@ -56,7 +56,7 @@ use super::ToUT1;
 use crate::julian::JulianDate;
 use crate::scales::{TAI, TT, UT1};
 use crate::TimeResult;
-use eternal_core::constants::SECONDS_PER_DAY_F64;
+use cosmos_core::constants::SECONDS_PER_DAY_F64;
 
 impl ToUT1 for UT1 {
     fn to_ut1(&self) -> TimeResult<UT1> {
@@ -195,7 +195,7 @@ impl ToUT1WithDeltaT for TT {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eternal_core::constants::J2000_JD;
+    use cosmos_core::constants::J2000_JD;
 
     #[test]
     fn test_ut1_identity_conversion() {

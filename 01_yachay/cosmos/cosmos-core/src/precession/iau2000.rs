@@ -70,7 +70,7 @@ use crate::matrix::RotationMatrix3;
 /// # Example
 ///
 /// ```
-/// use eternal_core::precession::PrecessionIAU2000;
+/// use cosmos_core::precession::PrecessionIAU2000;
 ///
 /// let precession = PrecessionIAU2000::new();
 ///

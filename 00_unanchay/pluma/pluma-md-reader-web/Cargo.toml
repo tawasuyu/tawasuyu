@@ -1,5 +1,5 @@
 [package]
-name = "fana-md-reader-web"
+name = "pluma-md-reader-web"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,7 +7,7 @@ authors.workspace = true
 publish.workspace = true
 
 [dependencies]
-fana-md = { path = "../pluma-md" }
+pluma-md = { path = "../pluma-md" }
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
 js-sys.workspace = true

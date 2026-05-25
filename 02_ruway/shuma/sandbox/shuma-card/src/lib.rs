@@ -7,12 +7,12 @@
 //! - [`PipelineSpec`] — DAG de `CommandRef` conectados por `FlowEdge`.
 //!
 //! Cada `WorkspaceSpec`/`CommandRef` se **compila** a una o varias
-//! [`brahman_card::Card`] que el daemon entrega al [`Incarnator`] de
+//! [`card_core::Card`] que el daemon entrega al [`Incarnator`] de
 //! `ente-incarnate`. Esto preserva el contrato canónico del fractal.
 
 #![forbid(unsafe_code)]
 
-use brahman_card::{Card, Payload, Permissions, SomaSpec, Supervision};
+use card_core::{Card, Payload, Permissions, SomaSpec, Supervision};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use thiserror::Error;
@@ -193,7 +193,7 @@ pub struct CommandRef {
 
     /// Inputs/outputs tipados (mismos `Flow` de brahman-card).
     #[serde(default)]
-    pub flows: brahman_card::Flows,
+    pub flows: card_core::Flows,
 
     /// Política de supervisión. Default `OneShot` (un comando se ejecuta y muere).
     #[serde(default = "default_oneshot")]
@@ -419,7 +419,7 @@ pub enum LoadError {
     Toml(#[from] toml::de::Error),
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("formato desconocido (esperado .toml o .json)")]
+    #[error("format desconocido (esperado .toml o .json)")]
     UnknownFormat,
 }
 
@@ -623,7 +623,7 @@ mod tests {
                 label: "a".into(),
                 payload: Payload::Virtual,
                 soma: SomaSpec::default(),
-                flows: brahman_card::Flows::default(),
+                flows: card_core::Flows::default(),
                 supervision: Supervision::OneShot,
             }],
             edges: vec![FlowEdge {

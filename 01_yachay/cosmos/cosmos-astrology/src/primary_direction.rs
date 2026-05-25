@@ -29,7 +29,7 @@
 //! framework with different mundane formulas and are scoped for a
 //! follow-up.
 
-use eternal_sky::Body;
+use cosmos_sky::Body;
 
 use crate::aspect::AspectKind;
 use crate::chart::NatalChart;

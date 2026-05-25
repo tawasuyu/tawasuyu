@@ -3,7 +3,7 @@
 //! `brahman-net` corre un único Kademlia para todo el ecosistema. Este
 //! crate le pone arriba un esquema de claves namespaced ([`DhtKey`]):
 //! `minga` publica bloques de código, `brahman-card-discovery` publica
-//! Cards, `agorapura` publica Personas — todo sobre la misma malla sin
+//! Cards, `agora_app` publica Personas — todo sobre la misma malla sin
 //! colisión, porque cada clave lleva un byte de `kind`.
 //!
 //! El modelo es de **provider records**: un nodo `announce`-a que provee
@@ -15,7 +15,7 @@ pub mod key;
 
 pub use key::{DhtKey, RecordKind, DHT_KEY_LEN};
 
-use brahman_net::BrahmanNet;
+use card_net::BrahmanNet;
 use libp2p::PeerId;
 use std::sync::Arc;
 

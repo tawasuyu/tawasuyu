@@ -1,4 +1,4 @@
-//! `badu` — demostración del cuaderno de notas.
+//! `khipu_app` — demostración del cuaderno de notas.
 //!
 //! Siembra un cuaderno personal, imprime el grafo de wiki-links
 //! (forward-links, backlinks, huérfanas, enlaces colgantes) y luego la
@@ -7,10 +7,10 @@
 //!
 //! Los vectores semánticos van a mano —tres tópicos: cocina, jardín,
 //! oficina— para que el clustering se vea con claridad. En la app real
-//! los produce `verbo`. Corre con `cargo run -p badu`.
+//! los produce `verbo`. Corre con `cargo run -p khipu_app`.
 
-use badu_core::{NoteId, NoteStore};
-use badu_gravity::{GravityConfig, SemanticField};
+use khipu_core::{NoteId, NoteStore};
+use khipu_gravity::{GravityConfig, SemanticField};
 
 /// Vector de tópico con un leve sesgo — notas del mismo tema quedan
 /// afines sin ser idénticas.
@@ -87,7 +87,7 @@ fn main() {
             .unwrap_or("?")
     };
 
-    println!("\n  badu · cuaderno de notas — {} notas\n", store.len());
+    println!("\n  khipu_app · cuaderno de notas — {} notas\n", store.len());
 
     println!("  grafo de enlaces:");
     for note in store.iter() {

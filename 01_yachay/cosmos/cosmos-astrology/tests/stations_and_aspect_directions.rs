@@ -1,12 +1,12 @@
 //! Tests for planetary stations and primary directions to non-
 //! conjunction aspects.
 
-use eternal_astrology::{
+use cosmos_astrology::{
     all_directions, all_directions_with_aspects, all_stations, direct, direct_to_aspect,
     next_station, AspectKind, BirthData, ChartConfig, DirectionKey, DirectionMethod,
     NatalChart, Significator, StationKind,
 };
-use eternal_sky::{Body, EphemerisSession, Instant, Observer, SessionConfig};
+use cosmos_sky::{Body, EphemerisSession, Instant, Observer, SessionConfig};
 
 fn session() -> EphemerisSession {
     EphemerisSession::open(SessionConfig::vsop2013()).unwrap()

@@ -1,7 +1,7 @@
 //! `format_edited` — el formateo de un valor numérico según una
 //! PICTURE de edición (`ZZ,ZZ9.99`).
 
-use charka_bcd::{Decimal, Rounding};
+use chaka_bcd::{Decimal, Rounding};
 
 /// Formatea `value` según una PICTURE de edición. Soporta `9` (dígito),
 /// `Z` (dígito con supresión de ceros a la izquierda), `,` (coma de

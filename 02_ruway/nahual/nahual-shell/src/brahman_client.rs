@@ -5,7 +5,7 @@
 
 use std::collections::BTreeSet;
 
-use brahman_card::{
+use card_core::{
     Card, Flow, Flows, FsPolicy, IpcPolicy, Lifecycle, Payload, Permissions, Priority, Supervision,
     TypeRef, CARD_SCHEMA_VERSION,
 };
@@ -13,7 +13,7 @@ use ulid::Ulid;
 
 /// Spawn del sidecar con la Card de nahual.
 pub fn spawn() {
-    brahman_sidecar::spawn(build_card());
+    card_sidecar::spawn(build_card());
 }
 
 fn build_card() -> Card {

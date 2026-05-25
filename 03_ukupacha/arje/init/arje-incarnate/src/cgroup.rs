@@ -1,7 +1,7 @@
 //! Resolución y creación de cgroups v2 para el hijo.
 
 use crate::error::IncarnateError;
-use brahman_card::{CgroupSpec, ResourceLimits};
+use card_core::{CgroupSpec, ResourceLimits};
 use std::path::{Path, PathBuf};
 
 /// Cgroup actual del proceso que llama. Lo usamos como prefijo para paths

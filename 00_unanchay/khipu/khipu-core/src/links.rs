@@ -1,6 +1,6 @@
 //! Parser de wiki-links — los destinos `[[...]]` dentro de una nota.
 //!
-//! Un solo formato: dobles corchetes con el título adentro. El texto se
+//! Un solo format: dobles corchetes con el título adentro. El texto se
 //! recorta; los enlaces vacíos se descartan; el orden de aparición se
 //! conserva y se deduplica (un mismo destino enlazado dos veces cuenta
 //! una sola vez como arista).

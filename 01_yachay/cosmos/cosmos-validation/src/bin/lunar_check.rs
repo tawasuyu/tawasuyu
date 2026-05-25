@@ -7,12 +7,12 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use serde::Deserialize;
 
-use eternal_ephemeris::jpl::SpkFile;
-use eternal_time::julian::JulianDate;
-use eternal_time::scales::ToTTFromTDB;
-use eternal_time::TDB;
+use cosmos_ephemeris::jpl::SpkFile;
+use cosmos_time::julian::JulianDate;
+use cosmos_time::scales::ToTTFromTDB;
+use cosmos_time::TDB;
 
-use eternal_validation::lunar::{
+use cosmos_validation::lunar::{
     mean_lilith, mean_lunar_node, true_lilith_geocentric, true_lunar_node_geocentric,
 };
 

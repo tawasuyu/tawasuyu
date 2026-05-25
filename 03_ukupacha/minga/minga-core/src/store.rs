@@ -16,7 +16,7 @@ use crate::cas::{self, ContentHash};
 use std::collections::HashMap;
 
 /// Forma "stored": idéntica a `SemanticNode` excepto que los hijos son
-/// hashes en vez de estructuras anidadas. Es el formato canónico en
+/// hashes en vez de estructuras anidadas. Es el format canónico en
 /// reposo y el que permite la deduplicación.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct StoredNode {

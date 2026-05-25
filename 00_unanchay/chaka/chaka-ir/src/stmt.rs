@@ -3,7 +3,7 @@
 //! del siguiente, por eso las listas de operandos se cortan al ver una
 //! palabra "frontera" (ver [`crate::kw`]).
 
-use charka_parser::TokenKind;
+use chaka_parser::TokenKind;
 
 use crate::ast::{
     FileMode, InspectOp, Operand, Perform, PerformControl, PerformTarget, Stmt, WhenBranch,

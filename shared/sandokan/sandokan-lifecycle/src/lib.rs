@@ -1,7 +1,7 @@
 //! sandokan-lifecycle — primitivas de ciclo de vida agnósticas.
 //!
 //! Lógica pura reutilizable por cualquier supervisor de procesos
-//! (shuma, matilda Ghost, charka-shadow, mirada). Sin dependencias de
+//! (shuma, matilda Ghost, chaka_app-shadow, mirada). Sin dependencias de
 //! syscalls, proceso, ni UI: solo cálculo.
 //!
 //! - [`backoff`] — backoff exponencial con tope.

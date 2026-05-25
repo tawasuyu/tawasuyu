@@ -1,12 +1,12 @@
 [package]
-name = "charka-runtime"
+name = "chaka-runtime"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "charka-runtime — soporte de ejecución de los programas COBOL transpilados: campos numéricos (Num) y alfanuméricos (Text) con la semántica de COBOL."
+description = "chaka-runtime — soporte de ejecución de los programas COBOL transpilados: campos numéricos (Num) y alfanuméricos (Text) con la semántica de COBOL."
 
 [dependencies]
-charka-bcd = { path = "../chaka-bcd" }
+chaka-bcd = { path = "../chaka-bcd" }

@@ -1,5 +1,5 @@
 use crate::Distance;
-use eternal_core::Vector3;
+use cosmos_core::Vector3;
 
 const C_AU_PER_DAY: f64 = 173.1446326846693;
 
@@ -27,7 +27,7 @@ impl LightTimeCorrection {
     }
 
     pub fn light_time_seconds(&self) -> f64 {
-        self.light_time_days * eternal_core::constants::SECONDS_PER_DAY_F64
+        self.light_time_days * cosmos_core::constants::SECONDS_PER_DAY_F64
     }
 
     pub fn apply_proper_motion(

@@ -1,10 +1,10 @@
-//! Loader de `EntityCard` (≡ `brahman_card::Card`) desde archivos JSON.
+//! Loader de `EntityCard` (≡ `card_core::Card`) desde archivos JSON.
 //!
 //! Card-loading consolidado: antes vivía duplicado en `arje-brain/loader.rs`.
 //! La fuente de verdad del shape es Rust + serde; en disco se guarda JSON
 //! crudo. Toda card-loading del ecosistema vive ahora en `brahman-cards`.
 
-use brahman_card::Card as EntityCard;
+use card_core::Card as EntityCard;
 use std::path::Path;
 
 /// Carga una `EntityCard` desde un archivo JSON. Pasa por

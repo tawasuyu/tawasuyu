@@ -11,12 +11,12 @@
 //! Phase 5 of the v1 roadmap can add `EOP::polar_motion(jd)` to tighten
 //! observer position to sub-mas if needed.
 
-use eternal_core::Vector3;
-use eternal_time::julian::JulianDate;
-use eternal_time::scales::conversions::ToUT1WithDeltaT;
-use eternal_time::scales::ToTTFromTDB;
-use eternal_time::sidereal::GAST;
-use eternal_time::{TDB, TT, UT1};
+use cosmos_core::Vector3;
+use cosmos_time::julian::JulianDate;
+use cosmos_time::scales::conversions::ToUT1WithDeltaT;
+use cosmos_time::scales::ToTTFromTDB;
+use cosmos_time::sidereal::GAST;
+use cosmos_time::{TDB, TT, UT1};
 
 use crate::oracle::{Backend, Oracle, OracleError, StateKmS};
 
@@ -59,7 +59,7 @@ pub fn observer_position_tet_km(
 }
 
 /// Inline WGS-84 geodetic-to-ITRS converter (returns metres). Mirrors
-/// `eternal_coords::frames::ITRSPosition::from_geodetic` so we do not
+/// `cosmos_coords::frames::ITRSPosition::from_geodetic` so we do not
 /// pull in the larger frames module just for one formula.
 fn wgs84_geodetic_to_itrs(obs: &Observer) -> Vector3 {
     const A: f64 = 6_378_137.0;
@@ -142,7 +142,7 @@ pub fn apparent_topocentric_state(
 /// Convert a topocentric Cartesian state in the TET frame to local
 /// **altitude / azimuth** in radians, given the observer's geodetic
 /// latitude and the **Local Apparent Sidereal Time** at the observer
-/// (in radians; obtainable via `eternal_time::sidereal::GAST::to_last`).
+/// (in radians; obtainable via `cosmos_time::sidereal::GAST::to_last`).
 ///
 /// Azimuth follows the modern N=0°, E=90°, S=180°, W=270° convention.
 /// Altitude is geometric (no atmospheric refraction). To match Swiss
@@ -185,7 +185,7 @@ pub fn apparent_alt_az(
     observer: &Observer,
     delta_t_seconds: f64,
 ) -> Result<(f64, f64), OracleError> {
-    use eternal_time::sidereal::GAST;
+    use cosmos_time::sidereal::GAST;
 
     let topo = apparent_topocentric_state(oracle, body, jd_tdb, observer, delta_t_seconds)?;
 
@@ -195,7 +195,7 @@ pub fn apparent_alt_az(
     let ut1 = tt
         .to_ut1_with_delta_t(delta_t_seconds)
         .map_err(|e| OracleError::Inner(format!("TT→UT1: {:?}", e)))?;
-    let location = eternal_core::Location::from_degrees(
+    let location = cosmos_core::Location::from_degrees(
         observer.lat_rad.to_degrees(),
         observer.lon_rad.to_degrees(),
         observer.elev_m,

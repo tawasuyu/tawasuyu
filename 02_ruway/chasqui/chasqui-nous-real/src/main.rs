@@ -32,7 +32,7 @@
 
 use std::collections::BTreeMap;
 
-use brahman_card::{
+use card_core::{
     ulid::Ulid, Card, CardKind, ContextBias, Flow, Flows, Lifecycle, Payload, Priority,
     Supervision, TypeRef,
 };
@@ -82,7 +82,7 @@ async fn main() -> std::io::Result<()> {
     // 2. Sidecar al brahman-init con Card declarando el socket.
     let card = build_card(sock_path.clone());
     info!(label = %card.label, mode = MODEL_ID, "publicando Card al brahman-init");
-    brahman_sidecar::spawn(card);
+    card_sidecar::spawn(card);
 
     // 3. Inicializar el modelo (sólo en modo embeddings).
     #[cfg(feature = "embeddings")]
@@ -158,7 +158,7 @@ fn build_card(service_socket: std::path::PathBuf) -> Card {
     );
 
     Card {
-        schema_version: brahman_card::CARD_SCHEMA_VERSION,
+        schema_version: card_core::CARD_SCHEMA_VERSION,
         id: Ulid::new(),
         label: "chasqui.nous_real".into(),
         payload: Payload::Virtual,

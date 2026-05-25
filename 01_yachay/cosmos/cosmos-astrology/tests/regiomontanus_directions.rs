@@ -7,11 +7,11 @@
 //! angles** (because the angles have fixed mundane positions in both
 //! frameworks).
 
-use eternal_astrology::{
+use cosmos_astrology::{
     direct_to_aspect, mundane, AspectKind, BirthData, ChartConfig, DirectionKey,
     DirectionMethod, NatalChart, Significator,
 };
-use eternal_sky::{Body, EphemerisSession, Instant, Observer, SessionConfig};
+use cosmos_sky::{Body, EphemerisSession, Instant, Observer, SessionConfig};
 
 fn session() -> EphemerisSession {
     EphemerisSession::open(SessionConfig::vsop2013()).unwrap()

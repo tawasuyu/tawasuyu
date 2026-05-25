@@ -74,7 +74,7 @@ mod tests {
 
     #[test]
     fn write_then_read_roundtrip() {
-        let path = std::env::temp_dir().join("charka-cobfile-test.dat");
+        let path = std::env::temp_dir().join("chaka_app-cobfile-test.dat");
         let path = path.to_str().unwrap();
 
         let mut f = CobFile::new(path);
@@ -95,7 +95,7 @@ mod tests {
 
     #[test]
     fn missing_file_reads_as_empty() {
-        let mut f = CobFile::new("/charka/no/existe/jamas.dat");
+        let mut f = CobFile::new("/chaka_app/no/existe/jamas.dat");
         f.open_input();
         assert_eq!(f.read(), None);
     }

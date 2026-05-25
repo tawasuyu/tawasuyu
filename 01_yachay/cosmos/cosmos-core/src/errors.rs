@@ -20,7 +20,7 @@
 //! Use the constructor methods for consistent error creation:
 //!
 //! ```
-//! use eternal_core::{AstroError, MathErrorKind};
+//! use cosmos_core::{AstroError, MathErrorKind};
 //!
 //! fn safe_divide(a: f64, b: f64) -> Result<f64, AstroError> {
 //!     if b == 0.0 {

@@ -1,16 +1,16 @@
 [package]
-name = "yachay"
+name = "pluma-notebook-app"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "yachay — demostración de notebooks reproducibles: DAG de celdas, orden de ejecución, propagación de staleness y digest Merkle."
+description = "pluma-notebook-app — demostración de notebooks reproducibles: DAG de celdas, orden de ejecución, propagación de staleness y digest Merkle."
 
 [[bin]]
-name = "yachay"
+name = "pluma-notebook-app"
 path = "src/main.rs"
 
 [dependencies]
-yachay-core = { path = "../pluma-notebook-core" }
+pluma-notebook-core = { path = "../pluma-notebook-core" }

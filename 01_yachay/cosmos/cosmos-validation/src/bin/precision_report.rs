@@ -18,11 +18,11 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 
-use eternal_validation::fixture::{
+use cosmos_validation::fixture::{
     BackendKind, Corrections, Fixture, FixtureSet, Frame, Source, Tolerance,
 };
-use eternal_validation::oracle::{Backend, Oracle};
-use eternal_validation::report::{ErrorReport, ReportTable};
+use cosmos_validation::oracle::{Backend, Oracle};
+use cosmos_validation::report::{ErrorReport, ReportTable};
 
 #[derive(Parser)]
 #[command(version, about = "eternal-ephemeris precision thermometer")]
@@ -298,7 +298,7 @@ fn cmd_bootstrap(spk: PathBuf, out: PathBuf) -> Result<()> {
 
 #[cfg(feature = "fetch")]
 fn cmd_fetch(backend: BackendArg, out: Option<PathBuf>) -> Result<()> {
-    use eternal_validation::horizons::HorizonsFetcher;
+    use cosmos_validation::horizons::HorizonsFetcher;
 
     let (kind, grid, default_out, corrections) = match backend {
         BackendArg::Spk => (

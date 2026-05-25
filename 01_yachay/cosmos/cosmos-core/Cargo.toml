@@ -1,5 +1,5 @@
 [package]
-name = "eternal-core"
+name = "cosmos-core"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true

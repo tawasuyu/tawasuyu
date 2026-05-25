@@ -18,8 +18,8 @@
 //! # Usage
 //!
 //! ```
-//! use eternal_time::{JulianDate, UTC};
-//! use eternal_time::scales::utc::utc_from_calendar;
+//! use cosmos_time::{JulianDate, UTC};
+//! use cosmos_time::scales::utc::utc_from_calendar;
 //!
 //! // From Unix timestamp
 //! let utc = UTC::new(1704067200, 0); // 2024-01-01 00:00:00 UTC
@@ -48,7 +48,7 @@ use crate::constants::UNIX_EPOCH_JD;
 use crate::julian::JulianDate;
 use crate::parsing::parse_iso8601;
 use crate::{TimeError, TimeResult};
-use eternal_core::constants::SECONDS_PER_DAY_F64;
+use cosmos_core::constants::SECONDS_PER_DAY_F64;
 use std::fmt;
 use std::str::FromStr;
 
@@ -66,11 +66,11 @@ impl UTC {
     /// Days are computed separately from sub-day time to preserve precision.
     /// The resulting Julian Date uses jd1 for whole days and jd2 for the fractional part.
     pub fn new(seconds: i64, nanos: u32) -> Self {
-        let days = seconds / eternal_core::constants::SECONDS_PER_DAY;
-        let remainder_seconds = seconds % eternal_core::constants::SECONDS_PER_DAY;
+        let days = seconds / cosmos_core::constants::SECONDS_PER_DAY;
+        let remainder_seconds = seconds % cosmos_core::constants::SECONDS_PER_DAY;
         let jd1 = UNIX_EPOCH_JD + days as f64;
         let jd2 = (remainder_seconds as f64
-            + nanos as f64 / eternal_core::constants::NANOSECONDS_PER_SECOND_F64)
+            + nanos as f64 / cosmos_core::constants::NANOSECONDS_PER_SECOND_F64)
             / SECONDS_PER_DAY_F64;
         Self(JulianDate::new(jd1, jd2))
     }
@@ -190,7 +190,7 @@ impl FromStr for UTC {
 mod tests {
     use super::*;
     use crate::constants::UNIX_EPOCH_JD;
-    use eternal_core::constants::J2000_JD;
+    use cosmos_core::constants::J2000_JD;
 
     #[test]
     fn test_utc_constructors() {
@@ -246,17 +246,17 @@ mod tests {
 
     #[test]
     fn test_utc_new_precision_preservation() {
-        let seconds_50_years = 50 * 365 * eternal_core::constants::SECONDS_PER_DAY as u32;
+        let seconds_50_years = 50 * 365 * cosmos_core::constants::SECONDS_PER_DAY as u32;
         let nanos = 123456789u32;
 
         let utc = UTC::new(seconds_50_years as i64, nanos);
         let jd = utc.to_julian_date();
 
-        let expected_days = seconds_50_years / eternal_core::constants::SECONDS_PER_DAY as u32;
-        let remainder_secs = seconds_50_years % eternal_core::constants::SECONDS_PER_DAY as u32;
+        let expected_days = seconds_50_years / cosmos_core::constants::SECONDS_PER_DAY as u32;
+        let remainder_secs = seconds_50_years % cosmos_core::constants::SECONDS_PER_DAY as u32;
         let expected_jd1 = UNIX_EPOCH_JD + expected_days as f64;
         let expected_jd2 = (remainder_secs as f64
-            + nanos as f64 / eternal_core::constants::NANOSECONDS_PER_SECOND_F64)
+            + nanos as f64 / cosmos_core::constants::NANOSECONDS_PER_SECOND_F64)
             / SECONDS_PER_DAY_F64;
 
         assert_eq!(jd.jd1(), expected_jd1);

@@ -24,7 +24,7 @@
 //! let net = Arc::new(BrahmanNet::new()?);
 //! net.listen("/ip4/0.0.0.0/tcp/4101".parse()?).await;
 //!
-//! tokio::spawn(brahman_handshake::network::run_libp2p_accept_loop(
+//! tokio::spawn(card_handshake::network::run_libp2p_accept_loop(
 //!     server.clone(),
 //!     net.clone(),
 //! ));
@@ -35,7 +35,7 @@
 //! ```ignore
 //! let net = BrahmanNet::new()?;
 //! net.dial(remote_multiaddr);
-//! let mut client = brahman_handshake::network::connect_libp2p(
+//! let mut client = card_handshake::network::connect_libp2p(
 //!     &net, peer_id, my_card, None,
 //! ).await?;
 //! client.ping().await?;
@@ -43,8 +43,8 @@
 
 use std::sync::Arc;
 
-use brahman_card::{Card, TypeRef, WitInterface};
-use brahman_net::{BrahmanNet, Keypair, OpenStreamError, PeerId, Stream, StreamProtocol};
+use card_core::{Card, TypeRef, WitInterface};
+use card_net::{BrahmanNet, Keypair, OpenStreamError, PeerId, Stream, StreamProtocol};
 
 use crate::identity::SessionCert;
 use futures::StreamExt;
@@ -114,7 +114,7 @@ async fn handle_libp2p_session(
     let session = server.session_from_libp2p_stream(stream.compat(), peer);
     if let Err(e) = session.handle().await {
         warn!(
-            target: "brahman_handshake::network",
+            target: "card_handshake::network",
             peer = %peer,
             error = %e,
             "sesión libp2p terminó con error"
@@ -128,7 +128,7 @@ async fn handle_libp2p_session(
 /// `net.dial(multiaddr)` antes.
 ///
 /// La `keypair` debe ser la misma que la del nodo libp2p (la que
-/// pasaste a [`brahman_net::BrahmanNet::with_keypair`]). Si no coincide
+/// pasaste a [`card_net::BrahmanNet::with_keypair`]). Si no coincide
 /// con el `peer_id` autenticado por Noise, el server rechaza el Hello
 /// con `Unauthorized`.
 ///
@@ -247,7 +247,7 @@ pub fn announce_outputs(net: &BrahmanNet, card: &Card) {
     for flow in &card.flow.output {
         let key = flow_dht_key(&flow.name, &flow.ty);
         debug!(
-            target: "brahman_handshake::network",
+            target: "card_handshake::network",
             flow = %flow.name,
             "announce_output → DHT"
         );
@@ -263,7 +263,7 @@ pub fn withdraw_outputs(net: &BrahmanNet, card: &Card) {
     for flow in &card.flow.output {
         let key = flow_dht_key(&flow.name, &flow.ty);
         debug!(
-            target: "brahman_handshake::network",
+            target: "card_handshake::network",
             flow = %flow.name,
             "withdraw_output → DHT (stop_providing)"
         );

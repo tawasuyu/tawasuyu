@@ -6,11 +6,11 @@
 //! Output is in the dynamical mean ecliptic and equinox of J2000 frame,
 //! with positions in kilometers.
 
-use eternal_core::{
+use cosmos_core::{
     constants::{ARCSEC_TO_RAD, DEG_TO_RAD, J2000_JD, PI},
     AstroResult,
 };
-use eternal_time::TDB;
+use cosmos_time::TDB;
 
 use crate::lunar_coefficients::{
     MainTerm, PertBlock, MAIN_DISTANCE, MAIN_LATITUDE, MAIN_LONGITUDE, PERT_DISTANCE,
@@ -79,7 +79,7 @@ impl ElpMpp02Moon {
     fn evaluate(&self, tj: f64) -> (f64, f64, f64, f64, f64, f64) {
         let t = [
             1.0,
-            tj / eternal_core::constants::DAYS_PER_JULIAN_CENTURY,
+            tj / cosmos_core::constants::DAYS_PER_JULIAN_CENTURY,
             0.0,
             0.0,
             0.0,
@@ -167,13 +167,13 @@ impl ElpMpp02Moon {
         let qpwra = qpw * ra + qw * rap;
 
         let vx = (pw2 * xp1 + pwqw * xp2 + pwra * xp3 + ppw2 * x1 + ppwqpw * x2 + ppwra * x3)
-            / eternal_core::constants::DAYS_PER_JULIAN_CENTURY;
+            / cosmos_core::constants::DAYS_PER_JULIAN_CENTURY;
         let vy = (pwqw * xp1 + qw2 * xp2 - qwra * xp3 + ppwqpw * x1 + qpw2 * x2 - qpwra * x3)
-            / eternal_core::constants::DAYS_PER_JULIAN_CENTURY;
+            / cosmos_core::constants::DAYS_PER_JULIAN_CENTURY;
         let vz = (-pwra * xp1 + qwra * xp2 + (pw2 + qw2 - 1.0) * xp3 - ppwra * x1
             + qpwra * x2
             + (ppw2 + qpw2) * x3)
-            / eternal_core::constants::DAYS_PER_JULIAN_CENTURY;
+            / cosmos_core::constants::DAYS_PER_JULIAN_CENTURY;
 
         (x, y, z, vx, vy, vz)
     }
@@ -433,7 +433,7 @@ fn ecliptic_to_icrs(ecl: [f64; 3]) -> [f64; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eternal_time::julian::JulianDate;
+    use cosmos_time::julian::JulianDate;
 
     #[test]
     fn test_moon_j2000() {
@@ -577,7 +577,7 @@ mod tests {
         let v_mag = libm::sqrt(state[3] * state[3] + state[4] * state[4] + state[5] * state[5]);
 
         // Moon's orbital velocity is ~1.022 km/s = ~88,300 km/day
-        let v_km_s = v_mag / eternal_core::constants::SECONDS_PER_DAY_F64;
+        let v_km_s = v_mag / cosmos_core::constants::SECONDS_PER_DAY_F64;
 
         println!("\nMoon velocity at J2000:");
         println!("  Vx = {:.3} km/day", state[3]);
@@ -601,7 +601,7 @@ mod tests {
         println!(
             "  Numerical velocity: {:.3} km/day = {:.4} km/s",
             v_num_mag,
-            v_num_mag / eternal_core::constants::SECONDS_PER_DAY_F64
+            v_num_mag / cosmos_core::constants::SECONDS_PER_DAY_F64
         );
 
         // Use numerical velocity as ground truth - should be ~88,000 km/day
@@ -759,7 +759,7 @@ mod tests {
 
         // Velocity magnitude should be ~1 km/s = 86400 km/day
         let v_mag = libm::sqrt(state[3].powi(2) + state[4].powi(2) + state[5].powi(2));
-        let v_km_s = v_mag / eternal_core::constants::SECONDS_PER_DAY_F64;
+        let v_km_s = v_mag / cosmos_core::constants::SECONDS_PER_DAY_F64;
 
         println!("DE405 fit velocity: {:.4} km/s", v_km_s);
         assert!(

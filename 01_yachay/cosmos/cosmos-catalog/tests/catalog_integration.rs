@@ -1,6 +1,6 @@
 #![cfg(feature = "integration-tests")]
 
-use eternal_catalog::query::catalog::Catalog;
+use cosmos_catalog::query::catalog::Catalog;
 
 const TEST_CATALOG: &str = "data/catalog.bin";
 

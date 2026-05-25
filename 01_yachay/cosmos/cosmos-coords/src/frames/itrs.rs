@@ -1,6 +1,6 @@
 use crate::CoordResult;
-use eternal_core::{Angle, Vector3};
-use eternal_time::TT;
+use cosmos_core::{Angle, Vector3};
+use cosmos_time::TT;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

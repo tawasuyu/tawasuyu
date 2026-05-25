@@ -12,5 +12,5 @@
 /// ΔT in seconds at the given Julian Date (TDB or TT — they differ by at
 /// most ~2 ms which is well below the precision of the underlying table).
 pub fn delta_t_seconds(jd: f64) -> f64 {
-    eternal_validation::delta_t::delta_t_seconds(jd)
+    cosmos_validation::delta_t::delta_t_seconds(jd)
 }

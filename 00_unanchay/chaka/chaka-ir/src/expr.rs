@@ -1,7 +1,7 @@
 //! Parseo de expresiones aritméticas (`COMPUTE`) y de condiciones
 //! (`IF`, `PERFORM UNTIL`).
 
-use charka_parser::TokenKind;
+use chaka_parser::TokenKind;
 
 use crate::ast::{BinOp, CmpOp, Cond, Expr, Operand};
 use crate::cursor::{parse_operand, Cursor};

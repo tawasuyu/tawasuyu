@@ -4,8 +4,8 @@ use crate::{
     transforms::CoordinateFrame,
     CoordError, CoordResult, Distance,
 };
-use eternal_core::{matrix::RotationMatrix3, Angle, Vector3};
-use eternal_time::{transforms::NutationCalculator, TT};
+use cosmos_core::{matrix::RotationMatrix3, Angle, Vector3};
+use cosmos_time::{transforms::NutationCalculator, TT};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -137,7 +137,7 @@ impl GCRSPosition {
 
     fn gcrs_to_cirs_matrix(epoch: &TT) -> CoordResult<RotationMatrix3> {
         let jd = epoch.to_julian_date();
-        let t = eternal_core::utils::jd_to_centuries(jd.jd1(), jd.jd2());
+        let t = cosmos_core::utils::jd_to_centuries(jd.jd1(), jd.jd2());
 
         let nutation = epoch
             .nutation_iau2006a()
@@ -145,20 +145,20 @@ impl GCRSPosition {
                 message: format!("Nutation calculation failed: {}", e),
             })?;
 
-        let precession_calc = eternal_core::precession::PrecessionIAU2006::new();
+        let precession_calc = cosmos_core::precession::PrecessionIAU2006::new();
         let npb_matrix = precession_calc.npb_matrix_iau2006a(
             t,
             nutation.nutation_longitude(),
             nutation.nutation_obliquity(),
         );
 
-        let cio_solution = eternal_core::CioSolution::calculate(&npb_matrix, t).map_err(|e| {
+        let cio_solution = cosmos_core::CioSolution::calculate(&npb_matrix, t).map_err(|e| {
             CoordError::CoreError {
                 message: format!("CIO calculation failed: {}", e),
             }
         })?;
 
-        let c2i_matrix = eternal_core::gcrs_to_cirs_matrix(
+        let c2i_matrix = cosmos_core::gcrs_to_cirs_matrix(
             cio_solution.cip.x,
             cio_solution.cip.y,
             cio_solution.s,
@@ -373,8 +373,8 @@ mod tests {
     fn test_aberration_varies_with_epoch() {
         let icrs = ICRSPosition::from_degrees(180.0, 45.0).unwrap();
 
-        let epoch_jan = TT::from_julian_date(eternal_time::JulianDate::new(2451545.0, 0.0));
-        let epoch_jul = TT::from_julian_date(eternal_time::JulianDate::new(2451545.0, 182.5));
+        let epoch_jan = TT::from_julian_date(cosmos_time::JulianDate::new(2451545.0, 0.0));
+        let epoch_jul = TT::from_julian_date(cosmos_time::JulianDate::new(2451545.0, 182.5));
 
         let gcrs_jan = GCRSPosition::from_icrs(&icrs, &epoch_jan).unwrap();
         let gcrs_jul = GCRSPosition::from_icrs(&icrs, &epoch_jul).unwrap();

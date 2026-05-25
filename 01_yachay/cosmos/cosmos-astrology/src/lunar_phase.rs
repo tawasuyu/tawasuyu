@@ -8,9 +8,9 @@
 //! phases occupy the eighths between the four canonical instants.
 //!
 //! All phase finding reduces to a root-find on
-//! `signed_delta(p − target)` and reuses [`eternal_sky::find_root`].
+//! `signed_delta(p − target)` and reuses [`cosmos_sky::find_root`].
 
-use eternal_sky::{find_root, Body, EphemerisSession, Instant, SearchOptions, SkyResult};
+use cosmos_sky::{find_root, Body, EphemerisSession, Instant, SearchOptions, SkyResult};
 
 use crate::angles::signed_delta_rad;
 use crate::error::{AstrologyError, AstrologyResult};

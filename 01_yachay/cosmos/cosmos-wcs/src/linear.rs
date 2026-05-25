@@ -155,7 +155,7 @@ mod tests {
     #[test]
     fn test_rotated_matrix_roundtrip() {
         let crpix = [256.0, 256.0];
-        let angle = eternal_core::constants::PI / 6.0;
+        let angle = cosmos_core::constants::PI / 6.0;
         let scale = 0.0005;
         let (angle_s, angle_c) = angle.sin_cos();
         let cd = [

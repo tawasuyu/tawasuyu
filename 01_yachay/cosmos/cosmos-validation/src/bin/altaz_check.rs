@@ -7,8 +7,8 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use serde::Deserialize;
 
-use eternal_validation::oracle::{Backend, Oracle};
-use eternal_validation::topocentric::{apparent_alt_az, Observer};
+use cosmos_validation::oracle::{Backend, Oracle};
+use cosmos_validation::topocentric::{apparent_alt_az, Observer};
 
 const MOON: i32 = 301;
 const SUN: i32 = 10;

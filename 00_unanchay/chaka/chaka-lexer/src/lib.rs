@@ -1,4 +1,4 @@
-//! `charka-lexer` — tokenizador de COBOL.
+//! `chaka_app-lexer` — tokenizador de COBOL.
 //!
 //! Primera etapa del transpilador COBOL→Rust: convierte el texto fuente
 //! en una secuencia de [`Token`]. El lexer es **deliberadamente tonto**
@@ -83,7 +83,7 @@ pub fn lex(source: &str, format: SourceFormat) -> Result<Vec<Token>, LexError> {
     Ok(tokens)
 }
 
-/// Extrae el área de código de una línea según el formato. `None` si la
+/// Extrae el área de código de una línea según el format. `None` si la
 /// línea entera se descarta (comentario, debugging). El `u32` es la
 /// columna 1-based del primer carácter del contenido devuelto.
 fn prepare_line(raw: &str, format: SourceFormat) -> Option<(String, u32)> {

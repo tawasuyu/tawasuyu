@@ -1,7 +1,7 @@
-//! `charka-ir` — la representación intermedia del transpilador.
+//! `chaka_app-ir` — la representación intermedia del transpilador.
 //!
 //! Tercera etapa del pipeline COBOL→Rust: toma el [`Program`] de
-//! `charka-parser` (cuyo PROCEDURE division es una lista de sentencias
+//! `chaka_app-parser` (cuyo PROCEDURE division es una lista de sentencias
 //! con tokens crudos) y produce un [`Ir`] donde cada sentencia ya es un
 //! árbol de [`Stmt`] tipados: `MOVE`, `IF`, `PERFORM`, `COMPUTE`, los
 //! verbos aritméticos, etc.
@@ -32,7 +32,7 @@ mod model;
 mod stmt;
 
 pub use ast::*;
-pub use charka_parser::Program;
+pub use chaka_parser::Program;
 pub use model::{resolve_data, ConditionName, DataModel, Field, FieldKind, GroupInfo};
 
 use cursor::Cursor;
@@ -67,12 +67,12 @@ pub fn lower(program: &Program) -> Ir {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use charka_lexer::{lex, SourceFormat};
+    use chaka_lexer::{lex, SourceFormat};
 
-    /// Helper: lexa, parsea y baja a IR un fuente en formato libre.
+    /// Helper: lexa, parsea y baja a IR un fuente en format libre.
     fn ir(src: &str) -> Ir {
         let toks = lex(src, SourceFormat::Free).expect("lex OK");
-        let program = charka_parser::parse(&toks).expect("parse OK");
+        let program = chaka_parser::parse(&toks).expect("parse OK");
         lower(&program)
     }
 
@@ -84,7 +84,7 @@ mod tests {
 
     #[test]
     fn empty_program_lowers_to_default() {
-        let got = lower(&charka_parser::parse(&[]).unwrap());
+        let got = lower(&chaka_parser::parse(&[]).unwrap());
         assert_eq!(got, Ir::default());
     }
 

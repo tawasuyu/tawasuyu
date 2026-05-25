@@ -56,7 +56,7 @@ use crate::math::fmod;
 /// # Example
 ///
 /// ```
-/// use eternal_core::nutation::NutationIAU2000B;
+/// use cosmos_core::nutation::NutationIAU2000B;
 ///
 /// let nut = NutationIAU2000B::new();
 /// // Compute nutation for J2000.0 (two-part JD: 2451545.0 + 0.0)

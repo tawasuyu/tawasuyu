@@ -36,7 +36,7 @@ use crate::async_system::reloj;
 use akasha::{
     analizar_frame, componer_frame, ErrorAkasha, Mac, MensajeAkasha, MAC_BROADCAST,
 };
-use formato::Hash;
+use format::Hash;
 
 use crate::almacen;
 use crate::baliza;
@@ -209,7 +209,7 @@ fn atender_solicitud(id: Hash, origen: Mac, nuestra: Mac) {
     };
     // Defensa en profundidad: el rehash DEBE coincidir. postcard es canonico
     // pero verificamos antes de poner algo en el cable que dice ser `id`.
-    if formato::hash(&payload) != id {
+    if format::hash(&payload) != id {
         let _ = writeln!(
             baliza::Serie,
             "akasha :: rehash no coincide al servir :: descartado"
@@ -233,7 +233,7 @@ fn atender_solicitud(id: Hash, origen: Mac, nuestra: Mac) {
 /// grafo local; si no, lo descarta con una traza. La unica entrada de
 /// integridad esta aqui: el grafo local no admite mentiras.
 fn absorber_proveedor(id: Hash, payload: &[u8], origen: Mac) {
-    if formato::hash(payload) != id {
+    if format::hash(payload) != id {
         let _ = writeln!(
             baliza::Serie,
             "akasha :: proveedor rechazado (rehash no coincide) :: src={}",
@@ -241,7 +241,7 @@ fn absorber_proveedor(id: Hash, payload: &[u8], origen: Mac) {
         );
         return;
     }
-    let objeto = match formato::Objeto::deserializar(payload) {
+    let objeto = match format::Objeto::deserializar(payload) {
         Ok(o) => o,
         Err(motivo) => {
             let _ = writeln!(

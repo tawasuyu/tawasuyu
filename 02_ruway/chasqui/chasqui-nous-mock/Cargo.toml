@@ -9,8 +9,8 @@ publish.workspace = true
 description = "Nouser — Nous mock determinístico: implementa el contrato nouser-nous con pseudo-embeddings de Phase C. Stand-in para tests y para `BRAHMAN_BROKER_CONTEXT=test`."
 
 [dependencies]
-brahman-card = { path = "../../../shared/card/card-core" }
-brahman-sidecar = { path = "../../../shared/card/card-sidecar" }
+card-core = { path = "../../../shared/card/card-core" }
+card-sidecar = { path = "../../../shared/card/card-sidecar" }
 chasqui-card = { path = "../chasqui-card" }
 chasqui-core = { path = "../chasqui-core" }
 chasqui-nous = { path = "../chasqui-nous" }

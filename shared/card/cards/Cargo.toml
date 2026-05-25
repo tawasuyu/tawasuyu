@@ -1,5 +1,5 @@
 [package]
-name = "brahman-cards"
+name = "cards"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,7 +14,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 ulid = { workspace = true }
-brahman-card = { path = "../card-core" }
+card-core = { path = "../card-core" }
 chasqui-card = { path = "../../../02_ruway/chasqui/chasqui-card" }
 nahual-meta-schema = { path = "../../../02_ruway/nahual/libs/meta-schema" }
 nickel-lang = "2.0.0"

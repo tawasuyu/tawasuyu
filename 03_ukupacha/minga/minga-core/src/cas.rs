@@ -3,7 +3,7 @@ use blake3::Hasher;
 
 /// Hash de 32 bytes que identifica unívocamente un `SemanticNode` por su
 /// estructura lógica. Dos nodos con misma estructura → mismo hash, sin
-/// importar formato, comentarios o posición en el archivo fuente.
+/// importar format, comentarios o posición en el archivo fuente.
 #[derive(
     Debug,
     Clone,

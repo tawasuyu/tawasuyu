@@ -6,7 +6,7 @@
 //! Pide la contraseña sin eco. El servicio por defecto es `carmen`; si
 //! `/etc/pam.d/carmen` aún no está instalado, probar con `login`.
 
-use brahman_auth::{Authenticator, PamAuthenticator};
+use auth_core::{Authenticator, PamAuthenticator};
 
 fn main() {
     let mut args = std::env::args().skip(1);

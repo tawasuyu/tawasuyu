@@ -68,17 +68,17 @@ wasmi = { version = "1.0", default-features = false, features = ["hash-collectio
 virtio-drivers = { version = "0.13", default-features = false, features = ["alloc"] }
 
 # --- Fase 6.1c / 7b :: el grafo de objetos direccionado por contenido ---
-# El formato del grafo —tipos, (de)serializacion postcard, hash BLAKE3, trazado
-# de registros del log— vive en la crate `formato`, un nucleo `no_std`
+# El format del grafo —tipos, (de)serializacion postcard, hash BLAKE3, trazado
+# de registros del log— vive en la crate `format`, un nucleo `no_std`
 # COMPARTIDO con `boot` (que lo usa para sembrar la imagen de disco). El kernel
 # ya no declara `serde`/`postcard`/`blake3` por su cuenta: los hereda —con las
-# mismas features, BLAKE3 escalar puro incluido— a traves de `formato`. Una
-# sola verdad del formato de disco, imposible de divergir entre los dos lados.
-formato = { path = "../formato" }
+# mismas features, BLAKE3 escalar puro incluido— a traves de `format`. Una
+# sola verdad del format de disco, imposible de divergir entre los dos lados.
+format = { path = "../format" }
 
 # --- Fase 20 :: Akasha Over Ether ---
 # El protocolo nativo de red de renaser: mensajes `MensajeAkasha` serializados
-# con `postcard`, sobre Ethernet crudo. Mismo patron que `formato`: nucleo
+# con `postcard`, sobre Ethernet crudo. Mismo patron que `format`: nucleo
 # `no_std` compartido, no miembro del workspace anfitrion. El kernel y boot lo
 # enlazan, y cualquier app o daemon que quiera hablar AoE en el futuro tomara
 # la misma crate — una sola verdad del protocolo.

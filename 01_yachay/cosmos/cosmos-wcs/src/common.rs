@@ -1,6 +1,6 @@
-use eternal_core::constants::RAD_TO_DEG;
-use eternal_core::utils::normalize_longitude;
-use eternal_core::Angle;
+use cosmos_core::constants::RAD_TO_DEG;
+use cosmos_core::utils::normalize_longitude;
+use cosmos_core::Angle;
 
 use crate::coordinate::{IntermediateCoord, NativeCoord};
 use crate::error::{WcsError, WcsResult};

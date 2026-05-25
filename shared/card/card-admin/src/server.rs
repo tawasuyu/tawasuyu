@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use brahman_broker::Broker;
+use chasqui_broker::Broker;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::Mutex;
@@ -101,7 +101,7 @@ async fn build_snapshot(broker: &Arc<Mutex<Broker>>, config: &AdminConfig) -> St
     let matches = b.all_matches();
     StatusSnapshot {
         server_version: crate::ADMIN_VERSION.to_string(),
-        protocol_version: brahman_card::PROTOCOL_VERSION.to_string(),
+        protocol_version: card_core::PROTOCOL_VERSION.to_string(),
         init_attached: config.init_attached,
         current_context: config.current_context.clone(),
         sessions,

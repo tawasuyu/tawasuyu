@@ -8,7 +8,7 @@
 //! `dup2` pre-execve sin romper la regla async-signal-safe.
 
 use crate::CoreError;
-use brahman_card::Payload;
+use card_core::Payload;
 use arje_incarnate::{ChildStdio, Incarnator};
 use nix::fcntl::OFlag;
 use nix::unistd::pipe2;
@@ -637,7 +637,7 @@ fn _keep_raw(_: &dyn AsRawFd) {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use brahman_card::Payload;
+    use card_core::Payload;
     use arje_incarnate::IncarnatorConfig;
     use shuma_card::{CommandRef, DiscernPolicy, FlowEdge, PipelineSpec, WorkspaceId};
 
@@ -651,7 +651,7 @@ mod tests {
             },
             soma: Default::default(),
             flows: Default::default(),
-            supervision: brahman_card::Supervision::OneShot,
+            supervision: card_core::Supervision::OneShot,
         }
     }
 

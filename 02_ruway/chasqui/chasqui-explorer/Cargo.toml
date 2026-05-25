@@ -6,8 +6,8 @@ license.workspace = true
 description = "Explorador GPUI de Mónadas: panel que descubre al daemon nouser vía broker brahman y consulta sus Mónadas dinámicamente."
 
 [dependencies]
-brahman-card = { path = "../../../shared/card/card-core" }
-brahman-sidecar = { path = "../../../shared/card/card-sidecar" }
+card-core = { path = "../../../shared/card/card-core" }
+card-sidecar = { path = "../../../shared/card/card-sidecar" }
 chasqui-card = { path = "../chasqui-card" }
 nahual-theme = { path = "../../nahual/libs/theme" }
 nahual-launcher = { path = "../../nahual/libs/launcher" }

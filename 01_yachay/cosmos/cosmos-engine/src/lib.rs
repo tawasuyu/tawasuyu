@@ -1,4 +1,4 @@
-//! `cosmobiologia-engine` — bridge entre el modelo agnóstico y
+//! `cosmos_app-engine` — bridge entre el modelo agnóstico y
 //! `eternal-astrology`.
 //!
 //! Recibe un `Chart` del modelo + un `ChartKind` y devuelve un
@@ -27,15 +27,15 @@
 
 use thiserror::Error;
 
-pub use cosmobiologia_model::{Chart, ChartId, ChartKind};
+pub use cosmos_model::{Chart, ChartId, ChartKind};
 
-// Los tipos del RenderModel viven en `cosmobiologia-render` (crate
+// Los tipos del RenderModel viven en `cosmos_app-render` (crate
 // agnóstico de surface — compila a WASM, lo consumen tanto el canvas
 // gpui como el cliente web). El engine los reexporta para mantener
 // compatibilidad con todos los call sites históricos
-// (`cosmobiologia_engine::Layer`, etc.) sin tener que cambiar
+// (`cosmos_engine::Layer`, etc.) sin tener que cambiar
 // imports en el shell, canvas, modules, tree, panel...
-pub use cosmobiologia_render::{
+pub use cosmos_render::{
     apply_harmonic, compute_gr_triggers, convergencia_minima, AspectSummary, Geometry, Glyph,
     GrDirection, GrTrigger, Layer, LayerKind, LineSeg, OverlayMeta, PointMark, RenderModel,
     UranianGroup, OUTER_RING_MODULES,
@@ -44,7 +44,7 @@ pub use cosmobiologia_render::{
 // El corpus de interpretación es agnóstico (no conoce eternal ni gpui).
 // El engine lo reexporta para que el shell y el canvas trabajen los
 // pasajes sin importar el crate aparte.
-pub use cosmobiologia_corpus::{
+pub use cosmos_corpus::{
     combinaciones_de_carta, rebanar_por_dominio, AspectoEnCarta, Colocacion, CombinacionId,
     Corpus, Dominio, EvidenciaVecina, Pasaje,
 };
@@ -73,7 +73,7 @@ pub enum EngineError {
     #[error("bridge a eternal-astrology no disponible (recompilá con feature `eternal-bridge`)")]
     BridgeDisabled,
     #[error("model: {0}")]
-    Model(#[from] cosmobiologia_model::ModelError),
+    Model(#[from] cosmos_model::ModelError),
     #[error("eternal: {0}")]
     Eternal(String),
     #[error("kind {0:?} todavía no implementado")]
@@ -89,7 +89,7 @@ pub enum EngineError {
 /// son **overlays adicionales**.
 ///
 /// Cada variante mapea 1-a-1 con un Module declarado en
-/// `cosmobiologia-modules` por id string. Esto deja la engine como
+/// `cosmos_app-modules` por id string. Esto deja la engine como
 /// dueña única del cómputo (no depende del trait Module — los módulos
 /// son sólo metadata + UI controls).
 #[derive(Debug, Clone)]
@@ -128,7 +128,7 @@ pub enum PipelineRequest {
     /// nivel de Shell.
     PlanetaryReturn {
         /// Identificador agnóstico del cuerpo ("sun", "moon",
-        /// "jupiter", …). El bridge lo mapea a `eternal_sky::Body`.
+        /// "jupiter", …). El bridge lo mapea a `cosmos_sky::Body`.
         body: String,
         target_age_years: f64,
         /// Días extra que se suman al anchor de búsqueda (birth +
@@ -156,7 +156,7 @@ pub enum PipelineRequest {
     /// de fórmulas.
     Uranian,
     /// `module_id = "lots"` — Lots arábigos (helenísticos) calculados
-    /// via `eternal_astrology::compute_lot`: Fortune, Spirit, Eros,
+    /// via `cosmos_astrology::compute_lot`: Fortune, Spirit, Eros,
     /// Necessity, Courage, Victory, Nemesis. Renderea cada lot como
     /// un texto pequeño en el ring de bodies natales.
     Lots,
@@ -326,7 +326,7 @@ pub fn compute_planetary_return_chart(
     body: &str,
     target_age_years: f64,
     shift_days: i64,
-) -> Result<(cosmobiologia_model::StoredBirthData, String), EngineError> {
+) -> Result<(cosmos_model::StoredBirthData, String), EngineError> {
     bridge::compute_planetary_return_chart(chart, body, target_age_years, shift_days)
 }
 
@@ -336,7 +336,7 @@ pub fn compute_planetary_return_chart(
 #[cfg(feature = "eternal-bridge")]
 pub fn compute_transit_chart(
     chart: &Chart,
-) -> Result<(cosmobiologia_model::StoredBirthData, String), EngineError> {
+) -> Result<(cosmos_model::StoredBirthData, String), EngineError> {
     bridge::compute_transit_chart(chart)
 }
 
@@ -346,7 +346,7 @@ pub fn compute_transit_chart(
 pub fn compute_progression_chart(
     chart: &Chart,
     target_age_years: f64,
-) -> Result<(cosmobiologia_model::StoredBirthData, String), EngineError> {
+) -> Result<(cosmos_model::StoredBirthData, String), EngineError> {
     bridge::compute_progression_chart(chart, target_age_years)
 }
 
@@ -483,7 +483,7 @@ fn signo_de_longitud(deg: f32) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cosmobiologia_model::{
+    use cosmos_model::{
         Chart, ChartKind, ContactId, StoredBirthData, StoredChartConfig,
     };
 

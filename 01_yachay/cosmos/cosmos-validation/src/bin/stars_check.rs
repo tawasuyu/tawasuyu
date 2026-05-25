@@ -7,12 +7,12 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use serde::Deserialize;
 
-use eternal_ephemeris::jpl::SpkFile;
-use eternal_time::julian::JulianDate;
-use eternal_time::scales::ToTTFromTDB;
-use eternal_time::TDB;
+use cosmos_ephemeris::jpl::SpkFile;
+use cosmos_time::julian::JulianDate;
+use cosmos_time::scales::ToTTFromTDB;
+use cosmos_time::TDB;
 
-use eternal_validation::fixed_stars::{apparent_ecliptic_of_date, by_name};
+use cosmos_validation::fixed_stars::{apparent_ecliptic_of_date, by_name};
 
 #[derive(Parser)]
 #[command(version, about = "compare oracle fixed-star apparent positions vs Swiss reference")]

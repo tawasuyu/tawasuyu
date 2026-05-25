@@ -31,7 +31,7 @@ pub enum WcsError {
     #[error("Coordinate error: {source}")]
     CoordinateError {
         #[from]
-        source: eternal_coords::CoordError,
+        source: cosmos_coords::CoordError,
     },
 }
 

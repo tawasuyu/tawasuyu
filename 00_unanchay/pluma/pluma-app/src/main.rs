@@ -1,10 +1,10 @@
-//! `fana` — el editor de escritura DAG, ventana GPUI.
+//! `pluma_app` — el editor de escritura DAG, ventana GPUI.
 //!
-//! Compone la cadena de fana:
+//! Compone la cadena de pluma_app:
 //!
 //! ```text
-//!   fana-core ─► fana-graph ─► fana-render-plan ─►
-//!   fana-editor-gpui ─► [esta ventana]
+//!   pluma_app-core ─► pluma_app-graph ─► pluma_app-render-plan ─►
+//!   pluma_app-editor-gpui ─► [esta ventana]
 //! ```
 //!
 //! El documento no es un texto plano sino un grafo de átomos
@@ -13,10 +13,10 @@
 //! «Mutar raíz» reescribe el átomo origen y dispara la onda de choque
 //! lógica: todo descendiente cae a «por evaluar».
 
-use fana_core::{CoherenceState, NarrativeAtom};
-use fana_editor_gpui::{editor_view, tone_color};
-use fana_graph::NarrativeGraph;
-use fana_render_plan::{build_plan, CoherenceTone, LayoutConfig};
+use pluma_core::{CoherenceState, NarrativeAtom};
+use pluma_editor_gpui::{editor_view, tone_color};
+use pluma_graph::NarrativeGraph;
+use pluma_render_plan::{build_plan, CoherenceTone, LayoutConfig};
 use gpui::{div, prelude::*, px, Context, IntoElement, Render, SharedString, Window};
 use nahual_launcher::launch_app;
 use nahual_theme::Theme;
@@ -172,7 +172,7 @@ impl Render for Fana {
             .px(px(14.))
             .bg(panel)
             .text_color(theme.fg_text)
-            .child("fana · editor de escritura DAG")
+            .child("pluma_app · editor de escritura DAG")
             .child(
                 div()
                     .text_color(theme.fg_muted)
@@ -199,8 +199,8 @@ impl Render for Fana {
             .cursor_pointer()
             .hover(|s| s.bg(theme.bg_row_hover))
             .child("⚡  Mutar raíz")
-            .on_click(cx.listener(|fana, _ev, _w, cx| {
-                fana.mutate_root();
+            .on_click(cx.listener(|pluma_app, _ev, _w, cx| {
+                pluma_app.mutate_root();
                 cx.notify();
             }));
         let btn_revalidar = div()
@@ -213,8 +213,8 @@ impl Render for Fana {
             .cursor_pointer()
             .hover(|s| s.bg(theme.bg_row_hover))
             .child("✓  Re-validar todo")
-            .on_click(cx.listener(|fana, _ev, _w, cx| {
-                fana.revalidate();
+            .on_click(cx.listener(|pluma_app, _ev, _w, cx| {
+                pluma_app.revalidate();
                 cx.notify();
             }));
 
@@ -263,5 +263,5 @@ impl Render for Fana {
 }
 
 fn main() {
-    launch_app("brahman · fana", (1180., 760.), Fana::new);
+    launch_app("brahman · pluma_app", (1180., 760.), Fana::new);
 }

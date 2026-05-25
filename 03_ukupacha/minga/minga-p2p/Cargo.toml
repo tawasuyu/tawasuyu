@@ -9,7 +9,7 @@ description = "Minga P2P: protocolo de sincronización entre repositorios. Lógi
 [dependencies]
 minga-core = { path = "../minga-core" }
 minga-store = { path = "../minga-store" }
-brahman-net = { path = "../../../shared/card/card-net" }
+card-net = { path = "../../../shared/card/card-net" }
 serde = { workspace = true }
 postcard = { workspace = true }
 thiserror = { workspace = true }

@@ -7,7 +7,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::io::{self, ErrorKind};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use verbo_core::{EmbeddingVector, ModelId};
+use rimay_verbo_core::{EmbeddingVector, ModelId};
 
 /// Tope de tamaño de un frame (8 MiB). Un lote grande de embeddings
 /// cabe holgado; cualquier cosa mayor se trata como frame corrupto.

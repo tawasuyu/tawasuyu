@@ -16,8 +16,8 @@
 //! # Usage
 //!
 //! ```
-//! use eternal_time::{JulianDate, GPS, TAI};
-//! use eternal_time::scales::conversions::{ToGPS, ToTAI};
+//! use cosmos_time::{JulianDate, GPS, TAI};
+//! use cosmos_time::scales::conversions::{ToGPS, ToTAI};
 //!
 //! let gps = GPS::from_julian_date(JulianDate::new(2451545.0, 0.0));
 //! let tai = gps.to_tai().unwrap();
@@ -34,7 +34,7 @@ use super::{ToGPS, ToTAI};
 use crate::constants::GPS_TO_TAI_OFFSET_SECONDS;
 use crate::scales::{GPS, TAI};
 use crate::TimeResult;
-use eternal_core::constants::SECONDS_PER_DAY_F64;
+use cosmos_core::constants::SECONDS_PER_DAY_F64;
 
 /// Identity conversion for GPS.
 impl ToGPS for GPS {
@@ -87,7 +87,7 @@ mod tests {
     use super::*;
     use crate::constants::GPS_EPOCH_JD;
     use crate::JulianDate;
-    use eternal_core::constants::J2000_JD;
+    use cosmos_core::constants::J2000_JD;
 
     #[test]
     fn test_gps_identity_conversion() {

@@ -9,7 +9,7 @@ publish.workspace = true
 description = "Rutina extraída del Init para encarnar Cards en procesos aislados (clone+ns+cgroup+rlimits). Reusable por cualquier supervisor — no implica ser PID 1."
 
 [dependencies]
-brahman-card = { path = "../../../../shared/card/card-core" }
+card-core = { path = "../../../../shared/card/card-core" }
 nix = { workspace = true }
 libc = { workspace = true }
 anyhow = { workspace = true }

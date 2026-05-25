@@ -1,7 +1,7 @@
 use super::{GAST, GMST, LAST, LMST};
 use crate::scales::{TT, UT1};
 use crate::TimeResult;
-use eternal_core::Location;
+use cosmos_core::Location;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ObservatoryContext<'a> {
@@ -29,8 +29,8 @@ impl<'a> ObservatoryContext<'a> {
     ///
     /// # Examples
     /// ```
-    /// use eternal_time::{UT1, TT};
-    /// use eternal_time::sidereal::ObservatoryContext;
+    /// use cosmos_time::{UT1, TT};
+    /// use cosmos_time::sidereal::ObservatoryContext;
     ///
     /// let ut1 = UT1::j2000();
     /// let tt = TT::j2000();
@@ -72,9 +72,9 @@ impl<'a> ObservatoryContext<'a> {
     ///
     /// # Examples
     /// ```
-    /// use eternal_time::{UT1, TT};
-    /// use eternal_time::sidereal::ObservatoryContext;
-    /// use eternal_core::Location;
+    /// use cosmos_time::{UT1, TT};
+    /// use cosmos_time::sidereal::ObservatoryContext;
+    /// use cosmos_core::Location;
     ///
     /// let ut1 = UT1::j2000();
     /// let tt = TT::j2000();
@@ -90,9 +90,9 @@ impl<'a> ObservatoryContext<'a> {
     ///
     /// # Examples
     /// ```
-    /// use eternal_time::{UT1, TT};
-    /// use eternal_time::sidereal::ObservatoryContext;
-    /// use eternal_core::Location;
+    /// use cosmos_time::{UT1, TT};
+    /// use cosmos_time::sidereal::ObservatoryContext;
+    /// use cosmos_core::Location;
     ///
     /// let ut1 = UT1::j2000();
     /// let tt = TT::j2000();
@@ -108,9 +108,9 @@ impl<'a> ObservatoryContext<'a> {
     ///
     /// # Examples
     /// ```
-    /// use eternal_time::{UT1, TT};
-    /// use eternal_time::sidereal::ObservatoryContext;
-    /// use eternal_core::Location;
+    /// use cosmos_time::{UT1, TT};
+    /// use cosmos_time::sidereal::ObservatoryContext;
+    /// use cosmos_core::Location;
     ///
     /// let ut1 = UT1::j2000();
     /// let tt = TT::j2000();
@@ -126,9 +126,9 @@ impl<'a> ObservatoryContext<'a> {
     ///
     /// # Examples
     /// ```
-    /// use eternal_time::{UT1, TT};
-    /// use eternal_time::sidereal::ObservatoryContext;
-    /// use eternal_core::Location;
+    /// use cosmos_time::{UT1, TT};
+    /// use cosmos_time::sidereal::ObservatoryContext;
+    /// use cosmos_core::Location;
     ///
     /// let ut1 = UT1::j2000();
     /// let tt = TT::j2000();
@@ -146,9 +146,9 @@ impl<'a> ObservatoryContext<'a> {
     ///
     /// # Examples
     /// ```
-    /// use eternal_time::{UT1, TT};
-    /// use eternal_time::sidereal::ObservatoryContext;
-    /// use eternal_core::Location;
+    /// use cosmos_time::{UT1, TT};
+    /// use cosmos_time::sidereal::ObservatoryContext;
+    /// use cosmos_core::Location;
     ///
     /// let ut1 = UT1::j2000();
     /// let tt = TT::j2000();
@@ -176,9 +176,9 @@ impl<'a> ObservatoryContext<'a> {
     ///
     /// # Examples
     /// ```
-    /// use eternal_time::{UT1, TT};
-    /// use eternal_time::sidereal::ObservatoryContext;
-    /// use eternal_core::Location;
+    /// use cosmos_time::{UT1, TT};
+    /// use cosmos_time::sidereal::ObservatoryContext;
+    /// use cosmos_core::Location;
     ///
     /// let ut1 = UT1::j2000();
     /// let tt = TT::j2000();
@@ -197,9 +197,9 @@ impl<'a> ObservatoryContext<'a> {
     ///
     /// # Examples
     /// ```
-    /// use eternal_time::{UT1, TT};
-    /// use eternal_time::sidereal::ObservatoryContext;
-    /// use eternal_core::Location;
+    /// use cosmos_time::{UT1, TT};
+    /// use cosmos_time::sidereal::ObservatoryContext;
+    /// use cosmos_core::Location;
     ///
     /// let ut1 = UT1::j2000();
     /// let tt = TT::j2000();
@@ -208,8 +208,8 @@ impl<'a> ObservatoryContext<'a> {
     /// println!("{}", observatory.info());
     /// ```
     pub fn info(&self) -> String {
-        let lat_deg = self.location.latitude * eternal_core::constants::RAD_TO_DEG;
-        let lon_deg = self.location.longitude * eternal_core::constants::RAD_TO_DEG;
+        let lat_deg = self.location.latitude * cosmos_core::constants::RAD_TO_DEG;
+        let lon_deg = self.location.longitude * cosmos_core::constants::RAD_TO_DEG;
         let height_m = self.location.height;
 
         format!(

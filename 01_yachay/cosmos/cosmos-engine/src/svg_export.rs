@@ -17,7 +17,7 @@ use crate::{Geometry, LayerKind, RenderModel};
 const VIEWBOX: f64 = 800.0;
 const MARGIN: f64 = 40.0;
 
-/// Radios normalizados — espejan los de `cosmobiologia-canvas`.
+/// Radios normalizados — espejan los de `cosmos_app-canvas`.
 const R_SIGN_OUTER: f64 = 1.00;
 const R_SIGN_INNER: f64 = 0.88;
 const R_TRANSITS: f64 = 0.82;
@@ -277,11 +277,11 @@ fn escape_xml(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::{compute_mock, ChartKind};
-    use cosmobiologia_model::{Chart, ContactId, StoredBirthData, StoredChartConfig};
+    use cosmos_model::{Chart, ContactId, StoredBirthData, StoredChartConfig};
 
     fn sample_chart() -> Chart {
         Chart {
-            id: cosmobiologia_model::ChartId::new(),
+            id: cosmos_model::ChartId::new(),
             contact_id: ContactId::new(),
             kind: ChartKind::Natal,
             label: "Test".into(),

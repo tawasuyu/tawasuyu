@@ -34,4 +34,4 @@ pub use metrics::serve_metrics;
 // --- Loader: card-loading vive en brahman-cards, rule-loading en
 //     arje-brain-rules. Re-exportados aquí por compat de consumidores. ---
 pub use arje_brain_rules::{extract_rules_from_json, load_rules_file};
-pub use brahman_cards::{extract_card_from_json, load_card_file};
+pub use cards::{extract_card_from_json, load_card_file};

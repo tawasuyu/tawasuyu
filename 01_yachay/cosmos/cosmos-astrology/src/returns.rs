@@ -7,10 +7,10 @@
 //!
 //! All returns reduce to one primitive: bisect on
 //! `f(t) = signed_angular_distance( body_longitude_at(t),  natal_longitude )`.
-//! The bisector lives in [`eternal_sky::find_root`]; this module just
+//! The bisector lives in [`cosmos_sky::find_root`]; this module just
 //! wraps it with body-aware default search windows.
 
-use eternal_sky::{find_root, Body, EphemerisSession, Instant, SearchOptions};
+use cosmos_sky::{find_root, Body, EphemerisSession, Instant, SearchOptions};
 
 use crate::angles::signed_delta_rad;
 use crate::error::{AstrologyError, AstrologyResult};

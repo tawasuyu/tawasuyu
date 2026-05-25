@@ -3,8 +3,8 @@
 //! Provides conversion between sky coordinates and HEALPix pixel indices,
 //! as well as disc/cone query support for efficient spatial searches.
 
-use eternal_core::constants::{PI, RAD_TO_DEG, TWOPI};
-use eternal_core::{math::vincenty_angular_separation, Angle};
+use cosmos_core::constants::{PI, RAD_TO_DEG, TWOPI};
+use cosmos_core::{math::vincenty_angular_separation, Angle};
 use std::collections::HashSet;
 
 /// Convert (RA, Dec) in degrees to HEALPix nested pixel index.

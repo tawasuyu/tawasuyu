@@ -1,4 +1,4 @@
-//! `cosmobiologia-modules` — registry de módulos astrológicos.
+//! `cosmos_app-modules` — registry de módulos astrológicos.
 //!
 //! Cada tipo de astrología (natal, tránsito, progresión, sinastría,
 //! Uraniano, …) es un **módulo** que declara:
@@ -22,8 +22,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use cosmobiologia_engine::Layer;
-use cosmobiologia_model::{Chart, ChartKind};
+use cosmos_engine::Layer;
+use cosmos_model::{Chart, ChartKind};
 
 // =====================================================================
 // Trait Module
@@ -185,7 +185,7 @@ impl Registry {
 
 pub mod natal {
     use super::*;
-    use cosmobiologia_engine::compute_mock;
+    use cosmos_engine::compute_mock;
 
     pub struct NatalModule;
 

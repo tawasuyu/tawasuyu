@@ -77,7 +77,7 @@ mod tests {
     use super::*;
     use crate::observation::{Observation, PierSide};
     use crate::solver::FitResult;
-    use eternal_core::Angle;
+    use cosmos_core::Angle;
 
     fn make_obs(
         cmd_ha_arcsec: f64,

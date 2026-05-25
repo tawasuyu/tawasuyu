@@ -6,13 +6,13 @@ use crate::{TimeResult, TT};
 
 #[derive(Debug)]
 pub struct NutationResult {
-    core_result: eternal_core::nutation::NutationResult,
+    core_result: cosmos_core::nutation::NutationResult,
     model: NutationModel,
 }
 
 impl NutationResult {
     pub fn new(
-        core_result: eternal_core::nutation::NutationResult,
+        core_result: cosmos_core::nutation::NutationResult,
         model: NutationModel,
     ) -> Self {
         Self { core_result, model }
@@ -68,7 +68,7 @@ impl NutationCalculator for TT {
 mod integration_tests {
     use super::*;
     use crate::TT;
-    use eternal_core::constants::J2000_JD;
+    use cosmos_core::constants::J2000_JD;
 
     #[test]
     fn test_all_nutation_models_at_j2000() {
@@ -167,7 +167,7 @@ mod integration_tests {
     fn test_nutation_epoch_too_far_from_j2000() {
         use crate::JulianDate;
 
-        let far_future_jd = J2000_JD + (25.0 * eternal_core::constants::DAYS_PER_JULIAN_CENTURY);
+        let far_future_jd = J2000_JD + (25.0 * cosmos_core::constants::DAYS_PER_JULIAN_CENTURY);
         let far_future_tt = TT::from_julian_date(JulianDate::from_f64(far_future_jd));
 
         let result = far_future_tt.nutation_iau2006a();
@@ -186,7 +186,7 @@ mod utils {
 
     pub fn tt_to_centuries(tt: &TT) -> TimeResult<f64> {
         let jd = tt.to_julian_date();
-        let centuries = eternal_core::utils::jd_to_centuries(jd.jd1(), jd.jd2());
+        let centuries = cosmos_core::utils::jd_to_centuries(jd.jd1(), jd.jd2());
 
         if centuries.abs() > 20.0 {
             return Err(TimeError::InvalidEpoch(format!(

@@ -58,7 +58,7 @@ impl Location {
     /// # Example
     ///
     /// ```
-    /// use eternal_core::Location;
+    /// use cosmos_core::Location;
     ///
     /// let obs = Location::from_degrees(45.0, 0.0, 0.0)?;
     /// let (u, v) = obs.to_geocentric_km()?;
@@ -66,7 +66,7 @@ impl Location {
     /// // At 45 degrees, u and v are similar but u > v due to Earth's shape
     /// assert!(u > 4500.0 && u < 4600.0);
     /// assert!(v > 4400.0 && v < 4500.0);
-    /// # Ok::<(), eternal_core::AstroError>(())
+    /// # Ok::<(), cosmos_core::AstroError>(())
     /// ```
     ///
     /// # Errors
@@ -114,7 +114,7 @@ impl Location {
     /// # Example
     ///
     /// ```
-    /// use eternal_core::Location;
+    /// use cosmos_core::Location;
     ///
     /// // Equator at sea level
     /// let equator = Location::from_degrees(0.0, 0.0, 0.0)?;
@@ -123,7 +123,7 @@ impl Location {
     /// // At equator: u equals semi-major axis, v is zero
     /// assert!((u - 6_378_137.0).abs() < 1.0);
     /// assert!(v.abs() < 1e-9);
-    /// # Ok::<(), eternal_core::AstroError>(())
+    /// # Ok::<(), cosmos_core::AstroError>(())
     /// ```
     pub fn to_geocentric_meters(&self) -> AstroResult<(f64, f64)> {
         let height_m = self.height;

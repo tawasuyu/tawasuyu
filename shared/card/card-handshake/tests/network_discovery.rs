@@ -29,14 +29,14 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use brahman_broker::{Broker, BrokerConfig};
-use brahman_card::{
+use chasqui_broker::{Broker, BrokerConfig};
+use card_core::{
     ulid::Ulid, Card, CardKind, Flow, Flows, Lifecycle, Payload, Priority, Supervision, TypeRef,
     CARD_SCHEMA_VERSION,
 };
-use brahman_handshake::network::{find_remote_providers, run_libp2p_accept_loop};
-use brahman_handshake::server::{Server, ServerConfig};
-use brahman_net::{BrahmanNet, Multiaddr, Protocol};
+use card_handshake::network::{find_remote_providers, run_libp2p_accept_loop};
+use card_handshake::server::{Server, ServerConfig};
+use card_net::{BrahmanNet, Multiaddr, Protocol};
 use tempfile::TempDir;
 use tokio::sync::Mutex;
 
@@ -119,7 +119,7 @@ async fn dht_discovery_finds_remote_provider() {
 
     // Registrar la Card local en A con un flow output.
     let card = provider_card("test.engine_remote", "monad-list", "json");
-    let mut local_client = brahman_handshake::client::Client::connect(&a_unix, card)
+    let mut local_client = card_handshake::client::Client::connect(&a_unix, card)
         .await
         .expect("registro local en A");
 
@@ -204,7 +204,7 @@ async fn dht_discovery_negative_unknown_flow() {
     }
 
     let card = provider_card("test.engine_other", "monad-list", "json");
-    let mut local = brahman_handshake::client::Client::connect(&a_unix, card)
+    let mut local = card_handshake::client::Client::connect(&a_unix, card)
         .await
         .unwrap();
 
@@ -281,7 +281,7 @@ async fn dht_discovery_withdraws_on_session_cleanup() {
 
     // Card con un flow output anunciable.
     let card = provider_card("test.withdraws", "monad-list", "json");
-    let local = brahman_handshake::client::Client::connect(&a_unix, card)
+    let local = card_handshake::client::Client::connect(&a_unix, card)
         .await
         .expect("registro local en A");
 

@@ -1,9 +1,9 @@
 //! Cosmobiología — server HTTP single-user.
 //!
-//! - Reusa `cosmobiologia-engine` (VSOP2013 + LRU cache) nativo.
+//! - Reusa `cosmos_app-engine` (VSOP2013 + LRU cache) nativo.
 //! - Comparte (por default) la misma `charts.db` SQLite que la app
 //!   desktop, vía `directories::ProjectDirs::from("net", "gioser",
-//!   "cosmobiologia")`. La idea es: levantar `cosmobiologia-server`
+//!   "cosmos_app")`. La idea es: levantar `cosmos_app-server`
 //!   en localhost y abrir el wheel desde el browser cuando no se está
 //!   con la app desktop.
 //! - Single-user, sin auth, bind a `127.0.0.1` por default. NO debe
@@ -42,15 +42,15 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use clap::Parser;
-use cosmobiologia_engine::{
+use cosmos_engine::{
     compose_with_options, svg_export, EngineError, NatalOptions, PipelineRequest, RenderModel,
 };
-use cosmobiologia_render::{compose_wheel, draw_commands_to_svg, CompositionOpts};
-use cosmobiologia_model::{
+use cosmos_render::{compose_wheel, draw_commands_to_svg, CompositionOpts};
+use cosmos_model::{
     Chart, ChartId, ChartKind, Contact, ContactId, Group, GroupId, StoredBirthData,
     StoredChartConfig,
 };
-use cosmobiologia_store::Store;
+use cosmos_store::Store;
 use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
@@ -59,7 +59,7 @@ use tracing::info;
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "cosmobiologia-server",
+    name = "cosmos_app-server",
     about = "Servidor HTTP single-user de Cosmobiología."
 )]
 struct Cli {
@@ -71,14 +71,14 @@ struct Cli {
     #[arg(long, default_value = "127.0.0.1")]
     bind: String,
     /// Path al archivo SQLite. Default = el mismo de la app desktop
-    /// (`$XDG_DATA_HOME/cosmobiologia/charts.db`).
+    /// (`$XDG_DATA_HOME/cosmos_app/charts.db`).
     #[arg(long)]
     db: Option<PathBuf>,
     /// Directorio con los assets estáticos del cliente WASM
     /// (output de `wasm-pack build --out-dir <este path>`). Si el
     /// directorio no existe, el endpoint `/static/wasm/*` devuelve
     /// 404 y el cliente cae al SSR.
-    #[arg(long, default_value = "crates/apps/cosmobiologia-server/static/wasm")]
+    #[arg(long, default_value = "crates/apps/cosmos_app-server/static/wasm")]
     static_wasm: PathBuf,
 }
 
@@ -92,7 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "cosmobiologia_server=info,tower_http=info".into()),
+                .unwrap_or_else(|_| "cosmos_server=info,tower_http=info".into()),
         )
         .init();
 
@@ -121,7 +121,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn default_db_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let dirs = directories::ProjectDirs::from("net", "gioser", "cosmobiologia")
+    let dirs = directories::ProjectDirs::from("net", "gioser", "cosmos_app")
         .ok_or("no se pudo determinar XDG data dir")?;
     Ok(dirs.data_dir().join("charts.db"))
 }
@@ -132,7 +132,7 @@ fn router() -> Router<AppState> {
         .route("/api/health", get(health))
         .route("/api/tree", get(get_tree))
         .route("/api/sky", get(get_sky))
-        // El render SVG agnóstico (via `cosmobiologia-render::compose_wheel`
+        // El render SVG agnóstico (via `cosmos_app-render::compose_wheel`
         // + `draw_commands_to_svg`) sirve a la fase 3 inicial: el
         // cliente recibe SVG ya compuesto, sin necesidad de WASM.
         // Cuando agreguemos el cliente WASM real, este endpoint se
@@ -172,7 +172,7 @@ async fn get_index() -> Response {
 }
 
 // SVG render agnóstico (no es el del engine — este viene de
-// `cosmobiologia-render::compose_wheel` que es lo que mañana el
+// `cosmos_app-render::compose_wheel` que es lo que mañana el
 // cliente WASM también va a usar). Útil para demos sin WASM.
 async fn get_sky_svg() -> Result<Response, ApiError> {
     let chart = build_present_sky_chart();
@@ -217,7 +217,7 @@ enum ApiError {
     #[error("bad request: {0}")]
     BadRequest(String),
     #[error("store: {0}")]
-    Store(#[from] cosmobiologia_store::StoreError),
+    Store(#[from] cosmos_store::StoreError),
     #[error("engine: {0}")]
     Engine(#[from] EngineError),
 }
@@ -240,7 +240,7 @@ type ApiResult<T> = Result<Json<T>, ApiError>;
 // =====================================================================
 
 async fn health() -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "status": "ok", "service": "cosmobiologia-server" }))
+    Json(serde_json::json!({ "status": "ok", "service": "cosmos_app-server" }))
 }
 
 // =====================================================================

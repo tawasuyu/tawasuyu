@@ -1,4 +1,4 @@
-//! `fana-store` — persistencia del grafo narrativo.
+//! `pluma_app-store` — persistencia del grafo narrativo.
 //!
 //! Store key-value embebido (`sled`): cada `NarrativeAtom` se guarda con
 //! su `Uuid` como clave y su serialización `bincode` como valor. El
@@ -7,8 +7,8 @@
 
 #![forbid(unsafe_code)]
 
-use fana_core::NarrativeAtom;
-use fana_graph::NarrativeGraph;
+use pluma_core::NarrativeAtom;
+use pluma_graph::NarrativeGraph;
 use uuid::Uuid;
 
 /// Falla de una operación de store.
@@ -87,7 +87,7 @@ mod tests {
 
     fn temp_store() -> (GraphStore, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
-        let store = GraphStore::open(dir.path().join("fana.sled")).unwrap();
+        let store = GraphStore::open(dir.path().join("pluma_app.sled")).unwrap();
         (store, dir)
     }
 

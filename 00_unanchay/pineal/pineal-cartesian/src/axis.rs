@@ -16,7 +16,7 @@
 //! `format_tick` es heurístico: si `step >= 1`, sin decimales; si
 //! no, tantos decimales como hagan falta para distinguir ticks
 //! adyacentes. Para escalas temporales el caller pasa su propio
-//! formato (epoch ms → "HH:MM:SS"), `format_tick` no entiende
+//! format (epoch ms → "HH:MM:SS"), `format_tick` no entiende
 //! semántica.
 
 use pineal_core::scale::nice_step;

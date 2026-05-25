@@ -1,14 +1,14 @@
 [package]
-name = "cosmobiologia-panel"
+name = "cosmos-panel"
 version = { workspace = true }
 edition = { workspace = true }
 license = { workspace = true }
 description = "Tahuantinsuyu — panel de control inferior. Toggles, sliders y selectores por módulo de astrología."
 
 [dependencies]
-cosmobiologia-model = { path = "../cosmos-model" }
-cosmobiologia-modules = { path = "../cosmos-modules" }
-cosmobiologia-theme = { path = "../cosmos-theme" }
+cosmos-model = { path = "../cosmos-model" }
+cosmos-modules = { path = "../cosmos-modules" }
+cosmos-theme = { path = "../cosmos-theme" }
 nahual-theme = { workspace = true }
 gpui = { workspace = true }
 serde_json = { workspace = true }

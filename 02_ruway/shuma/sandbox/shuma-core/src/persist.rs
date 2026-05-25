@@ -348,14 +348,14 @@ mod tests {
             workspace: ws_id,
             nodes: vec![CommandRef {
                 label: "n1".into(),
-                payload: brahman_card::Payload::Native {
+                payload: card_core::Payload::Native {
                     exec: "/bin/echo".into(),
                     argv: vec!["hi".into()],
                     envp: vec![],
                 },
                 soma: Default::default(),
                 flows: Default::default(),
-                supervision: brahman_card::Supervision::OneShot,
+                supervision: card_core::Supervision::OneShot,
             }],
             edges: vec![],
             discern: DiscernPolicy::default(),

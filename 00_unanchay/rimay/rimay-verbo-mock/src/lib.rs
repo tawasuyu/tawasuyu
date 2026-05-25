@@ -3,13 +3,13 @@
 //! No carga ningún modelo: hashea el texto y genera el vector con un LCG
 //! sembrado por ese hash. Mismo texto → mismo vector, siempre. Textos
 //! distintos → vectores distintos. Sirve para desarrollar y testear los
-//! consumidores de `verbo` (fana-semantic, badu, chasqui) sin descargar
+//! consumidores de `verbo` (pluma_app-semantic, khipu_app, chasqui) sin descargar
 //! modelos ONNX ni pegarle a la API de Cohere.
 
 #![forbid(unsafe_code)]
 
 use async_trait::async_trait;
-use verbo_core::{EmbedError, EmbeddingVector, ModelId, Provider};
+use rimay_verbo_core::{EmbedError, EmbeddingVector, ModelId, Provider};
 
 /// Proveedor determinista. La dimensión es configurable.
 pub struct MockProvider {

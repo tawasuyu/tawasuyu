@@ -17,8 +17,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-pub use barra_core::Task;
-use barra_core::{render_html, sanitize_attr};
+pub use mirada_bar_core::Task;
+use mirada_bar_core::{render_html, sanitize_attr};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{Element, HtmlElement, MouseEvent};

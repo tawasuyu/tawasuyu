@@ -1,11 +1,11 @@
 mod coefficients;
 
 use crate::{CoordError, CoordResult};
-use eternal_core::{
+use cosmos_core::{
     constants::{DAYS_PER_JULIAN_YEAR, J2000_JD, SPEED_OF_LIGHT_AU_PER_DAY},
     Vector3,
 };
-use eternal_time::TT;
+use cosmos_time::TT;
 use coefficients::Coefficients;
 
 pub struct EarthState {

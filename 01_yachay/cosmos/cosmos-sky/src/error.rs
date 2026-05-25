@@ -2,8 +2,8 @@
 //! lower-level error types from the time and ephemeris crates so callers
 //! only need a single `Result` alias.
 
-use eternal_time::TimeError;
-use eternal_validation::oracle::OracleError;
+use cosmos_time::TimeError;
+use cosmos_validation::oracle::OracleError;
 use thiserror::Error;
 
 pub type SkyResult<T> = Result<T, SkyError>;

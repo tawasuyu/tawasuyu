@@ -15,7 +15,7 @@
 //!   sin copia.
 //!
 //! Convención de coordenadas: el buffer canónico es interleaved
-//! `[x0, y0, x1, y1, ...]`. Esto es el formato que `drawRawPoints`,
+//! `[x0, y0, x1, y1, ...]`. Esto es el format que `drawRawPoints`,
 //! `Vertices.raw`, `wgpu` vertex buffers y `<polyline points>` SVG
 //! consumen sin transformación.
 

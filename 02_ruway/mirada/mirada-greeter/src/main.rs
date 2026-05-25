@@ -6,7 +6,7 @@
 //! lee el stdout.
 //!
 //! Flujo: el usuario teclea usuario + contraseña, el greeter autentica
-//! con [`brahman_auth`], y en éxito **imprime un [`SessionTicket`] a
+//! con [`auth_core`], y en éxito **imprime un [`SessionTicket`] a
 //! stdout** y termina. El compositor parsea esa línea, hace el traspaso
 //! a modo sesión (setuid al usuario + arranque) sin reiniciar el
 //! servidor gráfico — la «mutación atómica» del DM.
@@ -19,7 +19,7 @@
 use std::io::Write;
 use std::sync::Arc;
 
-use brahman_auth::{
+use auth_core::{
     AuthError, Authenticator, MockAuthenticator, PamAuthenticator, SessionTicket, UserInfo,
     DEFAULT_SERVICE,
 };

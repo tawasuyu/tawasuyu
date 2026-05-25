@@ -19,13 +19,13 @@
 //! # Usage
 //!
 //! ```
-//! use eternal_time::{JulianDate, TCB};
+//! use cosmos_time::{JulianDate, TCB};
 //!
 //! // Create from Julian Date
 //! let tcb = TCB::from_julian_date(JulianDate::j2000());
 //!
 //! // Create from calendar
-//! use eternal_time::scales::tcb::tcb_from_calendar;
+//! use cosmos_time::scales::tcb::tcb_from_calendar;
 //! let tcb = tcb_from_calendar(2000, 1, 1, 12, 0, 0.0);
 //!
 //! // Parse from ISO 8601
@@ -42,7 +42,7 @@ use crate::constants::UNIX_EPOCH_JD;
 use crate::julian::JulianDate;
 use crate::parsing::parse_iso8601;
 use crate::{TimeError, TimeResult};
-use eternal_core::constants::SECONDS_PER_DAY_F64;
+use cosmos_core::constants::SECONDS_PER_DAY_F64;
 use std::fmt;
 use std::str::FromStr;
 
@@ -61,7 +61,7 @@ impl TCB {
     /// (1970-01-01T00:00:00) in the TCB scale.
     pub fn new(seconds: i64, nanos: u32) -> Self {
         let total_seconds =
-            seconds as f64 + nanos as f64 / eternal_core::constants::NANOSECONDS_PER_SECOND_F64;
+            seconds as f64 + nanos as f64 / cosmos_core::constants::NANOSECONDS_PER_SECOND_F64;
         let jd = JulianDate::from_f64(UNIX_EPOCH_JD + total_seconds / SECONDS_PER_DAY_F64);
         Self(jd)
     }
@@ -131,7 +131,7 @@ pub fn tcb_from_calendar(year: i32, month: u8, day: u8, hour: u8, minute: u8, se
 mod tests {
     use super::*;
     use crate::constants::UNIX_EPOCH_JD;
-    use eternal_core::constants::J2000_JD;
+    use cosmos_core::constants::J2000_JD;
 
     #[test]
     fn test_tcb_construction() {

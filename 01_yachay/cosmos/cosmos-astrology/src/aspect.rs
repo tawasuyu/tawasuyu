@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 
-use eternal_sky::Body;
+use cosmos_sky::Body;
 
 use crate::angles::signed_delta_deg;
 use crate::chart::NatalChart;

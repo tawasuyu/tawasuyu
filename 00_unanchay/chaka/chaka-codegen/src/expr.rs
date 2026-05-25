@@ -1,7 +1,7 @@
 //! Emisión de expresiones y condiciones: cada nodo del IR se convierte
 //! en un fragmento de código Rust (un `String`).
 
-use charka_ir::{BinOp, CmpOp, Cond, Expr, Figurative, Operand};
+use chaka_ir::{BinOp, CmpOp, Cond, Expr, Figurative, Operand};
 
 use crate::sym::{FieldKind, Symbols};
 
@@ -82,7 +82,7 @@ pub(crate) fn operand_decimal(sym: &Symbols, op: &Operand) -> String {
             Some((lref, FieldKind::Text { .. })) => format!(
                 "Decimal::parse({lref}.display().trim()).unwrap_or_else(|_| Decimal::zero())"
             ),
-            None => "Decimal::zero() /* charka: dato no resuelto */".to_string(),
+            None => "Decimal::zero() /* chaka_app: dato no resuelto */".to_string(),
         },
     }
 }
@@ -95,7 +95,7 @@ pub(crate) fn operand_str(sym: &Symbols, op: &Operand) -> String {
         Operand::Figurative(f) => rust_str(figurative_text(*f)),
         Operand::Data(_) | Operand::Indexed { .. } => match field_ref(sym, op) {
             Some((lref, _)) => format!("{lref}.display().as_str()"),
-            None => "\"\" /* charka: dato no resuelto */".to_string(),
+            None => "\"\" /* chaka_app: dato no resuelto */".to_string(),
         },
     }
 }
@@ -108,7 +108,7 @@ pub(crate) fn operand_display(sym: &Symbols, op: &Operand) -> String {
         Operand::Figurative(f) => rust_str(figurative_text(*f)),
         Operand::Data(_) | Operand::Indexed { .. } => match field_ref(sym, op) {
             Some((lref, _)) => format!("{lref}.display()"),
-            None => "\"\" /* charka: dato no resuelto */".to_string(),
+            None => "\"\" /* chaka_app: dato no resuelto */".to_string(),
         },
     }
 }
@@ -128,7 +128,7 @@ pub(crate) fn emit_expr(sym: &Symbols, e: &Expr) -> String {
                 BinOp::Div => format!(
                     "({l}).div(&({r}), 9, Rounding::Truncate).unwrap_or_else(|_| Decimal::zero())"
                 ),
-                BinOp::Pow => "Decimal::zero() /* charka: ** no soportado */".to_string(),
+                BinOp::Pow => "Decimal::zero() /* chaka_app: ** no soportado */".to_string(),
             }
         }
     }
@@ -149,7 +149,7 @@ pub(crate) fn emit_cond(sym: &Symbols, c: &Cond) -> String {
                     rhs: cn.value.clone(),
                 },
             ),
-            None => format!("false /* charka: condición 88 no resuelta: {name} */"),
+            None => format!("false /* chaka_app: condición 88 no resuelta: {name} */"),
         },
         Cond::Not(inner) => format!("!({})", emit_cond(sym, inner)),
         Cond::And(a, b) => format!("({}) && ({})", emit_cond(sym, a), emit_cond(sym, b)),

@@ -38,7 +38,7 @@ use crate::errors::AstroResult;
 /// # Example
 ///
 /// ```
-/// use eternal_core::nutation::NutationIAU2006A;
+/// use cosmos_core::nutation::NutationIAU2006A;
 ///
 /// let nutation = NutationIAU2006A::new();
 ///

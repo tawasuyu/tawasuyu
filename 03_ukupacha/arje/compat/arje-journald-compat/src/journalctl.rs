@@ -206,7 +206,7 @@ fn print_pretty(e: &IndexEntry, body: &str) {
 
 /// systemd journal export format. Cada entry es un bloque de líneas
 /// `KEY=value\n` separado por blank line. Para values con newlines o
-/// bytes binarios, el formato usa una variante con length-prefix
+/// bytes binarios, el format usa una variante con length-prefix
 /// (8 bytes LE u64) — por simplicidad sólo emitimos values con texto
 /// que no contienen newlines o caracteres no-printables. Extraemos
 /// MESSAGE/PRIORITY/_SYSTEMD_UNIT del body si es journald native.
@@ -273,7 +273,7 @@ fn gethostname_safe() -> String {
 }
 
 fn print_json(e: &IndexEntry, body: &str) {
-    // JSON-lines básico, sin dependencia de serde — formato simple y estable.
+    // JSON-lines básico, sin dependencia de serde — format simple y estable.
     let escaped_body = body
         .replace('\\', "\\\\")
         .replace('"', "\\\"")

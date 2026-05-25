@@ -13,7 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 sandokan = { path = "../sandokan" }
-brahman-card = { path = "../../card/card-core" }
+card-core = { path = "../../card/card-core" }
 clap = { workspace = true }
 tokio = { workspace = true }
 ulid = { workspace = true }

@@ -8,7 +8,7 @@
 //!   y lo envuelve en [`Card`] derivando los campos del wrapper.
 //!
 //! Convenciones para derivar el wrapper:
-//! - `id`: del campo `id` del input (cada formato lo expone). Si es
+//! - `id`: del campo `id` del input (cada format lo expone). Si es
 //!   ULID se serializa a string canónico.
 //! - `label`: del campo `label`.
 //! - `lineage`: del campo `lineage` cuando existe (Ente/Monad).
@@ -26,11 +26,11 @@ use crate::{Card, CardBody, CardLoadError, CardReader, EnteCard, MonadManifest, 
 // Ente (brahman-card)
 // ============================================================================
 
-/// Reader para el shape JSON de [`brahman_card::Card`].
+/// Reader para el shape JSON de [`card_core::Card`].
 ///
 /// Heurística de detección: el input tiene `payload` Y `supervision`
 /// — son los campos requeridos del schema Ente que ningún otro
-/// formato del monorepo tiene.
+/// format del monorepo tiene.
 pub struct EnteJsonReader;
 
 impl CardReader for EnteJsonReader {

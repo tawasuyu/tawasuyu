@@ -13,7 +13,7 @@
 //!   (Rust/TS/JS/Go) sale legible; Python —cuya estructura vive en la
 //!   indentación, y la indentación es trivia— sale como una secuencia
 //!   de tokens en pocas líneas. Es esperado: el hash es de la
-//!   estructura, no del formato.
+//!   estructura, no del format.
 //!
 //! - [`render_sexp`]: el árbol como S-expression indentada. Vista
 //!   exacta y sin pérdida de lo que el store guarda de verdad.

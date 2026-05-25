@@ -1,5 +1,5 @@
 [package]
-name = "revista-web"
+name = "pluma-deck-web"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,7 +7,7 @@ authors.workspace = true
 publish.workspace = true
 
 [dependencies]
-revista-core = { path = "../pluma-deck-core" }
+pluma-deck-core = { path = "../pluma-deck-core" }
 wasm-bindgen.workspace = true
 js-sys.workspace = true
 

@@ -1,7 +1,7 @@
-//! `charka-parser` — parser de COBOL'85 (subconjunto) a AST.
+//! `chaka_app-parser` — parser de COBOL'85 (subconjunto) a AST.
 //!
 //! Segunda etapa del transpilador COBOL→Rust: consume los [`Token`] del
-//! `charka-lexer` y produce un [`Program`]. El alcance de la v1 es el
+//! `chaka_app-lexer` y produce un [`Program`]. El alcance de la v1 es el
 //! **esqueleto del programa**:
 //!
 //! - Las cuatro divisiones (`IDENTIFICATION`, `ENVIRONMENT`, `DATA`,
@@ -12,7 +12,7 @@
 //!   uno con sus [`Sentence`] (los tokens crudos de cada sentencia).
 //!
 //! Lo que **no** hace todavía: el parseo a nivel de statement (cada
-//! sentencia queda como `Vec<Token>` — es trabajo de `charka-ir`), la
+//! sentencia queda como `Vec<Token>` — es trabajo de `chaka_app-ir`), la
 //! ENVIRONMENT division, CICS, SQL embebido y los dialectos IBM. Son
 //! las etapas siguientes del plan.
 //!
@@ -25,7 +25,7 @@
 
 use thiserror::Error;
 
-pub use charka_lexer::{Token, TokenKind};
+pub use chaka_lexer::{Token, TokenKind};
 
 /// Un programa COBOL parseado: el esqueleto de sus cuatro divisiones.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -82,7 +82,7 @@ pub struct Paragraph {
 }
 
 /// Una sentencia: los tokens entre dos puntos terminadores. La v1 no
-/// parsea a nivel de statement — eso es trabajo de `charka-ir`.
+/// parsea a nivel de statement — eso es trabajo de `chaka_app-ir`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sentence {
     pub tokens: Vec<Token>,
@@ -562,9 +562,9 @@ fn kw(t: Option<&Token>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use charka_lexer::{lex, SourceFormat};
+    use chaka_lexer::{lex, SourceFormat};
 
-    /// Helper: lexa el fuente en formato libre y lo parsea.
+    /// Helper: lexa el fuente en format libre y lo parsea.
     fn parse_src(src: &str) -> Program {
         let toks = lex(src, SourceFormat::Free).expect("lex OK");
         parse(&toks).expect("parse OK")

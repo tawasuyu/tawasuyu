@@ -15,7 +15,7 @@ impl From<LAST> for GAST {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eternal_core::Location;
+    use cosmos_core::Location;
 
     fn mauna_kea() -> Location {
         Location::from_degrees(19.8283, -155.4783, 4145.0).unwrap()

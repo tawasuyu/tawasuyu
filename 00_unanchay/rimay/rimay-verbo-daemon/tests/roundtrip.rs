@@ -3,9 +3,9 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-use verbo_core::Provider;
-use verbo_daemon::{Daemon, DaemonClient};
-use verbo_mock::MockProvider;
+use rimay_verbo_core::Provider;
+use rimay_verbo_daemon::{Daemon, DaemonClient};
+use rimay_verbo_mock::MockProvider;
 
 /// Ruta de socket única por test — evita choques entre tests paralelos.
 fn unique_socket() -> std::path::PathBuf {

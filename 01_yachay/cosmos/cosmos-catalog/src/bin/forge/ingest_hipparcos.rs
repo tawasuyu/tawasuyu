@@ -246,8 +246,8 @@ fn col(bytes: &[u8], start: usize, end: usize) -> Option<&str> {
 }
 
 fn propagate_position(star: &Hip2Star) -> (f64, f64) {
-    let pmdec_rad_per_yr = star.pmdec / 3_600_000.0 * (eternal_core::constants::PI / 180.0);
-    let pmra_rad_per_yr = star.pmra / 3_600_000.0 * (eternal_core::constants::PI / 180.0);
+    let pmdec_rad_per_yr = star.pmdec / 3_600_000.0 * (cosmos_core::constants::PI / 180.0);
+    let pmra_rad_per_yr = star.pmra / 3_600_000.0 * (cosmos_core::constants::PI / 180.0);
     let dec_2016 = star.dec_rad + pmdec_rad_per_yr * DELTA_T_YEARS;
     let cos_dec = libm::cos(star.dec_rad);
     let ra_2016 = if libm::fabs(cos_dec) > 1e-10 {
@@ -334,8 +334,8 @@ fn write_star_record<W: Write>(
 ) -> anyhow::Result<()> {
     let record = StarRecord {
         source_id,
-        ra: ra_rad * 180.0 / eternal_core::constants::PI,
-        dec: dec_rad * 180.0 / eternal_core::constants::PI,
+        ra: ra_rad * 180.0 / cosmos_core::constants::PI,
+        dec: dec_rad * 180.0 / cosmos_core::constants::PI,
         pmra: star.pmra,
         pmdec: star.pmdec,
         parallax: star.parallax,
@@ -363,8 +363,8 @@ fn validate_star(stars: &[Hip2Star], crossmatch: &HashMap<u32, i64>, hip: u32, n
     };
     let (ra_2016, dec_2016) = propagate_position(star);
     let source_id = compute_source_id(hip, crossmatch);
-    let ra_deg = ra_2016 * 180.0 / eternal_core::constants::PI;
-    let dec_deg = dec_2016 * 180.0 / eternal_core::constants::PI;
+    let ra_deg = ra_2016 * 180.0 / cosmos_core::constants::PI;
+    let dec_deg = dec_2016 * 180.0 / cosmos_core::constants::PI;
     let match_status = if crossmatch.contains_key(&hip) {
         "Gaia match"
     } else {
@@ -374,8 +374,8 @@ fn validate_star(stars: &[Hip2Star], crossmatch: &HashMap<u32, i64>, hip: u32, n
         "HIP {} ({}): RA={:.6} Dec={:.6} deg (J2016.0), Hp={:.3}, {}",
         hip, name, ra_deg, dec_deg, star.hpmag, match_status
     );
-    let orig_ra_deg = star.ra_rad * 180.0 / eternal_core::constants::PI;
-    let orig_dec_deg = star.dec_rad * 180.0 / eternal_core::constants::PI;
+    let orig_ra_deg = star.ra_rad * 180.0 / cosmos_core::constants::PI;
+    let orig_dec_deg = star.dec_rad * 180.0 / cosmos_core::constants::PI;
     println!(
         "  Original (J1991.25): RA={:.6} Dec={:.6} deg",
         orig_ra_deg, orig_dec_deg

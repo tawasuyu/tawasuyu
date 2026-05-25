@@ -1,6 +1,6 @@
 //! User-controlled options for a natal-chart computation.
 
-use eternal_sky::Body;
+use cosmos_sky::Body;
 
 use crate::house_system::HouseSystem;
 use crate::zodiac::Zodiac;
@@ -45,7 +45,7 @@ impl BodySet {
 
     /// Add the four main-belt asteroids (Ceres, Pallas, Juno, Vesta).
     /// Requires an asteroid SPK kernel attached to the
-    /// [`eternal_sky::EphemerisSession`].
+    /// [`cosmos_sky::EphemerisSession`].
     pub fn with_main_belt_asteroids(mut self) -> Self {
         self.bodies.push(Body::Ceres);
         self.bodies.push(Body::Pallas);

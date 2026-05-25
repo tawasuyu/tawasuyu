@@ -9,7 +9,7 @@ pub mod lunar;
 pub mod solar;
 pub mod transforms;
 
-pub use eternal_core::Angle;
+pub use cosmos_core::Angle;
 pub use distance::Distance;
 pub use eop::{EopParameters, EopProvider, EopRecord};
 pub use errors::{CoordError, CoordResult};
@@ -23,5 +23,5 @@ pub use frames::{
 
 pub use transforms::{CartesianFrame, CoordinateFrame};
 
-pub use eternal_core::{Location, Vector3};
-pub use eternal_time::{TimeError, TimeResult, TAI, TT, UT1, UTC};
+pub use cosmos_core::{Location, Vector3};
+pub use cosmos_time::{TimeError, TimeResult, TAI, TT, UT1, UTC};

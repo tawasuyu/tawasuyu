@@ -17,13 +17,13 @@
 //! # Usage
 //!
 //! ```
-//! use eternal_time::{JulianDate, TT};
+//! use cosmos_time::{JulianDate, TT};
 //!
 //! // Create TT at J2000.0 epoch
 //! let tt = TT::j2000();
 //!
 //! // From calendar date
-//! use eternal_time::scales::tt::tt_from_calendar;
+//! use cosmos_time::scales::tt::tt_from_calendar;
 //! let tt = tt_from_calendar(2000, 1, 1, 12, 0, 0.0);
 //!
 //! // Parse from ISO 8601
@@ -43,7 +43,7 @@ use crate::constants::UNIX_EPOCH_JD;
 use crate::julian::JulianDate;
 use crate::parsing::parse_iso8601;
 use crate::{TimeError, TimeResult};
-use eternal_core::constants::{J2000_JD, SECONDS_PER_DAY_F64};
+use cosmos_core::constants::{J2000_JD, SECONDS_PER_DAY_F64};
 use std::fmt;
 use std::str::FromStr;
 
@@ -62,7 +62,7 @@ impl TT {
     /// to TT Julian Date representation.
     pub fn new(seconds: i64, nanos: u32) -> Self {
         let total_seconds =
-            seconds as f64 + nanos as f64 / eternal_core::constants::NANOSECONDS_PER_SECOND_F64;
+            seconds as f64 + nanos as f64 / cosmos_core::constants::NANOSECONDS_PER_SECOND_F64;
         let jd = JulianDate::from_f64(UNIX_EPOCH_JD + total_seconds / SECONDS_PER_DAY_F64);
         Self(jd)
     }
@@ -122,7 +122,7 @@ impl TT {
     /// This is the time argument used in IAU precession and nutation series.
     /// One Julian century = 36525 days.
     pub fn centuries_since_j2000(&self) -> f64 {
-        (self.0.to_f64() - J2000_JD) / eternal_core::constants::DAYS_PER_JULIAN_CENTURY
+        (self.0.to_f64() - J2000_JD) / cosmos_core::constants::DAYS_PER_JULIAN_CENTURY
     }
 }
 
@@ -214,7 +214,7 @@ mod tests {
         assert_eq!(tt.julian_year(), 2000.0);
         assert_eq!(tt.centuries_since_j2000(), 0.0);
 
-        let tt_plus_century = tt.add_days(eternal_core::constants::DAYS_PER_JULIAN_CENTURY);
+        let tt_plus_century = tt.add_days(cosmos_core::constants::DAYS_PER_JULIAN_CENTURY);
         assert_eq!(tt_plus_century.centuries_since_j2000(), 1.0);
     }
 

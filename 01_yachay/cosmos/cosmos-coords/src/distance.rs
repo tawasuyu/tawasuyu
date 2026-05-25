@@ -1,5 +1,5 @@
 use crate::{CoordError, CoordResult};
-use eternal_core::Angle;
+use cosmos_core::Angle;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -136,7 +136,7 @@ impl Distance {
 
     pub fn proper_motion_distance_au(self, pm_mas_per_year: f64, dt_years: f64) -> f64 {
         let pm_rad_per_year =
-            pm_mas_per_year * 1e-3 * (eternal_core::constants::PI / (180.0 * 3600.0));
+            pm_mas_per_year * 1e-3 * (cosmos_core::constants::PI / (180.0 * 3600.0));
         let angular_distance_rad = pm_rad_per_year * dt_years;
         self.au() * angular_distance_rad
     }

@@ -1,4 +1,4 @@
-use eternal_catalog::query::{cone_search, Catalog, ConeSearchParams};
+use cosmos_catalog::query::{cone_search, Catalog, ConeSearchParams};
 
 fn main() -> anyhow::Result<()> {
     let path = std::env::args()

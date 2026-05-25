@@ -290,7 +290,7 @@ impl MonadManifest {
             .unwrap_or(0);
     }
 
-    /// Proyecta el `MonadManifest` a la `brahman_card::Card` que viaja
+    /// Proyecta el `MonadManifest` a la `card_core::Card` que viaja
     /// por el protocolo. La Card resultante:
     ///
     /// - hereda `id` y `label` del manifiesto (ULID estable).
@@ -304,8 +304,8 @@ impl MonadManifest {
     /// - Los miembros completos NO viajan en la Card — se consultan al
     ///   daemon dueño bajo demanda. Lo que viaja es metadata liviana
     ///   apta para el wire postcard.
-    pub fn to_brahman_card(&self) -> brahman_card::Card {
-        use brahman_card::{
+    pub fn to_brahman_card(&self) -> card_core::Card {
+        use card_core::{
             Card, CardKind, DataFacet, Lifecycle, Payload, Priority, Supervision,
         };
 
@@ -320,7 +320,7 @@ impl MonadManifest {
         .to_string();
 
         Card {
-            schema_version: brahman_card::CARD_SCHEMA_VERSION,
+            schema_version: card_core::CARD_SCHEMA_VERSION,
             id: self.id,
             label: self.label.clone(),
             payload: Payload::Virtual,
@@ -403,7 +403,7 @@ mod tests {
         let bc = m.to_brahman_card();
         assert_eq!(bc.id, m.id);
         assert_eq!(bc.label, "test-monad");
-        assert_eq!(bc.kind, brahman_card::CardKind::Data);
+        assert_eq!(bc.kind, card_core::CardKind::Data);
         let data = bc.data.expect("data facet presente");
         assert_eq!(data.summary, "monad de prueba");
         assert_eq!(data.keywords, vec!["rs".to_string(), "toml".to_string()]);

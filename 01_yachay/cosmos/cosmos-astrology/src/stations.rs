@@ -2,12 +2,12 @@
 //! rate `dλ/dt` crosses zero, marking the transition between direct and
 //! retrograde motion.
 //!
-//! Reduces to one call into [`eternal_sky::find_root`] on the apparent
-//! longitude rate exposed by [`eternal_sky::ApparentPosition::ecliptic_velocity`].
+//! Reduces to one call into [`cosmos_sky::find_root`] on the apparent
+//! longitude rate exposed by [`cosmos_sky::ApparentPosition::ecliptic_velocity`].
 //! Use [`next_station`] for the next station after a given instant, or
 //! [`all_stations`] for every station inside a window.
 
-use eternal_sky::{find_all_roots, find_root, Body, EphemerisSession, Instant, SearchOptions};
+use cosmos_sky::{find_all_roots, find_root, Body, EphemerisSession, Instant, SearchOptions};
 
 use crate::error::{AstrologyError, AstrologyResult};
 

@@ -3,7 +3,7 @@
 //! Conecta al socket admin (default `$XDG_RUNTIME_DIR/brahman-admin.sock`,
 //! override con `$BRAHMAN_ADMIN_SOCKET`), recibe el snapshot, y lo imprime.
 
-use brahman_admin::{client, transport};
+use card_admin::{client, transport};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
@@ -25,8 +25,8 @@ async fn main() -> anyhow::Result<()> {
         for s in &snap.sessions {
             let conscious_marker = if s.wit.is_some() { " 🧠" } else { "" };
             let kind_marker = match s.kind {
-                brahman_card::CardKind::Ente => "ente",
-                brahman_card::CardKind::Data => "data",
+                card_core::CardKind::Ente => "ente",
+                card_core::CardKind::Data => "data",
             };
             println!(
                 "  [{}]  {}  {}{}  lifecycle={:?}  priority={:?}",

@@ -15,7 +15,7 @@
 //! 3. Convert back with [`to_spherical`](Vector3::to_spherical)
 //!
 //! ```
-//! use eternal_core::Vector3;
+//! use cosmos_core::Vector3;
 //! use std::f64::consts::FRAC_PI_4;
 //!
 //! // A star at RA=45°, Dec=30° (in radians)
@@ -34,7 +34,7 @@
 //! a unit vector pointing in the same direction:
 //!
 //! ```
-//! use eternal_core::Vector3;
+//! use cosmos_core::Vector3;
 //!
 //! let v = Vector3::new(3.0, 4.0, 0.0);
 //! let unit = v.normalize();
@@ -52,7 +52,7 @@
 //!   Useful for computing rotation axes and angular momentum vectors.
 //!
 //! ```
-//! use eternal_core::Vector3;
+//! use cosmos_core::Vector3;
 //!
 //! let a = Vector3::x_axis();  // Points along +X
 //! let b = Vector3::y_axis();  // Points along +Y
@@ -91,7 +91,7 @@ use std::fmt;
 /// # Construction
 ///
 /// ```
-/// use eternal_core::Vector3;
+/// use cosmos_core::Vector3;
 ///
 /// // Direct construction
 /// let v = Vector3::new(1.0, 2.0, 3.0);
@@ -217,7 +217,7 @@ impl Vector3 {
     /// If the vector has zero length, returns the zero vector unchanged (avoids NaN).
     ///
     /// ```
-    /// use eternal_core::Vector3;
+    /// use cosmos_core::Vector3;
     ///
     /// let v = Vector3::new(3.0, 4.0, 0.0);
     /// let unit = v.normalize();
@@ -240,7 +240,7 @@ impl Vector3 {
     /// celestial positions.
     ///
     /// ```
-    /// use eternal_core::Vector3;
+    /// use cosmos_core::Vector3;
     ///
     /// let a = Vector3::x_axis();
     /// let b = Vector3::y_axis();
@@ -261,7 +261,7 @@ impl Vector3 {
     /// by the right-hand rule. The magnitude equals `|a||b|sin(θ)`.
     ///
     /// ```
-    /// use eternal_core::Vector3;
+    /// use cosmos_core::Vector3;
     ///
     /// let x = Vector3::x_axis();
     /// let y = Vector3::y_axis();
@@ -296,7 +296,7 @@ impl Vector3 {
     /// The result is always a unit vector (magnitude = 1).
     ///
     /// ```
-    /// use eternal_core::Vector3;
+    /// use cosmos_core::Vector3;
     /// use std::f64::consts::FRAC_PI_2;
     ///
     /// // RA=0, Dec=0 → points along +X
@@ -327,7 +327,7 @@ impl Vector3 {
     /// of magnitude. For the zero vector, returns `(0.0, 0.0)`.
     ///
     /// ```
-    /// use eternal_core::Vector3;
+    /// use cosmos_core::Vector3;
     /// use std::f64::consts::FRAC_PI_2;
     ///
     /// let v = Vector3::new(0.0, 0.0, 1.0);  // North pole

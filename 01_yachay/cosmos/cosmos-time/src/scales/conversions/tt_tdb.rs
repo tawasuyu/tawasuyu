@@ -29,10 +29,10 @@
 //! - [`ToTTFromTDB`]: Convert TDB to TT with location awareness
 //!
 //! ```
-//! use eternal_time::scales::{TT, TDB};
-//! use eternal_time::scales::conversions::{ToTDB, ToTTFromTDB};
-//! use eternal_time::JulianDate;
-//! use eternal_core::Location;
+//! use cosmos_time::scales::{TT, TDB};
+//! use cosmos_time::scales::conversions::{ToTDB, ToTTFromTDB};
+//! use cosmos_time::JulianDate;
+//! use cosmos_core::Location;
 //!
 //! // TT → TDB: requires observer location
 //! let tt = TT::from_julian_date(JulianDate::new(2451545.0, 0.5));
@@ -67,11 +67,11 @@ use crate::{
 };
 
 use crate::{TimeError, TimeResult};
-use eternal_core::constants::{
+use cosmos_core::constants::{
     DAYS_PER_JULIAN_MILLENNIUM, DEG_TO_RAD, J2000_JD, SECONDS_PER_DAY_F64, TWOPI,
 };
-use eternal_core::math::fmod;
-use eternal_core::Location;
+use cosmos_core::math::fmod;
+use cosmos_core::Location;
 
 /// Returns the Royal Observatory Greenwich location.
 ///
@@ -194,7 +194,7 @@ impl ToTDB for TT {
     fn to_tdb_with_offset(&self, dtr_seconds: f64) -> TimeResult<TDB> {
         let tt_jd = self.to_julian_date();
 
-        let dtr_days = dtr_seconds / eternal_core::constants::SECONDS_PER_DAY_F64;
+        let dtr_days = dtr_seconds / cosmos_core::constants::SECONDS_PER_DAY_F64;
 
         let (tdb_jd1, tdb_jd2) = if tt_jd.jd1().abs() > tt_jd.jd2().abs() {
             (tt_jd.jd1(), tt_jd.jd2() + dtr_days)
@@ -304,7 +304,7 @@ impl ToTTFromTDB for TDB {
     fn to_tt_with_offset(&self, dtr_seconds: f64) -> TimeResult<TT> {
         let tdb_jd = self.to_julian_date();
 
-        let dtr_days = dtr_seconds / eternal_core::constants::SECONDS_PER_DAY_F64;
+        let dtr_days = dtr_seconds / cosmos_core::constants::SECONDS_PER_DAY_F64;
 
         let (tt_jd1, tt_jd2) = if tdb_jd.jd1().abs() > tdb_jd.jd2().abs() {
             (tdb_jd.jd1(), tdb_jd.jd2() - dtr_days)
@@ -407,7 +407,7 @@ fn calculate_tdb_tt_difference(date1: f64, date2: f64, ut: f64, elong: f64, u: f
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eternal_core::constants::{DAYS_PER_JULIAN_CENTURY, J2000_JD};
+    use cosmos_core::constants::{DAYS_PER_JULIAN_CENTURY, J2000_JD};
 
     #[test]
     fn test_identity_conversions() {

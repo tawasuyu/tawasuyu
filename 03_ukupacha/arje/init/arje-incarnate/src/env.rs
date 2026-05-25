@@ -1,6 +1,6 @@
 //! Construcción del entorno del hijo. Sin globals — toma EnvSpec por valor.
 
-use brahman_card::Card;
+use card_core::Card;
 use std::path::PathBuf;
 
 /// Var env para el path del bus interno (cuando aplica). Mismo nombre que
@@ -55,7 +55,7 @@ pub fn build_env(card: &Card, base_envp: &[(String, String)], spec: &EnvSpec) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use brahman_card::Card;
+    use card_core::Card;
 
     #[test]
     fn env_id_and_bus_injected() {

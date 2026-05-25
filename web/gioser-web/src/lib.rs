@@ -3,7 +3,7 @@
 //! Plano cartesiano SVG estático (en index.html) + visor markdown WASM.
 //! Click en un dominio → abre md/<dom>.md con pluma-md-reader-web.
 
-use fana_md_reader_web::Reader;
+use pluma_md_reader_web::Reader;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;

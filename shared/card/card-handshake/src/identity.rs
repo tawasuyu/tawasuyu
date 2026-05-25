@@ -38,7 +38,7 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use brahman_net::{Keypair, PeerId, PublicKey};
+use card_net::{Keypair, PeerId, PublicKey};
 use serde::{Deserialize, Serialize};
 
 /// TTL recomendado para un session cert: 24 horas. Suficiente para
@@ -121,16 +121,16 @@ pub const SESSION_CERT_VERSION: u8 = 1;
 /// libp2p a la identidad master del nodo, con expiración.
 ///
 /// **Wire**: viaja en `Hello.identity_cert`. Las pubkeys van en
-/// formato canónico libp2p (`encode_protobuf`) — mismo encoding que
+/// format canónico libp2p (`encode_protobuf`) — mismo encoding que
 /// `HelloSignature.public_key`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionCert {
     /// Versión del esquema (ver `SESSION_CERT_VERSION`).
     pub version: u8,
     /// Public key de la session libp2p (la que firma el Hello), en
-    /// formato libp2p protobuf.
+    /// format libp2p protobuf.
     pub session_pubkey: Vec<u8>,
-    /// Public key de la master identity, en formato libp2p protobuf.
+    /// Public key de la master identity, en format libp2p protobuf.
     /// El verificador deriva el `master_peer_id` desde acá.
     pub master_pubkey: Vec<u8>,
     /// Expiración en milisegundos desde UNIX_EPOCH. Tras esto, el

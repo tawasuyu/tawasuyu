@@ -1,11 +1,11 @@
 [package]
-name = "fana-core"
+name = "pluma-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "fana — átomo narrativo (NarrativeAtom) + estado de coherencia. Tipos puros del editor DAG, agnósticos de UI."
+description = "pluma-app — átomo narrativo (NarrativeAtom) + estado de coherencia. Tipos puros del editor DAG, agnósticos de UI."
 
 [dependencies]
 uuid = { workspace = true, features = ["serde"] }

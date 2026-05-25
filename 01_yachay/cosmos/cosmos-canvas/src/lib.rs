@@ -1,4 +1,4 @@
-//! `cosmobiologia-canvas` — el widget GPUI del lienzo astrológico.
+//! `cosmos_app-canvas` — el widget GPUI del lienzo astrológico.
 //!
 //! Modela el cielo como un lienzo de **geometría reactiva**: un estado
 //! unificado [`CanvasState`] guarda offsets de rotación, flags de
@@ -40,14 +40,14 @@ use gpui::{
     Window, canvas, div, hsla, point, prelude::*, px,
 };
 
-use cosmobiologia_engine::{
+use cosmos_engine::{
     combinaciones_de_carta, corpus_inputs, rebanar_por_dominio, CombinacionId, Corpus,
     Dominio, EvidenciaVecina, Geometry, GrTrigger, Layer, LayerKind, Pasaje, Rectificacion,
     RenderModel, UranianGroup, OUTER_RING_MODULES,
 };
-use cosmobiologia_model::{ChartId, ContactId, GroupId};
-use cosmobiologia_render::{compose_sphere, DrawCommand, Palette, SphereOpts, SphereView};
-use cosmobiologia_theme::{AspectKind as TAspectKind, AstroPalette, Element, Planet};
+use cosmos_model::{ChartId, ContactId, GroupId};
+use cosmos_render::{compose_sphere, DrawCommand, Palette, SphereOpts, SphereView};
+use cosmos_theme::{AspectKind as TAspectKind, AstroPalette, Element, Planet};
 use nahual_theme::Theme;
 
 // =====================================================================
@@ -960,7 +960,7 @@ fn load_corpus() -> Option<Corpus> {
         .unwrap_or_else(|| {
             format!("{}/.local/share", std::env::var("HOME").unwrap_or_default())
         });
-    let path = format!("{base}/cosmobiologia/corpus.ron");
+    let path = format!("{base}/cosmos_app/corpus.ron");
     if let Ok(txt) = std::fs::read_to_string(&path) {
         match Corpus::desde_ron(&txt) {
             Ok(c) => return Some(c),
@@ -1476,7 +1476,7 @@ fn render_thumbnails(theme: &Theme, items: &[ThumbnailItem]) -> gpui::Div {
 // =====================================================================
 
 /// Render del modo esfera 3D. Compone la escena agnóstica con
-/// `compose_sphere` (en `cosmobiologia-render`) y traduce sus
+/// `compose_sphere` (en `cosmos_app-render`) y traduce sus
 /// `DrawCommand`s a primitivas GPUI: las líneas y discos se pintan en
 /// el `canvas`; los glifos van como hijos DOM sobre las coordenadas ya
 /// proyectadas. El drag rota la esfera.
@@ -1621,7 +1621,7 @@ fn render_sphere(
 }
 
 /// Convierte un `Rgba` agnóstico (`[0,1]^4`) al `Hsla` de gpui.
-fn rgba_to_hsla(c: cosmobiologia_render::Rgba) -> Hsla {
+fn rgba_to_hsla(c: cosmos_render::Rgba) -> Hsla {
     let (r, g, b) = (c.r, c.g, c.b);
     let max = r.max(g).max(b);
     let min = r.min(g).min(b);
@@ -3024,11 +3024,11 @@ fn format_offset(minutes: i64) -> String {
 // Painting
 // =====================================================================
 
-// `Radii` + helpers migraron a `cosmobiologia-render` (crate
+// `Radii` + helpers migraron a `cosmos_app-render` (crate
 // agnóstico de surface, compila a WASM y nativo). Re-export para
 // que el código del canvas siga refiriendo `Radii` sin cambiar
 // imports en cada call site.
-use cosmobiologia_render::Radii;
+use cosmos_render::Radii;
 
 #[allow(clippy::too_many_arguments)]
 // `hover_focus`: symbol del planeta hovereado en este frame (si lo
@@ -3771,8 +3771,8 @@ fn dist_point_segment(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f
     (dx2 * dx2 + dy2 * dy2).sqrt()
 }
 
-// `polar_to_screen` se importa desde `cosmobiologia-render`.
-use cosmobiologia_render::polar_to_screen;
+// `polar_to_screen` se importa desde `cosmos_app-render`.
+use cosmos_render::polar_to_screen;
 
 fn centered_glyph(
     x: f32,
@@ -3847,14 +3847,14 @@ fn body_disk_base(module_id: &str, kind: LayerKind, view_scale: f32) -> f32 {
     base * view_scale
 }
 
-// `spread_angles` y `find_clusters` migraron a `cosmobiologia-render`.
-use cosmobiologia_render::{find_clusters, spread_angles};
+// `spread_angles` y `find_clusters` migraron a `cosmos_app-render`.
+use cosmos_render::{find_clusters, spread_angles};
 
-// `format_coord_compact` migró a `cosmobiologia-render`.
-use cosmobiologia_render::format_coord_compact;
+// `format_coord_compact` migró a `cosmos_app-render`.
+use cosmos_render::format_coord_compact;
 
 // Los tests de `spread_angles`, `find_clusters` y
-// `format_coord_compact` viven ahora en `cosmobiologia-render::math`
+// `format_coord_compact` viven ahora en `cosmos_app-render::math`
 // junto a sus implementaciones.
 
 /// Pill pequeña con un coord ("14°♈") junto al glyph de un planeta

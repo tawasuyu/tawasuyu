@@ -25,9 +25,9 @@
 //! # Usage
 //!
 //! ```
-//! use eternal_time::{JulianDate, TAI, TT};
-//! use eternal_time::scales::conversions::{ToTT, ToTAI};
-//! use eternal_core::constants::J2000_JD;
+//! use cosmos_time::{JulianDate, TAI, TT};
+//! use cosmos_time::scales::conversions::{ToTT, ToTAI};
+//! use cosmos_core::constants::J2000_JD;
 //!
 //! let tai = TAI::from_julian_date(JulianDate::new(J2000_JD, 0.0));
 //! let tt = tai.to_tt().unwrap();
@@ -49,7 +49,7 @@ use super::{ToTAI, ToTCG, ToTT};
 use crate::constants::TT_TAI_OFFSET;
 use crate::scales::{TAI, TCG, TT};
 use crate::TimeResult;
-use eternal_core::constants::SECONDS_PER_DAY_F64;
+use cosmos_core::constants::SECONDS_PER_DAY_F64;
 
 /// Identity conversion for TAI.
 impl ToTAI for TAI {
@@ -133,7 +133,7 @@ impl ToTAI for TCG {
 mod tests {
     use super::*;
     use crate::JulianDate;
-    use eternal_core::constants::J2000_JD;
+    use cosmos_core::constants::J2000_JD;
 
     #[test]
     fn test_identity_conversions() {

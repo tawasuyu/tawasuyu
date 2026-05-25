@@ -1,5 +1,5 @@
 [package]
-name = "barra-web"
+name = "mirada-bar-web"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,7 +7,7 @@ authors.workspace = true
 publish.workspace = true
 
 [dependencies]
-barra-core = { path = "../mirada-bar-core" }
+mirada-bar-core = { path = "../mirada-bar-core" }
 wasm-bindgen.workspace = true
 js-sys.workspace = true
 

@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use brahman_card::{
+use card_core::{
     Capability, Card, CgroupSpec, FsPolicy, Lifecycle, NetworkingPolicy, Payload, Permissions,
     Priority, SomaSpec, Supervision,
 };
@@ -175,7 +175,7 @@ mod tests {
         let c = carmen_dm_card();
         c.validate().expect("la Card de carmen-dm debe validar");
         match &c.payload {
-            brahman_card::Payload::Native { exec, argv, .. } => {
+            card_core::Payload::Native { exec, argv, .. } => {
                 assert_eq!(exec, "/usr/bin/mirada-compositor");
                 assert!(argv.contains(&"--greeter".to_string()));
             }

@@ -18,7 +18,7 @@
 //!
 //! En disco es RON de texto (`~/.config/mirada/keymap.ron`), editable a
 //! mano y versionable. El cable sólo lleva la lista de cadenas; no hay
-//! formato binario de configuración. Hay un único ejecutable que hace de
+//! format binario de configuración. Hay un único ejecutable que hace de
 //! "configurador": la app `mirada`, que carga este archivo al arrancar.
 //!
 //! # Recarga en caliente

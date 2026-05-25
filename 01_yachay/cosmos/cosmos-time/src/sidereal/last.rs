@@ -5,8 +5,8 @@ use super::lmst::LMST;
 use crate::scales::{TT, UT1};
 use crate::transforms::nutation::NutationCalculator;
 use crate::TimeResult;
-use eternal_core::angle::wrap_0_2pi;
-use eternal_core::Location;
+use cosmos_core::angle::wrap_0_2pi;
+use cosmos_core::Location;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -94,7 +94,7 @@ impl LAST {
     }
 
     pub fn to_gast(&self) -> GAST {
-        let longitude_hours = self.location.longitude * 12.0 / eternal_core::constants::PI;
+        let longitude_hours = self.location.longitude * 12.0 / cosmos_core::constants::PI;
 
         let gast_hours = self.hours() - longitude_hours;
 
@@ -105,10 +105,10 @@ impl LAST {
         let nutation = tt.nutation_iau2006a()?;
 
         let jd = tt.to_julian_date();
-        let mean_obliquity = eternal_core::obliquity::iau_2006_mean_obliquity(jd.jd1(), jd.jd2());
+        let mean_obliquity = cosmos_core::obliquity::iau_2006_mean_obliquity(jd.jd1(), jd.jd2());
 
         let ee_rad = nutation.nutation_longitude() * libm::cos(mean_obliquity);
-        let ee_hours = ee_rad * 12.0 / eternal_core::constants::PI;
+        let ee_hours = ee_rad * 12.0 / cosmos_core::constants::PI;
 
         let lmst_hours = self.hours() - ee_hours;
 
@@ -124,8 +124,8 @@ impl LAST {
 
 impl std::fmt::Display for LAST {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let lat_deg = self.location.latitude * eternal_core::constants::RAD_TO_DEG;
-        let lon_deg = self.location.longitude * eternal_core::constants::RAD_TO_DEG;
+        let lat_deg = self.location.latitude * cosmos_core::constants::RAD_TO_DEG;
+        let lon_deg = self.location.longitude * cosmos_core::constants::RAD_TO_DEG;
         write!(
             f,
             "LAST {} at ({:.4}°, {:.4}°)",
@@ -226,7 +226,7 @@ mod tests {
         let gast = GAST::from_ut1_and_tt(&ut1, &tt).unwrap();
 
         // Calculate longitude correction manually
-        let longitude_hours = location.longitude * 12.0 / eternal_core::constants::PI;
+        let longitude_hours = location.longitude * 12.0 / cosmos_core::constants::PI;
 
         // LAST should equal GAST + longitude correction
         let expected_last = gast.hours() + longitude_hours;
@@ -293,7 +293,7 @@ mod tests {
         let original_gast = GAST::from_hours(15.5);
 
         // Convert GAST -> LAST -> GAST
-        let longitude_hours = location.longitude * 12.0 / eternal_core::constants::PI;
+        let longitude_hours = location.longitude * 12.0 / cosmos_core::constants::PI;
         let last_hours = original_gast.hours() + longitude_hours;
         let last = LAST::from_hours(last_hours, &location);
         let recovered_gast = last.to_gast();
@@ -335,7 +335,7 @@ mod tests {
         // Test all constructor methods produce equivalent results
         let hours = 14.5;
         let degrees = hours * 15.0;
-        let radians = hours * eternal_core::constants::PI / 12.0;
+        let radians = hours * cosmos_core::constants::PI / 12.0;
 
         let last_hours = LAST::from_hours(hours, &location);
         let last_degrees = LAST::from_degrees(degrees, &location);
@@ -449,8 +449,8 @@ mod tests {
         assert_eq!(last_deg.hours(), 3.0);
 
         // Test from_radians constructor
-        let last_rad = LAST::from_radians(eternal_core::constants::PI / 4.0, &location);
-        assert!((last_rad.radians() - eternal_core::constants::PI / 4.0).abs() < 1e-15);
+        let last_rad = LAST::from_radians(cosmos_core::constants::PI / 4.0, &location);
+        assert!((last_rad.radians() - cosmos_core::constants::PI / 4.0).abs() < 1e-15);
         assert_eq!(last_rad.hours(), 3.0);
 
         // Test angle() accessor

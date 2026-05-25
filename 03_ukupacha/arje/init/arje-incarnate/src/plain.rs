@@ -4,7 +4,7 @@ use crate::env::{build_env, EnvSpec};
 use crate::error::IncarnateError;
 use crate::pre_exec::{apply_unchecked, ChildSetup};
 use crate::ChildStdio;
-use brahman_card::{Card, Payload};
+use card_core::{Card, Payload};
 use nix::unistd::Pid;
 use std::os::fd::FromRawFd;
 use std::os::unix::process::CommandExt;

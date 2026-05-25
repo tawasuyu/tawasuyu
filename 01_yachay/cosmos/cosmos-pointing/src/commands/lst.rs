@@ -1,7 +1,7 @@
 use super::{Command, CommandOutput};
 use crate::error::{Error, Result};
 use crate::session::Session;
-use eternal_core::Angle;
+use cosmos_core::Angle;
 
 pub struct Lst;
 

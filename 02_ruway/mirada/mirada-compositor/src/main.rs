@@ -69,7 +69,7 @@ use smithay::{
     delegate_shm, delegate_xdg_decoration, delegate_xdg_shell,
 };
 
-use brahman_auth::{SessionTicket, UserInfo};
+use auth_core::{SessionTicket, UserInfo};
 use mirada_body::{BodyOp, BodyState};
 use mirada_brain::{
     BodyEvent, BrainCommand, CtlReply, CtlRequest, CtlServer, Desktop, Keymap, Rules,
@@ -675,7 +675,7 @@ impl ClientData for ClientState {
 // ---------------------------------------------------------------------
 
 /// Construye la cadena de un atajo (`"Super+Shift+j"`) desde el estado de
-/// modificadores y el keysym, con el mismo formato que el mapa de teclas
+/// modificadores y el keysym, con el mismo format que el mapa de teclas
 /// de [`mirada_brain`]. `None` si no es una tecla mapeable.
 fn combo_string(mods: &ModifiersState, sym: Keysym) -> Option<String> {
     let utf = xkb::keysym_to_utf8(sym);
@@ -1010,7 +1010,7 @@ fn announce_output(
 fn announce_dmabuf(app: &mut App, dh: &DisplayHandle, renderer: &GlesRenderer) {
     let formats: Vec<_> = renderer.dmabuf_formats().into_iter().collect();
     println!(
-        "mirada-compositor · dmabuf: {} formato(s) anunciado(s).",
+        "mirada-compositor · dmabuf: {} format(s) anunciado(s).",
         formats.len()
     );
     app.dmabuf_state.create_global::<App>(dh, formats);

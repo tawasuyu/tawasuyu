@@ -2,8 +2,8 @@ use crate::error::{Error, Result};
 use crate::model::PointingModel;
 use crate::observation::{IndatFile, MountType, Observation, SiteParams};
 use crate::solver::{self, FitResult};
-use eternal_core::Angle;
-use eternal_time::JulianDate;
+use cosmos_core::Angle;
+use cosmos_time::JulianDate;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AdjustDirection {
@@ -94,7 +94,7 @@ mod tests {
     use super::*;
     use crate::observation::PierSide;
     use crate::parser::parse_indat;
-    use eternal_core::Angle;
+    use cosmos_core::Angle;
 
     #[test]
     fn new_session_defaults() {

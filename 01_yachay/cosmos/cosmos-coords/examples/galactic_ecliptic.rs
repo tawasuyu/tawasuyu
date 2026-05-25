@@ -1,7 +1,7 @@
-use eternal_coords::frames::{EclipticPosition, GalacticPosition, ICRSPosition};
-use eternal_coords::transforms::CoordinateFrame;
-use eternal_coords::Distance;
-use eternal_time::tt_from_calendar;
+use cosmos_coords::frames::{EclipticPosition, GalacticPosition, ICRSPosition};
+use cosmos_coords::transforms::CoordinateFrame;
+use cosmos_coords::Distance;
+use cosmos_time::tt_from_calendar;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tt = tt_from_calendar(2024, 6, 21, 12, 0, 0.0); // Summer solstice 2024

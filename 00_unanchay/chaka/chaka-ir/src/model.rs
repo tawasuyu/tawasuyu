@@ -2,11 +2,11 @@
 //! lista de campos elementales y a los nombres de condición (nivel 88).
 //!
 //! Es la fuente única de verdad sobre «qué tipo de campo describe una
-//! PICTURE» — `charka-codegen` y `charka-shadow` la consumen en vez de
+//! PICTURE» — `chaka_app-codegen` y `chaka_app-shadow` la consumen en vez de
 //! reimplementar cada uno la clasificación.
 
-use charka_bcd::{Decimal, Picture};
-use charka_parser::DataItem;
+use chaka_bcd::{Decimal, Picture};
+use chaka_parser::DataItem;
 
 use crate::ast::Operand;
 
@@ -149,7 +149,7 @@ fn walk(items: &[DataItem], model: &mut DataModel) -> Vec<String> {
 }
 
 /// Clasifica una cláusula PICTURE: alfanumérica si tiene `X`/`A`,
-/// numérica si `charka-bcd` la parsea; una PICTURE de edición se trata
+/// numérica si `chaka_app-bcd` la parsea; una PICTURE de edición se trata
 /// como texto de presentación.
 fn classify(pic: Option<&str>) -> Option<(FieldKind, Option<String>)> {
     let up = pic?.to_uppercase();
@@ -269,11 +269,11 @@ fn condition_value(value: Option<&str>) -> Operand {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use charka_lexer::{lex, SourceFormat};
+    use chaka_lexer::{lex, SourceFormat};
 
     fn model_of(src: &str) -> DataModel {
         let toks = lex(src, SourceFormat::Free).unwrap();
-        let program = charka_parser::parse(&toks).unwrap();
+        let program = chaka_parser::parse(&toks).unwrap();
         resolve_data(&program.data)
     }
 

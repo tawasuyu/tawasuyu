@@ -13,16 +13,16 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use brahman_broker::{Broker, BrokerConfig};
-use brahman_card::{
+use chasqui_broker::{Broker, BrokerConfig};
+use card_core::{
     ulid::Ulid, Card, CardKind, Lifecycle, Payload, Priority, Supervision,
     CARD_SCHEMA_VERSION,
 };
-use brahman_handshake::identity::{Identity, DEFAULT_SESSION_TTL};
-use brahman_handshake::network::{connect_libp2p, connect_libp2p_with_cert, run_libp2p_accept_loop};
-use brahman_handshake::peer_policy::PeerPolicy;
-use brahman_handshake::server::{Server, ServerConfig};
-use brahman_net::{BrahmanNet, Keypair, Multiaddr, PeerId, Protocol};
+use card_handshake::identity::{Identity, DEFAULT_SESSION_TTL};
+use card_handshake::network::{connect_libp2p, connect_libp2p_with_cert, run_libp2p_accept_loop};
+use card_handshake::peer_policy::PeerPolicy;
+use card_handshake::server::{Server, ServerConfig};
+use card_net::{BrahmanNet, Keypair, Multiaddr, PeerId, Protocol};
 use tempfile::TempDir;
 use tokio::sync::Mutex;
 
@@ -335,7 +335,7 @@ async fn swarm_level_deny_blocks_before_noise() {
 
     let tmp = TempDir::new().unwrap();
     let unix_socket = tmp.path().join("brahman-init.sock");
-    let policy = brahman_handshake::peer_policy::PeerPolicy::from_sets(
+    let policy = card_handshake::peer_policy::PeerPolicy::from_sets(
         None,
         [banned_peer].into_iter().collect(),
     );

@@ -1,4 +1,4 @@
-use eternal_core::AstroError;
+use cosmos_core::AstroError;
 use thiserror::Error;
 
 #[cfg(feature = "serde")]
@@ -15,7 +15,7 @@ pub enum CoordError {
     #[error("Epoch conversion failed: {source}")]
     EpochError {
         #[from]
-        source: eternal_time::TimeError,
+        source: cosmos_time::TimeError,
     },
 
     #[error("Core astronomical calculation failed: {message}")]

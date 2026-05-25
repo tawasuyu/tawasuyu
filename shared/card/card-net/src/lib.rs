@@ -114,7 +114,7 @@ pub struct BrahmanNet {
     pub peer_id: PeerId,
     /// Keypair compartida (Arc para compartir con consumers que
     /// necesitan firmar mensajes con la misma identidad — p. ej.
-    /// `brahman_handshake::network::connect_libp2p` que firma el
+    /// `card_handshake::network::connect_libp2p` que firma el
     /// Hello). NO se expone públicamente; usar [`Self::keypair`].
     keypair: Arc<Keypair>,
     cmd_tx: mpsc::UnboundedSender<Command>,

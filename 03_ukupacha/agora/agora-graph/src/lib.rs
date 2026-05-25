@@ -1,4 +1,4 @@
-//! `agorapura-graph` — la red de confianza del ágora.
+//! `agora_app-graph` — la red de confianza del ágora.
 //!
 //! Acumula [`Attestation`]s **verificadas** (una atestación con firma
 //! rota nunca entra) y responde preguntas de corroboración: *¿quién
@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use agorapura_core::{AgoraError, Attestation, Identity, IdentityId};
+use agora_core::{AgoraError, Attestation, Identity, IdentityId};
 use serde::{Deserialize, Serialize};
 
 /// Evidencia acumulada a favor de un claim concreto.
@@ -192,7 +192,7 @@ impl TrustGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agorapura_core::{Attestation, Claim, IdentityKind, Keypair};
+    use agora_core::{Attestation, Claim, IdentityKind, Keypair};
 
     /// Mundo de prueba: Yumaira (persona) + tres atestadores.
     fn actors() -> (Keypair, Keypair, Keypair, Keypair) {

@@ -1,6 +1,6 @@
-use eternal_core::constants::{HALF_PI, RAD_TO_DEG};
-use eternal_core::utils::normalize_longitude;
-use eternal_core::Angle;
+use cosmos_core::constants::{HALF_PI, RAD_TO_DEG};
+use cosmos_core::utils::normalize_longitude;
+use cosmos_core::Angle;
 
 use crate::common::{asin_safe, native_coord_from_radians};
 use crate::coordinate::{CelestialCoord, IntermediateCoord, NativeCoord};
@@ -445,7 +445,7 @@ impl Projection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eternal_core::assert_ulp_lt;
+    use cosmos_core::assert_ulp_lt;
 
     #[test]
     fn test_native_to_eternal_at_pole() {

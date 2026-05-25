@@ -1,4 +1,4 @@
-use eternal_core::Vector3;
+use cosmos_core::Vector3;
 
 /// Trait for Cartesian coordinate frame transformations.
 /// Unlike `CoordinateFrame` which handles spherical sky positions,

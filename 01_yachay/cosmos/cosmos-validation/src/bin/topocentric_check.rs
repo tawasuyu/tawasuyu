@@ -12,15 +12,15 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use serde::Deserialize;
 
-use eternal_coords::Vector3;
-use eternal_time::julian::JulianDate;
-use eternal_time::scales::ToTTFromTDB;
-use eternal_time::TDB;
+use cosmos_coords::Vector3;
+use cosmos_time::julian::JulianDate;
+use cosmos_time::scales::ToTTFromTDB;
+use cosmos_time::TDB;
 
-use eternal_validation::fixture::{Corrections, Frame};
-use eternal_validation::oracle::{Backend, Oracle};
-use eternal_validation::sidereal::{ecliptic_lon_lat, tet_equatorial_to_ecliptic_of_date};
-use eternal_validation::topocentric::{apparent_topocentric_state, Observer};
+use cosmos_validation::fixture::{Corrections, Frame};
+use cosmos_validation::oracle::{Backend, Oracle};
+use cosmos_validation::sidereal::{ecliptic_lon_lat, tet_equatorial_to_ecliptic_of_date};
+use cosmos_validation::topocentric::{apparent_topocentric_state, Observer};
 
 const MOON: i32 = 301;
 const SUN: i32 = 10;
@@ -153,7 +153,7 @@ fn compare(oracle: &Oracle, chart: &Chart) -> Result<()> {
     Ok(())
 }
 
-fn ecl_lon_deg(pos_km: [f64; 3], tt: &eternal_time::TT) -> f64 {
+fn ecl_lon_deg(pos_km: [f64; 3], tt: &cosmos_time::TT) -> f64 {
     let v_tet = Vector3::new(pos_km[0], pos_km[1], pos_km[2]);
     let v_ecl = tet_equatorial_to_ecliptic_of_date(v_tet, tt);
     let (lon, _) = ecliptic_lon_lat(v_ecl);

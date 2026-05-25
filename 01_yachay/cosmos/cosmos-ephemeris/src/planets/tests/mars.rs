@@ -1,7 +1,7 @@
 use crate::planets::Vsop2013Mars;
-use eternal_core::constants::{AU_KM, J2000_JD};
-use eternal_time::julian::JulianDate;
-use eternal_time::TDB;
+use cosmos_core::constants::{AU_KM, J2000_JD};
+use cosmos_time::julian::JulianDate;
+use cosmos_time::TDB;
 
 const MARS_VSOP2013_REF: &[(f64, f64, f64, f64)] = &[
     (2411545.0, -0.1474461434, -1.3278375334, -0.6049474049),
@@ -65,7 +65,7 @@ fn vsop2013_j2000() {
 #[test]
 fn geocentric_distance_range() {
     let mars = Vsop2013Mars;
-    let start_jd = eternal_core::constants::J2000_JD;
+    let start_jd = cosmos_core::constants::J2000_JD;
 
     let (min_dist, max_dist) = (0..12 * 15).fold((f64::MAX, 0.0f64), |(min, max), i| {
         let jd = start_jd + (i * 30) as f64;

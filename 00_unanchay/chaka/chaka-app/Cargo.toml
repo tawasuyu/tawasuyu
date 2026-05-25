@@ -1,22 +1,22 @@
 [package]
-name = "charka"
+name = "chaka-app"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "charka — CLI del transpilador COBOL→Rust: transpila, ejecuta y valida programas COBOL."
+description = "chaka-app — CLI del transpilador COBOL→Rust: transpila, ejecuta y valida programas COBOL."
 
 [[bin]]
-name = "charka"
+name = "chaka-app"
 path = "src/main.rs"
 
 [dependencies]
-charka-lexer = { path = "../chaka-lexer" }
-charka-parser = { path = "../chaka-parser" }
-charka-ir = { path = "../chaka-ir" }
-charka-codegen = { path = "../chaka-codegen" }
-charka-shadow = { path = "../chaka-shadow" }
+chaka-lexer = { path = "../chaka-lexer" }
+chaka-parser = { path = "../chaka-parser" }
+chaka-ir = { path = "../chaka-ir" }
+chaka-codegen = { path = "../chaka-codegen" }
+chaka-shadow = { path = "../chaka-shadow" }
 clap = { workspace = true }
 anyhow = { workspace = true }

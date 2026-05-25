@@ -1,7 +1,7 @@
 use crate::planets::Vsop2013Venus;
-use eternal_core::constants::{AU_KM, J2000_JD};
-use eternal_time::julian::JulianDate;
-use eternal_time::TDB;
+use cosmos_core::constants::{AU_KM, J2000_JD};
+use cosmos_time::julian::JulianDate;
+use cosmos_time::TDB;
 
 const VENUS_VSOP2013_REF: &[(f64, f64, f64, f64)] = &[
     (2411545.0, -0.7178452043, 0.0139241146, 0.0517532468),
@@ -15,7 +15,7 @@ const VENUS_VSOP2013_REF: &[(f64, f64, f64, f64)] = &[
     (2443545.0, 0.5935137101, -0.3693448084, -0.2037088644),
     (2447545.0, -0.1985961433, -0.6413855038, -0.2759551516),
     (
-        eternal_core::constants::J2000_JD,
+        cosmos_core::constants::J2000_JD,
         -0.7183022964,
         -0.0462742464,
         0.0246406381,
@@ -70,7 +70,7 @@ fn vsop2013_j2000() {
 #[test]
 fn geocentric_distance_range() {
     let venus = Vsop2013Venus;
-    let start_jd = eternal_core::constants::J2000_JD;
+    let start_jd = cosmos_core::constants::J2000_JD;
 
     let (min_dist, max_dist) = (0..12 * 8).fold((f64::MAX, 0.0f64), |(min, max), i| {
         let jd = start_jd + (i * 30) as f64;

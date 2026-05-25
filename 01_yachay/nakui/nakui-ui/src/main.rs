@@ -7,7 +7,7 @@
 //! - **Backend** [`backend::NakuiBackend`] — implementa el trait
 //!   wireado al stack nakui-core (event log + MemoryStore + Rhai
 //!   executors).
-//! - **Loader** [`load_ui_modules`] — usa `brahman_cards` para leer
+//! - **Loader** [`load_ui_modules`] — usa `cards` para leer
 //!   `card.{ncl,json}` / `module.{ncl,json}` desde
 //!   `NAKUI_MODULES_DIR`, filtra a UiModule body, valida.
 //!
@@ -29,7 +29,7 @@ use gpui::{
     WindowOptions,
 };
 
-use brahman_cards::CardBody;
+use cards::CardBody;
 use nahual_meta_schema::Module;
 use nahual_theme::Theme;
 use nahual_widget_meta_form::MetaApp;
@@ -43,7 +43,7 @@ fn main() {
         // crear el window evita que panicee.
         Theme::install_default(cx);
 
-        // 1. Cargar módulos (Cards UiModule via brahman_cards).
+        // 1. Cargar módulos (Cards UiModule via cards).
         let modules_dir = std::env::var("NAKUI_MODULES_DIR")
             .ok()
             .map(PathBuf::from)
@@ -138,7 +138,7 @@ fn main() {
 }
 
 /// Carga UiModules desde un directorio via el brazo unificado
-/// `brahman_cards::load_cards_from_dir`. Aplica las reglas
+/// `cards::load_cards_from_dir`. Aplica las reglas
 /// específicas de la UI:
 ///  - Sólo `CardBody::UiModule` cuenta; otros body kinds
 ///    (Ente, Monad, ...) se reportan en el `skipped` para que el
@@ -149,7 +149,7 @@ fn main() {
 ///
 /// Devuelve `(modules, skipped_ids)` ordenados por id.
 fn load_ui_modules(dir: &std::path::Path) -> Result<(Vec<Module>, Vec<String>), String> {
-    let cards = brahman_cards::load_cards_from_dir(dir).map_err(|e| e.to_string())?;
+    let cards = cards::load_cards_from_dir(dir).map_err(|e| e.to_string())?;
     let mut modules: Vec<Module> = Vec::new();
     let mut skipped: Vec<String> = Vec::new();
     for c in cards {
@@ -530,7 +530,7 @@ mod tests {
     }
 
     /// Carga el módulo crm por el mismo camino que usa `nakui-ui`
-    /// (`load_ui_modules` → `brahman_cards::load_cards_from_dir`). Se
+    /// (`load_ui_modules` → `cards::load_cards_from_dir`). Se
     /// aísla en un tempdir para no acoplar el test a los otros módulos
     /// de ejemplo.
     #[test]

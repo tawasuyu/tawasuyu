@@ -4,7 +4,7 @@
 //! 1. Cada reader matchea sólo el shape correcto.
 //! 2. El dispatcher (`load_card`/`dispatch`) elige el reader
 //!    correcto sin ambigüedad.
-//! 3. Round-trip: cada formato JSON cargado produce el variant
+//! 3. Round-trip: cada format JSON cargado produce el variant
 //!    esperado del Card canónico con los campos del wrapper bien
 //!    derivados.
 //! 4. Rechazo gracioso de inputs no-matched + extensiones no
@@ -12,7 +12,7 @@
 
 use std::collections::BTreeMap;
 
-use brahman_cards::{
+use cards::{
     default_readers, load_card_with, Card, CardBody, CardLoadError, CardReader, EnteJsonReader,
     MonadJsonReader, UiModuleJsonReader,
 };
@@ -311,7 +311,7 @@ fn load_cards_from_dir_walks_subdirs_and_finds_module_json() {
     std::fs::create_dir(&c).unwrap();
     std::fs::write(c.join("readme.txt"), b"sin card aca").unwrap();
 
-    let cards = brahman_cards::load_cards_from_dir(&root).expect("ok");
+    let cards = cards::load_cards_from_dir(&root).expect("ok");
     let ids: Vec<&str> = cards.iter().map(|c| c.id.as_str()).collect();
     assert_eq!(
         ids,
@@ -347,7 +347,7 @@ fn load_cards_from_dir_prefers_ncl_over_json_when_both_present() {
     )
     .unwrap();
 
-    let cards = brahman_cards::load_cards_from_dir(&root).expect("ok");
+    let cards = cards::load_cards_from_dir(&root).expect("ok");
     assert_eq!(cards.len(), 1);
     assert_eq!(cards[0].id, "from_ncl", "card.ncl tiene prioridad");
 
@@ -361,7 +361,7 @@ fn load_cards_from_dir_propagates_per_file_errors_loud() {
     std::fs::create_dir(&sub).unwrap();
     std::fs::write(sub.join("card.json"), b"{ this is not valid json").unwrap();
 
-    let err = brahman_cards::load_cards_from_dir(&root).unwrap_err();
+    let err = cards::load_cards_from_dir(&root).unwrap_err();
     assert!(
         matches!(err, CardLoadError::JsonParse(_)),
         "el error de un file roto debe propagar fail-loud, got {err:?}"
@@ -388,14 +388,14 @@ fn load_cards_from_dir_with_custom_filenames() {
     .unwrap();
 
     // Default no encuentra nada (skipea):
-    let with_default = brahman_cards::load_cards_from_dir(&root).unwrap();
+    let with_default = cards::load_cards_from_dir(&root).unwrap();
     assert_eq!(with_default.len(), 0, "default filenames no incluye manifest.json");
 
     // Custom filename encuentra:
-    let with_custom = brahman_cards::load_cards_from_dir_with(
+    let with_custom = cards::load_cards_from_dir_with(
         &root,
         &["manifest.json"],
-        &brahman_cards::default_readers(),
+        &cards::default_readers(),
     )
     .unwrap();
     assert_eq!(with_custom.len(), 1);

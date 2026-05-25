@@ -1,8 +1,8 @@
 use crate::{CoordError, CoordResult};
-use eternal_core::constants::{
+use cosmos_core::constants::{
     ARCSEC_TO_RAD, DAYS_PER_JULIAN_CENTURY, J2000_JD, MILLIARCSEC_TO_RAD, MJD_ZERO_POINT,
 };
-use eternal_time::{transforms::earth_rotation_angle, JulianDate};
+use cosmos_time::{transforms::earth_rotation_angle, JulianDate};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -250,7 +250,7 @@ impl EopParameters {
     pub fn compute_era(&self) -> CoordResult<f64> {
         let ut1_jd = self.mjd
             + MJD_ZERO_POINT
-            + self.ut1_utc / eternal_core::constants::SECONDS_PER_DAY_F64;
+            + self.ut1_utc / cosmos_core::constants::SECONDS_PER_DAY_F64;
 
         let ut1_jd1 = libm::floor(ut1_jd);
         let ut1_jd2 = ut1_jd - ut1_jd1;

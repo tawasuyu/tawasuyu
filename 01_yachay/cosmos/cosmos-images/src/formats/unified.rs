@@ -6,7 +6,7 @@ use crate::fits::data::array::DataArray;
 use crate::fits::header::Keyword;
 use crate::fits::io::writer::FitsWriter;
 use crate::xisf::writer::{XisfDataType, XisfWriter};
-use eternal_wcs::{Wcs, WcsKeyword, WcsKeywordValue};
+use cosmos_wcs::{Wcs, WcsKeyword, WcsKeywordValue};
 use std::io::{Read, Seek};
 use std::path::Path;
 
@@ -1740,7 +1740,7 @@ mod tests {
 
     #[test]
     fn astro_image_with_wcs() {
-        use eternal_wcs::{Projection, WcsBuilder};
+        use cosmos_wcs::{Projection, WcsBuilder};
         use tempfile::NamedTempFile;
 
         let temp_file = NamedTempFile::with_suffix(".fits").unwrap();

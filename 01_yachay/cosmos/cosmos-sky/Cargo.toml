@@ -1,5 +1,5 @@
 [package]
-name = "eternal-sky"
+name = "cosmos-sky"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -7,17 +7,17 @@ license.workspace = true
 repository.workspace = true
 description = "Ergonomic public façade over eternal-* astronomy crates: civil time → planetary positions → apparent topocentric sky."
 # Kept unpublishable for now because it transitively depends on
-# eternal-validation (publish = false). The plan is to migrate the core
+# cosmos-validation (publish = false). The plan is to migrate the core
 # engine modules (oracle, topocentric, sidereal, delta_t) here when
 # preparing the v1.0 release and then flip this back on.
 publish = false
 
 [dependencies]
-eternal-core.workspace = true
-eternal-time.workspace = true
-eternal-coords.workspace = true
-eternal-ephemeris.workspace = true
-eternal-validation = { path = "../cosmos-validation" }
+cosmos-core.workspace = true
+cosmos-time.workspace = true
+cosmos-coords.workspace = true
+cosmos-ephemeris.workspace = true
+cosmos-validation = { path = "../cosmos-validation" }
 libm.workspace = true
 thiserror.workspace = true
 

@@ -1,10 +1,10 @@
 //! El estado de los datos durante la ejecución sombra: el modelo de
-//! datos resuelto de `charka-ir` se materializa en campos vivos.
+//! datos resuelto de `chaka_app-ir` se materializa en campos vivos.
 
 use std::collections::HashMap;
 
-use charka_ir::{DataModel, FieldKind};
-use charka_runtime::{Num, Picture, Text};
+use chaka_ir::{DataModel, FieldKind};
+use chaka_runtime::{Num, Picture, Text};
 
 /// Un campo vivo. Todo campo es un vector: un dato escalar es un
 /// vector de un elemento; una tabla (`OCCURS n`) es de `n` elementos.

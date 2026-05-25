@@ -37,7 +37,7 @@
 //! # Example
 //!
 //! ```
-//! use eternal_core::angle::{wrap_0_2pi, wrap_pm_pi, clamp_dec};
+//! use cosmos_core::angle::{wrap_0_2pi, wrap_pm_pi, clamp_dec};
 //! use std::f64::consts::PI;
 //!
 //! // Right ascension: always positive
@@ -104,7 +104,7 @@ pub enum NormalizeMode {
 /// # Examples
 ///
 /// ```
-/// use eternal_core::angle::wrap_pm_pi;
+/// use cosmos_core::angle::wrap_pm_pi;
 /// use std::f64::consts::PI;
 ///
 /// // 270 degrees -> -90 degrees
@@ -157,7 +157,7 @@ pub fn wrap_pm_pi(x: f64) -> f64 {
 /// # Examples
 ///
 /// ```
-/// use eternal_core::angle::wrap_0_2pi;
+/// use cosmos_core::angle::wrap_0_2pi;
 /// use std::f64::consts::PI;
 ///
 /// // Negative angle -> positive equivalent
@@ -219,7 +219,7 @@ pub fn wrap_0_2pi(x: f64) -> f64 {
 /// # Examples
 ///
 /// ```
-/// use eternal_core::angle::clamp_dec;
+/// use cosmos_core::angle::clamp_dec;
 /// use std::f64::consts::FRAC_PI_2;
 ///
 /// // Within range: unchanged

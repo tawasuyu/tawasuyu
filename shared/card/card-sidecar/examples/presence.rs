@@ -12,11 +12,11 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use brahman_card::{
+use card_core::{
     ulid::Ulid, Card, Flow, Flows, Lifecycle, Payload, Priority, Supervision, TypeRef,
     CARD_SCHEMA_VERSION,
 };
-use brahman_sidecar::{spawn_with_handle, SidecarConfig};
+use card_sidecar::{spawn_with_handle, SidecarConfig};
 
 fn main() {
     tracing_subscriber::fmt()

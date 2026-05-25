@@ -1,5 +1,5 @@
 [package]
-name = "eternal-pointing"
+name = "cosmos-pointing"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -10,9 +10,9 @@ keywords = ["astronomy", "telescope", "pointing", "tpoint", "astrometry"]
 categories = ["science"]
 
 [dependencies]
-eternal-core.workspace = true
-eternal-coords.workspace = true
-eternal-time.workspace = true
+cosmos-core.workspace = true
+cosmos-coords.workspace = true
+cosmos-time.workspace = true
 libm.workspace = true
 thiserror.workspace = true
 regex.workspace = true

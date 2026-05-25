@@ -57,7 +57,7 @@ use smithay::utils::{
     DeviceFd, IsAlive, Logical, Physical, Point, Rectangle, Scale, Size, Transform, SERIAL_COUNTER,
 };
 
-use brahman_auth::SessionTicket;
+use auth_core::SessionTicket;
 use mirada_brain::{BodyEvent, CtlReply, Keymap, Rect};
 
 use crate::{

@@ -16,11 +16,11 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use brahman_card::{
+use card_core::{
     ulid::Ulid, Card, Flow, Flows, Lifecycle, Payload, Priority, Supervision, TypeRef,
     CARD_SCHEMA_VERSION,
 };
-use brahman_sidecar::{spawn_with_handle, SidecarConfig};
+use card_sidecar::{spawn_with_handle, SidecarConfig};
 
 fn main() {
     tracing_subscriber::fmt()
@@ -37,7 +37,7 @@ fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("shared_wit/protocol.wit"));
 
-    let wit = match brahman_card_wit::parse_wit_file(&wit_path) {
+    let wit = match card_wit::parse_wit_file(&wit_path) {
         Ok(worlds) => match worlds.into_iter().next() {
             Some(w) => {
                 eprintln!(

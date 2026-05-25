@@ -1,4 +1,4 @@
-use eternal_core::constants::{DEG_TO_RAD, HALF_PI, RAD_TO_DEG};
+use cosmos_core::constants::{DEG_TO_RAD, HALF_PI, RAD_TO_DEG};
 
 use crate::common::native_coord_from_radians;
 use crate::coordinate::{IntermediateCoord, NativeCoord};
@@ -452,8 +452,8 @@ fn qsc_inverse_omega(u: f64, v: f64) -> f64 {
 mod tests {
     use super::*;
     use crate::Projection;
-    use eternal_core::assert_ulp_lt;
-    use eternal_core::Angle;
+    use cosmos_core::assert_ulp_lt;
+    use cosmos_core::Angle;
 
     #[test]
     fn test_tsc_reference_point() {

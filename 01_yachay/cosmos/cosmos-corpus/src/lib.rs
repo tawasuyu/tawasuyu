@@ -1,8 +1,8 @@
-//! `cosmobiologia-corpus` — la biblioteca de interpretación, indexada.
+//! `cosmos_app-corpus` — la biblioteca de interpretación, indexada.
 //!
 //! El corpus **no calcula nada** y **no es un set de reglas
 //! matemáticas**. Las reglas —qué planeta en qué signo, qué aspecto—
-//! las computa el motor astronómico (`cosmobiologia-engine`). El corpus
+//! las computa el motor astronómico (`cosmos_app-engine`). El corpus
 //! es la **evidencia textual**: fragmentos de los libros —y de la
 //! escritura del propio astrólogo— recortados y etiquetados con la
 //! combinación exacta que describen. En runtime, las combinaciones de
@@ -355,7 +355,7 @@ pub struct Corpus {
 }
 
 impl Corpus {
-    /// Carga un corpus desde su forma RON (el formato de los archivos
+    /// Carga un corpus desde su forma RON (el format de los archivos
     /// que el astrólogo escribe a mano).
     pub fn desde_ron(texto: &str) -> Result<Corpus, String> {
         ron::from_str(texto).map_err(|e| format!("corpus :: RON inválido: {e}"))

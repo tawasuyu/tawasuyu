@@ -9,8 +9,8 @@
 //! a lunar eclipse), and exposes a helper that filters eclipses by
 //! proximity to any natal significator.
 
-use eternal_sky::{Body, EphemerisSession, Instant};
-use eternal_validation::eclipses as ev_eclipses;
+use cosmos_sky::{Body, EphemerisSession, Instant};
+use cosmos_validation::eclipses as ev_eclipses;
 
 use crate::angles::unsigned_arc_deg;
 use crate::chart::NatalChart;
@@ -103,7 +103,7 @@ fn next_eclipse(
         )
         .map(|opt| opt.map(EclipseHit::Lunar)),
     }
-    .map_err(|e| AstrologyError::Sky(eternal_sky::SkyError::Ephemeris(e)))?;
+    .map_err(|e| AstrologyError::Sky(cosmos_sky::SkyError::Ephemeris(e)))?;
 
     let Some(hit) = found else {
         return Ok(None);
@@ -217,7 +217,7 @@ pub fn eclipses_on_natal(
 
 fn require_spk(
     session: &EphemerisSession,
-) -> AstrologyResult<&eternal_ephemeris::jpl::SpkFile> {
+) -> AstrologyResult<&cosmos_ephemeris::jpl::SpkFile> {
     session.require_spk().map_err(AstrologyError::Sky)
 }
 

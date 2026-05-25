@@ -16,6 +16,6 @@ path = "src/main.rs"
 mirada-brain = { path = "../mirada-brain" }
 mirada-body = { path = "../mirada-body" }
 mirada-link = { path = "../mirada-link" }
-brahman-auth = { path = "../../../shared/auth/auth-core" }
+auth-core = { path = "../../../shared/auth/auth-core" }
 nix = { workspace = true }
 smithay = "0.7"

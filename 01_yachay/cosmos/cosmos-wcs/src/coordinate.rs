@@ -1,5 +1,5 @@
-use eternal_core::constants::DEG_TO_RAD;
-use eternal_core::Angle;
+use cosmos_core::constants::DEG_TO_RAD;
+use cosmos_core::Angle;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PixelCoord {

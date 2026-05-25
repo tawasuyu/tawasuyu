@@ -1,17 +1,17 @@
 //! El intérprete del IR: la ejecución «sombra» del programa COBOL.
 //!
-//! Ejecuta el [`Ir`] directamente sobre los tipos de `charka-runtime`,
+//! Ejecuta el [`Ir`] directamente sobre los tipos de `chaka_app-runtime`,
 //! sin compilar nada. Es una segunda ruta de ejecución, independiente
-//! del código que emite `charka-codegen` — eso es lo que lo hace un
+//! del código que emite `chaka_app-codegen` — eso es lo que lo hace un
 //! validador: si el intérprete y el transpilado divergen, hay un bug.
 
 use std::collections::HashMap;
 
-use charka_ir::{
+use chaka_ir::{
     BinOp, CmpOp, Cond, ConditionName, Expr, Figurative, FileMode, InspectOp, Ir, Operand, Perform,
     PerformControl, PerformTarget, Stmt, WhenTest,
 };
-use charka_runtime::{cobol_text_cmp, format_edited, CobFile, Decimal, Num, Rounding, Text};
+use chaka_runtime::{cobol_text_cmp, format_edited, CobFile, Decimal, Num, Rounding, Text};
 
 use crate::field::{build_fields, Cell};
 

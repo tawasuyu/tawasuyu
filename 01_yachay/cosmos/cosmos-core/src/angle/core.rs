@@ -18,7 +18,7 @@
 //! # Quick Start
 //!
 //! ```
-//! use eternal_core::Angle;
+//! use cosmos_core::Angle;
 //!
 //! // Construction - pick the unit that matches your data
 //! let from_deg = Angle::from_degrees(45.0);
@@ -39,7 +39,7 @@
 //! Astronomy uses hours (0-24h) for right ascension. One hour equals 15 degrees:
 //!
 //! ```
-//! use eternal_core::Angle;
+//! use cosmos_core::Angle;
 //!
 //! let ra = Angle::from_hours(6.0);  // 6h RA
 //! assert!((ra.degrees() - 90.0).abs() < 1e-10);
@@ -50,7 +50,7 @@
 //! Angles can be validated for specific astronomical contexts:
 //!
 //! ```
-//! use eternal_core::Angle;
+//! use cosmos_core::Angle;
 //!
 //! let dec = Angle::from_degrees(45.0);
 //! assert!(dec.validate_declination(false).is_ok());  // -90 to +90
@@ -69,7 +69,7 @@
 //! For terser code, use the free functions [`deg`], [`rad`], [`hours`], [`arcsec`], [`arcmin`]:
 //!
 //! ```
-//! use eternal_core::angle::{deg, hours, arcsec};
+//! use cosmos_core::angle::{deg, hours, arcsec};
 //!
 //! let a = deg(45.0);
 //! let b = hours(3.0);
@@ -83,7 +83,7 @@
 //! Angles support addition, subtraction, negation, and scalar multiplication/division:
 //!
 //! ```
-//! use eternal_core::Angle;
+//! use cosmos_core::Angle;
 //!
 //! let a = Angle::from_degrees(30.0);
 //! let b = Angle::from_degrees(15.0);
@@ -138,7 +138,7 @@ impl Angle {
     /// # Example
     ///
     /// ```
-    /// use eternal_core::Angle;
+    /// use cosmos_core::Angle;
     /// use std::f64::consts::FRAC_PI_4;
     ///
     /// let angle = Angle::from_radians(FRAC_PI_4);
@@ -154,10 +154,10 @@ impl Angle {
     /// # Example
     ///
     /// ```
-    /// use eternal_core::Angle;
+    /// use cosmos_core::Angle;
     ///
     /// let angle = Angle::from_degrees(180.0);
-    /// assert!((angle.radians() - eternal_core::constants::PI).abs() < 1e-10);
+    /// assert!((angle.radians() - cosmos_core::constants::PI).abs() < 1e-10);
     /// ```
     #[inline]
     pub fn from_degrees(deg: f64) -> Self {
@@ -174,7 +174,7 @@ impl Angle {
     /// # Example
     ///
     /// ```
-    /// use eternal_core::Angle;
+    /// use cosmos_core::Angle;
     ///
     /// let ra = Angle::from_hours(6.0);  // 6h = 90 degrees
     /// assert!((ra.degrees() - 90.0).abs() < 1e-10);
@@ -199,7 +199,7 @@ impl Angle {
     /// # Example
     ///
     /// ```
-    /// use eternal_core::Angle;
+    /// use cosmos_core::Angle;
     ///
     /// let angle = Angle::from_arcseconds(3600.0);  // 1 degree
     /// assert!((angle.degrees() - 1.0).abs() < 1e-10);
@@ -223,7 +223,7 @@ impl Angle {
     /// # Example
     ///
     /// ```
-    /// use eternal_core::Angle;
+    /// use cosmos_core::Angle;
     ///
     /// let angle = Angle::from_arcminutes(60.0);  // 1 degree
     /// assert!((angle.degrees() - 1.0).abs() < 1e-10);
@@ -295,7 +295,7 @@ impl Angle {
     /// # Example
     ///
     /// ```
-    /// use eternal_core::Angle;
+    /// use cosmos_core::Angle;
     ///
     /// let angle = Angle::from_degrees(30.0);
     /// let (sin, cos) = angle.sin_cos();
@@ -318,7 +318,7 @@ impl Angle {
     /// # Example
     ///
     /// ```
-    /// use eternal_core::Angle;
+    /// use cosmos_core::Angle;
     ///
     /// let negative = Angle::from_degrees(-45.0);
     /// let absolute = negative.abs();
@@ -339,7 +339,7 @@ impl Angle {
     /// # Example
     ///
     /// ```
-    /// use eternal_core::Angle;
+    /// use cosmos_core::Angle;
     ///
     /// let angle = Angle::from_degrees(270.0);
     /// let wrapped = angle.wrapped();
@@ -364,7 +364,7 @@ impl Angle {
     /// # Example
     ///
     /// ```
-    /// use eternal_core::Angle;
+    /// use cosmos_core::Angle;
     ///
     /// let angle = Angle::from_degrees(-90.0);
     /// let normalized = angle.normalized();
@@ -444,7 +444,7 @@ impl Angle {
 /// # Example
 ///
 /// ```
-/// use eternal_core::angle::rad;
+/// use cosmos_core::angle::rad;
 /// use std::f64::consts::PI;
 ///
 /// let angle = rad(PI);
@@ -460,7 +460,7 @@ pub fn rad(v: f64) -> Angle {
 /// # Example
 ///
 /// ```
-/// use eternal_core::angle::deg;
+/// use cosmos_core::angle::deg;
 ///
 /// let angle = deg(45.0);
 /// assert!((angle.radians() - std::f64::consts::FRAC_PI_4).abs() < 1e-10);
@@ -475,7 +475,7 @@ pub fn deg(v: f64) -> Angle {
 /// # Example
 ///
 /// ```
-/// use eternal_core::angle::hours;
+/// use cosmos_core::angle::hours;
 ///
 /// let ra = hours(6.0);  // 6h = 90 degrees
 /// assert!((ra.degrees() - 90.0).abs() < 1e-10);
@@ -490,7 +490,7 @@ pub fn hours(v: f64) -> Angle {
 /// # Example
 ///
 /// ```
-/// use eternal_core::angle::arcsec;
+/// use cosmos_core::angle::arcsec;
 ///
 /// let angle = arcsec(3600.0);  // 1 degree
 /// assert!((angle.degrees() - 1.0).abs() < 1e-10);
@@ -505,7 +505,7 @@ pub fn arcsec(v: f64) -> Angle {
 /// # Example
 ///
 /// ```
-/// use eternal_core::angle::arcmin;
+/// use cosmos_core::angle::arcmin;
 ///
 /// let angle = arcmin(60.0);  // 1 degree
 /// assert!((angle.degrees() - 1.0).abs() < 1e-10);
