@@ -26,8 +26,9 @@ use llimphi_ui::llimphi_layout::taffy::{
     AlignItems, JustifyContent, Rect,
 };
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, Handle, View};
+use llimphi_ui::{App, DragPhase, Handle, View};
 use llimphi_widget_button::{button_view, ButtonPalette};
+use llimphi_widget_slider::{slider_view, SliderPalette};
 
 /// Lado de la grilla cuadrada del mundo.
 const GRID: usize = 40;
@@ -115,6 +116,19 @@ struct Model {
     tick: u64,
     epoch: u64,
     rng_seed: u64,
+    /// Índice del Concepto seleccionado, si alguno. `None` cuando no hay
+    /// selección. Si se "Limpia" la lista se resetea a `None`.
+    selected: Option<usize>,
+}
+
+/// Una de las cuatro capas modificables de un `Concepto` (degradacion
+/// queda fuera — es cicatriz emergente, no editable).
+#[derive(Clone, Copy, Debug)]
+enum Layer {
+    Materia,
+    Psique,
+    Poder,
+    Oro,
 }
 
 struct Stats {
@@ -143,6 +157,11 @@ enum Msg {
     Reseed,
     LimpiarConceptos,
     SembrarConceptos,
+    SelectConcepto(usize),
+    DeselectConcepto,
+    EditMod(Layer, f32),
+    EditRadius(f32),
+    DeleteSelected,
 }
 
 struct Dominium;
@@ -183,6 +202,7 @@ impl App for Dominium {
             tick: 0,
             epoch: 0,
             rng_seed,
+            selected: None,
         }
     }
 
@@ -207,9 +227,47 @@ impl App for Dominium {
                 for lock in m.world.lemmings.hack_lock.iter_mut() {
                     *lock = 0;
                 }
+                m.selected = None;
             }
             Msg::SembrarConceptos => {
                 m.world.conceptos = default_conceptos();
+                m.selected = None;
+            }
+            Msg::SelectConcepto(i) => {
+                if i < m.world.conceptos.len() {
+                    m.selected = Some(i);
+                }
+            }
+            Msg::DeselectConcepto => m.selected = None,
+            Msg::EditMod(layer, dv) => {
+                if let Some(i) = m.selected {
+                    if let Some(c) = m.world.conceptos.items.get_mut(i) {
+                        let slot = match layer {
+                            Layer::Materia => &mut c.mods.materia,
+                            Layer::Psique => &mut c.mods.psique,
+                            Layer::Poder => &mut c.mods.poder,
+                            Layer::Oro => &mut c.mods.oro,
+                        };
+                        *slot = (*slot + dv).clamp(-1.0, 1.0);
+                    }
+                }
+            }
+            Msg::EditRadius(dv) => {
+                if let Some(i) = m.selected {
+                    if let Some(c) = m.world.conceptos.items.get_mut(i) {
+                        c.radius = (c.radius + dv).clamp(0.5, 20.0);
+                    }
+                }
+            }
+            Msg::DeleteSelected => {
+                if let Some(i) = m.selected.take() {
+                    if i < m.world.conceptos.len() {
+                        m.world.conceptos.remove(i);
+                        for lock in m.world.lemmings.hack_lock.iter_mut() {
+                            *lock = 0;
+                        }
+                    }
+                }
             }
         }
         m
@@ -356,6 +414,11 @@ fn canvas_pane(plan: dominium_render_plan::RenderPlan) -> View<Msg> {
 
 fn side_panel(model: &Model, stats: &Stats, theme: &Theme) -> View<Msg> {
     let btn_palette = ButtonPalette::from_theme(theme);
+    let mut slider_palette = SliderPalette::from_theme(theme);
+    // Comprimimos los slots para que entren en el sidebar de 240 px.
+    slider_palette.label_width = 56.0;
+    slider_palette.track_width = 90.0;
+    slider_palette.value_width = 44.0;
 
     let header = label_view("[ SIM ]", 11.0, theme.fg_muted);
 
@@ -393,11 +456,38 @@ fn side_panel(model: &Model, stats: &Stats, theme: &Theme) -> View<Msg> {
         conceptos_header,
         conceptos_count,
     ];
-    for c in &model.world.conceptos.items {
-        children.push(label_view(&format!("·  {}", c.id), 11.0, theme.fg_text));
+    for (i, c) in model.world.conceptos.items.iter().enumerate() {
+        children.push(concepto_row(i, &c.id, model.selected == Some(i), theme));
     }
     children.push(sized_button("✚  Sembrar pack", &btn_palette, Msg::SembrarConceptos));
     children.push(sized_button("✖  Limpiar", &btn_palette, Msg::LimpiarConceptos));
+
+    // Editor del concepto seleccionado: sliders en vivo sobre radius + 4 mods.
+    if let Some(i) = model.selected {
+        if let Some(c) = model.world.conceptos.items.get(i) {
+            children.push(separator());
+            children.push(label_view("[ EDITAR ]", 11.0, theme.fg_muted));
+            children.push(label_view(&format!("• {}", c.id), 12.0, theme.fg_text));
+            children.push(slider_view(
+                "radius",
+                c.radius,
+                0.5,
+                20.0,
+                &slider_palette,
+                |phase, dv| match phase {
+                    DragPhase::Move => Some(Msg::EditRadius(dv)),
+                    DragPhase::End => None,
+                },
+            ));
+            children.push(mod_slider("materia", c.mods.materia, Layer::Materia, &slider_palette));
+            children.push(mod_slider("psique", c.mods.psique, Layer::Psique, &slider_palette));
+            children.push(mod_slider("poder", c.mods.poder, Layer::Poder, &slider_palette));
+            children.push(mod_slider("oro", c.mods.oro, Layer::Oro, &slider_palette));
+            children.push(sized_button("🗑  Borrar", &btn_palette, Msg::DeleteSelected));
+            children.push(sized_button("◌  Deseleccionar", &btn_palette, Msg::DeselectConcepto));
+        }
+    }
+
     children.push(separator());
     children.push(label_view(&format!("grilla {GRID}×{GRID}"), 11.0, theme.fg_muted));
     children.push(label_view("relieve = materia (Z)", 11.0, theme.fg_muted));
@@ -473,4 +563,50 @@ fn sized_button(label: &str, palette: &ButtonPalette, msg: Msg) -> View<Msg> {
         height: length(30.0_f32),
     };
     btn
+}
+
+/// Fila clicable con el nombre de un Concepto. La fila seleccionada
+/// queda resaltada con `bg_selected`; las demás reaccionan al hover.
+fn concepto_row(i: usize, id: &str, selected: bool, theme: &Theme) -> View<Msg> {
+    let bg = if selected { theme.bg_selected } else { theme.bg_panel };
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(20.0_f32),
+        },
+        padding: Rect {
+            left: length(8.0_f32),
+            right: length(6.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(bg)
+    .hover_fill(theme.bg_row_hover)
+    .radius(3.0)
+    .text_aligned(
+        format!("·  {id}"),
+        12.0,
+        if selected { theme.accent } else { theme.fg_text },
+        Alignment::Start,
+    )
+    .on_click(Msg::SelectConcepto(i))
+}
+
+/// Slider para una capa de `LayerMods`. Rango fijo `[-1, 1]` — encaja con
+/// el patrón típico (emisión positiva, drenaje negativo).
+fn mod_slider(label: &str, value: f32, layer: Layer, palette: &SliderPalette) -> View<Msg> {
+    slider_view(
+        label,
+        value,
+        -1.0,
+        1.0,
+        palette,
+        move |phase, dv| match phase {
+            DragPhase::Move => Some(Msg::EditMod(layer, dv)),
+            DragPhase::End => None,
+        },
+    )
 }
