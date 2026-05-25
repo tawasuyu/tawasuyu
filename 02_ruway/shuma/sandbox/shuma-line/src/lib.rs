@@ -20,6 +20,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod ansi;
 pub mod complete;
 pub mod continuation;
 pub mod dialect;
@@ -29,6 +30,7 @@ pub mod lexer;
 pub mod pipeline;
 pub mod token;
 
+pub use ansi::{parse_ansi_line, strip_ansi, AnsiColor, AnsiSpan, AnsiStyle};
 pub use complete::{
     complete, flag_hints, Completion, CompletionKind, CompletionSource, StaticSource,
 };

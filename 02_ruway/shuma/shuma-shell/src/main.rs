@@ -2122,6 +2122,49 @@ fn pretty_cwd(cwd: &str) -> String {
     }
 }
 
+/// Mapea un [`shuma_line::AnsiColor`] a un `Hsla` del frontend. La
+/// paleta es la "VS Code Dark+" — buena legibilidad sobre fondos
+/// oscuros (panel del shell). `None` con `bold=true` levanta apenas el
+/// fallback para que el `bold` siga siendo distinguible.
+fn ansi_color_to_hsla(
+    color: Option<shuma_line::AnsiColor>,
+    bold: bool,
+    fallback: Hsla,
+) -> Hsla {
+    use shuma_line::AnsiColor::*;
+    let c = match color {
+        None => {
+            if bold {
+                // bold sin color = un blanco brillante.
+                return gpui::hsla(0.0, 0.0, 0.96, 1.0);
+            }
+            return fallback;
+        }
+        Some(c) => c,
+    };
+    // Las parejas (hue, sat, light). Bright sube light a ~0.72; normal a
+    // ~0.56. Black/White se manejan aparte.
+    let (h, s, l) = match c {
+        Black => (0.0, 0.0, 0.20),
+        Red => (0.0, 0.65, 0.58),
+        Green => (135.0, 0.50, 0.55),
+        Yellow => (48.0, 0.70, 0.62),
+        Blue => (210.0, 0.65, 0.62),
+        Magenta => (300.0, 0.55, 0.66),
+        Cyan => (185.0, 0.60, 0.60),
+        White => (0.0, 0.0, 0.85),
+        BrightBlack => (0.0, 0.0, 0.45),
+        BrightRed => (0.0, 0.75, 0.68),
+        BrightGreen => (135.0, 0.60, 0.65),
+        BrightYellow => (48.0, 0.85, 0.72),
+        BrightBlue => (210.0, 0.75, 0.72),
+        BrightMagenta => (300.0, 0.65, 0.74),
+        BrightCyan => (185.0, 0.75, 0.72),
+        BrightWhite => (0.0, 0.0, 0.96),
+    };
+    gpui::hsla(h / 360.0, s, l, 1.0)
+}
+
 /// Renderiza la tarjeta de un comando ejecutado: cabecera-acordeón +
 /// filtro stdout/stderr + cuerpo de salida.
 fn render_run(
@@ -2325,20 +2368,39 @@ fn render_run(
 
         let stream = if ui.show_stderr { Stream::Stderr } else { Stream::Stdout };
         let lines: Vec<&str> = r.lines_of(stream).collect();
-        let color = if ui.show_stderr { stderr_color } else { theme.fg_text };
+        let default_color = if ui.show_stderr { stderr_color } else { theme.fg_text };
         if lines.is_empty() {
             body.push(div().text_size(px(11.)).text_color(dim).child(
                 if ui.show_stderr { "sin errores" } else { "sin salida" },
             ));
         } else {
-            // Sin truncar: si hay contenido, se muestra entero.
+            // Cada línea se renderiza como una fila de spans coloreados
+            // según las secuencias ANSI (`\x1b[…m`) y los `\r` (overwrite)
+            // que viene emitiendo el subproceso. Si no hay ANSI, sale un
+            // único span con el color por defecto del stream.
             for l in &lines {
-                body.push(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(color)
-                        .child(SharedString::from(l.to_string())),
-                );
+                let spans = shuma_line::parse_ansi_line(l);
+                let mut row = div().flex().flex_row().flex_wrap().text_size(px(12.));
+                if spans.is_empty() {
+                    row = row.text_color(default_color);
+                } else {
+                    for sp in spans {
+                        let mut cell = div().flex_none();
+                        cell = cell.text_color(ansi_color_to_hsla(
+                            sp.style.fg,
+                            sp.style.bold,
+                            default_color,
+                        ));
+                        if let Some(bg) = sp.style.bg {
+                            cell = cell.bg(ansi_color_to_hsla(Some(bg), false, default_color));
+                        }
+                        if sp.style.underline {
+                            cell = cell.text_decoration_1();
+                        }
+                        row = row.child(cell.child(SharedString::from(sp.text)));
+                    }
+                }
+                body.push(row);
             }
         }
     }
