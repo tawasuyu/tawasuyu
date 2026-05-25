@@ -160,6 +160,47 @@ impl Killer {
             }
         }
     }
+
+    /// PIDs de las etapas que aún consider vivas el coordinador. Puede
+    /// estar vacío durante una micro-ventana entre `run()` y el spawn
+    /// real — no es un bug, sólo refleja la realidad del scheduling.
+    pub fn pids(&self) -> Vec<u32> {
+        match self.children.lock() {
+            Ok(g) => g.iter().map(|c| c.id()).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// SIGTERM — el "kill educado" (Ctrl-C estándar). El proceso suele
+    /// limpiar antes de morir. Devuelve `true` si llegó a al menos una
+    /// etapa viva.
+    pub fn term(&self) -> bool {
+        self.signal(nix::sys::signal::Signal::SIGTERM)
+    }
+
+    /// SIGSTOP — el proceso pasa a estado "stopped"; no consume CPU y
+    /// no produce salida hasta recibir SIGCONT. Útil para "pausar" un
+    /// `tail -f` o un build ruidoso sin perderlo.
+    pub fn stop(&self) -> bool {
+        self.signal(nix::sys::signal::Signal::SIGSTOP)
+    }
+
+    /// SIGCONT — reanuda un proceso parado con [`Killer::stop`].
+    pub fn cont(&self) -> bool {
+        self.signal(nix::sys::signal::Signal::SIGCONT)
+    }
+
+    fn signal(&self, sig: nix::sys::signal::Signal) -> bool {
+        let pids = self.pids();
+        let mut delivered = false;
+        for pid in pids {
+            let target = nix::unistd::Pid::from_raw(pid as i32);
+            if nix::sys::signal::kill(target, sig).is_ok() {
+                delivered = true;
+            }
+        }
+        delivered
+    }
 }
 
 impl RunHandle {
@@ -607,5 +648,26 @@ mod tests {
         assert!(RunEvent::Exited(0).is_terminal());
         assert!(!RunEvent::Truncated.is_terminal());
         assert!(!RunEvent::Spilled("x".into()).is_terminal());
+    }
+
+    #[test]
+    fn killer_can_stop_and_continue_a_process() {
+        // `sleep 30` se para con SIGSTOP, se reanuda con SIGCONT y
+        // luego se mata con SIGTERM. El test acaba en <1s aunque el
+        // sleep nominal sea de 30s.
+        let h = run(&direct("sleep", &["30"]));
+        let killer = h.killer();
+        // Esperar a que aparezca el PID (el coordinador rellena el Vec
+        // tras el spawn — micro-delay).
+        let mut tries = 0;
+        while killer.pids().is_empty() && tries < 100 {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            tries += 1;
+        }
+        assert!(!killer.pids().is_empty(), "pid no apareció");
+        assert!(killer.stop(), "SIGSTOP no llegó");
+        assert!(killer.cont(), "SIGCONT no llegó");
+        assert!(killer.term(), "SIGTERM no llegó");
+        // El test no se cuelga gracias al term().
     }
 }

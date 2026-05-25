@@ -386,6 +386,33 @@ struct RunUi {
     show_stderr: bool,
     /// El usuario tocó el acordeón a mano — ya no se autocolapsa.
     user_touched: bool,
+    /// El usuario lanzó el comando con `&` — la tarjeta queda "pinned"
+    /// aunque entren otros runs detrás. En este shell todo corre en
+    /// background, así que el `&` es sobre todo una pista visual para
+    /// no perder el run de vista en sesiones largas.
+    background_explicit: bool,
+}
+
+/// Las cuatro señales que el shell expone como builtins (`:kill`,
+/// `:term`, `:stop`, `:cont`). Mantengo el enum interno aquí para no
+/// filtrar `nix::sys::signal` hasta el caller.
+#[derive(Debug, Clone, Copy)]
+enum Sig {
+    Kill,
+    Term,
+    Stop,
+    Cont,
+}
+
+impl Sig {
+    fn label(self) -> &'static str {
+        match self {
+            Sig::Kill => "kill",
+            Sig::Term => "term",
+            Sig::Stop => "stop",
+            Sig::Cont => "cont",
+        }
+    }
 }
 
 /// Asa unificada sobre dos backends de ejecución: local (`shuma-exec`)
@@ -425,6 +452,41 @@ impl AnyRunHandle {
             Self::Remote(h) => h.is_finished(),
             Self::Synthetic { finished, .. } => *finished,
         }
+    }
+    /// SIGTERM. `false` si el backend no lo soporta (remote: el daemon
+    /// sólo expone close-as-kill por ahora; sintético: no aplica).
+    fn term(&self) -> bool {
+        match self {
+            Self::Local(h) => h.killer().term(),
+            Self::Remote(_) | Self::Synthetic { .. } => false,
+        }
+    }
+    /// SIGSTOP. Mismas limitaciones que `term`.
+    fn stop(&self) -> bool {
+        match self {
+            Self::Local(h) => h.killer().stop(),
+            Self::Remote(_) | Self::Synthetic { .. } => false,
+        }
+    }
+    /// SIGCONT.
+    fn cont(&self) -> bool {
+        match self {
+            Self::Local(h) => h.killer().cont(),
+            Self::Remote(_) | Self::Synthetic { .. } => false,
+        }
+    }
+    /// PIDs visibles del backend (vacío para Remote/Synthetic).
+    fn pids(&self) -> Vec<u32> {
+        match self {
+            Self::Local(h) => h.killer().pids(),
+            Self::Remote(_) | Self::Synthetic { .. } => Vec::new(),
+        }
+    }
+    /// `true` si este backend soporta señales no-letales (stop/cont/term).
+    /// El shell lo usa para informar cuando un usuario pide algo que la
+    /// implementación remota no atiende aún.
+    fn supports_signals(&self) -> bool {
+        matches!(self, Self::Local(_))
     }
 }
 
@@ -475,6 +537,24 @@ impl HistoryPicker {
     fn results<'a>(&self, history: &'a History) -> Vec<&'a HistoryEntry> {
         history.fuzzy_search(&self.query, Self::VISIBLE)
     }
+}
+
+/// Detecta el `&` final aislado (no `&&`) y devuelve la línea sin él
+/// junto a `true` si lo había. `cmd && otra` deja la línea intacta —
+/// el `&&` queda como operador para el ejecutor.
+fn strip_trailing_background(line: &str) -> (String, bool) {
+    let trimmed = line.trim_end();
+    if !trimmed.ends_with('&') {
+        return (line.to_string(), false);
+    }
+    let bytes = trimmed.as_bytes();
+    // El `&` final es el último char; comprobamos el penúltimo.
+    if bytes.len() >= 2 && bytes[bytes.len() - 2] == b'&' {
+        // Es `&&` (o `&&&` etc.) — operador, no background.
+        return (line.to_string(), false);
+    }
+    let without = &trimmed[..trimmed.len() - 1];
+    (without.trim_end().to_string(), true)
 }
 
 /// Limpia un pegado del portapapeles para insertarlo en la línea actual
@@ -871,6 +951,41 @@ impl Shell {
             self.matilda_command(args);
             return;
         }
+        // --- Job control ---
+        // `:jobs` lista los runs activos numerados [1..]. Convención
+        // estable mientras no termine ninguno: si uno termina, los
+        // índices se renumeran al ejecutar `:jobs` de nuevo. Es la
+        // misma semántica que bash.
+        if line == ":jobs" {
+            self.builtin_jobs();
+            return;
+        }
+        if let Some(arg) = line.strip_prefix(":kill ") {
+            self.builtin_signal(arg.trim(), Sig::Kill);
+            return;
+        }
+        if let Some(arg) = line.strip_prefix(":term ") {
+            self.builtin_signal(arg.trim(), Sig::Term);
+            return;
+        }
+        if let Some(arg) = line.strip_prefix(":stop ") {
+            self.builtin_signal(arg.trim(), Sig::Stop);
+            return;
+        }
+        if let Some(arg) = line.strip_prefix(":cont ") {
+            self.builtin_signal(arg.trim(), Sig::Cont);
+            return;
+        }
+
+        // El `&` final marca un run como "background explícito": la
+        // tarjeta se mantiene visible aunque entre otra detrás (los
+        // demás runs sin user_touched igual se autocolapsan). En este
+        // shell todo es "background" en realidad, así que el `&` es
+        // sobre todo una pista de UX para destacar el run.
+        // OJO: `cmd && otra` también termina en `&` cuando se mira por
+        // sufijo; sólo lo aceptamos si la `&` no viene precedida de otra
+        // (es decir, no es la cola de un `&&` operador).
+        let (line, background_explicit) = strip_trailing_background(&line);
 
         // Expansión de aliases: la primera palabra se reemplaza si está
         // declarada en el `.shumarc`. Tras esta línea, `line` es lo que
@@ -916,10 +1031,98 @@ impl Shell {
         }
 
         let id = self.session.begin_run(&line, now);
-        self.run_ui.insert(id, RunUi::default());
+        let mut ui = RunUi::default();
+        if background_explicit {
+            // El run "pinned" no se autocolapsa al entrar otro nuevo.
+            ui.user_touched = true;
+            ui.background_explicit = true;
+        }
+        self.run_ui.insert(id, ui);
         let spec = self.build_spec(&line, None, id);
         self.active.push((id, self.spawn(&spec)));
         self.scroll.scroll_to_bottom();
+    }
+
+    /// `:jobs` — lista los runs activos numerados desde 1 con PID(s)
+    /// y la línea original. Convención bash: la numeración es estable
+    /// dentro de una invocación; si un job termina entre dos `:jobs`
+    /// consecutivos, los demás se renumeran.
+    fn builtin_jobs(&mut self) {
+        let mut lines: Vec<String> = Vec::new();
+        for (idx, (id, handle)) in self.active.iter().enumerate() {
+            let pids = handle.pids();
+            let pid_label = if pids.is_empty() {
+                "—".to_string()
+            } else {
+                pids.iter()
+                    .map(|p| p.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            };
+            let cmd = self
+                .session
+                .run(*id)
+                .map(|r| r.line.as_str())
+                .unwrap_or("<?>");
+            let backend = match handle {
+                AnyRunHandle::Local(_) => "local",
+                AnyRunHandle::Remote(_) => "remote",
+                AnyRunHandle::Synthetic { .. } => "synth",
+            };
+            lines.push(format!("[{}] {} {:<6}  {}", idx + 1, backend, pid_label, cmd));
+        }
+        if lines.is_empty() {
+            lines.push("(sin jobs activos)".into());
+        }
+        self.synthetic_run(":jobs", lines, true);
+    }
+
+    /// `:kill N`, `:term N`, `:stop N`, `:cont N` — aplica la señal al
+    /// job N de la lista actual. Si N no existe, lo dice; si el backend
+    /// no soporta la señal, también. Las señales letales (`kill`,
+    /// `term`) drenan el run del `active` a la siguiente iteración del
+    /// reaper; `stop`/`cont` no cambian el active.
+    fn builtin_signal(&mut self, arg: &str, sig: Sig) {
+        let n: usize = match arg.parse() {
+            Ok(n) if n >= 1 => n,
+            _ => {
+                self.synthetic_run(
+                    &format!(":{}", sig.label()),
+                    vec![format!("uso: :{} <N>  (ver :jobs)", sig.label())],
+                    false,
+                );
+                return;
+            }
+        };
+        let Some((_, handle)) = self.active.get(n - 1) else {
+            self.synthetic_run(
+                &format!(":{}", sig.label()),
+                vec![format!("job {n} no existe (ver :jobs)")],
+                false,
+            );
+            return;
+        };
+        let supports = handle.supports_signals();
+        let delivered = match sig {
+            Sig::Kill => {
+                handle.kill();
+                true
+            }
+            Sig::Term => handle.term(),
+            Sig::Stop => handle.stop(),
+            Sig::Cont => handle.cont(),
+        };
+        let msg = if !supports && !matches!(sig, Sig::Kill) {
+            format!(
+                "[{n}] {} no soportado para este backend (sólo kill funciona en remoto)",
+                sig.label()
+            )
+        } else if delivered {
+            format!("[{n}] {} entregado", sig.label())
+        } else {
+            format!("[{n}] {} no llegó (proceso terminado?)", sig.label())
+        };
+        self.synthetic_run(&format!(":{}", sig.label()), vec![msg], delivered);
     }
 
     /// Arma la `CommandSpec` de una línea: decide directo vs shell y
@@ -2628,5 +2831,21 @@ mod tests {
     #[test]
     fn paste_keeps_plain_text() {
         assert_eq!(sanitize_paste("echo hola mundo"), "echo hola mundo");
+    }
+
+    #[test]
+    fn background_ampersand_is_stripped_and_flagged() {
+        use super::strip_trailing_background;
+        assert_eq!(strip_trailing_background("sleep 30 &"), ("sleep 30".into(), true));
+        assert_eq!(strip_trailing_background("sleep 30&"), ("sleep 30".into(), true));
+        assert_eq!(strip_trailing_background("sleep 30"), ("sleep 30".into(), false));
+        // `cmd_a && cmd_b` no termina en `&`, queda intacto.
+        assert_eq!(
+            strip_trailing_background("cmd_a && cmd_b"),
+            ("cmd_a && cmd_b".into(), false)
+        );
+        // `cmd &&` SÍ termina en `&`, pero la `&` previa lo identifica
+        // como operador — no se trata como background.
+        assert_eq!(strip_trailing_background("cmd &&"), ("cmd &&".into(), false));
     }
 }
