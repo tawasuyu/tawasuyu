@@ -31,6 +31,9 @@ pub mod axis;
 #[cfg(feature = "gpui")]
 pub mod element;
 
+#[cfg(feature = "llimphi")]
+pub mod view;
+
 // Pendientes — siguen como placeholders hasta su fase.
 pub mod picture_cache {}
 
@@ -42,4 +45,10 @@ pub use series::{LineSeries, PaintCtx, RenderMode, Series};
 pub use element::{
     chart_cache, lapaloma_chart, ChartCache, ChartCacheHandle, ChartSeriesItem,
     LapalomaChartElement,
+};
+
+#[cfg(feature = "llimphi")]
+pub use view::{
+    chart_cache as chart_cache_view, lapaloma_chart_view, ChartCache as ChartCacheView,
+    ChartCacheHandle as ChartCacheViewHandle, ChartSeriesItem as ChartSeriesItemView, ChartView,
 };
