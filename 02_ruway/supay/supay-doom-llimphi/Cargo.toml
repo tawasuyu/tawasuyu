@@ -1,0 +1,18 @@
+[package]
+name = "supay-doom-llimphi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "supay-doom-llimphi — Fase 1 de supay. Doom real corriendo en una ventana Llimphi: el motor C de doomgeneric (vendoreado en supay-core) avanza un tick por cada Msg::Tick (35 Hz vía Handle::spawn_periodic), el framebuffer 320×200 ARGB se pinta como `View::image` con aspect-fit, las pulsaciones de teclado se traducen a códigos Doom (KEY_FIRE, KEY_USE, KEY_*ARROW, etc.) y se enqueuean en el motor."
+
+[[bin]]
+name = "supay-doom-llimphi"
+path = "src/main.rs"
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+supay-core = { path = "../supay-core" }

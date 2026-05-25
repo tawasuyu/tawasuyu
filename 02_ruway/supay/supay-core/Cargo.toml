@@ -1,0 +1,16 @@
+[package]
+name = "supay-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "supay-core — bindings Rust al motor de doomgeneric. Compila doomgeneric vendoreado (~10k LOC C aislado de renderer) vía `cc`, expone los callbacks que doomgeneric llama del host (DG_DrawFrame, DG_GetKey, DG_GetTicksMs, etc.) como funciones extern \"C\" #[no_mangle], y wrappea la API `doomgeneric_Create` + `doomgeneric_Tick` en una struct `DoomEngine` safe. Si `vendor/doomgeneric/` no existe, compila como stub para mantener el workspace verde."
+links = "doomgeneric"
+build = "build.rs"
+
+[dependencies]
+
+[build-dependencies]
+cc = "1"

@@ -42,9 +42,23 @@ Tomar la simulación bit-exact de Doom (ticks 35 Hz, BSP, RNG, hitboxes, demos `
 - Render desacoplado vía `View::paint_with`: raycast columna por columna, alturas calculadas con perpendicular distance (no fish-eye), shading por distancia, niebla volumétrica.
 - Sin Doom real todavía — pero el modelo "tick separado del render" queda probado.
 
-### Fase 1 — Doom real (próximos bloques)
+### Fase 1 — Doom real (en código)
 
-`supay-core` enlaza `doomgeneric` vendoreado (~10k LOC C bien aislado) vía `cc` + bindings minimalistas. Loadeá `DOOM1.WAD` shareware (distribución legal). El framebuffer 320×200 ARGB que doomgeneric llena se pinta como `View::image` dentro de una ventana Llimphi — "Doom corriendo en una ventana Llimphi", baja resolución, software renderer original. Input: traducir keys de Llimphi a `DG_GetKey`. Es modesto pero valida la integración entera.
+**`supay-core`** (Fase 1.0, 2026-05-25): andamiaje completo.
+- `Cargo.toml` con `links = "doomgeneric"` y `build = "build.rs"`.
+- `build.rs`: busca `vendor/doomgeneric/doomgeneric/*.c`; si existe los compila con `cc` (excluye los `doomgeneric_<plataforma>.c` para no tener doble-host), define `FEATURE_SOUND=0`, flags `-w` para silenciar warnings legacy del id1. Si no existe, emite `cfg(doomgeneric_stub)` para que el lib compile como no-op y el workspace siga verde.
+- `src/lib.rs`: exporta callbacks `extern "C" #[no_mangle]` que doomgeneric llama (`DG_Init`, `DG_DrawFrame`, `DG_SleepMs`, `DG_GetTicksMs`, `DG_GetKey`, `DG_SetWindowTitle`); todos delegan a un `HostState` singleton (`OnceLock<Mutex<...>>`) que mantiene el framebuffer copiado + FIFO de input + ticks desde arranque + título solicitado. API safe envuelta en `DoomEngine::{new, tick, push_key, framebuffer, title}`. Módulo `keys` con códigos canónicos Doom (`KEY_FIRE`, `KEY_USE`, los `KEY_*ARROW`, etc.).
+- `vendor/README.md` explica cómo bajar doomgeneric (`git clone https://github.com/ozkl/doomgeneric.git`) + WAD shareware.
+
+**`supay-doom-llimphi`** (Fase 1.0): consumidor.
+- App Llimphi que crea `DoomEngine::new(["doomgeneric", "-iwad", "doom1.wad"])`, dispara tick a 35 Hz vía `Handle::spawn_periodic`, lee el framebuffer 320×200 u32 ARGB, lo convierte a Rgba8 (forzando alpha 255 porque doomgeneric llena el canal alpha con 0) y lo pinta como `View::image` con aspect-fit. `on_key` traduce eventos Llimphi → códigos Doom (`Key::Named(ArrowUp)→KEY_UPARROW`, `'w'→KEY_UPARROW`, `'a'→KEY_LEFTARROW`, `Space→KEY_USE`, `Control→KEY_FIRE`, etc.) y los enqueuea con `push_key`. F12 cierra la ventana.
+- En modo stub (sin vendor), arranca igual y pinta un panel explicando cómo proveer doomgeneric + WAD. Útil para validar plumbing Llimphi sin requerir el clone.
+
+**Cómo correr** (cuando vendor está provisto + DOOM1.WAD en cwd):
+
+```sh
+cargo run -p supay-doom-llimphi --release
+```
 
 ### Fase 2 — Scene extraction
 

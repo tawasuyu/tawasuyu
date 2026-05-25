@@ -186,6 +186,8 @@ members = [
     "02_ruway/shuma/sandbox/shuma-sysmon",
     "02_ruway/shuma/shuma-cli",
     "02_ruway/supay/supay-app-llimphi",
+    "02_ruway/supay/supay-core",
+    "02_ruway/supay/supay-doom-llimphi",
     "02_ruway/shuma/shuma-daemon",
     "02_ruway/shuma/shuma-gateway",
     "02_ruway/shuma/shuma-shell",
