@@ -78,8 +78,9 @@ No es una biblioteca genérica. Es un **motor de combate**. `wgpu + vello + taff
 |---|---|---|
 | HAL | `llimphi-hal` | `wgpu`, `winit`, `raw-window-handle` |
 | Raster | `llimphi-raster` | `vello`, `vello_encoding`, `peniko` |
+| Text | `llimphi-text` | `skrifa` (+ vello via `llimphi-raster`) |
 | Layout | `llimphi-layout` | `taffy` |
-| UI | `llimphi-ui` | (puro Rust, sin deps gráficas) |
+| UI | `llimphi-ui` | `llimphi-{hal,raster,layout,text}` |
 
 ## Migración GPUI → Llimphi
 
@@ -101,4 +102,7 @@ Apps actualmente en GPUI que deben portarse:
   - `cargo run -p llimphi-raster --example render_node --release` — nodo con AA perfecto vía vello/wgpu.
   - `cargo run -p llimphi-layout --example layout_panels --release` — sidebar + header/body/footer flex que se reorganiza al resize.
   - `cargo run -p llimphi-ui --example counter --release` — bucle Elm completo: click hit-test → update → view → layout → raster → present.
-- **Próximo:** texto (skrifa/parley sobre vello) — necesario para Cosmos, Pluma, Nahual. Luego: migración de las apps GPUI a Llimphi.
+- **2026-05-25 (noche):** quinto crate `llimphi-text` (skrifa + vello). Bug de `max_storage_buffers_per_shader_stage` corregido (`Limits::default()` en vez de `downlevel`). `View::text()` permite poner texto centrado en cualquier nodo. Examples:
+  - `cargo run -p llimphi-text --example hello_text --release` — "Llimphi" + tagline sobre fondo negro.
+  - `counter` ahora muestra el número real (no barras) y los botones llevan label.
+- **Próximo:** parley para shaping completo (bidi, ligatures, fallback chains). Luego: migración GPUI → Llimphi de Nahual/Mirada/Pluma/Cosmos/Dominium.

@@ -116,12 +116,17 @@ impl Hal {
             })
             .await
             .ok_or(HalError::NoAdapter)?;
+        // `Limits::default()` cubre los 5 storage buffers/stage que vello
+        // necesita. `downlevel_defaults()` solo expone 4 y rompe el raster.
+        // Si el adapter no lo aguanta, `using_resolution` recorta lo recortable
+        // (texturas/buffers grandes) preservando los conteos mínimos.
+        let limits = wgpu::Limits::default().using_resolution(adapter.limits());
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: Some("llimphi-hal-device"),
                     required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::downlevel_defaults(),
+                    required_limits: limits,
                     memory_hints: wgpu::MemoryHints::Performance,
                 },
                 None,

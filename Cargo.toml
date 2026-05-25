@@ -104,6 +104,7 @@ members = [
     "02_ruway/llimphi/llimphi-hal",
     "02_ruway/llimphi/llimphi-raster",
     "02_ruway/llimphi/llimphi-layout",
+    "02_ruway/llimphi/llimphi-text",
     "02_ruway/llimphi/llimphi-ui",
     "02_ruway/mirada/mirada-app",
     "02_ruway/mirada/mirada-bar-core",
@@ -346,12 +347,16 @@ gpui = "0.2"
 # raw-window-handle 0.6 alinea winit 0.30 con wgpu 24.
 # vello 0.5 = rasterizador vectorial sobre wgpu 24.
 # taffy 0.9 = motor Flexbox/Grid puro Rust (ya pulled por transitivos, lo alineamos).
+# parley 0.2 = shaping/layout de texto compatible con peniko 0.4 (que vello 0.5 expone).
 wgpu = "24"
 winit = "0.30"
 raw-window-handle = "0.6"
 pollster = "0.4"
 vello = "0.5"
 taffy = "0.9"
+# skrifa alineado con la versión que vello 0.5 trae transitivamente para evitar
+# tener dos copias del crate (los GlyphId/Font no son intercambiables entre versiones).
+skrifa = "0.35"
 
 # === Filesystem helpers ===
 directories = "5"

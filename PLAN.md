@@ -115,9 +115,12 @@ Cuando Llimphi tenga las 4 fases verdes, portar:
 
 ## 8. Próxima sesión arranca con
 
-**Llimphi extender con texto** (Fases 1–4 ya en verde, hito gris plomo verificado en hardware):
-- Integrar `skrifa` (lectura de fuentes TTF/OTF) + `parley` (shaping/layout de texto) sobre `vello`.
-- Hito visible: `llimphi-ui` cuenta numérico real en el example `counter`, no barras.
-- Bloquea: migración GPUI → Llimphi de las apps (Nahual, Mirada, Pluma, Dominium, Cosmos).
+**Llimphi: shaping completo con parley** (texto básico ya funciona vía `llimphi-text` con skrifa):
+- Integrar `parley` para bidi, ligatures, fallback de fuentes (CJK/emoji).
+- Línea base + line break + alineación (start/center/end).
+- Hito: `llimphi-text` renderiza un párrafo wrap-able con kerning.
+- Bloquea: nada crítico (lo actual ya alcanza para counter y labels). Sí desbloquea: texto editable de calidad para Pluma/Cosmos.
 
-En paralelo (no bloqueado por texto): **Fase 1 de Puriy** (`puriy-core` puro Rust — Tab/Session/History/Bookmark/Profile testeables).
+**Migración GPUI → Llimphi** ya es viable hoy para apps con texto simple. Empezar por Nahual (la base) o Pluma (mayor valor de usuario).
+
+En paralelo (no bloqueado): **Fase 1 de Puriy** (`puriy-core` puro Rust — Tab/Session/History/Bookmark/Profile testeables).

@@ -1,5 +1,5 @@
 [package]
-name = "llimphi-ui"
+name = "llimphi-text"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,12 +7,13 @@ authors.workspace = true
 publish.workspace = true
 
 [dependencies]
-llimphi-hal = { path = "../llimphi-hal" }
-llimphi-layout = { path = "../llimphi-layout" }
 llimphi-raster = { path = "../llimphi-raster" }
-llimphi-text = { path = "../llimphi-text" }
+skrifa = { workspace = true }
+
+[dev-dependencies]
+llimphi-hal = { path = "../llimphi-hal" }
 pollster = { workspace = true }
 
 [[example]]
-name = "counter"
-path = "examples/counter.rs"
+name = "hello_text"
+path = "examples/hello_text.rs"

@@ -26,6 +26,19 @@ use llimphi_raster::{vello, Renderer};
 pub use llimphi_hal;
 pub use llimphi_layout;
 pub use llimphi_raster;
+pub use llimphi_text;
+
+/// Cadena de fallback de fuentes para Linux que intenta el runtime al
+/// arrancar. La primera disponible gana; si ninguna existe, el texto no
+/// se pinta y se emite un warning por stderr.
+pub const DEFAULT_FONT_CANDIDATES: &[&str] = &[
+    "/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf",
+    "/usr/share/fonts/inter/Inter-Regular.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/droid/DroidSans-Regular.ttf",
+    "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+];
 
 /// Aplicación Elm: estado inmutable, transición pura, vista pura.
 pub trait App: 'static {
@@ -42,12 +55,20 @@ pub trait App: 'static {
     }
 }
 
+/// Texto a pintar centrado dentro de un nodo.
+pub struct TextSpec {
+    pub content: String,
+    pub size_px: f32,
+    pub color: Color,
+}
+
 /// Nodo de la vista declarativa. Estilo de layout (taffy) + relleno opcional
-/// (vello) + Msg al click opcional + hijos.
+/// (vello) + texto opcional (skrifa+vello) + Msg al click opcional + hijos.
 pub struct View<Msg> {
     pub style: Style,
     pub fill: Option<Color>,
     pub radius: f64,
+    pub text: Option<TextSpec>,
     pub on_click: Option<Msg>,
     pub children: Vec<View<Msg>>,
 }
@@ -58,6 +79,7 @@ impl<Msg> View<Msg> {
             style,
             fill: None,
             radius: 0.0,
+            text: None,
             on_click: None,
             children: Vec::new(),
         }
@@ -70,6 +92,15 @@ impl<Msg> View<Msg> {
 
     pub fn radius(mut self, r: f64) -> Self {
         self.radius = r;
+        self
+    }
+
+    pub fn text(mut self, content: impl Into<String>, size_px: f32, color: Color) -> Self {
+        self.text = Some(TextSpec {
+            content: content.into(),
+            size_px,
+            color,
+        });
         self
     }
 
@@ -96,6 +127,7 @@ struct MountedNode<Msg> {
     id: NodeId,
     fill: Option<Color>,
     radius: f64,
+    text: Option<TextSpec>,
     on_click: Option<Msg>,
 }
 
@@ -114,6 +146,7 @@ fn mount_recursive<Msg: Clone>(
         style,
         fill,
         radius,
+        text,
         on_click,
         children,
     } = v;
@@ -130,25 +163,48 @@ fn mount_recursive<Msg: Clone>(
         id,
         fill,
         radius,
+        text,
         on_click,
     });
     id
 }
 
-fn paint<Msg>(scene: &mut vello::Scene, mounted: &Mounted<Msg>, computed: &ComputedLayout) {
+fn paint<Msg>(
+    scene: &mut vello::Scene,
+    mounted: &Mounted<Msg>,
+    computed: &ComputedLayout,
+    face: Option<&llimphi_text::Typeface>,
+) {
     for node in &mounted.nodes {
-        let Some(color) = node.fill else { continue };
         let Some(r) = computed.get(node.id) else {
             continue;
         };
-        let rr = RoundedRect::new(
-            r.x as f64,
-            r.y as f64,
-            (r.x + r.w) as f64,
-            (r.y + r.h) as f64,
-            node.radius,
-        );
-        scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &rr);
+        if let Some(color) = node.fill {
+            let rr = RoundedRect::new(
+                r.x as f64,
+                r.y as f64,
+                (r.x + r.w) as f64,
+                (r.y + r.h) as f64,
+                node.radius,
+            );
+            scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &rr);
+        }
+        if let (Some(text), Some(face)) = (node.text.as_ref(), face) {
+            let m = face.measure(&text.content, text.size_px);
+            // Centrado dentro del rect. El origin de draw_block es el baseline.
+            let x = r.x as f64 + (r.w as f64 - m.width as f64) * 0.5;
+            let y = r.y as f64 + (r.h as f64 + m.ascent as f64 - m.descent.abs() as f64) * 0.5;
+            llimphi_text::draw_block(
+                scene,
+                face,
+                &llimphi_text::TextBlock {
+                    text: &text.content,
+                    size_px: text.size_px,
+                    color: text.color,
+                    origin: (x, y),
+                },
+            );
+        }
     }
 }
 
@@ -185,6 +241,7 @@ struct RuntimeState<A: App> {
     scene: vello::Scene,
     model: Option<A::Model>,
     cursor: PhysicalPosition<f64>,
+    face: Option<llimphi_text::Typeface>,
 }
 
 impl<A: App> ApplicationHandler for Runtime<A> {
@@ -203,6 +260,13 @@ impl<A: App> ApplicationHandler for Runtime<A> {
         let hal = pollster::block_on(Hal::new(None)).expect("hal");
         let surface = WinitSurface::new(&hal, window.clone()).expect("surface");
         let renderer = Renderer::new(&hal).expect("renderer");
+        let face = match llimphi_text::Typeface::first_available(DEFAULT_FONT_CANDIDATES) {
+            Ok(t) => Some(t),
+            Err(e) => {
+                eprintln!("llimphi-ui: sin fuente disponible ({e}); el texto no se pintará");
+                None
+            }
+        };
         window.request_redraw();
         self.state = Some(RuntimeState {
             window,
@@ -212,6 +276,7 @@ impl<A: App> ApplicationHandler for Runtime<A> {
             scene: vello::Scene::new(),
             model: Some(A::init()),
             cursor: PhysicalPosition::new(0.0, 0.0),
+            face,
         });
     }
 
@@ -273,7 +338,7 @@ impl<A: App> ApplicationHandler for Runtime<A> {
                     .compute(mounted.root, (w as f32, h as f32))
                     .expect("layout");
                 state.scene.reset();
-                paint(&mut state.scene, &mounted, &computed);
+                paint(&mut state.scene, &mounted, &computed, state.face.as_ref());
                 if let Err(e) = state.renderer.render(
                     &state.hal,
                     &state.scene,
