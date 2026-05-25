@@ -500,21 +500,82 @@ fn synthetic_failed_handle(msg: String) -> AnyRunHandle {
     }
 }
 
-/// Decide el path del socket del daemon según las env vars del rc /
-/// proceso: `SHUMA_REMOTE_SOCKET` (path explícito) o `SHUMA_REMOTE=1`
-/// (path canónico vía `shuma_protocol`). `None` desactiva el modo
-/// remoto y la shell sigue ejecutando local — comportamiento por
-/// defecto, sin sorpresas.
-fn detect_remote_socket() -> Option<std::path::PathBuf> {
+/// Transporte hacia el daemon. `Local` ejecuta in-process via
+/// `shuma-exec`. `UnixSocket` delega al daemon local (postcard sobre
+/// Unix socket). `Tcp` delega a un daemon **remoto** con Noise XK
+/// (autenticación mutua, cifrado ChaCha20-Poly1305).
+enum RemoteTransport {
+    Local,
+    UnixSocket(std::path::PathBuf),
+    Tcp {
+        addr: String,
+        keypair: shuma_link::Keypair,
+        server_pub: shuma_link::PublicKey,
+    },
+}
+
+impl RemoteTransport {
+    /// Etiqueta corta para el prompt — el power user ve de un vistazo
+    /// dónde está corriendo cada comando.
+    fn badge(&self) -> Option<&'static str> {
+        match self {
+            Self::Local => None,
+            Self::UnixSocket(_) => Some("⇄ unix"),
+            Self::Tcp { .. } => Some("🔒 tcp"),
+        }
+    }
+}
+
+/// Decide el transporte hacia el daemon según las env vars del proceso:
+///
+/// - `SHUMA_REMOTE_TCP_ADDR=host:port` + `SHUMA_REMOTE_TCP_PUB=<hex>`
+///   activan el modo TCP autenticado. La keypair propia se carga (o
+///   genera al primer uso) de `SHUMA_REMOTE_TCP_KEY` o, por defecto,
+///   `~/.config/shuma/keys/identity.x25519`. Si falla algo, cae a
+///   Local con un warning.
+/// - `SHUMA_REMOTE_SOCKET=/path` (path explícito) o `SHUMA_REMOTE=1`
+///   (path canónico) activan el modo Unix socket — comportamiento de
+///   antes.
+/// - Sin ninguna env, `Local` (ejecución in-process).
+fn detect_remote_transport() -> RemoteTransport {
+    // TCP autenticado tiene prioridad — la combinación más expresiva
+    // (host:port + pubkey del server) es la que el usuario fijó.
+    if let (Ok(addr), Ok(pub_hex)) = (
+        std::env::var("SHUMA_REMOTE_TCP_ADDR"),
+        std::env::var("SHUMA_REMOTE_TCP_PUB"),
+    ) {
+        if !addr.is_empty() && !pub_hex.is_empty() {
+            let key_path = std::env::var("SHUMA_REMOTE_TCP_KEY")
+                .ok()
+                .map(std::path::PathBuf::from)
+                .or_else(shuma_link::Keypair::default_path);
+            match (key_path, shuma_link::PublicKey::from_hex(&pub_hex)) {
+                (Some(kp_path), Ok(server_pub)) => {
+                    match shuma_link::Keypair::load_or_generate(&kp_path) {
+                        Ok(kp) => return RemoteTransport::Tcp { addr, keypair: kp, server_pub },
+                        Err(e) => {
+                            eprintln!("shuma-shell: no se pudo cargar/generar la keypair {}: {e} — cayendo a local", kp_path.display());
+                        }
+                    }
+                }
+                (None, _) => {
+                    eprintln!("shuma-shell: SHUMA_REMOTE_TCP_KEY sin path y XDG no disponible — cayendo a local");
+                }
+                (_, Err(e)) => {
+                    eprintln!("shuma-shell: SHUMA_REMOTE_TCP_PUB inválido ({e}) — cayendo a local");
+                }
+            }
+        }
+    }
     if let Ok(p) = std::env::var("SHUMA_REMOTE_SOCKET") {
         if !p.is_empty() {
-            return Some(std::path::PathBuf::from(p));
+            return RemoteTransport::UnixSocket(std::path::PathBuf::from(p));
         }
     }
     if std::env::var("SHUMA_REMOTE").as_deref() == Ok("1") {
-        return Some(shuma_protocol::default_socket_path());
+        return RemoteTransport::UnixSocket(shuma_protocol::default_socket_path());
     }
-    None
+    RemoteTransport::Local
 }
 
 /// Picker fuzzy del historial durable — el overlay que aparece con Ctrl-R.
@@ -591,10 +652,12 @@ struct Shell {
     /// local (`shuma-exec`) o remoto (al daemon vía `shuma-remote-exec`)
     /// — el shell sólo ve el asa unificada.
     active: Vec<(RunId, AnyRunHandle)>,
-    /// Si `Some`, los comandos se delegan al daemon en ese socket; si
-    /// `None`, ejecución local clásica. Lo decide [`detect_remote_socket`]
-    /// al arrancar.
-    remote_socket: Option<std::path::PathBuf>,
+    /// Por qué transporte ejecutar cada comando: in-process (Local),
+    /// daemon local (UnixSocket) o daemon remoto autenticado (Tcp).
+    /// Lo decide [`detect_remote_transport`] al arrancar; el modo no
+    /// cambia durante la vida del proceso (re-exportar env var requiere
+    /// relanzar el shell).
+    transport: RemoteTransport,
     completion: Option<shuma_line::Completion>,
     completion_index: usize,
     show_completion: bool,
@@ -671,7 +734,7 @@ impl Shell {
             line: LineState::new(),
             session,
             active: Vec::new(),
-            remote_socket: detect_remote_socket(),
+            transport: detect_remote_transport(),
             completion: None,
             completion_index: 0,
             show_completion: false,
@@ -1131,20 +1194,27 @@ impl Shell {
         self.build_spec_exec(plan_exec(line), stdin, run_id)
     }
 
-    /// Lanza `spec` por el backend que toque (local o remoto). Si el
-    /// modo remoto está activo y el daemon no responde, se reporta el
-    /// fallo como un `RunEvent::Failed` sintético — el comando se ve
-    /// como "✗ no se pudo lanzar" pero el shell sigue vivo.
+    /// Lanza `spec` por el transporte activo (Local / UnixSocket /
+    /// Tcp). Si el transporte remoto no se puede iniciar (daemon caído,
+    /// pubkey errónea, etc.) se reporta como `RunEvent::Failed`
+    /// sintético — el comando se ve como "✗ no se pudo lanzar" pero el
+    /// shell sigue vivo.
     fn spawn(&self, spec: &CommandSpec) -> AnyRunHandle {
-        match &self.remote_socket {
-            Some(sock) => match remote_exec_run(spec, sock) {
+        match &self.transport {
+            RemoteTransport::Local => AnyRunHandle::Local(exec_run(spec)),
+            RemoteTransport::UnixSocket(sock) => match remote_exec_run(spec, sock) {
                 Ok(h) => AnyRunHandle::Remote(h),
                 Err(e) => synthetic_failed_handle(format!(
                     "daemon en {}: {e}",
                     sock.display()
                 )),
             },
-            None => AnyRunHandle::Local(exec_run(spec)),
+            RemoteTransport::Tcp { addr, keypair, server_pub } => {
+                match shuma_remote_exec::run_tcp(spec, addr, keypair.clone(), *server_pub) {
+                    Ok(h) => AnyRunHandle::Remote(h),
+                    Err(e) => synthetic_failed_handle(format!("daemon TCP {addr}: {e}")),
+                }
+            }
         }
     }
 
@@ -1676,6 +1746,17 @@ impl Shell {
         let red = gpui::hsla(0.0, 0.65, 0.62, 1.0);
         let dim = theme.fg_muted;
         let mut row: Vec<gpui::Div> = Vec::new();
+        // Badge de transporte — sólo cuando el shell delega al daemon.
+        // En modo Local no aparece nada, para no añadir ruido al prompt
+        // de quien usa la shell tal cual.
+        if let Some(badge) = self.transport.badge() {
+            row.push(
+                div()
+                    .flex_none()
+                    .text_color(accent)
+                    .child(SharedString::from(badge.to_string())),
+            );
+        }
         for seg in &self.config.prompt.segments {
             match seg.as_str() {
                 "cwd" => row.push(
