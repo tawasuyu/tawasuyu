@@ -119,7 +119,7 @@ impl ApplicationHandler for App {
                 ) {
                     eprintln!("render error: {e}");
                 }
-                frame.present();
+                state.surface.present(frame, &state.hal);
             }
             _ => {}
         }

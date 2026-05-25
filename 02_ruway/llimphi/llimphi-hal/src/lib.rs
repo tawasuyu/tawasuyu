@@ -57,8 +57,12 @@ impl std::fmt::Display for HalError {
 
 impl std::error::Error for HalError {}
 
-/// Superficie gráfica donde llimphi pinta. Una sola cosa: ofrecer un
-/// `wgpu::TextureView` por frame y presentarlo.
+/// Superficie gráfica donde llimphi pinta.
+///
+/// Vello (rasterizador) emite a una textura intermedia con storage binding
+/// (la única forma portable: los formatos de swapchain no aceptan writes
+/// de compute shader en muchos adapters). En `present` se blittea la
+/// intermedia al swapchain real y se hace el flip.
 ///
 /// Implementaciones:
 /// - [`WinitSurface`]: ventana Wayland/X11 (dev + producción vía mirada).
@@ -66,28 +70,29 @@ impl std::error::Error for HalError {}
 pub trait Surface {
     fn size(&self) -> (u32, u32);
     fn resize(&mut self, width: u32, height: u32);
-    /// Adquiere el próximo frame. Llamar [`Frame::present`] para mostrar.
+    /// Adquiere la textura intermedia donde el raster pinta este frame.
     fn acquire(&mut self) -> Result<Frame, SurfaceError>;
+    /// Blittea la intermedia al swapchain y la presenta.
+    fn present(&mut self, frame: Frame, hal: &Hal);
 }
 
-/// Frame adquirido. Si se dropea sin `present()`, el frame se descarta.
+/// Frame en curso. `view()` devuelve la textura intermedia (Rgba8Unorm,
+/// STORAGE_BINDING) lista para que vello escriba sobre ella.
 pub struct Frame {
-    texture: wgpu::SurfaceTexture,
-    view: wgpu::TextureView,
+    surface_texture: wgpu::SurfaceTexture,
+    surface_view: wgpu::TextureView,
+    intermediate_view: wgpu::TextureView,
+    width: u32,
+    height: u32,
 }
 
 impl Frame {
     pub fn view(&self) -> &wgpu::TextureView {
-        &self.view
+        &self.intermediate_view
     }
 
     pub fn size(&self) -> (u32, u32) {
-        let t = &self.texture.texture;
-        (t.width(), t.height())
-    }
-
-    pub fn present(self) {
-        self.texture.present();
+        (self.width, self.height)
     }
 }
 
@@ -142,14 +147,20 @@ impl Hal {
     }
 }
 
-/// Surface basada en `winit::window::Window`. Owna el `Arc<Window>` para
-/// extender su vida al `wgpu::Surface<'static>`.
+/// Surface basada en `winit::window::Window`. Mantiene una textura
+/// intermedia `Rgba8Unorm` con storage binding (donde pinta vello) y
+/// un `TextureBlitter` que la copia al swapchain al presentar.
 pub struct WinitSurface {
     _window: Arc<Window>,
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     device: wgpu::Device,
+    intermediate: wgpu::Texture,
+    intermediate_view: wgpu::TextureView,
+    blitter: wgpu::util::TextureBlitter,
 }
+
+const INTERMEDIATE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 impl WinitSurface {
     pub fn new(hal: &Hal, window: Arc<Window>) -> Result<Self, HalError> {
@@ -159,8 +170,8 @@ impl WinitSurface {
             .map_err(|e| HalError::CreateSurface(e.to_string()))?;
         let size = window.inner_size();
         let caps = surface.get_capabilities(&hal.adapter);
-        // vello acepta Rgba8Unorm o Bgra8Unorm (sin sRGB porque el blit hace su propia gamma).
-        // Si el adapter no ofrece ninguno, caemos al primero disponible.
+        // Preferimos Bgra8Unorm o Rgba8Unorm (no sRGB) para que el blit
+        // desde la intermedia lineal preserve los valores tal cual.
         let format = caps
             .formats
             .iter()
@@ -168,9 +179,9 @@ impl WinitSurface {
             .find(|f| matches!(f, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Rgba8Unorm))
             .unwrap_or(caps.formats[0]);
         let config = wgpu::SurfaceConfiguration {
-            // STORAGE_BINDING permite que el rasterizador vectorial (vello) escriba
-            // directo al swapchain vía compute shader.
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::STORAGE_BINDING,
+            // El swapchain solo necesita render-attachment: vello no escribe
+            // directo, escribe a la intermedia y luego se blittea.
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
             width: size.width.max(1),
             height: size.height.max(1),
@@ -180,17 +191,46 @@ impl WinitSurface {
             view_formats: vec![],
         };
         surface.configure(&hal.device, &config);
+        let (intermediate, intermediate_view) =
+            create_intermediate(&hal.device, config.width, config.height);
+        let blitter = wgpu::util::TextureBlitter::new(&hal.device, format);
         Ok(Self {
             _window: window,
             surface,
             config,
             device: hal.device.clone(),
+            intermediate,
+            intermediate_view,
+            blitter,
         })
     }
 
     pub fn format(&self) -> wgpu::TextureFormat {
         self.config.format
     }
+}
+
+fn create_intermediate(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("llimphi-intermediate"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: INTERMEDIATE_FORMAT,
+        usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
 }
 
 impl Surface for WinitSurface {
@@ -202,6 +242,9 @@ impl Surface for WinitSurface {
         self.config.width = width.max(1);
         self.config.height = height.max(1);
         self.surface.configure(&self.device, &self.config);
+        let (tex, view) = create_intermediate(&self.device, self.config.width, self.config.height);
+        self.intermediate = tex;
+        self.intermediate_view = view;
     }
 
     fn acquire(&mut self) -> Result<Frame, SurfaceError> {
@@ -212,9 +255,31 @@ impl Surface for WinitSurface {
             wgpu::SurfaceError::Timeout => SurfaceError::Timeout,
             other => SurfaceError::Other(format!("{other:?}")),
         })?;
-        let view = texture
+        let surface_view = texture
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        Ok(Frame { texture, view })
+        Ok(Frame {
+            surface_texture: texture,
+            surface_view,
+            intermediate_view: self
+                .intermediate
+                .create_view(&wgpu::TextureViewDescriptor::default()),
+            width: self.config.width,
+            height: self.config.height,
+        })
+    }
+
+    fn present(&mut self, frame: Frame, hal: &Hal) {
+        let mut encoder = hal.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("llimphi-blit"),
+        });
+        self.blitter.copy(
+            &hal.device,
+            &mut encoder,
+            &frame.intermediate_view,
+            &frame.surface_view,
+        );
+        hal.queue.submit(std::iter::once(encoder.finish()));
+        frame.surface_texture.present();
     }
 }

@@ -106,7 +106,7 @@ impl ApplicationHandler for App {
                     });
                 }
                 state.hal.queue.submit(std::iter::once(encoder.finish()));
-                frame.present();
+                state.surface.present(frame, &state.hal);
 
                 self.frames += 1;
                 let elapsed = self.last_report.elapsed();

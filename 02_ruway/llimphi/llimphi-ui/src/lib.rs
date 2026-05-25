@@ -347,7 +347,7 @@ impl<A: App> ApplicationHandler for Runtime<A> {
                 ) {
                     eprintln!("render error: {e}");
                 }
-                frame.present();
+                state.surface.present(frame, &state.hal);
             }
             _ => {}
         }
