@@ -19,4 +19,5 @@ pluma-notebook-exec = { path = "../pluma-notebook-exec" }
 pluma-notebook-kernel-wasm = { path = "../pluma-notebook-kernel-wasm" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
+llimphi-widget-text-input = { workspace = true }
 tokio = { workspace = true }

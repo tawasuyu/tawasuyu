@@ -28,7 +28,8 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, DragPhase, Handle, Modifiers, View, WheelDelta};
+use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
+use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 use pluma_notebook_core::{
     Cell, CellId, CellKind, CellOutput, CellState, Notebook, Position as CanvasPos,
 };
@@ -46,6 +47,24 @@ enum Msg {
     /// El kernel terminó: reemplaza el notebook por la versión con los
     /// estados actualizados.
     RunCompleted(Notebook),
+    /// Entra modo edición sobre una celda. Carga el `source` actual en
+    /// el TextInput.
+    StartEdit(CellId),
+    /// Tecla aplicada al input en edición.
+    EditKey(KeyEvent),
+    /// Guarda el draft del input como nuevo `source` (vía `set_source`,
+    /// que marca stale + propaga) y sale del modo edición.
+    CommitEdit,
+    /// Descarta el draft y sale del modo edición.
+    CancelEdit,
+}
+
+/// Estado de una celda en edición. Single-line por la limitación del
+/// `llimphi-widget-text-input`; las newlines se preservan en el state
+/// pero no se muestran como nuevas líneas.
+struct EditState {
+    id: CellId,
+    input: TextInputState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,6 +83,8 @@ struct Model {
     /// Celda raíz de una corrida en curso (si la hay). Bloquea nuevos
     /// pedidos hasta que el thread devuelva `RunCompleted`.
     running_from: Option<CellId>,
+    /// Estado de la celda en edición, si la hay.
+    editing: Option<EditState>,
     /// Archivo de origen (None = demo embebido).
     source: Option<PathBuf>,
     /// Mensaje de error si load falló — se muestra en el header.
@@ -103,6 +124,7 @@ impl App for Viewer {
             mode,
             viewport: (0.0, 0.0),
             running_from: None,
+            editing: None,
             source,
             load_error,
         }
@@ -143,6 +165,43 @@ impl App for Viewer {
                 running_from: None,
                 ..model
             },
+            Msg::StartEdit(id) => {
+                let Some(cell) = model.notebook.cell(id) else { return model };
+                let mut input = TextInputState::new();
+                input.set_text(&cell.source);
+                Model { editing: Some(EditState { id, input }), ..model }
+            }
+            Msg::EditKey(ev) => {
+                let mut model = model;
+                if let Some(edit) = model.editing.as_mut() {
+                    edit.input.apply_key(&ev);
+                }
+                model
+            }
+            Msg::CommitEdit => {
+                let mut model = model;
+                if let Some(edit) = model.editing.take() {
+                    let _ = model.notebook.set_source(edit.id, edit.input.text());
+                    // set_source ya marca Stale + propaga; el último output
+                    // queda visible para comparar.
+                }
+                model
+            }
+            Msg::CancelEdit => Model { editing: None, ..model },
+        }
+    }
+
+    fn on_key(model: &Self::Model, event: &KeyEvent) -> Option<Self::Msg> {
+        if model.editing.is_none() {
+            return None;
+        }
+        if event.state != KeyState::Pressed {
+            return None;
+        }
+        match &event.key {
+            Key::Named(NamedKey::Enter) => Some(Msg::CommitEdit),
+            Key::Named(NamedKey::Escape) => Some(Msg::CancelEdit),
+            _ => Some(Msg::EditKey(event.clone())),
         }
     }
 
@@ -175,7 +234,12 @@ impl App for Viewer {
         let header = header_bar(model, &palette);
         let body = match model.mode {
             Mode::Linear => linear_view(&model.notebook, &palette),
-            Mode::Canvas => canvas_view(&model.notebook, model.viewport, &palette),
+            Mode::Canvas => canvas_view(
+                &model.notebook,
+                model.viewport,
+                model.editing.as_ref(),
+                &palette,
+            ),
         };
 
         View::new(Style {
@@ -331,7 +395,12 @@ const CANVAS_HEADER_H: f32 = 18.0;
 const CANVAS_FOOTER_H: f32 = 16.0;
 const CANVAS_BODY_H: f32 = CANVAS_CARD_H - CANVAS_HEADER_H - CANVAS_FOOTER_H;
 
-fn canvas_view(nb: &Notebook, viewport: (f32, f32), palette: &Palette) -> View<Msg> {
+fn canvas_view(
+    nb: &Notebook,
+    viewport: (f32, f32),
+    editing: Option<&EditState>,
+    palette: &Palette,
+) -> View<Msg> {
     let (vx, vy) = viewport;
     let mut children: Vec<View<Msg>> = Vec::new();
 
@@ -341,7 +410,6 @@ fn canvas_view(nb: &Notebook, viewport: (f32, f32), palette: &Palette) -> View<M
         for dep_id in &cell.depends_on {
             let Some(dep) = nb.cell(*dep_id) else { continue };
             let Some(dep_pos) = dep.position else { continue };
-            // Centro inferior del dep → centro superior del dependiente.
             let x1 = vx + dep_pos.x + CANVAS_CARD_W * 0.5;
             let y1 = vy + dep_pos.y + CANVAS_CARD_H;
             let x2 = vx + child_pos.x + CANVAS_CARD_W * 0.5;
@@ -353,19 +421,15 @@ fn canvas_view(nb: &Notebook, viewport: (f32, f32), palette: &Palette) -> View<M
     // Cards encima — draggables (mueven Cell::position).
     for cell in nb.cells() {
         let Some(pos) = cell.position else { continue };
-        children.push(canvas_card(cell, palette, vx + pos.x, vy + pos.y));
+        let edit = editing.filter(|e| e.id == cell.id);
+        children.push(canvas_card(cell, edit, palette, vx + pos.x, vy + pos.y));
     }
 
-    // Aviso si hay celdas sin posición — las omitimos en canvas.
     let huerfanas = nb.cells().iter().filter(|c| c.position.is_none()).count();
     if huerfanas > 0 {
         children.push(orphan_notice(huerfanas, palette));
     }
 
-    // El contenedor canvas es draggable: pan del viewport. Las cards
-    // están encima y atrapan su propio drag — el runtime hace hit-test
-    // sobre el child más arriba, así el fondo sólo dispara cuando se
-    // arrastra una zona vacía.
     View::new(Style {
         flex_grow: 1.0,
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
@@ -380,13 +444,28 @@ fn canvas_view(nb: &Notebook, viewport: (f32, f32), palette: &Palette) -> View<M
     .children(children)
 }
 
-fn canvas_card(cell: &Cell, palette: &Palette, x: f32, y: f32) -> View<Msg> {
+fn canvas_card(
+    cell: &Cell,
+    edit: Option<&EditState>,
+    palette: &Palette,
+    x: f32,
+    y: f32,
+) -> View<Msg> {
     let id = cell.id;
     let (header, body) = card_header_body(cell, palette, CANVAS_BODY_H);
     let footer = output_footer(cell.last_output.as_ref(), palette);
     let run_button = run_button_view(id, palette);
+    let edit_button = edit_button_view(id, edit.is_some(), palette);
 
-    View::new(Style {
+    // En edición el body se reemplaza por el text input.
+    let body = match edit {
+        None => body,
+        Some(es) => edit_input_view(&es.input, palette),
+    };
+
+    // En edición la card no debe ser draggable (interfiere con foco
+    // del input) ni renderizar conectores reactivos al delta.
+    let mut wrapper = View::new(Style {
         flex_direction: FlexDirection::Column,
         position: Position::Absolute,
         inset: Rect {
@@ -399,12 +478,32 @@ fn canvas_card(cell: &Cell, palette: &Palette, x: f32, y: f32) -> View<Msg> {
         ..Default::default()
     })
     .fill(palette.bg_card)
-    .clip(true)
-    .draggable(move |phase, dx, dy| match phase {
-        DragPhase::Move => Some(Msg::MoveCell { id, dx, dy }),
-        DragPhase::End => None,
+    .clip(true);
+    if edit.is_none() {
+        wrapper = wrapper.draggable(move |phase, dx, dy| match phase {
+            DragPhase::Move => Some(Msg::MoveCell { id, dx, dy }),
+            DragPhase::End => None,
+        });
+    }
+    wrapper.children(vec![header, body, footer, edit_button, run_button])
+}
+
+fn edit_input_view(input: &TextInputState, palette: &Palette) -> View<Msg> {
+    // El text-input asume su propia paleta — derivamos del theme dark
+    // para que combine con el resto del visor.
+    let tp = TextInputPalette::from_theme(&Theme::dark());
+    let _ = palette; // (reservado por si después pintamos un borde activo)
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(CANVAS_BODY_H) },
+        padding: Rect {
+            left: length(6.0_f32),
+            right: length(6.0_f32),
+            top: length(4.0_f32),
+            bottom: length(4.0_f32),
+        },
+        ..Default::default()
     })
-    .children(vec![header, body, footer, run_button])
+    .children(vec![text_input_view(input, "fuente…", true, &tp, Msg::CancelEdit)])
 }
 
 fn output_footer(out: Option<&CellOutput>, palette: &Palette) -> View<Msg> {
@@ -453,7 +552,7 @@ fn truncate_line(s: &str, max: usize) -> String {
 const RUN_BTN_SIZE: f32 = 18.0;
 
 fn run_button_view(id: CellId, palette: &Palette) -> View<Msg> {
-    // Posicionado en la esquina superior derecha de la card (overlay).
+    // Esquina superior derecha.
     View::new(Style {
         position: Position::Absolute,
         inset: Rect {
@@ -470,6 +569,32 @@ fn run_button_view(id: CellId, palette: &Palette) -> View<Msg> {
     .hover_fill(palette.accent_fresh)
     .on_click(Msg::RunFrom(id))
     .text_aligned("▶", 10.0, palette.bg, Alignment::Center)
+}
+
+fn edit_button_view(id: CellId, editing: bool, palette: &Palette) -> View<Msg> {
+    // A la izquierda del botón ▶. Cuando hay edición activa, este
+    // mismo botón pasa a representar "commit" (✓).
+    let (glyph, msg) = if editing {
+        ("✓", Msg::CommitEdit)
+    } else {
+        ("✎", Msg::StartEdit(id))
+    };
+    View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            left: auto(),
+            top: length(2.0_f32),
+            right: length(26.0_f32),
+            bottom: auto(),
+        },
+        size: Size { width: length(RUN_BTN_SIZE), height: length(RUN_BTN_SIZE) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(palette.bg_panel)
+    .hover_fill(palette.accent_fresh)
+    .on_click(msg)
+    .text_aligned(glyph, 10.0, palette.fg_text, Alignment::Center)
 }
 
 fn orphan_notice(n: usize, palette: &Palette) -> View<Msg> {
@@ -551,8 +676,8 @@ fn card_header_body(cell: &Cell, palette: &Palette, body_h: f32) -> (View<Msg>, 
         size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
         padding: Rect {
             left: length(10.0_f32),
-            // Espacio reservado para el botón ▶ en modo canvas.
-            right: length(28.0_f32),
+            // Espacio reservado para los botones ✎ y ▶ en modo canvas.
+            right: length(50.0_f32),
             top: length(0.0_f32),
             bottom: length(0.0_f32),
         },
@@ -627,15 +752,15 @@ fn demo_notebook() -> Notebook {
     let mut nb = Notebook::new();
     let intro = nb.push(
         CellKind::Markdown,
-        "# Demo canvas\n\nClick en ▶ ejecuta esa celda y todos sus dependientes (run_from). Los nodos arrastran; el fondo panea.",
+        "Demo · ✎ edita, Enter commit, Esc cancela. ▶ corre run_from.",
     );
     let datos = nb.push(
         CellKind::Code { language: "wat".into() },
-        "(module\n  (func (export \"main\") (result i32)\n    i32.const 21))",
+        "(module (func (export \"main\") (result i32) i32.const 21))",
     );
     let media = nb.push(
         CellKind::Code { language: "wat".into() },
-        "(module\n  (func (export \"main\") (result i32)\n    i32.const 42))",
+        "(module (func (export \"main\") (result i32) i32.const 42))",
     );
     let grafico = nb.push(
         CellKind::Embed { module: "pineal".into() },
