@@ -107,8 +107,10 @@ impl RemoteRunHandle {
 /// error a un `RunEvent::Failed` y continúa.
 #[derive(Debug, thiserror::Error)]
 pub enum RemoteExecError {
-    #[error("conexión a {0}: {1}")]
+    #[error("conexión Unix a {0}: {1}")]
     Connect(PathBuf, std::io::Error),
+    #[error("conexión TCP a {0}: {1}")]
+    ConnectTcp(String, std::io::Error),
 }
 
 /// Lanza `spec` contra el daemon en `socket` y devuelve un asa cuyos
@@ -230,6 +232,114 @@ fn response_to_event(r: Response) -> Option<RunEvent> {
 /// [`shuma_protocol::default_socket_path`].
 pub fn run_default(spec: &CommandSpec) -> Result<RemoteRunHandle, RemoteExecError> {
     run(spec, &shuma_protocol::default_socket_path())
+}
+
+/// Variante autenticada y cifrada vía Noise XK sobre TCP — espejo de
+/// [`run`] para hablar con un daemon **remoto**. El cliente conoce de
+/// antemano la pubkey del servidor (`server_pub`, igual que
+/// `known_hosts` en SSH); el server valida nuestra pubkey contra su
+/// propio allowlist.
+///
+/// El `RemoteRunHandle` que devuelve tiene la misma forma que el del
+/// Unix path — el shell consume `try_events / kill / is_finished`
+/// igual en los dos casos.
+pub fn run_tcp(
+    spec: &CommandSpec,
+    addr: &str,
+    our_keypair: shuma_link::Keypair,
+    server_pub: shuma_link::PublicKey,
+) -> Result<RemoteRunHandle, RemoteExecError> {
+    let (tx, rx) = std::sync::mpsc::channel::<RunEvent>();
+    let cancel = Arc::new(Notify::new());
+    let cancel_thread = cancel.clone();
+    let addr_owned = addr.to_string();
+
+    // Mismo proto Request que el path Unix.
+    let exec_proto = match &spec.exec {
+        Exec::Shell { line, program } => ExecKind::Shell {
+            line: line.clone(),
+            program: program.clone(),
+        },
+        Exec::Direct { stages } => ExecKind::Direct {
+            stages: stages
+                .iter()
+                .map(|s| ExecStage { program: s.program.clone(), args: s.args.clone() })
+                .collect(),
+        },
+    };
+    let req = Request::ExecStream {
+        cwd: spec.cwd.clone(),
+        exec: exec_proto,
+        capture_limit_bytes: spec.capture_limit,
+        stdin_data: spec.stdin_data.clone(),
+    };
+
+    std::thread::spawn(move || {
+        let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = tx.send(RunEvent::Failed(format!("runtime: {e}")));
+                return;
+            }
+        };
+        rt.block_on(async move {
+            // 1) Conexión TCP. El error de conexión llega como Failed
+            // (en vez de Err(RemoteExecError::ConnectTcp)) porque el
+            // caller ya recibió el RemoteRunHandle: la forma de
+            // notificarle ahora es vía el canal de eventos.
+            let tcp = match tokio::net::TcpStream::connect(&addr_owned).await {
+                Ok(s) => s,
+                Err(e) => {
+                    let _ = tx.send(RunEvent::Failed(format!("connect {addr_owned}: {e}")));
+                    return;
+                }
+            };
+            // 2) Handshake Noise XK. Si la pubkey del server no
+            // coincide con `server_pub`, falla aquí (protección MITM).
+            let mut ch = match shuma_link::client_handshake(tcp, &our_keypair, server_pub).await {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(RunEvent::Failed(format!("handshake: {e}")));
+                    return;
+                }
+            };
+            // 3) Misma forma que el Unix path: enviar la request y
+            // drenar Response frames hasta el terminal o cancel.
+            if let Err(e) = ch.send_postcard(&req).await {
+                let _ = tx.send(RunEvent::Failed(format!("send request: {e}")));
+                return;
+            }
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = cancel_thread.notified() => {
+                        drop(ch);
+                        return;
+                    }
+                    res = ch.recv_postcard::<Response>() => {
+                        let resp = match res {
+                            Ok(r) => r,
+                            Err(e) => {
+                                let _ = tx.send(RunEvent::Failed(format!("read frame: {e}")));
+                                return;
+                            }
+                        };
+                        let terminal = resp.is_exec_terminal();
+                        if let Some(ev) = response_to_event(resp) {
+                            if tx.send(ev).is_err() {
+                                return;
+                            }
+                        }
+                        if terminal {
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+    });
+
+    Ok(RemoteRunHandle { rx, finished: false, cancel })
 }
 
 // Re-exports útiles para el shell.
@@ -415,7 +525,147 @@ mod tests {
         );
         match run(&spec, &no_such) {
             Err(RemoteExecError::Connect(_, _)) => {}
+            Err(e) => panic!("variante de error inesperada: {e:?}"),
             Ok(_) => panic!("debería fallar al conectar a un socket inexistente"),
         }
+    }
+
+    // ----- Tests del path TCP autenticado (Noise XK) -----
+
+    /// Espejo de `serve_exec_stream` para FramedChannel — sirve un único
+    /// ExecStream sobre el canal cifrado. Replica la forma del
+    /// `handle_exec_stream_enc` del daemon pero in-process para el test.
+    async fn serve_one_exec_enc(
+        mut ch: shuma_link::FramedChannel<tokio::net::TcpStream>,
+    ) {
+        let req: Request = ch.recv_postcard().await.expect("recv request");
+        let Request::ExecStream { cwd, exec, capture_limit_bytes, stdin_data } = req else {
+            panic!("esperaba ExecStream");
+        };
+        let exec_local = match exec {
+            ProtoExecKind::Shell { line, program } => Exec::Shell { line, program },
+            ProtoExecKind::Direct { stages } => Exec::Direct {
+                stages: stages
+                    .into_iter()
+                    .map(|s| StageSpec { program: s.program, args: s.args })
+                    .collect(),
+            },
+        };
+        let spec = CommandSpec {
+            exec: exec_local,
+            cwd,
+            capture_limit: capture_limit_bytes,
+            spill_path: None,
+            stdin_data,
+        };
+        let mut h = shuma_exec::run(&spec);
+        let killer = h.killer();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<RunEvent>();
+        std::thread::spawn(move || {
+            while let Some(ev) = h.next_event() {
+                if tx.send(ev).is_err() {
+                    return;
+                }
+            }
+        });
+        while let Some(ev) = rx.recv().await {
+            let terminal = matches!(ev, RunEvent::Exited(_) | RunEvent::Failed(_));
+            let resp = match ev {
+                RunEvent::Stdout(l) => Response::ExecStdout(l),
+                RunEvent::Stderr(l) => Response::ExecStderr(l),
+                RunEvent::Truncated => Response::ExecTruncated,
+                RunEvent::Spilled(p) => Response::ExecSpilled(p),
+                RunEvent::Exited(c) => Response::ExecExited(c),
+                RunEvent::Failed(m) => Response::ExecFailed(m),
+            };
+            if ch.send_postcard(&resp).await.is_err() {
+                killer.kill();
+                return;
+            }
+            if terminal {
+                break;
+            }
+        }
+    }
+
+    #[test]
+    fn echo_round_trips_through_encrypted_tcp_client() {
+        // Bind a localhost con puerto efímero para evitar choque.
+        let server_kp = shuma_link::Keypair::generate().unwrap();
+        let client_kp = shuma_link::Keypair::generate().unwrap();
+        let server_pub = server_kp.public();
+
+        // Server-thread con su propio runtime para no contender el del
+        // cliente (que vive dentro del hilo de `run_tcp`).
+        let server_kp2 = server_kp.clone();
+        let (addr_tx, addr_rx) = std::sync::mpsc::channel::<String>();
+        let server_thread = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(async move {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let addr = listener.local_addr().unwrap().to_string();
+                addr_tx.send(addr).unwrap();
+                let (tcp, _) = listener.accept().await.unwrap();
+                let (ch, _peer) = shuma_link::server_handshake(tcp, &server_kp2).await.unwrap();
+                serve_one_exec_enc(ch).await;
+            });
+        });
+        let addr = addr_rx.recv().unwrap();
+        let spec = CommandSpec::direct(
+            vec![StageSpec { program: "echo".into(), args: vec!["hola".into(), "cifrado".into()] }],
+            ".",
+        );
+        let mut h = run_tcp(&spec, &addr, client_kp, server_pub).unwrap();
+        let mut got = String::new();
+        while let Some(ev) = h.next_event() {
+            if let RunEvent::Stdout(l) = ev {
+                got = l;
+            }
+        }
+        server_thread.join().unwrap();
+        assert_eq!(got, "hola cifrado");
+        assert!(h.is_finished());
+    }
+
+    #[test]
+    fn wrong_server_pubkey_surfaces_as_failed_event() {
+        // El cliente espera la pubkey de un server "legítimo", pero el
+        // que responde es otro. El handshake debe fallar y eso llega al
+        // shell como un RunEvent::Failed, NO como un panic.
+        let real_server = shuma_link::Keypair::generate().unwrap();
+        let attacker = shuma_link::Keypair::generate().unwrap();
+        let client = shuma_link::Keypair::generate().unwrap();
+
+        let (addr_tx, addr_rx) = std::sync::mpsc::channel::<String>();
+        let server_thread = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(async move {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                addr_tx.send(listener.local_addr().unwrap().to_string()).unwrap();
+                let (tcp, _) = listener.accept().await.unwrap();
+                // El "atacante" se identifica con su propia keypair.
+                let _ = shuma_link::server_handshake(tcp, &attacker).await;
+            });
+        });
+        let addr = addr_rx.recv().unwrap();
+        let spec = CommandSpec::direct(
+            vec![StageSpec { program: "true".into(), args: vec![] }],
+            ".",
+        );
+        let mut h = run_tcp(&spec, &addr, client, real_server.public()).unwrap();
+        let mut saw_failed = false;
+        while let Some(ev) = h.next_event() {
+            if matches!(ev, RunEvent::Failed(_)) {
+                saw_failed = true;
+            }
+        }
+        server_thread.join().ok();
+        assert!(saw_failed, "se esperaba RunEvent::Failed por pubkey errónea");
     }
 }

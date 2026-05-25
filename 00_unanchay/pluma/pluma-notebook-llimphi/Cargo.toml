@@ -1,0 +1,19 @@
+[package]
+name = "pluma-notebook-llimphi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "pluma-notebook — visor read-only sobre Llimphi. Abre un .pluma-nb (o muestra un notebook demo) y renderiza cada celda como un card con tipo, estado y fuente truncada. Sin edición ni ejecución todavía."
+
+[[bin]]
+name = "pluma-notebook-llimphi"
+path = "src/main.rs"
+
+[dependencies]
+pluma-notebook-core = { path = "../pluma-notebook-core" }
+pluma-notebook-store = { path = "../pluma-notebook-store" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
