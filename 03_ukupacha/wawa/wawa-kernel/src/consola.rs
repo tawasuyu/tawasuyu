@@ -7,6 +7,7 @@
 //  WASM. Es global y serializada tras un `Mutex`: las tareas escriben en ella.
 // =============================================================================
 
+use bootloader_api::info::PixelFormat;
 use spin::{Mutex, Once};
 
 use crate::grafico::{codificar, Color, Lienzo, Pantalla, RegionPantalla};
@@ -181,6 +182,15 @@ impl Consola {
     /// hacerse mayor o menor que ese natural— y se recorta con firmeza a sus
     /// bordes. Una app jamas pinta un pixel fuera de su marco. NO traza borde
     /// ni presenta: de eso se encargan `volcar_marco` y `recomponer`.
+    ///
+    /// El recorte se PRE-CALCULA por fila (no por pixel): conociendo `off_x`,
+    /// `off_y`, `marco`, y el ancho/alto del lienzo, se deriva una sola vez
+    /// cuantas filas y columnas validas hay. Despues:
+    ///   * camino RAPIDO (BGR): el byte order del fotograma WASM coincide con
+    ///     el encoding del lienzo — una `copy_nonoverlapping` por fila, sin
+    ///     decodificar pixel a pixel.
+    ///   * camino general (RGB/U8/Unknown): se decodifica cada pixel, pero
+    ///     sin los `if x >= …` por iteracion —ya estamos dentro del recorte—.
     fn componer_fotograma(
         &mut self,
         marco: RegionPantalla,
@@ -198,29 +208,59 @@ impl Consola {
         let marco_x_fin = marco.x + marco.ancho;
         let marco_y_fin = marco.y + marco.alto;
 
-        for (indice, trozo) in datos.chunks_exact(4).enumerate() {
-            let columna = indice % nat_ancho;
-            let fila = indice / nat_ancho;
-            if fila >= nat_alto {
-                break; // el fotograma excede su alto natural: se ignora el resto
+        // Recorte: cuantas filas y columnas reales caben. El minimo entre el
+        // natural, el marco y el propio lienzo —tres techos a respetar—.
+        let lienzo_ancho = self.lienzo.ancho;
+        let lienzo_alto = self.lienzo.alto;
+        let filas = nat_alto
+            .min(marco_y_fin.saturating_sub(off_y))
+            .min(lienzo_alto.saturating_sub(off_y));
+        let cols = nat_ancho
+            .min(marco_x_fin.saturating_sub(off_x))
+            .min(lienzo_ancho.saturating_sub(off_x));
+        // Tambien recortado al volumen real de bytes que la app entrego: una
+        // app puede haber cacheado un fotograma corto en su primer `init`.
+        let filas_datos = datos.len() / (nat_ancho * 4);
+        let filas = filas.min(filas_datos);
+        if filas == 0 || cols == 0 {
+            return;
+        }
+
+        // Camino RAPIDO: el fotograma WASM `0x00RRGGBB` en LE tiene bytes
+        // `[B, G, R, 0]`; un FB BGR codifica `b | (g << 8) | (r << 16)`, cuyos
+        // bytes en LE son tambien `[B, G, R, 0]`. Copia byte-a-byte de fila.
+        if matches!(self.lienzo.format, PixelFormat::Bgr) {
+            let bytes_por_fila = cols * 4;
+            for fila in 0..filas {
+                let src_inicio = fila * nat_ancho * 4;
+                let dst_base = (off_y + fila) * lienzo_ancho + off_x;
+                // SEGURIDAD: src_inicio + bytes_por_fila <= datos.len()
+                // (cols <= nat_ancho y filas <= filas_datos); dst_base + cols
+                // <= lienzo.pixeles.len() (off_y + filas <= lienzo_alto y
+                // off_x + cols <= lienzo_ancho).
+                unsafe {
+                    let src = datos.as_ptr().add(src_inicio);
+                    let dst = self.lienzo.pixeles.as_mut_ptr().add(dst_base) as *mut u8;
+                    core::ptr::copy_nonoverlapping(src, dst, bytes_por_fila);
+                }
             }
-            let x = off_x + columna;
-            let y = off_y + fila;
-            // Recorte firme: al marco —el confinamiento de la app— y al lienzo.
-            if x >= marco_x_fin || y >= marco_y_fin {
-                continue;
+            return;
+        }
+
+        // Camino general: decodificar (R,G,B) y recodificar al format del FB.
+        // Sin chequeos de limites por pixel — el recorte ya los garantizo.
+        let format = self.lienzo.format;
+        for fila in 0..filas {
+            let src_inicio = fila * nat_ancho * 4;
+            let dst_base = (off_y + fila) * lienzo_ancho + off_x;
+            for col in 0..cols {
+                let idx = src_inicio + col * 4;
+                let b = datos[idx];
+                let g = datos[idx + 1];
+                let r = datos[idx + 2];
+                self.lienzo.pixeles[dst_base + col] =
+                    codificar(format, Color { r, g, b });
             }
-            if x >= self.lienzo.ancho || y >= self.lienzo.alto {
-                continue;
-            }
-            let p = u32::from_le_bytes([trozo[0], trozo[1], trozo[2], trozo[3]]);
-            let color = Color {
-                r: (p >> 16) as u8,
-                g: (p >> 8) as u8,
-                b: p as u8,
-            };
-            self.lienzo.pixeles[y * self.lienzo.ancho + x] =
-                codificar(self.lienzo.format, color);
         }
     }
 

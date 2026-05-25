@@ -229,6 +229,9 @@ impl Lienzo {
     }
 
     /// Rellena un rectangulo, recortado con firmeza a los limites del lienzo.
+    /// Una fila completa se rellena con `slice::fill`, que LLVM materializa
+    /// como un `memset` SIMD —cientos de pixeles por instruccion donde antes
+    /// iba un bucle de asignaciones escalares—.
     pub(crate) fn rellenar_rect(
         &mut self,
         x0: usize,
@@ -242,22 +245,23 @@ impl Lienzo {
         let y_ini = y0.min(self.alto);
         let x_fin = (x0 + ancho).min(self.ancho);
         let y_fin = (y0 + alto).min(self.alto);
-
+        if x_fin <= x_ini || y_fin <= y_ini {
+            return;
+        }
         let mut y = y_ini;
         while y < y_fin {
             let base = y * self.ancho;
-            let mut x = x_ini;
-            while x < x_fin {
-                self.pixeles[base + x] = valor;
-                x += 1;
-            }
+            self.pixeles[base + x_ini..base + x_fin].fill(valor);
             y += 1;
         }
     }
 
-    /// Inunda el lienzo entero con un color plano.
+    /// Inunda el lienzo entero con un color plano. Una sola pasada `fill`
+    /// sobre el slice util del lienzo —no toca el respaldo no usado—.
     pub(crate) fn limpiar(&mut self, color: Color) {
-        self.rellenar_rect(0, 0, self.ancho, self.alto, color);
+        let valor = codificar(self.format, color);
+        let usados = self.ancho.saturating_mul(self.alto).min(self.pixeles.len());
+        self.pixeles[..usados].fill(valor);
     }
 }
 
@@ -326,20 +330,45 @@ impl Pantalla {
     }
 
     /// Vuelca el lienzo intermedio sobre la pantalla fisica de un solo gesto.
+    /// El camino RAPIDO (32 bpp, el universal en GOP UEFI moderno) hace una
+    /// `copy_nonoverlapping` POR FILA: el lienzo ya esta codificado al format
+    /// del framebuffer, asi que blittear es memcpy puro. En 1920×1080, esto
+    /// pasa de ~2M write_volatile escalares a ~1080 memcpys de 7680 bytes —el
+    /// optimizador lo materializa con instrucciones `rep movsq` o equivalentes
+    /// SIMD—. Para FB de 1/2/3 bpp se recae al bucle volatil pixel a pixel.
     pub(crate) fn presentar(&mut self, lienzo: &Lienzo) {
         let ancho = self.ancho.min(lienzo.ancho);
         let alto = self.alto.min(lienzo.alto);
 
-        for y in 0..alto {
-            let fila_fisica = y * self.paso_bytes;
-            let fila_lienzo = y * lienzo.ancho;
-            for x in 0..ancho {
-                let pixel = lienzo.pixeles[fila_lienzo + x];
-                // SEGURIDAD: x e y estan acotados por las dimensiones reales
-                // del framebuffer; el desplazamiento cae siempre dentro de el.
+        if self.bytes_por_pixel == 4 {
+            let bytes_por_fila = ancho * 4;
+            for y in 0..alto {
+                let fila_lienzo = y * lienzo.ancho;
+                let fila_fisica = y * self.paso_bytes;
+                // SEGURIDAD: `fila_lienzo + ancho` cae dentro de `lienzo.pixeles`
+                // (acotado por `lienzo.ancho`), y `fila_fisica + bytes_por_fila`
+                // cae dentro del framebuffer (acotado por `paso_bytes` y por la
+                // altura fisica). El destino es memoria de video write-combining
+                // del firmware UEFI; un `memcpy` no volatil es la operacion
+                // canonica de blit y LLVM no la elide (el `*mut u8` cruzo la
+                // frontera FFI del cargador y sus alias son opacos).
                 unsafe {
-                    let destino = self.base.add(fila_fisica + x * self.bytes_por_pixel);
-                    escribir_pixel_volatil(destino, pixel, self.bytes_por_pixel);
+                    let src = lienzo.pixeles.as_ptr().add(fila_lienzo) as *const u8;
+                    let dst = self.base.add(fila_fisica);
+                    ptr::copy_nonoverlapping(src, dst, bytes_por_fila);
+                }
+            }
+        } else {
+            for y in 0..alto {
+                let fila_fisica = y * self.paso_bytes;
+                let fila_lienzo = y * lienzo.ancho;
+                for x in 0..ancho {
+                    let pixel = lienzo.pixeles[fila_lienzo + x];
+                    // SEGURIDAD: x e y acotados a las dimensiones reales del FB.
+                    unsafe {
+                        let destino = self.base.add(fila_fisica + x * self.bytes_por_pixel);
+                        escribir_pixel_volatil(destino, pixel, self.bytes_por_pixel);
+                    }
                 }
             }
         }
