@@ -21,6 +21,11 @@
 use std::env;
 use std::path::PathBuf;
 
+use async_trait::async_trait;
+use pluma_notebook_exec::{Kernel, KernelError, KernelOutput};
+use pluma_notebook_kernel_python::PythonKernel;
+use pluma_notebook_kernel_wasm::WasmKernel;
+
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{auto, length, percent, FlexDirection, Position, Rect, Size, Style},
@@ -154,7 +159,7 @@ impl App for Viewer {
                         .enable_all()
                         .build()
                         .expect("tokio runtime");
-                    let kernel = pluma_notebook_kernel_wasm::WasmKernel::new();
+                    let kernel = MultiKernel::new();
                     let _ = rt.block_on(pluma_notebook_exec::run_from(&mut nb, &kernel, id));
                     Msg::RunCompleted(nb)
                 });
@@ -762,6 +767,10 @@ fn demo_notebook() -> Notebook {
         CellKind::Code { language: "wat".into() },
         "(module (func (export \"main\") (result i32) i32.const 42))",
     );
+    let py = nb.push(
+        CellKind::Code { language: "python".into() },
+        "sum(range(1, 11))",
+    );
     let grafico = nb.push(
         CellKind::Embed { module: "pineal".into() },
         "barras: kilos por semana",
@@ -769,15 +778,44 @@ fn demo_notebook() -> Notebook {
     nb.add_dependency(media, datos);
     nb.add_dependency(grafico, datos);
     nb.add_dependency(grafico, media);
+    nb.add_dependency(grafico, py);
 
-    // Layout en árbol descendente: intro arriba, datos al centro, media a
-    // la izquierda y gráfico a la derecha — ambos hijos de datos.
+    // Layout: intro arriba, datos al centro, media+python como hijos a
+    // izquierda y centro, gráfico a la derecha como sink de los tres.
     nb.set_position(intro, Some(P::new(40.0, 40.0)));
     nb.set_position(datos, Some(P::new(40.0, 170.0)));
     nb.set_position(media, Some(P::new(40.0, 320.0)));
-    nb.set_position(grafico, Some(P::new(360.0, 320.0)));
+    nb.set_position(py, Some(P::new(310.0, 170.0)));
+    nb.set_position(grafico, Some(P::new(310.0, 320.0)));
 
     nb
+}
+
+/// Dispatcher por `language` — la pieza que junta wasmi + RustPython
+/// detrás del mismo trait `Kernel`. El visor delega acá y deja que cada
+/// celda elija su intérprete con un string.
+struct MultiKernel {
+    wasm: WasmKernel,
+    python: PythonKernel,
+}
+
+impl MultiKernel {
+    fn new() -> Self {
+        Self { wasm: WasmKernel::new(), python: PythonKernel::new() }
+    }
+}
+
+#[async_trait]
+impl Kernel for MultiKernel {
+    async fn execute(&self, source: &str, language: &str) -> Result<KernelOutput, KernelError> {
+        match language {
+            "wasm" | "wat" => self.wasm.execute(source, language).await,
+            "python" | "py" => self.python.execute(source, language).await,
+            other => Err(KernelError::Runtime(format!(
+                "ningún kernel registrado para '{other}' (disponibles: wasm/wat, python/py)"
+            ))),
+        }
+    }
 }
 
 fn main() {
