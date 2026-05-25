@@ -235,9 +235,12 @@ números son leyes.
 - Editor visual: click en canvas → spawnear/mover/borrar Conceptos.
 - ~~Slider widget en Llimphi~~ — ✓ `llimphi-widget-slider` (2026-05-25).
   Conectado a `dominium-app-llimphi` para editar `LayerMods` + `radius`
-  del Concepto seleccionado.
-- CLI headless (`dominium-cli`): correr N ticks, dumpar CSV de stats,
-  validar determinismo cross-platform.
+  del Concepto seleccionado, y `SimParams` (climb/move/diffuse/entropy)
+  desde la sección `[ MOTOR ]`.
+- ~~CLI headless~~ — ✓ `dominium-cli` (2026-05-25). `run --seed --ticks
+  --grid --lemmings --conceptos pack.json --csv out.csv`. Determinismo
+  bit-exacto verificado ejecutando dos veces con el mismo seed y
+  `diff`-eando los CSVs. ~12k tps en debug en máquina del autor.
 - ~~Costo biológico de pendiente~~ — ✓ (2026-05-25). `act_mover` lee
   `SimParams::relieve: [f32; 5]` + `SimParams::climb_cost: f32`. Las
   montañas (definidas por la combinación lineal de capas) ahora restan

@@ -1,0 +1,19 @@
+[package]
+name = "dominium-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "dominium-cli — corredor headless del simulador. Útil para validar determinismo cross-platform, dumpar CSVs de stats por tick, o experimentar con packs de Conceptos sin abrir ventana."
+
+[[bin]]
+name = "dominium-cli"
+path = "src/main.rs"
+
+[dependencies]
+dominium-core = { path = "../dominium-core" }
+dominium-physics = { path = "../dominium-physics" }
+clap = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }

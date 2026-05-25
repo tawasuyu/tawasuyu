@@ -131,6 +131,27 @@ enum Layer {
     Oro,
 }
 
+/// Slot de `SimParams` editable desde el panel. Sólo los 4 más visibles
+/// (no es plan exponer las 14 constantes); los demás quedan al default.
+#[derive(Clone, Copy, Debug)]
+enum ParamSlot {
+    ClimbCost,
+    DiffusionRate,
+    EntropyRate,
+    MoveCost,
+}
+
+impl ParamSlot {
+    fn range(self) -> (f32, f32) {
+        match self {
+            ParamSlot::ClimbCost => (0.0, 0.5),
+            ParamSlot::DiffusionRate => (0.0, 0.5),
+            ParamSlot::EntropyRate => (0.0, 0.05),
+            ParamSlot::MoveCost => (0.0, 0.5),
+        }
+    }
+}
+
 struct Stats {
     poblacion: usize,
     materia: f32,
@@ -162,6 +183,7 @@ enum Msg {
     EditMod(Layer, f32),
     EditRadius(f32),
     DeleteSelected,
+    EditParam(ParamSlot, f32),
 }
 
 struct Dominium;
@@ -266,6 +288,24 @@ impl App for Dominium {
                         for lock in m.world.lemmings.hack_lock.iter_mut() {
                             *lock = 0;
                         }
+                    }
+                }
+            }
+            Msg::EditParam(slot, dv) => {
+                let (lo, hi) = slot.range();
+                match slot {
+                    ParamSlot::ClimbCost => {
+                        m.params.climb_cost = (m.params.climb_cost + dv).clamp(lo, hi)
+                    }
+                    ParamSlot::DiffusionRate => {
+                        m.params.diffusion_rate =
+                            (m.params.diffusion_rate + dv).clamp(lo, hi)
+                    }
+                    ParamSlot::EntropyRate => {
+                        m.params.entropy_rate = (m.params.entropy_rate + dv).clamp(lo, hi)
+                    }
+                    ParamSlot::MoveCost => {
+                        m.params.move_cost = (m.params.move_cost + dv).clamp(lo, hi)
                     }
                 }
             }
@@ -489,8 +529,35 @@ fn side_panel(model: &Model, stats: &Stats, theme: &Theme) -> View<Msg> {
     }
 
     children.push(separator());
+    children.push(label_view("[ MOTOR ]", 11.0, theme.fg_muted));
+    children.push(param_slider(
+        "climb",
+        model.params.climb_cost,
+        ParamSlot::ClimbCost,
+        &slider_palette,
+    ));
+    children.push(param_slider(
+        "move",
+        model.params.move_cost,
+        ParamSlot::MoveCost,
+        &slider_palette,
+    ));
+    children.push(param_slider(
+        "diffuse",
+        model.params.diffusion_rate,
+        ParamSlot::DiffusionRate,
+        &slider_palette,
+    ));
+    children.push(param_slider(
+        "entropy",
+        model.params.entropy_rate,
+        ParamSlot::EntropyRate,
+        &slider_palette,
+    ));
+
+    children.push(separator());
     children.push(label_view(&format!("grilla {GRID}×{GRID}"), 11.0, theme.fg_muted));
-    children.push(label_view("relieve = materia (Z)", 11.0, theme.fg_muted));
+    children.push(label_view("relieve físico = materia", 11.0, theme.fg_muted));
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -606,6 +673,27 @@ fn mod_slider(label: &str, value: f32, layer: Layer, palette: &SliderPalette) ->
         palette,
         move |phase, dv| match phase {
             DragPhase::Move => Some(Msg::EditMod(layer, dv)),
+            DragPhase::End => None,
+        },
+    )
+}
+
+/// Slider para un slot de `SimParams`. El rango lo decide el slot.
+fn param_slider(
+    label: &str,
+    value: f32,
+    slot: ParamSlot,
+    palette: &SliderPalette,
+) -> View<Msg> {
+    let (min, max) = slot.range();
+    slider_view(
+        label,
+        value,
+        min,
+        max,
+        palette,
+        move |phase, dv| match phase {
+            DragPhase::Move => Some(Msg::EditParam(slot, dv)),
             DragPhase::End => None,
         },
     )
