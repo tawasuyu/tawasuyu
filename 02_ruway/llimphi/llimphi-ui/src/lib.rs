@@ -62,6 +62,12 @@ pub trait App: 'static {
     fn app_id() -> Option<&'static str> {
         None
     }
+
+    /// Tamaño lógico inicial de la ventana, en píxeles. El usuario puede
+    /// redimensionar después; sólo se lee al arrancar.
+    fn initial_size() -> (u32, u32) {
+        (960, 540)
+    }
 }
 
 /// Mensaje interno del event loop. `Msg` lo dispara la app desde un hilo de
@@ -377,9 +383,10 @@ struct RuntimeState<A: App> {
 }
 
 fn build_window_attributes<A: App>() -> WindowAttributes {
+    let (w, h) = A::initial_size();
     let attrs = WindowAttributes::default()
         .with_title(A::title())
-        .with_inner_size(LogicalSize::new(960u32, 540u32));
+        .with_inner_size(LogicalSize::new(w, h));
     // En Linux, `with_name` del trait de Wayland mapea al `app_id` del
     // xdg-toplevel — lo que el compositor (`mirada-compositor`) usa para
     // reconocer ventanas especiales (greeter, launcher…).

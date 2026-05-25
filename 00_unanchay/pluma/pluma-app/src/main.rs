@@ -1,29 +1,40 @@
-//! `pluma_app` — el editor de escritura DAG, ventana GPUI.
+//! `pluma-app` — el editor de escritura DAG, ventana Llimphi.
 //!
-//! Compone la cadena de pluma_app:
+//! Compone la cadena de pluma:
 //!
 //! ```text
-//!   pluma_app-core ─► pluma_app-graph ─► pluma_app-render-plan ─►
-//!   pluma_app-editor-gpui ─► [esta ventana]
+//!   pluma-core ─► pluma-graph ─► pluma-render-plan ─►
+//!   pluma-editor-llimphi ─► [esta ventana]
 //! ```
 //!
-//! El documento no es un texto plano sino un grafo de átomos
-//! narrativos. La ventana lo muestra en columnas por rama, con los
-//! conectores de dependencia y el osciloscopio de coherencia. El botón
-//! «Mutar raíz» reescribe el átomo origen y dispara la onda de choque
-//! lógica: todo descendiente cae a «por evaluar».
+//! El documento no es un texto plano sino un grafo de átomos narrativos.
+//! La ventana lo muestra en columnas por rama, con los conectores de
+//! dependencia y el osciloscopio de coherencia. El botón «Mutar raíz»
+//! reescribe el átomo origen y dispara la onda de choque lógica: todo
+//! descendiente cae a «por evaluar».
 
+use llimphi_ui::llimphi_layout::taffy::{
+    prelude::{length, percent, FlexDirection, Size, Style},
+    AlignItems, JustifyContent, Rect,
+};
+use llimphi_ui::llimphi_raster::peniko::Color;
+use llimphi_ui::llimphi_text::Alignment;
+use llimphi_ui::{App, Handle, View};
 use pluma_core::{CoherenceState, NarrativeAtom};
-use pluma_editor_gpui::{editor_view, tone_color};
+use pluma_editor_llimphi::{editor_view, tone_color, tone_label, Palette};
 use pluma_graph::NarrativeGraph;
 use pluma_render_plan::{build_plan, CoherenceTone, LayoutConfig};
-use gpui::{div, prelude::*, px, Context, IntoElement, Render, SharedString, Window};
-use nahual_launcher::launch_app;
-use nahual_theme::Theme;
 use uuid::Uuid;
 
-/// Estado del editor.
-struct Fana {
+fn main() {
+    llimphi_ui::run::<Pluma>();
+}
+
+// ---------------------------------------------------------------------
+// Modelo + mensajes
+// ---------------------------------------------------------------------
+
+struct Model {
     graph: NarrativeGraph,
     /// Átomo raíz — el que muta el botón de demostración.
     root: Uuid,
@@ -31,53 +42,340 @@ struct Fana {
     mutations: u32,
 }
 
-impl Fana {
-    fn new(_cx: &mut Context<Self>) -> Self {
-        let (graph, root) = seed_document();
-        Self { graph, root, mutations: 0 }
-    }
-
+#[derive(Clone)]
+enum Msg {
     /// Reescribe la raíz y propaga la onda de choque a sus descendientes.
-    fn mutate_root(&mut self) {
-        self.mutations += 1;
-        let nuevo = format!(
-            "Capítulo 1 — versión {}: el viajero nunca llegó al puerto.",
-            self.mutations
-        );
-        if let Some(atom) = self.graph.get_mut(self.root) {
-            atom.set_content(nuevo); // marca la raíz como PendingEvaluation
-        }
-        // Marca en cascada todo descendiente transitivo.
-        self.graph.propagate_mutation(self.root);
-    }
-
+    MutateRoot,
     /// Devuelve todos los átomos a estado coherente.
-    fn revalidate(&mut self) {
-        let ids: Vec<Uuid> = self.graph.atoms().map(|a| a.id).collect();
-        for id in ids {
-            if let Some(atom) = self.graph.get_mut(id) {
-                atom.coherence = CoherenceState::Valid;
-            }
+    Revalidate,
+}
+
+struct Pluma;
+
+impl App for Pluma {
+    type Model = Model;
+    type Msg = Msg;
+
+    fn title() -> &'static str {
+        "pluma · editor DAG"
+    }
+
+    fn initial_size() -> (u32, u32) {
+        (1180, 760)
+    }
+
+    fn init(_: &Handle<Self::Msg>) -> Self::Model {
+        let (graph, root) = seed_document();
+        Model {
+            graph,
+            root,
+            mutations: 0,
         }
     }
 
-    /// Cuenta átomos en cada estado de coherencia: `(pendientes, conflictos)`.
-    fn coherence_counts(&self) -> (usize, usize) {
-        let mut pending = 0;
-        let mut conflict = 0;
-        for a in self.graph.atoms() {
-            match a.coherence {
-                CoherenceState::PendingEvaluation => pending += 1,
-                CoherenceState::InConflict { .. } => conflict += 1,
-                CoherenceState::Valid => {}
+    fn update(model: Self::Model, msg: Self::Msg, _: &Handle<Self::Msg>) -> Self::Model {
+        let mut m = model;
+        match msg {
+            Msg::MutateRoot => {
+                m.mutations += 1;
+                let nuevo = format!(
+                    "Capítulo 1 — versión {}: el viajero nunca llegó al puerto.",
+                    m.mutations
+                );
+                if let Some(atom) = m.graph.get_mut(m.root) {
+                    atom.set_content(nuevo); // marca la raíz como PendingEvaluation
+                }
+                // Marca en cascada todo descendiente transitivo.
+                m.graph.propagate_mutation(m.root);
+            }
+            Msg::Revalidate => {
+                let ids: Vec<Uuid> = m.graph.atoms().map(|a| a.id).collect();
+                for id in ids {
+                    if let Some(atom) = m.graph.get_mut(id) {
+                        atom.coherence = CoherenceState::Valid;
+                    }
+                }
             }
         }
-        (pending, conflict)
+        m
+    }
+
+    fn view(model: &Self::Model) -> View<Self::Msg> {
+        let palette = Palette::default();
+        let chip = Color::from_rgba8(36, 42, 56, 255);
+        let border = Color::from_rgba8(46, 54, 70, 255);
+
+        let plan = build_plan(&model.graph, &LayoutConfig::default());
+        let (pending, conflict) = coherence_counts(&model.graph);
+
+        // --- Barra de estado --------------------------------------------------
+        let status_bar = View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(34.0_f32),
+            },
+            padding: Rect {
+                left: length(14.0_f32),
+                right: length(14.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .fill(palette.bg_panel)
+        .text_aligned(
+            format!(
+                "pluma · editor de escritura DAG    ·    {} átomos",
+                model.graph.len()
+            ),
+            13.0,
+            palette.fg_text,
+            Alignment::Start,
+        );
+
+        // --- Lienzo del editor ------------------------------------------------
+        // Sin scroll: lo que no entre en la ventana queda recortado por la
+        // superficie. Llimphi todavía no implementa scroll containers — basta
+        // con redimensionar la ventana para ver el documento entero.
+        let canvas = View::new(Style {
+            flex_grow: 1.0,
+            flex_shrink: 0.0,
+            size: Size {
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(palette.bg_app)
+        .children(vec![editor_view::<Msg>(&plan, &palette)]);
+
+        // --- Panel lateral ----------------------------------------------------
+        let side = View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size {
+                width: length(240.0_f32),
+                height: percent(1.0_f32),
+            },
+            flex_shrink: 0.0,
+            gap: Size {
+                width: length(0.0_f32),
+                height: length(10.0_f32),
+            },
+            padding: Rect {
+                left: length(12.0_f32),
+                right: length(12.0_f32),
+                top: length(12.0_f32),
+                bottom: length(12.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(palette.bg_panel)
+        .children(vec![
+            label("[DOCUMENTO]", 11.0, palette.fg_muted),
+            button("⚡  Mutar raíz", chip, palette.fg_text, Msg::MutateRoot),
+            button(
+                "✓  Re-validar todo",
+                chip,
+                palette.fg_text,
+                Msg::Revalidate,
+            ),
+            divider(border),
+            stat_row("Átomos", format!("{}", model.graph.len()), &palette),
+            stat_row("Por evaluar", format!("{pending}"), &palette),
+            stat_row("En conflicto", format!("{conflict}"), &palette),
+            divider(border),
+            label("coherencia", 11.0, palette.fg_muted),
+            legend_row(CoherenceTone::Valid, &palette),
+            legend_row(CoherenceTone::Pending, &palette),
+            legend_row(CoherenceTone::Conflict, &palette),
+            divider(border),
+            description(
+                "«Mutar raíz» reescribe el átomo origen: la onda de choque marca \
+                 cada descendiente como «por evaluar».",
+                palette.fg_muted,
+            ),
+        ]);
+
+        let body = View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size {
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
+            },
+            flex_grow: 1.0,
+            ..Default::default()
+        })
+        .children(vec![canvas, side]);
+
+        View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size {
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(palette.bg_app)
+        .children(vec![status_bar, body])
     }
 }
 
-/// Construye el documento de ejemplo: un relato corto con una rama
-/// alterna. Devuelve el grafo y el id de la raíz.
+// ---------------------------------------------------------------------
+// Helpers del panel lateral
+// ---------------------------------------------------------------------
+
+fn label(text: &str, size: f32, color: Color) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(16.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(text.to_string(), size, color, Alignment::Start)
+}
+
+fn description(text: &str, color: Color) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(56.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(text.to_string(), 11.0, color, Alignment::Start)
+}
+
+fn divider(color: Color) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(color)
+}
+
+fn button(label: &str, bg: Color, fg: Color, on_click: Msg) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(30.0_f32),
+        },
+        padding: Rect {
+            left: length(10.0_f32),
+            right: length(10.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(bg)
+    .radius(5.0)
+    .text_aligned(label.to_string(), 13.0, fg, Alignment::Start)
+    .on_click(on_click)
+}
+
+/// Fila «etiqueta · valor» con justify_between.
+fn stat_row(label_text: &str, value: String, palette: &Palette) -> View<Msg> {
+    let left = View::new(Style {
+        size: Size {
+            width: length(120.0_f32),
+            height: length(18.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(
+        label_text.to_string(),
+        12.0,
+        palette.fg_muted,
+        Alignment::Start,
+    );
+    let right = View::new(Style {
+        size: Size {
+            width: length(80.0_f32),
+            height: length(18.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(value, 12.0, palette.fg_text, Alignment::End);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(18.0_f32),
+        },
+        justify_content: Some(JustifyContent::SpaceBetween),
+        ..Default::default()
+    })
+    .children(vec![left, right])
+}
+
+/// Fila de la leyenda: un cuadradito tonal + la etiqueta.
+fn legend_row(tone: CoherenceTone, palette: &Palette) -> View<Msg> {
+    let chip = View::new(Style {
+        size: Size {
+            width: length(12.0_f32),
+            height: length(12.0_f32),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(tone_color(tone))
+    .radius(3.0);
+    let text = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(14.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(
+        tone_label(tone).to_string(),
+        12.0,
+        palette.fg_muted,
+        Alignment::Start,
+    );
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(16.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(8.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![chip, text])
+}
+
+// ---------------------------------------------------------------------
+// Documento de demostración + helpers de modelo
+// ---------------------------------------------------------------------
+
+/// Cuenta átomos en cada estado de coherencia: `(pendientes, conflictos)`.
+fn coherence_counts(graph: &NarrativeGraph) -> (usize, usize) {
+    let mut pending = 0;
+    let mut conflict = 0;
+    for a in graph.atoms() {
+        match a.coherence {
+            CoherenceState::PendingEvaluation => pending += 1,
+            CoherenceState::InConflict { .. } => conflict += 1,
+            CoherenceState::Valid => {}
+        }
+    }
+    (pending, conflict)
+}
+
+/// Construye el documento de ejemplo: un relato corto con una rama alterna.
 fn seed_document() -> (NarrativeGraph, Uuid) {
     let mut root = NarrativeAtom::new(
         "Capítulo 1 — el viajero llega al puerto al amanecer.",
@@ -125,143 +423,4 @@ fn seed_document() -> (NarrativeGraph, Uuid) {
 
     let graph = NarrativeGraph::from_atoms([root, posada, pasos, puerta, muelle]);
     (graph, root_id)
-}
-
-/// Fila de leyenda: muestra el color de un tono y su etiqueta.
-fn legend_row(tone: CoherenceTone, label: &str, theme: &Theme) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(8.))
-        .child(div().w(px(12.)).h(px(12.)).rounded(px(3.)).bg(tone_color(tone)))
-        .child(
-            div()
-                .text_size(px(12.))
-                .text_color(theme.fg_muted)
-                .child(SharedString::from(label.to_string())),
-        )
-}
-
-/// Fila etiqueta/valor del panel.
-fn stat_row(label: &str, value: String, theme: &Theme) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_row()
-        .justify_between()
-        .child(div().text_color(theme.fg_muted).child(SharedString::from(label.to_string())))
-        .child(div().text_color(theme.fg_text).child(SharedString::from(value)))
-}
-
-impl Render for Fana {
-    fn render(&mut self, _w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::global(cx).clone();
-        let panel = gpui::hsla(220.0 / 360.0, 0.18, 0.10, 1.0);
-        let chip = gpui::hsla(220.0 / 360.0, 0.16, 0.16, 1.0);
-        let (pending, conflict) = self.coherence_counts();
-
-        let plan = build_plan(&self.graph, &LayoutConfig::default());
-
-        // --- Barra de estado ---
-        let status = div()
-            .h(px(34.))
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .px(px(14.))
-            .bg(panel)
-            .text_color(theme.fg_text)
-            .child("pluma_app · editor de escritura DAG")
-            .child(
-                div()
-                    .text_color(theme.fg_muted)
-                    .child(SharedString::from(format!("{} átomos", self.graph.len()))),
-            );
-
-        // --- Lienzo del editor (con scroll) ---
-        let canvas = div()
-            .id("editor-scroll")
-            .flex_1()
-            .overflow_x_scroll()
-            .overflow_y_scroll()
-            .bg(theme.bg_app)
-            .child(editor_view(&plan, &theme));
-
-        // --- Botones (los listeners se cablean abajo con cx.listener) ---
-        let btn_mutar = div()
-            .id("mutar")
-            .px(px(10.))
-            .py(px(7.))
-            .bg(chip)
-            .rounded(px(5.))
-            .text_color(theme.fg_text)
-            .cursor_pointer()
-            .hover(|s| s.bg(theme.bg_row_hover))
-            .child("⚡  Mutar raíz")
-            .on_click(cx.listener(|pluma_app, _ev, _w, cx| {
-                pluma_app.mutate_root();
-                cx.notify();
-            }));
-        let btn_revalidar = div()
-            .id("revalidar")
-            .px(px(10.))
-            .py(px(7.))
-            .bg(chip)
-            .rounded(px(5.))
-            .text_color(theme.fg_text)
-            .cursor_pointer()
-            .hover(|s| s.bg(theme.bg_row_hover))
-            .child("✓  Re-validar todo")
-            .on_click(cx.listener(|pluma_app, _ev, _w, cx| {
-                pluma_app.revalidate();
-                cx.notify();
-            }));
-
-        // --- Panel lateral ---
-        let side = div()
-            .w(px(240.))
-            .flex()
-            .flex_col()
-            .gap(px(10.))
-            .p(px(12.))
-            .bg(panel)
-            .text_color(theme.fg_text)
-            .child(div().text_color(theme.fg_muted).child("[DOCUMENTO]"))
-            .child(btn_mutar)
-            .child(btn_revalidar)
-            .child(div().h(px(1.)).bg(theme.border))
-            .child(stat_row("Átomos", format!("{}", self.graph.len()), &theme))
-            .child(stat_row("Por evaluar", format!("{pending}"), &theme))
-            .child(stat_row("En conflicto", format!("{conflict}"), &theme))
-            .child(div().h(px(1.)).bg(theme.border))
-            .child(div().text_color(theme.fg_muted).child("coherencia"))
-            .child(legend_row(CoherenceTone::Valid, "coherente", &theme))
-            .child(legend_row(CoherenceTone::Pending, "por evaluar", &theme))
-            .child(legend_row(CoherenceTone::Conflict, "en conflicto", &theme))
-            .child(div().h(px(1.)).bg(theme.border))
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(theme.fg_muted)
-                    .child(
-                        "«Mutar raíz» reescribe el átomo origen: la onda \
-                         de choque marca cada descendiente como «por \
-                         evaluar».",
-                    ),
-            );
-
-        // --- Composición ---
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .bg(theme.bg_app)
-            .child(status)
-            .child(div().flex().flex_row().flex_1().child(canvas).child(side))
-    }
-}
-
-fn main() {
-    launch_app("brahman · pluma_app", (1180., 760.), Fana::new);
 }

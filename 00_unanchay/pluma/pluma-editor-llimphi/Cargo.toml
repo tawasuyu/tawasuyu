@@ -1,0 +1,12 @@
+[package]
+name = "pluma-editor-llimphi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "pluma — backend Llimphi del editor DAG: pinta un RenderPlan como bloques de átomo, conectores de dependencia y osciloscopio de coherencia."
+
+[dependencies]
+pluma-render-plan = { path = "../pluma-render-plan" }
+llimphi-ui = { workspace = true }
