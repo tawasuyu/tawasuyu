@@ -142,6 +142,52 @@ pub enum Request {
 
     /// Cerrar el data plane de un pipeline (drop sockets + canales).
     FlowDrop { pipeline: Ulid },
+
+    /// Ejecutar un comando "shell-like" (sin workspace/cgroups) y
+    /// recibir su salida en **streaming** sobre la misma conexión.
+    ///
+    /// Modelo:
+    /// 1. El cliente envía `ExecStream`.
+    /// 2. El daemon spawnea el proceso (vía `shuma-exec`) y, sobre la
+    ///    misma conexión, escribe una secuencia de `Response::Exec*`
+    ///    terminada por `ExecExited` o `ExecFailed`.
+    /// 3. Tras el evento terminal, la conexión vuelve a modo
+    ///    request/response normal: el cliente puede mandar otra
+    ///    `Request` y el daemon contesta una `Response` por cada una.
+    ///
+    /// Para abortar a mitad de ejecución, el cliente cierra la conexión;
+    /// el daemon detecta el EOF al intentar escribir el próximo frame y
+    /// mata el proceso. Es la convención SSH/PTY.
+    ExecStream {
+        /// Directorio de trabajo del proceso.
+        cwd: String,
+        /// Modo de ejecución: directo (pipe de etapas) o vía shell.
+        exec: ExecKind,
+        /// Tope de captura por proceso en bytes; `0` = sin tope.
+        #[serde(default)]
+        capture_limit_bytes: usize,
+        /// Texto a alimentar por stdin — para reprocesar salidas previas.
+        #[serde(default)]
+        stdin_data: Option<String>,
+    },
+}
+
+/// Cómo ejecutar — variante serializable paralela a `shuma_exec::Exec`.
+/// Se mantiene aquí para que `shuma-protocol` no dependa de `shuma-exec`
+/// (que es un crate sync para spawning). El daemon traduce entre ambas.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ExecKind {
+    /// Delega a un shell externo (`program -c "<line>"`).
+    Shell { line: String, program: String },
+    /// Directo — daemon lanza y conecta cada etapa del pipe.
+    Direct { stages: Vec<ExecStage> },
+}
+
+/// Una etapa del pipe en ejecución directa.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecStage {
+    pub program: String,
+    pub args: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -261,6 +307,42 @@ pub enum Response {
     Error {
         message: String,
     },
+
+    // === Frames de streaming de ExecStream ===
+    // El daemon emite una secuencia de estos por cada `ExecStream`, en
+    // este orden lógico: `ExecStarted?` (cuando hay PID) → cualquier
+    // mezcla de `ExecStdout`/`ExecStderr`/`ExecTruncated`/`ExecSpilled`
+    // → terminal `ExecExited(_)` o `ExecFailed(_)`. Tras el terminal, la
+    // conexión vuelve a modo request/response.
+
+    /// El proceso (o la primera etapa de un pipe) arrancó con este PID.
+    /// Útil para el cliente para mostrar/auditar; opcional, no todos los
+    /// modos lo emiten.
+    ExecStarted { pid: i32 },
+    /// Una línea de stdout del proceso.
+    ExecStdout(String),
+    /// Una línea de stderr del proceso.
+    ExecStderr(String),
+    /// La captura alcanzó el tope; lo siguiente se descarta. El proceso
+    /// sigue corriendo (su pipe se sigue drenando del lado del daemon).
+    ExecTruncated,
+    /// La captura excedió el tope y la cola se está volcando al fichero
+    /// indicado (path en el lado del daemon, no del cliente).
+    ExecSpilled(String),
+    /// Terminal. Código de salida del proceso (de la última etapa en un
+    /// pipe directo).
+    ExecExited(i32),
+    /// Terminal. El proceso no se pudo ni lanzar (binario inexistente,
+    /// permisos, etc.).
+    ExecFailed(String),
+}
+
+impl Response {
+    /// `true` si este frame cierra un `ExecStream` (último que el
+    /// cliente leerá antes de volver al modo request/response).
+    pub fn is_exec_terminal(&self) -> bool {
+        matches!(self, Response::ExecExited(_) | Response::ExecFailed(_))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -440,5 +522,68 @@ mod tests {
     fn default_socket_path_uses_runtime_dir() {
         let p = default_socket_path();
         assert!(p.to_string_lossy().ends_with("shuma.sock"));
+    }
+
+    #[test]
+    fn exec_stream_request_round_trips() {
+        let req = Request::ExecStream {
+            cwd: "/tmp".into(),
+            exec: ExecKind::Direct {
+                stages: vec![
+                    ExecStage { program: "echo".into(), args: vec!["hola".into()] },
+                ],
+            },
+            capture_limit_bytes: 1024,
+            stdin_data: None,
+        };
+        let bytes = postcard::to_allocvec(&req).unwrap();
+        let back: Request = postcard::from_bytes(&bytes).unwrap();
+        match back {
+            Request::ExecStream { cwd, exec, capture_limit_bytes, stdin_data } => {
+                assert_eq!(cwd, "/tmp");
+                assert_eq!(capture_limit_bytes, 1024);
+                assert!(stdin_data.is_none());
+                if let ExecKind::Direct { stages } = exec {
+                    assert_eq!(stages.len(), 1);
+                    assert_eq!(stages[0].program, "echo");
+                } else {
+                    panic!("expected Direct");
+                }
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn exec_terminal_detector() {
+        assert!(Response::ExecExited(0).is_exec_terminal());
+        assert!(Response::ExecFailed("x".into()).is_exec_terminal());
+        assert!(!Response::ExecStdout("línea".into()).is_exec_terminal());
+        assert!(!Response::ExecStderr("warn".into()).is_exec_terminal());
+        assert!(!Response::ExecTruncated.is_exec_terminal());
+        assert!(!Response::ExecSpilled("/tmp/x".into()).is_exec_terminal());
+        // El terminal sólo aplica al subprotocolo Exec — un Pong NO es terminal.
+        assert!(!Response::Pong.is_exec_terminal());
+    }
+
+    #[test]
+    fn exec_stream_event_frames_round_trip() {
+        let evs = vec![
+            Response::ExecStarted { pid: 4242 },
+            Response::ExecStdout("hola".into()),
+            Response::ExecStderr("warn".into()),
+            Response::ExecTruncated,
+            Response::ExecSpilled("/tmp/shuma-spill.log".into()),
+            Response::ExecExited(0),
+        ];
+        for ev in evs {
+            let bytes = postcard::to_allocvec(&ev).unwrap();
+            let back: Response = postcard::from_bytes(&bytes).unwrap();
+            // El round-trip preserva la variante.
+            assert_eq!(
+                std::mem::discriminant(&ev),
+                std::mem::discriminant(&back),
+            );
+        }
     }
 }

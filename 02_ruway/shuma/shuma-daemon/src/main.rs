@@ -17,8 +17,8 @@ use shuma_core::WorkspaceManager;
 use shuma_discern::{DiscernPipeline, Hint};
 use shuma_protocol::{
     default_socket_path, read_frame, write_frame, CommandInfo as ProtoCommandInfo,
-    EdgeDiscernmentInfo, FlowInfo, FlowThroughputInfo, QuotaReportInfo, Request, Response,
-    WorkspaceStatsInfo, WorkspaceSummary,
+    EdgeDiscernmentInfo, ExecKind as ProtoExecKind, FlowInfo, FlowThroughputInfo, QuotaReportInfo,
+    Request, Response, WorkspaceStatsInfo, WorkspaceSummary,
 };
 use std::sync::Arc;
 use tokio::net::{UnixListener, UnixStream};
@@ -292,8 +292,117 @@ async fn handle_client(
             Err(e) => return Err(e.into()),
         };
         audit_request(peer, &req);
+
+        // El subprotocolo `ExecStream` produce N frames sobre la misma
+        // conexión hasta un terminal. Lo manejamos inline en vez de pasar
+        // por `dispatch` (que es request/response 1:1).
+        if let Request::ExecStream { cwd, exec, capture_limit_bytes, stdin_data } = req {
+            handle_exec_stream(&mut stream, cwd, exec, capture_limit_bytes, stdin_data).await?;
+            continue;
+        }
+
         let resp = dispatch(&mgr, &disc, &pool, daemon_started, req).await;
         write_frame(&mut stream, &resp).await?;
+    }
+}
+
+/// Subprotocolo ExecStream: spawnea con `shuma-exec` y reemite cada
+/// evento como un frame de `Response::Exec*` sobre `stream`. Cuando el
+/// cliente cierra la conexión a mitad de stream, detectamos el error de
+/// escritura y matamos el proceso — convención SSH/PTY.
+async fn handle_exec_stream(
+    stream: &mut UnixStream,
+    cwd: String,
+    exec: ProtoExecKind,
+    capture_limit_bytes: usize,
+    stdin_data: Option<String>,
+) -> anyhow::Result<()> {
+    let exec = match exec {
+        ProtoExecKind::Shell { line, program } => shuma_exec::Exec::Shell { line, program },
+        ProtoExecKind::Direct { stages } => shuma_exec::Exec::Direct {
+            stages: stages
+                .into_iter()
+                .map(|s| shuma_exec::StageSpec { program: s.program, args: s.args })
+                .collect(),
+        },
+    };
+    let spec = shuma_exec::CommandSpec {
+        exec,
+        cwd,
+        capture_limit: capture_limit_bytes,
+        spill_path: None, // el cliente no expone path local del daemon
+        stdin_data,
+    };
+    let mut handle = shuma_exec::run(&spec);
+    // Capturamos el "Killer" antes de mover el RunHandle al hilo bridge —
+    // así podemos disparar SIGKILL desde la tarea async sin contender el
+    // lock del lector (`next_event` puede estar bloqueado en `rx.recv`).
+    let killer = handle.killer();
+
+    // Bridge sync→async: un hilo dedicado bloquea en `next_event()` y
+    // reenvía por un canal tokio.
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<shuma_exec::RunEvent>();
+    let _bridge = std::thread::spawn(move || {
+        while let Some(ev) = handle.next_event() {
+            if tx.send(ev).is_err() {
+                return;
+            }
+        }
+    });
+
+    // Loop dual: por un lado los eventos del proceso (rx), por otro el
+    // socket del cliente. Cualquier byte o EOF en el socket significa
+    // "abort" (el cliente no debe escribir mientras dura el stream).
+    // Sin este watcher, un proceso silencioso (p.ej. `sleep 30`) deja
+    // colgado al handler hasta que el cliente cae por timeout TCP.
+    let mut byte = [0u8; 1];
+    loop {
+        tokio::select! {
+            biased;
+            ev = rx.recv() => {
+                let Some(ev) = ev else { break };
+                let terminal = matches!(
+                    ev,
+                    shuma_exec::RunEvent::Exited(_) | shuma_exec::RunEvent::Failed(_)
+                );
+                let resp = exec_event_to_response(ev);
+                if let Err(e) = write_frame(stream, &resp).await {
+                    killer.kill();
+                    return Err(e.into());
+                }
+                if terminal {
+                    break;
+                }
+            }
+            // `read_exact` es cancel-safe en tokio: si se cancela la rama
+            // no se pierden bytes. Aquí cualquier resultado (Ok = byte
+            // inesperado, Err = EOF/error) cuenta como señal de abort.
+            res = tokio::io::AsyncReadExt::read_exact(stream, &mut byte) => {
+                let _ = res; // ambos sentidos significan "kill"
+                killer.kill();
+                // Drenamos lo que quede en cola hasta el terminal para
+                // que el bridge cierre limpio (el thread del lector saldrá
+                // solo cuando el proceso muera y los readers vean EOF).
+                while let Some(ev) = rx.recv().await {
+                    if matches!(ev, shuma_exec::RunEvent::Exited(_) | shuma_exec::RunEvent::Failed(_)) {
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn exec_event_to_response(ev: shuma_exec::RunEvent) -> Response {
+    match ev {
+        shuma_exec::RunEvent::Stdout(l) => Response::ExecStdout(l),
+        shuma_exec::RunEvent::Stderr(l) => Response::ExecStderr(l),
+        shuma_exec::RunEvent::Truncated => Response::ExecTruncated,
+        shuma_exec::RunEvent::Spilled(p) => Response::ExecSpilled(p),
+        shuma_exec::RunEvent::Exited(c) => Response::ExecExited(c),
+        shuma_exec::RunEvent::Failed(m) => Response::ExecFailed(m),
     }
 }
 
@@ -351,6 +460,17 @@ fn audit_request(peer_uid: u32, req: &Request) {
         Request::PipelineSave { name, .. } => ("pipeline.save", format!("name={name}")),
         Request::PipelineDrop { name } => ("pipeline.drop", format!("name={name}")),
         Request::FlowDrop { pipeline } => ("flow.drop", format!("pipeline={pipeline}")),
+        Request::ExecStream { cwd, exec, .. } => {
+            let summary = match exec {
+                ProtoExecKind::Shell { line, .. } => format!("shell={line:?}"),
+                ProtoExecKind::Direct { stages } => stages
+                    .iter()
+                    .map(|s| s.program.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" | "),
+            };
+            ("exec.stream", format!("cwd={cwd} {summary}"))
+        }
         // Reads (no audit):
         Request::Ping
         | Request::Health
@@ -737,6 +857,13 @@ async fn dispatch(
                 has_cap_sys_admin: c.has_cap_sys_admin,
             }
         }
+
+        // `ExecStream` se atiende inline en `handle_client` con el
+        // subprotocolo de streaming; nunca debería llegar aquí. Si lo
+        // hace, devolvemos un error explícito en vez de panic.
+        Request::ExecStream { .. } => Response::Error {
+            message: "ExecStream debe atenderse en handle_client; no por dispatch".into(),
+        },
     }
 }
 
@@ -844,4 +971,121 @@ fn init_tracing() {
     use tracing_subscriber::{fmt, EnvFilter};
     let filter = EnvFilter::try_from_env("SHIPOTE_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
     fmt().with_env_filter(filter).init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shuma_protocol::{ExecKind, ExecStage};
+
+    /// El subprotocolo ExecStream sirve un `echo` end-to-end sobre un par
+    /// de UnixStream — sin lanzar el binario del daemon. Comprueba que
+    /// los frames llegan en el orden esperado y terminan con `ExecExited`.
+    #[tokio::test]
+    async fn exec_stream_echoes_a_line() {
+        let (mut server, mut client) = tokio::net::UnixStream::pair().unwrap();
+        // Server: corre el handler de streaming en tarea aparte.
+        let server_task = tokio::spawn(async move {
+            handle_exec_stream(
+                &mut server,
+                ".".into(),
+                ProtoExecKind::Direct {
+                    stages: vec![ExecStage {
+                        program: "echo".into(),
+                        args: vec!["hola".into(), "mundo".into()],
+                    }],
+                },
+                0,
+                None,
+            )
+            .await
+            .unwrap();
+        });
+        // Cliente: drena hasta terminal.
+        let mut frames: Vec<Response> = Vec::new();
+        loop {
+            let r: Response = read_frame(&mut client).await.expect("read frame");
+            let terminal = r.is_exec_terminal();
+            frames.push(r);
+            if terminal {
+                break;
+            }
+        }
+        server_task.await.unwrap();
+        let _ = ExecKind::Direct { stages: vec![] }; // silencia warning si quedara
+        // Esperamos al menos: un Stdout("hola mundo") y un ExecExited(0).
+        assert!(
+            frames.iter().any(|f| matches!(f, Response::ExecStdout(l) if l == "hola mundo")),
+            "no llegó la línea de stdout: {frames:?}"
+        );
+        assert!(matches!(frames.last(), Some(Response::ExecExited(0))));
+    }
+
+    /// El daemon mata el proceso si el cliente cierra mitad de stream —
+    /// invariante crítica para no dejar zombies (convención SSH/PTY).
+    #[tokio::test]
+    async fn exec_stream_kills_child_on_client_disconnect() {
+        let (mut server, client) = tokio::net::UnixStream::pair().unwrap();
+        let server_task = tokio::spawn(async move {
+            // `sleep 30` daría tiempo de sobra para detectar zombies; el
+            // test debería terminar en <1s gracias al EOF de write_frame.
+            let res = handle_exec_stream(
+                &mut server,
+                ".".into(),
+                ProtoExecKind::Direct {
+                    stages: vec![ExecStage {
+                        program: "sleep".into(),
+                        args: vec!["30".into()],
+                    }],
+                },
+                0,
+                None,
+            )
+            .await;
+            // Esperamos un error de I/O al intentar escribir tras el close;
+            // lo que importa es que la función retornó (no se colgó).
+            res
+        });
+        // Le damos tiempo a arrancar el proceso, luego cerramos.
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        drop(client);
+        // Sin timeout aquí porque el daemon debe terminar rápido al
+        // detectar el EOF al escribir. Si el test cuelga, el invariante
+        // está roto.
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server_task)
+            .await
+            .expect("handler colgado: posible zombie");
+    }
+
+    /// `ExecStream::Shell` también funciona (el daemon traduce el variante).
+    #[tokio::test]
+    async fn exec_stream_supports_shell_mode() {
+        let (mut server, mut client) = tokio::net::UnixStream::pair().unwrap();
+        let server_task = tokio::spawn(async move {
+            handle_exec_stream(
+                &mut server,
+                ".".into(),
+                ProtoExecKind::Shell {
+                    line: "echo $((2 + 3))".into(),
+                    program: "sh".into(),
+                },
+                0,
+                None,
+            )
+            .await
+            .unwrap();
+        });
+        let mut got = String::new();
+        loop {
+            let r: Response = read_frame(&mut client).await.unwrap();
+            if let Response::ExecStdout(l) = &r {
+                got = l.clone();
+            }
+            if r.is_exec_terminal() {
+                break;
+            }
+        }
+        server_task.await.unwrap();
+        assert_eq!(got, "5");
+    }
 }

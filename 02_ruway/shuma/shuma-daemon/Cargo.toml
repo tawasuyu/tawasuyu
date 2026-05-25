@@ -17,6 +17,7 @@ shuma-card = { path = "../sandbox/shuma-card" }
 shuma-protocol = { path = "../sandbox/shuma-protocol" }
 shuma-discern = { path = "../sandbox/shuma-discern" }
 shuma-core = { path = "../sandbox/shuma-core" }
+shuma-exec = { path = "../sandbox/shuma-exec" }
 arje-incarnate = { path = "../../../03_ukupacha/arje/init/arje-incarnate" }
 card-core = { path = "../../../shared/card/card-core" }
 card-sidecar = { path = "../../../shared/card/card-sidecar" }

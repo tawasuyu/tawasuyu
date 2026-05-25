@@ -141,12 +141,61 @@ pub struct RunHandle {
     children: Arc<Mutex<Vec<Child>>>,
 }
 
+/// Asa "fría" de un `RunHandle` que **sólo** sirve para matar el comando.
+/// No comparte el lock principal de eventos, así que se puede usar desde
+/// otro hilo/task aún cuando el dueño del `RunHandle` esté bloqueado en
+/// `next_event()`. Cloneable.
+#[derive(Clone)]
+pub struct Killer {
+    children: Arc<Mutex<Vec<Child>>>,
+}
+
+impl Killer {
+    /// Manda SIGKILL a todas las etapas vivas del comando. No hace nada
+    /// si ya terminaron.
+    pub fn kill(&self) {
+        if let Ok(mut guard) = self.children.lock() {
+            for c in guard.iter_mut() {
+                let _ = c.kill();
+            }
+        }
+    }
+}
+
 impl RunHandle {
     /// Mata todos los procesos del comando. No hace nada si ya terminaron.
     pub fn kill(&self) {
         if let Ok(mut guard) = self.children.lock() {
             for c in guard.iter_mut() {
                 let _ = c.kill();
+            }
+        }
+    }
+
+    /// Asa cloneable que sólo permite matar el comando — útil para usar
+    /// `kill()` desde otra tarea sin tocar el lock que tiene el reader.
+    pub fn killer(&self) -> Killer {
+        Killer { children: Arc::clone(&self.children) }
+    }
+
+    /// Próximo evento, bloqueando hasta que llegue. `None` cuando el
+    /// proceso terminó (ya se emitió `Exited`/`Failed`) o el canal se
+    /// cerró. Pensado para puentes sync→async (el daemon lo usa para
+    /// re-emitir cada evento como un frame del protocolo).
+    pub fn next_event(&mut self) -> Option<RunEvent> {
+        if self.finished {
+            return None;
+        }
+        match self.rx.recv() {
+            Ok(ev) => {
+                if ev.is_terminal() {
+                    self.finished = true;
+                }
+                Some(ev)
+            }
+            Err(_) => {
+                self.finished = true;
+                None
             }
         }
     }
