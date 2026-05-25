@@ -14,11 +14,12 @@ path = "src/main.rs"
 
 [dependencies]
 shuma-module = { path = "../sandbox/shuma-module" }
+shuma-module-commandbar = { path = "../sandbox/shuma-module-commandbar" }
+shuma-module-launcher = { path = "../sandbox/shuma-module-launcher" }
 shuma-module-shell = { path = "../sandbox/shuma-module-shell" }
 shuma-sysmon = { path = "../sandbox/shuma-sysmon" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
-llimphi-widget-app-header = { workspace = true }
 llimphi-widget-tabs = { workspace = true }
 llimphi-widget-splitter = { workspace = true }
 llimphi-widget-stat-card = { workspace = true }

@@ -24,6 +24,9 @@
 //! - [`Sample`] — un punto de la curva.
 //! - [`ShortcutSpec`] — descriptor declarativo de un botón de toolbar.
 //! - [`ShortcutAction`] — qué hace al pulsarse.
+//! - [`Placement`] — en qué slot del chasis vive el módulo (TopBar,
+//!   Main, BottomBar, DrawerTab).
+//! - [`DrawerTrigger`] — qué dispara la apertura del drawer Quake.
 //!
 //! El módulo no depende de `llimphi-ui` desde este crate; el host le
 //! pasa el `Theme` y el módulo construye el `View` con un `lift`
@@ -140,6 +143,101 @@ impl ModuleConfig {
     /// Etiqueta efectiva: `label` si está, si no la del `Source`.
     pub fn effective_label(&self) -> String {
         self.label.clone().unwrap_or_else(|| self.source.label())
+    }
+}
+
+/// En qué slot del chasis vive un módulo. El chasis dispone de cuatro
+/// slots fijos que el shumarc puebla:
+///
+/// ```text
+///  ┌─────────────────────────────────────────┐
+///  │ TopBar         (1 módulo: launcher)     │
+///  ├─────────────────────────────────────────┤
+///  │                                         │
+///  │  Main           (1 módulo focal —       │
+///  │                  matilda, editor, etc.) │
+///  │                                         │
+///  ├─────────────────────────────────────────┤
+///  │  ▲ Drawer Quake (overlay, oculto por    │
+///  │     default; N módulos DrawerTab)       │
+///  ├─────────────────────────────────────────┤
+///  │ BottomBar      (1 módulo: command-bar)  │
+///  └─────────────────────────────────────────┘
+/// ```
+///
+/// Cada módulo declara su `Placement` *preferido*; el shumarc puede
+/// sobreescribirlo. Un módulo puede ser válido en más de un slot
+/// (p. ej. `shell` puede ir como `DrawerTab` o como `Main`) — esos
+/// casos se modelan con instancias separadas en el shumarc, no con
+/// "multi-placement" en el módulo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Placement {
+    /// Barra superior fija (launcher de apps / shortcuts).
+    TopBar,
+    /// Área principal de la ventana. **Único** por sesión: el módulo
+    /// "foco". El drawer aparece encima como overlay sin reemplazarlo.
+    #[default]
+    Main,
+    /// Barra inferior fija (command bar — input de doble modo
+    /// launcher/shell). Auto-escondible según la `BarBehavior`.
+    BottomBar,
+    /// Tab del drawer Quake. **N** módulos pueden vivir aquí; el
+    /// usuario navega entre ellos con la tira de tabs del drawer.
+    DrawerTab,
+}
+
+impl Placement {
+    /// `true` si el slot acepta múltiples instancias simultáneas.
+    /// Sólo `DrawerTab` lo es; los demás son únicos.
+    pub fn allows_multiple(self) -> bool {
+        matches!(self, Placement::DrawerTab)
+    }
+}
+
+/// Comportamiento de visibilidad de una barra (top o bottom).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BarBehavior {
+    /// Siempre visible. Ocupa su alto en el layout permanentemente.
+    #[default]
+    Fixed,
+    /// Visible al hover o foco; oculta cuando el cursor sale (con un
+    /// delay corto). Cuando está oculta, no roba alto al `Main`.
+    Autohide,
+}
+
+/// Qué dispara la apertura/cierre del drawer Quake. Múltiples triggers
+/// se pueden activar simultáneamente (tecla + hover); cualquiera abre.
+/// El cierre es por la inversa: salir del hover, soltar la tecla
+/// (toggle) o pulsar `Esc`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DrawerTrigger {
+    /// Tecla global que togglea el drawer. `None` = sin tecla. Formato
+    /// libre (lo parsea el chasis): "F12", "Super+grave", etc.
+    #[serde(default)]
+    pub key: Option<String>,
+    /// `true` = pasar el mouse sobre la command bar abre el drawer.
+    #[serde(default)]
+    pub hover: bool,
+    /// Alto del drawer como fracción de la ventana (0.0..=1.0).
+    /// `0.4` típico para drawer Quake.
+    #[serde(default = "default_drawer_height")]
+    pub height_fraction: f32,
+}
+
+fn default_drawer_height() -> f32 {
+    0.4
+}
+
+impl Default for DrawerTrigger {
+    /// Default razonable: tecla `F12` + hover off + 40% de alto.
+    fn default() -> Self {
+        Self {
+            key: Some("F12".into()),
+            hover: false,
+            height_fraction: default_drawer_height(),
+        }
     }
 }
 
@@ -386,6 +484,49 @@ mod tests {
         let s = (m.sampler)();
         assert_eq!(s.value, 42.0);
         assert_eq!(s.display, "42%");
+    }
+
+    #[test]
+    fn placement_default_is_main() {
+        assert_eq!(Placement::default(), Placement::Main);
+    }
+
+    #[test]
+    fn only_drawer_tab_allows_multiple_instances() {
+        assert!(Placement::DrawerTab.allows_multiple());
+        assert!(!Placement::TopBar.allows_multiple());
+        assert!(!Placement::BottomBar.allows_multiple());
+        assert!(!Placement::Main.allows_multiple());
+    }
+
+    #[test]
+    fn placement_round_trips_snake_case_toml() {
+        // Sanity check del rename_all snake_case en serde.
+        let p: Placement = toml::from_str("v = \"top_bar\"\n")
+            .ok()
+            .and_then(|t: toml::Table| t.get("v").cloned())
+            .and_then(|v| v.try_into().ok())
+            .unwrap();
+        assert_eq!(p, Placement::TopBar);
+        let p: Placement = toml::from_str("v = \"drawer_tab\"\n")
+            .ok()
+            .and_then(|t: toml::Table| t.get("v").cloned())
+            .and_then(|v| v.try_into().ok())
+            .unwrap();
+        assert_eq!(p, Placement::DrawerTab);
+    }
+
+    #[test]
+    fn drawer_trigger_default_is_f12_no_hover() {
+        let d = DrawerTrigger::default();
+        assert_eq!(d.key.as_deref(), Some("F12"));
+        assert!(!d.hover);
+        assert!((d.height_fraction - 0.4).abs() < 1e-6);
+    }
+
+    #[test]
+    fn bar_behavior_default_is_fixed() {
+        assert_eq!(BarBehavior::default(), BarBehavior::Fixed);
     }
 
     #[test]

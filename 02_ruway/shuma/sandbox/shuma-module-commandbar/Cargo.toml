@@ -1,0 +1,13 @@
+[package]
+name = "shuma-module-commandbar"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "shuma-module-commandbar — barra inferior fija (Placement::BottomBar) con input de doble modo (launcher por default, shell con tecla). Placeholder con la línea visual; el cableado real al run-dialog y al REPL llega aparte."
+
+[dependencies]
+shuma-module = { path = "../shuma-module" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }

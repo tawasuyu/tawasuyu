@@ -1,0 +1,13 @@
+[package]
+name = "shuma-module-launcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "shuma-module-launcher — barra superior fija (Placement::TopBar) con grid de apps + shortcuts. Placeholder por ahora; la integración real con mirada-launcher llega aparte."
+
+[dependencies]
+shuma-module = { path = "../shuma-module" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
