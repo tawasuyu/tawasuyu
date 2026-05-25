@@ -28,7 +28,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
+use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
 use llimphi_widget_text_editor::{
     text_editor_view_highlighted, Clipboard, EditorMetrics, EditorPalette, EditorState, Language,
 };
@@ -38,6 +38,9 @@ const TREE_WIDTH: f32 = 240.0;
 const TREE_ROW_H: f32 = 22.0;
 const TREE_INDENT: f32 = 16.0;
 const HEADER_H: f32 = 28.0;
+/// Cuántas líneas mostramos en el viewport del editor. Aproximación
+/// estática: (alto ventana ~760 − header 28) / line_height(~18) ≈ 40.
+const EDITOR_VISIBLE_LINES: usize = 40;
 
 #[derive(Clone)]
 enum Msg {
@@ -46,6 +49,7 @@ enum Msg {
     EditKey(KeyEvent),
     Save,
     SaveResult(Result<(), String>),
+    Scroll(i32),
 }
 
 #[derive(Debug, Clone)]
@@ -107,6 +111,11 @@ impl App for EditorApp {
             Msg::SelectNode(i) => select_node(model, i),
             Msg::EditKey(ev) => apply_editor_key(model, ev),
             Msg::Save => save_open_file(model, handle),
+            Msg::Scroll(delta) => {
+                let mut m = model;
+                m.editor.scroll_by(delta);
+                m
+            }
             Msg::SaveResult(r) => {
                 let mut m = model;
                 m.status = match r {
@@ -121,6 +130,25 @@ impl App for EditorApp {
                 };
                 m
             }
+        }
+    }
+
+    fn on_wheel(
+        model: &Self::Model,
+        delta: WheelDelta,
+        _cursor: (f32, f32),
+        _mods: Modifiers,
+    ) -> Option<Self::Msg> {
+        if model.open_file.is_none() {
+            return None;
+        }
+        // delta.y positivo = arriba; queremos scroll DOWN cuando rueda
+        // baja (delta.y negativo). 3 líneas por click es estándar.
+        let lines = (-delta.y * 3.0).round() as i32;
+        if lines == 0 {
+            None
+        } else {
+            Some(Msg::Scroll(lines))
         }
     }
 
@@ -236,7 +264,7 @@ fn editor_panel(model: &Model, theme: &Theme) -> View<Msg> {
                 &model.editor,
                 &palette,
                 metrics,
-                f32::INFINITY,
+                EDITOR_VISIBLE_LINES,
                 language,
                 Msg::EditKey(focus_event()), // click → re-foco (sin efecto extra)
             )
@@ -388,6 +416,9 @@ fn apply_editor_key(mut model: Model, ev: KeyEvent) -> Model {
     let r = model.editor.apply_key_with_clipboard(&ev, &mut model.clipboard);
     if r.changed() {
         model.dirty = true;
+    }
+    if r.touched() {
+        model.editor.ensure_caret_visible(EDITOR_VISIBLE_LINES);
     }
     model
 }

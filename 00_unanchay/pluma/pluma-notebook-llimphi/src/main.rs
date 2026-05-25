@@ -505,7 +505,8 @@ fn edit_input_view(editor: &EditorState, body_h: f32, language: Language) -> Vie
     let theme = Theme::dark();
     let ep = EditorPalette::from_theme(&theme);
     let metrics = EditorMetrics::for_font_size(12.0);
-    text_editor_view_highlighted(editor, &ep, metrics, body_h, language, Msg::CancelEdit)
+    let visible = (body_h / metrics.line_height).max(1.0) as usize;
+    text_editor_view_highlighted(editor, &ep, metrics, visible, language, Msg::CancelEdit)
 }
 
 fn language_of(cell: &Cell) -> Language {

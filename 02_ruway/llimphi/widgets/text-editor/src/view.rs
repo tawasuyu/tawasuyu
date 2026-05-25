@@ -97,42 +97,54 @@ impl EditorMetrics {
     }
 }
 
-/// Render principal sin syntax highlight — todas las líneas en
-/// `palette.fg_text`. Útil para texto plano o cuando no se conoce el
-/// language. Equivale a `text_editor_view_highlighted(.., Language::Plain)`.
+/// Render principal sin syntax highlight — todas las líneas visibles
+/// en `palette.fg_text`. `visible_lines` es cuántas líneas mostrar como
+/// máximo en el viewport (las que excedan se scrollean).
 pub fn text_editor_view<Msg: Clone + 'static>(
     state: &EditorState,
     palette: &EditorPalette,
     metrics: EditorMetrics,
-    height: f32,
+    visible_lines: usize,
     on_focus: Msg,
 ) -> View<Msg> {
     text_editor_view_highlighted(
         state,
         palette,
         metrics,
-        height,
+        visible_lines,
         Language::Plain,
         on_focus,
     )
 }
 
-/// Render con syntax highlight. El highlighter se construye on-the-fly
-/// (parseo completo del buffer cada call — aceptable para celdas de
-/// notebook). Para edición intensiva en archivos grandes, el caller
-/// puede cachear su propio `Highlighter` y llamar a una variante que
-/// reciba los `Vec<Vec<Span>>` precomputados (TODO si surge el caso).
+/// Render con syntax highlight + **viewport scrolling**: sólo se renderizan
+/// las líneas en `[state.scroll_offset, scroll_offset + visible_lines)`.
+///
+/// `visible_lines` es cuántas líneas máximo dibujamos por frame; el caller
+/// se asegura de tener un container con altura ≥ `visible_lines * line_height`
+/// o aplica clip propio. Para archivos grandes (1000+ líneas), el cap es
+/// crítico — sin él generaríamos miles de Views y wgpu rechazaría el bind
+/// group por `max_*_buffer_binding_size`.
+///
+/// Recomendación para el caller: tras cada edición, llamar a
+/// [`EditorState::ensure_caret_visible`] con el mismo `visible_lines` para
+/// que el viewport siga al caret.
 pub fn text_editor_view_highlighted<Msg: Clone + 'static>(
     state: &EditorState,
     palette: &EditorPalette,
     metrics: EditorMetrics,
-    height: f32,
+    visible_lines: usize,
     language: Language,
     on_focus: Msg,
 ) -> View<Msg> {
-    let line_count = state.line_count();
     let caret = state.cursor.caret;
     let syntax = SyntaxPalette::dark_default(&llimphi_theme::Theme::dark());
+
+    let visible = visible_lines.max(1).min(200); // hard cap defensivo
+    let line_count = state.line_count();
+    let scroll = state.scroll_offset.min(line_count.saturating_sub(1));
+    let end_line = (scroll + visible).min(line_count);
+    let height = (end_line - scroll) as f32 * metrics.line_height;
 
     let spans = if matches!(language, Language::Plain) {
         Vec::new()
@@ -141,8 +153,18 @@ pub fn text_editor_view_highlighted<Msg: Clone + 'static>(
         h.highlight(&state.text())
     };
 
-    let gutter = build_gutter(line_count, caret.line, metrics, palette);
-    let content = build_content(state, palette, metrics, height, spans, &syntax, on_focus);
+    let gutter = build_gutter(scroll, end_line, caret.line, metrics, palette);
+    let content = build_content(
+        state,
+        palette,
+        metrics,
+        height,
+        scroll,
+        end_line,
+        spans,
+        &syntax,
+        on_focus,
+    );
 
     View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -155,25 +177,28 @@ pub fn text_editor_view_highlighted<Msg: Clone + 'static>(
 }
 
 fn build_gutter<Msg: Clone + 'static>(
-    line_count: usize,
+    scroll: usize,
+    end_line: usize,
     active_line: usize,
     metrics: EditorMetrics,
     palette: &EditorPalette,
 ) -> View<Msg> {
-    let mut children: Vec<View<Msg>> = Vec::with_capacity(line_count);
-    for n in 0..line_count {
+    let count = end_line.saturating_sub(scroll);
+    let mut children: Vec<View<Msg>> = Vec::with_capacity(count);
+    for n in scroll..end_line {
         let color = if n == active_line {
             palette.fg_line_number_active
         } else {
             palette.fg_line_number
         };
         let label = (n + 1).to_string();
+        let y = (n - scroll) as f32 * metrics.line_height;
         children.push(
             View::new(Style {
                 position: Position::Absolute,
                 inset: Rect {
                     left: length(0.0_f32),
-                    top: length(n as f32 * metrics.line_height),
+                    top: length(y),
                     right: length(4.0_f32),
                     bottom: auto(),
                 },
@@ -205,43 +230,52 @@ fn build_content<Msg: Clone + 'static>(
     palette: &EditorPalette,
     metrics: EditorMetrics,
     height: f32,
+    scroll: usize,
+    end_line: usize,
     spans_per_line: Vec<Vec<Span>>,
     syntax: &SyntaxPalette,
     on_focus: Msg,
 ) -> View<Msg> {
-    let line_count = state.line_count();
     let caret = state.cursor.caret;
     let mut children: Vec<View<Msg>> = Vec::new();
 
-    // 1) Fondo del renglón activo.
-    children.push(line_highlight(caret.line, metrics, palette));
-
-    // 2) Selección — un rect por línea afectada.
-    if let Some(sel) = state.cursor.selection() {
-        children.extend(selection_rects(state, sel, metrics, palette));
+    // 1) Fondo del renglón activo — sólo si está dentro del viewport.
+    if caret.line >= scroll && caret.line < end_line {
+        children.push(line_highlight(caret.line - scroll, metrics, palette));
     }
 
-    // 2b) Bracket pair bajo el cursor.
+    // 2) Selección — sólo los rects que tocan el viewport.
+    if state.cursor.has_selection() {
+        children.extend(selection_rects_visible(state, scroll, end_line, metrics, palette));
+    }
+
+    // 2b) Bracket pair bajo el cursor — si visible.
     if let Some((a, b)) = crate::bracket::find_bracket_pair(&state.buffer, &state.cursor) {
-        children.push(bracket_highlight(a, metrics, palette));
-        children.push(bracket_highlight(b, metrics, palette));
-    }
-
-    // 3) Texto — una View por línea. Con spans se usan tokens
-    //    coloreados; sin spans, monocolor.
-    for n in 0..line_count {
-        let text = state.buffer.line(n);
-        let text = text.trim_end_matches('\n').to_owned();
-        if let Some(line_spans) = spans_per_line.get(n) {
-            children.push(line_text_tokens(n, &text, line_spans, metrics, palette, syntax));
-        } else {
-            children.push(line_text_plain(n, text, metrics, palette));
+        if a.line >= scroll && a.line < end_line {
+            children.push(bracket_highlight(crate::cursor::Pos::new(a.line - scroll, a.col), metrics, palette));
+        }
+        if b.line >= scroll && b.line < end_line {
+            children.push(bracket_highlight(crate::cursor::Pos::new(b.line - scroll, b.col), metrics, palette));
         }
     }
 
-    // 4) Caret — bloque de 2 px de ancho a la izquierda del char en
-    //    `(caret.line, caret.col)`. No parpadea (sin animación).
-    children.push(caret_rect(caret, metrics, palette));
+    // 3) Texto — sólo las líneas en viewport.
+    for n in scroll..end_line {
+        let text = state.buffer.line(n);
+        let text = text.trim_end_matches('\n').to_owned();
+        let local_line = n - scroll;
+        if let Some(line_spans) = spans_per_line.get(n) {
+            children.push(line_text_tokens(local_line, &text, line_spans, metrics, palette, syntax));
+        } else {
+            children.push(line_text_plain(local_line, text, metrics, palette));
+        }
+    }
+
+    // 4) Caret — sólo si visible.
+    if caret.line >= scroll && caret.line < end_line {
+        let local = crate::cursor::Pos::new(caret.line - scroll, caret.col);
+        children.push(caret_rect(local, metrics, palette));
+    }
 
     View::new(Style {
         flex_grow: 1.0,
@@ -407,9 +441,10 @@ fn bracket_highlight<Msg: Clone + 'static>(
     .fill(palette.bg_bracket_pair)
 }
 
-fn selection_rects<Msg: Clone + 'static>(
+fn selection_rects_visible<Msg: Clone + 'static>(
     state: &EditorState,
-    sel: crate::cursor::Selection,
+    scroll: usize,
+    end_viewport: usize,
     metrics: EditorMetrics,
     palette: &EditorPalette,
 ) -> Vec<View<Msg>> {
@@ -417,30 +452,32 @@ fn selection_rects<Msg: Clone + 'static>(
     if start_off == end_off {
         return vec![];
     }
-    let _ = sel;
     let (start_line, start_col) = state.buffer.offset_to_pos(start_off);
     let (end_line, end_col) = state.buffer.offset_to_pos(end_off);
 
     let mut out: Vec<View<Msg>> = Vec::new();
-    for line in start_line..=end_line {
+    let first = start_line.max(scroll);
+    let last = end_line.min(end_viewport.saturating_sub(1));
+    if first > last {
+        return out;
+    }
+    for line in first..=last {
         let line_len = state.buffer.line_len_chars(line);
         let col_start = if line == start_line { start_col } else { 0 };
         let col_end = if line == end_line { end_col } else { line_len };
         let x = 4.0 + col_start as f32 * metrics.char_width;
-        // Si la selección llega al fin de línea, extendemos visualmente
-        // el rect un char extra (efecto de "seleccionó hasta el \n").
         let extra = if line < end_line { 1.0 } else { 0.0 };
         let w = ((col_end - col_start) as f32 + extra) * metrics.char_width;
         if w <= 0.0 {
             continue;
         }
-        let y = line as f32 * metrics.line_height;
+        let local_y = (line - scroll) as f32 * metrics.line_height;
         out.push(
             View::new(Style {
                 position: Position::Absolute,
                 inset: Rect {
                     left: length(x),
-                    top: length(y),
+                    top: length(local_y),
                     right: auto(),
                     bottom: auto(),
                 },

@@ -44,6 +44,10 @@ pub struct EditorState {
     pub cursor: Cursor,
     pub options: EditorOptions,
     pub undo: UndoStack,
+    /// Línea inicial visible — el viewport renderiza
+    /// `[scroll_offset, scroll_offset + visible)`. El caller llama a
+    /// [`Self::ensure_caret_visible`] tras movimientos para auto-scrollear.
+    pub scroll_offset: usize,
 }
 
 impl Default for EditorState {
@@ -59,6 +63,7 @@ impl EditorState {
             cursor: Cursor::new(),
             options: EditorOptions::default(),
             undo: UndoStack::new(),
+            scroll_offset: 0,
         }
     }
 
@@ -67,6 +72,35 @@ impl EditorState {
             options,
             ..Self::new()
         }
+    }
+
+    /// Ajusta `scroll_offset` para que la línea del caret quede dentro
+    /// de `[scroll_offset, scroll_offset + visible_lines)`. Si el caret
+    /// está arriba, scrollea para arriba; si está abajo, scrollea para
+    /// abajo dejando el caret en la última línea visible.
+    pub fn ensure_caret_visible(&mut self, visible_lines: usize) {
+        if visible_lines == 0 {
+            return;
+        }
+        let line = self.cursor.caret.line;
+        if line < self.scroll_offset {
+            self.scroll_offset = line;
+        } else if line >= self.scroll_offset + visible_lines {
+            self.scroll_offset = line + 1 - visible_lines;
+        }
+        // Clampea al rango válido — no scrollear más allá del fin del
+        // buffer (deja la última línea siempre visible).
+        let max_scroll = self.line_count().saturating_sub(1);
+        if self.scroll_offset > max_scroll {
+            self.scroll_offset = max_scroll;
+        }
+    }
+
+    /// Scrollea relativo (positivo = abajo). Clampea a 0..line_count-1.
+    pub fn scroll_by(&mut self, delta: i32) {
+        let new = (self.scroll_offset as i32 + delta).max(0) as usize;
+        let max = self.line_count().saturating_sub(1);
+        self.scroll_offset = new.min(max);
     }
 
     pub fn text(&self) -> String {
@@ -545,6 +579,53 @@ mod tests {
         let mut clip = MemClipboard::with("a\nb\nc");
         s.apply_key_with_clipboard(&evtext("v", false, true), &mut clip);
         assert_eq!(s.text(), "a b c");
+    }
+
+    #[test]
+    fn ensure_caret_visible_scrollea_hacia_abajo() {
+        let mut s = EditorState::new();
+        let lines: String = (0..100).map(|n| format!("line {n}\n")).collect();
+        s.set_text(&lines);
+        s.cursor = Cursor::at(50, 0);
+        s.ensure_caret_visible(20);
+        // Caret en línea 50, visible_lines = 20 → scroll = 50 - 19 = 31.
+        assert_eq!(s.scroll_offset, 31);
+        // El caret debe estar dentro del viewport.
+        assert!(s.cursor.caret.line >= s.scroll_offset);
+        assert!(s.cursor.caret.line < s.scroll_offset + 20);
+    }
+
+    #[test]
+    fn ensure_caret_visible_scrollea_hacia_arriba() {
+        let mut s = EditorState::new();
+        let lines: String = (0..100).map(|n| format!("line {n}\n")).collect();
+        s.set_text(&lines);
+        s.scroll_offset = 50;
+        s.cursor = Cursor::at(5, 0);
+        s.ensure_caret_visible(20);
+        assert_eq!(s.scroll_offset, 5);
+    }
+
+    #[test]
+    fn ensure_caret_visible_no_mueve_si_ya_visible() {
+        let mut s = EditorState::new();
+        let lines: String = (0..50).map(|n| format!("line {n}\n")).collect();
+        s.set_text(&lines);
+        s.scroll_offset = 10;
+        s.cursor = Cursor::at(15, 0);
+        s.ensure_caret_visible(20);
+        assert_eq!(s.scroll_offset, 10);
+    }
+
+    #[test]
+    fn scroll_by_clampea_a_rango_valido() {
+        let mut s = EditorState::new();
+        let lines: String = (0..10).map(|n| format!("line {n}\n")).collect();
+        s.set_text(&lines);
+        s.scroll_by(-100);
+        assert_eq!(s.scroll_offset, 0);
+        s.scroll_by(1000);
+        assert!(s.scroll_offset < 11);
     }
 
     #[test]
