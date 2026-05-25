@@ -7,4 +7,11 @@ authors.workspace = true
 publish.workspace = true
 
 [dependencies]
-# wgpu + winit se agregan en Fase 1; por ahora solo el trait Surface
+wgpu = { workspace = true }
+raw-window-handle = { workspace = true }
+winit = { workspace = true }
+pollster = { workspace = true }
+
+[[example]]
+name = "clear_screen"
+path = "examples/clear_screen.rs"

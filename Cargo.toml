@@ -341,6 +341,14 @@ tempfile = "3"
 # === GPUI (nahual) ===
 gpui = "0.2"
 
+# === Llimphi (motor gráfico soberano) ===
+# wgpu sobre Vulkan/Metal/DX12, winit para ventana en dev Linux.
+# raw-window-handle 0.6 alinea winit 0.30 con wgpu 24.
+wgpu = "24"
+winit = "0.30"
+raw-window-handle = "0.6"
+pollster = "0.4"
+
 # === Filesystem helpers ===
 directories = "5"
 
