@@ -322,24 +322,28 @@ fn paint<Msg>(
             // Parley resuelve la alineación horizontal vía max_width + alignment.
             // Para Center también centramos verticalmente; para Start/End/Justify
             // anclamos arriba (comportamiento esperado de párrafo/editor).
-            let line_height = 1.2;
-            let mut block = llimphi_text::TextBlock {
+            let block = llimphi_text::TextBlock {
                 text: &text.content,
                 size_px: text.size_px,
                 color: text.color,
                 origin: (r.x as f64, r.y as f64),
                 max_width: Some(r.w),
                 alignment: text.alignment,
-                line_height,
+                line_height: 1.2,
             };
-            if matches!(text.alignment, llimphi_text::Alignment::Center) {
-                let m = llimphi_text::measure(typesetter, &block);
-                block.origin = (
+            // Shaping una sola vez: el `Layout` retornado se reusa para
+            // medir (cuando hay centrado vertical) y para pintar.
+            let layout = llimphi_text::layout_block(typesetter, &block);
+            let origin = if matches!(text.alignment, llimphi_text::Alignment::Center) {
+                let m = llimphi_text::measurement(&layout);
+                (
                     r.x as f64,
                     r.y as f64 + ((r.h - m.height) as f64 * 0.5).max(0.0),
-                );
-            }
-            llimphi_text::draw_block(scene, typesetter, &block);
+                )
+            } else {
+                block.origin
+            };
+            llimphi_text::draw_layout(scene, &layout, text.color, origin);
         }
     }
 }
@@ -380,6 +384,15 @@ struct RuntimeState<A: App> {
     cursor: PhysicalPosition<f64>,
     modifiers: Modifiers,
     typesetter: llimphi_text::Typesetter,
+    /// Último frame renderizado: árbol montado + rects absolutos. Lo
+    /// consume el handler de click para hit-testear sin reconstruir
+    /// `view` + layout (que ya hizo el redraw anterior).
+    last_render: Option<RenderCache<A::Msg>>,
+}
+
+struct RenderCache<Msg> {
+    mounted: Mounted<Msg>,
+    computed: ComputedLayout,
 }
 
 fn build_window_attributes<A: App>() -> WindowAttributes {
@@ -424,6 +437,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
             cursor: PhysicalPosition::new(0.0, 0.0),
             modifiers: Modifiers::default(),
             typesetter,
+            last_render: None,
         });
     }
 
@@ -436,6 +450,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 };
                 let model = state.model.take().expect("model");
                 state.model = Some(A::update(model, msg, &self.handle));
+                state.last_render = None; // model cambió → cache obsoleto
                 state.window.request_redraw();
             }
         }
@@ -476,6 +491,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 if let Some(msg) = A::on_key(state.model.as_ref().expect("model"), &ev) {
                     let model = state.model.take().expect("model");
                     state.model = Some(A::update(model, msg, &self.handle));
+                    state.last_render = None;
                     state.window.request_redraw();
                 }
             }
@@ -484,20 +500,36 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 button: MouseButton::Left,
                 ..
             } => {
-                // Re-build view del modelo actual para hit-test contra el frame visible.
-                let model_ref = state.model.as_ref().expect("model");
-                let view = A::view(model_ref);
-                let mut layout = LayoutTree::new();
-                let mounted: Mounted<A::Msg> = mount(&mut layout, view);
-                let (w, h) = state.surface.size();
-                let computed = layout
-                    .compute(mounted.root, (w as f32, h as f32))
-                    .expect("layout");
-                if let Some(msg) =
-                    hit_test(&mounted, &computed, state.cursor.x as f32, state.cursor.y as f32)
-                {
+                // Camino normal: reusa el `mounted` + `computed` del último
+                // redraw — siempre representa lo que el usuario está viendo.
+                // Fallback (raro): no hubo redraw aún o el cache se invalidó
+                // por un Msg sin redraw intermedio; rehacé view + layout.
+                let msg = if let Some(cache) = state.last_render.as_ref() {
+                    hit_test(
+                        &cache.mounted,
+                        &cache.computed,
+                        state.cursor.x as f32,
+                        state.cursor.y as f32,
+                    )
+                } else {
+                    let view = A::view(state.model.as_ref().expect("model"));
+                    let mut layout = LayoutTree::new();
+                    let mounted: Mounted<A::Msg> = mount(&mut layout, view);
+                    let (w, h) = state.surface.size();
+                    let computed = layout
+                        .compute(mounted.root, (w as f32, h as f32))
+                        .expect("layout");
+                    hit_test(
+                        &mounted,
+                        &computed,
+                        state.cursor.x as f32,
+                        state.cursor.y as f32,
+                    )
+                };
+                if let Some(msg) = msg {
                     let model = state.model.take().expect("model");
                     state.model = Some(A::update(model, msg, &self.handle));
+                    state.last_render = None;
                     state.window.request_redraw();
                 }
             }
@@ -529,6 +561,9 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     eprintln!("render error: {e}");
                 }
                 state.surface.present(frame, &state.hal);
+                // Guardá el árbol pintado para que el próximo click haga
+                // hit-test sin repetir `view` + layout.
+                state.last_render = Some(RenderCache { mounted, computed });
             }
             _ => {}
         }

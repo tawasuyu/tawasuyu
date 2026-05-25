@@ -258,12 +258,12 @@ impl Surface for WinitSurface {
         let surface_view = texture
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+        // `TextureView` envuelve un Arc — clonar es atomic-incref, no
+        // recrea la vista. La intermedia sólo cambia en `resize`.
         Ok(Frame {
             surface_texture: texture,
             surface_view,
-            intermediate_view: self
-                .intermediate
-                .create_view(&wgpu::TextureViewDescriptor::default()),
+            intermediate_view: self.intermediate_view.clone(),
             width: self.config.width,
             height: self.config.height,
         })

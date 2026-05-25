@@ -122,55 +122,74 @@ pub struct Measurement {
     pub height: f32,
 }
 
-/// Mide sin pintar.
-pub fn measure(ts: &mut Typesetter, block: &TextBlock<'_>) -> Measurement {
-    let layout = ts.layout(
+/// Construye el layout (shaping + line break + alineación) listo para medir
+/// y/o pintar. Usá esta API cuando necesitás el alto **antes** de elegir el
+/// origen (p. ej. centrado vertical) y no querés repetir el shaping en el
+/// `draw`: medís sobre el layout retornado y luego lo pasás a
+/// [`draw_layout`].
+pub fn layout_block(ts: &mut Typesetter, block: &TextBlock<'_>) -> parley::Layout<()> {
+    ts.layout(
         block.text,
         block.size_px,
         block.max_width,
         block.alignment,
         block.line_height,
-    );
+    )
+}
+
+/// Devuelve las medidas de un layout ya resuelto. Equivalente conceptual a
+/// `(layout.width(), layout.height())` pero envuelto en [`Measurement`].
+pub fn measurement(layout: &parley::Layout<()>) -> Measurement {
     Measurement {
         width: layout.width(),
         height: layout.height(),
     }
 }
 
-/// Rasteriza el bloque en `scene`. Itera líneas y runs de parley emitiendo
-/// `vello::Glyph` posicionados; el offset del bloque se aplica como
-/// `Affine::translate` para no duplicar f32+f64 por cada glifo.
-pub fn draw_block(scene: &mut vello::Scene, ts: &mut Typesetter, block: &TextBlock<'_>) {
-    let layout = ts.layout(
-        block.text,
-        block.size_px,
-        block.max_width,
-        block.alignment,
-        block.line_height,
-    );
-    let brush = Brush::Solid(block.color);
-    let transform = vello::kurbo::Affine::translate(block.origin);
+/// Pinta un layout ya resuelto en `scene` con `color` y un offset `origin`
+/// (esquina superior-izquierda del bloque). No alloca: los glifos van
+/// directo del iterador de parley al builder de vello.
+pub fn draw_layout(
+    scene: &mut vello::Scene,
+    layout: &parley::Layout<()>,
+    color: Color,
+    origin: (f64, f64),
+) {
+    let brush = Brush::Solid(color);
+    let transform = vello::kurbo::Affine::translate(origin);
     for line in layout.lines() {
         for item in line.items() {
             if let parley::PositionedLayoutItem::GlyphRun(glyph_run) = item {
                 let run = glyph_run.run();
                 let font = run.font().clone();
                 let font_size = run.font_size();
-                let glyphs: Vec<vello::Glyph> = glyph_run
-                    .positioned_glyphs()
-                    .map(|g| vello::Glyph {
-                        id: g.id as u32,
-                        x: g.x,
-                        y: g.y,
-                    })
-                    .collect();
                 scene
                     .draw_glyphs(&font)
                     .font_size(font_size)
                     .brush(&brush)
                     .transform(transform)
-                    .draw(peniko::Fill::NonZero, glyphs.into_iter());
+                    .draw(
+                        peniko::Fill::NonZero,
+                        glyph_run.positioned_glyphs().map(|g| vello::Glyph {
+                            id: g.id as u32,
+                            x: g.x,
+                            y: g.y,
+                        }),
+                    );
             }
         }
     }
+}
+
+/// Mide sin pintar. Atajo de [`layout_block`] + [`measurement`] para
+/// llamadores que sólo necesitan el bounding box.
+pub fn measure(ts: &mut Typesetter, block: &TextBlock<'_>) -> Measurement {
+    measurement(&layout_block(ts, block))
+}
+
+/// Rasteriza el bloque en `scene` haciendo shaping una sola vez. Equivale a
+/// `layout_block` + `draw_layout` con `block.origin`.
+pub fn draw_block(scene: &mut vello::Scene, ts: &mut Typesetter, block: &TextBlock<'_>) {
+    let layout = layout_block(ts, block);
+    draw_layout(scene, &layout, block.color, block.origin);
 }
