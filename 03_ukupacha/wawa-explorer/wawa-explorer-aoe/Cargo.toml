@@ -1,0 +1,18 @@
+[package]
+name = "wawa-explorer-aoe"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "wawa-explorer — cliente Akasha Over Ether (AoE) sobre raw sockets. Pide objetos por hash a peers Wawa en la red de capa 2, anuncia raíz. Requiere CAP_NET_RAW (o root)."
+
+[dependencies]
+# El protocolo AoE — comparte tipos y framing con kernel y boot.
+# Path al wawa-fs porque ahí vive el crate `akasha` (nombre del crate ≠ nombre
+# del directorio por razones históricas — ver wawa/Cargo.toml).
+akasha = { path = "../../wawa/wawa-fs" }
+blake3 = { workspace = true }
+libc = { workspace = true }
+thiserror = { workspace = true }

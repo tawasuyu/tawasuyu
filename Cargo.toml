@@ -249,6 +249,7 @@ members = [
     "03_ukupacha/minga/minga-p2p",
     "03_ukupacha/minga/minga-store",
     "03_ukupacha/minga/minga-vfs",
+    "03_ukupacha/wawa-explorer/wawa-explorer-aoe",
     "03_ukupacha/wawa-explorer/wawa-explorer-core",
     "shared/auth/auth-core",
     "shared/card/card-admin",
