@@ -1,0 +1,18 @@
+[package]
+name = "nahual-image-viewer-llimphi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "nahual-image-viewer-llimphi — visor de imágenes (PNG/JPEG) sobre Llimphi. Decodifica con el crate `image` a Rgba8 y arma un `peniko::Image` que `llimphi-ui::View::image` pinta en aspect-fit centrado."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+image = { workspace = true }
+
+[[example]]
+name = "image_viewer_demo"
+path = "examples/image_viewer_demo.rs"

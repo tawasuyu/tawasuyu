@@ -23,7 +23,7 @@ pub use llimphi_hal::winit::keyboard::{Key, NamedKey};
 use llimphi_layout::taffy::NodeId;
 use llimphi_layout::{ComputedLayout, LayoutTree, Style};
 use llimphi_raster::kurbo::{Affine, Rect as KurboRect, RoundedRect};
-use llimphi_raster::peniko::{color::palette, Color, Fill, Mix};
+use llimphi_raster::peniko::{color::palette, Color, Fill, Image, Mix};
 use llimphi_raster::{vello, Renderer};
 
 pub use llimphi_hal;
@@ -223,6 +223,11 @@ pub struct View<Msg> {
     pub hover_fill: Option<Color>,
     pub radius: f64,
     pub text: Option<TextSpec>,
+    /// Imagen a pintar dentro del rect del nodo. Se centra y escala
+    /// preservando aspect ratio (`min(rect.w/img.w, rect.h/img.h)`).
+    /// El alfa por píxel de la imagen y el `Image::alpha` global se
+    /// respetan; el `fill` (si lo hay) se pinta debajo como background.
+    pub image: Option<Image>,
     pub on_click: Option<Msg>,
     /// Handler de drag. Si está presente, este nodo arrastra (y NO emite
     /// `on_click` al presionar — un nodo es uno u otro).
@@ -251,6 +256,7 @@ impl<Msg> View<Msg> {
             hover_fill: None,
             radius: 0.0,
             text: None,
+            image: None,
             on_click: None,
             drag: None,
             drag_payload: None,
@@ -351,6 +357,16 @@ impl<Msg> View<Msg> {
         self
     }
 
+    /// Pinta `image` dentro del rect del nodo, centrada y escalada
+    /// preservando aspect ratio. Re-exporta `peniko::Image` vía
+    /// `llimphi_raster::peniko::Image` — el caller decodifica los
+    /// bytes con el crate `image` (u otro) y construye el `Image`
+    /// con `Blob<u8>` + `ImageFormat::Rgba8`.
+    pub fn image(mut self, image: Image) -> Self {
+        self.image = Some(image);
+        self
+    }
+
     /// Recorta los hijos al rect de este nodo (paint y hit-test). Útil
     /// para paneles con contenido virtualizado que no debe sangrar a
     /// vecinos (listas, scrollers, viewers).
@@ -379,6 +395,7 @@ struct MountedNode<Msg> {
     hover_fill: Option<Color>,
     radius: f64,
     text: Option<TextSpec>,
+    image: Option<Image>,
     on_click: Option<Msg>,
     drag: Option<DragFn<Msg>>,
     drag_payload: Option<u64>,
@@ -411,6 +428,7 @@ fn mount_recursive<Msg: Clone>(
         hover_fill,
         radius,
         text,
+        image,
         on_click,
         drag,
         drag_payload,
@@ -426,6 +444,7 @@ fn mount_recursive<Msg: Clone>(
         hover_fill,
         radius,
         text,
+        image,
         on_click,
         drag,
         drag_payload,
@@ -491,6 +510,22 @@ fn paint<Msg>(
                 node.radius,
             );
             scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &rr);
+        }
+        if let Some(image) = node.image.as_ref() {
+            // Aspect-fit centrado: el min de las dos escalas ocupa
+            // todo el rect en el eje más restrictivo y deja banda en
+            // el otro.
+            if image.width > 0 && image.height > 0 && r.w > 0.0 && r.h > 0.0 {
+                let sx = r.w as f64 / image.width as f64;
+                let sy = r.h as f64 / image.height as f64;
+                let s = sx.min(sy);
+                let disp_w = image.width as f64 * s;
+                let disp_h = image.height as f64 * s;
+                let tx = r.x as f64 + (r.w as f64 - disp_w) * 0.5;
+                let ty = r.y as f64 + (r.h as f64 - disp_h) * 0.5;
+                let transform = Affine::translate((tx, ty)) * Affine::scale(s);
+                scene.draw_image(image, transform);
+            }
         }
         if let Some(text) = node.text.as_ref() {
             // Parley resuelve la alineación horizontal vía max_width + alignment.

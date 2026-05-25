@@ -120,6 +120,7 @@ members = [
     "02_ruway/llimphi/widgets/tiled",
     "02_ruway/llimphi/widgets/tree",
     "02_ruway/nahual/nahual-shell-llimphi",
+    "02_ruway/nahual/nahual-image-viewer-llimphi",
     "02_ruway/nahual/nahual-text-viewer-llimphi",
     "02_ruway/mirada/mirada-app",
     "02_ruway/mirada/mirada-bar-core",
@@ -336,6 +337,12 @@ tree-sitter-go = "0.23"
 # === FS notify ===
 notify = "6.1"
 
+# === Image decoding (nahual-image-viewer-llimphi) ===
+# default-features = false: nos quedamos con PNG + JPEG, que es el 95%
+# de los formatos en el wild. WebP/AVIF/etc. los habilitamos si una app
+# los pide específicamente.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
 # === FUSE (minga-vfs) ===
 # default-features = false: prescinde de pkg-config/libfuse-dev en build.
 # El montaje pasa a ser Rust puro (vía el helper `fusermount3` en runtime).
@@ -421,6 +428,7 @@ nahual-database-explorer = { path = "02_ruway/nahual/nahual-database-explorer" }
 nahual-text-viewer = { path = "02_ruway/nahual/nahual-text-viewer" }
 nahual-text-viewer-llimphi = { path = "02_ruway/nahual/nahual-text-viewer-llimphi" }
 nahual-image-viewer = { path = "02_ruway/nahual/nahual-image-viewer" }
+nahual-image-viewer-llimphi = { path = "02_ruway/nahual/nahual-image-viewer-llimphi" }
 
 # ============================================================
 # Intra-workspace deps de pineal (módulo de gráficos)
