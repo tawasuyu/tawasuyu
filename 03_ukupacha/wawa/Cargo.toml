@@ -12,14 +12,15 @@ resolver = "2"
 # kernel queda EXCLUIDO a proposito —es bare-metal puro y jamas debe compilarse
 # para el anfitrion— y se construye unica y exclusivamente como dependencia de
 # artefacto de `boot`, que le fija el target `x86_64-unknown-none`.
-members = ["boot"]
+members = ["wawa-boot"]
 # El kernel (bare-metal) y las apps WASM (target wasm32) se compilan aparte,
-# cada cual con su propio target; quedan fuera del espacio de trabajo.
-# `format` —el format del grafo en disco— y `akasha` —el protocolo Akasha
-# Over Ether (Fase 20)— tambien se excluyen: son nucleos `no_std` que enlaza
-# el kernel bare-metal, asi que se compilan como dependencia de cada lado
-# (kernel y boot) y no como miembros del workspace anfitrion.
-exclude = ["kernel", "apps", "format", "akasha"]
+# cada cual con su propio target; quedan fuera del espacio de trabajo. El
+# protocolo Akasha Over Ether (Fase 20) vive en `wawa-fs/` por razones
+# históricas (el crate adentro se llama `akasha`) y también queda excluido:
+# lo enlaza el kernel bare-metal como dependencia path. `format` se trasladó
+# a `shared/format/` en gioser y ya no vive aquí — el kernel y boot lo
+# referencian con `../../../shared/format`.
+exclude = ["wawa-kernel", "apps", "wawa-fs"]
 
 # -----------------------------------------------------------------------------
 #  Metadatos compartidos: cada miembro hereda esta identidad con `*.workspace`.
