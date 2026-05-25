@@ -20,6 +20,7 @@ use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette
 use llimphi_widget_stat_card::{stat_card_view, StatCardPalette};
 use llimphi_widget_tabs::{tabs_view, TabsPalette, TabsSpec};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
+use llimphi_widget_tiled::{tiled_view, TileSpec, TiledPalette};
 
 #[derive(Clone)]
 enum Msg {
@@ -143,14 +144,16 @@ impl App for Gallery {
             palette: list_palette,
         });
 
-        // --- Panel derecho: tabs con stat cards + banners + input ---
+        // --- Panel derecho: tabs con stat cards + banners + input + tiled ---
+        let tiled_palette = TiledPalette::from_theme(&theme);
         let tab_content = match model.tab {
             0 => stats_pane(&theme, &stat_palette),
             1 => alerts_pane(),
-            _ => input_pane(&model.text, &input_palette, &theme),
+            2 => input_pane(&model.text, &input_palette, &theme),
+            _ => tiled_pane(&theme, &tiled_palette),
         };
         let tabs = tabs_view(TabsSpec {
-            labels: vec!["Stats".into(), "Banners".into(), "Input".into()],
+            labels: vec!["Stats".into(), "Banners".into(), "Input".into(), "Tiled".into()],
             active: model.tab,
             on_select: Msg::SelectTab,
             content: tab_content,
@@ -335,6 +338,57 @@ fn input_pane(state: &TextInputState, palette: &TextInputPalette, theme: &Theme)
         ..Default::default()
     })
     .children(vec![label, input])
+}
+
+fn tiled_pane(theme: &Theme, palette: &TiledPalette) -> View<Msg> {
+    let body = |text: &str, size: f32, color: Color, align: Alignment| -> View<Msg> {
+        View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
+            },
+            flex_grow: 1.0,
+            padding: Rect {
+                left: length(12.0_f32),
+                right: length(12.0_f32),
+                top: length(10.0_f32),
+                bottom: length(10.0_f32),
+            },
+            ..Default::default()
+        })
+        .text_aligned(text.to_string(), size, color, align)
+    };
+
+    let tiles = vec![
+        TileSpec {
+            label: "logs".into(),
+            content: body(
+                "[12:01] boot\n[12:02] config ok\n[12:03] esperando…",
+                12.0,
+                theme.fg_text,
+                Alignment::Start,
+            ),
+        },
+        TileSpec {
+            label: "métricas".into(),
+            content: body("cpu 37%\nram 1.2 G\nnet 12 kB/s", 12.0, theme.fg_text, Alignment::Start),
+        },
+        TileSpec {
+            label: "uptime".into(),
+            content: body("4d 12h", 26.0, theme.accent, Alignment::Center),
+        },
+        TileSpec {
+            label: "queue".into(),
+            content: body(
+                "pending 7\nin-flight 2\ndone 1842",
+                12.0,
+                theme.fg_text,
+                Alignment::Start,
+            ),
+        },
+    ];
+
+    tiled_view(tiles, palette)
 }
 
 fn main() {

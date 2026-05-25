@@ -1,0 +1,16 @@
+[package]
+name = "llimphi-widget-tiled"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-tiled — grid auto cols×rows con title bar por tile. Análogo Llimphi al `nahual-widget-tiled` GPUI (sin drag-to-swap todavía: requiere drop-targets globales que llimphi-ui aún no expone)."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+
+[[example]]
+name = "tiled_demo"
+path = "examples/tiled_demo.rs"
