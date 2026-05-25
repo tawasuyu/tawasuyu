@@ -1,0 +1,20 @@
+[package]
+name = "pluma-notebook-kernel-wasm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "pluma-notebook — kernel WASM (wasmi + wat) con fuel cap y memory cap. Ejecuta WAT/WASM precompilado y captura el return value tipado del export `main`."
+
+[dependencies]
+pluma-notebook-core = { path = "../pluma-notebook-core" }
+pluma-notebook-exec = { path = "../pluma-notebook-exec" }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+wasmi = { workspace = true }
+wat = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
