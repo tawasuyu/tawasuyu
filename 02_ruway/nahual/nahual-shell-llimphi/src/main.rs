@@ -15,16 +15,19 @@
 //!   `nahual-text-viewer-llimphi`, ≤ 256 KB, UTF-8 sin null bytes).
 //! - Splitter draggable.
 //!
+//! El viewer se elige por extensión (PNG/JPG/JPEG → image, resto →
+//! text con fallback a "binario"). Esto es deliberadamente tosco:
+//! cuando exista un `MimeRegistry` o un AppBus con `EntityType`,
+//! pasará a usar eso.
+//!
 //! Lo que **todavía** no:
 //! - `layout.json` / `Persister` / hot-reload.
-//! - Otros containers (Tabs, Tiled) y otros viewers (Image, Database).
-//!   Image y Database viven como crates aparte; falta cablearlos como
-//!   "preview alternativo" cuando el path no es texto.
+//! - Otros containers (Tabs, Tiled) y otro viewer (Database).
 //! - AppBus: el viewer recibe el path directo desde el modelo. Cuando
 //!   tengamos un bus, el shell publica `EntitySelected` y los viewers
 //!   se suscriben.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, FlexDirection, Size, Style},
@@ -38,6 +41,10 @@ use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette
 use nahual_file_explorer_llimphi::{
     file_explorer_view, FileExplorerState, OpenedFile,
 };
+use nahual_image_viewer_llimphi::{
+    image_viewer_view, load_image, ImagePreviewState, ImageViewerPalette,
+    DEFAULT_IMAGE_BYTES_MAX,
+};
 use nahual_text_viewer_llimphi::{
     load_preview, text_viewer_view, PreviewState, TextViewerPalette,
     DEFAULT_PREVIEW_BYTES_MAX,
@@ -47,11 +54,22 @@ fn main() {
     llimphi_ui::run::<Shell>();
 }
 
+/// Qué viewer pinta el panel derecho. Se decide por extensión del
+/// path seleccionado en [`detect_kind`]; los archivos sin match
+/// caen como `Text` y el text viewer los muestra como binarios si
+/// no son UTF-8 — es un fallback razonable que pasa por la guard
+/// existente de `load_preview`.
+enum PreviewPane {
+    Empty,
+    Text(PreviewState),
+    Image(ImagePreviewState),
+}
+
 struct Model {
     explorer: FileExplorerState,
     /// Ancho del panel izquierdo en px. Lo muta el drag del splitter.
     list_width: f32,
-    preview: PreviewState,
+    preview: PreviewPane,
     /// Path del archivo previsualizado (header del panel derecho).
     preview_of: Option<PathBuf>,
 }
@@ -88,7 +106,7 @@ impl App for Shell {
         Model {
             explorer: FileExplorerState::new(cwd),
             list_width: 400.0,
-            preview: PreviewState::Empty,
+            preview: PreviewPane::Empty,
             preview_of: None,
         }
     }
@@ -141,11 +159,11 @@ impl App for Shell {
             Msg::OpenSelected => {
                 match m.explorer.open_selected() {
                     Some(OpenedFile::Directory) => {
-                        m.preview = PreviewState::Empty;
+                        m.preview = PreviewPane::Empty;
                         m.preview_of = None;
                     }
                     Some(OpenedFile::File(path)) => {
-                        m.preview = load_preview(&path, DEFAULT_PREVIEW_BYTES_MAX);
+                        m.preview = load_for(&path);
                         m.preview_of = Some(path);
                     }
                     None => {}
@@ -171,18 +189,31 @@ impl App for Shell {
     fn view(model: &Self::Model) -> View<Self::Msg> {
         let theme = Theme::dark();
         let splitter_palette = SplitterPalette::from_theme(&theme);
-        let viewer_palette = TextViewerPalette::from_theme(&theme);
+        let text_palette = TextViewerPalette::from_theme(&theme);
+        let image_palette = ImageViewerPalette::from_theme(&theme);
         let header = header_bar(model, &theme);
         let list_pane = file_explorer_view::<Msg, _>(
             &model.explorer,
             ListPalette::from_theme(&theme),
             Msg::Select,
         );
-        let viewer_pane = text_viewer_view::<Msg>(
-            &model.preview,
-            model.preview_of.as_deref(),
-            &viewer_palette,
-        );
+        let viewer_pane = match &model.preview {
+            PreviewPane::Empty => text_viewer_view::<Msg>(
+                &PreviewState::Empty,
+                None,
+                &text_palette,
+            ),
+            PreviewPane::Text(state) => text_viewer_view::<Msg>(
+                state,
+                model.preview_of.as_deref(),
+                &text_palette,
+            ),
+            PreviewPane::Image(state) => image_viewer_view::<Msg>(
+                state,
+                model.preview_of.as_deref(),
+                &image_palette,
+            ),
+        };
 
         let body = splitter_two(
             Direction::Row,
@@ -235,23 +266,40 @@ fn header_bar(model: &Model, theme: &Theme) -> View<Msg> {
 }
 
 /// Releé el preview del entry seleccionado tras un cambio de selección.
-/// Si es directorio, limpia; si es archivo, lo carga sync.
+/// Si es directorio, limpia; si es archivo, lo carga sync con el
+/// viewer apropiado según extensión.
 fn refresh_preview(m: &mut Model) {
     let Some(entry) = m.explorer.selected_entry() else {
-        m.preview = PreviewState::Empty;
+        m.preview = PreviewPane::Empty;
         m.preview_of = None;
         return;
     };
     if entry.is_dir {
-        m.preview = PreviewState::Empty;
+        m.preview = PreviewPane::Empty;
         m.preview_of = None;
         return;
     }
     let Some(path) = m.explorer.selected_path() else {
-        m.preview = PreviewState::Empty;
+        m.preview = PreviewPane::Empty;
         m.preview_of = None;
         return;
     };
-    m.preview = load_preview(&path, DEFAULT_PREVIEW_BYTES_MAX);
+    m.preview = load_for(&path);
     m.preview_of = Some(path);
+}
+
+/// Decide qué viewer usar según la extensión del path y dispara la
+/// carga sync. PNG/JPG/JPEG → image viewer; cualquier otro → text
+/// viewer (que ya degrada a "binario" si no es UTF-8).
+fn load_for(path: &Path) -> PreviewPane {
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("png") | Some("jpg") | Some("jpeg") => {
+            PreviewPane::Image(load_image(path, DEFAULT_IMAGE_BYTES_MAX))
+        }
+        _ => PreviewPane::Text(load_preview(path, DEFAULT_PREVIEW_BYTES_MAX)),
+    }
 }

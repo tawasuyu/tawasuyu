@@ -18,4 +18,5 @@ llimphi-theme = { workspace = true }
 llimphi-widget-list = { workspace = true }
 llimphi-widget-splitter = { workspace = true }
 nahual-file-explorer-llimphi = { workspace = true }
+nahual-image-viewer-llimphi = { workspace = true }
 nahual-text-viewer-llimphi = { workspace = true }
