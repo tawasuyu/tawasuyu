@@ -2337,32 +2337,58 @@ fn plain_cell(text: &str, fg: Hsla, bg: Option<Hsla>, underline: bool) -> gpui::
     cell.child(SharedString::from(text.to_string()))
 }
 
-/// Color de la decoración según su tipo y la naturaleza del path
-/// detrás: directorios en azul, ejecutables en verde, symlinks en
-/// magenta, URLs/grep-refs en accent.
-fn decoration_color(
-    kind: &shuma_line::DecorationKind,
+/// Paleta para los colores de decoraciones — la pasamos en bloque
+/// para no obligar a llamadores a recordar el orden de 5+ args.
+#[derive(Clone, Copy)]
+struct DecoPalette {
     accent: Hsla,
     dir: Hsla,
     exec: Hsla,
     symlink: Hsla,
-) -> Hsla {
+    sha: Hsla,
+    issue: Hsla,
+    frame: Hsla,
+}
+
+/// Color de la decoración según su tipo y la naturaleza del path
+/// detrás: directorios en azul, ejecutables en verde, symlinks en
+/// magenta, SHAs en ámbar, issues en violeta, box-drawing en frame.
+fn decoration_color(kind: &shuma_line::DecorationKind, p: &DecoPalette) -> Hsla {
     use shuma_line::DecorationKind::*;
     match kind {
         Path { is_dir, is_executable, is_symlink, .. } => {
             if *is_symlink {
-                symlink
+                p.symlink
             } else if *is_dir {
-                dir
+                p.dir
             } else if *is_executable {
-                exec
+                p.exec
             } else {
-                accent
+                p.accent
             }
         }
-        Url(_) => accent,
-        GrepRef { .. } => accent,
+        Url(_) => p.accent,
+        GrepRef { .. } => p.accent,
+        GitSha(_) => p.sha,
+        IssueRef(_) => p.issue,
+        BoxDraw => p.frame,
     }
+}
+
+/// `true` si la decoración no debe llevar underline (las cajas
+/// box-drawing pierden todo el sentido visual con subrayado, y los
+/// issues `#NN` quedan mejor sin él porque suelen ir en prosa).
+fn decoration_skip_underline(kind: &shuma_line::DecorationKind) -> bool {
+    use shuma_line::DecorationKind::*;
+    matches!(kind, BoxDraw | IssueRef(_))
+}
+
+/// `true` si la decoración tiene una acción asociada (click ↦ algo).
+/// Box-draw y issue-ref no actúan todavía: el primero es puramente
+/// visual; el segundo necesitaría resolver el host del repo, futuro.
+fn decoration_is_clickable(kind: &shuma_line::DecorationKind) -> bool {
+    use shuma_line::DecorationKind::*;
+    !matches!(kind, BoxDraw | IssueRef(_))
 }
 
 /// Acción al clickear una decoración. Cerrada como datos para
@@ -2381,6 +2407,13 @@ enum DecorationAction {
     SuggestEditAt { path: std::path::PathBuf, line_no: u32 },
     /// Abre la URL con `xdg-open` (Linux) — fire-and-forget.
     OpenUrl(String),
+    /// Rellena el input con `git show <sha>` — el usuario decide si lo
+    /// ejecuta. Pensado para clickear un commit hash en `git log` o en
+    /// un mensaje de error.
+    SuggestGitShow(String),
+    /// No hace nada — para decoraciones puramente visuales (box-draw)
+    /// o que aún no tienen target (issue refs sin host del repo).
+    None,
 }
 
 impl DecorationAction {
@@ -2423,6 +2456,12 @@ impl DecorationAction {
                     .arg(url)
                     .spawn();
             }
+            Self::SuggestGitShow(sha) => {
+                shell.line.set_text(format!("git show {sha}"));
+                shell.refresh_completion();
+                cx.notify();
+            }
+            Self::None => {}
         }
     }
 }
@@ -2442,6 +2481,8 @@ fn decoration_action(kind: &shuma_line::DecorationKind) -> DecorationAction {
             path: abs.clone(),
             line_no: *line_no,
         },
+        GitSha(s) => DecorationAction::SuggestGitShow(s.clone()),
+        IssueRef(_) | BoxDraw => DecorationAction::None,
     }
 }
 
@@ -2860,19 +2901,35 @@ fn render_run(
             ));
         } else {
             // Cada línea: spans ANSI (color/bold/underline) + decoraciones
-            // (paths existentes, URLs, refs `path:line:col`). El render
-            // mergea ambos: cuando un span solapa una decoración, se parte
-            // y el trozo decorado gana underline + click handler.
-            let accent = gpui::hsla(190.0 / 360.0, 0.70, 0.62, 1.0);
-            let dir_color = gpui::hsla(210.0 / 360.0, 0.65, 0.70, 1.0);
-            let exec_color = gpui::hsla(135.0 / 360.0, 0.55, 0.65, 1.0);
-            let symlink_color = gpui::hsla(285.0 / 360.0, 0.55, 0.70, 1.0);
+            // (paths existentes, URLs, refs `path:line:col`, SHAs git,
+            // `#NN`, box-drawing). El render mergea ambos: cuando un
+            // span solapa una decoración, se parte y el trozo decorado
+            // gana underline + click handler. Todo el cuerpo va en
+            // **monospace** para que ls -l, find, tree y cajas de
+            // box-drawing conserven la alineación de columnas.
+            let palette = DecoPalette {
+                accent: gpui::hsla(190.0 / 360.0, 0.70, 0.62, 1.0),
+                dir: gpui::hsla(210.0 / 360.0, 0.65, 0.70, 1.0),
+                exec: gpui::hsla(135.0 / 360.0, 0.55, 0.65, 1.0),
+                symlink: gpui::hsla(285.0 / 360.0, 0.55, 0.70, 1.0),
+                sha: gpui::hsla(38.0 / 360.0, 0.80, 0.65, 1.0),
+                issue: gpui::hsla(220.0 / 360.0, 0.75, 0.70, 1.0),
+                frame: gpui::hsla(190.0 / 360.0, 0.50, 0.55, 0.95),
+            };
             let cwd_owned = std::path::PathBuf::from(&r.cwd);
             for (li, l) in lines.iter().enumerate() {
                 let stripped = shuma_line::strip_ansi(l);
                 let decorations = shuma_line::decorate_line(&stripped, &cwd_owned);
                 let spans = shuma_line::parse_ansi_line(l);
-                let mut row = div().flex().flex_row().flex_wrap().text_size(px(12.));
+                // Monospace + sin wrap horizontal: cada línea conserva
+                // el shape del terminal. `flex_wrap` rompía las
+                // columnas de `ls -l` y los bordes de cajas; sin él,
+                // el panel hace scroll horizontal si la línea es ancha.
+                let mut row = div()
+                    .flex()
+                    .flex_row()
+                    .font_family("Iosevka")
+                    .text_size(px(12.));
                 if spans.is_empty() {
                     row = row.text_color(default_color);
                 } else {
@@ -2902,27 +2959,40 @@ fn render_run(
                                 }
                                 let text = sp.text[(dec_start - sp_start)..(dec_end - sp_start)]
                                     .to_string();
-                                let color = decoration_color(&dec.kind, accent, dir_color, exec_color, symlink_color);
-                                let dec_id = SharedString::from(format!(
-                                    "dec-{}-{}-{}",
-                                    id, li, dec_seq
-                                ));
-                                dec_seq += 1;
-                                let action = decoration_action(&dec.kind);
-                                row = row.child(
-                                    div()
+                                let color = decoration_color(&dec.kind, &palette);
+                                let underline =
+                                    !decoration_skip_underline(&dec.kind);
+                                let clickable =
+                                    decoration_is_clickable(&dec.kind);
+                                let cell: gpui::AnyElement = if clickable {
+                                    let dec_id = SharedString::from(format!(
+                                        "dec-{}-{}-{}",
+                                        id, li, dec_seq
+                                    ));
+                                    dec_seq += 1;
+                                    let action = decoration_action(&dec.kind);
+                                    let mut c = div()
                                         .id(dec_id)
                                         .flex_none()
                                         .text_color(color)
-                                        .text_decoration_1()
                                         .cursor_pointer()
-                                        .child(SharedString::from(text))
                                         .on_click(cx.listener(
                                             move |shell, _ev, _w, cx| {
                                                 action.apply(shell, cx);
                                             },
-                                        )),
-                                );
+                                        ));
+                                    if underline {
+                                        c = c.text_decoration_1();
+                                    }
+                                    c.child(SharedString::from(text)).into_any_element()
+                                } else {
+                                    let mut c = div().flex_none().text_color(color);
+                                    if underline {
+                                        c = c.text_decoration_1();
+                                    }
+                                    c.child(SharedString::from(text)).into_any_element()
+                                };
+                                row = row.child(cell);
                                 cursor = dec_end;
                             }
                             if cursor < sp_end {

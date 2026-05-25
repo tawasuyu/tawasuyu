@@ -58,34 +58,193 @@ pub enum DecorationKind {
         line_no: u32,
         col: Option<u32>,
     },
+    /// SHA de git (hex 7..40 chars). El frontend sugiere `git show
+    /// <sha>` en el input.
+    GitSha(String),
+    /// Referencia tipo `#1234` — issue/PR de GitHub/GitLab/Gitea. Sin
+    /// click action porque la url depende del repo; el frontend puede
+    /// resolverla mediante `git config remote.origin.url` + reglas
+    /// por host en el futuro. Hoy sólo se pinta destacado.
+    IssueRef(u32),
+    /// Run contiguo de caracteres de **box-drawing** Unicode
+    /// (U+2500..U+257F y U+2580..U+259F). El frontend los renderiza
+    /// con la fuente monospace + color accent para que los bordes
+    /// calcen entre filas y se vean como una caja real.
+    BoxDraw,
 }
 
 /// Punto de entrada: detecta decoraciones para una línea. `cwd` se usa
-/// para resolver paths relativos. El orden es:
+/// para resolver paths relativos. El orden importa porque las primeras
+/// reclaman el rango antes que las siguientes:
 ///
-/// 1. URLs primero (las más específicas y no se confunden con paths).
-/// 2. GrepRefs (formato `path:N[:N]` al inicio de línea).
-/// 3. Paths sueltos en los tokens restantes.
+/// 1. **Box-drawing** — son chars no-ASCII contiguos, sólo necesitan
+///    detección visual; van primero para que un `─` accidental no se
+///    interprete como nada raro después.
+/// 2. **URLs** — las más específicas, prefijo único.
+/// 3. **GrepRefs** — `path:N[:N]` al inicio de línea (cargo, grep, rg).
+/// 4. **GitSha** + **IssueRef** — patrones reconocibles fuera de
+///    contextos de paths.
+/// 5. **Paths** — generales, captura los tokens restantes.
 ///
-/// Decoraciones que solapan se descartan (gana la más temprana).
+/// Las decoraciones que solapan se descartan (gana la más temprana).
 pub fn decorate_line(line: &str, cwd: &Path) -> Vec<Decoration> {
     let mut out: Vec<Decoration> = Vec::new();
+    find_box_draw(line, &mut out);
     find_urls(line, &mut out);
     find_grep_refs(line, cwd, &mut out);
+    find_git_shas(line, &mut out);
+    find_issue_refs(line, &mut out);
     find_paths(line, cwd, &mut out);
     out.sort_by_key(|d| d.start);
-    // Si hubo solapamientos, los `find_*` ya los respetaron — pero por
-    // higiene re-chequeamos contiguamente.
     let mut merged: Vec<Decoration> = Vec::with_capacity(out.len());
     for d in out {
         if let Some(prev) = merged.last() {
             if d.start < prev.end {
-                continue; // gana el primero
+                continue;
             }
         }
         merged.push(d);
     }
     merged
+}
+
+// --- Box-drawing detection ---
+
+/// `true` si `c` pertenece a las áreas Unicode de líneas/bordes que
+/// las CLIs modernas (gemini, claude, cargo, etc.) usan para dibujar
+/// cajas: `Box Drawing` (U+2500..U+257F) y `Block Elements`
+/// (U+2580..U+259F).
+fn is_box_draw(c: char) -> bool {
+    let u = c as u32;
+    (0x2500..=0x257F).contains(&u) || (0x2580..=0x259F).contains(&u)
+}
+
+fn find_box_draw(line: &str, out: &mut Vec<Decoration>) {
+    let mut start: Option<usize> = None;
+    for (i, c) in line.char_indices() {
+        if is_box_draw(c) {
+            if start.is_none() {
+                start = Some(i);
+            }
+        } else if let Some(s) = start.take() {
+            out.push(Decoration {
+                start: s,
+                end: i,
+                kind: DecorationKind::BoxDraw,
+            });
+        }
+    }
+    if let Some(s) = start {
+        out.push(Decoration {
+            start: s,
+            end: line.len(),
+            kind: DecorationKind::BoxDraw,
+        });
+    }
+}
+
+// --- Git SHA + Issue ref detection ---
+
+/// SHAs de git: hex (0-9a-f) de 7..40 chars de largo. Para reducir
+/// falsos positivos exigimos: rodeado por boundary (inicio/fin de
+/// línea, whitespace o puntuación) y al menos un dígito O al menos
+/// una letra (puro `aaaaaaa` raramente es un SHA).
+fn find_git_shas(line: &str, out: &mut Vec<Decoration>) {
+    let bytes = line.as_bytes();
+    let n = bytes.len();
+    let mut i = 0;
+    while i < n {
+        // Buscar inicio de un run hex
+        if !is_boundary(line, i) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        let mut end = i;
+        let mut has_digit = false;
+        let mut has_alpha = false;
+        while end < n {
+            let c = bytes[end];
+            if c.is_ascii_digit() {
+                has_digit = true;
+                end += 1;
+            } else if matches!(c, b'a'..=b'f') {
+                has_alpha = true;
+                end += 1;
+            } else {
+                break;
+            }
+        }
+        let len = end - start;
+        if len >= 7 && len <= 40 && has_digit && has_alpha && is_end_boundary(line, end) {
+            // Evitar solapar con decoraciones previas (URLs, paths,
+            // etc.) — chequeo barato.
+            if !overlaps_any(start, end, out) {
+                out.push(Decoration {
+                    start,
+                    end,
+                    kind: DecorationKind::GitSha(line[start..end].to_string()),
+                });
+            }
+        }
+        i = end.max(start + 1);
+    }
+}
+
+/// `#NN` típico de issues/PRs en repos. Acepta 1..7 dígitos (millones
+/// de issues son raros y ayudan a evitar falsos positivos con hashes
+/// numéricos o números de línea).
+fn find_issue_refs(line: &str, out: &mut Vec<Decoration>) {
+    let bytes = line.as_bytes();
+    let n = bytes.len();
+    let mut i = 0;
+    while i < n {
+        if bytes[i] == b'#' && is_boundary(line, i) {
+            let start = i;
+            let mut end = i + 1;
+            while end < n && bytes[end].is_ascii_digit() {
+                end += 1;
+            }
+            let digits = end - i - 1;
+            if (1..=7).contains(&digits) && is_end_boundary(line, end) {
+                if !overlaps_any(start, end, out) {
+                    if let Ok(num) = line[start + 1..end].parse::<u32>() {
+                        out.push(Decoration {
+                            start,
+                            end,
+                            kind: DecorationKind::IssueRef(num),
+                        });
+                    }
+                }
+            }
+            i = end.max(start + 1);
+        } else {
+            i += 1;
+        }
+    }
+}
+
+/// `true` si justo a la izquierda de `pos` hay un carácter no-palabra
+/// (o estamos en inicio de línea). Lo usamos en find_git_shas /
+/// find_issue_refs para anclar el INICIO del patrón.
+fn is_boundary(line: &str, pos: usize) -> bool {
+    let bytes = line.as_bytes();
+    if pos == 0 || pos == bytes.len() {
+        return true;
+    }
+    let prev = bytes[pos - 1];
+    !(prev.is_ascii_alphanumeric() || prev == b'_')
+}
+
+/// `true` si justo a la derecha de `pos` hay un carácter no-palabra
+/// (o estamos en fin de línea). Ancla el FIN del patrón.
+fn is_end_boundary(line: &str, pos: usize) -> bool {
+    let bytes = line.as_bytes();
+    if pos >= bytes.len() {
+        return true;
+    }
+    let next = bytes[pos];
+    !(next.is_ascii_alphanumeric() || next == b'_')
 }
 
 // --- URL detection ---
@@ -515,5 +674,89 @@ mod tests {
         let d = tempdir().unwrap();
         let line = "esto-no-existe.txt foo-tampoco.bin";
         assert!(paths_in(line, d.path()).is_empty());
+    }
+
+    #[test]
+    fn box_drawing_chars_are_detected_as_one_run() {
+        // Tres chars contiguos U+2500..U+257F = una sola decoración.
+        let line = "┌───┐ texto │ otro";
+        let dec = decorate_line(line, Path::new("/"));
+        let boxes: Vec<_> = dec
+            .iter()
+            .filter(|d| matches!(d.kind, DecorationKind::BoxDraw))
+            .collect();
+        // Una para "┌───┐" y otra para "│".
+        assert_eq!(boxes.len(), 2);
+    }
+
+    #[test]
+    fn box_drawing_runs_are_contiguous_only() {
+        // Espacios cortan el run.
+        let line = "─ ─";
+        let dec = decorate_line(line, Path::new("/"));
+        let n_boxes = dec.iter().filter(|d| matches!(d.kind, DecorationKind::BoxDraw)).count();
+        assert_eq!(n_boxes, 2);
+    }
+
+    #[test]
+    fn block_elements_count_as_box_draw() {
+        // Bloques de progresión (cargo "███") también.
+        let line = "▓▓░ progreso";
+        let dec = decorate_line(line, Path::new("/"));
+        assert!(dec.iter().any(|d| matches!(d.kind, DecorationKind::BoxDraw)));
+    }
+
+    #[test]
+    fn git_sha_is_detected_with_hex_and_min_length() {
+        let line = "commit a1b2c3d  por sergio";
+        let dec = decorate_line(line, Path::new("/"));
+        let shas: Vec<_> = dec
+            .iter()
+            .filter_map(|d| match &d.kind {
+                DecorationKind::GitSha(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(shas, vec!["a1b2c3d"]);
+    }
+
+    #[test]
+    fn git_sha_long_form() {
+        let line = "ref a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
+        let dec = decorate_line(line, Path::new("/"));
+        let count = dec
+            .iter()
+            .filter(|d| matches!(d.kind, DecorationKind::GitSha(_)))
+            .count();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn pure_letters_are_not_a_sha() {
+        // "abcdefg" es hex pero sin dígito — descarta.
+        let line = "abcdefg";
+        let dec = decorate_line(line, Path::new("/"));
+        assert!(!dec.iter().any(|d| matches!(d.kind, DecorationKind::GitSha(_))));
+    }
+
+    #[test]
+    fn issue_ref_is_picked_up() {
+        let line = "fixes #1234 y también #56";
+        let dec = decorate_line(line, Path::new("/"));
+        let refs: Vec<_> = dec
+            .iter()
+            .filter_map(|d| match &d.kind {
+                DecorationKind::IssueRef(n) => Some(*n),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(refs, vec![1234, 56]);
+    }
+
+    #[test]
+    fn pound_inside_a_word_is_not_an_issue_ref() {
+        let line = "abc#123";
+        let dec = decorate_line(line, Path::new("/"));
+        assert!(!dec.iter().any(|d| matches!(d.kind, DecorationKind::IssueRef(_))));
     }
 }
