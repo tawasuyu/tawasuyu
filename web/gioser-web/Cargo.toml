@@ -10,11 +10,7 @@ publish.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-gioser-canvas-web = { path = "../gioser-canvas-web" }
 fana-md-reader-web = { path = "../../00_unanchay/pluma/pluma-md-reader-web" }
-revista-web = { path = "../../00_unanchay/pluma/pluma-deck-web" }
-barra-web = { path = "../../02_ruway/mirada/mirada-bar-web" }
-gioser-graph-web = { path = "../gioser-graph-web" }
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
 js-sys.workspace = true
@@ -25,20 +21,9 @@ features = [
     "Window",
     "Document",
     "Element",
-    "Node",
     "HtmlElement",
-    "HtmlCanvasElement",
-    "CssStyleDeclaration",
-    "DomTokenList",
-    "DomRect",
-    "Event",
-    "EventTarget",
-    "MouseEvent",
-    "PointerEvent",
-    "KeyboardEvent",
-    "NodeList",
-    "Performance",
+    "Request",
+    "RequestInit",
+    "Response",
     "console",
-    "Location",
-    "History",
 ]

@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gioser</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header>
+  <h1>gioser</h1>
+  <p class="subtitle">monorepo · 4 cuadrantes · ciclo de la información</p>
+</header>
+
+<main>
+<svg id="plano" viewBox="-100 -100 200 200" preserveAspectRatio="xMidYMid meet">
+  <!-- ejes -->
+  <line class="axis" x1="-100" y1="0" x2="100" y2="0"/>
+  <line class="axis" x1="0" y1="-100" x2="0" y2="100"/>
+  <!-- ticks -->
+  <g class="ticks">
+    <line x1="-50" y1="-2" x2="-50" y2="2"/>
+    <line x1="50" y1="-2" x2="50" y2="2"/>
+    <line x1="-2" y1="-50" x2="2" y2="-50"/>
+    <line x1="-2" y1="50" x2="2" y2="50"/>
+  </g>
+  <!-- etiquetas de ejes -->
+  <text class="axis-label" x="96" y="-4">x</text>
+  <text class="axis-label" x="4" y="-94">y</text>
+
+  <!-- Cuadrante II (top-left): 00_unanchay PERCIBIR -->
+  <g class="quad" data-cuad="00_unanchay" transform="translate(-50,-50)">
+    <rect x="-40" y="-40" width="80" height="80"/>
+    <text class="quad-id" x="0" y="-22">0x00</text>
+    <text class="quad-name" x="0" y="-6">UNANCHAY</text>
+    <text class="quad-verb" x="0" y="8">percibir</text>
+    <g class="domains" text-anchor="middle">
+      <text class="dom" x="0" y="22" data-dom="pluma">pluma</text>
+      <text class="dom" x="0" y="30" data-dom="khipu">khipu</text>
+      <text class="dom" x="0" y="38" data-dom="rimay">rimay · chaka · pineal</text>
+    </g>
+  </g>
+
+  <!-- Cuadrante I (top-right): 01_yachay CONOCER -->
+  <g class="quad" data-cuad="01_yachay" transform="translate(50,-50)">
+    <rect x="-40" y="-40" width="80" height="80"/>
+    <text class="quad-id" x="0" y="-22">0x01</text>
+    <text class="quad-name" x="0" y="-6">YACHAY</text>
+    <text class="quad-verb" x="0" y="8">conocer</text>
+    <g class="domains" text-anchor="middle">
+      <text class="dom" x="0" y="22" data-dom="cosmos">cosmos</text>
+      <text class="dom" x="0" y="30" data-dom="dominium">dominium</text>
+      <text class="dom" x="0" y="38" data-dom="nakui">nakui</text>
+    </g>
+  </g>
+
+  <!-- Cuadrante III (bottom-left): 03_ukupacha RAÍZ -->
+  <g class="quad" data-cuad="03_ukupacha" transform="translate(-50,50)">
+    <rect x="-40" y="-40" width="80" height="80"/>
+    <text class="quad-id" x="0" y="-22">0x03</text>
+    <text class="quad-name" x="0" y="-6">UKUPACHA</text>
+    <text class="quad-verb" x="0" y="8">raíz</text>
+    <g class="domains" text-anchor="middle">
+      <text class="dom" x="0" y="22" data-dom="arje">arje · wawa</text>
+      <text class="dom" x="0" y="30" data-dom="agora">agora</text>
+      <text class="dom" x="0" y="38" data-dom="minga">minga</text>
+    </g>
+  </g>
+
+  <!-- Cuadrante IV (bottom-right): 02_ruway HACER -->
+  <g class="quad" data-cuad="02_ruway" transform="translate(50,50)">
+    <rect x="-40" y="-40" width="80" height="80"/>
+    <text class="quad-id" x="0" y="-22">0x02</text>
+    <text class="quad-name" x="0" y="-6">RUWAY</text>
+    <text class="quad-verb" x="0" y="8">hacer</text>
+    <g class="domains" text-anchor="middle">
+      <text class="dom" x="0" y="22" data-dom="mirada">mirada · nahual</text>
+      <text class="dom" x="0" y="30" data-dom="shuma">shuma · chasqui</text>
+      <text class="dom" x="0" y="38" data-dom="takiy">takiy</text>
+    </g>
+  </g>
+</svg>
+
+<section id="lector" hidden>
+  <div class="lector-head">
+    <span id="lector-titulo"></span>
+    <button id="lector-cerrar" type="button" aria-label="cerrar">×</button>
+  </div>
+  <article id="lector-cuerpo"></article>
+</section>
+</main>
+
+<footer>
+  <a href="https://gitea.gioser.net/sergio/gioser">gitea.gioser.net/sergio/gioser</a>
+</footer>
+
+<script type="module">
+  import init, { abrir_md } from './pkg/gioser_web.js';
+  init().then(() => {
+    document.querySelectorAll('.dom').forEach(el => {
+      el.addEventListener('click', () => abrir_md(el.dataset.dom));
+    });
+    document.getElementById('lector-cerrar').addEventListener('click', () => {
+      document.getElementById('lector').hidden = true;
+    });
+  });
+</script>
+</body>
+</html>
