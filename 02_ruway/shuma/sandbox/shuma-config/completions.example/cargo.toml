@@ -1,0 +1,29 @@
+# ============================================================
+# cargo.toml — completions extra para `cargo` en shuma-shell.
+#
+# Copiá este fichero a `~/.config/shuma/completions/cargo.toml`
+# (creando el directorio si no existe). Los flags listados se SUMAN al
+# catálogo built-in de shuma-line; no lo reemplazan. Ideal para flags
+# personalizados o nuevos que aún no estén en el catálogo.
+#
+# Convenciones:
+# - Un flag por entrada; el motor de completion los filtra por prefijo.
+# - Si el flag espera valor, terminá en `=` (p.ej. `--manifest-path=`):
+#   tras `=` shuma-shell pasa a completar paths.
+# - El array `flags` es lo único soportado hoy; en el futuro se
+#   sumarán `subcommands` y `args` con tipo (path/host/etc.).
+# ============================================================
+
+flags = [
+    "--target-dir=",
+    "--manifest-path=",
+    "--profile=",
+    "--config=",
+    "--build-plan",
+    "--message-format=human",
+    "--message-format=json",
+    "--message-format=short",
+    "--timings",
+    "--unit-graph",
+    "-Z",
+]

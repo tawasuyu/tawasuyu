@@ -50,3 +50,13 @@ dedup = "ignore_consecutive"
 [capture]
 limit_mb = 8
 spill = false
+
+# ---- Completion de flags ----
+# El catálogo built-in de shuma-line cubre ~40 comandos típicos. Para
+# ampliarlo, dejá un archivo por comando en
+# `$XDG_CONFIG_HOME/shuma/completions/<cmd>.toml` con la forma:
+#
+#   flags = ["--mi-flag", "--otro=", "-x"]
+#
+# Los flags terminados en `=` activan completion de path tras el `=`.
+# Ver `completions.example/cargo.toml` en el repo para un caso real.

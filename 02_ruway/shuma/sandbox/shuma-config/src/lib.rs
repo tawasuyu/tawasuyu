@@ -125,6 +125,15 @@ impl Config {
             .map(|d| d.config_dir().join("shumarc.toml"))
     }
 
+    /// Directorio donde el shell busca completions extendidas:
+    /// `$XDG_CONFIG_HOME/shuma/completions/`. Cada archivo `<cmd>.toml`
+    /// declara las flags de un comando — el shell las suma a la tabla
+    /// estática de [`shuma_line::flag_hints`].
+    pub fn completions_dir() -> Option<PathBuf> {
+        directories::ProjectDirs::from("", "", "shuma")
+            .map(|d| d.config_dir().join("completions"))
+    }
+
     /// Carga la configuración del path indicado. Si el fichero no existe
     /// devuelve [`Config::default`] sin error (caso normal en arranque
     /// limpio).
@@ -252,6 +261,54 @@ pub fn expand_env(s: &str) -> String {
     out
 }
 
+/// Completion declarada por el usuario para un comando concreto.
+/// Esquema mínimo en `<cmd>.toml`:
+///
+/// ```toml
+/// flags = ["--foo", "--bar=", "-x"]
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct CommandCompletion {
+    #[serde(default)]
+    pub flags: Vec<String>,
+}
+
+impl CommandCompletion {
+    /// Carga `<dir>/<cmd>.toml` si existe, o devuelve `None`. Si el
+    /// archivo está roto, también `None` — completions son nice-to-have,
+    /// no deben caer el shell.
+    pub fn load(dir: &Path, command: &str) -> Option<Self> {
+        let path = dir.join(format!("{command}.toml"));
+        let text = std::fs::read_to_string(path).ok()?;
+        toml::from_str(&text).ok()
+    }
+
+    /// Carga *todas* las completions de un directorio en un HashMap.
+    /// Útil para precargar al arrancar el shell (un read_dir + N lecturas
+    /// pequeñas; barato comparado con el coste de un fork).
+    pub fn load_all(dir: &Path) -> HashMap<String, Self> {
+        let mut out = HashMap::new();
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return out;
+        };
+        for e in entries.flatten() {
+            let path = e.path();
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if path.extension().and_then(|e| e.to_str()) != Some("toml") {
+                continue;
+            }
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                if let Ok(c) = toml::from_str::<CommandCompletion>(&text) {
+                    out.insert(stem.to_string(), c);
+                }
+            }
+        }
+        out
+    }
+}
+
 /// Errores al cargar la configuración.
 #[derive(Debug)]
 pub enum ConfigError {
@@ -376,5 +433,42 @@ spill = true
         std::env::remove_var("SHUMA_TEST_FOO");
         assert_eq!(expand_env("$ "), "$ ");
         assert_eq!(expand_env("$"), "$");
+    }
+
+    #[test]
+    fn completion_loads_per_command_file() {
+        let d = tempdir().unwrap();
+        std::fs::write(
+            d.path().join("mytool.toml"),
+            "flags = [\"--foo\", \"--bar=\"]\n",
+        )
+        .unwrap();
+        let c = CommandCompletion::load(d.path(), "mytool").unwrap();
+        assert_eq!(c.flags, vec!["--foo", "--bar="]);
+        // Comando inexistente → None.
+        assert!(CommandCompletion::load(d.path(), "nope").is_none());
+    }
+
+    #[test]
+    fn completion_loads_all_in_dir() {
+        let d = tempdir().unwrap();
+        std::fs::write(d.path().join("alfa.toml"), "flags = [\"--a\"]\n").unwrap();
+        std::fs::write(d.path().join("beta.toml"), "flags = [\"--b\"]\n").unwrap();
+        std::fs::write(d.path().join("ignored.txt"), "no soy toml").unwrap();
+        let all = CommandCompletion::load_all(d.path());
+        assert_eq!(all.len(), 2);
+        assert!(all.contains_key("alfa"));
+        assert!(all.contains_key("beta"));
+        assert!(!all.contains_key("ignored"));
+    }
+
+    #[test]
+    fn corrupt_completion_file_is_skipped() {
+        let d = tempdir().unwrap();
+        std::fs::write(d.path().join("bad.toml"), "not = valid = toml").unwrap();
+        std::fs::write(d.path().join("good.toml"), "flags = [\"--ok\"]\n").unwrap();
+        let all = CommandCompletion::load_all(d.path());
+        assert!(all.contains_key("good"));
+        assert!(!all.contains_key("bad"));
     }
 }

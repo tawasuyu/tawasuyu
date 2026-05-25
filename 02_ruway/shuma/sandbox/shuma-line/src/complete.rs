@@ -19,6 +19,13 @@ pub trait CompletionSource {
     fn commands(&self) -> Vec<String>;
     /// Rutas de archivo que empiezan con `prefix`.
     fn paths(&self, prefix: &str) -> Vec<String>;
+    /// Banderas conocidas para `command`. Por defecto delega en la tabla
+    /// estática [`flag_hints`] (que cubre los binarios más usados). El
+    /// frontend puede sobreescribir el método para mergear con un DB
+    /// personalizado (p. ej. `~/.config/shuma/completions/<cmd>.toml`).
+    fn flags(&self, command: &str) -> Vec<String> {
+        flag_hints(command).iter().map(|s| s.to_string()).collect()
+    }
 }
 
 /// Qué clase de cosa se está completando.
@@ -51,23 +58,148 @@ impl Completion {
     }
 }
 
-/// Pistas de flags por comando — un diccionario mínimo de los comandos
-/// más usados. La fuente real de un frontend puede ampliarlo.
+/// Flags universales — `--help` y `-h` los reconoce casi todo binario
+/// POSIX/GNU/clap-style. Se agregan siempre al final de las sugerencias.
+const UNIVERSAL_FLAGS: &[&str] = &["--help", "-h"];
+
+/// Pistas de flags por comando — diccionario *static* de los comandos
+/// más usados en una shell de desarrollo. La fuente del frontend puede
+/// extenderlo con un DB cargado en runtime (p. ej. desde
+/// `~/.config/shuma/completions/`).
 pub fn flag_hints(command: &str) -> &'static [&'static str] {
     match command {
-        "ls" => &["-l", "-a", "-la", "-lh", "-R", "-t", "--all", "--color", "--human-readable"],
-        "grep" => &["-i", "-v", "-r", "-n", "-E", "-l", "-c", "--color", "--include"],
-        "rm" => &["-r", "-f", "-rf", "-i", "-v"],
-        "cp" => &["-r", "-a", "-v", "-p", "-u"],
-        "mv" => &["-f", "-i", "-n", "-v"],
-        "cargo" => &["--release", "--workspace", "--all-features", "-p", "--bin", "--example"],
-        "git" => &["--version", "--help", "-C"],
-        "docker" => &["-d", "-it", "--name", "--restart", "-p", "-e", "-v", "--rm"],
-        "ps" => &["-e", "-f", "-aux", "-u"],
-        "tar" => &["-c", "-x", "-z", "-v", "-f", "-czf", "-xzf"],
-        "curl" => &["-s", "-L", "-o", "-O", "-X", "-H", "-d"],
+        // --- coreutils ---
+        "ls" => &[
+            "-l", "-a", "-la", "-lh", "-A", "-R", "-r", "-t", "-S", "-d", "-1", "-F",
+            "--all", "--almost-all", "--color", "--color=always", "--color=auto",
+            "--color=never", "--human-readable", "--group-directories-first",
+            "--sort=time", "--sort=size", "--sort=name", "--reverse",
+        ],
+        "cat" => &["-A", "-b", "-E", "-n", "-s", "-T", "-v", "--number", "--show-ends"],
+        "grep" => &[
+            "-i", "-v", "-r", "-R", "-n", "-E", "-F", "-l", "-c", "-w", "-x", "-o",
+            "-A", "-B", "-C", "--color", "--color=always", "--include", "--exclude",
+            "--exclude-dir", "--binary-files=without-match",
+        ],
+        "sed" => &["-e", "-f", "-i", "-n", "-r", "-E", "--in-place"],
+        "awk" => &["-F", "-v", "-f", "-W"],
+        "find" => &[
+            "-name", "-iname", "-type", "-mtime", "-newer", "-size", "-maxdepth",
+            "-mindepth", "-prune", "-print", "-exec", "-delete", "-empty", "-not",
+            "-and", "-or", "-path", "-regex",
+        ],
+        "rm" => &["-r", "-f", "-rf", "-i", "-v", "-d", "--recursive", "--force", "--interactive"],
+        "cp" => &["-r", "-a", "-v", "-p", "-u", "-f", "-i", "-n", "--recursive", "--archive"],
+        "mv" => &["-f", "-i", "-n", "-v", "--no-clobber"],
+        "mkdir" => &["-p", "-v", "-m", "--parents"],
+        "head" => &["-n", "-c", "-q", "-v"],
+        "tail" => &["-n", "-c", "-f", "-F", "-q", "-v", "--follow", "--retry"],
+        "wc" => &["-c", "-l", "-w", "-m", "-L"],
+        "sort" => &["-n", "-r", "-u", "-k", "-t", "-f", "-h", "-V", "--unique", "--reverse"],
+        "uniq" => &["-c", "-d", "-u", "-i", "-f", "-s"],
+        "du" => &["-h", "-s", "-a", "-c", "-d", "-x", "--max-depth", "--summarize"],
+        "df" => &["-h", "-T", "-i", "-x", "--type", "--human-readable"],
+        "ps" => &["-e", "-f", "-aux", "-u", "-o", "-p", "--ppid"],
+        "kill" => &["-9", "-15", "-STOP", "-CONT", "-HUP", "-INT", "-l", "-s"],
+        "tar" => &[
+            "-c", "-x", "-z", "-j", "-J", "-v", "-f", "-t", "-C",
+            "-czf", "-xzf", "-tzf", "-cjf", "-xjf",
+            "--create", "--extract", "--list", "--gzip", "--bzip2", "--xz",
+        ],
+        "curl" => &[
+            "-s", "-S", "-L", "-o", "-O", "-X", "-H", "-d", "-D", "-i", "-I", "-v", "-f", "-k",
+            "--silent", "--show-error", "--location", "--output", "--remote-name",
+            "--request", "--header", "--data", "--insecure", "--fail",
+        ],
+        "wget" => &[
+            "-q", "-O", "-c", "-r", "-l", "--quiet", "--output-document", "--continue",
+            "--recursive", "--no-check-certificate",
+        ],
+        "ssh" => &["-i", "-p", "-l", "-L", "-R", "-D", "-N", "-T", "-X", "-Y", "-A", "-J", "-J"],
+        "scp" => &["-r", "-P", "-i", "-p", "-q", "-C"],
+        "rsync" => &[
+            "-a", "-v", "-z", "-h", "-r", "-n", "--archive", "--verbose", "--compress",
+            "--dry-run", "--delete", "--exclude", "--progress",
+        ],
+
+        // --- cargo / rust ---
+        "cargo" => &[
+            "--release", "--workspace", "--all-features", "--no-default-features",
+            "--features", "-p", "--package", "--bin", "--bins", "--example", "--examples",
+            "--lib", "--test", "--tests", "--bench", "--benches", "--target", "--target-dir",
+            "--manifest-path", "--frozen", "--locked", "--offline", "-v", "-vv", "--quiet",
+            "--color=always", "--message-format=json",
+        ],
+        "rustup" => &["--version", "--verbose", "--quiet", "--toolchain"],
+        "rustc" => &[
+            "--edition", "--crate-type", "--emit", "-O", "-g", "-C", "-Z", "--target",
+            "-L", "-l", "--cfg", "--print",
+        ],
+
+        // --- git ---
+        "git" => &["-C", "-c", "-p", "--paginate", "--no-pager", "--version", "--git-dir", "--work-tree"],
+
+        // --- contenedores / k8s ---
+        "docker" => &[
+            "-d", "-it", "--rm", "--name", "--restart", "-p", "-e", "-v",
+            "--network", "--volume", "--env", "--env-file", "--cpus", "--memory",
+        ],
+        "podman" => &["-d", "-it", "--rm", "--name", "-p", "-e", "-v", "--network", "--pod"],
+        "kubectl" => &[
+            "-n", "--namespace", "-o", "--output", "-w", "--watch", "-f", "--filename",
+            "--context", "-l", "--selector", "--all-namespaces", "-A",
+        ],
+        "systemctl" => &[
+            "--user", "--system", "--now", "--no-pager", "--full", "-l", "-r", "-a",
+            "--state", "--type", "--failed",
+        ],
+        "journalctl" => &[
+            "-u", "-f", "-r", "-n", "-k", "-b", "--since", "--until", "--user-unit",
+            "--no-pager", "-p", "--priority",
+        ],
+
+        // --- desarrollo ---
+        "make" => &["-j", "-C", "-f", "-n", "-B", "-s", "--jobs", "--always-make"],
+        "ninja" => &["-j", "-C", "-n", "-v", "-t"],
+        "python" => &["-c", "-m", "-u", "-V", "-O", "-OO", "-i", "--version"],
+        "python3" => &["-c", "-m", "-u", "-V", "-O", "-OO", "-i", "--version"],
+        "node" => &["-e", "-v", "-p", "--inspect", "--inspect-brk", "--version"],
+        "deno" => &["run", "test", "fmt", "lint", "-A", "--allow-net", "--allow-read", "--allow-write"],
+        "go" => &["build", "run", "test", "mod", "get", "fmt", "vet", "-race", "-tags"],
+
+        // --- vim / editores ---
+        "vim" => &["-c", "-O", "-o", "-p", "-R", "-d", "-u", "-N", "+"],
+        "nvim" => &["-c", "-O", "-o", "-p", "-R", "-d", "-u", "-N", "+", "--headless"],
+        "hx" => &["--tutor", "--health", "--config", "-V", "--version"],
+        "code" => &["-r", "-n", "-g", "-d", "--reuse-window", "--new-window", "--goto", "--diff"],
+
+        // --- proceso / debug ---
+        "strace" => &["-e", "-f", "-o", "-p", "-c", "-y", "-tt", "-T", "-s"],
+        "ltrace" => &["-e", "-f", "-o", "-p", "-c"],
+        "gdb" => &["-q", "-c", "--args", "-ex", "-batch", "--tui"],
+        "perf" => &["record", "report", "stat", "top", "-F", "-g", "-p", "-e"],
+
+        // --- shuma / brahman ---
+        "shuma" => &[
+            "workspace", "run", "pipeline", "discern", "capabilities",
+            "--socket", "--json", "--verbose",
+        ],
+
         _ => &[],
     }
+}
+
+/// Extiende cualquier lista de flags con los universales (`--help`/`-h`)
+/// si todavía no están presentes. Lo usa el motor cuando filtra los
+/// candidatos para `prefix`.
+fn extend_with_universal(mut flags: Vec<String>) -> Vec<String> {
+    for u in UNIVERSAL_FLAGS {
+        let s = (*u).to_string();
+        if !flags.iter().any(|f| f == &s) {
+            flags.push(s);
+        }
+    }
+    flags
 }
 
 /// Calcula el autocompletado para `line` con el cursor en `cursor`
@@ -116,29 +248,46 @@ pub fn complete(
         }
     }
 
-    let (kind, mut candidates) = if !has_command {
+    let (kind, mut candidates, repl_start_final) = if !has_command {
         let cs = source
             .commands()
             .into_iter()
             .filter(|c| c.starts_with(prefix))
             .collect();
-        (CompletionKind::Command, cs)
+        (CompletionKind::Command, cs, repl_start)
     } else if prefix.starts_with('-') {
-        let hints = stage_command.as_deref().map(flag_hints).unwrap_or(&[]);
-        let cs = hints
-            .iter()
-            .filter(|f| f.starts_with(prefix))
-            .map(|s| s.to_string())
-            .collect();
-        (CompletionKind::Flag, cs)
+        // Caso `--foo=<...>`: tras `=`, el cursor está completando el
+        // *valor* del flag, no otro flag. Lo más útil hoy es path
+        // completion (cubre `--config=`, `--output=`, etc.). En el futuro
+        // podríamos consultar al source por tipos de valor por flag.
+        if let Some(eq) = prefix.find('=') {
+            let value_prefix = &prefix[eq + 1..];
+            let cs = source.paths(value_prefix);
+            (CompletionKind::Path, cs, repl_start + eq + 1)
+        } else {
+            let hints = stage_command
+                .as_deref()
+                .map(|c| source.flags(c))
+                .unwrap_or_default();
+            let cs = extend_with_universal(hints)
+                .into_iter()
+                .filter(|f| f.starts_with(prefix))
+                .collect();
+            (CompletionKind::Flag, cs, repl_start)
+        }
     } else {
-        (CompletionKind::Path, source.paths(prefix))
+        (CompletionKind::Path, source.paths(prefix), repl_start)
     };
 
     candidates.sort();
     candidates.dedup();
     candidates.truncate(200);
-    Completion { kind, candidates, replace_start: repl_start, replace_end: repl_end }
+    Completion {
+        kind,
+        candidates,
+        replace_start: repl_start_final,
+        replace_end: repl_end,
+    }
 }
 
 /// Fuente de candidatos con listas fijas — útil para tests y para un
@@ -246,5 +395,68 @@ mod tests {
     fn cursor_past_end_is_clamped() {
         let c = complete_at("gi", 999);
         assert_eq!(c.candidates, vec!["git"]);
+    }
+
+    #[test]
+    fn universal_help_flags_always_suggested() {
+        // Comando sin entrada en la tabla estática igualmente recibe -h/--help.
+        let c = complete_at("foobar -", 8);
+        assert_eq!(c.kind, CompletionKind::Flag);
+        assert!(c.candidates.contains(&"-h".to_string()));
+        assert!(c.candidates.contains(&"--help".to_string()));
+    }
+
+    #[test]
+    fn equals_in_flag_switches_to_path_completion() {
+        // `cargo --manifest-path=Car` debe completar paths a partir de `Car`,
+        // reemplazando sólo el sufijo (no el flag completo).
+        let c = complete_at("cargo --manifest-path=Car", 25);
+        assert_eq!(c.kind, CompletionKind::Path);
+        assert_eq!(c.candidates, vec!["Cargo.lock", "Cargo.toml"]);
+        // El reemplazo arranca en la posición justo después del `=`.
+        let s = "cargo --manifest-path=";
+        assert_eq!(c.replace_start, s.len());
+        assert_eq!(c.replace_end, 25);
+    }
+
+    #[test]
+    fn source_can_override_flag_db() {
+        // Una fuente custom puede ampliar el catálogo más allá de la
+        // tabla estática (lo aprovecha el shell para cargar
+        // ~/.config/shuma/completions/<cmd>.toml).
+        #[derive(Default)]
+        struct CustomSource {
+            commands: Vec<String>,
+        }
+        impl CompletionSource for CustomSource {
+            fn commands(&self) -> Vec<String> {
+                self.commands.clone()
+            }
+            fn paths(&self, _: &str) -> Vec<String> {
+                Vec::new()
+            }
+            fn flags(&self, command: &str) -> Vec<String> {
+                if command == "mytool" {
+                    vec!["--mytool-only".into(), "--verbose".into()]
+                } else {
+                    flag_hints(command).iter().map(|s| s.to_string()).collect()
+                }
+            }
+        }
+        let s = CustomSource { commands: vec!["mytool".into()] };
+        let c = complete("mytool --m", 10, Dialect::Bash, &s);
+        assert_eq!(c.kind, CompletionKind::Flag);
+        assert!(c.candidates.contains(&"--mytool-only".to_string()));
+    }
+
+    #[test]
+    fn after_pipe_help_flag_works_for_new_stage_command() {
+        // `cargo build | grep -` → flags de grep, no de cargo.
+        let c = complete_at("cargo build | grep -", 20);
+        assert_eq!(c.kind, CompletionKind::Flag);
+        // grep tiene -i; cargo no.
+        assert!(c.candidates.iter().any(|f| f == "-i"));
+        // El universal sigue ahí.
+        assert!(c.candidates.contains(&"-h".to_string()));
     }
 }

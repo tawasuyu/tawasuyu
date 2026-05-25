@@ -28,7 +28,9 @@ pub mod lexer;
 pub mod pipeline;
 pub mod token;
 
-pub use complete::{complete, Completion, CompletionKind, CompletionSource, StaticSource};
+pub use complete::{
+    complete, flag_hints, Completion, CompletionKind, CompletionSource, StaticSource,
+};
 pub use dialect::Dialect;
 pub use editor::LineState;
 pub use ghost::ghost_suggestion;

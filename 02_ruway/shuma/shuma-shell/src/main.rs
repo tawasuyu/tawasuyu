@@ -180,6 +180,9 @@ fn plan_exec(line: &str) -> Exec {
 struct ShellCompletionSource {
     commands: Vec<String>,
     cwd: String,
+    /// Flags por comando cargadas de `~/.config/shuma/completions/*.toml`.
+    /// El método `flags()` las suma a la tabla estática del motor.
+    flag_db: HashMap<String, Vec<String>>,
 }
 
 impl ShellCompletionSource {
@@ -198,7 +201,18 @@ impl ShellCompletionSource {
         }
         commands.sort();
         commands.dedup();
-        Self { commands, cwd }
+        // Si el usuario tiene un dir de completions, lo cargamos una vez
+        // al arrancar — son archivos pequeños y leerlos por demanda
+        // añadiría latencia visible al primer Tab.
+        let flag_db = shuma_config::Config::completions_dir()
+            .map(|dir| {
+                shuma_config::CommandCompletion::load_all(&dir)
+                    .into_iter()
+                    .map(|(cmd, c)| (cmd, c.flags))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Self { commands, cwd, flag_db }
     }
 }
 
@@ -233,6 +247,20 @@ impl CompletionSource for ShellCompletionSource {
             }
         }
         out.sort();
+        out
+    }
+
+    fn flags(&self, command: &str) -> Vec<String> {
+        // Mergeo: el catálogo estático del motor + lo declarado por el
+        // usuario en `~/.config/shuma/completions/<cmd>.toml`. Si hay
+        // duplicados, `complete()` los dedup-ea al final.
+        let mut out: Vec<String> = shuma_line::flag_hints(command)
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        if let Some(user) = self.flag_db.get(command) {
+            out.extend(user.iter().cloned());
+        }
         out
     }
 }
