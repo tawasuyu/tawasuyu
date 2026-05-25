@@ -59,7 +59,7 @@ Cuando Llimphi tenga las 4 fases verdes, portar:
 | App | Crate(s) actual(es) | Acción |
 |---|---|---|
 | Nahual shell + viewers (5 apps + 8 libs + 12 widgets) | `02_ruway/nahual/*` | Reemplazar capa GPUI; conservar lógica de dominio |
-| Mirada UI (launcher, portal, greeter) | `02_ruway/mirada/mirada-{launcher,portal,greeter}` | Idem |
+| Mirada UI (launcher, portal, greeter) | `02_ruway/mirada/mirada-{launcher,portal,greeter}` | Idem · `mirada-greeter` portado a Llimphi (2026-05-25). |
 | Pluma editor | `00_unanchay/pluma/pluma-editor-gpui` | Renombrar a `pluma-editor-llimphi` |
 | Dominium canvas | `01_yachay/dominium/dominium-canvas-gpui` | Renombrar a `dominium-canvas-llimphi` |
 | Cosmos app | `01_yachay/cosmos/cosmos-app` | Reescribir canvas + panels en Llimphi |
@@ -118,8 +118,9 @@ Cuando Llimphi tenga las 4 fases verdes, portar:
 **Migración GPUI → Llimphi**. Llimphi ya tiene: render gráfico (vello), layout flex/grid (taffy), texto con shaping (parley), input mouse+teclado, bucle Elm. Suficiente para portar la primera app.
 
 Candidatos (orden de menor a mayor riesgo):
-1. **`mirada-launcher`** — UI sencilla, sin estado complejo. Bueno para validar.
-2. **`pluma-editor-gpui`** → `pluma-editor-llimphi` — editor de texto. Stretch: cursor positioning con click, selección, multi-line wrap.
-3. **`nahual-shell`** + un par de widgets — file explorer básico, valida composición.
+1. ~~**`mirada-launcher`**~~ — descartado como primera migración: hoy es TUI, no GPUI.
+2. **`mirada-greeter`** — ✅ portado (2026-05-25). Extendido `llimphi-ui` con `Handle<Msg>` (quit + spawn de hilos que reentran al `update`) y `app_id()` para Wayland. La lógica de `auth-core` quedó intacta.
+3. **`pluma-editor-gpui`** → `pluma-editor-llimphi` — editor de texto. Stretch: cursor positioning con click, selección, multi-line wrap.
+4. **`nahual-shell`** + un par de widgets — file explorer básico, valida composición.
 
 En paralelo (no bloqueado): **Fase 1 de Puriy** (`puriy-core` puro Rust — Tab/Session/History/Bookmark/Profile testeables).

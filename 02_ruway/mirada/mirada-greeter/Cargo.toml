@@ -6,14 +6,12 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "mirada-greeter — el greeter de carmen: ventana GPUI de login que autentica con auth-core y emite un SessionTicket al compositor por stdout."
+description = "mirada-greeter — el greeter de carmen: ventana Llimphi de login que autentica con auth-core y emite un SessionTicket al compositor por stdout."
 
 [[bin]]
 name = "mirada-greeter"
 path = "src/main.rs"
 
 [dependencies]
-gpui = { workspace = true }
-nahual-theme = { workspace = true }
-nahual-widget-text-input = { workspace = true }
+llimphi-ui = { workspace = true }
 auth-core = { path = "../../../shared/auth/auth-core" }

@@ -356,6 +356,8 @@ vello = "0.5"
 taffy = "0.9"
 # parley = shaping completo (bidi, ligatures, fallback CJK/emoji vía fontique, line break).
 parley = "0.4"
+# Bucle Elm (input→update→view→layout→raster→present). Lo consumen las apps.
+llimphi-ui = { path = "02_ruway/llimphi/llimphi-ui" }
 
 # === Filesystem helpers ===
 directories = "5"

@@ -14,7 +14,7 @@ use std::sync::Arc;
 use llimphi_hal::winit::application::ApplicationHandler;
 use llimphi_hal::winit::dpi::{LogicalSize, PhysicalPosition};
 use llimphi_hal::winit::event::{ElementState, MouseButton, WindowEvent};
-use llimphi_hal::winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use llimphi_hal::winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use llimphi_hal::winit::keyboard::ModifiersState;
 use llimphi_hal::winit::window::{Window, WindowAttributes, WindowId};
 use llimphi_hal::{Hal, Surface, WinitSurface};
@@ -32,12 +32,17 @@ pub use llimphi_raster;
 pub use llimphi_text;
 
 /// Aplicación Elm: estado inmutable, transición pura, vista pura.
+///
+/// `init` y `update` reciben un [`Handle`] que permite hablar con el runtime
+/// desde dentro de la transición (cerrar la ventana, lanzar trabajo en otro
+/// hilo y reentrar con un Msg al terminar). Mantener la transición pura del
+/// modelo sigue siendo el contrato — `Handle` sólo escala efectos.
 pub trait App: 'static {
     type Model: 'static;
-    type Msg: Clone + 'static;
+    type Msg: Clone + Send + 'static;
 
-    fn init() -> Self::Model;
-    fn update(model: Self::Model, msg: Self::Msg) -> Self::Model;
+    fn init(handle: &Handle<Self::Msg>) -> Self::Model;
+    fn update(model: Self::Model, msg: Self::Msg, handle: &Handle<Self::Msg>) -> Self::Model;
     fn view(model: &Self::Model) -> View<Self::Msg>;
 
     /// Maneja una pulsación de tecla. Devuelve `Some(Msg)` para disparar
@@ -49,6 +54,64 @@ pub trait App: 'static {
     /// Título de la ventana (sólo se lee al arrancar).
     fn title() -> &'static str {
         "llimphi"
+    }
+
+    /// Identificador de aplicación. En Wayland se mapea al `app_id` del
+    /// xdg-toplevel (lo que el compositor usa para reconocer la ventana,
+    /// p. ej. `carmen.greeter`). `None` deja que el sistema asigne uno.
+    fn app_id() -> Option<&'static str> {
+        None
+    }
+}
+
+/// Mensaje interno del event loop. `Msg` lo dispara la app desde un hilo de
+/// fondo vía [`Handle::dispatch`] o [`Handle::spawn`]; `Quit` cierra la
+/// ventana y termina el proceso.
+pub enum UserEvent<Msg> {
+    Msg(Msg),
+    Quit,
+}
+
+/// Asa al runtime de Llimphi. Clonable y enviable entre hilos: la usás para
+/// pedir cerrar la ventana o para lanzar trabajo (PAM, IO, etc.) que al
+/// terminar reentra con un Msg al `update`.
+pub struct Handle<Msg: Send + 'static> {
+    proxy: EventLoopProxy<UserEvent<Msg>>,
+}
+
+impl<Msg: Send + 'static> Clone for Handle<Msg> {
+    fn clone(&self) -> Self {
+        Self {
+            proxy: self.proxy.clone(),
+        }
+    }
+}
+
+impl<Msg: Send + 'static> Handle<Msg> {
+    /// Cierra la ventana y termina el bucle. La transición en curso (si la
+    /// hay) se completa antes de salir.
+    pub fn quit(&self) {
+        let _ = self.proxy.send_event(UserEvent::Quit);
+    }
+
+    /// Encola un Msg para procesarse en el próximo turno del bucle. Útil
+    /// para que un callback externo reentre al update.
+    pub fn dispatch(&self, msg: Msg) {
+        let _ = self.proxy.send_event(UserEvent::Msg(msg));
+    }
+
+    /// Lanza una closure en un hilo aparte; cuando devuelve `Msg`, el
+    /// runtime la entrega al `update` en el hilo de UI. Pensado para
+    /// trabajo bloqueante (PAM tarda ~2 s ante un fallo, p. ej.).
+    pub fn spawn<F>(&self, f: F)
+    where
+        F: FnOnce() -> Msg + Send + 'static,
+    {
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            let msg = f();
+            let _ = proxy.send_event(UserEvent::Msg(msg));
+        });
     }
 }
 
@@ -297,6 +360,7 @@ fn hit_test<Msg: Clone>(
 }
 
 struct Runtime<A: App> {
+    handle: Handle<A::Msg>,
     state: Option<RuntimeState<A>>,
 }
 
@@ -312,17 +376,30 @@ struct RuntimeState<A: App> {
     typesetter: llimphi_text::Typesetter,
 }
 
-impl<A: App> ApplicationHandler for Runtime<A> {
+fn build_window_attributes<A: App>() -> WindowAttributes {
+    let attrs = WindowAttributes::default()
+        .with_title(A::title())
+        .with_inner_size(LogicalSize::new(960u32, 540u32));
+    // En Linux, `with_name` del trait de Wayland mapea al `app_id` del
+    // xdg-toplevel — lo que el compositor (`mirada-compositor`) usa para
+    // reconocer ventanas especiales (greeter, launcher…).
+    #[cfg(all(target_os = "linux", not(target_os = "android")))]
+    {
+        if let Some(id) = A::app_id() {
+            use llimphi_hal::winit::platform::wayland::WindowAttributesExtWayland;
+            return attrs.with_name(id, "");
+        }
+    }
+    attrs
+}
+
+impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.state.is_some() {
             return;
         }
         let window = event_loop
-            .create_window(
-                WindowAttributes::default()
-                    .with_title(A::title())
-                    .with_inner_size(LogicalSize::new(960u32, 540u32)),
-            )
+            .create_window(build_window_attributes::<A>())
             .expect("create window");
         let window = Arc::new(window);
         let hal = pollster::block_on(Hal::new(None)).expect("hal");
@@ -336,11 +413,25 @@ impl<A: App> ApplicationHandler for Runtime<A> {
             surface,
             renderer,
             scene: vello::Scene::new(),
-            model: Some(A::init()),
+            model: Some(A::init(&self.handle)),
             cursor: PhysicalPosition::new(0.0, 0.0),
             modifiers: Modifiers::default(),
             typesetter,
         });
+    }
+
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent<A::Msg>) {
+        match event {
+            UserEvent::Quit => event_loop.exit(),
+            UserEvent::Msg(msg) => {
+                let Some(state) = self.state.as_mut() else {
+                    return;
+                };
+                let model = state.model.take().expect("model");
+                state.model = Some(A::update(model, msg, &self.handle));
+                state.window.request_redraw();
+            }
+        }
     }
 
     fn window_event(
@@ -377,7 +468,7 @@ impl<A: App> ApplicationHandler for Runtime<A> {
                 };
                 if let Some(msg) = A::on_key(state.model.as_ref().expect("model"), &ev) {
                     let model = state.model.take().expect("model");
-                    state.model = Some(A::update(model, msg));
+                    state.model = Some(A::update(model, msg, &self.handle));
                     state.window.request_redraw();
                 }
             }
@@ -399,7 +490,7 @@ impl<A: App> ApplicationHandler for Runtime<A> {
                     hit_test(&mounted, &computed, state.cursor.x as f32, state.cursor.y as f32)
                 {
                     let model = state.model.take().expect("model");
-                    state.model = Some(A::update(model, msg));
+                    state.model = Some(A::update(model, msg, &self.handle));
                     state.window.request_redraw();
                 }
             }
@@ -437,10 +528,19 @@ impl<A: App> ApplicationHandler for Runtime<A> {
     }
 }
 
-/// Punto de entrada: corre el bucle Elm hasta que el usuario cierre la ventana.
+/// Punto de entrada: corre el bucle Elm hasta que el usuario cierre la
+/// ventana (o la app llame [`Handle::quit`]).
 pub fn run<A: App>() {
-    let event_loop = EventLoop::new().expect("event loop");
+    let event_loop = EventLoop::<UserEvent<A::Msg>>::with_user_event()
+        .build()
+        .expect("event loop");
     event_loop.set_control_flow(ControlFlow::Wait);
-    let mut runtime: Runtime<A> = Runtime { state: None };
+    let handle = Handle {
+        proxy: event_loop.create_proxy(),
+    };
+    let mut runtime: Runtime<A> = Runtime {
+        handle,
+        state: None,
+    };
     event_loop.run_app(&mut runtime).expect("run app");
 }

@@ -8,7 +8,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, Key, KeyEvent, KeyState, NamedKey, View};
+use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 
 #[derive(Clone)]
 enum Msg {
@@ -27,11 +27,11 @@ impl App for Editor {
         "llimphi · editor"
     }
 
-    fn init() -> Self::Model {
+    fn init(_: &Handle<Self::Msg>) -> Self::Model {
         String::new()
     }
 
-    fn update(model: Self::Model, msg: Self::Msg) -> Self::Model {
+    fn update(model: Self::Model, msg: Self::Msg, _: &Handle<Self::Msg>) -> Self::Model {
         match msg {
             Msg::Insert(s) => {
                 let mut m = model;

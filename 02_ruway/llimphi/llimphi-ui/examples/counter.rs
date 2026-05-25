@@ -11,7 +11,7 @@ use llimphi_ui::llimphi_layout::taffy::{
     AlignItems, JustifyContent,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
-use llimphi_ui::{App, View};
+use llimphi_ui::{App, Handle, View};
 
 #[derive(Clone)]
 enum Msg {
@@ -29,11 +29,11 @@ impl App for Counter {
         "llimphi · counter"
     }
 
-    fn init() -> Self::Model {
+    fn init(_: &Handle<Self::Msg>) -> Self::Model {
         0
     }
 
-    fn update(model: Self::Model, msg: Self::Msg) -> Self::Model {
+    fn update(model: Self::Model, msg: Self::Msg, _: &Handle<Self::Msg>) -> Self::Model {
         match msg {
             Msg::Increment => model.saturating_add(1),
             Msg::Reset => 0,
