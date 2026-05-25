@@ -13,7 +13,6 @@
 //! colapsa, el mundo se re-siembra solo. El panel derecho muestra
 //! stats y dos controles (play/pausa, re-sembrar).
 
-use std::thread;
 use std::time::Duration;
 
 use dominium_canvas_llimphi::canvas_view;
@@ -149,16 +148,9 @@ impl App for Dominium {
     }
 
     fn init(handle: &Handle<Msg>) -> Model {
-        // Loop de tick en un thread aparte. `Handle` es Clone+Send;
-        // cada TICK_MS dispatchamos `Msg::Tick` al update. Cuando la
-        // ventana se cierra, el EventLoop muere y `dispatch` falla
-        // silenciosamente — el thread queda spinning hasta el exit
-        // del proceso, costo despreciable.
-        let h = handle.clone();
-        thread::spawn(move || loop {
-            thread::sleep(Duration::from_millis(TICK_MS));
-            h.dispatch(Msg::Tick);
-        });
+        // Loop de tick a ~11 Hz; el handle ya sabe cómo dejar morir
+        // el thread cuando el event loop se cierre.
+        handle.spawn_periodic(Duration::from_millis(TICK_MS), || Msg::Tick);
 
         let rng_seed = 0xD0_31_31_07;
         Model {

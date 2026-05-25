@@ -131,6 +131,31 @@ impl<Msg: Send + 'static> Handle<Msg> {
             let _ = proxy.send_event(UserEvent::Msg(msg));
         });
     }
+
+    /// Lanza un loop periódico en un hilo aparte: cada `period` invoca
+    /// `f()` y dispatcha el `Msg` resultante al `update`. El thread
+    /// queda corriendo hasta que el event loop se cierra (en ese
+    /// punto el `send_event` falla silenciosamente y el thread spinea
+    /// hasta el exit del proceso, costo despreciable).
+    ///
+    /// Útil para ticks de simulación (~11 Hz en dominium), polling de
+    /// hardware, o cualquier feed que necesite Msgs a intervalos
+    /// regulares. Si `f` necesita state, capturalo en la closure por
+    /// move; la closure se ejecuta en un thread aparte así que el
+    /// state capturado debe ser `Send`.
+    pub fn spawn_periodic<F>(&self, period: std::time::Duration, f: F)
+    where
+        F: Fn() -> Msg + Send + 'static,
+    {
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(period);
+            if proxy.send_event(UserEvent::Msg(f())).is_err() {
+                // Event loop cerrado — el thread puede morir.
+                break;
+            }
+        });
+    }
 }
 
 /// Evento de teclado normalizado.
