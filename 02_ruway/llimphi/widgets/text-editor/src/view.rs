@@ -22,6 +22,7 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
 
 use crate::cursor::Pos;
+use crate::diagnostics::{Diagnostic, Severity};
 use crate::highlight::{Language, Span, SyntaxPalette, TokenKind};
 use crate::state::EditorState;
 
@@ -40,6 +41,14 @@ pub struct EditorPalette {
     pub bg_bracket_pair: Color,
     /// Fondo de cada match del find activo.
     pub bg_match: Color,
+    /// Subrayado de diagnostic — Error.
+    pub diag_error: Color,
+    /// Subrayado de diagnostic — Warning.
+    pub diag_warning: Color,
+    /// Subrayado de diagnostic — Information.
+    pub diag_info: Color,
+    /// Subrayado de diagnostic — Hint.
+    pub diag_hint: Color,
 }
 
 impl Default for EditorPalette {
@@ -63,6 +72,10 @@ impl EditorPalette {
             caret: t.accent,
             bg_bracket_pair: t.bg_button_hover,
             bg_match: t.bg_button_hover,
+            diag_error: t.fg_destructive,
+            diag_warning: Color::from_rgb8(229, 192, 123),
+            diag_info: Color::from_rgb8(97, 175, 239),
+            diag_hint: t.fg_muted,
         }
     }
 }
@@ -337,6 +350,11 @@ fn build_content<Msg: Clone + 'static>(
         }
     }
 
+    // 3b) Diagnostics — subrayado bajo el rango, color por severity.
+    for d in &state.diagnostics {
+        children.extend(diagnostic_underline(d, scroll, end_line, metrics, palette));
+    }
+
     // 4) Caret — uno por cursor, sólo si visible.
     for c in state.all_cursors() {
         let p = c.caret;
@@ -519,6 +537,58 @@ fn bracket_highlight<Msg: Clone + 'static>(
         ..Default::default()
     })
     .fill(palette.bg_bracket_pair)
+}
+
+fn diagnostic_underline<Msg: Clone + 'static>(
+    d: &Diagnostic,
+    scroll: usize,
+    end_viewport: usize,
+    metrics: EditorMetrics,
+    palette: &EditorPalette,
+) -> Vec<View<Msg>> {
+    let color = match d.severity {
+        Severity::Error => palette.diag_error,
+        Severity::Warning => palette.diag_warning,
+        Severity::Information => palette.diag_info,
+        Severity::Hint => palette.diag_hint,
+    };
+    let mut out: Vec<View<Msg>> = Vec::new();
+    let first = d.range.start.line.max(scroll);
+    let last = d.range.end.line.min(end_viewport.saturating_sub(1));
+    if first > last {
+        return out;
+    }
+    for line in first..=last {
+        let col_start = if line == d.range.start.line { d.range.start.col } else { 0 };
+        let col_end = if line == d.range.end.line {
+            d.range.end.col
+        } else {
+            // Fin de línea — extendemos 1 char extra para visualizar el wrap.
+            col_start + 1
+        };
+        if col_end <= col_start {
+            continue;
+        }
+        let x = 4.0 + col_start as f32 * metrics.char_width;
+        let w = (col_end - col_start) as f32 * metrics.char_width;
+        // Subrayado de 1.5 px al final de la línea.
+        let y = (line - scroll) as f32 * metrics.line_height + metrics.line_height - 2.0;
+        out.push(
+            View::new(Style {
+                position: Position::Absolute,
+                inset: Rect {
+                    left: length(x),
+                    top: length(y),
+                    right: auto(),
+                    bottom: auto(),
+                },
+                size: Size { width: length(w), height: length(1.5_f32) },
+                ..Default::default()
+            })
+            .fill(color),
+        );
+    }
+    out
 }
 
 fn match_rects<Msg: Clone + 'static>(

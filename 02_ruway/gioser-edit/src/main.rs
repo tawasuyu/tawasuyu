@@ -30,8 +30,8 @@ use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
 use llimphi_widget_text_editor::{
-    all_matches, find_next, find_prev, text_editor_view_full, Clipboard, EditorMetrics,
-    EditorPalette, EditorState, FindState, Language, PointerEvent, Pos,
+    all_matches, find_next, find_prev, text_editor_view_full, Clipboard, Diagnostic,
+    EditorMetrics, EditorPalette, EditorState, FindState, Language, PointerEvent, Pos,
 };
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
@@ -84,6 +84,11 @@ struct Model {
     /// Modo find: cuando es Some, la barra del find está abierta y las
     /// teclas van al input en lugar de al editor.
     find: Option<FindBarState>,
+    /// Demo de diagnostics — `--demo-lsp` en la línea de comandos. Al
+    /// abrir un .rs, setea 2-3 diagnostics fake para validar el render
+    /// del subrayado. El client LSP real (rust-analyzer) viene en sesión
+    /// separada — esto es solo demostración visual de la infra.
+    demo_lsp: bool,
 }
 
 struct FindBarState {
@@ -116,8 +121,11 @@ impl App for EditorApp {
     }
 
     fn init(_: &Handle<Msg>) -> Model {
-        let root = env::args()
-            .nth(1)
+        let args: Vec<String> = env::args().skip(1).collect();
+        let demo_lsp = args.iter().any(|a| a == "--demo-lsp");
+        let root = args
+            .iter()
+            .find(|a| !a.starts_with("--"))
             .map(PathBuf::from)
             .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         let root = fs::canonicalize(&root).unwrap_or(root);
@@ -134,6 +142,7 @@ impl App for EditorApp {
             dirty: false,
             drag_accum: (0.0, 0.0),
             find: None,
+            demo_lsp,
         }
     }
 
@@ -509,6 +518,14 @@ fn select_node(mut model: Model, i: usize) -> Model {
         Ok(content) => {
             model.editor = EditorState::new();
             model.editor.set_text(&content);
+            // Demo de diagnostics — visualiza el render del subrayado.
+            // El client LSP real vendrá en sesión separada.
+            if model.demo_lsp {
+                let ext = node.path.extension().and_then(|s| s.to_str()).unwrap_or("");
+                if ext == "rs" || ext == "py" {
+                    model.editor.set_diagnostics(demo_diagnostics(&content));
+                }
+            }
             model.open_file = Some(node.path.clone());
             model.dirty = false;
             model.status = format!("abierto · {} bytes", content.len());
@@ -518,6 +535,39 @@ fn select_node(mut model: Model, i: usize) -> Model {
         }
     }
     model
+}
+
+/// Tres diagnostics fake repartidos en las primeras líneas — Error,
+/// Warning, Info. Solo para validar el render del subrayado.
+fn demo_diagnostics(content: &str) -> Vec<Diagnostic> {
+    use llimphi_widget_text_editor::Severity;
+    let mut out = Vec::new();
+    let lines: Vec<&str> = content.lines().collect();
+    for (i, line) in lines.iter().enumerate().take(20) {
+        if line.contains("TODO") {
+            out.push(Diagnostic {
+                range: llimphi_widget_text_editor::DiagnosticRange {
+                    start: Pos::new(i, 0),
+                    end: Pos::new(i, line.chars().count()),
+                },
+                severity: Severity::Warning,
+                message: "TODO pendiente".into(),
+                source: Some("demo".into()),
+            });
+        }
+        if line.contains("FIXME") {
+            out.push(Diagnostic {
+                range: llimphi_widget_text_editor::DiagnosticRange {
+                    start: Pos::new(i, 0),
+                    end: Pos::new(i, line.chars().count()),
+                },
+                severity: Severity::Error,
+                message: "FIXME crítico".into(),
+                source: Some("demo".into()),
+            });
+        }
+    }
+    out
 }
 
 fn apply_editor_key(mut model: Model, ev: KeyEvent) -> Model {

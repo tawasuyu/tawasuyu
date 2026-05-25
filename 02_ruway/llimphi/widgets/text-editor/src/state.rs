@@ -51,6 +51,10 @@ pub struct EditorState {
     /// Cuando hay extras, las ediciones aplican a todos; Esc los colapsa
     /// dejando sólo el primary.
     pub extra_cursors: Vec<Cursor>,
+    /// Diagnostics del LSP (o equivalente). El client externo los popa
+    /// vía `set_diagnostics`; el render del editor los pinta como
+    /// subrayado bajo el rango con color según severity.
+    pub diagnostics: Vec<crate::diagnostics::Diagnostic>,
     pub options: EditorOptions,
     pub undo: UndoStack,
     /// Línea inicial visible — el viewport renderiza
@@ -88,6 +92,7 @@ impl EditorState {
             buffer: Buffer::new(),
             cursor: Cursor::new(),
             extra_cursors: Vec::new(),
+            diagnostics: Vec::new(),
             options: EditorOptions::default(),
             undo: UndoStack::new(),
             scroll_offset: 0,
@@ -125,6 +130,12 @@ impl EditorState {
 
     pub fn has_multi_cursor(&self) -> bool {
         !self.extra_cursors.is_empty()
+    }
+
+    /// Reemplaza los diagnostics del editor. Usado por el client LSP
+    /// cuando recibe `textDocument/publishDiagnostics`.
+    pub fn set_diagnostics(&mut self, diags: Vec<crate::diagnostics::Diagnostic>) {
+        self.diagnostics = diags;
     }
 
     pub fn with_options(options: EditorOptions) -> Self {
