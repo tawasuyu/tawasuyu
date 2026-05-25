@@ -28,11 +28,17 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, Handle, View};
-use pluma_notebook_core::{Cell, CellKind, CellState, Notebook};
+use llimphi_ui::{App, DragPhase, Handle, Modifiers, View, WheelDelta};
+use pluma_notebook_core::{Cell, CellId, CellKind, CellState, Notebook, Position as CanvasPos};
 
 #[derive(Clone)]
-enum Msg {}
+enum Msg {
+    /// Desplaza el viewport del canvas por `(dx, dy)`.
+    PanBy(f32, f32),
+    /// Mueve una celda en el canvas por `(dx, dy)` (delta desde el evento
+    /// anterior — no acumulado desde el press).
+    MoveCell { id: CellId, dx: f32, dy: f32 },
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -43,6 +49,10 @@ enum Mode {
 struct Model {
     notebook: Notebook,
     mode: Mode,
+    /// Offset del viewport en modo canvas — el usuario lo cambia
+    /// arrastrando el fondo o con la rueda del mouse. Se suma a cada
+    /// `Cell::position` al render.
+    viewport: (f32, f32),
     /// Archivo de origen (None = demo embebido).
     source: Option<PathBuf>,
     /// Mensaje de error si load falló — se muestra en el header.
@@ -77,11 +87,45 @@ impl App for Viewer {
         } else {
             Mode::Linear
         };
-        Model { notebook, mode, source, load_error }
+        Model { notebook, mode, viewport: (0.0, 0.0), source, load_error }
     }
 
-    fn update(model: Model, _: Msg, _: &Handle<Msg>) -> Model {
-        model
+    fn update(model: Model, msg: Msg, _: &Handle<Msg>) -> Model {
+        match msg {
+            Msg::PanBy(dx, dy) => Model {
+                viewport: (model.viewport.0 + dx, model.viewport.1 + dy),
+                ..model
+            },
+            Msg::MoveCell { id, dx, dy } => {
+                let mut nb = model.notebook;
+                if let Some(p) = nb.position(id) {
+                    nb.set_position(id, Some(CanvasPos::new(p.x + dx, p.y + dy)));
+                }
+                Model { notebook: nb, ..model }
+            }
+        }
+    }
+
+    fn on_wheel(
+        model: &Self::Model,
+        delta: WheelDelta,
+        _cursor: (f32, f32),
+        _modifiers: Modifiers,
+    ) -> Option<Self::Msg> {
+        // Sólo paneamos en modo canvas; en lineal dejamos el wheel para
+        // un futuro scroll vertical interno.
+        if model.mode != Mode::Canvas {
+            return None;
+        }
+        // Una "línea" del wheel = 16 px de pan.
+        const STEP: f32 = 16.0;
+        let dx = delta.x * STEP;
+        let dy = -delta.y * STEP; // wheel arriba mueve el contenido hacia abajo.
+        if dx == 0.0 && dy == 0.0 {
+            None
+        } else {
+            Some(Msg::PanBy(dx, dy))
+        }
     }
 
     fn view(model: &Model) -> View<Msg> {
@@ -91,7 +135,7 @@ impl App for Viewer {
         let header = header_bar(model, &palette);
         let body = match model.mode {
             Mode::Linear => linear_view(&model.notebook, &palette),
-            Mode::Canvas => canvas_view(&model.notebook, &palette),
+            Mode::Canvas => canvas_view(&model.notebook, model.viewport, &palette),
         };
 
         View::new(Style {
@@ -148,8 +192,11 @@ fn header_bar(model: &Model, palette: &Palette) -> View<Msg> {
         .map(|d| short_hex(&d))
         .unwrap_or_else(|| "—(ciclo)".to_string());
     let modo = match model.mode {
-        Mode::Linear => "lineal",
-        Mode::Canvas => "canvas",
+        Mode::Linear => "lineal".to_string(),
+        Mode::Canvas => format!(
+            "canvas (viewport {:+.0},{:+.0})",
+            model.viewport.0, model.viewport.1
+        ),
     };
     let texto = format!(
         "pluma-notebook · {} celdas · modo {} · digest {} · {}",
@@ -236,7 +283,8 @@ const CANVAS_CARD_W: f32 = 240.0;
 const CANVAS_CARD_H: f32 = 96.0;
 const CANVAS_BODY_LINES_VISIBLE: usize = 4;
 
-fn canvas_view(nb: &Notebook, palette: &Palette) -> View<Msg> {
+fn canvas_view(nb: &Notebook, viewport: (f32, f32), palette: &Palette) -> View<Msg> {
+    let (vx, vy) = viewport;
     let mut children: Vec<View<Msg>> = Vec::new();
 
     // Aristas primero (capa de fondo) — del prerrequisito al dependiente.
@@ -246,18 +294,18 @@ fn canvas_view(nb: &Notebook, palette: &Palette) -> View<Msg> {
             let Some(dep) = nb.cell(*dep_id) else { continue };
             let Some(dep_pos) = dep.position else { continue };
             // Centro inferior del dep → centro superior del dependiente.
-            let x1 = dep_pos.x + CANVAS_CARD_W * 0.5;
-            let y1 = dep_pos.y + CANVAS_CARD_H;
-            let x2 = child_pos.x + CANVAS_CARD_W * 0.5;
-            let y2 = child_pos.y;
+            let x1 = vx + dep_pos.x + CANVAS_CARD_W * 0.5;
+            let y1 = vy + dep_pos.y + CANVAS_CARD_H;
+            let x2 = vx + child_pos.x + CANVAS_CARD_W * 0.5;
+            let y2 = vy + child_pos.y;
             children.extend(edge_segments(x1, y1, x2, y2, palette.edge));
         }
     }
 
-    // Cards encima.
+    // Cards encima — draggables (mueven Cell::position).
     for cell in nb.cells() {
         let Some(pos) = cell.position else { continue };
-        children.push(canvas_card(cell, palette, pos.x, pos.y));
+        children.push(canvas_card(cell, palette, vx + pos.x, vy + pos.y));
     }
 
     // Aviso si hay celdas sin posición — las omitimos en canvas.
@@ -266,6 +314,10 @@ fn canvas_view(nb: &Notebook, palette: &Palette) -> View<Msg> {
         children.push(orphan_notice(huerfanas, palette));
     }
 
+    // El contenedor canvas es draggable: pan del viewport. Las cards
+    // están encima y atrapan su propio drag — el runtime hace hit-test
+    // sobre el child más arriba, así el fondo sólo dispara cuando se
+    // arrastra una zona vacía.
     View::new(Style {
         flex_grow: 1.0,
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
@@ -273,10 +325,15 @@ fn canvas_view(nb: &Notebook, palette: &Palette) -> View<Msg> {
     })
     .fill(palette.bg)
     .clip(true)
+    .draggable(|phase, dx, dy| match phase {
+        DragPhase::Move => Some(Msg::PanBy(dx, dy)),
+        DragPhase::End => None,
+    })
     .children(children)
 }
 
 fn canvas_card(cell: &Cell, palette: &Palette, x: f32, y: f32) -> View<Msg> {
+    let id = cell.id;
     card_with_height(
         cell,
         palette,
@@ -294,6 +351,10 @@ fn canvas_card(cell: &Cell, palette: &Palette, x: f32, y: f32) -> View<Msg> {
         },
         CANVAS_CARD_H - 30.0,
     )
+    .draggable(move |phase, dx, dy| match phase {
+        DragPhase::Move => Some(Msg::MoveCell { id, dx, dy }),
+        DragPhase::End => None,
+    })
 }
 
 fn orphan_notice(n: usize, palette: &Palette) -> View<Msg> {
