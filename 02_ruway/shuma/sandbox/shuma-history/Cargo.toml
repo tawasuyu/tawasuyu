@@ -1,0 +1,18 @@
+[package]
+name = "shuma-history"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "shuma — historial durable de comandos (JSONL append-only) con navegación y búsqueda fuzzy."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+directories = { workspace = true }
+nucleo-matcher = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
