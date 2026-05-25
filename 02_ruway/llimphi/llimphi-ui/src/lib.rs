@@ -251,14 +251,20 @@ pub struct PaintRect {
 
 /// Callback de pintura custom. El runtime lo invoca durante el paint
 /// del nodo (entre el `fill`/`image` y el `text`) con el `Scene` vivo
-/// + el rect absoluto del nodo. Pensado para "canvas elements" tipo
-/// `dominium-canvas`, `pluma-editor` (osciloscopio de coherencia),
-/// `cosmos` (charts).
+/// + el `Typesetter` cacheado del runtime + el rect absoluto del nodo.
+/// Pensado para "canvas elements" tipo `dominium-canvas`,
+/// `pluma-editor` (osciloscopio de coherencia), `cosmos` (charts).
+///
+/// El `Typesetter` se pasa porque crearlo por frame es caro
+/// (`FontContext::new` enumera las fontes del sistema vía fontique).
+/// Los callers que no necesiten texto pueden ignorar el argumento.
 ///
 /// El callback no debe llamar a `scene.push_layer` sin un `pop_layer`
 /// correspondiente, ni reset el scene — sólo agregar primitivas que
 /// pertenezcan al rect del nodo.
-pub type PaintFn = Arc<dyn Fn(&mut vello::Scene, PaintRect) + Send + Sync>;
+pub type PaintFn = Arc<
+    dyn Fn(&mut vello::Scene, &mut llimphi_text::Typesetter, PaintRect) + Send + Sync,
+>;
 
 /// Nodo de la vista declarativa. Estilo de layout (taffy) + relleno opcional
 /// (vello) + texto opcional (skrifa+vello) + Msg al click opcional + hijos.
@@ -422,13 +428,17 @@ impl<Msg> View<Msg> {
     }
 
     /// Registra una closure de pintura custom. El runtime la invoca
-    /// con `(&mut vello::Scene, PaintRect)` durante el paint del
-    /// nodo. La closure es responsable de pintar primitivas custom
-    /// dentro del rect; no debe dejar `push_layer` sin par. Soporte
-    /// para canvas elements estilo dominium/pluma/cosmos.
+    /// con `(&mut vello::Scene, &mut Typesetter, PaintRect)` durante
+    /// el paint del nodo. La closure es responsable de pintar
+    /// primitivas custom dentro del rect; no debe dejar `push_layer`
+    /// sin par. Soporte para canvas elements estilo
+    /// dominium/pluma/cosmos.
     pub fn paint_with<F>(mut self, painter: F) -> Self
     where
-        F: Fn(&mut vello::Scene, PaintRect) + Send + Sync + 'static,
+        F: Fn(&mut vello::Scene, &mut llimphi_text::Typesetter, PaintRect)
+            + Send
+            + Sync
+            + 'static,
     {
         self.painter = Some(Arc::new(painter));
         self
@@ -600,6 +610,7 @@ fn paint<Msg>(
         if let Some(painter) = node.painter.as_ref() {
             (painter)(
                 scene,
+                typesetter,
                 PaintRect {
                     x: r.x,
                     y: r.y,

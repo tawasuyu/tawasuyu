@@ -1,0 +1,19 @@
+[package]
+name = "cosmos-app-llimphi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "cosmos-app-llimphi — visor minimalista del lienzo astrológico sobre Llimphi. MVP: arma un `RenderModel` mock (carta natal estática con cuerpos clásicos + ejes) y la pinta con `cosmos-canvas-llimphi` + `compose_wheel`. Sin engine real (eternal-sky no compila a WASM y arrastrar las efemérides es trabajo de otro bloque); el shell completo con tree + panel laterales viene después."
+
+[[bin]]
+name = "cosmos-app-llimphi"
+path = "src/main.rs"
+
+[dependencies]
+cosmos-canvas-llimphi = { path = "../cosmos-canvas-llimphi" }
+cosmos-render = { path = "../cosmos-render" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }

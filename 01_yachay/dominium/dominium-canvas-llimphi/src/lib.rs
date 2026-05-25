@@ -48,7 +48,7 @@ where
     } else {
         view
     };
-    view.paint_with(move |scene, rect: PaintRect| {
+    view.paint_with(move |scene, _ts, rect: PaintRect| {
         if plan.quads.is_empty() {
             return;
         }
