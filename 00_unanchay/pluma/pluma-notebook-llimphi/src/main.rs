@@ -36,6 +36,7 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
 use llimphi_widget_text_editor::{
     text_editor_view_highlighted, EditorMetrics, EditorPalette, EditorState, Language,
+    PointerEvent,
 };
 use pluma_notebook_core::{
     Cell, CellId, CellKind, CellOutput, CellState, Notebook, Position as CanvasPos,
@@ -62,6 +63,8 @@ enum Msg {
     StartEdit(CellId),
     /// Tecla aplicada al input en edición.
     EditKey(KeyEvent),
+    /// Click o drag sobre el área de texto del editor.
+    EditorPointer(PointerEvent),
     /// Guarda el draft del input como nuevo `source` (vía `set_source`,
     /// que marca stale + propaga) y sale del modo edición.
     CommitEdit,
@@ -76,6 +79,9 @@ enum Msg {
 struct EditState {
     id: CellId,
     editor: EditorState,
+    /// Acumulado de drag para drag-to-select del mouse — análogo a
+    /// gioser-edit. Pos actual = initial + accum.
+    drag_accum: (f32, f32),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,12 +190,38 @@ impl App for Viewer {
                 let Some(cell) = model.notebook.cell(id) else { return model };
                 let mut editor = EditorState::new();
                 editor.set_text(&cell.source);
-                Model { editing: Some(EditState { id, editor }), ..model }
+                Model {
+                    editing: Some(EditState { id, editor, drag_accum: (0.0, 0.0) }),
+                    ..model
+                }
             }
             Msg::EditKey(ev) => {
                 let mut model = model;
                 if let Some(edit) = model.editing.as_mut() {
                     let _ = edit.editor.apply_key(&ev);
+                }
+                model
+            }
+            Msg::EditorPointer(ev) => {
+                let mut model = model;
+                if let Some(edit) = model.editing.as_mut() {
+                    let metrics = EditorMetrics::for_font_size(12.0);
+                    let scroll = edit.editor.scroll_offset;
+                    match ev {
+                        PointerEvent::Click { x, y } => {
+                            edit.drag_accum = (0.0, 0.0);
+                            let (line, col) = metrics.screen_to_pos(x, y, scroll);
+                            edit.editor.set_caret_at(line, col);
+                        }
+                        PointerEvent::Drag { initial_x, initial_y, dx, dy } => {
+                            edit.drag_accum.0 += dx;
+                            edit.drag_accum.1 += dy;
+                            let cx = initial_x + edit.drag_accum.0;
+                            let cy = initial_y + edit.drag_accum.1;
+                            let (line, col) = metrics.screen_to_pos(cx, cy, scroll);
+                            edit.editor.extend_selection_to(line, col);
+                        }
+                    }
                 }
                 model
             }
@@ -417,6 +449,11 @@ const CANVAS_CARD_H: f32 = 112.0;
 /// Alto extendido cuando la card está en modo edición — da espacio
 /// para que el editor multilínea muestre varias líneas y caret/brackets.
 const CANVAS_CARD_H_EDITING: f32 = 240.0;
+/// Ancho del scrollbar vertical.
+const SCROLLBAR_W: f32 = 10.0;
+/// Aproximación del alto visible del canvas (ventana 760 − header 28).
+/// Sin medir el frame real; ajustamos si la ventana cambia mucho.
+const APPROX_VIEWPORT_H: f32 = 732.0;
 const CANVAS_BODY_LINES_VISIBLE: usize = 3;
 const CANVAS_HEADER_H: f32 = 18.0;
 const CANVAS_FOOTER_H: f32 = 16.0;
@@ -458,6 +495,11 @@ fn canvas_view(
         children.push(orphan_notice(huerfanas, palette));
     }
 
+    // Scrollbar vertical — sólo si el contenido excede el viewport.
+    if let Some(sb) = scrollbar_v(nb, viewport, palette) {
+        children.push(sb);
+    }
+
     View::new(Style {
         flex_grow: 1.0,
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
@@ -470,6 +512,87 @@ fn canvas_view(
         DragPhase::End => None,
     })
     .children(children)
+}
+
+/// Devuelve `Some(view)` con el track + thumb a la derecha cuando el
+/// contenido (bounding box vertical de las celdas) excede el viewport;
+/// `None` si todo cabe.
+fn scrollbar_v(nb: &Notebook, viewport: (f32, f32), palette: &Palette) -> Option<View<Msg>> {
+    let (min_y, max_y) = vertical_bounds(nb)?;
+    let content_h = (max_y - min_y) + 80.0; // margen para que el thumb no toque el borde
+    if content_h <= APPROX_VIEWPORT_H {
+        return None;
+    }
+
+    // viewport.1 (vy) traduce el contenido: contenido visible es
+    // [-vy + min_y, -vy + min_y + APPROX_VIEWPORT_H). El "scroll
+    // logical" = posición desde el tope del contenido.
+    let scroll = (-viewport.1 - min_y + 40.0).clamp(0.0, content_h - APPROX_VIEWPORT_H);
+    let thumb_ratio = APPROX_VIEWPORT_H / content_h;
+    let thumb_h = (thumb_ratio * APPROX_VIEWPORT_H).max(28.0);
+    let thumb_y = (scroll / content_h) * APPROX_VIEWPORT_H;
+
+    // Track: rectángulo de SCROLLBAR_W de ancho pegado a la derecha.
+    let track = View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            left: auto(),
+            top: length(0.0_f32),
+            right: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        size: Size { width: length(SCROLLBAR_W), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .fill(palette.bg_panel);
+
+    // Thumb: rectángulo más claro, draggable para scrollear.
+    // Drag del thumb mueve el viewport proporcionalmente: cada px
+    // visual = (content_h / viewport_h) px de contenido.
+    let scale = content_h / APPROX_VIEWPORT_H;
+    let thumb = View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            left: auto(),
+            top: length(thumb_y),
+            right: length(1.0_f32),
+            bottom: auto(),
+        },
+        size: Size { width: length(SCROLLBAR_W - 2.0), height: length(thumb_h) },
+        ..Default::default()
+    })
+    .fill(palette.accent_stale)
+    .hover_fill(palette.accent_fresh)
+    .draggable(move |phase, _dx, dy| match phase {
+        // dy del drag visual → -dy*scale en viewport.y (negativo porque
+        // mover el thumb hacia abajo desplaza el contenido hacia arriba).
+        DragPhase::Move => Some(Msg::PanBy(0.0, -dy * scale)),
+        DragPhase::End => None,
+    });
+
+    Some(track.children(vec![thumb]))
+}
+
+/// Bounding box vertical de las celdas con posición (top, bottom).
+/// `None` si no hay celdas posicionadas.
+fn vertical_bounds(nb: &Notebook) -> Option<(f32, f32)> {
+    let mut min_y = f32::INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for c in nb.cells() {
+        if let Some(p) = c.position {
+            if p.y < min_y {
+                min_y = p.y;
+            }
+            if p.y + CANVAS_CARD_H > max_y {
+                max_y = p.y + CANVAS_CARD_H;
+            }
+        }
+    }
+    if !min_y.is_finite() {
+        None
+    } else {
+        Some((min_y, max_y))
+    }
 }
 
 fn canvas_card(
@@ -523,10 +646,12 @@ fn edit_input_view(editor: &EditorState, body_h: f32, language: Language) -> Vie
     let ep = EditorPalette::from_theme(&theme);
     let metrics = EditorMetrics::for_font_size(12.0);
     let visible = (body_h / metrics.line_height).max(1.0) as usize;
-    // En el card del notebook ignoramos el mouse del editor por ahora
-    // (la card misma maneja drag para mover); el caret se mueve con
-    // teclado solamente.
-    text_editor_view_highlighted(editor, &ep, metrics, visible, language, |_| None)
+    // En modo edición la card pierde su drag (en canvas_card), así que el
+    // editor recibe los eventos del mouse para click-posiciona-caret y
+    // drag-selecciona, como en gioser-edit.
+    text_editor_view_highlighted(editor, &ep, metrics, visible, language, |ev| {
+        Some(Msg::EditorPointer(ev))
+    })
 }
 
 fn language_of(cell: &Cell) -> Language {

@@ -22,7 +22,7 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
 
 use crate::cursor::Pos;
-use crate::highlight::{Highlighter, Language, Span, SyntaxPalette, TokenKind};
+use crate::highlight::{Language, Span, SyntaxPalette, TokenKind};
 use crate::state::EditorState;
 
 /// Paleta del editor. Defaults dark.
@@ -204,12 +204,9 @@ pub fn text_editor_view_full<Msg: Clone + 'static>(
     let end_line = (scroll + visible).min(line_count);
     let height = (end_line - scroll) as f32 * metrics.line_height;
 
-    let spans = if matches!(language, Language::Plain) {
-        Vec::new()
-    } else {
-        let mut h = Highlighter::new(language);
-        h.highlight(&state.text())
-    };
+    // Memoizado por `edit_seq` — sólo reparseamos cuando el buffer
+    // realmente cambió o cambia el `Language`.
+    let spans = state.highlighted_spans(language);
 
     let gutter = build_gutter(scroll, end_line, caret.line, metrics, palette);
     let content = build_content(

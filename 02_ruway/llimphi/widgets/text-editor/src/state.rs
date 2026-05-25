@@ -3,11 +3,14 @@
 //! edición o movimiento. Este es el tipo que el caller pone en su
 //! `Model` y mete en el `update` Elm.
 
+use std::cell::RefCell;
+
 use llimphi_ui::{Key, KeyEvent, KeyState, NamedKey};
 
 use crate::buffer::Buffer;
 use crate::clipboard::{Clipboard, NullClipboard};
 use crate::cursor::{Cursor, Pos};
+use crate::highlight::{Highlighter, Language, Span};
 use crate::ops::{
     dedent, delete_backward, delete_forward, indent_or_insert_tab,
     insert_newline_auto_indent, replace_selection,
@@ -48,6 +51,23 @@ pub struct EditorState {
     /// `[scroll_offset, scroll_offset + visible)`. El caller llama a
     /// [`Self::ensure_caret_visible`] tras movimientos para auto-scrollear.
     pub scroll_offset: usize,
+    /// Contador monotónico que se incrementa con cada edición del buffer.
+    /// Lo usa el cache de highlight para invalidarse sin re-hashear el
+    /// texto entero por frame.
+    pub edit_seq: u64,
+    /// Cache memoizado del syntax highlight. Interior mutability vía
+    /// `RefCell` para que el view (que recibe `&EditorState`) lo
+    /// actualice on-demand. Se invalida cuando cambian `edit_seq` o el
+    /// `Language` solicitado.
+    pub highlight_cache: RefCell<Option<HighlightCache>>,
+}
+
+/// Entrada del cache: spans por línea + clave que la generó.
+#[derive(Debug, Clone)]
+pub struct HighlightCache {
+    pub seq: u64,
+    pub language: Language,
+    pub spans: Vec<Vec<Span>>,
 }
 
 impl Default for EditorState {
@@ -64,6 +84,8 @@ impl EditorState {
             options: EditorOptions::default(),
             undo: UndoStack::new(),
             scroll_offset: 0,
+            edit_seq: 0,
+            highlight_cache: RefCell::new(None),
         }
     }
 
@@ -114,6 +136,36 @@ impl EditorState {
         let col = self.buffer.line_len_chars(last_line);
         self.cursor = Cursor::at(last_line, col);
         self.undo.clear();
+        self.bump_edit_seq();
+    }
+
+    /// Incrementa el contador de ediciones — invalidando el cache de
+    /// highlight automáticamente.
+    pub fn bump_edit_seq(&mut self) {
+        self.edit_seq = self.edit_seq.wrapping_add(1);
+    }
+
+    /// Devuelve los spans del highlight cacheados. Si el cache no matchea
+    /// (distinto `edit_seq` o `language`), reparsea y lo guarda. Para
+    /// `Language::Plain` devuelve vacío sin tocar el cache (no aplica).
+    pub fn highlighted_spans(&self, language: Language) -> Vec<Vec<Span>> {
+        if matches!(language, Language::Plain) {
+            return Vec::new();
+        }
+        let mut cache = self.highlight_cache.borrow_mut();
+        if let Some(c) = cache.as_ref() {
+            if c.seq == self.edit_seq && c.language == language {
+                return c.spans.clone();
+            }
+        }
+        let mut h = Highlighter::new(language);
+        let spans = h.highlight(&self.buffer.text());
+        *cache = Some(HighlightCache {
+            seq: self.edit_seq,
+            language,
+            spans: spans.clone(),
+        });
+        spans
     }
 
     pub fn is_empty(&self) -> bool {
@@ -171,6 +223,18 @@ impl EditorState {
     /// Ctrl+C copia la selección, Ctrl+X la corta, Ctrl+V pega lo que
     /// haya en el clipboard.
     pub fn apply_key_with_clipboard(
+        &mut self,
+        event: &KeyEvent,
+        clipboard: &mut dyn Clipboard,
+    ) -> ApplyResult {
+        let r = self.apply_key_inner(event, clipboard);
+        if r.changed() {
+            self.bump_edit_seq();
+        }
+        r
+    }
+
+    fn apply_key_inner(
         &mut self,
         event: &KeyEvent,
         clipboard: &mut dyn Clipboard,
@@ -635,6 +699,41 @@ mod tests {
         s.cursor = Cursor::at(15, 0);
         s.ensure_caret_visible(20);
         assert_eq!(s.scroll_offset, 10);
+    }
+
+    #[test]
+    fn edit_seq_se_incrementa_solo_con_cambios() {
+        let mut s = EditorState::new();
+        let seq0 = s.edit_seq;
+        s.apply_key(&ev(NamedKey::ArrowRight, false, false)); // CursorMoved
+        assert_eq!(s.edit_seq, seq0, "movimiento no debería bumpear");
+        s.apply_key(&evtext("a", false, false)); // Changed
+        assert!(s.edit_seq > seq0);
+    }
+
+    #[test]
+    fn highlight_cache_reuse_cuando_seq_no_cambia() {
+        use crate::highlight::Language;
+        let mut s = EditorState::new();
+        s.set_text("fn main() {}");
+        let _ = s.highlighted_spans(Language::Rust);
+        let seq_before = s.edit_seq;
+        let _ = s.highlighted_spans(Language::Rust);
+        // Sin edición → seq igual → cache hit (no asserción directa
+        // posible sin mock, pero al menos el seq no cambia).
+        assert_eq!(s.edit_seq, seq_before);
+    }
+
+    #[test]
+    fn highlight_cache_invalida_con_cambio_de_lenguaje() {
+        use crate::highlight::Language;
+        let mut s = EditorState::new();
+        s.set_text("def f(): pass");
+        let py = s.highlighted_spans(Language::Python);
+        let rs = s.highlighted_spans(Language::Rust);
+        // Distinto lenguaje → spans distintos (al menos el conteo o
+        // las categorías difieren).
+        assert!(py != rs || s.is_empty());
     }
 
     #[test]
