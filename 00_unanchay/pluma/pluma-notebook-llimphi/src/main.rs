@@ -49,6 +49,12 @@ enum Msg {
     /// Centra el viewport en el bounding box de las celdas posicionadas
     /// (atajo "Home" cuando no estás editando).
     ResetViewport,
+    /// Cambia el zoom por un factor multiplicativo (ej. 1.1 = +10%).
+    ZoomBy(f32),
+    /// Resetea zoom a 1.0.
+    ZoomReset,
+    /// Zoom + viewport para que entre todo el bounding box (fit-all).
+    FitAll,
     /// Mueve una celda en el canvas por `(dx, dy)` (delta desde el evento
     /// anterior — no acumulado desde el press).
     MoveCell { id: CellId, dx: f32, dy: f32 },
@@ -97,6 +103,9 @@ struct Model {
     /// arrastrando el fondo o con la rueda del mouse. Se suma a cada
     /// `Cell::position` al render.
     viewport: (f32, f32),
+    /// Factor de zoom del canvas. 1.0 = nativo; > 1 = más grande;
+    /// rango sensato 0.25..4.0.
+    zoom: f32,
     /// Celda raíz de una corrida en curso (si la hay). Bloquea nuevos
     /// pedidos hasta que el thread devuelva `RunCompleted`.
     running_from: Option<CellId>,
@@ -140,6 +149,7 @@ impl App for Viewer {
             notebook,
             mode,
             viewport: (0.0, 0.0),
+            zoom: 1.0,
             running_from: None,
             editing: None,
             source,
@@ -157,6 +167,15 @@ impl App for Viewer {
                 viewport: viewport_to_fit(&model.notebook),
                 ..model
             },
+            Msg::ZoomBy(factor) => Model {
+                zoom: (model.zoom * factor).clamp(0.25, 4.0),
+                ..model
+            },
+            Msg::ZoomReset => Model { zoom: 1.0, ..model },
+            Msg::FitAll => {
+                let (zoom, viewport) = fit_all(&model.notebook);
+                Model { zoom, viewport, ..model }
+            }
             Msg::MoveCell { id, dx, dy } => {
                 let mut nb = model.notebook;
                 if let Some(p) = nb.position(id) {
@@ -240,12 +259,20 @@ impl App for Viewer {
         if event.state != KeyState::Pressed {
             return None;
         }
-        // Sin edición activa: Home recenta el viewport del canvas.
+        // Sin edición activa: atajos del canvas.
         if model.editing.is_none() {
-            if model.mode == Mode::Canvas
-                && matches!(&event.key, Key::Named(NamedKey::Home))
-            {
-                return Some(Msg::ResetViewport);
+            if model.mode == Mode::Canvas {
+                match &event.key {
+                    Key::Named(NamedKey::Home) => return Some(Msg::ResetViewport),
+                    // F = fit-all (zoom + viewport).
+                    Key::Character(s) if s.eq_ignore_ascii_case("f") => return Some(Msg::FitAll),
+                    // 0 = reset zoom a 1.0.
+                    Key::Character(s) if s == "0" => return Some(Msg::ZoomReset),
+                    // + / - zoom.
+                    Key::Character(s) if s == "+" || s == "=" => return Some(Msg::ZoomBy(1.1)),
+                    Key::Character(s) if s == "-" => return Some(Msg::ZoomBy(1.0 / 1.1)),
+                    _ => {}
+                }
             }
             return None;
         }
@@ -261,18 +288,19 @@ impl App for Viewer {
         model: &Self::Model,
         delta: WheelDelta,
         _cursor: (f32, f32),
-        _modifiers: Modifiers,
+        modifiers: Modifiers,
     ) -> Option<Self::Msg> {
-        // Sólo paneamos en modo canvas; en lineal dejamos el wheel para
-        // un futuro scroll vertical interno.
         if model.mode != Mode::Canvas {
             return None;
         }
-        // Una "línea" del wheel = 16 px de pan.
-        // 32 px por "línea" del wheel — un click razonable mueve ~2 cards.
-        // llimphi-ui ya invierte el signo de winit (`y: -y`); aquí
-        // *re-invertimos* porque queremos que rueda-abajo mueva el
-        // contenido hacia arriba (el viewport "baja"), como en un editor.
+        // Ctrl+wheel = zoom (factor 1.1 por click).
+        if modifiers.ctrl {
+            let factor = if delta.y > 0.0 { 1.0 / 1.1 } else { 1.1 };
+            return Some(Msg::ZoomBy(factor));
+        }
+        // 32 px por "línea" del wheel; llimphi-ui ya invierte el signo
+        // de winit, re-invertimos para que rueda-abajo mueva el
+        // contenido hacia arriba (estilo editor).
         const STEP: f32 = 32.0;
         let dx = delta.x * STEP;
         let dy = -delta.y * STEP;
@@ -293,6 +321,7 @@ impl App for Viewer {
             Mode::Canvas => canvas_view(
                 &model.notebook,
                 model.viewport,
+                model.zoom,
                 model.editing.as_ref(),
                 &palette,
             ),
@@ -354,8 +383,8 @@ fn header_bar(model: &Model, palette: &Palette) -> View<Msg> {
     let modo = match model.mode {
         Mode::Linear => "lineal".to_string(),
         Mode::Canvas => format!(
-            "canvas · viewport {:+.0},{:+.0} · Home recentra",
-            model.viewport.0, model.viewport.1
+            "canvas · viewport {:+.0},{:+.0} · zoom {:.2}× · Home recentra · F fit-all · 0/+/- zoom",
+            model.viewport.0, model.viewport.1, model.zoom,
         ),
     };
     let running = model
@@ -463,10 +492,13 @@ const CANVAS_EDITOR_H: f32 = CANVAS_CARD_H_EDITING - CANVAS_HEADER_H - CANVAS_FO
 fn canvas_view(
     nb: &Notebook,
     viewport: (f32, f32),
+    zoom: f32,
     editing: Option<&EditState>,
     palette: &Palette,
 ) -> View<Msg> {
     let (vx, vy) = viewport;
+    let card_w = CANVAS_CARD_W * zoom;
+    let card_h = CANVAS_CARD_H * zoom;
     let mut children: Vec<View<Msg>> = Vec::new();
 
     // Aristas primero (capa de fondo) — del prerrequisito al dependiente.
@@ -475,19 +507,29 @@ fn canvas_view(
         for dep_id in &cell.depends_on {
             let Some(dep) = nb.cell(*dep_id) else { continue };
             let Some(dep_pos) = dep.position else { continue };
-            let x1 = vx + dep_pos.x + CANVAS_CARD_W * 0.5;
-            let y1 = vy + dep_pos.y + CANVAS_CARD_H;
-            let x2 = vx + child_pos.x + CANVAS_CARD_W * 0.5;
-            let y2 = vy + child_pos.y;
+            let x1 = vx + dep_pos.x * zoom + card_w * 0.5;
+            let y1 = vy + dep_pos.y * zoom + card_h;
+            let x2 = vx + child_pos.x * zoom + card_w * 0.5;
+            let y2 = vy + child_pos.y * zoom;
             children.extend(edge_segments(x1, y1, x2, y2, palette.edge));
         }
     }
 
-    // Cards encima — draggables (mueven Cell::position).
+    // Cards encima — draggables (mueven Cell::position). En edición se
+    // mantienen al tamaño base (sin zoom) para que el editor multilínea
+    // sea legible aunque el resto esté zoom-out.
     for cell in nb.cells() {
         let Some(pos) = cell.position else { continue };
         let edit = editing.filter(|e| e.id == cell.id);
-        children.push(canvas_card(cell, edit, palette, vx + pos.x, vy + pos.y));
+        let scale = if edit.is_some() { 1.0 } else { zoom };
+        children.push(canvas_card_scaled(
+            cell,
+            edit,
+            palette,
+            vx + pos.x * zoom,
+            vy + pos.y * zoom,
+            scale,
+        ));
     }
 
     let huerfanas = nb.cells().iter().filter(|c| c.position.is_none()).count();
@@ -595,17 +637,19 @@ fn vertical_bounds(nb: &Notebook) -> Option<(f32, f32)> {
     }
 }
 
-fn canvas_card(
+fn canvas_card_scaled(
     cell: &Cell,
     edit: Option<&EditState>,
     palette: &Palette,
     x: f32,
     y: f32,
+    scale: f32,
 ) -> View<Msg> {
     let id = cell.id;
     let editing = edit.is_some();
-    let total_h = if editing { CANVAS_CARD_H_EDITING } else { CANVAS_CARD_H };
-    let body_h = if editing { CANVAS_EDITOR_H } else { CANVAS_BODY_H };
+    let card_w = CANVAS_CARD_W * scale;
+    let total_h = if editing { CANVAS_CARD_H_EDITING } else { CANVAS_CARD_H * scale };
+    let body_h = if editing { CANVAS_EDITOR_H } else { CANVAS_BODY_H * scale };
     let (header, body) = card_header_body(cell, palette, body_h);
     let footer = output_footer(cell.last_output.as_ref(), palette);
     let run_button = run_button_view(id, palette);
@@ -627,7 +671,7 @@ fn canvas_card(
             right: auto(),
             bottom: auto(),
         },
-        size: Size { width: length(CANVAS_CARD_W), height: length(total_h) },
+        size: Size { width: length(card_w), height: length(total_h) },
         ..Default::default()
     })
     .fill(palette.bg_card)
@@ -965,6 +1009,46 @@ impl Kernel for MultiKernel {
                 "ningún kernel registrado para '{other}' (disponibles: wasm/wat, python/py)"
             ))),
         }
+    }
+}
+
+/// Calcula `(zoom, viewport)` para que TODO el bounding box entre en el
+/// viewport visible aproximado. Margen de 40 px alrededor.
+fn fit_all(nb: &Notebook) -> (f32, (f32, f32)) {
+    let bounds = bounds_of_cells(nb);
+    let Some((min_x, min_y, max_x, max_y)) = bounds else {
+        return (1.0, (0.0, 0.0));
+    };
+    let content_w = (max_x - min_x).max(1.0);
+    let content_h = (max_y - min_y).max(1.0);
+    // Asumimos área visible ~ ventana 980 - scrollbar 10, 760 - header 28.
+    let avail_w = 970.0 - 80.0;
+    let avail_h = 732.0 - 80.0;
+    let zoom = (avail_w / content_w).min(avail_h / content_h).clamp(0.25, 4.0);
+    // Después de zoom, recentramos.
+    let vx = 40.0 - min_x * zoom;
+    let vy = 40.0 - min_y * zoom;
+    (zoom, (vx, vy))
+}
+
+/// Bounding box (min_x, min_y, max_x, max_y) de las celdas posicionadas.
+fn bounds_of_cells(nb: &Notebook) -> Option<(f32, f32, f32, f32)> {
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for c in nb.cells() {
+        if let Some(p) = c.position {
+            min_x = min_x.min(p.x);
+            min_y = min_y.min(p.y);
+            max_x = max_x.max(p.x + CANVAS_CARD_W);
+            max_y = max_y.max(p.y + CANVAS_CARD_H);
+        }
+    }
+    if !min_x.is_finite() {
+        None
+    } else {
+        Some((min_x, min_y, max_x, max_y))
     }
 }
 
