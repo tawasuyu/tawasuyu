@@ -44,6 +44,63 @@ impl CellKind {
     }
 }
 
+/// Carga tipada del resultado de una celda. Le dice al renderer qué
+/// "puerto visual" exponer en el borde (texto, tabla, imagen, geometría…).
+/// Un kernel que no sepa producir un tipo rico devuelve `Text(stdout)` y
+/// listo — backwards compat con stdout puro.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputPayload {
+    /// Sin valor productivo (ej. celda que sólo imprime stdout).
+    None,
+    /// Texto plano (repr del último valor, log, etc.).
+    Text(String),
+    /// Un escalar numérico.
+    Scalar(f64),
+    /// Tabla rectangular columna-encabezada — fila puro string.
+    Table { columns: Vec<String>, rows: Vec<Vec<String>> },
+    /// Imagen rasterizada con su MIME y bytes crudos (PNG/JPEG/etc.).
+    Image { width: u32, height: u32, mime: String, bytes: Vec<u8> },
+    /// Nube de puntos / malla / vectores en 3D.
+    Geometry { kind: String, points: Vec<[f32; 3]> },
+}
+
+impl OutputPayload {
+    /// Etiqueta corta del tipo de puerto que la celda expone — sirve para
+    /// que la UI elija el ícono/visor sin pattern-matchear el enum entero.
+    pub fn port_kind(&self) -> &'static str {
+        match self {
+            OutputPayload::None => "none",
+            OutputPayload::Text(_) => "text",
+            OutputPayload::Scalar(_) => "scalar",
+            OutputPayload::Table { .. } => "table",
+            OutputPayload::Image { .. } => "image",
+            OutputPayload::Geometry { .. } => "geometry",
+        }
+    }
+}
+
+/// Última salida persistida de una celda. Espejo de lo que devuelve un
+/// kernel al ejecutar; el `exec` la guarda en `Cell::last_output` para que
+/// el visor pueda mostrarla y para que un `notebook_digest()` futuro
+/// pueda mezclarla (cuando se cierre el loop de outputs addressable).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CellOutput {
+    pub stdout: String,
+    pub value: Option<String>,
+    pub payload: OutputPayload,
+}
+
+impl CellOutput {
+    pub fn text(stdout: impl Into<String>) -> Self {
+        let s = stdout.into();
+        Self { stdout: s.clone(), value: None, payload: OutputPayload::Text(s) }
+    }
+    pub fn empty() -> Self {
+        Self { stdout: String::new(), value: None, payload: OutputPayload::None }
+    }
+}
+
 /// Estado de frescura de una celda respecto de sus dependencias.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CellState {
@@ -68,6 +125,11 @@ pub struct Cell {
     /// Posición opcional en el canvas espacial. `None` = sólo orden lineal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<Position>,
+    /// Última salida de ejecución, si la hay. No entra al `content_hash`
+    /// (es resultado, no fuente); persistirla acá deja que el visor la
+    /// muestre y que un guardado/recarga la conserve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_output: Option<CellOutput>,
 }
 
 impl Cell {
@@ -104,7 +166,24 @@ mod tests {
             depends_on: vec![],
             state: CellState::Stale,
             position: None,
+            last_output: None,
         }
+    }
+
+    #[test]
+    fn output_payload_port_kind() {
+        assert_eq!(OutputPayload::None.port_kind(), "none");
+        assert_eq!(OutputPayload::Text("x".into()).port_kind(), "text");
+        assert_eq!(OutputPayload::Scalar(1.0).port_kind(), "scalar");
+    }
+
+    #[test]
+    fn last_output_does_not_change_the_hash() {
+        let mut a = cell(CellKind::Code { language: "rust".into() }, "x");
+        let mut b = cell(CellKind::Code { language: "rust".into() }, "x");
+        a.last_output = Some(CellOutput::text("hola"));
+        b.last_output = Some(CellOutput { stdout: "otra cosa".into(), value: Some("99".into()), payload: OutputPayload::Scalar(99.0) });
+        assert_eq!(a.content_hash(), b.content_hash());
     }
 
     #[test]

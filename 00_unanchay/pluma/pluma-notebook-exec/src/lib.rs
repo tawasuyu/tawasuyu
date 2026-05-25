@@ -15,75 +15,14 @@ use std::collections::HashSet;
 
 use async_trait::async_trait;
 use pluma_notebook_core::{CellId, CellKind, CellState, Notebook};
+pub use pluma_notebook_core::{CellOutput, OutputPayload};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Carga tipada del resultado de una celda. Le dice al renderer qué
-/// "puerto visual" exponer en el borde de la celda (texto, tabla, imagen,
-/// geometría…). Un kernel que no sepa producir un tipo rico devuelve
-/// `OutputPayload::Text` con el stdout y listo — backwards compat.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OutputPayload {
-    /// Sin valor productivo (ej. celda que sólo imprime stdout).
-    None,
-    /// Texto plano (repr del último valor, log, etc.).
-    Text(String),
-    /// Un escalar numérico.
-    Scalar(f64),
-    /// Tabla rectangular columna-encabezada — fila puro string.
-    Table { columns: Vec<String>, rows: Vec<Vec<String>> },
-    /// Imagen rasterizada con su MIME y bytes crudos (PNG/JPEG/etc.).
-    Image { width: u32, height: u32, mime: String, bytes: Vec<u8> },
-    /// Nube de puntos / malla / vectores en 3D.
-    Geometry { kind: String, points: Vec<[f32; 3]> },
-}
-
-impl OutputPayload {
-    /// Etiqueta corta del tipo de puerto que la celda expone — sirve para
-    /// que la UI elija el ícono/visor sin pattern-matchear el enum entero.
-    pub fn port_kind(&self) -> &'static str {
-        match self {
-            OutputPayload::None => "none",
-            OutputPayload::Text(_) => "text",
-            OutputPayload::Scalar(_) => "scalar",
-            OutputPayload::Table { .. } => "table",
-            OutputPayload::Image { .. } => "image",
-            OutputPayload::Geometry { .. } => "geometry",
-        }
-    }
-}
-
-/// Salida de la ejecución de una celda de código en el kernel.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KernelOutput {
-    /// Texto stdout/stderr concatenado.
-    pub stdout: String,
-    /// Representación textual del último valor evaluado, si lo hay.
-    pub value: Option<String>,
-    /// Valor tipado del último resultado — base para los puertos visuales.
-    /// Default `None` para no obligar a los kernels existentes.
-    #[serde(default = "default_payload")]
-    pub payload: OutputPayload,
-}
-
-fn default_payload() -> OutputPayload {
-    OutputPayload::None
-}
-
-impl KernelOutput {
-    /// Construye una salida puramente textual — atajo para los kernels
-    /// que aún no producen valores tipados.
-    pub fn text(stdout: impl Into<String>) -> Self {
-        let s = stdout.into();
-        Self { stdout: s.clone(), value: None, payload: OutputPayload::Text(s) }
-    }
-
-    /// Salida vacía (ni stdout ni valor).
-    pub fn empty() -> Self {
-        Self { stdout: String::new(), value: None, payload: OutputPayload::None }
-    }
-}
+/// Salida de la ejecución de una celda de código en el kernel — alias
+/// de [`pluma_notebook_core::CellOutput`]. Vive en core ahora para que
+/// `Cell::last_output` pueda persistirlo sin invertir la dependencia.
+pub type KernelOutput = CellOutput;
 
 #[derive(Debug, Error)]
 pub enum KernelError {
@@ -194,11 +133,20 @@ async fn run_subset<K: Kernel>(
                 report.executed.push(id);
             }
             CellKind::Code { language } => match kernel.execute(&source, &language).await {
-                Ok(_) => {
+                Ok(out) => {
+                    notebook.set_last_output(id, Some(out));
                     notebook.set_state(id, CellState::Fresh);
                     report.executed.push(id);
                 }
-                Err(_) => {
+                Err(e) => {
+                    notebook.set_last_output(
+                        id,
+                        Some(CellOutput {
+                            stdout: String::new(),
+                            value: Some(e.to_string()),
+                            payload: OutputPayload::Text(e.to_string()),
+                        }),
+                    );
                     notebook.set_state(id, CellState::Failed);
                     failed.insert(id);
                     report.failed.push(id);
@@ -340,30 +288,29 @@ mod tests {
         assert_eq!(nb.cell(c).unwrap().state, CellState::Fresh);
     }
 
-    #[test]
-    fn output_payload_port_kind() {
-        assert_eq!(OutputPayload::None.port_kind(), "none");
-        assert_eq!(OutputPayload::Text("x".into()).port_kind(), "text");
-        assert_eq!(OutputPayload::Scalar(1.0).port_kind(), "scalar");
-        assert_eq!(
-            OutputPayload::Table { columns: vec![], rows: vec![] }.port_kind(),
-            "table"
-        );
-        assert_eq!(
-            OutputPayload::Image { width: 1, height: 1, mime: "image/png".into(), bytes: vec![] }
-                .port_kind(),
-            "image"
-        );
-        assert_eq!(
-            OutputPayload::Geometry { kind: "points".into(), points: vec![] }.port_kind(),
-            "geometry"
-        );
+    #[tokio::test]
+    async fn run_all_persiste_output_en_la_celda() {
+        let mut nb = Notebook::new();
+        let id = nb.push(CellKind::Code { language: "rust".into() }, "x");
+        let k = KernelMock::new(|_, _| Ok(KernelOutput {
+            stdout: "log".into(),
+            value: Some("7".into()),
+            payload: OutputPayload::Scalar(7.0),
+        }));
+        run_all(&mut nb, &k).await.unwrap();
+        let saved = nb.cell(id).unwrap().last_output.as_ref().unwrap();
+        assert_eq!(saved.stdout, "log");
+        assert_eq!(saved.value.as_deref(), Some("7"));
+        assert!(matches!(saved.payload, OutputPayload::Scalar(n) if (n - 7.0).abs() < 1e-9));
     }
 
-    #[test]
-    fn kernel_output_text_constructor() {
-        let o = KernelOutput::text("hola");
-        assert_eq!(o.stdout, "hola");
-        assert!(matches!(o.payload, OutputPayload::Text(ref s) if s == "hola"));
+    #[tokio::test]
+    async fn falla_persiste_el_error_como_output() {
+        let mut nb = Notebook::new();
+        let id = nb.push(CellKind::Code { language: "rust".into() }, "x");
+        let k = KernelMock::new(|_, _| Err(KernelError::Runtime("explotó".into())));
+        run_all(&mut nb, &k).await.unwrap();
+        let saved = nb.cell(id).unwrap().last_output.as_ref().unwrap();
+        assert!(saved.value.as_ref().unwrap().contains("explotó"));
     }
 }

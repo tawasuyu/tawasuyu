@@ -29,7 +29,9 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, DragPhase, Handle, Modifiers, View, WheelDelta};
-use pluma_notebook_core::{Cell, CellId, CellKind, CellState, Notebook, Position as CanvasPos};
+use pluma_notebook_core::{
+    Cell, CellId, CellKind, CellOutput, CellState, Notebook, Position as CanvasPos,
+};
 
 #[derive(Clone)]
 enum Msg {
@@ -323,8 +325,11 @@ fn linear_body_height(source: &str) -> f32 {
 /// Tamaño fijo del card en canvas — el alto del body sale del card, no
 /// del texto, para que los conectores sean estables.
 const CANVAS_CARD_W: f32 = 240.0;
-const CANVAS_CARD_H: f32 = 96.0;
-const CANVAS_BODY_LINES_VISIBLE: usize = 4;
+const CANVAS_CARD_H: f32 = 112.0;
+const CANVAS_BODY_LINES_VISIBLE: usize = 3;
+const CANVAS_HEADER_H: f32 = 18.0;
+const CANVAS_FOOTER_H: f32 = 16.0;
+const CANVAS_BODY_H: f32 = CANVAS_CARD_H - CANVAS_HEADER_H - CANVAS_FOOTER_H;
 
 fn canvas_view(nb: &Notebook, viewport: (f32, f32), palette: &Palette) -> View<Msg> {
     let (vx, vy) = viewport;
@@ -377,7 +382,8 @@ fn canvas_view(nb: &Notebook, viewport: (f32, f32), palette: &Palette) -> View<M
 
 fn canvas_card(cell: &Cell, palette: &Palette, x: f32, y: f32) -> View<Msg> {
     let id = cell.id;
-    let (header, body) = card_header_body(cell, palette, CANVAS_CARD_H - 30.0);
+    let (header, body) = card_header_body(cell, palette, CANVAS_BODY_H);
+    let footer = output_footer(cell.last_output.as_ref(), palette);
     let run_button = run_button_view(id, palette);
 
     View::new(Style {
@@ -398,7 +404,50 @@ fn canvas_card(cell: &Cell, palette: &Palette, x: f32, y: f32) -> View<Msg> {
         DragPhase::Move => Some(Msg::MoveCell { id, dx, dy }),
         DragPhase::End => None,
     })
-    .children(vec![header, body, run_button])
+    .children(vec![header, body, footer, run_button])
+}
+
+fn output_footer(out: Option<&CellOutput>, palette: &Palette) -> View<Msg> {
+    let (text, color) = match out {
+        None => ("∅ sin output".to_string(), palette.fg_muted),
+        Some(o) => (format_output(o), palette.accent_fresh),
+    };
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(CANVAS_FOOTER_H) },
+        padding: Rect {
+            left: length(10.0_f32),
+            right: length(10.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(palette.bg_panel)
+    .text_aligned(text, 10.0, color, Alignment::Start)
+}
+
+/// Una línea legible del output. Prioriza `value`; cae al primer renglón
+/// de stdout si no hay value; muestra `[port_kind]` como prefijo del tipo.
+fn format_output(o: &CellOutput) -> String {
+    let port = o.payload.port_kind();
+    if let Some(v) = &o.value {
+        return format!("→[{}] {}", port, truncate_line(v, 28));
+    }
+    if !o.stdout.is_empty() {
+        let line = o.stdout.lines().next().unwrap_or("");
+        return format!("→[{}] {}", port, truncate_line(line, 28));
+    }
+    format!("→[{}]", port)
+}
+
+fn truncate_line(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let cut: String = s.chars().take(max - 1).collect();
+        format!("{cut}…")
+    }
 }
 
 const RUN_BTN_SIZE: f32 = 18.0;

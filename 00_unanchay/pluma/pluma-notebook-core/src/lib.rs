@@ -18,5 +18,5 @@
 pub mod cell;
 pub mod notebook;
 
-pub use cell::{Cell, CellId, CellKind, CellState, Position};
+pub use cell::{Cell, CellId, CellKind, CellOutput, CellState, OutputPayload, Position};
 pub use notebook::Notebook;

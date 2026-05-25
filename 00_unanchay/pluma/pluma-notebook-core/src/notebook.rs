@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
-use crate::cell::{Cell, CellId, CellKind, CellState, Position};
+use crate::cell::{Cell, CellId, CellKind, CellOutput, CellState, Position};
 
 /// Un notebook reproducible.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -37,8 +37,23 @@ impl Notebook {
             depends_on: Vec::new(),
             state: CellState::Stale,
             position: None,
+            last_output: None,
         });
         id
+    }
+
+    /// Reemplaza la última salida de una celda. Editar la fuente o cambiar
+    /// una dependencia no la borra automáticamente — el último output
+    /// queda visible mientras la celda está `Stale`, hasta la próxima
+    /// corrida. `false` si la celda no existe.
+    pub fn set_last_output(&mut self, id: CellId, out: Option<CellOutput>) -> bool {
+        match self.cell_mut(id) {
+            Some(c) => {
+                c.last_output = out;
+                true
+            }
+            None => false,
+        }
     }
 
     /// Coloca una celda en el canvas espacial. `None` la devuelve al modo
