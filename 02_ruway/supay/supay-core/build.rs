@@ -117,10 +117,17 @@ fn main() {
     let stubs = manifest.join("src/audio_stubs.c");
     println!("cargo:rerun-if-changed={}", stubs.display());
 
+    // Fase 2: getters de estado interno (player, walls, sectors, mobjs)
+    // que `supay-scene` consume desde Rust. Sólo tiene sentido si
+    // doomgeneric está presente — incluye headers del motor.
+    let scene = manifest.join("src/scene_export.c");
+    println!("cargo:rerun-if-changed={}", scene.display());
+
     let mut build = cc::Build::new();
     build
         .files(&sources)
         .file(&stubs)
+        .file(&scene)
         .include(&dg_dir)
         // doomgeneric tiene MUCHOS warnings legacy del id1 — los apagamos.
         .flag_if_supported("-w")

@@ -39,7 +39,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::peniko::{Blob, Color, Image, ImageFormat};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
-use supay_core::{keys, DoomEngine, DOOM_HEIGHT, DOOM_PIXELS, DOOM_WIDTH};
+use supay_core::{keys, DoomEngine, SnapshotPair, DOOM_HEIGHT, DOOM_PIXELS, DOOM_WIDTH};
 
 const TICK_HZ: u64 = 35; // canónico de Doom
 const TICK_MS: u64 = 1_000 / TICK_HZ;
@@ -50,6 +50,11 @@ struct Model {
     /// Framebuffer del último frame del motor, ya en formato Rgba8
     /// (lo que `View::image` espera).
     framebuffer_rgba: Vec<u8>,
+    /// Fase 2: par de snapshots (prev + next) capturados desde
+    /// doomgeneric — el renderer 3D futuro interpolará entre los dos
+    /// para correr más rápido que 35 Hz. Por ahora sólo lo mantenemos
+    /// vivo para validar el plumbing y mostrar conteos en el header.
+    snapshots: SnapshotPair,
 }
 
 #[derive(Clone)]
@@ -93,6 +98,7 @@ impl App for Supay {
             engine: DoomEngine::new(args),
             tick: 0,
             framebuffer_rgba: vec![0; DOOM_PIXELS * 4],
+            snapshots: SnapshotPair::new(),
         }
     }
 
@@ -112,6 +118,11 @@ impl App for Supay {
                 m.tick = m.tick.wrapping_add(1);
                 m.engine.tick();
                 refresh_framebuffer(&mut m);
+                // Fase 2: capturamos snapshot tras el tick. El renderer
+                // de Fase 3 lo consumirá; por ahora vive como evidencia
+                // de que el plumbing funciona.
+                let snap = m.engine.capture_scene(m.tick);
+                m.snapshots.push(snap);
             }
             Msg::Key(e) => {
                 if let Some(doom_key) = translate_key(&e.key, e.text.as_deref()) {
@@ -148,6 +159,19 @@ fn header_bar(model: &Model, theme: &Theme) -> View<Msg> {
     let mode = if model.engine.real { "ENGINE REAL" } else { "STUB" };
     let title = model.engine.title();
     let title = if title.is_empty() { "supay-doom".to_string() } else { title };
+    // Fase 2: stats del snapshot más reciente.
+    let scene = model
+        .snapshots
+        .next()
+        .map(|s| {
+            format!(
+                "scene[w={} sec={} spr={}]",
+                s.walls.len(),
+                s.sectors.len(),
+                s.sprites.len()
+            )
+        })
+        .unwrap_or_else(|| "scene[—]".to_string());
     View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -164,7 +188,7 @@ fn header_bar(model: &Model, theme: &Theme) -> View<Msg> {
     })
     .fill(theme.bg_panel)
     .text_aligned(
-        format!("{title}  ·  tick {}  ·  {}", model.tick, mode),
+        format!("{title}  ·  tick {}  ·  {}  ·  {}", model.tick, mode, scene),
         11.0,
         theme.fg_muted,
         Alignment::Start,

@@ -29,6 +29,11 @@ use std::ffi::CString;
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
+pub use supay_scene::{
+    interpolate, PlayerSnap, SceneSnapshot, SectorSnap, SnapshotPair, SpriteSnap, WallSeg,
+    NO_SECTOR,
+};
+
 // doomgeneric default es 640×400 (auto-scaling factor 2 sobre los
 // 320×200 del Doom clásico). Está hardcoded en `doomgeneric.h` como
 // `DOOMGENERIC_RESX`/`DOOMGENERIC_RESY`; si quisiéramos 320×200 puro
@@ -183,6 +188,53 @@ extern "C" {
 }
 
 // =====================================================================
+// FFI scene-export (Fase 2) — implementación en `src/scene_export.c`.
+// Sólo existe cuando el motor real está linkeado.
+// =====================================================================
+
+#[cfg(not(doomgeneric_stub))]
+extern "C" {
+    fn supay_scene_player(
+        x: *mut f32,
+        y: *mut f32,
+        z: *mut f32,
+        angle: *mut f32,
+        view_height: *mut f32,
+    ) -> std::ffi::c_int;
+    fn supay_scene_num_walls() -> std::ffi::c_int;
+    fn supay_scene_wall(
+        i: std::ffi::c_int,
+        x1: *mut f32,
+        y1: *mut f32,
+        x2: *mut f32,
+        y2: *mut f32,
+        front: *mut u32,
+        back: *mut u32,
+        flags: *mut u32,
+    ) -> std::ffi::c_int;
+    fn supay_scene_num_sectors() -> std::ffi::c_int;
+    fn supay_scene_sector(
+        i: std::ffi::c_int,
+        floor: *mut f32,
+        ceiling: *mut f32,
+        light: *mut u8,
+        floor_pic: *mut u16,
+        ceiling_pic: *mut u16,
+    ) -> std::ffi::c_int;
+    fn supay_scene_num_sprites() -> std::ffi::c_int;
+    fn supay_scene_sprite(
+        i: std::ffi::c_int,
+        x: *mut f32,
+        y: *mut f32,
+        z: *mut f32,
+        angle: *mut f32,
+        sprite: *mut u16,
+        frame: *mut u8,
+        sector: *mut u32,
+    ) -> std::ffi::c_int;
+}
+
+// =====================================================================
 // API pública safe
 // =====================================================================
 
@@ -276,5 +328,266 @@ impl DoomEngine {
             .lock()
             .map(|s| s.title.clone())
             .unwrap_or_default()
+    }
+
+    /// Captura un snapshot del estado visible del motor para el tick
+    /// dado. El renderer (Fase 3) acumula dos snapshots consecutivos y
+    /// los interpola para correr más rápido que 35 Hz.
+    ///
+    /// En modo stub (sin vendor doomgeneric) devuelve un snapshot
+    /// sintético: una sala 8×8 con el jugador caminando en círculo y
+    /// un sprite siguiéndolo. Útil para desarrollar el renderer antes
+    /// de tener el motor real linkeado.
+    ///
+    /// En modo real lee el estado del motor C vía los getters de
+    /// `scene_export.c`. **Debe llamarse desde el mismo thread que
+    /// invoca `tick()`** — el cache interno de mobjs no es
+    /// thread-safe (en la práctica, el host corre todo desde el event
+    /// loop de Llimphi así que esto se cumple naturalmente).
+    pub fn capture_scene(&self, tick: u64) -> SceneSnapshot {
+        #[cfg(doomgeneric_stub)]
+        {
+            return synth_snapshot(tick);
+        }
+        #[cfg(not(doomgeneric_stub))]
+        {
+            capture_scene_real(tick)
+        }
+    }
+}
+
+// =====================================================================
+// Captura real desde doomgeneric (Fase 2)
+// =====================================================================
+
+#[cfg(not(doomgeneric_stub))]
+fn capture_scene_real(tick: u64) -> SceneSnapshot {
+    use std::sync::Arc;
+
+    // Player: si el motor todavía no cargó el mapa, devolvemos snapshot
+    // vacío en lugar de coordenadas inválidas.
+    let mut player = PlayerSnap::default();
+    // SAFETY: los punteros apuntan a stack locales válidos; la fn C
+    // sólo escribe en ellos si retorna != 0.
+    let player_ok = unsafe {
+        supay_scene_player(
+            &mut player.x,
+            &mut player.y,
+            &mut player.z,
+            &mut player.angle,
+            &mut player.view_height,
+        ) != 0
+    };
+    if !player_ok {
+        return SceneSnapshot::empty(tick);
+    }
+
+    // Walls.
+    // SAFETY: getter sin side-effects, lee globales del motor.
+    let n_walls = unsafe { supay_scene_num_walls() }.max(0) as usize;
+    let mut walls = Vec::with_capacity(n_walls);
+    for i in 0..n_walls {
+        let mut x1 = 0.0_f32;
+        let mut y1 = 0.0_f32;
+        let mut x2 = 0.0_f32;
+        let mut y2 = 0.0_f32;
+        let mut front = 0_u32;
+        let mut back = 0_u32;
+        let mut flags = 0_u32;
+        // SAFETY: i en rango, punteros a locales válidos.
+        let ok = unsafe {
+            supay_scene_wall(
+                i as std::ffi::c_int,
+                &mut x1,
+                &mut y1,
+                &mut x2,
+                &mut y2,
+                &mut front,
+                &mut back,
+                &mut flags,
+            )
+        };
+        if ok != 0 {
+            walls.push(WallSeg {
+                x1,
+                y1,
+                x2,
+                y2,
+                front_sector: front,
+                back_sector: back,
+                flags,
+            });
+        }
+    }
+
+    // Sectors.
+    // SAFETY: idem.
+    let n_sectors = unsafe { supay_scene_num_sectors() }.max(0) as usize;
+    let mut sects = Vec::with_capacity(n_sectors);
+    for i in 0..n_sectors {
+        let mut floor = 0.0_f32;
+        let mut ceiling = 0.0_f32;
+        let mut light = 0_u8;
+        let mut floor_pic = 0_u16;
+        let mut ceiling_pic = 0_u16;
+        // SAFETY: idem.
+        let ok = unsafe {
+            supay_scene_sector(
+                i as std::ffi::c_int,
+                &mut floor,
+                &mut ceiling,
+                &mut light,
+                &mut floor_pic,
+                &mut ceiling_pic,
+            )
+        };
+        if ok != 0 {
+            sects.push(SectorSnap {
+                floor_height: floor,
+                ceiling_height: ceiling,
+                light_level: light,
+                floor_pic,
+                ceiling_pic,
+            });
+        }
+    }
+
+    // Sprites (mobjs). `num_sprites` reconstruye el cache interno C —
+    // hay que llamarlo siempre antes de iterar `sprite(i)`.
+    // SAFETY: idem.
+    let n_sprites = unsafe { supay_scene_num_sprites() }.max(0) as usize;
+    let mut sprs = Vec::with_capacity(n_sprites);
+    for i in 0..n_sprites {
+        let mut x = 0.0_f32;
+        let mut y = 0.0_f32;
+        let mut z = 0.0_f32;
+        let mut angle = 0.0_f32;
+        let mut sprite = 0_u16;
+        let mut frame = 0_u8;
+        let mut sector = 0_u32;
+        // SAFETY: idem.
+        let ok = unsafe {
+            supay_scene_sprite(
+                i as std::ffi::c_int,
+                &mut x,
+                &mut y,
+                &mut z,
+                &mut angle,
+                &mut sprite,
+                &mut frame,
+                &mut sector,
+            )
+        };
+        if ok != 0 {
+            sprs.push(SpriteSnap {
+                x,
+                y,
+                z,
+                angle,
+                sprite,
+                frame,
+                sector,
+            });
+        }
+    }
+
+    SceneSnapshot {
+        tick,
+        player,
+        walls: Arc::from(walls),
+        sectors: Arc::from(sects),
+        sprites: Arc::from(sprs),
+    }
+}
+
+// =====================================================================
+// Captura sintética para modo stub (Fase 2)
+// =====================================================================
+
+/// Snapshot sintético: una sala cuadrada 8×8 con el jugador caminando
+/// en círculo y un sprite siguiéndolo. Permite desarrollar el renderer
+/// (Fase 3) y el plumbing host sin vendor doomgeneric.
+#[cfg(doomgeneric_stub)]
+fn synth_snapshot(tick: u64) -> SceneSnapshot {
+    use std::sync::Arc;
+    // 35 Hz → 1 vuelta cada ~6 s con coef 0.03.
+    let t = tick as f32 * 0.03;
+    let center = 4.0_f32;
+    let r = 1.5_f32;
+    let player = PlayerSnap {
+        x: center + t.cos() * r,
+        y: center + t.sin() * r,
+        z: 0.0,
+        // El jugador mira tangente al círculo, hacia donde camina.
+        angle: t + std::f32::consts::FRAC_PI_2,
+        view_height: 41.0,
+    };
+    // Cuatro paredes de la sala (sentido antihorario para que la cara
+    // normal apunte hacia adentro).
+    let walls: Vec<WallSeg> = vec![
+        WallSeg {
+            x1: 0.0,
+            y1: 0.0,
+            x2: 8.0,
+            y2: 0.0,
+            front_sector: 0,
+            back_sector: NO_SECTOR,
+            flags: 0,
+        },
+        WallSeg {
+            x1: 8.0,
+            y1: 0.0,
+            x2: 8.0,
+            y2: 8.0,
+            front_sector: 0,
+            back_sector: NO_SECTOR,
+            flags: 0,
+        },
+        WallSeg {
+            x1: 8.0,
+            y1: 8.0,
+            x2: 0.0,
+            y2: 8.0,
+            front_sector: 0,
+            back_sector: NO_SECTOR,
+            flags: 0,
+        },
+        WallSeg {
+            x1: 0.0,
+            y1: 8.0,
+            x2: 0.0,
+            y2: 0.0,
+            front_sector: 0,
+            back_sector: NO_SECTOR,
+            flags: 0,
+        },
+    ];
+    let sectors: Vec<SectorSnap> = vec![SectorSnap {
+        floor_height: 0.0,
+        ceiling_height: 128.0,
+        // Brightness pulsando suave — sirve para probar interpolación
+        // de luz en el renderer.
+        light_level: (192.0 + (t * 0.5).sin() * 32.0).clamp(0.0, 255.0) as u8,
+        floor_pic: 0,
+        ceiling_pic: 0,
+    }];
+    // Un sprite siguiendo al jugador a 2 unidades por detrás.
+    let trail_angle = t - std::f32::consts::FRAC_PI_2;
+    let sprites: Vec<SpriteSnap> = vec![SpriteSnap {
+        x: player.x - trail_angle.cos() * 2.0,
+        y: player.y - trail_angle.sin() * 2.0,
+        z: 0.0,
+        angle: trail_angle,
+        sprite: 0,
+        // Ciclo de 4 frames a 35/4 ≈ 8.75 Hz.
+        frame: ((tick / 4) % 4) as u8,
+        sector: 0,
+    }];
+    SceneSnapshot {
+        tick,
+        player,
+        walls: Arc::from(walls),
+        sectors: Arc::from(sectors),
+        sprites: Arc::from(sprites),
     }
 }

@@ -11,6 +11,7 @@ links = "doomgeneric"
 build = "build.rs"
 
 [dependencies]
+supay-scene = { path = "../supay-scene" }
 
 [build-dependencies]
 cc = "1"

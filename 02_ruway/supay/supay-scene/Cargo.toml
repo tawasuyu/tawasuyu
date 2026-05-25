@@ -1,0 +1,11 @@
+[package]
+name = "supay-scene"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "supay-scene — snapshots inmutables del estado visible de Doom por tick, con interpolación entre snapshots consecutivos para que el renderer (Fase 3) corra a 144+ Hz sobre una simulación de 35 Hz. Tipos puros, sin FFI: el productor vive en supay-core (lee doomgeneric), el consumidor en supay-render-llimphi (Fase 3)."
+
+[dependencies]
