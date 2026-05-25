@@ -18,6 +18,42 @@ use pluma_notebook_core::{CellId, CellKind, CellState, Notebook};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+/// Carga tipada del resultado de una celda. Le dice al renderer qué
+/// "puerto visual" exponer en el borde de la celda (texto, tabla, imagen,
+/// geometría…). Un kernel que no sepa producir un tipo rico devuelve
+/// `OutputPayload::Text` con el stdout y listo — backwards compat.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputPayload {
+    /// Sin valor productivo (ej. celda que sólo imprime stdout).
+    None,
+    /// Texto plano (repr del último valor, log, etc.).
+    Text(String),
+    /// Un escalar numérico.
+    Scalar(f64),
+    /// Tabla rectangular columna-encabezada — fila puro string.
+    Table { columns: Vec<String>, rows: Vec<Vec<String>> },
+    /// Imagen rasterizada con su MIME y bytes crudos (PNG/JPEG/etc.).
+    Image { width: u32, height: u32, mime: String, bytes: Vec<u8> },
+    /// Nube de puntos / malla / vectores en 3D.
+    Geometry { kind: String, points: Vec<[f32; 3]> },
+}
+
+impl OutputPayload {
+    /// Etiqueta corta del tipo de puerto que la celda expone — sirve para
+    /// que la UI elija el ícono/visor sin pattern-matchear el enum entero.
+    pub fn port_kind(&self) -> &'static str {
+        match self {
+            OutputPayload::None => "none",
+            OutputPayload::Text(_) => "text",
+            OutputPayload::Scalar(_) => "scalar",
+            OutputPayload::Table { .. } => "table",
+            OutputPayload::Image { .. } => "image",
+            OutputPayload::Geometry { .. } => "geometry",
+        }
+    }
+}
+
 /// Salida de la ejecución de una celda de código en el kernel.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KernelOutput {
@@ -25,6 +61,28 @@ pub struct KernelOutput {
     pub stdout: String,
     /// Representación textual del último valor evaluado, si lo hay.
     pub value: Option<String>,
+    /// Valor tipado del último resultado — base para los puertos visuales.
+    /// Default `None` para no obligar a los kernels existentes.
+    #[serde(default = "default_payload")]
+    pub payload: OutputPayload,
+}
+
+fn default_payload() -> OutputPayload {
+    OutputPayload::None
+}
+
+impl KernelOutput {
+    /// Construye una salida puramente textual — atajo para los kernels
+    /// que aún no producen valores tipados.
+    pub fn text(stdout: impl Into<String>) -> Self {
+        let s = stdout.into();
+        Self { stdout: s.clone(), value: None, payload: OutputPayload::Text(s) }
+    }
+
+    /// Salida vacía (ni stdout ni valor).
+    pub fn empty() -> Self {
+        Self { stdout: String::new(), value: None, payload: OutputPayload::None }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -81,11 +139,45 @@ pub struct RunReport {
 /// Recorre el DAG en topo-order y ejecuta cada celda. Devuelve `None` si
 /// el notebook tiene un ciclo (no hay orden de ejecución).
 pub async fn run_all<K: Kernel>(notebook: &mut Notebook, kernel: &K) -> Option<RunReport> {
+    run_subset(notebook, kernel, None).await
+}
+
+/// Recomputación **reactiva mínima**: ejecuta `root` y sus dependientes
+/// transitivos en topo-order, sin tocar nada que esté fuera del cono.
+/// Si la celda raíz no existe devuelve `None`. Si el notebook tiene un
+/// ciclo devuelve `None`. Equivale al "edit-cell-and-propagate-only" de
+/// los notebooks reactivos: ningún ancestro vuelve a correr.
+pub async fn run_from<K: Kernel>(
+    notebook: &mut Notebook,
+    kernel: &K,
+    root: CellId,
+) -> Option<RunReport> {
+    if notebook.cell(root).is_none() {
+        return None;
+    }
+    let mut cone: HashSet<CellId> =
+        notebook.dependents_transitive(root).into_iter().collect();
+    cone.insert(root);
+    run_subset(notebook, kernel, Some(cone)).await
+}
+
+/// Núcleo compartido: `subset = None` corre todo el notebook; `Some(s)`
+/// restringe la corrida a los ids de `s` (en topo-order del DAG global).
+async fn run_subset<K: Kernel>(
+    notebook: &mut Notebook,
+    kernel: &K,
+    subset: Option<HashSet<CellId>>,
+) -> Option<RunReport> {
     let order = notebook.execution_order()?;
     let mut report = RunReport::default();
     let mut failed: HashSet<CellId> = HashSet::new();
 
     for id in order {
+        if let Some(s) = &subset {
+            if !s.contains(&id) {
+                continue;
+            }
+        }
         let cell = notebook.cell(id).expect("id viene de execution_order");
         let upstream_failed = cell.depends_on.iter().any(|dep| failed.contains(dep));
         if upstream_failed {
@@ -123,7 +215,7 @@ mod tests {
     use super::*;
 
     fn ok_kernel() -> KernelMock<impl Fn(&str, &str) -> Result<KernelOutput, KernelError> + Send + Sync> {
-        KernelMock::new(|_src, _lang| Ok(KernelOutput { stdout: String::new(), value: None }))
+        KernelMock::new(|_src, _lang| Ok(KernelOutput::empty()))
     }
 
     fn falla_si_contiene(token: &'static str) -> KernelMock<impl Fn(&str, &str) -> Result<KernelOutput, KernelError> + Send + Sync> {
@@ -131,9 +223,24 @@ mod tests {
             if src.contains(token) {
                 Err(KernelError::Runtime(format!("contiene {token}")))
             } else {
-                Ok(KernelOutput { stdout: String::new(), value: None })
+                Ok(KernelOutput::empty())
             }
         })
+    }
+
+    /// Kernel que registra cada source que recibió, para chequear que
+    /// `run_from` deja en paz a los ancestros.
+    fn kernel_grabador() -> (
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        KernelMock<impl Fn(&str, &str) -> Result<KernelOutput, KernelError> + Send + Sync>,
+    ) {
+        let log: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+        let cloned = log.clone();
+        let kernel = KernelMock::new(move |src, _lang| {
+            cloned.lock().unwrap().push(src.to_string());
+            Ok(KernelOutput::empty())
+        });
+        (log, kernel)
     }
 
     fn notebook_cadena() -> (Notebook, CellId, CellId, CellId) {
@@ -187,5 +294,76 @@ mod tests {
         let k = KernelMock::new(|_, _| panic!("no debería llamarse"));
         let report = run_all(&mut nb, &k).await.unwrap();
         assert_eq!(report.executed.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn run_from_solo_toca_el_cono() {
+        // a → b → c, d suelta — al correr desde b, sólo b y c se ejecutan.
+        let (mut nb, a, b, c) = notebook_cadena();
+        let d = nb.push(CellKind::Code { language: "rust".into() }, "let suelta = 0;");
+        for id in [a, b, c, d] {
+            nb.set_state(id, CellState::Fresh);
+        }
+        let (log, k) = kernel_grabador();
+        let report = run_from(&mut nb, &k, b).await.unwrap();
+
+        assert_eq!(report.executed, vec![b, c]);
+        // a y d no se ejecutaron: ni el kernel los vio ni cambiaron de estado.
+        let visto = log.lock().unwrap().clone();
+        assert_eq!(visto.len(), 2);
+        assert!(visto.iter().any(|s| s.contains("let y = 2;")));
+        assert!(visto.iter().any(|s| s.contains("let z = 3;")));
+        assert!(!visto.iter().any(|s| s.contains("let x = 1;")));
+        assert!(!visto.iter().any(|s| s.contains("suelta")));
+        assert_eq!(nb.cell(a).unwrap().state, CellState::Fresh);
+        assert_eq!(nb.cell(d).unwrap().state, CellState::Fresh);
+    }
+
+    #[tokio::test]
+    async fn run_from_inexistente_devuelve_none() {
+        let (mut nb, ..) = notebook_cadena();
+        assert!(run_from(&mut nb, &ok_kernel(), 999).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn run_from_de_una_hoja_solo_corre_esa() {
+        let (mut nb, a, b, c) = notebook_cadena();
+        for id in [a, b, c] {
+            nb.set_state(id, CellState::Stale);
+        }
+        let (log, k) = kernel_grabador();
+        let report = run_from(&mut nb, &k, c).await.unwrap();
+        assert_eq!(report.executed, vec![c]);
+        assert_eq!(log.lock().unwrap().len(), 1);
+        assert_eq!(nb.cell(a).unwrap().state, CellState::Stale);
+        assert_eq!(nb.cell(b).unwrap().state, CellState::Stale);
+        assert_eq!(nb.cell(c).unwrap().state, CellState::Fresh);
+    }
+
+    #[test]
+    fn output_payload_port_kind() {
+        assert_eq!(OutputPayload::None.port_kind(), "none");
+        assert_eq!(OutputPayload::Text("x".into()).port_kind(), "text");
+        assert_eq!(OutputPayload::Scalar(1.0).port_kind(), "scalar");
+        assert_eq!(
+            OutputPayload::Table { columns: vec![], rows: vec![] }.port_kind(),
+            "table"
+        );
+        assert_eq!(
+            OutputPayload::Image { width: 1, height: 1, mime: "image/png".into(), bytes: vec![] }
+                .port_kind(),
+            "image"
+        );
+        assert_eq!(
+            OutputPayload::Geometry { kind: "points".into(), points: vec![] }.port_kind(),
+            "geometry"
+        );
+    }
+
+    #[test]
+    fn kernel_output_text_constructor() {
+        let o = KernelOutput::text("hola");
+        assert_eq!(o.stdout, "hola");
+        assert!(matches!(o.payload, OutputPayload::Text(ref s) if s == "hola"));
     }
 }

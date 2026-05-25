@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
-use crate::cell::{Cell, CellId, CellKind, CellState};
+use crate::cell::{Cell, CellId, CellKind, CellState, Position};
 
 /// Un notebook reproducible.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -36,8 +36,27 @@ impl Notebook {
             source: source.into(),
             depends_on: Vec::new(),
             state: CellState::Stale,
+            position: None,
         });
         id
+    }
+
+    /// Coloca una celda en el canvas espacial. `None` la devuelve al modo
+    /// puramente lineal. No toca el estado de la celda (la posición es
+    /// presentación, no contenido) y por tanto no afecta el digest.
+    pub fn set_position(&mut self, id: CellId, pos: Option<Position>) -> bool {
+        match self.cell_mut(id) {
+            Some(c) => {
+                c.position = pos;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Posición de una celda en el canvas, si la tiene.
+    pub fn position(&self, id: CellId) -> Option<Position> {
+        self.cell(id).and_then(|c| c.position)
     }
 
     pub fn len(&self) -> usize {
@@ -127,6 +146,24 @@ impl Notebook {
             .filter(|c| c.depends_on.contains(&id))
             .map(|c| c.id)
             .collect()
+    }
+
+    /// Dependientes transitivos de `root` (sin incluir a `root`). Es el
+    /// cono de obsolescencia: las celdas que necesitan recomputarse si
+    /// `root` cambia. Útil para minimizar la recomputación reactiva.
+    pub fn dependents_transitive(&self, root: CellId) -> Vec<CellId> {
+        let mut out: Vec<CellId> = Vec::new();
+        let mut seen: BTreeSet<CellId> = BTreeSet::from([root]);
+        let mut queue: VecDeque<CellId> = VecDeque::from([root]);
+        while let Some(cur) = queue.pop_front() {
+            for child in self.dependents(cur) {
+                if seen.insert(child) {
+                    out.push(child);
+                    queue.push_back(child);
+                }
+            }
+        }
+        out
     }
 
     /// Marca `Stale` a todo dependiente transitivo de `id`. Devuelve los
@@ -345,5 +382,45 @@ mod tests {
             &nb.cell(id).unwrap().kind,
             CellKind::Embed { module } if module == "dominium"
         ));
+    }
+
+    #[test]
+    fn dependents_transitive_walks_the_cone() {
+        // a → b → c, d (suelta)
+        let mut nb = Notebook::new();
+        let a = code(&mut nb, "a");
+        let b = code(&mut nb, "b");
+        let c = code(&mut nb, "c");
+        let _d = code(&mut nb, "d");
+        nb.add_dependency(b, a);
+        nb.add_dependency(c, b);
+
+        let cono = nb.dependents_transitive(a);
+        assert_eq!(cono, vec![b, c]); // ni a ni d
+    }
+
+    #[test]
+    fn dependents_transitive_of_leaf_is_empty() {
+        let (nb, _a, _b, c) = chain();
+        assert!(nb.dependents_transitive(c).is_empty());
+    }
+
+    #[test]
+    fn position_round_trips_and_is_optional() {
+        let mut nb = Notebook::new();
+        let id = nb.push(CellKind::Markdown, "x");
+        assert_eq!(nb.position(id), None);
+        nb.set_position(id, Some(Position::new(12.5, -3.0)));
+        assert_eq!(nb.position(id), Some(Position::new(12.5, -3.0)));
+        nb.set_position(id, None);
+        assert_eq!(nb.position(id), None);
+    }
+
+    #[test]
+    fn position_does_not_affect_digest() {
+        let (mut nb, a, ..) = chain();
+        let antes = nb.notebook_digest();
+        nb.set_position(a, Some(Position::new(100.0, 200.0)));
+        assert_eq!(antes, nb.notebook_digest());
     }
 }

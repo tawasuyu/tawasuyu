@@ -5,6 +5,22 @@ use serde::{Deserialize, Serialize};
 /// Identificador de una celda dentro de su notebook.
 pub type CellId = u64;
 
+/// Coordenadas de una celda en el canvas infinito. Si una celda no tiene
+/// posición, vive sólo en el orden lineal de presentación; con posición,
+/// se le agrega una capa espacial. Las posiciones **no** entran al
+/// `content_hash` ni al digest: son presentación, no contenido.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Position {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl Position {
+    pub const fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
+}
+
 /// Qué clase de contenido lleva una celda.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CellKind {
@@ -40,7 +56,7 @@ pub enum CellState {
 }
 
 /// Una celda del notebook: contenido + sus dependencias lógicas.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Cell {
     pub id: CellId,
     pub kind: CellKind,
@@ -49,6 +65,9 @@ pub struct Cell {
     /// Celdas prerrequisito (deben ejecutarse antes).
     pub depends_on: Vec<CellId>,
     pub state: CellState,
+    /// Posición opcional en el canvas espacial. `None` = sólo orden lineal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<Position>,
 }
 
 impl Cell {
@@ -78,7 +97,14 @@ mod tests {
     use super::*;
 
     fn cell(kind: CellKind, source: &str) -> Cell {
-        Cell { id: 1, kind, source: source.into(), depends_on: vec![], state: CellState::Stale }
+        Cell {
+            id: 1,
+            kind,
+            source: source.into(),
+            depends_on: vec![],
+            state: CellState::Stale,
+            position: None,
+        }
     }
 
     #[test]
@@ -100,5 +126,14 @@ mod tests {
         let rust = cell(CellKind::Code { language: "rust".into() }, "1+1");
         let python = cell(CellKind::Code { language: "python".into() }, "1+1");
         assert_ne!(rust.content_hash(), python.content_hash());
+    }
+
+    #[test]
+    fn position_does_not_change_the_hash() {
+        let mut a = cell(CellKind::Markdown, "x");
+        let mut b = cell(CellKind::Markdown, "x");
+        a.position = Some(Position::new(0.0, 0.0));
+        b.position = Some(Position::new(420.0, -77.5));
+        assert_eq!(a.content_hash(), b.content_hash());
     }
 }
