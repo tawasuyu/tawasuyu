@@ -16,6 +16,7 @@ path = "src/main.rs"
 shuma-module = { path = "../sandbox/shuma-module" }
 shuma-module-commandbar = { path = "../sandbox/shuma-module-commandbar" }
 shuma-module-launcher = { path = "../sandbox/shuma-module-launcher" }
+shuma-module-matilda = { path = "../sandbox/shuma-module-matilda" }
 shuma-module-shell = { path = "../sandbox/shuma-module-shell" }
 shuma-sysmon = { path = "../sandbox/shuma-sysmon" }
 llimphi-ui = { workspace = true }

@@ -78,6 +78,7 @@ enum Kind {
     Launcher,
     CommandBar,
     Shell,
+    Matilda,
 }
 
 impl Kind {
@@ -88,6 +89,7 @@ impl Kind {
             Kind::Launcher => shuma_module_launcher::ID,
             Kind::CommandBar => shuma_module_commandbar::ID,
             Kind::Shell => shuma_module_shell::ID,
+            Kind::Matilda => shuma_module_matilda::ID,
         }
     }
 }
@@ -98,6 +100,9 @@ enum ModuleState {
     Launcher(shuma_module_launcher::State),
     CommandBar(shuma_module_commandbar::State),
     Shell(shuma_module_shell::State),
+    // `State` de matilda lleva el inventory entero (varios cientos
+    // de bytes); boxearlo mantiene el enum ModuleState compacto.
+    Matilda(Box<shuma_module_matilda::State>),
 }
 
 /// Una instancia activa de un módulo. `kind` + `state` deben coincidir
@@ -132,6 +137,14 @@ impl Instance {
             state: ModuleState::Shell(shuma_module_shell::State::new(source)),
         }
     }
+
+    fn matilda(label: String, source: Source) -> Self {
+        Self {
+            kind: Kind::Matilda,
+            label,
+            state: ModuleState::Matilda(Box::new(shuma_module_matilda::State::new(source))),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -140,6 +153,7 @@ enum ModuleMsg {
     CommandBar(shuma_module_commandbar::Msg),
     #[allow(dead_code)]
     Shell(shuma_module_shell::Msg),
+    Matilda(shuma_module_matilda::Msg),
 }
 
 // ─── Slot del chasis al que va un Msg de módulo ────────────────────
@@ -223,7 +237,10 @@ impl App for Shell {
                 shuma_module_commandbar::State::default(),
             )),
             main: None,
-            drawer_tabs: vec![Instance::shell("Shell".into(), Source::Local)],
+            drawer_tabs: vec![
+                Instance::shell("Shell".into(), Source::Local),
+                Instance::matilda("Matilda".into(), Source::Local),
+            ],
             drawer_open: false,
             active_drawer_tab: 0,
             drawer_trigger: DrawerTrigger::default(),
@@ -357,6 +374,9 @@ fn route_to_instance(inst: &mut Instance, msg: ModuleMsg) {
         (ModuleState::Shell(s), ModuleMsg::Shell(m)) => {
             *s = shuma_module_shell::update(s.clone(), m);
         }
+        (ModuleState::Matilda(s), ModuleMsg::Matilda(m)) => {
+            **s = shuma_module_matilda::update((**s).clone(), m);
+        }
         // Combinación inconsistente (state ≠ msg kind): no hace nada.
         // El registry no debería emitirlos; si pasa es un bug del chasis.
         _ => {}
@@ -430,14 +450,19 @@ fn render_main_area(model: &Model, theme: &Theme) -> View<Msg> {
 fn render_main_layer(model: &Model, theme: &Theme) -> View<Msg> {
     let body = match &model.main {
         Some(inst) => match (inst.kind, &inst.state) {
-            // Bloque 5 enruta cada Kind compilado como módulo Main. Por
-            // ahora, sólo Shell tiene placement Main válido — el resto
-            // muestra la placa "no compatible".
+            // Bloque 5 enrutará cada Kind activable como Main desde el
+            // shumarc. Shell y Matilda son los compatibles hoy; el
+            // resto cae al placeholder.
             (Kind::Shell, ModuleState::Shell(state)) => shuma_module_shell::view::<Msg>(
                 state,
                 theme,
                 |m| Msg::Module(Slot::Main, ModuleMsg::Shell(m)),
             ),
+            (Kind::Matilda, ModuleState::Matilda(state)) => {
+                shuma_module_matilda::view::<Msg>(state.as_ref(), theme, |m| {
+                    Msg::Module(Slot::Main, ModuleMsg::Matilda(m))
+                })
+            }
             _ => placeholder(theme, "Módulo Main no compatible"),
         },
         None => placeholder(
@@ -529,6 +554,11 @@ fn drawer_tab_content(model: &Model, theme: &Theme) -> View<Msg> {
         (Kind::Shell, ModuleState::Shell(state)) => {
             shuma_module_shell::view::<Msg>(state, theme, move |m| {
                 Msg::Module(Slot::DrawerTab(idx), ModuleMsg::Shell(m))
+            })
+        }
+        (Kind::Matilda, ModuleState::Matilda(state)) => {
+            shuma_module_matilda::view::<Msg>(state.as_ref(), theme, move |m| {
+                Msg::Module(Slot::DrawerTab(idx), ModuleMsg::Matilda(m))
             })
         }
         // Otros Kinds (Launcher/CommandBar) no tienen sentido como tab;

@@ -1,0 +1,19 @@
+[package]
+name = "shuma-module-matilda"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "shuma-module-matilda — administración declarativa de servidores como módulo enchufable de shuma. Visualiza inventario, plan y log de aplicación; corre discover/plan/dry-run local. Apply remoto via matilda-linker llega en el bloque de conectividad."
+
+[dependencies]
+shuma-module = { path = "../shuma-module" }
+matilda-core = { path = "../../baremetal/matilda-core" }
+matilda-plan = { path = "../../baremetal/matilda-plan" }
+matilda-apply = { path = "../../baremetal/matilda-apply" }
+matilda-discover = { path = "../../baremetal/matilda-discover" }
+matilda-ghost = { path = "../../baremetal/matilda-ghost" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-splitter = { workspace = true }
