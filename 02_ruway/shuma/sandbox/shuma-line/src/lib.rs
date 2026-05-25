@@ -21,6 +21,7 @@
 #![forbid(unsafe_code)]
 
 pub mod complete;
+pub mod continuation;
 pub mod dialect;
 pub mod editor;
 pub mod ghost;
@@ -31,6 +32,7 @@ pub mod token;
 pub use complete::{
     complete, flag_hints, Completion, CompletionKind, CompletionSource, StaticSource,
 };
+pub use continuation::needs_continuation;
 pub use dialect::Dialect;
 pub use editor::LineState;
 pub use ghost::ghost_suggestion;

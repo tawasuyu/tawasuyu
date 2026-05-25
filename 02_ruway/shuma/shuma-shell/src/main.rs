@@ -1445,7 +1445,25 @@ impl Shell {
 
         match key {
             "enter" => {
-                self.submit();
+                // Multi-línea: si el input tiene una construcción abierta
+                // (comilla, paréntesis, heredoc, `\` al final, operador
+                // pendiente), Enter inserta `\n` en lugar de ejecutar.
+                // Shift+Enter / Alt+Enter fuerzan newline aunque el input
+                // esté completo (escape para construir multi-línea
+                // explícita). Ctrl+Enter fuerza submit aunque parezca
+                // abierto (escape para forzar la ejecución).
+                let force_newline = ks.modifiers.shift || ks.modifiers.alt;
+                let force_submit = ctrl;
+                if !force_submit
+                    && (force_newline || shuma_line::needs_continuation(self.line.text()))
+                {
+                    self.line.insert("\n");
+                    self.history_cursor = None;
+                    self.history_draft = None;
+                    self.refresh_completion();
+                } else {
+                    self.submit();
+                }
                 cx.notify();
                 return;
             }
@@ -1680,6 +1698,87 @@ impl Shell {
             }
         }
         cx.notify();
+    }
+
+    /// Construye las **filas** del input — una por cada línea (cuando hay
+    /// `\n` interno tras Enter sobre input incompleto). Cada fila tiene
+    /// los tokens coloreados, el caret en su sitio si cae en esa línea,
+    /// y el sufijo fantasma (sólo en la última fila). Sin prefijo del
+    /// prompt — lo pone quien la usa.
+    fn input_lines(&self, theme: &Theme) -> Vec<Vec<gpui::Div>> {
+        let accent = gpui::hsla(190.0 / 360.0, 0.70, 0.62, 1.0);
+        let dim = theme.fg_muted;
+        let cursor = self.line.cursor();
+        let text = self.line.text();
+        let tokens = self.line.tokens();
+        let caret = || div().w(px(2.)).h(px(19.)).bg(accent);
+        let mut rows: Vec<Vec<gpui::Div>> = vec![Vec::new()];
+
+        if text.is_empty() {
+            rows[0].push(caret());
+            rows[0].push(
+                div()
+                    .text_color(dim)
+                    .child("escribe un comando…  (Tab autocompleta · Enter ejecuta · Shift+Enter newline)"),
+            );
+            return rows;
+        }
+
+        let mut caret_done = false;
+        for t in &tokens {
+            let color = token_color(t.kind, theme);
+            let token_text = &text[t.start..t.end];
+            let pieces: Vec<&str> = token_text.split('\n').collect();
+            let n_pieces = pieces.len();
+            let mut local_byte = 0usize;
+            for (idx, piece) in pieces.iter().enumerate() {
+                let abs_start = t.start + local_byte;
+                let abs_end = abs_start + piece.len();
+                // El caret cae en este fragmento si el cursor está en
+                // `[abs_start, abs_end]`. Lo emitimos partiendo el
+                // string en el offset local exacto.
+                if !caret_done && cursor >= abs_start && cursor <= abs_end {
+                    let cur_local = cursor - abs_start;
+                    let (left, right) = piece.split_at(cur_local);
+                    if !left.is_empty() {
+                        rows.last_mut().unwrap().push(
+                            div().flex_none().text_color(color).child(left.to_string()),
+                        );
+                    }
+                    rows.last_mut().unwrap().push(caret());
+                    if !right.is_empty() {
+                        rows.last_mut().unwrap().push(
+                            div().flex_none().text_color(color).child(right.to_string()),
+                        );
+                    }
+                    caret_done = true;
+                } else if !piece.is_empty() {
+                    rows.last_mut().unwrap().push(
+                        div().flex_none().text_color(color).child(piece.to_string()),
+                    );
+                }
+                // Tras cada pieza excepto la última, vino un `\n` —
+                // empezamos una nueva fila. El `+1` salta el byte del \n.
+                local_byte += piece.len() + 1;
+                if idx + 1 < n_pieces {
+                    rows.push(Vec::new());
+                }
+            }
+        }
+        if !caret_done {
+            rows.last_mut().unwrap().push(caret());
+        }
+        // El sufijo fantasma (predicción) sólo aparece en la fila final,
+        // donde está el cursor al final del input.
+        if let Some(ghost) = self.compute_ghost() {
+            rows.last_mut().unwrap().push(
+                div()
+                    .flex_none()
+                    .text_color(theme.fg_disabled)
+                    .child(SharedString::from(ghost)),
+            );
+        }
+        rows
     }
 
     /// Construye la fila del input: los tokens coloreados, el caret en su
@@ -2574,21 +2673,50 @@ impl Render for Shell {
                 ))
         };
 
-        // --- Zona prompt: el input inteligente ---
+        // --- Zona prompt: el input inteligente (multi-línea) ---
         // El prefijo lo arma `prompt_prefix_row` desde la config
-        // (`config.prompt.segments`); el resto (tokens + caret + fantasma)
-        // lo arma el helper compartido con el modo launcher.
-        let mut input_row: Vec<gpui::Div> = self.prompt_prefix_row(&theme);
-        input_row.extend(self.input_row(&theme));
+        // (`config.prompt.segments`); cada línea del input es una fila
+        // horizontal y se apilan en vertical. Sólo la primera lleva el
+        // prompt prefix; las continuaciones llevan un sangrado de `… `
+        // para señalar que es la misma orden.
+        let lines = self.input_lines(&theme);
+        let n_lines = lines.len();
+        let input_lines_stack: Vec<gpui::Div> = lines
+            .into_iter()
+            .enumerate()
+            .map(|(i, row_children)| {
+                let mut row = div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .px(px(14.));
+                if i == 0 {
+                    for cell in self.prompt_prefix_row(&theme) {
+                        row = row.child(cell);
+                    }
+                } else {
+                    row = row.child(
+                        div()
+                            .flex_none()
+                            .text_color(theme.fg_muted)
+                            .child("…  "),
+                    );
+                }
+                for cell in row_children {
+                    row = row.child(cell);
+                }
+                row
+            })
+            .collect();
         let input_bar = div()
-            .h(px(46.))
+            .when(n_lines == 1, |d| d.h(px(46.)))
             .flex()
-            .flex_row()
-            .items_center()
-            .px(px(14.))
+            .flex_col()
+            .justify_center()
             .text_color(text)
             .text_size(px(14.))
-            .children(input_row);
+            .py(px(if n_lines == 1 { 0.0 } else { 6.0 }))
+            .children(input_lines_stack);
         // Banner del modo reproceso — escribí un filtro para la salida.
         let banner = self.reprocess_source.map(|src| {
             div()
