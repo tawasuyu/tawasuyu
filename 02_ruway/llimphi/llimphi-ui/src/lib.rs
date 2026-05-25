@@ -132,16 +132,17 @@ struct MountedNode<Msg> {
 }
 
 fn mount<Msg: Clone>(layout: &mut LayoutTree, v: View<Msg>) -> Mounted<Msg> {
-    let mut nodes = Vec::new();
-    let root = mount_recursive(layout, v, &mut nodes);
+    let (root, nodes) = mount_recursive(layout, v);
     Mounted { root, nodes }
 }
 
+/// Devuelve `(NodeId del subárbol, lista de MountedNode en pre-orden)`.
+/// Pre-orden = padre antes que hijos, así `paint` recorre en orden e imita
+/// painter's algorithm (padre = background, hijos encima).
 fn mount_recursive<Msg: Clone>(
     layout: &mut LayoutTree,
     v: View<Msg>,
-    out: &mut Vec<MountedNode<Msg>>,
-) -> NodeId {
+) -> (NodeId, Vec<MountedNode<Msg>>) {
     let View {
         style,
         fill,
@@ -150,23 +151,28 @@ fn mount_recursive<Msg: Clone>(
         on_click,
         children,
     } = v;
-    let child_ids: Vec<NodeId> = children
+    let children_results: Vec<(NodeId, Vec<MountedNode<Msg>>)> = children
         .into_iter()
-        .map(|c| mount_recursive(layout, c, out))
+        .map(|c| mount_recursive(layout, c))
         .collect();
+    let child_ids: Vec<NodeId> = children_results.iter().map(|(id, _)| *id).collect();
     let id = if child_ids.is_empty() {
         layout.leaf(style).expect("layout leaf")
     } else {
         layout.node(style, &child_ids).expect("layout node")
     };
-    out.push(MountedNode {
+    let mut nodes = Vec::with_capacity(1 + children_results.iter().map(|(_, n)| n.len()).sum::<usize>());
+    nodes.push(MountedNode {
         id,
         fill,
         radius,
         text,
         on_click,
     });
-    id
+    for (_, child_nodes) in children_results {
+        nodes.extend(child_nodes);
+    }
+    (id, nodes)
 }
 
 fn paint<Msg>(
