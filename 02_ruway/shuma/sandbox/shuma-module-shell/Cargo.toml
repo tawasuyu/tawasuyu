@@ -1,0 +1,13 @@
+[package]
+name = "shuma-module-shell"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "shuma-module-shell — el shell interactivo (input + runs + historial) como un módulo enchufable a `shuma-shell-llimphi`. Vista placeholder por ahora; la migración del REPL GPUI llega aparte."
+
+[dependencies]
+shuma-module = { path = "../shuma-module" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
