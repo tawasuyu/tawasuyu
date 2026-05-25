@@ -1,0 +1,23 @@
+[package]
+name = "dominium-app-llimphi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "dominium-app-llimphi — la ventana viva del simulador de campo medio sobre Llimphi. Reemplazo del `dominium-app` GPUI: arma la cadena `core → physics → iso → render-plan → canvas-llimphi`, corre un loop de tick (~11 Hz) en un thread aparte que reentra al update vía `Handle::dispatch`, y compone canvas + panel de stats + controles play/pause/reseed."
+
+[[bin]]
+name = "dominium-app-llimphi"
+path = "src/main.rs"
+
+[dependencies]
+dominium-canvas-llimphi = { path = "../dominium-canvas-llimphi" }
+dominium-core = { path = "../dominium-core" }
+dominium-iso = { path = "../dominium-iso" }
+dominium-physics = { path = "../dominium-physics" }
+dominium-render-plan = { path = "../dominium-render-plan" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-button = { workspace = true }

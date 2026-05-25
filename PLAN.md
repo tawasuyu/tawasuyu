@@ -61,7 +61,7 @@ Cuando Llimphi tenga las 4 fases verdes, portar:
 | Nahual shell + viewers (5 apps + 8 libs + 12 widgets) | `02_ruway/nahual/*` | Reemplazar capa GPUI; conservar lógica de dominio |
 | Mirada UI (launcher, portal, greeter) | `02_ruway/mirada/mirada-{launcher,portal,greeter}` | Idem · `mirada-greeter` portado a Llimphi (2026-05-25). |
 | Pluma editor | ~~`00_unanchay/pluma/pluma-editor-gpui`~~ | ✅ `pluma-editor-llimphi` (2026-05-25). |
-| Dominium canvas | ~~`01_yachay/dominium/dominium-canvas-gpui`~~ | ✅ `dominium-canvas-llimphi` (2026-05-25): `canvas_view(plan, bg)` con `paint_with` que pinta quads vía vello; falta portar `dominium-app` para tener el simulador vivo. |
+| Dominium canvas + app | ~~`01_yachay/dominium/dominium-canvas-gpui`~~ + ~~`dominium-app`~~ (GPUI) | ✅ `dominium-canvas-llimphi` + ✅ `dominium-app-llimphi` (2026-05-25): la app monta la cadena `core→physics→iso→render-plan→canvas-llimphi`, corre un loop de tick ~11 Hz en un `thread::spawn` que reentra al update vía `Handle::dispatch(Msg::Tick)` (`Handle` es `Send + Clone`), y compone status bar + canvas + side panel con botones Play/Pause y Re-sembrar (vía `llimphi-widget-button`). |
 | Cosmos app | `01_yachay/cosmos/cosmos-app` | Reescribir canvas + panels en Llimphi |
 
 **Regla:** Las apps mantienen su `*-core` agnóstico intacto. Solo cambia el frontend.

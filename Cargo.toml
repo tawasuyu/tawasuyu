@@ -85,6 +85,7 @@ members = [
     "01_yachay/cosmos/cosmos-wcs",
     "01_yachay/cosmos/cosmos-web",
     "01_yachay/dominium/dominium-app",
+    "01_yachay/dominium/dominium-app-llimphi",
     "01_yachay/dominium/dominium-canvas-gpui",
     "01_yachay/dominium/dominium-canvas-llimphi",
     "01_yachay/dominium/dominium-core",
