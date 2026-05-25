@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use dominium_canvas_llimphi::canvas_view;
-use dominium_core::{Conceptos, SimParams, World};
+use dominium_core::{Concepto, Conceptos, LayerMods, SimParams, World};
 use dominium_iso::{IsoProjector, ZWeights};
 use dominium_physics::tick;
 use dominium_render_plan::{build_plan, PlanConfig};
@@ -101,6 +101,19 @@ fn save_user_pack(cs: &Conceptos) {
     }
 }
 
+/// Copia `ZWeights` (relieve visual) al array `[f32; 5]` que SimParams
+/// usa como relieve físico, manteniendo el orden de capas del `Grid`.
+fn mirror_zweights_to_relieve(
+    z: &dominium_iso::ZWeights,
+    relieve: &mut [f32; 5],
+) {
+    relieve[dominium_core::RELIEVE_MATERIA] = z.materia;
+    relieve[dominium_core::RELIEVE_PSIQUE] = z.psique;
+    relieve[dominium_core::RELIEVE_PODER] = z.poder;
+    relieve[dominium_core::RELIEVE_ORO] = z.oro;
+    relieve[dominium_core::RELIEVE_DEGRADACION] = z.degradacion;
+}
+
 /// Carga el pack del usuario si existe. Devuelve `None` si el archivo no
 /// está, o si el contenido no es un `Conceptos` válido. Errores van a stderr.
 fn load_user_pack() -> Option<Conceptos> {
@@ -169,6 +182,10 @@ struct Model {
     /// Índice del Concepto seleccionado, si alguno. `None` cuando no hay
     /// selección. Si se "Limpia" la lista se resetea a `None`.
     selected: Option<usize>,
+    /// Cuando está activo, editar `ZWeights` (relieve visual) también
+    /// escribe a `params.relieve` (relieve físico) — lo que ves es lo
+    /// que sienten los lemmings.
+    sync_relieve: bool,
 }
 
 /// Una de las cuatro capas modificables de un `Concepto` (degradacion
@@ -249,6 +266,9 @@ enum Msg {
     EditZWeight(ZSlot, f32),
     GuardarPack,
     CargarPack,
+    CrearConcepto,
+    ToggleSyncRelieve,
+    ToggleAndina,
 }
 
 struct Dominium;
@@ -283,6 +303,8 @@ impl App for Dominium {
                 concepto_size: 12.0,
                 concepto_lift: 1.6,
                 light_dir: (0.55, 0.35),
+                andina_layers: 0,
+                andina_threshold: 1.0,
                 palette: Default::default(),
             },
             running: true,
@@ -290,6 +312,7 @@ impl App for Dominium {
             epoch: 0,
             rng_seed,
             selected: None,
+            sync_relieve: false,
         }
     }
 
@@ -383,6 +406,9 @@ impl App for Dominium {
                     ZSlot::Degradacion => &mut m.weights.degradacion,
                 };
                 *s = (*s + dv).clamp(-2.0, 2.0);
+                if m.sync_relieve {
+                    mirror_zweights_to_relieve(&m.weights, &mut m.params.relieve);
+                }
             }
             Msg::GuardarPack => save_user_pack(&m.world.conceptos),
             Msg::CargarPack => {
@@ -393,6 +419,31 @@ impl App for Dominium {
                     }
                     m.selected = None;
                 }
+            }
+            Msg::CrearConcepto => {
+                let n = m.world.conceptos.len();
+                let center = (GRID as f32) * 0.5;
+                let new = Concepto {
+                    id: format!("nuevo-{}", n + 1),
+                    sprite_id: 0,
+                    pos_x: center,
+                    pos_y: center,
+                    radius: 4.0,
+                    mods: LayerMods::default(),
+                    hack: None,
+                };
+                let i = m.world.conceptos.add(new);
+                m.selected = Some(i);
+            }
+            Msg::ToggleSyncRelieve => {
+                m.sync_relieve = !m.sync_relieve;
+                if m.sync_relieve {
+                    mirror_zweights_to_relieve(&m.weights, &mut m.params.relieve);
+                }
+            }
+            Msg::ToggleAndina => {
+                // 0 ↔ 3 capas. El threshold no cambia.
+                m.cfg.andina_layers = if m.cfg.andina_layers == 0 { 3 } else { 0 };
             }
         }
         m
@@ -584,6 +635,7 @@ fn side_panel(model: &Model, stats: &Stats, theme: &Theme) -> View<Msg> {
     for (i, c) in model.world.conceptos.items.iter().enumerate() {
         children.push(concepto_row(i, &c.id, model.selected == Some(i), theme));
     }
+    children.push(sized_button("✦  Crear concepto", &btn_palette, Msg::CrearConcepto));
     children.push(sized_button("✚  Sembrar pack", &btn_palette, Msg::SembrarConceptos));
     children.push(sized_button("✖  Limpiar", &btn_palette, Msg::LimpiarConceptos));
     children.push(sized_button("💾  Guardar", &btn_palette, Msg::GuardarPack));
@@ -649,6 +701,14 @@ fn side_panel(model: &Model, stats: &Stats, theme: &Theme) -> View<Msg> {
     children.push(z_slider("poder", model.weights.poder, ZSlot::Poder, &slider_palette));
     children.push(z_slider("oro", model.weights.oro, ZSlot::Oro, &slider_palette));
     children.push(z_slider("degrad.", model.weights.degradacion, ZSlot::Degradacion, &slider_palette));
+    let sync_label = if model.sync_relieve { "✓  Sync físico: ON" } else { "○  Sync físico: OFF" };
+    children.push(sized_button(sync_label, &btn_palette, Msg::ToggleSyncRelieve));
+    let andina_label = if model.cfg.andina_layers > 0 {
+        "✓  Estampa andina: ON"
+    } else {
+        "○  Estampa andina: OFF"
+    };
+    children.push(sized_button(andina_label, &btn_palette, Msg::ToggleAndina));
 
     children.push(separator());
     children.push(label_view(&format!("grilla {GRID}×{GRID}"), 11.0, theme.fg_muted));

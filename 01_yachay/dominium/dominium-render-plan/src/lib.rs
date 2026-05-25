@@ -113,6 +113,14 @@ pub struct PlanConfig {
     /// dirección opuesta al sol. Default: hacia abajo-derecha (luz desde
     /// arriba-izquierda, convención de maqueta clásica).
     pub light_dir: (f32, f32),
+    /// Cantidad de capas adicionales que emite cada celda con relieve
+    /// significativo, estilo "estampa andina" (mapa topográfico de papel
+    /// cortado). Cada capa se apila a una fracción de `z` con un tile
+    /// progresivamente más chico y un tono ligeramente más oscuro. 0 = off.
+    pub andina_layers: u32,
+    /// Umbral mínimo de `z` para activar las capas concéntricas en una
+    /// celda — celdas planas no se descomponen.
+    pub andina_threshold: f32,
     pub palette: Palette,
 }
 
@@ -125,6 +133,8 @@ impl Default for PlanConfig {
             concepto_size: 14.0,
             concepto_lift: 1.4,
             light_dir: (0.55, 0.35),
+            andina_layers: 0,
+            andina_threshold: 1.0,
             palette: Palette::default(),
         }
     }
@@ -205,19 +215,57 @@ pub fn build_plan(
     let g = &world.grid;
     let mut quads: Vec<Quad> = Vec::with_capacity(g.cells() + world.lemmings.len());
 
-    // --- Celdas: un quad-rombo aproximado por celda ---
+    // --- Celdas: un quad-rombo por celda, más capas concéntricas
+    //     "estampa andina" si la celda supera `andina_threshold` ---
     for cy in 0..g.height {
         for cx in 0..g.width {
             let idx = g.idx(cx, cy);
             let z = weights.z_of(g, idx);
+            let color = cell_color(world, idx, &cfg.palette);
+            let depth = cx as f32 + cy as f32;
+
+            // Capas previas: del nivel del suelo (k=0) hasta justo por
+            // debajo de la cima (k = layers). Cada una más chica, más
+            // oscura, con depth tick chiquito hacia atrás para que paint
+            // primero (orden de pintor).
+            if cfg.andina_layers > 0 && z > cfg.andina_threshold {
+                let n = cfg.andina_layers as f32;
+                for k in 0..cfg.andina_layers {
+                    let frac = (k as f32) / n;
+                    let z_k = z * frac;
+                    let size_k = cfg.tile * (1.0 - frac * 0.18);
+                    let dark = 0.6 + frac * 0.35; // base 60% → 95% en la cima
+                    let color_k = [
+                        color[0] * dark,
+                        color[1] * dark,
+                        color[2] * dark,
+                        color[3],
+                    ];
+                    let (sx_k, sy_k) = iso.project(cx as f32, cy as f32, z_k);
+                    quads.push(Quad {
+                        x: sx_k - size_k * 0.5,
+                        y: sy_k - size_k * 0.5,
+                        w: size_k,
+                        h: size_k,
+                        color: color_k,
+                        // Mismo depth global, micro-shift hacia atrás para
+                        // que las capas inferiores pinten primero dentro
+                        // del bloque de la celda.
+                        depth: depth - 0.001 * (cfg.andina_layers - k) as f32,
+                    });
+                }
+            }
+
+            // Tope (la cima a su z máximo) — siempre se emite, conserva
+            // el mismo conteo de quads cuando andina_layers = 0.
             let (sx, sy) = iso.project(cx as f32, cy as f32, z);
             quads.push(Quad {
                 x: sx - cfg.tile * 0.5,
                 y: sy - cfg.tile * 0.5,
                 w: cfg.tile,
                 h: cfg.tile,
-                color: cell_color(world, idx, &cfg.palette),
-                depth: cx as f32 + cy as f32,
+                color,
+                depth,
             });
         }
     }
@@ -533,6 +581,45 @@ mod tests {
         let shadow_cx = shadow.x + shadow.w * 0.5;
         let top_cx = top.x + top.w * 0.5;
         assert!(shadow_cx > top_cx, "centro de sombra debe quedar a la derecha del tope");
+    }
+
+    #[test]
+    fn andina_disabled_keeps_one_quad_per_cell() {
+        // Con andina_layers = 0 (default), una celda con o sin relieve
+        // emite un solo quad — comportamiento idéntico al pre-estampa.
+        let mut world = World::new(3, 3);
+        let center = world.grid.idx(1, 1);
+        world.grid.materia[center] = 100.0;
+        let plan = build_plan(&world, &iso(), &ZWeights::default(), &PlanConfig::default());
+        assert_eq!(plan.quads.len(), 9);
+    }
+
+    #[test]
+    fn andina_enabled_stacks_extra_layers_on_high_relief() {
+        let mut world = World::new(3, 3);
+        let center = world.grid.idx(1, 1);
+        world.grid.materia[center] = 100.0; // z = 100 >> threshold 1.0
+        let cfg = PlanConfig {
+            andina_layers: 3,
+            andina_threshold: 1.0,
+            ..Default::default()
+        };
+        let plan = build_plan(&world, &iso(), &ZWeights::default(), &cfg);
+        // 9 celdas + 3 capas extra en la celda elevada = 12 quads.
+        assert_eq!(plan.quads.len(), 12);
+    }
+
+    #[test]
+    fn andina_skips_flat_cells_below_threshold() {
+        let world = World::new(4, 4); // todas las celdas en z = 0
+        let cfg = PlanConfig {
+            andina_layers: 3,
+            andina_threshold: 1.0,
+            ..Default::default()
+        };
+        let plan = build_plan(&world, &iso(), &ZWeights::default(), &cfg);
+        // 16 celdas, ninguna supera el threshold → 16 quads.
+        assert_eq!(plan.quads.len(), 16);
     }
 
     #[test]

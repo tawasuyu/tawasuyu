@@ -233,6 +233,12 @@ números son leyes.
 ## 5. Lo que viene (no inamovible — roadmap)
 
 - Editor visual: click en canvas → spawnear/mover/borrar Conceptos.
+  Botón "✦ Crear concepto" entregado (2026-05-25) — esquiva la
+  complejidad del hit-test sobre `paint_with` agregando uno al centro
+  del mundo con selección automática para editar al toque.
+- Toggle "Sync físico: ON/OFF" entregado (2026-05-25) — cuando está
+  activo, cualquier edición de `ZWeights` espeja al instante a
+  `params.relieve`: lo que ves es lo que sienten los lemmings.
 - ~~Slider widget en Llimphi~~ — ✓ `llimphi-widget-slider` (2026-05-25).
   Conectado a `dominium-app-llimphi` para editar `LayerMods` + `radius`
   del Concepto seleccionado, y `SimParams` (climb/move/diffuse/entropy)
@@ -246,8 +252,12 @@ números son leyes.
   montañas (definidas por la combinación lineal de capas) ahora restan
   score al candidato Y cobran energía extra al lemming al subirlas.
   Bajar es gratis. Default: relieve sigue a `materia`, climb_cost 0.05.
-- Capas concéntricas estilo estampa andina: para celdas con `Z` alto,
-  emitir N rombos apilados a alturas descendentes.
+- ~~Capas concéntricas estilo estampa andina~~ — ✓ (2026-05-25).
+  PlanConfig gana `andina_layers: u32` + `andina_threshold: f32`. Para
+  celdas con `z > threshold`, emite N capas adicionales a fracciones de
+  `z`, cada una un 18% más chica por nivel y un 60→95% del brillo del
+  color base. Default off (0 capas) → compat con tests existentes.
+  Toggle en panel cambia entre 0 y 3 capas.
 - ~~Persistencia~~ — ✓ (2026-05-25). Botones "Guardar" / "Cargar
   guardado" en el panel; escribe a `$XDG_CONFIG_HOME/dominium/pack.json`
   (típicamente `~/.config/dominium/pack.json`) via
