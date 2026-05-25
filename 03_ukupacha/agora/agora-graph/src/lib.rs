@@ -105,9 +105,22 @@ impl TrustGraph {
         self.identities.len()
     }
 
+    /// Iterador sobre todas las identidades registradas. Orden no
+    /// garantizado (`HashMap` interno) — los consumidores que necesiten
+    /// orden estable deben ordenar por `id()`.
+    pub fn identities(&self) -> impl Iterator<Item = &Identity> + '_ {
+        self.identities.values()
+    }
+
     /// Cantidad de atestaciones verificadas almacenadas.
     pub fn attestation_count(&self) -> usize {
         self.attestations.len()
+    }
+
+    /// Atestaciones verificadas en orden de inserción. Habilita
+    /// snapshots para persistencia y gossip.
+    pub fn attestations(&self) -> &[Attestation] {
+        &self.attestations
     }
 
     /// Verifica una atestación y, si es válida y no es duplicada exacta,

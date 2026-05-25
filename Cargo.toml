@@ -211,6 +211,7 @@ members = [
     "03_ukupacha/agora/agora-app",
     "03_ukupacha/agora/agora-core",
     "03_ukupacha/agora/agora-graph",
+    "03_ukupacha/agora/agora-store",
     "03_ukupacha/arje/arje-card",
     "03_ukupacha/arje/compat/arje-binfmt-compat",
     "03_ukupacha/arje/compat/arje-compat-common",

@@ -1,0 +1,19 @@
+[package]
+name = "agora-store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "agora — persistencia del TrustGraph: save/load JSON atómico con re-verificación de firmas en load. NO persiste Keypairs (las claves privadas viven sólo en RAM, por diseño)."
+
+[dependencies]
+agora-core = { path = "../agora-core" }
+agora-graph = { path = "../agora-graph" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
