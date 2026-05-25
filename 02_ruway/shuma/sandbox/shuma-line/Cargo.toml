@@ -9,3 +9,6 @@ description = "shuma — el cerebro del input del shell: analiza la línea de co
 
 [dependencies]
 serde = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

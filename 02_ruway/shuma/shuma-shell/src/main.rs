@@ -2324,6 +2324,138 @@ fn pretty_cwd(cwd: &str) -> String {
     }
 }
 
+/// Celda plana de output con estilo ANSI — auxiliar para evitar repetir
+/// el armado en cada rama del render decorado.
+fn plain_cell(text: &str, fg: Hsla, bg: Option<Hsla>, underline: bool) -> gpui::Div {
+    let mut cell = div().flex_none().text_color(fg);
+    if let Some(b) = bg {
+        cell = cell.bg(b);
+    }
+    if underline {
+        cell = cell.text_decoration_1();
+    }
+    cell.child(SharedString::from(text.to_string()))
+}
+
+/// Color de la decoración según su tipo y la naturaleza del path
+/// detrás: directorios en azul, ejecutables en verde, symlinks en
+/// magenta, URLs/grep-refs en accent.
+fn decoration_color(
+    kind: &shuma_line::DecorationKind,
+    accent: Hsla,
+    dir: Hsla,
+    exec: Hsla,
+    symlink: Hsla,
+) -> Hsla {
+    use shuma_line::DecorationKind::*;
+    match kind {
+        Path { is_dir, is_executable, is_symlink, .. } => {
+            if *is_symlink {
+                symlink
+            } else if *is_dir {
+                dir
+            } else if *is_executable {
+                exec
+            } else {
+                accent
+            }
+        }
+        Url(_) => accent,
+        GrepRef { .. } => accent,
+    }
+}
+
+/// Acción al clickear una decoración. Cerrada como datos para
+/// satisfacer al borrow-checker del closure de `on_click` (las acciones
+/// se mueven al listener); cuando aplica, opera sobre `Shell`.
+#[derive(Clone)]
+enum DecorationAction {
+    /// Rellena el input con `cd <path>` (sin ejecutar — el usuario
+    /// decide si pulsa Enter). Para directorios.
+    SuggestCd(std::path::PathBuf),
+    /// Rellena el input con `<EDITOR> <path>` para que el usuario
+    /// abra el archivo con su editor configurado.
+    SuggestEdit(std::path::PathBuf),
+    /// Rellena el input con `<EDITOR> +<line> <path>` (apertura al
+    /// número de línea — formato vim/nvim/hx).
+    SuggestEditAt { path: std::path::PathBuf, line_no: u32 },
+    /// Abre la URL con `xdg-open` (Linux) — fire-and-forget.
+    OpenUrl(String),
+}
+
+impl DecorationAction {
+    fn apply(&self, shell: &mut Shell, cx: &mut Context<Shell>) {
+        match self {
+            Self::SuggestCd(p) => {
+                let cmd = format!("cd {}", quote_if_needed(&p.to_string_lossy()));
+                shell.line.set_text(cmd);
+                shell.refresh_completion();
+                cx.notify();
+            }
+            Self::SuggestEdit(p) => {
+                let editor = std::env::var("EDITOR").unwrap_or_else(|_| "hx".into());
+                let cmd = format!("{} {}", editor, quote_if_needed(&p.to_string_lossy()));
+                shell.line.set_text(cmd);
+                shell.refresh_completion();
+                cx.notify();
+            }
+            Self::SuggestEditAt { path, line_no } => {
+                let editor = std::env::var("EDITOR").unwrap_or_else(|_| "hx".into());
+                // Convención común a vim/nvim/hx/emacs: `editor +N file`
+                let cmd = format!(
+                    "{} +{} {}",
+                    editor,
+                    line_no,
+                    quote_if_needed(&path.to_string_lossy())
+                );
+                shell.line.set_text(cmd);
+                shell.refresh_completion();
+                cx.notify();
+            }
+            Self::OpenUrl(url) => {
+                // xdg-open en Linux; en macOS sería `open`. Detección
+                // mínima por target_os.
+                #[cfg(target_os = "macos")]
+                let opener = "open";
+                #[cfg(not(target_os = "macos"))]
+                let opener = "xdg-open";
+                let _ = std::process::Command::new(opener)
+                    .arg(url)
+                    .spawn();
+            }
+        }
+    }
+}
+
+fn decoration_action(kind: &shuma_line::DecorationKind) -> DecorationAction {
+    use shuma_line::DecorationKind::*;
+    match kind {
+        Path { abs, is_dir, .. } => {
+            if *is_dir {
+                DecorationAction::SuggestCd(abs.clone())
+            } else {
+                DecorationAction::SuggestEdit(abs.clone())
+            }
+        }
+        Url(u) => DecorationAction::OpenUrl(u.clone()),
+        GrepRef { abs, line_no, .. } => DecorationAction::SuggestEditAt {
+            path: abs.clone(),
+            line_no: *line_no,
+        },
+    }
+}
+
+/// Si un path contiene espacios u otros chars problemáticos, lo
+/// envuelve en comillas dobles. Heurística simple — no escapamos
+/// comillas internas porque son rarísimas en paths reales.
+fn quote_if_needed(s: &str) -> String {
+    if s.contains(|c: char| c.is_whitespace() || matches!(c, '$' | '`' | '"' | '\'')) {
+        format!("\"{s}\"")
+    } else {
+        s.to_string()
+    }
+}
+
 /// Mapea un `vt100::Color` (el que devuelve la celda del emulador
 /// vt100 del run PTY) a un `Hsla` del frontend. Es un puente más rico
 /// que el SGR plano: cubre Default + 256-color indexed + 24-bit RGB.
@@ -2727,30 +2859,78 @@ fn render_run(
                 if ui.show_stderr { "sin errores" } else { "sin salida" },
             ));
         } else {
-            // Cada línea se renderiza como una fila de spans coloreados
-            // según las secuencias ANSI (`\x1b[…m`) y los `\r` (overwrite)
-            // que viene emitiendo el subproceso. Si no hay ANSI, sale un
-            // único span con el color por defecto del stream.
-            for l in &lines {
+            // Cada línea: spans ANSI (color/bold/underline) + decoraciones
+            // (paths existentes, URLs, refs `path:line:col`). El render
+            // mergea ambos: cuando un span solapa una decoración, se parte
+            // y el trozo decorado gana underline + click handler.
+            let accent = gpui::hsla(190.0 / 360.0, 0.70, 0.62, 1.0);
+            let dir_color = gpui::hsla(210.0 / 360.0, 0.65, 0.70, 1.0);
+            let exec_color = gpui::hsla(135.0 / 360.0, 0.55, 0.65, 1.0);
+            let symlink_color = gpui::hsla(285.0 / 360.0, 0.55, 0.70, 1.0);
+            let cwd_owned = std::path::PathBuf::from(&r.cwd);
+            for (li, l) in lines.iter().enumerate() {
+                let stripped = shuma_line::strip_ansi(l);
+                let decorations = shuma_line::decorate_line(&stripped, &cwd_owned);
                 let spans = shuma_line::parse_ansi_line(l);
                 let mut row = div().flex().flex_row().flex_wrap().text_size(px(12.));
                 if spans.is_empty() {
                     row = row.text_color(default_color);
                 } else {
+                    let mut visible_pos: usize = 0;
+                    let mut dec_seq: usize = 0;
                     for sp in spans {
-                        let mut cell = div().flex_none();
-                        cell = cell.text_color(ansi_color_to_hsla(
-                            sp.style.fg,
-                            sp.style.bold,
-                            default_color,
-                        ));
-                        if let Some(bg) = sp.style.bg {
-                            cell = cell.bg(ansi_color_to_hsla(Some(bg), false, default_color));
+                        let sp_start = visible_pos;
+                        let sp_end = sp_start + sp.text.len();
+                        let sp_fg = ansi_color_to_hsla(sp.style.fg, sp.style.bold, default_color);
+                        let sp_bg = sp.style.bg
+                            .map(|c| ansi_color_to_hsla(Some(c), false, default_color));
+                        // Decoraciones que solapan este span.
+                        let overlapping: Vec<&shuma_line::Decoration> = decorations
+                            .iter()
+                            .filter(|d| d.start < sp_end && sp_start < d.end)
+                            .collect();
+                        if overlapping.is_empty() {
+                            row = row.child(plain_cell(&sp.text, sp_fg, sp_bg, sp.style.underline));
+                        } else {
+                            let mut cursor = sp_start;
+                            for dec in overlapping {
+                                let dec_start = dec.start.max(sp_start);
+                                let dec_end = dec.end.min(sp_end);
+                                if cursor < dec_start {
+                                    let text = &sp.text[(cursor - sp_start)..(dec_start - sp_start)];
+                                    row = row.child(plain_cell(text, sp_fg, sp_bg, sp.style.underline));
+                                }
+                                let text = sp.text[(dec_start - sp_start)..(dec_end - sp_start)]
+                                    .to_string();
+                                let color = decoration_color(&dec.kind, accent, dir_color, exec_color, symlink_color);
+                                let dec_id = SharedString::from(format!(
+                                    "dec-{}-{}-{}",
+                                    id, li, dec_seq
+                                ));
+                                dec_seq += 1;
+                                let action = decoration_action(&dec.kind);
+                                row = row.child(
+                                    div()
+                                        .id(dec_id)
+                                        .flex_none()
+                                        .text_color(color)
+                                        .text_decoration_1()
+                                        .cursor_pointer()
+                                        .child(SharedString::from(text))
+                                        .on_click(cx.listener(
+                                            move |shell, _ev, _w, cx| {
+                                                action.apply(shell, cx);
+                                            },
+                                        )),
+                                );
+                                cursor = dec_end;
+                            }
+                            if cursor < sp_end {
+                                let text = &sp.text[(cursor - sp_start)..];
+                                row = row.child(plain_cell(text, sp_fg, sp_bg, sp.style.underline));
+                            }
                         }
-                        if sp.style.underline {
-                            cell = cell.text_decoration_1();
-                        }
-                        row = row.child(cell.child(SharedString::from(sp.text)));
+                        visible_pos = sp_end;
                     }
                 }
                 body.push(row);

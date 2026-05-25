@@ -23,6 +23,7 @@
 pub mod ansi;
 pub mod complete;
 pub mod continuation;
+pub mod decorate;
 pub mod dialect;
 pub mod editor;
 pub mod ghost;
@@ -35,6 +36,7 @@ pub use complete::{
     complete, flag_hints, Completion, CompletionKind, CompletionSource, StaticSource,
 };
 pub use continuation::needs_continuation;
+pub use decorate::{decorate_line, Decoration, DecorationKind};
 pub use dialect::Dialect;
 pub use editor::LineState;
 pub use ghost::ghost_suggestion;
