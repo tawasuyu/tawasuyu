@@ -1,0 +1,17 @@
+[package]
+name = "supay-app-llimphi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "supay-app-llimphi — Fase 0 del proyecto supay (modernizar Doom sin tocar su alma). Raycaster Wolfenstein/Doom-early hardcoded sobre Llimphi: mapa 16×16, jugador WASD, tick deterministic 35 Hz vía Handle::spawn_periodic, render desacoplado vía View::paint_with con niebla volumétrica y shading por distancia. Valida el pipeline tick-separado-del-render antes de cablear doomgeneric real."
+
+[[bin]]
+name = "supay-app-llimphi"
+path = "src/main.rs"
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }

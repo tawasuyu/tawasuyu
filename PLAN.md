@@ -88,6 +88,7 @@ Cuando Llimphi tenga las 4 fases verdes, portar:
 - **chasqui**: message broker monádico productivo.
 - **takiy**: app de composición musical con generador IA de sonidos.
 - **llimphi**: ver Hito #1.
+- **supay**: modernizar Doom sin tocar su alma — ver `02_ruway/supay/SDD.md`. Fase 0 (raycaster hardcoded sobre Llimphi) en código 2026-05-25; Fase 1 cablea doomgeneric vía FFI.
 
 ### `03_ukupacha/`
 - **arje**: DM end-to-end en hardware real, packaging rootfs+mesa.
