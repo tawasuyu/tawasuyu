@@ -10,7 +10,9 @@ description = "Lapaloma — abstracción de painter: trait Canvas + RenderPlan +
 [dependencies]
 pineal-core = { path = "../pineal-core" }
 gpui = { workspace = true, optional = true }
+llimphi-ui = { workspace = true, optional = true }
 
 [features]
 default = []
 gpui = ["dep:gpui"]
+llimphi = ["dep:llimphi-ui"]

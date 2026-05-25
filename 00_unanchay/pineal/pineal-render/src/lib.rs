@@ -28,6 +28,9 @@ pub mod recorder;
 #[cfg(feature = "gpui")]
 pub mod gpui_backend;
 
+#[cfg(feature = "llimphi")]
+pub mod llimphi_backend;
+
 pub use color::Color;
 pub use geom::{Point, Rect};
 pub use canvas::{Canvas, StrokeStyle};
@@ -36,3 +39,6 @@ pub use recorder::PlanRecorder;
 
 #[cfg(feature = "gpui")]
 pub use gpui_backend::WindowCanvas;
+
+#[cfg(feature = "llimphi")]
+pub use llimphi_backend::SceneCanvas;

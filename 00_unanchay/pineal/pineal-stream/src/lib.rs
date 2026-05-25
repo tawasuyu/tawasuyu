@@ -21,3 +21,9 @@ pub mod element;
 
 #[cfg(feature = "gpui")]
 pub use element::{pineal_stream, LapalomaStreamElement};
+
+#[cfg(feature = "llimphi")]
+pub mod view;
+
+#[cfg(feature = "llimphi")]
+pub use view::{pineal_stream_view, StreamView};
