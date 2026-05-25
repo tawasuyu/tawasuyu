@@ -107,6 +107,7 @@ members = [
     "02_ruway/llimphi/llimphi-text",
     "02_ruway/llimphi/llimphi-ui",
     "02_ruway/llimphi/widgets/list",
+    "02_ruway/llimphi/widgets/text-input",
     "02_ruway/nahual/nahual-shell-llimphi",
     "02_ruway/mirada/mirada-app",
     "02_ruway/mirada/mirada-bar-core",
@@ -363,6 +364,7 @@ llimphi-ui = { path = "02_ruway/llimphi/llimphi-ui" }
 # Widgets reusables sobre llimphi-ui — uno por crate, paralelo al
 # patrón de `02_ruway/nahual/widgets/*`.
 llimphi-widget-list = { path = "02_ruway/llimphi/widgets/list" }
+llimphi-widget-text-input = { path = "02_ruway/llimphi/widgets/text-input" }
 
 # === Filesystem helpers ===
 directories = "5"

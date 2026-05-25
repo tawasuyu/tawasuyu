@@ -14,4 +14,5 @@ path = "src/main.rs"
 
 [dependencies]
 llimphi-ui = { workspace = true }
+llimphi-widget-text-input = { workspace = true }
 auth-core = { path = "../../../shared/auth/auth-core" }

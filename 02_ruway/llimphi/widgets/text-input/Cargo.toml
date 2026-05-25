@@ -1,0 +1,11 @@
+[package]
+name = "llimphi-widget-text-input"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-text-input — input de texto single-line para Llimphi: estado plano (texto + masked), `apply_key` para editar desde el `update`, render con foco/placeholder/caret simulado. Análogo al `nahual-widget-text-input` GPUI."
+
+[dependencies]
+llimphi-ui = { workspace = true }
