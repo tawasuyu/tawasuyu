@@ -120,6 +120,7 @@ members = [
     "02_ruway/llimphi/widgets/tiled",
     "02_ruway/llimphi/widgets/tree",
     "02_ruway/nahual/nahual-shell-llimphi",
+    "02_ruway/nahual/nahual-file-explorer-llimphi",
     "02_ruway/nahual/nahual-image-viewer-llimphi",
     "02_ruway/nahual/nahual-text-viewer-llimphi",
     "02_ruway/mirada/mirada-app",
@@ -429,6 +430,7 @@ nahual-text-viewer = { path = "02_ruway/nahual/nahual-text-viewer" }
 nahual-text-viewer-llimphi = { path = "02_ruway/nahual/nahual-text-viewer-llimphi" }
 nahual-image-viewer = { path = "02_ruway/nahual/nahual-image-viewer" }
 nahual-image-viewer-llimphi = { path = "02_ruway/nahual/nahual-image-viewer-llimphi" }
+nahual-file-explorer-llimphi = { path = "02_ruway/nahual/nahual-file-explorer-llimphi" }
 
 # ============================================================
 # Intra-workspace deps de pineal (módulo de gráficos)
