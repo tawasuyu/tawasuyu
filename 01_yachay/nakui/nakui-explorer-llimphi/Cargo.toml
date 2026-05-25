@@ -1,0 +1,24 @@
+[package]
+name = "nakui-explorer-llimphi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Explorador Llimphi del event log de Nakui: timeline de seeds + morphisms con sus parámetros y breakdown por entity type. Lee un .jsonl con polling de 2s."
+
+[dependencies]
+nakui-core = { path = "../nakui-core" }
+nahual-meta-runtime = { path = "../../../02_ruway/nahual/libs/meta-runtime" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-app-header = { workspace = true }
+llimphi-widget-banner = { workspace = true }
+llimphi-widget-card = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[[bin]]
+name = "nakui-explorer-llimphi"
+path = "src/main.rs"
