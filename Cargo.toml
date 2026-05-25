@@ -155,9 +155,7 @@ members = [
     "02_ruway/nahual/widgets/app-header",
     "02_ruway/nahual/widgets/banner",
     "02_ruway/nahual/widgets/card",
-    "02_ruway/nahual/widgets/meta-form",
     "02_ruway/nahual/widgets/stat-card",
-    "02_ruway/nahual/widgets/text_input",
     "02_ruway/nahual/widgets/theme-switcher",
     "02_ruway/nahual/widgets/tree",
     "02_ruway/shuma/baremetal/matilda-app",
@@ -463,7 +461,6 @@ nahual-bus = { path = "02_ruway/nahual/libs/bus" }
 nahual-provider-fs = { path = "02_ruway/nahual/libs/providers/fs" }
 nahual-provider-sqlite = { path = "02_ruway/nahual/libs/providers/sqlite" }
 nahual-widget-tree = { path = "02_ruway/nahual/widgets/tree" }
-nahual-widget-text-input = { path = "02_ruway/nahual/widgets/text_input" }
 nahual-database-explorer = { path = "02_ruway/nahual/nahual-database-explorer" }
 nahual-text-viewer-llimphi = { path = "02_ruway/nahual/nahual-text-viewer-llimphi" }
 nahual-image-viewer-llimphi = { path = "02_ruway/nahual/nahual-image-viewer-llimphi" }
