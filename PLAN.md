@@ -121,6 +121,6 @@ Candidatos (orden de menor a mayor riesgo):
 1. ~~**`mirada-launcher`**~~ — descartado como primera migración: hoy es TUI, no GPUI.
 2. **`mirada-greeter`** — ✅ portado (2026-05-25). Extendido `llimphi-ui` con `Handle<Msg>` (quit + spawn de hilos que reentran al `update`) y `app_id()` para Wayland. La lógica de `auth-core` quedó intacta.
 3. **`pluma-editor-gpui`** → `pluma-editor-llimphi` — ✅ portado (2026-05-25). Visualizador DAG: bloques absolutamente posicionados (taffy `Position::Absolute`), conectores S-codo como triplas de rectángulos delgados, osciloscopio de coherencia. Llimphi-ui ganó `App::initial_size()` para overridear el default 960×540.
-4. **`nahual-shell`** + un par de widgets — file explorer básico, valida composición.
+4. **`nahual-shell-llimphi`** — MVP (2026-05-25): file explorer + text viewer en split fijo. Navegación con teclado (↑↓ Enter ⌫) y click; preview de archivos texto ≤256KB; sin layout.json/persister/hot-reload/Tabs/Tiled/DatabaseExplorer/ImageViewer/AppBus todavía. La virtualización de filas se hace en `view` (no hay scroll/clip en llimphi-ui aún).
 
 En paralelo (no bloqueado): **Fase 1 de Puriy** (`puriy-core` puro Rust — Tab/Session/History/Bookmark/Profile testeables).

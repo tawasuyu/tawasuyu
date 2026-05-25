@@ -1,0 +1,16 @@
+[package]
+name = "nahual-shell-llimphi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "nahual-shell-llimphi — MVP del shell nahual sobre Llimphi: file explorer + text viewer en split fijo, sin layout.json/persister todavía (vienen en bloques siguientes)."
+
+[[bin]]
+name = "nahual-shell-llimphi"
+path = "src/main.rs"
+
+[dependencies]
+llimphi-ui = { workspace = true }
