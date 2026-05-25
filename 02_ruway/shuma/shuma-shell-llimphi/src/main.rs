@@ -308,7 +308,7 @@ impl App for Shell {
         None
     }
 
-    fn update(model: Self::Model, msg: Self::Msg, _: &Handle<Self::Msg>) -> Self::Model {
+    fn update(model: Self::Model, msg: Self::Msg, handle: &Handle<Self::Msg>) -> Self::Model {
         let mut m = model;
         match msg {
             Msg::Tick => {
@@ -333,7 +333,7 @@ impl App for Shell {
                 m = apply_module_msg(m, slot, mmsg);
             }
             Msg::ShortcutClicked(slot, action) => {
-                m = handle_shortcut(m, slot, action);
+                m = handle_shortcut(m, slot, action, handle);
             }
         }
         m
@@ -504,7 +504,12 @@ fn monitor_key(slot: &Slot, spec: &MonitorSpec) -> String {
 ///   y lo enfoca. Si el drawer está cerrado, también lo abre.
 /// - `ModuleAction(action_id)` — dispatcha al módulo emisor vía su
 ///   `dispatch(action_id) -> Option<Msg>`.
-fn handle_shortcut(mut m: Model, slot: Slot, action: ShortcutAction) -> Model {
+fn handle_shortcut(
+    mut m: Model,
+    slot: Slot,
+    action: ShortcutAction,
+    handle: &Handle<Msg>,
+) -> Model {
     match action {
         ShortcutAction::Command { line } => {
             // Hack temporario: lo agregamos al log del primer matilda
@@ -530,6 +535,36 @@ fn handle_shortcut(mut m: Model, slot: Slot, action: ShortcutAction) -> Model {
             }
         }
         ShortcutAction::ModuleAction { action_id } => {
+            // Hook remoto: si la acción es `matilda.discover` y el
+            // matilda instanciado en `slot` apunta a `Source::Remote`,
+            // delegamos al thread SSH en lugar de al `update` local.
+            if action_id == "matilda.discover" {
+                if let Some((source, desired)) = remote_matilda_inputs(&slot, &m) {
+                    let slot_back = slot.clone();
+                    let handle_clone = handle.clone();
+                    m = apply_module_msg(
+                        m,
+                        slot.clone(),
+                        ModuleMsg::Matilda(shuma_module_matilda::Msg::LogLine(format!(
+                            "→ conectando a {} para discover…",
+                            source.label()
+                        ))),
+                    );
+                    handle.spawn(move || {
+                        let msg = match shuma_module_matilda::discover_remote_blocking(
+                            &source, &desired,
+                        ) {
+                            Ok(inv) => shuma_module_matilda::Msg::SetCurrent(inv),
+                            Err(e) => shuma_module_matilda::Msg::LogLine(format!(
+                                "✘ discover remoto: {e}"
+                            )),
+                        };
+                        let _ = handle_clone;
+                        Msg::Module(slot_back, ModuleMsg::Matilda(msg))
+                    });
+                    return m;
+                }
+            }
             let msg = dispatch_to_module(&slot, &m, action_id);
             if let Some(mmsg) = msg {
                 m = apply_module_msg(m, slot, mmsg);
@@ -537,6 +572,30 @@ fn handle_shortcut(mut m: Model, slot: Slot, action: ShortcutAction) -> Model {
         }
     }
     m
+}
+
+/// Si `slot` contiene una instancia de `matilda` y su `source` es
+/// `Remote`, retorna `(source, desired)` clonados para que el thread
+/// SSH los consuma sin tomar prestado del modelo.
+fn remote_matilda_inputs(
+    slot: &Slot,
+    model: &Model,
+) -> Option<(Source, matilda_core::Inventory)> {
+    let inst = match slot {
+        Slot::TopBar => model.topbar.as_ref()?,
+        Slot::BottomBar => model.bottombar.as_ref()?,
+        Slot::Main => model.main.as_ref()?,
+        Slot::DrawerTab(i) => model.drawer_tabs.get(*i)?,
+    };
+    let state = match &inst.state {
+        ModuleState::Matilda(s) => s.as_ref(),
+        _ => return None,
+    };
+    if state.source.is_remote() {
+        Some((state.source.clone(), state.desired.clone()))
+    } else {
+        None
+    }
 }
 
 fn dispatch_to_module(slot: &Slot, model: &Model, action_id: &str) -> Option<ModuleMsg> {

@@ -44,10 +44,12 @@ use llimphi_theme::Theme;
 use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
 use matilda_apply::plan_to_steps;
 use matilda_core::{Container, Host, Inventory, RestartPolicy, VHost};
-use matilda_discover::discover_inventory;
+use matilda_discover::{discover_inventory, observed_inventory, ServerState};
 use matilda_ghost::{dry_run, ApplyReport};
+use matilda_linker::{Linker, SshAuth, SshConfig};
 use matilda_plan::{plan, Op, Plan};
 use shuma_module::{ModuleContributions, MonitorSpec, Rgb, Sample, ShortcutSpec, Source};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 pub const ID: &str = "matilda";
@@ -95,12 +97,21 @@ impl State {
 
 #[derive(Debug, Clone)]
 pub enum Msg {
-    /// Descubre el inventario actual del servidor (local por ahora).
+    /// Descubre el inventario actual del servidor (local; los Remote
+    /// los maneja el chasis vía `discover_remote_blocking` y reenvía
+    /// el resultado como `SetCurrent`).
     Discover,
     /// Recalcula el plan deseado-vs-actual.
     MakePlan,
     /// Ejecuta `dry_run` sobre los pasos del plan y vuelca al log.
     DryRun,
+    /// Setter directo del inventario actual — usado para inyectar el
+    /// resultado del discover remoto desde el chasis (cuando el SSH
+    /// terminó en un thread aparte).
+    SetCurrent(Inventory),
+    /// Línea informativa para el log — útil para que el chasis avise
+    /// "conectando", "fallo de SSH", etc., sin acoplarse al módulo.
+    LogLine(String),
     /// Drag del splitter inventario|plan.
     ResizeSplit(f32),
 }
@@ -131,8 +142,12 @@ pub fn update(state: State, msg: Msg) -> State {
                 s.current = Some(current);
             }
             Source::Remote { host, .. } => {
+                // El discover remoto necesita un runtime tokio y vive
+                // en un thread del chasis (ver `discover_remote_blocking`).
+                // Aquí sólo registramos que el módulo no puede hacerlo
+                // por sí mismo desde el hilo de UI — es informativo.
                 s.log.push(format!(
-                    "✘ discover remoto en {host} no implementado todavía"
+                    "→ discover remoto en {host} delegado al chasis"
                 ));
             }
         },
@@ -177,11 +192,82 @@ pub fn update(state: State, msg: Msg) -> State {
                 s.log.drain(0..len - 200);
             }
         }
+        Msg::SetCurrent(inv) => {
+            s.log.push(format!(
+                "✔ current: {} containers, {} vhosts",
+                inv.containers().count(),
+                inv.vhosts().count()
+            ));
+            s.current = Some(inv);
+        }
+        Msg::LogLine(line) => {
+            s.log.push(line);
+            let len = s.log.len();
+            if len > 200 {
+                s.log.drain(0..len - 200);
+            }
+        }
         Msg::ResizeSplit(dx) => {
             s.split_width = (s.split_width + dx).clamp(220.0, 720.0);
         }
     }
     s
+}
+
+// ─── Discover remoto ───────────────────────────────────────────────
+
+/// Ruta default de la clave SSH del usuario; coincide con el matilda CLI.
+fn default_ssh_key() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".into());
+    PathBuf::from(format!("{home}/.ssh/id_ed25519"))
+}
+
+/// Descubre el inventario actual del servidor remoto. **Bloqueante**:
+/// crea un runtime tokio efímero, conecta por SSH y corre
+/// `docker ps -a --format '{{.Names}}'` + `ls /etc/nginx/sites-enabled`.
+/// Pensado para que el chasis lo invoque dentro de `Handle::spawn`
+/// (un thread aparte) — no llamar desde el hilo de UI.
+///
+/// Para Source::Local fallback a `discover_inventory` (no necesita
+/// SSH, pero usa el mismo entrypoint para uniformidad).
+pub fn discover_remote_blocking(source: &Source, desired: &Inventory) -> Result<Inventory, String> {
+    match source {
+        Source::Local => Ok(discover_inventory(desired)),
+        Source::Remote { host, user, port, .. } => {
+            let auth = SshAuth::Key {
+                path: default_ssh_key(),
+                passphrase: None,
+            };
+            let mut config = SshConfig::new(host.as_str(), user.as_str(), auth);
+            config.port = *port;
+
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| format!("tokio runtime: {e}"))?;
+
+            rt.block_on(async move {
+                let linker = Linker::connect(&config)
+                    .await
+                    .map_err(|e| format!("ssh connect: {e}"))?;
+
+                let containers_text = linker
+                    .exec("docker ps -a --format '{{.Names}}' 2>/dev/null || true")
+                    .await
+                    .map_err(|e| format!("docker ps: {e}"))?;
+                let vhosts_text = linker
+                    .exec("ls -1 /etc/nginx/sites-enabled 2>/dev/null || true")
+                    .await
+                    .map_err(|e| format!("ls sites-enabled: {e}"))?;
+
+                let state = ServerState {
+                    containers: matilda_discover::parse_docker_names(&containers_text),
+                    vhosts: matilda_discover::parse_nginx_sites(&vhosts_text),
+                };
+                Ok(observed_inventory(&state, desired))
+            })
+        }
+    }
 }
 
 /// Inventario de ejemplo — equivale al `matilda example`. Permite
@@ -511,7 +597,10 @@ mod tests {
     }
 
     #[test]
-    fn remote_discover_is_unimplemented_for_now() {
+    fn remote_discover_is_delegated_to_the_chassis() {
+        // El módulo no abre SSH desde el update — el chasis es quien
+        // spawnea el thread con `discover_remote_blocking`. Aquí
+        // verificamos sólo el log informativo.
         let s = State::new(Source::Remote {
             host: "srv".into(),
             user: "ops".into(),
@@ -519,8 +608,39 @@ mod tests {
             label: None,
         });
         let s = update(s, Msg::Discover);
-        assert!(s.log.iter().any(|l| l.contains("no implementado")));
+        assert!(s.log.iter().any(|l| l.contains("delegado al chasis")));
         assert!(s.current.is_none());
+    }
+
+    #[test]
+    fn set_current_updates_state_and_logs() {
+        let mut s = State::new(Source::Local);
+        let mut inv = matilda_core::Inventory::new();
+        inv.add_container(matilda_core::Container::new("web", "nginx"));
+        s = update(s, Msg::SetCurrent(inv));
+        assert!(s.current.is_some());
+        assert_eq!(s.current.as_ref().unwrap().containers().count(), 1);
+        assert!(s.log.iter().any(|l| l.contains("1 containers")));
+    }
+
+    #[test]
+    fn log_line_appends_and_caps_at_200() {
+        let mut s = State::new(Source::Local);
+        for i in 0..250 {
+            s = update(s, Msg::LogLine(format!("line {i}")));
+        }
+        assert_eq!(s.log.len(), 200);
+        // Las primeras 50 líneas deben haberse descartado.
+        assert!(s.log[0].contains("line 50"));
+    }
+
+    #[test]
+    fn discover_remote_blocking_local_falls_back_to_local() {
+        // Para `Source::Local` no abre SSH — `discover_inventory` corre
+        // localmente. En CI sin docker, retorna inventory vacío sin error.
+        let inv = matilda_core::Inventory::new();
+        let res = discover_remote_blocking(&Source::Local, &inv);
+        assert!(res.is_ok());
     }
 
     #[test]

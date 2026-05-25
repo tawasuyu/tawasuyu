@@ -94,6 +94,22 @@ impl Linker {
         StepResult { describe: step.describe.clone(), ok, log }
     }
 
+    /// Ejecuta un comando arbitrario en el host remoto y devuelve su
+    /// stdout. Útil para discover (p. ej. `docker ps -a --format
+    /// '{{.Names}}'`) sin abrir un `apply` completo. Si el comando
+    /// sale con código distinto de 0, retorna el stderr como `Err`.
+    pub async fn exec(&self, cmd: &str) -> Result<String, SshError> {
+        let out = self.session.exec(cmd).await?;
+        if out.exit_code != 0 {
+            return Err(SshError::Channel(format!(
+                "exit {}: {}",
+                out.exit_code,
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
     /// Aplica los pasos en orden sobre el host remoto. Se detiene en el
     /// primero que falle (semántica `set -e`).
     pub async fn apply(&self, steps: &[ApplyStep]) -> ApplyReport {

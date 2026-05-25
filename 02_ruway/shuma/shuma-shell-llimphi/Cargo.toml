@@ -17,6 +17,7 @@ shuma-module = { path = "../sandbox/shuma-module" }
 shuma-module-commandbar = { path = "../sandbox/shuma-module-commandbar" }
 shuma-module-launcher = { path = "../sandbox/shuma-module-launcher" }
 shuma-module-matilda = { path = "../sandbox/shuma-module-matilda" }
+matilda-core = { path = "../baremetal/matilda-core" }
 shuma-module-shell = { path = "../sandbox/shuma-module-shell" }
 shuma-sysmon = { path = "../sandbox/shuma-sysmon" }
 llimphi-ui = { workspace = true }
