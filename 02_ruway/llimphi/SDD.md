@@ -78,7 +78,7 @@ No es una biblioteca genérica. Es un **motor de combate**. `wgpu + vello + taff
 |---|---|---|
 | HAL | `llimphi-hal` | `wgpu`, `winit`, `raw-window-handle` |
 | Raster | `llimphi-raster` | `vello`, `vello_encoding`, `peniko` |
-| Text | `llimphi-text` | `skrifa` (+ vello via `llimphi-raster`) |
+| Text | `llimphi-text` | `parley` (shaping + fontique + swash, hereda vello via raster) |
 | Layout | `llimphi-layout` | `taffy` |
 | UI | `llimphi-ui` | `llimphi-{hal,raster,layout,text}` |
 
@@ -105,4 +105,8 @@ Apps actualmente en GPUI que deben portarse:
 - **2026-05-25 (noche):** quinto crate `llimphi-text` (skrifa + vello). Bug de `max_storage_buffers_per_shader_stage` corregido (`Limits::default()` en vez de `downlevel`). `View::text()` permite poner texto centrado en cualquier nodo. Examples:
   - `cargo run -p llimphi-text --example hello_text --release` — "Llimphi" + tagline sobre fondo negro.
   - `counter` ahora muestra el número real (no barras) y los botones llevan label.
-- **Próximo:** parley para shaping completo (bidi, ligatures, fallback chains). Luego: migración GPUI → Llimphi de Nahual/Mirada/Pluma/Cosmos/Dominium.
+- **2026-05-25 (cierre):** dos fixes de hardware + parley.
+  - **Storage write fix:** swapchain de muchos adapters Linux/Vulkan no acepta storage writes en Rgba8Unorm. Patrón nuevo: textura intermedia con `STORAGE_BINDING | TEXTURE_BINDING` donde pinta vello + `TextureBlitter` que la copia al swapchain en `Surface::present(frame, &hal)`. Cambio de API: `frame.present()` → `surface.present(frame, &hal)`.
+  - **Paint-order fix:** `mount_recursive` registraba en post-orden y el background del root tapaba a los hijos. Ahora pre-orden depth-first.
+  - **Parley:** llimphi-text reescrito sobre parley. API nueva: `Typesetter` (cachea FontContext + LayoutContext), `TextBlock { text, size_px, color, origin, max_width, alignment, line_height }`, `Alignment { Start, Center, End, Justify }`, `measure(&mut ts, &block)`. Bidi + ligatures + fallback CJK/emoji vía fontique. `hello_text` muestra título + párrafo justificado con script mixto Latin/Arabic/CJK.
+- **Próximo:** input de teclado en `llimphi-ui` (Key/Char/Modifiers → Msg). Luego migración GPUI → Llimphi.

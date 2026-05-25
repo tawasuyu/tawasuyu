@@ -19,7 +19,7 @@ gioser/
 1. **Migración estructural**: brahman (188 crates) + eternal (12) + dominium (1) → gioser, 214 crates en workspace + 13 en wawa excluido. Historia git preservada (336 commits + 478 brahman + 56 eternal).
 2. **Rename semántico**: 344 cambios en Cargo.tomls + 1668 en .rs. Nombres antiguos (`fana-*`, `charka-*`, `cosmobiologia-*`, `eternal-*`, `brahman-*`, `agorapura-*`, `barra-*`, `revista-*`, `yachay-core`, `verbo-*`, `badu-*`, `formato`) reemplazados por los canónicos.
 3. **Landing sobria**: plano cartesiano SVG estático + visor pluma (`web/gioser-web`, 38 LOC).
-4. **Llimphi**: las 4 fases implementadas y verdes. Hito gris plomo verificado en hardware. Examples corriendo en `llimphi-{hal,raster,layout,ui}`.
+4. **Llimphi**: 5 crates (`hal/raster/layout/text/ui`) verdes en hardware. Texto vía parley (shaping completo, fallback CJK/emoji vía fontique). Bucle Elm con hit-test funcional.
 5. `cargo check --workspace` pasa.
 
 ## 2. Hito #1 — Llimphi (gráfico soberano)
@@ -115,12 +115,11 @@ Cuando Llimphi tenga las 4 fases verdes, portar:
 
 ## 8. Próxima sesión arranca con
 
-**Llimphi: shaping completo con parley** (texto básico ya funciona vía `llimphi-text` con skrifa):
-- Integrar `parley` para bidi, ligatures, fallback de fuentes (CJK/emoji).
-- Línea base + line break + alineación (start/center/end).
-- Hito: `llimphi-text` renderiza un párrafo wrap-able con kerning.
-- Bloquea: nada crítico (lo actual ya alcanza para counter y labels). Sí desbloquea: texto editable de calidad para Pluma/Cosmos.
+**Input de teclado en llimphi-ui** — bloquea cualquier app que tipea.
+- Extender `App` con `fn on_key(model, key, mods) -> Option<Msg>` y `fn on_char(model, ch) -> Option<Msg>`.
+- Runtime intercepta `WindowEvent::KeyboardInput` y delega.
+- Hito: example `editor` mínimo — text field editable con backspace, cursor visible.
 
-**Migración GPUI → Llimphi** ya es viable hoy para apps con texto simple. Empezar por Nahual (la base) o Pluma (mayor valor de usuario).
+Luego: **Migración GPUI → Llimphi** (Pluma editor o Nahual shell).
 
 En paralelo (no bloqueado): **Fase 1 de Puriy** (`puriy-core` puro Rust — Tab/Session/History/Bookmark/Profile testeables).

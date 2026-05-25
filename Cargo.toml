@@ -354,9 +354,8 @@ raw-window-handle = "0.6"
 pollster = "0.4"
 vello = "0.5"
 taffy = "0.9"
-# skrifa alineado con la versión que vello 0.5 trae transitivamente para evitar
-# tener dos copias del crate (los GlyphId/Font no son intercambiables entre versiones).
-skrifa = "0.35"
+# parley = shaping completo (bidi, ligatures, fallback CJK/emoji vía fontique, line break).
+parley = "0.4"
 
 # === Filesystem helpers ===
 directories = "5"

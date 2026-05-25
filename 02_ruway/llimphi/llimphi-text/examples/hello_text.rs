@@ -1,4 +1,5 @@
-//! Carga una fuente del sistema y pinta "Llimphi" centrado-ish.
+//! Texto via parley sobre vello: párrafo wrappeable + shaping (kerning,
+//! ligatures, bidi, fallback CJK/emoji).
 //!
 //! Corre con: `cargo run -p llimphi-text --example hello_text --release`.
 
@@ -11,17 +12,11 @@ use llimphi_hal::winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use llimphi_hal::winit::window::{Window, WindowAttributes, WindowId};
 use llimphi_hal::{Hal, Surface, WinitSurface};
 use llimphi_text::peniko::{color::palette, Color};
-use llimphi_text::{draw_block, TextBlock, Typeface};
+use llimphi_text::{draw_block, Alignment, TextBlock, Typesetter};
 
-// Cadena de fallback típica en Linux. La primera que exista gana.
-const FONT_CANDIDATES: &[&str] = &[
-    "/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf",
-    "/usr/share/fonts/inter/Inter-Regular.ttf",
-    "/usr/share/fonts/TTF/DejaVuSans.ttf",
-    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/droid/DroidSans-Regular.ttf",
-    "/usr/share/fonts/noto/NotoSans-Regular.ttf",
-];
+const PARRAFO: &str = "Llimphi pinta vector preciso sobre el silicio: \
+geometrías exactas, sin cajas negras. شكراً 你好 — el shaping de parley \
+maneja kerning, ligaduras y fallback CJK/Arabic en la misma línea.";
 
 struct State {
     window: Arc<Window>,
@@ -29,7 +24,7 @@ struct State {
     surface: WinitSurface,
     renderer: llimphi_raster::Renderer,
     scene: llimphi_raster::vello::Scene,
-    face: Typeface,
+    typesetter: Typesetter,
 }
 
 struct App {
@@ -52,7 +47,7 @@ impl ApplicationHandler for App {
         let hal = pollster::block_on(Hal::new(None)).expect("hal");
         let surface = WinitSurface::new(&hal, window.clone()).expect("surface");
         let renderer = llimphi_raster::Renderer::new(&hal).expect("renderer");
-        let face = Typeface::first_available(FONT_CANDIDATES).expect("no candidate font available");
+        let typesetter = Typesetter::new();
         window.request_redraw();
         self.state = Some(State {
             window,
@@ -60,7 +55,7 @@ impl ApplicationHandler for App {
             surface,
             renderer,
             scene: llimphi_raster::vello::Scene::new(),
-            face,
+            typesetter,
         });
     }
 
@@ -89,28 +84,57 @@ impl ApplicationHandler for App {
                         return;
                     }
                 };
-                let (w, h) = frame.size();
+                let (w, _h) = frame.size();
+                let margin_x = 64.0_f64;
+                let margin_y = 64.0_f64;
+                let inner_w = (w as f32 - 2.0 * margin_x as f32).max(100.0);
                 state.scene.reset();
+
+                // Título centrado
                 draw_block(
                     &mut state.scene,
-                    &state.face,
+                    &mut state.typesetter,
                     &TextBlock {
                         text: "Llimphi",
                         size_px: 96.0,
                         color: Color::from_rgba8(220, 230, 240, 255),
-                        origin: (w as f64 * 0.25, h as f64 * 0.5),
+                        origin: (margin_x, margin_y),
+                        max_width: Some(inner_w),
+                        alignment: Alignment::Center,
+                        line_height: 1.0,
                     },
                 );
+
+                // Subtítulo centrado
                 draw_block(
                     &mut state.scene,
-                    &state.face,
+                    &mut state.typesetter,
                     &TextBlock {
-                        text: "motor grafico soberano",
-                        size_px: 22.0,
+                        text: "motor gráfico soberano · parley + vello",
+                        size_px: 20.0,
                         color: Color::from_rgba8(140, 160, 180, 255),
-                        origin: (w as f64 * 0.25, h as f64 * 0.5 + 30.0),
+                        origin: (margin_x, margin_y + 110.0),
+                        max_width: Some(inner_w),
+                        alignment: Alignment::Center,
+                        line_height: 1.0,
                     },
                 );
+
+                // Párrafo justificado con wrap
+                draw_block(
+                    &mut state.scene,
+                    &mut state.typesetter,
+                    &TextBlock {
+                        text: PARRAFO,
+                        size_px: 22.0,
+                        color: Color::from_rgba8(200, 210, 220, 255),
+                        origin: (margin_x, margin_y + 170.0),
+                        max_width: Some(inner_w),
+                        alignment: Alignment::Justify,
+                        line_height: 1.4,
+                    },
+                );
+
                 if let Err(e) = state.renderer.render(
                     &state.hal,
                     &state.scene,

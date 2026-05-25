@@ -28,18 +28,6 @@ pub use llimphi_layout;
 pub use llimphi_raster;
 pub use llimphi_text;
 
-/// Cadena de fallback de fuentes para Linux que intenta el runtime al
-/// arrancar. La primera disponible gana; si ninguna existe, el texto no
-/// se pinta y se emite un warning por stderr.
-pub const DEFAULT_FONT_CANDIDATES: &[&str] = &[
-    "/usr/share/fonts/Adwaita/AdwaitaSans-Regular.ttf",
-    "/usr/share/fonts/inter/Inter-Regular.ttf",
-    "/usr/share/fonts/TTF/DejaVuSans.ttf",
-    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/droid/DroidSans-Regular.ttf",
-    "/usr/share/fonts/noto/NotoSans-Regular.ttf",
-];
-
 /// Aplicación Elm: estado inmutable, transición pura, vista pura.
 pub trait App: 'static {
     type Model: 'static;
@@ -179,7 +167,7 @@ fn paint<Msg>(
     scene: &mut vello::Scene,
     mounted: &Mounted<Msg>,
     computed: &ComputedLayout,
-    face: Option<&llimphi_text::Typeface>,
+    typesetter: &mut llimphi_text::Typesetter,
 ) {
     for node in &mounted.nodes {
         let Some(r) = computed.get(node.id) else {
@@ -195,21 +183,24 @@ fn paint<Msg>(
             );
             scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &rr);
         }
-        if let (Some(text), Some(face)) = (node.text.as_ref(), face) {
-            let m = face.measure(&text.content, text.size_px);
-            // Centrado dentro del rect. El origin de draw_block es el baseline.
-            let x = r.x as f64 + (r.w as f64 - m.width as f64) * 0.5;
-            let y = r.y as f64 + (r.h as f64 + m.ascent as f64 - m.descent.abs() as f64) * 0.5;
-            llimphi_text::draw_block(
-                scene,
-                face,
-                &llimphi_text::TextBlock {
-                    text: &text.content,
-                    size_px: text.size_px,
-                    color: text.color,
-                    origin: (x, y),
-                },
+        if let Some(text) = node.text.as_ref() {
+            // Parley alinea horizontalmente con max_width=r.w + Alignment::Center.
+            // Para el centrado vertical medimos primero el alto.
+            let mut block = llimphi_text::TextBlock {
+                text: &text.content,
+                size_px: text.size_px,
+                color: text.color,
+                origin: (r.x as f64, r.y as f64),
+                max_width: Some(r.w),
+                alignment: llimphi_text::Alignment::Center,
+                line_height: 1.0,
+            };
+            let m = llimphi_text::measure(typesetter, &block);
+            block.origin = (
+                r.x as f64,
+                r.y as f64 + ((r.h - m.height) as f64 * 0.5).max(0.0),
             );
+            llimphi_text::draw_block(scene, typesetter, &block);
         }
     }
 }
@@ -247,7 +238,7 @@ struct RuntimeState<A: App> {
     scene: vello::Scene,
     model: Option<A::Model>,
     cursor: PhysicalPosition<f64>,
-    face: Option<llimphi_text::Typeface>,
+    typesetter: llimphi_text::Typesetter,
 }
 
 impl<A: App> ApplicationHandler for Runtime<A> {
@@ -266,13 +257,7 @@ impl<A: App> ApplicationHandler for Runtime<A> {
         let hal = pollster::block_on(Hal::new(None)).expect("hal");
         let surface = WinitSurface::new(&hal, window.clone()).expect("surface");
         let renderer = Renderer::new(&hal).expect("renderer");
-        let face = match llimphi_text::Typeface::first_available(DEFAULT_FONT_CANDIDATES) {
-            Ok(t) => Some(t),
-            Err(e) => {
-                eprintln!("llimphi-ui: sin fuente disponible ({e}); el texto no se pintará");
-                None
-            }
-        };
+        let typesetter = llimphi_text::Typesetter::new();
         window.request_redraw();
         self.state = Some(RuntimeState {
             window,
@@ -282,7 +267,7 @@ impl<A: App> ApplicationHandler for Runtime<A> {
             scene: vello::Scene::new(),
             model: Some(A::init()),
             cursor: PhysicalPosition::new(0.0, 0.0),
-            face,
+            typesetter,
         });
     }
 
@@ -344,7 +329,7 @@ impl<A: App> ApplicationHandler for Runtime<A> {
                     .compute(mounted.root, (w as f32, h as f32))
                     .expect("layout");
                 state.scene.reset();
-                paint(&mut state.scene, &mounted, &computed, state.face.as_ref());
+                paint(&mut state.scene, &mounted, &computed, &mut state.typesetter);
                 if let Err(e) = state.renderer.render(
                     &state.hal,
                     &state.scene,
