@@ -213,6 +213,28 @@ pub type DragFn<Msg> = Arc<dyn Fn(DragPhase, f32, f32) -> Option<Msg> + Send + S
 /// qué Msg emitir en función de ese ID.
 pub type DropFn<Msg> = Arc<dyn Fn(u64) -> Option<Msg> + Send + Sync>;
 
+/// Rect absoluto del nodo (en coordenadas físicas del frame). Lo
+/// recibe el callback de [`View::paint_with`] para que pueda
+/// posicionar sus primitivas custom dentro del nodo.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PaintRect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+/// Callback de pintura custom. El runtime lo invoca durante el paint
+/// del nodo (entre el `fill`/`image` y el `text`) con el `Scene` vivo
+/// + el rect absoluto del nodo. Pensado para "canvas elements" tipo
+/// `dominium-canvas`, `pluma-editor` (osciloscopio de coherencia),
+/// `cosmos` (charts).
+///
+/// El callback no debe llamar a `scene.push_layer` sin un `pop_layer`
+/// correspondiente, ni reset el scene — sólo agregar primitivas que
+/// pertenezcan al rect del nodo.
+pub type PaintFn = Arc<dyn Fn(&mut vello::Scene, PaintRect) + Send + Sync>;
+
 /// Nodo de la vista declarativa. Estilo de layout (taffy) + relleno opcional
 /// (vello) + texto opcional (skrifa+vello) + Msg al click opcional + hijos.
 pub struct View<Msg> {
@@ -228,6 +250,12 @@ pub struct View<Msg> {
     /// El alfa por píxel de la imagen y el `Image::alpha` global se
     /// respetan; el `fill` (si lo hay) se pinta debajo como background.
     pub image: Option<Image>,
+    /// Callback de pintura custom. Si está presente, el runtime lo
+    /// invoca durante el paint del nodo con el `Scene` vivo + el rect
+    /// absoluto. Pensado para "canvas elements" (dominium, pluma,
+    /// cosmos) que pintan primitivas custom no expresables como una
+    /// composición de Views.
+    pub painter: Option<PaintFn>,
     pub on_click: Option<Msg>,
     /// Handler de drag. Si está presente, este nodo arrastra (y NO emite
     /// `on_click` al presionar — un nodo es uno u otro).
@@ -257,6 +285,7 @@ impl<Msg> View<Msg> {
             radius: 0.0,
             text: None,
             image: None,
+            painter: None,
             on_click: None,
             drag: None,
             drag_payload: None,
@@ -367,6 +396,19 @@ impl<Msg> View<Msg> {
         self
     }
 
+    /// Registra una closure de pintura custom. El runtime la invoca
+    /// con `(&mut vello::Scene, PaintRect)` durante el paint del
+    /// nodo. La closure es responsable de pintar primitivas custom
+    /// dentro del rect; no debe dejar `push_layer` sin par. Soporte
+    /// para canvas elements estilo dominium/pluma/cosmos.
+    pub fn paint_with<F>(mut self, painter: F) -> Self
+    where
+        F: Fn(&mut vello::Scene, PaintRect) + Send + Sync + 'static,
+    {
+        self.painter = Some(Arc::new(painter));
+        self
+    }
+
     /// Recorta los hijos al rect de este nodo (paint y hit-test). Útil
     /// para paneles con contenido virtualizado que no debe sangrar a
     /// vecinos (listas, scrollers, viewers).
@@ -396,6 +438,7 @@ struct MountedNode<Msg> {
     radius: f64,
     text: Option<TextSpec>,
     image: Option<Image>,
+    painter: Option<PaintFn>,
     on_click: Option<Msg>,
     drag: Option<DragFn<Msg>>,
     drag_payload: Option<u64>,
@@ -429,6 +472,7 @@ fn mount_recursive<Msg: Clone>(
         radius,
         text,
         image,
+        painter,
         on_click,
         drag,
         drag_payload,
@@ -445,6 +489,7 @@ fn mount_recursive<Msg: Clone>(
         radius,
         text,
         image,
+        painter,
         on_click,
         drag,
         drag_payload,
@@ -526,6 +571,17 @@ fn paint<Msg>(
                 let transform = Affine::translate((tx, ty)) * Affine::scale(s);
                 scene.draw_image(image, transform);
             }
+        }
+        if let Some(painter) = node.painter.as_ref() {
+            (painter)(
+                scene,
+                PaintRect {
+                    x: r.x,
+                    y: r.y,
+                    w: r.w,
+                    h: r.h,
+                },
+            );
         }
         if let Some(text) = node.text.as_ref() {
             // Parley resuelve la alineación horizontal vía max_width + alignment.

@@ -1,0 +1,22 @@
+[package]
+name = "dominium-canvas-llimphi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "dominium-canvas-llimphi — backend Llimphi del simulador. Reemplazo del `dominium-canvas-gpui`: recibe un `RenderPlan` (cadena `core → physics → iso → render-plan` agnóstica intacta) y devuelve un `View<Msg>` con `paint_with` que pinta los quads centrados en sus bounds usando vello."
+
+[dependencies]
+dominium-render-plan = { path = "../dominium-render-plan" }
+llimphi-ui = { workspace = true }
+
+[dev-dependencies]
+# Cadena completa para el example: arma un World + un IsoProjector y
+# llama a `build_plan` para que el canvas reciba un plan realista.
+dominium-core = { path = "../dominium-core" }
+dominium-iso = { path = "../dominium-iso" }
+
+[[example]]
+name = "canvas_demo"
+path = "examples/canvas_demo.rs"
