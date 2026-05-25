@@ -34,7 +34,7 @@ use llimphi_widget_text_editor::{
     EditorMetrics, EditorPalette, EditorState, FindState, Language, PointerEvent, Pos,
 };
 use llimphi_widget_text_editor_lsp::{
-    CompletionItem, HoverInfo, LspClient, NoopLspClient, RustAnalyzerClient,
+    CompletionItem, DefinitionLocation, HoverInfo, LspClient, NoopLspClient, RustAnalyzerClient,
 };
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
@@ -76,6 +76,11 @@ enum Msg {
     HoverRequest,
     /// Cierra el popup de hover (Esc, o cambio de cursor).
     HoverClose,
+    /// F12 — pide goto-definition. Cuando llega, abre el archivo
+    /// destino y posiciona el caret.
+    GotoDefinitionRequest,
+    /// El LSP devolvió la definition — abrir destino + posicionar.
+    GotoDefinitionApply(DefinitionLocation),
 }
 
 #[derive(Debug, Clone)]
@@ -270,6 +275,12 @@ impl App for EditorApp {
                         popup.info = latest;
                     }
                 }
+                // Goto-def: si llegó una definition, dispara apply en
+                // el próximo tick para no anidar update.
+                if let Some(loc) = m.lsp.latest_definition() {
+                    m.lsp.clear_definition();
+                    handle.dispatch(Msg::GotoDefinitionApply(loc));
+                }
                 m
             }
             Msg::CompletionsRequest => {
@@ -358,6 +369,46 @@ impl App for EditorApp {
                 m.lsp.clear_hover();
                 m
             }
+            Msg::GotoDefinitionRequest => {
+                let mut m = model;
+                let Some(path) = m.open_file.clone() else { return m };
+                let line = m.editor.cursor.caret.line;
+                let col = m.editor.cursor.caret.col;
+                m.lsp.clear_definition();
+                m.lsp.request_definition(&path, line, col);
+                m.status = "goto-def · esperando LSP…".into();
+                m
+            }
+            Msg::GotoDefinitionApply(loc) => {
+                let mut m = model;
+                m.lsp.clear_definition();
+                match fs::read_to_string(&loc.path) {
+                    Ok(content) => {
+                        // Si está abriendo otro archivo, did_close al previo.
+                        if let Some(prev) = m.open_file.take() {
+                            if prev != loc.path {
+                                m.lsp.did_close(&prev);
+                            }
+                        }
+                        let was_open = m.open_file.is_some();
+                        m.editor = EditorState::new();
+                        m.editor.set_text(&content);
+                        m.editor.set_caret_at(loc.line, loc.col);
+                        m.editor.ensure_caret_visible(EDITOR_VISIBLE_LINES);
+                        if !was_open {
+                            let ext = loc.path.extension().and_then(|s| s.to_str()).unwrap_or("");
+                            m.lsp.did_open(&loc.path, ext, &content);
+                        }
+                        m.open_file = Some(loc.path.clone());
+                        m.dirty = false;
+                        m.status = format!("goto-def · {}:{}", loc.path.display(), loc.line + 1);
+                    }
+                    Err(e) => {
+                        m.status = format!("goto-def · error abriendo {}: {e}", loc.path.display());
+                    }
+                }
+                m
+            }
             Msg::SaveResult(r) => {
                 let mut m = model;
                 m.status = match r {
@@ -439,6 +490,12 @@ impl App for EditorApp {
             {
                 return Some(Msg::HoverRequest);
             }
+        }
+        // F12 = goto-definition (sin modificadores).
+        if matches!(&event.key, Key::Named(NamedKey::F12))
+            && model.open_file.is_some()
+        {
+            return Some(Msg::GotoDefinitionRequest);
         }
         // Hover popup abierto + Esc → cerrar.
         if model.hover.is_some()

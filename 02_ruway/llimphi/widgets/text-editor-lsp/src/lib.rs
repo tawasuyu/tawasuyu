@@ -76,6 +76,20 @@ pub trait LspClient: Send {
     fn latest_hover(&self) -> Option<HoverInfo>;
     /// Borra el cache de hover.
     fn clear_hover(&mut self);
+    /// Dispara textDocument/definition. Fire-and-forget; el caller
+    /// polla `latest_definition`.
+    fn request_definition(&mut self, path: &Path, line: usize, col: usize);
+    /// Última definition recibida (path destino + pos de inicio).
+    fn latest_definition(&self) -> Option<DefinitionLocation>;
+    fn clear_definition(&mut self);
+}
+
+/// Resultado de un goto-definition: archivo destino + posición.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DefinitionLocation {
+    pub path: PathBuf,
+    pub line: usize,
+    pub col: usize,
 }
 
 /// Información de hover — espejo simplificado de `lsp_types::Hover`.
@@ -107,6 +121,11 @@ impl LspClient for NoopLspClient {
         None
     }
     fn clear_hover(&mut self) {}
+    fn request_definition(&mut self, _: &Path, _: usize, _: usize) {}
+    fn latest_definition(&self) -> Option<DefinitionLocation> {
+        None
+    }
+    fn clear_definition(&mut self) {}
 }
 
 // ---------------------------------------------------------------------
@@ -123,10 +142,13 @@ struct SharedInner {
     completions: Vec<CompletionItem>,
     /// Última hover info recibida.
     hover: Option<HoverInfo>,
+    /// Última definition recibida.
+    definition: Option<DefinitionLocation>,
     /// IDs de requests pendientes para distinguir responses; el reader
     /// usa estos sets para routear cada response al handler correcto.
     pending_completion_ids: std::collections::HashSet<i64>,
     pending_hover_ids: std::collections::HashSet<i64>,
+    pending_definition_ids: std::collections::HashSet<i64>,
 }
 
 type SharedState = Arc<Mutex<SharedInner>>;
@@ -311,6 +333,33 @@ impl LspClient for RustAnalyzerClient {
         }
     }
 
+    fn request_definition(&mut self, path: &Path, line: usize, col: usize) {
+        let id = self.alloc_id();
+        if let Ok(mut s) = self.state.lock() {
+            s.pending_definition_ids.insert(id);
+        }
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "textDocument/definition",
+            "params": {
+                "textDocument": { "uri": format!("file://{}", path.display()) },
+                "position": { "line": line, "character": col }
+            }
+        });
+        self.send_raw(req.to_string());
+    }
+
+    fn latest_definition(&self) -> Option<DefinitionLocation> {
+        self.state.lock().ok().and_then(|s| s.definition.clone())
+    }
+
+    fn clear_definition(&mut self) {
+        if let Ok(mut s) = self.state.lock() {
+            s.definition = None;
+        }
+    }
+
     fn did_open(&mut self, path: &Path, language: &str, text: &str) {
         self.versions.insert(path.to_path_buf(), 1);
         let notif = serde_json::json!({
@@ -487,17 +536,62 @@ fn handle_publish_diagnostics(json: &serde_json::Value, state: &SharedState) {
 /// Routea una response del server al handler correspondiente según
 /// qué set de pendientes la contenía.
 fn handle_response(id: i64, json: &serde_json::Value, state: &SharedState) {
-    let (was_completion, was_hover) = {
+    let (was_completion, was_hover, was_definition) = {
         let Ok(mut s) = state.lock() else { return };
         let c = s.pending_completion_ids.remove(&id);
         let h = s.pending_hover_ids.remove(&id);
-        (c, h)
+        let d = s.pending_definition_ids.remove(&id);
+        (c, h, d)
     };
     if was_completion {
         handle_completion_response(json, state);
     }
     if was_hover {
         handle_hover_response(json, state);
+    }
+    if was_definition {
+        handle_definition_response(json, state);
+    }
+}
+
+fn handle_definition_response(json: &serde_json::Value, state: &SharedState) {
+    let Some(result) = json.get("result") else { return };
+    if result.is_null() {
+        return;
+    }
+    // `result` puede ser:
+    // - Location          { uri, range }
+    // - Location[]
+    // - LocationLink[]    { targetUri, targetSelectionRange }
+    // Tomamos la primera location en cualquier caso.
+    let loc_value = if result.is_array() {
+        result.as_array().and_then(|a| a.first()).cloned()
+    } else {
+        Some(result.clone())
+    };
+    let Some(loc) = loc_value else { return };
+
+    let (uri, range) = if let Some(u) = loc.get("uri") {
+        (u, loc.get("range"))
+    } else if let Some(u) = loc.get("targetUri") {
+        (
+            u,
+            loc.get("targetSelectionRange").or_else(|| loc.get("targetRange")),
+        )
+    } else {
+        return;
+    };
+    let Some(uri) = uri.as_str() else { return };
+    let path = match uri.strip_prefix("file://") {
+        Some(p) => PathBuf::from(p),
+        None => return,
+    };
+    let Some(range) = range else { return };
+    let Some(start) = range.get("start") else { return };
+    let line = start.get("line").and_then(|n| n.as_u64()).unwrap_or(0) as usize;
+    let col = start.get("character").and_then(|n| n.as_u64()).unwrap_or(0) as usize;
+    if let Ok(mut s) = state.lock() {
+        s.definition = Some(DefinitionLocation { path, line, col });
     }
 }
 
@@ -747,6 +841,52 @@ mod tests {
         let v = serde_json::json!({ "label": "main" });
         let c = parse_completion(&v).unwrap();
         assert_eq!(c.text_to_insert(), "main");
+    }
+
+    fn make_state() -> SharedState {
+        Arc::new(Mutex::new(SharedInner::default()))
+    }
+
+    #[test]
+    fn handle_definition_location_simple() {
+        let s = make_state();
+        let json = serde_json::json!({
+            "id": 1,
+            "result": {
+                "uri": "file:///tmp/x.rs",
+                "range": {
+                    "start": { "line": 10, "character": 4 },
+                    "end":   { "line": 10, "character": 9 }
+                }
+            }
+        });
+        handle_definition_response(&json, &s);
+        let d = s.lock().unwrap().definition.clone().unwrap();
+        assert_eq!(d.path, PathBuf::from("/tmp/x.rs"));
+        assert_eq!(d.line, 10);
+        assert_eq!(d.col, 4);
+    }
+
+    #[test]
+    fn handle_definition_location_link_array() {
+        let s = make_state();
+        let json = serde_json::json!({
+            "id": 1,
+            "result": [
+                {
+                    "targetUri": "file:///tmp/y.rs",
+                    "targetSelectionRange": {
+                        "start": { "line": 0, "character": 7 },
+                        "end":   { "line": 0, "character": 12 }
+                    }
+                }
+            ]
+        });
+        handle_definition_response(&json, &s);
+        let d = s.lock().unwrap().definition.clone().unwrap();
+        assert_eq!(d.path, PathBuf::from("/tmp/y.rs"));
+        assert_eq!(d.line, 0);
+        assert_eq!(d.col, 7);
     }
 
     #[test]
