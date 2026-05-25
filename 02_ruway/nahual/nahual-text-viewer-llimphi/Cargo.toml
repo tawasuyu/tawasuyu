@@ -1,0 +1,13 @@
+[package]
+name = "nahual-text-viewer-llimphi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "nahual-text-viewer-llimphi — visor de texto plano sobre Llimphi. Crate fino con la lógica de carga (size cap + null-byte guard + UTF-8 check) extraída en `PreviewState` + helper `load_preview`, y un `text_viewer_view` que pinta header + body con el tema activo."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }

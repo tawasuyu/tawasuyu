@@ -17,3 +17,4 @@ llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-list = { workspace = true }
 llimphi-widget-splitter = { workspace = true }
+nahual-text-viewer-llimphi = { workspace = true }

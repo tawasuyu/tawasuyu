@@ -1,24 +1,27 @@
 //! `nahual-shell-llimphi` — MVP del shell nahual sobre Llimphi.
 //!
-//! Composición mínima: barra superior con la ruta + split horizontal con
-//! lista de entradas a la izquierda y previsualización de texto a la
+//! Composición mínima: barra superior con la ruta + split draggable con
+//! lista de entradas a la izquierda y `nahual-text-viewer-llimphi` a la
 //! derecha. Foco en validar la composición Llimphi y consumir widgets
-//! reusables (`llimphi-widget-list`), no en paridad con el shell GPUI.
+//! reusables, no en paridad con el shell GPUI.
 //!
 //! Lo que **sí** hace este MVP:
 //! - Navegación con teclado: ↑/↓ y rueda mueven la selección/scroll;
 //!   Enter entra a un directorio o abre un archivo; Backspace sube al
 //!   padre.
 //! - Click en una fila: selecciona; si es archivo, lo previsualiza.
-//! - Preview de archivos texto pequeños (≤ 256 KB, sólo UTF-8 sin null
-//!   bytes). El resto se etiqueta como "binario" o "muy grande".
+//! - Preview de archivos texto pequeños (delegado al crate
+//!   `nahual-text-viewer-llimphi`, ≤ 256 KB, UTF-8 sin null bytes).
 //! - Recorte real de paneles (`clip = true`): contenido virtualizado o
 //!   texto largo no sangra a vecinos.
+//! - Splitter draggable (vía `llimphi-widget-splitter`).
 //!
 //! Lo que **todavía** no:
 //! - `layout.json` / `Persister` / hot-reload.
 //! - Otros containers (Tabs, Tiled) y otros viewers (Image, Database).
-//! - Splitter draggable (necesita tracking de drag en llimphi-ui).
+//! - AppBus: el viewer recibe el path directo desde el modelo. Cuando
+//!   tengamos un bus, el shell publica `EntitySelected` y los viewers
+//!   se suscriben.
 
 use std::cmp::min;
 use std::fs;
@@ -33,6 +36,10 @@ use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, Nam
 use llimphi_theme::Theme;
 use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
 use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
+use nahual_text_viewer_llimphi::{
+    load_preview, text_viewer_view, PreviewState, TextViewerPalette,
+    DEFAULT_PREVIEW_BYTES_MAX,
+};
 
 fn main() {
     llimphi_ui::run::<Shell>();
@@ -42,7 +49,6 @@ fn main() {
 // Modelo
 // ---------------------------------------------------------------------
 
-const PREVIEW_BYTES_MAX: u64 = 256 * 1024;
 const ROW_HEIGHT: f32 = 22.0;
 /// Cuántas filas mostramos a la vez en el panel de la lista. Calibrado
 /// para un viewport de 1200×800 (alto del panel ≈ 760, header ≈ 24).
@@ -55,14 +61,6 @@ const WHEEL_LINES_PER_ROW: f32 = 1.0;
 struct Entry {
     name: String,
     is_dir: bool,
-}
-
-enum Preview {
-    Empty,
-    Text(String),
-    Binary,
-    TooBig(u64),
-    Error(String),
 }
 
 struct Model {
@@ -78,7 +76,7 @@ struct Model {
     wheel_accum: f32,
     /// Ancho del panel izquierdo en px. Lo muta el drag del splitter.
     list_width: f32,
-    preview: Preview,
+    preview: PreviewState,
     /// Path del archivo que está previsualizado (si lo hay), para mostrar
     /// el nombre en el header del panel derecho.
     preview_of: Option<PathBuf>,
@@ -125,7 +123,7 @@ impl App for Shell {
             visible_offset: 0,
             wheel_accum: 0.0,
             list_width: 400.0,
-            preview: Preview::Empty,
+            preview: PreviewState::Empty,
             preview_of: None,
         }
     }
@@ -199,7 +197,7 @@ impl App for Shell {
                     m.entries = scan_dir(&m.cwd);
                     m.selected = 0;
                     m.visible_offset = 0;
-                    m.preview = Preview::Empty;
+                    m.preview = PreviewState::Empty;
                     m.preview_of = None;
                 }
             }
@@ -218,7 +216,7 @@ impl App for Shell {
                     .unwrap_or(0);
                 m.visible_offset = 0;
                 sync_offset(&mut m);
-                m.preview = Preview::Empty;
+                m.preview = PreviewState::Empty;
                 m.preview_of = None;
                 preview_selected(&mut m);
             }
@@ -247,9 +245,14 @@ impl App for Shell {
     fn view(model: &Self::Model) -> View<Self::Msg> {
         let theme = Theme::dark();
         let splitter_palette = SplitterPalette::from_theme(&theme);
+        let viewer_palette = TextViewerPalette::from_theme(&theme);
         let header = header_bar(model, &theme);
         let list_pane = build_list_pane(model, &theme);
-        let viewer_pane = viewer_pane_view(model, &theme);
+        let viewer_pane = text_viewer_view::<Msg>(
+            &model.preview,
+            model.preview_of.as_deref(),
+            &viewer_palette,
+        );
 
         let body = splitter_two(
             Direction::Row,
@@ -351,81 +354,6 @@ fn build_list_pane(model: &Model, theme: &Theme) -> View<Msg> {
     list
 }
 
-fn viewer_pane_view(model: &Model, theme: &Theme) -> View<Msg> {
-    let header_text = match &model.preview_of {
-        Some(p) => p
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_default(),
-        None => "(seleccioná un archivo)".to_string(),
-    };
-
-    let cap = View::new(Style {
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(20.0_f32),
-        },
-        padding: Rect {
-            left: length(12.0_f32),
-            right: length(12.0_f32),
-            top: length(0.0_f32),
-            bottom: length(0.0_f32),
-        },
-        align_items: Some(AlignItems::Center),
-        ..Default::default()
-    })
-    .text_aligned(header_text, 10.0, theme.fg_muted, Alignment::Start);
-
-    let (body_text, body_color) = match &model.preview {
-        Preview::Empty => ("—".to_string(), theme.fg_muted),
-        Preview::Text(s) => (s.clone(), theme.fg_text),
-        Preview::Binary => (
-            "(archivo binario — sin preview)".to_string(),
-            theme.fg_muted,
-        ),
-        Preview::TooBig(n) => (
-            format!("(archivo muy grande: {} bytes — sin preview)", n),
-            theme.fg_muted,
-        ),
-        Preview::Error(e) => (format!("(error: {e})"), theme.fg_destructive),
-    };
-
-    let body = View::new(Style {
-        flex_grow: 1.0,
-        size: Size {
-            width: percent(1.0_f32),
-            height: percent(1.0_f32),
-        },
-        padding: Rect {
-            left: length(12.0_f32),
-            right: length(12.0_f32),
-            top: length(6.0_f32),
-            bottom: length(12.0_f32),
-        },
-        ..Default::default()
-    })
-    .text_aligned(body_text, 12.0, body_color, Alignment::Start);
-
-    View::new(Style {
-        flex_direction: FlexDirection::Column,
-        flex_grow: 1.0,
-        size: Size {
-            width: percent(1.0_f32),
-            height: percent(1.0_f32),
-        },
-        padding: Rect {
-            left: length(0.0_f32),
-            right: length(0.0_f32),
-            top: length(6.0_f32),
-            bottom: length(0.0_f32),
-        },
-        ..Default::default()
-    })
-    .fill(theme.bg_app)
-    .clip(true) // recorta texto largo al pane.
-    .children(vec![cap, body])
-}
-
 // ---------------------------------------------------------------------
 // Lógica de directorio / preview
 // ---------------------------------------------------------------------
@@ -465,58 +393,16 @@ fn sync_offset(m: &mut Model) {
 
 fn preview_selected(m: &mut Model) {
     let Some(entry) = m.entries.get(m.selected) else {
-        m.preview = Preview::Empty;
+        m.preview = PreviewState::Empty;
         m.preview_of = None;
         return;
     };
     if entry.is_dir {
-        m.preview = Preview::Empty;
+        m.preview = PreviewState::Empty;
         m.preview_of = None;
         return;
     }
     let path = m.cwd.join(&entry.name);
-    m.preview_of = Some(path.clone());
-    match fs::metadata(&path) {
-        Ok(meta) if meta.len() > PREVIEW_BYTES_MAX => {
-            m.preview = Preview::TooBig(meta.len());
-            return;
-        }
-        Err(e) => {
-            m.preview = Preview::Error(e.to_string());
-            return;
-        }
-        _ => {}
-    }
-    match fs::read(&path) {
-        Ok(bytes) => {
-            if bytes.contains(&0) {
-                m.preview = Preview::Binary;
-            } else {
-                match String::from_utf8(bytes) {
-                    Ok(s) => m.preview = Preview::Text(truncate_preview(&s)),
-                    Err(_) => m.preview = Preview::Binary,
-                }
-            }
-        }
-        Err(e) => m.preview = Preview::Error(e.to_string()),
-    }
+    m.preview = load_preview(&path, DEFAULT_PREVIEW_BYTES_MAX);
+    m.preview_of = Some(path);
 }
-
-/// Llimphi-text wrappea hasta `max_width`; con archivos largos parley
-/// puede tardar. Recortamos las primeras N líneas para mantener el render
-/// instantáneo aunque el archivo entre en el límite de PREVIEW_BYTES_MAX.
-fn truncate_preview(s: &str) -> String {
-    const MAX_LINES: usize = 200;
-    const MAX_CHARS: usize = 8_000;
-    let mut out = String::new();
-    for (i, line) in s.lines().enumerate() {
-        if i >= MAX_LINES || out.len() + line.len() + 1 > MAX_CHARS {
-            out.push_str("\n…");
-            break;
-        }
-        out.push_str(line);
-        out.push('\n');
-    }
-    out
-}
-
