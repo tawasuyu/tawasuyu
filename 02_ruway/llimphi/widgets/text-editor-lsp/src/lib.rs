@@ -35,12 +35,40 @@ use std::sync::{Arc, Mutex};
 
 use llimphi_widget_text_editor::{Diagnostic, DiagnosticRange, Pos, Severity};
 
+/// Item de completion — mirror minimal de `lsp_types::CompletionItem`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompletionItem {
+    pub label: String,
+    /// Texto a insertar. Si `None`, se usa `label`.
+    pub insert_text: Option<String>,
+    /// Tipo del símbolo según LSP (Function, Variable, etc.) — para
+    /// mostrar un ícono. Aquí lo guardamos como string corto.
+    pub kind: Option<String>,
+    /// Documentación corta — el primer renglón típicamente.
+    pub detail: Option<String>,
+}
+
+impl CompletionItem {
+    pub fn text_to_insert(&self) -> &str {
+        self.insert_text.as_deref().unwrap_or(self.label.as_str())
+    }
+}
+
 /// Contrato que un client LSP debe cumplir para alimentar al editor.
 pub trait LspClient: Send {
     fn diagnostics(&self, path: &Path) -> Vec<Diagnostic>;
     fn did_open(&mut self, path: &Path, language: &str, text: &str);
     fn did_change(&mut self, path: &Path, new_text: &str);
     fn did_close(&mut self, path: &Path);
+    /// Dispara una petición de completions en `(line, col)` del path.
+    /// Fire-and-forget; la respuesta se lee con `latest_completions`.
+    fn request_completions(&mut self, path: &Path, line: usize, col: usize);
+    /// Última lista de completions recibida (cualquier path/pos).
+    /// Vacío hasta que el server responda. El client la limpia cuando
+    /// el caller llama `clear_completions`.
+    fn latest_completions(&self) -> Vec<CompletionItem>;
+    /// Borra el cache de completions — útil al cerrar el popup.
+    fn clear_completions(&mut self);
 }
 
 /// Stub que no hace nada — útil cuando no hay LSP configurado o para tests.
@@ -54,14 +82,31 @@ impl LspClient for NoopLspClient {
     fn did_open(&mut self, _: &Path, _: &str, _: &str) {}
     fn did_change(&mut self, _: &Path, _: &str) {}
     fn did_close(&mut self, _: &Path) {}
+    fn request_completions(&mut self, _: &Path, _: usize, _: usize) {}
+    fn latest_completions(&self) -> Vec<CompletionItem> {
+        Vec::new()
+    }
+    fn clear_completions(&mut self) {}
 }
 
 // ---------------------------------------------------------------------
 // Rust-analyzer client real
 // ---------------------------------------------------------------------
 
-/// State compartido: paths → versión + diagnostics actuales.
-type SharedState = Arc<Mutex<HashMap<PathBuf, Vec<Diagnostic>>>>;
+/// State compartido: paths → versión + diagnostics actuales + última
+/// lista de completions recibida.
+#[derive(Default)]
+struct SharedInner {
+    diagnostics: HashMap<PathBuf, Vec<Diagnostic>>,
+    /// Última respuesta de completions — sobreescribe cualquier
+    /// request previo. El caller decide cuándo limpiar.
+    completions: Vec<CompletionItem>,
+    /// IDs de requests pendientes para distinguir responses de
+    /// notifications. Hoy solo trackeamos completions.
+    pending_completion_ids: std::collections::HashSet<i64>,
+}
+
+type SharedState = Arc<Mutex<SharedInner>>;
 
 pub struct RustAnalyzerClient {
     /// Diagnostics activos por path. Lo escribe la task reader.
@@ -86,7 +131,7 @@ impl RustAnalyzerClient {
 
     /// Como `start` pero permite indicar el binary (`pylsp`, etc.).
     pub fn with_command(workspace_root: PathBuf, command: &str) -> Self {
-        let state: SharedState = Arc::new(Mutex::new(HashMap::new()));
+        let state: SharedState = Arc::new(Mutex::new(SharedInner::default()));
         let runtime = match tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -182,8 +227,38 @@ impl LspClient for RustAnalyzerClient {
         self.state
             .lock()
             .ok()
-            .and_then(|s| s.get(path).cloned())
+            .and_then(|s| s.diagnostics.get(path).cloned())
             .unwrap_or_default()
+    }
+
+    fn request_completions(&mut self, path: &Path, line: usize, col: usize) {
+        let id = self.alloc_id();
+        if let Ok(mut s) = self.state.lock() {
+            s.pending_completion_ids.insert(id);
+        }
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "textDocument/completion",
+            "params": {
+                "textDocument": { "uri": format!("file://{}", path.display()) },
+                "position": { "line": line, "character": col }
+            }
+        });
+        self.send_raw(req.to_string());
+    }
+
+    fn latest_completions(&self) -> Vec<CompletionItem> {
+        self.state
+            .lock()
+            .map(|s| s.completions.clone())
+            .unwrap_or_default()
+    }
+
+    fn clear_completions(&mut self) {
+        if let Ok(mut s) = self.state.lock() {
+            s.completions.clear();
+        }
     }
 
     fn did_open(&mut self, path: &Path, language: &str, text: &str) {
@@ -236,7 +311,7 @@ impl LspClient for RustAnalyzerClient {
         });
         self.send_raw(notif.to_string());
         if let Ok(mut s) = self.state.lock() {
-            s.remove(path);
+            s.diagnostics.remove(path);
         }
     }
 }
@@ -323,8 +398,9 @@ async fn run_server(
                     == Some("textDocument/publishDiagnostics")
                 {
                     handle_publish_diagnostics(&json, &state);
+                } else if let Some(id) = json.get("id").and_then(|i| i.as_i64()) {
+                    handle_response(id, &json, &state);
                 }
-                // Responses/otras notifications: por ahora ignorados.
             }
         }
     });
@@ -354,7 +430,82 @@ fn handle_publish_diagnostics(json: &serde_json::Value, state: &SharedState) {
         .filter_map(parse_lsp_diagnostic)
         .collect();
     if let Ok(mut s) = state.lock() {
-        s.insert(path, diagnostics);
+        s.diagnostics.insert(path, diagnostics);
+    }
+}
+
+/// Maneja una response del server. Hoy sólo nos importan las respuestas
+/// de completions pendientes; el resto se ignora.
+fn handle_response(id: i64, json: &serde_json::Value, state: &SharedState) {
+    let was_completion = {
+        let Ok(mut s) = state.lock() else { return };
+        s.pending_completion_ids.remove(&id)
+    };
+    if !was_completion {
+        return;
+    }
+    let Some(result) = json.get("result") else { return };
+    // `result` puede ser una array (CompletionItem[]) o un objeto
+    // { isIncomplete, items: [...] }. Manejamos ambos.
+    let items_arr = if let Some(arr) = result.as_array() {
+        arr.clone()
+    } else if let Some(items) = result.get("items").and_then(|i| i.as_array()) {
+        items.clone()
+    } else {
+        return;
+    };
+    let completions: Vec<CompletionItem> = items_arr.iter().filter_map(parse_completion).collect();
+    if let Ok(mut s) = state.lock() {
+        s.completions = completions;
+    }
+}
+
+fn parse_completion(v: &serde_json::Value) -> Option<CompletionItem> {
+    let label = v.get("label")?.as_str()?.to_string();
+    let insert_text = v
+        .get("insertText")
+        .and_then(|s| s.as_str())
+        .map(String::from);
+    let kind = v
+        .get("kind")
+        .and_then(|k| k.as_u64())
+        .map(|n| completion_kind_label(n).to_string());
+    let detail = v
+        .get("detail")
+        .and_then(|d| d.as_str())
+        .map(String::from);
+    Some(CompletionItem { label, insert_text, kind, detail })
+}
+
+/// Etiqueta corta para el CompletionItemKind de LSP (1..25).
+fn completion_kind_label(k: u64) -> &'static str {
+    match k {
+        1 => "Text",
+        2 => "Method",
+        3 => "Function",
+        4 => "Ctor",
+        5 => "Field",
+        6 => "Var",
+        7 => "Class",
+        8 => "Iface",
+        9 => "Mod",
+        10 => "Prop",
+        11 => "Unit",
+        12 => "Value",
+        13 => "Enum",
+        14 => "Keyword",
+        15 => "Snip",
+        16 => "Color",
+        17 => "File",
+        18 => "Ref",
+        19 => "Folder",
+        20 => "EnumMember",
+        21 => "Const",
+        22 => "Struct",
+        23 => "Event",
+        24 => "Op",
+        25 => "TypeParam",
+        _ => "?",
     }
 }
 
@@ -438,6 +589,28 @@ mod tests {
         });
         let d = parse_lsp_diagnostic(&json).unwrap();
         assert_eq!(d.severity, Severity::Information);
+    }
+
+    #[test]
+    fn parse_completion_minimo() {
+        let v = serde_json::json!({
+            "label": "to_string",
+            "insertText": "to_string()",
+            "kind": 2,
+            "detail": "fn(&self) -> String"
+        });
+        let c = parse_completion(&v).unwrap();
+        assert_eq!(c.label, "to_string");
+        assert_eq!(c.insert_text.as_deref(), Some("to_string()"));
+        assert_eq!(c.kind.as_deref(), Some("Method"));
+        assert_eq!(c.detail.as_deref(), Some("fn(&self) -> String"));
+    }
+
+    #[test]
+    fn parse_completion_sin_insert_text_usa_label() {
+        let v = serde_json::json!({ "label": "main" });
+        let c = parse_completion(&v).unwrap();
+        assert_eq!(c.text_to_insert(), "main");
     }
 
     #[test]

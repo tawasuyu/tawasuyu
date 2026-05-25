@@ -33,7 +33,9 @@ use llimphi_widget_text_editor::{
     all_matches, find_next, find_prev, text_editor_view_full, Clipboard, Diagnostic,
     EditorMetrics, EditorPalette, EditorState, FindState, Language, PointerEvent, Pos,
 };
-use llimphi_widget_text_editor_lsp::{LspClient, NoopLspClient, RustAnalyzerClient};
+use llimphi_widget_text_editor_lsp::{
+    CompletionItem, LspClient, NoopLspClient, RustAnalyzerClient,
+};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
 
@@ -60,8 +62,16 @@ enum Msg {
     FindKey(KeyEvent),
     FindNext,
     FindPrev,
-    /// Tick periódico — pull de diagnostics del LSP.
+    /// Tick periódico — pull de diagnostics + completions del LSP.
     PollLsp,
+    /// Ctrl+Space — pide completions al LSP en la pos del caret.
+    CompletionsRequest,
+    /// El usuario navega el dropdown de completions.
+    CompletionsNav { delta: i32 },
+    /// Aplica el item seleccionado (Enter).
+    CompletionsApply,
+    /// Cierra el dropdown.
+    CompletionsClose,
 }
 
 #[derive(Debug, Clone)]
@@ -94,6 +104,15 @@ struct Model {
     /// Cliente LSP real: `--lsp` spawnea rust-analyzer (o el binary
     /// pasado con `--lsp-cmd=...`). En modo no-op cuando no se pide.
     lsp: Box<dyn LspClient>,
+    /// Items del popup de completions; `None` si el popup está cerrado.
+    completions: Option<CompletionsBar>,
+}
+
+struct CompletionsBar {
+    items: Vec<CompletionItem>,
+    selected: usize,
+    /// Pos donde se pidió la completion — para anclar el popup visual.
+    anchor: (usize, usize),
 }
 
 struct FindBarState {
@@ -163,6 +182,7 @@ impl App for EditorApp {
             find: None,
             demo_lsp,
             lsp,
+            completions: None,
         }
     }
 
@@ -201,12 +221,71 @@ impl App for EditorApp {
                 let mut m = model;
                 if let Some(path) = m.open_file.as_ref() {
                     let diags = m.lsp.diagnostics(path);
-                    // Sólo reemplaza si hay cambio — evita repaint si
-                    // el LSP no envió nada nuevo.
                     if diags != m.editor.diagnostics {
                         m.editor.set_diagnostics(diags);
                     }
                 }
+                // Si hay request de completions pendiente (popup abierto
+                // sin items todavía), pollamos.
+                if let Some(bar) = m.completions.as_mut() {
+                    let latest = m.lsp.latest_completions();
+                    if !latest.is_empty() && latest != bar.items {
+                        bar.items = latest;
+                        bar.selected = 0;
+                    }
+                }
+                m
+            }
+            Msg::CompletionsRequest => {
+                let mut m = model;
+                let Some(path) = m.open_file.clone() else { return m };
+                let line = m.editor.cursor.caret.line;
+                let col = m.editor.cursor.caret.col;
+                m.lsp.clear_completions();
+                m.lsp.request_completions(&path, line, col);
+                m.completions = Some(CompletionsBar {
+                    items: Vec::new(),
+                    selected: 0,
+                    anchor: (line, col),
+                });
+                m
+            }
+            Msg::CompletionsNav { delta } => {
+                let mut m = model;
+                if let Some(bar) = m.completions.as_mut() {
+                    if !bar.items.is_empty() {
+                        let n = bar.items.len() as i32;
+                        let sel = (bar.selected as i32 + delta).rem_euclid(n);
+                        bar.selected = sel as usize;
+                    }
+                }
+                m
+            }
+            Msg::CompletionsApply => {
+                let mut m = model;
+                let Some(bar) = m.completions.take() else { return m };
+                m.lsp.clear_completions();
+                let Some(item) = bar.items.get(bar.selected) else { return m };
+                let text = item.text_to_insert().to_string();
+                // Insertamos en el caret actual; sin smart-replace del
+                // prefijo (TODO: detectar word boundary y reemplazar).
+                let _ = llimphi_widget_text_editor::ops::replace_selection(
+                    &mut m.editor.buffer,
+                    &mut m.editor.cursor,
+                    &text,
+                );
+                m.editor.bump_edit_seq();
+                m.dirty = true;
+                if let Some(path) = m.open_file.clone() {
+                    let new_text = m.editor.text();
+                    m.lsp.did_change(&path, &new_text);
+                }
+                m
+            }
+            Msg::CompletionsClose => {
+                let mut m = model;
+                m.completions = None;
+                m.lsp.clear_completions();
                 m
             }
             Msg::SaveResult(r) => {
@@ -250,6 +329,19 @@ impl App for EditorApp {
         if event.state != KeyState::Pressed {
             return None;
         }
+        // Si el popup de completions está abierto, intercepta nav.
+        if model.completions.is_some() {
+            match &event.key {
+                Key::Named(NamedKey::Escape) => return Some(Msg::CompletionsClose),
+                Key::Named(NamedKey::ArrowDown) => return Some(Msg::CompletionsNav { delta: 1 }),
+                Key::Named(NamedKey::ArrowUp) => return Some(Msg::CompletionsNav { delta: -1 }),
+                Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Tab) => {
+                    return Some(Msg::CompletionsApply);
+                }
+                _ => {}
+            }
+        }
+
         // Atajos globales
         if event.modifiers.ctrl {
             if matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("s")) {
@@ -264,6 +356,12 @@ impl App for EditorApp {
                 && model.find.is_some()
             {
                 return Some(if event.modifiers.shift { Msg::FindPrev } else { Msg::FindNext });
+            }
+            // Ctrl+Space pide completions al LSP.
+            if matches!(&event.key, Key::Named(NamedKey::Space))
+                && model.open_file.is_some()
+            {
+                return Some(Msg::CompletionsRequest);
             }
         }
 
@@ -388,6 +486,9 @@ fn editor_panel(model: &Model, theme: &Theme) -> View<Msg> {
     if let Some(find) = model.find.as_ref() {
         children.push(find_bar(find, theme));
     }
+    if let Some(bar) = model.completions.as_ref() {
+        children.push(completions_bar_view(bar, theme));
+    }
     let editor_view = match &model.open_file {
         None => empty_editor_placeholder(theme),
         Some(path) => {
@@ -423,6 +524,76 @@ fn editor_panel(model: &Model, theme: &Theme) -> View<Msg> {
 }
 
 const FIND_BAR_H: f32 = 32.0;
+const COMPLETIONS_BAR_H: f32 = 120.0;
+const COMPLETIONS_ROW_H: f32 = 22.0;
+const COMPLETIONS_MAX_ITEMS_VISIBLE: usize = 5;
+
+fn completions_bar_view(bar: &CompletionsBar, theme: &Theme) -> View<Msg> {
+    let mut rows: Vec<View<Msg>> = Vec::with_capacity(COMPLETIONS_MAX_ITEMS_VISIBLE);
+    let header = if bar.items.is_empty() {
+        format!("completions @ {}:{} · esperando LSP…", bar.anchor.0 + 1, bar.anchor.1)
+    } else {
+        format!(
+            "completions @ {}:{} · {} / {} · Tab/Enter aplica · Esc cierra",
+            bar.anchor.0 + 1,
+            bar.anchor.1,
+            bar.selected + 1,
+            bar.items.len(),
+        )
+    };
+    rows.push(
+        View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
+            padding: Rect {
+                left: length(8.0_f32),
+                right: length(8.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .fill(theme.bg_panel_alt)
+        .text_aligned(header, 10.0, theme.fg_muted, Alignment::Start),
+    );
+
+    let visible_start = bar
+        .selected
+        .saturating_sub(COMPLETIONS_MAX_ITEMS_VISIBLE.saturating_sub(1));
+    let visible_end =
+        (visible_start + COMPLETIONS_MAX_ITEMS_VISIBLE).min(bar.items.len());
+    for i in visible_start..visible_end {
+        let item = &bar.items[i];
+        let selected = i == bar.selected;
+        let bg = if selected { theme.bg_selected } else { theme.bg_panel };
+        let kind = item.kind.as_deref().unwrap_or("?");
+        let detail = item.detail.as_deref().unwrap_or("");
+        let label = format!("[{kind:>5}] {}  {}", item.label, detail);
+        rows.push(
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: length(COMPLETIONS_ROW_H) },
+                padding: Rect {
+                    left: length(10.0_f32),
+                    right: length(8.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .fill(bg)
+            .text_aligned(label, 11.0, theme.fg_text, Alignment::Start),
+        );
+    }
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: length(COMPLETIONS_BAR_H) },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(rows)
+}
 
 fn find_bar(find: &FindBarState, theme: &Theme) -> View<Msg> {
     let tp = TextInputPalette::from_theme(theme);
