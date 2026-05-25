@@ -186,6 +186,11 @@ impl EditorState {
         self.cursor = Cursor::at(last_line, col);
         self.undo.clear();
         self.bump_edit_seq();
+        // Cambio masivo de buffer — el árbol cached del highlighter
+        // queda inválido. Lo borramos para forzar full parse próximo.
+        for lang in [Language::Rust, Language::Python] {
+            crate::highlight::invalidate_tree_cache(lang);
+        }
     }
 
     /// Incrementa el contador de ediciones — invalidando el cache de

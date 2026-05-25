@@ -121,6 +121,23 @@ impl SyntaxPalette {
 thread_local! {
     static PARSER_POOL: std::cell::RefCell<std::collections::HashMap<Language, tree_sitter::Parser>>
         = std::cell::RefCell::new(std::collections::HashMap::new());
+    /// Cache del último árbol parseado por lenguaje. Se pasa como hint
+    /// al siguiente `parse(source, Some(&old_tree))` — tree-sitter
+    /// puede aprovechar partes del árbol viejo aunque no apliquemos
+    /// InputEdits explícitos (lo cual sería el "verdadero incremental";
+    /// queda pendiente como TODO). Este cache ya ayuda en parsers que
+    /// re-usan subtrees por valor de hash.
+    static TREE_CACHE: std::cell::RefCell<std::collections::HashMap<Language, tree_sitter::Tree>>
+        = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Invalida el árbol cached para `language` — el caller lo invoca al
+/// hacer `set_text` o cambios masivos donde el hint puede confundir
+/// más que ayudar. No es estrictamente necesario, pero es defensivo.
+pub fn invalidate_tree_cache(language: Language) {
+    TREE_CACHE.with(|c| {
+        c.borrow_mut().remove(&language);
+    });
 }
 
 /// Highlighter — fina capa sin estado mutable propio. La parser real
@@ -158,19 +175,24 @@ impl Highlighter {
         source: &str,
         kind_of: fn(&str) -> Option<TokenKind>,
     ) -> Vec<Vec<Span>> {
-        // Toma el parser del pool (o lo crea); parsea; guarda devuelta.
-        // Si make_ts_parser falla (lenguaje sin grammar), fallback Plain.
         let language = self.language;
+        // Parsea con hint del tree previo si lo hay. tree-sitter puede
+        // reusar subtrees por hash incluso sin InputEdits aplicados.
         let tree_opt = PARSER_POOL.with(|pool| {
             let mut pool = pool.borrow_mut();
             let parser = pool.entry(language).or_insert_with(|| {
                 make_ts_parser(language).unwrap_or_else(tree_sitter::Parser::new)
             });
-            parser.parse(source, None)
+            let old = TREE_CACHE.with(|c| c.borrow().get(&language).cloned());
+            parser.parse(source, old.as_ref())
         });
         let Some(tree) = tree_opt else {
             return plain_lines(source);
         };
+        // Guarda el nuevo árbol para la próxima invocación.
+        TREE_CACHE.with(|c| {
+            c.borrow_mut().insert(language, tree.clone());
+        });
 
         // Por línea: recopilamos spans de los nodos *named* tipados que
         // matchean kind_of. Luego rellenamos los huecos con `Other`.
