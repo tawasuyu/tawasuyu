@@ -3,21 +3,28 @@
 //! Uso:
 //!   pluma-notebook-llimphi [ruta.pluma-nb]
 //!
-//! Sin argumento, abre un notebook demo (markdown + dos celdas de código +
-//! embed de pineal) para mostrar la vista sin necesitar un archivo en disco.
+//! Sin argumento, abre un notebook demo con las celdas posicionadas en
+//! canvas para mostrar el modo espacial.
 //!
-//! MVP: solo render. Sin edición de fuentes, sin ejecución contra kernel,
-//! sin scroll (todas las celdas se apilan; si exceden la ventana se cortan).
-//! Edición → integrar `pluma-editor-llimphi`. Ejecución → cablear
-//! `pluma-notebook-exec::run_all` desde un botón.
+//! Dos modos de presentación:
+//!   - **Lineal**: cards apilados verticalmente (notebook tradicional).
+//!     Se elige cuando ninguna celda del notebook tiene `position`.
+//!   - **Canvas**: cards absolutamente posicionados en (x, y) según
+//!     `Cell::position`, con conectores S-codo entre cada celda y sus
+//!     dependencias. Se elige automáticamente si al menos una celda
+//!     tiene `position` definida.
+//!
+//! MVP: sólo render. Sin edición de fuentes, sin ejecución contra kernel,
+//! sin scroll/pan/zoom. Edición → integrar `pluma-editor-llimphi`.
+//! Ejecución → cablear `pluma-notebook-exec::{run_all, run_from}`.
 
 use std::env;
 use std::path::PathBuf;
 
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{length, percent, FlexDirection, Size, Style},
-    AlignItems, Rect,
+    prelude::{auto, length, percent, FlexDirection, Position, Rect, Size, Style},
+    AlignItems,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
@@ -27,8 +34,15 @@ use pluma_notebook_core::{Cell, CellKind, CellState, Notebook};
 #[derive(Clone)]
 enum Msg {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Linear,
+    Canvas,
+}
+
 struct Model {
     notebook: Notebook,
+    mode: Mode,
     /// Archivo de origen (None = demo embebido).
     source: Option<PathBuf>,
     /// Mensaje de error si load falló — se muestra en el header.
@@ -46,22 +60,24 @@ impl App for Viewer {
     }
 
     fn initial_size() -> (u32, u32) {
-        (820, 720)
+        (980, 760)
     }
 
     fn init(_: &Handle<Msg>) -> Model {
         let arg = env::args().nth(1).map(PathBuf::from);
-        match arg {
-            None => Model { notebook: demo_notebook(), source: None, load_error: None },
+        let (notebook, source, load_error) = match arg {
+            None => (demo_notebook(), None, None),
             Some(p) => match pluma_notebook_store::load(&p) {
-                Ok(nb) => Model { notebook: nb, source: Some(p), load_error: None },
-                Err(e) => Model {
-                    notebook: Notebook::new(),
-                    source: Some(p),
-                    load_error: Some(e.to_string()),
-                },
+                Ok(nb) => (nb, Some(p), None),
+                Err(e) => (Notebook::new(), Some(p), Some(e.to_string())),
             },
-        }
+        };
+        let mode = if notebook.cells().iter().any(|c| c.position.is_some()) {
+            Mode::Canvas
+        } else {
+            Mode::Linear
+        };
+        Model { notebook, mode, source, load_error }
     }
 
     fn update(model: Model, _: Msg, _: &Handle<Msg>) -> Model {
@@ -73,23 +89,10 @@ impl App for Viewer {
         let palette = Palette::from_theme(&theme);
 
         let header = header_bar(model, &palette);
-        let cards: Vec<View<Msg>> = model.notebook.cells().iter().map(|c| cell_card(c, &palette)).collect();
-
-        let stack = View::new(Style {
-            flex_direction: FlexDirection::Column,
-            flex_grow: 1.0,
-            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
-            padding: Rect {
-                left: length(12.0_f32),
-                right: length(12.0_f32),
-                top: length(8.0_f32),
-                bottom: length(12.0_f32),
-            },
-            ..Default::default()
-        })
-        .fill(palette.bg)
-        .clip(true)
-        .children(cards);
+        let body = match model.mode {
+            Mode::Linear => linear_view(&model.notebook, &palette),
+            Mode::Canvas => canvas_view(&model.notebook, &palette),
+        };
 
         View::new(Style {
             flex_direction: FlexDirection::Column,
@@ -97,7 +100,7 @@ impl App for Viewer {
             ..Default::default()
         })
         .fill(palette.bg)
-        .children(vec![header, stack])
+        .children(vec![header, body])
     }
 }
 
@@ -113,6 +116,7 @@ struct Palette {
     accent_stale: Color,
     accent_failed: Color,
     accent_fresh: Color,
+    edge: Color,
 }
 
 impl Palette {
@@ -127,6 +131,7 @@ impl Palette {
             accent_stale: t.fg_muted,
             accent_failed: t.fg_destructive,
             accent_fresh: t.fg_text,
+            edge: t.accent,
         }
     }
 }
@@ -142,7 +147,17 @@ fn header_bar(model: &Model, palette: &Palette) -> View<Msg> {
         .notebook_digest()
         .map(|d| short_hex(&d))
         .unwrap_or_else(|| "—(ciclo)".to_string());
-    let texto = format!("pluma-notebook · {} celdas · digest {} · {}", model.notebook.len(), digest, origen);
+    let modo = match model.mode {
+        Mode::Linear => "lineal",
+        Mode::Canvas => "canvas",
+    };
+    let texto = format!(
+        "pluma-notebook · {} celdas · modo {} · digest {} · {}",
+        model.notebook.len(),
+        modo,
+        digest,
+        origen,
+    );
     let color = if model.load_error.is_some() { palette.fg_error } else { palette.fg_muted };
 
     View::new(Style {
@@ -160,7 +175,185 @@ fn header_bar(model: &Model, palette: &Palette) -> View<Msg> {
     .text_aligned(texto, 11.0, color, Alignment::Start)
 }
 
-fn cell_card(cell: &Cell, palette: &Palette) -> View<Msg> {
+// ---------------------------------------------------------------------
+// Modo lineal — stack vertical, lo de siempre.
+// ---------------------------------------------------------------------
+
+fn linear_view(nb: &Notebook, palette: &Palette) -> View<Msg> {
+    let cards: Vec<View<Msg>> = nb.cells().iter().map(|c| linear_card(c, palette)).collect();
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        flex_grow: 1.0,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        padding: Rect {
+            left: length(12.0_f32),
+            right: length(12.0_f32),
+            top: length(8.0_f32),
+            bottom: length(12.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(palette.bg)
+    .clip(true)
+    .children(cards)
+}
+
+fn linear_card(cell: &Cell, palette: &Palette) -> View<Msg> {
+    let height = linear_body_height(&cell.source) + 30.0;
+    card_with_height(
+        cell,
+        palette,
+        Style {
+            flex_direction: FlexDirection::Column,
+            size: Size { width: percent(1.0_f32), height: length(height) },
+            margin: Rect {
+                left: length(0.0_f32),
+                right: length(0.0_f32),
+                top: length(0.0_f32),
+                bottom: length(8.0_f32),
+            },
+            ..Default::default()
+        },
+        linear_body_height(&cell.source),
+    )
+}
+
+const LINEAR_MAX_BODY_LINES: usize = 8;
+const LINEAR_MAX_BODY_CHARS: usize = 400;
+
+fn linear_body_height(source: &str) -> f32 {
+    let lines = source.lines().count().min(LINEAR_MAX_BODY_LINES).max(1);
+    16.0 * lines as f32 + 12.0
+}
+
+// ---------------------------------------------------------------------
+// Modo canvas — cada celda en su (x, y) + conectores S-codo del DAG.
+// ---------------------------------------------------------------------
+
+/// Tamaño fijo del card en canvas — el alto del body sale del card, no
+/// del texto, para que los conectores sean estables.
+const CANVAS_CARD_W: f32 = 240.0;
+const CANVAS_CARD_H: f32 = 96.0;
+const CANVAS_BODY_LINES_VISIBLE: usize = 4;
+
+fn canvas_view(nb: &Notebook, palette: &Palette) -> View<Msg> {
+    let mut children: Vec<View<Msg>> = Vec::new();
+
+    // Aristas primero (capa de fondo) — del prerrequisito al dependiente.
+    for cell in nb.cells() {
+        let Some(child_pos) = cell.position else { continue };
+        for dep_id in &cell.depends_on {
+            let Some(dep) = nb.cell(*dep_id) else { continue };
+            let Some(dep_pos) = dep.position else { continue };
+            // Centro inferior del dep → centro superior del dependiente.
+            let x1 = dep_pos.x + CANVAS_CARD_W * 0.5;
+            let y1 = dep_pos.y + CANVAS_CARD_H;
+            let x2 = child_pos.x + CANVAS_CARD_W * 0.5;
+            let y2 = child_pos.y;
+            children.extend(edge_segments(x1, y1, x2, y2, palette.edge));
+        }
+    }
+
+    // Cards encima.
+    for cell in nb.cells() {
+        let Some(pos) = cell.position else { continue };
+        children.push(canvas_card(cell, palette, pos.x, pos.y));
+    }
+
+    // Aviso si hay celdas sin posición — las omitimos en canvas.
+    let huerfanas = nb.cells().iter().filter(|c| c.position.is_none()).count();
+    if huerfanas > 0 {
+        children.push(orphan_notice(huerfanas, palette));
+    }
+
+    View::new(Style {
+        flex_grow: 1.0,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .fill(palette.bg)
+    .clip(true)
+    .children(children)
+}
+
+fn canvas_card(cell: &Cell, palette: &Palette, x: f32, y: f32) -> View<Msg> {
+    card_with_height(
+        cell,
+        palette,
+        Style {
+            flex_direction: FlexDirection::Column,
+            position: Position::Absolute,
+            inset: Rect {
+                left: length(x),
+                top: length(y),
+                right: auto(),
+                bottom: auto(),
+            },
+            size: Size { width: length(CANVAS_CARD_W), height: length(CANVAS_CARD_H) },
+            ..Default::default()
+        },
+        CANVAS_CARD_H - 30.0,
+    )
+}
+
+fn orphan_notice(n: usize, palette: &Palette) -> View<Msg> {
+    let texto = format!(
+        "{n} celda(s) sin posición — no se muestran en canvas. Asigná `Cell::position` para incluirlas."
+    );
+    View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            left: length(12.0_f32),
+            top: length(8.0_f32),
+            right: auto(),
+            bottom: auto(),
+        },
+        size: Size { width: length(560.0_f32), height: length(18.0_f32) },
+        ..Default::default()
+    })
+    .text_aligned(texto, 10.0, palette.fg_muted, Alignment::Start)
+}
+
+// ---------------------------------------------------------------------
+// Conectores S-codo — copia del patrón de pluma-editor-llimphi.
+// ---------------------------------------------------------------------
+
+fn edge_segments(x1: f32, y1: f32, x2: f32, y2: f32, color: Color) -> Vec<View<Msg>> {
+    let stroke = 1.6f32;
+    let half = stroke * 0.5;
+    let mid_y = (y1 + y2) * 0.5;
+    let mut out: Vec<View<Msg>> = Vec::with_capacity(3);
+
+    out.push(line_view(x1 - half, y1, stroke, (mid_y - y1).abs().max(stroke), color));
+    if (x2 - x1).abs() > stroke {
+        let (xl, xr) = if x1 < x2 { (x1, x2) } else { (x2, x1) };
+        out.push(line_view(xl - half, mid_y - half, (xr - xl) + stroke, stroke, color));
+    }
+    out.push(line_view(x2 - half, mid_y, stroke, (y2 - mid_y).abs().max(stroke), color));
+    out
+}
+
+fn line_view(x: f32, y: f32, w: f32, h: f32, color: Color) -> View<Msg> {
+    View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            left: length(x),
+            top: length(y),
+            right: auto(),
+            bottom: auto(),
+        },
+        size: Size { width: length(w), height: length(h) },
+        ..Default::default()
+    })
+    .fill(color)
+}
+
+// ---------------------------------------------------------------------
+// Card compartido — usado por ambos modos. El style del wrapper lo pone
+// cada modo (lineal = flex column; canvas = absoluto en (x,y)).
+// ---------------------------------------------------------------------
+
+fn card_with_height(cell: &Cell, palette: &Palette, wrapper: Style, body_h: f32) -> View<Msg> {
     let header_text = format!(
         "[{}] #{}  ·  {}",
         kind_label(&cell.kind),
@@ -187,7 +380,7 @@ fn cell_card(cell: &Cell, palette: &Palette) -> View<Msg> {
     .text_aligned(header_text, 10.0, header_color, Alignment::Start);
 
     let body = View::new(Style {
-        size: Size { width: percent(1.0_f32), height: length(body_height(&cell.source)) },
+        size: Size { width: percent(1.0_f32), height: length(body_h) },
         padding: Rect {
             left: length(10.0_f32),
             right: length(10.0_f32),
@@ -196,22 +389,14 @@ fn cell_card(cell: &Cell, palette: &Palette) -> View<Msg> {
         },
         ..Default::default()
     })
-    .text_aligned(truncate_source(&cell.source), 12.0, palette.fg_text, Alignment::Start);
+    .text_aligned(
+        truncate_source(&cell.source, CANVAS_BODY_LINES_VISIBLE.max(2)),
+        12.0,
+        palette.fg_text,
+        Alignment::Start,
+    );
 
-    View::new(Style {
-        flex_direction: FlexDirection::Column,
-        size: Size { width: percent(1.0_f32), height: length(body_height(&cell.source) + 30.0) },
-        margin: Rect {
-            left: length(0.0_f32),
-            right: length(0.0_f32),
-            top: length(0.0_f32),
-            bottom: length(8.0_f32),
-        },
-        ..Default::default()
-    })
-    .fill(palette.bg_card)
-    .clip(true)
-    .children(vec![header, body])
+    View::new(wrapper).fill(palette.bg_card).clip(true).children(vec![header, body])
 }
 
 fn kind_label(k: &CellKind) -> String {
@@ -230,13 +415,10 @@ fn state_label(s: CellState) -> &'static str {
     }
 }
 
-const MAX_BODY_LINES: usize = 8;
-const MAX_BODY_CHARS: usize = 400;
-
-fn truncate_source(s: &str) -> String {
+fn truncate_source(s: &str, max_lines: usize) -> String {
     let mut out = String::new();
     for (i, line) in s.lines().enumerate() {
-        if i >= MAX_BODY_LINES || out.len() + line.len() + 1 > MAX_BODY_CHARS {
+        if i >= max_lines || out.len() + line.len() + 1 > LINEAR_MAX_BODY_CHARS {
             out.push_str("\n…");
             break;
         }
@@ -251,24 +433,19 @@ fn truncate_source(s: &str) -> String {
     out
 }
 
-/// Alto fijo del body: una línea base + extras por salto, capeado.
-/// Sin scroll todavía, así que mejor un alto predecible que uno que
-/// crezca con texto arbitrario.
-fn body_height(source: &str) -> f32 {
-    let lines = source.lines().count().min(MAX_BODY_LINES).max(1);
-    16.0 * lines as f32 + 12.0
-}
-
 fn short_hex(d: &[u8; 32]) -> String {
     d[..6].iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Notebook embebido — se usa cuando se invoca el binario sin argumento.
+/// Notebook embebido — modo canvas: cuatro celdas con posición en (x, y)
+/// para que el binario sin argumento muestre el modo espacial.
 fn demo_notebook() -> Notebook {
+    use pluma_notebook_core::Position as P;
+
     let mut nb = Notebook::new();
-    nb.push(
+    let intro = nb.push(
         CellKind::Markdown,
-        "# Cosecha de auyama\n\nNotebook demo del visor.\nCada celda se renderiza como un card con su tipo, estado y fuente.",
+        "# Cosecha de auyama\n\nNotebook demo del visor canvas.\nLas celdas viven en (x, y) y los conectores muestran el DAG.",
     );
     let datos = nb.push(
         CellKind::Code { language: "rust".into() },
@@ -285,6 +462,14 @@ fn demo_notebook() -> Notebook {
     nb.add_dependency(media, datos);
     nb.add_dependency(grafico, datos);
     nb.add_dependency(grafico, media);
+
+    // Layout en árbol descendente: intro arriba, datos al centro, media a
+    // la izquierda y gráfico a la derecha — ambos hijos de datos.
+    nb.set_position(intro, Some(P::new(40.0, 40.0)));
+    nb.set_position(datos, Some(P::new(40.0, 170.0)));
+    nb.set_position(media, Some(P::new(40.0, 320.0)));
+    nb.set_position(grafico, Some(P::new(360.0, 320.0)));
+
     nb
 }
 
