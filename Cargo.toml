@@ -344,10 +344,14 @@ gpui = "0.2"
 # === Llimphi (motor gráfico soberano) ===
 # wgpu sobre Vulkan/Metal/DX12, winit para ventana en dev Linux.
 # raw-window-handle 0.6 alinea winit 0.30 con wgpu 24.
+# vello 0.5 = rasterizador vectorial sobre wgpu 24.
+# taffy 0.9 = motor Flexbox/Grid puro Rust (ya pulled por transitivos, lo alineamos).
 wgpu = "24"
 winit = "0.30"
 raw-window-handle = "0.6"
 pollster = "0.4"
+vello = "0.5"
+taffy = "0.9"
 
 # === Filesystem helpers ===
 directories = "5"

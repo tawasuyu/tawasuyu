@@ -81,6 +81,11 @@ impl Frame {
         &self.view
     }
 
+    pub fn size(&self) -> (u32, u32) {
+        let t = &self.texture.texture;
+        (t.width(), t.height())
+    }
+
     pub fn present(self) {
         self.texture.present();
     }
@@ -149,14 +154,18 @@ impl WinitSurface {
             .map_err(|e| HalError::CreateSurface(e.to_string()))?;
         let size = window.inner_size();
         let caps = surface.get_capabilities(&hal.adapter);
+        // vello acepta Rgba8Unorm o Bgra8Unorm (sin sRGB porque el blit hace su propia gamma).
+        // Si el adapter no ofrece ninguno, caemos al primero disponible.
         let format = caps
             .formats
             .iter()
             .copied()
-            .find(|f| f.is_srgb())
+            .find(|f| matches!(f, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Rgba8Unorm))
             .unwrap_or(caps.formats[0]);
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            // STORAGE_BINDING permite que el rasterizador vectorial (vello) escriba
+            // directo al swapchain vía compute shader.
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::STORAGE_BINDING,
             format,
             width: size.width.max(1),
             height: size.height.max(1),
@@ -172,6 +181,10 @@ impl WinitSurface {
             config,
             device: hal.device.clone(),
         })
+    }
+
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.config.format
     }
 }
 

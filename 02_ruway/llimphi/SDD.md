@@ -95,5 +95,10 @@ Apps actualmente en GPUI que deben portarse:
 
 ## Estado
 
-- **2026-05-25:** SDD escrito. Esqueletos de los 4 crates creados (sin implementación).
-- **Próximo:** Fase 1 — `llimphi-hal` con `wgpu` + `winit` + trait `Surface` + ventana gris plomo a 144 Hz.
+- **2026-05-25:** SDD escrito. Esqueletos de los 4 crates creados.
+- **2026-05-25 (tarde):** Las 4 fases en código y compilando. Examples:
+  - `cargo run -p llimphi-hal --example clear_screen --release` — ventana gris plomo a refresh del display ✅ (verificado en hardware).
+  - `cargo run -p llimphi-raster --example render_node --release` — nodo con AA perfecto vía vello/wgpu.
+  - `cargo run -p llimphi-layout --example layout_panels --release` — sidebar + header/body/footer flex que se reorganiza al resize.
+  - `cargo run -p llimphi-ui --example counter --release` — bucle Elm completo: click hit-test → update → view → layout → raster → present.
+- **Próximo:** texto (skrifa/parley sobre vello) — necesario para Cosmos, Pluma, Nahual. Luego: migración de las apps GPUI a Llimphi.

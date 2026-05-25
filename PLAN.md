@@ -19,7 +19,7 @@ gioser/
 1. **Migración estructural**: brahman (188 crates) + eternal (12) + dominium (1) → gioser, 214 crates en workspace + 13 en wawa excluido. Historia git preservada (336 commits + 478 brahman + 56 eternal).
 2. **Rename semántico**: 344 cambios en Cargo.tomls + 1668 en .rs. Nombres antiguos (`fana-*`, `charka-*`, `cosmobiologia-*`, `eternal-*`, `brahman-*`, `agorapura-*`, `barra-*`, `revista-*`, `yachay-core`, `verbo-*`, `badu-*`, `formato`) reemplazados por los canónicos.
 3. **Landing sobria**: plano cartesiano SVG estático + visor pluma (`web/gioser-web`, 38 LOC).
-4. **Llimphi**: SDD escrito, esqueletos de los 4 crates (`llimphi-{hal, raster, layout, ui}`) creados.
+4. **Llimphi**: las 4 fases implementadas y verdes. Hito gris plomo verificado en hardware. Examples corriendo en `llimphi-{hal,raster,layout,ui}`.
 5. `cargo check --workspace` pasa.
 
 ## 2. Hito #1 — Llimphi (gráfico soberano)
@@ -115,6 +115,9 @@ Cuando Llimphi tenga las 4 fases verdes, portar:
 
 ## 8. Próxima sesión arranca con
 
-**Fase 1 de Llimphi**: agregar `wgpu` + `winit` a `llimphi-hal/Cargo.toml`, definir el trait `Surface` completo (con métodos para configurar swapchain, render pass, present), e implementar `WinitSurface`. Hito visible: ventana gris plomo a 144 Hz.
+**Llimphi extender con texto** (Fases 1–4 ya en verde, hito gris plomo verificado en hardware):
+- Integrar `skrifa` (lectura de fuentes TTF/OTF) + `parley` (shaping/layout de texto) sobre `vello`.
+- Hito visible: `llimphi-ui` cuenta numérico real en el example `counter`, no barras.
+- Bloquea: migración GPUI → Llimphi de las apps (Nahual, Mirada, Pluma, Dominium, Cosmos).
 
-En paralelo (no bloqueado por Llimphi): **Fase 1 de Puriy** (`puriy-core` puro Rust — Tab/Session/History/Bookmark/Profile testeables).
+En paralelo (no bloqueado por texto): **Fase 1 de Puriy** (`puriy-core` puro Rust — Tab/Session/History/Bookmark/Profile testeables).

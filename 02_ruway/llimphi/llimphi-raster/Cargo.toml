@@ -8,4 +8,9 @@ publish.workspace = true
 
 [dependencies]
 llimphi-hal = { path = "../llimphi-hal" }
-# vello se agrega en Fase 2
+vello = { workspace = true }
+pollster = { workspace = true }
+
+[[example]]
+name = "render_node"
+path = "examples/render_node.rs"
