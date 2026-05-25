@@ -3,6 +3,7 @@
 //! Cualquier "profesión" o "rol" del macro es sólo un Lemming ejecutando
 //! una de estas 6 acciones en un entorno específico.
 
+use crate::conceptos::Conceptos;
 use crate::grid::Grid;
 use crate::lemmings::{Lemmings, PSI_CORRUPTIBILIDAD, PSI_CURIOSIDAD, PSI_MIEDO, PSI_ORDEN};
 use crate::params::SimParams;
@@ -46,11 +47,17 @@ impl Action {
 pub struct World {
     pub grid: Grid,
     pub lemmings: Lemmings,
+    #[serde(default)]
+    pub conceptos: Conceptos,
 }
 
 impl World {
     pub fn new(width: usize, height: usize) -> Self {
-        Self { grid: Grid::new(width, height), lemmings: Lemmings::new() }
+        Self {
+            grid: Grid::new(width, height),
+            lemmings: Lemmings::new(),
+            conceptos: Conceptos::new(),
+        }
     }
 
     /// Celda que ocupa el Lemming `i`.
@@ -102,14 +109,15 @@ impl World {
     }
 
     /// 2 · Sincronizar — el `vector_psi` deriva hacia los campos de la celda.
+    /// Mapeo coherente con `act_mover`: ORDEN↔materia, MIEDO↔poder,
+    /// CURIOSIDAD↔psique, CORRUPTIBILIDAD↔oro.
     pub fn act_sincronizar(&mut self, i: usize, p: &SimParams) {
         let idx = self.cell_of(i);
-        let targets = [
-            self.grid.psique[idx],
-            self.grid.poder[idx],
-            self.grid.psique[idx],
-            self.grid.poder[idx],
-        ];
+        let mut targets = [0.0f32; 4];
+        targets[PSI_ORDEN] = self.grid.materia[idx];
+        targets[PSI_MIEDO] = self.grid.poder[idx];
+        targets[PSI_CURIOSIDAD] = self.grid.psique[idx];
+        targets[PSI_CORRUPTIBILIDAD] = self.grid.oro[idx];
         for k in 0..4 {
             let v = self.lemmings.vector_psi[i][k];
             self.lemmings.vector_psi[i][k] = v + (targets[k] - v) * p.sync_rate;

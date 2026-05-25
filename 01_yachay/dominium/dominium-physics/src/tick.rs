@@ -3,12 +3,18 @@
 //! Orden fijo: difusión/entropía → evaluación de transiciones → acciones
 //! de los agentes → envejecimiento y cosecha de muertos.
 
+use crate::conceptos::{apply_conceptos, apply_hacks};
 use crate::diffuse::diffuse;
 use dominium_core::{SimParams, World};
 
 /// Evaluación de transiciones: un agente exhausto se fuerza a `Pelear`.
+/// Un lemming bajo `hack_lock` está blindado: su acción ya está fijada por
+/// un Concepto y no debe re-evaluarse hasta que el lock se agote.
 fn apply_transitions(world: &mut World, p: &SimParams) {
     for i in 0..world.lemmings.len() {
+        if world.lemmings.hack_lock[i] > 0 {
+            continue;
+        }
         if world.lemmings.energia[i] < p.desperation_threshold {
             world.lemmings.accion[i] = 5; // Degradar (Pelear)
         }
@@ -46,11 +52,17 @@ fn age_and_reap(world: &mut World, p: &SimParams) -> usize {
 
 /// Un paso completo de la simulación.
 pub fn tick(world: &mut World, p: &SimParams) {
-    // 1. Difusión y entropía sobre los campos.
+    // 1. Emisión/drenaje por Conceptos sobre las celdas (con falloff lineal).
+    //    Va antes de la difusión para que las inyecciones se propaguen este tick.
+    apply_conceptos(world);
+    // 2. Difusión y entropía sobre los campos.
     diffuse(&mut world.grid, p);
-    // 2. Transiciones de estado forzadas.
+    // 3. Transiciones de estado forzadas (desesperación → pelear).
     apply_transitions(world, p);
-    // 3. Acciones de los agentes. Se fija `n` antes del loop: los hijos
+    // 4. Captura de acción por Conceptos. Vence cualquier transición previa:
+    //    el `hack_lock` blindará al lemming hasta agotar su duración.
+    apply_hacks(world);
+    // 5. Acciones de los agentes. Se fija `n` antes del loop: los hijos
     //    que `Replicar` agrega al final NO actúan este tick.
     let n = world.lemmings.len();
     for i in 0..n {
@@ -58,7 +70,7 @@ pub fn tick(world: &mut World, p: &SimParams) {
             world.step_lemming(i, p);
         }
     }
-    // 4. Envejecer + cosechar muertos.
+    // 6. Envejecer + cosechar muertos.
     age_and_reap(world, p);
 }
 

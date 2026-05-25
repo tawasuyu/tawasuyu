@@ -24,6 +24,10 @@ pub struct Lemmings {
     pub vector_psi: Vec<[f32; 4]>,
     /// Byte discriminador de la máquina de estados (0-5).
     pub accion: Vec<u8>,
+    /// Ticks restantes de captura por un `BehaviorHack` de un Concepto.
+    /// Mientras es > 0, el Lemming ejecuta su `accion` sin reevaluar
+    /// transiciones (la captura sobrescribe a la desesperación).
+    pub hack_lock: Vec<u32>,
 }
 
 impl Lemmings {
@@ -48,6 +52,7 @@ impl Lemmings {
         self.energia.push(energia);
         self.vector_psi.push(psi);
         self.accion.push(0);
+        self.hack_lock.push(0);
         i
     }
 
@@ -60,6 +65,7 @@ impl Lemmings {
         self.energia.swap_remove(i);
         self.vector_psi.swap_remove(i);
         self.accion.swap_remove(i);
+        self.hack_lock.swap_remove(i);
     }
 
     /// Distancia euclidiana al cuadrado entre dos Lemmings (sin `sqrt` —

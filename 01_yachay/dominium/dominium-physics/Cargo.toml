@@ -9,3 +9,4 @@ description = "dominium — ciclo del motor: difusión + entropía de los campos
 
 [dependencies]
 dominium-core = { path = "../dominium-core" }
+libm = { workspace = true }
