@@ -45,6 +45,9 @@ use pluma_notebook_core::{
 enum Msg {
     /// Desplaza el viewport del canvas por `(dx, dy)`.
     PanBy(f32, f32),
+    /// Centra el viewport en el bounding box de las celdas posicionadas
+    /// (atajo "Home" cuando no estás editando).
+    ResetViewport,
     /// Mueve una celda en el canvas por `(dx, dy)` (delta desde el evento
     /// anterior — no acumulado desde el press).
     MoveCell { id: CellId, dx: f32, dy: f32 },
@@ -144,6 +147,10 @@ impl App for Viewer {
                 viewport: (model.viewport.0 + dx, model.viewport.1 + dy),
                 ..model
             },
+            Msg::ResetViewport => Model {
+                viewport: viewport_to_fit(&model.notebook),
+                ..model
+            },
             Msg::MoveCell { id, dx, dy } => {
                 let mut nb = model.notebook;
                 if let Some(p) = nb.position(id) {
@@ -198,10 +205,16 @@ impl App for Viewer {
     }
 
     fn on_key(model: &Self::Model, event: &KeyEvent) -> Option<Self::Msg> {
-        if model.editing.is_none() {
+        if event.state != KeyState::Pressed {
             return None;
         }
-        if event.state != KeyState::Pressed {
+        // Sin edición activa: Home recenta el viewport del canvas.
+        if model.editing.is_none() {
+            if model.mode == Mode::Canvas
+                && matches!(&event.key, Key::Named(NamedKey::Home))
+            {
+                return Some(Msg::ResetViewport);
+            }
             return None;
         }
         match &event.key {
@@ -224,9 +237,13 @@ impl App for Viewer {
             return None;
         }
         // Una "línea" del wheel = 16 px de pan.
-        const STEP: f32 = 16.0;
+        // 32 px por "línea" del wheel — un click razonable mueve ~2 cards.
+        // llimphi-ui ya invierte el signo de winit (`y: -y`); aquí
+        // *re-invertimos* porque queremos que rueda-abajo mueva el
+        // contenido hacia arriba (el viewport "baja"), como en un editor.
+        const STEP: f32 = 32.0;
         let dx = delta.x * STEP;
-        let dy = -delta.y * STEP; // wheel arriba mueve el contenido hacia abajo.
+        let dy = -delta.y * STEP;
         if dx == 0.0 && dy == 0.0 {
             None
         } else {
@@ -305,7 +322,7 @@ fn header_bar(model: &Model, palette: &Palette) -> View<Msg> {
     let modo = match model.mode {
         Mode::Linear => "lineal".to_string(),
         Mode::Canvas => format!(
-            "canvas (viewport {:+.0},{:+.0})",
+            "canvas · viewport {:+.0},{:+.0} · Home recentra",
             model.viewport.0, model.viewport.1
         ),
     };
@@ -824,6 +841,28 @@ impl Kernel for MultiKernel {
             ))),
         }
     }
+}
+
+/// Calcula un viewport que deje el bounding box de las celdas con
+/// `position` visible en la esquina superior-izquierda (margen 40 px).
+/// Si no hay celdas posicionadas, devuelve `(0, 0)`.
+fn viewport_to_fit(nb: &Notebook) -> (f32, f32) {
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    for c in nb.cells() {
+        if let Some(p) = c.position {
+            if p.x < min_x {
+                min_x = p.x;
+            }
+            if p.y < min_y {
+                min_y = p.y;
+            }
+        }
+    }
+    if !min_x.is_finite() || !min_y.is_finite() {
+        return (0.0, 0.0);
+    }
+    (40.0 - min_x, 40.0 - min_y)
 }
 
 fn main() {

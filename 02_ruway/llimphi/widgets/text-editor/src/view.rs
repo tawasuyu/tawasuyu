@@ -38,6 +38,8 @@ pub struct EditorPalette {
     pub caret: Color,
     /// Fondo del bracket bajo el cursor + su par. Un acento sutil.
     pub bg_bracket_pair: Color,
+    /// Fondo de cada match del find activo.
+    pub bg_match: Color,
 }
 
 impl Default for EditorPalette {
@@ -60,6 +62,7 @@ impl EditorPalette {
             fg_line_number_active: t.fg_text,
             caret: t.accent,
             bg_bracket_pair: t.bg_button_hover,
+            bg_match: t.bg_button_hover,
         }
     }
 }
@@ -169,10 +172,33 @@ pub fn text_editor_view_highlighted<Msg: Clone + 'static>(
     language: Language,
     on_pointer: impl Fn(PointerEvent) -> Option<Msg> + Send + Sync + Clone + 'static,
 ) -> View<Msg> {
+    text_editor_view_full(
+        state,
+        palette,
+        metrics,
+        visible_lines,
+        language,
+        &[],
+        on_pointer,
+    )
+}
+
+/// Como [`text_editor_view_highlighted`] + `match_ranges` para pintar
+/// las ocurrencias de un find activo. Cada par `(char_start, char_end)`
+/// es un rango de chars globales del buffer.
+pub fn text_editor_view_full<Msg: Clone + 'static>(
+    state: &EditorState,
+    palette: &EditorPalette,
+    metrics: EditorMetrics,
+    visible_lines: usize,
+    language: Language,
+    match_ranges: &[(usize, usize)],
+    on_pointer: impl Fn(PointerEvent) -> Option<Msg> + Send + Sync + Clone + 'static,
+) -> View<Msg> {
     let caret = state.cursor.caret;
     let syntax = SyntaxPalette::dark_default(&llimphi_theme::Theme::dark());
 
-    let visible = visible_lines.max(1).min(200); // hard cap defensivo
+    let visible = visible_lines.max(1).min(200);
     let line_count = state.line_count();
     let scroll = state.scroll_offset.min(line_count.saturating_sub(1));
     let end_line = (scroll + visible).min(line_count);
@@ -195,6 +221,7 @@ pub fn text_editor_view_highlighted<Msg: Clone + 'static>(
         end_line,
         spans,
         &syntax,
+        match_ranges,
         on_pointer,
     );
 
@@ -266,6 +293,7 @@ fn build_content<Msg: Clone + 'static>(
     end_line: usize,
     spans_per_line: Vec<Vec<Span>>,
     syntax: &SyntaxPalette,
+    match_ranges: &[(usize, usize)],
     on_pointer: impl Fn(PointerEvent) -> Option<Msg> + Send + Sync + Clone + 'static,
 ) -> View<Msg> {
     let caret = state.cursor.caret;
@@ -274,6 +302,12 @@ fn build_content<Msg: Clone + 'static>(
     // 1) Fondo del renglón activo — sólo si está dentro del viewport.
     if caret.line >= scroll && caret.line < end_line {
         children.push(line_highlight(caret.line - scroll, metrics, palette));
+    }
+
+    // 1b) Highlight de matches del find (debajo de la selección, encima
+    // del fondo).
+    for (s, e) in match_ranges {
+        children.extend(match_rects(state, *s, *e, scroll, end_line, metrics, palette));
     }
 
     // 2) Selección — sólo los rects que tocan el viewport.
@@ -482,6 +516,54 @@ fn bracket_highlight<Msg: Clone + 'static>(
         ..Default::default()
     })
     .fill(palette.bg_bracket_pair)
+}
+
+fn match_rects<Msg: Clone + 'static>(
+    state: &EditorState,
+    start_off: usize,
+    end_off: usize,
+    scroll: usize,
+    end_viewport: usize,
+    metrics: EditorMetrics,
+    palette: &EditorPalette,
+) -> Vec<View<Msg>> {
+    if start_off == end_off {
+        return vec![];
+    }
+    let (start_line, start_col) = state.buffer.offset_to_pos(start_off);
+    let (end_line, end_col) = state.buffer.offset_to_pos(end_off);
+    let mut out: Vec<View<Msg>> = Vec::new();
+    let first = start_line.max(scroll);
+    let last = end_line.min(end_viewport.saturating_sub(1));
+    if first > last {
+        return out;
+    }
+    for line in first..=last {
+        let line_len = state.buffer.line_len_chars(line);
+        let col_start = if line == start_line { start_col } else { 0 };
+        let col_end = if line == end_line { end_col } else { line_len };
+        if col_end <= col_start {
+            continue;
+        }
+        let x = 4.0 + col_start as f32 * metrics.char_width;
+        let w = (col_end - col_start) as f32 * metrics.char_width;
+        let local_y = (line - scroll) as f32 * metrics.line_height;
+        out.push(
+            View::new(Style {
+                position: Position::Absolute,
+                inset: Rect {
+                    left: length(x),
+                    top: length(local_y),
+                    right: auto(),
+                    bottom: auto(),
+                },
+                size: Size { width: length(w), height: length(metrics.line_height) },
+                ..Default::default()
+            })
+            .fill(palette.bg_match),
+        );
+    }
+    out
 }
 
 fn selection_rects_visible<Msg: Clone + 'static>(

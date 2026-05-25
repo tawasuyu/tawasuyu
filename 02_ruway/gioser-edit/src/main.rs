@@ -28,11 +28,12 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, View, WheelDelta};
+use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
 use llimphi_widget_text_editor::{
-    text_editor_view_highlighted, Clipboard, EditorMetrics, EditorPalette, EditorState, Language,
-    PointerEvent,
+    all_matches, find_next, find_prev, text_editor_view_full, Clipboard, EditorMetrics,
+    EditorPalette, EditorState, FindState, Language, PointerEvent, Pos,
 };
+use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
 
 const TREE_WIDTH: f32 = 240.0;
@@ -52,6 +53,12 @@ enum Msg {
     Save,
     SaveResult(Result<(), String>),
     Scroll(i32),
+    // Find
+    FindOpen,
+    FindClose,
+    FindKey(KeyEvent),
+    FindNext,
+    FindPrev,
 }
 
 #[derive(Debug, Clone)]
@@ -74,6 +81,24 @@ struct Model {
     /// Acumulado de drag del editor: cada `Msg::EditorPointer(Drag)`
     /// suma `(dx, dy)`. Pos actual = `initial + drag_accum`.
     drag_accum: (f32, f32),
+    /// Modo find: cuando es Some, la barra del find está abierta y las
+    /// teclas van al input en lugar de al editor.
+    find: Option<FindBarState>,
+}
+
+struct FindBarState {
+    input: TextInputState,
+    state: FindState,
+}
+
+impl FindBarState {
+    fn new() -> Self {
+        Self { input: TextInputState::new(), state: FindState::new() }
+    }
+    /// Sincroniza el FindState con el contenido actual del input.
+    fn sync(&mut self) {
+        self.state.query = self.input.text();
+    }
 }
 
 struct EditorApp;
@@ -108,6 +133,7 @@ impl App for EditorApp {
             status,
             dirty: false,
             drag_accum: (0.0, 0.0),
+            find: None,
         }
     }
 
@@ -123,6 +149,25 @@ impl App for EditorApp {
                 m.editor.scroll_by(delta);
                 m
             }
+            Msg::FindOpen => {
+                let mut m = model;
+                if m.find.is_none() {
+                    m.find = Some(FindBarState::new());
+                    m.status = "find · Ctrl+G siguiente · Esc cierra".to_string();
+                }
+                m
+            }
+            Msg::FindClose => Model { find: None, ..model },
+            Msg::FindKey(ev) => {
+                let mut m = model;
+                if let Some(f) = m.find.as_mut() {
+                    f.input.apply_key(&ev);
+                    f.sync();
+                }
+                m
+            }
+            Msg::FindNext => find_step(model, true),
+            Msg::FindPrev => find_step(model, false),
             Msg::SaveResult(r) => {
                 let mut m = model;
                 m.status = match r {
@@ -164,12 +209,41 @@ impl App for EditorApp {
         if event.state != KeyState::Pressed {
             return None;
         }
-        // Ctrl+S guarda; el resto va al editor si hay archivo abierto.
-        if event.modifiers.ctrl
-            && matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("s"))
-        {
-            return Some(Msg::Save);
+        // Atajos globales
+        if event.modifiers.ctrl {
+            if matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("s")) {
+                return Some(Msg::Save);
+            }
+            if matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("f"))
+                && model.open_file.is_some()
+            {
+                return Some(Msg::FindOpen);
+            }
+            if matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("g"))
+                && model.find.is_some()
+            {
+                return Some(if event.modifiers.shift { Msg::FindPrev } else { Msg::FindNext });
+            }
         }
+
+        // Modo find abierto: el input se queda con todo menos Esc/Enter/F3.
+        if model.find.is_some() {
+            return match &event.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::FindClose),
+                Key::Named(NamedKey::Enter) => Some(if event.modifiers.shift {
+                    Msg::FindPrev
+                } else {
+                    Msg::FindNext
+                }),
+                Key::Named(NamedKey::F3) => Some(if event.modifiers.shift {
+                    Msg::FindPrev
+                } else {
+                    Msg::FindNext
+                }),
+                _ => Some(Msg::FindKey(event.clone())),
+            };
+        }
+
         if model.open_file.is_none() {
             return None;
         }
@@ -262,29 +336,61 @@ fn tree_panel(model: &Model, theme: &Theme) -> View<Msg> {
 }
 
 fn editor_panel(model: &Model, theme: &Theme) -> View<Msg> {
-    let view = match &model.open_file {
+    let mut children: Vec<View<Msg>> = Vec::new();
+    if let Some(find) = model.find.as_ref() {
+        children.push(find_bar(find, theme));
+    }
+    let editor_view = match &model.open_file {
         None => empty_editor_placeholder(theme),
         Some(path) => {
             let language = language_for_path(path);
             let palette = EditorPalette::from_theme(theme);
             let metrics = EditorMetrics::for_font_size(13.0);
-            text_editor_view_highlighted(
+            let matches: Vec<(usize, usize)> = model
+                .find
+                .as_ref()
+                .filter(|f| !f.state.query.is_empty())
+                .map(|f| all_matches(&model.editor.buffer, &f.state))
+                .unwrap_or_default();
+            text_editor_view_full(
                 &model.editor,
                 &palette,
                 metrics,
                 EDITOR_VISIBLE_LINES,
                 language,
+                &matches,
                 |ev| Some(Msg::EditorPointer(ev)),
             )
         }
     };
+    children.push(editor_view);
     View::new(Style {
+        flex_direction: FlexDirection::Column,
         flex_grow: 1.0,
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
     .fill(theme.bg_app)
-    .children(vec![view])
+    .children(children)
+}
+
+const FIND_BAR_H: f32 = 32.0;
+
+fn find_bar(find: &FindBarState, theme: &Theme) -> View<Msg> {
+    let tp = TextInputPalette::from_theme(theme);
+    let input = text_input_view(&find.input, "buscar… (Enter / Ctrl+G siguiente · Shift inverso · Esc cierra)", true, &tp, Msg::FindOpen);
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(FIND_BAR_H) },
+        padding: Rect {
+            left: length(6.0_f32),
+            right: length(6.0_f32),
+            top: length(2.0_f32),
+            bottom: length(2.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(vec![input])
 }
 
 fn empty_editor_placeholder(theme: &Theme) -> View<Msg> {
@@ -436,6 +542,30 @@ fn apply_editor_pointer(mut model: Model, ev: PointerEvent) -> Model {
             model.editor.extend_selection_to(line, col);
         }
     }
+    model
+}
+
+fn find_step(mut model: Model, forward: bool) -> Model {
+    let Some(find) = model.find.as_ref() else { return model };
+    if find.state.query.is_empty() {
+        return model;
+    }
+    let result = if forward {
+        find_next(&model.editor.buffer, &find.state, &model.editor.cursor)
+    } else {
+        find_prev(&model.editor.buffer, &find.state, &model.editor.cursor)
+    };
+    let Some((start, end)) = result else {
+        model.status = format!("sin matches para «{}»", find.state.query);
+        return model;
+    };
+    // Selecciona la match (anchor=start, caret=end) y la deja visible.
+    model.editor.cursor.anchor = Some(Pos::new(start.line, start.col));
+    model.editor.cursor.caret = Pos::new(end.line, end.col);
+    model.editor.cursor.desired_col = end.col;
+    model.editor.ensure_caret_visible(EDITOR_VISIBLE_LINES);
+    let total = all_matches(&model.editor.buffer, &find.state).len();
+    model.status = format!("match · {total} totales");
     model
 }
 
