@@ -132,6 +132,25 @@ impl Buffer {
         self.set_text(s);
     }
 
+    /// Convierte char_offset → byte_offset. tree-sitter trabaja en bytes
+    /// (UTF-8); el editor en chars. Esto las conecta.
+    pub fn char_to_byte(&self, char_offset: usize) -> usize {
+        let off = char_offset.min(self.rope.len_chars());
+        self.rope.char_to_byte(off)
+    }
+
+    /// Línea (0-based) que contiene el char_offset dado.
+    pub fn char_to_line(&self, char_offset: usize) -> usize {
+        let off = char_offset.min(self.rope.len_chars());
+        self.rope.char_to_line(off)
+    }
+
+    /// Byte_offset del primer char de la línea `n`.
+    pub fn line_to_byte(&self, line: usize) -> usize {
+        let line = line.min(self.rope.len_lines());
+        self.rope.line_to_byte(line)
+    }
+
     /// Devuelve el rango `[start_col..col)` que contiene el "word" actual
     /// — desde el último carácter no-de-palabra hasta `col`, en la línea
     /// `line`. Útil para autocompletion (smart-replace del prefijo).

@@ -140,6 +140,24 @@ pub fn invalidate_tree_cache(language: Language) {
     });
 }
 
+/// Aplica una lista de `InputEdit` al tree cached del `language`.
+/// Llamarlo ANTES de `parse(source, Some(&old_tree))` activa el modo
+/// incremental real de tree-sitter — solo reconstruye los subtrees
+/// afectados por las edits.
+pub fn apply_pending_edits(language: Language, edits: &[tree_sitter::InputEdit]) {
+    if edits.is_empty() {
+        return;
+    }
+    TREE_CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        if let Some(tree) = c.get_mut(&language) {
+            for e in edits {
+                tree.edit(e);
+            }
+        }
+    });
+}
+
 /// Highlighter — fina capa sin estado mutable propio. La parser real
 /// vive en el pool thread-local.
 pub struct Highlighter {

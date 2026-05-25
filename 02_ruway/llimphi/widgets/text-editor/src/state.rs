@@ -65,6 +65,11 @@ pub struct EditorState {
     /// Lo usa el cache de highlight para invalidarse sin re-hashear el
     /// texto entero por frame.
     pub edit_seq: u64,
+    /// InputEdits que el editor produjo y todavía no fueron aplicados
+    /// al `Tree` cached del highlighter. El highlight, antes de
+    /// reparsear, los drena y los aplica al tree → parseo incremental
+    /// real (tree-sitter sólo reconstruye los subtrees afectados).
+    pub pending_input_edits: RefCell<Vec<tree_sitter::InputEdit>>,
     /// Cache memoizado del syntax highlight. Interior mutability vía
     /// `RefCell` para que el view (que recibe `&EditorState`) lo
     /// actualice on-demand. Se invalida cuando cambian `edit_seq` o el
@@ -97,6 +102,7 @@ impl EditorState {
             undo: UndoStack::new(),
             scroll_offset: 0,
             edit_seq: 0,
+            pending_input_edits: RefCell::new(Vec::new()),
             highlight_cache: RefCell::new(None),
         }
     }
@@ -200,8 +206,9 @@ impl EditorState {
     }
 
     /// Devuelve los spans del highlight cacheados. Si el cache no matchea
-    /// (distinto `edit_seq` o `language`), reparsea y lo guarda. Para
-    /// `Language::Plain` devuelve vacío sin tocar el cache (no aplica).
+    /// (distinto `edit_seq` o `language`), reparsea con tree-sitter
+    /// incremental — aplica los `pending_input_edits` al tree previo
+    /// antes de parsear, y guarda el nuevo tree.
     pub fn highlighted_spans(&self, language: Language) -> Vec<Vec<Span>> {
         if matches!(language, Language::Plain) {
             return Vec::new();
@@ -212,6 +219,12 @@ impl EditorState {
                 return c.spans.clone();
             }
         }
+        // Aplica los InputEdits pending al tree cached antes de parsear
+        // — eso convierte el parseo de "full" a "incremental real".
+        let edits: Vec<tree_sitter::InputEdit> =
+            self.pending_input_edits.borrow_mut().drain(..).collect();
+        crate::highlight::apply_pending_edits(language, &edits);
+
         let mut h = Highlighter::new(language);
         let spans = h.highlight(&self.buffer.text());
         *cache = Some(HighlightCache {
@@ -515,11 +528,12 @@ impl EditorState {
     /// cursores. Procesa en orden de offset descendente para que las
     /// ediciones tempranas no desplacen las posiciones de las
     /// posteriores. Devuelve `true` si al menos uno produjo un delta.
+    /// Cada delta también genera un `tree_sitter::InputEdit` que va a
+    /// `pending_input_edits` para alimentar el incremental parsing.
     fn apply_edit_all<F>(&mut self, mut f: F) -> bool
     where
         F: FnMut(&mut Buffer, &mut Cursor, &EditorOptions) -> Option<crate::ops::EditDelta>,
     {
-        // (which, offset) — which = None = primary, Some(i) = extra[i]
         let mut all: Vec<(Option<usize>, usize)> = Vec::with_capacity(1 + self.extra_cursors.len());
         let p_off = self.buffer.pos_to_offset(self.cursor.caret.line, self.cursor.caret.col);
         all.push((None, p_off));
@@ -536,7 +550,20 @@ impl EditorState {
                 None => &mut self.cursor,
                 Some(i) => &mut self.extra_cursors[i],
             };
+            // Pre-edit positions del start del delta — necesitamos las
+            // coordenadas BYTE del buffer ANTES de la edición.
+            let start_char = self.buffer.pos_to_offset(cursor.caret.line, cursor.caret.col);
+            // Pero si hay selección, el start real es el min de la sel.
+            let (sel_start, _) = cursor.selection_range(&self.buffer);
+            let start_char = start_char.min(sel_start);
+            let start_byte = self.buffer.char_to_byte(start_char);
+            let start_line = self.buffer.char_to_line(start_char);
+            let start_col_byte = start_byte - self.buffer.line_to_byte(start_line);
+            let pre_pt = tree_sitter::Point { row: start_line, column: start_col_byte };
+
             if let Some(d) = f(&mut self.buffer, cursor, &opts) {
+                let edit = compute_input_edit(start_byte, pre_pt, &d);
+                self.pending_input_edits.borrow_mut().push(edit);
                 self.undo.push(d);
                 any = true;
             }
@@ -559,6 +586,54 @@ impl EditorState {
                 true
             }
         });
+    }
+}
+
+/// Convierte un `EditDelta` + posiciones pre-edit a un `InputEdit` de
+/// tree-sitter. tree-sitter trabaja en bytes y `Point { row, column_byte }`;
+/// el editor trabaja en chars (y col_byte para esto).
+///
+/// `start_byte` y `start_point` son las coords del inicio del delta
+/// ANTES del cambio (el caller las captura).
+fn compute_input_edit(
+    start_byte: usize,
+    start_point: tree_sitter::Point,
+    delta: &crate::ops::EditDelta,
+) -> tree_sitter::InputEdit {
+    let removed_bytes = delta.removed.len();
+    let inserted_bytes = delta.inserted.len();
+
+    let old_end_byte = start_byte + removed_bytes;
+    let new_end_byte = start_byte + inserted_bytes;
+
+    let old_end_point = advance_point(start_point, &delta.removed);
+    let new_end_point = advance_point(start_point, &delta.inserted);
+
+    tree_sitter::InputEdit {
+        start_byte,
+        old_end_byte,
+        new_end_byte,
+        start_position: start_point,
+        old_end_position: old_end_point,
+        new_end_position: new_end_point,
+    }
+}
+
+/// Avanza un Point por el contenido de `text`: cuenta `\n` para filas,
+/// bytes de la última línea para columna.
+fn advance_point(start: tree_sitter::Point, text: &str) -> tree_sitter::Point {
+    let newlines = text.bytes().filter(|b| *b == b'\n').count();
+    if newlines == 0 {
+        tree_sitter::Point {
+            row: start.row,
+            column: start.column + text.len(),
+        }
+    } else {
+        let after_last_nl = text.rsplit('\n').next().unwrap_or("").len();
+        tree_sitter::Point {
+            row: start.row + newlines,
+            column: after_last_nl,
+        }
     }
 }
 
@@ -801,6 +876,37 @@ mod tests {
         s.cursor = Cursor::at(15, 0);
         s.ensure_caret_visible(20);
         assert_eq!(s.scroll_offset, 10);
+    }
+
+    #[test]
+    fn input_edits_se_acumulan_y_drenan_en_highlight() {
+        use crate::highlight::Language;
+        let mut s = EditorState::new();
+        s.set_text("fn main() {}");
+        // Set_text invalida pero NO pushea InputEdit (es replace_all).
+        // Después de una edit normal, sí debería haber 1 pending.
+        s.cursor = Cursor::at(0, 12);
+        s.apply_key(&evtext("x", false, false));
+        assert_eq!(s.pending_input_edits.borrow().len(), 1);
+        // El parse drena los pending.
+        let _ = s.highlighted_spans(Language::Rust);
+        assert!(s.pending_input_edits.borrow().is_empty());
+    }
+
+    #[test]
+    fn input_edit_multilinea_calcula_rows_correctamente() {
+        let mut s = EditorState::new();
+        s.set_text("ab");
+        s.cursor = Cursor::at(0, 2);
+        s.apply_key(&ev(NamedKey::Enter, false, false));
+        let edits = s.pending_input_edits.borrow().clone();
+        assert_eq!(edits.len(), 1);
+        let e = &edits[0];
+        // Insertó "\n" (auto-indent vacío porque no había indent) →
+        // new_end_position debe estar en row=1, col=0.
+        assert_eq!(e.start_byte, 2);
+        assert_eq!(e.new_end_position.row, 1);
+        assert_eq!(e.new_end_position.column, 0);
     }
 
     #[test]
