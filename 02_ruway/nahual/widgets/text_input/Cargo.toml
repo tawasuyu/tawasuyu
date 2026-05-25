@@ -1,0 +1,10 @@
+[package]
+name = "nahual-widget-text-input"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+description = "TextInput minimalista para diálogos (rename, prompts). Single-line, sin selección/clipboard."
+
+[dependencies]
+gpui = { workspace = true }
+nahual-theme = { workspace = true }

@@ -1,0 +1,10 @@
+[package]
+name = "nahual-widget-banner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Yahweh — widget banner: tira horizontal de status (info/success/warning/error). Reusable cross-app para toasts, errores, mensajes informativos."
+
+[dependencies]
+gpui = { workspace = true }
+nahual-theme = { path = "../../libs/theme" }

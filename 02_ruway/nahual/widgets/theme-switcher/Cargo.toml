@@ -1,0 +1,14 @@
+[package]
+name = "nahual-widget-theme-switcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Yahweh — widget para ciclar entre presets de Theme en runtime. Botón que muestra el nombre del theme actual y al click avanza al siguiente preset."
+
+[dependencies]
+gpui = { workspace = true }
+nahual-theme = { path = "../../libs/theme" }
+
+[dev-dependencies]
+# TestAppContext + #[gpui::test] para tests del switcher.
+gpui = { workspace = true, features = ["test-support"] }

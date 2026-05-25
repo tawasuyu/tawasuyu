@@ -1,0 +1,13 @@
+[package]
+name = "nahual-launcher"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+description = "Launcher GPUI reusable: Application::new + Theme::install_default + cx.open_window + cx.activate. Las explorer apps lo invocan en una sola línea (`launch_app(title, size, root_factory)`)."
+
+[dependencies]
+gpui = { workspace = true }
+nahual-theme = { path = "../theme" }
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }

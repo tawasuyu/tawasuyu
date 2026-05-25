@@ -1,0 +1,9 @@
+[package]
+name = "nahual-bus"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+description = "AppBus + AppEvent — comunicación cross-widget app-level."
+
+[dependencies]
+gpui = { workspace = true }
