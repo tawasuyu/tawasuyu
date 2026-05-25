@@ -233,12 +233,16 @@ números son leyes.
 ## 5. Lo que viene (no inamovible — roadmap)
 
 - Editor visual: click en canvas → spawnear/mover/borrar Conceptos.
-- Slider widget en Llimphi: edición en vivo de `SimParams` + `ZWeights`
-  + `LayerMods` del Concepto seleccionado.
+- ~~Slider widget en Llimphi~~ — ✓ `llimphi-widget-slider` (2026-05-25).
+  Conectado a `dominium-app-llimphi` para editar `LayerMods` + `radius`
+  del Concepto seleccionado.
 - CLI headless (`dominium-cli`): correr N ticks, dumpar CSV de stats,
   validar determinismo cross-platform.
-- Costo biológico de pendiente: `act_mover` mira el `Z` del destino y
-  paga energía proporcional al gradiente subido (montañas como barreras).
+- ~~Costo biológico de pendiente~~ — ✓ (2026-05-25). `act_mover` lee
+  `SimParams::relieve: [f32; 5]` + `SimParams::climb_cost: f32`. Las
+  montañas (definidas por la combinación lineal de capas) ahora restan
+  score al candidato Y cobran energía extra al lemming al subirlas.
+  Bajar es gratis. Default: relieve sigue a `materia`, climb_cost 0.05.
 - Capas concéntricas estilo estampa andina: para celdas con `Z` alto,
   emitir N rombos apilados a alturas descendentes.
 - Persistencia: guardar pack de Conceptos a JSON desde el panel.

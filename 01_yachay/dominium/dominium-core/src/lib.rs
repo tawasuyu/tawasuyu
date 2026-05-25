@@ -26,5 +26,7 @@ pub mod world;
 pub use conceptos::{BehaviorHack, Concepto, Conceptos, LayerMods, Trigger};
 pub use grid::Grid;
 pub use lemmings::Lemmings;
-pub use params::SimParams;
+pub use params::{
+    SimParams, RELIEVE_DEGRADACION, RELIEVE_MATERIA, RELIEVE_ORO, RELIEVE_PODER, RELIEVE_PSIQUE,
+};
 pub use world::{Action, World};

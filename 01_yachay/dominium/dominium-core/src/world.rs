@@ -66,12 +66,31 @@ impl World {
         self.grid.idx(cx, cy)
     }
 
-    /// 0 · Mover — gravedad mental hacia el vecino más afín al `vector_psi`.
+    /// Relieve físico de la celda `idx` — combinación lineal de las 5
+    /// capas pesada por `p.relieve`. Es la altura que **siente** un
+    /// lemming, no la que se renderiza (esa la define `ZWeights`).
+    fn relieve_at(&self, idx: usize, p: &SimParams) -> f32 {
+        let g = &self.grid;
+        p.relieve[0] * g.materia[idx]
+            + p.relieve[1] * g.psique[idx]
+            + p.relieve[2] * g.poder[idx]
+            + p.relieve[3] * g.oro[idx]
+            + p.relieve[4] * g.degradacion[idx]
+    }
+
+    /// 0 · Mover — gravedad mental hacia el vecino más afín al `vector_psi`,
+    /// penalizado por el costo de pendiente. Las "montañas" emergentes de
+    /// alta `materia` o de alta `psique` (según `p.relieve`) se vuelven
+    /// barreras físicas: cuesta más score subir y se paga energía extra
+    /// proporcional a la altura efectivamente subida.
     pub fn act_mover(&mut self, i: usize, p: &SimParams) {
         let (cx, cy) =
             self.grid.clamp_cell(self.lemmings.pos_x[i], self.lemmings.pos_y[i]);
         let psi = self.lemmings.vector_psi[i];
+        let cur_idx = self.grid.idx(cx, cy);
+        let z_cur = self.relieve_at(cur_idx, p);
         let mut best_dir = (0.0f32, 0.0f32);
+        let mut best_z = z_cur;
         let mut best_score = f32::MIN;
         for (dx, dy) in [(1i64, 0i64), (-1, 0), (0, 1), (0, -1)] {
             let (nx, ny) = (cx as i64 + dx, cy as i64 + dy);
@@ -81,13 +100,17 @@ impl World {
             let idx = self.grid.idx(nx as usize, ny as usize);
             // Orden busca materia, Miedo evita poder, Curiosidad busca
             // psique, Corruptibilidad busca oro.
-            let score = psi[PSI_ORDEN] * self.grid.materia[idx]
+            let mut score = psi[PSI_ORDEN] * self.grid.materia[idx]
                 - psi[PSI_MIEDO] * self.grid.poder[idx]
                 + psi[PSI_CURIOSIDAD] * self.grid.psique[idx]
                 + psi[PSI_CORRUPTIBILIDAD] * self.grid.oro[idx];
+            let z_n = self.relieve_at(idx, p);
+            let climb = (z_n - z_cur).max(0.0);
+            score -= p.climb_cost * climb;
             if score > best_score {
                 best_score = score;
                 best_dir = (dx as f32, dy as f32);
+                best_z = z_n;
             }
         }
         let w = self.grid.width as f32 - 1.0;
@@ -96,7 +119,9 @@ impl World {
             (self.lemmings.pos_x[i] + best_dir.0 * p.move_speed).clamp(0.0, w);
         self.lemmings.pos_y[i] =
             (self.lemmings.pos_y[i] + best_dir.1 * p.move_speed).clamp(0.0, h);
-        self.lemmings.energia[i] -= p.move_cost;
+        // Costo base + costo de pendiente realmente subida.
+        let climb_paid = (best_z - z_cur).max(0.0) * p.climb_cost;
+        self.lemmings.energia[i] -= p.move_cost + climb_paid;
     }
 
     /// 1 · Extraer — vacía materia de la celda hacia la energía del agente.
@@ -225,6 +250,61 @@ mod tests {
         w.act_degradar(0, &p);
         assert!(w.lemmings.energia[1] < 50.0, "la víctima pierde energía");
         assert!(w.lemmings.energia[0] > 50.0, "el atacante absorbe");
+    }
+
+    #[test]
+    fn mover_prefiere_camino_llano_sobre_subir_pendiente() {
+        // Dos vecinos atractivos por materia, uno además requiere subir
+        // una montaña (relieve = materia, climb_cost alto). El lemming
+        // debe elegir el llano.
+        let mut w = World::new(16, 16);
+        let i = w.lemmings.spawn(8.0, 8.0, 100.0, [1.0, 0.0, 0.0, 0.0]);
+        // Materia idéntica a ambos lados de la celda actual.
+        let right = w.grid.idx(9, 8);
+        let left = w.grid.idx(7, 8);
+        w.grid.materia[right] = 50.0;
+        w.grid.materia[left] = 50.0;
+        // Pero al subir a la derecha estamos sobre un pico alto.
+        // Como `relieve = materia`, el right_idx tiene z=50; el left_idx tiene
+        // z=50 también. Para forzar pendiente asimétrica subimos sólo la
+        // derecha:
+        w.grid.materia[right] = 200.0; // pico mucho mayor
+        let mut p = SimParams::default();
+        p.climb_cost = 10.0; // pendiente brutalmente cara
+        let x0 = w.lemmings.pos_x[i];
+        w.act_mover(i, &p);
+        // El pico está a la derecha; con climb_cost = 10 cuesta demasiado.
+        // Cualquier movimiento que NO sea hacia +x está bien (izq, arriba
+        // o abajo son todos llanos).
+        assert!(w.lemmings.pos_x[i] <= x0, "no fue hacia el pico de la derecha");
+    }
+
+    #[test]
+    fn mover_cobra_energia_extra_por_subir() {
+        let mut w = World::new(8, 8);
+        let i = w.lemmings.spawn(4.0, 4.0, 100.0, [1.0, 0.0, 0.0, 0.0]);
+        // Pico a la derecha.
+        let right = w.grid.idx(5, 4);
+        w.grid.materia[right] = 100.0;
+        // Caso A: climb_cost = 0 (sin penalty). Energy gastada = move_cost.
+        let mut p = SimParams::default();
+        p.climb_cost = 0.0;
+        w.act_mover(i, &p);
+        let after_flat = w.lemmings.energia[i];
+        let lost_flat = 100.0 - after_flat;
+        // Reset y repetir con climb_cost > 0.
+        let mut w2 = World::new(8, 8);
+        let j = w2.lemmings.spawn(4.0, 4.0, 100.0, [1.0, 0.0, 0.0, 0.0]);
+        let right2 = w2.grid.idx(5, 4);
+        w2.grid.materia[right2] = 100.0;
+        let mut p2 = SimParams::default();
+        p2.climb_cost = 0.5;
+        w2.act_mover(j, &p2);
+        let lost_climb = 100.0 - w2.lemmings.energia[j];
+        // Sin climb_cost, el agente puede ir igual al pico (porque la
+        // materia lo atrae mucho), pero pierde más energía cuando climb_cost
+        // > 0 porque paga la altura subida.
+        assert!(lost_climb > lost_flat, "subir con climb_cost > 0 cuesta más");
     }
 
     #[test]

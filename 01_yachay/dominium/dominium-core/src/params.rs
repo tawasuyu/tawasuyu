@@ -36,7 +36,25 @@ pub struct SimParams {
     pub diffusion_rate: f32,
     /// Tasa de pérdida natural (entropía) de los campos por tick (0-1).
     pub entropy_rate: f32,
+    /// Pesos por capa que definen el **relieve físico** que sienten los
+    /// lemmings al moverse (no es lo mismo que el `ZWeights` del render —
+    /// el render puede mostrar una vista distinta de la "altura"). El
+    /// gradiente del relieve atrae/repele en `act_mover` y cobra
+    /// `climb_cost` extra de energía por unidad subida.
+    pub relieve: [f32; 5],
+    /// Energía consumida por unidad de relieve **subido** en `act_mover`
+    /// (los lemmings no pagan extra al bajar). El score de un candidato
+    /// se reduce en `climb_cost · max(0, z_dst − z_src)` antes de elegir.
+    pub climb_cost: f32,
 }
+
+/// Índices semánticos para indexar `SimParams::relieve`. Coinciden con el
+/// orden de capas del `Grid`.
+pub const RELIEVE_MATERIA: usize = 0;
+pub const RELIEVE_PSIQUE: usize = 1;
+pub const RELIEVE_PODER: usize = 2;
+pub const RELIEVE_ORO: usize = 3;
+pub const RELIEVE_DEGRADACION: usize = 4;
 
 impl Default for SimParams {
     fn default() -> Self {
@@ -55,6 +73,11 @@ impl Default for SimParams {
             max_edad: 1000,
             diffusion_rate: 0.10,
             entropy_rate: 0.01,
+            // Default: el relieve físico sigue a materia, igual que el
+            // ZWeights del render por defecto. Las montañas de "biomasa"
+            // son las que se sienten al caminar.
+            relieve: [1.0, 0.0, 0.0, 0.0, 0.0],
+            climb_cost: 0.05,
         }
     }
 }
