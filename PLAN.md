@@ -115,11 +115,11 @@ Cuando Llimphi tenga las 4 fases verdes, portar:
 
 ## 8. Próxima sesión arranca con
 
-**Input de teclado en llimphi-ui** — bloquea cualquier app que tipea.
-- Extender `App` con `fn on_key(model, key, mods) -> Option<Msg>` y `fn on_char(model, ch) -> Option<Msg>`.
-- Runtime intercepta `WindowEvent::KeyboardInput` y delega.
-- Hito: example `editor` mínimo — text field editable con backspace, cursor visible.
+**Migración GPUI → Llimphi**. Llimphi ya tiene: render gráfico (vello), layout flex/grid (taffy), texto con shaping (parley), input mouse+teclado, bucle Elm. Suficiente para portar la primera app.
 
-Luego: **Migración GPUI → Llimphi** (Pluma editor o Nahual shell).
+Candidatos (orden de menor a mayor riesgo):
+1. **`mirada-launcher`** — UI sencilla, sin estado complejo. Bueno para validar.
+2. **`pluma-editor-gpui`** → `pluma-editor-llimphi` — editor de texto. Stretch: cursor positioning con click, selección, multi-line wrap.
+3. **`nahual-shell`** + un par de widgets — file explorer básico, valida composición.
 
 En paralelo (no bloqueado): **Fase 1 de Puriy** (`puriy-core` puro Rust — Tab/Session/History/Bookmark/Profile testeables).

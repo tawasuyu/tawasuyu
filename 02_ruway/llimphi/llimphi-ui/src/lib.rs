@@ -15,8 +15,11 @@ use llimphi_hal::winit::application::ApplicationHandler;
 use llimphi_hal::winit::dpi::{LogicalSize, PhysicalPosition};
 use llimphi_hal::winit::event::{ElementState, MouseButton, WindowEvent};
 use llimphi_hal::winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use llimphi_hal::winit::keyboard::ModifiersState;
 use llimphi_hal::winit::window::{Window, WindowAttributes, WindowId};
 use llimphi_hal::{Hal, Surface, WinitSurface};
+
+pub use llimphi_hal::winit::keyboard::{Key, NamedKey};
 use llimphi_layout::taffy::NodeId;
 use llimphi_layout::{ComputedLayout, LayoutTree, Style};
 use llimphi_raster::kurbo::{Affine, RoundedRect};
@@ -37,17 +40,63 @@ pub trait App: 'static {
     fn update(model: Self::Model, msg: Self::Msg) -> Self::Model;
     fn view(model: &Self::Model) -> View<Self::Msg>;
 
+    /// Maneja una pulsación de tecla. Devuelve `Some(Msg)` para disparar
+    /// una transición; `None` (default) ignora la tecla.
+    fn on_key(_model: &Self::Model, _event: &KeyEvent) -> Option<Self::Msg> {
+        None
+    }
+
     /// Título de la ventana (sólo se lee al arrancar).
     fn title() -> &'static str {
         "llimphi"
     }
 }
 
-/// Texto a pintar centrado dentro de un nodo.
+/// Evento de teclado normalizado.
+#[derive(Debug, Clone)]
+pub struct KeyEvent {
+    pub key: Key,
+    pub state: KeyState,
+    /// Texto resultante (con modifiers e IME aplicados). Útil para inserción
+    /// directa; `None` para teclas que no producen texto (flechas, etc.).
+    pub text: Option<String>,
+    pub modifiers: Modifiers,
+    pub repeat: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyState {
+    Pressed,
+    Released,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Modifiers {
+    pub shift: bool,
+    pub ctrl: bool,
+    pub alt: bool,
+    pub meta: bool,
+}
+
+impl From<ModifiersState> for Modifiers {
+    fn from(m: ModifiersState) -> Self {
+        Self {
+            shift: m.shift_key(),
+            ctrl: m.control_key(),
+            alt: m.alt_key(),
+            meta: m.super_key(),
+        }
+    }
+}
+
+/// Texto a pintar dentro de un nodo. Alineación por defecto `Center`
+/// (horizontal y vertical), apta para labels de botón. Para layouts tipo
+/// editor o párrafo, usar `.text_aligned(...)` con `Alignment::Start`.
 pub struct TextSpec {
     pub content: String,
     pub size_px: f32,
     pub color: Color,
+    pub alignment: llimphi_text::Alignment,
 }
 
 /// Nodo de la vista declarativa. Estilo de layout (taffy) + relleno opcional
@@ -88,6 +137,23 @@ impl<Msg> View<Msg> {
             content: content.into(),
             size_px,
             color,
+            alignment: llimphi_text::Alignment::Center,
+        });
+        self
+    }
+
+    pub fn text_aligned(
+        mut self,
+        content: impl Into<String>,
+        size_px: f32,
+        color: Color,
+        alignment: llimphi_text::Alignment,
+    ) -> Self {
+        self.text = Some(TextSpec {
+            content: content.into(),
+            size_px,
+            color,
+            alignment,
         });
         self
     }
@@ -184,22 +250,26 @@ fn paint<Msg>(
             scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &rr);
         }
         if let Some(text) = node.text.as_ref() {
-            // Parley alinea horizontalmente con max_width=r.w + Alignment::Center.
-            // Para el centrado vertical medimos primero el alto.
+            // Parley resuelve la alineación horizontal vía max_width + alignment.
+            // Para Center también centramos verticalmente; para Start/End/Justify
+            // anclamos arriba (comportamiento esperado de párrafo/editor).
+            let line_height = 1.2;
             let mut block = llimphi_text::TextBlock {
                 text: &text.content,
                 size_px: text.size_px,
                 color: text.color,
                 origin: (r.x as f64, r.y as f64),
                 max_width: Some(r.w),
-                alignment: llimphi_text::Alignment::Center,
-                line_height: 1.0,
+                alignment: text.alignment,
+                line_height,
             };
-            let m = llimphi_text::measure(typesetter, &block);
-            block.origin = (
-                r.x as f64,
-                r.y as f64 + ((r.h - m.height) as f64 * 0.5).max(0.0),
-            );
+            if matches!(text.alignment, llimphi_text::Alignment::Center) {
+                let m = llimphi_text::measure(typesetter, &block);
+                block.origin = (
+                    r.x as f64,
+                    r.y as f64 + ((r.h - m.height) as f64 * 0.5).max(0.0),
+                );
+            }
             llimphi_text::draw_block(scene, typesetter, &block);
         }
     }
@@ -238,6 +308,7 @@ struct RuntimeState<A: App> {
     scene: vello::Scene,
     model: Option<A::Model>,
     cursor: PhysicalPosition<f64>,
+    modifiers: Modifiers,
     typesetter: llimphi_text::Typesetter,
 }
 
@@ -267,6 +338,7 @@ impl<A: App> ApplicationHandler for Runtime<A> {
             scene: vello::Scene::new(),
             model: Some(A::init()),
             cursor: PhysicalPosition::new(0.0, 0.0),
+            modifiers: Modifiers::default(),
             typesetter,
         });
     }
@@ -288,6 +360,26 @@ impl<A: App> ApplicationHandler for Runtime<A> {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 state.cursor = position;
+            }
+            WindowEvent::ModifiersChanged(mods) => {
+                state.modifiers = mods.state().into();
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                let ev = KeyEvent {
+                    key: event.logical_key.clone(),
+                    state: match event.state {
+                        ElementState::Pressed => KeyState::Pressed,
+                        ElementState::Released => KeyState::Released,
+                    },
+                    text: event.text.as_ref().map(|t| t.to_string()),
+                    modifiers: state.modifiers,
+                    repeat: event.repeat,
+                };
+                if let Some(msg) = A::on_key(state.model.as_ref().expect("model"), &ev) {
+                    let model = state.model.take().expect("model");
+                    state.model = Some(A::update(model, msg));
+                    state.window.request_redraw();
+                }
             }
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,

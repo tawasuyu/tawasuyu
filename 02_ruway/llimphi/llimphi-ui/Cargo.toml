@@ -16,3 +16,7 @@ pollster = { workspace = true }
 [[example]]
 name = "counter"
 path = "examples/counter.rs"
+
+[[example]]
+name = "editor"
+path = "examples/editor.rs"
