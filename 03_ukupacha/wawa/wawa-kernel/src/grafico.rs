@@ -337,21 +337,48 @@ impl Pantalla {
     /// optimizador lo materializa con instrucciones `rep movsq` o equivalentes
     /// SIMD—. Para FB de 1/2/3 bpp se recae al bucle volatil pixel a pixel.
     pub(crate) fn presentar(&mut self, lienzo: &Lienzo) {
-        let ancho = self.ancho.min(lienzo.ancho);
-        let alto = self.alto.min(lienzo.alto);
+        let region = RegionPantalla {
+            x: 0,
+            y: 0,
+            ancho: self.ancho.min(lienzo.ancho),
+            alto: self.alto.min(lienzo.alto),
+        };
+        self.presentar_region(lienzo, region);
+    }
+
+    /// Vuelca una SUB-REGION del lienzo al framebuffer. Es el corazon del
+    /// camino rapido del compositor: cuando solo un marco cambio, basta
+    /// blittear ese marco —no la pantalla entera—. La region se recorta tanto
+    /// al lienzo como a la pantalla fisica antes de tocar memoria.
+    pub(crate) fn presentar_region(&mut self, lienzo: &Lienzo, region: RegionPantalla) {
+        // Recorte: x_fin / y_fin a las dos superficies.
+        let x_ini = region.x.min(self.ancho).min(lienzo.ancho);
+        let y_ini = region.y.min(self.alto).min(lienzo.alto);
+        let x_fin = region
+            .x
+            .saturating_add(region.ancho)
+            .min(self.ancho)
+            .min(lienzo.ancho);
+        let y_fin = region
+            .y
+            .saturating_add(region.alto)
+            .min(self.alto)
+            .min(lienzo.alto);
+        if x_fin <= x_ini || y_fin <= y_ini {
+            return;
+        }
+        let ancho = x_fin - x_ini;
 
         if self.bytes_por_pixel == 4 {
             let bytes_por_fila = ancho * 4;
-            for y in 0..alto {
-                let fila_lienzo = y * lienzo.ancho;
-                let fila_fisica = y * self.paso_bytes;
+            for y in y_ini..y_fin {
+                let fila_lienzo = y * lienzo.ancho + x_ini;
+                let fila_fisica = y * self.paso_bytes + x_ini * 4;
                 // SEGURIDAD: `fila_lienzo + ancho` cae dentro de `lienzo.pixeles`
-                // (acotado por `lienzo.ancho`), y `fila_fisica + bytes_por_fila`
-                // cae dentro del framebuffer (acotado por `paso_bytes` y por la
-                // altura fisica). El destino es memoria de video write-combining
-                // del firmware UEFI; un `memcpy` no volatil es la operacion
-                // canonica de blit y LLVM no la elide (el `*mut u8` cruzo la
-                // frontera FFI del cargador y sus alias son opacos).
+                // (recorte garantiza x_fin <= lienzo.ancho), y `fila_fisica +
+                // bytes_por_fila` dentro del framebuffer. Memoria de video WC
+                // del firmware UEFI; memcpy es la operacion canonica de blit y
+                // LLVM no la elide (el *mut u8 cruza frontera FFI del cargador).
                 unsafe {
                     let src = lienzo.pixeles.as_ptr().add(fila_lienzo) as *const u8;
                     let dst = self.base.add(fila_fisica);
@@ -359,12 +386,11 @@ impl Pantalla {
                 }
             }
         } else {
-            for y in 0..alto {
+            for y in y_ini..y_fin {
                 let fila_fisica = y * self.paso_bytes;
                 let fila_lienzo = y * lienzo.ancho;
-                for x in 0..ancho {
+                for x in x_ini..x_fin {
                     let pixel = lienzo.pixeles[fila_lienzo + x];
-                    // SEGURIDAD: x e y acotados a las dimensiones reales del FB.
                     unsafe {
                         let destino = self.base.add(fila_fisica + x * self.bytes_por_pixel);
                         escribir_pixel_volatil(destino, pixel, self.bytes_por_pixel);
