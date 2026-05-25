@@ -188,13 +188,27 @@ extern "C" {
 
 pub struct DoomEngine {
     // CStrings dueñas de la memoria que argv apunta — debemos
-    // mantenerlas vivas mientras el motor corre. No se acceden
-    // directamente después de `new`.
+    // mantenerlas vivas mientras el motor corre. doomgeneric guarda
+    // `myargv = argv` y consulta los args con `M_CheckParm` durante
+    // toda la partida; si los liberamos, segfault a los pocos
+    // segundos cuando el motor consulta `-nosound` o similar.
     _args: Vec<CString>,
+    /// Vec<*mut c_char> que doomgeneric guardó en `myargv`. También
+    /// vive lo que vive el engine — debemos preservarlo o `myargv`
+    /// queda dangling.
+    _argv: Vec<*mut std::ffi::c_char>,
     /// `true` si vendor/doomgeneric/ se compiló y el motor real está
     /// linkeado. `false` en modo stub.
     pub real: bool,
 }
+
+// SAFETY: `*mut c_char` no es Send + Sync por defecto, pero los
+// punteros que `_argv` mantiene apuntan a memoria dueña de `_args`
+// (CString) que sí es Send; los pointers nunca se desreferencian
+// desde Rust después de `new`. El motor C los consulta desde el
+// thread del tick siempre con el mismo address space.
+unsafe impl Send for DoomEngine {}
+unsafe impl Sync for DoomEngine {}
 
 impl DoomEngine {
     /// Inicializa doomgeneric con `args` estilo `argv`. El primer
@@ -210,19 +224,22 @@ impl DoomEngine {
             .into_iter()
             .filter_map(|s| CString::new(s).ok())
             .collect();
+        let mut argv: Vec<*mut std::ffi::c_char> =
+            cstrings.iter().map(|c| c.as_ptr() as *mut _).collect();
+        argv.push(std::ptr::null_mut());
         #[cfg(not(doomgeneric_stub))]
         {
-            let mut argv: Vec<*mut std::ffi::c_char> =
-                cstrings.iter().map(|c| c.as_ptr() as *mut _).collect();
-            argv.push(std::ptr::null_mut());
-            // SAFETY: doomgeneric_Create lee argc + argv como sería C.
-            // Los CStrings viven en `_args` (movidos a Self abajo).
+            // SAFETY: doomgeneric_Create lee argc + argv como sería C
+            // y guarda los punteros en `myargv` globales. Los
+            // mantenemos vivos en `_args` (CStrings) y `_argv` (Vec
+            // de ptrs) durante toda la vida del engine.
             unsafe {
                 doomgeneric_Create(cstrings.len() as std::ffi::c_int, argv.as_mut_ptr());
             }
         }
         Self {
             _args: cstrings,
+            _argv: argv,
             real: cfg!(not(doomgeneric_stub)),
         }
     }
