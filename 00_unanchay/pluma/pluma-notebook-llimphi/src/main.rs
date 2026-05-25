@@ -34,7 +34,9 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
-use llimphi_widget_text_area::{text_area_view, TextAreaPalette, TextAreaState};
+use llimphi_widget_text_editor::{
+    text_editor_view, EditorMetrics, EditorPalette, EditorState,
+};
 use pluma_notebook_core::{
     Cell, CellId, CellKind, CellOutput, CellState, Notebook, Position as CanvasPos,
 };
@@ -64,11 +66,13 @@ enum Msg {
     CancelEdit,
 }
 
-/// Estado de una celda en edición. Multilínea — Enter inserta `\n`, el
-/// commit explícito es **Ctrl+Enter** o el botón ✓. Esc cancela.
+/// Estado de una celda en edición. Editor completo: rope buffer + flechas
+/// + selección + undo/redo + indent auto + bracket matching. **Ctrl+Enter**
+/// commitea (set_source en el notebook), **Esc** cancela. La card crece
+/// a alto extendido mientras dura la edición.
 struct EditState {
     id: CellId,
-    input: TextAreaState,
+    editor: EditorState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -171,23 +175,21 @@ impl App for Viewer {
             },
             Msg::StartEdit(id) => {
                 let Some(cell) = model.notebook.cell(id) else { return model };
-                let mut input = TextAreaState::new();
-                input.set_text(&cell.source);
-                Model { editing: Some(EditState { id, input }), ..model }
+                let mut editor = EditorState::new();
+                editor.set_text(&cell.source);
+                Model { editing: Some(EditState { id, editor }), ..model }
             }
             Msg::EditKey(ev) => {
                 let mut model = model;
                 if let Some(edit) = model.editing.as_mut() {
-                    edit.input.apply_key(&ev);
+                    let _ = edit.editor.apply_key(&ev);
                 }
                 model
             }
             Msg::CommitEdit => {
                 let mut model = model;
                 if let Some(edit) = model.editing.take() {
-                    let _ = model.notebook.set_source(edit.id, edit.input.text());
-                    // set_source ya marca Stale + propaga; el último output
-                    // queda visible para comparar.
+                    let _ = model.notebook.set_source(edit.id, edit.editor.text());
                 }
                 model
             }
@@ -203,7 +205,7 @@ impl App for Viewer {
             return None;
         }
         match &event.key {
-            // Ctrl+Enter commitea; Enter solo agrega \n al text-area.
+            // Ctrl+Enter commitea; Enter solo inserta \n al editor.
             Key::Named(NamedKey::Enter) if event.modifiers.ctrl => Some(Msg::CommitEdit),
             Key::Named(NamedKey::Escape) => Some(Msg::CancelEdit),
             _ => Some(Msg::EditKey(event.clone())),
@@ -393,12 +395,16 @@ fn linear_body_height(source: &str) -> f32 {
 
 /// Tamaño fijo del card en canvas — el alto del body sale del card, no
 /// del texto, para que los conectores sean estables.
-const CANVAS_CARD_W: f32 = 240.0;
+const CANVAS_CARD_W: f32 = 280.0;
 const CANVAS_CARD_H: f32 = 112.0;
+/// Alto extendido cuando la card está en modo edición — da espacio
+/// para que el editor multilínea muestre varias líneas y caret/brackets.
+const CANVAS_CARD_H_EDITING: f32 = 240.0;
 const CANVAS_BODY_LINES_VISIBLE: usize = 3;
 const CANVAS_HEADER_H: f32 = 18.0;
 const CANVAS_FOOTER_H: f32 = 16.0;
 const CANVAS_BODY_H: f32 = CANVAS_CARD_H - CANVAS_HEADER_H - CANVAS_FOOTER_H;
+const CANVAS_EDITOR_H: f32 = CANVAS_CARD_H_EDITING - CANVAS_HEADER_H - CANVAS_FOOTER_H;
 
 fn canvas_view(
     nb: &Notebook,
@@ -457,19 +463,21 @@ fn canvas_card(
     y: f32,
 ) -> View<Msg> {
     let id = cell.id;
-    let (header, body) = card_header_body(cell, palette, CANVAS_BODY_H);
+    let editing = edit.is_some();
+    let total_h = if editing { CANVAS_CARD_H_EDITING } else { CANVAS_CARD_H };
+    let body_h = if editing { CANVAS_EDITOR_H } else { CANVAS_BODY_H };
+    let (header, body) = card_header_body(cell, palette, body_h);
     let footer = output_footer(cell.last_output.as_ref(), palette);
     let run_button = run_button_view(id, palette);
-    let edit_button = edit_button_view(id, edit.is_some(), palette);
+    let edit_button = edit_button_view(id, editing, palette);
 
-    // En edición el body se reemplaza por el text input.
+    // En edición el body se reemplaza por el editor.
     let body = match edit {
         None => body,
-        Some(es) => edit_input_view(&es.input, palette),
+        Some(es) => edit_input_view(&es.editor, body_h),
     };
 
-    // En edición la card no debe ser draggable (interfiere con foco
-    // del input) ni renderizar conectores reactivos al delta.
+    // En edición la card no debe ser draggable (interfiere con foco).
     let mut wrapper = View::new(Style {
         flex_direction: FlexDirection::Column,
         position: Position::Absolute,
@@ -479,12 +487,12 @@ fn canvas_card(
             right: auto(),
             bottom: auto(),
         },
-        size: Size { width: length(CANVAS_CARD_W), height: length(CANVAS_CARD_H) },
+        size: Size { width: length(CANVAS_CARD_W), height: length(total_h) },
         ..Default::default()
     })
     .fill(palette.bg_card)
     .clip(true);
-    if edit.is_none() {
+    if !editing {
         wrapper = wrapper.draggable(move |phase, dx, dy| match phase {
             DragPhase::Move => Some(Msg::MoveCell { id, dx, dy }),
             DragPhase::End => None,
@@ -493,27 +501,11 @@ fn canvas_card(
     wrapper.children(vec![header, body, footer, edit_button, run_button])
 }
 
-fn edit_input_view(input: &TextAreaState, palette: &Palette) -> View<Msg> {
-    let tp = TextAreaPalette::from_theme(&Theme::dark());
-    let _ = palette;
-    View::new(Style {
-        size: Size { width: percent(1.0_f32), height: length(CANVAS_BODY_H) },
-        padding: Rect {
-            left: length(4.0_f32),
-            right: length(4.0_f32),
-            top: length(2.0_f32),
-            bottom: length(2.0_f32),
-        },
-        ..Default::default()
-    })
-    .children(vec![text_area_view(
-        input,
-        "fuente… (Ctrl+Enter commit · Esc cancela)",
-        true,
-        CANVAS_BODY_H - 4.0,
-        &tp,
-        Msg::CancelEdit,
-    )])
+fn edit_input_view(editor: &EditorState, body_h: f32) -> View<Msg> {
+    let theme = Theme::dark();
+    let ep = EditorPalette::from_theme(&theme);
+    let metrics = EditorMetrics::for_font_size(12.0);
+    text_editor_view(editor, &ep, metrics, body_h, Msg::CancelEdit)
 }
 
 fn output_footer(out: Option<&CellOutput>, palette: &Palette) -> View<Msg> {

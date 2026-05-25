@@ -15,14 +15,17 @@
 
 #![forbid(unsafe_code)]
 
+pub mod bracket;
 pub mod buffer;
 pub mod cursor;
 pub mod ops;
 pub mod state;
 pub mod undo;
+pub mod view;
 
 pub use buffer::Buffer;
 pub use cursor::{Cursor, Pos, Selection};
 pub use ops::{indent_str, EditDelta};
 pub use state::{ApplyResult, EditorOptions, EditorState};
 pub use undo::UndoStack;
+pub use view::{text_editor_view, EditorMetrics, EditorPalette};
