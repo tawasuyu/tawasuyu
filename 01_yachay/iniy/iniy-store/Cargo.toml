@@ -1,0 +1,17 @@
+[package]
+name = "iniy-store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "iniy — persistencia: documentos, chunks, aserciones y matriz NLI sobre SQLite."
+
+[dependencies]
+iniy-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+rusqlite = { workspace = true }

@@ -1,0 +1,15 @@
+[package]
+name = "iniy-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "iniy — tipos núcleo: Asercion, Confianza, Postura, Implicacion. Modela grados de creencia (no de verdad) sobre un espacio vectorial subjetivo."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+ulid = { workspace = true }

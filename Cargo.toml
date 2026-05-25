@@ -94,6 +94,13 @@ members = [
     "01_yachay/dominium/dominium-iso",
     "01_yachay/dominium/dominium-physics",
     "01_yachay/dominium/dominium-render-plan",
+    "01_yachay/iniy/iniy-cli",
+    "01_yachay/iniy/iniy-core",
+    "01_yachay/iniy/iniy-extract",
+    "01_yachay/iniy/iniy-graph",
+    "01_yachay/iniy/iniy-ingest",
+    "01_yachay/iniy/iniy-nli",
+    "01_yachay/iniy/iniy-store",
     "01_yachay/nakui/nakui-core",
     "01_yachay/nakui/nakui-explorer",
     "01_yachay/nakui/nakui-ui",
@@ -350,6 +357,9 @@ tree-sitter-go = "0.23"
 # === FS notify ===
 notify = "6.1"
 
+# === Grafos (iniy, nakui-core ya lo usa directo en 0.6) ===
+petgraph = "0.6"
+
 # === Image decoding (nahual-image-viewer-llimphi) ===
 # default-features = false: nos quedamos con PNG + JPEG, que es el 95%
 # de los formatos en el wild. WebP/AVIF/etc. los habilitamos si una app
@@ -466,6 +476,16 @@ pineal-flow = { path = "00_unanchay/pineal/pineal-flow" }
 pineal-phosphor = { path = "00_unanchay/pineal/pineal-phosphor" }
 pineal-export = { path = "00_unanchay/pineal/pineal-export" }
 pineal = { path = "00_unanchay/pineal/pineal-umbrella" }
+
+# ============================================================
+# Intra-workspace deps de iniy (laboratorio semántico de creencias)
+# ============================================================
+iniy-core = { path = "01_yachay/iniy/iniy-core" }
+iniy-ingest = { path = "01_yachay/iniy/iniy-ingest" }
+iniy-extract = { path = "01_yachay/iniy/iniy-extract" }
+iniy-nli = { path = "01_yachay/iniy/iniy-nli" }
+iniy-graph = { path = "01_yachay/iniy/iniy-graph" }
+iniy-store = { path = "01_yachay/iniy/iniy-store" }
 
 # === auto: declarados por crates internos faltantes ===
 cosmos-coords = { path = "01_yachay/cosmos/cosmos-coords" }

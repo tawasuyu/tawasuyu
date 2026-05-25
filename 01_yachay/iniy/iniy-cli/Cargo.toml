@@ -1,0 +1,26 @@
+[package]
+name = "iniy-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "iniy — CLI: ingest, extract, nli, contradictions."
+
+[[bin]]
+name = "iniy"
+path = "src/main.rs"
+
+[dependencies]
+iniy-core = { workspace = true }
+iniy-ingest = { workspace = true }
+iniy-extract = { workspace = true }
+iniy-nli = { workspace = true }
+iniy-graph = { workspace = true }
+iniy-store = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

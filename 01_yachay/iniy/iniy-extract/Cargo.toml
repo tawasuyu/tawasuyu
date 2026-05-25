@@ -1,0 +1,18 @@
+[package]
+name = "iniy-extract"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "iniy — extracción de aserciones atómicas desde chunks de texto (via LLM)."
+
+[dependencies]
+iniy-core = { workspace = true }
+iniy-ingest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
