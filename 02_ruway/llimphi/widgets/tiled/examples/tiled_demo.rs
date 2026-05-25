@@ -1,6 +1,6 @@
-//! Showcase de `llimphi-widget-tiled`: 5 tiles heterogéneos en una
-//! grilla auto cols×rows. Sirve también como smoke test del recorte
-//! rounded (cada tile tiene `radius` 4 + `clip`).
+//! Showcase de `llimphi-widget-tiled` con drag-to-swap. Cinco paneles
+//! heterogéneos; arrastrá la title bar de uno sobre otro para
+//! intercambiarlos. El destino se ilumina mientras está bajo el cursor.
 //!
 //! Corré con: `cargo run -p llimphi-widget-tiled --example tiled_demo --release`.
 
@@ -12,12 +12,25 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, View};
-use llimphi_widget_tiled::{tiled_view, TileSpec, TiledPalette};
+use llimphi_widget_tiled::{tiled_view_reorderable, TileSpec, TiledPalette};
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TileId {
+    Logs,
+    Metrics,
+    Alerts,
+    Uptime,
+    Queue,
+}
 
 #[derive(Clone)]
-enum Msg {}
+enum Msg {
+    Swap { from: usize, to: usize },
+}
 
-struct Model;
+struct Model {
+    tiles: Vec<TileId>,
+}
 
 struct Showcase;
 
@@ -26,7 +39,7 @@ impl App for Showcase {
     type Msg = Msg;
 
     fn title() -> &'static str {
-        "llimphi · tiled showcase"
+        "llimphi · tiled showcase (drag titles para intercambiar)"
     }
 
     fn initial_size() -> (u32, u32) {
@@ -34,41 +47,65 @@ impl App for Showcase {
     }
 
     fn init(_: &Handle<Msg>) -> Model {
-        Model
+        Model {
+            tiles: vec![
+                TileId::Logs,
+                TileId::Metrics,
+                TileId::Alerts,
+                TileId::Uptime,
+                TileId::Queue,
+            ],
+        }
     }
 
-    fn update(model: Model, _msg: Msg, _: &Handle<Msg>) -> Model {
-        model
+    fn update(model: Model, msg: Msg, _: &Handle<Msg>) -> Model {
+        let mut m = model;
+        match msg {
+            Msg::Swap { from, to } => {
+                if from != to && from < m.tiles.len() && to < m.tiles.len() {
+                    m.tiles.swap(from, to);
+                }
+            }
+        }
+        m
     }
 
-    fn view(_model: &Model) -> View<Msg> {
+    fn view(model: &Model) -> View<Msg> {
         let theme = Theme::dark();
         let palette = TiledPalette::from_theme(&theme);
 
-        let tiles = vec![
-            TileSpec {
-                label: "logs".into(),
-                content: log_body(&theme),
-            },
-            TileSpec {
-                label: "métricas".into(),
-                content: metrics_body(&theme),
-            },
-            TileSpec {
-                label: "alertas".into(),
-                content: alerts_body(&theme),
-            },
-            TileSpec {
-                label: "uptime".into(),
-                content: uptime_body(&theme),
-            },
-            TileSpec {
-                label: "queue".into(),
-                content: queue_body(&theme),
-            },
-        ];
+        let tiles: Vec<TileSpec<Msg>> = model
+            .tiles
+            .iter()
+            .map(|id| match id {
+                TileId::Logs => TileSpec {
+                    label: "logs".into(),
+                    content: log_body(&theme),
+                },
+                TileId::Metrics => TileSpec {
+                    label: "métricas".into(),
+                    content: metrics_body(&theme),
+                },
+                TileId::Alerts => TileSpec {
+                    label: "alertas".into(),
+                    content: alerts_body(&theme),
+                },
+                TileId::Uptime => TileSpec {
+                    label: "uptime".into(),
+                    content: uptime_body(&theme),
+                },
+                TileId::Queue => TileSpec {
+                    label: "queue".into(),
+                    content: queue_body(&theme),
+                },
+            })
+            .collect();
 
-        tiled_view(tiles, &palette)
+        tiled_view_reorderable(
+            tiles,
+            |from, to| Some(Msg::Swap { from, to }),
+            &palette,
+        )
     }
 }
 

@@ -10,17 +10,18 @@
 //! algoritmo que el `nahual-widget-tiled` GPUI. Las celdas son
 //! equipesos: `flex_grow = 1` sobre ambos ejes.
 //!
-//! No hay drag-to-swap todavía: el `nahual-widget-tiled` GPUI emite
-//! `TiledEvent::Reordered { from, to }` cuando el usuario arrastra el
-//! title bar de un tile sobre otro, pero implementarlo en Llimphi
-//! requiere un sistema de drop-targets globales que `llimphi-ui`
-//! no expone aún (`View::draggable` da delta por nodo, no
-//! "el cursor está sobre el nodo X mientras el drag de Y está
-//! activo"). Cuando llimphi-ui gane drop-targets, este widget pasa
-//! a emitir `Msg::Reorder { from, to }` igual que el GPUI; mientras
-//! tanto, sirve como contenedor estático multipanel.
+//! ## Variantes
+//!
+//! - [`tiled_view`] — grilla estática, sin reordenamiento.
+//! - [`tiled_view_reorderable`] — drag-to-swap: arrastrar la title bar
+//!   de un tile y soltar sobre otro emite `on_reorder(from, to)`. El
+//!   tile destino se ilumina (`drop_hover_fill` = `accent`) mientras
+//!   el cursor está sobre él durante el drag. Usa los primitives
+//!   `drag_payload` + `on_drop` + `drop_hover_fill` de `llimphi-ui`.
 
 #![forbid(unsafe_code)]
+
+use std::sync::Arc;
 
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, Dimension, FlexDirection, Size, Style},
@@ -28,7 +29,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::View;
+use llimphi_ui::{DragPhase, View};
 
 const TITLE_BAR_HEIGHT: f32 = 20.0;
 const TITLE_TEXT_SIZE: f32 = 10.0;
@@ -46,6 +47,8 @@ pub struct TiledPalette {
     pub bg_title: Color,
     /// Color del label de la title bar.
     pub fg_title: Color,
+    /// Color del tile destino durante un drag (drop hover).
+    pub bg_drop_hover: Color,
 }
 
 impl Default for TiledPalette {
@@ -61,6 +64,7 @@ impl TiledPalette {
             bg_tile: t.bg_panel,
             bg_title: t.bg_panel_alt,
             fg_title: t.fg_muted,
+            bg_drop_hover: t.bg_selected,
         }
     }
 }
@@ -71,11 +75,40 @@ pub struct TileSpec<Msg> {
     pub content: View<Msg>,
 }
 
-/// Construye la grilla de tiles. Si `tiles` está vacío, devuelve un
-/// rect con `bg_outer` y un mensaje placeholder centrado.
+type ReorderFn<Msg> = Arc<dyn Fn(usize, usize) -> Option<Msg> + Send + Sync>;
+
+/// Construye una grilla estática (sin drag-to-swap). Equivalente a
+/// [`tiled_view_reorderable`] sin handler de reorder.
 pub fn tiled_view<Msg>(tiles: Vec<TileSpec<Msg>>, palette: &TiledPalette) -> View<Msg>
 where
-    Msg: Clone + 'static,
+    Msg: Clone + Send + Sync + 'static,
+{
+    build(tiles, palette, None)
+}
+
+/// Construye una grilla con drag-to-swap. Arrastrar la title bar de un
+/// tile y soltar sobre otro invoca `on_reorder(from_index, to_index)`;
+/// el `Msg` retornado se dispatchea al `update` antes de cerrar el
+/// drag. El caller es responsable de filtrar `from == to`.
+pub fn tiled_view_reorderable<Msg, F>(
+    tiles: Vec<TileSpec<Msg>>,
+    on_reorder: F,
+    palette: &TiledPalette,
+) -> View<Msg>
+where
+    Msg: Clone + Send + Sync + 'static,
+    F: Fn(usize, usize) -> Option<Msg> + Send + Sync + 'static,
+{
+    build(tiles, palette, Some(Arc::new(on_reorder)))
+}
+
+fn build<Msg>(
+    tiles: Vec<TileSpec<Msg>>,
+    palette: &TiledPalette,
+    on_reorder: Option<ReorderFn<Msg>>,
+) -> View<Msg>
+where
+    Msg: Clone + Send + Sync + 'static,
 {
     let n = tiles.len();
     if n == 0 {
@@ -97,14 +130,14 @@ where
     let cols = ((n as f32).sqrt().ceil() as usize).max(1);
     let rows = (n + cols - 1) / cols;
 
-    let mut tiles_iter = tiles.into_iter();
+    let mut tiles_iter = tiles.into_iter().enumerate();
     let mut rows_views: Vec<View<Msg>> = Vec::with_capacity(rows);
 
     for _r in 0..rows {
         let mut cells: Vec<View<Msg>> = Vec::with_capacity(cols);
         for _c in 0..cols {
             let cell = match tiles_iter.next() {
-                Some(tile) => tile_view(tile, palette),
+                Some((idx, tile)) => tile_view(idx, tile, palette, on_reorder.clone()),
                 None => empty_cell_view(palette),
             };
             cells.push(cell);
@@ -156,11 +189,16 @@ fn row_view<Msg>(cells: Vec<View<Msg>>) -> View<Msg> {
     .children(cells)
 }
 
-fn tile_view<Msg>(tile: TileSpec<Msg>, palette: &TiledPalette) -> View<Msg>
+fn tile_view<Msg>(
+    idx: usize,
+    tile: TileSpec<Msg>,
+    palette: &TiledPalette,
+    on_reorder: Option<ReorderFn<Msg>>,
+) -> View<Msg>
 where
-    Msg: Clone + 'static,
+    Msg: Clone + Send + Sync + 'static,
 {
-    let title = View::new(Style {
+    let mut title = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
             height: length(TITLE_BAR_HEIGHT),
@@ -177,6 +215,14 @@ where
     .fill(palette.bg_title)
     .text_aligned(tile.label, TITLE_TEXT_SIZE, palette.fg_title, Alignment::Start);
 
+    // Si hay reorder, la title bar arrastra con payload = idx.
+    if on_reorder.is_some() {
+        // Handler trivial: tiled no usa dx/dy. Devuelve None.
+        title = title
+            .draggable(|_phase: DragPhase, _dx: f32, _dy: f32| None)
+            .drag_payload(idx as u64);
+    }
+
     let body = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -191,7 +237,7 @@ where
     })
     .children(vec![tile.content]);
 
-    View::new(Style {
+    let mut tile_view = View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
             width: Dimension::auto(),
@@ -208,7 +254,17 @@ where
     .fill(palette.bg_tile)
     .radius(4.0)
     .clip(true)
-    .children(vec![title, body])
+    .children(vec![title, body]);
+
+    // Drop target: si hay reorder, este tile entero recibe drops.
+    if let Some(reorder) = on_reorder {
+        let to_idx = idx;
+        tile_view = tile_view
+            .on_drop(move |from: u64| (reorder)(from as usize, to_idx))
+            .drop_hover_fill(palette.bg_drop_hover);
+    }
+
+    tile_view
 }
 
 fn empty_cell_view<Msg>(palette: &TiledPalette) -> View<Msg>

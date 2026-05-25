@@ -20,7 +20,7 @@ use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette
 use llimphi_widget_stat_card::{stat_card_view, StatCardPalette};
 use llimphi_widget_tabs::{tabs_view, TabsPalette, TabsSpec};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
-use llimphi_widget_tiled::{tiled_view, TileSpec, TiledPalette};
+use llimphi_widget_tiled::{tiled_view_reorderable, TileSpec, TiledPalette};
 
 #[derive(Clone)]
 enum Msg {
@@ -29,6 +29,7 @@ enum Msg {
     SelectTab(usize),
     ClickAction(u32),
     ResizeOuter(f32),
+    SwapTile { from: usize, to: usize },
 }
 
 struct Model {
@@ -37,6 +38,7 @@ struct Model {
     tab: usize,
     last_action: Option<u32>,
     left_w: f32,
+    tile_order: Vec<usize>,
 }
 
 struct Gallery;
@@ -60,6 +62,7 @@ impl App for Gallery {
             tab: 0,
             last_action: None,
             left_w: 380.0,
+            tile_order: vec![0, 1, 2, 3],
         }
     }
 
@@ -77,6 +80,11 @@ impl App for Gallery {
             Msg::SelectTab(i) => m.tab = i,
             Msg::ClickAction(id) => m.last_action = Some(id),
             Msg::ResizeOuter(dx) => m.left_w = (m.left_w + dx).clamp(220.0, 800.0),
+            Msg::SwapTile { from, to } => {
+                if from != to && from < m.tile_order.len() && to < m.tile_order.len() {
+                    m.tile_order.swap(from, to);
+                }
+            }
         }
         m
     }
@@ -150,7 +158,7 @@ impl App for Gallery {
             0 => stats_pane(&theme, &stat_palette),
             1 => alerts_pane(),
             2 => input_pane(&model.text, &input_palette, &theme),
-            _ => tiled_pane(&theme, &tiled_palette),
+            _ => tiled_pane(&theme, &tiled_palette, &model.tile_order),
         };
         let tabs = tabs_view(TabsSpec {
             labels: vec!["Stats".into(), "Banners".into(), "Input".into(), "Tiled".into()],
@@ -340,7 +348,7 @@ fn input_pane(state: &TextInputState, palette: &TextInputPalette, theme: &Theme)
     .children(vec![label, input])
 }
 
-fn tiled_pane(theme: &Theme, palette: &TiledPalette) -> View<Msg> {
+fn tiled_pane(theme: &Theme, palette: &TiledPalette, order: &[usize]) -> View<Msg> {
     let body = |text: &str, size: f32, color: Color, align: Alignment| -> View<Msg> {
         View::new(Style {
             size: Size {
@@ -359,36 +367,44 @@ fn tiled_pane(theme: &Theme, palette: &TiledPalette) -> View<Msg> {
         .text_aligned(text.to_string(), size, color, align)
     };
 
-    let tiles = vec![
-        TileSpec {
-            label: "logs".into(),
-            content: body(
-                "[12:01] boot\n[12:02] config ok\n[12:03] esperando…",
-                12.0,
-                theme.fg_text,
-                Alignment::Start,
-            ),
-        },
-        TileSpec {
-            label: "métricas".into(),
-            content: body("cpu 37%\nram 1.2 G\nnet 12 kB/s", 12.0, theme.fg_text, Alignment::Start),
-        },
-        TileSpec {
-            label: "uptime".into(),
-            content: body("4d 12h", 26.0, theme.accent, Alignment::Center),
-        },
-        TileSpec {
-            label: "queue".into(),
-            content: body(
-                "pending 7\nin-flight 2\ndone 1842",
-                12.0,
-                theme.fg_text,
-                Alignment::Start,
-            ),
-        },
-    ];
+    let make_tile = |id: usize| -> TileSpec<Msg> {
+        match id {
+            0 => TileSpec {
+                label: "logs".into(),
+                content: body(
+                    "[12:01] boot\n[12:02] config ok\n[12:03] esperando…",
+                    12.0,
+                    theme.fg_text,
+                    Alignment::Start,
+                ),
+            },
+            1 => TileSpec {
+                label: "métricas".into(),
+                content: body("cpu 37%\nram 1.2 G\nnet 12 kB/s", 12.0, theme.fg_text, Alignment::Start),
+            },
+            2 => TileSpec {
+                label: "uptime".into(),
+                content: body("4d 12h", 26.0, theme.accent, Alignment::Center),
+            },
+            _ => TileSpec {
+                label: "queue".into(),
+                content: body(
+                    "pending 7\nin-flight 2\ndone 1842",
+                    12.0,
+                    theme.fg_text,
+                    Alignment::Start,
+                ),
+            },
+        }
+    };
 
-    tiled_view(tiles, palette)
+    let tiles: Vec<TileSpec<Msg>> = order.iter().map(|&id| make_tile(id)).collect();
+
+    tiled_view_reorderable(
+        tiles,
+        |from, to| Some(Msg::SwapTile { from, to }),
+        palette,
+    )
 }
 
 fn main() {

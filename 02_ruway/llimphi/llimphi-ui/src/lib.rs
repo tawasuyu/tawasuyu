@@ -204,6 +204,15 @@ pub enum DragPhase {
 /// de la vista se regenere mientras tanto.
 pub type DragFn<Msg> = Arc<dyn Fn(DragPhase, f32, f32) -> Option<Msg> + Send + Sync>;
 
+/// Handler de drop. El runtime lo invoca cuando un drag activo se suelta
+/// sobre este nodo. Recibe el `payload` `u64` que el origen del drag
+/// declaró vía [`View::drag_payload`]. Devolver `None` ignora el drop.
+///
+/// Los IDs `u64` son opacos para el runtime: el widget elige una
+/// convención (índice de tile, hash del item, etc.) y el handler decide
+/// qué Msg emitir en función de ese ID.
+pub type DropFn<Msg> = Arc<dyn Fn(u64) -> Option<Msg> + Send + Sync>;
+
 /// Nodo de la vista declarativa. Estilo de layout (taffy) + relleno opcional
 /// (vello) + texto opcional (skrifa+vello) + Msg al click opcional + hijos.
 pub struct View<Msg> {
@@ -218,6 +227,15 @@ pub struct View<Msg> {
     /// Handler de drag. Si está presente, este nodo arrastra (y NO emite
     /// `on_click` al presionar — un nodo es uno u otro).
     pub drag: Option<DragFn<Msg>>,
+    /// Payload `u64` que viaja con el drag iniciado sobre este nodo. Lo
+    /// recibe el handler [`Self::on_drop`] del drop target. Sin payload,
+    /// el drag funciona igual pero ningún drop target reacciona.
+    pub drag_payload: Option<u64>,
+    /// Handler invocado al soltar un drag sobre este nodo (drop target).
+    pub on_drop: Option<DropFn<Msg>>,
+    /// Color a pintar mientras un drag activo está hovereando este drop
+    /// target. Sobrepone a `fill`/`hover_fill` cuando aplica.
+    pub drop_hover_fill: Option<Color>,
     /// Si `true`, los descendientes se recortan al rect del nodo (vía
     /// `scene.push_layer` con `Mix::Clip`). El hit-test también respeta
     /// el recorte: clicks fuera del rect ignoran a los hijos.
@@ -235,6 +253,9 @@ impl<Msg> View<Msg> {
             text: None,
             on_click: None,
             drag: None,
+            drag_payload: None,
+            on_drop: None,
+            drop_hover_fill: None,
             clip: false,
             children: Vec::new(),
         }
@@ -262,6 +283,35 @@ impl<Msg> View<Msg> {
         F: Fn(DragPhase, f32, f32) -> Option<Msg> + Send + Sync + 'static,
     {
         self.drag = Some(Arc::new(handler));
+        self
+    }
+
+    /// Declara el payload `u64` que viaja con el drag de este nodo. Los
+    /// drop targets bajo cursor al soltar reciben este valor en su
+    /// `on_drop`. Sin payload, los drop targets no reaccionan (útil para
+    /// drags de "resize/scroll" que no representan transferencia).
+    pub fn drag_payload(mut self, payload: u64) -> Self {
+        self.drag_payload = Some(payload);
+        self
+    }
+
+    /// Marca este nodo como drop target. El runtime invoca `handler(payload)`
+    /// cuando un drag termina sobre el rect de este nodo y el origen del
+    /// drag declaró un payload. Si devuelve `Some(Msg)`, se dispatchea al
+    /// `update` antes del `DragPhase::End` del origen.
+    pub fn on_drop<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(u64) -> Option<Msg> + Send + Sync + 'static,
+    {
+        self.on_drop = Some(Arc::new(handler));
+        self
+    }
+
+    /// Color de relleno cuando un drag activo está hovereando este drop
+    /// target. Análogo a `hover_fill` pero solo aplica mientras dura un
+    /// drag. Útil para resaltar el destino válido.
+    pub fn drop_hover_fill(mut self, color: Color) -> Self {
+        self.drop_hover_fill = Some(color);
         self
     }
 
@@ -331,6 +381,9 @@ struct MountedNode<Msg> {
     text: Option<TextSpec>,
     on_click: Option<Msg>,
     drag: Option<DragFn<Msg>>,
+    drag_payload: Option<u64>,
+    on_drop: Option<DropFn<Msg>>,
+    drop_hover_fill: Option<Color>,
     clip: bool,
     /// Índice (exclusivo) del fin del subárbol en `Mounted::nodes`. Los
     /// descendientes ocupan `[idx + 1, subtree_end)`. Hace de "barrera" en
@@ -360,6 +413,9 @@ fn mount_recursive<Msg: Clone>(
         text,
         on_click,
         drag,
+        drag_payload,
+        on_drop,
+        drop_hover_fill,
         clip,
         children,
     } = v;
@@ -372,6 +428,9 @@ fn mount_recursive<Msg: Clone>(
         text,
         on_click,
         drag,
+        drag_payload,
+        on_drop,
+        drop_hover_fill,
         clip,
         subtree_end: 0,
     });
@@ -395,6 +454,7 @@ fn paint<Msg>(
     computed: &ComputedLayout,
     typesetter: &mut llimphi_text::Typesetter,
     hover_idx: Option<usize>,
+    drop_hover_idx: Option<usize>,
 ) {
     // Stack de subtree_end de los nodos con `clip = true` que están
     // activos. Cuando el índice del próximo nodo cruza el top, pop_layer.
@@ -412,8 +472,12 @@ fn paint<Msg>(
         let Some(r) = computed.get(node.id) else {
             continue;
         };
-        // Hover overrides fill cuando el cursor está sobre este nodo.
-        let effective_fill = if Some(idx) == hover_idx {
+        // Prioridad de pintura: drop-hover (drag activo) > hover normal >
+        // fill base. Solo aplica el override si el slot correspondiente
+        // está poblado; el siguiente cae como fallback.
+        let effective_fill = if Some(idx) == drop_hover_idx {
+            node.drop_hover_fill.or(node.hover_fill).or(node.fill)
+        } else if Some(idx) == hover_idx {
             node.hover_fill.or(node.fill)
         } else {
             node.fill
@@ -540,6 +604,18 @@ fn hit_test_hover<Msg>(
     hit_test_pred(mounted, computed, x, y, |n| n.hover_fill.is_some())
 }
 
+/// Hit-test específico para drop targets (nodos con `on_drop`). Usado
+/// durante un drag activo para resaltar el destino y para invocar el
+/// handler al soltar.
+fn hit_test_drop<Msg>(
+    mounted: &Mounted<Msg>,
+    computed: &ComputedLayout,
+    x: f32,
+    y: f32,
+) -> Option<usize> {
+    hit_test_pred(mounted, computed, x, y, |n| n.on_drop.is_some())
+}
+
 struct Runtime<A: App> {
     handle: Handle<A::Msg>,
     state: Option<RuntimeState<A>>,
@@ -572,6 +648,9 @@ struct RenderCache<Msg> {
     /// Índice del nodo en hover en el frame ya pintado. `None` si el
     /// cursor no toca ningún `hover_fill`.
     hover_idx: Option<usize>,
+    /// Índice del drop target hovereado en el frame ya pintado. Solo
+    /// se setea durante un drag activo con `payload` declarado.
+    drop_hover_idx: Option<usize>,
 }
 
 struct DragState<Msg> {
@@ -580,6 +659,10 @@ struct DragState<Msg> {
     /// próximo Move se calcula contra este, no contra el inicio del
     /// drag — el caller acumula los deltas en su modelo si los necesita.
     last_cursor: PhysicalPosition<f64>,
+    /// Payload `u64` que viaja con el drag. `None` si el draggable
+    /// origen no declaró ninguno (drag de resize/scroll/etc.). Los drop
+    /// targets sólo reaccionan cuando hay payload.
+    payload: Option<u64>,
 }
 
 fn build_window_attributes<A: App>() -> WindowAttributes {
@@ -662,19 +745,39 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
             WindowEvent::CursorMoved { position, .. } => {
                 let prev_cursor = state.cursor;
                 state.cursor = position;
-                // Drag activo: dispatchear delta al handler.
+                // Drag activo: dispatchear delta al handler + actualizar
+                // tracking del drop target hovereado (solo si hay payload).
                 if let Some(drag) = state.drag.as_mut() {
                     let dx = (position.x - drag.last_cursor.x) as f32;
                     let dy = (position.y - drag.last_cursor.y) as f32;
                     drag.last_cursor = position;
+                    let payload_active = drag.payload.is_some();
+                    let mut need_redraw = false;
                     if dx != 0.0 || dy != 0.0 {
                         if let Some(msg) = (drag.handler)(DragPhase::Move, dx, dy) {
                             let model = state.model.take().expect("model");
                             state.model = Some(A::update(model, msg, &self.handle));
                             // Durante drag NO invalidamos el cache —
                             // queda válido para el próximo Move.
-                            state.window.request_redraw();
+                            need_redraw = true;
                         }
+                    }
+                    if payload_active {
+                        if let Some(cache) = state.last_render.as_mut() {
+                            let new_drop = hit_test_drop(
+                                &cache.mounted,
+                                &cache.computed,
+                                position.x as f32,
+                                position.y as f32,
+                            );
+                            if new_drop != cache.drop_hover_idx {
+                                cache.drop_hover_idx = new_drop;
+                                need_redraw = true;
+                            }
+                        }
+                    }
+                    if need_redraw {
+                        state.window.request_redraw();
                     }
                 } else if let Some(cache) = state.last_render.as_ref() {
                     // Sin drag: chequear hover. Si cambió, pedir redraw.
@@ -755,7 +858,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     )
                     .map(|i| {
                         let node = &cache.mounted.nodes[i];
-                        (node.drag.clone(), node.on_click.clone())
+                        (node.drag.clone(), node.drag_payload, node.on_click.clone())
                     })
                 } else {
                     let view = A::view(state.model.as_ref().expect("model"));
@@ -768,17 +871,34 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     hit_test_click(&mounted, &computed, cursor.x as f32, cursor.y as f32).map(
                         |i| {
                             let node = &mounted.nodes[i];
-                            (node.drag.clone(), node.on_click.clone())
+                            (node.drag.clone(), node.drag_payload, node.on_click.clone())
                         },
                     )
                 };
-                if let Some((Some(handler), _)) = idx_and_action {
+                if let Some((Some(handler), payload, _)) = idx_and_action {
                     // Drag wins sobre click cuando ambos están presentes.
                     state.drag = Some(DragState {
                         handler,
                         last_cursor: cursor,
+                        payload,
                     });
-                } else if let Some((_, Some(msg))) = idx_and_action {
+                    // Si hay payload, repintar para que el drop target
+                    // bajo cursor (si lo hay) se ilumine de entrada.
+                    if payload.is_some() {
+                        if let Some(cache) = state.last_render.as_mut() {
+                            let new_drop = hit_test_drop(
+                                &cache.mounted,
+                                &cache.computed,
+                                cursor.x as f32,
+                                cursor.y as f32,
+                            );
+                            if new_drop != cache.drop_hover_idx {
+                                cache.drop_hover_idx = new_drop;
+                                state.window.request_redraw();
+                            }
+                        }
+                    }
+                } else if let Some((_, _, Some(msg))) = idx_and_action {
                     let model = state.model.take().expect("model");
                     state.model = Some(A::update(model, msg, &self.handle));
                     state.last_render = None;
@@ -791,17 +911,39 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 ..
             } => {
                 if let Some(drag) = state.drag.take() {
+                    let cursor = state.cursor;
+                    // 1. Drop: si hay payload + drop target bajo cursor,
+                    //    invocamos su handler. El Msg resultante se aplica
+                    //    ANTES del End del drag — la convención es "drop
+                    //    primero, cleanup del drag después".
+                    if let Some(payload) = drag.payload {
+                        if let Some(cache) = state.last_render.as_ref() {
+                            if let Some(idx) = hit_test_drop(
+                                &cache.mounted,
+                                &cache.computed,
+                                cursor.x as f32,
+                                cursor.y as f32,
+                            ) {
+                                if let Some(drop_h) =
+                                    cache.mounted.nodes[idx].on_drop.clone()
+                                {
+                                    if let Some(msg) = (drop_h)(payload) {
+                                        let model = state.model.take().expect("model");
+                                        state.model = Some(A::update(model, msg, &self.handle));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // 2. Cierre del drag.
                     if let Some(msg) = (drag.handler)(DragPhase::End, 0.0, 0.0) {
                         let model = state.model.take().expect("model");
                         state.model = Some(A::update(model, msg, &self.handle));
-                        state.last_render = None;
-                        state.window.request_redraw();
-                    } else {
-                        // Sin Msg de end: igual invalidamos cache + redraw
-                        // por si el hover cambió tras el drag.
-                        state.last_render = None;
-                        state.window.request_redraw();
                     }
+                    // Cache invalidado siempre — hover/drop pueden cambiar
+                    // y el modelo posiblemente mutó.
+                    state.last_render = None;
+                    state.window.request_redraw();
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -829,6 +971,19 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     state.cursor.x as f32,
                     state.cursor.y as f32,
                 );
+                // Drop hover sólo si hay drag activo con payload.
+                let drop_hover_idx = state
+                    .drag
+                    .as_ref()
+                    .and_then(|d| d.payload.map(|_| ()))
+                    .and_then(|_| {
+                        hit_test_drop(
+                            &mounted,
+                            &computed,
+                            state.cursor.x as f32,
+                            state.cursor.y as f32,
+                        )
+                    });
                 state.scene.reset();
                 paint(
                     &mut state.scene,
@@ -836,6 +991,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     &computed,
                     &mut state.typesetter,
                     hover_idx,
+                    drop_hover_idx,
                 );
                 if let Err(e) = state.renderer.render(
                     &state.hal,
@@ -850,6 +1006,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     mounted,
                     computed,
                     hover_idx,
+                    drop_hover_idx,
                 });
             }
             _ => {}
