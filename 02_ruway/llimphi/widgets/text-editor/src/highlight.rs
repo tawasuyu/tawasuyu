@@ -14,7 +14,7 @@ use llimphi_ui::llimphi_raster::peniko::Color;
 
 /// Lenguajes soportados — la matriz se extiende sumando un variant +
 /// una rama en [`Highlighter::tokenize_line`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Language {
     Plain,
     Rust,
@@ -113,16 +113,25 @@ impl SyntaxPalette {
     }
 }
 
-/// Highlighter — guarda el parser de tree-sitter si aplica.
+// Pool thread-local de parsers tree-sitter. Reconstruir el parser
+// (con `set_language`) es caro; reusarlo entre highlights del mismo
+// lenguaje es un ahorro grande. `tree_sitter::Parser` no es Send/
+// Sync ni Clone, así que vive en thread-local — un parser por
+// lenguaje por thread.
+thread_local! {
+    static PARSER_POOL: std::cell::RefCell<std::collections::HashMap<Language, tree_sitter::Parser>>
+        = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Highlighter — fina capa sin estado mutable propio. La parser real
+/// vive en el pool thread-local.
 pub struct Highlighter {
     language: Language,
-    ts_parser: Option<tree_sitter::Parser>,
 }
 
 impl Highlighter {
     pub fn new(language: Language) -> Self {
-        let ts_parser = make_ts_parser(language);
-        Self { language, ts_parser }
+        Self { language }
     }
 
     pub fn language(&self) -> Language {
@@ -130,10 +139,7 @@ impl Highlighter {
     }
 
     pub fn set_language(&mut self, language: Language) {
-        if language != self.language {
-            self.ts_parser = make_ts_parser(language);
-            self.language = language;
-        }
+        self.language = language;
     }
 
     /// Tokeniza el `source` entero y devuelve los spans por línea.
@@ -152,10 +158,17 @@ impl Highlighter {
         source: &str,
         kind_of: fn(&str) -> Option<TokenKind>,
     ) -> Vec<Vec<Span>> {
-        let Some(parser) = self.ts_parser.as_mut() else {
-            return plain_lines(source);
-        };
-        let Some(tree) = parser.parse(source, None) else {
+        // Toma el parser del pool (o lo crea); parsea; guarda devuelta.
+        // Si make_ts_parser falla (lenguaje sin grammar), fallback Plain.
+        let language = self.language;
+        let tree_opt = PARSER_POOL.with(|pool| {
+            let mut pool = pool.borrow_mut();
+            let parser = pool.entry(language).or_insert_with(|| {
+                make_ts_parser(language).unwrap_or_else(tree_sitter::Parser::new)
+            });
+            parser.parse(source, None)
+        });
+        let Some(tree) = tree_opt else {
             return plain_lines(source);
         };
 
