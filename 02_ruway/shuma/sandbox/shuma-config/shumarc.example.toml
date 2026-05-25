@@ -1,0 +1,52 @@
+# ============================================================
+# shumarc.toml — configuración personal de `shuma-shell`.
+#
+# Copiá este fichero a `~/.config/shuma/shumarc.toml` (o el
+# equivalente XDG que use tu SO) y editá lo que quieras. Cualquier
+# sección omitida cae a los valores por defecto.
+# ============================================================
+
+# ---- Aliases ----
+# La primera palabra de la línea de comando se reemplaza por el
+# cuerpo si coincide con un alias. No hay parámetros posicionales
+# ni recursión: lo que devuelve el alias es lo que se ejecuta.
+[aliases]
+ll  = "ls -la --color=auto"
+la  = "ls -A --color=auto"
+gs  = "git status --short"
+gl  = "git log --oneline --graph --decorate"
+gd  = "git diff"
+cb  = "cargo build"
+ct  = "cargo test"
+cr  = "cargo run"
+
+# ---- Variables de entorno ----
+# Se aplican al proceso del shell al arrancar; los hijos las heredan.
+[env]
+EDITOR  = "hx"
+PAGER   = "less -R"
+
+# ---- Prompt ----
+# Segmentos en orden. Tokens soportados:
+#   "cwd"   — directorio actual (con `~` corto si es $HOME).
+#   "git"   — rama actual, si estamos en un repo.
+#   "exit"  — código de salida del último comando, si fue ≠ 0.
+#   "time"  — HH:MM:SS local.
+#   <otro>  — literal, se muestra tal cual (útil como separador).
+[prompt]
+segments = ["cwd", "git", "exit"]
+
+# ---- Historial durable ----
+# Política de dedup al persistir en ~/.local/share/shuma/history.jsonl:
+#   "none"               — guarda todo.
+#   "ignore_consecutive" — descarta repeticiones inmediatas (default).
+#   "erase_dups"         — al ver un duplicado, borra las copias previas.
+[history]
+dedup = "ignore_consecutive"
+
+# ---- Captura de salida por sesión ----
+# `limit_mb = 0` desactiva el tope; `spill = true` vuelca al disco la
+# salida que excede el tope (útil para builds gigantes).
+[capture]
+limit_mb = 8
+spill = false

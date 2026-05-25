@@ -16,6 +16,7 @@ path = "src/main.rs"
 shuma-line = { path = "../sandbox/shuma-line" }
 shuma-session = { path = "../sandbox/shuma-session" }
 shuma-history = { path = "../sandbox/shuma-history" }
+shuma-config = { path = "../sandbox/shuma-config" }
 shuma-exec = { path = "../sandbox/shuma-exec" }
 shuma-infer = { path = "../sandbox/shuma-infer" }
 shuma-sysmon = { path = "../sandbox/shuma-sysmon" }

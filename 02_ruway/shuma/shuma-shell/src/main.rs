@@ -31,8 +31,9 @@ use mirada_brain::ctl::{default_socket_path, send_request};
 use mirada_brain::{CtlReply, CtlRequest, DesktopAction, WindowLine};
 use nahual_launcher::launch_app;
 use nahual_theme::Theme;
+use shuma_config::{Config, DedupPolicy as CfgDedup};
 use shuma_exec::{run as exec_run, CommandSpec, Exec, RunEvent, RunHandle, StageSpec};
-use shuma_history::{Entry as HistoryEntry, History, Nav as HistoryNav};
+use shuma_history::{DedupPolicy as HistDedup, Entry as HistoryEntry, History, Nav as HistoryNav};
 use shuma_line::{CompletionKind, CompletionSource, LineState, TokenKind};
 use shuma_session::{CommandRun, RunId, RunStatus, Stream, WorkSession};
 use shuma_sysmon::{Snapshot, SystemSampler};
@@ -68,6 +69,35 @@ fn markers_in(dir: &str) -> Vec<String> {
 /// Segundo Unix actual.
 fn unix_now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+/// Rama de git activa para `cwd` — `None` si no estamos en un repo (o si
+/// HEAD está detached y no podemos resolverlo trivialmente). Implementación
+/// minimalista por archivo: sube por los padres buscando `.git`, lee
+/// `HEAD` y extrae `refs/heads/<rama>`. No usa libgit2 ni shells.
+fn git_branch(cwd: &str) -> Option<String> {
+    let mut dir = std::path::PathBuf::from(cwd);
+    let git_dir = loop {
+        let candidate = dir.join(".git");
+        if candidate.exists() {
+            break candidate;
+        }
+        if !dir.pop() {
+            return None;
+        }
+    };
+    // `.git` puede ser un archivo (worktrees/submódulos) con `gitdir: …`,
+    // o un directorio con `HEAD` dentro.
+    let head_path = if git_dir.is_file() {
+        let s = std::fs::read_to_string(&git_dir).ok()?;
+        let target = s.strip_prefix("gitdir:")?.trim();
+        std::path::PathBuf::from(target).join("HEAD")
+    } else {
+        git_dir.join("HEAD")
+    };
+    let head = std::fs::read_to_string(head_path).ok()?;
+    let head = head.trim();
+    head.strip_prefix("ref: refs/heads/").map(|b| b.to_string())
 }
 
 /// Índice de grupo (0-based) de una tecla de función `f1`..`f8`.
@@ -418,6 +448,9 @@ struct Shell {
     /// `true` cuando el cajón de resultados del modo launcher está
     /// desplegado (la ventana crece hacia arriba sobre el escritorio).
     drawer_open: bool,
+    /// Configuración personal cargada de `~/.config/shuma/shumarc.toml`.
+    /// Si falta o no parsea se usa [`Config::default`].
+    config: Config,
     /// Historial durable entre sesiones — persistido a `~/.local/share/shuma/history.jsonl`.
     /// `None` si el SO no expone un directorio de datos o si la apertura
     /// falló (el shell sigue funcionando, sólo sin durabilidad).
@@ -438,7 +471,16 @@ impl Shell {
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| "/".to_string());
 
+        // Configuración personal: fallback silencioso a default si falta
+        // o no parsea. Aplica las env vars del .shumarc al proceso del
+        // shell antes de cualquier subproceso — los hijos las heredan.
+        let config = Config::load_default().unwrap_or_default();
+        config.apply_env();
+
         let mut session = WorkSession::new("sesión", &cwd);
+        // Aplica la política de captura del rc al arrancar la sesión.
+        session.set_capture_limit(config.capture.limit_mb * 1024 * 1024);
+        session.set_spill(config.capture.spill);
         // Grupos de ejemplo — recetas reutilizables.
         session.save_group("estado git", vec!["git status --short".into()]);
         session.save_group("build", vec!["cargo build --release".into()]);
@@ -474,10 +516,19 @@ impl Shell {
             launcher: false,
             windows_bar: Vec::new(),
             drawer_open: false,
-            history: History::default_path().and_then(|p| History::open(p).ok()),
+            history: History::default_path().and_then(|p| {
+                let mut h = History::open(p).ok()?;
+                h.set_dedup(match config.history.dedup {
+                    CfgDedup::None => HistDedup::None,
+                    CfgDedup::IgnoreConsecutive => HistDedup::IgnoreConsecutive,
+                    CfgDedup::EraseDups => HistDedup::EraseDups,
+                });
+                Some(h)
+            }),
             history_cursor: None,
             history_draft: None,
             picker: None,
+            config,
         };
         shell.start_loop(cx);
         shell
@@ -693,6 +744,8 @@ impl Shell {
         let now = unix_now();
 
         // Meta-comandos del shell — configuran la sesión, no se ejecutan.
+        // Se chequean ANTES de la expansión de aliases para que el rc no
+        // pueda secuestrar `:save`, `:limit`, etc.
         if let Some(name) = line.strip_prefix(":save ") {
             self.save_group(name);
             return;
@@ -715,6 +768,12 @@ impl Shell {
             self.matilda_command(args);
             return;
         }
+
+        // Expansión de aliases: la primera palabra se reemplaza si está
+        // declarada en el `.shumarc`. Tras esta línea, `line` es lo que
+        // realmente se ejecuta y se persiste — coherente con `history` en
+        // bash/zsh, donde el alias resuelto es lo que queda registrado.
+        let line = self.config.expand_aliases(&line).into_owned();
 
         // Los comandos anteriores que el usuario no fijó se autocolapsan
         // al aparecer uno nuevo abajo — orden de terminal tradicional.
@@ -1276,6 +1335,79 @@ impl Shell {
                     .child(SharedString::from(ghost)),
             );
         }
+        row
+    }
+
+    /// Último código de salida del historial vivo — alimenta el segmento
+    /// `exit` del prompt.
+    fn last_exit_code(&self) -> Option<i32> {
+        self.session.history().iter().rev().find_map(|r| r.exit_code)
+    }
+
+    /// Construye la fila de prefijo del prompt a partir de
+    /// `config.prompt.segments`. Tokens soportados: `cwd`, `git`, `exit`,
+    /// `time`; cualquier otro valor se trata como literal de texto. El
+    /// glifo `›` y un espacio se añaden siempre al final como separador.
+    fn prompt_prefix_row(&self, theme: &Theme) -> Vec<gpui::Div> {
+        let accent = gpui::hsla(190.0 / 360.0, 0.70, 0.62, 1.0);
+        let red = gpui::hsla(0.0, 0.65, 0.62, 1.0);
+        let dim = theme.fg_muted;
+        let mut row: Vec<gpui::Div> = Vec::new();
+        for seg in &self.config.prompt.segments {
+            match seg.as_str() {
+                "cwd" => row.push(
+                    div()
+                        .flex_none()
+                        .text_color(accent)
+                        .child(SharedString::from(format!(
+                            "📁 {}",
+                            pretty_cwd(self.session.cwd())
+                        ))),
+                ),
+                "git" => {
+                    if let Some(branch) = git_branch(self.session.cwd()) {
+                        row.push(
+                            div()
+                                .flex_none()
+                                .text_color(dim)
+                                .child(SharedString::from(format!(" {branch}"))),
+                        );
+                    }
+                }
+                "exit" => {
+                    if let Some(code) = self.last_exit_code() {
+                        if code != 0 {
+                            row.push(
+                                div()
+                                    .flex_none()
+                                    .text_color(red)
+                                    .child(SharedString::from(format!("✗{code}"))),
+                            );
+                        }
+                    }
+                }
+                "time" => {
+                    let secs = unix_now() % 86_400;
+                    let h = secs / 3600;
+                    let m = (secs / 60) % 60;
+                    let s = secs % 60;
+                    row.push(
+                        div()
+                            .flex_none()
+                            .text_color(dim)
+                            .child(SharedString::from(format!("{h:02}:{m:02}:{s:02}"))),
+                    );
+                }
+                literal => row.push(
+                    div()
+                        .flex_none()
+                        .text_color(dim)
+                        .child(SharedString::from(literal.to_string())),
+                ),
+            }
+        }
+        // Flecha — separador entre prefijo del prompt e input.
+        row.push(div().flex_none().text_color(accent).child(" ›  "));
         row
     }
 
@@ -2039,9 +2171,10 @@ impl Render for Shell {
         };
 
         // --- Zona prompt: el input inteligente ---
-        // El prefijo `›`, y el resto (tokens + caret + fantasma) lo arma
-        // el helper compartido con el modo launcher.
-        let mut input_row: Vec<gpui::Div> = vec![div().flex_none().text_color(accent).child("›  ")];
+        // El prefijo lo arma `prompt_prefix_row` desde la config
+        // (`config.prompt.segments`); el resto (tokens + caret + fantasma)
+        // lo arma el helper compartido con el modo launcher.
+        let mut input_row: Vec<gpui::Div> = self.prompt_prefix_row(&theme);
         input_row.extend(self.input_row(&theme));
         let input_bar = div()
             .h(px(46.))
