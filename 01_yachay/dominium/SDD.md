@@ -248,7 +248,15 @@ números son leyes.
   Bajar es gratis. Default: relieve sigue a `materia`, climb_cost 0.05.
 - Capas concéntricas estilo estampa andina: para celdas con `Z` alto,
   emitir N rombos apilados a alturas descendentes.
-- Persistencia: guardar pack de Conceptos a JSON desde el panel.
+- ~~Persistencia~~ — ✓ (2026-05-25). Botones "Guardar" / "Cargar
+  guardado" en el panel; escribe a `$XDG_CONFIG_HOME/dominium/pack.json`
+  (típicamente `~/.config/dominium/pack.json`) via
+  `directories::ProjectDirs`. Al iniciar la app, si existe el pack del
+  usuario gana sobre el embebido. La CLI lee el mismo formato JSON.
+- ~~Sliders de ZWeights~~ — ✓ (2026-05-25). Sección `[ RELIEVE VISUAL ]`
+  con 5 sliders (materia/psique/poder/oro/degradacion) en rango [-2, 2].
+  Independiente del `relieve` físico de SimParams — el render puede
+  mostrar una vista distinta de la altura que sienten los lemmings.
 
 Ninguno de estos cambia la base del §1.
 

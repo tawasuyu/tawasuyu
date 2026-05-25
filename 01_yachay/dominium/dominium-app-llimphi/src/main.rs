@@ -13,6 +13,7 @@
 //! colapsa, el mundo se re-siembra solo. El panel derecho muestra
 //! stats y dos controles (play/pausa, re-sembrar).
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use dominium_canvas_llimphi::canvas_view;
@@ -70,6 +71,53 @@ fn default_conceptos() -> Conceptos {
     serde_json::from_str::<Conceptos>(DEFAULT_PACK).unwrap_or_default()
 }
 
+/// Path absoluto al pack del usuario: `$XDG_CONFIG_HOME/dominium/pack.json`
+/// (típicamente `~/.config/dominium/pack.json`). `None` si la plataforma
+/// no expone un config dir.
+fn user_pack_path() -> Option<PathBuf> {
+    directories::ProjectDirs::from("", "", "dominium")
+        .map(|d| d.config_dir().join("pack.json"))
+}
+
+/// Escribe la colección actual al pack del usuario. Crea el directorio
+/// padre si no existe. Errores van a stderr (la app no muere).
+fn save_user_pack(cs: &Conceptos) {
+    let Some(path) = user_pack_path() else {
+        eprintln!("dominium · no hay ProjectDirs en esta plataforma");
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!("dominium · no pude crear {}: {e}", parent.display());
+            return;
+        }
+    }
+    match serde_json::to_string_pretty(cs) {
+        Ok(json) => match std::fs::write(&path, json) {
+            Ok(()) => eprintln!("dominium · pack guardado en {}", path.display()),
+            Err(e) => eprintln!("dominium · error escribiendo {}: {e}", path.display()),
+        },
+        Err(e) => eprintln!("dominium · error serializando pack: {e}"),
+    }
+}
+
+/// Carga el pack del usuario si existe. Devuelve `None` si el archivo no
+/// está, o si el contenido no es un `Conceptos` válido. Errores van a stderr.
+fn load_user_pack() -> Option<Conceptos> {
+    let path = user_pack_path()?;
+    let raw = std::fs::read_to_string(&path).ok()?;
+    match serde_json::from_str::<Conceptos>(&raw) {
+        Ok(cs) => {
+            eprintln!("dominium · pack cargado desde {}", path.display());
+            Some(cs)
+        }
+        Err(e) => {
+            eprintln!("dominium · {} corrupto: {e}", path.display());
+            None
+        }
+    }
+}
+
 /// Siembra un mundo: continentes de materia, vetas de oro, niebla de
 /// psique y una población de Lemmings con sesgos y acciones variadas.
 fn seed(seed: u64) -> World {
@@ -98,7 +146,9 @@ fn seed(seed: u64) -> World {
         let i = w.lemmings.spawn(x, y, 30.0 + rng.next_f32() * 40.0, psi);
         w.lemmings.accion[i] = (rng.next_u32() % 6) as u8;
     }
-    w.conceptos = default_conceptos();
+    // Si el usuario ya tiene un pack guardado, gana sobre el embebido —
+    // así sus ediciones sobreviven al reseed/reapertura. Si no, default.
+    w.conceptos = load_user_pack().unwrap_or_else(default_conceptos);
     w
 }
 
@@ -152,6 +202,18 @@ impl ParamSlot {
     }
 }
 
+/// Capa de `ZWeights` editable desde el panel — define el **relieve
+/// visual** (cuánto eleva cada capa el render). Independiente del
+/// `relieve` físico de `SimParams`.
+#[derive(Clone, Copy, Debug)]
+enum ZSlot {
+    Materia,
+    Psique,
+    Poder,
+    Oro,
+    Degradacion,
+}
+
 struct Stats {
     poblacion: usize,
     materia: f32,
@@ -184,6 +246,9 @@ enum Msg {
     EditRadius(f32),
     DeleteSelected,
     EditParam(ParamSlot, f32),
+    EditZWeight(ZSlot, f32),
+    GuardarPack,
+    CargarPack,
 }
 
 struct Dominium;
@@ -307,6 +372,26 @@ impl App for Dominium {
                     ParamSlot::MoveCost => {
                         m.params.move_cost = (m.params.move_cost + dv).clamp(lo, hi)
                     }
+                }
+            }
+            Msg::EditZWeight(slot, dv) => {
+                let s = match slot {
+                    ZSlot::Materia => &mut m.weights.materia,
+                    ZSlot::Psique => &mut m.weights.psique,
+                    ZSlot::Poder => &mut m.weights.poder,
+                    ZSlot::Oro => &mut m.weights.oro,
+                    ZSlot::Degradacion => &mut m.weights.degradacion,
+                };
+                *s = (*s + dv).clamp(-2.0, 2.0);
+            }
+            Msg::GuardarPack => save_user_pack(&m.world.conceptos),
+            Msg::CargarPack => {
+                if let Some(cs) = load_user_pack() {
+                    m.world.conceptos = cs;
+                    for lock in m.world.lemmings.hack_lock.iter_mut() {
+                        *lock = 0;
+                    }
+                    m.selected = None;
                 }
             }
         }
@@ -501,6 +586,8 @@ fn side_panel(model: &Model, stats: &Stats, theme: &Theme) -> View<Msg> {
     }
     children.push(sized_button("✚  Sembrar pack", &btn_palette, Msg::SembrarConceptos));
     children.push(sized_button("✖  Limpiar", &btn_palette, Msg::LimpiarConceptos));
+    children.push(sized_button("💾  Guardar", &btn_palette, Msg::GuardarPack));
+    children.push(sized_button("📂  Cargar guardado", &btn_palette, Msg::CargarPack));
 
     // Editor del concepto seleccionado: sliders en vivo sobre radius + 4 mods.
     if let Some(i) = model.selected {
@@ -556,8 +643,15 @@ fn side_panel(model: &Model, stats: &Stats, theme: &Theme) -> View<Msg> {
     ));
 
     children.push(separator());
+    children.push(label_view("[ RELIEVE VISUAL ]", 11.0, theme.fg_muted));
+    children.push(z_slider("materia", model.weights.materia, ZSlot::Materia, &slider_palette));
+    children.push(z_slider("psique", model.weights.psique, ZSlot::Psique, &slider_palette));
+    children.push(z_slider("poder", model.weights.poder, ZSlot::Poder, &slider_palette));
+    children.push(z_slider("oro", model.weights.oro, ZSlot::Oro, &slider_palette));
+    children.push(z_slider("degrad.", model.weights.degradacion, ZSlot::Degradacion, &slider_palette));
+
+    children.push(separator());
     children.push(label_view(&format!("grilla {GRID}×{GRID}"), 11.0, theme.fg_muted));
-    children.push(label_view("relieve físico = materia", 11.0, theme.fg_muted));
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -694,6 +788,27 @@ fn param_slider(
         palette,
         move |phase, dv| match phase {
             DragPhase::Move => Some(Msg::EditParam(slot, dv)),
+            DragPhase::End => None,
+        },
+    )
+}
+
+/// Slider para un slot de `ZWeights` (relieve visual del render).
+/// Rango simétrico [-2, 2]: negativo = la capa cava valles, positivo = eleva.
+fn z_slider(
+    label: &str,
+    value: f32,
+    slot: ZSlot,
+    palette: &SliderPalette,
+) -> View<Msg> {
+    slider_view(
+        label,
+        value,
+        -2.0,
+        2.0,
+        palette,
+        move |phase, dv| match phase {
+            DragPhase::Move => Some(Msg::EditZWeight(slot, dv)),
             DragPhase::End => None,
         },
     )
