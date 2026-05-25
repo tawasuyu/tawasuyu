@@ -37,6 +37,7 @@
 #include "m_fixed.h"     /* fixed_t */
 #include "r_defs.h"      /* line_t, sector_t, vertex_t, side_t */
 #include "p_mobj.h"      /* mobj_t */
+#include "p_local.h"     /* P_MobjThinker (función action_p1 que distingue mobjs) */
 #include "d_player.h"    /* player_t, MAXPLAYERS */
 #include "r_state.h"     /* lines/sectors/etc. globals */
 
