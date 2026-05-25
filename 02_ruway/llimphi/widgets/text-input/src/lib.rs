@@ -1,23 +1,16 @@
 //! `llimphi-widget-text-input` — input de texto single-line para Llimphi.
 //!
-//! Reproduce el contrato del `nahual-widget-text-input` GPUI pero
-//! adaptado al modelo Elm: el estado vive en el `Model` del App, no
-//! dentro del widget. Esto encaja con el bucle pure
-//! `update(model, msg) -> model`.
+//! Después del refactor 2026-05-25, [`TextInputState`] es un wrapper fino
+//! sobre [`llimphi_widget_text_editor::EditorState`] con
+//! `options.single_line = true` + un flag `masked` para passwords. La
+//! API pública (`new`, `masked`, `text`, `set_text`, `clear`, `apply_key`,
+//! `is_empty`, `push_str`, `pop`, `is_masked`) se mantiene salvo que
+//! `text()` ahora devuelve `String` (antes `&str`) — los callers que
+//! hacían `.text().trim().to_string()` siguen funcionando idénticos.
 //!
-//! Uso típico:
-//!
-//! 1. El `Model` tiene un campo `username: TextInputState` (y
-//!    `password: TextInputState::masked()` para campos enmascarados).
-//! 2. El `App::on_key` ruta las teclas no especiales como `Msg::EditKey(ev)`.
-//! 3. El `App::update` delega a `state.apply_key(&ev)` para que el widget
-//!    aplique inserts y backspace al estado focado.
-//! 4. El `App::view` invoca `text_input_view(state, placeholder, focused,
-//!    palette, on_focus_msg)` para renderear cada campo.
-//!
-//! Limitaciones (heredadas del nahual-widget-text-input): single-line,
-//! sin cursor positioning con flechas, sin selección, sin copy/paste,
-//! sin IME. Para algo serio: portar el ejemplo `gpui::examples::input`.
+//! Beneficios heredados del editor: selección con Shift+arrows, undo/
+//! redo con Ctrl+Z/Y, salto de palabra con Ctrl+arrows, Home/End,
+//! Delete (además de Backspace). Tab/Enter siguen ignorados (single_line).
 
 #![forbid(unsafe_code)]
 
@@ -27,7 +20,8 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{Key, KeyEvent, KeyState, NamedKey, View};
+use llimphi_ui::{KeyEvent, View};
+use llimphi_widget_text_editor::{EditorOptions, EditorState};
 
 /// Paleta del input. Defaults son una variante dark con borde tenue que
 /// se enciende al focar, equivalente conceptual al `nahual-theme` dark.
@@ -61,36 +55,40 @@ impl TextInputPalette {
     }
 }
 
-/// Estado del input. Vive en el `Model` del App; el widget lo lee para
-/// renderear y el `update` lo muta vía `apply_key`.
+/// Estado del input. Wrappea un `EditorState` single-line.
 #[derive(Debug, Clone, Default)]
 pub struct TextInputState {
-    text: String,
-    /// Si `true`, el contenido se muestra como `•` por cada carácter — el
-    /// texto real sigue accesible vía `text()`.
+    inner: EditorState,
     masked: bool,
 }
 
 impl TextInputState {
     /// Input vacío visible (texto plano).
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            inner: EditorState::with_options(EditorOptions {
+                single_line: true,
+                ..EditorOptions::default()
+            }),
+            masked: false,
+        }
     }
 
     /// Input enmascarado — para campos de contraseña.
     pub fn masked() -> Self {
-        Self {
-            text: String::new(),
-            masked: true,
-        }
+        Self { masked: true, ..Self::new() }
     }
 
-    pub fn text(&self) -> &str {
-        &self.text
+    /// Texto actual. Devuelve `String` (antes `&str` — el rope no expone
+    /// slice borrowed sin clone). Para evitar copias innecesarias, los
+    /// callers que sólo necesitan derivar `.trim()` o `.is_empty()`
+    /// pueden hacerlo directo sobre el `String` devuelto.
+    pub fn text(&self) -> String {
+        self.inner.text()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.text.is_empty()
+        self.inner.is_empty()
     }
 
     pub fn is_masked(&self) -> bool {
@@ -98,44 +96,39 @@ impl TextInputState {
     }
 
     pub fn clear(&mut self) {
-        self.text.clear();
+        self.inner.set_text("");
     }
 
     pub fn set_text(&mut self, s: impl Into<String>) {
-        self.text = s.into();
+        let s = s.into();
+        self.inner.set_text(&s);
     }
 
     pub fn push_str(&mut self, s: &str) {
-        self.text.push_str(s);
+        let combined = format!("{}{}", self.inner.text(), s);
+        self.inner.set_text(&combined);
     }
 
     pub fn pop(&mut self) -> Option<char> {
-        self.text.pop()
+        let mut t = self.inner.text();
+        let ch = t.pop()?;
+        self.inner.set_text(&t);
+        Some(ch)
     }
 
-    /// Aplica una tecla al estado. Devuelve `true` si cambió el contenido.
-    ///
-    /// Maneja: Backspace, e inserción de caracteres imprimibles (vía
-    /// `event.text`, que ya respeta layout + modifiers + IME). NO maneja:
-    /// Tab, Enter, Escape, flechas — el caller decide qué hacer con esas
-    /// (típicamente: cambio de foco, submit, cancel).
+    /// Aplica una tecla al estado. Devuelve `true` si cambió el contenido
+    /// **o** sólo se movió el cursor (cualquier cosa que requiera repintar).
     pub fn apply_key(&mut self, event: &KeyEvent) -> bool {
-        if event.state != KeyState::Pressed {
-            return false;
-        }
-        match &event.key {
-            Key::Named(NamedKey::Backspace) => self.text.pop().is_some(),
-            _ => {
-                let Some(text) = event.text.as_ref() else {
-                    return false;
-                };
-                if text.is_empty() || text.chars().any(|c| c.is_control()) {
-                    return false;
-                }
-                self.text.push_str(text);
-                true
-            }
-        }
+        self.inner.apply_key(event).touched()
+    }
+
+    /// Acceso de bajo nivel al editor interno — útil si el caller
+    /// quiere consultar cursor/selección o aplicar ops avanzadas.
+    pub fn editor(&self) -> &EditorState {
+        &self.inner
+    }
+    pub fn editor_mut(&mut self) -> &mut EditorState {
+        &mut self.inner
     }
 }
 
@@ -149,16 +142,15 @@ pub fn text_input_view<Msg: Clone + 'static>(
     palette: &TextInputPalette,
     on_focus: Msg,
 ) -> View<Msg> {
-    let is_empty = state.is_empty();
+    let raw = state.text();
+    let is_empty = raw.is_empty();
     let shown = if is_empty {
         placeholder.to_string()
     } else if state.masked {
-        "•".repeat(state.text.chars().count())
+        "•".repeat(raw.chars().count())
     } else {
-        state.text.clone()
+        raw
     };
-    // Caret: un bloque sólido al final del texto, sin blink. El cambio
-    // de borde + bg en foco ya transmite "este es el activo".
     let display = if focused && !is_empty {
         format!("{shown}\u{2588}")
     } else {
@@ -215,6 +207,7 @@ pub fn text_input_view<Msg: Clone + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use llimphi_ui::{Key, KeyState, NamedKey};
 
     fn key_press(key: Key, text: Option<&str>) -> KeyEvent {
         KeyEvent {
@@ -244,12 +237,10 @@ mod tests {
     }
 
     #[test]
-    fn apply_key_ignores_tab_and_enter() {
+    fn enter_ignorado_en_single_line() {
         let mut s = TextInputState::new();
         s.set_text("hola");
-        let tab = key_press(Key::Named(NamedKey::Tab), None);
         let enter = key_press(Key::Named(NamedKey::Enter), None);
-        assert!(!s.apply_key(&tab));
         assert!(!s.apply_key(&enter));
         assert_eq!(s.text(), "hola");
     }
@@ -258,5 +249,24 @@ mod tests {
     fn masked_state_is_masked() {
         let s = TextInputState::masked();
         assert!(s.is_masked());
+    }
+
+    #[test]
+    fn flecha_izquierda_mueve_cursor() {
+        // El refactor agrega esta capacidad — antes no había movimiento.
+        let mut s = TextInputState::new();
+        s.set_text("hola");
+        let arr = key_press(Key::Named(NamedKey::ArrowLeft), None);
+        assert!(s.apply_key(&arr));
+        assert_eq!(s.editor().cursor.caret.col, 3);
+    }
+
+    #[test]
+    fn push_str_y_pop_funcionan() {
+        let mut s = TextInputState::new();
+        s.push_str("hola");
+        assert_eq!(s.text(), "hola");
+        assert_eq!(s.pop(), Some('a'));
+        assert_eq!(s.text(), "hol");
     }
 }
