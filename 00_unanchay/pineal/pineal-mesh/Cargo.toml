@@ -10,4 +10,3 @@ description = "Lapaloma — grafos. NodeBuffer / EdgeBuffer + layouts (force-dir
 [dependencies]
 pineal-core = { path = "../pineal-core" }
 pineal-render = { path = "../pineal-render" }
-gpui = { workspace = true }

@@ -10,4 +10,3 @@ description = "Lapaloma — gráficos polares: pie chart, donut, radar."
 [dependencies]
 pineal-core = { path = "../pineal-core" }
 pineal-render = { path = "../pineal-render" }
-gpui = { workspace = true }
