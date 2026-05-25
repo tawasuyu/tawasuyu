@@ -15,6 +15,7 @@ use card_core::{Card, CardKind, Flow, Flows, Lifecycle, Payload, Supervision, Ty
 use arje_incarnate::IncarnatorConfig;
 use shuma_core::WorkspaceManager;
 use shuma_discern::{DiscernPipeline, Hint};
+use shuma_link::{FramedChannel, KnownPeers};
 use shuma_protocol::{
     default_socket_path, read_frame, write_frame, CommandInfo as ProtoCommandInfo,
     EdgeDiscernmentInfo, ExecKind as ProtoExecKind, FlowInfo, FlowThroughputInfo, QuotaReportInfo,
@@ -217,6 +218,67 @@ async fn main() -> anyhow::Result<()> {
         warn!("SHIPOTE_TRUST_ANYONE=1 — accepting any peer uid");
     }
 
+    // Listener TCP autenticado opt-in: `SHUMA_LISTEN_TCP=host:port` lo
+    // activa. Cada conexión hace handshake Noise XK con la identidad
+    // del daemon (auto-generada y persistida en `~/.config/shuma/keys/
+    // identity.x25519`) y valida la pubkey del cliente contra la
+    // allowlist `~/.config/shuma/known_peers.txt`. Es la base para que
+    // shuma-remote-exec hable con un daemon remoto sin SSH externo.
+    if let Ok(addr) = std::env::var("SHUMA_LISTEN_TCP") {
+        let kp_path = shuma_link::Keypair::default_path()
+            .context("no se puede determinar el directorio de configuración (XDG)")?;
+        let keypair = shuma_link::Keypair::load_or_generate(&kp_path)
+            .context("identity keypair")?;
+        let peers_path = KnownPeers::default_path()
+            .context("no se puede determinar el directorio de configuración (XDG)")?;
+        let tcp_listener = tokio::net::TcpListener::bind(&addr)
+            .await
+            .with_context(|| format!("bind TCP {addr}"))?;
+        info!(
+            socket = %addr,
+            identity = %keypair.public().to_hex(),
+            "shuma-daemon TCP listener up (Noise XK + KnownPeers)",
+        );
+        let mgr_tcp = mgr.clone();
+        let disc_tcp = discerner.clone();
+        let pool_tcp = sidecar_pool.clone();
+        let daemon_started_tcp = daemon_started;
+        tokio::spawn(async move {
+            loop {
+                match tcp_listener.accept().await {
+                    Ok((tcp, remote_addr)) => {
+                        // Re-cargamos peers en cada accept — barato, y
+                        // permite editar el allowlist sin reiniciar.
+                        let peers = KnownPeers::load(&peers_path).unwrap_or_default();
+                        let our_kp = keypair.clone();
+                        let mgr = mgr_tcp.clone();
+                        let disc = disc_tcp.clone();
+                        let pool = pool_tcp.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = handle_enc_client(
+                                tcp,
+                                our_kp,
+                                peers,
+                                mgr,
+                                disc,
+                                pool,
+                                daemon_started_tcp,
+                            )
+                            .await
+                            {
+                                warn!(?e, %remote_addr, "encrypted client handler error");
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        error!(?e, "TCP accept failed");
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                }
+            }
+        });
+    }
+
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
@@ -404,6 +466,124 @@ fn exec_event_to_response(ev: shuma_exec::RunEvent) -> Response {
         shuma_exec::RunEvent::Exited(c) => Response::ExecExited(c),
         shuma_exec::RunEvent::Failed(m) => Response::ExecFailed(m),
     }
+}
+
+/// Atiende una conexión TCP autenticada por Noise XK.
+///
+/// Flujo:
+/// 1. Handshake server: descubre la pubkey del cliente.
+/// 2. Verifica que esté en `peers` (allowlist). Si no, log + drop.
+/// 3. Loop dispatch idéntico a `handle_client` pero sobre
+///    `FramedChannel` en vez de UnixStream. Para `ExecStream`, usa
+///    `handle_exec_stream_enc`.
+///
+/// **Limitación v1**: a diferencia del path Unix, mid-stream cancel
+/// del cliente sólo se detecta cuando el daemon intenta escribir el
+/// próximo evento. Para procesos silenciosos (p. ej. `sleep 30` sin
+/// salida), un cliente que cierra TCP no dispara el kill hasta que el
+/// proceso emita algo. Se mejora cuando se añada un frame Cancel del
+/// cliente o se splittea el FramedChannel en mitades sender/receiver.
+async fn handle_enc_client(
+    tcp: tokio::net::TcpStream,
+    our_keypair: shuma_link::Keypair,
+    peers: KnownPeers,
+    mgr: Arc<WorkspaceManager>,
+    disc: Arc<DiscernPipeline>,
+    pool: Option<Arc<card_sidecar::SidecarPool>>,
+    daemon_started: std::time::Instant,
+) -> anyhow::Result<()> {
+    let (mut ch, peer) = shuma_link::server_handshake(tcp, &our_keypair)
+        .await
+        .map_err(|e| anyhow::anyhow!("handshake: {e}"))?;
+    if !peers.contains(&peer) {
+        warn!(peer = %peer.to_hex(), "TCP peer no autorizado — rechazando");
+        // Cerramos sin enviar nada: no le damos al atacante señal de
+        // si la pubkey existió alguna vez (timing-uniform reject).
+        return Ok(());
+    }
+    info!(peer = %peer.to_hex(), "TCP peer autorizado, sirviendo");
+
+    loop {
+        let req: Request = match ch.recv_postcard().await {
+            Ok(r) => r,
+            Err(shuma_link::channel::FrameError::Closed) => return Ok(()),
+            Err(e) => return Err(anyhow::anyhow!("recv: {e}")),
+        };
+        // El uid 0 a `audit_request` no es real — sólo un placeholder.
+        // En el log de auditoría aparece como uid=0 para conexiones TCP;
+        // la pubkey del peer ya quedó en el log "TCP peer autorizado".
+        audit_request(0, &req);
+
+        if let Request::ExecStream { cwd, exec, capture_limit_bytes, stdin_data } = req {
+            handle_exec_stream_enc(&mut ch, cwd, exec, capture_limit_bytes, stdin_data).await?;
+            continue;
+        }
+
+        let resp = dispatch(&mgr, &disc, &pool, daemon_started, req).await;
+        if let Err(e) = ch.send_postcard(&resp).await {
+            return Err(anyhow::anyhow!("send: {e}"));
+        }
+    }
+}
+
+/// Versión encriptada de [`handle_exec_stream`]. Misma forma: traduce
+/// la request al spec, spawnea con `shuma-exec`, puentea sync→async y
+/// emite frames de `Response::Exec*` hasta el terminal. La diferencia
+/// es que usa el `FramedChannel` en vez de `write_frame` directo, así
+/// que cada postcard viaja cifrado y autenticado.
+async fn handle_exec_stream_enc<S>(
+    ch: &mut FramedChannel<S>,
+    cwd: String,
+    exec: ProtoExecKind,
+    capture_limit_bytes: usize,
+    stdin_data: Option<String>,
+) -> anyhow::Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+{
+    let exec_local = match exec {
+        ProtoExecKind::Shell { line, program } => shuma_exec::Exec::Shell { line, program },
+        ProtoExecKind::Direct { stages } => shuma_exec::Exec::Direct {
+            stages: stages
+                .into_iter()
+                .map(|s| shuma_exec::StageSpec { program: s.program, args: s.args })
+                .collect(),
+        },
+    };
+    let spec = shuma_exec::CommandSpec {
+        exec: exec_local,
+        cwd,
+        capture_limit: capture_limit_bytes,
+        spill_path: None,
+        stdin_data,
+    };
+    let mut handle = shuma_exec::run(&spec);
+    let killer = handle.killer();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<shuma_exec::RunEvent>();
+    let _bridge = std::thread::spawn(move || {
+        while let Some(ev) = handle.next_event() {
+            if tx.send(ev).is_err() {
+                return;
+            }
+        }
+    });
+    while let Some(ev) = rx.recv().await {
+        let terminal = matches!(
+            ev,
+            shuma_exec::RunEvent::Exited(_) | shuma_exec::RunEvent::Failed(_)
+        );
+        let resp = exec_event_to_response(ev);
+        if let Err(e) = ch.send_postcard(&resp).await {
+            // Cliente cerró: matamos al hijo. No drenamos rx — el
+            // bridge thread saldrá solo cuando los readers vean EOF.
+            killer.kill();
+            return Err(anyhow::anyhow!("send: {e}"));
+        }
+        if terminal {
+            break;
+        }
+    }
+    Ok(())
 }
 
 /// Path canónico del audit log: `$XDG_STATE_HOME/shuma/audit.log` o

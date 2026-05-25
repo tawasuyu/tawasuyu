@@ -187,6 +187,7 @@ members = [
     "02_ruway/shuma/sandbox/shuma-exec",
     "02_ruway/shuma/sandbox/shuma-history",
     "02_ruway/shuma/sandbox/shuma-infer",
+    "02_ruway/shuma/sandbox/shuma-link",
     "02_ruway/shuma/sandbox/shuma-intent",
     "02_ruway/shuma/sandbox/shuma-line",
     "02_ruway/shuma/sandbox/shuma-protocol",
@@ -427,6 +428,14 @@ directories = "5"
 # bonus por prefijos, ranking estable. La versión 0.3 expone el API simple
 # que necesitamos (Matcher + Pattern + score).
 nucleo-matcher = "0.3"
+
+# === Transporte autenticado (shuma-link) ===
+# snow = framework Noise pure-rust. Lo usamos en modo Noise_XK (cliente
+# conoce la pubkey del servidor, server descubre la del cliente y la
+# valida contra una allowlist). ChaCha20-Poly1305 + X25519 + BLAKE2s.
+# La versión 0.9 viene pinneada por libp2p, así nos alineamos.
+snow = "0.9"
+hex = "0.4"
 
 # === WASM web (gioser) ===
 wasm-bindgen = "0.2"

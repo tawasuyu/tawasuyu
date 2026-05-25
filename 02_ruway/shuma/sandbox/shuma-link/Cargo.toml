@@ -1,0 +1,21 @@
+[package]
+name = "shuma-link"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "shuma — capa de transporte autenticado (Noise_XK + X25519 + ChaCha20Poly1305). Base para que shuma-remote-exec hable con un daemon remoto sin SSH externo."
+
+[dependencies]
+snow = { workspace = true }
+hex = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+directories = { workspace = true }
+serde = { workspace = true }
+postcard = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
