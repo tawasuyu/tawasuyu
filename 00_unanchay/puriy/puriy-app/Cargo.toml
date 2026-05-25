@@ -1,0 +1,18 @@
+[package]
+name = "puriy-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "puriy"
+path = "src/main.rs"
+
+[dependencies]
+puriy-core = { path = "../puriy-core" }
+puriy-engine = { path = "../puriy-engine" }
+puriy-llimphi = { path = "../puriy-llimphi" }
+llimphi-hal = { path = "../../../02_ruway/llimphi/llimphi-hal" }
+clap.workspace = true

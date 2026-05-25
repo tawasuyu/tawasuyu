@@ -1,0 +1,11 @@
+[package]
+name = "puriy-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+puriy-core = { path = "../puriy-core" }
+# servo crates se agregan en Fase 2 (script, style, layout, net)

@@ -1,0 +1,13 @@
+[package]
+name = "puriy-llimphi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+puriy-core = { path = "../puriy-core" }
+llimphi-ui = { path = "../../../02_ruway/llimphi/llimphi-ui" }
+llimphi-layout = { path = "../../../02_ruway/llimphi/llimphi-layout" }
+llimphi-raster = { path = "../../../02_ruway/llimphi/llimphi-raster" }

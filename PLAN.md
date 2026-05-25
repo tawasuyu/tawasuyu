@@ -6,7 +6,7 @@
 
 ```
 gioser/
-├── 00_unanchay/   PERCIBIR  — pluma · khipu · rimay · chaka · pineal
+├── 00_unanchay/   PERCIBIR  — pluma · khipu · rimay · chaka · pineal · puriy
 ├── 01_yachay/     CONOCER   — cosmos · dominium · nakui
 ├── 02_ruway/      HACER     — mirada · shuma · nahual · chasqui · takiy · llimphi
 ├── 03_ukupacha/   RAÍZ      — arje · wawa · agora · minga
@@ -37,7 +37,22 @@ Ver [`02_ruway/llimphi/SDD.md`](02_ruway/llimphi/SDD.md) para el spec completo.
 | 3. Layout | `llimphi-layout` | `taffy` | Paneles redimensionados < 1 ms/frame |
 | 4. UI | `llimphi-ui` | (puro Rust) | Bucle Elm completo: input→update→view→layout→raster |
 
-## 3. Hito #2 — Migración GPUI → Llimphi
+## 3. Hito #2 — Puriy (navegador soberano Servo+Llimphi)
+
+**Objetivo:** Navegador web propio que corre idéntico en mirada (Wayland) y en wawa (bare-metal) por el mismo trait `Surface` de Llimphi.
+
+Ver [`00_unanchay/puriy/SDD.md`](00_unanchay/puriy/SDD.md).
+
+| Fase | Crate | Hito |
+|---|---|---|
+| 1. Core | `puriy-core` | Sesiones/tabs/history puros (sin gráficos) |
+| 2. Engine | `puriy-engine` | Embed de Servo, parsea DOM, renderiza viewport en textura wgpu |
+| 3. Chrome | `puriy-llimphi` | Toolbar+tabs+address bar sobre llimphi-ui |
+| 4. App | `puriy-app` | `puriy URL` abre y carga sitio en mirada o framebuffer |
+
+**Bloqueado por:** Hito #1 (Llimphi fases 1-4). `puriy-core` se puede arrancar en paralelo (puro Rust).
+
+## 4. Hito #3 — Migración GPUI → Llimphi
 
 Cuando Llimphi tenga las 4 fases verdes, portar:
 
@@ -51,7 +66,7 @@ Cuando Llimphi tenga las 4 fases verdes, portar:
 
 **Regla:** Las apps mantienen su `*-core` agnóstico intacto. Solo cambia el frontend.
 
-## 4. Hitos por dominio (orden no estricto)
+## 5. Hitos por dominio (orden no estricto)
 
 ### `00_unanchay/`
 - **pluma**: cerrar editor (en Llimphi), notebook DAG funcional.
@@ -59,6 +74,7 @@ Cuando Llimphi tenga las 4 fases verdes, portar:
 - **rimay**: embeddings via verbo-daemon.
 - **chaka**: ampliar subconjunto COBOL (CICS, SQL, dialectos).
 - **pineal**: dominio propio, charts vivos.
+- **puriy**: ver Hito #2.
 
 ### `01_yachay/`
 - **cosmos**: cerrar 4 áreas del roadmap Kepler (box graphs → harmonics → AstroCarto → research). Corpus de interpretación pendiente de escritura humana.
@@ -83,7 +99,7 @@ Cuando Llimphi tenga las 4 fases verdes, portar:
 - **sandokan**: orquestador hot-swap consumible por shuma y otros.
 - **auth, card, ssh, format**: pulir APIs.
 
-## 5. Disciplina técnica permanente
+## 6. Disciplina técnica permanente
 
 1. **Filesystem = arquitectura**: cada cuadrante es una fase del ciclo de información.
 2. **Un dominio = un crate raíz + subcrates plugin**, sin proliferación.
@@ -93,10 +109,12 @@ Cuando Llimphi tenga las 4 fases verdes, portar:
 6. **Commit + push** tras cada bloque, sin pedir permiso (excepto operaciones destructivas).
 7. **Smoke test mínimo**: `cargo check --workspace` debe pasar en `main` siempre.
 
-## 6. Repos legacy
+## 7. Repos legacy
 
 `~/legacy/{brahman, eternal, dominium}` — arqueología local. Espejos remotos en gitea siguen como respaldo (no se borran).
 
-## 7. Próxima sesión arranca con
+## 8. Próxima sesión arranca con
 
 **Fase 1 de Llimphi**: agregar `wgpu` + `winit` a `llimphi-hal/Cargo.toml`, definir el trait `Surface` completo (con métodos para configurar swapchain, render pass, present), e implementar `WinitSurface`. Hito visible: ventana gris plomo a 144 Hz.
+
+En paralelo (no bloqueado por Llimphi): **Fase 1 de Puriy** (`puriy-core` puro Rust — Tab/Session/History/Bookmark/Profile testeables).
