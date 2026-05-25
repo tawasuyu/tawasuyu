@@ -29,8 +29,13 @@ use std::ffi::CString;
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
-pub const DOOM_WIDTH: usize = 320;
-pub const DOOM_HEIGHT: usize = 200;
+// doomgeneric default es 640×400 (auto-scaling factor 2 sobre los
+// 320×200 del Doom clásico). Está hardcoded en `doomgeneric.h` como
+// `DOOMGENERIC_RESX`/`DOOMGENERIC_RESY`; si quisiéramos 320×200 puro
+// habría que pasar `-DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200` al
+// `cc` build.
+pub const DOOM_WIDTH: usize = 640;
+pub const DOOM_HEIGHT: usize = 400;
 pub const DOOM_PIXELS: usize = DOOM_WIDTH * DOOM_HEIGHT;
 
 /// Códigos de tecla de doomgeneric (subset). Espejo de los `KEY_*`

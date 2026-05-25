@@ -79,10 +79,15 @@ impl App for Supay {
     fn init(handle: &Handle<Msg>) -> Model {
         handle.spawn_periodic(Duration::from_millis(TICK_MS), || Msg::Tick);
         // Args estilo argv. `-iwad doom1.wad` busca el WAD en cwd.
+        // `-nosound` apaga el subsistema de audio entero: nuestros
+        // stubs devuelven 0 / NULL y eso confunde a `S_StartSound`
+        // que va a leer "lump 0" del WAD como si fuera un efecto
+        // de sonido — segfault. Con `-nosound` el motor ni intenta.
         let args = vec![
             "doomgeneric".to_string(),
             "-iwad".to_string(),
             "doom1.wad".to_string(),
+            "-nosound".to_string(),
         ];
         Model {
             engine: DoomEngine::new(args),
