@@ -183,6 +183,7 @@ members = [
     "02_ruway/shuma/sandbox/shuma-intent",
     "02_ruway/shuma/sandbox/shuma-line",
     "02_ruway/shuma/sandbox/shuma-protocol",
+    "02_ruway/shuma/sandbox/shuma-remote-exec",
     "02_ruway/shuma/sandbox/shuma-session",
     "02_ruway/shuma/sandbox/shuma-shell-render",
     "02_ruway/shuma/sandbox/shuma-sysmon",

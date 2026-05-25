@@ -18,6 +18,8 @@ shuma-session = { path = "../sandbox/shuma-session" }
 shuma-history = { path = "../sandbox/shuma-history" }
 shuma-config = { path = "../sandbox/shuma-config" }
 shuma-exec = { path = "../sandbox/shuma-exec" }
+shuma-remote-exec = { path = "../sandbox/shuma-remote-exec" }
+shuma-protocol = { path = "../sandbox/shuma-protocol" }
 shuma-infer = { path = "../sandbox/shuma-infer" }
 shuma-sysmon = { path = "../sandbox/shuma-sysmon" }
 # El protocolo de control de carmen — el modo launcher lista y enfoca

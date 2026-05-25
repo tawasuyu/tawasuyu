@@ -1,0 +1,15 @@
+[package]
+name = "shuma-remote-exec"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "shuma — cliente sync del subprotocolo ExecStream del daemon. RemoteRunHandle paralelo a shuma_exec::RunHandle, hablando por Unix socket."
+
+[dependencies]
+shuma-exec = { path = "../shuma-exec" }
+shuma-protocol = { path = "../shuma-protocol" }
+tokio = { workspace = true }
+thiserror = { workspace = true }

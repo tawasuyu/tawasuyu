@@ -33,6 +33,7 @@ use nahual_launcher::launch_app;
 use nahual_theme::Theme;
 use shuma_config::{Config, DedupPolicy as CfgDedup};
 use shuma_exec::{run as exec_run, CommandSpec, Exec, RunEvent, RunHandle, StageSpec};
+use shuma_remote_exec::{run as remote_exec_run, RemoteRunHandle};
 use shuma_history::{DedupPolicy as HistDedup, Entry as HistoryEntry, History, Nav as HistoryNav};
 use shuma_line::{CompletionKind, CompletionSource, LineState, TokenKind};
 use shuma_session::{CommandRun, RunId, RunStatus, Stream, WorkSession};
@@ -359,6 +360,73 @@ struct RunUi {
     user_touched: bool,
 }
 
+/// Asa unificada sobre dos backends de ejecución: local (`shuma-exec`)
+/// y remoto (`shuma-remote-exec` por Unix socket al daemon). El resto
+/// del shell sólo ve esta variante — try_events / kill / is_finished
+/// tienen la misma forma para los dos.
+enum AnyRunHandle {
+    Local(RunHandle),
+    Remote(RemoteRunHandle),
+    /// Eventos pre-poblados — sólo se usa para reportar fallos upfront
+    /// del backend remoto (p. ej. el daemon no responde) sin caer el
+    /// shell ni hacer fallback silencioso al backend local.
+    Synthetic { pending: Vec<RunEvent>, finished: bool },
+}
+
+impl AnyRunHandle {
+    fn try_events(&mut self) -> Vec<RunEvent> {
+        match self {
+            Self::Local(h) => h.try_events(),
+            Self::Remote(h) => h.try_events(),
+            Self::Synthetic { pending, finished } => {
+                *finished = true;
+                std::mem::take(pending)
+            }
+        }
+    }
+    fn kill(&self) {
+        match self {
+            Self::Local(h) => h.kill(),
+            Self::Remote(h) => h.kill(),
+            Self::Synthetic { .. } => {}
+        }
+    }
+    fn is_finished(&self) -> bool {
+        match self {
+            Self::Local(h) => h.is_finished(),
+            Self::Remote(h) => h.is_finished(),
+            Self::Synthetic { finished, .. } => *finished,
+        }
+    }
+}
+
+/// Asa sintética que el `drain_exec` verá como un comando que falló
+/// inmediatamente con `Failed(msg)` + `Exited(-1)`. Útil cuando el
+/// backend remoto no se pudo iniciar.
+fn synthetic_failed_handle(msg: String) -> AnyRunHandle {
+    AnyRunHandle::Synthetic {
+        pending: vec![RunEvent::Failed(msg), RunEvent::Exited(-1)],
+        finished: false,
+    }
+}
+
+/// Decide el path del socket del daemon según las env vars del rc /
+/// proceso: `SHUMA_REMOTE_SOCKET` (path explícito) o `SHUMA_REMOTE=1`
+/// (path canónico vía `shuma_protocol`). `None` desactiva el modo
+/// remoto y la shell sigue ejecutando local — comportamiento por
+/// defecto, sin sorpresas.
+fn detect_remote_socket() -> Option<std::path::PathBuf> {
+    if let Ok(p) = std::env::var("SHUMA_REMOTE_SOCKET") {
+        if !p.is_empty() {
+            return Some(std::path::PathBuf::from(p));
+        }
+    }
+    if std::env::var("SHUMA_REMOTE").as_deref() == Ok("1") {
+        return Some(shuma_protocol::default_socket_path());
+    }
+    None
+}
+
 /// Picker fuzzy del historial durable — el overlay que aparece con Ctrl-R.
 struct HistoryPicker {
     /// Consulta vigente; query vacía muestra las entradas más recientes.
@@ -411,8 +479,14 @@ struct Shell {
     line: LineState,
     /// La sesión de trabajo: cwd, historial y grupos.
     session: WorkSession,
-    /// Comandos en curso, con su canal de salida.
-    active: Vec<(RunId, RunHandle)>,
+    /// Comandos en curso, con su canal de salida. El backend puede ser
+    /// local (`shuma-exec`) o remoto (al daemon vía `shuma-remote-exec`)
+    /// — el shell sólo ve el asa unificada.
+    active: Vec<(RunId, AnyRunHandle)>,
+    /// Si `Some`, los comandos se delegan al daemon en ese socket; si
+    /// `None`, ejecución local clásica. Lo decide [`detect_remote_socket`]
+    /// al arrancar.
+    remote_socket: Option<std::path::PathBuf>,
     completion: Option<shuma_line::Completion>,
     completion_index: usize,
     show_completion: bool,
@@ -489,6 +563,7 @@ impl Shell {
             line: LineState::new(),
             session,
             active: Vec::new(),
+            remote_socket: detect_remote_socket(),
             completion: None,
             completion_index: 0,
             show_completion: false,
@@ -815,7 +890,7 @@ impl Shell {
         let id = self.session.begin_run(&line, now);
         self.run_ui.insert(id, RunUi::default());
         let spec = self.build_spec(&line, None, id);
-        self.active.push((id, exec_run(&spec)));
+        self.active.push((id, self.spawn(&spec)));
         self.scroll.scroll_to_bottom();
     }
 
@@ -823,6 +898,23 @@ impl Shell {
     /// aplica la política de captura de la sesión.
     fn build_spec(&self, line: &str, stdin: Option<String>, run_id: RunId) -> CommandSpec {
         self.build_spec_exec(plan_exec(line), stdin, run_id)
+    }
+
+    /// Lanza `spec` por el backend que toque (local o remoto). Si el
+    /// modo remoto está activo y el daemon no responde, se reporta el
+    /// fallo como un `RunEvent::Failed` sintético — el comando se ve
+    /// como "✗ no se pudo lanzar" pero el shell sigue vivo.
+    fn spawn(&self, spec: &CommandSpec) -> AnyRunHandle {
+        match &self.remote_socket {
+            Some(sock) => match remote_exec_run(spec, sock) {
+                Ok(h) => AnyRunHandle::Remote(h),
+                Err(e) => synthetic_failed_handle(format!(
+                    "daemon en {}: {e}",
+                    sock.display()
+                )),
+            },
+            None => AnyRunHandle::Local(exec_run(spec)),
+        }
     }
 
     /// `build_spec` con el modo de ejecución ya decidido (lo usa la
@@ -873,7 +965,7 @@ impl Shell {
         self.run_ui.insert(id, RunUi::default());
         let exec = Exec::Shell { line: exec_line, program: "bash".into() };
         let spec = self.build_spec_exec(exec, None, id);
-        self.active.push((id, exec_run(&spec)));
+        self.active.push((id, self.spawn(&spec)));
         self.scroll.scroll_to_bottom();
     }
 
@@ -974,7 +1066,7 @@ impl Shell {
         let id = self.session.begin_run(&line, now);
         self.run_ui.insert(id, RunUi::default());
         let spec = self.build_spec(&line, Some(data), id);
-        self.active.push((id, exec_run(&spec)));
+        self.active.push((id, self.spawn(&spec)));
         self.scroll.scroll_to_bottom();
     }
 
