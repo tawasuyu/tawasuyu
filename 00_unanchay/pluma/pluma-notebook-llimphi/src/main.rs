@@ -34,7 +34,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
-use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
+use llimphi_widget_text_area::{text_area_view, TextAreaPalette, TextAreaState};
 use pluma_notebook_core::{
     Cell, CellId, CellKind, CellOutput, CellState, Notebook, Position as CanvasPos,
 };
@@ -64,12 +64,11 @@ enum Msg {
     CancelEdit,
 }
 
-/// Estado de una celda en edición. Single-line por la limitación del
-/// `llimphi-widget-text-input`; las newlines se preservan en el state
-/// pero no se muestran como nuevas líneas.
+/// Estado de una celda en edición. Multilínea — Enter inserta `\n`, el
+/// commit explícito es **Ctrl+Enter** o el botón ✓. Esc cancela.
 struct EditState {
     id: CellId,
-    input: TextInputState,
+    input: TextAreaState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -172,7 +171,7 @@ impl App for Viewer {
             },
             Msg::StartEdit(id) => {
                 let Some(cell) = model.notebook.cell(id) else { return model };
-                let mut input = TextInputState::new();
+                let mut input = TextAreaState::new();
                 input.set_text(&cell.source);
                 Model { editing: Some(EditState { id, input }), ..model }
             }
@@ -204,7 +203,8 @@ impl App for Viewer {
             return None;
         }
         match &event.key {
-            Key::Named(NamedKey::Enter) => Some(Msg::CommitEdit),
+            // Ctrl+Enter commitea; Enter solo agrega \n al text-area.
+            Key::Named(NamedKey::Enter) if event.modifiers.ctrl => Some(Msg::CommitEdit),
             Key::Named(NamedKey::Escape) => Some(Msg::CancelEdit),
             _ => Some(Msg::EditKey(event.clone())),
         }
@@ -493,22 +493,27 @@ fn canvas_card(
     wrapper.children(vec![header, body, footer, edit_button, run_button])
 }
 
-fn edit_input_view(input: &TextInputState, palette: &Palette) -> View<Msg> {
-    // El text-input asume su propia paleta — derivamos del theme dark
-    // para que combine con el resto del visor.
-    let tp = TextInputPalette::from_theme(&Theme::dark());
-    let _ = palette; // (reservado por si después pintamos un borde activo)
+fn edit_input_view(input: &TextAreaState, palette: &Palette) -> View<Msg> {
+    let tp = TextAreaPalette::from_theme(&Theme::dark());
+    let _ = palette;
     View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(CANVAS_BODY_H) },
         padding: Rect {
-            left: length(6.0_f32),
-            right: length(6.0_f32),
-            top: length(4.0_f32),
-            bottom: length(4.0_f32),
+            left: length(4.0_f32),
+            right: length(4.0_f32),
+            top: length(2.0_f32),
+            bottom: length(2.0_f32),
         },
         ..Default::default()
     })
-    .children(vec![text_input_view(input, "fuente…", true, &tp, Msg::CancelEdit)])
+    .children(vec![text_area_view(
+        input,
+        "fuente… (Ctrl+Enter commit · Esc cancela)",
+        true,
+        CANVAS_BODY_H - 4.0,
+        &tp,
+        Msg::CancelEdit,
+    )])
 }
 
 fn output_footer(out: Option<&CellOutput>, palette: &Palette) -> View<Msg> {
@@ -757,19 +762,19 @@ fn demo_notebook() -> Notebook {
     let mut nb = Notebook::new();
     let intro = nb.push(
         CellKind::Markdown,
-        "Demo · ✎ edita, Enter commit, Esc cancela. ▶ corre run_from.",
+        "Demo · ✎ edita (multilínea) · Ctrl+Enter commit · Esc cancela · ▶ corre run_from.",
     );
     let datos = nb.push(
         CellKind::Code { language: "wat".into() },
-        "(module (func (export \"main\") (result i32) i32.const 21))",
+        "(module\n  (func (export \"main\") (result i32)\n    i32.const 21))",
     );
     let media = nb.push(
         CellKind::Code { language: "wat".into() },
-        "(module (func (export \"main\") (result i32) i32.const 42))",
+        "(module\n  (func (export \"main\") (result i32)\n    i32.const 42))",
     );
     let py = nb.push(
         CellKind::Code { language: "python".into() },
-        "sum(range(1, 11))",
+        "n = 10\nprint(f\"suma 1..{n}\")\nsum(range(1, n + 1))",
     );
     let grafico = nb.push(
         CellKind::Embed { module: "pineal".into() },

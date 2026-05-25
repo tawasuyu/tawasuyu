@@ -1,0 +1,12 @@
+[package]
+name = "llimphi-widget-text-area"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-text-area — input de texto multilínea para Llimphi: estado plano (String con \\n), apply_key con Enter→\\n + Backspace + caracteres imprimibles, render multilínea con caret bloque al final del último renglón."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
