@@ -36,7 +36,6 @@
 
 use std::time::Duration;
 
-use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, FlexDirection, Size, Style},
     AlignItems, Rect,
@@ -93,6 +92,12 @@ enum SpriteKind {
     Pillar,
     Imp,
     Torch,
+    /// Proyectil del jugador (bullet trazante amarillo). Spawneado por
+    /// `Msg::Fire`, avanza a velocidad fija, muere al chocar pared.
+    Bullet,
+    /// Decal de impacto en pared. Lo deja un bullet al morir por
+    /// colisión. Estático con TTL.
+    Decal,
 }
 
 #[derive(Clone, Copy)]
@@ -116,11 +121,17 @@ impl Sprite {
             SpriteKind::Pillar => ((0.55, 0.50, 0.42), 1.0),
             SpriteKind::Imp => ((0.78, 0.20, 0.18), 0.85),
             SpriteKind::Torch => ((0.95, 0.78, 0.30), 0.7),
+            // Bullet: amarillo brillante saturado — el shading por
+            // distancia se reduce más adelante para que mantenga su
+            // glow incluso a media distancia.
+            SpriteKind::Bullet => ((1.00, 0.90, 0.30), 0.15),
+            // Decal: negro carbonizado con tinte rojizo.
+            SpriteKind::Decal => ((0.18, 0.08, 0.06), 0.20),
         }
     }
 }
 
-const SPRITES: &[Sprite] = &[
+const STATIC_SPRITES: &[Sprite] = &[
     Sprite { x: 4.5, y: 3.5, kind: SpriteKind::Barrel, scale: 0.5 },
     Sprite { x: 7.5, y: 5.5, kind: SpriteKind::Imp, scale: 0.85 },
     Sprite { x: 11.5, y: 4.5, kind: SpriteKind::Pillar, scale: 1.0 },
@@ -129,6 +140,34 @@ const SPRITES: &[Sprite] = &[
     Sprite { x: 8.5, y: 12.5, kind: SpriteKind::Torch, scale: 0.7 },
     Sprite { x: 3.5, y: 13.5, kind: SpriteKind::Torch, scale: 0.7 },
 ];
+
+/// Proyectil del jugador. Vida finita en ticks; se mueve a velocidad
+/// constante por (vx, vy); muere al chocar pared y deja un decal.
+#[derive(Clone, Copy)]
+struct Bullet {
+    x: f32,
+    y: f32,
+    vx: f32,
+    vy: f32,
+    ttl: u32,
+}
+
+const BULLET_SPEED: f32 = 0.45; // unidades/tick
+const BULLET_TTL: u32 = 60; // ticks (~1.7 s)
+const BULLET_LIGHT_STRENGTH: f32 = 1.4;
+const BULLET_LIGHT_COLOR: (f32, f32, f32) = (1.0, 0.85, 0.40);
+
+/// Decal en la pared (marca de impacto). Estático con TTL para que
+/// los decals se vayan limpiando solos.
+#[derive(Clone, Copy)]
+struct Decal {
+    x: f32,
+    y: f32,
+    ttl: u32,
+}
+
+const DECAL_TTL: u32 = 240; // ticks (~7 s)
+const MAX_DECALS: usize = 32;
 
 // =====================================================================
 // Sector lights — luces puntuales con falloff inverso al cuadrado
@@ -160,7 +199,16 @@ const LIGHTS: &[Light] = &[
 /// hacia naranja, identificadas por `color.0 > color.2`) — el
 /// resultado es que las antorchas parpadean orgánicamente con
 /// fases distintas por índice; las luces frías quedan estables.
-fn lighting_contribution(hit_x: f32, hit_y: f32, tick: u64) -> (f32, f32, f32) {
+///
+/// `bullets` aportan cada uno una luz puntual amarilla mientras
+/// vuelan — el proyectil ilumina dinámicamente las paredes que
+/// pasa cerca.
+fn lighting_contribution(
+    hit_x: f32,
+    hit_y: f32,
+    tick: u64,
+    bullets: &[Bullet],
+) -> (f32, f32, f32) {
     let mut acc = (0.0_f32, 0.0_f32, 0.0_f32);
     for (idx, l) in LIGHTS.iter().enumerate() {
         let dx = l.x - hit_x;
@@ -178,6 +226,17 @@ fn lighting_contribution(hit_x: f32, hit_y: f32, tick: u64) -> (f32, f32, f32) {
         acc.0 += l.color.0 * atten;
         acc.1 += l.color.1 * atten;
         acc.2 += l.color.2 * atten;
+    }
+    // Bullets: luz cálida amarillenta con falloff fuerte (caen rápido
+    // con la distancia para no inundar el pasillo entero).
+    for b in bullets {
+        let dx = b.x - hit_x;
+        let dy = b.y - hit_y;
+        let d2 = dx * dx + dy * dy;
+        let atten = BULLET_LIGHT_STRENGTH / (1.0 + 1.2 * d2);
+        acc.0 += BULLET_LIGHT_COLOR.0 * atten;
+        acc.1 += BULLET_LIGHT_COLOR.1 * atten;
+        acc.2 += BULLET_LIGHT_COLOR.2 * atten;
     }
     acc
 }
@@ -272,12 +331,19 @@ struct Model {
     input: Input,
     tick: u64,
     last_hit_material: u8,
+    /// Vida del jugador — sólo HUD por ahora, sin lógica de daño.
+    health: u32,
+    /// Munición restante. `Msg::Fire` la decrementa si > 0.
+    ammo: u32,
+    bullets: Vec<Bullet>,
+    decals: Vec<Decal>,
 }
 
 #[derive(Clone)]
 enum Msg {
     Tick,
     Key(KeyEvent),
+    Fire,
     Quit,
 }
 
@@ -304,12 +370,20 @@ impl App for Supay {
             input: Input::default(),
             tick: 0,
             last_hit_material: 0,
+            health: 100,
+            ammo: 50,
+            bullets: Vec::with_capacity(16),
+            decals: Vec::with_capacity(MAX_DECALS),
         }
     }
 
     fn on_key(_: &Model, e: &KeyEvent) -> Option<Msg> {
         if matches!(&e.key, Key::Named(NamedKey::Escape)) && e.state == KeyState::Pressed {
             return Some(Msg::Quit);
+        }
+        // Disparo: Space al apretar (no al soltar).
+        if e.state == KeyState::Pressed && matches!(&e.key, Key::Named(NamedKey::Space)) {
+            return Some(Msg::Fire);
         }
         Some(Msg::Key(e.clone()))
     }
@@ -319,6 +393,21 @@ impl App for Supay {
         match msg {
             Msg::Quit => {
                 handle.quit();
+            }
+            Msg::Fire => {
+                if m.ammo > 0 {
+                    m.ammo -= 1;
+                    let (sin, cos) = m.pa.sin_cos();
+                    // Spawn ligeramente delante del jugador para que el
+                    // sprite no asome detrás del crosshair.
+                    m.bullets.push(Bullet {
+                        x: m.px + cos * 0.25,
+                        y: m.py + sin * 0.25,
+                        vx: cos * BULLET_SPEED,
+                        vy: sin * BULLET_SPEED,
+                        ttl: BULLET_TTL,
+                    });
+                }
             }
             Msg::Key(e) => {
                 let pressed = e.state == KeyState::Pressed;
@@ -349,9 +438,8 @@ impl App for Supay {
     }
 
     fn view(model: &Model) -> View<Msg> {
-        let theme = Theme::dark();
-        let header = header_bar(model, &theme);
         let scene = scene_pane(model);
+        let hud = hud_panel(model);
 
         View::new(Style {
             flex_direction: FlexDirection::Column,
@@ -362,11 +450,14 @@ impl App for Supay {
             ..Default::default()
         })
         .fill(rgb(0.02, 0.02, 0.03))
-        .children(vec![header, scene])
+        .children(vec![scene, hud])
     }
 }
 
-fn header_bar(model: &Model, theme: &Theme) -> View<Msg> {
+/// HUD inferior estilo Doom clásico: tres celdas (vida, munición,
+/// material apuntado). Sin lógica de daño todavía — la vida queda en
+/// 100 mientras no haya enemigos que ataquen.
+fn hud_panel(model: &Model) -> View<Msg> {
     let mat_name = match model.last_hit_material {
         1 => "techbase",
         2 => "ladrillo",
@@ -374,30 +465,99 @@ fn header_bar(model: &Model, theme: &Theme) -> View<Msg> {
         4 => "slime",
         _ => "—",
     };
-    View::new(Style {
+    let hud_bg = rgb(0.08, 0.06, 0.06);
+    let border = rgb(0.42, 0.10, 0.06);
+
+    let cell = |label: &str, value: &str, value_color: (f32, f32, f32)| -> View<Msg> {
+        let label_v = View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(12.0_f32),
+            },
+            ..Default::default()
+        })
+        .text_aligned(label.to_string(), 10.0, rgb(0.65, 0.55, 0.45), Alignment::Center);
+        let value_v = View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(24.0_f32),
+            },
+            ..Default::default()
+        })
+        .text_aligned(
+            value.to_string(),
+            20.0,
+            rgb(value_color.0, value_color.1, value_color.2),
+            Alignment::Center,
+        );
+        View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size {
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
+            },
+            flex_grow: 1.0,
+            align_items: Some(AlignItems::Center),
+            padding: Rect {
+                left: length(8.0_f32),
+                right: length(8.0_f32),
+                top: length(4.0_f32),
+                bottom: length(4.0_f32),
+            },
+            ..Default::default()
+        })
+        .children(vec![label_v, value_v])
+    };
+
+    // Color de la vida cambia rojo cuando es baja.
+    let health_color = if model.health > 50 {
+        (0.80, 0.95, 0.55)
+    } else if model.health > 25 {
+        (0.95, 0.85, 0.30)
+    } else {
+        (0.95, 0.30, 0.25)
+    };
+    let ammo_color = if model.ammo > 0 {
+        (0.95, 0.85, 0.30)
+    } else {
+        (0.95, 0.30, 0.25)
+    };
+
+    let row = View::new(Style {
+        flex_direction: FlexDirection::Row,
         size: Size {
             width: percent(1.0_f32),
-            height: length(26.0_f32),
+            height: percent(1.0_f32),
         },
-        padding: Rect {
-            left: length(12.0_f32),
-            right: length(12.0_f32),
-            top: length(0.0_f32),
-            bottom: length(0.0_f32),
-        },
-        align_items: Some(AlignItems::Center),
+        flex_grow: 1.0,
         ..Default::default()
     })
-    .fill(theme.bg_panel)
-    .text_aligned(
-        format!(
-            "supay · ({:.2}, {:.2}) · θ {:.2} · tick {} · centro: {}",
-            model.px, model.py, model.pa, model.tick, mat_name
-        ),
-        11.0,
-        theme.fg_muted,
-        Alignment::Start,
-    )
+    .children(vec![
+        cell("VIDA", &model.health.to_string(), health_color),
+        cell("MUNICION", &model.ammo.to_string(), ammo_color),
+        cell("OBJETIVO", mat_name, (0.85, 0.80, 0.70)),
+    ]);
+
+    // Borde superior rojizo + fondo oscuro, alto 50 px.
+    let border_strip = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(2.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(border);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(52.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(hud_bg)
+    .children(vec![border_strip, row])
 }
 
 // =====================================================================
@@ -454,6 +614,50 @@ fn advance(m: &mut Model) {
     // (rayo recto) — útil para HUD/debug.
     let snap = cast_ray(m.px, m.py, m.pa);
     m.last_hit_material = snap.material;
+
+    // Avance de bullets + colisión + spawn de decals.
+    advance_bullets(m);
+    // Envejecimiento de decals (drop cuando ttl = 0).
+    m.decals.retain(|d| d.ttl > 0);
+    for d in m.decals.iter_mut() {
+        d.ttl = d.ttl.saturating_sub(1);
+    }
+}
+
+/// Avanza cada bullet por (vx, vy). Si el siguiente paso queda
+/// dentro de pared, muere y spawna decal justo delante del impacto
+/// (en el lado libre de la pared, para que el sprite no quede
+/// embebido). TTL también puede matarlo sin decal.
+fn advance_bullets(m: &mut Model) {
+    let mut new_decals: Vec<Decal> = Vec::new();
+    m.bullets.retain_mut(|b| {
+        if b.ttl == 0 {
+            return false;
+        }
+        b.ttl -= 1;
+        let nx = b.x + b.vx;
+        let ny = b.y + b.vy;
+        if tile(nx as i32, ny as i32) != 0 {
+            // Impacto. Ponemos el decal en la posición justo antes
+            // del muro (último punto libre del paso).
+            new_decals.push(Decal {
+                x: b.x,
+                y: b.y,
+                ttl: DECAL_TTL,
+            });
+            return false;
+        }
+        b.x = nx;
+        b.y = ny;
+        true
+    });
+    for d in new_decals {
+        if m.decals.len() >= MAX_DECALS {
+            // Circular: dropea el más viejo.
+            m.decals.remove(0);
+        }
+        m.decals.push(d);
+    }
 }
 
 fn is_blocked(x: f32, y: f32, r: f32) -> bool {
@@ -647,11 +851,13 @@ fn slime_mul(wall_x: f32, wall_y: f32, tick: u64) -> f32 {
 
 fn scene_pane(model: &Model) -> View<Msg> {
     // Capturamos el snapshot del jugador para la closure (paint_with
-    // necesita Send+Sync; (f32, f32, f32, u64) lo es trivialmente).
+    // necesita Send+Sync; los tipos copiados aquí son `Send + Sync` trivial).
     let px = model.px;
     let py = model.py;
     let pa = model.pa;
     let tick = model.tick;
+    let bullets = model.bullets.clone();
+    let decals = model.decals.clone();
 
     View::new(Style {
         size: Size {
@@ -663,7 +869,7 @@ fn scene_pane(model: &Model) -> View<Msg> {
     })
     .clip(true)
     .paint_with(move |scene, _ts, rect: PaintRect| {
-        draw_scene(scene, rect, px, py, pa, tick);
+        draw_scene(scene, rect, px, py, pa, tick, &bullets, &decals);
     })
 }
 
@@ -685,6 +891,8 @@ fn draw_scene(
     py: f32,
     pa: f32,
     tick: u64,
+    bullets: &[Bullet],
+    decals: &[Decal],
 ) {
     let w = rect.w as f64;
     let h = rect.h as f64;
@@ -716,7 +924,7 @@ fn draw_scene(
         // Hit world-point para iluminación por luces puntuales.
         let hit_x = px + hit.perp_dist * ray_angle.cos();
         let hit_y = py + hit.perp_dist * ray_angle.sin();
-        let lights = lighting_contribution(hit_x, hit_y, tick);
+        let lights = lighting_contribution(hit_x, hit_y, tick, bullets);
         let mut light_mul = (
             (AMBIENT + lights.0).min(2.0),
             (AMBIENT + lights.1).min(2.0),
@@ -782,7 +990,27 @@ fn draw_scene(
     }
 
     // --- Pass 2: sprites billboarded con z-test por columna ---
-    draw_sprites(scene, rect, px, py, pa, tick, &z_buf, total_cols);
+    // Combinamos sprites estáticos + bullets + decals en una sola
+    // lista para que `draw_sprites` los ordene por distancia y
+    // pinte de atrás hacia adelante.
+    let mut all_sprites: Vec<Sprite> = STATIC_SPRITES.to_vec();
+    for b in bullets {
+        all_sprites.push(Sprite {
+            x: b.x,
+            y: b.y,
+            kind: SpriteKind::Bullet,
+            scale: 0.15,
+        });
+    }
+    for d in decals {
+        all_sprites.push(Sprite {
+            x: d.x,
+            y: d.y,
+            kind: SpriteKind::Decal,
+            scale: 0.20,
+        });
+    }
+    draw_sprites(scene, rect, px, py, pa, tick, &z_buf, total_cols, &all_sprites);
 
     // --- Overlay: crosshair + minimap ---
     draw_crosshair(scene, rect);
@@ -806,6 +1034,7 @@ fn draw_sprites(
     tick: u64,
     z_buf: &[f32],
     total_cols: usize,
+    sprites: &[Sprite],
 ) {
     let h = rect.h as f64;
     let half_fov = FOV * 0.5;
@@ -818,7 +1047,7 @@ fn draw_sprites(
 
     // Ordenar sprites por distancia descendente — los más lejanos
     // primero, así los cercanos pintan encima cuando se superponen.
-    let mut visible: Vec<(usize, f32)> = SPRITES
+    let mut visible: Vec<(usize, f32)> = sprites
         .iter()
         .enumerate()
         .map(|(i, s)| {
@@ -830,7 +1059,7 @@ fn draw_sprites(
     visible.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
     for (idx, _) in visible {
-        let s = &SPRITES[idx];
+        let s = &sprites[idx];
         let dx = s.x - px;
         let dy = s.y - py;
         // Transform al espacio cámara.
@@ -850,22 +1079,35 @@ fn draw_sprites(
         let col_end = ((center_col + half_cols).max(0.0) as usize).min(total_cols);
 
         let y_mid = h * 0.5 + rect.y as f64;
-        // El sprite apoya en el "piso" del slice. Animación por kind:
-        // - Imp respira con bob vertical sinusoidal (~5% de su altura).
-        // - Torch parpadea sutilmente en altura para acompañar el flicker.
-        // - Barril/Pillar estáticos.
+        // Anchor por kind:
+        // - Barril/Pillar/Imp/Torch/Decal: apoyan en el "piso" del slice.
+        //   Imp respira (bob vertical sinusoidal); Torch oscila sutil.
+        // - Bullet: centrado a la altura del jugador (no toca piso ni
+        //   techo, vuela horizontal).
         let bob = match s.kind {
             SpriteKind::Imp => (tick as f32 * 0.18).sin() * 0.05 * sprite_h,
             SpriteKind::Torch => (tick as f32 * 0.42).sin() * 0.015 * sprite_h,
             _ => 0.0,
         };
         let slice_h = (h as f32 / ty) as f64;
-        let y_bot = (y_mid + slice_h * 0.5 + bob as f64).min((rect.y + rect.h) as f64);
-        let y_top = (y_bot - sprite_h as f64).max(rect.y as f64);
+        let (y_top, y_bot) = match s.kind {
+            SpriteKind::Bullet => {
+                let half = sprite_h as f64 * 0.5;
+                ((y_mid - half).max(rect.y as f64),
+                 (y_mid + half).min((rect.y + rect.h) as f64))
+            }
+            _ => {
+                let y_bot_g = (y_mid + slice_h * 0.5 + bob as f64).min((rect.y + rect.h) as f64);
+                let y_top_g = (y_bot_g - sprite_h as f64).max(rect.y as f64);
+                (y_top_g, y_bot_g)
+            }
+        };
 
-        // Color con shading + fog + lighting puntual.
+        // Color con shading + fog + lighting puntual. Para sprites
+        // dinámicos pasamos lista vacía de bullets (un bullet no se
+        // ilumina a sí mismo; usa su color base saturado).
         let (base, _appearance_h) = s.appearance();
-        let lights = lighting_contribution(s.x, s.y, tick);
+        let lights = lighting_contribution(s.x, s.y, tick, &[]);
         let light_mul = (
             (AMBIENT + lights.0).min(2.0),
             (AMBIENT + lights.1).min(2.0),
@@ -1045,8 +1287,9 @@ fn draw_minimap(
         }
     }
 
-    // Sprites como puntos coloreados según su tipo.
-    for s in SPRITES {
+    // Sprites estáticos como puntos coloreados según su tipo. Los
+    // bullets/decals no van al minimap — son ruidosos y efímeros.
+    for s in STATIC_SPRITES {
         let (base, _) = s.appearance();
         let dot = llimphi_ui::llimphi_raster::kurbo::Circle::new(
             (x0 + s.x as f64 * cell, y0 + s.y as f64 * cell),
