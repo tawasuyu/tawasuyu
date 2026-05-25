@@ -92,6 +92,13 @@ enum Msg {
     ReferencesNav { delta: i32 },
     ReferencesApply,
     ReferencesClose,
+    /// F2 — abre prompt para escribir el nuevo nombre.
+    RenameOpen,
+    RenameKey(KeyEvent),
+    RenameSubmit,
+    RenameClose,
+    /// Aplicar WorkspaceEdit (de rename) en N archivos.
+    RenameApply(std::collections::HashMap<PathBuf, Vec<TextEdit>>),
     /// El LSP devolvió text edits (de formatting o rename) para el
     /// archivo abierto — aplicar todos en orden descendente.
     TextEditsApply(Vec<TextEdit>),
@@ -135,6 +142,16 @@ struct Model {
     sig_help: Option<SignatureHelpBar>,
     /// Lista de references; `None` cerrada.
     references: Option<ReferencesBar>,
+    /// Prompt de rename con el nuevo nombre + pos original; `None` cerrado.
+    rename: Option<RenameBar>,
+}
+
+struct RenameBar {
+    input: TextInputState,
+    /// Pos donde se pidió el rename.
+    anchor: (usize, usize),
+    /// `true` mientras esperamos la respuesta del LSP tras submit.
+    waiting: bool,
 }
 
 struct ReferencesBar {
@@ -250,6 +267,7 @@ impl App for EditorApp {
             hover: None,
             sig_help: None,
             references: None,
+            rename: None,
         }
     }
 
@@ -326,11 +344,17 @@ impl App for EditorApp {
                     m.lsp.clear_definition();
                     handle.dispatch(Msg::GotoDefinitionApply(loc));
                 }
-                // Text edits (formatting / rename): aplicar al recibir.
+                // Text edits (formatting): aplicar al recibir.
                 let edits = m.lsp.latest_text_edits();
                 if !edits.is_empty() {
                     m.lsp.clear_text_edits();
                     handle.dispatch(Msg::TextEditsApply(edits));
+                }
+                // WorkspaceEdit (rename): aplicar al recibir.
+                let we = m.lsp.latest_workspace_edit();
+                if !we.is_empty() {
+                    m.lsp.clear_workspace_edit();
+                    handle.dispatch(Msg::RenameApply(we));
                 }
                 m
             }
@@ -471,6 +495,83 @@ impl App for EditorApp {
                 let mut m = model;
                 m.references = None;
                 m.lsp.clear_references();
+                m
+            }
+            Msg::RenameOpen => {
+                let mut m = model;
+                if m.open_file.is_none() {
+                    return m;
+                }
+                let line = m.editor.cursor.caret.line;
+                let col = m.editor.cursor.caret.col;
+                let (start, word) = m.editor.buffer.current_word_prefix(line, col);
+                let _ = start;
+                let mut input = TextInputState::new();
+                input.set_text(&word);
+                m.rename = Some(RenameBar {
+                    input,
+                    anchor: (line, col),
+                    waiting: false,
+                });
+                m.status = "rename · Enter aplica · Esc cancela".into();
+                m
+            }
+            Msg::RenameKey(ev) => {
+                let mut m = model;
+                if let Some(r) = m.rename.as_mut() {
+                    r.input.apply_key(&ev);
+                }
+                m
+            }
+            Msg::RenameSubmit => {
+                let mut m = model;
+                let Some(r) = m.rename.as_mut() else { return m };
+                let Some(path) = m.open_file.clone() else { return m };
+                let new_name = r.input.text();
+                if new_name.is_empty() {
+                    return m;
+                }
+                m.lsp.clear_workspace_edit();
+                m.lsp.request_rename(&path, r.anchor.0, r.anchor.1, &new_name);
+                r.waiting = true;
+                m.status = format!("rename → «{new_name}» · esperando LSP…");
+                m
+            }
+            Msg::RenameClose => {
+                let mut m = model;
+                m.rename = None;
+                m.lsp.clear_workspace_edit();
+                m
+            }
+            Msg::RenameApply(we) => {
+                let mut m = model;
+                m.rename = None;
+                let mut files_changed = 0;
+                let mut bytes_written = 0usize;
+                let open_path = m.open_file.clone();
+                for (path, edits) in we {
+                    if Some(&path) == open_path.as_ref() {
+                        apply_text_edits_in_place(&mut m.editor, edits);
+                        m.dirty = true;
+                        if let Some(p) = open_path.clone() {
+                            let new_text = m.editor.text();
+                            m.lsp.did_change(&p, &new_text);
+                        }
+                        files_changed += 1;
+                    } else {
+                        match apply_text_edits_to_file(&path, &edits) {
+                            Ok(n) => {
+                                files_changed += 1;
+                                bytes_written += n;
+                            }
+                            Err(e) => {
+                                m.status = format!("rename · error en {}: {e}", path.display());
+                                return m;
+                            }
+                        }
+                    }
+                }
+                m.status = format!("rename · {files_changed} archivos · {bytes_written} bytes");
                 m
             }
             Msg::SignatureHelpRequest => {
@@ -641,6 +742,14 @@ impl App for EditorApp {
         {
             return Some(Msg::SignatureHelpClose);
         }
+        // Rename prompt abierto: las teclas van al input, Enter submit, Esc cierra.
+        if model.rename.is_some() {
+            return match &event.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::RenameClose),
+                Key::Named(NamedKey::Enter) => Some(Msg::RenameSubmit),
+                _ => Some(Msg::RenameKey(event.clone())),
+            };
+        }
         // References abierto: Up/Down navega, Enter aplica, Esc cierra.
         if model.references.is_some() {
             match &event.key {
@@ -660,6 +769,12 @@ impl App for EditorApp {
             } else {
                 Msg::GotoDefinitionRequest
             });
+        }
+        // F2 = rename.
+        if matches!(&event.key, Key::Named(NamedKey::F2))
+            && model.open_file.is_some()
+        {
+            return Some(Msg::RenameOpen);
         }
         // Hover popup abierto + Esc → cerrar.
         if model.hover.is_some()
@@ -801,6 +916,9 @@ fn editor_panel(model: &Model, theme: &Theme) -> View<Msg> {
     if let Some(rb) = model.references.as_ref() {
         children.push(references_view(rb, &model.root, theme));
     }
+    if let Some(rn) = model.rename.as_ref() {
+        children.push(rename_view(rn, theme));
+    }
     let editor_view = match &model.open_file {
         None => empty_editor_placeholder(theme),
         Some(path) => {
@@ -843,6 +961,51 @@ const COMPLETIONS_MAX_ITEMS_VISIBLE: usize = 5;
 const HOVER_BAR_H: f32 = 96.0;
 const SIG_HELP_BAR_H: f32 = 56.0;
 const REFS_BAR_H: f32 = 160.0;
+const RENAME_BAR_H: f32 = 56.0;
+
+fn rename_view(rb: &RenameBar, theme: &Theme) -> View<Msg> {
+    let tp = TextInputPalette::from_theme(theme);
+    let header = if rb.waiting {
+        format!("rename @ {}:{} · esperando LSP…", rb.anchor.0 + 1, rb.anchor.1)
+    } else {
+        format!("rename @ {}:{} · Enter aplica · Esc cancela", rb.anchor.0 + 1, rb.anchor.1)
+    };
+    let header_view = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
+        padding: Rect {
+            left: length(8.0_f32), right: length(8.0_f32),
+            top: length(0.0_f32), bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .text_aligned(header, 10.0, theme.fg_muted, Alignment::Start);
+
+    let input_view = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(RENAME_BAR_H - 18.0) },
+        padding: Rect {
+            left: length(6.0_f32), right: length(6.0_f32),
+            top: length(2.0_f32), bottom: length(2.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(vec![text_input_view(
+        &rb.input,
+        "nuevo nombre",
+        true,
+        &tp,
+        Msg::RenameOpen,
+    )]);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: length(RENAME_BAR_H) },
+        ..Default::default()
+    })
+    .children(vec![header_view, input_view])
+}
 const REFS_ROW_H: f32 = 20.0;
 const REFS_MAX_VISIBLE: usize = 7;
 
@@ -1337,6 +1500,33 @@ fn apply_editor_pointer(mut model: Model, ev: PointerEvent) -> Model {
 /// Aplica una lista de TextEdits al EditorState en orden descendente
 /// por start offset (las edits tempranas no desplazan posiciones
 /// posteriores). Cada TextEdit es un reemplazo [start..end) → new_text.
+/// Aplica edits a un archivo del disco (no abierto). Carga, aplica
+/// ordenados desc por start, escribe atómico (write + fsync no, simple).
+fn apply_text_edits_to_file(path: &Path, edits: &[TextEdit]) -> std::io::Result<usize> {
+    let content = fs::read_to_string(path)?;
+    let mut buf = llimphi_widget_text_editor::Buffer::from_str(&content);
+    let mut sorted: Vec<TextEdit> = edits.to_vec();
+    sorted.sort_by(|a, b| {
+        let oa = buf.pos_to_offset(a.start_line, a.start_col);
+        let ob = buf.pos_to_offset(b.start_line, b.start_col);
+        ob.cmp(&oa)
+    });
+    for e in sorted {
+        let s = buf.pos_to_offset(e.start_line, e.start_col);
+        let en = buf.pos_to_offset(e.end_line, e.end_col);
+        if en > s {
+            buf.delete(s, en);
+        }
+        if !e.new_text.is_empty() {
+            buf.insert(s, &e.new_text);
+        }
+    }
+    let new_text = buf.text();
+    let len = new_text.len();
+    fs::write(path, new_text)?;
+    Ok(len)
+}
+
 fn apply_text_edits_in_place(editor: &mut EditorState, mut edits: Vec<TextEdit>) {
     // Ordenar desc por start.
     edits.sort_by(|a, b| {

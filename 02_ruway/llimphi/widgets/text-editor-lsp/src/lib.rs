@@ -98,6 +98,12 @@ pub trait LspClient: Send {
     fn request_references(&mut self, path: &Path, line: usize, col: usize, include_decl: bool);
     fn latest_references(&self) -> Vec<DefinitionLocation>;
     fn clear_references(&mut self);
+    /// Dispara textDocument/rename con `new_name` como nuevo identificador.
+    fn request_rename(&mut self, path: &Path, line: usize, col: usize, new_name: &str);
+    /// Última WorkspaceEdit recibida (rename o code actions). Mapeado a
+    /// `path → Vec<TextEdit>` por simplicidad.
+    fn latest_workspace_edit(&self) -> std::collections::HashMap<PathBuf, Vec<TextEdit>>;
+    fn clear_workspace_edit(&mut self);
 }
 
 /// Info de signatureHelp activa.
@@ -181,6 +187,11 @@ impl LspClient for NoopLspClient {
         Vec::new()
     }
     fn clear_references(&mut self) {}
+    fn request_rename(&mut self, _: &Path, _: usize, _: usize, _: &str) {}
+    fn latest_workspace_edit(&self) -> std::collections::HashMap<PathBuf, Vec<TextEdit>> {
+        std::collections::HashMap::new()
+    }
+    fn clear_workspace_edit(&mut self) {}
 }
 
 // ---------------------------------------------------------------------
@@ -205,6 +216,8 @@ struct SharedInner {
     signature_help: Option<SignatureHelpInfo>,
     /// Última lista de references.
     references: Vec<DefinitionLocation>,
+    /// Última WorkspaceEdit (de rename). Mapeo path → edits.
+    workspace_edit: HashMap<PathBuf, Vec<TextEdit>>,
     /// IDs de requests pendientes para distinguir responses; el reader
     /// usa estos sets para routear cada response al handler correcto.
     pending_completion_ids: std::collections::HashSet<i64>,
@@ -213,6 +226,7 @@ struct SharedInner {
     pending_formatting_ids: std::collections::HashSet<i64>,
     pending_signature_help_ids: std::collections::HashSet<i64>,
     pending_references_ids: std::collections::HashSet<i64>,
+    pending_rename_ids: std::collections::HashSet<i64>,
 }
 
 type SharedState = Arc<Mutex<SharedInner>>;
@@ -509,6 +523,34 @@ impl LspClient for RustAnalyzerClient {
         }
     }
 
+    fn request_rename(&mut self, path: &Path, line: usize, col: usize, new_name: &str) {
+        let id = self.alloc_id();
+        if let Ok(mut s) = self.state.lock() {
+            s.pending_rename_ids.insert(id);
+        }
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "textDocument/rename",
+            "params": {
+                "textDocument": { "uri": format!("file://{}", path.display()) },
+                "position": { "line": line, "character": col },
+                "newName": new_name
+            }
+        });
+        self.send_raw(req.to_string());
+    }
+
+    fn latest_workspace_edit(&self) -> std::collections::HashMap<PathBuf, Vec<TextEdit>> {
+        self.state.lock().map(|s| s.workspace_edit.clone()).unwrap_or_default()
+    }
+
+    fn clear_workspace_edit(&mut self) {
+        if let Ok(mut s) = self.state.lock() {
+            s.workspace_edit.clear();
+        }
+    }
+
     fn did_open(&mut self, path: &Path, language: &str, text: &str) {
         self.versions.insert(path.to_path_buf(), 1);
         let notif = serde_json::json!({
@@ -685,26 +727,29 @@ fn handle_publish_diagnostics(json: &serde_json::Value, state: &SharedState) {
 /// Routea una response del server al handler correspondiente según
 /// qué set de pendientes la contenía.
 fn handle_response(id: i64, json: &serde_json::Value, state: &SharedState) {
-    let (was_completion, was_hover, was_definition, was_formatting, was_sig, was_refs) = {
+    let flags = {
         let Ok(mut s) = state.lock() else { return };
-        let c = s.pending_completion_ids.remove(&id);
-        let h = s.pending_hover_ids.remove(&id);
-        let d = s.pending_definition_ids.remove(&id);
-        let f = s.pending_formatting_ids.remove(&id);
-        let sg = s.pending_signature_help_ids.remove(&id);
-        let r = s.pending_references_ids.remove(&id);
-        (c, h, d, f, sg, r)
+        (
+            s.pending_completion_ids.remove(&id),
+            s.pending_hover_ids.remove(&id),
+            s.pending_definition_ids.remove(&id),
+            s.pending_formatting_ids.remove(&id),
+            s.pending_signature_help_ids.remove(&id),
+            s.pending_references_ids.remove(&id),
+            s.pending_rename_ids.remove(&id),
+        )
     };
+    let (was_completion, was_hover, was_def, was_fmt, was_sig, was_refs, was_rename) = flags;
     if was_completion {
         handle_completion_response(json, state);
     }
     if was_hover {
         handle_hover_response(json, state);
     }
-    if was_definition {
+    if was_def {
         handle_definition_response(json, state);
     }
-    if was_formatting {
+    if was_fmt {
         handle_text_edits_response(json, state);
     }
     if was_sig {
@@ -712,6 +757,45 @@ fn handle_response(id: i64, json: &serde_json::Value, state: &SharedState) {
     }
     if was_refs {
         handle_references_response(json, state);
+    }
+    if was_rename {
+        handle_rename_response(json, state);
+    }
+}
+
+fn handle_rename_response(json: &serde_json::Value, state: &SharedState) {
+    let Some(result) = json.get("result") else { return };
+    if result.is_null() {
+        return;
+    }
+    let mut map: HashMap<PathBuf, Vec<TextEdit>> = HashMap::new();
+    // changes: { uri → TextEdit[] }
+    if let Some(changes) = result.get("changes").and_then(|c| c.as_object()) {
+        for (uri, edits_val) in changes {
+            let Some(path) = uri.strip_prefix("file://").map(PathBuf::from) else { continue };
+            let Some(arr) = edits_val.as_array() else { continue };
+            let edits: Vec<TextEdit> = arr.iter().filter_map(parse_text_edit).collect();
+            map.insert(path, edits);
+        }
+    }
+    // documentChanges: [{ textDocument: { uri }, edits: [...] }] — más nuevo.
+    if let Some(docs) = result.get("documentChanges").and_then(|c| c.as_array()) {
+        for doc in docs {
+            let Some(uri) = doc
+                .get("textDocument")
+                .and_then(|t| t.get("uri"))
+                .and_then(|u| u.as_str())
+            else {
+                continue;
+            };
+            let Some(path) = uri.strip_prefix("file://").map(PathBuf::from) else { continue };
+            let Some(arr) = doc.get("edits").and_then(|e| e.as_array()) else { continue };
+            let edits: Vec<TextEdit> = arr.iter().filter_map(parse_text_edit).collect();
+            map.entry(path).or_default().extend(edits);
+        }
+    }
+    if let Ok(mut s) = state.lock() {
+        s.workspace_edit = map;
     }
 }
 
@@ -1110,6 +1194,52 @@ mod tests {
 
     fn make_state() -> SharedState {
         Arc::new(Mutex::new(SharedInner::default()))
+    }
+
+    #[test]
+    fn handle_rename_changes_map() {
+        let s = make_state();
+        let json = serde_json::json!({
+            "id": 1,
+            "result": {
+                "changes": {
+                    "file:///tmp/a.rs": [
+                        { "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 3 } }, "newText": "bar" }
+                    ],
+                    "file:///tmp/b.rs": [
+                        { "range": { "start": { "line": 5, "character": 4 }, "end": { "line": 5, "character": 7 } }, "newText": "bar" },
+                        { "range": { "start": { "line": 10, "character": 0 }, "end": { "line": 10, "character": 3 } }, "newText": "bar" }
+                    ]
+                }
+            }
+        });
+        handle_rename_response(&json, &s);
+        let we = s.lock().unwrap().workspace_edit.clone();
+        assert_eq!(we.len(), 2);
+        assert_eq!(we.get(&PathBuf::from("/tmp/a.rs")).unwrap().len(), 1);
+        assert_eq!(we.get(&PathBuf::from("/tmp/b.rs")).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn handle_rename_document_changes() {
+        let s = make_state();
+        let json = serde_json::json!({
+            "id": 1,
+            "result": {
+                "documentChanges": [
+                    {
+                        "textDocument": { "uri": "file:///tmp/x.rs", "version": 2 },
+                        "edits": [
+                            { "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 3 } }, "newText": "foo" }
+                        ]
+                    }
+                ]
+            }
+        });
+        handle_rename_response(&json, &s);
+        let we = s.lock().unwrap().workspace_edit.clone();
+        assert_eq!(we.len(), 1);
+        assert_eq!(we.get(&PathBuf::from("/tmp/x.rs")).unwrap().len(), 1);
     }
 
     #[test]
