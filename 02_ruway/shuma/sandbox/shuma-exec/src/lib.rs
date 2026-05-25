@@ -34,6 +34,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use nix::fcntl::{splice, SpliceFFlags};
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
 /// Una etapa del pipe en ejecución directa: un binario y sus argumentos
 /// ya resueltos (sin comillas, sin metacaracteres).
@@ -50,6 +51,17 @@ pub enum Exec {
     Shell { line: String, program: String },
     /// Directo — brahman lanza y conecta cada etapa.
     Direct { stages: Vec<StageSpec> },
+    /// Bajo un PTY (cross-platform vía `portable-pty`). Pensado para
+    /// comandos **TUI fullscreen** (vim, htop, less, claude code) que
+    /// detectan `isatty()` y rehúsan funcionar con pipes. Emite
+    /// [`RunEvent::Bytes`] crudos en vez de `Stdout(String)` para que
+    /// el frontend pueda alimentar un emulador vt100 propio.
+    Pty {
+        program: String,
+        args: Vec<String>,
+        cols: u16,
+        rows: u16,
+    },
 }
 
 /// Qué ejecutar y con qué política de captura.
@@ -114,6 +126,10 @@ pub enum RunEvent {
     Stdout(String),
     /// Una línea de salida de error.
     Stderr(String),
+    /// Un chunk de bytes crudos del PTY (sólo bajo [`Exec::Pty`]). El
+    /// frontend debe alimentarlo a un emulador vt100 para renderizarlo;
+    /// puede traer secuencias de cursor movement, erase, OSC, etc.
+    Bytes(Vec<u8>),
     /// La captura alcanzó su tope; lo que sigue se descarta.
     Truncated,
     /// La captura alcanzó su tope; el resto se vuelca al archivo dado.
@@ -137,8 +153,17 @@ pub struct RunHandle {
     rx: Receiver<RunEvent>,
     finished: bool,
     /// Los procesos, compartidos con el hilo coordinador para poder
-    /// matarlos — todas las etapas de un pipe directo.
+    /// matarlos — todas las etapas de un pipe directo. Vacío para
+    /// runs PTY.
     children: Arc<Mutex<Vec<Child>>>,
+    /// PIDs vistos de runs PTY (los gestiona `portable-pty`; no son
+    /// `std::process::Child`). Se usan para enviarles señales con
+    /// `nix::sys::signal::kill`.
+    pty_pids: Arc<Mutex<Vec<u32>>>,
+    /// Canal opcional para escribir bytes en el stdin del proceso.
+    /// Sólo está cableado en modo PTY; en los otros modos los sends
+    /// no llegan a nadie (el receptor se cae al instante).
+    stdin_tx: Sender<Vec<u8>>,
 }
 
 /// Asa "fría" de un `RunHandle` que **sólo** sirve para matar el comando.
@@ -148,6 +173,7 @@ pub struct RunHandle {
 #[derive(Clone)]
 pub struct Killer {
     children: Arc<Mutex<Vec<Child>>>,
+    pty_pids: Arc<Mutex<Vec<u32>>>,
 }
 
 impl Killer {
@@ -159,16 +185,30 @@ impl Killer {
                 let _ = c.kill();
             }
         }
+        // PTY: el child de `portable-pty` no es un `std::process::Child`,
+        // así que su muerte va por señal a su PID.
+        if let Ok(g) = self.pty_pids.lock() {
+            for &p in g.iter() {
+                let _ = nix::sys::signal::kill(
+                    nix::unistd::Pid::from_raw(p as i32),
+                    nix::sys::signal::Signal::SIGKILL,
+                );
+            }
+        }
     }
 
     /// PIDs de las etapas que aún consider vivas el coordinador. Puede
     /// estar vacío durante una micro-ventana entre `run()` y el spawn
     /// real — no es un bug, sólo refleja la realidad del scheduling.
     pub fn pids(&self) -> Vec<u32> {
-        match self.children.lock() {
-            Ok(g) => g.iter().map(|c| c.id()).collect(),
-            Err(_) => Vec::new(),
+        let mut out = Vec::new();
+        if let Ok(g) = self.children.lock() {
+            out.extend(g.iter().map(|c| c.id()));
         }
+        if let Ok(g) = self.pty_pids.lock() {
+            out.extend(g.iter().copied());
+        }
+        out
     }
 
     /// SIGTERM — el "kill educado" (Ctrl-C estándar). El proceso suele
@@ -216,7 +256,18 @@ impl RunHandle {
     /// Asa cloneable que sólo permite matar el comando — útil para usar
     /// `kill()` desde otra tarea sin tocar el lock que tiene el reader.
     pub fn killer(&self) -> Killer {
-        Killer { children: Arc::clone(&self.children) }
+        Killer {
+            children: Arc::clone(&self.children),
+            pty_pids: Arc::clone(&self.pty_pids),
+        }
+    }
+
+    /// Escribe bytes en el stdin del proceso. Sólo tiene efecto bajo
+    /// [`Exec::Pty`] — el modo TUI cablea un writer thread que recibe
+    /// estos bytes y los reenvía al PTY master. En los otros modos, el
+    /// send se descarta (no hay listener) y devuelve `false`.
+    pub fn write_input(&self, bytes: Vec<u8>) -> bool {
+        self.stdin_tx.send(bytes).is_ok()
     }
 
     /// Próximo evento, bloqueando hasta que llegue. `None` cuando el
@@ -432,9 +483,29 @@ fn spawn_direct(stages: &[StageSpec], cwd: &str, want_stdin: bool) -> std::io::R
 /// salida. La función vuelve de inmediato: el proceso corre en hilos.
 pub fn run(spec: &CommandSpec) -> RunHandle {
     let (tx, rx) = mpsc::channel();
+    let (stdin_tx, stdin_rx) = mpsc::channel::<Vec<u8>>();
     let spec = spec.clone();
     let cell: Arc<Mutex<Vec<Child>>> = Arc::new(Mutex::new(Vec::new()));
+    let pty_pids: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(Vec::new()));
     let cell_thread = Arc::clone(&cell);
+    let pty_pids_thread = Arc::clone(&pty_pids);
+
+    // Modo PTY: ruta separada — el proceso corre bajo un pseudo-terminal
+    // (cross-platform via `portable-pty`), los bytes crudos se emiten
+    // como [`RunEvent::Bytes`] para que el frontend los pase por su
+    // emulador vt100, y el frontend escribe en stdin con
+    // [`RunHandle::write_input`].
+    if let Exec::Pty { program, args, cols, rows } = &spec.exec {
+        let program = program.clone();
+        let args = args.clone();
+        let cols = *cols;
+        let rows = *rows;
+        let cwd = spec.cwd.clone();
+        std::thread::spawn(move || {
+            spawn_pty_thread(&program, &args, &cwd, cols, rows, tx, stdin_rx, pty_pids_thread);
+        });
+        return RunHandle { rx, finished: false, children: cell, pty_pids, stdin_tx };
+    }
 
     std::thread::spawn(move || {
         let want_stdin = spec.stdin_data.is_some();
@@ -443,6 +514,7 @@ pub fn run(spec: &CommandSpec) -> RunHandle {
                 spawn_shell(line, program, &spec.cwd, want_stdin)
             }
             Exec::Direct { stages } => spawn_direct(stages, &spec.cwd, want_stdin),
+            Exec::Pty { .. } => unreachable!("Pty se maneja antes"),
         };
         let Spawned { children, stdin, stdout, stderrs } = match spawned {
             Ok(s) => s,
@@ -510,7 +582,118 @@ pub fn run(spec: &CommandSpec) -> RunHandle {
         let _ = tx.send(RunEvent::Exited(code));
     });
 
-    RunHandle { rx, finished: false, children: cell }
+    RunHandle { rx, finished: false, children: cell, pty_pids, stdin_tx }
+}
+
+/// Coordinador del modo PTY: aloja un PTY de tamaño `cols`×`rows`,
+/// lanza el comando bajo él, y mantiene tres flujos:
+///
+/// - Reader thread: lee chunks de hasta 4 KiB del master del PTY y los
+///   emite como `RunEvent::Bytes`. Termina cuando el child cierra el
+///   slave (EOF).
+/// - Writer thread: bloquea en `stdin_rx` y reenvía bytes al master
+///   del PTY (lo que el frontend manda como input crudo).
+/// - Esta función espera al child y emite `RunEvent::Exited(code)`.
+fn spawn_pty_thread(
+    program: &str,
+    args: &[String],
+    cwd: &str,
+    cols: u16,
+    rows: u16,
+    tx: Sender<RunEvent>,
+    stdin_rx: Receiver<Vec<u8>>,
+    pty_pids: Arc<Mutex<Vec<u32>>>,
+) {
+    let pty_system = native_pty_system();
+    let pair = match pty_system.openpty(PtySize {
+        rows,
+        cols,
+        pixel_width: 0,
+        pixel_height: 0,
+    }) {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = tx.send(RunEvent::Failed(format!("openpty: {e}")));
+            return;
+        }
+    };
+    let mut cmd = CommandBuilder::new(program);
+    for a in args {
+        cmd.arg(a);
+    }
+    cmd.cwd(cwd);
+    // Heurística estándar: TUIs leen `TERM` para decidir capacidad de
+    // colores y movimiento. xterm-256color es el lcm más amplio.
+    cmd.env("TERM", "xterm-256color");
+    let mut child = match pair.slave.spawn_command(cmd) {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = tx.send(RunEvent::Failed(format!("spawn: {e}")));
+            return;
+        }
+    };
+    // El slave fd no se necesita más en el padre; cerrarlo aquí evita
+    // que el child quede sin EOF cuando cierra su lado.
+    drop(pair.slave);
+
+    if let Some(pid) = child.process_id() {
+        if let Ok(mut g) = pty_pids.lock() {
+            g.push(pid);
+        }
+    }
+
+    let mut reader = match pair.master.try_clone_reader() {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = tx.send(RunEvent::Failed(format!("try_clone_reader: {e}")));
+            return;
+        }
+    };
+    let mut writer = match pair.master.take_writer() {
+        Ok(w) => w,
+        Err(e) => {
+            let _ = tx.send(RunEvent::Failed(format!("take_writer: {e}")));
+            return;
+        }
+    };
+
+    let tx_reader = tx.clone();
+    let reader_thread = std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break, // child cerró el slave
+                Ok(n) => {
+                    if tx_reader.send(RunEvent::Bytes(buf[..n].to_vec())).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    let writer_thread = std::thread::spawn(move || {
+        while let Ok(bytes) = stdin_rx.recv() {
+            if writer.write_all(&bytes).is_err() {
+                break;
+            }
+            let _ = writer.flush();
+        }
+    });
+
+    let code = match child.wait() {
+        Ok(s) => s.exit_code() as i32,
+        Err(_) => -1,
+    };
+    // El master se dropea cuando salga de scope → reader ve EOF y
+    // termina. Esperamos al reader para que no se pierdan bytes finales.
+    drop(pair.master);
+    let _ = reader_thread.join();
+    // El writer thread sale solo cuando el stdin_tx se dropee del lado
+    // del frontend; no lo joineamos sincrónicamente.
+    drop(writer_thread);
+    let _ = tx.send(RunEvent::Exited(code));
 }
 
 #[cfg(test)]
@@ -648,6 +831,83 @@ mod tests {
         assert!(RunEvent::Exited(0).is_terminal());
         assert!(!RunEvent::Truncated.is_terminal());
         assert!(!RunEvent::Spilled("x".into()).is_terminal());
+    }
+
+    #[test]
+    fn pty_run_emits_bytes_for_a_tty_aware_command() {
+        // `tty` imprime el path del terminal cuando se le da uno, o
+        // "not a tty" cuando se le pipea. Bajo PTY debe imprimir un
+        // path con `/dev/pts/` o `/dev/ptmx` (depende del SO).
+        let spec = CommandSpec {
+            exec: Exec::Pty {
+                program: "tty".into(),
+                args: vec![],
+                cols: 80,
+                rows: 24,
+            },
+            cwd: ".".into(),
+            capture_limit: 0,
+            spill_path: None,
+            stdin_data: None,
+        };
+        let mut h = run(&spec);
+        let mut bytes_seen = Vec::<u8>::new();
+        let mut exit = -999;
+        while let Some(ev) = h.next_event() {
+            match ev {
+                RunEvent::Bytes(b) => bytes_seen.extend(b),
+                RunEvent::Exited(c) => exit = c,
+                _ => {}
+            }
+        }
+        assert_eq!(exit, 0, "tty exit 0 bajo PTY (bytes='{}')",
+                   String::from_utf8_lossy(&bytes_seen));
+        let out = String::from_utf8_lossy(&bytes_seen);
+        // `tty` emite el path del slave + \r\n (los PTY añaden \r).
+        assert!(
+            out.contains("/dev/pts/") || out.contains("/dev/ptmx") || out.contains("/dev/tty"),
+            "tty output inesperado: {out:?}"
+        );
+    }
+
+    #[test]
+    fn pty_write_input_reaches_the_child_stdin() {
+        // `cat` bajo PTY refleja lo que le escribamos por stdin (en
+        // modo PTY, cada caracter va con echo encendido por defecto).
+        // Le mandamos "hola\n" y esperamos verlo en los bytes de
+        // salida. Después cerramos el stdin (drop del Sender) y
+        // mandamos Ctrl-D (0x04) para que cat termine.
+        let spec = CommandSpec {
+            exec: Exec::Pty {
+                program: "cat".into(),
+                args: vec![],
+                cols: 80,
+                rows: 24,
+            },
+            cwd: ".".into(),
+            capture_limit: 0,
+            spill_path: None,
+            stdin_data: None,
+        };
+        let mut h = run(&spec);
+        // Cat necesita un instante para que su slave arranque y abra stdin.
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        assert!(h.write_input(b"hola\n".to_vec()));
+        // Ctrl-D para cerrar EOF en modo cooked.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(h.write_input(b"\x04".to_vec()));
+        let mut bytes_seen = Vec::<u8>::new();
+        let started = std::time::Instant::now();
+        while let Some(ev) = h.next_event() {
+            if started.elapsed() > std::time::Duration::from_secs(5) {
+                panic!("cat no terminó en 5s tras Ctrl-D");
+            }
+            if let RunEvent::Bytes(b) = ev {
+                bytes_seen.extend(b);
+            }
+        }
+        let out = String::from_utf8_lossy(&bytes_seen);
+        assert!(out.contains("hola"), "cat no echó 'hola': {out:?}");
     }
 
     #[test]

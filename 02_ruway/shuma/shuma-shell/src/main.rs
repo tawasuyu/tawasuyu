@@ -849,6 +849,14 @@ impl Shell {
                         );
                         self.session.finish_run(*id, -1, now);
                     }
+                    // Bytes crudos del PTY — los procesa el render con
+                    // un emulador vt100 en la próxima fase. Por ahora,
+                    // los guardamos como salida raw para que al menos no
+                    // se pierdan ni rompan el flujo de drenado.
+                    RunEvent::Bytes(bytes) => {
+                        let text = String::from_utf8_lossy(&bytes).into_owned();
+                        self.session.append_output(*id, Stream::Stdout, text);
+                    }
                 }
             }
         }

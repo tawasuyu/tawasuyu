@@ -441,6 +441,15 @@ nucleo-matcher = "0.3"
 snow = "0.9"
 hex = "0.4"
 
+# === PTY + emulador de terminal (shuma-exec, shuma-shell) ===
+# portable-pty aloja un PTY cross-platform; lo usamos para los
+# comandos TUI tipo vim/htop/less que necesitan un terminal de verdad.
+# vt100 parsea la secuencia de bytes que el PTY emite (ANSI + cursor
+# movement + erase + screen state) y mantiene un buffer de pantalla
+# renderizable como grid.
+portable-pty = "0.9"
+vt100 = "0.16"
+
 # === WASM web (gioser) ===
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

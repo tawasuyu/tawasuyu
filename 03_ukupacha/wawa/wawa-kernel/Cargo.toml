@@ -74,7 +74,7 @@ virtio-drivers = { version = "0.13", default-features = false, features = ["allo
 # ya no declara `serde`/`postcard`/`blake3` por su cuenta: los hereda —con las
 # mismas features, BLAKE3 escalar puro incluido— a traves de `format`. Una
 # sola verdad del format de disco, imposible de divergir entre los dos lados.
-format = { path = "../format" }
+format = { path = "../../../shared/format" }
 
 # --- Fase 20 :: Akasha Over Ether ---
 # El protocolo nativo de red de renaser: mensajes `MensajeAkasha` serializados
@@ -82,7 +82,7 @@ format = { path = "../format" }
 # `no_std` compartido, no miembro del workspace anfitrion. El kernel y boot lo
 # enlazan, y cualquier app o daemon que quiera hablar AoE en el futuro tomara
 # la misma crate — una sola verdad del protocolo.
-akasha = { path = "../akasha" }
+akasha = { path = "../wawa-fs" }
 
 # --- Fase 8 (preparación) :: el compositor ---
 # `mirada-layout` es el motor de teselado del compositor de brahman —
@@ -90,4 +90,4 @@ akasha = { path = "../akasha" }
 # Wayland. Vive en el monorepo brahman, en su PROPIO workspace; renaser
 # lo enlaza por `path` cruzando la frontera. La feature `serde` queda
 # APAGADA: el kernel computa el layout en memoria, no lo serializa.
-mirada-layout = { path = "../../crates/modules/mirada/mirada-layout" }
+mirada-layout = { path = "../../../02_ruway/mirada/mirada-layout" }

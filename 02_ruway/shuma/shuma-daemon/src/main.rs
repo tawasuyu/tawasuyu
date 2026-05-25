@@ -465,6 +465,14 @@ fn exec_event_to_response(ev: shuma_exec::RunEvent) -> Response {
         shuma_exec::RunEvent::Spilled(p) => Response::ExecSpilled(p),
         shuma_exec::RunEvent::Exited(c) => Response::ExecExited(c),
         shuma_exec::RunEvent::Failed(m) => Response::ExecFailed(m),
+        // PTY bytes no se reemiten por ExecStream (el protocolo es
+        // unidireccional). El subprotocolo nunca debería verlos porque
+        // la request `ExecStream` traduce a `Exec::Direct/Shell`, no
+        // `Exec::Pty`. Si llegan, los reportamos como un fallo para no
+        // perderlos silenciosamente.
+        shuma_exec::RunEvent::Bytes(_) => Response::ExecFailed(
+            "PTY bytes inesperados en ExecStream — el daemon no debió spawnear PTY aquí".into(),
+        ),
     }
 }
 

@@ -10,3 +10,6 @@ description = "shuma — ejecutor de comandos del shell con salida en streaming:
 [dependencies]
 # `zerocopy` habilita `splice` — volcado pipe→archivo sin copia.
 nix = { workspace = true, features = ["zerocopy"] }
+# PTY allocation cross-platform — usado por `Exec::Pty` para los
+# comandos TUI (vim, htop, less, claude-code, etc.).
+portable-pty = { workspace = true }

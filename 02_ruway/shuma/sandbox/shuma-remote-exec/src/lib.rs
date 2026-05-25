@@ -111,6 +111,8 @@ pub enum RemoteExecError {
     Connect(PathBuf, std::io::Error),
     #[error("conexión TCP a {0}: {1}")]
     ConnectTcp(String, std::io::Error),
+    #[error("PTY remoto aún no soportado — usá el modo local para comandos TUI (vim, htop, etc.)")]
+    PtyNotSupported,
 }
 
 /// Lanza `spec` contra el daemon en `socket` y devuelve un asa cuyos
@@ -124,6 +126,11 @@ pub fn run(spec: &CommandSpec, socket: &std::path::Path) -> Result<RemoteRunHand
 
     // Traducción a tipos del protocolo (los del crate `shuma-protocol`
     // son los Serialize; los de `shuma-exec` son los locales).
+    // PTY remoto no está soportado aún — `ExecStream` es unidireccional
+    // (cliente→server: una Request, server→cliente: N events). Para PTY
+    // remoto haría falta un canal stdin server-bound (frame Input{bytes})
+    // y resize, en un protocolo distinto. Por ahora se rechaza upfront
+    // para que el shell pueda fallback a local con un mensaje útil.
     let exec_proto = match &spec.exec {
         Exec::Shell { line, program } => ExecKind::Shell {
             line: line.clone(),
@@ -135,6 +142,9 @@ pub fn run(spec: &CommandSpec, socket: &std::path::Path) -> Result<RemoteRunHand
                 .map(|s| ExecStage { program: s.program.clone(), args: s.args.clone() })
                 .collect(),
         },
+        Exec::Pty { .. } => {
+            return Err(RemoteExecError::PtyNotSupported);
+        }
     };
     let req = Request::ExecStream {
         cwd: spec.cwd.clone(),
@@ -266,6 +276,9 @@ pub fn run_tcp(
                 .map(|s| ExecStage { program: s.program.clone(), args: s.args.clone() })
                 .collect(),
         },
+        Exec::Pty { .. } => {
+            return Err(RemoteExecError::PtyNotSupported);
+        }
     };
     let req = Request::ExecStream {
         cwd: spec.cwd.clone(),
@@ -400,6 +413,10 @@ mod tests {
                         RunEvent::Spilled(p) => Response::ExecSpilled(p),
                         RunEvent::Exited(c) => Response::ExecExited(c),
                         RunEvent::Failed(m) => Response::ExecFailed(m),
+                        // Test server no puede levantar PTY (los tests
+                        // usan Exec::Direct), pero el match debe ser
+                        // exhaustivo.
+                        RunEvent::Bytes(_) => continue,
                     };
                     if write_frame(&mut stream, &resp).await.is_err() {
                         killer.kill();
@@ -577,6 +594,7 @@ mod tests {
                 RunEvent::Spilled(p) => Response::ExecSpilled(p),
                 RunEvent::Exited(c) => Response::ExecExited(c),
                 RunEvent::Failed(m) => Response::ExecFailed(m),
+                RunEvent::Bytes(_) => continue, // Test server no usa PTY
             };
             if ch.send_postcard(&resp).await.is_err() {
                 killer.kill();
