@@ -65,8 +65,12 @@ pub struct Palette {
     pub lemming: Color,
     /// Color del aura de influencia de un Concepto (translúcida).
     pub concepto_aura: Color,
-    /// Color de la marca central de un Concepto.
+    /// Color de la base de un Concepto (la "pared" de la mini-pirámide).
+    pub concepto_base: Color,
+    /// Color del tope de un Concepto (la "luz" de la mini-pirámide).
     pub concepto: Color,
+    /// Color de sombra proyectada (RGBA con alpha bajo).
+    pub shadow: Color,
 }
 
 impl Default for Palette {
@@ -82,7 +86,9 @@ impl Default for Palette {
             degradacion: [0.52, 0.30, 0.62, 1.0],
             lemming: [0.96, 0.96, 0.98, 1.0],
             concepto_aura: [0.95, 0.86, 0.55, 0.18],
+            concepto_base: [0.58, 0.45, 0.18, 1.0],
             concepto: [0.98, 0.88, 0.42, 1.0],
+            shadow: [0.04, 0.04, 0.06, 0.42],
         }
     }
 }
@@ -102,6 +108,11 @@ pub struct PlanConfig {
     pub concepto_size: f32,
     /// Cuánto se eleva la marca de un Concepto sobre el relieve, en `Z`.
     pub concepto_lift: f32,
+    /// Vector en coordenadas de mundo `(dx, dy)` que indica **hacia dónde
+    /// cae la sombra** desde el pie de la entidad. Equivalente a la
+    /// dirección opuesta al sol. Default: hacia abajo-derecha (luz desde
+    /// arriba-izquierda, convención de maqueta clásica).
+    pub light_dir: (f32, f32),
     pub palette: Palette,
 }
 
@@ -113,6 +124,7 @@ impl Default for PlanConfig {
             lemming_lift: 0.6,
             concepto_size: 14.0,
             concepto_lift: 1.4,
+            light_dir: (0.55, 0.35),
             palette: Palette::default(),
         }
     }
@@ -210,28 +222,58 @@ pub fn build_plan(
         }
     }
 
-    // --- Conceptos: aura translúcida + marca central ---
-    // El aura va al nivel del suelo (z=0), antes de las celdas con la misma
-    // diagonal: pinta como un halo bajo lemmings y celdas. La marca central
-    // va por encima de los lemmings (+0.75) — un Concepto es una entidad
-    // saliente, no enterrada en el campo.
+    // --- Conceptos: aura + sombra proyectada + base + tope ---
+    // Cuatro quads cuentan una mini-estructura volumétrica:
+    //   1) aura: halo translúcido en el suelo (depth -0.5)
+    //   2) sombra: rect oscuro al pie de la luz (depth -0.4, antes de cells)
+    //   3) base: cuadro ancho al ras del relieve (depth +0.5, "pared")
+    //   4) tope: cuadro chico elevado por `concepto_lift` (depth +0.75)
     for c in &world.conceptos.items {
-        let (sx, sy) = iso.project(c.pos_x, c.pos_y, 0.0);
+        let (cx, cy) = g.clamp_cell(c.pos_x, c.pos_y);
+        let z_floor = weights.z_of(g, g.idx(cx, cy));
+
+        // Aura al ras del suelo.
+        let (ax, ay) = iso.project(c.pos_x, c.pos_y, 0.0);
         let aura = c.radius * 2.0 * cfg.tile;
         quads.push(Quad {
-            x: sx - aura * 0.5,
-            y: sy - aura * 0.5,
+            x: ax - aura * 0.5,
+            y: ay - aura * 0.5,
             w: aura,
             h: aura,
             color: cfg.palette.concepto_aura,
             depth: c.pos_x + c.pos_y - 0.5,
         });
-        let (cx, cy) = g.clamp_cell(c.pos_x, c.pos_y);
-        let z = weights.z_of(g, g.idx(cx, cy)) + cfg.concepto_lift;
-        let (mx, my) = iso.project(c.pos_x, c.pos_y, z);
+
+        // Sombra proyectada en la dirección opuesta a la luz, largo
+        // proporcional a la altura del tope.
+        let z_top = z_floor + cfg.concepto_lift;
+        let (sx, sy) = iso.shadow(c.pos_x, c.pos_y, z_top, cfg.light_dir);
         quads.push(Quad {
-            x: mx - cfg.concepto_size * 0.5,
-            y: my - cfg.concepto_size * 0.5,
+            x: sx - cfg.concepto_size * 0.7,
+            y: sy - cfg.concepto_size * 0.35,
+            w: cfg.concepto_size * 1.4,
+            h: cfg.concepto_size * 0.7,
+            color: cfg.palette.shadow,
+            depth: c.pos_x + c.pos_y - 0.4,
+        });
+
+        // Base apoyada en el relieve — más ancha y oscura: la "pared".
+        let (bx, by) = iso.project(c.pos_x, c.pos_y, z_floor);
+        let base_size = cfg.concepto_size * 1.35;
+        quads.push(Quad {
+            x: bx - base_size * 0.5,
+            y: by - base_size * 0.5,
+            w: base_size,
+            h: base_size,
+            color: cfg.palette.concepto_base,
+            depth: c.pos_x + c.pos_y + 0.5,
+        });
+
+        // Tope elevado — más chico y brillante: la "luz".
+        let (tx, ty) = iso.project(c.pos_x, c.pos_y, z_top);
+        quads.push(Quad {
+            x: tx - cfg.concepto_size * 0.5,
+            y: ty - cfg.concepto_size * 0.5,
             w: cfg.concepto_size,
             h: cfg.concepto_size,
             color: cfg.palette.concepto,
@@ -239,16 +281,29 @@ pub fn build_plan(
         });
     }
 
-    // --- Lemmings: una marca posada sobre el relieve de su celda ---
+    // --- Lemmings: sombra al ras + marca posada sobre el relieve ---
     let lem = &world.lemmings;
     for i in 0..lem.len() {
         let (px, py) = (lem.pos_x[i], lem.pos_y[i]);
         let (cx, cy) = g.clamp_cell(px, py);
         let z = weights.z_of(g, g.idx(cx, cy)) + cfg.lemming_lift;
-        let (sx, sy) = iso.project(px, py, z);
+
+        // Sombra proyectada — pequeña, plana, al suelo de su celda.
+        let (sx, sy) = iso.shadow(px, py, z, cfg.light_dir);
         quads.push(Quad {
-            x: sx - cfg.lemming_size * 0.5,
-            y: sy - cfg.lemming_size * 0.5,
+            x: sx - cfg.lemming_size * 0.45,
+            y: sy - cfg.lemming_size * 0.25,
+            w: cfg.lemming_size * 0.9,
+            h: cfg.lemming_size * 0.5,
+            color: cfg.palette.shadow,
+            depth: px + py + 0.3,
+        });
+
+        // Marca del lemming.
+        let (mx, my) = iso.project(px, py, z);
+        quads.push(Quad {
+            x: mx - cfg.lemming_size * 0.5,
+            y: my - cfg.lemming_size * 0.5,
             w: cfg.lemming_size,
             h: cfg.lemming_size,
             color: cfg.palette.lemming,
@@ -296,13 +351,13 @@ mod tests {
     }
 
     #[test]
-    fn each_lemming_adds_a_quad() {
+    fn each_lemming_adds_two_quads_shadow_and_marker() {
         let mut world = World::new(8, 8);
         world.lemmings.spawn(2.0, 3.0, 50.0, [1.0, 0.0, 0.0, 0.0]);
         world.lemmings.spawn(5.0, 5.0, 50.0, [0.0, 1.0, 0.0, 0.0]);
         let plan = build_plan(&world, &iso(), &ZWeights::default(), &PlanConfig::default());
-        // 64 celdas + 2 marcas.
-        assert_eq!(plan.quads.len(), 66);
+        // 64 celdas + 2 lemmings × 2 quads (sombra + marca).
+        assert_eq!(plan.quads.len(), 68);
     }
 
     #[test]
@@ -398,7 +453,7 @@ mod tests {
     }
 
     #[test]
-    fn each_concepto_adds_two_quads_aura_and_marker() {
+    fn each_concepto_adds_four_quads_aura_shadow_base_top() {
         use dominium_core::{Concepto, LayerMods};
         let mut world = World::new(8, 8);
         world.conceptos.add(Concepto {
@@ -411,15 +466,15 @@ mod tests {
             hack: None,
         });
         let plan = build_plan(&world, &iso(), &ZWeights::default(), &PlanConfig::default());
-        // 64 celdas + 2 quads del concepto (aura + marca).
-        assert_eq!(plan.quads.len(), 66);
+        // 64 celdas + 4 quads del concepto (aura + sombra + base + tope).
+        assert_eq!(plan.quads.len(), 68);
     }
 
     #[test]
-    fn concepto_marker_paints_after_its_lemming_neighbors() {
+    fn concepto_top_paints_after_its_lemming_neighbors() {
         use dominium_core::{Concepto, LayerMods};
         let mut world = World::new(8, 8);
-        // Lemming en (4,4), concepto también en (4,4): la marca del concepto
+        // Lemming en (4,4), concepto también en (4,4): el tope del concepto
         // (depth 8.75) debe ir tras la marca del lemming (depth 8.5).
         world.lemmings.spawn(4.0, 4.0, 50.0, [0.0; 4]);
         world.conceptos.add(Concepto {
@@ -436,16 +491,48 @@ mod tests {
         let lemming_marker_depth = plan
             .quads
             .iter()
-            .find(|q| q.w == cfg.lemming_size)
+            .find(|q| q.w == cfg.lemming_size && q.color == cfg.palette.lemming)
             .expect("hay un lemming")
             .depth;
-        let concepto_marker_depth = plan
+        let concepto_top_depth = plan
             .quads
             .iter()
-            .find(|q| q.w == cfg.concepto_size)
-            .expect("hay una marca de concepto")
+            .find(|q| q.w == cfg.concepto_size && q.color == cfg.palette.concepto)
+            .expect("hay un tope de concepto")
             .depth;
-        assert!(concepto_marker_depth > lemming_marker_depth);
+        assert!(concepto_top_depth > lemming_marker_depth);
+    }
+
+    #[test]
+    fn shadow_falls_along_light_dir_world_x() {
+        use dominium_core::{Concepto, LayerMods};
+        // light_dir = (1, 0) → la sombra cae +x en mundo → en pantalla iso
+        // x' = (x - y)*cos30 crece. La sombra queda a la derecha del tope.
+        let mut world = World::new(8, 8);
+        world.conceptos.add(Concepto {
+            id: "torre".into(),
+            sprite_id: 0,
+            pos_x: 4.0,
+            pos_y: 4.0,
+            radius: 1.0,
+            mods: LayerMods::default(),
+            hack: None,
+        });
+        let cfg = PlanConfig { light_dir: (1.0, 0.0), ..Default::default() };
+        let plan = build_plan(&world, &iso(), &ZWeights::default(), &cfg);
+        let shadow = plan
+            .quads
+            .iter()
+            .find(|q| q.color == cfg.palette.shadow)
+            .expect("hay una sombra del concepto");
+        let top = plan
+            .quads
+            .iter()
+            .find(|q| q.w == cfg.concepto_size && q.color == cfg.palette.concepto)
+            .expect("hay un tope");
+        let shadow_cx = shadow.x + shadow.w * 0.5;
+        let top_cx = top.x + top.w * 0.5;
+        assert!(shadow_cx > top_cx, "centro de sombra debe quedar a la derecha del tope");
     }
 
     #[test]
