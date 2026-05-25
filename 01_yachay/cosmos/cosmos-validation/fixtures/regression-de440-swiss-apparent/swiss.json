@@ -1,0 +1,821 @@
+{
+  "description": "Swiss Ephemeris 2.10.03 apparent positions (IAU 2006/2000A, TET frame, geocentric, FLG_SWIEPH .se1 kernels \u2014 ~1 mas vs JPL). Generated 2026-05-11T21:51:22.774391+00:00.",
+  "backend": "spk",
+  "corrections": {
+    "light_time": true,
+    "stellar_aberration": true,
+    "gravitational_deflection": true
+  },
+  "fixtures": [
+    {
+      "name": "Mercury barycenter astrometric wrt Earth @ J2000",
+      "body": 1,
+      "center": 399,
+      "jd_tdb": 2451545.0,
+      "frame": "TET",
+      "pos_km": [
+        6975726.581105169,
+        -192682894.1618643,
+        -87538578.36367424
+      ],
+      "vel_km_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "swiss_extras": {
+        "tropical_lon_deg": 271.8881273489255,
+        "lahiri_sidereal_lon_deg": 248.03490489260602,
+        "lahiri_ayanamsha_deg": 23.85322248602912
+      },
+      "source": {
+        "kind": "swiss_ephemeris",
+        "version": "2.10.03"
+      },
+      "tolerance": {
+        "pos_km": 100.0,
+        "vel_km_s": 10000000000.0
+      }
+    },
+    {
+      "name": "Mercury barycenter astrometric wrt Earth @ 2023-02-25",
+      "body": 1,
+      "center": 399,
+      "jd_tdb": 2460000.5,
+      "frame": "TET",
+      "pos_km": [
+        150932130.301383,
+        -112806094.54677373,
+        -56308052.10888124
+      ],
+      "vel_km_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "swiss_extras": {
+        "tropical_lon_deg": 320.1678360017946,
+        "lahiri_sidereal_lon_deg": 295.989925349807,
+        "lahiri_ayanamsha_deg": 24.177910671321694
+      },
+      "source": {
+        "kind": "swiss_ephemeris",
+        "version": "2.10.03"
+      },
+      "tolerance": {
+        "pos_km": 100.0,
+        "vel_km_s": 10000000000.0
+      }
+    },
+    {
+      "name": "Mercury barycenter astrometric wrt Earth @ 1968-05-24",
+      "body": 1,
+      "center": 399,
+      "jd_tdb": 2440000.5,
+      "frame": "TET",
+      "pos_km": [
+        9858442.921478566,
+        111548917.4818726,
+        53248829.80061969
+      ],
+      "vel_km_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "swiss_extras": {
+        "tropical_lon_deg": 85.43696568680535,
+        "lahiri_sidereal_lon_deg": 62.022975953578964,
+        "lahiri_ayanamsha_deg": 23.41398974503693
+      },
+      "source": {
+        "kind": "swiss_ephemeris",
+        "version": "2.10.03"
+      },
+      "tolerance": {
+        "pos_km": 100.0,
+        "vel_km_s": 10000000000.0
+      }
+    },
+    {
+      "name": "Venus barycenter astrometric wrt Earth @ J2000",
+      "body": 2,
+      "center": 399,
+      "jd_tdb": 2451545.0,
+      "frame": "TET",
+      "pos_km": [
+        -80980125.475096,
+        -139652268.41384667,
+        -53854034.838801496
+      ],
+      "vel_km_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "swiss_extras": {
+        "tropical_lon_deg": 241.56489519178655,
+        "lahiri_sidereal_lon_deg": 217.71167273546718,
+        "lahiri_ayanamsha_deg": 23.85322248602912
+      },
+      "source": {
+        "kind": "swiss_ephemeris",
+        "version": "2.10.03"
+      },
+      "tolerance": {
+        "pos_km": 100.0,
+        "vel_km_s": 10000000000.0
+      }
+    },
+    {
+      "name": "Venus barycenter astrometric wrt Earth @ 2023-02-25",
+      "body": 2,
+      "center": 399,
+      "jd_tdb": 2460000.5,
+      "frame": "TET",
+      "pos_km": [
+        207165678.95782205,
+        20313724.546101525,
+        5471021.806895663
+      ],
+      "vel_km_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "swiss_extras": {
+        "tropical_lon_deg": 5.737209450887866,
+        "lahiri_sidereal_lon_deg": 341.5592987989001,
+        "lahiri_ayanamsha_deg": 24.177910671321694
+      },
+      "source": {
+        "kind": "swiss_ephemeris",
+        "version": "2.10.03"
+      },
+      "tolerance": {
+        "pos_km": 100.0,
+        "vel_km_s": 10000000000.0
+      }
+    },
+    {
+      "name": "Venus barycenter astrometric wrt Earth @ 1968-05-24",
+      "body": 2,
+      "center": 399,
+      "jd_tdb": 2440000.5,
+      "frame": "TET",
+      "pos_km": [
+        145524605.699773,
+        195174461.57323536,
+        81003868.71838075
+      ],
+      "vel_km_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "swiss_extras": {
+        "tropical_lon_deg": 55.44314939374626,
+        "lahiri_sidereal_lon_deg": 32.02915966051987,
+        "lahiri_ayanamsha_deg": 23.41398974503693
+      },
+      "source": {
+        "kind": "swiss_ephemeris",
+        "version": "2.10.03"
+      },
+      "tolerance": {
+        "pos_km": 100.0,
+        "vel_km_s": 10000000000.0
+      }
+    },
+    {
+      "name": "Mars barycenter astrometric wrt Earth @ J2000",
+      "body": 4,
+      "center": 399,
+      "jd_tdb": 2451545.0,
+      "frame": "TET",
+      "pos_km": [
+        234526172.0325044,
+        -132600664.13249302,
+        -63105291.7455374
+      ],
+      "vel_km_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "swiss_extras": {
+        "tropical_lon_deg": 327.9627294895615,
+        "lahiri_sidereal_lon_deg": 304.1095070332421,
+        "lahiri_ayanamsha_deg": 23.85322248602912
+      },
+      "source": {
+        "kind": "swiss_ephemeris",
+        "version": "2.10.03"
+      },
+      "tolerance": {
+        "pos_km": 100.0,
+        "vel_km_s": 10000000000.0
+      }
+    },
+    {
+      "name": "Mars barycenter astrometric wrt Earth @ 2023-02-25",
+      "body": 4,
+      "center": 399,
+      "jd_tdb": 2460000.5,
+      "frame": "TET",
+      "pos_km": [
+        35580490.949012056,
+        145107422.8786048,
+        70621958.26899786
+      ],
+      "vel_km_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "swiss_extras": {
+        "tropical_lon_deg": 77.55497546722532,
+        "lahiri_sidereal_lon_deg": 53.377064815237595,
+        "lahiri_ayanamsha_deg": 24.177910671321694
+      },
+      "source": {
+        "kind": "swiss_ephemeris",
+        "version": "2.10.03"
+      },
+      "tolerance": {
+        "pos_km": 100.0,
+        "vel_km_s": 10000000000.0
+      }
+    },
+    {
+      "name": "Mars barycenter astrometric wrt Earth @ 1968-05-24",
+      "body": 4,
+      "center": 399,
+      "jd_tdb": 2440000.5,
+      "frame": "TET",
+      "pos_km": [
+        124917575.09749605,
+        326949051.7203862,
+        145420789.68466008
+      ],
+      "vel_km_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "swiss_extras": {
+        "tropical_lon_deg": 70.75530000225547,
+        "lahiri_sidereal_lon_deg": 47.34131026902907,
+        "lahiri_ayanamsha_deg": 23.41398974503693
+      },
+      "source": {
+        "kind": "swiss_ephemeris",
+        "version": "2.10.03"
+      },
+      "tolerance": {
+        "pos_km": 100.0,
+        "vel_km_s": 10000000000.0
+      }
+    },
+    {
+      "name": "Jupiter barycenter astrometric wrt Earth @ J2000",
+      "body": 5,
+      "center": 399,
+      "jd_tdb": 2451545.0,
+      "frame": "TET",
+      "pos_km": [
+        625097082.3864502,
+        276585093.70968044,
+        103307603.96566403
+      ],
+      "vel_km_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "swiss_extras": {
+        "tropical_lon_deg": 25.25305706709438,
+        "lahiri_sidereal_lon_deg": 1.3998346107750106,
+        "lahiri_ayanamsha_deg": 23.85322248602912
+      },
+      "source": {
+        "kind": "swiss_ephemeris",
+        "version": "2.10.03"
+      },
+      "tolerance": {
+        "pos_km": 100.0,
+        "vel_km_s": 10000000000.0
+      }
+    },
+    {
+      "name": "Jupiter barycenter astrometric wrt Earth @ 2023-02-25",
+      "body": 5,
+      "center": 399,
+      "jd_tdb": 2460000.5,
+      "frame": "TET",
+      "pos_km": [
+        841446783.4225498,
+        156453817.120134,
+        49602488.647024095
+      ],
+      "vel_km_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "swiss_extras": {
+        "tropical_lon_deg": 10.981225418595017,
+        "lahiri_sidereal_lon_deg": 346.8033147666073,
+        "lahiri_ayanamsha_deg": 24.177910671321694
+      },
+      "source": {
+        "kind": "swiss_ephemeris",
+        "version": "2.10.03"
+      },
+      "tolerance": {
+        "pos_km": 100.0,
+        "vel_km_s": 10000000000.0
+      }
+    },
+    {
+      "name": "Jupiter barycenter astrometric wrt Earth @ 1968-05-24",
+      "body": 5,
+      "center": 399,
+      "jd_tdb": 2440000.5,
+      "frame": "TET",
+      "pos_km": [
+        -680743475.9703449,
+        393993911.93179417,
+        187896125.6630237
+      ],
+      "vel_km_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "swiss_extras": {
+        "tropical_lon_deg": 147.34798407615466,
+        "lahiri_sidereal_lon_deg": 123.93399434292824,
+        "lahiri_ayanamsha_deg": 23.41398974503693
+      },
+      "source": {
+        "kind": "swiss_ephemeris",
+        "version": "2.10.03"
+      },
+      "tolerance": {
+        "pos_km": 100.0,
+        "vel_km_s": 10000000000.0
+      }
+    },
+    {
+      "name": "Saturn barycenter astrometric wrt Earth @ J2000",
+      "body": 6,
+      "center": 399,
+      "jd_tdb": 2451545.0,
+      "frame": "TET",
+      "pos_km": [
+        984930283.1707222,
+        790926321.2088037,
+        282698514.2228822
+      ],
+      "vel_km_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "swiss_extras": {
+        "tropical_lon_deg": 40.39567823025044,
+        "lahiri_sidereal_lon_deg": 16.54245577393106,
+        "lahiri_ayanamsha_deg": 23.85322248602912
+      },
+      "source": {
+        "kind": "swiss_ephemeris",
+        "version": "2.10.03"
+      },
+      "tolerance": {
+        "pos_km": 100.0,
+        "vel_km_s": 10000000000.0
+      }
+    },
+    {
+      "name": "Saturn barycenter astrometric wrt Earth @ 2023-02-25",
+      "body": 6,
+      "center": 399,
+      "jd_tdb": 2460000.5,
+      "frame": "TET",
+      "pos_km": [
+        1381036701.4062152,
+        -754933119.9393193,
+        -366292474.2289134
+      ],
+      "vel_km_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "swiss_extras": {
+        "tropical_lon_deg": 328.74071668221757,
+        "lahiri_sidereal_lon_deg": 304.56280603022986,
+        "lahiri_ayanamsha_deg": 24.177910671321694
+      },
+      "source": {
+        "kind": "swiss_ephemeris",
+        "version": "2.10.03"
+      },
+      "tolerance": {
+        "pos_km": 100.0,
+        "vel_km_s": 10000000000.0
+      }
+    },
+    {
+      "name": "Saturn barycenter astrometric wrt Earth @ 1968-05-24",
+      "body": 6,
+      "center": 399,
+      "jd_tdb": 2440000.5,
+      "frame": "TET",
+      "pos_km": [
+        1408804144.4444416,
+        524837620.0438244,
+        161645763.23713833
+      ],
+      "vel_km_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "swiss_extras": {
+        "tropical_lon_deg": 21.178155198572703,
+        "lahiri_sidereal_lon_deg": 357.7641654653463,
+        "lahiri_ayanamsha_deg": 23.41398974503693
+      },
+      "source": {
+        "kind": "swiss_ephemeris",
+        "version": "2.10.03"
+      },
+      "tolerance": {
+        "pos_km": 100.0,
+        "vel_km_s": 10000000000.0
+      }
+    },
+    {
+      "name": "Uranus barycenter astrometric wrt Earth @ J2000",
+      "body": 7,
+      "center": 399,
+      "jd_tdb": 2451545.0,
+      "frame": "TET",
+      "pos_km": [
+        2185094244.311164,
+        -2004039081.8024595,
+        -907621072.74618
+      ],
+      "vel_km_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "swiss_extras": {
+        "tropical_lon_deg": 314.80915053069396,
+        "lahiri_sidereal_lon_deg": 290.9559280743745,
+        "lahiri_ayanamsha_deg": 23.85322248602912
+      },
+      "source": {
+        "kind": "swiss_ephemeris",
+        "version": "2.10.03"
+      },
+      "tolerance": {
+        "pos_km": 100.0,
+        "vel_km_s": 10000000000.0
+      }
+    },
+    {
+      "name": "Uranus barycenter astrometric wrt Earth @ 2023-02-25",
+      "body": 7,
+      "center": 399,
+      "jd_tdb": 2460000.5,
+      "frame": "TET",
+      "pos_km": [
+        2099246312.493306,
+        1960844970.0202,
+        831129353.338328
+      ],
+      "vel_km_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "swiss_extras": {
+        "tropical_lon_deg": 45.411849083520124,
+        "lahiri_sidereal_lon_deg": 21.23393843153241,
+        "lahiri_ayanamsha_deg": 24.177910671321694
+      },
+      "source": {
+        "kind": "swiss_ephemeris",
+        "version": "2.10.03"
+      },
+      "tolerance": {
+        "pos_km": 100.0,
+        "vel_km_s": 10000000000.0
+      }
+    },
+    {
+      "name": "Uranus barycenter astrometric wrt Earth @ 1968-05-24",
+      "body": 7,
+      "center": 399,
+      "jd_tdb": 2440000.5,
+      "frame": "TET",
+      "pos_km": [
+        -2666014020.3723803,
+        194985143.95297843,
+        123571736.76070046
+      ],
+      "vel_km_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "swiss_extras": {
+        "tropical_lon_deg": 175.1107655668819,
+        "lahiri_sidereal_lon_deg": 151.69677583365547,
+        "lahiri_ayanamsha_deg": 23.41398974503693
+      },
+      "source": {
+        "kind": "swiss_ephemeris",
+        "version": "2.10.03"
+      },
+      "tolerance": {
+        "pos_km": 100.0,
+        "vel_km_s": 10000000000.0
+      }
+    },
+    {
+      "name": "Neptune barycenter astrometric wrt Earth @ J2000",
+      "body": 8,
+      "center": 399,
+      "jd_tdb": 2451545.0,
+      "frame": "TET",
+      "pos_km": [
+        2540852621.2145886,
+        -3570993387.7274427,
+        -1527348527.4442368
+      ],
+      "vel_km_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "swiss_extras": {
+        "tropical_lon_deg": 303.19298694755,
+        "lahiri_sidereal_lon_deg": 279.33976449123065,
+        "lahiri_ayanamsha_deg": 23.85322248602912
+      },
+      "source": {
+        "kind": "swiss_ephemeris",
+        "version": "2.10.03"
+      },
+      "tolerance": {
+        "pos_km": 100.0,
+        "vel_km_s": 10000000000.0
+      }
+    },
+    {
+      "name": "Neptune barycenter astrometric wrt Earth @ 2023-02-25",
+      "body": 8,
+      "center": 399,
+      "jd_tdb": 2460000.5,
+      "frame": "TET",
+      "pos_km": [
+        4592024800.289039,
+        -375268249.4765245,
+        -265284574.7243772
+      ],
+      "vel_km_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "swiss_extras": {
+        "tropical_lon_deg": 354.40528168482496,
+        "lahiri_sidereal_lon_deg": 330.22737103283725,
+        "lahiri_ayanamsha_deg": 24.177910671321694
+      },
+      "source": {
+        "kind": "swiss_ephemeris",
+        "version": "2.10.03"
+      },
+      "tolerance": {
+        "pos_km": 100.0,
+        "vel_km_s": 10000000000.0
+      }
+    },
+    {
+      "name": "Neptune barycenter astrometric wrt Earth @ 1968-05-24",
+      "body": 8,
+      "center": 399,
+      "jd_tdb": 2440000.5,
+      "frame": "TET",
+      "pos_km": [
+        -2517972760.7458243,
+        -3346979971.2193446,
+        -1302964627.5145023
+      ],
+      "vel_km_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "swiss_extras": {
+        "tropical_lon_deg": 234.94775802684168,
+        "lahiri_sidereal_lon_deg": 211.5337682936153,
+        "lahiri_ayanamsha_deg": 23.41398974503693
+      },
+      "source": {
+        "kind": "swiss_ephemeris",
+        "version": "2.10.03"
+      },
+      "tolerance": {
+        "pos_km": 100.0,
+        "vel_km_s": 10000000000.0
+      }
+    },
+    {
+      "name": "Sun astrometric wrt Earth @ J2000",
+      "body": 10,
+      "center": 399,
+      "jd_tdb": 2451545.0,
+      "frame": "TET",
+      "pos_km": [
+        26474643.249716647,
+        -132763117.6535634,
+        -57554775.86680129
+      ],
+      "vel_km_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "swiss_extras": {
+        "tropical_lon_deg": 280.3681655535294,
+        "lahiri_sidereal_lon_deg": 256.51494309721005,
+        "lahiri_ayanamsha_deg": 23.85322248602912
+      },
+      "source": {
+        "kind": "swiss_ephemeris",
+        "version": "2.10.03"
+      },
+      "tolerance": {
+        "pos_km": 100.0,
+        "vel_km_s": 10000000000.0
+      }
+    },
+    {
+      "name": "Sun astrometric wrt Earth @ 2023-02-25",
+      "body": 10,
+      "center": 399,
+      "jd_tdb": 2460000.5,
+      "frame": "TET",
+      "pos_km": [
+        135370045.3750441,
+        -55022079.12591499,
+        -23854133.752226494
+      ],
+      "vel_km_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "swiss_extras": {
+        "tropical_lon_deg": 336.1061372934075,
+        "lahiri_sidereal_lon_deg": 311.9282266414198,
+        "lahiri_ayanamsha_deg": 24.177910671321694
+      },
+      "source": {
+        "kind": "swiss_ephemeris",
+        "version": "2.10.03"
+      },
+      "tolerance": {
+        "pos_km": 100.0,
+        "vel_km_s": 10000000000.0
+      }
+    },
+    {
+      "name": "Sun astrometric wrt Earth @ 1968-05-24",
+      "body": 10,
+      "center": 399,
+      "jd_tdb": 2440000.5,
+      "frame": "TET",
+      "pos_km": [
+        69070628.69114247,
+        123725287.99867615,
+        53658026.30918011
+      ],
+      "vel_km_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "swiss_extras": {
+        "tropical_lon_deg": 62.8799878554907,
+        "lahiri_sidereal_lon_deg": 39.46599812226432,
+        "lahiri_ayanamsha_deg": 23.41398974503693
+      },
+      "source": {
+        "kind": "swiss_ephemeris",
+        "version": "2.10.03"
+      },
+      "tolerance": {
+        "pos_km": 100.0,
+        "vel_km_s": 10000000000.0
+      }
+    },
+    {
+      "name": "Moon astrometric wrt Earth @ J2000",
+      "body": 301,
+      "center": 399,
+      "jd_tdb": 2451545.0,
+      "frame": "TET",
+      "pos_km": [
+        -291603.1689081369,
+        -266677.489667849,
+        -76080.3271917786
+      ],
+      "vel_km_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "swiss_extras": {
+        "tropical_lon_deg": 223.3148705529886,
+        "lahiri_sidereal_lon_deg": 199.4616480966692,
+        "lahiri_ayanamsha_deg": 23.85322248602912
+      },
+      "source": {
+        "kind": "swiss_ephemeris",
+        "version": "2.10.03"
+      },
+      "tolerance": {
+        "pos_km": 100.0,
+        "vel_km_s": 10000000000.0
+      }
+    },
+    {
+      "name": "Moon astrometric wrt Earth @ 2023-02-25",
+      "body": 301,
+      "center": 399,
+      "jd_tdb": 2460000.5,
+      "frame": "TET",
+      "pos_km": [
+        298357.27154533385,
+        218157.8159839919,
+        96378.6010647793
+      ],
+      "vel_km_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "swiss_extras": {
+        "tropical_lon_deg": 38.63723045049647,
+        "lahiri_sidereal_lon_deg": 14.459319798508753,
+        "lahiri_ayanamsha_deg": 24.177910671321694
+      },
+      "source": {
+        "kind": "swiss_ephemeris",
+        "version": "2.10.03"
+      },
+      "tolerance": {
+        "pos_km": 100.0,
+        "vel_km_s": 10000000000.0
+      }
+    },
+    {
+      "name": "Moon astrometric wrt Earth @ 1968-05-24",
+      "body": 301,
+      "center": 399,
+      "jd_tdb": 2440000.5,
+      "frame": "TET",
+      "pos_km": [
+        360457.63603974984,
+        165558.20725578032,
+        77922.30112565313
+      ],
+      "vel_km_s": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "swiss_extras": {
+        "tropical_lon_deg": 26.902836092690965,
+        "lahiri_sidereal_lon_deg": 3.4888463594645858,
+        "lahiri_ayanamsha_deg": 23.41398974503693
+      },
+      "source": {
+        "kind": "swiss_ephemeris",
+        "version": "2.10.03"
+      },
+      "tolerance": {
+        "pos_km": 100.0,
+        "vel_km_s": 10000000000.0
+      }
+    }
+  ]
+}

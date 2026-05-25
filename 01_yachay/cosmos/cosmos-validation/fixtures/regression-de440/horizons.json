@@ -1,0 +1,864 @@
+{
+  "description": "JPL Horizons reference fixtures for Spk backend (ICRF, TDB, km/(km·s⁻¹)).",
+  "backend": "spk",
+  "fixtures": [
+    {
+      "name": "Mercury barycenter wrt SSB @ J2000",
+      "body": 1,
+      "center": 0,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        -20529433.16123468,
+        -60324003.95827633,
+        -30130837.8641183
+      ],
+      "vel_km_s": [
+        37.00430442920571,
+        -8.541376789510446,
+        -8.398372409672424
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531638Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.001,
+        "vel_km_s": 1e-9
+      }
+    },
+    {
+      "name": "Mercury barycenter wrt SSB @ 2023-02-25",
+      "body": 1,
+      "center": 0,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        13879590.59412418,
+        -57921422.35229057,
+        -32478104.01880762
+      ],
+      "vel_km_s": [
+        37.70161607325829,
+        13.25264428901525,
+        3.173679072927781
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531638Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.001,
+        "vel_km_s": 1e-9
+      }
+    },
+    {
+      "name": "Mercury barycenter wrt SSB @ 1968-05-24",
+      "body": 1,
+      "center": 0,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        -58534465.75580661,
+        -12810629.16547924,
+        -692680.3507097326
+      ],
+      "vel_km_s": [
+        -0.5645199904682902,
+        -40.42209915378927,
+        -21.53157304639548
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531638Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.001,
+        "vel_km_s": 1e-9
+      }
+    },
+    {
+      "name": "Venus barycenter wrt SSB @ J2000",
+      "body": 2,
+      "center": 0,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        -108524200.8575715,
+        -7318564.9596786,
+        3548121.861333776
+      ],
+      "vel_km_s": [
+        1.391218601189967,
+        -32.02951993781091,
+        -14.4970867394732
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531639Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.001,
+        "vel_km_s": 1e-9
+      }
+    },
+    {
+      "name": "Venus barycenter wrt SSB @ 2023-02-25",
+      "body": 2,
+      "center": 0,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        70876857.1251132,
+        74918401.99105984,
+        29176751.72658296
+      ],
+      "vel_km_s": [
+        -26.15868723796315,
+        20.59321710253196,
+        10.92163767997019
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531639Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.001,
+        "vel_km_s": 1e-9
+      }
+    },
+    {
+      "name": "Venus barycenter wrt SSB @ 1968-05-24",
+      "body": 2,
+      "center": 0,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        76418189.93653615,
+        71823247.21832171,
+        27500080.02912958
+      ],
+      "vel_km_s": [
+        -25.06076690561507,
+        21.70173494945497,
+        11.34768213826679
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531639Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.001,
+        "vel_km_s": 1e-9
+      }
+    },
+    {
+      "name": "Earth-Moon barycenter wrt SSB @ J2000",
+      "body": 3,
+      "center": 0,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        -27570283.69509406,
+        132358140.3881496,
+        57417728.59655909
+      ],
+      "vel_km_s": [
+        -29.77712821605761,
+        -5.037847169534866,
+        -2.184306352440872
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531639Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.001,
+        "vel_km_s": 1e-9
+      }
+    },
+    {
+      "name": "Earth-Moon barycenter wrt SSB @ 2023-02-25",
+      "body": 3,
+      "center": 0,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        -136378592.2683192,
+        55640589.52208239,
+        24155157.18742143
+      ],
+      "vel_km_s": [
+        -12.69694228802208,
+        -25.045474642574,
+        -10.85685716543269
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531640Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.001,
+        "vel_km_s": 1e-9
+      }
+    },
+    {
+      "name": "Earth-Moon barycenter wrt SSB @ 1968-05-24",
+      "body": 3,
+      "center": 0,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        -67421544.65645303,
+        -124410323.8367212,
+        -53956128.93586872
+      ],
+      "vel_km_s": [
+        26.13843357115288,
+        -12.36005807693518,
+        -5.359805558997953
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531640Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.001,
+        "vel_km_s": 1e-9
+      }
+    },
+    {
+      "name": "Mars barycenter wrt SSB @ J2000",
+      "body": 4,
+      "center": 0,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        206980433.8364514,
+        -186417.0114371795,
+        -5667227.497526179
+      ],
+      "vel_km_s": [
+        1.171985008531777,
+        23.90670819417074,
+        10.93392063330765
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531640Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.001,
+        "vel_km_s": 1e-9
+      }
+    },
+    {
+      "name": "Mars barycenter wrt SSB @ 2023-02-25",
+      "body": 4,
+      "center": 0,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        -99907792.9474639,
+        200558554.5317855,
+        94687656.49945527
+      ],
+      "vel_km_s": [
+        -21.22069868319166,
+        -7.296428850937821,
+        -2.773676177517392
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531641Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.001,
+        "vel_km_s": 1e-9
+      }
+    },
+    {
+      "name": "Mars barycenter wrt SSB @ 1968-05-24",
+      "body": 4,
+      "center": 0,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        54657399.18169448,
+        203438371.4348626,
+        91840435.59365335
+      ],
+      "vel_km_s": [
+        -22.61627856547697,
+        6.837715585365587,
+        3.749058795780871
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531641Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.001,
+        "vel_km_s": 1e-9
+      }
+    },
+    {
+      "name": "Jupiter barycenter wrt SSB @ J2000",
+      "body": 5,
+      "center": 0,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        597499876.792548,
+        408990313.9317586,
+        160756281.9387201
+      ],
+      "vel_km_s": [
+        -7.900525116640771,
+        10.17179630923791,
+        4.552467787262923
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531641Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.001,
+        "vel_km_s": 1e-9
+      }
+    },
+    {
+      "name": "Jupiter barycenter wrt SSB @ 2023-02-25",
+      "body": 5,
+      "center": 0,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        705941073.6366262,
+        207867010.4098884,
+        71915325.32206577
+      ],
+      "vel_km_s": [
+        -4.024035016576972,
+        11.99666378616508,
+        5.240113568511566
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531641Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.001,
+        "vel_km_s": 1e-9
+      }
+    },
+    {
+      "name": "Jupiter barycenter wrt SSB @ 1968-05-24",
+      "body": 5,
+      "center": 0,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        -751539607.9962939,
+        264715694.2526582,
+        131803436.4739386
+      ],
+      "vel_km_s": [
+        -4.927469621236826,
+        -10.66270686301043,
+        -4.450739636493281
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531642Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.001,
+        "vel_km_s": 1e-9
+      }
+    },
+    {
+      "name": "Saturn barycenter wrt SSB @ J2000",
+      "body": 6,
+      "center": 0,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        957317417.4143425,
+        923319621.8969914,
+        340162800.3886153
+      ],
+      "vel_km_s": [
+        -7.422709426014511,
+        6.097474815228996,
+        2.837682288255575
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531642Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.001,
+        "vel_km_s": 1e-9
+      }
+    },
+    {
+      "name": "Saturn barycenter wrt SSB @ 2023-02-25",
+      "body": 6,
+      "center": 0,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        1240048091.763209,
+        -706221756.0754244,
+        -345116137.1973181
+      ],
+      "vel_km_s": [
+        4.627177249628951,
+        7.600141914754646,
+        2.939944784855079
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531642Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.001,
+        "vel_km_s": 1e-9
+      }
+    },
+    {
+      "name": "Saturn barycenter wrt SSB @ 1968-05-24",
+      "body": 6,
+      "center": 0,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        1337056724.964771,
+        410548466.7141973,
+        112059463.0123381
+      ],
+      "vel_km_s": [
+        -3.429821049577149,
+        8.443250892138684,
+        3.633803155347743
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531642Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.001,
+        "vel_km_s": 1e-9
+      }
+    },
+    {
+      "name": "Uranus barycenter wrt SSB @ J2000",
+      "body": 7,
+      "center": 0,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        2157907312.953845,
+        -1871306838.939559,
+        -850106800.0312823
+      ],
+      "vel_km_s": [
+        4.646336807878125,
+        4.251152675974153,
+        1.79617278581112
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531643Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.001,
+        "vel_km_s": 1e-9
+      }
+    },
+    {
+      "name": "Uranus barycenter wrt SSB @ 2023-02-25",
+      "body": 7,
+      "center": 0,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        1974632223.354397,
+        2005807063.70574,
+        850560486.3216969
+      ],
+      "vel_km_s": [
+        -5.095805258740478,
+        3.872363285657415,
+        1.768058057188321
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531643Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.001,
+        "vel_km_s": 1e-9
+      }
+    },
+    {
+      "name": "Uranus barycenter wrt SSB @ 1968-05-24",
+      "body": 7,
+      "center": 0,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        -2735118271.670272,
+        51699004.34956657,
+        61397548.98575199
+      ],
+      "vel_km_s": [
+        -0.2297786281518708,
+        -6.528275357977261,
+        -2.855988871865586
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531643Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.001,
+        "vel_km_s": 1e-9
+      }
+    },
+    {
+      "name": "Neptune barycenter wrt SSB @ J2000",
+      "body": 8,
+      "center": 0,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        2513978721.723721,
+        -3438170140.316856,
+        -1469851523.010959
+      ],
+      "vel_km_s": [
+        4.475214621751308,
+        2.877104855637858,
+        1.066200548145841
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531644Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.001,
+        "vel_km_s": 1e-9
+      }
+    },
+    {
+      "name": "Neptune barycenter wrt SSB @ 2023-02-25",
+      "body": 8,
+      "center": 0,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        4453103778.37745,
+        -342740516.416965,
+        -251152238.831698
+      ],
+      "vel_km_s": [
+        0.4676088795743544,
+        5.043778255112349,
+        2.05280509591075
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531644Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.001,
+        "vel_km_s": 1e-9
+      }
+    },
+    {
+      "name": "Neptune barycenter wrt SSB @ 1968-05-24",
+      "body": 8,
+      "center": 0,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        -2557854422.724615,
+        -3489023879.184684,
+        -1364426259.339472
+      ],
+      "vel_km_s": [
+        4.453836386268811,
+        -2.76822956084198,
+        -1.243901369911676
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531644Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.001,
+        "vel_km_s": 1e-9
+      }
+    },
+    {
+      "name": "Sun wrt SSB @ J2000",
+      "body": 10,
+      "center": 0,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        -1067706.805380953,
+        -396036.1847959462,
+        -138065.1842868809
+      ],
+      "vel_km_s": [
+        0.009312571926520472,
+        -0.01170150612817771,
+        -0.005251266205200356
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531644Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.001,
+        "vel_km_s": 1e-9
+      }
+    },
+    {
+      "name": "Sun wrt SSB @ 2023-02-25",
+      "body": 10,
+      "center": 0,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        -1344005.53838435,
+        -66917.69214620536,
+        5637.888872488713
+      ],
+      "vel_km_s": [
+        0.002820873859565612,
+        -0.01403010263822394,
+        -0.006020016318905818
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531645Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.001,
+        "vel_km_s": 1e-9
+      }
+    },
+    {
+      "name": "Sun wrt SSB @ 1968-05-24",
+      "body": 10,
+      "center": 0,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        586438.6617915676,
+        -192551.3871865371,
+        -90192.97686099615
+      ],
+      "vel_km_s": [
+        0.005455101778502596,
+        0.008183511093847807,
+        0.003390334822780546
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531645Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.001,
+        "vel_km_s": 1e-9
+      }
+    },
+    {
+      "name": "Earth wrt EMB @ J2000",
+      "body": 399,
+      "center": 3,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        3543.212282604189,
+        3240.765399532175,
+        924.6896947512166
+      ],
+      "vel_km_s": [
+        -0.007819282453275445,
+        0.008093354606785508,
+        0.003661283405117315
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531645Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Earth wrt EMB @ 2023-02-25",
+      "body": 399,
+      "center": 3,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        -3641.048925332317,
+        -2631.905087223,
+        -1162.752196278985
+      ],
+      "vel_km_s": [
+        0.006997291525610719,
+        -0.00898586648523153,
+        -0.005102212734254471
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531645Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Earth wrt EMB @ 1968-05-24",
+      "body": 399,
+      "center": 3,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        -4362.694486355093,
+        -2042.799338477151,
+        -960.2548019884597
+      ],
+      "vel_km_s": [
+        0.005186410800941499,
+        -0.009283643967383648,
+        -0.005174635212878865
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531646Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Moon wrt EMB @ J2000",
+      "body": 301,
+      "center": 3,
+      "jd_tdb": 2451545.0,
+      "frame": "ICRF",
+      "pos_km": [
+        -288065.1719051087,
+        -263476.0684545333,
+        -75177.79761183672
+      ],
+      "vel_km_s": [
+        0.6357121065356764,
+        -0.657994328349734,
+        -0.2976644212559759
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531646Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Moon wrt EMB @ 2023-02-25",
+      "body": 301,
+      "center": 3,
+      "jd_tdb": 2460000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        296019.3465517891,
+        213975.3790962791,
+        94532.4142582753
+      ],
+      "vel_km_s": [
+        -0.5688837770436185,
+        0.7305560512118313,
+        0.4148127944818475
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531646Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    },
+    {
+      "name": "Moon wrt EMB @ 1968-05-24",
+      "body": 301,
+      "center": 3,
+      "jd_tdb": 2440000.5,
+      "frame": "ICRF",
+      "pos_km": [
+        354689.540717462,
+        166080.746980691,
+        78069.26103908307
+      ],
+      "vel_km_s": [
+        -0.4216581451466541,
+        0.7547655297143655,
+        0.4207007831460199
+      ],
+      "source": {
+        "kind": "horizons",
+        "ephemeris": "1.2",
+        "fetched_at": "1778531646Z-unix"
+      },
+      "tolerance": {
+        "pos_km": 0.01,
+        "vel_km_s": 1e-8
+      }
+    }
+  ]
+}

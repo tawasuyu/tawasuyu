@@ -1,0 +1,50 @@
+{
+  "description": "Swiss Ephemeris 2.10.03 mean and true / osculating lunar nodes and Lilith. Generated 2026-05-12T00:04:42.657655+00:00.",
+  "samples": [
+    {
+      "label": "1900-01-01",
+      "jd_tdb": 2415020.5,
+      "jd_tt": 2415020.5000000005,
+      "mean_node_deg": 259.1613058935181,
+      "true_node_deg": 260.26835019653106,
+      "mean_apog_deg": 154.33276964254924,
+      "oscu_apog_deg": 136.76030406074236
+    },
+    {
+      "label": "1968-05-24",
+      "jd_tdb": 2440000.5,
+      "jd_tt": 2440000.499999988,
+      "mean_node_deg": 16.367900205808002,
+      "true_node_deg": 18.049846828748827,
+      "mean_apog_deg": 57.13820533476933,
+      "oscu_apog_deg": 49.40574388973211
+    },
+    {
+      "label": "J2000.0",
+      "jd_tdb": 2451545.0,
+      "jd_tt": 2451545.000000001,
+      "mean_node_deg": 125.04068517525927,
+      "true_node_deg": 123.95406327374585,
+      "mean_apog_deg": 263.4642504791766,
+      "oscu_apog_deg": 252.99417262634077
+    },
+    {
+      "label": "2023-02-25",
+      "jd_tdb": 2460000.5,
+      "jd_tt": 2460000.4999999846,
+      "mean_node_deg": 37.2915185291917,
+      "true_node_deg": 35.856623245511,
+      "mean_apog_deg": 125.31461979349612,
+      "oscu_apog_deg": 123.36273478939167
+    },
+    {
+      "label": "2100-01-01",
+      "jd_tdb": 2488069.5,
+      "jd_tt": 2488069.5000000014,
+      "mean_node_deg": 350.93770333384555,
+      "true_node_deg": 349.8346749351503,
+      "mean_apog_deg": 12.22333745417766,
+      "oscu_apog_deg": 3.632426277107408
+    }
+  ]
+}

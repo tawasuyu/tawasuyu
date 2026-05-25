@@ -1,0 +1,22 @@
+[package]
+name = "eternal-astrology"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Astrology-specific layer built on the eternal-sky façade: birth data, natal charts, house systems, ayanamshas, aspects."
+# Kept unpublishable while eternal-sky is. Will flip in lockstep at v1.0.
+publish = false
+
+[dependencies]
+eternal-core.workspace = true
+eternal-ephemeris.workspace = true
+eternal-time.workspace = true
+eternal-sky = { path = "../eternal-sky" }
+eternal-validation = { path = "../eternal-validation" }
+libm.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+approx.workspace = true

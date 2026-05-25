@@ -1,0 +1,182 @@
+{
+  "description": "Swiss Ephemeris 2.10.03 next 4 local solar eclipses per site from JD 2460310.5 (UT). Generated 2026-05-12T04:16:48.524182+00:00.",
+  "start_jd_ut": 2460310.5,
+  "sites": [
+    {
+      "name": "Madrid",
+      "lat_deg": 40.4168,
+      "lon_deg": -3.7038,
+      "elev_m": 0.0,
+      "eclipses": [
+        {
+          "max_jd_ut": 2460763.9445331725,
+          "first_contact_jd_ut": 2460763.90885592,
+          "last_contact_jd_ut": 2460763.981690847,
+          "kind": "partial",
+          "magnitude": 0.31662100921614983,
+          "fraction_covered": 0.20629543697844854,
+          "flags_hex": "0x1392"
+        },
+        {
+          "max_jd_ut": 2461265.2725034785,
+          "first_contact_jd_ut": 2461265.2338765175,
+          "last_contact_jd_ut": 2461265.308699498,
+          "kind": "partial",
+          "magnitude": 0.9991754255946043,
+          "fraction_covered": 0.9997819993406403,
+          "flags_hex": "0x392"
+        },
+        {
+          "max_jd_ut": 2461619.868943889,
+          "first_contact_jd_ut": 2461619.8232659763,
+          "last_contact_jd_ut": 2461619.9185953466,
+          "kind": "partial",
+          "magnitude": 0.8795292470076438,
+          "fraction_covered": 0.8636689110226126,
+          "flags_hex": "0x1390"
+        },
+        {
+          "max_jd_ut": 2461797.2053463943,
+          "first_contact_jd_ut": 2461797.1501799887,
+          "last_contact_jd_ut": 2461797.2544127507,
+          "kind": "partial",
+          "magnitude": 0.9028953081973848,
+          "fraction_covered": 0.8240679643791143,
+          "flags_hex": "0x390"
+        }
+      ]
+    },
+    {
+      "name": "New York",
+      "lat_deg": 40.7128,
+      "lon_deg": -74.006,
+      "elev_m": 0.0,
+      "eclipses": [
+        {
+          "max_jd_ut": 2460409.309443377,
+          "first_contact_jd_ut": 2460409.257364207,
+          "last_contact_jd_ut": 2460409.3586194543,
+          "kind": "partial",
+          "magnitude": 0.9109650625837257,
+          "fraction_covered": 0.89961593770109,
+          "flags_hex": "0x1390"
+        },
+        {
+          "max_jd_ut": 2460763.949020871,
+          "first_contact_jd_ut": 2460763.8915139274,
+          "last_contact_jd_ut": 2460763.961754427,
+          "kind": "partial",
+          "magnitude": 0.3348356997516649,
+          "fraction_covered": 0.22290157864636298,
+          "flags_hex": "0x1092"
+        },
+        {
+          "max_jd_ut": 2461265.246009129,
+          "first_contact_jd_ut": 2461265.2137374245,
+          "last_contact_jd_ut": 2461265.2770403987,
+          "kind": "partial",
+          "magnitude": 0.18627991586652198,
+          "fraction_covered": 0.09491153195064618,
+          "flags_hex": "0x1390"
+        },
+        {
+          "max_jd_ut": 2461797.1262436397,
+          "first_contact_jd_ut": 2461797.0956799616,
+          "last_contact_jd_ut": 2461797.1582815023,
+          "kind": "partial",
+          "magnitude": 0.08690291512184666,
+          "fraction_covered": 0.029637634296128555,
+          "flags_hex": "0x1390"
+        }
+      ]
+    },
+    {
+      "name": "Sydney",
+      "lat_deg": -33.8688,
+      "lon_deg": 151.2093,
+      "elev_m": 0.0,
+      "eclipses": [
+        {
+          "max_jd_ut": 2460940.324555121,
+          "first_contact_jd_ut": 2460940.248931266,
+          "last_contact_jd_ut": 2460940.326983661,
+          "kind": "partial",
+          "magnitude": 0.049369275876762986,
+          "fraction_covered": 0.012878971976131233,
+          "flags_hex": "0x1092"
+        },
+        {
+          "max_jd_ut": 2461974.6677332865,
+          "first_contact_jd_ut": 2461974.611649949,
+          "last_contact_jd_ut": 2461974.718562456,
+          "kind": "total",
+          "magnitude": 1.0247229610146729,
+          "fraction_covered": 1.105837805214066,
+          "flags_hex": "0x1f84"
+        },
+        {
+          "max_jd_ut": 2462830.846502384,
+          "first_contact_jd_ut": 2462830.809124648,
+          "last_contact_jd_ut": 2462830.8811502354,
+          "kind": "partial",
+          "magnitude": 0.8284176872142501,
+          "fraction_covered": 0.7903917379061404,
+          "flags_hex": "0x390"
+        },
+        {
+          "max_jd_ut": 2464396.3927166704,
+          "first_contact_jd_ut": 2464396.3482743823,
+          "last_contact_jd_ut": 2464396.4427019195,
+          "kind": "partial",
+          "magnitude": 0.6976810439128135,
+          "fraction_covered": 0.6174615790829848,
+          "flags_hex": "0x1392"
+        }
+      ]
+    },
+    {
+      "name": "Tokyo",
+      "lat_deg": 35.6762,
+      "lon_deg": 139.6503,
+      "elev_m": 0.0,
+      "eclipses": [
+        {
+          "max_jd_ut": 2462653.838814526,
+          "first_contact_jd_ut": 2462653.7871043836,
+          "last_contact_jd_ut": 2462653.8841875177,
+          "kind": "partial",
+          "magnitude": 0.7947654101599083,
+          "fraction_covered": 0.7225716593146718,
+          "flags_hex": "0x1392"
+        },
+        {
+          "max_jd_ut": 2463539.7747311178,
+          "first_contact_jd_ut": 2463539.722875151,
+          "last_contact_jd_ut": 2463539.820461984,
+          "kind": "partial",
+          "magnitude": 0.5107957500388842,
+          "fraction_covered": 0.3963073931418777,
+          "flags_hex": "0x1392"
+        },
+        {
+          "max_jd_ut": 2464572.547728073,
+          "first_contact_jd_ut": 2464572.4899008987,
+          "last_contact_jd_ut": 2464572.609279219,
+          "kind": "partial",
+          "magnitude": 0.9921401223187224,
+          "fraction_covered": 0.9943679880910608,
+          "flags_hex": "0x1390"
+        },
+        {
+          "max_jd_ut": 2466817.5078126006,
+          "first_contact_jd_ut": 2466817.4497955143,
+          "last_contact_jd_ut": 2466817.57249362,
+          "kind": "partial",
+          "magnitude": 0.9203204312324557,
+          "fraction_covered": 0.8700548436936063,
+          "flags_hex": "0x1390"
+        }
+      ]
+    }
+  ]
+}

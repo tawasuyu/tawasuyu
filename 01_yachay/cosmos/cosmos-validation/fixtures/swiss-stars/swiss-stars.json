@@ -1,0 +1,491 @@
+{
+  "description": "Swiss Ephemeris 2.10.03 apparent ecliptic-of-date positions for 26 named bright stars at three epochs. Generated 2026-05-12T00:24:05.144029+00:00.",
+  "epochs": [
+    {
+      "label": "1968-05-24",
+      "jd_tdb": 2440000.5,
+      "stars": [
+        {
+          "name": "Sirius",
+          "swiss_name": "Sirius",
+          "ecl_lon_deg": 103.63890299482152,
+          "ecl_lat_deg": -39.60028775448698
+        },
+        {
+          "name": "Canopus",
+          "swiss_name": "Canopus",
+          "ecl_lon_deg": 104.5054650534349,
+          "ecl_lat_deg": -75.83164418557158
+        },
+        {
+          "name": "Rigil Kentaurus",
+          "swiss_name": "Rigil Kentaurus",
+          "ecl_lon_deg": 239.08815846063177,
+          "ecl_lat_deg": -42.58503948989482
+        },
+        {
+          "name": "Arcturus",
+          "swiss_name": "Arcturus",
+          "ecl_lon_deg": 203.79594865970515,
+          "ecl_lat_deg": 30.75995169048428
+        },
+        {
+          "name": "Vega",
+          "swiss_name": "Vega",
+          "ecl_lon_deg": 284.8803463004631,
+          "ecl_lat_deg": 61.73114278306336
+        },
+        {
+          "name": "Capella",
+          "swiss_name": "Capella",
+          "ecl_lon_deg": 81.40875668659244,
+          "ecl_lat_deg": 22.864654012196738
+        },
+        {
+          "name": "Rigel",
+          "swiss_name": "Rigel",
+          "ecl_lon_deg": 76.37975801333006,
+          "ecl_lat_deg": -31.12755974964849
+        },
+        {
+          "name": "Procyon",
+          "swiss_name": "Procyon",
+          "ecl_lon_deg": 115.34424812858357,
+          "ecl_lat_deg": -16.014324672731664
+        },
+        {
+          "name": "Betelgeuse",
+          "swiss_name": "Betelgeuse",
+          "ecl_lon_deg": 88.30607356652553,
+          "ecl_lat_deg": -16.03189792952653
+        },
+        {
+          "name": "Achernar",
+          "swiss_name": "Achernar",
+          "ecl_lon_deg": 344.8583345567029,
+          "ecl_lat_deg": -59.37195906281005
+        },
+        {
+          "name": "Hadar",
+          "swiss_name": "Hadar",
+          "ecl_lon_deg": 233.3591710921597,
+          "ecl_lat_deg": -44.13442178257031
+        },
+        {
+          "name": "Altair",
+          "swiss_name": "Altair",
+          "ecl_lon_deg": 301.3319736864986,
+          "ecl_lat_deg": 29.3021008944438
+        },
+        {
+          "name": "Acrux",
+          "swiss_name": "Acrux",
+          "ecl_lon_deg": 221.43948341584314,
+          "ecl_lat_deg": -52.8771420903011
+        },
+        {
+          "name": "Aldebaran",
+          "swiss_name": "Aldebaran",
+          "ecl_lon_deg": 69.34007544417038,
+          "ecl_lat_deg": -5.469656459969917
+        },
+        {
+          "name": "Antares",
+          "swiss_name": "Antares",
+          "ecl_lon_deg": 249.32494941856706,
+          "ecl_lat_deg": -4.565695673058127
+        },
+        {
+          "name": "Spica",
+          "swiss_name": "Spica",
+          "ecl_lon_deg": 203.40300941856825,
+          "ecl_lat_deg": -2.052231853426193
+        },
+        {
+          "name": "Pollux",
+          "swiss_name": "Pollux",
+          "ecl_lon_deg": 112.77407044287789,
+          "ecl_lat_deg": 6.68243976692946
+        },
+        {
+          "name": "Fomalhaut",
+          "swiss_name": "Fomalhaut",
+          "ecl_lon_deg": 333.41339975345005,
+          "ecl_lat_deg": -21.12960868858144
+        },
+        {
+          "name": "Deneb",
+          "swiss_name": "Deneb",
+          "ecl_lon_deg": 334.89226125016995,
+          "ecl_lat_deg": 59.90266192221701
+        },
+        {
+          "name": "Mimosa",
+          "swiss_name": "Mimosa",
+          "ecl_lon_deg": 221.21441695150983,
+          "ecl_lat_deg": -48.63695706324445
+        },
+        {
+          "name": "Regulus",
+          "swiss_name": "Regulus",
+          "ecl_lon_deg": 149.3877712428021,
+          "ecl_lat_deg": 0.46386371459038755
+        },
+        {
+          "name": "Adara",
+          "swiss_name": "Adara",
+          "ecl_lon_deg": 110.31596397687002,
+          "ecl_lat_deg": -51.36719955753483
+        },
+        {
+          "name": "Castor",
+          "swiss_name": "Castor",
+          "ecl_lon_deg": 109.79439848638701,
+          "ecl_lat_deg": 10.094287798683428
+        },
+        {
+          "name": "Shaula",
+          "swiss_name": "Shaula",
+          "ecl_lon_deg": 264.14805288745845,
+          "ecl_lat_deg": -13.783564364053525
+        },
+        {
+          "name": "Bellatrix",
+          "swiss_name": "Bellatrix",
+          "ecl_lon_deg": 80.49778511000311,
+          "ecl_lat_deg": -16.820554041914626
+        },
+        {
+          "name": "Elnath",
+          "swiss_name": "El Nath",
+          "ecl_lon_deg": 82.12643360232813,
+          "ecl_lat_deg": 5.382705463415203
+        }
+      ]
+    },
+    {
+      "label": "J2000.0",
+      "jd_tdb": 2451545.0,
+      "stars": [
+        {
+          "name": "Sirius",
+          "swiss_name": "Sirius",
+          "ecl_lon_deg": 104.08530406565448,
+          "ecl_lat_deg": -39.60506774706685
+        },
+        {
+          "name": "Canopus",
+          "swiss_name": "Canopus",
+          "ecl_lon_deg": 104.98023451343323,
+          "ecl_lat_deg": -75.82342975511258
+        },
+        {
+          "name": "Rigil Kentaurus",
+          "swiss_name": "Rigil Kentaurus",
+          "ecl_lon_deg": 239.4698759311767,
+          "ecl_lat_deg": -42.593399665559744
+        },
+        {
+          "name": "Arcturus",
+          "swiss_name": "Arcturus",
+          "ecl_lon_deg": 204.22817296008316,
+          "ecl_lat_deg": 30.733359085874426
+        },
+        {
+          "name": "Vega",
+          "swiss_name": "Vega",
+          "ecl_lon_deg": 285.30034241272483,
+          "ecl_lat_deg": 61.73325819445737
+        },
+        {
+          "name": "Capella",
+          "swiss_name": "Capella",
+          "ecl_lon_deg": 81.85999619813914,
+          "ecl_lat_deg": 22.864998169883204
+        },
+        {
+          "name": "Rigel",
+          "swiss_name": "Rigel",
+          "ecl_lon_deg": 76.83192022362064,
+          "ecl_lat_deg": -31.123956929493573
+        },
+        {
+          "name": "Procyon",
+          "swiss_name": "Procyon",
+          "ecl_lon_deg": 115.78749679205269,
+          "ecl_lat_deg": -16.019205838545123
+        },
+        {
+          "name": "Betelgeuse",
+          "swiss_name": "Betelgeuse",
+          "ecl_lon_deg": 88.75663032407722,
+          "ecl_lat_deg": -16.027322959907856
+        },
+        {
+          "name": "Achernar",
+          "swiss_name": "Achernar",
+          "ecl_lon_deg": 345.3025881807897,
+          "ecl_lat_deg": -59.3826599738963
+        },
+        {
+          "name": "Hadar",
+          "swiss_name": "Hadar",
+          "ecl_lon_deg": 233.78283338040282,
+          "ecl_lat_deg": -44.134732665181815
+        },
+        {
+          "name": "Altair",
+          "swiss_name": "Altair",
+          "ecl_lon_deg": 301.7663462923698,
+          "ecl_lat_deg": 29.304460126088827
+        },
+        {
+          "name": "Acrux",
+          "swiss_name": "Acrux",
+          "ecl_lon_deg": 221.8610347715959,
+          "ecl_lat_deg": -52.874926842482424
+        },
+        {
+          "name": "Aldebaran",
+          "swiss_name": "Aldebaran",
+          "ecl_lon_deg": 69.79031730263767,
+          "ecl_lat_deg": -5.467602036441171
+        },
+        {
+          "name": "Antares",
+          "swiss_name": "Antares",
+          "ecl_lon_deg": 249.75342696541875,
+          "ecl_lat_deg": -4.569717069974275
+        },
+        {
+          "name": "Spica",
+          "swiss_name": "Spica",
+          "ecl_lon_deg": 203.83614804458273,
+          "ecl_lat_deg": -2.054285399678817
+        },
+        {
+          "name": "Pollux",
+          "swiss_name": "Pollux",
+          "ecl_lon_deg": 113.21746103509432,
+          "ecl_lat_deg": 6.684052972276937
+        },
+        {
+          "name": "Fomalhaut",
+          "swiss_name": "Fomalhaut",
+          "ecl_lon_deg": 333.8526634982998,
+          "ecl_lat_deg": -21.137293825897004
+        },
+        {
+          "name": "Deneb",
+          "swiss_name": "Deneb",
+          "ecl_lon_deg": 335.3187082715161,
+          "ecl_lat_deg": 59.91023770323935
+        },
+        {
+          "name": "Mimosa",
+          "swiss_name": "Mimosa",
+          "ecl_lon_deg": 221.6376254221087,
+          "ecl_lat_deg": -48.635063327785154
+        },
+        {
+          "name": "Regulus",
+          "swiss_name": "Regulus",
+          "ecl_lon_deg": 149.82904074735418,
+          "ecl_lat_deg": 0.4648132179459073
+        },
+        {
+          "name": "Adara",
+          "swiss_name": "Adara",
+          "ecl_lon_deg": 110.76813006415699,
+          "ecl_lat_deg": -51.35939212242413
+        },
+        {
+          "name": "Castor",
+          "swiss_name": "Castor",
+          "ecl_lon_deg": 110.24213313707259,
+          "ecl_lat_deg": 10.095594458501171
+        },
+        {
+          "name": "Shaula",
+          "swiss_name": "Shaula",
+          "ecl_lon_deg": 264.5761050788551,
+          "ecl_lat_deg": -13.788090683857858
+        },
+        {
+          "name": "Bellatrix",
+          "swiss_name": "Bellatrix",
+          "ecl_lon_deg": 80.94829832643391,
+          "ecl_lat_deg": -16.816592888459823
+        },
+        {
+          "name": "Elnath",
+          "swiss_name": "El Nath",
+          "ecl_lon_deg": 82.57660005172188,
+          "ecl_lat_deg": 5.385283280747229
+        }
+      ]
+    },
+    {
+      "label": "2023-02-25",
+      "jd_tdb": 2460000.5,
+      "stars": [
+        {
+          "name": "Sirius",
+          "swiss_name": "Sirius",
+          "ecl_lon_deg": 104.40275457211747,
+          "ecl_lat_deg": -39.61345745326768
+        },
+        {
+          "name": "Canopus",
+          "swiss_name": "Canopus",
+          "ecl_lon_deg": 105.29271923434554,
+          "ecl_lat_deg": -75.82514889207374
+        },
+        {
+          "name": "Rigil Kentaurus",
+          "swiss_name": "Rigil Kentaurus",
+          "ecl_lon_deg": 239.76899427572624,
+          "ecl_lat_deg": -42.60053956510881
+        },
+        {
+          "name": "Arcturus",
+          "swiss_name": "Arcturus",
+          "ecl_lon_deg": 204.55859877332125,
+          "ecl_lat_deg": 30.717958664206293
+        },
+        {
+          "name": "Vega",
+          "swiss_name": "Vega",
+          "ecl_lon_deg": 285.63068066615426,
+          "ecl_lat_deg": 61.72778452335469
+        },
+        {
+          "name": "Capella",
+          "swiss_name": "Capella",
+          "ecl_lon_deg": 82.18073523476686,
+          "ecl_lat_deg": 22.86666007970141
+        },
+        {
+          "name": "Rigel",
+          "swiss_name": "Rigel",
+          "ecl_lon_deg": 77.15204575418137,
+          "ecl_lat_deg": -31.12267657279967
+        },
+        {
+          "name": "Procyon",
+          "swiss_name": "Procyon",
+          "ecl_lon_deg": 116.10698930420989,
+          "ecl_lat_deg": -16.02540431296497
+        },
+        {
+          "name": "Betelgeuse",
+          "swiss_name": "Betelgeuse",
+          "ecl_lon_deg": 89.07795035086971,
+          "ecl_lat_deg": -16.025368802102847
+        },
+        {
+          "name": "Achernar",
+          "swiss_name": "Achernar",
+          "ecl_lon_deg": 345.6264532469451,
+          "ecl_lat_deg": -59.380098113301614
+        },
+        {
+          "name": "Hadar",
+          "swiss_name": "Hadar",
+          "ecl_lon_deg": 234.11295463228447,
+          "ecl_lat_deg": -44.136555331726804
+        },
+        {
+          "name": "Altair",
+          "swiss_name": "Altair",
+          "ecl_lon_deg": 302.09519972155124,
+          "ecl_lat_deg": 29.301159763021484
+        },
+        {
+          "name": "Acrux",
+          "swiss_name": "Acrux",
+          "ecl_lon_deg": 222.1915787346768,
+          "ecl_lat_deg": -52.87708291491623
+        },
+        {
+          "name": "Aldebaran",
+          "swiss_name": "Aldebaran",
+          "ecl_lon_deg": 70.11077748691814,
+          "ecl_lat_deg": -5.466209001220341
+        },
+        {
+          "name": "Antares",
+          "swiss_name": "Antares",
+          "ecl_lon_deg": 250.08252463253547,
+          "ecl_lat_deg": -4.572572826166966
+        },
+        {
+          "name": "Spica",
+          "swiss_name": "Spica",
+          "ecl_lon_deg": 204.1657006867294,
+          "ecl_lat_deg": -2.0560824335129793
+        },
+        {
+          "name": "Pollux",
+          "swiss_name": "Pollux",
+          "ecl_lon_deg": 113.53698712816221,
+          "ecl_lat_deg": 6.686301083454027
+        },
+        {
+          "name": "Fomalhaut",
+          "swiss_name": "Fomalhaut",
+          "ecl_lon_deg": 334.1776015507541,
+          "ecl_lat_deg": -21.138489071475355
+        },
+        {
+          "name": "Deneb",
+          "swiss_name": "Deneb",
+          "ecl_lon_deg": 335.6336753596149,
+          "ecl_lat_deg": 59.905157853558485
+        },
+        {
+          "name": "Mimosa",
+          "swiss_name": "Mimosa",
+          "ecl_lon_deg": 221.9677235478389,
+          "ecl_lat_deg": -48.6372672304445
+        },
+        {
+          "name": "Regulus",
+          "swiss_name": "Regulus",
+          "ecl_lon_deg": 150.15419635865643,
+          "ecl_lat_deg": 0.46560097439394155
+        },
+        {
+          "name": "Adara",
+          "swiss_name": "Adara",
+          "ecl_lon_deg": 111.08866919343329,
+          "ecl_lat_deg": -51.36061424156199
+        },
+        {
+          "name": "Castor",
+          "swiss_name": "Castor",
+          "ecl_lon_deg": 110.56430907442181,
+          "ecl_lat_deg": 10.098086138279056
+        },
+        {
+          "name": "Shaula",
+          "swiss_name": "Shaula",
+          "ecl_lon_deg": 264.90450217092786,
+          "ecl_lat_deg": -13.790392943285692
+        },
+        {
+          "name": "Bellatrix",
+          "swiss_name": "Bellatrix",
+          "ecl_lon_deg": 81.2689303424957,
+          "ecl_lat_deg": -16.81469983555355
+        },
+        {
+          "name": "Elnath",
+          "swiss_name": "El Nath",
+          "ecl_lon_deg": 82.89755887435712,
+          "ecl_lat_deg": 5.387528075333955
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,143 @@
+{
+  "description": "Swiss Ephemeris 2.10.03 apparent ecliptic-of-date for Ceres / Pallas / Juno / Vesta / Chiron at three epochs. Generated 2026-05-12T03:43:41.118301+00:00.",
+  "epochs": [
+    {
+      "label": "1968-05-24",
+      "jd_tdb": 2440000.5,
+      "asteroids": [
+        {
+          "name": "Ceres",
+          "naif_id": 2000001,
+          "swiss_id": 17,
+          "ecl_lon_deg": 203.33585294759493,
+          "ecl_lat_deg": 10.762632939378413,
+          "dist_au": 1.815208081525497
+        },
+        {
+          "name": "Pallas",
+          "naif_id": 2000002,
+          "swiss_id": 18,
+          "ecl_lon_deg": 165.82036283122727,
+          "ecl_lat_deg": 14.300672880132419,
+          "dist_au": 1.993743162982319
+        },
+        {
+          "name": "Juno",
+          "naif_id": 2000003,
+          "swiss_id": 19,
+          "ecl_lon_deg": 209.7244248930083,
+          "ecl_lat_deg": 13.563625774091378,
+          "dist_au": 2.4259407423948947
+        },
+        {
+          "name": "Vesta",
+          "naif_id": 2000004,
+          "swiss_id": 20,
+          "ecl_lon_deg": 9.221363505768252,
+          "ecl_lat_deg": -5.432206988881808,
+          "dist_au": 2.813936053384632
+        },
+        {
+          "name": "Chiron",
+          "naif_id": null,
+          "swiss_id": 15,
+          "ecl_lon_deg": 2.5898004350517785,
+          "ecl_lat_deg": 3.298104964359109,
+          "dist_au": 19.199056682296366
+        }
+      ]
+    },
+    {
+      "label": "J2000.0",
+      "jd_tdb": 2451545.0,
+      "asteroids": [
+        {
+          "name": "Ceres",
+          "naif_id": 2000001,
+          "swiss_id": 17,
+          "ecl_lon_deg": 184.4528714347833,
+          "ecl_lat_deg": 11.8375351037774,
+          "dist_au": 2.2568280002727095
+        },
+        {
+          "name": "Pallas",
+          "naif_id": 2000002,
+          "swiss_id": 18,
+          "ecl_lon_deg": 134.04315367079855,
+          "ecl_lat_deg": -48.35085547613344,
+          "dist_au": 1.4371472442792996
+        },
+        {
+          "name": "Juno",
+          "naif_id": 2000003,
+          "swiss_id": 19,
+          "ecl_lon_deg": 277.99578618062475,
+          "ecl_lat_deg": 9.451058439731968,
+          "dist_au": 4.08444024763723
+        },
+        {
+          "name": "Vesta",
+          "naif_id": 2000004,
+          "swiss_id": 20,
+          "ecl_lon_deg": 245.97158248914744,
+          "ecl_lat_deg": 4.2520023199496295,
+          "dist_au": 2.898541659482532
+        },
+        {
+          "name": "Chiron",
+          "naif_id": null,
+          "swiss_id": 15,
+          "ecl_lon_deg": 251.6175419806089,
+          "ecl_lat_deg": 4.071721834707537,
+          "dist_au": 10.66352996559388
+        }
+      ]
+    },
+    {
+      "label": "2023-02-25",
+      "jd_tdb": 2460000.5,
+      "asteroids": [
+        {
+          "name": "Ceres",
+          "naif_id": 2000001,
+          "swiss_id": 17,
+          "ecl_lon_deg": 185.35300692274808,
+          "ecl_lat_deg": 16.287872967213975,
+          "dist_au": 1.673832898642979
+        },
+        {
+          "name": "Pallas",
+          "naif_id": 2000002,
+          "swiss_id": 18,
+          "ecl_lon_deg": 100.79987339667306,
+          "ecl_lat_deg": -40.10779738779869,
+          "dist_au": 1.507355531070258
+        },
+        {
+          "name": "Juno",
+          "naif_id": 2000003,
+          "swiss_id": 19,
+          "ecl_lon_deg": 21.812530843513237,
+          "ecl_lat_deg": -8.138374138326734,
+          "dist_au": 2.5497087127554465
+        },
+        {
+          "name": "Vesta",
+          "naif_id": 2000004,
+          "swiss_id": 20,
+          "ecl_lon_deg": 7.457591532423449,
+          "ecl_lat_deg": -5.3827261920465705,
+          "dist_au": 3.252319459281294
+        },
+        {
+          "name": "Chiron",
+          "naif_id": null,
+          "swiss_id": 15,
+          "ecl_lon_deg": 13.646604229482667,
+          "ecl_lat_deg": 1.6312942023517503,
+          "dist_au": 19.577852025776174
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,73 @@
+[package]
+name = "eternal-validation"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Internal validation harness: compare eternal-ephemeris output against external ground truth (JPL Horizons, Swiss Ephemeris)."
+publish = false
+
+[features]
+default = []
+fetch = ["dep:reqwest", "dep:tokio"]
+
+[dependencies]
+eternal-ephemeris.workspace = true
+eternal-core.workspace = true
+eternal-coords.workspace = true
+eternal-time.workspace = true
+libm.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+clap = { workspace = true, features = ["derive"] }
+anyhow.workspace = true
+reqwest = { workspace = true, features = ["blocking", "json"], optional = true }
+tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[[bin]]
+name = "precision-report"
+path = "src/bin/precision_report.rs"
+
+[[bin]]
+name = "sidereal-check"
+path = "src/bin/sidereal_check.rs"
+
+[[bin]]
+name = "houses-check"
+path = "src/bin/houses_check.rs"
+
+[[bin]]
+name = "topocentric-check"
+path = "src/bin/topocentric_check.rs"
+
+[[bin]]
+name = "lunar-check"
+path = "src/bin/lunar_check.rs"
+
+[[bin]]
+name = "stars-check"
+path = "src/bin/stars_check.rs"
+
+[[bin]]
+name = "altaz-check"
+path = "src/bin/altaz_check.rs"
+
+[[bin]]
+name = "risetrans-check"
+path = "src/bin/risetrans_check.rs"
+
+[[bin]]
+name = "eclipses-check"
+path = "src/bin/eclipses_check.rs"
+
+[[bin]]
+name = "asteroids-check"
+path = "src/bin/asteroids_check.rs"
+
+[[bin]]
+name = "local-eclipses-check"
+path = "src/bin/local_eclipses_check.rs"

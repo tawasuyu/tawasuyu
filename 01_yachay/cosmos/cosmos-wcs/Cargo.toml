@@ -1,0 +1,20 @@
+[package]
+name = "eternal-wcs"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pure Rust implementation of World Coordinate System (WCS) transformations"
+keywords = ["astronomy", "wcs", "coordinates", "fits", "celestial"]
+categories = ["science", "algorithms"]
+
+[dependencies]
+eternal-core.workspace = true
+eternal-coords.workspace = true
+thiserror.workspace = true
+libm.workspace = true
+
+[dev-dependencies]
+approx.workspace = true
+proptest.workspace = true
