@@ -63,6 +63,10 @@ pub struct Palette {
     pub degradacion: Color,
     /// Color de la marca de un Lemming.
     pub lemming: Color,
+    /// Color del aura de influencia de un Concepto (translúcida).
+    pub concepto_aura: Color,
+    /// Color de la marca central de un Concepto.
+    pub concepto: Color,
 }
 
 impl Default for Palette {
@@ -77,6 +81,8 @@ impl Default for Palette {
             oro: [0.90, 0.74, 0.24, 1.0],
             degradacion: [0.52, 0.30, 0.62, 1.0],
             lemming: [0.96, 0.96, 0.98, 1.0],
+            concepto_aura: [0.95, 0.86, 0.55, 0.18],
+            concepto: [0.98, 0.88, 0.42, 1.0],
         }
     }
 }
@@ -92,6 +98,10 @@ pub struct PlanConfig {
     /// Cuánto se eleva la marca del Lemming sobre el relieve de su celda,
     /// en unidades de `Z`.
     pub lemming_lift: f32,
+    /// Lado del quad-marca central de un Concepto, en pixels.
+    pub concepto_size: f32,
+    /// Cuánto se eleva la marca de un Concepto sobre el relieve, en `Z`.
+    pub concepto_lift: f32,
     pub palette: Palette,
 }
 
@@ -101,6 +111,8 @@ impl Default for PlanConfig {
             tile: 18.0,
             lemming_size: 9.0,
             lemming_lift: 0.6,
+            concepto_size: 14.0,
+            concepto_lift: 1.4,
             palette: Palette::default(),
         }
     }
@@ -196,6 +208,35 @@ pub fn build_plan(
                 depth: cx as f32 + cy as f32,
             });
         }
+    }
+
+    // --- Conceptos: aura translúcida + marca central ---
+    // El aura va al nivel del suelo (z=0), antes de las celdas con la misma
+    // diagonal: pinta como un halo bajo lemmings y celdas. La marca central
+    // va por encima de los lemmings (+0.75) — un Concepto es una entidad
+    // saliente, no enterrada en el campo.
+    for c in &world.conceptos.items {
+        let (sx, sy) = iso.project(c.pos_x, c.pos_y, 0.0);
+        let aura = c.radius * 2.0 * cfg.tile;
+        quads.push(Quad {
+            x: sx - aura * 0.5,
+            y: sy - aura * 0.5,
+            w: aura,
+            h: aura,
+            color: cfg.palette.concepto_aura,
+            depth: c.pos_x + c.pos_y - 0.5,
+        });
+        let (cx, cy) = g.clamp_cell(c.pos_x, c.pos_y);
+        let z = weights.z_of(g, g.idx(cx, cy)) + cfg.concepto_lift;
+        let (mx, my) = iso.project(c.pos_x, c.pos_y, z);
+        quads.push(Quad {
+            x: mx - cfg.concepto_size * 0.5,
+            y: my - cfg.concepto_size * 0.5,
+            w: cfg.concepto_size,
+            h: cfg.concepto_size,
+            color: cfg.palette.concepto,
+            depth: c.pos_x + c.pos_y + 0.75,
+        });
     }
 
     // --- Lemmings: una marca posada sobre el relieve de su celda ---
@@ -354,6 +395,57 @@ mod tests {
         let a = build_plan(&world, &iso(), &ZWeights::default(), &PlanConfig::default());
         let b = build_plan(&world, &iso(), &ZWeights::default(), &PlanConfig::default());
         assert_eq!(a.quads, b.quads);
+    }
+
+    #[test]
+    fn each_concepto_adds_two_quads_aura_and_marker() {
+        use dominium_core::{Concepto, LayerMods};
+        let mut world = World::new(8, 8);
+        world.conceptos.add(Concepto {
+            id: "iglesia".into(),
+            sprite_id: 0,
+            pos_x: 4.0,
+            pos_y: 4.0,
+            radius: 2.0,
+            mods: LayerMods::default(),
+            hack: None,
+        });
+        let plan = build_plan(&world, &iso(), &ZWeights::default(), &PlanConfig::default());
+        // 64 celdas + 2 quads del concepto (aura + marca).
+        assert_eq!(plan.quads.len(), 66);
+    }
+
+    #[test]
+    fn concepto_marker_paints_after_its_lemming_neighbors() {
+        use dominium_core::{Concepto, LayerMods};
+        let mut world = World::new(8, 8);
+        // Lemming en (4,4), concepto también en (4,4): la marca del concepto
+        // (depth 8.75) debe ir tras la marca del lemming (depth 8.5).
+        world.lemmings.spawn(4.0, 4.0, 50.0, [0.0; 4]);
+        world.conceptos.add(Concepto {
+            id: "iglesia".into(),
+            sprite_id: 0,
+            pos_x: 4.0,
+            pos_y: 4.0,
+            radius: 1.5,
+            mods: LayerMods::default(),
+            hack: None,
+        });
+        let plan = build_plan(&world, &iso(), &ZWeights::default(), &PlanConfig::default());
+        let cfg = PlanConfig::default();
+        let lemming_marker_depth = plan
+            .quads
+            .iter()
+            .find(|q| q.w == cfg.lemming_size)
+            .expect("hay un lemming")
+            .depth;
+        let concepto_marker_depth = plan
+            .quads
+            .iter()
+            .find(|q| q.w == cfg.concepto_size)
+            .expect("hay una marca de concepto")
+            .depth;
+        assert!(concepto_marker_depth > lemming_marker_depth);
     }
 
     #[test]

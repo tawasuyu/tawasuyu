@@ -16,7 +16,7 @@
 use std::time::Duration;
 
 use dominium_canvas_llimphi::canvas_view;
-use dominium_core::{SimParams, World};
+use dominium_core::{Conceptos, SimParams, World};
 use dominium_iso::{IsoProjector, ZWeights};
 use dominium_physics::tick;
 use dominium_render_plan::{build_plan, PlanConfig};
@@ -37,6 +37,9 @@ const LEMMINGS: usize = 50;
 const TICK_MS: u64 = 90;
 /// Ancho del panel de stats.
 const SIDE_WIDTH: f32 = 240.0;
+/// Pack JSON por defecto — iglesia / banco / comuna / laboratorio.
+/// Embebido para que el binario corra sin archivos sueltos en cwd.
+const DEFAULT_PACK: &str = include_str!("../conceptos.default.json");
 
 // ---------------------------------------------------------------------
 // PRNG mínimo (LCG 64) — siembra reproducible sin dependencias.
@@ -58,6 +61,12 @@ impl Lcg {
     fn next_f32(&mut self) -> f32 {
         (self.next_u32() >> 8) as f32 / (1u32 << 24) as f32
     }
+}
+
+/// Parsea el pack JSON embebido. Si el JSON está malformado el binario
+/// arranca con la colección vacía — la sim corre igual.
+fn default_conceptos() -> Conceptos {
+    serde_json::from_str::<Conceptos>(DEFAULT_PACK).unwrap_or_default()
 }
 
 /// Siembra un mundo: continentes de materia, vetas de oro, niebla de
@@ -88,6 +97,7 @@ fn seed(seed: u64) -> World {
         let i = w.lemmings.spawn(x, y, 30.0 + rng.next_f32() * 40.0, psi);
         w.lemmings.accion[i] = (rng.next_u32() % 6) as u8;
     }
+    w.conceptos = default_conceptos();
     w
 }
 
@@ -131,6 +141,8 @@ enum Msg {
     Tick,
     TogglePlay,
     Reseed,
+    LimpiarConceptos,
+    SembrarConceptos,
 }
 
 struct Dominium;
@@ -162,6 +174,8 @@ impl App for Dominium {
                 tile: 15.0,
                 lemming_size: 8.0,
                 lemming_lift: 0.7,
+                concepto_size: 12.0,
+                concepto_lift: 1.4,
                 palette: Default::default(),
             },
             running: true,
@@ -184,6 +198,17 @@ impl App for Dominium {
             }
             Msg::Reseed => {
                 reseed(&mut m);
+            }
+            Msg::LimpiarConceptos => {
+                m.world.conceptos.clear();
+                // Romper los hack_locks vivos: sin Concepto que los sostenga,
+                // los lemmings vuelven a la lógica normal.
+                for lock in m.world.lemmings.hack_lock.iter_mut() {
+                    *lock = 0;
+                }
+            }
+            Msg::SembrarConceptos => {
+                m.world.conceptos = default_conceptos();
             }
         }
         m
@@ -348,6 +373,34 @@ fn side_panel(model: &Model, stats: &Stats, theme: &Theme) -> View<Msg> {
         .fill(theme.border)
     };
 
+    let conceptos_header = label_view("[ CONCEPTOS ]", 11.0, theme.fg_muted);
+    let conceptos_count = label_view(
+        &format!("{} activos", model.world.conceptos.len()),
+        12.0,
+        theme.fg_text,
+    );
+    let mut children: Vec<View<Msg>> = vec![
+        header,
+        play_btn,
+        reset_btn,
+        separator(),
+        stat_row("Población", &stats.poblacion.to_string(), theme),
+        stat_row("Materia", &format!("{:.0}", stats.materia), theme),
+        stat_row("Oro", &format!("{:.0}", stats.oro), theme),
+        stat_row("Energía", &format!("{:.0}", stats.energia), theme),
+        separator(),
+        conceptos_header,
+        conceptos_count,
+    ];
+    for c in &model.world.conceptos.items {
+        children.push(label_view(&format!("·  {}", c.id), 11.0, theme.fg_text));
+    }
+    children.push(sized_button("✚  Sembrar pack", &btn_palette, Msg::SembrarConceptos));
+    children.push(sized_button("✖  Limpiar", &btn_palette, Msg::LimpiarConceptos));
+    children.push(separator());
+    children.push(label_view(&format!("grilla {GRID}×{GRID}"), 11.0, theme.fg_muted));
+    children.push(label_view("relieve = materia (Z)", 11.0, theme.fg_muted));
+
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
@@ -368,19 +421,7 @@ fn side_panel(model: &Model, stats: &Stats, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_panel)
-    .children(vec![
-        header,
-        play_btn,
-        reset_btn,
-        separator(),
-        stat_row("Población", &stats.poblacion.to_string(), theme),
-        stat_row("Materia", &format!("{:.0}", stats.materia), theme),
-        stat_row("Oro", &format!("{:.0}", stats.oro), theme),
-        stat_row("Energía", &format!("{:.0}", stats.energia), theme),
-        separator(),
-        label_view(&format!("grilla {GRID}×{GRID}"), 11.0, theme.fg_muted),
-        label_view("relieve = materia (Z)", 11.0, theme.fg_muted),
-    ])
+    .children(children)
 }
 
 fn label_view(text: &str, size_px: f32, color: llimphi_ui::llimphi_raster::peniko::Color) -> View<Msg> {

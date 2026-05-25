@@ -21,3 +21,4 @@ dominium-render-plan = { path = "../dominium-render-plan" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-button = { workspace = true }
+serde_json = { workspace = true }
