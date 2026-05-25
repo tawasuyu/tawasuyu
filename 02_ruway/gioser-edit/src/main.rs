@@ -34,7 +34,7 @@ use llimphi_widget_text_editor::{
     EditorMetrics, EditorPalette, EditorState, FindState, Language, PointerEvent, Pos,
 };
 use llimphi_widget_text_editor_lsp::{
-    CompletionItem, LspClient, NoopLspClient, RustAnalyzerClient,
+    CompletionItem, HoverInfo, LspClient, NoopLspClient, RustAnalyzerClient,
 };
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
@@ -72,6 +72,10 @@ enum Msg {
     CompletionsApply,
     /// Cierra el dropdown.
     CompletionsClose,
+    /// Ctrl+K — pide hover en pos del caret.
+    HoverRequest,
+    /// Cierra el popup de hover (Esc, o cambio de cursor).
+    HoverClose,
 }
 
 #[derive(Debug, Clone)]
@@ -106,6 +110,13 @@ struct Model {
     lsp: Box<dyn LspClient>,
     /// Items del popup de completions; `None` si el popup está cerrado.
     completions: Option<CompletionsBar>,
+    /// Popup de hover; `None` cerrado.
+    hover: Option<HoverPopup>,
+}
+
+struct HoverPopup {
+    info: Option<HoverInfo>,
+    anchor: (usize, usize),
 }
 
 struct CompletionsBar {
@@ -183,6 +194,7 @@ impl App for EditorApp {
             demo_lsp,
             lsp,
             completions: None,
+            hover: None,
         }
     }
 
@@ -232,6 +244,12 @@ impl App for EditorApp {
                     if !latest.is_empty() && latest != bar.items {
                         bar.items = latest;
                         bar.selected = 0;
+                    }
+                }
+                if let Some(popup) = m.hover.as_mut() {
+                    let latest = m.lsp.latest_hover();
+                    if latest.is_some() && latest != popup.info {
+                        popup.info = latest;
                     }
                 }
                 m
@@ -286,6 +304,22 @@ impl App for EditorApp {
                 let mut m = model;
                 m.completions = None;
                 m.lsp.clear_completions();
+                m
+            }
+            Msg::HoverRequest => {
+                let mut m = model;
+                let Some(path) = m.open_file.clone() else { return m };
+                let line = m.editor.cursor.caret.line;
+                let col = m.editor.cursor.caret.col;
+                m.lsp.clear_hover();
+                m.lsp.request_hover(&path, line, col);
+                m.hover = Some(HoverPopup { info: None, anchor: (line, col) });
+                m
+            }
+            Msg::HoverClose => {
+                let mut m = model;
+                m.hover = None;
+                m.lsp.clear_hover();
                 m
             }
             Msg::SaveResult(r) => {
@@ -363,6 +397,18 @@ impl App for EditorApp {
             {
                 return Some(Msg::CompletionsRequest);
             }
+            // Ctrl+K pide hover en la pos del caret.
+            if matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("k"))
+                && model.open_file.is_some()
+            {
+                return Some(Msg::HoverRequest);
+            }
+        }
+        // Hover popup abierto + Esc → cerrar.
+        if model.hover.is_some()
+            && matches!(&event.key, Key::Named(NamedKey::Escape))
+        {
+            return Some(Msg::HoverClose);
         }
 
         // Esc colapsa multi-cursor antes de cerrar find/etc.
@@ -489,6 +535,9 @@ fn editor_panel(model: &Model, theme: &Theme) -> View<Msg> {
     if let Some(bar) = model.completions.as_ref() {
         children.push(completions_bar_view(bar, theme));
     }
+    if let Some(hp) = model.hover.as_ref() {
+        children.push(hover_view(hp, theme));
+    }
     let editor_view = match &model.open_file {
         None => empty_editor_placeholder(theme),
         Some(path) => {
@@ -527,6 +576,63 @@ const FIND_BAR_H: f32 = 32.0;
 const COMPLETIONS_BAR_H: f32 = 120.0;
 const COMPLETIONS_ROW_H: f32 = 22.0;
 const COMPLETIONS_MAX_ITEMS_VISIBLE: usize = 5;
+
+const HOVER_BAR_H: f32 = 96.0;
+
+fn hover_view(hp: &HoverPopup, theme: &Theme) -> View<Msg> {
+    let header = format!(
+        "hover @ {}:{} · Esc cierra",
+        hp.anchor.0 + 1,
+        hp.anchor.1,
+    );
+    let body_text = match hp.info.as_ref() {
+        None => "esperando LSP…".to_string(),
+        Some(info) => truncate_hover(&info.contents, 600),
+    };
+
+    let header_view = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
+        padding: Rect {
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .text_aligned(header, 10.0, theme.fg_muted, Alignment::Start);
+
+    let body_view = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(HOVER_BAR_H - 18.0) },
+        padding: Rect {
+            left: length(10.0_f32),
+            right: length(10.0_f32),
+            top: length(4.0_f32),
+            bottom: length(4.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .text_aligned(body_text, 11.0, theme.fg_text, Alignment::Start);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: length(HOVER_BAR_H) },
+        ..Default::default()
+    })
+    .children(vec![header_view, body_view])
+}
+
+fn truncate_hover(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let cut: String = s.chars().take(max - 1).collect();
+        format!("{cut}…")
+    }
+}
 
 fn completions_bar_view(bar: &CompletionsBar, theme: &Theme) -> View<Msg> {
     let mut rows: Vec<View<Msg>> = Vec::with_capacity(COMPLETIONS_MAX_ITEMS_VISIBLE);

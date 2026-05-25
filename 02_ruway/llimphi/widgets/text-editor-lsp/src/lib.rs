@@ -69,6 +69,21 @@ pub trait LspClient: Send {
     fn latest_completions(&self) -> Vec<CompletionItem>;
     /// Borra el cache de completions — útil al cerrar el popup.
     fn clear_completions(&mut self);
+    /// Dispara textDocument/hover. Fire-and-forget; el caller polla
+    /// `latest_hover` para leer la respuesta.
+    fn request_hover(&mut self, path: &Path, line: usize, col: usize);
+    /// Última hover info recibida (cualquier path/pos).
+    fn latest_hover(&self) -> Option<HoverInfo>;
+    /// Borra el cache de hover.
+    fn clear_hover(&mut self);
+}
+
+/// Información de hover — espejo simplificado de `lsp_types::Hover`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HoverInfo {
+    /// Markdown / plaintext del símbolo bajo el cursor. El render del
+    /// caller lo muestra tal cual (sin parsear markdown todavía).
+    pub contents: String,
 }
 
 /// Stub que no hace nada — útil cuando no hay LSP configurado o para tests.
@@ -87,6 +102,11 @@ impl LspClient for NoopLspClient {
         Vec::new()
     }
     fn clear_completions(&mut self) {}
+    fn request_hover(&mut self, _: &Path, _: usize, _: usize) {}
+    fn latest_hover(&self) -> Option<HoverInfo> {
+        None
+    }
+    fn clear_hover(&mut self) {}
 }
 
 // ---------------------------------------------------------------------
@@ -101,9 +121,12 @@ struct SharedInner {
     /// Última respuesta de completions — sobreescribe cualquier
     /// request previo. El caller decide cuándo limpiar.
     completions: Vec<CompletionItem>,
-    /// IDs de requests pendientes para distinguir responses de
-    /// notifications. Hoy solo trackeamos completions.
+    /// Última hover info recibida.
+    hover: Option<HoverInfo>,
+    /// IDs de requests pendientes para distinguir responses; el reader
+    /// usa estos sets para routear cada response al handler correcto.
     pending_completion_ids: std::collections::HashSet<i64>,
+    pending_hover_ids: std::collections::HashSet<i64>,
 }
 
 type SharedState = Arc<Mutex<SharedInner>>;
@@ -258,6 +281,33 @@ impl LspClient for RustAnalyzerClient {
     fn clear_completions(&mut self) {
         if let Ok(mut s) = self.state.lock() {
             s.completions.clear();
+        }
+    }
+
+    fn request_hover(&mut self, path: &Path, line: usize, col: usize) {
+        let id = self.alloc_id();
+        if let Ok(mut s) = self.state.lock() {
+            s.pending_hover_ids.insert(id);
+        }
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "textDocument/hover",
+            "params": {
+                "textDocument": { "uri": format!("file://{}", path.display()) },
+                "position": { "line": line, "character": col }
+            }
+        });
+        self.send_raw(req.to_string());
+    }
+
+    fn latest_hover(&self) -> Option<HoverInfo> {
+        self.state.lock().ok().and_then(|s| s.hover.clone())
+    }
+
+    fn clear_hover(&mut self) {
+        if let Ok(mut s) = self.state.lock() {
+            s.hover = None;
         }
     }
 
@@ -434,19 +484,25 @@ fn handle_publish_diagnostics(json: &serde_json::Value, state: &SharedState) {
     }
 }
 
-/// Maneja una response del server. Hoy sólo nos importan las respuestas
-/// de completions pendientes; el resto se ignora.
+/// Routea una response del server al handler correspondiente según
+/// qué set de pendientes la contenía.
 fn handle_response(id: i64, json: &serde_json::Value, state: &SharedState) {
-    let was_completion = {
+    let (was_completion, was_hover) = {
         let Ok(mut s) = state.lock() else { return };
-        s.pending_completion_ids.remove(&id)
+        let c = s.pending_completion_ids.remove(&id);
+        let h = s.pending_hover_ids.remove(&id);
+        (c, h)
     };
-    if !was_completion {
-        return;
+    if was_completion {
+        handle_completion_response(json, state);
     }
+    if was_hover {
+        handle_hover_response(json, state);
+    }
+}
+
+fn handle_completion_response(json: &serde_json::Value, state: &SharedState) {
     let Some(result) = json.get("result") else { return };
-    // `result` puede ser una array (CompletionItem[]) o un objeto
-    // { isIncomplete, items: [...] }. Manejamos ambos.
     let items_arr = if let Some(arr) = result.as_array() {
         arr.clone()
     } else if let Some(items) = result.get("items").and_then(|i| i.as_array()) {
@@ -457,6 +513,55 @@ fn handle_response(id: i64, json: &serde_json::Value, state: &SharedState) {
     let completions: Vec<CompletionItem> = items_arr.iter().filter_map(parse_completion).collect();
     if let Ok(mut s) = state.lock() {
         s.completions = completions;
+    }
+}
+
+fn handle_hover_response(json: &serde_json::Value, state: &SharedState) {
+    let Some(result) = json.get("result") else { return };
+    if result.is_null() {
+        if let Ok(mut s) = state.lock() {
+            s.hover = None;
+        }
+        return;
+    }
+    let info = parse_hover(result);
+    if let Ok(mut s) = state.lock() {
+        s.hover = info;
+    }
+}
+
+/// `contents` en LSP puede ser:
+/// - String
+/// - { kind: "markdown"|"plaintext", value: String }
+/// - Array de los anteriores (deprecated pero algunos servers lo mandan)
+/// - { language: ..., value: ... } (legacy MarkedString)
+fn parse_hover(result: &serde_json::Value) -> Option<HoverInfo> {
+    let contents = result.get("contents")?;
+    let text = stringify_hover_contents(contents);
+    if text.is_empty() {
+        None
+    } else {
+        Some(HoverInfo { contents: text })
+    }
+}
+
+fn stringify_hover_contents(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Object(map) => {
+            // { kind, value } o { language, value }
+            map.get("value")
+                .and_then(|s| s.as_str())
+                .unwrap_or("")
+                .to_string()
+        }
+        serde_json::Value::Array(arr) => arr
+            .iter()
+            .map(stringify_hover_contents)
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
     }
 }
 
@@ -604,6 +709,37 @@ mod tests {
         assert_eq!(c.insert_text.as_deref(), Some("to_string()"));
         assert_eq!(c.kind.as_deref(), Some("Method"));
         assert_eq!(c.detail.as_deref(), Some("fn(&self) -> String"));
+    }
+
+    #[test]
+    fn parse_hover_string_simple() {
+        let v = serde_json::json!({ "contents": "hola" });
+        let h = parse_hover(&v).unwrap();
+        assert_eq!(h.contents, "hola");
+    }
+
+    #[test]
+    fn parse_hover_marked_object() {
+        let v = serde_json::json!({
+            "contents": { "kind": "markdown", "value": "**fn**(x: i32) -> i32" }
+        });
+        let h = parse_hover(&v).unwrap();
+        assert_eq!(h.contents, "**fn**(x: i32) -> i32");
+    }
+
+    #[test]
+    fn parse_hover_array_concatena() {
+        let v = serde_json::json!({
+            "contents": ["primero", { "value": "segundo" }, ""]
+        });
+        let h = parse_hover(&v).unwrap();
+        assert_eq!(h.contents, "primero\nsegundo");
+    }
+
+    #[test]
+    fn parse_hover_vacio_devuelve_none() {
+        let v = serde_json::json!({ "contents": "" });
+        assert!(parse_hover(&v).is_none());
     }
 
     #[test]
