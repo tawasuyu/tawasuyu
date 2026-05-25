@@ -103,6 +103,10 @@ enum SpriteKind {
     /// Cadáver del imp (`Dead`): tinte muy oscuro, apoyado al piso
     /// con scale reducida.
     Corpse,
+    /// Pickup de munición — cajita cyan brillante.
+    AmmoBox,
+    /// Pickup de vida — cruz verde brillante.
+    HealthKit,
 }
 
 #[derive(Clone, Copy)]
@@ -132,6 +136,10 @@ impl Sprite {
             SpriteKind::DyingImp => ((0.45, 0.12, 0.10), 0.65),
             // Corpse: mancha rojiza oscura tirada en el piso.
             SpriteKind::Corpse => ((0.22, 0.07, 0.06), 0.30),
+            // Cajita cyan — pickup de munición.
+            SpriteKind::AmmoBox => ((0.45, 0.85, 0.95), 0.35),
+            // Cruz verde brillante — pickup de vida.
+            SpriteKind::HealthKit => ((0.30, 0.95, 0.40), 0.35),
         }
     }
 }
@@ -234,6 +242,38 @@ struct TempLight {
 const FLASH_TTL: u32 = 4; // ticks (~115 ms)
 const FLASH_STRENGTH_IMPACT: f32 = 3.5;
 const FLASH_COLOR_IMPACT: (f32, f32, f32) = (1.0, 0.75, 0.30);
+
+// =====================================================================
+// Pickups — items que el jugador recoge pasando por encima
+// =====================================================================
+
+#[derive(Clone, Copy)]
+enum PickupKind {
+    Ammo,
+    Health,
+}
+
+#[derive(Clone, Copy)]
+struct Pickup {
+    x: f32,
+    y: f32,
+    kind: PickupKind,
+}
+
+const AMMO_PICKUP_AMOUNT: u32 = 12;
+const HEALTH_PICKUP_AMOUNT: u32 = 25;
+const HEALTH_MAX: u32 = 100;
+const PICKUP_RADIUS: f32 = 0.55;
+
+fn initial_pickups() -> Vec<Pickup> {
+    vec![
+        Pickup { x: 4.5, y: 7.5, kind: PickupKind::Ammo },
+        Pickup { x: 11.5, y: 8.5, kind: PickupKind::Health },
+        Pickup { x: 2.5, y: 11.5, kind: PickupKind::Ammo },
+        Pickup { x: 13.5, y: 14.5, kind: PickupKind::Health },
+        Pickup { x: 6.5, y: 14.5, kind: PickupKind::Ammo },
+    ]
+}
 
 /// Proyectil del jugador. Vida finita en ticks; se mueve a velocidad
 /// constante por (vx, vy); muere al chocar pared y deja un decal.
@@ -446,8 +486,34 @@ struct Model {
     decals: Vec<Decal>,
     static_sprites: Vec<Sprite>,
     enemies: Vec<Enemy>,
+    pickups: Vec<Pickup>,
     /// Flashes temporales (impactos, etc.). Se decrementan cada tick.
     temp_lights: Vec<TempLight>,
+    /// El jugador murió (HP llegó a 0). Bloquea movimiento + disparo;
+    /// Space pasa a reiniciar la partida.
+    game_over: bool,
+    /// Todos los enemigos muertos. Mismo handling que `game_over` —
+    /// Space reinicia.
+    victory: bool,
+}
+
+/// Estado inicial del jugador + estructuras dinámicas. Lo usan `init`
+/// y `reset_game` (al apretar Space tras game_over/victory).
+fn reset_game(m: &mut Model) {
+    m.px = 2.5;
+    m.py = 2.5;
+    m.pa = 0.6;
+    m.input = Input::default();
+    m.health = 100;
+    m.ammo = 50;
+    m.bullets.clear();
+    m.decals.clear();
+    m.enemies = initial_enemies();
+    m.pickups = initial_pickups();
+    m.temp_lights.clear();
+    m.game_over = false;
+    m.victory = false;
+    m.last_hit_material = 0;
 }
 
 #[derive(Clone)]
@@ -455,6 +521,7 @@ enum Msg {
     Tick,
     Key(KeyEvent),
     Fire,
+    Reset,
     Quit,
 }
 
@@ -487,17 +554,26 @@ impl App for Supay {
             decals: Vec::with_capacity(MAX_DECALS),
             static_sprites: initial_static_sprites(),
             enemies: initial_enemies(),
+            pickups: initial_pickups(),
             temp_lights: Vec::with_capacity(8),
+            game_over: false,
+            victory: false,
         }
     }
 
-    fn on_key(_: &Model, e: &KeyEvent) -> Option<Msg> {
+    fn on_key(model: &Model, e: &KeyEvent) -> Option<Msg> {
         if matches!(&e.key, Key::Named(NamedKey::Escape)) && e.state == KeyState::Pressed {
             return Some(Msg::Quit);
         }
-        // Disparo: Space al apretar (no al soltar).
+        // Space tiene dos modos según el estado: si el jugador está
+        // en game_over o victory, dispara reset; en juego normal,
+        // dispara una bala.
         if e.state == KeyState::Pressed && matches!(&e.key, Key::Named(NamedKey::Space)) {
-            return Some(Msg::Fire);
+            return Some(if model.game_over || model.victory {
+                Msg::Reset
+            } else {
+                Msg::Fire
+            });
         }
         Some(Msg::Key(e.clone()))
     }
@@ -509,7 +585,7 @@ impl App for Supay {
                 handle.quit();
             }
             Msg::Fire => {
-                if m.ammo > 0 {
+                if !m.game_over && !m.victory && m.ammo > 0 {
                     m.ammo -= 1;
                     let (sin, cos) = m.pa.sin_cos();
                     // Spawn ligeramente delante del jugador para que el
@@ -522,6 +598,9 @@ impl App for Supay {
                         ttl: BULLET_TTL,
                     });
                 }
+            }
+            Msg::Reset => {
+                reset_game(&mut m);
             }
             Msg::Key(e) => {
                 let pressed = e.state == KeyState::Pressed;
@@ -679,6 +758,15 @@ fn hud_panel(model: &Model) -> View<Msg> {
 // =====================================================================
 
 fn advance(m: &mut Model) {
+    // Si está en game_over o victory, el mundo se congela — sólo
+    // envejecen flashes/decals para que el efecto siga drenando.
+    if m.game_over || m.victory {
+        m.temp_lights.retain(|tl| tl.ttl > 0);
+        for tl in m.temp_lights.iter_mut() {
+            tl.ttl = tl.ttl.saturating_sub(1);
+        }
+        return;
+    }
     if m.input.turn_left {
         m.pa -= TURN_SPEED;
     }
@@ -733,6 +821,8 @@ fn advance(m: &mut Model) {
     advance_bullets(m);
     // AI y movimiento de enemies.
     advance_enemies(m);
+    // Pickups que el jugador toca.
+    consume_pickups(m);
     // Envejecimiento de decals + temp_lights.
     m.decals.retain(|d| d.ttl > 0);
     for d in m.decals.iter_mut() {
@@ -741,6 +831,42 @@ fn advance(m: &mut Model) {
     m.temp_lights.retain(|tl| tl.ttl > 0);
     for tl in m.temp_lights.iter_mut() {
         tl.ttl = tl.ttl.saturating_sub(1);
+    }
+    // Transiciones de fin de partida — chequeadas al final del tick.
+    if m.health == 0 {
+        m.game_over = true;
+    } else if m.enemies.iter().all(|e| matches!(e.state, EnemyState::Dead)) {
+        m.victory = true;
+    }
+}
+
+fn consume_pickups(m: &mut Model) {
+    // Cobramos los pickups que el jugador toca este tick. Usamos
+    // `drain_filter` manual con un swap_remove backwards-safe.
+    let px = m.px;
+    let py = m.py;
+    let mut picked: Vec<Pickup> = Vec::new();
+    m.pickups.retain(|p| {
+        let dx = p.x - px;
+        let dy = p.y - py;
+        if dx * dx + dy * dy < PICKUP_RADIUS * PICKUP_RADIUS {
+            picked.push(*p);
+            false
+        } else {
+            true
+        }
+    });
+    for p in picked {
+        match p.kind {
+            PickupKind::Ammo => {
+                m.ammo = m.ammo.saturating_add(AMMO_PICKUP_AMOUNT);
+                spawn_flash(m, p.x, p.y, (0.45, 0.85, 0.95), 2.0);
+            }
+            PickupKind::Health => {
+                m.health = (m.health + HEALTH_PICKUP_AMOUNT).min(HEALTH_MAX);
+                spawn_flash(m, p.x, p.y, (0.30, 0.95, 0.40), 2.2);
+            }
+        }
     }
 }
 
@@ -1095,7 +1221,10 @@ fn scene_pane(model: &Model) -> View<Msg> {
     let decals = model.decals.clone();
     let static_sprites = model.static_sprites.clone();
     let enemies = model.enemies.clone();
+    let pickups = model.pickups.clone();
     let temp_lights = model.temp_lights.clone();
+    let game_over = model.game_over;
+    let victory = model.victory;
 
     View::new(Style {
         size: Size {
@@ -1106,9 +1235,10 @@ fn scene_pane(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .clip(true)
-    .paint_with(move |scene, _ts, rect: PaintRect| {
+    .paint_with(move |scene, ts, rect: PaintRect| {
         draw_scene(
             scene,
+            ts,
             rect,
             px,
             py,
@@ -1118,8 +1248,14 @@ fn scene_pane(model: &Model) -> View<Msg> {
             &decals,
             &static_sprites,
             &enemies,
+            &pickups,
             &temp_lights,
         );
+        if game_over {
+            draw_overlay(scene, ts, rect, "MUERTO", "SPACE para reiniciar", (0.95, 0.30, 0.25));
+        } else if victory {
+            draw_overlay(scene, ts, rect, "VICTORIA", "SPACE para reiniciar", (0.50, 0.95, 0.55));
+        }
     })
 }
 
@@ -1137,6 +1273,7 @@ const AMBIENT: f32 = 0.18;
 #[allow(clippy::too_many_arguments)]
 fn draw_scene(
     scene: &mut llimphi_ui::llimphi_raster::vello::Scene,
+    _ts: &mut llimphi_ui::llimphi_text::Typesetter,
     rect: PaintRect,
     px: f32,
     py: f32,
@@ -1146,6 +1283,7 @@ fn draw_scene(
     decals: &[Decal],
     static_sprites: &[Sprite],
     enemies: &[Enemy],
+    pickups: &[Pickup],
     temp_lights: &[TempLight],
 ) {
     let w = rect.w as f64;
@@ -1245,9 +1383,9 @@ fn draw_scene(
 
     // --- Pass 2: sprites billboarded con z-test por columna ---
     // Combinamos en una sola lista todos los sprites del frame
-    // (estáticos + enemies según su estado + bullets + decals) para
-    // que `draw_sprites` los ordene por distancia y pinte de atrás
-    // hacia adelante.
+    // (estáticos + enemies según su estado + pickups + bullets +
+    // decals) para que `draw_sprites` los ordene por distancia y
+    // pinte de atrás hacia adelante.
     let mut all_sprites: Vec<Sprite> = static_sprites.to_vec();
     for e in enemies {
         let (kind, scale) = match e.state {
@@ -1256,6 +1394,13 @@ fn draw_scene(
             EnemyState::Dead => (SpriteKind::Corpse, 0.30),
         };
         all_sprites.push(Sprite { x: e.x, y: e.y, kind, scale });
+    }
+    for p in pickups {
+        let kind = match p.kind {
+            PickupKind::Ammo => SpriteKind::AmmoBox,
+            PickupKind::Health => SpriteKind::HealthKit,
+        };
+        all_sprites.push(Sprite { x: p.x, y: p.y, kind, scale: 0.35 });
     }
     for b in bullets {
         all_sprites.push(Sprite {
@@ -1418,6 +1563,66 @@ fn draw_sprites(
             );
         }
     }
+}
+
+/// Overlay full-screen para `game_over` o `victory`: rect negro
+/// semi-transparente + título grande + subtítulo. Texto via parley
+/// con el typesetter cacheado del runtime.
+fn draw_overlay(
+    scene: &mut llimphi_ui::llimphi_raster::vello::Scene,
+    ts: &mut llimphi_ui::llimphi_text::Typesetter,
+    rect: PaintRect,
+    title: &str,
+    subtitle: &str,
+    title_color: (f32, f32, f32),
+) {
+    // Rect negro semi-transparente.
+    let scrim = llimphi_ui::llimphi_raster::kurbo::Rect::new(
+        rect.x as f64,
+        rect.y as f64,
+        (rect.x + rect.w) as f64,
+        (rect.y + rect.h) as f64,
+    );
+    scene.fill(
+        Fill::NonZero,
+        llimphi_ui::llimphi_raster::kurbo::Affine::IDENTITY,
+        Color::from_rgba8(0, 0, 0, 175),
+        None,
+        &scrim,
+    );
+
+    let cx = rect.x as f64 + rect.w as f64 * 0.5;
+    let cy = rect.y as f64 + rect.h as f64 * 0.5;
+    let tcolor = rgb(title_color.0, title_color.1, title_color.2);
+
+    // Título grande centrado.
+    let title_size = 64.0_f32;
+    let title_block = llimphi_ui::llimphi_text::TextBlock {
+        text: title,
+        size_px: title_size,
+        color: tcolor,
+        origin: (cx - rect.w as f64 * 0.5, cy - title_size as f64),
+        max_width: Some(rect.w),
+        alignment: llimphi_ui::llimphi_text::Alignment::Center,
+        line_height: 1.0,
+    };
+    let layout = llimphi_ui::llimphi_text::layout_block(ts, &title_block);
+    llimphi_ui::llimphi_text::draw_layout(scene, &layout, tcolor, title_block.origin);
+
+    // Subtítulo más chico debajo.
+    let sub_size = 18.0_f32;
+    let sub_color = Color::from_rgba8(230, 220, 200, 220);
+    let sub_block = llimphi_ui::llimphi_text::TextBlock {
+        text: subtitle,
+        size_px: sub_size,
+        color: sub_color,
+        origin: (cx - rect.w as f64 * 0.5, cy + 8.0),
+        max_width: Some(rect.w),
+        alignment: llimphi_ui::llimphi_text::Alignment::Center,
+        line_height: 1.0,
+    };
+    let layout = llimphi_ui::llimphi_text::layout_block(ts, &sub_block);
+    llimphi_ui::llimphi_text::draw_layout(scene, &layout, sub_color, sub_block.origin);
 }
 
 /// Crosshair central — dos rectángulos finos cruzados con un punto
