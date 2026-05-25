@@ -13,13 +13,13 @@ name = "matilda"
 path = "src/main.rs"
 
 [dependencies]
-matilda-core = { path = "../../modules/matilda/matilda-core" }
-matilda-config = { path = "../../modules/matilda/matilda-config" }
-matilda-plan = { path = "../../modules/matilda/matilda-plan" }
-matilda-apply = { path = "../../modules/matilda/matilda-apply" }
-matilda-ghost = { path = "../../modules/matilda/matilda-ghost" }
-matilda-linker = { path = "../../modules/matilda/matilda-linker" }
-matilda-discover = { path = "../../modules/matilda/matilda-discover" }
+matilda-core = { path = "../matilda-core" }
+matilda-config = { path = "../matilda-config" }
+matilda-plan = { path = "../matilda-plan" }
+matilda-apply = { path = "../matilda-apply" }
+matilda-ghost = { path = "../matilda-ghost" }
+matilda-linker = { path = "../matilda-linker" }
+matilda-discover = { path = "../matilda-discover" }
 clap = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

@@ -13,5 +13,5 @@ name = "agorapura"
 path = "src/main.rs"
 
 [dependencies]
-agorapura-core = { path = "../../modules/agorapura/agorapura-core" }
-agorapura-graph = { path = "../../modules/agorapura/agorapura-graph" }
+agorapura-core = { path = "../agora-core" }
+agorapura-graph = { path = "../agora-graph" }

@@ -6,7 +6,7 @@ license = { workspace = true }
 description = "Cosmobiología — cliente WASM. Reusa cosmobiologia-render para componer la rueda en SVG localmente, sin round-trip al server por cada interacción."
 
 [dependencies]
-cosmobiologia-render = { path = "../cosmobiologia-render" }
+cosmobiologia-render = { path = "../cosmos-render" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

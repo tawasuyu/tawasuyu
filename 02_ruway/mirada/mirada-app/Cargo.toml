@@ -13,8 +13,8 @@ name = "mirada"
 path = "src/main.rs"
 
 [dependencies]
-mirada-brain = { path = "../../modules/mirada/mirada-brain" }
-mirada-link = { path = "../../modules/mirada/mirada-link" }
-nahual-theme = { path = "../../modules/nahual/libs/theme" }
-nahual-launcher = { path = "../../modules/nahual/libs/launcher" }
+mirada-brain = { path = "../mirada-brain" }
+mirada-link = { path = "../mirada-link" }
+nahual-theme = { path = "../../nahual/libs/theme" }
+nahual-launcher = { path = "../../nahual/libs/launcher" }
 gpui = { workspace = true }

@@ -14,9 +14,9 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 ulid = { workspace = true }
-brahman-card = { path = "../brahman-card" }
-chasqui-card = { path = "../../modules/chasqui/card" }
-nahual-meta-schema = { path = "../../modules/nahual/libs/meta-schema" }
+brahman-card = { path = "../card-core" }
+chasqui-card = { path = "../../../02_ruway/chasqui/chasqui-card" }
+nahual-meta-schema = { path = "../../../02_ruway/nahual/libs/meta-schema" }
 nickel-lang = "2.0.0"
 
 [dev-dependencies]

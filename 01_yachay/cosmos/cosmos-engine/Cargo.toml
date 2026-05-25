@@ -6,9 +6,9 @@ license = { workspace = true }
 description = "Tahuantinsuyu — bridge entre el modelo agnóstico y eternal-astrology. Produce RenderModel agnóstico para el canvas."
 
 [dependencies]
-cosmobiologia-model = { path = "../cosmobiologia-model" }
-cosmobiologia-render = { path = "../cosmobiologia-render" }
-cosmobiologia-corpus = { path = "../cosmobiologia-corpus" }
+cosmobiologia-model = { path = "../cosmos-model" }
+cosmobiologia-render = { path = "../cosmos-render" }
+cosmobiologia-corpus = { path = "../cosmos-corpus" }
 serde = { workspace = true }
 thiserror = { workspace = true }
 
@@ -17,11 +17,11 @@ thiserror = { workspace = true }
 # Sergio. Si el path no existe (CI sin eternal checked out), el feature
 # `eternal-bridge` se apaga.
 [dependencies.eternal-astrology]
-path = "../../../../../eternal/eternal-astrology"
+path = "../cosmos-astrology"
 optional = true
 
 [dependencies.eternal-sky]
-path = "../../../../../eternal/eternal-sky"
+path = "../cosmos-sky"
 optional = true
 
 [features]

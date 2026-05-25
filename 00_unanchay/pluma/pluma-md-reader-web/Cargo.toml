@@ -7,7 +7,7 @@ authors.workspace = true
 publish.workspace = true
 
 [dependencies]
-fana-md = { path = "../fana-md" }
+fana-md = { path = "../pluma-md" }
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
 js-sys.workspace = true

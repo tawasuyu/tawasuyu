@@ -5,13 +5,11 @@ resolver = "2"
 # Cuadrantes — agregar a medida que se migran
 # ============================================================
 members = [
-    # 00_unanchay/ — PERCIBIR (pluma, khipu, rimay, chaka, pineal)
-    # 01_yachay/   — CONOCER  (cosmos, dominium, nakui)
-    # 02_ruway/    — HACER    (mirada, shuma, nahual, chasqui, takiy)
-    # 03_ukupacha/ — RAÍZ     (arje, wawa[excluido], agora, minga)
-    # shared/      — sandokan, auth, card, ssh, format
-    # web/         — landing (no es producto, no publicable)
-    # auto-generated
+    # 00_unanchay/ — PERCIBIR
+    # 01_yachay/   — CONOCER
+    # 02_ruway/    — HACER
+    # 03_ukupacha/ — RAÍZ (wawa excluido)
+    # shared/, web/
     "00_unanchay/chaka/chaka-app",
     "00_unanchay/chaka/chaka-bcd",
     "00_unanchay/chaka/chaka-codegen",
@@ -112,11 +110,31 @@ members = [
     "02_ruway/mirada/mirada-link",
     "02_ruway/mirada/mirada-portal",
     "02_ruway/mirada/mirada-protocol",
+    "02_ruway/nahual/libs/bus",
+    "02_ruway/nahual/libs/core",
+    "02_ruway/nahual/libs/launcher",
+    "02_ruway/nahual/libs/meta-runtime",
+    "02_ruway/nahual/libs/meta-schema",
+    "02_ruway/nahual/libs/providers/fs",
+    "02_ruway/nahual/libs/providers/sqlite",
+    "02_ruway/nahual/libs/theme",
     "02_ruway/nahual/nahual-database-explorer",
     "02_ruway/nahual/nahual-file-explorer",
     "02_ruway/nahual/nahual-image-viewer",
     "02_ruway/nahual/nahual-shell",
     "02_ruway/nahual/nahual-text-viewer",
+    "02_ruway/nahual/widgets/app-header",
+    "02_ruway/nahual/widgets/banner",
+    "02_ruway/nahual/widgets/card",
+    "02_ruway/nahual/widgets/container_core",
+    "02_ruway/nahual/widgets/meta-form",
+    "02_ruway/nahual/widgets/splitter",
+    "02_ruway/nahual/widgets/stat-card",
+    "02_ruway/nahual/widgets/tabs",
+    "02_ruway/nahual/widgets/text_input",
+    "02_ruway/nahual/widgets/theme-switcher",
+    "02_ruway/nahual/widgets/tiled",
+    "02_ruway/nahual/widgets/tree",
     "02_ruway/shuma/baremetal/matilda-app",
     "02_ruway/shuma/baremetal/matilda-apply",
     "02_ruway/shuma/baremetal/matilda-config",
@@ -235,7 +253,7 @@ bincode = "1"
 base64 = "0.22"
 
 # === Errores ===
-thiserror = "2"
+thiserror = "2"           # bump uniforme; arje (era 1) puede requerir ajustes menores
 anyhow = "1"
 
 # === Async ===
@@ -262,7 +280,9 @@ aes-gcm = "0.10"
 argon2 = "0.5"
 rand = "0.8"
 
-# === WASM ===
+# === WASM (arje) ===
+# wasmi 1.0: unifica la versión con renaser (su kernel ya corre 1.0), para
+# que el ABI WASM del host sea idéntico en Linux y en bare-metal.
 wasmi = "1.0"
 wat = "1"
 
@@ -275,7 +295,7 @@ libp2p = { version = "0.56", features = ["tokio", "tcp", "noise", "yamux", "macr
 libp2p-stream = "=0.4.0-alpha"
 libp2p-allow-block-list = "0.6"
 
-# === SSH (shared/ssh, sandokan remote, shuma baremetal) ===
+# === SSH (brahman-ssh-multiplex, sandokan RemoteEngine, matilda) ===
 russh = "0.54"
 
 # === Math determinista cross-platform (dominium) ===
@@ -293,14 +313,106 @@ tree-sitter-go = "0.23"
 notify = "6.1"
 
 # === FUSE (minga-vfs) ===
+# default-features = false: prescinde de pkg-config/libfuse-dev en build.
+# El montaje pasa a ser Rust puro (vía el helper `fusermount3` en runtime).
 fuser = { version = "0.15", default-features = false }
 
-# === CLI / auth ===
+# === CLI / auth (minga) ===
 clap = { version = "4", features = ["derive"] }
 rpassword = "7"
 
-# === PAM (shared/auth) ===
+# === PAM (brahman-auth) ===
 pam = "0.8"
 
 # === D-Bus (arje compat) ===
 zbus = { version = "4", default-features = false, features = ["tokio"] }
+
+# === Tests ===
+tempfile = "3"
+
+# === GPUI (nahual) ===
+gpui = "0.2"
+
+# === Filesystem helpers ===
+directories = "5"
+
+# === WASM web (gioser) ===
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = "0.3"
+glam = "0.30"
+
+# === Markdown (pluma) ===
+pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
+
+# ============================================================
+# Intra-workspace deps de nahual (referenciadas por workspace = true)
+# ============================================================
+nahual-core = { path = "02_ruway/nahual/libs/core" }
+nahual-theme = { path = "02_ruway/nahual/libs/theme" }
+nahual-bus = { path = "02_ruway/nahual/libs/bus" }
+nahual-provider-fs = { path = "02_ruway/nahual/libs/providers/fs" }
+nahual-provider-sqlite = { path = "02_ruway/nahual/libs/providers/sqlite" }
+nahual-widget-tree = { path = "02_ruway/nahual/widgets/tree" }
+nahual-widget-container-core = { path = "02_ruway/nahual/widgets/container_core" }
+nahual-widget-splitter = { path = "02_ruway/nahual/widgets/splitter" }
+nahual-widget-tabs = { path = "02_ruway/nahual/widgets/tabs" }
+nahual-widget-tiled = { path = "02_ruway/nahual/widgets/tiled" }
+nahual-widget-text-input = { path = "02_ruway/nahual/widgets/text_input" }
+nahual-file-explorer = { path = "02_ruway/nahual/nahual-file-explorer" }
+nahual-database-explorer = { path = "02_ruway/nahual/nahual-database-explorer" }
+nahual-text-viewer = { path = "02_ruway/nahual/nahual-text-viewer" }
+nahual-image-viewer = { path = "02_ruway/nahual/nahual-image-viewer" }
+
+# ============================================================
+# Intra-workspace deps de pineal (módulo de gráficos)
+# ============================================================
+pineal-core = { path = "00_unanchay/pineal/pineal-core" }
+pineal-render = { path = "00_unanchay/pineal/pineal-render" }
+pineal-cartesian = { path = "00_unanchay/pineal/pineal-cartesian" }
+pineal-stream = { path = "00_unanchay/pineal/pineal-stream" }
+pineal-mesh = { path = "00_unanchay/pineal/pineal-mesh" }
+pineal-financial = { path = "00_unanchay/pineal/pineal-financial" }
+pineal-polar = { path = "00_unanchay/pineal/pineal-polar" }
+pineal-heatmap = { path = "00_unanchay/pineal/pineal-heatmap" }
+pineal-treemap = { path = "00_unanchay/pineal/pineal-treemap" }
+pineal-flow = { path = "00_unanchay/pineal/pineal-flow" }
+pineal-phosphor = { path = "00_unanchay/pineal/pineal-phosphor" }
+pineal-export = { path = "00_unanchay/pineal/pineal-export" }
+pineal = { path = "00_unanchay/pineal/pineal-umbrella" }
+
+# === auto: declarados por crates internos faltantes ===
+eternal-coords = { path = "01_yachay/cosmos/cosmos-coords" }
+eternal-core = { path = "01_yachay/cosmos/cosmos-core" }
+eternal-ephemeris = { path = "01_yachay/cosmos/cosmos-ephemeris" }
+eternal-time = { path = "01_yachay/cosmos/cosmos-time" }
+eternal-wcs = { path = "01_yachay/cosmos/cosmos-wcs" }
+
+# === auto: externas de eternal ===
+celestial-eop-data = { version = "0.1"}
+approx = "0.5"
+byteorder = "1.5"
+cc = "1.0"
+chrono = "0.4"
+crc32fast = "1.4"
+criterion = "0.5"
+csv = "1.4"
+flate2 = "1.0"
+glob = "0.3"
+indicatif = "0.18"
+lz4_flex = "0.11"
+memmap2 = "0.9"
+mockito = "1.0"
+ndarray = "0.15"
+num-traits = "0.2"
+once_cell = "1.19"
+png = "0.18"
+proptest = "1.4"
+quick-xml = "0.31"
+rayon = "1.8"
+regex = "1.11"
+reqwest = "0.12"
+tiff = "0.11"
+wide = "0.7"
+wiremock = "0.6"

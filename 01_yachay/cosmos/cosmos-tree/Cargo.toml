@@ -6,9 +6,9 @@ license = { workspace = true }
 description = "Tahuantinsuyu — explorador izquierdo (Groups/Contacts/Charts) sobre yahweh-widget-tree."
 
 [dependencies]
-cosmobiologia-model = { path = "../cosmobiologia-model" }
-cosmobiologia-store = { path = "../cosmobiologia-store" }
+cosmobiologia-model = { path = "../cosmos-model" }
+cosmobiologia-store = { path = "../cosmos-store" }
 nahual-theme = { workspace = true }
 nahual-widget-tree = { workspace = true }
-nahual-widget-text-input = { path = "../../nahual/widgets/text_input" }
+nahual-widget-text-input = { path = "../../../02_ruway/nahual/widgets/text_input" }
 gpui = { workspace = true }

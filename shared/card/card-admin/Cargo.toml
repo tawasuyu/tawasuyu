@@ -9,8 +9,8 @@ publish.workspace = true
 description = "Brahman — admin API: snapshot del estado del broker (sesiones + matches) por Unix socket, formato JSON."
 
 [dependencies]
-brahman-broker = { path = "../brahman-broker" }
-brahman-card = { path = "../brahman-card" }
+brahman-broker = { path = "../../../02_ruway/chasqui/chasqui-broker" }
+brahman-card = { path = "../card-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

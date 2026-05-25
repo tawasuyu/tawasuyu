@@ -10,8 +10,8 @@ publish.workspace = true
 [dependencies]
 sandokan-core = { path = "../sandokan-core" }
 sandokan-lifecycle = { path = "../sandokan-lifecycle" }
-arje-incarnate = { path = "../../init/arje-incarnate" }
-brahman-card = { path = "../../protocol/brahman-card" }
+arje-incarnate = { path = "../../../03_ukupacha/arje/init/arje-incarnate" }
+brahman-card = { path = "../../card/card-core" }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 nix = { workspace = true }

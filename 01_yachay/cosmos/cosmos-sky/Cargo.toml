@@ -17,7 +17,7 @@ eternal-core.workspace = true
 eternal-time.workspace = true
 eternal-coords.workspace = true
 eternal-ephemeris.workspace = true
-eternal-validation = { path = "../eternal-validation" }
+eternal-validation = { path = "../cosmos-validation" }
 libm.workspace = true
 thiserror.workspace = true
 

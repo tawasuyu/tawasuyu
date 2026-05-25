@@ -14,7 +14,7 @@ name = "arje-echo"
 path = "src/main.rs"
 
 [dependencies]
-arje-card = { path = "../../protocol/arje-card" }
+arje-card = { path = "../../arje-card" }
 arje-bus = { path = "../arje-bus" }
 anyhow = { workspace = true }
 tokio = { workspace = true }

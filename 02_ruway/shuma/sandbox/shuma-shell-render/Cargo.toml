@@ -9,4 +9,4 @@ description = "shuma — draw-plan agnóstico del Lienzo de Contexto: layout del
 
 [dependencies]
 shuma-intent = { path = "../shuma-intent" }
-pineal-render = { path = "../../pineal/render" }
+pineal-render = { path = "../../../../00_unanchay/pineal/pineal-render" }

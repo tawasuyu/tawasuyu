@@ -10,9 +10,9 @@ description = "Capa de integración del brain: introspect socket + autopromote l
 arje-brain-rules = { path = "../arje-brain-rules" }
 arje-brain-cognitive = { path = "../arje-brain-cognitive" }
 arje-brain-audit = { path = "../arje-brain-audit" }
-arje-card = { path = "../../protocol/arje-card" }
+arje-card = { path = "../../arje-card" }
 arje-cas = { path = "../arje-cas" }
-brahman-cards = { path = "../../protocol/brahman-cards" }
+brahman-cards = { path = "../../../../shared/card/cards" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 ulid = { workspace = true }

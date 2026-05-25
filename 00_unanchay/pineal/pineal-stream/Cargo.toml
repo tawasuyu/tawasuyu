@@ -8,8 +8,8 @@ publish = { workspace = true }
 description = "Lapaloma — widget de telemetría tipo osciloscopio. Ring buffer + envelope min/max por columna + render en dos segmentos (split at head)."
 
 [dependencies]
-pineal-core = { path = "../core" }
-pineal-render = { path = "../render" }
+pineal-core = { path = "../pineal-core" }
+pineal-render = { path = "../pineal-render" }
 gpui = { workspace = true, optional = true }
 
 [features]

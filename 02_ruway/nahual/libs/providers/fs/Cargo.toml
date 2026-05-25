@@ -10,4 +10,4 @@ nahual-core = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 notify = { workspace = true }
-shuma-discern = { path = "../../../../shuma/shuma-discern" }
+shuma-discern = { path = "../../../../shuma/sandbox/shuma-discern" }

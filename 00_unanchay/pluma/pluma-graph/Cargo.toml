@@ -8,5 +8,5 @@ publish.workspace = true
 description = "fana — grafo narrativo (DAG de NarrativeAtoms): inserción, orden topológico y propagación de mutaciones en cascada."
 
 [dependencies]
-fana-core = { path = "../fana-core" }
+fana-core = { path = "../pluma-core" }
 uuid = { workspace = true }

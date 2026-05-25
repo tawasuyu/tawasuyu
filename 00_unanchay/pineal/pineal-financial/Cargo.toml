@@ -8,9 +8,9 @@ publish = { workspace = true }
 description = "Lapaloma — gráficos financieros. OHLC / candlesticks con agregación que preserva volatilidad (no LTTB, time-bucketing con max/min de wicks)."
 
 [dependencies]
-pineal-core = { path = "../core" }
-pineal-render = { path = "../render" }
-pineal-cartesian = { path = "../cartesian" }
+pineal-core = { path = "../pineal-core" }
+pineal-render = { path = "../pineal-render" }
+pineal-cartesian = { path = "../pineal-cartesian" }
 gpui = { workspace = true, optional = true }
 
 [features]

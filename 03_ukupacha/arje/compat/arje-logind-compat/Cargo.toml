@@ -10,7 +10,7 @@ name = "arje-logind-compat"
 path = "src/main.rs"
 
 [dependencies]
-arje-card = { path = "../../protocol/arje-card" }
+arje-card = { path = "../../arje-card" }
 arje-bus = { path = "../../runtime/arje-bus" }
 anyhow = { workspace = true }
 tokio = { workspace = true }

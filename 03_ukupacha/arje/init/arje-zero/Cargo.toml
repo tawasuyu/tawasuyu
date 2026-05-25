@@ -11,7 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Lib crates del fractal — orden: contratos → infra → encarnación → orquestación
-arje-card = { path = "../../protocol/arje-card" }
+arje-card = { path = "../../arje-card" }
 arje-bus = { path = "../../runtime/arje-bus" }
 arje-cas = { path = "../../runtime/arje-cas" }
 arje-kernel = { path = "../arje-kernel" }
@@ -22,10 +22,10 @@ arje-brain = { path = "../../runtime/arje-brain" }
 arje-echo = { path = "../../runtime/arje-echo" }   # solo para constantes del demo
 
 # Brahman protocol — handshake para módulos brahman conscientes
-brahman-handshake = { path = "../../protocol/brahman-handshake" }
-brahman-broker = { path = "../../protocol/brahman-broker" }
-brahman-admin = { path = "../../protocol/brahman-admin" }
-brahman-net = { path = "../../protocol/brahman-net" }
+brahman-handshake = { path = "../../../../shared/card/card-handshake" }
+brahman-broker = { path = "../../../../02_ruway/chasqui/chasqui-broker" }
+brahman-admin = { path = "../../../../shared/card/card-admin" }
+brahman-net = { path = "../../../../shared/card/card-net" }
 
 # Runtime / utilidades de PID 1
 serde = { workspace = true }

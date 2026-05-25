@@ -13,4 +13,4 @@ name = "mirada-ctl"
 path = "src/main.rs"
 
 [dependencies]
-mirada-brain = { path = "../../modules/mirada/mirada-brain" }
+mirada-brain = { path = "../mirada-brain" }

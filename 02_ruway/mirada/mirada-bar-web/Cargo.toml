@@ -7,7 +7,7 @@ authors.workspace = true
 publish.workspace = true
 
 [dependencies]
-barra-core = { path = "../barra-core" }
+barra-core = { path = "../mirada-bar-core" }
 wasm-bindgen.workspace = true
 js-sys.workspace = true
 

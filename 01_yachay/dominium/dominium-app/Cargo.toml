@@ -13,11 +13,11 @@ name = "dominium"
 path = "src/main.rs"
 
 [dependencies]
-dominium-core = { path = "../../modules/dominium/dominium-core" }
-dominium-physics = { path = "../../modules/dominium/dominium-physics" }
-dominium-iso = { path = "../../modules/dominium/dominium-iso" }
-dominium-render-plan = { path = "../../modules/dominium/dominium-render-plan" }
-dominium-canvas-gpui = { path = "../../modules/dominium/dominium-canvas-gpui" }
-nahual-theme = { path = "../../modules/nahual/libs/theme" }
-nahual-launcher = { path = "../../modules/nahual/libs/launcher" }
+dominium-core = { path = "../dominium-core" }
+dominium-physics = { path = "../dominium-physics" }
+dominium-iso = { path = "../dominium-iso" }
+dominium-render-plan = { path = "../dominium-render-plan" }
+dominium-canvas-gpui = { path = "../dominium-canvas-gpui" }
+nahual-theme = { path = "../../../02_ruway/nahual/libs/theme" }
+nahual-launcher = { path = "../../../02_ruway/nahual/libs/launcher" }
 gpui = { workspace = true }

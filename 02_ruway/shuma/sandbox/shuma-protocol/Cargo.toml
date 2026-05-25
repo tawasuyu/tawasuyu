@@ -10,7 +10,7 @@ description = "Wire protocol entre shipote-daemon y clientes (cli/gui). Postcard
 
 [dependencies]
 shuma-card = { path = "../shuma-card" }
-brahman-card = { path = "../../../protocol/brahman-card" }
+brahman-card = { path = "../../../../shared/card/card-core" }
 serde = { workspace = true }
 postcard = { workspace = true }
 thiserror = { workspace = true }

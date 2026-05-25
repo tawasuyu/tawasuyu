@@ -16,4 +16,4 @@ path = "src/main.rs"
 gpui = { workspace = true }
 nahual-theme = { workspace = true }
 nahual-widget-text-input = { workspace = true }
-brahman-auth = { path = "../../protocol/brahman-auth" }
+brahman-auth = { path = "../../../shared/auth/auth-core" }

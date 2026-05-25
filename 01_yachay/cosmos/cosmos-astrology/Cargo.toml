@@ -13,8 +13,8 @@ publish = false
 eternal-core.workspace = true
 eternal-ephemeris.workspace = true
 eternal-time.workspace = true
-eternal-sky = { path = "../eternal-sky" }
-eternal-validation = { path = "../eternal-validation" }
+eternal-sky = { path = "../cosmos-sky" }
+eternal-validation = { path = "../cosmos-validation" }
 libm.workspace = true
 thiserror.workspace = true
 

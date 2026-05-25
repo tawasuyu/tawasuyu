@@ -6,13 +6,13 @@ license.workspace = true
 description = "Explorador GPUI del event log de Nakui: timeline de seeds + morphisms, schema hashes, breakdown por entity. Standalone (lee un .jsonl) — futura integración con sidecar brahman cuando nakui se daemonice."
 
 [dependencies]
-nakui-core = { path = "../../modules/nakui/core" }
-nahual-meta-runtime = { path = "../../modules/nahual/libs/meta-runtime" }
-nahual-widget-banner = { path = "../../modules/nahual/widgets/banner" }
-nahual-widget-card = { path = "../../modules/nahual/widgets/card" }
-nahual-theme = { path = "../../modules/nahual/libs/theme" }
-nahual-launcher = { path = "../../modules/nahual/libs/launcher" }
-nahual-widget-app-header = { path = "../../modules/nahual/widgets/app-header" }
+nakui-core = { path = "../nakui-core" }
+nahual-meta-runtime = { path = "../../../02_ruway/nahual/libs/meta-runtime" }
+nahual-widget-banner = { path = "../../../02_ruway/nahual/widgets/banner" }
+nahual-widget-card = { path = "../../../02_ruway/nahual/widgets/card" }
+nahual-theme = { path = "../../../02_ruway/nahual/libs/theme" }
+nahual-launcher = { path = "../../../02_ruway/nahual/libs/launcher" }
+nahual-widget-app-header = { path = "../../../02_ruway/nahual/widgets/app-header" }
 gpui = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true, features = ["serde"] }

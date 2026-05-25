@@ -13,4 +13,4 @@ name = "yachay"
 path = "src/main.rs"
 
 [dependencies]
-yachay-core = { path = "../../modules/yachay/yachay-core" }
+yachay-core = { path = "../pluma-notebook-core" }

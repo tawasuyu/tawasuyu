@@ -6,10 +6,10 @@ license = { workspace = true }
 description = "Tahuantinsuyu — widget GPUI del canvas astrológico. Capas modulares, jog-dial perimetral, estado unificado."
 
 [dependencies]
-cosmobiologia-engine = { path = "../cosmobiologia-engine" }
-cosmobiologia-model = { path = "../cosmobiologia-model" }
-cosmobiologia-modules = { path = "../cosmobiologia-modules" }
-cosmobiologia-render = { path = "../cosmobiologia-render" }
-cosmobiologia-theme = { path = "../cosmobiologia-theme" }
+cosmobiologia-engine = { path = "../cosmos-engine" }
+cosmobiologia-model = { path = "../cosmos-model" }
+cosmobiologia-modules = { path = "../cosmos-modules" }
+cosmobiologia-render = { path = "../cosmos-render" }
+cosmobiologia-theme = { path = "../cosmos-theme" }
 nahual-theme = { workspace = true }
 gpui = { workspace = true }

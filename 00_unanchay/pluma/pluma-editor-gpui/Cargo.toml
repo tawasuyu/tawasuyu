@@ -8,6 +8,6 @@ publish.workspace = true
 description = "fana — backend GPUI del editor DAG: pinta un RenderPlan como bloques de átomo, conectores de dependencia y osciloscopio de coherencia."
 
 [dependencies]
-fana-render-plan = { path = "../fana-render-plan" }
-nahual-theme = { path = "../../nahual/libs/theme" }
+fana-render-plan = { path = "../pluma-render-plan" }
+nahual-theme = { path = "../../../02_ruway/nahual/libs/theme" }
 gpui = { workspace = true }

@@ -6,7 +6,7 @@ license = { workspace = true }
 description = "Tahuantinsuyu — modelo y matemática de render agnósticos de surface. Compila a WASM y a nativo; el canvas gpui y el cliente web lo consumen para emitir las primitivas comunes de la rueda."
 
 [dependencies]
-cosmobiologia-model = { path = "../cosmobiologia-model" }
+cosmobiologia-model = { path = "../cosmos-model" }
 serde = { workspace = true }
 
 [lib]

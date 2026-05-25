@@ -6,10 +6,10 @@ license = { workspace = true }
 description = "Cosmobiología — server HTTP single-user. axum + cosmobiologia-engine. Sirve cartas y assets del cliente web. CRUD completo de groups/contacts/charts."
 
 [dependencies]
-cosmobiologia-engine = { path = "../../modules/cosmobiologia/cosmobiologia-engine" }
-cosmobiologia-model = { path = "../../modules/cosmobiologia/cosmobiologia-model" }
-cosmobiologia-render = { path = "../../modules/cosmobiologia/cosmobiologia-render" }
-cosmobiologia-store = { path = "../../modules/cosmobiologia/cosmobiologia-store" }
+cosmobiologia-engine = { path = "../cosmos-engine" }
+cosmobiologia-model = { path = "../cosmos-model" }
+cosmobiologia-render = { path = "../cosmos-render" }
+cosmobiologia-store = { path = "../cosmos-store" }
 
 tokio = { workspace = true }
 serde = { workspace = true }

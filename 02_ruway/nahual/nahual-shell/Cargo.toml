@@ -27,8 +27,8 @@ serde_json = { workspace = true }
 notify = { workspace = true }
 
 # Brahman protocol — sidecar thread que se presenta al Init.
-brahman-card = { path = "../../protocol/brahman-card" }
-brahman-sidecar = { path = "../../protocol/brahman-sidecar" }
+brahman-card = { path = "../../../shared/card/card-core" }
+brahman-sidecar = { path = "../../../shared/card/card-sidecar" }
 ulid = { workspace = true }
 
 [[bin]]

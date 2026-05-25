@@ -9,8 +9,8 @@ description = "Lapaloma — demo de candlesticks OHLC. Random walk sintético de
 
 [dependencies]
 gpui = { workspace = true }
-nahual-launcher = { path = "../../modules/nahual/libs/launcher" }
-nahual-theme = { path = "../../modules/nahual/libs/theme" }
-pineal-render = { path = "../../modules/pineal/render", features = ["gpui"] }
-pineal-cartesian = { path = "../../modules/pineal/cartesian" }
-pineal-financial = { path = "../../modules/pineal/financial" }
+nahual-launcher = { path = "../../../../02_ruway/nahual/libs/launcher" }
+nahual-theme = { path = "../../../../02_ruway/nahual/libs/theme" }
+pineal-render = { path = "../../pineal-render", features = ["gpui"] }
+pineal-cartesian = { path = "../../pineal-cartesian" }
+pineal-financial = { path = "../../pineal-financial" }

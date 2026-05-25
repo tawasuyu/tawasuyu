@@ -967,7 +967,7 @@ fn load_corpus() -> Option<Corpus> {
             Err(e) => eprintln!("[canvas] {path}: {e}"),
         }
     }
-    Corpus::desde_ron(include_str!("../../cosmobiologia-corpus/ejemplo.ron")).ok()
+    Corpus::desde_ron(include_str!("../../cosmos-corpus/ejemplo.ron")).ok()
 }
 
 /// Color de cada tajada vivencial.

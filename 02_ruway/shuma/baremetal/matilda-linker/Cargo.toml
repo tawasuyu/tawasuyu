@@ -10,4 +10,4 @@ description = "matilda — el enlace SSH: conecta a un servidor y aplica los App
 [dependencies]
 matilda-apply = { path = "../matilda-apply" }
 matilda-ghost = { path = "../matilda-ghost" }
-brahman-ssh-multiplex = { path = "../../../protocol/brahman-ssh-multiplex" }
+brahman-ssh-multiplex = { path = "../../../../shared/ssh" }

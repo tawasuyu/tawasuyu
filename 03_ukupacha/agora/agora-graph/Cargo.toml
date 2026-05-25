@@ -8,5 +8,5 @@ publish.workspace = true
 description = "agorapura — red de confianza: almacena atestaciones verificadas y responde corroboración de claims; la validez la decide una política negociada, no el grafo."
 
 [dependencies]
-agorapura-core = { path = "../agorapura-core" }
+agorapura-core = { path = "../agora-core" }
 serde = { workspace = true }

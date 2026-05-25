@@ -13,10 +13,10 @@ name = "charka"
 path = "src/main.rs"
 
 [dependencies]
-charka-lexer = { path = "../../modules/charka/charka-lexer" }
-charka-parser = { path = "../../modules/charka/charka-parser" }
-charka-ir = { path = "../../modules/charka/charka-ir" }
-charka-codegen = { path = "../../modules/charka/charka-codegen" }
-charka-shadow = { path = "../../modules/charka/charka-shadow" }
+charka-lexer = { path = "../chaka-lexer" }
+charka-parser = { path = "../chaka-parser" }
+charka-ir = { path = "../chaka-ir" }
+charka-codegen = { path = "../chaka-codegen" }
+charka-shadow = { path = "../chaka-shadow" }
 clap = { workspace = true }
 anyhow = { workspace = true }

@@ -6,16 +6,16 @@ license.workspace = true
 description = "Probe GUI del broker brahman: conecta cada N segundos vía await_provider_blocking con un Card observer agnóstico, reporta 3 estados (down / up sin provider / up con provider)."
 
 [dependencies]
-brahman-broker = { path = "../../protocol/brahman-broker" }
-brahman-card = { path = "../../protocol/brahman-card" }
-brahman-handshake = { path = "../../protocol/brahman-handshake" }
-brahman-sidecar = { path = "../../protocol/brahman-sidecar" }
+brahman-broker = { path = "../chasqui-broker" }
+brahman-card = { path = "../../../shared/card/card-core" }
+brahman-handshake = { path = "../../../shared/card/card-handshake" }
+brahman-sidecar = { path = "../../../shared/card/card-sidecar" }
 ulid = { workspace = true }
-nahual-theme = { path = "../../modules/nahual/libs/theme" }
-nahual-launcher = { path = "../../modules/nahual/libs/launcher" }
-nahual-widget-banner = { path = "../../modules/nahual/widgets/banner" }
-nahual-widget-stat-card = { path = "../../modules/nahual/widgets/stat-card" }
-nahual-widget-app-header = { path = "../../modules/nahual/widgets/app-header" }
+nahual-theme = { path = "../../nahual/libs/theme" }
+nahual-launcher = { path = "../../nahual/libs/launcher" }
+nahual-widget-banner = { path = "../../nahual/widgets/banner" }
+nahual-widget-stat-card = { path = "../../nahual/widgets/stat-card" }
+nahual-widget-app-header = { path = "../../nahual/widgets/app-header" }
 gpui = { workspace = true }
 
 [[bin]]

@@ -8,8 +8,8 @@ publish = { workspace = true }
 description = "Lapaloma — gráficos cartesianos: LineSeries / BarSeries / AreaSeries, viewport con pan/zoom, picture cache, ejes con decimación, tooltips."
 
 [dependencies]
-pineal-core = { path = "../core" }
-pineal-render = { path = "../render" }
+pineal-core = { path = "../pineal-core" }
+pineal-render = { path = "../pineal-render" }
 gpui = { workspace = true, optional = true }
 
 [features]

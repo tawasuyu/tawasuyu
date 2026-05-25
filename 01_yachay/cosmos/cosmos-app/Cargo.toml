@@ -6,20 +6,20 @@ license = { workspace = true }
 description = "Tahuantinsuyu — estudio profesional de astrología. Tree + canvas + panel sobre yahweh + eternal-astrology."
 
 [dependencies]
-cosmobiologia-card = { path = "../../modules/cosmobiologia/cosmobiologia-card" }
-cosmobiologia-canvas = { path = "../../modules/cosmobiologia/cosmobiologia-canvas" }
-cosmobiologia-engine = { path = "../../modules/cosmobiologia/cosmobiologia-engine" }
-cosmobiologia-model = { path = "../../modules/cosmobiologia/cosmobiologia-model" }
-cosmobiologia-modules = { path = "../../modules/cosmobiologia/cosmobiologia-modules" }
-cosmobiologia-panel = { path = "../../modules/cosmobiologia/cosmobiologia-panel" }
-cosmobiologia-store = { path = "../../modules/cosmobiologia/cosmobiologia-store" }
-cosmobiologia-theme = { path = "../../modules/cosmobiologia/cosmobiologia-theme" }
-cosmobiologia-tree = { path = "../../modules/cosmobiologia/cosmobiologia-tree" }
-brahman-sidecar = { path = "../../protocol/brahman-sidecar" }
+cosmobiologia-card = { path = "../cosmos-card" }
+cosmobiologia-canvas = { path = "../cosmos-canvas" }
+cosmobiologia-engine = { path = "../cosmos-engine" }
+cosmobiologia-model = { path = "../cosmos-model" }
+cosmobiologia-modules = { path = "../cosmos-modules" }
+cosmobiologia-panel = { path = "../cosmos-panel" }
+cosmobiologia-store = { path = "../cosmos-store" }
+cosmobiologia-theme = { path = "../cosmos-theme" }
+cosmobiologia-tree = { path = "../cosmos-tree" }
+brahman-sidecar = { path = "../../../shared/card/card-sidecar" }
 
 nahual-core = { workspace = true }
 nahual-theme = { workspace = true }
-nahual-widget-theme-switcher = { path = "../../modules/nahual/widgets/theme-switcher" }
+nahual-widget-theme-switcher = { path = "../../../02_ruway/nahual/widgets/theme-switcher" }
 nahual-widget-splitter = { workspace = true }
 nahual-widget-container-core = { workspace = true }
 gpui = { workspace = true }

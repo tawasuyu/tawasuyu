@@ -13,9 +13,9 @@ name = "shuma"
 path = "src/main.rs"
 
 [dependencies]
-shuma-card = { path = "../../modules/shuma/shuma-card" }
-shuma-protocol = { path = "../../modules/shuma/shuma-protocol" }
-brahman-card = { path = "../../protocol/brahman-card" }
+shuma-card = { path = "../sandbox/shuma-card" }
+shuma-protocol = { path = "../sandbox/shuma-protocol" }
+brahman-card = { path = "../../../shared/card/card-core" }
 anyhow = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }

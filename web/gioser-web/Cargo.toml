@@ -10,11 +10,11 @@ publish.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-gioser-canvas-web = { path = "../../modules/gioser/gioser-canvas-web" }
-fana-md-reader-web = { path = "../../modules/fana/fana-md-reader-web" }
-revista-web = { path = "../../modules/revista/revista-web" }
-barra-web = { path = "../../modules/barra/barra-web" }
-gioser-graph-web = { path = "../../modules/gioser/gioser-graph-web" }
+gioser-canvas-web = { path = "../gioser-canvas-web" }
+fana-md-reader-web = { path = "../../00_unanchay/pluma/pluma-md-reader-web" }
+revista-web = { path = "../../00_unanchay/pluma/pluma-deck-web" }
+barra-web = { path = "../../02_ruway/mirada/mirada-bar-web" }
+gioser-graph-web = { path = "../gioser-graph-web" }
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
 js-sys.workspace = true

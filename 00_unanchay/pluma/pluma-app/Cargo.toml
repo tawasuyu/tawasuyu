@@ -13,11 +13,11 @@ name = "fana"
 path = "src/main.rs"
 
 [dependencies]
-fana-core = { path = "../../modules/fana/fana-core" }
-fana-graph = { path = "../../modules/fana/fana-graph" }
-fana-render-plan = { path = "../../modules/fana/fana-render-plan" }
-fana-editor-gpui = { path = "../../modules/fana/fana-editor-gpui" }
-nahual-theme = { path = "../../modules/nahual/libs/theme" }
-nahual-launcher = { path = "../../modules/nahual/libs/launcher" }
+fana-core = { path = "../pluma-core" }
+fana-graph = { path = "../pluma-graph" }
+fana-render-plan = { path = "../pluma-render-plan" }
+fana-editor-gpui = { path = "../pluma-editor-gpui" }
+nahual-theme = { path = "../../../02_ruway/nahual/libs/theme" }
+nahual-launcher = { path = "../../../02_ruway/nahual/libs/launcher" }
 gpui = { workspace = true }
 uuid = { workspace = true }

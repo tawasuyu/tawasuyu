@@ -9,4 +9,4 @@ publish.workspace = true
 description = "charka-runtime — soporte de ejecución de los programas COBOL transpilados: campos numéricos (Num) y alfanuméricos (Text) con la semántica de COBOL."
 
 [dependencies]
-charka-bcd = { path = "../charka-bcd" }
+charka-bcd = { path = "../chaka-bcd" }

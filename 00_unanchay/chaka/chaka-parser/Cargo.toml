@@ -9,5 +9,5 @@ publish.workspace = true
 description = "charka-parser — parser de COBOL'85 (subconjunto) a AST: divisiones, modelo de datos (DATA division) y párrafos del PROCEDURE."
 
 [dependencies]
-charka-lexer = { path = "../charka-lexer" }
+charka-lexer = { path = "../chaka-lexer" }
 thiserror = { workspace = true }

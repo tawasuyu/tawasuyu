@@ -8,6 +8,6 @@ publish = { workspace = true }
 description = "Lapaloma — gráficos polares: pie chart, donut, radar."
 
 [dependencies]
-pineal-core = { path = "../core" }
-pineal-render = { path = "../render" }
+pineal-core = { path = "../pineal-core" }
+pineal-render = { path = "../pineal-render" }
 gpui = { workspace = true }

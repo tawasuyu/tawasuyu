@@ -11,8 +11,8 @@ description = "Runtime de shuma: WorkspaceManager sobre arje-incarnate. Estado i
 [dependencies]
 shuma-card = { path = "../shuma-card" }
 shuma-discern = { path = "../shuma-discern" }
-brahman-card = { path = "../../../protocol/brahman-card" }
-arje-incarnate = { path = "../../../init/arje-incarnate" }
+brahman-card = { path = "../../../../shared/card/card-core" }
+arje-incarnate = { path = "../../../../03_ukupacha/arje/init/arje-incarnate" }
 nix = { workspace = true }
 libc = { workspace = true }
 anyhow = { workspace = true }

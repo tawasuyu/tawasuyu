@@ -11,7 +11,7 @@ name = "arje-absorb"
 path = "src/main.rs"
 
 [dependencies]
-brahman-card = { path = "../../protocol/brahman-card" }
+brahman-card = { path = "../../../../shared/card/card-core" }
 anyhow = { workspace = true }
 
 [dev-dependencies]

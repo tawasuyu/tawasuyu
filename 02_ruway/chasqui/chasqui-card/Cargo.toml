@@ -9,7 +9,7 @@ publish.workspace = true
 description = "Nouser — manifiesto de Mónada (agrupación semántica de archivos). Espejo de brahman-card pero para datos."
 
 [dependencies]
-brahman-card = { path = "../../../protocol/brahman-card" }
+brahman-card = { path = "../../../shared/card/card-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

@@ -9,7 +9,7 @@ publish.workspace = true
 description = "Discernidor de contenido sobre buffers: MIME, codificación, parser hints. Compartible con file_explorer y nouser."
 
 [dependencies]
-brahman-card = { path = "../../../protocol/brahman-card" }
+brahman-card = { path = "../../../../shared/card/card-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

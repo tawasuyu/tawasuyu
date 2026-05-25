@@ -8,8 +8,8 @@ publish.workspace = true
 description = "fana — persistencia del grafo narrativo en un store key-value embebido (sled), serializado con bincode."
 
 [dependencies]
-fana-core = { path = "../fana-core" }
-fana-graph = { path = "../fana-graph" }
+fana-core = { path = "../pluma-core" }
+fana-graph = { path = "../pluma-graph" }
 sled = { workspace = true }
 bincode = { workspace = true }
 uuid = { workspace = true }

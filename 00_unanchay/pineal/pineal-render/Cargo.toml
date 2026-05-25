@@ -8,7 +8,7 @@ publish = { workspace = true }
 description = "Lapaloma — abstracción de painter: trait Canvas + RenderPlan + color helpers. Habilita backend CPU (gpui hoy) y GPU (wgpu mañana) sin tocar a los painters."
 
 [dependencies]
-pineal-core = { path = "../core" }
+pineal-core = { path = "../pineal-core" }
 gpui = { workspace = true, optional = true }
 
 [features]

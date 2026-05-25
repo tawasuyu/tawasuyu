@@ -7,7 +7,7 @@ authors.workspace = true
 publish.workspace = true
 
 [dependencies]
-revista-core = { path = "../revista-core" }
+revista-core = { path = "../pluma-deck-core" }
 wasm-bindgen.workspace = true
 js-sys.workspace = true
 

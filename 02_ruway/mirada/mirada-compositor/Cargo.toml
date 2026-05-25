@@ -13,9 +13,9 @@ name = "mirada-compositor"
 path = "src/main.rs"
 
 [dependencies]
-mirada-brain = { path = "../../modules/mirada/mirada-brain" }
-mirada-body = { path = "../../modules/mirada/mirada-body" }
-mirada-link = { path = "../../modules/mirada/mirada-link" }
-brahman-auth = { path = "../../protocol/brahman-auth" }
+mirada-brain = { path = "../mirada-brain" }
+mirada-body = { path = "../mirada-body" }
+mirada-link = { path = "../mirada-link" }
+brahman-auth = { path = "../../../shared/auth/auth-core" }
 nix = { workspace = true }
 smithay = "0.7"

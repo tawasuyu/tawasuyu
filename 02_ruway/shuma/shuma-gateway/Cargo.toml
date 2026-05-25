@@ -13,7 +13,7 @@ name = "shuma-gateway"
 path = "src/main.rs"
 
 [dependencies]
-shuma-protocol = { path = "../../modules/shuma/shuma-protocol" }
+shuma-protocol = { path = "../sandbox/shuma-protocol" }
 anyhow = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

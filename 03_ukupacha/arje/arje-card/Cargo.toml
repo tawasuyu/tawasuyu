@@ -7,4 +7,4 @@ publish.workspace = true
 description = "Alias histórico de brahman-card. Re-exporta tipos legacy (EntityCard ≡ Card)."
 
 [dependencies]
-brahman-card = { path = "../brahman-card" }
+brahman-card = { path = "../../../shared/card/card-core" }

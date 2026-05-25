@@ -9,8 +9,8 @@ publish.workspace = true
 description = "charka-codegen — emisión de Rust desde el IR de charka: el modelo de datos COBOL y los statements del PROCEDURE a código que enlaza con charka-runtime."
 
 [dependencies]
-charka-ir = { path = "../charka-ir" }
+charka-ir = { path = "../chaka-ir" }
 
 [dev-dependencies]
-charka-parser = { path = "../charka-parser" }
-charka-lexer = { path = "../charka-lexer" }
+charka-parser = { path = "../chaka-parser" }
+charka-lexer = { path = "../chaka-lexer" }

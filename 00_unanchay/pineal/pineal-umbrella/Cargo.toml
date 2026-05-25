@@ -8,18 +8,18 @@ publish = { workspace = true }
 description = "Lapaloma — paraguas: re-exporta los módulos para prototipos. En producción importar los crates hoja directamente para que tree-shaking descarte lo no usado."
 
 [dependencies]
-pineal-core = { path = "../core", optional = true }
-pineal-render = { path = "../render", optional = true }
-pineal-cartesian = { path = "../cartesian", optional = true }
-pineal-stream = { path = "../stream", optional = true }
-pineal-mesh = { path = "../mesh", optional = true }
-pineal-financial = { path = "../financial", optional = true }
-pineal-polar = { path = "../polar", optional = true }
-pineal-heatmap = { path = "../heatmap", optional = true }
-pineal-treemap = { path = "../treemap", optional = true }
-pineal-flow = { path = "../flow", optional = true }
-pineal-phosphor = { path = "../phosphor", optional = true }
-pineal-export = { path = "../export", optional = true }
+pineal-core = { path = "../pineal-core", optional = true }
+pineal-render = { path = "../pineal-render", optional = true }
+pineal-cartesian = { path = "../pineal-cartesian", optional = true }
+pineal-stream = { path = "../pineal-stream", optional = true }
+pineal-mesh = { path = "../pineal-mesh", optional = true }
+pineal-financial = { path = "../pineal-financial", optional = true }
+pineal-polar = { path = "../pineal-polar", optional = true }
+pineal-heatmap = { path = "../pineal-heatmap", optional = true }
+pineal-treemap = { path = "../pineal-treemap", optional = true }
+pineal-flow = { path = "../pineal-flow", optional = true }
+pineal-phosphor = { path = "../pineal-phosphor", optional = true }
+pineal-export = { path = "../pineal-export", optional = true }
 
 [features]
 default = ["full"]

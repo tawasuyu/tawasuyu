@@ -9,7 +9,7 @@ publish.workspace = true
 description = "Brahman — capa de discovery typed sobre el Kademlia compartido de brahman-net. Claves namespaced por kind (Code/Card/Persona/Service) sin colisión en una sola malla."
 
 [dependencies]
-brahman-net = { path = "../brahman-net" }
+brahman-net = { path = "../../../shared/card/card-net" }
 libp2p = { workspace = true }
 blake3 = { workspace = true }
 serde = { workspace = true }

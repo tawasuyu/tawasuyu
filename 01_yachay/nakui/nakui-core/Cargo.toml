@@ -38,8 +38,8 @@ nickel-lang = "2.0.0"
 surrealdb = { version = "2", default-features = false, features = ["kv-mem"] }
 
 # Brahman protocol — presencia ante el Init cuando `nakui run` arranca.
-brahman-card = { path = "../../../protocol/brahman-card" }
-brahman-sidecar = { path = "../../../protocol/brahman-sidecar" }
+brahman-card = { path = "../../../shared/card/card-core" }
+brahman-sidecar = { path = "../../../shared/card/card-sidecar" }
 
 [[bin]]
 name = "nakui"

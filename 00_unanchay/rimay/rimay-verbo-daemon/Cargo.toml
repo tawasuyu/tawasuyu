@@ -8,11 +8,11 @@ publish.workspace = true
 description = "verbo — daemon multi-instancia: sirve cualquier Provider sobre un socket Unix; el DaemonClient lo consume desde otro proceso. Un modelo cargado, N procesos."
 
 [dependencies]
-verbo-core = { path = "../verbo-core" }
+verbo-core = { path = "../rimay-verbo-core" }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 postcard = { workspace = true }
 
 [dev-dependencies]
-verbo-mock = { path = "../verbo-mock" }
+verbo-mock = { path = "../rimay-verbo-mock" }

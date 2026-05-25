@@ -6,7 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-arje-card = { path = "../../protocol/arje-card" }
+arje-card = { path = "../../arje-card" }
 wasmi = { workspace = true }
 wat = { workspace = true }
 ulid = { workspace = true }

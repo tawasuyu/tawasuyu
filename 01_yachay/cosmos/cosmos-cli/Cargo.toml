@@ -6,8 +6,8 @@ license = { workspace = true }
 description = "Tahuantinsuyu — CLI cliente del service socket. Pide cómputos de cartas sin abrir la GUI."
 
 [dependencies]
-cosmobiologia-card = { path = "../../modules/cosmobiologia/cosmobiologia-card" }
-cosmobiologia-model = { path = "../../modules/cosmobiologia/cosmobiologia-model" }
+cosmobiologia-card = { path = "../cosmos-card" }
+cosmobiologia-model = { path = "../cosmos-model" }
 clap = { workspace = true }
 tokio = { workspace = true }
 serde_json = { workspace = true }

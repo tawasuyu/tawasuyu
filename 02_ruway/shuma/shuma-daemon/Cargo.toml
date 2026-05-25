@@ -13,13 +13,13 @@ name = "shuma-daemon"
 path = "src/main.rs"
 
 [dependencies]
-shuma-card = { path = "../../modules/shuma/shuma-card" }
-shuma-protocol = { path = "../../modules/shuma/shuma-protocol" }
-shuma-discern = { path = "../../modules/shuma/shuma-discern" }
-shuma-core = { path = "../../modules/shuma/shuma-core" }
-arje-incarnate = { path = "../../init/arje-incarnate" }
-brahman-card = { path = "../../protocol/brahman-card" }
-brahman-sidecar = { path = "../../protocol/brahman-sidecar" }
+shuma-card = { path = "../sandbox/shuma-card" }
+shuma-protocol = { path = "../sandbox/shuma-protocol" }
+shuma-discern = { path = "../sandbox/shuma-discern" }
+shuma-core = { path = "../sandbox/shuma-core" }
+arje-incarnate = { path = "../../../03_ukupacha/arje/init/arje-incarnate" }
+brahman-card = { path = "../../../shared/card/card-core" }
+brahman-sidecar = { path = "../../../shared/card/card-sidecar" }
 anyhow = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

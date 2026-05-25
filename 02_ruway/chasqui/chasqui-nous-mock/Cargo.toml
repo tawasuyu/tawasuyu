@@ -9,11 +9,11 @@ publish.workspace = true
 description = "Nouser — Nous mock determinístico: implementa el contrato nouser-nous con pseudo-embeddings de Phase C. Stand-in para tests y para `BRAHMAN_BROKER_CONTEXT=test`."
 
 [dependencies]
-brahman-card = { path = "../../../protocol/brahman-card" }
-brahman-sidecar = { path = "../../../protocol/brahman-sidecar" }
-chasqui-card = { path = "../card" }
-chasqui-core = { path = "../core" }
-chasqui-nous = { path = "../nous" }
+brahman-card = { path = "../../../shared/card/card-core" }
+brahman-sidecar = { path = "../../../shared/card/card-sidecar" }
+chasqui-card = { path = "../chasqui-card" }
+chasqui-core = { path = "../chasqui-core" }
+chasqui-nous = { path = "../chasqui-nous" }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

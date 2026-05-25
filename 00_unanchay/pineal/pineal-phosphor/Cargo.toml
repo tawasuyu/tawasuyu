@@ -8,8 +8,8 @@ publish = { workspace = true }
 description = "Lapaloma — decoración CRT sobre lapaloma-stream: trail con alpha decay por edad, ghost, anotaciones magnéticas ancladas a sample index."
 
 [dependencies]
-pineal-core = { path = "../core" }
-pineal-render = { path = "../render" }
+pineal-core = { path = "../pineal-core" }
+pineal-render = { path = "../pineal-render" }
 gpui = { workspace = true, optional = true }
 
 [features]

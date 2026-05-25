@@ -9,8 +9,8 @@ publish.workspace = true
 description = "charka-shadow — validador en sombra del transpilador: un intérprete del IR que ejecuta el programa COBOL y compara su salida contra una referencia."
 
 [dependencies]
-charka-lexer = { path = "../charka-lexer" }
-charka-parser = { path = "../charka-parser" }
-charka-ir = { path = "../charka-ir" }
-charka-runtime = { path = "../charka-runtime" }
+charka-lexer = { path = "../chaka-lexer" }
+charka-parser = { path = "../chaka-parser" }
+charka-ir = { path = "../chaka-ir" }
+charka-runtime = { path = "../chaka-runtime" }
 thiserror = { workspace = true }

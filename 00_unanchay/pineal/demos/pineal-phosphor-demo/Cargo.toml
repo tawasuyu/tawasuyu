@@ -9,8 +9,8 @@ description = "Lapaloma — demo del trail CRT (phosphor) sobre un RingBuffer st
 
 [dependencies]
 gpui = { workspace = true }
-nahual-launcher = { path = "../../modules/nahual/libs/launcher" }
-nahual-theme = { path = "../../modules/nahual/libs/theme" }
-pineal-core = { path = "../../modules/pineal/core" }
-pineal-render = { path = "../../modules/pineal/render", features = ["gpui"] }
-pineal-phosphor = { path = "../../modules/pineal/phosphor" }
+nahual-launcher = { path = "../../../../02_ruway/nahual/libs/launcher" }
+nahual-theme = { path = "../../../../02_ruway/nahual/libs/theme" }
+pineal-core = { path = "../../pineal-core" }
+pineal-render = { path = "../../pineal-render", features = ["gpui"] }
+pineal-phosphor = { path = "../../pineal-phosphor" }

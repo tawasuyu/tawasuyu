@@ -6,9 +6,9 @@ license = { workspace = true }
 description = "Tahuantinsuyu — panel de control inferior. Toggles, sliders y selectores por módulo de astrología."
 
 [dependencies]
-cosmobiologia-model = { path = "../cosmobiologia-model" }
-cosmobiologia-modules = { path = "../cosmobiologia-modules" }
-cosmobiologia-theme = { path = "../cosmobiologia-theme" }
+cosmobiologia-model = { path = "../cosmos-model" }
+cosmobiologia-modules = { path = "../cosmos-modules" }
+cosmobiologia-theme = { path = "../cosmos-theme" }
 nahual-theme = { workspace = true }
 gpui = { workspace = true }
 serde_json = { workspace = true }

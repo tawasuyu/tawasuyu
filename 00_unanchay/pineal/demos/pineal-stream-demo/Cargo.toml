@@ -9,8 +9,8 @@ description = "Lapaloma — demo de streaming: RingBuffer + timer 60 Hz + sweep 
 
 [dependencies]
 gpui = { workspace = true }
-nahual-launcher = { path = "../../modules/nahual/libs/launcher" }
-nahual-theme = { path = "../../modules/nahual/libs/theme" }
-pineal-core = { path = "../../modules/pineal/core" }
-pineal-render = { path = "../../modules/pineal/render", features = ["gpui"] }
-pineal-stream = { path = "../../modules/pineal/stream" }
+nahual-launcher = { path = "../../../../02_ruway/nahual/libs/launcher" }
+nahual-theme = { path = "../../../../02_ruway/nahual/libs/theme" }
+pineal-core = { path = "../../pineal-core" }
+pineal-render = { path = "../../pineal-render", features = ["gpui"] }
+pineal-stream = { path = "../../pineal-stream" }

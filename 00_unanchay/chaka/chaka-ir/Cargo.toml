@@ -9,8 +9,8 @@ publish.workspace = true
 description = "charka-ir — representación intermedia: el AST de charka-parser con los statements del PROCEDURE ya parseados a instrucciones tipadas (MOVE, IF, PERFORM, COMPUTE...)."
 
 [dependencies]
-charka-parser = { path = "../charka-parser" }
-charka-bcd = { path = "../charka-bcd" }
+charka-parser = { path = "../chaka-parser" }
+charka-bcd = { path = "../chaka-bcd" }
 
 [dev-dependencies]
-charka-lexer = { path = "../charka-lexer" }
+charka-lexer = { path = "../chaka-lexer" }

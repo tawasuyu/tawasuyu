@@ -8,9 +8,9 @@ publish.workspace = true
 description = "fana — scoring de intensidad semántica: embebe los átomos vía verbo y mide su afinidad coseno a un conjunto de conceptos."
 
 [dependencies]
-fana-core = { path = "../fana-core" }
-verbo-core = { path = "../../verbo/verbo-core" }
+fana-core = { path = "../pluma-core" }
+verbo-core = { path = "../../rimay/rimay-verbo-core" }
 
 [dev-dependencies]
-verbo-mock = { path = "../../verbo/verbo-mock" }
+verbo-mock = { path = "../../rimay/rimay-verbo-mock" }
 tokio = { workspace = true }

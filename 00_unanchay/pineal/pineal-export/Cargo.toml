@@ -8,5 +8,5 @@ publish = { workspace = true }
 description = "Lapaloma — exporters. SVG primero, PDF después. Decimación contextual por DPI: target = width_inches × dpi × vertices_per_pixel."
 
 [dependencies]
-pineal-core = { path = "../core" }
-pineal-render = { path = "../render" }
+pineal-core = { path = "../pineal-core" }
+pineal-render = { path = "../pineal-render" }

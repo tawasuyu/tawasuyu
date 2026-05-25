@@ -8,6 +8,6 @@ publish = { workspace = true }
 description = "Lapaloma — heatmap. Matriz [width × height] de f32 → imagen pre-encodeada que se rendea con un sólo drawImageRect."
 
 [dependencies]
-pineal-core = { path = "../core" }
-pineal-render = { path = "../render" }
+pineal-core = { path = "../pineal-core" }
+pineal-render = { path = "../pineal-render" }
 gpui = { workspace = true }
