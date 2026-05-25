@@ -35,6 +35,7 @@ use llimphi_widget_text_editor::{
 };
 use llimphi_widget_text_editor_lsp::{
     CompletionItem, DefinitionLocation, HoverInfo, LspClient, NoopLspClient, RustAnalyzerClient,
+    SignatureHelpInfo, TextEdit,
 };
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
@@ -81,6 +82,14 @@ enum Msg {
     GotoDefinitionRequest,
     /// El LSP devolvió la definition — abrir destino + posicionar.
     GotoDefinitionApply(DefinitionLocation),
+    /// Ctrl+Shift+F — pide formatting.
+    FormatRequest,
+    /// Ctrl+Shift+Space — pide signatureHelp.
+    SignatureHelpRequest,
+    SignatureHelpClose,
+    /// El LSP devolvió text edits (de formatting o rename) para el
+    /// archivo abierto — aplicar todos en orden descendente.
+    TextEditsApply(Vec<TextEdit>),
 }
 
 #[derive(Debug, Clone)]
@@ -117,6 +126,13 @@ struct Model {
     completions: Option<CompletionsBar>,
     /// Popup de hover; `None` cerrado.
     hover: Option<HoverPopup>,
+    /// Popup de signatureHelp; `None` cerrado.
+    sig_help: Option<SignatureHelpBar>,
+}
+
+struct SignatureHelpBar {
+    info: Option<SignatureHelpInfo>,
+    anchor: (usize, usize),
 }
 
 struct HoverPopup {
@@ -218,6 +234,7 @@ impl App for EditorApp {
             lsp,
             completions: None,
             hover: None,
+            sig_help: None,
         }
     }
 
@@ -275,11 +292,23 @@ impl App for EditorApp {
                         popup.info = latest;
                     }
                 }
+                if let Some(bar) = m.sig_help.as_mut() {
+                    let latest = m.lsp.latest_signature_help();
+                    if latest.is_some() && latest != bar.info {
+                        bar.info = latest;
+                    }
+                }
                 // Goto-def: si llegó una definition, dispara apply en
                 // el próximo tick para no anidar update.
                 if let Some(loc) = m.lsp.latest_definition() {
                     m.lsp.clear_definition();
                     handle.dispatch(Msg::GotoDefinitionApply(loc));
+                }
+                // Text edits (formatting / rename): aplicar al recibir.
+                let edits = m.lsp.latest_text_edits();
+                if !edits.is_empty() {
+                    m.lsp.clear_text_edits();
+                    handle.dispatch(Msg::TextEditsApply(edits));
                 }
                 m
             }
@@ -379,6 +408,41 @@ impl App for EditorApp {
                 m.status = "goto-def · esperando LSP…".into();
                 m
             }
+            Msg::SignatureHelpRequest => {
+                let mut m = model;
+                let Some(path) = m.open_file.clone() else { return m };
+                let line = m.editor.cursor.caret.line;
+                let col = m.editor.cursor.caret.col;
+                m.lsp.clear_signature_help();
+                m.lsp.request_signature_help(&path, line, col);
+                m.sig_help = Some(SignatureHelpBar { info: None, anchor: (line, col) });
+                m
+            }
+            Msg::SignatureHelpClose => {
+                let mut m = model;
+                m.sig_help = None;
+                m.lsp.clear_signature_help();
+                m
+            }
+            Msg::FormatRequest => {
+                let mut m = model;
+                let Some(path) = m.open_file.clone() else { return m };
+                m.lsp.clear_text_edits();
+                m.lsp.request_formatting(&path, 4, true);
+                m.status = "formatting · esperando LSP…".into();
+                m
+            }
+            Msg::TextEditsApply(edits) => {
+                let mut m = model;
+                apply_text_edits_in_place(&mut m.editor, edits);
+                m.dirty = true;
+                if let Some(path) = m.open_file.clone() {
+                    let new_text = m.editor.text();
+                    m.lsp.did_change(&path, &new_text);
+                }
+                m.status = "formatting · aplicado".into();
+                m
+            }
             Msg::GotoDefinitionApply(loc) => {
                 let mut m = model;
                 m.lsp.clear_definition();
@@ -468,7 +532,8 @@ impl App for EditorApp {
             if matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("s")) {
                 return Some(Msg::Save);
             }
-            if matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("f"))
+            if !event.modifiers.shift
+                && matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("f"))
                 && model.open_file.is_some()
             {
                 return Some(Msg::FindOpen);
@@ -490,6 +555,26 @@ impl App for EditorApp {
             {
                 return Some(Msg::HoverRequest);
             }
+            // Ctrl+Shift+F = format. (Ctrl+F sin Shift sigue siendo find.)
+            if event.modifiers.shift
+                && matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("f"))
+                && model.open_file.is_some()
+            {
+                return Some(Msg::FormatRequest);
+            }
+            // Ctrl+Shift+Space = signatureHelp.
+            if event.modifiers.shift
+                && matches!(&event.key, Key::Named(NamedKey::Space))
+                && model.open_file.is_some()
+            {
+                return Some(Msg::SignatureHelpRequest);
+            }
+        }
+        // Esc cierra sig_help antes que cualquier otra cosa.
+        if model.sig_help.is_some()
+            && matches!(&event.key, Key::Named(NamedKey::Escape))
+        {
+            return Some(Msg::SignatureHelpClose);
         }
         // F12 = goto-definition (sin modificadores).
         if matches!(&event.key, Key::Named(NamedKey::F12))
@@ -631,6 +716,9 @@ fn editor_panel(model: &Model, theme: &Theme) -> View<Msg> {
     if let Some(hp) = model.hover.as_ref() {
         children.push(hover_view(hp, theme));
     }
+    if let Some(bar) = model.sig_help.as_ref() {
+        children.push(sig_help_view(bar, theme));
+    }
     let editor_view = match &model.open_file {
         None => empty_editor_placeholder(theme),
         Some(path) => {
@@ -671,6 +759,57 @@ const COMPLETIONS_ROW_H: f32 = 22.0;
 const COMPLETIONS_MAX_ITEMS_VISIBLE: usize = 5;
 
 const HOVER_BAR_H: f32 = 96.0;
+const SIG_HELP_BAR_H: f32 = 56.0;
+
+fn sig_help_view(bar: &SignatureHelpBar, theme: &Theme) -> View<Msg> {
+    let header = format!(
+        "signatureHelp @ {}:{} · Esc cierra",
+        bar.anchor.0 + 1,
+        bar.anchor.1,
+    );
+    let body_text = match bar.info.as_ref() {
+        None => "esperando LSP…".to_string(),
+        Some(info) => {
+            let active = info
+                .param_labels
+                .get(info.active_param)
+                .map(|s| format!(" · activo: «{s}»"))
+                .unwrap_or_default();
+            format!("{}{active}", info.label)
+        }
+    };
+    let header_view = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
+        padding: Rect {
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .text_aligned(header, 10.0, theme.fg_muted, Alignment::Start);
+    let body_view = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(SIG_HELP_BAR_H - 18.0) },
+        padding: Rect {
+            left: length(10.0_f32),
+            right: length(10.0_f32),
+            top: length(4.0_f32),
+            bottom: length(4.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .text_aligned(body_text, 12.0, theme.fg_text, Alignment::Start);
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: length(SIG_HELP_BAR_H) },
+        ..Default::default()
+    })
+    .children(vec![header_view, body_view])
+}
 
 fn hover_view(hp: &HoverPopup, theme: &Theme) -> View<Msg> {
     let header = format!(
@@ -1051,6 +1190,33 @@ fn apply_editor_pointer(mut model: Model, ev: PointerEvent) -> Model {
         }
     }
     model
+}
+
+/// Aplica una lista de TextEdits al EditorState en orden descendente
+/// por start offset (las edits tempranas no desplazan posiciones
+/// posteriores). Cada TextEdit es un reemplazo [start..end) → new_text.
+fn apply_text_edits_in_place(editor: &mut EditorState, mut edits: Vec<TextEdit>) {
+    // Ordenar desc por start.
+    edits.sort_by(|a, b| {
+        let oa = editor.buffer.pos_to_offset(a.start_line, a.start_col);
+        let ob = editor.buffer.pos_to_offset(b.start_line, b.start_col);
+        ob.cmp(&oa)
+    });
+    for e in edits {
+        let start_off = editor.buffer.pos_to_offset(e.start_line, e.start_col);
+        let end_off = editor.buffer.pos_to_offset(e.end_line, e.end_col);
+        if end_off > start_off {
+            editor.buffer.delete(start_off, end_off);
+        }
+        if !e.new_text.is_empty() {
+            editor.buffer.insert(start_off, &e.new_text);
+        }
+    }
+    editor.bump_edit_seq();
+    // Clampea el caret a la nueva longitud.
+    let last_line = editor.buffer.len_lines().saturating_sub(1);
+    let max_col = editor.buffer.line_len_chars(editor.cursor.caret.line.min(last_line));
+    editor.cursor.caret.col = editor.cursor.caret.col.min(max_col);
 }
 
 fn find_step(mut model: Model, forward: bool) -> Model {

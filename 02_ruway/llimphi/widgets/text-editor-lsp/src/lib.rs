@@ -82,6 +82,41 @@ pub trait LspClient: Send {
     /// Última definition recibida (path destino + pos de inicio).
     fn latest_definition(&self) -> Option<DefinitionLocation>;
     fn clear_definition(&mut self);
+    /// Dispara textDocument/formatting. Cuando llega la response, el
+    /// caller polla `latest_text_edits` y los aplica al buffer.
+    fn request_formatting(&mut self, path: &Path, tab_size: u32, insert_spaces: bool);
+    /// Última lista de TextEdits recibida (de formatting o rename).
+    fn latest_text_edits(&self) -> Vec<TextEdit>;
+    fn clear_text_edits(&mut self);
+    /// Dispara textDocument/signatureHelp. Cuando llega, el popup
+    /// muestra la firma activa con el parámetro current resaltado.
+    fn request_signature_help(&mut self, path: &Path, line: usize, col: usize);
+    fn latest_signature_help(&self) -> Option<SignatureHelpInfo>;
+    fn clear_signature_help(&mut self);
+}
+
+/// Info de signatureHelp activa.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignatureHelpInfo {
+    /// Firma activa (label completa, ej. "fn foo(x: i32, y: String) -> u64").
+    pub label: String,
+    /// Documentación de la firma activa.
+    pub doc: Option<String>,
+    /// Índice del parámetro current (0-based).
+    pub active_param: usize,
+    /// Labels de los parámetros — para resaltar el activo.
+    pub param_labels: Vec<String>,
+}
+
+/// Edit estilo LSP: reemplazar el rango `[start..end)` por `new_text`.
+/// Para apply: ordenar desc por `start` y aplicar uno por uno.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextEdit {
+    pub start_line: usize,
+    pub start_col: usize,
+    pub end_line: usize,
+    pub end_col: usize,
+    pub new_text: String,
 }
 
 /// Resultado de un goto-definition: archivo destino + posición.
@@ -126,6 +161,16 @@ impl LspClient for NoopLspClient {
         None
     }
     fn clear_definition(&mut self) {}
+    fn request_formatting(&mut self, _: &Path, _: u32, _: bool) {}
+    fn latest_text_edits(&self) -> Vec<TextEdit> {
+        Vec::new()
+    }
+    fn clear_text_edits(&mut self) {}
+    fn request_signature_help(&mut self, _: &Path, _: usize, _: usize) {}
+    fn latest_signature_help(&self) -> Option<SignatureHelpInfo> {
+        None
+    }
+    fn clear_signature_help(&mut self) {}
 }
 
 // ---------------------------------------------------------------------
@@ -144,11 +189,17 @@ struct SharedInner {
     hover: Option<HoverInfo>,
     /// Última definition recibida.
     definition: Option<DefinitionLocation>,
+    /// Última lista de TextEdits (formatting / rename).
+    text_edits: Vec<TextEdit>,
+    /// Última signature help.
+    signature_help: Option<SignatureHelpInfo>,
     /// IDs de requests pendientes para distinguir responses; el reader
     /// usa estos sets para routear cada response al handler correcto.
     pending_completion_ids: std::collections::HashSet<i64>,
     pending_hover_ids: std::collections::HashSet<i64>,
     pending_definition_ids: std::collections::HashSet<i64>,
+    pending_formatting_ids: std::collections::HashSet<i64>,
+    pending_signature_help_ids: std::collections::HashSet<i64>,
 }
 
 type SharedState = Arc<Mutex<SharedInner>>;
@@ -360,6 +411,63 @@ impl LspClient for RustAnalyzerClient {
         }
     }
 
+    fn request_formatting(&mut self, path: &Path, tab_size: u32, insert_spaces: bool) {
+        let id = self.alloc_id();
+        if let Ok(mut s) = self.state.lock() {
+            s.pending_formatting_ids.insert(id);
+        }
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "textDocument/formatting",
+            "params": {
+                "textDocument": { "uri": format!("file://{}", path.display()) },
+                "options": {
+                    "tabSize": tab_size,
+                    "insertSpaces": insert_spaces
+                }
+            }
+        });
+        self.send_raw(req.to_string());
+    }
+
+    fn latest_text_edits(&self) -> Vec<TextEdit> {
+        self.state.lock().map(|s| s.text_edits.clone()).unwrap_or_default()
+    }
+
+    fn clear_text_edits(&mut self) {
+        if let Ok(mut s) = self.state.lock() {
+            s.text_edits.clear();
+        }
+    }
+
+    fn request_signature_help(&mut self, path: &Path, line: usize, col: usize) {
+        let id = self.alloc_id();
+        if let Ok(mut s) = self.state.lock() {
+            s.pending_signature_help_ids.insert(id);
+        }
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "textDocument/signatureHelp",
+            "params": {
+                "textDocument": { "uri": format!("file://{}", path.display()) },
+                "position": { "line": line, "character": col }
+            }
+        });
+        self.send_raw(req.to_string());
+    }
+
+    fn latest_signature_help(&self) -> Option<SignatureHelpInfo> {
+        self.state.lock().ok().and_then(|s| s.signature_help.clone())
+    }
+
+    fn clear_signature_help(&mut self) {
+        if let Ok(mut s) = self.state.lock() {
+            s.signature_help = None;
+        }
+    }
+
     fn did_open(&mut self, path: &Path, language: &str, text: &str) {
         self.versions.insert(path.to_path_buf(), 1);
         let notif = serde_json::json!({
@@ -536,12 +644,14 @@ fn handle_publish_diagnostics(json: &serde_json::Value, state: &SharedState) {
 /// Routea una response del server al handler correspondiente según
 /// qué set de pendientes la contenía.
 fn handle_response(id: i64, json: &serde_json::Value, state: &SharedState) {
-    let (was_completion, was_hover, was_definition) = {
+    let (was_completion, was_hover, was_definition, was_formatting, was_sig) = {
         let Ok(mut s) = state.lock() else { return };
         let c = s.pending_completion_ids.remove(&id);
         let h = s.pending_hover_ids.remove(&id);
         let d = s.pending_definition_ids.remove(&id);
-        (c, h, d)
+        let f = s.pending_formatting_ids.remove(&id);
+        let sg = s.pending_signature_help_ids.remove(&id);
+        (c, h, d, f, sg)
     };
     if was_completion {
         handle_completion_response(json, state);
@@ -552,6 +662,90 @@ fn handle_response(id: i64, json: &serde_json::Value, state: &SharedState) {
     if was_definition {
         handle_definition_response(json, state);
     }
+    if was_formatting {
+        handle_text_edits_response(json, state);
+    }
+    if was_sig {
+        handle_signature_help_response(json, state);
+    }
+}
+
+fn handle_signature_help_response(json: &serde_json::Value, state: &SharedState) {
+    let Some(result) = json.get("result") else { return };
+    if result.is_null() {
+        if let Ok(mut s) = state.lock() {
+            s.signature_help = None;
+        }
+        return;
+    }
+    let info = parse_signature_help(result);
+    if let Ok(mut s) = state.lock() {
+        s.signature_help = info;
+    }
+}
+
+fn parse_signature_help(result: &serde_json::Value) -> Option<SignatureHelpInfo> {
+    let sigs = result.get("signatures")?.as_array()?;
+    if sigs.is_empty() {
+        return None;
+    }
+    let active_sig = result.get("activeSignature").and_then(|n| n.as_u64()).unwrap_or(0) as usize;
+    let sig = sigs.get(active_sig).or_else(|| sigs.first())?;
+    let label = sig.get("label")?.as_str()?.to_string();
+    let doc = sig
+        .get("documentation")
+        .map(stringify_hover_contents)
+        .filter(|s| !s.is_empty());
+    let active_param = sig
+        .get("activeParameter")
+        .or_else(|| result.get("activeParameter"))
+        .and_then(|n| n.as_u64())
+        .unwrap_or(0) as usize;
+    let param_labels = sig
+        .get("parameters")
+        .and_then(|p| p.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|p| {
+                    let lbl = p.get("label")?;
+                    if let Some(s) = lbl.as_str() {
+                        Some(s.to_string())
+                    } else if let Some(arr2) = lbl.as_array() {
+                        let s = arr2.first()?.as_u64()? as usize;
+                        let e = arr2.get(1)?.as_u64()? as usize;
+                        label.get(s..e).map(String::from)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(SignatureHelpInfo { label, doc, active_param, param_labels })
+}
+
+fn handle_text_edits_response(json: &serde_json::Value, state: &SharedState) {
+    let Some(result) = json.get("result") else { return };
+    if result.is_null() {
+        return;
+    }
+    let Some(arr) = result.as_array() else { return };
+    let edits: Vec<TextEdit> = arr.iter().filter_map(parse_text_edit).collect();
+    if let Ok(mut s) = state.lock() {
+        s.text_edits = edits;
+    }
+}
+
+fn parse_text_edit(v: &serde_json::Value) -> Option<TextEdit> {
+    let range = v.get("range")?;
+    let start = range.get("start")?;
+    let end = range.get("end")?;
+    let start_line = start.get("line")?.as_u64()? as usize;
+    let start_col = start.get("character")?.as_u64()? as usize;
+    let end_line = end.get("line")?.as_u64()? as usize;
+    let end_col = end.get("character")?.as_u64()? as usize;
+    let new_text = v.get("newText")?.as_str()?.to_string();
+    Some(TextEdit { start_line, start_col, end_line, end_col, new_text })
 }
 
 fn handle_definition_response(json: &serde_json::Value, state: &SharedState) {
@@ -845,6 +1039,73 @@ mod tests {
 
     fn make_state() -> SharedState {
         Arc::new(Mutex::new(SharedInner::default()))
+    }
+
+    #[test]
+    fn parse_signature_help_basic() {
+        let result = serde_json::json!({
+            "signatures": [{
+                "label": "fn foo(x: i32, y: String) -> u64",
+                "parameters": [
+                    { "label": "x: i32" },
+                    { "label": "y: String" }
+                ]
+            }],
+            "activeSignature": 0,
+            "activeParameter": 1
+        });
+        let info = parse_signature_help(&result).unwrap();
+        assert_eq!(info.label, "fn foo(x: i32, y: String) -> u64");
+        assert_eq!(info.active_param, 1);
+        assert_eq!(info.param_labels, vec!["x: i32", "y: String"]);
+    }
+
+    #[test]
+    fn parse_signature_help_offset_label() {
+        // Label como [start, end] dentro del label de la firma.
+        let result = serde_json::json!({
+            "signatures": [{
+                "label": "foo(x, y)",
+                "parameters": [
+                    { "label": [4, 5] },
+                    { "label": [7, 8] }
+                ]
+            }]
+        });
+        let info = parse_signature_help(&result).unwrap();
+        assert_eq!(info.param_labels, vec!["x", "y"]);
+    }
+
+    #[test]
+    fn parse_text_edit_basic() {
+        let v = serde_json::json!({
+            "range": {
+                "start": { "line": 1, "character": 0 },
+                "end":   { "line": 1, "character": 4 }
+            },
+            "newText": "let "
+        });
+        let e = parse_text_edit(&v).unwrap();
+        assert_eq!(e.start_line, 1);
+        assert_eq!(e.start_col, 0);
+        assert_eq!(e.end_line, 1);
+        assert_eq!(e.end_col, 4);
+        assert_eq!(e.new_text, "let ");
+    }
+
+    #[test]
+    fn handle_text_edits_response_array() {
+        let s = make_state();
+        let json = serde_json::json!({
+            "id": 1,
+            "result": [
+                { "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 3 } }, "newText": "fn " },
+                { "range": { "start": { "line": 1, "character": 4 }, "end": { "line": 1, "character": 5 } }, "newText": "" }
+            ]
+        });
+        handle_text_edits_response(&json, &s);
+        let edits = s.lock().unwrap().text_edits.clone();
+        assert_eq!(edits.len(), 2);
     }
 
     #[test]
