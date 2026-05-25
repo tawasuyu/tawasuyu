@@ -32,6 +32,7 @@ use mirada_brain::{CtlReply, CtlRequest, DesktopAction, WindowLine};
 use nahual_launcher::launch_app;
 use nahual_theme::Theme;
 use shuma_exec::{run as exec_run, CommandSpec, Exec, RunEvent, RunHandle, StageSpec};
+use shuma_history::{Entry as HistoryEntry, History, Nav as HistoryNav};
 use shuma_line::{CompletionKind, CompletionSource, LineState, TokenKind};
 use shuma_session::{CommandRun, RunId, RunStatus, Stream, WorkSession};
 use shuma_sysmon::{Snapshot, SystemSampler};
@@ -328,6 +329,54 @@ struct RunUi {
     user_touched: bool,
 }
 
+/// Picker fuzzy del historial durable — el overlay que aparece con Ctrl-R.
+struct HistoryPicker {
+    /// Consulta vigente; query vacía muestra las entradas más recientes.
+    query: String,
+    /// Índice de la línea resaltada dentro de los resultados visibles.
+    selected: usize,
+}
+
+impl HistoryPicker {
+    /// Cuántas filas se muestran a la vez.
+    const VISIBLE: usize = 10;
+
+    fn new() -> Self {
+        Self { query: String::new(), selected: 0 }
+    }
+
+    /// Resultados ordenados por relevancia, limitados a `VISIBLE`.
+    fn results<'a>(&self, history: &'a History) -> Vec<&'a HistoryEntry> {
+        history.fuzzy_search(&self.query, Self::VISIBLE)
+    }
+}
+
+/// Limpia un pegado del portapapeles para insertarlo en la línea actual
+/// (que es de un solo renglón). Equivalente a "bracketed paste" en un
+/// terminal: nada se ejecuta automáticamente, las nuevas líneas se
+/// coalescen a `; ` y los controles se descartan.
+fn sanitize_paste(s: &str) -> String {
+    // Trabajamos por líneas no vacías y unimos con "; ". Así las
+    // múltiples \n consecutivas y los \r\n caen al mismo separador,
+    // sin generar `; ;` ni colas vacías.
+    let normalized = s.replace("\r\n", "\n").replace('\r', "\n");
+    let pieces: Vec<String> = normalized
+        .split('\n')
+        .map(|seg| {
+            seg.chars()
+                .map(|c| match c {
+                    '\t' => ' ',
+                    c if c.is_control() => '\0',
+                    c => c,
+                })
+                .filter(|c| *c != '\0')
+                .collect::<String>()
+        })
+        .filter(|seg| !seg.is_empty())
+        .collect();
+    pieces.join("; ")
+}
+
 struct Shell {
     line: LineState,
     /// La sesión de trabajo: cwd, historial y grupos.
@@ -369,6 +418,18 @@ struct Shell {
     /// `true` cuando el cajón de resultados del modo launcher está
     /// desplegado (la ventana crece hacia arriba sobre el escritorio).
     drawer_open: bool,
+    /// Historial durable entre sesiones — persistido a `~/.local/share/shuma/history.jsonl`.
+    /// `None` si el SO no expone un directorio de datos o si la apertura
+    /// falló (el shell sigue funcionando, sólo sin durabilidad).
+    history: Option<History>,
+    /// Posición en el historial durable mientras se navega con flechas;
+    /// `None` = el cursor está "debajo" de la última entrada (líneanueva).
+    history_cursor: Option<usize>,
+    /// La línea que se estaba editando cuando comenzó la navegación por
+    /// historial; se restaura al salir del historial por abajo.
+    history_draft: Option<String>,
+    /// Picker fuzzy del historial (Ctrl-R) — `Some` mientras está abierto.
+    picker: Option<HistoryPicker>,
 }
 
 impl Shell {
@@ -413,6 +474,10 @@ impl Shell {
             launcher: false,
             windows_bar: Vec::new(),
             drawer_open: false,
+            history: History::default_path().and_then(|p| History::open(p).ok()),
+            history_cursor: None,
+            history_draft: None,
+            picker: None,
         };
         shell.start_loop(cx);
         shell
@@ -657,6 +722,13 @@ impl Shell {
             if !ui.user_touched {
                 ui.collapsed = true;
             }
+        }
+
+        // Persistir en el historial durable. La política de dedup descarta
+        // duplicados consecutivos; cualquier error de I/O se ignora — el
+        // historial durable es una mejora, no un requisito para ejecutar.
+        if let Some(h) = self.history.as_mut() {
+            let _ = h.append(HistoryEntry::new(&line, self.session.cwd(), now));
         }
 
         // `cd` interno — un subproceso no podría cambiar nuestro cwd.
@@ -913,6 +985,12 @@ impl Shell {
         let ctrl = ks.modifiers.control;
         let mut changed = false;
 
+        // Picker fuzzy del historial — atajos propios mientras está abierto.
+        if self.picker.is_some() {
+            self.handle_picker_key(ks, cx);
+            return;
+        }
+
         match key {
             "enter" => {
                 self.submit();
@@ -922,6 +1000,8 @@ impl Shell {
             "escape" => {
                 self.show_completion = false;
                 self.reprocess_source = None;
+                self.history_cursor = None;
+                self.history_draft = None;
                 cx.notify();
                 return;
             }
@@ -931,12 +1011,22 @@ impl Shell {
                 return;
             }
             "up" => {
-                self.cycle_completion(-1);
+                // Prioridad: si el popup de autocompletado está abierto, las
+                // flechas lo recorren; si no, navegan el historial durable.
+                if self.show_completion {
+                    self.cycle_completion(-1);
+                } else {
+                    self.history_step(HistoryNav::Older);
+                }
                 cx.notify();
                 return;
             }
             "down" => {
-                self.cycle_completion(1);
+                if self.show_completion {
+                    self.cycle_completion(1);
+                } else {
+                    self.history_step(HistoryNav::Newer);
+                }
                 cx.notify();
                 return;
             }
@@ -976,6 +1066,24 @@ impl Shell {
                 self.line.clear();
                 changed = true;
             }
+            "r" if ctrl => {
+                // Abre el picker fuzzy del historial — overlay tipo Ctrl-R de bash.
+                self.open_history_picker();
+                cx.notify();
+                return;
+            }
+            "v" if ctrl => {
+                // Pegado del portapapeles — equivalente a "bracketed paste".
+                if let Some(item) = cx.read_from_clipboard() {
+                    if let Some(text) = item.text() {
+                        let sanitized = sanitize_paste(&text);
+                        if !sanitized.is_empty() {
+                            self.line.insert(&sanitized);
+                            changed = true;
+                        }
+                    }
+                }
+            }
             "space" if ctrl => {
                 // Ctrl+Space también acepta el fantasma predicho.
                 if let Some(g) = self.compute_ghost() {
@@ -1007,7 +1115,117 @@ impl Shell {
         }
 
         if changed {
+            // Cualquier edición del texto invalida la navegación por historial.
+            self.history_cursor = None;
+            self.history_draft = None;
             self.refresh_completion();
+        }
+        cx.notify();
+    }
+
+    /// Mueve el cursor del historial durable y refresca la línea con la
+    /// entrada apuntada. Si se sale por abajo, restaura el borrador
+    /// original que el usuario estaba escribiendo.
+    fn history_step(&mut self, dir: HistoryNav) {
+        let Some(h) = self.history.as_ref() else { return };
+        if h.is_empty() {
+            return;
+        }
+        if matches!(dir, HistoryNav::Older) && self.history_cursor.is_none() {
+            // Primer paso hacia atrás: recordamos lo que había escrito.
+            self.history_draft = Some(self.line.text().to_string());
+        }
+        match h.navigate(self.history_cursor, dir) {
+            Some((idx, entry)) => {
+                self.history_cursor = Some(idx);
+                let text = entry.line.clone();
+                self.line.clear();
+                self.line.insert(&text);
+            }
+            None => {
+                // Sólo cuando intentamos avanzar más allá de la última entrada
+                // (sentido Newer) restauramos el borrador. Ir más atrás del
+                // primer comando es un no-op.
+                if matches!(dir, HistoryNav::Newer) {
+                    self.history_cursor = None;
+                    self.line.clear();
+                    if let Some(draft) = self.history_draft.take() {
+                        self.line.insert(&draft);
+                    }
+                }
+            }
+        }
+        // El historial no debe filtrar el popup de autocompletado.
+        self.show_completion = false;
+    }
+
+    /// Abre el picker fuzzy del historial. Si el historial está vacío o
+    /// no se pudo cargar, no hace nada.
+    fn open_history_picker(&mut self) {
+        if self.history.as_ref().is_some_and(|h| !h.is_empty()) {
+            self.picker = Some(HistoryPicker::new());
+            self.show_completion = false;
+        }
+    }
+
+    /// Manejo de teclas mientras el picker fuzzy del historial está abierto.
+    fn handle_picker_key(&mut self, ks: &gpui::Keystroke, cx: &mut Context<Self>) {
+        let key = ks.key.as_str();
+        let ctrl = ks.modifiers.control;
+        let Some(picker) = self.picker.as_mut() else {
+            return;
+        };
+        let Some(history) = self.history.as_ref() else {
+            self.picker = None;
+            cx.notify();
+            return;
+        };
+
+        match key {
+            "escape" => {
+                self.picker = None;
+            }
+            "enter" => {
+                let results = picker.results(history);
+                if let Some(entry) = results.get(picker.selected).copied() {
+                    let text = entry.line.clone();
+                    self.line.clear();
+                    self.line.insert(&text);
+                }
+                self.picker = None;
+            }
+            "up" => {
+                if picker.selected > 0 {
+                    picker.selected -= 1;
+                }
+            }
+            "down" => {
+                let n = picker.results(history).len();
+                if n > 0 && picker.selected + 1 < n {
+                    picker.selected += 1;
+                }
+            }
+            "r" if ctrl => {
+                // Ctrl-R repetido avanza al siguiente match — convención bash.
+                let n = picker.results(history).len();
+                if n > 0 && picker.selected + 1 < n {
+                    picker.selected += 1;
+                }
+            }
+            "backspace" => {
+                picker.query.pop();
+                picker.selected = 0;
+            }
+            _ => {
+                if !ctrl {
+                    if let Some(ch) = ks.key_char.as_deref() {
+                        if !ch.chars().any(|c| c.is_control()) {
+                            picker.query.push_str(ch);
+                            picker.selected = 0;
+                        }
+                    }
+                }
+            }
         }
         cx.notify();
     }
@@ -1855,6 +2073,82 @@ impl Render for Shell {
 
         // --- Popup de autocompletado ---
         let mut popup_layer: Vec<gpui::Div> = Vec::new();
+
+        // --- Overlay del picker fuzzy del historial (Ctrl-R) ---
+        // Se dibuja primero para que, si está abierto, los demás popups no
+        // compitan visualmente. Tiene su propia cabecera con la query.
+        if let (Some(picker), Some(history)) = (self.picker.as_ref(), self.history.as_ref()) {
+            let results = picker.results(history);
+            let query_display = if picker.query.is_empty() {
+                SharedString::from("(escribe para filtrar · ↑↓ navega · Enter elige · Esc cierra)")
+            } else {
+                SharedString::from(format!("› {}", picker.query))
+            };
+            let total = history.len();
+            let header = div()
+                .px(px(10.))
+                .py(px(5.))
+                .text_color(accent)
+                .text_size(px(13.))
+                .child(query_display);
+            let stats = div()
+                .px(px(10.))
+                .py(px(3.))
+                .text_color(dim)
+                .text_size(px(11.))
+                .child(SharedString::from(format!(
+                    "{} / {} · Ctrl-R próximo",
+                    results.len(),
+                    total
+                )));
+            let rows: Vec<_> = results
+                .iter()
+                .enumerate()
+                .map(|(i, entry)| {
+                    let selected = i == picker.selected;
+                    let line_color = if selected { node_bg } else { text };
+                    let cwd_color = if selected { node_bg } else { dim };
+                    div()
+                        .px(px(10.))
+                        .py(px(3.))
+                        .flex()
+                        .flex_row()
+                        .gap(px(8.))
+                        .when(selected, |d| d.bg(accent))
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_color(line_color)
+                                .child(SharedString::from(entry.line.clone())),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_color(cwd_color)
+                                .text_size(px(11.))
+                                .child(SharedString::from(entry.cwd.clone())),
+                        )
+                })
+                .collect();
+            popup_layer.push(
+                div()
+                    .absolute()
+                    .left(px(28.))
+                    .bottom(px(52.))
+                    .w(px(640.))
+                    .flex()
+                    .flex_col()
+                    .bg(node_bg)
+                    .border_1()
+                    .border_color(accent)
+                    .rounded(px(5.))
+                    .text_size(px(13.))
+                    .child(header)
+                    .child(stats)
+                    .children(rows),
+            );
+        }
+
         if self.show_completion {
             if let Some(comp) = &self.completion {
                 if !comp.candidates.is_empty() {
@@ -2041,5 +2335,45 @@ fn main() {
         run_launcher();
     } else {
         launch_app("brahman · shuma shell", (1100., 700.), Shell::new);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_paste;
+
+    #[test]
+    fn paste_drops_trailing_newline() {
+        // Caso típico: pegar "ls -la\n" no debe ejecutar nada por sí solo.
+        assert_eq!(sanitize_paste("ls -la\n"), "ls -la");
+    }
+
+    #[test]
+    fn paste_joins_multiline_with_semicolon() {
+        // Varios comandos pegados se coalescen como secuencia, sin ejecutar.
+        assert_eq!(sanitize_paste("ls\npwd\n"), "ls; pwd");
+    }
+
+    #[test]
+    fn paste_normalizes_crlf() {
+        assert_eq!(sanitize_paste("a\r\nb"), "a; b");
+        assert_eq!(sanitize_paste("a\rb"), "a; b");
+    }
+
+    #[test]
+    fn paste_strips_other_controls() {
+        // ESC (\x1b) y BEL (\x07) se descartan; tab → espacio.
+        assert_eq!(sanitize_paste("ls\t-la\x1b[X\x07"), "ls -la[X");
+    }
+
+    #[test]
+    fn paste_collapses_repeated_separators() {
+        // Dos saltos seguidos no producen "; ;".
+        assert_eq!(sanitize_paste("a\n\nb"), "a; b");
+    }
+
+    #[test]
+    fn paste_keeps_plain_text() {
+        assert_eq!(sanitize_paste("echo hola mundo"), "echo hola mundo");
     }
 }
