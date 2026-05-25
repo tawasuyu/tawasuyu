@@ -1,8 +1,13 @@
-//! `supay-app-llimphi` — Fase 0 del proyecto supay.
+//! `supay-app-llimphi` — Fase 0.5 del proyecto supay.
 //!
 //! Raycaster estilo Wolfenstein/Doom-early para validar el pipeline
 //! "tick deterministic separado del render" antes de cablear
-//! doomgeneric real en Fase 1.
+//! doomgeneric real en Fase 1. Esta iteración suma **sprites
+//! billboarded con z-test** y **sector lights** — los dos rasgos
+//! que vuelven el modelo legible: ya hay scene extraction implícita
+//! (mapa estático + sprite list + light list son tres canales
+//! independientes) y el renderer las consume cada una con su
+//! pipeline.
 //!
 //! Mapa 16×16 hardcoded (paredes con 4 materiales), jugador con
 //! (x, y, angle), tick a 35 Hz vía `Handle::spawn_periodic`,
@@ -10,10 +15,22 @@
 //! lanzamos un rayo, DDA por la grilla, calculamos altura del slice
 //! con perpendicular distance (evita fish-eye), sombreamos por
 //! distancia + lado de pared (paredes E/W más oscuras que N/S como
-//! Doom original), niebla volumétrica con alpha vs distancia.
+//! Doom original) + contribución sumada de luces puntuales (falloff
+//! `1/(1+d²)`) + niebla volumétrica.
+//!
+//! Sprites: lista de objetos con `(x, y, kind, scale)`. Por sprite
+//! transformamos a espacio cámara con el inverso de la matriz
+//! `[plane | dir]`, calculamos `screen_x` + altura proporcional a
+//! `1/depth`, y pintamos columna por columna respetando un z-buffer
+//! por columna que guardamos durante el raycast de paredes.
+//!
+//! Sector lights: lista de `(x, y, r, g, b, strength)`. Cada luz
+//! aporta `strength · color · 1/(1 + d²)` al hit world-point del
+//! rayo, antes de fog. La iluminación total se clampea para no
+//! sobre-exponer.
 //!
 //! Anti-fish-eye: la distancia que usamos para el alto de pared es
-//! `hit_dist * cos(ray_angle - player_angle)`, no `hit_dist` puro.
+//! `hit_dist · cos(ray_angle - player_angle)`, no `hit_dist` puro.
 //!
 //! Controles: W/S adelante/atrás, A/D strafe, ←/→ giro, Esc cierra.
 
@@ -64,8 +81,97 @@ fn tile(x: i32, y: i32) -> u8 {
 }
 
 // =====================================================================
+// Sprites — objetos del mundo billboarded
+// =====================================================================
+
+/// Tipo de sprite. Cada uno tiene un color base y un perfil de altura
+/// (qué fracción del slice ocupa verticalmente). En Fase 1 los reemplaza
+/// la tabla de sprites del WAD (animaciones por estado + 8 ángulos).
+#[derive(Clone, Copy)]
+enum SpriteKind {
+    Barrel,
+    Pillar,
+    Imp,
+    Torch,
+}
+
+#[derive(Clone, Copy)]
+struct Sprite {
+    x: f32,
+    y: f32,
+    kind: SpriteKind,
+    /// Multiplicador de tamaño aparente. 1.0 = pared completa de 1
+    /// unidad. Los barriles ocupan ~0.5, las antorchas ~0.7, los
+    /// imps ~0.85.
+    scale: f32,
+}
+
+impl Sprite {
+    /// Color base + altura fraccional. La altura define qué % del
+    /// slice se pinta — un barril pintado a 0.5 ocupa la mitad inferior
+    /// del slice (porque está apoyado en el piso).
+    fn appearance(&self) -> ((f32, f32, f32), f32) {
+        match self.kind {
+            SpriteKind::Barrel => ((0.32, 0.78, 0.30), 0.5),
+            SpriteKind::Pillar => ((0.55, 0.50, 0.42), 1.0),
+            SpriteKind::Imp => ((0.78, 0.20, 0.18), 0.85),
+            SpriteKind::Torch => ((0.95, 0.78, 0.30), 0.7),
+        }
+    }
+}
+
+const SPRITES: &[Sprite] = &[
+    Sprite { x: 4.5, y: 3.5, kind: SpriteKind::Barrel, scale: 0.5 },
+    Sprite { x: 7.5, y: 5.5, kind: SpriteKind::Imp, scale: 0.85 },
+    Sprite { x: 11.5, y: 4.5, kind: SpriteKind::Pillar, scale: 1.0 },
+    Sprite { x: 6.5, y: 9.5, kind: SpriteKind::Barrel, scale: 0.5 },
+    Sprite { x: 12.5, y: 11.5, kind: SpriteKind::Imp, scale: 0.85 },
+    Sprite { x: 8.5, y: 12.5, kind: SpriteKind::Torch, scale: 0.7 },
+    Sprite { x: 3.5, y: 13.5, kind: SpriteKind::Torch, scale: 0.7 },
+];
+
+// =====================================================================
+// Sector lights — luces puntuales con falloff inverso al cuadrado
+// =====================================================================
+
+#[derive(Clone, Copy)]
+struct Light {
+    x: f32,
+    y: f32,
+    /// Color de la luz en lineal [0, 1].
+    color: (f32, f32, f32),
+    /// Multiplicador de intensidad. Strenghts típicos: 1.5 antorcha
+    /// cálida, 0.8 luz fría tenue, 2.5 portal infernal.
+    strength: f32,
+}
+
+const LIGHTS: &[Light] = &[
+    Light { x: 8.5, y: 12.5, color: (1.00, 0.70, 0.35), strength: 2.2 },
+    Light { x: 3.5, y: 13.5, color: (1.00, 0.70, 0.35), strength: 1.8 },
+    Light { x: 7.5, y: 5.5, color: (0.85, 0.20, 0.15), strength: 2.5 }, // halo infernal en el imp
+    Light { x: 13.5, y: 6.5, color: (0.35, 0.55, 1.00), strength: 1.4 }, // luz fría
+];
+
+/// Contribución sumada de todas las luces al hit_world_point.
+/// Atenuación `1/(1 + 0.6·d²)`. El resultado se SUMA al color
+/// ambient + base del material; el caller clampea.
+fn lighting_contribution(hit_x: f32, hit_y: f32) -> (f32, f32, f32) {
+    let mut acc = (0.0_f32, 0.0_f32, 0.0_f32);
+    for l in LIGHTS {
+        let dx = l.x - hit_x;
+        let dy = l.y - hit_y;
+        let d2 = dx * dx + dy * dy;
+        let atten = l.strength / (1.0 + 0.6 * d2);
+        acc.0 += l.color.0 * atten;
+        acc.1 += l.color.1 * atten;
+        acc.2 += l.color.2 * atten;
+    }
+    acc
+}
+
+// =====================================================================
 // Materiales — cada id de pared a un color base. La iluminación final
-// es: color · shading_por_distancia · 0.7 si pared E/W (lado) · niebla.
+// es: color · (ambient + lights) · side_bias · 1/(1+kd) · fog.
 // =====================================================================
 
 fn material_color(id: u8) -> (f32, f32, f32) {
@@ -455,6 +561,11 @@ fn scene_pane(model: &Model) -> View<Msg> {
 /// continuas). Bajalo a 1.0 si querés calidad full.
 const COL_STRIDE: f32 = 3.0;
 
+/// Luz ambiental mínima — sin esto los rincones sin luz son negro
+/// puro. Doom original tenía ambient sectorial; acá un escalar
+/// global más el aporte de las luces puntuales.
+const AMBIENT: f32 = 0.18;
+
 fn draw_scene(
     scene: &mut llimphi_ui::llimphi_raster::vello::Scene,
     rect: PaintRect,
@@ -468,16 +579,20 @@ fn draw_scene(
         return;
     }
 
-    // Banding del cielo/piso (4 bandas cada uno) — barato y enriquece
-    // un fondo que sería flat de otra manera. El raycast pinta encima.
+    // Banding del cielo/piso — barato y enriquece el fondo. El
+    // raycast pinta encima.
     draw_sky_and_floor(scene, rect);
 
-    // Para cada columna lanzamos un rayo. El ángulo del rayo es
-    // `pa - fov/2 + col_frac * fov` con `col_frac ∈ [0, 1]`.
+    // Z-buffer por columna: perp_dist de la pared que cubre esa
+    // columna. Los sprites se pintan después usando esto para
+    // ocultarse detrás de paredes más cercanas.
+    let total_cols = (w / COL_STRIDE as f64).max(1.0) as usize + 1;
+    let mut z_buf: Vec<f32> = vec![f32::INFINITY; total_cols];
+
+    // --- Pass 1: paredes ---
     let mut x_pix = rect.x as f64;
     let x_end = (rect.x + rect.w) as f64;
-    let total_cols = (w / COL_STRIDE as f64).max(1.0);
-    let mut i = 0;
+    let mut i = 0_usize;
     while x_pix < x_end {
         let col_frac = i as f32 / total_cols as f32;
         let ray_angle = pa - FOV * 0.5 + FOV * col_frac;
@@ -485,24 +600,33 @@ fn draw_scene(
         let cos_offset = (ray_angle - pa).cos().max(0.0001);
         let corrected = hit.perp_dist * cos_offset;
 
-        // Altura del slice en píxeles. Pared mundo de 1.0 unidad,
-        // cámara con plano vertical = altura del rect.
+        // Hit world-point para iluminación por luces puntuales.
+        let hit_x = px + hit.perp_dist * ray_angle.cos();
+        let hit_y = py + hit.perp_dist * ray_angle.sin();
+        let lights = lighting_contribution(hit_x, hit_y);
+        let mut light_mul = (
+            (AMBIENT + lights.0).min(2.0),
+            (AMBIENT + lights.1).min(2.0),
+            (AMBIENT + lights.2).min(2.0),
+        );
+        if hit.side_ew {
+            // Bias clásico de Doom para distinguir paredes E/W.
+            light_mul.0 *= 0.78;
+            light_mul.1 *= 0.78;
+            light_mul.2 *= 0.78;
+        }
+
+        let base = material_color(hit.material);
+        let mut col = (base.0 * light_mul.0, base.1 * light_mul.1, base.2 * light_mul.2);
+        col = shade_by_dist(col, hit.perp_dist);
+        col = apply_fog(col, hit.perp_dist);
+
+        // Altura del slice en píxeles.
         let line_h = (h / corrected as f64).min(h * 4.0);
         let y_mid = h * 0.5 + rect.y as f64;
         let y_top = y_mid - line_h * 0.5;
         let y_bot = y_mid + line_h * 0.5;
 
-        // Color final del slice.
-        let mut col = material_color(hit.material);
-        if hit.side_ew {
-            col.0 *= 0.78;
-            col.1 *= 0.78;
-            col.2 *= 0.78;
-        }
-        col = shade_by_dist(col, hit.perp_dist);
-        col = apply_fog(col, hit.perp_dist);
-
-        // Pintamos como rect de ancho COL_STRIDE y alto line_h.
         let r = llimphi_ui::llimphi_raster::kurbo::Rect::new(
             x_pix,
             y_top.max(rect.y as f64),
@@ -517,12 +641,125 @@ fn draw_scene(
             &r,
         );
 
+        // Guardamos la perp_dist (no la corregida) para z-test con sprites.
+        if i < z_buf.len() {
+            z_buf[i] = hit.perp_dist;
+        }
+
         x_pix += COL_STRIDE as f64;
         i += 1;
     }
 
-    // Minimap arriba a la derecha — overlay de debug.
+    // --- Pass 2: sprites billboarded con z-test por columna ---
+    draw_sprites(scene, rect, px, py, pa, &z_buf, total_cols);
+
+    // --- Overlay: minimap arriba a la derecha ---
     draw_minimap(scene, rect, px, py, pa);
+}
+
+/// Pinta todos los sprites visibles. Para cada uno:
+/// 1. Transforma `(sprite - player)` al espacio cámara con la inversa
+///    de la matriz `[plane | dir]`. `transformed.y` es la profundidad
+///    (>0 = delante).
+/// 2. `screen_x_center = (w/2) · (1 + transformed.x / transformed.y)`.
+/// 3. Altura proporcional a `1/depth` escalada por `sprite.scale`.
+/// 4. Pinta columna por columna en el rango horizontal; oculta la
+///    columna si la pared en esa columna tiene `perp_dist <= depth`.
+fn draw_sprites(
+    scene: &mut llimphi_ui::llimphi_raster::vello::Scene,
+    rect: PaintRect,
+    px: f32,
+    py: f32,
+    pa: f32,
+    z_buf: &[f32],
+    total_cols: usize,
+) {
+    let h = rect.h as f64;
+    let half_fov = FOV * 0.5;
+    let plane_len = half_fov.tan();
+    // dir = (cos, sin); plane = perpendicular a dir · plane_len.
+    let (sin_pa, cos_pa) = pa.sin_cos();
+    let dir = (cos_pa, sin_pa);
+    let plane = (-sin_pa * plane_len, cos_pa * plane_len);
+    let inv_det = 1.0 / (plane.0 * dir.1 - dir.0 * plane.1);
+
+    // Ordenar sprites por distancia descendente — los más lejanos
+    // primero, así los cercanos pintan encima cuando se superponen.
+    let mut visible: Vec<(usize, f32)> = SPRITES
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let dx = s.x - px;
+            let dy = s.y - py;
+            (i, dx * dx + dy * dy)
+        })
+        .collect();
+    visible.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    for (idx, _) in visible {
+        let s = &SPRITES[idx];
+        let dx = s.x - px;
+        let dy = s.y - py;
+        // Transform al espacio cámara.
+        let tx = inv_det * (dir.1 * dx - dir.0 * dy);
+        let ty = inv_det * (-plane.1 * dx + plane.0 * dy);
+        if ty <= 0.001 {
+            continue; // detrás de la cámara
+        }
+        // Centro horizontal en columnas lógicas (0..total_cols).
+        let screen_center_frac = 0.5 * (1.0 + tx / ty); // 0..1
+        let center_col = screen_center_frac * total_cols as f32;
+        // Tamaño aparente.
+        let sprite_h = (h as f32 / ty * s.scale).min(h as f32 * 4.0);
+        let sprite_w = sprite_h; // 1:1 aspect — los sprites Doom lo son
+        let half_cols = (sprite_w * 0.5) / COL_STRIDE;
+        let col_start = (center_col - half_cols).max(0.0) as usize;
+        let col_end = ((center_col + half_cols).max(0.0) as usize).min(total_cols);
+
+        let y_mid = h * 0.5 + rect.y as f64;
+        // El sprite apoya en el "piso" del slice: y_bot fijo al piso de
+        // un slice de altura full = h/ty, y_top sube según scale.
+        let slice_h = (h as f32 / ty) as f64;
+        let y_bot = (y_mid + slice_h * 0.5).min((rect.y + rect.h) as f64);
+        let y_top = (y_bot - sprite_h as f64).max(rect.y as f64);
+
+        // Color con shading + fog + lighting puntual.
+        let (base, _appearance_h) = s.appearance();
+        let lights = lighting_contribution(s.x, s.y);
+        let light_mul = (
+            (AMBIENT + lights.0).min(2.0),
+            (AMBIENT + lights.1).min(2.0),
+            (AMBIENT + lights.2).min(2.0),
+        );
+        let mut col = (base.0 * light_mul.0, base.1 * light_mul.1, base.2 * light_mul.2);
+        col = shade_by_dist(col, ty);
+        col = apply_fog(col, ty);
+        let color = rgb(col.0, col.1, col.2);
+
+        for cidx in col_start..col_end {
+            if cidx >= z_buf.len() {
+                break;
+            }
+            // Z-test: si la pared está más cerca, sprite tapado en esa col.
+            if z_buf[cidx] < ty {
+                continue;
+            }
+            let x_pix = rect.x as f64 + cidx as f64 * COL_STRIDE as f64;
+            let r = llimphi_ui::llimphi_raster::kurbo::Rect::new(
+                x_pix,
+                y_top,
+                x_pix + COL_STRIDE as f64,
+                y_bot,
+            );
+            scene.fill(
+                Fill::NonZero,
+                llimphi_ui::llimphi_raster::kurbo::Affine::IDENTITY,
+                color,
+                None,
+                &r,
+            );
+        }
+    }
 }
 
 fn draw_sky_and_floor(scene: &mut llimphi_ui::llimphi_raster::vello::Scene, rect: PaintRect) {
@@ -619,6 +856,43 @@ fn draw_minimap(
                 &cell_rect,
             );
         }
+    }
+
+    // Sprites como puntos coloreados según su tipo.
+    for s in SPRITES {
+        let (base, _) = s.appearance();
+        let dot = llimphi_ui::llimphi_raster::kurbo::Circle::new(
+            (x0 + s.x as f64 * cell, y0 + s.y as f64 * cell),
+            2.0,
+        );
+        scene.fill(
+            Fill::NonZero,
+            llimphi_ui::llimphi_raster::kurbo::Affine::IDENTITY,
+            rgb(base.0, base.1, base.2),
+            None,
+            &dot,
+        );
+    }
+
+    // Luces como anillos suaves del color de la luz — visualizan el
+    // radio de influencia aproximado en el minimap.
+    for l in LIGHTS {
+        let halo = llimphi_ui::llimphi_raster::kurbo::Circle::new(
+            (x0 + l.x as f64 * cell, y0 + l.y as f64 * cell),
+            (l.strength as f64).sqrt() * cell * 0.9,
+        );
+        scene.stroke(
+            &Stroke::new(0.8),
+            llimphi_ui::llimphi_raster::kurbo::Affine::IDENTITY,
+            Color::from_rgba8(
+                (l.color.0 * 255.0) as u8,
+                (l.color.1 * 255.0) as u8,
+                (l.color.2 * 255.0) as u8,
+                90,
+            ),
+            None,
+            &halo,
+        );
     }
 
     // Jugador + cono FOV.
