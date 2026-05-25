@@ -124,6 +124,24 @@ struct CompletionsBar {
     selected: usize,
     /// Pos donde se pidió la completion — para anclar el popup visual.
     anchor: (usize, usize),
+    /// Prefijo actual derivado del buffer en cada frame. Se filtran
+    /// los items por `label.to_lowercase().contains(filter.to_lowercase())`.
+    filter: String,
+}
+
+impl CompletionsBar {
+    fn filtered_indices(&self) -> Vec<usize> {
+        if self.filter.is_empty() {
+            return (0..self.items.len()).collect();
+        }
+        let f = self.filter.to_lowercase();
+        self.items
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.label.to_lowercase().contains(&f))
+            .map(|(i, _)| i)
+            .collect()
+    }
 }
 
 struct FindBarState {
@@ -261,18 +279,20 @@ impl App for EditorApp {
                 let col = m.editor.cursor.caret.col;
                 m.lsp.clear_completions();
                 m.lsp.request_completions(&path, line, col);
+                let (_, prefix) = m.editor.buffer.current_word_prefix(line, col);
                 m.completions = Some(CompletionsBar {
                     items: Vec::new(),
                     selected: 0,
                     anchor: (line, col),
+                    filter: prefix,
                 });
                 m
             }
             Msg::CompletionsNav { delta } => {
                 let mut m = model;
                 if let Some(bar) = m.completions.as_mut() {
-                    if !bar.items.is_empty() {
-                        let n = bar.items.len() as i32;
+                    let n = bar.filtered_indices().len() as i32;
+                    if n > 0 {
                         let sel = (bar.selected as i32 + delta).rem_euclid(n);
                         bar.selected = sel as usize;
                     }
@@ -283,10 +303,26 @@ impl App for EditorApp {
                 let mut m = model;
                 let Some(bar) = m.completions.take() else { return m };
                 m.lsp.clear_completions();
-                let Some(item) = bar.items.get(bar.selected) else { return m };
+                // Resolvemos el item seleccionado en el filtered set.
+                let filtered = bar.filtered_indices();
+                let Some(&item_idx) = filtered.get(bar.selected) else { return m };
+                let item = match bar.items.get(item_idx) {
+                    Some(it) => it.clone(),
+                    None => return m,
+                };
                 let text = item.text_to_insert().to_string();
-                // Insertamos en el caret actual; sin smart-replace del
-                // prefijo (TODO: detectar word boundary y reemplazar).
+                // Smart-replace: seleccionamos [word_start_col..caret_col]
+                // de la línea actual y reemplazamos por `text`. Si no hay
+                // prefijo, queda como simple insert.
+                let line = m.editor.cursor.caret.line;
+                let caret_col = m.editor.cursor.caret.col;
+                let (word_start, _) = m.editor.buffer.current_word_prefix(line, caret_col);
+                if word_start < caret_col {
+                    m.editor.cursor.anchor =
+                        Some(llimphi_widget_text_editor::Pos::new(line, word_start));
+                    m.editor.cursor.caret =
+                        llimphi_widget_text_editor::Pos::new(line, caret_col);
+                }
                 let _ = llimphi_widget_text_editor::ops::replace_selection(
                     &mut m.editor.buffer,
                     &mut m.editor.cursor,
@@ -635,16 +671,31 @@ fn truncate_hover(s: &str, max: usize) -> String {
 }
 
 fn completions_bar_view(bar: &CompletionsBar, theme: &Theme) -> View<Msg> {
+    let filtered = bar.filtered_indices();
     let mut rows: Vec<View<Msg>> = Vec::with_capacity(COMPLETIONS_MAX_ITEMS_VISIBLE);
+    let filter_label = if bar.filter.is_empty() {
+        String::new()
+    } else {
+        format!(" filtro «{}»", bar.filter)
+    };
     let header = if bar.items.is_empty() {
-        format!("completions @ {}:{} · esperando LSP…", bar.anchor.0 + 1, bar.anchor.1)
+        format!(
+            "completions @ {}:{}{} · esperando LSP…",
+            bar.anchor.0 + 1, bar.anchor.1, filter_label,
+        )
+    } else if filtered.is_empty() {
+        format!(
+            "completions @ {}:{}{} · sin matches",
+            bar.anchor.0 + 1, bar.anchor.1, filter_label,
+        )
     } else {
         format!(
-            "completions @ {}:{} · {} / {} · Tab/Enter aplica · Esc cierra",
+            "completions @ {}:{}{} · {} / {} · Tab/Enter aplica · Esc cierra",
             bar.anchor.0 + 1,
             bar.anchor.1,
+            filter_label,
             bar.selected + 1,
-            bar.items.len(),
+            filtered.len(),
         )
     };
     rows.push(
@@ -666,11 +717,11 @@ fn completions_bar_view(bar: &CompletionsBar, theme: &Theme) -> View<Msg> {
     let visible_start = bar
         .selected
         .saturating_sub(COMPLETIONS_MAX_ITEMS_VISIBLE.saturating_sub(1));
-    let visible_end =
-        (visible_start + COMPLETIONS_MAX_ITEMS_VISIBLE).min(bar.items.len());
-    for i in visible_start..visible_end {
-        let item = &bar.items[i];
-        let selected = i == bar.selected;
+    let visible_end = (visible_start + COMPLETIONS_MAX_ITEMS_VISIBLE).min(filtered.len());
+    for vi in visible_start..visible_end {
+        let item_idx = filtered[vi];
+        let item = &bar.items[item_idx];
+        let selected = vi == bar.selected;
         let bg = if selected { theme.bg_selected } else { theme.bg_panel };
         let kind = item.kind.as_deref().unwrap_or("?");
         let detail = item.detail.as_deref().unwrap_or("");
@@ -897,6 +948,21 @@ fn apply_editor_key(mut model: Model, ev: KeyEvent) -> Model {
     }
     if r.touched() {
         model.editor.ensure_caret_visible(EDITOR_VISIBLE_LINES);
+    }
+    // Si el popup de completions está abierto, actualizamos el filter
+    // según el prefijo actual del caret. Si no quedan matches → cerramos.
+    if let Some(bar) = model.completions.as_mut() {
+        let line = model.editor.cursor.caret.line;
+        let col = model.editor.cursor.caret.col;
+        let (_, prefix) = model.editor.buffer.current_word_prefix(line, col);
+        bar.filter = prefix;
+        let filtered = bar.filtered_indices();
+        if filtered.is_empty() && !bar.items.is_empty() {
+            model.completions = None;
+            model.lsp.clear_completions();
+        } else {
+            bar.selected = 0;
+        }
     }
     // Pull diagnostics actuales del LSP. Es barato — sólo lee del state
     // compartido.

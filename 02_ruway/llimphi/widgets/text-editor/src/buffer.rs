@@ -131,6 +131,28 @@ impl Buffer {
     pub fn replace_all(&mut self, s: &str) {
         self.set_text(s);
     }
+
+    /// Devuelve el rango `[start_col..col)` que contiene el "word" actual
+    /// — desde el último carácter no-de-palabra hasta `col`, en la línea
+    /// `line`. Útil para autocompletion (smart-replace del prefijo).
+    pub fn current_word_prefix(&self, line: usize, col: usize) -> (usize, String) {
+        let line_text = self.line(line);
+        let chars: Vec<char> = line_text
+            .chars()
+            .filter(|c| *c != '\n')
+            .collect();
+        let end = col.min(chars.len());
+        let mut start = end;
+        while start > 0 && is_word_char(chars[start - 1]) {
+            start -= 1;
+        }
+        let prefix: String = chars[start..end].iter().collect();
+        (start, prefix)
+    }
+}
+
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
 }
 
 #[cfg(test)]
@@ -176,6 +198,32 @@ mod tests {
         assert_eq!(b.slice(0, 100), "hola");
         assert_eq!(b.slice(50, 100), "");
         assert_eq!(b.slice(2, 1), ""); // end < start clampea
+    }
+
+    #[test]
+    fn current_word_prefix_basic() {
+        let b = Buffer::from_str("let hola_mundo = 1;");
+        // Caret en col 14 (después de la 'o' de "hola_mundo").
+        let (start, p) = b.current_word_prefix(0, 14);
+        assert_eq!(start, 4);
+        assert_eq!(p, "hola_mundo");
+    }
+
+    #[test]
+    fn current_word_prefix_en_inicio_es_vacio() {
+        let b = Buffer::from_str("hola");
+        let (start, p) = b.current_word_prefix(0, 0);
+        assert_eq!(start, 0);
+        assert!(p.is_empty());
+    }
+
+    #[test]
+    fn current_word_prefix_caret_despues_de_no_word() {
+        let b = Buffer::from_str("foo.bar");
+        let (start, p) = b.current_word_prefix(0, 4);
+        // El '.' no es word; el prefijo empieza ahí.
+        assert_eq!(start, 4);
+        assert!(p.is_empty());
     }
 
     #[test]
