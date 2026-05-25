@@ -1,0 +1,13 @@
+[package]
+name = "llimphi-widget-stat-card"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-stat-card — tarjeta de dashboard con label chico + valor grande + descripción + accent vertical. Análogo Llimphi al `nahual-widget-stat-card` GPUI."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-card = { workspace = true }

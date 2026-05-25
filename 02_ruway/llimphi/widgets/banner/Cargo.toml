@@ -1,0 +1,11 @@
+[package]
+name = "llimphi-widget-banner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-banner — tiras horizontales de status (Info/Success/Warning/Error). Colores semánticos hardcoded por severidad — no dependen del theme. Análogo Llimphi al `nahual-widget-banner` GPUI."
+
+[dependencies]
+llimphi-ui = { workspace = true }

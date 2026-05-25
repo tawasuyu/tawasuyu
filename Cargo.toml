@@ -107,9 +107,14 @@ members = [
     "02_ruway/llimphi/llimphi-text",
     "02_ruway/llimphi/llimphi-theme",
     "02_ruway/llimphi/llimphi-ui",
+    "02_ruway/llimphi/widgets/app-header",
+    "02_ruway/llimphi/widgets/banner",
     "02_ruway/llimphi/widgets/button",
+    "02_ruway/llimphi/widgets/card",
+    "02_ruway/llimphi/widgets/gallery",
     "02_ruway/llimphi/widgets/list",
     "02_ruway/llimphi/widgets/splitter",
+    "02_ruway/llimphi/widgets/stat-card",
     "02_ruway/llimphi/widgets/tabs",
     "02_ruway/llimphi/widgets/text-input",
     "02_ruway/llimphi/widgets/tree",
@@ -370,9 +375,13 @@ llimphi-ui = { path = "02_ruway/llimphi/llimphi-ui" }
 llimphi-theme = { path = "02_ruway/llimphi/llimphi-theme" }
 # Widgets reusables sobre llimphi-ui — uno por crate, paralelo al
 # patrón de `02_ruway/nahual/widgets/*`.
+llimphi-widget-app-header = { path = "02_ruway/llimphi/widgets/app-header" }
+llimphi-widget-banner = { path = "02_ruway/llimphi/widgets/banner" }
 llimphi-widget-button = { path = "02_ruway/llimphi/widgets/button" }
+llimphi-widget-card = { path = "02_ruway/llimphi/widgets/card" }
 llimphi-widget-list = { path = "02_ruway/llimphi/widgets/list" }
 llimphi-widget-splitter = { path = "02_ruway/llimphi/widgets/splitter" }
+llimphi-widget-stat-card = { path = "02_ruway/llimphi/widgets/stat-card" }
 llimphi-widget-tabs = { path = "02_ruway/llimphi/widgets/tabs" }
 llimphi-widget-text-input = { path = "02_ruway/llimphi/widgets/text-input" }
 llimphi-widget-tree = { path = "02_ruway/llimphi/widgets/tree" }

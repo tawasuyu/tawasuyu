@@ -1,0 +1,12 @@
+[package]
+name = "llimphi-widget-card"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-card — container card-shape con padding consistente, esquinas redondeadas y opcional accent border a la izquierda. Análogo Llimphi al `nahual-widget-card` GPUI."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
