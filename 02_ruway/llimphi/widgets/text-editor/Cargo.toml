@@ -1,0 +1,15 @@
+[package]
+name = "llimphi-widget-text-editor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-text-editor — editor de código multilínea para Llimphi: rope buffer (ropey), cursor + selección con flechas, undo/redo, indent auto, bracket matching, gutter con line numbers. LSP queda para una capa superior."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+ropey = { workspace = true }
+
+[dev-dependencies]
