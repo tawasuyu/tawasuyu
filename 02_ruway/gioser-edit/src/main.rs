@@ -1,0 +1,472 @@
+//! `gioser-edit` — editor de archivos rudimentario sobre Llimphi.
+//!
+//! - **Tree** a la izquierda (220 px) con el contenido del directorio
+//!   `cwd` (o el primer argumento). Click expande/colapsa directorios;
+//!   click en archivo lo carga al editor.
+//! - **Editor** a la derecha: text-editor multilínea con syntax highlight
+//!   derivado de la extensión (`.rs` → Rust, `.py` → Python, `.wat` → Wat,
+//!   resto → Plain). Caret, selección, bracket matching, gutter con
+//!   line numbers, undo/redo, copy/cut/paste.
+//! - **Atajos** dentro del editor: arrows + Shift/Ctrl, Home/End,
+//!   Ctrl+Home/End, PageUp/Down, Tab/Shift+Tab, Backspace/Delete,
+//!   Ctrl+Z/Y/Shift+Z (undo/redo), Ctrl+C/X/V (clipboard del sistema
+//!   vía arboard). **Ctrl+S guarda** el archivo abierto.
+//!
+//! Limitaciones MVP: el tree se construye al arrancar (no watcher), un
+//! solo archivo abierto a la vez (sin tabs), no marca "modified", no
+//! confirma overwrites externos.
+
+use std::env;
+use std::ffi::OsStr;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use llimphi_theme::Theme;
+use llimphi_ui::llimphi_layout::taffy::{
+    prelude::{length, percent, FlexDirection, Rect, Size, Style},
+    AlignItems,
+};
+use llimphi_ui::llimphi_raster::peniko::Color;
+use llimphi_ui::llimphi_text::Alignment;
+use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
+use llimphi_widget_text_editor::{
+    text_editor_view_highlighted, Clipboard, EditorMetrics, EditorPalette, EditorState, Language,
+};
+use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
+
+const TREE_WIDTH: f32 = 240.0;
+const TREE_ROW_H: f32 = 22.0;
+const TREE_INDENT: f32 = 16.0;
+const HEADER_H: f32 = 28.0;
+
+#[derive(Clone)]
+enum Msg {
+    ToggleNode(usize),
+    SelectNode(usize),
+    EditKey(KeyEvent),
+    Save,
+    SaveResult(Result<(), String>),
+}
+
+#[derive(Debug, Clone)]
+struct TreeNode {
+    path: PathBuf,
+    depth: usize,
+    is_dir: bool,
+    expanded: bool,
+}
+
+struct Model {
+    root: PathBuf,
+    nodes: Vec<TreeNode>,
+    selected: Option<usize>,
+    open_file: Option<PathBuf>,
+    editor: EditorState,
+    clipboard: ArboardClipboard,
+    status: String,
+    dirty: bool,
+}
+
+struct EditorApp;
+
+impl App for EditorApp {
+    type Model = Model;
+    type Msg = Msg;
+
+    fn title() -> &'static str {
+        "gioser-edit"
+    }
+
+    fn initial_size() -> (u32, u32) {
+        (1180, 760)
+    }
+
+    fn init(_: &Handle<Msg>) -> Model {
+        let root = env::args()
+            .nth(1)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        let root = fs::canonicalize(&root).unwrap_or(root);
+        let nodes = scan_root(&root);
+        let status = format!("{} · {} entradas", root.display(), nodes.len());
+        Model {
+            root,
+            nodes,
+            selected: None,
+            open_file: None,
+            editor: EditorState::new(),
+            clipboard: ArboardClipboard::new(),
+            status,
+            dirty: false,
+        }
+    }
+
+    fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
+        match msg {
+            Msg::ToggleNode(i) => toggle_node(model, i),
+            Msg::SelectNode(i) => select_node(model, i),
+            Msg::EditKey(ev) => apply_editor_key(model, ev),
+            Msg::Save => save_open_file(model, handle),
+            Msg::SaveResult(r) => {
+                let mut m = model;
+                m.status = match r {
+                    Ok(()) => {
+                        m.dirty = false;
+                        format!(
+                            "guardado · {}",
+                            m.open_file.as_deref().map(Path::display).map(|d| d.to_string()).unwrap_or_default()
+                        )
+                    }
+                    Err(e) => format!("error guardando: {e}"),
+                };
+                m
+            }
+        }
+    }
+
+    fn on_key(model: &Self::Model, event: &KeyEvent) -> Option<Self::Msg> {
+        if event.state != KeyState::Pressed {
+            return None;
+        }
+        // Ctrl+S guarda; el resto va al editor si hay archivo abierto.
+        if event.modifiers.ctrl
+            && matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("s"))
+        {
+            return Some(Msg::Save);
+        }
+        if model.open_file.is_none() {
+            return None;
+        }
+        Some(Msg::EditKey(event.clone()))
+    }
+
+    fn view(model: &Model) -> View<Msg> {
+        let theme = Theme::dark();
+        let header = header_bar(model, &theme);
+        let body = body_view(model, &theme);
+
+        View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+            ..Default::default()
+        })
+        .fill(theme.bg_app)
+        .children(vec![header, body])
+    }
+}
+
+fn header_bar(model: &Model, theme: &Theme) -> View<Msg> {
+    let open = model
+        .open_file
+        .as_deref()
+        .map(|p| relative_to(&model.root, p))
+        .unwrap_or_else(|| "(sin archivo abierto)".to_string());
+    let dirty = if model.dirty { " · ● modificado" } else { "" };
+    let text = format!(
+        "gioser-edit · {} · {}{}  ·  {}",
+        model.root.display(),
+        open,
+        dirty,
+        model.status,
+    );
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(HEADER_H) },
+        padding: Rect {
+            left: length(12.0_f32),
+            right: length(12.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .text_aligned(text, 11.0, theme.fg_muted, Alignment::Start)
+}
+
+fn body_view(model: &Model, theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        flex_grow: 1.0,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![tree_panel(model, theme), editor_panel(model, theme)])
+}
+
+fn tree_panel(model: &Model, theme: &Theme) -> View<Msg> {
+    let rows: Vec<TreeRow<Msg>> = model
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| TreeRow {
+            label: row_label(n),
+            depth: n.depth,
+            has_children: n.is_dir,
+            expanded: n.expanded,
+            selected: model.selected == Some(i),
+            on_toggle: Msg::ToggleNode(i),
+            on_select: Msg::SelectNode(i),
+        })
+        .collect();
+
+    let spec = TreeSpec {
+        rows,
+        row_height: TREE_ROW_H,
+        indent_px: TREE_INDENT,
+        palette: TreePalette::from_theme(theme),
+    };
+
+    View::new(Style {
+        size: Size { width: length(TREE_WIDTH), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(vec![tree_view(spec)])
+}
+
+fn editor_panel(model: &Model, theme: &Theme) -> View<Msg> {
+    let view = match &model.open_file {
+        None => empty_editor_placeholder(theme),
+        Some(path) => {
+            let language = language_for_path(path);
+            let palette = EditorPalette::from_theme(theme);
+            let metrics = EditorMetrics::for_font_size(13.0);
+            text_editor_view_highlighted(
+                &model.editor,
+                &palette,
+                metrics,
+                f32::INFINITY,
+                language,
+                Msg::EditKey(focus_event()), // click → re-foco (sin efecto extra)
+            )
+        }
+    };
+    View::new(Style {
+        flex_grow: 1.0,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children(vec![view])
+}
+
+/// "Click en el editor" — emite un EditKey con un evento sin efecto
+/// (Escape suelto sin modifiers, que `apply_key` ignora silently). Es
+/// el placeholder hasta que el editor tenga un Msg::Focus propio.
+fn focus_event() -> KeyEvent {
+    KeyEvent {
+        key: Key::Named(NamedKey::Escape),
+        state: KeyState::Released, // Released → apply_key lo ignora
+        text: None,
+        modifiers: Default::default(),
+        repeat: false,
+    }
+}
+
+fn empty_editor_placeholder(theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        padding: Rect {
+            left: length(20.0_f32),
+            right: length(20.0_f32),
+            top: length(20.0_f32),
+            bottom: length(20.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(
+        "Seleccioná un archivo del árbol para empezar a editar. \
+         Atajos: arrows con Shift selecciona · Ctrl+arrows salta palabra · \
+         Ctrl+Z/Y undo/redo · Ctrl+C/X/V clipboard · Ctrl+S guarda.",
+        12.0,
+        theme.fg_muted,
+        Alignment::Start,
+    )
+}
+
+// ---------------------------------------------------------------------
+// Tree logic
+// ---------------------------------------------------------------------
+
+fn scan_root(root: &Path) -> Vec<TreeNode> {
+    let mut out: Vec<TreeNode> = Vec::new();
+    visit_dir(root, 0, false, &mut out);
+    out
+}
+
+fn visit_dir(dir: &Path, depth: usize, into_expanded: bool, out: &mut Vec<TreeNode>) {
+    let _ = into_expanded;
+    let mut entries: Vec<(PathBuf, bool)> = match fs::read_dir(dir) {
+        Ok(rd) => rd
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_str()
+                    .map(|n| !n.starts_with('.') && n != "target" && n != "node_modules")
+                    .unwrap_or(false)
+            })
+            .map(|e| {
+                let p = e.path();
+                let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                (p, is_dir)
+            })
+            .collect(),
+        Err(_) => return,
+    };
+    // Directorios primero, luego archivos; ambos alfabéticos.
+    entries.sort_by(|a, b| match (a.1, b.1) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.0.file_name().cmp(&b.0.file_name()),
+    });
+
+    for (path, is_dir) in entries {
+        out.push(TreeNode {
+            path: path.clone(),
+            depth,
+            is_dir,
+            expanded: false,
+        });
+    }
+}
+
+fn toggle_node(mut model: Model, i: usize) -> Model {
+    let Some(node) = model.nodes.get(i).cloned() else {
+        return model;
+    };
+    if !node.is_dir {
+        return model;
+    }
+    let new_expanded = !node.expanded;
+    model.nodes[i].expanded = new_expanded;
+    if new_expanded {
+        // Insertamos children justo después de `i`.
+        let mut children: Vec<TreeNode> = Vec::new();
+        visit_dir(&node.path, node.depth + 1, true, &mut children);
+        // Splice
+        for (offset, child) in children.into_iter().enumerate() {
+            model.nodes.insert(i + 1 + offset, child);
+        }
+    } else {
+        // Quitamos descendants (deeper depth) hasta el primer hermano.
+        let mut j = i + 1;
+        while j < model.nodes.len() && model.nodes[j].depth > node.depth {
+            j += 1;
+        }
+        model.nodes.drain((i + 1)..j);
+    }
+    model
+}
+
+fn select_node(mut model: Model, i: usize) -> Model {
+    let Some(node) = model.nodes.get(i).cloned() else {
+        return model;
+    };
+    model.selected = Some(i);
+    if node.is_dir {
+        // Click en directorio = toggle también, así no necesita el chevron.
+        return toggle_node(model, i);
+    }
+    match fs::read_to_string(&node.path) {
+        Ok(content) => {
+            model.editor = EditorState::new();
+            model.editor.set_text(&content);
+            model.open_file = Some(node.path.clone());
+            model.dirty = false;
+            model.status = format!("abierto · {} bytes", content.len());
+        }
+        Err(e) => {
+            model.status = format!("error abriendo: {e}");
+        }
+    }
+    model
+}
+
+fn apply_editor_key(mut model: Model, ev: KeyEvent) -> Model {
+    let r = model.editor.apply_key_with_clipboard(&ev, &mut model.clipboard);
+    if r.changed() {
+        model.dirty = true;
+    }
+    model
+}
+
+fn save_open_file(model: Model, handle: &Handle<Msg>) -> Model {
+    let Some(path) = model.open_file.clone() else {
+        return model;
+    };
+    let content = model.editor.text();
+    let h = handle.clone();
+    handle.spawn(move || {
+        let result = fs::write(&path, content).map_err(|e| e.to_string());
+        Msg::SaveResult(result)
+    });
+    let _ = h;
+    let mut m = model;
+    m.status = "guardando…".to_string();
+    m
+}
+
+// ---------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------
+
+fn row_label(n: &TreeNode) -> String {
+    let name = n.path.file_name().and_then(|s| s.to_str()).unwrap_or("?");
+    if n.is_dir {
+        format!("📁 {name}")
+    } else {
+        format!("📄 {name}")
+    }
+}
+
+fn relative_to(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| path.display().to_string())
+}
+
+fn language_for_path(path: &Path) -> Language {
+    let ext = path.extension().and_then(OsStr::to_str).unwrap_or("");
+    Language::from_cell_language(ext)
+}
+
+// ---------------------------------------------------------------------
+// Clipboard backend (arboard)
+// ---------------------------------------------------------------------
+
+struct ArboardClipboard {
+    inner: Option<arboard::Clipboard>,
+}
+
+impl ArboardClipboard {
+    fn new() -> Self {
+        Self {
+            inner: arboard::Clipboard::new().ok(),
+        }
+    }
+}
+
+impl Clipboard for ArboardClipboard {
+    fn get(&mut self) -> Option<String> {
+        self.inner.as_mut()?.get_text().ok()
+    }
+    fn set(&mut self, s: &str) {
+        if let Some(c) = self.inner.as_mut() {
+            let _ = c.set_text(s.to_owned());
+        }
+    }
+}
+
+/// `Color::transparent()` para fills "vacíos" sin importar tema — quedaba
+/// huérfano de un branch viejo, lo dejamos por si surge un placeholder
+/// que lo necesite.
+#[allow(dead_code)]
+fn transparent() -> Color {
+    Color::TRANSPARENT
+}
+
+fn main() {
+    llimphi_ui::run::<EditorApp>();
+}

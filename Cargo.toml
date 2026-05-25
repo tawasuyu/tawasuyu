@@ -103,6 +103,7 @@ members = [
     "01_yachay/nakui/nakui-core",
     "01_yachay/nakui/nakui-explorer-llimphi",
     "01_yachay/nakui/nakui-ui-llimphi",
+    "02_ruway/gioser-edit",
     "02_ruway/chasqui/chasqui-broker",
     "02_ruway/chasqui/chasqui-broker-explorer",
     "02_ruway/chasqui/chasqui-card",
@@ -350,6 +351,7 @@ russh = "0.54"
 libm = "0.2"
 
 # === Code parsing (minga) ===
+arboard = "3"
 ropey = "1.6"
 tree-sitter = "0.24"
 tree-sitter-rust = "0.23"

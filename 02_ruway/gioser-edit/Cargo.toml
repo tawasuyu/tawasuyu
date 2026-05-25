@@ -1,0 +1,20 @@
+[package]
+name = "gioser-edit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "gioser-edit — editor de archivos rudimentario sobre Llimphi: file tree a la izquierda, text-editor con syntax highlight a la derecha. Pensado para probar las features del editor (selección, undo, brackets, clipboard) sobre archivos reales del workspace."
+
+[[bin]]
+name = "gioser-edit"
+path = "src/main.rs"
+
+[dependencies]
+arboard = { workspace = true }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-text-editor = { workspace = true }
+llimphi-widget-tree = { workspace = true }

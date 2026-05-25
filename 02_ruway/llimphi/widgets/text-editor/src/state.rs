@@ -6,6 +6,7 @@
 use llimphi_ui::{Key, KeyEvent, KeyState, NamedKey};
 
 use crate::buffer::Buffer;
+use crate::clipboard::{Clipboard, NullClipboard};
 use crate::cursor::{Cursor, Pos};
 use crate::ops::{
     dedent, delete_backward, delete_forward, indent_or_insert_tab,
@@ -89,10 +90,37 @@ impl EditorState {
         self.buffer.len_lines()
     }
 
+    /// Texto seleccionado, si hay selección no-vacía. `None` cuando el
+    /// cursor está colapsado.
+    pub fn selected_text(&self) -> Option<String> {
+        if !self.cursor.has_selection() {
+            return None;
+        }
+        let (s, e) = self.cursor.selection_range(&self.buffer);
+        if s == e {
+            return None;
+        }
+        Some(self.buffer.slice(s, e))
+    }
+
     /// Resultado: `Changed` si la tecla modificó el buffer o el cursor;
     /// `Ignored` si la tecla no aplica al editor. Útil para que el
     /// caller decida si rebuildear el view.
+    ///
+    /// Copy/cut/paste (Ctrl+C/X/V) son ignorados — para habilitarlos,
+    /// usá [`Self::apply_key_with_clipboard`] pasando un backend.
     pub fn apply_key(&mut self, event: &KeyEvent) -> ApplyResult {
+        self.apply_key_with_clipboard(event, &mut NullClipboard)
+    }
+
+    /// Como [`Self::apply_key`] pero con backend de clipboard activo:
+    /// Ctrl+C copia la selección, Ctrl+X la corta, Ctrl+V pega lo que
+    /// haya en el clipboard.
+    pub fn apply_key_with_clipboard(
+        &mut self,
+        event: &KeyEvent,
+        clipboard: &mut dyn Clipboard,
+    ) -> ApplyResult {
         if event.state != KeyState::Pressed {
             return ApplyResult::Ignored;
         }
@@ -198,6 +226,43 @@ impl EditorState {
                 } else {
                     ApplyResult::Ignored
                 }
+            }
+
+            // Clipboard
+            Key::Character(s) if ctrl && s.as_str().eq_ignore_ascii_case("c") => {
+                if let Some(text) = self.selected_text() {
+                    clipboard.set(&text);
+                    ApplyResult::CursorMoved
+                } else {
+                    ApplyResult::Ignored
+                }
+            }
+            Key::Character(s) if ctrl && s.as_str().eq_ignore_ascii_case("x") => {
+                if let Some(text) = self.selected_text() {
+                    clipboard.set(&text);
+                    let d = replace_selection(&mut self.buffer, &mut self.cursor, "");
+                    self.undo.push(d);
+                    ApplyResult::Changed
+                } else {
+                    ApplyResult::Ignored
+                }
+            }
+            Key::Character(s) if ctrl && s.as_str().eq_ignore_ascii_case("v") => {
+                let Some(text) = clipboard.get() else {
+                    return ApplyResult::Ignored;
+                };
+                if text.is_empty() {
+                    return ApplyResult::Ignored;
+                }
+                // En single-line, los `\n` del clipboard se aplanan.
+                let to_insert = if self.options.single_line {
+                    text.replace(['\n', '\r'], " ")
+                } else {
+                    text
+                };
+                let d = replace_selection(&mut self.buffer, &mut self.cursor, &to_insert);
+                self.undo.push(d);
+                ApplyResult::Changed
             }
 
             // Undo / Redo
@@ -422,5 +487,75 @@ mod tests {
         let r = s.apply_key(&evtext("s", false, true));
         assert_eq!(r, ApplyResult::Ignored);
         assert!(s.is_empty());
+    }
+
+    #[test]
+    fn ctrl_c_copia_la_seleccion_al_clipboard() {
+        use crate::clipboard::MemClipboard;
+        let mut s = EditorState::new();
+        s.set_text("hola mundo");
+        s.cursor = Cursor {
+            anchor: Some(Pos::new(0, 0)),
+            caret: Pos::new(0, 4),
+            desired_col: 4,
+        };
+        let mut clip = MemClipboard::new();
+        let r = s.apply_key_with_clipboard(&evtext("c", false, true), &mut clip);
+        assert_eq!(r, ApplyResult::CursorMoved);
+        assert_eq!(clip.get().as_deref(), Some("hola"));
+        // El buffer no cambia.
+        assert_eq!(s.text(), "hola mundo");
+    }
+
+    #[test]
+    fn ctrl_x_corta_y_borra() {
+        use crate::clipboard::MemClipboard;
+        let mut s = EditorState::new();
+        s.set_text("hola mundo");
+        s.cursor = Cursor {
+            anchor: Some(Pos::new(0, 0)),
+            caret: Pos::new(0, 5),
+            desired_col: 5,
+        };
+        let mut clip = MemClipboard::new();
+        let r = s.apply_key_with_clipboard(&evtext("x", false, true), &mut clip);
+        assert_eq!(r, ApplyResult::Changed);
+        assert_eq!(clip.get().as_deref(), Some("hola "));
+        assert_eq!(s.text(), "mundo");
+    }
+
+    #[test]
+    fn ctrl_v_pega_en_el_caret() {
+        use crate::clipboard::MemClipboard;
+        let mut s = EditorState::new();
+        s.set_text("ab");
+        s.cursor = Cursor::at(0, 1);
+        let mut clip = MemClipboard::with("XYZ");
+        s.apply_key_with_clipboard(&evtext("v", false, true), &mut clip);
+        assert_eq!(s.text(), "aXYZb");
+    }
+
+    #[test]
+    fn ctrl_v_aplana_newlines_en_single_line() {
+        use crate::clipboard::MemClipboard;
+        let mut s = EditorState::with_options(EditorOptions {
+            single_line: true,
+            ..Default::default()
+        });
+        let mut clip = MemClipboard::with("a\nb\nc");
+        s.apply_key_with_clipboard(&evtext("v", false, true), &mut clip);
+        assert_eq!(s.text(), "a b c");
+    }
+
+    #[test]
+    fn ctrl_c_sin_seleccion_es_ignorado() {
+        use crate::clipboard::MemClipboard;
+        let mut s = EditorState::new();
+        s.set_text("hola");
+        s.cursor = Cursor::at(0, 4);
+        let mut clip = MemClipboard::new();
+        let r = s.apply_key_with_clipboard(&evtext("c", false, true), &mut clip);
+        assert_eq!(r, ApplyResult::Ignored);
+        assert!(clip.get().is_none());
     }
 }

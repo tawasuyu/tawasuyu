@@ -17,7 +17,9 @@
 
 pub mod bracket;
 pub mod buffer;
+pub mod clipboard;
 pub mod cursor;
+pub mod find;
 pub mod highlight;
 pub mod ops;
 pub mod state;
@@ -25,7 +27,9 @@ pub mod undo;
 pub mod view;
 
 pub use buffer::Buffer;
+pub use clipboard::{Clipboard, MemClipboard, NullClipboard};
 pub use cursor::{Cursor, Pos, Selection};
+pub use find::{all_matches, find_next, find_prev, FindState};
 pub use highlight::{Highlighter, Language, Span, SyntaxPalette, TokenKind};
 pub use ops::{indent_str, EditDelta};
 pub use state::{ApplyResult, EditorOptions, EditorState};
