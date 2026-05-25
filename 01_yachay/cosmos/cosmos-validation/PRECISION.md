@@ -1,6 +1,6 @@
 # Precision Report
 
-This document inventories everything `eternal-validation` computes and
+This document inventories everything `cosmos-validation` computes and
 the precision at which each piece has been validated against the two
 independent reference implementations available to us: JPL Horizons
 (NASA/JPL ephemeris service, DE441) and Swiss Ephemeris (Astrodienst,
@@ -46,7 +46,7 @@ comes from running one of the comparison binaries under `src/bin/`.
                             ↓ compared against
 ┌───────────────────────────────────────────────────────────────────┐
 │  Oracle pipeline                                                   │
-│    • SPK backend (DE440 + sb441-n16, via eternal-ephemeris)      │
+│    • SPK backend (DE440 + sb441-n16, via cosmos-ephemeris)      │
 │    • VSOP2013 / ELP-MPP02 backend (analytic, embedded)             │
 │    • Apparent stack: LT + LD + S + NPB(IAU 2006/2000A)             │
 │    • Topocentric: WGS-84 → ITRS → TET via R3(GAST)                 │
@@ -188,7 +188,7 @@ Cross-validated against Swiss Ephemeris (`regression-de440-swiss-apparent/swiss.
 | Conversion | Precision |
 |---|---|
 | ΔT (TT − UT1) via IERS table | **sub-second** across 1968–2030 |
-| TT ↔ TDB (Fairhead-Bretagnon via eternal-time) | microseconds |
+| TT ↔ TDB (Fairhead-Bretagnon via cosmos-time) | microseconds |
 | TT ↔ UT1 (via ΔT) | sub-second in covered range |
 
 ---
@@ -207,7 +207,7 @@ The lunar ±30–44 s residual is now isolated to the parabolic γ-min refinemen
 
 ## Known limitations
 
-1. **SPK Type 21 not supported.** The on-disk reader handles Type 2 (Chebyshev) only. This is enough for DE440/DE441 (planets) and `sb441-n16` (main-belt-16 asteroids), but JPL Horizons distributes per-body SPKs for centaurs / TNOs (Chiron, Pholus, Eris, Sedna, etc.) as Type 21 (Modified Divided Differences). Adding Type 21 is a ~300-line self-contained patch in `eternal-ephemeris/src/jpl/spk.rs`; their NAIF IDs are already enumerated in `KNOWN_ASTEROIDS`.
+1. **SPK Type 21 not supported.** The on-disk reader handles Type 2 (Chebyshev) only. This is enough for DE440/DE441 (planets) and `sb441-n16` (main-belt-16 asteroids), but JPL Horizons distributes per-body SPKs for centaurs / TNOs (Chiron, Pholus, Eris, Sedna, etc.) as Type 21 (Modified Divided Differences). Adding Type 21 is a ~300-line self-contained patch in `cosmos-ephemeris/src/jpl/spk.rs`; their NAIF IDs are already enumerated in `KNOWN_ASTEROIDS`.
 
 2. **Lunar eclipse timing ±30–44 s.** Algorithmic, not physical. The parabolic γ-min refinement converges with limited precision; replacing it with golden-section or Brent's method (~50 lines) closes the gap to sub-second.
 
@@ -227,7 +227,7 @@ The lunar ±30–44 s residual is now isolated to the parabolic γ-min refinemen
 
 ### Tier 1 — high impact, low–medium effort
 
-1. **SPK Type 21 reader** (~300 lines in `eternal-ephemeris`). Unlocks Chiron, Pholus, Eris, Sedna, Quaoar, Makemake, Haumea, Salacia and every other centaur / TNO. Hot path for advanced astrology, planetary science, and outer solar system observation.
+1. **SPK Type 21 reader** (~300 lines in `cosmos-ephemeris`). Unlocks Chiron, Pholus, Eris, Sedna, Quaoar, Makemake, Haumea, Salacia and every other centaur / TNO. Hot path for advanced astrology, planetary science, and outer solar system observation.
 2. **Brent's method in eclipse-max search** (~50 lines). Closes the lunar-eclipse ±30 s residual to sub-second.
 3. **Per-body horizon convention in rise/set** (~30 lines). Sun radius and Moon parallax-aware horizon → sub-second rise/set match against Swiss.
 4. **Multi-kernel `Oracle`** (~100-line refactor). Move from `Backend::Spk { kernel_path }` to `Backend::Spk { kernel_paths: Vec<PathBuf> }` so a single Oracle covers DE440 + `sb441-n16` + per-body kernels uniformly.
@@ -246,7 +246,7 @@ The lunar ±30–44 s residual is now isolated to the parabolic γ-min refinemen
 11. **Planetary phenomena**: stations (retrograde turnarounds), oppositions, conjunctions, perihelion / aphelion, greatest elongations. Root-finding on velocity / elongation.
 12. **Saros cycle tracking**: identify each eclipse with its Saros number + family.
 13. **Equation of time** (mean vs apparent solar time).
-14. **Polar motion in topocentric** (sub-mas tightening). EOP loader already exists in `eternal-coords`.
+14. **Polar motion in topocentric** (sub-mas tightening). EOP loader already exists in `cosmos-coords`.
 15. **Atmospheric refraction model** including pressure / temperature dependence (the Saemundsson-Bennett formula).
 
 ### Tier 4 — performance + ergonomics

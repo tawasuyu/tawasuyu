@@ -1,4 +1,4 @@
-# brahman-auth
+# auth-core
 
 Autenticación del escritorio. Contrato `Authenticator` agnóstico del
 backend, con dos implementaciones.
@@ -46,7 +46,7 @@ comentarios del archivo).
 ## Probar contra PAM en una máquina real
 
 ```sh
-cargo run -p brahman-auth --example auth-probe -- "$USER" login
+cargo run -p auth-core --example auth-probe -- "$USER" login
 ```
 
 Pide la contraseña sin eco e informa el `UserInfo` resuelto.

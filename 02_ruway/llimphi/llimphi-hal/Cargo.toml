@@ -1,0 +1,10 @@
+[package]
+name = "llimphi-hal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+# wgpu + winit se agregan en Fase 1; por ahora solo el trait Surface

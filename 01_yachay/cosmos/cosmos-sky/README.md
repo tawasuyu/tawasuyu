@@ -1,8 +1,8 @@
-# eternal-sky
+# cosmos-sky
 
 Ergonomic public façade over the `eternal-*` astronomy crates.
 
-[![License: Apache 2.0](https://img.shields.io/crates/l/eternal-sky)](https://gitea.gioser.net/sergio/eternal)
+[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-sky)](https://gitea.gioser.net/sergio/eternal)
 
 Hides the orchestration of time scales, ephemeris kernels, IAU rotations, and topocentric reductions behind three high-level types: `Instant`, `Observer`, and `EphemerisSession`. Every number forwards to the same validated routines that gate the regression harness of the lower layers — precision is identical; the only thing added is ergonomics.
 
@@ -10,7 +10,7 @@ Hides the orchestration of time scales, ephemeris kernels, IAU rotations, and to
 
 ```toml
 [dependencies]
-eternal-sky = "0.1"
+cosmos-sky = "0.1"
 ```
 
 ## Quick start
@@ -99,8 +99,8 @@ Every astrology-layer forecast (returns, transits, station-finding) builds on th
 
 ## Design
 
-- **No parallel implementations.** Every internal call eventually hits `eternal-validation::oracle::Oracle`, which is the same engine the regression harness uses to gate the rest of the workspace.
-- **Astronomy first.** This crate makes no astrological claim. The astrology layer lives in `eternal-astrology`.
+- **No parallel implementations.** Every internal call eventually hits `cosmos-validation::oracle::Oracle`, which is the same engine the regression harness uses to gate the rest of the workspace.
+- **Astronomy first.** This crate makes no astrological claim. The astrology layer lives in `cosmos-astrology`.
 - **Cheap to clone.** `Instant`, `Observer`, `Body` are all `Copy`. `EphemerisSession` owns its kernel handles and is cheap to share by reference.
 
 ## License
@@ -115,7 +115,7 @@ This crate is part of the [eternal](../) workspace — a fork of
 [celestial](https://github.com/gaker/celestial) by Greg Aker — and
 was added by Sergio Velásquez Zeballos in collaboration with
 Claude (Anthropic) to provide an ergonomic API surface for the
-validated astronomy living in `eternal-validation`.
+validated astronomy living in `cosmos-validation`.
 
 ### With thanks to
 

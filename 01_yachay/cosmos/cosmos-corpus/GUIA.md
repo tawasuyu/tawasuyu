@@ -53,7 +53,7 @@ Reglas de los identificadores:
 ### Paso 1 — Crea tu archivo
 
 ```sh
-cd crates/modules/cosmobiologia/cosmobiologia-corpus
+cd 01_yachay/cosmos/cosmos-corpus
 cp ejemplo.ron corpus.ron
 ```
 
@@ -136,7 +136,7 @@ cuando el autor habla de un plano concreto.
 ### Paso 6 — Valida el archivo
 
 ```sh
-cargo test -p cosmobiologia-corpus
+cargo test -p cosmos-corpus
 ```
 
 Si tu RON tiene un error de sintaxis, el test `ejemplo_ron_carga`

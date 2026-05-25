@@ -1,4 +1,4 @@
-# eternal-validation
+# cosmos-validation
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org/)
@@ -6,7 +6,7 @@
 Internal validation harness and astronomical / astrological pipeline for
 the [`eternal-*`](../) Rust workspace.
 
-`eternal-validation` is a dev-only crate (`publish = false`) that gates
+`cosmos-validation` is a dev-only crate (`publish = false`) that gates
 every change to the surrounding ephemeris machinery against two
 independent reference implementations:
 
@@ -91,11 +91,11 @@ curl -L https://ssd.jpl.nasa.gov/ftp/eph/small_bodies/asteroids_de441/sb441-n16.
 
 ```sh
 # Build everything (release recommended)
-cargo build --release -p eternal-validation
+cargo build --release -p cosmos-validation
 
 # Run the gating regression tests
 CELESTIAL_VALIDATION_SPK=~/.local/share/ephemeris/de440.bsp \
-    cargo test --release -p eternal-validation
+    cargo test --release -p cosmos-validation
 
 # Inspect the precision of a specific module
 ./target/release/sidereal-check    --spk ~/.local/share/ephemeris/de440.bsp
@@ -145,7 +145,7 @@ PRECISION.md.
 ## Repository layout
 
 ```
-eternal-validation/
+cosmos-validation/
 ├── Cargo.toml
 ├── README.md                      ← this file
 ├── PRECISION.md                   ← feature × precision inventory
@@ -223,17 +223,17 @@ done
 ~/.local/share/eternal-validation-venv/bin/python3 scripts/fetch_swiss_topocentric.py --out fixtures/swiss-topocentric/swiss-topocentric.json
 
 # Regenerate Horizons fixtures (requires network access)
-cargo run --release -p eternal-validation --features fetch --bin precision-report -- \
+cargo run --release -p cosmos-validation --features fetch --bin precision-report -- \
     fetch --backend spk
-cargo run --release -p eternal-validation --features fetch --bin precision-report -- \
+cargo run --release -p cosmos-validation --features fetch --bin precision-report -- \
     fetch --backend spk-astrometric
-cargo run --release -p eternal-validation --features fetch --bin precision-report -- \
+cargo run --release -p cosmos-validation --features fetch --bin precision-report -- \
     fetch --backend spk-apparent-vector
-cargo run --release -p eternal-validation --features fetch --bin precision-report -- \
+cargo run --release -p cosmos-validation --features fetch --bin precision-report -- \
     fetch --backend spk-observer-astrometric
-cargo run --release -p eternal-validation --features fetch --bin precision-report -- \
+cargo run --release -p cosmos-validation --features fetch --bin precision-report -- \
     fetch --backend spk-observer-apparent
-cargo run --release -p eternal-validation --features fetch --bin precision-report -- \
+cargo run --release -p cosmos-validation --features fetch --bin precision-report -- \
     fetch --backend vsop
 ```
 
@@ -245,13 +245,13 @@ cargo run --release -p eternal-validation --features fetch --bin precision-repor
 |---|---|
 | `default` | None — minimal build for using the library only |
 | `fetch` | Enables the `horizons` module (pulls in `reqwest` + `tokio`) |
-| `serde` *(workspace)* | Inherited through `eternal-time`, `eternal-core`, `eternal-coords` |
+| `serde` *(workspace)* | Inherited through `cosmos-time`, `cosmos-core`, `cosmos-coords` |
 
 Add to your `Cargo.toml`:
 
 ```toml
 [dev-dependencies]
-eternal-validation = { path = "../eternal-validation", features = ["fetch"] }
+cosmos-validation = { path = "../cosmos-validation", features = ["fetch"] }
 ```
 
 (This crate is not published to crates.io. The version in
@@ -283,7 +283,7 @@ For now, the rough conventions:
 
 ## License
 
-`eternal-validation` is licensed under the **Apache License, Version 2.0**
+`cosmos-validation` is licensed under the **Apache License, Version 2.0**
 ([LICENSE-APACHE](../LICENSE-APACHE) or
 <https://www.apache.org/licenses/LICENSE-2.0>),
 matching the rest of the `eternal-*` workspace. See [NOTICE](../NOTICE)
@@ -303,11 +303,11 @@ separately from Swiss's [public mirror](https://github.com/aloistr/swisseph/tree
 
 - **Greg Aker** — original author of [celestial](https://github.com/gaker/celestial),
   the upstream project this fork derives from. The core astronomy crates
-  (`eternal-core`, `eternal-time`, `eternal-coords`, `eternal-ephemeris`,
-  `eternal-images`, `eternal-pointing`, `eternal-wcs`, `eternal-catalog`)
-  are his work; `eternal-validation` is the new layer added in this fork
+  (`cosmos-core`, `cosmos-time`, `cosmos-coords`, `cosmos-ephemeris`,
+  `cosmos-images`, `cosmos-pointing`, `cosmos-wcs`, `cosmos-catalog`)
+  are his work; `cosmos-validation` is the new layer added in this fork
   by Sergio Velásquez Zeballos with Claude (Anthropic). The
-  `eternal-sky` façade and the `eternal-astrology` symbolic layer were
+  `cosmos-sky` façade and the `cosmos-astrology` symbolic layer were
   added subsequently in the same collaboration.
 - **JPL Horizons** and the **NAIF SPICE Toolkit** — for the DE441 / DE440
   ephemerides and the SPK format that underpins every precision claim
@@ -319,7 +319,7 @@ separately from Swiss's [public mirror](https://github.com/aloistr/swisseph/tree
 - **IERS Bulletin A / EOP C04** — for the observed ΔT and EOP values
   bundled in `celestial-eop-data`.
 - **IAU SOFA** — for the precession / nutation / frame transformations
-  re-implemented in `eternal-core`.
+  re-implemented in `cosmos-core`.
 
 ### With thanks to
 

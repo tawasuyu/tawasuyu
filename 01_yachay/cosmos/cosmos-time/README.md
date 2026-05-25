@@ -1,10 +1,10 @@
-# eternal-time
+# cosmos-time
 
 Astronomical time scales and sidereal time calculations.
 
-[![Crates.io](https://img.shields.io/crates/v/eternal-time)](https://crates.io/crates/eternal-time)
-[![Documentation](https://docs.rs/eternal-time/badge.svg)](https://docs.rs/eternal-time)
-[![License: Apache 2.0](https://img.shields.io/crates/l/eternal-time)](https://gitea.gioser.net/sergio/eternal)
+[![Crates.io](https://img.shields.io/crates/v/cosmos-time)](https://crates.io/crates/cosmos-time)
+[![Documentation](https://docs.rs/cosmos-time/badge.svg)](https://docs.rs/cosmos-time)
+[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-time)](https://gitea.gioser.net/sergio/eternal)
 
 Pure Rust implementation of 8 astronomical time scales (UTC, TAI, TT, UT1, GPS, TDB, TCB, TCG) with nanosecond-precision Julian Date handling, leap second support, and IAU-standard sidereal time calculations. No runtime FFI.
 
@@ -12,7 +12,7 @@ Pure Rust implementation of 8 astronomical time scales (UTC, TAI, TT, UT1, GPS, 
 
 ```toml
 [dependencies]
-eternal-time = "0.1"
+cosmos-time = "0.1"
 ```
 
 ## Modules

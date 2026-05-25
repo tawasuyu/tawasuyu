@@ -1,10 +1,10 @@
-# eternal-wcs
+# cosmos-wcs
 
 Pure Rust implementation of World Coordinate System (WCS) transformations.
 
-[![Crates.io](https://img.shields.io/crates/v/eternal-wcs)](https://crates.io/crates/eternal-wcs)
-[![Documentation](https://docs.rs/eternal-wcs/badge.svg)](https://docs.rs/eternal-wcs)
-[![License: Apache 2.0](https://img.shields.io/crates/l/eternal-wcs)](https://gitea.gioser.net/sergio/eternal)
+[![Crates.io](https://img.shields.io/crates/v/cosmos-wcs)](https://crates.io/crates/cosmos-wcs)
+[![Documentation](https://docs.rs/cosmos-wcs/badge.svg)](https://docs.rs/cosmos-wcs)
+[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-wcs)](https://gitea.gioser.net/sergio/eternal)
 
 Convert between pixel coordinates and celestial coordinates (RA/Dec) for astronomical images. Supports all standard FITS WCS projections, distortion models (SIP, TPV, TNX), and the complete spherical rotation pipeline. No runtime FFI.
 
@@ -12,7 +12,7 @@ Convert between pixel coordinates and celestial coordinates (RA/Dec) for astrono
 
 ```toml
 [dependencies]
-eternal-wcs = "0.1"
+cosmos-wcs = "0.1"
 ```
 
 ## Modules

@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to `eternal-validation` are documented in this file.
+All notable changes to `cosmos-validation` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -16,12 +16,12 @@ version `0.1.1-alpha.2`.
 
 #### Phase 6 — Astronomy façade + symbolic astrology layer
 
-These changes did not modify `eternal-validation` itself, but they
+These changes did not modify `cosmos-validation` itself, but they
 build directly on its `Oracle` and lunar / asteroid / eclipses / houses
 modules. They are listed here so the validation harness's downstream
 consumers are documented in one place.
 
-- **`eternal-sky`** — ergonomic public façade. `Instant` (civil UTC
+- **`cosmos-sky`** — ergonomic public façade. `Instant` (civil UTC
   with on-demand TT/TDB/UT1/JD), `Observer`, `EphemerisSession`,
   `ApparentPosition` (ecliptic + equatorial + horizon), `Body` enum
   spanning 22 luminaries/planets/nodes/Lilith/asteroids, `find_root`
@@ -37,7 +37,7 @@ consumers are documented in one place.
   step itself is not yet implemented — `compute_state` on a Type 21
   segment returns `SpkError::UnsupportedType(21)` after a successful
   parse rather than silently dropping the body.
-- **`eternal-astrology`** — symbolic layer on top of `eternal-sky`.
+- **`cosmos-astrology`** — symbolic layer on top of `cosmos-sky`.
   Adds `NatalChart::compute`, 7 house systems, 8 ayanamshas, 12-kind
   aspect engine with applying/separating, planetary returns,
   secondary/tertiary/minor progressions, true and Naibod solar arc,
@@ -49,7 +49,7 @@ consumers are documented in one place.
 
 #### Phase 1 — SPK reader validation
 
-- **Validation harness scaffold**: `eternal-validation` crate with
+- **Validation harness scaffold**: `cosmos-validation` crate with
   `Oracle`, `Fixture`, `FixtureSet`, `Tolerance`, JPL Horizons fetcher
   (feature `fetch`), and the regression-test integration.
   ([`6964ce4`](../../commits/6964ce4))
@@ -71,7 +71,7 @@ consumers are documented in one place.
   Horizons VEC_CORR='LT+S'.
   ([`c7b585f`](../../commits/c7b585f))
 - **Horizons OBSERVER (spherical) fetcher** for astrometric J2000 RA/Dec.
-  TDB → TT conversion via `eternal-time`'s Fairhead-Bretagnon series.
+  TDB → TT conversion via `cosmos-time`'s Fairhead-Bretagnon series.
   Sub-microarcsec match for the LT-only pipeline.
   ([`9b0eb3d`](../../commits/9b0eb3d))
 - **Full apparent IAU 2006/2000A pipeline** (`Frame::TrueEquatorEquinoxOfDate`,
@@ -164,7 +164,7 @@ consumers are documented in one place.
 
 ### Known limitations carried forward
 
-- **SPK Type 21** not supported by `eternal-ephemeris`. Blocks Chiron,
+- **SPK Type 21** not supported by `cosmos-ephemeris`. Blocks Chiron,
   Pholus, Eris, Sedna and other centaurs / TNOs distributed by JPL
   Horizons as per-body SPK kernels.
 - **Lunar eclipse ±30–44 s** residual from parabolic γ-min refinement.

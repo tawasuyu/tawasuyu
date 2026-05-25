@@ -1,10 +1,10 @@
-# eternal-coords
+# cosmos-coords
 
 Type-safe astronomical coordinate transformations between reference frames.
 
-[![Crates.io](https://img.shields.io/crates/v/eternal-coords)](https://crates.io/crates/eternal-coords)
-[![Documentation](https://docs.rs/eternal-coords/badge.svg)](https://docs.rs/eternal-coords)
-[![License: Apache 2.0](https://img.shields.io/crates/l/eternal-coords)](https://gitea.gioser.net/sergio/eternal)
+[![Crates.io](https://img.shields.io/crates/v/cosmos-coords)](https://crates.io/crates/cosmos-coords)
+[![Documentation](https://docs.rs/cosmos-coords/badge.svg)](https://docs.rs/cosmos-coords)
+[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-coords)](https://gitea.gioser.net/sergio/eternal)
 
 Pure Rust implementation of coordinate frame transformations with full aberration, light deflection, and Earth orientation support. Each frame is a distinct type to prevent accidental mixing. ICRS serves as the pivot for all transformations.
 
@@ -12,7 +12,7 @@ Pure Rust implementation of coordinate frame transformations with full aberratio
 
 ```toml
 [dependencies]
-eternal-coords = "0.1"
+cosmos-coords = "0.1"
 ```
 
 ## Coordinate Frames

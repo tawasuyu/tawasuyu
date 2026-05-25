@@ -1,10 +1,10 @@
-# eternal-catalog
+# cosmos-catalog
 
 HEALPix-indexed star catalog combining Gaia DR3 and Hipparcos. Memory-mapped for fast cone searches.
 
-[![Crates.io](https://img.shields.io/crates/v/eternal-catalog)](https://crates.io/crates/eternal-catalog)
-[![Documentation](https://docs.rs/eternal-catalog/badge.svg)](https://docs.rs/eternal-catalog)
-[![License: Apache 2.0](https://img.shields.io/crates/l/eternal-catalog)](https://gitea.gioser.net/sergio/eternal)
+[![Crates.io](https://img.shields.io/crates/v/cosmos-catalog)](https://crates.io/crates/cosmos-catalog)
+[![Documentation](https://docs.rs/cosmos-catalog/badge.svg)](https://docs.rs/cosmos-catalog)
+[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-catalog)](https://gitea.gioser.net/sergio/eternal)
 
 ## Installation
 
@@ -12,13 +12,13 @@ As a library:
 
 ```toml
 [dependencies]
-eternal-catalog = "0.1"
+cosmos-catalog = "0.1"
 ```
 
 For the CLI tools (`forge` and `query-catalog`):
 
 ```sh
-cargo install eternal-catalog --features cli
+cargo install cosmos-catalog --features cli
 ```
 
 ## Example

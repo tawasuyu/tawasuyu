@@ -1,10 +1,10 @@
-# eternal-ephemeris
+# cosmos-ephemeris
 
 Planetary and lunar ephemerides for astronomical calculations.
 
-[![Crates.io](https://img.shields.io/crates/v/eternal-ephemeris)](https://crates.io/crates/eternal-ephemeris)
-[![Documentation](https://docs.rs/eternal-ephemeris/badge.svg)](https://docs.rs/eternal-ephemeris)
-[![License: Apache 2.0](https://img.shields.io/crates/l/eternal-ephemeris)](https://gitea.gioser.net/sergio/eternal)
+[![Crates.io](https://img.shields.io/crates/v/cosmos-ephemeris)](https://crates.io/crates/cosmos-ephemeris)
+[![Documentation](https://docs.rs/cosmos-ephemeris/badge.svg)](https://docs.rs/cosmos-ephemeris)
+[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-ephemeris)](https://gitea.gioser.net/sergio/eternal)
 
 Pure Rust implementation of VSOP2013 planetary theory and ELP/MPP02
 lunar theory, plus JPL SPK kernel support for high-precision
@@ -14,7 +14,7 @@ ephemerides. No runtime FFI.
 
 ```toml
 [dependencies]
-eternal-ephemeris = "0.1"
+cosmos-ephemeris = "0.1"
 ```
 
 ## Modules

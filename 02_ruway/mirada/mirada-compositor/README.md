@@ -83,7 +83,7 @@ sólo probarlo:
 
    ```sh
    mkdir -p ~/.config/mirada
-   cp crates/apps/mirada-compositor/session/autostart.example \
+   cp 02_ruway/mirada/mirada-compositor/session/autostart.example \
       ~/.config/mirada/autostart
    ```
 

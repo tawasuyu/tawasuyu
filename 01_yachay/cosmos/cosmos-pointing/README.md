@@ -1,10 +1,10 @@
-# eternal-pointing
+# cosmos-pointing
 
 Telescope pointing model fitting and correction.
 
-[![Crates.io](https://img.shields.io/crates/v/eternal-pointing)](https://crates.io/crates/eternal-pointing)
-[![Documentation](https://docs.rs/eternal-pointing/badge.svg)](https://docs.rs/eternal-pointing)
-[![License: Apache 2.0](https://img.shields.io/crates/l/eternal-pointing)](https://gitea.gioser.net/sergio/eternal)
+[![Crates.io](https://img.shields.io/crates/v/cosmos-pointing)](https://crates.io/crates/cosmos-pointing)
+[![Documentation](https://docs.rs/cosmos-pointing/badge.svg)](https://docs.rs/cosmos-pointing)
+[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-pointing)](https://gitea.gioser.net/sergio/eternal)
 
 Build, fit, and apply telescope pointing models using standard equatorial and harmonic terms. Interactive REPL with TPOINT-compatible workflow: load observations, fit models via least-squares, analyze residuals with plots, and export corrections. No runtime FFI.
 
@@ -12,13 +12,13 @@ Build, fit, and apply telescope pointing models using standard equatorial and ha
 
 ```toml
 [dependencies]
-eternal-pointing = "0.1"
+cosmos-pointing = "0.1"
 ```
 
 Or run the interactive CLI:
 
 ```bash
-cargo install eternal-pointing
+cargo install cosmos-pointing
 pointing
 ```
 

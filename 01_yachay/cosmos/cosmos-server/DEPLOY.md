@@ -1,7 +1,7 @@
 # Cosmobiología — guía de deploy
 
 Server HTTP single-user, escrito en Rust + axum. Sirve cartas
-astrológicas computadas con `cosmobiologia-engine` (VSOP2013 en Rust
+astrológicas computadas con `cosmos-engine` (VSOP2013 en Rust
 puro) y la página web HTML/JS del cliente. Diseñado para correr
 **local** o detrás de un reverse proxy con TLS.
 
@@ -12,8 +12,8 @@ puro) y la página web HTML/JS del cliente. Diseñado para correr
 ### Binario del server
 
 ```bash
-cargo build --release -p cosmobiologia-server
-# ./target/release/cosmobiologia-server
+cargo build --release -p cosmos-server
+# ./target/release/cosmos-server
 ```
 
 ### Cliente WASM (opcional pero recomendado)
@@ -27,15 +27,15 @@ sin round-trip.
 # Una sola vez:
 cargo install wasm-pack
 
-# Cada vez que cambie cosmobiologia-render o cosmobiologia-web:
-cd crates/modules/cosmobiologia/cosmobiologia-web
+# Cada vez que cambie cosmos-render o cosmos-web:
+cd 01_yachay/cosmos/cosmos-web
 wasm-pack build --release --target web \
-    --out-dir ../../../../apps/cosmobiologia-server/static/wasm
+    --out-dir ../../../../apps/cosmos-server/static/wasm
 ```
 
 `wasm-pack` produce `cosmobiologia_web.js` +
 `cosmobiologia_web_bg.wasm` en
-`crates/apps/cosmobiologia-server/static/wasm/`. El server los sirve
+`01_yachay/cosmos/cosmos-server/static/wasm/`. El server los sirve
 en `/static/wasm/*` y el `index.html` los importa con
 `import init, { render_model_to_svg } from
 '/static/wasm/cosmobiologia_web.js'`.
@@ -50,7 +50,7 @@ Si el directorio NO existe (build incompleto), el server devuelve
 ### Local (single-user, sin reverse proxy)
 
 ```bash
-./target/release/cosmobiologia-server \
+./target/release/cosmos-server \
     --port 8787 \
     --bind 127.0.0.1 \
     --db ~/.local/share/cosmobiologia/charts.db
@@ -73,7 +73,7 @@ Type=simple
 User=cosmobio
 Group=cosmobio
 WorkingDirectory=/opt/cosmobiologia
-ExecStart=/opt/cosmobiologia/cosmobiologia-server \
+ExecStart=/opt/cosmobiologia/cosmos-server \
     --port 8787 \
     --bind 127.0.0.1 \
     --db /var/lib/cosmobiologia/charts.db \
@@ -95,8 +95,8 @@ WantedBy=multi-user.target
 ```bash
 sudo useradd -r -s /usr/sbin/nologin cosmobio
 sudo mkdir -p /opt/cosmobiologia/static/wasm /var/lib/cosmobiologia
-sudo cp target/release/cosmobiologia-server /opt/cosmobiologia/
-sudo cp -r crates/apps/cosmobiologia-server/static/wasm/* \
+sudo cp target/release/cosmos-server /opt/cosmobiologia/
+sudo cp -r 01_yachay/cosmos/cosmos-server/static/wasm/* \
     /opt/cosmobiologia/static/wasm/
 sudo chown -R cosmobio:cosmobio /opt/cosmobiologia /var/lib/cosmobiologia
 sudo systemctl daemon-reload
@@ -223,7 +223,7 @@ demo público:
 # En tu VPS:
 mkdir -p /var/lib/cosmobiologia
 # Empezás con DB vacía (la app crea las tablas al primer arranque).
-cosmobiologia-server --db /var/lib/cosmobiologia/charts.db
+cosmos-server --db /var/lib/cosmobiologia/charts.db
 ```
 
 Si querés precargar cartas demo (Einstein, una carta natal pública),
@@ -252,7 +252,7 @@ sqlite3 /var/lib/cosmobiologia/charts.db ".backup /var/backups/cosmobiologia-$(d
 ```bash
 # Desde tu máquina:
 curl https://cosmobiologia.gioser.net/api/health
-# → {"status":"ok","service":"cosmobiologia-server"}
+# → {"status":"ok","service":"cosmos-server"}
 
 curl https://cosmobiologia.gioser.net/api/sky | jq .title
 # → "Cielo 2026-05-19 00:55 UTC"

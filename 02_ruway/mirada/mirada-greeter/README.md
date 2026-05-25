@@ -11,7 +11,7 @@ stdout.
 
 1. El usuario teclea usuario + contraseña. `Enter` en «usuario» pasa el
    foco a «contraseña»; `Enter` en «contraseña» autentica.
-2. La autenticación corre con [`brahman-auth`] en un hilo de fondo (PAM
+2. La autenticación corre con [`auth-core`] en un hilo de fondo (PAM
    puede demorar ~2 s ante un fallo, no se congela la UI).
 3. En éxito, el greeter **imprime un `SessionTicket` a stdout** y
    termina. El compositor parsea esa línea y hace el traspaso a modo

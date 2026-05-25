@@ -1,10 +1,10 @@
-# eternal-images
+# cosmos-images
 
 Pure Rust astronomical image format library (FITS and XISF support).
 
-[![Crates.io](https://img.shields.io/crates/v/eternal-images)](https://crates.io/crates/eternal-images)
-[![Documentation](https://docs.rs/eternal-images/badge.svg)](https://docs.rs/eternal-images)
-[![License: Apache 2.0](https://img.shields.io/crates/l/eternal-images)](https://gitea.gioser.net/sergio/eternal)
+[![Crates.io](https://img.shields.io/crates/v/cosmos-images)](https://crates.io/crates/cosmos-images)
+[![Documentation](https://docs.rs/cosmos-images/badge.svg)](https://docs.rs/cosmos-images)
+[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-images)](https://gitea.gioser.net/sergio/eternal)
 
 Read, write, and process FITS, XISF, and SER scientific image formats with compression support (Gzip, Rice), binary/ASCII tables, and Bayer demosaicing. No runtime FFI.
 
@@ -12,7 +12,7 @@ Read, write, and process FITS, XISF, and SER scientific image formats with compr
 
 ```toml
 [dependencies]
-eternal-images = "0.1"
+cosmos-images = "0.1"
 ```
 
 ## Modules

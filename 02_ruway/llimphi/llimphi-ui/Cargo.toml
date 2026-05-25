@@ -1,0 +1,11 @@
+[package]
+name = "llimphi-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+llimphi-layout = { path = "../llimphi-layout" }
+llimphi-raster = { path = "../llimphi-raster" }

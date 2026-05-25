@@ -1,7 +1,7 @@
-# Contributing to eternal-validation
+# Contributing to cosmos-validation
 
 Thanks for taking an interest. This document lays out the small set of
-conventions that keep `eternal-validation` useful as the gating
+conventions that keep `cosmos-validation` useful as the gating
 harness for the wider `eternal-*` workspace.
 
 ## How the harness works
@@ -84,7 +84,7 @@ or use an assistant.
 
 ### CI / release
 
-`eternal-validation` is `publish = false`. There is no `cargo publish`
+`cosmos-validation` is `publish = false`. There is no `cargo publish`
 gate. The release artefact is the workspace itself; cutting a release
 means tagging the workspace and updating the workspace version in the
 root `Cargo.toml`.

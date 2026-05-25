@@ -1,8 +1,8 @@
-# eternal-astrology
+# cosmos-astrology
 
-The astrology-specific layer of the `eternal` workspace, built on the [`eternal-sky`](../eternal-sky/) façade.
+The astrology-specific layer of the `eternal` workspace, built on the [`cosmos-sky`](../cosmos-sky/) façade.
 
-[![License: Apache 2.0](https://img.shields.io/crates/l/eternal-astrology)](https://gitea.gioser.net/sergio/eternal)
+[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-astrology)](https://gitea.gioser.net/sergio/eternal)
 
 A typed pipeline that turns *(when, where)* into a `NatalChart`: four angles, twelve house cusps in the chosen system, every requested body placed in its sign and house with retrograde flag — plus a full forecasting toolkit: aspects, returns, progressions, solar arc, the classical primary-direction trilogy (Placidus, Regiomontanus, Campanus), transits, stations, synastry, midpoint composites, Arabic Parts, Hellenistic profections, lunar phases, and eclipses-on-natal.
 
@@ -14,8 +14,8 @@ Astrology is a symbolic system with deep cultural and personal significance for 
 
 ```toml
 [dependencies]
-eternal-astrology = "0.1"
-eternal-sky = "0.1"
+cosmos-astrology = "0.1"
+cosmos-sky = "0.1"
 ```
 
 ## Feature matrix
@@ -43,7 +43,7 @@ eternal-sky = "0.1"
 | Eclipses (solar / lunar) on natal points | `eclipses_on_natal`, `next_solar_eclipse`, `next_lunar_eclipse` | ✅ |
 | Generic event root-finder over time | `eternal_sky::find_root` | ✅ |
 
-102 tests across `eternal-sky` + `eternal-astrology` gate the precision and behaviour of these features against direct calls into the validated underlying machinery.
+102 tests across `cosmos-sky` + `cosmos-astrology` gate the precision and behaviour of these features against direct calls into the validated underlying machinery.
 
 ## Quick start: a complete natal chart
 
@@ -164,10 +164,10 @@ let sync = find_synastry_aspects(
 
 ## Design
 
-- **Astronomy first.** Every astrology routine forwards to `eternal-sky` and ultimately to the validated `eternal-validation::oracle::Oracle`. No parallel ephemerides, no shortcuts.
+- **Astronomy first.** Every astrology routine forwards to `cosmos-sky` and ultimately to the validated `cosmos-validation::oracle::Oracle`. No parallel ephemerides, no shortcuts.
 - **Lazy where it matters.** `BodyPlacement` carries forward longitude rate + RA/Dec from `ApparentPosition`, so the aspect/applying engine and the mundane helpers do not re-query the ephemeris.
 - **Interpretation-free.** No body has a "rulership", no aspect has a "meaning". Configure orbs, house systems, ayanamshas and bodies; pattern-match on the results in your own application layer.
-- **Reusable primitives.** `find_root` from `eternal-sky` powers returns, transits, and future timing queries — adding a new "find next X" is ~30 lines.
+- **Reusable primitives.** `find_root` from `cosmos-sky` powers returns, transits, and future timing queries — adding a new "find next X" is ~30 lines.
 
 ## License
 
@@ -180,7 +180,7 @@ Licensed under the Apache License, Version 2.0
 This crate was added to the `eternal` workspace by Sergio Velásquez
 Zeballos in collaboration with Claude (Anthropic). It builds on the
 upstream [celestial](https://github.com/gaker/celestial) project by
-Greg Aker and on the validated astronomy of `eternal-validation`.
+Greg Aker and on the validated astronomy of `cosmos-validation`.
 
 ### With thanks to
 

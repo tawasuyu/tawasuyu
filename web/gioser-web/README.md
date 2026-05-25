@@ -14,7 +14,7 @@ crates/modules/gioser/
 ├── gioser-shaders/     sources GLSL ES 3.00 (FBM cósmico + SDF chacana)
 └── gioser-canvas-web/  renderer WebGL2 que compone todo
 
-crates/apps/gioser-web/  cdylib WASM + index.html + styles.css
+web/gioser-web/  cdylib WASM + index.html + styles.css
 ```
 
 Los cuatro primeros son agnósticos del runtime (compilan en cualquier
@@ -75,7 +75,7 @@ Hay un wrapper que hace cargo build + wasm-bindgen + copia salida:
 ./scripts/build-gioser-web.sh release
 ```
 
-El output queda en `crates/apps/gioser-web/pkg/`:
+El output queda en `web/gioser-web/pkg/`:
 ```
 pkg/
 ├── gioser_web.js              ← bindings JS (referenciados por index.html)
@@ -89,7 +89,7 @@ pkg/
 
 ```sh
 ./scripts/build-gioser-web.sh dev
-python3 -m http.server -d crates/apps/gioser-web 8080
+python3 -m http.server -d web/gioser-web 8080
 # Abrir http://localhost:8080/
 ```
 
@@ -117,7 +117,7 @@ Para deploy, los **artefactos a subir al host estático** son sólo
 cuatro archivos:
 
 ```
-crates/apps/gioser-web/
+web/gioser-web/
 ├── index.html       ← entry point
 ├── styles.css       ← estilos
 └── pkg/
@@ -141,7 +141,7 @@ Caddy, netlify, fly, Vercel static). **Importante:**
 ```sh
 ./scripts/build-gioser-web.sh release
 tar czf gioser-web-dist.tar.gz \
-    -C crates/apps/gioser-web \
+    -C web/gioser-web \
     index.html styles.css pkg/
 
 # Subir al server:
