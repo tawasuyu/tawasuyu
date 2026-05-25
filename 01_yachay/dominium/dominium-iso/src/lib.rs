@@ -88,6 +88,26 @@ impl IsoProjector {
         let foot_y = y + light_dir.1 * z;
         self.project(foot_x, foot_y, 0.0)
     }
+
+    /// Inversa de [`Self::project`] asumiendo `z = 0` (clicks sobre el
+    /// suelo). Dadas coordenadas de pantalla `(sx, sy)`, devuelve el
+    /// `(x, y)` de mundo que las generó si se hubiera proyectado con
+    /// `z = 0`. Para clicks sobre celdas elevadas el resultado se
+    /// desplaza (las cimas proyectan a una `y_pantalla` distinta a la
+    /// de su pie); para una sembrazón de Conceptos es suficiente.
+    ///
+    /// ```text
+    ///   sx = (x - y) · cos30 · scale
+    ///   sy = (x + y) · sin30 · scale
+    ///   ⇒  x = (sx / (cos30·scale) + sy / (sin30·scale)) / 2
+    ///       y = (sy / (sin30·scale) − sx / (cos30·scale)) / 2
+    /// ```
+    pub fn unproject_floor(&self, sx: f32, sy: f32) -> (f32, f32) {
+        let s = self.scale.max(f32::EPSILON);
+        let u = sx / (self.cos30 * s); // = x - y
+        let v = sy / (self.sin30 * s); // = x + y
+        ((u + v) * 0.5, (v - u) * 0.5)
+    }
 }
 
 #[cfg(test)]
@@ -138,6 +158,16 @@ mod tests {
         let a = IsoProjector::new(2.0, 3.0);
         let b = IsoProjector::new(2.0, 3.0);
         assert_eq!(a.project(7.0, 11.0, 1.5), b.project(7.0, 11.0, 1.5));
+    }
+
+    #[test]
+    fn unproject_floor_is_inverse_of_project_at_z_zero() {
+        let iso = IsoProjector::new(12.0, 5.0);
+        for (x, y) in [(3.0, 7.0), (15.0, 2.0), (8.0, 8.0), (0.0, 0.0)] {
+            let (sx, sy) = iso.project(x, y, 0.0);
+            let (rx, ry) = iso.unproject_floor(sx, sy);
+            assert!(approx(rx, x) && approx(ry, y), "({x},{y}) → ({rx},{ry})");
+        }
     }
 
     #[test]

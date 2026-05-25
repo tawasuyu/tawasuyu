@@ -232,10 +232,26 @@ números son leyes.
 
 ## 5. Lo que viene (no inamovible — roadmap)
 
-- Editor visual: click en canvas → spawnear/mover/borrar Conceptos.
-  Botón "✦ Crear concepto" entregado (2026-05-25) — esquiva la
-  complejidad del hit-test sobre `paint_with` agregando uno al centro
-  del mundo con selección automática para editar al toque.
+- ~~Editor visual: click en canvas → spawnear Conceptos~~ — ✓ (2026-05-25).
+  llimphi-ui gana `View::on_click_at(Fn(lx, ly, rw, rh) -> Option<Msg>)`,
+  un handler que recibe la posición local + tamaño del rect del nodo
+  (gana sobre `on_click` cuando ambos están). `dominium-iso` agrega
+  `IsoProjector::unproject_floor(sx, sy)` (inversa de proyección
+  asumiendo z=0). El canvas de dominium usa los dos para mapear el
+  click a coordenadas de mundo y emitir `Msg::CrearConceptoEn(x, y)`.
+  Botón "✦ Crear concepto" sigue disponible para spawning al centro.
+- ~~Editor de hack~~ — ✓ (2026-05-25). Sección bajo `[ EDITAR ]` cuando
+  hay Concepto seleccionado. Botón "+ Agregar hack" / "− Quitar hack",
+  cycle trigger (Always ↔ EnergiaBajo ↔ EdadSobre) con slider para el
+  parámetro, cycle de acción forzada (0..5 con nombre), slider de
+  duración (1..500 ticks).
+- ~~Glifos sprite_id~~ — ✓ (2026-05-25). `RenderPlan` gana
+  `glyphs: Vec<Glyph { ch, x, y, size_px, color, depth }>`,
+  `glyph_for_sprite(id)` mapea opaco 1→☩ (cruz), 2→¤ (moneda),
+  3→⌂ (casa), 4→⚗ (alambique), 5→☉, 6→☽, 7→★, 8→◬ (chacana).
+  `canvas-llimphi` pinta los glifos vía `llimphi-text::draw_block`
+  después de los quads. Picker en el panel cicla `sprite_id`
+  0..SPRITE_COUNT.
 - Toggle "Sync físico: ON/OFF" entregado (2026-05-25) — cuando está
   activo, cualquier edición de `ZWeights` espeja al instante a
   `params.relieve`: lo que ves es lo que sienten los lemmings.

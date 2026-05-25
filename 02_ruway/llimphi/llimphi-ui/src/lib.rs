@@ -238,6 +238,13 @@ pub type DragFn<Msg> = Arc<dyn Fn(DragPhase, f32, f32) -> Option<Msg> + Send + S
 /// qué Msg emitir en función de ese ID.
 pub type DropFn<Msg> = Arc<dyn Fn(u64) -> Option<Msg> + Send + Sync>;
 
+/// Handler de click con posición. Recibe `(x_local, y_local, rect_w,
+/// rect_h)`: las dos primeras son la posición del cursor **relativa a
+/// la esquina superior-izquierda del nodo** y las dos últimas son el
+/// ancho/alto actual del nodo en pixels — útil cuando el caller
+/// necesita centrar o normalizar. Devolver `None` no dispara update.
+pub type ClickAtFn<Msg> = Arc<dyn Fn(f32, f32, f32, f32) -> Option<Msg> + Send + Sync>;
+
 /// Rect absoluto del nodo (en coordenadas físicas del frame). Lo
 /// recibe el callback de [`View::paint_with`] para que pueda
 /// posicionar sus primitivas custom dentro del nodo.
@@ -288,6 +295,12 @@ pub struct View<Msg> {
     /// composición de Views.
     pub painter: Option<PaintFn>,
     pub on_click: Option<Msg>,
+    /// Handler de click que recibe la posición **relativa al rect del
+    /// nodo** (esquina superior-izquierda del nodo = `(0, 0)`). Útil
+    /// para canvas elements que quieren mapear el click a coordenadas
+    /// de mundo. Si está presente, gana sobre `on_click`. Devolver
+    /// `None` no dispara update.
+    pub on_click_at: Option<ClickAtFn<Msg>>,
     /// Handler de drag. Si está presente, este nodo arrastra (y NO emite
     /// `on_click` al presionar — un nodo es uno u otro).
     pub drag: Option<DragFn<Msg>>,
@@ -318,6 +331,7 @@ impl<Msg> View<Msg> {
             image: None,
             painter: None,
             on_click: None,
+            on_click_at: None,
             drag: None,
             drag_payload: None,
             on_drop: None,
@@ -417,6 +431,20 @@ impl<Msg> View<Msg> {
         self
     }
 
+    /// Como `on_click`, pero el handler recibe `(local_x, local_y,
+    /// rect_w, rect_h)` — la posición del cursor relativa al rect del
+    /// nodo más las dimensiones actuales del nodo. Útil para canvas
+    /// elements que necesitan saber dónde fue el click para convertirlo
+    /// a coordenadas de mundo. Sobrescribe `on_click` para este nodo
+    /// si ambos están presentes.
+    pub fn on_click_at<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(f32, f32, f32, f32) -> Option<Msg> + Send + Sync + 'static,
+    {
+        self.on_click_at = Some(Arc::new(handler));
+        self
+    }
+
     /// Pinta `image` dentro del rect del nodo, centrada y escalada
     /// preservando aspect ratio. Re-exporta `peniko::Image` vía
     /// `llimphi_raster::peniko::Image` — el caller decodifica los
@@ -475,6 +503,7 @@ struct MountedNode<Msg> {
     image: Option<Image>,
     painter: Option<PaintFn>,
     on_click: Option<Msg>,
+    on_click_at: Option<ClickAtFn<Msg>>,
     drag: Option<DragFn<Msg>>,
     drag_payload: Option<u64>,
     on_drop: Option<DropFn<Msg>>,
@@ -509,6 +538,7 @@ fn mount_recursive<Msg: Clone>(
         image,
         painter,
         on_click,
+        on_click_at,
         drag,
         drag_payload,
         on_drop,
@@ -526,6 +556,7 @@ fn mount_recursive<Msg: Clone>(
         image,
         painter,
         on_click,
+        on_click_at,
         drag,
         drag_payload,
         on_drop,
@@ -728,7 +759,7 @@ fn hit_test_click<Msg>(
     y: f32,
 ) -> Option<usize> {
     hit_test_pred(mounted, computed, x, y, |n| {
-        n.on_click.is_some() || n.drag.is_some()
+        n.on_click.is_some() || n.on_click_at.is_some() || n.drag.is_some()
     })
 }
 
@@ -987,7 +1018,17 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 // Hit-test contra el cache del último redraw (siempre
                 // representa lo visible). Fallback raro: cache vacío.
                 let cursor = state.cursor;
-                let idx_and_action = if let Some(cache) = state.last_render.as_ref() {
+                // Tupla: (drag_fn, payload, on_click_msg, on_click_at_handler, rect: (x, y, w, h))
+                type HitInfo<M> = (
+                    Option<DragFn<M>>,
+                    Option<u64>,
+                    Option<M>,
+                    Option<ClickAtFn<M>>,
+                    Option<(f32, f32, f32, f32)>,
+                );
+                let idx_and_action: Option<HitInfo<A::Msg>> = if let Some(cache) =
+                    state.last_render.as_ref()
+                {
                     hit_test_click(
                         &cache.mounted,
                         &cache.computed,
@@ -996,7 +1037,17 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     )
                     .map(|i| {
                         let node = &cache.mounted.nodes[i];
-                        (node.drag.clone(), node.drag_payload, node.on_click.clone())
+                        let rect = cache
+                            .computed
+                            .get(node.id)
+                            .map(|r| (r.x, r.y, r.w, r.h));
+                        (
+                            node.drag.clone(),
+                            node.drag_payload,
+                            node.on_click.clone(),
+                            node.on_click_at.clone(),
+                            rect,
+                        )
                     })
                 } else {
                     let view = A::view(state.model.as_ref().expect("model"));
@@ -1009,16 +1060,23 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     hit_test_click(&mounted, &computed, cursor.x as f32, cursor.y as f32).map(
                         |i| {
                             let node = &mounted.nodes[i];
-                            (node.drag.clone(), node.drag_payload, node.on_click.clone())
+                            let rect = computed.get(node.id).map(|r| (r.x, r.y, r.w, r.h));
+                            (
+                                node.drag.clone(),
+                                node.drag_payload,
+                                node.on_click.clone(),
+                                node.on_click_at.clone(),
+                                rect,
+                            )
                         },
                     )
                 };
-                if let Some((Some(handler), payload, _)) = idx_and_action {
+                if let Some((Some(handler), payload, _, _, _)) = &idx_and_action {
                     // Drag wins sobre click cuando ambos están presentes.
                     state.drag = Some(DragState {
-                        handler,
+                        handler: handler.clone(),
                         last_cursor: cursor,
-                        payload,
+                        payload: *payload,
                     });
                     // Si hay payload, repintar para que el drop target
                     // bajo cursor (si lo hay) se ilumine de entrada.
@@ -1036,7 +1094,19 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                             }
                         }
                     }
-                } else if let Some((_, _, Some(msg))) = idx_and_action {
+                } else if let Some((_, _, _, Some(handler), Some((ox, oy, rw, rh)))) =
+                    &idx_and_action
+                {
+                    // on_click_at gana sobre on_click si ambos existen.
+                    let lx = cursor.x as f32 - ox;
+                    let ly = cursor.y as f32 - oy;
+                    if let Some(msg) = handler(lx, ly, *rw, *rh) {
+                        let model = state.model.take().expect("model");
+                        state.model = Some(A::update(model, msg, &self.handle));
+                        state.last_render = None;
+                        state.window.request_redraw();
+                    }
+                } else if let Some((_, _, Some(msg), _, _)) = idx_and_action {
                     let model = state.model.take().expect("model");
                     state.model = Some(A::update(model, msg, &self.handle));
                     state.last_render = None;

@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use dominium_canvas_llimphi::canvas_view;
-use dominium_core::{Concepto, Conceptos, LayerMods, SimParams, World};
+use dominium_core::{BehaviorHack, Concepto, Conceptos, LayerMods, SimParams, Trigger, World};
 use dominium_iso::{IsoProjector, ZWeights};
 use dominium_physics::tick;
 use dominium_render_plan::{build_plan, PlanConfig};
@@ -99,6 +99,52 @@ fn save_user_pack(cs: &Conceptos) {
         },
         Err(e) => eprintln!("dominium · error serializando pack: {e}"),
     }
+}
+
+/// Accede mutable al Concepto seleccionado, si lo hay.
+fn selected_mut(m: &mut Model) -> Option<&mut Concepto> {
+    let i = m.selected?;
+    m.world.conceptos.items.get_mut(i)
+}
+
+/// Nombre humano de la acción atómica `0..5`.
+fn action_name(b: u8) -> &'static str {
+    match b {
+        0 => "Mover",
+        1 => "Extraer",
+        2 => "Sincronizar",
+        3 => "Intercambiar",
+        4 => "Replicar",
+        5 => "Degradar",
+        _ => "?",
+    }
+}
+
+/// Descripción del trigger para mostrar en el panel.
+fn trigger_label(t: Trigger) -> String {
+    match t {
+        Trigger::Always => "Always".to_string(),
+        Trigger::EnergiaBajo(v) => format!("EnergíaBajo({v:.0})"),
+        Trigger::EdadSobre(v) => format!("EdadSobre({v})"),
+    }
+}
+
+/// Agrega un Concepto en `(x, y)` (clamp al grid), lo nombra
+/// `nuevo-N` y queda seleccionado para edición inmediata.
+fn spawn_concepto_at(m: &mut Model, x: f32, y: f32) {
+    let max = (GRID as f32) - 1.0;
+    let n = m.world.conceptos.len();
+    let new = Concepto {
+        id: format!("nuevo-{}", n + 1),
+        sprite_id: 0,
+        pos_x: x.clamp(0.0, max),
+        pos_y: y.clamp(0.0, max),
+        radius: 4.0,
+        mods: LayerMods::default(),
+        hack: None,
+    };
+    let i = m.world.conceptos.add(new);
+    m.selected = Some(i);
 }
 
 /// Copia `ZWeights` (relieve visual) al array `[f32; 5]` que SimParams
@@ -267,8 +313,16 @@ enum Msg {
     GuardarPack,
     CargarPack,
     CrearConcepto,
+    CrearConceptoEn(f32, f32),
     ToggleSyncRelieve,
     ToggleAndina,
+    // Editor de BehaviorHack del Concepto seleccionado.
+    HackToggle,         // agrega o quita el hack.
+    HackCycleTrigger,   // rota Always → EnergiaBajo → EdadSobre → Always.
+    HackCycleAction,    // rota la acción forzada 0..5 → 0...
+    HackEditTriggerParam(f32),
+    HackEditDuration(f32),
+    CycleSprite,
 }
 
 struct Dominium;
@@ -421,19 +475,11 @@ impl App for Dominium {
                 }
             }
             Msg::CrearConcepto => {
-                let n = m.world.conceptos.len();
                 let center = (GRID as f32) * 0.5;
-                let new = Concepto {
-                    id: format!("nuevo-{}", n + 1),
-                    sprite_id: 0,
-                    pos_x: center,
-                    pos_y: center,
-                    radius: 4.0,
-                    mods: LayerMods::default(),
-                    hack: None,
-                };
-                let i = m.world.conceptos.add(new);
-                m.selected = Some(i);
+                spawn_concepto_at(&mut m, center, center);
+            }
+            Msg::CrearConceptoEn(x, y) => {
+                spawn_concepto_at(&mut m, x, y);
             }
             Msg::ToggleSyncRelieve => {
                 m.sync_relieve = !m.sync_relieve;
@@ -445,6 +491,66 @@ impl App for Dominium {
                 // 0 ↔ 3 capas. El threshold no cambia.
                 m.cfg.andina_layers = if m.cfg.andina_layers == 0 { 3 } else { 0 };
             }
+            Msg::HackToggle => {
+                if let Some(c) = selected_mut(&mut m) {
+                    c.hack = match c.hack {
+                        Some(_) => None,
+                        None => Some(BehaviorHack {
+                            trigger: Trigger::Always,
+                            forced_action: 2, // Sincronizar — el default más visible
+                            duration: 30,
+                        }),
+                    };
+                }
+            }
+            Msg::HackCycleTrigger => {
+                if let Some(c) = selected_mut(&mut m) {
+                    if let Some(h) = c.hack.as_mut() {
+                        h.trigger = match h.trigger {
+                            Trigger::Always => Trigger::EnergiaBajo(15.0),
+                            Trigger::EnergiaBajo(_) => Trigger::EdadSobre(100),
+                            Trigger::EdadSobre(_) => Trigger::Always,
+                        };
+                    }
+                }
+            }
+            Msg::HackCycleAction => {
+                if let Some(c) = selected_mut(&mut m) {
+                    if let Some(h) = c.hack.as_mut() {
+                        h.forced_action = (h.forced_action + 1) % 6;
+                    }
+                }
+            }
+            Msg::HackEditTriggerParam(dv) => {
+                if let Some(c) = selected_mut(&mut m) {
+                    if let Some(h) = c.hack.as_mut() {
+                        h.trigger = match h.trigger {
+                            Trigger::Always => Trigger::Always,
+                            Trigger::EnergiaBajo(v) => {
+                                Trigger::EnergiaBajo((v + dv).clamp(0.0, 100.0))
+                            }
+                            Trigger::EdadSobre(v) => {
+                                let next = (v as f32 + dv).clamp(0.0, 1000.0);
+                                Trigger::EdadSobre(next as u32)
+                            }
+                        };
+                    }
+                }
+            }
+            Msg::HackEditDuration(dv) => {
+                if let Some(c) = selected_mut(&mut m) {
+                    if let Some(h) = c.hack.as_mut() {
+                        let next = (h.duration as f32 + dv).clamp(1.0, 500.0);
+                        h.duration = next as u32;
+                    }
+                }
+            }
+            Msg::CycleSprite => {
+                if let Some(c) = selected_mut(&mut m) {
+                    // 0 (sin glifo) → 1..=SPRITE_COUNT → 0 ...
+                    c.sprite_id = (c.sprite_id + 1) % (dominium_render_plan::SPRITE_COUNT + 1);
+                }
+            }
         }
         m
     }
@@ -455,7 +561,23 @@ impl App for Dominium {
 
         let status = status_bar(model, &theme);
         let plan = build_plan(&model.world, &model.iso, &model.weights, &model.cfg);
-        let canvas = canvas_pane(plan);
+        let plan_cx = (plan.min_x + plan.max_x) * 0.5;
+        let plan_cy = (plan.min_y + plan.max_y) * 0.5;
+        let iso = model.iso;
+        let canvas = canvas_pane(plan).on_click_at(move |lx, ly, rw, rh| {
+            // Mapeo inverso al que aplica canvas-llimphi para centrar la maqueta:
+            //   plan_pos = local - rect/2 + plan_center
+            let plan_x = lx - rw * 0.5 + plan_cx;
+            let plan_y = ly - rh * 0.5 + plan_cy;
+            let (wx, wy) = iso.unproject_floor(plan_x, plan_y);
+            // Solo aceptamos clicks que caigan dentro del grid.
+            let max = (GRID as f32) - 1.0;
+            if wx >= 0.0 && wx <= max && wy >= 0.0 && wy <= max {
+                Some(Msg::CrearConceptoEn(wx, wy))
+            } else {
+                None
+            }
+        });
         let side = side_panel(model, &stats, &theme);
 
         let body = View::new(Style {
@@ -658,10 +780,89 @@ fn side_panel(model: &Model, stats: &Stats, theme: &Theme) -> View<Msg> {
                     DragPhase::End => None,
                 },
             ));
+            let sprite_glyph = dominium_render_plan::glyph_for_sprite(c.sprite_id)
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "—".to_string());
+            children.push(sized_button(
+                &format!("sprite: {} ({})", c.sprite_id, sprite_glyph),
+                &btn_palette,
+                Msg::CycleSprite,
+            ));
             children.push(mod_slider("materia", c.mods.materia, Layer::Materia, &slider_palette));
             children.push(mod_slider("psique", c.mods.psique, Layer::Psique, &slider_palette));
             children.push(mod_slider("poder", c.mods.poder, Layer::Poder, &slider_palette));
             children.push(mod_slider("oro", c.mods.oro, Layer::Oro, &slider_palette));
+
+            // BehaviorHack editor.
+            children.push(label_view("hack:", 11.0, theme.fg_muted));
+            match c.hack {
+                None => {
+                    children.push(sized_button(
+                        "+ Agregar hack",
+                        &btn_palette,
+                        Msg::HackToggle,
+                    ));
+                }
+                Some(h) => {
+                    children.push(sized_button(
+                        &format!("trigger: {}", trigger_label(h.trigger)),
+                        &btn_palette,
+                        Msg::HackCycleTrigger,
+                    ));
+                    // Slider del parámetro del trigger (solo si aplica).
+                    match h.trigger {
+                        Trigger::Always => {}
+                        Trigger::EnergiaBajo(v) => {
+                            children.push(slider_view(
+                                "umbral",
+                                v,
+                                0.0,
+                                100.0,
+                                &slider_palette,
+                                |phase, dv| match phase {
+                                    DragPhase::Move => Some(Msg::HackEditTriggerParam(dv)),
+                                    DragPhase::End => None,
+                                },
+                            ));
+                        }
+                        Trigger::EdadSobre(v) => {
+                            children.push(slider_view(
+                                "edad",
+                                v as f32,
+                                0.0,
+                                1000.0,
+                                &slider_palette,
+                                |phase, dv| match phase {
+                                    DragPhase::Move => Some(Msg::HackEditTriggerParam(dv)),
+                                    DragPhase::End => None,
+                                },
+                            ));
+                        }
+                    }
+                    children.push(sized_button(
+                        &format!("acción: {} ({})", h.forced_action, action_name(h.forced_action)),
+                        &btn_palette,
+                        Msg::HackCycleAction,
+                    ));
+                    children.push(slider_view(
+                        "duración",
+                        h.duration as f32,
+                        1.0,
+                        500.0,
+                        &slider_palette,
+                        |phase, dv| match phase {
+                            DragPhase::Move => Some(Msg::HackEditDuration(dv)),
+                            DragPhase::End => None,
+                        },
+                    ));
+                    children.push(sized_button(
+                        "− Quitar hack",
+                        &btn_palette,
+                        Msg::HackToggle,
+                    ));
+                }
+            }
+
             children.push(sized_button("🗑  Borrar", &btn_palette, Msg::DeleteSelected));
             children.push(sized_button("◌  Deseleccionar", &btn_palette, Msg::DeselectConcepto));
         }

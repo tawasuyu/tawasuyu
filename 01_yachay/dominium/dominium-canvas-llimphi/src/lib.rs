@@ -17,6 +17,7 @@ use dominium_render_plan::{Color as PlanColor, RenderPlan};
 use llimphi_ui::llimphi_layout::taffy::prelude::{percent, Size, Style};
 use llimphi_ui::llimphi_raster::kurbo::{Affine, Rect as KurboRect};
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
+use llimphi_ui::llimphi_text::{draw_block, TextBlock};
 use llimphi_ui::{PaintRect, View};
 
 /// Convierte el RGBA lineal del plan (`[f32;4]` en [0,1]) al `Color`
@@ -48,8 +49,8 @@ where
     } else {
         view
     };
-    view.paint_with(move |scene, _ts, rect: PaintRect| {
-        if plan.quads.is_empty() {
+    view.paint_with(move |scene, ts, rect: PaintRect| {
+        if plan.quads.is_empty() && plan.glyphs.is_empty() {
             return;
         }
         // Centra la maqueta: el centro de la caja envolvente del plan
@@ -72,6 +73,18 @@ where
                 None,
                 &r,
             );
+        }
+        // Glifos por encima de los quads, sin re-shaping cacheado (cada
+        // glyph hace un layout breve; son pocos: ~decenas).
+        for gl in &plan.glyphs {
+            let s = gl.ch.to_string();
+            let block = TextBlock::simple(
+                &s,
+                gl.size_px,
+                plan_color(gl.color),
+                (gl.x as f64 + off_x, gl.y as f64 + off_y),
+            );
+            draw_block(scene, ts, &block);
         }
     })
 }

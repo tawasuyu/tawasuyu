@@ -140,11 +140,33 @@ impl Default for PlanConfig {
     }
 }
 
+/// Un carácter rasterizado por encima de los quads — usado por los
+/// glifos de `sprite_id` de Conceptos. El backend lo pinta vía
+/// `llimphi-text::draw_block` con tamaño + color del Glyph.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Glyph {
+    /// Carácter unicode a pintar.
+    pub ch: char,
+    /// Esquina sup-izq donde debería caer el bounding box del glifo.
+    /// El backend puede centrarlo si quiere.
+    pub x: f32,
+    pub y: f32,
+    pub size_px: f32,
+    pub color: Color,
+    /// Profundidad (informativa — los glifos se pintan después de los
+    /// quads, así que sirve para sub-orden entre glifos si fuera necesario).
+    pub depth: f32,
+}
+
 /// Lista de quads ordenada de atrás hacia adelante + caja envolvente.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RenderPlan {
     /// Quads ya ordenados por `depth` ascendente: píntalos en orden.
     pub quads: Vec<Quad>,
+    /// Glifos a pintar **después** de los quads, en orden de inserción.
+    /// El backend usa `llimphi-text` para rasterizarlos.
+    #[serde(default)]
+    pub glyphs: Vec<Glyph>,
     /// Caja envolvente de todos los quads — el backend la usa para
     /// centrar o escalar la vista.
     pub min_x: f32,
@@ -164,6 +186,29 @@ impl RenderPlan {
         self.max_y - self.min_y
     }
 }
+
+/// Mapeo opaco `sprite_id → char`. El motor no le da semántica; sirve
+/// para que el panel y el backend gráfico se pongan de acuerdo sobre
+/// qué glifo pintar. `0` = sin glifo; `1..=8` definidos; el resto cae
+/// a un `?` para feedback visual cuando hay un id desconocido.
+pub fn glyph_for_sprite(id: u32) -> Option<char> {
+    match id {
+        0 => None,
+        1 => Some('☩'), // cruz — iglesia
+        2 => Some('¤'), // moneda — banco
+        3 => Some('⌂'), // casa — comuna
+        4 => Some('⚗'), // alambique — laboratorio
+        5 => Some('☉'), // sol — centro
+        6 => Some('☽'), // luna
+        7 => Some('★'), // estrella
+        8 => Some('◬'), // triángulo — chacana
+        _ => Some('?'),
+    }
+}
+
+/// Cantidad de sprite_ids con glifo definido (excluye 0 y el fallback).
+/// Útil para los pickers de UI que ciclan a través de las opciones.
+pub const SPRITE_COUNT: u32 = 8;
 
 /// Mezcla `n` colores con pesos: `Σ wᵢ·colorᵢ / Σ wᵢ`. Alpha del primero.
 fn blend(parts: &[(f32, Color)]) -> Color {
@@ -214,6 +259,7 @@ pub fn build_plan(
 ) -> RenderPlan {
     let g = &world.grid;
     let mut quads: Vec<Quad> = Vec::with_capacity(g.cells() + world.lemmings.len());
+    let mut glyphs: Vec<Glyph> = Vec::with_capacity(world.conceptos.len());
 
     // --- Celdas: un quad-rombo por celda, más capas concéntricas
     //     "estampa andina" si la celda supera `andina_threshold` ---
@@ -327,6 +373,20 @@ pub fn build_plan(
             color: cfg.palette.concepto,
             depth: c.pos_x + c.pos_y + 0.75,
         });
+
+        // Glifo del sprite_id (si hay uno definido), posado sobre el tope.
+        if let Some(ch) = glyph_for_sprite(c.sprite_id) {
+            let glyph_size = cfg.concepto_size * 1.15;
+            glyphs.push(Glyph {
+                ch,
+                // Aproximamos el centrado: parley pinta desde la esquina sup-izq.
+                x: tx - glyph_size * 0.4,
+                y: ty - glyph_size * 0.6,
+                size_px: glyph_size,
+                color: [0.05, 0.05, 0.08, 1.0],
+                depth: c.pos_x + c.pos_y + 0.85,
+            });
+        }
     }
 
     // --- Lemmings: sombra al ras + marca posada sobre el relieve ---
@@ -367,7 +427,7 @@ pub fn build_plan(
     });
 
     // --- Caja envolvente ---
-    let mut plan = RenderPlan { quads, ..Default::default() };
+    let mut plan = RenderPlan { quads, glyphs, ..Default::default() };
     if let Some(first) = plan.quads.first() {
         plan.min_x = first.x;
         plan.min_y = first.y;
