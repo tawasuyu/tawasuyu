@@ -1,0 +1,18 @@
+[package]
+name = "wawa-explorer-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "wawa-explorer — lector host-side de imágenes Wawa: parsea SuperBloque, replay del log, expone manifiesto/raíz y un grafo direccionado por contenido navegable. Comparte el formato con kernel y boot via `shared/format`."
+
+[dependencies]
+# El formato del grafo en disco — single source of truth, mismo que enlazan
+# kernel bare-metal y wawa-boot.
+format = { path = "../../../shared/format" }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

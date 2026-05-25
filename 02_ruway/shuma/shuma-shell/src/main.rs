@@ -488,6 +488,15 @@ impl AnyRunHandle {
     fn supports_signals(&self) -> bool {
         matches!(self, Self::Local(_))
     }
+    /// Reenvía bytes al stdin del proceso (sólo aplica a runs PTY
+    /// locales). Devuelve `false` si no hay listener — el caller puede
+    /// reportarlo o silenciarlo según el contexto.
+    fn write_input(&self, bytes: Vec<u8>) -> bool {
+        match self {
+            Self::Local(h) => h.write_input(bytes),
+            Self::Remote(_) | Self::Synthetic { .. } => false,
+        }
+    }
 }
 
 /// Asa sintética que el `drain_exec` verá como un comando que falló
@@ -600,6 +609,74 @@ impl HistoryPicker {
     }
 }
 
+/// Tabla de binarios que necesitan PTY para funcionar (fullscreen TUIs
+/// o herramientas que detectan `isatty()` y rehúsan correr con pipes).
+/// Coincide por el nombre exacto del comando (sin path).
+fn is_tui_command(cmd: &str) -> bool {
+    matches!(
+        cmd,
+        // Editores
+        "vim" | "vi" | "nvim" | "neovim" | "nano" | "emacs" | "hx" | "helix" | "kak"
+        // Paginadores
+        | "less" | "more"
+        // Monitores
+        | "top" | "htop" | "btop" | "btm" | "atop" | "iotop" | "iftop"
+        // File managers
+        | "ranger" | "nnn" | "lf" | "mc" | "ncdu"
+        // Network / cluster TUIs
+        | "k9s" | "lazydocker" | "lazygit" | "gitui" | "tig" | "tui"
+        // Otros TUIs comunes
+        | "tmux" | "screen" | "byobu" | "claude" | "gptcli"
+    )
+}
+
+/// Traduce un keystroke GPUI a los bytes que un PTY xterm-compatible
+/// espera de su stdin. Cubre los casos comunes: caracteres imprimibles,
+/// `Enter` → `\r`, flechas, Ctrl-letras, Esc, Tab, Backspace. Devuelve
+/// `None` para teclas que no traducimos todavía.
+fn key_to_pty_bytes(ks: &gpui::Keystroke) -> Option<Vec<u8>> {
+    let ctrl = ks.modifiers.control;
+    let alt = ks.modifiers.alt;
+    let key = ks.key.as_str();
+    // Ctrl+letra → byte de control (A=0x01, B=0x02, ...).
+    if ctrl && key.len() == 1 {
+        if let Some(c) = key.chars().next() {
+            if c.is_ascii_alphabetic() {
+                let upper = c.to_ascii_uppercase() as u8;
+                return Some(vec![upper - b'A' + 1]);
+            }
+        }
+    }
+    // Alt+letra → ESC + letra.
+    if alt && !ctrl {
+        if let Some(s) = ks.key_char.as_deref() {
+            let mut out = vec![0x1b];
+            out.extend_from_slice(s.as_bytes());
+            return Some(out);
+        }
+    }
+    match key {
+        "enter" => Some(b"\r".to_vec()),
+        "tab" => Some(b"\t".to_vec()),
+        "escape" => Some(b"\x1b".to_vec()),
+        "backspace" => Some(b"\x7f".to_vec()),
+        "delete" => Some(b"\x1b[3~".to_vec()),
+        "up" => Some(b"\x1b[A".to_vec()),
+        "down" => Some(b"\x1b[B".to_vec()),
+        "right" => Some(b"\x1b[C".to_vec()),
+        "left" => Some(b"\x1b[D".to_vec()),
+        "home" => Some(b"\x1b[H".to_vec()),
+        "end" => Some(b"\x1b[F".to_vec()),
+        "pageup" => Some(b"\x1b[5~".to_vec()),
+        "pagedown" => Some(b"\x1b[6~".to_vec()),
+        _ => {
+            // Carácter imprimible — usamos lo que GPUI ya nos da en
+            // `key_char` (respeta shift, layouts, etc.).
+            ks.key_char.as_deref().map(|s| s.as_bytes().to_vec())
+        }
+    }
+}
+
 /// Detecta el `&` final aislado (no `&&`) y devuelve la línea sin él
 /// junto a `true` si lo había. `cmd && otra` deja la línea intacta —
 /// el `&&` queda como operador para el ejecutor.
@@ -708,6 +785,15 @@ struct Shell {
     history_draft: Option<String>,
     /// Picker fuzzy del historial (Ctrl-R) — `Some` mientras está abierto.
     picker: Option<HistoryPicker>,
+    /// Estados de emulación vt100 por run-PTY. Cada `RunEvent::Bytes` se
+    /// procesa contra el parser correspondiente, que mantiene un buffer
+    /// de pantalla renderizable como grid.
+    tui_states: HashMap<RunId, vt100::Parser>,
+    /// Run PTY actualmente en "modo raw input": las teclas del usuario
+    /// se traducen a bytes y se reenvían al stdin del proceso en vez
+    /// de editar la `LineState`. Esc fuera del PTY o `:detach` cierran
+    /// el modo (el proceso sigue corriendo, sólo perdemos foco).
+    focused_pty: Option<RunId>,
 }
 
 impl Shell {
@@ -774,6 +860,8 @@ impl Shell {
             history_cursor: None,
             history_draft: None,
             picker: None,
+            tui_states: HashMap::new(),
+            focused_pty: None,
             config,
         };
         shell.start_loop(cx);
@@ -849,13 +937,15 @@ impl Shell {
                         );
                         self.session.finish_run(*id, -1, now);
                     }
-                    // Bytes crudos del PTY — los procesa el render con
-                    // un emulador vt100 en la próxima fase. Por ahora,
-                    // los guardamos como salida raw para que al menos no
-                    // se pierdan ni rompan el flujo de drenado.
+                    // Bytes crudos del PTY: van al emulador vt100 del
+                    // run correspondiente, que mantiene un buffer de
+                    // pantalla renderizable por el render_run.
                     RunEvent::Bytes(bytes) => {
-                        let text = String::from_utf8_lossy(&bytes).into_owned();
-                        self.session.append_output(*id, Stream::Stdout, text);
+                        let parser = self
+                            .tui_states
+                            .entry(*id)
+                            .or_insert_with(|| vt100::Parser::new(24, 80, 0));
+                        parser.process(&bytes);
                     }
                 }
             }
@@ -1022,6 +1112,29 @@ impl Shell {
             self.matilda_command(args);
             return;
         }
+        // `:tui <cmd> [args...]` — fuerza el modo PTY (Exec::Pty) para
+        // un comando concreto. Útil cuando el auto-detect no acierta
+        // (binarios poco usuales) o cuando el usuario quiere un PTY
+        // para algo que normalmente correría plano.
+        if let Some(rest) = line.strip_prefix(":tui ") {
+            self.run_tui(rest.trim().to_string());
+            return;
+        }
+        // `:detach` — cierra el modo raw-input sin matar al proceso PTY.
+        // El proceso sigue corriendo en background; las teclas vuelven al
+        // editor de línea. `:attach <N>` (futuro) lo recoloca en foco.
+        if line == ":detach" {
+            self.focused_pty = None;
+            return;
+        }
+        // Auto-detección: si el primer token coincide con la lista de
+        // TUIs conocidas, promovemos a PTY automáticamente.
+        if let Some(first) = line.split_whitespace().next() {
+            if is_tui_command(first) {
+                self.run_tui(line);
+                return;
+            }
+        }
         // --- Job control ---
         // `:jobs` lista los runs activos numerados [1..]. Convención
         // estable mientras no termine ninguno: si uno termina, los
@@ -1111,6 +1224,63 @@ impl Shell {
         self.run_ui.insert(id, ui);
         let spec = self.build_spec(&line, None, id);
         self.active.push((id, self.spawn(&spec)));
+        self.scroll.scroll_to_bottom();
+    }
+
+    /// `:tui <cmd> [args...]` — lanza `cmd` bajo PTY y le da foco
+    /// (modo raw-input). El usuario puede usar el comando como en un
+    /// terminal real; `:detach` (o cerrar el run) vuelve al editor.
+    fn run_tui(&mut self, line: String) {
+        let line = line.trim().to_string();
+        if line.is_empty() {
+            self.synthetic_run(
+                ":tui",
+                vec!["uso: :tui <comando> [args...]".into()],
+                false,
+            );
+            return;
+        }
+        // Parse muy simple: el primer token es el programa, el resto
+        // son args. Sin shell expansion, sin pipes (un PTY siempre es
+        // un único proceso). Las comillas se descartan literalmente
+        // para no obligar al usuario a escaparlas, pero no procesamos
+        // sustituciones.
+        let mut parts = line.split_whitespace();
+        let program = parts.next().expect("non-empty").to_string();
+        let args: Vec<String> = parts.map(|s| unquote(s)).collect();
+        let now = unix_now();
+        for ui in self.run_ui.values_mut() {
+            if !ui.user_touched {
+                ui.collapsed = true;
+            }
+        }
+        if let Some(h) = self.history.as_mut() {
+            let _ = h.append(HistoryEntry::new(&line, self.session.cwd(), now));
+        }
+        let id = self.session.begin_run(&line, now);
+        let mut ui = RunUi::default();
+        ui.user_touched = true; // PTY runs no se autocolapsan
+        ui.background_explicit = true;
+        self.run_ui.insert(id, ui);
+        let policy = self.session.capture();
+        // PTY runs no usan capture_limit — la captura va a vt100, no a
+        // ring buffer textual — pero respetamos spill_path por si en el
+        // futuro alguien quiere grabar la sesión.
+        let _ = policy;
+        // Cols/rows iniciales conservadores; un futuro PTY-resize los
+        // ajustará al tamaño real del panel.
+        let spec = CommandSpec {
+            exec: Exec::Pty { program, args, cols: 100, rows: 28 },
+            cwd: self.session.cwd().to_string(),
+            capture_limit: 0,
+            spill_path: None,
+            stdin_data: None,
+        };
+        // PTY no se puede delegar al daemon remoto todavía — siempre
+        // local. Si SHUMA_REMOTE_TCP está activo, igual va por exec_run.
+        self.active.push((id, AnyRunHandle::Local(exec_run(&spec))));
+        self.tui_states.insert(id, vt100::Parser::new(28, 100, 200));
+        self.focused_pty = Some(id);
         self.scroll.scroll_to_bottom();
     }
 
@@ -1449,6 +1619,29 @@ impl Shell {
         if self.picker.is_some() {
             self.handle_picker_key(ks, cx);
             return;
+        }
+
+        // Modo raw-input para PTY enfocado. Todas las teclas se reenvían
+        // al stdin del proceso. Sólo dos "escape hatches":
+        //   - Ctrl-\\: detach (el proceso sigue, perdemos foco)
+        //   - Ctrl-q como override por si Ctrl-\\ no se traduce
+        if let Some(pty_id) = self.focused_pty {
+            if ctrl && (key == "\\" || key == "q") {
+                self.focused_pty = None;
+                cx.notify();
+                return;
+            }
+            // Si el run ya terminó, salimos automáticamente del modo.
+            let alive = self.active.iter().any(|(rid, h)| *rid == pty_id && !h.is_finished());
+            if !alive {
+                self.focused_pty = None;
+            } else if let Some(bytes) = key_to_pty_bytes(ks) {
+                if let Some((_, handle)) = self.active.iter().find(|(rid, _)| *rid == pty_id) {
+                    handle.write_input(bytes);
+                    cx.notify();
+                    return;
+                }
+            }
         }
 
         match key {
@@ -2056,7 +2249,8 @@ impl Shell {
                 .iter()
                 .map(|r| {
                     let ui = self.run_ui.get(&r.id).copied().unwrap_or_default();
-                    render_run(r, ui, &theme, node_bg, cx)
+                    let tui = self.tui_states.get(&r.id);
+                    render_run(r, ui, &theme, node_bg, cx, tui)
                 })
                 .collect();
             let empty = runs.is_empty();
@@ -2130,6 +2324,83 @@ fn pretty_cwd(cwd: &str) -> String {
     }
 }
 
+/// Mapea un `vt100::Color` (el que devuelve la celda del emulador
+/// vt100 del run PTY) a un `Hsla` del frontend. Es un puente más rico
+/// que el SGR plano: cubre Default + 256-color indexed + 24-bit RGB.
+fn vt100_color_to_hsla(c: vt100::Color, default: Hsla) -> Hsla {
+    use vt100::Color::*;
+    match c {
+        Default => default,
+        Idx(i) => {
+            // 16 colores ANSI (0..15) — reutilizamos la paleta del shell.
+            if i < 16 {
+                let mapped = match i {
+                    0 => shuma_line::AnsiColor::Black,
+                    1 => shuma_line::AnsiColor::Red,
+                    2 => shuma_line::AnsiColor::Green,
+                    3 => shuma_line::AnsiColor::Yellow,
+                    4 => shuma_line::AnsiColor::Blue,
+                    5 => shuma_line::AnsiColor::Magenta,
+                    6 => shuma_line::AnsiColor::Cyan,
+                    7 => shuma_line::AnsiColor::White,
+                    8 => shuma_line::AnsiColor::BrightBlack,
+                    9 => shuma_line::AnsiColor::BrightRed,
+                    10 => shuma_line::AnsiColor::BrightGreen,
+                    11 => shuma_line::AnsiColor::BrightYellow,
+                    12 => shuma_line::AnsiColor::BrightBlue,
+                    13 => shuma_line::AnsiColor::BrightMagenta,
+                    14 => shuma_line::AnsiColor::BrightCyan,
+                    _ => shuma_line::AnsiColor::BrightWhite,
+                };
+                ansi_color_to_hsla(Some(mapped), false, default)
+            } else {
+                // Paleta 256 (16..231 = cubo 6x6x6, 232..255 = grises).
+                // Aproximación: convertimos a RGB lineal y luego a HSL.
+                let (r, g, b) = if i < 232 {
+                    let c = i - 16;
+                    let r = (c / 36) % 6;
+                    let g = (c / 6) % 6;
+                    let b = c % 6;
+                    let step = |v: u8| if v == 0 { 0 } else { 55 + 40 * v as u32 };
+                    (step(r), step(g), step(b))
+                } else {
+                    let v = 8 + 10 * (i - 232) as u32;
+                    (v, v, v)
+                };
+                rgb_to_hsla(r as u8, g as u8, b as u8)
+            }
+        }
+        Rgb(r, g, b) => rgb_to_hsla(r, g, b),
+    }
+}
+
+/// Conversión RGB → HSL para los pocos lugares (vt100 24-bit, paleta
+/// 256) donde el color viene en sRGB directo en vez de via la paleta
+/// ANSI nombrada. Devuelve un `Hsla` opaco.
+fn rgb_to_hsla(r: u8, g: u8, b: u8) -> Hsla {
+    let r = r as f32 / 255.0;
+    let g = g as f32 / 255.0;
+    let b = b as f32 / 255.0;
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let l = (max + min) / 2.0;
+    let d = max - min;
+    let (h, s) = if d < f32::EPSILON {
+        (0.0, 0.0)
+    } else {
+        let s = if l < 0.5 { d / (max + min) } else { d / (2.0 - max - min) };
+        let h = if max == r {
+            (g - b) / d + if g < b { 6.0 } else { 0.0 }
+        } else if max == g {
+            (b - r) / d + 2.0
+        } else {
+            (r - g) / d + 4.0
+        };
+        (h / 6.0, s)
+    };
+    gpui::hsla(h, s, l, 1.0)
+}
+
 /// Mapea un [`shuma_line::AnsiColor`] a un `Hsla` del frontend. La
 /// paleta es la "VS Code Dark+" — buena legibilidad sobre fondos
 /// oscuros (panel del shell). `None` con `bold=true` levanta apenas el
@@ -2181,6 +2452,7 @@ fn render_run(
     theme: &Theme,
     node_bg: Hsla,
     cx: &mut Context<Shell>,
+    tui: Option<&vt100::Parser>,
 ) -> impl IntoElement {
     let id = r.id;
     let dim = theme.fg_muted;
@@ -2372,6 +2644,79 @@ fn render_run(
                         .children(chips),
                 );
             }
+        }
+
+        // Si el run trae estado vt100 (modo PTY), el cuerpo es un grid
+        // de celdas en vez de líneas planas — el render dibuja la
+        // pantalla del proceso TUI con su cursor y colores.
+        if let Some(parser) = tui {
+            let screen = parser.screen();
+            let (rows, cols) = screen.size();
+            let mut grid_rows: Vec<gpui::Div> = Vec::with_capacity(rows as usize);
+            for row in 0..rows {
+                let mut spans: Vec<gpui::Div> = Vec::new();
+                let mut current_text = String::new();
+                let mut current_fg: Option<vt100::Color> = None;
+                let flush = |spans: &mut Vec<gpui::Div>, text: &mut String, fg: vt100::Color, theme: &Theme| {
+                    if text.is_empty() {
+                        return;
+                    }
+                    let color = vt100_color_to_hsla(fg, theme.fg_text);
+                    spans.push(
+                        div().flex_none().text_color(color).child(SharedString::from(std::mem::take(text))),
+                    );
+                };
+                for col in 0..cols {
+                    if let Some(cell) = screen.cell(row, col) {
+                        let fg = cell.fgcolor();
+                        if current_fg != Some(fg) {
+                            if let Some(prev) = current_fg {
+                                flush(&mut spans, &mut current_text, prev, theme);
+                            }
+                            current_fg = Some(fg);
+                        }
+                        let c = cell.contents();
+                        if c.is_empty() {
+                            current_text.push(' ');
+                        } else {
+                            current_text.push_str(c);
+                        }
+                    } else {
+                        current_text.push(' ');
+                    }
+                }
+                if let Some(fg) = current_fg {
+                    flush(&mut spans, &mut current_text, fg, theme);
+                } else if !current_text.is_empty() {
+                    spans.push(
+                        div()
+                            .flex_none()
+                            .text_color(theme.fg_text)
+                            .child(SharedString::from(std::mem::take(&mut current_text))),
+                    );
+                }
+                grid_rows.push(div().flex().flex_row().children(spans));
+            }
+            body.push(
+                div()
+                    .flex()
+                    .flex_col()
+                    .font_family("Iosevka")
+                    .text_size(px(12.))
+                    .children(grid_rows),
+            );
+            // En modo TUI no mostramos el filtro stdout/stderr; salimos.
+            return div()
+                .flex()
+                .flex_col()
+                .gap(px(3.))
+                .p(px(8.))
+                .bg(node_bg)
+                .border_l_2()
+                .border_color(gcolor)
+                .rounded(px(5.))
+                .child(header)
+                .children(body);
         }
 
         let stream = if ui.show_stderr { Stream::Stderr } else { Stream::Stdout };
@@ -2630,7 +2975,8 @@ impl Render for Shell {
             .iter()
             .map(|r| {
                 let ui = self.run_ui.get(&r.id).copied().unwrap_or_default();
-                render_run(r, ui, &theme, node_bg, cx)
+                let tui = self.tui_states.get(&r.id);
+                render_run(r, ui, &theme, node_bg, cx, tui)
             })
             .collect();
         let runs_empty = runs.is_empty();
