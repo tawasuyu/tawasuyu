@@ -22,6 +22,7 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
 
 use crate::cursor::Pos;
+use crate::highlight::{Highlighter, Language, Span, SyntaxPalette, TokenKind};
 use crate::state::EditorState;
 
 /// Paleta del editor. Defaults dark.
@@ -96,9 +97,9 @@ impl EditorMetrics {
     }
 }
 
-/// Render principal. `height` es el alto disponible para el editor
-/// completo (gutter + texto). El caller decide; el editor recorta
-/// (`clip`) si el contenido excede.
+/// Render principal sin syntax highlight — todas las líneas en
+/// `palette.fg_text`. Útil para texto plano o cuando no se conoce el
+/// language. Equivale a `text_editor_view_highlighted(.., Language::Plain)`.
 pub fn text_editor_view<Msg: Clone + 'static>(
     state: &EditorState,
     palette: &EditorPalette,
@@ -106,11 +107,42 @@ pub fn text_editor_view<Msg: Clone + 'static>(
     height: f32,
     on_focus: Msg,
 ) -> View<Msg> {
+    text_editor_view_highlighted(
+        state,
+        palette,
+        metrics,
+        height,
+        Language::Plain,
+        on_focus,
+    )
+}
+
+/// Render con syntax highlight. El highlighter se construye on-the-fly
+/// (parseo completo del buffer cada call — aceptable para celdas de
+/// notebook). Para edición intensiva en archivos grandes, el caller
+/// puede cachear su propio `Highlighter` y llamar a una variante que
+/// reciba los `Vec<Vec<Span>>` precomputados (TODO si surge el caso).
+pub fn text_editor_view_highlighted<Msg: Clone + 'static>(
+    state: &EditorState,
+    palette: &EditorPalette,
+    metrics: EditorMetrics,
+    height: f32,
+    language: Language,
+    on_focus: Msg,
+) -> View<Msg> {
     let line_count = state.line_count();
     let caret = state.cursor.caret;
+    let syntax = SyntaxPalette::dark_default(&llimphi_theme::Theme::dark());
+
+    let spans = if matches!(language, Language::Plain) {
+        Vec::new()
+    } else {
+        let mut h = Highlighter::new(language);
+        h.highlight(&state.text())
+    };
 
     let gutter = build_gutter(line_count, caret.line, metrics, palette);
-    let content = build_content(state, palette, metrics, height, on_focus);
+    let content = build_content(state, palette, metrics, height, spans, &syntax, on_focus);
 
     View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -173,6 +205,8 @@ fn build_content<Msg: Clone + 'static>(
     palette: &EditorPalette,
     metrics: EditorMetrics,
     height: f32,
+    spans_per_line: Vec<Vec<Span>>,
+    syntax: &SyntaxPalette,
     on_focus: Msg,
 ) -> View<Msg> {
     let line_count = state.line_count();
@@ -193,11 +227,16 @@ fn build_content<Msg: Clone + 'static>(
         children.push(bracket_highlight(b, metrics, palette));
     }
 
-    // 3) Texto — una View por línea.
+    // 3) Texto — una View por línea. Con spans se usan tokens
+    //    coloreados; sin spans, monocolor.
     for n in 0..line_count {
         let text = state.buffer.line(n);
         let text = text.trim_end_matches('\n').to_owned();
-        children.push(line_text(n, text, metrics, palette));
+        if let Some(line_spans) = spans_per_line.get(n) {
+            children.push(line_text_tokens(n, &text, line_spans, metrics, palette, syntax));
+        } else {
+            children.push(line_text_plain(n, text, metrics, palette));
+        }
     }
 
     // 4) Caret — bloque de 2 px de ancho a la izquierda del char en
@@ -237,7 +276,7 @@ fn line_highlight<Msg: Clone + 'static>(
     .fill(palette.bg_current_line)
 }
 
-fn line_text<Msg: Clone + 'static>(
+fn line_text_plain<Msg: Clone + 'static>(
     line: usize,
     text: String,
     metrics: EditorMetrics,
@@ -252,7 +291,6 @@ fn line_text<Msg: Clone + 'static>(
             bottom: auto(),
         },
         size: Size {
-            // Ancho amplio para no recortar; el clip del padre se ocupa.
             width: length(2000.0_f32),
             height: length(metrics.line_height),
         },
@@ -260,6 +298,71 @@ fn line_text<Msg: Clone + 'static>(
         ..Default::default()
     })
     .text_aligned(text, metrics.font_size, palette.fg_text, Alignment::Start)
+}
+
+/// Renderiza una línea como secuencia de Views absolutos posicionados,
+/// cada uno con el color de su span. El posicionamiento horizontal usa
+/// `char_width` (mono); para fuentes proporcionales habría que medir
+/// cada token con parley (TODO).
+fn line_text_tokens<Msg: Clone + 'static>(
+    line: usize,
+    text: &str,
+    spans: &[Span],
+    metrics: EditorMetrics,
+    palette: &EditorPalette,
+    syntax: &SyntaxPalette,
+) -> View<Msg> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut children: Vec<View<Msg>> = Vec::with_capacity(spans.len());
+
+    for span in spans {
+        if span.start_col >= chars.len() {
+            continue;
+        }
+        let end = span.end_col.min(chars.len());
+        if end <= span.start_col {
+            continue;
+        }
+        let token: String = chars[span.start_col..end].iter().collect();
+        if token.chars().all(|c| c.is_whitespace()) && !matches!(span.kind, TokenKind::String) {
+            continue;
+        }
+        let x = 4.0 + span.start_col as f32 * metrics.char_width;
+        let w = (end - span.start_col) as f32 * metrics.char_width + metrics.char_width;
+        let color = if matches!(span.kind, TokenKind::Other) {
+            palette.fg_text
+        } else {
+            syntax.color(span.kind)
+        };
+        children.push(
+            View::new(Style {
+                position: Position::Absolute,
+                inset: Rect {
+                    left: length(x),
+                    top: length(0.0_f32),
+                    right: auto(),
+                    bottom: auto(),
+                },
+                size: Size { width: length(w), height: length(metrics.line_height) },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .text_aligned(token, metrics.font_size, color, Alignment::Start),
+        );
+    }
+
+    View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            left: length(0.0_f32),
+            top: length(line as f32 * metrics.line_height),
+            right: auto(),
+            bottom: auto(),
+        },
+        size: Size { width: length(2000.0_f32), height: length(metrics.line_height) },
+        ..Default::default()
+    })
+    .children(children)
 }
 
 fn caret_rect<Msg: Clone + 'static>(

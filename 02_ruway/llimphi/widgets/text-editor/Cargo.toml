@@ -11,5 +11,8 @@ description = "llimphi-widget-text-editor — editor de código multilínea para
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 ropey = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-rust = { workspace = true }
+tree-sitter-python = { workspace = true }
 
 [dev-dependencies]

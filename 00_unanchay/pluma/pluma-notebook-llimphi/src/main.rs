@@ -35,7 +35,7 @@ use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
 use llimphi_widget_text_editor::{
-    text_editor_view, EditorMetrics, EditorPalette, EditorState,
+    text_editor_view_highlighted, EditorMetrics, EditorPalette, EditorState, Language,
 };
 use pluma_notebook_core::{
     Cell, CellId, CellKind, CellOutput, CellState, Notebook, Position as CanvasPos,
@@ -474,7 +474,7 @@ fn canvas_card(
     // En edición el body se reemplaza por el editor.
     let body = match edit {
         None => body,
-        Some(es) => edit_input_view(&es.editor, body_h),
+        Some(es) => edit_input_view(&es.editor, body_h, language_of(cell)),
     };
 
     // En edición la card no debe ser draggable (interfiere con foco).
@@ -501,11 +501,18 @@ fn canvas_card(
     wrapper.children(vec![header, body, footer, edit_button, run_button])
 }
 
-fn edit_input_view(editor: &EditorState, body_h: f32) -> View<Msg> {
+fn edit_input_view(editor: &EditorState, body_h: f32, language: Language) -> View<Msg> {
     let theme = Theme::dark();
     let ep = EditorPalette::from_theme(&theme);
     let metrics = EditorMetrics::for_font_size(12.0);
-    text_editor_view(editor, &ep, metrics, body_h, Msg::CancelEdit)
+    text_editor_view_highlighted(editor, &ep, metrics, body_h, language, Msg::CancelEdit)
+}
+
+fn language_of(cell: &Cell) -> Language {
+    match &cell.kind {
+        CellKind::Code { language } => Language::from_cell_language(language),
+        _ => Language::Plain,
+    }
 }
 
 fn output_footer(out: Option<&CellOutput>, palette: &Palette) -> View<Msg> {
