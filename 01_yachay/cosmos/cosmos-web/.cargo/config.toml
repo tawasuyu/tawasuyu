@@ -1,0 +1,7 @@
+# Forzamos el backend `wasm_js` de getrandom para el target
+# wasm32-unknown-unknown — sin esta flag, el getrandom transitivo
+# vía `uuid → cosmobiologia-model → cosmobiologia-render` falla a
+# compilar a WASM con "wasm32-unknown-unknown targets are not
+# supported by default".
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

@@ -1,0 +1,22 @@
+#!/bin/sh
+# mirada-session — arranca carmen (el compositor mirada) como una sesión
+# de escritorio. Pensado para lanzarse desde una TTY o desde un gestor de
+# login (greetd, ly, …).
+#
+# Instálalo en el PATH (p. ej. /usr/local/bin/mirada-session) junto al
+# binario `mirada-compositor`.
+
+# Carmen es un compositor Wayland.
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=carmen
+export XDG_SESSION_DESKTOP=carmen
+
+# Que las apps GUI prefieran sus backends Wayland.
+export MOZ_ENABLE_WAYLAND=1
+export QT_QPA_PLATFORM="wayland;xcb"
+export SDL_VIDEODRIVER=wayland
+export _JAVA_AWT_WM_NONREPARENTING=1
+
+# El backend DRM toma la TTY entera. Los programas de arranque van en
+# ~/.config/mirada/autostart (uno por línea).
+exec mirada-compositor --drm

@@ -1,0 +1,12 @@
+[package]
+name = "charka-bcd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "charka — aritmética decimal de punto fijo con semántica COBOL: cláusula PICTURE, Decimal exacto, truncado/redondeo y detección de SIZE ERROR."
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }

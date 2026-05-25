@@ -1,0 +1,25 @@
+[package]
+name = "mirada-layout"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "mirada — motor de teselado del compositor Wayland: reparte la pantalla entre ventanas según el modo de layout. Agnóstico de Wayland y de smithay."
+
+[dependencies]
+# Deps declaradas directas (no `workspace = true`): mirada-layout es un
+# crate-núcleo compartido entre dos workspaces de Cargo —brahman y
+# renaser— así que mantiene sus dependencias autocontenidas.
+#
+# `libm`: `sqrt`/`ceil`/`round` viven en `std`, no en `core`; este crate
+# es `no_std`, así que la matemática de punto flotante pasa por `libm`.
+libm = "0.2"
+# `serde` es opcional: el motor de teselado no necesita (de)serializar
+# para funcionar. Los consumidores Linux (mirada-protocol/brain) activan
+# la feature; el kernel bare-metal de renaser no. `default-features =
+# false` evita arrastrar `std` aun con la feature activa.
+serde = { version = "1", optional = true, default-features = false, features = ["derive", "alloc"] }
+
+[features]
+serde = ["dep:serde"]

@@ -1,0 +1,12 @@
+[package]
+name = "matilda-ghost"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "matilda — el agente que ejecuta los ApplySteps en la máquina destino: escribe los archivos, corre los comandos y reporta el resultado paso a paso."
+
+[dependencies]
+matilda-apply = { path = "../matilda-apply" }
+serde = { workspace = true }

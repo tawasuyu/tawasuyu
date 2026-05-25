@@ -1,0 +1,12 @@
+[package]
+name = "mirada-link"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "mirada — transporte Cerebro↔Cuerpo del compositor: el canal de socket Unix que mueve BrainCommand y BodyEvent sobre el marco postcard de mirada-protocol."
+
+[dependencies]
+mirada-protocol = { path = "../mirada-protocol" }
+serde = { workspace = true }

@@ -1,0 +1,30 @@
+# =============================================================================
+#  renaser :: apps/pregon — Fase 19 :: el primer app que sale a la red
+# -----------------------------------------------------------------------------
+#  Pregona la presencia de renaser en la red con un frame Ethernet broadcast,
+#  y pone en pantalla lo que va sucediendo: su MAC, paquetes enviados y
+#  recibidos, y los primeros bytes del ultimo frame entrante. Demuestra las
+#  capacidades `sys_net_*` de la Fase 19.
+# =============================================================================
+
+[package]
+name = "pregon"
+version = "0.1.0"
+edition = "2021"
+description = "renaser :: app WASM — voz hacia la red, demo de sys_net_*"
+
+[workspace]
+
+[dependencies]
+font8x8 = { version = "0.3", default-features = false, features = ["unicode"] }
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true

@@ -1,0 +1,31 @@
+# =============================================================================
+#  renaser :: apps/bitacora — Fase 17 :: un editor de texto que persiste
+# -----------------------------------------------------------------------------
+#  Tecleas, los caracteres se quedan. Y al reiniciar siguen ahi, porque viven en
+#  el grafo de objetos (Fase 7c, `sys_estado_*`). Renderizado con la tipografia
+#  8x8 clasica (font8x8), embebida en el binario WASM — no depende del kernel.
+# =============================================================================
+
+[package]
+name = "bitacora"
+version = "0.1.0"
+edition = "2021"
+description = "renaser :: app WASM — un editor de texto que persiste entre arranques"
+
+[workspace]
+
+[dependencies]
+# Tipografia 8x8 pixel-perfect, public domain. La crate es `no_std` y compila
+# limpiamente para `wasm32-unknown-unknown` con `default-features = false`.
+font8x8 = { version = "0.3", default-features = false, features = ["unicode"] }
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true

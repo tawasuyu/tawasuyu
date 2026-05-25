@@ -1,0 +1,28 @@
+# =============================================================================
+#  renaser :: apps/hello_wasm — primera aplicacion del userspace aislado
+# -----------------------------------------------------------------------------
+#  No es un ELF: es un modulo WebAssembly puro. Se compila para wasm32 y el
+#  kernel lo ejecuta dentro de wasmi, encerrado en su propia memoria lineal.
+#  Tiene su propio `[workspace]`: queda fuera del espacio de trabajo del kernel.
+# =============================================================================
+
+[package]
+name = "hello_wasm"
+version = "0.1.0"
+edition = "2021"
+description = "renaser :: app WASM de prueba — un cuadrado movil dirigido por teclado"
+
+[workspace]
+
+# `cdylib` produce un modulo `.wasm` que exporta funciones — el formato que
+# wasmi instancia. La aplicacion solo habla con el kernel por funciones del host.
+[lib]
+crate-type = ["cdylib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true

@@ -1,0 +1,13 @@
+[package]
+name = "fana-editor-gpui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "fana — backend GPUI del editor DAG: pinta un RenderPlan como bloques de átomo, conectores de dependencia y osciloscopio de coherencia."
+
+[dependencies]
+fana-render-plan = { path = "../fana-render-plan" }
+nahual-theme = { path = "../../nahual/libs/theme" }
+gpui = { workspace = true }

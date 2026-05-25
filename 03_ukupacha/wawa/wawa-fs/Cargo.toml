@@ -1,0 +1,38 @@
+# =============================================================================
+#  renaser :: akasha — protocolo Akasha Over Ether (AoE)
+# -----------------------------------------------------------------------------
+#  Nucleo `#![no_std]` COMPARTIDO: la verdad UNICA del protocolo de red nativo
+#  de renaser. Lo enlaza el kernel bare-metal (target `x86_64-unknown-none`) y,
+#  por ser no_std, lo compila tambien sin friccion el anfitrion `boot` y
+#  cualquier otra pieza que quiera dialogar en el mismo idioma — incluida
+#  alguna futura app del userspace.
+#
+#  El protocolo extiende el GRAFO de objetos persistentes (Fase 6) sobre una
+#  red Ethernet cruda, sin pasar por TCP/IP. Tres mensajes bastan: solicitar
+#  un objeto por su hash BLAKE3, proveerlo de vuelta, anunciar la raiz actual
+#  del sistema. Se serializa con `postcard` —compacto y deterministico— y
+#  viaja en frames de EtherType experimental `0x88B5`.
+#
+#  Queda EXCLUIDO del espacio de trabajo (ver el Cargo.toml raiz), como el
+#  kernel y como `formato`: lo consume un paquete bare-metal, asi que fija
+#  sus versiones de forma explicita.
+# =============================================================================
+
+[package]
+name = "akasha"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+authors = ["JL Soltech <gerencia@jlsoltech.com>"]
+description = "renaser :: protocolo Akasha Over Ether (AoE) — grafo distribuido sobre Ethernet"
+
+[lib]
+bench = false
+doctest = false
+
+[dependencies]
+# `serde` aporta los rasgos de (de)serializacion; `postcard` los materializa en
+# un formato binario compacto, el mismo que ya usa `formato` para el disco.
+# Asi el grafo habla el mismo idioma en el disco y en el cable.
+serde = { version = "1", default-features = false, features = ["alloc", "derive"] }
+postcard = { version = "1", default-features = false, features = ["alloc"] }

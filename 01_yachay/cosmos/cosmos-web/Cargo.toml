@@ -1,0 +1,23 @@
+[package]
+name = "cosmobiologia-web"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+description = "Cosmobiología — cliente WASM. Reusa cosmobiologia-render para componer la rueda en SVG localmente, sin round-trip al server por cada interacción."
+
+[dependencies]
+cosmobiologia-render = { path = "../cosmobiologia-render" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# wasm-bindgen solo se compila para target wasm32; en nativo el
+# crate igual compila (rlib), pero esta API no se expone.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { workspace = true }
+# Backend de getrandom para WASM: pide al embedder (browser) que
+# provea la randomness vía Web Crypto. Se activa con el cfg
+# `getrandom_backend = "wasm_js"` desde .cargo/config.toml.
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
+[lib]
+crate-type = ["cdylib", "rlib"]

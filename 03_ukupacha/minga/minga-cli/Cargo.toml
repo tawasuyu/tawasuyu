@@ -1,0 +1,27 @@
+[package]
+name = "minga-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "CLI de Minga: init, status, ingest, listen, sync, watch, mount."
+
+[[bin]]
+name = "minga"
+path = "src/main.rs"
+
+[dependencies]
+minga-core = { path = "../minga-core" }
+minga-p2p = { path = "../minga-p2p" }
+minga-store = { path = "../minga-store" }
+minga-vfs = { path = "../minga-vfs" }
+clap = { workspace = true }
+rpassword = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+futures = { workspace = true }
+libp2p = { workspace = true }
+notify = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

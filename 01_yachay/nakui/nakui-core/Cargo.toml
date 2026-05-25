@@ -1,0 +1,62 @@
+[package]
+name = "nakui-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Nakui — ERP modular: graph runtime, executor de scripts Rhai, persistencia opcional SurrealDB."
+
+[features]
+default = []
+# Pulls in surrealdb's pure-Rust SurrealKV backend so SurrealStore can
+# persist to disk across process restarts. Lighter compile cost than
+# RocksDB (which would otherwise pull in a C++ build); opt-in only.
+persistent = ["surrealdb/kv-surrealkv"]
+
+[dependencies]
+# Workspace-shared (versión y features alineadas con el resto del monorepo).
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+ulid = { workspace = true }
+sha2 = { workspace = true }
+# uuid del workspace ya activa "v4"; le sumamos "serde" para soporte
+# de derive en structs propios de nakui.
+uuid = { workspace = true, features = ["serde"] }
+
+# Específicas de nakui — no compartidas con otros crates del workspace,
+# por lo que se mantienen inline (versión local).
+rhai = { version = "1.20", features = ["serde"] }
+petgraph = "0.6"
+# Nickel reemplaza a KCL como motor de validación de entities.
+# Evaluación in-process (sin shellear binarios), contracts Nickel
+# nativos en los `schema.ncl` de cada módulo.
+nickel-lang = "2.0.0"
+surrealdb = { version = "2", default-features = false, features = ["kv-mem"] }
+
+# Brahman protocol — presencia ante el Init cuando `nakui run` arranca.
+brahman-card = { path = "../../../protocol/brahman-card" }
+brahman-sidecar = { path = "../../../protocol/brahman-sidecar" }
+
+[[bin]]
+name = "nakui"
+path = "src/bin/nakui.rs"
+
+[[bin]]
+name = "demo"
+path = "src/bin/demo.rs"
+
+[[bin]]
+name = "inventory_demo"
+path = "src/bin/inventory_demo.rs"
+
+[[bin]]
+name = "sales_demo"
+path = "src/bin/sales_demo.rs"
+
+[[bin]]
+name = "crm_demo"
+path = "src/bin/crm_demo.rs"

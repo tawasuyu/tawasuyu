@@ -1,0 +1,17 @@
+[package]
+name = "pineal-stream"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+publish = { workspace = true }
+description = "Lapaloma — widget de telemetría tipo osciloscopio. Ring buffer + envelope min/max por columna + render en dos segmentos (split at head)."
+
+[dependencies]
+pineal-core = { path = "../core" }
+pineal-render = { path = "../render" }
+gpui = { workspace = true, optional = true }
+
+[features]
+default = ["gpui"]
+gpui = ["dep:gpui", "pineal-render/gpui"]

@@ -1,0 +1,8 @@
+[package]
+name = "revista-core"
+description = "Vista — máquina de estados agnóstica para deck horizontal con snap. Sin dependencias web/DOM."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true

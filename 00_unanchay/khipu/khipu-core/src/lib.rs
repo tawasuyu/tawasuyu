@@ -1,0 +1,23 @@
+//! `badu-core` — el núcleo agnóstico de la toma de notas.
+//!
+//! Una nota es texto con título, etiquetas y enlaces `[[...]]`. El
+//! [`NoteStore`] las guarda y deriva el grafo: forward-links, backlinks,
+//! huérfanas y enlaces colgantes. Sin UI, sin storage en disco, sin red
+//! — tipos puros y deterministas.
+//!
+//! - [`note`] — el modelo [`Note`].
+//! - [`links`] — el parser de wiki-links `[[...]]`.
+//! - [`store`] — el [`NoteStore`] y el grafo de enlaces.
+//!
+//! La gravedad semántica (clustering por afinidad de embeddings) vive en
+//! `badu-gravity`; las lentes visuales, en los crates de frontend.
+
+#![forbid(unsafe_code)]
+
+pub mod links;
+pub mod note;
+pub mod store;
+
+pub use links::parse_links;
+pub use note::{Note, NoteId};
+pub use store::NoteStore;

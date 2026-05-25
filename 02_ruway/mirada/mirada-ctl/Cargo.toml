@@ -1,0 +1,16 @@
+[package]
+name = "mirada-ctl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "mirada-ctl — control del compositor carmen por línea de comandos (estilo swaymsg/hyprctl): aplica acciones de escritorio y consulta ventanas vía el socket de control de mirada-brain."
+
+[[bin]]
+name = "mirada-ctl"
+path = "src/main.rs"
+
+[dependencies]
+mirada-brain = { path = "../../modules/mirada/mirada-brain" }

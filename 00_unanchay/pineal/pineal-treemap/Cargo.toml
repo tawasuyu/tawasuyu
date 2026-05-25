@@ -1,0 +1,13 @@
+[package]
+name = "pineal-treemap"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+publish = { workspace = true }
+description = "Lapaloma — treemap con algoritmo squarified (Bruls / d3-hierarchy formulation)."
+
+[dependencies]
+pineal-core = { path = "../core" }
+pineal-render = { path = "../render" }
+gpui = { workspace = true }

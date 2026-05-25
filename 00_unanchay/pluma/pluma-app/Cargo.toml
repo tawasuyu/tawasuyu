@@ -1,0 +1,23 @@
+[package]
+name = "fana"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "fana — editor de escritura DAG: ventana GPUI con el documento como grafo de átomos narrativos, conectores de dependencia y osciloscopio de coherencia."
+
+[[bin]]
+name = "fana"
+path = "src/main.rs"
+
+[dependencies]
+fana-core = { path = "../../modules/fana/fana-core" }
+fana-graph = { path = "../../modules/fana/fana-graph" }
+fana-render-plan = { path = "../../modules/fana/fana-render-plan" }
+fana-editor-gpui = { path = "../../modules/fana/fana-editor-gpui" }
+nahual-theme = { path = "../../modules/nahual/libs/theme" }
+nahual-launcher = { path = "../../modules/nahual/libs/launcher" }
+gpui = { workspace = true }
+uuid = { workspace = true }

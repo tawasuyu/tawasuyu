@@ -1,0 +1,25 @@
+[package]
+name = "minga-p2p"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Minga P2P: protocolo de sincronización entre repositorios. Lógica pura; el transporte (libp2p) se monta encima."
+
+[dependencies]
+minga-core = { path = "../minga-core" }
+minga-store = { path = "../minga-store" }
+brahman-net = { path = "../../../protocol/brahman-net" }
+serde = { workspace = true }
+postcard = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures = { workspace = true }
+libp2p = { workspace = true }
+libp2p-stream = { workspace = true }
+rand = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tempfile = { workspace = true }

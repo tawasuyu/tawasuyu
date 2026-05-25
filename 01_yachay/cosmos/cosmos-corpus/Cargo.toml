@@ -1,0 +1,11 @@
+[package]
+name = "cosmobiologia-corpus"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Corpus de interpretación astrológica: pasajes de texto etiquetados por combinación e indexados para el JOIN con una carta."
+
+[dependencies]
+serde = { workspace = true }
+ron = { workspace = true }

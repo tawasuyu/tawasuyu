@@ -1,0 +1,16 @@
+[package]
+name = "charka-ir"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "charka-ir — representación intermedia: el AST de charka-parser con los statements del PROCEDURE ya parseados a instrucciones tipadas (MOVE, IF, PERFORM, COMPUTE...)."
+
+[dependencies]
+charka-parser = { path = "../charka-parser" }
+charka-bcd = { path = "../charka-bcd" }
+
+[dev-dependencies]
+charka-lexer = { path = "../charka-lexer" }

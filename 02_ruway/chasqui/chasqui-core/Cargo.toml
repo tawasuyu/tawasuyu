@@ -1,0 +1,33 @@
+[package]
+name = "chasqui-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Nouser — explorador de Mónadas: scanner, clustering determinista, DB en memoria."
+
+[dependencies]
+chasqui-card = { path = "../card" }
+chasqui-nous = { path = "../nous" }
+shuma-discern = { path = "../../shuma/shuma-discern" }
+brahman-card = { path = "../../../protocol/brahman-card" }
+brahman-handshake = { path = "../../../protocol/brahman-handshake" }
+brahman-sidecar = { path = "../../../protocol/brahman-sidecar" }
+blake3 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sled = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+ulid = { workspace = true }
+walkdir = "2"
+notify = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[[bin]]
+name = "chasqui"
+path = "src/bin/nouser.rs"

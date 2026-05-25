@@ -1,0 +1,19 @@
+[package]
+name = "minga-explorer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Dashboard GPUI del repo Minga: counts de nodos AST, atestaciones, claves MST, refresh por polling. Lee sled directo (sin passphrase). Standalone."
+
+[dependencies]
+minga-store = { path = "../../modules/semantic_dht/minga-store" }
+nahual-theme = { path = "../../modules/nahual/libs/theme" }
+nahual-launcher = { path = "../../modules/nahual/libs/launcher" }
+nahual-widget-banner = { path = "../../modules/nahual/widgets/banner" }
+nahual-widget-stat-card = { path = "../../modules/nahual/widgets/stat-card" }
+nahual-widget-app-header = { path = "../../modules/nahual/widgets/app-header" }
+gpui = { workspace = true }
+
+[[bin]]
+name = "minga-explorer"
+path = "src/main.rs"

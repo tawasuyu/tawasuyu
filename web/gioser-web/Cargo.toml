@@ -1,0 +1,44 @@
+[package]
+name = "gioser-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+gioser-canvas-web = { path = "../../modules/gioser/gioser-canvas-web" }
+fana-md-reader-web = { path = "../../modules/fana/fana-md-reader-web" }
+revista-web = { path = "../../modules/revista/revista-web" }
+barra-web = { path = "../../modules/barra/barra-web" }
+gioser-graph-web = { path = "../../modules/gioser/gioser-graph-web" }
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
+js-sys.workspace = true
+
+[dependencies.web-sys]
+workspace = true
+features = [
+    "Window",
+    "Document",
+    "Element",
+    "Node",
+    "HtmlElement",
+    "HtmlCanvasElement",
+    "CssStyleDeclaration",
+    "DomTokenList",
+    "DomRect",
+    "Event",
+    "EventTarget",
+    "MouseEvent",
+    "PointerEvent",
+    "KeyboardEvent",
+    "NodeList",
+    "Performance",
+    "console",
+    "Location",
+    "History",
+]

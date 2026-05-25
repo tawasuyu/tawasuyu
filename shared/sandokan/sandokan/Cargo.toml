@@ -1,0 +1,19 @@
+[package]
+name = "sandokan"
+description = "Orquestador sandokan (umbrella): re-exporta core/local/daemon + Engine::auto() que elige transporte según haya un daemon escuchando."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+sandokan-core = { path = "../sandokan-core" }
+sandokan-lifecycle = { path = "../sandokan-lifecycle" }
+sandokan-local = { path = "../sandokan-local" }
+sandokan-daemon = { path = "../sandokan-daemon" }
+sandokan-remote = { path = "../sandokan-remote" }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

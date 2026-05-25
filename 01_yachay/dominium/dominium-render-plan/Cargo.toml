@@ -1,0 +1,13 @@
+[package]
+name = "dominium-render-plan"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "dominium — maqueta isométrica agnóstica: convierte un World en una lista de quads 2D ordenada por profundidad, lista para cualquier backend (GPUI, web, tui)."
+
+[dependencies]
+dominium-core = { path = "../dominium-core" }
+dominium-iso = { path = "../dominium-iso" }
+serde = { workspace = true }

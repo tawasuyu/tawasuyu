@@ -1,0 +1,19 @@
+[package]
+name = "cosmobiologia-card"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+description = "Tahuantinsuyu — Tarjeta de Presentación brahman + spawn del sidecar + protocolo del service socket."
+
+[dependencies]
+brahman-card = { path = "../../../protocol/brahman-card" }
+brahman-sidecar = { path = "../../../protocol/brahman-sidecar" }
+cosmobiologia-engine = { path = "../cosmobiologia-engine" }
+cosmobiologia-model = { path = "../cosmobiologia-model" }
+ulid = { workspace = true }
+serde = { workspace = true }
+postcard = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+directories = { workspace = true }
+thiserror = { workspace = true }

@@ -1,0 +1,18 @@
+[package]
+name = "sandokan-local"
+description = "LocalEngine: implementación in-process del orquestador sandokan. Encarna Cards vía arje-incarnate, trackea lifecycle, reaping."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+sandokan-core = { path = "../sandokan-core" }
+sandokan-lifecycle = { path = "../sandokan-lifecycle" }
+arje-incarnate = { path = "../../init/arje-incarnate" }
+brahman-card = { path = "../../protocol/brahman-card" }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+nix = { workspace = true }
+ulid = { workspace = true }

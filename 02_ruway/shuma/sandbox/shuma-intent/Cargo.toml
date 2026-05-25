@@ -1,0 +1,11 @@
+[package]
+name = "shuma-intent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "shuma — núcleo agnóstico del shell: parser de intenciones (tokens %cN/%pN) + grafo de contexto de la sesión."
+
+[dependencies]
+serde = { workspace = true }

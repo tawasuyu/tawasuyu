@@ -1,0 +1,72 @@
+// ejemplo.ron — plantilla del corpus de interpretación.
+//
+// Cópialo a un archivo propio (p. ej. `corpus.ron`) y reemplaza el
+// contenido por el tuyo. Tiene dos secciones:
+//
+//   arquetipos — la ontología: cada planeta / signo / casa / aspecto
+//                con su perfil semántico (las dimensiones las nombras
+//                TÚ; el código no presupone ninguna).
+//   pasajes    — la evidencia: texto real, etiquetado por combinación,
+//                con su fuente. Es lo que el JOIN recupera.
+//
+// Sintaxis de la clave `combinacion` (el "código de barras"):
+//   "mars·virgo"   o   "mars/virgo"    — un planeta en un signo
+//   "mars@c6"                          — un planeta en una casa
+//   "mars square saturn"               — un aspecto (TRES palabras)
+//
+// Identificadores: minúscula, ASCII, una sola palabra (usa "_" para
+// nombres compuestos, p. ej. "north_node"). Un aspecto se guarda con
+// sus extremos ordenados, así "mars square saturn" y
+// "saturn square mars" son la misma clave.
+//
+// Los campos `perfil` y `dominio` de un pasaje son opcionales: omítelos
+// hasta que los necesites.
+(
+    arquetipos: [
+        (
+            nombre: "mars",
+            tipo: planeta,
+            perfil: {
+                "accion": 0.9,
+                "deseo": 0.7,
+                "agresion": 0.5,
+            },
+        ),
+        (
+            nombre: "saturn",
+            tipo: planeta,
+            perfil: {
+                "estructura": 0.9,
+                "limite": 0.8,
+                "miedo": 0.5,
+            },
+        ),
+        (
+            nombre: "virgo",
+            tipo: signo,
+            perfil: {
+                "precision": 0.9,
+                "servicio": 0.6,
+                "ansiedad": 0.4,
+            },
+        ),
+    ],
+    pasajes: [
+        (
+            combinacion: "mars·virgo",
+            texto: "La energía marciana se vuelve cirujana: actúa con método, corrige, perfecciona. El impulso ya no arrasa, disecciona.",
+            fuente: "plantilla — reemplaza por tu cita y su autor",
+        ),
+        (
+            combinacion: "mars@c6",
+            texto: "El deseo se descarga en el trabajo cotidiano y en el cuidado del cuerpo. Riesgo de agotamiento por exceso de tarea.",
+            fuente: "plantilla — reemplaza por tu cita y su autor",
+        ),
+        (
+            combinacion: "mars square saturn",
+            texto: "Acción y freno tironean a la vez. La frustración, con los años, forja una voluntad templada.",
+            fuente: "plantilla — reemplaza por tu cita y su autor",
+            dominio: Some(psiquico),
+        ),
+    ],
+)

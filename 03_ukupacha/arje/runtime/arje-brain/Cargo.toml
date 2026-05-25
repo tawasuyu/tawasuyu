@@ -1,0 +1,28 @@
+[package]
+name = "arje-brain"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Capa de integración del brain: introspect socket + autopromote loop + metrics HTTP + loader. Wirea arje-brain-{rules,cognitive,audit}."
+
+[dependencies]
+arje-brain-rules = { path = "../arje-brain-rules" }
+arje-brain-cognitive = { path = "../arje-brain-cognitive" }
+arje-brain-audit = { path = "../arje-brain-audit" }
+arje-card = { path = "../../protocol/arje-card" }
+arje-cas = { path = "../arje-cas" }
+brahman-cards = { path = "../../protocol/brahman-cards" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+ulid = { workspace = true }
+tokio = { workspace = true }
+bincode = { workspace = true }
+base64 = { workspace = true }
+postcard = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+
+[[example]]
+name = "brainctl"
+path = "examples/brainctl.rs"

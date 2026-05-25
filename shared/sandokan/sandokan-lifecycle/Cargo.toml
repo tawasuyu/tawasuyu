@@ -1,0 +1,11 @@
+[package]
+name = "sandokan-lifecycle"
+description = "Primitivas de ciclo de vida agnósticas: backoff exponencial, TTL, cuotas de recursos, política de restart, estado. Sin deps de proceso ni de UI."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde = { workspace = true }

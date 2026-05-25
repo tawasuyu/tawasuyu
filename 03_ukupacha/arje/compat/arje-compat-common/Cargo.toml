@@ -1,0 +1,9 @@
+[package]
+name = "arje-compat-common"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Lógica pura compartida por los shims D-Bus de compat: parseo KEY=value, escritura atómica, validadores. Testeada en un solo lugar."
+
+[dependencies]

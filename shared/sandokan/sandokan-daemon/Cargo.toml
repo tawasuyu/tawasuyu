@@ -1,0 +1,22 @@
+[package]
+name = "sandokan-daemon"
+description = "DaemonEngine: orquestador sandokan delegado a otro proceso vía Unix socket (protocolo postcard length-prefixed) + loop servidor."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+sandokan-core = { path = "../sandokan-core" }
+sandokan-lifecycle = { path = "../sandokan-lifecycle" }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+postcard = { workspace = true }
+serde = { workspace = true }
+ulid = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+sandokan-local = { path = "../sandokan-local" }
+tempfile = { workspace = true }

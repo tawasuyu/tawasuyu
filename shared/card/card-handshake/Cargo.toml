@@ -1,0 +1,37 @@
+[package]
+name = "brahman-handshake"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Brahman — handshake runtime Init↔módulo. Local sobre Unix socket; remoto sobre stream libp2p (brahman-net)."
+
+[dependencies]
+brahman-card = { path = "../brahman-card" }
+brahman-broker = { path = "../brahman-broker" }
+brahman-net = { path = "../brahman-net" }
+blake3 = { workspace = true }
+futures = { workspace = true }
+notify = { workspace = true }
+serde = { workspace = true }
+postcard = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+thiserror = { workspace = true }
+ulid = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+
+[[example]]
+name = "probe"
+path = "examples/probe.rs"
+
+[[example]]
+name = "subscriber"
+path = "examples/subscriber.rs"

@@ -1,0 +1,13 @@
+[package]
+name = "pineal-mesh"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+publish = { workspace = true }
+description = "Lapaloma — grafos. NodeBuffer / EdgeBuffer + layouts (force-directed con Barnes-Hut, Sugiyama-lite jerárquico, subtree-width)."
+
+[dependencies]
+pineal-core = { path = "../core" }
+pineal-render = { path = "../render" }
+gpui = { workspace = true }

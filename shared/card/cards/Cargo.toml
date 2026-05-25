@@ -1,0 +1,23 @@
+[package]
+name = "brahman-cards"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Brahman — brazo unificado: lee múltiples formatos de Card (Ente/Monad/UiModule/...) y los proyecta a una estructura canónica única."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+ulid = { workspace = true }
+brahman-card = { path = "../brahman-card" }
+chasqui-card = { path = "../../modules/chasqui/card" }
+nahual-meta-schema = { path = "../../modules/nahual/libs/meta-schema" }
+nickel-lang = "2.0.0"
+
+[dev-dependencies]
+serde_json = { workspace = true }

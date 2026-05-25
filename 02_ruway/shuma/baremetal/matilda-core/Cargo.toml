@@ -1,0 +1,11 @@
+[package]
+name = "matilda-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "matilda — modelo de dominio de administración de servidores: Host, Container, VHost y el Inventory que los agrupa. Agnóstico de transporte y de Docker."
+
+[dependencies]
+serde = { workspace = true }

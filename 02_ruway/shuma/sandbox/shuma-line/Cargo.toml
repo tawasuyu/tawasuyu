@@ -1,0 +1,11 @@
+[package]
+name = "shuma-line"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "shuma — el cerebro del input del shell: analiza la línea de comandos (bash), la clasifica para resaltado, autocompleta y separa los pipes. Agnóstico de GUI/TUI."
+
+[dependencies]
+serde = { workspace = true }

@@ -1,0 +1,33 @@
+# =============================================================================
+#  renaser :: boot (Fase 1.5) — orquestador host-side de empaquetado y arranque
+# -----------------------------------------------------------------------------
+#  Este paquete se ejecuta en el ANFITRION (Artix Linux), nunca en bare-metal.
+#  Toma el ELF nativo del kernel, lo fusiona con el cargador UEFI y lanza QEMU.
+# =============================================================================
+
+[package]
+name = "boot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "renaser :: constructor de imagen de disco UEFI y lanzador de QEMU"
+
+[dependencies]
+# Constructor de la imagen de disco UEFI. Corre en el anfitrion, usa `std`.
+bootloader.workspace = true
+
+# El formato del grafo de objetos en disco (Fase 7b). Es el MISMO nucleo
+# `no_std` que enlaza el kernel: gracias a el, `boot` siembra la imagen de
+# disco con el grafo ya poblado —objetos de bytecode y Manifiesto de Genesis—
+# hablando byte a byte el idioma que el kernel leera.
+formato = { path = "../formato" }
+
+# Dependencia de ARTEFACTO (RFC 3028). Cargo compila el kernel para
+# `x86_64-unknown-none` —en aislamiento total de arquitectura— y nos inyecta la
+# ruta de su ELF en la variable de entorno `CARGO_BIN_FILE_KERNEL_kernel`,
+# accesible desde `main.rs` mediante el macro `env!`.
+[dependencies.kernel]
+path = "../kernel"
+artifact = "bin"
+target = "x86_64-unknown-none"

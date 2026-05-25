@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="GioSer · arquitectura de sistemas distribuidos">
+  <title>GioSer · 0x00–0x03</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <!-- Canvas de fondo (opcional para portada, necesario para WASM) -->
+  <canvas id="gioser-canvas" style="position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:-1;" aria-hidden="true"></canvas>
+
+  <!-- Portada: retícula 2×2 tipo chakana -->
+  <div id="portada" class="portada">
+    <!-- Cuadrante I: 0x01 - Systems & Compositors (sup-izq) -->
+    <button class="cuadrante cuadrante-01" data-q="01" aria-label="0x01 Systems & Compositors">
+      <div class="cuadrante-border"></div>
+      <div class="cuadrante-content">
+        <span class="cuadrante-hex">0x01</span>
+        <span class="cuadrante-title">Systems &amp; Compositors</span>
+        <span class="cuadrante-context">Entorno operativo intermedio para Linux libres de telemetría.</span>
+        <div class="cuadrante-meta">
+          <span class="meta-cta">⏎ shell</span>
+          <span class="meta-stat">compositor · launcher</span>
+        </div>
+        <ul class="cuadrante-crates">
+          <li>eidolon (Compositor Wayland)</li>
+          <li>shimi (Shell/Launcher)</li>
+        </ul>
+      </div>
+    </button>
+
+    <!-- Cuadrante II: 0x00 - Bare-Metal OS (sup-der) -->
+    <button class="cuadrante cuadrante-00" data-q="00" aria-label="0x00 Bare-Metal OS">
+      <div class="cuadrante-border"></div>
+      <div class="cuadrante-content">
+        <span class="cuadrante-hex">0x00</span>
+        <span class="cuadrante-title">Bare-Metal OS</span>
+        <span class="cuadrante-context">El control directo sobre el silicio y la secuencia de arranque.</span>
+        <div class="cuadrante-meta">
+          <span class="meta-cta">⏎ init</span>
+          <span class="meta-stat">init · boot · sovereign</span>
+        </div>
+        <ul class="cuadrante-crates">
+          <li>arjé (Init/Nivel 0)</li>
+        </ul>
+      </div>
+    </button>
+
+    <!-- Cuadrante III: 0x02 - Simulators & Geometry (inf-izq) -->
+    <button class="cuadrante cuadrante-02" data-q="02" aria-label="0x02 Simulators & Geometry">
+      <div class="cuadrante-border"></div>
+      <div class="cuadrante-content">
+        <span class="cuadrante-hex">0x02</span>
+        <span class="cuadrante-title">Simulators &amp; Geometry</span>
+        <span class="cuadrante-context">Modelado del tiempo en bloque, frecuencias celestes, simulación determinista.</span>
+        <div class="cuadrante-meta">
+          <span class="meta-cta">⏎ simulate</span>
+          <span class="meta-stat">efemérides · orbital · mundos</span>
+        </div>
+        <ul class="cuadrante-crates">
+          <li>eternal (Efemérides analíticas)</li>
+          <li>cosmobiología (Canvas orbital)</li>
+          <li>dominium (Simulador de mundos)</li>
+        </ul>
+      </div>
+    </button>
+
+    <!-- Cuadrante IV: 0x03 - Core & Orchestration (inf-der) -->
+    <button class="cuadrante cuadrante-03" data-q="03" aria-label="0x03 Core & Orchestration">
+      <div class="cuadrante-border"></div>
+      <div class="cuadrante-content">
+        <span class="cuadrante-hex">0x03</span>
+        <span class="cuadrante-title">Core &amp; Orchestration</span>
+        <span class="cuadrante-context">Motor invisible: persistencia local-first, P2P, ERP, encriptación.</span>
+        <div class="cuadrante-meta">
+          <span class="meta-cta">⏎ orchestrate</span>
+          <span class="meta-stat">dht · p2p · erp</span>
+        </div>
+        <ul class="cuadrante-crates">
+          <li>brahman (Supervisor)</li>
+          <li>minga / minga-vfs (FS distribuido)</li>
+          <li>brahman-auth · nakui (ERP)</li>
+        </ul>
+      </div>
+    </button>
+  </div>
+
+  <!-- DECK: contenedor para páginas md (oculto hasta expandir cuadrante) -->
+  <div id="deck" class="deck" aria-hidden="true">
+    <div id="deck-strip" class="deck-strip" role="region" aria-label="Vistas abiertas"></div>
+  </div>
+
+  <!-- Controles fijos -->
+  <div class="page-controls" id="global-page-controls" style="opacity:0;pointer-events:none;">
+    <button class="page-control-btn page-minimize" data-minimize type="button" aria-label="Minimizar">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19 H19" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+    </button>
+    <button class="page-control-btn page-close" data-close-page type="button" aria-label="Cerrar">×</button>
+  </div>
+
+  <!-- Taskbar -->
+  <nav class="taskbar" aria-label="Barra de vistas">
+    <button class="taskbar-home" data-home aria-label="Volver a la chakana" type="button">
+      <svg viewBox="0 0 24 24" class="taskbar-home-glyph" aria-hidden="true">
+        <path d="M3 12 L12 3 L21 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+        <path d="M5 11 V20 H10 V14 H14 V20 H19 V11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+        <circle cx="12" cy="17" r="0.8" fill="currentColor"/>
+      </svg>
+    </button>
+    <a class="taskbar-brand" href="#" aria-label="GioSer">
+      <span>Gio</span><span class="brand-dot">·</span><span>Ser</span>
+    </a>
+    <span class="taskbar-divider" aria-hidden="true"></span>
+    <ul class="taskbar-list" id="taskbar-list" role="presentation"></ul>
+    <span class="taskbar-spacer" aria-hidden="true"></span>
+    <a class="taskbar-credit" href="https://sergio.gioser.net" target="_blank" rel="noopener noreferrer" aria-label="Copyleft sergio">
+      <span class="copyleft-mark" aria-hidden="true">©</span>
+      <span class="taskbar-credit-text">sergio@gioser.net</span>
+    </a>
+  </nav>
+
+  <!-- Tips ocultos para navegación WASM (se mantienen para compatibilidad) -->
+  <div id="tips" hidden aria-hidden="true">
+    <a id="tip-aire" href="#aire" data-md="/md/aire.md"></a>
+    <a id="tip-fuego" href="#fuego" data-md="/md/fuego.md"></a>
+    <a id="tip-tierra" href="#tierra" data-md="/md/tierra.md"></a>
+    <a id="tip-agua" href="#agua" data-md="/md/agua.md"></a>
+    <a id="tip-cuerpo" href="#cuerpo" data-md="/md/cuerpo.md"></a>
+    <a id="tip-sombra" href="#sombra" data-md="/md/sombra.md"></a>
+    <a id="tip-cosmos" href="#cosmos" data-md="/md/cosmos.md"></a>
+    <a id="tip-practica" href="#practica" data-md="/md/practica.md"></a>
+    <a id="tip-olvido" href="#olvido" data-md="/md/olvido.md"></a>
+  </div>
+
+  <script type="module">
+    // Mapa: cuadrante hex → camino md
+    const Q_TO_CAMINO = {
+      '00': 'aire',    // Bare-Metal → Software
+      '01': 'fuego',   // Systems → Quién Soy
+      '02': 'tierra',  // Simulators → Manifiesto
+      '03': 'agua',    // Core → Mística
+    };
+
+    // JS de portada: hover/click en cuadrantes
+    const portada = document.getElementById('portada');
+    const deck = document.getElementById('deck');
+    const controls = document.getElementById('global-page-controls');
+    const reticulaV = document.querySelector('.reticula-v');
+    const reticulaH = document.querySelector('.reticula-h');
+    const reticulaC = document.querySelector('.reticula-center');
+
+    // Hover en cuadrantes ilumina portada
+    document.querySelectorAll('.cuadrante').forEach(q => {
+      q.addEventListener('mouseenter', () => {
+        portada.classList.add('portada-hover');
+      });
+      q.addEventListener('mouseleave', () => {
+        portada.classList.remove('portada-hover');
+      });
+      q.addEventListener('click', function(e) {
+        const hex = this.dataset.q;
+        const camino = Q_TO_CAMINO[hex] || 'aire';
+        // cerrar portada
+        portada.classList.add('portada-closing');
+        // mostrar deck
+        deck.removeAttribute('aria-hidden');
+        controls.style.opacity = '1';
+        controls.style.pointerEvents = 'auto';
+        // navegar vía hash para que el WASM lo atrape
+        history.pushState({}, '', '/estudio/' + camino);
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      });
+    });
+
+    // Botón home en taskbar: volver a portada
+    document.querySelectorAll('[data-home]').forEach(btn => {
+      btn.addEventListener('click', function(e) {
+        e.preventDefault();
+        portada.classList.remove('portada-closing');
+        deck.setAttribute('aria-hidden', 'true');
+        controls.style.opacity = '0';
+        controls.style.pointerEvents = 'none';
+        history.pushState({}, '', '/');
+      });
+    });
+
+    // Importar WASM existente
+    import init from "/pkg/gioser_web.js";
+    init().catch(err => {
+      console.error(err);
+      document.body.insertAdjacentHTML('beforeend',
+        '<pre style="color:#f59056;position:fixed;left:1rem;bottom:1rem;max-width:90vw;white-space:pre-wrap;font-family:monospace;z-index:9999">' +
+        String(err) + '</pre>');
+    });
+  </script>
+</body>
+</html>

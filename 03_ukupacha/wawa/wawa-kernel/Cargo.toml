@@ -1,0 +1,93 @@
+# =============================================================================
+#  renaser :: kernel — el corazon bare-metal que late en el espacio unico
+# -----------------------------------------------------------------------------
+#  Este paquete esta EXCLUIDO del espacio de trabajo (ver el Cargo.toml raiz):
+#  es codigo puramente bare-metal y solo se compila como dependencia de
+#  artefacto de `boot`, que le impone el target `x86_64-unknown-none`. Por eso
+#  fija sus versiones de forma explicita, sin herencia del workspace.
+# =============================================================================
+
+[package]
+name = "kernel"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+authors = ["JL Soltech <gerencia@jlsoltech.com>"]
+description = "renaser :: kernel asincrono SASOS — entrada, framebuffer y reactor"
+
+# El kernel es un binario freestanding: sin arnes de pruebas ni de benchmarks.
+[[bin]]
+name = "kernel"
+path = "src/main.rs"
+test = false
+bench = false
+doctest = false
+
+# -----------------------------------------------------------------------------
+#  Perfiles. El kernel esta EXCLUIDO del workspace; los `[profile]` del raiz
+#  no le alcanzan, asi que se declaran aqui. En bare-metal, las verificaciones
+#  UB de la stdlib —`unchecked_mul::precondition_check`, etc.— inyectan un
+#  panico cuyo propio camino de propagacion suele escribir en regiones que el
+#  cargador no mapeo: un colapso DENTRO de la red de seguridad del colapso,
+#  imposible de diagnosticar. Desactivar `debug-assertions` y `overflow-checks`
+#  las saca del binario sin cambiar la semantica del codigo correcto.
+# -----------------------------------------------------------------------------
+[profile.dev]
+panic = "abort"
+debug-assertions = false
+overflow-checks = false
+
+[profile.release]
+panic = "abort"
+debug-assertions = false
+overflow-checks = false
+opt-level = "s"
+lto = true
+codegen-units = 1
+
+[dependencies]
+# --- Fase 1-2 :: arranque, framebuffer e interrupciones ---
+bootloader_api = "0.11"
+x86_64 = "0.15"
+embedded-graphics = "0.8"
+
+# --- Fase 3 :: heap dinamico, reactor asincrono y texto vectorial ---
+linked_list_allocator = "0.10"
+spin = "0.9"
+crossbeam-queue = { version = "0.3", default-features = false, features = ["alloc"] }
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
+# `hashbrown` ACTIVA el modo `no_std` de fontdue; sin el recae en `std`.
+fontdue = { version = "0.9", default-features = false, features = ["hashbrown"] }
+
+# --- Fase 4 :: interprete WebAssembly del userspace aislado ---
+# `wasmi` bare-metal: sin `std`, sin `wat`, sin `simd` (el target no tiene SSE).
+wasmi = { version = "1.0", default-features = false, features = ["hash-collections"] }
+
+# --- Fase 6 :: drivers de hardware — el disco virtio-blk sobre el bus PCI ---
+# `virtio-drivers` bare-metal: el kernel implementa su `trait Hal` para el DMA.
+virtio-drivers = { version = "0.13", default-features = false, features = ["alloc"] }
+
+# --- Fase 6.1c / 7b :: el grafo de objetos direccionado por contenido ---
+# El formato del grafo —tipos, (de)serializacion postcard, hash BLAKE3, trazado
+# de registros del log— vive en la crate `formato`, un nucleo `no_std`
+# COMPARTIDO con `boot` (que lo usa para sembrar la imagen de disco). El kernel
+# ya no declara `serde`/`postcard`/`blake3` por su cuenta: los hereda —con las
+# mismas features, BLAKE3 escalar puro incluido— a traves de `formato`. Una
+# sola verdad del formato de disco, imposible de divergir entre los dos lados.
+formato = { path = "../formato" }
+
+# --- Fase 20 :: Akasha Over Ether ---
+# El protocolo nativo de red de renaser: mensajes `MensajeAkasha` serializados
+# con `postcard`, sobre Ethernet crudo. Mismo patron que `formato`: nucleo
+# `no_std` compartido, no miembro del workspace anfitrion. El kernel y boot lo
+# enlazan, y cualquier app o daemon que quiera hablar AoE en el futuro tomara
+# la misma crate — una sola verdad del protocolo.
+akasha = { path = "../akasha" }
+
+# --- Fase 8 (preparación) :: el compositor ---
+# `mirada-layout` es el motor de teselado del compositor de brahman —
+# geometría pura (rectángulos, foco, Z-order), `no_std`, sin smithay ni
+# Wayland. Vive en el monorepo brahman, en su PROPIO workspace; renaser
+# lo enlaza por `path` cruzando la frontera. La feature `serde` queda
+# APAGADA: el kernel computa el layout en memoria, no lo serializa.
+mirada-layout = { path = "../../crates/modules/mirada/mirada-layout" }

@@ -1,0 +1,14 @@
+[package]
+name = "matilda-apply"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "matilda — puente plan→ejecución: traduce un Plan de reconciliación a pasos concretos (archivos a escribir + comandos a correr) listos para aplicar en el servidor."
+
+[dependencies]
+matilda-core = { path = "../matilda-core" }
+matilda-plan = { path = "../matilda-plan" }
+matilda-config = { path = "../matilda-config" }
+serde = { workspace = true }

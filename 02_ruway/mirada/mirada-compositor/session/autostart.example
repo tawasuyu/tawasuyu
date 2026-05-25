@@ -1,0 +1,17 @@
+# Autoarranque de carmen — cópialo a ~/.config/mirada/autostart
+#
+# Un comando por línea; se lanza al arrancar el compositor, con
+# WAYLAND_DISPLAY ya puesto. Las líneas en blanco y las que empiezan
+# por # se ignoran. Cada línea se pasa a `sh -c`, así que valen las
+# variables, las tuberías y el `&` final no hace falta.
+
+# El shell de carmen — barra acoplada al pie con su línea de comandos.
+# carmen la reconoce por su app_id y le reserva la franja.
+shuma-shell --launcher
+
+# Una terminal para empezar.
+foot
+
+# Ejemplos (descoméntalos si los quieres):
+# mirada-ctl layout spiral
+# wbg ~/fondo.png

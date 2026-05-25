@@ -1,0 +1,31 @@
+# =============================================================================
+#  renaser :: apps/cronista — Fase 6.1c :: el primer escriba del userspace
+# -----------------------------------------------------------------------------
+#  Un modulo WebAssembly que, a diferencia de sus vecinas, deja HUELLA. En cada
+#  arranque graba un objeto en el grafo persistente del kernel —enlazado al del
+#  arranque anterior, formando una cadena— y lo corona como raiz. Asi lleva la
+#  cronica de cuantas veces ha despertado el sistema: una cuenta que sobrevive
+#  a los reinicios porque vive en el disco, no en la RAM.
+#  Tiene su propio `[workspace]`: queda fuera del espacio de trabajo del kernel.
+# =============================================================================
+
+[package]
+name = "cronista"
+version = "0.1.0"
+edition = "2021"
+description = "renaser :: app WASM cronista — la cronica persistente de los arranques"
+
+[workspace]
+
+# `cdylib` produce un modulo `.wasm` que exporta funciones — el formato que
+# wasmi instancia.
+[lib]
+crate-type = ["cdylib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true

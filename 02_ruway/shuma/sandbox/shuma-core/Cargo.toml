@@ -1,0 +1,27 @@
+[package]
+name = "shuma-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Runtime de shuma: WorkspaceManager sobre arje-incarnate. Estado in-memory, lifecycle, reaping."
+
+[dependencies]
+shuma-card = { path = "../shuma-card" }
+shuma-discern = { path = "../shuma-discern" }
+brahman-card = { path = "../../../protocol/brahman-card" }
+arje-incarnate = { path = "../../../init/arje-incarnate" }
+nix = { workspace = true }
+libc = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+ulid = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

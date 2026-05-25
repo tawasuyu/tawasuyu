@@ -1,0 +1,18 @@
+[package]
+name = "minga-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Almacenamiento persistente para Minga: stores con backing sled para nodos, atestaciones y MST."
+
+[dependencies]
+minga-core = { path = "../minga-core" }
+sled = { workspace = true }
+postcard = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+blake3 = { workspace = true }

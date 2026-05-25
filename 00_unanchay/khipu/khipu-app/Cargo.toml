@@ -1,0 +1,17 @@
+[package]
+name = "badu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "badu — demostración de la toma de notas: un cuaderno con wiki-links, backlinks, enlaces colgantes y clústeres por gravedad semántica."
+
+[[bin]]
+name = "badu"
+path = "src/main.rs"
+
+[dependencies]
+badu-core = { path = "../../modules/badu/badu-core" }
+badu-gravity = { path = "../../modules/badu/badu-gravity" }

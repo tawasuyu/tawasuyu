@@ -1,0 +1,13 @@
+[package]
+name = "cosmobiologia-render"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+description = "Tahuantinsuyu — modelo y matemática de render agnósticos de surface. Compila a WASM y a nativo; el canvas gpui y el cliente web lo consumen para emitir las primitivas comunes de la rueda."
+
+[dependencies]
+cosmobiologia-model = { path = "../cosmobiologia-model" }
+serde = { workspace = true }
+
+[lib]
+crate-type = ["rlib"]

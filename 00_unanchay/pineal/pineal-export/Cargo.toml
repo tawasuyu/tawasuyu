@@ -1,0 +1,12 @@
+[package]
+name = "pineal-export"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+publish = { workspace = true }
+description = "Lapaloma — exporters. SVG primero, PDF después. Decimación contextual por DPI: target = width_inches × dpi × vertices_per_pixel."
+
+[dependencies]
+pineal-core = { path = "../core" }
+pineal-render = { path = "../render" }

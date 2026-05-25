@@ -1,0 +1,30 @@
+# =============================================================================
+#  renaser :: apps/discola — el inquilino discolo del userspace
+# -----------------------------------------------------------------------------
+#  Un modulo WebAssembly construido a proposito para portarse mal: su `tick`
+#  cae en un bucle cerrado y jamas retorna. Existe para una sola cosa —
+#  demostrar que el escudo de combustible (fuel) del kernel `renaser` lo
+#  desaloja sin colgar el sistema ni perturbar a sus apps vecinas.
+#  Tiene su propio `[workspace]`: queda fuera del espacio de trabajo del kernel.
+# =============================================================================
+
+[package]
+name = "discola"
+version = "0.1.0"
+edition = "2021"
+description = "renaser :: app WASM discola — un bucle infinito que el fuel fulmina"
+
+[workspace]
+
+# `cdylib` produce un modulo `.wasm` que exporta funciones — el formato que
+# wasmi instancia.
+[lib]
+crate-type = ["cdylib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true

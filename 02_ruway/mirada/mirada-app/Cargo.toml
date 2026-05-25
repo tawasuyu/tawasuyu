@@ -1,0 +1,20 @@
+[package]
+name = "mirada"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "mirada — el Cerebro del compositor: ventana GPUI que tesela el escritorio sobre mirada-brain y manda la geometría al Cuerpo (smithay) por mirada-link. Sin Cuerpo, corre en simulación."
+
+[[bin]]
+name = "mirada"
+path = "src/main.rs"
+
+[dependencies]
+mirada-brain = { path = "../../modules/mirada/mirada-brain" }
+mirada-link = { path = "../../modules/mirada/mirada-link" }
+nahual-theme = { path = "../../modules/nahual/libs/theme" }
+nahual-launcher = { path = "../../modules/nahual/libs/launcher" }
+gpui = { workspace = true }

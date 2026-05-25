@@ -1,0 +1,12 @@
+[package]
+name = "matilda-plan"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "matilda — reconciliación de estado: compara el inventario deseado con el actual y produce una lista ordenada de acciones que respeta las dependencias."
+
+[dependencies]
+matilda-core = { path = "../matilda-core" }
+serde = { workspace = true }

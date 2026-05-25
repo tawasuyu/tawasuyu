@@ -1,0 +1,30 @@
+# =============================================================================
+#  renaser :: apps/memoriosa — Fase 7c :: la app que recuerda entre vidas
+# -----------------------------------------------------------------------------
+#  Un modulo WebAssembly interactivo. Cuenta las teclas que se pulsan y graba
+#  ese recuento como SU estado persistido —anclado en su `EntradaApp` del
+#  Manifiesto de Genesis—. Al reiniciar la maquina, despierta justo donde se
+#  quedo: la cuenta no vive en la RAM, vive en el grafo.
+#  Tiene su propio `[workspace]`: queda fuera del espacio de trabajo del kernel.
+# =============================================================================
+
+[package]
+name = "memoriosa"
+version = "0.1.0"
+edition = "2021"
+description = "renaser :: app WASM memoriosa — persistencia inter-sesion por-app"
+
+[workspace]
+
+# `cdylib` produce un modulo `.wasm` que exporta funciones — el formato que
+# wasmi instancia.
+[lib]
+crate-type = ["cdylib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true

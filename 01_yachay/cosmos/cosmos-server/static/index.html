@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cosmobiología</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --bg-panel: #171a21;
+      --fg: #e8e6df;
+      --fg-muted: #9aa0a8;
+      --accent: #c79a4d;
+      --border: #2a2e38;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: -apple-system, system-ui, sans-serif;
+      display: flex;
+      min-height: 100vh;
+    }
+    aside {
+      width: 280px;
+      background: var(--bg-panel);
+      border-right: 1px solid var(--border);
+      padding: 16px;
+      overflow-y: auto;
+    }
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px;
+    }
+    h1 {
+      margin: 0 0 4px;
+      font-weight: 500;
+      letter-spacing: .02em;
+    }
+    h2 {
+      margin: 24px 0 8px;
+      font-size: 12px;
+      color: var(--fg-muted);
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+    .tree-node {
+      cursor: pointer;
+      padding: 4px 6px;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+    .tree-node:hover { background: rgba(255,255,255,.05); }
+    .tree-node.active { background: rgba(199,154,77,.15); color: var(--accent); }
+    .tree-node .icon { margin-right: 6px; opacity: .7; }
+    .indent-1 { padding-left: 22px; }
+    .indent-2 { padding-left: 38px; }
+    #wheel-container {
+      width: 600px;
+      height: 600px;
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #info {
+      margin-top: 12px;
+      font-size: 12px;
+      color: var(--fg-muted);
+    }
+    #info b { color: var(--fg); font-weight: 500; }
+    .toolbar {
+      width: 600px;
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+      align-items: center;
+    }
+    .toolbar button {
+      background: var(--bg-panel);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      padding: 6px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .toolbar button:hover { border-color: var(--accent); color: var(--accent); }
+    .toolbar label { font-size: 12px; color: var(--fg-muted); }
+    .toolbar input { width: 60px; padding: 4px; border: 1px solid var(--border);
+      background: var(--bg); color: var(--fg); border-radius: 4px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <aside>
+    <h1>Cosmobiología</h1>
+    <div style="font-size:11px;color:var(--fg-muted);">cliente web demo</div>
+
+    <h2>Cartas</h2>
+    <div id="tree"></div>
+
+    <h2>Acciones rápidas</h2>
+    <div class="tree-node" onclick="loadSky()">⏱ Cielo ahora</div>
+    <div class="tree-node" onclick="newGroup()">＋ Nuevo grupo</div>
+    <div class="tree-node" onclick="newContact()">＋ Nuevo contacto</div>
+  </aside>
+
+  <main>
+    <div class="toolbar">
+      <button onclick="refreshSelected()">↻ Refrescar</button>
+      <label>Offset (min):
+        <input type="number" id="offset" value="0" step="60">
+      </label>
+      <label>
+        <input type="checkbox" id="transit"> Tránsito
+      </label>
+      <button onclick="downloadSvg()">⬇ SVG</button>
+    </div>
+    <div id="wheel-container">
+      <div style="color:var(--fg-muted)">Seleccioná una carta o "Cielo ahora"</div>
+    </div>
+    <div id="info"></div>
+  </main>
+
+  <script>
+    let selectedChartId = null;
+    let mode = 'sky'; // 'sky' | 'chart'
+
+    async function loadTree() {
+      const tree = await fetch('/api/tree').then(r => r.json());
+      const el = document.getElementById('tree');
+      el.innerHTML = '';
+      renderNodes(tree, el, 0);
+    }
+
+    function renderNodes(nodes, container, depth) {
+      for (const n of nodes) {
+        const div = document.createElement('div');
+        div.className = `tree-node indent-${depth}`;
+        const icon = n.kind === 'group' ? '◇' : n.kind === 'contact' ? '◯' : '✦';
+        div.innerHTML = `<span class="icon">${icon}</span>${escapeHtml(n.label)}`;
+        if (n.kind === 'chart') {
+          const id = n.id.replace(/^h:/, '');
+          div.onclick = () => selectChart(id);
+        }
+        container.appendChild(div);
+        if (n.children && n.children.length) {
+          renderNodes(n.children, container, depth + 1);
+        }
+      }
+    }
+
+    async function selectChart(id) {
+      selectedChartId = id;
+      mode = 'chart';
+      document.querySelectorAll('.tree-node').forEach(el =>
+        el.classList.toggle('active', el.textContent.endsWith(' (active)'))
+      );
+      await refreshSelected();
+    }
+
+    async function loadSky() {
+      mode = 'sky';
+      selectedChartId = null;
+      await refreshSelected();
+    }
+
+    // Cliente WASM opcional. Si `/static/wasm/cosmobiologia_web.js`
+    // existe (= el usuario corrió `wasm-pack build` después de
+    // `cargo build`), el rendering se hace localmente sin pedirle
+    // el SVG al server por cada interacción. Si NO existe (deploy
+    // mínimo), caemos al SSR de `/api/*.svg`. Toggle automático,
+    // sin configuración.
+    let wasm = null;
+    async function tryLoadWasm() {
+      try {
+        const mod = await import('/static/wasm/cosmobiologia_web.js');
+        await mod.default(); // wasm-pack: inicializa
+        wasm = mod;
+        document.getElementById('info').textContent = 'WASM cargado — render local';
+      } catch (e) {
+        console.info('WASM no disponible, usando SSR:', e.message);
+      }
+    }
+
+    async function refreshSelected() {
+      const offset = document.getElementById('offset').value || 0;
+      const transit = document.getElementById('transit').checked ? '1' : '0';
+      const params = new URLSearchParams({ offset_min: offset, transit });
+      const jsonUrl = mode === 'sky'
+        ? `/api/sky`
+        : `/api/charts/${selectedChartId}/render?${params}`;
+      const ssrUrl = mode === 'sky'
+        ? `/api/sky.svg`
+        : `/api/charts/${selectedChartId}/wheel.svg?${params}`;
+
+      const render = await fetch(jsonUrl).then(r => r.json()).catch(() => null);
+      let svg;
+      if (wasm && render) {
+        // Render local — WASM compose_wheel + draw_commands_to_svg.
+        try {
+          svg = wasm.render_model_to_svg(JSON.stringify(render), 600, 0);
+        } catch (e) {
+          console.warn('WASM render falló, fallback SSR:', e);
+          svg = await fetch(ssrUrl).then(r => r.text());
+        }
+      } else {
+        // Fallback: SSR — el server devuelve el SVG ya compuesto.
+        svg = await fetch(ssrUrl).then(r => r.text());
+      }
+      document.getElementById('wheel-container').innerHTML = svg;
+      const info = document.getElementById('info');
+      if (render) {
+        const mode_label = wasm ? 'WASM' : 'SSR';
+        info.innerHTML =
+          `<b>${escapeHtml(render.title)}</b> · ` +
+          `Asc ${render.ascendant_deg.toFixed(2)}° · ` +
+          `MC ${render.midheaven_deg.toFixed(2)}° · ` +
+          `${render.compute_ms} ms · ${mode_label}`;
+      } else {
+        info.textContent = '';
+      }
+    }
+
+    function downloadSvg() {
+      const offset = document.getElementById('offset').value || 0;
+      const transit = document.getElementById('transit').checked ? '1' : '0';
+      const params = new URLSearchParams({ offset_min: offset, transit });
+      const url = mode === 'sky'
+        ? `/api/sky.svg`
+        : `/api/charts/${selectedChartId}/wheel.svg?${params}`;
+      window.location.href = url;
+    }
+
+    async function newGroup() {
+      const name = prompt('Nombre del grupo:');
+      if (!name) return;
+      await fetch('/api/groups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      });
+      loadTree();
+    }
+
+    async function newContact() {
+      const name = prompt('Nombre del contacto:');
+      if (!name) return;
+      await fetch('/api/contacts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name })
+      });
+      loadTree();
+    }
+
+    function escapeHtml(s) {
+      return s.replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+    }
+
+    (async () => {
+      await tryLoadWasm();
+      await loadTree();
+      await loadSky();
+    })();
+  </script>
+</body>
+</html>

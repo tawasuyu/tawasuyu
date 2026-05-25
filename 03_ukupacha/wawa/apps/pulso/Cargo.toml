@@ -1,0 +1,29 @@
+# =============================================================================
+#  renaser :: apps/pulso — Fase 11 :: el compas visual del reloj del host
+# -----------------------------------------------------------------------------
+#  Un modulo WebAssembly puro que no guarda estado alguno: su escena es una
+#  funcion pura del reloj monotono del sistema (`sys_tiempo_mono`). Por eso dos
+#  instancias de `pulso`, nazcan cuando nazcan, laten al unisono. Tiene su
+#  propio `[workspace]`: queda fuera del espacio de trabajo del kernel.
+# =============================================================================
+
+[package]
+name = "pulso"
+version = "0.1.0"
+edition = "2021"
+description = "renaser :: app WASM — un compas visual gobernado por el reloj del host"
+
+[workspace]
+
+# `cdylib` produce un modulo `.wasm` que exporta funciones — el formato que
+# wasmi instancia. La aplicacion solo habla con el kernel por funciones del host.
+[lib]
+crate-type = ["cdylib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true

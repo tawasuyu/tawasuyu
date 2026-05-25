@@ -1,0 +1,30 @@
+# =============================================================================
+#  renaser :: apps/glotona — el inquilino voraz del userspace
+# -----------------------------------------------------------------------------
+#  Un modulo WebAssembly construido a proposito para devorar memoria: su `tick`
+#  reclama paginas de memoria lineal sin freno. Existe para demostrar que el
+#  techo ESPACIAL del kernel `renaser` lo desaloja —baliza amarilla— sin agotar
+#  el heap del sistema ni perturbar a sus apps vecinas.
+#  Tiene su propio `[workspace]`: queda fuera del espacio de trabajo del kernel.
+# =============================================================================
+
+[package]
+name = "glotona"
+version = "0.1.0"
+edition = "2021"
+description = "renaser :: app WASM glotona — devora memoria; el techo espacial la frena"
+
+[workspace]
+
+# `cdylib` produce un modulo `.wasm` que exporta funciones — el formato que
+# wasmi instancia.
+[lib]
+crate-type = ["cdylib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true

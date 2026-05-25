@@ -1,0 +1,21 @@
+[package]
+name = "mirada-compositor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "mirada — el Cuerpo del compositor: un compositor Wayland teselante sobre smithay (backend winit, nested). Tesela con un Cerebro embebido o uno externo por mirada-link."
+
+[[bin]]
+name = "mirada-compositor"
+path = "src/main.rs"
+
+[dependencies]
+mirada-brain = { path = "../../modules/mirada/mirada-brain" }
+mirada-body = { path = "../../modules/mirada/mirada-body" }
+mirada-link = { path = "../../modules/mirada/mirada-link" }
+brahman-auth = { path = "../../protocol/brahman-auth" }
+nix = { workspace = true }
+smithay = "0.7"

@@ -1,0 +1,20 @@
+[package]
+name = "sandokan-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "CLI de prueba del orquestador sandokan: daemon + run/list/status/stop/telemetry."
+
+[[bin]]
+name = "sandokan"
+path = "src/main.rs"
+
+[dependencies]
+sandokan = { path = "../../runtime/sandokan" }
+brahman-card = { path = "../../protocol/brahman-card" }
+clap = { workspace = true }
+tokio = { workspace = true }
+ulid = { workspace = true }
+anyhow = { workspace = true }

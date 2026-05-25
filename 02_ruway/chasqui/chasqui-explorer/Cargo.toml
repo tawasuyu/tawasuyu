@@ -1,0 +1,21 @@
+[package]
+name = "chasqui-explorer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Explorador GPUI de Mónadas: panel que descubre al daemon nouser vía broker brahman y consulta sus Mónadas dinámicamente."
+
+[dependencies]
+brahman-card = { path = "../../protocol/brahman-card" }
+brahman-sidecar = { path = "../../protocol/brahman-sidecar" }
+chasqui-card = { path = "../../modules/chasqui/card" }
+nahual-theme = { path = "../../modules/nahual/libs/theme" }
+nahual-launcher = { path = "../../modules/nahual/libs/launcher" }
+nahual-widget-banner = { path = "../../modules/nahual/widgets/banner" }
+nahual-widget-card = { path = "../../modules/nahual/widgets/card" }
+nahual-widget-app-header = { path = "../../modules/nahual/widgets/app-header" }
+gpui = { workspace = true }
+
+[[bin]]
+name = "chasqui-explorer"
+path = "src/main.rs"

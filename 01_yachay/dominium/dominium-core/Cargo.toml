@@ -1,0 +1,11 @@
+[package]
+name = "dominium-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "dominium — núcleo del simulador de campo medio: grilla SoA de 5 capas + Lemmings vectoriales + las 6 acciones atómicas. Sin deps gráficas."
+
+[dependencies]
+serde = { workspace = true }

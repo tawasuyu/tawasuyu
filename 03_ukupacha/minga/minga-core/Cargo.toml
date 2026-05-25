@@ -1,0 +1,27 @@
+[package]
+name = "minga-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Minga core: semantic AST, content addressing, Merkle Search Tree. Pure logic, no IO."
+
+[dependencies]
+tree-sitter = { workspace = true }
+tree-sitter-rust = { workspace = true }
+tree-sitter-python = { workspace = true }
+tree-sitter-typescript = { workspace = true }
+tree-sitter-javascript = { workspace = true }
+tree-sitter-go = { workspace = true }
+blake3 = { workspace = true }
+thiserror = { workspace = true }
+ed25519-dalek = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde-big-array = { workspace = true }
+aes-gcm = { workspace = true }
+argon2 = { workspace = true }
+
+[dev-dependencies]
+blake3 = { workspace = true }
+postcard = { workspace = true }

@@ -1,0 +1,23 @@
+[package]
+name = "brahman-broker-explorer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Probe GUI del broker brahman: conecta cada N segundos vía await_provider_blocking con un Card observer agnóstico, reporta 3 estados (down / up sin provider / up con provider)."
+
+[dependencies]
+brahman-broker = { path = "../../protocol/brahman-broker" }
+brahman-card = { path = "../../protocol/brahman-card" }
+brahman-handshake = { path = "../../protocol/brahman-handshake" }
+brahman-sidecar = { path = "../../protocol/brahman-sidecar" }
+ulid = { workspace = true }
+nahual-theme = { path = "../../modules/nahual/libs/theme" }
+nahual-launcher = { path = "../../modules/nahual/libs/launcher" }
+nahual-widget-banner = { path = "../../modules/nahual/widgets/banner" }
+nahual-widget-stat-card = { path = "../../modules/nahual/widgets/stat-card" }
+nahual-widget-app-header = { path = "../../modules/nahual/widgets/app-header" }
+gpui = { workspace = true }
+
+[[bin]]
+name = "brahman-broker-explorer"
+path = "src/main.rs"
