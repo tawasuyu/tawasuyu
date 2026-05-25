@@ -7,6 +7,13 @@
 
 use crate::buffer::Buffer;
 
+fn is_word(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+fn is_ws(c: char) -> bool {
+    c.is_whitespace() && c != '\n'
+}
+
 /// Posición lógica del cursor — (línea, columna en chars).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Pos {
@@ -186,6 +193,39 @@ impl Cursor {
         let last_line = buf.len_lines().saturating_sub(1);
         self.caret = Pos::new(last_line, buf.line_len_chars(last_line));
         self.desired_col = self.caret.col;
+    }
+
+    // ----- Word movement -----
+
+    /// Movimiento por palabra a la izquierda — salta whitespace, después
+    /// caracteres de palabra (alfanumérico + `_`).
+    pub fn move_word_left(&mut self, buf: &Buffer, extending: bool) {
+        self.set_extending(extending);
+        let mut off = buf.pos_to_offset(self.caret.line, self.caret.col);
+        while off > 0 && buf.char_at(off - 1).map_or(false, is_ws) {
+            off -= 1;
+        }
+        while off > 0 && buf.char_at(off - 1).map_or(false, is_word) {
+            off -= 1;
+        }
+        let (l, c) = buf.offset_to_pos(off);
+        self.caret = Pos::new(l, c);
+        self.desired_col = c;
+    }
+
+    pub fn move_word_right(&mut self, buf: &Buffer, extending: bool) {
+        self.set_extending(extending);
+        let len = buf.len_chars();
+        let mut off = buf.pos_to_offset(self.caret.line, self.caret.col);
+        while off < len && buf.char_at(off).map_or(false, is_word) {
+            off += 1;
+        }
+        while off < len && buf.char_at(off).map_or(false, is_ws) {
+            off += 1;
+        }
+        let (l, c) = buf.offset_to_pos(off);
+        self.caret = Pos::new(l, c);
+        self.desired_col = c;
     }
 
     // ----- Setters -----

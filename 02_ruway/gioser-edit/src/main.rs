@@ -226,6 +226,13 @@ impl App for EditorApp {
             }
         }
 
+        // Esc colapsa multi-cursor antes de cerrar find/etc.
+        if matches!(&event.key, Key::Named(NamedKey::Escape))
+            && model.editor.has_multi_cursor()
+        {
+            return Some(Msg::EditKey(event.clone())); // lo ruteamos al editor
+        }
+
         // Modo find abierto: el input se queda con todo menos Esc/Enter/F3.
         if model.find.is_some() {
             return match &event.key {

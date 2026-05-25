@@ -296,23 +296,26 @@ fn build_content<Msg: Clone + 'static>(
     let caret = state.cursor.caret;
     let mut children: Vec<View<Msg>> = Vec::new();
 
-    // 1) Fondo del renglón activo — sólo si está dentro del viewport.
+    // 1) Fondo del renglón activo — sólo el del primary cursor.
     if caret.line >= scroll && caret.line < end_line {
         children.push(line_highlight(caret.line - scroll, metrics, palette));
     }
 
-    // 1b) Highlight de matches del find (debajo de la selección, encima
-    // del fondo).
+    // 1b) Highlight de matches del find.
     for (s, e) in match_ranges {
         children.extend(match_rects(state, *s, *e, scroll, end_line, metrics, palette));
     }
 
-    // 2) Selección — sólo los rects que tocan el viewport.
-    if state.cursor.has_selection() {
-        children.extend(selection_rects_visible(state, scroll, end_line, metrics, palette));
+    // 2) Selección — por cada cursor que tenga selección.
+    for c in state.all_cursors() {
+        if c.has_selection() {
+            children.extend(selection_rects_for_cursor(
+                state, c, scroll, end_line, metrics, palette,
+            ));
+        }
     }
 
-    // 2b) Bracket pair bajo el cursor — si visible.
+    // 2b) Bracket pair bajo el primary cursor — si visible.
     if let Some((a, b)) = crate::bracket::find_bracket_pair(&state.buffer, &state.cursor) {
         if a.line >= scroll && a.line < end_line {
             children.push(bracket_highlight(crate::cursor::Pos::new(a.line - scroll, a.col), metrics, palette));
@@ -334,10 +337,13 @@ fn build_content<Msg: Clone + 'static>(
         }
     }
 
-    // 4) Caret — sólo si visible.
-    if caret.line >= scroll && caret.line < end_line {
-        let local = crate::cursor::Pos::new(caret.line - scroll, caret.col);
-        children.push(caret_rect(local, metrics, palette));
+    // 4) Caret — uno por cursor, sólo si visible.
+    for c in state.all_cursors() {
+        let p = c.caret;
+        if p.line >= scroll && p.line < end_line {
+            let local = crate::cursor::Pos::new(p.line - scroll, p.col);
+            children.push(caret_rect(local, metrics, palette));
+        }
     }
 
     let click_cb = on_pointer.clone();
@@ -563,14 +569,15 @@ fn match_rects<Msg: Clone + 'static>(
     out
 }
 
-fn selection_rects_visible<Msg: Clone + 'static>(
+fn selection_rects_for_cursor<Msg: Clone + 'static>(
     state: &EditorState,
+    cursor: &crate::cursor::Cursor,
     scroll: usize,
     end_viewport: usize,
     metrics: EditorMetrics,
     palette: &EditorPalette,
 ) -> Vec<View<Msg>> {
-    let (start_off, end_off) = state.cursor.selection_range(&state.buffer);
+    let (start_off, end_off) = cursor.selection_range(&state.buffer);
     if start_off == end_off {
         return vec![];
     }

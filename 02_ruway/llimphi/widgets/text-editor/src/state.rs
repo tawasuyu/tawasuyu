@@ -44,7 +44,13 @@ impl Default for EditorOptions {
 #[derive(Debug, Clone)]
 pub struct EditorState {
     pub buffer: Buffer,
+    /// Cursor primario — el que la API legacy expone como "el" cursor.
+    /// Edit ops aplican al primary + todos los `extra_cursors` en orden.
     pub cursor: Cursor,
+    /// Cursores adicionales (multi-cursor). Vacío en el caso típico.
+    /// Cuando hay extras, las ediciones aplican a todos; Esc los colapsa
+    /// dejando sólo el primary.
+    pub extra_cursors: Vec<Cursor>,
     pub options: EditorOptions,
     pub undo: UndoStack,
     /// Línea inicial visible — el viewport renderiza
@@ -81,12 +87,44 @@ impl EditorState {
         Self {
             buffer: Buffer::new(),
             cursor: Cursor::new(),
+            extra_cursors: Vec::new(),
             options: EditorOptions::default(),
             undo: UndoStack::new(),
             scroll_offset: 0,
             edit_seq: 0,
             highlight_cache: RefCell::new(None),
         }
+    }
+
+    /// Devuelve todos los cursores en orden: primary + extras. Útil para
+    /// el render que dibuja un caret + selección por cada uno.
+    pub fn all_cursors(&self) -> impl Iterator<Item = &Cursor> {
+        std::iter::once(&self.cursor).chain(self.extra_cursors.iter())
+    }
+
+    /// Agrega un cursor adicional con caret en `(line, col)`. Si ya hay
+    /// un cursor exactamente ahí, no duplica.
+    pub fn add_cursor_at(&mut self, line: usize, col: usize) {
+        let line = line.min(self.buffer.len_lines().saturating_sub(1));
+        let col = col.min(self.buffer.line_len_chars(line));
+        let pos = Pos::new(line, col);
+        if self.cursor.caret == pos {
+            return;
+        }
+        if self.extra_cursors.iter().any(|c| c.caret == pos) {
+            return;
+        }
+        self.extra_cursors.push(Cursor::at(line, col));
+    }
+
+    /// Colapsa multi-cursor: descarta los `extra_cursors`. No toca el
+    /// primary.
+    pub fn collapse_to_primary(&mut self) {
+        self.extra_cursors.clear();
+    }
+
+    pub fn has_multi_cursor(&self) -> bool {
+        !self.extra_cursors.is_empty()
     }
 
     pub fn with_options(options: EditorOptions) -> Self {
@@ -244,55 +282,93 @@ impl EditorState {
         }
         let extending = event.modifiers.shift;
         let ctrl = event.modifiers.ctrl || event.modifiers.meta;
+        let alt = event.modifiers.alt;
 
+        // Esc colapsa multi-cursor (sin extras = ignorado, el caller
+        // decide qué más hacer — cancelar edit, cerrar find, etc.).
+        if matches!(&event.key, Key::Named(NamedKey::Escape)) {
+            if self.has_multi_cursor() {
+                self.collapse_to_primary();
+                return ApplyResult::CursorMoved;
+            }
+            return ApplyResult::Ignored;
+        }
+
+        // Multi-cursor: Ctrl+Alt+ArrowDown/Up agrega un cursor en la
+        // línea siguiente/anterior usando la misma desired_col. Esc del
+        // caller debería colapsar — no lo manejamos acá porque el caller
+        // puede querer usar Esc para otras cosas (cerrar find, cancelar
+        // edit). El caller chequea has_multi_cursor() antes.
+        if ctrl && alt {
+            match &event.key {
+                Key::Named(NamedKey::ArrowDown) => {
+                    let line = self.cursor.caret.line + 1;
+                    if line < self.buffer.len_lines() {
+                        self.add_cursor_at(line, self.cursor.desired_col);
+                        return ApplyResult::CursorMoved;
+                    }
+                    return ApplyResult::Ignored;
+                }
+                Key::Named(NamedKey::ArrowUp) => {
+                    if self.cursor.caret.line > 0 {
+                        self.add_cursor_at(self.cursor.caret.line - 1, self.cursor.desired_col);
+                        return ApplyResult::CursorMoved;
+                    }
+                    return ApplyResult::Ignored;
+                }
+                _ => {}
+            }
+        }
+
+        let page = self.options.page_size;
         match &event.key {
             // Movimiento
             Key::Named(NamedKey::ArrowLeft) => {
                 if ctrl {
-                    self.move_word_left(extending);
+                    self.apply_move_all(|b, c| c.move_word_left(b, extending));
                 } else {
-                    self.cursor.move_left(&self.buffer, extending);
+                    self.apply_move_all(|b, c| c.move_left(b, extending));
                 }
                 ApplyResult::CursorMoved
             }
             Key::Named(NamedKey::ArrowRight) => {
                 if ctrl {
-                    self.move_word_right(extending);
+                    self.apply_move_all(|b, c| c.move_word_right(b, extending));
                 } else {
-                    self.cursor.move_right(&self.buffer, extending);
+                    self.apply_move_all(|b, c| c.move_right(b, extending));
                 }
                 ApplyResult::CursorMoved
             }
             Key::Named(NamedKey::ArrowUp) => {
-                self.cursor.move_up(&self.buffer, extending);
+                self.apply_move_all(|b, c| c.move_up(b, extending));
                 ApplyResult::CursorMoved
             }
             Key::Named(NamedKey::ArrowDown) => {
-                self.cursor.move_down(&self.buffer, extending);
+                self.apply_move_all(|b, c| c.move_down(b, extending));
                 ApplyResult::CursorMoved
             }
             Key::Named(NamedKey::Home) => {
                 if ctrl {
-                    self.cursor.move_doc_start(&self.buffer, extending);
+                    self.apply_move_all(|b, c| c.move_doc_start(b, extending));
                 } else {
-                    self.cursor.move_home(&self.buffer, extending);
+                    self.apply_move_all(|b, c| c.move_home(b, extending));
                 }
                 ApplyResult::CursorMoved
             }
             Key::Named(NamedKey::End) => {
                 if ctrl {
-                    self.cursor.move_doc_end(&self.buffer, extending);
+                    self.apply_move_all(|b, c| c.move_doc_end(b, extending));
                 } else {
-                    self.cursor.move_end(&self.buffer, extending);
+                    self.apply_move_all(|b, c| c.move_end(b, extending));
                 }
                 ApplyResult::CursorMoved
             }
             Key::Named(NamedKey::PageUp) => {
-                self.cursor.move_page_up(&self.buffer, extending, self.options.page_size);
+                self.apply_move_all(|b, c| c.move_page_up(b, extending, page));
                 ApplyResult::CursorMoved
             }
             Key::Named(NamedKey::PageDown) => {
-                self.cursor.move_page_down(&self.buffer, extending, self.options.page_size);
+                self.apply_move_all(|b, c| c.move_page_down(b, extending, page));
                 ApplyResult::CursorMoved
             }
 
@@ -301,49 +377,34 @@ impl EditorState {
                 if self.options.single_line {
                     return ApplyResult::Ignored;
                 }
-                let d = insert_newline_auto_indent(&mut self.buffer, &mut self.cursor);
-                self.undo.push(d);
+                self.apply_edit_all(|b, c, _opts| Some(insert_newline_auto_indent(b, c)));
                 ApplyResult::Changed
             }
             Key::Named(NamedKey::Backspace) => {
-                if let Some(d) = delete_backward(&mut self.buffer, &mut self.cursor) {
-                    self.undo.push(d);
+                if self.apply_edit_all(|b, c, _opts| delete_backward(b, c)) {
                     ApplyResult::Changed
                 } else {
                     ApplyResult::Ignored
                 }
             }
             Key::Named(NamedKey::Delete) => {
-                if let Some(d) = delete_forward(&mut self.buffer, &mut self.cursor) {
-                    self.undo.push(d);
+                if self.apply_edit_all(|b, c, _opts| delete_forward(b, c)) {
                     ApplyResult::Changed
                 } else {
                     ApplyResult::Ignored
                 }
             }
             Key::Named(NamedKey::Tab) => {
-                let d = if extending {
-                    // Shift+Tab = dedent
-                    dedent(
-                        &mut self.buffer,
-                        &mut self.cursor,
-                        self.options.tab_to_spaces,
-                        self.options.indent_size,
-                    )
+                let any = if extending {
+                    self.apply_edit_all(|b, c, opts| {
+                        dedent(b, c, opts.tab_to_spaces, opts.indent_size)
+                    })
                 } else {
-                    Some(indent_or_insert_tab(
-                        &mut self.buffer,
-                        &mut self.cursor,
-                        self.options.tab_to_spaces,
-                        self.options.indent_size,
-                    ))
+                    self.apply_edit_all(|b, c, opts| {
+                        Some(indent_or_insert_tab(b, c, opts.tab_to_spaces, opts.indent_size))
+                    })
                 };
-                if let Some(d) = d {
-                    self.undo.push(d);
-                    ApplyResult::Changed
-                } else {
-                    ApplyResult::Ignored
-                }
+                if any { ApplyResult::Changed } else { ApplyResult::Ignored }
             }
 
             // Clipboard
@@ -411,53 +472,78 @@ impl EditorState {
                 if text.is_empty() || text.chars().any(|c| c.is_control()) {
                     return ApplyResult::Ignored;
                 }
-                let d = replace_selection(&mut self.buffer, &mut self.cursor, text);
-                self.undo.push(d);
+                let text = text.clone();
+                self.apply_edit_all(|b, c, _opts| Some(replace_selection(b, c, &text)));
                 ApplyResult::Changed
             }
         }
     }
 
-    /// Movimiento por palabra a la izquierda: salta whitespace, después
-    /// salta caracteres de palabra. Implementación simple (alfanuméricos
-    /// + `_` cuentan como palabra).
-    fn move_word_left(&mut self, extending: bool) {
-        self.cursor.set_extending(extending);
-        let mut off = self.buffer.pos_to_offset(self.cursor.caret.line, self.cursor.caret.col);
-        // Skip whitespace hacia atrás
-        while off > 0 && self.buffer.char_at(off - 1).map_or(false, is_ws) {
-            off -= 1;
+    // ----- Multi-cursor helpers -----
+
+    /// Aplica un movimiento (no edita el buffer) a todos los cursores:
+    /// primary + extras. Después dedupa para evitar cursores que terminan
+    /// en el mismo punto.
+    fn apply_move_all<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&Buffer, &mut Cursor),
+    {
+        f(&self.buffer, &mut self.cursor);
+        for c in &mut self.extra_cursors {
+            f(&self.buffer, c);
         }
-        // Skip word chars hacia atrás
-        while off > 0 && self.buffer.char_at(off - 1).map_or(false, is_word) {
-            off -= 1;
-        }
-        let (l, c) = self.buffer.offset_to_pos(off);
-        self.cursor.caret = Pos::new(l, c);
-        self.cursor.desired_col = c;
+        self.dedupe_cursors();
     }
 
-    fn move_word_right(&mut self, extending: bool) {
-        self.cursor.set_extending(extending);
-        let len = self.buffer.len_chars();
-        let mut off = self.buffer.pos_to_offset(self.cursor.caret.line, self.cursor.caret.col);
-        while off < len && self.buffer.char_at(off).map_or(false, is_word) {
-            off += 1;
+    /// Aplica una edición (que puede modificar el buffer) a todos los
+    /// cursores. Procesa en orden de offset descendente para que las
+    /// ediciones tempranas no desplacen las posiciones de las
+    /// posteriores. Devuelve `true` si al menos uno produjo un delta.
+    fn apply_edit_all<F>(&mut self, mut f: F) -> bool
+    where
+        F: FnMut(&mut Buffer, &mut Cursor, &EditorOptions) -> Option<crate::ops::EditDelta>,
+    {
+        // (which, offset) — which = None = primary, Some(i) = extra[i]
+        let mut all: Vec<(Option<usize>, usize)> = Vec::with_capacity(1 + self.extra_cursors.len());
+        let p_off = self.buffer.pos_to_offset(self.cursor.caret.line, self.cursor.caret.col);
+        all.push((None, p_off));
+        for (i, c) in self.extra_cursors.iter().enumerate() {
+            let off = self.buffer.pos_to_offset(c.caret.line, c.caret.col);
+            all.push((Some(i), off));
         }
-        while off < len && self.buffer.char_at(off).map_or(false, is_ws) {
-            off += 1;
-        }
-        let (l, c) = self.buffer.offset_to_pos(off);
-        self.cursor.caret = Pos::new(l, c);
-        self.cursor.desired_col = c;
-    }
-}
+        all.sort_by_key(|(_, off)| std::cmp::Reverse(*off));
 
-fn is_word(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
-}
-fn is_ws(c: char) -> bool {
-    c.is_whitespace() && c != '\n'
+        let opts = self.options;
+        let mut any = false;
+        for (which, _) in all {
+            let cursor: &mut Cursor = match which {
+                None => &mut self.cursor,
+                Some(i) => &mut self.extra_cursors[i],
+            };
+            if let Some(d) = f(&mut self.buffer, cursor, &opts) {
+                self.undo.push(d);
+                any = true;
+            }
+        }
+        self.dedupe_cursors();
+        any
+    }
+
+    /// Elimina cursores extras que están en la misma posición que el
+    /// primary o que otros extras (después de una edición pueden
+    /// converger).
+    fn dedupe_cursors(&mut self) {
+        let primary = self.cursor.caret;
+        let mut seen: Vec<Pos> = vec![primary];
+        self.extra_cursors.retain(|c| {
+            if seen.contains(&c.caret) {
+                false
+            } else {
+                seen.push(c.caret);
+                true
+            }
+        });
+    }
 }
 
 /// Resultado de `apply_key`. El caller usa esto para decidir si
@@ -722,6 +808,52 @@ mod tests {
         // Sin edición → seq igual → cache hit (no asserción directa
         // posible sin mock, pero al menos el seq no cambia).
         assert_eq!(s.edit_seq, seq_before);
+    }
+
+    #[test]
+    fn multi_cursor_insert_aplica_a_todos() {
+        let mut s = EditorState::new();
+        s.set_text("ab\ncd\nef");
+        // Cursor primary al final de "ab", extras al final de "cd" y "ef".
+        s.cursor = Cursor::at(0, 2);
+        s.add_cursor_at(1, 2);
+        s.add_cursor_at(2, 2);
+        s.apply_key(&evtext("!", false, false));
+        assert_eq!(s.text(), "ab!\ncd!\nef!");
+    }
+
+    #[test]
+    fn multi_cursor_backspace_aplica_a_todos() {
+        let mut s = EditorState::new();
+        s.set_text("ab\ncd\nef");
+        s.cursor = Cursor::at(0, 2);
+        s.add_cursor_at(1, 2);
+        s.add_cursor_at(2, 2);
+        s.apply_key(&ev(NamedKey::Backspace, false, false));
+        assert_eq!(s.text(), "a\nc\ne");
+    }
+
+    #[test]
+    fn dedupe_cursors_remueve_solapados() {
+        let mut s = EditorState::new();
+        s.set_text("abc");
+        s.cursor = Cursor::at(0, 1);
+        s.add_cursor_at(0, 1); // exacto primary → no se agrega
+        s.add_cursor_at(0, 2);
+        // El primer add no agregó nada; el segundo sí.
+        assert_eq!(s.extra_cursors.len(), 1);
+    }
+
+    #[test]
+    fn collapse_to_primary_descarta_extras() {
+        let mut s = EditorState::new();
+        s.set_text("abc");
+        s.cursor = Cursor::at(0, 0);
+        s.add_cursor_at(0, 1);
+        s.add_cursor_at(0, 2);
+        assert!(s.has_multi_cursor());
+        s.collapse_to_primary();
+        assert!(!s.has_multi_cursor());
     }
 
     #[test]
