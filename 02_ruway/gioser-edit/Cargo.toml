@@ -17,5 +17,6 @@ arboard = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-text-editor = { workspace = true }
+llimphi-widget-text-editor-lsp = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
 llimphi-widget-tree = { workspace = true }

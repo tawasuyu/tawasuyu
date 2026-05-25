@@ -33,6 +33,7 @@ use llimphi_widget_text_editor::{
     all_matches, find_next, find_prev, text_editor_view_full, Clipboard, Diagnostic,
     EditorMetrics, EditorPalette, EditorState, FindState, Language, PointerEvent, Pos,
 };
+use llimphi_widget_text_editor_lsp::{LspClient, NoopLspClient, RustAnalyzerClient};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
 
@@ -59,6 +60,8 @@ enum Msg {
     FindKey(KeyEvent),
     FindNext,
     FindPrev,
+    /// Tick periódico — pull de diagnostics del LSP.
+    PollLsp,
 }
 
 #[derive(Debug, Clone)]
@@ -84,11 +87,13 @@ struct Model {
     /// Modo find: cuando es Some, la barra del find está abierta y las
     /// teclas van al input en lugar de al editor.
     find: Option<FindBarState>,
-    /// Demo de diagnostics — `--demo-lsp` en la línea de comandos. Al
-    /// abrir un .rs, setea 2-3 diagnostics fake para validar el render
-    /// del subrayado. El client LSP real (rust-analyzer) viene en sesión
-    /// separada — esto es solo demostración visual de la infra.
+    /// Demo de diagnostics fake (--demo-lsp): TODO/FIXME en .rs/.py se
+    /// pintan como warning/error. Útil cuando no hay rust-analyzer y
+    /// querés ver el render del subrayado.
     demo_lsp: bool,
+    /// Cliente LSP real: `--lsp` spawnea rust-analyzer (o el binary
+    /// pasado con `--lsp-cmd=...`). En modo no-op cuando no se pide.
+    lsp: Box<dyn LspClient>,
 }
 
 struct FindBarState {
@@ -120,9 +125,17 @@ impl App for EditorApp {
         (1180, 760)
     }
 
-    fn init(_: &Handle<Msg>) -> Model {
+    fn init(handle: &Handle<Msg>) -> Model {
+        // Tick periódico para refrescar diagnostics del LSP.
+        handle.spawn_periodic(std::time::Duration::from_millis(400), || Msg::PollLsp);
+
         let args: Vec<String> = env::args().skip(1).collect();
         let demo_lsp = args.iter().any(|a| a == "--demo-lsp");
+        let lsp_on = args.iter().any(|a| a == "--lsp");
+        let lsp_cmd = args
+            .iter()
+            .find_map(|a| a.strip_prefix("--lsp-cmd=").map(|s| s.to_string()))
+            .unwrap_or_else(|| "rust-analyzer".to_string());
         let root = args
             .iter()
             .find(|a| !a.starts_with("--"))
@@ -130,7 +143,13 @@ impl App for EditorApp {
             .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         let root = fs::canonicalize(&root).unwrap_or(root);
         let nodes = scan_root(&root);
-        let status = format!("{} · {} entradas", root.display(), nodes.len());
+        let lsp: Box<dyn LspClient> = if lsp_on {
+            Box::new(RustAnalyzerClient::with_command(root.clone(), &lsp_cmd))
+        } else {
+            Box::new(NoopLspClient)
+        };
+        let lsp_label = if lsp_on { format!("lsp:{lsp_cmd}") } else { "lsp:off".into() };
+        let status = format!("{} · {} entradas · {lsp_label}", root.display(), nodes.len());
         Model {
             root,
             nodes,
@@ -143,6 +162,7 @@ impl App for EditorApp {
             drag_accum: (0.0, 0.0),
             find: None,
             demo_lsp,
+            lsp,
         }
     }
 
@@ -177,6 +197,18 @@ impl App for EditorApp {
             }
             Msg::FindNext => find_step(model, true),
             Msg::FindPrev => find_step(model, false),
+            Msg::PollLsp => {
+                let mut m = model;
+                if let Some(path) = m.open_file.as_ref() {
+                    let diags = m.lsp.diagnostics(path);
+                    // Sólo reemplaza si hay cambio — evita repaint si
+                    // el LSP no envió nada nuevo.
+                    if diags != m.editor.diagnostics {
+                        m.editor.set_diagnostics(diags);
+                    }
+                }
+                m
+            }
             Msg::SaveResult(r) => {
                 let mut m = model;
                 m.status = match r {
@@ -516,16 +548,23 @@ fn select_node(mut model: Model, i: usize) -> Model {
     }
     match fs::read_to_string(&node.path) {
         Ok(content) => {
+            // Si había un archivo abierto antes, notificamos al LSP que
+            // se cerró.
+            if let Some(prev) = model.open_file.take() {
+                model.lsp.did_close(&prev);
+            }
             model.editor = EditorState::new();
             model.editor.set_text(&content);
-            // Demo de diagnostics — visualiza el render del subrayado.
-            // El client LSP real vendrá en sesión separada.
+            // Demo de diagnostics fake (--demo-lsp).
             if model.demo_lsp {
                 let ext = node.path.extension().and_then(|s| s.to_str()).unwrap_or("");
                 if ext == "rs" || ext == "py" {
                     model.editor.set_diagnostics(demo_diagnostics(&content));
                 }
             }
+            // LSP real (--lsp): notifica al server.
+            let ext = node.path.extension().and_then(|s| s.to_str()).unwrap_or("");
+            model.lsp.did_open(&node.path, ext, &content);
             model.open_file = Some(node.path.clone());
             model.dirty = false;
             model.status = format!("abierto · {} bytes", content.len());
@@ -574,9 +613,21 @@ fn apply_editor_key(mut model: Model, ev: KeyEvent) -> Model {
     let r = model.editor.apply_key_with_clipboard(&ev, &mut model.clipboard);
     if r.changed() {
         model.dirty = true;
+        if let Some(path) = model.open_file.clone() {
+            let text = model.editor.text();
+            model.lsp.did_change(&path, &text);
+        }
     }
     if r.touched() {
         model.editor.ensure_caret_visible(EDITOR_VISIBLE_LINES);
+    }
+    // Pull diagnostics actuales del LSP. Es barato — sólo lee del state
+    // compartido.
+    if let Some(path) = model.open_file.as_ref() {
+        let diags = model.lsp.diagnostics(path);
+        if !diags.is_empty() || !model.editor.diagnostics.is_empty() {
+            model.editor.set_diagnostics(diags);
+        }
     }
     model
 }
