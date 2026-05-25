@@ -11,10 +11,4 @@ description = "Lapaloma — gráficos financieros. OHLC / candlesticks con agreg
 pineal-core = { path = "../pineal-core" }
 pineal-render = { path = "../pineal-render" }
 pineal-cartesian = { path = "../pineal-cartesian" }
-gpui = { workspace = true, optional = true }
-llimphi-ui = { workspace = true, optional = true }
-
-[features]
-default = ["gpui"]
-gpui = ["dep:gpui", "pineal-render/gpui", "pineal-cartesian/gpui"]
-llimphi = ["dep:llimphi-ui", "pineal-render/llimphi", "pineal-cartesian/llimphi"]
+llimphi-ui = { workspace = true }

@@ -11,5 +11,5 @@ description = "Lapaloma — demo app: una serie sin(x) sobre ChartViewport rende
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 pineal-core = { path = "../../pineal-core" }
-pineal-render = { path = "../../pineal-render", features = ["llimphi"] }
-pineal-cartesian = { path = "../../pineal-cartesian", default-features = false, features = ["llimphi"] }
+pineal-render = { path = "../../pineal-render" }
+pineal-cartesian = { path = "../../pineal-cartesian" }

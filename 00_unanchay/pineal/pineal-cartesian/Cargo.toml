@@ -10,10 +10,4 @@ description = "Lapaloma — gráficos cartesianos: LineSeries / BarSeries / Area
 [dependencies]
 pineal-core = { path = "../pineal-core" }
 pineal-render = { path = "../pineal-render" }
-gpui = { workspace = true, optional = true }
-llimphi-ui = { workspace = true, optional = true }
-
-[features]
-default = ["gpui"]
-gpui = ["dep:gpui", "pineal-render/gpui"]
-llimphi = ["dep:llimphi-ui", "pineal-render/llimphi"]
+llimphi-ui = { workspace = true }

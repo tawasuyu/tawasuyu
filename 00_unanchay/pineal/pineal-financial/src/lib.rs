@@ -24,23 +24,10 @@
 pub mod ohlc_buffer;
 pub mod aggregate;
 
-#[cfg(any(feature = "gpui", feature = "llimphi"))]
 pub mod candlestick;
-
-#[cfg(feature = "gpui")]
-pub mod element;
-
-#[cfg(feature = "llimphi")]
 pub mod view;
 
 pub use ohlc_buffer::{Bar, OhlcBuffer};
 pub use aggregate::aggregate_time_bucketed;
-
-#[cfg(any(feature = "gpui", feature = "llimphi"))]
 pub use candlestick::{paint_candlesticks, CandlestickStyle};
-
-#[cfg(feature = "gpui")]
-pub use element::{lapaloma_candlestick, LapalomaCandlestickElement};
-
-#[cfg(feature = "llimphi")]
 pub use view::{lapaloma_candlestick_view, CandlestickView};

@@ -10,6 +10,6 @@ description = "Lapaloma — demo de candlesticks OHLC. Random walk sintético de
 [dependencies]
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
-pineal-render = { path = "../../pineal-render", features = ["llimphi"] }
-pineal-cartesian = { path = "../../pineal-cartesian", default-features = false, features = ["llimphi"] }
-pineal-financial = { path = "../../pineal-financial", default-features = false, features = ["llimphi"] }
+pineal-render = { path = "../../pineal-render" }
+pineal-cartesian = { path = "../../pineal-cartesian" }
+pineal-financial = { path = "../../pineal-financial" }

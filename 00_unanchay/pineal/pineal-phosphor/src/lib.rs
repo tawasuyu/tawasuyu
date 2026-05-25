@@ -26,14 +26,6 @@
 pub mod ghost {}
 pub mod magnetic_anchor {}
 
-#[cfg(feature = "gpui")]
-pub mod element;
-
-#[cfg(feature = "gpui")]
-pub use element::{pineal_phosphor, LapalomaPhosphorElement};
-
-#[cfg(feature = "llimphi")]
 pub mod view;
 
-#[cfg(feature = "llimphi")]
 pub use view::{pineal_phosphor_view, PhosphorView};

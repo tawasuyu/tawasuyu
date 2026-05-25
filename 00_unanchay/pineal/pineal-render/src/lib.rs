@@ -1,21 +1,21 @@
 //! `pineal-render` — abstracción de painter.
 //!
-//! Los crates de visualización (cartesian, mesh, polar…) no
-//! conocen `gpui` ni `wgpu`. Hablan contra el trait [`Canvas`]
-//! definido acá. Eso permite:
+//! Los crates de visualización (cartesian, mesh, polar…) no conocen
+//! el runtime de UI: hablan contra el trait [`Canvas`] definido acá.
+//! Eso deja a la cadena `core → render → painter` agnóstica.
 //!
-//! - **Backend CPU sobre gpui** — implementación por defecto;
-//!   sirve para series de hasta ~50 k vértices a 60 FPS sin
-//!   sudar.
-//! - **Backend GPU sobre wgpu** — placeholder hoy; cuando un
-//!   módulo le pegue al wall (millones de puntos, force-sim
-//!   pesada), se enchufa sin tocar la lógica de los painters.
-//! - **Backend SVG** — `pineal-export` implementa el mismo
-//!   trait emitiendo elementos `<path>`, `<polyline>`, etc.
+//! Hoy hay un solo backend vivo (`SceneCanvas` sobre vello + llimphi),
+//! pero el trait permite enchufar más sin tocar los painters:
 //!
-//! Tipos primitivos (`Color`, `Point`, `Rect`) viven acá para
-//! no atarlos a `gpui::Rgba`/`gpui::Point` — los backends
-//! traducen al tipo nativo del runtime que les toca.
+//! - **Llimphi/vello** — backend canónico para apps gioser; pinta
+//!   dentro de un `paint_with` del `View<Msg>` declarativo.
+//! - **SVG** — `pineal-export` implementa el mismo trait emitiendo
+//!   elementos `<path>`, `<polyline>`, etc.
+//! - **GPU directo wgpu** — placeholder; el día que una visualización
+//!   le pegue al wall (millones de puntos), entra sin tocar la lógica.
+//!
+//! Tipos primitivos (`Color`, `Point`, `Rect`) viven acá para no
+//! atarlos al tipo de color/punto de ningún runtime.
 
 #![forbid(unsafe_code)]
 
@@ -25,10 +25,6 @@ pub mod canvas;
 pub mod plan;
 pub mod recorder;
 
-#[cfg(feature = "gpui")]
-pub mod gpui_backend;
-
-#[cfg(feature = "llimphi")]
 pub mod llimphi_backend;
 
 pub use color::Color;
@@ -37,8 +33,4 @@ pub use canvas::{Canvas, StrokeStyle};
 pub use plan::{RenderCmd, RenderPlan};
 pub use recorder::PlanRecorder;
 
-#[cfg(feature = "gpui")]
-pub use gpui_backend::WindowCanvas;
-
-#[cfg(feature = "llimphi")]
 pub use llimphi_backend::SceneCanvas;
