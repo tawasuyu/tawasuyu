@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "pluma-notebook — visor read-only sobre Llimphi. Abre un .pluma-nb (o muestra un notebook demo) y renderiza cada celda como un card con tipo, estado y fuente truncada. Sin edición ni ejecución todavía."
+description = "pluma-notebook — visor sobre Llimphi: lineal o canvas (pan + drag), con botón 'ejecutar desde aquí' que invoca run_from contra el kernel WASM. Sin edición de fuentes todavía."
 
 [[bin]]
 name = "pluma-notebook-llimphi"
@@ -15,5 +15,8 @@ path = "src/main.rs"
 [dependencies]
 pluma-notebook-core = { path = "../pluma-notebook-core" }
 pluma-notebook-store = { path = "../pluma-notebook-store" }
+pluma-notebook-exec = { path = "../pluma-notebook-exec" }
+pluma-notebook-kernel-wasm = { path = "../pluma-notebook-kernel-wasm" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
+tokio = { workspace = true }

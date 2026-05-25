@@ -38,6 +38,12 @@ enum Msg {
     /// Mueve una celda en el canvas por `(dx, dy)` (delta desde el evento
     /// anterior — no acumulado desde el press).
     MoveCell { id: CellId, dx: f32, dy: f32 },
+    /// El usuario pidió ejecutar desde una celda — corre `run_from` en un
+    /// thread aparte y dispatcha `RunCompleted` al volver.
+    RunFrom(CellId),
+    /// El kernel terminó: reemplaza el notebook por la versión con los
+    /// estados actualizados.
+    RunCompleted(Notebook),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +59,9 @@ struct Model {
     /// arrastrando el fondo o con la rueda del mouse. Se suma a cada
     /// `Cell::position` al render.
     viewport: (f32, f32),
+    /// Celda raíz de una corrida en curso (si la hay). Bloquea nuevos
+    /// pedidos hasta que el thread devuelva `RunCompleted`.
+    running_from: Option<CellId>,
     /// Archivo de origen (None = demo embebido).
     source: Option<PathBuf>,
     /// Mensaje de error si load falló — se muestra en el header.
@@ -87,10 +96,17 @@ impl App for Viewer {
         } else {
             Mode::Linear
         };
-        Model { notebook, mode, viewport: (0.0, 0.0), source, load_error }
+        Model {
+            notebook,
+            mode,
+            viewport: (0.0, 0.0),
+            running_from: None,
+            source,
+            load_error,
+        }
     }
 
-    fn update(model: Model, msg: Msg, _: &Handle<Msg>) -> Model {
+    fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         match msg {
             Msg::PanBy(dx, dy) => Model {
                 viewport: (model.viewport.0 + dx, model.viewport.1 + dy),
@@ -103,6 +119,28 @@ impl App for Viewer {
                 }
                 Model { notebook: nb, ..model }
             }
+            Msg::RunFrom(id) => {
+                // Ya hay una corrida en curso → ignoramos el pedido.
+                if model.running_from.is_some() {
+                    return model;
+                }
+                let mut nb = model.notebook.clone();
+                handle.spawn(move || {
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("tokio runtime");
+                    let kernel = pluma_notebook_kernel_wasm::WasmKernel::new();
+                    let _ = rt.block_on(pluma_notebook_exec::run_from(&mut nb, &kernel, id));
+                    Msg::RunCompleted(nb)
+                });
+                Model { running_from: Some(id), ..model }
+            }
+            Msg::RunCompleted(nb) => Model {
+                notebook: nb,
+                running_from: None,
+                ..model
+            },
         }
     }
 
@@ -198,11 +236,16 @@ fn header_bar(model: &Model, palette: &Palette) -> View<Msg> {
             model.viewport.0, model.viewport.1
         ),
     };
+    let running = model
+        .running_from
+        .map(|id| format!(" · ejecutando #{id}…"))
+        .unwrap_or_default();
     let texto = format!(
-        "pluma-notebook · {} celdas · modo {} · digest {} · {}",
+        "pluma-notebook · {} celdas · modo {} · digest {}{} · {}",
         model.notebook.len(),
         modo,
         digest,
+        running,
         origen,
     );
     let color = if model.load_error.is_some() { palette.fg_error } else { palette.fg_muted };
@@ -334,27 +377,50 @@ fn canvas_view(nb: &Notebook, viewport: (f32, f32), palette: &Palette) -> View<M
 
 fn canvas_card(cell: &Cell, palette: &Palette, x: f32, y: f32) -> View<Msg> {
     let id = cell.id;
-    card_with_height(
-        cell,
-        palette,
-        Style {
-            flex_direction: FlexDirection::Column,
-            position: Position::Absolute,
-            inset: Rect {
-                left: length(x),
-                top: length(y),
-                right: auto(),
-                bottom: auto(),
-            },
-            size: Size { width: length(CANVAS_CARD_W), height: length(CANVAS_CARD_H) },
-            ..Default::default()
+    let (header, body) = card_header_body(cell, palette, CANVAS_CARD_H - 30.0);
+    let run_button = run_button_view(id, palette);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        position: Position::Absolute,
+        inset: Rect {
+            left: length(x),
+            top: length(y),
+            right: auto(),
+            bottom: auto(),
         },
-        CANVAS_CARD_H - 30.0,
-    )
+        size: Size { width: length(CANVAS_CARD_W), height: length(CANVAS_CARD_H) },
+        ..Default::default()
+    })
+    .fill(palette.bg_card)
+    .clip(true)
     .draggable(move |phase, dx, dy| match phase {
         DragPhase::Move => Some(Msg::MoveCell { id, dx, dy }),
         DragPhase::End => None,
     })
+    .children(vec![header, body, run_button])
+}
+
+const RUN_BTN_SIZE: f32 = 18.0;
+
+fn run_button_view(id: CellId, palette: &Palette) -> View<Msg> {
+    // Posicionado en la esquina superior derecha de la card (overlay).
+    View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            left: auto(),
+            top: length(2.0_f32),
+            right: length(4.0_f32),
+            bottom: auto(),
+        },
+        size: Size { width: length(RUN_BTN_SIZE), height: length(RUN_BTN_SIZE) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(palette.edge)
+    .hover_fill(palette.accent_fresh)
+    .on_click(Msg::RunFrom(id))
+    .text_aligned("▶", 10.0, palette.bg, Alignment::Center)
 }
 
 fn orphan_notice(n: usize, palette: &Palette) -> View<Msg> {
@@ -415,6 +481,11 @@ fn line_view(x: f32, y: f32, w: f32, h: f32, color: Color) -> View<Msg> {
 // ---------------------------------------------------------------------
 
 fn card_with_height(cell: &Cell, palette: &Palette, wrapper: Style, body_h: f32) -> View<Msg> {
+    let (header, body) = card_header_body(cell, palette, body_h);
+    View::new(wrapper).fill(palette.bg_card).clip(true).children(vec![header, body])
+}
+
+fn card_header_body(cell: &Cell, palette: &Palette, body_h: f32) -> (View<Msg>, View<Msg>) {
     let header_text = format!(
         "[{}] #{}  ·  {}",
         kind_label(&cell.kind),
@@ -431,7 +502,8 @@ fn card_with_height(cell: &Cell, palette: &Palette, wrapper: Style, body_h: f32)
         size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
         padding: Rect {
             left: length(10.0_f32),
-            right: length(10.0_f32),
+            // Espacio reservado para el botón ▶ en modo canvas.
+            right: length(28.0_f32),
             top: length(0.0_f32),
             bottom: length(0.0_f32),
         },
@@ -457,7 +529,7 @@ fn card_with_height(cell: &Cell, palette: &Palette, wrapper: Style, body_h: f32)
         Alignment::Start,
     );
 
-    View::new(wrapper).fill(palette.bg_card).clip(true).children(vec![header, body])
+    (header, body)
 }
 
 fn kind_label(k: &CellKind) -> String {
@@ -506,15 +578,15 @@ fn demo_notebook() -> Notebook {
     let mut nb = Notebook::new();
     let intro = nb.push(
         CellKind::Markdown,
-        "# Cosecha de auyama\n\nNotebook demo del visor canvas.\nLas celdas viven en (x, y) y los conectores muestran el DAG.",
+        "# Demo canvas\n\nClick en ▶ ejecuta esa celda y todos sus dependientes (run_from). Los nodos arrastran; el fondo panea.",
     );
     let datos = nb.push(
-        CellKind::Code { language: "rust".into() },
-        "let kilos = vec![12.0, 18.0, 9.5, 21.0];",
+        CellKind::Code { language: "wat".into() },
+        "(module\n  (func (export \"main\") (result i32)\n    i32.const 21))",
     );
     let media = nb.push(
-        CellKind::Code { language: "rust".into() },
-        "let media = kilos.iter().sum::<f64>() / kilos.len() as f64;\nprintln!(\"{media}\");",
+        CellKind::Code { language: "wat".into() },
+        "(module\n  (func (export \"main\") (result i32)\n    i32.const 42))",
     );
     let grafico = nb.push(
         CellKind::Embed { module: "pineal".into() },
