@@ -87,6 +87,11 @@ enum Msg {
     /// Ctrl+Shift+Space — pide signatureHelp.
     SignatureHelpRequest,
     SignatureHelpClose,
+    /// Shift+F12 — pide references al símbolo en el caret.
+    ReferencesRequest,
+    ReferencesNav { delta: i32 },
+    ReferencesApply,
+    ReferencesClose,
     /// El LSP devolvió text edits (de formatting o rename) para el
     /// archivo abierto — aplicar todos en orden descendente.
     TextEditsApply(Vec<TextEdit>),
@@ -128,6 +133,15 @@ struct Model {
     hover: Option<HoverPopup>,
     /// Popup de signatureHelp; `None` cerrado.
     sig_help: Option<SignatureHelpBar>,
+    /// Lista de references; `None` cerrada.
+    references: Option<ReferencesBar>,
+}
+
+struct ReferencesBar {
+    items: Vec<DefinitionLocation>,
+    selected: usize,
+    /// Pos donde se pidió la búsqueda.
+    anchor: (usize, usize),
 }
 
 struct SignatureHelpBar {
@@ -235,6 +249,7 @@ impl App for EditorApp {
             completions: None,
             hover: None,
             sig_help: None,
+            references: None,
         }
     }
 
@@ -296,6 +311,13 @@ impl App for EditorApp {
                     let latest = m.lsp.latest_signature_help();
                     if latest.is_some() && latest != bar.info {
                         bar.info = latest;
+                    }
+                }
+                if let Some(bar) = m.references.as_mut() {
+                    let latest = m.lsp.latest_references();
+                    if !latest.is_empty() && latest != bar.items {
+                        bar.items = latest;
+                        bar.selected = 0;
                     }
                 }
                 // Goto-def: si llegó una definition, dispara apply en
@@ -406,6 +428,49 @@ impl App for EditorApp {
                 m.lsp.clear_definition();
                 m.lsp.request_definition(&path, line, col);
                 m.status = "goto-def · esperando LSP…".into();
+                m
+            }
+            Msg::ReferencesRequest => {
+                let mut m = model;
+                let Some(path) = m.open_file.clone() else { return m };
+                let line = m.editor.cursor.caret.line;
+                let col = m.editor.cursor.caret.col;
+                m.lsp.clear_references();
+                m.lsp.request_references(&path, line, col, true);
+                m.references = Some(ReferencesBar {
+                    items: Vec::new(),
+                    selected: 0,
+                    anchor: (line, col),
+                });
+                m.status = "references · esperando LSP…".into();
+                m
+            }
+            Msg::ReferencesNav { delta } => {
+                let mut m = model;
+                if let Some(bar) = m.references.as_mut() {
+                    let n = bar.items.len() as i32;
+                    if n > 0 {
+                        bar.selected = ((bar.selected as i32 + delta).rem_euclid(n)) as usize;
+                    }
+                }
+                m
+            }
+            Msg::ReferencesApply => {
+                let m = model;
+                if let Some(bar) = m.references.as_ref() {
+                    if let Some(loc) = bar.items.get(bar.selected).cloned() {
+                        let mut m2 = m;
+                        m2.references = None;
+                        m2.lsp.clear_references();
+                        return Self::update(m2, Msg::GotoDefinitionApply(loc), handle);
+                    }
+                }
+                m
+            }
+            Msg::ReferencesClose => {
+                let mut m = model;
+                m.references = None;
+                m.lsp.clear_references();
                 m
             }
             Msg::SignatureHelpRequest => {
@@ -576,11 +641,25 @@ impl App for EditorApp {
         {
             return Some(Msg::SignatureHelpClose);
         }
-        // F12 = goto-definition (sin modificadores).
+        // References abierto: Up/Down navega, Enter aplica, Esc cierra.
+        if model.references.is_some() {
+            match &event.key {
+                Key::Named(NamedKey::Escape) => return Some(Msg::ReferencesClose),
+                Key::Named(NamedKey::ArrowDown) => return Some(Msg::ReferencesNav { delta: 1 }),
+                Key::Named(NamedKey::ArrowUp) => return Some(Msg::ReferencesNav { delta: -1 }),
+                Key::Named(NamedKey::Enter) => return Some(Msg::ReferencesApply),
+                _ => {}
+            }
+        }
+        // F12 = goto-definition; Shift+F12 = references.
         if matches!(&event.key, Key::Named(NamedKey::F12))
             && model.open_file.is_some()
         {
-            return Some(Msg::GotoDefinitionRequest);
+            return Some(if event.modifiers.shift {
+                Msg::ReferencesRequest
+            } else {
+                Msg::GotoDefinitionRequest
+            });
         }
         // Hover popup abierto + Esc → cerrar.
         if model.hover.is_some()
@@ -719,6 +798,9 @@ fn editor_panel(model: &Model, theme: &Theme) -> View<Msg> {
     if let Some(bar) = model.sig_help.as_ref() {
         children.push(sig_help_view(bar, theme));
     }
+    if let Some(rb) = model.references.as_ref() {
+        children.push(references_view(rb, &model.root, theme));
+    }
     let editor_view = match &model.open_file {
         None => empty_editor_placeholder(theme),
         Some(path) => {
@@ -760,6 +842,66 @@ const COMPLETIONS_MAX_ITEMS_VISIBLE: usize = 5;
 
 const HOVER_BAR_H: f32 = 96.0;
 const SIG_HELP_BAR_H: f32 = 56.0;
+const REFS_BAR_H: f32 = 160.0;
+const REFS_ROW_H: f32 = 20.0;
+const REFS_MAX_VISIBLE: usize = 7;
+
+fn references_view(bar: &ReferencesBar, root: &Path, theme: &Theme) -> View<Msg> {
+    let header = if bar.items.is_empty() {
+        format!(
+            "references @ {}:{} · esperando LSP…",
+            bar.anchor.0 + 1, bar.anchor.1,
+        )
+    } else {
+        format!(
+            "references @ {}:{} · {} / {} · ↓↑ navega · Enter abre · Esc cierra",
+            bar.anchor.0 + 1, bar.anchor.1,
+            bar.selected + 1, bar.items.len(),
+        )
+    };
+    let mut rows: Vec<View<Msg>> = Vec::new();
+    rows.push(
+        View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
+            padding: Rect {
+                left: length(8.0_f32), right: length(8.0_f32),
+                top: length(0.0_f32), bottom: length(0.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .fill(theme.bg_panel_alt)
+        .text_aligned(header, 10.0, theme.fg_muted, Alignment::Start),
+    );
+    let visible_start = bar.selected.saturating_sub(REFS_MAX_VISIBLE.saturating_sub(1));
+    let visible_end = (visible_start + REFS_MAX_VISIBLE).min(bar.items.len());
+    for i in visible_start..visible_end {
+        let loc = &bar.items[i];
+        let selected = i == bar.selected;
+        let bg = if selected { theme.bg_selected } else { theme.bg_panel };
+        let label = format!("{}:{}", relative_to(root, &loc.path), loc.line + 1);
+        rows.push(
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: length(REFS_ROW_H) },
+                padding: Rect {
+                    left: length(10.0_f32), right: length(8.0_f32),
+                    top: length(0.0_f32), bottom: length(0.0_f32),
+                },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .fill(bg)
+            .text_aligned(label, 11.0, theme.fg_text, Alignment::Start),
+        );
+    }
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: length(REFS_BAR_H) },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(rows)
+}
 
 fn sig_help_view(bar: &SignatureHelpBar, theme: &Theme) -> View<Msg> {
     let header = format!(

@@ -93,6 +93,11 @@ pub trait LspClient: Send {
     fn request_signature_help(&mut self, path: &Path, line: usize, col: usize);
     fn latest_signature_help(&self) -> Option<SignatureHelpInfo>;
     fn clear_signature_help(&mut self);
+    /// Dispara textDocument/references. `include_decl` controla si la
+    /// declaración misma aparece en los resultados.
+    fn request_references(&mut self, path: &Path, line: usize, col: usize, include_decl: bool);
+    fn latest_references(&self) -> Vec<DefinitionLocation>;
+    fn clear_references(&mut self);
 }
 
 /// Info de signatureHelp activa.
@@ -171,6 +176,11 @@ impl LspClient for NoopLspClient {
         None
     }
     fn clear_signature_help(&mut self) {}
+    fn request_references(&mut self, _: &Path, _: usize, _: usize, _: bool) {}
+    fn latest_references(&self) -> Vec<DefinitionLocation> {
+        Vec::new()
+    }
+    fn clear_references(&mut self) {}
 }
 
 // ---------------------------------------------------------------------
@@ -193,6 +203,8 @@ struct SharedInner {
     text_edits: Vec<TextEdit>,
     /// Última signature help.
     signature_help: Option<SignatureHelpInfo>,
+    /// Última lista de references.
+    references: Vec<DefinitionLocation>,
     /// IDs de requests pendientes para distinguir responses; el reader
     /// usa estos sets para routear cada response al handler correcto.
     pending_completion_ids: std::collections::HashSet<i64>,
@@ -200,6 +212,7 @@ struct SharedInner {
     pending_definition_ids: std::collections::HashSet<i64>,
     pending_formatting_ids: std::collections::HashSet<i64>,
     pending_signature_help_ids: std::collections::HashSet<i64>,
+    pending_references_ids: std::collections::HashSet<i64>,
 }
 
 type SharedState = Arc<Mutex<SharedInner>>;
@@ -468,6 +481,34 @@ impl LspClient for RustAnalyzerClient {
         }
     }
 
+    fn request_references(&mut self, path: &Path, line: usize, col: usize, include_decl: bool) {
+        let id = self.alloc_id();
+        if let Ok(mut s) = self.state.lock() {
+            s.pending_references_ids.insert(id);
+        }
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "textDocument/references",
+            "params": {
+                "textDocument": { "uri": format!("file://{}", path.display()) },
+                "position": { "line": line, "character": col },
+                "context": { "includeDeclaration": include_decl }
+            }
+        });
+        self.send_raw(req.to_string());
+    }
+
+    fn latest_references(&self) -> Vec<DefinitionLocation> {
+        self.state.lock().map(|s| s.references.clone()).unwrap_or_default()
+    }
+
+    fn clear_references(&mut self) {
+        if let Ok(mut s) = self.state.lock() {
+            s.references.clear();
+        }
+    }
+
     fn did_open(&mut self, path: &Path, language: &str, text: &str) {
         self.versions.insert(path.to_path_buf(), 1);
         let notif = serde_json::json!({
@@ -644,14 +685,15 @@ fn handle_publish_diagnostics(json: &serde_json::Value, state: &SharedState) {
 /// Routea una response del server al handler correspondiente según
 /// qué set de pendientes la contenía.
 fn handle_response(id: i64, json: &serde_json::Value, state: &SharedState) {
-    let (was_completion, was_hover, was_definition, was_formatting, was_sig) = {
+    let (was_completion, was_hover, was_definition, was_formatting, was_sig, was_refs) = {
         let Ok(mut s) = state.lock() else { return };
         let c = s.pending_completion_ids.remove(&id);
         let h = s.pending_hover_ids.remove(&id);
         let d = s.pending_definition_ids.remove(&id);
         let f = s.pending_formatting_ids.remove(&id);
         let sg = s.pending_signature_help_ids.remove(&id);
-        (c, h, d, f, sg)
+        let r = s.pending_references_ids.remove(&id);
+        (c, h, d, f, sg, r)
     };
     if was_completion {
         handle_completion_response(json, state);
@@ -668,6 +710,35 @@ fn handle_response(id: i64, json: &serde_json::Value, state: &SharedState) {
     if was_sig {
         handle_signature_help_response(json, state);
     }
+    if was_refs {
+        handle_references_response(json, state);
+    }
+}
+
+fn handle_references_response(json: &serde_json::Value, state: &SharedState) {
+    let Some(result) = json.get("result") else { return };
+    if result.is_null() {
+        if let Ok(mut s) = state.lock() {
+            s.references.clear();
+        }
+        return;
+    }
+    let Some(arr) = result.as_array() else { return };
+    let refs: Vec<DefinitionLocation> = arr.iter().filter_map(parse_location).collect();
+    if let Ok(mut s) = state.lock() {
+        s.references = refs;
+    }
+}
+
+/// Parsea una `Location` LSP: { uri, range } → DefinitionLocation.
+fn parse_location(loc: &serde_json::Value) -> Option<DefinitionLocation> {
+    let uri = loc.get("uri")?.as_str()?;
+    let path = uri.strip_prefix("file://").map(PathBuf::from)?;
+    let range = loc.get("range")?;
+    let start = range.get("start")?;
+    let line = start.get("line")?.as_u64()? as usize;
+    let col = start.get("character")?.as_u64()? as usize;
+    Some(DefinitionLocation { path, line, col })
 }
 
 fn handle_signature_help_response(json: &serde_json::Value, state: &SharedState) {
@@ -1039,6 +1110,25 @@ mod tests {
 
     fn make_state() -> SharedState {
         Arc::new(Mutex::new(SharedInner::default()))
+    }
+
+    #[test]
+    fn handle_references_response_array() {
+        let s = make_state();
+        let json = serde_json::json!({
+            "id": 1,
+            "result": [
+                { "uri": "file:///tmp/a.rs", "range": { "start": { "line": 1, "character": 2 }, "end": { "line": 1, "character": 5 } } },
+                { "uri": "file:///tmp/b.rs", "range": { "start": { "line": 10, "character": 0 }, "end": { "line": 10, "character": 3 } } }
+            ]
+        });
+        handle_references_response(&json, &s);
+        let refs = s.lock().unwrap().references.clone();
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0].path, PathBuf::from("/tmp/a.rs"));
+        assert_eq!(refs[0].line, 1);
+        assert_eq!(refs[1].path, PathBuf::from("/tmp/b.rs"));
+        assert_eq!(refs[1].line, 10);
     }
 
     #[test]
