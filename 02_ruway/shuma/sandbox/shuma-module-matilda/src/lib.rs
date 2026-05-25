@@ -112,6 +112,9 @@ pub enum Msg {
     /// Línea informativa para el log — útil para que el chasis avise
     /// "conectando", "fallo de SSH", etc., sin acoplarse al módulo.
     LogLine(String),
+    /// Inyecta el reporte de un dry-run remoto que el chasis corrió en
+    /// un thread aparte (cada `String` es una línea del log).
+    DryRunReport(Vec<String>),
     /// Drag del splitter inventario|plan.
     ResizeSplit(f32),
 }
@@ -164,33 +167,43 @@ pub fn update(state: State, msg: Msg) -> State {
             s.plan = Some(p);
         }
         Msg::DryRun => {
-            let p = match &s.plan {
-                Some(p) => p.clone(),
-                None => plan(&s.current_or_empty(), &s.desired),
-            };
-            let steps = plan_to_steps(&p, &s.desired);
-            if steps.is_empty() {
-                s.log.push("Sin pasos: nada que aplicar.".into());
+            // El dry-run para Source::Remote vive en el chasis (necesita
+            // SSH + thread); aquí sólo manejamos Local sincrónicamente.
+            // Para Remote, el chasis interceptó el shortcut y dispatchó
+            // el resultado vía `Msg::DryRunReport`.
+            if s.source.is_remote() {
+                s.log
+                    .push("→ dry-run remoto delegado al chasis".into());
             } else {
-                s.log.push(format!("— dry-run de {} pasos —", steps.len()));
-                let report: ApplyReport = dry_run(&steps);
-                for r in &report.results {
-                    s.log.push(format!(
-                        "{} {}",
-                        if r.ok { "✔" } else { "✘" },
-                        r.describe
-                    ));
-                    for line in &r.log {
-                        s.log.push(format!("   {line}"));
+                let p = match &s.plan {
+                    Some(p) => p.clone(),
+                    None => plan(&s.current_or_empty(), &s.desired),
+                };
+                let steps = plan_to_steps(&p, &s.desired);
+                if steps.is_empty() {
+                    s.log.push("Sin pasos: nada que aplicar.".into());
+                } else {
+                    s.log.push(format!("— dry-run de {} pasos —", steps.len()));
+                    let report: ApplyReport = dry_run(&steps);
+                    for r in &report.results {
+                        s.log.push(format!(
+                            "{} {}",
+                            if r.ok { "✔" } else { "✘" },
+                            r.describe
+                        ));
+                        for line in &r.log {
+                            s.log.push(format!("   {line}"));
+                        }
                     }
                 }
             }
-            // Recorta el log a las últimas 200 líneas para no crecer
-            // sin tope durante una sesión larga.
-            let len = s.log.len();
-            if len > 200 {
-                s.log.drain(0..len - 200);
+            cap_log(&mut s.log);
+        }
+        Msg::DryRunReport(lines) => {
+            for line in lines {
+                s.log.push(line);
             }
+            cap_log(&mut s.log);
         }
         Msg::SetCurrent(inv) => {
             s.log.push(format!(
@@ -202,10 +215,7 @@ pub fn update(state: State, msg: Msg) -> State {
         }
         Msg::LogLine(line) => {
             s.log.push(line);
-            let len = s.log.len();
-            if len > 200 {
-                s.log.drain(0..len - 200);
-            }
+            cap_log(&mut s.log);
         }
         Msg::ResizeSplit(dx) => {
             s.split_width = (s.split_width + dx).clamp(220.0, 720.0);
@@ -214,7 +224,15 @@ pub fn update(state: State, msg: Msg) -> State {
     s
 }
 
-// ─── Discover remoto ───────────────────────────────────────────────
+fn cap_log(log: &mut Vec<String>) {
+    const MAX: usize = 200;
+    let len = log.len();
+    if len > MAX {
+        log.drain(0..len - MAX);
+    }
+}
+
+// ─── Discover y dry-run remotos ─────────────────────────────────────
 
 /// Ruta default de la clave SSH del usuario; coincide con el matilda CLI.
 fn default_ssh_key() -> PathBuf {
@@ -233,6 +251,83 @@ fn default_ssh_key() -> PathBuf {
 pub fn discover_remote_blocking(source: &Source, desired: &Inventory) -> Result<Inventory, String> {
     match source {
         Source::Local => Ok(discover_inventory(desired)),
+        Source::Remote { .. } => {
+            let config = ssh_config_for(source)?;
+            let rt = blocking_runtime()?;
+            rt.block_on(async move {
+                let linker = Linker::connect(&config)
+                    .await
+                    .map_err(|e| format!("ssh connect: {e}"))?;
+                fetch_remote_inventory(&linker, desired).await
+            })
+        }
+    }
+}
+
+/// Equivalente remoto de `Msg::DryRun`: conecta por SSH, descubre el
+/// inventory actual, calcula el plan deseado-vs-actual y enumera los
+/// pasos que SE EJECUTARÍAN — sin invocar ninguno. Útil para validar
+/// que el `Source::Remote` está bien configurado y previsualizar el
+/// cambio antes de un eventual Apply real (fuera de scope aquí).
+///
+/// Devuelve un `Vec<String>` con líneas listas para insertar al log
+/// (incluyendo el reporte de dry-run de cada paso). El chasis las
+/// envuelve en `Msg::DryRunReport`.
+pub fn dry_run_remote_blocking(
+    source: &Source,
+    desired: &Inventory,
+) -> Result<Vec<String>, String> {
+    let mut lines = Vec::new();
+
+    let current = match source {
+        Source::Local => discover_inventory(desired),
+        Source::Remote { .. } => {
+            let config = ssh_config_for(source)?;
+            let rt = blocking_runtime()?;
+            rt.block_on(async move {
+                let linker = Linker::connect(&config)
+                    .await
+                    .map_err(|e| format!("ssh connect: {e}"))?;
+                fetch_remote_inventory(&linker, desired).await
+            })?
+        }
+    };
+    lines.push(format!(
+        "✔ current: {} containers, {} vhosts",
+        current.containers().count(),
+        current.vhosts().count()
+    ));
+
+    let p = plan(&current, desired);
+    if p.is_empty() {
+        lines.push("Sin cambios: el servidor ya está al día.".into());
+        return Ok(lines);
+    }
+    lines.push(format!(
+        "plan: {} acciones ({} crear, {} actualizar, {} eliminar)",
+        p.len(),
+        p.count(Op::Create),
+        p.count(Op::Update),
+        p.count(Op::Remove)
+    ));
+
+    let steps = plan_to_steps(&p, desired);
+    let report: ApplyReport = dry_run(&steps);
+    for r in &report.results {
+        lines.push(format!(
+            "{} {}",
+            if r.ok { "✔" } else { "✘" },
+            r.describe
+        ));
+        for line in &r.log {
+            lines.push(format!("   {line}"));
+        }
+    }
+    Ok(lines)
+}
+
+fn ssh_config_for(source: &Source) -> Result<SshConfig, String> {
+    match source {
         Source::Remote { host, user, port, .. } => {
             let auth = SshAuth::Key {
                 path: default_ssh_key(),
@@ -240,34 +335,36 @@ pub fn discover_remote_blocking(source: &Source, desired: &Inventory) -> Result<
             };
             let mut config = SshConfig::new(host.as_str(), user.as_str(), auth);
             config.port = *port;
-
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| format!("tokio runtime: {e}"))?;
-
-            rt.block_on(async move {
-                let linker = Linker::connect(&config)
-                    .await
-                    .map_err(|e| format!("ssh connect: {e}"))?;
-
-                let containers_text = linker
-                    .exec("docker ps -a --format '{{.Names}}' 2>/dev/null || true")
-                    .await
-                    .map_err(|e| format!("docker ps: {e}"))?;
-                let vhosts_text = linker
-                    .exec("ls -1 /etc/nginx/sites-enabled 2>/dev/null || true")
-                    .await
-                    .map_err(|e| format!("ls sites-enabled: {e}"))?;
-
-                let state = ServerState {
-                    containers: matilda_discover::parse_docker_names(&containers_text),
-                    vhosts: matilda_discover::parse_nginx_sites(&vhosts_text),
-                };
-                Ok(observed_inventory(&state, desired))
-            })
+            Ok(config)
         }
+        Source::Local => Err("ssh_config_for esperaba Source::Remote".into()),
     }
+}
+
+fn blocking_runtime() -> Result<tokio::runtime::Runtime, String> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("tokio runtime: {e}"))
+}
+
+async fn fetch_remote_inventory(
+    linker: &Linker,
+    desired: &Inventory,
+) -> Result<Inventory, String> {
+    let containers_text = linker
+        .exec("docker ps -a --format '{{.Names}}' 2>/dev/null || true")
+        .await
+        .map_err(|e| format!("docker ps: {e}"))?;
+    let vhosts_text = linker
+        .exec("ls -1 /etc/nginx/sites-enabled 2>/dev/null || true")
+        .await
+        .map_err(|e| format!("ls sites-enabled: {e}"))?;
+    let state = ServerState {
+        containers: matilda_discover::parse_docker_names(&containers_text),
+        vhosts: matilda_discover::parse_nginx_sites(&vhosts_text),
+    };
+    Ok(observed_inventory(&state, desired))
 }
 
 /// Inventario de ejemplo — equivale al `matilda example`. Permite
@@ -641,6 +738,41 @@ mod tests {
         let inv = matilda_core::Inventory::new();
         let res = discover_remote_blocking(&Source::Local, &inv);
         assert!(res.is_ok());
+    }
+
+    #[test]
+    fn dry_run_report_appends_lines_to_log() {
+        let mut s = State::new(Source::Local);
+        let lines = vec!["línea 1".into(), "línea 2".into(), "línea 3".into()];
+        s = update(s, Msg::DryRunReport(lines));
+        assert!(s.log.iter().any(|l| l == "línea 1"));
+        assert!(s.log.iter().any(|l| l == "línea 3"));
+    }
+
+    #[test]
+    fn dry_run_with_remote_source_defers_to_chassis() {
+        let s = State::new(Source::Remote {
+            host: "srv".into(),
+            user: "ops".into(),
+            port: 22,
+            label: None,
+        });
+        let s = update(s, Msg::DryRun);
+        assert!(s
+            .log
+            .iter()
+            .any(|l| l.contains("delegado al chasis")));
+    }
+
+    #[test]
+    fn dry_run_remote_blocking_local_returns_lines() {
+        let inv = matilda_core::Inventory::new();
+        let res = dry_run_remote_blocking(&Source::Local, &inv);
+        assert!(res.is_ok());
+        let lines = res.unwrap();
+        assert!(!lines.is_empty());
+        // El primer reporte siempre incluye el current.
+        assert!(lines[0].contains("current"));
     }
 
     #[test]

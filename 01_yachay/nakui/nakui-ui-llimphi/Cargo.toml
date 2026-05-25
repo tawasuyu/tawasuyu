@@ -1,0 +1,26 @@
+[package]
+name = "nakui-ui-llimphi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Nakui — runtime Llimphi de la metainterfaz. MVP: carga module.json desde un directorio, monta sidebar de módulos + área principal con menú + listado de entities. Sin formularios de edición todavía — el meta-form widget Llimphi viene en un bloque futuro."
+
+[dependencies]
+nakui-core = { path = "../nakui-core" }
+nahual-meta-schema = { path = "../../../02_ruway/nahual/libs/meta-schema" }
+nahual-meta-runtime = { path = "../../../02_ruway/nahual/libs/meta-runtime" }
+cards = { path = "../../../shared/card/cards" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-app-header = { workspace = true }
+llimphi-widget-banner = { workspace = true }
+llimphi-widget-list = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }
+
+[[bin]]
+name = "nakui-ui-llimphi"
+path = "src/main.rs"
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -99,7 +99,7 @@ members = [
     "01_yachay/iniy/iniy-store",
     "01_yachay/nakui/nakui-core",
     "01_yachay/nakui/nakui-explorer-llimphi",
-    "01_yachay/nakui/nakui-ui",
+    "01_yachay/nakui/nakui-ui-llimphi",
     "02_ruway/chasqui/chasqui-broker",
     "02_ruway/chasqui/chasqui-broker-explorer",
     "02_ruway/chasqui/chasqui-card",

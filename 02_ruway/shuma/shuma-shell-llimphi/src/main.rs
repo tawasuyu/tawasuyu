@@ -535,13 +535,11 @@ fn handle_shortcut(
             }
         }
         ShortcutAction::ModuleAction { action_id } => {
-            // Hook remoto: si la acción es `matilda.discover` y el
-            // matilda instanciado en `slot` apunta a `Source::Remote`,
-            // delegamos al thread SSH en lugar de al `update` local.
-            if action_id == "matilda.discover" {
-                if let Some((source, desired)) = remote_matilda_inputs(&slot, &m) {
-                    let slot_back = slot.clone();
-                    let handle_clone = handle.clone();
+            // Hooks remotos: ciertas acciones de matilda necesitan
+            // SSH + tokio. Las delegamos a un thread (`Handle::spawn`)
+            // que al volver dispatcha un Msg con el resultado.
+            if let Some((source, desired)) = remote_matilda_inputs(&slot, &m) {
+                if action_id == "matilda.discover" {
                     m = apply_module_msg(
                         m,
                         slot.clone(),
@@ -550,6 +548,7 @@ fn handle_shortcut(
                             source.label()
                         ))),
                     );
+                    let slot_back = slot.clone();
                     handle.spawn(move || {
                         let msg = match shuma_module_matilda::discover_remote_blocking(
                             &source, &desired,
@@ -559,7 +558,29 @@ fn handle_shortcut(
                                 "✘ discover remoto: {e}"
                             )),
                         };
-                        let _ = handle_clone;
+                        Msg::Module(slot_back, ModuleMsg::Matilda(msg))
+                    });
+                    return m;
+                }
+                if action_id == "matilda.dry_run" {
+                    m = apply_module_msg(
+                        m,
+                        slot.clone(),
+                        ModuleMsg::Matilda(shuma_module_matilda::Msg::LogLine(format!(
+                            "→ dry-run remoto en {} (sin tocar nada)…",
+                            source.label()
+                        ))),
+                    );
+                    let slot_back = slot.clone();
+                    handle.spawn(move || {
+                        let msg = match shuma_module_matilda::dry_run_remote_blocking(
+                            &source, &desired,
+                        ) {
+                            Ok(lines) => shuma_module_matilda::Msg::DryRunReport(lines),
+                            Err(e) => shuma_module_matilda::Msg::LogLine(format!(
+                                "✘ dry-run remoto: {e}"
+                            )),
+                        };
                         Msg::Module(slot_back, ModuleMsg::Matilda(msg))
                     });
                     return m;
