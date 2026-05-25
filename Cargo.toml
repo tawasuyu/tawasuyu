@@ -49,6 +49,7 @@ members = [
     "00_unanchay/pluma/pluma-notebook-app",
     "00_unanchay/pluma/pluma-notebook-core",
     "00_unanchay/pluma/pluma-notebook-exec",
+    "00_unanchay/pluma/pluma-notebook-llimphi",
     "00_unanchay/pluma/pluma-notebook-store",
     "00_unanchay/pluma/pluma-render-plan",
     "00_unanchay/pluma/pluma-semantic",
