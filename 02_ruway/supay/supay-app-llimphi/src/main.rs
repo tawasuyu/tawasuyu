@@ -155,13 +155,26 @@ const LIGHTS: &[Light] = &[
 /// Contribución sumada de todas las luces al hit_world_point.
 /// Atenuación `1/(1 + 0.6·d²)`. El resultado se SUMA al color
 /// ambient + base del material; el caller clampea.
-fn lighting_contribution(hit_x: f32, hit_y: f32) -> (f32, f32, f32) {
+///
+/// `tick` modula el flicker de las luces cálidas (las que tiñen
+/// hacia naranja, identificadas por `color.0 > color.2`) — el
+/// resultado es que las antorchas parpadean orgánicamente con
+/// fases distintas por índice; las luces frías quedan estables.
+fn lighting_contribution(hit_x: f32, hit_y: f32, tick: u64) -> (f32, f32, f32) {
     let mut acc = (0.0_f32, 0.0_f32, 0.0_f32);
-    for l in LIGHTS {
+    for (idx, l) in LIGHTS.iter().enumerate() {
         let dx = l.x - hit_x;
         let dy = l.y - hit_y;
         let d2 = dx * dx + dy * dy;
-        let atten = l.strength / (1.0 + 0.6 * d2);
+        let flicker = if l.color.0 > l.color.2 {
+            // Antorcha cálida: parpadeo orgánico ±12% con fase por idx.
+            let phase = idx as f32 * 1.37;
+            1.0 + 0.12 * (tick as f32 * 0.31 + phase).sin()
+                + 0.05 * (tick as f32 * 0.71 + phase * 1.7).sin()
+        } else {
+            1.0
+        };
+        let atten = l.strength * flicker / (1.0 + 0.6 * d2);
         acc.0 += l.color.0 * atten;
         acc.1 += l.color.1 * atten;
         acc.2 += l.color.2 * atten;
@@ -471,6 +484,10 @@ struct RayHit {
     /// `true` si la pared golpeada es E/W (vertical grid edge);
     /// `false` si N/S. Se usa para el sombreado tipo Doom.
     side_ew: bool,
+    /// Posición horizontal del hit dentro de la pared, en `[0, 1)`.
+    /// Las texturas procedurales por slice la usan para variar el
+    /// patrón a lo largo de la pared (ladrillos, paneles).
+    wall_x: f32,
 }
 
 fn cast_ray(px: f32, py: f32, ray_angle: f32) -> RayHit {
@@ -523,11 +540,105 @@ fn cast_ray(px: f32, py: f32, ray_angle: f32) -> RayHit {
     };
     let perp = perp.max(0.0001);
 
+    // wall_x: posición en la pared donde golpeó el rayo, normalizada
+    // a [0, 1). Para paredes E/W (lado vertical) viene de Y; para N/S
+    // de X. Es la coordenada que usan las texturas procedurales.
+    let wall_x_raw = if side_ew {
+        py + perp * dir_y
+    } else {
+        px + perp * dir_x
+    };
+    let wall_x = wall_x_raw - wall_x_raw.floor();
+
     RayHit {
         perp_dist: perp,
         material: hit,
         side_ew,
+        wall_x,
     }
+}
+
+// =====================================================================
+// Texturas procedurales — sin bitmaps. Cada material define un
+// `texture_mul(wall_x, wall_y, tick)` que devuelve un multiplicador
+// en `[0.6, 1.15]` aproximadamente. El renderer divide cada slice en
+// SLICE_SEGMENTS bandas verticales y pinta cada una con su shade.
+// =====================================================================
+
+/// Cantidad de segmentos verticales por slice. Más = más detalle de
+/// textura, más rects. 8 es buen compromiso visual/costo a 960×600
+/// con COL_STRIDE = 3 (~320 cols × 8 segs = ~2560 rects/frame).
+const SLICE_SEGMENTS: usize = 8;
+
+/// Multiplicador de detalle textural. `wall_x ∈ [0, 1)` posición
+/// horizontal en la pared, `wall_y ∈ [0, 1)` posición vertical del
+/// segmento (0 = arriba), `tick` para texturas animadas (slime).
+fn texture_mul(material: u8, wall_x: f32, wall_y: f32, tick: u64) -> f32 {
+    match material {
+        1 => techbase_mul(wall_x, wall_y),
+        2 => brick_mul(wall_x, wall_y),
+        3 => metal_mul(wall_x, wall_y),
+        4 => slime_mul(wall_x, wall_y, tick),
+        _ => 1.0,
+    }
+}
+
+/// Techbase beige: junta horizontal sutil cada 0.25 unidades + leve
+/// shade gradiente vertical. Plano y limpio.
+fn techbase_mul(wall_x: f32, wall_y: f32) -> f32 {
+    let _ = wall_x;
+    // Junta cada 0.25 con grosor ~0.04.
+    let row_pos = (wall_y * 4.0).fract();
+    let joint = if row_pos < 0.05 || row_pos > 0.95 { 0.78 } else { 1.0 };
+    // Gradiente vertical sutil (más oscuro abajo).
+    let grad = 0.92 + 0.10 * (1.0 - wall_y);
+    joint * grad
+}
+
+/// Ladrillo: filas alternadas con offset 0.5 (running bond típico),
+/// juntas horizontales más oscuras + juntas verticales en cada
+/// ladrillo. Visualmente "Doom HELL ladrillo".
+fn brick_mul(wall_x: f32, wall_y: f32) -> f32 {
+    // Filas de 0.25 de alto. Cada fila desplaza wall_x medio ladrillo.
+    let row = (wall_y * 4.0).floor() as i32;
+    let row_offset = if row % 2 == 0 { 0.0 } else { 0.5 };
+    let bx = (wall_x + row_offset).fract();
+    let by = (wall_y * 4.0).fract();
+    // Junta horizontal (gruesa, oscura).
+    let h_joint = if by < 0.10 { 0.55 } else { 1.0 };
+    // Junta vertical cada 0.5 (ladrillos de medio metro).
+    let v_pos = (bx * 2.0).fract();
+    let v_joint = if v_pos < 0.06 || v_pos > 0.94 { 0.62 } else { 1.0 };
+    // Variación interna por ladrillo (pseudo-random pero determinístico).
+    let brick_id = ((bx * 2.0).floor() as i32 + row * 7) as u32;
+    let variation = 0.96 + ((brick_id.wrapping_mul(2_654_435_761) >> 24) & 0xF) as f32 / 200.0;
+    h_joint * v_joint * variation
+}
+
+/// Metal: paneles verticales (0.25 unidades) con bordes oscuros y
+/// pequeños "tornillos" en las esquinas (puntos más oscuros).
+fn metal_mul(wall_x: f32, wall_y: f32) -> f32 {
+    let panel_x = (wall_x * 4.0).fract();
+    // Bordes verticales del panel.
+    let edge_v = if panel_x < 0.06 || panel_x > 0.94 { 0.72 } else { 1.0 };
+    // Tornillos en esquinas (intersección de bordes).
+    let near_top = wall_y < 0.06 || (wall_y - 0.5).abs() < 0.03;
+    let near_edge = panel_x < 0.10 || panel_x > 0.90;
+    let bolt = if near_top && near_edge { 0.55 } else { 1.0 };
+    // Sutil highlight central por panel.
+    let center_glow = 1.0 + 0.05 * (1.0 - (panel_x - 0.5).abs() * 2.0);
+    edge_v * bolt * center_glow
+}
+
+/// Slime: patrón orgánico que ondula con el tick. Las celdas brillan
+/// y se atenúan en olas — el efecto "fluido vivo" de Doom.
+fn slime_mul(wall_x: f32, wall_y: f32, tick: u64) -> f32 {
+    let t = tick as f32 * 0.08;
+    let wave1 = (wall_y * 7.0 + t).sin() * 0.10;
+    let wave2 = (wall_x * 5.0 - t * 0.7).sin() * 0.06;
+    let speckle_phase = (wall_y * 17.0 + wall_x * 13.0 + t * 0.4).sin();
+    let speckle = if speckle_phase > 0.85 { 0.15 } else { 0.0 };
+    (1.0 + wave1 + wave2 + speckle).clamp(0.75, 1.20)
 }
 
 // =====================================================================
@@ -536,10 +647,11 @@ fn cast_ray(px: f32, py: f32, ray_angle: f32) -> RayHit {
 
 fn scene_pane(model: &Model) -> View<Msg> {
     // Capturamos el snapshot del jugador para la closure (paint_with
-    // necesita Send+Sync; (f32, f32, f32) lo es trivialmente).
+    // necesita Send+Sync; (f32, f32, f32, u64) lo es trivialmente).
     let px = model.px;
     let py = model.py;
     let pa = model.pa;
+    let tick = model.tick;
 
     View::new(Style {
         size: Size {
@@ -551,7 +663,7 @@ fn scene_pane(model: &Model) -> View<Msg> {
     })
     .clip(true)
     .paint_with(move |scene, _ts, rect: PaintRect| {
-        draw_scene(scene, rect, px, py, pa);
+        draw_scene(scene, rect, px, py, pa, tick);
     })
 }
 
@@ -572,6 +684,7 @@ fn draw_scene(
     px: f32,
     py: f32,
     pa: f32,
+    tick: u64,
 ) {
     let w = rect.w as f64;
     let h = rect.h as f64;
@@ -589,7 +702,7 @@ fn draw_scene(
     let total_cols = (w / COL_STRIDE as f64).max(1.0) as usize + 1;
     let mut z_buf: Vec<f32> = vec![f32::INFINITY; total_cols];
 
-    // --- Pass 1: paredes ---
+    // --- Pass 1: paredes con textura procedural por slice ---
     let mut x_pix = rect.x as f64;
     let x_end = (rect.x + rect.w) as f64;
     let mut i = 0_usize;
@@ -603,7 +716,7 @@ fn draw_scene(
         // Hit world-point para iluminación por luces puntuales.
         let hit_x = px + hit.perp_dist * ray_angle.cos();
         let hit_y = py + hit.perp_dist * ray_angle.sin();
-        let lights = lighting_contribution(hit_x, hit_y);
+        let lights = lighting_contribution(hit_x, hit_y, tick);
         let mut light_mul = (
             (AMBIENT + lights.0).min(2.0),
             (AMBIENT + lights.1).min(2.0),
@@ -617,29 +730,47 @@ fn draw_scene(
         }
 
         let base = material_color(hit.material);
-        let mut col = (base.0 * light_mul.0, base.1 * light_mul.1, base.2 * light_mul.2);
-        col = shade_by_dist(col, hit.perp_dist);
-        col = apply_fog(col, hit.perp_dist);
+        let lit = (base.0 * light_mul.0, base.1 * light_mul.1, base.2 * light_mul.2);
 
         // Altura del slice en píxeles.
         let line_h = (h / corrected as f64).min(h * 4.0);
         let y_mid = h * 0.5 + rect.y as f64;
         let y_top = y_mid - line_h * 0.5;
-        let y_bot = y_mid + line_h * 0.5;
+        let view_top = rect.y as f64;
+        let view_bot = (rect.y + rect.h) as f64;
+        let x_right = x_pix + COL_STRIDE as f64;
 
-        let r = llimphi_ui::llimphi_raster::kurbo::Rect::new(
-            x_pix,
-            y_top.max(rect.y as f64),
-            x_pix + COL_STRIDE as f64,
-            y_bot.min((rect.y + rect.h) as f64),
-        );
-        scene.fill(
-            Fill::NonZero,
-            llimphi_ui::llimphi_raster::kurbo::Affine::IDENTITY,
-            rgb(col.0, col.1, col.2),
-            None,
-            &r,
-        );
+        // Subdivisión vertical en SLICE_SEGMENTS bandas: cada una con
+        // su textura procedural aplicada. wall_y normalizado [0, 1).
+        let seg_h_world = 1.0_f32 / SLICE_SEGMENTS as f32;
+        for j in 0..SLICE_SEGMENTS {
+            let wy_lo = j as f32 * seg_h_world;
+            let wy_hi = (j + 1) as f32 * seg_h_world;
+            let wy_mid = (wy_lo + wy_hi) * 0.5;
+            let detail = texture_mul(hit.material, hit.wall_x, wy_mid, tick);
+            let mut seg = (lit.0 * detail, lit.1 * detail, lit.2 * detail);
+            seg = shade_by_dist(seg, hit.perp_dist);
+            seg = apply_fog(seg, hit.perp_dist);
+
+            let seg_y_top = (y_top + wy_lo as f64 * line_h).max(view_top);
+            let seg_y_bot = (y_top + wy_hi as f64 * line_h).min(view_bot);
+            if seg_y_bot <= seg_y_top {
+                continue; // segmento entero fuera del viewport
+            }
+            let r = llimphi_ui::llimphi_raster::kurbo::Rect::new(
+                x_pix,
+                seg_y_top,
+                x_right,
+                seg_y_bot,
+            );
+            scene.fill(
+                Fill::NonZero,
+                llimphi_ui::llimphi_raster::kurbo::Affine::IDENTITY,
+                rgb(seg.0, seg.1, seg.2),
+                None,
+                &r,
+            );
+        }
 
         // Guardamos la perp_dist (no la corregida) para z-test con sprites.
         if i < z_buf.len() {
@@ -651,9 +782,10 @@ fn draw_scene(
     }
 
     // --- Pass 2: sprites billboarded con z-test por columna ---
-    draw_sprites(scene, rect, px, py, pa, &z_buf, total_cols);
+    draw_sprites(scene, rect, px, py, pa, tick, &z_buf, total_cols);
 
-    // --- Overlay: minimap arriba a la derecha ---
+    // --- Overlay: crosshair + minimap ---
+    draw_crosshair(scene, rect);
     draw_minimap(scene, rect, px, py, pa);
 }
 
@@ -671,6 +803,7 @@ fn draw_sprites(
     px: f32,
     py: f32,
     pa: f32,
+    tick: u64,
     z_buf: &[f32],
     total_cols: usize,
 ) {
@@ -717,15 +850,22 @@ fn draw_sprites(
         let col_end = ((center_col + half_cols).max(0.0) as usize).min(total_cols);
 
         let y_mid = h * 0.5 + rect.y as f64;
-        // El sprite apoya en el "piso" del slice: y_bot fijo al piso de
-        // un slice de altura full = h/ty, y_top sube según scale.
+        // El sprite apoya en el "piso" del slice. Animación por kind:
+        // - Imp respira con bob vertical sinusoidal (~5% de su altura).
+        // - Torch parpadea sutilmente en altura para acompañar el flicker.
+        // - Barril/Pillar estáticos.
+        let bob = match s.kind {
+            SpriteKind::Imp => (tick as f32 * 0.18).sin() * 0.05 * sprite_h,
+            SpriteKind::Torch => (tick as f32 * 0.42).sin() * 0.015 * sprite_h,
+            _ => 0.0,
+        };
         let slice_h = (h as f32 / ty) as f64;
-        let y_bot = (y_mid + slice_h * 0.5).min((rect.y + rect.h) as f64);
+        let y_bot = (y_mid + slice_h * 0.5 + bob as f64).min((rect.y + rect.h) as f64);
         let y_top = (y_bot - sprite_h as f64).max(rect.y as f64);
 
         // Color con shading + fog + lighting puntual.
         let (base, _appearance_h) = s.appearance();
-        let lights = lighting_contribution(s.x, s.y);
+        let lights = lighting_contribution(s.x, s.y, tick);
         let light_mul = (
             (AMBIENT + lights.0).min(2.0),
             (AMBIENT + lights.1).min(2.0),
@@ -760,6 +900,53 @@ fn draw_sprites(
             );
         }
     }
+}
+
+/// Crosshair central — dos rectángulos finos cruzados con un punto
+/// hueco en medio. No es interactivo, sólo orienta el aim.
+fn draw_crosshair(scene: &mut llimphi_ui::llimphi_raster::vello::Scene, rect: PaintRect) {
+    let cx = rect.x as f64 + rect.w as f64 * 0.5;
+    let cy = rect.y as f64 + rect.h as f64 * 0.5;
+    let arm: f64 = 8.0;
+    let thick: f64 = 1.5;
+    let color = Color::from_rgba8(255, 240, 200, 180);
+    // Horizontal.
+    let h_rect = llimphi_ui::llimphi_raster::kurbo::Rect::new(
+        cx - arm,
+        cy - thick * 0.5,
+        cx + arm,
+        cy + thick * 0.5,
+    );
+    scene.fill(
+        Fill::NonZero,
+        llimphi_ui::llimphi_raster::kurbo::Affine::IDENTITY,
+        color,
+        None,
+        &h_rect,
+    );
+    // Vertical.
+    let v_rect = llimphi_ui::llimphi_raster::kurbo::Rect::new(
+        cx - thick * 0.5,
+        cy - arm,
+        cx + thick * 0.5,
+        cy + arm,
+    );
+    scene.fill(
+        Fill::NonZero,
+        llimphi_ui::llimphi_raster::kurbo::Affine::IDENTITY,
+        color,
+        None,
+        &v_rect,
+    );
+    // Punto central — un pequeño cuadrado oscuro para marcar el aim.
+    let dot = llimphi_ui::llimphi_raster::kurbo::Rect::new(cx - 1.0, cy - 1.0, cx + 1.0, cy + 1.0);
+    scene.fill(
+        Fill::NonZero,
+        llimphi_ui::llimphi_raster::kurbo::Affine::IDENTITY,
+        Color::from_rgba8(20, 10, 10, 220),
+        None,
+        &dot,
+    );
 }
 
 fn draw_sky_and_floor(scene: &mut llimphi_ui::llimphi_raster::vello::Scene, rect: PaintRect) {
