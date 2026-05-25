@@ -14,7 +14,9 @@ path = "src/main.rs"
 
 [dependencies]
 wawa-explorer-core = { path = "../wawa-explorer-core" }
+wawa-explorer-aoe = { path = "../wawa-explorer-aoe" }
 format = { path = "../../../shared/format" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-tree = { workspace = true }
+llimphi-widget-button = { workspace = true }

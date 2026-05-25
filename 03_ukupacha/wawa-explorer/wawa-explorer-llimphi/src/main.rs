@@ -1,22 +1,31 @@
 //! `wawa-explorer-llimphi` — visor Llimphi de imágenes Wawa.
 //!
 //! Uso:
-//!   wawa-explorer-llimphi <ruta.img>
+//!   wawa-explorer-llimphi <ruta.img> [iface]
 //!
 //! Renderea el grafo direccionado por contenido del disco Wawa: tree a la
 //! izquierda con expand/collapse y selección, panel de detalle a la derecha
 //! con header (hash + tamaño + aridad), hex preview de los primeros bytes
 //! del payload y listado de hijos.
 //!
-//! Sin AoE en esta iteración. El crate `wawa-explorer-aoe` está disponible
-//! para wirearlo (botón "fetch from peers" cuando un hash referenciado no
-//! exista en la imagen local) en una pasada posterior.
+//! Cuando un nodo está REFERENCIADO pero AUSENTE de la imagen local, el
+//! panel ofrece un botón "fetch from peers" que pide el objeto por AoE a
+//! la red local (`wawa-explorer-aoe`). El payload llega verificado
+//! (`blake3(payload) == id`) y queda en memoria para la sesión actual —
+//! la imagen original NO se modifica.
+//!
+//! Interfaz de red: pasada como segundo argumento, o auto-detectada
+//! leyendo `/sys/class/net/` (la primera no-loopback con `operstate=up` y
+//! MAC no cero). El cliente AoE necesita `CAP_NET_RAW` o root; sin esos
+//! permisos el fetch falla con un mensaje legible.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::env;
+use std::fs;
 use std::path::PathBuf;
+use std::time::Duration;
 
-use format::Hash;
+use format::{Hash, Objeto};
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, FlexDirection, Size, Style},
@@ -24,13 +33,22 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, View};
+use llimphi_widget_button::{button_view, ButtonPalette};
 use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
+use wawa_explorer_aoe::ClienteAoE;
 use wawa_explorer_core::{short_hex, Disco};
+
+/// Timeout del fetch AoE: la red local responde en milisegundos; 3 s deja
+/// margen para una retransmisión perdida sin colgar la UI.
+const TIMEOUT_FETCH: Duration = Duration::from_secs(3);
 
 #[derive(Clone)]
 enum Msg {
     Toggle(Hash),
     Select(Hash),
+    FetchPeers(Hash),
+    FetchOk(Hash, Objeto),
+    FetchFailed(Hash, String),
 }
 
 struct Model {
@@ -40,6 +58,15 @@ struct Model {
     expanded: HashSet<Hash>,
     selected: Option<Hash>,
     raices: Vec<Hash>,
+    /// Interfaz que usará el cliente AoE. `Err` lleva el motivo legible —
+    /// se muestra en lugar del botón de fetch.
+    iface: Result<String, String>,
+    /// Objetos traídos por AoE — viven sólo en esta sesión.
+    fetched: HashMap<Hash, Objeto>,
+    /// Hashes con fetch en vuelo.
+    fetching: HashSet<Hash>,
+    /// Último error de fetch por hash. Se limpia cuando arranca un retry.
+    fetch_errors: HashMap<Hash, String>,
 }
 
 struct Explorer;
@@ -57,22 +84,42 @@ impl App for Explorer {
     }
 
     fn init(_: &Handle<Msg>) -> Model {
-        let source = env::args().nth(1).map(PathBuf::from).unwrap_or_else(|| PathBuf::from(""));
+        let mut args = env::args().skip(1);
+        let source = args.next().map(PathBuf::from).unwrap_or_else(|| PathBuf::from(""));
+        let iface_arg = args.next();
+
+        let iface = resolver_iface(iface_arg.as_deref());
+
         if source.as_os_str().is_empty() {
             return Model {
                 disco: None,
                 source,
-                error: Some("uso: wawa-explorer-llimphi <ruta.img>".into()),
+                error: Some("uso: wawa-explorer-llimphi <ruta.img> [iface]".into()),
                 expanded: HashSet::new(),
                 selected: None,
                 raices: Vec::new(),
+                iface,
+                fetched: HashMap::new(),
+                fetching: HashSet::new(),
+                fetch_errors: HashMap::new(),
             };
         }
         match Disco::abrir(&source) {
             Ok(d) => {
                 let raices = raices_de(&d);
                 let selected = raices.first().copied();
-                Model { disco: Some(d), source, error: None, expanded: HashSet::new(), selected, raices }
+                Model {
+                    disco: Some(d),
+                    source,
+                    error: None,
+                    expanded: HashSet::new(),
+                    selected,
+                    raices,
+                    iface,
+                    fetched: HashMap::new(),
+                    fetching: HashSet::new(),
+                    fetch_errors: HashMap::new(),
+                }
             }
             Err(e) => Model {
                 disco: None,
@@ -81,11 +128,15 @@ impl App for Explorer {
                 expanded: HashSet::new(),
                 selected: None,
                 raices: Vec::new(),
+                iface,
+                fetched: HashMap::new(),
+                fetching: HashSet::new(),
+                fetch_errors: HashMap::new(),
             },
         }
     }
 
-    fn update(mut model: Model, msg: Msg, _: &Handle<Msg>) -> Model {
+    fn update(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         match msg {
             Msg::Toggle(h) => {
                 if !model.expanded.remove(&h) {
@@ -94,6 +145,25 @@ impl App for Explorer {
             }
             Msg::Select(h) => {
                 model.selected = Some(h);
+            }
+            Msg::FetchPeers(h) => {
+                let Ok(iface) = model.iface.clone() else {
+                    return model;
+                };
+                if model.fetching.contains(&h) {
+                    return model;
+                }
+                model.fetch_errors.remove(&h);
+                model.fetching.insert(h);
+                handle.spawn(move || pedir_objeto(&iface, h));
+            }
+            Msg::FetchOk(h, obj) => {
+                model.fetching.remove(&h);
+                model.fetched.insert(h, obj);
+            }
+            Msg::FetchFailed(h, e) => {
+                model.fetching.remove(&h);
+                model.fetch_errors.insert(h, e);
             }
         }
         model
@@ -132,39 +202,62 @@ fn raices_de(d: &Disco) -> Vec<Hash> {
     raices
 }
 
+/// Lookup unificado: primero el disco local, después los objetos
+/// traídos por AoE en esta sesión.
+fn lookup<'a>(model: &'a Model, hash: &Hash) -> Option<&'a Objeto> {
+    if let Some(d) = &model.disco {
+        if let Some(o) = d.objeto(hash) {
+            return Some(o);
+        }
+    }
+    model.fetched.get(hash)
+}
+
 /// Aplana el árbol a partir de las raíces, respetando el set de expandidos.
 fn filas_visibles(model: &Model) -> Vec<TreeRow<Msg>> {
-    let Some(disco) = &model.disco else {
+    if model.disco.is_none() {
         return Vec::new();
-    };
+    }
     let mut rows = Vec::new();
     for &raiz in &model.raices {
-        emitir_subtree(disco, &model.expanded, model.selected, raiz, 0, &mut rows);
+        emitir_subtree(model, model.selected, raiz, 0, &mut rows);
     }
     rows
 }
 
 fn emitir_subtree(
-    disco: &Disco,
-    expanded: &HashSet<Hash>,
+    model: &Model,
     selected: Option<Hash>,
     hash: Hash,
     depth: usize,
     rows: &mut Vec<TreeRow<Msg>>,
 ) {
-    let objeto = disco.objeto(&hash);
+    let objeto = lookup(model, &hash);
     let hijos: &[Hash] = objeto.map(|o| o.hijos.as_slice()).unwrap_or(&[]);
     let has_children = !hijos.is_empty();
-    let expanded_aqui = expanded.contains(&hash);
+    let expanded_aqui = model.expanded.contains(&hash);
 
     let etiqueta = match objeto {
-        Some(o) => format!(
-            "{}  ·  {} bytes  ·  {} hijos",
-            short_hex(&hash),
-            o.datos.len(),
-            o.hijos.len()
-        ),
-        None => format!("{}  ·  (no en imagen)", short_hex(&hash)),
+        Some(o) => {
+            let marca = if model.fetched.contains_key(&hash) { "  ·  via AoE" } else { "" };
+            format!(
+                "{}  ·  {} bytes  ·  {} hijos{}",
+                short_hex(&hash),
+                o.datos.len(),
+                o.hijos.len(),
+                marca,
+            )
+        }
+        None => {
+            let estado = if model.fetching.contains(&hash) {
+                "  ·  buscando…"
+            } else if model.fetch_errors.contains_key(&hash) {
+                "  ·  fetch falló"
+            } else {
+                "  ·  (no en imagen)"
+            };
+            format!("{}{}", short_hex(&hash), estado)
+        }
     };
 
     rows.push(TreeRow {
@@ -179,7 +272,7 @@ fn emitir_subtree(
 
     if expanded_aqui {
         for &h in hijos {
-            emitir_subtree(disco, expanded, selected, h, depth + 1, rows);
+            emitir_subtree(model, selected, h, depth + 1, rows);
         }
     }
 }
@@ -208,17 +301,22 @@ impl Palette {
 use llimphi_ui::llimphi_raster::peniko::Color;
 
 fn header_view(model: &Model, palette: &Palette) -> View<Msg> {
+    let iface_chip = match &model.iface {
+        Ok(name) => format!("  ·  AoE iface: {name}"),
+        Err(_) => "  ·  AoE: sin interfaz".to_string(),
+    };
     let texto = match (&model.disco, &model.error) {
         (_, Some(e)) => format!("wawa-explorer · error: {e}"),
         (Some(d), None) => {
             let sb = d.superbloque();
             format!(
-                "wawa-explorer · {}  ·  {} bytes  ·  v{}  ·  cursor sector {}  ·  {} objetos",
+                "wawa-explorer · {}  ·  {} bytes  ·  v{}  ·  cursor sector {}  ·  {} objetos{}",
                 model.source.display(),
                 d.bytes_imagen(),
                 sb.version,
                 sb.cursor,
-                d.cantidad_objetos()
+                d.cantidad_objetos(),
+                iface_chip,
             )
         }
         (None, None) => "wawa-explorer".to_string(),
@@ -253,7 +351,7 @@ fn main_view(model: &Model, theme: &Theme, palette: &Palette) -> View<Msg> {
     .clip(true)
     .children(vec![tree]);
 
-    let detail = detail_view(model, palette);
+    let detail = detail_view(model, theme, palette);
 
     View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -264,35 +362,79 @@ fn main_view(model: &Model, theme: &Theme, palette: &Palette) -> View<Msg> {
     .children(vec![tree_panel, detail])
 }
 
-fn detail_view(model: &Model, palette: &Palette) -> View<Msg> {
-    let (titulo, cuerpo) = match (&model.disco, model.selected) {
-        (Some(disco), Some(hash)) => match disco.objeto(&hash) {
-            Some(o) => {
-                let titulo = format!(
-                    "objeto {}  ·  {} bytes  ·  {} hijos",
-                    hex_completo(&hash),
-                    o.datos.len(),
-                    o.hijos.len()
-                );
-                let mut cuerpo = String::new();
-                cuerpo.push_str("payload (primeros 256 bytes):\n\n");
-                cuerpo.push_str(&hex_dump(&o.datos, 256));
-                if !o.hijos.is_empty() {
-                    cuerpo.push_str("\nhijos:\n");
-                    for (i, h) in o.hijos.iter().enumerate() {
-                        cuerpo.push_str(&format!("  {i:3}.  {}\n", short_hex(h)));
-                    }
-                }
-                (titulo, cuerpo)
-            }
-            None => (
-                format!("objeto {}", hex_completo(&hash)),
-                "no presente en la imagen local (referenciado por un padre).\n\nposible siguiente paso: pedirlo a peers Wawa por AoE (wawa-explorer-aoe).".to_string(),
-            ),
-        },
-        _ => ("(seleccioná un objeto del tree)".into(), String::new()),
+fn detail_view(model: &Model, theme: &Theme, palette: &Palette) -> View<Msg> {
+    let Some(hash) = model.selected else {
+        return detail_chrome(
+            "(seleccioná un objeto del tree)",
+            String::new(),
+            None,
+            palette,
+        );
+    };
+    let Some(_) = &model.disco else {
+        return detail_chrome("", String::new(), None, palette);
     };
 
+    if let Some(obj) = lookup(model, &hash) {
+        let origen = if model.fetched.contains_key(&hash) { "  ·  via AoE" } else { "" };
+        let titulo = format!(
+            "objeto {}  ·  {} bytes  ·  {} hijos{}",
+            hex_completo(&hash),
+            obj.datos.len(),
+            obj.hijos.len(),
+            origen,
+        );
+        let mut cuerpo = String::new();
+        cuerpo.push_str("payload (primeros 256 bytes):\n\n");
+        cuerpo.push_str(&hex_dump(&obj.datos, 256));
+        if !obj.hijos.is_empty() {
+            cuerpo.push_str("\nhijos:\n");
+            for (i, h) in obj.hijos.iter().enumerate() {
+                let mark = if lookup(model, h).is_some() { "" } else { "  (no en imagen)" };
+                cuerpo.push_str(&format!("  {i:3}.  {}{}\n", short_hex(h), mark));
+            }
+        }
+        return detail_chrome(&titulo, cuerpo, None, palette);
+    }
+
+    let titulo = format!("objeto {}  ·  no presente localmente", hex_completo(&hash));
+    let estado_action = if model.fetching.contains(&hash) {
+        ("buscando en la red local (AoE)…\n\nbroadcast SolicitarObjeto, espera ProveedorObjeto con hash verificado.".to_string(), None)
+    } else if let Some(err) = model.fetch_errors.get(&hash) {
+        let cuerpo = format!(
+            "último intento de AoE falló:\n  {err}\n\npodés reintentar con el botón debajo.",
+        );
+        (cuerpo, Some(("reintentar fetch from peers".to_string(), Msg::FetchPeers(hash))))
+    } else {
+        match &model.iface {
+            Ok(iface) => (
+                format!(
+                    "este objeto está referenciado por un padre pero no vive en la imagen local.\n\n\
+                     podés pedirlo a peers Wawa de la red local (AoE, iface `{iface}`)."
+                ),
+                Some(("fetch from peers".to_string(), Msg::FetchPeers(hash))),
+            ),
+            Err(why) => (
+                format!(
+                    "este objeto está referenciado por un padre pero no vive en la imagen local.\n\n\
+                     AoE deshabilitado: {why}\n\n\
+                     pasá `<iface>` como segundo argumento de CLI o ejecutá con CAP_NET_RAW\n\
+                     (`sudo setcap cap_net_raw=eip <binario>`)."
+                ),
+                None,
+            ),
+        }
+    };
+    let (cuerpo, action) = estado_action;
+    detail_chrome(&titulo, cuerpo, action.map(|(l, m)| (l, m, theme)), palette)
+}
+
+fn detail_chrome(
+    titulo: &str,
+    cuerpo: String,
+    action: Option<(String, Msg, &Theme)>,
+    palette: &Palette,
+) -> View<Msg> {
     let header = View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(22.0_f32) },
         padding: Rect {
@@ -304,11 +446,11 @@ fn detail_view(model: &Model, palette: &Palette) -> View<Msg> {
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .text_aligned(titulo, 11.0, palette.fg_text, Alignment::Start);
+    .text_aligned(titulo.to_string(), 11.0, palette.fg_text, Alignment::Start);
 
     let body = View::new(Style {
-        flex_grow: 1.0,
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        flex_grow: 1.0,
         padding: Rect {
             left: length(12.0_f32),
             right: length(12.0_f32),
@@ -319,6 +461,23 @@ fn detail_view(model: &Model, palette: &Palette) -> View<Msg> {
     })
     .text_aligned(cuerpo, 11.0, palette.fg_muted, Alignment::Start);
 
+    let mut children = vec![header, body];
+    if let Some((label, msg, theme)) = action {
+        let btn_palette = ButtonPalette::from_theme(theme);
+        let btn_row = View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(48.0_f32) },
+            padding: Rect {
+                left: length(12.0_f32),
+                right: length(12.0_f32),
+                top: length(8.0_f32),
+                bottom: length(8.0_f32),
+            },
+            ..Default::default()
+        })
+        .children(vec![button_view(label, &btn_palette, msg)]);
+        children.push(btn_row);
+    }
+
     View::new(Style {
         flex_direction: FlexDirection::Column,
         flex_grow: 1.0,
@@ -327,7 +486,7 @@ fn detail_view(model: &Model, palette: &Palette) -> View<Msg> {
     })
     .fill(palette.bg)
     .clip(true)
-    .children(vec![header, body])
+    .children(children)
 }
 
 fn hex_completo(h: &Hash) -> String {
@@ -352,6 +511,94 @@ fn hex_dump(bytes: &[u8], max_bytes: usize) -> String {
         out.push_str(&format!("  … ({} bytes más)\n", bytes.len() - max_bytes));
     }
     out
+}
+
+// =============================================================================
+//  Detección de interfaz default y fetch AoE en background
+// =============================================================================
+
+/// Resuelve la interfaz a usar para AoE. Si el caller pasó una explícita
+/// la honra. Si no, lee `/sys/class/net/` y elige la primera no-loopback
+/// con `operstate=up` y MAC distinta de cero. En cualquier fallo devuelve
+/// `Err(motivo)` legible para mostrar en lugar del botón.
+fn resolver_iface(explicita: Option<&str>) -> Result<String, String> {
+    if let Some(name) = explicita {
+        if name.is_empty() {
+            return Err("interfaz vacía en CLI".into());
+        }
+        return Ok(name.to_string());
+    }
+    let entries = fs::read_dir("/sys/class/net")
+        .map_err(|e| format!("no pude listar /sys/class/net: {e}"))?;
+    let mut candidatas: Vec<String> = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name == "lo" {
+            continue;
+        }
+        let operstate = fs::read_to_string(format!("/sys/class/net/{name}/operstate"))
+            .unwrap_or_default();
+        let address = fs::read_to_string(format!("/sys/class/net/{name}/address"))
+            .unwrap_or_default();
+        if operstate.trim() == "up" && address.trim() != "00:00:00:00:00:00" {
+            candidatas.push(name);
+        }
+    }
+    candidatas.sort();
+    candidatas
+        .into_iter()
+        .next()
+        .ok_or_else(|| "no detecté ninguna interfaz no-loopback con operstate=up".into())
+}
+
+/// Ejecuta un ciclo completo de fetch AoE: abre cliente, broadcast pedido,
+/// espera respuesta, deserializa payload a `Objeto`. Devuelve `FetchOk` o
+/// `FetchFailed(motivo)`. Pensado para correr en un thread aparte vía
+/// `Handle::spawn`.
+fn pedir_objeto(iface: &str, hash: Hash) -> Msg {
+    let cliente = match ClienteAoE::nuevo(iface) {
+        Ok(c) => c,
+        Err(e) => {
+            return Msg::FetchFailed(hash, formatear_error_cliente(iface, e));
+        }
+    };
+    match cliente.solicitar(hash, TIMEOUT_FETCH) {
+        Ok(Some(payload)) => match Objeto::deserializar(&payload) {
+            Ok(obj) => Msg::FetchOk(hash, obj),
+            Err(_) => Msg::FetchFailed(
+                hash,
+                "peer respondió con bytes que no decodifican a Objeto (postcard inválido)"
+                    .into(),
+            ),
+        },
+        Ok(None) => Msg::FetchFailed(
+            hash,
+            format!("timeout: ningún peer respondió en {} s", TIMEOUT_FETCH.as_secs()),
+        ),
+        Err(e) => Msg::FetchFailed(hash, format!("error de socket: {e}")),
+    }
+}
+
+/// Traduce el error técnico del cliente AoE en una frase corta accionable.
+/// Caso típico: falta `CAP_NET_RAW` (EPERM al abrir socket).
+fn formatear_error_cliente(iface: &str, e: wawa_explorer_aoe::Error) -> String {
+    use wawa_explorer_aoe::Error as E;
+    match e {
+        E::Io(io) if io.raw_os_error() == Some(libc_eperm()) => {
+            "permiso denegado al abrir raw socket. Ejecutá con sudo o aplicá \
+             `sudo setcap cap_net_raw=eip <binario>`."
+                .into()
+        }
+        E::InterfazInaccesible(_) => format!("interfaz `{iface}` no existe o no es accesible"),
+        otro => otro.to_string(),
+    }
+}
+
+/// EPERM como `i32` sin tirar de la dep `libc` desde aquí. El valor lo
+/// fija POSIX y Linux lo respeta — 1 en todas las arquitecturas que nos
+/// interesan.
+const fn libc_eperm() -> i32 {
+    1
 }
 
 fn main() {
