@@ -506,7 +506,10 @@ fn edit_input_view(editor: &EditorState, body_h: f32, language: Language) -> Vie
     let ep = EditorPalette::from_theme(&theme);
     let metrics = EditorMetrics::for_font_size(12.0);
     let visible = (body_h / metrics.line_height).max(1.0) as usize;
-    text_editor_view_highlighted(editor, &ep, metrics, visible, language, Msg::CancelEdit)
+    // En el card del notebook ignoramos el mouse del editor por ahora
+    // (la card misma maneja drag para mover); el caret se mueve con
+    // teclado solamente.
+    text_editor_view_highlighted(editor, &ep, metrics, visible, language, |_| None)
 }
 
 fn language_of(cell: &Cell) -> Language {
@@ -578,16 +581,16 @@ fn run_button_view(id: CellId, palette: &Palette) -> View<Msg> {
     .fill(palette.edge)
     .hover_fill(palette.accent_fresh)
     .on_click(Msg::RunFrom(id))
-    .text_aligned("▶", 10.0, palette.bg, Alignment::Center)
+    .text_aligned(">", 10.0, palette.bg, Alignment::Center)
 }
 
 fn edit_button_view(id: CellId, editing: bool, palette: &Palette) -> View<Msg> {
     // A la izquierda del botón ▶. Cuando hay edición activa, este
     // mismo botón pasa a representar "commit" (✓).
     let (glyph, msg) = if editing {
-        ("✓", Msg::CommitEdit)
+        ("OK", Msg::CommitEdit)
     } else {
-        ("✎", Msg::StartEdit(id))
+        ("*", Msg::StartEdit(id))
     };
     View::new(Style {
         position: Position::Absolute,

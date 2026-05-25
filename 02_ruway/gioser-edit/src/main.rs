@@ -28,9 +28,10 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
+use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, View, WheelDelta};
 use llimphi_widget_text_editor::{
     text_editor_view_highlighted, Clipboard, EditorMetrics, EditorPalette, EditorState, Language,
+    PointerEvent,
 };
 use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
 
@@ -47,6 +48,7 @@ enum Msg {
     ToggleNode(usize),
     SelectNode(usize),
     EditKey(KeyEvent),
+    EditorPointer(PointerEvent),
     Save,
     SaveResult(Result<(), String>),
     Scroll(i32),
@@ -69,6 +71,9 @@ struct Model {
     clipboard: ArboardClipboard,
     status: String,
     dirty: bool,
+    /// Acumulado de drag del editor: cada `Msg::EditorPointer(Drag)`
+    /// suma `(dx, dy)`. Pos actual = `initial + drag_accum`.
+    drag_accum: (f32, f32),
 }
 
 struct EditorApp;
@@ -102,6 +107,7 @@ impl App for EditorApp {
             clipboard: ArboardClipboard::new(),
             status,
             dirty: false,
+            drag_accum: (0.0, 0.0),
         }
     }
 
@@ -110,6 +116,7 @@ impl App for EditorApp {
             Msg::ToggleNode(i) => toggle_node(model, i),
             Msg::SelectNode(i) => select_node(model, i),
             Msg::EditKey(ev) => apply_editor_key(model, ev),
+            Msg::EditorPointer(ev) => apply_editor_pointer(model, ev),
             Msg::Save => save_open_file(model, handle),
             Msg::Scroll(delta) => {
                 let mut m = model;
@@ -142,9 +149,10 @@ impl App for EditorApp {
         if model.open_file.is_none() {
             return None;
         }
-        // delta.y positivo = arriba; queremos scroll DOWN cuando rueda
-        // baja (delta.y negativo). 3 líneas por click es estándar.
-        let lines = (-delta.y * 3.0).round() as i32;
+        // llimphi-ui ya invierte el signo de winit (`y: -y` en LineDelta).
+        // Por convención llimphi, delta.y > 0 = rueda hacia abajo = scroll
+        // contenido hacia abajo. Sin inversión adicional.
+        let lines = (delta.y * 3.0).round() as i32;
         if lines == 0 {
             None
         } else {
@@ -266,7 +274,7 @@ fn editor_panel(model: &Model, theme: &Theme) -> View<Msg> {
                 metrics,
                 EDITOR_VISIBLE_LINES,
                 language,
-                Msg::EditKey(focus_event()), // click → re-foco (sin efecto extra)
+                |ev| Some(Msg::EditorPointer(ev)),
             )
         }
     };
@@ -277,19 +285,6 @@ fn editor_panel(model: &Model, theme: &Theme) -> View<Msg> {
     })
     .fill(theme.bg_app)
     .children(vec![view])
-}
-
-/// "Click en el editor" — emite un EditKey con un evento sin efecto
-/// (Escape suelto sin modifiers, que `apply_key` ignora silently). Es
-/// el placeholder hasta que el editor tenga un Msg::Focus propio.
-fn focus_event() -> KeyEvent {
-    KeyEvent {
-        key: Key::Named(NamedKey::Escape),
-        state: KeyState::Released, // Released → apply_key lo ignora
-        text: None,
-        modifiers: Default::default(),
-        repeat: false,
-    }
 }
 
 fn empty_editor_placeholder(theme: &Theme) -> View<Msg> {
@@ -423,6 +418,27 @@ fn apply_editor_key(mut model: Model, ev: KeyEvent) -> Model {
     model
 }
 
+fn apply_editor_pointer(mut model: Model, ev: PointerEvent) -> Model {
+    let metrics = EditorMetrics::for_font_size(13.0);
+    let scroll = model.editor.scroll_offset;
+    match ev {
+        PointerEvent::Click { x, y } => {
+            model.drag_accum = (0.0, 0.0);
+            let (line, col) = metrics.screen_to_pos(x, y, scroll);
+            model.editor.set_caret_at(line, col);
+        }
+        PointerEvent::Drag { initial_x, initial_y, dx, dy } => {
+            model.drag_accum.0 += dx;
+            model.drag_accum.1 += dy;
+            let cur_x = initial_x + model.drag_accum.0;
+            let cur_y = initial_y + model.drag_accum.1;
+            let (line, col) = metrics.screen_to_pos(cur_x, cur_y, scroll);
+            model.editor.extend_selection_to(line, col);
+        }
+    }
+    model
+}
+
 fn save_open_file(model: Model, handle: &Handle<Msg>) -> Model {
     let Some(path) = model.open_file.clone() else {
         return model;
@@ -445,10 +461,13 @@ fn save_open_file(model: Model, handle: &Handle<Msg>) -> Model {
 
 fn row_label(n: &TreeNode) -> String {
     let name = n.path.file_name().and_then(|s| s.to_str()).unwrap_or("?");
+    // Sin prefijo Unicode/emoji — el chevron del tree widget ya distingue
+    // dirs (v/>) de archivos (espacio). Las fuentes default no tienen
+    // glyphs para 📁/📄 y dibujan cuadrados de fallback.
     if n.is_dir {
-        format!("📁 {name}")
+        format!("{name}/")
     } else {
-        format!("📄 {name}")
+        name.to_owned()
     }
 }
 

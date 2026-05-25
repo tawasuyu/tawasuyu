@@ -140,10 +140,6 @@ pub fn text_area_view<Msg: Clone + 'static>(
     let is_empty = state.is_empty();
     let display = if is_empty {
         placeholder.to_string()
-    } else if focused {
-        // Caret bloque al final — sin blink. Parley lo pinta como un
-        // glifo más, así no rompe el layout multilínea.
-        format!("{}\u{2588}", state.text)
     } else {
         state.text.clone()
     };

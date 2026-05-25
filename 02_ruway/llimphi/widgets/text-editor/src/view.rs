@@ -95,17 +95,35 @@ impl EditorMetrics {
             gutter_width: font_size * 3.5,
         }
     }
+
+    /// Convierte coords locales del **área de contenido** (no del gutter)
+    /// a `(line, col)` absolutas en el buffer. `local_x` se mide desde el
+    /// borde izquierdo del área de texto (sin el padding interno de 4 px);
+    /// `local_y` desde la primera línea visible.
+    ///
+    /// Devuelve coordenadas siempre dentro del buffer — el caller
+    /// generalmente las pasa a `EditorState::set_caret_at` que clampea
+    /// `col` al ancho real de la línea.
+    pub fn screen_to_pos(self, local_x: f32, local_y: f32, scroll_offset: usize) -> (usize, usize) {
+        let line_local = (local_y / self.line_height).max(0.0) as usize;
+        let col = ((local_x - 4.0).max(0.0) / self.char_width).round() as usize;
+        (scroll_offset + line_local, col)
+    }
 }
 
 /// Render principal sin syntax highlight — todas las líneas visibles
 /// en `palette.fg_text`. `visible_lines` es cuántas líneas mostrar como
-/// máximo en el viewport (las que excedan se scrollean).
+/// máximo en el viewport.
+///
+/// `on_pointer` se invoca con el evento del mouse dentro del área de
+/// texto (no del gutter): el caller decide cómo mover el caret /
+/// extender selección. Ver [`PointerEvent`].
 pub fn text_editor_view<Msg: Clone + 'static>(
     state: &EditorState,
     palette: &EditorPalette,
     metrics: EditorMetrics,
     visible_lines: usize,
-    on_focus: Msg,
+    on_pointer: impl Fn(PointerEvent) -> Option<Msg> + Send + Sync + Clone + 'static,
 ) -> View<Msg> {
     text_editor_view_highlighted(
         state,
@@ -113,8 +131,22 @@ pub fn text_editor_view<Msg: Clone + 'static>(
         metrics,
         visible_lines,
         Language::Plain,
-        on_focus,
+        on_pointer,
     )
+}
+
+/// Evento de mouse que el view envía al caller dentro del área de texto.
+/// El caller convierte `(x, y)` con [`EditorMetrics::screen_to_pos`] y
+/// aplica `set_caret_at` (Click) o `extend_selection_to` (Drag).
+///
+/// `Drag` entrega `initial` (pos del press inicial, constante durante el
+/// drag) + `delta` (delta desde el evento anterior). El caller debe
+/// acumular el delta — el view no mantiene state. Patrón típico:
+/// `accum += (dx, dy); actual = (initial_x + accum.0, initial_y + accum.1)`.
+#[derive(Debug, Clone, Copy)]
+pub enum PointerEvent {
+    Click { x: f32, y: f32 },
+    Drag { initial_x: f32, initial_y: f32, dx: f32, dy: f32 },
 }
 
 /// Render con syntax highlight + **viewport scrolling**: sólo se renderizan
@@ -135,7 +167,7 @@ pub fn text_editor_view_highlighted<Msg: Clone + 'static>(
     metrics: EditorMetrics,
     visible_lines: usize,
     language: Language,
-    on_focus: Msg,
+    on_pointer: impl Fn(PointerEvent) -> Option<Msg> + Send + Sync + Clone + 'static,
 ) -> View<Msg> {
     let caret = state.cursor.caret;
     let syntax = SyntaxPalette::dark_default(&llimphi_theme::Theme::dark());
@@ -163,7 +195,7 @@ pub fn text_editor_view_highlighted<Msg: Clone + 'static>(
         end_line,
         spans,
         &syntax,
-        on_focus,
+        on_pointer,
     );
 
     View::new(Style {
@@ -234,7 +266,7 @@ fn build_content<Msg: Clone + 'static>(
     end_line: usize,
     spans_per_line: Vec<Vec<Span>>,
     syntax: &SyntaxPalette,
-    on_focus: Msg,
+    on_pointer: impl Fn(PointerEvent) -> Option<Msg> + Send + Sync + Clone + 'static,
 ) -> View<Msg> {
     let caret = state.cursor.caret;
     let mut children: Vec<View<Msg>> = Vec::new();
@@ -277,6 +309,8 @@ fn build_content<Msg: Clone + 'static>(
         children.push(caret_rect(local, metrics, palette));
     }
 
+    let click_cb = on_pointer.clone();
+    let drag_cb = on_pointer;
     View::new(Style {
         flex_grow: 1.0,
         size: Size { width: percent(1.0_f32), height: length(height) },
@@ -284,7 +318,16 @@ fn build_content<Msg: Clone + 'static>(
     })
     .fill(palette.bg)
     .clip(true)
-    .on_click(on_focus)
+    .on_click_at(move |x, y, _w, _h| click_cb(PointerEvent::Click { x, y }))
+    .draggable_at(move |phase, dx, dy, lx, ly| match phase {
+        llimphi_ui::DragPhase::Move => drag_cb(PointerEvent::Drag {
+            initial_x: lx,
+            initial_y: ly,
+            dx,
+            dy,
+        }),
+        llimphi_ui::DragPhase::End => None,
+    })
     .children(children)
 }
 

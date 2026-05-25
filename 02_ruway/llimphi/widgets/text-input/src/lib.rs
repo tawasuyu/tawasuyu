@@ -151,11 +151,9 @@ pub fn text_input_view<Msg: Clone + 'static>(
     } else {
         raw
     };
-    let display = if focused && !is_empty {
-        format!("{shown}\u{2588}")
-    } else {
-        shown
-    };
+    // El cambio de bg al focus ya transmite "este es el activo"; sin
+    // caret glyph (la fuente default rendea cuadrados de fallback).
+    let display = shown;
     let text_color = if is_empty {
         palette.fg_placeholder
     } else {

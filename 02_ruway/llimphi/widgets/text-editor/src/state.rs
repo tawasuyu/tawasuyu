@@ -124,6 +124,26 @@ impl EditorState {
         self.buffer.len_lines()
     }
 
+    /// Posiciona el caret en `(line, col)`, clampeando al rango válido
+    /// del buffer. Colapsa la selección. Usado por el caller cuando el
+    /// usuario clickea en el área de texto.
+    pub fn set_caret_at(&mut self, line: usize, col: usize) {
+        self.cursor.set_caret(&self.buffer, Pos::new(line, col));
+    }
+
+    /// Extiende la selección hasta `(line, col)`. Si no había anchor,
+    /// lo planta en el caret actual antes de mover. Usado por drag del
+    /// mouse: cada `Move` del drag llama esto con la nueva pos.
+    pub fn extend_selection_to(&mut self, line: usize, col: usize) {
+        let line = line.min(self.buffer.len_lines().saturating_sub(1));
+        let col = col.min(self.buffer.line_len_chars(line));
+        if self.cursor.anchor.is_none() {
+            self.cursor.anchor = Some(self.cursor.caret);
+        }
+        self.cursor.caret = Pos::new(line, col);
+        self.cursor.desired_col = col;
+    }
+
     /// Texto seleccionado, si hay selección no-vacía. `None` cuando el
     /// cursor está colapsado.
     pub fn selected_text(&self) -> Option<String> {

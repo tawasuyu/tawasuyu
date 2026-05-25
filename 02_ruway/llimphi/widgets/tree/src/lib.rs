@@ -131,11 +131,13 @@ fn tree_row_view<Msg: Clone + 'static>(
     // Chevron a la izquierda — 16px de ancho, ▸ si colapsado, ▾ si
     // expandido. Si es hoja, espacio en blanco del mismo ancho para que
     // los labels alineen.
+    // ASCII puro: fuentes default sin glyphs Unicode bloque dibujan
+    // cuadrados de fallback. `v`/`>` son universales.
     let chevron_label = if row.has_children {
         if row.expanded {
-            "▾"
+            "v"
         } else {
-            "▸"
+            ">"
         }
     } else {
         " "
