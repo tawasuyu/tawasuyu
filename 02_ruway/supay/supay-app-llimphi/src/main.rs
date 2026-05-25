@@ -98,6 +98,11 @@ enum SpriteKind {
     /// Decal de impacto en pared. Lo deja un bullet al morir por
     /// colisión. Estático con TTL.
     Decal,
+    /// Imp herido en `Dying`: tinte más oscuro, perdiendo color rojo.
+    DyingImp,
+    /// Cadáver del imp (`Dead`): tinte muy oscuro, apoyado al piso
+    /// con scale reducida.
+    Corpse,
 }
 
 #[derive(Clone, Copy)]
@@ -121,25 +126,114 @@ impl Sprite {
             SpriteKind::Pillar => ((0.55, 0.50, 0.42), 1.0),
             SpriteKind::Imp => ((0.78, 0.20, 0.18), 0.85),
             SpriteKind::Torch => ((0.95, 0.78, 0.30), 0.7),
-            // Bullet: amarillo brillante saturado — el shading por
-            // distancia se reduce más adelante para que mantenga su
-            // glow incluso a media distancia.
             SpriteKind::Bullet => ((1.00, 0.90, 0.30), 0.15),
-            // Decal: negro carbonizado con tinte rojizo.
             SpriteKind::Decal => ((0.18, 0.08, 0.06), 0.20),
+            // Dying: rojo más opaco, perdiendo brillo.
+            SpriteKind::DyingImp => ((0.45, 0.12, 0.10), 0.65),
+            // Corpse: mancha rojiza oscura tirada en el piso.
+            SpriteKind::Corpse => ((0.22, 0.07, 0.06), 0.30),
         }
     }
 }
 
-const STATIC_SPRITES: &[Sprite] = &[
-    Sprite { x: 4.5, y: 3.5, kind: SpriteKind::Barrel, scale: 0.5 },
-    Sprite { x: 7.5, y: 5.5, kind: SpriteKind::Imp, scale: 0.85 },
-    Sprite { x: 11.5, y: 4.5, kind: SpriteKind::Pillar, scale: 1.0 },
-    Sprite { x: 6.5, y: 9.5, kind: SpriteKind::Barrel, scale: 0.5 },
-    Sprite { x: 12.5, y: 11.5, kind: SpriteKind::Imp, scale: 0.85 },
-    Sprite { x: 8.5, y: 12.5, kind: SpriteKind::Torch, scale: 0.7 },
-    Sprite { x: 3.5, y: 13.5, kind: SpriteKind::Torch, scale: 0.7 },
-];
+/// Decorados estáticos (no se mueven, no pelean). Los imps van aparte
+/// como [`Enemy`] porque tienen HP y AI.
+fn initial_static_sprites() -> Vec<Sprite> {
+    vec![
+        Sprite { x: 4.5, y: 3.5, kind: SpriteKind::Barrel, scale: 0.5 },
+        Sprite { x: 11.5, y: 4.5, kind: SpriteKind::Pillar, scale: 1.0 },
+        Sprite { x: 6.5, y: 9.5, kind: SpriteKind::Barrel, scale: 0.5 },
+        Sprite { x: 8.5, y: 12.5, kind: SpriteKind::Torch, scale: 0.7 },
+        Sprite { x: 3.5, y: 13.5, kind: SpriteKind::Torch, scale: 0.7 },
+    ]
+}
+
+// =====================================================================
+// Enemies — imps con HP, AI de persecución, ataque cuerpo a cuerpo
+// =====================================================================
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EnemyState {
+    /// Quieto: no vio al jugador (sin LOS o fuera de rango).
+    Idle,
+    /// Persiguiendo: hay LOS al jugador.
+    Walking,
+    /// Recibió daño letal; entra en animación de muerte por N ticks
+    /// antes de pasar a `Dead`.
+    Dying(u32),
+    /// Cadáver pintado en el piso. Sin colisión ni daño.
+    Dead,
+}
+
+#[derive(Clone, Copy)]
+struct Enemy {
+    x: f32,
+    y: f32,
+    hp: i32,
+    state: EnemyState,
+    /// Cooldown del ataque cuerpo a cuerpo. Cuando es 0 y el imp toca
+    /// al jugador, le pega y se resetea.
+    attack_cd: u32,
+}
+
+const ENEMY_HP: i32 = 100;
+const ENEMY_SPEED: f32 = 0.045; // u/tick — más lento que el jugador
+const ENEMY_AGGRO_RANGE: f32 = 8.0; // unidades
+const ENEMY_MELEE_RANGE: f32 = 0.9;
+const ENEMY_MELEE_DAMAGE: u32 = 8;
+const ENEMY_MELEE_CD: u32 = 25; // ticks (~0.7 s entre golpes)
+const ENEMY_DYING_TICKS: u32 = 14;
+const BULLET_DAMAGE: i32 = 25;
+const BULLET_HIT_RADIUS: f32 = 0.35;
+
+fn initial_enemies() -> Vec<Enemy> {
+    vec![
+        Enemy { x: 7.5, y: 5.5, hp: ENEMY_HP, state: EnemyState::Idle, attack_cd: 0 },
+        Enemy { x: 12.5, y: 11.5, hp: ENEMY_HP, state: EnemyState::Idle, attack_cd: 0 },
+    ]
+}
+
+/// Línea de visión libre entre `(ax, ay)` y `(bx, by)` — DDA que
+/// chequea si alguna celda intermedia es pared. True = visible.
+fn has_los(ax: f32, ay: f32, bx: f32, by: f32) -> bool {
+    let dx = bx - ax;
+    let dy = by - ay;
+    let dist = (dx * dx + dy * dy).sqrt();
+    if dist < 0.01 {
+        return true;
+    }
+    // Muestreo cada 0.1 unidades — suficiente para grid de 1 u.
+    let steps = (dist / 0.1).ceil() as i32;
+    let inv = 1.0 / steps as f32;
+    for i in 1..steps {
+        let t = i as f32 * inv;
+        let cx = (ax + dx * t).floor() as i32;
+        let cy = (ay + dy * t).floor() as i32;
+        if tile(cx, cy) != 0 {
+            return false;
+        }
+    }
+    true
+}
+
+// =====================================================================
+// Temp lights — flashes instantáneos con TTL (impactos, disparos)
+// =====================================================================
+
+#[derive(Clone, Copy)]
+struct TempLight {
+    x: f32,
+    y: f32,
+    color: (f32, f32, f32),
+    /// Intensidad pico en el tick de spawn. Cae linealmente con el TTL.
+    strength: f32,
+    ttl: u32,
+    ttl_max: u32,
+}
+
+const FLASH_TTL: u32 = 4; // ticks (~115 ms)
+const FLASH_STRENGTH_IMPACT: f32 = 3.5;
+const FLASH_COLOR_IMPACT: (f32, f32, f32) = (1.0, 0.75, 0.30);
 
 /// Proyectil del jugador. Vida finita en ticks; se mueve a velocidad
 /// constante por (vx, vy); muere al chocar pared y deja un decal.
@@ -208,6 +302,7 @@ fn lighting_contribution(
     hit_y: f32,
     tick: u64,
     bullets: &[Bullet],
+    temp_lights: &[TempLight],
 ) -> (f32, f32, f32) {
     let mut acc = (0.0_f32, 0.0_f32, 0.0_f32);
     for (idx, l) in LIGHTS.iter().enumerate() {
@@ -237,6 +332,18 @@ fn lighting_contribution(
         acc.0 += BULLET_LIGHT_COLOR.0 * atten;
         acc.1 += BULLET_LIGHT_COLOR.1 * atten;
         acc.2 += BULLET_LIGHT_COLOR.2 * atten;
+    }
+    // Temp lights: flashes con strength que cae con el TTL (fade-out
+    // lineal). Falloff espacial moderado.
+    for tl in temp_lights {
+        let dx = tl.x - hit_x;
+        let dy = tl.y - hit_y;
+        let d2 = dx * dx + dy * dy;
+        let life = tl.ttl as f32 / tl.ttl_max.max(1) as f32;
+        let atten = tl.strength * life / (1.0 + 1.0 * d2);
+        acc.0 += tl.color.0 * atten;
+        acc.1 += tl.color.1 * atten;
+        acc.2 += tl.color.2 * atten;
     }
     acc
 }
@@ -331,12 +438,16 @@ struct Model {
     input: Input,
     tick: u64,
     last_hit_material: u8,
-    /// Vida del jugador — sólo HUD por ahora, sin lógica de daño.
+    /// Vida del jugador. Bajada por ataque cuerpo a cuerpo de enemigos.
     health: u32,
     /// Munición restante. `Msg::Fire` la decrementa si > 0.
     ammo: u32,
     bullets: Vec<Bullet>,
     decals: Vec<Decal>,
+    static_sprites: Vec<Sprite>,
+    enemies: Vec<Enemy>,
+    /// Flashes temporales (impactos, etc.). Se decrementan cada tick.
+    temp_lights: Vec<TempLight>,
 }
 
 #[derive(Clone)]
@@ -374,6 +485,9 @@ impl App for Supay {
             ammo: 50,
             bullets: Vec::with_capacity(16),
             decals: Vec::with_capacity(MAX_DECALS),
+            static_sprites: initial_static_sprites(),
+            enemies: initial_enemies(),
+            temp_lights: Vec::with_capacity(8),
         }
     }
 
@@ -615,48 +729,170 @@ fn advance(m: &mut Model) {
     let snap = cast_ray(m.px, m.py, m.pa);
     m.last_hit_material = snap.material;
 
-    // Avance de bullets + colisión + spawn de decals.
+    // Avance de bullets + colisión vs pared + colisión vs enemy.
     advance_bullets(m);
-    // Envejecimiento de decals (drop cuando ttl = 0).
+    // AI y movimiento de enemies.
+    advance_enemies(m);
+    // Envejecimiento de decals + temp_lights.
     m.decals.retain(|d| d.ttl > 0);
     for d in m.decals.iter_mut() {
         d.ttl = d.ttl.saturating_sub(1);
     }
+    m.temp_lights.retain(|tl| tl.ttl > 0);
+    for tl in m.temp_lights.iter_mut() {
+        tl.ttl = tl.ttl.saturating_sub(1);
+    }
 }
 
-/// Avanza cada bullet por (vx, vy). Si el siguiente paso queda
-/// dentro de pared, muere y spawna decal justo delante del impacto
-/// (en el lado libre de la pared, para que el sprite no quede
-/// embebido). TTL también puede matarlo sin decal.
+fn spawn_flash(m: &mut Model, x: f32, y: f32, color: (f32, f32, f32), strength: f32) {
+    m.temp_lights.push(TempLight {
+        x,
+        y,
+        color,
+        strength,
+        ttl: FLASH_TTL,
+        ttl_max: FLASH_TTL,
+    });
+}
+
+/// AI por enemy:
+/// - Si está muerto/dying: solo decrementa countdown si dying.
+/// - Si está vivo: chequea LOS al jugador; si la hay y dist <
+///   `ENEMY_AGGRO_RANGE`, persigue. Si dist < `ENEMY_MELEE_RANGE` y
+///   `attack_cd == 0`, pega al jugador y resetea cooldown.
+fn advance_enemies(m: &mut Model) {
+    let player_x = m.px;
+    let player_y = m.py;
+    let mut total_damage: u32 = 0;
+    for e in m.enemies.iter_mut() {
+        // Cooldown del ataque siempre decrementa.
+        e.attack_cd = e.attack_cd.saturating_sub(1);
+        match e.state {
+            EnemyState::Dead => continue,
+            EnemyState::Dying(rem) => {
+                if rem <= 1 {
+                    e.state = EnemyState::Dead;
+                } else {
+                    e.state = EnemyState::Dying(rem - 1);
+                }
+                continue;
+            }
+            EnemyState::Idle | EnemyState::Walking => {}
+        }
+        let dx = player_x - e.x;
+        let dy = player_y - e.y;
+        let dist = (dx * dx + dy * dy).sqrt();
+        if dist > ENEMY_AGGRO_RANGE || !has_los(e.x, e.y, player_x, player_y) {
+            e.state = EnemyState::Idle;
+            continue;
+        }
+        e.state = EnemyState::Walking;
+        // Melee: golpea cuando está pegado.
+        if dist < ENEMY_MELEE_RANGE && e.attack_cd == 0 {
+            total_damage = total_damage.saturating_add(ENEMY_MELEE_DAMAGE);
+            e.attack_cd = ENEMY_MELEE_CD;
+            continue;
+        }
+        // Persecución: vector unitario × speed, colisión cell-based.
+        if dist > 0.01 {
+            let inv = 1.0 / dist;
+            let step_x = dx * inv * ENEMY_SPEED;
+            let step_y = dy * inv * ENEMY_SPEED;
+            // Eje X primero, eje Y después — sliding contra paredes.
+            const ER: f32 = 0.18;
+            let nx = e.x + step_x;
+            if !is_blocked(nx, e.y, ER) {
+                e.x = nx;
+            }
+            let ny = e.y + step_y;
+            if !is_blocked(e.x, ny, ER) {
+                e.y = ny;
+            }
+        }
+    }
+    if total_damage > 0 {
+        m.health = m.health.saturating_sub(total_damage);
+    }
+}
+
+/// Avanza cada bullet. Tres maneras de morir:
+/// 1. Choca pared → decal + flash.
+/// 2. Choca enemy alive (dist < `BULLET_HIT_RADIUS`) → enemy.hp -=
+///    BULLET_DAMAGE + flash; sin decal.
+/// 3. TTL agotado → muerte silenciosa.
 fn advance_bullets(m: &mut Model) {
     let mut new_decals: Vec<Decal> = Vec::new();
-    m.bullets.retain_mut(|b| {
+    let mut new_flashes: Vec<(f32, f32)> = Vec::new();
+    let mut bullet_hits_enemy: Vec<usize> = Vec::new(); // idx enemy
+    let mut survivors: Vec<Bullet> = Vec::with_capacity(m.bullets.len());
+
+    for mut b in m.bullets.drain(..) {
         if b.ttl == 0 {
-            return false;
+            continue;
         }
         b.ttl -= 1;
         let nx = b.x + b.vx;
         let ny = b.y + b.vy;
+
+        // 1. Pared.
         if tile(nx as i32, ny as i32) != 0 {
-            // Impacto. Ponemos el decal en la posición justo antes
-            // del muro (último punto libre del paso).
             new_decals.push(Decal {
                 x: b.x,
                 y: b.y,
                 ttl: DECAL_TTL,
             });
-            return false;
+            new_flashes.push((b.x, b.y));
+            continue;
         }
+
+        // 2. Enemy alive — chequea contra todos.
+        let mut hit_enemy: Option<usize> = None;
+        for (i, e) in m.enemies.iter().enumerate() {
+            if matches!(e.state, EnemyState::Dead | EnemyState::Dying(_)) {
+                continue;
+            }
+            let edx = e.x - nx;
+            let edy = e.y - ny;
+            if edx * edx + edy * edy < BULLET_HIT_RADIUS * BULLET_HIT_RADIUS {
+                hit_enemy = Some(i);
+                break;
+            }
+        }
+        if let Some(i) = hit_enemy {
+            bullet_hits_enemy.push(i);
+            new_flashes.push((nx, ny));
+            continue;
+        }
+
         b.x = nx;
         b.y = ny;
-        true
-    });
+        survivors.push(b);
+    }
+    m.bullets = survivors;
+
     for d in new_decals {
         if m.decals.len() >= MAX_DECALS {
-            // Circular: dropea el más viejo.
             m.decals.remove(0);
         }
         m.decals.push(d);
+    }
+    for (fx, fy) in new_flashes {
+        spawn_flash(m, fx, fy, FLASH_COLOR_IMPACT, FLASH_STRENGTH_IMPACT);
+    }
+    // Aplicar daño a enemies golpeados (puede ocurrir varias veces
+    // contra el mismo enemy si varias balas lo tocan en el mismo tick).
+    for i in bullet_hits_enemy {
+        if i >= m.enemies.len() {
+            continue;
+        }
+        let e = &mut m.enemies[i];
+        if matches!(e.state, EnemyState::Dead | EnemyState::Dying(_)) {
+            continue;
+        }
+        e.hp -= BULLET_DAMAGE;
+        if e.hp <= 0 {
+            e.state = EnemyState::Dying(ENEMY_DYING_TICKS);
+        }
     }
 }
 
@@ -850,14 +1086,16 @@ fn slime_mul(wall_x: f32, wall_y: f32, tick: u64) -> f32 {
 // =====================================================================
 
 fn scene_pane(model: &Model) -> View<Msg> {
-    // Capturamos el snapshot del jugador para la closure (paint_with
-    // necesita Send+Sync; los tipos copiados aquí son `Send + Sync` trivial).
+    // Capturamos snapshot del frame. Todo Send+Sync trivial.
     let px = model.px;
     let py = model.py;
     let pa = model.pa;
     let tick = model.tick;
     let bullets = model.bullets.clone();
     let decals = model.decals.clone();
+    let static_sprites = model.static_sprites.clone();
+    let enemies = model.enemies.clone();
+    let temp_lights = model.temp_lights.clone();
 
     View::new(Style {
         size: Size {
@@ -869,7 +1107,19 @@ fn scene_pane(model: &Model) -> View<Msg> {
     })
     .clip(true)
     .paint_with(move |scene, _ts, rect: PaintRect| {
-        draw_scene(scene, rect, px, py, pa, tick, &bullets, &decals);
+        draw_scene(
+            scene,
+            rect,
+            px,
+            py,
+            pa,
+            tick,
+            &bullets,
+            &decals,
+            &static_sprites,
+            &enemies,
+            &temp_lights,
+        );
     })
 }
 
@@ -884,6 +1134,7 @@ const COL_STRIDE: f32 = 3.0;
 /// global más el aporte de las luces puntuales.
 const AMBIENT: f32 = 0.18;
 
+#[allow(clippy::too_many_arguments)]
 fn draw_scene(
     scene: &mut llimphi_ui::llimphi_raster::vello::Scene,
     rect: PaintRect,
@@ -893,6 +1144,9 @@ fn draw_scene(
     tick: u64,
     bullets: &[Bullet],
     decals: &[Decal],
+    static_sprites: &[Sprite],
+    enemies: &[Enemy],
+    temp_lights: &[TempLight],
 ) {
     let w = rect.w as f64;
     let h = rect.h as f64;
@@ -924,7 +1178,7 @@ fn draw_scene(
         // Hit world-point para iluminación por luces puntuales.
         let hit_x = px + hit.perp_dist * ray_angle.cos();
         let hit_y = py + hit.perp_dist * ray_angle.sin();
-        let lights = lighting_contribution(hit_x, hit_y, tick, bullets);
+        let lights = lighting_contribution(hit_x, hit_y, tick, bullets, temp_lights);
         let mut light_mul = (
             (AMBIENT + lights.0).min(2.0),
             (AMBIENT + lights.1).min(2.0),
@@ -990,10 +1244,19 @@ fn draw_scene(
     }
 
     // --- Pass 2: sprites billboarded con z-test por columna ---
-    // Combinamos sprites estáticos + bullets + decals en una sola
-    // lista para que `draw_sprites` los ordene por distancia y
-    // pinte de atrás hacia adelante.
-    let mut all_sprites: Vec<Sprite> = STATIC_SPRITES.to_vec();
+    // Combinamos en una sola lista todos los sprites del frame
+    // (estáticos + enemies según su estado + bullets + decals) para
+    // que `draw_sprites` los ordene por distancia y pinte de atrás
+    // hacia adelante.
+    let mut all_sprites: Vec<Sprite> = static_sprites.to_vec();
+    for e in enemies {
+        let (kind, scale) = match e.state {
+            EnemyState::Idle | EnemyState::Walking => (SpriteKind::Imp, 0.85),
+            EnemyState::Dying(_) => (SpriteKind::DyingImp, 0.65),
+            EnemyState::Dead => (SpriteKind::Corpse, 0.30),
+        };
+        all_sprites.push(Sprite { x: e.x, y: e.y, kind, scale });
+    }
     for b in bullets {
         all_sprites.push(Sprite {
             x: b.x,
@@ -1010,7 +1273,20 @@ fn draw_scene(
             scale: 0.20,
         });
     }
-    draw_sprites(scene, rect, px, py, pa, tick, &z_buf, total_cols, &all_sprites);
+    draw_sprites(
+        scene,
+        rect,
+        px,
+        py,
+        pa,
+        tick,
+        &z_buf,
+        total_cols,
+        &all_sprites,
+    );
+    // Sutiles: avoid usar `temp_lights` solo para iluminación (ya
+    // está) — los flashes en sí no se renderizan como sprites.
+    let _ = temp_lights;
 
     // --- Overlay: crosshair + minimap ---
     draw_crosshair(scene, rect);
@@ -1104,10 +1380,10 @@ fn draw_sprites(
         };
 
         // Color con shading + fog + lighting puntual. Para sprites
-        // dinámicos pasamos lista vacía de bullets (un bullet no se
-        // ilumina a sí mismo; usa su color base saturado).
+        // dinámicos pasamos lista vacía de bullets/temp_lights (un
+        // sprite no se ilumina a sí mismo; usa su color base).
         let (base, _appearance_h) = s.appearance();
-        let lights = lighting_contribution(s.x, s.y, tick, &[]);
+        let lights = lighting_contribution(s.x, s.y, tick, &[], &[]);
         let light_mul = (
             (AMBIENT + lights.0).min(2.0),
             (AMBIENT + lights.1).min(2.0),
@@ -1288,8 +1564,9 @@ fn draw_minimap(
     }
 
     // Sprites estáticos como puntos coloreados según su tipo. Los
-    // bullets/decals no van al minimap — son ruidosos y efímeros.
-    for s in STATIC_SPRITES {
+    // bullets/decals/enemies no van al minimap — son ruidosos o
+    // requieren state que el minimap no recibe.
+    for s in initial_static_sprites().iter() {
         let (base, _) = s.appearance();
         let dot = llimphi_ui::llimphi_raster::kurbo::Circle::new(
             (x0 + s.x as f64 * cell, y0 + s.y as f64 * cell),
