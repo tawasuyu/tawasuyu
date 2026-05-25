@@ -33,7 +33,7 @@ use std::time::Duration;
 
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{length, percent, FlexDirection, Size, Style},
+    prelude::{length, percent, Dimension, FlexDirection, Size, Style},
     AlignItems, Rect,
 };
 use llimphi_ui::llimphi_raster::peniko::{Blob, Color, Image, ImageFormat};
@@ -172,12 +172,22 @@ fn game_pane(model: &Model) -> View<Msg> {
     // = 256 KB/frame.
     let blob = Blob::from(model.framebuffer_rgba.clone());
     let image = Image::new(blob, ImageFormat::Rgba8, DOOM_WIDTH as u32, DOOM_HEIGHT as u32);
+    // Patrón flex correcto para "ocupá el resto de la columna":
+    // `flex_basis = 0` + `flex_grow = 1` + `height = auto`. Si en su
+    // lugar pidiéramos `height = percent(1.0)`, taffy le daría el
+    // 100% del padre (= ventana entera) y la imagen se solaparía
+    // con el header de 24 px.
     View::new(Style {
         size: Size {
             width: percent(1.0_f32),
-            height: percent(1.0_f32),
+            height: Dimension::auto(),
         },
         flex_grow: 1.0,
+        flex_basis: length(0.0_f32),
+        min_size: Size {
+            width: length(0.0_f32),
+            height: length(0.0_f32),
+        },
         ..Default::default()
     })
     .image(image)

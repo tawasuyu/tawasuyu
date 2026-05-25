@@ -594,7 +594,10 @@ fn paint<Msg>(
         if let Some(image) = node.image.as_ref() {
             // Aspect-fit centrado: el min de las dos escalas ocupa
             // todo el rect en el eje más restrictivo y deja banda en
-            // el otro.
+            // el otro. Defensivo: envolvemos en push_layer/pop_layer
+            // con el rect del nodo para que, aunque el caller pida
+            // un layout mal-dimensionado, la imagen nunca pinte fuera
+            // del nodo (visualmente preferible a un overflow opaco).
             if image.width > 0 && image.height > 0 && r.w > 0.0 && r.h > 0.0 {
                 let sx = r.w as f64 / image.width as f64;
                 let sy = r.h as f64 / image.height as f64;
@@ -604,7 +607,15 @@ fn paint<Msg>(
                 let tx = r.x as f64 + (r.w as f64 - disp_w) * 0.5;
                 let ty = r.y as f64 + (r.h as f64 - disp_h) * 0.5;
                 let transform = Affine::translate((tx, ty)) * Affine::scale(s);
+                let node_rect = KurboRect::new(
+                    r.x as f64,
+                    r.y as f64,
+                    (r.x + r.w) as f64,
+                    (r.y + r.h) as f64,
+                );
+                scene.push_layer(Mix::Clip, 1.0, Affine::IDENTITY, &node_rect);
                 scene.draw_image(image, transform);
+                scene.pop_layer();
             }
         }
         if let Some(painter) = node.painter.as_ref() {
