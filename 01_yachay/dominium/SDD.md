@@ -232,14 +232,24 @@ números son leyes.
 
 ## 5. Lo que viene (no inamovible — roadmap)
 
-- ~~Editor visual: click en canvas → spawnear Conceptos~~ — ✓ (2026-05-25).
-  llimphi-ui gana `View::on_click_at(Fn(lx, ly, rw, rh) -> Option<Msg>)`,
-  un handler que recibe la posición local + tamaño del rect del nodo
-  (gana sobre `on_click` cuando ambos están). `dominium-iso` agrega
-  `IsoProjector::unproject_floor(sx, sy)` (inversa de proyección
-  asumiendo z=0). El canvas de dominium usa los dos para mapear el
-  click a coordenadas de mundo y emitir `Msg::CrearConceptoEn(x, y)`.
+- ~~Editor visual: click + drag en canvas~~ — ✓ (2026-05-25).
+  llimphi-ui gana `View::on_click_at(Fn(lx, ly, rw, rh) -> Option<Msg>)`
+  y `View::draggable_at(Fn(DragPhase, dx, dy, lx0, ly0) -> Option<Msg>)`
+  con el nuevo `DragHandlerKind::{Delta, DeltaAt}` interno. Cuando un
+  nodo tiene **ambos**, el press dispara click_at Y arranca el drag
+  rastreado con la posición inicial — patrón "select-on-press +
+  move-on-drag" para canvas elements. `dominium-iso` agrega
+  `IsoProjector::unproject_floor(sx, sy)` (inversa lineal vía z=0).
+  El canvas de dominium emite:
+    - `Msg::CanvasClick(x, y)` — si pega cerca de un Concepto (radius
+      capped a 3 celdas), lo selecciona; si no, lo crea ahí.
+    - `Msg::CanvasDragMove(dx, dy)` — mueve el Concepto seleccionado.
   Botón "✦ Crear concepto" sigue disponible para spawning al centro.
+- ~~Editor en vivo de id (nombre)~~ — ✓ (2026-05-25). Botón
+  "• {id} (✎ renombrar)" en `[ EDITAR ]` cambia a un
+  `text_input_view` focado; cada tecla sincroniza al instante con
+  `concepto.id`. Enter o Escape cierran. `on_key` ruta cuando hay
+  focus al input.
 - ~~Editor de hack~~ — ✓ (2026-05-25). Sección bajo `[ EDITAR ]` cuando
   hay Concepto seleccionado. Botón "+ Agregar hack" / "− Quitar hack",
   cycle trigger (Always ↔ EnergiaBajo ↔ EdadSobre) con slider para el
@@ -263,6 +273,10 @@ números son leyes.
   --grid --lemmings --conceptos pack.json --csv out.csv`. Determinismo
   bit-exacto verificado ejecutando dos veces con el mismo seed y
   `diff`-eando los CSVs. ~12k tps en debug en máquina del autor.
+  Subcomando `repl` agregado (2026-05-25): loop interactivo línea por
+  línea con `step [N]` / `stats` / `list` / `add ID X Y R [hack A D]`
+  / `del N` / `load PATH` / `save PATH` / `csv PATH` / `quit`. Permite
+  experimentar con packs sin abrir ventana ni recompilar.
 - ~~Costo biológico de pendiente~~ — ✓ (2026-05-25). `act_mover` lee
   `SimParams::relieve: [f32; 5]` + `SimParams::climb_cost: f32`. Las
   montañas (definidas por la combinación lineal de capas) ahora restan

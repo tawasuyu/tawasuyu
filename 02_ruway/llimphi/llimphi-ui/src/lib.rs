@@ -245,6 +245,12 @@ pub type DropFn<Msg> = Arc<dyn Fn(u64) -> Option<Msg> + Send + Sync>;
 /// necesita centrar o normalizar. Devolver `None` no dispara update.
 pub type ClickAtFn<Msg> = Arc<dyn Fn(f32, f32, f32, f32) -> Option<Msg> + Send + Sync>;
 
+/// Variante de [`DragFn`] que **conoce la posición inicial del press**
+/// relativa al rect del nodo. Útil cuando el caller necesita identificar
+/// qué entidad (Concepto, lemming, etc.) bajo el cursor agarró el drag.
+/// Recibe `(phase, dx, dy, initial_lx, initial_ly)`.
+pub type DragAtFn<Msg> = Arc<dyn Fn(DragPhase, f32, f32, f32, f32) -> Option<Msg> + Send + Sync>;
+
 /// Rect absoluto del nodo (en coordenadas físicas del frame). Lo
 /// recibe el callback de [`View::paint_with`] para que pueda
 /// posicionar sus primitivas custom dentro del nodo.
@@ -304,6 +310,9 @@ pub struct View<Msg> {
     /// Handler de drag. Si está presente, este nodo arrastra (y NO emite
     /// `on_click` al presionar — un nodo es uno u otro).
     pub drag: Option<DragFn<Msg>>,
+    /// Variante de drag que recibe la posición inicial del press relativa
+    /// al rect del nodo. Gana sobre `drag` si ambos están presentes.
+    pub drag_at: Option<DragAtFn<Msg>>,
     /// Payload `u64` que viaja con el drag iniciado sobre este nodo. Lo
     /// recibe el handler [`Self::on_drop`] del drop target. Sin payload,
     /// el drag funciona igual pero ningún drop target reacciona.
@@ -333,6 +342,7 @@ impl<Msg> View<Msg> {
             on_click: None,
             on_click_at: None,
             drag: None,
+            drag_at: None,
             drag_payload: None,
             on_drop: None,
             drop_hover_fill: None,
@@ -363,6 +373,19 @@ impl<Msg> View<Msg> {
         F: Fn(DragPhase, f32, f32) -> Option<Msg> + Send + Sync + 'static,
     {
         self.drag = Some(Arc::new(handler));
+        self
+    }
+
+    /// Como `draggable`, pero el handler también recibe la posición
+    /// inicial del press relativa al rect del nodo `(initial_lx,
+    /// initial_ly)`. Útil cuando el caller necesita resolver qué
+    /// entidad bajo el cursor inició el drag (Conceptos, lemmings,
+    /// nodos de un grafo, etc.). Gana sobre `draggable` si ambos están.
+    pub fn draggable_at<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(DragPhase, f32, f32, f32, f32) -> Option<Msg> + Send + Sync + 'static,
+    {
+        self.drag_at = Some(Arc::new(handler));
         self
     }
 
@@ -505,6 +528,7 @@ struct MountedNode<Msg> {
     on_click: Option<Msg>,
     on_click_at: Option<ClickAtFn<Msg>>,
     drag: Option<DragFn<Msg>>,
+    drag_at: Option<DragAtFn<Msg>>,
     drag_payload: Option<u64>,
     on_drop: Option<DropFn<Msg>>,
     drop_hover_fill: Option<Color>,
@@ -540,6 +564,7 @@ fn mount_recursive<Msg: Clone>(
         on_click,
         on_click_at,
         drag,
+        drag_at,
         drag_payload,
         on_drop,
         drop_hover_fill,
@@ -558,6 +583,7 @@ fn mount_recursive<Msg: Clone>(
         on_click,
         on_click_at,
         drag,
+        drag_at,
         drag_payload,
         on_drop,
         drop_hover_fill,
@@ -759,7 +785,10 @@ fn hit_test_click<Msg>(
     y: f32,
 ) -> Option<usize> {
     hit_test_pred(mounted, computed, x, y, |n| {
-        n.on_click.is_some() || n.on_click_at.is_some() || n.drag.is_some()
+        n.on_click.is_some()
+            || n.on_click_at.is_some()
+            || n.drag.is_some()
+            || n.drag_at.is_some()
     })
 }
 
@@ -822,8 +851,16 @@ struct RenderCache<Msg> {
     drop_hover_idx: Option<usize>,
 }
 
+/// Dos sabores de handler de drag activo: el simple `(phase, dx, dy)`
+/// o la variante que conserva la posición local del press original
+/// `(phase, dx, dy, lx0, ly0)`. El runtime elige uno al iniciar el drag.
+enum DragHandlerKind<Msg> {
+    Delta(DragFn<Msg>),
+    DeltaAt(DragAtFn<Msg>, f32, f32),
+}
+
 struct DragState<Msg> {
-    handler: DragFn<Msg>,
+    handler: DragHandlerKind<Msg>,
     /// Cursor en el último evento (Press o CursorMoved). El delta del
     /// próximo Move se calcula contra este, no contra el inicio del
     /// drag — el caller acumula los deltas en su modelo si los necesita.
@@ -923,7 +960,13 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     let payload_active = drag.payload.is_some();
                     let mut need_redraw = false;
                     if dx != 0.0 || dy != 0.0 {
-                        if let Some(msg) = (drag.handler)(DragPhase::Move, dx, dy) {
+                        let msg_opt = match &drag.handler {
+                            DragHandlerKind::Delta(h) => h(DragPhase::Move, dx, dy),
+                            DragHandlerKind::DeltaAt(h, lx0, ly0) => {
+                                h(DragPhase::Move, dx, dy, *lx0, *ly0)
+                            }
+                        };
+                        if let Some(msg) = msg_opt {
                             let model = state.model.take().expect("model");
                             state.model = Some(A::update(model, msg, &self.handle));
                             // Durante drag NO invalidamos el cache —
@@ -1018,9 +1061,11 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 // Hit-test contra el cache del último redraw (siempre
                 // representa lo visible). Fallback raro: cache vacío.
                 let cursor = state.cursor;
-                // Tupla: (drag_fn, payload, on_click_msg, on_click_at_handler, rect: (x, y, w, h))
+                // Tupla: (drag_fn, drag_at_fn, payload, on_click_msg,
+                //         on_click_at_handler, rect: (x, y, w, h))
                 type HitInfo<M> = (
                     Option<DragFn<M>>,
+                    Option<DragAtFn<M>>,
                     Option<u64>,
                     Option<M>,
                     Option<ClickAtFn<M>>,
@@ -1043,6 +1088,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                             .map(|r| (r.x, r.y, r.w, r.h));
                         (
                             node.drag.clone(),
+                            node.drag_at.clone(),
                             node.drag_payload,
                             node.on_click.clone(),
                             node.on_click_at.clone(),
@@ -1063,6 +1109,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                             let rect = computed.get(node.id).map(|r| (r.x, r.y, r.w, r.h));
                             (
                                 node.drag.clone(),
+                                node.drag_at.clone(),
                                 node.drag_payload,
                                 node.on_click.clone(),
                                 node.on_click_at.clone(),
@@ -1071,10 +1118,35 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                         },
                     )
                 };
-                if let Some((Some(handler), payload, _, _, _)) = &idx_and_action {
-                    // Drag wins sobre click cuando ambos están presentes.
+                // drag_at + on_click_at COEXISTEN: el press dispara
+                // on_click_at (si está) y arranca un drag rastreado con la
+                // posición inicial. Diseño pensado para canvas elements
+                // que necesitan select-on-press + move-on-drag.
+                //
+                // En cambio, `drag` simple (sin _at) mantiene la semántica
+                // antigua: gana exclusivo sobre on_click.
+                if let Some((_, Some(handler_at), payload, _, click_at, Some((ox, oy, rw, rh)))) =
+                    &idx_and_action
+                {
+                    let lx0 = cursor.x as f32 - ox;
+                    let ly0 = cursor.y as f32 - oy;
+                    // Disparar on_click_at en el press (si también está).
+                    if let Some(click_at_h) = click_at {
+                        if let Some(msg) = click_at_h(lx0, ly0, *rw, *rh) {
+                            let model = state.model.take().expect("model");
+                            state.model = Some(A::update(model, msg, &self.handle));
+                            state.last_render = None;
+                        }
+                    }
                     state.drag = Some(DragState {
-                        handler: handler.clone(),
+                        handler: DragHandlerKind::DeltaAt(handler_at.clone(), lx0, ly0),
+                        last_cursor: cursor,
+                        payload: *payload,
+                    });
+                    state.window.request_redraw();
+                } else if let Some((Some(handler), _, payload, _, _, _)) = &idx_and_action {
+                    state.drag = Some(DragState {
+                        handler: DragHandlerKind::Delta(handler.clone()),
                         last_cursor: cursor,
                         payload: *payload,
                     });
@@ -1094,7 +1166,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                             }
                         }
                     }
-                } else if let Some((_, _, _, Some(handler), Some((ox, oy, rw, rh)))) =
+                } else if let Some((_, _, _, _, Some(handler), Some((ox, oy, rw, rh)))) =
                     &idx_and_action
                 {
                     // on_click_at gana sobre on_click si ambos existen.
@@ -1106,7 +1178,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                         state.last_render = None;
                         state.window.request_redraw();
                     }
-                } else if let Some((_, _, Some(msg), _, _)) = idx_and_action {
+                } else if let Some((_, _, _, Some(msg), _, _)) = idx_and_action {
                     let model = state.model.take().expect("model");
                     state.model = Some(A::update(model, msg, &self.handle));
                     state.last_render = None;
@@ -1144,7 +1216,13 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                         }
                     }
                     // 2. Cierre del drag.
-                    if let Some(msg) = (drag.handler)(DragPhase::End, 0.0, 0.0) {
+                    let end_msg = match &drag.handler {
+                        DragHandlerKind::Delta(h) => h(DragPhase::End, 0.0, 0.0),
+                        DragHandlerKind::DeltaAt(h, lx0, ly0) => {
+                            h(DragPhase::End, 0.0, 0.0, *lx0, *ly0)
+                        }
+                    };
+                    if let Some(msg) = end_msg {
                         let model = state.model.take().expect("model");
                         state.model = Some(A::update(model, msg, &self.handle));
                     }

@@ -27,9 +27,10 @@ use llimphi_ui::llimphi_layout::taffy::{
     AlignItems, JustifyContent, Rect,
 };
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, DragPhase, Handle, View};
+use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use llimphi_widget_button::{button_view, ButtonPalette};
 use llimphi_widget_slider::{slider_view, SliderPalette};
+use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
 /// Lado de la grilla cuadrada del mundo.
 const GRID: usize = 40;
@@ -232,6 +233,10 @@ struct Model {
     /// escribe a `params.relieve` (relieve físico) — lo que ves es lo
     /// que sienten los lemmings.
     sync_relieve: bool,
+    /// Buffer de texto del input de renombre. `id_input_focused` decide
+    /// si el panel muestra el text-input o el label estático.
+    id_input: TextInputState,
+    id_input_focused: bool,
 }
 
 /// Una de las cuatro capas modificables de un `Concepto` (degradacion
@@ -313,7 +318,9 @@ enum Msg {
     GuardarPack,
     CargarPack,
     CrearConcepto,
-    CrearConceptoEn(f32, f32),
+    /// Click sobre el canvas, en coords de mundo. Si cae sobre un
+    /// Concepto existente lo selecciona; si no, crea uno nuevo ahí.
+    CanvasClick(f32, f32),
     ToggleSyncRelieve,
     ToggleAndina,
     // Editor de BehaviorHack del Concepto seleccionado.
@@ -323,6 +330,12 @@ enum Msg {
     HackEditTriggerParam(f32),
     HackEditDuration(f32),
     CycleSprite,
+    /// Delta de un Move dentro de un drag activo, en coords de mundo.
+    /// Mueve el Concepto seleccionado si hay uno.
+    CanvasDragMove(f32, f32),
+    FocusIdInput,
+    BlurIdInput,
+    IdInputKey(KeyEvent),
 }
 
 struct Dominium;
@@ -367,6 +380,8 @@ impl App for Dominium {
             rng_seed,
             selected: None,
             sync_relieve: false,
+            id_input: TextInputState::new(),
+            id_input_focused: false,
         }
     }
 
@@ -478,8 +493,24 @@ impl App for Dominium {
                 let center = (GRID as f32) * 0.5;
                 spawn_concepto_at(&mut m, center, center);
             }
-            Msg::CrearConceptoEn(x, y) => {
-                spawn_concepto_at(&mut m, x, y);
+            Msg::CanvasClick(wx, wy) => {
+                // Hit-test contra Conceptos existentes (centro + radio
+                // pickeable acotado). Si pega, selecciona sin crear; si
+                // no, crea un Concepto nuevo ahí.
+                let mut hit: Option<usize> = None;
+                for (i, c) in m.world.conceptos.items.iter().enumerate() {
+                    let dx = wx - c.pos_x;
+                    let dy = wy - c.pos_y;
+                    let pick_r = c.radius.min(3.0);
+                    if dx * dx + dy * dy <= pick_r * pick_r {
+                        hit = Some(i);
+                        break;
+                    }
+                }
+                match hit {
+                    Some(i) => m.selected = Some(i),
+                    None => spawn_concepto_at(&mut m, wx, wy),
+                }
             }
             Msg::ToggleSyncRelieve => {
                 m.sync_relieve = !m.sync_relieve;
@@ -551,8 +582,48 @@ impl App for Dominium {
                     c.sprite_id = (c.sprite_id + 1) % (dominium_render_plan::SPRITE_COUNT + 1);
                 }
             }
+            Msg::CanvasDragMove(dwx, dwy) => {
+                if let Some(c) = selected_mut(&mut m) {
+                    let max = (GRID as f32) - 1.0;
+                    c.pos_x = (c.pos_x + dwx).clamp(0.0, max);
+                    c.pos_y = (c.pos_y + dwy).clamp(0.0, max);
+                }
+            }
+            Msg::FocusIdInput => {
+                if let Some(c) = m.selected.and_then(|i| m.world.conceptos.items.get(i)) {
+                    m.id_input.set_text(c.id.clone());
+                    m.id_input_focused = true;
+                }
+            }
+            Msg::BlurIdInput => {
+                m.id_input_focused = false;
+            }
+            Msg::IdInputKey(ev) => {
+                if m.id_input_focused && m.id_input.apply_key(&ev) {
+                    let new_id = m.id_input.text().to_string();
+                    if let Some(c) = selected_mut(&mut m) {
+                        c.id = new_id;
+                    }
+                }
+            }
         }
         m
+    }
+
+    fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
+        if !model.id_input_focused {
+            return None;
+        }
+        // Enter o Escape → cerrar la edición.
+        if event.state == KeyState::Pressed {
+            match &event.key {
+                Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Escape) => {
+                    return Some(Msg::BlurIdInput);
+                }
+                _ => {}
+            }
+        }
+        Some(Msg::IdInputKey(event.clone()))
     }
 
     fn view(model: &Model) -> View<Msg> {
@@ -564,20 +635,32 @@ impl App for Dominium {
         let plan_cx = (plan.min_x + plan.max_x) * 0.5;
         let plan_cy = (plan.min_y + plan.max_y) * 0.5;
         let iso = model.iso;
-        let canvas = canvas_pane(plan).on_click_at(move |lx, ly, rw, rh| {
-            // Mapeo inverso al que aplica canvas-llimphi para centrar la maqueta:
-            //   plan_pos = local - rect/2 + plan_center
-            let plan_x = lx - rw * 0.5 + plan_cx;
-            let plan_y = ly - rh * 0.5 + plan_cy;
-            let (wx, wy) = iso.unproject_floor(plan_x, plan_y);
-            // Solo aceptamos clicks que caigan dentro del grid.
-            let max = (GRID as f32) - 1.0;
-            if wx >= 0.0 && wx <= max && wy >= 0.0 && wy <= max {
-                Some(Msg::CrearConceptoEn(wx, wy))
-            } else {
-                None
-            }
-        });
+        let canvas = canvas_pane(plan)
+            .on_click_at(move |lx, ly, rw, rh| {
+                // Mapeo inverso al que aplica canvas-llimphi para centrar la maqueta:
+                //   plan_pos = local - rect/2 + plan_center
+                let plan_x = lx - rw * 0.5 + plan_cx;
+                let plan_y = ly - rh * 0.5 + plan_cy;
+                let (wx, wy) = iso.unproject_floor(plan_x, plan_y);
+                let max = (GRID as f32) - 1.0;
+                if wx >= 0.0 && wx <= max && wy >= 0.0 && wy <= max {
+                    Some(Msg::CanvasClick(wx, wy))
+                } else {
+                    None
+                }
+            })
+            .draggable_at(move |phase, dx, dy, _lx0, _ly0| match phase {
+                DragPhase::Move => {
+                    // La inversa iso es lineal → unproject(dx, dy) = delta de mundo.
+                    let (wdx, wdy) = iso.unproject_floor(dx, dy);
+                    if wdx == 0.0 && wdy == 0.0 {
+                        None
+                    } else {
+                        Some(Msg::CanvasDragMove(wdx, wdy))
+                    }
+                }
+                DragPhase::End => None,
+            });
         let side = side_panel(model, &stats, &theme);
 
         let body = View::new(Style {
@@ -768,7 +851,21 @@ fn side_panel(model: &Model, stats: &Stats, theme: &Theme) -> View<Msg> {
         if let Some(c) = model.world.conceptos.items.get(i) {
             children.push(separator());
             children.push(label_view("[ EDITAR ]", 11.0, theme.fg_muted));
-            children.push(label_view(&format!("• {}", c.id), 12.0, theme.fg_text));
+            if model.id_input_focused {
+                children.push(text_input_view(
+                    &model.id_input,
+                    "nombre",
+                    true,
+                    &TextInputPalette::from_theme(theme),
+                    Msg::FocusIdInput,
+                ));
+            } else {
+                children.push(sized_button(
+                    &format!("• {}  (✎ renombrar)", c.id),
+                    &btn_palette,
+                    Msg::FocusIdInput,
+                ));
+            }
             children.push(slider_view(
                 "radius",
                 c.radius,
