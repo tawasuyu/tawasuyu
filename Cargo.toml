@@ -1,0 +1,111 @@
+[workspace]
+resolver = "2"
+
+# ============================================================
+# Cuadrantes — agregar a medida que se migran
+# ============================================================
+members = [
+    # 00_unanchay/ — PERCIBIR (pluma, khipu, rimay, chaka, pineal)
+    # 01_yachay/   — CONOCER  (cosmos, dominium, nakui)
+    # 02_ruway/    — HACER    (mirada, shuma, nahual, chasqui, takiy)
+    # 03_ukupacha/ — RAÍZ     (arje, wawa, agora, minga)
+    # shared/      — sandokan, auth, card, ssh, format
+    # web/         — landing (no es producto, no publicable)
+]
+
+# `wawa/` se excluye del workspace global porque corre en target
+# `x86_64-unknown-none` y `panic = "abort"`, incompatibles con los
+# perfiles globales. Los crates compartidos se referencian por `path`
+# cruzando la frontera.
+exclude = ["03_ukupacha/wawa"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT OR Apache-2.0"
+authors = ["Sergio <gerencia@jlsoltech.com>"]
+publish = false
+repository = "https://gitea.gioser.net/sergio/gioser"
+
+[workspace.dependencies]
+# === Serialización ===
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde-big-array = "0.5"
+postcard = { version = "1", features = ["use-std"] }
+toml = "0.8"
+ron = "0.8"
+bincode = "1"
+base64 = "0.22"
+
+# === Errores ===
+thiserror = "2"
+anyhow = "1"
+
+# === Async ===
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["compat"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# === Observabilidad ===
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# === Linux primitives (arje) ===
+nix = { version = "0.29", features = ["signal", "process", "sched", "mount", "fs", "socket", "net", "user"] }
+libc = "0.2"
+
+# === IDs / Hash / Crypto ===
+ulid = { version = "1", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"
+blake3 = "1.5"
+ed25519-dalek = "2"
+aes-gcm = "0.10"
+argon2 = "0.5"
+rand = "0.8"
+
+# === WASM ===
+wasmi = "1.0"
+wat = "1"
+
+# === Storage / DB ===
+sled = "0.34"
+rusqlite = { version = "0.31", features = ["bundled", "blob"] }
+
+# === P2P (minga) ===
+libp2p = { version = "0.56", features = ["tokio", "tcp", "noise", "yamux", "macros", "kad", "identify"] }
+libp2p-stream = "=0.4.0-alpha"
+libp2p-allow-block-list = "0.6"
+
+# === SSH (shared/ssh, sandokan remote, shuma baremetal) ===
+russh = "0.54"
+
+# === Math determinista cross-platform (dominium) ===
+libm = "0.2"
+
+# === Code parsing (minga) ===
+tree-sitter = "0.24"
+tree-sitter-rust = "0.23"
+tree-sitter-python = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-javascript = "0.23"
+tree-sitter-go = "0.23"
+
+# === FS notify ===
+notify = "6.1"
+
+# === FUSE (minga-vfs) ===
+fuser = { version = "0.15", default-features = false }
+
+# === CLI / auth ===
+clap = { version = "4", features = ["derive"] }
+rpassword = "7"
+
+# === PAM (shared/auth) ===
+pam = "0.8"
+
+# === D-Bus (arje compat) ===
+zbus = { version = "4", default-features = false, features = ["tokio"] }

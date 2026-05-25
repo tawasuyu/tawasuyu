@@ -1,0 +1,10 @@
+target/
+Cargo.lock
+*.bak
+*.bak2
+.DS_Store
+*.swp
+*~
+node_modules/
+dist/
+*.log
