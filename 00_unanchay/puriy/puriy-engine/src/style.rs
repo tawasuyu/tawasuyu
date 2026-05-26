@@ -95,18 +95,45 @@ impl StyleEngine {
 
     /// Computa el estilo de un nodo Element. Aplica en orden: UA →
     /// stylesheets del documento → atributo `style="..."`. El último
-    /// gana (cascada simplificada).
+    /// gana (cascada simplificada). Sin inheritance — el caller debe
+    /// usar [`Self::compute_with_parent`] si necesita propagación.
     pub fn compute(&self, node: &Handle) -> ComputedStyle {
+        self.compute_with_parent(node, None)
+    }
+
+    /// Variante con inheritance CSS. Si `parent` está dado, las
+    /// propiedades heredables (`color`, `font_size`, `font_weight`,
+    /// `text_align`, `line_height`) se inicializan con el valor del
+    /// padre antes de aplicar reglas y `style=`. Propiedades no
+    /// heredables (`background`, `display`, `margin`, `padding`,
+    /// `width`, `max_width`) siempre arrancan en el default.
+    pub fn compute_with_parent(
+        &self,
+        node: &Handle,
+        parent: Option<&ComputedStyle>,
+    ) -> ComputedStyle {
         let mut style = ComputedStyle::default();
+        if let Some(p) = parent {
+            style.color = p.color;
+            style.font_size = p.font_size;
+            style.font_weight = p.font_weight;
+            style.text_align = p.text_align;
+            style.line_height = p.line_height;
+        }
         let Some(local) = dom::element_name(node) else {
             return style;
         };
-        // Defaults por tag — `div`/`p`/`h1` son block.
+        // Defaults por tag — `div`/`p`/`h1` son block. `display` no
+        // hereda, así que siempre se setea según el tag local.
         style.display = default_display(&local);
 
-        // Defaults por tag para weight (h1..h6 y b/strong = bold) antes
-        // de la cascada — cualquier regla de autor las puede override.
-        style.font_weight = default_weight(&local);
+        // `font_weight` por tag (h1..h6/b/strong/th = bold) override
+        // el heredado — un `<b>` dentro de un `<p>` no-bold sigue
+        // siendo bold.
+        let weight_default = default_weight(&local);
+        if weight_default != 400 {
+            style.font_weight = weight_default;
+        }
 
         for rule in &self.rules {
             if rule.matches(node) {
@@ -1268,6 +1295,69 @@ mod tests {
         assert_eq!(st.max_width, LengthVal::Px(600.0));
         assert_eq!(st.text_align, TextAlign::Center);
         assert!((st.line_height.unwrap() - 1.6).abs() < 1e-6);
+    }
+
+    #[test]
+    fn hereda_color_y_font_size_del_padre() {
+        // `<p style="color:red; font-size:20px">foo <em>bar</em></p>` —
+        // el `<em>` no tiene regla propia pero hereda color y tamaño.
+        let html = r#"<html><body><p style="color:red; font-size:20px">foo<em>bar</em></p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        let p_style = eng.compute_with_parent(&p, None);
+        assert_eq!(p_style.color, Color::rgb(255, 0, 0));
+        let em = dom.find("em").unwrap();
+        let em_style = eng.compute_with_parent(&em, Some(&p_style));
+        assert_eq!(em_style.color, Color::rgb(255, 0, 0));
+        assert!((em_style.font_size - 20.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn no_hereda_propiedades_no_heredables() {
+        // background y margin/padding NO heredan.
+        let html = r#"<html><body><div style="background:red; margin:30px"><p>x</p></div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let div = dom.find("div").unwrap();
+        let div_style = eng.compute_with_parent(&div, None);
+        assert_eq!(div_style.background, Some(Color::rgb(255, 0, 0)));
+        let p = dom.find("p").unwrap();
+        let p_style = eng.compute_with_parent(&p, Some(&div_style));
+        assert_eq!(p_style.background, None);
+        // margin del <p> es 12px (UA default), no 30px del padre.
+        assert!((p_style.margin - 12.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn font_weight_bold_local_no_propaga_a_padre_no_bold() {
+        // Un `<b>` dentro de `<p>` no-bold sigue siendo bold.
+        let html = "<html><body><p>foo<b>bar</b></p></body></html>";
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        let p_style = eng.compute_with_parent(&p, None);
+        assert_eq!(p_style.font_weight, 400);
+        let b = dom.find("b").unwrap();
+        let b_style = eng.compute_with_parent(&b, Some(&p_style));
+        assert_eq!(b_style.font_weight, 700);
+    }
+
+    #[test]
+    fn box_tree_propaga_color_a_hoja_de_texto() {
+        // Verifica el bug original: el text leaf debe heredar el color
+        // del `<p>` padre.
+        let html = r#"<html><body><p style="color: #00ff00">verde</p></body></html>"#;
+        let eng = crate::Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut leaf_colors = Vec::new();
+        doc.box_tree.walk(|b| {
+            if b.text.as_deref() == Some("verde") {
+                leaf_colors.push(b.color);
+            }
+        });
+        assert_eq!(leaf_colors.len(), 1);
+        assert_eq!(leaf_colors[0], Color::rgb(0, 0xff, 0));
     }
 
     #[test]

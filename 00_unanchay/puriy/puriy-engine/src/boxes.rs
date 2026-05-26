@@ -128,7 +128,7 @@ fn walk_inner(b: &BoxNode, f: &mut impl FnMut(&BoxNode)) {
 pub fn build(dom: &DomTree, styles: &StyleEngine, base_url: &str) -> BoxTree {
     let base = url::Url::parse(base_url).ok();
     let body = dom.find("body").unwrap_or_else(|| dom.document());
-    let root = build_node(&body, styles, base.as_ref()).unwrap_or_else(empty_root);
+    let root = build_node(&body, styles, base.as_ref(), None).unwrap_or_else(empty_root);
     BoxTree { root }
 }
 
@@ -153,10 +153,15 @@ fn empty_root() -> BoxNode {
     }
 }
 
-fn build_node(node: &Handle, styles: &StyleEngine, base: Option<&url::Url>) -> Option<BoxNode> {
+fn build_node(
+    node: &Handle,
+    styles: &StyleEngine,
+    base: Option<&url::Url>,
+    parent_style: Option<&ComputedStyle>,
+) -> Option<BoxNode> {
     match &node.data {
         NodeData::Element { .. } => {
-            let style = styles.compute(node);
+            let style = styles.compute_with_parent(node, parent_style);
             if style.display == Display::None {
                 return None;
             }
@@ -176,20 +181,21 @@ fn build_node(node: &Handle, styles: &StyleEngine, base: Option<&url::Url>) -> O
             };
             let mut children = Vec::new();
             // <li>: prefija con bullet. Lo agregamos como un hijo Text
-            // inline antes de procesar los hijos reales.
+            // inline antes de procesar los hijos reales. El bullet
+            // hereda color/font-size de `style`.
             if tag.as_deref() == Some("li") {
-                children.push(bullet_marker());
+                children.push(inline_text_with_style("•  ".into(), &style));
             }
             // <img> sin imagen decodificada: muestra `alt`.
             if tag.as_deref() == Some("img") && image.is_none() {
                 if let Some(alt) = dom::attr(node, "alt") {
                     if !alt.trim().is_empty() {
-                        children.push(plain_inline_text(format!("[img: {alt}]")));
+                        children.push(inline_text_with_style(format!("[img: {alt}]"), &style));
                     }
                 }
             }
             for child in node.children.borrow().iter() {
-                if let Some(b) = build_node(child, styles, base) {
+                if let Some(b) = build_node(child, styles, base, Some(&style)) {
                     children.push(b);
                 }
             }
@@ -223,30 +229,17 @@ fn build_node(node: &Handle, styles: &StyleEngine, base: Option<&url::Url>) -> O
             if collapsed.is_empty() {
                 return None;
             }
-            Some(BoxNode {
-                display: Display::Inline,
-                background: None,
-                color: Color::BLACK,
-                font_size: 16.0,
-                font_weight: 400,
-                margin: 0.0,
-                padding: 0.0,
-                width: LengthVal::Auto,
-                max_width: LengthVal::Auto,
-                text_align: TextAlign::Left,
-                line_height: None,
-                text: Some(collapsed),
-                children: Vec::new(),
-                tag: None,
-                link: None,
-                image: None,
-            })
+            // El leaf de texto hereda las propiedades inheritables del
+            // padre (color, font-size, font-weight, text-align,
+            // line-height). Sin esto, todo texto sale negro 16px aunque
+            // el `<p>` padre indique color rojo.
+            Some(inline_text_with_style(collapsed, parent_style.unwrap_or(&ComputedStyle::default())))
         }
         _ => {
             // Document / Doctype / Comment → recurrir sólo en hijos.
             let mut children = Vec::new();
             for child in node.children.borrow().iter() {
-                if let Some(b) = build_node(child, styles, base) {
+                if let Some(b) = build_node(child, styles, base, parent_style) {
                     children.push(b);
                 }
             }
@@ -254,19 +247,20 @@ fn build_node(node: &Handle, styles: &StyleEngine, base: Option<&url::Url>) -> O
                 return None;
             }
             // Wrapeamos los hijos en un block transparente para no
-            // perder la jerarquía.
+            // perder la jerarquía. Heredamos lo del padre si lo hay.
+            let p = parent_style.cloned().unwrap_or_default();
             Some(BoxNode {
                 display: Display::Block,
                 background: None,
-                color: Color::BLACK,
-                font_size: 16.0,
-                font_weight: 400,
+                color: p.color,
+                font_size: p.font_size,
+                font_weight: p.font_weight,
                 margin: 0.0,
                 padding: 0.0,
                 width: LengthVal::Auto,
                 max_width: LengthVal::Auto,
-                text_align: TextAlign::Left,
-                line_height: None,
+                text_align: p.text_align,
+                line_height: p.line_height,
                 text: None,
                 children,
                 tag: None,
@@ -277,23 +271,22 @@ fn build_node(node: &Handle, styles: &StyleEngine, base: Option<&url::Url>) -> O
     }
 }
 
-fn bullet_marker() -> BoxNode {
-    plain_inline_text("•  ".into())
-}
-
-fn plain_inline_text(s: String) -> BoxNode {
+/// Construye un nodo Text inline con el color/font/text-align/line-height
+/// del estilo dado — usado tanto por hojas Text reales como por los
+/// markers sintéticos (`•` de `<li>`, `[img: alt]` de `<img>` roto).
+fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
     BoxNode {
         display: Display::Inline,
         background: None,
-        color: Color::BLACK,
-        font_size: 16.0,
-        font_weight: 400,
+        color: style.color,
+        font_size: style.font_size,
+        font_weight: style.font_weight,
         margin: 0.0,
         padding: 0.0,
         width: LengthVal::Auto,
         max_width: LengthVal::Auto,
-        text_align: TextAlign::Left,
-        line_height: None,
+        text_align: style.text_align,
+        line_height: style.line_height,
         text: Some(s),
         children: Vec::new(),
         tag: None,
