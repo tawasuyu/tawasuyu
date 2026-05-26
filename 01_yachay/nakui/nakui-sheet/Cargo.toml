@@ -1,0 +1,16 @@
+[package]
+name = "nakui-sheet"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Nakui — motor de hojas de cálculo determinista: SheetValue (Decimal), parser de fórmulas estilo Excel, grafo dinámico de dependencias y propagación reactiva sobre el kernel de nakui-core."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+petgraph = { workspace = true }
+rust_decimal = { version = "1.36", default-features = false, features = ["serde-str", "std"] }
