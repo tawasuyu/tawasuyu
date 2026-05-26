@@ -39,9 +39,12 @@ use serde_big_array::BigArray;
 pub const MAGIA: [u8; 8] = *b"RENASGRF";
 
 /// Version del format del superbloque en disco. Un disco con otra version se
-/// reformatea al arrancar. v2 (Fase 7) — el superbloque porta el ancla
-/// `manifiesto`, gemela de `raiz`.
-pub const VERSION_SUPERBLOQUE: u32 = 2;
+/// reformatea al arrancar. v3 (Fase 24) — el superbloque porta `log_inicio`:
+/// el sector donde arranca el log activo. El compactador semantico copia el
+/// set alcanzable a una zona limpia del disco y reanca el superbloque a un
+/// nuevo `log_inicio` en una sola escritura atomica. v2 (Fase 7) ya portaba
+/// el ancla `manifiesto`, gemela de `raiz`.
+pub const VERSION_SUPERBLOQUE: u32 = 3;
 
 /// Version del format del manifiesto serializado. Independiente de la del
 /// superbloque: el manifiesto es un objeto del grafo, no una estructura fija
@@ -169,14 +172,23 @@ pub struct Objeto {
     pub hijos: Vec<Hash>,
 }
 
-/// El superbloque: el sector 0 del disco. Ancla el grafo entero — dice por
-/// donde continua el log, cual es el objeto raiz y cual el manifiesto.
+/// El superbloque: el sector 0 del disco. Ancla el grafo entero — dice donde
+/// arranca el log activo, donde acaba, cual es el objeto raiz y cual el
+/// manifiesto.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct SuperBloque {
     /// Firma magica: debe ser [`MAGIA`].
     pub magia: [u8; 8],
     /// Version del format: debe ser [`VERSION_SUPERBLOQUE`].
     pub version: u32,
+    /// Primer sector del log activo. En un disco virgen es `1` (justo despues
+    /// del superbloque); el compactador semantico (Fase 24) lo desplaza al
+    /// principio de un segmento limpio cada vez que aspira los nodos muertos.
+    /// Mover `log_inicio` (junto con `cursor`) en una sola escritura del
+    /// superbloque es lo que convierte la compactacion en una transicion
+    /// atomica: el log viejo queda en sectores anteriores, ya inalcanzables,
+    /// pero el grafo logico es el mismo.
+    pub log_inicio: u64,
     /// Proximo sector libre del log — donde se anexara el siguiente objeto.
     pub cursor: u64,
     /// El objeto raiz del DAG: el punto de entrada que el userspace fija y lee.
@@ -809,6 +821,7 @@ mod pruebas {
         let sb = SuperBloque {
             magia: MAGIA,
             version: VERSION_SUPERBLOQUE,
+            log_inicio: 1,
             cursor: 4096,
             raiz: Some([1u8; 32]),
             manifiesto: Some([2u8; 32]),
@@ -816,5 +829,26 @@ mod pruebas {
         let bytes = sb.serializar().unwrap();
         assert!(bytes.len() <= TAM_SECTOR);
         assert_eq!(SuperBloque::deserializar(&bytes).unwrap(), sb);
+    }
+
+    #[test]
+    fn superbloque_porta_log_inicio_distinto_de_uno() {
+        // Tras una compactacion semantica, `log_inicio` no es 1: apunta al
+        // sector donde empieza el segmento limpio recien escrito. El
+        // superbloque sigue cabiendo en su sector y el roundtrip preserva
+        // el campo: el GC depende de esa simetria.
+        let sb = SuperBloque {
+            magia: MAGIA,
+            version: VERSION_SUPERBLOQUE,
+            log_inicio: 32_768,
+            cursor: 33_500,
+            raiz: Some([0xAA; 32]),
+            manifiesto: Some([0xBB; 32]),
+        };
+        let bytes = sb.serializar().unwrap();
+        assert!(bytes.len() <= TAM_SECTOR);
+        let leido = SuperBloque::deserializar(&bytes).unwrap();
+        assert_eq!(leido.log_inicio, 32_768);
+        assert_eq!(leido.cursor, 33_500);
     }
 }

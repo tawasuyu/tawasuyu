@@ -182,6 +182,29 @@ async fn tarea_compositor() {
         for _ in 0..compositor::partos_pendientes() {
             lanzar_app();
         }
+        // FASE 24 :: tic ocioso del compactador semantico. Cuando el log ha
+        // ganado bastantes escrituras desde la ultima pasada, aspirar los
+        // nodos huerfanos. La operacion es BLOQUEANTE para la E/S de disco
+        // pero ocurre una vez cada decenas de fotogramas, asi que el
+        // estrangulamiento es invisible al usuario. Si falla, lo dejamos
+        // en la traza serial y seguimos: el GC NO debe tumbar el compositor.
+        if almacen::conviene_compactar() {
+            match almacen::compactar() {
+                Ok(stats) => {
+                    let _ = writeln!(
+                        baliza::Serie,
+                        "gc :: compactado :: vivos={} muertos={} sectores={}->{}",
+                        stats.nodos_vivos,
+                        stats.nodos_muertos,
+                        stats.sectores_antes,
+                        stats.sectores_despues
+                    );
+                }
+                Err(motivo) => {
+                    let _ = writeln!(baliza::Serie, "gc :: compactar fallido :: {motivo}");
+                }
+            }
+        }
     }
 }
 

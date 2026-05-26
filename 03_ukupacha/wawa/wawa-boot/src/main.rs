@@ -289,6 +289,9 @@ fn sembrar_grafo() -> Result<(Vec<u8>, usize), String> {
     let superbloque = SuperBloque {
         magia: MAGIA,
         version: VERSION_SUPERBLOQUE,
+        // Un disco recien sembrado arranca el log justo despues del
+        // superbloque. El compactador semantico lo desplazara mas tarde.
+        log_inicio: 1,
         cursor,
         raiz: None,
         manifiesto: Some(hash_manifiesto),

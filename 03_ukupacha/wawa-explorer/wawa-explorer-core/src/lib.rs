@@ -253,6 +253,7 @@ mod tests {
         let sb = SuperBloque {
             magia: MAGIA,
             version: VERSION_SUPERBLOQUE,
+            log_inicio: 1,
             cursor: cursor_final,
             raiz: None,
             manifiesto: Some(manifest_hash),
@@ -298,6 +299,7 @@ mod tests {
         let sb = SuperBloque {
             magia: *b"OTRABASU",
             version: VERSION_SUPERBLOQUE,
+            log_inicio: 1,
             cursor: 1,
             raiz: None,
             manifiesto: None,
@@ -321,6 +323,7 @@ mod tests {
         let sb = SuperBloque {
             magia: MAGIA,
             version: VERSION_SUPERBLOQUE,
+            log_inicio: 1,
             cursor: 1,
             raiz: None,
             manifiesto: Some([0x42; 32]),
