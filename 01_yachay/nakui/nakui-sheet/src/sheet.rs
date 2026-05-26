@@ -47,7 +47,7 @@ struct CellState {
     value: SheetValue,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Sheet {
     cells: HashMap<CellRef, CellState>,
     graph: SheetGraph,

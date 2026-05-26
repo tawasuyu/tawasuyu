@@ -24,7 +24,7 @@ pub struct CycleError {
     pub chain: Vec<CellRef>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct SheetGraph {
     g: DiGraph<CellRef, ()>,
     nodes: HashMap<CellRef, NodeIndex>,
