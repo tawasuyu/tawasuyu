@@ -21,23 +21,39 @@ shared/wawa-config/       el bus en sí (modelo + watcher)
   Productor (escribe en cada *Save*) y consumidor (recibe
   `ConfigChanged` si otro proceso edita el archivo).
 * **`wawactl`** — CLI delgada para scripts y debugging. Subcomandos:
-  `path`, `show`, `get`, `set`, `module`, `reset`, `watch`.
+  `path`, `show`, `get`, `set`, `module`, `reset`, `watch`. Acepta
+  `--system` en operaciones de escritura/lectura para targetear la
+  capa `/etc/wawa/config.json` y `--layer system|user|effective` en
+  `show` para inspeccionar capas concretas.
 
 ## El bus
 
 ### Medio físico
 
-Un único archivo JSON canónico:
+Dos archivos JSON canónicos, en dos capas:
 
 ```
-$XDG_CONFIG_HOME/wawa/config.json
+/etc/wawa/config.json                  # sistema (Linux), requiere root
+$XDG_CONFIG_HOME/wawa/config.json      # usuario
 ```
 
-Resuelto con `directories::ProjectDirs::from("", "", "wawa")`. En
-Linux es `~/.config/wawa/config.json`. Las constantes
-`wawa_config::CONFIG_DIR` y `CONFIG_FILE` están expuestas para que
-las herramientas externas (tests, packagers) las puedan referenciar
-sin importar `directories` ellas mismas.
+`user_config_path()` resuelve la de usuario con
+`directories::ProjectDirs::from("", "", "wawa")` — en Linux es
+`~/.config/wawa/config.json`. `system_config_path()` devuelve
+`/etc/wawa/config.json` en Linux y `None` en otras plataformas.
+
+La capa de **sistema** define machine-wide defaults; la de **usuario**
+override campo por campo. `WawaConfig::load()` mergea `defaults →
+system → user` con deep merge en `modules` (clave por clave, no
+reemplazo total del mapa) y reemplazo total en el resto. Si la capa
+de sistema no existe, el comportamiento es idéntico al original.
+
+`/etc/` es una convención Unix/Linux: cuando wawa sea su propio SO,
+`system_config_path()` devolverá el mecanismo nativo que defina arje y
+la API pública no cambia. Las constantes `CONFIG_DIR`, `CONFIG_FILE`
+y `SYSTEM_CONFIG_DIR_LINUX` están expuestas para que herramientas
+externas (tests, packagers, instaladores) las puedan referenciar sin
+importar `directories`.
 
 ### Modelo
 
@@ -61,16 +77,26 @@ serializar → diffs limpios en git si el archivo está versionado.
 ### Productor
 
 ```rust
-use wawa_config::WawaConfig;
+use wawa_config::{Layer, WawaConfig};
 
-let mut cfg = WawaConfig::load();      // nunca falla; defaults si no existe
+let mut cfg = WawaConfig::load();      // efectiva mergeada; nunca falla
 cfg.theme_variant = "aurora".into();
-cfg.save()?;                            // atomic: tmp + rename
+cfg.save()?;                            // atomic: tmp + rename, capa usuario
+
+// O explícito a la capa de sistema (requiere root):
+cfg.save_to(Layer::System)?;
 ```
 
-`save()` escribe a `config.json.tmp` y renombra sobre `config.json`.
-Los watchers ven un único evento de creación que contiene la versión
-completa — no hay riesgo de leer un archivo a medias.
+`save()`/`save_to()` escriben a `config.json.tmp` y renombran sobre
+`config.json` en la capa indicada. Los watchers ven un único evento
+de creación que contiene la versión completa — no hay riesgo de leer
+un archivo a medias. `save()` (sin argumento) sigue apuntando a la
+capa de usuario para no romper callers existentes.
+
+Para inspeccionar una capa concreta sin mergear: `WawaConfig::
+load_layer(Layer::System)` o `Layer::User` devuelven `Option<Self>`
+(`None` si el archivo no existe en esa capa — distingue "ausente" de
+"presente con defaults").
 
 ### Consumidor
 
@@ -101,6 +127,13 @@ varios eventos `notify` por una sola operación lógica. El watcher
 agrupa señales durante **200 ms** y emite un único callback con la
 versión leída tras la pausa. Acepta perder estados intermedios
 durante ráfagas — solo importa el estado final.
+
+El `ConfigWatcher` observa **ambas capas**: el callback se dispara
+cuando cambia cualquiera de los dos archivos, ya con la config
+efectiva mergeada. Si la capa de sistema no aplica en la plataforma
+(no Linux) o no se puede observar (p. ej. `/etc/wawa` ausente al
+arrancar la app), el watcher sigue activo sólo sobre la capa de
+usuario — best-effort, log a `warn` y no rompe.
 
 ## Por qué archivo + `notify` y no daemon pub-sub
 
@@ -182,6 +215,13 @@ cargo build -p wawa-config -p wawa-panel-llimphi -p wawactl -p gioser-edit
 ./target/debug/wawactl module shuma off
 ./target/debug/wawactl reset
 
+# Capa de sistema (requiere root):
+sudo ./target/debug/wawactl set theme_variant dark --system
+sudo ./target/debug/wawactl module mirada off --system
+./target/debug/wawactl show --layer system    # sólo /etc/wawa/...
+./target/debug/wawactl show --layer user      # sólo $XDG_CONFIG_HOME/...
+./target/debug/wawactl show                   # efectiva (default)
+
 # Terminal 3 (opcional): consumidores reales
 ./target/debug/wawa-panel       # GUI; cambios se reflejan al instante
 ./target/debug/gioser-edit      # cambia theme cuando el bus emite
@@ -195,9 +235,11 @@ cargo build -p wawa-config -p wawa-panel-llimphi -p wawactl -p gioser-edit
 * **Toggles de módulos con efecto real** — actualmente persisten
   estado, no arrancan/paran daemons. El binding al supervisor del SO
   (arje, mirada-compositor, shuma) llega cuando exista el contrato.
-* **Sección `/etc/wawa/config.json`** — `wawa-config` ya expone
-  `watch_path()` para observar un directorio externo; falta una capa
-  que mezcle config de sistema y usuario con precedencia clara.
 * **Permisos** — hoy cualquier proceso del usuario puede tocar el
   archivo. Para multiusuario o sandboxes futuros, agregar
   `getpeercred`/`SO_PEERCRED` si pasamos a daemon.
+* **Migración a wawa-OS** — `system_config_path()` devolverá el
+  mecanismo nativo que defina arje en lugar de `/etc/wawa`. Los
+  consumidores no deberían enterarse: la API pública (`load`,
+  `save`, `Layer::{System,User}`) se mantiene; sólo cambia lo que
+  resuelve el path interno.
