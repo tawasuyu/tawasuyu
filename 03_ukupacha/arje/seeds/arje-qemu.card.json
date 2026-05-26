@@ -1,0 +1,64 @@
+{
+    "schema_version": 1,
+    "id": "01HQAR53D4M2NBV8KZTYXFQM01",
+    "lineage": null,
+    "label": "arje-qemu",
+    "provides": ["Spawn", "Journal"],
+    "requires": [],
+    "permissions": {
+        "networking": "full",
+        "filesystem": "read-write",
+        "ipc": { "allow": [] },
+        "processes": true
+    },
+    "soma": {
+        "namespaces": {
+            "mount": false, "pid": false, "net": false,
+            "uts": false, "ipc": false, "user": false, "cgroup": false
+        },
+        "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
+        "cgroup": { "path": "arje.slice/qemu", "cpu_weight": null, "io_weight": null },
+        "cpu_affinity": null
+    },
+    "payload": "Virtual",
+    "supervision": "OneShot",
+    "lifecycle": "daemon",
+    "priority": "normal",
+    "flow": { "input": [], "output": [] },
+    "genesis": [
+        {
+            "schema_version": 1,
+            "id": "01HQAR53D4M2NBV8KZTYXFQM02",
+            "label": "agetty-ttyS0",
+            "provides": [],
+            "requires": [],
+            "permissions": {
+                "networking": "none",
+                "filesystem": "read-write",
+                "ipc": { "allow": [] },
+                "processes": true
+            },
+            "soma": {
+                "namespaces": {
+                    "mount": false, "pid": false, "net": false,
+                    "uts": false, "ipc": false, "user": false, "cgroup": false
+                },
+                "rlimits": { "mem_bytes": null, "nproc": null, "nofile": null },
+                "cgroup": { "path": "arje.slice/getty", "cpu_weight": null, "io_weight": null },
+                "cpu_affinity": null
+            },
+            "payload": {
+                "Native": {
+                    "exec": "/sbin/agetty",
+                    "argv": ["--noclear", "ttyS0", "115200,38400,9600", "vt100"],
+                    "envp": []
+                }
+            },
+            "supervision": { "Restart": { "initial": 200, "max": 10000 } },
+            "lifecycle": "daemon",
+            "priority": "normal",
+            "flow": { "input": [], "output": [] },
+            "genesis": []
+        }
+    ]
+}
