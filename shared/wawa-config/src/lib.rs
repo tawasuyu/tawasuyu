@@ -1,9 +1,25 @@
 //! `wawa-config` — bus de configuración del SO wawa.
 //!
-//! Un único archivo JSON canónico (`$XDG_CONFIG_HOME/wawa/config.json`)
-//! actúa como medio: el panel de control y los daemons escriben; las
-//! apps Llimphi leen y se suscriben a cambios vía
-//! [`notify::RecommendedWatcher`].
+//! Dos capas de archivos JSON canónicos actúan como medio:
+//!
+//! 1. **Sistema** — `/etc/wawa/config.json` (Linux). Defaults
+//!    machine-wide; lo escribe el admin con `wawactl --system set …`
+//!    (requiere root) o un instalador.
+//! 2. **Usuario** — `$XDG_CONFIG_HOME/wawa/config.json` (Linux:
+//!    `~/.config/wawa/config.json`). Lo que escribe el panel y las
+//!    apps; **sobreescribe** campo por campo a la capa de sistema.
+//!
+//! El panel de control y los daemons escriben; las apps Llimphi leen y
+//! se suscriben a cambios vía [`notify::RecommendedWatcher`] sobre
+//! **ambos** paths.
+//!
+//! ## Nota sobre `/etc/wawa`
+//!
+//! `/etc/` es una convención de Unix/Linux. Cuando wawa sea su propio
+//! SO (no un userland sobre Linux), esta capa se reemplazará por el
+//! mecanismo nativo de "config de sistema" que defina arje — la API
+//! pública (`load`, `system_path`, `user_path`) se mantiene; sólo
+//! cambia lo que devuelve `system_path()` adentro.
 //!
 //! Por qué archivo + `notify` y no un daemon pub-sub:
 //!
@@ -84,6 +100,20 @@ use tracing::warn;
 pub const CONFIG_DIR: &str = "wawa";
 /// Nombre del archivo canónico.
 pub const CONFIG_FILE: &str = "config.json";
+/// Directorio de la capa de sistema en Linux. Cuando wawa sea su
+/// propio SO esta ruta se reemplaza por lo que defina arje; la API
+/// pública (`system_config_path`) se mantiene.
+pub const SYSTEM_CONFIG_DIR_LINUX: &str = "/etc/wawa";
+
+/// Capa de la cual se cargó/escribió una config. Útil para herramientas
+/// que necesiten distinguir explícitamente entre sistema y usuario.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Layer {
+    /// `/etc/wawa/config.json` — defaults machine-wide, requiere root.
+    System,
+    /// `$XDG_CONFIG_HOME/wawa/config.json` — override por usuario.
+    User,
+}
 
 /// Mapea el `theme_variant` de la config (lowercase, libre) al nombre
 /// canónico que reconoce `llimphi_theme::Theme::by_name` (capitalizado).
@@ -239,40 +269,79 @@ impl WawaConfig {
         *v = !*v;
     }
 
-    /// Path canónico del archivo. `None` si la plataforma no expone
-    /// un config dir (extremadamente raro fuera de embebidos).
+    /// Path canónico del archivo de usuario (alias de [`user_config_path`]).
+    /// `None` si la plataforma no expone un config dir (extremadamente
+    /// raro fuera de embebidos).
     pub fn path() -> Option<PathBuf> {
-        config_path()
+        user_config_path()
     }
 
-    /// Carga la config del disco. Si no existe, está corrupta, o no
-    /// hay ProjectDirs, devuelve defaults — nunca falla. Los errores
-    /// se loggean a `tracing::warn`.
+    /// Path canónico del archivo de la capa indicada. `None` si la
+    /// capa no aplica en esta plataforma (p. ej. `Layer::System` fuera
+    /// de Linux).
+    pub fn path_for(layer: Layer) -> Option<PathBuf> {
+        match layer {
+            Layer::System => system_config_path(),
+            Layer::User => user_config_path(),
+        }
+    }
+
+    /// Carga la config efectiva: defaults → capa de sistema → capa de
+    /// usuario. Cada capa **sobreescribe campo por campo** lo que
+    /// definió la anterior; campos ausentes preservan el valor
+    /// previo. Para `modules`, el merge es key-by-key (no reemplazo
+    /// total del mapa).
+    ///
+    /// Si ningún archivo existe, o están corruptos, devuelve defaults
+    /// — nunca falla. Los errores se loggean a `tracing::warn`.
     pub fn load() -> Self {
-        let Some(path) = config_path() else {
-            return Self::default();
-        };
+        let mut acc = serde_json::to_value(Self::default())
+            .expect("WawaConfig::default siempre serializa");
+        for layer in [Layer::System, Layer::User] {
+            if let Some(v) = load_layer_value(layer) {
+                merge_json(&mut acc, v);
+            }
+        }
+        serde_json::from_value(acc).unwrap_or_default()
+    }
+
+    /// Carga **sólo** la capa indicada, sin mergear con la otra. Útil
+    /// para herramientas como `wawactl --system show` que necesitan
+    /// inspeccionar una capa concreta. Si el archivo no existe,
+    /// devuelve `None` (no defaults — distingue "ausente" de
+    /// "presente con defaults"). Errores de parseo loggean warn y
+    /// también devuelven `None`.
+    pub fn load_layer(layer: Layer) -> Option<Self> {
+        let path = Self::path_for(layer)?;
         let bytes = match std::fs::read(&path) {
             Ok(b) => b,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Self::default(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
             Err(e) => {
-                warn!(?path, error = %e, "wawa-config: read failed, using defaults");
-                return Self::default();
+                warn!(?path, error = %e, "wawa-config: read failed");
+                return None;
             }
         };
         match serde_json::from_slice::<WawaConfig>(&bytes) {
-            Ok(c) => c,
+            Ok(c) => Some(c),
             Err(e) => {
-                warn!(?path, error = %e, "wawa-config: parse failed, using defaults");
-                Self::default()
+                warn!(?path, error = %e, "wawa-config: parse failed");
+                None
             }
         }
     }
 
-    /// Persiste atómicamente: serializa a `config.json.tmp` y renombra
+    /// Persiste atómicamente en la capa de **usuario** (compat con
+    /// callers existentes): serializa a `config.json.tmp` y renombra
     /// sobre `config.json`. Crea el directorio padre si no existe.
     pub fn save(&self) -> Result<PathBuf, ConfigError> {
-        let path = config_path().ok_or(ConfigError::NoProjectDirs)?;
+        self.save_to(Layer::User)
+    }
+
+    /// Persiste en la capa indicada. `Layer::System` apunta a
+    /// `/etc/wawa/config.json` y típicamente requiere root — devuelve
+    /// `ConfigError::Io` con `PermissionDenied` si no.
+    pub fn save_to(&self, layer: Layer) -> Result<PathBuf, ConfigError> {
+        let path = Self::path_for(layer).ok_or(ConfigError::NoProjectDirs)?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -281,6 +350,52 @@ impl WawaConfig {
         std::fs::write(&tmp, json)?;
         std::fs::rename(&tmp, &path)?;
         Ok(path)
+    }
+}
+
+/// Lee y parsea una capa como `serde_json::Value`. Devuelve `None`
+/// (no defaults) si el archivo no existe o falla el parse — esto es
+/// distinto del `WawaConfig::load_layer` que también devuelve Option,
+/// pero acá trabajamos con Value para mergear sin perder "campo
+/// ausente vs explícito".
+fn load_layer_value(layer: Layer) -> Option<serde_json::Value> {
+    let path = WawaConfig::path_for(layer)?;
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            warn!(?path, error = %e, "wawa-config: read failed");
+            return None;
+        }
+    };
+    match serde_json::from_slice::<serde_json::Value>(&bytes) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            warn!(?path, error = %e, "wawa-config: parse failed");
+            None
+        }
+    }
+}
+
+/// Merge profundo: `over` sobreescribe `base` hoja por hoja, recursivo
+/// sobre objetos JSON. Para arrays y escalares, `over` reemplaza
+/// completamente. Esto preserva la semántica "campo ausente → no
+/// modifica la capa inferior" y permite que un user override sólo
+/// algunas keys de `modules`.
+fn merge_json(base: &mut serde_json::Value, over: serde_json::Value) {
+    use serde_json::Value;
+    match (base, over) {
+        (Value::Object(b), Value::Object(o)) => {
+            for (k, v) in o {
+                match b.get_mut(&k) {
+                    Some(existing) => merge_json(existing, v),
+                    None => {
+                        b.insert(k, v);
+                    }
+                }
+            }
+        }
+        (slot, v) => *slot = v,
     }
 }
 
@@ -298,13 +413,30 @@ pub enum ConfigError {
     Notify(#[from] notify::Error),
 }
 
-fn config_path() -> Option<PathBuf> {
-    // El qualifier "" + organization "" se mapea a
-    // `$XDG_CONFIG_HOME/wawa/` en Linux (típicamente
-    // `~/.config/wawa/`), `~/Library/Application Support/wawa/` en
-    // macOS, `%APPDATA%/wawa/` en Windows.
+/// Path del archivo de **usuario**. El qualifier "" + organization ""
+/// se mapea a `$XDG_CONFIG_HOME/wawa/` en Linux (típicamente
+/// `~/.config/wawa/`), `~/Library/Application Support/wawa/` en
+/// macOS, `%APPDATA%/wawa/` en Windows. `None` si la plataforma no
+/// expone un config dir.
+pub fn user_config_path() -> Option<PathBuf> {
     directories::ProjectDirs::from("", "", CONFIG_DIR)
         .map(|d| d.config_dir().join(CONFIG_FILE))
+}
+
+/// Path del archivo de **sistema**. `Some("/etc/wawa/config.json")`
+/// en Linux; `None` en otras plataformas (no hay convención
+/// equivalente y no vale la pena inventarla). Cuando wawa sea su
+/// propio SO, esta función devolverá el equivalente nativo y la API
+/// pública no cambia.
+pub fn system_config_path() -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        Some(PathBuf::from(SYSTEM_CONFIG_DIR_LINUX).join(CONFIG_FILE))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
 }
 
 // =====================================================================
@@ -315,24 +447,31 @@ fn config_path() -> Option<PathBuf> {
 /// para seguir recibiendo notificaciones; al dropearlo, los callbacks
 /// dejan de dispararse.
 ///
-/// El watcher escucha el directorio padre con `RecursiveMode::
-/// NonRecursive` y filtra por `config.json` — así detecta tanto
-/// modificaciones in-place como reemplazos atómicos por `rename`.
+/// Observa **ambas capas** (sistema y usuario): un cambio en
+/// cualquiera dispara `on_change` con la config efectiva ya mergeada.
+/// Cada capa escucha el directorio padre con
+/// `RecursiveMode::NonRecursive` y filtra por `config.json` — así
+/// detecta tanto modificaciones in-place como reemplazos atómicos por
+/// `rename`. Si la capa de sistema no aplica en la plataforma (no
+/// Linux), o no se puede crear/observar (p. ej. `/etc/wawa` sin
+/// permisos de lectura — improbable porque `/etc/` es world-readable
+/// por convención), se ignora con un warn y el watcher sigue activo
+/// sólo sobre la capa de usuario.
 ///
 /// Para evitar disparar dos veces seguidas cuando un editor escribe
 /// con la secuencia `truncate → write → close`, el watcher debouncea
 /// internamente con un timeout de ~200 ms: agrupa eventos consecutivos
 /// y emite un único callback con la última versión leída.
 pub struct ConfigWatcher {
-    _watcher: RecommendedWatcher,
+    _watchers: Vec<RecommendedWatcher>,
     _debounce_thread: Option<thread::JoinHandle<()>>,
 }
 
 impl ConfigWatcher {
-    /// Arranca el watcher. `on_change` se llama cada vez que el
-    /// archivo cambia, ya con la nueva config parseada. Si el parseo
-    /// falla, no se invoca (se loggea como warn y se ignora hasta el
-    /// próximo cambio).
+    /// Arranca el watcher. `on_change` se llama cada vez que **alguna**
+    /// de las capas cambia, ya con la nueva config efectiva mergeada
+    /// (sistema ← usuario). Si el parseo falla, no se invoca (se
+    /// loggea como warn y se ignora hasta el próximo cambio).
     ///
     /// `on_change` corre en un thread propio del watcher — para
     /// reentrar al loop de Llimphi, capturá un `Handle<Msg>` clonado
@@ -341,24 +480,73 @@ impl ConfigWatcher {
     where
         F: FnMut(WawaConfig) + Send + 'static,
     {
-        let path = config_path().ok_or(ConfigError::NoProjectDirs)?;
-        let parent = path
-            .parent()
-            .ok_or_else(|| {
-                ConfigError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "config path sin parent",
-                ))
-            })?
-            .to_path_buf();
-        // Crear el dir si falta: si el archivo todavía no existe,
-        // notify igual puede watchear el dir vacío.
-        std::fs::create_dir_all(&parent)?;
-
-        let target_name = path.file_name().map(|n| n.to_owned());
         let (tx, rx) = mpsc::channel::<()>();
+        let mut watchers = Vec::with_capacity(2);
 
-        let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        // Capa de usuario es obligatoria; si no hay ProjectDirs es un
+        // entorno raro y devolvemos error como antes.
+        let user_path = user_config_path().ok_or(ConfigError::NoProjectDirs)?;
+        watchers.push(spawn_layer_watcher(&user_path, tx.clone(), /*must_exist=*/ true)?);
+
+        // Capa de sistema es best-effort: si no aplica (no Linux), o
+        // no se puede observar (sin permiso de lectura de `/etc/wawa`,
+        // que es muy raro pero posible si el admin la chmodea), no
+        // rompe — sólo no se entera de cambios de sistema.
+        if let Some(sys_path) = system_config_path() {
+            match spawn_layer_watcher(&sys_path, tx.clone(), /*must_exist=*/ false) {
+                Ok(w) => watchers.push(w),
+                Err(e) => warn!(?sys_path, error = %e, "wawa-config: system layer watch skipped"),
+            }
+        }
+
+        // Debounce: junta señales durante ~200 ms y al cierre llama
+        // `on_change` con la lectura más reciente (mergeada). Acepta
+        // que perdamos ráfagas intermedias — solo importa el estado
+        // final.
+        let debounce = thread::Builder::new()
+            .name("wawa-config-debounce".into())
+            .spawn(move || debounce_loop(rx, Box::new(on_change)))
+            .ok();
+
+        Ok(Self {
+            _watchers: watchers,
+            _debounce_thread: debounce,
+        })
+    }
+}
+
+fn spawn_layer_watcher(
+    path: &Path,
+    tx: mpsc::Sender<()>,
+    must_exist: bool,
+) -> Result<RecommendedWatcher, ConfigError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| {
+            ConfigError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "config path sin parent",
+            ))
+        })?
+        .to_path_buf();
+
+    // Para la capa de usuario creamos el dir si falta — notify puede
+    // watchear un dir vacío. Para la de sistema no lo creamos: si
+    // `/etc/wawa` no existe, probablemente esta máquina no usa la capa
+    // de sistema y mejor no requerir permisos de root para correr una
+    // app de usuario.
+    if must_exist {
+        std::fs::create_dir_all(&parent)?;
+    } else if !parent.exists() {
+        return Err(ConfigError::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "directorio de capa de sistema ausente",
+        )));
+    }
+
+    let target_name = path.file_name().map(|n| n.to_owned());
+    let mut watcher =
+        notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
             let event = match res {
                 Ok(e) => e,
                 Err(e) => {
@@ -382,26 +570,10 @@ impl ConfigWatcher {
             ) {
                 return;
             }
-            // Disparar al debounce sin importar si tiene capacidad —
-            // si ya hay uno pendiente no necesitamos otro.
             let _ = tx.send(());
         })?;
-
-        watcher.watch(&parent, RecursiveMode::NonRecursive)?;
-
-        // Debounce: junta señales durante ~200 ms y al cierre llama
-        // `on_change` con la lectura más reciente. Acepta que perdamos
-        // ráfagas intermedias — solo importa el estado final.
-        let debounce = thread::Builder::new()
-            .name("wawa-config-debounce".into())
-            .spawn(move || debounce_loop(rx, Box::new(on_change)))
-            .ok();
-
-        Ok(Self {
-            _watcher: watcher,
-            _debounce_thread: debounce,
-        })
-    }
+    watcher.watch(&parent, RecursiveMode::NonRecursive)?;
+    Ok(watcher)
 }
 
 fn debounce_loop(rx: mpsc::Receiver<()>, mut on_change: Box<dyn FnMut(WawaConfig) + Send>) {
@@ -487,6 +659,52 @@ mod tests {
     }
 
     #[test]
+    fn merge_user_over_system_overrides_field_by_field() {
+        // Sistema define theme aurora y lang qu-PE; usuario sólo
+        // sobreescribe lang. Resultado: theme aurora (de sistema),
+        // lang en-US (de usuario).
+        let mut base = serde_json::to_value(WawaConfig::default()).unwrap();
+        let system: serde_json::Value =
+            serde_json::from_str(r#"{"theme_variant":"aurora","lang":"qu-PE"}"#).unwrap();
+        let user: serde_json::Value =
+            serde_json::from_str(r#"{"lang":"en-US"}"#).unwrap();
+        merge_json(&mut base, system);
+        merge_json(&mut base, user);
+        let final_cfg: WawaConfig = serde_json::from_value(base).unwrap();
+        assert_eq!(final_cfg.theme_variant, "aurora");
+        assert_eq!(final_cfg.lang, "en-US");
+        // El resto cae al default.
+        assert_eq!(final_cfg.accent, "default");
+    }
+
+    #[test]
+    fn merge_modules_is_deep_per_key() {
+        // Sistema apaga mirada; usuario apaga shuma. Esperado: ambos
+        // off, el resto en su default true.
+        let mut base = serde_json::to_value(WawaConfig::default()).unwrap();
+        let system: serde_json::Value =
+            serde_json::from_str(r#"{"modules":{"mirada":false}}"#).unwrap();
+        let user: serde_json::Value =
+            serde_json::from_str(r#"{"modules":{"shuma":false}}"#).unwrap();
+        merge_json(&mut base, system);
+        merge_json(&mut base, user);
+        let final_cfg: WawaConfig = serde_json::from_value(base).unwrap();
+        assert!(!final_cfg.module_enabled(modules::MIRADA));
+        assert!(!final_cfg.module_enabled(modules::SHUMA));
+        assert!(final_cfg.module_enabled(modules::CHASQUI));
+    }
+
+    #[test]
+    fn system_path_only_on_linux() {
+        let p = system_config_path();
+        if cfg!(target_os = "linux") {
+            assert_eq!(p, Some(PathBuf::from("/etc/wawa/config.json")));
+        } else {
+            assert!(p.is_none());
+        }
+    }
+
+    #[test]
     fn constants_match_helpers() {
         // THEME_VARIANTS y ACCENTS deben coincidir con lo que aceptan
         // los helpers — guarda contra agregar uno y olvidar el otro.
@@ -505,11 +723,23 @@ mod tests {
     }
 }
 
-/// Path absoluto de utilidad para que apps externas (no las del
-/// monorepo) puedan resolver el config dir sin importar `directories`.
+/// Path absoluto del config dir de **usuario** — alias por compat.
 /// `None` si no hay ProjectDirs disponibles.
 pub fn config_dir() -> Option<PathBuf> {
     directories::ProjectDirs::from("", "", CONFIG_DIR).map(|d| d.config_dir().to_path_buf())
+}
+
+/// Path absoluto del config dir de **sistema** (`/etc/wawa` en Linux).
+/// `None` en otras plataformas.
+pub fn system_config_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        Some(PathBuf::from(SYSTEM_CONFIG_DIR_LINUX))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
 }
 
 /// Helper opcional: agrega el `path` provisto a una lista de
