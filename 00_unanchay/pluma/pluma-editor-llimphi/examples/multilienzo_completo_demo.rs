@@ -84,6 +84,12 @@ enum Msg {
     /// Si el backend no está configurado (env key ausente), conserva el
     /// anterior y muestra error en la status bar.
     CiclarBackend,
+    /// Editor inline MVP: muta el primer párrafo de la madre añadiendo un
+    /// sello con el contador, propaga `PendingEvaluation` por el grafo,
+    /// avanza `modificado_en` de la madre. Después, las hijas Derivadas
+    /// quedan stale automáticamente. Sirve para demostrar el ciclo
+    /// edit → stale → regenerar sin necesitar widget de input.
+    EditarPrimerParrafoMadre,
 }
 
 struct Model {
@@ -327,6 +333,51 @@ impl App for Demo {
                         contar_stale(&m)
                     );
                 }
+            }
+            Msg::EditarPrimerParrafoMadre => {
+                // Tomar el primer átomo de la madre y mutar su contenido.
+                // Si la madre no tiene átomos, no hay nada que editar.
+                let (madre_id, primer_atom_id) =
+                    match m.cuerpos.first().and_then(|c| c.orden.first().map(|id| (c.id, *id))) {
+                        Some(t) => t,
+                        None => return m,
+                    };
+                let nuevo_texto = {
+                    let actual = m
+                        .graph
+                        .get(primer_atom_id)
+                        .map(|a| a.content.as_str().to_string())
+                        .unwrap_or_default();
+                    // Sello incremental para que cada click produzca texto
+                    // distinto (sino el hash no cambiaría).
+                    let sello = ahora_unix() % 10_000;
+                    if let Some(idx) = actual.rfind(" ⟨edit ") {
+                        format!("{} ⟨edit {sello}⟩", &actual[..idx])
+                    } else {
+                        format!("{actual} ⟨edit {sello}⟩")
+                    }
+                };
+                if let Some(atom) = m.graph.get_mut(primer_atom_id) {
+                    atom.set_content(nuevo_texto);
+                    // Persistir el atom mutado.
+                    let _ = m.store.put_atom(atom);
+                }
+                // Propaga PendingEvaluation a todos los descendientes del
+                // átomo en el DAG narrativo (caso típico: si el atom era
+                // dep de otros).
+                let afectados = m.graph.propagate_mutation(primer_atom_id);
+                eprintln!(
+                    "multilienzo_completo_demo :: editado primer párrafo madre — \
+                     {} átomos descendientes marcados PendingEvaluation",
+                    afectados.len()
+                );
+                // Avanzar modificado_en de la madre — las hijas Derivadas
+                // pasan a `es_stale(modif)` automáticamente.
+                if let Some(madre) = m.cuerpos.iter_mut().find(|c| c.id == madre_id) {
+                    madre.metadatos.modificado_en = ahora_unix();
+                    let _ = m.store.put_cuerpo(madre);
+                }
+                let _ = m.store.flush();
             }
             Msg::CiclarBackend => {
                 let siguiente = siguiente_backend(m.backend);
@@ -684,6 +735,11 @@ where
         button_view::<Msg>("resumir 30p", pal, MsgUi::Resumir(Some(30)).into()),
         button_view::<Msg>(label_focus, pal_focus, MsgUi::ToggleSoloMadre.into()),
         button_view::<Msg>("tocar madre", pal_focus, MsgUi::TocarMadre.into()),
+        button_view::<Msg>(
+            "editar madre",
+            pal_focus,
+            MsgUi::EditarPrimerParrafoMadre.into(),
+        ),
     ];
     // Botón cíclico de backend: muestra el actual, click pasa al siguiente.
     botones.push(button_view::<Msg>(
@@ -770,6 +826,7 @@ enum MsgUi {
     TocarMadre,
     RegenerarSiguienteStale,
     CiclarBackend,
+    EditarPrimerParrafoMadre,
 }
 
 impl From<MsgUi> for Msg {
@@ -782,6 +839,7 @@ impl From<MsgUi> for Msg {
             MsgUi::TocarMadre => Msg::TocarMadre,
             MsgUi::RegenerarSiguienteStale => Msg::RegenerarSiguienteStale,
             MsgUi::CiclarBackend => Msg::CiclarBackend,
+            MsgUi::EditarPrimerParrafoMadre => Msg::EditarPrimerParrafoMadre,
         }
     }
 }
