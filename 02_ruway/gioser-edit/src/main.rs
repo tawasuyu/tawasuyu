@@ -12,10 +12,12 @@
 //!   line numbers, undo/redo, copy/cut/paste.
 //! - **Atajos globales**: Ctrl+S guarda · Ctrl+W cierra tab · Ctrl+Tab /
 //!   Ctrl+Shift+Tab ciclan tabs · Ctrl+P fuzzy file picker (walk
-//!   recursivo del workspace, hasta 50k archivos) · Ctrl+F find · Ctrl+G
-//!   next match · Ctrl+Space completions · Ctrl+K hover · Ctrl+Shift+F
-//!   format · Ctrl+Shift+Space signatureHelp · F12 goto-def · Shift+F12
-//!   references · F2 rename.
+//!   recursivo del workspace, hasta 50k archivos) · Ctrl+Shift+F
+//!   find-in-files (JetBrains style: panel con input + lista de matches
+//!   file:line + snippet, Enter abre el match) · Ctrl+F find en archivo
+//!   actual · Ctrl+G next match · Ctrl+Space completions · Ctrl+K hover
+//!   · Ctrl+Alt+L format (estilo JetBrains) · Ctrl+Shift+Space
+//!   signatureHelp · F12 goto-def · Shift+F12 references · F2 rename.
 //! - **Atajos del editor**: arrows + Shift/Ctrl, Home/End, Ctrl+Home/End,
 //!   PageUp/Down, Tab/Shift+Tab, Backspace/Delete, Ctrl+Z/Y/Shift+Z
 //!   (undo/redo), Ctrl+C/X/V (clipboard del sistema vía arboard).
@@ -84,6 +86,14 @@ enum Msg {
     PickerNav { delta: i32 },
     /// Enter en el picker — abre (o activa) el archivo seleccionado.
     PickerApply,
+    /// Ctrl+Shift+F abre el find-in-files (estilo JetBrains).
+    FifOpen,
+    FifClose,
+    FifKey(KeyEvent),
+    FifNav { delta: i32 },
+    /// Enter sin resultados ejecuta la búsqueda; con resultados abre el
+    /// archivo del match seleccionado.
+    FifSubmit,
     // Find
     FindOpen,
     FindClose,
@@ -157,6 +167,8 @@ struct Model {
     all_files: Vec<PathBuf>,
     /// Estado del picker; `None` cerrado.
     picker: Option<PickerState>,
+    /// Estado del find-in-files; `None` cerrado.
+    fif: Option<FifState>,
     tabs: Vec<Tab>,
     /// Índice del tab activo dentro de `tabs`. `None` si no hay ninguno
     /// abierto todavía.
@@ -186,6 +198,32 @@ struct Model {
     references: Option<ReferencesBar>,
     /// Prompt de rename con el nuevo nombre + pos original; `None` cerrado.
     rename: Option<RenameBar>,
+}
+
+/// Un match individual del find-in-files.
+struct FifMatch {
+    /// Índice a `Model.all_files`.
+    file_idx: usize,
+    /// 0-based line / col del primer carácter del match.
+    line: usize,
+    col: usize,
+    /// La línea entera donde apareció el match, trimeada. Sirve de
+    /// preview en la lista de resultados.
+    snippet: String,
+}
+
+/// Estado del find-in-files (Ctrl+Shift+F). A diferencia del picker, la
+/// búsqueda no corre en cada keystroke — sólo cuando el usuario manda
+/// Enter (la primera vez) o sigue tipeando. Es sync por ahora: si se
+/// vuelve lento sobre el workspace, mover a thread + dispatch.
+struct FifState {
+    input: TextInputState,
+    results: Vec<FifMatch>,
+    /// Índice dentro de `results`.
+    selected: usize,
+    /// Última query ejecutada — para mostrar cuándo el input difiere y
+    /// hay que apretar Enter de nuevo.
+    last_query: String,
 }
 
 /// Estado del fuzzy file picker (Ctrl+P).
@@ -332,6 +370,7 @@ impl App for EditorApp {
             selected: None,
             all_files,
             picker: None,
+            fif: None,
             tabs: Vec::new(),
             active: None,
             clipboard: ArboardClipboard::new(),
@@ -422,6 +461,79 @@ impl App for EditorApp {
                 let Some(path) = m.all_files.get(file_idx).cloned() else { return m };
                 m.picker = None;
                 open_path(m, path)
+            }
+            Msg::FifOpen => {
+                let mut m = model;
+                if m.fif.is_none() {
+                    m.fif = Some(FifState {
+                        input: TextInputState::new(),
+                        results: Vec::new(),
+                        selected: 0,
+                        last_query: String::new(),
+                    });
+                    m.status = format!(
+                        "find-in-files · escribí + Enter para buscar en {} archivos · Esc cierra",
+                        m.all_files.len(),
+                    );
+                }
+                m
+            }
+            Msg::FifClose => Model { fif: None, ..model },
+            Msg::FifKey(ev) => {
+                let mut m = model;
+                if let Some(f) = m.fif.as_mut() {
+                    f.input.apply_key(&ev);
+                }
+                m
+            }
+            Msg::FifNav { delta } => {
+                let mut m = model;
+                if let Some(f) = m.fif.as_mut() {
+                    let n = f.results.len() as i32;
+                    if n > 0 {
+                        f.selected = (f.selected as i32 + delta).rem_euclid(n) as usize;
+                    }
+                }
+                m
+            }
+            Msg::FifSubmit => {
+                let mut m = model;
+                let Some(f) = m.fif.as_ref() else { return m };
+                let query = f.input.text();
+                // Si el query cambió (o nunca corrimos), ejecutamos search.
+                // Si no, Enter abre el match seleccionado.
+                let needs_search = query != f.last_query || f.results.is_empty();
+                if needs_search {
+                    if query.len() < 2 {
+                        m.status = "find-in-files · query muy corta (mín 2 chars)".into();
+                        return m;
+                    }
+                    let started = std::time::Instant::now();
+                    let results = find_in_files(&m.all_files, &query);
+                    let elapsed = started.elapsed();
+                    let fif = m.fif.as_mut().unwrap();
+                    fif.results = results;
+                    fif.selected = 0;
+                    fif.last_query = query.clone();
+                    m.status = format!(
+                        "find-in-files · «{query}» · {} matches · {:.0} ms",
+                        fif.results.len(),
+                        elapsed.as_secs_f64() * 1000.0,
+                    );
+                    return m;
+                }
+                // Enter con resultados → abrir el match seleccionado.
+                let Some(fm) = f.results.get(f.selected) else { return m };
+                let line = fm.line;
+                let col = fm.col;
+                let Some(path) = m.all_files.get(fm.file_idx).cloned() else { return m };
+                m.fif = None;
+                let mut m = open_path(m, path);
+                if let Some(tab) = m.active_tab_mut() {
+                    tab.editor.set_caret_at(line, col);
+                    tab.editor.ensure_caret_visible(EDITOR_VISIBLE_LINES);
+                }
+                m
             }
             Msg::FindOpen => {
                 let mut m = model;
@@ -854,6 +966,17 @@ impl App for EditorApp {
                 _ => Some(Msg::PickerKey(event.clone())),
             };
         }
+        // Find-in-files abierto: idem, pero Enter es Submit (ejecuta
+        // search la primera vez, abre match las siguientes).
+        if model.fif.is_some() {
+            return match &event.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::FifClose),
+                Key::Named(NamedKey::Enter) => Some(Msg::FifSubmit),
+                Key::Named(NamedKey::ArrowDown) => Some(Msg::FifNav { delta: 1 }),
+                Key::Named(NamedKey::ArrowUp) => Some(Msg::FifNav { delta: -1 }),
+                _ => Some(Msg::FifKey(event.clone())),
+            };
+        }
 
         // Atajos globales
         if event.modifiers.ctrl {
@@ -897,9 +1020,16 @@ impl App for EditorApp {
             {
                 return Some(Msg::HoverRequest);
             }
-            // Ctrl+Shift+F = format. (Ctrl+F sin Shift sigue siendo find.)
+            // Ctrl+Shift+F = find-in-files (estilo JetBrains).
             if event.modifiers.shift
                 && matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("f"))
+            {
+                return Some(Msg::FifOpen);
+            }
+            // Ctrl+Alt+L = format (estilo JetBrains; antes era Ctrl+Shift+F).
+            if event.modifiers.alt
+                && !event.modifiers.shift
+                && matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("l"))
                 && model.active_tab().is_some()
             {
                 return Some(Msg::FormatRequest);
@@ -1130,6 +1260,9 @@ fn active_editor_content(model: &Model, theme: &Theme) -> View<Msg> {
     if let Some(p) = model.picker.as_ref() {
         children.push(picker_view(p, model, theme));
     }
+    if let Some(f) = model.fif.as_ref() {
+        children.push(fif_view(f, model, theme));
+    }
     if let Some(find) = model.find.as_ref() {
         children.push(find_bar(find, theme));
     }
@@ -1189,6 +1322,9 @@ const COMPLETIONS_MAX_ITEMS_VISIBLE: usize = 5;
 const PICKER_BAR_H: f32 = 220.0;
 const PICKER_ROW_H: f32 = 20.0;
 const PICKER_MAX_VISIBLE: usize = 9;
+const FIF_BAR_H: f32 = 280.0;
+const FIF_ROW_H: f32 = 20.0;
+const FIF_MAX_VISIBLE: usize = 11;
 
 const HOVER_BAR_H: f32 = 96.0;
 const SIG_HELP_BAR_H: f32 = 56.0;
@@ -1576,6 +1712,103 @@ fn picker_view(picker: &PickerState, model: &Model, theme: &Theme) -> View<Msg> 
     .children(children)
 }
 
+fn fif_view(fif: &FifState, model: &Model, theme: &Theme) -> View<Msg> {
+    let tp = TextInputPalette::from_theme(theme);
+    let dirty_query = fif.input.text() != fif.last_query;
+    let header = if fif.results.is_empty() && fif.last_query.is_empty() {
+        format!("find-in-files · escribí + Enter · {} archivos · Esc cierra", model.all_files.len())
+    } else if fif.results.is_empty() {
+        format!("find-in-files · «{}» · sin matches · Esc cierra", fif.last_query)
+    } else {
+        let staleness = if dirty_query { " · query cambió, Enter re-busca" } else { "" };
+        format!(
+            "find-in-files · «{}» · {} / {} matches · ↓↑ Enter abre{staleness} · Esc cierra",
+            fif.last_query,
+            fif.selected + 1,
+            fif.results.len(),
+        )
+    };
+    let header_view = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
+        padding: Rect {
+            left: length(8.0_f32), right: length(8.0_f32),
+            top: length(0.0_f32), bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .text_aligned(header, 10.0, theme.fg_muted, Alignment::Start);
+
+    let input_view = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
+        padding: Rect {
+            left: length(6.0_f32), right: length(6.0_f32),
+            top: length(2.0_f32), bottom: length(2.0_f32),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(vec![text_input_view(
+        &fif.input,
+        "buscar en archivos…",
+        true,
+        &tp,
+        Msg::FifOpen,
+    )]);
+
+    // Ventana de resultados centrada en el seleccionado.
+    let visible_start = fif.selected.saturating_sub(FIF_MAX_VISIBLE.saturating_sub(1));
+    let visible_end = (visible_start + FIF_MAX_VISIBLE).min(fif.results.len());
+    let mut rows: Vec<View<Msg>> = Vec::with_capacity(FIF_MAX_VISIBLE);
+    for i in visible_start..visible_end {
+        let Some(fm) = fif.results.get(i) else { continue };
+        let Some(path) = model.all_files.get(fm.file_idx) else { continue };
+        let rel = relative_to(&model.root, path);
+        let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("?");
+        let dir = rel.strip_suffix(name).unwrap_or("").trim_end_matches('/');
+        let dir_label = if dir.is_empty() { String::new() } else { format!("  {dir}") };
+        let label = format!(
+            "{name}:{}{dir_label}    {}",
+            fm.line + 1,
+            fm.snippet,
+        );
+        let selected = i == fif.selected;
+        let bg = if selected { theme.bg_selected } else { theme.bg_panel };
+        let fg = if selected { theme.fg_text } else { theme.fg_muted };
+        rows.push(
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: length(FIF_ROW_H) },
+                padding: Rect {
+                    left: length(10.0_f32), right: length(8.0_f32),
+                    top: length(0.0_f32), bottom: length(0.0_f32),
+                },
+                align_items: Some(AlignItems::Center),
+                flex_shrink: 0.0,
+                ..Default::default()
+            })
+            .fill(bg)
+            .text_aligned(label, 11.0, fg, Alignment::Start),
+        );
+    }
+
+    let mut children: Vec<View<Msg>> = Vec::with_capacity(2 + rows.len());
+    children.push(header_view);
+    children.push(input_view);
+    children.extend(rows);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: length(FIF_BAR_H) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(children)
+}
+
 fn find_bar(find: &FindBarState, theme: &Theme) -> View<Msg> {
     let tp = TextInputPalette::from_theme(theme);
     let input = text_input_view(&find.input, "buscar… (Enter / Ctrl+G siguiente · Shift inverso · Esc cierra)", true, &tp, Msg::FindOpen);
@@ -1803,6 +2036,75 @@ fn picker_refilter(picker: &mut PickerState, files: &[PathBuf], root: &Path) {
 }
 
 const PICKER_MAX_RESULTS: usize = 200;
+const FIF_MAX_RESULTS: usize = 1000;
+const FIF_MAX_FILE_SIZE: u64 = 2_000_000;
+const FIF_SNIPPET_MAX_CHARS: usize = 160;
+
+/// Búsqueda simple substring case-insensitive sobre todos los files.
+/// Sync: lee cada archivo (skipea binarios obvios y >2MB), recolecta
+/// matches por línea (un match por línea aunque haya varios en la misma).
+/// Cap a 1000 resultados para que el UI no se pinche.
+fn find_in_files(files: &[PathBuf], query: &str) -> Vec<FifMatch> {
+    let mut out: Vec<FifMatch> = Vec::new();
+    let q_lc = query.to_lowercase();
+    for (file_idx, path) in files.iter().enumerate() {
+        if out.len() >= FIF_MAX_RESULTS {
+            break;
+        }
+        // Skipea archivos grandes.
+        if let Ok(meta) = fs::metadata(path) {
+            if meta.len() > FIF_MAX_FILE_SIZE {
+                continue;
+            }
+        }
+        // Lee como string; si tiene bytes no-UTF8 (binario), saltea.
+        let Ok(content) = fs::read_to_string(path) else { continue };
+        for (line_idx, line) in content.lines().enumerate() {
+            if out.len() >= FIF_MAX_RESULTS {
+                break;
+            }
+            // Match case-insensitive, sin alocar lower de la línea entera
+            // a menos que sea inevitable (lower del query es chico).
+            let line_lc;
+            let line_for_search = if line.is_ascii() {
+                line
+            } else {
+                line_lc = line.to_lowercase();
+                line_lc.as_str()
+            };
+            let needle = if line.is_ascii() { q_lc.as_str() } else { &q_lc };
+            let line_search_lc;
+            let line_search = if line.is_ascii() {
+                line_search_lc = line_for_search.to_ascii_lowercase();
+                line_search_lc.as_str()
+            } else {
+                line_for_search
+            };
+            let Some(byte_off) = line_search.find(needle) else { continue };
+            // Convertimos byte offset a char offset (col).
+            let col = line[..byte_off.min(line.len())].chars().count();
+            // Snippet: la línea trimmed, truncada.
+            let trimmed = line.trim_start();
+            let leading_ws = line.len() - trimmed.len();
+            let snippet = if trimmed.chars().count() <= FIF_SNIPPET_MAX_CHARS {
+                trimmed.to_string()
+            } else {
+                let cut: String = trimmed.chars().take(FIF_SNIPPET_MAX_CHARS - 1).collect();
+                format!("{cut}…")
+            };
+            // El col del match en la línea original (antes del trim). Lo
+            // ajustamos restando el whitespace inicial si aplica.
+            let _ = leading_ws;
+            out.push(FifMatch {
+                file_idx,
+                line: line_idx,
+                col,
+                snippet,
+            });
+        }
+    }
+    out
+}
 
 /// Activa el tab `idx` si es válido. No-op si está fuera de rango.
 fn activate_tab(mut model: Model, idx: usize) -> Model {
