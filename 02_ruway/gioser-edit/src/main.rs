@@ -502,7 +502,7 @@ impl App for EditorApp {
                 let mut m = model;
                 if m.find.is_none() {
                     m.find = Some(FindBarState::new());
-                    m.status = "find · Ctrl+G siguiente · Esc cierra".to_string();
+                    m.status = rimay_localize::t("edit-status-find");
                 }
                 m
             }
@@ -681,7 +681,7 @@ impl App for EditorApp {
                 let col = m.tabs[idx].editor.cursor.caret.col;
                 m.lsp.clear_definition();
                 m.lsp.request_definition(&path, line, col);
-                m.status = "goto-def · esperando LSP…".into();
+                m.status = rimay_localize::t("edit-status-goto-def-waiting");
                 m
             }
             Msg::ReferencesRequest => {
@@ -697,7 +697,7 @@ impl App for EditorApp {
                     selected: 0,
                     anchor: (line, col),
                 });
-                m.status = "references · esperando LSP…".into();
+                m.status = rimay_localize::t("edit-status-references-waiting");
                 m
             }
             Msg::ReferencesNav { delta } => {
@@ -742,7 +742,7 @@ impl App for EditorApp {
                     anchor: (line, col),
                     waiting: false,
                 });
-                m.status = "rename · Enter aplica · Esc cancela".into();
+                m.status = rimay_localize::t("edit-status-rename-input");
                 m
             }
             Msg::RenameKey(ev) => {
@@ -763,7 +763,10 @@ impl App for EditorApp {
                 m.lsp.clear_workspace_edit();
                 m.lsp.request_rename(&path, r.anchor.0, r.anchor.1, &new_name);
                 r.waiting = true;
-                m.status = format!("rename → «{new_name}» · esperando LSP…");
+                m.status = rimay_localize::t_args(
+                    "edit-status-rename-waiting",
+                    &[("name", new_name.as_str().into())],
+                );
                 m
             }
             Msg::RenameClose => {
@@ -794,13 +797,25 @@ impl App for EditorApp {
                                 bytes_written += n;
                             }
                             Err(e) => {
-                                m.status = format!("rename · error en {}: {e}", path.display());
+                                m.status = rimay_localize::t_args(
+                                    "edit-status-rename-error",
+                                    &[
+                                        ("path", path.display().to_string().into()),
+                                        ("err", e.to_string().into()),
+                                    ],
+                                );
                                 return m;
                             }
                         }
                     }
                 }
-                m.status = format!("rename · {files_changed} archivos · {bytes_written} bytes");
+                m.status = rimay_localize::t_args(
+                    "edit-status-rename-done",
+                    &[
+                        ("files", files_changed.to_string().into()),
+                        ("bytes", bytes_written.to_string().into()),
+                    ],
+                );
                 m
             }
             Msg::SignatureHelpRequest => {
@@ -825,7 +840,7 @@ impl App for EditorApp {
                 let Some(path) = m.active_path() else { return m };
                 m.lsp.clear_text_edits();
                 m.lsp.request_formatting(&path, 4, true);
-                m.status = "formatting · esperando LSP…".into();
+                m.status = rimay_localize::t("edit-status-formatting-waiting");
                 m
             }
             Msg::TextEditsApply(edits) => {
@@ -837,7 +852,7 @@ impl App for EditorApp {
                 let path = tab.path.clone();
                 let new_text = tab.editor.text();
                 m.lsp.did_change(&path, &new_text);
-                m.status = "formatting · aplicado".into();
+                m.status = rimay_localize::t("edit-status-formatting-done");
                 m
             }
             Msg::GotoDefinitionApply(loc) => {
@@ -850,7 +865,13 @@ impl App for EditorApp {
                     let tab = &mut m.tabs[idx];
                     tab.editor.set_caret_at(loc.line, loc.col);
                     tab.editor.ensure_caret_visible(EDITOR_VISIBLE_LINES);
-                    m.status = format!("goto-def · {}:{}", loc.path.display(), loc.line + 1);
+                    m.status = rimay_localize::t_args(
+                        "edit-status-goto-def-at",
+                        &[
+                            ("path", loc.path.display().to_string().into()),
+                            ("line", (loc.line + 1).to_string().into()),
+                        ],
+                    );
                     return m;
                 }
                 match fs::read_to_string(&loc.path) {
@@ -863,10 +884,22 @@ impl App for EditorApp {
                         m.lsp.did_open(&loc.path, ext, &content);
                         m.tabs.push(Tab { path: loc.path.clone(), editor, dirty: false });
                         m.active = Some(m.tabs.len() - 1);
-                        m.status = format!("goto-def · {}:{}", loc.path.display(), loc.line + 1);
+                        m.status = rimay_localize::t_args(
+                        "edit-status-goto-def-at",
+                        &[
+                            ("path", loc.path.display().to_string().into()),
+                            ("line", (loc.line + 1).to_string().into()),
+                        ],
+                    );
                     }
                     Err(e) => {
-                        m.status = format!("goto-def · error abriendo {}: {e}", loc.path.display());
+                        m.status = rimay_localize::t_args(
+                            "edit-status-goto-def-error",
+                            &[
+                                ("path", loc.path.display().to_string().into()),
+                                ("err", e.to_string().into()),
+                            ],
+                        );
                     }
                 }
                 m
@@ -882,9 +915,15 @@ impl App for EditorApp {
                         if let Some(tab) = m.active_tab_mut() {
                             tab.dirty = false;
                         }
-                        format!("guardado · {path_disp}")
+                        rimay_localize::t_args(
+                            "edit-status-saved",
+                            &[("path", path_disp.into())],
+                        )
                     }
-                    Err(e) => format!("error guardando: {e}"),
+                    Err(e) => rimay_localize::t_args(
+                        "edit-status-save-error",
+                        &[("err", e.to_string().into())],
+                    ),
                 };
                 m
             }
@@ -1238,7 +1277,7 @@ fn header_bar(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        "Ctrl+Shift+P palette  ·  Ctrl+P files  ·  Ctrl+Shift+F search".to_string(),
+        rimay_localize::t("edit-header-hint"),
         10.5, theme.fg_muted, Alignment::End,
     );
 
@@ -1294,7 +1333,14 @@ fn status_bar(model: &Model, theme: &Theme) -> View<Msg> {
             let lang = lang_label(&tab.path);
             let line = tab.editor.cursor.caret.line + 1;
             let col = tab.editor.cursor.caret.col + 1;
-            format!("Ln {line}, Col {col}  ·  {lang}")
+            rimay_localize::t_args(
+                "edit-status-position",
+                &[
+                    ("line", line.to_string().into()),
+                    ("col", col.to_string().into()),
+                    ("lang", lang.into()),
+                ],
+            )
         }
         None => "".to_string(),
     };
@@ -2894,5 +2940,6 @@ fn restore_session(mut model: Model, sess: Session) -> Model {
 }
 
 fn main() {
+    rimay_localize::init();
     llimphi_ui::run::<EditorApp>();
 }

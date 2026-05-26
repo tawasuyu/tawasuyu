@@ -89,3 +89,20 @@ nakui-pending-render-dashboard = qhawachiy suyaykuchkan: dashboard Llimphi munak
 pluma-tone-valid = khuska
 pluma-tone-pending = qhawana
 pluma-tone-conflict = ch'aqwaypi
+
+# === gioser-edit (qillqa hukchaq) ===
+edit-status-find = maskay · Ctrl+G qatiq · Esc wisq'ay
+edit-status-goto-def-waiting = goto-def · LSP suyaykuchkan…
+edit-status-references-waiting = references · LSP suyaykuchkan…
+edit-status-rename-input = sutichay · Enter ruway · Esc saqiy
+edit-status-rename-waiting = sutichay → «{ $name }» · LSP suyaykuchkan…
+edit-status-rename-error = sutichay · pantay { $path }: { $err }
+edit-status-rename-done = sutichay · { $files } qillqa · { $bytes } bytes
+edit-status-formatting-waiting = patachay · LSP suyaykuchkan…
+edit-status-formatting-done = patachay · churasqa
+edit-status-goto-def-at = goto-def · { $path }:{ $line }
+edit-status-goto-def-error = goto-def · pantay kichaspa { $path }: { $err }
+edit-status-saved = waqaychasqa · { $path }
+edit-status-save-error = pantay waqaychaspa: { $err }
+edit-header-hint = Ctrl+Shift+P akllana  ·  Ctrl+P qillqakuna  ·  Ctrl+Shift+F maskay
+edit-status-position = Ln { $line }, Col { $col }  ·  { $lang }

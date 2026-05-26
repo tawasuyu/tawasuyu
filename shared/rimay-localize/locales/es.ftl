@@ -86,3 +86,20 @@ nakui-pending-render-dashboard = render pendiente: requiere dashboard Llimphi
 pluma-tone-valid = coherente
 pluma-tone-pending = por evaluar
 pluma-tone-conflict = en conflicto
+
+# === gioser-edit (editor de código) ===
+edit-status-find = find · Ctrl+G siguiente · Esc cierra
+edit-status-goto-def-waiting = goto-def · esperando LSP…
+edit-status-references-waiting = references · esperando LSP…
+edit-status-rename-input = rename · Enter aplica · Esc cancela
+edit-status-rename-waiting = rename → «{ $name }» · esperando LSP…
+edit-status-rename-error = rename · error en { $path }: { $err }
+edit-status-rename-done = rename · { $files } archivos · { $bytes } bytes
+edit-status-formatting-waiting = formatting · esperando LSP…
+edit-status-formatting-done = formatting · aplicado
+edit-status-goto-def-at = goto-def · { $path }:{ $line }
+edit-status-goto-def-error = goto-def · error abriendo { $path }: { $err }
+edit-status-saved = guardado · { $path }
+edit-status-save-error = error guardando: { $err }
+edit-header-hint = Ctrl+Shift+P palette  ·  Ctrl+P files  ·  Ctrl+Shift+F search
+edit-status-position = Ln { $line }, Col { $col }  ·  { $lang }
