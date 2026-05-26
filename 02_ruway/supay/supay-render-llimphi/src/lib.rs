@@ -310,6 +310,12 @@ pub struct RenderConfig {
     /// Cantidad de bandas horizontales por slab (subdivisión vertical).
     /// Más bandas = más detalle "panel/ladrillo" a costo de rects.
     pub wall_bands: u32,
+    /// Cantidad de strips horizontales por slab texturizada. Cada
+    /// strip resuelve su propia affine (image→screen) — el error de
+    /// perspectiva queda reducido por factor `wall_strips`. 1 = sin
+    /// subdivisión (3.6 behavior). 8 = compromiso razonable. Strips
+    /// adicionales cuestan O(N) image fills.
+    pub wall_strips: u32,
     /// Atlas WAD con paleta + colores de flats. Sin él, el renderer cae
     /// a las paletas hardcoded de 3.1.
     pub atlas: Option<Arc<WadAtlas>>,
@@ -324,6 +330,7 @@ impl Default for RenderConfig {
             sprite_height: 56.0,
             sprite_half_width: 16.0,
             wall_bands: 4,
+            wall_strips: 8,
             atlas: None,
         }
     }
@@ -723,19 +730,12 @@ fn gather_wall(
         path.close_path();
 
         if let Some(tex) = tex {
-            // Texturizado: una sola fill con image brush + Extend::Repeat.
-            // Affine: image pixel (u, v) → scene point
-            //   tl + u·step_u + v·step_v
-            //   donde step_u = (tr - tl) / wall_len_world  (1 image px = 1 world unit)
-            //         step_v = (bl - tl) / slab_h_world
-            // Repeat extend tilea texturas más cortas que la pared.
+            // Per-strip rendering: subdividimos la pared en N strips a
+            // lo largo del linedef. Cada strip se proyecta y resuelve
+            // su propia affine — el error de perspectiva queda 1/N.
             use llimphi_ui::llimphi_raster::peniko::{Blob, Extend, Image, ImageFormat};
+            let strips = cfg.wall_strips.max(1);
             let slab_h = (z_top - z_bot).max(1e-3);
-            let step_ux = (tr.x - tl.x) / wall_len as f64;
-            let step_uy = (tr.y - tl.y) / wall_len as f64;
-            let step_vx = (bl.x - tl.x) / slab_h as f64;
-            let step_vy = (bl.y - tl.y) / slab_h as f64;
-            let xform = Affine::new([step_ux, step_uy, step_vx, step_vy, tl.x, tl.y]);
             let img = Image::new(
                 Blob::from(tex.rgba.clone()),
                 ImageFormat::Rgba8,
@@ -743,30 +743,69 @@ fn gather_wall(
                 tex.height as u32,
             )
             .with_extend(Extend::Repeat);
-            out.push(Renderable {
-                depth,
-                color: Color::WHITE, // unused
-                path,
-                kind: RenderKind::TexturedWall {
-                    image: img,
-                    brush_xform: xform,
-                },
-            });
-            // Overlay de shade para que las paredes texturizadas no se
-            // vean siempre full bright. Dark fill con alpha = (1-shade).
+            // Para cada strip: lerp world a lo largo de v1→v2, proyectar
+            // y emitir quad con su propio affine. Reuso el `img` clonado
+            // por refcount (Blob).
+            for s in 0..strips {
+                let t0 = s as f32 / strips as f32;
+                let t1 = (s + 1) as f32 / strips as f32;
+                // World start/end del strip (después del near-clip,
+                // que ya está reflejado en x1/y1/x2/y2 cam-space).
+                // Trabajamos en cam space directamente: lerp entre los
+                // dos extremos cam del slab.
+                let cx0 = x1 + (x2 - x1) * t0;
+                let cy0 = y1 + (y2 - y1) * t0;
+                let cx1 = x1 + (x2 - x1) * t1;
+                let cy1 = y1 + (y2 - y1) * t1;
+                let zb_c = z_bot - cam.view_z;
+                let zt_c = z_top - cam.view_z;
+                let s_bl = proj.project(cx0, cy0, zb_c);
+                let s_tl = proj.project(cx0, cy0, zt_c);
+                let s_tr = proj.project(cx1, cy1, zt_c);
+                let s_br = proj.project(cx1, cy1, zb_c);
+                // U coord en image space del strip: [t0·wall_len, t1·wall_len].
+                // Affine: image(ix, iy) → screen donde ix-base se mide
+                // desde el inicio del strip. step_u = (s_tr - s_tl) / strip_w_world.
+                let strip_w = wall_len * (t1 - t0);
+                let strip_u_base = wall_len * t0;
+                let step_ux = (s_tr.x - s_tl.x) / strip_w.max(1e-3) as f64;
+                let step_uy = (s_tr.y - s_tl.y) / strip_w.max(1e-3) as f64;
+                let step_vx = (s_bl.x - s_tl.x) / slab_h as f64;
+                let step_vy = (s_bl.y - s_tl.y) / slab_h as f64;
+                let xform = Affine::new([
+                    step_ux,
+                    step_uy,
+                    step_vx,
+                    step_vy,
+                    s_tl.x - strip_u_base as f64 * step_ux,
+                    s_tl.y - strip_u_base as f64 * step_uy,
+                ]);
+                let mut s_path = BezPath::new();
+                s_path.move_to(s_bl);
+                s_path.line_to(s_tl);
+                s_path.line_to(s_tr);
+                s_path.line_to(s_br);
+                s_path.close_path();
+                out.push(Renderable {
+                    depth,
+                    color: Color::WHITE,
+                    path: s_path,
+                    kind: RenderKind::TexturedWall {
+                        image: img.clone(),
+                        brush_xform: xform,
+                    },
+                });
+            }
+            // Overlay de shade: una sola fill sobre todo el slab —
+            // no hace falta strip-per-strip porque shade es constante
+            // sobre la slab al mismo depth.
             let shade = shade_for(sec.light_level, depth, cfg);
             if shade < 0.95 {
-                let mut overlay = BezPath::new();
-                overlay.move_to(bl);
-                overlay.line_to(tl);
-                overlay.line_to(tr);
-                overlay.line_to(br);
-                overlay.close_path();
                 let alpha = ((1.0 - shade) * 255.0) as u8;
                 out.push(Renderable {
-                    depth: depth - 0.001, // ligeramente "delante" → pintado después → encima
+                    depth: depth - 0.001,
                     color: Color::from_rgba8(0, 0, 0, alpha),
-                    path: overlay,
+                    path,
                     kind: RenderKind::Fill,
                 });
             }
