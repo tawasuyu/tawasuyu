@@ -42,6 +42,9 @@ use llimphi_module_command_palette::{
     self as palette, Command as PaletteCommand, PaletteAction, PaletteMsg, PalettePalette,
     PaletteState,
 };
+use llimphi_module_diff_viewer::{
+    self as diff, DiffAction, DiffMsg, DiffPalette, DiffState,
+};
 use llimphi_module_fif::{self as fif, FifAction, FifMsg, FifPalette, FifState};
 use llimphi_module_file_picker::{
     self as picker, PickerAction, PickerMsg, PickerPalette, PickerState,
@@ -76,6 +79,9 @@ const EDITOR_VISIBLE_LINES: usize = 40;
 /// Altura del panel terminal cuando está abierto. ~14 filas de 14px +
 /// header 18px ≈ 214px — redondeado a 220.
 const TERM_PANEL_H: f32 = 220.0;
+/// Altura del panel diff cuando está abierto. ~30 filas de 15px +
+/// header 18px ≈ 468px — redondeado a 480.
+const DIFF_PANEL_H: f32 = 480.0;
 
 #[derive(Clone)]
 enum Msg {
@@ -109,6 +115,8 @@ enum Msg {
     Outline(OutlineMsg),
     /// El LSP devolvió document symbols — repoblar el outline.
     OutlineRefresh(Vec<SymbolItem>),
+    /// Mensajes del módulo diff viewer (Ctrl+Shift+D).
+    Diff(DiffMsg),
     // Find
     FindOpen,
     FindClose,
@@ -199,6 +207,11 @@ struct Model {
     /// repuebla en cada `OutlineRefresh`; vacío hasta que llega la
     /// primera respuesta.
     outline_symbols: Vec<SymbolItem>,
+    /// Diff viewer; `None` cerrado. Snapshot del diff: si el buffer
+    /// cambia con el panel abierto, las filas no se recomputan — el
+    /// usuario cierra y reabre para refrescar (semántica congelada,
+    /// como VS Code "Compare with Saved").
+    diff: Option<DiffState>,
     tabs: Vec<Tab>,
     /// Índice del tab activo dentro de `tabs`. `None` si no hay ninguno
     /// abierto todavía.
@@ -375,6 +388,7 @@ impl App for EditorApp {
             palette_commands: build_command_catalog(),
             outline: None,
             outline_symbols: Vec::new(),
+            diff: None,
             tabs: Vec::new(),
             active: None,
             clipboard: ArboardClipboard::new(),
@@ -439,6 +453,7 @@ impl App for EditorApp {
                 }
                 m
             }
+            Msg::Diff(dm) => apply_diff(model, dm),
             Msg::FindOpen => {
                 let mut m = model;
                 if m.find.is_none() {
@@ -882,6 +897,12 @@ impl App for EditorApp {
                 return Some(Msg::Outline(om));
             }
         }
+        // Diff viewer abierto: idem.
+        if let Some(state) = model.diff.as_ref() {
+            if let Some(dm) = diff::on_key(state, event) {
+                return Some(Msg::Diff(dm));
+            }
+        }
 
         // Terminal abierto: traga TODAS las teclas (salvo el toggle de
         // apertura, que se reusa para cerrar abajo). El módulo internamente
@@ -967,6 +988,10 @@ impl App for EditorApp {
             // Ctrl+Shift+O = abre el symbol outline.
             if outline::open_shortcut(event) {
                 return Some(Msg::Outline(OutlineMsg::Open));
+            }
+            // Ctrl+Shift+D = abre el diff viewer (disco vs buffer).
+            if diff::open_shortcut(event) {
+                return Some(Msg::Diff(DiffMsg::Open));
             }
             // Ctrl+Alt+L = format (estilo JetBrains; antes era Ctrl+Shift+F).
             if event.modifiers.alt
@@ -1228,6 +1253,10 @@ fn active_editor_content(model: &Model, theme: &Theme) -> View<Msg> {
     if let Some(o) = model.outline.as_ref() {
         let pal = OutlinePalette::from_theme(theme);
         children.push(outline::view(o, &model.outline_symbols, &pal, Msg::Outline));
+    }
+    if let Some(d) = model.diff.as_ref() {
+        let pal = DiffPalette::from_theme(theme);
+        children.push(diff::view(d, &pal, DIFF_PANEL_H, Msg::Diff));
     }
     if let Some(p) = model.picker.as_ref() {
         let palette = PickerPalette::from_theme(theme);
@@ -1848,6 +1877,45 @@ fn apply_fif(model: Model, fmsg: FifMsg) -> Model {
     m
 }
 
+/// Cuántas filas del diff caben en su panel. El módulo necesita esto
+/// para clampear el scroll; lo derivamos de [`DIFF_PANEL_H`] y la
+/// altura de fila del módulo (15 px) — aproximación constante para
+/// evitar tener que medir layout en el host.
+const DIFF_VISIBLE_ROWS: usize = ((DIFF_PANEL_H - 18.0) / 15.0) as usize;
+
+/// Routea un DiffMsg al módulo diff. Lazy-init: en `Open`, lee el
+/// archivo de disco y compara contra el buffer actual. Snapshot
+/// congelado — cambios subsecuentes del buffer no recomputan.
+fn apply_diff(model: Model, dm: DiffMsg) -> Model {
+    let mut m = model;
+    if matches!(dm, DiffMsg::Open) && m.diff.is_none() {
+        let Some(tab) = m.active_tab() else {
+            m.status = "diff · ningún tab activo".into();
+            return m;
+        };
+        let path = tab.path.clone();
+        let after = tab.editor.text();
+        let before = std::fs::read_to_string(&path).unwrap_or_default();
+        let label_left = format!("disco · {}", path.file_name().and_then(|s| s.to_str()).unwrap_or("?"));
+        let label_right = if tab.dirty { "buffer (●)" } else { "buffer" }.to_string();
+        let state = DiffState::new(label_left, label_right, &before, &after);
+        m.status = format!(
+            "diff · +{} -{} ={} · ↑↓ scroll · n/N hunk · Esc cierra",
+            state.stats.inserts, state.stats.deletes, state.stats.equals,
+        );
+        m.diff = Some(state);
+        return m;
+    }
+    let action = match m.diff.as_mut() {
+        Some(state) => diff::apply(state, dm, DIFF_VISIBLE_ROWS),
+        None => return m,
+    };
+    if matches!(action, DiffAction::Close) {
+        m.diff = None;
+    }
+    m
+}
+
 /// Convierte la lista de symbols que devuelve el LSP al tipo que el
 /// módulo outline conoce. La estructura es 1:1; este shim sólo evita
 /// que el módulo dependa del crate del LSP.
@@ -1935,6 +2003,8 @@ fn build_command_catalog() -> Vec<PaletteCommand> {
             .with_shortcut("Ctrl+Space"),
         PaletteCommand::new("editor.outline", "Symbol Outline", "Editor")
             .with_shortcut("Ctrl+Shift+O"),
+        PaletteCommand::new("editor.diff", "Compare with Saved", "Editor")
+            .with_shortcut("Ctrl+Shift+D"),
     ]
 }
 
@@ -1959,6 +2029,7 @@ fn palette_id_to_msg(id: &str) -> Option<Msg> {
         "lsp.signatureHelp" => Msg::SignatureHelpRequest,
         "lsp.completions" => Msg::CompletionsRequest,
         "editor.outline" => Msg::Outline(OutlineMsg::Open),
+        "editor.diff" => Msg::Diff(DiffMsg::Open),
         _ => return None,
     })
 }

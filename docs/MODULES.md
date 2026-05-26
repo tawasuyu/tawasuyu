@@ -285,6 +285,7 @@ distintos a propósito.
 | Crate                          | Capability               | Atajo recomendado |
 |--------------------------------|--------------------------|-------------------|
 | `llimphi-module-command-palette` | `editor.command-palette` | Ctrl+Shift+P      |
+| `llimphi-module-diff-viewer`   | `editor.diff-viewer`     | Ctrl+Shift+D      |
 | `llimphi-module-fif`           | `editor.find-in-files`   | Ctrl+Shift+F      |
 | `llimphi-module-file-picker`   | `editor.file-picker`     | Ctrl+P            |
 | `llimphi-module-shuma-term`    | `editor.terminal`        | Ctrl+`            |
@@ -296,7 +297,6 @@ distintos a propósito.
 
 ## Siguientes módulos candidatos
 
-- `llimphi-module-diff-viewer` — visualización side-by-side de cambios.
 - `llimphi-module-mini-map` — overlay de minimap del buffer activo.
 
 ### Caso particular: `llimphi-module-command-palette`
