@@ -77,12 +77,8 @@ impl StyleEngine {
         // de la cascada — cualquier regla de autor las puede override.
         style.font_weight = default_weight(&local);
 
-        let id = dom::attr(node, "id").unwrap_or_default();
-        let class_attr = dom::attr(node, "class").unwrap_or_default();
-        let classes: Vec<&str> = class_attr.split_whitespace().collect();
-
         for rule in &self.rules {
-            if rule.matches(&local, &id, &classes) {
+            if rule.matches(node) {
                 rule.apply(&mut style);
             }
         }
@@ -102,31 +98,81 @@ struct Rule {
     decls: Vec<Decl>,
 }
 
-/// Subset de selectores simples. Sin combinadores (`a b`), sin
-/// pseudoclases, sin atributos. Suficiente para Fase 3 / sitios
-/// "blog-style".
+/// Selector compound — secuencia de simples conectada por combinador
+/// "descendiente" (whitespace en CSS). `parts[0]` = ancestro más
+/// lejano; `parts.last()` = sujeto. Sin combinadores `>`/`+`/`~`, sin
+/// pseudoclases — la fase actual sólo necesita descendientes.
 #[derive(Debug, Clone)]
-enum Selector {
+struct Selector {
+    parts: Vec<Simple>,
+}
+
+#[derive(Debug, Clone)]
+enum Simple {
     Universal,
     Type(String),
     Id(String),
     Class(String),
 }
 
-impl Rule {
-    fn matches(&self, local: &str, id: &str, classes: &[&str]) -> bool {
-        match &self.selector {
-            Selector::Universal => true,
-            Selector::Type(t) => t.eq_ignore_ascii_case(local),
-            Selector::Id(want) => want == id && !id.is_empty(),
-            Selector::Class(want) => classes.iter().any(|c| c == want),
+impl Simple {
+    fn matches(&self, node: &markup5ever_rcdom::Handle) -> bool {
+        let Some(local) = dom::element_name(node) else {
+            return false;
+        };
+        match self {
+            Simple::Universal => true,
+            Simple::Type(t) => t.eq_ignore_ascii_case(&local),
+            Simple::Id(want) => {
+                dom::attr(node, "id").as_deref().map(|v| v == want).unwrap_or(false)
+            }
+            Simple::Class(want) => dom::attr(node, "class")
+                .map(|c| c.split_whitespace().any(|cls| cls == want))
+                .unwrap_or(false),
         }
+    }
+}
+
+impl Rule {
+    fn matches(&self, node: &markup5ever_rcdom::Handle) -> bool {
+        let parts = &self.selector.parts;
+        if parts.is_empty() {
+            return false;
+        }
+        // El último simple debe matchear el sujeto.
+        if !parts.last().unwrap().matches(node) {
+            return false;
+        }
+        if parts.len() == 1 {
+            return true;
+        }
+        // Los anteriores (en orden, derecha→izquierda) deben matchear
+        // *algún* ancestro — greedy: por cada uno avanzamos hacia arriba
+        // hasta encontrar match, sino fallamos.
+        let mut remaining = &parts[..parts.len() - 1];
+        let mut current = parent_of(node);
+        while !remaining.is_empty() {
+            let Some(n) = current else { return false };
+            let last = remaining.last().unwrap();
+            if last.matches(&n) {
+                remaining = &remaining[..remaining.len() - 1];
+            }
+            current = parent_of(&n);
+        }
+        true
     }
     fn apply(&self, style: &mut ComputedStyle) {
         for d in &self.decls {
             d.apply(style);
         }
     }
+}
+
+fn parent_of(node: &markup5ever_rcdom::Handle) -> Option<markup5ever_rcdom::Handle> {
+    let weak = node.parent.take();
+    let restored = weak.clone();
+    node.parent.set(restored);
+    weak.and_then(|w| w.upgrade())
 }
 
 #[derive(Debug, Clone)]
@@ -175,23 +221,14 @@ fn default_weight(tag: &str) -> u16 {
 /// inyecta. Mantén corto: sólo lo necesario para no devolver páginas
 /// "blancas" sin reglas autor.
 fn ua_stylesheet() -> Vec<Rule> {
+    fn ty(s: &str) -> Selector {
+        Selector { parts: vec![Simple::Type(s.into())] }
+    }
     vec![
-        Rule {
-            selector: Selector::Type("h1".into()),
-            decls: vec![Decl::FontSize(32.0), Decl::Margin(20.0)],
-        },
-        Rule {
-            selector: Selector::Type("h2".into()),
-            decls: vec![Decl::FontSize(24.0), Decl::Margin(18.0)],
-        },
-        Rule {
-            selector: Selector::Type("p".into()),
-            decls: vec![Decl::Margin(12.0)],
-        },
-        Rule {
-            selector: Selector::Type("body".into()),
-            decls: vec![Decl::Padding(8.0)],
-        },
+        Rule { selector: ty("h1"), decls: vec![Decl::FontSize(32.0), Decl::Margin(20.0)] },
+        Rule { selector: ty("h2"), decls: vec![Decl::FontSize(24.0), Decl::Margin(18.0)] },
+        Rule { selector: ty("p"), decls: vec![Decl::Margin(12.0)] },
+        Rule { selector: ty("body"), decls: vec![Decl::Padding(8.0)] },
     ]
 }
 
@@ -234,31 +271,50 @@ fn parse_stylesheet(css: &str) -> Vec<Rule> {
     out
 }
 
-/// Parsea un selector simple. Soporta `*`, `tag`, `.class`, `#id`.
-/// Devuelve `None` para combinadores, pseudoclases, atributos.
+/// Parsea un selector compound. Soporta:
+/// - simples: `*`, `tag`, `.class`, `#id`
+/// - combinador descendiente (whitespace): `a b`, `.menu li`, `#hero h2`
+///
+/// Combinadores `>`, `+`, `~`, pseudoclases (`:hover`), atributos (`[…]`)
+/// no soportados — la regla se ignora.
 fn parse_selector(sel: &str) -> Option<Selector> {
-    if sel.is_empty() || sel == "*" {
-        return Some(Selector::Universal);
+    let sel = sel.trim();
+    if sel.is_empty() {
+        return Some(Selector { parts: vec![Simple::Universal] });
     }
-    if sel.contains(' ') || sel.contains('>') || sel.contains('+') || sel.contains('~')
+    if sel.contains('>') || sel.contains('+') || sel.contains('~')
         || sel.contains(':') || sel.contains('[')
     {
         return None;
     }
+    let mut parts = Vec::new();
+    for token in sel.split_whitespace() {
+        parts.push(parse_simple(token)?);
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    Some(Selector { parts })
+}
+
+fn parse_simple(sel: &str) -> Option<Simple> {
+    if sel == "*" {
+        return Some(Simple::Universal);
+    }
     if let Some(rest) = sel.strip_prefix('.') {
-        if rest.chars().all(is_ident_char) {
-            return Some(Selector::Class(rest.to_string()));
+        if rest.chars().all(is_ident_char) && !rest.is_empty() {
+            return Some(Simple::Class(rest.to_string()));
         }
         return None;
     }
     if let Some(rest) = sel.strip_prefix('#') {
-        if rest.chars().all(is_ident_char) {
-            return Some(Selector::Id(rest.to_string()));
+        if rest.chars().all(is_ident_char) && !rest.is_empty() {
+            return Some(Simple::Id(rest.to_string()));
         }
         return None;
     }
-    if sel.chars().all(is_ident_char) {
-        return Some(Selector::Type(sel.to_string()));
+    if sel.chars().all(is_ident_char) && !sel.is_empty() {
+        return Some(Simple::Type(sel.to_string()));
     }
     None
 }
@@ -415,8 +471,33 @@ mod tests {
     fn parsea_regla_simple() {
         let rules = parse_stylesheet("p { color: red; font-size: 14px; }");
         assert_eq!(rules.len(), 1);
-        assert!(matches!(&rules[0].selector, Selector::Type(t) if t == "p"));
+        assert_eq!(rules[0].selector.parts.len(), 1);
+        assert!(matches!(&rules[0].selector.parts[0], Simple::Type(t) if t == "p"));
         assert_eq!(rules[0].decls.len(), 2);
+    }
+
+    #[test]
+    fn selector_descendiente_matchea() {
+        // `.menu li` matchea sólo los `<li>` dentro de `.menu`.
+        let html = r#"<html><head><style>.menu li{color:#00aa00}</style></head>
+            <body>
+              <ul class="menu"><li>uno</li><li>dos</li></ul>
+              <ul><li>tres</li></ul>
+            </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut lis = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("li") {
+                lis.push(n.clone());
+            }
+        });
+        assert_eq!(lis.len(), 3);
+        // Los dos primeros viven en .menu → verde
+        assert_eq!(eng.compute(&lis[0]).color, Color::rgb(0, 0xaa, 0));
+        assert_eq!(eng.compute(&lis[1]).color, Color::rgb(0, 0xaa, 0));
+        // El tercero no
+        assert_eq!(eng.compute(&lis[2]).color, Color::BLACK);
     }
 
     #[test]

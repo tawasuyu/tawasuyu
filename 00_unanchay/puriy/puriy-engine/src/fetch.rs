@@ -8,6 +8,8 @@
 use thiserror::Error;
 use url::Url;
 
+use crate::cache;
+
 #[derive(Debug, Error)]
 pub enum FetchError {
     #[error("transporte: {0}")]
@@ -20,15 +22,33 @@ pub enum FetchError {
 
 /// GET sobre la URL dada; devuelve el body como String.
 ///
-/// Asume `text/html` o `text/*`. Para recursos binarios habría que
-/// devolver `Vec<u8>`, pero Fase 2 sólo consume HTML/CSS.
+/// Pasa por la cache global: si la URL ya fue descargada antes en este
+/// proceso, sale instantáneo sin tocar la red. Si miss, descarga,
+/// guarda en cache y devuelve.
 pub fn fetch(url: &Url) -> Result<String, FetchError> {
-    let resp = ureq::get(url.as_str())
+    let bytes = fetch_bytes(url.as_str())?;
+    String::from_utf8(bytes).map_err(|e| FetchError::Body(e.to_string()))
+}
+
+/// Versión que devuelve bytes — útil para assets binarios (imágenes).
+/// Mismo mecanismo de cache.
+pub fn fetch_bytes(url: &str) -> Result<Vec<u8>, FetchError> {
+    if let Some(hit) = cache::get(url) {
+        return Ok(hit);
+    }
+    let resp = ureq::get(url)
         .set("User-Agent", concat!("puriy/", env!("CARGO_PKG_VERSION")))
         .call()
         .map_err(|e| match e {
             ureq::Error::Status(code, _) => FetchError::Status(code),
             ureq::Error::Transport(t) => FetchError::Transport(t.to_string()),
         })?;
-    resp.into_string().map_err(|e| FetchError::Body(e.to_string()))
+    let mut bytes = Vec::new();
+    use std::io::Read;
+    resp.into_reader()
+        .take(64 * 1024 * 1024)
+        .read_to_end(&mut bytes)
+        .map_err(|e| FetchError::Transport(e.to_string()))?;
+    cache::put(url, bytes.clone());
+    Ok(bytes)
 }

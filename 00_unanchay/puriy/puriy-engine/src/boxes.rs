@@ -276,12 +276,11 @@ fn plain_inline_text(s: String) -> BoxNode {
 /// Descarga `url` y la decodifica a RGBA8. Devuelve `None` si la URL no
 /// es HTTP(S), si la descarga falla, si el MIME no es imagen, o si el
 /// decoder no soporta el formato. Sync: bloquea el thread caller — el
-/// chrome ya está en un worker thread durante `Engine::load`.
+/// chrome ya está en un worker thread durante `Engine::load`. Pasa por
+/// la cache global de bytes — recargas y navegación entre tabs no
+/// re-descargan.
 fn fetch_and_decode(url: &str) -> Option<ImageData> {
-    let resp = ureq::get(url).call().ok()?;
-    let mut bytes = Vec::with_capacity(resp.header("content-length").and_then(|s| s.parse().ok()).unwrap_or(16 * 1024));
-    use std::io::Read;
-    resp.into_reader().take(8 * 1024 * 1024).read_to_end(&mut bytes).ok()?;
+    let bytes = crate::fetch::fetch_bytes(url).ok()?;
     let reader = image::ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()
         .ok()?;

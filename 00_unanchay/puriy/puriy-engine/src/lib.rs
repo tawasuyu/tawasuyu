@@ -21,6 +21,7 @@
 #![forbid(unsafe_code)]
 
 pub mod boxes;
+pub mod cache;
 pub mod dom;
 pub mod fetch;
 pub mod style;
