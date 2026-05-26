@@ -80,6 +80,68 @@ pub const TAM_SECTOR: usize = 512;
 /// un almacen direccionado por contenido, la identidad ES el contenido.
 pub type Hash = [u8; 32];
 
+// =============================================================================
+//  CodigoError — el lenguaje de los retornos de syscall, sin alucinaciones
+// -----------------------------------------------------------------------------
+//  Los retornos negativos de las capacidades `sys_*` no son enteros opacos:
+//  son variantes nombradas, fuertemente tipadas, con un valor i32 estable.
+//  El kernel emite `CodigoError::X as i32`; el userspace compara contra el
+//  mismo numero. Anadir una variante NUEVA es engendrar un valor nuevo (las
+//  existentes jamas se renumeran), de modo que un binario viejo y un kernel
+//  nuevo siguen hablando el mismo idioma para los codigos que ambos conocen.
+//
+//  Los retornos POSITIVOS de algunas capacidades son cuentas de bytes copiados
+//  —no errores—; por eso `Ok = 0` y todos los errores caen en negativos. La
+//  comparacion habitual del userspace queda intacta: `< 0` ya es "fallo", y
+//  el codigo concreto lo describe.
+// =============================================================================
+
+/// El catalogo de retornos negativos de las capacidades del kernel. Un solo
+/// nombre por causa: nadie ha de inventarse una semantica nueva para el -1.
+///
+/// Mantenido en `format` porque viaja por TRES fronteras: el kernel lo emite,
+/// el explorador (host-side) lo lee de las trazas, y los modulos WASM lo
+/// reciben. La crate ya es no_std y la traen ambos lados sin friccion.
+#[repr(i32)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CodigoError {
+    /// Operacion completada sin novedad. Las capacidades que devuelven un
+    /// conteo de bytes usan tambien `0` para "no habia nada que entregar"
+    /// (lectura sin frame, sin evento, sin estado previo); el contexto del
+    /// retorno positivo distingue ambos casos.
+    Ok = 0,
+    /// El recurso solicitado no esta presente: un objeto que no esta en el
+    /// grafo, la tarjeta de red sin montar, una app sin estado previo, una
+    /// cola del puntero o el teclado vacia. Tambien lo emite un guardar
+    /// que no encontro su ranura.
+    Ausente = -1,
+    /// La capacidad recibida en `salida` no cubre los datos a copiar. La app
+    /// debe llamar con un bufer mas amplio; el kernel no escribio nada en el
+    /// destino.
+    CapacidadInsuficiente = -2,
+    /// El subsistema de almacenamiento (virtio-blk, log de objetos, censo del
+    /// manifiesto) fallo al servir o anclar el objeto. NO es culpa del modulo,
+    /// pero la operacion no pudo completarse.
+    AlmacenamientoFallo = -3,
+    /// La app no tiene el FOCO del compositor en este fotograma y la capacidad
+    /// solo se honra para la ventana enfocada — por ejemplo, cambiar la
+    /// `Configuracion` del escritorio. Reintentar cuando la app sea la
+    /// destinataria del teclado.
+    SinFoco = -4,
+    /// El envio al dispositivo (driver de red, altavoz) fracaso. Lo emite el
+    /// driver y la capacidad lo propaga: no hay rastro de bytes residuales en
+    /// el hardware.
+    EnvioFallo = -5,
+}
+
+impl CodigoError {
+    /// Convierte el codigo a su forma de cable i32 — la unica que el userspace
+    /// recibe. `as i32` directo, sin trampa: el `#[repr(i32)]` fija el valor.
+    pub const fn como_i32(self) -> i32 {
+        self as i32
+    }
+}
+
 /// La identidad de un autor agora: una clave publica Ed25519, 32 bytes. Quien
 /// firma una raiz de canal se identifica con esto. `format` no valida la
 /// firma —no enlaza ninguna primitiva criptografica—; solo declara su forma.
@@ -649,6 +711,20 @@ mod pruebas {
         let bytes = m.serializar().unwrap();
         let leido = Manifiesto::deserializar(&bytes).unwrap();
         assert_eq!(leido.apps[0].permisos, 0b11111);
+    }
+
+    #[test]
+    fn codigo_error_tiene_valores_estables() {
+        // Anadir una variante NUEVA al enum jamas debe renumerar las
+        // existentes: el binario WASM viejo compila contra el numero
+        // literal y kernel + userspace tienen que coincidir aunque el
+        // catalogo crezca. Este test es el contrato.
+        assert_eq!(CodigoError::Ok.como_i32(), 0);
+        assert_eq!(CodigoError::Ausente.como_i32(), -1);
+        assert_eq!(CodigoError::CapacidadInsuficiente.como_i32(), -2);
+        assert_eq!(CodigoError::AlmacenamientoFallo.como_i32(), -3);
+        assert_eq!(CodigoError::SinFoco.como_i32(), -4);
+        assert_eq!(CodigoError::EnvioFallo.como_i32(), -5);
     }
 
     #[test]

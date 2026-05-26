@@ -17,7 +17,8 @@
 pub mod env;
 
 use wasmi::{
-    CompilationMode, Config, Engine, Linker, Module, Store, StoreLimitsBuilder, TrapCode, TypedFunc,
+    CompilationMode, Config, Engine, Linker, Memory, Module, Store, StoreLimitsBuilder, TrapCode,
+    TypedFunc,
 };
 
 use crate::grafico::Color;
@@ -66,6 +67,12 @@ pub struct AplicacionWasm {
     /// `TypedFunc` es un asa autosuficiente dentro del `Store`: conservada esta,
     /// el handle de la `Instance` no aporta nada y no se retiene.
     func_tick: TypedFunc<(), ()>,
+    /// Asa a la memoria lineal del modulo. Se retiene SOLO para `Drop`: cuando
+    /// la app muere, el kernel TIÑE DE CEROS sus bytes —los 4 MiB de su jaula—
+    /// antes de soltar el `Store`. La siguiente app que reciba ese mismo bloque
+    /// del heap del kernel no encuentra residuo alguno. Sin fuga semantica
+    /// entre vidas; el bloque vuelve a entropia cero.
+    memoria: Memory,
     /// Combustible que se recarga al inicio de cada `tick` — su techo temporal
     /// por fotograma. Lo declara el manifiesto: un editor tree-sitter puede
     /// pedir mas que un reloj parpadeante, y el scheduler cooperativo lo honra.
@@ -161,13 +168,17 @@ impl AplicacionWasm {
             .instantiate_and_start(&mut almacen, &modulo)
             .map_err(|_| FallaApp::Carga)?;
 
-        // 6. Resolver los dos puntos del ABI de fotograma: `init` y `tick`.
+        // 6. Resolver los dos puntos del ABI de fotograma: `init` y `tick`,
+        //    y guardar el asa a la memoria lineal — el `Drop` la zeroizara.
         let func_init = instancia
             .get_typed_func::<(), ()>(&almacen, "init")
             .map_err(|_| FallaApp::Carga)?;
         let func_tick = instancia
             .get_typed_func::<(), ()>(&almacen, "tick")
             .map_err(|_| FallaApp::Carga)?;
+        let memoria = instancia
+            .get_memory(&almacen, "memory")
+            .ok_or(FallaApp::Carga)?;
 
         // 7. Arranque unico: `init` prepara el estado inicial de la aplicacion.
         almacen.set_fuel(FUEL_ARRANQUE).map_err(|_| FallaApp::Carga)?;
@@ -189,6 +200,7 @@ impl AplicacionWasm {
         Ok(AplicacionWasm {
             almacen,
             func_tick,
+            memoria,
             fuel_fotograma,
         })
     }
@@ -254,5 +266,12 @@ impl Drop for AplicacionWasm {
         let indice = self.almacen.data().indice_app;
         crate::async_system::teclado::cerrar_canal(indice);
         crate::async_system::puntero::cerrar_canal(indice);
+        // MANIFIESTO DE MUERTE. Antes de soltar el `Store` —que devolveria
+        // los bytes al heap del kernel sin tocarlos—, teñimos la memoria
+        // lineal entera de ceros. El siguiente owner de esos bloques jamas
+        // leera un byte de la app desalojada: ni un puntero, ni un texto, ni
+        // una clave a medio borrar. Entropia cero al cerrar la jaula —el
+        // bloque vuelve al kernel tan limpio como nacio—.
+        self.memoria.data_mut(&mut self.almacen).fill(0);
     }
 }

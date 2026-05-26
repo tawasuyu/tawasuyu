@@ -135,7 +135,7 @@ const FUEL_EDITOR: u32 = 6_000_000;
 /// testigo visual del bucle de Configuracion, que pinta la paleta activa y
 /// la rota con SPACE para demostrar el reanclaje atomico del manifiesto.
 const GENESIS: [AppGenesis; 10] = [
-    AppGenesis { nombre: "bitacora", archivo: "bitacora.wasm", region: (100, 120, 480, 280), fuel: FUEL_EDITOR, permisos: format::PERMISO_GRAFO_ESCRITURA },
+    AppGenesis { nombre: "bitacora", archivo: "bitacora.wasm", region: (100, 120, 480, 280), fuel: FUEL_EDITOR, permisos: 0 },
     AppGenesis { nombre: "pregon", archivo: "pregon.wasm", region: (100, 120, 480, 160), fuel: FUEL_COMUN, permisos: format::PERMISO_RED },
     AppGenesis { nombre: "tonada", archivo: "tonada.wasm", region: (100, 120, 360, 120), fuel: FUEL_COMUN, permisos: format::PERMISO_ALTAVOZ },
     AppGenesis { nombre: "pulso", archivo: "pulso.wasm", region: (100, 120, 360, 120), fuel: FUEL_COMUN, permisos: 0 },
@@ -143,7 +143,7 @@ const GENESIS: [AppGenesis; 10] = [
     AppGenesis { nombre: "memoriosa", archivo: "memoriosa.wasm", region: (700, 120, 360, 80), fuel: FUEL_COMUN, permisos: 0 },
     AppGenesis { nombre: "discola", archivo: "discola.wasm", region: (60, 700, 360, 80), fuel: FUEL_COMUN, permisos: 0 },
     AppGenesis { nombre: "glotona", archivo: "glotona.wasm", region: (460, 700, 360, 80), fuel: FUEL_COMUN, permisos: 0 },
-    AppGenesis { nombre: "cronista", archivo: "cronista.wasm", region: (860, 700, 360, 80), fuel: FUEL_COMUN, permisos: 0 },
+    AppGenesis { nombre: "cronista", archivo: "cronista.wasm", region: (860, 700, 360, 80), fuel: FUEL_COMUN, permisos: format::PERMISO_GRAFO_ESCRITURA | format::PERMISO_RAIZ },
     AppGenesis { nombre: "tonalero", archivo: "tonalero.wasm", region: (700, 220, 480, 300), fuel: FUEL_COMUN, permisos: format::PERMISO_CONFIG },
 ];
 

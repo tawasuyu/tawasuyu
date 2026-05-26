@@ -41,8 +41,8 @@ use crate::almacen::Hash;
 use crate::async_system::puntero::CanalPuntero;
 use crate::async_system::teclado::CanalTeclado;
 use format::{
-    IdiomaCodigo, Paleta, Permisos, PERMISO_ALTAVOZ, PERMISO_CONFIG, PERMISO_GRAFO_ESCRITURA,
-    PERMISO_RAIZ, PERMISO_RED,
+    CodigoError, IdiomaCodigo, Paleta, Permisos, PERMISO_ALTAVOZ, PERMISO_CONFIG,
+    PERMISO_GRAFO_ESCRITURA, PERMISO_RAIZ, PERMISO_RED,
 };
 
 /// El estado del host adscrito al `Store` de una aplicacion: cuanto necesita
@@ -215,7 +215,7 @@ pub(crate) fn enlazar_capacidades(
         |mut caller: Caller<'_, ContextoCapacidades>, salida: u32| -> Result<i32, Error> {
             let evento = match caller.data().canal_puntero.pop() {
                 Some(e) => e,
-                None => return Ok(0),
+                None => return Ok(CodigoError::Ok.como_i32()),
             };
             let memoria = obtener_memoria(&caller)?;
             {
@@ -295,14 +295,14 @@ pub(crate) fn enlazar_capacidades(
                 (datos, hijos)
             };
 
-            // --- Grabar. Un fallo del almacen NO es culpa de la app: -1. ---
+            // --- Grabar. Un fallo del almacen NO es culpa de la app. ---
             match crate::almacen::almacenar(datos, hijos) {
                 Ok(hash) => {
                     let m = memoria.data_mut(&mut caller);
                     m[salida as usize..salida as usize + 32].copy_from_slice(&hash);
-                    Ok(0)
+                    Ok(CodigoError::Ok.como_i32())
                 }
-                Err(_) => Ok(-1),
+                Err(_) => Ok(CodigoError::AlmacenamientoFallo.como_i32()),
             }
         },
     )?;
@@ -333,11 +333,11 @@ pub(crate) fn enlazar_capacidades(
 
             let objeto = match crate::almacen::recuperar(&hash) {
                 Ok(Some(objeto)) => objeto,
-                Ok(None) => return Ok(-1),
-                Err(_) => return Ok(-3),
+                Ok(None) => return Ok(CodigoError::Ausente.como_i32()),
+                Err(_) => return Ok(CodigoError::AlmacenamientoFallo.como_i32()),
             };
             if objeto.datos.len() > capacidad as usize {
-                return Ok(-2);
+                return Ok(CodigoError::CapacidadInsuficiente.como_i32());
             }
 
             // Verificar que el destino cabe, y solo entonces copiar.
@@ -360,7 +360,8 @@ pub(crate) fn enlazar_capacidades(
     // --- CAPACIDAD 5 :: sys_object_hijo(hash, indice, salida) -> i32 ---
     // Recorre las aristas del DAG. Devuelve el NUMERO de hijos del objeto
     // `hash`; si `indice` es valido, ademas escribe el hash de ese hijo en
-    // `salida`. Devuelve -1 si el objeto no existe, -3 si el almacen fallo.
+    // `salida`. CodigoError::Ausente si el objeto no existe,
+    // CodigoError::AlmacenamientoFallo si el almacen fallo.
     enlazador.func_wrap(
         "renaser",
         "sys_object_hijo",
@@ -382,8 +383,8 @@ pub(crate) fn enlazar_capacidades(
 
             let objeto = match crate::almacen::recuperar(&hash) {
                 Ok(Some(objeto)) => objeto,
-                Ok(None) => return Ok(-1),
-                Err(_) => return Ok(-3),
+                Ok(None) => return Ok(CodigoError::Ausente.como_i32()),
+                Err(_) => return Ok(CodigoError::AlmacenamientoFallo.como_i32()),
             };
             let total = objeto.hijos.len();
 
@@ -428,14 +429,14 @@ pub(crate) fn enlazar_capacidades(
                     m[salida as usize..salida as usize + 32].copy_from_slice(&hash);
                     Ok(1)
                 }
-                None => Ok(0),
+                None => Ok(CodigoError::Ok.como_i32()),
             }
         },
     )?;
 
     // --- CAPACIDAD 7 :: sys_object_fijar_raiz(hash) -> i32 ---
-    // Corona el objeto `hash` como raiz del grafo. Devuelve 0 si se logro, -3
-    // si el almacenamiento fallo.
+    // Corona el objeto `hash` como raiz del grafo. CodigoError::Ok si se logro,
+    // CodigoError::AlmacenamientoFallo si el almacenamiento fallo.
     //
     // GATEADA por PERMISO_RAIZ: cambiar la raiz del grafo mueve el punto
     // de entrada que el resto del userspace lee. Solo apps explicitamente
@@ -455,8 +456,8 @@ pub(crate) fn enlazar_capacidades(
                 )?
             };
             match crate::almacen::fijar_raiz(hash) {
-                Ok(()) => Ok(0),
-                Err(_) => Ok(-3),
+                Ok(()) => Ok(CodigoError::Ok.como_i32()),
+                Err(_) => Ok(CodigoError::AlmacenamientoFallo.como_i32()),
             }
         },
     )?;
@@ -478,15 +479,15 @@ pub(crate) fn enlazar_capacidades(
             // El hash del estado de esta app, segun el manifiesto vivo.
             let hash = match crate::manifiesto::estado_de(indice) {
                 Some(hash) => hash,
-                None => return Ok(0), // Sin estado previo: nada que cargar.
+                None => return Ok(CodigoError::Ok.como_i32()), // Sin estado previo.
             };
             let objeto = match crate::almacen::recuperar(&hash) {
                 Ok(Some(objeto)) => objeto,
-                Ok(None) => return Ok(-1),
-                Err(_) => return Ok(-3),
+                Ok(None) => return Ok(CodigoError::Ausente.como_i32()),
+                Err(_) => return Ok(CodigoError::AlmacenamientoFallo.como_i32()),
             };
             if objeto.datos.len() > capacidad as usize {
-                return Ok(-2);
+                return Ok(CodigoError::CapacidadInsuficiente.como_i32());
             }
 
             let memoria = obtener_memoria(&caller)?;
@@ -533,15 +534,15 @@ pub(crate) fn enlazar_capacidades(
                 .to_vec()
             };
             // Grabar el objeto de estado. Un fallo del almacen NO es culpa de
-            // la app: se le devuelve -3, y ella decide que hacer.
+            // la app: se le devuelve CodigoError::AlmacenamientoFallo.
             let hash = match crate::almacen::almacenar(datos, alloc::vec::Vec::new()) {
                 Ok(hash) => hash,
-                Err(_) => return Ok(-3),
+                Err(_) => return Ok(CodigoError::AlmacenamientoFallo.como_i32()),
             };
             // Anclarlo: muta el manifiesto vivo, lo re-graba y lo re-ancla.
             match crate::manifiesto::fijar_estado(indice, hash) {
-                Ok(()) => Ok(0),
-                Err(_) => Ok(-3),
+                Ok(()) => Ok(CodigoError::Ok.como_i32()),
+                Err(_) => Ok(CodigoError::AlmacenamientoFallo.como_i32()),
             }
         },
     )?;
@@ -601,14 +602,15 @@ pub(crate) fn enlazar_capacidades(
     if permisos & PERMISO_RED != 0 {
 
     // --- CAPACIDAD 12 :: sys_net_mac(salida) -> i32 ---
-    // Copia los 6 bytes de la MAC de la tarjeta de red en `salida`. Devuelve 0
-    // si la red esta montada; -1 si no hay tarjeta o aun no se monto.
+    // Copia los 6 bytes de la MAC de la tarjeta de red en `salida`.
+    // CodigoError::Ok si la red esta montada; CodigoError::Ausente si no hay
+    // tarjeta o aun no se monto.
     enlazador.func_wrap(
         "renaser",
         "sys_net_mac",
         |mut caller: Caller<'_, ContextoCapacidades>, salida: u32| -> Result<i32, Error> {
             let Some(mac) = crate::drivers::red::mac() else {
-                return Ok(-1);
+                return Ok(CodigoError::Ausente.como_i32());
             };
             let memoria = obtener_memoria(&caller)?;
             {
@@ -617,14 +619,14 @@ pub(crate) fn enlazar_capacidades(
             }
             let m = memoria.data_mut(&mut caller);
             m[salida as usize..salida as usize + 6].copy_from_slice(&mac);
-            Ok(0)
+            Ok(CodigoError::Ok.como_i32())
         },
     )?;
 
     // --- CAPACIDAD 13 :: sys_net_enviar(ptr, len) -> i32 ---
     // Envia un frame Ethernet crudo (cabecera + payload, sin CRC). El app
-    // construye el frame entero en su memoria lineal. Devuelve 0 si el
-    // envio se entrego al dispositivo; -1 si fallo el envio o no hay red.
+    // construye el frame entero en su memoria lineal. CodigoError::Ok si el
+    // envio se entrego al dispositivo; CodigoError::EnvioFallo si fallo.
     enlazador.func_wrap(
         "renaser",
         "sys_net_enviar",
@@ -638,8 +640,8 @@ pub(crate) fn enlazar_capacidades(
                 "WASM :: sys_net_enviar desbordo la memoria lineal",
             )?;
             match crate::drivers::red::enviar(frame) {
-                Ok(()) => Ok(0),
-                Err(_) => Ok(-1),
+                Ok(()) => Ok(CodigoError::Ok.como_i32()),
+                Err(_) => Ok(CodigoError::EnvioFallo.como_i32()),
             }
         },
     )?;
@@ -661,7 +663,7 @@ pub(crate) fn enlazar_capacidades(
          capacidad: u32|
          -> Result<i32, Error> {
             if crate::drivers::red::mac().is_none() {
-                return Ok(-1);
+                return Ok(CodigoError::Ausente.como_i32());
             }
             let memoria = obtener_memoria(&caller)?;
             // Verificar que el destino cabe ANTES de tocar la cola.
@@ -679,7 +681,7 @@ pub(crate) fn enlazar_capacidades(
             let mut buf: alloc::vec::Vec<u8> = alloc::vec![0u8; capacidad as usize];
             let n = crate::akasha::pop_usuario(&mut buf);
             if n == 0 {
-                return Ok(0);
+                return Ok(CodigoError::Ok.como_i32());
             }
             let m = memoria.data_mut(&mut caller);
             m[salida as usize..salida as usize + n].copy_from_slice(&buf[..n]);
@@ -713,8 +715,8 @@ pub(crate) fn enlazar_capacidades(
                 )?
             };
             match crate::akasha::difundir_solicitud(hash) {
-                Ok(()) => Ok(0),
-                Err(()) => Ok(-1),
+                Ok(()) => Ok(CodigoError::Ok.como_i32()),
+                Err(()) => Ok(CodigoError::EnvioFallo.como_i32()),
             }
         },
     )?;
@@ -761,10 +763,10 @@ pub(crate) fn enlazar_capacidades(
          paleta_ptr: u32|
          -> Result<i32, Error> {
             // Frontera de confianza local: solo la ventana enfocada gobierna
-            // la experiencia. Una app en segundo plano puede intentarlo y se
-            // le devuelve -2; el kernel no toca nada.
+            // la experiencia. Una app en segundo plano recibe SinFoco; el
+            // kernel no toca nada.
             if crate::compositor::foco() != caller.data().indice_app {
-                return Ok(-2);
+                return Ok(CodigoError::SinFoco.como_i32());
             }
             let memoria = obtener_memoria(&caller)?;
             let datos = memoria.data(&caller);
@@ -782,8 +784,8 @@ pub(crate) fn enlazar_capacidades(
                 paleta,
             };
             match crate::manifiesto::fijar_configuracion(nueva) {
-                Ok(_hash) => Ok(0),
-                Err(_) => Ok(-1),
+                Ok(_hash) => Ok(CodigoError::Ok.como_i32()),
+                Err(_) => Ok(CodigoError::AlmacenamientoFallo.como_i32()),
             }
         },
     )?;
@@ -813,7 +815,7 @@ pub(crate) fn enlazar_capacidades(
             }
             let m = memoria.data_mut(&mut caller);
             m[salida as usize..salida as usize + paleta.len()].copy_from_slice(&paleta);
-            Ok(0)
+            Ok(CodigoError::Ok.como_i32())
         },
     )?;
 
