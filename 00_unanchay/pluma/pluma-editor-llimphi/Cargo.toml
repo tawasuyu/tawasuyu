@@ -16,3 +16,10 @@ llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 rimay-localize = { path = "../../../shared/rimay-localize" }
 uuid = { workspace = true, features = ["serde"] }
+
+[dev-dependencies]
+pluma-transform = { path = "../pluma-transform" }
+pluma-transform-tabla = { path = "../pluma-transform-tabla" }
+pluma-align-embeddings = { path = "../pluma-align-embeddings" }
+rimay-verbo-mock = { path = "../../rimay/rimay-verbo-mock" }
+tokio = { workspace = true }

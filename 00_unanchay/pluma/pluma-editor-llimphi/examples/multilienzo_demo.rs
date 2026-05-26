@@ -1,21 +1,36 @@
-//! Demo del multilienzo: tres cuerpos (es / qu / en) con hebras
-//! mostrando los cuatro estados posibles — derivada fresca, embeddings
-//! con fuerza modulada, manual, y stale punteada.
+//! Demo del multilienzo — flujo end-to-end real:
+//!
+//!   1. Cuerpo madre `es` con párrafos sintéticos.
+//!   2. Cuerpo `qu` derivado por `EjecutorTraducirTabla` (Derivada 1↔1).
+//!   3. Cuerpo `en` (resumen, 2 párrafos manuales).
+//!   4. Hebras `es↔qu`: producto natural de la transformación (Derivada).
+//!   5. Hebras `qu↔en`: calculadas por `alinear_por_embeddings` con
+//!      MockProvider determinista (umbral muy bajo para mostrar que el
+//!      pipeline funciona aun con vectores random — fuerzas variadas
+//!      generan saturación visible).
+//!
+//! Una hebra es↔qu se marca stale a mano para mostrar el efecto visual.
 //!
 //! Corré con:
 //!   cargo run -p pluma-editor-llimphi --example multilienzo_demo --release
 
+use std::collections::HashMap;
+
 use llimphi_ui::llimphi_layout::taffy::prelude::{percent, FlexDirection, Size, Style};
 use llimphi_ui::{App, Handle, View};
-use pluma_align::{
-    alinear_explicito, alinear_uno_a_uno, Alineamiento, CartaHebras, OrigenAlineamiento,
-};
+use pluma_align::CartaHebras;
+use pluma_align_embeddings::{alinear_por_embeddings, ModoAlineacion, ParamsAlineacion};
 use pluma_core::NarrativeAtom;
 use pluma_cuerpo::{Cuerpo, Intencion};
 use pluma_editor_llimphi::multilienzo::{
     multilienzo_view, IndiceAtoms, MultilienzoConfig, PaletaHebras,
 };
 use pluma_editor_llimphi::Palette;
+use pluma_transform::{
+    Ejecutor, TipoTransformacion, Transformacion,
+};
+use pluma_transform_tabla::EjecutorTraducirTabla;
+use rimay_verbo_mock::MockProvider;
 use uuid::Uuid;
 
 #[derive(Clone, Debug)]
@@ -34,107 +49,116 @@ impl App for Demo {
     type Msg = Msg;
 
     fn title() -> &'static str {
-        "pluma · multilienzo demo"
+        "pluma · multilienzo demo (es → qu derivado · qu ↔ en embeddings)"
     }
 
     fn initial_size() -> (u32, u32) {
-        (1280, 640)
+        (1280, 680)
     }
 
     fn init(_: &Handle<Msg>) -> Model {
-        let (es, atoms_es) = cuerpo(
-            "es",
-            "español (original)",
-            Intencion::Original,
-            &[
-                "El cóndor cruzó el cielo del valle al amanecer.",
-                "Las llamas pastaban entre los pastizales del altiplano.",
-                "Una mujer joven tejía un telar bajo el aleros.",
-                "El río Apurímac descendía rugiente por las rocas.",
-                "Al caer la tarde, las nubes cubrieron el sol.",
-            ],
-        );
+        // -- 1. Cuerpo madre `es` ----------------------------------------------
+        let textos_es = [
+            "El cóndor cruzó el cielo del valle al amanecer.",
+            "Las llamas pastaban entre los pastizales del altiplano.",
+            "Una mujer joven tejía un telar bajo el alero.",
+            "El río Apurímac descendía rugiente por las rocas.",
+            "Al caer la tarde, las nubes cubrieron el sol.",
+        ];
+        let atoms_es: Vec<NarrativeAtom> = textos_es
+            .iter()
+            .map(|t| NarrativeAtom::new(*t, "es"))
+            .collect();
+        let mut es = Cuerpo::nuevo("es", "español (original)", Intencion::Original, 100);
+        for a in &atoms_es {
+            es.agregar(a.id, 101);
+        }
 
-        let (qu, atoms_qu) = cuerpo(
-            "qu",
-            "runa simi (traducción)",
-            Intencion::Traduccion,
-            &[
-                "Kuntur wayqu hanaqpachata pacha paqarinpi pasarqa.",
-                "Llamaqakuna qulla suyup q'achupinpi mikhusharqaku.",
-                "Sipas warmiq away wasiq hawanpi awayta ruwasharqa.",
-                "Apurímac mayu rumikuna ukhumanta qhaparispa uraykurqa.",
-                "Inti yaykuy pachapi puyukuna intita pakarqaku.",
-            ],
+        // -- 2. Cuerpo `qu` derivado por tabla --------------------------------
+        let traducciones = [
+            "Kuntur wayqu hanaqpachata pacha paqarinpi pasarqa.",
+            "Llamaqakuna qulla suyup q'achupinpi mikhusharqaku.",
+            "Sipas warmiq away wasiq hawanpi awayta ruwasharqa.",
+            "Apurímac mayu rumikuna ukhumanta qhaparispa uraykurqa.",
+            "Inti yaykuy pachapi puyukuna intita pakarqaku.",
+        ];
+        let mut tabla: HashMap<Uuid, String> = HashMap::new();
+        for (atom, tr) in atoms_es.iter().zip(traducciones.iter()) {
+            tabla.insert(atom.id, (*tr).to_string());
+        }
+        let ejecutor_traducir = EjecutorTraducirTabla::new(tabla, "qu");
+        let t_qu = Transformacion::nueva(
+            es.id,
+            Uuid::new_v4(),
+            TipoTransformacion::Traducir {
+                lengua_destino: "qu".into(),
+            },
+            "ana",
+            200,
         );
+        let prod = ejecutor_traducir
+            .aplicar(&t_qu, &es, 200)
+            .expect("traducción por tabla debería tener éxito");
+        let qu = prod.hija;
+        let atoms_qu = prod.atoms_nuevos;
+        let mut carta_es_qu = prod.carta;
 
-        let (en, atoms_en) = cuerpo(
+        // Marcar a mano la primera hebra como stale: la madre se editó después
+        // de la regeneración (simulación del estado típico tras edición).
+        if let Some(h) = carta_es_qu.hebras.get_mut(0) {
+            h.fresco = false;
+        }
+
+        // -- 3. Cuerpo `en` (resumen, 2 párrafos manuales) --------------------
+        let textos_en = [
+            "Dawn over the highlands — condor, llamas, weaver.",
+            "By dusk, the Apurímac roared and the clouds hid the sun.",
+        ];
+        let atoms_en: Vec<NarrativeAtom> = textos_en
+            .iter()
+            .map(|t| NarrativeAtom::new(*t, "en"))
+            .collect();
+        let mut en = Cuerpo::nuevo(
             "en",
             "english (résumé)",
             Intencion::Resumen {
                 palabras_objetivo: Some(40),
             },
-            &[
-                "Dawn over the highlands — condor, llamas, weaver.",
-                "By dusk, the Apurímac roared and the clouds hid the sun.",
-            ],
+            200,
         );
-
-        // Carta es↔qu: 1↔1 derivada fresca.
-        let mut carta_es_qu = alinear_uno_a_uno(
-            &es,
-            &qu,
-            OrigenAlineamiento::Derivado {
-                transformacion: Uuid::new_v4(),
-                timestamp: 1_000,
-            },
-        );
-        // La hebra del tercer párrafo viene de Embeddings con fuerza baja —
-        // se verá visualmente más tenue.
-        if let Some(h) = carta_es_qu.hebras.get_mut(2) {
-            h.origen = OrigenAlineamiento::Embeddings {
-                modelo: "iniy-1".into(),
-                timestamp: 1_000,
-            };
-            h.fuerza = 0.35;
-        }
-        // La hebra del último es Manual (autoría humana — color ámbar).
-        if let Some(h) = carta_es_qu.hebras.get_mut(4) {
-            h.origen = OrigenAlineamiento::Manual {
-                autor: "ana".into(),
-                timestamp: 1_000,
-            };
-        }
-        // La hebra del primero quedó stale: la madre se editó después.
-        if let Some(h) = carta_es_qu.hebras.get_mut(0) {
-            h.fresco = false;
+        for a in &atoms_en {
+            en.agregar(a.id, 201);
         }
 
-        // Carta qu↔en: 5→2 manual (resumen condensa varios párrafos).
-        let pares: Vec<(Uuid, Uuid, f32)> = vec![
-            (atoms_qu[0].id, atoms_en[0].id, 0.9),
-            (atoms_qu[1].id, atoms_en[0].id, 0.85),
-            (atoms_qu[2].id, atoms_en[0].id, 0.6),
-            (atoms_qu[3].id, atoms_en[1].id, 0.9),
-            (atoms_qu[4].id, atoms_en[1].id, 0.8),
-        ];
-        let carta_qu_en = alinear_explicito(
-            &qu,
-            &en,
-            &pares,
-            OrigenAlineamiento::Embeddings {
-                modelo: "iniy-1".into(),
-                timestamp: 1_000,
-            },
-        );
+        // -- 4. Hebras qu↔en por embeddings (MockProvider determinista) -------
+        // Indice de atoms para que alinear_por_embeddings resuelva los textos.
+        let mut atoms_all: Vec<NarrativeAtom> = atoms_es.clone();
+        atoms_all.extend(atoms_qu.iter().cloned());
+        atoms_all.extend(atoms_en.iter().cloned());
+        let idx: HashMap<Uuid, &NarrativeAtom> =
+            atoms_all.iter().map(|a| (a.id, a)).collect();
 
-        let mut atoms = atoms_es;
-        atoms.extend(atoms_qu);
-        atoms.extend(atoms_en);
+        let provider = MockProvider::default();
+        // Umbral negativo para que TODAS las mejores correspondencias pasen —
+        // con vectores random veremos fuerzas dispersas, que es justo el
+        // comportamiento esperado del mock. Con un modelo real bajar el
+        // umbral a 0.5–0.7 filtraría ruido.
+        let params = ParamsAlineacion {
+            umbral_minimo: -1.0,
+            modo: ModoAlineacion::MejorParaCadaA,
+        };
+        let carta_qu_en = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime tokio")
+            .block_on(alinear_por_embeddings(
+                &qu, &en, &idx, &provider, &params, 200,
+            ))
+            .expect("alineación por embeddings");
 
         Model {
             cuerpos: vec![es, qu, en],
-            atoms,
+            atoms: atoms_all,
             cartas: vec![carta_es_qu, carta_qu_en],
         }
     }
@@ -161,8 +185,6 @@ impl App for Demo {
             &palette,
         );
 
-        // Envoltura full-window con clip — el multilienzo ya devuelve un nodo
-        // del tamaño exacto del contenido; el padre lo recorta al viewport.
         View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
@@ -177,27 +199,6 @@ impl App for Demo {
     }
 }
 
-fn cuerpo(
-    branch: &str,
-    nombre: &str,
-    intencion: Intencion,
-    textos: &[&str],
-) -> (Cuerpo, Vec<NarrativeAtom>) {
-    let mut c = Cuerpo::nuevo(branch, nombre, intencion, 100);
-    let atoms: Vec<NarrativeAtom> = textos
-        .iter()
-        .map(|t| NarrativeAtom::new(*t, branch))
-        .collect();
-    for a in &atoms {
-        c.agregar(a.id, 101);
-    }
-    (c, atoms)
-}
-
 fn main() {
     llimphi_ui::run::<Demo>();
 }
-
-// Re-exported types referenced only via type alias chains.
-#[allow(dead_code)]
-fn _silence_alineamiento(_: Alineamiento) {}
