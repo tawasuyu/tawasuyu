@@ -1,0 +1,15 @@
+[package]
+name = "pluma-llm-mock"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "pluma — backend LLM determinista para tests. No habla con ningún servicio; devuelve respuestas predeclaradas indexadas por hash del prompt, o un eco modificable."
+
+[dependencies]
+async-trait = { workspace = true }
+pluma-llm-core = { path = "../pluma-llm-core" }
+
+[dev-dependencies]
+tokio = { workspace = true }
