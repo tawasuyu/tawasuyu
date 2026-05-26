@@ -1,0 +1,20 @@
+[package]
+name = "minga-explorer-llimphi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Dashboard Llimphi del repo Minga: counts de nodos AST, atestaciones, claves MST, refresh por polling. Reemplazo del `minga-explorer` GPUI; lee sled directo (sin passphrase) y compone header + 3 stat cards + banner de error con widgets reusables de llimphi."
+
+[dependencies]
+minga-store = { path = "../minga-store" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-app-header = { workspace = true }
+llimphi-widget-banner = { workspace = true }
+llimphi-widget-stat-card = { workspace = true }
+
+[[bin]]
+name = "minga-explorer-llimphi"
+path = "src/main.rs"
