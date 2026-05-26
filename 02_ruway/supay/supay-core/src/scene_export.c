@@ -40,6 +40,7 @@
 #include "p_mobj.h"      /* mobj_t */
 #include "p_local.h"     /* P_MobjThinker (función action_p1 que distingue mobjs) */
 #include "info.h"        /* sprnames[] — array de strings 4-char por spritenum_t */
+#include "p_pspr.h"      /* pspdef_t, ps_weapon */
 #include "d_player.h"    /* player_t, MAXPLAYERS */
 #include "r_state.h"     /* lines/sectors/subsectors/segs/etc. globals */
 #include "w_wad.h"       /* lumpinfo[i].name para resolver flats */
@@ -136,6 +137,40 @@ int supay_scene_player_overlays(int *damagecount, int *bonuscount,
     *bonuscount = p->bonuscount;
     *power_invuln = p->powers[pw_invulnerability];
     *power_radsuit = p->powers[pw_ironfeet];
+    return 1;
+}
+
+/* Estado del psprite del arma del jugador (Fase 3.15). doomgeneric
+ * mantiene `players[].psprites[ps_weapon]` con la animación de la
+ * pistola/escopeta/etc. que el motor pintaría sobre la vista 2D.
+ * El psprite tiene `state*` (None → inactivo), `tics`, y `sx/sy`
+ * en coordenadas screen 320x200 (fixed-point 16.16).
+ *
+ * Devuelve 1 si el state está activo + outs llenados; 0 si está
+ * inactivo (player dead, game start) → Rust lo trata como "sin arma".
+ */
+int supay_scene_player_weapon(uint16_t *spritenum, uint8_t *frame,
+                              float *sx, float *sy) {
+    player_t *p = &players[consoleplayer];
+    if (!p->mo) {
+        return 0;
+    }
+    pspdef_t *psp = &p->psprites[ps_weapon];
+    if (!psp->state) {
+        return 0;
+    }
+    *spritenum = (uint16_t)psp->state->sprite;
+    /* state->frame puede tener el bit FF_FULLBRIGHT (bit 15) y FF_FRAMEMASK
+     * los bits 0..14. Para nuestro `u8` extraemos los bits relevantes:
+     * letter en bits 0..4, full-bright en bit 7 (convención existente). */
+    int fr = psp->state->frame;
+    uint8_t f = (uint8_t)(fr & 0x1F);
+    if (fr & 0x8000) {
+        f |= 0x80; /* full bright para muzzle flashes */
+    }
+    *frame = f;
+    *sx = ftox(psp->sx);
+    *sy = ftox(psp->sy);
     return 1;
 }
 

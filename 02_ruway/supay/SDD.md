@@ -328,6 +328,29 @@ cargo run -p supay-doom-llimphi --release
 
 **No incluido en 3.14 (defer a 3.15+):** wall + sprite BSP ordering; pitch / mouse-look; volumetric fog real por sector; texture scrolling visual validation; decals dinámicos; berserk red tint; invuln invert-colors real (necesita custom shader).
 
+**Fase 3.15 (2026-05-26, este bloque):** weapon psprite — el arma en mano.
+
+- **Contexto.** Doom pinta `players[].psprites[ps_weapon]` como overlay 2D sobre la vista 3D (pistol, shotgun, chaingun, etc.). Sin esto, nuestra vista 3D se ve sin manos — un FPS sin arma es raro. La modernización es leer el psprite del motor y pintarlo encima de la escena, antes del overlay PLAYPAL.
+- **C-side `supay_scene_player_weapon(spritenum, frame, sx, sy)`**: lee `players[consoleplayer].psprites[ps_weapon]`. Devuelve 0 si `psp->state == NULL` (player dead, pre-mapa); outs en cero. Extrae `state->sprite` (e.g. SPR_PISG), `state->frame` con bit FF_FULLBRIGHT preservado (movido al bit 7 para nuestra convención `u8`), `psp->sx/sy` convertidos de fixed-point a float (coords nominales 320×200 del viewport Doom).
+- **`supay-scene::WeaponSpriteSnap`** struct con `active: bool, sprite: u16, frame: u8, sx: f32, sy: f32`. `SceneSnapshot.weapon: WeaponSpriteSnap`. `interpolate` interpola `sx/sy` cuando `prev` y `next` comparten sprite + ambos activos (smoothing del weapon bob al caminar); cambio de sprite o transitions a inactive → toma `next` puro.
+- **`supay-core::capture_scene_real`** llama el getter post-tick. Stub deja `weapon: Default` (inactivo).
+- **`supay-render-llimphi::draw_weapon_sprite`**: pintado entre el sort de renderables y `draw_player_overlays`. Reutiliza `atlas.sprite_patch(spritenum, frame, 1)` — Doom usa angle=0 para weapon lumps; nuestro `sprite_lump` cae al fallback `<NAME><F>0` automáticamente.
+  - **Escalado**: `scale = min(rect.w / 320, rect.h / 200)` (4:3 nominal de Doom). Aspectos más altos letterboxean horizontalmente.
+  - **Horizontal**: centro del rect + `sx * scale` como offset (sx=0 idle = centrado).
+  - **Vertical**: anclado al bottom del rect (bottom de patch = bottom de rect cuando sy=32 idle). Cuando sy crece (WEAPONBOTTOM=128 al guardar arma), el patch desciende `(sy - 32) * scale` pixels — la animación de switch-down funciona automáticamente.
+  - **Mirror flag** del lump combinado-ángulo se respeta (improbable en weapon sprites pero el código está ahí por consistencia con sprite_patch).
+  - **Full-bright bit** (bit 7 del frame) no se aplica especialmente — el sprite ya viene sin shading porque está "en la mano del jugador" (modernización: el arma siempre se ve clara, vanilla Doom dimmea con el sector pero queremos que el feedback visual del arma sea siempre legible).
+- **Z-order respecto a overlays.** `draw_weapon_sprite` se llama *antes* de `draw_player_overlays` — el flash rojo de daño tinta también el arma (esperado en Doom original, donde la PLAYPAL afecta todo el frame incluido el psprite).
+- **Tests**. Sin tests unitarios nuevos esta fase (la lógica vive en una función con efectos visuales puros; las posiciones se validan empíricamente con el binario). 33 tests verde se mantienen.
+- **Header bump**: `PHASE 3.14` → `PHASE 3.15`.
+
+**Limitaciones conocidas de 3.15.**
+- **`ps_flash` no se renderiza** — Doom usa un psprite secundario para el muzzle flash de algunas armas (BFG, plasma). Sólo pintamos `ps_weapon` por ahora. El flash bright cuando la pistola dispara igual lo tenemos vía el bit FF_FULLBRIGHT del frame en `ps_weapon` (PISGB frame del fire).
+- **Weapon bob no es perfecto** — interpolar sx/sy entre snapshots da smoothing, pero el feel del bob viene del motor C; cualquier diff entre 35 Hz y 60 Hz se mantiene como artefacto leve.
+- **Sin scale por viewport activo** — Doom escala el psprite por `viewwidth/SCREENWIDTH` cuando se cambia el detail level. Asumimos siempre fullscreen 320×200; si el rect no es 4:3 puro, hay letterbox horizontal en lugar del 100% nuestro fov.
+
+**No incluido en 3.15 (defer a 3.16+):** wall + sprite BSP ordering; pitch / mouse-look; volumetric fog real; texture scrolling validation; decals dinámicos; berserk red tint; invuln invert-colors real; `ps_flash` (muzzle flash separado); weapon bob smoothing extra.
+
 ### Fase 4 — Capa de modernización opt-in
 
 Cada feature como toggle:
@@ -391,6 +414,7 @@ Cada feature como toggle:
   - **TempLight + flash de impacto**: nueva lista `Vec<TempLight>` con `(x, y, color, strength, ttl, ttl_max)`. Cada flash dura `FLASH_TTL = 4 ticks` y su `strength` decae linealmente con el TTL. `lighting_contribution` los suma; el resultado es un destello cálido cuando un bullet impacta. Spawn en colisión pared + colisión enemy.
   - **SpriteKinds nuevos**: `DyingImp` (rojo opaco scale 0.65) y `Corpse` (mancha rojiza scale 0.30) — el enemy en `draw_scene` se convierte al kind apropiado según state.
   - El jugador puede morir (vida llega a 0 y queda en 0); por ahora sin pantalla de game over — el input sigue activo. La pantalla del HUD muestra todo en rojo cuando vida < 25.
+- **2026-05-26 (+14):** Fase 3.15 — weapon psprite (pistol/shotgun/etc. en mano). Capture de `players[].psprites[ps_weapon]` desde doomgeneric, render como image overlay 2D anclado al bottom del viewport. Smoothing de sx/sy entre snapshots para weapon bob suave.
 - **2026-05-26 (+13):** Fase 3.14 — player palette overlays (damage red, pickup yellow, radsuit green, invuln white) como overlay alpha full-screen. Modernización de PLAYPAL[1..13] swap → un único fill semi-translúcido por frame. 33 tests verde renderer.
 - **2026-05-26 (+12):** Fase 3.13 — BSP back-to-front ordering exacto para pisos/techos (expone `nodes[]`, walker recursivo, depth `1e6 + step` reemplaza el centroide euclidiano para Renderable.depth de planos). Escaleras y sectores interpenetrados dejan de glitchear en el painter's. Walls/sprites siguen euclidiano. 28 tests verde renderer.
 - **2026-05-26 (+11):** Fase 3.12 — pisos y techos per-triangle (fan triangulation desde vértice 0 + affine exacta por triángulo). Desaparece el "affine sheen" residual de 3.7 en pisos grandes vistos oblicuos.

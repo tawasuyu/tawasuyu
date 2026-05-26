@@ -131,6 +131,29 @@ pub const NO_SECTOR: u32 = u32::MAX;
 /// resolvió `skyflatnum` (mapa todavía sin cargar) o estamos en stub.
 pub const NO_SKY_PIC: u16 = 0xFFFF;
 
+/// Estado del psprite del arma del jugador (Fase 3.15). Doom pinta
+/// `players[].psprites[ps_weapon]` como overlay 2D sobre la vista —
+/// la pistola/escopeta/chaingun visible "en la mano". Sin esto el
+/// renderer 3D se ve sin arma, raro para un FPS.
+///
+/// Las coordenadas `sx`/`sy` están en el viewport nominal 320×200 de
+/// Doom (origen arriba-izquierda); el renderer las escala al rect real.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct WeaponSpriteSnap {
+    /// `true` si el psprite tiene state activo (i.e. el jugador está
+    /// vivo y sostiene un arma). `false` durante death sequence o
+    /// pre-mapa.
+    pub active: bool,
+    /// `spritenum_t` (SPR_PISG, SPR_SHTG, SPR_CHGG, SPR_BFGG, etc.).
+    pub sprite: u16,
+    /// Frame: bits 0..4 = letter (A..Z), bit 7 = full bright (muzzle).
+    pub frame: u8,
+    /// Posición X en el viewport nominal 320×200.
+    pub sx: f32,
+    /// Posición Y en el viewport nominal 320×200.
+    pub sy: f32,
+}
+
 /// Estado de los overlays de pantalla del jugador. Doom intercambia
 /// PLAYPAL[1..13] cuando algo de esto está activo (red flash al daño,
 /// yellow al pickup, green con radsuit, white con invuln); como
@@ -265,6 +288,9 @@ pub struct SceneSnapshot {
     /// Fase 3.14: counters del jugador para overlays de pantalla
     /// (red flash, yellow flash, etc.). Default = sin overlays.
     pub player_overlays: PlayerOverlays,
+    /// Fase 3.15: psprite del arma del jugador (pistol, shotgun, etc.).
+    /// Cuando `active=false`, el renderer no pinta arma.
+    pub weapon: WeaponSpriteSnap,
 }
 
 impl Default for SceneSnapshot {
@@ -288,6 +314,7 @@ impl SceneSnapshot {
             nodes: Arc::from(Vec::<NodeSnap>::new()),
             sky_pic: NO_SKY_PIC,
             player_overlays: PlayerOverlays::default(),
+            weapon: WeaponSpriteSnap::default(),
         }
     }
 }
@@ -423,6 +450,20 @@ pub fn interpolate(prev: &SceneSnapshot, next: &SceneSnapshot, alpha: f32) -> Sc
         // pasos discretos por tick); el cambio entre snapshots se nota
         // como cambio de alpha del overlay.
         player_overlays: next.player_overlays,
+        // Weapon: el sprite cambia en pasos discretos por tick (state
+        // transitions). Interpolar sx/sy daría smoothing al bob de la
+        // pistola al caminar — vale la pena.
+        weapon: if prev.weapon.active && next.weapon.active && prev.weapon.sprite == next.weapon.sprite {
+            WeaponSpriteSnap {
+                active: true,
+                sprite: next.weapon.sprite,
+                frame: next.weapon.frame,
+                sx: lerp(prev.weapon.sx, next.weapon.sx, a),
+                sy: lerp(prev.weapon.sy, next.weapon.sy, a),
+            }
+        } else {
+            next.weapon
+        },
     }
 }
 

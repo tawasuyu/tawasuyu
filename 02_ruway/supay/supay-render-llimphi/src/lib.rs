@@ -65,7 +65,8 @@ use llimphi_ui::llimphi_raster::vello::Scene;
 use llimphi_ui::{PaintRect, View};
 use supay_scene::{
     interpolate, NodeSnap, PlayerOverlays, SceneSnapshot, SectorSnap, SnapshotPair, SpriteSnap,
-    SubsectorSnap, WallSeg, ML_DONTPEGBOTTOM, ML_DONTPEGTOP, NF_SUBSECTOR, NO_SECTOR, NO_SKY_PIC,
+    SubsectorSnap, WallSeg, WeaponSpriteSnap, ML_DONTPEGBOTTOM, ML_DONTPEGTOP, NF_SUBSECTOR,
+    NO_SECTOR, NO_SKY_PIC,
 };
 
 // =====================================================================
@@ -473,6 +474,11 @@ fn render_frame(scene: &mut Scene, rect: PaintRect, snap: &SceneSnapshot, cfg: &
             }
         }
     }
+
+    // Fase 3.15: sprite del arma del jugador (pistol/shotgun/etc.) —
+    // pintado *encima* de la escena 3D pero *debajo* del overlay de
+    // PLAYPAL (porque los damage flashes en Doom tintan el arma también).
+    draw_weapon_sprite(scene, rect, &snap.weapon, cfg);
 
     // Fase 3.14: overlay full-screen al final del frame (damage red,
     // pickup yellow, radsuit green, invuln white). Modernización pura
@@ -1759,6 +1765,91 @@ fn draw_backdrop(scene: &mut Scene, rect: PaintRect, snap: &SceneSnapshot, cfg: 
         255,
     );
     scene.fill(Fill::NonZero, Affine::IDENTITY, bg, None, &floor_rect);
+}
+
+// =====================================================================
+// Weapon sprite overlay (Fase 3.15)
+// =====================================================================
+//
+// Doom pinta `psprites[ps_weapon]` (la animación del arma en mano) como
+// overlay 2D sobre la vista. Las coordenadas vienen en el viewport
+// nominal 320×200; escalamos al rect real preservando aspect-fit
+// (Doom 4:3, igual que el FB original).
+
+/// Constante nominal del viewport Doom — el motor produce sx/sy
+/// asumiendo esta resolución base.
+const DOOM_VIEW_W: f32 = 320.0;
+const DOOM_VIEW_H: f32 = 200.0;
+/// Constante de psprite del motor: el counter `psp->sy` arranca en 32
+/// (WEAPONTOP) en idle, sube hasta 128 (WEAPONBOTTOM) cuando el arma se
+/// guarda. La diferencia `sy - WEAPONTOP` es cuánto cae el arma desde
+/// la posición "lista para disparar".
+const DOOM_WEAPON_TOP: f32 = 32.0;
+
+fn draw_weapon_sprite(scene: &mut Scene, rect: PaintRect, weap: &WeaponSpriteSnap, cfg: &RenderConfig) {
+    if !weap.active {
+        return;
+    }
+    let Some(atlas) = cfg.atlas.as_ref() else {
+        return;
+    };
+    // Las armas en Doom son sprites no-rotacionales con lump `<NAME><F>0`.
+    // Nuestra `sprite_patch` con angle=1 cae automáticamente al fallback
+    // omnidireccional vía `sprite_lump`.
+    let Some((patch, mirror)) = atlas.sprite_patch(weap.sprite, weap.frame, 1) else {
+        return;
+    };
+
+    // Escalado uniforme: usamos la altura del rect como referencia (Doom
+    // standard 320×200 = 1.6:1, mismo aspect que nuestra ventana 1280×800).
+    // Aspectos más altos letterboxean horizontalmente.
+    let scale = (rect.w / DOOM_VIEW_W).min(rect.h / DOOM_VIEW_H);
+    let patch_w_s = patch.width as f32 * scale;
+    let patch_h_s = patch.height as f32 * scale;
+
+    // Horizontal: psp->sx defaultea 0 = centrado. Cuando hay weapon bob
+    // o switch animation, sx oscila ±N pixels. Centramos el patch +
+    // offset horizontal de sx.
+    let screen_x_center = rect.x + rect.w * 0.5 + weap.sx * scale;
+    let screen_x = screen_x_center - patch_w_s * 0.5;
+
+    // Vertical: psp->sy es la coord top-of-patch en el viewport nominal
+    // 200px de Doom. WEAPONTOP=32 = arma totalmente levantada (visible);
+    // sy crece hasta WEAPONBOTTOM=128 cuando el arma baja (al cambiar
+    // de arma, por ejemplo). Anchor: con sy=32, el patch queda anclado
+    // al bottom del rect; subir sy lo hunde por debajo (offscreen).
+    let bottom = rect.y + rect.h;
+    let screen_y = bottom - patch_h_s + (weap.sy - DOOM_WEAPON_TOP) * scale;
+
+    use llimphi_ui::llimphi_raster::peniko::{Blob, Image, ImageFormat};
+    let img = Image::new(
+        Blob::from(patch.rgba.clone()),
+        ImageFormat::Rgba8,
+        patch.width as u32,
+        patch.height as u32,
+    );
+    // Affine: image(ix, iy) → screen(screen_x + ix·scale, screen_y + iy·scale).
+    // Para mirror, X negativo + offset al borde derecho.
+    let xform = if mirror {
+        Affine::new([
+            -(scale as f64),
+            0.0,
+            0.0,
+            scale as f64,
+            (screen_x + patch_w_s) as f64,
+            screen_y as f64,
+        ])
+    } else {
+        Affine::new([
+            scale as f64,
+            0.0,
+            0.0,
+            scale as f64,
+            screen_x as f64,
+            screen_y as f64,
+        ])
+    };
+    scene.draw_image(&img, xform);
 }
 
 // =====================================================================

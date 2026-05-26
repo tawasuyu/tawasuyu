@@ -31,7 +31,8 @@ use std::time::Instant;
 
 pub use supay_scene::{
     interpolate, NodeSnap, PlayerOverlays, PlayerSnap, SceneSnapshot, SectorSnap, SegSnap,
-    SnapshotPair, SpriteSnap, SubsectorSnap, WallSeg, NF_SUBSECTOR, NO_SECTOR, NO_SKY_PIC,
+    SnapshotPair, SpriteSnap, SubsectorSnap, WallSeg, WeaponSpriteSnap, NF_SUBSECTOR, NO_SECTOR,
+    NO_SKY_PIC,
 };
 
 // doomgeneric default es 640×400 (auto-scaling factor 2 sobre los
@@ -292,6 +293,15 @@ extern "C" {
         bonuscount: *mut std::ffi::c_int,
         power_invuln: *mut std::ffi::c_int,
         power_radsuit: *mut std::ffi::c_int,
+    ) -> std::ffi::c_int;
+    /// Fase 3.15: estado del psprite del arma del jugador (pistol,
+    /// shotgun, etc.). Devuelve 0 si el psprite no tiene state activo
+    /// (player dead, pre-mapa). `sx`/`sy` en coords nominales 320×200.
+    fn supay_scene_player_weapon(
+        spritenum: *mut u16,
+        frame: *mut u8,
+        sx: *mut f32,
+        sy: *mut f32,
     ) -> std::ffi::c_int;
 }
 
@@ -796,6 +806,28 @@ fn capture_scene_real(tick: u64) -> SceneSnapshot {
         power_radsuit: p_rad.max(0) as u32,
     };
 
+    // Psprite del arma (Fase 3.15).
+    let mut weap_sprite = 0_u16;
+    let mut weap_frame = 0_u8;
+    let mut weap_sx = 0.0_f32;
+    let mut weap_sy = 0.0_f32;
+    // SAFETY: punteros a locales válidos.
+    let weap_ok = unsafe {
+        supay_scene_player_weapon(
+            &mut weap_sprite,
+            &mut weap_frame,
+            &mut weap_sx,
+            &mut weap_sy,
+        )
+    };
+    let weapon = WeaponSpriteSnap {
+        active: weap_ok != 0,
+        sprite: weap_sprite,
+        frame: weap_frame,
+        sx: weap_sx,
+        sy: weap_sy,
+    };
+
     SceneSnapshot {
         tick,
         player,
@@ -807,6 +839,7 @@ fn capture_scene_real(tick: u64) -> SceneSnapshot {
         nodes: Arc::from(nodes_vec),
         sky_pic,
         player_overlays,
+        weapon,
     }
 }
 
@@ -927,5 +960,7 @@ fn synth_snapshot(tick: u64) -> SceneSnapshot {
         // Stub: sin overlays. El red flash sintético se puede testear en
         // modo real moviéndose hacia un enemigo.
         player_overlays: PlayerOverlays::default(),
+        // Stub: sin arma — no hay psprite que mostrar sin jugador real.
+        weapon: WeaponSpriteSnap::default(),
     }
 }
