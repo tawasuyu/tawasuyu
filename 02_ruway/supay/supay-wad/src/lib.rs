@@ -267,6 +267,130 @@ impl Wad {
         }
         Some(out)
     }
+
+    /// Decodifica un lump en formato "patch" (sprites + wall patches) a
+    /// RGBA8 con transparencia. El formato:
+    ///
+    /// ```text
+    /// header (8 bytes):
+    ///   width        (i16 LE)
+    ///   height       (i16 LE)
+    ///   leftoffset   (i16 LE)  — distancia del centro al lado izq
+    ///   topoffset    (i16 LE)  — distancia del baseline al top
+    /// columnofs[width] (i32 LE) — offset desde inicio del lump a cada col
+    /// columns: para cada col, secuencia de "posts":
+    ///   topdelta (u8)            — 0xFF termina la columna
+    ///   length   (u8)
+    ///   pad      (u8)            — unused
+    ///   length × u8 (palette idx)
+    ///   pad      (u8)            — unused
+    /// ```
+    ///
+    /// Pixels no cubiertos por ningún post quedan transparentes
+    /// (alpha = 0). El renderer 3D pinta el `Image` resultante como
+    /// billboard con scale aplicado.
+    pub fn patch_rgba(
+        &self,
+        name: &str,
+        palette: &[(u8, u8, u8); PALETTE_ENTRIES],
+    ) -> Option<Patch> {
+        let lump = self.lump(name)?;
+        decode_patch(lump, palette)
+    }
+}
+
+/// Sprite o wall-patch decodificado a RGBA8.
+#[derive(Clone, Debug)]
+pub struct Patch {
+    pub width: u16,
+    pub height: u16,
+    /// Offsets de centrado — el renderer billboarder coloca el píxel
+    /// (leftoffset, topoffset) del patch en el "anchor" (típicamente
+    /// los pies del mobj). Pueden ser negativos en Doom; los exponemos
+    /// como i16 sin saturar.
+    pub leftoffset: i16,
+    pub topoffset: i16,
+    /// `width × height × 4` bytes (RGBA8). Stride = `width × 4`.
+    pub rgba: Vec<u8>,
+}
+
+fn read_i16_le(b: &[u8], off: usize) -> Option<i16> {
+    let s = b.get(off..off + 2)?;
+    Some(i16::from_le_bytes([s[0], s[1]]))
+}
+
+fn read_i32_le(b: &[u8], off: usize) -> Option<i32> {
+    let s = b.get(off..off + 4)?;
+    Some(i32::from_le_bytes([s[0], s[1], s[2], s[3]]))
+}
+
+fn decode_patch(
+    lump: &[u8],
+    palette: &[(u8, u8, u8); PALETTE_ENTRIES],
+) -> Option<Patch> {
+    if lump.len() < 8 {
+        return None;
+    }
+    let width = read_i16_le(lump, 0)?;
+    let height = read_i16_le(lump, 2)?;
+    let leftoffset = read_i16_le(lump, 4)?;
+    let topoffset = read_i16_le(lump, 6)?;
+    if width <= 0 || height <= 0 || width > 4096 || height > 4096 {
+        // Heurística anti-bogus: ningún patch razonable supera 4096.
+        return None;
+    }
+    let w = width as usize;
+    let h = height as usize;
+    let header_end = 8 + w * 4;
+    if lump.len() < header_end {
+        return None;
+    }
+    let mut rgba = vec![0u8; w * h * 4]; // todo alpha 0 por default
+    for col in 0..w {
+        let off = read_i32_le(lump, 8 + col * 4)? as usize;
+        if off >= lump.len() {
+            // Columna apunta fuera del lump — skip.
+            continue;
+        }
+        let mut p = off;
+        loop {
+            let topdelta = *lump.get(p)?;
+            if topdelta == 0xFF {
+                break;
+            }
+            let length = *lump.get(p + 1)? as usize;
+            // p+2 = unused pad; data en p+3..p+3+length; p+3+length = pad
+            let data_start = p + 3;
+            let data_end = data_start + length;
+            if data_end > lump.len() {
+                break;
+            }
+            for i in 0..length {
+                let y = topdelta as usize + i;
+                if y >= h {
+                    break;
+                }
+                let idx = lump[data_start + i] as usize;
+                let (r, g, b) = palette[idx];
+                let o = (y * w + col) * 4;
+                rgba[o] = r;
+                rgba[o + 1] = g;
+                rgba[o + 2] = b;
+                rgba[o + 3] = 0xFF;
+            }
+            p = data_end + 1; // +1 por el pad final del post
+            if p >= lump.len() {
+                break;
+            }
+        }
+    }
+    Some(Patch {
+        width: width as u16,
+        height: height as u16,
+        leftoffset,
+        topoffset,
+        rgba,
+    })
 }
 
 #[inline]
@@ -394,6 +518,92 @@ mod tests {
         let avg = wad.flat_average_color("F_TEST", &pal).unwrap();
         // 50% pixels = 100, 50% = 200 → promedio 150.
         assert_eq!(avg, (150, 150, 150));
+    }
+
+    /// Construye un patch sintético 4×4 con dos posts:
+    /// - Columna 0: post topdelta=0, length=2, palette idx 100, 200.
+    /// - Columna 1: post topdelta=2, length=2, palette idx 50, 75.
+    /// - Columnas 2, 3: vacías (sólo el 0xFF terminator).
+    fn build_synth_patch() -> Vec<u8> {
+        let mut out = Vec::new();
+        // header
+        out.extend_from_slice(&4i16.to_le_bytes()); // width
+        out.extend_from_slice(&4i16.to_le_bytes()); // height
+        out.extend_from_slice(&2i16.to_le_bytes()); // leftoffset
+        out.extend_from_slice(&3i16.to_le_bytes()); // topoffset
+        // columnofs placeholders (parchear después).
+        let cof_start = out.len();
+        for _ in 0..4 {
+            out.extend_from_slice(&0i32.to_le_bytes());
+        }
+        let mut col_offs: [u32; 4] = [0; 4];
+        // Col 0: post topdelta=0, len=2.
+        col_offs[0] = out.len() as u32;
+        out.extend_from_slice(&[0u8, 2, 0, 100, 200, 0, 0xFF]);
+        // Col 1: post topdelta=2, len=2.
+        col_offs[1] = out.len() as u32;
+        out.extend_from_slice(&[2u8, 2, 0, 50, 75, 0, 0xFF]);
+        // Col 2 + 3: vacías.
+        col_offs[2] = out.len() as u32;
+        out.extend_from_slice(&[0xFFu8]);
+        col_offs[3] = out.len() as u32;
+        out.extend_from_slice(&[0xFFu8]);
+        // Parchear columnofs.
+        for (i, &o) in col_offs.iter().enumerate() {
+            let pos = cof_start + i * 4;
+            out[pos..pos + 4].copy_from_slice(&(o as i32).to_le_bytes());
+        }
+        out
+    }
+
+    #[test]
+    fn patch_decode_synthetic() {
+        // Palette: i → (i, i, i) grayscale.
+        let mut pal = [(0u8, 0u8, 0u8); PALETTE_ENTRIES];
+        for i in 0..PALETTE_ENTRIES {
+            let v = i as u8;
+            pal[i] = (v, v, v);
+        }
+        let lump = build_synth_patch();
+        let p = decode_patch(&lump, &pal).expect("decode");
+        assert_eq!(p.width, 4);
+        assert_eq!(p.height, 4);
+        assert_eq!(p.leftoffset, 2);
+        assert_eq!(p.topoffset, 3);
+        assert_eq!(p.rgba.len(), 4 * 4 * 4);
+        // Pixel (col=0, y=0) → idx 100 → opaco gris 100.
+        let px = |x: usize, y: usize| {
+            let o = (y * 4 + x) * 4;
+            (p.rgba[o], p.rgba[o + 1], p.rgba[o + 2], p.rgba[o + 3])
+        };
+        assert_eq!(px(0, 0), (100, 100, 100, 0xFF));
+        assert_eq!(px(0, 1), (200, 200, 200, 0xFF));
+        // Pixel (col=0, y=2): no cubierto → transparente.
+        assert_eq!(px(0, 2), (0, 0, 0, 0));
+        // Pixel (col=1, y=2): topdelta=2 → 50 gris opaco.
+        assert_eq!(px(1, 2), (50, 50, 50, 0xFF));
+        assert_eq!(px(1, 3), (75, 75, 75, 0xFF));
+        // Col 1, y < 2: transparente (no post hasta topdelta=2).
+        assert_eq!(px(1, 0), (0, 0, 0, 0));
+        // Col 2, 3: todas transparentes.
+        assert_eq!(px(2, 0), (0, 0, 0, 0));
+        assert_eq!(px(3, 3), (0, 0, 0, 0));
+    }
+
+    #[test]
+    fn patch_decode_rejects_bogus_dimensions() {
+        let mut bytes = build_synth_patch();
+        // width=0 → rechazo.
+        bytes[0] = 0;
+        bytes[1] = 0;
+        let pal = [(0u8, 0u8, 0u8); PALETTE_ENTRIES];
+        assert!(decode_patch(&bytes, &pal).is_none());
+    }
+
+    #[test]
+    fn patch_decode_handles_truncated_header() {
+        let pal = [(0u8, 0u8, 0u8); PALETTE_ENTRIES];
+        assert!(decode_patch(&[0u8; 4], &pal).is_none());
     }
 
     #[test]

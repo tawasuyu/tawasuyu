@@ -39,6 +39,7 @@
 #include "r_defs.h"      /* line_t, sector_t, vertex_t, side_t, subsector_t, seg_t */
 #include "p_mobj.h"      /* mobj_t */
 #include "p_local.h"     /* P_MobjThinker (función action_p1 que distingue mobjs) */
+#include "info.h"        /* sprnames[] — array de strings 4-char por spritenum_t */
 #include "d_player.h"    /* player_t, MAXPLAYERS */
 #include "r_state.h"     /* lines/sectors/subsectors/segs/etc. globals */
 #include "w_wad.h"       /* lumpinfo[i].name para resolver flats */
@@ -233,6 +234,33 @@ uint16_t supay_scene_sky_pic(void) {
  * Rust lo usa para cachear el color promedio del flat resuelto contra
  * la paleta PLAYPAL del WAD que parsea aparte (supay-wad).
  */
+/* Resuelve `spritenum` al string 4-char de `sprnames[]`
+ * (e.g. spritenum_t SPR_TROO=29 → "TROO"). El renderer combina ese
+ * nombre con el `frame` letter + ángulo para encontrar el lump del
+ * sprite (e.g. "TROOA1"). Devuelve 1 si OK, 0 si fuera de rango.
+ *
+ * Nota: NUMSPRITES (info.h) marca el fin del array; sprnames[NUMSPRITES]
+ * es NULL como terminador, así también verificamos eso. */
+int supay_scene_sprite_name(uint16_t spritenum, char out[5]) {
+    if (spritenum >= NUMSPRITES) {
+        return 0;
+    }
+    const char *src = sprnames[spritenum];
+    if (!src) {
+        return 0;
+    }
+    for (int i = 0; i < 4; i++) {
+        out[i] = src[i];
+        if (!src[i]) {
+            /* sprnames son siempre 4 chars (DDDD); padding por si acaso. */
+            for (int j = i; j < 4; j++) out[j] = '\0';
+            break;
+        }
+    }
+    out[4] = '\0';
+    return 1;
+}
+
 int supay_scene_flat_name(uint16_t pic_idx, char out[9]) {
     if (!lumpinfo || firstflat <= 0) {
         return 0;

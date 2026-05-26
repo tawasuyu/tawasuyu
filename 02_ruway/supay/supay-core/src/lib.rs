@@ -252,6 +252,9 @@ extern "C" {
     /// Resuelve un `pic_idx` (índice de flat) al nombre del lump.
     /// `out` debe apuntar a un buffer de ≥ 9 bytes. Devuelve 1 si OK.
     fn supay_scene_flat_name(pic_idx: u16, out: *mut std::ffi::c_char) -> std::ffi::c_int;
+    /// Resuelve un `spritenum` al string 4-char de `sprnames[]`.
+    /// `out` debe apuntar a un buffer de ≥ 5 bytes (4 chars + nul).
+    fn supay_scene_sprite_name(spritenum: u16, out: *mut std::ffi::c_char) -> std::ffi::c_int;
 }
 
 // =====================================================================
@@ -362,6 +365,36 @@ impl DoomEngine {
                 return None;
             }
             // Convertir [i8; 9] null-terminated a String.
+            let mut end = buf.len();
+            for (i, &c) in buf.iter().enumerate() {
+                if c == 0 {
+                    end = i;
+                    break;
+                }
+            }
+            let bytes: Vec<u8> = buf[..end].iter().map(|&c| c as u8).collect();
+            String::from_utf8(bytes).ok()
+        }
+    }
+
+    /// Resuelve un `spritenum_t` al string 4-char del sprite (e.g.
+    /// `SPR_TROO=29 → "TROO"`). El renderer combina con `frame`+ángulo
+    /// para encontrar el lump del sprite (e.g. `"TROOA1"`).
+    pub fn sprite_name(&self, spritenum: u16) -> Option<String> {
+        #[cfg(doomgeneric_stub)]
+        {
+            let _ = spritenum;
+            None
+        }
+        #[cfg(not(doomgeneric_stub))]
+        {
+            let mut buf = [0i8; 5];
+            // SAFETY: buf vive en este stack frame; la fn C escribe
+            // hasta 5 bytes (4 chars + nul).
+            let ok = unsafe { supay_scene_sprite_name(spritenum, buf.as_mut_ptr()) };
+            if ok == 0 {
+                return None;
+            }
             let mut end = buf.len();
             for (i, &c) in buf.iter().enumerate() {
                 if c == 0 {

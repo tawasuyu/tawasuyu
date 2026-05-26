@@ -107,6 +107,9 @@ struct Model {
     /// un sector con un pic_idx nuevo, lo resolvemos vía
     /// `engine.flat_name` y lo añadimos.
     known_pics: std::collections::HashSet<u16>,
+    /// Análogo para spritenums (Fase 3.4): cada vez que un mobj nuevo
+    /// aparece, registramos su 4-char base name en el atlas.
+    known_sprites: std::collections::HashSet<u16>,
 }
 
 #[derive(Clone)]
@@ -173,6 +176,7 @@ impl App for Supay {
             view_mode: ViewMode::Framebuffer,
             atlas,
             known_pics: std::collections::HashSet::new(),
+            known_sprites: std::collections::HashSet::new(),
         }
     }
 
@@ -211,6 +215,13 @@ impl App for Supay {
                                 if let Some(name) = m.engine.flat_name(pic) {
                                     atlas.set_flat_name(pic, name);
                                 }
+                            }
+                        }
+                    }
+                    for spr in snap.sprites.iter() {
+                        if m.known_sprites.insert(spr.sprite) {
+                            if let Some(name) = m.engine.sprite_name(spr.sprite) {
+                                atlas.set_sprite_name(spr.sprite, name);
                             }
                         }
                     }
@@ -302,7 +313,7 @@ fn header_bar(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        "PHASE 3.3 · LLIMPHI BUILD".to_string(),
+        "PHASE 3.4 · LLIMPHI BUILD".to_string(),
         9.0,
         COLOR_AMBER,
         Alignment::Start,

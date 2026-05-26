@@ -97,6 +97,15 @@ struct AtlasInner {
     flat_names: HashMap<u16, String>,
     /// Cache lazy: pic_idx → color promedio resuelto.
     color_cache: HashMap<u16, Option<(u8, u8, u8)>>,
+    /// Lookup spritenum (u16) → 4-char base name del sprite (e.g.
+    /// "TROO"). Llenado por el host con `DoomEngine::sprite_name(n)`
+    /// la primera vez que el host ve un `SpriteSnap` con ese sprite.
+    sprite_names: HashMap<u16, String>,
+    /// Cache de patches decodificados por (spritenum, frame_letter).
+    /// `frame_letter` viene del bit 0..6 del `frame` del mobj
+    /// ('A'..'Z' = índices 0..25). `None` cacheado para combos que
+    /// no resuelven (lump faltante o decode failure) — no reintenta.
+    sprite_patches: HashMap<(u16, u8), Option<Arc<supay_wad::Patch>>>,
 }
 
 impl std::fmt::Debug for WadAtlas {
@@ -122,6 +131,8 @@ impl WadAtlas {
             inner: Mutex::new(AtlasInner {
                 flat_names,
                 color_cache: HashMap::new(),
+                sprite_names: HashMap::new(),
+                sprite_patches: HashMap::new(),
             }),
         }
     }
@@ -161,6 +172,70 @@ impl WadAtlas {
             .lock()
             .map(|i| i.flat_names.contains_key(&pic_idx))
             .unwrap_or(false)
+    }
+
+    /// Registra el 4-char name del sprite para un `spritenum`. Usado
+    /// por el host análogo a [`Self::set_flat_name`]. Invalida los
+    /// patches cacheados para ese spritenum (por si los frames
+    /// dependían del nombre viejo).
+    pub fn set_sprite_name(&self, spritenum: u16, name: String) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.sprite_names.insert(spritenum, name);
+            inner.sprite_patches.retain(|(s, _), _| *s != spritenum);
+        }
+    }
+
+    pub fn has_sprite_name(&self, spritenum: u16) -> bool {
+        self.inner
+            .lock()
+            .map(|i| i.sprite_names.contains_key(&spritenum))
+            .unwrap_or(false)
+    }
+
+    /// Recupera (decodificando si hace falta y cacheando) el patch
+    /// RGBA para el sprite `spritenum` en el frame `frame` (los bits
+    /// 0..6 son el frame letter, A..Z = 0..25; el bit 7 es "full
+    /// bright" — lo ignoramos por ahora). Devuelve `None` si el
+    /// nombre del sprite no está mapeado o el lump del frame no
+    /// existe en el WAD.
+    ///
+    /// Convención de naming: primero probamos `<NAME><LETTER>0` —
+    /// sprites omnidireccionales como llaves/munición/decoración usan
+    /// el ángulo `0`. Si no existe, probamos `<NAME><LETTER>1` —
+    /// sprites direccionales (monstruos, jugador) tienen 8 ángulos
+    /// (1..8) y `1` es "facing camera". Sin lookup de ángulo todavía
+    /// — Fase 3.5 agregará la rotación correcta consultando
+    /// `mobj.angle - player.angle`.
+    pub fn sprite_patch(&self, spritenum: u16, frame: u8) -> Option<Arc<supay_wad::Patch>> {
+        let letter = frame & 0x1F; // bits 0..4 cubren A..Z; el 7 es bright
+        let key = (spritenum, letter);
+        // Lookup cacheado primero (hot path).
+        if let Ok(inner) = self.inner.lock() {
+            if let Some(cached) = inner.sprite_patches.get(&key) {
+                return cached.clone();
+            }
+        }
+        // Resolución + cache (cold path, una vez por (sprite, frame)).
+        let name = {
+            let inner = self.inner.lock().ok()?;
+            inner.sprite_names.get(&spritenum).cloned()?
+        };
+        let frame_char = (b'A' + letter) as char;
+        let try_names = [
+            format!("{name}{frame_char}0"),
+            format!("{name}{frame_char}1"),
+        ];
+        let mut decoded: Option<Arc<supay_wad::Patch>> = None;
+        for n in &try_names {
+            if let Some(p) = self.wad.patch_rgba(n, &self.palette) {
+                decoded = Some(Arc::new(p));
+                break;
+            }
+        }
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.sprite_patches.insert(key, decoded.clone());
+        }
+        decoded
     }
 
     /// Acceso al WAD interno (para features futuras como wall
@@ -300,7 +375,14 @@ fn render_frame(scene: &mut Scene, rect: PaintRect, snap: &SceneSnapshot, cfg: &
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     for r in &renderables {
-        scene.fill(Fill::NonZero, Affine::IDENTITY, r.color, None, &r.path);
+        match &r.kind {
+            RenderKind::Fill => {
+                scene.fill(Fill::NonZero, Affine::IDENTITY, r.color, None, &r.path);
+            }
+            RenderKind::Sprite { image, xform } => {
+                scene.draw_image(image, *xform);
+            }
+        }
     }
 }
 
@@ -308,6 +390,19 @@ struct Renderable {
     depth: f32,
     color: Color,
     path: BezPath,
+    kind: RenderKind,
+}
+
+enum RenderKind {
+    /// Fill sólido del `path` con `color`. Walls, floors, ceilings,
+    /// sprites fallback.
+    Fill,
+    /// `scene.draw_image(image, xform)` — `path` y `color` se ignoran.
+    /// Sprites texturizados desde el WAD.
+    Sprite {
+        image: llimphi_ui::llimphi_raster::peniko::Image,
+        xform: Affine,
+    },
 }
 
 // =====================================================================
@@ -496,6 +591,7 @@ fn gather_wall(
                 depth: depth + 0.5,
                 color: floor_color(near_sec, depth, cfg),
                 path,
+                kind: RenderKind::Fill,
             });
         }
 
@@ -510,6 +606,7 @@ fn gather_wall(
                 depth: depth + 0.5,
                 color: ceiling_color(near_sec, depth, cfg, snap.sky_pic),
                 path,
+                kind: RenderKind::Fill,
             });
         }
     }
@@ -544,6 +641,7 @@ fn gather_wall(
                 depth,
                 color: wall_color(wall_idx, wall, sec, depth, b, bands, cfg),
                 path,
+                kind: RenderKind::Fill,
             });
         }
     }
@@ -657,6 +755,7 @@ fn gather_subsector_planes(
             depth: depth + 1.0, // estrictamente detrás de paredes y sprites
             color: floor_color(sec, depth, cfg),
             path,
+            kind: RenderKind::Fill,
         });
     }
 
@@ -668,6 +767,7 @@ fn gather_subsector_planes(
                 depth: depth + 1.0,
                 color: ceiling_color(sec, depth, cfg, snap.sky_pic),
                 path,
+                kind: RenderKind::Fill,
             });
         }
     }
@@ -724,6 +824,72 @@ fn gather_sprite(
     }
     let sec = snap.sectors.get(sprite.sector as usize);
     let floor = sec.map(|s| s.floor_height).unwrap_or(0.0);
+    let depth = (x_cam * x_cam + y_cam * y_cam).sqrt();
+
+    // ---- Camino texturizado: hay atlas + patch decodificado ----
+    if let Some(atlas) = cfg.atlas.as_ref() {
+        if let Some(patch) = atlas.sprite_patch(sprite.sprite, sprite.frame) {
+            // Anchor en world: el sprite está parado a (sprite.x,
+            // sprite.y, floor). El pixel (leftoffset, topoffset) del
+            // patch corresponde al anchor. Tras eso, la esquina
+            // top-left del patch en mundo:
+            //   y_cam (lateral) = y_cam_center + leftoffset (1 px = 1 unit
+            //                     en convención Doom de sprites)
+            //   z (vertical)    = floor + topoffset
+            // y la esquina bottom-right (anchor - top + height pixels):
+            //   y_cam_right     = y_cam_center + leftoffset - width
+            //   z_bot           = floor + topoffset - height
+            let w = patch.width as f32;
+            let h = patch.height as f32;
+            let lo = patch.leftoffset as f32;
+            let to = patch.topoffset as f32;
+            let y_left = y_cam + lo;
+            let y_right = y_cam + lo - w;
+            let z_top = floor + to - cam.view_z;
+            let z_bot = floor + to - h - cam.view_z;
+            // Billboard: ambos lados al mismo X_cam → la proyección es
+            // un rectángulo axis-aligned en pantalla, así que el affine
+            // que mapea image-space → screen-space es exacto.
+            let tl = proj.project(x_cam, y_left, z_top);
+            let br = proj.project(x_cam, y_right, z_bot);
+            // Cull si el sprite cae completamente fuera del rect del
+            // viewport — el closure de paint no nos pasa el rect, pero
+            // si el tamaño proyectado es 0 o invertido, skip.
+            let sx = (br.x - tl.x) / w as f64;
+            let sy = (br.y - tl.y) / h as f64;
+            if !(sx.is_finite() && sy.is_finite() && sx > 0.01 && sy > 0.01) {
+                return;
+            }
+            // Construimos un peniko::Image envolviendo el RGBA del patch.
+            // El Image clona los bytes — costo amortizado por sprite por
+            // frame; ~5KB para sprites tipo Imp.
+            let img = make_sprite_image(&patch);
+            let xform = Affine::translate((tl.x, tl.y))
+                * Affine::scale_non_uniform(sx, sy);
+            // Aplicamos el shading multiplicando sobre el image — vello
+            // no tiene tint built-in, así que usamos `draw_image` directo
+            // y dejamos el sprite con luz plena. Fase 3.5: image+overlay
+            // con alpha modulado por shade. Por ahora, light_level del
+            // sector controla un solo factor en el alpha del overlay.
+            //
+            // MVP: dibujamos el image sin shade — los sprites se ven a
+            // luz plena pero con la forma correcta. Mejor que el blob
+            // rojo plano.
+            //
+            // Empaquetamos como "Renderable Image" — necesitamos
+            // ampliar el enum de Renderable porque actualmente sólo
+            // soporta BezPath fill.
+            out.push(Renderable {
+                depth,
+                color: Color::WHITE, // unused para Sprite
+                path: BezPath::new(), // unused
+                kind: RenderKind::Sprite { image: img, xform },
+            });
+            return;
+        }
+    }
+
+    // ---- Fallback 3.1: rectángulo coloreado ----
     let z_bot = floor - cam.view_z;
     let z_top = z_bot + cfg.sprite_height;
     let hw = cfg.sprite_half_width;
@@ -737,12 +903,18 @@ fn gather_sprite(
     path.line_to(tr);
     path.line_to(br);
     path.close_path();
-    let depth = (x_cam * x_cam + y_cam * y_cam).sqrt();
     out.push(Renderable {
         depth,
         color: sprite_color(sprite, sec, depth, cfg),
         path,
+        kind: RenderKind::Fill,
     });
+}
+
+fn make_sprite_image(patch: &supay_wad::Patch) -> llimphi_ui::llimphi_raster::peniko::Image {
+    use llimphi_ui::llimphi_raster::peniko::{Blob, Image, ImageFormat};
+    let blob = Blob::from(patch.rgba.clone());
+    Image::new(blob, ImageFormat::Rgba8, patch.width as u32, patch.height as u32)
 }
 
 // =====================================================================
