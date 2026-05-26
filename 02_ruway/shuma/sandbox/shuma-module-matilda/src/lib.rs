@@ -71,9 +71,15 @@ pub struct State {
 
 impl State {
     pub fn new(source: Source) -> Self {
+        Self::with_inventory(source, example_inventory())
+    }
+
+    /// Variante de `new` con inventario explícito — usada por el chasis
+    /// cuando el `shumarc` declara `inventory = "path/to/inv.json"`.
+    pub fn with_inventory(source: Source, desired: Inventory) -> Self {
         Self {
             source,
-            desired: example_inventory(),
+            desired,
             current: None,
             plan: None,
             log: Vec::new(),
@@ -816,6 +822,16 @@ mod tests {
         assert_eq!(inv.hosts().count(), 1);
         assert_eq!(inv.containers().count(), 2);
         assert_eq!(inv.vhosts().count(), 1);
+    }
+
+    #[test]
+    fn with_inventory_uses_provided_desired() {
+        let mut inv = matilda_core::Inventory::new();
+        inv.add_container(matilda_core::Container::new("only", "alpine:3"));
+        let s = State::with_inventory(Source::Local, inv);
+        assert_eq!(s.desired.containers().count(), 1);
+        assert_eq!(s.desired.hosts().count(), 0);
+        assert!(s.plan.is_none());
     }
 
     #[test]

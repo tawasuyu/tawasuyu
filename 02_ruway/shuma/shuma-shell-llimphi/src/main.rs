@@ -144,10 +144,25 @@ impl Instance {
     }
 
     fn matilda(label: String, source: Source) -> Self {
+        Self::matilda_with_inventory(label, source, None)
+    }
+
+    fn matilda_with_inventory(
+        label: String,
+        source: Source,
+        inventory: Option<&std::path::Path>,
+    ) -> Self {
+        let state = match inventory {
+            Some(p) => match load_matilda_inventory(p) {
+                Some(inv) => shuma_module_matilda::State::with_inventory(source, inv),
+                None => shuma_module_matilda::State::new(source),
+            },
+            None => shuma_module_matilda::State::new(source),
+        };
         Self {
             kind: Kind::Matilda,
             label,
-            state: ModuleState::Matilda(Box::new(shuma_module_matilda::State::new(source))),
+            state: ModuleState::Matilda(Box::new(state)),
         }
     }
 }
@@ -408,14 +423,29 @@ fn apply_module_msg(mut m: Model, slot: Slot, msg: ModuleMsg) -> Model {
 /// imprime warning en lugar de fallar para no romper el arranque.
 fn resolve_slot(entry: Option<&config::SlotEntry>) -> Option<Instance> {
     let entry = entry?;
-    resolve_instance(&entry.module, entry.source.clone(), entry.label.clone())
+    resolve_instance(
+        &entry.module,
+        entry.source.clone(),
+        entry.label.clone(),
+        entry.inventory.as_deref(),
+    )
 }
 
 fn resolve_drawer_tab(entry: &config::DrawerTabEntry) -> Option<Instance> {
-    resolve_instance(&entry.id, entry.source.clone(), entry.label.clone())
+    resolve_instance(
+        &entry.id,
+        entry.source.clone(),
+        entry.label.clone(),
+        entry.inventory.as_deref(),
+    )
 }
 
-fn resolve_instance(id: &str, source: Source, label: Option<String>) -> Option<Instance> {
+fn resolve_instance(
+    id: &str,
+    source: Source,
+    label: Option<String>,
+    inventory: Option<&std::path::Path>,
+) -> Option<Instance> {
     let label = label.unwrap_or_else(|| source.label());
     match id {
         shuma_module_launcher::ID => {
@@ -425,9 +455,37 @@ fn resolve_instance(id: &str, source: Source, label: Option<String>) -> Option<I
             shuma_module_commandbar::State::default(),
         )),
         shuma_module_shell::ID => Some(Instance::shell(label, source)),
-        shuma_module_matilda::ID => Some(Instance::matilda(label, source)),
+        shuma_module_matilda::ID => Some(Instance::matilda_with_inventory(
+            label, source, inventory,
+        )),
         unknown => {
             eprintln!("shuma: módulo desconocido «{unknown}» — se ignora");
+            None
+        }
+    }
+}
+
+/// Lee un inventario JSON desde un path. Errores van a stderr y la
+/// función retorna `None` — el chasis cae al ejemplo en lugar de
+/// fallar el arranque (mismo criterio que el config TOML malformado).
+fn load_matilda_inventory(path: &std::path::Path) -> Option<matilda_core::Inventory> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!(
+                "shuma: no se pudo leer inventario {} ({e}) — uso ejemplo",
+                path.display()
+            );
+            return None;
+        }
+    };
+    match serde_json::from_str::<matilda_core::Inventory>(&text) {
+        Ok(inv) => Some(inv),
+        Err(e) => {
+            eprintln!(
+                "shuma: inventario {} mal formado ({e}) — uso ejemplo",
+                path.display()
+            );
             None
         }
     }

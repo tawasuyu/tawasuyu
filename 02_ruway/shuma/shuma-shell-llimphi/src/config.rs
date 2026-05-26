@@ -17,6 +17,7 @@
 //! [main]
 //! module = "matilda"
 //! source = { kind = "local" }
+//! inventory = "/etc/matilda/local.json"   # opcional; default = ejemplo
 //!
 //! [[drawer.tabs]]
 //! id = "shell"
@@ -27,6 +28,7 @@
 //! id = "matilda"
 //! source = { kind = "remote", host = "edge-1", user = "ops" }
 //! label = "edge-1"
+//! inventory = "/etc/matilda/edge-1.json"
 //!
 //! [drawer.trigger]
 //! key = "F12"
@@ -57,6 +59,11 @@ pub struct SlotEntry {
     /// Override de label (donde aplique).
     #[serde(default)]
     pub label: Option<String>,
+    /// Path opcional a un inventario JSON (módulos como matilda lo
+    /// consumen para arrancar contra un servidor real en lugar del
+    /// inventario de ejemplo).
+    #[serde(default)]
+    pub inventory: Option<PathBuf>,
 }
 
 /// Una entrada del array `[[drawer.tabs]]`. Mismo shape pero con el
@@ -69,6 +76,9 @@ pub struct DrawerTabEntry {
     pub source: Source,
     #[serde(default)]
     pub label: Option<String>,
+    /// Path opcional a un inventario JSON — ver [`SlotEntry::inventory`].
+    #[serde(default)]
+    pub inventory: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -209,6 +219,34 @@ height_fraction = 0.5
         std::fs::write(&path, "this = is { broken").unwrap();
         let c = ShumaConfig::load(&path);
         assert!(c.topbar.is_none()); // default
+    }
+
+    #[test]
+    fn inventory_field_parses_on_main_and_drawer_tabs() {
+        let d = tempdir().unwrap();
+        let path = d.path().join("p.toml");
+        std::fs::write(
+            &path,
+            r#"
+[main]
+module = "matilda"
+inventory = "/etc/matilda/edge.json"
+
+[[drawer.tabs]]
+id = "matilda"
+inventory = "/etc/matilda/edge2.json"
+"#,
+        )
+        .unwrap();
+        let c = ShumaConfig::load(&path);
+        assert_eq!(
+            c.main.unwrap().inventory.as_deref(),
+            Some(std::path::Path::new("/etc/matilda/edge.json"))
+        );
+        assert_eq!(
+            c.drawer.tabs[0].inventory.as_deref(),
+            Some(std::path::Path::new("/etc/matilda/edge2.json"))
+        );
     }
 
     #[test]
