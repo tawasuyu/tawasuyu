@@ -391,7 +391,11 @@ fn render_frame(scene: &mut Scene, rect: PaintRect, snap: &SceneSnapshot, cfg: &
 
     let view_z = snap.player.z + snap.player.view_height;
     let cam = Camera::new(snap.player.x, snap.player.y, view_z, snap.player.angle);
-    let proj = Projection::new(rect, cfg.fov_y_deg.to_radians());
+    let proj = Projection::new_pitched(
+        rect,
+        cfg.fov_y_deg.to_radians(),
+        snap.player.view_pitch,
+    );
 
     // Si el snapshot trae BSP (motor real con mapa cargado), pintamos
     // pisos/techos reales por subsector. Si no, los walls hacen
@@ -567,15 +571,35 @@ struct Projection {
     cy: f32,
     /// `focal = h / (2·tan(fov_y/2))`. Pixels cuadrados.
     focal: f32,
+    /// **Y-shear** del rasterizador para mouse-look cosmético. Suma a
+    /// `sy` un offset constante para todos los puntos proyectados
+    /// (independiente de la profundidad), lo que equivale a mover la
+    /// línea del horizonte arriba/abajo en pantalla. Doom clásico no
+    /// hace pitch real (cilindros de hitbox verticales); este offset
+    /// preserva esa convención porque sólo afecta el rasterizador.
+    ///
+    /// `pitch_offset_px = focal · tan(view_pitch)`. Positivo = horizonte
+    /// se mueve hacia abajo (mirando hacia arriba).
+    pitch_offset_px: f32,
 }
 
 impl Projection {
     fn new(rect: PaintRect, fov_y_rad: f32) -> Self {
+        Self::new_pitched(rect, fov_y_rad, 0.0)
+    }
+
+    fn new_pitched(rect: PaintRect, fov_y_rad: f32, view_pitch: f32) -> Self {
         let focal = rect.h * 0.5 / (fov_y_rad * 0.5).tan();
+        // Clampeamos el pitch a ±π/3 para evitar tan() explotando y
+        // distorsiones absurdas que mostrarían el "horizonte" fuera del
+        // viewport. El host también clampea, pero defendemos al renderer.
+        let p = view_pitch.clamp(-PITCH_MAX, PITCH_MAX);
+        let pitch_offset_px = focal * p.tan();
         Self {
             cx: rect.x + rect.w * 0.5,
             cy: rect.y + rect.h * 0.5,
             focal,
+            pitch_offset_px,
         }
     }
 
@@ -584,10 +608,15 @@ impl Projection {
     fn project(&self, x_cam: f32, y_cam: f32, z_cam: f32) -> Point {
         let inv_d = 1.0 / x_cam;
         let sx = self.cx + y_cam * self.focal * inv_d;
-        let sy = self.cy - z_cam * self.focal * inv_d;
+        let sy = self.cy + self.pitch_offset_px - z_cam * self.focal * inv_d;
         Point::new(sx as f64, sy as f64)
     }
 }
+
+/// Rango sano del pitch (±60°). Más allá el horizonte se sale del
+/// viewport y los planos del piso/techo dejan de tener interpretación
+/// visual razonable.
+const PITCH_MAX: f32 = std::f32::consts::FRAC_PI_3;
 
 // =====================================================================
 // Walls + floor/ceiling strips
@@ -1677,7 +1706,15 @@ fn sprite_color(
 /// snapshot no expone explícitamente sector del player en 3.1; el sprite
 /// con índice 0 suele ser el avatar). Si no hay sectores, fallback gris.
 fn draw_backdrop(scene: &mut Scene, rect: PaintRect, snap: &SceneSnapshot, cfg: &RenderConfig) {
-    let mid_y = rect.y as f64 + (rect.h as f64) * 0.5;
+    // Horizonte = línea donde z_cam=0 cae en pantalla. Con pitch sumamos
+    // `focal · tan(pitch)` al centro vertical para que el sky/floor
+    // backdrop se mueva con la mirada (mouse-look). Clampeamos a los
+    // bordes del rect para no pintar fuera.
+    let focal = (rect.h * 0.5) / (cfg.fov_y_deg.to_radians() * 0.5).tan();
+    let pitch = snap.player.view_pitch.clamp(-PITCH_MAX, PITCH_MAX);
+    let pitch_offset_px = (focal * pitch.tan()) as f64;
+    let mid_y_unclamped = rect.y as f64 + (rect.h as f64) * 0.5 + pitch_offset_px;
+    let mid_y = mid_y_unclamped.clamp(rect.y as f64, (rect.y + rect.h) as f64);
     let sky_rect = Rect::new(
         rect.x as f64,
         rect.y as f64,
@@ -1718,7 +1755,16 @@ fn draw_backdrop(scene: &mut Scene, rect: PaintRect, snap: &SceneSnapshot, cfg: 
         let fov_x_rad = (cfg.fov_y_deg as f64).to_radians() * aspect;
         let pixels_to_show = fov_x_rad / std::f64::consts::TAU * panorama_px;
         let scale_x = pixels_to_show / rect.w as f64;
-        let scale_y = tex_h / (rect.h as f64 * 0.5);
+        // Mantenemos el alto visual del sky constante (= mitad del rect)
+        // para que el panorama no se estire al hacer pitch. El offset
+        // vertical de la textura sigue al horizonte: `sky_top_y` es la
+        // posición Y de la fila iy=0 del lump, calculada para que la
+        // fila iy=tex_h (el bottom del panorama) caiga sobre el horizonte
+        // virtual `mid_y_unclamped` (puede estar fuera del viewport
+        // cuando el pitch es agresivo; vello clipea con `sky_rect`).
+        let sky_visual_h = (rect.h as f64) * 0.5;
+        let scale_y = tex_h / sky_visual_h;
+        let sky_top_y = mid_y_unclamped - sky_visual_h;
         // Affine: image(ix, iy) → screen((ix - scroll_x) / scale_x, iy / scale_y).
         // Vello forward affine a/b/c/d/e/f donde sx = a·ix + c·iy + e,
         // sy = b·ix + d·iy + f.
@@ -1728,7 +1774,7 @@ fn draw_backdrop(scene: &mut Scene, rect: PaintRect, snap: &SceneSnapshot, cfg: 
             0.0,
             1.0 / scale_y,
             -scroll_x / scale_x + rect.x as f64,
-            rect.y as f64,
+            sky_top_y,
         ]);
         let img = Image::new(
             Blob::from(tex.rgba.clone()),
@@ -1989,6 +2035,98 @@ mod tests {
         let proj = Projection::new(rect, 75_f32.to_radians());
         let p = proj.project(10.0, 1.0, 0.0);
         assert!(p.x > 400.0, "+Y_cam should project right of center, got {}", p.x);
+    }
+
+    #[test]
+    fn projection_pitch_up_shifts_horizon_down() {
+        // pitch positivo = mirar hacia arriba → línea del horizonte
+        // (puntos con z_cam=0) baja en pantalla (sy mayor).
+        let rect = PaintRect {
+            x: 0.0,
+            y: 0.0,
+            w: 800.0,
+            h: 600.0,
+        };
+        let proj_flat = Projection::new(rect, 75_f32.to_radians());
+        let proj_up = Projection::new_pitched(rect, 75_f32.to_radians(), 0.4);
+        let p_flat = proj_flat.project(10.0, 0.0, 0.0);
+        let p_up = proj_up.project(10.0, 0.0, 0.0);
+        assert!(
+            p_up.y > p_flat.y,
+            "pitch up debe empujar el horizonte hacia abajo, flat={} up={}",
+            p_flat.y,
+            p_up.y
+        );
+        // El offset debe ser exactamente `focal · tan(pitch)`.
+        let focal = (rect.h as f64) * 0.5 / (75_f32.to_radians() as f64 * 0.5).tan();
+        let expected = focal * (0.4_f64).tan();
+        assert!(
+            (p_up.y - p_flat.y - expected).abs() < 1e-3,
+            "offset esperado {expected}, observado {}",
+            p_up.y - p_flat.y
+        );
+    }
+
+    #[test]
+    fn projection_pitch_down_shifts_horizon_up() {
+        let rect = PaintRect {
+            x: 0.0,
+            y: 0.0,
+            w: 800.0,
+            h: 600.0,
+        };
+        let proj_flat = Projection::new(rect, 75_f32.to_radians());
+        let proj_dn = Projection::new_pitched(rect, 75_f32.to_radians(), -0.3);
+        let p_flat = proj_flat.project(10.0, 0.0, 0.0);
+        let p_dn = proj_dn.project(10.0, 0.0, 0.0);
+        assert!(
+            p_dn.y < p_flat.y,
+            "pitch down debe empujar el horizonte hacia arriba, flat={} down={}",
+            p_flat.y,
+            p_dn.y
+        );
+    }
+
+    #[test]
+    fn projection_pitch_does_not_alter_x() {
+        // El y-shear es vertical puro — la coordenada X de un punto
+        // debe quedar idéntica con o sin pitch.
+        let rect = PaintRect {
+            x: 0.0,
+            y: 0.0,
+            w: 800.0,
+            h: 600.0,
+        };
+        let proj_flat = Projection::new(rect, 75_f32.to_radians());
+        let proj_up = Projection::new_pitched(rect, 75_f32.to_radians(), 0.5);
+        let p_flat = proj_flat.project(10.0, 3.0, 0.0);
+        let p_up = proj_up.project(10.0, 3.0, 0.0);
+        assert!(
+            (p_flat.x - p_up.x).abs() < 1e-3,
+            "X debe ser invariante al pitch, flat.x={} up.x={}",
+            p_flat.x,
+            p_up.x
+        );
+    }
+
+    #[test]
+    fn projection_pitch_clamps_extremes() {
+        // Más allá de ±π/3 el horizonte se sale del viewport; el
+        // clamp del constructor evita tan() explotando.
+        let rect = PaintRect {
+            x: 0.0,
+            y: 0.0,
+            w: 800.0,
+            h: 600.0,
+        };
+        let proj_extreme = Projection::new_pitched(rect, 75_f32.to_radians(), 5.0);
+        let proj_max = Projection::new_pitched(rect, 75_f32.to_radians(), PITCH_MAX);
+        let p_extreme = proj_extreme.project(10.0, 0.0, 0.0);
+        let p_max = proj_max.project(10.0, 0.0, 0.0);
+        assert!(
+            (p_extreme.y - p_max.y).abs() < 1e-3,
+            "valores absurdos deben clampearse a PITCH_MAX"
+        );
     }
 
     #[test]

@@ -110,7 +110,17 @@ struct Model {
     /// Análogo para spritenums (Fase 3.4): cada vez que un mobj nuevo
     /// aparece, registramos su 4-char base name en el atlas.
     known_sprites: std::collections::HashSet<u16>,
+    /// Fase 3.17: pitch cosmético del viewer (mouse-look). Doom no lo
+    /// conoce — lo aplica sólo el rasterizador como y-shear sobre la
+    /// proyección y el sky backdrop. PageUp/PageDown ajustan; Home
+    /// resetea a 0. Clampeado a ±PITCH_MAX = π/3.
+    view_pitch: f32,
 }
+
+/// Rango sano del pitch en el host (mismo clamp que el renderer).
+const PITCH_MAX: f32 = std::f32::consts::FRAC_PI_3;
+/// Paso del pitch por tap de PageUp/PageDown (en radianes). ~6° por tap.
+const PITCH_STEP: f32 = 0.105;
 
 #[derive(Clone)]
 enum Msg {
@@ -123,6 +133,13 @@ enum Msg {
     Frame,
     Key(KeyEvent),
     ToggleViewMode,
+    /// Fase 3.17: cambio de pitch cosmético. `delta` se suma al
+    /// `view_pitch` actual y se clampea a ±PITCH_MAX. `delta=0.0` con
+    /// `reset=true` fuerza pitch=0.
+    PitchDelta {
+        delta: f32,
+        reset: bool,
+    },
     Quit,
 }
 
@@ -177,6 +194,7 @@ impl App for Supay {
             atlas,
             known_pics: std::collections::HashSet::new(),
             known_sprites: std::collections::HashSet::new(),
+            view_pitch: 0.0,
         }
     }
 
@@ -189,6 +207,19 @@ impl App for Supay {
             if matches!(&e.key, Key::Named(NamedKey::F3)) {
                 // F3 alterna framebuffer ↔ renderer 3D (Fase 1 ↔ Fase 3.0).
                 return Some(Msg::ToggleViewMode);
+            }
+            // Fase 3.17: mouse-look cosmético. PageUp = mirar arriba,
+            // PageDown = mirar abajo, Home = resetear horizonte. No pasan
+            // al motor (Doom no usa estas teclas) y sólo afectan el
+            // renderer 3D.
+            if matches!(&e.key, Key::Named(NamedKey::PageUp)) {
+                return Some(Msg::PitchDelta { delta: PITCH_STEP, reset: false });
+            }
+            if matches!(&e.key, Key::Named(NamedKey::PageDown)) {
+                return Some(Msg::PitchDelta { delta: -PITCH_STEP, reset: false });
+            }
+            if matches!(&e.key, Key::Named(NamedKey::Home)) {
+                return Some(Msg::PitchDelta { delta: 0.0, reset: true });
             }
         }
         Some(Msg::Key(e.clone()))
@@ -203,7 +234,11 @@ impl App for Supay {
                 m.engine.tick();
                 refresh_framebuffer(&mut m);
                 // Fase 2: snapshot tras cada tick.
-                let snap = m.engine.capture_scene(m.tick);
+                let mut snap = m.engine.capture_scene(m.tick);
+                // Fase 3.17: el motor C deja `view_pitch=0`; lo inyectamos
+                // post-capture para que el renderer 3D haga y-shear sobre
+                // este snapshot y los próximos interpolados.
+                snap.player.view_pitch = m.view_pitch;
                 // Fase 3.3: registrar en el atlas cualquier pic_idx
                 // nuevo que aparezca en sectores. WadAtlas usa interior
                 // mutability — el Arc compartido con el renderer ve
@@ -246,6 +281,13 @@ impl App for Supay {
                 m.view_mode = match m.view_mode {
                     ViewMode::Framebuffer => ViewMode::Scene3d,
                     ViewMode::Scene3d => ViewMode::Framebuffer,
+                };
+            }
+            Msg::PitchDelta { delta, reset } => {
+                m.view_pitch = if reset {
+                    0.0
+                } else {
+                    (m.view_pitch + delta).clamp(-PITCH_MAX, PITCH_MAX)
                 };
             }
         }
@@ -313,7 +355,7 @@ fn header_bar(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        "PHASE 3.16 · LLIMPHI BUILD".to_string(),
+        "PHASE 3.17 · LLIMPHI BUILD".to_string(),
         9.0,
         COLOR_AMBER,
         Alignment::Start,

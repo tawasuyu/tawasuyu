@@ -372,6 +372,26 @@ cargo run -p supay-doom-llimphi --release
 
 **No incluido en 3.16 (defer a 3.17+):** wall + sprite BSP ordering; pitch / mouse-look; volumetric fog real; texture scrolling validation; decals dinámicos; invuln invert-colors real (necesita custom shader); weapon shading por luz de sector.
 
+**Fase 3.17 (2026-05-26, este bloque):** mouse-look cosmético (pitch via y-shear).
+
+- **Contexto.** Doom clásico no tiene pitch — las hitboxes son cilindros infinitos verticales y los proyectiles autoapuntan en Y. Implementar "mirar arriba/abajo" como pitch real del motor rompería la simulación (cambia raycasts, AI sight, etc.). En cambio, modernizamos sólo la **percepción** vía la técnica clásica de los engines pre-real-3D (Build, ZDoom software, Heretic): un *y-shear* del rasterizador que mueve la línea del horizonte en pantalla, sin tocar timing/RNG/hitboxes.
+- **`supay-scene::PlayerSnap.view_pitch`** field nuevo (radianes; positivo = mirando arriba). `Default` lo deja en 0.0. `interpolate` hace lerp lineal entre prev/next — coherente con la suavidad de los cambios de pitch del usuario por tap de PageUp/PageDown.
+- **`supay-core::capture_scene_real`** no toca el campo (queda en 0.0 de `PlayerSnap::default`). `synth_snapshot` igual. El motor Doom no conoce pitch; el host lo inyecta post-capture si quiere mouse-look.
+- **`supay-render-llimphi::Projection`** gana `pitch_offset_px = focal · tan(view_pitch)` precomputado en `Projection::new_pitched(rect, fov_y, pitch)`. `project(x_cam, y_cam, z_cam)` suma este offset a `sy` — afecta uniformemente todos los puntos proyectados (independiente de profundidad), equivalente a deslizar la línea del horizonte arriba/abajo en pantalla. Clampeo defensivo a `±PITCH_MAX = π/3` para evitar `tan()` explotando y horizontes fuera del viewport.
+- **`render_frame`** lee `snap.player.view_pitch` y construye el `Projection` con `new_pitched`. Pisos/techos, paredes y sprites usan todos `proj.project`, así que el shear se propaga sin tocar gather_*. El weapon sprite y los player overlays no van por la proyección (son HUD layer) → quedan anclados a la pantalla, como debe ser.
+- **`draw_backdrop`** sigue el horizonte: el `mid_y` que separa sky/floor se desplaza por `focal · tan(pitch)` (clampeado a los bordes del rect). El affine de SKY1 mantiene `scale_y` constante (`tex_h / (rect.h/2)`) — el panorama no se estira — pero su offset `f` (donde cae `iy=0`) se ajusta para que `iy=tex_h` quede sobre `mid_y_unclamped`. Vello recorta con el `sky_rect` cuando el pitch es agresivo. El fallback `SKY_BAND_TOP` (color plano) hereda el `sky_rect` shifted automáticamente.
+- **Host (`supay-doom-llimphi`)**: `Model.view_pitch: f32` + `Msg::PitchDelta { delta, reset }`. `on_key` intercepta PageUp (+0.105 rad ≈ +6°), PageDown (-6°), Home (reset a 0). Cada Msg::Tick hace `snap.player.view_pitch = m.view_pitch` justo antes de `pair.push(snap)`. Las teclas no se forwardean al motor C (Doom no usa PgUp/PgDn/Home en gameplay). Latencia máxima de 1 tick (~28.5 ms) entre tap y cambio visual — imperceptible.
+- **Tests** (+4 render = 39 total verde, 44 supay total): `projection_pitch_up_shifts_horizon_down` (verifica offset = `focal · tan(pitch)`), `projection_pitch_down_shifts_horizon_up` (caso espejo), `projection_pitch_does_not_alter_x` (y-shear es vertical puro), `projection_pitch_clamps_extremes` (valores absurdos clampean a PITCH_MAX).
+- **Header bump**: `PHASE 3.16` → `PHASE 3.17`.
+
+**Limitaciones conocidas de 3.17.**
+- **No es 3D real**, es y-shear. Mirando muy arriba/abajo las paredes se ven "geometricamente extrañas" — los costados verticales no se inclinan correctamente. Es exactamente el artefacto que tenían Build/ZDoom software; aceptable mientras la jugabilidad sea zenital-ish. Pitch máximo ±π/3 mitiga.
+- **Hitboxes / disparo siguen sin pitch** — exactamente lo que queremos (preserva el contrato). Pero significa que mirar hacia arriba "para apuntarle a un enemigo en una plataforma alta" es cosmético — el motor autoapunta como siempre.
+- **No hay mouse capture**, sólo PageUp/PageDown. Cuando llimphi-ui exponga mouse delta + cursor capture, conectar el delta vertical a `Msg::PitchDelta { delta: dy * sensitivity, reset: false }` es trivial.
+- **Sin smoothing del input** — un tap = un step de 6°. Con un poco de spam queda usable; con mouse real va a ser orgánicamente suave por sí solo (deltas pequeños).
+
+**No incluido en 3.17 (defer a 3.18+):** wall + sprite BSP ordering; mouse capture real (depende de llimphi-ui); volumetric fog real; texture scrolling validation; decals dinámicos; invuln invert-colors real; weapon shading por luz de sector; pitch realmente 3D (paredes inclinadas) — defer indefinidamente, exige reescribir todo el render pipeline.
+
 ### Fase 4 — Capa de modernización opt-in
 
 Cada feature como toggle:
@@ -435,6 +455,7 @@ Cada feature como toggle:
   - **TempLight + flash de impacto**: nueva lista `Vec<TempLight>` con `(x, y, color, strength, ttl, ttl_max)`. Cada flash dura `FLASH_TTL = 4 ticks` y su `strength` decae linealmente con el TTL. `lighting_contribution` los suma; el resultado es un destello cálido cuando un bullet impacta. Spawn en colisión pared + colisión enemy.
   - **SpriteKinds nuevos**: `DyingImp` (rojo opaco scale 0.65) y `Corpse` (mancha rojiza scale 0.30) — el enemy en `draw_scene` se convierte al kind apropiado según state.
   - El jugador puede morir (vida llega a 0 y queda en 0); por ahora sin pantalla de game over — el input sigue activo. La pantalla del HUD muestra todo en rojo cuando vida < 25.
+- **2026-05-26 (+16):** Fase 3.17 — mouse-look cosmético (y-shear del rasterizador + sky backdrop siguiendo el horizonte). PageUp/PageDown mueven el horizonte ±6° por tap; Home resetea. La simulación queda intacta (hitboxes/autoapuntado siguen sin pitch). 39 tests verde renderer (+4 nuevos).
 - **2026-05-26 (+15):** Fase 3.16 — `ps_flash` (muzzle flash overlay) + berserk red tint en overlays. Plasma/BFG/chaingun ahora muestran el destello brillante por encima del arma; agarrar el berserk tinte rojo el frame por un rato. 35 tests verde renderer.
 - **2026-05-26 (+14):** Fase 3.15 — weapon psprite (pistol/shotgun/etc. en mano). Capture de `players[].psprites[ps_weapon]` desde doomgeneric, render como image overlay 2D anclado al bottom del viewport. Smoothing de sx/sy entre snapshots para weapon bob suave.
 - **2026-05-26 (+13):** Fase 3.14 — player palette overlays (damage red, pickup yellow, radsuit green, invuln white) como overlay alpha full-screen. Modernización de PLAYPAL[1..13] swap → un único fill semi-translúcido por frame. 33 tests verde renderer.

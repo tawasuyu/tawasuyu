@@ -48,6 +48,14 @@ pub struct PlayerSnap {
     /// Altura de la cámara por encima del piso del sector (incluye el
     /// view-bob de caminata). En Doom default ≈ 41.
     pub view_height: f32,
+    /// **Pitch cosmético** del viewer en radianes (positivo = mirando
+    /// hacia arriba, negativo = hacia abajo). Doom clásico no conoce
+    /// pitch — las hitboxes son cilindros infinitos verticales y los
+    /// proyectiles autoapuntan en Y. Acá lo usamos sólo como y-shear
+    /// del rasterizador para modernizar la **percepción** sin tocar la
+    /// simulación. El host lo inyecta post-capture; el motor C
+    /// devuelve siempre 0.0. Rango sano `[-π/3, π/3]`.
+    pub view_pitch: f32,
 }
 
 impl Default for PlayerSnap {
@@ -58,6 +66,7 @@ impl Default for PlayerSnap {
             z: 0.0,
             angle: 0.0,
             view_height: 41.0,
+            view_pitch: 0.0,
         }
     }
 }
@@ -404,6 +413,7 @@ pub fn interpolate(prev: &SceneSnapshot, next: &SceneSnapshot, alpha: f32) -> Sc
         z: lerp(prev.player.z, next.player.z, a),
         angle: lerp_angle(prev.player.angle, next.player.angle, a),
         view_height: lerp(prev.player.view_height, next.player.view_height, a),
+        view_pitch: lerp(prev.player.view_pitch, next.player.view_pitch, a),
     };
     let sectors: Arc<[SectorSnap]> = if prev.sectors.len() == next.sectors.len() {
         let v: Vec<SectorSnap> = prev
@@ -530,6 +540,7 @@ mod tests {
             z: 0.0,
             angle: 0.0,
             view_height: 41.0,
+            view_pitch: -0.2,
         };
         let n = PlayerSnap {
             x: 10.0,
@@ -537,6 +548,7 @@ mod tests {
             z: 2.0,
             angle: 1.0,
             view_height: 43.0,
+            view_pitch: 0.4,
         };
         let prev = SceneSnapshot {
             tick: 0,
@@ -554,6 +566,7 @@ mod tests {
         assert!((mid.player.z - 1.0).abs() < 1e-5);
         assert!((mid.player.angle - 0.5).abs() < 1e-5);
         assert!((mid.player.view_height - 42.0).abs() < 1e-5);
+        assert!((mid.player.view_pitch - 0.1).abs() < 1e-5);
         // `next.tick` se preserva — el snapshot interpolado vive
         // conceptualmente en next.
         assert_eq!(mid.tick, 1);

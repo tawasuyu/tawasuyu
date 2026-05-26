@@ -890,6 +890,9 @@ fn synth_snapshot(tick: u64) -> SceneSnapshot {
         // El jugador mira tangente al círculo, hacia donde camina.
         angle: t + std::f32::consts::FRAC_PI_2,
         view_height: 41.0,
+        // El modo stub no expone pitch — el host puede sobreescribirlo
+        // post-capture si quiere validar mouse-look sin vendor.
+        view_pitch: 0.0,
     };
     // Cuatro paredes de la sala. Winding CW (mirando desde +Z): así
     // el "front side" de cada linedef en convención Doom — donde
