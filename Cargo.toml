@@ -128,6 +128,7 @@ members = [
     "02_ruway/llimphi/widgets/splitter",
     "02_ruway/llimphi/widgets/stat-card",
     "02_ruway/llimphi/widgets/tabs",
+    "02_ruway/llimphi/widgets/theme-switcher",
     "02_ruway/llimphi/widgets/text-area",
     "02_ruway/llimphi/widgets/text-editor",
     "02_ruway/llimphi/widgets/text-editor-lsp",
@@ -424,6 +425,7 @@ llimphi-widget-slider = { path = "02_ruway/llimphi/widgets/slider" }
 llimphi-widget-splitter = { path = "02_ruway/llimphi/widgets/splitter" }
 llimphi-widget-stat-card = { path = "02_ruway/llimphi/widgets/stat-card" }
 llimphi-widget-tabs = { path = "02_ruway/llimphi/widgets/tabs" }
+llimphi-widget-theme-switcher = { path = "02_ruway/llimphi/widgets/theme-switcher" }
 llimphi-widget-text-area = { path = "02_ruway/llimphi/widgets/text-area" }
 llimphi-widget-text-editor = { path = "02_ruway/llimphi/widgets/text-editor" }
 llimphi-widget-text-editor-lsp = { path = "02_ruway/llimphi/widgets/text-editor-lsp" }

@@ -20,6 +20,7 @@ use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette
 use llimphi_widget_stat_card::{stat_card_view, StatCardPalette};
 use llimphi_widget_tabs::{tabs_view, TabsPalette, TabsSpec};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
+use llimphi_widget_theme_switcher::theme_switcher_view;
 use llimphi_widget_tiled::{tiled_view_reorderable, TileSpec, TiledPalette};
 
 #[derive(Clone)]
@@ -30,6 +31,7 @@ enum Msg {
     ClickAction(u32),
     ResizeOuter(f32),
     SwapTile { from: usize, to: usize },
+    ChangeTheme(Theme),
 }
 
 struct Model {
@@ -39,6 +41,7 @@ struct Model {
     last_action: Option<u32>,
     left_w: f32,
     tile_order: Vec<usize>,
+    theme: Theme,
 }
 
 struct Gallery;
@@ -63,6 +66,7 @@ impl App for Gallery {
             last_action: None,
             left_w: 380.0,
             tile_order: vec![0, 1, 2, 3],
+            theme: Theme::dark(),
         }
     }
 
@@ -85,12 +89,13 @@ impl App for Gallery {
                     m.tile_order.swap(from, to);
                 }
             }
+            Msg::ChangeTheme(t) => m.theme = t,
         }
         m
     }
 
     fn view(model: &Model) -> View<Msg> {
-        let theme = Theme::dark();
+        let theme = model.theme;
         let header_palette = AppHeaderPalette::from_theme(&theme);
         let btn_palette = ButtonPalette::from_theme(&theme);
         let list_palette = ListPalette::from_theme(&theme);
@@ -125,6 +130,7 @@ impl App for Gallery {
                     };
                     btn
                 },
+                theme_switcher_view::<Msg>(&theme, Msg::ChangeTheme),
             ],
             &header_palette,
         );

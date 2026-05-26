@@ -23,6 +23,10 @@ pub use llimphi_raster::peniko::Color;
 /// `Palette` específico desde acá vía `Palette::from_theme(&theme)`.
 #[derive(Debug, Clone, Copy)]
 pub struct Theme {
+    /// Nombre legible del preset — alimenta `Theme::by_name`,
+    /// `next_after`, y los UIs que ciclan presets (theme-switcher).
+    pub name: &'static str,
+
     // --- Fondos ---
     /// Fondo de la ventana / superficie raíz.
     pub bg_app: Color,
@@ -68,6 +72,7 @@ impl Theme {
     /// versión Llimphi: tonos azulados profundos, acento azul claro.
     pub const fn dark() -> Self {
         Self {
+            name: "Dark",
             bg_app: Color::from_rgba8(14, 16, 22, 255),
             bg_panel: Color::from_rgba8(22, 26, 36, 255),
             bg_panel_alt: Color::from_rgba8(18, 22, 30, 255),
@@ -91,6 +96,7 @@ impl Theme {
     /// que lo pida. Calculado por inversión parcial del dark.
     pub const fn light() -> Self {
         Self {
+            name: "Light",
             bg_app: Color::from_rgba8(244, 246, 250, 255),
             bg_panel: Color::from_rgba8(232, 236, 242, 255),
             bg_panel_alt: Color::from_rgba8(224, 230, 240, 255),
@@ -108,5 +114,131 @@ impl Theme {
             border_focus: Color::from_rgba8(60, 100, 200, 255),
             accent: Color::from_rgba8(60, 100, 200, 255),
         }
+    }
+
+    /// Tema "Aurora" — verdes nocturnos con acento aqua. Análogo al
+    /// preset del nahual-theme.
+    pub const fn aurora() -> Self {
+        Self {
+            name: "Aurora",
+            bg_app: Color::from_rgba8(8, 18, 22, 255),
+            bg_panel: Color::from_rgba8(14, 28, 34, 255),
+            bg_panel_alt: Color::from_rgba8(12, 24, 30, 255),
+            bg_input: Color::from_rgba8(10, 22, 28, 255),
+            bg_input_focus: Color::from_rgba8(14, 30, 38, 255),
+            bg_button: Color::from_rgba8(20, 44, 52, 255),
+            bg_button_hover: Color::from_rgba8(30, 66, 78, 255),
+            bg_selected: Color::from_rgba8(30, 90, 100, 255),
+            bg_row_hover: Color::from_rgba8(20, 46, 56, 255),
+            fg_text: Color::from_rgba8(214, 232, 232, 255),
+            fg_muted: Color::from_rgba8(130, 168, 168, 255),
+            fg_placeholder: Color::from_rgba8(90, 120, 120, 255),
+            fg_destructive: Color::from_rgba8(220, 110, 110, 255),
+            border: Color::from_rgba8(38, 70, 78, 255),
+            border_focus: Color::from_rgba8(80, 200, 200, 255),
+            accent: Color::from_rgba8(80, 200, 200, 255),
+        }
+    }
+
+    /// Tema "Sunset" — cálidos con acento naranja, sobre base oscura.
+    pub const fn sunset() -> Self {
+        Self {
+            name: "Sunset",
+            bg_app: Color::from_rgba8(22, 14, 14, 255),
+            bg_panel: Color::from_rgba8(34, 22, 22, 255),
+            bg_panel_alt: Color::from_rgba8(28, 18, 18, 255),
+            bg_input: Color::from_rgba8(28, 18, 18, 255),
+            bg_input_focus: Color::from_rgba8(36, 24, 22, 255),
+            bg_button: Color::from_rgba8(54, 34, 28, 255),
+            bg_button_hover: Color::from_rgba8(78, 50, 38, 255),
+            bg_selected: Color::from_rgba8(120, 64, 38, 255),
+            bg_row_hover: Color::from_rgba8(56, 36, 28, 255),
+            fg_text: Color::from_rgba8(238, 220, 200, 255),
+            fg_muted: Color::from_rgba8(174, 142, 120, 255),
+            fg_placeholder: Color::from_rgba8(120, 96, 80, 255),
+            fg_destructive: Color::from_rgba8(220, 100, 100, 255),
+            border: Color::from_rgba8(70, 46, 36, 255),
+            border_focus: Color::from_rgba8(232, 140, 70, 255),
+            accent: Color::from_rgba8(232, 140, 70, 255),
+        }
+    }
+
+    /// Todos los presets del repo, en el orden canónico de rotación
+    /// (Dark → Light → Aurora → Sunset → Dark…). El theme-switcher
+    /// los consume vía [`Theme::next_after`].
+    pub fn all() -> Vec<Self> {
+        vec![Self::dark(), Self::light(), Self::aurora(), Self::sunset()]
+    }
+
+    /// Busca un preset por nombre exacto.
+    pub fn by_name(name: &str) -> Option<Self> {
+        Self::all().into_iter().find(|t| t.name == name)
+    }
+
+    /// Próximo preset en la rotación de [`Theme::all`]. Si `current` no
+    /// se encuentra, retorna el primero — el switcher nunca se traba.
+    pub fn next_after(current: &str) -> Self {
+        let all = Self::all();
+        let idx = all
+            .iter()
+            .position(|t| t.name == current)
+            .map(|i| (i + 1) % all.len())
+            .unwrap_or(0);
+        all[idx]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn presets_have_unique_names() {
+        let all = Theme::all();
+        let mut names: Vec<&str> = all.iter().map(|t| t.name).collect();
+        let n_before = names.len();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), n_before, "nombres duplicados en Theme::all()");
+    }
+
+    #[test]
+    fn by_name_finds_each_preset() {
+        for t in Theme::all() {
+            let by = Theme::by_name(t.name).expect("preset registrado");
+            assert_eq!(by.name, t.name);
+        }
+    }
+
+    #[test]
+    fn by_name_returns_none_for_unknown() {
+        assert!(Theme::by_name("ThisDoesNotExist").is_none());
+    }
+
+    #[test]
+    fn next_after_cycles_through_all_presets() {
+        let all = Theme::all();
+        let mut current = all[0].name;
+        let mut visited = vec![current];
+        for _ in 0..all.len() - 1 {
+            current = Theme::next_after(current).name;
+            visited.push(current);
+        }
+        let names: Vec<&str> = all.iter().map(|t| t.name).collect();
+        assert_eq!(visited, names);
+        // El siguiente debe volver al primero.
+        let wrapped = Theme::next_after(current).name;
+        assert_eq!(wrapped, all[0].name);
+    }
+
+    #[test]
+    fn next_after_unknown_falls_back_to_first() {
+        let n = Theme::next_after("Nope").name;
+        assert_eq!(n, Theme::all()[0].name);
+    }
+
+    #[test]
+    fn dark_is_the_default() {
+        assert_eq!(Theme::default().name, "Dark");
     }
 }

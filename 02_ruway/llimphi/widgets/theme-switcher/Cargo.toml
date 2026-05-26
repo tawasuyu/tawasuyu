@@ -1,0 +1,16 @@
+[package]
+name = "llimphi-widget-theme-switcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-theme-switcher — botón que cicla los presets de `llimphi_theme::Theme`. Análogo Llimphi del `nahual-widget-theme-switcher` GPUI: el caller lifta `Msg::ChangeTheme(Theme)` y reasigna el theme en su Model."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+
+[[example]]
+name = "theme_switcher_demo"
+path = "examples/theme_switcher_demo.rs"

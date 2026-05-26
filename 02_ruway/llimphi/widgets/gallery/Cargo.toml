@@ -22,6 +22,7 @@ llimphi-widget-list = { workspace = true }
 llimphi-widget-splitter = { workspace = true }
 llimphi-widget-stat-card = { workspace = true }
 llimphi-widget-tabs = { workspace = true }
+llimphi-widget-theme-switcher = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
 llimphi-widget-tiled = { workspace = true }
 llimphi-widget-tree = { workspace = true }
