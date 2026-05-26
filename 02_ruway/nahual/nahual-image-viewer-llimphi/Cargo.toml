@@ -12,6 +12,7 @@ description = "nahual-image-viewer-llimphi — visor de imágenes (PNG/JPEG) sob
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 image = { workspace = true }
+rimay-localize = { path = "../../../shared/rimay-localize" }
 
 [[example]]
 name = "image_viewer_demo"

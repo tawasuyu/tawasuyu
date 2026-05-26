@@ -70,9 +70,7 @@ pub fn load_image(path: &Path, max_bytes: u64) -> ImagePreviewState {
     // `format()` es `None` si el formato detectado no está habilitado
     // por feature. Reportamos diferenciado de error de IO.
     if reader.format().is_none() {
-        return ImagePreviewState::Unsupported(
-            "formato no soportado (sólo PNG/JPEG en esta build)".to_string(),
-        );
+        return ImagePreviewState::Unsupported(rimay_localize::t("nahual-image-unsupported"));
     }
     let img = match reader.decode() {
         Ok(i) => i,

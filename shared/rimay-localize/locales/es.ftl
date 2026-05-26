@@ -141,6 +141,23 @@ supay-view-3d = view=3D (F3→FB)
 supay-header = { $title }  ·  tick { $tick }  ·  { $mode }  ·  { $view }  ·  { $scene }
 supay-stub-title = supay-doom-llimphi corre en modo STUB
 
+# === shuma-shell ===
+shuma-label-launcher = Launcher
+shuma-label-command = Command
+shuma-label-shell = Shell
+shuma-label-matilda = Matilda
+shuma-empty-main-incompat = Módulo Main no compatible
+shuma-empty-no-main = Sin módulo Main configurado.
+shuma-empty-no-main-hint = F12 abre el drawer con shell + monitores. Click en la command bar también.
+shuma-empty-no-drawer-tabs = Sin tabs en el drawer.
+shuma-empty-no-drawer-compat = Este módulo no puede ser DrawerTab.
+shuma-empty-no-data-linux = sin datos (¿no es Linux?)
+shuma-empty-no-data = sin datos
+shuma-stat-samples = muestras: { $have } / { $total }
+
+# === nahual (visores) ===
+nahual-image-unsupported = formato no soportado (sólo PNG/JPEG en esta build)
+
 # === greeter (mirada login) ===
 greeter-subtitle = iniciá tu sesión
 greeter-label-user = usuario

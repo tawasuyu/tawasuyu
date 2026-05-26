@@ -69,6 +69,7 @@ const TICK: Duration = Duration::from_secs(1);
 const MONITORS_INITIAL_WIDTH: f32 = 280.0;
 
 fn main() {
+    rimay_localize::init();
     llimphi_ui::run::<Shell>();
 }
 
@@ -122,7 +123,7 @@ impl Instance {
     fn launcher(state: shuma_module_launcher::State) -> Self {
         Self {
             kind: Kind::Launcher,
-            label: "Launcher".into(),
+            label: rimay_localize::t("shuma-label-launcher"),
             state: ModuleState::Launcher(state),
         }
     }
@@ -130,7 +131,7 @@ impl Instance {
     fn command_bar(state: shuma_module_commandbar::State) -> Self {
         Self {
             kind: Kind::CommandBar,
-            label: "Command".into(),
+            label: rimay_localize::t("shuma-label-command"),
             state: ModuleState::CommandBar(state),
         }
     }
@@ -273,8 +274,8 @@ impl App for Shell {
             // locales para que el chasis sea exploratorio desde el día
             // uno sin que el usuario tenga que escribir un shumarc.
             vec![
-                Instance::shell("Shell".into(), Source::Local),
-                Instance::matilda("Matilda".into(), Source::Local),
+                Instance::shell(rimay_localize::t("shuma-label-shell"), Source::Local),
+                Instance::matilda(rimay_localize::t("shuma-label-matilda"), Source::Local),
             ]
         } else {
             cfg.drawer
@@ -894,11 +895,15 @@ fn render_main_layer(model: &Model, theme: &Theme) -> View<Msg> {
                     Msg::Module(Slot::Main, ModuleMsg::Matilda(m))
                 })
             }
-            _ => placeholder(theme, "Módulo Main no compatible"),
+            _ => placeholder(theme, &rimay_localize::t("shuma-empty-main-incompat")),
         },
         None => placeholder(
             theme,
-            "Sin módulo Main configurado.\n\nF12 abre el drawer con shell + monitores.\nClick en la command bar también.",
+            &format!(
+                "{}\n\n{}",
+                rimay_localize::t("shuma-empty-no-main"),
+                rimay_localize::t("shuma-empty-no-main-hint"),
+            ),
         ),
     };
 
@@ -1089,7 +1094,7 @@ fn shortcut_button(slot: Slot, spec: ShortcutSpec, theme: &Theme) -> View<Msg> {
 
 fn drawer_tab_content(model: &Model, theme: &Theme) -> View<Msg> {
     let Some(inst) = model.drawer_tabs.get(model.active_drawer_tab) else {
-        return placeholder(theme, "Sin tabs en el drawer.");
+        return placeholder(theme, &rimay_localize::t("shuma-empty-no-drawer-tabs"));
     };
     let idx = model.active_drawer_tab;
     match (inst.kind, &inst.state) {
@@ -1105,7 +1110,7 @@ fn drawer_tab_content(model: &Model, theme: &Theme) -> View<Msg> {
         }
         // Otros Kinds (Launcher/CommandBar) no tienen sentido como tab;
         // mostramos un placeholder informativo.
-        _ => placeholder(theme, "Este módulo no puede ser DrawerTab."),
+        _ => placeholder(theme, &rimay_localize::t("shuma-empty-no-drawer-compat")),
     }
 }
 
@@ -1128,7 +1133,7 @@ fn monitor_stack(model: &Model, theme: &Theme) -> View<Msg> {
                 model.sysmon.cpu_history().len(),
                 HISTORY
             ),
-            _ => "sin datos (¿no es Linux?)".into(),
+            _ => rimay_localize::t("shuma-empty-no-data-linux"),
         },
         Color::from_rgb8(0x82, 0xCF, 0xF2),
         model.sysmon.cpu_history().values(),
@@ -1140,7 +1145,7 @@ fn monitor_stack(model: &Model, theme: &Theme) -> View<Msg> {
         format!("{mem_value:>3.0}%"),
         match model.last_snapshot {
             Some(s) if s.valid => format!("{} MB de {} MB", s.mem_used_mb, s.mem_total_mb),
-            _ => "sin datos".into(),
+            _ => rimay_localize::t("shuma-empty-no-data"),
         },
         Color::from_rgb8(0xF7, 0xC8, 0x7A),
         model.sysmon.mem_history().values(),
@@ -1168,7 +1173,13 @@ fn monitor_stack(model: &Model, theme: &Theme) -> View<Msg> {
             children.push(monitor_card(
                 spec.label.as_str(),
                 display,
-                format!("muestras: {} / {}", history.len(), HISTORY),
+                rimay_localize::t_args(
+                    "shuma-stat-samples",
+                    &[
+                        ("have", history.len().to_string().into()),
+                        ("total", HISTORY.to_string().into()),
+                    ],
+                ),
                 accent,
                 history,
                 &palette,

@@ -144,6 +144,23 @@ supay-view-3d = qhaway=3D (F3→FB)
 supay-header = { $title }  ·  thaski { $tick }  ·  { $mode }  ·  { $view }  ·  { $scene }
 supay-stub-title = supay-doom-llimphi STUB modo-pi purichkan
 
+# === shuma-shell ===
+shuma-label-launcher = Launcher
+shuma-label-command = Kamachiq
+shuma-label-shell = Shell
+shuma-label-matilda = Matilda
+shuma-empty-main-incompat = Main yanapakuq mana atinmanchu
+shuma-empty-no-main = Mana Main yanapakuq churasqa.
+shuma-empty-no-main-hint = F12 drawer-ta kichan shell + qhawanakunawan. Command bar-pi click-pis.
+shuma-empty-no-drawer-tabs = Mana tabs drawer-pi.
+shuma-empty-no-drawer-compat = Kay yanapakuq mana DrawerTab kayta atinmanchu.
+shuma-empty-no-data-linux = mana willay (¿manachu Linux?)
+shuma-empty-no-data = mana willay
+shuma-stat-samples = qhawasqakuna: { $have } / { $total }
+
+# === nahual (qhawanakuna) ===
+nahual-image-unsupported = mana atisqa formato (kay build-pi PNG/JPEG sapanlla)
+
 # === greeter (mirada login) ===
 greeter-subtitle = sesionniykita qallariy
 greeter-label-user = sutiyki
