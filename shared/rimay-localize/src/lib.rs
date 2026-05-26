@@ -60,11 +60,16 @@ use unic_langid::LanguageIdentifier;
 
 /// Lista de catálogos compilada al binario. Para añadir un idioma:
 /// 1. Crear `locales/{lang}.ftl`.
-/// 2. Añadir la tupla `(langid!("{lang}"), include_str!(...))` aquí.
+/// 2. Añadir la tupla `("{lang}", include_str!(...))` aquí.
+///
+/// **Orden = prioridad declarada del proyecto**: español primero (es el
+/// fallback y la lengua de trabajo), quechua segundo (lengua de la
+/// arquitectura del monorepo), inglés tercero (uso técnico). Cambios
+/// futuros conservan este orden por convención.
 const CATALOGS: &[(&str, &str)] = &[
     ("es-PE", include_str!("../locales/es.ftl")),
-    ("en-US", include_str!("../locales/en.ftl")),
     ("qu-PE", include_str!("../locales/qu.ftl")),
+    ("en-US", include_str!("../locales/en.ftl")),
 ];
 
 /// Locale por defecto cuando la detección del sistema falla o pide algo
@@ -204,14 +209,20 @@ pub fn t_args(id: &str, args: &[(&str, Cow<'_, str>)]) -> String {
 // =====================================================================
 
 fn resolve(id: &str, args: Option<&FluentArgs>) -> String {
+    // Auto-init lazy: si `t()` se llama sin `init()` previo (típico desde
+    // librerías como `cosmos-modules` que no ven el `main`), cargamos el
+    // fallback en ese momento. Es un costo amortizado de una sola vez.
+    if STATE.read().bundles.is_empty() {
+        let mut w = STATE.write();
+        if w.bundles.is_empty() {
+            let _ = w.ensure_bundle(FALLBACK_LOCALE);
+            w.active = FALLBACK_LOCALE.to_string();
+        }
+    }
     let state = STATE.read();
     let bundle = match state.bundles.get(&state.active) {
         Some(b) => b,
-        None => {
-            // Esto solo puede pasar si alguien llama a `t` sin `init`
-            // previo. Devolvemos el id como degradación segura.
-            return id.to_string();
-        }
+        None => return id.to_string(),
     };
     let Some(msg) = bundle.get_message(id) else {
         return id.to_string();

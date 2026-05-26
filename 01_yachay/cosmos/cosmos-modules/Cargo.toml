@@ -10,3 +10,4 @@ cosmos-model = { path = "../cosmos-model" }
 cosmos-engine = { path = "../cosmos-engine" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+rimay-localize = { path = "../../../shared/rimay-localize" }

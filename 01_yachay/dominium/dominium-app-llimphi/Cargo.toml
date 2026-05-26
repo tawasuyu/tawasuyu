@@ -25,3 +25,4 @@ llimphi-widget-slider = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
 serde_json = { workspace = true }
 directories = { workspace = true }
+rimay-localize = { path = "../../../shared/rimay-localize" }

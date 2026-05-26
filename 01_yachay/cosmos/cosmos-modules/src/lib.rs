@@ -329,7 +329,7 @@ pub mod transit {
                 },
                 Control::Action {
                     key: "save_as_free".into(),
-                    label: "💾 Guardar tránsito como carta libre".into(),
+                    label: rimay_localize::t("cosmos-btn-save-transit"),
                 },
             ]
         }
@@ -394,7 +394,7 @@ pub mod progression {
                 },
                 Control::Action {
                     key: "save_as_free".into(),
-                    label: "💾 Guardar progresada como carta libre".into(),
+                    label: rimay_localize::t("cosmos-btn-save-progressed"),
                 },
             ]
         }
@@ -532,7 +532,7 @@ pub mod planetary_return {
                 // luego decide si guardarla en un contacto.
                 Control::Action {
                     key: "save_as_free".into(),
-                    label: "💾 Guardar retorno como carta libre".into(),
+                    label: rimay_localize::t("cosmos-btn-save-return"),
                 },
             ]
         }

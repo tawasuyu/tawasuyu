@@ -839,6 +839,7 @@ impl App for Dominium {
 }
 
 fn main() {
+    rimay_localize::init();
     llimphi_ui::run::<Dominium>();
 }
 
@@ -975,7 +976,11 @@ fn overlay_trails(plan: &mut RenderPlan, m: &Model) {
 // ---------------------------------------------------------------------
 
 fn status_bar(model: &Model, theme: &Theme) -> View<Msg> {
-    let estado = if model.running { "● corriendo" } else { "‖ en pausa" };
+    let estado = rimay_localize::t(if model.running {
+        "dominium-status-running"
+    } else {
+        "dominium-status-paused"
+    });
     let label_view = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -985,9 +990,12 @@ fn status_bar(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        format!(
-            "dominium · campo medio   ·   época {}   ·   tick {}",
-            model.epoch, model.tick
+        rimay_localize::t_args(
+            "dominium-status-line",
+            &[
+                ("epoch", model.epoch.to_string().into()),
+                ("tick", model.tick.to_string().into()),
+            ],
         ),
         12.0,
         theme.fg_text,
@@ -1000,7 +1008,7 @@ fn status_bar(model: &Model, theme: &Theme) -> View<Msg> {
         },
         ..Default::default()
     })
-    .text_aligned(estado.to_string(), 12.0, theme.accent, Alignment::End);
+    .text_aligned(estado, 12.0, theme.accent, Alignment::End);
 
     View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -1050,11 +1058,19 @@ fn side_panel(model: &Model, stats: &WorldStats, theme: &Theme) -> View<Msg> {
     slider_palette.track_width = 90.0;
     slider_palette.value_width = 44.0;
 
-    let header = label_view("[ SIM ]", 11.0, theme.fg_muted);
+    let header = label_view(&rimay_localize::t("dominium-header-sim"), 11.0, theme.fg_muted);
 
-    let play_label = if model.running { "‖  Pausar" } else { "▶  Reanudar" };
-    let play_btn = sized_button(play_label, &btn_palette, Msg::TogglePlay);
-    let reset_btn = sized_button("↺  Re-sembrar", &btn_palette, Msg::Reseed);
+    let play_label = rimay_localize::t(if model.running {
+        "dominium-btn-pause"
+    } else {
+        "dominium-btn-resume"
+    });
+    let play_btn = sized_button(&play_label, &btn_palette, Msg::TogglePlay);
+    let reset_btn = sized_button(
+        &rimay_localize::t("dominium-btn-reseed"),
+        &btn_palette,
+        Msg::Reseed,
+    );
 
     let separator = || -> View<Msg> {
         View::new(Style {
@@ -1067,9 +1083,16 @@ fn side_panel(model: &Model, stats: &WorldStats, theme: &Theme) -> View<Msg> {
         .fill(theme.border)
     };
 
-    let conceptos_header = label_view("[ CONCEPTOS ]", 11.0, theme.fg_muted);
+    let conceptos_header = label_view(
+        &rimay_localize::t("dominium-header-conceptos"),
+        11.0,
+        theme.fg_muted,
+    );
     let conceptos_count = label_view(
-        &format!("{} activos", model.world.conceptos.len()),
+        &rimay_localize::t_args(
+            "dominium-active-count",
+            &[("count", model.world.conceptos.len().to_string().into())],
+        ),
         12.0,
         theme.fg_text,
     );
@@ -1083,7 +1106,11 @@ fn side_panel(model: &Model, stats: &WorldStats, theme: &Theme) -> View<Msg> {
         stat_row("Oro", &format!("{:.0}", stats.total_oro), theme),
         stat_row("Energía", &format!("{:.0}", stats.total_energia), theme),
         separator(),
-        label_view("[ MÉTRICAS ]", 11.0, theme.fg_muted),
+        label_view(
+            &rimay_localize::t("dominium-header-metricas"),
+            11.0,
+            theme.fg_muted,
+        ),
         stat_row("Época", Epoch::classify(stats).label(), theme),
         stat_row("Gini energía", &format!("{:.3}", stats.gini_energia), theme),
         stat_row("Edad media", &format!("{:.1}", stats.mean_edad), theme),
@@ -1128,17 +1155,41 @@ fn side_panel(model: &Model, stats: &WorldStats, theme: &Theme) -> View<Msg> {
     for (i, c) in model.world.conceptos.items.iter().enumerate() {
         children.push(concepto_row(i, &c.id, model.selected == Some(i), theme));
     }
-    children.push(sized_button("✦  Crear concepto", &btn_palette, Msg::CrearConcepto));
-    children.push(sized_button("✚  Sembrar pack", &btn_palette, Msg::SembrarConceptos));
-    children.push(sized_button("✖  Limpiar", &btn_palette, Msg::LimpiarConceptos));
-    children.push(sized_button("💾  Guardar", &btn_palette, Msg::GuardarPack));
-    children.push(sized_button("📂  Cargar guardado", &btn_palette, Msg::CargarPack));
+    children.push(sized_button(
+        &rimay_localize::t("dominium-btn-create-concept"),
+        &btn_palette,
+        Msg::CrearConcepto,
+    ));
+    children.push(sized_button(
+        &rimay_localize::t("dominium-btn-seed-pack"),
+        &btn_palette,
+        Msg::SembrarConceptos,
+    ));
+    children.push(sized_button(
+        &rimay_localize::t("dominium-btn-clear"),
+        &btn_palette,
+        Msg::LimpiarConceptos,
+    ));
+    children.push(sized_button(
+        &rimay_localize::t("dominium-btn-save"),
+        &btn_palette,
+        Msg::GuardarPack,
+    ));
+    children.push(sized_button(
+        &rimay_localize::t("dominium-btn-load-saved"),
+        &btn_palette,
+        Msg::CargarPack,
+    ));
 
     // Editor del concepto seleccionado: sliders en vivo sobre radius + 4 mods.
     if let Some(i) = model.selected {
         if let Some(c) = model.world.conceptos.items.get(i) {
             children.push(separator());
-            children.push(label_view("[ EDITAR ]", 11.0, theme.fg_muted));
+            children.push(label_view(
+                &rimay_localize::t("dominium-header-editar"),
+                11.0,
+                theme.fg_muted,
+            ));
             if model.id_input_focused {
                 children.push(text_input_view(
                     &model.id_input,
@@ -1362,7 +1413,10 @@ fn side_panel(model: &Model, stats: &WorldStats, theme: &Theme) -> View<Msg> {
         Msg::CycleScenario,
     ));
     children.push(sized_button(
-        &format!("✓ Cargar «{}»", current_id),
+        &rimay_localize::t_args(
+            "dominium-btn-load-named",
+            &[("name", current_id.into())],
+        ),
         &btn_palette,
         Msg::LoadScenario,
     ));

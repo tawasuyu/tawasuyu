@@ -38,3 +38,27 @@ success = Listo
 # === interpolación ===
 welcome-user = Bienvenido, { $name }.
 items-count = { $count } elementos.
+
+# === dominium (simulador de campo medio) ===
+dominium-status-running = ● corriendo
+dominium-status-paused = ‖ en pausa
+dominium-status-line = dominium · campo medio   ·   época { $epoch }   ·   tick { $tick }
+dominium-btn-pause = ‖  Pausar
+dominium-btn-resume = ▶  Reanudar
+dominium-btn-reseed = ↺  Re-sembrar
+dominium-btn-create-concept = ✦  Crear concepto
+dominium-btn-seed-pack = ✚  Sembrar pack
+dominium-btn-clear = ✖  Limpiar
+dominium-btn-save = 💾  Guardar
+dominium-btn-load-saved = 📂  Cargar guardado
+dominium-btn-load-named = ✓ Cargar «{ $name }»
+dominium-header-sim = [ SIM ]
+dominium-header-conceptos = [ CONCEPTOS ]
+dominium-header-metricas = [ MÉTRICAS ]
+dominium-header-editar = [ EDITAR ]
+dominium-active-count = { $count } activos
+
+# === cosmos (módulos overlay) ===
+cosmos-btn-save-transit = 💾 Guardar tránsito como carta libre
+cosmos-btn-save-progressed = 💾 Guardar progresada como carta libre
+cosmos-btn-save-return = 💾 Guardar retorno como carta libre

@@ -41,3 +41,27 @@ success = Allinmi
 # === interpolación ===
 welcome-user = Allin hamusqaykim, { $name }.
 items-count = { $count } imaymana.
+
+# === dominium (chawpi pachapi pukllachiq) ===
+dominium-status-running = ● purichkan
+dominium-status-paused = ‖ samachkan
+dominium-status-line = dominium · chawpi pacha   ·   wiñay { $epoch }   ·   thaski { $tick }
+dominium-btn-pause = ‖  Samay
+dominium-btn-resume = ▶  Kutiy
+dominium-btn-reseed = ↺  Watiq taqraay
+dominium-btn-create-concept = ✦  Yuyay ruway
+dominium-btn-seed-pack = ✚  Taqra churay
+dominium-btn-clear = ✖  Pichay
+dominium-btn-save = 💾  Waqaychay
+dominium-btn-load-saved = 📂  Waqaychasqa apamuy
+dominium-btn-load-named = ✓ «{ $name }» apamuy
+dominium-header-sim = [ PUKLLAY ]
+dominium-header-conceptos = [ YUYAYKUNA ]
+dominium-header-metricas = [ TUPUCHIQKUNA ]
+dominium-header-editar = [ HUKCHAY ]
+dominium-active-count = { $count } kawsachkan
+
+# === cosmos (overlay módulos) ===
+cosmos-btn-save-transit = 💾 Purichiqta qispi qillqaman waqaychay
+cosmos-btn-save-progressed = 💾 Wiñasqata qispi qillqaman waqaychay
+cosmos-btn-save-return = 💾 Kutiqta qispi qillqaman waqaychay
