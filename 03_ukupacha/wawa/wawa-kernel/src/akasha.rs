@@ -73,6 +73,11 @@ static TX_ANUNCIOS: AtomicU64 = AtomicU64::new(0);
 /// Frames descartados en RX por ser basura (payload AoE invalido).
 static RX_DESCARTADOS: AtomicU64 = AtomicU64::new(0);
 
+/// Solicitudes que el dedup descarto: un mismo par pidio el mismo objeto
+/// dentro de `VENTANA_DEDUP_MS` — la primera respuesta ya esta en vuelo
+/// (o el grafo no la tiene), repetir es ruido.
+static RX_SOLICITUDES_DEDUP: AtomicU64 = AtomicU64::new(0);
+
 /// Frames no-AoE encolados hacia el userspace.
 static USUARIO_ENCOLADOS: AtomicU64 = AtomicU64::new(0);
 /// Frames no-AoE descartados por desbordamiento de la cola del userspace.
@@ -161,6 +166,78 @@ pub fn pop_usuario(buf: &mut [u8]) -> usize {
 }
 
 // =============================================================================
+//  Dedup de solicitudes recientes — pareja con la retransmision del cliente
+// =============================================================================
+//
+//  El cliente AoE de `wawa-explorer-aoe` reenvia una `SolicitarObjeto` hasta
+//  `INTENTOS_SOLICITAR` veces dentro de un mismo `timeout` para tolerar
+//  broadcast perdido. Si NO dedupamos del lado del kernel, cada uno de esos
+//  reenvios dispara una `ProveedorObjeto` unicast — ruido innecesario en la
+//  red de capa 2 y trabajo redundante en el almacen.
+//
+//  Solucion minima: una ventana corta `VENTANA_DEDUP_MS` durante la cual el
+//  primer par que repite la misma `(MAC, hash)` queda silenciado. Una vez
+//  servida la primera, las repeticiones se descuentan a contador y se
+//  ignoran.
+
+/// Cuanto tiempo (ms) consideramos "la misma rafaga" del mismo par pidiendo
+/// el mismo objeto. Acotado por arriba al timeout total tipico del cliente
+/// (3 s) para que la rafaga completa de retransmisiones quepa adentro.
+const VENTANA_DEDUP_MS: u64 = 3_000;
+
+/// Cuantas (MAC, hash, ms) recordamos a la vez. Mas grande = mas memoria de
+/// rafagas paralelas; mas chico = un par ruidoso desplaza a otro. 64 es el
+/// mismo orden que `PROFUNDIDAD_COLA_USUARIO`.
+const PROFUNDIDAD_DEDUP: usize = 64;
+
+/// Entrada del cache de dedup. Determinista, sin Hash inline para no traer
+/// hashing aleatorio al kernel.
+#[derive(Clone, Copy)]
+struct RegistroSolicitud {
+    origen: Mac,
+    id: Hash,
+    cuando_ms: u64,
+}
+
+/// Cache FIFO de solicitudes recientes. Lookup lineal; con PROFUNDIDAD <= 64
+/// es trivial y no justifica una estructura mas compleja.
+static RECIENTES_SOLICITUDES: Mutex<VecDeque<RegistroSolicitud>> =
+    Mutex::new(VecDeque::new());
+
+/// Devuelve `true` si esta solicitud es un duplicado dentro de la ventana —
+/// el caller debe descartarla. Si no lo es, la registra y devuelve `false`.
+///
+/// La pasada de purga de entradas viejas (mas alla de la ventana) ocurre en
+/// el mismo lock, asi que no acumulamos basura mas alla del horizonte util.
+fn es_duplicado_y_registrar(origen: Mac, id: Hash, ahora_ms: u64) -> bool {
+    let mut cache = RECIENTES_SOLICITUDES.lock();
+    // Purgar entradas vencidas (las que se acumulan al frente por ser viejas).
+    while let Some(reg) = cache.front() {
+        if ahora_ms.saturating_sub(reg.cuando_ms) > VENTANA_DEDUP_MS {
+            cache.pop_front();
+        } else {
+            break;
+        }
+    }
+    // Buscar duplicado dentro de la ventana.
+    for reg in cache.iter() {
+        if reg.origen == origen
+            && reg.id == id
+            && ahora_ms.saturating_sub(reg.cuando_ms) <= VENTANA_DEDUP_MS
+        {
+            return true;
+        }
+    }
+    // No es duplicado — registrar. Si la cola esta llena, descartar la mas
+    // antigua para hacer lugar (otro guardarrail termodinamico clasico).
+    if cache.len() >= PROFUNDIDAD_DEDUP {
+        cache.pop_front();
+    }
+    cache.push_back(RegistroSolicitud { origen, id, cuando_ms: ahora_ms });
+    false
+}
+
+// =============================================================================
 //  Atencion de mensajes — el oficio numero 2
 // =============================================================================
 
@@ -169,6 +246,19 @@ fn procesar(mensaje: MensajeAkasha, origen: Mac, nuestra: Mac) {
     match mensaje {
         MensajeAkasha::SolicitarObjeto(id) => {
             RX_SOLICITUDES.fetch_add(1, Ordering::Relaxed);
+            // Dedup: la rafaga de retransmision del cliente (3 broadcasts
+            // dentro del mismo timeout) NO debe dispararnos 3 respuestas.
+            let ahora = reloj::milisegundos();
+            if es_duplicado_y_registrar(origen, id, ahora) {
+                RX_SOLICITUDES_DEDUP.fetch_add(1, Ordering::Relaxed);
+                let _ = writeln!(
+                    baliza::Serie,
+                    "akasha :: solicitud dedupada (rafaga reciente) :: {} de {}",
+                    FormatoHash(&id),
+                    FormatoMac(&origen)
+                );
+                return;
+            }
             atender_solicitud(id, origen, nuestra);
         }
         MensajeAkasha::ProveedorObjeto(id, payload) => {
@@ -406,6 +496,7 @@ pub struct ResumenAkasha {
     pub tx_proveedores: u64,
     pub tx_anuncios: u64,
     pub rx_descartados: u64,
+    pub rx_solicitudes_dedup: u64,
     pub usuario_encolados: u64,
     pub usuario_desbordados: u64,
 }
@@ -420,6 +511,7 @@ pub fn resumen() -> ResumenAkasha {
         tx_proveedores: TX_PROVEEDORES.load(Ordering::Relaxed),
         tx_anuncios: TX_ANUNCIOS.load(Ordering::Relaxed),
         rx_descartados: RX_DESCARTADOS.load(Ordering::Relaxed),
+        rx_solicitudes_dedup: RX_SOLICITUDES_DEDUP.load(Ordering::Relaxed),
         usuario_encolados: USUARIO_ENCOLADOS.load(Ordering::Relaxed),
         usuario_desbordados: USUARIO_DESBORDADOS.load(Ordering::Relaxed),
     }
