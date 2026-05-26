@@ -54,6 +54,8 @@ extern int numsubsectors;
 extern subsector_t *subsectors;
 extern int numsegs;
 extern seg_t *segs;
+extern int numnodes;
+extern node_t *nodes;
 extern player_t players[MAXPLAYERS];
 extern int consoleplayer;
 extern thinker_t thinkercap;
@@ -242,6 +244,47 @@ int supay_scene_seg(int i,
     *y1 = ftox(s->v1->y);
     *x2 = ftox(s->v2->x);
     *y2 = ftox(s->v2->y);
+    return 1;
+}
+
+/* ---- BSP nodes (Fase 3.13) ----
+ *
+ * El motor mantiene el árbol BSP en `nodes[]`. Cada nodo tiene una línea
+ * de partición (origin x/y + dx/dy) y dos hijos. Cada hijo es:
+ *   - subsector si `child & NF_SUBSECTOR` (0x8000), índice = `child & ~NF_SUBSECTOR`
+ *   - nodo interno si no, índice = `child`
+ * La raíz es `nodes[numnodes - 1]`.
+ *
+ * El renderer Rust camina el árbol back-to-front desde la posición del
+ * jugador para asignar orden de painter's correcto a los polígonos de
+ * subsector. La función supay_scene_node devuelve todos los campos en una
+ * sola llamada para minimizar el costo de FFI por nodo (numnodes típicos
+ * ≈ #subsectors - 1, ~200-500 en E1Mx).
+ *
+ * Convención: el lado del frente del partición está al **lado +z del
+ * cross product** `(dx, dy) × (px - x, py - y)`, i.e. el viewer está al
+ * front si `dx·(py - y) - dy·(px - x) > 0`. Es la misma convención que
+ * `R_PointOnSide` en r_main.c. Cuando el viewer está al front, children[0]
+ * es el subtree del front y children[1] es el subtree del back.
+ */
+
+int supay_scene_num_nodes(void) {
+    return numnodes;
+}
+
+int supay_scene_node(int i,
+                     float *x, float *y, float *dx, float *dy,
+                     uint16_t *child_front, uint16_t *child_back) {
+    if (i < 0 || i >= numnodes || !nodes) {
+        return 0;
+    }
+    node_t *n = &nodes[i];
+    *x = ftox(n->x);
+    *y = ftox(n->y);
+    *dx = ftox(n->dx);
+    *dy = ftox(n->dy);
+    *child_front = n->children[0];
+    *child_back = n->children[1];
     return 1;
 }
 

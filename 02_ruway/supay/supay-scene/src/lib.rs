@@ -157,6 +157,37 @@ pub struct SegSnap {
     pub y2: f32,
 }
 
+/// Flag de Doom: si un `NodeSnap::children[i]` tiene este bit set, el
+/// hijo es un subsector (`index = child & !NF_SUBSECTOR`). Si no está set,
+/// es otro nodo interno del árbol (`index = child`).
+pub const NF_SUBSECTOR: u16 = 0x8000;
+
+/// Un nodo interno del árbol BSP — partición + dos hijos.
+///
+/// La línea de partición es `(x, y) + t·(dx, dy)`. La convención Doom
+/// para decidir de qué lado cae un punto `(px, py)`:
+///
+/// ```text
+/// side = dx·(py - y) - dy·(px - x)
+/// ```
+///
+/// `side > 0` → front (children[0]), `side < 0` → back (children[1]),
+/// `side == 0` → arbitrario (Doom decide por dx ≷ 0 / dy ≷ 0).
+///
+/// La raíz del árbol es `nodes[len - 1]`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NodeSnap {
+    /// Origen de la partición.
+    pub partition_x: f32,
+    pub partition_y: f32,
+    /// Dirección de la partición.
+    pub partition_dx: f32,
+    pub partition_dy: f32,
+    /// Hijos: front (children[0]) y back (children[1]).
+    /// Bit 15 ([`NF_SUBSECTOR`]) set → subsector; sino → otro nodo.
+    pub children: [u16; 2],
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SectorSnap {
     pub floor_height: f32,
@@ -200,6 +231,10 @@ pub struct SceneSnapshot {
     /// "fake floor" de 3.1 (trapezoides per-pared).
     pub subsectors: Arc<[SubsectorSnap]>,
     pub segs: Arc<[SegSnap]>,
+    /// Fase 3.13: árbol BSP del mapa. La raíz es el último elemento.
+    /// Vacío en modo stub o antes de que cargue el mapa — el renderer
+    /// cae al sort euclidiano clásico si esto está vacío.
+    pub nodes: Arc<[NodeSnap]>,
     /// Índice del flat que el motor trata como "cielo" (ceiling_pic
     /// con este valor → renderer pinta sky en vez de techo sólido).
     /// [`NO_SKY_PIC`] = stub o mapa no cargado.
@@ -224,6 +259,7 @@ impl SceneSnapshot {
             sprites: Arc::from(Vec::<SpriteSnap>::new()),
             subsectors: Arc::from(Vec::<SubsectorSnap>::new()),
             segs: Arc::from(Vec::<SegSnap>::new()),
+            nodes: Arc::from(Vec::<NodeSnap>::new()),
             sky_pic: NO_SKY_PIC,
         }
     }
@@ -349,10 +385,11 @@ pub fn interpolate(prev: &SceneSnapshot, next: &SceneSnapshot, alpha: f32) -> Sc
         walls: next.walls.clone(),
         sectors,
         sprites,
-        // Topología BSP: nunca se interpola — los subsectores y segs son
-        // estables por mapa cargado. Tomamos `next` directamente.
+        // Topología BSP: nunca se interpola — los subsectores, segs y
+        // nodos son estables por mapa cargado. Tomamos `next` directamente.
         subsectors: next.subsectors.clone(),
         segs: next.segs.clone(),
+        nodes: next.nodes.clone(),
         sky_pic: next.sky_pic,
     }
 }

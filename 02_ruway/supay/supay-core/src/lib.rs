@@ -30,8 +30,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 pub use supay_scene::{
-    interpolate, PlayerSnap, SceneSnapshot, SectorSnap, SegSnap, SnapshotPair, SpriteSnap,
-    SubsectorSnap, WallSeg, NO_SECTOR, NO_SKY_PIC,
+    interpolate, NodeSnap, PlayerSnap, SceneSnapshot, SectorSnap, SegSnap, SnapshotPair,
+    SpriteSnap, SubsectorSnap, WallSeg, NF_SUBSECTOR, NO_SECTOR, NO_SKY_PIC,
 };
 
 // doomgeneric default es 640×400 (auto-scaling factor 2 sobre los
@@ -272,6 +272,17 @@ extern "C" {
         side: std::ffi::c_int,
         xoff: *mut f32,
         yoff: *mut f32,
+    ) -> std::ffi::c_int;
+    /// Fase 3.13: árbol BSP del mapa.
+    fn supay_scene_num_nodes() -> std::ffi::c_int;
+    fn supay_scene_node(
+        i: std::ffi::c_int,
+        x: *mut f32,
+        y: *mut f32,
+        dx: *mut f32,
+        dy: *mut f32,
+        child_front: *mut u16,
+        child_back: *mut u16,
     ) -> std::ffi::c_int;
 }
 
@@ -725,6 +736,40 @@ fn capture_scene_real(tick: u64) -> SceneSnapshot {
             segs_vec.push(SegSnap { x1, y1, x2, y2 });
         }
     }
+    // Nodos BSP (Fase 3.13). Vacío hasta que cargue el mapa.
+    // SAFETY: idem.
+    let n_nodes = unsafe { supay_scene_num_nodes() }.max(0) as usize;
+    let mut nodes_vec = Vec::with_capacity(n_nodes);
+    for i in 0..n_nodes {
+        let mut x = 0.0_f32;
+        let mut y = 0.0_f32;
+        let mut dx = 0.0_f32;
+        let mut dy = 0.0_f32;
+        let mut child_front = 0_u16;
+        let mut child_back = 0_u16;
+        // SAFETY: punteros a locales válidos.
+        let ok = unsafe {
+            supay_scene_node(
+                i as std::ffi::c_int,
+                &mut x,
+                &mut y,
+                &mut dx,
+                &mut dy,
+                &mut child_front,
+                &mut child_back,
+            )
+        };
+        if ok != 0 {
+            nodes_vec.push(NodeSnap {
+                partition_x: x,
+                partition_y: y,
+                partition_dx: dx,
+                partition_dy: dy,
+                children: [child_front, child_back],
+            });
+        }
+    }
+
     // SAFETY: idem.
     let sky_pic = unsafe { supay_scene_sky_pic() };
 
@@ -736,6 +781,7 @@ fn capture_scene_real(tick: u64) -> SceneSnapshot {
         sprites: Arc::from(sprs),
         subsectors: Arc::from(subs),
         segs: Arc::from(segs_vec),
+        nodes: Arc::from(nodes_vec),
         sky_pic,
     }
 }
@@ -852,6 +898,7 @@ fn synth_snapshot(tick: u64) -> SceneSnapshot {
         // Stub: sin BSP. El renderer cae al modo fake-floor de 3.1.
         subsectors: Arc::from(Vec::<SubsectorSnap>::new()),
         segs: Arc::from(Vec::<SegSnap>::new()),
+        nodes: Arc::from(Vec::<NodeSnap>::new()),
         sky_pic: NO_SKY_PIC,
     }
 }

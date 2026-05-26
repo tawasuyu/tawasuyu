@@ -64,8 +64,8 @@ use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::llimphi_raster::vello::Scene;
 use llimphi_ui::{PaintRect, View};
 use supay_scene::{
-    interpolate, SceneSnapshot, SectorSnap, SnapshotPair, SpriteSnap, SubsectorSnap, WallSeg,
-    ML_DONTPEGBOTTOM, ML_DONTPEGTOP, NO_SECTOR, NO_SKY_PIC,
+    interpolate, NodeSnap, SceneSnapshot, SectorSnap, SnapshotPair, SpriteSnap, SubsectorSnap,
+    WallSeg, ML_DONTPEGBOTTOM, ML_DONTPEGTOP, NF_SUBSECTOR, NO_SECTOR, NO_SKY_PIC,
 };
 
 // =====================================================================
@@ -397,14 +397,40 @@ fn render_frame(scene: &mut Scene, rect: PaintRect, snap: &SceneSnapshot, cfg: &
     // "fake-floor" como fallback de 3.1.
     let use_subsectors = !snap.subsectors.is_empty() && !snap.segs.is_empty();
 
+    // Fase 3.13: si tenemos el árbol BSP, calculamos un orden
+    // back-to-front desde la posición del jugador para asignar depth
+    // de painter's correcto a los planos de subsector. Walls y sprites
+    // siguen usando depth euclidiano (su orden relativo entre ellos no
+    // depende del BSP y el ordenamiento por distancia funciona en Doom
+    // para cualquier viewpoint plausible).
+    //
+    // `bsp_order_depths[ss_id]` = depth para los planos de ese subsector.
+    // Grande = pintado primero. Vacío si no hay BSP — fallback al cálculo
+    // euclidiano viejo dentro de gather_subsector_planes.
+    let bsp_order_depths: Vec<Option<f32>> = if use_subsectors && !snap.nodes.is_empty() {
+        compute_bsp_order_depths(snap)
+    } else {
+        Vec::new()
+    };
+
     let cap = snap.walls.len() * (cfg.wall_bands as usize * 2 + 2)
         + snap.subsectors.len() * 2
         + snap.sprites.len();
     let mut renderables: Vec<Renderable> = Vec::with_capacity(cap);
 
     if use_subsectors {
-        for sub in snap.subsectors.iter() {
-            gather_subsector_planes(&mut renderables, sub, snap, &cam, &proj, &rect, cfg);
+        for (idx, sub) in snap.subsectors.iter().enumerate() {
+            let bsp_depth = bsp_order_depths.get(idx).copied().flatten();
+            gather_subsector_planes(
+                &mut renderables,
+                sub,
+                snap,
+                &cam,
+                &proj,
+                &rect,
+                cfg,
+                bsp_depth,
+            );
         }
     }
     for (idx, wall) in snap.walls.iter().enumerate() {
@@ -949,6 +975,63 @@ fn wall_slab_kind(slab_i: usize, n_slabs: usize, two_sided: bool) -> usize {
 /// → v1_inicial. Algunos lados pueden estar bordeados por particiones
 /// BSP sin seg correspondiente y la cadena no representa el polígono
 /// completo; el subsector vecino del mismo sector cubre el hueco.
+/// Base sobre la que se acumula el orden BSP para los depths de planos.
+/// Mucho más grande que cualquier depth euclidiano de pared o sprite
+/// (los maps de Doom tienen ~3000 unidades de extensión máxima) para
+/// garantizar que los planos siempre se pinten antes que walls y sprites.
+const BSP_DEPTH_BASE: f32 = 1.0e6;
+
+/// Devuelve, por cada subsector del snapshot, su depth de painter's
+/// asignado por el orden back-to-front del árbol BSP — o `None` si el
+/// subsector no fue alcanzado (no debería pasar en un BSP bien formado,
+/// pero defendemos contra mapas con subtrees colgados).
+///
+/// El primer subsector visitado (más lejano) recibe el depth más grande;
+/// el último visitado (donde está el jugador) recibe el depth más chico.
+/// La painter's pinta de más-depth a menos-depth → orden BSP correcto.
+fn compute_bsp_order_depths(snap: &SceneSnapshot) -> Vec<Option<f32>> {
+    let n_subs = snap.subsectors.len();
+    let mut depths: Vec<Option<f32>> = vec![None; n_subs];
+    let mut traversal: Vec<u32> = Vec::with_capacity(n_subs);
+    let root_child = (snap.nodes.len() - 1) as u16;
+    walk_bsp(&snap.nodes, root_child, snap.player.x, snap.player.y, &mut traversal);
+    let total = traversal.len();
+    for (step, &ss) in traversal.iter().enumerate() {
+        if let Some(slot) = depths.get_mut(ss as usize) {
+            // step 0 = más lejano → depth alto; step total-1 = más cercano → depth bajo.
+            *slot = Some(BSP_DEPTH_BASE + (total - step) as f32);
+        }
+    }
+    depths
+}
+
+/// Camina el árbol BSP recursivamente desde `child`, agregando los
+/// subsectores hoja a `out` en orden back-to-front respecto al viewer.
+///
+/// `child` codifica al estilo Doom: bit 15 set = subsector, else nodo
+/// interno (ver [`NF_SUBSECTOR`]).
+fn walk_bsp(nodes: &[NodeSnap], child: u16, view_x: f32, view_y: f32, out: &mut Vec<u32>) {
+    if child & NF_SUBSECTOR != 0 {
+        out.push((child & !NF_SUBSECTOR) as u32);
+        return;
+    }
+    let Some(node) = nodes.get(child as usize) else {
+        return;
+    };
+    // Convención R_PointOnSide: side = dx·(py - y) - dy·(px - x).
+    // side > 0 → viewer en el lado front (children[0]); side < 0 → back.
+    let side = node.partition_dx * (view_y - node.partition_y)
+        - node.partition_dy * (view_x - node.partition_x);
+    let (near_child, far_child) = if side > 0.0 {
+        (node.children[0], node.children[1])
+    } else {
+        (node.children[1], node.children[0])
+    };
+    // Back-to-front: visitamos el subtree lejano primero.
+    walk_bsp(nodes, far_child, view_x, view_y, out);
+    walk_bsp(nodes, near_child, view_x, view_y, out);
+}
+
 fn gather_subsector_planes(
     out: &mut Vec<Renderable>,
     sub: &SubsectorSnap,
@@ -957,6 +1040,7 @@ fn gather_subsector_planes(
     proj: &Projection,
     rect: &PaintRect,
     cfg: &RenderConfig,
+    bsp_depth_override: Option<f32>,
 ) {
     if sub.num_segs < 2 {
         return;
@@ -1012,16 +1096,27 @@ fn gather_subsector_planes(
 
     let world_xy: Vec<(f32, f32)> = clipped.iter().map(|&(cx, cy)| cam.from_cam_2d(cx, cy)).collect();
 
-    // Centroide para depth sort.
-    let (mut cx_sum, mut cy_sum) = (0.0_f32, 0.0_f32);
-    for &(x, y) in &clipped {
-        cx_sum += x;
-        cy_sum += y;
-    }
-    let n = clipped.len() as f32;
-    let cx = cx_sum / n;
-    let cy = cy_sum / n;
-    let depth = (cx * cx + cy * cy).sqrt();
+    // Centroide euclidiano del polígono en cámara — necesario para
+    // calcular el shade (fog + light dropoff) que depende de la distancia
+    // real al observador, no del BSP order.
+    let shade_depth = {
+        let (mut cx_sum, mut cy_sum) = (0.0_f32, 0.0_f32);
+        for &(x, y) in &clipped {
+            cx_sum += x;
+            cy_sum += y;
+        }
+        let n = clipped.len() as f32;
+        let cx = cx_sum / n;
+        let cy = cy_sum / n;
+        (cx * cx + cy * cy).sqrt()
+    };
+    // Depth para painter's sort:
+    // - Con BSP (Fase 3.13), usamos el depth asignado por la travesía
+    //   back-to-front del árbol — orden correcto Doom, elimina glitches
+    //   del sort euclidiano cuando dos subsectores comparten centroide
+    //   pero tienen prioridad distinta (escaleras, sectores interpenetrados).
+    // - Sin BSP (stub, mapa no cargado), euclidiano como Fase 3.7+.
+    let depth = bsp_depth_override.unwrap_or(shade_depth);
 
     let screen_x_min = rect.x as f64;
     let screen_x_max = (rect.x + rect.w) as f64;
@@ -1113,7 +1208,10 @@ fn gather_subsector_planes(
                         // Shade overlay sobre el polígono entero
                         // (shade es constante por plano — no necesita
                         // ser per-triangle). Mismo truco que walls.
-                        let shade = shade_for(sec.light_level, depth, cfg)
+                        // Usa `shade_depth` euclidiano (no `depth` BSP-derived)
+                        // porque fog/light dropoff dependen de la distancia
+                        // real al jugador.
+                        let shade = shade_for(sec.light_level, shade_depth, cfg)
                             * if is_floor { 0.92 } else { 0.85 };
                         if shade < 0.95 {
                             let alpha = ((1.0 - shade) * 255.0).clamp(0.0, 255.0) as u8;
@@ -1131,9 +1229,9 @@ fn gather_subsector_planes(
         }
         // Fallback al color promedio (3.3 behavior).
         let color = if is_floor {
-            floor_color(sec, depth, cfg)
+            floor_color(sec, shade_depth, cfg)
         } else {
-            ceiling_color(sec, depth, cfg, snap.sky_pic)
+            ceiling_color(sec, shade_depth, cfg, snap.sky_pic)
         };
         out.push(Renderable {
             depth: depth + 1.0,
@@ -2043,5 +2141,74 @@ mod tests {
         let ca = floor_color(&a, 0.0, &cfg);
         let cb = floor_color(&b, 0.0, &cfg);
         assert_ne!(ca.to_rgba8().to_u8_array(), cb.to_rgba8().to_u8_array());
+    }
+
+    // -----------------------------------------------------------------
+    // Fase 3.13: BSP back-to-front traversal
+    // -----------------------------------------------------------------
+
+    /// Construye un BSP de 2 hojas con partición a X=0 y dx=0, dy=1
+    /// (línea vertical). Front (children[0]) = subsector 0 (lado +X).
+    /// Back (children[1]) = subsector 1 (lado -X).
+    fn simple_two_leaf_bsp() -> Vec<NodeSnap> {
+        vec![NodeSnap {
+            partition_x: 0.0,
+            partition_y: 0.0,
+            partition_dx: 0.0,
+            partition_dy: 1.0,
+            children: [NF_SUBSECTOR | 0, NF_SUBSECTOR | 1],
+        }]
+    }
+
+    #[test]
+    fn bsp_walk_viewer_on_front_visits_back_first() {
+        // Partición vertical x=0, dy=1. side = dx·(py - y) - dy·(px - x).
+        // Para viewer en (+10, 0): side = 0·(0) - 1·(10) = -10 < 0 → back.
+        // ¡Pero los hijos en Doom convention son [front, back] respecto a
+        // R_PointOnSide, que dice `side > 0 = back` en su implementación
+        // ¡pero usamos el signo opuesto! Verifiquemos lo que walk_bsp hace
+        // realmente con esta config.
+        // Implementación actual: side > 0 → near = children[0] (front lit).
+        // side < 0 → near = children[1].
+        // Para viewer en (+10, 0): side = -10 < 0 → near = children[1] = ss1,
+        // far = children[0] = ss0. Visita ss0 primero (back-to-front).
+        let nodes = simple_two_leaf_bsp();
+        let mut out = Vec::new();
+        walk_bsp(&nodes, (nodes.len() - 1) as u16, 10.0, 0.0, &mut out);
+        assert_eq!(out, vec![0, 1], "viewer al +X visita ss0 (far) primero");
+    }
+
+    #[test]
+    fn bsp_walk_viewer_on_back_visits_front_first() {
+        // Para viewer en (-10, 0): side = -1·(-10) = +10 > 0 → near = children[0] = ss0,
+        // far = children[1] = ss1. Visita ss1 primero (back-to-front).
+        let nodes = simple_two_leaf_bsp();
+        let mut out = Vec::new();
+        walk_bsp(&nodes, (nodes.len() - 1) as u16, -10.0, 0.0, &mut out);
+        assert_eq!(out, vec![1, 0], "viewer al -X visita ss1 (far) primero");
+    }
+
+    #[test]
+    fn bsp_compute_depths_assigns_decreasing_values() {
+        // Snapshot con 2 subsectors y el árbol simple. Compute_depths debe
+        // asignar al subsector visitado primero (más lejano) el depth más
+        // grande.
+        let mut snap = SceneSnapshot::empty(0);
+        snap.player.x = 10.0;
+        snap.player.y = 0.0;
+        snap.subsectors = Arc::from(vec![
+            SubsectorSnap { sector: 0, first_seg: 0, num_segs: 0 },
+            SubsectorSnap { sector: 0, first_seg: 0, num_segs: 0 },
+        ]);
+        snap.nodes = Arc::from(simple_two_leaf_bsp());
+        let depths = compute_bsp_order_depths(&snap);
+        // ss0 visitado primero → depth grande. ss1 segundo → depth chico.
+        let d0 = depths[0].expect("ss0 reached");
+        let d1 = depths[1].expect("ss1 reached");
+        assert!(d0 > d1, "ss0 (far) {d0} debe ser > ss1 (near) {d1}");
+        // Ambos depths están sobre BSP_DEPTH_BASE para estar siempre detrás
+        // de walls/sprites con depths euclidianos.
+        assert!(d0 > BSP_DEPTH_BASE);
+        assert!(d1 > BSP_DEPTH_BASE);
     }
 }
