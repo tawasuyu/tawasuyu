@@ -81,6 +81,22 @@ pub struct WallSeg {
     pub back_sector: u32,
     /// Flags Doom (`ML_BLOCKING`, `ML_TWOSIDED`, `ML_DONTPEGTOP`, etc.).
     pub flags: u32,
+    /// Texturas asignadas a la pared, por sidedef + kind (sin alocación).
+    /// Layout: `[front_mid, front_up, front_lo, back_mid, back_up, back_lo]`.
+    /// Cada slot son 8 chars (null-padded) del nombre del lump
+    /// TEXTURE1. Todo cero = sin textura asignada (slot vacío Doom
+    /// "no texture", convención id 0).
+    pub textures: [[u8; 8]; 6],
+}
+
+/// Helper: extrae el nombre de una entrada `[u8; 8]` como string ascii
+/// (recortando en el primer 0). Devuelve `None` si está vacío.
+pub fn texture_name(slot: &[u8; 8]) -> Option<&str> {
+    let end = slot.iter().position(|&c| c == 0).unwrap_or(8);
+    if end == 0 {
+        return None;
+    }
+    std::str::from_utf8(&slot[..end]).ok()
 }
 
 /// Marca de "sin sector trasero" en [`WallSeg::back_sector`].

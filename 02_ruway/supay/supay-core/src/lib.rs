@@ -255,6 +255,15 @@ extern "C" {
     /// Resuelve un `spritenum` al string 4-char de `sprnames[]`.
     /// `out` debe apuntar a un buffer de ≥ 5 bytes (4 chars + nul).
     fn supay_scene_sprite_name(spritenum: u16, out: *mut std::ffi::c_char) -> std::ffi::c_int;
+    /// Resuelve la textura de pared en (wall_idx, side, kind) al
+    /// nombre del lump TEXTURE1. `out` debe apuntar a ≥ 9 bytes.
+    /// side: 0=front, 1=back. kind: 0=middle, 1=upper, 2=lower.
+    fn supay_scene_wall_texture(
+        wall_idx: std::ffi::c_int,
+        side: std::ffi::c_int,
+        kind: std::ffi::c_int,
+        out: *mut std::ffi::c_char,
+    ) -> std::ffi::c_int;
 }
 
 // =====================================================================
@@ -365,6 +374,45 @@ impl DoomEngine {
                 return None;
             }
             // Convertir [i8; 9] null-terminated a String.
+            let mut end = buf.len();
+            for (i, &c) in buf.iter().enumerate() {
+                if c == 0 {
+                    end = i;
+                    break;
+                }
+            }
+            let bytes: Vec<u8> = buf[..end].iter().map(|&c| c as u8).collect();
+            String::from_utf8(bytes).ok()
+        }
+    }
+
+    /// Resuelve la textura de pared al nombre del lump.
+    /// `side`: 0=front, 1=back (back es `None` cuando one-sided).
+    /// `kind`: 0=middle, 1=upper, 2=lower.
+    /// Devuelve `None` si no hay sidedef, no hay textura asignada
+    /// (slot vacío con id 0), o estamos en modo stub.
+    pub fn wall_texture(&self, wall_idx: u32, side: u8, kind: u8) -> Option<String> {
+        #[cfg(doomgeneric_stub)]
+        {
+            let _ = (wall_idx, side, kind);
+            None
+        }
+        #[cfg(not(doomgeneric_stub))]
+        {
+            let mut buf = [0i8; 9];
+            // SAFETY: buf vive en este stack frame; la fn C escribe
+            // hasta 9 bytes (8 chars + nul).
+            let ok = unsafe {
+                supay_scene_wall_texture(
+                    wall_idx as std::ffi::c_int,
+                    side as std::ffi::c_int,
+                    kind as std::ffi::c_int,
+                    buf.as_mut_ptr(),
+                )
+            };
+            if ok == 0 {
+                return None;
+            }
             let mut end = buf.len();
             for (i, &c) in buf.iter().enumerate() {
                 if c == 0 {
@@ -493,6 +541,30 @@ fn capture_scene_real(tick: u64) -> SceneSnapshot {
             )
         };
         if ok != 0 {
+            // Texturas: leemos las 6 combinaciones (side × kind) ahora
+            // que el wall está aceptado. supay_scene_wall_texture
+            // devuelve 0 para slots vacíos — quedan como [0; 8].
+            let mut textures = [[0u8; 8]; 6];
+            for side in 0..2_u8 {
+                for kind in 0..3_u8 {
+                    let mut buf = [0i8; 9];
+                    // SAFETY: buf válido; fn C escribe ≤9 bytes.
+                    let tok = unsafe {
+                        supay_scene_wall_texture(
+                            i as std::ffi::c_int,
+                            side as std::ffi::c_int,
+                            kind as std::ffi::c_int,
+                            buf.as_mut_ptr(),
+                        )
+                    };
+                    if tok != 0 {
+                        let idx = side as usize * 3 + kind as usize;
+                        for j in 0..8 {
+                            textures[idx][j] = buf[j] as u8;
+                        }
+                    }
+                }
+            }
             walls.push(WallSeg {
                 x1,
                 y1,
@@ -501,6 +573,7 @@ fn capture_scene_real(tick: u64) -> SceneSnapshot {
                 front_sector: front,
                 back_sector: back,
                 flags,
+                textures,
             });
         }
     }
@@ -676,6 +749,7 @@ fn synth_snapshot(tick: u64) -> SceneSnapshot {
             front_sector: 0,
             back_sector: NO_SECTOR,
             flags: 0,
+            textures: [[0; 8]; 6],
         },
         // Norte: (0,256)→(256,256).
         WallSeg {
@@ -686,6 +760,7 @@ fn synth_snapshot(tick: u64) -> SceneSnapshot {
             front_sector: 0,
             back_sector: NO_SECTOR,
             flags: 0,
+            textures: [[0; 8]; 6],
         },
         // Este: (256,256)→(256,0).
         WallSeg {
@@ -696,6 +771,7 @@ fn synth_snapshot(tick: u64) -> SceneSnapshot {
             front_sector: 0,
             back_sector: NO_SECTOR,
             flags: 0,
+            textures: [[0; 8]; 6],
         },
         // Sur: (256,0)→(0,0).
         WallSeg {
@@ -706,6 +782,7 @@ fn synth_snapshot(tick: u64) -> SceneSnapshot {
             front_sector: 0,
             back_sector: NO_SECTOR,
             flags: 0,
+            textures: [[0; 8]; 6],
         },
     ];
     let sectors: Vec<SectorSnap> = vec![SectorSnap {

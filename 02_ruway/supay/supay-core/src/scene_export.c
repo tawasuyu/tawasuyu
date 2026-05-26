@@ -61,6 +61,22 @@ extern int skyflatnum;
 extern int firstflat;
 /* `lumpinfo` y `numlumps` están en w_wad.h pero los re-extern-amos
  * para claridad. */
+extern int numtextures;
+/* `textures` es `texture_t **` — array de punteros a `texture_t`.
+ * Cada `texture_t` tiene `char name[8]` (sin nul terminator garantizado)
+ * + width/height/patchcount. */
+struct texture_s {
+    char name[8];
+    short width;
+    short height;
+    int index;
+    void *next;
+    short patchcount;
+    /* patches[] follow; no los tocamos desde acá. */
+};
+extern struct texture_s **textures;
+extern side_t *sides;
+extern int numsides;
 
 static inline float ftox(fixed_t v) {
     /* FRACUNIT = 1<<16 = 65536. División por constante el compilador
@@ -258,6 +274,56 @@ int supay_scene_sprite_name(uint16_t spritenum, char out[5]) {
         }
     }
     out[4] = '\0';
+    return 1;
+}
+
+/* Resuelve una textura de pared al nombre del lump TEXTURE1.
+ *
+ * `wall_idx` = índice en `lines[]`.
+ * `side`     = 0=front (sidenum[0]), 1=back (sidenum[1]).
+ * `kind`     = 0=middle, 1=upper, 2=lower.
+ *
+ * Devuelve 1 si OK + nombre escrito a `out` (8 chars + nul); 0 si:
+ *   - wall fuera de rango, motor sin mapa cargado, sidedef inexistente
+ *   - textura id 0 ("no texture", convencion Doom para slots vacíos)
+ *
+ * Notas:
+ *   - sidenum[1] == -1 cuando la pared es one-sided.
+ *   - El renderer Rust prueba el nombre directamente como texture
+ *     compuesta (supay-wad::texture); si no existe, cae al color.
+ */
+int supay_scene_wall_texture(int wall_idx, int side, int kind, char out[9]) {
+    if (!lines || wall_idx < 0 || wall_idx >= numlines) {
+        return 0;
+    }
+    if (side != 0 && side != 1) {
+        return 0;
+    }
+    line_t *l = &lines[wall_idx];
+    short sn = l->sidenum[side];
+    if (sn < 0 || sn >= numsides || !sides) {
+        return 0;
+    }
+    side_t *sd = &sides[sn];
+    short tex_id;
+    switch (kind) {
+        case 0: tex_id = sd->midtexture; break;
+        case 1: tex_id = sd->toptexture; break;
+        case 2: tex_id = sd->bottomtexture; break;
+        default: return 0;
+    }
+    if (tex_id <= 0 || tex_id >= numtextures || !textures || !textures[tex_id]) {
+        return 0;
+    }
+    char *src = textures[tex_id]->name;
+    for (int i = 0; i < 8; i++) {
+        out[i] = src[i];
+        if (!src[i]) {
+            for (int j = i; j < 8; j++) out[j] = '\0';
+            break;
+        }
+    }
+    out[8] = '\0';
     return 1;
 }
 

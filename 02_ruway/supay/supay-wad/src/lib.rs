@@ -333,6 +333,126 @@ impl Wad {
         None
     }
 
+    /// Decodifica `PNAMES` — lista plana de nombres de patches que
+    /// `TEXTURE1` referencia por índice. Formato:
+    ///
+    /// ```text
+    /// num_patches  (i32 LE)
+    /// num_patches × 8 bytes  (nombre del patch, null-padded ASCII)
+    /// ```
+    ///
+    /// Devuelve los nombres normalizados a uppercase.
+    pub fn pnames(&self) -> Option<Vec<String>> {
+        let lump = self.lump("PNAMES")?;
+        if lump.len() < 4 {
+            return None;
+        }
+        let n = u32_le(&lump[0..4]) as usize;
+        let needed = 4 + n * 8;
+        if lump.len() < needed {
+            return None;
+        }
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let off = 4 + i * 8;
+            let raw = &lump[off..off + 8];
+            out.push(parse_lump_name(raw).to_ascii_uppercase());
+        }
+        Some(out)
+    }
+
+    /// Compone una textura de pared a partir de `TEXTURE1` + `PNAMES`.
+    ///
+    /// `TEXTURE1` formato:
+    ///
+    /// ```text
+    /// num_textures        (i32 LE)
+    /// offsets[num_textures] (i32 LE) — desde inicio del lump al maptexture
+    /// por cada texture:
+    ///   name      (8 bytes ASCII null-padded)
+    ///   masked    (i32 LE, unused)
+    ///   width     (i16 LE)
+    ///   height    (i16 LE)
+    ///   columndir (i32 LE, unused)
+    ///   patchcount (i16 LE)
+    ///   patchcount × 10 bytes:
+    ///     originx (i16) originy (i16) patch_idx (i16) stepdir (i16) colormap (i16)
+    /// ```
+    ///
+    /// La textura compuesta es `width × height` RGBA8, con todos los
+    /// patches blittered back-to-front en sus offsets. Pixels fuera de
+    /// cualquier patch quedan transparentes (alpha 0) — el caller
+    /// puede asumir opaco para texturas de pared one-sided.
+    ///
+    /// Devuelve `None` si la textura no existe, el lump está mal
+    /// formado, o algún patch referenciado falta.
+    pub fn texture(
+        &self,
+        name: &str,
+        palette: &[(u8, u8, u8); PALETTE_ENTRIES],
+    ) -> Option<Texture> {
+        let lump_t1 = self.lump("TEXTURE1").or_else(|| self.lump("TEXTURE2"))?;
+        let pnames = self.pnames()?;
+        let want = name.to_ascii_uppercase();
+        if lump_t1.len() < 4 {
+            return None;
+        }
+        let n = u32_le(&lump_t1[0..4]) as usize;
+        // Tabla de offsets a maptexture_t.
+        if lump_t1.len() < 4 + n * 4 {
+            return None;
+        }
+        for i in 0..n {
+            let off = u32_le(&lump_t1[4 + i * 4..4 + i * 4 + 4]) as usize;
+            if off + 22 > lump_t1.len() {
+                continue;
+            }
+            let raw_name = &lump_t1[off..off + 8];
+            let tname = parse_lump_name(raw_name).to_ascii_uppercase();
+            if tname != want {
+                continue;
+            }
+            let width = i16::from_le_bytes([lump_t1[off + 12], lump_t1[off + 13]]) as i32;
+            let height = i16::from_le_bytes([lump_t1[off + 14], lump_t1[off + 15]]) as i32;
+            let patchcount =
+                i16::from_le_bytes([lump_t1[off + 20], lump_t1[off + 21]]) as usize;
+            if width <= 0 || height <= 0 || width > 4096 || height > 4096 {
+                return None;
+            }
+            let w = width as usize;
+            let h = height as usize;
+            let mut rgba = vec![0u8; w * h * 4]; // alpha 0 por defecto
+            let patches_off = off + 22;
+            if patches_off + patchcount * 10 > lump_t1.len() {
+                return None;
+            }
+            for pi in 0..patchcount {
+                let po = patches_off + pi * 10;
+                let originx = i16::from_le_bytes([lump_t1[po], lump_t1[po + 1]]) as i32;
+                let originy = i16::from_le_bytes([lump_t1[po + 2], lump_t1[po + 3]]) as i32;
+                let patch_idx =
+                    i16::from_le_bytes([lump_t1[po + 4], lump_t1[po + 5]]) as usize;
+                let Some(pname) = pnames.get(patch_idx) else {
+                    continue;
+                };
+                let Some(patch) = self.patch_rgba(pname, palette) else {
+                    continue;
+                };
+                blit_patch(&mut rgba, w, h, &patch, originx, originy);
+            }
+            // Forzar alpha 255 en cualquier pixel cubierto por al menos
+            // un patch (ya quedó así arriba). Pixels nunca cubiertos
+            // siguen alpha 0 — para una pared sólida típica esto no
+            // pasa, pero para masked textures (rejas) sí importa.
+            return Some(Texture {
+                width: w as u16,
+                height: h as u16,
+                rgba,
+            });
+        }
+        None
+    }
+
     /// Decodifica un lump en formato "patch" (sprites + wall patches) a
     /// RGBA8 con transparencia. El formato:
     ///
@@ -377,6 +497,52 @@ pub struct Patch {
     pub topoffset: i16,
     /// `width × height × 4` bytes (RGBA8). Stride = `width × 4`.
     pub rgba: Vec<u8>,
+}
+
+/// Textura de pared compuesta a partir de patches via TEXTURE1/PNAMES.
+#[derive(Clone, Debug)]
+pub struct Texture {
+    pub width: u16,
+    pub height: u16,
+    /// `width × height × 4` bytes RGBA8.
+    pub rgba: Vec<u8>,
+}
+
+/// Blitta un `Patch` ya decodificado al buffer de la textura en
+/// `(originx, originy)`. Pixels transparentes del patch (alpha 0)
+/// no escriben — eso es lo que permite que TEXTURE1 componga
+/// múltiples patches superpuestos con máscaras.
+fn blit_patch(
+    dst: &mut [u8],
+    dst_w: usize,
+    dst_h: usize,
+    patch: &Patch,
+    originx: i32,
+    originy: i32,
+) {
+    let pw = patch.width as i32;
+    let ph = patch.height as i32;
+    for py in 0..ph {
+        let dy = originy + py;
+        if dy < 0 || dy >= dst_h as i32 {
+            continue;
+        }
+        for px in 0..pw {
+            let dx = originx + px;
+            if dx < 0 || dx >= dst_w as i32 {
+                continue;
+            }
+            let p_off = ((py * pw + px) * 4) as usize;
+            if patch.rgba[p_off + 3] == 0 {
+                continue;
+            }
+            let d_off = ((dy as usize) * dst_w + (dx as usize)) * 4;
+            dst[d_off] = patch.rgba[p_off];
+            dst[d_off + 1] = patch.rgba[p_off + 1];
+            dst[d_off + 2] = patch.rgba[p_off + 2];
+            dst[d_off + 3] = 0xFF;
+        }
+    }
 }
 
 fn read_i16_le(b: &[u8], off: usize) -> Option<i16> {

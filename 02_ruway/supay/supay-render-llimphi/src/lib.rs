@@ -108,6 +108,9 @@ struct AtlasInner {
     /// indica que el patch corresponde a un lump combinado tipo
     /// `TROOA2A8` y debe pintarse horizontalmente espejado.
     sprite_patches: HashMap<(u16, u8, u8), Option<(Arc<supay_wad::Patch>, bool)>>,
+    /// Cache de texturas de pared compuestas por nombre. `None` para
+    /// nombres que no resuelven en TEXTURE1.
+    wall_textures: HashMap<String, Option<Arc<supay_wad::Texture>>>,
 }
 
 impl std::fmt::Debug for WadAtlas {
@@ -135,6 +138,7 @@ impl WadAtlas {
                 color_cache: HashMap::new(),
                 sprite_names: HashMap::new(),
                 sprite_patches: HashMap::new(),
+                wall_textures: HashMap::new(),
             }),
         }
     }
@@ -230,6 +234,23 @@ impl WadAtlas {
         });
         if let Ok(mut inner) = self.inner.lock() {
             inner.sprite_patches.insert(key, decoded.clone());
+        }
+        decoded
+    }
+
+    /// Recupera (decodificando + cacheando) la textura de pared
+    /// compuesta `name` (de TEXTURE1). Devuelve `None` si no existe
+    /// o no parsea. Cache: `Some(Arc<Texture>)` o `None` para misses.
+    pub fn wall_texture(&self, name: &str) -> Option<Arc<supay_wad::Texture>> {
+        let key = name.to_ascii_uppercase();
+        if let Ok(inner) = self.inner.lock() {
+            if let Some(cached) = inner.wall_textures.get(&key) {
+                return cached.clone();
+            }
+        }
+        let decoded = self.wad.texture(&key, &self.palette).map(Arc::new);
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.wall_textures.insert(key, decoded.clone());
         }
         decoded
     }
@@ -378,6 +399,15 @@ fn render_frame(scene: &mut Scene, rect: PaintRect, snap: &SceneSnapshot, cfg: &
             RenderKind::Sprite { image, xform } => {
                 scene.draw_image(image, *xform);
             }
+            RenderKind::TexturedWall { image, brush_xform } => {
+                scene.fill(
+                    Fill::NonZero,
+                    Affine::IDENTITY,
+                    image,
+                    Some(*brush_xform),
+                    &r.path,
+                );
+            }
         }
     }
 }
@@ -390,14 +420,22 @@ struct Renderable {
 }
 
 enum RenderKind {
-    /// Fill sólido del `path` con `color`. Walls, floors, ceilings,
-    /// sprites fallback.
+    /// Fill sólido del `path` con `color`. Walls fallback, floors,
+    /// ceilings, sprites fallback.
     Fill,
     /// `scene.draw_image(image, xform)` — `path` y `color` se ignoran.
     /// Sprites texturizados desde el WAD.
     Sprite {
         image: llimphi_ui::llimphi_raster::peniko::Image,
         xform: Affine,
+    },
+    /// Pared texturizada: fill del `path` con la `image` (Extend::Repeat
+    /// activado) usando `brush_xform` como brush_transform — vello
+    /// rellena el polígono samplando el image tileado en world coords.
+    /// `color` se ignora.
+    TexturedWall {
+        image: llimphi_ui::llimphi_raster::peniko::Image,
+        brush_xform: Affine,
     },
 }
 
@@ -608,38 +646,136 @@ fn gather_wall(
     }
 
     // -----------------------------------------------------------------
-    // Wall slabs subdivididas en bandas horizontales.
+    // Wall slabs: texturizadas si hay textura asignada + atlas; sino
+    // fallback a bandas horizontales con shading procedural.
     // -----------------------------------------------------------------
+    // Index del slab actual en `slabs`: i=0 puede ser lower o solid,
+    // i=1 (si existe) es upper. `slab_kind_for(i, n_slabs, far_sec)`
+    // resuelve cuál sidedef-kind aplica (0=mid, 1=upper, 2=lower).
     let bands = cfg.wall_bands.max(1);
-    for &(z_bot, z_top, sec) in &slabs[..n_slabs] {
+    let wall_len = ((wall.x2 - wall.x1).powi(2) + (wall.y2 - wall.y1).powi(2)).sqrt().max(1e-3);
+    for (slab_i, &(z_bot, z_top, sec)) in (&slabs[..n_slabs]).iter().enumerate() {
         if z_top <= z_bot {
             continue;
         }
-        for b in 0..bands {
-            let t0 = b as f32 / bands as f32;
-            let t1 = (b + 1) as f32 / bands as f32;
-            // Banda b ocupa z ∈ [lerp(z_bot, z_top, t0), lerp(...t1)].
-            // El índice 0 es la banda inferior (cerca del piso),
-            // bands-1 la superior.
-            let zb = (z_bot + (z_top - z_bot) * t0) - cam.view_z;
-            let zt = (z_bot + (z_top - z_bot) * t1) - cam.view_z;
-            let bl = proj.project(x1, y1, zb);
-            let tl = proj.project(x1, y1, zt);
-            let tr = proj.project(x2, y2, zt);
-            let br = proj.project(x2, y2, zb);
-            let mut path = BezPath::new();
-            path.move_to(bl);
-            path.line_to(tl);
-            path.line_to(tr);
-            path.line_to(br);
-            path.close_path();
+        let zb = z_bot - cam.view_z;
+        let zt = z_top - cam.view_z;
+        let bl = proj.project(x1, y1, zb);
+        let tl = proj.project(x1, y1, zt);
+        let tr = proj.project(x2, y2, zt);
+        let br = proj.project(x2, y2, zb);
+
+        // ¿Hay textura asignada? Front side (0) o back side (1) según
+        // qué lado del linedef ve el jugador. kind según slab_i.
+        let side_idx = if on_front { 0usize } else { 1usize };
+        let kind = wall_slab_kind(slab_i, n_slabs, far_sec.is_some());
+        let tex_slot = wall.textures.get(side_idx * 3 + kind);
+        let tex_name = tex_slot.and_then(|s| supay_scene::texture_name(s));
+        let tex = tex_name.and_then(|n| cfg.atlas.as_ref().and_then(|a| a.wall_texture(n)));
+
+        let mut path = BezPath::new();
+        path.move_to(bl);
+        path.line_to(tl);
+        path.line_to(tr);
+        path.line_to(br);
+        path.close_path();
+
+        if let Some(tex) = tex {
+            // Texturizado: una sola fill con image brush + Extend::Repeat.
+            // Affine: image pixel (u, v) → scene point
+            //   tl + u·step_u + v·step_v
+            //   donde step_u = (tr - tl) / wall_len_world  (1 image px = 1 world unit)
+            //         step_v = (bl - tl) / slab_h_world
+            // Repeat extend tilea texturas más cortas que la pared.
+            use llimphi_ui::llimphi_raster::peniko::{Blob, Extend, Image, ImageFormat};
+            let slab_h = (z_top - z_bot).max(1e-3);
+            let step_ux = (tr.x - tl.x) / wall_len as f64;
+            let step_uy = (tr.y - tl.y) / wall_len as f64;
+            let step_vx = (bl.x - tl.x) / slab_h as f64;
+            let step_vy = (bl.y - tl.y) / slab_h as f64;
+            let xform = Affine::new([step_ux, step_uy, step_vx, step_vy, tl.x, tl.y]);
+            let img = Image::new(
+                Blob::from(tex.rgba.clone()),
+                ImageFormat::Rgba8,
+                tex.width as u32,
+                tex.height as u32,
+            )
+            .with_extend(Extend::Repeat);
             out.push(Renderable {
                 depth,
-                color: wall_color(wall_idx, wall, sec, depth, b, bands, cfg),
+                color: Color::WHITE, // unused
                 path,
-                kind: RenderKind::Fill,
+                kind: RenderKind::TexturedWall {
+                    image: img,
+                    brush_xform: xform,
+                },
             });
+            // Overlay de shade para que las paredes texturizadas no se
+            // vean siempre full bright. Dark fill con alpha = (1-shade).
+            let shade = shade_for(sec.light_level, depth, cfg);
+            if shade < 0.95 {
+                let mut overlay = BezPath::new();
+                overlay.move_to(bl);
+                overlay.line_to(tl);
+                overlay.line_to(tr);
+                overlay.line_to(br);
+                overlay.close_path();
+                let alpha = ((1.0 - shade) * 255.0) as u8;
+                out.push(Renderable {
+                    depth: depth - 0.001, // ligeramente "delante" → pintado después → encima
+                    color: Color::from_rgba8(0, 0, 0, alpha),
+                    path: overlay,
+                    kind: RenderKind::Fill,
+                });
+            }
+        } else {
+            // Fallback: bandas horizontales coloreadas (3.1 behavior).
+            for b in 0..bands {
+                let t0 = b as f32 / bands as f32;
+                let t1 = (b + 1) as f32 / bands as f32;
+                let zb_b = (z_bot + (z_top - z_bot) * t0) - cam.view_z;
+                let zt_b = (z_bot + (z_top - z_bot) * t1) - cam.view_z;
+                let bl_b = proj.project(x1, y1, zb_b);
+                let tl_b = proj.project(x1, y1, zt_b);
+                let tr_b = proj.project(x2, y2, zt_b);
+                let br_b = proj.project(x2, y2, zb_b);
+                let mut p = BezPath::new();
+                p.move_to(bl_b);
+                p.line_to(tl_b);
+                p.line_to(tr_b);
+                p.line_to(br_b);
+                p.close_path();
+                out.push(Renderable {
+                    depth,
+                    color: wall_color(wall_idx, wall, sec, depth, b, bands, cfg),
+                    path: p,
+                    kind: RenderKind::Fill,
+                });
+            }
         }
+    }
+}
+
+/// Resuelve el `kind` del sidedef (0=mid, 1=upper, 2=lower) para un
+/// slab dado. Convención:
+/// - Pared one-sided: hay un único slab → middle.
+/// - Pared two-sided con n_slabs=1: el step expuesto → upper si
+///   `far.ceiling < near.ceiling`, sino lower. (Reconstruimos del
+///   orden en que `gather_wall` los emite — siempre lower primero.)
+/// - Two-sided con n_slabs=2: slab_i=0 es lower, slab_i=1 es upper.
+fn wall_slab_kind(slab_i: usize, n_slabs: usize, two_sided: bool) -> usize {
+    if !two_sided {
+        return 0; // middle
+    }
+    // En el path two-sided: gather_wall pushea lower primero (si visible)
+    // y upper después. Sin n_slabs=1 sabemos cuál tipo. Aproximamos:
+    if n_slabs == 2 {
+        if slab_i == 0 { 2 } else { 1 }
+    } else {
+        // Un único slab two-sided: no podemos distinguir lower vs upper
+        // sin más info. Default a upper (más común en mapas E1M1: techos
+        // bajos sobre puertas).
+        1
     }
 }
 
@@ -1241,6 +1377,7 @@ mod tests {
             front_sector: 0,
             back_sector: NO_SECTOR,
             flags: 0,
+            textures: [[0; 8]; 6],
         };
         let cfg = RenderConfig::default();
         let c_bot = wall_color(7, &wall, &sec, 100.0, 0, 4, &cfg);
