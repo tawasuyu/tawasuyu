@@ -873,23 +873,7 @@ impl App for Dominium {
     }
 }
 
-/// Construye el Theme efectivo desde `wawa-config`. Si el variant del
-/// bus no se reconoce, conserva `fallback`. Si hay `accent` override,
-/// le sobreescribe `accent` y `border_focus`. Espejo del helper en
-/// gioser-edit — repetido por simplicidad (5 líneas), si aparece un
-/// tercero conviene factorizarlo a `wawa-config` con feature flag de
-/// llimphi-theme.
-fn theme_from_wawa(cfg: &wawa_config::WawaConfig, fallback: &Theme) -> Theme {
-    let mut t = wawa_config::canonical_theme_name(&cfg.theme_variant)
-        .and_then(Theme::by_name)
-        .unwrap_or(*fallback);
-    if let Some([r, g, b]) = wawa_config::accent_rgb(&cfg.accent) {
-        let c = llimphi_ui::llimphi_raster::peniko::Color::from_rgba8(r, g, b, 255);
-        t.accent = c;
-        t.border_focus = c;
-    }
-    t
-}
+use wawa_config_llimphi::theme_from_wawa;
 
 fn main() {
     rimay_localize::init();

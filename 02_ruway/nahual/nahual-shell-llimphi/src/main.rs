@@ -49,6 +49,7 @@ use nahual_text_viewer_llimphi::{
     load_preview, text_viewer_view, PreviewState, TextViewerPalette,
     DEFAULT_PREVIEW_BYTES_MAX,
 };
+use wawa_config_llimphi::theme_from_wawa;
 
 fn main() {
     llimphi_ui::run::<Shell>();
@@ -72,6 +73,9 @@ struct Model {
     preview: PreviewPane,
     /// Path del archivo previsualizado (header del panel derecho).
     preview_of: Option<PathBuf>,
+    theme: Theme,
+    /// Suscripción al bus de configuración del SO.
+    _wawa_watcher: Option<wawa_config::ConfigWatcher>,
 }
 
 #[derive(Clone)]
@@ -85,6 +89,8 @@ enum Msg {
     Scroll(i32),
     /// Drag del divisor — positivo = lista crece.
     ResizeList(f32),
+    /// El bus `wawa-config` publicó una versión nueva.
+    WawaConfigChanged(Box<wawa_config::WawaConfig>),
 }
 
 struct Shell;
@@ -101,13 +107,23 @@ impl App for Shell {
         (1200, 800)
     }
 
-    fn init(_: &Handle<Self::Msg>) -> Self::Model {
+    fn init(handle: &Handle<Self::Msg>) -> Self::Model {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+        let cfg = wawa_config::WawaConfig::load();
+        let theme = theme_from_wawa(&cfg, &Theme::dark());
+        let handle_clone = handle.clone();
+        let watcher = wawa_config::ConfigWatcher::spawn(move |new_cfg| {
+            handle_clone.dispatch(Msg::WawaConfigChanged(Box::new(new_cfg)));
+        })
+        .map_err(|e| eprintln!("nahual-shell · wawa-config watcher: {e}"))
+        .ok();
         Model {
             explorer: FileExplorerState::new(cwd),
             list_width: 400.0,
             preview: PreviewPane::Empty,
             preview_of: None,
+            theme,
+            _wawa_watcher: watcher,
         }
     }
 
@@ -182,12 +198,17 @@ impl App for Shell {
                 // touchpads — le pasamos el delta crudo (en líneas).
                 m.explorer.apply_wheel(steps as f32);
             }
+            Msg::WawaConfigChanged(cfg) => {
+                m.theme = theme_from_wawa(&cfg, &m.theme);
+                // nahual-shell no usa rimay_localize hoy; si en el
+                // futuro lo hace, agregar el set_locale acá.
+            }
         }
         m
     }
 
     fn view(model: &Self::Model) -> View<Self::Msg> {
-        let theme = Theme::dark();
+        let theme = model.theme;
         let splitter_palette = SplitterPalette::from_theme(&theme);
         let text_palette = TextViewerPalette::from_theme(&theme);
         let image_palette = ImageViewerPalette::from_theme(&theme);

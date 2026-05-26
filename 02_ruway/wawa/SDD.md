@@ -126,25 +126,46 @@ lanzan independientemente desde el usuario y no son entes hijos.
 
 ## Quién es consumidor hoy
 
-| Crate | Rol | Qué consume |
-|---|---|---|
-| `wawa-panel-llimphi` | productor + consumidor | todo |
-| `gioser-edit` | consumidor | `theme_variant`, `accent`, `lang` |
-| `dominium-app-llimphi` | consumidor | `theme_variant`, `accent`, `lang` |
-| `wawactl` | productor + consumidor | todo (CLI) |
+| Crate | Cuadrante | Rol | Qué consume |
+|---|---|---|---|
+| `wawa-panel-llimphi` | 02_ruway | productor + consumidor | todo |
+| `wawactl` | 02_ruway | productor + consumidor | todo (CLI) |
+| `gioser-edit` | 02_ruway | consumidor | theme, accent, lang |
+| `nahual-shell-llimphi` | 02_ruway | consumidor | theme, accent |
+| `dominium-app-llimphi` | 01_yachay | consumidor | theme, accent, lang |
+| `cosmos-app-llimphi` | 01_yachay | consumidor | theme, accent, lang |
+| `nakui-explorer-llimphi` | 01_yachay | consumidor | theme, accent, lang |
 
 Cualquier app Llimphi puede sumarse en ~30 líneas siguiendo la
 sección **Consumidor**.
 
-### Helper `theme_from_wawa`
+### `shared/wawa-config-llimphi`
 
-Las apps Llimphi que toman el theme del bus repiten un helper de
-unas 10 líneas (`theme_from_wawa(cfg, fallback) -> Theme`) que toma
-el `theme_variant` canonicalizado y aplica `accent_rgb` como
-override. Está duplicado en `gioser-edit` y `dominium-app-llimphi`.
-Cuando aparezca un tercer consumidor conviene factorizarlo a un
-crate `shared/wawa-config-llimphi` (o exponer `wawa-config` con un
-feature `llimphi` que sume la dep a `llimphi-theme`).
+Adaptador Llimphi del bus. Expone un único helper:
+
+```rust
+pub fn theme_from_wawa(cfg: &WawaConfig, fallback: &Theme) -> Theme;
+```
+
+Existe para no obligar a `wawa-config` (UI-agnóstico) a depender de
+`llimphi-theme`. Los consumidores Llimphi importan ambos: `wawa-config`
+para `WawaConfig`/`ConfigWatcher`, y `wawa-config-llimphi` para el
+helper. 4 tests unitarios cubren los 4 caminos (variant base,
+override de acento, variant desconocido → fallback, accent default
+= no override).
+
+**Por qué crate separado y no feature flag**: features en `wawa-config`
+contaminarían sus tests (Llimphi arrastra winit + wgpu en CI). Un
+crate dedicado mantiene el grafo limpio para herramientas no-GUI.
+
+### Qué no encaja
+
+- **`mirada-bar-core` / `mirada-bar-web`** no son apps Llimphi sino
+  taskbar DOM (HTML+CSS+JS sobre wasm-bindgen). El patrón de
+  `Handle<Msg>` + `ConfigWatcher` no aplica directo. Si en el
+  futuro se quisiera sincronizar el theme entre el escritorio web y
+  el SO, el path es escribir un proxy HTTP/WebSocket que lea el
+  archivo y lo emita a la página por SSE — eso es trabajo aparte.
 
 ## Cómo probar el bus
 

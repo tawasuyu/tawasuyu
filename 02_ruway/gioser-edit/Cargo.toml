@@ -34,3 +34,4 @@ llimphi-widget-text-input = { workspace = true }
 llimphi-widget-tree = { workspace = true }
 rimay-localize = { path = "../../shared/rimay-localize" }
 wawa-config = { path = "../../shared/wawa-config" }
+wawa-config-llimphi = { path = "../../shared/wawa-config-llimphi" }

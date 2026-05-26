@@ -37,6 +37,7 @@ use llimphi_ui::{App, Handle, View};
 use llimphi_widget_app_header::{app_header, AppHeaderPalette};
 use llimphi_widget_banner::{banner_view, BannerKind};
 use llimphi_widget_card::{card_view, CardOptions, CardPalette};
+use wawa_config_llimphi::theme_from_wawa;
 
 use nahual_meta_runtime::format::{preview_value, short_hash, short_uuid};
 use nakui_core::event_log::{EventLog, LogEntry};
@@ -50,6 +51,8 @@ const ACCENT_MORPHISM: Color = Color::from_rgba8(0xa3, 0xbe, 0x8c, 0xff);
 #[derive(Clone)]
 enum Msg {
     Reload,
+    /// El bus `wawa-config` publicó una versión nueva.
+    WawaConfigChanged(Box<wawa_config::WawaConfig>),
 }
 
 struct Model {
@@ -58,6 +61,9 @@ struct Model {
     /// fuera del lock del Model. `Msg::Reload` es la señal de "una
     /// pasada ocurrió, leé la versión nueva".
     shared: Arc<Mutex<SharedState>>,
+    theme: Theme,
+    /// Suscripción al bus de configuración del SO.
+    _wawa_watcher: Option<wawa_config::ConfigWatcher>,
 }
 
 struct SharedState {
@@ -103,18 +109,40 @@ impl App for Explorer {
             Msg::Reload
         });
 
-        Model { log_path, shared }
+        // Bus de configuración del SO: theme + locale en vivo.
+        let cfg = wawa_config::WawaConfig::load();
+        let theme = theme_from_wawa(&cfg, &Theme::dark());
+        let _ = rimay_localize::set_locale(&cfg.lang);
+        let handle_clone = handle.clone();
+        let watcher = wawa_config::ConfigWatcher::spawn(move |new_cfg| {
+            handle_clone.dispatch(Msg::WawaConfigChanged(Box::new(new_cfg)));
+        })
+        .map_err(|e| eprintln!("nakui-explorer · wawa-config watcher: {e}"))
+        .ok();
+
+        Model { log_path, shared, theme, _wawa_watcher: watcher }
     }
 
-    fn update(model: Model, _: Msg, _: &Handle<Msg>) -> Model {
-        // El sampler ya escribió en `shared` antes de despachar. El
-        // update sólo necesita disparar el re-render — el `view` lee
-        // del `shared` lockeando.
-        model
+    fn update(model: Model, msg: Msg, _: &Handle<Msg>) -> Model {
+        let mut m = model;
+        match msg {
+            Msg::Reload => {
+                // El sampler ya escribió en `shared` antes de
+                // despachar. El update sólo dispara el re-render — el
+                // `view` lee del `shared` lockeando.
+            }
+            Msg::WawaConfigChanged(cfg) => {
+                m.theme = theme_from_wawa(&cfg, &m.theme);
+                if cfg.lang != rimay_localize::current_locale() {
+                    let _ = rimay_localize::set_locale(&cfg.lang);
+                }
+            }
+        }
+        m
     }
 
     fn view(model: &Model) -> View<Msg> {
-        let theme = Theme::dark();
+        let theme = model.theme;
         let snapshot = model.shared.lock().unwrap();
         let entries = &snapshot.entries;
 

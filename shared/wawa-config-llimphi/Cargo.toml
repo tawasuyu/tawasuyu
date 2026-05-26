@@ -1,0 +1,12 @@
+[package]
+name = "wawa-config-llimphi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Adaptador Llimphi para wawa-config: ensambla el Theme efectivo a partir del WawaConfig (variant + accent override). Existe para no obligar a `wawa-config` a depender de `llimphi-theme` (sigue UI-agnóstico)."
+
+[dependencies]
+llimphi-theme = { workspace = true }
+wawa-config = { path = "../wawa-config" }

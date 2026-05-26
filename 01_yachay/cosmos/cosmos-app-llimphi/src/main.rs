@@ -22,14 +22,21 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, View};
+use wawa_config_llimphi::theme_from_wawa;
 
 const WHEEL_SIZE: f32 = 720.0;
 
 #[derive(Clone)]
-enum Msg {}
+enum Msg {
+    /// El bus `wawa-config` publicó una versión nueva.
+    WawaConfigChanged(Box<wawa_config::WawaConfig>),
+}
 
 struct Model {
     render: RenderModel,
+    theme: Theme,
+    /// Suscripción al bus. Mantiene vivo el watcher.
+    _wawa_watcher: Option<wawa_config::ConfigWatcher>,
 }
 
 struct Cosmos;
@@ -46,16 +53,38 @@ impl App for Cosmos {
         (980, 800)
     }
 
-    fn init(_: &Handle<Msg>) -> Model {
-        Model { render: mock_model() }
+    fn init(handle: &Handle<Msg>) -> Model {
+        let cfg = wawa_config::WawaConfig::load();
+        let theme = theme_from_wawa(&cfg, &Theme::dark());
+        let _ = rimay_localize::set_locale(&cfg.lang);
+        let handle_clone = handle.clone();
+        let watcher = wawa_config::ConfigWatcher::spawn(move |new_cfg| {
+            handle_clone.dispatch(Msg::WawaConfigChanged(Box::new(new_cfg)));
+        })
+        .map_err(|e| eprintln!("cosmos · wawa-config watcher: {e}"))
+        .ok();
+        Model {
+            render: mock_model(),
+            theme,
+            _wawa_watcher: watcher,
+        }
     }
 
-    fn update(model: Model, _: Msg, _: &Handle<Msg>) -> Model {
-        model
+    fn update(model: Model, msg: Msg, _: &Handle<Msg>) -> Model {
+        let mut m = model;
+        match msg {
+            Msg::WawaConfigChanged(cfg) => {
+                m.theme = theme_from_wawa(&cfg, &m.theme);
+                if cfg.lang != rimay_localize::current_locale() {
+                    let _ = rimay_localize::set_locale(&cfg.lang);
+                }
+            }
+        }
+        m
     }
 
     fn view(model: &Model) -> View<Msg> {
-        let theme = Theme::dark();
+        let theme = model.theme;
         let opts = CompositionOpts {
             size: WHEEL_SIZE,
             rot_offset_deg: 0.0,

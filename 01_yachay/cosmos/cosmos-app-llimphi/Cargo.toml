@@ -18,3 +18,5 @@ cosmos-render = { path = "../cosmos-render" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 rimay-localize = { path = "../../../shared/rimay-localize" }
+wawa-config = { path = "../../../shared/wawa-config" }
+wawa-config-llimphi = { path = "../../../shared/wawa-config-llimphi" }

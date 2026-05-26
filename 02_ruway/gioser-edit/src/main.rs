@@ -2987,22 +2987,7 @@ fn restore_session(mut model: Model, sess: Session) -> Model {
     model
 }
 
-/// Construye el Theme efectivo a partir de la config del bus. Toma el
-/// `theme_variant` con `Theme::by_name` (via `canonical_theme_name`) y,
-/// si hay `accent` override, le sobreescribe `accent` y `border_focus`.
-/// Si no encuentra el variant del bus, conserva el `fallback` (lo
-/// usamos para no perder un theme valido al recibir basura).
-fn theme_from_wawa(cfg: &wawa_config::WawaConfig, fallback: &Theme) -> Theme {
-    let mut t = wawa_config::canonical_theme_name(&cfg.theme_variant)
-        .and_then(Theme::by_name)
-        .unwrap_or(*fallback);
-    if let Some([r, g, b]) = wawa_config::accent_rgb(&cfg.accent) {
-        let c = llimphi_ui::llimphi_raster::peniko::Color::from_rgba8(r, g, b, 255);
-        t.accent = c;
-        t.border_focus = c;
-    }
-    t
-}
+use wawa_config_llimphi::theme_from_wawa;
 
 fn main() {
     rimay_localize::init();
