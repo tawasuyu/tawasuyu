@@ -39,7 +39,7 @@ use pluma_editor_llimphi::multilienzo::{
 };
 use pluma_editor_llimphi::Palette;
 use pluma_graph::NarrativeGraph;
-use pluma_llm::from_env as llm_from_env;
+use pluma_llm::{build_client, from_env as llm_from_env, BackendKind, LlmConfig};
 use pluma_llm_core::ChatClient;
 use pluma_store::{EstadoUi, PlumaStore};
 use pluma_transform::{TipoTransformacion, Transformacion};
@@ -79,6 +79,11 @@ enum Msg {
     /// Consulta el store por la `Transformacion` original (madre → hija)
     /// y re-aplica con la madre actualizada. Un click = una hija.
     RegenerarSiguienteStale,
+    /// Cicla al siguiente backend LLM en la lista
+    /// `mock → gemini → anthropic → deepseek → cohere → ollama → mock`.
+    /// Si el backend no está configurado (env key ausente), conserva el
+    /// anterior y muestra error en la status bar.
+    CiclarBackend,
 }
 
 struct Model {
@@ -86,6 +91,9 @@ struct Model {
     graph: NarrativeGraph,
     cartas: Vec<CartaHebras>,
     chat: Arc<dyn ChatClient>,
+    /// Backend actualmente activo — para mostrarlo en la toolbar y
+    /// para ciclar al siguiente con `Msg::CiclarBackend`.
+    backend: BackendKind,
     store: Arc<PlumaStore>,
     en_curso: bool,
     ultimo_error: Option<String>,
@@ -185,11 +193,12 @@ impl App for Demo {
         let sled_path = cache_dir.join("pluma.sled");
         let store = Arc::new(PlumaStore::open(&sled_path).expect("abrir PlumaStore"));
 
-        let chat = construir_chat();
+        let (chat, backend) = construir_chat();
         eprintln!(
-            "multilienzo_completo_demo :: store={} · LLM={}",
+            "multilienzo_completo_demo :: store={} · LLM={} ({})",
             sled_path.display(),
-            chat.model_id()
+            chat.model_id(),
+            etiqueta_backend(backend),
         );
 
         // Cargar lo que haya en disco; si nada, sembrar madre es base.
@@ -198,10 +207,10 @@ impl App for Demo {
                 "multilienzo_completo_demo :: cargando {} cuerpos de disco",
                 store.cuerpos_len()
             );
-            cargar_de_store(store.clone(), chat)
+            cargar_de_store(store.clone(), chat, backend)
         } else {
             eprintln!("multilienzo_completo_demo :: sembrando madre es base");
-            sembrar_madre_base(store.clone(), chat)
+            sembrar_madre_base(store.clone(), chat, backend)
         };
         // Restaurar estado UI persistido — focus, búsqueda, scroll
         // sobreviven al cierre del proceso.
@@ -319,6 +328,38 @@ impl App for Demo {
                     );
                 }
             }
+            Msg::CiclarBackend => {
+                let siguiente = siguiente_backend(m.backend);
+                match build_client(&LlmConfig {
+                    kind: siguiente,
+                    model: if matches!(siguiente, BackendKind::Ollama) {
+                        Some("llama3.1".into())
+                    } else {
+                        None
+                    },
+                    api_key: None,
+                    endpoint: None,
+                }) {
+                    Ok(c) => {
+                        eprintln!(
+                            "multilienzo_completo_demo :: backend cambiado a {} ({})",
+                            etiqueta_backend(siguiente),
+                            c.model_id()
+                        );
+                        m.chat = c;
+                        m.backend = siguiente;
+                        m.ultimo_error = None;
+                        persistir_estado_ui(&m);
+                    }
+                    Err(e) => {
+                        eprintln!("backend {siguiente:?} no disponible: {e}");
+                        m.ultimo_error = Some(format!(
+                            "{} no disponible — falta env key u Ollama",
+                            etiqueta_backend(siguiente)
+                        ));
+                    }
+                }
+            }
             Msg::RegenerarSiguienteStale => {
                 if m.en_curso || m.cuerpos.is_empty() {
                     return m;
@@ -432,6 +473,7 @@ impl App for Demo {
             model.solo_madre,
             &model.busqueda,
             n_stale,
+            model.backend,
         );
 
         View::new(Style {
@@ -445,6 +487,37 @@ impl App for Demo {
         .fill(palette.bg_app)
         .clip(true)
         .children(vec![toolbar, cuerpos_view])
+    }
+}
+
+/// Ciclo fijo de backends para el botón "modelo: X". Empieza por mock
+/// porque siempre está disponible — si el siguiente real falla por
+/// falta de env, volver a mock recupera control.
+const CICLO_BACKENDS: [BackendKind; 6] = [
+    BackendKind::Mock,
+    BackendKind::Gemini,
+    BackendKind::Anthropic,
+    BackendKind::DeepSeek,
+    BackendKind::Cohere,
+    BackendKind::Ollama,
+];
+
+fn siguiente_backend(actual: BackendKind) -> BackendKind {
+    let i = CICLO_BACKENDS
+        .iter()
+        .position(|b| *b == actual)
+        .unwrap_or(0);
+    CICLO_BACKENDS[(i + 1) % CICLO_BACKENDS.len()]
+}
+
+fn etiqueta_backend(b: BackendKind) -> &'static str {
+    match b {
+        BackendKind::Mock => "mock",
+        BackendKind::Gemini => "gemini",
+        BackendKind::Anthropic => "anthropic",
+        BackendKind::DeepSeek => "deepseek",
+        BackendKind::Cohere => "cohere",
+        BackendKind::Ollama => "ollama",
     }
 }
 
@@ -581,6 +654,7 @@ fn toolbar_view<Msg: Clone + 'static>(
     solo_madre: bool,
     busqueda: &str,
     n_stale: usize,
+    backend_actual: BackendKind,
 ) -> View<Msg>
 where
     Msg: From<MsgUi>,
@@ -611,6 +685,12 @@ where
         button_view::<Msg>(label_focus, pal_focus, MsgUi::ToggleSoloMadre.into()),
         button_view::<Msg>("tocar madre", pal_focus, MsgUi::TocarMadre.into()),
     ];
+    // Botón cíclico de backend: muestra el actual, click pasa al siguiente.
+    botones.push(button_view::<Msg>(
+        format!("modelo: {}", etiqueta_backend(backend_actual)),
+        pal_focus,
+        MsgUi::CiclarBackend.into(),
+    ));
     // Botón de regeneración: activo solo si hay hijas stale.
     let label_regen = if n_stale > 0 {
         format!("regenerar stale ({n_stale})")
@@ -689,6 +769,7 @@ enum MsgUi {
     ToggleSoloMadre,
     TocarMadre,
     RegenerarSiguienteStale,
+    CiclarBackend,
 }
 
 impl From<MsgUi> for Msg {
@@ -700,11 +781,16 @@ impl From<MsgUi> for Msg {
             MsgUi::ToggleSoloMadre => Msg::ToggleSoloMadre,
             MsgUi::TocarMadre => Msg::TocarMadre,
             MsgUi::RegenerarSiguienteStale => Msg::RegenerarSiguienteStale,
+            MsgUi::CiclarBackend => Msg::CiclarBackend,
         }
     }
 }
 
-fn cargar_de_store(store: Arc<PlumaStore>, chat: Arc<dyn ChatClient>) -> Model {
+fn cargar_de_store(
+    store: Arc<PlumaStore>,
+    chat: Arc<dyn ChatClient>,
+    backend: BackendKind,
+) -> Model {
     let mut graph = NarrativeGraph::new();
     for atom in store.iter_atoms() {
         graph.insert(atom.expect("leer atom"));
@@ -737,6 +823,7 @@ fn cargar_de_store(store: Arc<PlumaStore>, chat: Arc<dyn ChatClient>) -> Model {
         graph,
         cartas,
         chat,
+        backend,
         store,
         en_curso: false,
         ultimo_error: None,
@@ -746,7 +833,11 @@ fn cargar_de_store(store: Arc<PlumaStore>, chat: Arc<dyn ChatClient>) -> Model {
     }
 }
 
-fn sembrar_madre_base(store: Arc<PlumaStore>, chat: Arc<dyn ChatClient>) -> Model {
+fn sembrar_madre_base(
+    store: Arc<PlumaStore>,
+    chat: Arc<dyn ChatClient>,
+    backend: BackendKind,
+) -> Model {
     let mut graph = NarrativeGraph::new();
     let mut es = Cuerpo::nuevo("es", "español (original)", Intencion::Original, 100);
     for t in [
@@ -770,6 +861,7 @@ fn sembrar_madre_base(store: Arc<PlumaStore>, chat: Arc<dyn ChatClient>) -> Mode
         graph,
         cartas: Vec::new(),
         chat,
+        backend,
         store,
         en_curso: false,
         ultimo_error: None,
@@ -788,11 +880,14 @@ fn cache_dir() -> PathBuf {
     base.join("gioser").join("pluma-multilienzo-completo")
 }
 
-fn construir_chat() -> Arc<dyn ChatClient> {
+/// Construye el chat inicial y reporta el backend elegido. Si no hay
+/// keys, usa un mock pre-poblado con traducciones predecibles.
+fn construir_chat() -> (Arc<dyn ChatClient>, BackendKind) {
     let usa_mock = std::env::var("ANTHROPIC_API_KEY").is_err()
         && std::env::var("GEMINI_API_KEY").is_err()
         && std::env::var("GOOGLE_API_KEY").is_err()
         && std::env::var("DEEPSEEK_API_KEY").is_err()
+        && std::env::var("COHERE_API_KEY").is_err()
         && std::env::var("PLUMA_LLM_BACKEND")
             .map(|s| s.to_lowercase() != "ollama")
             .unwrap_or(true);
@@ -806,9 +901,26 @@ fn construir_chat() -> Arc<dyn ChatClient> {
         ] {
             mock = mock.con_respuesta(k, v);
         }
-        return Arc::new(mock);
+        return (Arc::new(mock), BackendKind::Mock);
     }
-    llm_from_env().expect("from_env")
+    let backend = std::env::var("PLUMA_LLM_BACKEND")
+        .ok()
+        .and_then(|s| BackendKind::parse(&s))
+        .unwrap_or_else(|| {
+            // mismo orden que from_env interno.
+            if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+                BackendKind::Anthropic
+            } else if std::env::var("GEMINI_API_KEY").is_ok()
+                || std::env::var("GOOGLE_API_KEY").is_ok()
+            {
+                BackendKind::Gemini
+            } else if std::env::var("DEEPSEEK_API_KEY").is_ok() {
+                BackendKind::DeepSeek
+            } else {
+                BackendKind::Cohere
+            }
+        });
+    (llm_from_env().expect("from_env"), backend)
 }
 
 fn ahora_unix() -> u64 {
