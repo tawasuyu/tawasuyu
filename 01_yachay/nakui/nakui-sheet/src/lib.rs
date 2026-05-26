@@ -12,7 +12,9 @@
 //! manifiesto.
 
 pub mod cell;
+pub mod formula;
 pub mod value;
 
-pub use cell::{CellRef, CellRefError, CellRange, CellRangeError};
+pub use cell::{CellRange, CellRangeError, CellRef, CellRefError};
+pub use formula::{compile, dependencies, eval_formula, CellResolver, FormulaExpr};
 pub use value::{SheetError, SheetValue};
