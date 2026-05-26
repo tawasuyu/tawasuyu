@@ -70,6 +70,25 @@ impl Attestation {
     pub fn is_self_attested(&self) -> bool {
         self.attester == self.claim.subject
     }
+
+    /// Hash estable de la atestación — BLAKE3 sobre la concatenación de
+    /// `claim.canonical_bytes() || attester_key || signature`. Dos
+    /// atestaciones equivalentes (mismo claim, mismo atestador, misma
+    /// firma) hashearán igual en cualquier máquina. Pensado para el
+    /// protocolo de gossip: cada par anuncia los hashes que tiene, el otro
+    /// pide los que le faltan.
+    ///
+    /// Note: ed25519 es **determinista** en este crate (`ed25519-dalek`
+    /// sin features de RNG), así que `Attestation::create` produce la
+    /// misma firma byte a byte para el mismo (clave, claim) — el hash
+    /// queda canónico sin depender de orden de campos en serde.
+    pub fn stable_hash(&self) -> [u8; 32] {
+        let mut h = blake3::Hasher::new();
+        h.update(&self.claim.canonical_bytes());
+        h.update(&self.attester_key);
+        h.update(&self.signature);
+        *h.finalize().as_bytes()
+    }
 }
 
 #[cfg(test)]
@@ -117,6 +136,31 @@ mod tests {
         let att = Attestation::create(&yumaira, claim);
         assert!(att.verify().is_ok());
         assert!(att.is_self_attested());
+    }
+
+    #[test]
+    fn stable_hash_is_deterministic_per_attestation() {
+        let venezuela = Keypair::from_seed([10; 32]);
+        let yumaira = Keypair::from_seed([20; 32]);
+        let claim = Claim::new(yumaira.identity_id(), "nacionalidad", "venezolana", 1_700_000_000);
+        let a = Attestation::create(&venezuela, claim.clone());
+        let b = Attestation::create(&venezuela, claim);
+        assert_eq!(a.stable_hash(), b.stable_hash());
+    }
+
+    #[test]
+    fn stable_hash_changes_when_value_changes() {
+        let venezuela = Keypair::from_seed([10; 32]);
+        let yumaira = Keypair::from_seed([20; 32]);
+        let a = Attestation::create(
+            &venezuela,
+            Claim::new(yumaira.identity_id(), "nacionalidad", "venezolana", 1_700_000_000),
+        );
+        let b = Attestation::create(
+            &venezuela,
+            Claim::new(yumaira.identity_id(), "nacionalidad", "marciana", 1_700_000_000),
+        );
+        assert_ne!(a.stable_hash(), b.stable_hash());
     }
 
     #[test]
