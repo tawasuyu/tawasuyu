@@ -24,11 +24,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use llimphi_ui::llimphi_layout::taffy::prelude::{
-    length, percent, FlexDirection, Rect, Size, Style,
+    auto, length, percent, FlexDirection, Position, Rect, Size, Style,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, Handle, View};
+use llimphi_ui::{App, Handle, Modifiers, View, WheelDelta};
 use llimphi_widget_button::{button_view, ButtonPalette};
 use pluma_align::CartaHebras;
 use pluma_core::NarrativeAtom;
@@ -59,6 +59,8 @@ enum Msg {
         transformacion: Transformacion,
     },
     LlmError(String),
+    /// Delta de scroll horizontal en píxeles, positivo = derecha.
+    ScrollHoriz(f32),
 }
 
 struct Model {
@@ -69,6 +71,10 @@ struct Model {
     store: Arc<PlumaStore>,
     en_curso: bool,
     ultimo_error: Option<String>,
+    /// Desplazamiento horizontal acumulado del multilienzo, en píxeles.
+    /// Wheel del mouse + Shift (o eje X de un touchpad) lo modifica.
+    /// Se limita en `view` al ancho del contenido.
+    scroll_x: f32,
 }
 
 struct Demo;
@@ -83,6 +89,29 @@ impl App for Demo {
 
     fn initial_size() -> (u32, u32) {
         (1400, 720)
+    }
+
+    /// Wheel del mouse → scroll horizontal. Convenciones:
+    /// - touchpad con eje X (delta.x != 0) → horizontal directo.
+    /// - Shift + wheel-Y vertical (común en Linux) → horizontal.
+    /// - Wheel-Y sin Shift → vertical (no implementado todavía, ignorado).
+    /// Multiplicador 30 px/línea coincide con el visor de texto de nahual.
+    fn on_wheel(
+        _model: &Self::Model,
+        delta: WheelDelta,
+        _cursor: (f32, f32),
+        modifiers: Modifiers,
+    ) -> Option<Self::Msg> {
+        const PX_POR_LINEA: f32 = 30.0;
+        let dx_lineas = if delta.x.abs() > 0.0 {
+            delta.x
+        } else if modifiers.shift {
+            // Shift convierte el eje Y de la rueda en horizontal.
+            delta.y
+        } else {
+            return None;
+        };
+        Some(Msg::ScrollHoriz(-dx_lineas * PX_POR_LINEA))
     }
 
     fn init(_: &Handle<Msg>) -> Model {
@@ -184,6 +213,12 @@ impl App for Demo {
                 m.ultimo_error = Some(s);
                 m.en_curso = false;
             }
+            Msg::ScrollHoriz(dx) => {
+                // El clamp duro lo aplica `view` (necesita medir el
+                // ancho del contenido); aquí solo acumulamos y dejamos
+                // que no se vaya negativo.
+                m.scroll_x = (m.scroll_x + dx).max(0.0);
+            }
         }
         m
     }
@@ -196,7 +231,7 @@ impl App for Demo {
         let cuerpos_ref: Vec<&Cuerpo> = model.cuerpos.iter().collect();
         let cartas_ref: Vec<Option<&CartaHebras>> = model.cartas.iter().map(Some).collect();
 
-        let cuerpos_view = multilienzo_view::<Msg>(
+        let interior = multilienzo_view::<Msg>(
             &cuerpos_ref,
             &index,
             &cartas_ref,
@@ -204,6 +239,32 @@ impl App for Demo {
             &paleta,
             &palette,
         );
+
+        // Envoltorio scrollable: contenedor relative full-width que
+        // recorta su contenido; el interior va position=Absolute con
+        // left = -scroll_x. Sin clamp del lado del scroll (el update
+        // ya impide negativo); el clip resuelve el desbordamiento
+        // a la derecha visualmente.
+        let cuerpos_view = View::new(Style {
+            position: Position::Relative,
+            size: Size {
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
+            },
+            ..Default::default()
+        })
+        .clip(true)
+        .children(vec![View::new(Style {
+            position: Position::Absolute,
+            inset: Rect {
+                left: length(-model.scroll_x),
+                top: length(0.0_f32),
+                right: auto(),
+                bottom: auto(),
+            },
+            ..Default::default()
+        })
+        .children(vec![interior])]);
 
         let toolbar = toolbar_view::<Msg>(
             &palette,
@@ -432,6 +493,7 @@ fn cargar_de_store(store: Arc<PlumaStore>, chat: Arc<dyn ChatClient>) -> Model {
         store,
         en_curso: false,
         ultimo_error: None,
+        scroll_x: 0.0,
     }
 }
 
@@ -462,6 +524,7 @@ fn sembrar_madre_base(store: Arc<PlumaStore>, chat: Arc<dyn ChatClient>) -> Mode
         store,
         en_curso: false,
         ultimo_error: None,
+        scroll_x: 0.0,
     }
 }
 
