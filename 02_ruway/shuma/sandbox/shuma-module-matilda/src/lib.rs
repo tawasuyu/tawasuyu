@@ -45,7 +45,7 @@ use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette
 use matilda_apply::plan_to_steps;
 use matilda_core::{Container, Host, Inventory, RestartPolicy, VHost};
 use matilda_discover::{discover_inventory, observed_inventory, ServerState};
-use matilda_ghost::{dry_run, ApplyReport};
+use matilda_ghost::{apply, dry_run, ApplyReport};
 use matilda_linker::{Linker, SshAuth, SshConfig};
 use matilda_plan::{plan, Op, Plan};
 use shuma_module::{ModuleContributions, MonitorSpec, Rgb, Sample, ShortcutSpec, Source};
@@ -105,6 +105,9 @@ pub enum Msg {
     MakePlan,
     /// Ejecuta `dry_run` sobre los pasos del plan y vuelca al log.
     DryRun,
+    /// Aplica el plan al servidor (local sincrónico; remoto delega al
+    /// chasis, que spawnea el thread SSH y devuelve `ApplyReport`).
+    Apply,
     /// Setter directo del inventario actual — usado para inyectar el
     /// resultado del discover remoto desde el chasis (cuando el SSH
     /// terminó en un thread aparte).
@@ -115,6 +118,13 @@ pub enum Msg {
     /// Inyecta el reporte de un dry-run remoto que el chasis corrió en
     /// un thread aparte (cada `String` es una línea del log).
     DryRunReport(Vec<String>),
+    /// Inyecta el reporte de un apply remoto: líneas para el log y, si
+    /// la aplicación fue completa, el nuevo inventario actual (re-
+    /// descubierto post-apply) para resetear plan + pendientes.
+    ApplyReport {
+        lines: Vec<String>,
+        new_current: Option<Inventory>,
+    },
     /// Drag del splitter inventario|plan.
     ResizeSplit(f32),
 }
@@ -127,6 +137,7 @@ pub fn dispatch(action_id: &str) -> Option<Msg> {
         "matilda.discover" => Some(Msg::Discover),
         "matilda.plan" => Some(Msg::MakePlan),
         "matilda.dry_run" => Some(Msg::DryRun),
+        "matilda.apply" => Some(Msg::Apply),
         _ => None,
     }
 }
@@ -199,9 +210,65 @@ pub fn update(state: State, msg: Msg) -> State {
             }
             cap_log(&mut s.log);
         }
+        Msg::Apply => {
+            if s.source.is_remote() {
+                s.log
+                    .push("→ apply remoto delegado al chasis".into());
+            } else {
+                let p = match &s.plan {
+                    Some(p) => p.clone(),
+                    None => plan(&s.current_or_empty(), &s.desired),
+                };
+                let steps = plan_to_steps(&p, &s.desired);
+                if steps.is_empty() {
+                    s.log.push("Sin pasos: nada que aplicar.".into());
+                } else {
+                    s.log.push(format!("— aplicando {} pasos —", steps.len()));
+                    let report: ApplyReport = apply(&steps);
+                    for r in &report.results {
+                        s.log.push(format!(
+                            "{} {}",
+                            if r.ok { "✔" } else { "✘" },
+                            r.describe
+                        ));
+                        for line in &r.log {
+                            s.log.push(format!("   {line}"));
+                        }
+                    }
+                    s.log.push(format!(
+                        "{} de {} pasos aplicados.",
+                        report.applied(),
+                        report.results.len()
+                    ));
+                    if report.all_ok() {
+                        // Re-discover local para resetear plan + pendientes.
+                        let current = discover_inventory(&s.desired);
+                        let new_plan = plan(&current, &s.desired);
+                        *s.pending_steps.lock().unwrap() = new_plan.len();
+                        s.current = Some(current);
+                        s.plan = Some(new_plan);
+                    } else {
+                        s.log.push("✘ se detuvo en el primer error.".into());
+                    }
+                }
+            }
+            cap_log(&mut s.log);
+        }
         Msg::DryRunReport(lines) => {
             for line in lines {
                 s.log.push(line);
+            }
+            cap_log(&mut s.log);
+        }
+        Msg::ApplyReport { lines, new_current } => {
+            for line in lines {
+                s.log.push(line);
+            }
+            if let Some(inv) = new_current {
+                let new_plan = plan(&inv, &s.desired);
+                *s.pending_steps.lock().unwrap() = new_plan.len();
+                s.current = Some(inv);
+                s.plan = Some(new_plan);
             }
             cap_log(&mut s.log);
         }
@@ -324,6 +391,104 @@ pub fn dry_run_remote_blocking(
         }
     }
     Ok(lines)
+}
+
+/// Aplica el plan deseado-vs-actual en el servidor remoto: conecta por
+/// SSH, descubre el inventario, calcula el plan, ejecuta los pasos en
+/// orden y re-descubre el estado final. **Bloqueante** — pensado para
+/// que el chasis lo invoque dentro de `Handle::spawn` y reenvíe el
+/// resultado por `Msg::ApplyReport`.
+///
+/// Devuelve `(lines, new_current)`: el log textual y, si todos los
+/// pasos completaron, el inventario re-observado (para resetear el
+/// plan/pendientes del módulo). Si algún paso falla, `new_current` es
+/// `None` — la UI conserva el plan vigente para que el operador vea
+/// dónde se rompió.
+pub fn apply_remote_blocking(
+    source: &Source,
+    desired: &Inventory,
+) -> Result<(Vec<String>, Option<Inventory>), String> {
+    let mut lines = Vec::new();
+
+    match source {
+        Source::Local => {
+            // Local lo maneja `Msg::Apply` sincrónicamente. Para
+            // uniformidad damos un fallback síncrono sin tocar el UI.
+            let current = discover_inventory(desired);
+            let p = plan(&current, desired);
+            if p.is_empty() {
+                lines.push("Sin cambios: nada que aplicar.".into());
+                return Ok((lines, Some(current)));
+            }
+            let steps = plan_to_steps(&p, desired);
+            let report: ApplyReport = apply(&steps);
+            push_apply_log(&mut lines, &report);
+            let new_current = if report.all_ok() {
+                Some(discover_inventory(desired))
+            } else {
+                None
+            };
+            Ok((lines, new_current))
+        }
+        Source::Remote { .. } => {
+            let config = ssh_config_for(source)?;
+            let rt = blocking_runtime()?;
+            rt.block_on(async move {
+                let linker = Linker::connect(&config)
+                    .await
+                    .map_err(|e| format!("ssh connect: {e}"))?;
+                let current = fetch_remote_inventory(&linker, desired).await?;
+                lines.push(format!(
+                    "✔ current: {} containers, {} vhosts",
+                    current.containers().count(),
+                    current.vhosts().count()
+                ));
+                let p = plan(&current, desired);
+                if p.is_empty() {
+                    lines.push("Sin cambios: el servidor ya está al día.".into());
+                    return Ok((lines, Some(current)));
+                }
+                lines.push(format!(
+                    "plan: {} acciones ({} crear, {} actualizar, {} eliminar)",
+                    p.len(),
+                    p.count(Op::Create),
+                    p.count(Op::Update),
+                    p.count(Op::Remove)
+                ));
+                let steps = plan_to_steps(&p, desired);
+                lines.push(format!("— aplicando {} pasos por SSH —", steps.len()));
+                let report = linker.apply(&steps).await;
+                push_apply_log(&mut lines, &report);
+                let new_current = if report.all_ok() {
+                    Some(fetch_remote_inventory(&linker, desired).await?)
+                } else {
+                    None
+                };
+                Ok((lines, new_current))
+            })
+        }
+    }
+}
+
+fn push_apply_log(lines: &mut Vec<String>, report: &ApplyReport) {
+    for r in &report.results {
+        lines.push(format!(
+            "{} {}",
+            if r.ok { "✔" } else { "✘" },
+            r.describe
+        ));
+        for line in &r.log {
+            lines.push(format!("   {line}"));
+        }
+    }
+    lines.push(format!(
+        "{} de {} pasos aplicados.",
+        report.applied(),
+        report.results.len()
+    ));
+    if !report.all_ok() {
+        lines.push("✘ se detuvo en el primer error.".into());
+    }
 }
 
 fn ssh_config_for(source: &Source) -> Result<SshConfig, String> {
@@ -630,6 +795,8 @@ pub fn contributions(state: &State) -> ModuleContributions {
                 .with_hint("Calcula la reconciliación deseado-vs-actual"),
             ShortcutSpec::module_action("Dry-run", "matilda.dry_run")
                 .with_hint("Previsualiza los pasos sin aplicar"),
+            ShortcutSpec::module_action("Apply", "matilda.apply")
+                .with_hint("Reconcilia el servidor con el inventario deseado"),
         ],
     }
 }
@@ -789,18 +956,86 @@ mod tests {
         assert!(matches!(dispatch("matilda.discover"), Some(Msg::Discover)));
         assert!(matches!(dispatch("matilda.plan"), Some(Msg::MakePlan)));
         assert!(matches!(dispatch("matilda.dry_run"), Some(Msg::DryRun)));
+        assert!(matches!(dispatch("matilda.apply"), Some(Msg::Apply)));
         assert!(dispatch("desconocido").is_none());
     }
 
     #[test]
-    fn contributions_expose_monitor_and_three_shortcuts() {
+    fn contributions_expose_monitor_and_four_shortcuts() {
         let s = State::new(Source::Local);
         let c = contributions(&s);
         assert_eq!(c.monitors.len(), 1);
-        assert_eq!(c.shortcuts.len(), 3);
+        assert_eq!(c.shortcuts.len(), 4);
         assert_eq!(c.shortcuts[0].label, "Discover");
         assert_eq!(c.shortcuts[1].label, "Plan");
         assert_eq!(c.shortcuts[2].label, "Dry-run");
+        assert_eq!(c.shortcuts[3].label, "Apply");
+    }
+
+    #[test]
+    fn apply_with_remote_source_defers_to_chassis() {
+        let s = State::new(Source::Remote {
+            host: "srv".into(),
+            user: "ops".into(),
+            port: 22,
+            label: None,
+        });
+        let s = update(s, Msg::Apply);
+        assert!(s
+            .log
+            .iter()
+            .any(|l| l.contains("delegado al chasis")));
+        assert!(s.plan.is_none());
+    }
+
+    #[test]
+    fn apply_report_with_new_current_resets_plan() {
+        let mut s = State::new(Source::Local);
+        // Forzamos un plan vigente con pendientes.
+        s = update(s, Msg::MakePlan);
+        assert!(s.pending_count() > 0);
+
+        // Ahora simulamos que el chasis aplicó remoto y re-descubrió:
+        // el nuevo current coincide con el desired → plan vacío.
+        let new_current = s.desired.clone();
+        s = update(
+            s,
+            Msg::ApplyReport {
+                lines: vec!["✔ aplicado".into()],
+                new_current: Some(new_current),
+            },
+        );
+        assert_eq!(s.pending_count(), 0);
+        assert_eq!(s.plan.as_ref().unwrap().len(), 0);
+        assert!(s.log.iter().any(|l| l == "✔ aplicado"));
+    }
+
+    #[test]
+    fn apply_report_without_new_current_keeps_plan() {
+        let mut s = State::new(Source::Local);
+        s = update(s, Msg::MakePlan);
+        let pending_before = s.pending_count();
+        s = update(
+            s,
+            Msg::ApplyReport {
+                lines: vec!["✘ falló paso 2".into()],
+                new_current: None,
+            },
+        );
+        // El plan vigente sobrevive — el operador inspecciona dónde se rompió.
+        assert_eq!(s.pending_count(), pending_before);
+        assert!(s.log.iter().any(|l| l.contains("falló paso 2")));
+    }
+
+    #[test]
+    fn apply_remote_blocking_local_returns_lines() {
+        let inv = matilda_core::Inventory::new();
+        let res = apply_remote_blocking(&Source::Local, &inv);
+        assert!(res.is_ok());
+        let (lines, new_current) = res.unwrap();
+        // Inventory vacío → "nada que aplicar"; new_current refleja el local.
+        assert!(!lines.is_empty());
+        assert!(new_current.is_some());
     }
 
     #[test]

@@ -585,6 +585,31 @@ fn handle_shortcut(
                     });
                     return m;
                 }
+                if action_id == "matilda.apply" {
+                    m = apply_module_msg(
+                        m,
+                        slot.clone(),
+                        ModuleMsg::Matilda(shuma_module_matilda::Msg::LogLine(format!(
+                            "→ apply remoto en {} por SSH…",
+                            source.label()
+                        ))),
+                    );
+                    let slot_back = slot.clone();
+                    handle.spawn(move || {
+                        let msg = match shuma_module_matilda::apply_remote_blocking(
+                            &source, &desired,
+                        ) {
+                            Ok((lines, new_current)) => {
+                                shuma_module_matilda::Msg::ApplyReport { lines, new_current }
+                            }
+                            Err(e) => shuma_module_matilda::Msg::LogLine(format!(
+                                "✘ apply remoto: {e}"
+                            )),
+                        };
+                        Msg::Module(slot_back, ModuleMsg::Matilda(msg))
+                    });
+                    return m;
+                }
             }
             let msg = dispatch_to_module(&slot, &m, action_id);
             if let Some(mmsg) = msg {
