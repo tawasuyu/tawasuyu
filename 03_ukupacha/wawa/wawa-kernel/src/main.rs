@@ -115,6 +115,10 @@ struct Plantilla {
     nat_alto: usize,
     techo: usize,
     fuel: u64,
+    /// Bitfield de permisos heredado del `EntradaApp`. Cada instancia que
+    /// `Alt+N` engendra de esta plantilla nace con los mismos permisos
+    /// del manifiesto: un clon no se gana, ni se pierde, capacidades.
+    permisos: format::Permisos,
 }
 
 /// Las plantillas de las apps de genesis. Se fijan una vez, en el arranque;
@@ -268,6 +272,7 @@ fn encender_app(
         entrada.techo_memoria as usize,
         entrada.fuel_fotograma as u64,
         indice,
+        entrada.permisos,
     ) {
         Ok(app) => ejecutor.spawn(tarea_aplicacion(app)),
         Err(_) => compositor::desalojar(indice, Color::DESALOJO),
@@ -282,6 +287,7 @@ fn encender_app(
         nat_alto: natural.alto,
         techo: entrada.techo_memoria as usize,
         fuel: entrada.fuel_fotograma as u64,
+        permisos: entrada.permisos,
     })
 }
 
@@ -311,6 +317,7 @@ fn lanzar_app() {
         plantilla.techo,
         plantilla.fuel,
         indice,
+        plantilla.permisos,
     ) {
         // La tarea se ENGENDRA, no se hace `spawn`: el reactor ya corre y el
         // ejecutor la adoptara en su proxima vuelta (Fase 10).

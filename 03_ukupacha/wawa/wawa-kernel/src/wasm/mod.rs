@@ -22,6 +22,7 @@ use wasmi::{
 
 use crate::grafico::Color;
 use env::ContextoCapacidades;
+use format::Permisos;
 
 /// Combustible concedido a `init`. Cubre con holgura el pintado inicial del
 /// fondo de una region a pantalla casi completa — un gasto unico, de arranque.
@@ -82,8 +83,11 @@ impl AplicacionWasm {
     /// `natural_ancho`/`natural_alto` son el tamaño del lienzo de la app;
     /// `techo_memoria`, su cuota de memoria lineal —la dicta su `EntradaApp` del
     /// manifiesto—; `fuel_fotograma`, su presupuesto de combustible por `tick`
-    /// (mismo origen); e `indice_app`, su identidad: la posicion con que el
-    /// compositor halla su ventana y las capacidades de estado su ranura.
+    /// (mismo origen); `indice_app`, su identidad: la posicion con que el
+    /// compositor halla su ventana y las capacidades de estado su ranura; y
+    /// `permisos`, el bitfield que dicta que capacidades gateadas se le
+    /// enlazan al `Linker` de wasmi. Lo que no se enlace aqui, el modulo no
+    /// lo puede invocar — no por chequeo, sino porque no existe.
     pub fn cargar(
         bytecode: &[u8],
         natural_ancho: usize,
@@ -91,6 +95,7 @@ impl AplicacionWasm {
         techo_memoria: usize,
         fuel_fotograma: u64,
         indice_app: usize,
+        permisos: Permisos,
     ) -> Result<AplicacionWasm, FallaApp> {
         // 1. El motor, con metricas de combustible y compilacion ANTICIPADA: la
         //    traduccion del modulo ocurre ahora, de modo que el `fuel` mida
@@ -120,6 +125,11 @@ impl AplicacionWasm {
         // contexto antes de instanciar el modulo, y desde ese instante la app
         // pinta con esos colores y rotula con ese idioma.
         let configuracion = crate::manifiesto::cargar_configuracion();
+        // Tiempo congelado para el `init`: el snapshot de arranque. Asi `init`
+        // ve un reloj inmutable como cualquier `tick` posterior — la app no
+        // distingue entre "arranque" y "fotograma comun"; ambos son rafagas
+        // con un tiempo unico que las gobierna.
+        let tiempo_arranque = crate::async_system::reloj::milisegundos();
         let mut almacen = Store::new(
             &motor,
             ContextoCapacidades {
@@ -130,6 +140,7 @@ impl AplicacionWasm {
                 indice_app,
                 idioma: configuracion.idioma,
                 paleta: configuracion.paleta,
+                tiempo_ms_fotograma: tiempo_arranque,
             },
         );
         // Ligar el limitador de recursos: `wasmi` lo consultara en cada
@@ -141,7 +152,7 @@ impl AplicacionWasm {
 
         // 4. El enlazador y la matriz de capacidades (ver `env`).
         let mut enlazador: Linker<ContextoCapacidades> = Linker::new(&motor);
-        env::enlazar_capacidades(&mut enlazador).map_err(|_| FallaApp::Carga)?;
+        env::enlazar_capacidades(&mut enlazador, permisos).map_err(|_| FallaApp::Carga)?;
 
         // 5. Instanciar, resolviendo las importaciones contra las capacidades.
         let instancia = enlazador
@@ -187,9 +198,17 @@ impl AplicacionWasm {
         // la operacion es leer el `Option<Hash>` del manifiesto vivo y, a lo
         // sumo, deserializar veintipocos bytes del grafo: barato y silencioso.
         let configuracion = crate::manifiesto::cargar_configuracion();
+        // Snapshot del reloj UNA sola vez para todo el fotograma. La app vera
+        // este valor en cada `sys_tiempo_mono` durante su rafaga; el reloj
+        // fisico sigue avanzando, pero la app no se entera hasta el proximo
+        // `tick`. Si dos apps comparten un fotograma, cada una recibe SU
+        // snapshot —tomado justo antes de su llamada— pero el suyo es
+        // inmutable dentro de su rafaga.
+        let tiempo_ahora = crate::async_system::reloj::milisegundos();
         let datos = self.almacen.data_mut();
         datos.idioma = configuracion.idioma;
         datos.paleta = configuracion.paleta;
+        datos.tiempo_ms_fotograma = tiempo_ahora;
 
         // Recargar el deposito: cada fotograma parte con su techo intacto —
         // el que su `EntradaApp` declaro, no un techo unico del kernel.

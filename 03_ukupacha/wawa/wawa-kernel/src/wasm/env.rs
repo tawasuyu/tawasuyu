@@ -39,7 +39,10 @@ use wasmi::{Caller, Error, Extern, Linker, Memory, StoreLimits};
 
 use crate::almacen::Hash;
 use crate::async_system::teclado::CanalTeclado;
-use format::{IdiomaCodigo, Paleta};
+use format::{
+    IdiomaCodigo, Paleta, Permisos, PERMISO_ALTAVOZ, PERMISO_CONFIG, PERMISO_GRAFO_ESCRITURA,
+    PERMISO_RAIZ, PERMISO_RED,
+};
 
 /// El estado del host adscrito al `Store` de una aplicacion: cuanto necesita
 /// una capacidad para servir a ESA app y a ninguna otra — su region de pantalla,
@@ -71,6 +74,15 @@ pub(crate) struct ContextoCapacidades {
     /// ocurre en sincronia con el refresco del fotograma — sin sondeo,
     /// sin "preguntar al kernel".
     pub(crate) paleta: Paleta,
+    /// EL TIEMPO CONGELADO POR FOTOGRAMA. Snapshot de los milisegundos
+    /// monotonos en el instante en que el kernel le cede la CPU a esta app.
+    /// Permanece INMUTABLE durante toda la rafaga cooperativa: si la app
+    /// graba tres nodos en el grafo dentro del mismo `tick`, los tres
+    /// llevaran exactamente el mismo indice temporal. El reloj fisico
+    /// sigue corriendo en el host; la app lo ve quieto. POSIX permite que
+    /// gettimeofday devuelva tres valores distintos en tres lineas
+    /// adyacentes; renaser no.
+    pub(crate) tiempo_ms_fotograma: u64,
 }
 
 /// Recupera la memoria lineal exportada por el modulo. Que no la exporte es un
@@ -104,10 +116,29 @@ fn leer_hash(m: &[u8], ptr: u32, fallo: &'static str) -> Result<Hash, Error> {
 /// Inyecta en el enlazador la matriz de capacidades del modulo WASM. Todo lo
 /// que no se defina aqui le queda, al modulo, fisicamente fuera de alcance.
 ///
+/// `permisos` es el bitfield de [`Permisos`] que el manifiesto declaro para
+/// esta app. Las capacidades GATEADAS (red, raiz, altavoz, configuracion,
+/// escritura del grafo) solo se registran si el bit correspondiente esta
+/// puesto; si no, su import queda sin resolver y wasmi rechazara el modulo
+/// que intente importarla — la frontera es fisica, no chequeada en runtime.
+/// No hay escalada porque no hay tabla que escalar.
+///
+/// SWAP SEMANTICO: las capacidades `sys_object_put`, `sys_object_datos`,
+/// `sys_estado_guardar` y `sys_estado_cargar` SON el swap del sistema.
+/// Cuando una app necesita liberar espacio en su jaula de 4 MiB, serializa
+/// sus estructuras intermedias con postcard, las graba en el grafo (un
+/// hash) y limpia su propia memoria lineal. Cuando vuelve a necesitarlas,
+/// las trae de vuelta por hash. Es una decision CONSCIENTE del userspace,
+/// no un paginado ciego del kernel: el coste de E/S esta a la vista de
+/// quien lo paga, y nada se mueve a sus espaldas. POSIX hace swap a ojos
+/// cerrados y destroza el rendimiento; renaser entrega las herramientas y
+/// confia en que la app sepa lo que hace con sus 4 MiB.
+///
 /// Devuelve `Err` si una capacidad no se pudo enlazar — un fallo del kernel,
 /// no de la app; aun asi se propaga como `Result` para no incendiar nada.
 pub(crate) fn enlazar_capacidades(
     enlazador: &mut Linker<ContextoCapacidades>,
+    permisos: Permisos,
 ) -> Result<(), Error> {
     // --- CAPACIDAD 1 :: sys_render_frame(ptr, len) ---
     // El modulo entrega (ptr, len) hacia su PROPIA memoria lineal; el kernel
@@ -167,6 +198,11 @@ pub(crate) fn enlazar_capacidades(
     // El kernel escribe el hash resultante —la identidad del objeto— en
     // `salida`. Devuelve 0 si el objeto se grabo (o ya existia), -1 si el
     // almacenamiento fallo.
+    //
+    // GATEADA por PERMISO_GRAFO_ESCRITURA: si la app no lo declaro en su
+    // EntradaApp, este import NO se registra y el modulo no la puede
+    // invocar — el simbolo, sencillamente, no existe.
+    if permisos & PERMISO_GRAFO_ESCRITURA != 0 {
     enlazador.func_wrap(
         "renaser",
         "sys_object_put",
@@ -231,6 +267,7 @@ pub(crate) fn enlazar_capacidades(
             }
         },
     )?;
+    } // PERMISO_GRAFO_ESCRITURA
 
     // --- CAPACIDAD 4 :: sys_object_datos(hash, salida, capacidad) -> i32 ---
     // Copia la carga util del objeto `hash` en `salida`. Devuelve el numero de
@@ -360,6 +397,11 @@ pub(crate) fn enlazar_capacidades(
     // --- CAPACIDAD 7 :: sys_object_fijar_raiz(hash) -> i32 ---
     // Corona el objeto `hash` como raiz del grafo. Devuelve 0 si se logro, -3
     // si el almacenamiento fallo.
+    //
+    // GATEADA por PERMISO_RAIZ: cambiar la raiz del grafo mueve el punto
+    // de entrada que el resto del userspace lee. Solo apps explicitamente
+    // habilitadas en el manifiesto pueden hacerlo; el resto, ni la ve.
+    if permisos & PERMISO_RAIZ != 0 {
     enlazador.func_wrap(
         "renaser",
         "sys_object_fijar_raiz",
@@ -379,6 +421,7 @@ pub(crate) fn enlazar_capacidades(
             }
         },
     )?;
+    } // PERMISO_RAIZ
 
     // --- CAPACIDAD 8 :: sys_estado_cargar(salida, capacidad) -> i32 ---
     // Copia el estado persistido de ESTA app —el objeto que su `EntradaApp` del
@@ -465,16 +508,19 @@ pub(crate) fn enlazar_capacidades(
     )?;
 
     // --- CAPACIDAD 10 :: sys_tiempo_mono() -> u64 ---
-    // El reloj MONOTONO del sistema: milisegundos transcurridos desde el
-    // arranque. Le da al userspace un sentido del tiempo independiente del
-    // ritmo de los fotogramas — una app sabe CUANTO ha pasado, no solo CUANTAS
-    // veces la han llamado—. Jamas retrocede. No toca la memoria del modulo:
-    // es una lectura pura, sin puntero que validar.
+    // El reloj MONOTONO del sistema, CONGELADO POR FOTOGRAMA. El kernel
+    // tomo un snapshot de los milisegundos justo antes de cederle a esta
+    // app su `tick`; cada llamada dentro del fotograma devuelve EL MISMO
+    // valor. Si la app graba tres nodos del grafo en un `tick`, los tres
+    // llevan el mismo indice temporal — determinismo total a la vista del
+    // userspace. El reloj sigue corriendo en el host, pero la app no lo
+    // ve correr: lo ve como una fotografia. POSIX permite que dos lineas
+    // adyacentes de `gettimeofday` devuelvan valores distintos; aqui no.
     enlazador.func_wrap(
         "renaser",
         "sys_tiempo_mono",
-        |_caller: Caller<'_, ContextoCapacidades>| -> u64 {
-            crate::async_system::reloj::milisegundos()
+        |caller: Caller<'_, ContextoCapacidades>| -> u64 {
+            caller.data().tiempo_ms_fotograma
         },
     )?;
 
@@ -485,6 +531,10 @@ pub(crate) fn enlazar_capacidades(
     // app sin foco puede pedir un tono; sencillamente, no se oye. Y cuando el
     // foco cambia, el compositor calla la bocina: la nueva dueña la reclamara
     // en su proximo fotograma si quiere sonar.
+    //
+    // GATEADA por PERMISO_ALTAVOZ: aunque la bocina ya esta gateada por
+    // foco, el bit deja EXPLICITO que la app puede solicitar sonido.
+    if permisos & PERMISO_ALTAVOZ != 0 {
     enlazador.func_wrap(
         "renaser",
         "sys_tono",
@@ -501,6 +551,15 @@ pub(crate) fn enlazar_capacidades(
             }
         },
     )?;
+    } // PERMISO_ALTAVOZ
+
+    // --- CAPACIDADES 12-15 (gateadas por PERMISO_RED) ---
+    // Las cuatro capacidades de red (`sys_net_mac`, `sys_net_enviar`,
+    // `sys_net_recibir`, `sys_red_solicitar`) viajan juntas: una app que
+    // no declaro PERMISO_RED en su manifiesto NO ve ninguna de ellas. Sin
+    // tabla que escalar; si necesitas tres y declaras una, no aprovecharas
+    // un import — los cuatro simbolos quedan ausentes a la vez.
+    if permisos & PERMISO_RED != 0 {
 
     // --- CAPACIDAD 12 :: sys_net_mac(salida) -> i32 ---
     // Copia los 6 bytes de la MAC de la tarjeta de red en `salida`. Devuelve 0
@@ -621,6 +680,8 @@ pub(crate) fn enlazar_capacidades(
         },
     )?;
 
+    } // PERMISO_RED
+
     // --- CAPACIDAD 16 :: sys_config_idioma() -> u32 ---
     // Lectura PASIVA del idioma activo: el kernel ya copio el valor en el
     // `ContextoCapacidades` antes de cederle el `tick` a la app. No hay sondeo
@@ -648,6 +709,11 @@ pub(crate) fn enlazar_capacidades(
     // -2 si la app no esta enfocada (la configuracion la gobierna el usuario,
     // y el usuario interactua con la ventana enfocada; una app sin foco no
     // se apropia de la experiencia del escritorio).
+    //
+    // GATEADA por PERMISO_CONFIG. La LECTURA del contexto (idioma + paleta)
+    // siempre esta; cambiar la configuracion, no. Solo el "tonalero" y
+    // futuras apps panel-de-control llevan ese bit en su manifiesto.
+    if permisos & PERMISO_CONFIG != 0 {
     enlazador.func_wrap(
         "renaser",
         "sys_config_proponer",
@@ -682,6 +748,7 @@ pub(crate) fn enlazar_capacidades(
             }
         },
     )?;
+    } // PERMISO_CONFIG
 
     // --- CAPACIDAD 18 :: sys_config_paleta(salida) -> i32 ---
     // Copia los 20 bytes de la paleta activa (cinco colores RGBA8) en la

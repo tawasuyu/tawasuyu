@@ -107,6 +107,12 @@ struct AppGenesis {
     archivo: &'static str,
     region: (u32, u32, u32, u32),
     fuel: u32,
+    /// Bitfield de permisos declarados en el manifiesto. El kernel los
+    /// honrara en el momento de instanciar el modulo: las capacidades
+    /// sensibles que no figuren aqui NO se registran en el `Linker` de
+    /// wasmi, asi que el modulo no puede invocarlas — no por chequeo,
+    /// sino porque no existen.
+    permisos: u32,
 }
 
 /// Combustible por fotograma de una app comun: cubre con holgura un `tick`
@@ -129,16 +135,16 @@ const FUEL_EDITOR: u32 = 6_000_000;
 /// testigo visual del bucle de Configuracion, que pinta la paleta activa y
 /// la rota con SPACE para demostrar el reanclaje atomico del manifiesto.
 const GENESIS: [AppGenesis; 10] = [
-    AppGenesis { nombre: "bitacora", archivo: "bitacora.wasm", region: (100, 120, 480, 280), fuel: FUEL_EDITOR },
-    AppGenesis { nombre: "pregon", archivo: "pregon.wasm", region: (100, 120, 480, 160), fuel: FUEL_COMUN },
-    AppGenesis { nombre: "tonada", archivo: "tonada.wasm", region: (100, 120, 360, 120), fuel: FUEL_COMUN },
-    AppGenesis { nombre: "pulso", archivo: "pulso.wasm", region: (100, 120, 360, 120), fuel: FUEL_COMUN },
-    AppGenesis { nombre: "hola", archivo: "app.wasm", region: (100, 120, 480, 560), fuel: FUEL_COMUN },
-    AppGenesis { nombre: "memoriosa", archivo: "memoriosa.wasm", region: (700, 120, 360, 80), fuel: FUEL_COMUN },
-    AppGenesis { nombre: "discola", archivo: "discola.wasm", region: (60, 700, 360, 80), fuel: FUEL_COMUN },
-    AppGenesis { nombre: "glotona", archivo: "glotona.wasm", region: (460, 700, 360, 80), fuel: FUEL_COMUN },
-    AppGenesis { nombre: "cronista", archivo: "cronista.wasm", region: (860, 700, 360, 80), fuel: FUEL_COMUN },
-    AppGenesis { nombre: "tonalero", archivo: "tonalero.wasm", region: (700, 220, 480, 300), fuel: FUEL_COMUN },
+    AppGenesis { nombre: "bitacora", archivo: "bitacora.wasm", region: (100, 120, 480, 280), fuel: FUEL_EDITOR, permisos: format::PERMISO_GRAFO_ESCRITURA },
+    AppGenesis { nombre: "pregon", archivo: "pregon.wasm", region: (100, 120, 480, 160), fuel: FUEL_COMUN, permisos: format::PERMISO_RED },
+    AppGenesis { nombre: "tonada", archivo: "tonada.wasm", region: (100, 120, 360, 120), fuel: FUEL_COMUN, permisos: format::PERMISO_ALTAVOZ },
+    AppGenesis { nombre: "pulso", archivo: "pulso.wasm", region: (100, 120, 360, 120), fuel: FUEL_COMUN, permisos: 0 },
+    AppGenesis { nombre: "hola", archivo: "app.wasm", region: (100, 120, 480, 560), fuel: FUEL_COMUN, permisos: 0 },
+    AppGenesis { nombre: "memoriosa", archivo: "memoriosa.wasm", region: (700, 120, 360, 80), fuel: FUEL_COMUN, permisos: 0 },
+    AppGenesis { nombre: "discola", archivo: "discola.wasm", region: (60, 700, 360, 80), fuel: FUEL_COMUN, permisos: 0 },
+    AppGenesis { nombre: "glotona", archivo: "glotona.wasm", region: (460, 700, 360, 80), fuel: FUEL_COMUN, permisos: 0 },
+    AppGenesis { nombre: "cronista", archivo: "cronista.wasm", region: (860, 700, 360, 80), fuel: FUEL_COMUN, permisos: 0 },
+    AppGenesis { nombre: "tonalero", archivo: "tonalero.wasm", region: (700, 220, 480, 300), fuel: FUEL_COMUN, permisos: format::PERMISO_CONFIG },
 ];
 
 /// Techo de memoria lineal de cada app de genesis: 4 MiB. Un modulo que intente
@@ -260,6 +266,7 @@ fn sembrar_grafo() -> Result<(Vec<u8>, usize), String> {
             techo_memoria: TECHO_GENESIS,
             fuel_fotograma: app.fuel,
             estado: None,
+            permisos: app.permisos,
         });
     }
 

@@ -45,10 +45,12 @@ pub const VERSION_SUPERBLOQUE: u32 = 2;
 
 /// Version del format del manifiesto serializado. Independiente de la del
 /// superbloque: el manifiesto es un objeto del grafo, no una estructura fija
-/// del disco. v3 — el manifiesto porta un enlace opcional al hash de la
-/// `Configuracion` activa (idioma + tema). Sin enlace, el kernel emplea los
-/// valores por defecto: misma forma que `estado: None` en una `EntradaApp`.
-pub const VERSION_MANIFIESTO: u32 = 3;
+/// del disco. v4 — cada `EntradaApp` declara su `permisos: u32`: un bitfield
+/// que dicta QUE capacidades el kernel enlaza en su `Linker` de wasmi. Las
+/// capacidades sensibles (red, raiz, altavoz, configuracion, escritura del
+/// grafo) no se REGISTRAN si el bit no esta puesto: la frontera es fisica,
+/// no chequeada en runtime. No hay escalada porque no hay tabla que escalar.
+pub const VERSION_MANIFIESTO: u32 = 4;
 
 /// Version del format de la `Configuracion` serializada. La configuracion es
 /// otro objeto del grafo (idioma + paleta); el manifiesto la enlaza por hash.
@@ -219,9 +221,44 @@ impl Configuracion {
     }
 }
 
+/// Bitfield de permisos de una app — cada bit habilita una clase de
+/// capacidades. Capacidades sensibles que no figuran aqui no se ENLAZAN en
+/// el `Linker` de wasmi cuando la app se instancia: el import del modulo
+/// queda sin resolver y el modulo entero ni siquiera arranca. La frontera
+/// es fisica; el kernel no hace chequeos en cada syscall porque no hay
+/// syscall que chequear: la funcion del host no se concedio. POSIX gestiona
+/// privilegios con un check `if (uid == 0)` en cada syscall y se llena de
+/// CVE; aqui no hay nada que comprobar.
+pub type Permisos = u32;
+
+/// Permite enviar y recibir frames Ethernet y solicitar objetos por hash a
+/// peers Akasha. Sin este bit, las capacidades `sys_net_*` y `sys_red_*` no
+/// se enlazan: el modulo no las puede invocar porque no existen.
+pub const PERMISO_RED: Permisos = 1 << 0;
+
+/// Permite grabar objetos nuevos en el grafo del disco (`sys_object_put`).
+/// La lectura del grafo es libre —la inmutabilidad direccionada por contenido
+/// la hace inofensiva—, la escritura no.
+pub const PERMISO_GRAFO_ESCRITURA: Permisos = 1 << 1;
+
+/// Permite reanclar la raiz del grafo (`sys_object_fijar_raiz`). Cambia el
+/// punto de entrada que el resto del userspace lee; un permiso de mucha
+/// gravedad.
+pub const PERMISO_RAIZ: Permisos = 1 << 2;
+
+/// Permite hacer sonar la bocina del PC (`sys_tono`). El altavoz es un
+/// recurso unico y global; aunque ya esta gateado por foco, el bit deja
+/// explicito que la app puede SOLICITAR sonido.
+pub const PERMISO_ALTAVOZ: Permisos = 1 << 3;
+
+/// Permite proponer una nueva `Configuracion` (`sys_config_proponer`):
+/// idioma + tema visual. La LECTURA pasiva del contexto (sys_config_idioma,
+/// sys_config_paleta) no necesita bit; cualquier app la tiene siempre.
+pub const PERMISO_CONFIG: Permisos = 1 << 4;
+
 /// Una entrada del manifiesto: una aplicacion del userspace y todo lo que el
 /// kernel necesita para darle vida — su bytecode, su ventana, su cuota de
-/// memoria y, si lo tuviera, su ultimo estado persistido.
+/// memoria, su tabla de permisos y, si lo tuviera, su ultimo estado persistido.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct EntradaApp {
     /// Nombre legible — para los rotulos de la consola y la baliza.
@@ -246,6 +283,12 @@ pub struct EntradaApp {
     /// Hash del ultimo estado persistido de la app (Fase 7c). `None` hasta que
     /// la app guarde estado por primera vez.
     pub estado: Option<Hash>,
+    /// Bitfield de permisos (ver [`Permisos`] y las constantes `PERMISO_*`).
+    /// Lo evalua el `Linker` de wasmi al instanciar la app: las capacidades
+    /// gateadas que no figuren aqui NO se registran. La app puede llamar a
+    /// otras capacidades —la matriz pasiva siempre esta— pero las gateadas
+    /// son, literalmente, simbolos inexistentes para el modulo.
+    pub permisos: Permisos,
 }
 
 /// Un canal de release: un objeto del grafo que historiza, en orden cronologico,
@@ -551,6 +594,61 @@ mod pruebas {
         assert_eq!(defecto.paleta, PALETA_DEFECTO);
         let bytes = defecto.serializar().unwrap();
         assert_eq!(Configuracion::deserializar(&bytes).unwrap(), defecto);
+    }
+
+    #[test]
+    fn entrada_app_transporta_permisos_y_distingue_hash() {
+        // Una entrada con permisos distintos engendra un manifiesto con un
+        // hash distinto: el bit es CONTENIDO direccionado, no metadato lateral.
+        // Una app que se "regala" un permiso a si misma no puede pasar por
+        // la misma app del manifiesto anterior — el grafo lo delata.
+        let base = EntradaApp {
+            nombre: String::from("test"),
+            bytecode: [0x11; 32],
+            region_x: 0,
+            region_y: 0,
+            region_ancho: 100,
+            region_alto: 100,
+            techo_memoria: 4 * 1024 * 1024,
+            fuel_fotograma: 1_000_000,
+            estado: None,
+            permisos: 0,
+        };
+        let mut con_red = base.clone();
+        con_red.permisos = PERMISO_RED;
+        let manifiesto_a = Manifiesto {
+            version: VERSION_MANIFIESTO,
+            apps: vec![base.clone()],
+            configuracion: None,
+        };
+        let manifiesto_b = Manifiesto {
+            version: VERSION_MANIFIESTO,
+            apps: vec![con_red],
+            configuracion: None,
+        };
+        assert_ne!(
+            hash(&manifiesto_a.serializar().unwrap()),
+            hash(&manifiesto_b.serializar().unwrap()),
+            "manifiestos con distintos permisos deben dar hashes distintos"
+        );
+
+        // El roundtrip preserva la mascara entera.
+        let con_todo = EntradaApp {
+            permisos: PERMISO_RED
+                | PERMISO_GRAFO_ESCRITURA
+                | PERMISO_RAIZ
+                | PERMISO_ALTAVOZ
+                | PERMISO_CONFIG,
+            ..base.clone()
+        };
+        let m = Manifiesto {
+            version: VERSION_MANIFIESTO,
+            apps: vec![con_todo],
+            configuracion: None,
+        };
+        let bytes = m.serializar().unwrap();
+        let leido = Manifiesto::deserializar(&bytes).unwrap();
+        assert_eq!(leido.apps[0].permisos, 0b11111);
     }
 
     #[test]
