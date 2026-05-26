@@ -49,6 +49,9 @@ use llimphi_module_fif::{self as fif, FifAction, FifMsg, FifPalette, FifState};
 use llimphi_module_file_picker::{
     self as picker, PickerAction, PickerMsg, PickerPalette, PickerState,
 };
+use llimphi_module_mini_map::{
+    self as minimap, MiniMapAction, MiniMapMsg, MiniMapPalette, MiniMapState, Snapshot as MiniMapSnapshot,
+};
 use llimphi_module_shuma_term::{
     self as term, ShumaTermAction, ShumaTermMsg, ShumaTermPalette, ShumaTermState,
 };
@@ -115,6 +118,7 @@ enum Msg {
     Outline(OutlineMsg),
     /// El LSP devolvió document symbols — repoblar el outline.
     OutlineRefresh(Vec<SymbolItem>),
+    MiniMap(MiniMapMsg),
     /// Mensajes del módulo diff viewer (Ctrl+Shift+D).
     Diff(DiffMsg),
     // Find
@@ -207,6 +211,7 @@ struct Model {
     /// repuebla en cada `OutlineRefresh`; vacío hasta que llega la
     /// primera respuesta.
     outline_symbols: Vec<SymbolItem>,
+    minimap: Option<MiniMapState>,
     /// Diff viewer; `None` cerrado. Snapshot del diff: si el buffer
     /// cambia con el panel abierto, las filas no se recomputan — el
     /// usuario cierra y reabre para refrescar (semántica congelada,
@@ -388,6 +393,7 @@ impl App for EditorApp {
             palette_commands: build_command_catalog(),
             outline: None,
             outline_symbols: Vec::new(),
+            minimap: None,
             diff: None,
             tabs: Vec::new(),
             active: None,
@@ -453,6 +459,7 @@ impl App for EditorApp {
                 }
                 m
             }
+            Msg::MiniMap(mm) => apply_minimap(model, mm),
             Msg::Diff(dm) => apply_diff(model, dm),
             Msg::FindOpen => {
                 let mut m = model;
@@ -993,6 +1000,10 @@ impl App for EditorApp {
             if diff::open_shortcut(event) {
                 return Some(Msg::Diff(DiffMsg::Open));
             }
+            if minimap::open_shortcut(event) {
+                let already_open = model.minimap.is_some();
+                return Some(Msg::MiniMap(if already_open { MiniMapMsg::Close } else { MiniMapMsg::Open }));
+            }
             // Ctrl+Alt+L = format (estilo JetBrains; antes era Ctrl+Shift+F).
             if event.modifiers.alt
                 && !event.modifiers.shift
@@ -1156,7 +1167,30 @@ fn body_view(model: &Model, theme: &Theme) -> View<Msg> {
 /// como panel inferior fijo de 220px (estilo VS Code).
 fn right_panel(model: &Model, theme: &Theme) -> View<Msg> {
     let editor = editor_panel(model, theme);
-    let mut children = vec![editor];
+    // Si el minimap esta abierto, el editor y el minimap conviven en
+    // un Row para que el minimap quede pegado a la derecha (estilo VS Code).
+    let editor_row: View<Msg> = match model.minimap.as_ref() {
+        Some(mm_state) => {
+            let (lines, vp_start, vp_end, caret_line) = minimap_snapshot_data(model);
+            let snap = MiniMapSnapshot {
+                lines: &lines,
+                viewport_start: vp_start,
+                viewport_end: vp_end,
+                caret_line,
+            };
+            let palette = MiniMapPalette::from_theme(theme);
+            let mm_view = minimap::view(mm_state, &snap, &palette, Msg::MiniMap);
+            View::new(Style {
+                flex_direction: FlexDirection::Row,
+                flex_grow: 1.0,
+                size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+                ..Default::default()
+            })
+            .children(vec![editor, mm_view])
+        }
+        None => editor,
+    };
+    let mut children = vec![editor_row];
     if let Some(state) = model.term.as_ref() {
         children.push(term::view(
             state,
@@ -1976,6 +2010,52 @@ fn apply_outline(model: Model, om: OutlineMsg) -> Model {
 /// una sola vez en `init` y vive en `Model.palette_commands`. Cada `id`
 /// debe estar mapeado en [`palette_id_to_msg`] para que el invoke pueda
 /// dispatchearse.
+fn apply_minimap(model: Model, mm: MiniMapMsg) -> Model {
+    let mut m = model;
+    if matches!(mm, MiniMapMsg::Open) && m.minimap.is_none() {
+        if m.active.is_none() {
+            m.status = "minimap: ningun tab activo".into();
+            return m;
+        }
+        m.minimap = Some(MiniMapState::new());
+        m.status = "minimap abierto - Ctrl+Shift+M cierra".into();
+        return m;
+    }
+    let action = match m.minimap.as_mut() {
+        Some(state) => minimap::apply(state, mm),
+        None => return m,
+    };
+    match action {
+        MiniMapAction::None => {}
+        MiniMapAction::Close => m.minimap = None,
+        MiniMapAction::JumpTo(line) => {
+            if let Some(tab) = m.active_tab_mut() {
+                let max_line = tab.editor.buffer.len_lines().saturating_sub(1);
+                let target = line.min(max_line);
+                tab.editor.set_caret_at(target, 0);
+                tab.editor.ensure_caret_visible(EDITOR_VISIBLE_LINES);
+            }
+        }
+    }
+    m
+}
+
+
+/// Construye un vec de chars-per-line + viewport + caret_line para
+/// el minimap del tab activo. Si no hay tab, todo vacio. O(lineas).
+fn minimap_snapshot_data(model: &Model) -> (Vec<usize>, usize, usize, usize) {
+    let Some(tab) = model.active_tab() else {
+        return (Vec::new(), 0, 0, 0);
+    };
+    let total = tab.editor.buffer.len_lines();
+    let lines: Vec<usize> = (0..total)
+        .map(|i| tab.editor.buffer.line_len_chars(i))
+        .collect();
+    let scroll = tab.editor.scroll_offset;
+    let caret = tab.editor.cursor.caret.line;
+    (lines, scroll, scroll + EDITOR_VISIBLE_LINES, caret)
+}
+
 fn build_command_catalog() -> Vec<PaletteCommand> {
     vec![
         PaletteCommand::new("editor.save", "Save File", "Editor").with_shortcut("Ctrl+S"),
@@ -2005,6 +2085,8 @@ fn build_command_catalog() -> Vec<PaletteCommand> {
             .with_shortcut("Ctrl+Shift+O"),
         PaletteCommand::new("editor.diff", "Compare with Saved", "Editor")
             .with_shortcut("Ctrl+Shift+D"),
+        PaletteCommand::new("editor.miniMap", "Toggle Mini-Map", "Editor")
+            .with_shortcut("Ctrl+Shift+M"),
     ]
 }
 
@@ -2030,6 +2112,7 @@ fn palette_id_to_msg(id: &str) -> Option<Msg> {
         "lsp.completions" => Msg::CompletionsRequest,
         "editor.outline" => Msg::Outline(OutlineMsg::Open),
         "editor.diff" => Msg::Diff(DiffMsg::Open),
+        "editor.miniMap" => Msg::MiniMap(MiniMapMsg::Open),
         _ => return None,
     })
 }
