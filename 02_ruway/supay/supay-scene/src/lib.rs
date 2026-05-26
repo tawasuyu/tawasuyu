@@ -175,6 +175,11 @@ pub struct PlayerOverlays {
     pub power_invuln: u32,
     /// Tics restantes del traje anti-radiación.
     pub power_radsuit: u32,
+    /// Fase 3.16: counter del berserk pickup (`pw_strength`). Tinte rojo
+    /// que fade-out a lo largo del nivel. En Doom: `12 - (val >> 6)` ↦
+    /// nivel de paleta (más rojo recién agarrado, transparente más tarde).
+    /// 0 = sin berserk activo.
+    pub power_strength: u32,
 }
 
 /// Una hoja convexa del BSP — referencia a un sector y un rango
@@ -291,6 +296,10 @@ pub struct SceneSnapshot {
     /// Fase 3.15: psprite del arma del jugador (pistol, shotgun, etc.).
     /// Cuando `active=false`, el renderer no pinta arma.
     pub weapon: WeaponSpriteSnap,
+    /// Fase 3.16: `psprites[ps_flash]` — segundo psprite que Doom usa
+    /// para muzzle flashes (BFG, plasma, chaingun fire frames). Sobrepuesto
+    /// a `weapon`. Inactivo la mayor parte del tiempo.
+    pub weapon_flash: WeaponSpriteSnap,
 }
 
 impl Default for SceneSnapshot {
@@ -315,6 +324,7 @@ impl SceneSnapshot {
             sky_pic: NO_SKY_PIC,
             player_overlays: PlayerOverlays::default(),
             weapon: WeaponSpriteSnap::default(),
+            weapon_flash: WeaponSpriteSnap::default(),
         }
     }
 }
@@ -453,17 +463,23 @@ pub fn interpolate(prev: &SceneSnapshot, next: &SceneSnapshot, alpha: f32) -> Sc
         // Weapon: el sprite cambia en pasos discretos por tick (state
         // transitions). Interpolar sx/sy daría smoothing al bob de la
         // pistola al caminar — vale la pena.
-        weapon: if prev.weapon.active && next.weapon.active && prev.weapon.sprite == next.weapon.sprite {
-            WeaponSpriteSnap {
-                active: true,
-                sprite: next.weapon.sprite,
-                frame: next.weapon.frame,
-                sx: lerp(prev.weapon.sx, next.weapon.sx, a),
-                sy: lerp(prev.weapon.sy, next.weapon.sy, a),
-            }
-        } else {
-            next.weapon
-        },
+        weapon: lerp_weapon(&prev.weapon, &next.weapon, a),
+        weapon_flash: lerp_weapon(&prev.weapon_flash, &next.weapon_flash, a),
+    }
+}
+
+#[inline]
+fn lerp_weapon(prev: &WeaponSpriteSnap, next: &WeaponSpriteSnap, a: f32) -> WeaponSpriteSnap {
+    if prev.active && next.active && prev.sprite == next.sprite {
+        WeaponSpriteSnap {
+            active: true,
+            sprite: next.sprite,
+            frame: next.frame,
+            sx: lerp(prev.sx, next.sx, a),
+            sy: lerp(prev.sy, next.sy, a),
+        }
+    } else {
+        *next
     }
 }
 

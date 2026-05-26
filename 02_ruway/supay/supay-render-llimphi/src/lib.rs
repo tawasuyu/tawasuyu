@@ -479,6 +479,10 @@ fn render_frame(scene: &mut Scene, rect: PaintRect, snap: &SceneSnapshot, cfg: &
     // pintado *encima* de la escena 3D pero *debajo* del overlay de
     // PLAYPAL (porque los damage flashes en Doom tintan el arma también).
     draw_weapon_sprite(scene, rect, &snap.weapon, cfg);
+    // Fase 3.16: muzzle flash (`ps_flash`) sobrepuesto al weapon.
+    // Doom usa este slot para el destello brillante de BFG, plasma,
+    // chaingun, etc. Mismo helper, mismo z-order layer apenas encima.
+    draw_weapon_sprite(scene, rect, &snap.weapon_flash, cfg);
 
     // Fase 3.14: overlay full-screen al final del frame (damage red,
     // pickup yellow, radsuit green, invuln white). Modernización pura
@@ -1926,6 +1930,18 @@ fn overlay_rgba(ov: &PlayerOverlays, tick: u64) -> Option<(u8, u8, u8, u8)> {
             return Some((45, 140, 60, 64));
         }
     }
+    // Berserk (`pw_strength`): tinte rojo que fade-out lento. Doom:
+    // `palette_idx = 12 - (strength >> 6)`, clampado a 0..7 = paletas
+    // STARTREDPALS+0..7. Nosotros mapeamos a alpha directo: recién
+    // agarrado el berserk strength=1 → idx=12 (max), después de muchos
+    // tics strength sube y el alpha cae. `strength >> 6` empieza en 0
+    // y crece a ~16+ en pocos minutos.
+    if ov.power_strength > 0 {
+        let shift = (ov.power_strength >> 6) as i32;
+        let level = (12 - shift).clamp(1, 8) as u8;
+        let alpha = (level * 10).min(90); // ramp 10..80
+        return Some((180, 40, 30, alpha));
+    }
     None
 }
 
@@ -2412,6 +2428,35 @@ mod tests {
         let off = overlay_rgba(&ov, 0);
         assert!(on.is_some(), "blink-on tick debe pintar verde");
         assert!(off.is_none(), "blink-off tick no debe pintar");
+    }
+
+    #[test]
+    fn overlay_berserk_fades_with_strength() {
+        // Fase 3.16: berserk recién agarrado tinte rojo intenso; después
+        // de muchos tics el alpha cae.
+        let fresh = PlayerOverlays {
+            power_strength: 1,
+            ..Default::default()
+        };
+        let old = PlayerOverlays {
+            power_strength: 600,
+            ..Default::default()
+        };
+        let (_, _, _, a_fresh) = overlay_rgba(&fresh, 0).expect("berserk fresh");
+        let (_, _, _, a_old) = overlay_rgba(&old, 0).expect("berserk old");
+        assert!(a_fresh > a_old, "alpha cae con tics: fresh={a_fresh} old={a_old}");
+    }
+
+    #[test]
+    fn overlay_radsuit_priority_over_berserk() {
+        // Si radsuit + berserk activos, gana radsuit (verde, no rojo).
+        let ov = PlayerOverlays {
+            power_strength: 1,
+            power_radsuit: 200,
+            ..Default::default()
+        };
+        let (r, g, _b, _a) = overlay_rgba(&ov, 0).expect("overlay");
+        assert!(g > r, "radsuit verde domina berserk rojo: r={r} g={g}");
     }
 
     #[test]

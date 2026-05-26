@@ -285,19 +285,26 @@ extern "C" {
         child_front: *mut u16,
         child_back: *mut u16,
     ) -> std::ffi::c_int;
-    /// Fase 3.14: counters del jugador para los overlays de pantalla
-    /// (red flash, yellow flash, radsuit green, invuln). Devuelve 0 si
-    /// el jugador no existe (pre-mapa) — outs en cero.
-    fn supay_scene_player_overlays(
-        damagecount: *mut std::ffi::c_int,
-        bonuscount: *mut std::ffi::c_int,
-        power_invuln: *mut std::ffi::c_int,
-        power_radsuit: *mut std::ffi::c_int,
-    ) -> std::ffi::c_int;
     /// Fase 3.15: estado del psprite del arma del jugador (pistol,
     /// shotgun, etc.). Devuelve 0 si el psprite no tiene state activo
     /// (player dead, pre-mapa). `sx`/`sy` en coords nominales 320×200.
     fn supay_scene_player_weapon(
+        spritenum: *mut u16,
+        frame: *mut u8,
+        sx: *mut f32,
+        sy: *mut f32,
+    ) -> std::ffi::c_int;
+    /// Fase 3.16: variante extendida con `power_strength` (berserk).
+    fn supay_scene_player_overlays_ext(
+        damagecount: *mut std::ffi::c_int,
+        bonuscount: *mut std::ffi::c_int,
+        power_invuln: *mut std::ffi::c_int,
+        power_radsuit: *mut std::ffi::c_int,
+        power_strength: *mut std::ffi::c_int,
+    ) -> std::ffi::c_int;
+    /// Fase 3.16: estado del `psprites[ps_flash]` (muzzle flash overlay
+    /// sobre el arma). Inactivo la mayor parte del tiempo.
+    fn supay_scene_player_flash(
         spritenum: *mut u16,
         frame: *mut u8,
         sx: *mut f32,
@@ -792,41 +799,33 @@ fn capture_scene_real(tick: u64) -> SceneSnapshot {
     // SAFETY: idem.
     let sky_pic = unsafe { supay_scene_sky_pic() };
 
-    // Player overlay counters (Fase 3.14).
+    // Player overlay counters (Fase 3.14 + 3.16 ext con berserk).
     let mut dmg = 0_i32;
     let mut bon = 0_i32;
     let mut p_inv = 0_i32;
     let mut p_rad = 0_i32;
+    let mut p_str = 0_i32;
     // SAFETY: punteros a locales válidos.
-    let _ = unsafe { supay_scene_player_overlays(&mut dmg, &mut bon, &mut p_inv, &mut p_rad) };
+    let _ = unsafe {
+        supay_scene_player_overlays_ext(
+            &mut dmg,
+            &mut bon,
+            &mut p_inv,
+            &mut p_rad,
+            &mut p_str,
+        )
+    };
     let player_overlays = PlayerOverlays {
         damage_count: dmg.max(0) as u16,
         bonus_count: bon.max(0) as u16,
         power_invuln: p_inv.max(0) as u32,
         power_radsuit: p_rad.max(0) as u32,
+        power_strength: p_str.max(0) as u32,
     };
 
-    // Psprite del arma (Fase 3.15).
-    let mut weap_sprite = 0_u16;
-    let mut weap_frame = 0_u8;
-    let mut weap_sx = 0.0_f32;
-    let mut weap_sy = 0.0_f32;
-    // SAFETY: punteros a locales válidos.
-    let weap_ok = unsafe {
-        supay_scene_player_weapon(
-            &mut weap_sprite,
-            &mut weap_frame,
-            &mut weap_sx,
-            &mut weap_sy,
-        )
-    };
-    let weapon = WeaponSpriteSnap {
-        active: weap_ok != 0,
-        sprite: weap_sprite,
-        frame: weap_frame,
-        sx: weap_sx,
-        sy: weap_sy,
-    };
+    // Psprite del arma (Fase 3.15) + flash overlay (Fase 3.16).
+    let weapon = capture_psprite(false);
+    let weapon_flash = capture_psprite(true);
 
     SceneSnapshot {
         tick,
@@ -840,6 +839,31 @@ fn capture_scene_real(tick: u64) -> SceneSnapshot {
         sky_pic,
         player_overlays,
         weapon,
+        weapon_flash,
+    }
+}
+
+/// Captura uno de los dos psprites del jugador. `is_flash=false` →
+/// `ps_weapon`; `true` → `ps_flash`. Devuelve `Default` (inactivo) si
+/// el motor no expone state activo para ese slot.
+#[cfg(not(doomgeneric_stub))]
+fn capture_psprite(is_flash: bool) -> WeaponSpriteSnap {
+    let mut sprite = 0_u16;
+    let mut frame = 0_u8;
+    let mut sx = 0.0_f32;
+    let mut sy = 0.0_f32;
+    // SAFETY: punteros a locales.
+    let ok = if is_flash {
+        unsafe { supay_scene_player_flash(&mut sprite, &mut frame, &mut sx, &mut sy) }
+    } else {
+        unsafe { supay_scene_player_weapon(&mut sprite, &mut frame, &mut sx, &mut sy) }
+    };
+    WeaponSpriteSnap {
+        active: ok != 0,
+        sprite,
+        frame,
+        sx,
+        sy,
     }
 }
 
@@ -962,5 +986,6 @@ fn synth_snapshot(tick: u64) -> SceneSnapshot {
         player_overlays: PlayerOverlays::default(),
         // Stub: sin arma — no hay psprite que mostrar sin jugador real.
         weapon: WeaponSpriteSnap::default(),
+        weapon_flash: WeaponSpriteSnap::default(),
     }
 }

@@ -351,6 +351,27 @@ cargo run -p supay-doom-llimphi --release
 
 **No incluido en 3.15 (defer a 3.16+):** wall + sprite BSP ordering; pitch / mouse-look; volumetric fog real; texture scrolling validation; decals dinámicos; berserk red tint; invuln invert-colors real; `ps_flash` (muzzle flash separado); weapon bob smoothing extra.
 
+**Fase 3.16 (2026-05-26, este bloque):** `ps_flash` (muzzle flash) + berserk red tint.
+
+- **`ps_flash`** — Doom mantiene un segundo psprite `psprites[ps_flash]` que se superpone al arma durante el disparo. Algunas armas (BFG, plasma, chaingun, shotgun de combate) lo usan para el destello brillante; pistola y motosierra no. Sin este overlay, los disparos de plasma/BFG se ven planos.
+- **C-side `supay_scene_player_flash`** — espejo exacto de `supay_scene_player_weapon`, pero leyendo `psprites[ps_flash]`. Devuelve 0 cuando el slot no tiene state (la mayor parte del tiempo).
+- **Berserk red tint** — Doom usa `pw_strength` (counter que sube monotónicamente desde 1) para tintar la paleta hacia el rojo al agarrar el berserk pack, con fade-out lento. La paleta se elige con `12 - (strength >> 6)` clampada a 0..7.
+- **C-side `supay_scene_player_overlays_ext`** — variante extendida que también devuelve `power_strength`. Reemplaza la versión vieja en `capture_scene_real`; la vieja FFI declaration se removió.
+- **`supay-scene::PlayerOverlays.power_strength`** field nuevo + `SceneSnapshot.weapon_flash: WeaponSpriteSnap` field nuevo.
+- **`interpolate`** factorizada en `lerp_weapon(prev, next, alpha)` para reusarse entre `weapon` y `weapon_flash`.
+- **`supay-render-llimphi::draw_weapon_sprite`** ahora se llama dos veces — una para `weapon`, otra para `weapon_flash`. El flash queda inmediatamente encima del arma (mismo escalado + anchor).
+- **`overlay_rgba` con berserk** — branch nueva al final, prioridad después de radsuit (más débil que invuln/damage/bonus/radsuit, fade-out de fondo del nivel completo). Color `(180, 40, 30)`, alpha ramp 10..80 a medida que `strength >> 6` crece.
+- **Prioridad final de overlays**: invuln > damage > bonus > radsuit > berserk. Mirrors la prioridad implícita de PLAYPAL en Doom (radsuit y strength comparten paletas red+green, pero radsuit gana en el motor cuando ambos activos).
+- **Tests** (+2 render = 35 total verde): `overlay_berserk_fades_with_strength` (alpha cae al subir el counter), `overlay_radsuit_priority_over_berserk` (radsuit verde domina cuando ambos activos).
+- **Header bump**: `PHASE 3.15` → `PHASE 3.16`.
+
+**Limitaciones conocidas de 3.16.**
+- **El flash siempre se pinta full-bright** — no aplicamos atenuación por luz de sector (consistente con 3.15 para `ps_weapon`). El bit FF_FULLBRIGHT del frame del flash queda capturado en el snapshot pero sin uso renderer-side (los flashes ya vienen brillantes en sus patches del WAD).
+- **Sin smoothing extra del bob** — `lerp_weapon` interpola sx/sy entre snapshots pero el bob mismo viene del motor a 35 Hz. Para feel ultra-suave habría que reconstruir el bob renderer-side a partir de la velocidad del jugador. Defer.
+- **Strength en E1 shareware** — los niveles del shareware DOOM1.WAD no incluyen berserk pack (es de DOOM2 + nightmare difficulty), así que el tint berserk no se va a ver corriendo el WAD shareware. Funciona con freedoom2 o doom1.wad full.
+
+**No incluido en 3.16 (defer a 3.17+):** wall + sprite BSP ordering; pitch / mouse-look; volumetric fog real; texture scrolling validation; decals dinámicos; invuln invert-colors real (necesita custom shader); weapon shading por luz de sector.
+
 ### Fase 4 — Capa de modernización opt-in
 
 Cada feature como toggle:
@@ -414,6 +435,7 @@ Cada feature como toggle:
   - **TempLight + flash de impacto**: nueva lista `Vec<TempLight>` con `(x, y, color, strength, ttl, ttl_max)`. Cada flash dura `FLASH_TTL = 4 ticks` y su `strength` decae linealmente con el TTL. `lighting_contribution` los suma; el resultado es un destello cálido cuando un bullet impacta. Spawn en colisión pared + colisión enemy.
   - **SpriteKinds nuevos**: `DyingImp` (rojo opaco scale 0.65) y `Corpse` (mancha rojiza scale 0.30) — el enemy en `draw_scene` se convierte al kind apropiado según state.
   - El jugador puede morir (vida llega a 0 y queda en 0); por ahora sin pantalla de game over — el input sigue activo. La pantalla del HUD muestra todo en rojo cuando vida < 25.
+- **2026-05-26 (+15):** Fase 3.16 — `ps_flash` (muzzle flash overlay) + berserk red tint en overlays. Plasma/BFG/chaingun ahora muestran el destello brillante por encima del arma; agarrar el berserk tinte rojo el frame por un rato. 35 tests verde renderer.
 - **2026-05-26 (+14):** Fase 3.15 — weapon psprite (pistol/shotgun/etc. en mano). Capture de `players[].psprites[ps_weapon]` desde doomgeneric, render como image overlay 2D anclado al bottom del viewport. Smoothing de sx/sy entre snapshots para weapon bob suave.
 - **2026-05-26 (+13):** Fase 3.14 — player palette overlays (damage red, pickup yellow, radsuit green, invuln white) como overlay alpha full-screen. Modernización de PLAYPAL[1..13] swap → un único fill semi-translúcido por frame. 33 tests verde renderer.
 - **2026-05-26 (+12):** Fase 3.13 — BSP back-to-front ordering exacto para pisos/techos (expone `nodes[]`, walker recursivo, depth `1e6 + step` reemplaza el centroide euclidiano para Renderable.depth de planos). Escaleras y sectores interpenetrados dejan de glitchear en el painter's. Walls/sprites siguen euclidiano. 28 tests verde renderer.

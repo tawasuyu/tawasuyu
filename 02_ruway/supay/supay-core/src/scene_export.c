@@ -140,6 +140,61 @@ int supay_scene_player_overlays(int *damagecount, int *bonuscount,
     return 1;
 }
 
+/* Variante extendida — Fase 3.16. Suma `power_strength` (berserk pickup)
+ * para el red tint que se desvanece a lo largo del nivel.
+ *
+ * En Doom, pw_strength es un contador que arranca grande (1) y crece
+ * por tick (no decae); el tinte se calcula como `12 - (power_strength >> 6)`
+ * con clamp — paleta más roja al recién agarrar el berserk, fade-out
+ * suave después. */
+int supay_scene_player_overlays_ext(int *damagecount, int *bonuscount,
+                                    int *power_invuln, int *power_radsuit,
+                                    int *power_strength) {
+    player_t *p = &players[consoleplayer];
+    if (!p->mo) {
+        *damagecount = 0;
+        *bonuscount = 0;
+        *power_invuln = 0;
+        *power_radsuit = 0;
+        *power_strength = 0;
+        return 0;
+    }
+    *damagecount = p->damagecount;
+    *bonuscount = p->bonuscount;
+    *power_invuln = p->powers[pw_invulnerability];
+    *power_radsuit = p->powers[pw_ironfeet];
+    *power_strength = p->powers[pw_strength];
+    return 1;
+}
+
+/* Estado del segundo psprite — `ps_flash`. Doom lo usa para los muzzle
+ * flashes de algunas armas (BFG, plasma, chaingun): un overlay extra
+ * sobre `ps_weapon` que dura sólo 1-2 tics y agrega el destello.
+ *
+ * API espejo de `supay_scene_player_weapon`. Devuelve 0 si state es NULL.
+ */
+int supay_scene_player_flash(uint16_t *spritenum, uint8_t *frame,
+                             float *sx, float *sy) {
+    player_t *p = &players[consoleplayer];
+    if (!p->mo) {
+        return 0;
+    }
+    pspdef_t *psp = &p->psprites[ps_flash];
+    if (!psp->state) {
+        return 0;
+    }
+    *spritenum = (uint16_t)psp->state->sprite;
+    int fr = psp->state->frame;
+    uint8_t f = (uint8_t)(fr & 0x1F);
+    if (fr & 0x8000) {
+        f |= 0x80;
+    }
+    *frame = f;
+    *sx = ftox(psp->sx);
+    *sy = ftox(psp->sy);
+    return 1;
+}
+
 /* Estado del psprite del arma del jugador (Fase 3.15). doomgeneric
  * mantiene `players[].psprites[ps_weapon]` con la animación de la
  * pistola/escopeta/etc. que el motor pintaría sobre la vista 2D.
