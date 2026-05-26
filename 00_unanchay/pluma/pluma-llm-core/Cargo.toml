@@ -1,0 +1,13 @@
+[package]
+name = "pluma-llm-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "pluma — contrato del cliente LLM (chat completion): trait ChatClient + tipos comunes. Backends (Anthropic, OpenAI-compatible, mock) implementan el rasgo en crates aparte."
+
+[dependencies]
+async-trait = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

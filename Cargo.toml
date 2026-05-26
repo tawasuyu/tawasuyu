@@ -47,6 +47,7 @@ members = [
     "00_unanchay/pluma/pluma-deck-web",
     "00_unanchay/pluma/pluma-editor-llimphi",
     "00_unanchay/pluma/pluma-graph",
+    "00_unanchay/pluma/pluma-llm-core",
     "00_unanchay/pluma/pluma-md",
     "00_unanchay/pluma/pluma-md-reader-web",
     "00_unanchay/pluma/pluma-notebook-app",
