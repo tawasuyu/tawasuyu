@@ -39,6 +39,9 @@ use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
 use llimphi_module_fif::{self as fif, FifAction, FifMsg, FifPalette, FifState};
+use llimphi_module_file_picker::{
+    self as picker, PickerAction, PickerMsg, PickerPalette, PickerState,
+};
 use llimphi_widget_tabs::{tabs_view, TabsPalette, TabsSpec};
 use llimphi_widget_text_editor::{
     all_matches, find_next, find_prev, text_editor_view_full, Clipboard, Diagnostic,
@@ -80,13 +83,8 @@ enum Msg {
     NextTab,
     /// Atajo Ctrl+Shift+Tab.
     PrevTab,
-    /// Ctrl+P abre el fuzzy file picker.
-    PickerOpen,
-    PickerClose,
-    PickerKey(KeyEvent),
-    PickerNav { delta: i32 },
-    /// Enter en el picker — abre (o activa) el archivo seleccionado.
-    PickerApply,
+    /// Mensajes del módulo file-picker.
+    Picker(PickerMsg),
     /// Mensajes del módulo find-in-files. El host los wrappea para
     /// rutearlos a `llimphi_module_fif::apply`.
     Fif(FifMsg),
@@ -194,16 +192,6 @@ struct Model {
     references: Option<ReferencesBar>,
     /// Prompt de rename con el nuevo nombre + pos original; `None` cerrado.
     rename: Option<RenameBar>,
-}
-
-/// Estado del fuzzy file picker (Ctrl+P).
-struct PickerState {
-    input: TextInputState,
-    /// Índices a `Model.all_files` filtrados por el query del input.
-    /// Se re-calcula en cada keystroke.
-    results: Vec<usize>,
-    /// Índice dentro de `results` (no de `all_files`).
-    selected: usize,
 }
 
 struct RenameBar {
@@ -391,47 +379,7 @@ impl App for EditorApp {
                 }
                 m
             }
-            Msg::PickerOpen => {
-                let mut m = model;
-                if m.picker.is_none() {
-                    let mut p = PickerState {
-                        input: TextInputState::new(),
-                        results: Vec::new(),
-                        selected: 0,
-                    };
-                    picker_refilter(&mut p, &m.all_files, &m.root);
-                    m.picker = Some(p);
-                    m.status = format!("picker · {} archivos · ↓↑ Enter abre · Esc cierra", m.all_files.len());
-                }
-                m
-            }
-            Msg::PickerClose => Model { picker: None, ..model },
-            Msg::PickerKey(ev) => {
-                let mut m = model;
-                if let Some(p) = m.picker.as_mut() {
-                    p.input.apply_key(&ev);
-                    picker_refilter(p, &m.all_files, &m.root);
-                }
-                m
-            }
-            Msg::PickerNav { delta } => {
-                let mut m = model;
-                if let Some(p) = m.picker.as_mut() {
-                    let n = p.results.len() as i32;
-                    if n > 0 {
-                        p.selected = (p.selected as i32 + delta).rem_euclid(n) as usize;
-                    }
-                }
-                m
-            }
-            Msg::PickerApply => {
-                let mut m = model;
-                let Some(p) = m.picker.as_ref() else { return m };
-                let Some(&file_idx) = p.results.get(p.selected) else { return m };
-                let Some(path) = m.all_files.get(file_idx).cloned() else { return m };
-                m.picker = None;
-                open_path(m, path)
-            }
+            Msg::Picker(pm) => apply_picker(model, pm),
             Msg::Fif(fmsg) => apply_fif(model, fmsg),
             Msg::FindOpen => {
                 let mut m = model;
@@ -853,16 +801,11 @@ impl App for EditorApp {
             }
         }
 
-        // Picker abierto: Up/Down navegan, Enter aplica, Esc cierra,
-        // el resto va al input.
-        if model.picker.is_some() {
-            return match &event.key {
-                Key::Named(NamedKey::Escape) => Some(Msg::PickerClose),
-                Key::Named(NamedKey::Enter) => Some(Msg::PickerApply),
-                Key::Named(NamedKey::ArrowDown) => Some(Msg::PickerNav { delta: 1 }),
-                Key::Named(NamedKey::ArrowUp) => Some(Msg::PickerNav { delta: -1 }),
-                _ => Some(Msg::PickerKey(event.clone())),
-            };
+        // Picker abierto: el módulo decide qué hacer con cada tecla.
+        if let Some(state) = model.picker.as_ref() {
+            if let Some(pm) = picker::on_key(state, event) {
+                return Some(Msg::Picker(pm));
+            }
         }
         // Find-in-files abierto: el módulo decide qué hacer con cada tecla.
         if let Some(state) = model.fif.as_ref() {
@@ -876,9 +819,9 @@ impl App for EditorApp {
             if matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("s")) {
                 return Some(Msg::Save);
             }
-            // Ctrl+P abre el fuzzy file picker.
-            if matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("p")) {
-                return Some(Msg::PickerOpen);
+            // Ctrl+P abre el fuzzy file picker (helper del módulo).
+            if picker::open_shortcut(event) {
+                return Some(Msg::Picker(PickerMsg::Open));
             }
             // Ctrl+W cierra el tab activo.
             if matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("w")) {
@@ -1149,7 +1092,8 @@ fn editor_panel(model: &Model, theme: &Theme) -> View<Msg> {
 fn active_editor_content(model: &Model, theme: &Theme) -> View<Msg> {
     let mut children: Vec<View<Msg>> = Vec::new();
     if let Some(p) = model.picker.as_ref() {
-        children.push(picker_view(p, model, theme));
+        let palette = PickerPalette::from_theme(theme);
+        children.push(picker::view(p, &model.all_files, &model.root, &palette, Msg::Picker));
     }
     if let Some(f) = model.fif.as_ref() {
         let palette = FifPalette::from_theme(theme);
@@ -1211,9 +1155,6 @@ const FIND_BAR_H: f32 = 32.0;
 const COMPLETIONS_BAR_H: f32 = 120.0;
 const COMPLETIONS_ROW_H: f32 = 22.0;
 const COMPLETIONS_MAX_ITEMS_VISIBLE: usize = 5;
-const PICKER_BAR_H: f32 = 220.0;
-const PICKER_ROW_H: f32 = 20.0;
-const PICKER_MAX_VISIBLE: usize = 9;
 
 const HOVER_BAR_H: f32 = 96.0;
 const SIG_HELP_BAR_H: f32 = 56.0;
@@ -1510,97 +1451,6 @@ fn completions_bar_view(bar: &CompletionsBar, theme: &Theme) -> View<Msg> {
     .children(rows)
 }
 
-fn picker_view(picker: &PickerState, model: &Model, theme: &Theme) -> View<Msg> {
-    let tp = TextInputPalette::from_theme(theme);
-    let header = if picker.results.is_empty() {
-        format!("file picker · sin matches · {} archivos · Esc cierra", model.all_files.len())
-    } else {
-        format!(
-            "file picker · {} / {} · ↓↑ navega · Enter abre · Esc cierra",
-            picker.selected + 1,
-            picker.results.len(),
-        )
-    };
-    let header_view = View::new(Style {
-        size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
-        padding: Rect {
-            left: length(8.0_f32), right: length(8.0_f32),
-            top: length(0.0_f32), bottom: length(0.0_f32),
-        },
-        align_items: Some(AlignItems::Center),
-        flex_shrink: 0.0,
-        ..Default::default()
-    })
-    .fill(theme.bg_panel_alt)
-    .text_aligned(header, 10.0, theme.fg_muted, Alignment::Start);
-
-    let input_view = View::new(Style {
-        size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
-        padding: Rect {
-            left: length(6.0_f32), right: length(6.0_f32),
-            top: length(2.0_f32), bottom: length(2.0_f32),
-        },
-        flex_shrink: 0.0,
-        ..Default::default()
-    })
-    .fill(theme.bg_panel)
-    .children(vec![text_input_view(
-        &picker.input,
-        "filtro: nombre o ruta…",
-        true,
-        &tp,
-        Msg::PickerOpen,
-    )]);
-
-    // Ventana visible centrada (más o menos) en el seleccionado.
-    let visible_start = picker.selected.saturating_sub(PICKER_MAX_VISIBLE.saturating_sub(1));
-    let visible_end = (visible_start + PICKER_MAX_VISIBLE).min(picker.results.len());
-    let mut rows: Vec<View<Msg>> = Vec::with_capacity(PICKER_MAX_VISIBLE);
-    for i in visible_start..visible_end {
-        let Some(&file_idx) = picker.results.get(i) else { continue };
-        let Some(path) = model.all_files.get(file_idx) else { continue };
-        let rel = relative_to(&model.root, path);
-        let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("?");
-        let dir = rel.strip_suffix(name).unwrap_or("");
-        let label = if dir.is_empty() {
-            name.to_string()
-        } else {
-            format!("{name}    {}", dir.trim_end_matches('/'))
-        };
-        let selected = i == picker.selected;
-        let bg = if selected { theme.bg_selected } else { theme.bg_panel };
-        let fg = if selected { theme.fg_text } else { theme.fg_muted };
-        rows.push(
-            View::new(Style {
-                size: Size { width: percent(1.0_f32), height: length(PICKER_ROW_H) },
-                padding: Rect {
-                    left: length(10.0_f32), right: length(8.0_f32),
-                    top: length(0.0_f32), bottom: length(0.0_f32),
-                },
-                align_items: Some(AlignItems::Center),
-                flex_shrink: 0.0,
-                ..Default::default()
-            })
-            .fill(bg)
-            .text_aligned(label, 11.0, fg, Alignment::Start),
-        );
-    }
-
-    let mut children: Vec<View<Msg>> = Vec::with_capacity(3 + rows.len());
-    children.push(header_view);
-    children.push(input_view);
-    children.extend(rows);
-
-    View::new(Style {
-        flex_direction: FlexDirection::Column,
-        size: Size { width: percent(1.0_f32), height: length(PICKER_BAR_H) },
-        flex_shrink: 0.0,
-        ..Default::default()
-    })
-    .fill(theme.bg_panel)
-    .children(children)
-}
-
 fn find_bar(find: &FindBarState, theme: &Theme) -> View<Msg> {
     let tp = TextInputPalette::from_theme(theme);
     let input = text_input_view(&find.input, "buscar… (Enter / Ctrl+G siguiente · Shift inverso · Esc cierra)", true, &tp, Msg::FindOpen);
@@ -1792,42 +1642,31 @@ fn open_path(mut model: Model, path: PathBuf) -> Model {
     model
 }
 
-/// Re-calcula `picker.results` según el query actual del input. Match
-/// case-insensitive sobre el path relativo. Score: prefiere hits en el
-/// basename y los más cortos. Vacío = todos.
-fn picker_refilter(picker: &mut PickerState, files: &[PathBuf], root: &Path) {
-    let q = picker.input.text();
-    let q_lc = q.to_lowercase();
-    let mut scored: Vec<(i64, usize)> = Vec::new();
-    for (i, path) in files.iter().enumerate() {
-        let rel = relative_to(root, path);
-        if q_lc.is_empty() {
-            scored.push((rel.len() as i64, i));
-            continue;
-        }
-        let rel_lc = rel.to_lowercase();
-        let Some(rel_hit) = rel_lc.find(&q_lc) else { continue };
-        let name = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_lowercase())
-            .unwrap_or_default();
-        let name_hit = name.find(&q_lc);
-        // Menor score = mejor. Penaliza paths largos, premia hits en el
-        // basename.
-        let score = match name_hit {
-            Some(pos) => pos as i64 * 4 + rel.len() as i64,
-            None => 10_000 + rel_hit as i64 + rel.len() as i64,
-        };
-        scored.push((score, i));
+/// Routea un PickerMsg al módulo y traduce el `PickerAction` resultante.
+fn apply_picker(model: Model, pm: PickerMsg) -> Model {
+    let mut m = model;
+    if matches!(pm, PickerMsg::Open) && m.picker.is_none() {
+        m.picker = Some(PickerState::new(&m.all_files, &m.root));
+        m.status = format!(
+            "picker · {} archivos · ↓↑ Enter abre · Esc cierra",
+            m.all_files.len(),
+        );
+        return m;
     }
-    scored.sort_by_key(|(s, _)| *s);
-    scored.truncate(PICKER_MAX_RESULTS);
-    picker.results = scored.into_iter().map(|(_, i)| i).collect();
-    picker.selected = 0;
+    let action = match m.picker.as_mut() {
+        Some(state) => picker::apply(state, pm, &m.all_files, &m.root),
+        None => return m,
+    };
+    match action {
+        PickerAction::None => {}
+        PickerAction::Close => m.picker = None,
+        PickerAction::Open(path) => {
+            m.picker = None;
+            m = open_path(m, path);
+        }
+    }
+    m
 }
-
-const PICKER_MAX_RESULTS: usize = 200;
 
 /// Routea un FifMsg a `llimphi_module_fif::apply` y traduce el `FifAction`
 /// resultante a la mutación apropiada del Model. Único lugar de gioser-edit

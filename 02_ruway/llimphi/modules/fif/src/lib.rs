@@ -103,6 +103,20 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{Key, KeyEvent, KeyState, NamedKey, View};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
+/// Capabilities que este módulo aporta al host. Convención del protocolo
+/// Brahman Card aplicada a módulos compile-time: el host (cuando construye
+/// su [`card_core::Card`]) puede agregar esto a `provides` para anunciar
+/// — vía broker — que su instancia ofrece find-in-files al ecosistema.
+///
+/// Ejemplo en el `build_card()` del host:
+/// ```ignore
+/// let mut provides: BTreeSet<Capability> = base_provides();
+/// for cap in llimphi_module_fif::CAPABILITIES {
+///     provides.insert(Capability::from_str(cap).unwrap());
+/// }
+/// ```
+pub const CAPABILITIES: &[&str] = &["editor.find-in-files"];
+
 /// Caps razonables para que un workspace grande no funda el UI.
 pub const MAX_RESULTS: usize = 1000;
 pub const MAX_FILE_SIZE: u64 = 2_000_000;

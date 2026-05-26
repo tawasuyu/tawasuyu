@@ -136,6 +136,7 @@ members = [
     "02_ruway/llimphi/widgets/tiled",
     "02_ruway/llimphi/widgets/tree",
     "02_ruway/llimphi/modules/fif",
+    "02_ruway/llimphi/modules/file-picker",
     "02_ruway/nahual/nahual-shell-llimphi",
     "02_ruway/nahual/nahual-file-explorer-llimphi",
     "02_ruway/nahual/nahual-image-viewer-llimphi",
@@ -218,6 +219,7 @@ members = [
     "03_ukupacha/arje/init/arje-incarnate",
     "03_ukupacha/arje/init/arje-kernel",
     "03_ukupacha/arje/init/arje-net-bring-up",
+    "03_ukupacha/arje/init/arje-packager",
     "03_ukupacha/arje/init/arje-snapshot",
     "03_ukupacha/arje/init/arje-soma",
     "03_ukupacha/arje/init/arje-zero",
@@ -411,6 +413,7 @@ llimphi-widget-splitter = { path = "02_ruway/llimphi/widgets/splitter" }
 llimphi-widget-stat-card = { path = "02_ruway/llimphi/widgets/stat-card" }
 llimphi-widget-tabs = { path = "02_ruway/llimphi/widgets/tabs" }
 llimphi-module-fif = { path = "02_ruway/llimphi/modules/fif" }
+llimphi-module-file-picker = { path = "02_ruway/llimphi/modules/file-picker" }
 llimphi-widget-theme-switcher = { path = "02_ruway/llimphi/widgets/theme-switcher" }
 llimphi-widget-text-area = { path = "02_ruway/llimphi/widgets/text-area" }
 llimphi-widget-text-editor = { path = "02_ruway/llimphi/widgets/text-editor" }

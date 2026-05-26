@@ -138,12 +138,43 @@ Lo que el host gana:
   chasqui-broker-explorer, un pluma-app) puede sumar find-in-files con
   ~15 líneas de glue.
 
+## Relación con el protocolo Brahman Card
+
+`card_core::Card` describe **entidades runtime** (procesos con
+`payload`/`soma`/`supervision`, gestionados por Init/Admin/Sidecar). Los
+módulos Llimphi son **crates de librería** que se linkean al host — no
+tienen proceso propio. Por eso un módulo individual **no lleva Card**.
+
+Sí son relevantes en dos lugares:
+
+1. **Card del host**. Cuando una app construye su Card (ej.
+   `cosmos_card::build_card()`), puede agregar a `provides` las
+   capabilities que sus módulos embebidos aportan. Cada módulo expone
+   `pub const CAPABILITIES: &[&str]` con strings tipo
+   `"editor.find-in-files"` que el host enrola en su Card antes de
+   `spawn_sidecar()`. Beneficio: el broker chasqui descubre que la
+   instancia ofrece esas funciones sin que el host tenga que enumerarlas
+   a mano.
+
+2. **Plugins WASM runtime (Tier 2, próximo)**. Esos sí son entidades
+   runtime cargadas dinámicamente y van a llevar Card completa con
+   `permissions` enumerados, sandboxing real vía `card_core::Permissions`,
+   y descubrimiento por broker. Estos no son "módulos" en el sentido de
+   este doc — viven en una capa distinta.
+
+## Módulos existentes
+
+| Crate                          | Capability               | Atajo recomendado |
+|--------------------------------|--------------------------|-------------------|
+| `llimphi-module-fif`           | `editor.find-in-files`   | Ctrl+Shift+F      |
+| `llimphi-module-file-picker`   | `editor.file-picker`     | Ctrl+P            |
+
 ## Siguientes módulos candidatos
 
-- `llimphi-module-file-picker` — el Ctrl+P fuzzy file picker (hoy inline
-  en `gioser-edit`).
 - `llimphi-module-command-palette` — Ctrl+Shift+P estilo VS Code.
 - `llimphi-module-diff-viewer` — visualización side-by-side de cambios.
 - `llimphi-module-mini-map` — overlay de minimap del buffer activo.
+- `llimphi-module-symbol-outline` — outline del documento via LSP
+  `documentSymbol`.
 
 Cada uno debería seguir el mismo contrato sin inventar uno nuevo.

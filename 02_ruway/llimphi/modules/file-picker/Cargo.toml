@@ -1,0 +1,13 @@
+[package]
+name = "llimphi-module-file-picker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-module-file-picker — fuzzy file picker (estilo Ctrl+P de VS Code). Módulo Llimphi reutilizable: state + Msg + Action + apply/on_key/view sobre un slice de paths que provee el host."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-text-input = { workspace = true }
