@@ -253,7 +253,14 @@ fn create_intermediate(
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: INTERMEDIATE_FORMAT,
-        usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+        // STORAGE_BINDING: vello escribe via compute shader.
+        // TEXTURE_BINDING: el blitter la lee como sampler source.
+        // RENDER_ATTACHMENT: render passes con clear-only (sin vello)
+        //   también escriben acá — desktop drivers lo tolerían sin este
+        //   flag, Adreno con validación estricta rechaza el frame.
+        usage: wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
