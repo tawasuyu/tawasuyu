@@ -9,6 +9,10 @@ description = "pluma — backend Llimphi del editor DAG: pinta un RenderPlan com
 
 [dependencies]
 pluma-render-plan = { path = "../pluma-render-plan" }
+pluma-core = { path = "../pluma-core" }
+pluma-cuerpo = { path = "../pluma-cuerpo" }
+pluma-align = { path = "../pluma-align" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 rimay-localize = { path = "../../../shared/rimay-localize" }
+uuid = { workspace = true, features = ["serde"] }
