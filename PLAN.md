@@ -22,6 +22,12 @@ gioser/
 4. **Llimphi**: 5 crates (`hal/raster/layout/text/ui`) verdes en hardware. Texto vía parley (shaping completo, fallback CJK/emoji vía fontique). Bucle Elm con hit-test funcional.
 5. `cargo check --workspace` pasa.
 6. **Canal de release wawa** (2026-05-26): `format::Canal` + `RaizFirmada` + `mensaje_a_firmar`, `akasha::MensajeAkasha::AnunciarCanal` (cuarta variante). Kernel ingesta el DAG y traza; verificación de firma + re-anclaje quedan para userspace (app `mudanza`, pendiente). 8/8 tests format, 7/7 tests akasha. Distribución/actualización en wawa: paquete = objeto, versión = hash, repo = canal firmado por agora, update = re-anclar superbloque (atómico), rollback = re-anclar raíz vieja del log.
+7. **Pluma multilienzo — andamiaje** (2026-05-26): cuatro de las siete fases del §11.7 ya en `main`.
+   - `pluma-cuerpo` (9/9 tests): Cuerpo + MetaCuerpo + Intencion (Original/Traduccion/Tono/Resumen/Reescritura/Anotacion/Custom), `valida_consistencia`, `es_stale(modificado_madre_en)`, postcard roundtrip.
+   - `pluma-align` (7/7 tests): Alineamiento(atom_a, atom_b, fuerza∈[0,1], origen, fresco), OrigenAlineamiento (Manual/Embeddings/Derivado, todos con timestamp), CartaHebras + `marcar_stale_anteriores_a`, alineadores `alinear_uno_a_uno` y `alinear_explicito`.
+   - `pluma-transform` (5/5 tests): TipoTransformacion (Identidad/Traducir/Tono/Resumir/Reescribir/Custom{Rhai}), trait Ejecutor (no toca reloj — recibe `ahora` para tests deterministicos), `EjecutorIdentidad` end-to-end sin LLM (hija comparte UUIDs con madre, carta 1↔1 Derivada).
+   - `pluma-editor-llimphi::multilienzo` (5 tests nuevos + demo ejecutable): vista HStack de columnas + carriles de hebras. Hebras pintadas via `View::paint_with` con vello strokes; color por origen (Derivada verde / Embeddings azul-modulado-por-fuerza / Manual ámbar / Stale gris), trazo punteado para stale. `precomputar_hebras` robusto a la convención atom_a/atom_b. Demo `multilienzo_demo` con 3 cuerpos (es / qu runa simi / en resumen) muestra los 4 estados y un caso 5→2 (resumen condensando varios párrafos).
+   - **Pendiente** (§11.7 pasos 5-7): conectar `Traducir` a `rimay-localize` (cuerpo derivado real es→qu), conectar `alinear_por_embeddings` a `iniy` (saturación + stale detection automáticos), transformaciones LLM completas (Tono/Resumir/Reescribir) y UI completa (focus mode, búsqueda transversal, vista matriz, inline previews, federación minga).
 
 ## 2. Hito #1 — Llimphi (gráfico soberano)
 
