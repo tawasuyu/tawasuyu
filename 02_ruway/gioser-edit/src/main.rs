@@ -127,6 +127,7 @@ enum Msg {
     OutlineRefresh(Vec<SymbolItem>),
     MiniMap(MiniMapMsg),
     Bookmarks(BookmarksMsg),
+    CycleTheme,
     /// Mensajes del módulo diff viewer (Ctrl+Shift+D).
     Diff(DiffMsg),
     // Find
@@ -248,6 +249,7 @@ struct Model {
     /// Etiqueta corta del LSP activo para mostrar en la status bar.
     /// Se setea una vez en init y no muta despues.
     lsp_label: String,
+    theme: Theme,
     /// Items del popup de completions; `None` si el popup está cerrado.
     completions: Option<CompletionsBar>,
     /// Popup de hover; `None` cerrado.
@@ -416,6 +418,7 @@ impl App for EditorApp {
             demo_lsp,
             lsp,
             lsp_label,
+            theme: Theme::dark(),
             completions: None,
             hover: None,
             sig_help: None,
@@ -474,6 +477,12 @@ impl App for EditorApp {
             }
             Msg::MiniMap(mm) => apply_minimap(model, mm),
             Msg::Bookmarks(bm) => apply_bookmarks(model, bm),
+            Msg::CycleTheme => {
+                let mut m = model;
+                m.theme = Theme::next_after(m.theme.name);
+                m.status = format!("✓ tema: {}", m.theme.name);
+                m
+            }
             Msg::Diff(dm) => apply_diff(model, dm),
             Msg::FindOpen => {
                 let mut m = model;
@@ -1021,6 +1030,13 @@ impl App for EditorApp {
                 let already_open = model.minimap.is_some();
                 return Some(Msg::MiniMap(if already_open { MiniMapMsg::Close } else { MiniMapMsg::Open }));
             }
+            // Ctrl+Alt+T = ciclar tema.
+            if event.modifiers.alt
+                && !event.modifiers.shift
+                && matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("t"))
+            {
+                return Some(Msg::CycleTheme);
+            }
             if bookmarks::open_shortcut(event) {
                 let already_open = model.bookmarks.overlay.is_some();
                 return Some(Msg::Bookmarks(if already_open { BookmarksMsg::CloseList } else { BookmarksMsg::OpenList }));
@@ -1138,7 +1154,7 @@ impl App for EditorApp {
     }
 
     fn view(model: &Model) -> View<Msg> {
-        let theme = Theme::dark();
+        let theme = model.theme.clone();
         let header = header_bar(model, &theme);
         let body = body_view(model, &theme);
         let status = status_bar(model, &theme);
@@ -2364,6 +2380,8 @@ fn build_command_catalog() -> Vec<PaletteCommand> {
         PaletteCommand::new("editor.bookmarkList", "List Bookmarks", "Editor")
             .with_shortcut("Ctrl+Shift+B"),
         PaletteCommand::new("editor.bookmarkClear", "Clear All Bookmarks", "Editor"),
+        PaletteCommand::new("view.cycleTheme", "Cycle Theme", "View")
+            .with_shortcut("Ctrl+Alt+T"),
     ]
 }
 
@@ -2392,6 +2410,7 @@ fn palette_id_to_msg(id: &str) -> Option<Msg> {
         "editor.miniMap" => Msg::MiniMap(MiniMapMsg::Open),
         "editor.bookmarkList" => Msg::Bookmarks(BookmarksMsg::OpenList),
         "editor.bookmarkClear" => Msg::Bookmarks(BookmarksMsg::ClearAll),
+        "view.cycleTheme" => Msg::CycleTheme,
         _ => return None,
     })
 }
