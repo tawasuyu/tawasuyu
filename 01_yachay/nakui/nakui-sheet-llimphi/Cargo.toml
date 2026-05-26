@@ -1,0 +1,19 @@
+[package]
+name = "nakui-sheet-llimphi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Visor + editor mínimo de hojas de cálculo Nakui sobre Llimphi: grilla con headers, barra de fórmula, selección por click o flechas. Aplica al Workbook con Enter; muestra errores de invariante en línea."
+
+[[bin]]
+name = "nakui-sheet-llimphi"
+path = "src/main.rs"
+
+[dependencies]
+nakui-sheet = { path = "../nakui-sheet" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-text-input = { workspace = true }
