@@ -2,7 +2,7 @@
 //! conversión polar → pantalla, spread anti-solapamiento, detección
 //! de clusters, format de coordenadas.
 //!
-//! Vive aquí (no en el canvas gpui) porque exactamente la misma
+//! Vive aquí (no en el canvas Llimphi) porque exactamente la misma
 //! lógica corre en el cliente web (WASM) y en la app desktop. Cualquier
 //! ajuste de geometría aparece en ambos a la vez.
 

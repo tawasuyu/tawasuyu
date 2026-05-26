@@ -1,6 +1,6 @@
 # Plan maestro gioser
 
-> Estado al **2026-05-25**: monorepo nacido, 4 cuadrantes consolidados, ~220 crates compilando, GPUI marcado para extinción.
+> Estado al **2026-05-26**: monorepo nacido, 4 cuadrantes consolidados, ~210 crates compilando, **GPUI extinto** — todas las apps pasaron a Llimphi.
 
 ## 0. Cartografía
 

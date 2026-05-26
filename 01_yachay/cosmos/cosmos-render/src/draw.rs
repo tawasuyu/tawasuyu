@@ -1,11 +1,11 @@
 //! Primitivas agnósticas de pintura — el `DrawCommand` que cada
-//! surface (gpui canvas o SVG/Canvas2D del WASM) traduce a su API.
+//! surface (canvas Llimphi o SVG/Canvas2D del WASM) traduce a su API.
 
 use serde::{Deserialize, Serialize};
 
 /// Color RGBA en `[0.0, 1.0]^4`. Independiente del color-space del
-/// surface (no es Hsla de gpui ni hex de CSS). El traductor de surface
-/// hace la conversión final.
+/// surface (no es Hsla de la UI nativa ni hex de CSS). El traductor de
+/// surface hace la conversión final.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 pub struct Rgba {
     pub r: f32,

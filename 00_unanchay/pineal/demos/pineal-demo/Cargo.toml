@@ -5,7 +5,7 @@ edition = { workspace = true }
 license = { workspace = true }
 authors = { workspace = true }
 publish = { workspace = true }
-description = "Lapaloma — demo app: una serie sin(x) sobre ChartViewport rendereada con LapalomaChartElement. Valida la cadena core → render → cartesian → gpui en vivo."
+description = "Lapaloma — demo app: una serie sin(x) sobre ChartViewport rendereada con LapalomaChartElement. Valida la cadena core → render → cartesian → llimphi en vivo."
 
 [dependencies]
 llimphi-ui = { workspace = true }

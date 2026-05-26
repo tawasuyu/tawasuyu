@@ -1,13 +1,12 @@
-//! Paleta astrológica agnóstica (`Rgba`, no `Hsla` de gpui). Replica
-//! los slots de `cosmos_app-theme::AstroPalette` con `dark()` y
-//! `light()`, sin arrastrar dependencia de gpui. El canvas nativo
-//! traduce desde su `AstroPalette` Hsla; el cliente WASM usa esta
-//! palette directamente.
+//! Paleta astrológica agnóstica (`Rgba`, sin tipos de UI nativa).
+//! Replica los slots de `cosmos_app-theme::AstroPalette` con `dark()`
+//! y `light()` para que canvas Llimphi y cliente WASM compartan los
+//! mismos colores sin arrastrar deps de UI.
 
 use crate::draw::Rgba;
 
 /// Color en HSL `[0..1]^4`, helper local para construir la palette
-/// con la misma convención que el theme nativo (que era Hsla de gpui).
+/// con la misma convención que las paletas anteriores.
 fn hsla(h_deg: f32, s: f32, l: f32, a: f32) -> Rgba {
     // Conversión HSL → RGB (algoritmo estándar). H en grados.
     let h = h_deg / 360.0;
@@ -32,7 +31,7 @@ fn hsla(h_deg: f32, s: f32, l: f32, a: f32) -> Rgba {
 }
 
 /// Paleta astrológica completa. Mismos slots que el theme nativo —
-/// permite que el cliente WASM y el canvas gpui generen las mismas
+/// permite que el cliente WASM y el canvas Llimphi generen las mismas
 /// decisiones de color en su superficie.
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {

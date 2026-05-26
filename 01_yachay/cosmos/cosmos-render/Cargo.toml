@@ -3,7 +3,7 @@ name = "cosmos-render"
 version = { workspace = true }
 edition = { workspace = true }
 license = { workspace = true }
-description = "Tahuantinsuyu — modelo y matemática de render agnósticos de surface. Compila a WASM y a nativo; el canvas gpui y el cliente web lo consumen para emitir las primitivas comunes de la rueda."
+description = "Tahuantinsuyu — modelo y matemática de render agnósticos de surface. Compila a WASM y a nativo; el canvas Llimphi y el cliente web lo consumen para emitir las primitivas comunes de la rueda."
 
 [dependencies]
 cosmos-model = { path = "../cosmos-model" }

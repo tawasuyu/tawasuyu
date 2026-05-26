@@ -1,5 +1,5 @@
 //! `cosmos_app-render` — modelo y matemática de render
-//! **agnósticos de surface**. Lo consumen tanto el canvas gpui
+//! **agnósticos de surface**. Lo consumen tanto el canvas Llimphi
 //! (nativo, render Vulkan/Metal) como el cliente web (WASM, render
 //! SVG / Canvas2D). Cualquier mejora del layout / spread / cluster /
 //! coords vive acá una sola vez y aparece en ambos clientes.
@@ -19,7 +19,7 @@
 //!    que el engine emite y los clients consumen.
 //! 2. **Matemática agnóstica** *(módulos siguientes, no en esta primera
 //!    versión)* — `polar_to_screen`, `spread_angles`, `find_clusters`,
-//!    `format_coord_compact`, `Radii`. Migran desde el canvas gpui.
+//!    `format_coord_compact`, `Radii`. Migran desde el canvas Llimphi.
 //! 3. **`DrawCommand`** *(módulo siguiente)* — primitivas de pintura
 //!    (line, circle, glyph, pill) que cada surface traduce a su API.
 
@@ -54,7 +54,7 @@ pub use sphere3d::{compose_sphere, SphereOpts, SphereView, OBLICUIDAD_DEG};
 // =====================================================================
 
 /// Resultado agnóstico de un cómputo astrológico, listo para renderizar.
-/// El canvas gpui y el cliente web lo consumen idénticamente: el engine
+/// El canvas Llimphi y el cliente web lo consumen idénticamente: el engine
 /// computa (en nativo, con eternal) y publica este struct.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenderModel {

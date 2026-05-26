@@ -31,7 +31,7 @@ pub use cosmos_model::{Chart, ChartId, ChartKind};
 
 // Los tipos del RenderModel viven en `cosmos_app-render` (crate
 // agnóstico de surface — compila a WASM, lo consumen tanto el canvas
-// gpui como el cliente web). El engine los reexporta para mantener
+// Llimphi como el cliente web). El engine los reexporta para mantener
 // compatibilidad con todos los call sites históricos
 // (`cosmos_engine::Layer`, etc.) sin tener que cambiar
 // imports en el shell, canvas, modules, tree, panel...
@@ -41,7 +41,7 @@ pub use cosmos_render::{
     UranianGroup, OUTER_RING_MODULES,
 };
 
-// El corpus de interpretación es agnóstico (no conoce eternal ni gpui).
+// El corpus de interpretación es agnóstico (no conoce eternal ni UI).
 // El engine lo reexporta para que el shell y el canvas trabajen los
 // pasajes sin importar el crate aparte.
 pub use cosmos_corpus::{

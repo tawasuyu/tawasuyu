@@ -10,7 +10,7 @@
 //!
 //! Lógica pura, agnóstica de surface: el engine produce el
 //! `RenderModel` natal y delega aquí la transformación. Reutilizable
-//! por el canvas gpui y por el cliente web.
+//! por el canvas Llimphi y por el cliente web.
 
 use crate::{AspectSummary, Geometry, LayerKind, LineSeg, RenderModel};
 

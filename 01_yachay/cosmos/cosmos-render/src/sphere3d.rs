@@ -1,9 +1,9 @@
 //! `sphere3d` — la esfera celeste en 3D, proyectada a primitivas 2D.
 //!
-//! GPUI no es un motor 3D y empotrar wgpu sería frágil. La estrategia
-//! es otra: la esfera celeste es un objeto de **alambre** —círculos
-//! máximos y puntos—, y eso se proyecta a software con trigonometría
-//! pura. Cada superficie (canvas gpui nativo, SVG del cliente web) ya
+//! La estrategia es de alambre: la esfera celeste es un objeto de
+//! **alambre** —círculos máximos y puntos—, y eso se proyecta a
+//! software con trigonometría pura. Cada superficie (canvas Llimphi
+//! nativo, SVG del cliente web) ya
 //! sabe traducir un [`DrawCommand`] (línea, círculo, texto); este
 //! módulo solo decide DÓNDE cae cada trazo. Resultado: una esfera
 //! celeste real, rotable, sin una sola línea de GPU.
