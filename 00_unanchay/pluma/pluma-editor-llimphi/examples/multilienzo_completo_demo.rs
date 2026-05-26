@@ -70,6 +70,15 @@ enum Msg {
     BuscarBorrar,
     /// Limpia la búsqueda completa.
     BuscarLimpiar,
+    /// Actualiza el timestamp de la madre — TODAS las hijas Derivadas
+    /// quedan stale (es_stale(modificado_madre_en) = true). Útil para
+    /// demostrar el flujo "regenerar tras editar la madre" sin tener
+    /// que editar texto a mano todavía.
+    TocarMadre,
+    /// Lanza la transformación de la primera hija stale que encuentre.
+    /// Consulta el store por la `Transformacion` original (madre → hija)
+    /// y re-aplica con la madre actualizada. Un click = una hija.
+    RegenerarSiguienteStale,
 }
 
 struct Model {
@@ -298,6 +307,63 @@ impl App for Demo {
                 m.busqueda.clear();
                 persistir_estado_ui(&m);
             }
+            Msg::TocarMadre => {
+                if let Some(madre) = m.cuerpos.first_mut() {
+                    madre.metadatos.modificado_en = ahora_unix();
+                    let _ = m.store.put_cuerpo(madre);
+                    let _ = m.store.flush();
+                    eprintln!(
+                        "multilienzo_completo_demo :: madre tocada — \
+                         {} hija(s) ahora stale",
+                        contar_stale(&m)
+                    );
+                }
+            }
+            Msg::RegenerarSiguienteStale => {
+                if m.en_curso || m.cuerpos.is_empty() {
+                    return m;
+                }
+                let madre_modificado = m.cuerpos[0].metadatos.modificado_en;
+                let madre_id = m.cuerpos[0].id;
+                let hija_stale_idx = m
+                    .cuerpos
+                    .iter()
+                    .position(|c| c.es_derivado() && c.es_stale(madre_modificado));
+                let Some(idx) = hija_stale_idx else {
+                    eprintln!(
+                        "multilienzo_completo_demo :: no hay hijas stale — \
+                         click 'tocar madre' antes para forzar staleness"
+                    );
+                    return m;
+                };
+                let hija_id = m.cuerpos[idx].id;
+                let tipo = match m
+                    .store
+                    .transformaciones_de(madre_id)
+                    .ok()
+                    .and_then(|ts| ts.into_iter().find(|t| t.hija == hija_id))
+                {
+                    Some(t) => t.tipo,
+                    None => {
+                        eprintln!(
+                            "multilienzo_completo_demo :: no se halló \
+                             transformación registrada para la hija {idx}; \
+                             nada que regenerar"
+                        );
+                        return m;
+                    }
+                };
+                let Some(trabajo) = trabajo_de_tipo(&tipo) else {
+                    eprintln!(
+                        "multilienzo_completo_demo :: TipoTransformacion \
+                         no regenerable automáticamente: {tipo:?}"
+                    );
+                    return m;
+                };
+                m.en_curso = true;
+                m.ultimo_error = None;
+                lanzar_trabajo(&m, handle, trabajo);
+            }
         }
         m
     }
@@ -356,6 +422,7 @@ impl App for Demo {
         })
         .children(vec![interior])]);
 
+        let n_stale = contar_stale(model);
         let toolbar = toolbar_view::<Msg>(
             &palette,
             model.en_curso,
@@ -364,6 +431,7 @@ impl App for Demo {
             model.cartas.len(),
             model.solo_madre,
             &model.busqueda,
+            n_stale,
         );
 
         View::new(Style {
@@ -377,6 +445,37 @@ impl App for Demo {
         .fill(palette.bg_app)
         .clip(true)
         .children(vec![toolbar, cuerpos_view])
+    }
+}
+
+/// Cuenta cuántas hijas están stale respecto a la madre actual.
+fn contar_stale(m: &Model) -> usize {
+    if m.cuerpos.is_empty() {
+        return 0;
+    }
+    let modif = m.cuerpos[0].metadatos.modificado_en;
+    m.cuerpos
+        .iter()
+        .filter(|c| c.es_derivado() && c.es_stale(modif))
+        .count()
+}
+
+/// Traduce un `TipoTransformacion` persistido en el trabajo concreto
+/// que `lanzar_trabajo` sabe ejecutar. Devuelve `None` para tipos no
+/// regenerables automáticamente (`Identidad`, `Reescribir` que
+/// requiere prompt humano, `Custom` con Rhai).
+fn trabajo_de_tipo(t: &TipoTransformacion) -> Option<TrabajoLlm> {
+    match t {
+        TipoTransformacion::Traducir { lengua_destino } => {
+            Some(TrabajoLlm::Traducir(lengua_destino.clone()))
+        }
+        TipoTransformacion::Tono { etiqueta } => {
+            Some(TrabajoLlm::Tono(etiqueta.clone()))
+        }
+        TipoTransformacion::Resumir { palabras_objetivo } => {
+            Some(TrabajoLlm::Resumir(*palabras_objetivo))
+        }
+        _ => None,
     }
 }
 
@@ -481,6 +580,7 @@ fn toolbar_view<Msg: Clone + 'static>(
     n_cartas: usize,
     solo_madre: bool,
     busqueda: &str,
+    n_stale: usize,
 ) -> View<Msg>
 where
     Msg: From<MsgUi>,
@@ -509,7 +609,24 @@ where
         button_view::<Msg>("tono formal", pal, MsgUi::Tono("formal".into()).into()),
         button_view::<Msg>("resumir 30p", pal, MsgUi::Resumir(Some(30)).into()),
         button_view::<Msg>(label_focus, pal_focus, MsgUi::ToggleSoloMadre.into()),
+        button_view::<Msg>("tocar madre", pal_focus, MsgUi::TocarMadre.into()),
     ];
+    // Botón de regeneración: activo solo si hay hijas stale.
+    let label_regen = if n_stale > 0 {
+        format!("regenerar stale ({n_stale})")
+    } else {
+        "regenerar stale (0)".to_string()
+    };
+    let pal_regen = if n_stale > 0 && !en_curso {
+        &p_activo
+    } else {
+        &p_desactivado
+    };
+    botones.push(button_view::<Msg>(
+        label_regen,
+        pal_regen,
+        MsgUi::RegenerarSiguienteStale.into(),
+    ));
 
     let busqueda_label = if busqueda.is_empty() {
         "🔍 (escribe para buscar · Esc limpia)".to_string()
@@ -570,6 +687,8 @@ enum MsgUi {
     Tono(String),
     Resumir(Option<u32>),
     ToggleSoloMadre,
+    TocarMadre,
+    RegenerarSiguienteStale,
 }
 
 impl From<MsgUi> for Msg {
@@ -579,6 +698,8 @@ impl From<MsgUi> for Msg {
             MsgUi::Tono(e) => Msg::PedirTono(e),
             MsgUi::Resumir(p) => Msg::PedirResumir(p),
             MsgUi::ToggleSoloMadre => Msg::ToggleSoloMadre,
+            MsgUi::TocarMadre => Msg::TocarMadre,
+            MsgUi::RegenerarSiguienteStale => Msg::RegenerarSiguienteStale,
         }
     }
 }
