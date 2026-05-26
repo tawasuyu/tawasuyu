@@ -1430,10 +1430,61 @@ fn draw_backdrop(scene: &mut Scene, rect: PaintRect, snap: &SceneSnapshot, cfg: 
         (rect.y + rect.h) as f64,
     );
 
-    // Sky: gradiente sutil simulado con dos rects horizontales (top
-    // más oscuro, bottom más claro). El gradiente real (vello soporta
-    // linear gradients) lo dejo para 3.2 cuando agreguemos sky texture.
-    scene.fill(Fill::NonZero, Affine::IDENTITY, SKY_BAND_TOP, None, &sky_rect);
+    // Sky con textura real si el atlas la tiene (SKY1 en E1, SKY2 en
+    // E2, SKY3 en E3). Scrolling horizontal según player.angle —
+    // convención Doom: 360° = 4 × sky_width = 1024 pixels en panorama.
+    let sky_drawn = (|| -> bool {
+        let Some(atlas) = cfg.atlas.as_ref() else {
+            return false;
+        };
+        let Some(tex) = atlas.wall_texture("SKY1") else {
+            return false;
+        };
+        use llimphi_ui::llimphi_raster::peniko::{Blob, Extend, Image, ImageFormat};
+        let tex_w = tex.width as f64;
+        let tex_h = tex.height as f64;
+        let panorama_px = tex_w * 4.0; // 360° = 4 × tex.width
+        let px_per_rad = panorama_px / std::f64::consts::TAU;
+        // Scroll: player.angle aumenta antihorario; el sky debe
+        // moverse en el sentido opuesto (cuando giro a la izquierda,
+        // el sky parece moverse a la derecha en pantalla).
+        let scroll_x = (-snap.player.angle as f64) * px_per_rad;
+        // FOV horizontal aproximada (asumimos rect 4:3-ish, fov_y=75°).
+        // pixels image por pixel pantalla en horizontal:
+        // ancho de sky panorama visible = (fov_x_rad / 2π) × panorama_px
+        // Aproximación: tomamos fov_x = fov_y · aspect_ratio.
+        let aspect = rect.w as f64 / rect.h.max(1.0) as f64;
+        let fov_x_rad = (cfg.fov_y_deg as f64).to_radians() * aspect;
+        let pixels_to_show = fov_x_rad / std::f64::consts::TAU * panorama_px;
+        let scale_x = pixels_to_show / rect.w as f64;
+        let scale_y = tex_h / (rect.h as f64 * 0.5);
+        // Affine: image(ix, iy) → screen((ix - scroll_x) / scale_x, iy / scale_y).
+        // Vello forward affine a/b/c/d/e/f donde sx = a·ix + c·iy + e,
+        // sy = b·ix + d·iy + f.
+        let xform = Affine::new([
+            1.0 / scale_x,
+            0.0,
+            0.0,
+            1.0 / scale_y,
+            -scroll_x / scale_x + rect.x as f64,
+            rect.y as f64,
+        ]);
+        let img = Image::new(
+            Blob::from(tex.rgba.clone()),
+            ImageFormat::Rgba8,
+            tex.width as u32,
+            tex.height as u32,
+        )
+        .with_x_extend(Extend::Repeat)
+        .with_y_extend(Extend::Pad);
+        scene.fill(Fill::NonZero, Affine::IDENTITY, &img, Some(xform), &sky_rect);
+        true
+    })();
+
+    if !sky_drawn {
+        scene.fill(Fill::NonZero, Affine::IDENTITY, SKY_BAND_TOP, None, &sky_rect);
+    }
+    let _ = SKY_BAND_BOT;
 
     // Floor backdrop: si tenemos al menos un sector, usá su paleta.
     // Como heurística pickeamos el sector con más light_level (la
