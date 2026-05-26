@@ -4,7 +4,9 @@
 //!
 //! Requiere CAP_NET_RAW (o root). El hash es hex de 64 caracteres (32 bytes).
 //! Difunde `SolicitarObjeto(id)` por la interfaz y espera 3s una respuesta
-//! `ProveedorObjeto(id, datos)` con hash coincidente.
+//! `ProveedorObjeto(id, datos)` con hash coincidente. Dentro de esos 3s el
+//! cliente reenvía la solicitud automáticamente (3 intentos equiespaciados)
+//! para tolerar broadcast Ethernet perdido.
 
 use std::time::Duration;
 

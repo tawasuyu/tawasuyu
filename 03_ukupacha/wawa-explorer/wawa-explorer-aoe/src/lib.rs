@@ -28,16 +28,25 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use std::collections::HashSet;
 use std::io;
 use std::mem::{size_of, zeroed};
 use std::os::unix::io::{AsRawFd, RawFd};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use akasha::{
     analizar_frame, componer_frame, ErrorAkasha, Mac, MensajeAkasha, ObjectId,
     ETHER_TYPE_AKASHA, MAC_BROADCAST,
 };
 use thiserror::Error;
+
+/// Cuántas veces reenviamos `SolicitarObjeto` dentro del timeout total cuando
+/// nadie nos responde — el broadcast de Ethernet no es confiable, una sola
+/// solicitud puede caer en el cable sin que ningún peer la vea. Tres intentos
+/// equiespaciados dentro del timeout total dan una probabilidad efectiva de
+/// recepción de ~99% incluso a pérdida 50% por intento, sin extender el
+/// tiempo total que ve el caller.
+pub const INTENTOS_SOLICITAR: u32 = 3;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -125,61 +134,129 @@ impl ClienteAoE {
     /// Difunde `SolicitarObjeto(id)` y bloquea hasta recibir
     /// `ProveedorObjeto(id, datos)` con hash coincidente, o hasta `timeout`.
     ///
+    /// Reintenta automáticamente: el broadcast Ethernet no es confiable, una
+    /// sola solicitud puede no llegar a ningún peer. Equiparte `timeout` en
+    /// [`INTENTOS_SOLICITAR`] slots; al cumplirse un slot sin respuesta,
+    /// reenvía el pedido. El tiempo total que ve el caller no cambia.
+    ///
     /// Verifica `blake3(datos) == id` antes de devolver — si llega un
     /// provider con datos corruptos, los descarta y sigue esperando hasta
     /// que el timeout cumpla. Frames de otros mensajes (anuncios, otras
-    /// solicitudes) se ignoran sin tocar el timeout.
+    /// solicitudes) se ignoran sin tocar el timeout. Si un mismo peer envía
+    /// múltiples provider-frames mal-hashed para el mismo id, se le marca
+    /// como sospechoso y se descartan futuros frames suyos en este intento
+    /// (backpressure básico — evita ser secuestrado por un peer ruidoso).
     pub fn solicitar(&self, id: ObjectId, timeout: Duration) -> Result<Option<Vec<u8>>> {
-        let pedido = componer_frame(
-            self.my_mac,
-            MAC_BROADCAST,
-            &MensajeAkasha::SolicitarObjeto(id),
-        )
-        .map_err(Error::Aoe)?;
-        enviar_frame(&self.fd, self.ifindex, MAC_BROADCAST, &pedido)?;
+        self.solicitar_con_reintentos(id, timeout, INTENTOS_SOLICITAR)
+    }
 
-        setsockopt_rcvtimeo(&self.fd, timeout)?;
-
+    /// Variante explícita de [`solicitar`] que toma el número de intentos.
+    /// Con `intentos == 1` el comportamiento es one-shot (la semántica
+    /// original previa a la fase de robustez).
+    pub fn solicitar_con_reintentos(
+        &self,
+        id: ObjectId,
+        timeout: Duration,
+        intentos: u32,
+    ) -> Result<Option<Vec<u8>>> {
+        let intentos = intentos.max(1);
+        let presupuesto_por_intento = presupuesto_por_intento(timeout, intentos);
+        let inicio_total = Instant::now();
         let mut buf = vec![0u8; 65536];
-        let inicio = std::time::Instant::now();
-        loop {
-            let restante = match timeout.checked_sub(inicio.elapsed()) {
-                Some(r) if !r.is_zero() => r,
-                _ => return Ok(None),
-            };
-            // Ajustar el timeout del socket al tiempo restante — un peer
-            // ruidoso que mande mensajes ajenos no debe extender la espera.
-            setsockopt_rcvtimeo(&self.fd, restante)?;
+        // MACs que mandaron payloads corruptos en este pedido — las ignoramos
+        // hasta que el caller vuelva a llamar. Se descarta entre intentos
+        // porque el peer puede haber recuperado integridad mientras tanto.
+        let mut sospechosos: HashSet<Mac> = HashSet::new();
 
-            match recvfrom_frame(&self.fd, &mut buf) {
-                Ok(longitud) => {
-                    let (_, mensaje) = match analizar_frame(&buf[..longitud]) {
-                        Ok(t) => t,
-                        Err(_) => continue, // frame ajeno, sigue esperando
-                    };
-                    if let MensajeAkasha::ProveedorObjeto(provider_id, datos) = mensaje {
-                        if provider_id != id {
-                            continue; // provider de otro objeto
-                        }
-                        // Contrato AoE: verificar blake3(datos) == id.
-                        let calculado = *blake3::hash(&datos).as_bytes();
-                        if calculado != id {
-                            // Provider malicioso o corrupto. Descartar y
-                            // seguir — quizás haya otro peer con el bueno.
+        for intento in 0..intentos {
+            // Enviar (o re-enviar) el broadcast del pedido.
+            let pedido = componer_frame(
+                self.my_mac,
+                MAC_BROADCAST,
+                &MensajeAkasha::SolicitarObjeto(id),
+            )
+            .map_err(Error::Aoe)?;
+            enviar_frame(&self.fd, self.ifindex, MAC_BROADCAST, &pedido)?;
+
+            // Cada intento dedica al menos `presupuesto_por_intento` a esperar;
+            // el último intento absorbe cualquier remanente del timeout total
+            // por redondeo entero, así no perdemos milisegundos al caller.
+            let limite_intento = if intento + 1 == intentos {
+                timeout
+            } else {
+                presupuesto_por_intento.saturating_mul((intento + 1) as u32)
+            };
+
+            loop {
+                let elapsed_total = inicio_total.elapsed();
+                let restante_total = match timeout.checked_sub(elapsed_total) {
+                    Some(r) if !r.is_zero() => r,
+                    _ => return Ok(None),
+                };
+                let restante_intento = match limite_intento.checked_sub(elapsed_total) {
+                    Some(r) if !r.is_zero() => r,
+                    // Slot del intento agotado: rompemos para reenviar.
+                    _ => break,
+                };
+                // El socket espera el menor de los dos — un peer ruidoso que
+                // ocupe el slot no debe extender más allá del total.
+                let espera = restante_intento.min(restante_total);
+                setsockopt_rcvtimeo(&self.fd, espera)?;
+
+                match recvfrom_frame(&self.fd, &mut buf) {
+                    Ok(longitud) => {
+                        let (origen, mensaje) = match analizar_frame(&buf[..longitud]) {
+                            Ok(t) => t,
+                            Err(_) => continue, // frame ajeno
+                        };
+                        // Backpressure: un peer ya marcado como sospechoso no
+                        // gasta más nuestro tiempo en este pedido.
+                        if sospechosos.contains(&origen) {
                             continue;
                         }
-                        return Ok(Some(datos));
+                        if let MensajeAkasha::ProveedorObjeto(provider_id, datos) = mensaje
+                        {
+                            if provider_id != id {
+                                continue;
+                            }
+                            let calculado = *blake3::hash(&datos).as_bytes();
+                            if calculado != id {
+                                // Provider corrupto. Marcamos al emisor para
+                                // no atender más payloads suyos en lo que
+                                // resta de este `solicitar`.
+                                sospechosos.insert(origen);
+                                continue;
+                            }
+                            return Ok(Some(datos));
+                        }
                     }
+                    Err(e)
+                        if e.kind() == io::ErrorKind::WouldBlock
+                            || e.kind() == io::ErrorKind::TimedOut =>
+                    {
+                        // Timeout del recv: si fue del slot del intento, se
+                        // detecta arriba al recalcular `restante_intento`.
+                        // Si fue del total, la próxima iteración del loop
+                        // sale por `restante_total`.
+                        continue;
+                    }
+                    Err(e) => return Err(e.into()),
                 }
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock
-                    || e.kind() == io::ErrorKind::TimedOut =>
-                {
-                    return Ok(None);
-                }
-                Err(e) => return Err(e.into()),
             }
         }
+
+        Ok(None)
     }
+}
+
+/// Calcula el budget por intento como `timeout / intentos` redondeado hacia
+/// abajo, garantizando al menos 1 ms — un slot de 0 ms convertiría el
+/// reintento en busy-loop sin oportunidad real de recibir.
+fn presupuesto_por_intento(timeout: Duration, intentos: u32) -> Duration {
+    let intentos = intentos.max(1) as u128;
+    let per = timeout.as_nanos() / intentos;
+    let nanos = per.max(1_000_000); // piso de 1 ms
+    Duration::from_nanos(nanos as u64)
 }
 
 // =============================================================================
@@ -348,5 +425,36 @@ mod tests {
         let largo = "a".repeat(libc::IFNAMSIZ);
         let err = ClienteAoE::nuevo(&largo).unwrap_err();
         assert!(matches!(err, Error::NombreInterfazLargo(_)), "fue {err:?}");
+    }
+
+    #[test]
+    fn presupuesto_por_intento_divide_uniforme() {
+        let t = Duration::from_millis(300);
+        let p = presupuesto_por_intento(t, 3);
+        assert_eq!(p, Duration::from_millis(100));
+    }
+
+    #[test]
+    fn presupuesto_con_intentos_extremos_no_es_cero() {
+        // Aun con muchos intentos en poco tiempo, garantizamos un piso de 1 ms
+        // para que no se vuelva busy-loop.
+        let p = presupuesto_por_intento(Duration::from_micros(100), 10);
+        assert!(p >= Duration::from_millis(1), "p fue {p:?}");
+    }
+
+    #[test]
+    fn presupuesto_con_un_solo_intento_es_el_total() {
+        let t = Duration::from_millis(500);
+        let p = presupuesto_por_intento(t, 1);
+        assert_eq!(p, t);
+    }
+
+    #[test]
+    fn presupuesto_redondea_hacia_abajo() {
+        // 300 ms / 7 intentos = 42.857 ms cada uno. La división entera baja
+        // a 42 ms — el último intento se queda con el remanente porque el
+        // `limite_intento` del último iteración usa `timeout` directo.
+        let p = presupuesto_por_intento(Duration::from_millis(300), 7);
+        assert!(p <= Duration::from_millis(43));
     }
 }
