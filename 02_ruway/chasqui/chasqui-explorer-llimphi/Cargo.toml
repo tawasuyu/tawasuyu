@@ -16,6 +16,7 @@ llimphi-theme = { workspace = true }
 llimphi-widget-app-header = { workspace = true }
 llimphi-widget-banner = { workspace = true }
 llimphi-widget-card = { workspace = true }
+rimay-localize = { path = "../../../shared/rimay-localize" }
 
 [[bin]]
 name = "chasqui-explorer-llimphi"

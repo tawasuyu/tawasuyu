@@ -127,3 +127,13 @@ edit-status-saved = guardado · { $path }
 edit-status-save-error = error guardando: { $err }
 edit-header-hint = Ctrl+Shift+P palette  ·  Ctrl+P files  ·  Ctrl+Shift+F search
 edit-status-position = Ln { $line }, Col { $col }  ·  { $lang }
+
+# === chasqui-explorer (mónadas) ===
+chasqui-header = Engine '{ $engine }'  ·  { $count } mónada(s)  ·  socket: { $socket } ({ $src }){ $watching }
+chasqui-header-watching =   ·  watching: { $name }
+chasqui-header-searching = Buscando daemon chasqui vía brahman-broker…
+chasqui-field-id = id: { $id }
+chasqui-field-watching = watching: { $name }
+chasqui-field-keywords = keywords: { $keywords }
+chasqui-field-path = path: { $path }
+chasqui-field-model = model: { $name }

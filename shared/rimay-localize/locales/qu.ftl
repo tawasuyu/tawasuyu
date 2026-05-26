@@ -130,3 +130,13 @@ edit-status-saved = waqaychasqa · { $path }
 edit-status-save-error = pantay waqaychaspa: { $err }
 edit-header-hint = Ctrl+Shift+P akllana  ·  Ctrl+P qillqakuna  ·  Ctrl+Shift+F maskay
 edit-status-position = Ln { $line }, Col { $col }  ·  { $lang }
+
+# === chasqui-explorer (mónadas) ===
+chasqui-header = Engine '{ $engine }'  ·  { $count } mónada  ·  socket: { $socket } ({ $src }){ $watching }
+chasqui-header-watching =   ·  qhawachkan: { $name }
+chasqui-header-searching = Chasqui daemonta maskaspa brahman-brokerwan…
+chasqui-field-id = id: { $id }
+chasqui-field-watching = qhawachkan: { $name }
+chasqui-field-keywords = rimaykuna: { $keywords }
+chasqui-field-path = ñan: { $path }
+chasqui-field-model = modelo: { $name }

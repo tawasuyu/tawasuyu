@@ -142,19 +142,30 @@ impl App for Explorer {
         let accent_data = Color::from_rgba8(0xb4, 0x8e, 0xad, 0xff);
 
         let header_text = match (&model.snapshot, &model.socket, model.socket_source) {
-            (Some(s), Some(sock), Some(src)) => format!(
-                "Engine '{}'  ·  {} mónada(s)  ·  socket: {} ({}){}",
-                s.engine.label,
-                s.monads.len(),
-                sock.display(),
-                src,
-                s.engine
+            (Some(s), Some(sock), Some(src)) => {
+                let watching = s
+                    .engine
                     .watching
                     .as_deref()
-                    .map(|w| format!("  ·  watching: {w}"))
-                    .unwrap_or_default()
-            ),
-            _ => "Buscando daemon chasqui vía brahman-broker…".to_string(),
+                    .map(|w| {
+                        rimay_localize::t_args(
+                            "chasqui-header-watching",
+                            &[("name", w.into())],
+                        )
+                    })
+                    .unwrap_or_default();
+                rimay_localize::t_args(
+                    "chasqui-header",
+                    &[
+                        ("engine", s.engine.label.as_str().into()),
+                        ("count", s.monads.len().to_string().into()),
+                        ("socket", sock.display().to_string().into()),
+                        ("src", src.into()),
+                        ("watching", watching.into()),
+                    ],
+                )
+            }
+            _ => rimay_localize::t("chasqui-header-searching"),
         };
 
         let header = app_header::<Msg>(header_text, vec![], &header_palette);
@@ -215,10 +226,22 @@ fn engine_card(
 ) -> View<Msg> {
     let mut rows: Vec<View<Msg>> = vec![
         kind_row("[engine]", &snap.engine.label, accent, theme),
-        muted_line(&format!("id: {}", snap.engine.id), theme),
+        muted_line(
+            &rimay_localize::t_args(
+                "chasqui-field-id",
+                &[("id", snap.engine.id.to_string().into())],
+            ),
+            theme,
+        ),
     ];
     if let Some(w) = &snap.engine.watching {
-        rows.push(muted_line(&format!("watching: {w}"), theme));
+        rows.push(muted_line(
+            &rimay_localize::t_args(
+                "chasqui-field-watching",
+                &[("name", w.as_str().into())],
+            ),
+            theme,
+        ));
     }
     card_view(
         rows,
@@ -240,20 +263,38 @@ fn monad_card(
     let stats = format!("{} files · ent {:.2} · {}", m.cardinality, m.entropy, lens);
     let mut rows: Vec<View<Msg>> = vec![
         kind_row_with_stats("[monad]", &m.label, &stats, accent, theme),
-        muted_line(&format!("id: {}", m.id), theme),
+        muted_line(
+            &rimay_localize::t_args(
+                "chasqui-field-id",
+                &[("id", m.id.to_string().into())],
+            ),
+            theme,
+        ),
     ];
     if !m.summary.is_empty() {
         rows.push(text_line(&m.summary, theme.fg_text, theme));
     }
     let keywords = m.keywords.join(", ");
     if !keywords.is_empty() {
-        rows.push(muted_line(&format!("keywords: {keywords}"), theme));
+        rows.push(muted_line(
+            &rimay_localize::t_args(
+                "chasqui-field-keywords",
+                &[("keywords", keywords.as_str().into())],
+            ),
+            theme,
+        ));
     }
     if let Some(p) = m.path_hint.as_deref().filter(|p| !p.is_empty()) {
-        rows.push(muted_line(&format!("path: {p}"), theme));
+        rows.push(muted_line(
+            &rimay_localize::t_args("chasqui-field-path", &[("path", p.into())]),
+            theme,
+        ));
     }
     if let Some(model_name) = m.centroid_model.as_deref().filter(|s| !s.is_empty()) {
-        rows.push(muted_line(&format!("model: {model_name}"), theme));
+        rows.push(muted_line(
+            &rimay_localize::t_args("chasqui-field-model", &[("name", model_name.into())]),
+            theme,
+        ));
     }
     card_view(
         rows,
@@ -426,6 +467,7 @@ fn lens_label(l: Lens) -> &'static str {
 }
 
 fn main() {
+    rimay_localize::init();
     llimphi_ui::run::<Explorer>();
 }
 
