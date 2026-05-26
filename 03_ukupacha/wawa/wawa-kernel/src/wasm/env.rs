@@ -665,6 +665,21 @@ pub(crate) fn enlazar_capacidades(
             if crate::drivers::red::mac().is_none() {
                 return Ok(CodigoError::Ausente.como_i32());
             }
+            // Bufer kernel-side donde la cola del usuario vuelca el frame antes
+            // de copiarlo a la memoria lineal de la app. PRE-ALOCADO EN PILA y
+            // de tamaño fijo: una rafaga RX de 60 fps que llamaba a `sys_net_recibir`
+            // engendraba un `Vec` nuevo en el heap del kernel por fotograma —
+            // ahora la operacion entera no toca al asignador.
+            //
+            // El techo se elige sobre el MTU clasico de Ethernet (1500 payload +
+            // 18 cabecera/FCS) con un margen para frames marcadamente cortos;
+            // un app que pida mas que esto recibe CapacidadInsuficiente — el
+            // protocolo no acomoda jumbo frames y un buffer ilimitado abriria
+            // la puerta a una alocacion adversaria desde el userspace.
+            const MAX_FRAME_USERSPACE: usize = 2048;
+            if (capacidad as usize) > MAX_FRAME_USERSPACE {
+                return Ok(CodigoError::CapacidadInsuficiente.como_i32());
+            }
             let memoria = obtener_memoria(&caller)?;
             // Verificar que el destino cabe ANTES de tocar la cola.
             {
@@ -676,10 +691,9 @@ pub(crate) fn enlazar_capacidades(
                     "WASM :: sys_net_recibir desbordo la memoria lineal",
                 )?;
             }
-            // Bufer kernel-side donde la cola del usuario vuelca el frame; luego
-            // se copia a la memoria del app en una sola pasada.
-            let mut buf: alloc::vec::Vec<u8> = alloc::vec![0u8; capacidad as usize];
-            let n = crate::akasha::pop_usuario(&mut buf);
+            let mut buf = [0u8; MAX_FRAME_USERSPACE];
+            let cap = capacidad as usize;
+            let n = crate::akasha::pop_usuario(&mut buf[..cap]);
             if n == 0 {
                 return Ok(CodigoError::Ok.como_i32());
             }
