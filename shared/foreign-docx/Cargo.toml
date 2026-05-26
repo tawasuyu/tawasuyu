@@ -1,0 +1,15 @@
+[package]
+name = "foreign-docx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "shared/foreign-docx — importa `.docx` (Word 2007+ y compatibles) como cuerpo madre del multilienzo. Un párrafo `<w:p>` del XML → un NarrativeAtom; runs `<w:t>` concatenados, formato (negrita/cursiva) descartado."
+
+[dependencies]
+zip = { version = "2", default-features = false, features = ["deflate"] }
+quick-xml = { workspace = true }
+thiserror = { workspace = true }
+pluma-core = { path = "../../00_unanchay/pluma/pluma-core" }
+pluma-cuerpo = { path = "../../00_unanchay/pluma/pluma-cuerpo" }
