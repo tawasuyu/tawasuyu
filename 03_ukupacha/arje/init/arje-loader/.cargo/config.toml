@@ -1,0 +1,5 @@
+# El crate sólo tiene sentido cross-compilado al firmware EFI.
+# Esto evita que `cargo build` (sin --target) intente compilar contra el
+# host y se rompa por las APIs no-std.
+[build]
+target = "x86_64-unknown-uefi"
