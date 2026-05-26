@@ -1,9 +1,8 @@
 //! puriy-app — binario del navegador.
 //!
-//! CLI: `puriy [URL] [--profile NAME] [--target wayland|framebuffer]`.
-//! Detección automática: WAYLAND_DISPLAY → mirada; sino framebuffer wawa.
-//!
-//! Fase 4: el target gráfico aún es stub (sólo dumpea el box tree).
+//! CLI: `puriy [URL] [--profile NAME] [--target wayland|framebuffer|headless]`.
+//! Detección automática: `WAYLAND_DISPLAY` o `DISPLAY` → `wayland` (abre
+//! ventana Llimphi); sino → `headless` (dumpea box tree por stdout).
 
 use clap::Parser;
 use puriy_engine::{BoxNode, Engine};
@@ -25,33 +24,46 @@ fn main() {
     let cli = Cli::parse();
     let target = cli.target.clone().unwrap_or_else(|| detect_target().to_string());
     let Some(url) = cli.url else {
-        eprintln!("uso: puriy <URL> [--profile NAME] [--target wayland|framebuffer]");
+        eprintln!("uso: puriy <URL> [--profile NAME] [--target wayland|framebuffer|headless]");
         std::process::exit(2);
     };
 
-    println!("[puriy] profile={} target={} url={}", cli.profile, target, url);
+    eprintln!("[puriy] profile={} target={} url={}", cli.profile, target, url);
 
+    match target.as_str() {
+        "headless" => run_headless(&url),
+        // wayland / framebuffer ambos abren ventana Llimphi en Fase 3;
+        // el split real entre WinitSurface y FramebufferSurface llega
+        // cuando puriy se mueva a wawa bare-metal.
+        "wayland" | "framebuffer" => puriy_llimphi::run(url),
+        other => {
+            eprintln!("[puriy] target desconocido: {other}");
+            std::process::exit(2);
+        }
+    }
+}
+
+fn detect_target() -> &'static str {
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_some() {
+        "wayland"
+    } else {
+        "headless"
+    }
+}
+
+fn run_headless(url: &str) {
     let engine = Engine::new();
-    let doc = match engine.load(&url) {
+    let doc = match engine.load(url) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("[puriy] error cargando {url}: {e}");
             std::process::exit(1);
         }
     };
-
-    println!("[puriy] título: {}", doc.title);
-    println!("[puriy] boxes : {}", doc.box_tree.descendants_count());
+    println!("título: {}", doc.title);
+    println!("boxes : {}", doc.box_tree.descendants_count());
     println!("---");
     dump(&doc.box_tree.root, 0);
-}
-
-fn detect_target() -> &'static str {
-    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-        "wayland"
-    } else {
-        "framebuffer"
-    }
 }
 
 fn dump(b: &BoxNode, depth: usize) {
