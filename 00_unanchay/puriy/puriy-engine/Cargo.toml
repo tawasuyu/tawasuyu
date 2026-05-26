@@ -20,5 +20,8 @@ url = { workspace = true }
 # Net síncrono
 ureq = { workspace = true }
 
+# Decoding de imágenes (<img>) — sólo PNG + JPEG por default-features
+image = { workspace = true }
+
 # Errores
 thiserror = { workspace = true }

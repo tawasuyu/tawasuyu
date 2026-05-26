@@ -67,6 +67,19 @@ pub struct BoxNode {
     /// contra la URL base del documento — los consumidores no tienen
     /// que conocer la base.
     pub link: Option<String>,
+    /// Imagen decodificada (RGBA8) si el nodo es un `<img src>` que
+    /// pudo descargarse y decodificarse. PNG/JPEG soportados; otros
+    /// formatos dejan `None` y el chrome muestra un placeholder.
+    pub image: Option<ImageData>,
+}
+
+/// Imagen RGBA8 lista para que el chrome la envuelva en `peniko::Image`.
+/// `rgba` tiene exactamente `4 * width * height` bytes en orden RGBA.
+#[derive(Debug, Clone)]
+pub struct ImageData {
+    pub rgba: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
 }
 
 /// Árbol de boxes. Wrapper para poder agregar utilidades.
@@ -123,6 +136,7 @@ fn empty_root() -> BoxNode {
         children: Vec::new(),
         tag: Some("body".into()),
         link: None,
+        image: None,
     }
 }
 
@@ -138,11 +152,28 @@ fn build_node(node: &Handle, styles: &StyleEngine, base: Option<&url::Url>) -> O
                 (Some("a"), base) => dom::attr(node, "href").and_then(|h| resolve_href(base, &h)),
                 _ => None,
             };
+            // <img>: descarga + decode sync. Si falla, el campo queda
+            // None y el chrome muestra placeholder con el alt.
+            let image = if tag.as_deref() == Some("img") {
+                dom::attr(node, "src")
+                    .and_then(|s| resolve_href(base, &s))
+                    .and_then(|abs| fetch_and_decode(&abs))
+            } else {
+                None
+            };
             let mut children = Vec::new();
             // <li>: prefija con bullet. Lo agregamos como un hijo Text
             // inline antes de procesar los hijos reales.
             if tag.as_deref() == Some("li") {
                 children.push(bullet_marker());
+            }
+            // <img> sin imagen decodificada: muestra `alt`.
+            if tag.as_deref() == Some("img") && image.is_none() {
+                if let Some(alt) = dom::attr(node, "alt") {
+                    if !alt.trim().is_empty() {
+                        children.push(plain_inline_text(format!("[img: {alt}]")));
+                    }
+                }
             }
             for child in node.children.borrow().iter() {
                 if let Some(b) = build_node(child, styles, base) {
@@ -161,6 +192,7 @@ fn build_node(node: &Handle, styles: &StyleEngine, base: Option<&url::Url>) -> O
                 children,
                 tag,
                 link,
+                image,
             })
         }
         NodeData::Text { contents } => {
@@ -181,6 +213,7 @@ fn build_node(node: &Handle, styles: &StyleEngine, base: Option<&url::Url>) -> O
                 children: Vec::new(),
                 tag: None,
                 link: None,
+                image: None,
             })
         }
         _ => {
@@ -208,12 +241,17 @@ fn build_node(node: &Handle, styles: &StyleEngine, base: Option<&url::Url>) -> O
                 children,
                 tag: None,
                 link: None,
+                image: None,
             })
         }
     }
 }
 
 fn bullet_marker() -> BoxNode {
+    plain_inline_text("•  ".into())
+}
+
+fn plain_inline_text(s: String) -> BoxNode {
     BoxNode {
         display: Display::Inline,
         background: None,
@@ -222,11 +260,31 @@ fn bullet_marker() -> BoxNode {
         font_weight: 400,
         margin: 0.0,
         padding: 0.0,
-        text: Some("•  ".to_string()),
+        text: Some(s),
         children: Vec::new(),
         tag: None,
         link: None,
+        image: None,
     }
+}
+
+/// Descarga `url` y la decodifica a RGBA8. Devuelve `None` si la URL no
+/// es HTTP(S), si la descarga falla, si el MIME no es imagen, o si el
+/// decoder no soporta el formato. Sync: bloquea el thread caller — el
+/// chrome ya está en un worker thread durante `Engine::load`.
+fn fetch_and_decode(url: &str) -> Option<ImageData> {
+    let resp = ureq::get(url).call().ok()?;
+    let mut bytes = Vec::with_capacity(resp.header("content-length").and_then(|s| s.parse().ok()).unwrap_or(16 * 1024));
+    use std::io::Read;
+    resp.into_reader().take(8 * 1024 * 1024).read_to_end(&mut bytes).ok()?;
+    let reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    reader.format()?; // formato no habilitado por features → None
+    let img = reader.decode().ok()?;
+    let rgba = img.to_rgba8();
+    let (width, height) = (rgba.width(), rgba.height());
+    Some(ImageData { rgba: rgba.into_raw(), width, height })
 }
 
 fn resolve_href(base: Option<&url::Url>, href: &str) -> Option<String> {
