@@ -262,7 +262,10 @@ fn sembrar_grafo() -> Result<(Vec<u8>, usize), String> {
 
     // --- 2. El objeto del Manifiesto de Genesis. Sus `hijos` son los objetos
     //        de bytecode: el grafo lo lee como el nodo padre del userspace. ---
-    let manifiesto = Manifiesto { version: VERSION_MANIFIESTO, apps };
+    // Sin configuracion enlazada: el kernel inyectara `Configuracion::por_defecto`
+    // en cada `ContextoCapacidades`. El cambio de idioma/tema engendrara un
+    // nodo nuevo en caliente y reanclara el manifiesto sin pasar por aqui.
+    let manifiesto = Manifiesto { version: VERSION_MANIFIESTO, apps, configuracion: None };
     let man_datos = manifiesto.serializar().map_err(|e| e.to_string())?;
     let man_objeto = Objeto { datos: man_datos, hijos: hijos_manifiesto };
     let man_payload = man_objeto.serializar().map_err(|e| e.to_string())?;

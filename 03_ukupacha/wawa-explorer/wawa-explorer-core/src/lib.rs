@@ -233,6 +233,7 @@ mod tests {
                 fuel_fotograma: 2_000_000,
                 estado: None,
             }],
+            configuracion: None,
         };
         let manifest_obj = Objeto {
             datos: manifiesto.serializar().unwrap(),

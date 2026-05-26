@@ -30,7 +30,7 @@ use crate::grafico::RegionPantalla;
 
 // Los tipos del manifiesto los define `format`; se reexportan para que el
 // resto del kernel los nombre `manifiesto::EntradaApp` / `manifiesto::Manifiesto`.
-pub use format::{EntradaApp, Manifiesto};
+pub use format::{Configuracion, EntradaApp, Manifiesto};
 
 /// El manifiesto VIVO del kernel: la copia en memoria, mutable, del Manifiesto
 /// de Genesis. Las apps la actualizan al persistir su estado (Fase 7c); el
@@ -94,11 +94,76 @@ pub fn fijar_estado(indice: usize, hash: Hash) -> Result<(), &'static str> {
         .get_mut(indice)
         .ok_or("manifiesto :: indice de app fuera de rango")?;
     entrada.estado = Some(hash);
+    regrabar_y_reanclar(&manifiesto)
+}
 
-    // Re-grabar el manifiesto mutado. Sus `hijos` son, como en la siembra de
-    // `boot`, los objetos de bytecode deduplicados: el grafo lo sigue leyendo
-    // como el nodo padre del userspace. El objeto nuevo se ancla en el
-    // superbloque; el viejo queda en el log, inerte e inofensivo.
+/// El hash de la `Configuracion` activa, si el manifiesto enlaza una. `None`
+/// significa que el kernel emplea [`Configuracion::por_defecto`].
+pub fn configuracion_activa() -> Option<Hash> {
+    VIVO.get().and_then(|vivo| vivo.lock().configuracion)
+}
+
+/// Lee la `Configuracion` que el manifiesto enlaza ahora, ya deserializada. Si
+/// el manifiesto no enlaza ninguna —o el objeto no se halla en el grafo, o no
+/// se deserializa—, devuelve [`Configuracion::por_defecto`]. El kernel jamas
+/// se queda sin configuracion: el "no hay" se rellena con el defecto, no con
+/// un error que detenga el fotograma.
+pub fn cargar_configuracion() -> Configuracion {
+    let Some(hash) = configuracion_activa() else {
+        return Configuracion::por_defecto();
+    };
+    match almacen::recuperar(&hash) {
+        Ok(Some(objeto)) => {
+            Configuracion::deserializar(&objeto.datos).unwrap_or_else(|_| Configuracion::por_defecto())
+        }
+        _ => Configuracion::por_defecto(),
+    }
+}
+
+/// Engendra un nodo nuevo `Configuracion` en el grafo, reancla el manifiesto al
+/// hash recien creado y lo re-graba en disco — todo en un solo paso atomico
+/// desde el punto de vista del proximo fotograma. Es la unica via para mutar
+/// la configuracion activa: nadie escribe en una "variable global"; cada
+/// cambio engendra un nodo nuevo, hashable e inmutable, y solo el puntero del
+/// manifiesto se mueve.
+///
+/// La hermeticidad de la red descansa en esto: aunque Akasha absorba un objeto
+/// `Configuracion` ajeno al grafo local, ese objeto NO altera la configuracion
+/// vigente; solo este camino —y solo cuando el usuario local lo invoca con un
+/// hash que ya esta en el grafo local— mueve el puntero del manifiesto vivo.
+pub fn fijar_configuracion(configuracion: Configuracion) -> Result<Hash, &'static str> {
+    let bytes = configuracion.serializar()?;
+    let hash = almacen::almacenar(bytes, Vec::new())?;
+    enlazar_configuracion(hash)?;
+    Ok(hash)
+}
+
+/// Reancla el manifiesto vivo a un `hash` de configuracion que ya existe en el
+/// grafo local. NO copia datos del exterior: si el objeto no esta en el grafo,
+/// se devuelve error. Esta es la frontera que separa "recibir un objeto por
+/// red" de "aplicar una configuracion": la red puede ingestar el objeto en el
+/// grafo (Akasha lo hace si el rehash cuadra), pero solo este enlace —invocado
+/// por un camino local que confia en quien lo invoca— lo aplica.
+pub fn enlazar_configuracion(hash: Hash) -> Result<(), &'static str> {
+    let objeto = almacen::recuperar(&hash)?
+        .ok_or("configuracion :: el objeto no esta en el grafo local")?;
+    // Defensa: verificar que el objeto se deserialice como una Configuracion
+    // bien formada antes de reanclar el manifiesto. Un puntero a un objeto
+    // arbitrario reanclado se delata aqui, no en el proximo fotograma.
+    Configuracion::deserializar(&objeto.datos)?;
+
+    let vivo = VIVO.get().ok_or("manifiesto :: no hay manifiesto vivo")?;
+    let mut manifiesto = vivo.lock();
+    manifiesto.configuracion = Some(hash);
+    regrabar_y_reanclar(&manifiesto)
+}
+
+/// Re-serializa el manifiesto vivo, lo graba como un objeto NUEVO del grafo y
+/// lo re-ancla en el superbloque. Sus `hijos` son los bytecodes de las apps
+/// deduplicados —el grafo lo sigue leyendo como el nodo padre del userspace—.
+/// El objeto previo queda en el log, inerte e inofensivo: la atomicidad del
+/// cambio descansa en el reanclaje del superbloque, no en la mutacion en sitio.
+fn regrabar_y_reanclar(manifiesto: &Manifiesto) -> Result<(), &'static str> {
     let bytes = manifiesto.serializar()?;
     let mut hijos: Vec<Hash> = Vec::new();
     for app in &manifiesto.apps {

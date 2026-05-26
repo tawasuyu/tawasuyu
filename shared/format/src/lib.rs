@@ -45,9 +45,15 @@ pub const VERSION_SUPERBLOQUE: u32 = 2;
 
 /// Version del format del manifiesto serializado. Independiente de la del
 /// superbloque: el manifiesto es un objeto del grafo, no una estructura fija
-/// del disco. v2 — cada `EntradaApp` declara su propio `fuel_fotograma`
-/// (presupuesto cooperativo por `tick`); el kernel ya no impone un techo unico.
-pub const VERSION_MANIFIESTO: u32 = 2;
+/// del disco. v3 — el manifiesto porta un enlace opcional al hash de la
+/// `Configuracion` activa (idioma + tema). Sin enlace, el kernel emplea los
+/// valores por defecto: misma forma que `estado: None` en una `EntradaApp`.
+pub const VERSION_MANIFIESTO: u32 = 3;
+
+/// Version del format de la `Configuracion` serializada. La configuracion es
+/// otro objeto del grafo (idioma + paleta); el manifiesto la enlaza por hash.
+/// v1 inaugura el modelo: cambiarla es engendrar un nodo nuevo y reanclar.
+pub const VERSION_CONFIGURACION: u32 = 1;
 
 /// Version del format del canal de release serializado. Independiente del
 /// manifiesto: un canal es otro objeto del grafo, con su propia historia de
@@ -124,6 +130,93 @@ pub struct Manifiesto {
     pub version: u32,
     /// Las aplicaciones del userspace, en orden de arranque.
     pub apps: Vec<EntradaApp>,
+    /// Hash del nodo `Configuracion` activo (idioma + tema). `None` => el
+    /// kernel emplea los valores por defecto. Cambiar de idioma o tema NO
+    /// muta este nodo: engendra una `Configuracion` nueva, calcula su hash,
+    /// y reancla el manifiesto al objeto nuevo en un solo paso atomico —el
+    /// mismo trazado que `EntradaApp::estado` para el estado por app.
+    pub configuracion: Option<Hash>,
+}
+
+/// Un idioma codificado como un par de letras ASCII ISO 639-1 empaquetado en
+/// little-endian: `b'e' | (b's' << 8) == 0x7365` para castellano, `0x6E65`
+/// para ingles, `0x7571` para quechua. El propio numero es trivialmente
+/// legible al inspeccionarlo en hexadecimal —no hace falta una tabla—.
+pub type IdiomaCodigo = u16;
+
+/// Compone un `IdiomaCodigo` desde un par ISO 639-1 (`b"es"`, `b"qu"`...).
+/// Las dos letras viajan en orden de lectura: la primera ocupa el byte bajo.
+pub const fn idioma_iso639(letras: [u8; 2]) -> IdiomaCodigo {
+    (letras[0] as u16) | ((letras[1] as u16) << 8)
+}
+
+/// Codigo de idioma por defecto: `es` (castellano). Lo emplea el kernel cuando
+/// el manifiesto no enlaza ninguna `Configuracion`.
+pub const IDIOMA_DEFECTO: IdiomaCodigo = idioma_iso639(*b"es");
+
+/// La paleta de un tema visual: cinco colores RGBA8 — primario, secundario,
+/// fondo, texto, acento— en ese orden. La forma binaria (20 bytes) es la
+/// misma que la app recibe del kernel a traves de la capacidad pasiva
+/// `sys_config_paleta`. Cinco colores cubren un esquema completo sin caer en
+/// la trampa de "un color por widget": la consistencia visual la impone el
+/// numero pequeño.
+pub type Paleta = [u8; 20];
+
+/// Paleta por defecto cuando el manifiesto no enlaza configuracion. Negro de
+/// fondo, blanco de texto, azul renaser de acento; cualquier app pinta sin
+/// adivinar. Cada cuatro bytes son R, G, B, A en ese orden.
+pub const PALETA_DEFECTO: Paleta = [
+    0x20, 0x80, 0xC0, 0xFF, // primario   — azul renaser
+    0x60, 0x60, 0x60, 0xFF, // secundario — gris medio
+    0x00, 0x00, 0x00, 0xFF, // fondo      — negro
+    0xFF, 0xFF, 0xFF, 0xFF, // texto      — blanco
+    0xF0, 0x90, 0x20, 0xFF, // acento     — ambar
+];
+
+/// La configuracion activa de Wawa: idioma + paleta del tema. Es un objeto
+/// del grafo —direccionado por su hash—; el manifiesto la enlaza. Cambiar de
+/// idioma o tema significa engendrar UN NODO NUEVO y reanclar el manifiesto
+/// al hash del nuevo objeto en una sola transicion atomica. Sin estados
+/// mutables globales: la "configuracion vigente" es siempre el hash al que
+/// apunta el manifiesto en este preciso fotograma.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Configuracion {
+    /// Version del format — debe ser [`VERSION_CONFIGURACION`].
+    pub version: u32,
+    /// Idioma activo (ISO 639-1 empaquetado, ver [`idioma_iso639`]).
+    pub idioma: IdiomaCodigo,
+    /// Paleta del tema visual: cinco colores RGBA8 en orden canonico.
+    pub paleta: Paleta,
+}
+
+impl Configuracion {
+    /// La configuracion canonica cuando el manifiesto no enlaza ninguna:
+    /// idioma `es`, paleta `PALETA_DEFECTO`. El kernel la inyecta tal cual en
+    /// el `ContextoCapacidades` de cada app.
+    pub const fn por_defecto() -> Configuracion {
+        Configuracion {
+            version: VERSION_CONFIGURACION,
+            idioma: IDIOMA_DEFECTO,
+            paleta: PALETA_DEFECTO,
+        }
+    }
+
+    /// Serializa la configuracion a su forma binaria `postcard`.
+    pub fn serializar(&self) -> Result<Vec<u8>, &'static str> {
+        postcard::to_allocvec(self).map_err(|_| "configuracion :: serializacion fallida")
+    }
+
+    /// Reconstruye una configuracion desde la carga util de su objeto. Rechaza
+    /// una version desconocida en lugar de malinterpretarla — gemelo del trato
+    /// que `Manifiesto::deserializar` da a su propia version.
+    pub fn deserializar(bytes: &[u8]) -> Result<Configuracion, &'static str> {
+        let (cfg, _) = postcard::take_from_bytes::<Configuracion>(bytes)
+            .map_err(|_| "configuracion :: deserializacion fallida")?;
+        if cfg.version != VERSION_CONFIGURACION {
+            return Err("configuracion :: version de format desconocida");
+        }
+        Ok(cfg)
+    }
 }
 
 /// Una entrada del manifiesto: una aplicacion del userspace y todo lo que el
@@ -386,11 +479,86 @@ mod pruebas {
         let mut manifiesto = Manifiesto {
             version: 99,
             apps: Vec::new(),
+            configuracion: None,
         };
         let bytes = postcard::to_allocvec(&manifiesto).unwrap();
         assert!(Manifiesto::deserializar(&bytes).is_err());
         manifiesto.version = VERSION_MANIFIESTO;
         assert!(Manifiesto::deserializar(&manifiesto.serializar().unwrap()).is_ok());
+    }
+
+    #[test]
+    fn manifiesto_transporta_enlace_de_configuracion() {
+        // Un manifiesto puede nacer sin configuracion (defecto) o cargar el
+        // hash de un nodo de configuracion en el grafo. Lo que el `serializar`
+        // escribe es exactamente lo que el `deserializar` recupera.
+        let con_enlace = Manifiesto {
+            version: VERSION_MANIFIESTO,
+            apps: Vec::new(),
+            configuracion: Some([0xC5; 32]),
+        };
+        let bytes = con_enlace.serializar().unwrap();
+        let leido = Manifiesto::deserializar(&bytes).unwrap();
+        assert_eq!(leido.configuracion, Some([0xC5; 32]));
+
+        let sin_enlace = Manifiesto {
+            version: VERSION_MANIFIESTO,
+            apps: Vec::new(),
+            configuracion: None,
+        };
+        let bytes = sin_enlace.serializar().unwrap();
+        assert!(Manifiesto::deserializar(&bytes)
+            .unwrap()
+            .configuracion
+            .is_none());
+    }
+
+    #[test]
+    fn configuracion_ida_y_vuelta_y_rechaza_version() {
+        let cfg = Configuracion {
+            version: VERSION_CONFIGURACION,
+            idioma: idioma_iso639(*b"qu"),
+            paleta: [
+                0x11, 0x22, 0x33, 0xFF, 0x44, 0x55, 0x66, 0xFF, 0x77, 0x88, 0x99, 0xFF, 0xAA, 0xBB,
+                0xCC, 0xFF, 0xDD, 0xEE, 0xFF, 0xFF,
+            ],
+        };
+        let bytes = cfg.serializar().unwrap();
+        assert_eq!(Configuracion::deserializar(&bytes).unwrap(), cfg);
+
+        // Hashes distintos => identidades distintas. Cambiar la paleta o el
+        // idioma engendra un nodo nuevo del grafo; ningun cambio se cuela
+        // bajo el mismo hash.
+        let mut otro = cfg;
+        otro.idioma = idioma_iso639(*b"en");
+        assert_ne!(hash(&otro.serializar().unwrap()), hash(&bytes));
+
+        // Version desconocida: se rechaza al deserializar.
+        let mut ajeno = cfg;
+        ajeno.version = 99;
+        let bytes_ajenos = postcard::to_allocvec(&ajeno).unwrap();
+        assert!(Configuracion::deserializar(&bytes_ajenos).is_err());
+    }
+
+    #[test]
+    fn configuracion_por_defecto_es_estable() {
+        // El `por_defecto` debe ser determinista y reconstruirse desde su
+        // forma binaria sin perder ningun campo. El kernel lo inyecta tal
+        // cual cuando el manifiesto no enlaza configuracion alguna.
+        let defecto = Configuracion::por_defecto();
+        assert_eq!(defecto.version, VERSION_CONFIGURACION);
+        assert_eq!(defecto.idioma, IDIOMA_DEFECTO);
+        assert_eq!(defecto.paleta, PALETA_DEFECTO);
+        let bytes = defecto.serializar().unwrap();
+        assert_eq!(Configuracion::deserializar(&bytes).unwrap(), defecto);
+    }
+
+    #[test]
+    fn idioma_iso639_empaqueta_en_little_endian() {
+        // `es` => 'e' (0x65) en el byte bajo, 's' (0x73) en el alto.
+        assert_eq!(idioma_iso639(*b"es"), 0x7365);
+        assert_eq!(idioma_iso639(*b"en"), 0x6E65);
+        assert_eq!(idioma_iso639(*b"qu"), 0x7571);
     }
 
     #[test]

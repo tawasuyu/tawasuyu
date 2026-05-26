@@ -114,6 +114,12 @@ impl AplicacionWasm {
             // app pudiera ignorar: asi el kernel la captura y la desaloja.
             .trap_on_grow_failure(true)
             .build();
+        // Configuracion activa al instante de la carga: si el manifiesto enlaza
+        // un nodo, lo recuperamos del grafo y lo deserializamos; si no, el
+        // defecto. La app jamas pregunta — el kernel lo deja servido en el
+        // contexto antes de instanciar el modulo, y desde ese instante la app
+        // pinta con esos colores y rotula con ese idioma.
+        let configuracion = crate::manifiesto::cargar_configuracion();
         let mut almacen = Store::new(
             &motor,
             ContextoCapacidades {
@@ -122,6 +128,8 @@ impl AplicacionWasm {
                 canal,
                 limites,
                 indice_app,
+                idioma: configuracion.idioma,
+                paleta: configuracion.paleta,
             },
         );
         // Ligar el limitador de recursos: `wasmi` lo consultara en cada
@@ -171,6 +179,18 @@ impl AplicacionWasm {
     /// una trampa, el kernel recupera el mando y la falla se devuelve para que
     /// la tarea proceda al desalojo. El kernel nunca pierde el control.
     pub fn tick(&mut self) -> Result<(), FallaApp> {
+        // Inyeccion UNIDIRECCIONAL de la configuracion activa: el kernel lee
+        // el hash que el manifiesto enlaza ahora y refresca idioma+paleta en
+        // el contexto antes de cederle el `tick` a la app. Si entre dos
+        // fotogramas el usuario engendro un nodo nuevo y reanclo el manifiesto,
+        // el cambio se VE en este `tick` —frame-lock perfecto—. Si nada cambio,
+        // la operacion es leer el `Option<Hash>` del manifiesto vivo y, a lo
+        // sumo, deserializar veintipocos bytes del grafo: barato y silencioso.
+        let configuracion = crate::manifiesto::cargar_configuracion();
+        let datos = self.almacen.data_mut();
+        datos.idioma = configuracion.idioma;
+        datos.paleta = configuracion.paleta;
+
         // Recargar el deposito: cada fotograma parte con su techo intacto —
         // el que su `EntradaApp` declaro, no un techo unico del kernel.
         self.almacen
