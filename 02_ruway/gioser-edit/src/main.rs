@@ -1,20 +1,26 @@
 //! `gioser-edit` — editor de archivos rudimentario sobre Llimphi.
 //!
-//! - **Tree** a la izquierda (220 px) con el contenido del directorio
+//! - **Tree** a la izquierda (240 px) con el contenido del directorio
 //!   `cwd` (o el primer argumento). Click expande/colapsa directorios;
-//!   click en archivo lo carga al editor.
+//!   click en archivo lo abre como tab nuevo (o activa el existente).
+//! - **Tab strip** arriba del editor (vía `llimphi-widget-tabs`): un tab
+//!   por archivo abierto, prefijo `●` cuando está modificado. Click
+//!   cambia de tab.
 //! - **Editor** a la derecha: text-editor multilínea con syntax highlight
 //!   derivado de la extensión (`.rs` → Rust, `.py` → Python, `.wat` → Wat,
 //!   resto → Plain). Caret, selección, bracket matching, gutter con
 //!   line numbers, undo/redo, copy/cut/paste.
-//! - **Atajos** dentro del editor: arrows + Shift/Ctrl, Home/End,
-//!   Ctrl+Home/End, PageUp/Down, Tab/Shift+Tab, Backspace/Delete,
-//!   Ctrl+Z/Y/Shift+Z (undo/redo), Ctrl+C/X/V (clipboard del sistema
-//!   vía arboard). **Ctrl+S guarda** el archivo abierto.
+//! - **Atajos globales**: Ctrl+S guarda · Ctrl+W cierra tab · Ctrl+Tab /
+//!   Ctrl+Shift+Tab ciclan tabs · Ctrl+F find · Ctrl+G next match ·
+//!   Ctrl+Space completions · Ctrl+K hover · Ctrl+Shift+F format ·
+//!   Ctrl+Shift+Space signatureHelp · F12 goto-def · Shift+F12 references
+//!   · F2 rename.
+//! - **Atajos del editor**: arrows + Shift/Ctrl, Home/End, Ctrl+Home/End,
+//!   PageUp/Down, Tab/Shift+Tab, Backspace/Delete, Ctrl+Z/Y/Shift+Z
+//!   (undo/redo), Ctrl+C/X/V (clipboard del sistema vía arboard).
 //!
-//! Limitaciones MVP: el tree se construye al arrancar (no watcher), un
-//! solo archivo abierto a la vez (sin tabs), no marca "modified", no
-//! confirma overwrites externos.
+//! Limitaciones: el tree se construye al arrancar (no watcher), no
+//! confirma overwrites externos, no hay save-as todavía.
 
 use std::env;
 use std::ffi::OsStr;
@@ -29,6 +35,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
+use llimphi_widget_tabs::{tabs_view, TabsPalette, TabsSpec};
 use llimphi_widget_text_editor::{
     all_matches, find_next, find_prev, text_editor_view_full, Clipboard, Diagnostic,
     EditorMetrics, EditorPalette, EditorState, FindState, Language, PointerEvent, Pos,
@@ -44,6 +51,8 @@ const TREE_WIDTH: f32 = 240.0;
 const TREE_ROW_H: f32 = 22.0;
 const TREE_INDENT: f32 = 16.0;
 const HEADER_H: f32 = 28.0;
+/// Altura del tab strip (sin contar la línea de acento).
+const TAB_STRIP_H: f32 = 26.0;
 /// Cuántas líneas mostramos en el viewport del editor. Aproximación
 /// estática: (alto ventana ~760 − header 28) / line_height(~18) ≈ 40.
 const EDITOR_VISIBLE_LINES: usize = 40;
@@ -57,6 +66,16 @@ enum Msg {
     Save,
     SaveResult(Result<(), String>),
     Scroll(i32),
+    /// Cambia el tab activo. El índice se asume válido; en caso contrario
+    /// se ignora.
+    ActivateTab(usize),
+    /// Cierra el tab dado. Si era el activo, salta al anterior (o `None`
+    /// si era el último). Notifica `did_close` al LSP.
+    CloseTab(usize),
+    /// Atajo Ctrl+Tab.
+    NextTab,
+    /// Atajo Ctrl+Shift+Tab.
+    PrevTab,
     // Find
     FindOpen,
     FindClose,
@@ -112,15 +131,24 @@ struct TreeNode {
     expanded: bool,
 }
 
+/// Un archivo abierto en su tab. El editor + el flag `dirty` viven aquí;
+/// switchear tabs es cuestión de mover el índice `Model.active`.
+struct Tab {
+    path: PathBuf,
+    editor: EditorState,
+    dirty: bool,
+}
+
 struct Model {
     root: PathBuf,
     nodes: Vec<TreeNode>,
     selected: Option<usize>,
-    open_file: Option<PathBuf>,
-    editor: EditorState,
+    tabs: Vec<Tab>,
+    /// Índice del tab activo dentro de `tabs`. `None` si no hay ninguno
+    /// abierto todavía.
+    active: Option<usize>,
     clipboard: ArboardClipboard,
     status: String,
-    dirty: bool,
     /// Acumulado de drag del editor: cada `Msg::EditorPointer(Drag)`
     /// suma `(dx, dy)`. Pos actual = `initial + drag_accum`.
     drag_accum: (f32, f32),
@@ -211,6 +239,24 @@ impl FindBarState {
     }
 }
 
+impl Model {
+    fn active_tab(&self) -> Option<&Tab> {
+        self.active.and_then(|i| self.tabs.get(i))
+    }
+    fn active_tab_mut(&mut self) -> Option<&mut Tab> {
+        match self.active {
+            Some(i) => self.tabs.get_mut(i),
+            None => None,
+        }
+    }
+    fn active_path(&self) -> Option<PathBuf> {
+        self.active_tab().map(|t| t.path.clone())
+    }
+    fn tab_idx_for(&self, path: &Path) -> Option<usize> {
+        self.tabs.iter().position(|t| t.path == path)
+    }
+}
+
 struct EditorApp;
 
 impl App for EditorApp {
@@ -254,11 +300,10 @@ impl App for EditorApp {
             root,
             nodes,
             selected: None,
-            open_file: None,
-            editor: EditorState::new(),
+            tabs: Vec::new(),
+            active: None,
             clipboard: ArboardClipboard::new(),
             status,
-            dirty: false,
             drag_accum: (0.0, 0.0),
             find: None,
             demo_lsp,
@@ -280,7 +325,29 @@ impl App for EditorApp {
             Msg::Save => save_open_file(model, handle),
             Msg::Scroll(delta) => {
                 let mut m = model;
-                m.editor.scroll_by(delta);
+                if let Some(tab) = m.active_tab_mut() {
+                    tab.editor.scroll_by(delta);
+                }
+                m
+            }
+            Msg::ActivateTab(i) => activate_tab(model, i),
+            Msg::CloseTab(i) => close_tab(model, i),
+            Msg::NextTab => {
+                let mut m = model;
+                if !m.tabs.is_empty() {
+                    let n = m.tabs.len();
+                    let cur = m.active.unwrap_or(0);
+                    m = activate_tab(m, (cur + 1) % n);
+                }
+                m
+            }
+            Msg::PrevTab => {
+                let mut m = model;
+                if !m.tabs.is_empty() {
+                    let n = m.tabs.len();
+                    let cur = m.active.unwrap_or(0);
+                    m = activate_tab(m, (cur + n - 1) % n);
+                }
                 m
             }
             Msg::FindOpen => {
@@ -304,10 +371,10 @@ impl App for EditorApp {
             Msg::FindPrev => find_step(model, false),
             Msg::PollLsp => {
                 let mut m = model;
-                if let Some(path) = m.open_file.as_ref() {
-                    let diags = m.lsp.diagnostics(path);
-                    if diags != m.editor.diagnostics {
-                        m.editor.set_diagnostics(diags);
+                if let (Some(idx), Some(path)) = (m.active, m.active_path()) {
+                    let diags = m.lsp.diagnostics(&path);
+                    if diags != m.tabs[idx].editor.diagnostics {
+                        m.tabs[idx].editor.set_diagnostics(diags);
                     }
                 }
                 // Si hay request de completions pendiente (popup abierto
@@ -360,12 +427,13 @@ impl App for EditorApp {
             }
             Msg::CompletionsRequest => {
                 let mut m = model;
-                let Some(path) = m.open_file.clone() else { return m };
-                let line = m.editor.cursor.caret.line;
-                let col = m.editor.cursor.caret.col;
+                let Some(idx) = m.active else { return m };
+                let path = m.tabs[idx].path.clone();
+                let line = m.tabs[idx].editor.cursor.caret.line;
+                let col = m.tabs[idx].editor.cursor.caret.col;
                 m.lsp.clear_completions();
                 m.lsp.request_completions(&path, line, col);
-                let (_, prefix) = m.editor.buffer.current_word_prefix(line, col);
+                let (_, prefix) = m.tabs[idx].editor.buffer.current_word_prefix(line, col);
                 m.completions = Some(CompletionsBar {
                     items: Vec::new(),
                     selected: 0,
@@ -389,6 +457,7 @@ impl App for EditorApp {
                 let mut m = model;
                 let Some(bar) = m.completions.take() else { return m };
                 m.lsp.clear_completions();
+                let Some(idx) = m.active else { return m };
                 // Resolvemos el item seleccionado en el filtered set.
                 let filtered = bar.filtered_indices();
                 let Some(&item_idx) = filtered.get(bar.selected) else { return m };
@@ -400,26 +469,27 @@ impl App for EditorApp {
                 // Smart-replace: seleccionamos [word_start_col..caret_col]
                 // de la línea actual y reemplazamos por `text`. Si no hay
                 // prefijo, queda como simple insert.
-                let line = m.editor.cursor.caret.line;
-                let caret_col = m.editor.cursor.caret.col;
-                let (word_start, _) = m.editor.buffer.current_word_prefix(line, caret_col);
+                let line = m.tabs[idx].editor.cursor.caret.line;
+                let caret_col = m.tabs[idx].editor.cursor.caret.col;
+                let (word_start, _) =
+                    m.tabs[idx].editor.buffer.current_word_prefix(line, caret_col);
                 if word_start < caret_col {
-                    m.editor.cursor.anchor =
+                    m.tabs[idx].editor.cursor.anchor =
                         Some(llimphi_widget_text_editor::Pos::new(line, word_start));
-                    m.editor.cursor.caret =
+                    m.tabs[idx].editor.cursor.caret =
                         llimphi_widget_text_editor::Pos::new(line, caret_col);
                 }
+                let tab = &mut m.tabs[idx];
                 let _ = llimphi_widget_text_editor::ops::replace_selection(
-                    &mut m.editor.buffer,
-                    &mut m.editor.cursor,
+                    &mut tab.editor.buffer,
+                    &mut tab.editor.cursor,
                     &text,
                 );
-                m.editor.bump_edit_seq();
-                m.dirty = true;
-                if let Some(path) = m.open_file.clone() {
-                    let new_text = m.editor.text();
-                    m.lsp.did_change(&path, &new_text);
-                }
+                tab.editor.bump_edit_seq();
+                tab.dirty = true;
+                let path = tab.path.clone();
+                let new_text = tab.editor.text();
+                m.lsp.did_change(&path, &new_text);
                 m
             }
             Msg::CompletionsClose => {
@@ -430,9 +500,10 @@ impl App for EditorApp {
             }
             Msg::HoverRequest => {
                 let mut m = model;
-                let Some(path) = m.open_file.clone() else { return m };
-                let line = m.editor.cursor.caret.line;
-                let col = m.editor.cursor.caret.col;
+                let Some(idx) = m.active else { return m };
+                let path = m.tabs[idx].path.clone();
+                let line = m.tabs[idx].editor.cursor.caret.line;
+                let col = m.tabs[idx].editor.cursor.caret.col;
                 m.lsp.clear_hover();
                 m.lsp.request_hover(&path, line, col);
                 m.hover = Some(HoverPopup { info: None, anchor: (line, col) });
@@ -446,9 +517,10 @@ impl App for EditorApp {
             }
             Msg::GotoDefinitionRequest => {
                 let mut m = model;
-                let Some(path) = m.open_file.clone() else { return m };
-                let line = m.editor.cursor.caret.line;
-                let col = m.editor.cursor.caret.col;
+                let Some(idx) = m.active else { return m };
+                let path = m.tabs[idx].path.clone();
+                let line = m.tabs[idx].editor.cursor.caret.line;
+                let col = m.tabs[idx].editor.cursor.caret.col;
                 m.lsp.clear_definition();
                 m.lsp.request_definition(&path, line, col);
                 m.status = "goto-def · esperando LSP…".into();
@@ -456,9 +528,10 @@ impl App for EditorApp {
             }
             Msg::ReferencesRequest => {
                 let mut m = model;
-                let Some(path) = m.open_file.clone() else { return m };
-                let line = m.editor.cursor.caret.line;
-                let col = m.editor.cursor.caret.col;
+                let Some(idx) = m.active else { return m };
+                let path = m.tabs[idx].path.clone();
+                let line = m.tabs[idx].editor.cursor.caret.line;
+                let col = m.tabs[idx].editor.cursor.caret.col;
                 m.lsp.clear_references();
                 m.lsp.request_references(&path, line, col, true);
                 m.references = Some(ReferencesBar {
@@ -499,12 +572,10 @@ impl App for EditorApp {
             }
             Msg::RenameOpen => {
                 let mut m = model;
-                if m.open_file.is_none() {
-                    return m;
-                }
-                let line = m.editor.cursor.caret.line;
-                let col = m.editor.cursor.caret.col;
-                let (start, word) = m.editor.buffer.current_word_prefix(line, col);
+                let Some(idx) = m.active else { return m };
+                let line = m.tabs[idx].editor.cursor.caret.line;
+                let col = m.tabs[idx].editor.cursor.caret.col;
+                let (start, word) = m.tabs[idx].editor.buffer.current_word_prefix(line, col);
                 let _ = start;
                 let mut input = TextInputState::new();
                 input.set_text(&word);
@@ -525,8 +596,8 @@ impl App for EditorApp {
             }
             Msg::RenameSubmit => {
                 let mut m = model;
+                let Some(path) = m.active_path() else { return m };
                 let Some(r) = m.rename.as_mut() else { return m };
-                let Some(path) = m.open_file.clone() else { return m };
                 let new_name = r.input.text();
                 if new_name.is_empty() {
                     return m;
@@ -548,15 +619,15 @@ impl App for EditorApp {
                 m.rename = None;
                 let mut files_changed = 0;
                 let mut bytes_written = 0usize;
-                let open_path = m.open_file.clone();
                 for (path, edits) in we {
-                    if Some(&path) == open_path.as_ref() {
-                        apply_text_edits_in_place(&mut m.editor, edits);
-                        m.dirty = true;
-                        if let Some(p) = open_path.clone() {
-                            let new_text = m.editor.text();
-                            m.lsp.did_change(&p, &new_text);
-                        }
+                    // ¿Tenemos un tab abierto sobre este path? Si sí, lo
+                    // editamos en memoria y notificamos al LSP.
+                    if let Some(tab_idx) = m.tab_idx_for(&path) {
+                        let tab = &mut m.tabs[tab_idx];
+                        apply_text_edits_in_place(&mut tab.editor, edits);
+                        tab.dirty = true;
+                        let new_text = tab.editor.text();
+                        m.lsp.did_change(&path, &new_text);
                         files_changed += 1;
                     } else {
                         match apply_text_edits_to_file(&path, &edits) {
@@ -576,9 +647,10 @@ impl App for EditorApp {
             }
             Msg::SignatureHelpRequest => {
                 let mut m = model;
-                let Some(path) = m.open_file.clone() else { return m };
-                let line = m.editor.cursor.caret.line;
-                let col = m.editor.cursor.caret.col;
+                let Some(idx) = m.active else { return m };
+                let path = m.tabs[idx].path.clone();
+                let line = m.tabs[idx].editor.cursor.caret.line;
+                let col = m.tabs[idx].editor.cursor.caret.col;
                 m.lsp.clear_signature_help();
                 m.lsp.request_signature_help(&path, line, col);
                 m.sig_help = Some(SignatureHelpBar { info: None, anchor: (line, col) });
@@ -592,7 +664,7 @@ impl App for EditorApp {
             }
             Msg::FormatRequest => {
                 let mut m = model;
-                let Some(path) = m.open_file.clone() else { return m };
+                let Some(path) = m.active_path() else { return m };
                 m.lsp.clear_text_edits();
                 m.lsp.request_formatting(&path, 4, true);
                 m.status = "formatting · esperando LSP…".into();
@@ -600,37 +672,39 @@ impl App for EditorApp {
             }
             Msg::TextEditsApply(edits) => {
                 let mut m = model;
-                apply_text_edits_in_place(&mut m.editor, edits);
-                m.dirty = true;
-                if let Some(path) = m.open_file.clone() {
-                    let new_text = m.editor.text();
-                    m.lsp.did_change(&path, &new_text);
-                }
+                let Some(idx) = m.active else { return m };
+                let tab = &mut m.tabs[idx];
+                apply_text_edits_in_place(&mut tab.editor, edits);
+                tab.dirty = true;
+                let path = tab.path.clone();
+                let new_text = tab.editor.text();
+                m.lsp.did_change(&path, &new_text);
                 m.status = "formatting · aplicado".into();
                 m
             }
             Msg::GotoDefinitionApply(loc) => {
                 let mut m = model;
                 m.lsp.clear_definition();
+                // ¿Ya hay tab con este path? Si sí, lo activamos y movemos
+                // el caret. Si no, leemos del disco y abrimos un tab nuevo.
+                if let Some(idx) = m.tab_idx_for(&loc.path) {
+                    m.active = Some(idx);
+                    let tab = &mut m.tabs[idx];
+                    tab.editor.set_caret_at(loc.line, loc.col);
+                    tab.editor.ensure_caret_visible(EDITOR_VISIBLE_LINES);
+                    m.status = format!("goto-def · {}:{}", loc.path.display(), loc.line + 1);
+                    return m;
+                }
                 match fs::read_to_string(&loc.path) {
                     Ok(content) => {
-                        // Si está abriendo otro archivo, did_close al previo.
-                        if let Some(prev) = m.open_file.take() {
-                            if prev != loc.path {
-                                m.lsp.did_close(&prev);
-                            }
-                        }
-                        let was_open = m.open_file.is_some();
-                        m.editor = EditorState::new();
-                        m.editor.set_text(&content);
-                        m.editor.set_caret_at(loc.line, loc.col);
-                        m.editor.ensure_caret_visible(EDITOR_VISIBLE_LINES);
-                        if !was_open {
-                            let ext = loc.path.extension().and_then(|s| s.to_str()).unwrap_or("");
-                            m.lsp.did_open(&loc.path, ext, &content);
-                        }
-                        m.open_file = Some(loc.path.clone());
-                        m.dirty = false;
+                        let mut editor = EditorState::new();
+                        editor.set_text(&content);
+                        editor.set_caret_at(loc.line, loc.col);
+                        editor.ensure_caret_visible(EDITOR_VISIBLE_LINES);
+                        let ext = loc.path.extension().and_then(|s| s.to_str()).unwrap_or("");
+                        m.lsp.did_open(&loc.path, ext, &content);
+                        m.tabs.push(Tab { path: loc.path.clone(), editor, dirty: false });
+                        m.active = Some(m.tabs.len() - 1);
                         m.status = format!("goto-def · {}:{}", loc.path.display(), loc.line + 1);
                     }
                     Err(e) => {
@@ -643,11 +717,14 @@ impl App for EditorApp {
                 let mut m = model;
                 m.status = match r {
                     Ok(()) => {
-                        m.dirty = false;
-                        format!(
-                            "guardado · {}",
-                            m.open_file.as_deref().map(Path::display).map(|d| d.to_string()).unwrap_or_default()
-                        )
+                        let path_disp = m
+                            .active_tab()
+                            .map(|t| t.path.display().to_string())
+                            .unwrap_or_default();
+                        if let Some(tab) = m.active_tab_mut() {
+                            tab.dirty = false;
+                        }
+                        format!("guardado · {path_disp}")
                     }
                     Err(e) => format!("error guardando: {e}"),
                 };
@@ -662,7 +739,7 @@ impl App for EditorApp {
         _cursor: (f32, f32),
         _mods: Modifiers,
     ) -> Option<Self::Msg> {
-        if model.open_file.is_none() {
+        if model.active_tab().is_none() {
             return None;
         }
         // llimphi-ui ya invierte el signo de winit (`y: -y` en LineDelta).
@@ -698,9 +775,19 @@ impl App for EditorApp {
             if matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("s")) {
                 return Some(Msg::Save);
             }
+            // Ctrl+W cierra el tab activo.
+            if matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("w")) {
+                if let Some(idx) = model.active {
+                    return Some(Msg::CloseTab(idx));
+                }
+            }
+            // Ctrl+Tab / Ctrl+Shift+Tab ciclan entre tabs.
+            if matches!(&event.key, Key::Named(NamedKey::Tab)) && model.tabs.len() > 1 {
+                return Some(if event.modifiers.shift { Msg::PrevTab } else { Msg::NextTab });
+            }
             if !event.modifiers.shift
                 && matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("f"))
-                && model.open_file.is_some()
+                && model.active_tab().is_some()
             {
                 return Some(Msg::FindOpen);
             }
@@ -711,27 +798,27 @@ impl App for EditorApp {
             }
             // Ctrl+Space pide completions al LSP.
             if matches!(&event.key, Key::Named(NamedKey::Space))
-                && model.open_file.is_some()
+                && model.active_tab().is_some()
             {
                 return Some(Msg::CompletionsRequest);
             }
             // Ctrl+K pide hover en la pos del caret.
             if matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("k"))
-                && model.open_file.is_some()
+                && model.active_tab().is_some()
             {
                 return Some(Msg::HoverRequest);
             }
             // Ctrl+Shift+F = format. (Ctrl+F sin Shift sigue siendo find.)
             if event.modifiers.shift
                 && matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("f"))
-                && model.open_file.is_some()
+                && model.active_tab().is_some()
             {
                 return Some(Msg::FormatRequest);
             }
             // Ctrl+Shift+Space = signatureHelp.
             if event.modifiers.shift
                 && matches!(&event.key, Key::Named(NamedKey::Space))
-                && model.open_file.is_some()
+                && model.active_tab().is_some()
             {
                 return Some(Msg::SignatureHelpRequest);
             }
@@ -762,7 +849,7 @@ impl App for EditorApp {
         }
         // F12 = goto-definition; Shift+F12 = references.
         if matches!(&event.key, Key::Named(NamedKey::F12))
-            && model.open_file.is_some()
+            && model.active_tab().is_some()
         {
             return Some(if event.modifiers.shift {
                 Msg::ReferencesRequest
@@ -772,7 +859,7 @@ impl App for EditorApp {
         }
         // F2 = rename.
         if matches!(&event.key, Key::Named(NamedKey::F2))
-            && model.open_file.is_some()
+            && model.active_tab().is_some()
         {
             return Some(Msg::RenameOpen);
         }
@@ -785,7 +872,7 @@ impl App for EditorApp {
 
         // Esc colapsa multi-cursor antes de cerrar find/etc.
         if matches!(&event.key, Key::Named(NamedKey::Escape))
-            && model.editor.has_multi_cursor()
+            && model.active_tab().is_some_and(|t| t.editor.has_multi_cursor())
         {
             return Some(Msg::EditKey(event.clone())); // lo ruteamos al editor
         }
@@ -808,7 +895,7 @@ impl App for EditorApp {
             };
         }
 
-        if model.open_file.is_none() {
+        if model.active_tab().is_none() {
             return None;
         }
         Some(Msg::EditKey(event.clone()))
@@ -830,17 +917,24 @@ impl App for EditorApp {
 }
 
 fn header_bar(model: &Model, theme: &Theme) -> View<Msg> {
-    let open = model
-        .open_file
-        .as_deref()
-        .map(|p| relative_to(&model.root, p))
-        .unwrap_or_else(|| "(sin archivo abierto)".to_string());
-    let dirty = if model.dirty { " · ● modificado" } else { "" };
+    let (open, dirty_mark) = match model.active_tab() {
+        Some(tab) => (
+            relative_to(&model.root, &tab.path),
+            if tab.dirty { " · ● modificado" } else { "" },
+        ),
+        None => ("(sin archivo abierto)".to_string(), ""),
+    };
+    let tabs_count = if model.tabs.len() > 1 {
+        format!(" · {} tabs", model.tabs.len())
+    } else {
+        String::new()
+    };
     let text = format!(
-        "gioser-edit · {} · {}{}  ·  {}",
+        "gioser-edit · {} · {}{}{}  ·  {}",
         model.root.display(),
         open,
-        dirty,
+        dirty_mark,
+        tabs_count,
         model.status,
     );
     View::new(Style {
@@ -900,6 +994,45 @@ fn tree_panel(model: &Model, theme: &Theme) -> View<Msg> {
 }
 
 fn editor_panel(model: &Model, theme: &Theme) -> View<Msg> {
+    let inner = active_editor_content(model, theme);
+    if model.tabs.is_empty() {
+        // Sin tabs todavía: solo placeholder, sin tab strip.
+        return View::new(Style {
+            flex_direction: FlexDirection::Column,
+            flex_grow: 1.0,
+            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+            ..Default::default()
+        })
+        .fill(theme.bg_app)
+        .children(vec![inner]);
+    }
+    let labels: Vec<String> = model
+        .tabs
+        .iter()
+        .map(|t| {
+            let name = t.path.file_name().and_then(|s| s.to_str()).unwrap_or("?");
+            if t.dirty {
+                format!("● {name}")
+            } else {
+                name.to_string()
+            }
+        })
+        .collect();
+    let active = model.active.unwrap_or(0);
+    tabs_view(TabsSpec {
+        labels,
+        active,
+        on_select: Msg::ActivateTab,
+        content: inner,
+        tab_height: TAB_STRIP_H,
+        palette: TabsPalette::from_theme(theme),
+        tab_width: None,
+    })
+}
+
+/// Contenido del tab activo: bars (find/completions/hover/etc.) + editor.
+/// Si no hay tab activo, devuelve el placeholder.
+fn active_editor_content(model: &Model, theme: &Theme) -> View<Msg> {
     let mut children: Vec<View<Msg>> = Vec::new();
     if let Some(find) = model.find.as_ref() {
         children.push(find_bar(find, theme));
@@ -919,20 +1052,20 @@ fn editor_panel(model: &Model, theme: &Theme) -> View<Msg> {
     if let Some(rn) = model.rename.as_ref() {
         children.push(rename_view(rn, theme));
     }
-    let editor_view = match &model.open_file {
+    let editor_view = match model.active_tab() {
         None => empty_editor_placeholder(theme),
-        Some(path) => {
-            let language = language_for_path(path);
+        Some(tab) => {
+            let language = language_for_path(&tab.path);
             let palette = EditorPalette::from_theme(theme);
             let metrics = EditorMetrics::for_font_size(13.0);
             let matches: Vec<(usize, usize)> = model
                 .find
                 .as_ref()
                 .filter(|f| !f.state.query.is_empty())
-                .map(|f| all_matches(&model.editor.buffer, &f.state))
+                .map(|f| all_matches(&tab.editor.buffer, &f.state))
                 .unwrap_or_default();
             text_editor_view_full(
-                &model.editor,
+                &tab.editor,
                 &palette,
                 metrics,
                 EDITOR_VISIBLE_LINES,
@@ -1375,33 +1508,96 @@ fn select_node(mut model: Model, i: usize) -> Model {
         // Click en directorio = toggle también, así no necesita el chevron.
         return toggle_node(model, i);
     }
+    // Si ya hay un tab abierto con este path, lo activamos sin releer.
+    if let Some(tab_idx) = model.tab_idx_for(&node.path) {
+        model.active = Some(tab_idx);
+        model.status = format!("activo · {}", relative_to(&model.root, &node.path));
+        return model;
+    }
     match fs::read_to_string(&node.path) {
         Ok(content) => {
-            // Si había un archivo abierto antes, notificamos al LSP que
-            // se cerró.
-            if let Some(prev) = model.open_file.take() {
-                model.lsp.did_close(&prev);
-            }
-            model.editor = EditorState::new();
-            model.editor.set_text(&content);
+            let mut editor = EditorState::new();
+            editor.set_text(&content);
             // Demo de diagnostics fake (--demo-lsp).
             if model.demo_lsp {
                 let ext = node.path.extension().and_then(|s| s.to_str()).unwrap_or("");
                 if ext == "rs" || ext == "py" {
-                    model.editor.set_diagnostics(demo_diagnostics(&content));
+                    editor.set_diagnostics(demo_diagnostics(&content));
                 }
             }
             // LSP real (--lsp): notifica al server.
             let ext = node.path.extension().and_then(|s| s.to_str()).unwrap_or("");
             model.lsp.did_open(&node.path, ext, &content);
-            model.open_file = Some(node.path.clone());
-            model.dirty = false;
+            model.tabs.push(Tab {
+                path: node.path.clone(),
+                editor,
+                dirty: false,
+            });
+            model.active = Some(model.tabs.len() - 1);
             model.status = format!("abierto · {} bytes", content.len());
         }
         Err(e) => {
             model.status = format!("error abriendo: {e}");
         }
     }
+    model
+}
+
+/// Activa el tab `idx` si es válido. No-op si está fuera de rango.
+fn activate_tab(mut model: Model, idx: usize) -> Model {
+    if idx < model.tabs.len() {
+        model.active = Some(idx);
+        // Limpiamos popups anclados al tab anterior — anchor era una pos
+        // específica que ya no aplica.
+        model.completions = None;
+        model.hover = None;
+        model.sig_help = None;
+        model.references = None;
+        model.rename = None;
+        model.lsp.clear_completions();
+        model.lsp.clear_hover();
+        model.lsp.clear_signature_help();
+        model.lsp.clear_references();
+        model.lsp.clear_workspace_edit();
+    }
+    model
+}
+
+/// Cierra el tab `idx`. Notifica `did_close` al LSP, reajusta `active`,
+/// y limpia popups si era el activo.
+fn close_tab(mut model: Model, idx: usize) -> Model {
+    if idx >= model.tabs.len() {
+        return model;
+    }
+    let was_active = model.active == Some(idx);
+    let closed_path = model.tabs[idx].path.clone();
+    model.tabs.remove(idx);
+    model.lsp.did_close(&closed_path);
+    // Reajustamos `active`:
+    //  - si quedaron 0 tabs: None.
+    //  - si cerramos el activo: nuevo activo = min(idx, len-1).
+    //  - si cerramos uno previo al activo: active baja 1.
+    //  - si cerramos uno posterior al activo: queda igual.
+    model.active = if model.tabs.is_empty() {
+        None
+    } else if was_active {
+        Some(idx.min(model.tabs.len() - 1))
+    } else {
+        model.active.map(|a| if a > idx { a - 1 } else { a })
+    };
+    if was_active {
+        model.completions = None;
+        model.hover = None;
+        model.sig_help = None;
+        model.references = None;
+        model.rename = None;
+        model.lsp.clear_completions();
+        model.lsp.clear_hover();
+        model.lsp.clear_signature_help();
+        model.lsp.clear_references();
+        model.lsp.clear_workspace_edit();
+    }
+    model.status = format!("cerrado · {}", relative_to(&model.root, &closed_path));
     model
 }
 
@@ -1439,23 +1635,25 @@ fn demo_diagnostics(content: &str) -> Vec<Diagnostic> {
 }
 
 fn apply_editor_key(mut model: Model, ev: KeyEvent) -> Model {
-    let r = model.editor.apply_key_with_clipboard(&ev, &mut model.clipboard);
+    let Some(idx) = model.active else { return model };
+    let r = model.tabs[idx]
+        .editor
+        .apply_key_with_clipboard(&ev, &mut model.clipboard);
     if r.changed() {
-        model.dirty = true;
-        if let Some(path) = model.open_file.clone() {
-            let text = model.editor.text();
-            model.lsp.did_change(&path, &text);
-        }
+        model.tabs[idx].dirty = true;
+        let path = model.tabs[idx].path.clone();
+        let text = model.tabs[idx].editor.text();
+        model.lsp.did_change(&path, &text);
     }
     if r.touched() {
-        model.editor.ensure_caret_visible(EDITOR_VISIBLE_LINES);
+        model.tabs[idx].editor.ensure_caret_visible(EDITOR_VISIBLE_LINES);
     }
     // Si el popup de completions está abierto, actualizamos el filter
     // según el prefijo actual del caret. Si no quedan matches → cerramos.
     if let Some(bar) = model.completions.as_mut() {
-        let line = model.editor.cursor.caret.line;
-        let col = model.editor.cursor.caret.col;
-        let (_, prefix) = model.editor.buffer.current_word_prefix(line, col);
+        let line = model.tabs[idx].editor.cursor.caret.line;
+        let col = model.tabs[idx].editor.cursor.caret.col;
+        let (_, prefix) = model.tabs[idx].editor.buffer.current_word_prefix(line, col);
         bar.filter = prefix;
         let filtered = bar.filtered_indices();
         if filtered.is_empty() && !bar.items.is_empty() {
@@ -1467,23 +1665,23 @@ fn apply_editor_key(mut model: Model, ev: KeyEvent) -> Model {
     }
     // Pull diagnostics actuales del LSP. Es barato — sólo lee del state
     // compartido.
-    if let Some(path) = model.open_file.as_ref() {
-        let diags = model.lsp.diagnostics(path);
-        if !diags.is_empty() || !model.editor.diagnostics.is_empty() {
-            model.editor.set_diagnostics(diags);
-        }
+    let path = model.tabs[idx].path.clone();
+    let diags = model.lsp.diagnostics(&path);
+    if !diags.is_empty() || !model.tabs[idx].editor.diagnostics.is_empty() {
+        model.tabs[idx].editor.set_diagnostics(diags);
     }
     model
 }
 
 fn apply_editor_pointer(mut model: Model, ev: PointerEvent) -> Model {
+    let Some(idx) = model.active else { return model };
     let metrics = EditorMetrics::for_font_size(13.0);
-    let scroll = model.editor.scroll_offset;
+    let scroll = model.tabs[idx].editor.scroll_offset;
     match ev {
         PointerEvent::Click { x, y } => {
             model.drag_accum = (0.0, 0.0);
             let (line, col) = metrics.screen_to_pos(x, y, scroll);
-            model.editor.set_caret_at(line, col);
+            model.tabs[idx].editor.set_caret_at(line, col);
         }
         PointerEvent::Drag { initial_x, initial_y, dx, dy } => {
             model.drag_accum.0 += dx;
@@ -1491,7 +1689,7 @@ fn apply_editor_pointer(mut model: Model, ev: PointerEvent) -> Model {
             let cur_x = initial_x + model.drag_accum.0;
             let cur_y = initial_y + model.drag_accum.1;
             let (line, col) = metrics.screen_to_pos(cur_x, cur_y, scroll);
-            model.editor.extend_selection_to(line, col);
+            model.tabs[idx].editor.extend_selection_to(line, col);
         }
     }
     model
@@ -1552,34 +1750,39 @@ fn apply_text_edits_in_place(editor: &mut EditorState, mut edits: Vec<TextEdit>)
 }
 
 fn find_step(mut model: Model, forward: bool) -> Model {
+    let Some(idx) = model.active else { return model };
     let Some(find) = model.find.as_ref() else { return model };
     if find.state.query.is_empty() {
         return model;
     }
+    let tab_buf = &model.tabs[idx].editor.buffer;
+    let tab_cursor = &model.tabs[idx].editor.cursor;
     let result = if forward {
-        find_next(&model.editor.buffer, &find.state, &model.editor.cursor)
+        find_next(tab_buf, &find.state, tab_cursor)
     } else {
-        find_prev(&model.editor.buffer, &find.state, &model.editor.cursor)
+        find_prev(tab_buf, &find.state, tab_cursor)
     };
     let Some((start, end)) = result else {
         model.status = format!("sin matches para «{}»", find.state.query);
         return model;
     };
+    let total = all_matches(&model.tabs[idx].editor.buffer, &find.state).len();
     // Selecciona la match (anchor=start, caret=end) y la deja visible.
-    model.editor.cursor.anchor = Some(Pos::new(start.line, start.col));
-    model.editor.cursor.caret = Pos::new(end.line, end.col);
-    model.editor.cursor.desired_col = end.col;
-    model.editor.ensure_caret_visible(EDITOR_VISIBLE_LINES);
-    let total = all_matches(&model.editor.buffer, &find.state).len();
+    let tab = &mut model.tabs[idx];
+    tab.editor.cursor.anchor = Some(Pos::new(start.line, start.col));
+    tab.editor.cursor.caret = Pos::new(end.line, end.col);
+    tab.editor.cursor.desired_col = end.col;
+    tab.editor.ensure_caret_visible(EDITOR_VISIBLE_LINES);
     model.status = format!("match · {total} totales");
     model
 }
 
 fn save_open_file(model: Model, handle: &Handle<Msg>) -> Model {
-    let Some(path) = model.open_file.clone() else {
+    let Some(tab) = model.active_tab() else {
         return model;
     };
-    let content = model.editor.text();
+    let path = tab.path.clone();
+    let content = tab.editor.text();
     let h = handle.clone();
     handle.spawn(move || {
         let result = fs::write(&path, content).map_err(|e| e.to_string());
