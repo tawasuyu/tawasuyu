@@ -9,6 +9,7 @@ description = "dominium — núcleo del simulador de campo medio: grilla SoA de 
 
 [dependencies]
 serde = { workspace = true }
+libm = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

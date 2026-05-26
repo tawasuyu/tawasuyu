@@ -6,7 +6,7 @@
 use crate::conceptos::Conceptos;
 use crate::grid::Grid;
 use crate::lemmings::{Lemmings, PSI_CORRUPTIBILIDAD, PSI_CURIOSIDAD, PSI_MIEDO, PSI_ORDEN};
-use crate::params::SimParams;
+use crate::params::{SimParams, TradeTarget};
 use serde::{Deserialize, Serialize};
 
 /// Las 6 acciones atómicas. El byte `accion` del Lemming es uno de estos.
@@ -49,6 +49,12 @@ pub struct World {
     pub lemmings: Lemmings,
     #[serde(default)]
     pub conceptos: Conceptos,
+    /// Tick global del mundo — `physics::tick` lo incrementa al final de
+    /// cada paso. Es el reloj que alimenta la modulación estacional de
+    /// `SimParams::season_period`. Saves viejos sin este campo arrancan
+    /// en 0 vía `serde(default)`.
+    #[serde(default)]
+    pub tick_count: u64,
 }
 
 impl World {
@@ -57,6 +63,7 @@ impl World {
             grid: Grid::new(width, height),
             lemmings: Lemmings::new(),
             conceptos: Conceptos::new(),
+            tick_count: 0,
         }
     }
 
@@ -149,24 +156,57 @@ impl World {
         }
     }
 
-    /// 3 · Intercambiar — transfiere energía al vecino más cercano.
+    /// 3 · Intercambiar — transfiere energía a otro agente. El destinatario
+    /// depende de `p.trade_target`: `Nearest` mantiene la semántica original
+    /// (vecino físico más cercano), `Poorest` redistribuye al más necesitado
+    /// del mundo. La elección controla si el sistema alcanza un punto fijo
+    /// `N* > 0` o se extingue por desigualdad creciente.
     pub fn act_intercambiar(&mut self, i: usize, p: &SimParams) {
-        let Some(j) = self.lemmings.nearest(i) else { return };
+        let target = match p.trade_target {
+            TradeTarget::Nearest => self.lemmings.nearest(i),
+            TradeTarget::Poorest => self.lemmings.poorest(i),
+        };
+        let Some(j) = target else { return };
         let amount = p.trade_amount.min(self.lemmings.energia[i]).max(0.0);
         self.lemmings.energia[i] -= amount;
         self.lemmings.energia[j] += amount;
     }
 
-    /// 4 · Replicar — instancia un hijo con edad 0 en las mismas coordenadas.
+    /// 4 · Replicar — instancia un hijo con edad 0 en una celda **vecina**
+    /// (no la misma del padre). El hijo hereda la acción y el `vector_psi`.
+    ///
+    /// Dispersión determinista: la dirección del hijo viene de
+    /// `(edad_padre + idx_padre) % 4`, así N hijos del mismo padre se
+    /// reparten en las 4 vecinas. Sin esta dispersión, los hijos saturan
+    /// la celda del padre, agotan la materia local y colapsan en cascada
+    /// — incluso con regrowth + costo metabólico activos.
+    ///
+    /// La herencia + dispersión + side-effect de abundancia (ver
+    /// `step_lemming`) son las tres piezas que dan al sistema un punto
+    /// fijo `N* > 0`.
     pub fn act_replicar(&mut self, i: usize, p: &SimParams) {
         if self.lemmings.energia[i] <= p.replicate_threshold {
             return;
         }
         let cost = self.lemmings.energia[i] * p.child_energy_frac;
         self.lemmings.energia[i] -= cost;
-        let (x, y) = (self.lemmings.pos_x[i], self.lemmings.pos_y[i]);
         let psi = self.lemmings.vector_psi[i];
-        self.lemmings.spawn(x, y, cost, psi);
+        let accion = self.lemmings.accion[i];
+        // Dirección de dispersión: 0=E, 1=O, 2=S, 3=N. Determinista por
+        // (edad + i) — distribuye los hijos sucesivos en las 4 vecinas.
+        let dir = (self.lemmings.edad[i].wrapping_add(i as u32) & 0x3) as u8;
+        let (dx, dy) = match dir {
+            0 => (1.0, 0.0),
+            1 => (-1.0, 0.0),
+            2 => (0.0, 1.0),
+            _ => (0.0, -1.0),
+        };
+        let max_x = self.grid.width as f32 - 1.0;
+        let max_y = self.grid.height as f32 - 1.0;
+        let x = (self.lemmings.pos_x[i] + dx).clamp(0.0, max_x);
+        let y = (self.lemmings.pos_y[i] + dy).clamp(0.0, max_y);
+        let child = self.lemmings.spawn(x, y, cost, psi);
+        self.lemmings.accion[child] = accion;
     }
 
     /// 5 · Degradar (Pelear) — resta energía al vecino y absorbe parte.
@@ -178,7 +218,23 @@ impl World {
     }
 
     /// Despacha la acción del Lemming `i` según su byte `accion`.
+    ///
+    /// **Bonus de abundancia**: si `p.abundance_threshold > 0` y la
+    /// energía del agente supera ese umbral, ejecuta `act_replicar` como
+    /// *side-effect* ANTES de su acción principal. Esto cierra el ciclo
+    /// termodinámico: cualquier agente saciado se reproduce sin abandonar
+    /// su rol (un Extractor sigue extrayendo, un Trader sigue donando).
+    /// Si el lemming ya está en `Replicar`, el bonus no doble-cuenta —
+    /// `act_replicar` requiere que `energia > replicate_threshold` y le
+    /// resta `child_energy_frac`, así que el segundo intento dentro del
+    /// mismo tick muy probablemente fallará el guardia.
     pub fn step_lemming(&mut self, i: usize, p: &SimParams) {
+        if p.abundance_threshold > 0.0
+            && self.lemmings.hack_lock[i] == 0
+            && self.lemmings.energia[i] > p.abundance_threshold
+        {
+            self.act_replicar(i, p);
+        }
         match Action::from_u8(self.lemmings.accion[i]) {
             Some(Action::Mover) => self.act_mover(i, p),
             Some(Action::Extraer) => self.act_extraer(i, p),
@@ -239,6 +295,24 @@ mod tests {
         assert_eq!(w.lemmings.len(), 2);
         assert_eq!(w.lemmings.edad[1], 0);
         assert!(w.lemmings.energia[0] < 100.0);
+    }
+
+    #[test]
+    fn replicar_passes_action_to_child() {
+        // Sin herencia, el subgrupo "Replicador" se pierde en una generación
+        // y dN/dt < 0 estructuralmente. La herencia es el fix matemático
+        // que cierra el ciclo.
+        let mut w = World::new(8, 8);
+        let i = w.lemmings.spawn(4.0, 4.0, 100.0, [0.5, 0.5, 0.5, 0.5]);
+        w.lemmings.accion[i] = 4; // Replicar
+        let p = SimParams::default();
+        w.act_replicar(i, &p);
+        assert_eq!(w.lemmings.len(), 2);
+        // El hijo (índice 1) hereda la acción 4 del padre, no la acción 0
+        // que el spawn pone por default.
+        assert_eq!(w.lemmings.accion[1], 4, "hijo hereda accion del padre");
+        // El psi también se hereda — eso ya funcionaba.
+        assert_eq!(w.lemmings.vector_psi[1], w.lemmings.vector_psi[0]);
     }
 
     #[test]
@@ -316,5 +390,39 @@ mod tests {
         w.act_intercambiar(0, &p);
         let total = w.lemmings.energia[0] + w.lemmings.energia[1];
         assert!((total - 60.0).abs() < 1e-4, "la energía se conserva");
+    }
+
+    #[test]
+    fn intercambiar_poorest_donates_to_the_neediest() {
+        // Default: TradeTarget::Poorest. El trader (i=0) tiene E=50.
+        // El más cercano (i=1) está al lado pero tiene E=49. El más pobre
+        // (i=2) está lejos pero tiene E=5. Debe donar al pobre, no al
+        // cercano.
+        let mut w = World::new(20, 20);
+        w.lemmings.spawn(2.0, 2.0, 50.0, [0.0; 4]); // 0: trader
+        w.lemmings.spawn(3.0, 2.0, 49.0, [0.0; 4]); // 1: cercano, rico
+        w.lemmings.spawn(18.0, 18.0, 5.0, [0.0; 4]); // 2: lejos, pobre
+        let p = SimParams::default();
+        let before_close = w.lemmings.energia[1];
+        let before_poor = w.lemmings.energia[2];
+        w.act_intercambiar(0, &p);
+        assert_eq!(w.lemmings.energia[1], before_close, "no le tocó al cercano");
+        assert!(w.lemmings.energia[2] > before_poor, "le donó al pobre");
+    }
+
+    #[test]
+    fn intercambiar_nearest_preserves_legacy_behavior() {
+        // Con TradeTarget::Nearest, el comportamiento histórico se mantiene.
+        let mut w = World::new(20, 20);
+        w.lemmings.spawn(2.0, 2.0, 50.0, [0.0; 4]);
+        w.lemmings.spawn(3.0, 2.0, 49.0, [0.0; 4]); // cercano
+        w.lemmings.spawn(18.0, 18.0, 5.0, [0.0; 4]); // pobre lejos
+        let mut p = SimParams::default();
+        p.trade_target = TradeTarget::Nearest;
+        let before_close = w.lemmings.energia[1];
+        let before_poor = w.lemmings.energia[2];
+        w.act_intercambiar(0, &p);
+        assert!(w.lemmings.energia[1] > before_close, "le donó al cercano");
+        assert_eq!(w.lemmings.energia[2], before_poor, "no le tocó al pobre");
     }
 }

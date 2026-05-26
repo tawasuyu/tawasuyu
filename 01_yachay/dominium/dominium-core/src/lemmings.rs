@@ -92,6 +92,25 @@ impl Lemmings {
         }
         best.map(|(j, _)| j)
     }
+
+    /// Índice del Lemming vivo con **menor energía** distinto de `i`. Es
+    /// el destinatario de `act_intercambiar` cuando la estrategia es
+    /// "redistribución solidaria": en lugar de donar al vecino físico
+    /// más cercano (que puede ser igualmente pobre), busca al más
+    /// necesitado del mundo. Determinista: ante empate, menor índice.
+    pub fn poorest(&self, i: usize) -> Option<usize> {
+        let mut best: Option<(usize, f32)> = None;
+        for j in 0..self.len() {
+            if j == i {
+                continue;
+            }
+            let e = self.energia[j];
+            if best.map(|(_, be)| e < be).unwrap_or(true) {
+                best = Some((j, e));
+            }
+        }
+        best.map(|(j, _)| j)
+    }
 }
 
 #[cfg(test)]

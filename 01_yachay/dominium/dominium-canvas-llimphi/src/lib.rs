@@ -15,7 +15,7 @@
 
 use dominium_render_plan::{Color as PlanColor, RenderPlan};
 use llimphi_ui::llimphi_layout::taffy::prelude::{percent, Size, Style};
-use llimphi_ui::llimphi_raster::kurbo::{Affine, Rect as KurboRect};
+use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Point, Rect as KurboRect};
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::llimphi_text::{draw_block, TextBlock};
 use llimphi_ui::{PaintRect, View};
@@ -50,7 +50,7 @@ where
         view
     };
     view.paint_with(move |scene, ts, rect: PaintRect| {
-        if plan.quads.is_empty() && plan.glyphs.is_empty() {
+        if plan.quads.is_empty() && plan.polygons.is_empty() && plan.glyphs.is_empty() {
             return;
         }
         // Centra la maqueta: el centro de la caja envolvente del plan
@@ -60,22 +60,55 @@ where
         let off_x = (rect.x + rect.w * 0.5 - plan_cx) as f64;
         let off_y = (rect.y + rect.h * 0.5 - plan_cy) as f64;
 
-        for q in &plan.quads {
-            let x0 = q.x as f64 + off_x;
-            let y0 = q.y as f64 + off_y;
-            let x1 = x0 + q.w as f64;
-            let y1 = y0 + q.h as f64;
-            let r = KurboRect::new(x0, y0, x1, y1);
-            scene.fill(
-                Fill::NonZero,
-                Affine::IDENTITY,
-                plan_color(q.color),
-                None,
-                &r,
-            );
+        // Intercala quads + polygons por depth, atrás → adelante. Cada
+        // input ya está ordenado por su propio depth, así que un merge
+        // lineal alcanza — sin re-ordenar.
+        let mut qi = 0usize;
+        let mut pi = 0usize;
+        while qi < plan.quads.len() || pi < plan.polygons.len() {
+            let q_d = plan.quads.get(qi).map(|q| q.depth);
+            let p_d = plan.polygons.get(pi).map(|p| p.depth);
+            let take_quad = match (q_d, p_d) {
+                (Some(q), Some(p)) => q <= p,
+                (Some(_), None) => true,
+                (None, Some(_)) => false,
+                (None, None) => break,
+            };
+            if take_quad {
+                let q = &plan.quads[qi];
+                let x0 = q.x as f64 + off_x;
+                let y0 = q.y as f64 + off_y;
+                let x1 = x0 + q.w as f64;
+                let y1 = y0 + q.h as f64;
+                let r = KurboRect::new(x0, y0, x1, y1);
+                scene.fill(
+                    Fill::NonZero,
+                    Affine::IDENTITY,
+                    plan_color(q.color),
+                    None,
+                    &r,
+                );
+                qi += 1;
+            } else {
+                let p = &plan.polygons[pi];
+                let mut path = BezPath::new();
+                let v = &p.vertices;
+                path.move_to(Point::new(v[0].0 as f64 + off_x, v[0].1 as f64 + off_y));
+                path.line_to(Point::new(v[1].0 as f64 + off_x, v[1].1 as f64 + off_y));
+                path.line_to(Point::new(v[2].0 as f64 + off_x, v[2].1 as f64 + off_y));
+                path.line_to(Point::new(v[3].0 as f64 + off_x, v[3].1 as f64 + off_y));
+                path.close_path();
+                scene.fill(
+                    Fill::NonZero,
+                    Affine::IDENTITY,
+                    plan_color(p.color),
+                    None,
+                    &path,
+                );
+                pi += 1;
+            }
         }
-        // Glifos por encima de los quads, sin re-shaping cacheado (cada
-        // glyph hace un layout breve; son pocos: ~decenas).
+        // Glifos por encima de todo, sin re-shaping cacheado.
         for gl in &plan.glyphs {
             let s = gl.ch.to_string();
             let block = TextBlock::simple(

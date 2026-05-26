@@ -13,14 +13,19 @@
 //! colapsa, el mundo se re-siembra solo. El panel derecho muestra
 //! stats y dos controles (play/pausa, re-sembrar).
 
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use dominium_canvas_llimphi::canvas_view;
-use dominium_core::{BehaviorHack, Concepto, Conceptos, LayerMods, SimParams, Trigger, World};
+use dominium_core::{
+    BehaviorHack, Concepto, Conceptos, Epoch, LayerMods, SimParams, Trigger, World, WorldStats,
+};
 use dominium_iso::{IsoProjector, ZWeights};
 use dominium_physics::tick;
-use dominium_render_plan::{build_plan, PlanConfig};
+use dominium_render_plan::{
+    build_plan, Color, PlanConfig, Quad, RenderLayer, RenderMode, RenderPlan,
+};
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, Dimension, FlexDirection, Size, Style},
@@ -32,17 +37,34 @@ use llimphi_widget_button::{button_view, ButtonPalette};
 use llimphi_widget_slider::{slider_view, SliderPalette};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
-/// Lado de la grilla cuadrada del mundo.
-const GRID: usize = 40;
-/// Población inicial de Lemmings.
-const LEMMINGS: usize = 50;
+/// Lado de la grilla cuadrada del mundo. Subido a 80 para que se vea como
+/// un continente y no como una sala; tps suficiente con regrowth + caras.
+const GRID: usize = 80;
+/// Población inicial de Lemmings. 4× la grilla anterior, manteniendo
+/// densidad similar.
+const LEMMINGS: usize = 220;
 /// Periodo del bucle de simulación (~11 Hz).
 const TICK_MS: u64 = 90;
 /// Ancho del panel de stats.
 const SIDE_WIDTH: f32 = 240.0;
-/// Pack JSON por defecto — iglesia / banco / comuna / laboratorio.
+/// Pack JSON por defecto — iglesia / banco / comuna / laboratorio + variantes.
 /// Embebido para que el binario corra sin archivos sueltos en cwd.
 const DEFAULT_PACK: &str = include_str!("../conceptos.default.json");
+/// Scenarios embebidos: civilizaciones-arquetipo. Cada uno es un JSON con
+/// la misma forma que el `DEFAULT_PACK`; el picker del panel cicla entre
+/// ellos sin necesidad de archivos sueltos.
+const PACK_ANDES: &str = include_str!("../packs/andes.json");
+const PACK_MESOPOTAMIA: &str = include_str!("../packs/mesopotamia.json");
+const PACK_CAPITALISMO: &str = include_str!("../packs/capitalismo.json");
+
+/// Tamaño del ring de snapshots: ~18 segundos a 11 Hz. Permite ver hacia
+/// atrás un par de minutos de simulación sin pasarse en RAM (cada snapshot
+/// es un `World` clonado; con grid 40×40 y ~50 lemmings, ~30 KB).
+const SNAPSHOT_RING_CAP: usize = 200;
+/// Largo del trail por lemming. Tradeoff: muy alto y la pantalla se llena
+/// de motas; muy bajo y el rastro no cuenta nada. 24 a 11 Hz ≈ 2 s de
+/// historia visible — coincide con el horizonte que el ojo integra.
+const TRAIL_CAP: usize = 24;
 
 // ---------------------------------------------------------------------
 // PRNG mínimo (LCG 64) — siembra reproducible sin dependencias.
@@ -70,6 +92,17 @@ impl Lcg {
 /// arranca con la colección vacía — la sim corre igual.
 fn default_conceptos() -> Conceptos {
     serde_json::from_str::<Conceptos>(DEFAULT_PACK).unwrap_or_default()
+}
+
+/// Listado ordenado de packs embebidos disponibles en el picker. El primero
+/// es el default; el ciclo es circular. Tupla `(id legible, JSON raw)`.
+fn scenario_packs() -> [(&'static str, &'static str); 4] {
+    [
+        ("default", DEFAULT_PACK),
+        ("andes", PACK_ANDES),
+        ("mesopotamia", PACK_MESOPOTAMIA),
+        ("capitalismo", PACK_CAPITALISMO),
+    ]
 }
 
 /// Path absoluto al pack del usuario: `$XDG_CONFIG_HOME/dominium/pack.json`
@@ -194,7 +227,7 @@ fn seed(seed: u64) -> World {
             w.grid.psique[idx] = rng.next_f32() * 12.0;
         }
     }
-    for _ in 0..LEMMINGS {
+    for k in 0..LEMMINGS {
         let x = rng.next_f32() * (GRID as f32 - 1.0);
         let y = rng.next_f32() * (GRID as f32 - 1.0);
         let psi = [
@@ -203,8 +236,29 @@ fn seed(seed: u64) -> World {
             rng.next_f32(),
             rng.next_f32(),
         ];
-        let i = w.lemmings.spawn(x, y, 30.0 + rng.next_f32() * 40.0, psi);
-        w.lemmings.accion[i] = (rng.next_u32() % 6) as u8;
+        let i = w.lemmings.spawn(x, y, 40.0 + rng.next_f32() * 40.0, psi);
+        // Distribución calibrada al punto fijo del sistema con herencia
+        // de acción + intercambio fuerte (trade_amount = 1.5):
+        //   α_e = 0.30 (Extraer · cosecha — fuente principal de E)
+        //   α_t = 0.30 (Intercambiar · redistribución — evita concentración)
+        //   α_m = 0.20 (Mover · exploración)
+        //   α_r = 0.15 (Replicar · natalidad)
+        //   α_s = 0.05 (Sincronizar · convergencia cultural)
+        //
+        // Balance energético por capita en equilibrio:
+        //   dE/dt = α_e · e_r - α_m · c_m - α_r · f · E_r · 1[E_r>T]
+        //         = 0.30·2.5 - 0.20·0.06 - 0.15·0.45·E_r
+        //         = 0.738 - 0.0675·E_r
+        //   E* = 0.738 / 0.0675 ≈ 11 (cerca del threshold T=12)
+        // El sistema oscila alrededor de ese E*, replicando a baja
+        // frecuencia pero sostenidamente.
+        w.lemmings.accion[i] = match k % 20 {
+            0..=5 => 1,            // 6/20 = 0.30 Extraer
+            6..=11 => 3,           // 6/20 = 0.30 Intercambiar
+            12..=15 => 0,          // 4/20 = 0.20 Mover
+            16..=18 => 4,          // 3/20 = 0.15 Replicar
+            _ => 2,                // 1/20 = 0.05 Sincronizar
+        } as u8;
     }
     // Si el usuario ya tiene un pack guardado, gana sobre el embebido —
     // así sus ediciones sobreviven al reseed/reapertura. Si no, default.
@@ -237,6 +291,28 @@ struct Model {
     /// si el panel muestra el text-input o el label estático.
     id_input: TextInputState,
     id_input_focused: bool,
+    /// Índice del scenario actual en `scenario_packs()`. El picker del panel
+    /// lo cicla; "Sembrar pack" instala el JSON correspondiente.
+    scenario_idx: usize,
+    /// Ring de snapshots del `World` — el último elemento es el más reciente
+    /// ya cosechado. `rewind_offset == 0` significa "presente" y se renderiza
+    /// `world`; `> 0` significa "mirar hacia atrás" y se renderiza
+    /// `snapshots[len - 1 - offset]` en modo read-only.
+    snapshots: VecDeque<World>,
+    /// Cuántos pasos hacia atrás está mirando el usuario. `0` = vivo.
+    /// Cuando `> 0`, el `Tick` deja de avanzar el mundo (la sim se
+    /// auto-pausa visualmente, pero el reloj real podría seguir si se
+    /// pidiera). Implementación: pausamos también el motor mientras hay
+    /// rewind, así no acumula divergencia.
+    rewind_offset: usize,
+    /// Trails: para cada lemming vivo, las últimas `TRAIL_CAP` posiciones
+    /// `(x, y)`. Como los lemmings se referencian por índice y `swap_remove`
+    /// puede mover índices, el trail se reconstruye cada tick desde
+    /// `lemmings.pos_x/pos_y` — sólo guardamos las posiciones, no su id.
+    /// Estructura: `trails[k]` es el snapshot del frame `tick - k`.
+    trails: VecDeque<Vec<(f32, f32)>>,
+    /// Toggle para mostrar las trayectorias.
+    show_trails: bool,
 }
 
 /// Una de las cuatro capas modificables de un `Concepto` (degradacion
@@ -249,14 +325,16 @@ enum Layer {
     Oro,
 }
 
-/// Slot de `SimParams` editable desde el panel. Sólo los 4 más visibles
-/// (no es plan exponer las 14 constantes); los demás quedan al default.
+/// Slot de `SimParams` editable desde el panel. Los 4 más visibles más los
+/// dos del ciclo estacional; los demás quedan al default.
 #[derive(Clone, Copy, Debug)]
 enum ParamSlot {
     ClimbCost,
     DiffusionRate,
     EntropyRate,
     MoveCost,
+    SeasonPeriod,
+    SeasonAmplitude,
 }
 
 impl ParamSlot {
@@ -266,6 +344,9 @@ impl ParamSlot {
             ParamSlot::DiffusionRate => (0.0, 0.5),
             ParamSlot::EntropyRate => (0.0, 0.05),
             ParamSlot::MoveCost => (0.0, 0.5),
+            // 0 = sin estaciones; hasta 500 ticks por ciclo (≈45 s a 11 Hz).
+            ParamSlot::SeasonPeriod => (0.0, 500.0),
+            ParamSlot::SeasonAmplitude => (0.0, 1.0),
         }
     }
 }
@@ -282,24 +363,6 @@ enum ZSlot {
     Degradacion,
 }
 
-struct Stats {
-    poblacion: usize,
-    materia: f32,
-    oro: f32,
-    energia: f32,
-}
-
-impl Model {
-    fn stats(&self) -> Stats {
-        let g = &self.world.grid;
-        Stats {
-            poblacion: self.world.lemmings.len(),
-            materia: g.materia.iter().sum(),
-            oro: g.oro.iter().sum(),
-            energia: self.world.lemmings.energia.iter().sum(),
-        }
-    }
-}
 
 #[derive(Clone)]
 enum Msg {
@@ -336,6 +399,25 @@ enum Msg {
     FocusIdInput,
     BlurIdInput,
     IdInputKey(KeyEvent),
+    /// Cicla al siguiente scenario embebido. Sólo cambia la selección
+    /// (no lo aplica hasta que se toque "Cargar scenario").
+    CycleScenario,
+    /// Reemplaza los conceptos del mundo con el scenario actualmente
+    /// seleccionado. Limpia hack_locks vivos y deselecciona.
+    LoadScenario,
+    /// Cicla `cfg.render_mode`: Composite → Heatmap(Materia) → … →
+    /// Heatmap(Degradacion) → Composite.
+    CycleRenderMode,
+    /// Toggle de visualización de trayectorias.
+    ToggleTrails,
+    /// Toggle de texturización procedural sobre los techos.
+    ToggleTexture,
+    /// Delta sobre `rewind_offset` (positivo = más atrás; negativo = hacia
+    /// el presente). El slider del panel emite estos deltas; un botón
+    /// "vivo" emite `RewindHome`.
+    RewindBy(f32),
+    /// Vuelve `rewind_offset` a 0 (presente).
+    RewindHome,
 }
 
 struct Dominium;
@@ -361,18 +443,27 @@ impl App for Dominium {
         Model {
             world: seed(rng_seed),
             params: SimParams::default(),
-            iso: IsoProjector::new(12.0, 0.05),
+            // Scale más chico (8.0) para encajar el grid 80×80 en pantalla.
+            // z_factor más alto (0.18) para que el relieve se sienta volumétrico.
+            iso: IsoProjector::new(8.0, 0.18),
             weights: ZWeights::default(),
             cfg: PlanConfig {
-                tile: 15.0,
-                lemming_size: 8.0,
-                lemming_lift: 0.7,
-                concepto_size: 12.0,
-                concepto_lift: 1.6,
+                // El tile real queda definido por el iso.scale (las celdas
+                // son polygons proyectados, no rects axis-aligned). Estos
+                // siguen siendo factores para lemmings/conceptos.
+                tile: 8.0,
+                lemming_size: 5.5,
+                lemming_lift: 0.5,
+                concepto_size: 9.0,
+                concepto_lift: 2.4,
                 light_dir: (0.55, 0.35),
                 andina_layers: 0,
                 andina_threshold: 1.0,
                 palette: Default::default(),
+                render_mode: RenderMode::Composite,
+                // Textura procedural por default — es lo que vuelve maqueta
+                // al render.
+                texture: true,
             },
             running: true,
             tick: 0,
@@ -382,6 +473,11 @@ impl App for Dominium {
             sync_relieve: false,
             id_input: TextInputState::new(),
             id_input_focused: false,
+            scenario_idx: 0,
+            snapshots: VecDeque::with_capacity(SNAPSHOT_RING_CAP),
+            rewind_offset: 0,
+            trails: VecDeque::with_capacity(TRAIL_CAP),
+            show_trails: false,
         }
     }
 
@@ -389,7 +485,9 @@ impl App for Dominium {
         let mut m = model;
         match msg {
             Msg::Tick => {
-                if m.running {
+                // Si el usuario está revisando el pasado, la sim queda
+                // congelada para no acumular divergencia con el ring.
+                if m.running && m.rewind_offset == 0 {
                     advance(&mut m);
                 }
             }
@@ -463,6 +561,14 @@ impl App for Dominium {
                     }
                     ParamSlot::MoveCost => {
                         m.params.move_cost = (m.params.move_cost + dv).clamp(lo, hi)
+                    }
+                    ParamSlot::SeasonPeriod => {
+                        let v = (m.params.season_period as f32 + dv).clamp(lo, hi);
+                        m.params.season_period = v as u32;
+                    }
+                    ParamSlot::SeasonAmplitude => {
+                        m.params.season_amplitude =
+                            (m.params.season_amplitude + dv).clamp(lo, hi)
                     }
                 }
             }
@@ -606,6 +712,43 @@ impl App for Dominium {
                     }
                 }
             }
+            Msg::CycleScenario => {
+                let n = scenario_packs().len();
+                m.scenario_idx = (m.scenario_idx + 1) % n;
+            }
+            Msg::LoadScenario => {
+                let packs = scenario_packs();
+                let (_, json) = packs[m.scenario_idx];
+                if let Ok(cs) = serde_json::from_str::<Conceptos>(json) {
+                    m.world.conceptos = cs;
+                    for lock in m.world.lemmings.hack_lock.iter_mut() {
+                        *lock = 0;
+                    }
+                    m.selected = None;
+                }
+            }
+            Msg::CycleRenderMode => {
+                m.cfg.render_mode = match m.cfg.render_mode {
+                    RenderMode::Composite => RenderMode::Heatmap(RenderLayer::Materia),
+                    RenderMode::Heatmap(RenderLayer::Degradacion) => RenderMode::Composite,
+                    RenderMode::Heatmap(l) => RenderMode::Heatmap(l.next()),
+                };
+            }
+            Msg::ToggleTrails => {
+                m.show_trails = !m.show_trails;
+            }
+            Msg::ToggleTexture => {
+                m.cfg.texture = !m.cfg.texture;
+            }
+            Msg::RewindBy(dv) => {
+                let cap = m.snapshots.len().saturating_sub(1);
+                let cur = m.rewind_offset as f32;
+                let next = (cur + dv).clamp(0.0, cap as f32);
+                m.rewind_offset = next as usize;
+            }
+            Msg::RewindHome => {
+                m.rewind_offset = 0;
+            }
         }
         m
     }
@@ -628,10 +771,14 @@ impl App for Dominium {
 
     fn view(model: &Model) -> View<Msg> {
         let theme = Theme::dark();
-        let stats = model.stats();
+        let shown = displayed_world(model);
+        let stats = WorldStats::from_world(shown);
 
         let status = status_bar(model, &theme);
-        let plan = build_plan(&model.world, &model.iso, &model.weights, &model.cfg);
+        let mut plan = build_plan(shown, &model.iso, &model.weights, &model.cfg);
+        if model.show_trails && model.rewind_offset == 0 {
+            overlay_trails(&mut plan, model);
+        }
         let plan_cx = (plan.min_x + plan.max_x) * 0.5;
         let plan_cy = (plan.min_y + plan.max_y) * 0.5;
         let iso = model.iso;
@@ -699,7 +846,9 @@ fn main() {
 // Transiciones
 // ---------------------------------------------------------------------
 
-/// Un paso de simulación; re-siembra si la población colapsa.
+/// Un paso de simulación; re-siembra si la población colapsa. Captura
+/// también el snapshot del estado y el frame de trails (después de avanzar,
+/// así el "presente" siempre coincide con `world`).
 fn advance(m: &mut Model) {
     tick(&mut m.world, &m.params);
     m.tick += 1;
@@ -711,7 +860,11 @@ fn advance(m: &mut Model) {
             .wrapping_add(1);
         m.world = seed(m.rng_seed);
         m.tick = 0;
+        m.snapshots.clear();
+        m.trails.clear();
     }
+    push_snapshot(m);
+    push_trail_frame(m);
 }
 
 fn reseed(m: &mut Model) {
@@ -719,6 +872,102 @@ fn reseed(m: &mut Model) {
     m.world = seed(m.rng_seed);
     m.tick = 0;
     m.epoch += 1;
+    m.snapshots.clear();
+    m.trails.clear();
+    m.rewind_offset = 0;
+}
+
+/// Empuja el `World` actual al ring (clone barato: SoA + Vec). Drop del más
+/// viejo al exceder la capacidad.
+fn push_snapshot(m: &mut Model) {
+    if m.snapshots.len() == SNAPSHOT_RING_CAP {
+        m.snapshots.pop_front();
+    }
+    m.snapshots.push_back(m.world.clone());
+}
+
+/// Empuja el frame de posiciones de todos los lemmings vivos al ring.
+fn push_trail_frame(m: &mut Model) {
+    if m.trails.len() == TRAIL_CAP {
+        m.trails.pop_front();
+    }
+    let lem = &m.world.lemmings;
+    let frame: Vec<(f32, f32)> = (0..lem.len())
+        .map(|i| (lem.pos_x[i], lem.pos_y[i]))
+        .collect();
+    m.trails.push_back(frame);
+}
+
+/// Devuelve el `World` que actualmente se está mostrando — el presente
+/// (`world`) si no hay rewind, o el snapshot apropiado si lo hay.
+fn displayed_world(m: &Model) -> &World {
+    if m.rewind_offset == 0 || m.snapshots.is_empty() {
+        &m.world
+    } else {
+        let len = m.snapshots.len();
+        let idx = len.saturating_sub(1 + m.rewind_offset);
+        &m.snapshots[idx]
+    }
+}
+
+/// Pinta las posiciones históricas de los lemmings como quads diminutos
+/// con alpha decreciente — los más viejos casi transparentes. Va después
+/// del `build_plan` para que los trails queden por encima del suelo pero
+/// por debajo del HUD; depth pequeño constante negativo para no romper el
+/// orden de pintor de las celdas.
+///
+/// Se llama sólo en vivo (no en rewind), porque en rewind el `World` que
+/// se renderiza no necesariamente tiene los mismos índices de lemming que
+/// el frame de trails — y mezclarlos confundiría al ojo más que ayudar.
+fn overlay_trails(plan: &mut RenderPlan, m: &Model) {
+    let n_frames = m.trails.len();
+    if n_frames == 0 {
+        return;
+    }
+    let lemming_color = m.cfg.palette.lemming;
+    // Tamaño de la moteta: la mitad del marker del lemming, así no compite
+    // visualmente con la posición actual.
+    let size = m.cfg.lemming_size * 0.45;
+    for (k, frame) in m.trails.iter().enumerate() {
+        // k=0 es el más viejo → alpha bajo; k=n-1 el más nuevo → alpha alto.
+        // No incluyo el último frame: ya está pintado por el lemming actual.
+        if k + 1 == n_frames {
+            break;
+        }
+        let t = (k + 1) as f32 / n_frames as f32; // ∈ (0, 1)
+        let alpha = 0.10 + 0.40 * t;
+        let color: Color = [
+            lemming_color[0],
+            lemming_color[1],
+            lemming_color[2],
+            alpha,
+        ];
+        for &(x, y) in frame {
+            let (sx, sy) = m.iso.project(x, y, m.cfg.lemming_lift * 0.5);
+            plan.quads.push(Quad {
+                x: sx - size * 0.5,
+                y: sy - size * 0.5,
+                w: size,
+                h: size,
+                color,
+                // Detrás de los Lemmings vivos (que pintan a depth ≈ x+y+0.5)
+                // pero delante de la celda (depth x+y).
+                depth: x + y + 0.25,
+            });
+        }
+    }
+    // Mantengo el plan ordenado: insert al final desordena. Re-ordeno por
+    // depth — coste O(N log N) pero N es del orden de 50·24 = 1200 quads.
+    plan.quads.sort_by(|a, b| {
+        a.depth.partial_cmp(&b.depth).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    // Re-extender la bounding box por si los trails caen fuera.
+    for q in &plan.quads {
+        plan.min_x = plan.min_x.min(q.x);
+        plan.min_y = plan.min_y.min(q.y);
+        plan.max_x = plan.max_x.max(q.x + q.w);
+        plan.max_y = plan.max_y.max(q.y + q.h);
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -793,7 +1042,7 @@ fn canvas_pane(plan: dominium_render_plan::RenderPlan) -> View<Msg> {
     .children(vec![canvas])
 }
 
-fn side_panel(model: &Model, stats: &Stats, theme: &Theme) -> View<Msg> {
+fn side_panel(model: &Model, stats: &WorldStats, theme: &Theme) -> View<Msg> {
     let btn_palette = ButtonPalette::from_theme(theme);
     let mut slider_palette = SliderPalette::from_theme(theme);
     // Comprimimos los slots para que entren en el sidebar de 240 px.
@@ -829,10 +1078,49 @@ fn side_panel(model: &Model, stats: &Stats, theme: &Theme) -> View<Msg> {
         play_btn,
         reset_btn,
         separator(),
-        stat_row("Población", &stats.poblacion.to_string(), theme),
-        stat_row("Materia", &format!("{:.0}", stats.materia), theme),
-        stat_row("Oro", &format!("{:.0}", stats.oro), theme),
-        stat_row("Energía", &format!("{:.0}", stats.energia), theme),
+        stat_row("Población", &stats.n.to_string(), theme),
+        stat_row("Materia", &format!("{:.0}", stats.total_materia), theme),
+        stat_row("Oro", &format!("{:.0}", stats.total_oro), theme),
+        stat_row("Energía", &format!("{:.0}", stats.total_energia), theme),
+        separator(),
+        label_view("[ MÉTRICAS ]", 11.0, theme.fg_muted),
+        stat_row("Época", Epoch::classify(stats).label(), theme),
+        stat_row("Gini energía", &format!("{:.3}", stats.gini_energia), theme),
+        stat_row("Edad media", &format!("{:.1}", stats.mean_edad), theme),
+        stat_row(
+            "Var ψ orden",
+            &format!("{:.3}", stats.var_psi[0]),
+            theme,
+        ),
+        stat_row(
+            "Var ψ miedo",
+            &format!("{:.3}", stats.var_psi[1]),
+            theme,
+        ),
+        stat_row(
+            "Var ψ curiosidad",
+            &format!("{:.3}", stats.var_psi[2]),
+            theme,
+        ),
+        stat_row(
+            "Var ψ corruptib.",
+            &format!("{:.3}", stats.var_psi[3]),
+            theme,
+        ),
+        stat_row("→ mover", &stats.action_counts[0].to_string(), theme),
+        stat_row("→ extraer", &stats.action_counts[1].to_string(), theme),
+        stat_row("→ sincronizar", &stats.action_counts[2].to_string(), theme),
+        stat_row("→ intercambiar", &stats.action_counts[3].to_string(), theme),
+        stat_row("→ replicar", &stats.action_counts[4].to_string(), theme),
+        stat_row("→ degradar", &stats.action_counts[5].to_string(), theme),
+        stat_row(
+            "season×",
+            &format!(
+                "{:.2}",
+                model.params.season_factor(model.world.tick_count)
+            ),
+            theme,
+        ),
         separator(),
         conceptos_header,
         conceptos_count,
@@ -991,6 +1279,18 @@ fn side_panel(model: &Model, stats: &Stats, theme: &Theme) -> View<Msg> {
         ParamSlot::EntropyRate,
         &slider_palette,
     ));
+    children.push(param_slider(
+        "season T",
+        model.params.season_period as f32,
+        ParamSlot::SeasonPeriod,
+        &slider_palette,
+    ));
+    children.push(param_slider(
+        "season A",
+        model.params.season_amplitude,
+        ParamSlot::SeasonAmplitude,
+        &slider_palette,
+    ));
 
     children.push(separator());
     children.push(label_view("[ RELIEVE VISUAL ]", 11.0, theme.fg_muted));
@@ -1007,6 +1307,65 @@ fn side_panel(model: &Model, stats: &Stats, theme: &Theme) -> View<Msg> {
         "○  Estampa andina: OFF"
     };
     children.push(sized_button(andina_label, &btn_palette, Msg::ToggleAndina));
+
+    // ─── [ VISTA ] — render mode + trails + rewind ───
+    children.push(separator());
+    children.push(label_view("[ VISTA ]", 11.0, theme.fg_muted));
+    let render_label = match model.cfg.render_mode {
+        RenderMode::Composite => "Render: compuesto".to_string(),
+        RenderMode::Heatmap(l) => format!("Render: heatmap {}", l.label()),
+    };
+    children.push(sized_button(&render_label, &btn_palette, Msg::CycleRenderMode));
+    let trails_label = if model.show_trails {
+        "✓  Trayectorias: ON"
+    } else {
+        "○  Trayectorias: OFF"
+    };
+    children.push(sized_button(trails_label, &btn_palette, Msg::ToggleTrails));
+    let texture_label = if model.cfg.texture {
+        "✓  Textura: ON"
+    } else {
+        "○  Textura: OFF"
+    };
+    children.push(sized_button(texture_label, &btn_palette, Msg::ToggleTexture));
+
+    // Rewind: slider de tiempo (0 = vivo, N = N pasos atrás)
+    let max_rewind = model.snapshots.len().saturating_sub(1).max(1);
+    children.push(slider_view(
+        "rewind",
+        model.rewind_offset as f32,
+        0.0,
+        max_rewind as f32,
+        &slider_palette,
+        |phase, dv| match phase {
+            DragPhase::Move => Some(Msg::RewindBy(dv)),
+            DragPhase::End => None,
+        },
+    ));
+    // Atajo: si está en rewind, un botón "vivo" lo resetea instantáneo.
+    if model.rewind_offset > 0 {
+        children.push(sized_button(
+            &format!("▶  Vivo (estabas {} atrás)", model.rewind_offset),
+            &btn_palette,
+            Msg::RewindHome,
+        ));
+    }
+
+    // ─── [ SCENARIO ] — picker de packs embebidos ───
+    children.push(separator());
+    children.push(label_view("[ SCENARIO ]", 11.0, theme.fg_muted));
+    let packs = scenario_packs();
+    let (current_id, _) = packs[model.scenario_idx];
+    children.push(sized_button(
+        &format!("pack: {} (▸ ciclar)", current_id),
+        &btn_palette,
+        Msg::CycleScenario,
+    ));
+    children.push(sized_button(
+        &format!("✓ Cargar «{}»", current_id),
+        &btn_palette,
+        Msg::LoadScenario,
+    ));
 
     children.push(separator());
     children.push(label_view(&format!("grilla {GRID}×{GRID}"), 11.0, theme.fg_muted));

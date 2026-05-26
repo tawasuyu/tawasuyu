@@ -3,74 +3,74 @@
     {
       "id": "iglesia",
       "sprite_id": 1,
-      "pos_x": 10.0,
-      "pos_y": 10.0,
-      "radius": 6.0,
-      "mods": {
-        "materia": -0.05,
-        "psique": 0.40,
-        "poder": 0.10,
-        "oro": 0.00
-      },
-      "hack": {
-        "trigger": { "EnergiaBajo": 18.0 },
-        "forced_action": 2,
-        "duration": 40
-      }
+      "pos_x": 16.0,
+      "pos_y": 16.0,
+      "radius": 10.0,
+      "mods": { "materia": -0.05, "psique": 0.40, "poder": 0.10, "oro": 0.00 },
+      "hack": { "trigger": { "EnergiaBajo": 18.0 }, "forced_action": 2, "duration": 40 }
     },
     {
       "id": "banco-central",
       "sprite_id": 2,
-      "pos_x": 30.0,
-      "pos_y": 12.0,
-      "radius": 5.0,
-      "mods": {
-        "materia": 0.00,
-        "psique": -0.05,
-        "poder": 0.25,
-        "oro": -0.15
-      },
-      "hack": {
-        "trigger": "Always",
-        "forced_action": 1,
-        "duration": 25
-      }
+      "pos_x": 64.0,
+      "pos_y": 18.0,
+      "radius": 9.0,
+      "mods": { "materia": 0.00, "psique": -0.05, "poder": 0.25, "oro": -0.15 },
+      "hack": { "trigger": "Always", "forced_action": 1, "duration": 25 }
     },
     {
       "id": "comuna",
       "sprite_id": 3,
-      "pos_x": 12.0,
-      "pos_y": 30.0,
-      "radius": 7.0,
-      "mods": {
-        "materia": 0.18,
-        "psique": 0.05,
-        "poder": -0.10,
-        "oro": 0.00
-      },
-      "hack": {
-        "trigger": { "EnergiaBajo": 10.0 },
-        "forced_action": 3,
-        "duration": 30
-      }
+      "pos_x": 18.0,
+      "pos_y": 60.0,
+      "radius": 12.0,
+      "mods": { "materia": 0.18, "psique": 0.05, "poder": -0.10, "oro": 0.00 },
+      "hack": { "trigger": { "EnergiaBajo": 10.0 }, "forced_action": 3, "duration": 30 }
     },
     {
       "id": "laboratorio-rebelde",
       "sprite_id": 4,
-      "pos_x": 30.0,
-      "pos_y": 30.0,
-      "radius": 5.0,
-      "mods": {
-        "materia": -0.02,
-        "psique": 0.25,
-        "poder": -0.05,
-        "oro": 0.00
-      },
-      "hack": {
-        "trigger": { "EdadSobre": 80 },
-        "forced_action": 4,
-        "duration": 15
-      }
+      "pos_x": 64.0,
+      "pos_y": 62.0,
+      "radius": 9.0,
+      "mods": { "materia": -0.02, "psique": 0.25, "poder": -0.05, "oro": 0.00 },
+      "hack": { "trigger": { "EdadSobre": 80 }, "forced_action": 4, "duration": 15 }
+    },
+    {
+      "id": "imperio",
+      "sprite_id": 5,
+      "pos_x": 40.0,
+      "pos_y": 8.0,
+      "radius": 14.0,
+      "mods": { "materia": -0.08, "psique": -0.05, "poder": 0.45, "oro": 0.10 },
+      "hack": { "trigger": { "EdadSobre": 60 }, "forced_action": 5, "duration": 35 }
+    },
+    {
+      "id": "casino",
+      "sprite_id": 6,
+      "pos_x": 10.0,
+      "pos_y": 40.0,
+      "radius": 8.0,
+      "mods": { "materia": -0.04, "psique": 0.10, "poder": -0.02, "oro": 0.20 },
+      "hack": { "trigger": "Always", "forced_action": 1, "duration": 12 }
+    },
+    {
+      "id": "mercado",
+      "sprite_id": 7,
+      "pos_x": 40.0,
+      "pos_y": 40.0,
+      "radius": 11.0,
+      "mods": { "materia": 0.05, "psique": 0.02, "poder": 0.00, "oro": 0.06 },
+      "hack": { "trigger": "Always", "forced_action": 3, "duration": 18 }
+    },
+    {
+      "id": "templo-andino",
+      "sprite_id": 8,
+      "pos_x": 70.0,
+      "pos_y": 72.0,
+      "radius": 10.0,
+      "mods": { "materia": 0.06, "psique": 0.22, "poder": -0.02, "oro": 0.02 },
+      "hack": { "trigger": { "EnergiaBajo": 25.0 }, "forced_action": 2, "duration": 50 }
     }
   ]
 }

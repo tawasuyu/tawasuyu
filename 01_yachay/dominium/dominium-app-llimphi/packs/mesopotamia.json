@@ -1,0 +1,58 @@
+{
+  "items": [
+    {
+      "id": "zigurat",
+      "sprite_id": 1,
+      "pos_x": 36.0,
+      "pos_y": 24.0,
+      "radius": 12.0,
+      "mods": { "materia": -0.04, "psique": 0.32, "poder": 0.18, "oro": 0.00 },
+      "hack": { "trigger": { "EnergiaBajo": 20.0 }, "forced_action": 2, "duration": 45 }
+    },
+    {
+      "id": "palacio",
+      "sprite_id": 5,
+      "pos_x": 52.0,
+      "pos_y": 20.0,
+      "radius": 11.0,
+      "mods": { "materia": -0.06, "psique": -0.02, "poder": 0.38, "oro": 0.08 },
+      "hack": { "trigger": { "EdadSobre": 50 }, "forced_action": 5, "duration": 25 }
+    },
+    {
+      "id": "bazar",
+      "sprite_id": 7,
+      "pos_x": 28.0,
+      "pos_y": 48.0,
+      "radius": 12.0,
+      "mods": { "materia": 0.06, "psique": 0.04, "poder": 0.00, "oro": 0.10 },
+      "hack": { "trigger": "Always", "forced_action": 3, "duration": 18 }
+    },
+    {
+      "id": "campo-de-cebada",
+      "sprite_id": 3,
+      "pos_x": 16.0,
+      "pos_y": 64.0,
+      "radius": 14.0,
+      "mods": { "materia": 0.22, "psique": 0.02, "poder": -0.06, "oro": 0.00 },
+      "hack": null
+    },
+    {
+      "id": "casa-de-tablillas",
+      "sprite_id": 4,
+      "pos_x": 62.0,
+      "pos_y": 60.0,
+      "radius": 9.0,
+      "mods": { "materia": -0.02, "psique": 0.18, "poder": 0.10, "oro": 0.02 },
+      "hack": { "trigger": { "EdadSobre": 70 }, "forced_action": 2, "duration": 30 }
+    },
+    {
+      "id": "irrigacion",
+      "sprite_id": 3,
+      "pos_x": 48.0,
+      "pos_y": 50.0,
+      "radius": 10.0,
+      "mods": { "materia": 0.16, "psique": 0.00, "poder": -0.02, "oro": 0.00 },
+      "hack": null
+    }
+  ]
+}

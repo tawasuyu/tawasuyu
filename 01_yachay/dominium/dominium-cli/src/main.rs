@@ -22,7 +22,9 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use dominium_core::{BehaviorHack, Concepto, Conceptos, LayerMods, SimParams, Trigger, World};
+use dominium_core::{
+    BehaviorHack, Concepto, Conceptos, Epoch, LayerMods, SimParams, Trigger, World, WorldStats,
+};
 use dominium_physics::tick;
 
 #[derive(Parser, Debug)]
@@ -75,15 +77,37 @@ enum Cmd {
         /// Archivo CSV destino. Vacío = imprime resumen a stdout.
         #[arg(long)]
         csv: Option<PathBuf>,
+        /// Período del ciclo estacional en ticks. `0` = sin estaciones.
+        #[arg(long, default_value_t = 0)]
+        season_period: u32,
+        /// Amplitud del ciclo estacional ∈ [0, 1]. `0` = sin estaciones.
+        #[arg(long, default_value_t = 0.0)]
+        season_amplitude: f32,
     },
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Run { seed, ticks, grid, lemmings, conceptos, csv } => {
-            run_sim(seed, ticks, grid, lemmings, conceptos.as_deref(), csv.as_deref())
-        }
+        Cmd::Run {
+            seed,
+            ticks,
+            grid,
+            lemmings,
+            conceptos,
+            csv,
+            season_period,
+            season_amplitude,
+        } => run_sim(
+            seed,
+            ticks,
+            grid,
+            lemmings,
+            conceptos.as_deref(),
+            csv.as_deref(),
+            season_period,
+            season_amplitude,
+        ),
         Cmd::Repl { seed, grid, lemmings, conceptos } => {
             repl(seed, grid, lemmings, conceptos.as_deref())
         }
@@ -97,6 +121,8 @@ fn run_sim(
     lemmings: usize,
     conceptos_path: Option<&std::path::Path>,
     csv_path: Option<&std::path::Path>,
+    season_period: u32,
+    season_amplitude: f32,
 ) -> Result<()> {
     let mut world = build_world(seed, grid, lemmings);
     if let Some(path) = conceptos_path {
@@ -106,7 +132,9 @@ fn run_sim(
             .with_context(|| format!("parseando {}", path.display()))?;
         world.conceptos = cs;
     }
-    let params = SimParams::default();
+    let mut params = SimParams::default();
+    params.season_period = season_period;
+    params.season_amplitude = season_amplitude;
 
     let mut writer: Option<BufWriter<File>> = match csv_path {
         Some(p) => Some(BufWriter::new(
@@ -115,19 +143,14 @@ fn run_sim(
         None => None,
     };
     if let Some(w) = writer.as_mut() {
-        writeln!(w, "tick,poblacion,materia,oro,energia,degradacion")?;
+        writeln!(w, "{}", CSV_HEADER)?;
     }
 
     let t0 = std::time::Instant::now();
     for t in 0..ticks {
         tick(&mut world, &params);
         if let Some(w) = writer.as_mut() {
-            let row = row_of(&world, t + 1);
-            writeln!(
-                w,
-                "{},{},{:.3},{:.3},{:.3},{:.3}",
-                row.tick, row.pop, row.materia, row.oro, row.energia, row.degradacion
-            )?;
+            write_row(w, &world, t + 1)?;
         }
         if world.lemmings.is_empty() {
             eprintln!("colapso en tick {} — población vacía", t + 1);
@@ -138,42 +161,59 @@ fn run_sim(
     if let Some(w) = writer.as_mut() {
         w.flush()?;
     }
-    let final_row = row_of(&world, ticks);
+    let final_stats = WorldStats::from_world(&world);
     let tps = (ticks as f64) / dt.as_secs_f64().max(1e-9);
     println!(
-        "ok · {} ticks en {:.2?} ({:.0} tps) · seed={} grid={}×{} · poblacion={} materia={:.0} oro={:.0} energia={:.0}",
+        "ok · {} ticks en {:.2?} ({:.0} tps) · seed={} grid={}×{} · poblacion={} materia={:.0} oro={:.0} energia={:.0} gini_e={:.3}",
         ticks,
         dt,
         tps,
         seed,
         grid,
         grid,
-        final_row.pop,
-        final_row.materia,
-        final_row.oro,
-        final_row.energia,
+        final_stats.n,
+        final_stats.total_materia,
+        final_stats.total_oro,
+        final_stats.total_energia,
+        final_stats.gini_energia,
     );
     Ok(())
 }
 
-struct Row {
-    tick: u64,
-    pop: usize,
-    materia: f32,
-    oro: f32,
-    energia: f32,
-    degradacion: f32,
-}
+/// Encabezado CSV: orden estable usado por `write_row` y por el header del
+/// REPL. Cualquier reordenamiento debe replicarse en `write_row`.
+const CSV_HEADER: &str = "tick,epoca,poblacion,materia,psique,poder,oro,degradacion,energia,mean_edad,gini_e,var_psi0,var_psi1,var_psi2,var_psi3,act_mover,act_extraer,act_sync,act_trade,act_repl,act_degr";
 
-fn row_of(w: &World, t: u64) -> Row {
-    Row {
-        tick: t,
-        pop: w.lemmings.len(),
-        materia: w.grid.materia.iter().sum(),
-        oro: w.grid.oro.iter().sum(),
-        energia: w.lemmings.energia.iter().sum(),
-        degradacion: w.grid.degradacion.iter().sum(),
-    }
+/// Escribe una fila al CSV usando `WorldStats` — formato bit-exacto con
+/// `:.3` para los floats (mismo grano que el formato original).
+fn write_row<W: Write>(w: &mut W, world: &World, t: u64) -> std::io::Result<()> {
+    let s = WorldStats::from_world(world);
+    let e = Epoch::classify(&s);
+    writeln!(
+        w,
+        "{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{},{},{},{}",
+        t,
+        e.label(),
+        s.n,
+        s.total_materia,
+        s.total_psique,
+        s.total_poder,
+        s.total_oro,
+        s.total_degradacion,
+        s.total_energia,
+        s.mean_edad,
+        s.gini_energia,
+        s.var_psi[0],
+        s.var_psi[1],
+        s.var_psi[2],
+        s.var_psi[3],
+        s.action_counts[0],
+        s.action_counts[1],
+        s.action_counts[2],
+        s.action_counts[3],
+        s.action_counts[4],
+        s.action_counts[5],
+    )
 }
 
 // PRNG mínimo (mismo LCG que el app — bit-exacto).
@@ -240,29 +280,45 @@ fn repl(
                     tick(&mut world, &params);
                     tick_count += 1;
                     if let Some(w) = csv_writer.as_mut() {
-                        let r = row_of(&world, tick_count);
-                        writeln!(
-                            w,
-                            "{},{},{:.3},{:.3},{:.3},{:.3}",
-                            r.tick, r.pop, r.materia, r.oro, r.energia, r.degradacion
-                        )?;
+                        write_row(w, &world, tick_count)?;
                     }
                     if world.lemmings.is_empty() {
                         println!("colapso en tick {tick_count}");
                         break;
                     }
                 }
-                let r = row_of(&world, tick_count);
+                let s = WorldStats::from_world(&world);
                 println!(
-                    "tick={} pop={} materia={:.0} oro={:.0} energia={:.0}",
-                    r.tick, r.pop, r.materia, r.oro, r.energia
+                    "tick={} pop={} materia={:.0} oro={:.0} energia={:.0} gini_e={:.3}",
+                    tick_count, s.n, s.total_materia, s.total_oro, s.total_energia, s.gini_energia
                 );
             }
             "stats" => {
-                let r = row_of(&world, tick_count);
+                let s = WorldStats::from_world(&world);
                 println!(
-                    "tick={} pop={} materia={:.0} oro={:.0} energia={:.0} degradacion={:.0}",
-                    r.tick, r.pop, r.materia, r.oro, r.energia, r.degradacion
+                    "tick={} epoca={} pop={} materia={:.0} oro={:.0} energia={:.0} degradacion={:.0} mean_edad={:.1} gini_e={:.3}",
+                    tick_count,
+                    Epoch::classify(&s).label(),
+                    s.n,
+                    s.total_materia,
+                    s.total_oro,
+                    s.total_energia,
+                    s.total_degradacion,
+                    s.mean_edad,
+                    s.gini_energia
+                );
+                println!(
+                    "  var_psi=[O:{:.3} M:{:.3} C:{:.3} K:{:.3}]  acciones=[mover:{} extraer:{} sync:{} trade:{} repl:{} degr:{}]",
+                    s.var_psi[0],
+                    s.var_psi[1],
+                    s.var_psi[2],
+                    s.var_psi[3],
+                    s.action_counts[0],
+                    s.action_counts[1],
+                    s.action_counts[2],
+                    s.action_counts[3],
+                    s.action_counts[4],
+                    s.action_counts[5],
                 );
             }
             "list" => {
@@ -338,7 +394,7 @@ fn repl(
                 match File::create(path) {
                     Ok(f) => {
                         let mut w = BufWriter::new(f);
-                        writeln!(w, "tick,poblacion,materia,oro,energia,degradacion")?;
+                        writeln!(w, "{}", CSV_HEADER)?;
                         csv_writer = Some(w);
                         println!("ok · CSV abierto en {path}");
                     }
@@ -407,7 +463,7 @@ fn build_world(seed: u64, grid: usize, lemmings: usize) -> World {
             w.grid.psique[idx] = rng.next_f32() * 12.0;
         }
     }
-    for _ in 0..lemmings {
+    for k in 0..lemmings {
         let x = rng.next_f32() * (grid as f32 - 1.0);
         let y = rng.next_f32() * (grid as f32 - 1.0);
         let psi = [
@@ -416,8 +472,16 @@ fn build_world(seed: u64, grid: usize, lemmings: usize) -> World {
             rng.next_f32(),
             rng.next_f32(),
         ];
-        let i = w.lemmings.spawn(x, y, 30.0 + rng.next_f32() * 40.0, psi);
-        w.lemmings.accion[i] = (rng.next_u32() % 6) as u8;
+        let i = w.lemmings.spawn(x, y, 40.0 + rng.next_f32() * 40.0, psi);
+        // Distribución calibrada al punto fijo (ver dominium-app-llimphi):
+        // 30% Extraer + 30% Trade + 20% Mover + 15% Replicar + 5% Sync.
+        w.lemmings.accion[i] = match k % 20 {
+            0..=5 => 1,
+            6..=11 => 3,
+            12..=15 => 0,
+            16..=18 => 4,
+            _ => 2,
+        } as u8;
     }
     w
 }

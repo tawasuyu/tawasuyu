@@ -49,6 +49,20 @@ pub struct Quad {
     pub depth: f32,
 }
 
+/// Un cuadrilátero arbitrario de 4 vértices en coordenadas de pantalla.
+/// Lo usamos para las **caras laterales** del prisma isométrico de cada
+/// celda — paralelogramos que no encajan en un `Quad` axis-aligned, y dan
+/// la sensación de maqueta 3D / papel cortado.
+///
+/// Vértices en orden anti-horario empezando por la esquina sup-izq, según
+/// la convención del backend (BezPath cierra el path).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Polygon {
+    pub vertices: [(f32, f32); 4],
+    pub color: Color,
+    pub depth: f32,
+}
+
 /// Paleta: un color por capa de la grilla, más el de los Lemmings. El
 /// color de cada celda es la mezcla de estos pesada por el valor relativo
 /// de cada capa.
@@ -93,6 +107,70 @@ impl Default for Palette {
     }
 }
 
+/// Una de las 5 capas del Sustrato, para selección de heatmap. Coincide
+/// 1:1 con los índices `RELIEVE_*` del core.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RenderLayer {
+    Materia,
+    Psique,
+    Poder,
+    Oro,
+    Degradacion,
+}
+
+impl RenderLayer {
+    /// Etiqueta corta para HUD/picker.
+    pub fn label(self) -> &'static str {
+        match self {
+            RenderLayer::Materia => "materia",
+            RenderLayer::Psique => "psique",
+            RenderLayer::Poder => "poder",
+            RenderLayer::Oro => "oro",
+            RenderLayer::Degradacion => "degrad.",
+        }
+    }
+
+    /// Ciclado para pickers de UI: Materia → Psique → … → Materia.
+    pub fn next(self) -> RenderLayer {
+        match self {
+            RenderLayer::Materia => RenderLayer::Psique,
+            RenderLayer::Psique => RenderLayer::Poder,
+            RenderLayer::Poder => RenderLayer::Oro,
+            RenderLayer::Oro => RenderLayer::Degradacion,
+            RenderLayer::Degradacion => RenderLayer::Materia,
+        }
+    }
+
+    /// Devuelve el valor de la capa en la celda `idx`.
+    pub fn value_at(self, world: &World, idx: usize) -> f32 {
+        let g = &world.grid;
+        match self {
+            RenderLayer::Materia => g.materia[idx],
+            RenderLayer::Psique => g.psique[idx],
+            RenderLayer::Poder => g.poder[idx],
+            RenderLayer::Oro => g.oro[idx],
+            RenderLayer::Degradacion => g.degradacion[idx],
+        }
+    }
+}
+
+/// Cómo colorear las celdas del suelo. `Composite` mezcla las 5 capas
+/// según la paleta (modo por defecto, lo que el simulador siempre fue).
+/// `Heatmap(layer)` ignora las otras capas y pinta una sola en gradiente
+/// `floor → palette[layer]` — útil para ver dónde se concentra una capa
+/// específica sin que las otras la enmascaren.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RenderMode {
+    Composite,
+    Heatmap(RenderLayer),
+}
+
+impl Default for RenderMode {
+    fn default() -> Self {
+        RenderMode::Composite
+    }
+}
+
 /// Ajustes de la maqueta: tamaños de quad y paleta. Lo que un panel
 /// expondría como controles de presentación (no afectan la simulación).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -122,6 +200,16 @@ pub struct PlanConfig {
     /// celda — celdas planas no se descomponen.
     pub andina_threshold: f32,
     pub palette: Palette,
+    /// Modo de coloreo de las celdas. Default `Composite` = el render
+    /// histórico. `Heatmap(L)` aísla una capa.
+    #[serde(default)]
+    pub render_mode: RenderMode,
+    /// Si está activo, cada techo siembra micro-quads procedurales que
+    /// insinúan textura según la capa dominante: matorrales en celdas
+    /// fértiles, brillos en oro, grietas en degradación. PRNG determinista
+    /// por `(cx, cy)` así el patrón no titila entre frames.
+    #[serde(default)]
+    pub texture: bool,
 }
 
 impl Default for PlanConfig {
@@ -136,6 +224,8 @@ impl Default for PlanConfig {
             andina_layers: 0,
             andina_threshold: 1.0,
             palette: Palette::default(),
+            render_mode: RenderMode::Composite,
+            texture: false,
         }
     }
 }
@@ -163,6 +253,11 @@ pub struct Glyph {
 pub struct RenderPlan {
     /// Quads ya ordenados por `depth` ascendente: píntalos en orden.
     pub quads: Vec<Quad>,
+    /// Polígonos arbitrarios (caras laterales 3D, sombras paralelogramo)
+    /// ordenados por `depth` ascendente. El backend los **intercala** con
+    /// los quads por depth para mantener el orden de pintor isométrico.
+    #[serde(default)]
+    pub polygons: Vec<Polygon>,
     /// Glifos a pintar **después** de los quads, en orden de inserción.
     /// El backend usa `llimphi-text` para rasterizarlos.
     #[serde(default)]
@@ -245,6 +340,152 @@ fn cell_color(world: &World, idx: usize, pal: &Palette) -> Color {
     blend(&layers)
 }
 
+/// Oscurece un color por un factor multiplicativo (mantiene alpha).
+/// Útil para sombrear caras laterales: el techo va en color base, las
+/// caras visibles a la luz en factor 0.72, las en sombra en 0.55.
+fn shade(c: Color, k: f32) -> Color {
+    [c[0] * k, c[1] * k, c[2] * k, c[3]]
+}
+
+/// PRNG determinista a partir de `(cx, cy)`. Hash xorshift de 32 bits,
+/// suficiente para sembrar texturas que no titilen entre frames.
+fn cell_hash(cx: usize, cy: usize, salt: u32) -> u32 {
+    let mut h = (cx as u32)
+        .wrapping_mul(0x9E37_79B1)
+        .wrapping_add((cy as u32).wrapping_mul(0x85EB_CA6B))
+        .wrapping_add(salt.wrapping_mul(0xC2B2_AE35));
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x7feb_352d);
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x846c_a68b);
+    h ^= h >> 16;
+    h
+}
+
+/// Float ∈ [0, 1) determinista para la celda.
+fn cell_rand(cx: usize, cy: usize, salt: u32) -> f32 {
+    (cell_hash(cx, cy, salt) >> 8) as f32 / (1u32 << 24) as f32
+}
+
+/// Siembra micro-quads sobre el techo de una celda según la capa
+/// dominante. Cada decoración cae dentro del rombo del techo —
+/// aproximamos como un rect axis-aligned para mantener costo bajo:
+/// son detalles pequeños donde el sesgo visual es despreciable.
+///
+/// Sólo emite quads cuando la celda tiene "algo que mostrar" — si está
+/// vacía o todas las capas son insignificantes, no agrega ruido.
+fn add_texture(
+    out: &mut Vec<Quad>,
+    world: &World,
+    idx: usize,
+    cx: usize,
+    cy: usize,
+    sx_center: f32,
+    sy_center: f32,
+    half_extent: f32,
+    depth: f32,
+    pal: &Palette,
+) {
+    let g = &world.grid;
+    let m = g.materia[idx];
+    let p = g.psique[idx];
+    let pw = g.poder[idx];
+    let o = g.oro[idx];
+    let d = g.degradacion[idx];
+
+    // Layout: las decoraciones se ubican en posiciones pseudo-aleatorias
+    // dentro del rectángulo (sx ± half_extent, sy ± half_extent).
+    let put = |out: &mut Vec<Quad>, salt: u32, size: f32, color: Color| {
+        let rx = cell_rand(cx, cy, salt) * 2.0 - 1.0;
+        let ry = cell_rand(cx, cy, salt + 1) * 2.0 - 1.0;
+        // Margen para que el dot no caiga pisando el borde.
+        let r = half_extent * 0.7;
+        out.push(Quad {
+            x: sx_center + rx * r - size * 0.5,
+            y: sy_center + ry * r - size * 0.5,
+            w: size,
+            h: size,
+            color,
+            depth: depth + 0.05,
+        });
+    };
+
+    // Matorrales: 1 a 3 puntos verde oscuro según cuánta materia.
+    if m > 8.0 {
+        let n = if m > 50.0 { 3 } else if m > 20.0 { 2 } else { 1 };
+        let dark_green = shade(pal.materia, 0.45);
+        for k in 0..n {
+            put(out, 11 + k as u32 * 7, half_extent * 0.18, dark_green);
+        }
+    }
+    // Brillo dorado: 1 mota pequeña amarilla cuando hay oro.
+    if o > 4.0 {
+        let glow = [
+            (pal.oro[0] + 0.2).min(1.0),
+            (pal.oro[1] + 0.2).min(1.0),
+            (pal.oro[2] * 0.4).max(0.0),
+            1.0,
+        ];
+        put(out, 41, half_extent * 0.16, glow);
+    }
+    // Grietas: para degradacion alta, una mota violeta oscura.
+    if d > 0.5 {
+        let scar = shade(pal.degradacion, 0.55);
+        put(out, 57, half_extent * 0.22, scar);
+        if d > 2.0 {
+            put(out, 71, half_extent * 0.16, scar);
+        }
+    }
+    // Halo psíquico: cuando psique es muy alta, una mota azulada
+    // semitransparente — sugiere niebla espiritual.
+    if p > 8.0 {
+        let mist = [pal.psique[0], pal.psique[1], pal.psique[2], 0.55];
+        put(out, 83, half_extent * 0.22, mist);
+    }
+    // Vena de poder: trazo rojizo cuando poder concentrado.
+    if pw > 6.0 {
+        let vein = shade(pal.poder, 0.85);
+        put(out, 97, half_extent * 0.14, vein);
+    }
+}
+
+/// Color de una celda en modo Heatmap de una sola capa: gradiente
+/// `pal.floor → color de capa` saturando a `1.0` cuando el valor llega al
+/// rango de referencia. Las celdas vacías quedan `floor`; las saturadas
+/// quedan exactamente el color de la capa.
+///
+/// `scale` define qué valor cuenta como "saturado" — algo flexible porque
+/// las capas viven en escalas distintas (materia llega a centenares,
+/// degradacion suele ser sub-unidad). Default razonable para una grilla
+/// 40×40 con SimParams default.
+fn heatmap_color(world: &World, idx: usize, pal: &Palette, layer: RenderLayer) -> Color {
+    let v = layer.value_at(world, idx).max(0.0);
+    // Escala de referencia por capa: el orden de magnitud típico en una
+    // corrida normal. Saturación lineal.
+    let scale = match layer {
+        RenderLayer::Materia => 60.0,
+        RenderLayer::Psique => 20.0,
+        RenderLayer::Poder => 15.0,
+        RenderLayer::Oro => 25.0,
+        RenderLayer::Degradacion => 5.0,
+    };
+    let t = (v / scale).clamp(0.0, 1.0);
+    let tip = match layer {
+        RenderLayer::Materia => pal.materia,
+        RenderLayer::Psique => pal.psique,
+        RenderLayer::Poder => pal.poder,
+        RenderLayer::Oro => pal.oro,
+        RenderLayer::Degradacion => pal.degradacion,
+    };
+    let base = pal.floor;
+    [
+        base[0] + (tip[0] - base[0]) * t,
+        base[1] + (tip[1] - base[1]) * t,
+        base[2] + (tip[2] - base[2]) * t,
+        1.0,
+    ]
+}
+
 /// Construye la maqueta isométrica de un `World`.
 ///
 /// Emite un quad por celda (coloreado por sus capas, elevado por el `Z`
@@ -258,61 +499,126 @@ pub fn build_plan(
     cfg: &PlanConfig,
 ) -> RenderPlan {
     let g = &world.grid;
-    let mut quads: Vec<Quad> = Vec::with_capacity(g.cells() + world.lemmings.len());
+    let mut quads: Vec<Quad> = Vec::with_capacity(world.lemmings.len() * 2);
+    // Cada celda emite 1 techo + hasta 2 caras laterales (este, sur).
+    let mut polygons: Vec<Polygon> = Vec::with_capacity(g.cells() * 3);
     let mut glyphs: Vec<Glyph> = Vec::with_capacity(world.conceptos.len());
 
-    // --- Celdas: un quad-rombo por celda, más capas concéntricas
-    //     "estampa andina" si la celda supera `andina_threshold` ---
+    // Lookup de la altura de una celda — None para fuera de bounds.
+    let z_at = |cx: i64, cy: i64| -> Option<f32> {
+        if cx < 0 || cy < 0 || cx >= g.width as i64 || cy >= g.height as i64 {
+            None
+        } else {
+            Some(weights.z_of(g, g.idx(cx as usize, cy as usize)))
+        }
+    };
+
+    // Half-side de una celda en coordenadas de mundo. El tile (en pixels)
+    // queda aplicado por el `IsoProjector.scale` — acá pensamos en mundo.
+    let hs = 0.5_f32;
+
+    // --- Celdas: techo (rombo iso) + caras laterales visibles (paralelogramos) ---
     for cy in 0..g.height {
         for cx in 0..g.width {
             let idx = g.idx(cx, cy);
             let z = weights.z_of(g, idx);
-            let color = cell_color(world, idx, &cfg.palette);
+            let color = match cfg.render_mode {
+                RenderMode::Composite => cell_color(world, idx, &cfg.palette),
+                RenderMode::Heatmap(layer) => {
+                    heatmap_color(world, idx, &cfg.palette, layer)
+                }
+            };
             let depth = cx as f32 + cy as f32;
+            let fx = cx as f32;
+            let fy = cy as f32;
 
-            // Capas previas: del nivel del suelo (k=0) hasta justo por
-            // debajo de la cima (k = layers). Cada una más chica, más
-            // oscura, con depth tick chiquito hacia atrás para que paint
-            // primero (orden de pintor).
+            // 4 esquinas del techo proyectadas: NW, NE, SE, SW (sentido
+            // horario porque la proyección iso invierte el eje Y).
+            let p_nw = iso.project(fx - hs, fy - hs, z);
+            let p_ne = iso.project(fx + hs, fy - hs, z);
+            let p_se = iso.project(fx + hs, fy + hs, z);
+            let p_sw = iso.project(fx - hs, fy + hs, z);
+
+            // Estampa andina: capas previas como rombos concéntricos.
             if cfg.andina_layers > 0 && z > cfg.andina_threshold {
                 let n = cfg.andina_layers as f32;
                 for k in 0..cfg.andina_layers {
                     let frac = (k as f32) / n;
                     let z_k = z * frac;
-                    let size_k = cfg.tile * (1.0 - frac * 0.18);
-                    let dark = 0.6 + frac * 0.35; // base 60% → 95% en la cima
-                    let color_k = [
-                        color[0] * dark,
-                        color[1] * dark,
-                        color[2] * dark,
-                        color[3],
-                    ];
-                    let (sx_k, sy_k) = iso.project(cx as f32, cy as f32, z_k);
-                    quads.push(Quad {
-                        x: sx_k - size_k * 0.5,
-                        y: sy_k - size_k * 0.5,
-                        w: size_k,
-                        h: size_k,
+                    let s = 1.0 - frac * 0.18;
+                    let dark = 0.6 + frac * 0.35;
+                    let color_k = shade(color, dark);
+                    let p_nw_k = iso.project(fx - hs * s, fy - hs * s, z_k);
+                    let p_ne_k = iso.project(fx + hs * s, fy - hs * s, z_k);
+                    let p_se_k = iso.project(fx + hs * s, fy + hs * s, z_k);
+                    let p_sw_k = iso.project(fx - hs * s, fy + hs * s, z_k);
+                    polygons.push(Polygon {
+                        vertices: [p_nw_k, p_ne_k, p_se_k, p_sw_k],
                         color: color_k,
-                        // Mismo depth global, micro-shift hacia atrás para
-                        // que las capas inferiores pinten primero dentro
-                        // del bloque de la celda.
                         depth: depth - 0.001 * (cfg.andina_layers - k) as f32,
                     });
                 }
             }
 
-            // Tope (la cima a su z máximo) — siempre se emite, conserva
-            // el mismo conteo de quads cuando andina_layers = 0.
-            let (sx, sy) = iso.project(cx as f32, cy as f32, z);
-            quads.push(Quad {
-                x: sx - cfg.tile * 0.5,
-                y: sy - cfg.tile * 0.5,
-                w: cfg.tile,
-                h: cfg.tile,
+            // Techo (cima a `z`).
+            polygons.push(Polygon {
+                vertices: [p_nw, p_ne, p_se, p_sw],
                 color,
                 depth,
             });
+
+            // Textura procedural: micro-quads sobre el techo según capa
+            // dominante. Determinista por (cx, cy).
+            if cfg.texture {
+                // Centro del techo y extensión ≈ media diagonal del rombo.
+                let sx_top = (p_nw.0 + p_se.0) * 0.5;
+                let sy_top = (p_nw.1 + p_se.1) * 0.5;
+                let dx = (p_ne.0 - p_nw.0).abs();
+                let dy = (p_se.1 - p_ne.1).abs();
+                let extent = (dx + dy) * 0.25;
+                add_texture(
+                    &mut quads,
+                    world,
+                    idx,
+                    cx,
+                    cy,
+                    sx_top,
+                    sy_top,
+                    extent,
+                    depth,
+                    &cfg.palette,
+                );
+            }
+
+            // Caras laterales — sólo si hay borde "abierto": la vecina no
+            // existe o está más abajo. Sino, su propio techo ya oculta
+            // esta pared y emitirla sería trabajo perdido.
+            //
+            // Las caras bajan hasta la altura de la vecina (no hasta 0),
+            // así celdas escalonadas se ven como escalones reales. Si no
+            // hay vecina (borde del grid), bajan hasta 0.
+            let east_z = z_at(cx as i64 + 1, cy as i64).unwrap_or(0.0);
+            if east_z < z {
+                let p_ne_b = iso.project(fx + hs, fy - hs, east_z);
+                let p_se_b = iso.project(fx + hs, fy + hs, east_z);
+                polygons.push(Polygon {
+                    // Orden cerrado: arriba-norte, arriba-sur, abajo-sur, abajo-norte.
+                    vertices: [p_ne, p_se, p_se_b, p_ne_b],
+                    color: shade(color, 0.72),
+                    depth: depth + 0.30,
+                });
+            }
+            let south_z = z_at(cx as i64, cy as i64 + 1).unwrap_or(0.0);
+            if south_z < z {
+                let p_se_b = iso.project(fx + hs, fy + hs, south_z);
+                let p_sw_b = iso.project(fx - hs, fy + hs, south_z);
+                polygons.push(Polygon {
+                    // Arriba-este, abajo-este, abajo-oeste, arriba-oeste.
+                    vertices: [p_se, p_se_b, p_sw_b, p_sw],
+                    color: shade(color, 0.55),
+                    depth: depth + 0.40,
+                });
+            }
         }
     }
 
@@ -425,19 +731,40 @@ pub fn build_plan(
     quads.sort_by(|a, b| {
         a.depth.partial_cmp(&b.depth).unwrap_or(core::cmp::Ordering::Equal)
     });
+    polygons.sort_by(|a, b| {
+        a.depth.partial_cmp(&b.depth).unwrap_or(core::cmp::Ordering::Equal)
+    });
 
-    // --- Caja envolvente ---
-    let mut plan = RenderPlan { quads, glyphs, ..Default::default() };
-    if let Some(first) = plan.quads.first() {
-        plan.min_x = first.x;
-        plan.min_y = first.y;
-        plan.max_x = first.x + first.w;
-        plan.max_y = first.y + first.h;
-        for q in &plan.quads {
-            plan.min_x = plan.min_x.min(q.x);
-            plan.min_y = plan.min_y.min(q.y);
-            plan.max_x = plan.max_x.max(q.x + q.w);
-            plan.max_y = plan.max_y.max(q.y + q.h);
+    // --- Caja envolvente: cubre quads + polygons + glifos ---
+    let mut plan = RenderPlan { quads, polygons, glyphs, ..Default::default() };
+    let mut have_bounds = false;
+    let bump = |plan: &mut RenderPlan, have: &mut bool, x: f32, y: f32, w: f32, h: f32| {
+        if !*have {
+            plan.min_x = x;
+            plan.min_y = y;
+            plan.max_x = x + w;
+            plan.max_y = y + h;
+            *have = true;
+        } else {
+            plan.min_x = plan.min_x.min(x);
+            plan.min_y = plan.min_y.min(y);
+            plan.max_x = plan.max_x.max(x + w);
+            plan.max_y = plan.max_y.max(y + h);
+        }
+    };
+    // Snapshot las refs en variables locales para no chocar con el mut borrow.
+    let q_iter: Vec<(f32, f32, f32, f32)> = plan
+        .quads
+        .iter()
+        .map(|q| (q.x, q.y, q.w, q.h))
+        .collect();
+    for (x, y, w, h) in q_iter {
+        bump(&mut plan, &mut have_bounds, x, y, w, h);
+    }
+    let pg_iter: Vec<[(f32, f32); 4]> = plan.polygons.iter().map(|p| p.vertices).collect();
+    for v in pg_iter {
+        for (vx, vy) in v {
+            bump(&mut plan, &mut have_bounds, vx, vy, 0.0, 0.0);
         }
     }
     plan
@@ -452,10 +779,13 @@ mod tests {
     }
 
     #[test]
-    fn empty_world_yields_one_quad_per_cell() {
+    fn empty_world_yields_one_top_polygon_per_cell() {
+        // Plano (z=0 en todos lados) → solo techos, sin caras laterales.
         let world = World::new(5, 4);
         let plan = build_plan(&world, &iso(), &ZWeights::default(), &PlanConfig::default());
-        assert_eq!(plan.quads.len(), 20);
+        assert_eq!(plan.polygons.len(), 20);
+        // Sin lemmings ni conceptos → sin quads.
+        assert_eq!(plan.quads.len(), 0);
     }
 
     #[test]
@@ -464,17 +794,21 @@ mod tests {
         world.lemmings.spawn(2.0, 3.0, 50.0, [1.0, 0.0, 0.0, 0.0]);
         world.lemmings.spawn(5.0, 5.0, 50.0, [0.0, 1.0, 0.0, 0.0]);
         let plan = build_plan(&world, &iso(), &ZWeights::default(), &PlanConfig::default());
-        // 64 celdas + 2 lemmings × 2 quads (sombra + marca).
-        assert_eq!(plan.quads.len(), 68);
+        // 2 lemmings × 2 quads (sombra + marca) — las celdas ahora son polygons.
+        assert_eq!(plan.quads.len(), 4);
+        assert_eq!(plan.polygons.len(), 64);
     }
 
     #[test]
-    fn quads_are_depth_sorted_back_to_front() {
+    fn polygons_are_depth_sorted_back_to_front() {
         let mut world = World::new(6, 6);
         world.lemmings.spawn(3.0, 3.0, 50.0, [0.0; 4]);
         let plan = build_plan(&world, &iso(), &ZWeights::default(), &PlanConfig::default());
+        for w in plan.polygons.windows(2) {
+            assert!(w[0].depth <= w[1].depth, "techos van de atrás hacia adelante");
+        }
         for w in plan.quads.windows(2) {
-            assert!(w[0].depth <= w[1].depth, "deben ir de atrás hacia adelante");
+            assert!(w[0].depth <= w[1].depth);
         }
     }
 
@@ -499,25 +833,26 @@ mod tests {
         let world = World::new(3, 3);
         let cfg = PlanConfig::default();
         let plan = build_plan(&world, &iso(), &ZWeights::default(), &cfg);
-        assert_eq!(plan.quads[0].color, cfg.palette.floor);
+        // El primer polygon es el techo de la celda más al fondo: floor.
+        assert_eq!(plan.polygons[0].color, cfg.palette.floor);
     }
 
     #[test]
     fn high_materia_cell_leans_green() {
-        // Sólo la celda (1,1) tiene campo → sólo ella escapa del color
-        // `floor`; el resto del tablero queda desnudo.
+        // Una celda con materia → su techo en color `materia`; las otras
+        // celdas vacías van en `floor`. (La celda alta también emite caras
+        // laterales sombreadas — las filtramos por color exacto.)
         let mut world = World::new(3, 3);
         let idx = world.grid.idx(1, 1);
         world.grid.materia[idx] = 100.0;
         let cfg = PlanConfig::default();
         let plan = build_plan(&world, &iso(), &ZWeights::default(), &cfg);
         let painted: Vec<_> = plan
-            .quads
+            .polygons
             .iter()
-            .filter(|q| q.w == cfg.tile && q.color != cfg.palette.floor)
+            .filter(|p| p.color == cfg.palette.materia)
             .collect();
-        assert_eq!(painted.len(), 1, "una sola celda con campo");
-        assert_eq!(painted[0].color, cfg.palette.materia);
+        assert_eq!(painted.len(), 1, "un solo techo con color materia");
     }
 
     #[test]
@@ -536,7 +871,7 @@ mod tests {
     }
 
     #[test]
-    fn bounding_box_encloses_every_quad() {
+    fn bounding_box_encloses_every_quad_and_polygon() {
         let mut world = World::new(7, 5);
         world.lemmings.spawn(3.0, 2.0, 50.0, [0.0; 4]);
         let plan = build_plan(&world, &iso(), &ZWeights::default(), &PlanConfig::default());
@@ -546,7 +881,42 @@ mod tests {
             assert!(q.x + q.w <= plan.max_x + 1e-3);
             assert!(q.y + q.h <= plan.max_y + 1e-3);
         }
+        for p in &plan.polygons {
+            for (vx, vy) in p.vertices {
+                assert!(vx >= plan.min_x - 1e-3);
+                assert!(vy >= plan.min_y - 1e-3);
+                assert!(vx <= plan.max_x + 1e-3);
+                assert!(vy <= plan.max_y + 1e-3);
+            }
+        }
         assert!(plan.width() > 0.0 && plan.height() > 0.0);
+    }
+
+    #[test]
+    fn heatmap_isolates_one_layer() {
+        let mut world = World::new(3, 3);
+        let i_mat = world.grid.idx(0, 0);
+        let i_pow = world.grid.idx(2, 0);
+        world.grid.materia[i_mat] = 60.0;
+        world.grid.poder[i_pow] = 15.0;
+        let mut cfg = PlanConfig::default();
+        cfg.render_mode = RenderMode::Heatmap(RenderLayer::Materia);
+        let plan = build_plan(&world, &iso(), &ZWeights::default(), &cfg);
+        // El techo de (0,0) (depth 0) y (2,0) (depth 2) son los que
+        // queremos. En heatmap(materia), (0,0) llega a saturación
+        // (color materia) y (2,0) queda en floor porque no tiene materia.
+        let p_mat = plan
+            .polygons
+            .iter()
+            .find(|p| p.depth == 0.0)
+            .expect("techo (0,0)");
+        let p_pow = plan
+            .polygons
+            .iter()
+            .find(|p| p.depth == 2.0)
+            .expect("techo (2,0)");
+        assert_eq!(p_mat.color, cfg.palette.materia);
+        assert_eq!(p_pow.color, cfg.palette.floor);
     }
 
     #[test]
@@ -558,6 +928,7 @@ mod tests {
         let a = build_plan(&world, &iso(), &ZWeights::default(), &PlanConfig::default());
         let b = build_plan(&world, &iso(), &ZWeights::default(), &PlanConfig::default());
         assert_eq!(a.quads, b.quads);
+        assert_eq!(a.polygons, b.polygons);
     }
 
     #[test]
@@ -574,8 +945,10 @@ mod tests {
             hack: None,
         });
         let plan = build_plan(&world, &iso(), &ZWeights::default(), &PlanConfig::default());
-        // 64 celdas + 4 quads del concepto (aura + sombra + base + tope).
-        assert_eq!(plan.quads.len(), 68);
+        // 4 quads del concepto (aura + sombra + base + tope). Las celdas
+        // viven en polygons ahora.
+        assert_eq!(plan.quads.len(), 4);
+        assert_eq!(plan.polygons.len(), 64);
     }
 
     #[test]
@@ -644,14 +1017,22 @@ mod tests {
     }
 
     #[test]
-    fn andina_disabled_keeps_one_quad_per_cell() {
-        // Con andina_layers = 0 (default), una celda con o sin relieve
-        // emite un solo quad — comportamiento idéntico al pre-estampa.
+    fn andina_disabled_keeps_one_top_per_cell() {
+        // Con andina_layers = 0, una celda alta emite techo + caras
+        // laterales hacia las vecinas bajas — pero ningún rombo extra
+        // andino.
         let mut world = World::new(3, 3);
         let center = world.grid.idx(1, 1);
         world.grid.materia[center] = 100.0;
         let plan = build_plan(&world, &iso(), &ZWeights::default(), &PlanConfig::default());
-        assert_eq!(plan.quads.len(), 9);
+        // 9 techos + caras laterales (la celda alta emite 2 caras: este
+        // hacia (2,1) y sur hacia (1,2), ambas tienen z=0).
+        let tops = plan
+            .polygons
+            .iter()
+            .filter(|p| p.depth.fract() == 0.0)
+            .count();
+        assert_eq!(tops, 9);
     }
 
     #[test]
@@ -665,8 +1046,14 @@ mod tests {
             ..Default::default()
         };
         let plan = build_plan(&world, &iso(), &ZWeights::default(), &cfg);
-        // 9 celdas + 3 capas extra en la celda elevada = 12 quads.
-        assert_eq!(plan.quads.len(), 12);
+        // Las 3 capas andinas tienen depths estrictamente menores que el
+        // depth del techo (2.0), pero mayores que 1.99 (micro-shift -0.001).
+        let andina = plan
+            .polygons
+            .iter()
+            .filter(|p| p.depth > 1.99 && p.depth < 2.0)
+            .count();
+        assert_eq!(andina, 3, "tres capas andinas extras en la celda alta");
     }
 
     #[test]
@@ -678,13 +1065,13 @@ mod tests {
             ..Default::default()
         };
         let plan = build_plan(&world, &iso(), &ZWeights::default(), &cfg);
-        // 16 celdas, ninguna supera el threshold → 16 quads.
-        assert_eq!(plan.quads.len(), 16);
+        // 16 techos + 0 capas andinas + 0 caras laterales (todo plano).
+        assert_eq!(plan.polygons.len(), 16);
     }
 
     #[test]
     fn z_weights_raise_the_terrain() {
-        // Con materia alta y peso de relieve, la celda sube (menor y).
+        // Con materia alta y peso de relieve, el techo de la celda sube.
         let mut world = World::new(3, 3);
         let idx = world.grid.idx(1, 1);
         world.grid.materia[idx] = 50.0;
@@ -701,15 +1088,56 @@ mod tests {
             &PlanConfig::default(),
         );
         let cfg = PlanConfig::default();
-        // La celda (1,1) es la única con campo → la única coloreada
-        // `materia`; la identificamos por color, no por `depth`.
+        // El techo coloreado `materia` es único: comparo su Y promedio.
         let pick = |p: &RenderPlan| {
-            p.quads
+            let top = p
+                .polygons
                 .iter()
-                .find(|q| q.w == cfg.tile && q.color == cfg.palette.materia)
-                .unwrap()
-                .y
+                .find(|pg| pg.color == cfg.palette.materia)
+                .unwrap();
+            (top.vertices[0].1
+                + top.vertices[1].1
+                + top.vertices[2].1
+                + top.vertices[3].1)
+                / 4.0
         };
-        assert!(pick(&raised) < pick(&flat), "el relieve sube la celda");
+        assert!(pick(&raised) < pick(&flat), "el relieve sube el techo");
+    }
+
+    #[test]
+    fn side_face_emitted_when_neighbor_is_lower() {
+        // Pico aislado en (1,1) → emite 2 caras laterales (este+sur)
+        // hacia las celdas (2,1) y (1,2) que están en z=0.
+        let mut world = World::new(3, 3);
+        let idx = world.grid.idx(1, 1);
+        world.grid.materia[idx] = 50.0;
+        let plan = build_plan(&world, &iso(), &ZWeights::default(), &PlanConfig::default());
+        let cfg = PlanConfig::default();
+        // Caras: color shade(materia, 0.72) y shade(materia, 0.55).
+        let east_color = shade(cfg.palette.materia, 0.72);
+        let south_color = shade(cfg.palette.materia, 0.55);
+        let east_count = plan
+            .polygons
+            .iter()
+            .filter(|p| p.color == east_color)
+            .count();
+        let south_count = plan
+            .polygons
+            .iter()
+            .filter(|p| p.color == south_color)
+            .count();
+        assert_eq!(east_count, 1, "una cara este");
+        assert_eq!(south_count, 1, "una cara sur");
+    }
+
+    #[test]
+    fn side_face_skipped_when_neighbor_is_same_or_higher() {
+        // Todas las celdas planas (z=0): ninguna emite caras.
+        let world = World::new(4, 4);
+        let plan = build_plan(&world, &iso(), &ZWeights::default(), &PlanConfig::default());
+        // Solo techos.
+        for p in &plan.polygons {
+            assert_eq!(p.depth.fract(), 0.0, "polygon no-techo emitido en plano");
+        }
     }
 }
