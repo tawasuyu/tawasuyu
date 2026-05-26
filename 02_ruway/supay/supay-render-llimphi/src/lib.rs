@@ -65,7 +65,7 @@ use llimphi_ui::llimphi_raster::vello::Scene;
 use llimphi_ui::{PaintRect, View};
 use supay_scene::{
     interpolate, SceneSnapshot, SectorSnap, SnapshotPair, SpriteSnap, SubsectorSnap, WallSeg,
-    NO_SECTOR, NO_SKY_PIC,
+    ML_DONTPEGBOTTOM, ML_DONTPEGTOP, NO_SECTOR, NO_SKY_PIC,
 };
 
 // =====================================================================
@@ -736,6 +736,25 @@ fn gather_wall(
             use llimphi_ui::llimphi_raster::peniko::{Blob, Extend, Image, ImageFormat};
             let strips = cfg.wall_strips.max(1);
             let slab_h = (z_top - z_bot).max(1e-3);
+            // Offsets de textura del sidedef + convención de pegging
+            // de Doom (ML_DONTPEGTOP / ML_DONTPEGBOTTOM). v_top es la
+            // coord V del image en el borde superior del slab — el
+            // affine V de cada strip arranca ahí.
+            let tex_x_offset = wall.tex_x_offsets[side_idx];
+            let row_offset = wall.tex_y_offsets[side_idx];
+            let far_floor = far_sec.map(|f| f.floor_height);
+            let far_ceiling = far_sec.map(|f| f.ceiling_height);
+            let v_top = wall_v_top(
+                kind,
+                wall.flags,
+                near_floor,
+                near_ceiling,
+                far_floor,
+                far_ceiling,
+                z_top,
+                tex.height as f32,
+                row_offset,
+            );
             let img = Image::new(
                 Blob::from(tex.rgba.clone()),
                 ImageFormat::Rgba8,
@@ -763,11 +782,12 @@ fn gather_wall(
                 let s_tl = proj.project(cx0, cy0, zt_c);
                 let s_tr = proj.project(cx1, cy1, zt_c);
                 let s_br = proj.project(cx1, cy1, zb_c);
-                // U coord en image space del strip: [t0·wall_len, t1·wall_len].
-                // Affine: image(ix, iy) → screen donde ix-base se mide
-                // desde el inicio del strip. step_u = (s_tr - s_tl) / strip_w_world.
+                // U coord en image space del strip:
+                //   [tex_x_offset + t0·wall_len, tex_x_offset + t1·wall_len].
+                // V coord: [v_top, v_top + slab_h]. El affine mapea
+                // image(u, v) → screen.
                 let strip_w = wall_len * (t1 - t0);
-                let strip_u_base = wall_len * t0;
+                let strip_u_base = tex_x_offset + wall_len * t0;
                 let step_ux = (s_tr.x - s_tl.x) / strip_w.max(1e-3) as f64;
                 let step_uy = (s_tr.y - s_tl.y) / strip_w.max(1e-3) as f64;
                 let step_vx = (s_bl.x - s_tl.x) / slab_h as f64;
@@ -777,8 +797,8 @@ fn gather_wall(
                     step_uy,
                     step_vx,
                     step_vy,
-                    s_tl.x - strip_u_base as f64 * step_ux,
-                    s_tl.y - strip_u_base as f64 * step_uy,
+                    s_tl.x - strip_u_base as f64 * step_ux - v_top as f64 * step_vx,
+                    s_tl.y - strip_u_base as f64 * step_uy - v_top as f64 * step_vy,
                 ]);
                 let mut s_path = BezPath::new();
                 s_path.move_to(s_bl);
@@ -844,6 +864,64 @@ fn gather_wall(
 ///   `far.ceiling < near.ceiling`, sino lower. (Reconstruimos del
 ///   orden en que `gather_wall` los emite — siempre lower primero.)
 /// - Two-sided con n_slabs=2: slab_i=0 es lower, slab_i=1 es upper.
+/// Coordenada V (image-space) en el borde superior del slab,
+/// siguiendo la convención de pegging de Doom.
+///
+/// La regla general (ver `r_segs.c` de Chocolate Doom): la textura
+/// queda anclada por un `v_anchor` que depende del `slab_kind` y los
+/// flags `ML_DONTPEGTOP`/`ML_DONTPEGBOTTOM`. La V de un pixel a altura
+/// world `z` es entonces `v(z) = v_anchor - z + rowoffset`. Acá
+/// evaluamos eso en `z = z_top` — el resto del slab cae por debajo
+/// con `v(z_bot) = v_top + slab_h` (1 image-pixel = 1 world-unit).
+///
+/// Casos:
+/// - `kind=0` middle (one-sided): default → top de la textura en
+///   `near_ceiling`. `DONTPEGBOTTOM` → bottom en `near_floor`.
+/// - `kind=1` upper: default → top en `far_ceiling` (anclado al
+///   bottom del opening); `DONTPEGTOP` → top en `near_ceiling`.
+///   Esto hace que las puertas no muevan su textura al subir.
+/// - `kind=2` lower: default → top en `far_floor` (el escalón);
+///   `DONTPEGBOTTOM` → top en `near_ceiling` (para alinear con upper).
+fn wall_v_top(
+    slab_kind: usize,
+    flags: u32,
+    near_floor: f32,
+    near_ceiling: f32,
+    far_floor: Option<f32>,
+    far_ceiling: Option<f32>,
+    z_top: f32,
+    tex_height: f32,
+    row_offset: f32,
+) -> f32 {
+    let peg_top = (flags & ML_DONTPEGTOP) != 0;
+    let peg_bot = (flags & ML_DONTPEGBOTTOM) != 0;
+    let v_anchor = match slab_kind {
+        0 => {
+            if peg_bot {
+                near_floor + tex_height
+            } else {
+                near_ceiling
+            }
+        }
+        1 => {
+            if peg_top {
+                near_ceiling
+            } else {
+                far_ceiling.unwrap_or(near_ceiling) + tex_height
+            }
+        }
+        2 => {
+            if peg_bot {
+                near_ceiling
+            } else {
+                far_floor.unwrap_or(near_floor)
+            }
+        }
+        _ => near_ceiling,
+    };
+    (v_anchor - z_top) + row_offset
+}
+
 fn wall_slab_kind(slab_i: usize, n_slabs: usize, two_sided: bool) -> usize {
     if !two_sided {
         return 0; // middle
@@ -1616,6 +1694,8 @@ mod tests {
             back_sector: NO_SECTOR,
             flags: 0,
             textures: [[0; 8]; 6],
+            tex_x_offsets: [0.0; 2],
+            tex_y_offsets: [0.0; 2],
         };
         let cfg = RenderConfig::default();
         let c_bot = wall_color(7, &wall, &sec, 100.0, 0, 4, &cfg);
@@ -1819,6 +1899,67 @@ mod tests {
         assert!((rc[0] as i32 - 38).abs() <= 2, "expected ≈38, got {rc:?}");
         assert_eq!(rc[0], rc[1]);
         assert_eq!(rc[1], rc[2]);
+    }
+
+    #[test]
+    fn wall_v_top_middle_default_pegs_top_to_ceiling() {
+        // Middle, no flags: la textura ancla su TOP al techo del near.
+        // En z_top (= ceiling), V = 0.
+        let v = wall_v_top(0, 0, 0.0, 128.0, None, None, 128.0, 64.0, 0.0);
+        assert!(v.abs() < 1e-4, "expected v_top=0, got {v}");
+    }
+
+    #[test]
+    fn wall_v_top_middle_dontpegbottom_pegs_bottom_to_floor() {
+        // Middle + DONTPEGBOTTOM: bottom de la textura en near_floor.
+        // En z_top (= ceiling=128), V = floor + tex_h - z_top = -64
+        // (lo cual con Extend::Repeat tilea correctamente).
+        let v = wall_v_top(0, ML_DONTPEGBOTTOM, 0.0, 128.0, None, None, 128.0, 64.0, 0.0);
+        assert!((v - (-64.0)).abs() < 1e-4, "expected -64, got {v}");
+    }
+
+    #[test]
+    fn wall_v_top_upper_default_pegs_to_back_ceiling() {
+        // Upper sin flag: top de la textura al far_ceiling. La pared
+        // "header" va de far_ceiling (= 96) a near_ceiling (= 128).
+        // V(z_top = 128) = far_ceiling + tex_h - z_top = 96 + 64 - 128 = 32.
+        let v = wall_v_top(1, 0, 0.0, 128.0, Some(0.0), Some(96.0), 128.0, 64.0, 0.0);
+        assert!((v - 32.0).abs() < 1e-4, "expected 32, got {v}");
+    }
+
+    #[test]
+    fn wall_v_top_upper_dontpegtop_pegs_to_front_ceiling() {
+        // Upper + DONTPEGTOP: top alineado al near_ceiling — doors.
+        // V(z_top = 128) = near_ceiling - z_top = 0.
+        let v = wall_v_top(1, ML_DONTPEGTOP, 0.0, 128.0, Some(0.0), Some(96.0), 128.0, 64.0, 0.0);
+        assert!(v.abs() < 1e-4, "expected 0, got {v}");
+    }
+
+    #[test]
+    fn wall_v_top_lower_default_pegs_to_back_floor() {
+        // Lower sin flag: top de la textura al far_floor. La pared
+        // "step" va de near_floor (= 0) a far_floor (= 32).
+        // V(z_top = 32) = far_floor - z_top = 0.
+        let v = wall_v_top(2, 0, 0.0, 128.0, Some(32.0), Some(128.0), 32.0, 64.0, 0.0);
+        assert!(v.abs() < 1e-4, "expected 0, got {v}");
+    }
+
+    #[test]
+    fn wall_v_top_lower_dontpegbottom_pegs_to_near_ceiling() {
+        // Lower + DONTPEGBOTTOM: top alineado al near_ceiling (= 128)
+        // — alinea con la textura "main" del techo.
+        // V(z_top = 32) = near_ceiling - z_top = 96.
+        let v = wall_v_top(2, ML_DONTPEGBOTTOM, 0.0, 128.0, Some(32.0), Some(128.0), 32.0, 64.0, 0.0);
+        assert!((v - 96.0).abs() < 1e-4, "expected 96, got {v}");
+    }
+
+    #[test]
+    fn wall_v_top_rowoffset_is_added() {
+        // rowoffset shift directo del V_top — útil para alinear
+        // texturas entre paredes adyacentes.
+        let v0 = wall_v_top(0, 0, 0.0, 128.0, None, None, 128.0, 64.0, 0.0);
+        let v8 = wall_v_top(0, 0, 0.0, 128.0, None, None, 128.0, 64.0, 8.0);
+        assert!((v8 - v0 - 8.0).abs() < 1e-4, "expected +8 shift, got {} vs {}", v8, v0);
     }
 
     #[test]

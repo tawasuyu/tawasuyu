@@ -87,7 +87,32 @@ pub struct WallSeg {
     /// TEXTURE1. Todo cero = sin textura asignada (slot vacío Doom
     /// "no texture", convención id 0).
     pub textures: [[u8; 8]; 6],
+    /// `sidedef.textureoffset` — desplazamiento horizontal de la
+    /// textura, en unidades Doom. Indexado `[front, back]`. Doom usa
+    /// este offset para alinear texturas entre paredes adyacentes:
+    /// el U de un pixel a distancia `d` de `v1` es `tex_x_offsets[side] + d`
+    /// (mod tex_width). Sin esto, las costuras saltan cuando dos
+    /// paredes consecutivas usan la misma textura.
+    pub tex_x_offsets: [f32; 2],
+    /// `sidedef.rowoffset` — desplazamiento vertical de la textura,
+    /// en unidades Doom. Indexado `[front, back]`. Se combina con la
+    /// convención de pegging (controlada por `flags` `ML_DONTPEGTOP` /
+    /// `ML_DONTPEGBOTTOM`) para decidir dónde "ancla" la textura
+    /// verticalmente cada kind (mid/upper/lower).
+    pub tex_y_offsets: [f32; 2],
 }
+
+/// Flag `ML_DONTPEGTOP` de Doom: cuando set, la textura **upper** se
+/// "pegga" al techo del front sector en vez de al techo del back
+/// (el bottom del opening). Usado para que las puertas no muevan su
+/// textura cuando suben.
+pub const ML_DONTPEGTOP: u32 = 0x0008;
+
+/// Flag `ML_DONTPEGBOTTOM` de Doom: cuando set, la textura **middle**
+/// (one-sided) o **lower** se "pegga" al piso / techo del sector en
+/// vez del default. Usado para que los pasos de ascensor no muevan
+/// su textura cuando suben.
+pub const ML_DONTPEGBOTTOM: u32 = 0x0010;
 
 /// Helper: extrae el nombre de una entrada `[u8; 8]` como string ascii
 /// (recortando en el primer 0). Devuelve `None` si está vacío.

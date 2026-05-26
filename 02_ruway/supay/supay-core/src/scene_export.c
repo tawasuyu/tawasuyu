@@ -327,6 +327,35 @@ int supay_scene_wall_texture(int wall_idx, int side, int kind, char out[9]) {
     return 1;
 }
 
+/* Resuelve los offsets de textura (`sidedef.textureoffset` y
+ * `sidedef.rowoffset`) para `(wall_idx, side)`. Doom guarda ambos en
+ * fixed-point 16.16; los convertimos a float (división por 65536).
+ *
+ * side = 0 (front) o 1 (back).
+ *
+ * Devuelve 1 si OK + valores escritos a `*xoff`/`*yoff`; 0 si fuera de
+ * rango o sidedef inexistente. En ese caso ambos quedan en 0 — el
+ * renderer hace `[f32; 2]` con default cero, equivalente al
+ * comportamiento Doom de "sin offset".
+ */
+int supay_scene_wall_offsets(int wall_idx, int side, float *xoff, float *yoff) {
+    if (!lines || wall_idx < 0 || wall_idx >= numlines) {
+        return 0;
+    }
+    if (side != 0 && side != 1) {
+        return 0;
+    }
+    line_t *l = &lines[wall_idx];
+    short sn = l->sidenum[side];
+    if (sn < 0 || sn >= numsides || !sides) {
+        return 0;
+    }
+    side_t *sd = &sides[sn];
+    *xoff = ftox(sd->textureoffset);
+    *yoff = ftox(sd->rowoffset);
+    return 1;
+}
+
 int supay_scene_flat_name(uint16_t pic_idx, char out[9]) {
     if (!lumpinfo || firstflat <= 0) {
         return 0;

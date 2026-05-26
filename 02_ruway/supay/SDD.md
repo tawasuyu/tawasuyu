@@ -242,6 +242,25 @@ cargo run -p supay-doom-llimphi --release
 
 **No incluido en 3.9 (defer a 3.10+):** adaptive strip count (más strips para slabs anchas en pantalla); per-strip rendering equivalente para floors/ceilings (triangulación); pitch / mouse-look; `rowoffset`/`textureoffset`; switches/animaciones; full-bright sprite flag; BSP front-to-back ordering exacto.
 
+**Fase 3.10 (2026-05-26, este bloque):** texturas alineadas — `textureoffset` / `rowoffset` + pegging Doom.
+
+- **C-side `scene_export.c::supay_scene_wall_offsets(wall_idx, side, *xoff, *yoff)`**: nuevo getter que lee `sides[].textureoffset` y `sides[].rowoffset` (fixed-point 16.16 → float). side=0=front, 1=back. Devuelve 0 si fuera de rango.
+- **`supay-scene::WallSeg`** gana `tex_x_offsets: [f32; 2]` y `tex_y_offsets: [f32; 2]` (front/back). 16 bytes adicionales por wall (×1000 walls = 16 KB por snapshot, despreciable). El crate también re-exporta `ML_DONTPEGTOP = 0x0008` y `ML_DONTPEGBOTTOM = 0x0010`, las dos flags de Doom que controlan dónde se "pegga" la textura verticalmente cada kind (mid/upper/lower).
+- **`supay-core::capture_scene_real`** llama el getter para cada wall × 2 sides — 2 FFI extras por wall (×35 Hz × ~1000 walls ≈ 70K calls/s, barato porque el motor sólo lee fields, sin string compare). En `synth_snapshot` los offsets quedan en 0.
+- **`supay-render-llimphi::wall_v_top`**: helper que resuelve la coord V (image-space) en el borde superior del slab siguiendo la convención de Chocolate Doom (`r_segs.c::R_StoreWallRange`). Casos:
+  - **Middle one-sided default**: top de la textura al near_ceiling → `v_top = 0` en z_top.
+  - **Middle + `DONTPEGBOTTOM`**: bottom al near_floor → `v_top = tex_h - slab_h`. Usado en lifts.
+  - **Upper default**: top al far_ceiling (anclado al bottom del opening) → `v_top = tex_h - slab_h`.
+  - **Upper + `DONTPEGTOP`**: top al near_ceiling → `v_top = 0`. Usado en puertas para que la textura no suba con la puerta.
+  - **Lower default**: top al far_floor (el escalón) → `v_top = 0`.
+  - **Lower + `DONTPEGBOTTOM`**: top al near_ceiling → `v_top = near_ceiling - z_top`. Alinea con upper.
+- **`gather_wall` reescribe el affine de cada strip texturizado**: en lugar de partir el U en `wall_len·t0` y el V en 0, suma `tex_x_offset` al base U y desplaza el V por `v_top`. La translación del affine queda `s_tl - (strip_u_base + tex_x_offset)·step_u - v_top·step_v`, donde `Extend::Repeat` se encarga del wrap modulo tex_width/tex_height. Continuidad de strips preservada (cada strip arrastra el mismo `strip_u_base` corrido).
+- **Resultado visible.** Las costuras entre paredes adyacentes con la misma textura dejan de saltar (donde antes había un offset arbitrario entre ladrillos, ahora se ven alineados como Doom original). Las puertas mantienen su textura quieta cuando suben (efecto "deslizándose" correcto). Los escalones de lift heredan la textura de la pared principal en vez de empezar desde cero arriba.
+- **Tests** (+7 render = 24 total verde, 40 supay total): `wall_v_top_middle_default_pegs_top_to_ceiling`, `wall_v_top_middle_dontpegbottom_pegs_bottom_to_floor`, `wall_v_top_upper_default_pegs_to_back_ceiling`, `wall_v_top_upper_dontpegtop_pegs_to_front_ceiling`, `wall_v_top_lower_default_pegs_to_back_floor`, `wall_v_top_lower_dontpegbottom_pegs_to_near_ceiling`, `wall_v_top_rowoffset_is_added`.
+- **Header bump**: `PHASE 3.9` → `PHASE 3.10`.
+
+**No incluido en 3.10 (defer a 3.11+):** sprites con full-bright frame flag (bit 7); animated textures (switches, NUKAGE, FIREBLU); per-triangle subdivision para perspective-correct floors; pitch / mouse-look; BSP front-to-back ordering exacto; volumetric fog real por sector.
+
 ### Fase 4 — Capa de modernización opt-in
 
 Cada feature como toggle:
@@ -305,6 +324,7 @@ Cada feature como toggle:
   - **TempLight + flash de impacto**: nueva lista `Vec<TempLight>` con `(x, y, color, strength, ttl, ttl_max)`. Cada flash dura `FLASH_TTL = 4 ticks` y su `strength` decae linealmente con el TTL. `lighting_contribution` los suma; el resultado es un destello cálido cuando un bullet impacta. Spawn en colisión pared + colisión enemy.
   - **SpriteKinds nuevos**: `DyingImp` (rojo opaco scale 0.65) y `Corpse` (mancha rojiza scale 0.30) — el enemy en `draw_scene` se convierte al kind apropiado según state.
   - El jugador puede morir (vida llega a 0 y queda en 0); por ahora sin pantalla de game over — el input sigue activo. La pantalla del HUD muestra todo en rojo cuando vida < 25.
+- **2026-05-26 (+9):** Fase 3.10 — `textureoffset`/`rowoffset` del sidedef + pegging Doom (`ML_DONTPEGTOP`/`ML_DONTPEGBOTTOM`). Las costuras entre paredes adyacentes se alinean correctamente; las puertas mantienen su textura quieta cuando suben.
 - **2026-05-26 (+8):** Fase 3.9 — paredes per-strip (8 por slab default) para perspective approximation. El affine sheen de 3.6 desaparece en paredes largas vistas oblicuas.
 - **2026-05-26 (+7):** Fase 3.8 — sky SKY1 real con scroll horizontal según ángulo del jugador. Convención Doom 360° = 4×sky.width.
 - **2026-05-26 (+6):** Fase 3.7 — pisos y techos texturizados con flats reales (FLOOR4_8, NUKAGE1, etc.) sampleados por affine de 3-puntos con Extend::Repeat. Las salas tienen textura piso a techo.

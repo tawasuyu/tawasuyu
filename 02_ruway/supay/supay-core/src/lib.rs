@@ -264,6 +264,15 @@ extern "C" {
         kind: std::ffi::c_int,
         out: *mut std::ffi::c_char,
     ) -> std::ffi::c_int;
+    /// Resuelve los offsets de textura del sidedef
+    /// (`textureoffset`/`rowoffset`) para `(wall_idx, side)`. side=0/1.
+    /// Devuelve 1 si OK + valores en `*xoff`/`*yoff`; 0 si fuera de rango.
+    fn supay_scene_wall_offsets(
+        wall_idx: std::ffi::c_int,
+        side: std::ffi::c_int,
+        xoff: *mut f32,
+        yoff: *mut f32,
+    ) -> std::ffi::c_int;
 }
 
 // =====================================================================
@@ -545,6 +554,8 @@ fn capture_scene_real(tick: u64) -> SceneSnapshot {
             // que el wall está aceptado. supay_scene_wall_texture
             // devuelve 0 para slots vacíos — quedan como [0; 8].
             let mut textures = [[0u8; 8]; 6];
+            let mut tex_x_offsets = [0.0_f32; 2];
+            let mut tex_y_offsets = [0.0_f32; 2];
             for side in 0..2_u8 {
                 for kind in 0..3_u8 {
                     let mut buf = [0i8; 9];
@@ -564,6 +575,22 @@ fn capture_scene_real(tick: u64) -> SceneSnapshot {
                         }
                     }
                 }
+                // Offsets del sidedef. Una llamada por lado.
+                let mut xoff = 0.0_f32;
+                let mut yoff = 0.0_f32;
+                // SAFETY: punteros a locales válidos.
+                let ook = unsafe {
+                    supay_scene_wall_offsets(
+                        i as std::ffi::c_int,
+                        side as std::ffi::c_int,
+                        &mut xoff,
+                        &mut yoff,
+                    )
+                };
+                if ook != 0 {
+                    tex_x_offsets[side as usize] = xoff;
+                    tex_y_offsets[side as usize] = yoff;
+                }
             }
             walls.push(WallSeg {
                 x1,
@@ -574,6 +601,8 @@ fn capture_scene_real(tick: u64) -> SceneSnapshot {
                 back_sector: back,
                 flags,
                 textures,
+                tex_x_offsets,
+                tex_y_offsets,
             });
         }
     }
@@ -750,6 +779,8 @@ fn synth_snapshot(tick: u64) -> SceneSnapshot {
             back_sector: NO_SECTOR,
             flags: 0,
             textures: [[0; 8]; 6],
+            tex_x_offsets: [0.0; 2],
+            tex_y_offsets: [0.0; 2],
         },
         // Norte: (0,256)→(256,256).
         WallSeg {
@@ -761,6 +792,8 @@ fn synth_snapshot(tick: u64) -> SceneSnapshot {
             back_sector: NO_SECTOR,
             flags: 0,
             textures: [[0; 8]; 6],
+            tex_x_offsets: [0.0; 2],
+            tex_y_offsets: [0.0; 2],
         },
         // Este: (256,256)→(256,0).
         WallSeg {
@@ -772,6 +805,8 @@ fn synth_snapshot(tick: u64) -> SceneSnapshot {
             back_sector: NO_SECTOR,
             flags: 0,
             textures: [[0; 8]; 6],
+            tex_x_offsets: [0.0; 2],
+            tex_y_offsets: [0.0; 2],
         },
         // Sur: (256,0)→(0,0).
         WallSeg {
@@ -783,6 +818,8 @@ fn synth_snapshot(tick: u64) -> SceneSnapshot {
             back_sector: NO_SECTOR,
             flags: 0,
             textures: [[0; 8]; 6],
+            tex_x_offsets: [0.0; 2],
+            tex_y_offsets: [0.0; 2],
         },
     ];
     let sectors: Vec<SectorSnap> = vec![SectorSnap {
