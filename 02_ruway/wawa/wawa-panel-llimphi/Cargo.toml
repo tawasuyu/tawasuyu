@@ -11,9 +11,6 @@ name = "wawa-panel"
 path = "src/main.rs"
 
 [dependencies]
-directories = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-app-header = { workspace = true }
@@ -21,3 +18,4 @@ llimphi-widget-button = { workspace = true }
 llimphi-widget-slider = { workspace = true }
 llimphi-widget-stat-card = { workspace = true }
 rimay-localize = { path = "../../../shared/rimay-localize" }
+wawa-config = { path = "../../../shared/wawa-config" }

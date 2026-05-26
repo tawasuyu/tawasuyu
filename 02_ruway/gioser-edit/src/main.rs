@@ -128,6 +128,10 @@ enum Msg {
     MiniMap(MiniMapMsg),
     Bookmarks(BookmarksMsg),
     CycleTheme,
+    /// El bus `wawa-config` publicó una versión nueva. Aplicamos el
+    /// theme y locale del payload; los flags que no nos competen
+    /// (apps, módulos, acento, reloj) los ignoramos.
+    WawaConfigChanged(Box<wawa_config::WawaConfig>),
     SaveSession,
     /// Mensajes del módulo diff viewer (Ctrl+Shift+D).
     Diff(DiffMsg),
@@ -261,6 +265,11 @@ struct Model {
     references: Option<ReferencesBar>,
     /// Prompt de rename con el nuevo nombre + pos original; `None` cerrado.
     rename: Option<RenameBar>,
+    /// Subscripción al bus de configuración del SO (`wawa-config`).
+    /// Mantiene vivo el watcher mientras el editor corre; al droparlo
+    /// dejan de llegar `WawaConfigChanged`. `None` si la plataforma
+    /// no expone ProjectDirs (caso muy raro).
+    _wawa_watcher: Option<wawa_config::ConfigWatcher>,
 }
 
 struct RenameBar {
@@ -428,13 +437,32 @@ impl App for EditorApp {
             sig_help: None,
             references: None,
             rename: None,
+            _wawa_watcher: None,
         };
         // Restaurar sesion previa si la hay: tabs, bookmarks, theme.
         // Best-effort: si load_session falla o paths ya no existen, arranca limpio.
-        match load_session() {
+        let mut model = match load_session() {
             Some(sess) => restore_session(model, sess),
             None => model,
+        };
+        // Bus de configuración del SO. Si hay un panel abierto y ya
+        // configuró un theme/idioma global, lo respetamos por encima
+        // de la sesión local. La sesión sigue siendo útil cuando el
+        // bus no está disponible o no fue inicializado todavía.
+        let wawa_cfg = wawa_config::WawaConfig::load();
+        if let Some(t) = Theme::by_name(&wawa_cfg.theme_variant) {
+            model.theme = t;
         }
+        let _ = rimay_localize::set_locale(&wawa_cfg.lang);
+        // Subscripción: cualquier cambio futuro reentra al update.
+        let handle_clone = handle.clone();
+        let watcher = wawa_config::ConfigWatcher::spawn(move |new_cfg| {
+            handle_clone.dispatch(Msg::WawaConfigChanged(Box::new(new_cfg)));
+        })
+        .map_err(|e| eprintln!("gioser-edit · wawa-config watcher: {e}"))
+        .ok();
+        model._wawa_watcher = watcher;
+        model
     }
 
     fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
@@ -495,6 +523,24 @@ impl App for EditorApp {
                 let mut m = model;
                 m.theme = Theme::next_after(m.theme.name);
                 m.status = format!("✓ tema: {}", m.theme.name);
+                m
+            }
+            Msg::WawaConfigChanged(cfg) => {
+                let mut m = model;
+                let mut changes = Vec::new();
+                if let Some(t) = Theme::by_name(&cfg.theme_variant) {
+                    if t.name != m.theme.name {
+                        m.theme = t;
+                        changes.push("tema");
+                    }
+                }
+                if cfg.lang != rimay_localize::current_locale() {
+                    let _ = rimay_localize::set_locale(&cfg.lang);
+                    changes.push("idioma");
+                }
+                if !changes.is_empty() {
+                    m.status = format!("↻ wawa-config · {}", changes.join(" + "));
+                }
                 m
             }
             Msg::Diff(dm) => apply_diff(model, dm),

@@ -17,7 +17,6 @@
 //! — esa parte vendrá cuando exista un bus de configuración global;
 //! por ahora se guarda como preferencia de usuario.
 
-use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use llimphi_theme::Theme;
@@ -29,7 +28,7 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use llimphi_widget_app_header::{app_header, AppHeaderPalette};
 use llimphi_widget_button::{button_styled, ButtonPalette};
-use serde::{Deserialize, Serialize};
+use wawa_config::{ConfigWatcher, WawaConfig};
 
 // =====================================================================
 // Constantes y catálogos
@@ -160,69 +159,11 @@ const MODULES: &[(&str, &str, &str)] = &[
 // Configuración persistida
 // =====================================================================
 
-#[derive(Serialize, Deserialize, Clone)]
-struct PanelConfig {
-    theme_variant: String,
-    accent: String,
-    lang: String,
-    timefmt_24h: bool,
-    /// Pares (module_id, enabled). Vec para mantener el orden estable.
-    modules: Vec<(String, bool)>,
-}
-
-impl Default for PanelConfig {
-    fn default() -> Self {
-        Self {
-            theme_variant: "dark".into(),
-            accent: "default".into(),
-            lang: "es-PE".into(),
-            timefmt_24h: true,
-            modules: MODULES.iter().map(|(k, _, _)| (k.to_string(), true)).collect(),
-        }
-    }
-}
-
-impl PanelConfig {
-    fn module_enabled(&self, id: &str) -> bool {
-        self.modules
-            .iter()
-            .find(|(k, _)| k == id)
-            .map(|(_, v)| *v)
-            .unwrap_or(true)
-    }
-    fn toggle_module(&mut self, id: &str) {
-        if let Some((_, v)) = self.modules.iter_mut().find(|(k, _)| k == id) {
-            *v = !*v;
-        } else {
-            self.modules.push((id.to_string(), false));
-        }
-    }
-}
-
-fn config_path() -> Option<PathBuf> {
-    directories::ProjectDirs::from("", "", "wawa-panel")
-        .map(|d| d.config_dir().join("state.json"))
-}
-
-fn load_config() -> PanelConfig {
-    let Some(path) = config_path() else {
-        return PanelConfig::default();
-    };
-    let Ok(bytes) = std::fs::read(&path) else {
-        return PanelConfig::default();
-    };
-    serde_json::from_slice(&bytes).unwrap_or_default()
-}
-
-fn save_config(cfg: &PanelConfig) -> Result<PathBuf, String> {
-    let path = config_path().ok_or_else(|| "no hay ProjectDirs".to_string())?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let json = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
-    std::fs::write(&path, json).map_err(|e| e.to_string())?;
-    Ok(path)
-}
+// El modelo persistido vive en `wawa-config::WawaConfig` — un struct
+// compartido con el resto del SO. Acá sólo lo consumimos: cargamos al
+// arrancar, escribimos cuando el usuario apreta "guardar", y nos
+// suscribimos a cambios externos vía `ConfigWatcher` (otro panel
+// abierto, edición manual del JSON, futuras herramientas CLI).
 
 // =====================================================================
 // Información del host (Linux /proc)
@@ -372,9 +313,14 @@ fn fmt_clock(hms: (u32, u32, u32), is_24h: bool) -> String {
 
 struct Model {
     category: Category,
-    cfg: PanelConfig,
+    cfg: WawaConfig,
     host: HostInfo,
     status: String,
+    /// Subscripción al bus: mantiene vivo el watcher que reentra al
+    /// `update` cuando otro proceso (panel duplicado, edición manual,
+    /// futuras CLIs) modifica el archivo. `Option` porque la creación
+    /// puede fallar en plataformas sin ProjectDirs.
+    _config_watcher: Option<ConfigWatcher>,
 }
 
 #[derive(Clone)]
@@ -389,6 +335,9 @@ enum Msg {
     LaunchApp(String),
     Save,
     Reset,
+    /// Cambió la config desde afuera (otro panel, herramienta, edición
+    /// manual). El `WawaConfig` ya viene parseado por el watcher.
+    ConfigChanged(Box<WawaConfig>),
 }
 
 // =====================================================================
@@ -413,10 +362,23 @@ impl App for Panel {
         // Refresco vivo del monitor cada segundo.
         handle.spawn_periodic(Duration::from_millis(TICK_MS), || Msg::Tick);
 
-        let cfg = load_config();
+        let cfg = WawaConfig::load();
         // Aplicar locale al arrancar para que el resto de t() use el
         // idioma que el usuario eligió la última vez.
         let _ = rimay_localize::set_locale(&cfg.lang);
+
+        // Subscripción al bus de configuración: si otro proceso edita
+        // el archivo, recibimos un Msg con la versión nueva. El propio
+        // panel también escribe el archivo en `Msg::Save`; el watcher
+        // ignora esos cambios porque la comparación es contra el
+        // estado actual del modelo (no disparamos `ConfigChanged` si
+        // ya coincide).
+        let handle_clone = handle.clone();
+        let watcher = ConfigWatcher::spawn(move |new_cfg| {
+            handle_clone.dispatch(Msg::ConfigChanged(Box::new(new_cfg)));
+        })
+        .map_err(|e| eprintln!("wawa-panel · watcher: {e}"))
+        .ok();
 
         let mut host = HostInfo::default();
         refresh_host(&mut host);
@@ -426,6 +388,7 @@ impl App for Panel {
             cfg,
             host,
             status: String::new(),
+            _config_watcher: watcher,
         }
     }
 
@@ -461,7 +424,7 @@ impl App for Panel {
                     Err(e) => m.status = format!("· {}: {}", bin, e),
                 }
             }
-            Msg::Save => match save_config(&m.cfg) {
+            Msg::Save => match m.cfg.save() {
                 Ok(path) => {
                     m.status = rimay_localize::t_args(
                         "wawa-panel-saved",
@@ -473,9 +436,22 @@ impl App for Panel {
                 }
             },
             Msg::Reset => {
-                m.cfg = PanelConfig::default();
+                m.cfg = WawaConfig::default();
                 let _ = rimay_localize::set_locale(&m.cfg.lang);
                 m.status = rimay_localize::t("wawa-panel-reset");
+            }
+            Msg::ConfigChanged(new_cfg) => {
+                // Cambio desde afuera. Si difiere del nuestro, lo
+                // adoptamos sin perder la categoría visible ni el
+                // status actual (avisar pero no resetear UX).
+                if *new_cfg != m.cfg {
+                    let lang_changed = new_cfg.lang != m.cfg.lang;
+                    m.cfg = *new_cfg;
+                    if lang_changed {
+                        let _ = rimay_localize::set_locale(&m.cfg.lang);
+                    }
+                    m.status = "↻ config actualizada desde el bus".into();
+                }
             }
         }
         m
