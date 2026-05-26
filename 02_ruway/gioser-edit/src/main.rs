@@ -11,10 +11,11 @@
 //!   resto → Plain). Caret, selección, bracket matching, gutter con
 //!   line numbers, undo/redo, copy/cut/paste.
 //! - **Atajos globales**: Ctrl+S guarda · Ctrl+W cierra tab · Ctrl+Tab /
-//!   Ctrl+Shift+Tab ciclan tabs · Ctrl+F find · Ctrl+G next match ·
-//!   Ctrl+Space completions · Ctrl+K hover · Ctrl+Shift+F format ·
-//!   Ctrl+Shift+Space signatureHelp · F12 goto-def · Shift+F12 references
-//!   · F2 rename.
+//!   Ctrl+Shift+Tab ciclan tabs · Ctrl+P fuzzy file picker (walk
+//!   recursivo del workspace, hasta 50k archivos) · Ctrl+F find · Ctrl+G
+//!   next match · Ctrl+Space completions · Ctrl+K hover · Ctrl+Shift+F
+//!   format · Ctrl+Shift+Space signatureHelp · F12 goto-def · Shift+F12
+//!   references · F2 rename.
 //! - **Atajos del editor**: arrows + Shift/Ctrl, Home/End, Ctrl+Home/End,
 //!   PageUp/Down, Tab/Shift+Tab, Backspace/Delete, Ctrl+Z/Y/Shift+Z
 //!   (undo/redo), Ctrl+C/X/V (clipboard del sistema vía arboard).
@@ -76,6 +77,13 @@ enum Msg {
     NextTab,
     /// Atajo Ctrl+Shift+Tab.
     PrevTab,
+    /// Ctrl+P abre el fuzzy file picker.
+    PickerOpen,
+    PickerClose,
+    PickerKey(KeyEvent),
+    PickerNav { delta: i32 },
+    /// Enter en el picker — abre (o activa) el archivo seleccionado.
+    PickerApply,
     // Find
     FindOpen,
     FindClose,
@@ -143,6 +151,12 @@ struct Model {
     root: PathBuf,
     nodes: Vec<TreeNode>,
     selected: Option<usize>,
+    /// Walk recursivo de todos los archivos bajo `root` (skip dotfiles,
+    /// `target/`, `node_modules/`). Cacheado al arrancar; lo consume el
+    /// fuzzy file picker (Ctrl+P).
+    all_files: Vec<PathBuf>,
+    /// Estado del picker; `None` cerrado.
+    picker: Option<PickerState>,
     tabs: Vec<Tab>,
     /// Índice del tab activo dentro de `tabs`. `None` si no hay ninguno
     /// abierto todavía.
@@ -172,6 +186,16 @@ struct Model {
     references: Option<ReferencesBar>,
     /// Prompt de rename con el nuevo nombre + pos original; `None` cerrado.
     rename: Option<RenameBar>,
+}
+
+/// Estado del fuzzy file picker (Ctrl+P).
+struct PickerState {
+    input: TextInputState,
+    /// Índices a `Model.all_files` filtrados por el query del input.
+    /// Se re-calcula en cada keystroke.
+    results: Vec<usize>,
+    /// Índice dentro de `results` (no de `all_files`).
+    selected: usize,
 }
 
 struct RenameBar {
@@ -289,17 +313,25 @@ impl App for EditorApp {
             .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         let root = fs::canonicalize(&root).unwrap_or(root);
         let nodes = scan_root(&root);
+        let all_files = walk_files(&root);
         let lsp: Box<dyn LspClient> = if lsp_on {
             Box::new(RustAnalyzerClient::with_command(root.clone(), &lsp_cmd))
         } else {
             Box::new(NoopLspClient)
         };
         let lsp_label = if lsp_on { format!("lsp:{lsp_cmd}") } else { "lsp:off".into() };
-        let status = format!("{} · {} entradas · {lsp_label}", root.display(), nodes.len());
+        let status = format!(
+            "{} · {} entradas · {} archivos · {lsp_label}",
+            root.display(),
+            nodes.len(),
+            all_files.len(),
+        );
         Model {
             root,
             nodes,
             selected: None,
+            all_files,
+            picker: None,
             tabs: Vec::new(),
             active: None,
             clipboard: ArboardClipboard::new(),
@@ -349,6 +381,47 @@ impl App for EditorApp {
                     m = activate_tab(m, (cur + n - 1) % n);
                 }
                 m
+            }
+            Msg::PickerOpen => {
+                let mut m = model;
+                if m.picker.is_none() {
+                    let mut p = PickerState {
+                        input: TextInputState::new(),
+                        results: Vec::new(),
+                        selected: 0,
+                    };
+                    picker_refilter(&mut p, &m.all_files, &m.root);
+                    m.picker = Some(p);
+                    m.status = format!("picker · {} archivos · ↓↑ Enter abre · Esc cierra", m.all_files.len());
+                }
+                m
+            }
+            Msg::PickerClose => Model { picker: None, ..model },
+            Msg::PickerKey(ev) => {
+                let mut m = model;
+                if let Some(p) = m.picker.as_mut() {
+                    p.input.apply_key(&ev);
+                    picker_refilter(p, &m.all_files, &m.root);
+                }
+                m
+            }
+            Msg::PickerNav { delta } => {
+                let mut m = model;
+                if let Some(p) = m.picker.as_mut() {
+                    let n = p.results.len() as i32;
+                    if n > 0 {
+                        p.selected = (p.selected as i32 + delta).rem_euclid(n) as usize;
+                    }
+                }
+                m
+            }
+            Msg::PickerApply => {
+                let mut m = model;
+                let Some(p) = m.picker.as_ref() else { return m };
+                let Some(&file_idx) = p.results.get(p.selected) else { return m };
+                let Some(path) = m.all_files.get(file_idx).cloned() else { return m };
+                m.picker = None;
+                open_path(m, path)
             }
             Msg::FindOpen => {
                 let mut m = model;
@@ -770,10 +843,26 @@ impl App for EditorApp {
             }
         }
 
+        // Picker abierto: Up/Down navegan, Enter aplica, Esc cierra,
+        // el resto va al input.
+        if model.picker.is_some() {
+            return match &event.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::PickerClose),
+                Key::Named(NamedKey::Enter) => Some(Msg::PickerApply),
+                Key::Named(NamedKey::ArrowDown) => Some(Msg::PickerNav { delta: 1 }),
+                Key::Named(NamedKey::ArrowUp) => Some(Msg::PickerNav { delta: -1 }),
+                _ => Some(Msg::PickerKey(event.clone())),
+            };
+        }
+
         // Atajos globales
         if event.modifiers.ctrl {
             if matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("s")) {
                 return Some(Msg::Save);
+            }
+            // Ctrl+P abre el fuzzy file picker.
+            if matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("p")) {
+                return Some(Msg::PickerOpen);
             }
             // Ctrl+W cierra el tab activo.
             if matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("w")) {
@@ -1038,6 +1127,9 @@ fn editor_panel(model: &Model, theme: &Theme) -> View<Msg> {
 /// Si no hay tab activo, devuelve el placeholder.
 fn active_editor_content(model: &Model, theme: &Theme) -> View<Msg> {
     let mut children: Vec<View<Msg>> = Vec::new();
+    if let Some(p) = model.picker.as_ref() {
+        children.push(picker_view(p, model, theme));
+    }
     if let Some(find) = model.find.as_ref() {
         children.push(find_bar(find, theme));
     }
@@ -1094,6 +1186,9 @@ const FIND_BAR_H: f32 = 32.0;
 const COMPLETIONS_BAR_H: f32 = 120.0;
 const COMPLETIONS_ROW_H: f32 = 22.0;
 const COMPLETIONS_MAX_ITEMS_VISIBLE: usize = 5;
+const PICKER_BAR_H: f32 = 220.0;
+const PICKER_ROW_H: f32 = 20.0;
+const PICKER_MAX_VISIBLE: usize = 9;
 
 const HOVER_BAR_H: f32 = 96.0;
 const SIG_HELP_BAR_H: f32 = 56.0;
@@ -1390,6 +1485,97 @@ fn completions_bar_view(bar: &CompletionsBar, theme: &Theme) -> View<Msg> {
     .children(rows)
 }
 
+fn picker_view(picker: &PickerState, model: &Model, theme: &Theme) -> View<Msg> {
+    let tp = TextInputPalette::from_theme(theme);
+    let header = if picker.results.is_empty() {
+        format!("file picker · sin matches · {} archivos · Esc cierra", model.all_files.len())
+    } else {
+        format!(
+            "file picker · {} / {} · ↓↑ navega · Enter abre · Esc cierra",
+            picker.selected + 1,
+            picker.results.len(),
+        )
+    };
+    let header_view = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
+        padding: Rect {
+            left: length(8.0_f32), right: length(8.0_f32),
+            top: length(0.0_f32), bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .text_aligned(header, 10.0, theme.fg_muted, Alignment::Start);
+
+    let input_view = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
+        padding: Rect {
+            left: length(6.0_f32), right: length(6.0_f32),
+            top: length(2.0_f32), bottom: length(2.0_f32),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(vec![text_input_view(
+        &picker.input,
+        "filtro: nombre o ruta…",
+        true,
+        &tp,
+        Msg::PickerOpen,
+    )]);
+
+    // Ventana visible centrada (más o menos) en el seleccionado.
+    let visible_start = picker.selected.saturating_sub(PICKER_MAX_VISIBLE.saturating_sub(1));
+    let visible_end = (visible_start + PICKER_MAX_VISIBLE).min(picker.results.len());
+    let mut rows: Vec<View<Msg>> = Vec::with_capacity(PICKER_MAX_VISIBLE);
+    for i in visible_start..visible_end {
+        let Some(&file_idx) = picker.results.get(i) else { continue };
+        let Some(path) = model.all_files.get(file_idx) else { continue };
+        let rel = relative_to(&model.root, path);
+        let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("?");
+        let dir = rel.strip_suffix(name).unwrap_or("");
+        let label = if dir.is_empty() {
+            name.to_string()
+        } else {
+            format!("{name}    {}", dir.trim_end_matches('/'))
+        };
+        let selected = i == picker.selected;
+        let bg = if selected { theme.bg_selected } else { theme.bg_panel };
+        let fg = if selected { theme.fg_text } else { theme.fg_muted };
+        rows.push(
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: length(PICKER_ROW_H) },
+                padding: Rect {
+                    left: length(10.0_f32), right: length(8.0_f32),
+                    top: length(0.0_f32), bottom: length(0.0_f32),
+                },
+                align_items: Some(AlignItems::Center),
+                flex_shrink: 0.0,
+                ..Default::default()
+            })
+            .fill(bg)
+            .text_aligned(label, 11.0, fg, Alignment::Start),
+        );
+    }
+
+    let mut children: Vec<View<Msg>> = Vec::with_capacity(3 + rows.len());
+    children.push(header_view);
+    children.push(input_view);
+    children.extend(rows);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: length(PICKER_BAR_H) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(children)
+}
+
 fn find_bar(find: &FindBarState, theme: &Theme) -> View<Msg> {
     let tp = TextInputPalette::from_theme(theme);
     let input = text_input_view(&find.input, "buscar… (Enter / Ctrl+G siguiente · Shift inverso · Esc cierra)", true, &tp, Msg::FindOpen);
@@ -1436,6 +1622,40 @@ fn empty_editor_placeholder(theme: &Theme) -> View<Msg> {
 fn scan_root(root: &Path) -> Vec<TreeNode> {
     let mut out: Vec<TreeNode> = Vec::new();
     visit_dir(root, 0, false, &mut out);
+    out
+}
+
+/// Walk recursivo: todos los archivos bajo `root`, excluyendo dotfiles,
+/// `target/` y `node_modules/`. Devuelve paths absolutos. Cap a 50k para
+/// que un mal directorio no funda RAM.
+const PICKER_FILE_CAP: usize = 50_000;
+fn walk_files(root: &Path) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        if out.len() >= PICKER_FILE_CAP {
+            break;
+        }
+        let Ok(rd) = fs::read_dir(&dir) else { continue };
+        for entry in rd.filter_map(|e| e.ok()) {
+            let name = entry.file_name();
+            let Some(name_str) = name.to_str() else { continue };
+            if name_str.starts_with('.') || name_str == "target" || name_str == "node_modules" {
+                continue;
+            }
+            let path = entry.path();
+            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            if is_dir {
+                stack.push(path);
+            } else {
+                out.push(path);
+                if out.len() >= PICKER_FILE_CAP {
+                    break;
+                }
+            }
+        }
+    }
+    out.sort();
     out
 }
 
@@ -1512,40 +1732,77 @@ fn select_node(mut model: Model, i: usize) -> Model {
         // Click en directorio = toggle también, así no necesita el chevron.
         return toggle_node(model, i);
     }
-    // Si ya hay un tab abierto con este path, lo activamos sin releer.
-    if let Some(tab_idx) = model.tab_idx_for(&node.path) {
+    open_path(model, node.path)
+}
+
+/// Abre un archivo: si ya hay un tab con ese path lo activa; si no, lee
+/// del disco, crea EditorState nuevo, notifica `did_open` al LSP y empuja
+/// un tab nuevo. Mensaje de status según el resultado.
+fn open_path(mut model: Model, path: PathBuf) -> Model {
+    if let Some(tab_idx) = model.tab_idx_for(&path) {
         model.active = Some(tab_idx);
-        model.status = format!("activo · {}", relative_to(&model.root, &node.path));
+        model.status = format!("activo · {}", relative_to(&model.root, &path));
         return model;
     }
-    match fs::read_to_string(&node.path) {
+    match fs::read_to_string(&path) {
         Ok(content) => {
             let mut editor = EditorState::new();
             editor.set_text(&content);
-            // Demo de diagnostics fake (--demo-lsp).
             if model.demo_lsp {
-                let ext = node.path.extension().and_then(|s| s.to_str()).unwrap_or("");
+                let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
                 if ext == "rs" || ext == "py" {
                     editor.set_diagnostics(demo_diagnostics(&content));
                 }
             }
-            // LSP real (--lsp): notifica al server.
-            let ext = node.path.extension().and_then(|s| s.to_str()).unwrap_or("");
-            model.lsp.did_open(&node.path, ext, &content);
-            model.tabs.push(Tab {
-                path: node.path.clone(),
-                editor,
-                dirty: false,
-            });
+            let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+            model.lsp.did_open(&path, ext, &content);
+            model.tabs.push(Tab { path: path.clone(), editor, dirty: false });
             model.active = Some(model.tabs.len() - 1);
             model.status = format!("abierto · {} bytes", content.len());
         }
         Err(e) => {
-            model.status = format!("error abriendo: {e}");
+            model.status = format!("error abriendo {}: {e}", path.display());
         }
     }
     model
 }
+
+/// Re-calcula `picker.results` según el query actual del input. Match
+/// case-insensitive sobre el path relativo. Score: prefiere hits en el
+/// basename y los más cortos. Vacío = todos.
+fn picker_refilter(picker: &mut PickerState, files: &[PathBuf], root: &Path) {
+    let q = picker.input.text();
+    let q_lc = q.to_lowercase();
+    let mut scored: Vec<(i64, usize)> = Vec::new();
+    for (i, path) in files.iter().enumerate() {
+        let rel = relative_to(root, path);
+        if q_lc.is_empty() {
+            scored.push((rel.len() as i64, i));
+            continue;
+        }
+        let rel_lc = rel.to_lowercase();
+        let Some(rel_hit) = rel_lc.find(&q_lc) else { continue };
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_lowercase())
+            .unwrap_or_default();
+        let name_hit = name.find(&q_lc);
+        // Menor score = mejor. Penaliza paths largos, premia hits en el
+        // basename.
+        let score = match name_hit {
+            Some(pos) => pos as i64 * 4 + rel.len() as i64,
+            None => 10_000 + rel_hit as i64 + rel.len() as i64,
+        };
+        scored.push((score, i));
+    }
+    scored.sort_by_key(|(s, _)| *s);
+    scored.truncate(PICKER_MAX_RESULTS);
+    picker.results = scored.into_iter().map(|(_, i)| i).collect();
+    picker.selected = 0;
+}
+
+const PICKER_MAX_RESULTS: usize = 200;
 
 /// Activa el tab `idx` si es válido. No-op si está fuera de rango.
 fn activate_tab(mut model: Model, idx: usize) -> Model {
