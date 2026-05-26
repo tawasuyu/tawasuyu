@@ -41,12 +41,23 @@ impl Renderer {
     /// Inicializa el rasterizador. Vello acepta cualquier textura compatible
     /// (Rgba8Unorm / Bgra8Unorm) en `render`, así que no se fija un formato
     /// en construcción.
+    ///
+    /// **`antialiasing_support`**: pedimos `area` solamente, no `all()`.
+    /// `area` es el único método que `render()` usa (`AaConfig::Area`
+    /// fijo). Pedir `all()` haría a vello compilar también pipelines
+    /// para `msaa8` y `msaa16` que nunca se invocan — en Mali-G57 eso
+    /// triplica el cold-start (medido: 3.7s vs ~1.2s). Si alguna app
+    /// futura necesita MSAA, agregamos un constructor explícito.
     pub fn new(hal: &Hal) -> Result<Self, RasterError> {
         let inner = vello::Renderer::new(
             &hal.device,
             vello::RendererOptions {
                 use_cpu: false,
-                antialiasing_support: vello::AaSupport::all(),
+                antialiasing_support: vello::AaSupport {
+                    area: true,
+                    msaa8: false,
+                    msaa16: false,
+                },
                 num_init_threads: NonZeroUsize::new(1),
                 pipeline_cache: None,
             },
