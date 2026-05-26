@@ -31,7 +31,7 @@ use thiserror::Error;
 pub use boxes::{BoxNode, BoxTree, Color, Display};
 pub use dom::DomTree;
 pub use fetch::{fetch, FetchError};
-pub use style::{ComputedStyle, StyleEngine};
+pub use style::{ComputedStyle, LengthVal, StyleEngine, TextAlign};
 
 /// Pipeline completo del navegador. Sin estado mutable — cada `load`
 /// devuelve un [`Document`] independiente.

@@ -26,7 +26,7 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
-use puriy_engine::{BoxNode, BoxTree, Display, Engine};
+use puriy_engine::{BoxNode, BoxTree, Display, Engine, LengthVal, TextAlign};
 
 const HEADER_H: f32 = 78.0;
 const TABS_H: f32 = 30.0;
@@ -675,9 +675,10 @@ fn box_style(b: &BoxNode) -> Style {
     // colapsa los inlines al top del bloque. Para inlines con hijos
     // dejamos auto y que el padre mida.
     let is_text_leaf = b.text.is_some();
-    let line_h = b.font_size * 1.4;
+    let lh_mult = b.line_height.unwrap_or(1.4);
+    let line_h = b.font_size * lh_mult;
 
-    let (flex_direction, width, height) = match b.display {
+    let (flex_direction, mut width, height) = match b.display {
         Display::Block => (FlexDirection::Column, percent(1.0_f32), auto()),
         Display::InlineBlock | Display::Inline => {
             let h = if is_text_leaf { length(line_h) } else { auto() };
@@ -698,17 +699,43 @@ fn box_style(b: &BoxNode) -> Style {
     // Para bloques con hijos inline, cambiamos a Row + wrap. Esto convierte
     // el `<p>foo <a>bar</a> baz</p>` en una fila con wrap en lugar de
     // apilar cada token en su propia línea.
-    let (flex_direction, width) =
+    let (flex_direction, w_base) =
         if matches!(b.display, Display::Block) && has_inline_children(b) {
             (FlexDirection::Row, percent(1.0_f32))
         } else {
             (flex_direction, width)
         };
+    width = w_base;
+
+    // CSS `width` explícito gana sobre el default de display.
+    if let Some(explicit) = length_to_taffy(b.width) {
+        width = explicit;
+    }
+    // `max-width` se aplica vía max_size del Style.
+    let max_size = Size {
+        width: length_to_taffy(b.max_width).unwrap_or_else(auto),
+        height: auto(),
+    };
+
+    // `text-align: center|right` sobre bloques con inlines mapea a
+    // `justify_content` del row interno (axis main = row → horizontal).
+    let justify_content =
+        if matches!(b.display, Display::Block) && has_inline_children(b) {
+            match b.text_align {
+                TextAlign::Left | TextAlign::Justify => None,
+                TextAlign::Center => Some(llimphi_layout::taffy::prelude::JustifyContent::Center),
+                TextAlign::Right => Some(llimphi_layout::taffy::prelude::JustifyContent::End),
+            }
+        } else {
+            None
+        };
 
     Style {
         flex_direction,
         flex_wrap,
+        justify_content,
         size: Size { width, height },
+        max_size,
         margin: Rect {
             left: length(b.margin),
             right: length(b.margin * 0.25),
@@ -722,6 +749,17 @@ fn box_style(b: &BoxNode) -> Style {
             bottom: length(b.padding * 0.5),
         },
         ..Default::default()
+    }
+}
+
+/// Traduce un `LengthVal` CSS al tipo de longitud que taffy entiende.
+/// `Auto` queda como `None` (caller lo reemplaza con el default según
+/// display o `auto()` para max-size).
+fn length_to_taffy(v: LengthVal) -> Option<llimphi_layout::taffy::style::Dimension> {
+    match v {
+        LengthVal::Auto => None,
+        LengthVal::Px(px) => Some(length(px)),
+        LengthVal::Pct(pct) => Some(percent(pct / 100.0)),
     }
 }
 

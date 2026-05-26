@@ -11,7 +11,7 @@
 use markup5ever_rcdom::{Handle, NodeData};
 
 use crate::dom::{self, DomTree};
-use crate::style::{ComputedStyle, StyleEngine};
+use crate::style::{ComputedStyle, LengthVal, StyleEngine, TextAlign};
 
 /// Color RGBA, 8 bits por canal. Suficiente para CSS color values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +57,15 @@ pub struct BoxNode {
     pub font_weight: u16,
     pub margin: f32,
     pub padding: f32,
+    /// Ancho explícito CSS (`auto` por defecto).
+    pub width: LengthVal,
+    /// Tope superior del ancho.
+    pub max_width: LengthVal,
+    /// Alineación del texto inline dentro del bloque.
+    pub text_align: TextAlign,
+    /// Multiplicador line-height (font-size * line_height = altura
+    /// de línea). `None` → caller usa 1.4 como default.
+    pub line_height: Option<f32>,
     /// Texto plano del nodo (sólo para hojas de texto). Para nodos con
     /// hijos el texto vive en los hijos.
     pub text: Option<String>,
@@ -132,6 +141,10 @@ fn empty_root() -> BoxNode {
         font_weight: 400,
         margin: 0.0,
         padding: 0.0,
+        width: LengthVal::Auto,
+        max_width: LengthVal::Auto,
+        text_align: TextAlign::Left,
+        line_height: None,
         text: None,
         children: Vec::new(),
         tag: Some("body".into()),
@@ -188,6 +201,10 @@ fn build_node(node: &Handle, styles: &StyleEngine, base: Option<&url::Url>) -> O
                 font_weight: style.font_weight,
                 margin: style.margin,
                 padding: style.padding,
+                width: style.width,
+                max_width: style.max_width,
+                text_align: style.text_align,
+                line_height: style.line_height,
                 text: None,
                 children,
                 tag,
@@ -214,6 +231,10 @@ fn build_node(node: &Handle, styles: &StyleEngine, base: Option<&url::Url>) -> O
                 font_weight: 400,
                 margin: 0.0,
                 padding: 0.0,
+                width: LengthVal::Auto,
+                max_width: LengthVal::Auto,
+                text_align: TextAlign::Left,
+                line_height: None,
                 text: Some(collapsed),
                 children: Vec::new(),
                 tag: None,
@@ -242,6 +263,10 @@ fn build_node(node: &Handle, styles: &StyleEngine, base: Option<&url::Url>) -> O
                 font_weight: 400,
                 margin: 0.0,
                 padding: 0.0,
+                width: LengthVal::Auto,
+                max_width: LengthVal::Auto,
+                text_align: TextAlign::Left,
+                line_height: None,
                 text: None,
                 children,
                 tag: None,
@@ -265,6 +290,10 @@ fn plain_inline_text(s: String) -> BoxNode {
         font_weight: 400,
         margin: 0.0,
         padding: 0.0,
+        width: LengthVal::Auto,
+        max_width: LengthVal::Auto,
+        text_align: TextAlign::Left,
+        line_height: None,
         text: Some(s),
         children: Vec::new(),
         tag: None,

@@ -29,6 +29,33 @@ pub struct ComputedStyle {
     pub font_weight: u16,
     pub margin: f32,
     pub padding: f32,
+    /// Ancho explícito. `Auto` = el default block-fills-parent.
+    pub width: LengthVal,
+    /// Tope superior — útil para containers narrow ("max-width:800px").
+    pub max_width: LengthVal,
+    /// Alineación horizontal del texto dentro del box.
+    pub text_align: TextAlign,
+    /// Altura de línea como multiplicador del font-size. `None` =
+    /// default razonable (1.4) en el caller.
+    pub line_height: Option<f32>,
+}
+
+/// Valor longitud de CSS reducido al subset que soportamos: `auto`,
+/// `Npx`, `N%`. `em`/`rem` se resuelven a px en parse time.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LengthVal {
+    Auto,
+    Px(f32),
+    Pct(f32),
+}
+
+/// Alineación horizontal del contenido inline dentro de un bloque.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextAlign {
+    Left,
+    Center,
+    Right,
+    Justify,
 }
 
 impl Default for ComputedStyle {
@@ -41,6 +68,10 @@ impl Default for ComputedStyle {
             font_weight: 400,
             margin: 0.0,
             padding: 0.0,
+            width: LengthVal::Auto,
+            max_width: LengthVal::Auto,
+            text_align: TextAlign::Left,
+            line_height: None,
         }
     }
 }
@@ -367,6 +398,10 @@ enum Decl {
     FontWeight(u16),
     Margin(f32),
     Padding(f32),
+    Width(LengthVal),
+    MaxWidth(LengthVal),
+    TextAlign(TextAlign),
+    LineHeight(f32),
 }
 
 impl Decl {
@@ -379,6 +414,10 @@ impl Decl {
             Decl::FontWeight(w) => s.font_weight = *w,
             Decl::Margin(v) => s.margin = *v,
             Decl::Padding(v) => s.padding = *v,
+            Decl::Width(v) => s.width = *v,
+            Decl::MaxWidth(v) => s.max_width = *v,
+            Decl::TextAlign(a) => s.text_align = *a,
+            Decl::LineHeight(v) => s.line_height = Some(*v),
         }
     }
 }
@@ -736,8 +775,54 @@ fn decl_from_pair(prop: &str, value: &str) -> Option<Decl> {
         "font-weight" => parse_weight(value).map(Decl::FontWeight),
         "margin" => parse_length_px(value).map(Decl::Margin),
         "padding" => parse_length_px(value).map(Decl::Padding),
+        "width" => parse_length_or_pct(value).map(Decl::Width),
+        "max-width" => parse_length_or_pct(value).map(Decl::MaxWidth),
+        "text-align" => parse_text_align(value).map(Decl::TextAlign),
+        "line-height" => parse_line_height(value).map(Decl::LineHeight),
         _ => None,
     }
+}
+
+fn parse_text_align(s: &str) -> Option<TextAlign> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "left" | "start" => Some(TextAlign::Left),
+        "center" => Some(TextAlign::Center),
+        "right" | "end" => Some(TextAlign::Right),
+        "justify" => Some(TextAlign::Justify),
+        _ => None,
+    }
+}
+
+/// Acepta `auto`, `Npx`, `Nrem`/`Nem` (→ px), `N%`. Sin unidad y
+/// distinto de `0` → falla (a diferencia de `parse_length_px`, que
+/// asume px).
+fn parse_length_or_pct(s: &str) -> Option<LengthVal> {
+    let s = s.trim();
+    if s.eq_ignore_ascii_case("auto") {
+        return Some(LengthVal::Auto);
+    }
+    if let Some(num) = s.strip_suffix('%') {
+        return num.trim().parse::<f32>().ok().map(LengthVal::Pct);
+    }
+    parse_length_px(s).map(LengthVal::Px)
+}
+
+/// Acepta multiplicador adimensional (`1.5`, `1.6`), `Npx`, `Nem`/`Nrem`.
+/// Devuelve siempre un multiplicador (px se divide por 16; `em`/`rem`
+/// salen como ya están). Imperfecto pero alcanza para Fase 4.
+fn parse_line_height(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(num) = s.strip_suffix("px") {
+        let v: f32 = num.trim().parse().ok()?;
+        return Some(v / 16.0);
+    }
+    if let Some(num) = s.strip_suffix("rem") {
+        return num.trim().parse().ok();
+    }
+    if let Some(num) = s.strip_suffix("em") {
+        return num.trim().parse().ok();
+    }
+    s.parse::<f32>().ok()
 }
 
 fn parse_color(s: &str) -> Option<Color> {
@@ -1144,6 +1229,45 @@ mod tests {
         assert_eq!(eng.compute(&ps[1]).color, Color::BLACK);
         // último <p> → verde
         assert_eq!(eng.compute(&ps[2]).color, Color::rgb(0, 0xaa, 0));
+    }
+
+    #[test]
+    fn parsea_width_max_width() {
+        let s = parse_stylesheet("p { width: 80%; max-width: 800px } div { width: auto }");
+        assert_eq!(s.len(), 2);
+        assert!(matches!(s[0].decls[0], Decl::Width(LengthVal::Pct(80.0))));
+        assert!(matches!(s[0].decls[1], Decl::MaxWidth(LengthVal::Px(800.0))));
+        assert!(matches!(s[1].decls[0], Decl::Width(LengthVal::Auto)));
+    }
+
+    #[test]
+    fn parsea_text_align() {
+        let s = parse_stylesheet("h1 { text-align: center } p { text-align: right }");
+        assert!(matches!(s[0].decls[0], Decl::TextAlign(TextAlign::Center)));
+        assert!(matches!(s[1].decls[0], Decl::TextAlign(TextAlign::Right)));
+    }
+
+    #[test]
+    fn parsea_line_height() {
+        let s = parse_stylesheet("p { line-height: 1.5 } h1 { line-height: 32px }");
+        // 1.5 → 1.5
+        assert!(matches!(s[0].decls[0], Decl::LineHeight(v) if (v - 1.5).abs() < 1e-6));
+        // 32px sobre font-size 16px estimado → 2.0
+        assert!(matches!(s[1].decls[0], Decl::LineHeight(v) if (v - 2.0).abs() < 1e-6));
+    }
+
+    #[test]
+    fn computa_width_y_text_align() {
+        let html = r#"<html><head><style>
+            .narrow{max-width:600px;text-align:center;line-height:1.6}
+        </style></head><body><div class="narrow">x</div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let div = dom.find("div").unwrap();
+        let st = eng.compute(&div);
+        assert_eq!(st.max_width, LengthVal::Px(600.0));
+        assert_eq!(st.text_align, TextAlign::Center);
+        assert!((st.line_height.unwrap() - 1.6).abs() < 1e-6);
     }
 
     #[test]
