@@ -134,7 +134,9 @@ fn leer_flags(fd: RawFd, iface: &str) -> anyhow::Result<i16> {
     let mut req: libc::ifreq = unsafe { zeroed() };
     copy_iface_name(&mut req, iface)?;
     // SAFETY: req contiene un nombre valido, SIOCGIFFLAGS rellena ifr_flags.
-    let r = unsafe { libc::ioctl(fd, libc::SIOCGIFFLAGS, &mut req) };
+    // SIOCGIFFLAGS es u64 en glibc y c_int en musl — `as _` deja que el
+    // compilador elija el tipo correcto según el target.
+    let r = unsafe { libc::ioctl(fd, libc::SIOCGIFFLAGS as _, &mut req) };
     if r < 0 {
         return Err(io::Error::last_os_error().into());
     }
@@ -148,7 +150,7 @@ fn escribir_flags(fd: RawFd, iface: &str, flags: i16) -> anyhow::Result<()> {
     copy_iface_name(&mut req, iface)?;
     req.ifr_ifru.ifru_flags = flags;
     // SAFETY: req inicializado, SIOCSIFFLAGS lee ifr_flags.
-    let r = unsafe { libc::ioctl(fd, libc::SIOCSIFFLAGS, &req) };
+    let r = unsafe { libc::ioctl(fd, libc::SIOCSIFFLAGS as _, &req) };
     if r < 0 {
         return Err(io::Error::last_os_error().into());
     }

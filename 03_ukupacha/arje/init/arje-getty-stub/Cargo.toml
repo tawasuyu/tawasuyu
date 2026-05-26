@@ -1,0 +1,11 @@
+[package]
+name = "arje-getty-stub"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "arje-getty-stub — agetty mínimo de validación. Abre la TTY que recibe en argv, escribe un banner y se bloquea leyendo. Sin dependencias C, compila estático en musl. Usado por el smoke test de QEMU del fractal."
+
+[[bin]]
+name = "arje-getty-stub"
+path = "src/main.rs"
