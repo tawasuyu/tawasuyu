@@ -129,11 +129,22 @@ lanzan independientemente desde el usuario y no son entes hijos.
 | Crate | Rol | Qué consume |
 |---|---|---|
 | `wawa-panel-llimphi` | productor + consumidor | todo |
-| `gioser-edit` | consumidor | `theme_variant`, `lang` |
+| `gioser-edit` | consumidor | `theme_variant`, `accent`, `lang` |
+| `dominium-app-llimphi` | consumidor | `theme_variant`, `accent`, `lang` |
 | `wawactl` | productor + consumidor | todo (CLI) |
 
 Cualquier app Llimphi puede sumarse en ~30 líneas siguiendo la
 sección **Consumidor**.
+
+### Helper `theme_from_wawa`
+
+Las apps Llimphi que toman el theme del bus repiten un helper de
+unas 10 líneas (`theme_from_wawa(cfg, fallback) -> Theme`) que toma
+el `theme_variant` canonicalizado y aplica `accent_rgb` como
+override. Está duplicado en `gioser-edit` y `dominium-app-llimphi`.
+Cuando aparezca un tercer consumidor conviene factorizarlo a un
+crate `shared/wawa-config-llimphi` (o exponer `wawa-config` con un
+feature `llimphi` que sume la dep a `llimphi-theme`).
 
 ## Cómo probar el bus
 

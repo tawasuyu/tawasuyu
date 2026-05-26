@@ -313,6 +313,14 @@ struct Model {
     trails: VecDeque<Vec<(f32, f32)>>,
     /// Toggle para mostrar las trayectorias.
     show_trails: bool,
+    /// Theme efectivo. Se construye en init desde `wawa-config` (con
+    /// fallback a `Theme::dark()` si no hay archivo aún) y se rearma
+    /// en cada `Msg::WawaConfigChanged`.
+    theme: Theme,
+    /// Subscripción al bus de configuración del SO. `Option` porque
+    /// la creación puede fallar en plataformas sin ProjectDirs.
+    /// Se mantiene viva mientras vive el `Model`.
+    _wawa_watcher: Option<wawa_config::ConfigWatcher>,
 }
 
 /// Una de las cuatro capas modificables de un `Concepto` (degradacion
@@ -418,6 +426,9 @@ enum Msg {
     RewindBy(f32),
     /// Vuelve `rewind_offset` a 0 (presente).
     RewindHome,
+    /// El bus `wawa-config` publicó una versión nueva. Aplicamos
+    /// theme y locale; los demás campos no nos competen.
+    WawaConfigChanged(Box<wawa_config::WawaConfig>),
 }
 
 struct Dominium;
@@ -438,6 +449,19 @@ impl App for Dominium {
         // Loop de tick a ~11 Hz; el handle ya sabe cómo dejar morir
         // el thread cuando el event loop se cierre.
         handle.spawn_periodic(Duration::from_millis(TICK_MS), || Msg::Tick);
+
+        // Bus de configuración del SO. Theme y locale arrancan desde
+        // el archivo si existe; el watcher reentra al `update` cuando
+        // cambia.
+        let wawa_cfg = wawa_config::WawaConfig::load();
+        let theme = theme_from_wawa(&wawa_cfg, &Theme::dark());
+        let _ = rimay_localize::set_locale(&wawa_cfg.lang);
+        let handle_clone = handle.clone();
+        let wawa_watcher = wawa_config::ConfigWatcher::spawn(move |new_cfg| {
+            handle_clone.dispatch(Msg::WawaConfigChanged(Box::new(new_cfg)));
+        })
+        .map_err(|e| eprintln!("dominium · wawa-config watcher: {e}"))
+        .ok();
 
         let rng_seed = 0xD0_31_31_07;
         Model {
@@ -478,6 +502,8 @@ impl App for Dominium {
             rewind_offset: 0,
             trails: VecDeque::with_capacity(TRAIL_CAP),
             show_trails: false,
+            theme,
+            _wawa_watcher: wawa_watcher,
         }
     }
 
@@ -749,6 +775,15 @@ impl App for Dominium {
             Msg::RewindHome => {
                 m.rewind_offset = 0;
             }
+            Msg::WawaConfigChanged(cfg) => {
+                // Re-armamos el theme y el locale. El locale lo respeta
+                // el próximo `view()` porque `rimay_localize::t(...)` se
+                // re-llama cada frame.
+                m.theme = theme_from_wawa(&cfg, &m.theme);
+                if cfg.lang != rimay_localize::current_locale() {
+                    let _ = rimay_localize::set_locale(&cfg.lang);
+                }
+            }
         }
         m
     }
@@ -770,7 +805,7 @@ impl App for Dominium {
     }
 
     fn view(model: &Model) -> View<Msg> {
-        let theme = Theme::dark();
+        let theme = model.theme;
         let shown = displayed_world(model);
         let stats = WorldStats::from_world(shown);
 
@@ -836,6 +871,24 @@ impl App for Dominium {
         .fill(theme.bg_app)
         .children(vec![status, body])
     }
+}
+
+/// Construye el Theme efectivo desde `wawa-config`. Si el variant del
+/// bus no se reconoce, conserva `fallback`. Si hay `accent` override,
+/// le sobreescribe `accent` y `border_focus`. Espejo del helper en
+/// gioser-edit — repetido por simplicidad (5 líneas), si aparece un
+/// tercero conviene factorizarlo a `wawa-config` con feature flag de
+/// llimphi-theme.
+fn theme_from_wawa(cfg: &wawa_config::WawaConfig, fallback: &Theme) -> Theme {
+    let mut t = wawa_config::canonical_theme_name(&cfg.theme_variant)
+        .and_then(Theme::by_name)
+        .unwrap_or(*fallback);
+    if let Some([r, g, b]) = wawa_config::accent_rgb(&cfg.accent) {
+        let c = llimphi_ui::llimphi_raster::peniko::Color::from_rgba8(r, g, b, 255);
+        t.accent = c;
+        t.border_focus = c;
+    }
+    t
 }
 
 fn main() {
