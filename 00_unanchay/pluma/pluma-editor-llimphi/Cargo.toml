@@ -21,5 +21,7 @@ uuid = { workspace = true, features = ["serde"] }
 pluma-transform = { path = "../pluma-transform" }
 pluma-transform-tabla = { path = "../pluma-transform-tabla" }
 pluma-align-embeddings = { path = "../pluma-align-embeddings" }
+rimay-verbo-core = { path = "../../rimay/rimay-verbo-core" }
 rimay-verbo-mock = { path = "../../rimay/rimay-verbo-mock" }
+rimay-verbo-daemon = { path = "../../rimay/rimay-verbo-daemon" }
 tokio = { workspace = true }

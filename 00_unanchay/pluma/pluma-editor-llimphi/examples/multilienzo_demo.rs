@@ -30,6 +30,8 @@ use pluma_transform::{
     Ejecutor, TipoTransformacion, Transformacion,
 };
 use pluma_transform_tabla::EjecutorTraducirTabla;
+use rimay_verbo_core::Provider;
+use rimay_verbo_daemon::DaemonClient;
 use rimay_verbo_mock::MockProvider;
 use uuid::Uuid;
 
@@ -138,23 +140,55 @@ impl App for Demo {
         let idx: HashMap<Uuid, &NarrativeAtom> =
             atoms_all.iter().map(|a| (a.id, a)).collect();
 
-        let provider = MockProvider::default();
-        // Umbral negativo para que TODAS las mejores correspondencias pasen —
-        // con vectores random veremos fuerzas dispersas, que es justo el
-        // comportamiento esperado del mock. Con un modelo real bajar el
-        // umbral a 0.5–0.7 filtraría ruido.
-        let params = ParamsAlineacion {
-            umbral_minimo: -1.0,
-            modo: ModoAlineacion::MejorParaCadaA,
-        };
-        let carta_qu_en = tokio::runtime::Builder::new_current_thread()
+        // Provider: si hay un `verbo-daemon` corriendo, nos conectamos —
+        // así las hebras llevan similitudes semánticas reales. Sin daemon,
+        // fallback al MockProvider determinista (las fuerzas serán
+        // dispersas; sirve para ver la geometría del pintado).
+        let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .expect("runtime tokio")
-            .block_on(alinear_por_embeddings(
-                &qu, &en, &idx, &provider, &params, 200,
-            ))
-            .expect("alineación por embeddings");
+            .expect("runtime tokio");
+        let socket = socket_verbo_default();
+        let (provider_label, carta_qu_en) = rt.block_on(async {
+            match conectar_daemon_si_existe(&socket).await {
+                Some(daemon) => {
+                    eprintln!(
+                        "multilienzo_demo :: usando verbo-daemon en {} ({})",
+                        socket.display(),
+                        daemon.model_id()
+                    );
+                    // Con modelo real, umbral 0.5 filtra ruido sin perder
+                    // las correspondencias semánticas reales.
+                    let params = ParamsAlineacion {
+                        umbral_minimo: 0.5,
+                        modo: ModoAlineacion::MejorParaCadaA,
+                    };
+                    let carta = alinear_por_embeddings(&qu, &en, &idx, &daemon, &params, 200)
+                        .await
+                        .expect("alineación por embeddings (daemon)");
+                    ("verbo-daemon".to_string(), carta)
+                }
+                None => {
+                    let mock = MockProvider::default();
+                    eprintln!(
+                        "multilienzo_demo :: sin verbo-daemon — usando MockProvider \
+                         (las fuerzas Embeddings saldrán dispersas y geométricas, no semánticas; \
+                         para hebras reales: `verbo-daemon --provider fastembed &`)"
+                    );
+                    // Umbral negativo: con mock random todas las "mejores"
+                    // pasan — vemos la geometría aunque la fuerza sea ruido.
+                    let params = ParamsAlineacion {
+                        umbral_minimo: -1.0,
+                        modo: ModoAlineacion::MejorParaCadaA,
+                    };
+                    let carta = alinear_por_embeddings(&qu, &en, &idx, &mock, &params, 200)
+                        .await
+                        .expect("alineación por embeddings (mock)");
+                    ("mock".to_string(), carta)
+                }
+            }
+        });
+        eprintln!("multilienzo_demo :: hebras qu↔en con provider={provider_label}");
 
         Model {
             cuerpos: vec![es, qu, en],
@@ -196,6 +230,40 @@ impl App for Demo {
         .fill(palette.bg_app)
         .clip(true)
         .children(vec![interior])
+    }
+}
+
+/// Ruta default del socket del `verbo-daemon`, alineada con la convención
+/// que usa el bin (`rimay-verbo-daemon-bin`): `$XDG_RUNTIME_DIR/verbo.sock`
+/// con fallback a `/tmp/verbo-{uid}.sock`.
+fn socket_verbo_default() -> std::path::PathBuf {
+    if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
+        return std::path::PathBuf::from(xdg).join("verbo.sock");
+    }
+    let uid = std::fs::read_to_string("/proc/self/loginuid")
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .filter(|&u| u != u32::MAX)
+        .unwrap_or(1000);
+    std::path::PathBuf::from(format!("/tmp/verbo-{uid}.sock"))
+}
+
+/// Intenta conectar al daemon en `path`. Devuelve `None` si el socket no
+/// existe o si la conexión falla — el caller decide el fallback. No
+/// imprime; deja la decisión de logging al caller.
+async fn conectar_daemon_si_existe(path: &std::path::Path) -> Option<DaemonClient> {
+    if !path.exists() {
+        return None;
+    }
+    match DaemonClient::connect(path).await {
+        Ok(c) => Some(c),
+        Err(e) => {
+            eprintln!(
+                "multilienzo_demo :: socket {} existe pero connect falló: {e}",
+                path.display()
+            );
+            None
+        }
     }
 }
 
