@@ -261,6 +261,18 @@ cargo run -p supay-doom-llimphi --release
 
 **No incluido en 3.10 (defer a 3.11+):** sprites con full-bright frame flag (bit 7); animated textures (switches, NUKAGE, FIREBLU); per-triangle subdivision para perspective-correct floors; pitch / mouse-look; BSP front-to-back ordering exacto; volumetric fog real por sector.
 
+**Fase 3.11 (2026-05-26, este bloque):** flats/paredes animados + full-bright sprite flag.
+
+- **C-side `supay_scene_sector` aplica `flattranslation[]`**: cuando la tabla existe (post-`R_InitFlats`), reportamos `flattranslation[s->floorpic]`/`flattranslation[s->ceilingpic]` en vez del pic estático. Doom rota la tabla cada ~8 ticks vía `P_UpdateSpecials` por familias hardcoded en `p_spec.c::animdefs[]`: NUKAGE1→NUKAGE2→NUKAGE3, FIREBLU1↔FIREBLU2, BLOOD1→BLOOD2→BLOOD3, FWATER1→FWATER4, SLIME, LAVA, etc. El renderer ve un `floor_pic` distinto cada ciclo y resuelve el lump aparte vía `DoomEngine::flat_name` (cache lazy en `WadAtlas` se llena on-demand).
+- **C-side `supay_scene_wall_texture` aplica `texturetranslation[]`**: switches activos cambian su lump (SW1xxx ↔ SW2xxx) cuando el jugador los activa. El renderer ve la textura "presionada" en el siguiente snapshot.
+- **`gather_sprite` respeta `frame & 0x80`** (`FF_FULLBRIGHT_BYTE` en `info.h`): cuando el flag está set, saltamos `shade_for` y usamos `shade = 1.0`. Esto cubre proyectiles (BAL1, BAL7, MISL), muzzle flashes del player (TROO + state attack tiene un frame full-bright para el destello del fireball lanzado), barriles en explosión (BEXP frames), y otros mobjs que el motor marca como "emisores de luz propia". Sin esto, los proyectiles se ven igual de oscuros que el ambiente — con el flag, brillan en cuartos oscuros como en Doom original.
+- **`sprite_color`** (fallback sin patch del WAD) también respeta el flag — modo stub o sprites no resueltos siguen comportándose consistente.
+- **Costo de animación**: cero, la translation se aplica en C antes de devolver al snapshot. Cada nuevo pic_idx hace que el host registre el `flat_name` la primera vez (~40 flats únicos en E1M1 después del primer ciclo de animación, vs ~10 sin animación), pero el cache resuelve los siguientes ticks en O(1).
+- **Tests** (+1 render = 25 total verde, 41 supay total): `sprite_color_full_bright_bypasses_shading` verifica que con `frame=0x80` + sector oscuro + fog activo, el sprite sale visiblemente más brillante que sin el flag. La animación de flats/textures la valida el smoke contra DOOM1.WAD — se observa por inspección visual.
+- **Header bump**: `PHASE 3.10` → `PHASE 3.11`.
+
+**No incluido en 3.11 (defer a 3.12+):** per-triangle subdivision para perspective-correct floors; pitch / mouse-look; BSP front-to-back ordering exacto; volumetric fog real por sector; texture scrolling (líneas con `Scroll_*` specials).
+
 ### Fase 4 — Capa de modernización opt-in
 
 Cada feature como toggle:
@@ -324,6 +336,7 @@ Cada feature como toggle:
   - **TempLight + flash de impacto**: nueva lista `Vec<TempLight>` con `(x, y, color, strength, ttl, ttl_max)`. Cada flash dura `FLASH_TTL = 4 ticks` y su `strength` decae linealmente con el TTL. `lighting_contribution` los suma; el resultado es un destello cálido cuando un bullet impacta. Spawn en colisión pared + colisión enemy.
   - **SpriteKinds nuevos**: `DyingImp` (rojo opaco scale 0.65) y `Corpse` (mancha rojiza scale 0.30) — el enemy en `draw_scene` se convierte al kind apropiado según state.
   - El jugador puede morir (vida llega a 0 y queda en 0); por ahora sin pantalla de game over — el input sigue activo. La pantalla del HUD muestra todo en rojo cuando vida < 25.
+- **2026-05-26 (+10):** Fase 3.11 — flats/paredes animados (NUKAGE/FIREBLU/BLOOD via `flattranslation[]`, switches via `texturetranslation[]`) + sprites full-bright (bit 7 del frame). Proyectiles y muzzle flashes ahora brillan en cuartos oscuros.
 - **2026-05-26 (+9):** Fase 3.10 — `textureoffset`/`rowoffset` del sidedef + pegging Doom (`ML_DONTPEGTOP`/`ML_DONTPEGBOTTOM`). Las costuras entre paredes adyacentes se alinean correctamente; las puertas mantienen su textura quieta cuando suben.
 - **2026-05-26 (+8):** Fase 3.9 — paredes per-strip (8 por slab default) para perspective approximation. El affine sheen de 3.6 desaparece en paredes largas vistas oblicuas.
 - **2026-05-26 (+7):** Fase 3.8 — sky SKY1 real con scroll horizontal según ángulo del jugador. Convención Doom 360° = 4×sky.width.

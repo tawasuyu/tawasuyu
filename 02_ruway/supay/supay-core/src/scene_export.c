@@ -154,8 +154,20 @@ int supay_scene_sector(int i,
     if (ll < 0) ll = 0;
     if (ll > 255) ll = 255;
     *light = (uint8_t)ll;
-    *floor_pic = (uint16_t)s->floorpic;
-    *ceiling_pic = (uint16_t)s->ceilingpic;
+    /* Aplica flattranslation cuando la tabla existe (post-R_InitFlats).
+     * Doom anima los flats vía P_UpdateSpecials cada ~8 ticks rotando
+     * flattranslation[base_pic] entre los frames de la familia
+     * (NUKAGE1→NUKAGE2→NUKAGE3, FIREBLU1↔FIREBLU2, etc.). Devolvemos el
+     * pic actual: el renderer Rust ve un floor_pic distinto cada ciclo
+     * y resuelve el nombre del lump aparte vía DoomEngine::flat_name. */
+    int fp = s->floorpic;
+    int cp = s->ceilingpic;
+    if (flattranslation) {
+        fp = flattranslation[fp];
+        cp = flattranslation[cp];
+    }
+    *floor_pic = (uint16_t)fp;
+    *ceiling_pic = (uint16_t)cp;
     return 1;
 }
 
@@ -314,6 +326,16 @@ int supay_scene_wall_texture(int wall_idx, int side, int kind, char out[9]) {
     }
     if (tex_id <= 0 || tex_id >= numtextures || !textures || !textures[tex_id]) {
         return 0;
+    }
+    /* Aplica texturetranslation cuando la tabla existe — los switches
+     * activan/desactivan vía P_ChangeSwitchTexture, que setea esta
+     * tabla. Asegura que un switch presionado refleje su version
+     * "off"/"on" en el renderer (familias SW1xxx y SW2xxx). */
+    if (texturetranslation) {
+        short t2 = (short)texturetranslation[tex_id];
+        if (t2 > 0 && t2 < numtextures && textures[t2]) {
+            tex_id = t2;
+        }
     }
     char *src = textures[tex_id]->name;
     for (int i = 0; i < 8; i++) {

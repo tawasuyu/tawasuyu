@@ -1255,8 +1255,18 @@ fn gather_sprite(
             // un Vec::with_capacity + iter de width·height pixels;
             // para sprites típicos (≈2300 px) ronda 10 KB/draw,
             // ~30 sprites/frame ≈ 300 KB/frame, asumible a 60 fps.
+            //
+            // Full-bright (bit 7 = FF_FULLBRIGHT_BYTE): si el estado
+            // del mobj tiene este flag (proyectiles, muzzle flashes,
+            // frames de "fire" de imps/cacos), saltamos shade y fog —
+            // el sprite se ve a luz plena como en Doom original.
+            let full_bright = (sprite.frame & 0x80) != 0;
             let light = sec.map(|s| s.light_level).unwrap_or(192);
-            let shade = shade_for(light, depth, cfg);
+            let shade = if full_bright {
+                1.0
+            } else {
+                shade_for(light, depth, cfg)
+            };
             let img = make_tinted_sprite_image(&patch, shade);
             // Mirror = pintamos espejado: scale_x negativo + corrimiento.
             let xform = if mirror {
@@ -1519,8 +1529,13 @@ fn sprite_color(
     cfg: &RenderConfig,
 ) -> Color {
     let rgb = SPRITE_PALETTE[(sprite.sprite as usize) % SPRITE_PALETTE.len()];
-    let light = sec.map(|s| s.light_level).unwrap_or(192);
-    let shade = shade_for(light, depth, cfg);
+    let full_bright = (sprite.frame & 0x80) != 0;
+    let shade = if full_bright {
+        1.0
+    } else {
+        let light = sec.map(|s| s.light_level).unwrap_or(192);
+        shade_for(light, depth, cfg)
+    };
     tint(rgb, shade)
 }
 
@@ -1951,6 +1966,37 @@ mod tests {
         // V(z_top = 32) = near_ceiling - z_top = 96.
         let v = wall_v_top(2, ML_DONTPEGBOTTOM, 0.0, 128.0, Some(32.0), Some(128.0), 32.0, 64.0, 0.0);
         assert!((v - 96.0).abs() < 1e-4, "expected 96, got {v}");
+    }
+
+    #[test]
+    fn sprite_color_full_bright_bypasses_shading() {
+        // Sin full-bright el sprite oscurece con light_level bajo + fog.
+        // Con bit 7 set, sale a luz plena (shade=1.0).
+        let sec = SectorSnap {
+            floor_height: 0.0,
+            ceiling_height: 128.0,
+            light_level: 80, // oscuro
+            floor_pic: 0,
+            ceiling_pic: 0,
+        };
+        let cfg = RenderConfig::default();
+        let dim_sprite = SpriteSnap {
+            x: 0.0, y: 0.0, z: 0.0, angle: 0.0,
+            sprite: 0, frame: 0, sector: 0,
+        };
+        let bright_sprite = SpriteSnap {
+            frame: 0x80, // bit 7 set
+            ..dim_sprite.clone()
+        };
+        // depth=500 → fog atenúa visible
+        let dim = sprite_color(&dim_sprite, Some(&sec), 500.0, &cfg).to_rgba8().to_u8_array();
+        let bright = sprite_color(&bright_sprite, Some(&sec), 500.0, &cfg).to_rgba8().to_u8_array();
+        let dim_sum = dim[0] as u32 + dim[1] as u32 + dim[2] as u32;
+        let bright_sum = bright[0] as u32 + bright[1] as u32 + bright[2] as u32;
+        assert!(
+            bright_sum > dim_sum + 40,
+            "full-bright should be much brighter than dim shaded: bright={bright:?} dim={dim:?}"
+        );
     }
 
     #[test]
