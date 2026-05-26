@@ -5,7 +5,7 @@
 
 use arje_bus::{BusClient, BusRequest, BusResponse};
 use arje_card::Capability;
-use arje_compat_common::atomic_write;
+use arje_compat::atomic_write;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::signal::unix::{signal, SignalKind};
 use tracing::{info, warn};

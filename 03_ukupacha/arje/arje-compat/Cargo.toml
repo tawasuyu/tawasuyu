@@ -1,0 +1,92 @@
+[package]
+name = "arje-compat"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "arje-compat — shims D-Bus que traducen interfaces de systemd al bus interno de arje. Un solo crate con un binario por servicio (hostnamed, localed, logind, machined, polkit, resolved, systemd1, timedated, journald + journalctl, binfmt, notify, timer, tmpfiles, policy-provider) y una lib pequeña con la lógica pura compartida (parseo KEY=value, escritura atómica, validadores) testeada en un solo lugar. Reemplaza los 15 crates dispersos bajo `compat/`."
+
+# === Lib: lógica pura compartida (lo que era arje-compat-common). ===
+[lib]
+name = "arje_compat"
+path = "src/lib.rs"
+
+# === Binarios: uno por servicio. Nombres iguales a los antiguos
+# para que `cargo run -p arje-compat --bin arje-hostnamed-compat`
+# siga funcionando y los paquetes downstream no tengan que cambiar.
+[[bin]]
+name = "arje-binfmt-compat"
+path = "src/bin/arje-binfmt-compat.rs"
+
+[[bin]]
+name = "arje-hostnamed-compat"
+path = "src/bin/arje-hostnamed-compat.rs"
+
+[[bin]]
+name = "arje-journald-compat"
+path = "src/bin/arje-journald-compat.rs"
+
+[[bin]]
+name = "arje-journalctl"
+path = "src/bin/arje-journalctl.rs"
+
+[[bin]]
+name = "arje-localed-compat"
+path = "src/bin/arje-localed-compat.rs"
+
+[[bin]]
+name = "arje-logind-compat"
+path = "src/bin/arje-logind-compat.rs"
+
+[[bin]]
+name = "arje-machined-compat"
+path = "src/bin/arje-machined-compat.rs"
+
+[[bin]]
+name = "arje-notify-compat"
+path = "src/bin/arje-notify-compat.rs"
+
+[[bin]]
+name = "arje-policy-provider"
+path = "src/bin/arje-policy-provider.rs"
+
+[[bin]]
+name = "arje-polkit-compat"
+path = "src/bin/arje-polkit-compat.rs"
+
+[[bin]]
+name = "arje-resolved-compat"
+path = "src/bin/arje-resolved-compat.rs"
+
+[[bin]]
+name = "arje-systemd1-compat"
+path = "src/bin/arje-systemd1-compat.rs"
+
+[[bin]]
+name = "arje-timedated-compat"
+path = "src/bin/arje-timedated-compat.rs"
+
+[[bin]]
+name = "arje-timer-compat"
+path = "src/bin/arje-timer-compat.rs"
+
+[[bin]]
+name = "arje-tmpfiles-compat"
+path = "src/bin/arje-tmpfiles-compat.rs"
+
+[dependencies]
+arje-card = { path = "../arje-card" }
+arje-bus = { path = "../runtime/arje-bus" }
+arje-cas = { path = "../runtime/arje-cas" }
+anyhow = { workspace = true }
+libc = { workspace = true }
+nix = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+zbus = { version = "4", default-features = false, features = ["tokio"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }

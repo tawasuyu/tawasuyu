@@ -5,7 +5,7 @@
 
 use arje_bus::{BusClient, BusRequest, BusResponse};
 use arje_card::Capability;
-use arje_compat_common::{atomic_write, conf_entries, merge_kv, parse_kv};
+use arje_compat::{atomic_write, conf_entries, merge_kv, parse_kv};
 use std::sync::Mutex;
 use tokio::signal::unix::{signal, SignalKind};
 use tracing::{info, warn};

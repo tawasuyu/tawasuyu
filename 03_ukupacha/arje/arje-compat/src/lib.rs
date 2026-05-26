@@ -1,12 +1,16 @@
-//! `arje-compat-common` — lógica pura compartida por los shims D-Bus de
-//! compat (`arje-*-compat`).
+//! `arje-compat` — shims D-Bus que traducen interfaces de systemd al
+//! bus interno de `arje`, en un solo crate con un binario por servicio.
 //!
-//! Los shims son binarios que traducen interfaces de systemd al bus
-//! interno de `arje`. Antes cada uno copiaba su propio parseo de
-//! archivos `KEY=value`, su escritura atómica y sus validadores —
-//! código duplicado catorce veces y **sin un solo test**. Esta crate
-//! junta esa lógica pura en un lugar y la cubre con tests; los shims
-//! quedan como pura cáscara D-Bus.
+//! Cada binario (`arje-{hostnamed,localed,logind,…}-compat`) es una
+//! cáscara D-Bus que recibe llamadas systemd y las reenvía como cards
+//! `arje-bus`. La lógica pura compartida —parseo `KEY=value`, escritura
+//! atómica, validadores— vive en esta lib y se testea en un solo lugar.
+//!
+//! Antes vivía como 14 crates aislados bajo `arje/compat/*` + el lib
+//! `arje-compat-common`. Cada uno duplicaba parseo y escritura sin un
+//! solo test. La consolidación a un crate con `[[bin]]` por servicio
+//! deja el código duplicado fuera y respeta la regla del PLAN.md §6.2
+//! "un dominio = un crate raíz + subcrates plugin, sin proliferación".
 
 #![forbid(unsafe_code)]
 
@@ -114,7 +118,6 @@ mod tests {
 
     #[test]
     fn parse_kv_ignora_comentarios_y_blancos() {
-        // Una clave comentada no cuenta.
         assert_eq!(parse_kv("#LANG=x\n\nLANG=real\n", "LANG").as_deref(), Some("real"));
     }
 
@@ -158,7 +161,7 @@ mod tests {
     #[test]
     fn atomic_write_escribe_y_sobrescribe() {
         let dir = std::env::temp_dir();
-        let path = dir.join(format!("arje-compat-common-test-{}.conf", std::process::id()));
+        let path = dir.join(format!("arje-compat-test-{}.conf", std::process::id()));
         atomic_write(&path, b"primero\n").expect("escribe");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "primero\n");
         atomic_write(&path, b"segundo\n").expect("sobrescribe");
