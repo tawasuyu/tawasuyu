@@ -13,8 +13,12 @@
 
 pub mod cell;
 pub mod formula;
+pub mod graph;
+pub mod sheet;
 pub mod value;
 
 pub use cell::{CellRange, CellRangeError, CellRef, CellRefError};
 pub use formula::{compile, dependencies, eval_formula, CellResolver, FormulaExpr};
+pub use graph::{CycleError, SheetGraph};
+pub use sheet::{SetError, SetReport, Sheet};
 pub use value::{SheetError, SheetValue};
