@@ -19,7 +19,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use llimphi_layout::taffy::prelude::{
-    auto, length, percent, AlignItems, FlexDirection, Position, Rect, Size, Style,
+    auto, length, percent, AlignItems, FlexDirection, FlexWrap, Position, Rect, Size, Style,
 };
 use llimphi_raster::peniko::{Blob, Color, Image as PenikoImage, ImageFormat};
 use llimphi_ui::llimphi_text::Alignment;
@@ -670,14 +670,44 @@ fn render_link_subtree(b: &BoxNode, target: &str, color: Color) -> View<Msg> {
 }
 
 fn box_style(b: &BoxNode) -> Style {
+    // Si el nodo es una hoja de texto, le damos un height ≈ line-height
+    // para que el row del padre tenga altura real — sin esto, taffy
+    // colapsa los inlines al top del bloque. Para inlines con hijos
+    // dejamos auto y que el padre mida.
+    let is_text_leaf = b.text.is_some();
+    let line_h = b.font_size * 1.4;
+
     let (flex_direction, width, height) = match b.display {
         Display::Block => (FlexDirection::Column, percent(1.0_f32), auto()),
-        Display::InlineBlock | Display::Inline => (FlexDirection::Row, auto(), auto()),
+        Display::InlineBlock | Display::Inline => {
+            let h = if is_text_leaf { length(line_h) } else { auto() };
+            (FlexDirection::Row, auto(), h)
+        }
         Display::None => (FlexDirection::Column, length(0.0_f32), length(0.0_f32)),
     };
 
+    // Bloques con hijos inline: habilitamos flex_wrap para que los
+    // tokens fluyan en múltiples líneas si exceden el ancho del bloque.
+    // Bloques con hijos block siguen en column sin wrap.
+    let flex_wrap = if matches!(b.display, Display::Block) && has_inline_children(b) {
+        FlexWrap::Wrap
+    } else {
+        FlexWrap::NoWrap
+    };
+
+    // Para bloques con hijos inline, cambiamos a Row + wrap. Esto convierte
+    // el `<p>foo <a>bar</a> baz</p>` en una fila con wrap en lugar de
+    // apilar cada token en su propia línea.
+    let (flex_direction, width) =
+        if matches!(b.display, Display::Block) && has_inline_children(b) {
+            (FlexDirection::Row, percent(1.0_f32))
+        } else {
+            (flex_direction, width)
+        };
+
     Style {
         flex_direction,
+        flex_wrap,
         size: Size { width, height },
         margin: Rect {
             left: length(b.margin),
@@ -693,6 +723,15 @@ fn box_style(b: &BoxNode) -> Style {
         },
         ..Default::default()
     }
+}
+
+/// `true` si todos los hijos directos son inline o inline-block. Si los
+/// hijos son block, el bloque sigue siendo column.
+fn has_inline_children(b: &BoxNode) -> bool {
+    !b.children.is_empty()
+        && b.children
+            .iter()
+            .all(|c| matches!(c.display, Display::Inline | Display::InlineBlock))
 }
 
 fn truncate(s: &str, max: usize) -> String {
