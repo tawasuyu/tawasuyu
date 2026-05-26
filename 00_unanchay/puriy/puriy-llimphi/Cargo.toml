@@ -13,3 +13,5 @@ puriy-engine = { path = "../puriy-engine" }
 llimphi-ui = { path = "../../../02_ruway/llimphi/llimphi-ui" }
 llimphi-layout = { path = "../../../02_ruway/llimphi/llimphi-layout" }
 llimphi-raster = { path = "../../../02_ruway/llimphi/llimphi-raster" }
+llimphi-widget-text-input = { workspace = true }
+llimphi-theme = { workspace = true }

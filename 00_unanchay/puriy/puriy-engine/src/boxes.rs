@@ -51,6 +51,10 @@ pub struct BoxNode {
     pub background: Option<Color>,
     pub color: Color,
     pub font_size: f32,
+    /// 400 = normal, 700 = bold. Por ahora discreto: `< 600` se trata
+    /// como normal y `>= 600` como bold (Llimphi text aún no expone
+    /// weight axis arbitrario).
+    pub font_weight: u16,
     pub margin: f32,
     pub padding: f32,
     /// Texto plano del nodo (sólo para hojas de texto). Para nodos con
@@ -59,6 +63,10 @@ pub struct BoxNode {
     pub children: Vec<BoxNode>,
     /// Tag HTML que originó el box (para debug y feature detection).
     pub tag: Option<String>,
+    /// Destino absoluto si el nodo es un `<a href="…">`. Ya resuelto
+    /// contra la URL base del documento — los consumidores no tienen
+    /// que conocer la base.
+    pub link: Option<String>,
 }
 
 /// Árbol de boxes. Wrapper para poder agregar utilidades.
@@ -91,9 +99,14 @@ fn walk_inner(b: &BoxNode, f: &mut impl FnMut(&BoxNode)) {
 }
 
 /// Construye el árbol de boxes desde un DOM y un StyleEngine.
-pub fn build(dom: &DomTree, styles: &StyleEngine) -> BoxTree {
+///
+/// `base_url` se usa para resolver los `href` de `<a>` a URLs
+/// absolutos. Pasale el URL del documento (puede ser `about:blank`
+/// para HTML inline).
+pub fn build(dom: &DomTree, styles: &StyleEngine, base_url: &str) -> BoxTree {
+    let base = url::Url::parse(base_url).ok();
     let body = dom.find("body").unwrap_or_else(|| dom.document());
-    let root = build_node(&body, styles).unwrap_or_else(empty_root);
+    let root = build_node(&body, styles, base.as_ref()).unwrap_or_else(empty_root);
     BoxTree { root }
 }
 
@@ -103,15 +116,17 @@ fn empty_root() -> BoxNode {
         background: None,
         color: Color::BLACK,
         font_size: 16.0,
+        font_weight: 400,
         margin: 0.0,
         padding: 0.0,
         text: None,
         children: Vec::new(),
         tag: Some("body".into()),
+        link: None,
     }
 }
 
-fn build_node(node: &Handle, styles: &StyleEngine) -> Option<BoxNode> {
+fn build_node(node: &Handle, styles: &StyleEngine, base: Option<&url::Url>) -> Option<BoxNode> {
     match &node.data {
         NodeData::Element { .. } => {
             let style = styles.compute(node);
@@ -119,9 +134,18 @@ fn build_node(node: &Handle, styles: &StyleEngine) -> Option<BoxNode> {
                 return None;
             }
             let tag = dom::element_name(node);
+            let link = match (tag.as_deref(), base) {
+                (Some("a"), base) => dom::attr(node, "href").and_then(|h| resolve_href(base, &h)),
+                _ => None,
+            };
             let mut children = Vec::new();
+            // <li>: prefija con bullet. Lo agregamos como un hijo Text
+            // inline antes de procesar los hijos reales.
+            if tag.as_deref() == Some("li") {
+                children.push(bullet_marker());
+            }
             for child in node.children.borrow().iter() {
-                if let Some(b) = build_node(child, styles) {
+                if let Some(b) = build_node(child, styles, base) {
                     children.push(b);
                 }
             }
@@ -130,11 +154,13 @@ fn build_node(node: &Handle, styles: &StyleEngine) -> Option<BoxNode> {
                 background: style.background,
                 color: style.color,
                 font_size: style.font_size,
+                font_weight: style.font_weight,
                 margin: style.margin,
                 padding: style.padding,
                 text: None,
                 children,
                 tag,
+                link,
             })
         }
         NodeData::Text { contents } => {
@@ -148,18 +174,20 @@ fn build_node(node: &Handle, styles: &StyleEngine) -> Option<BoxNode> {
                 background: None,
                 color: Color::BLACK,
                 font_size: 16.0,
+                font_weight: 400,
                 margin: 0.0,
                 padding: 0.0,
                 text: Some(trimmed.to_string()),
                 children: Vec::new(),
                 tag: None,
+                link: None,
             })
         }
         _ => {
             // Document / Doctype / Comment → recurrir sólo en hijos.
             let mut children = Vec::new();
             for child in node.children.borrow().iter() {
-                if let Some(b) = build_node(child, styles) {
+                if let Some(b) = build_node(child, styles, base) {
                     children.push(b);
                 }
             }
@@ -173,14 +201,43 @@ fn build_node(node: &Handle, styles: &StyleEngine) -> Option<BoxNode> {
                 background: None,
                 color: Color::BLACK,
                 font_size: 16.0,
+                font_weight: 400,
                 margin: 0.0,
                 padding: 0.0,
                 text: None,
                 children,
                 tag: None,
+                link: None,
             })
         }
     }
+}
+
+fn bullet_marker() -> BoxNode {
+    BoxNode {
+        display: Display::Inline,
+        background: None,
+        color: Color::BLACK,
+        font_size: 16.0,
+        font_weight: 400,
+        margin: 0.0,
+        padding: 0.0,
+        text: Some("•  ".to_string()),
+        children: Vec::new(),
+        tag: None,
+        link: None,
+    }
+}
+
+fn resolve_href(base: Option<&url::Url>, href: &str) -> Option<String> {
+    let href = href.trim();
+    if href.is_empty() || href.starts_with('#') || href.starts_with("javascript:") {
+        return None;
+    }
+    if let Ok(abs) = url::Url::parse(href) {
+        return Some(abs.into());
+    }
+    base.and_then(|b| b.join(href).ok()).map(Into::into)
 }
 
 impl ComputedStyle {

@@ -54,7 +54,7 @@ impl Engine {
     pub fn load_html(&self, url: &str, html: &str) -> Document {
         let dom = DomTree::parse(html);
         let styles = StyleEngine::from_dom(&dom);
-        let box_tree = boxes::build(&dom, &styles);
+        let box_tree = boxes::build(&dom, &styles, url);
         let title = dom.title().unwrap_or_default();
         Document {
             url: url.to_string(),

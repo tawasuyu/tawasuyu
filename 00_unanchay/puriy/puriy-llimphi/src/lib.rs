@@ -4,20 +4,30 @@
 //! abre ventana Llimphi y dibuja el [`BoxTree`](puriy_engine::BoxTree)
 //! como árbol de Views (column de blocks, row de inlines).
 //!
-//! Anti-objetivo de Fase 3: no hay JS, no hay scroll virtual, no hay
-//! historial — esto es el MVP feo que muestra que el pipeline cierra.
+//! Características:
+//! - Address bar editable (`text_input_view`) con Enter para navegar.
+//! - F5 recarga.
+//! - Rueda del mouse scrollea el viewport (clip + inset negativo).
+//! - Links `<a href>` clickeables — disparan `Msg::Navigate`.
+//! - Bold simulado: `font_weight >= 600` agranda 10 % el `font_size`
+//!   (Llimphi text aún no expone el eje weight de la fuente).
 
 #![forbid(unsafe_code)]
 
+use std::sync::Arc;
+
 use llimphi_layout::taffy::prelude::{
-    length, percent, AlignItems, FlexDirection, Rect, Size, Style,
+    auto, length, percent, AlignItems, FlexDirection, Position, Rect, Size, Style,
 };
 use llimphi_raster::peniko::Color;
-use llimphi_ui::{App, Handle, KeyEvent, NamedKey, View};
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::Key;
+use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
+use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
 use puriy_engine::{BoxNode, BoxTree, Display, Engine};
+
+const HEADER_H: f32 = 56.0;
+const LINE_PX: f32 = 24.0;
 
 /// Punto de entrada — abre ventana Llimphi cargando `url`.
 pub fn run(url: String) {
@@ -25,7 +35,6 @@ pub fn run(url: String) {
     llimphi_ui::run::<Puriy>();
 }
 
-// La trait `App` no permite parámetros — el url inicial viaja por TLS.
 thread_local! {
     static PURIY_URL: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
@@ -36,6 +45,9 @@ pub struct Model {
     pub url: String,
     pub title: String,
     pub status: String,
+    pub scroll_y: f32,
+    pub addr: TextInputState,
+    pub addr_focused: bool,
     /// Sólo el [`BoxTree`] viaja al UI thread — el `DomTree` (Rc-based)
     /// es `!Send`, así que se queda en el worker y muere ahí.
     pub box_tree: Option<BoxTree>,
@@ -46,6 +58,10 @@ pub enum Msg {
     Reload,
     Loaded { title: String, box_tree: BoxTree },
     LoadFailed(String),
+    Navigate(String),
+    Scroll(f32),
+    FocusAddr,
+    AddrKey(KeyEvent),
 }
 
 impl App for Puriy {
@@ -69,22 +85,48 @@ impl App for Puriy {
             .with(|c| c.borrow().clone())
             .unwrap_or_else(|| "about:blank".to_string());
         spawn_load(url.clone(), handle.clone());
+        let mut addr = TextInputState::new();
+        addr.set_text(url.clone());
         Model {
             url,
             title: String::new(),
             status: "cargando…".into(),
+            scroll_y: 0.0,
+            addr,
+            addr_focused: false,
             box_tree: None,
         }
     }
 
-    fn on_key(_m: &Self::Model, e: &KeyEvent) -> Option<Self::Msg> {
-        if e.state != llimphi_ui::KeyState::Pressed {
+    fn on_key(model: &Self::Model, e: &KeyEvent) -> Option<Self::Msg> {
+        if e.state != KeyState::Pressed {
             return None;
         }
-        if matches!(&e.key, Key::Named(NamedKey::F5)) {
-            return Some(Msg::Reload);
+        // Si la address bar tiene foco, redirige las teclas al input
+        // (excepto F5 que siempre recarga).
+        if model.addr_focused && !matches!(&e.key, Key::Named(NamedKey::F5)) {
+            return Some(Msg::AddrKey(e.clone()));
         }
-        None
+        match &e.key {
+            Key::Named(NamedKey::F5) => Some(Msg::Reload),
+            Key::Named(NamedKey::PageDown) => Some(Msg::Scroll(LINE_PX * 12.0)),
+            Key::Named(NamedKey::PageUp) => Some(Msg::Scroll(-LINE_PX * 12.0)),
+            Key::Named(NamedKey::ArrowDown) => Some(Msg::Scroll(LINE_PX)),
+            Key::Named(NamedKey::ArrowUp) => Some(Msg::Scroll(-LINE_PX)),
+            Key::Named(NamedKey::Home) => Some(Msg::Scroll(-1.0e9)),
+            Key::Named(NamedKey::End) => Some(Msg::Scroll(1.0e9)),
+            _ => None,
+        }
+    }
+
+    fn on_wheel(
+        _model: &Self::Model,
+        delta: WheelDelta,
+        _cursor: (f32, f32),
+        _mods: Modifiers,
+    ) -> Option<Self::Msg> {
+        // WheelDelta.y > 0 = contenido sube (CSS convention).
+        Some(Msg::Scroll(delta.y * LINE_PX * 3.0))
     }
 
     fn update(model: Self::Model, msg: Self::Msg, handle: &Handle<Self::Msg>) -> Self::Model {
@@ -92,6 +134,7 @@ impl App for Puriy {
         match msg {
             Msg::Reload => {
                 m.status = "recargando…".into();
+                m.scroll_y = 0.0;
                 m.box_tree = None;
                 spawn_load(m.url.clone(), handle.clone());
             }
@@ -104,6 +147,34 @@ impl App for Puriy {
             Msg::LoadFailed(err) => {
                 m.status = format!("error: {err}");
                 m.box_tree = None;
+            }
+            Msg::Navigate(target) => {
+                m.url = target.clone();
+                m.addr.set_text(target.clone());
+                m.addr_focused = false;
+                m.status = format!("cargando {target}…");
+                m.scroll_y = 0.0;
+                m.box_tree = None;
+                spawn_load(target, handle.clone());
+            }
+            Msg::Scroll(dy) => {
+                m.scroll_y = (m.scroll_y + dy).max(0.0);
+            }
+            Msg::FocusAddr => {
+                m.addr_focused = true;
+            }
+            Msg::AddrKey(e) => {
+                if matches!(&e.key, Key::Named(NamedKey::Enter)) {
+                    let target = m.addr.text().trim().to_string();
+                    if !target.is_empty() {
+                        return Self::update(m, Msg::Navigate(target), handle);
+                    }
+                } else if matches!(&e.key, Key::Named(NamedKey::Escape)) {
+                    m.addr_focused = false;
+                    m.addr.set_text(m.url.clone());
+                } else {
+                    m.addr.apply_key(&e);
+                }
             }
         }
         m
@@ -133,8 +204,6 @@ fn spawn_load(url: String, handle: Handle<Msg>) {
                 } else {
                     doc.title.clone()
                 };
-                // Sólo el BoxTree cruza al UI thread; el DomTree (Rc) se
-                // dropea junto con `doc` al salir del scope.
                 handle.dispatch(Msg::Loaded { title, box_tree: doc.box_tree });
             }
             Err(e) => handle.dispatch(Msg::LoadFailed(e.to_string())),
@@ -143,40 +212,41 @@ fn spawn_load(url: String, handle: Handle<Msg>) {
 }
 
 fn header_bar(model: &Model) -> View<Msg> {
-    let title_line = if model.title.is_empty() {
-        model.url.clone()
-    } else {
-        format!("{}  ·  {}", model.title, model.url)
-    };
+    let palette = TextInputPalette::default();
+    let addr = text_input_view(&model.addr, "ingresar URL…", model.addr_focused, &palette, Msg::FocusAddr);
+
+    let status_line = format!(
+        "{}    ·    status: {}    ·    [F5 recargar · Enter navegar]",
+        if model.title.is_empty() { model.url.as_str() } else { model.title.as_str() },
+        model.status,
+    );
+
     View::new(Style {
-        size: Size { width: percent(1.0_f32), height: length(48.0_f32) },
+        size: Size { width: percent(1.0_f32), height: length(HEADER_H) },
         padding: Rect {
-            left: length(16.0_f32),
-            right: length(16.0_f32),
-            top: length(8.0_f32),
-            bottom: length(8.0_f32),
+            left: length(12.0_f32),
+            right: length(12.0_f32),
+            top: length(6.0_f32),
+            bottom: length(6.0_f32),
         },
-        align_items: Some(AlignItems::Center),
         flex_direction: FlexDirection::Column,
         ..Default::default()
     })
     .fill(Color::from_rgb8(28, 28, 36))
     .children(vec![
-        View::new(Style {
-            size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
-            ..Default::default()
-        })
-        .text_aligned(title_line, 13.0, Color::from_rgb8(220, 220, 230), Alignment::Start),
+        addr,
         View::new(Style {
             size: Size { width: percent(1.0_f32), height: length(14.0_f32) },
+            margin: Rect {
+                left: length(0.0_f32),
+                right: length(0.0_f32),
+                top: length(2.0_f32),
+                bottom: length(0.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
             ..Default::default()
         })
-        .text_aligned(
-            format!("status: {}    [F5 recargar]", model.status),
-            11.0,
-            Color::from_rgb8(150, 150, 165),
-            Alignment::Start,
-        ),
+        .text_aligned(status_line, 10.0, Color::from_rgb8(150, 150, 165), Alignment::Start),
     ])
 }
 
@@ -196,19 +266,27 @@ fn viewport(model: &Model) -> View<Msg> {
         .text_aligned("(sin documento)", 14.0, Color::from_rgb8(120, 120, 120), Alignment::Start);
     };
 
-    View::new(Style {
-        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
-        flex_direction: FlexDirection::Column,
-        padding: Rect {
+    // Contenido absoluto desplazado verticalmente; el outer recorta.
+    let content = View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
             left: length(24.0_f32),
             right: length(24.0_f32),
-            top: length(16.0_f32),
-            bottom: length(16.0_f32),
+            top: length(16.0_f32 - model.scroll_y),
+            bottom: auto(),
         },
+        flex_direction: FlexDirection::Column,
+        ..Default::default()
+    })
+    .children(vec![render_box(&tree.root)]);
+
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
     .fill(Color::WHITE)
-    .children(vec![render_box(&tree.root)])
+    .clip(true)
+    .children(vec![content])
 }
 
 fn render_box(b: &BoxNode) -> View<Msg> {
@@ -219,31 +297,63 @@ fn render_box(b: &BoxNode) -> View<Msg> {
         view = view.fill(Color::from_rgb8(bg.r, bg.g, bg.b));
     }
 
+    // Color azul + click handler para links (sólo si tienen href).
+    let link_color = Color::from_rgb8(30, 90, 200);
+    let display_color = if b.link.is_some() {
+        link_color
+    } else {
+        Color::from_rgb8(b.color.r, b.color.g, b.color.b)
+    };
+
+    if let Some(target) = &b.link {
+        view = view.on_click(Msg::Navigate(target.clone()));
+    }
+
     // Hojas de texto: el nodo no tiene children, pinta el texto.
     if let Some(text) = &b.text {
-        let color = Color::from_rgb8(b.color.r, b.color.g, b.color.b);
-        return view.text_aligned(text.clone(), b.font_size, color, Alignment::Start);
+        let size = if b.font_weight >= 600 { b.font_size * 1.1 } else { b.font_size };
+        return view.text_aligned(text.clone(), size, display_color, Alignment::Start);
     }
 
     if !b.children.is_empty() {
-        view = view.children(b.children.iter().map(render_box).collect());
+        // Si el container es un link, propagamos el Navigate también
+        // a los hijos via wrap (Llimphi sólo emite on_click sobre el
+        // nodo cliqueado, y los hijos lo "ocultan"); recolorear el
+        // texto interno se hace abajo con render_link_subtree.
+        let kids: Vec<View<Msg>> = if let Some(target) = &b.link {
+            b.children.iter().map(|c| render_link_subtree(c, target, link_color)).collect()
+        } else {
+            b.children.iter().map(render_box).collect()
+        };
+        view = view.children(kids);
+    }
+    view
+}
+
+fn render_link_subtree(b: &BoxNode, target: &str, color: Color) -> View<Msg> {
+    let mut view = View::new(box_style(b)).on_click(Msg::Navigate(target.to_string()));
+    if let Some(bg) = b.background {
+        view = view.fill(Color::from_rgb8(bg.r, bg.g, bg.b));
+    }
+    if let Some(text) = &b.text {
+        let size = if b.font_weight >= 600 { b.font_size * 1.1 } else { b.font_size };
+        return view.text_aligned(text.clone(), size, color, Alignment::Start);
+    }
+    if !b.children.is_empty() {
+        view = view.children(
+            b.children
+                .iter()
+                .map(|c| render_link_subtree(c, target, color))
+                .collect(),
+        );
     }
     view
 }
 
 fn box_style(b: &BoxNode) -> Style {
     let (flex_direction, width, height) = match b.display {
-        Display::Block => (
-            FlexDirection::Column,
-            percent(1.0_f32),
-            llimphi_layout::taffy::prelude::auto(),
-        ),
-        Display::InlineBlock | Display::Inline => (
-            FlexDirection::Row,
-            llimphi_layout::taffy::prelude::auto(),
-            // ~ 1 línea por defecto cuando hay texto; layout taffy mide.
-            llimphi_layout::taffy::prelude::auto(),
-        ),
+        Display::Block => (FlexDirection::Column, percent(1.0_f32), auto()),
+        Display::InlineBlock | Display::Inline => (FlexDirection::Row, auto(), auto()),
         Display::None => (FlexDirection::Column, length(0.0_f32), length(0.0_f32)),
     };
 
@@ -252,7 +362,7 @@ fn box_style(b: &BoxNode) -> Style {
         size: Size { width, height },
         margin: Rect {
             left: length(b.margin),
-            right: length(b.margin),
+            right: length(b.margin * 0.25),
             top: length(b.margin * 0.25),
             bottom: length(b.margin * 0.25),
         },
@@ -264,4 +374,10 @@ fn box_style(b: &BoxNode) -> Style {
         },
         ..Default::default()
     }
+}
+
+// `Arc` queda traído por si futuras versiones envuelven handlers async.
+#[doc(hidden)]
+pub fn _arc_anchor<T>(v: Arc<T>) -> Arc<T> {
+    v
 }

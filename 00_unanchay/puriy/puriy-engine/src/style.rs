@@ -26,6 +26,7 @@ pub struct ComputedStyle {
     pub color: Color,
     pub background: Option<Color>,
     pub font_size: f32,
+    pub font_weight: u16,
     pub margin: f32,
     pub padding: f32,
 }
@@ -37,6 +38,7 @@ impl Default for ComputedStyle {
             color: Color::BLACK,
             background: None,
             font_size: 16.0,
+            font_weight: 400,
             margin: 0.0,
             padding: 0.0,
         }
@@ -70,6 +72,10 @@ impl StyleEngine {
         };
         // Defaults por tag — `div`/`p`/`h1` son block.
         style.display = default_display(&local);
+
+        // Defaults por tag para weight (h1..h6 y b/strong = bold) antes
+        // de la cascada — cualquier regla de autor las puede override.
+        style.font_weight = default_weight(&local);
 
         for rule in &self.rules {
             if rule.matches(&local) {
@@ -113,6 +119,7 @@ enum Decl {
     Background(Color),
     Display(Display),
     FontSize(f32),
+    FontWeight(u16),
     Margin(f32),
     Padding(f32),
 }
@@ -124,6 +131,7 @@ impl Decl {
             Decl::Background(c) => s.background = Some(*c),
             Decl::Display(d) => s.display = *d,
             Decl::FontSize(v) => s.font_size = *v,
+            Decl::FontWeight(w) => s.font_weight = *w,
             Decl::Margin(v) => s.margin = *v,
             Decl::Padding(v) => s.padding = *v,
         }
@@ -134,9 +142,16 @@ fn default_display(tag: &str) -> Display {
     match tag {
         "html" | "body" | "div" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "ul" | "ol"
         | "li" | "header" | "footer" | "section" | "article" | "nav" | "main" | "aside"
-        | "form" => Display::Block,
+        | "form" | "pre" | "blockquote" | "hr" => Display::Block,
         "head" | "title" | "style" | "script" | "meta" | "link" => Display::None,
         _ => Display::Inline,
+    }
+}
+
+fn default_weight(tag: &str) -> u16 {
+    match tag {
+        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "b" | "strong" | "th" => 700,
+        _ => 400,
     }
 }
 
@@ -244,6 +259,7 @@ fn decl_from_pair(prop: &str, value: &str) -> Option<Decl> {
         "background-color" | "background" => parse_color(value).map(Decl::Background),
         "display" => parse_display(value).map(Decl::Display),
         "font-size" => parse_length_px(value).map(Decl::FontSize),
+        "font-weight" => parse_weight(value).map(Decl::FontWeight),
         "margin" => parse_length_px(value).map(Decl::Margin),
         "padding" => parse_length_px(value).map(Decl::Padding),
         _ => None,
@@ -281,6 +297,16 @@ const NAMED_COLORS: &[(&str, Color)] = &[
     ("silver", Color::rgb_const(192, 192, 192)),
     ("transparent", Color::TRANSPARENT),
 ];
+
+fn parse_weight(s: &str) -> Option<u16> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "normal" => Some(400),
+        "bold" => Some(700),
+        "lighter" => Some(300),
+        "bolder" => Some(700),
+        num => num.parse().ok(),
+    }
+}
 
 fn parse_display(s: &str) -> Option<Display> {
     match s.trim().to_ascii_lowercase().as_str() {
