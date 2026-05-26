@@ -27,6 +27,7 @@ pluma-align-embeddings = { path = "../pluma-align-embeddings" }
 pluma-llm = { path = "../pluma-llm" }
 pluma-llm-core = { path = "../pluma-llm-core" }
 pluma-llm-mock = { path = "../pluma-llm-mock" }
+pluma-store = { path = "../pluma-store" }
 rimay-verbo-core = { path = "../../rimay/rimay-verbo-core" }
 rimay-verbo-mock = { path = "../../rimay/rimay-verbo-mock" }
 rimay-verbo-daemon = { path = "../../rimay/rimay-verbo-daemon" }
