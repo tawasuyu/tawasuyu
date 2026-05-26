@@ -131,7 +131,28 @@ GEMINI_API_KEY=... PLUMA_LLM_BACKEND=gemini \
   --example multilienzo_dinamico_demo --release
 ```
 
-### 2.4 Persistente — sobrevive entre corridas
+### 2.4 Completo — toolbar dinámica CON persistencia
+
+El más cercano a "app real": botones LLM como en 2.3, pero CADA
+transformación se persiste en `~/.cache/gioser/pluma-multilienzo-completo/`
+antes de mostrarse. Cierra el demo, volvé a abrirlo: cuerpos y hebras
+siguen ahí + podés seguir generando.
+
+```bash
+GEMINI_API_KEY=... PLUMA_LLM_BACKEND=gemini \
+  cargo run -p pluma-editor-llimphi \
+  --example multilienzo_completo_demo --release
+
+# Reset:
+MULTILIENZO_COMPLETO_RESET=1 cargo run -p pluma-editor-llimphi \
+  --example multilienzo_completo_demo --release
+```
+
+Tras unas cuantas corridas tendrás un haz crecido: una madre `es` con
+varias derivadas (`qu`, `en`, formal, resumen). El editor las muestra
+todas alineadas por hebras Derivadas 1↔1.
+
+### 2.5 Persistente — sobrevive entre corridas
 
 Primera vez: genera y guarda en `~/.cache/gioser/pluma-multilienzo/`.
 Siguientes: lee y muestra instantáneo, sin red.
@@ -209,7 +230,40 @@ let carta = alinear_por_embeddings(&qu, &en, &idx, &daemon, &params, ahora).awai
 Cualquier consumidor de `&dyn Provider` (pluma-semantic, chasqui-core,
 khipu) habla igual.
 
-## 5. Notebook + LLM
+## 5. Notebook + LLM — demo CLI ejecutable
+
+`notebook_llm_demo` arma un notebook con cuatro celdas (markdown fuente
++ traducir-qu + tono-formal + resumir-20), corre `run_all` con el
+`LlmKernel`, e imprime los outputs por consola. No usa ventana — útil
+para verificar que el flujo entero funciona en un servidor sin GUI.
+
+```bash
+# Sin keys (mock que diferencia acciones por system):
+cargo run -p pluma-notebook-kernel-llm --example notebook_llm_demo --release
+
+# Con Gemini:
+GEMINI_API_KEY=... PLUMA_LLM_BACKEND=gemini \
+  cargo run -p pluma-notebook-kernel-llm --example notebook_llm_demo --release
+
+# Con Ollama:
+PLUMA_LLM_BACKEND=ollama PLUMA_LLM_MODEL=llama3.1 \
+  cargo run -p pluma-notebook-kernel-llm --example notebook_llm_demo --release
+```
+
+Salida esperada (modo mock):
+
+```
+notebook_llm_demo :: LLM = mock-nb
+=== ejecución ===
+ejecutadas: 4   fallidas: 0   skipped: 0
+=== outputs ===
+[1/markdown] sin output
+[2/llm-traducir-qu]     Kuntur wayqu hanaqpachatakta…
+[3/llm-tono-formal]     El cóndor surcó con majestuosidad…
+[4/llm-resumir-20]      Amanecer andino: cóndor, llamas, tejedora.
+```
+
+## 5.bis Notebook + LLM — uso programático
 
 ```rust
 use pluma_llm::{build_client, BackendKind, LlmConfig};
