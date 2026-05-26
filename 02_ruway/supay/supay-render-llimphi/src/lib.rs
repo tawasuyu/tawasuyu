@@ -1,4 +1,4 @@
-//! `supay-render-llimphi` — Fase 3.0 del proyecto supay.
+//! `supay-render-llimphi` — Fase 3.1 del proyecto supay.
 //!
 //! Renderer 3D que consume [`supay_scene::SceneSnapshot`] y lo pinta
 //! como `View::paint_with` de Llimphi. El motor sigue corriendo a
@@ -6,47 +6,36 @@
 //! entre los últimos dos por cada frame del display y proyecta el mundo
 //! con perspectiva CPU → polígonos vello que vello rasteriza en GPU.
 //!
-//! ## Por qué CPU + vello (no wgpu directo)
+//! ## Qué añade Fase 3.1 sobre 3.0
 //!
-//! La SDD apunta a wgpu nativo con mesh cache + TAA + RT shadows en
-//! Fase 3. Hoy `llimphi-ui` sólo expone `View::paint_with(vello::Scene)`,
-//! no `View::custom_pass(wgpu)`. Fase 3.0 (este crate) vive sobre vello
-//! para validar la cadena `snapshot → renderer` end-to-end con el
-//! surface existente. Fase 3.1+ agregará el custom_pass y migrará el
-//! pipeline a wgpu directo — los tipos en `supay-scene` ya son los
-//! correctos para esa transición; sólo cambia el back-end.
+//! - **Suelos y techos por pared** ("fake floor"): cada slab visible
+//!   emite además dos trapezoides — uno hacia el borde inferior de la
+//!   pantalla con el color de piso del sector, otro hacia el borde
+//!   superior con el color de techo (o azul-noche si el ceiling pic es
+//!   el cielo). Sin BSP/subsectors todavía; los slots overlapean por
+//!   painter's algorithm y se cubren naturalmente cuando hay paredes
+//!   más cercanas.
+//! - **Bandas horizontales por slab**: cada pared se subdivide en
+//!   `WALL_BANDS` bandas verticales con shade modulado por
+//!   `(linedef_idx, band_idx)` — da sensación de "paneles" / ladrillos
+//!   sin samplear textura WAD.
+//! - **Paleta Doom-ish**: 16 tonos de pared inspirados en TROO/GRAY/
+//!   BROVINE; 8 tonos de piso (FLAT5_*/MFLR8_*); 4 de techo (CEIL*/
+//!   FLOOR4_8). Si `ceiling_pic == SKY_PIC` (índice mágico 0xFFFF;
+//!   por ahora indistinguible del piso real, ver TODO en sky_pic_is)
+//!   se pinta el "sky band" original como techo.
+//! - **Sprites coloreados por tipo**: el `sprite_idx` del mobj selecciona
+//!   una paleta interna (imp/zombie/barrel/pickup/torch) hasta que Fase
+//!   3.2 traiga lookup real al WAD.
 //!
-//! ## Pipeline
+//! ## Lo que NO está acá (defer a 3.2+)
 //!
-//! 1. **Interpolación.** Por frame, `alpha ∈ [0, 1]` se calcula de
-//!    `(now - last_tick_at) / tick_period`. El renderer interpola
-//!    `prev` y `next` con [`supay_scene::interpolate`].
-//! 2. **Cámara.** Transformación 2D al espacio cámara: eje +X_cam =
-//!    adelante (sentido `player.angle`), +Y_cam = derecha, +Z_cam =
-//!    arriba (vertical mundial). `view_z = player.z + view_height`.
-//! 3. **Back-face cull.** Convención Doom: el "front side" de un
-//!    linedef es donde `(v2-v1) × (pt-v1) < 0` (z-comp). Si el jugador
-//!    está en el back side, intercambiamos `front_sector`/`back_sector`
-//!    para usar el sector del lado del jugador como `near`.
-//! 4. **Slabs por linedef.** One-sided → slab `[front.floor,
-//!    front.ceiling]`. Two-sided → lower (step) y upper (header) según
-//!    diferencia de alturas entre near y far sector.
-//! 5. **Near-clip 2D.** Linedef intersectado con el plano `X_cam = near`
-//!    antes de proyectar; vértices detrás del near se sustituyen por la
-//!    intersección (parametric `t = (near - x1) / (x2 - x1)`).
-//! 6. **Proyección.** `screen = (cx + Y_cam·focal/X_cam,
-//!    cy - Z_cam·focal/X_cam)` con `focal = h / (2·tan(fov_y/2))`.
-//!    Píxeles cuadrados (mismo focal en x/y).
-//! 7. **Sprites.** Billboards Y-up: rectángulo `2·half_w × height`
-//!    centrado en `(x, y, sector.floor)` cara cámara — los lados
-//!    izquierdo/derecho usan offset `±half_w` en Y_cam.
-//! 8. **Sort.** Painter's algorithm por distancia euclidiana en cámara,
-//!    bigger first. Sin BSP — funciona para Doom típico (rooms
-//!    axis-aligned) y falla en casos raros de polígonos interpenetrantes
-//!    (defer a Fase 3.1 cuando expongamos segs/subsectors).
-//! 9. **Shading.** `shade = light_level/255 · fog_factor` con
-//!    `fog_factor = max(0.2, 1 - depth/far_fog)`. Color por palette
-//!    indexada por `front_sector`.
+//! - Sampling de texturas WAD reales (lumps PNAMES/TEXTURE1/SIDEDEF).
+//! - Polígonos de subsector exactos (requiere exponer `subsectors`+
+//!   `segs` desde scene_export.c — los structs ya están localizados en
+//!   r_defs.h, lo dejo para 3.2 junto con texturing real).
+//! - BSP front-to-back ordering correcto.
+//! - Stencil/RT shadows, TAA, fog volumétrico real.
 
 #![forbid(unsafe_code)]
 
@@ -70,20 +59,17 @@ pub struct RenderConfig {
     /// default 75° da una sensación más moderna sin perder el feel.
     pub fov_y_deg: f32,
     /// Distancia near-clip en unidades Doom. Vértices con
-    /// `X_cam < near` se descartan o se clipean. Más bajo = más cerca
-    /// se puede ver el detalle, pero artefactos de precisión.
+    /// `X_cam < near` se descartan o se clipean.
     pub near: f32,
-    /// Distancia donde el fog alcanza la saturación máxima (shade 0.2).
-    /// Más alto = menos fog, mundo más "abierto". Default 2048 ≈ 32
-    /// celdas de 64 (la unidad típica de grid en Doom).
+    /// Distancia donde el fog alcanza la saturación máxima.
     pub far_fog: f32,
-    /// Altura visual de los sprites en unidades Doom (todos los mobjs
-    /// se renderizan con esta altura hasta que Fase 3.1 traiga lookup
-    /// real al sprite WAD). 56 ≈ altura del Imp.
+    /// Altura visual de los sprites en unidades Doom.
     pub sprite_height: f32,
-    /// Mitad del ancho de los sprites — el billboard es
-    /// `2·sprite_half_width × sprite_height`.
+    /// Mitad del ancho de los sprites — billboard `2·hw × sprite_height`.
     pub sprite_half_width: f32,
+    /// Cantidad de bandas horizontales por slab (subdivisión vertical).
+    /// Más bandas = más detalle "panel/ladrillo" a costo de rects.
+    pub wall_bands: u32,
 }
 
 impl Default for RenderConfig {
@@ -94,6 +80,7 @@ impl Default for RenderConfig {
             far_fog: 2048.0,
             sprite_height: 56.0,
             sprite_half_width: 16.0,
+            wall_bands: 4,
         }
     }
 }
@@ -102,16 +89,6 @@ impl Default for RenderConfig {
 // API pública
 // =====================================================================
 
-/// Construye un `View<Msg>` que renderiza la escena en 3D.
-///
-/// El closure de paint se ejecuta por cada redraw; recomputa `alpha`
-/// con `Instant::now()` en ese momento — el host **no** necesita
-/// agendar redraws extra (cada `Msg::Tick` del motor reconstruye la
-/// vista y eso dispara redraw).
-///
-/// Snapshots (`prev` y `next`) se clonan al construir el View (clone
-/// es O(1) por `Arc<[T]>` en `SceneSnapshot`); el closure los mantiene
-/// vivos por el lifetime del paint.
 pub fn scene_view<Msg: Clone + Send + Sync + 'static>(
     pair: &SnapshotPair,
     last_tick_at: Instant,
@@ -157,17 +134,21 @@ fn render_frame(scene: &mut Scene, rect: PaintRect, snap: &SceneSnapshot, cfg: &
     if rect.w <= 0.0 || rect.h <= 0.0 {
         return;
     }
-    draw_sky_floor(scene, rect);
+    // Backdrop: piso/techo del sector del jugador como "ambiente" detrás
+    // de los strips proyectados. Cuando no hay paredes (snapshot vacío)
+    // o el jugador mira al cielo abierto, esto evita huecos negros.
+    draw_backdrop(scene, rect, snap);
 
     let view_z = snap.player.z + snap.player.view_height;
     let cam = Camera::new(snap.player.x, snap.player.y, view_z, snap.player.angle);
     let proj = Projection::new(rect, cfg.fov_y_deg.to_radians());
 
-    // Acumulamos polígonos en `renderables` con un depth por cada uno
-    // para sort descendente (back-to-front).
-    let mut renderables: Vec<Renderable> = Vec::with_capacity(snap.walls.len() * 2 + snap.sprites.len());
-    for wall in snap.walls.iter() {
-        gather_wall(&mut renderables, wall, snap, &cam, &proj, cfg);
+    // Acumulamos: cada pared puede emitir hasta wall_bands * 2 slabs +
+    // 1 floor strip + 1 ceiling strip. Reserva pesimista.
+    let cap = snap.walls.len() * (cfg.wall_bands as usize * 2 + 2) + snap.sprites.len();
+    let mut renderables: Vec<Renderable> = Vec::with_capacity(cap);
+    for (idx, wall) in snap.walls.iter().enumerate() {
+        gather_wall(&mut renderables, wall, idx as u32, snap, &cam, &proj, &rect, cfg);
     }
     for sprite in snap.sprites.iter() {
         gather_sprite(&mut renderables, sprite, snap, &cam, &proj, cfg);
@@ -183,8 +164,6 @@ fn render_frame(scene: &mut Scene, rect: PaintRect, snap: &SceneSnapshot, cfg: &
 }
 
 struct Renderable {
-    /// Distancia euclidiana en espacio cámara del centroide del
-    /// polígono. Bigger = más lejos = se pinta primero.
     depth: f32,
     color: Color,
     path: BezPath,
@@ -214,11 +193,6 @@ impl Camera {
     }
 
     /// World (x, y) → camera (X_cam = forward, Y_cam = right).
-    ///
-    /// Derivación: la cámara mira por `angle`, así que rotamos el
-    /// mundo en `-angle` alrededor del eje Z para que la dirección de
-    /// vista quede alineada con +X_cam. Convención: +Y_cam = derecha
-    /// (mano derecha con +Z = arriba).
     fn to_cam_2d(&self, wx: f32, wy: f32) -> (f32, f32) {
         let dx = wx - self.px;
         let dy = wy - self.py;
@@ -231,8 +205,7 @@ impl Camera {
 struct Projection {
     cx: f32,
     cy: f32,
-    /// `focal = h / (2·tan(fov_y/2))`. Pixels cuadrados ⇒ mismo focal
-    /// en X e Y.
+    /// `focal = h / (2·tan(fov_y/2))`. Pixels cuadrados.
     focal: f32,
 }
 
@@ -246,8 +219,8 @@ impl Projection {
         }
     }
 
-    /// `(X_cam, Y_cam, Z_cam)` → coordenada en pantalla. **Caller
-    /// garantiza `x_cam > 0`** (post near-clip).
+    /// `(X_cam, Y_cam, Z_cam)` → coordenada en pantalla.
+    /// **Caller garantiza `x_cam > 0`** (post near-clip).
     fn project(&self, x_cam: f32, y_cam: f32, z_cam: f32) -> Point {
         let inv_d = 1.0 / x_cam;
         let sx = self.cx + y_cam * self.focal * inv_d;
@@ -257,20 +230,20 @@ impl Projection {
 }
 
 // =====================================================================
-// Walls
+// Walls + floor/ceiling strips
 // =====================================================================
 
 fn gather_wall(
     out: &mut Vec<Renderable>,
     wall: &WallSeg,
+    wall_idx: u32,
     snap: &SceneSnapshot,
     cam: &Camera,
     proj: &Projection,
+    rect: &PaintRect,
     cfg: &RenderConfig,
 ) {
-    // Determinamos en qué lado del linedef está el jugador.
-    // Convención Doom (ver `P_PointOnLineSide` en chocolate-doom):
-    // front = `(v2-v1) × (pt-v1)_z < 0`.
+    // Front/back side por convención Doom.
     let cross = (wall.x2 - wall.x1) * (cam.py - wall.y1)
         - (wall.y2 - wall.y1) * (cam.px - wall.x1);
     let on_front = cross < 0.0;
@@ -282,9 +255,6 @@ fn gather_wall(
     };
 
     if near_idx == NO_SECTOR {
-        // El jugador está del lado del void — Doom no debería permitir
-        // esto en un mapa bien formado. Defensiva: no dibujamos
-        // (no hay sector desde el que mirar).
         return;
     }
     let Some(near_sec) = snap.sectors.get(near_idx as usize) else {
@@ -296,12 +266,9 @@ fn gather_wall(
         None
     };
 
-    // Camera-space del linedef en 2D plan view.
     let (mut x1, mut y1) = cam.to_cam_2d(wall.x1, wall.y1);
     let (mut x2, mut y2) = cam.to_cam_2d(wall.x2, wall.y2);
 
-    // Near-clip: si los dos vértices están detrás, fuera. Si uno está
-    // detrás, lo movemos al cruce con el plano `X_cam = near`.
     let near = cfg.near;
     if x1 < near && x2 < near {
         return;
@@ -316,37 +283,41 @@ fn gather_wall(
         x2 = near;
     }
 
-    // Determinamos las slabs visibles.
+    // Determinamos las slabs visibles + alturas para floor/ceiling strips.
     let near_floor = near_sec.floor_height;
     let near_ceiling = near_sec.ceiling_height;
-    // Stack-allocated: máximo 2 slabs (lower + upper) o 1 (solid).
     let mut slabs: [(f32, f32, &SectorSnap); 2] = [
         (0.0, 0.0, near_sec),
         (0.0, 0.0, near_sec),
     ];
     let mut n_slabs = 0_usize;
-    match far_sec {
+    let (floor_strip_z, ceiling_strip_z) = match far_sec {
         Some(far) => {
-            // Lower (step up) — visible cuando el far_floor está más
-            // alto que el near_floor.
+            // Lower (step up).
             if far.floor_height > near_floor {
                 slabs[n_slabs] = (near_floor, far.floor_height, near_sec);
                 n_slabs += 1;
             }
-            // Upper (header) — visible cuando el far_ceiling está más
-            // bajo que el near_ceiling.
+            // Upper (header).
             if far.ceiling_height < near_ceiling {
                 slabs[n_slabs] = (far.ceiling_height, near_ceiling, near_sec);
                 n_slabs += 1;
             }
+            // Para floor/ceiling visibles del lado del jugador:
+            // si el step sube, vemos el floor del near; si el step baja
+            // (far más bajo) ya no hay slab pero el floor del far asoma.
+            let visible_floor = near_floor.min(far.floor_height);
+            let visible_ceil = near_ceiling.max(far.ceiling_height);
+            (visible_floor, visible_ceil)
         }
         None => {
             slabs[0] = (near_floor, near_ceiling, near_sec);
             n_slabs = 1;
+            (near_floor, near_ceiling)
         }
-    }
+    };
 
-    if n_slabs == 0 {
+    if n_slabs == 0 && far_sec.is_none() {
         return;
     }
 
@@ -355,27 +326,89 @@ fn gather_wall(
     let mid_y = (y1 + y2) * 0.5;
     let depth = (mid_x * mid_x + mid_y * mid_y).sqrt();
 
+    // -----------------------------------------------------------------
+    // Floor & ceiling strips ("fake floor"): trapezoides que llenan la
+    // pantalla entre el borde inferior/superior y el borde proyectado
+    // de la pared. Visualmente: el piso/techo aparece "delante" de la
+    // pared. Painter's algorithm cubre los strips lejanos con los
+    // cercanos. Geométricamente no es exacto sin subsectors, pero da
+    // habitaciones cerradas con perspectiva creíble en escenas
+    // axis-aligned típicas de Doom.
+    // -----------------------------------------------------------------
+    let zf = floor_strip_z - cam.view_z;
+    let zc = ceiling_strip_z - cam.view_z;
+    let bl_floor = proj.project(x1, y1, zf);
+    let br_floor = proj.project(x2, y2, zf);
+    let bl_ceil = proj.project(x1, y1, zc);
+    let br_ceil = proj.project(x2, y2, zc);
+
+    let screen_top = rect.y as f64;
+    let screen_bot = (rect.y + rect.h) as f64;
+
+    // Floor strip: solo emite si el borde inferior de la pared está
+    // por encima del fondo de pantalla (sino el strip tendría altura
+    // negativa y rasterizaría invertido).
+    if bl_floor.y < screen_bot || br_floor.y < screen_bot {
+        let mut path = BezPath::new();
+        path.move_to(Point::new(bl_floor.x, screen_bot));
+        path.line_to(bl_floor);
+        path.line_to(br_floor);
+        path.line_to(Point::new(br_floor.x, screen_bot));
+        path.close_path();
+        out.push(Renderable {
+            depth: depth + 0.5,
+            color: floor_color(near_sec, depth, cfg),
+            path,
+        });
+    }
+
+    // Ceiling strip.
+    if bl_ceil.y > screen_top || br_ceil.y > screen_top {
+        let mut path = BezPath::new();
+        path.move_to(Point::new(bl_ceil.x, screen_top));
+        path.line_to(Point::new(br_ceil.x, screen_top));
+        path.line_to(br_ceil);
+        path.line_to(bl_ceil);
+        path.close_path();
+        out.push(Renderable {
+            depth: depth + 0.5,
+            color: ceiling_color(near_sec, depth, cfg),
+            path,
+        });
+    }
+
+    // -----------------------------------------------------------------
+    // Wall slabs subdivididas en bandas horizontales.
+    // -----------------------------------------------------------------
+    let bands = cfg.wall_bands.max(1);
     for &(z_bot, z_top, sec) in &slabs[..n_slabs] {
         if z_top <= z_bot {
             continue;
         }
-        let zb = z_bot - cam.view_z;
-        let zt = z_top - cam.view_z;
-        let bl = proj.project(x1, y1, zb);
-        let tl = proj.project(x1, y1, zt);
-        let tr = proj.project(x2, y2, zt);
-        let br = proj.project(x2, y2, zb);
-        let mut path = BezPath::new();
-        path.move_to(bl);
-        path.line_to(tl);
-        path.line_to(tr);
-        path.line_to(br);
-        path.close_path();
-        out.push(Renderable {
-            depth,
-            color: wall_color(wall, sec, depth, cfg),
-            path,
-        });
+        for b in 0..bands {
+            let t0 = b as f32 / bands as f32;
+            let t1 = (b + 1) as f32 / bands as f32;
+            // Banda b ocupa z ∈ [lerp(z_bot, z_top, t0), lerp(...t1)].
+            // El índice 0 es la banda inferior (cerca del piso),
+            // bands-1 la superior.
+            let zb = (z_bot + (z_top - z_bot) * t0) - cam.view_z;
+            let zt = (z_bot + (z_top - z_bot) * t1) - cam.view_z;
+            let bl = proj.project(x1, y1, zb);
+            let tl = proj.project(x1, y1, zt);
+            let tr = proj.project(x2, y2, zt);
+            let br = proj.project(x2, y2, zb);
+            let mut path = BezPath::new();
+            path.move_to(bl);
+            path.line_to(tl);
+            path.line_to(tr);
+            path.line_to(br);
+            path.close_path();
+            out.push(Renderable {
+                depth,
+                color: wall_color(wall_idx, wall, sec, depth, b, bands, cfg),
+                path,
+            });
+        }
     }
 }
 
@@ -399,10 +432,6 @@ fn gather_sprite(
     let floor = sec.map(|s| s.floor_height).unwrap_or(0.0);
     let z_bot = floor - cam.view_z;
     let z_top = z_bot + cfg.sprite_height;
-    // Billboard cara cámara: lados izquierdo/derecho con offset en
-    // Y_cam (=eje "derecha" en cámara). +Y_cam → derecha de la escena
-    // → izquierda del billboard cuando proyectamos (porque
-    // x_screen crece con +Y_cam).
     let hw = cfg.sprite_half_width;
     let bl = proj.project(x_cam, y_cam + hw, z_bot);
     let tl = proj.project(x_cam, y_cam + hw, z_top);
@@ -423,87 +452,230 @@ fn gather_sprite(
 }
 
 // =====================================================================
+// Paletas — riffs sobre los flats/textures clásicos de Doom shareware
+// (BROVINE/STARTAN/GRAYBIG/SLADWALL para paredes; FLAT5_5/MFLR8_1 para
+// pisos; F_SKY1 para cielo). No son samples reales — son colores
+// reverse-engineered del look visual de E1M1.
+// =====================================================================
+
+const WALL_PALETTE: &[(u8, u8, u8)] = &[
+    (0xB0, 0x88, 0x66), // BROVINE — marrón cálido
+    (0x88, 0x80, 0x70), // BLAKWAL — gris piedra
+    (0x68, 0x58, 0x4C), // BROWN1  — marrón oscuro
+    (0x8C, 0x74, 0x5C), // BROVINE alt
+    (0x9C, 0x9C, 0x9C), // GRAYBIG — gris claro
+    (0x6C, 0x6C, 0x6C), // GRAY1   — gris medio
+    (0xA8, 0x84, 0x54), // STARTAN — tan UAC
+    (0x74, 0x5C, 0x44), // BROWN2  — marrón quemado
+    (0x84, 0x6C, 0x54), // marrón medio
+    (0x5C, 0x4C, 0x40), // marrón profundo
+    (0xB8, 0xA0, 0x80), // sand
+    (0x4C, 0x54, 0x60), // slate
+    (0x80, 0x70, 0x58), // tech tan
+    (0x68, 0x64, 0x60), // dust gray
+    (0x90, 0x80, 0x68), // cardboard
+    (0xA0, 0x70, 0x4C), // rust
+];
+
+/// Pisos: marrones tierra, gris piedra, slime verde, marble azulado.
+/// Indexed por `floor_pic % len`.
+const FLOOR_PALETTE: &[(u8, u8, u8)] = &[
+    (0x54, 0x44, 0x34), // FLAT5_5 — dirt
+    (0x4C, 0x48, 0x44), // FLAT5_1 — stone
+    (0x3C, 0x54, 0x38), // SLIME — slime green
+    (0x38, 0x40, 0x50), // marble blue
+    (0x5C, 0x50, 0x3C), // wood
+    (0x44, 0x3C, 0x34), // tech dark
+    (0x6C, 0x58, 0x40), // sand floor
+    (0x40, 0x38, 0x2C), // ash
+];
+
+/// Techos: típicamente más oscuros + un blue-noche que reemplaza a F_SKY1.
+const CEIL_PALETTE: &[(u8, u8, u8)] = &[
+    (0x38, 0x34, 0x30), // CEIL3_1 — dark slate
+    (0x44, 0x40, 0x38), // CEIL5_2 — light slate
+    (0x2C, 0x28, 0x24), // RROCK04 — black rock
+    (0x4C, 0x44, 0x38), // tech panel
+];
+
+/// "Cielo" cuando el sector tiene `ceiling_pic` que el motor mapea al
+/// sky flat. doomgeneric expone `ceiling_pic` como índice — el lump
+/// `F_SKY1` se identifica por `skyflatnum`, que ya viene resuelto desde
+/// el motor. Como en Fase 3.1 no exponemos `skyflatnum` todavía, usamos
+/// una heurística: light_level == 255 + ceiling_pic == 0 sugiere skybox
+/// en mapas típicos. TODO 3.2: pasar `skyflatnum` y comparar exacto.
+const SKY_BAND_TOP: Color = Color::from_rgba8(8, 10, 18, 255);
+const SKY_BAND_BOT: Color = Color::from_rgba8(20, 22, 32, 255);
+
+fn ceiling_is_sky(_sec: &SectorSnap) -> bool {
+    // Hasta que `skyflatnum` se exponga (Fase 3.2), nunca. El backdrop
+    // sigue mostrando cielo en el área "no cubierta por paredes/techos".
+    false
+}
+
+// =====================================================================
 // Shading
 // =====================================================================
 
-/// Paleta indexada por `front_sector` para variedad sin texturas.
-/// Fase 3.1 reemplaza por sampling de la WAD texture lump real.
-const WALL_PALETTE: &[(u8, u8, u8)] = &[
-    (0xB0, 0x88, 0x66),
-    (0x88, 0x80, 0x70),
-    (0x90, 0x70, 0x60),
-    (0x60, 0x70, 0x80),
-    (0xA0, 0x90, 0x70),
-    (0x70, 0x68, 0x60),
-];
+fn shade_for(light_level: u8, depth: f32, cfg: &RenderConfig) -> f32 {
+    let light = light_level as f32 / 255.0;
+    let fog = 1.0 - (depth / cfg.far_fog).clamp(0.0, 0.85);
+    (light * fog).clamp(0.05, 1.0)
+}
 
-fn wall_color(wall: &WallSeg, sec: &SectorSnap, depth: f32, cfg: &RenderConfig) -> Color {
-    let (r, g, b) = WALL_PALETTE[(wall.front_sector as usize) % WALL_PALETTE.len()];
-    let light = sec.light_level as f32 / 255.0;
-    let fog = 1.0 - (depth / cfg.far_fog).clamp(0.0, 0.8);
-    let shade = (light * fog).clamp(0.05, 1.0);
+fn tint(rgb: (u8, u8, u8), shade: f32) -> Color {
     Color::from_rgba8(
-        ((r as f32) * shade) as u8,
-        ((g as f32) * shade) as u8,
-        ((b as f32) * shade) as u8,
+        ((rgb.0 as f32) * shade) as u8,
+        ((rgb.1 as f32) * shade) as u8,
+        ((rgb.2 as f32) * shade) as u8,
         255,
     )
 }
 
+/// Hash determinístico ligero para variar tonos por linedef. xorshift
+/// de 32 bits sembrado con el índice — la idea es que paredes adyacentes
+/// no tengan exactamente el mismo color base.
+fn wall_hash(wall_idx: u32) -> u32 {
+    let mut x = wall_idx.wrapping_add(0x9E37_79B9);
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    x
+}
+
+fn wall_color(
+    wall_idx: u32,
+    wall: &WallSeg,
+    sec: &SectorSnap,
+    depth: f32,
+    band: u32,
+    bands: u32,
+    cfg: &RenderConfig,
+) -> Color {
+    // Base color por linedef hash + nudge por front_sector (para que
+    // cada habitación tienda a una familia de tonos sin ser uniforme).
+    let h = wall_hash(wall_idx).wrapping_add(wall.front_sector.wrapping_mul(7));
+    let base = WALL_PALETTE[(h as usize) % WALL_PALETTE.len()];
+
+    // Banda 0 = piso → más oscura. Banda top = techo → más clara. Curva
+    // levemente positiva: simulación cheap de iluminación cenital.
+    let band_t = if bands <= 1 {
+        0.5
+    } else {
+        band as f32 / (bands - 1) as f32
+    };
+    // Factor en [0.78, 1.12] — bajo abajo, alto arriba, con sutil curva.
+    let band_mul = 0.78 + 0.34 * band_t;
+
+    // Variación pseudo-aleatoria por banda (ladrillo / panel feel).
+    let band_jitter = {
+        let hj = wall_hash(wall_idx ^ band.wrapping_mul(0x1234_5));
+        let n = ((hj as f32) / (u32::MAX as f32)) * 2.0 - 1.0; // -1..1
+        1.0 + n * 0.08 // ±8%
+    };
+
+    let base_shade = shade_for(sec.light_level, depth, cfg);
+    let shade = (base_shade * band_mul * band_jitter).clamp(0.05, 1.0);
+    tint(base, shade)
+}
+
+fn floor_color(sec: &SectorSnap, depth: f32, cfg: &RenderConfig) -> Color {
+    let rgb = FLOOR_PALETTE[(sec.floor_pic as usize) % FLOOR_PALETTE.len()];
+    // Pisos suelen verse ~8% más oscuros que el shade base (poca luz
+    // rebotada desde arriba).
+    let shade = shade_for(sec.light_level, depth, cfg) * 0.92;
+    tint(rgb, shade.clamp(0.05, 1.0))
+}
+
+fn ceiling_color(sec: &SectorSnap, depth: f32, cfg: &RenderConfig) -> Color {
+    if ceiling_is_sky(sec) {
+        return SKY_BAND_BOT;
+    }
+    let rgb = CEIL_PALETTE[(sec.ceiling_pic as usize) % CEIL_PALETTE.len()];
+    let shade = shade_for(sec.light_level, depth, cfg) * 0.85;
+    tint(rgb, shade.clamp(0.05, 1.0))
+}
+
+/// Paleta minimal por tipo de sprite. spritenum_t de Doom shareware
+/// (subset): SPR_TROO=imp marrón, SPR_POSS=zombi verdoso, SPR_BAR1=barril,
+/// SPR_BKEY/RKEY/YKEY=llaves, SPR_BFUG/SHOT/PLAS=armas, SPR_TLMP=lámpara.
+/// Como Fase 3.1 no tiene tabla de spritenum_t expandida, usamos
+/// `sprite_idx % len` directo — los colores quedan estables por tipo
+/// pero no correspondem a la semántica real hasta Fase 3.2.
+const SPRITE_PALETTE: &[(u8, u8, u8)] = &[
+    (0xB4, 0x5C, 0x3C), // imp red-brown
+    (0x6C, 0x84, 0x4C), // zombi verde
+    (0x88, 0x70, 0x54), // barril marrón
+    (0xC4, 0xA8, 0x4C), // amarillo (llave / munición)
+    (0x5C, 0x80, 0xB4), // azul (llave azul / plasma)
+    (0xB4, 0x44, 0x44), // rojo (llave roja / sangre)
+    (0xD4, 0xC0, 0x88), // hueso / cráneo
+    (0xE0, 0xA8, 0x4C), // antorcha cálida
+    (0x9C, 0x9C, 0xA8), // armadura plateada
+    (0x44, 0x6C, 0x44), // verde oscuro
+    (0xC4, 0x80, 0x40), // naranja
+    (0xA0, 0xA0, 0xB4), // gris claro
+];
+
 fn sprite_color(
-    _sprite: &SpriteSnap,
+    sprite: &SpriteSnap,
     sec: Option<&SectorSnap>,
     depth: f32,
     cfg: &RenderConfig,
 ) -> Color {
-    let light = sec.map(|s| s.light_level as f32 / 255.0).unwrap_or(0.8);
-    let fog = 1.0 - (depth / cfg.far_fog).clamp(0.0, 0.8);
-    let shade = (light * fog).clamp(0.05, 1.0);
-    // Imp-red-ish hasta que Fase 3.1 traiga sprite real desde el WAD.
-    Color::from_rgba8(
-        (220.0 * shade) as u8,
-        (90.0 * shade) as u8,
-        (60.0 * shade) as u8,
-        255,
-    )
+    let rgb = SPRITE_PALETTE[(sprite.sprite as usize) % SPRITE_PALETTE.len()];
+    let light = sec.map(|s| s.light_level).unwrap_or(192);
+    let shade = shade_for(light, depth, cfg);
+    tint(rgb, shade)
 }
 
 // =====================================================================
-// Sky + floor backdrop
+// Backdrop (cuando paredes no cubren)
 // =====================================================================
 
-/// Banda superior de cielo + banda inferior de piso. Llenan el rect
-/// completo antes de los polígonos 3D — los muros se pintan encima.
-/// Sin gradiente todavía: dos colores planos para mantener el costo
-/// bajo (vello rasteriza dos rects).
-fn draw_sky_floor(scene: &mut Scene, rect: PaintRect) {
+/// Pinta cielo arriba + tinte del piso del sector del jugador abajo.
+/// El sector del jugador se infiere del primer sprite del jugador (el
+/// snapshot no expone explícitamente sector del player en 3.1; el sprite
+/// con índice 0 suele ser el avatar). Si no hay sectores, fallback gris.
+fn draw_backdrop(scene: &mut Scene, rect: PaintRect, snap: &SceneSnapshot) {
     let mid_y = rect.y as f64 + (rect.h as f64) * 0.5;
-    let sky = Rect::new(
+    let sky_rect = Rect::new(
         rect.x as f64,
         rect.y as f64,
         (rect.x + rect.w) as f64,
         mid_y,
     );
-    let floor = Rect::new(
+    let floor_rect = Rect::new(
         rect.x as f64,
         mid_y,
         (rect.x + rect.w) as f64,
         (rect.y + rect.h) as f64,
     );
-    scene.fill(
-        Fill::NonZero,
-        Affine::IDENTITY,
-        Color::from_rgba8(14, 16, 24, 255),
-        None,
-        &sky,
+
+    // Sky: gradiente sutil simulado con dos rects horizontales (top
+    // más oscuro, bottom más claro). El gradiente real (vello soporta
+    // linear gradients) lo dejo para 3.2 cuando agreguemos sky texture.
+    scene.fill(Fill::NonZero, Affine::IDENTITY, SKY_BAND_TOP, None, &sky_rect);
+
+    // Floor backdrop: si tenemos al menos un sector, usá su paleta.
+    // Como heurística pickeamos el sector con más light_level (la
+    // habitación más iluminada — suele ser donde el jugador está
+    // cuando arranca el nivel). No es exacto pero quita el "gris muerto"
+    // de la 3.0 cuando mirás al vacío.
+    let floor_rgb = snap
+        .sectors
+        .iter()
+        .max_by_key(|s| s.light_level)
+        .map(|s| FLOOR_PALETTE[(s.floor_pic as usize) % FLOOR_PALETTE.len()])
+        .unwrap_or((0x32, 0x2E, 0x28));
+    let backdrop_shade = 0.45;
+    let bg = Color::from_rgba8(
+        ((floor_rgb.0 as f32) * backdrop_shade) as u8,
+        ((floor_rgb.1 as f32) * backdrop_shade) as u8,
+        ((floor_rgb.2 as f32) * backdrop_shade) as u8,
+        255,
     );
-    scene.fill(
-        Fill::NonZero,
-        Affine::IDENTITY,
-        Color::from_rgba8(28, 26, 22, 255),
-        None,
-        &floor,
-    );
+    scene.fill(Fill::NonZero, Affine::IDENTITY, bg, None, &floor_rect);
 }
 
 #[cfg(test)]
@@ -513,7 +685,6 @@ mod tests {
     #[test]
     fn camera_identity_at_zero_angle() {
         let cam = Camera::new(0.0, 0.0, 0.0, 0.0);
-        // Point in front (+X world) — should map to (+X_cam, 0).
         let (x, y) = cam.to_cam_2d(10.0, 0.0);
         assert!((x - 10.0).abs() < 1e-5);
         assert!(y.abs() < 1e-5);
@@ -521,10 +692,6 @@ mod tests {
 
     #[test]
     fn camera_left_is_negative_y_cam() {
-        // Player at origin, looking +X. Point to player's left in world
-        // is at +Y world (right-hand rule with +Z up). En cámara,
-        // derecha = +Y_cam, así que el punto izquierdo debe tener
-        // Y_cam < 0.
         let cam = Camera::new(0.0, 0.0, 0.0, 0.0);
         let (_x, y) = cam.to_cam_2d(0.0, 10.0);
         assert!(y < 0.0, "left point should map to negative Y_cam, got {y}");
@@ -539,7 +706,6 @@ mod tests {
             h: 600.0,
         };
         let proj = Projection::new(rect, 75_f32.to_radians());
-        // Punto directamente al frente — debe caer en el centro.
         let p = proj.project(100.0, 0.0, 0.0);
         assert!((p.x - 400.0).abs() < 1e-3);
         assert!((p.y - 300.0).abs() < 1e-3);
@@ -554,9 +720,64 @@ mod tests {
             h: 600.0,
         };
         let proj = Projection::new(rect, 75_f32.to_radians());
-        // Punto a 10 unidades al frente y 1 a la derecha — debe caer
-        // a la derecha del centro horizontal.
         let p = proj.project(10.0, 1.0, 0.0);
         assert!(p.x > 400.0, "+Y_cam should project right of center, got {}", p.x);
+    }
+
+    #[test]
+    fn wall_bands_vary_shade_monotonic_lighter_up() {
+        // Misma pared, misma profundidad, distintas bandas — la banda
+        // de arriba debe quedar más clara que la de abajo (multiplicador
+        // 0.78..1.12 con t creciente).
+        let sec = SectorSnap {
+            floor_height: 0.0,
+            ceiling_height: 128.0,
+            light_level: 200,
+            floor_pic: 0,
+            ceiling_pic: 0,
+        };
+        let wall = WallSeg {
+            x1: 0.0,
+            y1: 0.0,
+            x2: 64.0,
+            y2: 0.0,
+            front_sector: 0,
+            back_sector: NO_SECTOR,
+            flags: 0,
+        };
+        let cfg = RenderConfig::default();
+        let c_bot = wall_color(7, &wall, &sec, 100.0, 0, 4, &cfg);
+        let c_top = wall_color(7, &wall, &sec, 100.0, 3, 4, &cfg);
+        let comps = |c: Color| {
+            let [r, g, b, _a] = c.to_rgba8().to_u8_array();
+            r as u32 + g as u32 + b as u32
+        };
+        assert!(
+            comps(c_top) > comps(c_bot),
+            "top band ({:?}) should be lighter than bottom ({:?})",
+            c_top.to_rgba8().to_u8_array(),
+            c_bot.to_rgba8().to_u8_array()
+        );
+    }
+
+    #[test]
+    fn floor_and_ceiling_palettes_indexed_by_pic() {
+        // Distintos floor_pic deben dar colores distintos cuando el módulo
+        // los separa.
+        let a = SectorSnap {
+            floor_height: 0.0,
+            ceiling_height: 128.0,
+            light_level: 255,
+            floor_pic: 0,
+            ceiling_pic: 0,
+        };
+        let b = SectorSnap {
+            floor_pic: 1,
+            ..a.clone()
+        };
+        let cfg = RenderConfig::default();
+        let ca = floor_color(&a, 0.0, &cfg);
+        let cb = floor_color(&b, 0.0, &cfg);
+        assert_ne!(ca.to_rgba8().to_u8_array(), cb.to_rgba8().to_u8_array());
     }
 }

@@ -1,0 +1,20 @@
+[package]
+name = "rimay-verbo-fastembed"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "verbo — backend de embeddings local sin API key vía fastembed (ONNX en CPU). Default: multilingual-e5-small (384d) — sirve es/qu/en/otros idiomas. Descarga el modelo a ~/.cache/fastembed en el primer arranque."
+
+[dependencies]
+rimay-verbo-core = { path = "../rimay-verbo-core" }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+# fastembed-rs trae ort (onnxruntime) + hf-hub + tokenizers. Sin features de
+# GPU/CUDA — corremos en CPU; basta para los volúmenes que un editor o un
+# notebook generan (lotes pequeños de decenas/cientos de párrafos).
+# `hf-hub-rustls-tls` evita la dep nativa OpenSSL del sistema (preferimos rustls
+# en la suite); `ort-download-binaries` baja onnxruntime precompilado.
+fastembed = { version = "4", default-features = false, features = ["ort-download-binaries", "hf-hub-rustls-tls"] }

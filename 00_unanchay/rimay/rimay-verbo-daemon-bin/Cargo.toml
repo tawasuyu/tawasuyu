@@ -15,6 +15,7 @@ path = "src/main.rs"
 rimay-verbo-core = { path = "../rimay-verbo-core" }
 rimay-verbo-daemon = { path = "../rimay-verbo-daemon" }
 rimay-verbo-mock = { path = "../rimay-verbo-mock" }
+rimay-verbo-fastembed = { path = "../rimay-verbo-fastembed" }
 tokio = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }

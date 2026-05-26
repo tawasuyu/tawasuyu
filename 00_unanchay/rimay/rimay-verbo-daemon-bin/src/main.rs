@@ -26,17 +26,22 @@ use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use rimay_verbo_core::Provider;
 use rimay_verbo_daemon::Daemon;
+use rimay_verbo_fastembed::FastembedProvider;
 use rimay_verbo_mock::MockProvider;
 
-/// Provider concreto que el daemon expondrá. Hoy solo `mock`; los
-/// providers reales (`fastembed`, `bge`, `cohere`) se irán añadiendo en
-/// iteraciones futuras y se elegirán por esta misma flag.
+/// Provider concreto que el daemon expondrá. `mock` para desarrollo
+/// determinista, `fastembed` para embeddings semánticos reales en CPU
+/// con descarga del modelo en el primer arranque.
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum ProviderKind {
     /// Provider determinista por hash (FNV-1a + LCG). Sin descargas, sin
     /// API keys; útil para desarrollo, tests y CI. Vectores aleatorios
     /// estables: misma cadena → mismo vector siempre.
     Mock,
+    /// Provider real vía fastembed (ONNX en CPU). Modelo por defecto:
+    /// `multilingual-e5-small` (384d), multilingüe — sirve es/qu/en/otros.
+    /// Descarga el modelo a `~/.cache/fastembed` en el primer arranque.
+    Fastembed,
 }
 
 #[derive(Debug, Parser)]
@@ -92,21 +97,38 @@ async fn main() -> Result<()> {
     let socket = cli.socket.unwrap_or_else(socket_por_defecto);
     eprintln!("verbo-daemon :: bind {}", socket.display());
 
-    // Provider configurado por CLI. El daemon es agnóstico — `Arc<dyn>`
-    // no porque el rasgo `Provider` exige `'static + Send + Sync`, y el
-    // `serve` genérico ya acepta cualquier `P: Provider + 'static`.
-    let provider = match cli.provider {
-        ProviderKind::Mock => Arc::new(MockProvider::new(cli.dim)),
-    };
-    eprintln!(
-        "verbo-daemon :: provider {} ({}d)",
-        provider.model_id().name,
-        provider.model_id().dimension
-    );
-
+    // Provider configurado por CLI. Cada variante construye su propio
+    // `Arc<P>` concreto y lo pasa a `Daemon::serve`, que es genérico —
+    // así no se mezclan `Arc<dyn Provider>` distintos en una sola
+    // variable (cada brazo del match queda con su tipo estable).
     let daemon = Daemon::bind(&socket).context("bindear socket Unix")?;
     eprintln!("verbo-daemon :: escuchando — ^C para terminar");
-    daemon.serve(provider).await.context("loop del daemon")?;
+    match cli.provider {
+        ProviderKind::Mock => {
+            let provider = Arc::new(MockProvider::new(cli.dim));
+            eprintln!(
+                "verbo-daemon :: provider {} ({}d)",
+                provider.model_id().name,
+                provider.model_id().dimension
+            );
+            daemon.serve(provider).await.context("loop del daemon")?;
+        }
+        ProviderKind::Fastembed => {
+            // La descarga del modelo se hace ANTES de spawn del runtime
+            // tokio (estamos dentro de main pero antes del `await` del
+            // serve, así que no bloqueamos un workers pool ya activo).
+            let provider = Arc::new(
+                FastembedProvider::try_default()
+                    .context("inicializando fastembed (multilingual-e5-small)")?,
+            );
+            eprintln!(
+                "verbo-daemon :: provider {} ({}d)",
+                provider.model_id().name,
+                provider.model_id().dimension
+            );
+            daemon.serve(provider).await.context("loop del daemon")?;
+        }
+    }
     Ok(())
 }
 
