@@ -132,6 +132,18 @@ minga-card-mst-title = MST Llaves
 minga-card-mst-desc = Merkle Search Tree-pi yaykuq
 minga-empty = Ñawpaq refresh suyachkan…
 
+# === nakui-explorer (event log) ===
+nakui-explorer-header = Log: { $path }  ·  { $entries } yaykuq ({ $seeds } seeds, { $morphisms } morphisms)  ·  watiq apamuy { $ms } ms
+nakui-explorer-breakdown = rakiy: { $parts }
+
+# === supay (doom) ===
+supay-mode-real = MOTOR PAQARIQ
+supay-mode-stub = STUB
+supay-view-fb = qhaway=FB (F3→3D)
+supay-view-3d = qhaway=3D (F3→FB)
+supay-header = { $title }  ·  thaski { $tick }  ·  { $mode }  ·  { $view }  ·  { $scene }
+supay-stub-title = supay-doom-llimphi STUB modo-pi purichkan
+
 # === greeter (mirada login) ===
 greeter-subtitle = sesionniykita qallariy
 greeter-label-user = sutiyki

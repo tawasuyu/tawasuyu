@@ -120,13 +120,15 @@ impl App for Explorer {
 
         let (seed_count, morphism_count, top_breakdown) = breakdown(entries);
 
-        let header_text = format!(
-            "Log: {}  ·  {} entries ({} seeds, {} morphisms)  ·  reload {} ms",
-            model.log_path.display(),
-            entries.len(),
-            seed_count,
-            morphism_count,
-            snapshot.last_load_ms,
+        let header_text = rimay_localize::t_args(
+            "nakui-explorer-header",
+            &[
+                ("path", model.log_path.display().to_string().into()),
+                ("entries", entries.len().to_string().into()),
+                ("seeds", seed_count.to_string().into()),
+                ("morphisms", morphism_count.to_string().into()),
+                ("ms", snapshot.last_load_ms.to_string().into()),
+            ],
         );
         let header = app_header::<Msg>(
             header_text,
@@ -144,7 +146,10 @@ impl App for Explorer {
                 .take(5)
                 .map(|(k, v)| format!("{k}({v})"))
                 .collect();
-            Some(format!("breakdown: {}", parts.join(", ")))
+            Some(rimay_localize::t_args(
+                "nakui-explorer-breakdown",
+                &[("parts", parts.join(", ").into())],
+            ))
         };
         if let Some(line) = breakdown_line {
             chrome.push(
@@ -366,6 +371,7 @@ fn breakdown(entries: &[LogEntry]) -> (usize, usize, Vec<(String, usize)>) {
 }
 
 fn main() {
+    rimay_localize::init();
     llimphi_ui::run::<Explorer>();
 }
 

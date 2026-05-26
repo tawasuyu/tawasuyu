@@ -216,7 +216,11 @@ impl App for Supay {
 }
 
 fn header_bar(model: &Model, theme: &Theme) -> View<Msg> {
-    let mode = if model.engine.real { "ENGINE REAL" } else { "STUB" };
+    let mode = rimay_localize::t(if model.engine.real {
+        "supay-mode-real"
+    } else {
+        "supay-mode-stub"
+    });
     let title = model.engine.title();
     let title = if title.is_empty() { "supay-doom".to_string() } else { title };
     // Fase 2: stats del snapshot más reciente.
@@ -232,10 +236,10 @@ fn header_bar(model: &Model, theme: &Theme) -> View<Msg> {
             )
         })
         .unwrap_or_else(|| "scene[—]".to_string());
-    let view_tag = match model.view_mode {
-        ViewMode::Framebuffer => "view=FB (F3→3D)",
-        ViewMode::Scene3d => "view=3D (F3→FB)",
-    };
+    let view_tag = rimay_localize::t(match model.view_mode {
+        ViewMode::Framebuffer => "supay-view-fb",
+        ViewMode::Scene3d => "supay-view-3d",
+    });
     View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -252,9 +256,15 @@ fn header_bar(model: &Model, theme: &Theme) -> View<Msg> {
     })
     .fill(theme.bg_panel)
     .text_aligned(
-        format!(
-            "{title}  ·  tick {}  ·  {}  ·  {}  ·  {}",
-            model.tick, mode, view_tag, scene
+        rimay_localize::t_args(
+            "supay-header",
+            &[
+                ("title", title.into()),
+                ("tick", model.tick.to_string().into()),
+                ("mode", mode.into()),
+                ("view", view_tag.into()),
+                ("scene", scene.into()),
+            ],
         ),
         11.0,
         theme.fg_muted,
@@ -304,7 +314,7 @@ fn stub_message_pane(theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        "supay-doom-llimphi corre en modo STUB".to_string(),
+        rimay_localize::t("supay-stub-title"),
         24.0,
         theme.fg_text,
         Alignment::Start,
@@ -411,5 +421,6 @@ fn translate_key(key: &Key, text: Option<&str>) -> Option<u8> {
 }
 
 fn main() {
+    rimay_localize::init();
     llimphi_ui::run::<Supay>();
 }

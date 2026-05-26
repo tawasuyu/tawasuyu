@@ -126,6 +126,18 @@ minga-card-mst-title = MST Keys
 minga-card-mst-desc = Merkle Search Tree entries
 minga-empty = Waiting for first refresh…
 
+# === nakui-explorer (event log) ===
+nakui-explorer-header = Log: { $path }  ·  { $entries } entries ({ $seeds } seeds, { $morphisms } morphisms)  ·  reload { $ms } ms
+nakui-explorer-breakdown = breakdown: { $parts }
+
+# === supay (doom) ===
+supay-mode-real = REAL ENGINE
+supay-mode-stub = STUB
+supay-view-fb = view=FB (F3→3D)
+supay-view-3d = view=3D (F3→FB)
+supay-header = { $title }  ·  tick { $tick }  ·  { $mode }  ·  { $view }  ·  { $scene }
+supay-stub-title = supay-doom-llimphi is running in STUB mode
+
 # === greeter (mirada login) ===
 greeter-subtitle = sign in
 greeter-label-user = username
