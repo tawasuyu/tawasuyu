@@ -18,9 +18,15 @@ rimay-localize = { path = "../../../shared/rimay-localize" }
 uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
+pluma-graph = { path = "../pluma-graph" }
+pluma-graph-transform = { path = "../pluma-graph-transform" }
 pluma-transform = { path = "../pluma-transform" }
 pluma-transform-tabla = { path = "../pluma-transform-tabla" }
+pluma-transform-llm = { path = "../pluma-transform-llm" }
 pluma-align-embeddings = { path = "../pluma-align-embeddings" }
+pluma-llm = { path = "../pluma-llm" }
+pluma-llm-core = { path = "../pluma-llm-core" }
+pluma-llm-mock = { path = "../pluma-llm-mock" }
 rimay-verbo-core = { path = "../../rimay/rimay-verbo-core" }
 rimay-verbo-mock = { path = "../../rimay/rimay-verbo-mock" }
 rimay-verbo-daemon = { path = "../../rimay/rimay-verbo-daemon" }

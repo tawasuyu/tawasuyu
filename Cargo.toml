@@ -47,6 +47,7 @@ members = [
     "00_unanchay/pluma/pluma-deck-web",
     "00_unanchay/pluma/pluma-editor-llimphi",
     "00_unanchay/pluma/pluma-graph",
+    "00_unanchay/pluma/pluma-graph-transform",
     "00_unanchay/pluma/pluma-llm",
     "00_unanchay/pluma/pluma-llm-anthropic",
     "00_unanchay/pluma/pluma-llm-gemini",

@@ -194,17 +194,34 @@ fn etiqueta_intencion(i: &Intencion) -> String {
 /// Traductor LLM. Por cada párrafo de la madre, una request al modelo
 /// con el system "traduce a X" cacheado. Materializa el cuerpo hija con
 /// `Intencion::Traduccion`, branch_id `{madre}-{lengua}`, lengua anotada.
-pub struct EjecutorTraducirLlm<C> {
-    chat: Arc<C>,
+///
+/// No es genérico sobre el backend: usa `Arc<dyn ChatClient>` para encajar
+/// con el factory `pluma_llm::build_client` sin vueltas de tipos. La
+/// indirección vtable es ínfima comparada con un round-trip HTTP a un LLM.
+pub struct EjecutorTraducirLlm {
+    chat: Arc<dyn ChatClient>,
     lengua_destino: Lengua,
     system_prompt: String,
     max_tokens: u32,
     temperature: f32,
 }
 
-impl<C: ChatClient + 'static> EjecutorTraducirLlm<C> {
-    /// Construye con system prompt razonable por defecto.
-    pub fn new(chat: C, lengua_destino: impl Into<Lengua>) -> Self {
+impl EjecutorTraducirLlm {
+    /// Construye con system prompt razonable por defecto desde cualquier
+    /// `ChatClient` concreto (lo envolvemos en `Arc<dyn>`).
+    pub fn new<C: ChatClient + 'static>(
+        chat: C,
+        lengua_destino: impl Into<Lengua>,
+    ) -> Self {
+        Self::from_arc(Arc::new(chat), lengua_destino)
+    }
+
+    /// Construye desde un `Arc<dyn ChatClient>` ya armado — flujo natural
+    /// con `pluma_llm::build_client(&cfg)`.
+    pub fn from_arc(
+        chat: Arc<dyn ChatClient>,
+        lengua_destino: impl Into<Lengua>,
+    ) -> Self {
         let lengua = lengua_destino.into();
         let system = format!(
             "Eres un traductor profesional al {lengua}. Traduce con \
@@ -214,7 +231,7 @@ impl<C: ChatClient + 'static> EjecutorTraducirLlm<C> {
              párrafo traducido."
         );
         Self {
-            chat: Arc::new(chat),
+            chat,
             lengua_destino: lengua,
             system_prompt: system,
             max_tokens: 1024,
@@ -266,7 +283,7 @@ impl<C: ChatClient + 'static> EjecutorTraducirLlm<C> {
 }
 
 #[async_trait]
-impl<C: ChatClient + 'static> Ejecutor for EjecutorTraducirLlm<C> {
+impl Ejecutor for EjecutorTraducirLlm {
     /// El trait no recibe el índice de átomos. Aquí señalamos al caller
     /// que use el método inherente `aplicar_con_atoms`.
     async fn aplicar(
@@ -289,16 +306,20 @@ impl<C: ChatClient + 'static> Ejecutor for EjecutorTraducirLlm<C> {
 // =============================================================================
 
 /// Reescribe cada párrafo con otro tono (formal, casual, técnico, infantil…).
-pub struct EjecutorTonoLlm<C> {
-    chat: Arc<C>,
+pub struct EjecutorTonoLlm {
+    chat: Arc<dyn ChatClient>,
     etiqueta: String,
     system_prompt: String,
     max_tokens: u32,
     temperature: f32,
 }
 
-impl<C: ChatClient + 'static> EjecutorTonoLlm<C> {
-    pub fn new(chat: C, etiqueta: impl Into<String>) -> Self {
+impl EjecutorTonoLlm {
+    pub fn new<C: ChatClient + 'static>(chat: C, etiqueta: impl Into<String>) -> Self {
+        Self::from_arc(Arc::new(chat), etiqueta)
+    }
+
+    pub fn from_arc(chat: Arc<dyn ChatClient>, etiqueta: impl Into<String>) -> Self {
         let etiqueta = etiqueta.into();
         let system = format!(
             "Reescribes cada párrafo que recibes con tono {etiqueta}, \
@@ -307,7 +328,7 @@ impl<C: ChatClient + 'static> EjecutorTonoLlm<C> {
              SOLO el párrafo reescrito."
         );
         Self {
-            chat: Arc::new(chat),
+            chat,
             etiqueta,
             system_prompt: system,
             max_tokens: 1024,
@@ -346,7 +367,7 @@ impl<C: ChatClient + 'static> EjecutorTonoLlm<C> {
 }
 
 #[async_trait]
-impl<C: ChatClient + 'static> Ejecutor for EjecutorTonoLlm<C> {
+impl Ejecutor for EjecutorTonoLlm {
     async fn aplicar(
         &self,
         _t: &Transformacion,
@@ -364,16 +385,20 @@ impl<C: ChatClient + 'static> Ejecutor for EjecutorTonoLlm<C> {
 // =============================================================================
 
 /// Resume cada párrafo a un objetivo de palabras (o el LLM decide si es None).
-pub struct EjecutorResumirLlm<C> {
-    chat: Arc<C>,
+pub struct EjecutorResumirLlm {
+    chat: Arc<dyn ChatClient>,
     palabras_objetivo: Option<u32>,
     system_prompt: String,
     max_tokens: u32,
     temperature: f32,
 }
 
-impl<C: ChatClient + 'static> EjecutorResumirLlm<C> {
-    pub fn new(chat: C, palabras_objetivo: Option<u32>) -> Self {
+impl EjecutorResumirLlm {
+    pub fn new<C: ChatClient + 'static>(chat: C, palabras_objetivo: Option<u32>) -> Self {
+        Self::from_arc(Arc::new(chat), palabras_objetivo)
+    }
+
+    pub fn from_arc(chat: Arc<dyn ChatClient>, palabras_objetivo: Option<u32>) -> Self {
         let n = palabras_objetivo
             .map(|n| format!("aproximadamente {n} palabras"))
             .unwrap_or_else(|| "lo más conciso posible".to_string());
@@ -383,7 +408,7 @@ impl<C: ChatClient + 'static> EjecutorResumirLlm<C> {
              NO uses comillas. Devuelve SOLO el resumen."
         );
         Self {
-            chat: Arc::new(chat),
+            chat,
             palabras_objetivo,
             system_prompt: system,
             max_tokens: 512,
@@ -422,7 +447,7 @@ impl<C: ChatClient + 'static> EjecutorResumirLlm<C> {
 }
 
 #[async_trait]
-impl<C: ChatClient + 'static> Ejecutor for EjecutorResumirLlm<C> {
+impl Ejecutor for EjecutorResumirLlm {
     async fn aplicar(
         &self,
         _t: &Transformacion,
@@ -441,17 +466,21 @@ impl<C: ChatClient + 'static> Ejecutor for EjecutorResumirLlm<C> {
 
 /// Reescritura libre dictada por un prompt humano arbitrario (el `prompt`
 /// del `TipoTransformacion::Reescribir`).
-pub struct EjecutorReescribirLlm<C> {
-    chat: Arc<C>,
+pub struct EjecutorReescribirLlm {
+    chat: Arc<dyn ChatClient>,
     prompt: String,
     max_tokens: u32,
     temperature: f32,
 }
 
-impl<C: ChatClient + 'static> EjecutorReescribirLlm<C> {
-    pub fn new(chat: C, prompt: impl Into<String>) -> Self {
+impl EjecutorReescribirLlm {
+    pub fn new<C: ChatClient + 'static>(chat: C, prompt: impl Into<String>) -> Self {
+        Self::from_arc(Arc::new(chat), prompt)
+    }
+
+    pub fn from_arc(chat: Arc<dyn ChatClient>, prompt: impl Into<String>) -> Self {
         Self {
-            chat: Arc::new(chat),
+            chat,
             prompt: prompt.into(),
             max_tokens: 1024,
             temperature: 0.6,
@@ -495,7 +524,7 @@ impl<C: ChatClient + 'static> EjecutorReescribirLlm<C> {
 }
 
 #[async_trait]
-impl<C: ChatClient + 'static> Ejecutor for EjecutorReescribirLlm<C> {
+impl Ejecutor for EjecutorReescribirLlm {
     async fn aplicar(
         &self,
         _t: &Transformacion,

@@ -1,0 +1,22 @@
+[package]
+name = "pluma-graph-transform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "pluma — pegamento entre pluma-graph y pluma-transform: helpers para persistir un ProductoTransformacion en el NarrativeGraph y construir el índice Uuid→&NarrativeAtom que los ejecutores LLM esperan."
+
+[dependencies]
+uuid = { workspace = true, features = ["serde"] }
+pluma-core = { path = "../pluma-core" }
+pluma-cuerpo = { path = "../pluma-cuerpo" }
+pluma-align = { path = "../pluma-align" }
+pluma-graph = { path = "../pluma-graph" }
+pluma-transform = { path = "../pluma-transform" }
+
+[dev-dependencies]
+tokio = { workspace = true }
+pluma-llm-mock = { path = "../pluma-llm-mock" }
+pluma-transform-llm = { path = "../pluma-transform-llm" }
+pluma-transform-tabla = { path = "../pluma-transform-tabla" }
