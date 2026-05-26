@@ -11,3 +11,4 @@ description = "shuma-module-shell — el shell interactivo (input + runs + histo
 shuma-module = { path = "../shuma-module" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
+llimphi-widget-text-input = { workspace = true }

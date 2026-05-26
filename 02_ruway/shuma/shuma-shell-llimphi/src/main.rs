@@ -320,7 +320,10 @@ impl App for Shell {
                 return Some(Msg::ToggleDrawer);
             }
         }
-        None
+        // Reenvía teclas al módulo focado. Hoy sólo el shell consume
+        // teclas (input del REPL); el resto de módulos siguen sin
+        // recibirlas hasta que las necesiten.
+        forward_key_to_focused_shell(model, e)
     }
 
     fn update(model: Self::Model, msg: Self::Msg, handle: &Handle<Self::Msg>) -> Self::Model {
@@ -705,6 +708,34 @@ fn handle_shortcut(
         }
     }
     m
+}
+
+/// Si la instancia focada (drawer tab activo, o Main) es un shell,
+/// genera el `Msg::Module` que reenvía la tecla. El módulo shell
+/// distingue Enter (submit) de inserción de texto internamente.
+fn forward_key_to_focused_shell(model: &Model, e: &KeyEvent) -> Option<Msg> {
+    // 1) Drawer tab activo, si el drawer está abierto.
+    if model.drawer_open {
+        if let Some(inst) = model.drawer_tabs.get(model.active_drawer_tab) {
+            if matches!(inst.state, ModuleState::Shell(_)) {
+                return Some(Msg::Module(
+                    Slot::DrawerTab(model.active_drawer_tab),
+                    ModuleMsg::Shell(shuma_module_shell::Msg::Key(e.clone())),
+                ));
+            }
+        }
+    }
+    // 2) Slot Main, si tiene un shell activo. Permite al usuario poner
+    //    el shell como módulo principal de la ventana sin drawer.
+    if let Some(inst) = model.main.as_ref() {
+        if matches!(inst.state, ModuleState::Shell(_)) {
+            return Some(Msg::Module(
+                Slot::Main,
+                ModuleMsg::Shell(shuma_module_shell::Msg::Key(e.clone())),
+            ));
+        }
+    }
+    None
 }
 
 /// Path del inventario JSON de un slot de matilda, si lo tiene cargado.
