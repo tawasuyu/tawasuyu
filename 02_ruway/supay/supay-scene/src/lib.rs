@@ -131,6 +131,29 @@ pub const NO_SECTOR: u32 = u32::MAX;
 /// resolvió `skyflatnum` (mapa todavía sin cargar) o estamos en stub.
 pub const NO_SKY_PIC: u16 = 0xFFFF;
 
+/// Estado de los overlays de pantalla del jugador. Doom intercambia
+/// PLAYPAL[1..13] cuando algo de esto está activo (red flash al daño,
+/// yellow al pickup, green con radsuit, white con invuln); como
+/// sampleamos siempre con PLAYPAL[0], esto se convierte en overlay
+/// alpha sobre el frame final en el renderer.
+///
+/// Los valores son los counters internos del motor — la conversión
+/// a alpha vive en `supay-render-llimphi`. Mantenerlos crudos nos da
+/// flexibilidad de ajustar la presentación sin tocar la captura.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PlayerOverlays {
+    /// 0..100, +N por hp de daño, decae 1/tick. Drives el red flash.
+    pub damage_count: u16,
+    /// 0..32, +6/+12 por pickup, decae 1/tick. Drives el yellow flash.
+    pub bonus_count: u16,
+    /// Tics restantes de invulnerabilidad. >0 = activo. En los últimos
+    /// 32 tics blinkea (el motor expone el valor, no el blink); el
+    /// renderer aplica el blink basado en `tick`.
+    pub power_invuln: u32,
+    /// Tics restantes del traje anti-radiación.
+    pub power_radsuit: u32,
+}
+
 /// Una hoja convexa del BSP — referencia a un sector y un rango
 /// contiguo en [`SceneSnapshot::segs`] (`first_seg`, `num_segs`).
 ///
@@ -239,6 +262,9 @@ pub struct SceneSnapshot {
     /// con este valor → renderer pinta sky en vez de techo sólido).
     /// [`NO_SKY_PIC`] = stub o mapa no cargado.
     pub sky_pic: u16,
+    /// Fase 3.14: counters del jugador para overlays de pantalla
+    /// (red flash, yellow flash, etc.). Default = sin overlays.
+    pub player_overlays: PlayerOverlays,
 }
 
 impl Default for SceneSnapshot {
@@ -261,6 +287,7 @@ impl SceneSnapshot {
             segs: Arc::from(Vec::<SegSnap>::new()),
             nodes: Arc::from(Vec::<NodeSnap>::new()),
             sky_pic: NO_SKY_PIC,
+            player_overlays: PlayerOverlays::default(),
         }
     }
 }
@@ -391,6 +418,11 @@ pub fn interpolate(prev: &SceneSnapshot, next: &SceneSnapshot, alpha: f32) -> Sc
         segs: next.segs.clone(),
         nodes: next.nodes.clone(),
         sky_pic: next.sky_pic,
+        // Overlays: counters integers — tomamos `next` puro. Interpolar
+        // un counter no tiene sentido visual (el flash sube/baja en
+        // pasos discretos por tick); el cambio entre snapshots se nota
+        // como cambio de alpha del overlay.
+        player_overlays: next.player_overlays,
     }
 }
 

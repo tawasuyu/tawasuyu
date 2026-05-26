@@ -110,6 +110,35 @@ int supay_scene_player(float *x, float *y, float *z,
     return 1;
 }
 
+/* Counters del player para los overlays de pantalla. Doom intercambia
+ * PLAYPAL[1..13] cuando algo de esto está activo; nosotros sampleamos
+ * siempre con PLAYPAL[0], así que la modernización es overlay alpha
+ * sobre el frame final. El lado Rust convierte counters → alphas.
+ *
+ * - damagecount: 0..100, +N por hp de daño, decae 1/tick.
+ * - bonuscount: 0..32, +6/+12 por pickup, decae 1/tick.
+ * - power_invuln: tics restantes de invulnerabilidad (>0 = activo).
+ * - power_radsuit: tics restantes de suit.
+ *
+ * Devuelve 0 si el jugador no existe (pre-mapa) — outs quedan en cero
+ * y el renderer trata como "sin overlays". */
+int supay_scene_player_overlays(int *damagecount, int *bonuscount,
+                                int *power_invuln, int *power_radsuit) {
+    player_t *p = &players[consoleplayer];
+    if (!p->mo) {
+        *damagecount = 0;
+        *bonuscount = 0;
+        *power_invuln = 0;
+        *power_radsuit = 0;
+        return 0;
+    }
+    *damagecount = p->damagecount;
+    *bonuscount = p->bonuscount;
+    *power_invuln = p->powers[pw_invulnerability];
+    *power_radsuit = p->powers[pw_ironfeet];
+    return 1;
+}
+
 /* ---- Walls (linedefs) ---- */
 
 int supay_scene_num_walls(void) {

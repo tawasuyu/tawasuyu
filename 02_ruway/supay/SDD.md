@@ -305,6 +305,29 @@ cargo run -p supay-doom-llimphi --release
 
 **No incluido en 3.13 (defer a 3.14+):** wall + sprite BSP ordering (requiere refactorizar el iter de walls a iter de segs por subsector); pitch / mouse-look; volumetric fog real por sector; texture scrolling validation (3.10 capture de `textureoffset` ya debería funcionar para SCROLL Left lines tipo 48 — verificar visual); decals dinámicos; relighting por sector specials.
 
+**Fase 3.14 (2026-05-26, este bloque):** player palette overlays — damage red, pickup yellow, radsuit green, invuln white.
+
+- **Contexto.** Doom intercambia PLAYPAL[1..13] cuando algo le pasa al jugador (rojo de daño, amarillo de pickup, verde con radsuit, inversión con invulnerabilidad). Como sampleamos siempre con PLAYPAL[0] desde el renderer 3D, esos overlays no aparecen "gratis" — la modernización es overlay alpha full-screen al final del frame.
+- **C-side `supay_scene_player_overlays(damagecount, bonuscount, power_invuln, power_radsuit)`**: getter nuevo que devuelve los 4 counters del `player_t` (los dos contadores de flash + dos powers relevantes). Devuelve 0 si no hay player mobj (pre-mapa); outs en cero. Costo: 4 reads + 4 writes — despreciable a 35 Hz.
+- **`supay-scene::PlayerOverlays`** struct nuevo con los counters crudos (`u16` para los flashes + `u32` para los powers, alineado a los tipos doomgeneric). `SceneSnapshot.player_overlays` field. `interpolate` toma `next` puro — el flash sube/baja en pasos discretos de 1/tick, interpolar tendría sentido pero a 60 Hz la transición visual es suave por la decadencia natural del counter.
+- **`supay-core::capture_scene_real`** llama el getter post-tick y rellena el field. `synth_snapshot` deja todo en cero — el modo stub no tiene flashes (lo cual está bien, no hay enemigos que peguen ni pickups que tomar).
+- **`supay-render-llimphi::draw_player_overlays`**: pinta un único `Rect::fill` con `Color::from_rgba8(r, g, b, alpha)` sobre todo el viewport. Costo: 1 fill extra por frame.
+- **Prioridad y curva.** `overlay_rgba(overlays, tick)` resuelve cuál pintar:
+  - **Invuln** (gana sobre todo) → blanco semi-translúcido `(220, 220, 232, 110)`. Blinkea en los últimos 4 tics (`& 0x8` del tick). Aproximación cheap del invert-colors de Doom — para fidelidad real haría falta una segunda pasada con un colormap invertido.
+  - **Damage** → rojo `(220, 30, 30)`, alpha `24 + level·24` con level = `(damagecount + 7) >> 3` clampado a 8 (NUMREDPALS de Doom). Rango alpha 48..216 sobre 8 niveles.
+  - **Bonus** → amarillo cálido `(215, 180, 70)`, alpha `24 + level·18` con level clampado a 4 (NUMBONUSPALS). Rango 42..96.
+  - **Radsuit** → verde `(45, 140, 60, 64)`. Constante mientras `power > 4*32` (~3.6 s); luego blinkea con `tick & 0x8`.
+- **Resultado visible.** En modo real con DOOM1.WAD: pegar a un zombie produce flashes rojos cuyo alpha es proporcional al daño recibido. Recoger una llave o ammo produce un flash amarillo de 1-2 segundos. Caminar sobre slime con el traje de protección tinta verdoso constante. Cuando el traje se agota, blinka antes de quitarse.
+- **Tests** (+5 render = 33 total verde, 41 supay total): `overlay_none_when_all_counters_zero`, `overlay_damage_red_priority_over_bonus`, `overlay_damage_alpha_scales_with_count`, `overlay_radsuit_blinks_in_last_seconds`, `overlay_invuln_dominates_damage`.
+- **Header bump**: `PHASE 3.13` → `PHASE 3.14`.
+
+**Limitaciones conocidas de 3.14.**
+- **Invuln no invierte colores** — usa un overlay blanco aproximado. Para invertir habría que pasar la escena completa por un compositor que aplique `1 - c` por canal. Vello no expone blend modes que hagan exactamente eso sin shaders custom (`Mix::Difference` con (255,255,255) se acerca pero no es exacto). Defer cuando llimphi-ui exponga custom_pass.
+- **Sin berserk red tint.** El `pw_strength` también tinta rojo en Doom, con fade-out por counter. No lo expongo todavía (es menos visible que damage; en E1M1 ni siquiera hay berserk).
+- **Sin transición palette → palette del Doom original.** El motor usa 14 paletas discretas; nosotros tenemos un alpha gradiente continuo. Diferente "feel" pero más limpio visualmente.
+
+**No incluido en 3.14 (defer a 3.15+):** wall + sprite BSP ordering; pitch / mouse-look; volumetric fog real por sector; texture scrolling visual validation; decals dinámicos; berserk red tint; invuln invert-colors real (necesita custom shader).
+
 ### Fase 4 — Capa de modernización opt-in
 
 Cada feature como toggle:
@@ -368,6 +391,7 @@ Cada feature como toggle:
   - **TempLight + flash de impacto**: nueva lista `Vec<TempLight>` con `(x, y, color, strength, ttl, ttl_max)`. Cada flash dura `FLASH_TTL = 4 ticks` y su `strength` decae linealmente con el TTL. `lighting_contribution` los suma; el resultado es un destello cálido cuando un bullet impacta. Spawn en colisión pared + colisión enemy.
   - **SpriteKinds nuevos**: `DyingImp` (rojo opaco scale 0.65) y `Corpse` (mancha rojiza scale 0.30) — el enemy en `draw_scene` se convierte al kind apropiado según state.
   - El jugador puede morir (vida llega a 0 y queda en 0); por ahora sin pantalla de game over — el input sigue activo. La pantalla del HUD muestra todo en rojo cuando vida < 25.
+- **2026-05-26 (+13):** Fase 3.14 — player palette overlays (damage red, pickup yellow, radsuit green, invuln white) como overlay alpha full-screen. Modernización de PLAYPAL[1..13] swap → un único fill semi-translúcido por frame. 33 tests verde renderer.
 - **2026-05-26 (+12):** Fase 3.13 — BSP back-to-front ordering exacto para pisos/techos (expone `nodes[]`, walker recursivo, depth `1e6 + step` reemplaza el centroide euclidiano para Renderable.depth de planos). Escaleras y sectores interpenetrados dejan de glitchear en el painter's. Walls/sprites siguen euclidiano. 28 tests verde renderer.
 - **2026-05-26 (+11):** Fase 3.12 — pisos y techos per-triangle (fan triangulation desde vértice 0 + affine exacta por triángulo). Desaparece el "affine sheen" residual de 3.7 en pisos grandes vistos oblicuos.
 - **2026-05-26 (+10):** Fase 3.11 — flats/paredes animados (NUKAGE/FIREBLU/BLOOD via `flattranslation[]`, switches via `texturetranslation[]`) + sprites full-bright (bit 7 del frame). Proyectiles y muzzle flashes ahora brillan en cuartos oscuros.

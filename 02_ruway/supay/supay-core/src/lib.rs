@@ -30,8 +30,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 pub use supay_scene::{
-    interpolate, NodeSnap, PlayerSnap, SceneSnapshot, SectorSnap, SegSnap, SnapshotPair,
-    SpriteSnap, SubsectorSnap, WallSeg, NF_SUBSECTOR, NO_SECTOR, NO_SKY_PIC,
+    interpolate, NodeSnap, PlayerOverlays, PlayerSnap, SceneSnapshot, SectorSnap, SegSnap,
+    SnapshotPair, SpriteSnap, SubsectorSnap, WallSeg, NF_SUBSECTOR, NO_SECTOR, NO_SKY_PIC,
 };
 
 // doomgeneric default es 640×400 (auto-scaling factor 2 sobre los
@@ -283,6 +283,15 @@ extern "C" {
         dy: *mut f32,
         child_front: *mut u16,
         child_back: *mut u16,
+    ) -> std::ffi::c_int;
+    /// Fase 3.14: counters del jugador para los overlays de pantalla
+    /// (red flash, yellow flash, radsuit green, invuln). Devuelve 0 si
+    /// el jugador no existe (pre-mapa) — outs en cero.
+    fn supay_scene_player_overlays(
+        damagecount: *mut std::ffi::c_int,
+        bonuscount: *mut std::ffi::c_int,
+        power_invuln: *mut std::ffi::c_int,
+        power_radsuit: *mut std::ffi::c_int,
     ) -> std::ffi::c_int;
 }
 
@@ -773,6 +782,20 @@ fn capture_scene_real(tick: u64) -> SceneSnapshot {
     // SAFETY: idem.
     let sky_pic = unsafe { supay_scene_sky_pic() };
 
+    // Player overlay counters (Fase 3.14).
+    let mut dmg = 0_i32;
+    let mut bon = 0_i32;
+    let mut p_inv = 0_i32;
+    let mut p_rad = 0_i32;
+    // SAFETY: punteros a locales válidos.
+    let _ = unsafe { supay_scene_player_overlays(&mut dmg, &mut bon, &mut p_inv, &mut p_rad) };
+    let player_overlays = PlayerOverlays {
+        damage_count: dmg.max(0) as u16,
+        bonus_count: bon.max(0) as u16,
+        power_invuln: p_inv.max(0) as u32,
+        power_radsuit: p_rad.max(0) as u32,
+    };
+
     SceneSnapshot {
         tick,
         player,
@@ -783,6 +806,7 @@ fn capture_scene_real(tick: u64) -> SceneSnapshot {
         segs: Arc::from(segs_vec),
         nodes: Arc::from(nodes_vec),
         sky_pic,
+        player_overlays,
     }
 }
 
@@ -900,5 +924,8 @@ fn synth_snapshot(tick: u64) -> SceneSnapshot {
         segs: Arc::from(Vec::<SegSnap>::new()),
         nodes: Arc::from(Vec::<NodeSnap>::new()),
         sky_pic: NO_SKY_PIC,
+        // Stub: sin overlays. El red flash sintético se puede testear en
+        // modo real moviéndose hacia un enemigo.
+        player_overlays: PlayerOverlays::default(),
     }
 }

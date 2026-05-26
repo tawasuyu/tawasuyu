@@ -64,8 +64,8 @@ use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::llimphi_raster::vello::Scene;
 use llimphi_ui::{PaintRect, View};
 use supay_scene::{
-    interpolate, NodeSnap, SceneSnapshot, SectorSnap, SnapshotPair, SpriteSnap, SubsectorSnap,
-    WallSeg, ML_DONTPEGBOTTOM, ML_DONTPEGTOP, NF_SUBSECTOR, NO_SECTOR, NO_SKY_PIC,
+    interpolate, NodeSnap, PlayerOverlays, SceneSnapshot, SectorSnap, SnapshotPair, SpriteSnap,
+    SubsectorSnap, WallSeg, ML_DONTPEGBOTTOM, ML_DONTPEGTOP, NF_SUBSECTOR, NO_SECTOR, NO_SKY_PIC,
 };
 
 // =====================================================================
@@ -473,6 +473,11 @@ fn render_frame(scene: &mut Scene, rect: PaintRect, snap: &SceneSnapshot, cfg: &
             }
         }
     }
+
+    // Fase 3.14: overlay full-screen al final del frame (damage red,
+    // pickup yellow, radsuit green, invuln white). Modernización pura
+    // de la lógica de Doom de palette swapping a PLAYPAL[1..13].
+    draw_player_overlays(scene, rect, &snap.player_overlays, snap.tick);
 }
 
 struct Renderable {
@@ -1756,6 +1761,83 @@ fn draw_backdrop(scene: &mut Scene, rect: PaintRect, snap: &SceneSnapshot, cfg: 
     scene.fill(Fill::NonZero, Affine::IDENTITY, bg, None, &floor_rect);
 }
 
+// =====================================================================
+// Player overlays (Fase 3.14)
+// =====================================================================
+//
+// Doom intercala PLAYPAL[1..13] cuando algo le pasa al jugador:
+//   - [1..8]   = damage red flash (intensidad ∝ damagecount)
+//   - [9..12]  = bonus yellow flash (intensidad ∝ bonuscount)
+//   - [13]     = radiation suit green tint
+//   - invuln   = inversión de colores via colormap (más caro de emular)
+//
+// Como sampleamos siempre con PLAYPAL[0] desde el renderer 3D, los
+// overlays no aparecen "gratis" — los pintamos como rect full-screen
+// semi-transparente al final del frame.
+
+/// Pinta el overlay del jugador (damage/pickup/radsuit/invuln) sobre
+/// todo el viewport. No-op si no hay overlays activos.
+fn draw_player_overlays(scene: &mut Scene, rect: PaintRect, ov: &PlayerOverlays, tick: u64) {
+    let Some((r, g, b, a)) = overlay_rgba(ov, tick) else {
+        return;
+    };
+    let path = Rect::new(
+        rect.x as f64,
+        rect.y as f64,
+        (rect.x + rect.w) as f64,
+        (rect.y + rect.h) as f64,
+    );
+    scene.fill(
+        Fill::NonZero,
+        Affine::IDENTITY,
+        Color::from_rgba8(r, g, b, a),
+        None,
+        &path,
+    );
+}
+
+/// Resuelve el overlay activo + su color RGBA. Prioridad Doom:
+///   damage > bonus > radsuit. Invuln se superpone con tinte propio.
+///
+/// Acepta `tick` para el blink de los últimos 4 segundos (32 tics =
+/// ~0.9 s a 35 Hz) de invuln/radsuit — bit 3 del tick controla on/off.
+fn overlay_rgba(ov: &PlayerOverlays, tick: u64) -> Option<(u8, u8, u8, u8)> {
+    use PlayerOverlays as O;
+    let _ = std::mem::size_of::<O>();
+    // Invulnerability: blink 32 tics finales, blanco brillante.
+    let invuln_active = ov.power_invuln > 0
+        && (ov.power_invuln > 4 * 32 || (tick & 0x8) != 0);
+    if invuln_active {
+        // Blanco semi-translúcido — aproximación cheap del invert colors
+        // de Doom. Subir alpha hace que la escena "se desature".
+        return Some((220, 220, 232, 110));
+    }
+    // Damage: red flash 8 niveles, alpha cada 8 pts de damagecount.
+    if ov.damage_count > 0 {
+        // Doom: (dc + 7) >> 3 → niveles 1..8. NUMREDPALS=8.
+        let level = (((ov.damage_count + 7) >> 3).min(8)) as u8;
+        // Alpha ramp 40..200 sobre los 8 niveles (más fuerte = más opaco).
+        let alpha = 24 + level * 24;
+        return Some((220, 30, 30, alpha));
+    }
+    // Bonus pickup: yellow flash 4 niveles.
+    if ov.bonus_count > 0 {
+        // Doom: (bc + 7) >> 3, NUMBONUSPALS=4.
+        let level = (((ov.bonus_count + 7) >> 3).min(4)) as u8;
+        let alpha = 24 + level * 18;
+        return Some((215, 180, 70, alpha));
+    }
+    // Radsuit: green tint constante mientras el power > 4*32 (≈3.6 s),
+    // luego blinkea con bit 3 del tick.
+    if ov.power_radsuit > 0 {
+        let active = ov.power_radsuit > 4 * 32 || (tick & 0x8) != 0;
+        if active {
+            return Some((45, 140, 60, 64));
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2186,6 +2268,72 @@ mod tests {
         let mut out = Vec::new();
         walk_bsp(&nodes, (nodes.len() - 1) as u16, -10.0, 0.0, &mut out);
         assert_eq!(out, vec![1, 0], "viewer al -X visita ss1 (far) primero");
+    }
+
+    // -----------------------------------------------------------------
+    // Fase 3.14: player overlays
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn overlay_none_when_all_counters_zero() {
+        let ov = PlayerOverlays::default();
+        assert!(overlay_rgba(&ov, 0).is_none());
+    }
+
+    #[test]
+    fn overlay_damage_red_priority_over_bonus() {
+        // damagecount tiene prioridad sobre bonuscount.
+        let ov = PlayerOverlays {
+            damage_count: 16,
+            bonus_count: 16,
+            ..Default::default()
+        };
+        let (r, g, b, _a) = overlay_rgba(&ov, 0).expect("overlay activo");
+        // Es rojizo: r >> g, r >> b.
+        assert!(r > g && r > b, "expected red dominant, got ({r}, {g}, {b})");
+    }
+
+    #[test]
+    fn overlay_damage_alpha_scales_with_count() {
+        let low = PlayerOverlays {
+            damage_count: 4,
+            ..Default::default()
+        };
+        let hi = PlayerOverlays {
+            damage_count: 80,
+            ..Default::default()
+        };
+        let (_, _, _, a_lo) = overlay_rgba(&low, 0).expect("low");
+        let (_, _, _, a_hi) = overlay_rgba(&hi, 0).expect("hi");
+        assert!(a_hi > a_lo, "alpha más grande con más daño: lo={a_lo} hi={a_hi}");
+    }
+
+    #[test]
+    fn overlay_radsuit_blinks_in_last_seconds() {
+        // power_radsuit < 4*32 (= 128): blinkea por bit 3 del tick.
+        let ov = PlayerOverlays {
+            power_radsuit: 50,
+            ..Default::default()
+        };
+        // tick con bit 3 set (8, 9, 10, ...) → overlay activo (green).
+        let on = overlay_rgba(&ov, 8);
+        // tick con bit 3 limpio (0..7) → sin overlay.
+        let off = overlay_rgba(&ov, 0);
+        assert!(on.is_some(), "blink-on tick debe pintar verde");
+        assert!(off.is_none(), "blink-off tick no debe pintar");
+    }
+
+    #[test]
+    fn overlay_invuln_dominates_damage() {
+        // Si hay invuln activo + damage, gana invuln (blanco, no rojo).
+        let ov = PlayerOverlays {
+            damage_count: 80,
+            power_invuln: 200,
+            ..Default::default()
+        };
+        let (r, g, b, _a) = overlay_rgba(&ov, 0).expect("overlay activo");
+        // Blanco: r ~ g ~ b, todos altos.
+        assert!(r > 180 && g > 180 && b > 180, "expected white-ish, got ({r}, {g}, {b})");
     }
 
     #[test]
