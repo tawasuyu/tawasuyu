@@ -131,6 +131,20 @@ GEMINI_API_KEY=... PLUMA_LLM_BACKEND=gemini \
   --example multilienzo_dinamico_demo --release
 ```
 
+### 2.3.0 Importar un archivo `.docx` como cuerpo madre
+
+```rust
+use foreign_docx::parse_docx;
+let bytes = std::fs::read("informe.docx")?;
+let imp = parse_docx(&bytes, "es", "informe.docx", ahora_unix())?;
+// imp.cuerpo: Original, branch_id "es", lengua None
+// imp.atoms: un NarrativeAtom por <w:p> con texto no vacío
+```
+
+Mismo shape que `pluma_md::DocumentoImportado` para que el caller los
+trate uniforme. Formato Word (negrita, cursiva, estilos, headers,
+footers, tablas, comments) se descarta — solo contenido legible.
+
 ### 2.3.1 Importar un archivo `.md` como cuerpo madre
 
 ```rust
@@ -170,13 +184,19 @@ Tras unas cuantas corridas tendrás un haz crecido: una madre `es` con
 varias derivadas (`qu`, `en`, formal, resumen). El editor las muestra
 todas alineadas por hebras Derivadas 1↔1.
 
-**Atajos del demo completo**:
+**Atajos y botones del demo completo**:
 
 | Acción | Cómo |
 |---|---|
+| Derivar cuerpo nuevo | Botones `→ qu` · `→ en` · `tono formal` · `resumir 30p` |
+| Editar la madre | Botón `editar madre` (anexa marca incremental al 1er párrafo) |
+| Marcar todas las hijas stale | Botón `tocar madre` |
+| Regenerar hija stale | Botón `regenerar stale (N)` — una a la vez |
+| Cambiar IA en runtime | Botón `modelo: X` — cicla por los 6 backends |
 | Scroll horizontal | `Shift + rueda del mouse` · o eje X de touchpad |
-| Focus mode | Botón `solo madre` (oculta derivados) / `todos` |
+| Focus mode | Botón `solo madre` / `todos` |
 | Búsqueda transversal | Tipeá cualquier texto · `Backspace` borra · `Esc` limpia |
+| Persistencia UI | Automática: scroll/focus/búsqueda se restauran al reabrir |
 | Reset cache | `MULTILIENZO_COMPLETO_RESET=1` en el env |
 
 ### 2.5 Persistente — sobrevive entre corridas
