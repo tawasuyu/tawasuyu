@@ -163,11 +163,38 @@ pub struct WinitSurface {
 const INTERMEDIATE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 impl WinitSurface {
+    /// Constructor "feliz": crea la `wgpu::Surface` internamente.
+    /// Conveniente en desktop donde la secuencia normal es
+    /// `Hal::new(None)` → `WinitSurface::new(hal, window)`. **En Android
+    /// usar [`WinitSurface::from_surface`]** — allí la surface debe
+    /// existir antes del `request_adapter(compatible_surface=Some(...))`,
+    /// y crearla dos veces sobre la misma `ANativeWindow` falla con
+    /// `ERROR_NATIVE_WINDOW_IN_USE_KHR`.
     pub fn new(hal: &Hal, window: Arc<Window>) -> Result<Self, HalError> {
         let surface = hal
             .instance
             .create_surface(window.clone())
             .map_err(|e| HalError::CreateSurface(e.to_string()))?;
+        Self::from_surface(hal, window, surface)
+    }
+
+    /// Constructor reutilizable: arma el `WinitSurface` envolviendo una
+    /// `wgpu::Surface` ya creada por el caller. Necesario en Android
+    /// porque el orden allí es:
+    ///
+    /// 1. `instance.create_surface(window)`
+    /// 2. `instance.request_adapter(compatible_surface=Some(&surface))`
+    /// 3. `adapter.request_device(...)`
+    /// 4. `WinitSurface::from_surface(hal, window, surface)`
+    ///
+    /// — no se puede dropear la surface entre 2 y 4 ni recrearla, porque
+    /// Android reserva la `ANativeWindow` por VkSurface y rechaza un
+    /// segundo `vkCreateAndroidSurfaceKHR` sobre la misma ventana.
+    pub fn from_surface(
+        hal: &Hal,
+        window: Arc<Window>,
+        surface: wgpu::Surface<'static>,
+    ) -> Result<Self, HalError> {
         let size = window.inner_size();
         let caps = surface.get_capabilities(&hal.adapter);
         // Preferimos Bgra8Unorm o Rgba8Unorm (no sRGB) para que el blit

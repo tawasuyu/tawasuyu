@@ -130,8 +130,12 @@ impl App {
         };
 
         log::info!("[boot] 7/7 envolviendo en WinitSurface (intermediate + blitter)");
-        let llimphi_surface =
-            WinitSurface::new(&hal, window.clone()).map_err(|e| format!("WinitSurface: {e}"))?;
+        // Crítico: usar `from_surface` (no `new`), pasando la surface que
+        // ya creamos en el paso 3. `WinitSurface::new` haría un segundo
+        // create_surface contra la misma NativeWindow y Android responde
+        // ERROR_NATIVE_WINDOW_IN_USE_KHR → panic.
+        let llimphi_surface = WinitSurface::from_surface(&hal, window.clone(), surface)
+            .map_err(|e| format!("WinitSurface::from_surface: {e}"))?;
         log::info!("[boot] ✓ bootstrap completo, pidiendo redraw");
         window.request_redraw();
 
