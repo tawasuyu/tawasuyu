@@ -17,6 +17,8 @@
       <span class="brand-sub">monorepo · 4 cuadrantes</span>
     </div>
     <div class="topbar-right">
+      <span class="topbar-link is-panel" data-panel="1" data-title="panel · gioser" data-theme="gioser">panel</span>
+      <span class="topbar-sep">·</span>
       <span class="topbar-link" data-doc="/README.md" data-title="README" data-theme="gioser">README</span>
       <span class="topbar-sep">·</span>
       <span class="topbar-link" data-doc="/PLAN.md" data-title="PLAN" data-theme="gioser">PLAN</span>
@@ -29,7 +31,7 @@
 
     <!-- panel izquierdo: documentos del sistema -->
     <aside id="sidebar">
-      <div class="sidebar-section">
+      <div class="sidebar-section" data-mod="sistema">
         <h3>sistema</h3>
         <ul>
           <li><span class="doc" data-doc="/README.md" data-title="gioser/README" data-theme="gioser">gioser · README</span></li>
@@ -39,7 +41,7 @@
         </ul>
       </div>
 
-      <div class="sidebar-section">
+      <div class="sidebar-section" data-mod="unanchay">
         <h3>00 unanchay · percibir</h3>
         <ul>
           <li><span class="doc" data-doc="/00_unanchay/puriy/SDD.md" data-title="puriy/SDD" data-theme="unanchay">puriy · SDD</span></li>
@@ -48,7 +50,7 @@
         </ul>
       </div>
 
-      <div class="sidebar-section">
+      <div class="sidebar-section" data-mod="yachay">
         <h3>01 yachay · conocer</h3>
         <ul>
           <li><span class="doc" data-doc="/01_yachay/dominium/SDD.md" data-title="dominium/SDD" data-theme="yachay">dominium · SDD</span></li>
@@ -67,7 +69,7 @@
         </ul>
       </div>
 
-      <div class="sidebar-section">
+      <div class="sidebar-section" data-mod="ruway">
         <h3>02 ruway · hacer</h3>
         <ul>
           <li><span class="doc" data-doc="/02_ruway/llimphi/SDD.md" data-title="llimphi/SDD" data-theme="ruway">llimphi · SDD</span></li>
@@ -80,7 +82,7 @@
         </ul>
       </div>
 
-      <div class="sidebar-section">
+      <div class="sidebar-section" data-mod="ukupacha">
         <h3>03 ukupacha · raíz</h3>
         <ul>
           <li><span class="doc" data-doc="/03_ukupacha/arje/seeds/README.md" data-title="arje/seeds" data-theme="ukupacha">arje · seeds</span></li>
@@ -95,7 +97,7 @@
         </ul>
       </div>
 
-      <div class="sidebar-section">
+      <div class="sidebar-section" data-mod="shared">
         <h3>shared</h3>
         <ul>
           <li><span class="doc" data-doc="/shared/auth/auth-core/README.md" data-title="auth-core" data-theme="gioser">auth-core</span></li>
@@ -193,7 +195,7 @@
 
 <!-- ===================== JS: sistema de ventanas ===================== -->
 <script type="module">
-  import init, { cargar_md } from './pkg/gioser_web.js';
+  import init, { cargar_md, mount_panel, aplicar_preferencias } from './pkg/gioser_web.js';
 
   // Estado: { id, title, url, theme, x, y, w, h, z, minimized, el, taskEl }
   const ventanas = new Map();
@@ -360,9 +362,123 @@
     return id;
   }
 
-  // wire-up: cualquier elemento [data-doc] abre ventana
+  // ===== ventana especial: panel de control =====
+  // Reutiliza el chrome (titlebar/drag/resize/taskbar) y reemplaza el
+  // body por un contenedor donde Rust monta el panel.
+  function abrirPanel(title, theme) {
+    const url = '__panel__'; // pseudo-url para dedup en abrirVentana()
+    for (const [vid, v] of ventanas.entries()) {
+      if (v.url === url) {
+        if (v.minimized) restaurar(vid);
+        else traerAlFrente(vid);
+        return;
+      }
+    }
+    const id = `win-${++seq}`;
+    const contId = `${id}-content`;
+    const offset = (ventanas.size % 8) * 28;
+    const x = 100 + offset;
+    const y = 70 + offset;
+
+    const el = document.createElement('section');
+    el.className = 'window focused';
+    el.dataset.theme = theme || 'gioser';
+    el.style.left = x + 'px';
+    el.style.top  = y + 'px';
+    el.style.width = '780px';
+    el.style.height = '520px';
+    zTop += 1;
+    el.style.zIndex = zTop;
+    el.innerHTML = `
+      <header class="win-titlebar" data-drag="1">
+        <span class="win-icon">◧</span>
+        <span class="win-title"></span>
+        <span class="win-spacer"></span>
+        <button class="win-btn win-min"   type="button" aria-label="minimizar">─</button>
+        <button class="win-btn win-max"   type="button" aria-label="maximizar">▢</button>
+        <button class="win-btn win-close" type="button" aria-label="cerrar">×</button>
+      </header>
+      <div class="win-body">
+        <div id="${contId}" class="panel-host" style="height:100%"></div>
+      </div>
+      <div class="win-resize" data-resize="1"></div>
+    `;
+    el.querySelector('.win-title').textContent = title;
+    layer.appendChild(el);
+
+    const taskEl = document.createElement('button');
+    taskEl.type = 'button';
+    taskEl.className = 'task-item active';
+    taskEl.dataset.theme = theme || 'gioser';
+    taskEl.innerHTML = `<span class="task-dot"></span><span class="task-label"></span>`;
+    taskEl.querySelector('.task-label').textContent = title;
+    taskEl.addEventListener('click', () => {
+      const v = ventanas.get(id);
+      if (!v) return;
+      if (v.minimized) restaurar(id);
+      else if (v.el.classList.contains('focused')) minimizar(id);
+      else traerAlFrente(id);
+    });
+    taskItems.appendChild(taskEl);
+
+    const v = { id, title, url, theme, x, y, z: zTop, minimized: false, el, taskEl };
+    ventanas.set(id, v);
+
+    el.addEventListener('mousedown', () => traerAlFrente(id));
+    el.querySelector('.win-min').addEventListener('click',  (e) => { e.stopPropagation(); minimizar(id); });
+    el.querySelector('.win-close').addEventListener('click',(e) => { e.stopPropagation(); cerrar(id); });
+    el.querySelector('.win-max').addEventListener('click',  (e) => { e.stopPropagation(); el.classList.toggle('maximized'); });
+
+    // drag (mismo patrón que abrirVentana, sin duplicar handlers globales:
+    // los mousemove/up de abrirVentana ya están registrados a nivel document
+    // y aplican sobre cualquier `drag`/`resizing` activo — pero como cada
+    // ventana usa closures locales, agregamos los suyos también aquí).
+    const tb = el.querySelector('.win-titlebar');
+    let drag = null;
+    tb.addEventListener('mousedown', (e) => {
+      if (e.target.closest('.win-btn')) return;
+      if (el.classList.contains('maximized')) return;
+      drag = { dx: e.clientX - el.offsetLeft, dy: e.clientY - el.offsetTop };
+      e.preventDefault();
+    });
+    tb.addEventListener('dblclick', (e) => {
+      if (e.target.closest('.win-btn')) return;
+      el.classList.toggle('maximized');
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!drag) return;
+      const nx = Math.max(0, Math.min(window.innerWidth  - 100, e.clientX - drag.dx));
+      const ny = Math.max(0, Math.min(window.innerHeight - 80,  e.clientY - drag.dy));
+      el.style.left = nx + 'px';
+      el.style.top  = ny + 'px';
+    });
+    document.addEventListener('mouseup', () => { drag = null; resizing = null; });
+
+    const grip = el.querySelector('.win-resize');
+    let resizing = null;
+    grip.addEventListener('mousedown', (e) => {
+      resizing = { sx: e.clientX, sy: e.clientY, sw: el.offsetWidth, sh: el.offsetHeight };
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!resizing) return;
+      const nw = Math.max(520, resizing.sw + (e.clientX - resizing.sx));
+      const nh = Math.max(360, resizing.sh + (e.clientY - resizing.sy));
+      el.style.width  = nw + 'px';
+      el.style.height = nh + 'px';
+    });
+
+    // Montar el panel Rust adentro del contenedor.
+    try { mount_panel(contId); }
+    catch (e) { console.error('mount_panel failed', e); }
+    return id;
+  }
+
+  // wire-up: cualquier elemento [data-doc] o [data-panel] abre ventana
   function bindDocTriggers(root) {
-    root.querySelectorAll('[data-doc]').forEach(el => {
+    root.querySelectorAll('[data-doc]:not([data-bound])').forEach(el => {
+      el.setAttribute('data-bound', '1');
       el.addEventListener('click', (e) => {
         e.preventDefault();
         const url   = el.dataset.doc;
@@ -371,7 +487,24 @@
         abrirVentana(url, title, theme);
       });
     });
+    root.querySelectorAll('[data-panel]:not([data-bound])').forEach(el => {
+      el.setAttribute('data-bound', '1');
+      el.addEventListener('click', (e) => {
+        e.preventDefault();
+        const title = el.dataset.title || 'panel';
+        const theme = el.dataset.theme || 'gioser';
+        abrirPanel(title, theme);
+      });
+    });
   }
+
+  // El panel inyecta cards con [data-doc]: cuando termina de montar,
+  // dispara `gioser:rebind` con detail = container para que los
+  // enganchemos al sistema de ventanas (sin duplicar listeners).
+  document.addEventListener('gioser:rebind', (e) => {
+    const target = e.detail || document;
+    if (target && target.querySelectorAll) bindDocTriggers(target);
+  });
 
   // reloj de la taskbar
   function tickClock() {
@@ -382,6 +515,9 @@
   }
 
   init().then(() => {
+    // Aplicar preferencias persistidas antes de mostrar nada interactivo,
+    // así theme/accent/módulos arrancan respetando lo que ya configuró.
+    try { aplicar_preferencias(); } catch (e) { console.error('aplicar_preferencias', e); }
     bindDocTriggers(document);
     tickClock();
     setInterval(tickClock, 30_000);
