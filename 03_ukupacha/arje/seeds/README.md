@@ -25,6 +25,17 @@ arje-zero               # busca /ente/seed.card.json (o /ente/seed.card)
 arje-zero --dev         # busca ./seed.card.json en el CWD
 ```
 
+Para armar el initramfs bootable a partir de la seed —
+ver [`arje-packager`](../init/arje-packager) — usá:
+
+```sh
+target/release/arje-packager \
+    --seed 03_ukupacha/arje/seeds/arje-qemu.card.json \
+    --out  /tmp/arje-qemu.cpio.gz \
+    --bin  arje-zero=target/release/arje-zero \
+    --bin  agetty-ttyS0=/sbin/agetty
+```
+
 `arje-zero` invoca `EntityCard::validate()` recursivamente sobre `genesis`
 antes de encarnar nada — una semilla con un campo roto frena el arranque
 con `anyhow::bail!` antes de tocar fork(2).
