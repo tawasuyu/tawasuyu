@@ -1,0 +1,15 @@
+[package]
+name = "arje-net-bring-up"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "arje-net-bring-up — oneshot Ente que sube el enlace de la primera interfaz no-loopback. Lo invoca la semilla host como Native payload."
+
+[[bin]]
+name = "arje-net-bring-up"
+path = "src/main.rs"
+
+[dependencies]
+libc = { workspace = true }
+anyhow = { workspace = true }

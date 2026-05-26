@@ -217,6 +217,7 @@ members = [
     "03_ukupacha/arje/init/arje-absorb",
     "03_ukupacha/arje/init/arje-incarnate",
     "03_ukupacha/arje/init/arje-kernel",
+    "03_ukupacha/arje/init/arje-net-bring-up",
     "03_ukupacha/arje/init/arje-snapshot",
     "03_ukupacha/arje/init/arje-soma",
     "03_ukupacha/arje/init/arje-zero",
