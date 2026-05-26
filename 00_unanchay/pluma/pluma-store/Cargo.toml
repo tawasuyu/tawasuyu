@@ -15,6 +15,7 @@ pluma-align = { path = "../pluma-align" }
 pluma-transform = { path = "../pluma-transform" }
 sled = { workspace = true }
 bincode = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 uuid = { workspace = true }
 thiserror = { workspace = true }
 

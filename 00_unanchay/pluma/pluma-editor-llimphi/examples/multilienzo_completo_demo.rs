@@ -41,7 +41,7 @@ use pluma_editor_llimphi::Palette;
 use pluma_graph::NarrativeGraph;
 use pluma_llm::from_env as llm_from_env;
 use pluma_llm_core::ChatClient;
-use pluma_store::PlumaStore;
+use pluma_store::{EstadoUi, PlumaStore};
 use pluma_transform::{TipoTransformacion, Transformacion};
 use pluma_transform_llm::{
     EjecutorResumirLlm, EjecutorTonoLlm, EjecutorTraducirLlm,
@@ -184,7 +184,7 @@ impl App for Demo {
         );
 
         // Cargar lo que haya en disco; si nada, sembrar madre es base.
-        if store.cuerpos_len() >= 1 {
+        let mut m = if store.cuerpos_len() >= 1 {
             eprintln!(
                 "multilienzo_completo_demo :: cargando {} cuerpos de disco",
                 store.cuerpos_len()
@@ -193,7 +193,20 @@ impl App for Demo {
         } else {
             eprintln!("multilienzo_completo_demo :: sembrando madre es base");
             sembrar_madre_base(store.clone(), chat)
+        };
+        // Restaurar estado UI persistido — focus, búsqueda, scroll
+        // sobreviven al cierre del proceso.
+        if let Ok(Some(ui)) = m.store.get_estado_ui() {
+            eprintln!(
+                "multilienzo_completo_demo :: estado UI restaurado: \
+                 solo_madre={} busqueda=\"{}\" scroll_x={:.0}",
+                ui.solo_madre, ui.busqueda, ui.scroll_x
+            );
+            m.solo_madre = ui.solo_madre;
+            m.busqueda = ui.busqueda;
+            m.scroll_x = ui.scroll_x;
         }
+        m
     }
 
     fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
@@ -267,18 +280,23 @@ impl App for Demo {
                 // ancho del contenido); aquí solo acumulamos y dejamos
                 // que no se vaya negativo.
                 m.scroll_x = (m.scroll_x + dx).max(0.0);
+                persistir_estado_ui(&m);
             }
             Msg::ToggleSoloMadre => {
                 m.solo_madre = !m.solo_madre;
+                persistir_estado_ui(&m);
             }
             Msg::BuscarAgregar(c) => {
                 m.busqueda.push(c);
+                persistir_estado_ui(&m);
             }
             Msg::BuscarBorrar => {
                 m.busqueda.pop();
+                persistir_estado_ui(&m);
             }
             Msg::BuscarLimpiar => {
                 m.busqueda.clear();
+                persistir_estado_ui(&m);
             }
         }
         m
@@ -360,6 +378,23 @@ impl App for Demo {
         .clip(true)
         .children(vec![toolbar, cuerpos_view])
     }
+}
+
+/// Vuelca el estado de UI del modelo al store. Lo llamamos en cada
+/// cambio de `solo_madre`/`busqueda`/`scroll_x`. El cuello de botella
+/// es despreciable (sled escribe + flush; <1 ms) y vale la pena para
+/// no perder el estado de la sesión si el proceso muere.
+fn persistir_estado_ui(m: &Model) {
+    let ui = EstadoUi {
+        solo_madre: m.solo_madre,
+        busqueda: m.busqueda.clone(),
+        scroll_x: m.scroll_x,
+        backend_llm: m.chat.model_id().to_string(),
+    };
+    if let Err(e) = m.store.put_estado_ui(&ui) {
+        eprintln!("persistir estado UI falló: {e}");
+    }
+    let _ = m.store.flush();
 }
 
 enum TrabajoLlm {

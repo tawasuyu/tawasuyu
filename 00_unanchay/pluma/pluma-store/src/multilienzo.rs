@@ -17,6 +17,8 @@
 use sled::{Db, Tree};
 use uuid::Uuid;
 
+use serde::{Deserialize, Serialize};
+
 use pluma_align::CartaHebras;
 use pluma_cuerpo::Cuerpo;
 use pluma_transform::Transformacion;
@@ -27,6 +29,25 @@ const TREE_ATOMS: &str = "atoms";
 const TREE_CUERPOS: &str = "cuerpos";
 const TREE_TRANSFORMACIONES: &str = "transformaciones";
 const TREE_CARTAS: &str = "cartas";
+const TREE_UI: &str = "ui";
+const KEY_ESTADO_UI: &[u8] = b"default";
+
+/// Estado de UI persistible — sobrevive a cerrar la app. Por documento
+/// hay UN estado (clave fija `b"default"` en el tree "ui"); si el
+/// futuro pide multi-documento, las claves se versionan por documento.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct EstadoUi {
+    /// Focus mode: ocultar todos los cuerpos derivados, solo madre.
+    pub solo_madre: bool,
+    /// Búsqueda transversal activa (vacío = sin búsqueda).
+    pub busqueda: String,
+    /// Desplazamiento horizontal del multilienzo, en px.
+    pub scroll_x: f32,
+    /// Nombre del backend LLM activo — se restaura al reabrir el
+    /// documento. Formato libre (`"anthropic"`, `"gemini"`, …). Vacío
+    /// = el demo elige por defecto.
+    pub backend_llm: String,
+}
 
 /// Errores específicos del multilienzo store.
 #[derive(Debug, thiserror::Error)]
@@ -48,6 +69,7 @@ pub struct PlumaStore {
     cuerpos: Tree,
     transformaciones: Tree,
     cartas: Tree,
+    ui: Tree,
 }
 
 impl PlumaStore {
@@ -60,12 +82,14 @@ impl PlumaStore {
             .open_tree(TREE_TRANSFORMACIONES)
             .map_err(StoreError::from)?;
         let cartas = db.open_tree(TREE_CARTAS).map_err(StoreError::from)?;
+        let ui = db.open_tree(TREE_UI).map_err(StoreError::from)?;
         Ok(Self {
             db,
             atoms,
             cuerpos,
             transformaciones,
             cartas,
+            ui,
         })
     }
 
@@ -261,6 +285,27 @@ impl PlumaStore {
     pub fn cartas_len(&self) -> usize {
         self.cartas.len()
     }
+
+    // ----- Estado UI ------------------------------------------------------
+
+    /// Guarda el estado de UI del documento. Sobrescribe el anterior; el
+    /// modelo aquí asume UN estado por store (clave fija).
+    pub fn put_estado_ui(&self, e: &EstadoUi) -> Result<(), MultilienzoError> {
+        let bytes = bincode::serialize(e).map_err(StoreError::from)?;
+        self.ui.insert(KEY_ESTADO_UI, bytes).map_err(StoreError::from)?;
+        Ok(())
+    }
+
+    /// Lee el estado de UI persistido. `None` si nunca se guardó —
+    /// caller cae a `EstadoUi::default()`.
+    pub fn get_estado_ui(&self) -> Result<Option<EstadoUi>, MultilienzoError> {
+        match self.ui.get(KEY_ESTADO_UI).map_err(StoreError::from)? {
+            Some(b) => Ok(Some(
+                bincode::deserialize(&b).map_err(StoreError::from)?,
+            )),
+            None => Ok(None),
+        }
+    }
 }
 
 /// Compone la clave binaria de una carta: 16 bytes de `cuerpo_a` +
@@ -412,6 +457,23 @@ mod pruebas {
         }
         let todos: Vec<Cuerpo> = s.iter_cuerpos().collect::<Result<_, _>>().unwrap();
         assert_eq!(todos.len(), 5);
+    }
+
+    #[test]
+    fn estado_ui_roundtrip_y_default_si_vacio() {
+        let (s, _d) = store_temp();
+        // Sin nada guardado, get devuelve None.
+        assert!(s.get_estado_ui().unwrap().is_none());
+        // Put + get devuelve el estado intacto.
+        let e = EstadoUi {
+            solo_madre: true,
+            busqueda: "cóndor".to_string(),
+            scroll_x: 240.5,
+            backend_llm: "gemini".to_string(),
+        };
+        s.put_estado_ui(&e).unwrap();
+        let r = s.get_estado_ui().unwrap().unwrap();
+        assert_eq!(r, e);
     }
 
     #[test]
