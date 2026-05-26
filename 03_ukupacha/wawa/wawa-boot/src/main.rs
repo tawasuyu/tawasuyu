@@ -119,14 +119,16 @@ const FUEL_COMUN: u32 = 2_000_000;
 /// presupuesto comun. El primer caso real del modelo "fuel per-app".
 const FUEL_EDITOR: u32 = 6_000_000;
 
-/// El userspace de genesis — las nueve aplicaciones que pueblan un disco recien
+/// El userspace de genesis — las diez aplicaciones que pueblan un disco recien
 /// forjado. La `bitacora` (Fase 17, editor que persiste), el `pregon` (Fase 19,
 /// la primera voz hacia la red), la melodia visual `tonada` (Fase 12), el
 /// compas visual `pulso` (Fase 11), un saludo (`hola`), la `memoriosa`
-/// interactiva que recuerda entre sesiones (Fase 7c), y tres demos de los
-/// guardarrailes del kernel: `discola` (combustible), `glotona` (memoria) y
-/// `cronista` (la cronica de los arranques).
-const GENESIS: [AppGenesis; 9] = [
+/// interactiva que recuerda entre sesiones (Fase 7c), tres demos de los
+/// guardarrailes del kernel —`discola` (combustible), `glotona` (memoria),
+/// `cronista` (la cronica de los arranques)— y `tonalero` (Fase 22): el
+/// testigo visual del bucle de Configuracion, que pinta la paleta activa y
+/// la rota con SPACE para demostrar el reanclaje atomico del manifiesto.
+const GENESIS: [AppGenesis; 10] = [
     AppGenesis { nombre: "bitacora", archivo: "bitacora.wasm", region: (100, 120, 480, 280), fuel: FUEL_EDITOR },
     AppGenesis { nombre: "pregon", archivo: "pregon.wasm", region: (100, 120, 480, 160), fuel: FUEL_COMUN },
     AppGenesis { nombre: "tonada", archivo: "tonada.wasm", region: (100, 120, 360, 120), fuel: FUEL_COMUN },
@@ -136,6 +138,7 @@ const GENESIS: [AppGenesis; 9] = [
     AppGenesis { nombre: "discola", archivo: "discola.wasm", region: (60, 700, 360, 80), fuel: FUEL_COMUN },
     AppGenesis { nombre: "glotona", archivo: "glotona.wasm", region: (460, 700, 360, 80), fuel: FUEL_COMUN },
     AppGenesis { nombre: "cronista", archivo: "cronista.wasm", region: (860, 700, 360, 80), fuel: FUEL_COMUN },
+    AppGenesis { nombre: "tonalero", archivo: "tonalero.wasm", region: (700, 220, 480, 300), fuel: FUEL_COMUN },
 ];
 
 /// Techo de memoria lineal de cada app de genesis: 4 MiB. Un modulo que intente

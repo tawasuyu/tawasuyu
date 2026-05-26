@@ -1,0 +1,30 @@
+# =============================================================================
+#  renaser :: apps/tonalero — demostrador de Configuracion (idioma + tema)
+# -----------------------------------------------------------------------------
+#  Esta app no conoce el manifiesto, no sondea el grafo, no pregunta nada. En
+#  cada `tick` el kernel ya le dejo en el ContextoCapacidades el idioma y la
+#  paleta activos; la app los lee con dos capacidades pasivas y pinta cinco
+#  bandas con los cinco colores. La barra espaciadora rota la paleta: la app
+#  propone una nueva configuracion al kernel, que engendra un nodo nuevo del
+#  grafo y reancla el manifiesto en una sola transicion atomica — el siguiente
+#  fotograma ya pinta con los nuevos colores. Frame-lock perfecto.
+# =============================================================================
+
+[package]
+name = "tonalero"
+version = "0.1.0"
+edition = "2021"
+description = "renaser :: app WASM que demuestra el bucle de Configuracion"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
