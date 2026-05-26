@@ -204,7 +204,6 @@ members = [
     "02_ruway/supay/supay-scene",
     "02_ruway/shuma/shuma-daemon",
     "02_ruway/shuma/shuma-gateway",
-    "02_ruway/shuma/shuma-shell",
     "02_ruway/takiy/takiy-core",
     "03_ukupacha/agora/agora-app",
     "03_ukupacha/agora/agora-core",
@@ -450,7 +449,7 @@ nucleo-matcher = "0.3"
 snow = "0.9"
 hex = "0.4"
 
-# === PTY + emulador de terminal (shuma-exec, shuma-shell) ===
+# === PTY + emulador de terminal (shuma-exec, módulos REPL) ===
 # portable-pty aloja un PTY cross-platform; lo usamos para los
 # comandos TUI tipo vim/htop/less que necesitan un terminal de verdad.
 # vt100 parsea la secuencia de bytes que el PTY emite (ANSI + cursor
