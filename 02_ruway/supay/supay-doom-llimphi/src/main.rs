@@ -31,9 +31,8 @@
 
 use std::time::{Duration, Instant};
 
-use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{length, percent, Dimension, FlexDirection, Size, Style},
+    prelude::{length, percent, Dimension, FlexDirection, JustifyContent, Size, Style},
     AlignItems, Rect,
 };
 use llimphi_ui::llimphi_raster::peniko::{Blob, Color, Image, ImageFormat};
@@ -41,6 +40,26 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use supay_core::{keys, DoomEngine, SnapshotPair, DOOM_HEIGHT, DOOM_PIXELS, DOOM_WIDTH};
 use supay_render_llimphi::{scene_view, RenderConfig};
+
+// =====================================================================
+// Paleta Supay — riffs sobre la identidad del Doom clásico:
+// negro carbón de cabina, crimson de sangre BFG, ámbar de chasis, gris
+// hueso del HUD. Pensada para verse igual sobre wayland o framebuffer.
+// =====================================================================
+const COLOR_BG_ABYSS: Color = Color::from_rgba8(0, 0, 0, 255);
+const COLOR_BG_PANEL: Color = Color::from_rgba8(12, 8, 8, 255);
+const COLOR_BG_SUNKEN: Color = Color::from_rgba8(6, 4, 4, 255);
+const COLOR_CRIMSON: Color = Color::from_rgba8(180, 30, 30, 255);
+const COLOR_CRIMSON_DEEP: Color = Color::from_rgba8(90, 14, 14, 255);
+const COLOR_AMBER: Color = Color::from_rgba8(232, 168, 76, 255);
+const COLOR_BONE: Color = Color::from_rgba8(216, 204, 188, 255);
+const COLOR_DUST: Color = Color::from_rgba8(132, 124, 116, 255);
+const COLOR_GREEN_CRT: Color = Color::from_rgba8(140, 188, 96, 255);
+const COLOR_RULE: Color = Color::from_rgba8(48, 16, 16, 255);
+
+const HEADER_HEIGHT: f32 = 44.0;
+const FOOTER_HEIGHT: f32 = 24.0;
+const FRAME_THICKNESS: f32 = 4.0;
 
 const TICK_HZ: u64 = 35; // canónico de Doom
 const TICK_MS: u64 = 1_000 / TICK_HZ;
@@ -185,23 +204,23 @@ impl App for Supay {
     }
 
     fn view(model: &Model) -> View<Msg> {
-        let theme = Theme::dark();
-        let header = header_bar(model, &theme);
+        let header = header_bar(model);
         let body = match model.view_mode {
             ViewMode::Framebuffer => {
                 if model.engine.real {
-                    game_pane(model)
+                    framed_pane(game_pane(model))
                 } else {
-                    stub_message_pane(&theme)
+                    stub_message_pane()
                 }
             }
-            ViewMode::Scene3d => scene_view(
+            ViewMode::Scene3d => framed_pane(scene_view(
                 &model.snapshots,
                 model.last_tick_at,
                 TICK_PERIOD,
                 RenderConfig::default(),
-            ),
+            )),
         };
+        let footer = footer_bar(model);
         View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
@@ -210,66 +229,236 @@ impl App for Supay {
             },
             ..Default::default()
         })
-        .fill(Color::from_rgba8(0, 0, 0, 255))
-        .children(vec![header, body])
+        .fill(COLOR_BG_ABYSS)
+        .children(vec![header, body, footer])
     }
 }
 
-fn header_bar(model: &Model, theme: &Theme) -> View<Msg> {
-    let mode = rimay_localize::t(if model.engine.real {
+// =====================================================================
+// Header — banda alta con el logo a la izquierda y un HUD a la derecha:
+// pill de modo (REAL o STUB), tick monoespaciado, tag de vista, recuento
+// de la escena. Look "BFG console".
+// =====================================================================
+fn header_bar(model: &Model) -> View<Msg> {
+    let logo_text = View::new(Style {
+        size: Size {
+            width: Dimension::auto(),
+            height: length(26.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(
+        "SUPAY · DOOM".to_string(),
+        22.0,
+        COLOR_CRIMSON,
+        Alignment::Start,
+    );
+    let logo_sub = View::new(Style {
+        size: Size {
+            width: Dimension::auto(),
+            height: length(12.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(
+        "PHASE 1 · LLIMPHI BUILD".to_string(),
+        9.0,
+        COLOR_AMBER,
+        Alignment::Start,
+    );
+    let logo = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: Dimension::auto(),
+            height: percent(1.0_f32),
+        },
+        justify_content: Some(JustifyContent::Center),
+        padding: Rect {
+            left: length(18.0_f32),
+            right: length(0.0_f32),
+            top: length(2.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![logo_text, logo_sub]);
+
+    let mode_id = if model.engine.real {
         "supay-mode-real"
     } else {
         "supay-mode-stub"
-    });
-    let title = model.engine.title();
-    let title = if title.is_empty() { "supay-doom".to_string() } else { title };
-    // Fase 2: stats del snapshot más reciente.
+    };
+    let mode_bg = if model.engine.real { COLOR_CRIMSON_DEEP } else { COLOR_BG_SUNKEN };
+    let mode_fg = if model.engine.real { COLOR_AMBER } else { COLOR_DUST };
+    let mode_pill = View::new(Style {
+        size: Size {
+            width: length(110.0_f32),
+            height: length(22.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(mode_bg)
+    .radius(3.0)
+    .text_aligned(
+        rimay_localize::t(mode_id),
+        11.0,
+        mode_fg,
+        Alignment::Center,
+    );
+
     let scene = model
         .snapshots
         .next()
         .map(|s| {
             format!(
-                "scene[w={} sec={} spr={}]",
+                "w={} sec={} spr={}",
                 s.walls.len(),
                 s.sectors.len(),
                 s.sprites.len()
             )
         })
-        .unwrap_or_else(|| "scene[—]".to_string());
+        .unwrap_or_else(|| "—".to_string());
     let view_tag = rimay_localize::t(match model.view_mode {
         ViewMode::Framebuffer => "supay-view-fb",
         ViewMode::Scene3d => "supay-view-3d",
     });
-    View::new(Style {
+    let stats = View::new(Style {
         size: Size {
-            width: percent(1.0_f32),
-            height: length(24.0_f32),
+            width: Dimension::auto(),
+            height: percent(1.0_f32),
         },
+        flex_grow: 1.0,
+        align_items: Some(AlignItems::Center),
         padding: Rect {
             left: length(12.0_f32),
-            right: length(12.0_f32),
+            right: length(18.0_f32),
             top: length(0.0_f32),
             bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(
+        format!(
+            "TICK {:06}    {}    SCENE [{}]",
+            model.tick, view_tag, scene
+        ),
+        11.0,
+        COLOR_BONE,
+        Alignment::End,
+    );
+
+    let right = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::End),
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .children(vec![stats, mode_pill]);
+
+    let inner = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(HEADER_HEIGHT),
         },
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .fill(theme.bg_panel)
+    .fill(COLOR_BG_PANEL)
+    .children(vec![logo, right]);
+
+    // Banda 1 px crimson como underline al header — separador del juego.
+    let rule = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(COLOR_RULE);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(HEADER_HEIGHT + 1.0),
+        },
+        ..Default::default()
+    })
+    .children(vec![inner, rule])
+}
+
+// =====================================================================
+// Footer — banda baja con los controles, color CRT verde sobre negro.
+// =====================================================================
+fn footer_bar(model: &Model) -> View<Msg> {
+    let id = if model.engine.real {
+        "supay-controls-hint"
+    } else {
+        "supay-stub-controls-hint"
+    };
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(FOOTER_HEIGHT),
+        },
+        align_items: Some(AlignItems::Center),
+        padding: Rect {
+            left: length(18.0_f32),
+            right: length(18.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(COLOR_BG_SUNKEN)
     .text_aligned(
-        rimay_localize::t_args(
-            "supay-header",
-            &[
-                ("title", title.into()),
-                ("tick", model.tick.to_string().into()),
-                ("mode", mode.into()),
-                ("view", view_tag.into()),
-                ("scene", scene.into()),
-            ],
-        ),
-        11.0,
-        theme.fg_muted,
+        rimay_localize::t(id),
+        10.0,
+        COLOR_GREEN_CRT,
         Alignment::Start,
     )
+}
+
+// =====================================================================
+// Marco crimson — envuelve cualquier contenido (FB o renderer 3D) con
+// un border de 4 px en rojo profundo. Truco "outer fill = border color,
+// inner fill = real content".
+// =====================================================================
+fn framed_pane(content: View<Msg>) -> View<Msg> {
+    let inner = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .fill(COLOR_BG_ABYSS)
+    .children(vec![content]);
+
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        flex_grow: 1.0,
+        padding: Rect {
+            left: length(FRAME_THICKNESS),
+            right: length(FRAME_THICKNESS),
+            top: length(FRAME_THICKNESS),
+            bottom: length(FRAME_THICKNESS),
+        },
+        ..Default::default()
+    })
+    .fill(COLOR_CRIMSON_DEEP)
+    .children(vec![inner])
 }
 
 fn game_pane(model: &Model) -> View<Msg> {
@@ -299,55 +488,109 @@ fn game_pane(model: &Model) -> View<Msg> {
     .image(image)
 }
 
-fn stub_message_pane(theme: &Theme) -> View<Msg> {
-    let title = View::new(Style {
+// =====================================================================
+// Stub screen — pantalla "no hay WAD" rediseñada como console-prompt:
+// banner crimson arriba, pasos numerados con su comando en color CRT,
+// pie con el porqué técnico del motor.
+// =====================================================================
+fn stub_message_pane() -> View<Msg> {
+    let banner = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
-            height: length(60.0_f32),
+            height: length(120.0_f32),
         },
         padding: Rect {
-            left: length(32.0_f32),
-            right: length(32.0_f32),
-            top: length(40.0_f32),
+            left: length(40.0_f32),
+            right: length(40.0_f32),
+            top: length(36.0_f32),
             bottom: length(0.0_f32),
         },
+        flex_direction: FlexDirection::Column,
         ..Default::default()
     })
-    .text_aligned(
-        rimay_localize::t("supay-stub-title"),
-        24.0,
-        theme.fg_text,
-        Alignment::Start,
-    );
+    .children(vec![
+        View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(44.0_f32),
+            },
+            ..Default::default()
+        })
+        .text_aligned(
+            "SUPAY · DOOM".to_string(),
+            32.0,
+            COLOR_CRIMSON,
+            Alignment::Start,
+        ),
+        View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(24.0_f32),
+            },
+            ..Default::default()
+        })
+        .text_aligned(
+            rimay_localize::t("supay-stub-title"),
+            13.0,
+            COLOR_DUST,
+            Alignment::Start,
+        ),
+    ]);
+
+    let mut steps: Vec<View<Msg>> = Vec::new();
+    for (n, (title_id, cmd_id)) in [
+        ("supay-stub-step-1", "supay-stub-step-1-cmd"),
+        ("supay-stub-step-2", "supay-stub-step-2-cmd"),
+        ("supay-stub-step-3", "supay-stub-step-3-cmd"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        steps.push(stub_step((n as u32) + 1, title_id, cmd_id));
+    }
+
     let body = View::new(Style {
+        flex_direction: FlexDirection::Column,
         size: Size {
             width: percent(1.0_f32),
-            height: percent(1.0_f32),
+            height: Dimension::auto(),
         },
         flex_grow: 1.0,
         padding: Rect {
-            left: length(32.0_f32),
-            right: length(32.0_f32),
-            top: length(10.0_f32),
-            bottom: length(32.0_f32),
+            left: length(40.0_f32),
+            right: length(40.0_f32),
+            top: length(8.0_f32),
+            bottom: length(20.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(14.0_f32),
         },
         ..Default::default()
     })
+    .children(steps);
+
+    let foot = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(36.0_f32),
+        },
+        padding: Rect {
+            left: length(40.0_f32),
+            right: length(40.0_f32),
+            top: length(0.0_f32),
+            bottom: length(12.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
     .text_aligned(
-        "Para correr Doom real:\n\n\
-         1.  cd 02_ruway/supay/supay-core/vendor\n\
-         2.  git clone https://github.com/ozkl/doomgeneric.git\n\
-         3.  Bajá DOOM1.WAD (shareware) al cwd:\n\
-         \n     curl -O https://distro.ibiblio.org/slitaz/sources/packages/d/doom1.wad\n\n\
-         4.  cargo run -p supay-doom-llimphi --release\n\n\
-         La ventana Llimphi pintará el framebuffer 320×200 del motor\n\
-         original con aspect-fit a la resolución de la ventana.\n\n\
-         F12 cierra la ventana en cualquier momento.".to_string(),
-        13.0,
-        theme.fg_muted,
+        rimay_localize::t("supay-stub-footer"),
+        11.0,
+        COLOR_DUST,
         Alignment::Start,
-    )
-    .fill(Color::from_rgba8(10, 10, 14, 255));
+    );
+
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
@@ -357,7 +600,91 @@ fn stub_message_pane(theme: &Theme) -> View<Msg> {
         flex_grow: 1.0,
         ..Default::default()
     })
-    .children(vec![title, body])
+    .fill(COLOR_BG_PANEL)
+    .children(vec![banner, body, foot])
+}
+
+/// Un paso del setup: bullet ámbar con el número + título en hueso +
+/// comando shell debajo en verde CRT sobre una caja sunken.
+fn stub_step(n: u32, title_id: &'static str, cmd_id: &'static str) -> View<Msg> {
+    let bullet = View::new(Style {
+        size: Size {
+            width: length(28.0_f32),
+            height: length(22.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(
+        format!("{:02}", n),
+        13.0,
+        COLOR_AMBER,
+        Alignment::Center,
+    );
+
+    let title = View::new(Style {
+        size: Size {
+            width: Dimension::auto(),
+            height: length(22.0_f32),
+        },
+        flex_grow: 1.0,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(
+        rimay_localize::t(title_id),
+        14.0,
+        COLOR_BONE,
+        Alignment::Start,
+    );
+
+    let head = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(22.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(vec![bullet, title]);
+
+    let cmd = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(28.0_f32),
+        },
+        padding: Rect {
+            left: length(12.0_f32),
+            right: length(12.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(COLOR_BG_SUNKEN)
+    .radius(2.0)
+    .text_aligned(
+        rimay_localize::t(cmd_id),
+        11.0,
+        COLOR_GREEN_CRT,
+        Alignment::Start,
+    );
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: Dimension::auto(),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(4.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![head, cmd])
 }
 
 /// Copia el framebuffer ARGB (`0xAARRGGBB` little-endian u32) que el

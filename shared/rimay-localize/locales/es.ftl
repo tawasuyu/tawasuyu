@@ -140,6 +140,15 @@ supay-view-fb = view=FB (F3→3D)
 supay-view-3d = view=3D (F3→FB)
 supay-header = { $title }  ·  tick { $tick }  ·  { $mode }  ·  { $view }  ·  { $scene }
 supay-stub-title = supay-doom-llimphi corre en modo STUB
+supay-stub-step-1 = Cloná doomgeneric
+supay-stub-step-1-cmd =     cd 02_ruway/supay/supay-core/vendor && git clone https://github.com/ozkl/doomgeneric.git
+supay-stub-step-2 = Bajá el WAD shareware al cwd
+supay-stub-step-2-cmd =     curl -O https://distro.ibiblio.org/slitaz/sources/packages/d/doom1.wad
+supay-stub-step-3 = Volvé a correr
+supay-stub-step-3-cmd =     cargo run -p supay-doom-llimphi --release
+supay-stub-footer = doomgeneric (C) avanza a 35 Hz; el framebuffer 320×200 ARGB se pinta en aspect-fit.
+supay-controls-hint = WASD/← → mover  ·  Ctrl disparar  ·  Space usar  ·  Tab mapa  ·  Esc menú  ·  F3 alterna vista  ·  F12 salir
+supay-stub-controls-hint = F3 alterna FB/3D  ·  F12 cierra la ventana
 
 # === shuma-shell ===
 shuma-label-launcher = Launcher

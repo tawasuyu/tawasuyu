@@ -1,0 +1,16 @@
+[package]
+name = "pluma-transform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "pluma — transformaciones declarativas entre cuerpos: Identidad/Traducir/Tono/Resumir/Reescribir/Custom. Los backends reales (rimay/iniy) viven aparte; aquí queda el modelo + el ejecutor Identidad que prueba el flujo madre→hija sin LLM."
+
+[dependencies]
+uuid = { workspace = true, features = ["serde"] }
+serde = { workspace = true }
+postcard = { workspace = true }
+pluma-core = { path = "../pluma-core" }
+pluma-cuerpo = { path = "../pluma-cuerpo" }
+pluma-align = { path = "../pluma-align" }
