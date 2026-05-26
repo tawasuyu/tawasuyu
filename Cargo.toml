@@ -40,6 +40,7 @@ members = [
     "00_unanchay/pineal/pineal-umbrella",
     "00_unanchay/pluma/pluma-app",
     "00_unanchay/pluma/pluma-core",
+    "00_unanchay/pluma/pluma-cuerpo",
     "00_unanchay/pluma/pluma-deck-core",
     "00_unanchay/pluma/pluma-deck-web",
     "00_unanchay/pluma/pluma-editor-llimphi",
