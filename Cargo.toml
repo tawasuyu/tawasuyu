@@ -108,7 +108,7 @@ members = [
     "02_ruway/chasqui/chasqui-broker-explorer",
     "02_ruway/chasqui/chasqui-card",
     "02_ruway/chasqui/chasqui-core",
-    "02_ruway/chasqui/chasqui-explorer",
+    "02_ruway/chasqui/chasqui-explorer-llimphi",
     "02_ruway/chasqui/chasqui-nous",
     "02_ruway/chasqui/chasqui-nous-mock",
     "02_ruway/chasqui/chasqui-nous-real",

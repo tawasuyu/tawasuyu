@@ -1,0 +1,22 @@
+[package]
+name = "chasqui-explorer-llimphi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Explorador Llimphi de Mónadas: panel que descubre al daemon chasqui vía broker brahman y consulta sus Mónadas dinámicamente. Reemplazo del `chasqui-explorer` GPUI; el discovery (card-sidecar) y el cliente de query no cambian, sólo el frontend."
+
+[dependencies]
+card-core = { path = "../../../shared/card/card-core" }
+card-sidecar = { path = "../../../shared/card/card-sidecar" }
+chasqui-card = { path = "../chasqui-card" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-app-header = { workspace = true }
+llimphi-widget-banner = { workspace = true }
+llimphi-widget-card = { workspace = true }
+
+[[bin]]
+name = "chasqui-explorer-llimphi"
+path = "src/main.rs"
