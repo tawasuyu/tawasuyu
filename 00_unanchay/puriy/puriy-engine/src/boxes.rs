@@ -197,8 +197,13 @@ fn build_node(node: &Handle, styles: &StyleEngine, base: Option<&url::Url>) -> O
         }
         NodeData::Text { contents } => {
             let raw = contents.borrow().to_string();
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
+            // CSS whitespace collapse: colapsa runs internos a un solo
+            // espacio, preserva un espacio al inicio o fin si lo había
+            // (caso clásico: `foo <a>bar</a> baz` debe rendear "foo bar
+            // baz" — sin el espacio adyacente al link los tokens se
+            // pegan al renderizarse en views vecinas).
+            let collapsed = collapse_whitespace(&raw);
+            if collapsed.is_empty() {
                 return None;
             }
             Some(BoxNode {
@@ -209,7 +214,7 @@ fn build_node(node: &Handle, styles: &StyleEngine, base: Option<&url::Url>) -> O
                 font_weight: 400,
                 margin: 0.0,
                 padding: 0.0,
-                text: Some(trimmed.to_string()),
+                text: Some(collapsed),
                 children: Vec::new(),
                 tag: None,
                 link: None,
@@ -285,6 +290,32 @@ fn fetch_and_decode(url: &str) -> Option<ImageData> {
     let rgba = img.to_rgba8();
     let (width, height) = (rgba.width(), rgba.height());
     Some(ImageData { rgba: rgba.into_raw(), width, height })
+}
+
+/// Colapso de whitespace al estilo CSS (sin `white-space: pre`):
+/// - todo run de whitespace interno → un solo espacio
+/// - preserva un espacio leading/trailing si existía
+/// - vacío puro → `""` (el caller decide skipear)
+fn collapse_whitespace(s: &str) -> String {
+    let leading = s.chars().next().is_some_and(|c| c.is_whitespace());
+    let trailing = s.chars().last().is_some_and(|c| c.is_whitespace());
+    let core: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if core.is_empty() {
+        // Sólo whitespace: si el padre lo coloca entre dos inlines
+        // (caso `foo <a>bar</a>`), el espacio entre <a> y "foo" llega
+        // como un Text-node de un solo espacio. Lo conservamos como
+        // un solo " " para no perder la separación.
+        return if leading || trailing { " ".to_string() } else { String::new() };
+    }
+    let mut out = String::with_capacity(core.len() + 2);
+    if leading {
+        out.push(' ');
+    }
+    out.push_str(&core);
+    if trailing {
+        out.push(' ');
+    }
+    out
 }
 
 fn resolve_href(base: Option<&url::Url>, href: &str) -> Option<String> {

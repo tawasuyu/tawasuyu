@@ -77,8 +77,12 @@ impl StyleEngine {
         // de la cascada — cualquier regla de autor las puede override.
         style.font_weight = default_weight(&local);
 
+        let id = dom::attr(node, "id").unwrap_or_default();
+        let class_attr = dom::attr(node, "class").unwrap_or_default();
+        let classes: Vec<&str> = class_attr.split_whitespace().collect();
+
         for rule in &self.rules {
-            if rule.matches(&local) {
+            if rule.matches(&local, &id, &classes) {
                 rule.apply(&mut style);
             }
         }
@@ -94,16 +98,28 @@ impl StyleEngine {
 
 #[derive(Debug)]
 struct Rule {
-    /// `None` = universal selector. Some("p") = matchea `<p>`.
-    selector: Option<String>,
+    selector: Selector,
     decls: Vec<Decl>,
 }
 
+/// Subset de selectores simples. Sin combinadores (`a b`), sin
+/// pseudoclases, sin atributos. Suficiente para Fase 3 / sitios
+/// "blog-style".
+#[derive(Debug, Clone)]
+enum Selector {
+    Universal,
+    Type(String),
+    Id(String),
+    Class(String),
+}
+
 impl Rule {
-    fn matches(&self, local: &str) -> bool {
+    fn matches(&self, local: &str, id: &str, classes: &[&str]) -> bool {
         match &self.selector {
-            None => true,
-            Some(sel) => sel.eq_ignore_ascii_case(local),
+            Selector::Universal => true,
+            Selector::Type(t) => t.eq_ignore_ascii_case(local),
+            Selector::Id(want) => want == id && !id.is_empty(),
+            Selector::Class(want) => classes.iter().any(|c| c == want),
         }
     }
     fn apply(&self, style: &mut ComputedStyle) {
@@ -161,19 +177,19 @@ fn default_weight(tag: &str) -> u16 {
 fn ua_stylesheet() -> Vec<Rule> {
     vec![
         Rule {
-            selector: Some("h1".into()),
+            selector: Selector::Type("h1".into()),
             decls: vec![Decl::FontSize(32.0), Decl::Margin(20.0)],
         },
         Rule {
-            selector: Some("h2".into()),
+            selector: Selector::Type("h2".into()),
             decls: vec![Decl::FontSize(24.0), Decl::Margin(18.0)],
         },
         Rule {
-            selector: Some("p".into()),
+            selector: Selector::Type("p".into()),
             decls: vec![Decl::Margin(12.0)],
         },
         Rule {
-            selector: Some("body".into()),
+            selector: Selector::Type("body".into()),
             decls: vec![Decl::Padding(8.0)],
         },
     ]
@@ -206,19 +222,49 @@ fn parse_stylesheet(css: &str) -> Vec<Rule> {
         // Selectores múltiples separados por ',': uno por uno.
         for sel in sel_raw.split(',') {
             let sel = sel.trim();
-            let selector = if sel == "*" || sel.is_empty() {
-                None
-            } else if sel.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-                Some(sel.to_string())
-            } else {
-                // Selectores compuestos (`.cls`, `#id`, `a b`, `a:hover`)
-                // no soportados en Fase 2 — la regla queda inerte.
+            let Some(selector) = parse_selector(sel) else {
+                // Selectores no soportados (combinadores, pseudoclases,
+                // atributos) ignoramos en silencio — la regla queda
+                // inerte y el documento sigue parseando.
                 continue;
             };
             out.push(Rule { selector, decls: parse_declarations(body) });
         }
     }
     out
+}
+
+/// Parsea un selector simple. Soporta `*`, `tag`, `.class`, `#id`.
+/// Devuelve `None` para combinadores, pseudoclases, atributos.
+fn parse_selector(sel: &str) -> Option<Selector> {
+    if sel.is_empty() || sel == "*" {
+        return Some(Selector::Universal);
+    }
+    if sel.contains(' ') || sel.contains('>') || sel.contains('+') || sel.contains('~')
+        || sel.contains(':') || sel.contains('[')
+    {
+        return None;
+    }
+    if let Some(rest) = sel.strip_prefix('.') {
+        if rest.chars().all(is_ident_char) {
+            return Some(Selector::Class(rest.to_string()));
+        }
+        return None;
+    }
+    if let Some(rest) = sel.strip_prefix('#') {
+        if rest.chars().all(is_ident_char) {
+            return Some(Selector::Id(rest.to_string()));
+        }
+        return None;
+    }
+    if sel.chars().all(is_ident_char) {
+        return Some(Selector::Type(sel.to_string()));
+    }
+    None
+}
+
+fn is_ident_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '-' || c == '_'
 }
 
 fn strip_comments(css: &str) -> String {
@@ -369,8 +415,41 @@ mod tests {
     fn parsea_regla_simple() {
         let rules = parse_stylesheet("p { color: red; font-size: 14px; }");
         assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0].selector.as_deref(), Some("p"));
+        assert!(matches!(&rules[0].selector, Selector::Type(t) if t == "p"));
         assert_eq!(rules[0].decls.len(), 2);
+    }
+
+    #[test]
+    fn selector_class_matchea() {
+        let html = r#"<html><head><style>.alert{color:red}</style></head><body><p class="alert">x</p><p>y</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let ps: Vec<_> = {
+            let mut acc = Vec::new();
+            crate::dom::walk(&dom.document(), &mut |n| {
+                if crate::dom::element_name(n).as_deref() == Some("p") {
+                    acc.push(n.clone());
+                }
+            });
+            acc
+        };
+        assert_eq!(eng.compute(&ps[0]).color, Color::rgb(255, 0, 0));
+        assert_eq!(eng.compute(&ps[1]).color, Color::BLACK);
+    }
+
+    #[test]
+    fn selector_id_matchea() {
+        let html = r#"<html><head><style>#hero{color:#0000ff}</style></head><body><p id="hero">x</p><p>y</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut ps = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("p") {
+                ps.push(n.clone());
+            }
+        });
+        assert_eq!(eng.compute(&ps[0]).color, Color::rgb(0, 0, 255));
+        assert_eq!(eng.compute(&ps[1]).color, Color::BLACK);
     }
 
     #[test]
