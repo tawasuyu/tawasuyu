@@ -1,4 +1,4 @@
-//! `supay-render-llimphi` — Fase 3.1 del proyecto supay.
+//! `supay-render-llimphi` — Fase 3.2 del proyecto supay.
 //!
 //! Renderer 3D que consume [`supay_scene::SceneSnapshot`] y lo pinta
 //! como `View::paint_with` de Llimphi. El motor sigue corriendo a
@@ -6,36 +6,40 @@
 //! entre los últimos dos por cada frame del display y proyecta el mundo
 //! con perspectiva CPU → polígonos vello que vello rasteriza en GPU.
 //!
-//! ## Qué añade Fase 3.1 sobre 3.0
+//! ## Qué añade Fase 3.2 sobre 3.1
 //!
-//! - **Suelos y techos por pared** ("fake floor"): cada slab visible
-//!   emite además dos trapezoides — uno hacia el borde inferior de la
-//!   pantalla con el color de piso del sector, otro hacia el borde
-//!   superior con el color de techo (o azul-noche si el ceiling pic es
-//!   el cielo). Sin BSP/subsectors todavía; los slots overlapean por
-//!   painter's algorithm y se cubren naturalmente cuando hay paredes
-//!   más cercanas.
-//! - **Bandas horizontales por slab**: cada pared se subdivide en
-//!   `WALL_BANDS` bandas verticales con shade modulado por
-//!   `(linedef_idx, band_idx)` — da sensación de "paneles" / ladrillos
-//!   sin samplear textura WAD.
-//! - **Paleta Doom-ish**: 16 tonos de pared inspirados en TROO/GRAY/
-//!   BROVINE; 8 tonos de piso (FLAT5_*/MFLR8_*); 4 de techo (CEIL*/
-//!   FLOOR4_8). Si `ceiling_pic == SKY_PIC` (índice mágico 0xFFFF;
-//!   por ahora indistinguible del piso real, ver TODO en sky_pic_is)
-//!   se pinta el "sky band" original como techo.
-//! - **Sprites coloreados por tipo**: el `sprite_idx` del mobj selecciona
-//!   una paleta interna (imp/zombie/barrel/pickup/torch) hasta que Fase
-//!   3.2 traiga lookup real al WAD.
+//! - **Polígonos de subsector reales**. Si el snapshot trae
+//!   `subsectors` y `segs` (motor real con BSP cargado), el renderer
+//!   pinta el piso y el techo de cada subsector como polígono convexo
+//!   proyectado con near-plane clipping Sutherland-Hodgman 2D. Esto
+//!   reemplaza el "fake floor" de 3.1 que extendía cada pared a los
+//!   bordes de pantalla — ahora los pisos/techos respetan la geometría
+//!   real del nivel y las habitaciones se ven cerradas con la forma
+//!   correcta.
+//! - **Cielo detectado**. `ceiling_pic == sky_pic` (el motor expone
+//!   `skyflatnum` en cada snapshot) → el subsector salta el techo
+//!   sólido y deja ver el backdrop de cielo. Útil para áreas abiertas
+//!   tipo E1M1 entrada exterior.
+//! - **Fallback fake-floor 3.1**. Si el snapshot no trae subsectors
+//!   (modo stub, mapa todavía no cargado) los walls vuelven a emitir
+//!   trapezoides de piso/techo como antes — todavía se ve algo en
+//!   lugar de horizonte plano.
 //!
-//! ## Lo que NO está acá (defer a 3.2+)
+//! ## Qué añade 3.1 (todavía vigente)
+//!
+//! - Bandas horizontales por slab (`wall_bands=4` configurable) con
+//!   shade modulado por `(linedef_idx, band_idx)` — feel de paneles
+//!   sin samplear WAD.
+//! - Paletas Doom-ish (`WALL_PALETTE`/`FLOOR_PALETTE`/`CEIL_PALETTE`/
+//!   `SPRITE_PALETTE`) reverse-engineered del look de E1M1.
+//! - Backdrop tinted con el color del sector más iluminado.
+//!
+//! ## Lo que NO está acá (defer a 3.3+)
 //!
 //! - Sampling de texturas WAD reales (lumps PNAMES/TEXTURE1/SIDEDEF).
-//! - Polígonos de subsector exactos (requiere exponer `subsectors`+
-//!   `segs` desde scene_export.c — los structs ya están localizados en
-//!   r_defs.h, lo dejo para 3.2 junto con texturing real).
-//! - BSP front-to-back ordering correcto.
+//! - BSP front-to-back ordering correcto (3.2 sigue con painter's algo).
 //! - Stencil/RT shadows, TAA, fog volumétrico real.
+//! - Sprite real lookup por `sprite/frame` desde el WAD.
 
 #![forbid(unsafe_code)]
 
@@ -46,7 +50,10 @@ use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Point, Rect};
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::llimphi_raster::vello::Scene;
 use llimphi_ui::{PaintRect, View};
-use supay_scene::{interpolate, SceneSnapshot, SectorSnap, SnapshotPair, SpriteSnap, WallSeg, NO_SECTOR};
+use supay_scene::{
+    interpolate, SceneSnapshot, SectorSnap, SnapshotPair, SpriteSnap, SubsectorSnap, WallSeg,
+    NO_SECTOR, NO_SKY_PIC,
+};
 
 // =====================================================================
 // Config
@@ -134,21 +141,39 @@ fn render_frame(scene: &mut Scene, rect: PaintRect, snap: &SceneSnapshot, cfg: &
     if rect.w <= 0.0 || rect.h <= 0.0 {
         return;
     }
-    // Backdrop: piso/techo del sector del jugador como "ambiente" detrás
-    // de los strips proyectados. Cuando no hay paredes (snapshot vacío)
-    // o el jugador mira al cielo abierto, esto evita huecos negros.
     draw_backdrop(scene, rect, snap);
 
     let view_z = snap.player.z + snap.player.view_height;
     let cam = Camera::new(snap.player.x, snap.player.y, view_z, snap.player.angle);
     let proj = Projection::new(rect, cfg.fov_y_deg.to_radians());
 
-    // Acumulamos: cada pared puede emitir hasta wall_bands * 2 slabs +
-    // 1 floor strip + 1 ceiling strip. Reserva pesimista.
-    let cap = snap.walls.len() * (cfg.wall_bands as usize * 2 + 2) + snap.sprites.len();
+    // Si el snapshot trae BSP (motor real con mapa cargado), pintamos
+    // pisos/techos reales por subsector. Si no, los walls hacen
+    // "fake-floor" como fallback de 3.1.
+    let use_subsectors = !snap.subsectors.is_empty() && !snap.segs.is_empty();
+
+    let cap = snap.walls.len() * (cfg.wall_bands as usize * 2 + 2)
+        + snap.subsectors.len() * 2
+        + snap.sprites.len();
     let mut renderables: Vec<Renderable> = Vec::with_capacity(cap);
+
+    if use_subsectors {
+        for sub in snap.subsectors.iter() {
+            gather_subsector_planes(&mut renderables, sub, snap, &cam, &proj, &rect, cfg);
+        }
+    }
     for (idx, wall) in snap.walls.iter().enumerate() {
-        gather_wall(&mut renderables, wall, idx as u32, snap, &cam, &proj, &rect, cfg);
+        gather_wall(
+            &mut renderables,
+            wall,
+            idx as u32,
+            snap,
+            &cam,
+            &proj,
+            &rect,
+            cfg,
+            use_subsectors,
+        );
     }
     for sprite in snap.sprites.iter() {
         gather_sprite(&mut renderables, sprite, snap, &cam, &proj, cfg);
@@ -242,6 +267,7 @@ fn gather_wall(
     proj: &Projection,
     rect: &PaintRect,
     cfg: &RenderConfig,
+    skip_fake_floor: bool,
 ) {
     // Front/back side por convención Doom.
     let cross = (wall.x2 - wall.x1) * (cam.py - wall.y1)
@@ -327,54 +353,49 @@ fn gather_wall(
     let depth = (mid_x * mid_x + mid_y * mid_y).sqrt();
 
     // -----------------------------------------------------------------
-    // Floor & ceiling strips ("fake floor"): trapezoides que llenan la
-    // pantalla entre el borde inferior/superior y el borde proyectado
-    // de la pared. Visualmente: el piso/techo aparece "delante" de la
-    // pared. Painter's algorithm cubre los strips lejanos con los
-    // cercanos. Geométricamente no es exacto sin subsectors, pero da
-    // habitaciones cerradas con perspectiva creíble en escenas
-    // axis-aligned típicas de Doom.
+    // Floor & ceiling strips ("fake floor") — fallback de 3.1 cuando no
+    // hay BSP. Si el snapshot trae subsectors, los pisos/techos los
+    // dibuja `gather_subsector_planes` con polígonos reales y este
+    // bloque se salta entero.
     // -----------------------------------------------------------------
-    let zf = floor_strip_z - cam.view_z;
-    let zc = ceiling_strip_z - cam.view_z;
-    let bl_floor = proj.project(x1, y1, zf);
-    let br_floor = proj.project(x2, y2, zf);
-    let bl_ceil = proj.project(x1, y1, zc);
-    let br_ceil = proj.project(x2, y2, zc);
+    if !skip_fake_floor {
+        let zf = floor_strip_z - cam.view_z;
+        let zc = ceiling_strip_z - cam.view_z;
+        let bl_floor = proj.project(x1, y1, zf);
+        let br_floor = proj.project(x2, y2, zf);
+        let bl_ceil = proj.project(x1, y1, zc);
+        let br_ceil = proj.project(x2, y2, zc);
 
-    let screen_top = rect.y as f64;
-    let screen_bot = (rect.y + rect.h) as f64;
+        let screen_top = rect.y as f64;
+        let screen_bot = (rect.y + rect.h) as f64;
 
-    // Floor strip: solo emite si el borde inferior de la pared está
-    // por encima del fondo de pantalla (sino el strip tendría altura
-    // negativa y rasterizaría invertido).
-    if bl_floor.y < screen_bot || br_floor.y < screen_bot {
-        let mut path = BezPath::new();
-        path.move_to(Point::new(bl_floor.x, screen_bot));
-        path.line_to(bl_floor);
-        path.line_to(br_floor);
-        path.line_to(Point::new(br_floor.x, screen_bot));
-        path.close_path();
-        out.push(Renderable {
-            depth: depth + 0.5,
-            color: floor_color(near_sec, depth, cfg),
-            path,
-        });
-    }
+        if bl_floor.y < screen_bot || br_floor.y < screen_bot {
+            let mut path = BezPath::new();
+            path.move_to(Point::new(bl_floor.x, screen_bot));
+            path.line_to(bl_floor);
+            path.line_to(br_floor);
+            path.line_to(Point::new(br_floor.x, screen_bot));
+            path.close_path();
+            out.push(Renderable {
+                depth: depth + 0.5,
+                color: floor_color(near_sec, depth, cfg),
+                path,
+            });
+        }
 
-    // Ceiling strip.
-    if bl_ceil.y > screen_top || br_ceil.y > screen_top {
-        let mut path = BezPath::new();
-        path.move_to(Point::new(bl_ceil.x, screen_top));
-        path.line_to(Point::new(br_ceil.x, screen_top));
-        path.line_to(br_ceil);
-        path.line_to(bl_ceil);
-        path.close_path();
-        out.push(Renderable {
-            depth: depth + 0.5,
-            color: ceiling_color(near_sec, depth, cfg),
-            path,
-        });
+        if bl_ceil.y > screen_top || br_ceil.y > screen_top {
+            let mut path = BezPath::new();
+            path.move_to(Point::new(bl_ceil.x, screen_top));
+            path.line_to(Point::new(br_ceil.x, screen_top));
+            path.line_to(br_ceil);
+            path.line_to(bl_ceil);
+            path.close_path();
+            out.push(Renderable {
+                depth: depth + 0.5,
+                color: ceiling_color(near_sec, depth, cfg, snap.sky_pic),
+                path,
+            });
+        }
     }
 
     // -----------------------------------------------------------------
@@ -410,6 +431,163 @@ fn gather_wall(
             });
         }
     }
+}
+
+// =====================================================================
+// Subsector planes (floor + ceiling)
+// =====================================================================
+
+/// Pinta los polígonos de piso y techo de un subsector. El polígono se
+/// construye encadenando los segs del subsector (`subsector.first_seg`,
+/// `num_segs`): cada seg aporta `v1` y, el último, también su `v2`.
+/// La cadena es CCW por convención BSP; cerramos directamente v2_final
+/// → v1_inicial. Algunos lados pueden estar bordeados por particiones
+/// BSP sin seg correspondiente y la cadena no representa el polígono
+/// completo; el subsector vecino del mismo sector cubre el hueco.
+fn gather_subsector_planes(
+    out: &mut Vec<Renderable>,
+    sub: &SubsectorSnap,
+    snap: &SceneSnapshot,
+    cam: &Camera,
+    proj: &Projection,
+    rect: &PaintRect,
+    cfg: &RenderConfig,
+) {
+    if sub.num_segs < 2 {
+        return;
+    }
+    let Some(sec) = snap.sectors.get(sub.sector as usize) else {
+        return;
+    };
+    let first = sub.first_seg as usize;
+    let count = sub.num_segs as usize;
+    let end = first + count;
+    if end > snap.segs.len() {
+        return;
+    }
+    let seg_slice = &snap.segs[first..end];
+
+    // Construir polígono mundial: v1 de cada seg + v2 del último.
+    let mut world: Vec<(f32, f32)> = Vec::with_capacity(count + 1);
+    for s in seg_slice {
+        world.push((s.x1, s.y1));
+    }
+    // Cerrar con v2 del último seg sólo si difiere del primer v1
+    // (algunos subsectores ya cierran naturalmente).
+    let last_v2 = (seg_slice[count - 1].x2, seg_slice[count - 1].y2);
+    let first_v1 = world[0];
+    if (last_v2.0 - first_v1.0).abs() > 0.01 || (last_v2.1 - first_v1.1).abs() > 0.01 {
+        world.push(last_v2);
+    }
+
+    // Transformar a cámara 2D.
+    let cam_poly: Vec<(f32, f32)> = world
+        .iter()
+        .map(|&(x, y)| cam.to_cam_2d(x, y))
+        .collect();
+
+    // Clip contra near plane (X_cam >= near).
+    let clipped = clip_near(&cam_poly, cfg.near);
+    if clipped.len() < 3 {
+        return;
+    }
+
+    // Centroide para depth sort.
+    let (mut cx_sum, mut cy_sum) = (0.0_f32, 0.0_f32);
+    for &(x, y) in &clipped {
+        cx_sum += x;
+        cy_sum += y;
+    }
+    let n = clipped.len() as f32;
+    let cx = cx_sum / n;
+    let cy = cy_sum / n;
+    let depth = (cx * cx + cy * cy).sqrt();
+
+    let screen_x_min = rect.x as f64;
+    let screen_x_max = (rect.x + rect.w) as f64;
+    let screen_y_min = rect.y as f64;
+    let screen_y_max = (rect.y + rect.h) as f64;
+
+    // Helper para construir el path proyectado a una altura z (mundo).
+    // Si después de proyectar todos los vértices caen del mismo lado
+    // (off-screen colectivo), saltamos el polígono.
+    let build_path = |z_world: f32| -> Option<BezPath> {
+        let z_cam = z_world - cam.view_z;
+        let pts: Vec<Point> = clipped
+            .iter()
+            .map(|&(x, y)| proj.project(x, y, z_cam))
+            .collect();
+        // Cull rápido: si todos los puntos están fuera del rect por el
+        // mismo lado, el polígono no es visible.
+        let all_left = pts.iter().all(|p| p.x < screen_x_min);
+        let all_right = pts.iter().all(|p| p.x > screen_x_max);
+        let all_above = pts.iter().all(|p| p.y < screen_y_min);
+        let all_below = pts.iter().all(|p| p.y > screen_y_max);
+        if all_left || all_right || all_above || all_below {
+            return None;
+        }
+        let mut p = BezPath::new();
+        p.move_to(pts[0]);
+        for pt in &pts[1..] {
+            p.line_to(*pt);
+        }
+        p.close_path();
+        Some(p)
+    };
+
+    // Piso.
+    if let Some(path) = build_path(sec.floor_height) {
+        out.push(Renderable {
+            depth: depth + 1.0, // estrictamente detrás de paredes y sprites
+            color: floor_color(sec, depth, cfg),
+            path,
+        });
+    }
+
+    // Techo — si es sky, no pintamos sólido (dejamos ver el backdrop).
+    let is_sky = snap.sky_pic != NO_SKY_PIC && sec.ceiling_pic == snap.sky_pic;
+    if !is_sky {
+        if let Some(path) = build_path(sec.ceiling_height) {
+            out.push(Renderable {
+                depth: depth + 1.0,
+                color: ceiling_color(sec, depth, cfg, snap.sky_pic),
+                path,
+            });
+        }
+    }
+}
+
+/// Sutherland-Hodgman para un único plano `X_cam >= near` en 2D
+/// (paralelo al eje Y_cam). Vértices con `x < near` se descartan; las
+/// aristas que cruzan el plano se intersectan parámetricamente.
+fn clip_near(poly: &[(f32, f32)], near: f32) -> Vec<(f32, f32)> {
+    if poly.is_empty() {
+        return Vec::new();
+    }
+    let mut out: Vec<(f32, f32)> = Vec::with_capacity(poly.len() + 2);
+    let n = poly.len();
+    for i in 0..n {
+        let curr = poly[i];
+        let prev = poly[if i == 0 { n - 1 } else { i - 1 }];
+        let curr_in = curr.0 >= near;
+        let prev_in = prev.0 >= near;
+        match (prev_in, curr_in) {
+            (true, true) => out.push(curr),
+            (true, false) => {
+                let t = (near - prev.0) / (curr.0 - prev.0);
+                let yi = prev.1 + (curr.1 - prev.1) * t;
+                out.push((near, yi));
+            }
+            (false, true) => {
+                let t = (near - prev.0) / (curr.0 - prev.0);
+                let yi = prev.1 + (curr.1 - prev.1) * t;
+                out.push((near, yi));
+                out.push(curr);
+            }
+            (false, false) => {}
+        }
+    }
+    out
 }
 
 // =====================================================================
@@ -498,19 +676,15 @@ const CEIL_PALETTE: &[(u8, u8, u8)] = &[
     (0x4C, 0x44, 0x38), // tech panel
 ];
 
-/// "Cielo" cuando el sector tiene `ceiling_pic` que el motor mapea al
-/// sky flat. doomgeneric expone `ceiling_pic` como índice — el lump
-/// `F_SKY1` se identifica por `skyflatnum`, que ya viene resuelto desde
-/// el motor. Como en Fase 3.1 no exponemos `skyflatnum` todavía, usamos
-/// una heurística: light_level == 255 + ceiling_pic == 0 sugiere skybox
-/// en mapas típicos. TODO 3.2: pasar `skyflatnum` y comparar exacto.
+/// "Cielo" en 3.2 se detecta comparando `sector.ceiling_pic` contra el
+/// `sky_pic` del snapshot (el motor lo resuelve vía `skyflatnum` al
+/// cargar el mapa). Cuando coincide, los pisos/techos por subsector
+/// directamente NO emiten polígono y el backdrop se ve por ahí.
 const SKY_BAND_TOP: Color = Color::from_rgba8(8, 10, 18, 255);
 const SKY_BAND_BOT: Color = Color::from_rgba8(20, 22, 32, 255);
 
-fn ceiling_is_sky(_sec: &SectorSnap) -> bool {
-    // Hasta que `skyflatnum` se exponga (Fase 3.2), nunca. El backdrop
-    // sigue mostrando cielo en el área "no cubierta por paredes/techos".
-    false
+fn ceiling_is_sky(sec: &SectorSnap, sky_pic: u16) -> bool {
+    sky_pic != NO_SKY_PIC && sec.ceiling_pic == sky_pic
 }
 
 // =====================================================================
@@ -587,8 +761,8 @@ fn floor_color(sec: &SectorSnap, depth: f32, cfg: &RenderConfig) -> Color {
     tint(rgb, shade.clamp(0.05, 1.0))
 }
 
-fn ceiling_color(sec: &SectorSnap, depth: f32, cfg: &RenderConfig) -> Color {
-    if ceiling_is_sky(sec) {
+fn ceiling_color(sec: &SectorSnap, depth: f32, cfg: &RenderConfig, sky_pic: u16) -> Color {
+    if ceiling_is_sky(sec, sky_pic) {
         return SKY_BAND_BOT;
     }
     let rgb = CEIL_PALETTE[(sec.ceiling_pic as usize) % CEIL_PALETTE.len()];
@@ -758,6 +932,61 @@ mod tests {
             c_top.to_rgba8().to_u8_array(),
             c_bot.to_rgba8().to_u8_array()
         );
+    }
+
+    #[test]
+    fn clip_near_keeps_polygon_fully_in_front() {
+        // Cuadrado a X_cam = 100..200, Y ±50. Todo delante del near=4.
+        let poly = vec![(100.0, -50.0), (200.0, -50.0), (200.0, 50.0), (100.0, 50.0)];
+        let clipped = clip_near(&poly, 4.0);
+        assert_eq!(clipped.len(), 4);
+        assert_eq!(clipped, poly);
+    }
+
+    #[test]
+    fn clip_near_drops_polygon_fully_behind() {
+        // Cuadrado a X_cam = -100..-50. Todo detrás.
+        let poly = vec![(-100.0, -50.0), (-50.0, -50.0), (-50.0, 50.0), (-100.0, 50.0)];
+        let clipped = clip_near(&poly, 4.0);
+        assert!(clipped.is_empty(), "behind-camera poly should be empty, got {clipped:?}");
+    }
+
+    #[test]
+    fn clip_near_clips_polygon_crossing_plane() {
+        // Triángulo con un vértice atrás (X=-10) y dos adelante (X=20).
+        // Las dos aristas que cruzan deben generar intersecciones a X=near.
+        let near = 4.0;
+        let poly = vec![(-10.0, 0.0), (20.0, -10.0), (20.0, 10.0)];
+        let clipped = clip_near(&poly, near);
+        // Resultado esperado: 4 vértices — los 2 frontales + 2 intersecciones.
+        assert_eq!(clipped.len(), 4, "expected 4 verts, got {clipped:?}");
+        // Todas las X >= near.
+        for &(x, _) in &clipped {
+            assert!(x >= near - 1e-4, "vertex x={x} < near={near}");
+        }
+        // Las dos intersecciones deben estar en x = near.
+        let on_plane = clipped.iter().filter(|&&(x, _)| (x - near).abs() < 1e-4).count();
+        assert_eq!(on_plane, 2, "expected 2 vertices on plane, got {clipped:?}");
+    }
+
+    #[test]
+    fn ceiling_sky_detection_matches_pic() {
+        let sky_sec = SectorSnap {
+            floor_height: 0.0,
+            ceiling_height: 256.0,
+            light_level: 255,
+            floor_pic: 0,
+            ceiling_pic: 42,
+        };
+        assert!(ceiling_is_sky(&sky_sec, 42));
+        assert!(!ceiling_is_sky(&sky_sec, 41));
+        // Sentinel NO_SKY_PIC nunca debe matchear, aunque ceiling_pic
+        // por casualidad sea 0xFFFF (mapa raro).
+        let weird = SectorSnap {
+            ceiling_pic: NO_SKY_PIC,
+            ..sky_sec.clone()
+        };
+        assert!(!ceiling_is_sky(&weird, NO_SKY_PIC));
     }
 
     #[test]

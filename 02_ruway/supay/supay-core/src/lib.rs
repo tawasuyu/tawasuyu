@@ -30,8 +30,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 pub use supay_scene::{
-    interpolate, PlayerSnap, SceneSnapshot, SectorSnap, SnapshotPair, SpriteSnap, WallSeg,
-    NO_SECTOR,
+    interpolate, PlayerSnap, SceneSnapshot, SectorSnap, SegSnap, SnapshotPair, SpriteSnap,
+    SubsectorSnap, WallSeg, NO_SECTOR, NO_SKY_PIC,
 };
 
 // doomgeneric default es 640×400 (auto-scaling factor 2 sobre los
@@ -232,6 +232,23 @@ extern "C" {
         frame: *mut u8,
         sector: *mut u32,
     ) -> std::ffi::c_int;
+    // Fase 3.2: BSP subsectors + segs + sky flat number.
+    fn supay_scene_num_subsectors() -> std::ffi::c_int;
+    fn supay_scene_subsector(
+        i: std::ffi::c_int,
+        sector: *mut u32,
+        first_seg: *mut u32,
+        num_segs: *mut u32,
+    ) -> std::ffi::c_int;
+    fn supay_scene_num_segs() -> std::ffi::c_int;
+    fn supay_scene_seg(
+        i: std::ffi::c_int,
+        x1: *mut f32,
+        y1: *mut f32,
+        x2: *mut f32,
+        y2: *mut f32,
+    ) -> std::ffi::c_int;
+    fn supay_scene_sky_pic() -> u16;
 }
 
 // =====================================================================
@@ -491,12 +508,65 @@ fn capture_scene_real(tick: u64) -> SceneSnapshot {
         }
     }
 
+    // Subsectors + segs (Fase 3.2).
+    // SAFETY: getters sin side-effects.
+    let n_subs = unsafe { supay_scene_num_subsectors() }.max(0) as usize;
+    let mut subs = Vec::with_capacity(n_subs);
+    for i in 0..n_subs {
+        let mut sector = 0_u32;
+        let mut first_seg = 0_u32;
+        let mut num_segs = 0_u32;
+        // SAFETY: i en rango, punteros válidos.
+        let ok = unsafe {
+            supay_scene_subsector(
+                i as std::ffi::c_int,
+                &mut sector,
+                &mut first_seg,
+                &mut num_segs,
+            )
+        };
+        if ok != 0 {
+            subs.push(SubsectorSnap {
+                sector,
+                first_seg,
+                num_segs,
+            });
+        }
+    }
+    // SAFETY: idem.
+    let n_segs = unsafe { supay_scene_num_segs() }.max(0) as usize;
+    let mut segs_vec = Vec::with_capacity(n_segs);
+    for i in 0..n_segs {
+        let mut x1 = 0.0_f32;
+        let mut y1 = 0.0_f32;
+        let mut x2 = 0.0_f32;
+        let mut y2 = 0.0_f32;
+        // SAFETY: idem.
+        let ok = unsafe {
+            supay_scene_seg(
+                i as std::ffi::c_int,
+                &mut x1,
+                &mut y1,
+                &mut x2,
+                &mut y2,
+            )
+        };
+        if ok != 0 {
+            segs_vec.push(SegSnap { x1, y1, x2, y2 });
+        }
+    }
+    // SAFETY: idem.
+    let sky_pic = unsafe { supay_scene_sky_pic() };
+
     SceneSnapshot {
         tick,
         player,
         walls: Arc::from(walls),
         sectors: Arc::from(sects),
         sprites: Arc::from(sprs),
+        subsectors: Arc::from(subs),
+        segs: Arc::from(segs_vec),
+        sky_pic,
     }
 }
 
@@ -597,5 +667,9 @@ fn synth_snapshot(tick: u64) -> SceneSnapshot {
         walls: Arc::from(walls),
         sectors: Arc::from(sectors),
         sprites: Arc::from(sprites),
+        // Stub: sin BSP. El renderer cae al modo fake-floor de 3.1.
+        subsectors: Arc::from(Vec::<SubsectorSnap>::new()),
+        segs: Arc::from(Vec::<SegSnap>::new()),
+        sky_pic: NO_SKY_PIC,
     }
 }

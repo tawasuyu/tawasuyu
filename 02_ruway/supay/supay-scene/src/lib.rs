@@ -86,6 +86,36 @@ pub struct WallSeg {
 /// Marca de "sin sector trasero" en [`WallSeg::back_sector`].
 pub const NO_SECTOR: u32 = u32::MAX;
 
+/// Sentinel para [`SceneSnapshot::sky_pic`] cuando el motor aún no
+/// resolvió `skyflatnum` (mapa todavía sin cargar) o estamos en stub.
+pub const NO_SKY_PIC: u16 = 0xFFFF;
+
+/// Una hoja convexa del BSP — referencia a un sector y un rango
+/// contiguo en [`SceneSnapshot::segs`] (`first_seg`, `num_segs`).
+///
+/// Los segs en una hoja forman una cadena ordenada (CCW por la
+/// convención de Doom) que bordea parcialmente el polígono convexo del
+/// subsector. Algunos lados pueden estar bordeados por particiones BSP
+/// sin seg correspondiente — en esos casos la cadena no cierra el
+/// polígono completo y el renderer asume que el subsector vecino del
+/// mismo sector cubre el hueco.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SubsectorSnap {
+    pub sector: u32,
+    pub first_seg: u32,
+    pub num_segs: u32,
+}
+
+/// Un lineseg del mapa — v1 y v2 en coordenadas Doom (float, 1 unit ≈
+/// 1 pulgada). Compartido por todos los subsectors que lo referencian.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SegSnap {
+    pub x1: f32,
+    pub y1: f32,
+    pub x2: f32,
+    pub y2: f32,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SectorSnap {
     pub floor_height: f32,
@@ -117,13 +147,28 @@ pub struct SpriteSnap {
 ///
 /// Las listas son `Arc<[T]>` para que el renderer pueda mantener dos
 /// snapshots vivos sin pagar copia — clonar es bumping refcount.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct SceneSnapshot {
     pub tick: u64,
     pub player: PlayerSnap,
     pub walls: Arc<[WallSeg]>,
     pub sectors: Arc<[SectorSnap]>,
     pub sprites: Arc<[SpriteSnap]>,
+    /// Fase 3.2: subsectors del BSP, cada uno apuntando a un rango
+    /// contiguo de `segs`. Si está vacío, el renderer cae al modo
+    /// "fake floor" de 3.1 (trapezoides per-pared).
+    pub subsectors: Arc<[SubsectorSnap]>,
+    pub segs: Arc<[SegSnap]>,
+    /// Índice del flat que el motor trata como "cielo" (ceiling_pic
+    /// con este valor → renderer pinta sky en vez de techo sólido).
+    /// [`NO_SKY_PIC`] = stub o mapa no cargado.
+    pub sky_pic: u16,
+}
+
+impl Default for SceneSnapshot {
+    fn default() -> Self {
+        Self::empty(0)
+    }
 }
 
 impl SceneSnapshot {
@@ -136,6 +181,9 @@ impl SceneSnapshot {
             walls: Arc::from(Vec::<WallSeg>::new()),
             sectors: Arc::from(Vec::<SectorSnap>::new()),
             sprites: Arc::from(Vec::<SpriteSnap>::new()),
+            subsectors: Arc::from(Vec::<SubsectorSnap>::new()),
+            segs: Arc::from(Vec::<SegSnap>::new()),
+            sky_pic: NO_SKY_PIC,
         }
     }
 }
@@ -260,6 +308,11 @@ pub fn interpolate(prev: &SceneSnapshot, next: &SceneSnapshot, alpha: f32) -> Sc
         walls: next.walls.clone(),
         sectors,
         sprites,
+        // Topología BSP: nunca se interpola — los subsectores y segs son
+        // estables por mapa cargado. Tomamos `next` directamente.
+        subsectors: next.subsectors.clone(),
+        segs: next.segs.clone(),
+        sky_pic: next.sky_pic,
     }
 }
 

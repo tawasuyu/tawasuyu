@@ -33,13 +33,14 @@
 
 #include "doomdef.h"
 #include "doomtype.h"
+#include "doomstat.h"    /* skyflatnum */
 #include "tables.h"      /* angle_t */
 #include "m_fixed.h"     /* fixed_t */
-#include "r_defs.h"      /* line_t, sector_t, vertex_t, side_t */
+#include "r_defs.h"      /* line_t, sector_t, vertex_t, side_t, subsector_t, seg_t */
 #include "p_mobj.h"      /* mobj_t */
 #include "p_local.h"     /* P_MobjThinker (función action_p1 que distingue mobjs) */
 #include "d_player.h"    /* player_t, MAXPLAYERS */
-#include "r_state.h"     /* lines/sectors/etc. globals */
+#include "r_state.h"     /* lines/sectors/subsectors/segs/etc. globals */
 
 /* Globales del motor — declarados en r_state.h pero los re-extern-amos
  * acá por claridad de qué consumimos. */
@@ -47,9 +48,14 @@ extern int numlines;
 extern line_t *lines;
 extern int numsectors;
 extern sector_t *sectors;
+extern int numsubsectors;
+extern subsector_t *subsectors;
+extern int numsegs;
+extern seg_t *segs;
 extern player_t players[MAXPLAYERS];
 extern int consoleplayer;
 extern thinker_t thinkercap;
+extern int skyflatnum;
 
 static inline float ftox(fixed_t v) {
     /* FRACUNIT = 1<<16 = 65536. División por constante el compilador
@@ -160,6 +166,57 @@ static void supay_mobj_cache_rebuild(void) {
 int supay_scene_num_sprites(void) {
     supay_mobj_cache_rebuild();
     return supay_mobj_cache_len;
+}
+
+/* ---- Subsectors + segs (Fase 3.2) ----
+ *
+ * Cada subsector es una hoja convexa del BSP que referencia un sector y
+ * una corrida contigua de segs (`firstline`, `numlines`). Los segs son
+ * los linesegs visibles que bordean la hoja — algunos lados pueden ser
+ * particiones BSP internas y no tener seg, por lo que la cadena de segs
+ * a veces no cierra el polígono completo (el lado faltante lo cubre el
+ * subsector vecino del mismo sector). El renderer 3D (Fase 3.2) usa
+ * estos polígonos para pintar pisos y techos reales por subsector.
+ */
+
+int supay_scene_num_subsectors(void) {
+    return numsubsectors;
+}
+
+int supay_scene_subsector(int i, uint32_t *sector,
+                          uint32_t *first_seg, uint32_t *num_segs) {
+    if (i < 0 || i >= numsubsectors || !subsectors) {
+        return 0;
+    }
+    subsector_t *ss = &subsectors[i];
+    *sector = ss->sector ? (uint32_t)(ss->sector - sectors) : 0xFFFFFFFFu;
+    *first_seg = (uint32_t)ss->firstline;
+    *num_segs = (uint32_t)ss->numlines;
+    return 1;
+}
+
+int supay_scene_num_segs(void) {
+    return numsegs;
+}
+
+int supay_scene_seg(int i,
+                    float *x1, float *y1, float *x2, float *y2) {
+    if (i < 0 || i >= numsegs || !segs) {
+        return 0;
+    }
+    seg_t *s = &segs[i];
+    *x1 = ftox(s->v1->x);
+    *y1 = ftox(s->v1->y);
+    *x2 = ftox(s->v2->x);
+    *y2 = ftox(s->v2->y);
+    return 1;
+}
+
+/* Índice del "sky flat" (ceiling_pic == this → renderear cielo). El motor
+ * lo resuelve en R_InitFlats vía W_GetNumForName("F_SKY1"). Antes de que
+ * el mapa cargue, vale -1 — devolvemos 0xFFFF como sentinel. */
+uint16_t supay_scene_sky_pic(void) {
+    return skyflatnum < 0 ? 0xFFFFu : (uint16_t)skyflatnum;
 }
 
 int supay_scene_sprite(int i,
