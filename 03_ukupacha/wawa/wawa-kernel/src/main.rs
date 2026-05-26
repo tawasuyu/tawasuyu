@@ -510,9 +510,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // --- 5. Con el heap activo, fundar lo que depende de el: el canal de
     //        scancodes, el reloj de fotogramas y la tipografia vectorial. ---
     async_system::teclado::init();
+    async_system::puntero::init();
     async_system::reloj::init();
     texto::init();
-    traza("teclado + reloj + texto");
+    traza("teclado + puntero + reloj + texto");
 
     // --- 6. Construir el lienzo y la consola; pintar el rotulo inicial,
     //        ya rasterizado por fontdue, y publicar la consola globalmente. ---

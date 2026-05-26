@@ -22,6 +22,7 @@
 extern "C" {
     fn sys_render_frame(ptr: u32, len: u32);
     fn sys_get_scancode() -> u32;
+    fn sys_puntero(salida: u32) -> i32;
     fn sys_config_idioma() -> u32;
     fn sys_config_paleta(salida: u32) -> i32;
     fn sys_config_proponer(idioma: u32, paleta_ptr: u32) -> i32;
@@ -67,6 +68,17 @@ static mut PALETA: [u8; 20] = [0; 20];
 static mut IDIOMA: u16 = 0;
 static mut SPACE_PRESS: bool = false;
 
+/// Estado del boton izquierdo en el evento anterior. Como el SPACE, queremos
+/// reaccionar al FLANCO de subida, no al sostenido: un clic = una rotacion.
+static mut RATON_IZQ_PREV: bool = false;
+
+/// Ultima posicion local del puntero recibida. Se pinta como una cruz fina
+/// del color "acento" — testigo geometrico de la inyeccion: la app sabe
+/// solo lo que el kernel le dice de SU lienzo, jamas pixeles fuera.
+static mut RATON_X: u16 = 0;
+static mut RATON_Y: u16 = 0;
+static mut RATON_DENTRO: bool = false;
+
 #[no_mangle]
 pub extern "C" fn init() {
     refrescar_contexto();
@@ -84,6 +96,37 @@ pub extern "C" fn tick() {
         proponer_rotacion();
     }
     unsafe { SPACE_PRESS = space_ahora };
+
+    // Drenar TODOS los eventos del puntero acumulados: aplicar el ultimo,
+    // detectar flancos del boton izquierdo y guardar la posicion para el
+    // testigo geometrico de pintado.
+    let mut buffer = [0u8; 5];
+    let mut izq_flanco_subida = false;
+    loop {
+        let n = unsafe { sys_puntero(buffer.as_mut_ptr() as u32) };
+        if n != 5 {
+            break;
+        }
+        let lx = u16::from_le_bytes([buffer[0], buffer[1]]);
+        let ly = u16::from_le_bytes([buffer[2], buffer[3]]);
+        let botones = buffer[4];
+        let izq = (botones & 0x01) != 0;
+        if izq && !unsafe { RATON_IZQ_PREV } {
+            izq_flanco_subida = true;
+        }
+        unsafe {
+            RATON_X = lx;
+            RATON_Y = ly;
+            RATON_DENTRO = true;
+            RATON_IZQ_PREV = izq;
+        }
+    }
+    // Un clic dentro del area de swatches rota la paleta tambien — espejo
+    // visual del SPACE pero gobernado por la geometria local que el kernel
+    // entrega. La frontera la decide la app sobre sus propias coordenadas.
+    if izq_flanco_subida {
+        proponer_rotacion();
+    }
 
     pintar();
     volcar();
@@ -177,6 +220,27 @@ fn pintar() {
     let pie_texto = &linea[..3 + cola.len()];
     let pie_texto_y = pie_y + (PIE_ALTO - 7 * ESCALA_PIE) / 2;
     dibujar_texto(lienzo, pie_texto, MARGEN * 2, pie_texto_y, ESCALA_PIE, tinta);
+
+    // 5. Testigo del puntero. Si el kernel ha enviado al menos un evento
+    //    DENTRO de este lienzo, dibujar una cruz fina en (RATON_X, RATON_Y)
+    //    con el color "acento". Es la prueba visual: la app pinta solo
+    //    donde el kernel le dejo coordenadas locales legitimas; un clic en
+    //    otra ventana o en el cromo nunca llega aqui, asi que la cruz se
+    //    queda exactamente donde estuvo el ultimo evento valido.
+    if unsafe { RATON_DENTRO } {
+        let cx = unsafe { RATON_X } as usize;
+        let cy = unsafe { RATON_Y } as usize;
+        if cx < ANCHO && cy < ALTO {
+            let largo = 6_usize;
+            let x0 = cx.saturating_sub(largo);
+            let x1 = (cx + largo).min(ANCHO);
+            let y0 = cy.saturating_sub(largo);
+            let y1 = (cy + largo).min(ALTO);
+            // Linea horizontal y vertical, dos pixeles de grueso.
+            rellenar_rect(lienzo, x0, cy.saturating_sub(1), x1 - x0, 2, acento);
+            rellenar_rect(lienzo, cx.saturating_sub(1), y0, 2, y1 - y0, acento);
+        }
+    }
 }
 
 fn volcar() {

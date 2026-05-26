@@ -38,6 +38,7 @@
 use wasmi::{Caller, Error, Extern, Linker, Memory, StoreLimits};
 
 use crate::almacen::Hash;
+use crate::async_system::puntero::CanalPuntero;
 use crate::async_system::teclado::CanalTeclado;
 use format::{
     IdiomaCodigo, Paleta, Permisos, PERMISO_ALTAVOZ, PERMISO_CONFIG, PERMISO_GRAFO_ESCRITURA,
@@ -56,6 +57,10 @@ pub(crate) struct ContextoCapacidades {
     pub(crate) natural_alto: usize,
     /// El canal de teclado propio de la aplicacion.
     pub(crate) canal: CanalTeclado,
+    /// El canal del puntero propio de la aplicacion. Eventos ya traducidos
+    /// al lienzo natural: la app jamas ve coordenadas absolutas ni eventos
+    /// que caigan fuera de su propio perimetro.
+    pub(crate) canal_puntero: CanalPuntero,
     /// El techo de recursos de la aplicacion — hoy, su memoria lineal maxima.
     /// `wasmi` lo consulta en cada `memory.grow` via `Store::limiter`.
     pub(crate) limites: StoreLimits,
@@ -189,6 +194,40 @@ pub(crate) fn enlazar_capacidades(
         "sys_get_scancode",
         |caller: Caller<'_, ContextoCapacidades>| -> u32 {
             caller.data().canal.pop().unwrap_or(0) as u32
+        },
+    )?;
+
+    // --- CAPACIDAD 2b :: sys_puntero(salida) -> i32 ---
+    // Saca el siguiente evento del puntero del canal PROPIO de la app, ya
+    // TRADUCIDO al lienzo natural por el compositor. Escribe cinco bytes en
+    // `salida`: local_x (u16 LE), local_y (u16 LE), botones (u8). Devuelve
+    // 5 si habia evento, 0 si la cola esta vacia.
+    //
+    // INYECCION UNIDIRECCIONAL y GEOMETRICA. La app jamas conoce la posicion
+    // absoluta del puntero: el kernel solo deposita eventos cuyo (x, y)
+    // ABSOLUTO cae dentro del propio lienzo natural de la app. Clics sobre
+    // otras ventanas, sobre el cromo de la propia ventana o sobre la
+    // taskbar nunca llegan aqui. Es la matematica de mirada-layout decidiendo,
+    // no un chequeo de la app: la geometria del marco no es opcional.
+    enlazador.func_wrap(
+        "renaser",
+        "sys_puntero",
+        |mut caller: Caller<'_, ContextoCapacidades>, salida: u32| -> Result<i32, Error> {
+            let evento = match caller.data().canal_puntero.pop() {
+                Some(e) => e,
+                None => return Ok(0),
+            };
+            let memoria = obtener_memoria(&caller)?;
+            {
+                let m = memoria.data(&caller);
+                rango(m, salida, 5, "WASM :: sys_puntero desbordo la memoria lineal")?;
+            }
+            let m = memoria.data_mut(&mut caller);
+            let off = salida as usize;
+            m[off..off + 2].copy_from_slice(&evento.local_x.to_le_bytes());
+            m[off + 2..off + 4].copy_from_slice(&evento.local_y.to_le_bytes());
+            m[off + 4] = evento.botones;
+            Ok(5)
         },
     )?;
 

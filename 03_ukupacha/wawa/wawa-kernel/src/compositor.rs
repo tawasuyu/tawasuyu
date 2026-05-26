@@ -929,6 +929,33 @@ pub fn atender_raton() {
             escritorio.arrastre = None;
         }
         escritorio.raton_izq = izq;
+
+        // ENRUTADO AL USERSPACE. Despues de aplicar foco y arrastre, entregar
+        // el evento ya TRADUCIDO al canal del puntero de la ventana enfocada.
+        // El kernel hace toda la matematica: la app no ve coordenadas globales
+        // ni eventos que caigan fuera de su lienzo natural. Si el cursor esta
+        // sobre el cromo de su propia ventana o sobre otras ventanas, el
+        // evento se descarta en silencio dentro de `puntero::enrutar`.
+        let foco = FOCO.load(Ordering::Relaxed);
+        if let Some(ventana) = escritorio.ventanas.get(foco) {
+            if !ventana.cerrada && ventana.baliza.is_none() {
+                let marco = ventana.marco;
+                let nat_ancho = ventana.natural_ancho;
+                let nat_alto = ventana.natural_alto;
+                crate::async_system::puntero::enrutar(
+                    foco,
+                    x,
+                    y,
+                    evento.botones,
+                    marco.x,
+                    marco.y,
+                    marco.ancho,
+                    marco.alto,
+                    nat_ancho,
+                    nat_alto,
+                );
+            }
+        }
     }
     if cambio {
         recomponer(&escritorio);

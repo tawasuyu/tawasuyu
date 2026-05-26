@@ -113,6 +113,7 @@ impl AplicacionWasm {
         //    crea ahora pero se inscribe en el censo de la IRQ1 al final, ya con
         //    la app cargada: una carga fallida no deja canales huerfanos.
         let canal = crate::async_system::teclado::crear_canal();
+        let canal_puntero = crate::async_system::puntero::crear_canal();
         let limites = StoreLimitsBuilder::new()
             .memory_size(techo_memoria)
             // Una expansion denegada se convierte en TRAMPA, no en un -1 que la
@@ -136,6 +137,7 @@ impl AplicacionWasm {
                 natural_ancho,
                 natural_alto,
                 canal,
+                canal_puntero,
                 limites,
                 indice_app,
                 idioma: configuracion.idioma,
@@ -173,10 +175,16 @@ impl AplicacionWasm {
             .call(&mut almacen, ())
             .map_err(|_| FallaApp::Carga)?;
 
-        // 8. Con la app ya cargada e instanciada, inscribir su canal de teclado
-        //    en el censo de la IRQ1, en la ranura de su `indice_app`: desde
-        //    aqui recibe las teclas cuando el compositor le da el foco.
+        // 8. Con la app ya cargada e instanciada, inscribir sus canales de
+        //    entrada en sus respectivos censos, en la ranura de su `indice_app`:
+        //    desde aqui recibe las teclas cuando el compositor le da el foco, y
+        //    los eventos del puntero ya traducidos cuando el cursor cae en su
+        //    lienzo.
         crate::async_system::teclado::registrar_canal(indice_app, &almacen.data().canal);
+        crate::async_system::puntero::registrar_canal(
+            indice_app,
+            &almacen.data().canal_puntero,
+        );
 
         Ok(AplicacionWasm {
             almacen,
@@ -243,6 +251,8 @@ impl AplicacionWasm {
 /// empujando scancodes a una cola muerta: una fuga lenta pero segura.
 impl Drop for AplicacionWasm {
     fn drop(&mut self) {
-        crate::async_system::teclado::cerrar_canal(self.almacen.data().indice_app);
+        let indice = self.almacen.data().indice_app;
+        crate::async_system::teclado::cerrar_canal(indice);
+        crate::async_system::puntero::cerrar_canal(indice);
     }
 }

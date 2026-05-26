@@ -10,6 +10,7 @@
 // =============================================================================
 
 pub mod executor;
+pub mod puntero;
 pub mod reloj;
 pub mod task;
 pub mod teclado;
