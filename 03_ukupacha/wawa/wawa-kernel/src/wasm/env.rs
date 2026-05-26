@@ -21,6 +21,9 @@
 //    * sys_net_recibir       — leer el siguiente frame recibido (Fase 19;
 //                              desde la Fase 20, los frames Akasha se filtran
 //                              en el kernel y no llegan al userspace).
+//    * sys_red_solicitar     — pedir un objeto por hash a peers de capa-2; el
+//                              demultiplexer absorbe la respuesta async al
+//                              almacen local (Fase 21, AoE bajo demanda).
 //
 //  GUARDARRAIL: el kernel valida MATEMATICAMENTE todo puntero que el modulo le
 //  entrega contra los limites reales de su memoria lineal. No se confia en que
@@ -571,6 +574,38 @@ pub(crate) fn enlazar_capacidades(
             let m = memoria.data_mut(&mut caller);
             m[salida as usize..salida as usize + n].copy_from_slice(&buf[..n]);
             Ok(n as i32)
+        },
+    )?;
+
+    // --- CAPACIDAD 15 :: sys_red_solicitar(hash_ptr) -> i32 ---
+    // Difunde a la red `MensajeAkasha::SolicitarObjeto(hash)`. Si un par tiene
+    // el objeto y responde, el demultiplexer del kernel lo absorbe al almacen
+    // local async — el siguiente `sys_object_datos(hash, ...)` del app lo
+    // encontrara. Patron tipico:
+    //
+    //   let n = sys_object_datos(&h, buf, BUF);
+    //   if n == -1 { sys_red_solicitar(&h); /* reintentar en siguiente tick */ }
+    //
+    // Devuelve 0 si el frame se entrego al driver; -1 si no hay red montada o
+    // el envio fallo. NO bloquea esperando respuesta — la espera la decide la
+    // app entre fotogramas, no el kernel dentro del syscall.
+    enlazador.func_wrap(
+        "renaser",
+        "sys_red_solicitar",
+        |caller: Caller<'_, ContextoCapacidades>, hash_ptr: u32| -> Result<i32, Error> {
+            let memoria = obtener_memoria(&caller)?;
+            let hash = {
+                let m = memoria.data(&caller);
+                leer_hash(
+                    m,
+                    hash_ptr,
+                    "WASM :: sys_red_solicitar desbordo la memoria lineal (hash)",
+                )?
+            };
+            match crate::akasha::difundir_solicitud(hash) {
+                Ok(()) => Ok(0),
+                Err(()) => Ok(-1),
+            }
         },
     )?;
 

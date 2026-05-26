@@ -330,6 +330,29 @@ pub fn tic_compositor() {
     }
 }
 
+/// Difunde, por broadcast, una solicitud de objeto por su hash. Es la
+/// version "tira del cable" del fetch — la userspace la activa cuando
+/// `almacen::recuperar(&hash)` devuelve `None` y quiere intentar
+/// completarse desde la red. El kernel ya tiene el camino de respuesta
+/// montado: cuando un par conteste con `ProveedorObjeto`, el
+/// demultiplexer lo absorbe via `absorber_proveedor`, y el siguiente
+/// `recuperar` lo encontrara en el almacen local.
+///
+/// Devuelve `Ok(())` si el frame se entrego al driver; `Err(())` si no
+/// hay MAC montada (red ausente) o el envio fallo.
+pub fn difundir_solicitud(id: Hash) -> Result<(), ()> {
+    let nuestra = NUESTRA_MAC.get().copied().ok_or(())?;
+    let mensaje = MensajeAkasha::SolicitarObjeto(id);
+    enviar(&mensaje, nuestra, MAC_BROADCAST)?;
+    TX_SOLICITUDES.fetch_add(1, Ordering::Relaxed);
+    let _ = writeln!(
+        baliza::Serie,
+        "akasha :: SOLICITUD (userspace) :: {}",
+        FormatoHash(&id)
+    );
+    Ok(())
+}
+
 /// Anuncia, por broadcast, el hash del manifiesto actual. Es el faro de
 /// renaser: quien escuche en la red de capa-2 sabra de nuestra existencia y
 /// del nodo raiz del grafo. Si aun no hay manifiesto anclado, no se difunde
