@@ -7,6 +7,9 @@
 
 #![forbid(unsafe_code)]
 
+pub mod multilienzo;
+pub use multilienzo::{MultilienzoError, PlumaStore};
+
 use pluma_core::NarrativeAtom;
 use pluma_graph::NarrativeGraph;
 use uuid::Uuid;
