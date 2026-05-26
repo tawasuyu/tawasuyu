@@ -12,8 +12,10 @@ pluma-render-plan = { path = "../pluma-render-plan" }
 pluma-core = { path = "../pluma-core" }
 pluma-cuerpo = { path = "../pluma-cuerpo" }
 pluma-align = { path = "../pluma-align" }
+pluma-editor-cuerpo = { path = "../pluma-editor-cuerpo" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
+llimphi-widget-text-editor = { workspace = true }
 rimay-localize = { path = "../../../shared/rimay-localize" }
 uuid = { workspace = true, features = ["serde"] }
 

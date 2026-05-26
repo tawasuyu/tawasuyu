@@ -353,6 +353,8 @@ pluma-transform-llm  Ejecutor{Traducir,Tono,Resumir,Reescribir}Llm
 pluma-graph-transform  indice_atoms + persistir_producto (pegamento)
 pluma-store          PlumaStore (atoms+cuerpos+transformaciones+cartas+EstadoUi en sled)
 pluma-editor-llimphi::multilienzo  vista columnas+carriles+hebras
+pluma-editor-llimphi::cuerpo_ide   text-editor IDE de Llimphi sobre EditorCuerpo
+                                   (apply_key → buffer; diff → CambioAtom)
 pluma-editor-cuerpo  sincronia cuerpo ↔ buffer plano (diff Mutar/Crear/Eliminar)
                      reusa Uuids al mutar → hebras vivas tras edit
 shared/foreign-docx  importar .docx como cuerpo madre

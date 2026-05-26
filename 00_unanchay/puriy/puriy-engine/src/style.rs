@@ -135,12 +135,25 @@ impl StyleEngine {
             style.font_weight = weight_default;
         }
 
-        for rule in &self.rules {
-            if rule.matches(node) {
-                rule.apply(&mut style);
-            }
+        // Cascada con especificidad. Recolectamos todas las reglas que
+        // matchean y las aplicamos ordenadas por (specificity ASC,
+        // source_index ASC) — la última escrita gana en caso de empate,
+        // pero un `#id` siempre vence a `body p` aunque llegue antes.
+        let mut matched: Vec<(u32, usize, &Rule)> = self
+            .rules
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.matches(node))
+            .map(|(i, r)| (r.selector.specificity(), i, r))
+            .collect();
+        matched.sort_by_key(|(spec, idx, _)| (*spec, *idx));
+        for (_, _, rule) in matched {
+            rule.apply(&mut style);
         }
 
+        // Inline `style="..."` tiene especificidad implícita 1000 — más
+        // alta que cualquier selector, así que se aplica al final y
+        // sobrescribe todo lo anterior.
         if let Some(inline) = dom::attr(node, "style") {
             for decl in parse_declarations(&inline) {
                 decl.apply(&mut style);
@@ -164,6 +177,32 @@ struct Rule {
 struct Selector {
     compounds: Vec<Compound>,
     combinators: Vec<Combinator>,
+}
+
+impl Selector {
+    /// Especificidad CSS — número compuesto `a*100 + b*10 + c` donde:
+    /// - `a` = cuentas de `#id` en toda la cadena
+    /// - `b` = cuentas de `.class`, `[attr]`, `:pseudo-class`
+    /// - `c` = cuentas de tags (`p`, `div`, …); `*` y combinadores no
+    ///   suman
+    ///
+    /// Inline `style="..."` no pasa por acá; el caller le otorga 1000
+    /// implícito al aplicarlo después de los selectores.
+    fn specificity(&self) -> u32 {
+        let mut ids = 0u32;
+        let mut classes_etc = 0u32;
+        let mut types = 0u32;
+        for c in &self.compounds {
+            ids += c.ids.len() as u32;
+            classes_etc += c.classes.len() as u32;
+            classes_etc += c.attrs.len() as u32;
+            classes_etc += c.pseudos.len() as u32;
+            if matches!(c.tag, TagPart::Type(_)) {
+                types += 1;
+            }
+        }
+        ids * 100 + classes_etc * 10 + types
+    }
 }
 
 /// Combinador CSS entre dos compounds consecutivos.
@@ -1358,6 +1397,78 @@ mod tests {
         });
         assert_eq!(leaf_colors.len(), 1);
         assert_eq!(leaf_colors[0], Color::rgb(0, 0xff, 0));
+    }
+
+    #[test]
+    fn specificity_calculada_correctamente() {
+        // `body p` = 0,0,2 → 2
+        let s1 = parse_selector("body p").unwrap();
+        assert_eq!(s1.specificity(), 2);
+        // `.menu li` = 0,1,1 → 11
+        let s2 = parse_selector(".menu li").unwrap();
+        assert_eq!(s2.specificity(), 11);
+        // `#hero` = 1,0,0 → 100
+        let s3 = parse_selector("#hero").unwrap();
+        assert_eq!(s3.specificity(), 100);
+        // `a.btn[href^="https"]:first-child` = 0,3,1 → 31
+        let s4 = parse_selector(r#"a.btn[href^="https"]:first-child"#).unwrap();
+        assert_eq!(s4.specificity(), 31);
+        // `nav > a#x.y` = 1,1,2 → 112
+        let s5 = parse_selector("nav > a#x.y").unwrap();
+        assert_eq!(s5.specificity(), 112);
+    }
+
+    #[test]
+    fn id_vence_a_tag_aunque_llegue_antes() {
+        // `#hero { color: blue }` está ANTES que `body p { color: red }`
+        // en el stylesheet — sin especificidad, el último (rojo) ganaba.
+        // Con especificidad, el #id (100 > 2) gana azul.
+        let html = r#"<html><head><style>
+            #hero { color: blue }
+            body p { color: red }
+        </style></head><body><p id="hero">x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        assert_eq!(eng.compute(&p).color, Color::rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn clase_vence_a_tag() {
+        // `.alert` (10) > `p` (1) aunque ambos matcheen.
+        let html = r#"<html><head><style>
+            .alert { color: red }
+            p { color: blue }
+        </style></head><body><p class="alert">x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        assert_eq!(eng.compute(&p).color, Color::rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn inline_style_vence_a_id() {
+        // Inline tiene especificidad implícita 1000 — gana sobre `#hero`.
+        let html = r##"<html><head><style>
+            #hero { color: blue }
+        </style></head><body><p id="hero" style="color: green">x</p></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        assert_eq!(eng.compute(&p).color, Color::rgb(0, 128, 0));
+    }
+
+    #[test]
+    fn empate_de_especificidad_gana_el_ultimo() {
+        // Dos selectores con misma especificidad: gana el que llega después.
+        let html = r#"<html><head><style>
+            p { color: red }
+            p { color: blue }
+        </style></head><body><p>x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        assert_eq!(eng.compute(&p).color, Color::rgb(0, 0, 255));
     }
 
     #[test]

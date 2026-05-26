@@ -11,6 +11,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod cuerpo_ide;
 pub mod multilienzo;
 
 use llimphi_ui::llimphi_layout::taffy::{
