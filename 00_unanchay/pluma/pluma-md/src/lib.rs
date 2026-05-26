@@ -9,6 +9,9 @@
 //! tests. Si necesitás emitir Markdown-AST en lugar de HTML, usá la API
 //! `events()` y construí tu propio renderer.
 
+pub mod import;
+pub use import::{parse_md, DocumentoImportado};
+
 use pulldown_cmark::{html, Event, Options, Parser};
 
 /// Opciones por default — GFM completo: tables, footnotes, tasklists, strikethrough,
