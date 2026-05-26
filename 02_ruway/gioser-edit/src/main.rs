@@ -946,6 +946,10 @@ fn header_bar(model: &Model, theme: &Theme) -> View<Msg> {
             bottom: length(0.0_f32),
         },
         align_items: Some(AlignItems::Center),
+        // Sin esto, el `flex_shrink: 1.0` default de taffy comprime el
+        // header cuando body pide percent(1.0) + grow:1 sobre el column
+        // raíz — overflow de 28px se reparte mitad y mitad.
+        flex_shrink: 0.0,
         ..Default::default()
     })
     .fill(theme.bg_panel)

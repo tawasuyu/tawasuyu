@@ -22,9 +22,17 @@
 #![forbid(unsafe_code)]
 
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{length, percent, Dimension, FlexDirection, Size, Style},
+    prelude::{auto, length, percent, Dimension, FlexDirection, Size, Style},
     AlignItems, JustifyContent, Rect,
 };
+
+/// Ancho mínimo de un tab cuando `tab_width` es `None` — evita que los
+/// tabs cortos (un nombre de 4 chars) se vean apretados contra los
+/// vecinos. Si se especifica `tab_width: Some(px)`, se ignora.
+const DEFAULT_MIN_TAB_WIDTH: f32 = 120.0;
+/// Separación horizontal entre tabs — deja ver el `bg_bar` como hilo
+/// fino, suaviza el bloque sólido de antes.
+const TAB_GAP: f32 = 2.0;
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
@@ -126,6 +134,14 @@ where
             width: percent(1.0_f32),
             height: length(tab_height + accent_thickness(&palette)),
         },
+        // No comprimir verticalmente cuando el contenido del tab activo
+        // pide percent(1.0): si no, el column padre reparte overflow y
+        // come la altura del tab strip.
+        flex_shrink: 0.0,
+        gap: Size {
+            width: length(TAB_GAP),
+            height: length(0.0_f32),
+        },
         ..Default::default()
     })
     .fill(palette.bg_bar)
@@ -170,15 +186,22 @@ fn tab_button<Msg: Clone + 'static>(
         Some(px) => length(px),
         None => Dimension::auto(),
     };
+    // Cuando el tab es auto-width, garantizamos min para que un label
+    // corto («main.rs», 7 chars) no apriete al vecino.
+    let min_w = match width {
+        Some(_) => auto(),
+        None => length(DEFAULT_MIN_TAB_WIDTH),
+    };
 
     let label_view = View::new(Style {
         size: Size {
             width: w,
             height: length(height),
         },
+        min_size: Size { width: min_w, height: auto() },
         padding: Rect {
-            left: length(14.0_f32),
-            right: length(14.0_f32),
+            left: length(16.0_f32),
+            right: length(16.0_f32),
             top: length(0.0_f32),
             bottom: length(0.0_f32),
         },
@@ -202,6 +225,7 @@ fn tab_button<Msg: Clone + 'static>(
             width: w,
             height: length(accent_thickness(palette)),
         },
+        min_size: Size { width: min_w, height: auto() },
         ..Default::default()
     })
     .fill(accent_color);
@@ -212,6 +236,11 @@ fn tab_button<Msg: Clone + 'static>(
             width: w,
             height: length(height + accent_thickness(palette)),
         },
+        min_size: Size { width: min_w, height: auto() },
+        // Cuando hay muchos tabs y el ancho total excede la bar, no
+        // comprimir cada tab — preferimos overflow a verlos como una
+        // lasca delgada. (Eventualmente: scroll horizontal.)
+        flex_shrink: 0.0,
         ..Default::default()
     })
     .children(vec![label_view, accent])
