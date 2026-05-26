@@ -64,6 +64,7 @@ members = [
     "00_unanchay/rimay/rimay-verbo-core",
     "00_unanchay/rimay/rimay-verbo-daemon",
     "00_unanchay/rimay/rimay-verbo-daemon-bin",
+    "00_unanchay/rimay/rimay-verbo-fastembed",
     "00_unanchay/rimay/rimay-verbo-mock",
     "00_unanchay/puriy/puriy-app",
     "00_unanchay/puriy/puriy-core",
