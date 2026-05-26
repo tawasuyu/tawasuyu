@@ -61,6 +61,7 @@ pub enum BackendKind {
     Anthropic,
     Gemini,
     DeepSeek,
+    Cohere,
     Ollama,
     Mock,
 }
@@ -73,6 +74,7 @@ impl BackendKind {
             "anthropic" => Some(BackendKind::Anthropic),
             "gemini" | "google" => Some(BackendKind::Gemini),
             "deepseek" => Some(BackendKind::DeepSeek),
+            "cohere" => Some(BackendKind::Cohere),
             "ollama" => Some(BackendKind::Ollama),
             "mock" => Some(BackendKind::Mock),
             _ => None,
@@ -173,6 +175,19 @@ pub fn build_client(cfg: &LlmConfig) -> Result<Arc<dyn ChatClient>, BuildError> 
             };
             Ok(Arc::new(cli))
         }
+        BackendKind::Cohere => {
+            let mut cli = match &cfg.api_key {
+                Some(k) => pluma_llm_cohere::CohereClient::with_api_key(k.clone())?,
+                None => pluma_llm_cohere::CohereClient::from_env()?,
+            };
+            if let Some(m) = &cfg.model {
+                cli = cli.with_model(m.clone());
+            }
+            if let Some(ep) = &cfg.endpoint {
+                cli = cli.with_endpoint(ep.clone());
+            }
+            Ok(Arc::new(cli))
+        }
         BackendKind::Ollama => {
             let model = cfg.model.clone().ok_or_else(|| {
                 BuildError::Config(
@@ -228,6 +243,9 @@ fn detectar_backend_por_env() -> BackendKind {
     }
     if std::env::var("DEEPSEEK_API_KEY").is_ok() {
         return BackendKind::DeepSeek;
+    }
+    if std::env::var("COHERE_API_KEY").is_ok() {
+        return BackendKind::Cohere;
     }
     BackendKind::Mock
 }

@@ -13,6 +13,7 @@ thiserror = { workspace = true }
 pluma-llm-core = { path = "../pluma-llm-core" }
 pluma-llm-mock = { path = "../pluma-llm-mock" }
 pluma-llm-anthropic = { path = "../pluma-llm-anthropic" }
+pluma-llm-cohere = { path = "../pluma-llm-cohere" }
 pluma-llm-gemini = { path = "../pluma-llm-gemini" }
 pluma-llm-openai-compatible = { path = "../pluma-llm-openai-compatible" }
 
