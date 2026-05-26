@@ -42,6 +42,9 @@ use llimphi_module_fif::{self as fif, FifAction, FifMsg, FifPalette, FifState};
 use llimphi_module_file_picker::{
     self as picker, PickerAction, PickerMsg, PickerPalette, PickerState,
 };
+use llimphi_module_shuma_term::{
+    self as term, ShumaTermAction, ShumaTermMsg, ShumaTermPalette, ShumaTermState,
+};
 use llimphi_widget_tabs::{tabs_view, TabsPalette, TabsSpec};
 use llimphi_widget_text_editor::{
     all_matches, find_next, find_prev, text_editor_view_full, Clipboard, Diagnostic,
@@ -63,6 +66,9 @@ const TAB_STRIP_H: f32 = 26.0;
 /// Cuántas líneas mostramos en el viewport del editor. Aproximación
 /// estática: (alto ventana ~760 − header 28) / line_height(~18) ≈ 40.
 const EDITOR_VISIBLE_LINES: usize = 40;
+/// Altura del panel terminal cuando está abierto. ~14 filas de 14px +
+/// header 18px ≈ 214px — redondeado a 220.
+const TERM_PANEL_H: f32 = 220.0;
 
 #[derive(Clone)]
 enum Msg {
@@ -88,6 +94,8 @@ enum Msg {
     /// Mensajes del módulo find-in-files. El host los wrappea para
     /// rutearlos a `llimphi_module_fif::apply`.
     Fif(FifMsg),
+    /// Mensajes del módulo terminal integrado (Ctrl+`).
+    Term(ShumaTermMsg),
     // Find
     FindOpen,
     FindClose,
@@ -163,6 +171,9 @@ struct Model {
     picker: Option<PickerState>,
     /// Estado del find-in-files; `None` cerrado.
     fif: Option<FifState>,
+    /// Terminal integrado; `None` cerrado. Cuando está abierto, las
+    /// teclas pasan al PTY (con excepciones del módulo).
+    term: Option<ShumaTermState>,
     tabs: Vec<Tab>,
     /// Índice del tab activo dentro de `tabs`. `None` si no hay ninguno
     /// abierto todavía.
@@ -294,6 +305,11 @@ impl App for EditorApp {
     fn init(handle: &Handle<Msg>) -> Model {
         // Tick periódico para refrescar diagnostics del LSP.
         handle.spawn_periodic(std::time::Duration::from_millis(400), || Msg::PollLsp);
+        // Tick más rápido para drenar el PTY del terminal (si está abierto).
+        // Sin esto, el output de comandos del shell aparece a saltos de 400ms.
+        handle.spawn_periodic(std::time::Duration::from_millis(50), || {
+            Msg::Term(ShumaTermMsg::Tick)
+        });
 
         let args: Vec<String> = env::args().skip(1).collect();
         let demo_lsp = args.iter().any(|a| a == "--demo-lsp");
@@ -329,6 +345,7 @@ impl App for EditorApp {
             all_files,
             picker: None,
             fif: None,
+            term: None,
             tabs: Vec::new(),
             active: None,
             clipboard: ArboardClipboard::new(),
@@ -381,6 +398,7 @@ impl App for EditorApp {
             }
             Msg::Picker(pm) => apply_picker(model, pm),
             Msg::Fif(fmsg) => apply_fif(model, fmsg),
+            Msg::Term(tm) => apply_term(model, tm),
             Msg::FindOpen => {
                 let mut m = model;
                 if m.find.is_none() {
@@ -801,6 +819,20 @@ impl App for EditorApp {
             }
         }
 
+        // Terminal abierto: traga TODAS las teclas (salvo el toggle de
+        // apertura, que se reusa para cerrar abajo). El módulo internamente
+        // intercepta Ctrl+Shift+W → Close.
+        if let Some(state) = model.term.as_ref() {
+            // Re-presionar el atajo de apertura cierra el panel y devuelve
+            // el foco al editor.
+            if term::open_shortcut(event) {
+                return Some(Msg::Term(ShumaTermMsg::Close));
+            }
+            if let Some(tm) = term::on_key(state, event) {
+                return Some(Msg::Term(tm));
+            }
+        }
+
         // Picker abierto: el módulo decide qué hacer con cada tecla.
         if let Some(state) = model.picker.as_ref() {
             if let Some(pm) = picker::on_key(state, event) {
@@ -859,6 +891,10 @@ impl App for EditorApp {
             // Ctrl+Shift+F = find-in-files (helper del módulo).
             if fif::open_shortcut(event) {
                 return Some(Msg::Fif(FifMsg::Open));
+            }
+            // Ctrl+` = abre el terminal integrado.
+            if term::open_shortcut(event) {
+                return Some(Msg::Term(ShumaTermMsg::Open));
             }
             // Ctrl+Alt+L = format (estilo JetBrains; antes era Ctrl+Shift+F).
             if event.modifiers.alt
@@ -1016,7 +1052,29 @@ fn body_view(model: &Model, theme: &Theme) -> View<Msg> {
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
-    .children(vec![tree_panel(model, theme), editor_panel(model, theme)])
+    .children(vec![tree_panel(model, theme), right_panel(model, theme)])
+}
+
+/// Columna derecha: editor arriba; si el terminal está abierto, va
+/// como panel inferior fijo de 220px (estilo VS Code).
+fn right_panel(model: &Model, theme: &Theme) -> View<Msg> {
+    let editor = editor_panel(model, theme);
+    let mut children = vec![editor];
+    if let Some(state) = model.term.as_ref() {
+        children.push(term::view(
+            state,
+            &ShumaTermPalette::from_theme(theme),
+            TERM_PANEL_H,
+            Msg::Term,
+        ));
+    }
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        flex_grow: 1.0,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .children(children)
 }
 
 fn tree_panel(model: &Model, theme: &Theme) -> View<Msg> {
@@ -1706,6 +1764,32 @@ fn apply_fif(model: Model, fmsg: FifMsg) -> Model {
                 tab.editor.ensure_caret_visible(EDITOR_VISIBLE_LINES);
             }
         }
+    }
+    m
+}
+
+/// Routea un ShumaTermMsg al módulo terminal. Lazy-init: el shell se
+/// spawnea en la raíz del workspace cuando el user dispara Ctrl+`.
+fn apply_term(model: Model, tm: ShumaTermMsg) -> Model {
+    let mut m = model;
+    if matches!(tm, ShumaTermMsg::Open) && m.term.is_none() {
+        let cwd = m.root.display().to_string();
+        m.term = Some(term::spawn(cwd));
+        m.status = "terminal · Ctrl+` cierra · Ctrl+Shift+W cierra".into();
+        return m;
+    }
+    let action = match m.term.as_mut() {
+        Some(state) => term::apply(state, tm),
+        None => return m,
+    };
+    match action {
+        ShumaTermAction::None => {}
+        ShumaTermAction::Close => {
+            // Drop del state envía SIGTERM al shell — ver Drop impl del módulo.
+            m.term = None;
+            m.status = "terminal cerrado".into();
+        }
+        ShumaTermAction::SetStatus(s) => m.status = s,
     }
     m
 }

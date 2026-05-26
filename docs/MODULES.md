@@ -286,6 +286,7 @@ distintos a propósito.
 |--------------------------------|--------------------------|-------------------|
 | `llimphi-module-fif`           | `editor.find-in-files`   | Ctrl+Shift+F      |
 | `llimphi-module-file-picker`   | `editor.file-picker`     | Ctrl+P            |
+| `llimphi-module-shuma-term`    | `editor.terminal`        | Ctrl+`            |
 
 | Crate (Tier 2 runtime)         | Rol                                                                              |
 |--------------------------------|----------------------------------------------------------------------------------|
@@ -298,5 +299,29 @@ distintos a propósito.
 - `llimphi-module-mini-map` — overlay de minimap del buffer activo.
 - `llimphi-module-symbol-outline` — outline del documento via LSP
   `documentSymbol`.
+
+### Caso particular: `llimphi-module-shuma-term`
+
+Es el reemplazo del "terminal integrado" de los IDEs tradicionales
+(Ctrl+\` de VS Code, "Terminal" de JetBrains) pero como módulo Tier 1
+enchufable, no como feature monolítica. Levanta un PTY real vía
+`shuma-exec` (`Exec::Pty` + `portable-pty`) y emula la pantalla con
+`vt100::Parser`. El host:
+
+- Crea el state con `shuma_term::spawn(cwd)` cuando el user dispara el
+  shortcut.
+- Dispatchea `Msg::Term(ShumaTermMsg::Tick)` periódicamente
+  (recomendado ~50 ms) para drenar los bytes que llegan del PTY.
+- Reenruta teclas al PTY mientras `term.is_some()`: el módulo traga
+  todas las teclas y el host no debe reusarlas para sus atajos durante
+  ese tiempo (la excepción es el toggle de apertura, que cierra).
+- Renderiza el panel donde quiera (recomendación: panel inferior fijo,
+  ~220 px, estilo VS Code).
+
+Notar la simetría con la decisión de Tier 2: **un terminal NO es un
+plugin WASM** porque necesita spawn-ear procesos y abrir PTYs — eso
+rompe la promesa del sandbox WASM. Esta es la ruta correcta para
+features que necesitan privilegios del host pero quieren ser
+reutilizables across apps.
 
 Cada uno debería seguir el mismo contrato sin inventar uno nuevo.

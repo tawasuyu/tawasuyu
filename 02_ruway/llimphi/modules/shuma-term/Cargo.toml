@@ -1,0 +1,14 @@
+[package]
+name = "llimphi-module-shuma-term"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-module-shuma-term — terminal integrado tipo Ctrl+\\` de VS Code. Módulo Llimphi sobre shuma-exec (PTY real) + vt100 (emulación). Cualquier app Llimphi puede enchufar un terminal sandboxeado por el shell del usuario."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+shuma-exec = { path = "../../../shuma/sandbox/shuma-exec" }
+vt100 = { workspace = true }
