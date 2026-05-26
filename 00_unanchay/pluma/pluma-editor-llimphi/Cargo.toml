@@ -11,3 +11,4 @@ description = "pluma — backend Llimphi del editor DAG: pinta un RenderPlan com
 pluma-render-plan = { path = "../pluma-render-plan" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
+rimay-localize = { path = "../../../shared/rimay-localize" }

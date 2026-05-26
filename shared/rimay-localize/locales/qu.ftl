@@ -65,3 +65,27 @@ dominium-active-count = { $count } kawsachkan
 cosmos-btn-save-transit = 💾 Purichiqta qispi qillqaman waqaychay
 cosmos-btn-save-progressed = 💾 Wiñasqata qispi qillqaman waqaychay
 cosmos-btn-save-return = 💾 Kutiqta qispi qillqaman waqaychay
+
+# === greeter (mirada login) ===
+greeter-subtitle = sesionniykita qallariy
+greeter-label-user = sutiyki
+greeter-label-password = pakasqa rimay
+greeter-placeholder-user = sutiykita churay
+greeter-status-authenticating = qhawachkani…
+greeter-error-empty-user = sutiyki churay
+
+# === nakui (ERP shell) ===
+nakui-header = Nakui · { $count } yanapakuq
+nakui-sidebar-modules = Yanapakuqkuna ({ $count })
+nakui-sidebar-menu = Akllana
+nakui-empty-no-modules = Mana yanapakuq apamusqa
+nakui-empty-pick-menu = Akllanata akllariy lateral barrapi
+nakui-empty-pick-module = Yanapakuqta akllariy lateral barrapi
+nakui-pending-edit = hukchay suyaykuchkan: meta-form Llimphi munakun
+nakui-pending-render-detail = qhawachiy suyaykuchkan: meta-form Llimphi munakun
+nakui-pending-render-dashboard = qhawachiy suyaykuchkan: dashboard Llimphi munakun
+
+# === pluma (DAG hukchaq) ===
+pluma-tone-valid = khuska
+pluma-tone-pending = qhawana
+pluma-tone-conflict = ch'aqwaypi

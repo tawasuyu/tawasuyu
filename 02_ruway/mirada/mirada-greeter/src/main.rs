@@ -39,6 +39,7 @@ const GREETER_APP_ID: &str = "carmen.greeter";
 type DynAuth = Arc<dyn Authenticator + Send + Sync>;
 
 fn main() {
+    rimay_localize::init();
     llimphi_ui::run::<Greeter>();
 }
 
@@ -174,7 +175,7 @@ impl App for Greeter {
                 }
                 let user = m.user.text().trim().to_string();
                 if user.is_empty() {
-                    m.status = Status::Failed("ingresá un usuario".into());
+                    m.status = Status::Failed(rimay_localize::t("greeter-error-empty-user"));
                     m.focus = Field::User;
                     return m;
                 }
@@ -201,18 +202,33 @@ impl App for Greeter {
         let input_palette = TextInputPalette::from_theme(&theme);
 
         let title = row(28.0, "carmen", 22.0, theme.fg_text);
-        let subtitle = row(16.0, "iniciá tu sesión", 12.0, theme.fg_muted);
+        let subtitle = row(
+            16.0,
+            &rimay_localize::t("greeter-subtitle"),
+            12.0,
+            theme.fg_muted,
+        );
 
-        let user_cap = row(14.0, "usuario", 10.0, theme.fg_muted);
+        let user_cap = row(
+            14.0,
+            &rimay_localize::t("greeter-label-user"),
+            10.0,
+            theme.fg_muted,
+        );
         let user_box = text_input_view(
             &model.user,
-            "ingresá tu usuario",
+            &rimay_localize::t("greeter-placeholder-user"),
             model.focus == Field::User,
             &input_palette,
             Msg::Focus(Field::User),
         );
 
-        let pass_cap = row(14.0, "contraseña", 10.0, theme.fg_muted);
+        let pass_cap = row(
+            14.0,
+            &rimay_localize::t("greeter-label-password"),
+            10.0,
+            theme.fg_muted,
+        );
         let pass_box = text_input_view(
             &model.pass,
             "·······",
@@ -223,7 +239,10 @@ impl App for Greeter {
 
         let (status_msg, status_color) = match &model.status {
             Status::Idle => (String::new(), theme.fg_muted),
-            Status::Authenticating => ("verificando…".to_string(), theme.fg_muted),
+            Status::Authenticating => (
+                rimay_localize::t("greeter-status-authenticating"),
+                theme.fg_muted,
+            ),
             Status::Failed(m) => (m.clone(), theme.fg_destructive),
         };
         let status_line = row(16.0, &status_msg, 11.0, status_color);

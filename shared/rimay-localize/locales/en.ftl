@@ -59,3 +59,27 @@ dominium-active-count = { $count } active
 cosmos-btn-save-transit = 💾 Save transit as free chart
 cosmos-btn-save-progressed = 💾 Save progressed as free chart
 cosmos-btn-save-return = 💾 Save return as free chart
+
+# === greeter (mirada login) ===
+greeter-subtitle = sign in
+greeter-label-user = username
+greeter-label-password = password
+greeter-placeholder-user = enter your username
+greeter-status-authenticating = verifying…
+greeter-error-empty-user = enter a username
+
+# === nakui (ERP shell) ===
+nakui-header = Nakui · { $count } module(s)
+nakui-sidebar-modules = Modules ({ $count })
+nakui-sidebar-menu = Menu
+nakui-empty-no-modules = No modules loaded
+nakui-empty-pick-module = Pick a module in the sidebar
+nakui-empty-pick-menu = Pick a menu in the sidebar
+nakui-pending-edit = edit pending: requires Llimphi meta-form
+nakui-pending-render-detail = render pending: requires Llimphi meta-form
+nakui-pending-render-dashboard = render pending: requires Llimphi dashboard
+
+# === pluma (DAG editor) ===
+pluma-tone-valid = coherent
+pluma-tone-pending = pending
+pluma-tone-conflict = conflict

@@ -17,6 +17,7 @@ llimphi-widget-banner = { workspace = true }
 llimphi-widget-list = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true, features = ["serde"] }
+rimay-localize = { path = "../../../shared/rimay-localize" }
 
 [[bin]]
 name = "nakui-ui-llimphi"

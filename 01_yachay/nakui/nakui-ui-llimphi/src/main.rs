@@ -198,7 +198,10 @@ impl App for NakuiApp {
     fn view(model: &Model) -> View<Msg> {
         let theme = Theme::dark();
         let header = app_header::<Msg>(
-            format!("Nakui · {} módulo(s)", model.modules.len()),
+            rimay_localize::t_args(
+                "nakui-header",
+                &[("count", model.modules.len().to_string().into())],
+            ),
             Vec::new(),
             &AppHeaderPalette::from_theme(&theme),
         );
@@ -268,7 +271,10 @@ fn build_sidebar(model: &Model, theme: &Theme) -> View<Msg> {
     let modules_panel = list_view(ListSpec {
         rows: module_rows,
         total: model.modules.len(),
-        caption: Some(format!("Módulos ({})", model.modules.len())),
+        caption: Some(rimay_localize::t_args(
+            "nakui-sidebar-modules",
+            &[("count", model.modules.len().to_string().into())],
+        )),
         truncated_hint: None,
         row_height: ROW_HEIGHT,
         palette,
@@ -294,13 +300,13 @@ fn build_sidebar(model: &Model, theme: &Theme) -> View<Msg> {
             list_view(ListSpec {
                 rows,
                 total: m.menu.len(),
-                caption: Some("Menú".into()),
+                caption: Some(rimay_localize::t("nakui-sidebar-menu")),
                 truncated_hint: None,
                 row_height: ROW_HEIGHT,
                 palette,
             })
         }
-        None => empty_panel(theme, "Sin módulos cargados"),
+        None => empty_panel(theme, &rimay_localize::t("nakui-empty-no-modules")),
     };
 
     View::new(Style {
@@ -331,8 +337,8 @@ fn build_main(model: &Model, theme: &Theme) -> View<Msg> {
                 ),
             }
         }
-        (Some(_), None) => empty_panel(theme, "Elegí un menú en la barra lateral"),
-        _ => empty_panel(theme, "Elegí un módulo en la barra lateral"),
+        (Some(_), None) => empty_panel(theme, &rimay_localize::t("nakui-empty-pick-menu")),
+        _ => empty_panel(theme, &rimay_localize::t("nakui-empty-pick-module")),
     };
 
     View::new(Style {
@@ -383,14 +389,14 @@ fn build_view_panel(
             let lines = vec![
                 format!("kind: form · entity: {}", fv.entity),
                 format!("fields: {}", fv.fields.len()),
-                "edición pendiente: requiere meta-form Llimphi".into(),
+                rimay_localize::t("nakui-pending-edit"),
             ];
             (fv.title.clone(), lines)
         }
         ModuleView::Detail(dv) => {
             let lines = vec![
                 format!("kind: detail · entity: {}", dv.entity),
-                "render pendiente: requiere meta-form Llimphi".into(),
+                rimay_localize::t("nakui-pending-render-detail"),
             ];
             (dv.title.clone(), lines)
         }
@@ -398,7 +404,7 @@ fn build_view_panel(
             let lines = vec![
                 "kind: dashboard".into(),
                 format!("cards: {}", d.cards.len()),
-                "render pendiente: requiere dashboard Llimphi".into(),
+                rimay_localize::t("nakui-pending-render-dashboard"),
             ];
             (d.title.clone(), lines)
         }
@@ -501,6 +507,7 @@ fn load_ui_modules(dir: &std::path::Path) -> Result<(Vec<Module>, Vec<String>), 
 }
 
 fn main() {
+    rimay_localize::init();
     llimphi_ui::run::<NakuiApp>();
 }
 

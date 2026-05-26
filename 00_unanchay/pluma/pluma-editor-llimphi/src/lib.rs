@@ -64,13 +64,23 @@ pub fn tone_color(tone: CoherenceTone) -> Color {
     }
 }
 
-/// Etiqueta corta de un tono — para leyendas.
-pub fn tone_label(tone: CoherenceTone) -> &'static str {
+/// ID estable (en el catálogo `rimay-localize`) para la etiqueta corta
+/// de un tono. Existe como función para que callers puedan acceder al
+/// ID raw (p.ej. tests) sin pasar por i18n.
+pub fn tone_label_id(tone: CoherenceTone) -> &'static str {
     match tone {
-        CoherenceTone::Valid => "coherente",
-        CoherenceTone::Pending => "por evaluar",
-        CoherenceTone::Conflict => "en conflicto",
+        CoherenceTone::Valid => "pluma-tone-valid",
+        CoherenceTone::Pending => "pluma-tone-pending",
+        CoherenceTone::Conflict => "pluma-tone-conflict",
     }
+}
+
+/// Etiqueta corta de un tono ya traducida al locale activo. La firma
+/// vuelve `String` (no `&'static str` como antes) porque la traducción
+/// es dinámica. Auto-inicializa el fallback es-PE si nadie llamó a
+/// `rimay_localize::init` aún.
+pub fn tone_label(tone: CoherenceTone) -> String {
+    rimay_localize::t(tone_label_id(tone))
 }
 
 /// Compone el plan completo en un árbol `View`: capa de conectores al
@@ -303,6 +313,6 @@ mod tests {
 
     #[test]
     fn tone_labels_are_set() {
-        assert_eq!(tone_label(CoherenceTone::Conflict), "en conflicto");
+        assert_eq!(tone_label_id(CoherenceTone::Conflict), "pluma-tone-conflict");
     }
 }

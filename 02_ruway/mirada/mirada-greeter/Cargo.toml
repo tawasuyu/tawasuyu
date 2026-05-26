@@ -17,3 +17,4 @@ llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
 auth-core = { path = "../../../shared/auth/auth-core" }
+rimay-localize = { path = "../../../shared/rimay-localize" }

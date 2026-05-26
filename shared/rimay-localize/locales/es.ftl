@@ -62,3 +62,27 @@ dominium-active-count = { $count } activos
 cosmos-btn-save-transit = 💾 Guardar tránsito como carta libre
 cosmos-btn-save-progressed = 💾 Guardar progresada como carta libre
 cosmos-btn-save-return = 💾 Guardar retorno como carta libre
+
+# === greeter (mirada login) ===
+greeter-subtitle = iniciá tu sesión
+greeter-label-user = usuario
+greeter-label-password = contraseña
+greeter-placeholder-user = ingresá tu usuario
+greeter-status-authenticating = verificando…
+greeter-error-empty-user = ingresá un usuario
+
+# === nakui (ERP shell) ===
+nakui-header = Nakui · { $count } módulo(s)
+nakui-sidebar-modules = Módulos ({ $count })
+nakui-sidebar-menu = Menú
+nakui-empty-no-modules = Sin módulos cargados
+nakui-empty-pick-menu = Elegí un menú en la barra lateral
+nakui-empty-pick-module = Elegí un módulo en la barra lateral
+nakui-pending-edit = edición pendiente: requiere meta-form Llimphi
+nakui-pending-render-detail = render pendiente: requiere meta-form Llimphi
+nakui-pending-render-dashboard = render pendiente: requiere dashboard Llimphi
+
+# === pluma (editor DAG) ===
+pluma-tone-valid = coherente
+pluma-tone-pending = por evaluar
+pluma-tone-conflict = en conflicto
