@@ -11,6 +11,10 @@ description = "pluma — transformaciones declarativas entre cuerpos: Identidad/
 uuid = { workspace = true, features = ["serde"] }
 serde = { workspace = true }
 postcard = { workspace = true }
+async-trait = { workspace = true }
 pluma-core = { path = "../pluma-core" }
 pluma-cuerpo = { path = "../pluma-cuerpo" }
 pluma-align = { path = "../pluma-align" }
+
+[dev-dependencies]
+tokio = { workspace = true }

@@ -21,6 +21,7 @@
 
 #![forbid(unsafe_code)]
 
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -154,15 +155,21 @@ pub enum ErrorEjecutor {
 }
 
 /// Un ejecutor sabe aplicar una `Transformacion` sobre una madre y producir
-/// la hija. Los backends reales (rimay, iniy, Rhai) implementan este rasgo
-/// en crates aparte.
-pub trait Ejecutor {
+/// la hija. Los backends reales (rimay, iniy, Rhai, LLM remoto) implementan
+/// este rasgo en crates aparte.
+///
+/// **Async**: los ejecutores triviales (Identidad, Tabla) hacen `async fn`
+/// sin awaits; los que llaman a servicios externos (LLM) sí. Mantener el
+/// rasgo async desde el principio evita que el primer adapter remoto
+/// fuerce una migración del API.
+#[async_trait]
+pub trait Ejecutor: Send + Sync {
     /// Aplica `t` sobre `madre`. Recibe `ahora` para sellar los timestamps de
     /// los productos (frescura del cuerpo hija, timestamps de los
     /// alineamientos derivados). El ejecutor NO debe leer el reloj del
     /// sistema directamente: eso queda en el caller para mantener el flujo
     /// determinista y testeable.
-    fn aplicar(
+    async fn aplicar(
         &self,
         t: &Transformacion,
         madre: &Cuerpo,
@@ -191,8 +198,9 @@ pub trait Ejecutor {
 /// trabajo, sin tirar de un backend pesado.
 pub struct EjecutorIdentidad;
 
+#[async_trait]
 impl Ejecutor for EjecutorIdentidad {
-    fn aplicar(
+    async fn aplicar(
         &self,
         t: &Transformacion,
         madre: &Cuerpo,
@@ -287,15 +295,15 @@ mod pruebas {
         assert_eq!(t.regenerada_en, Some(1500));
     }
 
-    #[test]
-    fn identidad_produce_hija_con_mismos_uuids_y_carta_uno_a_uno() {
+    #[tokio::test]
+    async fn identidad_produce_hija_con_mismos_uuids_y_carta_uno_a_uno() {
         let (madre, ids) = madre_de_3_atomos();
         let t = Transformacion::nueva(
             madre.id, Uuid::new_v4(),
             TipoTransformacion::Identidad,
             "tester", 200,
         );
-        let prod = EjecutorIdentidad.aplicar(&t, &madre, 200).unwrap();
+        let prod = EjecutorIdentidad.aplicar(&t, &madre, 200).await.unwrap();
 
         // La hija comparte UUIDs con la madre.
         assert_eq!(prod.hija.orden, ids);
@@ -323,8 +331,8 @@ mod pruebas {
         assert_eq!(prod.hija.metadatos.fresco_hasta, Some(200));
     }
 
-    #[test]
-    fn identidad_rechaza_otros_tipos() {
+    #[tokio::test]
+    async fn identidad_rechaza_otros_tipos() {
         let (madre, _) = madre_de_3_atomos();
         let t = Transformacion::nueva(
             madre.id, Uuid::new_v4(),
@@ -332,20 +340,20 @@ mod pruebas {
             "tester", 200,
         );
         assert!(matches!(
-            EjecutorIdentidad.aplicar(&t, &madre, 200),
+            EjecutorIdentidad.aplicar(&t, &madre, 200).await,
             Err(ErrorEjecutor::TipoNoSoportado)
         ));
     }
 
-    #[test]
-    fn hija_de_identidad_marca_stale_si_madre_cambia_despues() {
+    #[tokio::test]
+    async fn hija_de_identidad_marca_stale_si_madre_cambia_despues() {
         let (madre, _) = madre_de_3_atomos();
         let t = Transformacion::nueva(
             madre.id, Uuid::new_v4(),
             TipoTransformacion::Identidad,
             "tester", 200,
         );
-        let prod = EjecutorIdentidad.aplicar(&t, &madre, 200).unwrap();
+        let prod = EjecutorIdentidad.aplicar(&t, &madre, 200).await.unwrap();
         // La madre se modifica después de la regeneración.
         assert!(prod.hija.es_stale(300));
         assert!(!prod.hija.es_stale(150));

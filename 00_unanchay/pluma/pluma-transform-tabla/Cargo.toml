@@ -9,7 +9,11 @@ description = "pluma — ejecutor de `Traducir` por tabla explícita Uuid→text
 
 [dependencies]
 uuid = { workspace = true, features = ["serde"] }
+async-trait = { workspace = true }
 pluma-core = { path = "../pluma-core" }
 pluma-cuerpo = { path = "../pluma-cuerpo" }
 pluma-align = { path = "../pluma-align" }
 pluma-transform = { path = "../pluma-transform" }
+
+[dev-dependencies]
+tokio = { workspace = true }

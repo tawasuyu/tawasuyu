@@ -59,6 +59,13 @@ impl App for Demo {
     }
 
     fn init(_: &Handle<Msg>) -> Model {
+        // Runtime tokio compartido para todos los `await` (aplicar de la
+        // transformación + alineación por embeddings).
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime tokio");
+
         // -- 1. Cuerpo madre `es` ----------------------------------------------
         let textos_es = [
             "El cóndor cruzó el cielo del valle al amanecer.",
@@ -98,8 +105,8 @@ impl App for Demo {
             "ana",
             200,
         );
-        let prod = ejecutor_traducir
-            .aplicar(&t_qu, &es, 200)
+        let prod = rt
+            .block_on(ejecutor_traducir.aplicar(&t_qu, &es, 200))
             .expect("traducción por tabla debería tener éxito");
         let qu = prod.hija;
         let atoms_qu = prod.atoms_nuevos;
@@ -144,10 +151,6 @@ impl App for Demo {
         // así las hebras llevan similitudes semánticas reales. Sin daemon,
         // fallback al MockProvider determinista (las fuerzas serán
         // dispersas; sirve para ver la geometría del pintado).
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime tokio");
         let socket = socket_verbo_default();
         let (provider_label, carta_qu_en) = rt.block_on(async {
             match conectar_daemon_si_existe(&socket).await {

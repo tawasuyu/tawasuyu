@@ -15,6 +15,7 @@
 
 use std::collections::HashMap;
 
+use async_trait::async_trait;
 use uuid::Uuid;
 
 use pluma_align::{alinear_explicito, OrigenAlineamiento};
@@ -62,8 +63,9 @@ impl EjecutorTraducirTabla {
     }
 }
 
+#[async_trait]
 impl Ejecutor for EjecutorTraducirTabla {
-    fn aplicar(
+    async fn aplicar(
         &self,
         t: &Transformacion,
         madre: &Cuerpo,
@@ -148,8 +150,8 @@ mod pruebas {
         (c, atoms)
     }
 
-    #[test]
-    fn traduce_madre_completa_y_genera_hebras_derivadas() {
+    #[tokio::test]
+    async fn traduce_madre_completa_y_genera_hebras_derivadas() {
         let (madre, atoms_madre) = madre_es(&["uno", "dos", "tres"]);
         let mut tabla = HashMap::new();
         tabla.insert(atoms_madre[0].id, "huk".to_string());
@@ -166,7 +168,7 @@ mod pruebas {
             "tester",
             200,
         );
-        let prod = ejecutor.aplicar(&t, &madre, 200).unwrap();
+        let prod = ejecutor.aplicar(&t, &madre, 200).await.unwrap();
 
         // 3 atoms nuevos, 3 entradas en orden de la madre.
         assert_eq!(prod.atoms_nuevos.len(), 3);
@@ -194,8 +196,8 @@ mod pruebas {
         assert_eq!(prod.hija.metadatos.lengua.as_deref(), Some("qu"));
     }
 
-    #[test]
-    fn tabla_con_huecos_omite_atoms_sin_traduccion() {
+    #[tokio::test]
+    async fn tabla_con_huecos_omite_atoms_sin_traduccion() {
         let (madre, atoms_madre) = madre_es(&["a", "b", "c"]);
         let mut tabla = HashMap::new();
         // Solo a y c — b queda sin traducción.
@@ -210,7 +212,7 @@ mod pruebas {
             "x",
             10,
         );
-        let prod = ejecutor.aplicar(&t, &madre, 10).unwrap();
+        let prod = ejecutor.aplicar(&t, &madre, 10).await.unwrap();
 
         assert_eq!(prod.hija.orden.len(), 2);
         assert_eq!(prod.atoms_nuevos[0].content.as_str(), "A");
@@ -222,8 +224,8 @@ mod pruebas {
         assert!(!toca_b, "la hebra no debería tocar al átomo b (sin traducción)");
     }
 
-    #[test]
-    fn lengua_destino_inconsistente_devuelve_backend_error() {
+    #[tokio::test]
+    async fn lengua_destino_inconsistente_devuelve_backend_error() {
         let (madre, atoms_madre) = madre_es(&["a"]);
         let mut tabla = HashMap::new();
         tabla.insert(atoms_madre[0].id, "A".into());
@@ -237,14 +239,14 @@ mod pruebas {
             "x",
             1,
         );
-        match ejecutor.aplicar(&t, &madre, 1) {
+        match ejecutor.aplicar(&t, &madre, 1).await {
             Err(ErrorEjecutor::Backend(msg)) => assert!(msg.contains("no coincide")),
             otro => panic!("esperaba Backend, fue {otro:?}"),
         }
     }
 
-    #[test]
-    fn tipo_no_traducir_devuelve_tipo_no_soportado() {
+    #[tokio::test]
+    async fn tipo_no_traducir_devuelve_tipo_no_soportado() {
         let (madre, _) = madre_es(&["a"]);
         let ejecutor = EjecutorTraducirTabla::new(HashMap::new(), "qu");
         let t = Transformacion::nueva(
@@ -255,13 +257,13 @@ mod pruebas {
             1,
         );
         assert!(matches!(
-            ejecutor.aplicar(&t, &madre, 1),
+            ejecutor.aplicar(&t, &madre, 1).await,
             Err(ErrorEjecutor::TipoNoSoportado)
         ));
     }
 
-    #[test]
-    fn tabla_que_no_cubre_la_madre_es_madre_invalida() {
+    #[tokio::test]
+    async fn tabla_que_no_cubre_la_madre_es_madre_invalida() {
         let (madre, _atoms_madre) = madre_es(&["a"]);
         // Tabla con un Uuid que NO pertenece a la madre.
         let mut tabla = HashMap::new();
@@ -276,13 +278,13 @@ mod pruebas {
             1,
         );
         assert!(matches!(
-            ejecutor.aplicar(&t, &madre, 1),
+            ejecutor.aplicar(&t, &madre, 1).await,
             Err(ErrorEjecutor::MadreInvalida(_))
         ));
     }
 
-    #[test]
-    fn con_branch_suffix_override_se_aplica_al_hija() {
+    #[tokio::test]
+    async fn con_branch_suffix_override_se_aplica_al_hija() {
         let (madre, atoms_madre) = madre_es(&["a"]);
         let mut tabla = HashMap::new();
         tabla.insert(atoms_madre[0].id, "A".into());
@@ -296,7 +298,7 @@ mod pruebas {
             "x",
             1,
         );
-        let prod = ejecutor.aplicar(&t, &madre, 1).unwrap();
+        let prod = ejecutor.aplicar(&t, &madre, 1).await.unwrap();
         assert_eq!(prod.hija.branch_id, "es-qu-cuzco");
     }
 }
