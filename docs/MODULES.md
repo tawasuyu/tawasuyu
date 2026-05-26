@@ -156,11 +156,129 @@ Sí son relevantes en dos lugares:
    instancia ofrece esas funciones sin que el host tenga que enumerarlas
    a mano.
 
-2. **Plugins WASM runtime (Tier 2, próximo)**. Esos sí son entidades
-   runtime cargadas dinámicamente y van a llevar Card completa con
-   `permissions` enumerados, sandboxing real vía `card_core::Permissions`,
-   y descubrimiento por broker. Estos no son "módulos" en el sentido de
-   este doc — viven en una capa distinta.
+2. **Plugins WASM runtime (Tier 2)**. Son entidades runtime cargadas
+   dinámicamente, con Card completa, `Permissions` enumerados,
+   sandboxing real y descubrimiento por broker. Vea
+   [§Tier 2 — Plugins WASM](#tier-2--plugins-wasm) más abajo.
+
+## Tier 2 — Plugins WASM
+
+Los módulos Tier 1 (sección anterior) son **crates Rust** que el host
+linkea en build-time. Son rápidos, type-safe, y baratos — pero requieren
+recompilar el host para agregarlos.
+
+Los **plugins Tier 2** invierten esos trade-offs: son `.wasm` cargados en
+runtime, sin recompilar nada. Pierden algo de performance y la
+type-safety se vuelve dinámica, pero ganan tres cosas:
+
+1. **Distribución independiente**. Un plugin se entrega como un blob
+   (`.wasm` + `manifest.toml`) que cualquier host Llimphi puede consumir.
+2. **Sandboxing real**. Lo que un plugin puede hacer está limitado por
+   `card_core::Permissions`, no por el código fuente del plugin. Un
+   plugin con `filesystem = "none"` físicamente no puede leer disco
+   aunque lo intente — el host import no existe en su `Linker`.
+3. **Descubrimiento dinámico**. Cada plugin declara `capabilities` en su
+   manifest; el `PluginHost` indexa por capability y enruta invocaciones.
+   El broker chasqui ve esas capabilities como parte de la Card del host.
+
+### El contrato
+
+Un plugin Tier 2 es **un `.wasm` + un `manifest.toml` hermano**:
+
+```toml
+# manifest.toml
+name = "hello-status"
+version = "0.1.0"
+capabilities = ["status.greet"]
+
+[permissions]
+networking = "none"     # none | loopback | outbound | full
+filesystem = "none"     # none | read-only | read-write
+processes  = false
+
+[permissions.ipc]
+allow = []              # protocolos IPC permitidos (vacío = sin IPC)
+```
+
+El `.wasm` debe exportar:
+
+| Export                                                          | Rol                                                                                                                                |
+|-----------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------|
+| `memory` (lineal, exportada como `"memory"`)                    | Buffer que el host usa para leer strings que el plugin emite.                                                                       |
+| `_invoke(cap_ptr: i32, cap_len: i32, arg_ptr: i32, arg_len: i32) -> i32` | Entry point único. `cap_*` apunta al nombre de capability invocada, `arg_*` al payload (bytes opacos). El retorno es un exit code informativo. |
+
+**ABI de memoria v0**: el host escribe `cap` y `args` empezando en
+offset `0` de la `memory` lineal del plugin. Por convención, las `data`
+sections del plugin deben vivir por encima del offset `256` para no ser
+sobrescritas. Esta restricción es temporal — desaparecerá cuando el
+contrato exija exportar `_alloc(len) -> ptr` y el host pida espacio al
+plugin antes de escribir.
+
+El host expone como imports (todos bajo el namespace `"plugin"`):
+
+| Import                                  | Permiso requerido                | Efecto                                                                                                |
+|-----------------------------------------|----------------------------------|-------------------------------------------------------------------------------------------------------|
+| `plugin.log(ptr, len)`                  | siempre disponible               | Traza UTF-8 vía `tracing::info!`. Útil para debug.                                                    |
+| `plugin.set_status(ptr, len)`           | siempre disponible               | Emite `PluginAction::SetStatus(s)`. El host típicamente lo pinta en la barra inferior.                |
+| `plugin.open_at(path_ptr, path_len, line, col)` | `filesystem >= read-only`        | Emite `PluginAction::OpenAt { path, line, col }`. Si el permiso falta, el import **no se enlaza** y el plugin trap-ea al intentar usarlo. |
+
+La lista crecerá; el principio es: **cada nuevo import se gatea por un
+`Permissions` field**, no se agrega "por defecto".
+
+### Por qué Action (igual que Tier 1)
+
+Las invocaciones devuelven `PluginAction` por exactamente la misma razón
+que un módulo Tier 1: el plugin no sabe — ni necesita saber — cómo se
+"abre" un path en este host, qué significa "set status" en este chrome
+visual, o si la app está en modo headless. Devuelve intención; el host
+decide ejecución. Esto también desacopla testing: el host puede ejercitar
+un plugin sin renderizar nada.
+
+### Por qué un manifest sidecar y no una sección WASM custom
+
+Las custom sections en `.wasm` requieren un toolchain especializado para
+escribirlas y otro para leerlas. Un `.toml` hermano se lee con
+`serde` (que el workspace ya usa) y se edita a mano si hace falta. La
+puerta para mover el manifest a una custom section queda abierta cuando
+haya un cargador uniforme — por ahora, pragmatismo gana.
+
+### Ejemplo: cargar e invocar un plugin
+
+```rust
+use llimphi_plugin_host::{PluginHost, PluginAction};
+
+let mut host = PluginHost::new();
+let id = host.load_from_dir("./plugins/hello-status")?;
+// El manifest declara capability "status.greet".
+
+let action = host.invoke(id, "status.greet", b"mundo")?;
+match action {
+    PluginAction::SetStatus(s) => model.status = s,
+    PluginAction::OpenAt { path, line, col } => { /* … */ }
+    PluginAction::None => {}
+}
+```
+
+Si el plugin pidió `status.greet` pero tiene `filesystem = "none"` y su
+código llama `plugin.open_at(…)`, el plugin trap-ea inmediatamente
+porque ese import no fue enlazado — el host devuelve
+`PluginError::Trap` y el `PluginAction` no se emite. La capability *no*
+es lo que autoriza; **los permisos sí**.
+
+### Relación con `arje-wasm`
+
+`arje-wasm` (`03_ukupacha/arje/runtime/arje-wasm`) encarna
+`Payload::Wasm` como un **Ente del grafo**: un hilo dedicado, ciclo de
+vida atado al kernel arje, imports bajo namespace `"ente"`. Esa es la
+ruta para *procesos* Wasm de larga vida, supervisados por arje, parte
+del grafo dominium.
+
+`llimphi-plugin-host` es la ruta inversa: invocación **on-demand desde
+la UI**, sin hilo dedicado, sin Card de proceso (el plugin **no es un
+Ente** — vive dentro del proceso del host). Comparten engine wasmi 1.0
+para que un mismo `.wasm` *podría* correr en ambos modos si su
+contrato lo permite, pero los entry points y namespaces de imports son
+distintos a propósito.
 
 ## Módulos existentes
 
@@ -168,6 +286,10 @@ Sí son relevantes en dos lugares:
 |--------------------------------|--------------------------|-------------------|
 | `llimphi-module-fif`           | `editor.find-in-files`   | Ctrl+Shift+F      |
 | `llimphi-module-file-picker`   | `editor.file-picker`     | Ctrl+P            |
+
+| Crate (Tier 2 runtime)         | Rol                                                                              |
+|--------------------------------|----------------------------------------------------------------------------------|
+| `llimphi-plugin-host`          | Carga `.wasm` + `manifest.toml`, sandbox por `card_core::Permissions`, `PluginAction`. |
 
 ## Siguientes módulos candidatos
 

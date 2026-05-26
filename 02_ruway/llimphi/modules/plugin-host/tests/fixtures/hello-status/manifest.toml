@@ -1,0 +1,11 @@
+name = "hello-status"
+version = "0.1.0"
+capabilities = ["status.greet"]
+
+[permissions]
+networking = "none"
+filesystem = "none"
+processes  = false
+
+[permissions.ipc]
+allow = []

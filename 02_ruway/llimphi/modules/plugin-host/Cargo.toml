@@ -1,0 +1,21 @@
+[package]
+name = "llimphi-plugin-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-plugin-host — runtime de plugins WASM (Tier 2) para apps Llimphi. Carga .wasm + manifest.toml, aplica sandbox por card_core::Permissions, e invoca capabilities devolviendo PluginAction."
+
+[dependencies]
+card-core = { path = "../../../../shared/card/card-core" }
+wasmi = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+# wat sólo aparece en tests: los fixtures se escriben en WAT y se
+# compilan en runtime, evitando una dependencia de toolchain wasm32.
+wat = { workspace = true }
