@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, FlexDirection, Rect, Size, Style},
-    AlignItems,
+    AlignItems, JustifyContent,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
@@ -76,7 +76,11 @@ use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
 const TREE_WIDTH: f32 = 240.0;
 const TREE_ROW_H: f32 = 22.0;
 const TREE_INDENT: f32 = 16.0;
-const HEADER_H: f32 = 28.0;
+const HEADER_H: f32 = 34.0;
+/// Altura del status bar inferior (estilo VS Code).
+const STATUS_H: f32 = 24.0;
+/// Grosor de las lineas accent que separan header/body/status.
+const SEP_H: f32 = 1.0;
 /// Altura del tab strip (sin contar la línea de acento).
 const TAB_STRIP_H: f32 = 26.0;
 /// Cuántas líneas mostramos en el viewport del editor. Aproximación
@@ -241,6 +245,9 @@ struct Model {
     /// Cliente LSP real: `--lsp` spawnea rust-analyzer (o el binary
     /// pasado con `--lsp-cmd=...`). En modo no-op cuando no se pide.
     lsp: Box<dyn LspClient>,
+    /// Etiqueta corta del LSP activo para mostrar en la status bar.
+    /// Se setea una vez en init y no muta despues.
+    lsp_label: String,
     /// Items del popup de completions; `None` si el popup está cerrado.
     completions: Option<CompletionsBar>,
     /// Popup de hover; `None` cerrado.
@@ -379,10 +386,9 @@ impl App for EditorApp {
         } else {
             Box::new(NoopLspClient)
         };
-        let lsp_label = if lsp_on { format!("lsp:{lsp_cmd}") } else { "lsp:off".into() };
+        let lsp_label = if lsp_on { format!("● lsp:{lsp_cmd}") } else { "○ lsp:off".into() };
         let status = format!(
-            "{} · {} entradas · {} archivos · {lsp_label}",
-            root.display(),
+            "{} entradas · {} archivos indexados",
             nodes.len(),
             all_files.len(),
         );
@@ -409,6 +415,7 @@ impl App for EditorApp {
             find: None,
             demo_lsp,
             lsp,
+            lsp_label,
             completions: None,
             hover: None,
             sig_help: None,
@@ -1134,6 +1141,7 @@ impl App for EditorApp {
         let theme = Theme::dark();
         let header = header_bar(model, &theme);
         let body = body_view(model, &theme);
+        let status = status_bar(model, &theme);
 
         View::new(Style {
             flex_direction: FlexDirection::Column,
@@ -1141,48 +1149,196 @@ impl App for EditorApp {
             ..Default::default()
         })
         .fill(theme.bg_app)
-        .children(vec![header, body])
+        .children(vec![
+            header,
+            separator_line(&theme),
+            body,
+            separator_line(&theme),
+            status,
+        ])
     }
 }
 
 fn header_bar(model: &Model, theme: &Theme) -> View<Msg> {
-    let (open, dirty_mark) = match model.active_tab() {
-        Some(tab) => (
-            relative_to(&model.root, &tab.path),
-            if tab.dirty { " · ● modificado" } else { "" },
-        ),
-        None => ("(sin archivo abierto)".to_string(), ""),
-    };
-    let tabs_count = if model.tabs.len() > 1 {
-        format!(" · {} tabs", model.tabs.len())
-    } else {
-        String::new()
-    };
-    let text = format!(
-        "gioser-edit · {} · {}{}{}  ·  {}",
-        model.root.display(),
-        open,
-        dirty_mark,
-        tabs_count,
-        model.status,
-    );
-    View::new(Style {
-        size: Size { width: percent(1.0_f32), height: length(HEADER_H) },
+    // Section 1: brand pill (gioser-edit con bg accent).
+    let brand = View::new(Style {
+        size: Size { width: length(108.0_f32), height: length(22.0_f32) },
         padding: Rect {
-            left: length(12.0_f32),
-            right: length(12.0_f32),
-            top: length(0.0_f32),
-            bottom: length(0.0_f32),
+            left: length(10.0_f32), right: length(10.0_f32),
+            top: length(0.0_f32), bottom: length(0.0_f32),
         },
         align_items: Some(AlignItems::Center),
-        // Sin esto, el `flex_shrink: 1.0` default de taffy comprime el
-        // header cuando body pide percent(1.0) + grow:1 sobre el column
-        // raíz — overflow de 28px se reparte mitad y mitad.
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.accent)
+    .radius(4.0)
+    .text_aligned("gioser-edit".to_string(), 11.0, theme.bg_app, Alignment::Center);
+
+    // Section 2: breadcrumb root - active-file (ocupa el centro).
+    let crumb_text = match model.active_tab() {
+        Some(tab) => {
+            let rel = relative_to(&model.root, &tab.path);
+            let dirty = if tab.dirty { "  ●" } else { "" };
+            format!("{}  ›  {}{}", model.root.display(), rel, dirty)
+        }
+        None => format!("{}", model.root.display()),
+    };
+    let breadcrumb = View::new(Style {
+        flex_grow: 1.0,
+        size: Size { width: percent(0.0_f32), height: percent(1.0_f32) },
+        padding: Rect {
+            left: length(12.0_f32), right: length(12.0_f32),
+            top: length(0.0_f32), bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(crumb_text, 11.5, theme.fg_text, Alignment::Start);
+
+    // Section 3: hint con shortcuts mas usados.
+    let hint = View::new(Style {
+        size: Size { width: length(360.0_f32), height: percent(1.0_f32) },
+        padding: Rect {
+            left: length(0.0_f32), right: length(12.0_f32),
+            top: length(0.0_f32), bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .text_aligned(
+        "Ctrl+Shift+P palette  ·  Ctrl+P files  ·  Ctrl+Shift+F search".to_string(),
+        10.5, theme.fg_muted, Alignment::End,
+    );
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(HEADER_H) },
+        padding: Rect {
+            left: length(8.0_f32), right: length(8.0_f32),
+            top: length(6.0_f32), bottom: length(6.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
         flex_shrink: 0.0,
         ..Default::default()
     })
     .fill(theme.bg_panel)
-    .text_aligned(text, 11.0, theme.fg_muted, Alignment::Start)
+    .children(vec![brand, breadcrumb, hint])
+}
+
+/// Linea fina accent-tinted que separa header del body, body del status.
+fn separator_line(theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(SEP_H) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.border)
+}
+
+/// Status bar al pie estilo VS Code: tres secciones (status mensaje a la
+/// izquierda, cursor + lang al centro, lsp + bookmarks + tabs a la derecha).
+fn status_bar(model: &Model, theme: &Theme) -> View<Msg> {
+    // --- left: status text ---
+    let status_text = if model.status.is_empty() {
+        "✓ ready".to_string()
+    } else {
+        model.status.clone()
+    };
+    let left = View::new(Style {
+        flex_grow: 1.0,
+        size: Size { width: percent(0.0_f32), height: percent(1.0_f32) },
+        padding: Rect {
+            left: length(10.0_f32), right: length(8.0_f32),
+            top: length(0.0_f32), bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(status_text, 10.5, theme.fg_text, Alignment::Start);
+
+    // --- center: cursor pos + lang ---
+    let center_text = match model.active_tab() {
+        Some(tab) => {
+            let lang = lang_label(&tab.path);
+            let line = tab.editor.cursor.caret.line + 1;
+            let col = tab.editor.cursor.caret.col + 1;
+            format!("Ln {line}, Col {col}  ·  {lang}")
+        }
+        None => "".to_string(),
+    };
+    let center = View::new(Style {
+        size: Size { width: length(220.0_f32), height: percent(1.0_f32) },
+        padding: Rect {
+            left: length(0.0_f32), right: length(0.0_f32),
+            top: length(0.0_f32), bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .text_aligned(center_text, 10.5, theme.fg_muted, Alignment::Center);
+
+    // --- right: lsp + bookmarks + tabs ---
+    let lsp_label = model.lsp_label.clone();
+    let bm = model.bookmarks.marks.len();
+    let bm_label = if bm > 0 { format!("★ {bm}") } else { "".to_string() };
+    let tabs_label = if model.tabs.is_empty() {
+        "".to_string()
+    } else if model.tabs.len() == 1 {
+        "1 tab".to_string()
+    } else {
+        format!("{} tabs", model.tabs.len())
+    };
+    let right_text = [tabs_label, bm_label, lsp_label]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("  ·  ");
+    let right = View::new(Style {
+        size: Size { width: length(360.0_f32), height: percent(1.0_f32) },
+        padding: Rect {
+            left: length(0.0_f32), right: length(10.0_f32),
+            top: length(0.0_f32), bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .text_aligned(right_text, 10.5, theme.fg_muted, Alignment::End);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(STATUS_H) },
+        align_items: Some(AlignItems::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(vec![left, center, right])
+}
+
+/// Etiqueta corta del lenguaje a partir del path. Convive con
+/// language_for_path pero no devuelve el enum del editor — solo
+/// texto humano para la status bar.
+fn lang_label(path: &Path) -> &'static str {
+    match path.extension().and_then(|s| s.to_str()) {
+        Some("rs") => "Rust",
+        Some("py") => "Python",
+        Some("js") | Some("mjs") => "JS",
+        Some("ts") => "TS",
+        Some("tsx") => "TSX",
+        Some("go") => "Go",
+        Some("toml") => "TOML",
+        Some("md") => "Markdown",
+        Some("json") => "JSON",
+        Some("yaml") | Some("yml") => "YAML",
+        Some("sh") => "Shell",
+        Some("html") => "HTML",
+        Some("css") => "CSS",
+        _ => "Text",
+    }
 }
 
 fn body_view(model: &Model, theme: &Theme) -> View<Msg> {
@@ -1706,29 +1862,80 @@ fn find_bar(find: &FindBarState, theme: &Theme) -> View<Msg> {
 }
 
 fn empty_editor_placeholder(theme: &Theme) -> View<Msg> {
-    View::new(Style {
-        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
-        padding: Rect {
-            left: length(20.0_f32),
-            right: length(20.0_f32),
-            top: length(20.0_f32),
-            bottom: length(20.0_f32),
-        },
+    let title = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(36.0_f32) },
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .text_aligned(
-        "Seleccioná un archivo del árbol para empezar a editar. \
-         Atajos: arrows con Shift selecciona · Ctrl+arrows salta palabra · \
-         Ctrl+Z/Y undo/redo · Ctrl+C/X/V clipboard · Ctrl+S guarda.",
-        12.0,
-        theme.fg_muted,
-        Alignment::Start,
-    )
+    .text_aligned("gioser-edit".to_string(), 22.0, theme.fg_text, Alignment::Center);
+
+    let subtitle = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned("editor soberano sobre Llimphi".to_string(), 12.0, theme.fg_muted, Alignment::Center);
+
+    fn row(theme: &Theme, key: &str, action: &str) -> View<Msg> {
+        let key_v = View::new(Style {
+            size: Size { width: length(180.0_f32), height: length(22.0_f32) },
+            padding: Rect { left: length(10.0_f32), right: length(10.0_f32), top: length(2.0_f32), bottom: length(2.0_f32) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .fill(theme.bg_panel_alt)
+        .radius(3.0)
+        .text_aligned(key.to_string(), 11.0, theme.fg_text, Alignment::Center);
+        let action_v = View::new(Style {
+            size: Size { width: length(220.0_f32), height: length(22.0_f32) },
+            padding: Rect { left: length(12.0_f32), right: length(0.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text_aligned(action.to_string(), 11.5, theme.fg_muted, Alignment::Start);
+        View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size { width: length(420.0_f32), height: length(26.0_f32) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .children(vec![key_v, action_v])
+    }
+
+    let card_children = vec![
+        title,
+        subtitle,
+        View::new(Style { size: Size { width: percent(1.0_f32), height: length(20.0_f32) }, ..Default::default() }),
+        row(theme, "Ctrl+P", "Abrir archivo (fuzzy file picker)"),
+        row(theme, "Ctrl+Shift+P", "Command Palette"),
+        row(theme, "Ctrl+Shift+F", "Find in Files"),
+        row(theme, "Ctrl+`", "Abrir terminal integrado"),
+        row(theme, "Ctrl+Shift+O", "Symbol Outline"),
+        row(theme, "Ctrl+Shift+M", "Toggle Mini-Map"),
+        row(theme, "Ctrl+Alt+B", "Toggle Bookmark"),
+    ];
+    let body_card = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: length(460.0_f32), height: length(320.0_f32) },
+        padding: Rect { left: length(20.0_f32), right: length(20.0_f32), top: length(24.0_f32), bottom: length(24.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .radius(8.0)
+    .children(card_children);
+
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        flex_direction: FlexDirection::Column,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children(vec![body_card])
 }
 
-// ---------------------------------------------------------------------
-// Tree logic
 // ---------------------------------------------------------------------
 
 fn scan_root(root: &Path) -> Vec<TreeNode> {
