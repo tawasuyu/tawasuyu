@@ -136,6 +136,24 @@ pub fn multilienzo_view<Msg: Clone + 'static>(
     paleta_hebras: &PaletaHebras,
     palette: &Palette,
 ) -> View<Msg> {
+    multilienzo_view_resaltado::<Msg>(
+        cuerpos, atoms, cartas, cfg, paleta_hebras, palette, "",
+    )
+}
+
+/// Variante con resaltado de búsqueda transversal: cualquier átomo cuyo
+/// `content` contenga `resaltar` (case-insensitive) se pinta con un
+/// fondo distinto. Pasar `""` desactiva el resaltado (idéntico a
+/// [`multilienzo_view`]).
+pub fn multilienzo_view_resaltado<Msg: Clone + 'static>(
+    cuerpos: &[&Cuerpo],
+    atoms: &IndiceAtoms<'_>,
+    cartas: &[Option<&CartaHebras>],
+    cfg: &MultilienzoConfig,
+    paleta_hebras: &PaletaHebras,
+    palette: &Palette,
+    resaltar: &str,
+) -> View<Msg> {
     if cuerpos.is_empty() {
         return View::new(Style::default());
     }
@@ -151,7 +169,14 @@ pub fn multilienzo_view<Msg: Clone + 'static>(
 
     let mut hijos: Vec<View<Msg>> = Vec::with_capacity(cuerpos.len() * 2 - 1);
     for (i, c) in cuerpos.iter().enumerate() {
-        hijos.push(columna_cuerpo::<Msg>(c, atoms, cfg, palette, alto_contenido));
+        hijos.push(columna_cuerpo::<Msg>(
+            c,
+            atoms,
+            cfg,
+            palette,
+            alto_contenido,
+            resaltar,
+        ));
         if i + 1 < cuerpos.len() {
             let carta = cartas.get(i).copied().flatten();
             let derecha = cuerpos[i + 1];
@@ -189,6 +214,7 @@ fn columna_cuerpo<Msg: Clone + 'static>(
     cfg: &MultilienzoConfig,
     palette: &Palette,
     alto_total: f32,
+    resaltar: &str,
 ) -> View<Msg> {
     let header_text = format!(
         "{} · {}",
@@ -213,13 +239,23 @@ fn columna_cuerpo<Msg: Clone + 'static>(
     .text_aligned(header_text, 11.0, palette.fg_muted, Alignment::Start);
 
     let mut bloques: Vec<View<Msg>> = Vec::with_capacity(cuerpo.orden.len());
+    let resaltar_lc = if resaltar.is_empty() {
+        String::new()
+    } else {
+        resaltar.to_lowercase()
+    };
     for (i, atom_id) in cuerpo.orden.iter().enumerate() {
-        let preview = atoms
+        let (preview, hit) = atoms
             .get(atom_id)
-            .map(|a| preview_text(a))
-            .unwrap_or_else(|| "(átomo ausente)".to_string());
+            .map(|a| {
+                let p = preview_text(a);
+                let hit = !resaltar_lc.is_empty()
+                    && a.content.to_lowercase().contains(&resaltar_lc);
+                (p, hit)
+            })
+            .unwrap_or_else(|| ("(átomo ausente)".to_string(), false));
         let y = cfg.padding_top + cfg.alto_header + i as f32 * (cfg.altura_atom + cfg.gap_atom);
-        bloques.push(bloque_atom::<Msg>(&preview, y, cfg, palette));
+        bloques.push(bloque_atom::<Msg>(&preview, y, cfg, palette, hit));
     }
 
     View::new(Style {
@@ -245,7 +281,16 @@ fn bloque_atom<Msg: Clone + 'static>(
     y: f32,
     cfg: &MultilienzoConfig,
     palette: &Palette,
+    hit_busqueda: bool,
 ) -> View<Msg> {
+    // Fondo destacado cuando el átomo matchea la búsqueda transversal.
+    // Mezcla 30% del color accent con el bg_panel base — visible sin
+    // ser estridente.
+    let fondo = if hit_busqueda {
+        mezclar(palette.bg_panel, palette.border_strong, 0.35)
+    } else {
+        palette.bg_panel
+    };
     View::new(Style {
         position: Position::Absolute,
         inset: Rect {
@@ -266,9 +311,23 @@ fn bloque_atom<Msg: Clone + 'static>(
         },
         ..Default::default()
     })
-    .fill(palette.bg_panel)
+    .fill(fondo)
     .radius(4.0)
     .text_aligned(preview.to_string(), 13.0, palette.fg_text, Alignment::Start)
+}
+
+/// Interpolación lineal de dos colores por componente RGBA. `t = 0`
+/// devuelve `a`, `t = 1` devuelve `b`, intermedio el blend.
+fn mezclar(a: Color, b: Color, t: f32) -> Color {
+    let t = t.clamp(0.0, 1.0);
+    let ca = a.components;
+    let cb = b.components;
+    Color::new([
+        ca[0] + (cb[0] - ca[0]) * t,
+        ca[1] + (cb[1] - ca[1]) * t,
+        ca[2] + (cb[2] - ca[2]) * t,
+        ca[3] + (cb[3] - ca[3]) * t,
+    ])
 }
 
 /// Carril entre dos columnas: nodo que pinta diagonales (hebras) con

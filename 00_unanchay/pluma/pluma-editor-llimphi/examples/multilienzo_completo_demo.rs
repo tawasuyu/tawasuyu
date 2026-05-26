@@ -28,13 +28,14 @@ use llimphi_ui::llimphi_layout::taffy::prelude::{
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, Handle, Modifiers, View, WheelDelta};
+use llimphi_ui::llimphi_hal::winit::keyboard::{Key, NamedKey};
+use llimphi_ui::{App, Handle, KeyEvent, KeyState, Modifiers, View, WheelDelta};
 use llimphi_widget_button::{button_view, ButtonPalette};
 use pluma_align::CartaHebras;
 use pluma_core::NarrativeAtom;
 use pluma_cuerpo::{Cuerpo, Intencion};
 use pluma_editor_llimphi::multilienzo::{
-    multilienzo_view, IndiceAtoms, MultilienzoConfig, PaletaHebras,
+    multilienzo_view_resaltado, IndiceAtoms, MultilienzoConfig, PaletaHebras,
 };
 use pluma_editor_llimphi::Palette;
 use pluma_graph::NarrativeGraph;
@@ -61,6 +62,14 @@ enum Msg {
     LlmError(String),
     /// Delta de scroll horizontal en píxeles, positivo = derecha.
     ScrollHoriz(f32),
+    /// Alterna entre mostrar solo el cuerpo madre y mostrar todos.
+    ToggleSoloMadre,
+    /// Agrega un carácter al final de la búsqueda transversal.
+    BuscarAgregar(char),
+    /// Borra el último carácter de la búsqueda.
+    BuscarBorrar,
+    /// Limpia la búsqueda completa.
+    BuscarLimpiar,
 }
 
 struct Model {
@@ -75,6 +84,15 @@ struct Model {
     /// Wheel del mouse + Shift (o eje X de un touchpad) lo modifica.
     /// Se limita en `view` al ancho del contenido.
     scroll_x: f32,
+    /// Si `true`, oculta todos los cuerpos excepto el primero (la madre).
+    /// Toggleable con el botón "solo madre"/"todos".
+    solo_madre: bool,
+    /// Query de búsqueda transversal. Cualquier átomo (en cualquier
+    /// cuerpo visible) cuyo `content` contenga este substring se
+    /// resalta. Se acumula con `App::on_key` — el demo no usa widget
+    /// de input, captura las teclas directas (alfanuméricas + espacio
+    /// + Backspace + Escape).
+    busqueda: String,
 }
 
 struct Demo;
@@ -96,6 +114,37 @@ impl App for Demo {
     /// - Shift + wheel-Y vertical (común en Linux) → horizontal.
     /// - Wheel-Y sin Shift → vertical (no implementado todavía, ignorado).
     /// Multiplicador 30 px/línea coincide con el visor de texto de nahual.
+    /// Captura de teclado para la búsqueda transversal sin widget de
+    /// input. Cualquier `text` no-vacío del KeyEvent (lo que el sistema
+    /// IME ya resolvió) suma su primer char a la búsqueda. Backspace
+    /// borra el último; Escape limpia. Ctrl/Alt como modificador deja
+    /// pasar la tecla (no captura — futuro: combos de la app).
+    fn on_key(_model: &Self::Model, event: &KeyEvent) -> Option<Self::Msg> {
+        if event.state != KeyState::Pressed {
+            return None;
+        }
+        if event.modifiers.ctrl || event.modifiers.alt || event.modifiers.meta {
+            return None;
+        }
+        if let Key::Named(NamedKey::Backspace) = event.key {
+            return Some(Msg::BuscarBorrar);
+        }
+        if let Key::Named(NamedKey::Escape) = event.key {
+            return Some(Msg::BuscarLimpiar);
+        }
+        // Texto producido (con IME e ortografía) — el primer char alfanum
+        // o espacio entra a la búsqueda. Filtramos teclas de control
+        // (Tab/Enter/etc.) por ser no-imprimibles.
+        if let Some(text) = &event.text {
+            if let Some(c) = text.chars().next() {
+                if !c.is_control() {
+                    return Some(Msg::BuscarAgregar(c));
+                }
+            }
+        }
+        None
+    }
+
     fn on_wheel(
         _model: &Self::Model,
         delta: WheelDelta,
@@ -219,6 +268,18 @@ impl App for Demo {
                 // que no se vaya negativo.
                 m.scroll_x = (m.scroll_x + dx).max(0.0);
             }
+            Msg::ToggleSoloMadre => {
+                m.solo_madre = !m.solo_madre;
+            }
+            Msg::BuscarAgregar(c) => {
+                m.busqueda.push(c);
+            }
+            Msg::BuscarBorrar => {
+                m.busqueda.pop();
+            }
+            Msg::BuscarLimpiar => {
+                m.busqueda.clear();
+            }
         }
         m
     }
@@ -228,16 +289,27 @@ impl App for Demo {
         let paleta = PaletaHebras::default();
         let palette = Palette::default();
         let index: IndiceAtoms = model.graph.atoms().map(|a| (a.id, a)).collect();
-        let cuerpos_ref: Vec<&Cuerpo> = model.cuerpos.iter().collect();
-        let cartas_ref: Vec<Option<&CartaHebras>> = model.cartas.iter().map(Some).collect();
+        // Focus mode: si `solo_madre`, recortamos a la primera columna y
+        // descartamos todas las cartas (no hay vecinos a la derecha).
+        let cuerpos_ref: Vec<&Cuerpo> = if model.solo_madre {
+            model.cuerpos.iter().take(1).collect()
+        } else {
+            model.cuerpos.iter().collect()
+        };
+        let cartas_ref: Vec<Option<&CartaHebras>> = if model.solo_madre {
+            Vec::new()
+        } else {
+            model.cartas.iter().map(Some).collect()
+        };
 
-        let interior = multilienzo_view::<Msg>(
+        let interior = multilienzo_view_resaltado::<Msg>(
             &cuerpos_ref,
             &index,
             &cartas_ref,
             &cfg,
             &paleta,
             &palette,
+            &model.busqueda,
         );
 
         // Envoltorio scrollable: contenedor relative full-width que
@@ -272,6 +344,8 @@ impl App for Demo {
             &model.ultimo_error,
             model.cuerpos.len(),
             model.cartas.len(),
+            model.solo_madre,
+            &model.busqueda,
         );
 
         View::new(Style {
@@ -370,6 +444,8 @@ fn toolbar_view<Msg: Clone + 'static>(
     ultimo_error: &Option<String>,
     n_cuerpos: usize,
     n_cartas: usize,
+    solo_madre: bool,
+    busqueda: &str,
 ) -> View<Msg>
 where
     Msg: From<MsgUi>,
@@ -388,19 +464,32 @@ where
     };
     let pal = if en_curso { &p_desactivado } else { &p_activo };
 
+    // Focus mode siempre activo, no afectado por en_curso.
+    let pal_focus = &p_activo;
+    let label_focus = if solo_madre { "todos" } else { "solo madre" };
+
     let mut botones: Vec<View<Msg>> = vec![
         button_view::<Msg>("→ qu", pal, MsgUi::Traducir("qu".into()).into()),
         button_view::<Msg>("→ en", pal, MsgUi::Traducir("en".into()).into()),
         button_view::<Msg>("tono formal", pal, MsgUi::Tono("formal".into()).into()),
         button_view::<Msg>("resumir 30p", pal, MsgUi::Resumir(Some(30)).into()),
+        button_view::<Msg>(label_focus, pal_focus, MsgUi::ToggleSoloMadre.into()),
     ];
 
+    let busqueda_label = if busqueda.is_empty() {
+        "🔍 (escribe para buscar · Esc limpia)".to_string()
+    } else {
+        format!("🔍 \"{busqueda}\"")
+    };
+
     let status_text = if en_curso {
-        format!("⏳ en curso… · {n_cuerpos} cuerpos, {n_cartas} cartas")
+        format!("⏳ en curso… · {n_cuerpos} cuerpos, {n_cartas} cartas · {busqueda_label}")
     } else if let Some(e) = ultimo_error {
         format!("⚠ {}", &e[..e.len().min(80)])
     } else {
-        format!("{n_cuerpos} cuerpos · {n_cartas} cartas · click para derivar otro")
+        format!(
+            "{n_cuerpos} cuerpos · {n_cartas} cartas · {busqueda_label}"
+        )
     };
     let status = View::new(Style {
         size: Size {
@@ -445,6 +534,7 @@ enum MsgUi {
     Traducir(String),
     Tono(String),
     Resumir(Option<u32>),
+    ToggleSoloMadre,
 }
 
 impl From<MsgUi> for Msg {
@@ -453,6 +543,7 @@ impl From<MsgUi> for Msg {
             MsgUi::Traducir(l) => Msg::PedirTraducir(l),
             MsgUi::Tono(e) => Msg::PedirTono(e),
             MsgUi::Resumir(p) => Msg::PedirResumir(p),
+            MsgUi::ToggleSoloMadre => Msg::ToggleSoloMadre,
         }
     }
 }
@@ -494,6 +585,8 @@ fn cargar_de_store(store: Arc<PlumaStore>, chat: Arc<dyn ChatClient>) -> Model {
         en_curso: false,
         ultimo_error: None,
         scroll_x: 0.0,
+        solo_madre: false,
+        busqueda: String::new(),
     }
 }
 
@@ -525,6 +618,8 @@ fn sembrar_madre_base(store: Arc<PlumaStore>, chat: Arc<dyn ChatClient>) -> Mode
         en_curso: false,
         ultimo_error: None,
         scroll_x: 0.0,
+        solo_madre: false,
+        busqueda: String::new(),
     }
 }
 
