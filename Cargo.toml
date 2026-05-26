@@ -152,21 +152,10 @@ members = [
     "02_ruway/mirada/mirada-link",
     "02_ruway/mirada/mirada-portal",
     "02_ruway/mirada/mirada-protocol",
-    "02_ruway/nahual/libs/bus",
-    "02_ruway/nahual/libs/core",
     "02_ruway/nahual/libs/launcher",
     "02_ruway/nahual/libs/meta-runtime",
     "02_ruway/nahual/libs/meta-schema",
-    "02_ruway/nahual/libs/providers/fs",
-    "02_ruway/nahual/libs/providers/sqlite",
     "02_ruway/nahual/libs/theme",
-    "02_ruway/nahual/nahual-database-explorer",
-    "02_ruway/nahual/widgets/app-header",
-    "02_ruway/nahual/widgets/banner",
-    "02_ruway/nahual/widgets/card",
-    "02_ruway/nahual/widgets/stat-card",
-    "02_ruway/nahual/widgets/theme-switcher",
-    "02_ruway/nahual/widgets/tree",
     "02_ruway/shuma/baremetal/matilda-app",
     "02_ruway/shuma/baremetal/matilda-apply",
     "02_ruway/shuma/baremetal/matilda-config",
@@ -413,8 +402,7 @@ parley = "0.4"
 llimphi-ui = { path = "02_ruway/llimphi/llimphi-ui" }
 # Paleta semántica compartida por las apps y los widgets.
 llimphi-theme = { path = "02_ruway/llimphi/llimphi-theme" }
-# Widgets reusables sobre llimphi-ui — uno por crate, paralelo al
-# patrón de `02_ruway/nahual/widgets/*`.
+# Widgets reusables sobre llimphi-ui — uno por crate.
 llimphi-widget-app-header = { path = "02_ruway/llimphi/widgets/app-header" }
 llimphi-widget-banner = { path = "02_ruway/llimphi/widgets/banner" }
 llimphi-widget-button = { path = "02_ruway/llimphi/widgets/button" }
@@ -471,13 +459,7 @@ pulldown-cmark = { version = "0.12", default-features = false, features = ["html
 # ============================================================
 # Intra-workspace deps de nahual (referenciadas por workspace = true)
 # ============================================================
-nahual-core = { path = "02_ruway/nahual/libs/core" }
 nahual-theme = { path = "02_ruway/nahual/libs/theme" }
-nahual-bus = { path = "02_ruway/nahual/libs/bus" }
-nahual-provider-fs = { path = "02_ruway/nahual/libs/providers/fs" }
-nahual-provider-sqlite = { path = "02_ruway/nahual/libs/providers/sqlite" }
-nahual-widget-tree = { path = "02_ruway/nahual/widgets/tree" }
-nahual-database-explorer = { path = "02_ruway/nahual/nahual-database-explorer" }
 nahual-text-viewer-llimphi = { path = "02_ruway/nahual/nahual-text-viewer-llimphi" }
 nahual-image-viewer-llimphi = { path = "02_ruway/nahual/nahual-image-viewer-llimphi" }
 nahual-file-explorer-llimphi = { path = "02_ruway/nahual/nahual-file-explorer-llimphi" }
