@@ -563,3 +563,17 @@ wiremock = "0.6"
 fluent-bundle = "0.15"
 unic-langid = { version = "0.9", features = ["macros"] }
 sys-locale = "0.3"
+
+# === Servo (puriy-engine) ===
+# Crates publicados de Servo embebibles individualmente. html5ever/markup5ever
+# ya entran via ammonia→surrealdb→nakui, así que alineamos versión para no
+# duplicar el árbol. markup5ever_rcdom es el DOM Rc-based simple (suficiente
+# para Fase 2: parsear y renderizar, sin scripting). cssparser es el tokenizer
+# CSS de Stylo, sirve para inline styles. ureq = HTTP síncrono minimalista,
+# evita pull de tokio en el engine.
+html5ever = "0.39"
+markup5ever = "0.39"
+markup5ever_rcdom = "0.39"
+cssparser = "0.35"
+url = "2"
+ureq = { version = "2", default-features = false, features = ["tls"] }

@@ -93,7 +93,8 @@ Una sola pila gráfica (`wgpu + vello + taffy + DAG monádico`), una sola superf
 ## Estado
 
 - **2026-05-25:** SDD escrito. Esqueletos de los 4 crates creados (sin deps de Servo todavía).
-- **Bloqueado por:** Fases 1–4 de [[Llimphi]] (puriy depende de `llimphi-ui` funcional). Se puede arrancar `puriy-core` en paralelo (puro Rust, sin deps gráficas).
+- **2026-05-26:** Fase 2 — `puriy-engine` real. Deps de Servo embebidos: `html5ever 0.39` (parser HTML), `markup5ever_rcdom 0.39` (DOM), `cssparser 0.35` (anchor; el subset CSS se parsea con un mini-parser propio porque la API de cssparser rotó entre 0.33→0.35 y nuestro subset es trivial), `url 2`. Net síncrono con `ureq` (no tokio en el engine). Pipeline `fetch → parse_html → parse_styles → build_box_tree → BoxTree` operativo: `cargo run -p puriy-app -- https://example.com` baja la página, parsea DOM + UA stylesheet + `<style>` inline + atributo `style="..."`, y dumpea el árbol de boxes. 10/10 tests verde. **Decisión arquitectónica:** se eligió Opción A (pragmática) — webrender se mantiene fuera por ahora, el box tree pasa directo a `llimphi-raster`. Opción B (interceptar Display List Servo→Vello) se reconsidera cuando el motor adopte Stylo entero.
+- **Bloqueado por:** Fases 1–4 de [[Llimphi]] (puriy depende de `llimphi-ui` funcional para Fase 3 chrome). El engine ya no está bloqueado.
 
 ## Relacionados
 

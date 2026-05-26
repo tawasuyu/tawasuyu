@@ -5,7 +5,20 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
+description = "puriy — bridge a Servo: net (ureq) + html5ever + markup5ever_rcdom + cssparser. Salida: Document con árbol de boxes para llimphi-raster."
 
 [dependencies]
 puriy-core = { path = "../puriy-core" }
-# servo crates se agregan en Fase 2 (script, style, layout, net)
+
+# Servo embebido — selección mínima para Fase 2
+html5ever = { workspace = true }
+markup5ever = { workspace = true }
+markup5ever_rcdom = { workspace = true }
+cssparser = { workspace = true }
+url = { workspace = true }
+
+# Net síncrono
+ureq = { workspace = true }
+
+# Errores
+thiserror = { workspace = true }
