@@ -121,19 +121,55 @@ enum Combinator {
     GeneralSibling,
 }
 
-/// Simple compound — un Tag + 0..N ids/clases en cadena (sin espacios).
-/// `a.btn`, `p#hero.alert`, `*`, `.menu`, `#x`.
+/// Simple compound — un Tag + 0..N ids/clases/atributos/pseudoclases en
+/// cadena (sin espacios). Ejemplos válidos: `a.btn`, `p#hero.alert`,
+/// `input[type="checkbox"]`, `li:first-child`, `a[href^="https"]:last-of-type`.
 #[derive(Debug, Clone)]
 struct Compound {
     tag: TagPart,
     ids: Vec<String>,
     classes: Vec<String>,
+    attrs: Vec<AttrMatch>,
+    pseudos: Vec<Pseudo>,
 }
 
 #[derive(Debug, Clone)]
 enum TagPart {
     Universal,
     Type(String),
+}
+
+#[derive(Debug, Clone)]
+struct AttrMatch {
+    name: String,
+    op: AttrOp,
+    value: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum AttrOp {
+    /// `[attr]` — sólo presencia
+    Present,
+    /// `[attr=value]` — igualdad exacta
+    Equals,
+    /// `[attr^=value]` — empieza con
+    Prefix,
+    /// `[attr$=value]` — termina con
+    Suffix,
+    /// `[attr*=value]` — contiene substring
+    Contains,
+}
+
+/// Pseudoclases estructurales — puramente posicionales, sin estado de UI.
+/// `:hover`, `:focus`, `:active` siguen sin soporte porque requieren
+/// tracking del chrome.
+#[derive(Debug, Clone, Copy)]
+enum Pseudo {
+    FirstChild,
+    LastChild,
+    OnlyChild,
+    FirstOfType,
+    LastOfType,
 }
 
 impl Compound {
@@ -160,7 +196,65 @@ impl Compound {
                 }
             }
         }
+        for am in &self.attrs {
+            if !attr_matches(node, am) {
+                return false;
+            }
+        }
+        for p in &self.pseudos {
+            if !pseudo_matches(node, *p) {
+                return false;
+            }
+        }
         true
+    }
+}
+
+fn attr_matches(node: &markup5ever_rcdom::Handle, am: &AttrMatch) -> bool {
+    let actual = dom::attr(node, &am.name);
+    match am.op {
+        AttrOp::Present => actual.is_some(),
+        op => {
+            let Some(actual) = actual else { return false };
+            match op {
+                AttrOp::Equals => actual == am.value,
+                AttrOp::Prefix => actual.starts_with(&am.value),
+                AttrOp::Suffix => actual.ends_with(&am.value),
+                AttrOp::Contains => actual.contains(&am.value),
+                AttrOp::Present => unreachable!(),
+            }
+        }
+    }
+}
+
+fn pseudo_matches(node: &markup5ever_rcdom::Handle, p: Pseudo) -> bool {
+    let Some(parent) = parent_of(node) else { return false };
+    let kids = parent.children.borrow();
+    let mut elems: Vec<markup5ever_rcdom::Handle> = Vec::new();
+    for c in kids.iter() {
+        if dom::element_name(c).is_some() {
+            elems.push(c.clone());
+        }
+    }
+    let Some(pos) = elems.iter().position(|c| std::rc::Rc::ptr_eq(c, node)) else {
+        return false;
+    };
+    match p {
+        Pseudo::FirstChild => pos == 0,
+        Pseudo::LastChild => pos + 1 == elems.len(),
+        Pseudo::OnlyChild => elems.len() == 1,
+        Pseudo::FirstOfType => {
+            let my_tag = dom::element_name(node).unwrap_or_default();
+            elems[..pos]
+                .iter()
+                .all(|c| dom::element_name(c).map(|t| t != my_tag).unwrap_or(true))
+        }
+        Pseudo::LastOfType => {
+            let my_tag = dom::element_name(node).unwrap_or_default();
+            elems[pos + 1..]
+                .iter()
+                .all(|c| dom::element_name(c).map(|t| t != my_tag).unwrap_or(true))
+        }
     }
 }
 
@@ -316,6 +410,8 @@ fn ua_stylesheet() -> Vec<Rule> {
                 tag: TagPart::Type(s.into()),
                 ids: vec![],
                 classes: vec![],
+                attrs: vec![],
+                pseudos: vec![],
             }],
             combinators: vec![],
         }
@@ -369,13 +465,16 @@ fn parse_stylesheet(css: &str) -> Vec<Rule> {
 
 /// Parsea un selector encadenado. Soporta:
 /// - simples compound: `*`, `tag`, `.class`, `#id`, `a.btn`, `p#hero.alert`
-/// - combinador descendiente (whitespace): `a b`, `.menu li`
-/// - combinador hijo directo `>`: `nav > a`, `ul.menu > li`
-/// - hermano adyacente `+`: `h2 + p`
-/// - hermano general `~`: `h2 ~ p`
+/// - selectores de atributo: `[href]`, `[type="text"]`, `[href^="https"]`,
+///   `[src$=".png"]`, `[class*="foo"]`
+/// - pseudoclases estructurales: `:first-child`, `:last-child`,
+///   `:only-child`, `:first-of-type`, `:last-of-type`
+/// - combinadores: descendiente (whitespace), hijo directo `>`,
+///   hermano adyacente `+`, hermano general `~`
 ///
-/// Pseudoclases (`:hover`) y selectores de atributo (`[href]`) siguen
-/// sin soporte — cualquier selector que las use se ignora en silencio.
+/// Pseudoclases de estado (`:hover`, `:focus`, `:active`), `:not(...)`,
+/// `:nth-child(...)` y pseudo-elementos (`::before`) siguen sin soporte —
+/// el selector entero se ignora si los menciona.
 fn parse_selector(sel: &str) -> Option<Selector> {
     let sel = sel.trim();
     if sel.is_empty() {
@@ -384,16 +483,16 @@ fn parse_selector(sel: &str) -> Option<Selector> {
                 tag: TagPart::Universal,
                 ids: vec![],
                 classes: vec![],
+                attrs: vec![],
+                pseudos: vec![],
             }],
             combinators: vec![],
         });
     }
-    if sel.contains(':') || sel.contains('[') {
-        return None;
-    }
     // Tokenizamos: cada compound es una secuencia sin espacios ni
     // combinadores; los combinadores ('>', '+', '~') están separados por
-    // whitespace en CSS canónico o pegados. Normalizamos.
+    // whitespace en CSS canónico o pegados. Normalizamos respetando lo
+    // que viva dentro de `[...]` o `(...)`.
     let normalized = normalize_combinators(sel);
     let mut compounds: Vec<Compound> = Vec::new();
     let mut combinators: Vec<Combinator> = Vec::new();
@@ -426,14 +525,34 @@ fn parse_selector(sel: &str) -> Option<Selector> {
 }
 
 /// Inserta espacios alrededor de `>`/`+`/`~` para que `split_whitespace`
-/// los aísle. Sólo se aplica fuera de identificadores — los combinadores
-/// no aparecen como caracteres de identificador, así que un replace
-/// directo basta.
+/// los aísle como tokens propios. Si caen dentro de `[…]` o `(…)` los
+/// dejamos intactos — `[href*="a>b"]` o `:not(a+b)` deben pasar al
+/// compound parser sin romperse.
 fn normalize_combinators(sel: &str) -> String {
     let mut out = String::with_capacity(sel.len() + 4);
+    let mut in_bracket = false;
+    let mut paren_depth: u32 = 0;
     for c in sel.chars() {
         match c {
-            '>' | '+' | '~' => {
+            '[' => {
+                in_bracket = true;
+                out.push(c);
+            }
+            ']' => {
+                in_bracket = false;
+                out.push(c);
+            }
+            '(' => {
+                paren_depth += 1;
+                out.push(c);
+            }
+            ')' => {
+                if paren_depth > 0 {
+                    paren_depth -= 1;
+                }
+                out.push(c);
+            }
+            '>' | '+' | '~' if !in_bracket && paren_depth == 0 => {
                 out.push(' ');
                 out.push(c);
                 out.push(' ');
@@ -445,8 +564,8 @@ fn normalize_combinators(sel: &str) -> String {
 }
 
 /// Parsea un compound: opcional tag/`*` seguido de cualquier número de
-/// `.class` y `#id`. Devuelve `None` si encuentra caracteres no
-/// esperados.
+/// `.class`, `#id`, `[attr...]`, `:pseudo`. Devuelve `None` si encuentra
+/// caracteres no esperados, una pseudo no soportada, o `::pseudo-element`.
 fn parse_compound(sel: &str) -> Option<Compound> {
     let bytes = sel.as_bytes();
     if bytes.is_empty() {
@@ -468,32 +587,108 @@ fn parse_compound(sel: &str) -> Option<Compound> {
     };
     let mut ids = Vec::new();
     let mut classes = Vec::new();
+    let mut attrs = Vec::new();
+    let mut pseudos = Vec::new();
     while i < bytes.len() {
-        let marker = bytes[i];
-        if marker != b'.' && marker != b'#' {
-            return None;
-        }
-        i += 1;
-        let start = i;
-        while i < bytes.len() && is_ident_byte(bytes[i]) {
-            i += 1;
-        }
-        if start == i {
-            return None;
-        }
-        let ident = sel[start..i].to_string();
-        if marker == b'.' {
-            classes.push(ident);
-        } else {
-            ids.push(ident);
+        match bytes[i] {
+            b'.' | b'#' => {
+                let marker = bytes[i];
+                i += 1;
+                let start = i;
+                while i < bytes.len() && is_ident_byte(bytes[i]) {
+                    i += 1;
+                }
+                if start == i {
+                    return None;
+                }
+                let ident = sel[start..i].to_string();
+                if marker == b'.' {
+                    classes.push(ident);
+                } else {
+                    ids.push(ident);
+                }
+            }
+            b'[' => {
+                let inner_start = i + 1;
+                let rel_close = sel[inner_start..].find(']')?;
+                let inner = &sel[inner_start..inner_start + rel_close];
+                attrs.push(parse_attr_match(inner)?);
+                i = inner_start + rel_close + 1;
+            }
+            b':' => {
+                i += 1;
+                // `::pseudo-element` (e.g. ::before) — rechazamos.
+                if i < bytes.len() && bytes[i] == b':' {
+                    return None;
+                }
+                let start = i;
+                while i < bytes.len() && is_ident_byte(bytes[i]) {
+                    i += 1;
+                }
+                if start == i {
+                    return None;
+                }
+                let name = sel[start..i].to_ascii_lowercase();
+                // Pseudoclases con paréntesis (`:not(...)`, `:nth-child(...)`)
+                // no soportadas todavía — rechazamos el selector entero.
+                if i < bytes.len() && bytes[i] == b'(' {
+                    return None;
+                }
+                let p = match name.as_str() {
+                    "first-child" => Pseudo::FirstChild,
+                    "last-child" => Pseudo::LastChild,
+                    "only-child" => Pseudo::OnlyChild,
+                    "first-of-type" => Pseudo::FirstOfType,
+                    "last-of-type" => Pseudo::LastOfType,
+                    _ => return None,
+                };
+                pseudos.push(p);
+            }
+            _ => return None,
         }
     }
-    // Si el selector era puro tag/`*` y nada más, ok. Si era vacío (sólo
-    // basura), `tag` quedó Universal y no hay ids/classes → rechazamos.
-    if matches!(tag, TagPart::Universal) && ids.is_empty() && classes.is_empty() && sel != "*" {
+    if matches!(tag, TagPart::Universal)
+        && ids.is_empty()
+        && classes.is_empty()
+        && attrs.is_empty()
+        && pseudos.is_empty()
+        && sel != "*"
+    {
         return None;
     }
-    Some(Compound { tag, ids, classes })
+    Some(Compound { tag, ids, classes, attrs, pseudos })
+}
+
+/// Parsea el interior de `[...]`: `name`, `name=val`, `name="val"`,
+/// `name^=val`, `name$=val`, `name*=val`. Devuelve `None` si el formato
+/// no encaja.
+fn parse_attr_match(inner: &str) -> Option<AttrMatch> {
+    let inner = inner.trim();
+    if inner.is_empty() {
+        return None;
+    }
+    let ops: &[(&str, AttrOp)] = &[
+        ("^=", AttrOp::Prefix),
+        ("$=", AttrOp::Suffix),
+        ("*=", AttrOp::Contains),
+        ("=", AttrOp::Equals),
+    ];
+    for (sym, op) in ops {
+        if let Some(pos) = inner.find(sym) {
+            let name = inner[..pos].trim().to_string();
+            if name.is_empty() {
+                return None;
+            }
+            let raw = inner[pos + sym.len()..].trim();
+            let value = raw.trim_matches(|c| c == '"' || c == '\'').to_string();
+            return Some(AttrMatch { name, op: *op, value });
+        }
+    }
+    Some(AttrMatch {
+        name: inner.to_string(),
+        op: AttrOp::Present,
+        value: String::new(),
+    })
 }
 
 fn is_ident_byte(b: u8) -> bool {
@@ -807,6 +1002,148 @@ mod tests {
         });
         assert_eq!(eng.compute(&ps[0]).color, Color::rgb(0, 0, 255));
         assert_eq!(eng.compute(&ps[1]).color, Color::BLACK);
+    }
+
+    #[test]
+    fn selector_attr_presente() {
+        // `[href]` matchea cualquier elemento con atributo `href`.
+        let html = r#"<html><head><style>[href]{color:red}</style></head>
+            <body><a href="x">link</a><a>sin</a><span>no a</span></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut elems = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if matches!(
+                crate::dom::element_name(n).as_deref(),
+                Some("a") | Some("span")
+            ) {
+                elems.push(n.clone());
+            }
+        });
+        // a[href] → rojo; a sin href → negro; span → negro
+        assert_eq!(eng.compute(&elems[0]).color, Color::rgb(255, 0, 0));
+        assert_eq!(eng.compute(&elems[1]).color, Color::BLACK);
+        assert_eq!(eng.compute(&elems[2]).color, Color::BLACK);
+    }
+
+    #[test]
+    fn selector_attr_equals() {
+        // `input[type="checkbox"]` matchea sólo el checkbox.
+        let html = r##"<html><head><style>input[type="checkbox"]{color:#00aa00}</style></head>
+            <body>
+              <input type="checkbox">
+              <input type="text">
+              <input>
+            </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut inputs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("input") {
+                inputs.push(n.clone());
+            }
+        });
+        assert_eq!(inputs.len(), 3);
+        assert_eq!(eng.compute(&inputs[0]).color, Color::rgb(0, 0xaa, 0));
+        assert_eq!(eng.compute(&inputs[1]).color, Color::BLACK);
+        assert_eq!(eng.compute(&inputs[2]).color, Color::BLACK);
+    }
+
+    #[test]
+    fn selector_attr_prefix_suffix_contains() {
+        let html = r##"<html><head><style>
+            a[href^="https"]{color:#00f}
+            img[src$=".png"]{color:#0f0}
+            div[class*="warn"]{color:#f00}
+        </style></head>
+        <body>
+            <a href="https://x">seguro</a>
+            <a href="http://x">inseguro</a>
+            <img src="logo.png">
+            <img src="logo.jpg">
+            <div class="banner warn-strong">!!</div>
+            <div class="banner">--</div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut anchors = Vec::new();
+        let mut imgs = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| match crate::dom::element_name(n).as_deref() {
+            Some("a") => anchors.push(n.clone()),
+            Some("img") => imgs.push(n.clone()),
+            Some("div") => divs.push(n.clone()),
+            _ => {}
+        });
+        assert_eq!(eng.compute(&anchors[0]).color, Color::rgb(0, 0, 255));
+        assert_eq!(eng.compute(&anchors[1]).color, Color::BLACK);
+        assert_eq!(eng.compute(&imgs[0]).color, Color::rgb(0, 255, 0));
+        assert_eq!(eng.compute(&imgs[1]).color, Color::BLACK);
+        assert_eq!(eng.compute(&divs[0]).color, Color::rgb(255, 0, 0));
+        assert_eq!(eng.compute(&divs[1]).color, Color::BLACK);
+    }
+
+    #[test]
+    fn selector_first_last_only_child() {
+        let html = r#"<html><head><style>
+            li:first-child{color:#00f}
+            li:last-child{background:#0f0}
+            p:only-child{color:#f0f}
+        </style></head>
+        <body>
+          <ul><li>a</li><li>b</li><li>c</li></ul>
+          <section><p>solo</p></section>
+          <section><p>uno</p><p>dos</p></section>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut lis = Vec::new();
+        let mut ps = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| match crate::dom::element_name(n).as_deref() {
+            Some("li") => lis.push(n.clone()),
+            Some("p") => ps.push(n.clone()),
+            _ => {}
+        });
+        // li:first-child sólo el primero
+        assert_eq!(eng.compute(&lis[0]).color, Color::rgb(0, 0, 255));
+        assert_eq!(eng.compute(&lis[1]).color, Color::BLACK);
+        // li:last-child sólo el tercero (background)
+        assert!(eng.compute(&lis[0]).background.is_none());
+        assert_eq!(eng.compute(&lis[2]).background, Some(Color::rgb(0, 255, 0)));
+        // p:only-child el primero (único en su section), no los otros dos
+        assert_eq!(eng.compute(&ps[0]).color, Color::rgb(255, 0, 255));
+        assert_eq!(eng.compute(&ps[1]).color, Color::BLACK);
+        assert_eq!(eng.compute(&ps[2]).color, Color::BLACK);
+    }
+
+    #[test]
+    fn selector_first_last_of_type() {
+        let html = r#"<html><head><style>
+            p:first-of-type{color:#00f}
+            p:last-of-type{color:#0a0}
+        </style></head>
+        <body>
+          <div>x</div>
+          <p>uno</p>
+          <span>y</span>
+          <p>dos</p>
+          <p>tres</p>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut ps = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("p") {
+                ps.push(n.clone());
+            }
+        });
+        assert_eq!(ps.len(), 3);
+        // primer <p> → azul (es :first-of-type aunque haya <div> y <span> antes)
+        assert_eq!(eng.compute(&ps[0]).color, Color::rgb(0, 0, 255));
+        // del medio → ninguno (last gana cascada al último pero a este ninguno)
+        assert_eq!(eng.compute(&ps[1]).color, Color::BLACK);
+        // último <p> → verde
+        assert_eq!(eng.compute(&ps[2]).color, Color::rgb(0, 0xaa, 0));
     }
 
     #[test]
