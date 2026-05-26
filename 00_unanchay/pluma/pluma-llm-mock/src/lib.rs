@@ -24,14 +24,25 @@ use pluma_llm_core::{
 
 /// Cliente LLM mock. Cero red, cero latencia, salida deterministica.
 pub struct MockChatClient {
-    /// Pares `(substring_a_buscar, respuesta)`. La primera que coincida
-    /// en el último mensaje user gana. Orden importa.
-    tabla: Vec<(String, String)>,
+    /// Reglas `(donde, substring, respuesta)`. La primera que matchee
+    /// gana. Orden importa.
+    tabla: Vec<(Donde, String, String)>,
     /// Prefijo del eco para prompts no cubiertos por la tabla.
     eco_prefix: String,
     /// `model_id` reportado — útil para distinguir varios mocks en una
     /// suite de tests.
     model_id: String,
+}
+
+/// Dónde buscar el `substring` de una regla del mock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Donde {
+    /// En el último mensaje `user` del request (comportamiento típico).
+    User,
+    /// En el `system` prompt — útil para que dos celdas con el mismo
+    /// user pero distinto system reciban respuestas distintas (el caso
+    /// canónico de `pluma-notebook-kernel-llm`).
+    System,
 }
 
 impl Default for MockChatClient {
@@ -53,7 +64,24 @@ impl MockChatClient {
         substring: impl Into<String>,
         respuesta: impl Into<String>,
     ) -> Self {
-        self.tabla.push((substring.into(), respuesta.into()));
+        self.tabla
+            .push((Donde::User, substring.into(), respuesta.into()));
+        self
+    }
+
+    /// Como [`Self::con_respuesta`] pero matchea contra el `system`
+    /// prompt en lugar del último user. Útil cuando distintas celdas/
+    /// transformaciones mandan el MISMO user pero distinto system
+    /// (caso típico del `LlmKernel` del notebook: `llm-traducir-qu` y
+    /// `llm-tono-formal` aplicadas al mismo texto comparten user pero
+    /// difieren en el system "Eres traductor…" vs "Reescribes en tono…").
+    pub fn con_respuesta_si_system(
+        mut self,
+        substring_system: impl Into<String>,
+        respuesta: impl Into<String>,
+    ) -> Self {
+        self.tabla
+            .push((Donde::System, substring_system.into(), respuesta.into()));
         self
     }
 
@@ -90,12 +118,17 @@ impl ChatClient for MockChatClient {
 
     async fn complete(&self, req: &ChatRequest) -> Result<ChatResponse, ChatError> {
         let prompt = Self::ultimo_user(req);
-        // Buscar coincidencia en la tabla.
+        let system = req.system.as_deref().unwrap_or("");
+        // Buscar coincidencia en la tabla. El primero que matchee gana,
+        // independientemente de si la regla es User o System.
         let content = self
             .tabla
             .iter()
-            .find(|(needle, _)| prompt.contains(needle))
-            .map(|(_, resp)| resp.clone())
+            .find(|(donde, needle, _)| match donde {
+                Donde::User => prompt.contains(needle.as_str()),
+                Donde::System => system.contains(needle.as_str()),
+            })
+            .map(|(_, _, resp)| resp.clone())
             .unwrap_or_else(|| format!("{}{prompt}", self.eco_prefix));
 
         Ok(ChatResponse {
@@ -159,6 +192,31 @@ mod pruebas {
         let req = ChatRequest::una_vuelta("xyz", 1);
         let resp = rt().block_on(cli.complete(&req)).unwrap();
         assert_eq!(resp.content, "[ECO] xyz");
+    }
+
+    #[test]
+    fn con_respuesta_si_system_diferencia_acciones_con_mismo_user() {
+        // Caso típico LlmKernel: dos celdas mandan el mismo texto user
+        // pero distinto system. La regla por system los distingue.
+        let cli = MockChatClient::default()
+            .con_respuesta_si_system("traductor", "TRAD")
+            .con_respuesta_si_system("tono", "TONO");
+        let user = "el mismo texto";
+
+        let req_trad = ChatRequest::una_vuelta(user, 50)
+            .con_sistema("Eres un traductor profesional.");
+        let r1 = rt().block_on(cli.complete(&req_trad)).unwrap();
+        assert_eq!(r1.content, "TRAD");
+
+        let req_tono = ChatRequest::una_vuelta(user, 50)
+            .con_sistema("Reescribes con tono formal.");
+        let r2 = rt().block_on(cli.complete(&req_tono)).unwrap();
+        assert_eq!(r2.content, "TONO");
+
+        // Sin system que matchee → eco.
+        let req_libre = ChatRequest::una_vuelta(user, 50);
+        let r3 = rt().block_on(cli.complete(&req_libre)).unwrap();
+        assert_eq!(r3.content, "mock:: el mismo texto");
     }
 
     #[test]

@@ -16,3 +16,4 @@ pluma-llm-core = { path = "../pluma-llm-core" }
 [dev-dependencies]
 tokio = { workspace = true }
 pluma-llm-mock = { path = "../pluma-llm-mock" }
+pluma-llm = { path = "../pluma-llm" }
