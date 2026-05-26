@@ -1,0 +1,17 @@
+[package]
+name = "wawactl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "wawactl — CLI para inspeccionar y modificar la configuración global del SO wawa. Cliente delgado sobre wawa-config."
+
+[[bin]]
+name = "wawactl"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+serde_json = { workspace = true }
+wawa-config = { path = "../../../shared/wawa-config" }
