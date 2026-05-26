@@ -66,6 +66,10 @@ pub struct State {
     pub plan: Option<Plan>,
     pub log: Vec<String>,
     pub split_width: f32,
+    /// Path al inventario JSON, si vino del shumarc. El módulo lo
+    /// expone para que el chasis sepa de dónde recargar al pulsar
+    /// «Reload»; el módulo mismo no hace IO, sólo recibe `SetDesired`.
+    pub inventory_path: Option<PathBuf>,
     pending_steps: Arc<Mutex<usize>>,
 }
 
@@ -84,8 +88,16 @@ impl State {
             plan: None,
             log: Vec::new(),
             split_width: 380.0,
+            inventory_path: None,
             pending_steps: Arc::new(Mutex::new(0)),
         }
+    }
+
+    /// Como `with_inventory`, recordando además el path para reloads.
+    pub fn with_inventory_path(source: Source, desired: Inventory, path: PathBuf) -> Self {
+        let mut s = Self::with_inventory(source, desired);
+        s.inventory_path = Some(path);
+        s
     }
 
     /// Inventario actual contra el cual reconciliar — si no se ha
@@ -131,6 +143,9 @@ pub enum Msg {
         lines: Vec<String>,
         new_current: Option<Inventory>,
     },
+    /// Reemplaza el inventario deseado — usado por el chasis tras un
+    /// reload exitoso desde disco. Invalida el plan vigente.
+    SetDesired(Inventory),
     /// Drag del splitter inventario|plan.
     ResizeSplit(f32),
 }
@@ -289,6 +304,17 @@ pub fn update(state: State, msg: Msg) -> State {
         Msg::LogLine(line) => {
             s.log.push(line);
             cap_log(&mut s.log);
+        }
+        Msg::SetDesired(inv) => {
+            s.log.push(format!(
+                "✔ inventario recargado: {} hosts, {} containers, {} vhosts",
+                inv.hosts().count(),
+                inv.containers().count(),
+                inv.vhosts().count()
+            ));
+            s.desired = inv;
+            s.plan = None;
+            *s.pending_steps.lock().unwrap() = 0;
         }
         Msg::ResizeSplit(dx) => {
             s.split_width = (s.split_width + dx).clamp(220.0, 720.0);
@@ -803,6 +829,8 @@ pub fn contributions(state: &State) -> ModuleContributions {
                 .with_hint("Previsualiza los pasos sin aplicar"),
             ShortcutSpec::module_action("Apply", "matilda.apply")
                 .with_hint("Reconcilia el servidor con el inventario deseado"),
+            ShortcutSpec::module_action("Reload", "matilda.reload")
+                .with_hint("Relee el inventario JSON desde disco"),
         ],
     }
 }
@@ -977,15 +1005,41 @@ mod tests {
     }
 
     #[test]
-    fn contributions_expose_monitor_and_four_shortcuts() {
+    fn contributions_expose_monitor_and_five_shortcuts() {
         let s = State::new(Source::Local);
         let c = contributions(&s);
         assert_eq!(c.monitors.len(), 1);
-        assert_eq!(c.shortcuts.len(), 4);
+        assert_eq!(c.shortcuts.len(), 5);
         assert_eq!(c.shortcuts[0].label, "Discover");
         assert_eq!(c.shortcuts[1].label, "Plan");
         assert_eq!(c.shortcuts[2].label, "Dry-run");
         assert_eq!(c.shortcuts[3].label, "Apply");
+        assert_eq!(c.shortcuts[4].label, "Reload");
+    }
+
+    #[test]
+    fn with_inventory_path_records_the_path() {
+        let inv = matilda_core::Inventory::new();
+        let p = PathBuf::from("/etc/matilda/inv.json");
+        let s = State::with_inventory_path(Source::Local, inv, p.clone());
+        assert_eq!(s.inventory_path.as_deref(), Some(p.as_path()));
+    }
+
+    #[test]
+    fn set_desired_replaces_inventory_and_invalidates_plan() {
+        let mut s = State::new(Source::Local);
+        s = update(s, Msg::MakePlan);
+        assert!(s.pending_count() > 0);
+
+        let mut new_inv = matilda_core::Inventory::new();
+        new_inv.add_container(matilda_core::Container::new("alone", "alpine"));
+        s = update(s, Msg::SetDesired(new_inv));
+
+        assert_eq!(s.desired.containers().count(), 1);
+        assert_eq!(s.desired.hosts().count(), 0);
+        assert!(s.plan.is_none());
+        assert_eq!(s.pending_count(), 0);
+        assert!(s.log.iter().any(|l| l.contains("recargado")));
     }
 
     #[test]

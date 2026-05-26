@@ -153,10 +153,10 @@ impl Instance {
         inventory: Option<&std::path::Path>,
     ) -> Self {
         let state = match inventory {
-            Some(p) => match load_matilda_inventory(p) {
-                Some(inv) => shuma_module_matilda::State::with_inventory(source, inv),
-                None => shuma_module_matilda::State::new(source),
-            },
+            Some(p) => {
+                let inv = load_matilda_inventory(p).unwrap_or_else(example_inventory_fallback);
+                shuma_module_matilda::State::with_inventory_path(source, inv, p.to_path_buf())
+            }
             None => shuma_module_matilda::State::new(source),
         };
         Self {
@@ -465,6 +465,12 @@ fn resolve_instance(
     }
 }
 
+/// Fallback al inventario de ejemplo cuando el path declarado falla
+/// — replica el default de `State::new` sin perder el path para reloads.
+fn example_inventory_fallback() -> matilda_core::Inventory {
+    shuma_module_matilda::example_inventory()
+}
+
 /// Lee un inventario JSON desde un path. Errores van a stderr y la
 /// función retorna `None` — el chasis cae al ejemplo en lugar de
 /// fallar el arranque (mismo criterio que el config TOML malformado).
@@ -593,6 +599,29 @@ fn handle_shortcut(
             }
         }
         ShortcutAction::ModuleAction { action_id } => {
+            // Reload del inventario: el path lo lleva el State del
+            // módulo (cargado por el chasis al construir la instancia
+            // desde el shumarc). Sirve para Local y Remote por igual.
+            if action_id == "matilda.reload" {
+                if let Some(path) = matilda_inventory_path(&slot, &m) {
+                    let mmsg = match load_matilda_inventory(&path) {
+                        Some(inv) => shuma_module_matilda::Msg::SetDesired(inv),
+                        None => shuma_module_matilda::Msg::LogLine(format!(
+                            "✘ reload: ver stderr ({})",
+                            path.display()
+                        )),
+                    };
+                    return apply_module_msg(m, slot, ModuleMsg::Matilda(mmsg));
+                } else {
+                    return apply_module_msg(
+                        m,
+                        slot,
+                        ModuleMsg::Matilda(shuma_module_matilda::Msg::LogLine(
+                            "✘ sin inventory_path: agregá `inventory = …` al shumarc".into(),
+                        )),
+                    );
+                }
+            }
             // Hooks remotos: ciertas acciones de matilda necesitan
             // SSH + tokio. Las delegamos a un thread (`Handle::spawn`)
             // que al volver dispatcha un Msg con el resultado.
@@ -676,6 +705,21 @@ fn handle_shortcut(
         }
     }
     m
+}
+
+/// Path del inventario JSON de un slot de matilda, si lo tiene cargado.
+fn matilda_inventory_path(slot: &Slot, model: &Model) -> Option<std::path::PathBuf> {
+    let inst = match slot {
+        Slot::TopBar => model.topbar.as_ref()?,
+        Slot::BottomBar => model.bottombar.as_ref()?,
+        Slot::Main => model.main.as_ref()?,
+        Slot::DrawerTab(i) => model.drawer_tabs.get(*i)?,
+    };
+    let state = match &inst.state {
+        ModuleState::Matilda(s) => s.as_ref(),
+        _ => return None,
+    };
+    state.inventory_path.clone()
 }
 
 /// Si `slot` contiene una instancia de `matilda` y su `source` es
