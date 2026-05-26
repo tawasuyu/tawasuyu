@@ -104,7 +104,8 @@ fn traza(rotulo: &str) {
 
 /// FASE 10 :: el molde de una aplicacion para los lanzamientos EN VIVO. Guarda
 /// su bytecode —cacheado en RAM al arrancar, para no volver al disco despues—
-/// y la geometria y la cuota de memoria con que instanciarla.
+/// y la geometria, cuota de memoria y presupuesto de combustible con que
+/// instanciarla.
 struct Plantilla {
     /// Nombre legible de la app — el del manifiesto, que la barra de tareas
     /// (Fase 14) muestra en la pestaña.
@@ -113,6 +114,7 @@ struct Plantilla {
     nat_ancho: usize,
     nat_alto: usize,
     techo: usize,
+    fuel: u64,
 }
 
 /// Las plantillas de las apps de genesis. Se fijan una vez, en el arranque;
@@ -264,6 +266,7 @@ fn encender_app(
         natural.ancho,
         natural.alto,
         entrada.techo_memoria as usize,
+        entrada.fuel_fotograma as u64,
         indice,
     ) {
         Ok(app) => ejecutor.spawn(tarea_aplicacion(app)),
@@ -278,6 +281,7 @@ fn encender_app(
         nat_ancho: natural.ancho,
         nat_alto: natural.alto,
         techo: entrada.techo_memoria as usize,
+        fuel: entrada.fuel_fotograma as u64,
     })
 }
 
@@ -305,6 +309,7 @@ fn lanzar_app() {
         plantilla.nat_ancho,
         plantilla.nat_alto,
         plantilla.techo,
+        plantilla.fuel,
         indice,
     ) {
         // La tarea se ENGENDRA, no se hace `spawn`: el reactor ya corre y el

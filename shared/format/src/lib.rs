@@ -44,8 +44,9 @@ pub const VERSION_SUPERBLOQUE: u32 = 2;
 
 /// Version del format del manifiesto serializado. Independiente de la del
 /// superbloque: el manifiesto es un objeto del grafo, no una estructura fija
-/// del disco.
-pub const VERSION_MANIFIESTO: u32 = 1;
+/// del disco. v2 — cada `EntradaApp` declara su propio `fuel_fotograma`
+/// (presupuesto cooperativo por `tick`); el kernel ya no impone un techo unico.
+pub const VERSION_MANIFIESTO: u32 = 2;
 
 /// Techo del tamaño de un objeto serializado: 1 MiB. Acota los buferes de E/S
 /// y permite descartar un registro corrupto sin leer un disparate.
@@ -120,6 +121,12 @@ pub struct EntradaApp {
     pub region_alto: u32,
     /// Techo de memoria lineal de la app, en bytes. Cada app lleva su cuota.
     pub techo_memoria: u32,
+    /// Presupuesto de combustible (unidades de wasmi) que la app recibe en
+    /// cada `tick`. Es el techo TEMPORAL por fotograma: lo agota una app en
+    /// bucle infinito (`SinCombustible`) y se desaloja. Por-app porque un
+    /// editor con tree-sitter no necesita lo mismo que un reloj parpadeante;
+    /// el scheduler cooperativo honra la declaracion en lugar de un techo unico.
+    pub fuel_fotograma: u32,
     /// Hash del ultimo estado persistido de la app (Fase 7c). `None` hasta que
     /// la app guarde estado por primera vez.
     pub estado: Option<Hash>,

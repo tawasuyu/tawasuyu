@@ -27,11 +27,6 @@ use env::ContextoCapacidades;
 /// fondo de una region a pantalla casi completa — un gasto unico, de arranque.
 const FUEL_ARRANQUE: u64 = 20_000_000;
 
-/// Combustible concedido a cada `tick`. Sobra para un fotograma honesto (unos
-/// cientos de miles de operaciones); una app en bucle infinito lo agota en
-/// milisegundos y es desalojada. Este numero ES el techo temporal del userspace.
-const FUEL_FOTOGRAMA: u64 = 2_000_000;
-
 /// Por que el kernel da por terminada —desaloja— una aplicacion WASM.
 #[derive(Clone, Copy)]
 pub enum FallaApp {
@@ -70,6 +65,10 @@ pub struct AplicacionWasm {
     /// `TypedFunc` es un asa autosuficiente dentro del `Store`: conservada esta,
     /// el handle de la `Instance` no aporta nada y no se retiene.
     func_tick: TypedFunc<(), ()>,
+    /// Combustible que se recarga al inicio de cada `tick` — su techo temporal
+    /// por fotograma. Lo declara el manifiesto: un editor tree-sitter puede
+    /// pedir mas que un reloj parpadeante, y el scheduler cooperativo lo honra.
+    fuel_fotograma: u64,
 }
 
 impl AplicacionWasm {
@@ -82,13 +81,15 @@ impl AplicacionWasm {
     ///
     /// `natural_ancho`/`natural_alto` son el tamaño del lienzo de la app;
     /// `techo_memoria`, su cuota de memoria lineal —la dicta su `EntradaApp` del
-    /// manifiesto—; e `indice_app`, su identidad: la posicion con que el
+    /// manifiesto—; `fuel_fotograma`, su presupuesto de combustible por `tick`
+    /// (mismo origen); e `indice_app`, su identidad: la posicion con que el
     /// compositor halla su ventana y las capacidades de estado su ranura.
     pub fn cargar(
         bytecode: &[u8],
         natural_ancho: usize,
         natural_alto: usize,
         techo_memoria: usize,
+        fuel_fotograma: u64,
         indice_app: usize,
     ) -> Result<AplicacionWasm, FallaApp> {
         // 1. El motor, con metricas de combustible y compilacion ANTICIPADA: la
@@ -158,7 +159,11 @@ impl AplicacionWasm {
         //    aqui recibe las teclas cuando el compositor le da el foco.
         crate::async_system::teclado::registrar_canal(indice_app, &almacen.data().canal);
 
-        Ok(AplicacionWasm { almacen, func_tick })
+        Ok(AplicacionWasm {
+            almacen,
+            func_tick,
+            fuel_fotograma,
+        })
     }
 
     /// Hace avanzar la aplicacion un fotograma. Recarga su presupuesto de
@@ -166,9 +171,10 @@ impl AplicacionWasm {
     /// una trampa, el kernel recupera el mando y la falla se devuelve para que
     /// la tarea proceda al desalojo. El kernel nunca pierde el control.
     pub fn tick(&mut self) -> Result<(), FallaApp> {
-        // Recargar el deposito: cada fotograma parte con su techo intacto.
+        // Recargar el deposito: cada fotograma parte con su techo intacto —
+        // el que su `EntradaApp` declaro, no un techo unico del kernel.
         self.almacen
-            .set_fuel(FUEL_FOTOGRAMA)
+            .set_fuel(self.fuel_fotograma)
             .map_err(|_| FallaApp::Trampa)?;
 
         match self.func_tick.call(&mut self.almacen, ()) {

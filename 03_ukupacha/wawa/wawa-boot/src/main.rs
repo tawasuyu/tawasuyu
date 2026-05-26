@@ -99,13 +99,25 @@ fn orquestar() -> Result<(), String> {
 //  Fase 7b — la siembra del grafo: el userspace nace de la imagen de disco
 // =============================================================================
 
-/// Una app de genesis: su nombre legible, el `.wasm` que la encarna y la
-/// ventana del framebuffer que habitara — `(x, y, ancho, alto)` en pixeles.
+/// Una app de genesis: su nombre legible, el `.wasm` que la encarna, la
+/// ventana del framebuffer que habitara — `(x, y, ancho, alto)` en pixeles— y
+/// su presupuesto de combustible por fotograma.
 struct AppGenesis {
     nombre: &'static str,
     archivo: &'static str,
     region: (u32, u32, u32, u32),
+    fuel: u32,
 }
+
+/// Combustible por fotograma de una app comun: cubre con holgura un `tick`
+/// de cientos de miles de operaciones, y una app en bucle infinito lo agota
+/// en milisegundos.
+const FUEL_COMUN: u32 = 2_000_000;
+
+/// Combustible por fotograma del editor `bitacora`: re-resaltado tree-sitter
+/// incremental, recompute de cursor y scroll caben holgadamente en 3x el
+/// presupuesto comun. El primer caso real del modelo "fuel per-app".
+const FUEL_EDITOR: u32 = 6_000_000;
 
 /// El userspace de genesis — las nueve aplicaciones que pueblan un disco recien
 /// forjado. La `bitacora` (Fase 17, editor que persiste), el `pregon` (Fase 19,
@@ -115,15 +127,15 @@ struct AppGenesis {
 /// guardarrailes del kernel: `discola` (combustible), `glotona` (memoria) y
 /// `cronista` (la cronica de los arranques).
 const GENESIS: [AppGenesis; 9] = [
-    AppGenesis { nombre: "bitacora", archivo: "bitacora.wasm", region: (100, 120, 480, 280) },
-    AppGenesis { nombre: "pregon", archivo: "pregon.wasm", region: (100, 120, 480, 160) },
-    AppGenesis { nombre: "tonada", archivo: "tonada.wasm", region: (100, 120, 360, 120) },
-    AppGenesis { nombre: "pulso", archivo: "pulso.wasm", region: (100, 120, 360, 120) },
-    AppGenesis { nombre: "hola", archivo: "app.wasm", region: (100, 120, 480, 560) },
-    AppGenesis { nombre: "memoriosa", archivo: "memoriosa.wasm", region: (700, 120, 360, 80) },
-    AppGenesis { nombre: "discola", archivo: "discola.wasm", region: (60, 700, 360, 80) },
-    AppGenesis { nombre: "glotona", archivo: "glotona.wasm", region: (460, 700, 360, 80) },
-    AppGenesis { nombre: "cronista", archivo: "cronista.wasm", region: (860, 700, 360, 80) },
+    AppGenesis { nombre: "bitacora", archivo: "bitacora.wasm", region: (100, 120, 480, 280), fuel: FUEL_EDITOR },
+    AppGenesis { nombre: "pregon", archivo: "pregon.wasm", region: (100, 120, 480, 160), fuel: FUEL_COMUN },
+    AppGenesis { nombre: "tonada", archivo: "tonada.wasm", region: (100, 120, 360, 120), fuel: FUEL_COMUN },
+    AppGenesis { nombre: "pulso", archivo: "pulso.wasm", region: (100, 120, 360, 120), fuel: FUEL_COMUN },
+    AppGenesis { nombre: "hola", archivo: "app.wasm", region: (100, 120, 480, 560), fuel: FUEL_COMUN },
+    AppGenesis { nombre: "memoriosa", archivo: "memoriosa.wasm", region: (700, 120, 360, 80), fuel: FUEL_COMUN },
+    AppGenesis { nombre: "discola", archivo: "discola.wasm", region: (60, 700, 360, 80), fuel: FUEL_COMUN },
+    AppGenesis { nombre: "glotona", archivo: "glotona.wasm", region: (460, 700, 360, 80), fuel: FUEL_COMUN },
+    AppGenesis { nombre: "cronista", archivo: "cronista.wasm", region: (860, 700, 360, 80), fuel: FUEL_COMUN },
 ];
 
 /// Techo de memoria lineal de cada app de genesis: 4 MiB. Un modulo que intente
@@ -243,6 +255,7 @@ fn sembrar_grafo() -> Result<(Vec<u8>, usize), String> {
             region_ancho: ancho,
             region_alto: alto,
             techo_memoria: TECHO_GENESIS,
+            fuel_fotograma: app.fuel,
             estado: None,
         });
     }

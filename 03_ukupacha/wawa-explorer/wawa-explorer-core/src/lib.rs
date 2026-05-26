@@ -230,6 +230,7 @@ mod tests {
                 region_ancho: 640,
                 region_alto: 480,
                 techo_memoria: 4 * 1024 * 1024,
+                fuel_fotograma: 2_000_000,
                 estado: None,
             }],
         };
