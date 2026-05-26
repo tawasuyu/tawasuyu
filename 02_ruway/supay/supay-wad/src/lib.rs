@@ -268,6 +268,71 @@ impl Wad {
         Some(out)
     }
 
+    /// Busca un sprite lump por (name, frame_letter, angle).
+    ///
+    /// La convención de naming Doom es:
+    /// - `<NAME><F>0` = omnidireccional (un único frame para todos los
+    ///   ángulos; usado por keys, ammo, decoración).
+    /// - `<NAME><F><A>` = direccional, `A ∈ '1'..='8'` (1=front,
+    ///   3=right, 5=back, 7=left; 2/4/6/8 son cuartos).
+    /// - `<NAME><F><A><F2><A2>` = un lump que cubre dos ángulos. Cuando
+    ///   se requiere `A2`, se renderiza horizontalmente espejado.
+    ///
+    /// Orden de fallback:
+    /// 1. `<NAME><F><angle>` directo.
+    /// 2. `<NAME><F>0` omnidireccional.
+    /// 3. Cualquier lump que empiece con `<NAME><F>` y tenga segundo
+    ///    suffix igualando `<angle>` → flag `mirror = true`.
+    ///
+    /// Devuelve `(lump_name, mirror)` o `None` si no se encuentra
+    /// nada parseable.
+    pub fn sprite_lump(&self, name: &str, frame_letter: char, angle: u8) -> Option<(String, bool)> {
+        if angle < 1 || angle > 8 {
+            return None;
+        }
+        let base = format!("{}{}", name.to_ascii_uppercase(), frame_letter.to_ascii_uppercase());
+        let digit = (b'0' + angle) as char;
+        // 1. Directo.
+        let direct = format!("{base}{digit}");
+        if self.lump(&direct).is_some() {
+            return Some((direct, false));
+        }
+        // 2. Omnidireccional.
+        let omni = format!("{base}0");
+        if self.lump(&omni).is_some() {
+            return Some((omni, false));
+        }
+        // 3. Espejado: lump <NAME><F><X><F><angle> donde X es cualquier
+        //    dígito 1..8. Escaneo lineal del directorio entre
+        //    S_START..S_END — barato porque ~500 lumps de sprites por WAD.
+        let s_start = self.lump_index("S_START");
+        let s_end = self.lump_index("S_END");
+        let (start, end) = match (s_start, s_end) {
+            (Some(s), Some(e)) if s < e => (s + 1, e),
+            _ => (0, self.entries.len()),
+        };
+        let f_char = frame_letter.to_ascii_uppercase();
+        for i in start..end {
+            let Some(n) = self.lump_name_at(i) else { continue };
+            // Necesitamos exactamente 8 chars: base(5) + dir1(1) + f(1) + dir2(1).
+            // Algunos sprites como `TROOA2A8` son 8 exactos.
+            if n.len() != 8 {
+                continue;
+            }
+            let bytes = n.as_bytes();
+            // bytes[0..5] == base (4 chars name + 1 char frame)
+            if !n.starts_with(&base) {
+                continue;
+            }
+            // bytes[6] debería ser el frame letter otra vez, bytes[7] el ángulo deseado.
+            if bytes[6] != f_char as u8 || bytes[7] != digit as u8 {
+                continue;
+            }
+            return Some((n.to_string(), true));
+        }
+        None
+    }
+
     /// Decodifica un lump en formato "patch" (sprites + wall patches) a
     /// RGBA8 con transparencia. El formato:
     ///

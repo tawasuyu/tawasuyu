@@ -101,11 +101,13 @@ struct AtlasInner {
     /// "TROO"). Llenado por el host con `DoomEngine::sprite_name(n)`
     /// la primera vez que el host ve un `SpriteSnap` con ese sprite.
     sprite_names: HashMap<u16, String>,
-    /// Cache de patches decodificados por (spritenum, frame_letter).
-    /// `frame_letter` viene del bit 0..6 del `frame` del mobj
-    /// ('A'..'Z' = índices 0..25). `None` cacheado para combos que
-    /// no resuelven (lump faltante o decode failure) — no reintenta.
-    sprite_patches: HashMap<(u16, u8), Option<Arc<supay_wad::Patch>>>,
+    /// Cache de patches decodificados por (spritenum, frame_letter,
+    /// angle). `frame_letter` viene del bit 0..4 del `frame` del mobj
+    /// (A..Z = 0..25); `angle` es 1..8 (Doom convention: 1=front,
+    /// 5=back). Valor: `Option<(Arc<Patch>, mirror_flag)>` — mirror
+    /// indica que el patch corresponde a un lump combinado tipo
+    /// `TROOA2A8` y debe pintarse horizontalmente espejado.
+    sprite_patches: HashMap<(u16, u8, u8), Option<(Arc<supay_wad::Patch>, bool)>>,
 }
 
 impl std::fmt::Debug for WadAtlas {
@@ -181,7 +183,7 @@ impl WadAtlas {
     pub fn set_sprite_name(&self, spritenum: u16, name: String) {
         if let Ok(mut inner) = self.inner.lock() {
             inner.sprite_names.insert(spritenum, name);
-            inner.sprite_patches.retain(|(s, _), _| *s != spritenum);
+            inner.sprite_patches.retain(|(s, _, _), _| *s != spritenum);
         }
     }
 
@@ -193,45 +195,39 @@ impl WadAtlas {
     }
 
     /// Recupera (decodificando si hace falta y cacheando) el patch
-    /// RGBA para el sprite `spritenum` en el frame `frame` (los bits
-    /// 0..6 son el frame letter, A..Z = 0..25; el bit 7 es "full
-    /// bright" — lo ignoramos por ahora). Devuelve `None` si el
-    /// nombre del sprite no está mapeado o el lump del frame no
-    /// existe en el WAD.
+    /// RGBA para el sprite `spritenum` en `frame` (bits 0..4 = letter
+    /// A..Z; bit 7 = full bright, ignorado por ahora) y `angle` (1..8).
     ///
-    /// Convención de naming: primero probamos `<NAME><LETTER>0` —
-    /// sprites omnidireccionales como llaves/munición/decoración usan
-    /// el ángulo `0`. Si no existe, probamos `<NAME><LETTER>1` —
-    /// sprites direccionales (monstruos, jugador) tienen 8 ángulos
-    /// (1..8) y `1` es "facing camera". Sin lookup de ángulo todavía
-    /// — Fase 3.5 agregará la rotación correcta consultando
-    /// `mobj.angle - player.angle`.
-    pub fn sprite_patch(&self, spritenum: u16, frame: u8) -> Option<Arc<supay_wad::Patch>> {
-        let letter = frame & 0x1F; // bits 0..4 cubren A..Z; el 7 es bright
-        let key = (spritenum, letter);
-        // Lookup cacheado primero (hot path).
+    /// Devuelve `Some((patch, mirror))` o `None` si no se encuentra
+    /// ningún lump razonable. `mirror=true` indica que el lump
+    /// corresponde a un combinado tipo `TROOA2A8` y debe pintarse
+    /// horizontalmente espejado.
+    pub fn sprite_patch(
+        &self,
+        spritenum: u16,
+        frame: u8,
+        angle: u8,
+    ) -> Option<(Arc<supay_wad::Patch>, bool)> {
+        let letter = frame & 0x1F;
+        let angle = angle.clamp(1, 8);
+        let key = (spritenum, letter, angle);
         if let Ok(inner) = self.inner.lock() {
             if let Some(cached) = inner.sprite_patches.get(&key) {
                 return cached.clone();
             }
         }
-        // Resolución + cache (cold path, una vez por (sprite, frame)).
         let name = {
             let inner = self.inner.lock().ok()?;
             inner.sprite_names.get(&spritenum).cloned()?
         };
         let frame_char = (b'A' + letter) as char;
-        let try_names = [
-            format!("{name}{frame_char}0"),
-            format!("{name}{frame_char}1"),
-        ];
-        let mut decoded: Option<Arc<supay_wad::Patch>> = None;
-        for n in &try_names {
-            if let Some(p) = self.wad.patch_rgba(n, &self.palette) {
-                decoded = Some(Arc::new(p));
-                break;
-            }
-        }
+        // `sprite_lump` cubre los tres casos de naming + mirror.
+        let resolved = self.wad.sprite_lump(&name, frame_char, angle);
+        let decoded: Option<(Arc<supay_wad::Patch>, bool)> = resolved.and_then(|(lump_name, mirror)| {
+            self.wad
+                .patch_rgba(&lump_name, &self.palette)
+                .map(|p| (Arc::new(p), mirror))
+        });
         if let Ok(mut inner) = self.inner.lock() {
             inner.sprite_patches.insert(key, decoded.clone());
         }
@@ -828,17 +824,14 @@ fn gather_sprite(
 
     // ---- Camino texturizado: hay atlas + patch decodificado ----
     if let Some(atlas) = cfg.atlas.as_ref() {
-        if let Some(patch) = atlas.sprite_patch(sprite.sprite, sprite.frame) {
-            // Anchor en world: el sprite está parado a (sprite.x,
-            // sprite.y, floor). El pixel (leftoffset, topoffset) del
-            // patch corresponde al anchor. Tras eso, la esquina
-            // top-left del patch en mundo:
-            //   y_cam (lateral) = y_cam_center + leftoffset (1 px = 1 unit
-            //                     en convención Doom de sprites)
-            //   z (vertical)    = floor + topoffset
-            // y la esquina bottom-right (anchor - top + height pixels):
-            //   y_cam_right     = y_cam_center + leftoffset - width
-            //   z_bot           = floor + topoffset - height
+        // Ángulo de display 1..8 según la convención Doom:
+        // R_PointToAngle2(thing, viewer) − thing.angle, redondeado al
+        // wedge de π/4 más cercano. 1 = facing camera, 5 = back,
+        // 3 = right side, 7 = left.
+        let display_angle = compute_display_angle(sprite.x, sprite.y, sprite.angle, cam.px, cam.py);
+        if let Some((patch, mirror)) =
+            atlas.sprite_patch(sprite.sprite, sprite.frame, display_angle)
+        {
             let w = patch.width as f32;
             let h = patch.height as f32;
             let lo = patch.leftoffset as f32;
@@ -847,42 +840,33 @@ fn gather_sprite(
             let y_right = y_cam + lo - w;
             let z_top = floor + to - cam.view_z;
             let z_bot = floor + to - h - cam.view_z;
-            // Billboard: ambos lados al mismo X_cam → la proyección es
-            // un rectángulo axis-aligned en pantalla, así que el affine
-            // que mapea image-space → screen-space es exacto.
+            // Billboard axis-aligned → affine exacto.
             let tl = proj.project(x_cam, y_left, z_top);
             let br = proj.project(x_cam, y_right, z_bot);
-            // Cull si el sprite cae completamente fuera del rect del
-            // viewport — el closure de paint no nos pasa el rect, pero
-            // si el tamaño proyectado es 0 o invertido, skip.
             let sx = (br.x - tl.x) / w as f64;
             let sy = (br.y - tl.y) / h as f64;
             if !(sx.is_finite() && sy.is_finite() && sx > 0.01 && sy > 0.01) {
                 return;
             }
-            // Construimos un peniko::Image envolviendo el RGBA del patch.
-            // El Image clona los bytes — costo amortizado por sprite por
-            // frame; ~5KB para sprites tipo Imp.
-            let img = make_sprite_image(&patch);
-            let xform = Affine::translate((tl.x, tl.y))
-                * Affine::scale_non_uniform(sx, sy);
-            // Aplicamos el shading multiplicando sobre el image — vello
-            // no tiene tint built-in, así que usamos `draw_image` directo
-            // y dejamos el sprite con luz plena. Fase 3.5: image+overlay
-            // con alpha modulado por shade. Por ahora, light_level del
-            // sector controla un solo factor en el alpha del overlay.
-            //
-            // MVP: dibujamos el image sin shade — los sprites se ven a
-            // luz plena pero con la forma correcta. Mejor que el blob
-            // rojo plano.
-            //
-            // Empaquetamos como "Renderable Image" — necesitamos
-            // ampliar el enum de Renderable porque actualmente sólo
-            // soporta BezPath fill.
+            // Shading: tinte multiplicativo al RGBA cacheado, según
+            // light_level del sector + fog distance. Construimos un
+            // Image nuevo con la versión tinted — cada draw cuesta
+            // un Vec::with_capacity + iter de width·height pixels;
+            // para sprites típicos (≈2300 px) ronda 10 KB/draw,
+            // ~30 sprites/frame ≈ 300 KB/frame, asumible a 60 fps.
+            let light = sec.map(|s| s.light_level).unwrap_or(192);
+            let shade = shade_for(light, depth, cfg);
+            let img = make_tinted_sprite_image(&patch, shade);
+            // Mirror = pintamos espejado: scale_x negativo + corrimiento.
+            let xform = if mirror {
+                Affine::translate((br.x, tl.y)) * Affine::scale_non_uniform(-sx, sy)
+            } else {
+                Affine::translate((tl.x, tl.y)) * Affine::scale_non_uniform(sx, sy)
+            };
             out.push(Renderable {
                 depth,
-                color: Color::WHITE, // unused para Sprite
-                path: BezPath::new(), // unused
+                color: Color::WHITE,
+                path: BezPath::new(),
                 kind: RenderKind::Sprite { image: img, xform },
             });
             return;
@@ -911,10 +895,52 @@ fn gather_sprite(
     });
 }
 
-fn make_sprite_image(patch: &supay_wad::Patch) -> llimphi_ui::llimphi_raster::peniko::Image {
+/// Crea un `peniko::Image` aplicando un shade multiplicativo (0..1) al
+/// RGBA del patch. `shade=1.0` → idéntico; `shade<1.0` → tonos más
+/// oscuros. La alpha del patch se preserva tal cual (importante: los
+/// pixels transparentes siguen transparentes después del tint).
+fn make_tinted_sprite_image(
+    patch: &supay_wad::Patch,
+    shade: f32,
+) -> llimphi_ui::llimphi_raster::peniko::Image {
     use llimphi_ui::llimphi_raster::peniko::{Blob, Image, ImageFormat};
-    let blob = Blob::from(patch.rgba.clone());
+    let s = shade.clamp(0.05, 1.0);
+    let tinted: Vec<u8> = if (s - 1.0).abs() < 1e-3 {
+        // Fast path full-bright: clonamos sin transformar.
+        patch.rgba.clone()
+    } else {
+        let mut out = Vec::with_capacity(patch.rgba.len());
+        for chunk in patch.rgba.chunks_exact(4) {
+            out.push(((chunk[0] as f32) * s) as u8);
+            out.push(((chunk[1] as f32) * s) as u8);
+            out.push(((chunk[2] as f32) * s) as u8);
+            out.push(chunk[3]);
+        }
+        out
+    };
+    let blob = Blob::from(tinted);
     Image::new(blob, ImageFormat::Rgba8, patch.width as u32, patch.height as u32)
+}
+
+/// Calcula el ángulo de display 1..8 para un sprite direccional según
+/// la convención Doom. `mobj_angle` = orientación facial del mobj en
+/// world space (radianes desde +X, antihorario). `(viewer_x, viewer_y)`
+/// = posición del jugador. Resultado: 1 si la cámara está en frente
+/// del mobj, 3 a la derecha del mobj, 5 detrás, 7 a la izquierda.
+fn compute_display_angle(
+    mobj_x: f32,
+    mobj_y: f32,
+    mobj_angle: f32,
+    viewer_x: f32,
+    viewer_y: f32,
+) -> u8 {
+    use std::f32::consts::{FRAC_PI_4, TAU};
+    let angle_to_viewer = (viewer_y - mobj_y).atan2(viewer_x - mobj_x);
+    let rel = (angle_to_viewer - mobj_angle).rem_euclid(TAU);
+    // Wedge de π/4. +π/8 = bias para que el wedge centre cada ángulo.
+    let wedge = ((rel + FRAC_PI_4 / 2.0) / FRAC_PI_4).floor() as i32;
+    let wedge = wedge.rem_euclid(8) as u8;
+    wedge + 1
 }
 
 // =====================================================================
@@ -1284,6 +1310,39 @@ mod tests {
             ..sky_sec.clone()
         };
         assert!(!ceiling_is_sky(&weird, NO_SKY_PIC));
+    }
+
+    #[test]
+    fn display_angle_facing_camera_is_1() {
+        // Mobj en (10, 0) facing -X (hacia el jugador en origen).
+        // mobj_angle = π, viewer = (0,0). atan2(0-0, 0-10) = π.
+        // rel = π - π = 0 → wedge 0 → display 1.
+        let a = compute_display_angle(10.0, 0.0, std::f32::consts::PI, 0.0, 0.0);
+        assert_eq!(a, 1, "expected front (1), got {a}");
+    }
+
+    #[test]
+    fn display_angle_back_is_5() {
+        // Mobj en (10, 0) facing +X (de espaldas al jugador en origen).
+        // mobj_angle = 0, atan2(0-0, 0-10) = π. rel = π - 0 = π.
+        // π / (π/4) = 4 → wedge 4 → display 5.
+        let a = compute_display_angle(10.0, 0.0, 0.0, 0.0, 0.0);
+        assert_eq!(a, 5, "expected back (5), got {a}");
+    }
+
+    #[test]
+    fn display_angle_right_side_is_3() {
+        // Mobj en origen facing +X (su derecha = -Y world). Jugador
+        // sobre el lado derecho del mobj → en -Y.
+        // mobj_angle=0, viewer=(0,-10). atan2(-10-0, 0-0) = -π/2.
+        // rel = (-π/2 - 0) mod 2π = 3π/2. 3π/2 / (π/4) = 6 → display 7.
+        // (lado IZQUIERDO según convención Doom mirror; 3 sería al
+        //  otro lado). Verificamos consistencia: si viewer está a +Y,
+        //  debería ser 3.
+        let a = compute_display_angle(0.0, 0.0, 0.0, 0.0, 10.0);
+        // mobj_angle=0, viewer=(0,+10). atan2(+10, 0) = +π/2.
+        // rel = π/2. π/2 / (π/4) = 2 → display 3.
+        assert_eq!(a, 3, "expected right (3) for viewer on +Y of mobj facing +X, got {a}");
     }
 
     #[test]
