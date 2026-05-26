@@ -1,0 +1,20 @@
+[package]
+name = "rimay-verbo-daemon-bin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "verbo — binario del daemon. Levanta un Provider en RAM y lo sirve a N procesos por socket Unix. Hoy: provider mock determinista. Mañana: providers reales (fastembed BGE local, cohere remoto)."
+
+[[bin]]
+name = "verbo-daemon"
+path = "src/main.rs"
+
+[dependencies]
+rimay-verbo-core = { path = "../rimay-verbo-core" }
+rimay-verbo-daemon = { path = "../rimay-verbo-daemon" }
+rimay-verbo-mock = { path = "../rimay-verbo-mock" }
+tokio = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
