@@ -1,0 +1,24 @@
+[package]
+name = "chasqui-broker-explorer-llimphi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Probe Llimphi del broker brahman: conecta cada N segundos vía await_provider_blocking con un Card observer agnóstico, reporta 3 estados (down / up sin provider / up con provider) y trackea la diff de matches entre ticks. Reemplazo del `chasqui-broker-explorer` GPUI."
+
+[dependencies]
+chasqui-broker = { path = "../chasqui-broker" }
+card-core = { path = "../../../shared/card/card-core" }
+card-handshake = { path = "../../../shared/card/card-handshake" }
+card-sidecar = { path = "../../../shared/card/card-sidecar" }
+ulid = { workspace = true }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-app-header = { workspace = true }
+llimphi-widget-banner = { workspace = true }
+llimphi-widget-stat-card = { workspace = true }
+
+[[bin]]
+name = "chasqui-broker-explorer-llimphi"
+path = "src/main.rs"

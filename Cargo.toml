@@ -105,7 +105,7 @@ members = [
     "01_yachay/nakui/nakui-ui-llimphi",
     "02_ruway/gioser-edit",
     "02_ruway/chasqui/chasqui-broker",
-    "02_ruway/chasqui/chasqui-broker-explorer",
+    "02_ruway/chasqui/chasqui-broker-explorer-llimphi",
     "02_ruway/chasqui/chasqui-card",
     "02_ruway/chasqui/chasqui-core",
     "02_ruway/chasqui/chasqui-explorer-llimphi",
