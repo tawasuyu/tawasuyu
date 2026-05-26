@@ -7,62 +7,44 @@
 //!    SimpleFileSystem).
 //! 2. Lee `/loader/entries/arje.conf` y parsea `linux`/`initrd`/`options`
 //!    (formato systemd-boot compatible).
-//! 3. Carga el kernel (PE/COFF con EFISTUB) en un buffer y lo pasa a
+//! 3. Carga el initramfs a memoria y **registra un handle nuevo con un
+//!    LoadFile2 protocol + device path media-vendor cuya GUID es
+//!    `LINUX_EFI_INITRD_MEDIA_GUID`**. Es la API que el EFISTUB del
+//!    kernel ≥ 5.10 usa para encontrar su initrd — sin ella el kernel
+//!    arranca y muere con "Failed to load initrd".
+//! 4. Carga el kernel (PE/COFF con EFISTUB) en un buffer y lo pasa a
 //!    `BootServices::load_image` (FromBuffer).
-//! 4. Setea las `LoadOptions` del kernel = cmdline con `initrd=` al frente.
-//! 5. `start_image` → control al kernel.
+//! 5. Setea las `LoadOptions` del kernel = cmdline (sin `initrd=` porque
+//!    ahora va por el protocol).
+//! 6. `start_image` → control al kernel; el kernel busca el handle del
+//!    LoadFile2 + media-vendor, llama load_file dos veces (una para el
+//!    tamaño, otra para los bytes), descomprime el initramfs y arranca.
 //!
 //! ## Por qué este crate existe
 //!
 //! `systemd-boot` y `rEFInd` son los bootloaders EFI estándar para Linux,
 //! pero ambos vienen de proyectos externos con cadenas de build complejas.
 //! Para que `arje-installer to-usb` funcione sin requerir que el host tenga
-//! uno pre-empacado, el fractal lleva su propio loader — chico (~20 KB), en
-//! Rust, entendible de punta a punta.
-//!
-//! ## Estado actual (2026-05-26)
-//!
-//! El loader compila, ejecuta y carga el kernel correctamente bajo OVMF.
-//! La cadena `firmware UEFI → arje-loader → start_image(kernel)` funciona.
-//!
-//! **Sin embargo**, los kernels Linux ≥ 5.10 (Artix linux 7.0.8) **YA NO
-//! soportan `initrd=` por cmdline** y exigen que el bootloader instale el
-//! `LINUX_EFI_INITRD_MEDIA_GUID` LoadFile2 protocol. Sin ese protocol, el
-//! kernel arranca pero falla con:
-//!
-//! ```text
-//! EFI stub: ERROR: Failed to handle fs_proto
-//! EFI stub: ERROR: Failed to load initrd: 0x8000000000000002
-//! ```
-//!
-//! Implementar LoadFile2 protocol en uefi-rs 0.35 requiere:
-//!
-//! - Definir la struct con vtable manual de `EFI_LOAD_FILE2_PROTOCOL`.
-//! - Construir un device path media-vendor con
-//!   `5568e427-68fc-4f3d-ac74-ca555231cc68`.
-//! - `boot::install_protocol_interface` con esa GUID + handle nuevo.
-//! - El callback de la vtable copia los bytes del initrd al buffer del
-//!   kernel.
-//!
-//! Es la próxima iteración. Mientras tanto: el `to-partition` flow con
-//! `--register efibootmgr` arranca correctamente porque la NVRAM entry
-//! incluye el cmdline y EFISTUB lee el initrd directo de la ESP por el
-//! viejo método (compatible con kernels que aún tienen el fallback). Sólo
-//! `to-usb` queda con esta limitación temporal.
+//! uno pre-empacado, el fractal lleva su propio loader — chico, en Rust,
+//! entendible de punta a punta.
 
 #![no_main]
 #![no_std]
 
 extern crate alloc;
 
+use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use core::ffi::c_void;
+use core::ptr;
 
 use uefi::prelude::*;
+use uefi::proto::device_path::DevicePath;
 use uefi::proto::loaded_image::LoadedImage;
 use uefi::proto::media::file::{File, FileAttribute, FileInfo, FileMode, FileType, RegularFile};
 use uefi::proto::media::fs::SimpleFileSystem;
-use uefi::{boot, CStr16};
+use uefi::{boot, guid, CStr16, Guid, Identify};
 
 /// Ruta canónica donde arje-installer deja la entry.
 const ENTRY_PATH: &str = r"\loader\entries\arje.conf";
@@ -96,10 +78,18 @@ fn run() -> Result<(), Status> {
     let initrd = entry.initrd.ok_or(Status::INVALID_PARAMETER)?;
     let options = entry.options.unwrap_or_default();
 
+    // 1) Initramfs a memoria y registramos un handle con LoadFile2.
+    let initrd_bytes = read_file_bytes(&mut fs_root, &initrd)?;
+    log::info!("arje-loader :: initramfs leído, {} bytes", initrd_bytes.len());
+    install_initrd_loadfile2(initrd_bytes)?;
+    log::info!("arje-loader :: LoadFile2 LINUX_EFI_INITRD instalado");
+
+    // 2) Kernel a memoria.
     let kernel_bytes = read_file_bytes(&mut fs_root, &linux)?;
-    log::info!("arje-loader :: kernel cargado, {} bytes", kernel_bytes.len());
+    log::info!("arje-loader :: kernel leído, {} bytes", kernel_bytes.len());
     drop(fs_root);
 
+    // 3) LoadImage del kernel desde el buffer.
     let kernel_handle = boot::load_image(
         boot::image_handle(),
         boot::LoadImageSource::FromBuffer {
@@ -113,12 +103,147 @@ fn run() -> Result<(), Status> {
     })?;
     log::info!("arje-loader :: LoadImage OK");
 
+    // 4) Cmdline. Cuando el initrd va por LoadFile2, no necesitamos
+    //    `initrd=` en el cmdline. Lo dejamos en el cmdline sólo si las
+    //    options del .conf no usan LoadFile2 (compat con bootloaders
+    //    viejos) — el kernel preferirá LoadFile2 si lo encuentra.
     let cmdline = compose_cmdline(&initrd, &options);
     log::info!("arje-loader :: cmdline = {cmdline}");
     set_load_options(kernel_handle, &cmdline)?;
 
     log::info!("arje-loader :: start_image");
     boot::start_image(kernel_handle).map_err(|e| e.status())?;
+    Ok(())
+}
+
+// =====================================================================
+// LoadFile2 protocol + media-vendor device path con LINUX_EFI_INITRD_MEDIA_GUID
+// =====================================================================
+//
+// El kernel Linux ≥ 5.10 busca handles que cumplan:
+//   1. Soportan EFI_LOAD_FILE2_PROTOCOL (GUID 4006c0c1-...)
+//   2. Tienen un device path con UN ÚNICO nodo de tipo MEDIA/VENDOR
+//      cuya GUID interna sea LINUX_EFI_INITRD_MEDIA_GUID
+//      (5568e427-68fc-4f3d-ac74-ca555231cc68).
+//
+// Cuando los encuentra, llama LoadFile dos veces:
+//   - Primera: BufferSize=0, Buffer=NULL → debemos devolver el tamaño
+//     real en BufferSize y EFI_BUFFER_TOO_SMALL.
+//   - Segunda: con buffer alocado → copiamos los bytes y devolvemos SUCCESS.
+
+const LINUX_EFI_INITRD_MEDIA_GUID: Guid = guid!("5568e427-68fc-4f3d-ac74-ca555231cc68");
+const LOAD_FILE2_GUID: Guid = guid!("4006c0c1-fcb3-403e-996d-4a6c8724e06d");
+
+/// vtable de EFI_LOAD_FILE2_PROTOCOL — un único método.
+#[repr(C)]
+struct LoadFile2Protocol {
+    load_file: unsafe extern "efiapi" fn(
+        this: *mut LoadFile2Protocol,
+        file_path: *const c_void,
+        boot_policy: u8,
+        buffer_size: *mut usize,
+        buffer: *mut c_void,
+    ) -> Status,
+}
+
+// Estado del initrd accesible desde el callback. El callback es `extern
+// "efiapi"` (C ABI), no puede capturar — así que la única forma de
+// pasarle los bytes es una static. El bytes se leakea (Box::leak)
+// porque vive más allá del scope normal: el kernel lo lee después de
+// que `start_image` transfiere control.
+static mut INITRD_PTR: *const u8 = ptr::null();
+static mut INITRD_LEN: usize = 0;
+
+unsafe extern "efiapi" fn initrd_load_file(
+    _this: *mut LoadFile2Protocol,
+    _file_path: *const c_void,
+    _boot_policy: u8,
+    buffer_size: *mut usize,
+    buffer: *mut c_void,
+) -> Status {
+    // SAFETY: el kernel UEFI EFISTUB pasa punteros válidos para ambos
+    // parámetros (excepto buffer puede ser NULL en la primera llamada).
+    let len = INITRD_LEN;
+    if buffer.is_null() {
+        *buffer_size = len;
+        return Status::BUFFER_TOO_SMALL;
+    }
+    if *buffer_size < len {
+        *buffer_size = len;
+        return Status::BUFFER_TOO_SMALL;
+    }
+    ptr::copy_nonoverlapping(INITRD_PTR, buffer as *mut u8, len);
+    *buffer_size = len;
+    Status::SUCCESS
+}
+
+/// La vtable estática que pasamos a UEFI. Vive todo el programa.
+static LOAD_FILE2_VTABLE: LoadFile2Protocol = LoadFile2Protocol {
+    load_file: initrd_load_file,
+};
+
+/// Device path con un solo nodo MEDIA/VENDOR cuya GUID es
+/// LINUX_EFI_INITRD_MEDIA_GUID, seguido del END node. 24 bytes
+/// totales. Lo construimos en runtime (no puede ser const porque
+/// `Guid::to_bytes` no es const en uefi-rs 0.35) y lo leakeamos.
+fn build_initrd_device_path() -> &'static [u8] {
+    // Layout:
+    //   offset 0:  type=0x04 (MEDIA), subtype=0x03 (VENDOR), length=0x0014 (20)
+    //   offset 4:  vendor_guid (16 bytes)
+    //   offset 20: type=0x7f (END), subtype=0xff (END_ENTIRE), length=0x0004 (4)
+    let mut v: Vec<u8> = alloc::vec![0u8; 24];
+    v[0] = 0x04; // MEDIA
+    v[1] = 0x03; // VENDOR_MEDIA
+    v[2] = 20;
+    v[3] = 0;
+    v[4..20].copy_from_slice(LINUX_EFI_INITRD_MEDIA_GUID.to_bytes().as_ref());
+    v[20] = 0x7f; // END
+    v[21] = 0xff; // END_ENTIRE
+    v[22] = 4;
+    v[23] = 0;
+    Box::leak(v.into_boxed_slice())
+}
+
+/// Crea un handle nuevo, le instala el DevicePath con el media-vendor
+/// (GUID del initrd) y el LoadFile2 protocol. Los bytes del initrd se
+/// leakean y quedan accesibles desde el callback static.
+fn install_initrd_loadfile2(initrd_bytes: Vec<u8>) -> Result<(), Status> {
+    // Leakeamos los bytes — el kernel los va a leer DESPUÉS de
+    // start_image, así que el destructor no puede correr.
+    let leaked: &'static [u8] = Box::leak(initrd_bytes.into_boxed_slice());
+    // SAFETY: la static sólo se escribe acá, antes de que el callback
+    // pueda invocarse (el kernel no corre hasta start_image).
+    unsafe {
+        INITRD_PTR = leaked.as_ptr();
+        INITRD_LEN = leaked.len();
+    }
+
+    let dp_bytes = build_initrd_device_path();
+
+    // SAFETY: el GUID y la interface satisfacen sus contratos UEFI:
+    //   - DevicePath GUID + puntero a bytes válidos de un DevicePath bien-
+    //     formado (vendor node + end node).
+    //   - LoadFile2 GUID + puntero a una vtable estática válida.
+    unsafe {
+        let h = boot::install_protocol_interface(
+            None,
+            &DevicePath::GUID,
+            dp_bytes.as_ptr() as *const c_void,
+        )
+        .map_err(|e| {
+            log::error!("install DevicePath: {e:?}");
+            e.status()
+        })?;
+        boot::install_protocol_interface(
+            Some(h),
+            &LOAD_FILE2_GUID,
+            &LOAD_FILE2_VTABLE as *const _ as *const c_void,
+        )
+        .map_err(|e| {
+            log::error!("install LoadFile2: {e:?}");
+            e.status()
+        })?;
+    }
     Ok(())
 }
 
@@ -155,11 +280,18 @@ fn open_regular(
     root: &mut uefi::proto::media::file::Directory,
     path: &str,
 ) -> Result<RegularFile, Status> {
+    // UEFI File::open exige separadores de path estilo Windows ('\'). Las
+    // entries de systemd-boot usan '/' — convertimos in-place al pasar.
+    let normalized: String = path.chars().map(|c| if c == '/' { '\\' } else { c }).collect();
     let mut buf = [0u16; 256];
-    let cpath = CStr16::from_str_with_buf(path, &mut buf).map_err(|_| Status::INVALID_PARAMETER)?;
+    let cpath = CStr16::from_str_with_buf(&normalized, &mut buf)
+        .map_err(|_| Status::INVALID_PARAMETER)?;
     let h = root
         .open(cpath, FileMode::Read, FileAttribute::empty())
-        .map_err(|e| e.status())?;
+        .map_err(|e| {
+            log::error!("File::open({normalized}): {e:?}");
+            e.status()
+        })?;
     match h.into_type().map_err(|e| e.status())? {
         FileType::Regular(f) => Ok(f),
         FileType::Dir(_) => Err(Status::INVALID_PARAMETER),
