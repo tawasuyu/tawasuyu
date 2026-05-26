@@ -1060,43 +1060,59 @@ fn gather_subsector_planes(
         // Intentar texturizar: tenemos atlas + flat resolves a RGBA.
         if let Some(atlas) = cfg.atlas.as_ref() {
             if let Some(rgba) = atlas.flat_rgba(pic_idx) {
-                // Buscamos 3 vértices NO colineales en world space para
-                // resolver la affine image (= world XY mod 64 con Repeat
-                // extend) → screen. Spread-out picks dan estabilidad
-                // numérica mejor.
+                // Per-triangle fan: triangulamos el polígono convexo
+                // del subsector desde el vértice 0 (fan(0, j, j+1)).
+                // Cada triángulo individual es perspective-correct
+                // porque sus 3 vértices determinan exactamente una
+                // affine — sin aproximación de "spread-out 3 picks"
+                // de 3.7. Subsectores son convexos por BSP definition,
+                // y el clip near (Sutherland-Hodgman) preserva la
+                // convexidad, así que el fan es válido. Triángulos
+                // colineales o degenerados (post-clip) se saltan.
                 let n_v = world_xy.len();
                 if n_v >= 3 {
-                    let i0 = 0;
-                    let i1 = n_v / 3;
-                    let i2 = (2 * n_v) / 3;
-                    if let Some(xform) = solve_floor_affine(
-                        world_xy[i0],
-                        screen_pts[i0],
-                        world_xy[i1],
-                        screen_pts[i1],
-                        world_xy[i2],
-                        screen_pts[i2],
-                    ) {
-                        use llimphi_ui::llimphi_raster::peniko::{
-                            Blob, Extend, Image, ImageFormat,
-                        };
-                        let img = Image::new(
-                            Blob::from((*rgba).clone()),
-                            ImageFormat::Rgba8,
-                            supay_wad::FLAT_SIZE as u32,
-                            supay_wad::FLAT_SIZE as u32,
-                        )
-                        .with_extend(Extend::Repeat);
-                        out.push(Renderable {
-                            depth: depth + 1.0,
-                            color: Color::WHITE,
-                            path: path.clone(),
-                            kind: RenderKind::TexturedWall {
-                                image: img,
-                                brush_xform: xform,
-                            },
-                        });
-                        // Shade overlay — mismo truco que walls.
+                    use llimphi_ui::llimphi_raster::peniko::{
+                        Blob, Extend, Image, ImageFormat,
+                    };
+                    let img = Image::new(
+                        Blob::from((*rgba).clone()),
+                        ImageFormat::Rgba8,
+                        supay_wad::FLAT_SIZE as u32,
+                        supay_wad::FLAT_SIZE as u32,
+                    )
+                    .with_extend(Extend::Repeat);
+                    let mut any_drawn = false;
+                    for j in 1..n_v - 1 {
+                        let (i0, i1, i2) = (0, j, j + 1);
+                        if let Some(xform) = solve_floor_affine(
+                            world_xy[i0],
+                            screen_pts[i0],
+                            world_xy[i1],
+                            screen_pts[i1],
+                            world_xy[i2],
+                            screen_pts[i2],
+                        ) {
+                            let mut tri = BezPath::new();
+                            tri.move_to(screen_pts[i0]);
+                            tri.line_to(screen_pts[i1]);
+                            tri.line_to(screen_pts[i2]);
+                            tri.close_path();
+                            out.push(Renderable {
+                                depth: depth + 1.0,
+                                color: Color::WHITE,
+                                path: tri,
+                                kind: RenderKind::TexturedWall {
+                                    image: img.clone(),
+                                    brush_xform: xform,
+                                },
+                            });
+                            any_drawn = true;
+                        }
+                    }
+                    if any_drawn {
+                        // Shade overlay sobre el polígono entero
+                        // (shade es constante por plano — no necesita
+                        // ser per-triangle). Mismo truco que walls.
                         let shade = shade_for(sec.light_level, depth, cfg)
                             * if is_floor { 0.92 } else { 0.85 };
                         if shade < 0.95 {

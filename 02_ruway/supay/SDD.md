@@ -273,6 +273,19 @@ cargo run -p supay-doom-llimphi --release
 
 **No incluido en 3.11 (defer a 3.12+):** per-triangle subdivision para perspective-correct floors; pitch / mouse-look; BSP front-to-back ordering exacto; volumetric fog real por sector; texture scrolling (líneas con `Scroll_*` specials).
 
+**Fase 3.12 (2026-05-26, este bloque):** pisos y techos per-triangle — perspective-correct exacto.
+
+- **`gather_subsector_planes` reescribe el camino texturizado**: en lugar de resolver UNA affine para todo el polígono usando 3 vértices spread-out (3.7 behavior), triangulamos fan-from-vertex-0 (`(0, j, j+1)` para `j ∈ [1, N-2]`) y emitimos UN `Renderable::TexturedWall` por triángulo, cada uno con su propia affine resuelta vía `solve_floor_affine`. Tres vértices determinan exactamente una affine — sin aproximación.
+- **Convexidad garantizada**. Subsectores en Doom son convex hulls del BSP por construcción. El clip Sutherland-Hodgman contra el near plane preserva la convexidad (intersección de un convex hull con un half-plane sigue siendo convex). Por eso el fan-from-vertex-0 es topológicamente válido sin necesidad de ear-clipping ni constrained Delaunay.
+- **Costo**. Subsectores típicos tienen 3-6 vértices → 1-4 triángulos por plano = 2-8 fills extra por subsector cuando hay piso + techo. Mapas E1M1-tipo con ~250 subsectors visibles ≈ 1000-2000 fills/frame, asumible — vello batchea internamente y los triángulos comparten el mismo `Image` por refcount (Blob).
+- **Overlay de shade**. Sigue siendo uno sólo sobre todo el polígono — el shade es constante por plano al mismo depth, no hace falta per-triangle. Path del overlay = el polígono completo cerrado.
+- **Triángulos degenerados** (colineales post-clip, raro pero posible) se saltan silenciosamente vía el `None` de `solve_floor_affine` — el vecino del fan los cubre.
+- **Resultado visible.** El "affine sheen" que quedaba en pisos largos vistos en ángulo agudo desaparece. Niveles con grandes habitaciones (entrada exterior de E1M1, hangar de E2M1) muestran el tile del flat siguiendo perspectiva por trozo en vez de una sola affine lineal sobre todo el polígono.
+- **Tests**. Sin tests nuevos esta fase — el cambio es interno al render loop y validable por inspección visual; `solve_floor_affine` ya tenía cobertura completa de 3.7.
+- **Header bump**: `PHASE 3.11` → `PHASE 3.12`. 25 tests verde supay (sin regresiones).
+
+**No incluido en 3.12 (defer a 3.13+):** pitch / mouse-look; BSP front-to-back ordering exacto (painter's algorithm con depth euclidiano sigue, pero falla en geometrías raras con sectors interpenetrating); volumetric fog real por sector; texture scrolling (`Scroll_*` specials); decals dinámicos.
+
 ### Fase 4 — Capa de modernización opt-in
 
 Cada feature como toggle:
@@ -336,6 +349,7 @@ Cada feature como toggle:
   - **TempLight + flash de impacto**: nueva lista `Vec<TempLight>` con `(x, y, color, strength, ttl, ttl_max)`. Cada flash dura `FLASH_TTL = 4 ticks` y su `strength` decae linealmente con el TTL. `lighting_contribution` los suma; el resultado es un destello cálido cuando un bullet impacta. Spawn en colisión pared + colisión enemy.
   - **SpriteKinds nuevos**: `DyingImp` (rojo opaco scale 0.65) y `Corpse` (mancha rojiza scale 0.30) — el enemy en `draw_scene` se convierte al kind apropiado según state.
   - El jugador puede morir (vida llega a 0 y queda en 0); por ahora sin pantalla de game over — el input sigue activo. La pantalla del HUD muestra todo en rojo cuando vida < 25.
+- **2026-05-26 (+11):** Fase 3.12 — pisos y techos per-triangle (fan triangulation desde vértice 0 + affine exacta por triángulo). Desaparece el "affine sheen" residual de 3.7 en pisos grandes vistos oblicuos.
 - **2026-05-26 (+10):** Fase 3.11 — flats/paredes animados (NUKAGE/FIREBLU/BLOOD via `flattranslation[]`, switches via `texturetranslation[]`) + sprites full-bright (bit 7 del frame). Proyectiles y muzzle flashes ahora brillan en cuartos oscuros.
 - **2026-05-26 (+9):** Fase 3.10 — `textureoffset`/`rowoffset` del sidedef + pegging Doom (`ML_DONTPEGTOP`/`ML_DONTPEGBOTTOM`). Las costuras entre paredes adyacentes se alinean correctamente; las puertas mantienen su textura quieta cuando suben.
 - **2026-05-26 (+8):** Fase 3.9 — paredes per-strip (8 por slab default) para perspective approximation. El affine sheen de 3.6 desaparece en paredes largas vistas oblicuas.
