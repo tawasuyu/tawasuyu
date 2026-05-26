@@ -1,0 +1,22 @@
+[package]
+name = "pluma-transform-llm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "pluma — ejecutores Traducir/Tono/Resumir/Reescribir basados en cualquier `pluma_llm_core::ChatClient`. Generan la tabla parrafo-a-parrafo via LLM y delegan en pluma-transform-tabla la materializacion del cuerpo hija."
+
+[dependencies]
+async-trait = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }
+pluma-core = { path = "../pluma-core" }
+pluma-cuerpo = { path = "../pluma-cuerpo" }
+pluma-align = { path = "../pluma-align" }
+pluma-transform = { path = "../pluma-transform" }
+pluma-transform-tabla = { path = "../pluma-transform-tabla" }
+pluma-llm-core = { path = "../pluma-llm-core" }
+
+[dev-dependencies]
+tokio = { workspace = true }
+pluma-llm-mock = { path = "../pluma-llm-mock" }
