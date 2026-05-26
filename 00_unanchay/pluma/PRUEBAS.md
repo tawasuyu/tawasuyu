@@ -131,7 +131,25 @@ GEMINI_API_KEY=... PLUMA_LLM_BACKEND=gemini \
   --example multilienzo_dinamico_demo --release
 ```
 
-### 2.4 Completo — toolbar dinámica CON persistencia
+### 2.3.1 Importar un archivo `.md` como cuerpo madre
+
+```rust
+use pluma_md::parse_md;
+let texto = std::fs::read_to_string("notas.md")?;
+let imp = parse_md(&texto, "es", "notas.md", ahora_unix());
+// imp.atoms: un NarrativeAtom por bloque (párrafo, lista, encabezado…)
+// imp.cuerpo: Intencion::Original con todos los atoms en orden.
+for atom in &imp.atoms {
+    graph.insert(atom.clone());
+}
+// Pasar imp.cuerpo como madre a cualquier ejecutor LLM.
+```
+
+Formato inline (negrita, cursiva, code inline) se aplana — el LLM
+recibe texto limpio. Encabezados preservan jerarquía vía prefijo `# `,
+`## `, etc.
+
+### 2.4 Completo — toolbar dinámica CON persistencia + focus + búsqueda
 
 El más cercano a "app real": botones LLM como en 2.3, pero CADA
 transformación se persiste en `~/.cache/gioser/pluma-multilienzo-completo/`
@@ -151,6 +169,15 @@ MULTILIENZO_COMPLETO_RESET=1 cargo run -p pluma-editor-llimphi \
 Tras unas cuantas corridas tendrás un haz crecido: una madre `es` con
 varias derivadas (`qu`, `en`, formal, resumen). El editor las muestra
 todas alineadas por hebras Derivadas 1↔1.
+
+**Atajos del demo completo**:
+
+| Acción | Cómo |
+|---|---|
+| Scroll horizontal | `Shift + rueda del mouse` · o eje X de touchpad |
+| Focus mode | Botón `solo madre` (oculta derivados) / `todos` |
+| Búsqueda transversal | Tipeá cualquier texto · `Backspace` borra · `Esc` limpia |
+| Reset cache | `MULTILIENZO_COMPLETO_RESET=1` en el env |
 
 ### 2.5 Persistente — sobrevive entre corridas
 
@@ -311,6 +338,7 @@ pluma-llm-core       trait ChatClient (contrato agnóstico de proveedor)
 pluma-llm-mock       determinista para tests
 pluma-llm-anthropic  Claude con prompt caching del system
 pluma-llm-gemini     Gemini con cachedContentTokenCount
+pluma-llm-cohere     Cohere Command (Anthropic-shape de response)
 pluma-llm-openai-compatible  DeepSeek + Ollama + Groq/Together/vLLM
 pluma-llm            fachada transparente: build_client(&cfg)/from_env
 
@@ -331,6 +359,7 @@ rimay-verbo-{core,mock,daemon,daemon-bin,fastembed}  embedder global
 | `ANTHROPIC_API_KEY` | `pluma-llm-anthropic` | Claude |
 | `GEMINI_API_KEY` o `GOOGLE_API_KEY` | `pluma-llm-gemini` | Gemini AI Studio |
 | `DEEPSEEK_API_KEY` | `pluma-llm-openai-compatible` | DeepSeek |
+| `COHERE_API_KEY` | `pluma-llm-cohere` | Cohere Command |
 | `MULTILIENZO_RESET` | `multilienzo_store_demo` | `=1` para limpiar el cache |
 | `XDG_RUNTIME_DIR` | `verbo-daemon` y clientes | path del socket del embedder |
 | `XDG_CACHE_HOME` | `multilienzo_store_demo` | base del cache de PlumaStore |
