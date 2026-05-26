@@ -6,8 +6,6 @@
 //! Punto de entrada: [`Renderer`]. Recibe una [`vello::Scene`] y la pinta
 //! sobre un [`llimphi_hal::Frame`].
 
-use std::num::NonZeroUsize;
-
 use llimphi_hal::{Frame, Hal};
 pub use vello;
 pub use vello::kurbo;
@@ -48,6 +46,13 @@ impl Renderer {
     /// para `msaa8` y `msaa16` que nunca se invocan — en Mali-G57 eso
     /// triplica el cold-start (medido: 3.7s vs ~1.2s). Si alguna app
     /// futura necesita MSAA, agregamos un constructor explícito.
+    ///
+    /// **`num_init_threads: None`**: vello paraleliza la compilación
+    /// de shaders en `None` → todos los CPU cores. Mali-G57 viene en
+    /// SoCs octa-core ARM; con 1 thread tardamos 2.0s, con 8 esperamos
+    /// ~400-600ms. La compilación de shaders es 100% CPU (Rust →
+    /// SPIR-V), el GPU no participa, así que multi-thread escala
+    /// casi linealmente hasta saturar el queue del Naga compiler.
     pub fn new(hal: &Hal) -> Result<Self, RasterError> {
         let inner = vello::Renderer::new(
             &hal.device,
@@ -58,7 +63,7 @@ impl Renderer {
                     msaa8: false,
                     msaa16: false,
                 },
-                num_init_threads: NonZeroUsize::new(1),
+                num_init_threads: None,
                 pipeline_cache: None,
             },
         )
