@@ -1,0 +1,795 @@
+//! `mirada-llimphi` — la ventana del Cerebro del compositor.
+//!
+//! Es el "Cerebro" de la arquitectura carmen hecho app Llimphi: envuelve
+//! [`mirada_brain::Desktop`] (toda la lógica de teselado y foco) y lo
+//! pinta. La cadena completa:
+//!
+//! ```text
+//!   mirada-layout ─► mirada-protocol ─► mirada-brain ─► [esta ventana]
+//!                                          │
+//!                                    mirada-link ─► mirada-compositor (Cuerpo)
+//! ```
+//!
+//! Con un Cuerpo conectado (variable `MIRADA_SOCKET`) sondea sus
+//! [`BodyEvent`]s y le devuelve [`BrainCommand`]s por el socket. Sin
+//! Cuerpo arranca en **simulación**: las ventanas son sintéticas y el
+//! teclado de esta ventana maneja el escritorio — útil para ver el
+//! motor de teselado sin hardware.
+//!
+//! Teclas (simulación):
+//!
+//! ```text
+//!   n / Shift+n  abre ventana / monitor    tab / espacio  cicla layout
+//!   w            cierra la enfocada        t m g c r d s  layout directo
+//!   f / Shift+f  flota / pantalla completa h / l          área maestra −/+
+//!   j / k        foco siguiente/anterior   , / .          nmaster −/+
+//!   Shift+j / k  mueve la enfocada         1..9           ir a escritorio
+//!   Enter        promueve a maestra        Ctrl+1..9      enviar a escritorio
+//!   o            siguiente monitor         ` / Shift+`    scratchpad ver/guardar
+//! ```
+//!
+//! Los pips de escritorio y las ventanas del lienzo son **clicables**, y
+//! `mirada-ctl` controla el escritorio desde la terminal — ambos pasan
+//! por el mismo `Desktop::apply`.
+
+#![forbid(unsafe_code)]
+
+use std::path::PathBuf;
+use std::time::Duration;
+
+use llimphi_theme::Theme;
+use llimphi_ui::llimphi_layout::taffy::{
+    prelude::{auto, length, percent, AlignItems, Dimension, FlexDirection, JustifyContent, Position, Size, Style},
+    Rect,
+};
+use llimphi_ui::llimphi_raster::peniko::Color;
+use llimphi_ui::llimphi_text::Alignment;
+use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
+use mirada_brain::{
+    BodyEvent, BrainCommand, CtlConn, CtlReply, CtlRequest, CtlServer, Desktop, DesktopAction,
+    Keymap, KeymapWatch, LayoutMode, Rules, WindowId, WindowPlacement,
+};
+use mirada_link::BrainLink;
+
+/// Pantalla virtual del modo simulación — coincide con el lienzo.
+const SCREEN_W: i32 = 1280;
+const SCREEN_H: i32 = 720;
+/// Período del sondeo del Cuerpo, en ms (~60 Hz).
+const POLL_MS: u64 = 16;
+
+/// Nombres de app ficticios para las ventanas de simulación.
+const APPS: &[&str] = &[
+    "shuma", "pluma_app", "revista", "cosmobiología", "matilda", "pluma_notebook_app", "barra",
+];
+
+struct Model {
+    theme: Theme,
+    desktop: Desktop,
+    /// Geometría vigente — lo que se pinta. Es la última `Place` emitida.
+    placements: Vec<WindowPlacement>,
+    /// Contador de ids para las ventanas sintéticas.
+    next_id: WindowId,
+    /// Cable al Cuerpo; `None` en simulación.
+    link: Option<BrainLink>,
+    /// Última acción, para la barra de estado.
+    note: String,
+    /// Ruta del keymap del usuario, para recargarlo en caliente.
+    keymap_path: Option<PathBuf>,
+    /// Vigía del keymap; `None` en simulación o si no hay archivo.
+    keymap_watch: Option<KeymapWatch>,
+    /// Socket del API de control externo (`mirada-ctl`).
+    ctl: Option<CtlServer>,
+}
+
+#[derive(Clone)]
+enum Msg {
+    /// Tick periódico: drena el Cuerpo, vigila el keymap, atiende ctl.
+    Tick,
+    /// Tecla recibida desde la ventana de simulación.
+    Key(KeyEvent),
+    /// Click en un pip de escritorio.
+    SwitchWorkspace(usize),
+    /// Click en una ventana del lienzo.
+    FocusWindow(WindowId),
+}
+
+struct Mirada;
+
+impl App for Mirada {
+    type Model = Model;
+    type Msg = Msg;
+
+    fn title() -> &'static str {
+        "brahman · mirada"
+    }
+
+    fn initial_size() -> (u32, u32) {
+        (SCREEN_W as u32, (SCREEN_H + 70) as u32)
+    }
+
+    fn init(handle: &Handle<Msg>) -> Model {
+        // Keymap del usuario (~/.config/mirada/keymap.ron): define los
+        // atajos que el Cuerpo intercepta y nos devuelve como `Keybind`.
+        let keymap_path = Keymap::default_path();
+        let keymap = match &keymap_path {
+            Some(p) => Keymap::load_or_init(p),
+            None => Keymap::default(),
+        };
+        let link = connect_body();
+        // Vigilar el keymap sólo tiene sentido con un Cuerpo conectado;
+        // en simulación, mirada usa las teclas de su propia ventana.
+        let keymap_watch = if link.is_some() {
+            keymap_path.as_deref().and_then(|p| Keymap::watch(p).ok())
+        } else {
+            None
+        };
+        // API de control: mirada siempre posee el Desktop, así que
+        // siempre abre el socket de `mirada-ctl`.
+        let ctl = match CtlServer::bind(&mirada_brain::ctl::default_socket_path()) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                eprintln!("mirada · sin API de control: {e}");
+                None
+            }
+        };
+
+        let mut desktop = Desktop::with_keymap(keymap);
+        desktop.set_rules(load_user_rules());
+
+        let mut model = Model {
+            theme: Theme::dark(),
+            desktop,
+            placements: Vec::new(),
+            next_id: 1,
+            link,
+            note: "listo".into(),
+            keymap_path,
+            keymap_watch,
+            ctl,
+        };
+        if let Some(link) = model.link.as_mut() {
+            let _ = link.send(&model.desktop.grab_keys());
+            model.note = "Cuerpo conectado".into();
+        } else {
+            // Simulación: una pantalla virtual y tres ventanas de muestra.
+            feed(&mut model, BodyEvent::OutputAdded {
+                id: 0,
+                width: SCREEN_W,
+                height: SCREEN_H,
+            });
+            for _ in 0..3 {
+                open_window(&mut model);
+            }
+            model.note = "simulación — sin Cuerpo".into();
+        }
+
+        // El sondeo corre siempre: drena el Cuerpo (si lo hay), vigila el
+        // keymap y atiende `mirada-ctl`. Llega como `Msg::Tick` al update.
+        handle.spawn_periodic(Duration::from_millis(POLL_MS), || Msg::Tick);
+
+        model
+    }
+
+    fn on_key(_model: &Model, e: &KeyEvent) -> Option<Msg> {
+        if e.state == KeyState::Pressed {
+            Some(Msg::Key(e.clone()))
+        } else {
+            None
+        }
+    }
+
+    fn update(model: Model, msg: Msg, _: &Handle<Msg>) -> Model {
+        let mut m = model;
+        match msg {
+            Msg::Tick => tick(&mut m),
+            Msg::Key(ev) => handle_key(&mut m, &ev),
+            Msg::SwitchWorkspace(i) => act(&mut m, DesktopAction::SwitchWorkspace(i)),
+            Msg::FocusWindow(id) => act(&mut m, DesktopAction::FocusWindow(id)),
+        }
+        m
+    }
+
+    fn view(model: &Model) -> View<Msg> {
+        let theme = &model.theme;
+        // Colores cromáticos heredados del original (HSL → RGB hardcoded).
+        let win_bg = Color::from_rgba8(28, 32, 41, 255);
+        let bar_bg = Color::from_rgba8(19, 22, 30, 255);
+        let canvas_bg = Color::from_rgba8(10, 13, 19, 255);
+        let on_accent = Color::from_rgba8(12, 16, 24, 255);
+
+        let active = model.desktop.active_index();
+        let mode = model.desktop.active_workspace().params().mode;
+        let loads = model.desktop.workspace_loads();
+        let focused = model.desktop.focused_window();
+
+        // --- Barra superior: identidad + escritorios + modo ----------
+        let bar = top_bar(model, theme, mode, &loads, active, focused, on_accent, bar_bg);
+
+        // --- Lienzo: el escritorio teselado, a escala ----------------
+        let canvas = canvas_view(model, theme, on_accent, win_bg, canvas_bg);
+
+        // --- Pie de estado ------------------------------------------
+        let status = View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(26.0_f32),
+            },
+            padding: Rect {
+                left: length(14.0_f32),
+                right: length(14.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .fill(bar_bg)
+        .text_aligned(model.note.clone(), 11.0, theme.fg_placeholder, Alignment::Start);
+
+        // --- Composición ---------------------------------------------
+        let canvas_wrap = View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size {
+                width: percent(1.0_f32),
+                height: Dimension::auto(),
+            },
+            flex_grow: 1.0,
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .fill(theme.bg_app)
+        .children(vec![canvas]);
+
+        View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size {
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(theme.bg_app)
+        .children(vec![bar, canvas_wrap, status])
+    }
+}
+
+// ─── Lógica fuera del trait App ─────────────────────────────────────
+
+/// Bucle de poll consolidado: drena Cuerpo, recarga keymap, sirve ctl.
+fn tick(m: &mut Model) {
+    let events: Vec<BodyEvent> = match m.link.as_ref() {
+        Some(link) => link.drain(),
+        None => Vec::new(),
+    };
+    let keymap_changed = m.keymap_watch.as_ref().is_some_and(|w| w.changed());
+    if keymap_changed {
+        reload_keymap(m);
+    }
+    let _ctl_served = poll_ctl(m);
+    for ev in events {
+        feed(m, ev);
+    }
+}
+
+fn open_window(m: &mut Model) {
+    let id = m.next_id;
+    m.next_id += 1;
+    let app = APPS[(id as usize) % APPS.len()];
+    feed(m, BodyEvent::WindowOpened {
+        id,
+        app_id: format!("org.brahman.{app}"),
+        title: format!("{app} · ventana {id}"),
+    });
+    m.note = format!("abierta ventana {id}");
+}
+
+fn feed(m: &mut Model, event: BodyEvent) {
+    let cmds = m.desktop.on_event(event);
+    dispatch(m, cmds);
+}
+
+fn act(m: &mut Model, action: DesktopAction) {
+    let cmds = m.desktop.apply(action);
+    dispatch(m, cmds);
+}
+
+fn reload_keymap(m: &mut Model) {
+    let Some(path) = m.keymap_path.clone() else {
+        return;
+    };
+    match Keymap::load(&path) {
+        Ok(km) => {
+            let cmd = m.desktop.set_keymap(km);
+            dispatch(m, vec![cmd]);
+            m.note = "keymap recargado".into();
+        }
+        Err(e) => m.note = format!("keymap inválido: {e}"),
+    }
+}
+
+fn poll_ctl(m: &mut Model) -> bool {
+    let conns: Vec<CtlConn> = match &m.ctl {
+        Some(ctl) => std::iter::from_fn(|| ctl.poll()).collect(),
+        None => return false,
+    };
+    let mut served = false;
+    for mut conn in conns {
+        let reply = match conn.read_request() {
+            Ok(Some(req)) => {
+                served = true;
+                serve_ctl(m, req)
+            }
+            Ok(None) => continue,
+            Err(e) => CtlReply::Error(format!("{e}")),
+        };
+        let _ = conn.reply(&reply);
+    }
+    served
+}
+
+fn serve_ctl(m: &mut Model, req: CtlRequest) -> CtlReply {
+    match req {
+        CtlRequest::Do(action) => {
+            act(m, action);
+            CtlReply::Ok
+        }
+        CtlRequest::ListWindows => CtlReply::Windows(m.desktop.window_lines()),
+    }
+}
+
+fn dispatch(m: &mut Model, cmds: Vec<BrainCommand>) {
+    for cmd in &cmds {
+        if let BrainCommand::Place(p) = cmd {
+            m.placements = p.clone();
+        }
+    }
+    match m.link.as_mut() {
+        Some(link) => {
+            for cmd in &cmds {
+                let _ = link.send(cmd);
+            }
+        }
+        None => {
+            for cmd in cmds {
+                match cmd {
+                    BrainCommand::Close(id) | BrainCommand::Kill(id) => {
+                        feed(m, BodyEvent::WindowClosed { id });
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+/// Mapea una tecla a una acción de escritorio. La firma cambia respecto
+/// del original GPUI: ahora muta `Model` directamente porque el bucle
+/// Llimphi es Elm puro.
+fn handle_key(m: &mut Model, ev: &KeyEvent) {
+    let shift = ev.modifiers.shift;
+    let ctrl = ev.modifiers.ctrl;
+    let connected = m.link.is_some();
+
+    let key_str: Option<String> = match &ev.key {
+        Key::Named(NamedKey::Tab) => Some("tab".into()),
+        Key::Named(NamedKey::Space) => Some("space".into()),
+        Key::Named(NamedKey::Enter) => Some("enter".into()),
+        Key::Character(s) => Some(s.to_lowercase()),
+        _ => None,
+    };
+    let Some(k) = key_str else { return };
+
+    match k.as_str() {
+        "n" if shift && !connected => {
+            let id = m.desktop.outputs().len() as u32;
+            feed(m, BodyEvent::OutputAdded {
+                id,
+                width: SCREEN_W,
+                height: SCREEN_H,
+            });
+        }
+        "n" if !connected => open_window(m),
+        "w" => act(m, DesktopAction::CloseFocused),
+        "f" if shift => act(m, DesktopAction::ToggleFullscreen),
+        "f" => act(m, DesktopAction::ToggleFloat),
+        "j" if shift => act(m, DesktopAction::MoveForward),
+        "k" if shift => act(m, DesktopAction::MoveBackward),
+        "j" => act(m, DesktopAction::FocusNext),
+        "k" => act(m, DesktopAction::FocusPrev),
+        "tab" | "space" => act(m, DesktopAction::CycleLayout),
+        "t" => act(m, DesktopAction::SetLayout(LayoutMode::MasterStack)),
+        "m" => act(m, DesktopAction::SetLayout(LayoutMode::Monocle)),
+        "g" => act(m, DesktopAction::SetLayout(LayoutMode::Grid)),
+        "c" => act(m, DesktopAction::SetLayout(LayoutMode::Columns)),
+        "r" => act(m, DesktopAction::SetLayout(LayoutMode::Rows)),
+        "d" => act(m, DesktopAction::SetLayout(LayoutMode::CenteredMaster)),
+        "s" => act(m, DesktopAction::SetLayout(LayoutMode::Spiral)),
+        "h" => act(m, DesktopAction::ShrinkMaster),
+        "l" => act(m, DesktopAction::GrowMaster),
+        "o" => act(m, DesktopAction::FocusOutputNext),
+        "`" if shift => act(m, DesktopAction::SendToScratchpad),
+        "`" => act(m, DesktopAction::ToggleScratchpad),
+        "enter" => act(m, DesktopAction::PromoteToMaster),
+        "," => act(m, DesktopAction::IncMaster),
+        "." => act(m, DesktopAction::DecMaster),
+        d if d.len() == 1 && d.as_bytes()[0].is_ascii_digit() && d != "0" => {
+            let n = (d.as_bytes()[0] - b'1') as usize;
+            if ctrl {
+                act(m, DesktopAction::SendToWorkspace(n));
+            } else {
+                act(m, DesktopAction::SwitchWorkspace(n));
+            }
+        }
+        _ => {}
+    }
+}
+
+fn connect_body() -> Option<BrainLink> {
+    let path = std::env::var("MIRADA_SOCKET").ok()?;
+    BrainLink::connect(&path).ok()
+}
+
+fn load_user_rules() -> Rules {
+    match Rules::default_path() {
+        Some(p) => Rules::load_or_default(&p),
+        None => Rules::default(),
+    }
+}
+
+fn mode_name(m: LayoutMode) -> &'static str {
+    match m {
+        LayoutMode::MasterStack => "maestro + pila",
+        LayoutMode::Monocle => "monóculo",
+        LayoutMode::Grid => "rejilla",
+        LayoutMode::Columns => "columnas",
+        LayoutMode::Rows => "filas",
+        LayoutMode::CenteredMaster => "maestro centrado",
+        LayoutMode::Spiral => "espiral",
+    }
+}
+
+// ─── Subviews ───────────────────────────────────────────────────────
+
+#[allow(clippy::too_many_arguments)]
+fn top_bar(
+    model: &Model,
+    theme: &Theme,
+    mode: LayoutMode,
+    loads: &[usize],
+    active: usize,
+    focused: Option<WindowId>,
+    on_accent: Color,
+    bar_bg: Color,
+) -> View<Msg> {
+    let mut pips: Vec<View<Msg>> = Vec::with_capacity(loads.len());
+    for (i, &load) in loads.iter().enumerate() {
+        let is_active = i == active;
+        let fg = if is_active {
+            on_accent
+        } else if load > 0 {
+            theme.fg_text
+        } else {
+            theme.fg_placeholder
+        };
+        let bg = if is_active {
+            theme.accent
+        } else if load > 0 {
+            theme.bg_row_hover
+        } else {
+            bar_bg
+        };
+        pips.push(
+            View::new(Style {
+                size: Size {
+                    width: length(24.0_f32),
+                    height: length(22.0_f32),
+                },
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                ..Default::default()
+            })
+            .fill(bg)
+            .radius(4.0)
+            .text_aligned(format!("{}", i + 1), 12.0, fg, Alignment::Start)
+            .on_click(Msg::SwitchWorkspace(i)),
+        );
+    }
+
+    let focus_label = match focused.and_then(|id| model.desktop.window_info(id)) {
+        Some(info) => info.title.clone(),
+        None => "—".to_string(),
+    };
+
+    let pips_row = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: Dimension::auto(),
+            height: length(22.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(4.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(pips);
+
+    let label_node = |text: String, color: Color, size: f32, width: f32| {
+        View::new(Style {
+            size: Size {
+                width: length(width),
+                height: length(22.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text_aligned(text, size, color, Alignment::Start)
+    };
+
+    let mirada_tag = label_node("mirada".into(), theme.accent, 13.0, 70.0);
+    let sep_a = label_node("·".into(), theme.fg_placeholder, 12.0, 12.0);
+    let sep_b = label_node("·".into(), theme.fg_placeholder, 12.0, 12.0);
+    let layout_label = label_node(
+        format!("layout: {}", mode_name(mode)),
+        theme.fg_muted,
+        12.0,
+        180.0,
+    );
+    let spacer = View::new(Style {
+        size: Size {
+            width: Dimension::auto(),
+            height: length(22.0_f32),
+        },
+        flex_grow: 1.0,
+        ..Default::default()
+    });
+    let focus_label_node = label_node(
+        format!("foco: {focus_label}"),
+        theme.fg_muted,
+        12.0,
+        320.0,
+    );
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(44.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        padding: Rect {
+            left: length(14.0_f32),
+            right: length(14.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        gap: Size {
+            width: length(12.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(bar_bg)
+    .children(vec![
+        mirada_tag,
+        sep_a,
+        pips_row,
+        sep_b,
+        layout_label,
+        spacer,
+        focus_label_node,
+    ])
+}
+
+fn canvas_view(
+    model: &Model,
+    theme: &Theme,
+    on_accent: Color,
+    win_bg: Color,
+    canvas_bg: Color,
+) -> View<Msg> {
+    let outs = model.desktop.outputs();
+    let (bb_w, bb_h) = if outs.is_empty() {
+        (SCREEN_W as f32, SCREEN_H as f32)
+    } else {
+        let w = outs.iter().map(|o| o.rect.x + o.rect.w).max().unwrap_or(SCREEN_W);
+        let h = outs.iter().map(|o| o.rect.y + o.rect.h).max().unwrap_or(SCREEN_H);
+        (w as f32, h as f32)
+    };
+    let scale = (SCREEN_W as f32 / bb_w)
+        .min(SCREEN_H as f32 / bb_h)
+        .min(1.0);
+
+    let mut children: Vec<View<Msg>> = Vec::new();
+
+    // Marcos de cada salida.
+    for (i, o) in outs.iter().enumerate() {
+        let is_focused_out = i == model.desktop.focused_output();
+        let border = if is_focused_out { theme.accent } else { theme.border };
+        let label = View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(16.0_f32),
+            },
+            padding: Rect {
+                left: length(4.0_f32),
+                right: length(4.0_f32),
+                top: length(2.0_f32),
+                bottom: length(0.0_f32),
+            },
+            ..Default::default()
+        })
+        .text_aligned(
+            format!("salida {} · escritorio {}", i + 1, o.workspace + 1),
+            10.0,
+            theme.fg_placeholder,
+            Alignment::Start,
+        );
+        children.push(
+            View::new(Style {
+                position: Position::Absolute,
+                inset: Rect {
+                    left: length(o.rect.x as f32 * scale),
+                    top: length(o.rect.y as f32 * scale),
+                    right: auto(),
+                    bottom: auto(),
+                },
+                size: Size {
+                    width: length(o.rect.w as f32 * scale),
+                    height: length(o.rect.h as f32 * scale),
+                },
+                ..Default::default()
+            })
+            // Llimphi no tiene "border 1px" como propiedad — emulamos
+            // con un fill del color del border que pinta una franja
+            // alrededor del contenido vía padding (cheap edge).
+            .fill(border)
+            .children(vec![label]),
+        );
+    }
+
+    // Mensaje vacío.
+    let visible = model.placements.iter().filter(|p| p.visible).count();
+    if visible == 0 {
+        children.push(
+            View::new(Style {
+                position: Position::Absolute,
+                inset: Rect {
+                    left: length(0.0_f32),
+                    top: length(0.0_f32),
+                    right: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: percent(1.0_f32),
+                },
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                ..Default::default()
+            })
+            .text_aligned(
+                "escritorio vacío — pulsa  n  para abrir una ventana".to_string(),
+                13.0,
+                theme.fg_placeholder,
+                Alignment::Center,
+            ),
+        );
+    }
+
+    // Ventanas.
+    for p in model.placements.iter().filter(|p| p.visible) {
+        let info = model.desktop.window_info(p.id);
+        let title = info
+            .map(|i| i.title.clone())
+            .unwrap_or_else(|| format!("ventana {}", p.id));
+        let app_id = info.map(|i| i.app_id.clone()).unwrap_or_default();
+        let border = if p.focused { theme.accent } else { theme.border };
+        let tb_bg = if p.focused { theme.accent } else { theme.bg_row_hover };
+        let tb_fg = if p.focused { on_accent } else { theme.fg_muted };
+        let kind_label = if p.fullscreen {
+            "· pantalla completa ·"
+        } else if p.floating {
+            "· ventana flotante ·"
+        } else {
+            "· superficie del Cuerpo ·"
+        };
+
+        let titlebar = View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(22.0_f32),
+            },
+            padding: Rect {
+                left: length(8.0_f32),
+                right: length(8.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .fill(tb_bg)
+        .text_aligned(title, 11.0, tb_fg, Alignment::Start);
+
+        let interior = View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size {
+                width: percent(1.0_f32),
+                height: Dimension::auto(),
+            },
+            flex_grow: 1.0,
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            gap: Size {
+                width: length(0.0_f32),
+                height: length(4.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(win_bg)
+        .children(vec![
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(16.0_f32),
+                },
+                ..Default::default()
+            })
+            .text_aligned(app_id, 11.0, theme.fg_placeholder, Alignment::Center),
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(16.0_f32),
+                },
+                ..Default::default()
+            })
+            .text_aligned(kind_label.to_string(), 11.0, theme.fg_placeholder, Alignment::Center),
+        ]);
+
+        children.push(
+            View::new(Style {
+                flex_direction: FlexDirection::Column,
+                position: Position::Absolute,
+                inset: Rect {
+                    left: length(p.rect.x as f32 * scale),
+                    top: length(p.rect.y as f32 * scale),
+                    right: auto(),
+                    bottom: auto(),
+                },
+                size: Size {
+                    width: length(p.rect.w as f32 * scale),
+                    height: length(p.rect.h as f32 * scale),
+                },
+                padding: Rect {
+                    left: length(2.0_f32),
+                    right: length(2.0_f32),
+                    top: length(2.0_f32),
+                    bottom: length(2.0_f32),
+                },
+                ..Default::default()
+            })
+            .fill(border)
+            .radius(5.0)
+            .on_click(Msg::FocusWindow(p.id))
+            .children(vec![titlebar, interior]),
+        );
+    }
+
+    View::new(Style {
+        position: Position::Relative,
+        size: Size {
+            width: length(SCREEN_W as f32),
+            height: length(SCREEN_H as f32),
+        },
+        ..Default::default()
+    })
+    .fill(canvas_bg)
+    .children(children)
+}
+
+fn main() {
+    llimphi_ui::run::<Mirada>();
+}

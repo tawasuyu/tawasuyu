@@ -139,7 +139,7 @@ members = [
     "02_ruway/nahual/nahual-file-explorer-llimphi",
     "02_ruway/nahual/nahual-image-viewer-llimphi",
     "02_ruway/nahual/nahual-text-viewer-llimphi",
-    "02_ruway/mirada/mirada-app",
+    "02_ruway/mirada/mirada-app-llimphi",
     "02_ruway/mirada/mirada-bar-core",
     "02_ruway/mirada/mirada-bar-web",
     "02_ruway/mirada/mirada-body",
@@ -152,10 +152,8 @@ members = [
     "02_ruway/mirada/mirada-link",
     "02_ruway/mirada/mirada-portal",
     "02_ruway/mirada/mirada-protocol",
-    "02_ruway/nahual/libs/launcher",
     "02_ruway/nahual/libs/meta-runtime",
     "02_ruway/nahual/libs/meta-schema",
-    "02_ruway/nahual/libs/theme",
     "02_ruway/shuma/baremetal/matilda-app",
     "02_ruway/shuma/baremetal/matilda-apply",
     "02_ruway/shuma/baremetal/matilda-config",
@@ -459,7 +457,6 @@ pulldown-cmark = { version = "0.12", default-features = false, features = ["html
 # ============================================================
 # Intra-workspace deps de nahual (referenciadas por workspace = true)
 # ============================================================
-nahual-theme = { path = "02_ruway/nahual/libs/theme" }
 nahual-text-viewer-llimphi = { path = "02_ruway/nahual/nahual-text-viewer-llimphi" }
 nahual-image-viewer-llimphi = { path = "02_ruway/nahual/nahual-image-viewer-llimphi" }
 nahual-file-explorer-llimphi = { path = "02_ruway/nahual/nahual-file-explorer-llimphi" }

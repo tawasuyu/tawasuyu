@@ -1,9 +1,0 @@
-[package]
-name = "nahual-theme"
-version = { workspace = true }
-edition = { workspace = true }
-license = { workspace = true }
-description = "Sistema de temas — paleta + gradientes, Theme como Global GPUI."
-
-[dependencies]
-gpui = { workspace = true }

@@ -1,0 +1,19 @@
+[package]
+name = "mirada-app-llimphi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "mirada (Llimphi) — el Cerebro del compositor: ventana Llimphi que tesela el escritorio sobre mirada-brain y manda la geometría al Cuerpo (smithay) por mirada-link. Reemplazo del `mirada-app` GPUI; sin Cuerpo arranca en simulación."
+
+[[bin]]
+name = "mirada-llimphi"
+path = "src/main.rs"
+
+[dependencies]
+mirada-brain = { path = "../mirada-brain" }
+mirada-link = { path = "../mirada-link" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
