@@ -1,0 +1,16 @@
+[package]
+name = "pluma-llm-openai-compatible"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "pluma — backend de pluma-llm-core contra cualquier servicio con la shape OpenAI Chat Completions (`/chat/completions`). Cubre DeepSeek, Ollama en modo OpenAI-compat, Groq, Together, vLLM, y cualquier proxy compatible. Presets explícitos para los dos casos típicos en gioser: DeepSeek remoto y Ollama local."
+
+[dependencies]
+async-trait = { workspace = true }
+pluma-llm-core = { path = "../pluma-llm-core" }
+reqwest = { workspace = true, features = ["json", "rustls-tls"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true }

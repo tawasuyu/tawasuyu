@@ -1,0 +1,21 @@
+[package]
+name = "pluma-llm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "pluma — fachada transparente del stack LLM: una sola config (LlmConfig) construye un Arc<dyn ChatClient> contra Anthropic, Gemini, DeepSeek, Ollama o Mock. Los consumidores reciben un trait, no un backend concreto."
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }
+pluma-llm-core = { path = "../pluma-llm-core" }
+pluma-llm-mock = { path = "../pluma-llm-mock" }
+pluma-llm-anthropic = { path = "../pluma-llm-anthropic" }
+pluma-llm-gemini = { path = "../pluma-llm-gemini" }
+pluma-llm-openai-compatible = { path = "../pluma-llm-openai-compatible" }
+
+[dev-dependencies]
+tokio = { workspace = true }
+serde_json = { workspace = true }
