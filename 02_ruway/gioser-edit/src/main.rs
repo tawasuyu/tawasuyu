@@ -49,14 +49,17 @@ use llimphi_module_file_picker::{
 use llimphi_module_shuma_term::{
     self as term, ShumaTermAction, ShumaTermMsg, ShumaTermPalette, ShumaTermState,
 };
+use llimphi_module_symbol_outline::{
+    self as outline, OutlineAction, OutlineMsg, OutlinePalette, OutlineState, SymbolItem,
+};
 use llimphi_widget_tabs::{tabs_view, TabsPalette, TabsSpec};
 use llimphi_widget_text_editor::{
     all_matches, find_next, find_prev, text_editor_view_full, Clipboard, Diagnostic,
     EditorMetrics, EditorPalette, EditorState, FindState, Language, PointerEvent, Pos,
 };
 use llimphi_widget_text_editor_lsp::{
-    CompletionItem, DefinitionLocation, HoverInfo, LspClient, NoopLspClient, RustAnalyzerClient,
-    SignatureHelpInfo, TextEdit,
+    CompletionItem, DefinitionLocation, DocumentSymbolEntry, HoverInfo, LspClient, NoopLspClient,
+    RustAnalyzerClient, SignatureHelpInfo, TextEdit,
 };
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
@@ -102,6 +105,10 @@ enum Msg {
     Term(ShumaTermMsg),
     /// Mensajes del módulo command palette (Ctrl+Shift+P).
     Palette(PaletteMsg),
+    /// Mensajes del módulo symbol outline (Ctrl+Shift+O).
+    Outline(OutlineMsg),
+    /// El LSP devolvió document symbols — repoblar el outline.
+    OutlineRefresh(Vec<SymbolItem>),
     // Find
     FindOpen,
     FindClose,
@@ -186,6 +193,12 @@ struct Model {
     /// `init` y se reusa en cada apertura del palette — el palette no
     /// lo copia, sólo guarda índices.
     palette_commands: Vec<PaletteCommand>,
+    /// Symbol outline; `None` cerrado.
+    outline: Option<OutlineState>,
+    /// Últimos símbolos devueltos por el LSP para el tab activo. Se
+    /// repuebla en cada `OutlineRefresh`; vacío hasta que llega la
+    /// primera respuesta.
+    outline_symbols: Vec<SymbolItem>,
     tabs: Vec<Tab>,
     /// Índice del tab activo dentro de `tabs`. `None` si no hay ninguno
     /// abierto todavía.
@@ -360,6 +373,8 @@ impl App for EditorApp {
             term: None,
             palette: None,
             palette_commands: build_command_catalog(),
+            outline: None,
+            outline_symbols: Vec::new(),
             tabs: Vec::new(),
             active: None,
             clipboard: ArboardClipboard::new(),
@@ -414,6 +429,16 @@ impl App for EditorApp {
             Msg::Fif(fmsg) => apply_fif(model, fmsg),
             Msg::Term(tm) => apply_term(model, tm),
             Msg::Palette(pm) => apply_palette(model, pm, handle),
+            Msg::Outline(om) => apply_outline(model, om),
+            Msg::OutlineRefresh(items) => {
+                let mut m = model;
+                m.outline_symbols = items;
+                // Si el panel está abierto, refrescamos su filtro.
+                if let Some(state) = m.outline.as_mut() {
+                    outline::refilter(state, &m.outline_symbols);
+                }
+                m
+            }
             Msg::FindOpen => {
                 let mut m = model;
                 if m.find.is_none() {
@@ -486,6 +511,16 @@ impl App for EditorApp {
                 if !we.is_empty() {
                     m.lsp.clear_workspace_edit();
                     handle.dispatch(Msg::RenameApply(we));
+                }
+                // Document symbols: si llegaron y son distintos a lo que
+                // tenemos, refresca el outline state.
+                let syms = m.lsp.latest_document_symbols();
+                if !syms.is_empty() {
+                    let items = symbols_lsp_to_module(syms);
+                    if items != m.outline_symbols {
+                        m.lsp.clear_document_symbols();
+                        handle.dispatch(Msg::OutlineRefresh(items));
+                    }
                 }
                 m
             }
@@ -841,6 +876,12 @@ impl App for EditorApp {
                 return Some(Msg::Palette(pm));
             }
         }
+        // Symbol outline abierto: idem.
+        if let Some(state) = model.outline.as_ref() {
+            if let Some(om) = outline::on_key(state, event) {
+                return Some(Msg::Outline(om));
+            }
+        }
 
         // Terminal abierto: traga TODAS las teclas (salvo el toggle de
         // apertura, que se reusa para cerrar abajo). El módulo internamente
@@ -922,6 +963,10 @@ impl App for EditorApp {
             // Ctrl+Shift+P = abre el command palette.
             if palette::open_shortcut(event) {
                 return Some(Msg::Palette(PaletteMsg::Open));
+            }
+            // Ctrl+Shift+O = abre el symbol outline.
+            if outline::open_shortcut(event) {
+                return Some(Msg::Outline(OutlineMsg::Open));
             }
             // Ctrl+Alt+L = format (estilo JetBrains; antes era Ctrl+Shift+F).
             if event.modifiers.alt
@@ -1179,6 +1224,10 @@ fn active_editor_content(model: &Model, theme: &Theme) -> View<Msg> {
     if let Some(p) = model.palette.as_ref() {
         let pal = PalettePalette::from_theme(theme);
         children.push(palette::view(p, &model.palette_commands, &pal, Msg::Palette));
+    }
+    if let Some(o) = model.outline.as_ref() {
+        let pal = OutlinePalette::from_theme(theme);
+        children.push(outline::view(o, &model.outline_symbols, &pal, Msg::Outline));
     }
     if let Some(p) = model.picker.as_ref() {
         let palette = PickerPalette::from_theme(theme);
@@ -1799,6 +1848,62 @@ fn apply_fif(model: Model, fmsg: FifMsg) -> Model {
     m
 }
 
+/// Convierte la lista de symbols que devuelve el LSP al tipo que el
+/// módulo outline conoce. La estructura es 1:1; este shim sólo evita
+/// que el módulo dependa del crate del LSP.
+fn symbols_lsp_to_module(lsp: Vec<DocumentSymbolEntry>) -> Vec<SymbolItem> {
+    lsp.into_iter()
+        .map(|e| SymbolItem {
+            name: e.name,
+            kind: e.kind,
+            line: e.line,
+            col: e.col,
+            container: e.container,
+            depth: e.depth,
+        })
+        .collect()
+}
+
+/// Routea un OutlineMsg al módulo outline. Lazy-init en `Open`: si no
+/// hay tab activo es no-op; si lo hay y todavía no llegaron symbols,
+/// dispara `documentSymbol` en background — el PollLsp tick poblará
+/// la lista cuando la respuesta llegue.
+fn apply_outline(model: Model, om: OutlineMsg) -> Model {
+    let mut m = model;
+    if matches!(om, OutlineMsg::Open) && m.outline.is_none() {
+        if m.active.is_none() {
+            m.status = "outline · ningún tab activo".into();
+            return m;
+        }
+        if let Some(path) = m.active_path() {
+            m.lsp.request_document_symbols(&path);
+        }
+        m.outline = Some(OutlineState::new(&m.outline_symbols));
+        m.status = if m.outline_symbols.is_empty() {
+            "outline · pidiendo symbols al LSP… (sin LSP, queda vacío)".into()
+        } else {
+            format!("outline · {} símbolos", m.outline_symbols.len())
+        };
+        return m;
+    }
+    let action = match m.outline.as_mut() {
+        Some(state) => outline::apply(state, om, &m.outline_symbols),
+        None => return m,
+    };
+    match action {
+        OutlineAction::None => {}
+        OutlineAction::Close => m.outline = None,
+        OutlineAction::GoTo { line, col } => {
+            m.outline = None;
+            if let Some(tab) = m.active_tab_mut() {
+                tab.editor.set_caret_at(line, col);
+                tab.editor.ensure_caret_visible(EDITOR_VISIBLE_LINES);
+            }
+        }
+    }
+    m
+}
+
 /// Catálogo de comandos que el palette muestra. Estático: lo construimos
 /// una sola vez en `init` y vive en `Model.palette_commands`. Cada `id`
 /// debe estar mapeado en [`palette_id_to_msg`] para que el invoke pueda
@@ -1828,6 +1933,8 @@ fn build_command_catalog() -> Vec<PaletteCommand> {
             .with_shortcut("Ctrl+Shift+Space"),
         PaletteCommand::new("lsp.completions", "Trigger Suggest", "LSP")
             .with_shortcut("Ctrl+Space"),
+        PaletteCommand::new("editor.outline", "Symbol Outline", "Editor")
+            .with_shortcut("Ctrl+Shift+O"),
     ]
 }
 
@@ -1851,6 +1958,7 @@ fn palette_id_to_msg(id: &str) -> Option<Msg> {
         "lsp.hover" => Msg::HoverRequest,
         "lsp.signatureHelp" => Msg::SignatureHelpRequest,
         "lsp.completions" => Msg::CompletionsRequest,
+        "editor.outline" => Msg::Outline(OutlineMsg::Open),
         _ => return None,
     })
 }

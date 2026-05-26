@@ -104,6 +104,29 @@ pub trait LspClient: Send {
     /// `path → Vec<TextEdit>` por simplicidad.
     fn latest_workspace_edit(&self) -> std::collections::HashMap<PathBuf, Vec<TextEdit>>;
     fn clear_workspace_edit(&mut self);
+
+    /// Dispara textDocument/documentSymbol. La respuesta llega
+    /// asincrónica; el caller la recoge con [`latest_document_symbols`].
+    fn request_document_symbols(&mut self, path: &Path);
+    /// Última respuesta de documentSymbol — lista plana flattening del
+    /// árbol jerárquico que devuelve el server. Orden: top-down,
+    /// children en orden de aparición. `depth` refleja la profundidad
+    /// para que el caller indente visualmente.
+    fn latest_document_symbols(&self) -> Vec<DocumentSymbolEntry>;
+    fn clear_document_symbols(&mut self);
+}
+
+/// Una entrada flattening del árbol `DocumentSymbol` del LSP. Espejo
+/// mínimo que evita arrastrar `lsp_types::SymbolKind` a los hosts —
+/// `kind` viene ya como string corta (`"fn"`, `"struct"`, `"method"`, …).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentSymbolEntry {
+    pub name: String,
+    pub kind: String,
+    pub line: usize,
+    pub col: usize,
+    pub container: Option<String>,
+    pub depth: u32,
 }
 
 /// Info de signatureHelp activa.
@@ -192,6 +215,11 @@ impl LspClient for NoopLspClient {
         std::collections::HashMap::new()
     }
     fn clear_workspace_edit(&mut self) {}
+    fn request_document_symbols(&mut self, _: &Path) {}
+    fn latest_document_symbols(&self) -> Vec<DocumentSymbolEntry> {
+        Vec::new()
+    }
+    fn clear_document_symbols(&mut self) {}
 }
 
 // ---------------------------------------------------------------------
@@ -218,6 +246,9 @@ struct SharedInner {
     references: Vec<DefinitionLocation>,
     /// Última WorkspaceEdit (de rename). Mapeo path → edits.
     workspace_edit: HashMap<PathBuf, Vec<TextEdit>>,
+    /// Última lista de document symbols (flattened del árbol que devuelve
+    /// el server). Se sobreescribe en cada request.
+    document_symbols: Vec<DocumentSymbolEntry>,
     /// IDs de requests pendientes para distinguir responses; el reader
     /// usa estos sets para routear cada response al handler correcto.
     pending_completion_ids: std::collections::HashSet<i64>,
@@ -227,6 +258,7 @@ struct SharedInner {
     pending_signature_help_ids: std::collections::HashSet<i64>,
     pending_references_ids: std::collections::HashSet<i64>,
     pending_rename_ids: std::collections::HashSet<i64>,
+    pending_document_symbols_ids: std::collections::HashSet<i64>,
 }
 
 type SharedState = Arc<Mutex<SharedInner>>;
@@ -551,6 +583,32 @@ impl LspClient for RustAnalyzerClient {
         }
     }
 
+    fn request_document_symbols(&mut self, path: &Path) {
+        let id = self.alloc_id();
+        if let Ok(mut s) = self.state.lock() {
+            s.pending_document_symbols_ids.insert(id);
+        }
+        let req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "textDocument/documentSymbol",
+            "params": {
+                "textDocument": { "uri": format!("file://{}", path.display()) }
+            }
+        });
+        self.send_raw(req.to_string());
+    }
+
+    fn latest_document_symbols(&self) -> Vec<DocumentSymbolEntry> {
+        self.state.lock().map(|s| s.document_symbols.clone()).unwrap_or_default()
+    }
+
+    fn clear_document_symbols(&mut self) {
+        if let Ok(mut s) = self.state.lock() {
+            s.document_symbols.clear();
+        }
+    }
+
     fn did_open(&mut self, path: &Path, language: &str, text: &str) {
         self.versions.insert(path.to_path_buf(), 1);
         let notif = serde_json::json!({
@@ -737,9 +795,11 @@ fn handle_response(id: i64, json: &serde_json::Value, state: &SharedState) {
             s.pending_signature_help_ids.remove(&id),
             s.pending_references_ids.remove(&id),
             s.pending_rename_ids.remove(&id),
+            s.pending_document_symbols_ids.remove(&id),
         )
     };
-    let (was_completion, was_hover, was_def, was_fmt, was_sig, was_refs, was_rename) = flags;
+    let (was_completion, was_hover, was_def, was_fmt, was_sig, was_refs, was_rename, was_doc_sym) =
+        flags;
     if was_completion {
         handle_completion_response(json, state);
     }
@@ -761,6 +821,132 @@ fn handle_response(id: i64, json: &serde_json::Value, state: &SharedState) {
     if was_rename {
         handle_rename_response(json, state);
     }
+    if was_doc_sym {
+        handle_document_symbols_response(json, state);
+    }
+}
+
+/// Parsea la respuesta de `textDocument/documentSymbol`. Devuelve dos
+/// formatos posibles según la versión del server:
+///
+/// - `DocumentSymbol[]` (jerárquico, moderno) — el que usa rust-analyzer.
+/// - `SymbolInformation[]` (plano, legacy) — fallback razonable.
+///
+/// Ambos se flatten a `Vec<DocumentSymbolEntry>` con depth para que el
+/// caller pueda indentar visualmente.
+fn handle_document_symbols_response(json: &serde_json::Value, state: &SharedState) {
+    let Some(result) = json.get("result") else { return };
+    if result.is_null() {
+        if let Ok(mut s) = state.lock() {
+            s.document_symbols.clear();
+        }
+        return;
+    }
+    let mut out: Vec<DocumentSymbolEntry> = Vec::new();
+    if let Some(arr) = result.as_array() {
+        for item in arr {
+            // Distingue por la presencia de "selectionRange" (sólo en
+            // DocumentSymbol). SymbolInformation tiene "location" en
+            // su lugar.
+            if item.get("selectionRange").is_some() {
+                flatten_document_symbol(item, None, 0, &mut out);
+            } else if item.get("location").is_some() {
+                if let Some(entry) = parse_symbol_information(item) {
+                    out.push(entry);
+                }
+            }
+        }
+    }
+    if let Ok(mut s) = state.lock() {
+        s.document_symbols = out;
+    }
+}
+
+/// Flatten recursivo de `DocumentSymbol`. `parent` es el nombre del
+/// contenedor (para que `container` quede poblado en métodos/campos).
+fn flatten_document_symbol(
+    node: &serde_json::Value,
+    parent: Option<&str>,
+    depth: u32,
+    out: &mut Vec<DocumentSymbolEntry>,
+) {
+    let name = node.get("name").and_then(|v| v.as_str()).unwrap_or("?").to_string();
+    let kind_num = node.get("kind").and_then(|v| v.as_u64()).unwrap_or(0);
+    let kind = symbol_kind_label(kind_num);
+    // `selectionRange.start` es la pos del identificador (lo que el
+    // usuario quiere ver al saltar). `range.start` apuntaría al `{` de
+    // la definición — menos útil para outline.
+    let (line, col) = node
+        .get("selectionRange")
+        .and_then(|r| r.get("start"))
+        .and_then(parse_position)
+        .or_else(|| node.get("range").and_then(|r| r.get("start")).and_then(parse_position))
+        .unwrap_or((0, 0));
+    out.push(DocumentSymbolEntry {
+        name: name.clone(),
+        kind,
+        line,
+        col,
+        container: parent.map(|s| s.to_string()),
+        depth,
+    });
+    if let Some(children) = node.get("children").and_then(|c| c.as_array()) {
+        for child in children {
+            flatten_document_symbol(child, Some(&name), depth + 1, out);
+        }
+    }
+}
+
+fn parse_symbol_information(item: &serde_json::Value) -> Option<DocumentSymbolEntry> {
+    let name = item.get("name")?.as_str()?.to_string();
+    let kind_num = item.get("kind").and_then(|v| v.as_u64()).unwrap_or(0);
+    let location = item.get("location")?;
+    let (line, col) = location.get("range").and_then(|r| r.get("start")).and_then(parse_position)?;
+    let container = item
+        .get("containerName")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    Some(DocumentSymbolEntry {
+        name,
+        kind: symbol_kind_label(kind_num),
+        line,
+        col,
+        container,
+        depth: 0,
+    })
+}
+
+fn parse_position(p: &serde_json::Value) -> Option<(usize, usize)> {
+    let line = p.get("line")?.as_u64()? as usize;
+    let col = p.get("character")?.as_u64()? as usize;
+    Some((line, col))
+}
+
+/// Mapea el `SymbolKind` numérico del LSP a la etiqueta corta que el
+/// outline pinta. Sólo cubre las que el usuario suele ver — el resto
+/// va a `"sym"`. Lista canónica: <https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#symbolKind>
+fn symbol_kind_label(kind: u64) -> String {
+    match kind {
+        2 => "mod",
+        5 => "class",
+        6 => "method",
+        7 => "property",
+        8 => "field",
+        9 => "ctor",
+        10 => "enum",
+        11 => "iface",
+        12 => "fn",
+        13 => "var",
+        14 => "const",
+        15 => "str",
+        18 => "arr",
+        22 => "variant",
+        23 => "struct",
+        26 => "type",
+        _ => "sym",
+    }
+    .to_string()
 }
 
 fn handle_rename_response(json: &serde_json::Value, state: &SharedState) {
@@ -1240,6 +1426,99 @@ mod tests {
         let we = s.lock().unwrap().workspace_edit.clone();
         assert_eq!(we.len(), 1);
         assert_eq!(we.get(&PathBuf::from("/tmp/x.rs")).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn handle_document_symbols_jerarquico() {
+        let s = make_state();
+        // Estructura: struct Foo { fn bar(), fn baz() } + fn top()
+        let json = serde_json::json!({
+            "id": 1,
+            "result": [
+                {
+                    "name": "Foo",
+                    "kind": 23, // struct
+                    "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 10, "character": 1 } },
+                    "selectionRange": { "start": { "line": 0, "character": 7 }, "end": { "line": 0, "character": 10 } },
+                    "children": [
+                        {
+                            "name": "bar",
+                            "kind": 6, // method
+                            "range": { "start": { "line": 2, "character": 4 }, "end": { "line": 4, "character": 5 } },
+                            "selectionRange": { "start": { "line": 2, "character": 7 }, "end": { "line": 2, "character": 10 } }
+                        },
+                        {
+                            "name": "baz",
+                            "kind": 6,
+                            "range": { "start": { "line": 6, "character": 4 }, "end": { "line": 8, "character": 5 } },
+                            "selectionRange": { "start": { "line": 6, "character": 7 }, "end": { "line": 6, "character": 10 } }
+                        }
+                    ]
+                },
+                {
+                    "name": "top",
+                    "kind": 12, // function
+                    "range": { "start": { "line": 12, "character": 0 }, "end": { "line": 14, "character": 1 } },
+                    "selectionRange": { "start": { "line": 12, "character": 3 }, "end": { "line": 12, "character": 6 } }
+                }
+            ]
+        });
+        handle_document_symbols_response(&json, &s);
+        let syms = s.lock().unwrap().document_symbols.clone();
+        assert_eq!(syms.len(), 4, "esperaba 4 entradas flattening");
+
+        assert_eq!(syms[0].name, "Foo");
+        assert_eq!(syms[0].kind, "struct");
+        assert_eq!(syms[0].line, 0);
+        assert_eq!(syms[0].depth, 0);
+        assert_eq!(syms[0].container, None);
+
+        assert_eq!(syms[1].name, "bar");
+        assert_eq!(syms[1].kind, "method");
+        assert_eq!(syms[1].line, 2);
+        assert_eq!(syms[1].depth, 1);
+        assert_eq!(syms[1].container.as_deref(), Some("Foo"));
+
+        assert_eq!(syms[2].name, "baz");
+        assert_eq!(syms[2].depth, 1);
+        assert_eq!(syms[2].container.as_deref(), Some("Foo"));
+
+        assert_eq!(syms[3].name, "top");
+        assert_eq!(syms[3].kind, "fn");
+        assert_eq!(syms[3].depth, 0);
+    }
+
+    #[test]
+    fn handle_document_symbols_legacy_symbolinformation() {
+        let s = make_state();
+        // Formato viejo: SymbolInformation[] (plano + location).
+        let json = serde_json::json!({
+            "id": 1,
+            "result": [
+                {
+                    "name": "main",
+                    "kind": 12,
+                    "location": {
+                        "uri": "file:///tmp/x.rs",
+                        "range": { "start": { "line": 0, "character": 3 }, "end": { "line": 0, "character": 7 } }
+                    }
+                },
+                {
+                    "name": "helper",
+                    "kind": 12,
+                    "containerName": "main",
+                    "location": {
+                        "uri": "file:///tmp/x.rs",
+                        "range": { "start": { "line": 5, "character": 3 }, "end": { "line": 5, "character": 9 } }
+                    }
+                }
+            ]
+        });
+        handle_document_symbols_response(&json, &s);
+        let syms = s.lock().unwrap().document_symbols.clone();
+        assert_eq!(syms.len(), 2);
+        assert_eq!(syms[1].name, "helper");
+        assert_eq!(syms[1].container.as_deref(), Some("main"));
     }
 
     #[test]

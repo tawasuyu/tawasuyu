@@ -288,6 +288,7 @@ distintos a propósito.
 | `llimphi-module-fif`           | `editor.find-in-files`   | Ctrl+Shift+F      |
 | `llimphi-module-file-picker`   | `editor.file-picker`     | Ctrl+P            |
 | `llimphi-module-shuma-term`    | `editor.terminal`        | Ctrl+`            |
+| `llimphi-module-symbol-outline`| `editor.symbol-outline`  | Ctrl+Shift+O      |
 
 | Crate (Tier 2 runtime)         | Rol                                                                              |
 |--------------------------------|----------------------------------------------------------------------------------|
@@ -297,8 +298,6 @@ distintos a propósito.
 
 - `llimphi-module-diff-viewer` — visualización side-by-side de cambios.
 - `llimphi-module-mini-map` — overlay de minimap del buffer activo.
-- `llimphi-module-symbol-outline` — outline del documento via LSP
-  `documentSymbol`.
 
 ### Caso particular: `llimphi-module-command-palette`
 
