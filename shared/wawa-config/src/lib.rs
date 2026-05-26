@@ -85,6 +85,60 @@ pub const CONFIG_DIR: &str = "wawa";
 /// Nombre del archivo canónico.
 pub const CONFIG_FILE: &str = "config.json";
 
+/// Mapea el `theme_variant` de la config (lowercase, libre) al nombre
+/// canónico que reconoce `llimphi_theme::Theme::by_name` (capitalizado).
+/// Devuelve `None` si el variant no es uno de los presets conocidos —
+/// el consumidor decide qué hacer (fallback a dark, error, etc.).
+///
+/// Los presets de Llimphi tienen `name: &'static str` capitalizado;
+/// los users del CLI y el panel escriben en lowercase. Este shim
+/// mantiene a `wawa-config` UI-agnóstico (no depende de
+/// `llimphi-theme`) y a la vez evita que cada consumidor reimplemente
+/// el casing.
+pub fn canonical_theme_name(variant: &str) -> Option<&'static str> {
+    match variant.to_ascii_lowercase().as_str() {
+        "dark" => Some("Dark"),
+        "light" => Some("Light"),
+        "aurora" => Some("Aurora"),
+        "sunset" => Some("Sunset"),
+        _ => None,
+    }
+}
+
+/// Devuelve el color RGB de un acento por id. `default` retorna `None`
+/// para que el consumidor no toque el accent del theme base. La paleta
+/// es la misma del web (`gioser-web/styles.css`): tinte por cuadrante
+/// + accent gioser por default.
+///
+/// Es un trio RGB (no un tipo de `peniko`) para no obligar a depender
+/// de `llimphi-raster` desde acá. Los consumidores Llimphi hacen:
+///
+/// ```ignore
+/// if let Some([r,g,b]) = wawa_config::accent_rgb(&cfg.accent) {
+///     let c = llimphi_theme::Color::from_rgba8(r, g, b, 255);
+///     theme.accent = c;
+///     theme.border_focus = c;
+/// }
+/// ```
+pub fn accent_rgb(accent: &str) -> Option<[u8; 3]> {
+    match accent {
+        "default" => None,
+        "gioser" => Some([0x6E, 0x8C, 0xDC]),
+        "unanchay" => Some([0xB9, 0xC9, 0xE8]),
+        "yachay" => Some([0xE8, 0xC9, 0x7A]),
+        "ruway" => Some([0xE8, 0x9B, 0x6E]),
+        "ukupacha" => Some([0x8F, 0xB5, 0x8C]),
+        _ => None,
+    }
+}
+
+/// Lista de variants de theme reconocidas — útil para validadores y
+/// generadores de docs/UI. Orden estable.
+pub const THEME_VARIANTS: &[&str] = &["dark", "light", "aurora", "sunset"];
+
+/// Lista de acentos reconocidos. `"default"` significa "no override".
+pub const ACCENTS: &[&str] = &["default", "gioser", "unanchay", "yachay", "ruway", "ukupacha"];
+
 /// Identificadores estables de los módulos del SO conocidos. Las apps
 /// son libres de leer/escribir otros, pero estos son los que el panel
 /// expone por default — mantenerlos como `const` ayuda a no escribir
@@ -413,6 +467,41 @@ mod tests {
         assert!(!c.module_enabled(modules::MIRADA));
         c.toggle_module("inexistente");
         assert!(!c.module_enabled("inexistente"));
+    }
+
+    #[test]
+    fn canonical_theme_maps_variants() {
+        assert_eq!(canonical_theme_name("dark"), Some("Dark"));
+        assert_eq!(canonical_theme_name("LIGHT"), Some("Light"));
+        assert_eq!(canonical_theme_name("Aurora"), Some("Aurora"));
+        assert_eq!(canonical_theme_name("sunset"), Some("Sunset"));
+        assert_eq!(canonical_theme_name("hyperdark"), None);
+    }
+
+    #[test]
+    fn accent_rgb_default_is_none() {
+        assert_eq!(accent_rgb("default"), None);
+        assert_eq!(accent_rgb("gioser"), Some([0x6E, 0x8C, 0xDC]));
+        assert_eq!(accent_rgb("ukupacha"), Some([0x8F, 0xB5, 0x8C]));
+        assert_eq!(accent_rgb("desconocido"), None);
+    }
+
+    #[test]
+    fn constants_match_helpers() {
+        // THEME_VARIANTS y ACCENTS deben coincidir con lo que aceptan
+        // los helpers — guarda contra agregar uno y olvidar el otro.
+        for v in THEME_VARIANTS {
+            assert!(canonical_theme_name(v).is_some(), "variant {v} sin mapeo");
+        }
+        for a in ACCENTS {
+            // accent_rgb("default") es None por diseño; el resto debe
+            // tener color asignado.
+            if *a == "default" {
+                assert_eq!(accent_rgb(a), None);
+            } else {
+                assert!(accent_rgb(a).is_some(), "accent {a} sin color");
+            }
+        }
     }
 }
 

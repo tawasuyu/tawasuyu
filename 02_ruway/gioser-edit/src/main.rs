@@ -450,9 +450,7 @@ impl App for EditorApp {
         // de la sesión local. La sesión sigue siendo útil cuando el
         // bus no está disponible o no fue inicializado todavía.
         let wawa_cfg = wawa_config::WawaConfig::load();
-        if let Some(t) = Theme::by_name(&wawa_cfg.theme_variant) {
-            model.theme = t;
-        }
+        model.theme = theme_from_wawa(&wawa_cfg, &model.theme);
         let _ = rimay_localize::set_locale(&wawa_cfg.lang);
         // Subscripción: cualquier cambio futuro reentra al update.
         let handle_clone = handle.clone();
@@ -528,12 +526,16 @@ impl App for EditorApp {
             Msg::WawaConfigChanged(cfg) => {
                 let mut m = model;
                 let mut changes = Vec::new();
-                if let Some(t) = Theme::by_name(&cfg.theme_variant) {
-                    if t.name != m.theme.name {
-                        m.theme = t;
-                        changes.push("tema");
-                    }
+                let next_theme = theme_from_wawa(&cfg, &m.theme);
+                // Comparamos por color de accent (cubre acent override)
+                // y por nombre del preset base. Cambio en cualquiera = re-aplicar.
+                if next_theme.name != m.theme.name {
+                    changes.push("tema");
                 }
+                if next_theme.accent != m.theme.accent {
+                    changes.push("acento");
+                }
+                m.theme = next_theme;
                 if cfg.lang != rimay_localize::current_locale() {
                     let _ = rimay_localize::set_locale(&cfg.lang);
                     changes.push("idioma");
@@ -2983,6 +2985,23 @@ fn restore_session(mut model: Model, sess: Session) -> Model {
         }
     }
     model
+}
+
+/// Construye el Theme efectivo a partir de la config del bus. Toma el
+/// `theme_variant` con `Theme::by_name` (via `canonical_theme_name`) y,
+/// si hay `accent` override, le sobreescribe `accent` y `border_focus`.
+/// Si no encuentra el variant del bus, conserva el `fallback` (lo
+/// usamos para no perder un theme valido al recibir basura).
+fn theme_from_wawa(cfg: &wawa_config::WawaConfig, fallback: &Theme) -> Theme {
+    let mut t = wawa_config::canonical_theme_name(&cfg.theme_variant)
+        .and_then(Theme::by_name)
+        .unwrap_or(*fallback);
+    if let Some([r, g, b]) = wawa_config::accent_rgb(&cfg.accent) {
+        let c = llimphi_ui::llimphi_raster::peniko::Color::from_rgba8(r, g, b, 255);
+        t.accent = c;
+        t.border_focus = c;
+    }
+    t
 }
 
 fn main() {

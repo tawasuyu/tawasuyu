@@ -115,10 +115,9 @@ const LANGS: &[(&str, &str)] = &[
     ("qu-PE", "Runasimi"),
 ];
 
-/// Acentos disponibles. El acento define el color de tinte cuando una
-/// categoría está activa en la nav y los chips seleccionados; no
-/// modifica el theme base. El identificador es libre, lo mapea
-/// `accent_color()`.
+/// Acentos disponibles para la UI. El id (izq) es lo que persiste en
+/// `WawaConfig::accent`; el label (der) es lo que ve el usuario. El
+/// color real lo resuelve `wawa_config::accent_rgb(id)`.
 const ACCENTS: &[(&str, &str)] = &[
     ("default", "gioser"),
     ("unanchay", "unanchay"),
@@ -404,19 +403,24 @@ impl App for Panel {
             }
             Msg::SetThemeVariant(v) => {
                 m.cfg.theme_variant = v;
+                autosave(&mut m);
             }
             Msg::SetAccent(a) => {
                 m.cfg.accent = a;
+                autosave(&mut m);
             }
             Msg::SetLang(l) => {
                 let _ = rimay_localize::set_locale(&l);
                 m.cfg.lang = l;
+                autosave(&mut m);
             }
             Msg::SetTimeFmt(is_24h) => {
                 m.cfg.timefmt_24h = is_24h;
+                autosave(&mut m);
             }
             Msg::ToggleModule(id) => {
                 m.cfg.toggle_module(&id);
+                autosave(&mut m);
             }
             Msg::LaunchApp(bin) => {
                 match std::process::Command::new(&bin).spawn() {
@@ -438,6 +442,10 @@ impl App for Panel {
             Msg::Reset => {
                 m.cfg = WawaConfig::default();
                 let _ = rimay_localize::set_locale(&m.cfg.lang);
+                autosave(&mut m);
+                // El status del autosave queda como "↻ aplicado"; lo
+                // reemplazamos por el mensaje específico de reset para
+                // que el usuario sepa qué pasó.
                 m.status = rimay_localize::t("wawa-panel-reset");
             }
             Msg::ConfigChanged(new_cfg) => {
@@ -487,8 +495,13 @@ impl App for Panel {
     }
 
     fn view(model: &Model) -> View<Msg> {
-        let theme = current_theme(&model.cfg.theme_variant);
-        let accent = accent_color(&model.cfg.accent).unwrap_or(theme.accent);
+        // `theme_from_cfg` ya incorpora el acento override (si lo hay).
+        // El parámetro separado `accent` se conserva para los chips y
+        // marcadores donde queremos el acento "puro" aunque el theme
+        // ya lo tenga aplicado (p. ej. para no perder visibilidad si
+        // un futuro variant lo pisa con otra cosa).
+        let theme = theme_from_cfg(&model.cfg);
+        let accent = theme.accent;
 
         let header = build_header(&theme);
         let nav = build_nav(model, &theme, accent);
@@ -528,27 +541,32 @@ fn main() {
     llimphi_ui::run::<Panel>();
 }
 
+/// Persiste la config y actualiza el status. Llamada después de cada
+/// mutación del Model::cfg para reflejar el cambio en disco (y por
+/// ende en el bus) sin requerir Save explícito.
+fn autosave(m: &mut Model) {
+    match m.cfg.save() {
+        Ok(_) => m.status = "↻ aplicado".into(),
+        Err(e) => m.status = format!("· save: {e}"),
+    }
+}
+
 // =====================================================================
 // Resolución del theme + acento
 // =====================================================================
 
-fn current_theme(variant: &str) -> Theme {
-    Theme::by_name(variant).unwrap_or_else(Theme::dark)
-}
-
-fn accent_color(id: &str) -> Option<llimphi_ui::llimphi_raster::peniko::Color> {
-    use llimphi_ui::llimphi_raster::peniko::Color;
-    // Paleta gioser por dominio (espejo del CSS del web): unanchay (azul
-    // pálido), yachay (oro), ruway (naranja), ukupacha (verde oliva).
-    let c = match id {
-        "default" => return None,
-        "unanchay" => Color::from_rgba8(0xB9, 0xC9, 0xE8, 255),
-        "yachay" => Color::from_rgba8(0xE8, 0xC9, 0x7A, 255),
-        "ruway" => Color::from_rgba8(0xE8, 0x9B, 0x6E, 255),
-        "ukupacha" => Color::from_rgba8(0x8F, 0xB5, 0x8C, 255),
-        _ => return None,
-    };
-    Some(c)
+/// Construye el Theme efectivo a partir de la config: variant + accent
+/// override. Si `variant` no se reconoce, cae a Dark. Si `accent` es
+/// `"default"` o desconocido, deja el accent del preset base.
+fn theme_from_cfg(cfg: &WawaConfig) -> Theme {
+    let canonical = wawa_config::canonical_theme_name(&cfg.theme_variant).unwrap_or("Dark");
+    let mut t = Theme::by_name(canonical).unwrap_or_else(Theme::dark);
+    if let Some([r, g, b]) = wawa_config::accent_rgb(&cfg.accent) {
+        let c = llimphi_ui::llimphi_raster::peniko::Color::from_rgba8(r, g, b, 255);
+        t.accent = c;
+        t.border_focus = c;
+    }
+    t
 }
 
 // =====================================================================
