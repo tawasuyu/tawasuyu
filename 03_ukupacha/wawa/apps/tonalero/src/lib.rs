@@ -1,30 +1,23 @@
 // =============================================================================
 //  renaser :: apps/tonalero — Fase 22 :: la Configuracion como nodo del grafo
 // -----------------------------------------------------------------------------
-//  El testigo visual del bucle de Configuracion. Pinta cinco bandas
-//  horizontales con los cinco colores de la paleta activa: primario,
-//  secundario, fondo, texto y acento. Tambien rotula un caracter ASCII bajo
-//  la primera banda con el codigo de idioma para que se vea cambiar al
-//  vuelo.
+//  El testigo visual del bucle de Configuracion. Muestra los cinco colores de
+//  la paleta activa como swatches etiquetados, rotula el idioma, y propone
+//  una rotacion al pulsar SPACE. Toda la lectura es PASIVA: el kernel ya dejo
+//  idioma y paleta en el ContextoCapacidades antes de cederle este `tick`;
+//  la app las lee con dos capacidades de veintipocos bytes, sin sondeo, sin
+//  bloqueo, frame-lock perfecto.
 //
-//  La app jamas pregunta al kernel "cual es la paleta". No hay sondeo, no
-//  hay bloqueo: en cada `tick`, el kernel ya copio idioma y paleta dentro
-//  del ContextoCapacidades antes de cederle el control; la app las lee con
-//  dos capacidades PASIVAS (`sys_config_idioma` y `sys_config_paleta`) que
-//  son, fisicamente, leer veintidos bytes del contexto. Inyeccion
-//  unidireccional, frame-lock perfecto.
-//
-//  La barra espaciadora propone una paleta nueva: la app rota los cinco
-//  colores y llama a `sys_config_proponer`. El kernel engendra un nodo
-//  nuevo del grafo, reancla el manifiesto al hash recien creado, y el
-//  proximo `tick` —de esta app y de TODAS las demas— pinta con la paleta
-//  nueva. Sin estados mutables globales: el "ahora" es el hash al que
-//  apunta el manifiesto vivo.
+//  La barra espaciadora invoca `sys_config_proponer`: el kernel engendra un
+//  nodo nuevo del grafo, reancla el manifiesto al hash recien creado, y el
+//  proximo fotograma —de esta app y de TODAS las demas— pinta con la paleta
+//  nueva. Sin estados mutables globales: el "ahora" es el hash al que apunta
+//  el manifiesto vivo.
 // =============================================================================
 
 #![no_std]
 
-// --- Las capacidades que el kernel inyecta. Nada mas existe para esta app. ---
+// --- Las capacidades del host que el kernel inyecta a esta app. -----------
 #[link(wasm_import_module = "renaser")]
 extern "C" {
     fn sys_render_frame(ptr: u32, len: u32);
@@ -39,37 +32,43 @@ fn al_fallar(_: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
-// --- Geometria. DEBE encajar con la region que `boot` asigna a esta app. ---
+// =============================================================================
+//  Geometria del lienzo. DEBE encajar con la region que `boot` reservo en su
+//  GENESIS — el kernel rechaza cualquier fotograma de otro tamaño.
+// =============================================================================
+
 const ANCHO: usize = 480;
 const ALTO: usize = 300;
-const BANDA: usize = ALTO / 5; // 60 px por banda
 
-/// El lienzo, en la propia memoria lineal. El kernel jamas lo ve; solo recibe
-/// el (ptr, len) que vuelca `sys_render_frame`. Cuatro bytes por pixel; el
-/// kernel los decodifica como BGRA.
+const MARGEN: usize = 12;
+const TITULO_ALTO: usize = 28;
+const PIE_ALTO: usize = 20;
+const SWATCHES_GAP: usize = 6;
+
+const NUM_SWATCHES: usize = 5;
+const ETIQUETAS: [&[u8]; NUM_SWATCHES] = [
+    b"PRIMARIO",
+    b"SECUNDARIO",
+    b"FONDO",
+    b"TEXTO",
+    b"ACENTO",
+];
+
+const ESCALA_TITULO: usize = 3;
+const ESCALA_ETIQUETA: usize = 2;
+const ESCALA_PIE: usize = 2;
+
+// =============================================================================
+//  Estado de la app — un puñado de estaticos en SU propia memoria lineal.
+// =============================================================================
+
 static mut LIENZO: [u32; ANCHO * ALTO] = [0; ANCHO * ALTO];
-
-/// La paleta que el kernel inyecta. 5 colores RGBA8, en orden:
-/// primario, secundario, fondo, texto, acento. La rellena cada `tick`
-/// desde el contexto, asi que un cambio remoto la refleja al siguiente
-/// fotograma.
 static mut PALETA: [u8; 20] = [0; 20];
-
-/// El codigo de idioma activo (ISO 639-1 empaquetado en LE). Tambien se
-/// refresca cada `tick` desde el contexto.
 static mut IDIOMA: u16 = 0;
-
-/// Anti-rebote del SPACE. La capacidad de teclado entrega el scancode crudo;
-/// si el usuario mantiene la barra, llegaria un torrente. Aceptamos una sola
-/// propuesta cada vez que se libera la tecla.
 static mut SPACE_PRESS: bool = false;
 
 #[no_mangle]
 pub extern "C" fn init() {
-    // `init` solo refresca contexto y vuelca el primer fotograma. El estado
-    // visual entero se reconstruye en cada `tick` a partir del contexto:
-    // jamas hay divergencia entre "lo que la app cree" y "lo que el kernel
-    // sabe".
     refrescar_contexto();
     pintar();
     volcar();
@@ -79,7 +78,6 @@ pub extern "C" fn init() {
 pub extern "C" fn tick() {
     refrescar_contexto();
 
-    // Anti-rebote: contar como pulsacion solo el flanco de subida.
     let scancode = unsafe { sys_get_scancode() };
     let space_ahora = scancode == 0x39; // SPACE en scancode set 1
     if space_ahora && !unsafe { SPACE_PRESS } {
@@ -91,68 +89,94 @@ pub extern "C" fn tick() {
     volcar();
 }
 
-/// Lee idioma y paleta del contexto de capacidades. Dos llamadas pasivas: no
-/// hay E/S, no hay bloqueo, no hay sondeo del grafo. El kernel ya las dejo
-/// ahi al iniciar este `tick`.
+// =============================================================================
+//  Lectura del contexto y propuesta de cambio — el cinturon de Configuracion
+// =============================================================================
+
 fn refrescar_contexto() {
     let idioma = unsafe { sys_config_idioma() } as u16;
     unsafe { IDIOMA = idioma };
-    // SEGURIDAD: PALETA tiene 20 bytes, el kernel valida los limites del
-    // puntero contra esta memoria lineal antes de copiar.
+    // SEGURIDAD: PALETA mide 20 bytes en esta memoria lineal; el kernel
+    // valida los limites del puntero antes de copiar.
     let _ = unsafe { sys_config_paleta(core::ptr::addr_of_mut!(PALETA) as u32) };
 }
 
-/// Propone una rotacion de la paleta: los cinco colores se desplazan un
-/// puesto. Si la propuesta llega (foco), el siguiente `tick` ya pinta con la
-/// paleta nueva — el `refrescar_contexto` la encontrara en el contexto.
 fn proponer_rotacion() {
     let actual = unsafe { PALETA };
     let mut rotada = [0u8; 20];
     rotada[0..16].copy_from_slice(&actual[4..20]);
     rotada[16..20].copy_from_slice(&actual[0..4]);
     let idioma = unsafe { IDIOMA } as u32;
-    // SEGURIDAD: pasamos un puntero a un local valido durante toda la llamada;
-    // el kernel solo lee 20 bytes y valida limites por su cuenta.
     let _ = unsafe { sys_config_proponer(idioma, rotada.as_ptr() as u32) };
 }
 
-/// Pinta las cinco bandas en el lienzo. Cada banda usa el color RGBA8
-/// correspondiente de la paleta. El kernel decodifica el lienzo como BGRA
-/// (lee byte 0 como B, 1 como G, 2 como R), asi que componemos el u32 con
-/// los bytes en ese orden.
+// =============================================================================
+//  Pintado del fotograma — un bloque encima del otro, sin sorpresas
+// =============================================================================
+
 fn pintar() {
     let paleta = unsafe { PALETA };
     let lienzo: &mut [u32] = unsafe { &mut *core::ptr::addr_of_mut!(LIENZO) };
-    for banda in 0..5 {
-        let r = paleta[banda * 4];
-        let g = paleta[banda * 4 + 1];
-        let b = paleta[banda * 4 + 2];
-        // BGRA en memoria => u32 LE con B en el byte bajo.
-        let color = (b as u32) | ((g as u32) << 8) | ((r as u32) << 16);
-        let y_inicio = banda * BANDA;
-        let y_fin = if banda == 4 { ALTO } else { y_inicio + BANDA };
-        for fila in y_inicio..y_fin {
-            let base = fila * ANCHO;
-            for col in 0..ANCHO {
-                lienzo[base + col] = color;
-            }
-        }
+
+    let fondo = color_u32(paleta, 2);
+    let tinta = color_u32(paleta, 3);
+    let acento = color_u32(paleta, 4);
+
+    // 1. Fondo plano del lienzo entero.
+    rellenar_rect(lienzo, 0, 0, ANCHO, ALTO, fondo);
+
+    // 2. Banda del titulo: barra horizontal con TONALERO centrado y un
+    //    subrayado fino en color acento — un acabado simple, no decorativo.
+    rellenar_rect(lienzo, 0, 0, ANCHO, TITULO_ALTO, color_atenuar(paleta, 2, 0xE0));
+    let titulo = b"TONALERO";
+    let titulo_ancho = ancho_texto(titulo, ESCALA_TITULO);
+    let titulo_x = (ANCHO - titulo_ancho) / 2;
+    let titulo_y = (TITULO_ALTO - 7 * ESCALA_TITULO) / 2;
+    dibujar_texto(lienzo, titulo, titulo_x, titulo_y, ESCALA_TITULO, tinta);
+    rellenar_rect(lienzo, 0, TITULO_ALTO, ANCHO, 2, acento);
+
+    // 3. Cinco filas de swatch + etiqueta. Cada swatch es una baldosa de
+    //    color con un borde sutil; la etiqueta vive a su derecha, en tinta
+    //    del color "texto" de la paleta.
+    let area_swatches_y = TITULO_ALTO + 4 + MARGEN;
+    let area_swatches_alto = ALTO - area_swatches_y - PIE_ALTO - MARGEN;
+    let fila_alto =
+        (area_swatches_alto - SWATCHES_GAP * (NUM_SWATCHES - 1)) / NUM_SWATCHES;
+    let swatch_ancho = 70_usize;
+    let swatch_x = MARGEN * 2;
+    let etiqueta_x = swatch_x + swatch_ancho + MARGEN;
+
+    for (i, etiqueta) in ETIQUETAS.iter().enumerate() {
+        let y = area_swatches_y + i * (fila_alto + SWATCHES_GAP);
+        let c = color_u32(paleta, i);
+        // Borde fino del swatch — un marco un tono mas oscuro que el color.
+        let borde = color_atenuar(paleta, i, 0x80);
+        rellenar_rect(lienzo, swatch_x, y, swatch_ancho, fila_alto, borde);
+        rellenar_rect(
+            lienzo,
+            swatch_x + 2,
+            y + 2,
+            swatch_ancho - 4,
+            fila_alto - 4,
+            c,
+        );
+        // Etiqueta vertical-centrada respecto al swatch.
+        let texto_y = y + (fila_alto - 7 * ESCALA_ETIQUETA) / 2;
+        dibujar_texto(lienzo, etiqueta, etiqueta_x, texto_y, ESCALA_ETIQUETA, tinta);
     }
 
-    // Rotular las dos letras del idioma (ISO 639-1) en la esquina superior
-    // izquierda. Cada letra ocupa una matriz 5x7 que se dibuja con bloques
-    // de 4x4 pixeles: ocho colores por pixel, sin tipografias. Es fea pero
-    // legible — MVP feo primero.
+    // 4. Pie: idioma activo + atajo. "ES   SPACE: ROTAR".
+    let pie_y = ALTO - PIE_ALTO;
+    rellenar_rect(lienzo, 0, pie_y - 2, ANCHO, 2, acento);
+    let mut linea: [u8; 32] = [b' '; 32];
     let idioma = unsafe { IDIOMA };
-    let letra_a = (idioma & 0xFF) as u8;
-    let letra_b = ((idioma >> 8) & 0xFF) as u8;
-    // El color del texto (cuarto color de la paleta).
-    let tr = paleta[12];
-    let tg = paleta[13];
-    let tb = paleta[14];
-    let tinta = (tb as u32) | ((tg as u32) << 8) | ((tr as u32) << 16);
-    rotular_letra(lienzo, 16, 10, letra_a, tinta);
-    rotular_letra(lienzo, 16 + 6 * 5, 10, letra_b, tinta);
+    linea[0] = ((idioma & 0xFF) as u8).to_ascii_uppercase();
+    linea[1] = (((idioma >> 8) & 0xFF) as u8).to_ascii_uppercase();
+    let cola = b"   SPACE: ROTAR";
+    linea[3..3 + cola.len()].copy_from_slice(cola);
+    let pie_texto = &linea[..3 + cola.len()];
+    let pie_texto_y = pie_y + (PIE_ALTO - 7 * ESCALA_PIE) / 2;
+    dibujar_texto(lienzo, pie_texto, MARGEN * 2, pie_texto_y, ESCALA_PIE, tinta);
 }
 
 fn volcar() {
@@ -160,47 +184,124 @@ fn volcar() {
     unsafe { sys_render_frame(lienzo.as_ptr() as u32, (ANCHO * ALTO * 4) as u32) };
 }
 
-/// Dibuja una letra ASCII mayuscula en (x, y) con bloques de 5 px de lado.
-/// La matriz es 5x7 columnas/filas; lo justo para leer "ES", "EN" o "QU".
-/// Letras no reconocidas se omiten — la rotulacion sirve al testigo visual,
-/// no a la lectura general.
-fn rotular_letra(lienzo: &mut [u32], x: usize, y: usize, c: u8, tinta: u32) {
-    let glifo: [u8; 7] = match c {
-        b'a'..=b'z' => glifo_letra(c - b'a' + b'A'),
-        b'A'..=b'Z' => glifo_letra(c),
-        _ => return,
-    };
-    for (fila, bits) in glifo.iter().enumerate() {
-        for col in 0..5 {
-            if bits & (1 << (4 - col)) != 0 {
-                let px0 = x + col * 5;
-                let py0 = y + fila * 5;
-                for dy in 0..5 {
-                    for dx in 0..5 {
-                        let px = px0 + dx;
-                        let py = py0 + dy;
-                        if px < ANCHO && py < ALTO {
-                            lienzo[py * ANCHO + px] = tinta;
-                        }
-                    }
-                }
-            }
+// =============================================================================
+//  Color — la paleta es RGBA8, el kernel decodifica el lienzo como BGRA
+// =============================================================================
+
+/// Convierte el color `n` de la paleta (4 bytes RGBA) al u32 little-endian
+/// con B en el byte bajo que el kernel decodifica en `componer_fotograma`.
+fn color_u32(paleta: [u8; 20], n: usize) -> u32 {
+    let base = n * 4;
+    let r = paleta[base] as u32;
+    let g = paleta[base + 1] as u32;
+    let b = paleta[base + 2] as u32;
+    b | (g << 8) | (r << 16)
+}
+
+/// Igual que `color_u32` pero atenua cada canal multiplicando por
+/// `factor / 256`. Util para sombras de borde y bandas atenuadas, sin
+/// requerir mas colores en la paleta.
+fn color_atenuar(paleta: [u8; 20], n: usize, factor: u32) -> u32 {
+    let base = n * 4;
+    let r = (paleta[base] as u32 * factor) >> 8;
+    let g = (paleta[base + 1] as u32 * factor) >> 8;
+    let b = (paleta[base + 2] as u32 * factor) >> 8;
+    b | (g << 8) | (r << 16)
+}
+
+fn rellenar_rect(lienzo: &mut [u32], x: usize, y: usize, w: usize, h: usize, color: u32) {
+    let x_fin = (x + w).min(ANCHO);
+    let y_fin = (y + h).min(ALTO);
+    for fila in y..y_fin {
+        let base = fila * ANCHO;
+        for col in x..x_fin {
+            lienzo[base + col] = color;
         }
     }
 }
 
-/// La tipografia 5x7 de los caracteres ASCII A-Z, codificada como siete
-/// filas; cada fila usa los cinco bits bajos. Una matriz suficiente para
-/// los codigos ISO 639-1 mas comunes — solo las letras que aparecen en
-/// `es`, `en` y `qu` se rellenan; el resto cae a la `E` por defecto, que
-/// rara vez se vera en la practica.
-fn glifo_letra(c: u8) -> [u8; 7] {
+// =============================================================================
+//  Mini-tipografia 5x7 mayuscula — bastante para etiquetar la paleta
+// =============================================================================
+
+const FUENTE_ANCHO: usize = 5;
+const FUENTE_ALTO: usize = 7;
+const FUENTE_AVANCE: usize = FUENTE_ANCHO + 1;
+
+/// Cada caracter ocupa 7 filas de 5 bits, los cinco bits bajos del byte.
+/// Bit alto = pixel encendido. Cubre A-Z, 0-9, espacio, dos puntos y guion;
+/// caracteres fuera de tabla se rotulan como un bloque solido para que
+/// quien los vea sepa que falta un glifo.
+fn glifo(c: u8) -> [u8; FUENTE_ALTO] {
     match c {
+        b' ' => [0x00; 7],
+        b'-' => [0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00],
+        b':' => [0x00, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00],
+        b'.' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x06],
+        b'A' => [0x0E, 0x11, 0x11, 0x11, 0x1F, 0x11, 0x11],
+        b'B' => [0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E],
+        b'C' => [0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E],
+        b'D' => [0x1E, 0x09, 0x09, 0x09, 0x09, 0x09, 0x1E],
         b'E' => [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F],
-        b'N' => [0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11],
+        b'F' => [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10],
+        b'G' => [0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0F],
+        b'H' => [0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
+        b'I' => [0x0E, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0E],
+        b'J' => [0x07, 0x02, 0x02, 0x02, 0x02, 0x12, 0x0C],
+        b'K' => [0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11],
+        b'L' => [0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F],
+        b'M' => [0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11],
+        b'N' => [0x11, 0x11, 0x19, 0x15, 0x13, 0x11, 0x11],
+        b'O' => [0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E],
+        b'P' => [0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10],
         b'Q' => [0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D],
+        b'R' => [0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11],
         b'S' => [0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E],
+        b'T' => [0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
         b'U' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E],
-        _ => [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F],
+        b'V' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x0A, 0x04],
+        b'W' => [0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0A],
+        b'X' => [0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11],
+        b'Y' => [0x11, 0x11, 0x11, 0x0A, 0x04, 0x04, 0x04],
+        b'Z' => [0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F],
+        b'0' => [0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E],
+        b'1' => [0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E],
+        b'2' => [0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F],
+        b'3' => [0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E],
+        b'4' => [0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02],
+        b'5' => [0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E],
+        b'6' => [0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E],
+        b'7' => [0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08],
+        b'8' => [0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E],
+        b'9' => [0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C],
+        _ => [0x1F; 7],
+    }
+}
+
+/// Ancho en pixeles que ocupara `texto` rendereado a la escala dada. Cuenta
+/// `FUENTE_AVANCE` por caracter menos un espaciado final.
+fn ancho_texto(texto: &[u8], escala: usize) -> usize {
+    if texto.is_empty() {
+        return 0;
+    }
+    (texto.len() * FUENTE_AVANCE - 1) * escala
+}
+
+/// Rendereiza `texto` empezando en (x, y) con bloques cuadrados de `escala`
+/// pixeles. El recorte se hace contra los limites del lienzo entero.
+fn dibujar_texto(lienzo: &mut [u32], texto: &[u8], x: usize, y: usize, escala: usize, color: u32) {
+    let mut cursor_x = x;
+    for &c in texto {
+        let g = glifo(c);
+        for (fila, bits) in g.iter().enumerate() {
+            for col in 0..FUENTE_ANCHO {
+                if bits & (1 << (FUENTE_ANCHO - 1 - col)) != 0 {
+                    let px0 = cursor_x + col * escala;
+                    let py0 = y + fila * escala;
+                    rellenar_rect(lienzo, px0, py0, escala, escala, color);
+                }
+            }
+        }
+        cursor_x += FUENTE_AVANCE * escala;
     }
 }
