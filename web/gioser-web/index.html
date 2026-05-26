@@ -3,106 +3,388 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>gioser</title>
+<title>gioser · escritorio</title>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<header>
-  <h1>gioser</h1>
-  <p class="subtitle">monorepo · 4 cuadrantes · ciclo de la información</p>
-</header>
 
-<main>
-<svg id="plano" viewBox="-100 -100 200 200" preserveAspectRatio="xMidYMid meet">
-  <!-- ejes -->
-  <line class="axis" x1="-100" y1="0" x2="100" y2="0"/>
-  <line class="axis" x1="0" y1="-100" x2="0" y2="100"/>
-  <!-- ticks -->
-  <g class="ticks">
-    <line x1="-50" y1="-2" x2="-50" y2="2"/>
-    <line x1="50" y1="-2" x2="50" y2="2"/>
-    <line x1="-2" y1="-50" x2="2" y2="-50"/>
-    <line x1="-2" y1="50" x2="2" y2="50"/>
-  </g>
-  <!-- etiquetas de ejes -->
-  <text class="axis-label" x="96" y="-4">x</text>
-  <text class="axis-label" x="4" y="-94">y</text>
+<!-- ===================== escritorio ===================== -->
+<div id="desktop">
 
-  <!-- Cuadrante II (top-left): 00_unanchay PERCIBIR -->
-  <g class="quad" data-cuad="00_unanchay" transform="translate(-50,-50)">
-    <rect x="-40" y="-40" width="80" height="80"/>
-    <text class="quad-id" x="0" y="-22">0x00</text>
-    <text class="quad-name" x="0" y="-6">UNANCHAY</text>
-    <text class="quad-verb" x="0" y="8">percibir</text>
-    <g class="domains" text-anchor="middle">
-      <text class="dom" x="0" y="22" data-dom="pluma">pluma</text>
-      <text class="dom" x="0" y="30" data-dom="khipu">khipu</text>
-      <text class="dom" x="0" y="38" data-dom="rimay">rimay · chaka · pineal</text>
-    </g>
-  </g>
+  <header id="topbar">
+    <div class="topbar-left">
+      <span class="brand">gioser</span>
+      <span class="brand-sub">monorepo · 4 cuadrantes</span>
+    </div>
+    <div class="topbar-right">
+      <span class="topbar-link" data-doc="/README.md" data-title="README" data-theme="gioser">README</span>
+      <span class="topbar-sep">·</span>
+      <span class="topbar-link" data-doc="/PLAN.md" data-title="PLAN" data-theme="gioser">PLAN</span>
+      <span class="topbar-sep">·</span>
+      <a href="https://gitea.gioser.net/sergio/gioser" target="_blank" rel="noopener">gitea</a>
+    </div>
+  </header>
 
-  <!-- Cuadrante I (top-right): 01_yachay CONOCER -->
-  <g class="quad" data-cuad="01_yachay" transform="translate(50,-50)">
-    <rect x="-40" y="-40" width="80" height="80"/>
-    <text class="quad-id" x="0" y="-22">0x01</text>
-    <text class="quad-name" x="0" y="-6">YACHAY</text>
-    <text class="quad-verb" x="0" y="8">conocer</text>
-    <g class="domains" text-anchor="middle">
-      <text class="dom" x="0" y="22" data-dom="cosmos">cosmos</text>
-      <text class="dom" x="0" y="30" data-dom="dominium">dominium</text>
-      <text class="dom" x="0" y="38" data-dom="nakui">nakui</text>
-    </g>
-  </g>
+  <main id="portada">
 
-  <!-- Cuadrante III (bottom-left): 03_ukupacha RAÍZ -->
-  <g class="quad" data-cuad="03_ukupacha" transform="translate(-50,50)">
-    <rect x="-40" y="-40" width="80" height="80"/>
-    <text class="quad-id" x="0" y="-22">0x03</text>
-    <text class="quad-name" x="0" y="-6">UKUPACHA</text>
-    <text class="quad-verb" x="0" y="8">raíz</text>
-    <g class="domains" text-anchor="middle">
-      <text class="dom" x="0" y="22" data-dom="arje">arje · wawa</text>
-      <text class="dom" x="0" y="30" data-dom="agora">agora</text>
-      <text class="dom" x="0" y="38" data-dom="minga">minga</text>
-    </g>
-  </g>
+    <!-- panel izquierdo: documentos del sistema -->
+    <aside id="sidebar">
+      <div class="sidebar-section">
+        <h3>sistema</h3>
+        <ul>
+          <li><span class="doc" data-doc="/README.md" data-title="gioser/README" data-theme="gioser">gioser · README</span></li>
+          <li><span class="doc" data-doc="/PLAN.md" data-title="gioser/PLAN" data-theme="gioser">gioser · PLAN</span></li>
+          <li><span class="doc" data-doc="/docs/SUITE.md" data-title="docs/SUITE" data-theme="gioser">docs · SUITE</span></li>
+          <li><span class="doc" data-doc="/docs/MODULES.md" data-title="docs/MODULES" data-theme="gioser">docs · MODULES</span></li>
+        </ul>
+      </div>
 
-  <!-- Cuadrante IV (bottom-right): 02_ruway HACER -->
-  <g class="quad" data-cuad="02_ruway" transform="translate(50,50)">
-    <rect x="-40" y="-40" width="80" height="80"/>
-    <text class="quad-id" x="0" y="-22">0x02</text>
-    <text class="quad-name" x="0" y="-6">RUWAY</text>
-    <text class="quad-verb" x="0" y="8">hacer</text>
-    <g class="domains" text-anchor="middle">
-      <text class="dom" x="0" y="22" data-dom="mirada">mirada · nahual</text>
-      <text class="dom" x="0" y="30" data-dom="shuma">shuma · chasqui</text>
-      <text class="dom" x="0" y="38" data-dom="takiy">takiy</text>
-    </g>
-  </g>
-</svg>
+      <div class="sidebar-section">
+        <h3>00 unanchay · percibir</h3>
+        <ul>
+          <li><span class="doc" data-doc="/00_unanchay/puriy/SDD.md" data-title="puriy/SDD" data-theme="unanchay">puriy · SDD</span></li>
+          <li><span class="doc" data-doc="/web/gioser-web/md/aire.md" data-title="aire" data-theme="aire">aire</span></li>
+          <li><span class="doc" data-doc="/web/gioser-web/md/sombra.md" data-title="sombra" data-theme="unanchay">sombra</span></li>
+        </ul>
+      </div>
 
-<section id="lector" hidden>
-  <div class="lector-head">
-    <span id="lector-titulo"></span>
-    <button id="lector-cerrar" type="button" aria-label="cerrar">×</button>
-  </div>
-  <article id="lector-cuerpo"></article>
-</section>
-</main>
+      <div class="sidebar-section">
+        <h3>01 yachay · conocer</h3>
+        <ul>
+          <li><span class="doc" data-doc="/01_yachay/dominium/SDD.md" data-title="dominium/SDD" data-theme="yachay">dominium · SDD</span></li>
+          <li><span class="doc" data-doc="/01_yachay/cosmos/cosmos-core/README.md" data-title="cosmos-core" data-theme="yachay">cosmos-core</span></li>
+          <li><span class="doc" data-doc="/01_yachay/cosmos/cosmos-sky/README.md" data-title="cosmos-sky" data-theme="yachay">cosmos-sky</span></li>
+          <li><span class="doc" data-doc="/01_yachay/cosmos/cosmos-catalog/README.md" data-title="cosmos-catalog" data-theme="yachay">cosmos-catalog</span></li>
+          <li><span class="doc" data-doc="/01_yachay/cosmos/cosmos-ephemeris/README.md" data-title="cosmos-ephemeris" data-theme="yachay">cosmos-ephemeris</span></li>
+          <li><span class="doc" data-doc="/01_yachay/cosmos/cosmos-coords/README.md" data-title="cosmos-coords" data-theme="yachay">cosmos-coords</span></li>
+          <li><span class="doc" data-doc="/01_yachay/cosmos/cosmos-pointing/README.md" data-title="cosmos-pointing" data-theme="yachay">cosmos-pointing</span></li>
+          <li><span class="doc" data-doc="/01_yachay/cosmos/cosmos-astrology/README.md" data-title="cosmos-astrology" data-theme="yachay">cosmos-astrology</span></li>
+          <li><span class="doc" data-doc="/01_yachay/cosmos/cosmos-images/README.md" data-title="cosmos-images" data-theme="yachay">cosmos-images</span></li>
+          <li><span class="doc" data-doc="/01_yachay/cosmos/cosmos-time/README.md" data-title="cosmos-time" data-theme="yachay">cosmos-time</span></li>
+          <li><span class="doc" data-doc="/01_yachay/cosmos/cosmos-wcs/README.md" data-title="cosmos-wcs" data-theme="yachay">cosmos-wcs</span></li>
+          <li><span class="doc" data-doc="/01_yachay/cosmos/cosmos-validation/README.md" data-title="cosmos-validation" data-theme="yachay">cosmos-validation</span></li>
+          <li><span class="doc" data-doc="/01_yachay/cosmos/cosmos-corpus/GUIA.md" data-title="cosmos-corpus/GUIA" data-theme="yachay">cosmos-corpus · GUIA</span></li>
+        </ul>
+      </div>
 
-<footer>
-  <a href="https://gitea.gioser.net/sergio/gioser">gitea.gioser.net/sergio/gioser</a>
-</footer>
+      <div class="sidebar-section">
+        <h3>02 ruway · hacer</h3>
+        <ul>
+          <li><span class="doc" data-doc="/02_ruway/llimphi/SDD.md" data-title="llimphi/SDD" data-theme="ruway">llimphi · SDD</span></li>
+          <li><span class="doc" data-doc="/02_ruway/supay/SDD.md" data-title="supay/SDD" data-theme="ruway">supay · SDD</span></li>
+          <li><span class="doc" data-doc="/02_ruway/mirada/mirada-compositor/README.md" data-title="mirada-compositor" data-theme="ruway">mirada-compositor</span></li>
+          <li><span class="doc" data-doc="/02_ruway/mirada/mirada-portal/README.md" data-title="mirada-portal" data-theme="ruway">mirada-portal</span></li>
+          <li><span class="doc" data-doc="/02_ruway/mirada/mirada-greeter/README.md" data-title="mirada-greeter" data-theme="ruway">mirada-greeter</span></li>
+          <li><span class="doc" data-doc="/web/gioser-web/md/fuego.md" data-title="fuego" data-theme="fuego">fuego</span></li>
+          <li><span class="doc" data-doc="/web/gioser-web/md/practica.md" data-title="practica" data-theme="ruway">practica</span></li>
+        </ul>
+      </div>
 
+      <div class="sidebar-section">
+        <h3>03 ukupacha · raíz</h3>
+        <ul>
+          <li><span class="doc" data-doc="/03_ukupacha/arje/seeds/README.md" data-title="arje/seeds" data-theme="ukupacha">arje · seeds</span></li>
+          <li><span class="doc" data-doc="/03_ukupacha/arje/init/arje-packager/README.md" data-title="arje-packager" data-theme="ukupacha">arje-packager</span></li>
+          <li><span class="doc" data-doc="/03_ukupacha/arje/init/arje-installer/README.md" data-title="arje-installer" data-theme="ukupacha">arje-installer</span></li>
+          <li><span class="doc" data-doc="/03_ukupacha/arje/init/arje-absorb/README.md" data-title="arje-absorb" data-theme="ukupacha">arje-absorb</span></li>
+          <li><span class="doc" data-doc="/web/gioser-web/md/tierra.md" data-title="tierra" data-theme="tierra">tierra</span></li>
+          <li><span class="doc" data-doc="/web/gioser-web/md/agua.md" data-title="agua" data-theme="agua">agua</span></li>
+          <li><span class="doc" data-doc="/web/gioser-web/md/cuerpo.md" data-title="cuerpo" data-theme="ukupacha">cuerpo</span></li>
+          <li><span class="doc" data-doc="/web/gioser-web/md/olvido.md" data-title="olvido" data-theme="ukupacha">olvido</span></li>
+          <li><span class="doc" data-doc="/web/gioser-web/md/cosmos.md" data-title="cosmos" data-theme="cosmos">cosmos</span></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <h3>shared</h3>
+        <ul>
+          <li><span class="doc" data-doc="/shared/auth/auth-core/README.md" data-title="auth-core" data-theme="gioser">auth-core</span></li>
+          <li><span class="doc" data-doc="/web/gioser-web/README.md" data-title="gioser-web" data-theme="gioser">gioser-web</span></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- centro: plano cartesiano de cuadrantes -->
+    <section id="plano-wrap">
+      <svg id="plano" viewBox="-100 -100 200 200" preserveAspectRatio="xMidYMid meet">
+        <line class="axis" x1="-100" y1="0" x2="100" y2="0"/>
+        <line class="axis" x1="0" y1="-100" x2="0" y2="100"/>
+        <g class="ticks">
+          <line x1="-50" y1="-2" x2="-50" y2="2"/>
+          <line x1="50" y1="-2" x2="50" y2="2"/>
+          <line x1="-2" y1="-50" x2="2" y2="-50"/>
+          <line x1="-2" y1="50" x2="2" y2="50"/>
+        </g>
+        <text class="axis-label" x="96" y="-4">x</text>
+        <text class="axis-label" x="4" y="-94">y</text>
+
+        <!-- Cuadrante II: 00_unanchay PERCIBIR -->
+        <g class="quad" data-cuad="00_unanchay" data-theme="unanchay" transform="translate(-50,-50)">
+          <rect x="-40" y="-40" width="80" height="80"/>
+          <text class="quad-id" x="0" y="-22">0x00</text>
+          <text class="quad-name" x="0" y="-6">UNANCHAY</text>
+          <text class="quad-verb" x="0" y="8">percibir</text>
+          <g class="domains" text-anchor="middle">
+            <text class="dom" x="0" y="22" data-doc="/web/gioser-web/md/aire.md" data-title="pluma" data-theme="aire">pluma</text>
+            <text class="dom" x="0" y="30" data-doc="/web/gioser-web/md/sombra.md" data-title="khipu" data-theme="unanchay">khipu</text>
+            <text class="dom" x="0" y="38" data-doc="/00_unanchay/puriy/SDD.md" data-title="puriy" data-theme="unanchay">rimay · chaka · pineal</text>
+          </g>
+        </g>
+
+        <!-- Cuadrante I: 01_yachay CONOCER -->
+        <g class="quad" data-cuad="01_yachay" data-theme="yachay" transform="translate(50,-50)">
+          <rect x="-40" y="-40" width="80" height="80"/>
+          <text class="quad-id" x="0" y="-22">0x01</text>
+          <text class="quad-name" x="0" y="-6">YACHAY</text>
+          <text class="quad-verb" x="0" y="8">conocer</text>
+          <g class="domains" text-anchor="middle">
+            <text class="dom" x="0" y="22" data-doc="/01_yachay/cosmos/cosmos-core/README.md" data-title="cosmos" data-theme="yachay">cosmos</text>
+            <text class="dom" x="0" y="30" data-doc="/01_yachay/dominium/SDD.md" data-title="dominium" data-theme="yachay">dominium</text>
+            <text class="dom" x="0" y="38" data-doc="/web/gioser-web/md/cosmos.md" data-title="nakui" data-theme="cosmos">nakui</text>
+          </g>
+        </g>
+
+        <!-- Cuadrante III: 03_ukupacha RAIZ -->
+        <g class="quad" data-cuad="03_ukupacha" data-theme="ukupacha" transform="translate(-50,50)">
+          <rect x="-40" y="-40" width="80" height="80"/>
+          <text class="quad-id" x="0" y="-22">0x03</text>
+          <text class="quad-name" x="0" y="-6">UKUPACHA</text>
+          <text class="quad-verb" x="0" y="8">raíz</text>
+          <g class="domains" text-anchor="middle">
+            <text class="dom" x="0" y="22" data-doc="/03_ukupacha/arje/seeds/README.md" data-title="arje · wawa" data-theme="ukupacha">arje · wawa</text>
+            <text class="dom" x="0" y="30" data-doc="/web/gioser-web/md/agua.md" data-title="agora" data-theme="agua">agora</text>
+            <text class="dom" x="0" y="38" data-doc="/web/gioser-web/md/tierra.md" data-title="minga" data-theme="tierra">minga</text>
+          </g>
+        </g>
+
+        <!-- Cuadrante IV: 02_ruway HACER -->
+        <g class="quad" data-cuad="02_ruway" data-theme="ruway" transform="translate(50,50)">
+          <rect x="-40" y="-40" width="80" height="80"/>
+          <text class="quad-id" x="0" y="-22">0x02</text>
+          <text class="quad-name" x="0" y="-6">RUWAY</text>
+          <text class="quad-verb" x="0" y="8">hacer</text>
+          <g class="domains" text-anchor="middle">
+            <text class="dom" x="0" y="22" data-doc="/02_ruway/mirada/mirada-compositor/README.md" data-title="mirada · nahual" data-theme="ruway">mirada · nahual</text>
+            <text class="dom" x="0" y="30" data-doc="/02_ruway/llimphi/SDD.md" data-title="shuma · chasqui" data-theme="ruway">shuma · chasqui</text>
+            <text class="dom" x="0" y="38" data-doc="/web/gioser-web/md/fuego.md" data-title="takiy" data-theme="fuego">takiy</text>
+          </g>
+        </g>
+      </svg>
+    </section>
+
+  </main>
+
+  <!-- capa de ventanas (las ventanas se inyectan acá) -->
+  <div id="windows-layer"></div>
+
+  <!-- taskbar inferior tipo Llimphi -->
+  <footer id="taskbar">
+    <div class="task-start">
+      <span class="start-glyph">◧</span>
+      <span class="start-label">gioser</span>
+    </div>
+    <div id="taskbar-items"></div>
+    <div class="task-clock">
+      <span id="clock">--:--</span>
+    </div>
+  </footer>
+
+</div>
+
+<!-- ===================== JS: sistema de ventanas ===================== -->
 <script type="module">
-  import init, { abrir_md } from './pkg/gioser_web.js';
+  import init, { cargar_md } from './pkg/gioser_web.js';
+
+  // Estado: { id, title, url, theme, x, y, w, h, z, minimized, el, taskEl }
+  const ventanas = new Map();
+  let zTop = 100;
+  let seq = 0;
+
+  const layer = document.getElementById('windows-layer');
+  const taskItems = document.getElementById('taskbar-items');
+
+  function traerAlFrente(id) {
+    const v = ventanas.get(id);
+    if (!v) return;
+    zTop += 1;
+    v.z = zTop;
+    v.el.style.zIndex = zTop;
+    document.querySelectorAll('.window').forEach(w => w.classList.remove('focused'));
+    v.el.classList.add('focused');
+    document.querySelectorAll('.task-item').forEach(t => t.classList.remove('active'));
+    v.taskEl.classList.add('active');
+  }
+
+  function minimizar(id) {
+    const v = ventanas.get(id);
+    if (!v) return;
+    v.minimized = true;
+    v.el.style.display = 'none';
+    v.taskEl.classList.remove('active');
+  }
+
+  function restaurar(id) {
+    const v = ventanas.get(id);
+    if (!v) return;
+    v.minimized = false;
+    v.el.style.display = 'flex';
+    traerAlFrente(id);
+  }
+
+  function cerrar(id) {
+    const v = ventanas.get(id);
+    if (!v) return;
+    v.el.remove();
+    v.taskEl.remove();
+    ventanas.delete(id);
+  }
+
+  function abrirVentana(url, title, theme) {
+    // Si ya hay una ventana con la misma URL, restaurarla.
+    for (const [vid, v] of ventanas.entries()) {
+      if (v.url === url) {
+        if (v.minimized) restaurar(vid);
+        else traerAlFrente(vid);
+        return;
+      }
+    }
+
+    const id = `win-${++seq}`;
+    const contId = `${id}-content`;
+
+    // posición en cascada
+    const offset = (ventanas.size % 8) * 28;
+    const x = 80 + offset;
+    const y = 60 + offset;
+
+    const el = document.createElement('section');
+    el.className = 'window focused';
+    el.dataset.theme = theme || 'gioser';
+    el.style.left = x + 'px';
+    el.style.top  = y + 'px';
+    el.style.width = '640px';
+    el.style.height = '480px';
+    zTop += 1;
+    el.style.zIndex = zTop;
+
+    el.innerHTML = `
+      <header class="win-titlebar" data-drag="1">
+        <span class="win-icon">▤</span>
+        <span class="win-title"></span>
+        <span class="win-spacer"></span>
+        <button class="win-btn win-min"   type="button" aria-label="minimizar">─</button>
+        <button class="win-btn win-max"   type="button" aria-label="maximizar">▢</button>
+        <button class="win-btn win-close" type="button" aria-label="cerrar">×</button>
+      </header>
+      <div class="win-body">
+        <article id="${contId}" class="pluma-host"></article>
+      </div>
+      <div class="win-resize" data-resize="1"></div>
+    `;
+    el.querySelector('.win-title').textContent = title;
+    layer.appendChild(el);
+
+    // taskbar item
+    const taskEl = document.createElement('button');
+    taskEl.type = 'button';
+    taskEl.className = 'task-item active';
+    taskEl.dataset.theme = theme || 'gioser';
+    taskEl.innerHTML = `<span class="task-dot"></span><span class="task-label"></span>`;
+    taskEl.querySelector('.task-label').textContent = title;
+    taskEl.addEventListener('click', () => {
+      const v = ventanas.get(id);
+      if (!v) return;
+      if (v.minimized) restaurar(id);
+      else if (v.el.classList.contains('focused')) minimizar(id);
+      else traerAlFrente(id);
+    });
+    taskItems.appendChild(taskEl);
+
+    const v = { id, title, url, theme, x, y, z: zTop, minimized: false, el, taskEl };
+    ventanas.set(id, v);
+
+    // focus on mousedown
+    el.addEventListener('mousedown', () => traerAlFrente(id));
+
+    // botones
+    el.querySelector('.win-min').addEventListener('click', (e) => { e.stopPropagation(); minimizar(id); });
+    el.querySelector('.win-close').addEventListener('click', (e) => { e.stopPropagation(); cerrar(id); });
+    el.querySelector('.win-max').addEventListener('click', (e) => {
+      e.stopPropagation();
+      el.classList.toggle('maximized');
+    });
+
+    // drag
+    const tb = el.querySelector('.win-titlebar');
+    let drag = null;
+    tb.addEventListener('mousedown', (e) => {
+      if (e.target.closest('.win-btn')) return;
+      if (el.classList.contains('maximized')) return;
+      drag = { dx: e.clientX - el.offsetLeft, dy: e.clientY - el.offsetTop };
+      e.preventDefault();
+    });
+    tb.addEventListener('dblclick', (e) => {
+      if (e.target.closest('.win-btn')) return;
+      el.classList.toggle('maximized');
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!drag) return;
+      const nx = Math.max(0, Math.min(window.innerWidth  - 100, e.clientX - drag.dx));
+      const ny = Math.max(0, Math.min(window.innerHeight - 80,  e.clientY - drag.dy));
+      el.style.left = nx + 'px';
+      el.style.top  = ny + 'px';
+    });
+    document.addEventListener('mouseup', () => { drag = null; resizing = null; });
+
+    // resize
+    const grip = el.querySelector('.win-resize');
+    let resizing = null;
+    grip.addEventListener('mousedown', (e) => {
+      resizing = {
+        sx: e.clientX, sy: e.clientY,
+        sw: el.offsetWidth, sh: el.offsetHeight,
+      };
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!resizing) return;
+      const nw = Math.max(300, resizing.sw + (e.clientX - resizing.sx));
+      const nh = Math.max(200, resizing.sh + (e.clientY - resizing.sy));
+      el.style.width  = nw + 'px';
+      el.style.height = nh + 'px';
+    });
+
+    // cargar contenido
+    cargar_md(contId, url, theme || 'gioser');
+    return id;
+  }
+
+  // wire-up: cualquier elemento [data-doc] abre ventana
+  function bindDocTriggers(root) {
+    root.querySelectorAll('[data-doc]').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.preventDefault();
+        const url   = el.dataset.doc;
+        const title = el.dataset.title || url;
+        const theme = el.dataset.theme || 'gioser';
+        abrirVentana(url, title, theme);
+      });
+    });
+  }
+
+  // reloj de la taskbar
+  function tickClock() {
+    const d = new Date();
+    const hh = String(d.getHours()).padStart(2,'0');
+    const mm = String(d.getMinutes()).padStart(2,'0');
+    document.getElementById('clock').textContent = `${hh}:${mm}`;
+  }
+
   init().then(() => {
-    document.querySelectorAll('.dom').forEach(el => {
-      el.addEventListener('click', () => abrir_md(el.dataset.dom));
-    });
-    document.getElementById('lector-cerrar').addEventListener('click', () => {
-      document.getElementById('lector').hidden = true;
-    });
+    bindDocTriggers(document);
+    tickClock();
+    setInterval(tickClock, 30_000);
   });
 </script>
 </body>
