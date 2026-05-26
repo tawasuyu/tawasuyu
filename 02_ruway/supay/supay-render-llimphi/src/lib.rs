@@ -111,6 +111,8 @@ struct AtlasInner {
     /// Cache de texturas de pared compuestas por nombre. `None` para
     /// nombres que no resuelven en TEXTURE1.
     wall_textures: HashMap<String, Option<Arc<supay_wad::Texture>>>,
+    /// Cache de flats expandidos a RGBA8 (64×64×4 = 16 KB) por pic_idx.
+    flat_rgbas: HashMap<u16, Option<Arc<Vec<u8>>>>,
 }
 
 impl std::fmt::Debug for WadAtlas {
@@ -139,6 +141,7 @@ impl WadAtlas {
                 sprite_names: HashMap::new(),
                 sprite_patches: HashMap::new(),
                 wall_textures: HashMap::new(),
+                flat_rgbas: HashMap::new(),
             }),
         }
     }
@@ -169,6 +172,7 @@ impl WadAtlas {
         if let Ok(mut inner) = self.inner.lock() {
             inner.flat_names.insert(pic_idx, name);
             inner.color_cache.remove(&pic_idx);
+            inner.flat_rgbas.remove(&pic_idx);
         }
     }
 
@@ -234,6 +238,32 @@ impl WadAtlas {
         });
         if let Ok(mut inner) = self.inner.lock() {
             inner.sprite_patches.insert(key, decoded.clone());
+        }
+        decoded
+    }
+
+    /// Recupera (decodificando + cacheando) el RGBA del flat 64×64
+    /// para `pic_idx`. Devuelve `None` si el nombre del flat no está
+    /// mapeado o no existe en el WAD (e.g. F_SKY1 placeholder).
+    /// El renderer usa esto para texturizar pisos/techos.
+    pub fn flat_rgba(&self, pic_idx: u16) -> Option<Arc<Vec<u8>>> {
+        // Reusamos el color_cache para evitar duplicar lookups; lo
+        // dejamos sin tocar porque el RGBA es ortogonal al color.
+        // Cache propia para flats: el HashMap nuevo `flat_rgbas`.
+        // De momento simplificamos: re-decodificamos por idx — son
+        // 64×64=4 KB por flat resuelto, y `inner.flat_rgbas` cachea.
+        if let Ok(inner) = self.inner.lock() {
+            if let Some(cached) = inner.flat_rgbas.get(&pic_idx) {
+                return cached.clone();
+            }
+        }
+        let name = {
+            let inner = self.inner.lock().ok()?;
+            inner.flat_names.get(&pic_idx).cloned()
+        }?;
+        let decoded = self.wad.flat_rgba(&name, &self.palette).map(Arc::new);
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.flat_rgbas.insert(pic_idx, decoded.clone());
         }
         decoded
     }
@@ -469,6 +499,18 @@ impl Camera {
         let x_cam = dx * self.cos_pa + dy * self.sin_pa;
         let y_cam = dx * self.sin_pa - dy * self.cos_pa;
         (x_cam, y_cam)
+    }
+
+    /// Inverso de [`Self::to_cam_2d`]: camera (X, Y) → world (wx, wy).
+    /// Útil para recuperar las coords mundo de vértices intermedios
+    /// generados por el near-clip 2D (que ya están en cam space).
+    fn from_cam_2d(&self, x_cam: f32, y_cam: f32) -> (f32, f32) {
+        // Inversa de la rotación: rot⁻¹ = rotᵀ.
+        // dx = x_cam·cos + y_cam·sin
+        // dy = x_cam·sin - y_cam·cos
+        let dx = x_cam * self.cos_pa + y_cam * self.sin_pa;
+        let dy = x_cam * self.sin_pa - y_cam * self.cos_pa;
+        (self.px + dx, self.py + dy)
     }
 }
 
@@ -838,6 +880,21 @@ fn gather_subsector_planes(
         return;
     }
 
+    // Necesitamos las world (x, y) en paralelo con el camera-space para
+    // poder construir la affine image→screen del flat. El clip near
+    // pudo introducir vértices intermedios sin world coords reales —
+    // los recuperamos por inversa: world = cam.px + cos·x_cam - sin·y_cam
+    //                              world_y = cam.py + sin·x_cam + cos·y_cam
+    let cam_to_world = |cx: f32, cy: f32| -> (f32, f32) {
+        (
+            cam.px + cx * cam.cos_pa - cy * cam.sin_pa * -1.0 + cy * cam.sin_pa - cy * cam.sin_pa,
+            cam.py,
+        )
+    };
+    let _ = cam_to_world; // bypass — refactorizamos a un método del Camera.
+
+    let world_xy: Vec<(f32, f32)> = clipped.iter().map(|&(cx, cy)| cam.from_cam_2d(cx, cy)).collect();
+
     // Centroide para depth sort.
     let (mut cx_sum, mut cy_sum) = (0.0_f32, 0.0_f32);
     for &(x, y) in &clipped {
@@ -854,17 +911,14 @@ fn gather_subsector_planes(
     let screen_y_min = rect.y as f64;
     let screen_y_max = (rect.y + rect.h) as f64;
 
-    // Helper para construir el path proyectado a una altura z (mundo).
-    // Si después de proyectar todos los vértices caen del mismo lado
-    // (off-screen colectivo), saltamos el polígono.
-    let build_path = |z_world: f32| -> Option<BezPath> {
+    // Proyecta todos los vértices a screen a una altura z dada y
+    // devuelve `(path, screen_points)` — o `None` si está fuera de rect.
+    let project_polygon = |z_world: f32| -> Option<(BezPath, Vec<Point>)> {
         let z_cam = z_world - cam.view_z;
         let pts: Vec<Point> = clipped
             .iter()
             .map(|&(x, y)| proj.project(x, y, z_cam))
             .collect();
-        // Cull rápido: si todos los puntos están fuera del rect por el
-        // mismo lado, el polígono no es visible.
         let all_left = pts.iter().all(|p| p.x < screen_x_min);
         let all_right = pts.iter().all(|p| p.x > screen_x_max);
         let all_above = pts.iter().all(|p| p.y < screen_y_min);
@@ -878,31 +932,125 @@ fn gather_subsector_planes(
             p.line_to(*pt);
         }
         p.close_path();
-        Some(p)
+        Some((p, pts))
     };
 
-    // Piso.
-    if let Some(path) = build_path(sec.floor_height) {
+    // Helper común para emitir un plano (piso o techo) con o sin tex.
+    let mut emit_plane = |z_world: f32, pic_idx: u16, is_floor: bool| {
+        let Some((path, screen_pts)) = project_polygon(z_world) else {
+            return;
+        };
+        // Intentar texturizar: tenemos atlas + flat resolves a RGBA.
+        if let Some(atlas) = cfg.atlas.as_ref() {
+            if let Some(rgba) = atlas.flat_rgba(pic_idx) {
+                // Buscamos 3 vértices NO colineales en world space para
+                // resolver la affine image (= world XY mod 64 con Repeat
+                // extend) → screen. Spread-out picks dan estabilidad
+                // numérica mejor.
+                let n_v = world_xy.len();
+                if n_v >= 3 {
+                    let i0 = 0;
+                    let i1 = n_v / 3;
+                    let i2 = (2 * n_v) / 3;
+                    if let Some(xform) = solve_floor_affine(
+                        world_xy[i0],
+                        screen_pts[i0],
+                        world_xy[i1],
+                        screen_pts[i1],
+                        world_xy[i2],
+                        screen_pts[i2],
+                    ) {
+                        use llimphi_ui::llimphi_raster::peniko::{
+                            Blob, Extend, Image, ImageFormat,
+                        };
+                        let img = Image::new(
+                            Blob::from((*rgba).clone()),
+                            ImageFormat::Rgba8,
+                            supay_wad::FLAT_SIZE as u32,
+                            supay_wad::FLAT_SIZE as u32,
+                        )
+                        .with_extend(Extend::Repeat);
+                        out.push(Renderable {
+                            depth: depth + 1.0,
+                            color: Color::WHITE,
+                            path: path.clone(),
+                            kind: RenderKind::TexturedWall {
+                                image: img,
+                                brush_xform: xform,
+                            },
+                        });
+                        // Shade overlay — mismo truco que walls.
+                        let shade = shade_for(sec.light_level, depth, cfg)
+                            * if is_floor { 0.92 } else { 0.85 };
+                        if shade < 0.95 {
+                            let alpha = ((1.0 - shade) * 255.0).clamp(0.0, 255.0) as u8;
+                            out.push(Renderable {
+                                depth: depth + 0.999,
+                                color: Color::from_rgba8(0, 0, 0, alpha),
+                                path,
+                                kind: RenderKind::Fill,
+                            });
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+        // Fallback al color promedio (3.3 behavior).
+        let color = if is_floor {
+            floor_color(sec, depth, cfg)
+        } else {
+            ceiling_color(sec, depth, cfg, snap.sky_pic)
+        };
         out.push(Renderable {
-            depth: depth + 1.0, // estrictamente detrás de paredes y sprites
-            color: floor_color(sec, depth, cfg),
+            depth: depth + 1.0,
+            color,
             path,
             kind: RenderKind::Fill,
         });
-    }
+    };
 
-    // Techo — si es sky, no pintamos sólido (dejamos ver el backdrop).
+    emit_plane(sec.floor_height, sec.floor_pic, true);
+
     let is_sky = snap.sky_pic != NO_SKY_PIC && sec.ceiling_pic == snap.sky_pic;
     if !is_sky {
-        if let Some(path) = build_path(sec.ceiling_height) {
-            out.push(Renderable {
-                depth: depth + 1.0,
-                color: ceiling_color(sec, depth, cfg, snap.sky_pic),
-                path,
-                kind: RenderKind::Fill,
-            });
-        }
+        emit_plane(sec.ceiling_height, sec.ceiling_pic, false);
     }
+}
+
+/// Resuelve la affine `image (wx, wy) → screen (sx, sy)` a partir de 3
+/// pares de correspondencias. Devuelve `None` si los 3 vértices están
+/// near-colineales en world space (determinante ~0).
+fn solve_floor_affine(
+    w0: (f32, f32),
+    s0: Point,
+    w1: (f32, f32),
+    s1: Point,
+    w2: (f32, f32),
+    s2: Point,
+) -> Option<Affine> {
+    let dw1x = (w1.0 - w0.0) as f64;
+    let dw1y = (w1.1 - w0.1) as f64;
+    let dw2x = (w2.0 - w0.0) as f64;
+    let dw2y = (w2.1 - w0.1) as f64;
+    let det_w = dw1x * dw2y - dw2x * dw1y;
+    if det_w.abs() < 1e-3 {
+        return None;
+    }
+    let ds1x = s1.x - s0.x;
+    let ds1y = s1.y - s0.y;
+    let ds2x = s2.x - s0.x;
+    let ds2y = s2.y - s0.y;
+    let a = (ds1x * dw2y - ds2x * dw1y) / det_w;
+    let c = (dw1x * ds2x - ds1x * dw2x) / det_w;
+    let e = s0.x - a * w0.0 as f64 - c * w0.1 as f64;
+    let b = (ds1y * dw2y - ds2y * dw1y) / det_w;
+    let d = (dw1x * ds2y - ds1y * dw2x) / det_w;
+    let f = s0.y - b * w0.0 as f64 - d * w0.1 as f64;
+    if !a.is_finite() || !b.is_finite() || !c.is_finite() || !d.is_finite() {
+        return None;
+    }
+    Some(Affine::new([a, b, c, d, e, f]))
 }
 
 /// Sutherland-Hodgman para un único plano `X_cam >= near` en 2D
@@ -1447,6 +1595,44 @@ mod tests {
             ..sky_sec.clone()
         };
         assert!(!ceiling_is_sky(&weird, NO_SKY_PIC));
+    }
+
+    #[test]
+    fn camera_to_from_round_trip() {
+        let cam = Camera::new(100.0, 200.0, 41.0, 0.75);
+        for (wx, wy) in [(150.0, 220.0), (50.0, 80.0), (100.0, 200.0), (-20.0, 999.0)] {
+            let (cx, cy) = cam.to_cam_2d(wx, wy);
+            let (rx, ry) = cam.from_cam_2d(cx, cy);
+            assert!((rx - wx).abs() < 1e-3, "wx round-trip: {wx} → {rx}");
+            assert!((ry - wy).abs() < 1e-3, "wy round-trip: {wy} → {ry}");
+        }
+    }
+
+    #[test]
+    fn solve_floor_affine_recovers_identity_when_world_equals_screen() {
+        // Si world == screen para 3 puntos, la affine resuelta es la
+        // identidad (a=1, b=0, c=0, d=1, e=0, f=0).
+        let a = solve_floor_affine(
+            (0.0, 0.0), Point::new(0.0, 0.0),
+            (10.0, 0.0), Point::new(10.0, 0.0),
+            (0.0, 10.0), Point::new(0.0, 10.0),
+        ).expect("solve");
+        let coeffs = a.as_coeffs();
+        assert!((coeffs[0] - 1.0).abs() < 1e-6, "a={}", coeffs[0]);
+        assert!(coeffs[1].abs() < 1e-6, "b={}", coeffs[1]);
+        assert!(coeffs[2].abs() < 1e-6, "c={}", coeffs[2]);
+        assert!((coeffs[3] - 1.0).abs() < 1e-6, "d={}", coeffs[3]);
+    }
+
+    #[test]
+    fn solve_floor_affine_rejects_collinear() {
+        // 3 vértices sobre una línea horizontal → det_w = 0 → None.
+        let a = solve_floor_affine(
+            (0.0, 0.0), Point::new(0.0, 0.0),
+            (10.0, 0.0), Point::new(10.0, 0.0),
+            (20.0, 0.0), Point::new(20.0, 0.0),
+        );
+        assert!(a.is_none());
     }
 
     #[test]
