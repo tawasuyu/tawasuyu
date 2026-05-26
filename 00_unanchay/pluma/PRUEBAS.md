@@ -351,8 +351,11 @@ pluma-transform      trait Ejecutor async + EjecutorIdentidad
 pluma-transform-tabla     EjecutorTraducirTabla (tabla explícita)
 pluma-transform-llm  Ejecutor{Traducir,Tono,Resumir,Reescribir}Llm
 pluma-graph-transform  indice_atoms + persistir_producto (pegamento)
-pluma-store          PlumaStore (atoms+cuerpos+transformaciones+cartas en sled)
+pluma-store          PlumaStore (atoms+cuerpos+transformaciones+cartas+EstadoUi en sled)
 pluma-editor-llimphi::multilienzo  vista columnas+carriles+hebras
+pluma-editor-cuerpo  sincronia cuerpo ↔ buffer plano (diff Mutar/Crear/Eliminar)
+                     reusa Uuids al mutar → hebras vivas tras edit
+shared/foreign-docx  importar .docx como cuerpo madre
 
 pluma-llm-core       trait ChatClient (contrato agnóstico de proveedor)
 pluma-llm-mock       determinista para tests
