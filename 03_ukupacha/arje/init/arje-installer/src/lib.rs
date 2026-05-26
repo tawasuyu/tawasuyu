@@ -1,0 +1,317 @@
+//! `arje-installer` — lib. Lógica pura del installer (sin tocar disco):
+//! armar el initramfs vía [`arje_packager`], decidir el layout de la ESP,
+//! producir el cmdline canónico y el contenido del `loader.conf` style
+//! `arje.conf` que el bootloader (rEFInd, systemd-boot) entiende.
+//!
+//! Las operaciones I/O destructivas (sfdisk, mkfs.fat, mount, cp, efibootmgr)
+//! viven en el binario — la lib se queda testeable sin root y sin `/dev/`.
+//!
+//! ## Doctrina de instalación UEFI
+//!
+//! El installer asume **firmware UEFI**. Para sistemas BIOS legacy hay que
+//! sumar GRUB/syslinux — fuera del alcance de la primera versión.
+//!
+//! Dos modos:
+//!
+//! - **`to-partition`** (no destructivo): el usuario monta su ESP en alguna
+//!   ruta y el installer pega kernel/initramfs/seed bajo `<esp>/EFI/arje/`.
+//!   Opcionalmente registra una entrada NVRAM via `efibootmgr` apuntando
+//!   directo al PE del kernel (EFISTUB) con el cmdline embebido. Sin
+//!   bootloader en disco: la firmware ejecuta el kernel.
+//!
+//! - **`to-usb`** (destructivo): formatea un disco entero como GPT + una
+//!   partición ESP FAT32, copia los archivos y, si encuentra un
+//!   bootloader EFI disponible en el host (systemd-boot o rEFInd), lo
+//!   instala. Si no, deja el kernel como `/EFI/BOOT/BOOTX64.EFI` y avisa
+//!   que el USB necesitará efibootmgr en cada máquina destino.
+
+use std::path::{Path, PathBuf};
+
+use arje_card::EntityCard;
+pub use arje_packager::{CpioWriter, EntryKind};
+
+/// Layout fijo bajo la ESP. Cualquier cosa que escribimos cae acá.
+///
+/// Razón del subdir `EFI/arje/` y no `EFI/Linux/` (la convención de
+/// distros UKI): mantener namespace propio para coexistir con un GRUB o
+/// systemd-boot del host sin chocar. El usuario puede tener su distro
+/// principal arriba y arje al lado sin pisarse.
+pub struct EspLayout {
+    pub root: PathBuf,
+}
+
+impl EspLayout {
+    pub fn new(esp: impl Into<PathBuf>) -> Self {
+        Self { root: esp.into() }
+    }
+
+    /// Directorio del namespace arje en la ESP — todo lo nuestro vive
+    /// adentro. El padre (`EFI/`) queda compartido con otros loaders.
+    pub fn arje_dir(&self) -> PathBuf {
+        self.root.join("EFI/arje")
+    }
+    pub fn kernel(&self) -> PathBuf {
+        self.arje_dir().join("vmlinuz")
+    }
+    pub fn initramfs(&self) -> PathBuf {
+        self.arje_dir().join("initramfs.cpio.gz")
+    }
+    pub fn seed(&self) -> PathBuf {
+        self.arje_dir().join("seed.card.json")
+    }
+    pub fn cmdline_txt(&self) -> PathBuf {
+        self.arje_dir().join("cmdline.txt")
+    }
+    pub fn entries_dir(&self) -> PathBuf {
+        self.root.join("loader/entries")
+    }
+    pub fn arje_entry(&self) -> PathBuf {
+        self.entries_dir().join("arje.conf")
+    }
+    pub fn loader_conf(&self) -> PathBuf {
+        self.root.join("loader/loader.conf")
+    }
+    pub fn bootx64_fallback(&self) -> PathBuf {
+        self.root.join("EFI/BOOT/BOOTX64.EFI")
+    }
+}
+
+/// Cmdline canónico para arje: incluye el `initrd=` con la ruta UEFI
+/// (backslashes) hacia el initramfs en la ESP, más lo que el usuario quiera
+/// agregar (p. ej. `console=ttyS0` para QEMU serial).
+///
+/// El kernel EFISTUB lee este cmdline como UEFI LoadOption args cuando lo
+/// invoca la firmware directamente, o como `options` del .conf cuando lo
+/// invoca un bootloader (systemd-boot/rEFInd). Ambos paths convergen.
+pub fn canonical_cmdline(extra: &str) -> String {
+    let base = r"initrd=\EFI\arje\initramfs.cpio.gz";
+    if extra.trim().is_empty() {
+        base.to_string()
+    } else {
+        format!("{base} {}", extra.trim())
+    }
+}
+
+/// Genera el contenido del `loader/entries/arje.conf` — formato
+/// systemd-boot/rEFInd-bootmgr (líneas `key value`).
+///
+/// `kernel_rel` e `initrd_rel` son rutas relativas a la ESP **con
+/// backslashes** (convención UEFI). Las construye [`EspLayout`] por ti.
+pub fn render_entry_conf(title: &str, cmdline_extra: &str) -> String {
+    let cmdline = canonical_cmdline(cmdline_extra);
+    format!(
+        "title    {title}\n\
+         linux    /EFI/arje/vmlinuz\n\
+         initrd   /EFI/arje/initramfs.cpio.gz\n\
+         options  {options}\n",
+        options = strip_initrd_from_options(&cmdline),
+    )
+}
+
+/// El `initrd` del cmdline ya está cubierto por la línea `initrd` del
+/// .conf — algunos bootloaders se confunden si aparece dos veces. Strippeamos
+/// el prefijo `initrd=...` (un solo token) cuando lo emitimos como
+/// `options`.
+fn strip_initrd_from_options(cmdline: &str) -> String {
+    cmdline
+        .split_whitespace()
+        .filter(|tok| !tok.starts_with("initrd="))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Contenido del `loader/loader.conf` global — selecciona arje como entry
+/// por defecto y le da 3 segundos al usuario para ver las opciones.
+pub fn render_loader_conf() -> String {
+    "default arje\ntimeout 3\nconsole-mode auto\n".to_string()
+}
+
+/// Construye el initramfs invocando a `arje-packager` con la lista de
+/// binarios provista. Devuelve los bytes gzipeados listos para escribir
+/// a la ESP, y la `EntityCard` parseada (el caller probablemente la
+/// vuelve a serializar para guardar la `seed.card.json` en la ESP).
+pub fn build_initramfs(
+    seed_path: &Path,
+    bins: &[(String, PathBuf)],
+) -> anyhow::Result<(Vec<u8>, EntityCard)> {
+    use anyhow::Context;
+    let card = EntityCard::from_path(seed_path)
+        .with_context(|| format!("cargando seed {}", seed_path.display()))?;
+
+    // Recolectamos exec paths declarados — debe haber un binario por cada
+    // label Native/Legacy del fractal. Repetimos la lógica del CLI del
+    // packager acá para no acoplar al binario.
+    let mut required: std::collections::BTreeMap<String, String> = Default::default();
+    required.insert("arje-zero".into(), "sbin/arje-zero".into());
+    collect_native(&card, &mut required);
+
+    let bin_map: std::collections::BTreeMap<String, PathBuf> =
+        bins.iter().cloned().collect();
+
+    let mut tree: std::collections::BTreeMap<String, Vec<u8>> = Default::default();
+    for (label, dest_rel) in &required {
+        let src = bin_map.get(label).ok_or_else(|| {
+            anyhow::anyhow!("falta --bin {label}=... (lo exige el fractal)")
+        })?;
+        let data = std::fs::read(src)
+            .with_context(|| format!("leyendo binario {label} desde {}", src.display()))?;
+        tree.insert(dest_rel.clone(), data);
+    }
+
+    let mut buf: Vec<u8> = Vec::with_capacity(8 * 1024 * 1024);
+    let mut w = CpioWriter::new(&mut buf);
+    for dir in [
+        "dev", "ente", "proc", "run", "sys", "sbin", "usr", "usr/lib", "usr/lib/arje",
+    ] {
+        w.append(dir, EntryKind::Directory)?;
+    }
+    w.append(
+        "dev/console",
+        EntryKind::CharDev { major: 5, minor: 1, perm: 0o600 },
+    )?;
+    w.append("init", EntryKind::Symlink { target: "sbin/arje-zero" })?;
+
+    let seed_bytes = serde_json::to_vec_pretty(&card)?;
+    w.append(
+        "ente/seed.card.json",
+        EntryKind::Regular { data: &seed_bytes, perm: 0o644 },
+    )?;
+    for (rel, data) in &tree {
+        w.append(rel, EntryKind::Regular { data, perm: 0o755 })?;
+    }
+    let _: &mut Vec<u8> = w.finish()?;
+
+    let gz = arje_packager::gzip(&buf)?;
+    Ok((gz, card))
+}
+
+fn collect_native(
+    card: &EntityCard,
+    out: &mut std::collections::BTreeMap<String, String>,
+) {
+    use arje_card::Payload;
+    for child in &card.genesis {
+        match &child.payload {
+            Payload::Native { exec, .. } | Payload::Legacy { exec, .. } => {
+                let rel = exec.strip_prefix('/').unwrap_or(exec).to_string();
+                out.insert(child.label.clone(), rel);
+            }
+            _ => {}
+        }
+        collect_native(child, out);
+    }
+}
+
+/// Args del comando `efibootmgr` para crear una entrada NVRAM directa al
+/// kernel (EFISTUB), sin bootloader intermedio. La firmware UEFI le pasa
+/// `options` como UEFI LoadOption args, que el stub del kernel interpreta
+/// como cmdline.
+///
+/// `disk` es el dispositivo block (p. ej. `/dev/sda`) y `partition` el
+/// índice de la ESP (1-based). `efi_kernel_path` es la ruta DENTRO de la
+/// partición ESP con backslashes (`\EFI\arje\vmlinuz`).
+///
+/// Devuelve los args como `Vec<String>` para que el caller los pase a
+/// `Command::new("efibootmgr").args(...)`. La función no ejecuta nada —
+/// es testeable.
+pub fn efibootmgr_create_args(
+    disk: &str,
+    partition: u32,
+    label: &str,
+    efi_kernel_path: &str,
+    cmdline: &str,
+) -> Vec<String> {
+    vec![
+        "--create".into(),
+        "--disk".into(),
+        disk.into(),
+        "--part".into(),
+        partition.to_string(),
+        "--loader".into(),
+        efi_kernel_path.into(),
+        "--label".into(),
+        label.into(),
+        "--unicode".into(),
+        cmdline.into(),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cmdline_canonico_sin_extra() {
+        assert_eq!(
+            canonical_cmdline(""),
+            r"initrd=\EFI\arje\initramfs.cpio.gz"
+        );
+        assert_eq!(
+            canonical_cmdline("   "),
+            r"initrd=\EFI\arje\initramfs.cpio.gz"
+        );
+    }
+
+    #[test]
+    fn cmdline_canonico_con_extra() {
+        assert_eq!(
+            canonical_cmdline("console=ttyS0 panic=10"),
+            r"initrd=\EFI\arje\initramfs.cpio.gz console=ttyS0 panic=10"
+        );
+    }
+
+    #[test]
+    fn entry_conf_tiene_linux_initrd_y_options_sin_initrd() {
+        let s = render_entry_conf("arje", "console=ttyS0 panic=10");
+        assert!(s.contains("title    arje\n"), "{s}");
+        assert!(s.contains("linux    /EFI/arje/vmlinuz\n"), "{s}");
+        assert!(s.contains("initrd   /EFI/arje/initramfs.cpio.gz\n"), "{s}");
+        // options no debe duplicar initrd=
+        let opts_line = s.lines().find(|l| l.starts_with("options")).unwrap();
+        assert!(!opts_line.contains("initrd="), "options duplicó initrd: {opts_line}");
+        assert!(opts_line.contains("console=ttyS0"));
+        assert!(opts_line.contains("panic=10"));
+    }
+
+    #[test]
+    fn loader_conf_default_es_arje_con_timeout() {
+        let s = render_loader_conf();
+        assert!(s.contains("default arje"));
+        assert!(s.contains("timeout 3"));
+    }
+
+    #[test]
+    fn esp_layout_devuelve_rutas_canonicas() {
+        let l = EspLayout::new("/mnt/esp");
+        assert_eq!(l.kernel(), PathBuf::from("/mnt/esp/EFI/arje/vmlinuz"));
+        assert_eq!(
+            l.initramfs(),
+            PathBuf::from("/mnt/esp/EFI/arje/initramfs.cpio.gz")
+        );
+        assert_eq!(l.arje_entry(), PathBuf::from("/mnt/esp/loader/entries/arje.conf"));
+        assert_eq!(l.bootx64_fallback(), PathBuf::from("/mnt/esp/EFI/BOOT/BOOTX64.EFI"));
+    }
+
+    #[test]
+    fn efibootmgr_args_son_los_que_esperaria_el_cli() {
+        let args = efibootmgr_create_args(
+            "/dev/sda",
+            1,
+            "arje",
+            r"\EFI\arje\vmlinuz",
+            r"initrd=\EFI\arje\initramfs.cpio.gz console=tty0",
+        );
+        // Forma esperada por `man efibootmgr`.
+        assert_eq!(args[0], "--create");
+        assert!(args.windows(2).any(|w| w[0] == "--disk" && w[1] == "/dev/sda"));
+        assert!(args.windows(2).any(|w| w[0] == "--part" && w[1] == "1"));
+        assert!(args
+            .windows(2)
+            .any(|w| w[0] == "--loader" && w[1] == r"\EFI\arje\vmlinuz"));
+        assert!(args.windows(2).any(|w| w[0] == "--label" && w[1] == "arje"));
+        // El cmdline va como un solo arg luego de --unicode.
+        let unicode_pos = args.iter().position(|a| a == "--unicode").unwrap();
+        assert!(args[unicode_pos + 1].contains("initrd=\\EFI\\arje"));
+        assert!(args[unicode_pos + 1].contains("console=tty0"));
+    }
+}

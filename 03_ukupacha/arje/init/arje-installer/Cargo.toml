@@ -1,0 +1,25 @@
+[package]
+name = "arje-installer"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "arje-installer — copia kernel + initramfs + seed a una ESP montada (to-partition) o formatea un USB GPT/ESP booteable (to-usb). Solo UEFI. Reusa arje-packager para el initramfs."
+
+[lib]
+name = "arje_installer"
+path = "src/lib.rs"
+
+[[bin]]
+name = "arje-installer"
+path = "src/main.rs"
+
+[dependencies]
+arje-card = { path = "../../arje-card" }
+arje-packager = { path = "../arje-packager" }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+
+[dev-dependencies]
+flate2 = { workspace = true }
