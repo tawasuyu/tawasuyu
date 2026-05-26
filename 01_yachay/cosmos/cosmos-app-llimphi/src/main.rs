@@ -103,9 +103,13 @@ fn header_bar(m: &RenderModel, theme: &Theme) -> View<Msg> {
     })
     .fill(theme.bg_panel)
     .text_aligned(
-        format!(
-            "cosmos · {} (mock · Asc {:.1}° MC {:.1}°)",
-            m.title, m.ascendant_deg, m.midheaven_deg
+        rimay_localize::t_args(
+            "cosmos-header",
+            &[
+                ("title", m.title.as_str().into()),
+                ("asc", format!("{:.1}", m.ascendant_deg).into()),
+                ("mc", format!("{:.1}", m.midheaven_deg).into()),
+            ],
         ),
         12.0,
         theme.fg_text,
@@ -167,8 +171,8 @@ fn mock_model() -> RenderModel {
     RenderModel {
         chart_id: ChartId::new(),
         chart_kind: ChartKind::Natal,
-        title: "Carta sintética (demo)".into(),
-        subtitle: Some("sin cómputo real — sólo geometría".into()),
+        title: rimay_localize::t("cosmos-demo-title"),
+        subtitle: Some(rimay_localize::t("cosmos-demo-subtitle")),
         compute_ms: 0,
         ascendant_deg: 8.0,
         midheaven_deg: 280.0,
@@ -194,5 +198,6 @@ fn sign_name(i: usize) -> &'static str {
 }
 
 fn main() {
+    rimay_localize::init();
     llimphi_ui::run::<Cosmos>();
 }

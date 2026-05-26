@@ -239,7 +239,11 @@ fn emitir_subtree(
 
     let etiqueta = match objeto {
         Some(o) => {
-            let marca = if model.fetched.contains_key(&hash) { "  ·  via AoE" } else { "" };
+            let marca = if model.fetched.contains_key(&hash) {
+                rimay_localize::t("wawa-marker-via-aoe")
+            } else {
+                String::new()
+            };
             format!(
                 "{}  ·  {} bytes  ·  {} hijos{}",
                 short_hex(&hash),
@@ -250,11 +254,11 @@ fn emitir_subtree(
         }
         None => {
             let estado = if model.fetching.contains(&hash) {
-                "  ·  buscando…"
+                rimay_localize::t("wawa-marker-searching")
             } else if model.fetch_errors.contains_key(&hash) {
-                "  ·  fetch falló"
+                rimay_localize::t("wawa-marker-fetch-failed")
             } else {
-                "  ·  (no en imagen)"
+                rimay_localize::t("wawa-marker-not-in-image")
             };
             format!("{}{}", short_hex(&hash), estado)
         }
@@ -302,21 +306,28 @@ use llimphi_ui::llimphi_raster::peniko::Color;
 
 fn header_view(model: &Model, palette: &Palette) -> View<Msg> {
     let iface_chip = match &model.iface {
-        Ok(name) => format!("  ·  AoE iface: {name}"),
-        Err(_) => "  ·  AoE: sin interfaz".to_string(),
+        Ok(name) => {
+            rimay_localize::t_args("wawa-iface-ok", &[("name", name.as_str().into())])
+        }
+        Err(_) => rimay_localize::t("wawa-iface-err"),
     };
     let texto = match (&model.disco, &model.error) {
-        (_, Some(e)) => format!("wawa-explorer · error: {e}"),
+        (_, Some(e)) => rimay_localize::t_args(
+            "wawa-header-error",
+            &[("err", e.to_string().into())],
+        ),
         (Some(d), None) => {
             let sb = d.superbloque();
-            format!(
-                "wawa-explorer · {}  ·  {} bytes  ·  v{}  ·  cursor sector {}  ·  {} objetos{}",
-                model.source.display(),
-                d.bytes_imagen(),
-                sb.version,
-                sb.cursor,
-                d.cantidad_objetos(),
-                iface_chip,
+            rimay_localize::t_args(
+                "wawa-header",
+                &[
+                    ("source", model.source.display().to_string().into()),
+                    ("bytes", d.bytes_imagen().to_string().into()),
+                    ("version", sb.version.to_string().into()),
+                    ("cursor", sb.cursor.to_string().into()),
+                    ("objects", d.cantidad_objetos().to_string().into()),
+                    ("iface", iface_chip.into()),
+                ],
             )
         }
         (None, None) => "wawa-explorer".to_string(),
@@ -365,7 +376,7 @@ fn main_view(model: &Model, theme: &Theme, palette: &Palette) -> View<Msg> {
 fn detail_view(model: &Model, theme: &Theme, palette: &Palette) -> View<Msg> {
     let Some(hash) = model.selected else {
         return detail_chrome(
-            "(seleccioná un objeto del tree)",
+            &rimay_localize::t("wawa-detail-empty"),
             String::new(),
             None,
             palette,
@@ -376,50 +387,82 @@ fn detail_view(model: &Model, theme: &Theme, palette: &Palette) -> View<Msg> {
     };
 
     if let Some(obj) = lookup(model, &hash) {
-        let origen = if model.fetched.contains_key(&hash) { "  ·  via AoE" } else { "" };
-        let titulo = format!(
-            "objeto {}  ·  {} bytes  ·  {} hijos{}",
-            hex_completo(&hash),
-            obj.datos.len(),
-            obj.hijos.len(),
-            origen,
+        let origen = if model.fetched.contains_key(&hash) {
+            rimay_localize::t("wawa-marker-via-aoe")
+        } else {
+            String::new()
+        };
+        let titulo = rimay_localize::t_args(
+            "wawa-detail-title",
+            &[
+                ("hash", hex_completo(&hash).into()),
+                ("bytes", obj.datos.len().to_string().into()),
+                ("children", obj.hijos.len().to_string().into()),
+                ("origen", origen.into()),
+            ],
         );
         let mut cuerpo = String::new();
-        cuerpo.push_str("payload (primeros 256 bytes):\n\n");
+        cuerpo.push_str(&rimay_localize::t("wawa-detail-payload-header"));
+        cuerpo.push_str("\n\n");
         cuerpo.push_str(&hex_dump(&obj.datos, 256));
         if !obj.hijos.is_empty() {
-            cuerpo.push_str("\nhijos:\n");
+            cuerpo.push('\n');
+            cuerpo.push_str(&rimay_localize::t("wawa-detail-children-header"));
+            cuerpo.push('\n');
+            let missing_mark = rimay_localize::t("wawa-detail-child-missing");
             for (i, h) in obj.hijos.iter().enumerate() {
-                let mark = if lookup(model, h).is_some() { "" } else { "  (no en imagen)" };
+                let mark = if lookup(model, h).is_some() { "" } else { missing_mark.as_str() };
                 cuerpo.push_str(&format!("  {i:3}.  {}{}\n", short_hex(h), mark));
             }
         }
         return detail_chrome(&titulo, cuerpo, None, palette);
     }
 
-    let titulo = format!("objeto {}  ·  no presente localmente", hex_completo(&hash));
+    let titulo = rimay_localize::t_args(
+        "wawa-detail-title-missing",
+        &[("hash", hex_completo(&hash).into())],
+    );
     let estado_action = if model.fetching.contains(&hash) {
-        ("buscando en la red local (AoE)…\n\nbroadcast SolicitarObjeto, espera ProveedorObjeto con hash verificado.".to_string(), None)
+        (
+            format!(
+                "{}\n\n{}",
+                rimay_localize::t("wawa-detail-searching-aoe-1"),
+                rimay_localize::t("wawa-detail-searching-aoe-2"),
+            ),
+            None,
+        )
     } else if let Some(err) = model.fetch_errors.get(&hash) {
         let cuerpo = format!(
-            "último intento de AoE falló:\n  {err}\n\npodés reintentar con el botón debajo.",
+            "{}\n  {err}\n\n{}",
+            rimay_localize::t("wawa-detail-fetch-error-1"),
+            rimay_localize::t("wawa-detail-fetch-error-2"),
         );
-        (cuerpo, Some(("reintentar fetch from peers".to_string(), Msg::FetchPeers(hash))))
+        (
+            cuerpo,
+            Some((rimay_localize::t("wawa-btn-retry-fetch"), Msg::FetchPeers(hash))),
+        )
     } else {
         match &model.iface {
             Ok(iface) => (
                 format!(
-                    "este objeto está referenciado por un padre pero no vive en la imagen local.\n\n\
-                     podés pedirlo a peers Wawa de la red local (AoE, iface `{iface}`)."
+                    "{}\n\n{}",
+                    rimay_localize::t("wawa-detail-needs-fetch-1"),
+                    rimay_localize::t_args(
+                        "wawa-detail-needs-fetch-2",
+                        &[("iface", iface.as_str().into())],
+                    ),
                 ),
-                Some(("fetch from peers".to_string(), Msg::FetchPeers(hash))),
+                Some((rimay_localize::t("wawa-btn-fetch"), Msg::FetchPeers(hash))),
             ),
             Err(why) => (
                 format!(
-                    "este objeto está referenciado por un padre pero no vive en la imagen local.\n\n\
-                     AoE deshabilitado: {why}\n\n\
-                     pasá `<iface>` como segundo argumento de CLI o ejecutá con CAP_NET_RAW\n\
-                     (`sudo setcap cap_net_raw=eip <binario>`)."
+                    "{}\n\n{}\n\n{}",
+                    rimay_localize::t("wawa-detail-aoe-disabled-1"),
+                    rimay_localize::t_args(
+                        "wawa-detail-aoe-disabled-2",
+                        &[("why", why.to_string().into())],
+                    ),
+                    rimay_localize::t("wawa-detail-aoe-disabled-3"),
                 ),
                 None,
             ),
@@ -602,5 +645,6 @@ const fn libc_eperm() -> i32 {
 }
 
 fn main() {
+    rimay_localize::init();
     llimphi_ui::run::<Explorer>();
 }

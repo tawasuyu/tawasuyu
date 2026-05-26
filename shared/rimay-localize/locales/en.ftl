@@ -83,6 +83,48 @@ dominium-label-hack = hack:
 cosmos-btn-save-transit = 💾 Save transit as free chart
 cosmos-btn-save-progressed = 💾 Save progressed as free chart
 cosmos-btn-save-return = 💾 Save return as free chart
+cosmos-header = cosmos · { $title } (mock · Asc { $asc }° MC { $mc }°)
+cosmos-demo-title = Synthetic chart (demo)
+cosmos-demo-subtitle = no real computation — just geometry
+
+# === wawa-explorer (Wawa image browser) ===
+wawa-marker-via-aoe =   ·  via AoE
+wawa-marker-searching =   ·  searching…
+wawa-marker-fetch-failed =   ·  fetch failed
+wawa-marker-not-in-image =   ·  (not in image)
+wawa-iface-ok =   ·  AoE iface: { $name }
+wawa-iface-err =   ·  AoE: no interface
+wawa-header-error = wawa-explorer · error: { $err }
+wawa-header = wawa-explorer · { $source }  ·  { $bytes } bytes  ·  v{ $version }  ·  cursor sector { $cursor }  ·  { $objects } objects{ $iface }
+wawa-detail-empty = (select an object from the tree)
+wawa-detail-title = object { $hash }  ·  { $bytes } bytes  ·  { $children } children{ $origen }
+wawa-detail-title-missing = object { $hash }  ·  not present locally
+wawa-detail-payload-header = payload (first 256 bytes):
+wawa-detail-children-header = children:
+wawa-detail-child-missing =   (not in image)
+wawa-detail-searching-aoe-1 = searching the local network (AoE)…
+wawa-detail-searching-aoe-2 = broadcast SolicitarObjeto, awaiting ProveedorObjeto with verified hash.
+wawa-detail-fetch-error-1 = last AoE attempt failed:
+wawa-detail-fetch-error-2 = you can retry with the button below.
+wawa-detail-needs-fetch-1 = this object is referenced by a parent but does not live in the local image.
+wawa-detail-needs-fetch-2 = you can request it from Wawa peers on the local network (AoE, iface `{ $iface }`).
+wawa-detail-aoe-disabled-1 = this object is referenced by a parent but does not live in the local image.
+wawa-detail-aoe-disabled-2 = AoE disabled: { $why }
+wawa-detail-aoe-disabled-3 = pass `<iface>` as the second CLI argument or run with CAP_NET_RAW (`sudo setcap cap_net_raw=eip <binary>`).
+wawa-btn-fetch = fetch from peers
+wawa-btn-retry-fetch = retry fetch from peers
+
+# === minga-explorer (repo browser) ===
+minga-header-loaded = Repo: { $path }  ·  reload { $ms } ms
+minga-header-searching = Searching repo at { $path }…
+minga-error-read = could not read repo { $path }: { $err }
+minga-card-nodes-title = AST Nodes
+minga-card-nodes-desc = code fragments parsed
+minga-card-attestations-title = Attestations
+minga-card-attestations-desc = Ed25519 signatures over nodes
+minga-card-mst-title = MST Keys
+minga-card-mst-desc = Merkle Search Tree entries
+minga-empty = Waiting for first refresh…
 
 # === greeter (mirada login) ===
 greeter-subtitle = sign in

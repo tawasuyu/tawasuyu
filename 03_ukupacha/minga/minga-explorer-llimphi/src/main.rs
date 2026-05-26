@@ -135,9 +135,12 @@ impl App for Explorer {
                         m.error = None;
                     }
                     Err(e) => {
-                        m.error = Some(format!(
-                            "no pude leer repo {}: {e}",
-                            m.repo_path.display()
+                        m.error = Some(rimay_localize::t_args(
+                            "minga-error-read",
+                            &[
+                                ("path", m.repo_path.display().to_string().into()),
+                                ("err", e.to_string().into()),
+                            ],
                         ));
                     }
                 }
@@ -159,12 +162,17 @@ impl App for Explorer {
         let accent_mst = Color::from_rgba8(0xb4, 0x8e, 0xad, 0xff);
 
         let header_text = match &model.snapshot {
-            Some(_) => format!(
-                "Repo: {}  ·  reload {} ms",
-                model.repo_path.display(),
-                model.last_load_ms
+            Some(_) => rimay_localize::t_args(
+                "minga-header-loaded",
+                &[
+                    ("path", model.repo_path.display().to_string().into()),
+                    ("ms", model.last_load_ms.to_string().into()),
+                ],
             ),
-            None => format!("Buscando repo en {}…", model.repo_path.display()),
+            None => rimay_localize::t_args(
+                "minga-header-searching",
+                &[("path", model.repo_path.display().to_string().into())],
+            ),
         };
 
         let header = app_header::<Msg>(header_text, vec![], &header_palette);
@@ -193,25 +201,25 @@ impl App for Explorer {
                 let mst_items: Vec<String> = snap.recent_mst_keys.clone();
 
                 body_children.push(stat_card_view::<Msg>(
-                    "Nodos AST",
-                    snap.nodes.to_string(),
-                    "fragments parseados del código",
+                    &rimay_localize::t("minga-card-nodes-title"),
+                    &snap.nodes.to_string(),
+                    &rimay_localize::t("minga-card-nodes-desc"),
                     accent_nodes,
                     &node_items,
                     &stat_palette,
                 ));
                 body_children.push(stat_card_view::<Msg>(
-                    "Atestaciones",
-                    snap.attestations.to_string(),
-                    "firmas Ed25519 sobre los nodos",
+                    &rimay_localize::t("minga-card-attestations-title"),
+                    &snap.attestations.to_string(),
+                    &rimay_localize::t("minga-card-attestations-desc"),
                     accent_attestations,
                     &attestation_items,
                     &stat_palette,
                 ));
                 body_children.push(stat_card_view::<Msg>(
-                    "Claves MST",
-                    snap.mst_keys.to_string(),
-                    "entradas del Merkle Search Tree",
+                    &rimay_localize::t("minga-card-mst-title"),
+                    &snap.mst_keys.to_string(),
+                    &rimay_localize::t("minga-card-mst-desc"),
                     accent_mst,
                     &mst_items,
                     &stat_palette,
@@ -264,7 +272,7 @@ fn empty_message(theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        "Esperando primer refresh…".to_string(),
+        rimay_localize::t("minga-empty"),
         13.0,
         theme.fg_muted,
         Alignment::Start,
@@ -337,6 +345,7 @@ fn short_hash(s: &str) -> String {
 }
 
 fn main() {
+    rimay_localize::init();
     llimphi_ui::run::<Explorer>();
 }
 

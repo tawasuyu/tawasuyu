@@ -89,6 +89,48 @@ dominium-label-hack = hack:
 cosmos-btn-save-transit = 💾 Purichiqta qispi qillqaman waqaychay
 cosmos-btn-save-progressed = 💾 Wiñasqata qispi qillqaman waqaychay
 cosmos-btn-save-return = 💾 Kutiqta qispi qillqaman waqaychay
+cosmos-header = cosmos · { $title } (mock · Asc { $asc }° MC { $mc }°)
+cosmos-demo-title = Carta ruwasqa (demo)
+cosmos-demo-subtitle = mana yupasqa — geometría sapanlla
+
+# === wawa-explorer (Wawa imagen qhawana) ===
+wawa-marker-via-aoe =   ·  AoE-pi
+wawa-marker-searching =   ·  maskachkan…
+wawa-marker-fetch-failed =   ·  fetch pantasqa
+wawa-marker-not-in-image =   ·  (mana imagenpi)
+wawa-iface-ok =   ·  AoE iface: { $name }
+wawa-iface-err =   ·  AoE: mana interfaz
+wawa-header-error = wawa-explorer · pantay: { $err }
+wawa-header = wawa-explorer · { $source }  ·  { $bytes } bytes  ·  v{ $version }  ·  cursor sector { $cursor }  ·  { $objects } imaymana{ $iface }
+wawa-detail-empty = (huk imaymanata akllariy tree-pi)
+wawa-detail-title = imaymana { $hash }  ·  { $bytes } bytes  ·  { $children } wawa{ $origen }
+wawa-detail-title-missing = imaymana { $hash }  ·  mana kaypi
+wawa-detail-payload-header = payload (ñawpaq 256 bytes):
+wawa-detail-children-header = wawakuna:
+wawa-detail-child-missing =   (mana imagenpi)
+wawa-detail-searching-aoe-1 = local red AoE-pi maskachkan…
+wawa-detail-searching-aoe-2 = broadcast SolicitarObjeto, suyay ProveedorObjeto verified hash-niyuq.
+wawa-detail-fetch-error-1 = AoE intento pantasqa:
+wawa-detail-fetch-error-2 = kay botón qhipata watiq maskayta atinki.
+wawa-detail-needs-fetch-1 = kay imaymana huk tayta-pi nisqa, ichaqa mana local imagen-pi kawsachkan.
+wawa-detail-needs-fetch-2 = local red Wawa peer-kuna-mantapis mañakuyta atinki (AoE, iface `{ $iface }`).
+wawa-detail-aoe-disabled-1 = kay imaymana huk tayta-pi nisqa, ichaqa mana local imagen-pi kawsachkan.
+wawa-detail-aoe-disabled-2 = AoE wisq'asqa: { $why }
+wawa-detail-aoe-disabled-3 = CLI iskaynin parlachi-pi `<iface>` churay icha CAP_NET_RAW-wan kachay (`sudo setcap cap_net_raw=eip <binario>`).
+wawa-btn-fetch = peer-kuna-manta apamuy
+wawa-btn-retry-fetch = peer-kuna-manta watiq apamuy
+
+# === minga-explorer (repo qhawana) ===
+minga-header-loaded = Repo: { $path }  ·  watiq apamuy { $ms } ms
+minga-header-searching = { $path }-pi repo maskachkan…
+minga-error-read = { $path } repo mana ñawinchayta atinichu: { $err }
+minga-card-nodes-title = AST Yuyay
+minga-card-nodes-desc = código-manta parsesqa fragments
+minga-card-attestations-title = Firmasqakuna
+minga-card-attestations-desc = nodos hawapi Ed25519 firmakuna
+minga-card-mst-title = MST Llaves
+minga-card-mst-desc = Merkle Search Tree-pi yaykuq
+minga-empty = Ñawpaq refresh suyachkan…
 
 # === greeter (mirada login) ===
 greeter-subtitle = sesionniykita qallariy

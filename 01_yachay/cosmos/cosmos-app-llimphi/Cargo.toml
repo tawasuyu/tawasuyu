@@ -17,3 +17,4 @@ cosmos-canvas-llimphi = { path = "../cosmos-canvas-llimphi" }
 cosmos-render = { path = "../cosmos-render" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
+rimay-localize = { path = "../../../shared/rimay-localize" }
