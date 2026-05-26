@@ -11,11 +11,17 @@
 //  AoE viaja DIRECTAMENTE sobre Ethernet (`EtherType = 0x88B5`, rango
 //  experimental reservado por IEEE para uso local). Cada frame transporta un
 //  `MensajeAkasha` serializado con `postcard` —el mismo codec que ya usa
-//  `format` para el grafo en disco—. Tres mensajes bastan:
+//  `format` para el grafo en disco—. Cuatro mensajes bastan:
 //
-//    1. `SolicitarObjeto(id)`   — pide un nodo del grafo por su hash BLAKE3.
+//    1. `SolicitarObjeto(id)`    — pide un nodo del grafo por su hash BLAKE3.
 //    2. `ProveedorObjeto(id, d)` — responde con el payload binario del nodo.
-//    3. `AnunciarRaiz(id)`      — difunde el hash de la raiz del sistema.
+//    3. `AnunciarRaiz(id)`       — difunde el hash de la raiz del sistema.
+//    4. `AnunciarCanal { ... }`  — difunde el hash de un CANAL de release y la
+//       raiz de manifiesto que su autor recomienda en este momento, firmada.
+//       Es el equivalente nativo de `apt update`: quien escuche un anuncio de
+//       un canal en el que confia puede pedir el canal, verificar las firmas,
+//       descargar el DAG faltante (gratis por dedup BLAKE3) y re-anclar su
+//       superbloque a la raiz nueva. Sin servidor central, sin TLS, sin DNS.
 //
 //  Con esto basta para extender el grafo de objetos —direccionado por
 //  contenido, inmutable, ya BLAKE3— a OTRAS maquinas renaser que escuchen en
@@ -38,6 +44,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use serde::{Deserialize, Serialize};
+use serde_big_array::BigArray;
 
 // =============================================================================
 //  Constantes del protocolo en el cable
@@ -70,6 +77,16 @@ pub type ObjectId = [u8; 32];
 /// Una direccion MAC, en seis bytes.
 pub type Mac = [u8; 6];
 
+/// La identidad de un autor agora en el cable: una clave publica Ed25519, 32
+/// bytes. Coincide byte a byte con `format::AgoraId` —el cable habla el mismo
+/// idioma de identidad que el disco—. `akasha` no enlaza criptografia: solo
+/// transporta la clave. La verificacion vive en quien recibe.
+pub type AutorId = [u8; 32];
+
+/// Una firma Ed25519 en el cable, 64 bytes. Coincide byte a byte con
+/// `format::Firma`. `akasha` la transporta; quien recibe la verifica.
+pub type FirmaAkasha = [u8; 64];
+
 // =============================================================================
 //  El mensaje
 // =============================================================================
@@ -99,6 +116,30 @@ pub enum MensajeAkasha {
     /// Difundo el hash de mi raiz actual — quien me escuche y le falte este
     /// nodo en su grafo local puede pedirmelo.
     AnunciarRaiz(ObjectId),
+    /// Difundo un CANAL de release: el `canal` es el hash de un `format::Canal`
+    /// del grafo; `raiz` es la `Hash` del manifiesto que el `autor` recomienda
+    /// en este `timestamp`, firmada con `firma` sobre el mensaje canonico que
+    /// produce `format::mensaje_a_firmar(nombre, timestamp, raiz)`. El receptor
+    /// que confia en `autor` puede entonces pedir el canal y la raiz, verificar
+    /// las firmas internas, descargar el DAG delta y re-anclar el superbloque.
+    /// Es la unidad de "actualizacion" en wawa — el equivalente nativo de
+    /// `apt update && apt upgrade`, en un solo frame de capa-2 de ~210 bytes.
+    AnunciarCanal {
+        /// Hash del objeto `format::Canal` que historiza las raices firmadas.
+        canal: ObjectId,
+        /// Hash de la raiz de manifiesto que el autor recomienda ahora.
+        raiz: ObjectId,
+        /// Clave publica del autor (`format::AgoraId`).
+        autor: AutorId,
+        /// Instante de la recomendacion, segundos UNIX. Forma parte del mensaje
+        /// firmado: un anuncio no se replica como si fuera de hoy.
+        timestamp: u64,
+        /// Firma Ed25519 del autor sobre `mensaje_a_firmar(_, timestamp, raiz)`.
+        /// El receptor reconstruye el mensaje localmente y la verifica.
+        /// `serde-big-array` cierra el hueco que serde deja en arrays > 32.
+        #[serde(with = "BigArray")]
+        firma: FirmaAkasha,
+    },
 }
 
 /// El motivo por el que un frame AoE no se pudo componer o analizar.
@@ -213,6 +254,33 @@ mod pruebas {
             MensajeAkasha::ProveedorObjeto(id, p) => {
                 assert_eq!(id, HASH_X);
                 assert_eq!(p, payload);
+            }
+            otro => panic!("variante inesperada: {otro:?}"),
+        }
+    }
+
+    #[test]
+    fn anuncio_de_canal_viaja_compacto_y_es_simetrico() {
+        let msg = MensajeAkasha::AnunciarCanal {
+            canal: [0x11; 32],
+            raiz: [0x22; 32],
+            autor: [0x33; 32],
+            timestamp: 1_700_000_000,
+            firma: [0x44; 64],
+        };
+        let frame = componer_frame(MAC_A, MAC_BROADCAST, &msg).unwrap();
+        // 14 cabecera + 1 variante + 32 canal + 32 raiz + 32 autor +
+        // varint(timestamp) <= 10 + 64 firma. Bordes flojos: cabe holgado en MTU.
+        assert!(frame.len() < 200);
+        let (src, rec) = analizar_frame(&frame).unwrap();
+        assert_eq!(src, MAC_A);
+        match rec {
+            MensajeAkasha::AnunciarCanal { canal, raiz, autor, timestamp, firma } => {
+                assert_eq!(canal, [0x11; 32]);
+                assert_eq!(raiz, [0x22; 32]);
+                assert_eq!(autor, [0x33; 32]);
+                assert_eq!(timestamp, 1_700_000_000);
+                assert_eq!(firma, [0x44; 64]);
             }
             otro => panic!("variante inesperada: {otro:?}"),
         }

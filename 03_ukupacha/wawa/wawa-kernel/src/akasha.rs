@@ -64,6 +64,10 @@ static COLA_USUARIO: Mutex<VecDeque<Vec<u8>>> = Mutex::new(VecDeque::new());
 static RX_SOLICITUDES: AtomicU64 = AtomicU64::new(0);
 static RX_PROVEEDORES: AtomicU64 = AtomicU64::new(0);
 static RX_ANUNCIOS: AtomicU64 = AtomicU64::new(0);
+/// Anuncios de canal recibidos. Independiente de `RX_ANUNCIOS` (que cuenta
+/// `AnunciarRaiz`): un anuncio de canal lleva una recomendacion FIRMADA por
+/// un autor agora, y la politica de "actualizar" la decide el userspace.
+static RX_ANUNCIOS_CANAL: AtomicU64 = AtomicU64::new(0);
 
 /// Frames AoE emitidos en TX, por variante.
 static TX_SOLICITUDES: AtomicU64 = AtomicU64::new(0);
@@ -269,6 +273,17 @@ fn procesar(mensaje: MensajeAkasha, origen: Mac, nuestra: Mac) {
             RX_ANUNCIOS.fetch_add(1, Ordering::Relaxed);
             atender_anuncio(id, origen, nuestra);
         }
+        MensajeAkasha::AnunciarCanal { canal, raiz, autor, timestamp, firma: _ } => {
+            // El kernel NO verifica la firma ni decide si actualizar — esa es
+            // politica de userspace (la app `mudanza`, que conoce las
+            // suscripciones del usuario y la red de confianza agora). Aqui solo
+            // se ingesta el DAG: pedimos al emisor el objeto `Canal` y la raiz
+            // de manifiesto si no los tenemos. Cuando lleguen via
+            // `ProveedorObjeto`, el userspace los lee del grafo, verifica la
+            // firma, y propone re-anclar.
+            RX_ANUNCIOS_CANAL.fetch_add(1, Ordering::Relaxed);
+            atender_anuncio_canal(canal, raiz, autor, timestamp, origen, nuestra);
+        }
     }
 }
 
@@ -386,6 +401,45 @@ fn atender_anuncio(id: Hash, origen: Mac, nuestra: Mac) {
     }
 }
 
+/// Atiende un `AnunciarCanal`: pide al emisor el objeto `Canal` y la raiz de
+/// manifiesto si el almacen local no los tiene. No verifica la firma —el
+/// kernel no carga criptografia de identidad— ni reancla nada; solo ingesta
+/// los nodos del DAG para que la app `mudanza` los pueda leer, verificar y
+/// decidir. Los parametros `autor` y `timestamp` van a la traza para
+/// diagnostico; la firma se descarto en el match.
+fn atender_anuncio_canal(
+    canal: Hash,
+    raiz: Hash,
+    autor: [u8; 32],
+    timestamp: u64,
+    origen: Mac,
+    nuestra: Mac,
+) {
+    let _ = writeln!(
+        baliza::Serie,
+        "akasha :: anuncio de canal :: canal={} raiz={} autor={} ts={} de {}",
+        FormatoHash(&canal),
+        FormatoHash(&raiz),
+        FormatoHash(&autor),
+        timestamp,
+        FormatoMac(&origen)
+    );
+    // Pedir `canal` si nos falta.
+    if matches!(almacen::recuperar(&canal), Ok(None)) {
+        let mensaje = MensajeAkasha::SolicitarObjeto(canal);
+        if enviar(&mensaje, nuestra, origen).is_ok() {
+            TX_SOLICITUDES.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    // Pedir la raiz de manifiesto si nos falta.
+    if matches!(almacen::recuperar(&raiz), Ok(None)) {
+        let mensaje = MensajeAkasha::SolicitarObjeto(raiz);
+        if enviar(&mensaje, nuestra, origen).is_ok() {
+            TX_SOLICITUDES.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
 // =============================================================================
 //  Difusion periodica de nuestra raiz — el oficio numero 3
 // =============================================================================
@@ -492,6 +546,7 @@ pub struct ResumenAkasha {
     pub rx_solicitudes: u64,
     pub rx_proveedores: u64,
     pub rx_anuncios: u64,
+    pub rx_anuncios_canal: u64,
     pub tx_solicitudes: u64,
     pub tx_proveedores: u64,
     pub tx_anuncios: u64,
@@ -507,6 +562,7 @@ pub fn resumen() -> ResumenAkasha {
         rx_solicitudes: RX_SOLICITUDES.load(Ordering::Relaxed),
         rx_proveedores: RX_PROVEEDORES.load(Ordering::Relaxed),
         rx_anuncios: RX_ANUNCIOS.load(Ordering::Relaxed),
+        rx_anuncios_canal: RX_ANUNCIOS_CANAL.load(Ordering::Relaxed),
         tx_solicitudes: TX_SOLICITUDES.load(Ordering::Relaxed),
         tx_proveedores: TX_PROVEEDORES.load(Ordering::Relaxed),
         tx_anuncios: TX_ANUNCIOS.load(Ordering::Relaxed),

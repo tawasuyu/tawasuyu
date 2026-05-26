@@ -8,10 +8,12 @@
 #  alguna futura app del userspace.
 #
 #  El protocolo extiende el GRAFO de objetos persistentes (Fase 6) sobre una
-#  red Ethernet cruda, sin pasar por TCP/IP. Tres mensajes bastan: solicitar
+#  red Ethernet cruda, sin pasar por TCP/IP. Cuatro mensajes bastan: solicitar
 #  un objeto por su hash BLAKE3, proveerlo de vuelta, anunciar la raiz actual
-#  del sistema. Se serializa con `postcard` —compacto y deterministico— y
-#  viaja en frames de EtherType experimental `0x88B5`.
+#  del sistema, y anunciar un canal de release firmado (la unidad de
+#  actualizacion nativa, equivalente a `apt update` sin servidor central). Se
+#  serializa con `postcard` —compacto y deterministico— y viaja en frames de
+#  EtherType experimental `0x88B5`.
 #
 #  Queda EXCLUIDO del espacio de trabajo (ver el Cargo.toml raiz), como el
 #  kernel y como `format`: lo consume un paquete bare-metal, asi que fija
@@ -36,3 +38,6 @@ doctest = false
 # Asi el grafo habla el mismo idioma en el disco y en el cable.
 serde = { version = "1", default-features = false, features = ["alloc", "derive"] }
 postcard = { version = "1", default-features = false, features = ["alloc"] }
+# `serde-big-array` cubre el hueco de serde con arrays mayores a 32 bytes: la
+# firma Ed25519 del `AnunciarCanal` (`[u8; 64]`) lo requiere. `no_std`.
+serde-big-array = { version = "0.5", default-features = false }

@@ -28,6 +28,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use serde::{Deserialize, Serialize};
+use serde_big_array::BigArray;
 
 // =============================================================================
 //  Constantes del format en disco
@@ -48,6 +49,17 @@ pub const VERSION_SUPERBLOQUE: u32 = 2;
 /// (presupuesto cooperativo por `tick`); el kernel ya no impone un techo unico.
 pub const VERSION_MANIFIESTO: u32 = 2;
 
+/// Version del format del canal de release serializado. Independiente del
+/// manifiesto: un canal es otro objeto del grafo, con su propia historia de
+/// raices recomendadas. v1 inaugura el modelo de distribucion.
+pub const VERSION_CANAL: u32 = 1;
+
+/// Techo del nombre de un canal, en bytes. Acota la cabecera serializada y
+/// fuerza a que los canales se nombren cortos —`estable`, `beta`, `dev`,
+/// `cofradia-tal`—. Quien intente registrar un canal con un nombre mas largo
+/// se topa con un error de deserializacion.
+pub const NOMBRE_CANAL_LIMITE: usize = 64;
+
 /// Techo del tamaño de un objeto serializado: 1 MiB. Acota los buferes de E/S
 /// y permite descartar un registro corrupto sin leer un disparate.
 pub const MAX_OBJETO: usize = 1024 * 1024;
@@ -59,6 +71,17 @@ pub const TAM_SECTOR: usize = 512;
 /// El identificador de un objeto: el hash BLAKE3 de su forma serializada. En
 /// un almacen direccionado por contenido, la identidad ES el contenido.
 pub type Hash = [u8; 32];
+
+/// La identidad de un autor agora: una clave publica Ed25519, 32 bytes. Quien
+/// firma una raiz de canal se identifica con esto. `format` no valida la
+/// firma —no enlaza ninguna primitiva criptografica—; solo declara su forma.
+/// La verificacion vive en `agora` (o en `firma`), donde corresponde.
+pub type AgoraId = [u8; 32];
+
+/// Una firma Ed25519, 64 bytes. La produce `agora` sobre el mensaje canonico
+/// que devuelve [`mensaje_a_firmar`]. `format` la transporta y la deja a quien
+/// pueda verificarla.
+pub type Firma = [u8; 64];
 
 // =============================================================================
 //  Los tipos del grafo
@@ -132,6 +155,50 @@ pub struct EntradaApp {
     pub estado: Option<Hash>,
 }
 
+/// Un canal de release: un objeto del grafo que historiza, en orden cronologico,
+/// las raices de manifiesto que su(s) autor(es) recomiendan. Es el equivalente
+/// nativo de un repositorio apt/dnf/pacman, pero firmado por una `AgoraId` y no
+/// por una infraestructura central. Quien se suscribe a un canal confia en su
+/// autor; el canal nunca dice "esta es la unica version", dice "esta es mi
+/// recomendacion en este momento". El historial completo viaja junto.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct Canal {
+    /// Version del format — debe ser [`VERSION_CANAL`].
+    pub version: u32,
+    /// Nombre legible del canal: `estable`, `beta`, `dev`, `cofradia-tal`.
+    /// Acotado a [`NOMBRE_CANAL_LIMITE`] bytes para que la cabecera sea barata.
+    pub nombre: String,
+    /// La identidad del autor que firma este canal. Quien recibe el canal
+    /// verifica que cada `RaizFirmada` lleve una firma valida sobre esta clave.
+    /// Un canal puede cambiar de autor en una version futura (multi-firma); por
+    /// ahora, una clave gobierna un canal.
+    pub autor: AgoraId,
+    /// El historial de raices recomendadas, ordenado por `timestamp` ascendente.
+    /// La ultima entrada es la recomendacion vigente. El historial completo se
+    /// conserva para que un nodo pueda volver atras —rollback— sin pedirle
+    /// permiso al canal.
+    pub raices: Vec<RaizFirmada>,
+}
+
+/// Una entrada del historial de un canal: una raiz de manifiesto, el instante
+/// en que el autor la propuso, y la firma Ed25519 con la que el autor la
+/// respalda. La firma se calcula sobre [`mensaje_a_firmar`].
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct RaizFirmada {
+    /// Instante en que el autor propuso esta raiz, segundos desde UNIX epoch.
+    /// Un receptor desconfia de raices con timestamp futuro mas alla de un
+    /// margen razonable —proteccion barata contra anuncios envenenados—.
+    pub timestamp: u64,
+    /// El hash del [`Manifiesto`] que esta raiz inaugura. Re-anclar el
+    /// superbloque a este hash es, literalmente, "actualizar a esta version".
+    pub raiz_manifiesto: Hash,
+    /// La firma Ed25519 del autor del canal sobre [`mensaje_a_firmar`].
+    /// `serde` no derivara `Deserialize` para `[u8; 64]` sin ayuda —su soporte
+    /// directo se detiene en 32 bytes—; `serde-big-array` cierra ese hueco.
+    #[serde(with = "BigArray")]
+    pub firma: Firma,
+}
+
 // =============================================================================
 //  (De)serializacion — la forma binaria que viaja al disco
 // =============================================================================
@@ -183,6 +250,55 @@ impl Manifiesto {
         }
         Ok(manifiesto)
     }
+}
+
+impl Canal {
+    /// Serializa el canal a su forma binaria `postcard` — la carga util del
+    /// objeto del grafo que lo aloja. Rechaza por adelantado un nombre que
+    /// supere [`NOMBRE_CANAL_LIMITE`]: mejor un error de serializacion que un
+    /// canal grafico que no quepa en disco.
+    pub fn serializar(&self) -> Result<Vec<u8>, &'static str> {
+        if self.nombre.len() > NOMBRE_CANAL_LIMITE {
+            return Err("canal :: nombre demasiado largo");
+        }
+        postcard::to_allocvec(self).map_err(|_| "canal :: serializacion fallida")
+    }
+
+    /// Reconstruye un canal desde la carga util de su objeto. Rechaza version
+    /// desconocida y nombres que excedan [`NOMBRE_CANAL_LIMITE`] —un canal con
+    /// nombre extravagante se detecta al recibirlo, no al servirlo—.
+    pub fn deserializar(bytes: &[u8]) -> Result<Canal, &'static str> {
+        let (canal, _) = postcard::take_from_bytes::<Canal>(bytes)
+            .map_err(|_| "canal :: deserializacion fallida")?;
+        if canal.version != VERSION_CANAL {
+            return Err("canal :: version de format desconocida");
+        }
+        if canal.nombre.len() > NOMBRE_CANAL_LIMITE {
+            return Err("canal :: nombre excede el techo");
+        }
+        Ok(canal)
+    }
+
+    /// La recomendacion vigente del canal: la ultima `RaizFirmada` por
+    /// `timestamp`, o `None` si el canal aun no propuso ninguna. Quien quiera
+    /// "actualizar" sigue este hash; quien quiera rollback elige otra entrada
+    /// del historial.
+    pub fn vigente(&self) -> Option<&RaizFirmada> {
+        self.raices.last()
+    }
+}
+
+/// Compone el mensaje canonico que un autor firma para respaldar una raiz en
+/// un canal: la concatenacion `nombre || timestamp_le || raiz_manifiesto`.
+/// Es la unica verdad del payload firmable —quien firma y quien verifica han
+/// de componerlo por aqui, jamas a mano—. La canonizacion incluye el nombre
+/// del canal para que una firma valida en `dev` no se replique en `estable`.
+pub fn mensaje_a_firmar(nombre_canal: &str, timestamp: u64, raiz_manifiesto: &Hash) -> Vec<u8> {
+    let mut mensaje = Vec::with_capacity(nombre_canal.len() + 8 + raiz_manifiesto.len());
+    mensaje.extend_from_slice(nombre_canal.as_bytes());
+    mensaje.extend_from_slice(&timestamp.to_le_bytes());
+    mensaje.extend_from_slice(raiz_manifiesto);
+    mensaje
 }
 
 // =============================================================================
@@ -275,6 +391,75 @@ mod pruebas {
         assert!(Manifiesto::deserializar(&bytes).is_err());
         manifiesto.version = VERSION_MANIFIESTO;
         assert!(Manifiesto::deserializar(&manifiesto.serializar().unwrap()).is_ok());
+    }
+
+    #[test]
+    fn canal_ida_y_vuelta_con_dos_raices() {
+        let canal = Canal {
+            version: VERSION_CANAL,
+            nombre: String::from("estable"),
+            autor: [0xA1; 32],
+            raices: vec![
+                RaizFirmada {
+                    timestamp: 1_700_000_000,
+                    raiz_manifiesto: [0x11; 32],
+                    firma: [0x22; 64],
+                },
+                RaizFirmada {
+                    timestamp: 1_700_000_100,
+                    raiz_manifiesto: [0x33; 32],
+                    firma: [0x44; 64],
+                },
+            ],
+        };
+        let bytes = canal.serializar().unwrap();
+        let recuperado = Canal::deserializar(&bytes).unwrap();
+        assert_eq!(recuperado, canal);
+        // `vigente` devuelve la ultima entrada por orden, no la mas reciente
+        // por timestamp — el contrato es que las entradas vienen ordenadas;
+        // verificarlo es responsabilidad de quien construye el canal.
+        assert_eq!(recuperado.vigente().unwrap().raiz_manifiesto, [0x33; 32]);
+    }
+
+    #[test]
+    fn canal_rechaza_version_y_nombre_excedido() {
+        let mut canal = Canal {
+            version: 99,
+            nombre: String::from("dev"),
+            autor: [0; 32],
+            raices: Vec::new(),
+        };
+        let bytes = postcard::to_allocvec(&canal).unwrap();
+        assert!(Canal::deserializar(&bytes).is_err());
+        canal.version = VERSION_CANAL;
+        assert!(Canal::deserializar(&canal.serializar().unwrap()).is_ok());
+
+        // Nombre excedido: el serializador lo veta sin escribir nada al disco.
+        let largo = Canal {
+            version: VERSION_CANAL,
+            nombre: "x".repeat(NOMBRE_CANAL_LIMITE + 1),
+            autor: [0; 32],
+            raices: Vec::new(),
+        };
+        assert!(largo.serializar().is_err());
+    }
+
+    #[test]
+    fn mensaje_a_firmar_es_canonico_y_distingue_canales() {
+        let raiz: Hash = [0x55; 32];
+        let m1 = mensaje_a_firmar("estable", 42, &raiz);
+        let m2 = mensaje_a_firmar("estable", 42, &raiz);
+        assert_eq!(m1, m2, "el mensaje firmable debe ser deterministico");
+
+        // Cambiar el canal cambia el mensaje: una firma valida en `dev` no se
+        // replica en `estable`.
+        let m3 = mensaje_a_firmar("dev", 42, &raiz);
+        assert_ne!(m1, m3);
+
+        // Cambiar el timestamp tambien — no se replica una recomendacion vieja
+        // como si fuera nueva.
+        let m4 = mensaje_a_firmar("estable", 43, &raiz);
+        assert_ne!(m1, m4);
     }
 
     #[test]
