@@ -119,6 +119,7 @@ members = [
     "02_ruway/llimphi/llimphi-theme",
     "02_ruway/llimphi/llimphi-ui",
     "02_ruway/llimphi/android/clear-screen-android",
+    "02_ruway/llimphi/android/vello-hello-android",
     "02_ruway/llimphi/widgets/app-header",
     "02_ruway/llimphi/widgets/banner",
     "02_ruway/llimphi/widgets/button",

@@ -1,0 +1,39 @@
+[package]
+name = "vello-hello-android"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Tier 1.5 Android: vello + llimphi-raster pintando una chacana animada como smoke test del stack completo."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+llimphi-hal = { path = "../../llimphi-hal" }
+llimphi-raster = { path = "../../llimphi-raster" }
+winit = { workspace = true, features = ["android-native-activity"] }
+wgpu.workspace = true
+vello.workspace = true
+pollster.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+android-activity = { version = "0.6", features = ["native-activity"] }
+android_logger = "0.14"
+log = "0.4"
+
+[package.metadata.android]
+package = "net.gioser.llimphi.vellohello"
+build_targets = ["aarch64-linux-android", "x86_64-linux-android"]
+min_sdk_version = 24
+target_sdk_version = 34
+
+[package.metadata.android.application]
+label = "Llimphi · vello-hello"
+debuggable = true
+
+[package.metadata.android.application.activity]
+config_changes = "orientation|screenSize|keyboardHidden"
+launch_mode = "singleTop"
+orientation = "unspecified"
