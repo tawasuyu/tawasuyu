@@ -1,0 +1,16 @@
+[package]
+name = "llimphi-module-bookmarks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-module-bookmarks - marcadores per-file persistentes en la sesion del editor. Modulo Llimphi: el host emite ToggleAt(path, line) al disparar Ctrl+Alt+B, JumpNext/JumpPrev para navegar (devuelve JumpTo accion), y OpenList para abrir un overlay tipo symbol-outline con fuzzy filter sobre los marks. No persiste a disco - el host puede serializar marks si quiere."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-text-input = { workspace = true }
+nucleo-matcher = { workspace = true }
+
+[dev-dependencies]

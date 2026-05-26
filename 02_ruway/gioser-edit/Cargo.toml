@@ -20,6 +20,7 @@ llimphi-module-command-palette = { workspace = true }
 llimphi-module-diff-viewer = { workspace = true }
 llimphi-module-fif = { workspace = true }
 llimphi-module-file-picker = { workspace = true }
+llimphi-module-bookmarks = { workspace = true }
 llimphi-module-mini-map = { workspace = true }
 llimphi-module-shuma-term = { workspace = true }
 llimphi-module-symbol-outline = { workspace = true }

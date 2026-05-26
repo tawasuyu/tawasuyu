@@ -49,6 +49,9 @@ use llimphi_module_fif::{self as fif, FifAction, FifMsg, FifPalette, FifState};
 use llimphi_module_file_picker::{
     self as picker, PickerAction, PickerMsg, PickerPalette, PickerState,
 };
+use llimphi_module_bookmarks::{
+    self as bookmarks, BookmarksAction, BookmarksMsg, BookmarksOverlay, BookmarksPalette, BookmarksState,
+};
 use llimphi_module_mini_map::{
     self as minimap, MiniMapAction, MiniMapMsg, MiniMapPalette, MiniMapState, Snapshot as MiniMapSnapshot,
 };
@@ -119,6 +122,7 @@ enum Msg {
     /// El LSP devolvió document symbols — repoblar el outline.
     OutlineRefresh(Vec<SymbolItem>),
     MiniMap(MiniMapMsg),
+    Bookmarks(BookmarksMsg),
     /// Mensajes del módulo diff viewer (Ctrl+Shift+D).
     Diff(DiffMsg),
     // Find
@@ -212,6 +216,7 @@ struct Model {
     /// primera respuesta.
     outline_symbols: Vec<SymbolItem>,
     minimap: Option<MiniMapState>,
+    bookmarks: BookmarksState,
     /// Diff viewer; `None` cerrado. Snapshot del diff: si el buffer
     /// cambia con el panel abierto, las filas no se recomputan — el
     /// usuario cierra y reabre para refrescar (semántica congelada,
@@ -394,6 +399,7 @@ impl App for EditorApp {
             outline: None,
             outline_symbols: Vec::new(),
             minimap: None,
+            bookmarks: BookmarksState::new(),
             diff: None,
             tabs: Vec::new(),
             active: None,
@@ -460,6 +466,7 @@ impl App for EditorApp {
                 m
             }
             Msg::MiniMap(mm) => apply_minimap(model, mm),
+            Msg::Bookmarks(bm) => apply_bookmarks(model, bm),
             Msg::Diff(dm) => apply_diff(model, dm),
             Msg::FindOpen => {
                 let mut m = model;
@@ -904,6 +911,9 @@ impl App for EditorApp {
                 return Some(Msg::Outline(om));
             }
         }
+        if let Some(bm) = bookmarks::on_key(&model.bookmarks, event) {
+            return Some(Msg::Bookmarks(bm));
+        }
         // Diff viewer abierto: idem.
         if let Some(state) = model.diff.as_ref() {
             if let Some(dm) = diff::on_key(state, event) {
@@ -1003,6 +1013,28 @@ impl App for EditorApp {
             if minimap::open_shortcut(event) {
                 let already_open = model.minimap.is_some();
                 return Some(Msg::MiniMap(if already_open { MiniMapMsg::Close } else { MiniMapMsg::Open }));
+            }
+            if bookmarks::open_shortcut(event) {
+                let already_open = model.bookmarks.overlay.is_some();
+                return Some(Msg::Bookmarks(if already_open { BookmarksMsg::CloseList } else { BookmarksMsg::OpenList }));
+            }
+            if bookmarks::toggle_shortcut(event) {
+                if let (Some(idx), Some(path)) = (model.active, model.active_path()) {
+                    let line = model.tabs[idx].editor.cursor.caret.line;
+                    return Some(Msg::Bookmarks(BookmarksMsg::ToggleAt { path, line }));
+                }
+            }
+            if bookmarks::next_shortcut(event) {
+                if let (Some(idx), Some(path)) = (model.active, model.active_path()) {
+                    let line = model.tabs[idx].editor.cursor.caret.line;
+                    return Some(Msg::Bookmarks(BookmarksMsg::JumpNext { current_path: path, current_line: line }));
+                }
+            }
+            if bookmarks::prev_shortcut(event) {
+                if let (Some(idx), Some(path)) = (model.active, model.active_path()) {
+                    let line = model.tabs[idx].editor.cursor.caret.line;
+                    return Some(Msg::Bookmarks(BookmarksMsg::JumpPrev { current_path: path, current_line: line }));
+                }
             }
             // Ctrl+Alt+L = format (estilo JetBrains; antes era Ctrl+Shift+F).
             if event.modifiers.alt
@@ -1291,6 +1323,10 @@ fn active_editor_content(model: &Model, theme: &Theme) -> View<Msg> {
     if let Some(d) = model.diff.as_ref() {
         let pal = DiffPalette::from_theme(theme);
         children.push(diff::view(d, &pal, DIFF_PANEL_H, Msg::Diff));
+    }
+    if model.bookmarks.overlay.is_some() {
+        let pal = BookmarksPalette::from_theme(theme);
+        children.push(bookmarks::view(&model.bookmarks, &model.root, &pal, Msg::Bookmarks));
     }
     if let Some(p) = model.picker.as_ref() {
         let palette = PickerPalette::from_theme(theme);
@@ -2010,6 +2046,37 @@ fn apply_outline(model: Model, om: OutlineMsg) -> Model {
 /// una sola vez en `init` y vive en `Model.palette_commands`. Cada `id`
 /// debe estar mapeado en [`palette_id_to_msg`] para que el invoke pueda
 /// dispatchearse.
+
+/// Routea un BookmarksMsg al modulo bookmarks. El state es
+/// always-on (no Option), pero el overlay es opcional: OpenList
+/// lo crea, CloseList lo cierra.
+fn apply_bookmarks(model: Model, bm: BookmarksMsg) -> Model {
+    let mut m = model;
+    if matches!(bm, BookmarksMsg::OpenList) && m.bookmarks.overlay.is_none() {
+        m.bookmarks.overlay = Some(BookmarksOverlay::new());
+        bookmarks::refilter_overlay(&mut m.bookmarks);
+        let n = m.bookmarks.marks.len();
+        m.status = format!("bookmarks abierto - {} marks - Enter salta - Esc cierra", n);
+        return m;
+    }
+    let action = bookmarks::apply(&mut m.bookmarks, bm);
+    match action {
+        BookmarksAction::None => {}
+        BookmarksAction::Close => m.bookmarks.overlay = None,
+        BookmarksAction::SetStatus(s) => m.status = s,
+        BookmarksAction::JumpTo { path, line } => {
+            m.bookmarks.overlay = None;
+            m = open_path(m, path);
+            if let Some(tab) = m.active_tab_mut() {
+                let max_line = tab.editor.buffer.len_lines().saturating_sub(1);
+                let target = line.min(max_line);
+                tab.editor.set_caret_at(target, 0);
+                tab.editor.ensure_caret_visible(EDITOR_VISIBLE_LINES);
+            }
+        }
+    }
+    m
+}
 fn apply_minimap(model: Model, mm: MiniMapMsg) -> Model {
     let mut m = model;
     if matches!(mm, MiniMapMsg::Open) && m.minimap.is_none() {
@@ -2087,6 +2154,9 @@ fn build_command_catalog() -> Vec<PaletteCommand> {
             .with_shortcut("Ctrl+Shift+D"),
         PaletteCommand::new("editor.miniMap", "Toggle Mini-Map", "Editor")
             .with_shortcut("Ctrl+Shift+M"),
+        PaletteCommand::new("editor.bookmarkList", "List Bookmarks", "Editor")
+            .with_shortcut("Ctrl+Shift+B"),
+        PaletteCommand::new("editor.bookmarkClear", "Clear All Bookmarks", "Editor"),
     ]
 }
 
@@ -2113,6 +2183,8 @@ fn palette_id_to_msg(id: &str) -> Option<Msg> {
         "editor.outline" => Msg::Outline(OutlineMsg::Open),
         "editor.diff" => Msg::Diff(DiffMsg::Open),
         "editor.miniMap" => Msg::MiniMap(MiniMapMsg::Open),
+        "editor.bookmarkList" => Msg::Bookmarks(BookmarksMsg::OpenList),
+        "editor.bookmarkClear" => Msg::Bookmarks(BookmarksMsg::ClearAll),
         _ => return None,
     })
 }

@@ -289,6 +289,7 @@ distintos a propósito.
 | `llimphi-module-fif`           | `editor.find-in-files`   | Ctrl+Shift+F      |
 | `llimphi-module-file-picker`   | `editor.file-picker`     | Ctrl+P            |
 | `llimphi-module-shuma-term`    | `editor.terminal`        | Ctrl+`            |
+| `llimphi-module-bookmarks`     | `editor.bookmarks`       | Ctrl+Alt+B / Ctrl+Shift+B |
 | `llimphi-module-mini-map`      | `editor.mini-map`        | Ctrl+Shift+M      |
 | `llimphi-module-symbol-outline`| `editor.symbol-outline`  | Ctrl+Shift+O      |
 
