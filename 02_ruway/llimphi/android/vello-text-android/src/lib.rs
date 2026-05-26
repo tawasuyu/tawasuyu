@@ -60,6 +60,10 @@ struct App {
     state: Option<State>,
     frames: u64,
     last_report: Instant,
+    /// `None` antes del primer present; al loguearse pasa a `Some` para
+    /// no spamear. Mide el tiempo "tiempo en pantalla" real del usuario.
+    first_paint: Option<Instant>,
+    started: Instant,
 }
 
 impl App {
@@ -68,30 +72,50 @@ impl App {
             state: None,
             frames: 0,
             last_report: Instant::now(),
+            first_paint: None,
+            started: Instant::now(),
         }
     }
 
     fn boot(&self, event_loop: &ActiveEventLoop) -> Result<State, String> {
-        log::info!("[boot] 1/9 Window");
+        // Timings paso a paso — Android tarda 3-5s en el cold-start,
+        // queremos saber si es vello shader compile, fontique scan,
+        // request_device, o el primer render. `step` toma el delta
+        // desde la marca anterior y lo loguea.
+        let t0 = Instant::now();
+        let mut tprev = t0;
+        let mut step = |name: &str| {
+            let now = Instant::now();
+            let dt = now.duration_since(tprev);
+            let total = now.duration_since(t0);
+            log::info!(
+                "[boot+{:>5}ms] {} (+{}ms)",
+                total.as_millis(),
+                name,
+                dt.as_millis()
+            );
+            tprev = now;
+        };
+
+        step("0/9 START");
         let window = event_loop
             .create_window(WindowAttributes::default().with_title("llimphi · vello-text"))
             .map_err(|e| format!("create_window: {e}"))?;
         let window = Arc::new(window);
         let size = window.inner_size();
-        log::info!("[boot] window {}x{}", size.width, size.height);
+        step(&format!("1/9 Window {}x{}", size.width, size.height));
 
-        log::info!("[boot] 2/9 Instance");
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..Default::default()
         });
+        step("2/9 wgpu::Instance");
 
-        log::info!("[boot] 3/9 Surface");
         let surface = instance
             .create_surface(window.clone())
             .map_err(|e| format!("create_surface: {e}"))?;
+        step("3/9 Surface");
 
-        log::info!("[boot] 4/9 Adapter compatible");
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
@@ -99,14 +123,8 @@ impl App {
         }))
         .ok_or_else(|| "request_adapter → None".to_string())?;
         let info = adapter.get_info();
-        log::info!(
-            "[boot] adapter {:?} · {} · {:?}",
-            info.backend,
-            info.name,
-            info.driver_info
-        );
+        step(&format!("4/9 Adapter {:?} {}", info.backend, info.name));
 
-        log::info!("[boot] 5/9 Device");
         let limits = wgpu::Limits::default().using_resolution(adapter.limits());
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
@@ -118,26 +136,37 @@ impl App {
             None,
         ))
         .map_err(|e| format!("request_device: {e}"))?;
+        step("5/9 Device + Queue");
 
-        log::info!("[boot] 6/9 Hal");
         let hal = Hal {
             instance,
             adapter,
             device,
             queue,
         };
+        step("6/9 Hal armado");
 
-        log::info!("[boot] 7/9 WinitSurface::from_surface");
         let surface = WinitSurface::from_surface(&hal, window.clone(), surface)
             .map_err(|e| format!("WinitSurface: {e}"))?;
+        step("7/9 WinitSurface::from_surface");
 
-        log::info!("[boot] 8/9 Renderer (vello)");
+        // Sospechoso #1: vello compila ~20 shaders WGSL + crea pipelines
+        // de compute. En desktop ~150ms; en Adreno entry-level estimamos
+        // 1-3s. Si es esto, la solución es pipeline_cache persistente.
         let renderer =
             llimphi_raster::Renderer::new(&hal).map_err(|e| format!("Renderer: {e}"))?;
+        step("8/9 vello Renderer (shaders + pipelines)");
 
-        log::info!("[boot] 9/9 Typesetter (parley + fontique scan /system/fonts)");
+        // Sospechoso #2: fontique escanea /system/fonts y parsea cada
+        // TTF/OTF para indexar metadata (family, style, scripts).
+        // Android tiene ~50-80 fuentes Noto + Roboto.
         let typesetter = Typesetter::new();
-        log::info!("[boot] ✓ stack texto listo");
+        step("9/9 Typesetter (fontique scan /system/fonts)");
+
+        log::info!(
+            "[boot ✓ total {}ms] stack texto listo",
+            t0.elapsed().as_millis()
+        );
 
         window.request_redraw();
         Ok(State {
@@ -203,6 +232,15 @@ impl ApplicationHandler for App {
                     log::error!("render: {e}");
                 }
                 state.surface.present(frame, &state.hal);
+
+                if self.first_paint.is_none() {
+                    let elapsed = self.started.elapsed();
+                    log::info!(
+                        "[FIRST PAINT] {}ms desde android_main START",
+                        elapsed.as_millis()
+                    );
+                    self.first_paint = Some(Instant::now());
+                }
 
                 self.frames += 1;
                 if self.last_report.elapsed().as_secs() >= 2 {
