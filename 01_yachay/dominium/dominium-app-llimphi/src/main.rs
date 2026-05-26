@@ -1101,45 +1101,97 @@ fn side_panel(model: &Model, stats: &WorldStats, theme: &Theme) -> View<Msg> {
         play_btn,
         reset_btn,
         separator(),
-        stat_row("Población", &stats.n.to_string(), theme),
-        stat_row("Materia", &format!("{:.0}", stats.total_materia), theme),
-        stat_row("Oro", &format!("{:.0}", stats.total_oro), theme),
-        stat_row("Energía", &format!("{:.0}", stats.total_energia), theme),
+        stat_row(
+            &rimay_localize::t("dominium-stat-population"),
+            &stats.n.to_string(),
+            theme,
+        ),
+        stat_row(
+            &rimay_localize::t("dominium-stat-materia"),
+            &format!("{:.0}", stats.total_materia),
+            theme,
+        ),
+        stat_row(
+            &rimay_localize::t("dominium-stat-oro"),
+            &format!("{:.0}", stats.total_oro),
+            theme,
+        ),
+        stat_row(
+            &rimay_localize::t("dominium-stat-energia"),
+            &format!("{:.0}", stats.total_energia),
+            theme,
+        ),
         separator(),
         label_view(
             &rimay_localize::t("dominium-header-metricas"),
             11.0,
             theme.fg_muted,
         ),
-        stat_row("Época", Epoch::classify(stats).label(), theme),
-        stat_row("Gini energía", &format!("{:.3}", stats.gini_energia), theme),
-        stat_row("Edad media", &format!("{:.1}", stats.mean_edad), theme),
         stat_row(
-            "Var ψ orden",
+            &rimay_localize::t("dominium-stat-epoca"),
+            Epoch::classify(stats).label(),
+            theme,
+        ),
+        stat_row(
+            &rimay_localize::t("dominium-stat-gini-energia"),
+            &format!("{:.3}", stats.gini_energia),
+            theme,
+        ),
+        stat_row(
+            &rimay_localize::t("dominium-stat-edad-media"),
+            &format!("{:.1}", stats.mean_edad),
+            theme,
+        ),
+        stat_row(
+            &rimay_localize::t("dominium-stat-var-psi-orden"),
             &format!("{:.3}", stats.var_psi[0]),
             theme,
         ),
         stat_row(
-            "Var ψ miedo",
+            &rimay_localize::t("dominium-stat-var-psi-miedo"),
             &format!("{:.3}", stats.var_psi[1]),
             theme,
         ),
         stat_row(
-            "Var ψ curiosidad",
+            &rimay_localize::t("dominium-stat-var-psi-curiosidad"),
             &format!("{:.3}", stats.var_psi[2]),
             theme,
         ),
         stat_row(
-            "Var ψ corruptib.",
+            &rimay_localize::t("dominium-stat-var-psi-corruptib"),
             &format!("{:.3}", stats.var_psi[3]),
             theme,
         ),
-        stat_row("→ mover", &stats.action_counts[0].to_string(), theme),
-        stat_row("→ extraer", &stats.action_counts[1].to_string(), theme),
-        stat_row("→ sincronizar", &stats.action_counts[2].to_string(), theme),
-        stat_row("→ intercambiar", &stats.action_counts[3].to_string(), theme),
-        stat_row("→ replicar", &stats.action_counts[4].to_string(), theme),
-        stat_row("→ degradar", &stats.action_counts[5].to_string(), theme),
+        stat_row(
+            &rimay_localize::t("dominium-action-mover"),
+            &stats.action_counts[0].to_string(),
+            theme,
+        ),
+        stat_row(
+            &rimay_localize::t("dominium-action-extraer"),
+            &stats.action_counts[1].to_string(),
+            theme,
+        ),
+        stat_row(
+            &rimay_localize::t("dominium-action-sincronizar"),
+            &stats.action_counts[2].to_string(),
+            theme,
+        ),
+        stat_row(
+            &rimay_localize::t("dominium-action-intercambiar"),
+            &stats.action_counts[3].to_string(),
+            theme,
+        ),
+        stat_row(
+            &rimay_localize::t("dominium-action-replicar"),
+            &stats.action_counts[4].to_string(),
+            theme,
+        ),
+        stat_row(
+            &rimay_localize::t("dominium-action-degradar"),
+            &stats.action_counts[5].to_string(),
+            theme,
+        ),
         stat_row(
             "season×",
             &format!(
@@ -1193,7 +1245,7 @@ fn side_panel(model: &Model, stats: &WorldStats, theme: &Theme) -> View<Msg> {
             if model.id_input_focused {
                 children.push(text_input_view(
                     &model.id_input,
-                    "nombre",
+                    &rimay_localize::t("dominium-slider-nombre"),
                     true,
                     &TextInputPalette::from_theme(theme),
                     Msg::FocusIdInput,
@@ -1206,7 +1258,7 @@ fn side_panel(model: &Model, stats: &WorldStats, theme: &Theme) -> View<Msg> {
                 ));
             }
             children.push(slider_view(
-                "radius",
+                &rimay_localize::t("dominium-slider-radius"),
                 c.radius,
                 0.5,
                 20.0,
@@ -1224,13 +1276,37 @@ fn side_panel(model: &Model, stats: &WorldStats, theme: &Theme) -> View<Msg> {
                 &btn_palette,
                 Msg::CycleSprite,
             ));
-            children.push(mod_slider("materia", c.mods.materia, Layer::Materia, &slider_palette));
-            children.push(mod_slider("psique", c.mods.psique, Layer::Psique, &slider_palette));
-            children.push(mod_slider("poder", c.mods.poder, Layer::Poder, &slider_palette));
-            children.push(mod_slider("oro", c.mods.oro, Layer::Oro, &slider_palette));
+            children.push(mod_slider(
+                &rimay_localize::t("dominium-slider-materia"),
+                c.mods.materia,
+                Layer::Materia,
+                &slider_palette,
+            ));
+            children.push(mod_slider(
+                &rimay_localize::t("dominium-slider-psique"),
+                c.mods.psique,
+                Layer::Psique,
+                &slider_palette,
+            ));
+            children.push(mod_slider(
+                &rimay_localize::t("dominium-slider-poder"),
+                c.mods.poder,
+                Layer::Poder,
+                &slider_palette,
+            ));
+            children.push(mod_slider(
+                &rimay_localize::t("dominium-slider-oro"),
+                c.mods.oro,
+                Layer::Oro,
+                &slider_palette,
+            ));
 
             // BehaviorHack editor.
-            children.push(label_view("hack:", 11.0, theme.fg_muted));
+            children.push(label_view(
+                &rimay_localize::t("dominium-label-hack"),
+                11.0,
+                theme.fg_muted,
+            ));
             match c.hack {
                 None => {
                     children.push(sized_button(
@@ -1345,10 +1421,30 @@ fn side_panel(model: &Model, stats: &WorldStats, theme: &Theme) -> View<Msg> {
 
     children.push(separator());
     children.push(label_view("[ RELIEVE VISUAL ]", 11.0, theme.fg_muted));
-    children.push(z_slider("materia", model.weights.materia, ZSlot::Materia, &slider_palette));
-    children.push(z_slider("psique", model.weights.psique, ZSlot::Psique, &slider_palette));
-    children.push(z_slider("poder", model.weights.poder, ZSlot::Poder, &slider_palette));
-    children.push(z_slider("oro", model.weights.oro, ZSlot::Oro, &slider_palette));
+    children.push(z_slider(
+        &rimay_localize::t("dominium-slider-materia"),
+        model.weights.materia,
+        ZSlot::Materia,
+        &slider_palette,
+    ));
+    children.push(z_slider(
+        &rimay_localize::t("dominium-slider-psique"),
+        model.weights.psique,
+        ZSlot::Psique,
+        &slider_palette,
+    ));
+    children.push(z_slider(
+        &rimay_localize::t("dominium-slider-poder"),
+        model.weights.poder,
+        ZSlot::Poder,
+        &slider_palette,
+    ));
+    children.push(z_slider(
+        &rimay_localize::t("dominium-slider-oro"),
+        model.weights.oro,
+        ZSlot::Oro,
+        &slider_palette,
+    ));
     children.push(z_slider("degrad.", model.weights.degradacion, ZSlot::Degradacion, &slider_palette));
     let sync_label = if model.sync_relieve { "✓  Sync físico: ON" } else { "○  Sync físico: OFF" };
     children.push(sized_button(sync_label, &btn_palette, Msg::ToggleSyncRelieve));
