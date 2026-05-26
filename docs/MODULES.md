@@ -284,6 +284,7 @@ distintos a propósito.
 
 | Crate                          | Capability               | Atajo recomendado |
 |--------------------------------|--------------------------|-------------------|
+| `llimphi-module-command-palette` | `editor.command-palette` | Ctrl+Shift+P      |
 | `llimphi-module-fif`           | `editor.find-in-files`   | Ctrl+Shift+F      |
 | `llimphi-module-file-picker`   | `editor.file-picker`     | Ctrl+P            |
 | `llimphi-module-shuma-term`    | `editor.terminal`        | Ctrl+`            |
@@ -294,11 +295,28 @@ distintos a propósito.
 
 ## Siguientes módulos candidatos
 
-- `llimphi-module-command-palette` — Ctrl+Shift+P estilo VS Code.
 - `llimphi-module-diff-viewer` — visualización side-by-side de cambios.
 - `llimphi-module-mini-map` — overlay de minimap del buffer activo.
 - `llimphi-module-symbol-outline` — outline del documento via LSP
   `documentSymbol`.
+
+### Caso particular: `llimphi-module-command-palette`
+
+Es el pegamento entre módulos. El host declara una lista plana de
+[`Command`]s (id opaco + título + grupo + hint del atajo) y el módulo
+muestra un overlay con fuzzy match. Cuando el user selecciona uno, el
+módulo emite `PaletteAction::Invoke(id)`; el host hace match contra su
+tabla y dispatcha el `Msg` correspondiente.
+
+El módulo **no sabe qué hacen los comandos**. Eso es lo que permite
+que el mismo crate funcione idéntico en gioser-edit (cuyos comandos
+son "Save File", "Open Terminal", "Format Document") y en un hipotético
+dominium-explorer (cuyos comandos serían "Insert Concept", "Run Pack",
+"Toggle Epoch View") sin acoplarse al dominio de la app.
+
+Por convención el id tiene formato `"namespace.action"` (`"editor.save"`,
+`"terminal.open"`, `"lsp.format"`) — el host mantiene su tabla
+`id → Msg` en un solo lugar (`palette_id_to_msg`), trivial de auditar.
 
 ### Caso particular: `llimphi-module-shuma-term`
 

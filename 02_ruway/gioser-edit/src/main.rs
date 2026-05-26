@@ -38,6 +38,10 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
+use llimphi_module_command_palette::{
+    self as palette, Command as PaletteCommand, PaletteAction, PaletteMsg, PalettePalette,
+    PaletteState,
+};
 use llimphi_module_fif::{self as fif, FifAction, FifMsg, FifPalette, FifState};
 use llimphi_module_file_picker::{
     self as picker, PickerAction, PickerMsg, PickerPalette, PickerState,
@@ -96,6 +100,8 @@ enum Msg {
     Fif(FifMsg),
     /// Mensajes del módulo terminal integrado (Ctrl+`).
     Term(ShumaTermMsg),
+    /// Mensajes del módulo command palette (Ctrl+Shift+P).
+    Palette(PaletteMsg),
     // Find
     FindOpen,
     FindClose,
@@ -174,6 +180,12 @@ struct Model {
     /// Terminal integrado; `None` cerrado. Cuando está abierto, las
     /// teclas pasan al PTY (con excepciones del módulo).
     term: Option<ShumaTermState>,
+    /// Command palette; `None` cerrado.
+    palette: Option<PaletteState>,
+    /// Catálogo estático de comandos disponibles. Se construye en
+    /// `init` y se reusa en cada apertura del palette — el palette no
+    /// lo copia, sólo guarda índices.
+    palette_commands: Vec<PaletteCommand>,
     tabs: Vec<Tab>,
     /// Índice del tab activo dentro de `tabs`. `None` si no hay ninguno
     /// abierto todavía.
@@ -346,6 +358,8 @@ impl App for EditorApp {
             picker: None,
             fif: None,
             term: None,
+            palette: None,
+            palette_commands: build_command_catalog(),
             tabs: Vec::new(),
             active: None,
             clipboard: ArboardClipboard::new(),
@@ -399,6 +413,7 @@ impl App for EditorApp {
             Msg::Picker(pm) => apply_picker(model, pm),
             Msg::Fif(fmsg) => apply_fif(model, fmsg),
             Msg::Term(tm) => apply_term(model, tm),
+            Msg::Palette(pm) => apply_palette(model, pm, handle),
             Msg::FindOpen => {
                 let mut m = model;
                 if m.find.is_none() {
@@ -819,6 +834,14 @@ impl App for EditorApp {
             }
         }
 
+        // Command palette abierto: el módulo se lleva todas las teclas
+        // (filtro, ↓↑, Enter, Esc).
+        if let Some(state) = model.palette.as_ref() {
+            if let Some(pm) = palette::on_key(state, event) {
+                return Some(Msg::Palette(pm));
+            }
+        }
+
         // Terminal abierto: traga TODAS las teclas (salvo el toggle de
         // apertura, que se reusa para cerrar abajo). El módulo internamente
         // intercepta Ctrl+Shift+W → Close.
@@ -895,6 +918,10 @@ impl App for EditorApp {
             // Ctrl+` = abre el terminal integrado.
             if term::open_shortcut(event) {
                 return Some(Msg::Term(ShumaTermMsg::Open));
+            }
+            // Ctrl+Shift+P = abre el command palette.
+            if palette::open_shortcut(event) {
+                return Some(Msg::Palette(PaletteMsg::Open));
             }
             // Ctrl+Alt+L = format (estilo JetBrains; antes era Ctrl+Shift+F).
             if event.modifiers.alt
@@ -1149,6 +1176,10 @@ fn editor_panel(model: &Model, theme: &Theme) -> View<Msg> {
 /// Si no hay tab activo, devuelve el placeholder.
 fn active_editor_content(model: &Model, theme: &Theme) -> View<Msg> {
     let mut children: Vec<View<Msg>> = Vec::new();
+    if let Some(p) = model.palette.as_ref() {
+        let pal = PalettePalette::from_theme(theme);
+        children.push(palette::view(p, &model.palette_commands, &pal, Msg::Palette));
+    }
     if let Some(p) = model.picker.as_ref() {
         let palette = PickerPalette::from_theme(theme);
         children.push(picker::view(p, &model.all_files, &model.root, &palette, Msg::Picker));
@@ -1762,6 +1793,93 @@ fn apply_fif(model: Model, fmsg: FifMsg) -> Model {
             if let Some(tab) = m.active_tab_mut() {
                 tab.editor.set_caret_at(line, col);
                 tab.editor.ensure_caret_visible(EDITOR_VISIBLE_LINES);
+            }
+        }
+    }
+    m
+}
+
+/// Catálogo de comandos que el palette muestra. Estático: lo construimos
+/// una sola vez en `init` y vive en `Model.palette_commands`. Cada `id`
+/// debe estar mapeado en [`palette_id_to_msg`] para que el invoke pueda
+/// dispatchearse.
+fn build_command_catalog() -> Vec<PaletteCommand> {
+    vec![
+        PaletteCommand::new("editor.save", "Save File", "Editor").with_shortcut("Ctrl+S"),
+        PaletteCommand::new("editor.openFile", "Open File…", "Editor")
+            .with_shortcut("Ctrl+P"),
+        PaletteCommand::new("editor.findInFiles", "Find in Files", "Editor")
+            .with_shortcut("Ctrl+Shift+F"),
+        PaletteCommand::new("editor.find", "Find in File", "Editor").with_shortcut("Ctrl+F"),
+        PaletteCommand::new("editor.closeTab", "Close Tab", "Editor").with_shortcut("Ctrl+W"),
+        PaletteCommand::new("editor.nextTab", "Next Tab", "Editor").with_shortcut("Ctrl+Tab"),
+        PaletteCommand::new("editor.prevTab", "Previous Tab", "Editor")
+            .with_shortcut("Ctrl+Shift+Tab"),
+        PaletteCommand::new("terminal.open", "Open Terminal", "Terminal")
+            .with_shortcut("Ctrl+`"),
+        PaletteCommand::new("lsp.format", "Format Document", "LSP")
+            .with_shortcut("Ctrl+Alt+L"),
+        PaletteCommand::new("lsp.goto", "Go to Definition", "LSP").with_shortcut("F12"),
+        PaletteCommand::new("lsp.references", "Find References", "LSP")
+            .with_shortcut("Shift+F12"),
+        PaletteCommand::new("lsp.rename", "Rename Symbol", "LSP").with_shortcut("F2"),
+        PaletteCommand::new("lsp.hover", "Show Hover Info", "LSP").with_shortcut("Ctrl+K"),
+        PaletteCommand::new("lsp.signatureHelp", "Signature Help", "LSP")
+            .with_shortcut("Ctrl+Shift+Space"),
+        PaletteCommand::new("lsp.completions", "Trigger Suggest", "LSP")
+            .with_shortcut("Ctrl+Space"),
+    ]
+}
+
+/// Traduce un id de comando del catálogo al `Msg` correspondiente. Si
+/// el id es desconocido, devuelve `None` y el host lo reporta como
+/// status. Mantener en sync con [`build_command_catalog`].
+fn palette_id_to_msg(id: &str) -> Option<Msg> {
+    Some(match id {
+        "editor.save" => Msg::Save,
+        "editor.openFile" => Msg::Picker(PickerMsg::Open),
+        "editor.findInFiles" => Msg::Fif(FifMsg::Open),
+        "editor.find" => Msg::FindOpen,
+        "editor.closeTab" => Msg::CloseTab(usize::MAX), // será no-op si no hay tabs
+        "editor.nextTab" => Msg::NextTab,
+        "editor.prevTab" => Msg::PrevTab,
+        "terminal.open" => Msg::Term(ShumaTermMsg::Open),
+        "lsp.format" => Msg::FormatRequest,
+        "lsp.goto" => Msg::GotoDefinitionRequest,
+        "lsp.references" => Msg::ReferencesRequest,
+        "lsp.rename" => Msg::RenameOpen,
+        "lsp.hover" => Msg::HoverRequest,
+        "lsp.signatureHelp" => Msg::SignatureHelpRequest,
+        "lsp.completions" => Msg::CompletionsRequest,
+        _ => return None,
+    })
+}
+
+/// Routea un PaletteMsg al módulo command-palette. Lazy-init en `Open`.
+/// En `Invoke(id)`: cierra el palette y dispatcha el Msg correspondiente
+/// — el comando se ejecuta en el siguiente turno del loop.
+fn apply_palette(model: Model, pm: PaletteMsg, handle: &Handle<Msg>) -> Model {
+    let mut m = model;
+    if matches!(pm, PaletteMsg::Open) && m.palette.is_none() {
+        m.palette = Some(PaletteState::new(&m.palette_commands));
+        m.status = format!(
+            "command palette · {} comandos · ↓↑ Enter ejecuta · Esc cierra",
+            m.palette_commands.len(),
+        );
+        return m;
+    }
+    let action = match m.palette.as_mut() {
+        Some(state) => palette::apply(state, pm, &m.palette_commands),
+        None => return m,
+    };
+    match action {
+        PaletteAction::None => {}
+        PaletteAction::Close => m.palette = None,
+        PaletteAction::Invoke(id) => {
+            m.palette = None;
+            match palette_id_to_msg(&id) {
+                Some(msg) => handle.dispatch(msg),
+                None => m.status = format!("comando desconocido: {id}"),
             }
         }
     }

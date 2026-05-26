@@ -135,6 +135,7 @@ members = [
     "02_ruway/llimphi/widgets/text-input",
     "02_ruway/llimphi/widgets/tiled",
     "02_ruway/llimphi/widgets/tree",
+    "02_ruway/llimphi/modules/command-palette",
     "02_ruway/llimphi/modules/fif",
     "02_ruway/llimphi/modules/file-picker",
     "02_ruway/llimphi/modules/plugin-host",
@@ -415,6 +416,7 @@ llimphi-widget-slider = { path = "02_ruway/llimphi/widgets/slider" }
 llimphi-widget-splitter = { path = "02_ruway/llimphi/widgets/splitter" }
 llimphi-widget-stat-card = { path = "02_ruway/llimphi/widgets/stat-card" }
 llimphi-widget-tabs = { path = "02_ruway/llimphi/widgets/tabs" }
+llimphi-module-command-palette = { path = "02_ruway/llimphi/modules/command-palette" }
 llimphi-module-fif = { path = "02_ruway/llimphi/modules/fif" }
 llimphi-module-file-picker = { path = "02_ruway/llimphi/modules/file-picker" }
 llimphi-module-shuma-term = { path = "02_ruway/llimphi/modules/shuma-term" }
