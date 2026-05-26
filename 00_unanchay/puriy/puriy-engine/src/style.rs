@@ -98,66 +98,136 @@ struct Rule {
     decls: Vec<Decl>,
 }
 
-/// Selector compound — secuencia de simples conectada por combinador
-/// "descendiente" (whitespace en CSS). `parts[0]` = ancestro más
-/// lejano; `parts.last()` = sujeto. Sin combinadores `>`/`+`/`~`, sin
-/// pseudoclases — la fase actual sólo necesita descendientes.
+/// Selector encadenado — alterna compound + combinador. `compounds[0]`
+/// es el ancestro/hermano más lejano; `compounds.last()` es el sujeto.
+/// `combinators[i]` es el combinador entre `compounds[i]` y
+/// `compounds[i+1]`.
 #[derive(Debug, Clone)]
 struct Selector {
-    parts: Vec<Simple>,
+    compounds: Vec<Compound>,
+    combinators: Vec<Combinator>,
+}
+
+/// Combinador CSS entre dos compounds consecutivos.
+#[derive(Debug, Clone, Copy)]
+enum Combinator {
+    /// Whitespace — descendiente cualquier nivel.
+    Descendant,
+    /// `>` — hijo directo.
+    Child,
+    /// `+` — hermano adyacente inmediato.
+    AdjacentSibling,
+    /// `~` — hermano general (posterior, mismo padre).
+    GeneralSibling,
+}
+
+/// Simple compound — un Tag + 0..N ids/clases en cadena (sin espacios).
+/// `a.btn`, `p#hero.alert`, `*`, `.menu`, `#x`.
+#[derive(Debug, Clone)]
+struct Compound {
+    tag: TagPart,
+    ids: Vec<String>,
+    classes: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
-enum Simple {
+enum TagPart {
     Universal,
     Type(String),
-    Id(String),
-    Class(String),
 }
 
-impl Simple {
+impl Compound {
     fn matches(&self, node: &markup5ever_rcdom::Handle) -> bool {
         let Some(local) = dom::element_name(node) else {
             return false;
         };
-        match self {
-            Simple::Universal => true,
-            Simple::Type(t) => t.eq_ignore_ascii_case(&local),
-            Simple::Id(want) => {
-                dom::attr(node, "id").as_deref().map(|v| v == want).unwrap_or(false)
+        if let TagPart::Type(t) = &self.tag {
+            if !t.eq_ignore_ascii_case(&local) {
+                return false;
             }
-            Simple::Class(want) => dom::attr(node, "class")
-                .map(|c| c.split_whitespace().any(|cls| cls == want))
-                .unwrap_or(false),
         }
+        for want in &self.ids {
+            if dom::attr(node, "id").as_deref() != Some(want.as_str()) {
+                return false;
+            }
+        }
+        if !self.classes.is_empty() {
+            let attr = dom::attr(node, "class").unwrap_or_default();
+            let present: Vec<&str> = attr.split_whitespace().collect();
+            for want in &self.classes {
+                if !present.iter().any(|c| c == want) {
+                    return false;
+                }
+            }
+        }
+        true
     }
 }
 
 impl Rule {
     fn matches(&self, node: &markup5ever_rcdom::Handle) -> bool {
-        let parts = &self.selector.parts;
-        if parts.is_empty() {
+        let compounds = &self.selector.compounds;
+        if compounds.is_empty() {
             return false;
         }
-        // El último simple debe matchear el sujeto.
-        if !parts.last().unwrap().matches(node) {
+        // El sujeto (último) debe matchear el nodo.
+        if !compounds.last().unwrap().matches(node) {
             return false;
         }
-        if parts.len() == 1 {
+        if compounds.len() == 1 {
             return true;
         }
-        // Los anteriores (en orden, derecha→izquierda) deben matchear
-        // *algún* ancestro — greedy: por cada uno avanzamos hacia arriba
-        // hasta encontrar match, sino fallamos.
-        let mut remaining = &parts[..parts.len() - 1];
-        let mut current = parent_of(node);
-        while !remaining.is_empty() {
-            let Some(n) = current else { return false };
-            let last = remaining.last().unwrap();
-            if last.matches(&n) {
-                remaining = &remaining[..remaining.len() - 1];
+        // Avanzamos derecha→izquierda, encadenando combinadores. Cada
+        // combinador define cómo viajar al "siguiente" candidato:
+        //   Descendant/Child  → ancestro
+        //   Adjacent/General  → hermano anterior
+        let combs = &self.selector.combinators;
+        // El combinador entre compounds[i-1] y compounds[i] vive en
+        // combs[i-1]. Recorremos desde compounds[len-2] hacia 0.
+        let mut subject = node.clone();
+        let mut i = compounds.len() - 1;
+        while i > 0 {
+            let comb = combs[i - 1];
+            let target = &compounds[i - 1];
+            match comb {
+                Combinator::Child => {
+                    let Some(p) = parent_of(&subject) else { return false };
+                    if !target.matches(&p) {
+                        return false;
+                    }
+                    subject = p;
+                }
+                Combinator::Descendant => {
+                    let mut cur = parent_of(&subject);
+                    loop {
+                        let Some(n) = cur else { return false };
+                        if target.matches(&n) {
+                            subject = n;
+                            break;
+                        }
+                        cur = parent_of(&n);
+                    }
+                }
+                Combinator::AdjacentSibling => {
+                    let Some(prev) = prev_element_sibling(&subject) else { return false };
+                    if !target.matches(&prev) {
+                        return false;
+                    }
+                    subject = prev;
+                }
+                Combinator::GeneralSibling => {
+                    let mut cur = prev_element_sibling(&subject);
+                    loop {
+                        let Some(n) = cur else { return false };
+                        if target.matches(&n) {
+                            subject = n;
+                            break;
+                        }
+                        cur = prev_element_sibling(&n);
+                    }
+                }
             }
-            current = parent_of(&n);
+            i -= 1;
         }
         true
     }
@@ -173,6 +243,25 @@ fn parent_of(node: &markup5ever_rcdom::Handle) -> Option<markup5ever_rcdom::Hand
     let restored = weak.clone();
     node.parent.set(restored);
     weak.and_then(|w| w.upgrade())
+}
+
+/// Hermano Element anterior (saltea texto/whitespace nodes). Devuelve
+/// `None` si no hay padre o si no hay Element previo bajo el mismo padre.
+fn prev_element_sibling(
+    node: &markup5ever_rcdom::Handle,
+) -> Option<markup5ever_rcdom::Handle> {
+    let parent = parent_of(node)?;
+    let kids = parent.children.borrow();
+    let mut last_elem: Option<markup5ever_rcdom::Handle> = None;
+    for child in kids.iter() {
+        if std::rc::Rc::ptr_eq(child, node) {
+            return last_elem;
+        }
+        if dom::element_name(child).is_some() {
+            last_elem = Some(child.clone());
+        }
+    }
+    None
 }
 
 #[derive(Debug, Clone)]
@@ -222,7 +311,14 @@ fn default_weight(tag: &str) -> u16 {
 /// "blancas" sin reglas autor.
 fn ua_stylesheet() -> Vec<Rule> {
     fn ty(s: &str) -> Selector {
-        Selector { parts: vec![Simple::Type(s.into())] }
+        Selector {
+            compounds: vec![Compound {
+                tag: TagPart::Type(s.into()),
+                ids: vec![],
+                classes: vec![],
+            }],
+            combinators: vec![],
+        }
     }
     vec![
         Rule { selector: ty("h1"), decls: vec![Decl::FontSize(32.0), Decl::Margin(20.0)] },
@@ -271,56 +367,137 @@ fn parse_stylesheet(css: &str) -> Vec<Rule> {
     out
 }
 
-/// Parsea un selector compound. Soporta:
-/// - simples: `*`, `tag`, `.class`, `#id`
-/// - combinador descendiente (whitespace): `a b`, `.menu li`, `#hero h2`
+/// Parsea un selector encadenado. Soporta:
+/// - simples compound: `*`, `tag`, `.class`, `#id`, `a.btn`, `p#hero.alert`
+/// - combinador descendiente (whitespace): `a b`, `.menu li`
+/// - combinador hijo directo `>`: `nav > a`, `ul.menu > li`
+/// - hermano adyacente `+`: `h2 + p`
+/// - hermano general `~`: `h2 ~ p`
 ///
-/// Combinadores `>`, `+`, `~`, pseudoclases (`:hover`), atributos (`[…]`)
-/// no soportados — la regla se ignora.
+/// Pseudoclases (`:hover`) y selectores de atributo (`[href]`) siguen
+/// sin soporte — cualquier selector que las use se ignora en silencio.
 fn parse_selector(sel: &str) -> Option<Selector> {
     let sel = sel.trim();
     if sel.is_empty() {
-        return Some(Selector { parts: vec![Simple::Universal] });
+        return Some(Selector {
+            compounds: vec![Compound {
+                tag: TagPart::Universal,
+                ids: vec![],
+                classes: vec![],
+            }],
+            combinators: vec![],
+        });
     }
-    if sel.contains('>') || sel.contains('+') || sel.contains('~')
-        || sel.contains(':') || sel.contains('[')
-    {
+    if sel.contains(':') || sel.contains('[') {
         return None;
     }
-    let mut parts = Vec::new();
-    for token in sel.split_whitespace() {
-        parts.push(parse_simple(token)?);
+    // Tokenizamos: cada compound es una secuencia sin espacios ni
+    // combinadores; los combinadores ('>', '+', '~') están separados por
+    // whitespace en CSS canónico o pegados. Normalizamos.
+    let normalized = normalize_combinators(sel);
+    let mut compounds: Vec<Compound> = Vec::new();
+    let mut combinators: Vec<Combinator> = Vec::new();
+    let mut pending_combinator: Option<Combinator> = None;
+    let mut first = true;
+    for tok in normalized.split_whitespace() {
+        match tok {
+            ">" => pending_combinator = Some(Combinator::Child),
+            "+" => pending_combinator = Some(Combinator::AdjacentSibling),
+            "~" => pending_combinator = Some(Combinator::GeneralSibling),
+            _ => {
+                let compound = parse_compound(tok)?;
+                if first {
+                    first = false;
+                } else {
+                    combinators.push(pending_combinator.take().unwrap_or(Combinator::Descendant));
+                }
+                compounds.push(compound);
+            }
+        }
     }
-    if parts.is_empty() {
+    if compounds.is_empty() {
         return None;
     }
-    Some(Selector { parts })
+    // Si el selector terminó con un combinador colgado, es inválido.
+    if pending_combinator.is_some() {
+        return None;
+    }
+    Some(Selector { compounds, combinators })
 }
 
-fn parse_simple(sel: &str) -> Option<Simple> {
-    if sel == "*" {
-        return Some(Simple::Universal);
-    }
-    if let Some(rest) = sel.strip_prefix('.') {
-        if rest.chars().all(is_ident_char) && !rest.is_empty() {
-            return Some(Simple::Class(rest.to_string()));
+/// Inserta espacios alrededor de `>`/`+`/`~` para que `split_whitespace`
+/// los aísle. Sólo se aplica fuera de identificadores — los combinadores
+/// no aparecen como caracteres de identificador, así que un replace
+/// directo basta.
+fn normalize_combinators(sel: &str) -> String {
+    let mut out = String::with_capacity(sel.len() + 4);
+    for c in sel.chars() {
+        match c {
+            '>' | '+' | '~' => {
+                out.push(' ');
+                out.push(c);
+                out.push(' ');
+            }
+            _ => out.push(c),
         }
-        return None;
     }
-    if let Some(rest) = sel.strip_prefix('#') {
-        if rest.chars().all(is_ident_char) && !rest.is_empty() {
-            return Some(Simple::Id(rest.to_string()));
-        }
-        return None;
-    }
-    if sel.chars().all(is_ident_char) && !sel.is_empty() {
-        return Some(Simple::Type(sel.to_string()));
-    }
-    None
+    out
 }
 
-fn is_ident_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '-' || c == '_'
+/// Parsea un compound: opcional tag/`*` seguido de cualquier número de
+/// `.class` y `#id`. Devuelve `None` si encuentra caracteres no
+/// esperados.
+fn parse_compound(sel: &str) -> Option<Compound> {
+    let bytes = sel.as_bytes();
+    if bytes.is_empty() {
+        return None;
+    }
+    let mut i = 0;
+    // Tag opcional (puede ser `*` o un nombre).
+    let tag = if bytes[0] == b'*' {
+        i = 1;
+        TagPart::Universal
+    } else if is_ident_byte(bytes[0]) {
+        let start = i;
+        while i < bytes.len() && is_ident_byte(bytes[i]) {
+            i += 1;
+        }
+        TagPart::Type(sel[start..i].to_string())
+    } else {
+        TagPart::Universal
+    };
+    let mut ids = Vec::new();
+    let mut classes = Vec::new();
+    while i < bytes.len() {
+        let marker = bytes[i];
+        if marker != b'.' && marker != b'#' {
+            return None;
+        }
+        i += 1;
+        let start = i;
+        while i < bytes.len() && is_ident_byte(bytes[i]) {
+            i += 1;
+        }
+        if start == i {
+            return None;
+        }
+        let ident = sel[start..i].to_string();
+        if marker == b'.' {
+            classes.push(ident);
+        } else {
+            ids.push(ident);
+        }
+    }
+    // Si el selector era puro tag/`*` y nada más, ok. Si era vacío (sólo
+    // basura), `tag` quedó Universal y no hay ids/classes → rechazamos.
+    if matches!(tag, TagPart::Universal) && ids.is_empty() && classes.is_empty() && sel != "*" {
+        return None;
+    }
+    Some(Compound { tag, ids, classes })
+}
+
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'-' || b == b'_'
 }
 
 fn strip_comments(css: &str) -> String {
@@ -471,9 +648,108 @@ mod tests {
     fn parsea_regla_simple() {
         let rules = parse_stylesheet("p { color: red; font-size: 14px; }");
         assert_eq!(rules.len(), 1);
-        assert_eq!(rules[0].selector.parts.len(), 1);
-        assert!(matches!(&rules[0].selector.parts[0], Simple::Type(t) if t == "p"));
+        assert_eq!(rules[0].selector.compounds.len(), 1);
+        assert!(matches!(
+            &rules[0].selector.compounds[0].tag,
+            TagPart::Type(t) if t == "p"
+        ));
         assert_eq!(rules[0].decls.len(), 2);
+    }
+
+    #[test]
+    fn selector_compound_matchea() {
+        // `a.btn` matchea sólo `<a class="btn">`.
+        let html = r##"<html><head><style>a.btn{color:red}</style></head><body>
+                <a class="btn" href="#">click</a>
+                <a href="#">otro</a>
+                <span class="btn">no soy a</span>
+            </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut anchors = Vec::new();
+        let mut spans = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("a") => anchors.push(n.clone()),
+                Some("span") => spans.push(n.clone()),
+                _ => {}
+            }
+        });
+        assert_eq!(anchors.len(), 2);
+        assert_eq!(spans.len(), 1);
+        // anchors[0] tiene class="btn"
+        assert_eq!(eng.compute(&anchors[0]).color, Color::rgb(255, 0, 0));
+        // anchors[1] sin class
+        assert_eq!(eng.compute(&anchors[1]).color, Color::BLACK);
+        // span.btn no es <a>
+        assert_eq!(eng.compute(&spans[0]).color, Color::BLACK);
+    }
+
+    #[test]
+    fn selector_hijo_directo_matchea() {
+        // `ul > li` matchea `<li>` que es hijo *directo* de `<ul>`. Un
+        // `<li>` dentro de `<ol>` adentro de `<ul>` no debe matchear.
+        let html = r#"<html><head><style>ul > li{color:#0a0}</style></head>
+            <body>
+              <ul><li>directo</li></ul>
+              <ol><li>indirecto</li></ol>
+            </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut lis = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("li") {
+                lis.push(n.clone());
+            }
+        });
+        assert_eq!(lis.len(), 2);
+        assert_eq!(eng.compute(&lis[0]).color, Color::rgb(0, 0xaa, 0));
+        assert_eq!(eng.compute(&lis[1]).color, Color::BLACK);
+    }
+
+    #[test]
+    fn selector_hermano_adyacente_matchea() {
+        // `h2 + p` matchea sólo el primer `<p>` inmediatamente después
+        // de un `<h2>`.
+        let html = r#"<html><head><style>h2+p{color:#00f}</style></head>
+            <body>
+              <h2>t</h2><p>uno</p><p>dos</p>
+              <p>aislado</p>
+            </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut ps = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("p") {
+                ps.push(n.clone());
+            }
+        });
+        assert_eq!(ps.len(), 3);
+        assert_eq!(eng.compute(&ps[0]).color, Color::rgb(0, 0, 255));
+        assert_eq!(eng.compute(&ps[1]).color, Color::BLACK);
+        assert_eq!(eng.compute(&ps[2]).color, Color::BLACK);
+    }
+
+    #[test]
+    fn selector_hermano_general_matchea() {
+        // `h2 ~ p` matchea TODOS los `<p>` hermanos posteriores a un `<h2>`.
+        let html = r#"<html><head><style>h2~p{color:#00f}</style></head>
+            <body>
+              <p>antes</p><h2>t</h2><p>uno</p><span>x</span><p>dos</p>
+            </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut ps = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("p") {
+                ps.push(n.clone());
+            }
+        });
+        assert_eq!(ps.len(), 3);
+        // El primero está antes del h2 → no aplica.
+        assert_eq!(eng.compute(&ps[0]).color, Color::BLACK);
+        assert_eq!(eng.compute(&ps[1]).color, Color::rgb(0, 0, 255));
+        assert_eq!(eng.compute(&ps[2]).color, Color::rgb(0, 0, 255));
     }
 
     #[test]
