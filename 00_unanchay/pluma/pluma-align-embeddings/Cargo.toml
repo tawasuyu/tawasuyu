@@ -1,0 +1,21 @@
+[package]
+name = "pluma-align-embeddings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "pluma — alineador de cuerpos por embeddings: produce hebras (CartaHebras) calculando similitud coseno entre los párrafos de dos cuerpos, vía cualquier rimay_verbo_core::Provider (mock determinista, BGE local, Cohere remoto)."
+
+[dependencies]
+uuid = { workspace = true, features = ["serde"] }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+pluma-core = { path = "../pluma-core" }
+pluma-cuerpo = { path = "../pluma-cuerpo" }
+pluma-align = { path = "../pluma-align" }
+rimay-verbo-core = { path = "../../rimay/rimay-verbo-core" }
+
+[dev-dependencies]
+tokio = { workspace = true }
+rimay-verbo-mock = { path = "../../rimay/rimay-verbo-mock" }
