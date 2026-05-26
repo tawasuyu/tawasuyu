@@ -16,9 +16,9 @@
 use crate::cell::CellRef;
 use crate::formula::{self, CellResolver, FormulaExpr};
 use crate::graph::{CycleError, SheetGraph};
-use crate::value::{SheetError, SheetValue};
+use crate::value::SheetValue;
 use rust_decimal::Decimal;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::str::FromStr;
 use thiserror::Error;
 
@@ -244,7 +244,9 @@ fn assert_topo(order: &[CellRef], edges: &[(CellRef, CellRef)]) {
 mod tests {
     use super::*;
     use crate::cell::CellRef;
+    use crate::value::SheetError;
     use rust_decimal::Decimal;
+    use std::collections::HashSet;
     use std::str::FromStr;
 
     fn cr(s: &str) -> CellRef {

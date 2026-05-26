@@ -15,14 +15,31 @@ use crate::cell::CellRef;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 use std::collections::{HashMap, HashSet, VecDeque};
-use thiserror::Error;
+use std::fmt;
 
-#[derive(Debug, Error, PartialEq, Eq)]
-#[error("cycle: cell {target} depends on itself through {chain:?}")]
+#[derive(Debug, PartialEq, Eq)]
 pub struct CycleError {
     pub target: CellRef,
     pub chain: Vec<CellRef>,
 }
+
+impl fmt::Display for CycleError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} would depend on itself", self.target)?;
+        if !self.chain.is_empty() {
+            let chain = self
+                .chain
+                .iter()
+                .map(|c| c.to_string())
+                .collect::<Vec<_>>()
+                .join(" → ");
+            write!(f, " (chain: {chain} → {})", self.target)?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for CycleError {}
 
 #[derive(Debug, Default, Clone)]
 pub struct SheetGraph {

@@ -14,3 +14,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 petgraph = { workspace = true }
 rust_decimal = { version = "1.36", default-features = false, features = ["serde-str", "std"] }
+
+[[bin]]
+name = "sheet_demo"
+path = "src/bin/sheet_demo.rs"
