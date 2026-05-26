@@ -1,0 +1,15 @@
+[package]
+name = "pluma-transform-tabla"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "pluma — ejecutor de `Traducir` por tabla explícita Uuid→texto. La traducción la genera quien sea (humano, LLM, traductor automático); este ejecutor solo cuece la tabla en un cuerpo hija con hebras Derivadas."
+
+[dependencies]
+uuid = { workspace = true, features = ["serde"] }
+pluma-core = { path = "../pluma-core" }
+pluma-cuerpo = { path = "../pluma-cuerpo" }
+pluma-align = { path = "../pluma-align" }
+pluma-transform = { path = "../pluma-transform" }
