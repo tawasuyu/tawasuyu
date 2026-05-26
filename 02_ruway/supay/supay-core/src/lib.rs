@@ -249,6 +249,9 @@ extern "C" {
         y2: *mut f32,
     ) -> std::ffi::c_int;
     fn supay_scene_sky_pic() -> u16;
+    /// Resuelve un `pic_idx` (índice de flat) al nombre del lump.
+    /// `out` debe apuntar a un buffer de ≥ 9 bytes. Devuelve 1 si OK.
+    fn supay_scene_flat_name(pic_idx: u16, out: *mut std::ffi::c_char) -> std::ffi::c_int;
 }
 
 // =====================================================================
@@ -337,6 +340,38 @@ impl DoomEngine {
             .lock()
             .map(|s| s.framebuffer.clone())
             .unwrap_or_else(|_| vec![0; DOOM_PIXELS])
+    }
+
+    /// Resuelve un índice de flat al nombre del lump (e.g. `"FLOOR4_8"`).
+    /// En modo stub o si el mapa todavía no cargó, devuelve `None`.
+    /// El renderer 3.3+ lo usa para mapear `sector.floor_pic` al color
+    /// real del flat parseando el lump desde el WAD aparte.
+    pub fn flat_name(&self, pic_idx: u16) -> Option<String> {
+        #[cfg(doomgeneric_stub)]
+        {
+            let _ = pic_idx;
+            None
+        }
+        #[cfg(not(doomgeneric_stub))]
+        {
+            let mut buf = [0i8; 9];
+            // SAFETY: buf vive en este stack frame; la fn C escribe
+            // hasta 9 bytes (8 chars + nul).
+            let ok = unsafe { supay_scene_flat_name(pic_idx, buf.as_mut_ptr()) };
+            if ok == 0 {
+                return None;
+            }
+            // Convertir [i8; 9] null-terminated a String.
+            let mut end = buf.len();
+            for (i, &c) in buf.iter().enumerate() {
+                if c == 0 {
+                    end = i;
+                    break;
+                }
+            }
+            let bytes: Vec<u8> = buf[..end].iter().map(|&c| c as u8).collect();
+            String::from_utf8(bytes).ok()
+        }
     }
 
     /// Título que el motor solicitó (último `DG_SetWindowTitle`).

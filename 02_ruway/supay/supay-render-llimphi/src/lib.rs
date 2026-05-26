@@ -1,10 +1,21 @@
-//! `supay-render-llimphi` — Fase 3.2 del proyecto supay.
+//! `supay-render-llimphi` — Fase 3.3 del proyecto supay.
 //!
 //! Renderer 3D que consume [`supay_scene::SceneSnapshot`] y lo pinta
 //! como `View::paint_with` de Llimphi. El motor sigue corriendo a
 //! 35 Hz (Fase 1) y produce snapshots (Fase 2); este renderer interpola
 //! entre los últimos dos por cada frame del display y proyecta el mundo
 //! con perspectiva CPU → polígonos vello que vello rasteriza en GPU.
+//!
+//! ## Qué añade Fase 3.3 sobre 3.2
+//!
+//! - **Colores de piso/techo desde el WAD real**. Si `RenderConfig`
+//!   trae un [`WadAtlas`] (cargado por el host con `supay-wad` desde
+//!   `DOOM1.WAD`), `floor_color`/`ceiling_color` devuelven el promedio
+//!   real del flat indexed por `sector.floor_pic`/`ceiling_pic` —
+//!   resuelto vía `DoomEngine::flat_name(pic_idx)` → nombre del lump →
+//!   `Wad::flat_average_color`. El cache vive en `WadAtlas` y se llena
+//!   on-demand. Sin WAD (`atlas: None`), cae a las paletas hardcoded
+//!   de 3.1 — el modo stub queda igual.
 //!
 //! ## Qué añade Fase 3.2 sobre 3.1
 //!
@@ -43,6 +54,8 @@
 
 #![forbid(unsafe_code)]
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use llimphi_ui::llimphi_layout::taffy::prelude::{percent, Size, Style};
@@ -59,8 +72,106 @@ use supay_scene::{
 // Config
 // =====================================================================
 
+/// Atlas de assets resueltos desde el WAD para que el renderer no
+/// tenga que hablar con `supay-wad` por frame. Construir con
+/// [`WadAtlas::new`] una vez al inicio del host y compartir por `Arc`.
+///
+/// El cache de colores por nombre de flat es interno y lazy — la
+/// primera vez que un flat se consulta calculamos su `flat_average_color`
+/// y lo guardamos.
+pub struct WadAtlas {
+    wad: supay_wad::Wad,
+    palette: [(u8, u8, u8); supay_wad::PALETTE_ENTRIES],
+    /// Estado mutable interior — flat_names + color_cache bajo un
+    /// único `Mutex` para que el host pueda registrar pic_idx nuevos
+    /// (`set_flat_name`) sin tener que clonar/reconstruir el Arc
+    /// compartido con el renderer.
+    inner: Mutex<AtlasInner>,
+}
+
+#[derive(Default)]
+struct AtlasInner {
+    /// Lookup pic_idx (u16) → nombre del flat. Se llena on-demand
+    /// vía `DoomEngine::flat_name(i)` la primera vez que el host ve
+    /// un pic_idx en algún sector.
+    flat_names: HashMap<u16, String>,
+    /// Cache lazy: pic_idx → color promedio resuelto.
+    color_cache: HashMap<u16, Option<(u8, u8, u8)>>,
+}
+
+impl std::fmt::Debug for WadAtlas {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names = self.inner.lock().map(|i| i.flat_names.len()).unwrap_or(0);
+        f.debug_struct("WadAtlas")
+            .field("lumps", &self.wad.len())
+            .field("flat_names", &names)
+            .finish()
+    }
+}
+
+impl WadAtlas {
+    /// Construye el atlas desde un WAD ya parseado. El mapa
+    /// `pic_idx → flat_name` arranca vacío; el host lo va llenando
+    /// con [`Self::set_flat_name`] conforme el motor expone los
+    /// pic_idx del mapa cargado.
+    pub fn new(wad: supay_wad::Wad, flat_names: HashMap<u16, String>) -> Self {
+        let palette = wad.palette();
+        Self {
+            wad,
+            palette,
+            inner: Mutex::new(AtlasInner {
+                flat_names,
+                color_cache: HashMap::new(),
+            }),
+        }
+    }
+
+    /// Recupera el color promedio para un `pic_idx`. Devuelve `None`
+    /// si el nombre del flat no está mapeado o si el flat no existe
+    /// en el WAD (e.g. el placeholder `F_SKY1` que no tiene bytes).
+    pub fn flat_color(&self, pic_idx: u16) -> Option<(u8, u8, u8)> {
+        let Ok(mut inner) = self.inner.lock() else {
+            return None;
+        };
+        if let Some(&cached) = inner.color_cache.get(&pic_idx) {
+            return cached;
+        }
+        let resolved = inner
+            .flat_names
+            .get(&pic_idx)
+            .and_then(|n| self.wad.flat_average_color(n, &self.palette));
+        inner.color_cache.insert(pic_idx, resolved);
+        resolved
+    }
+
+    /// Registra (o sobreescribe) el nombre del flat para `pic_idx`.
+    /// Invalida la entrada cacheada para ese índice. Toma `&self` —
+    /// la interior mutability permite hacerlo desde un `Arc<Self>`
+    /// compartido con el renderer.
+    pub fn set_flat_name(&self, pic_idx: u16, name: String) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.flat_names.insert(pic_idx, name);
+            inner.color_cache.remove(&pic_idx);
+        }
+    }
+
+    /// `true` si `pic_idx` ya fue registrado vía `set_flat_name`.
+    pub fn has_flat_name(&self, pic_idx: u16) -> bool {
+        self.inner
+            .lock()
+            .map(|i| i.flat_names.contains_key(&pic_idx))
+            .unwrap_or(false)
+    }
+
+    /// Acceso al WAD interno (para features futuras como wall
+    /// texturing samplear patches sin reabrir).
+    pub fn wad(&self) -> &supay_wad::Wad {
+        &self.wad
+    }
+}
+
 /// Parámetros del renderer.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct RenderConfig {
     /// Field of view vertical en grados. Doom clásico ronda 60°; el
     /// default 75° da una sensación más moderna sin perder el feel.
@@ -77,6 +188,9 @@ pub struct RenderConfig {
     /// Cantidad de bandas horizontales por slab (subdivisión vertical).
     /// Más bandas = más detalle "panel/ladrillo" a costo de rects.
     pub wall_bands: u32,
+    /// Atlas WAD con paleta + colores de flats. Sin él, el renderer cae
+    /// a las paletas hardcoded de 3.1.
+    pub atlas: Option<Arc<WadAtlas>>,
 }
 
 impl Default for RenderConfig {
@@ -88,6 +202,7 @@ impl Default for RenderConfig {
             sprite_height: 56.0,
             sprite_half_width: 16.0,
             wall_bands: 4,
+            atlas: None,
         }
     }
 }
@@ -105,6 +220,7 @@ pub fn scene_view<Msg: Clone + Send + Sync + 'static>(
     let prev = pair.prev().cloned();
     let next = pair.next().cloned();
     let tick_period_secs = tick_period.as_secs_f32().max(1.0 / 1000.0);
+    let config = Arc::new(config);
     View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -141,7 +257,7 @@ fn render_frame(scene: &mut Scene, rect: PaintRect, snap: &SceneSnapshot, cfg: &
     if rect.w <= 0.0 || rect.h <= 0.0 {
         return;
     }
-    draw_backdrop(scene, rect, snap);
+    draw_backdrop(scene, rect, snap, cfg);
 
     let view_z = snap.player.z + snap.player.view_height;
     let cam = Camera::new(snap.player.x, snap.player.y, view_z, snap.player.angle);
@@ -754,9 +870,11 @@ fn wall_color(
 }
 
 fn floor_color(sec: &SectorSnap, depth: f32, cfg: &RenderConfig) -> Color {
-    let rgb = FLOOR_PALETTE[(sec.floor_pic as usize) % FLOOR_PALETTE.len()];
-    // Pisos suelen verse ~8% más oscuros que el shade base (poca luz
-    // rebotada desde arriba).
+    let rgb = cfg
+        .atlas
+        .as_ref()
+        .and_then(|a| a.flat_color(sec.floor_pic))
+        .unwrap_or_else(|| FLOOR_PALETTE[(sec.floor_pic as usize) % FLOOR_PALETTE.len()]);
     let shade = shade_for(sec.light_level, depth, cfg) * 0.92;
     tint(rgb, shade.clamp(0.05, 1.0))
 }
@@ -765,7 +883,11 @@ fn ceiling_color(sec: &SectorSnap, depth: f32, cfg: &RenderConfig, sky_pic: u16)
     if ceiling_is_sky(sec, sky_pic) {
         return SKY_BAND_BOT;
     }
-    let rgb = CEIL_PALETTE[(sec.ceiling_pic as usize) % CEIL_PALETTE.len()];
+    let rgb = cfg
+        .atlas
+        .as_ref()
+        .and_then(|a| a.flat_color(sec.ceiling_pic))
+        .unwrap_or_else(|| CEIL_PALETTE[(sec.ceiling_pic as usize) % CEIL_PALETTE.len()]);
     let shade = shade_for(sec.light_level, depth, cfg) * 0.85;
     tint(rgb, shade.clamp(0.05, 1.0))
 }
@@ -811,7 +933,7 @@ fn sprite_color(
 /// El sector del jugador se infiere del primer sprite del jugador (el
 /// snapshot no expone explícitamente sector del player en 3.1; el sprite
 /// con índice 0 suele ser el avatar). Si no hay sectores, fallback gris.
-fn draw_backdrop(scene: &mut Scene, rect: PaintRect, snap: &SceneSnapshot) {
+fn draw_backdrop(scene: &mut Scene, rect: PaintRect, snap: &SceneSnapshot, cfg: &RenderConfig) {
     let mid_y = rect.y as f64 + (rect.h as f64) * 0.5;
     let sky_rect = Rect::new(
         rect.x as f64,
@@ -836,11 +958,14 @@ fn draw_backdrop(scene: &mut Scene, rect: PaintRect, snap: &SceneSnapshot) {
     // habitación más iluminada — suele ser donde el jugador está
     // cuando arranca el nivel). No es exacto pero quita el "gris muerto"
     // de la 3.0 cuando mirás al vacío.
-    let floor_rgb = snap
-        .sectors
-        .iter()
-        .max_by_key(|s| s.light_level)
-        .map(|s| FLOOR_PALETTE[(s.floor_pic as usize) % FLOOR_PALETTE.len()])
+    let brightest = snap.sectors.iter().max_by_key(|s| s.light_level);
+    let floor_rgb = brightest
+        .and_then(|s| {
+            cfg.atlas
+                .as_ref()
+                .and_then(|a| a.flat_color(s.floor_pic))
+                .or_else(|| Some(FLOOR_PALETTE[(s.floor_pic as usize) % FLOOR_PALETTE.len()]))
+        })
         .unwrap_or((0x32, 0x2E, 0x28));
     let backdrop_shade = 0.45;
     let bg = Color::from_rgba8(
@@ -987,6 +1112,69 @@ mod tests {
             ..sky_sec.clone()
         };
         assert!(!ceiling_is_sky(&weird, NO_SKY_PIC));
+    }
+
+    #[test]
+    fn floor_color_uses_atlas_when_available() {
+        // Sintetiza un WAD mínimo en memoria con un flat "F_T1" cuyo
+        // promedio es conocido (todo índice 42 → palette[42]).
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"IWAD");
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        let dir_off_placeholder = bytes.len();
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        // PLAYPAL grayscale.
+        let p1 = bytes.len();
+        let playpal: Vec<u8> = (0..supay_wad::PALETTE_ENTRIES)
+            .flat_map(|i| {
+                let v = i as u8;
+                [v, v, v]
+            })
+            .collect();
+        bytes.extend_from_slice(&playpal);
+        // F_T1 = todo 42.
+        let p2 = bytes.len();
+        bytes.extend(std::iter::repeat(42u8).take(supay_wad::FLAT_BYTES));
+        let dir_off = bytes.len() as u32;
+        bytes.extend_from_slice(&(p1 as u32).to_le_bytes());
+        bytes.extend_from_slice(&(playpal.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(b"PLAYPAL\0");
+        bytes.extend_from_slice(&(p2 as u32).to_le_bytes());
+        bytes.extend_from_slice(&(supay_wad::FLAT_BYTES as u32).to_le_bytes());
+        bytes.extend_from_slice(b"F_T1\0\0\0\0");
+        bytes[dir_off_placeholder..dir_off_placeholder + 4]
+            .copy_from_slice(&dir_off.to_le_bytes());
+
+        let wad = supay_wad::Wad::parse(bytes).unwrap();
+        let atlas = Arc::new(WadAtlas::new(wad, HashMap::new()));
+        // Antes de registrar el nombre, flat_color devuelve None y el
+        // floor_color cae a FLOOR_PALETTE.
+        let sec = SectorSnap {
+            floor_height: 0.0,
+            ceiling_height: 128.0,
+            light_level: 255,
+            floor_pic: 7,
+            ceiling_pic: 0,
+        };
+        let cfg_no_name = RenderConfig {
+            atlas: Some(atlas.clone()),
+            ..RenderConfig::default()
+        };
+        let c_fallback = floor_color(&sec, 0.0, &cfg_no_name);
+        // Color del fallback: FLOOR_PALETTE[7 % 8] = ash (0x40,0x38,0x2C)
+        // multiplicado por shade ≈ 0.92.
+        let fb = c_fallback.to_rgba8().to_u8_array();
+        assert!(fb[0] < 80, "fallback red should be muted, got {fb:?}");
+
+        // Registrar nombre del flat → ahora flat_color devuelve (42,42,42).
+        atlas.set_flat_name(7, "F_T1".to_string());
+        let c_real = floor_color(&sec, 0.0, &cfg_no_name);
+        let rc = c_real.to_rgba8().to_u8_array();
+        // Expected: (42,42,42) tinted con light=255, depth=0 → shade≈0.92
+        // → 42*0.92 ≈ 38 en cada canal.
+        assert!((rc[0] as i32 - 38).abs() <= 2, "expected ≈38, got {rc:?}");
+        assert_eq!(rc[0], rc[1]);
+        assert_eq!(rc[1], rc[2]);
     }
 
     #[test]

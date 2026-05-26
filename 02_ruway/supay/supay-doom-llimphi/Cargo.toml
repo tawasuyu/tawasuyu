@@ -17,4 +17,5 @@ llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 supay-core = { path = "../supay-core" }
 supay-render-llimphi = { path = "../supay-render-llimphi" }
+supay-wad = { path = "../supay-wad" }
 rimay-localize = { path = "../../../shared/rimay-localize" }

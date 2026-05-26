@@ -1,0 +1,11 @@
+[package]
+name = "supay-wad"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "supay-wad — parser mínimo del formato WAD de id Software (header IWAD/PWAD + directorio + lookup de lumps por nombre + PLAYPAL palette + flats 64×64). Soporta lo necesario para que el renderer moderno (supay-render-llimphi) saque colores reales del DOOM1.WAD shareware en vez de paletas hardcoded. Lectura solo, sin parser de niveles ni music/sound — esos siguen en doomgeneric."
+
+[dependencies]

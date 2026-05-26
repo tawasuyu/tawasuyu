@@ -41,6 +41,7 @@
 #include "p_local.h"     /* P_MobjThinker (función action_p1 que distingue mobjs) */
 #include "d_player.h"    /* player_t, MAXPLAYERS */
 #include "r_state.h"     /* lines/sectors/subsectors/segs/etc. globals */
+#include "w_wad.h"       /* lumpinfo[i].name para resolver flats */
 
 /* Globales del motor — declarados en r_state.h pero los re-extern-amos
  * acá por claridad de qué consumimos. */
@@ -56,6 +57,9 @@ extern player_t players[MAXPLAYERS];
 extern int consoleplayer;
 extern thinker_t thinkercap;
 extern int skyflatnum;
+extern int firstflat;
+/* `lumpinfo` y `numlumps` están en w_wad.h pero los re-extern-amos
+ * para claridad. */
 
 static inline float ftox(fixed_t v) {
     /* FRACUNIT = 1<<16 = 65536. División por constante el compilador
@@ -217,6 +221,33 @@ int supay_scene_seg(int i,
  * el mapa cargue, vale -1 — devolvemos 0xFFFF como sentinel. */
 uint16_t supay_scene_sky_pic(void) {
     return skyflatnum < 0 ? 0xFFFFu : (uint16_t)skyflatnum;
+}
+
+/* Resuelve `pic_idx` (índice relativo a la tabla de flats del motor) al
+ * nombre del lump (8 chars + nul terminator). Devuelve 1 si éxito, 0 si
+ * el índice está fuera de rango o `lumpinfo` aún no fue inicializado.
+ *
+ * Doomgeneric mantiene los flats como lumps consecutivos a partir de
+ * `firstflat` (set en R_InitFlats). El nombre de un flat con índice
+ * relativo `i` está en `lumpinfo[firstflat + i].name`. El renderer
+ * Rust lo usa para cachear el color promedio del flat resuelto contra
+ * la paleta PLAYPAL del WAD que parsea aparte (supay-wad).
+ */
+int supay_scene_flat_name(uint16_t pic_idx, char out[9]) {
+    if (!lumpinfo || firstflat <= 0) {
+        return 0;
+    }
+    unsigned int lump = (unsigned int)firstflat + (unsigned int)pic_idx;
+    if (lump >= numlumps) {
+        return 0;
+    }
+    /* lumpinfo[].name son 8 chars sin nul terminator garantizado;
+     * copiamos y agregamos el nul al final. */
+    for (int i = 0; i < 8; i++) {
+        out[i] = lumpinfo[lump].name[i];
+    }
+    out[8] = '\0';
+    return 1;
 }
 
 int supay_scene_sprite(int i,

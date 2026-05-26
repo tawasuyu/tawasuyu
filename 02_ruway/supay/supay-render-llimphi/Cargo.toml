@@ -11,3 +11,4 @@ description = "supay-render-llimphi — Fase 3 de supay. Renderer 3D moderno que
 [dependencies]
 llimphi-ui = { workspace = true }
 supay-scene = { path = "../supay-scene" }
+supay-wad = { path = "../supay-wad" }

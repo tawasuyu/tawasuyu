@@ -29,6 +29,8 @@
 //! En modo stub (sin vendor), la app arranca igual y pinta un mensaje
 //! explicando qué falta — útil para verificar el plumbing Llimphi.
 
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use llimphi_ui::llimphi_layout::taffy::{
@@ -39,7 +41,8 @@ use llimphi_ui::llimphi_raster::peniko::{Blob, Color, Image, ImageFormat};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use supay_core::{keys, DoomEngine, SnapshotPair, DOOM_HEIGHT, DOOM_PIXELS, DOOM_WIDTH};
-use supay_render_llimphi::{scene_view, RenderConfig};
+use supay_render_llimphi::{scene_view, RenderConfig, WadAtlas};
+use supay_wad::Wad;
 
 // =====================================================================
 // Paleta Supay — riffs sobre la identidad del Doom clásico:
@@ -96,6 +99,14 @@ struct Model {
     /// para calcular `alpha = elapsed / TICK_PERIOD` al pintar.
     last_tick_at: Instant,
     view_mode: ViewMode,
+    /// Fase 3.3: atlas WAD compartido con el renderer. `None` si el WAD
+    /// no pudo cargarse (modo stub o doom1.wad ausente en cwd); en ese
+    /// caso el renderer cae a las paletas hardcoded de 3.1.
+    atlas: Option<Arc<WadAtlas>>,
+    /// Conjunto de pic_idx ya registrados en el atlas. Cuando aparece
+    /// un sector con un pic_idx nuevo, lo resolvemos vía
+    /// `engine.flat_name` y lo añadimos.
+    known_pics: std::collections::HashSet<u16>,
 }
 
 #[derive(Clone)]
@@ -143,6 +154,16 @@ impl App for Supay {
             "doom1.wad".to_string(),
             "-nosound".to_string(),
         ];
+        // Cargamos el WAD desde el mismo path que pasamos al motor.
+        // Si falla (no existe, mal formato), seguimos sin atlas — el
+        // renderer cae a las paletas hardcoded de 3.1 sin romperse.
+        let atlas = match Wad::open("doom1.wad") {
+            Ok(wad) => Some(Arc::new(WadAtlas::new(wad, HashMap::new()))),
+            Err(e) => {
+                eprintln!("supay: WAD no cargado ({e}) — renderer 3D usará paletas fallback");
+                None
+            }
+        };
         Model {
             engine: DoomEngine::new(args),
             tick: 0,
@@ -150,6 +171,8 @@ impl App for Supay {
             snapshots: SnapshotPair::new(),
             last_tick_at: Instant::now(),
             view_mode: ViewMode::Framebuffer,
+            atlas,
+            known_pics: std::collections::HashSet::new(),
         }
     }
 
@@ -177,6 +200,21 @@ impl App for Supay {
                 refresh_framebuffer(&mut m);
                 // Fase 2: snapshot tras cada tick.
                 let snap = m.engine.capture_scene(m.tick);
+                // Fase 3.3: registrar en el atlas cualquier pic_idx
+                // nuevo que aparezca en sectores. WadAtlas usa interior
+                // mutability — el Arc compartido con el renderer ve
+                // los nombres nuevos sin necesidad de reconstruirlo.
+                if let Some(atlas) = m.atlas.as_ref() {
+                    for sec in snap.sectors.iter() {
+                        for pic in [sec.floor_pic, sec.ceiling_pic] {
+                            if m.known_pics.insert(pic) {
+                                if let Some(name) = m.engine.flat_name(pic) {
+                                    atlas.set_flat_name(pic, name);
+                                }
+                            }
+                        }
+                    }
+                }
                 m.snapshots.push(snap);
                 m.last_tick_at = Instant::now();
             }
@@ -217,7 +255,10 @@ impl App for Supay {
                 &model.snapshots,
                 model.last_tick_at,
                 TICK_PERIOD,
-                RenderConfig::default(),
+                RenderConfig {
+                    atlas: model.atlas.clone(),
+                    ..RenderConfig::default()
+                },
             )),
         };
         let footer = footer_bar(model);
@@ -261,7 +302,7 @@ fn header_bar(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        "PHASE 3.2 · LLIMPHI BUILD".to_string(),
+        "PHASE 3.3 · LLIMPHI BUILD".to_string(),
         9.0,
         COLOR_AMBER,
         Alignment::Start,
