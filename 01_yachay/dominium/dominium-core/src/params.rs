@@ -228,6 +228,35 @@ pub struct SimParams {
     /// al comportamiento de B.1.
     #[serde(default)]
     pub homophily_threshold: f32,
+    /// Activa el modelo Big Five (5 dimensiones) en vez de las 4 históricas.
+    /// Cuando es `true`:
+    /// - El contagio social incluye la quinta dimensión (Extraversion).
+    /// - La política `PsiArgmax` consulta `action_weights_ext` además de
+    ///   `action_weights`.
+    /// - Las métricas `PsiMetrics` calculan `polarization_ext` y `moran_i_ext`.
+    /// - La homofilia mide distancia en 5D (en vez de 4D).
+    ///
+    /// `false` (default) → bit-exacto al motor histórico Big Four.
+    #[serde(default)]
+    pub big_five: bool,
+    /// Columna extendida de `action_weights` para la quinta dimensión del
+    /// psi (Extraversion). Sólo se consulta cuando `big_five = true`. Default
+    /// cero → la 5ª dimensión empieza neutra y el caller la sintoniza.
+    ///
+    /// Default semánticamente plausible:
+    /// - Mover (0), Sincronizar (2), Intercambiar (3): premian extraversión.
+    /// - Extraer (1), Replicar (4), Degradar (5): neutrales.
+    #[serde(default = "default_action_weights_ext")]
+    pub action_weights_ext: [f32; 6],
+}
+
+/// Default de `SimParams::action_weights_ext` — peso por acción para la 5ª
+/// dimensión del psi (Big Five Extraversion). Acciones sociales (Mover,
+/// Sincronizar, Intercambiar) premian extraversión; las solitarias o
+/// agresivas (Extraer, Replicar, Degradar) son neutrales.
+fn default_action_weights_ext() -> [f32; 6] {
+    // 0 Mover, 1 Extraer, 2 Sincronizar, 3 Intercambiar, 4 Replicar, 5 Degradar
+    [0.4, 0.0, 0.6, 0.8, 0.0, -0.2]
 }
 
 /// Default de `SimParams::action_weights` — fila por acción, columna por
@@ -360,6 +389,10 @@ impl Default for SimParams {
             // Fase B.2: sin filtro de homofilia → contagio universal cuando
             // se enciende (semántica de B.1).
             homophily_threshold: 0.0,
+            // Big Five off por default — el motor mantiene los 4 ejes
+            // históricos bit-exacto.
+            big_five: false,
+            action_weights_ext: default_action_weights_ext(),
         }
     }
 }

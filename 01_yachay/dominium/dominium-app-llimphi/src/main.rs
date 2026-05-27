@@ -19,7 +19,8 @@ use std::time::Duration;
 
 use dominium_canvas_llimphi::canvas_view;
 use dominium_core::{
-    BehaviorHack, Concepto, Conceptos, Epoch, LayerMods, SimParams, Trigger, World, WorldStats,
+    BehaviorHack, Concepto, Conceptos, Epoch, LayerMods, PsiMetrics, SimParams, Trigger, World,
+    WorldStats,
 };
 use dominium_iso::{IsoProjector, ZWeights};
 use dominium_physics::tick;
@@ -344,6 +345,14 @@ enum ParamSlot {
     MoveCost,
     SeasonPeriod,
     SeasonAmplitude,
+    /// Intensidad con la que el psi modula los efectos de las acciones.
+    PsiModulation,
+    /// Radio social del contagio (Fase B).
+    SocialRadius,
+    /// Tasa de convergencia del contagio social.
+    ContagionRate,
+    /// Umbral de homofilia (Fase B.2) — 0 = sin filtro.
+    HomophilyThreshold,
 }
 
 impl ParamSlot {
@@ -356,6 +365,16 @@ impl ParamSlot {
             // 0 = sin estaciones; hasta 500 ticks por ciclo (≈45 s a 11 Hz).
             ParamSlot::SeasonPeriod => (0.0, 500.0),
             ParamSlot::SeasonAmplitude => (0.0, 1.0),
+            // Psi modulation: rango [0, 1] de uso típico; > 1 amplifica
+            // demasiado y rompe calibraciones del default.
+            ParamSlot::PsiModulation => (0.0, 1.0),
+            // Radio social — hasta media diagonal del grid 80×80.
+            ParamSlot::SocialRadius => (0.0, 30.0),
+            // Tasa de contagio: > 0.5 produce conformismo brutal en pocos
+            // ticks; típicos 0.05..0.20.
+            ParamSlot::ContagionRate => (0.0, 0.5),
+            // Homofilia 0..2 — > sqrt(4) = 2 incluye todo el psi space.
+            ParamSlot::HomophilyThreshold => (0.0, 2.0),
         }
     }
 }
@@ -430,6 +449,12 @@ enum Msg {
     /// El bus `wawa-config` publicó una versión nueva. Aplicamos
     /// theme y locale; los demás campos no nos competen.
     WawaConfigChanged(Box<wawa_config::WawaConfig>),
+    /// Alterna `big_five` en SimParams. Si la población vino sin columna
+    /// `psi5` (saves Big Four), la rellenamos al pasar a Big5.
+    ToggleBigFive,
+    /// Cicla `ActionPolicy` entre Fixed y PsiArgmax. Con periodo 0 nunca
+    /// re-elige, así que también arrancamos un período sano la primera vez.
+    CyclePsiPolicy,
 }
 
 struct Dominium;
@@ -596,6 +621,22 @@ impl App for Dominium {
                     ParamSlot::SeasonAmplitude => {
                         m.params.season_amplitude =
                             (m.params.season_amplitude + dv).clamp(lo, hi)
+                    }
+                    ParamSlot::PsiModulation => {
+                        m.params.psi_effect_modulation =
+                            (m.params.psi_effect_modulation + dv).clamp(lo, hi)
+                    }
+                    ParamSlot::SocialRadius => {
+                        m.params.social_radius =
+                            (m.params.social_radius + dv).clamp(lo, hi)
+                    }
+                    ParamSlot::ContagionRate => {
+                        m.params.contagion_rate =
+                            (m.params.contagion_rate + dv).clamp(lo, hi)
+                    }
+                    ParamSlot::HomophilyThreshold => {
+                        m.params.homophily_threshold =
+                            (m.params.homophily_threshold + dv).clamp(lo, hi)
                     }
                 }
             }
@@ -776,6 +817,28 @@ impl App for Dominium {
             Msg::RewindHome => {
                 m.rewind_offset = 0;
             }
+            Msg::ToggleBigFive => {
+                m.params.big_five = !m.params.big_five;
+                if m.params.big_five {
+                    // Saves Big Four que entraron sin columna psi5 hay que
+                    // rellenarlos antes de que el motor consulte
+                    // `lemmings.psi5[i]`.
+                    m.world.lemmings.ensure_psi5_len();
+                }
+            }
+            Msg::CyclePsiPolicy => {
+                m.params.action_policy = match m.params.action_policy {
+                    dominium_core::ActionPolicy::Fixed => {
+                        if m.params.policy_reeval_period == 0 {
+                            m.params.policy_reeval_period = 20;
+                        }
+                        dominium_core::ActionPolicy::PsiArgmax
+                    }
+                    dominium_core::ActionPolicy::PsiArgmax => {
+                        dominium_core::ActionPolicy::Fixed
+                    }
+                };
+            }
             Msg::WawaConfigChanged(cfg) => {
                 // Re-armamos el theme y el locale. El locale lo respeta
                 // el próximo `view()` porque `rimay_localize::t(...)` se
@@ -811,6 +874,10 @@ impl App for Dominium {
         let stats = WorldStats::from_world(shown);
 
         let status = status_bar(model, &theme);
+        // PsiMetrics es O(N²) por Moran — para N≈500 son ~250k operaciones
+        // por frame a 11 Hz, perfectamente costeable y nos da las métricas
+        // psicológicas en vivo sin un segundo bucle de cálculo.
+        let psi_metrics = PsiMetrics::from_world(shown);
         let mut plan = build_plan(shown, &model.iso, &model.weights, &model.cfg);
         if model.show_trails && model.rewind_offset == 0 {
             overlay_trails(&mut plan, model);
@@ -844,7 +911,7 @@ impl App for Dominium {
                 }
                 DragPhase::End => None,
             });
-        let side = side_panel(model, &stats, &theme);
+        let side = side_panel(model, &stats, &psi_metrics, &theme);
 
         let body = View::new(Style {
             flex_direction: FlexDirection::Row,
@@ -1088,7 +1155,12 @@ fn canvas_pane(plan: dominium_render_plan::RenderPlan) -> View<Msg> {
     .children(vec![canvas])
 }
 
-fn side_panel(model: &Model, stats: &WorldStats, theme: &Theme) -> View<Msg> {
+fn side_panel(
+    model: &Model,
+    stats: &WorldStats,
+    psi_metrics: &PsiMetrics,
+    theme: &Theme,
+) -> View<Msg> {
     let btn_palette = ButtonPalette::from_theme(theme);
     let mut slider_palette = SliderPalette::from_theme(theme);
     // Comprimimos los slots para que entren en el sidebar de 240 px.
@@ -1456,6 +1528,104 @@ fn side_panel(model: &Model, stats: &WorldStats, theme: &Theme) -> View<Msg> {
         ParamSlot::SeasonAmplitude,
         &slider_palette,
     ));
+
+    // ─── [ PSICOLOGÍA ] — sliders de los parámetros psi + toggles ───
+    children.push(separator());
+    children.push(label_view("[ PSICOLOGIA ]", 11.0, theme.fg_muted));
+    children.push(param_slider(
+        "psi mod",
+        model.params.psi_effect_modulation,
+        ParamSlot::PsiModulation,
+        &slider_palette,
+    ));
+    children.push(param_slider(
+        "radio soc",
+        model.params.social_radius,
+        ParamSlot::SocialRadius,
+        &slider_palette,
+    ));
+    children.push(param_slider(
+        "contagio",
+        model.params.contagion_rate,
+        ParamSlot::ContagionRate,
+        &slider_palette,
+    ));
+    children.push(param_slider(
+        "homofilia",
+        model.params.homophily_threshold,
+        ParamSlot::HomophilyThreshold,
+        &slider_palette,
+    ));
+    let big5_label = if model.params.big_five {
+        "✓  Big Five: ON (5D)"
+    } else {
+        "○  Big Five: OFF (4D)"
+    };
+    children.push(sized_button(big5_label, &btn_palette, Msg::ToggleBigFive));
+    let policy_label = match model.params.action_policy {
+        dominium_core::ActionPolicy::Fixed => "○  Política: Fixed".to_string(),
+        dominium_core::ActionPolicy::PsiArgmax => format!(
+            "✓  Política: PsiArgmax (T={})",
+            model.params.policy_reeval_period
+        ),
+    };
+    children.push(sized_button(&policy_label, &btn_palette, Msg::CyclePsiPolicy));
+
+    // ─── [ MÉTRICAS ψ ] — polarización + Moran's I por componente ───
+    children.push(separator());
+    children.push(label_view("[ METRICAS ψ ]", 11.0, theme.fg_muted));
+    children.push(stat_row(
+        "polar ORDEN",
+        &format!("{:.4}", psi_metrics.polarization[0]),
+        theme,
+    ));
+    children.push(stat_row(
+        "polar MIEDO",
+        &format!("{:.4}", psi_metrics.polarization[1]),
+        theme,
+    ));
+    children.push(stat_row(
+        "polar CURIO",
+        &format!("{:.4}", psi_metrics.polarization[2]),
+        theme,
+    ));
+    children.push(stat_row(
+        "polar CORR",
+        &format!("{:.4}", psi_metrics.polarization[3]),
+        theme,
+    ));
+    children.push(stat_row(
+        "Moran ORDEN",
+        &format!("{:+.3}", psi_metrics.moran_i[0]),
+        theme,
+    ));
+    children.push(stat_row(
+        "Moran MIEDO",
+        &format!("{:+.3}", psi_metrics.moran_i[1]),
+        theme,
+    ));
+    children.push(stat_row(
+        "Moran CURIO",
+        &format!("{:+.3}", psi_metrics.moran_i[2]),
+        theme,
+    ));
+    children.push(stat_row(
+        "Moran CORR",
+        &format!("{:+.3}", psi_metrics.moran_i[3]),
+        theme,
+    ));
+    if model.params.big_five {
+        children.push(stat_row(
+            "polar EXTRA",
+            &format!("{:.4}", psi_metrics.polarization_ext),
+            theme,
+        ));
+        children.push(stat_row(
+            "Moran EXTRA",
+            &format!("{:+.3}", psi_metrics.moran_i_ext),
+            theme,
+        ));
+    }
 
     children.push(separator());
     children.push(label_view("[ RELIEVE VISUAL ]", 11.0, theme.fg_muted));

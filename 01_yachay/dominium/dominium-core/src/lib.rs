@@ -31,7 +31,10 @@ pub use conceptos::{BehaviorHack, Concepto, Conceptos, LayerMods, Persuasion, Tr
 pub use epoch::Epoch;
 pub use events::{apply_event, Event, EventKind, LayerId};
 pub use grid::Grid;
-pub use lemmings::Lemmings;
+pub use lemmings::{
+    Lemmings, PSI_CORRUPTIBILIDAD, PSI_CURIOSIDAD, PSI_EXTRAVERSION, PSI_EXTRAVERSION_DEFAULT,
+    PSI_MIEDO, PSI_ORDEN,
+};
 pub use metrics::WorldStats;
 pub use psi_metrics::{
     kmeans_psi, morans_i_for, KMeansResult, PsiMetrics, KMEANS_EPS, KMEANS_K, KMEANS_MAX_ITER,
@@ -41,4 +44,4 @@ pub use params::{
     ActionPolicy, SimParams, TradeTarget, RELIEVE_DEGRADACION, RELIEVE_MATERIA, RELIEVE_ORO,
     RELIEVE_PODER, RELIEVE_PSIQUE,
 };
-pub use world::{select_action_argmax, Action, World};
+pub use world::{select_action_argmax, select_action_argmax_big5, Action, World};

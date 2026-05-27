@@ -943,6 +943,7 @@ mod tests {
             radius: 2.0,
             mods: LayerMods::default(),
             hack: None,
+            persuasion: None,
         });
         let plan = build_plan(&world, &iso(), &ZWeights::default(), &PlanConfig::default());
         // 4 quads del concepto (aura + sombra + base + tope). Las celdas
@@ -966,6 +967,7 @@ mod tests {
             radius: 1.5,
             mods: LayerMods::default(),
             hack: None,
+            persuasion: None,
         });
         let plan = build_plan(&world, &iso(), &ZWeights::default(), &PlanConfig::default());
         let cfg = PlanConfig::default();
@@ -998,6 +1000,7 @@ mod tests {
             radius: 1.0,
             mods: LayerMods::default(),
             hack: None,
+            persuasion: None,
         });
         let cfg = PlanConfig { light_dir: (1.0, 0.0), ..Default::default() };
         let plan = build_plan(&world, &iso(), &ZWeights::default(), &cfg);

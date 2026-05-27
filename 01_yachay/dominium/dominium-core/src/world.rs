@@ -29,6 +29,30 @@ pub fn select_action_argmax(psi: &[f32; 4], weights: &[[f32; 4]; 6]) -> u8 {
     best_idx
 }
 
+/// Variante Big Five de [`select_action_argmax`]. Suma al score la
+/// contribución de la 5ª dimensión `psi5` ponderada por `weights_ext`.
+/// Tie-break determinista por menor índice — idéntico al motor Big Four
+/// cuando `psi5 == 0` y `weights_ext == [0; 6]`.
+pub fn select_action_argmax_big5(
+    psi: &[f32; 4],
+    psi5: f32,
+    weights: &[[f32; 4]; 6],
+    weights_ext: &[f32; 6],
+) -> u8 {
+    let mut best_idx: u8 = 0;
+    let mut best_score: f32 = f32::MIN;
+    for a in 0..6 {
+        let w = &weights[a];
+        let s = w[0] * psi[0] + w[1] * psi[1] + w[2] * psi[2] + w[3] * psi[3]
+            + weights_ext[a] * psi5;
+        if s > best_score {
+            best_score = s;
+            best_idx = a as u8;
+        }
+    }
+    best_idx
+}
+
 /// Las 6 acciones atómicas. El byte `accion` del Lemming es uno de estos.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
@@ -248,7 +272,10 @@ impl World {
         let max_y = self.grid.height as f32 - 1.0;
         let x = (self.lemmings.pos_x[i] + dx).clamp(0.0, max_x);
         let y = (self.lemmings.pos_y[i] + dy).clamp(0.0, max_y);
-        let child = self.lemmings.spawn(x, y, cost, psi);
+        // El hijo hereda el psi5 del padre — sin esto, el linaje Big Five
+        // se borraría a cada generación.
+        let psi5 = self.lemmings.psi5_at(i);
+        let child = self.lemmings.spawn_big5(x, y, cost, psi, psi5);
         self.lemmings.accion[child] = accion;
     }
 
@@ -567,6 +594,51 @@ mod tests {
             donado_orden > donado_base,
             "ordenado donó más: {donado_orden} > {donado_base}"
         );
+    }
+
+    #[test]
+    fn argmax_big5_se_reduce_a_big4_con_pesos_ext_cero() {
+        // Sanity: con `action_weights_ext = [0; 6]` y cualquier psi5,
+        // `select_action_argmax_big5` debe coincidir con la versión Big Four.
+        let weights = crate::params::SimParams::default().action_weights;
+        let weights_ext = [0.0f32; 6];
+        let psis = [
+            [0.0, 0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0, 0.0],
+            [0.5, 0.5, 0.5, 0.5],
+        ];
+        for psi in &psis {
+            let a4 = select_action_argmax(psi, &weights);
+            for psi5 in [0.0, 0.5, 1.0] {
+                let a5 = select_action_argmax_big5(psi, psi5, &weights, &weights_ext);
+                assert_eq!(a4, a5, "psi {:?} psi5 {}", psi, psi5);
+            }
+        }
+    }
+
+    #[test]
+    fn argmax_big5_cambia_decision_cuando_extra_pesa() {
+        // Con un peso ext alto en Intercambiar (3) y psi5 = 1.0, un agente
+        // que en Big Four iría a Degradar (5) — psi=[0,0,0,1] — debería
+        // saltar a Intercambiar porque la 5ª columna lo empuja.
+        let mut weights_ext = [0.0f32; 6];
+        weights_ext[3] = 5.0; // empujamos fuerte a Intercambiar
+        let weights = crate::params::SimParams::default().action_weights;
+        let psi = [0.0, 0.0, 0.0, 1.0];
+        let psi5 = 1.0;
+        let a = select_action_argmax_big5(&psi, psi5, &weights, &weights_ext);
+        assert_eq!(a, 3, "el 5º peso debe ganarle a Degradar");
+    }
+
+    #[test]
+    fn replicar_hereda_psi5_del_padre() {
+        let mut w = World::new(8, 8);
+        let i = w.lemmings.spawn_big5(4.0, 4.0, 100.0, [0.5; 4], 0.73);
+        w.lemmings.accion[i] = 4;
+        let p = SimParams::default();
+        w.act_replicar(i, &p);
+        assert_eq!(w.lemmings.len(), 2);
+        assert!((w.lemmings.psi5_at(1) - 0.73).abs() < 1e-5, "hijo {} != 0.73", w.lemmings.psi5_at(1));
     }
 
     #[test]

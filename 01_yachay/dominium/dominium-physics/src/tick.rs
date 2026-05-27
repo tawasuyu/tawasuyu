@@ -6,7 +6,9 @@
 use crate::conceptos::{apply_conceptos, apply_hacks, apply_persuasion};
 use crate::diffuse::{diffuse_with, regrow_materia};
 use crate::social::apply_social_contagion;
-use dominium_core::{select_action_argmax, ActionPolicy, SimParams, World};
+use dominium_core::{
+    select_action_argmax, select_action_argmax_big5, ActionPolicy, SimParams, World,
+};
 
 /// Reelige la `accion` base de los lemmings libres según la política
 /// psicológica. Cero costo cuando la política es `Fixed` o el periodo es 0
@@ -32,12 +34,19 @@ fn apply_psi_policy(world: &mut World, p: &SimParams) {
         return;
     }
     let weights = &p.action_weights;
+    let weights_ext = &p.action_weights_ext;
+    let big5 = p.big_five && world.lemmings.psi5.len() == world.lemmings.len();
     for i in 0..world.lemmings.len() {
         if world.lemmings.hack_lock[i] > 0 {
             continue;
         }
         let psi = world.lemmings.vector_psi[i];
-        world.lemmings.accion[i] = select_action_argmax(&psi, weights);
+        world.lemmings.accion[i] = if big5 {
+            let psi5 = world.lemmings.psi5[i];
+            select_action_argmax_big5(&psi, psi5, weights, weights_ext)
+        } else {
+            select_action_argmax(&psi, weights)
+        };
     }
 }
 

@@ -73,6 +73,13 @@ pub struct PsiMetrics {
     /// Cero por convención cuando `n < 2`, `var(psi[k]) ≈ 0`, o ningún
     /// par está dentro del radio.
     pub moran_i: [f32; 4],
+    /// Polarización Esteban-Ray de la 5ª dimensión `psi5` (Big Five
+    /// Extraversion). `0.0` cuando el motor corre en Big Four o cuando la
+    /// 5ª dimensión es uniforme.
+    pub polarization_ext: f32,
+    /// Índice de Moran I de la 5ª dimensión `psi5`. `0.0` en Big Four o
+    /// distribución uniforme/azarosa.
+    pub moran_i_ext: f32,
 }
 
 impl PsiMetrics {
@@ -101,8 +108,26 @@ impl PsiMetrics {
             polarization[k] = polarization_esteban_ray(&buf);
             moran_i[k] = morans_i_for(&buf, &l.pos_x, &l.pos_y, moran_radius);
         }
+        // Big Five: si la columna psi5 está poblada (len == n), computa
+        // polarización y Moran sobre ella. En motor Big Four la columna está
+        // vacía o uniforme y los valores quedan en cero por convención.
+        let (polarization_ext, moran_i_ext) = if l.psi5.len() == n {
+            let buf: &[f32] = &l.psi5;
+            (
+                polarization_esteban_ray(buf),
+                morans_i_for(buf, &l.pos_x, &l.pos_y, moran_radius),
+            )
+        } else {
+            (0.0, 0.0)
+        };
         let psi_action_corr = psi_action_corr_all(l);
-        Self { polarization, psi_action_corr, moran_i }
+        Self {
+            polarization,
+            psi_action_corr,
+            moran_i,
+            polarization_ext,
+            moran_i_ext,
+        }
     }
 }
 
@@ -654,6 +679,47 @@ mod tests {
         assert_eq!(a.assignments, b.assignments);
         assert_eq!(a.inertia, b.inertia);
         assert_eq!(a.iterations, b.iterations);
+    }
+
+    #[test]
+    fn psi_metrics_calcula_ext_cuando_psi5_esta_poblado() {
+        // Población bimodal sólo en la 5ª dimensión: mitad psi5=0,
+        // mitad psi5=1. Las 4 primeras componentes uniformes.
+        let mut w = World::new(8, 8);
+        for k in 0..40 {
+            let v5 = if k < 20 { 0.0 } else { 1.0 };
+            w.lemmings.spawn_big5(1.0, 1.0, 10.0, [0.5; 4], v5);
+        }
+        let m = PsiMetrics::from_world(&w);
+        // polarization_ext debe ser alta porque la distribución es bimodal.
+        assert!(m.polarization_ext > 0.1, "polar_ext bimodal: {}", m.polarization_ext);
+        // Las 4 primeras componentes uniformes → polarization ~0.
+        for k in 0..4 {
+            assert!(m.polarization[k].abs() < 1e-4, "comp {k}: {}", m.polarization[k]);
+        }
+    }
+
+    #[test]
+    fn psi_metrics_ext_es_cero_sin_columna_psi5() {
+        // Build manual de un Lemmings con psi5 vacío (motor Big Four
+        // serializado antes del cambio).
+        use crate::lemmings::Lemmings;
+        let mut w = World::new(8, 8);
+        // Llenamos los vectores básicos a mano para simular un deserialize
+        // viejo que no traía psi5.
+        w.lemmings = Lemmings {
+            pos_x: vec![1.0, 2.0],
+            pos_y: vec![1.0, 2.0],
+            edad: vec![0; 2],
+            energia: vec![10.0; 2],
+            vector_psi: vec![[0.5; 4]; 2],
+            accion: vec![0; 2],
+            hack_lock: vec![0; 2],
+            psi5: Vec::new(),
+        };
+        let m = PsiMetrics::from_world(&w);
+        assert_eq!(m.polarization_ext, 0.0);
+        assert_eq!(m.moran_i_ext, 0.0);
     }
 
     #[test]
