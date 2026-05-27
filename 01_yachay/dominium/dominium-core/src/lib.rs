@@ -19,6 +19,7 @@
 
 pub mod conceptos;
 pub mod epoch;
+pub mod events;
 pub mod grid;
 pub mod lemmings;
 pub mod metrics;
@@ -28,6 +29,7 @@ pub mod world;
 
 pub use conceptos::{BehaviorHack, Concepto, Conceptos, LayerMods, Persuasion, Trigger};
 pub use epoch::Epoch;
+pub use events::{apply_event, Event, EventKind, LayerId};
 pub use grid::Grid;
 pub use lemmings::Lemmings;
 pub use metrics::WorldStats;

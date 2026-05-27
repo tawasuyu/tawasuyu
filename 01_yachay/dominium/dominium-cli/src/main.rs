@@ -23,8 +23,8 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use dominium_core::{
-    ActionPolicy, BehaviorHack, Concepto, Conceptos, Epoch, LayerMods, PsiMetrics, SimParams,
-    Trigger, World, WorldStats,
+    apply_event, ActionPolicy, BehaviorHack, Concepto, Conceptos, Epoch, Event, LayerMods,
+    PsiMetrics, SimParams, Trigger, World, WorldStats,
 };
 use dominium_physics::tick;
 
@@ -113,6 +113,20 @@ enum Cmd {
         /// umbral. Rango útil 0.3..1.0 para producir tribus aisladas.
         #[arg(long, default_value_t = 0.0)]
         homophily_threshold: f32,
+        /// CSV de población inicial (Fase D.1). Header opcional; columnas
+        /// requeridas: `psi_orden, psi_miedo, psi_curiosidad,
+        /// psi_corruptibilidad`. Columnas opcionales: `x, y, energia,
+        /// accion`. Si están presentes ganan sobre los valores generados
+        /// por el PRNG; si faltan, se rellenan con el PRNG sembrado por
+        /// `--seed`. Cuando se usa, `--lemmings` queda ignorado.
+        #[arg(long)]
+        from_csv: Option<PathBuf>,
+        /// Timeline JSON de eventos a inyectar (Fase D.1). Lista ordenada
+        /// de `{tick, kind: Shock|PsiNudge, ...}`. Antes de cada `tick()`,
+        /// los eventos cuyo `tick` coincide con el reloj global se aplican
+        /// en orden de aparición en el archivo.
+        #[arg(long)]
+        events_json: Option<PathBuf>,
     },
 }
 
@@ -144,6 +158,8 @@ fn main() -> Result<()> {
             social_radius,
             contagion_rate,
             homophily_threshold,
+            from_csv,
+            events_json,
         } => run_sim(
             seed,
             ticks,
@@ -159,6 +175,8 @@ fn main() -> Result<()> {
             social_radius,
             contagion_rate,
             homophily_threshold,
+            from_csv.as_deref(),
+            events_json.as_deref(),
         ),
         Cmd::Repl { seed, grid, lemmings, conceptos } => {
             repl(seed, grid, lemmings, conceptos.as_deref())
@@ -181,8 +199,25 @@ fn run_sim(
     social_radius: f32,
     contagion_rate: f32,
     homophily_threshold: f32,
+    from_csv: Option<&std::path::Path>,
+    events_json: Option<&std::path::Path>,
 ) -> Result<()> {
     let mut world = build_world(seed, grid, lemmings);
+    if let Some(path) = from_csv {
+        let n = seed_population_from_csv(&mut world, path, seed)
+            .with_context(|| format!("leyendo CSV de población {}", path.display()))?;
+        eprintln!("dominium-cli · población cargada desde CSV: {n} agentes");
+    }
+    let events: Vec<Event> = if let Some(path) = events_json {
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("leyendo {}", path.display()))?;
+        let evs: Vec<Event> = serde_json::from_str(&raw)
+            .with_context(|| format!("parseando timeline {}", path.display()))?;
+        eprintln!("dominium-cli · timeline cargada: {} eventos", evs.len());
+        evs
+    } else {
+        Vec::new()
+    };
     if let Some(path) = conceptos_path {
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("leyendo {}", path.display()))?;
@@ -212,6 +247,16 @@ fn run_sim(
 
     let t0 = std::time::Instant::now();
     for t in 0..ticks {
+        // Aplica eventos cuyo tick coincide con el reloj actual ANTES del
+        // tick() — el shock entra en juego en este paso (la difusión lo
+        // propaga). Orden lineal en `events` para determinismo: ante dos
+        // eventos en el mismo tick, se aplican en orden de aparición.
+        let now = world.tick_count;
+        for ev in &events {
+            if ev.tick == now {
+                apply_event(&mut world, &ev.kind);
+            }
+        }
         tick(&mut world, &params);
         if let Some(w) = writer.as_mut() {
             write_row(w, &world, t + 1)?;
@@ -555,6 +600,124 @@ fn parse_add<'a>(mut parts: impl Iterator<Item = &'a str>) -> Result<Concepto> {
         hack,
         persuasion: None,
     })
+}
+
+/// Carga una población inicial desde CSV (Fase D.1). Reemplaza COMPLETAMENTE
+/// la población actual del `world` (la grilla se preserva — el sustrato
+/// sigue siendo el sembrado por el PRNG). Devuelve la cantidad de agentes
+/// cargados.
+///
+/// Header opcional. Columnas reconocidas:
+/// - `psi_orden, psi_miedo, psi_curiosidad, psi_corruptibilidad`
+///   (requeridas si hay header; si no, las primeras 4 columnas se asumen
+///   en este orden).
+/// - `x, y` (opcionales): posición; si faltan, se generan con el PRNG.
+/// - `energia` (opcional): energía inicial; default 40 + rng·40.
+/// - `accion` (opcional): byte de acción (0..=5); default reusa el bucket
+///   módulo k del `build_world`.
+fn seed_population_from_csv(world: &mut World, path: &std::path::Path, seed: u64) -> Result<usize> {
+    let raw = std::fs::read_to_string(path).context("leyendo CSV")?;
+    let mut lines = raw.lines().filter(|l| !l.trim().is_empty() && !l.starts_with('#'));
+    let first = lines.next().context("CSV vacío")?;
+    // Detecta header: si tiene letras alfabéticas (no sólo dígitos/puntos/comas/menos)
+    // asume header. Si no, primera fila es ya un agente.
+    let has_header = first
+        .chars()
+        .any(|c| c.is_alphabetic() && c != 'e' && c != 'E');
+    // Mapeo de columna → posición. Sin header, asumimos PSI_ORDEN,
+    // PSI_MIEDO, PSI_CURIOSIDAD, PSI_CORRUPTIBILIDAD en columnas 0..3.
+    let mut col_psi_o = Some(0usize);
+    let mut col_psi_m = Some(1usize);
+    let mut col_psi_c = Some(2usize);
+    let mut col_psi_k = Some(3usize);
+    let mut col_x: Option<usize> = None;
+    let mut col_y: Option<usize> = None;
+    let mut col_energia: Option<usize> = None;
+    let mut col_accion: Option<usize> = None;
+    if has_header {
+        col_psi_o = None;
+        col_psi_m = None;
+        col_psi_c = None;
+        col_psi_k = None;
+        for (i, name) in first.split(',').map(str::trim).enumerate() {
+            match name {
+                "psi_orden" => col_psi_o = Some(i),
+                "psi_miedo" => col_psi_m = Some(i),
+                "psi_curiosidad" => col_psi_c = Some(i),
+                "psi_corruptibilidad" => col_psi_k = Some(i),
+                "x" => col_x = Some(i),
+                "y" => col_y = Some(i),
+                "energia" => col_energia = Some(i),
+                "accion" => col_accion = Some(i),
+                _ => {} // columna desconocida — la ignoramos
+            }
+        }
+    }
+    let col_psi_o = col_psi_o.context("falta columna psi_orden")?;
+    let col_psi_m = col_psi_m.context("falta columna psi_miedo")?;
+    let col_psi_c = col_psi_c.context("falta columna psi_curiosidad")?;
+    let col_psi_k = col_psi_k.context("falta columna psi_corruptibilidad")?;
+    // Reemplazo total de población. La grilla se preserva.
+    world.lemmings = dominium_core::Lemmings::new();
+    // PRNG sembrado por --seed: alimenta x/y/energia faltantes. Determinista.
+    let mut rng = Lcg::new(seed);
+    let mut rows_iter: Box<dyn Iterator<Item = &str>> = if has_header {
+        Box::new(lines)
+    } else {
+        Box::new(std::iter::once(first).chain(lines))
+    };
+    let max = (world.grid.width.max(world.grid.height) as f32) - 1.0;
+    let mut k = 0usize;
+    while let Some(line) = rows_iter.next() {
+        let fields: Vec<&str> = line.split(',').map(str::trim).collect();
+        let get = |c: usize| -> Result<f32> {
+            fields
+                .get(c)
+                .with_context(|| format!("fila {k} faltan columnas (idx {c})"))?
+                .parse::<f32>()
+                .with_context(|| format!("fila {k} col {c} no parsea como f32"))
+        };
+        let psi = [
+            get(col_psi_o)?,
+            get(col_psi_m)?,
+            get(col_psi_c)?,
+            get(col_psi_k)?,
+        ];
+        let x = match col_x {
+            Some(c) => get(c)?.clamp(0.0, max),
+            None => rng.next_f32() * max,
+        };
+        let y = match col_y {
+            Some(c) => get(c)?.clamp(0.0, max),
+            None => rng.next_f32() * max,
+        };
+        let energia = match col_energia {
+            Some(c) => get(c)?.max(0.0),
+            None => 40.0 + rng.next_f32() * 40.0,
+        };
+        let i = world.lemmings.spawn(x, y, energia, psi);
+        let accion = match col_accion {
+            Some(c) => {
+                let raw = fields
+                    .get(c)
+                    .with_context(|| format!("fila {k} falta accion (idx {c})"))?
+                    .trim();
+                raw.parse::<u8>()
+                    .with_context(|| format!("fila {k} accion no parsea como u8"))?
+                    .min(5)
+            }
+            None => match k % 20 {
+                0..=5 => 1,
+                6..=11 => 3,
+                12..=15 => 0,
+                16..=18 => 4,
+                _ => 2,
+            },
+        };
+        world.lemmings.accion[i] = accion;
+        k += 1;
+    }
+    Ok(k)
 }
 
 fn build_world(seed: u64, grid: usize, lemmings: usize) -> World {
