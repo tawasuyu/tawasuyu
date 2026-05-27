@@ -1,23 +1,23 @@
-# 01 yachay · conocer
+# 01 yachay · to know
 
-`yachay` (quechua: *saber, conocimiento*). Es el cuadrante del **modelo**: lo que tomamos de la percepción y lo organizamos como teoría. Acá viven los simuladores, los catálogos, los grafos semánticos, las hojas de cálculo, los motores físicos. Lo que `unanchay` recibió en bruto, `yachay` lo convierte en estructura que se puede consultar y proyectar.
+`yachay` (Quechua: *to know, knowledge*). This is the **model** quadrant: we take what perception gave us and organize it as theory. Simulators, catalogs, semantic graphs, spreadsheets, physics engines live here. What `unanchay` received raw, `yachay` turns into queryable, projectable structure.
 
-La regla del cuadrante es **el modelo se valida contra la realidad, no contra sí mismo**: una teoría elegante que no se chequea es decoración. Cada aplicación de `yachay` tiene una manera explícita de confrontar su salida con datos externos.
+The quadrant's rule is **the model validates against reality, not against itself**: an elegant theory that isn't checked is decoration. Each `yachay` app has an explicit way to confront its output with outside data.
 
-## Aplicaciones
+## Applications
 
-- **[cosmos](cosmos/README.md)** — astronomía con precisión astronómica. Tiempo, efemérides, coordenadas, WCS, astrología, validación contra ephemerides oficiales.
-- **[dominium](dominium/README.md)** — simulador determinista de campo medio: cinco capas físicas (materia · psique · poder · oro · degradación) + agentes vectoriales + acoplamiento ψ↔acción endógeno.
-- **[iniy](iniy/README.md)** — laboratorio semántico. Subjective Logic + dirección de subjetividad para auditar afirmaciones. Piloto: auditoría de libros y wikis.
-- **[nakui](nakui/README.md)** — motor reactivo tipo Excel sobre principios sólidos: Decimal exacto, cascada topológica, WAL, time-travel, invariantes atómicos. Tres vistas (matriz · grafo · formulario) sobre el mismo grafo de tokens.
-- **[tinkuy](tinkuy/README.md)** — motor de partículas DOD (ECS-SoA + Grid3D + Velocity-Verlet paralelo) con snapshots BLAKE3 compatibles con Wawa.
+- **[cosmos](cosmos/README.md)** — astronomy with astronomical precision. Time, ephemerides, coordinates, WCS, astrology, validation against official ephemerides.
+- **[dominium](dominium/README.md)** — deterministic mean-field simulator: five physical layers (matter · psyche · power · gold · degradation) + vector agents + endogenous ψ↔action coupling.
+- **[iniy](iniy/README.md)** — semantic lab. Subjective Logic + subjectivity-direction axis for auditing statements. Pilot: book and wiki audits.
+- **[nakui](nakui/README.md)** — Excel-style reactive engine on solid principles: exact `Decimal`, topological cascade, WAL, time-travel, atomic invariants. Three views (matrix · graph · form) over the same token graph.
+- **[tinkuy](tinkuy/README.md)** — DOD particle engine (ECS-SoA + Grid3D + parallel Velocity-Verlet) with BLAKE3 snapshots compatible with Wawa.
 
-## Manifiesto
+## Manifesto
 
-> **Conocer es atreverse a equivocarse con precisión.**
-> El modelo no se vende como verdad; se ofrece como herramienta. Su valor está en que falla de manera predecible.
+> **To know is to dare to be wrong with precision.**
+> The model isn't sold as truth; it's offered as a tool. Its value lies in failing predictably.
 >
-> 1. **Determinismo siempre que sea posible.** Misma semilla, mismo resultado — la reproducibilidad es honestidad.
-> 2. **Exactitud sobre estética.** `Decimal` y enteros antes que `f32` cuando el dominio lo pide (nakui, cosmos).
-> 3. **Las unidades no son adorno.** SI, IAU, ISO — siempre explícitas; nunca "asumir grados".
-> 4. **Validar contra ephemerides, datos, simulaciones independientes.** Si nadie más obtiene tu resultado, sospechá del tuyo primero.
+> 1. **Determinism whenever possible.** Same seed, same result — reproducibility is honesty.
+> 2. **Exactness over aesthetics.** `Decimal` and integers before `f32` when the domain demands it (nakui, cosmos).
+> 3. **Units aren't decoration.** SI, IAU, ISO — always explicit; never "assume degrees".
+> 4. **Validate against ephemerides, data, independent simulations.** If no one else gets your result, suspect yours first.

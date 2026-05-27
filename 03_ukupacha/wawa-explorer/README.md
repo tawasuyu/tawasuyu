@@ -1,35 +1,32 @@
 # wawa-explorer
 
-> Visor host-side del DAG de Wawa.
+> Host-side viewer of Wawa's DAG.
 
-Corre en un host Linux y lee el filesystem de Wawa **sin montar nada**: abre el `.img`, recorre el DAG content-addressed y muestra el árbol con detalle en Llimphi. Cliente Akasha (raw sockets) para inspeccionar Wawa corriendo. Útil para debugging, forensics y educación.
+Runs on a Linux host and reads Wawa's filesystem **without mounting anything**: opens the `.img`, walks the content-addressed DAG, shows the tree with detail in Llimphi. Akasha client (raw sockets) to inspect a running Wawa. Useful for debugging, forensics, and education.
 
-## Instalación
+## Install
 
 ```sh
-# leer una imagen .img
 cargo run --release -p wawa-explorer-llimphi -- /path/to/wawa.img
-
-# conectar a un Wawa corriendo (vía Akasha)
 cargo run --release -p wawa-explorer-llimphi -- akasha://<host>:<port>
 ```
 
-## Compatibilidad
+## Compatibility
 
-- **Linux** — raw sockets requieren `CAP_NET_RAW` o `setcap`.
-- **macOS** — sólo modo `.img` (raw sockets bloqueado por OS).
-- **Windows** — sólo modo `.img`.
+- **Linux** — raw sockets require `CAP_NET_RAW` or `setcap`.
+- **macOS** — `.img` mode only.
+- **Windows** — `.img` mode only.
 
 ## Crates
 
-| Crate | Rol |
+| Crate | Role |
 |---|---|
-| [`wawa-explorer-core`](wawa-explorer-core/README.md) | Lectura del `.img`, decode del DAG. |
-| [`wawa-explorer-aoe`](wawa-explorer-aoe/README.md) | Cliente Akasha (raw sockets). |
-| [`wawa-explorer-llimphi`](wawa-explorer-llimphi/README.md) | UI: árbol + panel de detalle. |
+| [`wawa-explorer-core`](wawa-explorer-core/README.md) | `.img` reader, DAG decode. |
+| [`wawa-explorer-aoe`](wawa-explorer-aoe/README.md) | Akasha client (raw sockets). |
+| [`wawa-explorer-llimphi`](wawa-explorer-llimphi/README.md) | UI: tree + detail panel. |
 
-## Consideraciones
+## Considerations
 
-- **Read-only.** No muta el DAG ni el sistema en vivo.
-- Akasha es un protocolo propio; raw sockets requieren permisos elevados o `cap_net_raw=p`.
-- Útil para validar lo que `wawa-fs` materializa cuando algo no cuadra.
+- **Read-only.** Doesn't mutate the DAG or the live system.
+- Akasha is a custom protocol; raw sockets require elevated permissions or `cap_net_raw=p`.
+- Useful for validating what `wawa-fs` materializes when something doesn't add up.

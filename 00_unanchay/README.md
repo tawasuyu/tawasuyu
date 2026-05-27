@@ -1,24 +1,24 @@
-# 00 unanchay · percibir
+# 00 unanchay · to perceive
 
-`unanchay` (quechua: *señalar, marcar, hacer notar*). Es el cuadrante de la **percepción**: el ingreso de información al sistema. Todo lo que llega al monorepo desde afuera entra por acá — texto, imagen, sonido, web, código legacy, notas sueltas — y se transforma en estructuras digeribles por los cuadrantes siguientes.
+`unanchay` (Quechua: *to mark, to signal, to make notice*). This is the **perception** quadrant: how information enters the system. Anything that reaches the monorepo from outside enters here — text, image, sound, web, legacy code, scattered notes — and gets transformed into structures the next quadrants can digest.
 
-La regla del cuadrante es **fidelidad antes que opinión**: lo que entra se preserva con su forma, y la interpretación se difiere a `01_yachay` (conocer) o `02_ruway` (hacer). Acá no se juzga, se recibe.
+The quadrant's rule is **fidelity before opinion**: what enters keeps its shape, and interpretation is deferred to `01_yachay` (know) or `02_ruway` (do). Here nothing is judged, only received.
 
-## Aplicaciones
+## Applications
 
-- **[chaka](chaka/README.md)** — puente al legado. Lee fuentes externas (BCD, formatos viejos, lenguajes muertos) y las normaliza al lenguaje del monorepo.
-- **[khipu](khipu/README.md)** — captura de notas con gravedad temporal. El olvido es parte del modelo: lo viejo se difumina, lo recurrente queda.
-- **[pineal](pineal/README.md)** — visualización agnóstica del backend (cartesiano · polar · mesh · treemap · phosphor · flow · heatmap · stream · financial · umbrella). El órgano visual.
-- **[pluma](pluma/README.md)** — documentos vivos. Markdown como grafo de átomos editables, con LLM como transformador, no como autor.
-- **[puriy](puriy/README.md)** — navegador web soberano sobre Servo + Llimphi. Mismo engine en Linux y en Wawa bare-metal.
-- **[rimay](rimay/README.md)** — lenguaje. Embeddings y verbos: cuando algo *quiere decir* algo, pasa por acá.
+- **[chaka](chaka/README.md)** — bridge to the legacy. Reads external sources (BCD, old formats, dead languages) and normalizes them to the monorepo's language.
+- **[khipu](khipu/README.md)** — note capture with temporal gravity. Forgetting is part of the model: the old fades, the recurrent stays.
+- **[pineal](pineal/README.md)** — backend-agnostic visualization (Cartesian · polar · mesh · treemap · phosphor · flow · heatmap · stream · financial · umbrella). The visual organ.
+- **[pluma](pluma/README.md)** — living documents. Markdown as a graph of editable atoms, with LLM as a transformer, not as an author.
+- **[puriy](puriy/README.md)** — sovereign web browser over Servo + Llimphi. Same engine on Linux and Wawa bare-metal.
+- **[rimay](rimay/README.md)** — language. Embeddings and verbs: when something *wants to say* something, it passes through here.
 
-## Manifiesto
+## Manifesto
 
-> **Percibir antes que pensar.**
-> Lo que llega al sistema entra con dignidad: no se interpreta, no se resume, no se descarta. Se preserva, se contextualiza y se ofrece a los cuadrantes que sí saben qué hacer con esa información.
+> **Perceive before thinking.**
+> What reaches the system enters with dignity: it isn't interpreted, summarized, or discarded. It's preserved, contextualized, and offered to the quadrants that know what to do with it.
 >
-> 1. **El input tiene voluntad propia.** Su forma original es información — no la perdemos.
-> 2. **Los formatos del mundo conviven.** PDF, HTML, BCD, voz, imagen — todos ingresan sin reducirse al menor común denominador.
-> 3. **El olvido también es percepción.** No todo merece quedar; el sistema sabe cuándo dejar ir (khipu).
-> 4. **La traducción es responsabilidad del receptor, no del emisor.** Lo que entra entra como vino.
+> 1. **Input has its own will.** Its original form is information — we don't lose it.
+> 2. **The world's formats coexist.** PDF, HTML, BCD, voice, image — all ingest without reducing to the lowest common denominator.
+> 3. **Forgetting is also perception.** Not everything deserves to stay; the system knows when to let go (khipu).
+> 4. **Translation is the receiver's responsibility, not the sender's.** What comes in comes in as it came.

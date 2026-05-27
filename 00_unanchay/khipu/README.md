@@ -1,30 +1,30 @@
 # khipu
 
-> `khipu` (quechua: nudos de cuerdas para registrar memoria). Notas con gravedad temporal.
+> `khipu` (Quechua: knotted cord recordkeeping). Notes with temporal gravity.
 
-Captura de notas rápidas donde el olvido es parte del modelo: cada nota tiene una masa que decae con el tiempo y se refuerza con cada acceso. Lo recurrente queda visible; lo que no se vuelve a tocar se va difuminando hasta caer del horizonte.
+Quick-note capture where forgetting is part of the model: each note has a mass that decays with time and reinforces with each access. What's recurrent stays visible; what isn't touched fades until it falls off the horizon.
 
-## Instalación
+## Install
 
 ```sh
 cargo run --release -p khipu-app
 ```
 
-## Compatibilidad
+## Compatibility
 
-- **Linux / macOS / Windows** — UI Llimphi (Wayland/X11/Win32 vía `winit`).
-- Persistencia local en `$XDG_DATA_HOME/khipu/`.
+- **Linux / macOS / Windows** — Llimphi UI (Wayland/X11/Win32 via `winit`).
+- Local persistence in `$XDG_DATA_HOME/khipu/`.
 
 ## Crates
 
-| Crate | Rol |
+| Crate | Role |
 |---|---|
-| [`khipu-core`](khipu-core/README.md) | Modelo de nota + store; sin UI. |
-| [`khipu-gravity`](khipu-gravity/README.md) | Algoritmo de masa/decay; refuerzo por acceso. |
-| [`khipu-app`](khipu-app/README.md) | UI Llimphi sobre el core. |
+| [`khipu-core`](khipu-core/README.md) | Note model + store; no UI. |
+| [`khipu-gravity`](khipu-gravity/README.md) | Mass/decay algorithm; reinforcement on access. |
+| [`khipu-app`](khipu-app/README.md) | Llimphi UI over the core. |
 
-## Consideraciones
+## Considerations
 
-- **No es un sistema de "todo"** — no hay due-dates ni recordatorios; es un cuaderno con física propia.
-- El decay es transparente: cada nota expone su masa actual; el usuario decide si la salva.
-- Compatible con la red `agora` (03_ukupacha): notas pueden compartirse sin perder su gravedad local.
+- **It's not a "todo" system** — no due dates, no reminders; it's a notebook with its own physics.
+- Decay is transparent: each note shows its current mass; the user decides whether to save it.
+- Plays well with the [agora](../../03_ukupacha/agora/README.md) network: notes can be shared without losing their local gravity.

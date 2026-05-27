@@ -1,33 +1,26 @@
 # takiy
 
-> `takiy` (quechua: *cantar*). Música del monorepo.
+> `takiy` (Quechua: *to sing*). The monorepo's music.
 
-Síntesis, secuenciación y playback. Diseñado para correr en tiempo real (xruns medibles, no hand-wavey) y para ser deterministic cuando se pide (mismo seed → mismo wav). Acopla con el bus `chasqui` para integrarse con otras apps (notebook, dominium, supay).
+Synthesis, sequencing, playback. Designed to run in real time (measurable xruns, not hand-wavey) and to be deterministic when asked (same seed → same WAV). Couples with the `chasqui` bus to integrate with other apps (notebook, dominium, supay).
 
-## Instalación
+## Install
 
 ```sh
 cargo run --release -p takiy-app-llimphi
 ```
 
-## Compatibilidad
+## Compatibility
 
 - **Linux** — PulseAudio / PipeWire / ALSA.
 - **macOS** — CoreAudio.
 - **Windows** — WASAPI.
-- **Wawa** — driver propio del kernel (cuando esté).
+- **Wawa** — kernel driver (when ready).
 
-## Crates
+Crates: [`takiy-core`](takiy-core/README.md), [`takiy-synth`](takiy-synth/README.md), [`takiy-playback`](takiy-playback/README.md), [`takiy-app-llimphi`](takiy-app-llimphi/README.md).
 
-| Crate | Rol |
-|---|---|
-| [`takiy-core`](takiy-core/README.md) | Modelo musical: nota, secuencia, voz. |
-| [`takiy-synth`](takiy-synth/README.md) | Synths (osciladores, filtros, envolventes). |
-| [`takiy-playback`](takiy-playback/README.md) | Output a audio device. |
-| [`takiy-app-llimphi`](takiy-app-llimphi/README.md) | UI Llimphi (secuenciador + síntesis). |
+## Considerations
 
-## Consideraciones
-
-- **Latencia es first-class.** El loop de audio respeta el período del device; no se rompe por culpa del UI.
-- **Sin VST3/AU.** El catálogo de plugins es el árbol de crates; cualquier nuevo synth se agrega como crate.
-- Render offline (no-realtime) para archivos largos: dumpea WAV/FLAC determinista.
+- **Latency is first-class.** The audio loop respects the device period; doesn't break because of UI.
+- **No VST3/AU.** Plugin catalog = crate tree; new synth = new crate.
+- Offline (non-realtime) render for long files: dumps deterministic WAV/FLAC.

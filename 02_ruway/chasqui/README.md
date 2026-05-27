@@ -1,41 +1,38 @@
 # chasqui
 
-> `chasqui` (quechua: *mensajero del camino del inca*). Broker de mensajería + bus tipado.
+> `chasqui` (Quechua: *messenger of the Inca road*). Message broker + typed bus.
 
-Sistema nervioso del monorepo. Apps publican y se suscriben a topics tipados; el broker rutea y persiste. Backend `nous` con dos implementaciones: `mock` (in-process para tests) y `real` (TCP + binary). Cada mensaje lleva su schema, fail-closed si el receptor no lo conoce.
+Nervous system of the monorepo. Apps publish and subscribe to typed topics; the broker routes and persists. `nous` backend with two impls: `mock` (in-process for tests) and `real` (binary TCP). Every message carries its schema, fail-closed if the receiver doesn't know it.
 
-## Instalación
+## Install
 
 ```sh
-# arrancar el broker
 cargo run --release -p chasqui-broker
-
-# explorer (ver topics + mensajes en vivo)
 cargo run --release -p chasqui-broker-explorer-llimphi
 cargo run --release -p chasqui-explorer-llimphi
 ```
 
-## Compatibilidad
+## Compatibility
 
-- **Linux / macOS / Windows** — broker + clientes en Rust nativo.
-- **Wawa** — broker corre como app del kernel (`apps/`).
-- TCP localhost por default; sockets Unix opcionales.
+- **Linux / macOS / Windows** — broker + clients in native Rust.
+- **Wawa** — broker runs as a kernel app.
+- TCP localhost by default; Unix sockets optional.
 
 ## Crates
 
-| Crate | Rol |
+| Crate | Role |
 |---|---|
-| [`chasqui-core`](chasqui-core/README.md) | Tipos: Topic, Message, Schema, Subscription. |
-| [`chasqui-broker`](chasqui-broker/README.md) | Binario del broker. |
-| [`chasqui-nous`](chasqui-nous/README.md) | Trait del transport. |
-| [`chasqui-nous-mock`](chasqui-nous-mock/README.md) | Transport in-process para tests. |
-| [`chasqui-nous-real`](chasqui-nous-real/README.md) | Transport TCP/Unix binario. |
-| [`chasqui-card`](chasqui-card/README.md) | Card escritorio (estado del broker). |
-| [`chasqui-broker-explorer-llimphi`](chasqui-broker-explorer-llimphi/README.md) | UI: topics + suscriptores activos. |
-| [`chasqui-explorer-llimphi`](chasqui-explorer-llimphi/README.md) | UI: log de mensajes en vivo. |
+| [`chasqui-core`](chasqui-core/README.md) | Topic, Message, Schema, Subscription. |
+| [`chasqui-broker`](chasqui-broker/README.md) | Broker binary. |
+| [`chasqui-nous`](chasqui-nous/README.md) | Transport trait. |
+| [`chasqui-nous-mock`](chasqui-nous-mock/README.md) | In-process transport. |
+| [`chasqui-nous-real`](chasqui-nous-real/README.md) | Binary TCP/Unix transport. |
+| [`chasqui-card`](chasqui-card/README.md) | Desktop card. |
+| [`chasqui-broker-explorer-llimphi`](chasqui-broker-explorer-llimphi/README.md) | Topics + active subscribers UI. |
+| [`chasqui-explorer-llimphi`](chasqui-explorer-llimphi/README.md) | Live message log UI. |
 
-## Consideraciones
+## Considerations
 
-- **Schema-first.** Sin schema declarado, ningún mensaje pasa.
-- **Persistencia opt-in** por topic; los topics efímeros viven sólo en memoria.
-- **No es Kafka.** Diseñado para el monorepo, no para volumen de producción interplanetaria.
+- **Schema-first.** No schema declared, no message through.
+- **Persistence opt-in** per topic; ephemeral topics live in memory only.
+- **Not Kafka.** Designed for the monorepo, not interplanetary production volume.

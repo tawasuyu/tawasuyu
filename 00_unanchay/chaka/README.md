@@ -1,35 +1,35 @@
 # chaka
 
-> `chaka` (quechua: *puente*). Puente entre el monorepo y el código legacy.
+> `chaka` (Quechua: *bridge*). Bridge between the monorepo and legacy code.
 
-Lee fuentes externas (BCD, lenguajes muertos, formatos antiguos) y las normaliza al lenguaje del sistema. Pipeline en capas: lexer → parser → IR → codegen → runtime, con `chaka-shadow` para correr legacy en paralelo y comparar resultados sin romper el flujo original.
+Reads external sources (BCD, dead languages, old formats) and normalizes them to the system's language. Layered pipeline: lexer → parser → IR → codegen → runtime, with `chaka-shadow` to run legacy in parallel and compare results without breaking the original flow.
 
-## Instalación
+## Install
 
 ```sh
 cargo build --release -p chaka-app
 ./target/release/chaka --help
 ```
 
-## Compatibilidad
+## Compatibility
 
-- **Linux / macOS / Windows** — puro Rust, sin deps de sistema.
-- **Wawa** — `chaka-runtime` compila a WASM y corre adentro de `wawa-kernel`.
+- **Linux / macOS / Windows** — pure Rust, no system deps.
+- **Wawa** — `chaka-runtime` compiles to WASM and runs inside `wawa-kernel`.
 
 ## Crates
 
-| Crate | Rol |
+| Crate | Role |
 |---|---|
-| [`chaka-app`](chaka-app/README.md) | CLI/UI de entrada. |
-| [`chaka-lexer`](chaka-lexer/README.md) | Tokenización de fuentes legacy. |
-| [`chaka-parser`](chaka-parser/README.md) | AST tipado del lenguaje fuente. |
-| [`chaka-ir`](chaka-ir/README.md) | IR intermedia normalizada. |
-| [`chaka-codegen`](chaka-codegen/README.md) | IR → código destino. |
-| [`chaka-runtime`](chaka-runtime/README.md) | Ejecutor de código compilado. |
-| [`chaka-bcd`](chaka-bcd/README.md) | Reader/writer BCD (formato legacy específico). |
-| [`chaka-shadow`](chaka-shadow/README.md) | Modo sombra: corre legacy + nuevo en paralelo, compara salida. |
+| [`chaka-app`](chaka-app/README.md) | Entry CLI/UI. |
+| [`chaka-lexer`](chaka-lexer/README.md) | Tokenize legacy sources. |
+| [`chaka-parser`](chaka-parser/README.md) | Typed AST of the source language. |
+| [`chaka-ir`](chaka-ir/README.md) | Normalized intermediate IR. |
+| [`chaka-codegen`](chaka-codegen/README.md) | IR → target code. |
+| [`chaka-runtime`](chaka-runtime/README.md) | Compiled-code runner. |
+| [`chaka-bcd`](chaka-bcd/README.md) | BCD reader/writer (specific legacy format). |
+| [`chaka-shadow`](chaka-shadow/README.md) | Shadow mode: runs legacy + new in parallel, compares output. |
 
-## Consideraciones
+## Considerations
 
-- El modo sombra no reemplaza al legacy; lo **acompaña** hasta que diverja cero veces en un período fijado por el operador.
-- Cada nueva fuente legacy entra primero como dialecto en `chaka-lexer` antes de subir a IR.
+- Shadow mode doesn't replace legacy; it **accompanies** it until divergence reaches zero over an operator-set window.
+- Each new legacy source first enters as a `chaka-lexer` dialect before promoting to IR.

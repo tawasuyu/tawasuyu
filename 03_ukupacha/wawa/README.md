@@ -1,62 +1,31 @@
 # wawa (root / kernel)
 
-> Sistema operativo desde cero. Kernel + boot + filesystem + apps.
+> Operating system from scratch. Kernel + boot + filesystem + apps.
 
-`wawa` (quechua: *bebé, criatura nueva*) es el lado kernel del par; el userspace vive en `02_ruway/wawa/`. Filesystem es un **DAG content-addressed** sobre BLAKE3 (ingesta POSIX → BLAKE3 → grafo); las apps son WASM (cranelift AOT); pacing cooperativo del frame; GPU passthrough cuando hay; el destilador (host) + AoE (red) + atlas (Fontdue) materializan el DAG. Wawa **nunca habla NTFS/Ext4 directo** — todo entra por el destilador.
+`wawa` (Quechua: *new creature, baby*) is the kernel side of the pair; userspace lives in `02_ruway/wawa/`. Filesystem is a **content-addressed DAG** over BLAKE3 (POSIX → BLAKE3 ingest → graph); apps are WASM (cranelift AOT); cooperative frame pacing; GPU passthrough when present; the distiller (host) + AoE (network) + atlas (Fontdue) materialize the DAG. Wawa **never speaks NTFS/Ext4 directly** — everything enters via the distiller.
 
-Gaming-grade: AOT WASM + GPU passthrough + frame pacing cooperativo + asset streaming BLAKE3.
+Gaming-grade: AOT WASM + GPU passthrough + cooperative frame pacing + BLAKE3 asset streaming.
 
-## Instalación
+## Install
 
 ```sh
-# build del kernel
 cargo build --release -p wawa-kernel
-
-# build del bootloader
 cargo build --release -p wawa-boot
-
-# levantar el filesystem
 cargo run --release -p wawa-fs
-
-# correr en QEMU (script provisto)
 ./scripts/wawa-qemu.sh
 ```
 
-## Compatibilidad
+## Compatibility
 
 - **x86_64** — primary.
-- **aarch64** — limitado.
-- Pareja userspace: ver `02_ruway/wawa/` (panel + wawactl).
-- Boot via `arje` o vía bootloader externo (GRUB, systemd-boot).
+- **aarch64** — limited.
+- Userspace counterpart: `02_ruway/wawa/`.
 
-## Crates: kernel
+Crates listed in [README.md](README.md).
 
-| Crate | Rol |
-|---|---|
-| [`wawa-kernel`](wawa-kernel/README.md) | Kernel (scheduler, syscalls, capabilities). |
-| [`wawa-boot`](wawa-boot/README.md) | Bootloader del kernel. |
-| [`wawa-fs`](wawa-fs/README.md) | Filesystem (DAG BLAKE3). |
+## Considerations
 
-## Crates: apps (WASM en el kernel)
-
-| App | Función |
-|---|---|
-| [`pluma`](apps/pluma/README.md) | Visor de markdown adentro del kernel. |
-| [`bitacora`](apps/bitacora/README.md) | Bitácora del sistema. |
-| [`cronista`](apps/cronista/README.md) | Logger histórico. |
-| [`discola`](apps/discola/README.md) | Disco/media. |
-| [`glotona`](apps/glotona/README.md) | Comer tareas pesadas (batch). |
-| [`hello_wasm`](apps/hello_wasm/README.md) | Hello-world WASM. |
-| [`memoriosa`](apps/memoriosa/README.md) | Memoria persistente del usuario. |
-| [`mudanza`](apps/mudanza/README.md) | Migrar entre snapshots. |
-| [`pregon`](apps/pregon/README.md) | Anuncios del sistema. |
-| [`pulso`](apps/pulso/README.md) | Heartbeat/health checks. |
-| [`tonada`](apps/tonada/README.md) | Tonada → reproductor de audio. |
-| [`tonalero`](apps/tonalero/README.md) | Productor de tonadas. |
-
-## Consideraciones
-
-- **WASM-first**: las apps no son procesos nativos; son módulos WASM con capabilities explícitas.
-- **Inmutabilidad de bytes**: una vez calculado el hash, esos bytes no cambian; las "ediciones" son nuevos hashes.
-- **Cero NTFS/Ext4 directo**: el destilador en el host genera el DAG; Wawa lee el DAG.
-- **Pacing cooperativo**: ninguna app puede monopolizar el frame; el scheduler le pide ceder.
+- **WASM-first**: apps aren't native processes; they're WASM modules with explicit capabilities.
+- **Byte immutability**: once the hash is computed, those bytes don't change; "edits" are new hashes.
+- **Zero direct NTFS/Ext4**: the host distiller produces the DAG; Wawa reads the DAG.
+- **Cooperative pacing**: no app can hog the frame; the scheduler asks it to yield.

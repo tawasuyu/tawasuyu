@@ -1,41 +1,33 @@
 # dominium
 
-> Simulador determinista de campo medio con agentes vectoriales.
+> Deterministic mean-field simulator with vector agents.
 
-Cinco capas físicas (`materia`, `psique`, `poder`, `oro`, `degradacion`) viven sobre un `Grid<f32>` denso; encima corre un mundo de agentes con seis acciones atómicas (mover, tomar, soltar, transmitir, atacar, descansar). Acoplamiento ψ↔acción **endógeno** (Fase A): el campo `psique` y la dinámica de los agentes se influyen mutuamente sin que el operador toque parámetros entre ticks. Detalle de diseño en [SDD.md](SDD.md).
+Five physical layers (`materia`, `psique`, `poder`, `oro`, `degradacion`) sit on a dense `Grid<f32>`; above them lives a world of agents with six atomic actions (move, take, drop, transmit, attack, rest). **Endogenous ψ↔action coupling** (Phase A): the `psique` field and agent dynamics influence each other without operator intervention between ticks. Design detail in [SDD.md](SDD.md).
 
-Conceptos metaprogramables: cualquier emisor de campo (radiación, mercado, dogma) se carga como JSON con `id+pos+radio+mods+hack` — el motor sigue tonto, la IA externa es opcional.
+Metaprogrammable Concepts: any field emitter (radiation, market, dogma) loads as JSON with `id+pos+radius+mods+hack` — the engine stays dumb, external AI is optional.
 
-## Instalación
+## Install
 
 ```sh
-# CLI determinista
+# deterministic CLI
 cargo run --release -p dominium-cli -- run --seed 42 --ticks 1000
 
-# App Llimphi (canvas + panel de control en vivo)
+# Llimphi app (canvas + live control panel)
 cargo run --release -p dominium-app-llimphi
 ```
 
-## Compatibilidad
+## Compatibility
 
-- **Linux / macOS / Windows** — UI Llimphi.
-- **Wawa** — `dominium-core/physics/iso/render-plan` compilan a WASM (cero deps gráficas).
-- **Web** — vía `pluma-notebook-kernel-dominium`.
+- **Linux / macOS / Windows** — Llimphi UI.
+- **Wawa** — `dominium-core/physics/iso/render-plan` compile to WASM (zero graphical deps).
+- **Web** — via `pluma-notebook-kernel-dominium`.
 
 ## Crates
 
-| Crate | Rol |
-|---|---|
-| [`dominium-core`](dominium-core/README.md) | Grid + agentes + 6 acciones + Conceptos JSON. Sin gráficos. |
-| [`dominium-physics`](dominium-physics/README.md) | Tick determinista de 6 fases (difusión, decay, acoplamiento, agentes, ...). |
-| [`dominium-iso`](dominium-iso/README.md) | Proyección 30° + sombra Lambert. |
-| [`dominium-render-plan`](dominium-render-plan/README.md) | World → `Vec<Quad>` ordenado por pintor. |
-| [`dominium-canvas-llimphi`](dominium-canvas-llimphi/README.md) | Backend Llimphi (`paint_with` vello). |
-| [`dominium-app-llimphi`](dominium-app-llimphi/README.md) | App + panel + loop 11 Hz. |
-| [`dominium-cli`](dominium-cli/README.md) | CLI: run / step / dump. |
+See [README.md](README.md). Core split: `dominium-core` (data + actions + Concepts), `dominium-physics` (6-phase tick), `dominium-iso` (30° projection + Lambert shadow), `dominium-render-plan` (World → `Vec<Quad>`), `dominium-canvas-llimphi` (vello backend), `dominium-app-llimphi` (app), `dominium-cli`.
 
-## Consideraciones
+## Considerations
 
-- **Regla inviolable:** cero deps gráficas en `core` / `physics` / `iso` / `render-plan`. Sólo `serde` y `libm`. El gráfico vive en `canvas-llimphi`/`app-llimphi`.
-- **Determinista bit-a-bit** dado mismo seed y misma versión.
-- Conceptos se cargan en runtime; permiten reescribir el dominio sin recompilar.
+- **Inviolable rule:** zero graphical deps in `core`/`physics`/`iso`/`render-plan`. Only `serde` and `libm`. Graphics live in `canvas-llimphi`/`app-llimphi`.
+- **Bit-for-bit deterministic** given same seed and same version.
+- Concepts load at runtime; they let you rewrite the domain without recompiling.

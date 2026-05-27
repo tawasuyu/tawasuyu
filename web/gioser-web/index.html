@@ -356,18 +356,65 @@
   window.addEventListener('hashchange', aplicarHash);
 
   // ===== lang resolution =====
-  // El URL canónico es `path/archivo.md`. Según la preferencia del usuario
-  // (gioser.lang ∈ {es,en,qu}), intentamos primero `path/archivo.<lang>.md`
-  // y caemos al canónico si no existe.
+  // Convención: README.md = inglés (default), LEEME.md = español,
+  // README.qu.md = quechua (sólo en cuadrante + app, no en crates).
+  // El URL canónico de la sidebar siempre apunta a README.md; la
+  // función `langCandidates` decide cuál archivo se sirve según la
+  // preferencia del usuario, con fallback en cadena hacia los otros
+  // idiomas si el preferido no existe.
   function getLang() {
-    try { return localStorage.getItem('gioser.lang') || 'es'; }
-    catch (e) { return 'es'; }
+    let stored;
+    try { stored = localStorage.getItem('gioser.lang'); } catch (e) {}
+    if (stored === 'en' || stored === 'es' || stored === 'qu') return stored;
+    // primer arranque: usar idioma del navegador o inglés
+    const nav = ((navigator.language || navigator.userLanguage || 'en') + '').toLowerCase();
+    if (nav.startsWith('es')) return 'es';
+    if (nav.startsWith('qu')) return 'qu';
+    return 'en';
   }
   function langCandidates(url) {
     const lang = getLang();
-    if (lang === 'es') return [url];
-    return [url.replace(/\.md$/, `.${lang}.md`), url];
+    // Sólo `/path/README.md` recibe variantes de idioma. Otros .md
+    // (PLAN.md, SUITE.md, GUIA.md, etc.) pasan tal cual.
+    const m = url.match(/^(.*)\/README\.md$/);
+    if (!m) return [url];
+    const base = m[1];
+    const en = `${base}/README.md`;
+    const es = `${base}/LEEME.md`;
+    const qu = `${base}/README.qu.md`;
+    if (lang === 'es') return [es, en, qu];
+    if (lang === 'qu') return [qu, es, en];
+    return [en, es, qu]; // en default
   }
+
+  // Persistir lang inicial si no estaba seteada (para que el panel arranque sincronizado)
+  try {
+    if (!localStorage.getItem('gioser.lang')) {
+      localStorage.setItem('gioser.lang', getLang());
+    }
+  } catch (e) {}
+
+  // Hijack de localStorage.setItem para emitir evento cuando cambia el lang.
+  // Esto permite que el panel (que escribe en localStorage) dispare reload
+  // de los artículos abiertos sin acoplarse al panel directamente.
+  (function() {
+    const _set = Storage.prototype.setItem;
+    Storage.prototype.setItem = function(k, v) {
+      _set.apply(this, arguments);
+      if (k === 'gioser.lang') {
+        document.dispatchEvent(new CustomEvent('gioser:lang-change', { detail: v }));
+      }
+    };
+  })();
+
+  // Reload de artículos abiertos cuando el lang cambia en vivo.
+  document.addEventListener('gioser:lang-change', () => {
+    for (const v of ventanas.values()) {
+      if (!v.url || v.url.startsWith('__')) continue; // skip panel
+      const contId = `${v.id}-content`;
+      cargarMdSeguro(contId, v.url, v.theme);
+    }
+  });
 
   // Fetch + sniff: rechaza HTML (SPA-fallback) y resuelve lang.
   async function cargarMdSeguro(contId, url, theme) {
@@ -429,14 +476,19 @@
     el.style.zIndex = zTop;
 
     // Sin titlebar — los artículos no llevan "barra de Windows" propia.
-    // Botones flotantes en la esquina superior derecha.
+    // Botones flotantes en la esquina superior derecha:
+    //   ←  back: cierra (lo quita de la barra) + history.back para volver
+    //          a la URL anterior si la había.
+    //   ─  minimizar: sigue en la barra, oculta.
+    //   ×  cerrar: lo quita sin tocar la URL.
     el.innerHTML = `
       <div class="win-body">
         <article id="${contId}" class="pluma-host"></article>
       </div>
       <div class="win-actions" data-win-title="${title.replace(/"/g, '&quot;')}">
-        <button class="win-btn win-min"   type="button" aria-label="minimizar" title="minimizar">─</button>
-        <button class="win-btn win-close" type="button" aria-label="cerrar"   title="cerrar (Esc)">×</button>
+        <button class="win-btn win-back"  type="button" aria-label="atrás"      title="atrás">←</button>
+        <button class="win-btn win-min"   type="button" aria-label="minimizar"  title="minimizar">─</button>
+        <button class="win-btn win-close" type="button" aria-label="cerrar"     title="cerrar (Esc)">×</button>
       </div>
     `;
     layer.appendChild(el);
@@ -463,6 +515,12 @@
     el.addEventListener('mousedown', () => traerAlFrente(id));
     el.querySelector('.win-min').addEventListener('click',  (e) => { e.stopPropagation(); minimizar(id); });
     el.querySelector('.win-close').addEventListener('click',(e) => { e.stopPropagation(); cerrar(id); });
+    el.querySelector('.win-back').addEventListener('click', (e) => {
+      e.stopPropagation();
+      cerrar(id);
+      // Si había navegación previa, volver a ella; quita el artículo de la barra.
+      if (window.history.length > 1) window.history.back();
+    });
 
     // En mobile (≤ 800px) auto-cerramos la sidebar para que el artículo
     // ocupe todo el ancho. En desktop la sidebar sigue abierta y el

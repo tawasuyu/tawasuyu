@@ -1,32 +1,29 @@
 # wawa (userspace)
 
-> Pareja userspace de `03_ukupacha/wawa`: panel de control + CLI.
+> Userspace counterpart of `03_ukupacha/wawa`: control panel + CLI.
 
-Acá vive lo que el operador de Wawa usa **desde un host Linux** (no desde adentro del kernel): el panel Llimphi para ver/mutar config, y `wawactl` para operaciones desde terminal. La parte de kernel/bootloader/filesystem está en `03_ukupacha/wawa/`. Detalle en [SDD.md](SDD.md).
+This is what the Wawa operator uses **from a Linux host** (not from inside the kernel): the Llimphi panel for state/config, and `wawactl` for terminal ops. The kernel/bootloader/filesystem side is in `03_ukupacha/wawa/`. Detail in [SDD.md](SDD.md).
 
-## Instalación
+## Install
 
 ```sh
-# panel desktop (Llimphi)
 cargo run --release -p wawa-panel-llimphi
-
-# CLI
 cargo run --release -p wawactl
 ```
 
-## Compatibilidad
+## Compatibility
 
-- **Linux** — primary host. Habla con `wawa-kernel` via virtio-console o socket Unix.
-- **macOS / Windows** — sólo si Wawa corre en VM accesible (TCP).
+- **Linux** — primary host. Talks to `wawa-kernel` via virtio-console or Unix socket.
+- **macOS / Windows** — only if Wawa runs in an accessible VM (TCP).
 
 ## Crates
 
-| Crate | Rol |
+| Crate | Role |
 |---|---|
-| [`wawa-panel-llimphi`](wawa-panel-llimphi/README.md) | Panel de control Llimphi: estado de apps, config, recursos. |
+| [`wawa-panel-llimphi`](wawa-panel-llimphi/README.md) | Llimphi control panel: app state, config, resources. |
 | [`wawactl`](wawactl/README.md) | CLI: `wawactl status`, `wawactl deploy`, etc. |
 
-## Consideraciones
+## Considerations
 
-- **Userspace, no kernel.** Si necesitás tocar boot/fs/proc del Wawa, andá a `03_ukupacha/wawa`.
-- El panel y `wawactl` comparten el modelo de config con el shell del escritorio (via `shared/wawa-config`).
+- **Userspace, not kernel.** Boot/fs/proc tweaks → `03_ukupacha/wawa`.
+- Panel and `wawactl` share the config model with the desktop shell (via `shared/wawa-config`).

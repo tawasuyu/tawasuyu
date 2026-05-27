@@ -1,32 +1,32 @@
 # agora
 
-> Plaza pública. Foro, conversación, deliberación con identidad mínima.
+> Public square. Forum, conversation, deliberation with minimal identity.
 
-`agora` es el espacio donde nodos del monorepo hablan en abierto. Gossip protocol sobre `chasqui` para distribución; identidad por clave pública (ed25519); grafo de hilos persistido localmente. Diseñado para sobrevivir sin servidor central, sin cuentas corporativas y sin moderación algorítmica.
+`agora` is where monorepo nodes talk openly. Gossip protocol over `chasqui` for distribution; ed25519-pubkey identity; thread graph persisted locally. Designed to survive without a central server, without corporate accounts and without algorithmic moderation.
 
-## Instalación
+## Install
 
 ```sh
 cargo run --release -p agora-app
 ```
 
-## Compatibilidad
+## Compatibility
 
-- **Linux / macOS / Windows / Wawa** — todos los crates son puro Rust.
-- Persistencia local; sincronización opcional con peers de la red `minga`.
+- **Linux / macOS / Windows / Wawa** — all crates are pure Rust.
+- Local persistence; optional sync with peers from the `minga` network.
 
 ## Crates
 
-| Crate | Rol |
+| Crate | Role |
 |---|---|
-| [`agora-core`](agora-core/README.md) | Modelo: hilo, mensaje, autor, firma. |
-| [`agora-graph`](agora-graph/README.md) | Grafo de hilos + relaciones. |
-| [`agora-store`](agora-store/README.md) | Persistencia local. |
-| [`agora-gossip`](agora-gossip/README.md) | Gossip protocol sobre chasqui. |
-| [`agora-app`](agora-app/README.md) | UI Llimphi. |
+| [`agora-core`](agora-core/README.md) | Model: thread, message, author, signature. |
+| [`agora-graph`](agora-graph/README.md) | Thread graph + relations. |
+| [`agora-store`](agora-store/README.md) | Local persistence. |
+| [`agora-gossip`](agora-gossip/README.md) | Gossip protocol over chasqui. |
+| [`agora-app`](agora-app/README.md) | Llimphi UI. |
 
-## Consideraciones
+## Considerations
 
-- **Identidad por clave**, no por email ni teléfono.
-- Sin algoritmo de feed: el orden es cronológico o por hilo; el usuario decide qué seguir.
-- Compatible con `minga`: agora corre encima de la red de pares de `minga` cuando ambos están activos.
+- **Pubkey identity**, not email or phone.
+- No algorithmic feed: order is chronological or by thread; the user decides what to follow.
+- Plays well with `minga`: agora runs over `minga`'s peer network when both are active.

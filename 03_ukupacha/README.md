@@ -1,23 +1,23 @@
-# 03 ukupacha · raíz
+# 03 ukupacha · root
 
-`ukupacha` (quechua: *mundo interior, raíz, lo subterráneo*). Es el cuadrante de la **infraestructura invisible**: el kernel, el bootloader, el filesystem, los protocolos de red profundos, la comunidad que sostiene todo. Lo que ningún usuario ve directamente pero que decide si el sistema arranca o no.
+`ukupacha` (Quechua: *inner world, root, what is underground*). This is the **invisible infrastructure** quadrant: kernel, bootloader, filesystem, deep network protocols, the community that holds it all up. What no user sees directly but that decides whether the system boots or not.
 
-La regla del cuadrante es **la invariante antes que la feature**: en `ukupacha` los breaking changes cuestan migraciones a todo el árbol; por eso cada decisión se piensa como "¿en diez años, esto sigue siendo verdad?". El cambio acá es lento y deliberado.
+The quadrant's rule is **invariants before features**: in `ukupacha`, breaking changes cost migrations across the whole tree; that's why each decision is thought of as "in ten years, is this still true?". Change here is slow and deliberate.
 
-## Aplicaciones
+## Applications
 
-- **[agora](agora/README.md)** — plaza pública. Foro, conversación, deliberación con identidad mínima.
-- **[arje](arje/README.md)** — bootloader y vida temprana del sistema. `arje-seeds` (semillas), `arje-packager` (empaquetado), `arje-installer` (instalación), `arje-absorb` (ingestión de un sistema existente).
-- **[minga](minga/README.md)** — colaboración entre nodos. Tradición andina del trabajo comunitario, aplicada a la red.
-- **[wawa](wawa/README.md)** — sistema operativo desde cero (`wawa-kernel`, `wawa-boot`, `wawa-fs`, `apps/`). Ingesta POSIX → BLAKE3; el filesystem como DAG content-addressed; gaming-grade (AOT WASM + GPU passthrough + frame pacing cooperativo).
-- **[wawa-explorer](wawa-explorer/README.md)** — visor host-side del DAG de Wawa: lee `.img`, habla el protocolo Akasha por raw sockets, muestra el árbol con detalle en Llimphi.
+- **[agora](agora/README.md)** — public square. Forum, conversation, deliberation with minimal identity.
+- **[arje](arje/README.md)** — bootloader and the system's early life. `arje-seeds` (seeds), `arje-packager` (packaging), `arje-installer` (install), `arje-absorb` (ingest an existing system).
+- **[minga](minga/README.md)** — collaboration between nodes. Andean tradition of communal work, applied to the network.
+- **[wawa](wawa/README.md)** — operating system from scratch (`wawa-kernel`, `wawa-boot`, `wawa-fs`, `apps/`). POSIX → BLAKE3 ingest; filesystem as content-addressed DAG; gaming-grade (AOT WASM + GPU passthrough + cooperative frame pacing).
+- **[wawa-explorer](wawa-explorer/README.md)** — host-side viewer of Wawa's DAG: reads `.img`, speaks the Akasha protocol over raw sockets, shows the tree with detail in Llimphi.
 
-## Manifiesto
+## Manifesto
 
-> **La raíz se sostiene callada.**
-> Lo que dura es lo que no llama la atención cuando funciona. El kernel buen kernel es el que nadie nota.
+> **The root holds quiet.**
+> What lasts is what doesn't call attention when it works. A good kernel is the one no one notices.
 >
-> 1. **Sin dependencias frívolas en la raíz.** Cada crate de `ukupacha` justifica cada `Cargo.toml` línea por línea.
-> 2. **Content-addressed por defecto.** BLAKE3 es la identidad — los bytes son la verdad, los nombres son hint.
-> 3. **El usuario no es el cliente del kernel.** El cliente del kernel es el operador. Las herramientas amigables viven en `02_ruway`.
-> 4. **Documentar como si el próximo lector fuera un arqueólogo dentro de veinte años.** Los SDDs, los WHY, los porqués escritos — son la única forma de que algo sobreviva al autor.
+> 1. **No frivolous dependencies at the root.** Each `ukupacha` crate justifies every `Cargo.toml` line.
+> 2. **Content-addressed by default.** BLAKE3 is identity — bytes are truth, names are hints.
+> 3. **The user is not the kernel's client.** The kernel's client is the operator. User-friendly tools live in `02_ruway`.
+> 4. **Document as if the next reader were an archaeologist twenty years from now.** The SDDs, the WHY, the written reasons — they are the only way for something to survive its author.

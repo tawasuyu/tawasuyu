@@ -1,10 +1,10 @@
 # nahual
 
-> `nahual` (náhuatl: *espíritu acompañante*). Visores cotidianos sobre Llimphi.
+> `nahual` (Nahuatl: *companion spirit*). Everyday viewers over Llimphi.
 
-Conjunto mínimo de viewers que el usuario espera de un escritorio: shell de archivos, viewer de texto, viewer de imagen. Implementados con la misma framework de UI; comparten preferencias con el resto del monorepo via `wawa-config`. Más un meta-runtime para definir nuevos viewers via schema sin escribir Rust desde cero.
+Minimal set of viewers a desktop user expects: file shell, text viewer, image viewer. Built on the same UI framework; share preferences with the rest of the monorepo via `wawa-config`. Plus a meta-runtime to define new viewers via schema without writing Rust from scratch.
 
-## Instalación
+## Install
 
 ```sh
 cargo run --release -p nahual-shell-llimphi
@@ -13,23 +13,14 @@ cargo run --release -p nahual-text-viewer-llimphi
 cargo run --release -p nahual-image-viewer-llimphi
 ```
 
-## Compatibilidad
+## Compatibility
 
-- **Linux / macOS / Windows** — UI Llimphi nativa.
-- **Wawa** — los viewers compilan adentro del kernel; el file explorer habla con `wawa-fs`.
+- **Linux / macOS / Windows** — native Llimphi UI.
+- **Wawa** — viewers compile inside the kernel; file explorer speaks `wawa-fs`.
 
-## Crates
+Crates listed in [README.md](README.md).
 
-| Crate | Rol |
-|---|---|
-| [`meta-schema`](libs/meta-schema/README.md) | Schema declarativo de viewers. |
-| [`meta-runtime`](libs/meta-runtime/README.md) | Runtime que monta un viewer desde schema. |
-| [`nahual-shell-llimphi`](nahual-shell-llimphi/README.md) | Shell de archivos: navegación + acciones básicas. |
-| [`nahual-file-explorer-llimphi`](nahual-file-explorer-llimphi/README.md) | File explorer con tree + previews. |
-| [`nahual-text-viewer-llimphi`](nahual-text-viewer-llimphi/README.md) | Viewer de texto plano. |
-| [`nahual-image-viewer-llimphi`](nahual-image-viewer-llimphi/README.md) | Viewer de imagen (PNG/JPEG/WebP). |
+## Considerations
 
-## Consideraciones
-
-- **Visualizadores, no editores.** Si querés editar el archivo, `nada`. Si querés editar la imagen, `pineal` o un editor externo.
-- El meta-runtime permite **definir un viewer en JSON** y obtener una app Llimphi sin código.
+- **Viewers, not editors.** Edit the file → `nada`. Edit the image → `pineal` or external.
+- The meta-runtime lets you **define a viewer in JSON** and get a Llimphi app without code.

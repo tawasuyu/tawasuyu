@@ -1,38 +1,27 @@
 # supay
 
-> `supay` (quechua: *espíritu, demonio*). Renderer estilo DOOM sobre Llimphi.
+> `supay` (Quechua: *spirit, demon*). DOOM-style renderer over Llimphi.
 
-Bridge entre el motor `doomgeneric` (C) y Llimphi: FFI + atlas de sprites de WAD + paletas + escena reconstruida del nivel + scene rendering en vello. Sirve dos propósitos: (1) demostrar que la pila Llimphi/Wawa puede correr workloads gaming-grade; (2) compatibilidad inmediata con WADs originales y comunitarios. Detalle de fase a fase en [SDD.md](SDD.md).
+Bridge between the `doomgeneric` engine (C) and Llimphi: FFI + WAD sprite atlas + palettes + reconstructed level scene + vello rendering. Serves two purposes: (1) prove the Llimphi/Wawa stack can run gaming-grade workloads; (2) immediate compatibility with original and community WADs. Phase-by-phase detail in [SDD.md](SDD.md).
 
-## Instalación
+## Install
 
 ```sh
-# precondición: poner doom1.wad (shareware o registrado) en el cwd
+# precondition: place doom1.wad (shareware or registered) in cwd
 cargo run --release -p supay-app-llimphi
-
-# headless renderer (test de la cadena snapshot → scene → render)
 cargo run --release -p supay-doom-llimphi
 ```
 
-## Compatibilidad
+## Compatibility
 
-- **Linux / macOS / Windows** — Llimphi nativo + `cc` para compilar `doomgeneric`.
-- **Wawa** — `supay-core/scene/wad` compilan a WASM; el renderer usa el HAL Wawa.
+- **Linux / macOS / Windows** — native Llimphi + `cc` to build `doomgeneric`.
+- **Wawa** — `supay-core/scene/wad` compile to WASM; renderer uses the Wawa HAL.
 
-## Crates
+Crates listed in [README.md](README.md).
 
-| Crate | Rol |
-|---|---|
-| [`supay-core`](supay-core/README.md) | FFI a `doomgeneric` + `DoomEngine` safe. |
-| [`supay-wad`](supay-wad/README.md) | Parser WAD (lumps, patches, flats, sprites). |
-| [`supay-scene`](supay-scene/README.md) | Snapshot del nivel: sectores, mobjs, jugador. |
-| [`supay-render-llimphi`](supay-render-llimphi/README.md) | `scene_view` → polígonos vello + atlas. |
-| [`supay-doom-llimphi`](supay-doom-llimphi/README.md) | Driver: enlaza motor + atlas + UI. |
-| [`supay-app-llimphi`](supay-app-llimphi/README.md) | Binario. |
+## Considerations
 
-## Consideraciones
-
-- **WAD legal:** sólo shareware (`doom1.wad`) viene mencionado; el resto los aportás vos.
-- `vendor/doomgeneric/`: clonalo del repo upstream antes de build (el `build.rs` detecta su presencia).
-- **`FEATURE_SOUND=0`** por ahora; el bus de audio va por `takiy` cuando esté listo.
-- Renderer 3D simplificado (sin BSP-walking real); sprites direccionales sólo en ángulo 1 hasta Fase 3.5.
+- **Legal WAD:** only shareware `doom1.wad` is referenced; others come from you.
+- `vendor/doomgeneric/`: clone it from upstream before build (`build.rs` detects).
+- **`FEATURE_SOUND=0`** for now; audio bus goes through `takiy` when ready.
+- Simplified 3D rendering (no real BSP-walking); directional sprites only at angle 1 until Phase 3.5.

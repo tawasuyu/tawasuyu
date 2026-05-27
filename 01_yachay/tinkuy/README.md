@@ -1,32 +1,32 @@
 # tinkuy
 
-> `tinkuy` (quechua: *encuentro, choque*). Motor de partículas DOD.
+> `tinkuy` (Quechua: *encounter, collision*). DOD particle engine.
 
-ECS Structure-of-Arrays + Grid3D + integrador Velocity-Verlet paralelo. Snapshots `BLAKE3` content-addressed compatibles con el filesystem de Wawa: una simulación puede pausarse, exportarse y reanudarse en otra máquina sin perder ni un bit. Roadmap B1-B5 completado.
+ECS Structure-of-Arrays + Grid3D + parallel Velocity-Verlet integrator. `BLAKE3` content-addressed snapshots compatible with Wawa's filesystem: a simulation can be paused, exported, and resumed on another machine without losing a single bit. Roadmap B1-B5 complete.
 
-Visión a largo plazo (anti token-junkie): motor Rust → ABI WASM → DSL matemático → nodos visuales. Cuatro capas secuenciales; el motor primero. Orden confirmado.
+Long-term vision (anti token-junkie): Rust engine → WASM ABI → math DSL → visual nodes. Four sequential layers; engine first. Order confirmed.
 
-## Instalación
+## Install
 
 ```sh
 cargo run --release -p tinkuy-sim -- --particles 100000 --ticks 1000
 ```
 
-## Compatibilidad
+## Compatibility
 
-- **Linux / macOS / Windows** — motor puro Rust con `rayon`.
-- **Wawa** — `tinkuy-core` compila a WASM; snapshots intercambiables.
+- **Linux / macOS / Windows** — pure Rust engine with `rayon`.
+- **Wawa** — `tinkuy-core` compiles to WASM; snapshots interchangeable.
 
 ## Crates
 
-| Crate | Rol |
+| Crate | Role |
 |---|---|
 | [`tinkuy-core`](tinkuy-core/README.md) | ECS SoA + Grid3D + Velocity-Verlet. |
-| [`tinkuy-forces`](tinkuy-forces/README.md) | Catálogo de fuerzas (Lennard-Jones, Coulomb, ...). |
-| [`tinkuy-sim`](tinkuy-sim/README.md) | CLI: corre simulación, dumpea snapshots. |
+| [`tinkuy-forces`](tinkuy-forces/README.md) | Force catalog (Lennard-Jones, Coulomb, ...). |
+| [`tinkuy-sim`](tinkuy-sim/README.md) | CLI: runs simulation, dumps snapshots. |
 
-## Consideraciones
+## Considerations
 
-- **Determinista** con seed fija + número de threads fijo (`rayon` con scheduler propio).
-- **Snapshots = BLAKE3 de la SoA serializada.** Mismo input ⇒ mismo hash; reproducibilidad bit-a-bit entre máquinas.
-- **Sin alocar en el hot loop.** El motor pre-aloca grids, partículas y buffers temporales al `init`.
+- **Deterministic** with fixed seed + fixed thread count (`rayon` with custom scheduler).
+- **Snapshots = BLAKE3 of serialized SoA.** Same input ⇒ same hash; bit-for-bit reproducibility across machines.
+- **No allocations in the hot loop.** Engine pre-allocates grids, particles, and temp buffers at `init`.

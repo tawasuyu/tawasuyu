@@ -1,37 +1,37 @@
 # rimay
 
-> `rimay` (quechua: *hablar, decir, palabra*). Lenguaje: embeddings, verbos, lo que *quiere decir* algo.
+> `rimay` (Quechua: *to speak, word*). Language: embeddings, verbs, what *wants to say* something.
 
-Servicio local de NLP/embeddings que cualquier app del monorepo consulta cuando necesita "qué tan parecidos son estos dos textos" o "dame el embedding de esto" sin salir a la red. El daemon `rimay-verbo-daemon` corre como servicio; los clientes hablan por bus tipado (`chasqui`).
+Local NLP/embeddings service that any monorepo app queries when it needs "how similar are these two texts" or "give me the embedding for this" without going out to the network. The daemon `rimay-verbo-daemon` runs as a service; clients talk over the typed bus ([`chasqui`](../../02_ruway/chasqui/README.md)).
 
-## Instalación
+## Install
 
 ```sh
-# arrancar el daemon
+# start the daemon
 cargo run --release -p rimay-verbo-daemon-bin
 
-# correr en modo mock (sin GPU, sin descargar modelos)
+# run in mock mode (no GPU, no model downloads)
 RIMAY_BACKEND=mock cargo run --release -p rimay-verbo-daemon-bin
 ```
 
-## Compatibilidad
+## Compatibility
 
-- **Linux** — backend `fastembed` con ONNX runtime (CPU o GPU).
-- **macOS / Windows / Wawa** — backend `mock` o `fastembed` CPU.
-- Modelos cacheados en `$XDG_CACHE_HOME/rimay/`.
+- **Linux** — `fastembed` backend with ONNX runtime (CPU or GPU).
+- **macOS / Windows / Wawa** — `mock` backend or `fastembed` CPU.
+- Models cached in `$XDG_CACHE_HOME/rimay/`.
 
 ## Crates
 
-| Crate | Rol |
+| Crate | Role |
 |---|---|
-| [`rimay-verbo-core`](rimay-verbo-core/README.md) | Trait `Verbo` + tipos públicos. |
-| [`rimay-verbo-daemon`](rimay-verbo-daemon/README.md) | Loop del daemon + IPC. |
-| [`rimay-verbo-daemon-bin`](rimay-verbo-daemon-bin/README.md) | Binario del daemon. |
-| [`rimay-verbo-fastembed`](rimay-verbo-fastembed/README.md) | Backend ONNX (BGE, MiniLM). |
-| [`rimay-verbo-mock`](rimay-verbo-mock/README.md) | Backend determinista para tests. |
+| [`rimay-verbo-core`](rimay-verbo-core/README.md) | `Verbo` trait + public types. |
+| [`rimay-verbo-daemon`](rimay-verbo-daemon/README.md) | Daemon loop + IPC. |
+| [`rimay-verbo-daemon-bin`](rimay-verbo-daemon-bin/README.md) | Daemon binary. |
+| [`rimay-verbo-fastembed`](rimay-verbo-fastembed/README.md) | ONNX backend (BGE, MiniLM). |
+| [`rimay-verbo-mock`](rimay-verbo-mock/README.md) | Deterministic mock backend for tests. |
 
-## Consideraciones
+## Considerations
 
-- El daemon NO se autodescarga modelos sin permiso del usuario: la primera vez pide confirmación + el path.
-- `pluma-llm` y `rimay-verbo` son ortogonales: el primero genera texto, el segundo lo *entiende*.
-- Compatible con el `wawa-kernel`: el daemon también compila a WASM y vive en `apps/`.
+- The daemon does NOT auto-download models without user permission: first-run asks for confirmation + path.
+- [`pluma-llm`](../pluma/pluma-llm/README.md) and `rimay-verbo` are orthogonal: the former generates text, the latter *understands* it.
+- Wawa-compatible: the daemon also builds to WASM and lives in `apps/`.

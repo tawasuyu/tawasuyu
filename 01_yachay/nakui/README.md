@@ -1,39 +1,39 @@
 # nakui
 
-> Motor reactivo tipo Excel, sobre principios sólidos.
+> Excel-style reactive engine, on solid principles.
 
-`nakui` es una hoja de cálculo con cabeza: `Decimal` exacto (no `f64`), cascada por orden topológico, WAL antes de aplicar, invariantes atómicos, time-travel por historial inmutable. Tres vistas sobre el mismo grafo de tokens — **matriz** (Excel clásico), **grafo** (DAG de dependencias), **formulario** (record único) — guiadas por `view_hint` del schema.
+`nakui` is a spreadsheet with a head: exact `Decimal` (not `f64`), topological-order cascade, WAL before applying, atomic invariants, time-travel via immutable history. Three views over the same token graph — **matrix** (classic Excel), **graph** (dependency DAG), **form** (single record) — guided by the schema's `view_hint`.
 
-Visión a futuro: nakui como **motor de tokens en DAG**, base para verticales (Fintech, IAM, Logística, MedTech).
+Long-term vision: nakui as a **DAG token engine**, foundation for verticals (Fintech, IAM, Logistics, MedTech).
 
-## Instalación
+## Install
 
 ```sh
-# UI Llimphi
+# Llimphi UI
 cargo run --release -p nakui-ui-llimphi
 cargo run --release -p nakui-sheet-llimphi
 cargo run --release -p nakui-explorer-llimphi
 ```
 
-## Compatibilidad
+## Compatibility
 
-- **Linux / macOS / Windows** — UI Llimphi.
-- **Wawa** — `nakui-core` y `nakui-sheet-nakuicore` compilan a WASM.
-- Persistencia local con WAL en `$XDG_DATA_HOME/nakui/`.
+- **Linux / macOS / Windows** — Llimphi UI.
+- **Wawa** — `nakui-core` and `nakui-sheet-nakuicore` compile to WASM.
+- Local persistence with WAL in `$XDG_DATA_HOME/nakui/`.
 
 ## Crates
 
-| Crate | Rol |
+| Crate | Role |
 |---|---|
-| [`nakui-core`](nakui-core/README.md) | Motor: tokens, schema, DAG, cascada, WAL. |
-| [`nakui-sheet`](nakui-sheet/README.md) | Vista matriz (rangos, celdas, fórmulas). |
-| [`nakui-sheet-nakuicore`](nakui-sheet-nakuicore/README.md) | Bridge nakui-sheet ↔ nakui-core. |
-| [`nakui-sheet-llimphi`](nakui-sheet-llimphi/README.md) | UI matriz Llimphi. |
-| [`nakui-ui-llimphi`](nakui-ui-llimphi/README.md) | Shell de UI (selector de vista, panel). |
-| [`nakui-explorer-llimphi`](nakui-explorer-llimphi/README.md) | Explorer del grafo de tokens. |
+| [`nakui-core`](nakui-core/README.md) | Engine: tokens, schema, DAG, cascade, WAL. |
+| [`nakui-sheet`](nakui-sheet/README.md) | Matrix view (ranges, cells, formulas). |
+| [`nakui-sheet-nakuicore`](nakui-sheet-nakuicore/README.md) | nakui-sheet ↔ nakui-core bridge. |
+| [`nakui-sheet-llimphi`](nakui-sheet-llimphi/README.md) | Matrix UI Llimphi. |
+| [`nakui-ui-llimphi`](nakui-ui-llimphi/README.md) | UI shell (view selector, panel). |
+| [`nakui-explorer-llimphi`](nakui-explorer-llimphi/README.md) | Token-graph explorer. |
 
-## Consideraciones
+## Considerations
 
-- **Sin `f64`**. `Decimal` exacto en todo el motor; los formatos numéricos viven en la vista, no en el dato.
-- **WAL antes que mutar**: cada operación pasa por log; el dato en memoria sólo cambia cuando el WAL se sincronizó.
-- **No es Excel.** No buscamos compatibilidad de fórmulas con XLSX; los formularios y el grafo son first-class, no addons.
+- **No `f64`.** Exact `Decimal` throughout the engine; numeric format lives in the view, not the data.
+- **WAL before mutate.** Every operation goes through the log; in-memory data only changes when the WAL synced.
+- **Not Excel.** No formula compatibility with XLSX; forms and the graph are first-class, not addons.

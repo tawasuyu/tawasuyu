@@ -1,72 +1,46 @@
 # pluma
 
-> Documentos vivos. Markdown como grafo de átomos editables; LLM como transformador, no como autor.
+> Living documents. Markdown as a graph of editable atoms; LLM as transformer, not author.
 
-`pluma` trata un documento como un DAG de párrafos (átomos) con identidad estable. La edición preserva ids; el LLM se invoca como **transformación pura** sobre subgrafos (resumir esta sección, traducir aquel párrafo) — siempre con diff visible y reversible. Incluye notebook (con kernels Python/WASM/LLM/cosmos/dominium), editor visual, deck (slides) y reader web.
+`pluma` treats a document as a DAG of paragraphs (atoms) with stable identity. Editing preserves ids; the LLM is invoked as **pure transformation** over subgraphs (summarize this section, translate that paragraph) — always with visible, reversible diff. Includes notebook (with Python/WASM/LLM/cosmos/dominium kernels), visual editor, deck (slides) and web reader.
 
-## Instalación
+## Install
 
 ```sh
-# editor de markdown (Llimphi desktop)
+# markdown editor (Llimphi desktop)
 cargo run --release -p pluma-app
 
 # notebook
 cargo run --release -p pluma-notebook-app
 
-# reader web (WASM)
+# web reader (WASM)
 ./scripts/build-gioser-web.sh
 ```
 
-## Compatibilidad
+## Compatibility
 
-- **Linux / macOS / Windows** — apps Llimphi nativas.
-- **Wawa** — `pluma` viaja como app del kernel (`03_ukupacha/wawa/apps/pluma/`).
-- **Web** — `pluma-md-reader-web` renderiza markdown en navegador (el reader que usa este sitio).
+- **Linux / macOS / Windows** — native Llimphi apps.
+- **Wawa** — `pluma` ships as a kernel app (`03_ukupacha/wawa/apps/pluma/`).
+- **Web** — `pluma-md-reader-web` renders markdown in the browser (the reader this site uses).
 
 ## Crates
 
-| Crate | Rol |
-|---|---|
-| [`pluma-core`](pluma-core/README.md) | Modelo de documento: átomos, grafo, ids. |
-| [`pluma-cuerpo`](pluma-cuerpo/README.md) | Texto del documento como secuencia de átomos. |
-| [`pluma-store`](pluma-store/README.md) | Persistencia (`$XDG_DATA_HOME/pluma/`). |
-| [`pluma-md`](pluma-md/README.md) | Parser GFM (pulldown-cmark) → HTML temable. |
-| [`pluma-md-reader-web`](pluma-md-reader-web/README.md) | Reader markdown para WASM. |
-| [`pluma-graph`](pluma-graph/README.md) | DAG de átomos con identidad. |
-| [`pluma-graph-transform`](pluma-graph-transform/README.md) | Mutaciones del DAG (insert/mutar/eliminar). |
-| [`pluma-transform`](pluma-transform/README.md) | Marco general de transformaciones puras. |
-| [`pluma-transform-llm`](pluma-transform-llm/README.md) | Transforms LLM (resumir, traducir, ...). |
-| [`pluma-transform-tabla`](pluma-transform-tabla/README.md) | Transforms tabulares. |
-| [`pluma-llm`](pluma-llm/README.md) | Fachada `Arc<dyn ChatClient>` con autodetect. |
-| [`pluma-llm-core`](pluma-llm-core/README.md) | Trait `ChatClient`. |
-| [`pluma-llm-anthropic`](pluma-llm-anthropic/README.md) | Backend Claude API. |
-| [`pluma-llm-gemini`](pluma-llm-gemini/README.md) | Backend Gemini. |
-| [`pluma-llm-cohere`](pluma-llm-cohere/README.md) | Backend Cohere. |
-| [`pluma-llm-openai-compatible`](pluma-llm-openai-compatible/README.md) | OpenAI / DeepSeek / Ollama / proxies. |
-| [`pluma-llm-mock`](pluma-llm-mock/README.md) | Backend mock para tests. |
-| [`pluma-align`](pluma-align/README.md) | Alineamiento texto–texto. |
-| [`pluma-align-embeddings`](pluma-align-embeddings/README.md) | Alineamiento por embeddings. |
-| [`pluma-semantic`](pluma-semantic/README.md) | Anotaciones semánticas del documento. |
-| [`pluma-editor-cuerpo`](pluma-editor-cuerpo/README.md) | Editor texto↔átomos con diff (greedy). |
-| [`pluma-editor-llimphi`](pluma-editor-llimphi/README.md) | Editor visual Llimphi. |
-| [`pluma-app`](pluma-app/README.md) | Binario del editor. |
-| [`pluma-render-plan`](pluma-render-plan/README.md) | Plan de render del documento. |
-| [`pluma-deck-core`](pluma-deck-core/README.md) | Deck (slides) sobre pluma. |
-| [`pluma-deck-web`](pluma-deck-web/README.md) | Deck en navegador. |
-| [`pluma-notebook-core`](pluma-notebook-core/README.md) | Notebook: celdas + outputs addressable. |
-| [`pluma-notebook-store`](pluma-notebook-store/README.md) | Persistencia notebook. |
-| [`pluma-notebook-exec`](pluma-notebook-exec/README.md) | Despacho a kernels. |
-| [`pluma-notebook-kernel-python`](pluma-notebook-kernel-python/README.md) | Python via RustPython/WASM. |
-| [`pluma-notebook-kernel-wasm`](pluma-notebook-kernel-wasm/README.md) | WASM genérico (cranelift AOT). |
-| [`pluma-notebook-kernel-llm`](pluma-notebook-kernel-llm/README.md) | Celdas LLM. |
-| [`pluma-notebook-kernel-cosmos`](pluma-notebook-kernel-cosmos/README.md) | Kernel astronomía (cosmos-sky). |
-| [`pluma-notebook-kernel-dominium`](pluma-notebook-kernel-dominium/README.md) | Kernel simulador (dominium). |
-| [`pluma-notebook-llimphi`](pluma-notebook-llimphi/README.md) | Notebook UI Llimphi. |
-| [`pluma-notebook-graph-llimphi`](pluma-notebook-graph-llimphi/README.md) | Vista grafo del notebook (celdas como nodos). |
-| [`pluma-notebook-app`](pluma-notebook-app/README.md) | Binario del notebook. |
+Core + parser: `pluma-core`, `pluma-cuerpo`, `pluma-store`, `pluma-md`, `pluma-md-reader-web`, `pluma-graph`, `pluma-graph-transform`, `pluma-semantic`, `pluma-align`, `pluma-align-embeddings`, `pluma-render-plan`.
 
-## Consideraciones
+Transforms: `pluma-transform`, `pluma-transform-llm`, `pluma-transform-tabla`.
 
-- **El LLM no escribe; transforma.** No hay "modo redacción libre" — cada llamada devuelve una mutación atómica que el usuario aprueba o rechaza.
-- Los IDs de átomo son la unidad de verdad: rename/move conservan referencias internas y links externos.
-- Kernels del notebook son **WASM-first** (sandboxing del notebook por defecto).
+LLM facade: `pluma-llm`, `pluma-llm-core`, `pluma-llm-anthropic`, `pluma-llm-gemini`, `pluma-llm-cohere`, `pluma-llm-openai-compatible`, `pluma-llm-mock`.
+
+Editor: `pluma-editor-cuerpo`, `pluma-editor-llimphi`, `pluma-app`.
+
+Deck: `pluma-deck-core`, `pluma-deck-web`.
+
+Notebook: `pluma-notebook-{core,store,exec,llimphi,graph-llimphi,app,kernel-python,kernel-wasm,kernel-llm,kernel-cosmos,kernel-dominium}`.
+
+Full table in [README.md](README.md).
+
+## Considerations
+
+- **The LLM doesn't write; it transforms.** No "free writing mode" — each call returns an atomic mutation that the user approves or rejects.
+- Atom IDs are the unit of truth: rename/move preserves internal refs and outside links.
+- Notebook kernels are **WASM-first** (notebook sandboxing by default).

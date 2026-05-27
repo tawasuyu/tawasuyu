@@ -1,10 +1,10 @@
 # pineal
 
-> Visualización agnóstica del backend. El "tercer ojo" del monorepo.
+> Backend-agnostic visualization. The "third eye" of the monorepo.
 
-Catálogo de canvases especializados (cartesiano · polar · mesh · treemap · phosphor · flow · heatmap · stream · financial · umbrella) sobre un `SceneCanvas` único de Llimphi. Toda fuente de datos del workspace (cosmos, dominium, nakui, tinkuy, chasqui) puede empujar shapes a un pineal y obtener visualización sin cargar pipeline gráfica propia.
+Catalog of specialized canvases (Cartesian · polar · mesh · treemap · phosphor · flow · heatmap · stream · financial · umbrella) over a single Llimphi `SceneCanvas`. Any data source in the workspace ([cosmos](../cosmos/README.md) where applicable — cross-quadrant — etc.) can push shapes to a `pineal` and get rendering without carrying its own graphics pipeline.
 
-## Instalación
+## Install
 
 ```sh
 cargo run --release -p pineal-demo
@@ -13,34 +13,34 @@ cargo run --release -p pineal-phosphor-demo
 cargo run --release -p pineal-stream-demo
 ```
 
-## Compatibilidad
+## Compatibility
 
-- **Linux / macOS / Windows** — render Llimphi (vello/wgpu).
-- **Wawa bare-metal** — Llimphi corre directo sobre framebuffer, mismo árbol gráfico.
+- **Linux / macOS / Windows** — Llimphi (vello/wgpu) rendering.
+- **Wawa bare-metal** — Llimphi runs straight on framebuffer; same scene tree.
 
 ## Crates
 
-| Crate | Rol |
+| Crate | Role |
 |---|---|
-| [`pineal-core`](pineal-core/README.md) | Modelo de escena: shapes, transforms, capas. |
-| [`pineal-render`](pineal-render/README.md) | Render Llimphi del modelo. |
-| [`pineal-cartesian`](pineal-cartesian/README.md) | Coordenadas cartesianas: ejes, grid, ticks. |
-| [`pineal-polar`](pineal-polar/README.md) | Coordenadas polares: radial, angular. |
-| [`pineal-mesh`](pineal-mesh/README.md) | Triángulos arbitrarios. |
-| [`pineal-treemap`](pineal-treemap/README.md) | Treemap jerárquico. |
-| [`pineal-phosphor`](pineal-phosphor/README.md) | Persistencia de fósforo (osciloscopio). |
-| [`pineal-flow`](pineal-flow/README.md) | Campos vectoriales con streamlines. |
-| [`pineal-heatmap`](pineal-heatmap/README.md) | Heatmap denso 2D. |
-| [`pineal-stream`](pineal-stream/README.md) | Series temporales con scroll. |
-| [`pineal-financial`](pineal-financial/README.md) | Candlesticks, volúmenes, overlays técnicos. |
-| [`pineal-umbrella`](pineal-umbrella/README.md) | Compose de múltiples pineales sobre un mismo viewport. |
-| [`pineal-export`](pineal-export/README.md) | PNG / SVG / GIF de la escena. |
-| [`pineal-demo`](pineal-demo/README.md) | Demo gallery del catálogo. |
-| [`pineal-financial-demo`](pineal-financial-demo/README.md) | Demo del backend financiero. |
-| [`pineal-phosphor-demo`](pineal-phosphor-demo/README.md) | Demo del backend fósforo. |
-| [`pineal-stream-demo`](pineal-stream-demo/README.md) | Demo del backend streaming. |
+| [`pineal-core`](pineal-core/README.md) | Scene model: shapes, transforms, layers. |
+| [`pineal-render`](pineal-render/README.md) | Llimphi rendering. |
+| [`pineal-cartesian`](pineal-cartesian/README.md) | Cartesian coords: axes, grid, ticks. |
+| [`pineal-polar`](pineal-polar/README.md) | Polar coords: radial, angular. |
+| [`pineal-mesh`](pineal-mesh/README.md) | Arbitrary triangles. |
+| [`pineal-treemap`](pineal-treemap/README.md) | Hierarchical treemap. |
+| [`pineal-phosphor`](pineal-phosphor/README.md) | Phosphor persistence (scope). |
+| [`pineal-flow`](pineal-flow/README.md) | Vector fields with streamlines. |
+| [`pineal-heatmap`](pineal-heatmap/README.md) | Dense 2D heatmap. |
+| [`pineal-stream`](pineal-stream/README.md) | Scrolling time series. |
+| [`pineal-financial`](pineal-financial/README.md) | Candles, volumes, technical overlays. |
+| [`pineal-umbrella`](pineal-umbrella/README.md) | Compose multiple pineals over a viewport. |
+| [`pineal-export`](pineal-export/README.md) | PNG / SVG / GIF export. |
+| [`pineal-demo`](pineal-demo/README.md) | Demo gallery. |
+| [`pineal-financial-demo`](pineal-financial-demo/README.md) | Financial backend demo. |
+| [`pineal-phosphor-demo`](pineal-phosphor-demo/README.md) | Phosphor backend demo. |
+| [`pineal-stream-demo`](pineal-stream-demo/README.md) | Streaming backend demo. |
 
-## Consideraciones
+## Considerations
 
-- pineal **no calcula** — sólo dibuja. Si querés correr una simulación, hablás con `dominium`, `tinkuy`, `cosmos`, etc., y le pasás el resultado.
-- El export a SVG es vector real (no captura de píxeles).
+- pineal **doesn't compute** — only draws. To run a simulation, talk to [`dominium`](../../01_yachay/dominium/README.md), [`tinkuy`](../../01_yachay/tinkuy/README.md), [`cosmos`](../../01_yachay/cosmos/README.md), etc., and feed it the result.
+- SVG export is true vector (not pixel capture).

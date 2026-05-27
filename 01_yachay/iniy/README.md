@@ -1,42 +1,30 @@
 # iniy
 
-> Laboratorio semántico. Modela grados de creencia y dirección de subjetividad.
+> Semantic lab. Models degrees of belief and subjectivity direction.
 
-`iniy` aplica **Subjective Logic** + un eje explícito de "dirección de subjetividad" (autoría, fuente, posicionalidad) para auditar afirmaciones en textos largos. Piloto: auditoría de libros y wikis. Pipeline: ingest → extract → graph → NLI → reporte.
+`iniy` applies **Subjective Logic** + an explicit "subjectivity direction" axis (authorship, source, positionality) to audit statements in long texts. Pilot: book and wiki audits. Pipeline: ingest → extract → graph → NLI → report.
 
-## Instalación
+## Install
 
 ```sh
-cargo run --release -p iniy-cli -- ingest /path/to/libro.md
-cargo run --release -p iniy-cli -- audit  /path/to/libro.md
+cargo run --release -p iniy-cli -- ingest /path/to/book.md
+cargo run --release -p iniy-cli -- audit  /path/to/book.md
 cargo run --release -p iniy-explorer-llimphi
 cargo run --release -p iniy-server
 ```
 
-## Compatibilidad
+## Compatibility
 
-- **Linux / macOS / Windows** — CLI + UI Llimphi.
-- Backend NLI: local (`iniy-nli`) o LLM (`iniy-nli-llm` vía `pluma-llm`).
-- Store local SQLite (`iniy-store`).
+- **Linux / macOS / Windows** — CLI + Llimphi UI.
+- NLI backend: local ([`iniy-nli`](iniy-nli/README.md)) or LLM ([`iniy-nli-llm`](iniy-nli-llm/README.md) via `pluma-llm`).
+- SQLite local store (`iniy-store`).
 
 ## Crates
 
-| Crate | Rol |
-|---|---|
-| [`iniy-core`](iniy-core/README.md) | Tipos: opiniones, evidencia, ejes de subjetividad. |
-| [`iniy-ingest`](iniy-ingest/README.md) | Lectura de fuentes (md/pdf/wiki). |
-| [`iniy-extract`](iniy-extract/README.md) | Extracción de afirmaciones. |
-| [`iniy-graph`](iniy-graph/README.md) | Grafo de afirmaciones + relaciones. |
-| [`iniy-nli`](iniy-nli/README.md) | Inferencia local (rules + embeddings via rimay). |
-| [`iniy-nli-llm`](iniy-nli-llm/README.md) | Inferencia delegada a LLM. |
-| [`iniy-store`](iniy-store/README.md) | Persistencia. |
-| [`iniy-wiki`](iniy-wiki/README.md) | Crawler/parser para Wikipedia/MediaWiki. |
-| [`iniy-cli`](iniy-cli/README.md) | CLI. |
-| [`iniy-server`](iniy-server/README.md) | HTTP. |
-| [`iniy-explorer-llimphi`](iniy-explorer-llimphi/README.md) | UI Llimphi: grafo + auditoría. |
+See [README.md](README.md). Pipeline: `iniy-{core, ingest, extract, graph, nli, nli-llm, store, wiki, cli, server, explorer-llimphi}`.
 
-## Consideraciones
+## Considerations
 
-- **Iniy no opina** — devuelve grados de creencia con incertidumbre explícita. La conclusión humana queda fuera del sistema.
-- LLM-NLI es opcional y bandera-by-bandera: ningún flow obliga a salir a la red.
-- Diseñado para que un revisor humano pueda **reproducir cada paso** del audit.
+- **iniy doesn't opine** — returns degrees of belief with explicit uncertainty. The human conclusion stays outside the system.
+- LLM-NLI is optional and flag-by-flag: no flow forces a network call.
+- Designed so a human reviewer can **reproduce every step** of the audit.
