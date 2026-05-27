@@ -347,6 +347,88 @@ pub(crate) fn enlazar_capacidades(
             Ok(resultado.como_i32())
         },
     )?;
+    } // PERMISO_GRAFO_ESCRITURA (sys_object_put)
+
+    // --- CAPACIDAD 3b :: sys_subsistema_registrar_ejecutable -----------------
+    // sys_subsistema_registrar_ejecutable(ptr, len, salida_hash_ptr) -> i32
+    //
+    // La via PRIVILEGIADA para que el IDE materialice un modulo WebAssembly
+    // (Fase 28). Es un sys_object_put con validacion semantica: antes de
+    // tocar el grafo, el kernel comprueba que los primeros cuatro bytes
+    // del payload son la firma magica de WebAssembly (`\0asm`). Un payload
+    // sin la firma cae con `PayloadInvalido` y el grafo NO crece.
+    //
+    // La idea es enchufar el Hito 8 (binding inmutable bytecode-permisos):
+    // el dia que una app firmada por el operador local empareje el HASH de
+    // un ejecutable con un set de permisos, esta syscall sera la unica via
+    // que un userspace pueda usar para INSCRIBIR un binario reciclable.
+    //
+    // GATEADA por PERMISO_GRAFO_ESCRITURA (misma autoridad que cualquier
+    // mutacion del grafo) Y consume del contador `paginas_dma_en_vuelo`
+    // de la app — el bytecode pesa, el bus DMA no es gratis—. El payload
+    // se acota a 1 MiB (`format::MAX_OBJETO`) por la propia almacen.
+    if permisos & PERMISO_GRAFO_ESCRITURA != 0 {
+    enlazador.func_wrap(
+        "renaser",
+        "sys_subsistema_registrar_ejecutable",
+        |mut caller: Caller<'_, ContextoCapacidades>,
+         ptr: u32,
+         len: u32,
+         salida_hash_ptr: u32|
+         -> Result<i32, Error> {
+            // Back-pressure DMA, gemela de sys_object_put.
+            if caller.data().paginas_dma_en_vuelo >= MAX_PAGINAS_DMA_PER_APP {
+                return Ok(CodigoError::Saturado.como_i32());
+            }
+            caller.data_mut().paginas_dma_en_vuelo += 1;
+
+            let memoria = obtener_memoria(&caller)?;
+            // Lectura del payload con limites firmes; copia a Vec —el `to_vec`
+            // es inevitable porque `almacenar` toma propiedad—.
+            let payload = {
+                let m = memoria.data(&caller);
+                let bytes = rango(
+                    m,
+                    ptr,
+                    len as usize,
+                    "WASM :: sys_subsistema_registrar_ejecutable desbordo memoria (payload)",
+                )?;
+                bytes.to_vec()
+            };
+
+            // Validacion semantica: cuatro bytes magicos `\0asm`. Sin esto,
+            // el grafo se podria llenar de basura no-WebAssembly bajo una
+            // capacidad de "ejecutable" que en realidad solo lee texto.
+            const WASM_MAGIA: [u8; 4] = [0x00, 0x61, 0x73, 0x6D];
+            if payload.len() < 8 || payload[..4] != WASM_MAGIA {
+                caller.data_mut().paginas_dma_en_vuelo -= 1;
+                return Ok(CodigoError::PayloadInvalido.como_i32());
+            }
+
+            // Verificar que el destino del hash cabe ANTES de tocar el disco.
+            {
+                let m = memoria.data(&caller);
+                rango(
+                    m,
+                    salida_hash_ptr,
+                    32,
+                    "WASM :: sys_subsistema_registrar_ejecutable desbordo memoria (salida)",
+                )?;
+            }
+
+            let resultado = match crate::almacen::almacenar(payload, alloc::vec::Vec::new()) {
+                Ok(hash) => {
+                    let m = memoria.data_mut(&mut caller);
+                    m[salida_hash_ptr as usize..salida_hash_ptr as usize + 32]
+                        .copy_from_slice(&hash);
+                    CodigoError::Ok
+                }
+                Err(_) => CodigoError::AlmacenamientoFallo,
+            };
+            caller.data_mut().paginas_dma_en_vuelo -= 1;
+            Ok(resultado.como_i32())
+        },
+    )?;
     } // PERMISO_GRAFO_ESCRITURA
 
     // --- CAPACIDAD 4 :: sys_object_datos(hash, salida, capacidad) -> i32 ---

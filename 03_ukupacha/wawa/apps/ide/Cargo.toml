@@ -1,0 +1,29 @@
+# =============================================================================
+#  renaser :: apps/ide — Fase 28 :: la forja del IDE semantico
+# -----------------------------------------------------------------------------
+#  El IDE no es un Vim, ni un VSCode, ni un ELF que se imprime al disco. Es
+#  un modulo WASM `cdylib` que vive en su jaula de 4 MiB y manipula bloques
+#  de codigo COMO NODOS DEL GRAFO direccionado por contenido. Su lazo en
+#  `tick()` subdivide su lienzo natural en tres paneles logicos (Alfa, Beta,
+#  Gamma), serializa fragmentos del buffer con `sys_object_put`, y registra
+#  modulos `.wasm` materializados con `sys_subsistema_registrar_ejecutable`.
+# =============================================================================
+
+[package]
+name = "ide"
+version = "0.1.0"
+edition = "2021"
+description = "renaser :: app WASM del IDE semantico (Fase 28)"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
