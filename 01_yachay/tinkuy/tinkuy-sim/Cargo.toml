@@ -1,0 +1,17 @@
+[package]
+name = "tinkuy-sim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "tinkuy — binario demo end-to-end: lattice cúbica + Lennard-Jones + paredes reflectivas + reporte periódico de energía, temperatura, momentum y CID BLAKE3."
+
+[[bin]]
+name = "tinkuy-sim"
+path = "src/main.rs"
+
+[dependencies]
+tinkuy-core   = { path = "../tinkuy-core" }
+tinkuy-forces = { path = "../tinkuy-forces" }
+rayon         = { workspace = true }

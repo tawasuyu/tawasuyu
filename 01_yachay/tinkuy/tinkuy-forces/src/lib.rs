@@ -19,5 +19,5 @@
 pub mod lennard_jones;
 pub mod coulomb;
 
-pub use lennard_jones::{lennard_jones, LjParams};
+pub use lennard_jones::{clear_accelerations, lennard_jones, LjParams};
 pub use coulomb::{coulomb, CoulombParams};

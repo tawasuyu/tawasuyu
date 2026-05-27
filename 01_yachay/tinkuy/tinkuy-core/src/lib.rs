@@ -18,9 +18,13 @@
 pub mod ecs;
 pub mod grid;
 pub mod integrator;
+pub mod observables;
 pub mod snapshot;
+pub mod walls;
 
 pub use ecs::{Aligned64, EntityHandle, World};
 pub use grid::{CellId, Grid3D, Outbox, Transfer};
 pub use integrator::{velocity_verlet_step, IntegratorParams};
+pub use observables::{kinetic_energy, temperature, total_momentum};
 pub use snapshot::Snapshot;
+pub use walls::reflect_walls;
