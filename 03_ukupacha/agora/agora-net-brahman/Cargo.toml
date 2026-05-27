@@ -1,0 +1,27 @@
+[package]
+name = "agora-net-brahman"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "agora — bridge entre agora-gossip y brahman-net: registra /agora/gossip/1.0.0 sobre BrahmanNet (compartible con minga), expone listen/dial/gossip_with/accept y mergea bundles a un TrustGraph compartido."
+
+[dependencies]
+agora-core = { path = "../agora-core" }
+agora-graph = { path = "../agora-graph" }
+agora-gossip = { path = "../agora-gossip" }
+card-net = { path = "../../../shared/card/card-net" }
+libp2p = { workspace = true }
+libp2p-stream = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures = { workspace = true }
+postcard = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+minga-core = { path = "../../minga/minga-core" }
+minga-p2p = { path = "../../minga/minga-p2p" }
+tempfile = { workspace = true }

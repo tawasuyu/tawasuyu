@@ -23,6 +23,7 @@ cargo run --release -p agora-app
 | [`agora-graph`](agora-graph/README.md) | Thread graph + relations. |
 | [`agora-store`](agora-store/README.md) | Local persistence. |
 | [`agora-gossip`](agora-gossip/README.md) | Gossip protocol over chasqui. |
+| [`agora-net-brahman`](agora-net-brahman/README.md) | Bridge to brahman-net: registers `/agora/gossip/1.0.0` over `BrahmanNet` (shareable with minga). |
 | [`agora-app`](agora-app/README.md) | Llimphi UI. |
 
 ## Considerations

@@ -169,6 +169,18 @@ La re-verificación se ofrece como primitiva (`alpha::verify_root_alpha`) y como
 - **Path metadata excluida.** El bundle no transmite `SledPathHistoryStore` ni `SledTimestampStore` (locales por diseño, como en el wire de sync). El receptor pone timestamp = `now` al merge.
 - **Atestaciones/retractions con `content != alpha`** se descartan silenciosamente en el import. No debería pasar bajo bundles bien formados; el filtro es defensivo.
 
+## 10.bis Convergencia con ágora (lateral)
+
+Aunque no toca el dominio de minga directamente, este sprint cerró el bridge entre los dos: ágora ahora puede correr sobre el mismo nodo libp2p que `MingaPeer`. Cambios relevantes para minga:
+
+- **`MingaPeer::node`** pasó de `LibP2pNode` (por valor) a `Arc<LibP2pNode>` (compartido).
+- Nuevos constructores:
+  - **`MingaPeer::open_with_node(keypair, path, node: Arc<LibP2pNode>)`** — adopta un nodo libp2p ya existente en lugar de crear uno propio. El `open` clásico ahora delega a esto.
+  - **`MingaPeer::brahman_net() -> Arc<LibP2pNode>`** — accessor para que otros consumidores (típicamente `agora_net_brahman::AgoraNet`) compartan el mismo nodo.
+- Sin cambios en el wire de sync — la convergencia es a nivel de transport, no de protocolo. `/minga/sync/1.0.0` sigue idéntico; agora registra `/agora/gossip/1.0.0` en paralelo y libp2p stream behaviour los demultiplexa.
+
+Demo: `cargo run -p agora-net-brahman --example convergencia_minga` — un solo `PeerId` sirviendo ambos protocolos sobre un solo `listen`.
+
 ## 11. Próximos pasos abiertos
 
 | # | Tarea | Prioridad |

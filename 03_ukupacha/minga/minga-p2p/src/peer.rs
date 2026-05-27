@@ -70,7 +70,12 @@ struct PeerState {
 }
 
 pub struct MingaPeer {
-    node: LibP2pNode,
+    /// El nodo libp2p envuelto en `Arc` para que otros consumidores
+    /// (por ejemplo `agora_net_brahman::AgoraNet`) puedan compartir
+    /// el mismo `BrahmanNet` — una sola identidad libp2p, una sola
+    /// tabla Kademlia, dos protocolos de stream. Ver
+    /// [`MingaPeer::brahman_net`] y [`MingaPeer::open_with_node`].
+    node: Arc<LibP2pNode>,
     state: Arc<Mutex<PeerState>>,
 }
 
@@ -81,7 +86,7 @@ impl MingaPeer {
         store: MemStore,
         attestations: AttestationStore,
     ) -> Result<Self, NodeError> {
-        let node = LibP2pNode::new()?;
+        let node = Arc::new(LibP2pNode::new()?);
         let state = Arc::new(Mutex::new(PeerState {
             mst,
             store,
@@ -94,11 +99,36 @@ impl MingaPeer {
         Ok(Self { node, state })
     }
 
-    /// Abre o crea un peer persistente sobre `path`. Si el directorio
-    /// no contiene un repo, se crea vacío. Si lo contiene, se carga
-    /// el estado completo (MST, nodos, atestaciones) en memoria.
-    /// Cualquier cambio posterior se escribe a disco vía write-through.
+    /// Abre o crea un peer persistente sobre `path`, construyendo un
+    /// `LibP2pNode` propio (efímero). Atajo para procesos que sólo
+    /// corren minga; si querés compartir el nodo libp2p con ágora u
+    /// otro consumidor, usá [`MingaPeer::open_with_node`].
     pub fn open(keypair: Keypair, path: impl AsRef<Path>) -> Result<Self, PeerOpenError> {
+        let node = Arc::new(LibP2pNode::new()?);
+        Self::open_with_node(keypair, path, node)
+    }
+
+    /// Acceso al nodo libp2p subyacente — útil para que otro consumidor
+    /// (típicamente `agora_net_brahman::AgoraNet`) abra sus propios
+    /// sub-protocolos de stream sobre la misma malla brahman-net. Es
+    /// el lado "lectura" de la convergencia; el lado "construcción" es
+    /// [`MingaPeer::open_with_node`].
+    pub fn brahman_net(&self) -> Arc<LibP2pNode> {
+        Arc::clone(&self.node)
+    }
+
+    /// Como [`MingaPeer::open`], pero adopta un `LibP2pNode` ya
+    /// existente envuelto en `Arc`. Sirve para compartir un solo nodo
+    /// libp2p entre minga y otros consumidores — un solo `PeerId`, una
+    /// sola Kademlia, varios protocolos de stream coexistiendo. Esta
+    /// es la convergencia que el README de ágora promete: *"agora
+    /// corre sobre la red de pares de minga cuando ambos están
+    /// activos"*.
+    pub fn open_with_node(
+        keypair: Keypair,
+        path: impl AsRef<Path>,
+        node: Arc<LibP2pNode>,
+    ) -> Result<Self, PeerOpenError> {
         let repo = Arc::new(PersistentRepo::open(path)?);
 
         // Cargar MST desde disco.
@@ -142,7 +172,6 @@ impl MingaPeer {
             }
         }
 
-        let node = LibP2pNode::new()?;
         let state = Arc::new(Mutex::new(PeerState {
             mst,
             store,
