@@ -33,6 +33,12 @@ pub fn dispatch(name: &str, args: &[FormulaArg]) -> SheetValue {
         "MAX" => agg_max(args),
         "COUNT" => agg_count(args),
         "COUNTA" => agg_counta(args),
+        "SUMIF" => agg_sumif(args),
+        "COUNTIF" => agg_countif(args),
+        "AVERAGEIF" | "AVGIF" => agg_averageif(args),
+        "SUMIFS" => agg_sumifs(args),
+        "COUNTIFS" => agg_countifs(args),
+        "AVERAGEIFS" | "AVGIFS" => agg_averageifs(args),
         "ROUND" => fn_round(args),
         "ABS" => fn_abs(args),
         "INT" => fn_int(args),
@@ -938,6 +944,344 @@ fn days_to_date(days: i64) -> (i64, i32, i32) {
     (y, m, d)
 }
 
+// ─── Familia condicional (SUMIF / COUNTIF / AVERAGEIF + IFS) ────────
+//
+// Criterio Excel: o un escalar (igualdad exacta) o un texto con prefijo
+// de comparador (`">5"`, `"<=3"`, `"<>foo"`, `"=bar"`). Sin wildcards en
+// este bloque — `*` y `?` quedan para un Bloque futuro porque exigen
+// una pasada de matching diferente (regex/glob) y meten ambigüedad en
+// los precios con `*` literales.
+//
+// Reglas:
+//   * Si el operando es número y la celda es texto (o viceversa), el
+//     criterio NO matchea — coherente con Excel, que no coerce tipos en
+//     comparaciones de criterio aunque sí lo haga en aritmética.
+//   * El texto compara case-insensitive (lower-vs-lower) — coherente
+//     con `value_ord` y con Excel/Sheets.
+//   * Una celda en error se considera no-coincidente. SUMIF/COUNTIF no
+//     deben "tragar" celdas rotas como ceros silenciosos: si una celda
+//     dentro del rango de criterio es `#REF!`, propagamos el error a
+//     la fórmula entera (igual que hace `flatten_numbers`).
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CritOp { Eq, Ne, Lt, Le, Gt, Ge }
+
+#[derive(Debug, Clone)]
+struct Criteria {
+    op: CritOp,
+    operand: SheetValue,
+}
+
+fn parse_criteria(a: &FormulaArg) -> Result<Criteria, SheetValue> {
+    let v = match a {
+        FormulaArg::Value(v) => v,
+        // Un rango como criterio es ambiguo (Excel lo trataría como
+        // array-formula). Aquí preferimos el `#VALUE!` explícito.
+        FormulaArg::Range { .. } => return Err(SheetValue::Error(SheetError::Value)),
+    };
+    match v {
+        SheetValue::Error(e) => Err(SheetValue::Error(e.clone())),
+        SheetValue::Number(_) | SheetValue::Bool(_) | SheetValue::Empty => Ok(Criteria {
+            op: CritOp::Eq,
+            operand: v.clone(),
+        }),
+        SheetValue::Text(s) => Ok(parse_text_criteria(s)),
+    }
+}
+
+fn parse_text_criteria(raw: &str) -> Criteria {
+    let s = raw.trim();
+    // Orden importante: chequear primero los prefijos de 2 chars (>=,
+    // <=, <>) para que no los robe el match de un solo char (>, <).
+    let (op, rest) = if let Some(r) = s.strip_prefix(">=") {
+        (CritOp::Ge, r)
+    } else if let Some(r) = s.strip_prefix("<=") {
+        (CritOp::Le, r)
+    } else if let Some(r) = s.strip_prefix("<>") {
+        (CritOp::Ne, r)
+    } else if let Some(r) = s.strip_prefix('>') {
+        (CritOp::Gt, r)
+    } else if let Some(r) = s.strip_prefix('<') {
+        (CritOp::Lt, r)
+    } else if let Some(r) = s.strip_prefix('=') {
+        (CritOp::Eq, r)
+    } else {
+        (CritOp::Eq, s)
+    };
+    Criteria {
+        op,
+        operand: parse_operand(rest),
+    }
+}
+
+fn parse_operand(s: &str) -> SheetValue {
+    let t = s.trim();
+    if t.is_empty() {
+        return SheetValue::Empty;
+    }
+    if let Ok(n) = t.parse::<Decimal>() {
+        return SheetValue::Number(n);
+    }
+    match t.to_uppercase().as_str() {
+        "TRUE" => SheetValue::Bool(true),
+        "FALSE" => SheetValue::Bool(false),
+        _ => SheetValue::Text(t.to_string()),
+    }
+}
+
+fn criteria_matches(c: &Criteria, v: &SheetValue) -> bool {
+    use std::cmp::Ordering;
+    if v.is_error() {
+        return false;
+    }
+    let ord = match (v, &c.operand) {
+        (SheetValue::Number(a), SheetValue::Number(b)) => a.cmp(b),
+        (SheetValue::Text(a), SheetValue::Text(b)) => a.to_lowercase().cmp(&b.to_lowercase()),
+        (SheetValue::Bool(a), SheetValue::Bool(b)) => a.cmp(b),
+        (SheetValue::Empty, SheetValue::Empty) => Ordering::Equal,
+        // Tipos distintos no comparan ordinalmente: Eq=false, Ne=true,
+        // y los comparadores estrictos siempre dan false.
+        _ => return matches!(c.op, CritOp::Ne),
+    };
+    match c.op {
+        CritOp::Eq => ord == Ordering::Equal,
+        CritOp::Ne => ord != Ordering::Equal,
+        CritOp::Lt => ord == Ordering::Less,
+        CritOp::Le => ord != Ordering::Greater,
+        CritOp::Gt => ord == Ordering::Greater,
+        CritOp::Ge => ord != Ordering::Less,
+    }
+}
+
+/// Devuelve los valores del rango como `Vec<SheetValue>` o, si es un
+/// escalar, un `Vec` de un elemento. Útil para uniformar la iteración
+/// en SUMIF/COUNTIF. Propaga error si encuentra `Error` dentro del
+/// rango.
+fn arg_values(a: &FormulaArg) -> Result<Vec<SheetValue>, SheetError> {
+    match a {
+        FormulaArg::Value(v) => {
+            if let SheetValue::Error(e) = v {
+                return Err(e.clone());
+            }
+            Ok(vec![v.clone()])
+        }
+        FormulaArg::Range { values, .. } => {
+            for v in values {
+                if let SheetValue::Error(e) = v {
+                    return Err(e.clone());
+                }
+            }
+            Ok(values.clone())
+        }
+    }
+}
+
+/// Igual que `arg_values` pero devuelve también la cantidad de elementos
+/// — necesaria para verificar shape entre crit_range y sum_range/avg_range.
+fn arg_len(a: &FormulaArg) -> usize {
+    match a {
+        FormulaArg::Value(_) => 1,
+        FormulaArg::Range { values, .. } => values.len(),
+    }
+}
+
+fn agg_sumif(args: &[FormulaArg]) -> SheetValue {
+    // SUMIF(range, criteria, [sum_range])
+    if !(2..=3).contains(&args.len()) {
+        return SheetValue::Error(SheetError::Value);
+    }
+    let crit = match parse_criteria(&args[1]) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let crit_vals = match arg_values(&args[0]) {
+        Ok(v) => v,
+        Err(e) => return SheetValue::Error(e),
+    };
+    let sum_vals = if args.len() == 3 {
+        let v = match arg_values(&args[2]) {
+            Ok(v) => v,
+            Err(e) => return SheetValue::Error(e),
+        };
+        if v.len() != crit_vals.len() {
+            return SheetValue::Error(SheetError::Value);
+        }
+        v
+    } else {
+        crit_vals.clone()
+    };
+    let mut total = Decimal::ZERO;
+    for (cv, sv) in crit_vals.iter().zip(sum_vals.iter()) {
+        if !criteria_matches(&crit, cv) {
+            continue;
+        }
+        // Solo sumamos los numéricos del sum_range — igual que SUM
+        // dentro de un rango. Texto y booleans dentro del rango se
+        // ignoran en silencio.
+        if let SheetValue::Number(n) = sv {
+            total += *n;
+        }
+    }
+    SheetValue::Number(total)
+}
+
+fn agg_countif(args: &[FormulaArg]) -> SheetValue {
+    // COUNTIF(range, criteria)
+    if args.len() != 2 {
+        return SheetValue::Error(SheetError::Value);
+    }
+    let crit = match parse_criteria(&args[1]) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let vals = match arg_values(&args[0]) {
+        Ok(v) => v,
+        Err(e) => return SheetValue::Error(e),
+    };
+    let n = vals.iter().filter(|v| criteria_matches(&crit, v)).count();
+    SheetValue::Number(Decimal::from(n as i64))
+}
+
+fn agg_averageif(args: &[FormulaArg]) -> SheetValue {
+    // AVERAGEIF(range, criteria, [avg_range])
+    if !(2..=3).contains(&args.len()) {
+        return SheetValue::Error(SheetError::Value);
+    }
+    let crit = match parse_criteria(&args[1]) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let crit_vals = match arg_values(&args[0]) {
+        Ok(v) => v,
+        Err(e) => return SheetValue::Error(e),
+    };
+    let avg_vals = if args.len() == 3 {
+        let v = match arg_values(&args[2]) {
+            Ok(v) => v,
+            Err(e) => return SheetValue::Error(e),
+        };
+        if v.len() != crit_vals.len() {
+            return SheetValue::Error(SheetError::Value);
+        }
+        v
+    } else {
+        crit_vals.clone()
+    };
+    let mut total = Decimal::ZERO;
+    let mut count = 0i64;
+    for (cv, sv) in crit_vals.iter().zip(avg_vals.iter()) {
+        if !criteria_matches(&crit, cv) {
+            continue;
+        }
+        if let SheetValue::Number(n) = sv {
+            total += *n;
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return SheetValue::Error(SheetError::DivZero);
+    }
+    SheetValue::Number(total / Decimal::from(count))
+}
+
+fn agg_sumifs(args: &[FormulaArg]) -> SheetValue {
+    // SUMIFS(sum_range, range1, crit1, range2, crit2, ...)
+    if args.len() < 3 || (args.len() - 1) % 2 != 0 {
+        return SheetValue::Error(SheetError::Value);
+    }
+    let sum_vals = match arg_values(&args[0]) {
+        Ok(v) => v,
+        Err(e) => return SheetValue::Error(e),
+    };
+    let pairs = match collect_pairs(&args[1..], sum_vals.len()) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let mut total = Decimal::ZERO;
+    for i in 0..sum_vals.len() {
+        if !pairs.iter().all(|(vals, c)| criteria_matches(c, &vals[i])) {
+            continue;
+        }
+        if let SheetValue::Number(n) = &sum_vals[i] {
+            total += *n;
+        }
+    }
+    SheetValue::Number(total)
+}
+
+fn agg_countifs(args: &[FormulaArg]) -> SheetValue {
+    // COUNTIFS(range1, crit1, range2, crit2, ...)
+    if args.is_empty() || args.len() % 2 != 0 {
+        return SheetValue::Error(SheetError::Value);
+    }
+    let len = arg_len(&args[0]);
+    let pairs = match collect_pairs(args, len) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let mut count = 0i64;
+    for i in 0..len {
+        if pairs.iter().all(|(vals, c)| criteria_matches(c, &vals[i])) {
+            count += 1;
+        }
+    }
+    SheetValue::Number(Decimal::from(count))
+}
+
+fn agg_averageifs(args: &[FormulaArg]) -> SheetValue {
+    // AVERAGEIFS(avg_range, range1, crit1, range2, crit2, ...)
+    if args.len() < 3 || (args.len() - 1) % 2 != 0 {
+        return SheetValue::Error(SheetError::Value);
+    }
+    let avg_vals = match arg_values(&args[0]) {
+        Ok(v) => v,
+        Err(e) => return SheetValue::Error(e),
+    };
+    let pairs = match collect_pairs(&args[1..], avg_vals.len()) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let mut total = Decimal::ZERO;
+    let mut count = 0i64;
+    for i in 0..avg_vals.len() {
+        if !pairs.iter().all(|(vals, c)| criteria_matches(c, &vals[i])) {
+            continue;
+        }
+        if let SheetValue::Number(n) = &avg_vals[i] {
+            total += *n;
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return SheetValue::Error(SheetError::DivZero);
+    }
+    SheetValue::Number(total / Decimal::from(count))
+}
+
+/// Convierte una secuencia `[range, criteria, range, criteria, ...]` en
+/// vector de tuplas, exigiendo que todos los rangos tengan el mismo
+/// `expected_len`. Propaga errores de criterio o de tipo.
+fn collect_pairs(
+    items: &[FormulaArg],
+    expected_len: usize,
+) -> Result<Vec<(Vec<SheetValue>, Criteria)>, SheetValue> {
+    let mut out = Vec::with_capacity(items.len() / 2);
+    let mut i = 0;
+    while i < items.len() {
+        let vals = match arg_values(&items[i]) {
+            Ok(v) => v,
+            Err(e) => return Err(SheetValue::Error(e)),
+        };
+        if vals.len() != expected_len {
+            return Err(SheetValue::Error(SheetError::Value));
+        }
+        let crit = parse_criteria(&items[i + 1])?;
+        out.push((vals, crit));
+        i += 2;
+    }
+    Ok(out)
+}
+
 // ─── Helpers locales ────────────────────────────────────────────────
 
 fn decimal_to_usize(d: Decimal) -> Option<usize> {
@@ -1330,6 +1674,262 @@ mod tests {
         assert_eq!(
             run(r#"=IF(SUM(B1:B3)>100, "ALERTA", "OK")"#, &env),
             SheetValue::Text("ALERTA".into())
+        );
+    }
+
+    // ─── Familia condicional (Bloque 19) ────────────────────────────
+
+    /// Helper: rellena la columna A con la secuencia de (numero, texto)
+    /// que usan los tests de SUMIF/COUNTIF. Devuelve el HashMap listo.
+    fn env_invoices() -> HashMap<CellRef, SheetValue> {
+        // A: importes; B: categoría textual; C: estado.
+        // Cada fila representa una factura.
+        let rows: &[(i64, &str, &str)] = &[
+            (100, "rojo", "pagada"),
+            (200, "azul", "pendiente"),
+            (50, "rojo", "pagada"),
+            (300, "verde", "pendiente"),
+            (75, "Rojo", "pagada"), // case-insensitive: matchea "rojo"
+        ];
+        let mut env = HashMap::new();
+        for (i, (n, cat, est)) in rows.iter().enumerate() {
+            let r = i as u32;
+            env.insert(CellRef::new(0, r), SheetValue::Number(Decimal::from(*n)));
+            env.insert(CellRef::new(1, r), SheetValue::Text((*cat).into()));
+            env.insert(CellRef::new(2, r), SheetValue::Text((*est).into()));
+        }
+        env
+    }
+
+    #[test]
+    fn sumif_no_sum_range_sums_matching_cells() {
+        let env = env_invoices();
+        // Importes >100: 200 + 300 = 500.
+        assert_eq!(
+            run(r#"=SUMIF(A1:A5, ">100")"#, &env),
+            SheetValue::Number(dec("500"))
+        );
+    }
+
+    #[test]
+    fn sumif_with_sum_range_uses_separate_column() {
+        let env = env_invoices();
+        // Importes donde categoría = "rojo" (case-insensitive):
+        // 100 + 50 + 75 = 225.
+        assert_eq!(
+            run(r#"=SUMIF(B1:B5, "rojo", A1:A5)"#, &env),
+            SheetValue::Number(dec("225"))
+        );
+    }
+
+    #[test]
+    fn sumif_exact_text_match_is_case_insensitive() {
+        let env = env_invoices();
+        // Sin operador → igualdad. "ROJO" matchea "rojo" y "Rojo".
+        assert_eq!(
+            run(r#"=SUMIF(B1:B5, "ROJO", A1:A5)"#, &env),
+            SheetValue::Number(dec("225"))
+        );
+    }
+
+    #[test]
+    fn sumif_numeric_equality_via_scalar_criterion() {
+        let env = env_invoices();
+        // Criterio numérico literal (no string): 200.
+        assert_eq!(
+            run("=SUMIF(A1:A5, 200)", &env),
+            SheetValue::Number(dec("200"))
+        );
+    }
+
+    #[test]
+    fn sumif_lte_and_ne_operators() {
+        let env = env_invoices();
+        // <=100: 100+50+75 = 225.
+        assert_eq!(
+            run(r#"=SUMIF(A1:A5, "<=100")"#, &env),
+            SheetValue::Number(dec("225"))
+        );
+        // <>"rojo": azul (200) + verde (300) = 500.
+        assert_eq!(
+            run(r#"=SUMIF(B1:B5, "<>rojo", A1:A5)"#, &env),
+            SheetValue::Number(dec("500"))
+        );
+    }
+
+    #[test]
+    fn sumif_shape_mismatch_yields_value_error() {
+        let mut env = env_invoices();
+        // sum_range con 3 elementos, crit_range con 5 → mismatch.
+        env.insert(CellRef::new(3, 0), SheetValue::Number(dec("1")));
+        env.insert(CellRef::new(3, 1), SheetValue::Number(dec("2")));
+        env.insert(CellRef::new(3, 2), SheetValue::Number(dec("3")));
+        assert_eq!(
+            run(r#"=SUMIF(A1:A5, ">0", D1:D3)"#, &env),
+            SheetValue::Error(SheetError::Value)
+        );
+    }
+
+    #[test]
+    fn sumif_propagates_error_inside_range() {
+        let mut env = env_invoices();
+        // Inyecto un #REF! en una fila → SUMIF debe fallar el rango,
+        // no devolver un 0 silencioso.
+        env.insert(CellRef::new(0, 1), SheetValue::Error(SheetError::Ref));
+        assert_eq!(
+            run(r#"=SUMIF(A1:A5, ">0")"#, &env),
+            SheetValue::Error(SheetError::Ref)
+        );
+    }
+
+    #[test]
+    fn countif_counts_matches() {
+        let env = env_invoices();
+        // Filas con categoría = "rojo" (case-insensitive): 3.
+        assert_eq!(
+            run(r#"=COUNTIF(B1:B5, "rojo")"#, &env),
+            SheetValue::Number(dec("3"))
+        );
+        // Filas con importe > 100: 2.
+        assert_eq!(
+            run(r#"=COUNTIF(A1:A5, ">100")"#, &env),
+            SheetValue::Number(dec("2"))
+        );
+    }
+
+    #[test]
+    fn countif_no_matches_returns_zero() {
+        let env = env_invoices();
+        assert_eq!(
+            run(r#"=COUNTIF(B1:B5, "negro")"#, &env),
+            SheetValue::Number(dec("0"))
+        );
+    }
+
+    #[test]
+    fn averageif_computes_average_of_matching_subset() {
+        let env = env_invoices();
+        // Promedio de importes donde estado = "pagada":
+        // (100 + 50 + 75) / 3 = 75.
+        assert_eq!(
+            run(r#"=AVERAGEIF(C1:C5, "pagada", A1:A5)"#, &env),
+            SheetValue::Number(dec("75"))
+        );
+    }
+
+    #[test]
+    fn averageif_no_match_is_div_zero() {
+        let env = env_invoices();
+        assert_eq!(
+            run(r#"=AVERAGEIF(C1:C5, "cancelada", A1:A5)"#, &env),
+            SheetValue::Error(SheetError::DivZero)
+        );
+    }
+
+    #[test]
+    fn sumifs_two_criteria_intersection() {
+        let env = env_invoices();
+        // SUM de importes donde categoría = "rojo" Y estado = "pagada":
+        // 100 + 50 + 75 = 225 (todas las rojo son pagadas en este set).
+        assert_eq!(
+            run(
+                r#"=SUMIFS(A1:A5, B1:B5, "rojo", C1:C5, "pagada")"#,
+                &env
+            ),
+            SheetValue::Number(dec("225"))
+        );
+        // Excluir pagadas: nada matchea → 0.
+        assert_eq!(
+            run(
+                r#"=SUMIFS(A1:A5, B1:B5, "rojo", C1:C5, "<>pagada")"#,
+                &env
+            ),
+            SheetValue::Number(dec("0"))
+        );
+    }
+
+    #[test]
+    fn sumifs_three_criteria_with_numeric_bound() {
+        let env = env_invoices();
+        // importe >= 75 Y categoría = "rojo" Y estado = "pagada":
+        //   100 (✓), 50 (importe falla), 75 (✓) → 175.
+        assert_eq!(
+            run(
+                r#"=SUMIFS(A1:A5, A1:A5, ">=75", B1:B5, "rojo", C1:C5, "pagada")"#,
+                &env
+            ),
+            SheetValue::Number(dec("175"))
+        );
+    }
+
+    #[test]
+    fn countifs_multi_criteria() {
+        let env = env_invoices();
+        assert_eq!(
+            run(
+                r#"=COUNTIFS(B1:B5, "rojo", C1:C5, "pagada")"#,
+                &env
+            ),
+            SheetValue::Number(dec("3"))
+        );
+    }
+
+    #[test]
+    fn averageifs_filters_and_averages() {
+        let env = env_invoices();
+        // Promedio donde categoría = "rojo" Y estado = "pagada":
+        // (100+50+75)/3 = 75.
+        assert_eq!(
+            run(
+                r#"=AVERAGEIFS(A1:A5, B1:B5, "rojo", C1:C5, "pagada")"#,
+                &env
+            ),
+            SheetValue::Number(dec("75"))
+        );
+    }
+
+    #[test]
+    fn ifs_shape_mismatch_yields_value_error() {
+        let mut env = env_invoices();
+        // sum_range largo 5, criterio range largo 3 → #VALUE!.
+        env.insert(CellRef::new(3, 0), SheetValue::Text("x".into()));
+        env.insert(CellRef::new(3, 1), SheetValue::Text("y".into()));
+        env.insert(CellRef::new(3, 2), SheetValue::Text("z".into()));
+        assert_eq!(
+            run(r#"=SUMIFS(A1:A5, D1:D3, "x")"#, &env),
+            SheetValue::Error(SheetError::Value)
+        );
+    }
+
+    #[test]
+    fn sumifs_arity_check() {
+        let env = env_invoices();
+        // (range, criteria) en pares: 4 args = 1 sum_range + 1 pair + 1
+        // huérfano → falla.
+        assert_eq!(
+            run(r#"=SUMIFS(A1:A5, B1:B5, "rojo", C1:C5)"#, &env),
+            SheetValue::Error(SheetError::Value)
+        );
+    }
+
+    #[test]
+    fn countifs_arity_check() {
+        let env = env_invoices();
+        // COUNTIFS exige cantidad par; 3 args → #VALUE!.
+        assert_eq!(
+            run(r#"=COUNTIFS(A1:A5, ">0", B1:B5)"#, &env),
+            SheetValue::Error(SheetError::Value)
+        );
+    }
+
+    #[test]
+    fn sumif_type_mismatch_doesnt_falsely_match() {
+        let env = env_invoices();
+        // Criterio numérico ">100" sobre rango de texto: ningún texto
+        // matchea un comparador numérico — debe sumar 0.
+        assert_eq!(
+            run(r#"=SUMIF(B1:B5, ">100", A1:A5)"#, &env),
+            SheetValue::Number(dec("0"))
         );
     }
 }
