@@ -188,20 +188,35 @@ a:hover { color: var(--fg-text); }
   max-height: calc(100vh - var(--topbar-h) - var(--taskbar-h) - 48px);
 }
 
-.axis  { stroke: var(--border); stroke-width: 0.4; }
-.ticks line { stroke: var(--border); stroke-width: 0.4; }
+.axis  { stroke: var(--fg-muted); stroke-width: 0.5; }
+#axisArrow path { fill: var(--fg-muted); }
+.ticks line { stroke: var(--fg-muted); stroke-width: 0.4; opacity: 0.7; }
 .axis-label { fill: var(--fg-placeholder); font-size: 4px; font-family: var(--mono); }
+/* φ pequeñita junto al origen — chiste matemático: la rayitas siguen Fibonacci
+   y sus razones tienden a φ. Se descubre si te acercás. */
+.axis-phi {
+  font-family: var(--mono);
+  font-size: 3px;
+  fill: var(--fg-placeholder);
+  opacity: 0.55;
+  font-style: italic;
+}
 
+.quad { cursor: pointer; }
 .quad rect {
   fill: rgba(22, 26, 36, 0.4);
   stroke: var(--border);
   stroke-width: 0.4;
   stroke-dasharray: 1.5 1.5;
-  transition: fill 0.2s, stroke 0.2s;
+  transition: fill 0.2s, stroke 0.2s, stroke-width 0.2s;
 }
 .quad:hover rect {
-  fill: rgba(36, 42, 56, 0.5);
+  fill: rgba(36, 42, 56, 0.55);
   stroke: var(--accent);
+  stroke-width: 0.6;
+}
+.quad:active rect {
+  fill: rgba(58, 78, 128, 0.35);
 }
 .quad text {
   fill: var(--fg-text);
@@ -895,3 +910,100 @@ a:hover { color: var(--fg-text); }
   --border-focus:    #E89B6E;
   --accent:          #E89B6E;
 }
+
+/* ===================== pluma a pantalla-completa =====================
+ * Overlay sin titlebar ni chrome — sólo el contenido pluma.
+ * Arranca con las dimensiones del <rect> del cuadrante y se expande.
+ * ==================================================================== */
+.pluma-fs {
+  position: fixed;
+  background: var(--bg-app);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  box-shadow:
+    0 0 0 1px rgba(110,140,220,0.10),
+    0 24px 80px rgba(0,0,0,0.65),
+    0 8px 24px rgba(0,0,0,0.45);
+  z-index: 10000;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  /* la transición incluye geometría + radio + sombra para que el "morph"
+     desde el recuadro a pantalla completa se sienta orgánico */
+  transition:
+    left   0.42s cubic-bezier(.5,.0,.2,1),
+    top    0.42s cubic-bezier(.5,.0,.2,1),
+    width  0.42s cubic-bezier(.5,.0,.2,1),
+    height 0.42s cubic-bezier(.5,.0,.2,1),
+    border-radius 0.42s ease,
+    border-color 0.3s ease,
+    box-shadow 0.42s ease;
+  will-change: left, top, width, height;
+}
+.pluma-fs.expanded {
+  left: 0 !important;
+  top: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  border-radius: 0;
+  border-color: transparent;
+}
+.pluma-fs.closing { pointer-events: none; }
+
+.pluma-fs-close {
+  position: absolute;
+  top: 14px;
+  right: 18px;
+  width: 34px;
+  height: 34px;
+  background: transparent;
+  border: none;
+  color: var(--fg-muted);
+  font-family: var(--mono);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 50%;
+  z-index: 2;
+  opacity: 0;
+  transform: scale(0.7);
+  transition: opacity 0.25s 0.28s ease, transform 0.25s 0.28s ease, background 0.15s, color 0.15s;
+}
+.pluma-fs.expanded .pluma-fs-close {
+  opacity: 1;
+  transform: scale(1);
+}
+.pluma-fs-close:hover {
+  background: var(--bg-row-hover);
+  color: var(--fg-text);
+}
+
+.pluma-fs-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  opacity: 0;
+  transition: opacity 0.32s 0.18s ease;
+}
+.pluma-fs.expanded .pluma-fs-scroll { opacity: 1; }
+.pluma-fs-scroll::-webkit-scrollbar { width: 10px; }
+.pluma-fs-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
+
+/* Contenido pluma centrado en pantalla con ancho cómodo de lectura */
+.pluma-fs-scroll .pluma-host {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 64px 32px 80px;
+}
+
+/* tinte del borde según el tema del cuadrante */
+.pluma-fs[data-theme="unanchay"] { border-color: var(--c-unanchay); }
+.pluma-fs[data-theme="yachay"]   { border-color: var(--c-yachay); }
+.pluma-fs[data-theme="ruway"]    { border-color: var(--c-ruway); }
+.pluma-fs[data-theme="ukupacha"] { border-color: var(--c-ukupacha); }
+.pluma-fs[data-theme="aire"]     { border-color: var(--c-aire); }
+.pluma-fs[data-theme="fuego"]    { border-color: var(--c-fuego); }
+.pluma-fs[data-theme="tierra"]   { border-color: var(--c-tierra); }
+.pluma-fs[data-theme="agua"]     { border-color: var(--c-agua); }
+.pluma-fs[data-theme="cosmos"]   { border-color: var(--c-cosmos); }
+.pluma-fs.expanded { border-color: transparent; }

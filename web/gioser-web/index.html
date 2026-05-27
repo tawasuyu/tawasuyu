@@ -109,66 +109,128 @@
     <!-- centro: plano cartesiano de cuadrantes -->
     <section id="plano-wrap">
       <svg id="plano" viewBox="-100 -100 200 200" preserveAspectRatio="xMidYMid meet">
-        <line class="axis" x1="-100" y1="0" x2="100" y2="0"/>
-        <line class="axis" x1="0" y1="-100" x2="0" y2="100"/>
-        <g class="ticks">
-          <line x1="-50" y1="-2" x2="-50" y2="2"/>
-          <line x1="50" y1="-2" x2="50" y2="2"/>
-          <line x1="-2" y1="-50" x2="2" y2="-50"/>
-          <line x1="-2" y1="50" x2="2" y2="50"/>
+        <defs>
+          <!-- flechas de los ejes; userSpaceOnUse para no escalar con stroke -->
+          <marker id="axisArrow" viewBox="0 0 10 10" refX="9" refY="5"
+                  markerUnits="userSpaceOnUse" markerWidth="5" markerHeight="5"
+                  orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" />
+          </marker>
+        </defs>
+
+        <!-- Ejes con flechas en ambos extremos -->
+        <line class="axis" x1="-95" y1="0" x2="95" y2="0"
+              marker-start="url(#axisArrow)" marker-end="url(#axisArrow)"/>
+        <line class="axis" x1="0" y1="-95" x2="0" y2="95"
+              marker-start="url(#axisArrow)" marker-end="url(#axisArrow)"/>
+
+        <!--
+          Rayitas en posiciones Fibonacci: 1, 2, 3, 5, 8, 13, 21, 34, 55, 89.
+          La separación entre rayitas consecutivas tiende a φ (razón áurea):
+          la línea recta "esconde" la espiral. Chiste matemático en el ritmo.
+        -->
+        <g class="ticks" data-fibonacci="1,2,3,5,8,13,21,34,55,89">
+          <!-- eje x -->
+          <line x1="1"  y1="-1.5" x2="1"  y2="1.5"/>
+          <line x1="2"  y1="-1.5" x2="2"  y2="1.5"/>
+          <line x1="3"  y1="-1.5" x2="3"  y2="1.5"/>
+          <line x1="5"  y1="-1.5" x2="5"  y2="1.5"/>
+          <line x1="8"  y1="-2"   x2="8"  y2="2"/>
+          <line x1="13" y1="-2"   x2="13" y2="2"/>
+          <line x1="21" y1="-2"   x2="21" y2="2"/>
+          <line x1="34" y1="-2.5" x2="34" y2="2.5"/>
+          <line x1="55" y1="-2.5" x2="55" y2="2.5"/>
+          <line x1="89" y1="-3"   x2="89" y2="3"/>
+          <line x1="-1"  y1="-1.5" x2="-1"  y2="1.5"/>
+          <line x1="-2"  y1="-1.5" x2="-2"  y2="1.5"/>
+          <line x1="-3"  y1="-1.5" x2="-3"  y2="1.5"/>
+          <line x1="-5"  y1="-1.5" x2="-5"  y2="1.5"/>
+          <line x1="-8"  y1="-2"   x2="-8"  y2="2"/>
+          <line x1="-13" y1="-2"   x2="-13" y2="2"/>
+          <line x1="-21" y1="-2"   x2="-21" y2="2"/>
+          <line x1="-34" y1="-2.5" x2="-34" y2="2.5"/>
+          <line x1="-55" y1="-2.5" x2="-55" y2="2.5"/>
+          <line x1="-89" y1="-3"   x2="-89" y2="3"/>
+          <!-- eje y -->
+          <line x1="-1.5" y1="1"  x2="1.5" y2="1"/>
+          <line x1="-1.5" y1="2"  x2="1.5" y2="2"/>
+          <line x1="-1.5" y1="3"  x2="1.5" y2="3"/>
+          <line x1="-1.5" y1="5"  x2="1.5" y2="5"/>
+          <line x1="-2"   y1="8"  x2="2"   y2="8"/>
+          <line x1="-2"   y1="13" x2="2"   y2="13"/>
+          <line x1="-2"   y1="21" x2="2"   y2="21"/>
+          <line x1="-2.5" y1="34" x2="2.5" y2="34"/>
+          <line x1="-2.5" y1="55" x2="2.5" y2="55"/>
+          <line x1="-3"   y1="89" x2="3"   y2="89"/>
+          <line x1="-1.5" y1="-1"  x2="1.5" y2="-1"/>
+          <line x1="-1.5" y1="-2"  x2="1.5" y2="-2"/>
+          <line x1="-1.5" y1="-3"  x2="1.5" y2="-3"/>
+          <line x1="-1.5" y1="-5"  x2="1.5" y2="-5"/>
+          <line x1="-2"   y1="-8"  x2="2"   y2="-8"/>
+          <line x1="-2"   y1="-13" x2="2"   y2="-13"/>
+          <line x1="-2"   y1="-21" x2="2"   y2="-21"/>
+          <line x1="-2.5" y1="-34" x2="2.5" y2="-34"/>
+          <line x1="-2.5" y1="-55" x2="2.5" y2="-55"/>
+          <line x1="-3"   y1="-89" x2="3"   y2="-89"/>
         </g>
-        <text class="axis-label" x="96" y="-4">x</text>
-        <text class="axis-label" x="4" y="-94">y</text>
+        <text class="axis-label" x="92" y="-5">x</text>
+        <text class="axis-label" x="5"  y="-92">y</text>
+        <!-- φ escondida: la pista del chiste, casi invisible cerca del origen -->
+        <text class="axis-phi" x="2.2" y="-2.2">φ</text>
 
         <!-- Cuadrante II: 00_unanchay PERCIBIR -->
-        <g class="quad" data-cuad="00_unanchay" data-theme="unanchay" transform="translate(-50,-50)">
+        <g class="quad" data-cuad="00_unanchay" data-theme="unanchay" transform="translate(-50,-50)"
+           data-doc="/web/gioser-web/md/aire.md" data-title="unanchay · percibir">
           <rect x="-40" y="-40" width="80" height="80"/>
-          <text class="quad-id" x="0" y="-22">0x00</text>
-          <text class="quad-name" x="0" y="-6">UNANCHAY</text>
-          <text class="quad-verb" x="0" y="8">percibir</text>
+          <text class="quad-id"   x="0" y="-30">0x00</text>
+          <text class="quad-name" x="0" y="-14">UNANCHAY</text>
+          <text class="quad-verb" x="0" y="0">percibir</text>
           <g class="domains" text-anchor="middle">
-            <text class="dom" x="0" y="22" data-doc="/web/gioser-web/md/aire.md" data-title="pluma" data-theme="aire">pluma</text>
-            <text class="dom" x="0" y="30" data-doc="/web/gioser-web/md/sombra.md" data-title="khipu" data-theme="unanchay">khipu</text>
-            <text class="dom" x="0" y="38" data-doc="/00_unanchay/puriy/SDD.md" data-title="puriy" data-theme="unanchay">rimay · chaka · pineal</text>
+            <text class="dom" x="0" y="14" data-doc="/web/gioser-web/md/aire.md" data-title="pluma" data-theme="aire">pluma</text>
+            <text class="dom" x="0" y="22" data-doc="/web/gioser-web/md/sombra.md" data-title="khipu" data-theme="unanchay">khipu</text>
+            <text class="dom" x="0" y="30" data-doc="/00_unanchay/puriy/SDD.md" data-title="puriy" data-theme="unanchay">rimay · chaka · pineal</text>
           </g>
         </g>
 
         <!-- Cuadrante I: 01_yachay CONOCER -->
-        <g class="quad" data-cuad="01_yachay" data-theme="yachay" transform="translate(50,-50)">
+        <g class="quad" data-cuad="01_yachay" data-theme="yachay" transform="translate(50,-50)"
+           data-doc="/web/gioser-web/md/cosmos.md" data-title="yachay · conocer">
           <rect x="-40" y="-40" width="80" height="80"/>
-          <text class="quad-id" x="0" y="-22">0x01</text>
-          <text class="quad-name" x="0" y="-6">YACHAY</text>
-          <text class="quad-verb" x="0" y="8">conocer</text>
+          <text class="quad-id"   x="0" y="-30">0x01</text>
+          <text class="quad-name" x="0" y="-14">YACHAY</text>
+          <text class="quad-verb" x="0" y="0">conocer</text>
           <g class="domains" text-anchor="middle">
-            <text class="dom" x="0" y="22" data-doc="/01_yachay/cosmos/cosmos-core/README.md" data-title="cosmos" data-theme="yachay">cosmos</text>
-            <text class="dom" x="0" y="30" data-doc="/01_yachay/dominium/SDD.md" data-title="dominium" data-theme="yachay">dominium</text>
-            <text class="dom" x="0" y="38" data-doc="/web/gioser-web/md/cosmos.md" data-title="nakui" data-theme="cosmos">nakui</text>
+            <text class="dom" x="0" y="14" data-doc="/01_yachay/cosmos/cosmos-core/README.md" data-title="cosmos" data-theme="yachay">cosmos</text>
+            <text class="dom" x="0" y="22" data-doc="/01_yachay/dominium/SDD.md" data-title="dominium" data-theme="yachay">dominium</text>
+            <text class="dom" x="0" y="30" data-doc="/web/gioser-web/md/cosmos.md" data-title="nakui" data-theme="cosmos">nakui</text>
           </g>
         </g>
 
         <!-- Cuadrante III: 03_ukupacha RAIZ -->
-        <g class="quad" data-cuad="03_ukupacha" data-theme="ukupacha" transform="translate(-50,50)">
+        <g class="quad" data-cuad="03_ukupacha" data-theme="ukupacha" transform="translate(-50,50)"
+           data-doc="/web/gioser-web/md/tierra.md" data-title="ukupacha · raíz">
           <rect x="-40" y="-40" width="80" height="80"/>
-          <text class="quad-id" x="0" y="-22">0x03</text>
-          <text class="quad-name" x="0" y="-6">UKUPACHA</text>
-          <text class="quad-verb" x="0" y="8">raíz</text>
+          <text class="quad-id"   x="0" y="-30">0x03</text>
+          <text class="quad-name" x="0" y="-14">UKUPACHA</text>
+          <text class="quad-verb" x="0" y="0">raíz</text>
           <g class="domains" text-anchor="middle">
-            <text class="dom" x="0" y="22" data-doc="/03_ukupacha/arje/seeds/README.md" data-title="arje · wawa" data-theme="ukupacha">arje · wawa</text>
-            <text class="dom" x="0" y="30" data-doc="/web/gioser-web/md/agua.md" data-title="agora" data-theme="agua">agora</text>
-            <text class="dom" x="0" y="38" data-doc="/web/gioser-web/md/tierra.md" data-title="minga" data-theme="tierra">minga</text>
+            <text class="dom" x="0" y="14" data-doc="/03_ukupacha/arje/seeds/README.md" data-title="arje · wawa" data-theme="ukupacha">arje · wawa</text>
+            <text class="dom" x="0" y="22" data-doc="/web/gioser-web/md/agua.md" data-title="agora" data-theme="agua">agora</text>
+            <text class="dom" x="0" y="30" data-doc="/web/gioser-web/md/tierra.md" data-title="minga" data-theme="tierra">minga</text>
           </g>
         </g>
 
         <!-- Cuadrante IV: 02_ruway HACER -->
-        <g class="quad" data-cuad="02_ruway" data-theme="ruway" transform="translate(50,50)">
+        <g class="quad" data-cuad="02_ruway" data-theme="ruway" transform="translate(50,50)"
+           data-doc="/web/gioser-web/md/fuego.md" data-title="ruway · hacer">
           <rect x="-40" y="-40" width="80" height="80"/>
-          <text class="quad-id" x="0" y="-22">0x02</text>
-          <text class="quad-name" x="0" y="-6">RUWAY</text>
-          <text class="quad-verb" x="0" y="8">hacer</text>
+          <text class="quad-id"   x="0" y="-30">0x02</text>
+          <text class="quad-name" x="0" y="-14">RUWAY</text>
+          <text class="quad-verb" x="0" y="0">hacer</text>
           <g class="domains" text-anchor="middle">
-            <text class="dom" x="0" y="22" data-doc="/02_ruway/mirada/mirada-compositor/README.md" data-title="mirada · nahual" data-theme="ruway">mirada · nahual</text>
-            <text class="dom" x="0" y="30" data-doc="/02_ruway/llimphi/SDD.md" data-title="shuma · chasqui" data-theme="ruway">shuma · chasqui</text>
-            <text class="dom" x="0" y="38" data-doc="/web/gioser-web/md/fuego.md" data-title="takiy" data-theme="fuego">takiy</text>
+            <text class="dom" x="0" y="14" data-doc="/02_ruway/mirada/mirada-compositor/README.md" data-title="mirada · nahual" data-theme="ruway">mirada · nahual</text>
+            <text class="dom" x="0" y="22" data-doc="/02_ruway/llimphi/SDD.md" data-title="shuma · chasqui" data-theme="ruway">shuma · chasqui</text>
+            <text class="dom" x="0" y="30" data-doc="/web/gioser-web/md/fuego.md" data-title="takiy" data-theme="fuego">takiy</text>
           </g>
         </g>
       </svg>
@@ -475,9 +537,99 @@
     return id;
   }
 
+  // ===== pluma pantalla-completa con animación desde el recuadro =====
+  // Sin titlebar / sin chrome de ventana — sólo el contenido pluma.
+  // El overlay arranca con las dimensiones del rect SVG y se expande
+  // a toda la pantalla (FLIP-style transition sobre left/top/w/h).
+  let plumaFsAbierto = null;
+  function abrirPlumaFs(url, title, theme, sourceEl) {
+    if (plumaFsAbierto) return; // un overlay a la vez
+
+    const bounds = sourceEl.getBoundingClientRect();
+    const overlay = document.createElement('div');
+    overlay.className = 'pluma-fs';
+    overlay.dataset.theme = theme || 'gioser';
+    overlay.style.left   = bounds.left   + 'px';
+    overlay.style.top    = bounds.top    + 'px';
+    overlay.style.width  = bounds.width  + 'px';
+    overlay.style.height = bounds.height + 'px';
+
+    const contId = `pluma-fs-content-${++seq}`;
+    overlay.innerHTML = `
+      <button class="pluma-fs-close" type="button" aria-label="cerrar (Esc)">×</button>
+      <div class="pluma-fs-scroll">
+        <article id="${contId}" class="pluma-host"></article>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    // forzar reflow para que la transición arranque desde los bounds
+    void overlay.offsetWidth;
+    overlay.classList.add('expanded');
+
+    // cargar el markdown en cuanto el overlay existe; el fade-in
+    // del contenedor enmascara el flash inicial
+    cargar_md(contId, url, theme || 'gioser');
+
+    function cerrar() {
+      if (!plumaFsAbierto) return;
+      const ahora = sourceEl.getBoundingClientRect();
+      overlay.classList.add('closing');
+      overlay.classList.remove('expanded');
+      overlay.style.left   = ahora.left   + 'px';
+      overlay.style.top    = ahora.top    + 'px';
+      overlay.style.width  = ahora.width  + 'px';
+      overlay.style.height = ahora.height + 'px';
+      document.removeEventListener('keydown', escHandler);
+      plumaFsAbierto = null;
+      setTimeout(() => overlay.remove(), 420);
+    }
+
+    function escHandler(e) {
+      if (e.key === 'Escape') { e.preventDefault(); cerrar(); }
+    }
+    overlay.querySelector('.pluma-fs-close').addEventListener('click', cerrar);
+    document.addEventListener('keydown', escHandler);
+
+    plumaFsAbierto = { overlay, cerrar };
+  }
+
+  // Click en cualquier <g class="quad">: si fue sobre un .dom usa el
+  // data-doc de ese texto; si fue sobre el rect/fondo usa el del quad.
+  // En ambos casos la animación arranca desde el <rect> del cuadrante.
+  function bindQuadTriggers() {
+    document.querySelectorAll('svg#plano g.quad:not([data-bound])').forEach(g => {
+      g.setAttribute('data-bound', '1');
+      g.style.cursor = 'pointer';
+      g.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const tgt = ev.target;
+        let url, title, theme;
+        if (tgt.classList && tgt.classList.contains('dom')) {
+          url   = tgt.dataset.doc;
+          title = tgt.dataset.title;
+          theme = tgt.dataset.theme;
+        } else {
+          url   = g.dataset.doc;
+          title = g.dataset.title;
+          theme = g.dataset.theme;
+        }
+        if (!url) return;
+        const rectEl = g.querySelector('rect');
+        abrirPlumaFs(url, title, theme || 'gioser', rectEl);
+      });
+    });
+  }
+
   // wire-up: cualquier elemento [data-doc] o [data-panel] abre ventana
   function bindDocTriggers(root) {
     root.querySelectorAll('[data-doc]:not([data-bound])').forEach(el => {
+      // los .dom y los quads se manejan por bindQuadTriggers
+      if (el.closest && el.closest('svg#plano')) {
+        el.setAttribute('data-bound', '1');
+        return;
+      }
       el.setAttribute('data-bound', '1');
       el.addEventListener('click', (e) => {
         e.preventDefault();
@@ -518,6 +670,7 @@
     // Aplicar preferencias persistidas antes de mostrar nada interactivo,
     // así theme/accent/módulos arrancan respetando lo que ya configuró.
     try { aplicar_preferencias(); } catch (e) { console.error('aplicar_preferencias', e); }
+    bindQuadTriggers();
     bindDocTriggers(document);
     tickClock();
     setInterval(tickClock, 30_000);
