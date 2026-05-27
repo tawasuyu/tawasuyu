@@ -94,6 +94,18 @@ enum Cmd {
         #[arg(long)]
         kind: Option<String>,
     },
+    /// Marca una aserción como cita de otra fuente (≠ fuente del doc).
+    /// Ej.: una aserción de un doc de "Wikipedia" que dice «Aristóteles
+    /// sostenía que…» se cita a Aristóteles. `--unset` deshace.
+    Cite {
+        asercion_id: String,
+        /// Nombre de la fuente citada. Omitir con --unset para quitar la cita.
+        fuente: Option<String>,
+        #[arg(long)]
+        kind: Option<String>,
+        #[arg(long)]
+        unset: bool,
+    },
     /// "¿Qué dice el corpus sobre X?" — agrupa aserciones que apoyan o contradicen
     /// el query, con la opinión autoral y la fuente de cada una.
     Testimonio {
@@ -138,10 +150,11 @@ fn truncar(s: &str, n: usize) -> String {
 }
 
 fn etiqueta_fuente(att: &AsercionAtribuida) -> String {
+    let marca_cita = if att.citada { " (citada)" } else { "" };
     match &att.fuente {
         Some(f) => match &f.kind {
-            Some(k) => format!("{} [{}] / {}", f.nombre, k, att.doc_titulo),
-            None => format!("{} / {}", f.nombre, att.doc_titulo),
+            Some(k) => format!("{} [{}]{} / {}", f.nombre, k, marca_cita, att.doc_titulo),
+            None => format!("{}{} / {}", f.nombre, marca_cita, att.doc_titulo),
         },
         None => format!("(sin fuente) / {}", att.doc_titulo),
     }
@@ -202,18 +215,32 @@ async fn main() -> Result<()> {
                 anyhow::bail!("doc no tiene chunks (¿doc_id correcto, ya hiciste ingest?)");
             }
             let extractor = ExtractorHeuristico::default();
-            let mut total: Vec<Asercion> = Vec::new();
+            let mut extraidas = Vec::new();
             for c in &chunks {
-                let mut a = extractor.extraer(c).await?;
-                total.append(&mut a);
+                let mut a = extractor.extraer_con_atribucion(c).await?;
+                extraidas.append(&mut a);
             }
-            store.persistir_aserciones(&total)?;
-            println!("aserciones extraídas: {}  (de {} chunks)", total.len(), chunks.len());
-            for a in total.iter().take(8) {
-                println!("  · {}  {}", fila_opinion(&a.opinion_autoral), truncar(&a.texto, 90));
+            let aserciones: Vec<Asercion> = extraidas.iter().map(|e| e.asercion.clone()).collect();
+            store.persistir_aserciones(&aserciones)?;
+            // Atribuir cualquier cita detectada.
+            let mut citas_aplicadas = 0usize;
+            for e in &extraidas {
+                if let Some(nombre) = &e.fuente_citada_nombre {
+                    let fid = store.obtener_o_crear_fuente(nombre, None)?;
+                    store.asignar_fuente_citada(e.asercion.id, Some(fid))?;
+                    citas_aplicadas += 1;
+                }
             }
-            if total.len() > 8 {
-                println!("  … (+{} más, persistidas)", total.len() - 8);
+            println!("aserciones extraídas: {}  (de {} chunks)", aserciones.len(), chunks.len());
+            if citas_aplicadas > 0 {
+                println!("citas inline detectadas: {citas_aplicadas} (\"Según X, …\" / \"Para X, …\")");
+            }
+            for (a, e) in aserciones.iter().zip(extraidas.iter()).take(8) {
+                let cita = e.fuente_citada_nombre.as_deref().map(|n| format!(" → cita «{n}»")).unwrap_or_default();
+                println!("  · {}{}  {}", fila_opinion(&a.opinion_autoral), cita, truncar(&a.texto, 90));
+            }
+            if aserciones.len() > 8 {
+                println!("  … (+{} más, persistidas)", aserciones.len() - 8);
             }
         }
         Cmd::Nli { doc_id, umbral, backend } => {
@@ -315,6 +342,18 @@ async fn main() -> Result<()> {
             let fuente_id = store.obtener_o_crear_fuente(&fuente, kind.as_deref())?;
             store.asignar_fuente_a_doc(doc_id, Some(fuente_id))?;
             println!("doc {} ahora atribuido a «{}»", doc_id.0, fuente);
+        }
+        Cmd::Cite { asercion_id, fuente, kind, unset } => {
+            let aid = parse_asercion_id(&asercion_id)?;
+            if unset {
+                store.asignar_fuente_citada(aid, None)?;
+                println!("cita removida de aserción {}", aid.0);
+            } else {
+                let nombre = fuente.context("falta el nombre de la fuente (o --unset)")?;
+                let fid = store.obtener_o_crear_fuente(&nombre, kind.as_deref())?;
+                store.asignar_fuente_citada(aid, Some(fid))?;
+                println!("aserción {} citada a «{}»", aid.0, nombre);
+            }
         }
         Cmd::Propagar { asercion_id } => {
             let seed_id = parse_asercion_id(&asercion_id)?;

@@ -13,9 +13,30 @@ use async_trait::async_trait;
 use iniy_core::{Asercion, AsercionId, Opinion};
 use iniy_ingest::Chunk;
 
+/// Aserción tal como sale del extractor + opcionalmente el nombre de la
+/// fuente *citada* — distinta de la fuente del documento. Ej. el doc puede
+/// ser de "Wikipedia" pero contener «Según Aristóteles, …»: la fuente
+/// citada es "Aristóteles".
+#[derive(Debug, Clone)]
+pub struct AsercionExtraida {
+    pub asercion: Asercion,
+    pub fuente_citada_nombre: Option<String>,
+}
+
 #[async_trait]
 pub trait Extractor: Send + Sync {
+    /// Extracción mínima — sin atribución de citas. Implementadores nuevos
+    /// pueden enriquecer vía `extraer_con_atribucion`.
     async fn extraer(&self, chunk: &Chunk) -> Result<Vec<Asercion>>;
+
+    /// Como `extraer` pero detectando además citas inline ("Según X,…",
+    /// "Para X,…"). Por defecto, devuelve las aserciones de `extraer`
+    /// sin marcar ninguna como cita.
+    async fn extraer_con_atribucion(&self, chunk: &Chunk) -> Result<Vec<AsercionExtraida>> {
+        Ok(self.extraer(chunk).await?.into_iter()
+            .map(|a| AsercionExtraida { asercion: a, fuente_citada_nombre: None })
+            .collect())
+    }
 }
 
 /// Stub que devuelve una lista vacía. Útil para tests del pipeline antes
@@ -45,21 +66,77 @@ impl Default for ExtractorHeuristico {
 #[async_trait]
 impl Extractor for ExtractorHeuristico {
     async fn extraer(&self, chunk: &Chunk) -> Result<Vec<Asercion>> {
+        Ok(self
+            .extraer_con_atribucion(chunk)
+            .await?
+            .into_iter()
+            .map(|a| a.asercion)
+            .collect())
+    }
+
+    async fn extraer_con_atribucion(&self, chunk: &Chunk) -> Result<Vec<AsercionExtraida>> {
         let mut out = Vec::new();
         for oracion in dividir_en_oraciones(&chunk.texto) {
             let t = oracion.trim();
             if t.chars().count() < self.min_caracteres {
                 continue;
             }
-            out.push(Asercion {
+            let (fuente_citada_nombre, texto_limpio) = match detectar_cita(t) {
+                Some((nombre, resto)) => (Some(nombre), resto),
+                None => (None, t.to_string()),
+            };
+            if texto_limpio.chars().count() < self.min_caracteres {
+                continue;
+            }
+            let asercion = Asercion {
                 id: AsercionId::nuevo(),
                 doc_id: chunk.doc_id,
                 chunk_id: chunk.id,
-                texto: t.to_string(),
-                opinion_autoral: inferir_opinion(t),
-            });
+                texto: texto_limpio.clone(),
+                opinion_autoral: inferir_opinion(&texto_limpio),
+            };
+            out.push(AsercionExtraida { asercion, fuente_citada_nombre });
         }
         Ok(out)
+    }
+}
+
+/// Detecta atribución inline en español: "Según X, …" o "Para X, …".
+/// Devuelve `(nombre_fuente_citada, resto_sin_el_prefijo)` o `None`.
+/// El nombre se limita a 60 caracteres para evitar capturar frases largas.
+pub fn detectar_cita(texto: &str) -> Option<(String, String)> {
+    let trim = texto.trim_start();
+    for prefijo in ["Según ", "según ", "Para ", "para "] {
+        if let Some(rest) = trim.strip_prefix(prefijo) {
+            let mut fin_nombre = None;
+            for (i, c) in rest.char_indices() {
+                if matches!(c, ',' | ':' | '.') {
+                    fin_nombre = Some(i);
+                    break;
+                }
+                if i > 80 {
+                    return None;
+                }
+            }
+            let fin = fin_nombre?;
+            let nombre = rest[..fin].trim().to_string();
+            if nombre.is_empty() || nombre.chars().count() > 60 {
+                return None;
+            }
+            let resto = rest[fin + 1..].trim_start().to_string();
+            // Capitaliza la primera letra del resto si quedó en minúscula.
+            let resto = capitalizar_inicial(&resto);
+            return Some((nombre, resto));
+        }
+    }
+    None
+}
+
+fn capitalizar_inicial(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + c.as_str(),
+        None => String::new(),
     }
 }
 
@@ -164,5 +241,39 @@ mod tests {
         assert_eq!(asercs.len(), 1);
         assert_eq!(asercs[0].doc_id, c.doc_id);
         assert_eq!(asercs[0].chunk_id, c.id);
+    }
+
+    #[test]
+    fn detectar_cita_segun_extrae_nombre_y_limpia() {
+        let r = detectar_cita("Según Aristóteles, el sol gira alrededor de la Tierra.");
+        assert_eq!(r.as_ref().map(|(n, _)| n.as_str()), Some("Aristóteles"));
+        assert!(r.unwrap().1.starts_with("El sol"));
+    }
+
+    #[test]
+    fn detectar_cita_para_extrae_nombre() {
+        let r = detectar_cita("Para Heráclito, todo fluye.");
+        assert_eq!(r.as_ref().map(|(n, _)| n.as_str()), Some("Heráclito"));
+        assert_eq!(r.unwrap().1, "Todo fluye.");
+    }
+
+    #[test]
+    fn detectar_cita_sin_prefijo_es_none() {
+        assert!(detectar_cita("El sol gira alrededor de la Tierra.").is_none());
+    }
+
+    #[test]
+    fn detectar_cita_nombre_demasiado_largo_es_none() {
+        let largo = "x ".repeat(50);
+        assert!(detectar_cita(&format!("Según {largo}, algo.")).is_none());
+    }
+
+    #[tokio::test]
+    async fn extractor_heuristico_marca_fuente_citada() {
+        let c = chunk_con("Según Aristóteles, el cosmos es eterno y no tuvo comienzo en el tiempo.");
+        let asercs = ExtractorHeuristico::default().extraer_con_atribucion(&c).await.unwrap();
+        assert_eq!(asercs.len(), 1);
+        assert_eq!(asercs[0].fuente_citada_nombre.as_deref(), Some("Aristóteles"));
+        assert!(asercs[0].asercion.texto.starts_with("El cosmos"));
     }
 }

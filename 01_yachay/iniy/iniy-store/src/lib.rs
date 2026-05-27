@@ -24,12 +24,16 @@ pub struct DocumentoResumen {
 }
 
 /// Una aserción con su contexto atribucional: en qué doc apareció y de qué
-/// fuente viene. Es el átomo de la consulta `testimonio`: "quién dice qué".
+/// fuente viene. La `fuente` es la EFECTIVA: si la aserción cita a otra fuente
+/// (campo `fuente_citada_id` en DB, ej. «Según Aristóteles, …»), la fuente
+/// efectiva es la citada; si no, la del documento. El flag `citada` distingue
+/// el caso para la UI.
 #[derive(Debug, Clone)]
 pub struct AsercionAtribuida {
     pub asercion: Asercion,
     pub doc_titulo: String,
     pub fuente: Option<Fuente>,
+    pub citada: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +100,25 @@ impl Store {
             "#,
         )?;
         self.migrar_documentos_fuente_id()?;
+        self.migrar_aserciones_fuente_citada()?;
+        Ok(())
+    }
+
+    fn migrar_aserciones_fuente_citada(&self) -> Result<()> {
+        let mut stmt = self.conn.prepare("PRAGMA table_info(aserciones)")?;
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))?
+            .collect::<rusqlite::Result<_>>()?;
+        if !cols.iter().any(|c| c == "fuente_citada_id") {
+            self.conn.execute(
+                "ALTER TABLE aserciones ADD COLUMN fuente_citada_id TEXT REFERENCES fuentes(id)",
+                [],
+            )?;
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_aserciones_fuente_citada ON aserciones(fuente_citada_id)",
+                [],
+            )?;
+        }
         Ok(())
     }
 
@@ -165,12 +188,12 @@ impl Store {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT f.id, f.nombre, f.kind,
-                   COUNT(DISTINCT d.id) AS n_docs,
-                   COUNT(DISTINCT a.id) AS n_aserciones
+                   (SELECT COUNT(*) FROM documentos d2 WHERE d2.fuente_id = f.id) AS n_docs,
+                   (SELECT COUNT(*) FROM aserciones a2
+                    JOIN documentos d3 ON d3.id = a2.doc_id
+                    WHERE a2.fuente_citada_id = f.id
+                       OR (a2.fuente_citada_id IS NULL AND d3.fuente_id = f.id)) AS n_aserciones
             FROM fuentes f
-            LEFT JOIN documentos d ON d.fuente_id = f.id
-            LEFT JOIN aserciones a ON a.doc_id = d.id
-            GROUP BY f.id
             ORDER BY f.nombre ASC
             "#,
         )?;
@@ -311,17 +334,21 @@ impl Store {
     }
 
     /// Todas las aserciones del corpus, cada una con su doc.titulo y fuente
-    /// (resuelta). Es el insumo de la consulta `testimonio`, que itera todo
-    /// y filtra por relación léxica contra el texto query.
+    /// EFECTIVA (citada > doc). Es el insumo de las consultas `testimonio` /
+    /// `propagar` / `consenso`.
     pub fn cargar_aserciones_atribuidas_todas(&self) -> Result<Vec<AsercionAtribuida>> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT a.id, a.doc_id, a.chunk_id, a.texto, a.opinion_json,
                    d.titulo,
-                   f.id AS f_id, f.nombre AS f_nombre, f.kind AS f_kind
+                   CASE WHEN fc.id IS NOT NULL THEN fc.id     ELSE fd.id     END AS f_id,
+                   CASE WHEN fc.id IS NOT NULL THEN fc.nombre ELSE fd.nombre END AS f_nombre,
+                   CASE WHEN fc.id IS NOT NULL THEN fc.kind   ELSE fd.kind   END AS f_kind,
+                   CASE WHEN fc.id IS NOT NULL THEN 1 ELSE 0 END AS citada
             FROM aserciones a
             JOIN documentos d ON d.id = a.doc_id
-            LEFT JOIN fuentes f ON f.id = d.fuente_id
+            LEFT JOIN fuentes fd ON fd.id = d.fuente_id
+            LEFT JOIN fuentes fc ON fc.id = a.fuente_citada_id
             "#,
         )?;
         let rows = stmt.query_map([], |r| {
@@ -335,11 +362,12 @@ impl Store {
                 r.get::<_, Option<String>>(6)?,
                 r.get::<_, Option<String>>(7)?,
                 r.get::<_, Option<String>>(8)?,
+                r.get::<_, i64>(9)?,
             ))
         })?;
         let mut out = Vec::new();
         for r in rows {
-            let (a_id_s, d_id_s, c_id_s, texto, op_json, d_titulo, f_id, f_nombre, f_kind) = r?;
+            let (a_id_s, d_id_s, c_id_s, texto, op_json, d_titulo, f_id, f_nombre, f_kind, citada) = r?;
             let id = AsercionId(Ulid::from_str(&a_id_s).with_context(|| format!("asercion_id inválido: {a_id_s}"))?);
             let doc_id = DocId(Ulid::from_str(&d_id_s).with_context(|| format!("doc_id inválido: {d_id_s}"))?);
             let chunk_id = ChunkId(Ulid::from_str(&c_id_s).with_context(|| format!("chunk_id inválido: {c_id_s}"))?);
@@ -356,9 +384,19 @@ impl Store {
                 asercion: Asercion { id, doc_id, chunk_id, texto, opinion_autoral },
                 doc_titulo: d_titulo,
                 fuente,
+                citada: citada != 0,
             });
         }
         Ok(out)
+    }
+
+    /// Marca una aserción como cita de otra fuente. `None` deshace.
+    pub fn asignar_fuente_citada(&mut self, asercion_id: AsercionId, fuente_id: Option<FuenteId>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE aserciones SET fuente_citada_id = ?2 WHERE id = ?1",
+            params![asercion_id.0.to_string(), fuente_id.map(|f| f.0.to_string())],
+        )?;
+        Ok(())
     }
 
     pub fn cargar_aserciones(&self, doc_id: DocId) -> Result<Vec<Asercion>> {
@@ -641,6 +679,53 @@ mod tests {
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].fuente.as_ref().unwrap().nombre, "Plotino");
         assert_eq!(v[0].doc_titulo, "demo");
+    }
+
+    #[test]
+    fn fuente_citada_supera_a_fuente_del_doc_en_atribuida() {
+        let mut s = Store::en_memoria().unwrap();
+        let f_doc = s.obtener_o_crear_fuente("Wikipedia", Some("wiki")).unwrap();
+        let f_citada = s.obtener_o_crear_fuente("Aristóteles", Some("autor")).unwrap();
+        let doc = doc_demo();
+        s.persistir_documento(&doc, Some(f_doc)).unwrap();
+        let a = asercion_demo(doc.id, doc.chunks[0].id, "El cosmos es eterno");
+        s.persistir_aserciones(&[a.clone()]).unwrap();
+        s.asignar_fuente_citada(a.id, Some(f_citada)).unwrap();
+        let v = s.cargar_aserciones_atribuidas_todas().unwrap();
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].fuente.as_ref().unwrap().nombre, "Aristóteles");
+        assert!(v[0].citada);
+    }
+
+    #[test]
+    fn aserciones_sin_cita_usan_fuente_del_doc() {
+        let mut s = Store::en_memoria().unwrap();
+        let f = s.obtener_o_crear_fuente("Anaximandro", Some("autor")).unwrap();
+        let doc = doc_demo();
+        s.persistir_documento(&doc, Some(f)).unwrap();
+        let a = asercion_demo(doc.id, doc.chunks[0].id, "X");
+        s.persistir_aserciones(&[a]).unwrap();
+        let v = s.cargar_aserciones_atribuidas_todas().unwrap();
+        assert_eq!(v[0].fuente.as_ref().unwrap().nombre, "Anaximandro");
+        assert!(!v[0].citada);
+    }
+
+    #[test]
+    fn listar_fuentes_cuenta_aserciones_citadas() {
+        let mut s = Store::en_memoria().unwrap();
+        let f_doc = s.obtener_o_crear_fuente("Doxógrafo", None).unwrap();
+        let f_cita = s.obtener_o_crear_fuente("Tales", Some("autor")).unwrap();
+        let doc = doc_demo();
+        s.persistir_documento(&doc, Some(f_doc)).unwrap();
+        let a1 = asercion_demo(doc.id, doc.chunks[0].id, "agua principio");
+        let a2 = asercion_demo(doc.id, doc.chunks[0].id, "otra cosa");
+        s.persistir_aserciones(&[a1.clone(), a2]).unwrap();
+        s.asignar_fuente_citada(a1.id, Some(f_cita)).unwrap();
+        let lista = s.listar_fuentes().unwrap();
+        let tales = lista.iter().find(|r| r.fuente.nombre == "Tales").unwrap();
+        let doxo = lista.iter().find(|r| r.fuente.nombre == "Doxógrafo").unwrap();
+        assert_eq!(tales.n_aserciones, 1); // la citada
+        assert_eq!(doxo.n_aserciones, 1);  // la que cae al doc
     }
 
     #[test]
