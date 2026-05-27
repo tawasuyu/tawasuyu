@@ -774,6 +774,110 @@ pub fn longitud_registro(cabecera: &[u8]) -> Option<usize> {
 }
 
 // =============================================================================
+//  Fase 60 — Asistente Akasha: tipos de mensaje del canal del asistente
+// -----------------------------------------------------------------------------
+//  La app `asistente.wasm` (kernel-side) y el `asistente-puente` (host-side)
+//  conversan por un canal Akasha bien conocido. Estos tipos definen el
+//  protocolo. Diseñado para serializarse con `postcard` (el mismo encoder
+//  que usa todo el resto del kernel) y vivir en `#![no_std] + alloc` para
+//  cruzar la frontera kernel-wasm sin friction.
+//
+//  ESTADO (Fase 60 v1): tipos definidos, sin código que los consuma todavía.
+//  Ver `docs/ASISTENTE_WAWA.md` §2.2 para el contexto del diseño.
+// =============================================================================
+
+/// Canal Akasha bien conocido para el asistente. ASCII `"AS"` = 0x4153. El
+/// kernel filtra paquetes con este canal hacia los suscriptores del oficio
+/// asistente; el puente Linux abre un socket raw que suscribe al mismo
+/// número para recibir consultas y enviar propuestas.
+pub const CANAL_ASISTENTE: u16 = 0x4153;
+
+/// Acción que el LLM (vía el puente) propone al asistente. La app pinta
+/// la propuesta, el humano decide. Acciones potentes (re-anclar manifiesto,
+/// cambiar configuración) referencian objetos del grafo por `Hash` — el
+/// puente los preparó y los ingestó vía Akasha; el kernel los verifica al
+/// aplicar.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub enum AccionPropuesta {
+    /// Lanzar la app `plantilla`-ésima del manifiesto. Equivalente al
+    /// `Mando::LanzarFila` del launcher, pero dirigido por LLM.
+    LanzarApp { plantilla: u32 },
+    /// Re-anclar el manifiesto al hash propuesto. Requiere firma humana
+    /// vía `daemon-firma` antes de invocar `sys_manifiesto_proponer`.
+    InstalarApp { manifiesto_propuesto: Hash },
+    /// Cambiar la `Configuracion` activa al hash propuesto. Mismo flujo
+    /// de firma humana que `InstalarApp`.
+    CambiarConfiguracion { config_propuesta: Hash },
+    /// Sin efecto sobre el sistema — el LLM nada más anota algo para que
+    /// el humano lo lea. Útil para responder preguntas tipo "¿cuántas
+    /// apps tengo?" sin disparar acciones.
+    Notar { texto: String },
+}
+
+/// Contexto del estado actual del nodo wawa que la app envía al puente
+/// junto con la consulta. Permite que el LLM responda con info concreta
+/// (nombres de apps reales, configuración activa) en lugar de a ciegas.
+/// Lo que se incluye está acotado deliberadamente — más campos = más
+/// tokens en el system prompt = más coste.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug, Default)]
+pub struct Contexto {
+    /// Nombres de las apps del manifiesto vivo, en el orden del catálogo
+    /// del launcher. El LLM puede usar `LanzarApp { plantilla: i }` con
+    /// el índice de la fila correspondiente.
+    pub apps: Vec<String>,
+    /// Hash del manifiesto vigente. Permite que el puente detecte si su
+    /// caché local quedó stale (otro nodo re-ancló en paralelo) y
+    /// rerequiera contexto fresco.
+    pub manifiesto_actual: Option<Hash>,
+    /// Hash de la `Configuracion` activa, si la hay. `None` si el
+    /// manifiesto no enlaza ninguna.
+    pub configuracion_activa: Option<Hash>,
+}
+
+/// Un mensaje sobre el canal `CANAL_ASISTENTE`. La app y el puente
+/// hablan exclusivamente este enum — un atacante que envíe payload ajeno
+/// al canal se queda sin decodificar (postcard rechaza el frame).
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub enum MensajeAsistente {
+    /// La app pregunta. El puente lo retransmite al LLM. `id` correlaciona
+    /// request/response — un puente sirviendo varios nodos los distingue
+    /// por id ANTES de cualquier RTT extra.
+    Consulta {
+        id: u64,
+        prompt: String,
+        contexto: Contexto,
+    },
+    /// El puente responde con una propuesta interpretada del LLM.
+    /// `confianza` es la decisión del puente — `1.0` si el LLM produjo
+    /// JSON limpio y la acción está en la lista blanca; valores menores
+    /// si tuvo que adivinar o si el parseo fue parcial.
+    Propuesta {
+        id: u64,
+        accion: AccionPropuesta,
+        explicacion: String,
+        confianza: f32,
+    },
+    /// El puente reporta un fallo de transporte o parseo. El `id`
+    /// correlaciona contra la consulta original; el `motivo` es un string
+    /// libre que la app pinta al humano.
+    Error { id: u64, motivo: String },
+}
+
+impl MensajeAsistente {
+    /// Serializa con postcard. El kernel lo manda por Akasha; el puente
+    /// lo recibe y deserializa.
+    pub fn serializar(&self) -> Result<Vec<u8>, postcard::Error> {
+        postcard::to_allocvec(self)
+    }
+
+    /// Deserializa desde bytes. Si el frame está truncado o el canal
+    /// trajo basura ajena, devuelve error sin tocar `self`.
+    pub fn deserializar(bytes: &[u8]) -> Result<Self, postcard::Error> {
+        postcard::from_bytes(bytes)
+    }
+}
+
+// =============================================================================
 //  Pruebas — el format debe ser un espejo perfecto: lo escrito se relee igual
 // =============================================================================
 
@@ -1282,5 +1386,95 @@ mod pruebas {
         let leido = SuperBloque::deserializar(&bytes).unwrap();
         assert_eq!(leido.log_inicio, 32_768);
         assert_eq!(leido.cursor, 33_500);
+    }
+
+    // === Fase 60: MensajeAsistente ===
+
+    #[test]
+    fn mensaje_asistente_consulta_ida_y_vuelta() {
+        let msg = MensajeAsistente::Consulta {
+            id: 0xDEADBEEF,
+            prompt: "lanza pluma".into(),
+            contexto: Contexto {
+                apps: vec!["pluma".into(), "bitacora".into()],
+                manifiesto_actual: Some([0x11; 32]),
+                configuracion_activa: None,
+            },
+        };
+        let bytes = msg.serializar().unwrap();
+        let leido = MensajeAsistente::deserializar(&bytes).unwrap();
+        assert_eq!(leido, msg);
+    }
+
+    #[test]
+    fn mensaje_asistente_propuesta_lanzar_app() {
+        let msg = MensajeAsistente::Propuesta {
+            id: 42,
+            accion: AccionPropuesta::LanzarApp { plantilla: 7 },
+            explicacion: "abre pluma para tomar notas".into(),
+            confianza: 0.95,
+        };
+        let bytes = msg.serializar().unwrap();
+        let leido = MensajeAsistente::deserializar(&bytes).unwrap();
+        assert_eq!(leido, msg);
+    }
+
+    #[test]
+    fn mensaje_asistente_propuesta_instalar_app() {
+        let msg = MensajeAsistente::Propuesta {
+            id: 100,
+            accion: AccionPropuesta::InstalarApp {
+                manifiesto_propuesto: [0xAB; 32],
+            },
+            explicacion: "manifiesto v2 firmado".into(),
+            confianza: 1.0,
+        };
+        let bytes = msg.serializar().unwrap();
+        let leido = MensajeAsistente::deserializar(&bytes).unwrap();
+        assert_eq!(leido, msg);
+    }
+
+    #[test]
+    fn mensaje_asistente_error_ida_y_vuelta() {
+        let msg = MensajeAsistente::Error {
+            id: 0,
+            motivo: "LLM rate-limited".into(),
+        };
+        let bytes = msg.serializar().unwrap();
+        let leido = MensajeAsistente::deserializar(&bytes).unwrap();
+        assert_eq!(leido, msg);
+    }
+
+    #[test]
+    fn mensaje_asistente_basura_rechazada() {
+        // Bytes arbitrarios — postcard debe rechazar sin panic.
+        let basura = [0xFFu8; 16];
+        assert!(MensajeAsistente::deserializar(&basura).is_err());
+    }
+
+    #[test]
+    fn mensaje_asistente_propuesta_notar_sin_efecto() {
+        // `Notar` permite respuestas informativas: el LLM contesta una
+        // pregunta sin proponer una accion ejecutable.
+        let msg = MensajeAsistente::Propuesta {
+            id: 1,
+            accion: AccionPropuesta::Notar {
+                texto: "tienes 3 apps abiertas en el escritorio 1".into(),
+            },
+            explicacion: String::new(),
+            confianza: 1.0,
+        };
+        let bytes = msg.serializar().unwrap();
+        let leido = MensajeAsistente::deserializar(&bytes).unwrap();
+        assert_eq!(leido, msg);
+    }
+
+    #[test]
+    fn canal_asistente_no_choca_con_otros() {
+        // 0x4153 = "AS". Si más adelante se registran otros canales
+        // (chasqui, agora, etc.) este test recuerda el namespace
+        // ocupado. Cambiar el valor requiere actualizar el doc.
+        assert_eq!(CANAL_ASISTENTE, 0x4153);
+        assert_eq!(&CANAL_ASISTENTE.to_be_bytes(), b"AS");
     }
 }
