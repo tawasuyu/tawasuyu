@@ -33,6 +33,8 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, View};
 use llimphi_widget_button::{button_styled, ButtonPalette};
 use llimphi_widget_tiled::{tiled_view_reorderable_cols, TileSpec, TiledPalette};
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use wawa_config_llimphi::theme_from_wawa;
 
 const WHEEL_SIZE: f32 = 720.0;
@@ -47,7 +49,8 @@ enum Msg {
     SwapTiles(usize, usize),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 enum OverlayKind {
     Transit,
     Progression,
@@ -103,7 +106,8 @@ impl OverlayKind {
 /// Identidad de cada tile del sidebar. El orden lo controla
 /// `Model::panel_order`. Los tiles dinámicos (gated por overlay) entran o
 /// salen del vec según `Model::overlays`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 enum TileId {
     Carta,
     Modulos,
@@ -150,6 +154,105 @@ const DEFAULT_ORDER: &[TileId] = &[
 /// `cosmos-corpus`. Se reemplaza más adelante por un loader que mire en
 /// `~/.config/cosmos/corpus.ron` y caiga a este si no existe.
 const CORPUS_DEFAULT_RON: &str = include_str!("../../cosmos-corpus/ejemplo.ron");
+
+/// Nombre del archivo JSON donde persiste el estado de la UI (orden de
+/// tiles + overlays activos + armónico). Vive en el config dir de wawa
+/// para no acoplar a un dirs propio por app — un solo árbol de config.
+const UI_STATE_FILE: &str = "cosmos-ui.json";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct UiState {
+    #[serde(default)]
+    panel_order: Vec<TileId>,
+    #[serde(default)]
+    overlays: Vec<OverlayKind>,
+    #[serde(default = "default_harmonic")]
+    harmonic: u32,
+}
+
+fn default_harmonic() -> u32 {
+    1
+}
+
+impl Default for UiState {
+    fn default() -> Self {
+        Self {
+            panel_order: DEFAULT_ORDER.to_vec(),
+            overlays: Vec::new(),
+            harmonic: 1,
+        }
+    }
+}
+
+fn ui_state_path() -> Option<PathBuf> {
+    wawa_config::config_dir().map(|d| d.join(UI_STATE_FILE))
+}
+
+fn load_ui_state() -> UiState {
+    let Some(path) = ui_state_path() else {
+        return UiState::default();
+    };
+    let Ok(bytes) = std::fs::read(&path) else {
+        return UiState::default();
+    };
+    match serde_json::from_slice::<UiState>(&bytes) {
+        Ok(mut s) => {
+            // Garantía: las always-on tienen que estar. Si el archivo viejo
+            // tiene un order corto o le falta alguna, completamos al final
+            // sin perder el orden que el usuario ya eligió.
+            for tid in DEFAULT_ORDER {
+                if !s.panel_order.contains(tid) {
+                    s.panel_order.push(*tid);
+                }
+            }
+            // Reconciliar tiles gated con overlays activos: si el archivo
+            // dice "Uranian on" pero no hay TileId::Uraniano en el order,
+            // lo agregamos. Y al revés: tile dinámico sin overlay → fuera.
+            reconcile(&mut s);
+            s
+        }
+        Err(e) => {
+            eprintln!("cosmos · ui-state: no se pudo parsear {path:?}: {e}");
+            UiState::default()
+        }
+    }
+}
+
+/// Reescribe `s.panel_order` para mantener la invariante:
+///   - todas las always-on están presentes
+///   - cada TileId gated existe sii su overlay está en `s.overlays`
+fn reconcile(s: &mut UiState) {
+    let active_gated: Vec<TileId> = s
+        .overlays
+        .iter()
+        .filter_map(|k| overlay_tile(*k))
+        .collect();
+    s.panel_order.retain(|tid| {
+        is_always_on(*tid) || active_gated.contains(tid)
+    });
+    for tid in &active_gated {
+        if !s.panel_order.contains(tid) {
+            s.panel_order.push(*tid);
+        }
+    }
+}
+
+fn is_always_on(tid: TileId) -> bool {
+    DEFAULT_ORDER.contains(&tid)
+}
+
+fn save_ui_state(s: &UiState) {
+    let Some(path) = ui_state_path() else { return };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let Ok(json) = serde_json::to_vec_pretty(s) else {
+        return;
+    };
+    if let Err(e) = std::fs::write(&path, json) {
+        eprintln!("cosmos · ui-state: write fallido {path:?}: {e}");
+    }
+}
 
 /// Devuelve el TileId dinámico que aporta un overlay, si aporta uno. Los
 /// overlays que solo tienen efecto visual sobre el wheel (Lots, FixedStars,
@@ -204,18 +307,17 @@ impl App for Cosmos {
         .ok();
 
         let chart = sample_chart();
-        let overlays: Vec<OverlayKind> = Vec::new();
-        let harmonic = 1;
-        let (render, error) = compute(&chart, &overlays, harmonic);
+        let ui = load_ui_state();
+        let (render, error) = compute(&chart, &ui.overlays, ui.harmonic);
         let corpus = Corpus::desde_ron(CORPUS_DEFAULT_RON).unwrap_or_default();
         Model {
             chart,
-            overlays,
-            harmonic,
+            overlays: ui.overlays,
+            harmonic: ui.harmonic,
             render,
             theme,
             error,
-            panel_order: DEFAULT_ORDER.to_vec(),
+            panel_order: ui.panel_order,
             corpus,
             _wawa_watcher: watcher,
         }
@@ -223,6 +325,7 @@ impl App for Cosmos {
 
     fn update(model: Model, msg: Msg, _: &Handle<Msg>) -> Model {
         let mut m = model;
+        let mut persist = false;
         match msg {
             Msg::WawaConfigChanged(cfg) => {
                 m.theme = theme_from_wawa(&cfg, &m.theme);
@@ -250,6 +353,7 @@ impl App for Cosmos {
                 let (render, error) = compute(&m.chart, &m.overlays, m.harmonic);
                 m.render = render;
                 m.error = error;
+                persist = true;
             }
             Msg::SetHarmonic(n) => {
                 if m.harmonic != n {
@@ -257,13 +361,22 @@ impl App for Cosmos {
                     let (render, error) = compute(&m.chart, &m.overlays, m.harmonic);
                     m.render = render;
                     m.error = error;
+                    persist = true;
                 }
             }
             Msg::SwapTiles(from, to) => {
                 if from != to && from < m.panel_order.len() && to < m.panel_order.len() {
                     m.panel_order.swap(from, to);
+                    persist = true;
                 }
             }
+        }
+        if persist {
+            save_ui_state(&UiState {
+                panel_order: m.panel_order.clone(),
+                overlays: m.overlays.clone(),
+                harmonic: m.harmonic,
+            });
         }
         m
     }
