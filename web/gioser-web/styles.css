@@ -289,7 +289,7 @@ a:hover { color: var(--fg-text); }
   position: absolute;
   display: flex;
   flex-direction: column;
-  background: var(--bg-panel);
+  background: var(--bg-app);
   border: 1px solid var(--border);
   border-radius: 4px;
   box-shadow:
@@ -302,36 +302,45 @@ a:hover { color: var(--fg-text); }
   min-height: 220px;
 }
 .window.focused {
-  border-color: var(--border-focus);
+  border-color: var(--border);
 }
+/* Maximized = ocupa todo el #windows-layer (que ya está entre topbar y
+ * taskbar). Sin border, sin radius, sin sombra: se integra al escritorio. */
 .window.maximized {
   left: 0 !important;
   top: 0 !important;
   width: 100% !important;
   height: 100% !important;
+  border: none;
   border-radius: 0;
-  border-color: var(--border-focus);
+  box-shadow: none;
 }
 
 .win-titlebar {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 6px 0 10px;
-  height: 28px;
+  padding: 0 6px 0 12px;
+  height: 30px;
   background: var(--bg-panel-alt);
   border-bottom: 1px solid var(--border);
-  cursor: move;
   user-select: none;
   font-size: 12px;
   color: var(--fg-muted);
 }
+.window.maximized .win-titlebar {
+  /* En maximizado no se arrastra; cursor por defecto. */
+  cursor: default;
+}
+.window:not(.maximized) .win-titlebar { cursor: move; }
 .window.focused .win-titlebar {
-  background: linear-gradient(180deg, #1B2230 0%, #161A24 100%);
   color: var(--fg-text);
 }
 .win-icon { color: var(--accent); font-size: 12px; }
-.win-title { letter-spacing: 0.04em; }
+.win-title {
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+}
 .win-spacer { flex: 1; }
 
 .win-btn {
@@ -374,12 +383,15 @@ a:hover { color: var(--fg-text); }
   background: linear-gradient(135deg, transparent 50%, var(--border) 50%, var(--border) 60%, transparent 60%, transparent 70%, var(--border) 70%, var(--border) 80%, transparent 80%);
 }
 
-/* contenido pluma dentro de la ventana */
+/* contenido pluma dentro de la ventana — ancho cómodo de lectura,
+ * centrado, con padding generoso arriba para que respire. */
 .pluma-host {
-  padding: 16px 22px 24px;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 48px 32px 80px;
   font-family: var(--sans);
-  font-size: 14px;
-  line-height: 1.65;
+  font-size: 15px;
+  line-height: 1.7;
   color: var(--fg-text);
 }
 .pluma-host h1, .pluma-host h2, .pluma-host h3, .pluma-host h4 {
@@ -944,99 +956,3 @@ a:hover { color: var(--fg-text); }
   --accent:          #E89B6E;
 }
 
-/* ===================== pluma a pantalla-completa =====================
- * Overlay sin titlebar ni chrome — sólo el contenido pluma.
- * Arranca con las dimensiones del <rect> del cuadrante y se expande.
- * ==================================================================== */
-.pluma-fs {
-  position: fixed;
-  background: var(--bg-app);
-  border: 1px solid var(--accent);
-  border-radius: 4px;
-  box-shadow:
-    0 0 0 1px rgba(110,140,220,0.10),
-    0 24px 80px rgba(0,0,0,0.65),
-    0 8px 24px rgba(0,0,0,0.45);
-  z-index: 10000;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  /* la transición incluye geometría + radio + sombra para que el "morph"
-     desde el recuadro a pantalla completa se sienta orgánico */
-  transition:
-    left   0.42s cubic-bezier(.5,.0,.2,1),
-    top    0.42s cubic-bezier(.5,.0,.2,1),
-    width  0.42s cubic-bezier(.5,.0,.2,1),
-    height 0.42s cubic-bezier(.5,.0,.2,1),
-    border-radius 0.42s ease,
-    border-color 0.3s ease,
-    box-shadow 0.42s ease;
-  will-change: left, top, width, height;
-}
-.pluma-fs.expanded {
-  left: 0 !important;
-  top: 0 !important;
-  width: 100vw !important;
-  height: 100vh !important;
-  border-radius: 0;
-  border-color: transparent;
-}
-.pluma-fs.closing { pointer-events: none; }
-
-.pluma-fs-close {
-  position: absolute;
-  top: 14px;
-  right: 18px;
-  width: 34px;
-  height: 34px;
-  background: transparent;
-  border: none;
-  color: var(--fg-muted);
-  font-family: var(--mono);
-  font-size: 22px;
-  line-height: 1;
-  cursor: pointer;
-  border-radius: 50%;
-  z-index: 2;
-  opacity: 0;
-  transform: scale(0.7);
-  transition: opacity 0.25s 0.28s ease, transform 0.25s 0.28s ease, background 0.15s, color 0.15s;
-}
-.pluma-fs.expanded .pluma-fs-close {
-  opacity: 1;
-  transform: scale(1);
-}
-.pluma-fs-close:hover {
-  background: var(--bg-row-hover);
-  color: var(--fg-text);
-}
-
-.pluma-fs-scroll {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  opacity: 0;
-  transition: opacity 0.32s 0.18s ease;
-}
-.pluma-fs.expanded .pluma-fs-scroll { opacity: 1; }
-.pluma-fs-scroll::-webkit-scrollbar { width: 10px; }
-.pluma-fs-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
-
-/* Contenido pluma centrado en pantalla con ancho cómodo de lectura */
-.pluma-fs-scroll .pluma-host {
-  max-width: 760px;
-  margin: 0 auto;
-  padding: 64px 32px 80px;
-}
-
-/* tinte del borde según el tema del cuadrante */
-.pluma-fs[data-theme="unanchay"] { border-color: var(--c-unanchay); }
-.pluma-fs[data-theme="yachay"]   { border-color: var(--c-yachay); }
-.pluma-fs[data-theme="ruway"]    { border-color: var(--c-ruway); }
-.pluma-fs[data-theme="ukupacha"] { border-color: var(--c-ukupacha); }
-.pluma-fs[data-theme="aire"]     { border-color: var(--c-aire); }
-.pluma-fs[data-theme="fuego"]    { border-color: var(--c-fuego); }
-.pluma-fs[data-theme="tierra"]   { border-color: var(--c-tierra); }
-.pluma-fs[data-theme="agua"]     { border-color: var(--c-agua); }
-.pluma-fs[data-theme="cosmos"]   { border-color: var(--c-cosmos); }
-.pluma-fs.expanded { border-color: transparent; }

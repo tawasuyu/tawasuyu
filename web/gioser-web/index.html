@@ -346,34 +346,25 @@
     const id = `win-${++seq}`;
     const contId = `${id}-content`;
 
-    // posición en cascada
-    const offset = (ventanas.size % 8) * 28;
-    const x = 80 + offset;
-    const y = 60 + offset;
-
+    // Artículos abren ya maximizados dentro de #windows-layer (que está
+    // acotado entre topbar y taskbar via CSS). Sin drag / resize / max.
     const el = document.createElement('section');
-    el.className = 'window focused';
+    el.className = 'window focused maximized';
     el.dataset.theme = theme || 'gioser';
-    el.style.left = x + 'px';
-    el.style.top  = y + 'px';
-    el.style.width = '640px';
-    el.style.height = '480px';
     zTop += 1;
     el.style.zIndex = zTop;
 
     el.innerHTML = `
-      <header class="win-titlebar" data-drag="1">
+      <header class="win-titlebar">
         <span class="win-icon">▤</span>
         <span class="win-title"></span>
         <span class="win-spacer"></span>
         <button class="win-btn win-min"   type="button" aria-label="minimizar">─</button>
-        <button class="win-btn win-max"   type="button" aria-label="maximizar">▢</button>
         <button class="win-btn win-close" type="button" aria-label="cerrar">×</button>
       </header>
       <div class="win-body">
         <article id="${contId}" class="pluma-host"></article>
       </div>
-      <div class="win-resize" data-resize="1"></div>
     `;
     el.querySelector('.win-title').textContent = title;
     layer.appendChild(el);
@@ -394,62 +385,13 @@
     });
     taskItems.appendChild(taskEl);
 
-    const v = { id, title, url, theme, x, y, z: zTop, minimized: false, el, taskEl };
+    const v = { id, title, url, theme, z: zTop, minimized: false, el, taskEl };
     ventanas.set(id, v);
 
-    // focus on mousedown
     el.addEventListener('mousedown', () => traerAlFrente(id));
+    el.querySelector('.win-min').addEventListener('click',  (e) => { e.stopPropagation(); minimizar(id); });
+    el.querySelector('.win-close').addEventListener('click',(e) => { e.stopPropagation(); cerrar(id); });
 
-    // botones
-    el.querySelector('.win-min').addEventListener('click', (e) => { e.stopPropagation(); minimizar(id); });
-    el.querySelector('.win-close').addEventListener('click', (e) => { e.stopPropagation(); cerrar(id); });
-    el.querySelector('.win-max').addEventListener('click', (e) => {
-      e.stopPropagation();
-      el.classList.toggle('maximized');
-    });
-
-    // drag
-    const tb = el.querySelector('.win-titlebar');
-    let drag = null;
-    tb.addEventListener('mousedown', (e) => {
-      if (e.target.closest('.win-btn')) return;
-      if (el.classList.contains('maximized')) return;
-      drag = { dx: e.clientX - el.offsetLeft, dy: e.clientY - el.offsetTop };
-      e.preventDefault();
-    });
-    tb.addEventListener('dblclick', (e) => {
-      if (e.target.closest('.win-btn')) return;
-      el.classList.toggle('maximized');
-    });
-    document.addEventListener('mousemove', (e) => {
-      if (!drag) return;
-      const nx = Math.max(0, Math.min(window.innerWidth  - 100, e.clientX - drag.dx));
-      const ny = Math.max(0, Math.min(window.innerHeight - 80,  e.clientY - drag.dy));
-      el.style.left = nx + 'px';
-      el.style.top  = ny + 'px';
-    });
-    document.addEventListener('mouseup', () => { drag = null; resizing = null; });
-
-    // resize
-    const grip = el.querySelector('.win-resize');
-    let resizing = null;
-    grip.addEventListener('mousedown', (e) => {
-      resizing = {
-        sx: e.clientX, sy: e.clientY,
-        sw: el.offsetWidth, sh: el.offsetHeight,
-      };
-      e.preventDefault();
-      e.stopPropagation();
-    });
-    document.addEventListener('mousemove', (e) => {
-      if (!resizing) return;
-      const nw = Math.max(300, resizing.sw + (e.clientX - resizing.sx));
-      const nh = Math.max(200, resizing.sh + (e.clientY - resizing.sy));
-      el.style.width  = nw + 'px';
-      el.style.height = nh + 'px';
-    });
-
-    // cargar contenido
     cargar_md(contId, url, theme || 'gioser');
     return id;
   }
@@ -567,66 +509,8 @@
     return id;
   }
 
-  // ===== pluma pantalla-completa con animación desde el recuadro =====
-  // Sin titlebar / sin chrome de ventana — sólo el contenido pluma.
-  // El overlay arranca con las dimensiones del rect SVG y se expande
-  // a toda la pantalla (FLIP-style transition sobre left/top/w/h).
-  let plumaFsAbierto = null;
-  function abrirPlumaFs(url, title, theme, sourceEl) {
-    if (plumaFsAbierto) return; // un overlay a la vez
-
-    const bounds = sourceEl.getBoundingClientRect();
-    const overlay = document.createElement('div');
-    overlay.className = 'pluma-fs';
-    overlay.dataset.theme = theme || 'gioser';
-    overlay.style.left   = bounds.left   + 'px';
-    overlay.style.top    = bounds.top    + 'px';
-    overlay.style.width  = bounds.width  + 'px';
-    overlay.style.height = bounds.height + 'px';
-
-    const contId = `pluma-fs-content-${++seq}`;
-    overlay.innerHTML = `
-      <button class="pluma-fs-close" type="button" aria-label="cerrar (Esc)">×</button>
-      <div class="pluma-fs-scroll">
-        <article id="${contId}" class="pluma-host"></article>
-      </div>
-    `;
-    document.body.appendChild(overlay);
-
-    // forzar reflow para que la transición arranque desde los bounds
-    void overlay.offsetWidth;
-    overlay.classList.add('expanded');
-
-    // cargar el markdown en cuanto el overlay existe; el fade-in
-    // del contenedor enmascara el flash inicial
-    cargar_md(contId, url, theme || 'gioser');
-
-    function cerrar() {
-      if (!plumaFsAbierto) return;
-      const ahora = sourceEl.getBoundingClientRect();
-      overlay.classList.add('closing');
-      overlay.classList.remove('expanded');
-      overlay.style.left   = ahora.left   + 'px';
-      overlay.style.top    = ahora.top    + 'px';
-      overlay.style.width  = ahora.width  + 'px';
-      overlay.style.height = ahora.height + 'px';
-      document.removeEventListener('keydown', escHandler);
-      plumaFsAbierto = null;
-      setTimeout(() => overlay.remove(), 420);
-    }
-
-    function escHandler(e) {
-      if (e.key === 'Escape') { e.preventDefault(); cerrar(); }
-    }
-    overlay.querySelector('.pluma-fs-close').addEventListener('click', cerrar);
-    document.addEventListener('keydown', escHandler);
-
-    plumaFsAbierto = { overlay, cerrar };
-  }
-
   // Click en cualquier <g class="quad">: si fue sobre un .dom usa el
   // data-doc de ese texto; si fue sobre el rect/fondo usa el del quad.
-  // En ambos casos la animación arranca desde el <rect> del cuadrante.
   function bindQuadTriggers() {
     document.querySelectorAll('svg#plano g.quad:not([data-bound])').forEach(g => {
       g.setAttribute('data-bound', '1');
@@ -646,8 +530,7 @@
           theme = g.dataset.theme;
         }
         if (!url) return;
-        const rectEl = g.querySelector('rect');
-        abrirPlumaFs(url, title, theme || 'gioser', rectEl);
+        abrirVentana(url, title || url, theme || 'gioser');
       });
     });
   }
