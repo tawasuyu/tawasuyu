@@ -113,6 +113,42 @@ impl Grid3D {
         }
     }
 
+    /// Llama a `f(j)` por cada entidad `j` en `cell` y en sus 26 celdas
+    /// adyacentes (≤ 27 celdas). Respeta los bordes de la grilla. El callback
+    /// es responsable de filtrar `j == i` para evitar self-interacción.
+    ///
+    /// Diseñado para ser inlineado en el hot loop del kernel de fuerzas: el
+    /// compilador suele eliminar la indirección del closure por completo.
+    #[inline]
+    pub fn for_each_neighbor<F: FnMut(usize)>(&self, cell: CellId, mut f: F) {
+        let nx = self.dims[0] as i32;
+        let ny = self.dims[1] as i32;
+        let nz = self.dims[2] as i32;
+        let lin = cell.0 as i32;
+        let cx = lin % nx;
+        let cy = (lin / nx) % ny;
+        let cz = lin / (nx * ny);
+
+        for dz in -1..=1 {
+            let kz = cz + dz;
+            if kz < 0 || kz >= nz { continue; }
+            for dy in -1..=1 {
+                let ky = cy + dy;
+                if ky < 0 || ky >= ny { continue; }
+                for dx in -1..=1 {
+                    let kx = cx + dx;
+                    if kx < 0 || kx >= nx { continue; }
+                    let lin_n = (kx + ky * nx + kz * nx * ny) as usize;
+                    let mut p = self.heads[lin_n];
+                    while p != u32::MAX {
+                        f(p as usize);
+                        p = self.next[p as usize];
+                    }
+                }
+            }
+        }
+    }
+
     #[inline]
     fn link(&mut self, entity_idx: usize, cell: CellId) {
         self.next[entity_idx] = self.heads[cell.0 as usize];
@@ -151,6 +187,23 @@ mod tests {
         // clamp
         assert_eq!(g.cell_of_pos(-9.0, 0.5, 0.5).0, 0);
         assert_eq!(g.cell_of_pos(99.0, 99.0, 99.0).0, 4 * 4 * 4 - 1);
+    }
+
+    #[test]
+    fn for_each_neighbor_visits_27_or_fewer_cells() {
+        let mut w = World::with_capacity(8);
+        // Una partícula en cada celda del cubo 2×2×2 (origen ↓→↑)
+        for k in 0..2 { for j in 0..2 { for i in 0..2 {
+            w.spawn([i as f32 + 0.5, j as f32 + 0.5, k as f32 + 0.5],
+                    [0.; 3], 1.0, 0.0);
+        }}}
+        let mut g = Grid3D::new([0.; 3], 1.0, [4, 4, 4], w.len());
+        g.rebuild(&w);
+        let mut visited = Vec::new();
+        g.for_each_neighbor(CellId(0), |j| visited.push(j));
+        // Desde celda (0,0,0) las vecinas válidas son (0..=1)³ = 8 celdas, una
+        // partícula por celda → 8 visitas.
+        assert_eq!(visited.len(), 8);
     }
 
     #[test]

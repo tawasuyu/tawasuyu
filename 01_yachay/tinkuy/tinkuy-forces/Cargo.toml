@@ -1,0 +1,18 @@
+[package]
+name = "tinkuy-forces"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "tinkuy — kernels de fuerza física: Lennard-Jones (van der Waals + repulsión) y Coulomb (electrostática) con neighbor-list sobre las 27 celdas adyacentes. Paralelos sin atómicos vía double-counting."
+
+[features]
+default = ["cpu"]
+cpu = ["tinkuy-core/cpu", "dep:rayon"]
+simd = ["tinkuy-core/simd"]
+wasm = ["tinkuy-core/wasm"]
+
+[dependencies]
+tinkuy-core = { path = "../tinkuy-core", default-features = false }
+rayon = { workspace = true, optional = true }
