@@ -21,11 +21,15 @@ llimphi-hal = { path = "../../llimphi-hal" }
 winit = { workspace = true, features = ["android-native-activity"] }
 wgpu.workspace = true
 pollster.workspace = true
+# `log` se declara aquí (no en el bloque condicional Android) para que
+# `cargo check --workspace` en host pase: los macros de `log` son no-op
+# sin logger instalado. En Android, `android_logger` (más abajo) instala
+# el sink real hacia `logcat`.
+log = "0.4"
 
 [target.'cfg(target_os = "android")'.dependencies]
 android-activity = { version = "0.6", features = ["native-activity"] }
 android_logger = "0.14"
-log = "0.4"
 
 # Metadata para xbuild / cargo-apk — define el manifiesto Android que se
 # inyecta en el APK final.
