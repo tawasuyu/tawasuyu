@@ -1,51 +1,60 @@
 // =============================================================================
-//  renaser :: apps/ide — Fase 28 :: el IDE semantico
+//  renaser :: apps/ide — Fase 28/29 :: IDE semantico con emisor Forth->WASM
 // -----------------------------------------------------------------------------
-//  Tres paneles internos sobre el lienzo natural 480x400, sin pretensiones
-//  graficas: una fila por panel, cromo minimo, fuente 5x7 embebida.
+//  El IDE habita en su jaula de 4 MiB y trata el codigo como NODOS DEL GRAFO
+//  direccionado por contenido. Tres paneles internos sobre el lienzo natural
+//  480x400 (ALFA editor / BETA AST / GAMMA consola).
 //
-//   Panel ALFA  (editor)         altura 200 px
-//   Panel BETA  (AST / hash)     altura  90 px
-//   Panel GAMMA (consola)        altura 110 px
+//  FASE 29 :: F1 deja de registrar un modulo hardcoded; ahora COMPILA en
+//  caliente el buffer del editor con un emisor Forth->WASM `#![no_std]`
+//  zero-alloc. Reconoce expresiones de pila simples ("5 10 +") y produce
+//  un modulo WebAssembly entero (magic, type, func, export, code) sobre
+//  buffers en pila. Si la sintaxis es correcta el IDE graba el texto
+//  fuente como objeto del grafo (sys_object_put -> HASH_FUENTE) y a
+//  continuacion registra el binario (sys_subsistema_registrar_ejecutable
+//  -> HASH_BINARIO). BETA muestra los DOS hashes apilados, conectados por
+//  una linea acento vertical: el grafo semantico explicito.
 //
-//  El usuario teclea sobre un BUFFER lineal acotado a 256 bytes. Al pulsar:
+//  Hotkeys:
 //
-//   F1  ->  sys_subsistema_registrar_ejecutable con un MODULO WASM MINIMO
-//           hardcoded (`\0asm\1\0\0\0`). Demuestra el OK path: el hash
-//           devuelto aparece en el Panel BETA y la consola dice "REGISTRADO".
+//   F1  ->  Compila el texto del editor, graba fuente, registra binario.
+//           Camino feliz: GAMMA dice "OK BINARIO EMITIDO" y BETA actualiza.
+//           Camino de error: GAMMA muestra PayloadInvalido (-7).
 //
-//   F2  ->  sys_subsistema_registrar_ejecutable con el TEXTO QUE TECLEASTE.
-//           El kernel rechaza con `PayloadInvalido` (-7) porque el texto
-//           no tiene magia WebAssembly. La consola muestra el codigo y la
-//           leccion: validacion semantica funcionando.
+//   F2  ->  Registra el TEXTO TECLEADO crudo (sin compilar). El kernel
+//           rechaza con PayloadInvalido porque el texto no es WASM.
+//           Demo de la validacion semantica del syscall.
 //
-//   F3  ->  sys_object_datos sobre el ultimo hash registrado. Trae los
-//           bytes de vuelta desde el grafo —demostracion del SWAP SEMANTICO:
-//           el IDE no retiene el bytecode en su memoria lineal, lo aspira
-//           del disco cuando lo necesita—. El primer byte recuperado se
-//           muestra en la consola.
-//
-//  Las hotkeys evidencian el patron sin construir un parser real: el motor
-//  del IDE de produccion vendra cuando un lexer/parser `#![no_std]`
-//  porte tree-sitter o un equivalente al wasm32 cdylib.
+//   F3  ->  sys_object_datos sobre el ultimo binario registrado.
+//           Demuestra el SWAP SEMANTICO: el IDE no retiene el bytecode
+//           en su memoria lineal; lo aspira del disco cuando lo necesita.
 // =============================================================================
 
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 
+#[cfg(not(test))]
 #[link(wasm_import_module = "renaser")]
 extern "C" {
     fn sys_render_frame(ptr: u32, len: u32);
     fn sys_get_scancode() -> u32;
     fn sys_config_idioma() -> u32;
     fn sys_config_paleta(salida: u32) -> i32;
+    fn sys_object_put(
+        datos_ptr: u32,
+        datos_len: u32,
+        hijos_ptr: u32,
+        hijos_cnt: u32,
+        salida: u32,
+    ) -> i32;
+    fn sys_object_datos(hash_ptr: u32, salida: u32, capacidad: u32) -> i32;
     fn sys_subsistema_registrar_ejecutable(
         ptr: u32,
         len: u32,
         salida_hash_ptr: u32,
     ) -> i32;
-    fn sys_object_datos(hash_ptr: u32, salida: u32, capacidad: u32) -> i32;
 }
 
+#[cfg(not(test))]
 #[panic_handler]
 fn al_fallar(_: &core::panic::PanicInfo) -> ! {
     loop {}
@@ -58,7 +67,7 @@ fn al_fallar(_: &core::panic::PanicInfo) -> ! {
 const ANCHO: usize = 480;
 const ALTO: usize = 400;
 
-const ALFA_Y: usize = 24; // tras la cabecera global del IDE
+const ALFA_Y: usize = 24;
 const ALFA_ALTO: usize = 200;
 const BETA_Y: usize = ALFA_Y + ALFA_ALTO + 4;
 const BETA_ALTO: usize = 90;
@@ -66,7 +75,7 @@ const GAMMA_Y: usize = BETA_Y + BETA_ALTO + 4;
 const GAMMA_ALTO: usize = ALTO - GAMMA_Y - 4;
 
 // =============================================================================
-//  Estado en estaticos — todo en la memoria lineal de la app
+//  Estado en estaticos
 // =============================================================================
 
 static mut LIENZO: [u32; ANCHO * ALTO] = [0; ANCHO * ALTO];
@@ -77,38 +86,26 @@ const BUFFER_CAP: usize = 256;
 static mut FUENTE: [u8; BUFFER_CAP] = [0; BUFFER_CAP];
 static mut FUENTE_LEN: usize = 0;
 
-/// Ultimo hash registrado con exito por F1 o (futuramente) F2. Cero si nadie
-/// ha registrado nada todavia — para que el panel BETA muestre solo guiones.
-static mut HASH_ULTIMO: [u8; 32] = [0; 32];
-static mut HASH_VALIDO: bool = false;
+/// Hash del objeto FUENTE (texto del editor) tras un F1 exitoso. Cero si
+/// nadie ha compilado aun.
+static mut HASH_FUENTE: [u8; 32] = [0; 32];
+static mut HASH_FUENTE_VALIDO: bool = false;
 
-/// Buffer de recuperacion de F3 — el byte que `sys_object_datos` trajo del
-/// grafo y la longitud que recibimos.
+/// Hash del objeto BINARIO (modulo WASM materializado) tras un F1 exitoso.
+static mut HASH_BINARIO: [u8; 32] = [0; 32];
+static mut HASH_BINARIO_VALIDO: bool = false;
+
+/// Buffer de recuperacion de F3.
 static mut RECUPERADO: [u8; 32] = [0; 32];
 static mut RECUPERADO_LEN: usize = 0;
 
-/// Codigo de la ultima syscall importante; el panel GAMMA lo rotula como
-/// el "estado del compilador".
 static mut ULTIMO_CODIGO: i32 = i32::MIN;
-/// Etiqueta que acompaña al codigo: "F1 ::", "F2 ::", "F3 ::". Sin alocar.
 static mut ULTIMA_ETIQUETA: [u8; 8] = *b"INICIO  ";
-
-// =============================================================================
-//  Hotkeys + flancos
-// =============================================================================
 
 static mut F1_PREV: bool = false;
 static mut F2_PREV: bool = false;
 static mut F3_PREV: bool = false;
-/// Estado anterior del scancode generico, para detectar flancos de tecla
-/// (cualquier press se considera "ENTRADA NUEVA").
 static mut SCAN_PREV: u32 = 0;
-
-/// Modulo WASM minimo VALIDO: magia `\0asm` + version 0x01_00_00_00. Sin
-/// secciones — wasmi lo aceptaria como modulo vacio en tiempo de instanciar,
-/// pero `almacen::almacenar` solo necesita que sea bien formado a nivel
-/// de cabecera. El IDE lo lleva hardcoded como "test fixture" del registro.
-const WASM_MINIMO: [u8; 8] = [0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00];
 
 #[no_mangle]
 pub extern "C" fn init() {
@@ -138,23 +135,21 @@ fn refrescar_contexto() {
 }
 
 // =============================================================================
-//  Manejo del teclado
+//  Teclado
 // =============================================================================
 
 fn atender_scancode(scancode: u32) {
-    // Hotkeys de funcion primero — tienen prioridad y NO se incorporan al
-    // buffer de texto.
     match scancode {
         0x3B => {
             if !unsafe { F1_PREV } {
-                accion_registrar_modulo_minimo();
+                accion_compilar();
             }
             unsafe { F1_PREV = true };
             return;
         }
         0x3C => {
             if !unsafe { F2_PREV } {
-                accion_registrar_texto_buffer();
+                accion_registrar_texto_crudo();
             }
             unsafe { F2_PREV = true };
             return;
@@ -166,24 +161,16 @@ fn atender_scancode(scancode: u32) {
             unsafe { F3_PREV = true };
             return;
         }
-        // Make codes "break" (bit alto puesto) NO los vemos —el driver
-        // PS/2 del kernel solo entrega make codes y break codes con 0x80—.
-        // Los flancos los gestionamos por nuestra cuenta abajo.
         _ => {}
     }
-
-    // Resetear flancos de hotkeys al recibir cualquier OTRA tecla — asi
-    // pulsar F1 dos veces (con otra tecla en medio) cuenta como dos.
     unsafe {
         F1_PREV = scancode == 0x3B;
         F2_PREV = scancode == 0x3C;
         F3_PREV = scancode == 0x3D;
     }
 
-    // Edicion: backspace, enter, o letra/digito/espacio.
     let escribir = match scancode {
         0x0E => {
-            // Backspace.
             if unsafe { FUENTE_LEN } > 0 {
                 unsafe { FUENTE_LEN -= 1 };
             }
@@ -191,7 +178,7 @@ fn atender_scancode(scancode: u32) {
         }
         0x1C => Some(b'\n'),
         0x39 => Some(b' '),
-        _ => mapear_letra_o_digito(scancode as u8),
+        _ => mapear_caracter(scancode as u8),
     };
     if let Some(b) = escribir {
         let mut len = unsafe { FUENTE_LEN };
@@ -205,10 +192,14 @@ fn atender_scancode(scancode: u32) {
     }
 }
 
-/// Mapea los make codes mas comunes de PS/2 set 1 a ASCII en minusculas.
-/// Solo los caracteres que un editor minimo necesita; el resto se ignora.
-fn mapear_letra_o_digito(scan: u8) -> Option<u8> {
+/// Mapeo de scancodes PS/2 set 1 a ASCII. Cubre la fila principal de
+/// letras + digitos, y todo el numpad (incluyendo sus operadores). El
+/// numpad es la VIA POR DEFECTO de introducir `+ - *` sin Shift, lo que
+/// hace que la expresion Forth "5 10 +" sea componible en cualquier
+/// teclado fisico sin tener que captar modificadores.
+fn mapear_caracter(scan: u8) -> Option<u8> {
     Some(match scan {
+        // Fila principal: digitos y letras minusculas.
         0x02 => b'1',
         0x03 => b'2',
         0x04 => b'3',
@@ -219,6 +210,7 @@ fn mapear_letra_o_digito(scan: u8) -> Option<u8> {
         0x09 => b'8',
         0x0A => b'9',
         0x0B => b'0',
+        0x0C => b'-', // tecla '-' unshifted en la fila de digitos
         0x10 => b'q',
         0x11 => b'w',
         0x12 => b'e',
@@ -245,34 +237,290 @@ fn mapear_letra_o_digito(scan: u8) -> Option<u8> {
         0x30 => b'b',
         0x31 => b'n',
         0x32 => b'm',
+        // Numpad: digitos.
+        0x47 => b'7',
+        0x48 => b'8',
+        0x49 => b'9',
+        0x4B => b'4',
+        0x4C => b'5',
+        0x4D => b'6',
+        0x4F => b'1',
+        0x50 => b'2',
+        0x51 => b'3',
+        0x52 => b'0',
+        // Numpad: operadores Forth.
+        0x37 => b'*',
+        0x4A => b'-',
+        0x4E => b'+',
         _ => return None,
     })
+}
+
+// =============================================================================
+//  Emisor Forth -> WASM (Fase 29)
+// -----------------------------------------------------------------------------
+//  Compila expresiones de pila ("5 10 +") al format binario WebAssembly 1.0
+//  sobre buffers FIJOS pre-alocados en pila. Cero alocaciones, cero
+//  dependencias. La salida es un modulo entero: cabecera (`\0asm\1\0\0\0`)
+//  + Type Section (1 funcion () -> i32) + Function Section + Export
+//  Section ("run") + Code Section (cuerpo emitido).
+//
+//  Tokens reconocidos:
+//
+//   digitos    ->  i32.const <valor>   (LEB128 signed)
+//   '+'        ->  i32.add             (opcode 0x6A)
+//   '-'        ->  i32.sub             (opcode 0x6B)
+//   '*'        ->  i32.mul             (opcode 0x6C)
+//
+//  La pila debe terminar con EXACTAMENTE un valor (firma `() -> i32`).
+//  Cualquier desviacion (token ajeno, sobrante, vacio) cae en Err.
+// =============================================================================
+
+mod emisor {
+    /// Opcodes WASM 1.0 que el emisor produce.
+    const OP_I32_CONST: u8 = 0x41;
+    const OP_I32_ADD: u8 = 0x6A;
+    const OP_I32_SUB: u8 = 0x6B;
+    const OP_I32_MUL: u8 = 0x6C;
+    const OP_END: u8 = 0x0B;
+
+    /// Compila el buffer Forth en `fuente` al modulo WASM `destino`.
+    /// Devuelve `Some(len)` con la longitud final del modulo, o `None` si
+    /// el codigo es invalido (token ajeno, pila descuadrada, desbordo del
+    /// buffer destino).
+    pub fn compilar(fuente: &[u8], destino: &mut [u8]) -> Option<usize> {
+        // --- 1. Construir el CUERPO de la funcion en un scratch local. ---
+        let mut body = [0u8; 384];
+        let mut body_len = 0usize;
+
+        // Locals declarations: 0 grupos.
+        body[body_len] = 0x00;
+        body_len += 1;
+
+        let mut profundidad: i32 = 0;
+        let mut i = 0usize;
+        while i < fuente.len() {
+            let c = fuente[i];
+            // Saltar espacios, saltos, tabs, y bytes nulos del relleno.
+            if c == b' ' || c == b'\n' || c == b'\t' || c == 0 {
+                i += 1;
+                continue;
+            }
+            // Numero.
+            if c.is_ascii_digit() {
+                let mut valor: i64 = 0;
+                while i < fuente.len() && fuente[i].is_ascii_digit() {
+                    valor = valor * 10 + (fuente[i] - b'0') as i64;
+                    if valor > i32::MAX as i64 {
+                        return None;
+                    }
+                    i += 1;
+                }
+                if body_len + 6 > body.len() {
+                    return None;
+                }
+                body[body_len] = OP_I32_CONST;
+                body_len += 1;
+                emit_leb128_i32(valor as i32, &mut body, &mut body_len);
+                profundidad += 1;
+                continue;
+            }
+            // Operador binario.
+            if c == b'+' || c == b'-' || c == b'*' {
+                if profundidad < 2 {
+                    return None;
+                }
+                let op = match c {
+                    b'+' => OP_I32_ADD,
+                    b'-' => OP_I32_SUB,
+                    _ => OP_I32_MUL,
+                };
+                if body_len + 1 > body.len() {
+                    return None;
+                }
+                body[body_len] = op;
+                body_len += 1;
+                profundidad -= 1;
+                i += 1;
+                continue;
+            }
+            // Cualquier otro caracter: invalido. El compilador no es
+            // permissivo con tokens que no entienda — la baliza visual y
+            // la traza serial bastan; no agendamos correcciones magicas.
+            return None;
+        }
+        // El cuerpo ha de cerrar EXACTAMENTE con un valor en la pila —es
+        // lo que la firma `() -> i32` exige—.
+        if profundidad != 1 {
+            return None;
+        }
+        // Opcode `end` (cierra la funcion).
+        if body_len + 1 > body.len() {
+            return None;
+        }
+        body[body_len] = OP_END;
+        body_len += 1;
+
+        // --- 2. Emitir el modulo completo a `destino`. ---
+        let mut out = 0usize;
+
+        // Header WASM 1.0.
+        const HEADER: [u8; 8] = [0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00];
+        if HEADER.len() > destino.len() {
+            return None;
+        }
+        destino[..HEADER.len()].copy_from_slice(&HEADER);
+        out += HEADER.len();
+
+        // Type Section (0x01) :: 1 functype  () -> i32
+        //   payload: count=1, functype = 0x60 0x00 (0 params) 0x01 0x7F (1 result, i32)
+        let type_payload = [0x01, 0x60, 0x00, 0x01, 0x7F];
+        emit_section(0x01, &type_payload, destino, &mut out)?;
+
+        // Function Section (0x03) :: la funcion 0 usa el type 0.
+        let func_payload = [0x01, 0x00];
+        emit_section(0x03, &func_payload, destino, &mut out)?;
+
+        // Export Section (0x07) :: nombre "run" -> func 0.
+        let export_payload = [0x01, 0x03, b'r', b'u', b'n', 0x00, 0x00];
+        emit_section(0x07, &export_payload, destino, &mut out)?;
+
+        // Code Section (0x0A) :: count=1, body_size LEB128, body.
+        let mut code_payload = [0u8; 400];
+        let mut cp = 0usize;
+        code_payload[cp] = 0x01;
+        cp += 1;
+        emit_leb128_u32(body_len as u32, &mut code_payload, &mut cp);
+        if cp + body_len > code_payload.len() {
+            return None;
+        }
+        code_payload[cp..cp + body_len].copy_from_slice(&body[..body_len]);
+        cp += body_len;
+        emit_section(0x0A, &code_payload[..cp], destino, &mut out)?;
+
+        Some(out)
+    }
+
+    fn emit_section(id: u8, payload: &[u8], destino: &mut [u8], cursor: &mut usize) -> Option<()> {
+        if *cursor + 1 > destino.len() {
+            return None;
+        }
+        destino[*cursor] = id;
+        *cursor += 1;
+        emit_leb128_u32(payload.len() as u32, destino, cursor);
+        if *cursor + payload.len() > destino.len() {
+            return None;
+        }
+        destino[*cursor..*cursor + payload.len()].copy_from_slice(payload);
+        *cursor += payload.len();
+        Some(())
+    }
+
+    fn emit_leb128_u32(mut v: u32, out: &mut [u8], cursor: &mut usize) {
+        loop {
+            let mut byte = (v & 0x7F) as u8;
+            v >>= 7;
+            if v != 0 {
+                byte |= 0x80;
+                out[*cursor] = byte;
+                *cursor += 1;
+            } else {
+                out[*cursor] = byte;
+                *cursor += 1;
+                return;
+            }
+        }
+    }
+
+    fn emit_leb128_i32(mut v: i32, out: &mut [u8], cursor: &mut usize) {
+        loop {
+            let byte = (v & 0x7F) as u8;
+            v >>= 7;
+            let continuar = !((v == 0 && byte & 0x40 == 0) || (v == -1 && byte & 0x40 != 0));
+            if continuar {
+                out[*cursor] = byte | 0x80;
+                *cursor += 1;
+            } else {
+                out[*cursor] = byte;
+                *cursor += 1;
+            }
+            if !continuar {
+                return;
+            }
+        }
+    }
 }
 
 // =============================================================================
 //  Acciones de las hotkeys
 // =============================================================================
 
-fn accion_registrar_modulo_minimo() {
-    let codigo = unsafe {
-        sys_subsistema_registrar_ejecutable(
-            WASM_MINIMO.as_ptr() as u32,
-            WASM_MINIMO.len() as u32,
-            core::ptr::addr_of_mut!(HASH_ULTIMO) as u32,
-        )
-    };
-    unsafe {
-        ULTIMO_CODIGO = codigo;
-        ULTIMA_ETIQUETA = *b"F1 MIN  ";
-        HASH_VALIDO = codigo == 0;
-    }
-}
-
-fn accion_registrar_texto_buffer() {
+fn accion_compilar() {
     let len = unsafe { FUENTE_LEN };
     if len == 0 {
         unsafe {
-            ULTIMO_CODIGO = -7; // PayloadInvalido sin tocar el kernel
+            ULTIMO_CODIGO = -7;
+            ULTIMA_ETIQUETA = *b"F1 VACIO";
+        }
+        return;
+    }
+    // Compilar Forth -> WASM en un buffer en pila.
+    let fuente = unsafe { &FUENTE[..len] };
+    let mut binario = [0u8; 768];
+    let bin_len = match emisor::compilar(fuente, &mut binario) {
+        Some(n) => n,
+        None => {
+            unsafe {
+                ULTIMO_CODIGO = -7;
+                ULTIMA_ETIQUETA = *b"F1 EMSR ";
+                HASH_FUENTE_VALIDO = false;
+                HASH_BINARIO_VALIDO = false;
+            }
+            return;
+        }
+    };
+
+    // 1) Grabar el TEXTO FUENTE como objeto del grafo. Sin hijos.
+    let codigo_fuente = unsafe {
+        sys_object_put(
+            core::ptr::addr_of!(FUENTE) as u32,
+            len as u32,
+            0u32,
+            0u32,
+            core::ptr::addr_of_mut!(HASH_FUENTE) as u32,
+        )
+    };
+    if codigo_fuente != 0 {
+        unsafe {
+            ULTIMO_CODIGO = codigo_fuente;
+            ULTIMA_ETIQUETA = *b"F1 PUT  ";
+            HASH_FUENTE_VALIDO = false;
+            HASH_BINARIO_VALIDO = false;
+        }
+        return;
+    }
+    unsafe { HASH_FUENTE_VALIDO = true };
+
+    // 2) Registrar el BINARIO WASM via la syscall privilegiada.
+    let codigo_bin = unsafe {
+        sys_subsistema_registrar_ejecutable(
+            binario.as_ptr() as u32,
+            bin_len as u32,
+            core::ptr::addr_of_mut!(HASH_BINARIO) as u32,
+        )
+    };
+    unsafe {
+        ULTIMO_CODIGO = codigo_bin;
+        ULTIMA_ETIQUETA = *b"F1 BIN  ";
+        HASH_BINARIO_VALIDO = codigo_bin == 0;
+    }
+}
+
+fn accion_registrar_texto_crudo() {
+    let len = unsafe { FUENTE_LEN };
+    if len == 0 {
+        unsafe {
+            ULTIMO_CODIGO = -7;
             ULTIMA_ETIQUETA = *b"F2 VACIO";
         }
         return;
@@ -281,29 +529,29 @@ fn accion_registrar_texto_buffer() {
         sys_subsistema_registrar_ejecutable(
             core::ptr::addr_of!(FUENTE) as u32,
             len as u32,
-            core::ptr::addr_of_mut!(HASH_ULTIMO) as u32,
+            core::ptr::addr_of_mut!(HASH_BINARIO) as u32,
         )
     };
     unsafe {
         ULTIMO_CODIGO = codigo;
         ULTIMA_ETIQUETA = *b"F2 TXT  ";
-        if codigo == 0 {
-            HASH_VALIDO = true;
-        }
+        // Si milagrosamente el texto cuadrara con magic WASM, marcarlo
+        // como hash valido — en cualquier otro caso, no.
+        HASH_BINARIO_VALIDO = codigo == 0;
     }
 }
 
 fn accion_recuperar_ultimo() {
-    if !unsafe { HASH_VALIDO } {
+    if !unsafe { HASH_BINARIO_VALIDO } {
         unsafe {
-            ULTIMO_CODIGO = -1; // Ausente — no hay hash que recuperar
+            ULTIMO_CODIGO = -1;
             ULTIMA_ETIQUETA = *b"F3 SHASH";
         }
         return;
     }
     let codigo = unsafe {
         sys_object_datos(
-            core::ptr::addr_of!(HASH_ULTIMO) as u32,
+            core::ptr::addr_of!(HASH_BINARIO) as u32,
             core::ptr::addr_of_mut!(RECUPERADO) as u32,
             32,
         )
@@ -318,7 +566,7 @@ fn accion_recuperar_ultimo() {
 }
 
 // =============================================================================
-//  Pintado de los tres paneles
+//  Pintado
 // =============================================================================
 
 fn pintar() {
@@ -332,9 +580,8 @@ fn pintar() {
 
     rellenar_rect(lienzo, 0, 0, ANCHO, ALTO, fondo);
 
-    // Cabecera global con titulo y la firma del idioma activo.
     rellenar_rect(lienzo, 0, 0, ANCHO, ALFA_Y - 4, secundario);
-    dibujar_texto(lienzo, b"IDE WAWA  FASE 28", 8, 6, 2, tinta);
+    dibujar_texto(lienzo, b"IDE WAWA  FASE 29", 8, 6, 2, tinta);
     rellenar_rect(lienzo, 0, ALFA_Y - 4, ANCHO, 2, acento);
 
     pintar_panel_alfa(lienzo, tinta, acento);
@@ -343,23 +590,22 @@ fn pintar() {
 }
 
 fn pintar_panel_alfa(lienzo: &mut [u32], tinta: u32, acento: u32) {
-    // Marquito y rotulo.
     dibujar_texto(lienzo, b"ALFA  EDITOR", 8, ALFA_Y, 1, acento);
     rellenar_rect(lienzo, 0, ALFA_Y + 10, ANCHO, 1, acento);
 
-    // Render del buffer FUENTE con wrap simple: 5x7 a escala 2 = 10 px ancho
-    // por caracter, ~46 caracteres por linea de 460 px utiles.
     let escala = 2usize;
     let avance = 6 * escala;
     let cols = (ANCHO - 16) / avance;
     let mut linea_y = ALFA_Y + 16;
     let mut cursor_col = 0usize;
     let len = unsafe { FUENTE_LEN };
-    let mut buf_local = [b' '; 64]; // bufer de UNA linea, escrito sobre pila.
+    let mut buf_local = [b' '; 64];
     let mut buf_len = 0usize;
+
     let comprimir_y_pintar = |lienzo: &mut [u32], y: usize, buf: &[u8]| {
         dibujar_texto(lienzo, buf, 8, y, escala, tinta);
     };
+
     for i in 0..len {
         let c = unsafe { FUENTE[i] };
         let salto = c == b'\n' || cursor_col >= cols || buf_len == buf_local.len();
@@ -375,55 +621,72 @@ fn pintar_panel_alfa(lienzo: &mut [u32], tinta: u32, acento: u32) {
                 continue;
             }
         }
-        if c.is_ascii_alphanumeric() || c == b' ' {
-            // La mini-fuente solo cubre mayusculas; subimos minusculas.
+        let renderable = c.is_ascii_alphanumeric()
+            || c == b' '
+            || c == b'+'
+            || c == b'-'
+            || c == b'*';
+        if renderable {
             buf_local[buf_len] = c.to_ascii_uppercase();
             buf_len += 1;
             cursor_col += 1;
         }
     }
     if buf_len > 0 {
-        // Cursor: un bloque solido al final de la ultima linea.
         comprimir_y_pintar(lienzo, linea_y, &buf_local[..buf_len]);
     }
-    // Bloque-cursor parpadeante: dibujado siempre por simplicidad. El
-    // parpadeo lo daria un timer; aqui es un cuadrado fijo.
     let cursor_x = 8 + buf_len * avance;
     rellenar_rect(lienzo, cursor_x, linea_y, 2 * escala, 7 * escala, acento);
 }
 
 fn pintar_panel_beta(lienzo: &mut [u32], tinta: u32, acento: u32, secundario: u32) {
-    dibujar_texto(lienzo, b"BETA  HASH AST", 8, BETA_Y, 1, acento);
+    dibujar_texto(lienzo, b"BETA  GRAFO SEMANTICO", 8, BETA_Y, 1, acento);
     rellenar_rect(lienzo, 0, BETA_Y + 10, ANCHO, 1, acento);
 
-    // Pintar el hash del ultimo objeto registrado como 32 bytes hex sobre
-    // dos lineas, con cromo discreto de fondo. Si no hay hash, guiones.
-    let hash = unsafe { HASH_ULTIMO };
-    let valido = unsafe { HASH_VALIDO };
-    let mut hex = [0u8; 64];
-    for i in 0..32 {
-        let b = if valido { hash[i] } else { 0 };
-        hex[i * 2] = nibble_hex(b >> 4);
-        hex[i * 2 + 1] = nibble_hex(b & 0x0F);
-    }
-    if !valido {
-        for slot in hex.iter_mut() {
-            *slot = b'-';
+    let fila_y_fuente = BETA_Y + 18;
+    let fila_y_bin = BETA_Y + 56;
+    let bloque_fondo = color_atenuar_u32(secundario, 0xC0);
+
+    // --- Nodo FUENTE (texto del editor) ---
+    rellenar_rect(lienzo, 8, fila_y_fuente, ANCHO - 16, 24, bloque_fondo);
+    dibujar_texto(lienzo, b"FUENTE", 12, fila_y_fuente + 2, 1, acento);
+    let hash_f = unsafe { HASH_FUENTE };
+    let mut hex_f = [b'-'; 64];
+    if unsafe { HASH_FUENTE_VALIDO } {
+        for i in 0..32 {
+            hex_f[i * 2] = nibble_hex(hash_f[i] >> 4);
+            hex_f[i * 2 + 1] = nibble_hex(hash_f[i] & 0x0F);
         }
     }
-    rellenar_rect(lienzo, 8, BETA_Y + 18, ANCHO - 16, 28, color_atenuar_u32(secundario, 0xC0));
-    dibujar_texto(lienzo, &hex[..32], 12, BETA_Y + 22, 1, tinta);
-    dibujar_texto(lienzo, &hex[32..], 12, BETA_Y + 34, 1, tinta);
+    dibujar_texto(lienzo, &hex_f[..32], 60, fila_y_fuente + 2, 1, tinta);
+    dibujar_texto(lienzo, &hex_f[32..], 60, fila_y_fuente + 12, 1, tinta);
 
-    // Etiqueta inferior: ¿hay arbol AST? Por ahora, hash unico = unica
-    // hoja del arbol. Cuando llegue el parser, se mostraran tantos hashes
-    // como bloques sintacticos haya en el grafo.
-    let nota: &[u8] = if valido {
-        b"AST  1 HOJA  HASH UNICO REGISTRADO"
-    } else {
-        b"AST  VACIO  REGISTRA UN MODULO CON F1"
-    };
-    dibujar_texto(lienzo, nota, 8, BETA_Y + 60, 1, acento);
+    // --- Linea acento vertical (5 px de ancho) que une nodo fuente y binario.
+    let conector_x = 32;
+    let conector_y0 = fila_y_fuente + 24;
+    let conector_y1 = fila_y_bin;
+    rellenar_rect(
+        lienzo,
+        conector_x,
+        conector_y0,
+        5,
+        conector_y1 - conector_y0,
+        acento,
+    );
+
+    // --- Nodo BINARIO (modulo WASM emitido).
+    rellenar_rect(lienzo, 8, fila_y_bin, ANCHO - 16, 24, bloque_fondo);
+    dibujar_texto(lienzo, b"BINARIO", 12, fila_y_bin + 2, 1, acento);
+    let hash_b = unsafe { HASH_BINARIO };
+    let mut hex_b = [b'-'; 64];
+    if unsafe { HASH_BINARIO_VALIDO } {
+        for i in 0..32 {
+            hex_b[i * 2] = nibble_hex(hash_b[i] >> 4);
+            hex_b[i * 2 + 1] = nibble_hex(hash_b[i] & 0x0F);
+        }
+    }
+    dibujar_texto(lienzo, &hex_b[..32], 60, fila_y_bin + 2, 1, tinta);
+    dibujar_texto(lienzo, &hex_b[32..], 60, fila_y_bin + 12, 1, tinta);
 }
 
 fn pintar_panel_gamma(lienzo: &mut [u32], tinta: u32, acento: u32, secundario: u32) {
@@ -432,10 +695,9 @@ fn pintar_panel_gamma(lienzo: &mut [u32], tinta: u32, acento: u32, secundario: u
 
     rellenar_rect(lienzo, 8, GAMMA_Y + 16, ANCHO - 16, 12, color_atenuar_u32(secundario, 0xC0));
 
-    // Linea 1: etiqueta del ultimo gesto + codigo.
     let etiqueta = unsafe { ULTIMA_ETIQUETA };
     let codigo = unsafe { ULTIMO_CODIGO };
-    let mut linea1 = [b' '; 32];
+    let mut linea1 = [b' '; 48];
     linea1[..8].copy_from_slice(&etiqueta);
     linea1[8] = b' ';
     let (dec, dlen) = formatear_i32(codigo);
@@ -450,22 +712,20 @@ fn pintar_panel_gamma(lienzo: &mut [u32], tinta: u32, acento: u32, secundario: u
     }
     dibujar_texto(lienzo, &linea1[..n], 12, GAMMA_Y + 18, 1, tinta);
 
-    // Linea 2: leyenda humana del codigo.
     let leyenda: &[u8] = match codigo {
-        0 => b"OK  REGISTRADO EN GRAFO",
+        0 => b"OK  BINARIO EMITIDO CON EXITO",
         -1 => b"AUSENTE  OBJETO NO HALLADO",
         -2 => b"CAPACIDAD INSUFICIENTE",
         -3 => b"ALMACENAMIENTO FALLO",
         -4 => b"SIN FOCO",
         -5 => b"ENVIO FALLO",
         -6 => b"SATURADO  REINTENTAR PROXIMO TICK",
-        -7 => b"PAYLOAD INVALIDO  MAGIA WASM AJENA",
+        -7 => b"PAYLOAD INVALIDO  SINTAXIS FORTH AJENA",
         x if x > 0 => b"OK  BYTES COPIADOS",
-        _ => b"INICIO  PULSA F1 PARA REGISTRAR",
+        _ => b"INICIO  TECLEA 5 10 + Y PULSA F1",
     };
     dibujar_texto(lienzo, leyenda, 12, GAMMA_Y + 32, 1, tinta);
 
-    // Linea 3 (opcional): primer byte recuperado por F3.
     let rl = unsafe { RECUPERADO_LEN };
     if rl > 0 {
         let mut linea3 = [b' '; 32];
@@ -478,8 +738,7 @@ fn pintar_panel_gamma(lienzo: &mut [u32], tinta: u32, acento: u32, secundario: u
         dibujar_texto(lienzo, &linea3[..len_total], 12, GAMMA_Y + 46, 1, acento);
     }
 
-    // Pie con hotkeys.
-    let hotkeys = b"F1 MODULO MIN   F2 TEXTO   F3 RECUPERA   BS DEL   ENTER";
+    let hotkeys = b"F1 COMPILA   F2 CRUDO   F3 RECUPERA   BS  ENTER";
     dibujar_texto(lienzo, hotkeys, 8, GAMMA_Y + GAMMA_ALTO - 10, 1, acento);
 }
 
@@ -489,7 +748,7 @@ fn volcar() {
 }
 
 // =============================================================================
-//  Helpers
+//  Helpers de color y dibujo
 // =============================================================================
 
 fn color_u32(paleta: [u8; 20], n: usize) -> u32 {
@@ -558,7 +817,7 @@ fn formatear_i32(n: i32) -> ([u8; 12], usize) {
 }
 
 // =============================================================================
-//  Mini-tipografia 5x7 (mayusculas, digitos, simbolos comunes)
+//  Mini-tipografia 5x7
 // =============================================================================
 
 const FA: usize = 5;
@@ -573,6 +832,8 @@ fn glifo(c: u8) -> [u8; FH] {
         b'.' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x06],
         b'/' => [0x01, 0x02, 0x02, 0x04, 0x08, 0x08, 0x10],
         b'?' => [0x0E, 0x11, 0x01, 0x02, 0x04, 0x00, 0x04],
+        b'+' => [0x00, 0x04, 0x04, 0x1F, 0x04, 0x04, 0x00],
+        b'*' => [0x00, 0x0A, 0x04, 0x1F, 0x04, 0x0A, 0x00],
         b'0' => [0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E],
         b'1' => [0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E],
         b'2' => [0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F],
@@ -629,3 +890,9 @@ fn dibujar_texto(lienzo: &mut [u32], texto: &[u8], x: usize, y: usize, escala: u
         cursor_x += FAV * escala;
     }
 }
+
+// El emisor Forth->WASM se verifica empiricamente al construir el .wasm
+// para `wasm32-unknown-unknown` y comprobar interactivamente con el IDE
+// (`5 10 +` + F1) que el binario se acepta por `wasmi`. Los tests unitarios
+// en host requeririan extraer el emisor a una crate aparte (los syscalls
+// `sys_*` solo existen en wasm32 y rompen el target de pruebas std).
