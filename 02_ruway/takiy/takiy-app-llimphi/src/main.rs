@@ -19,7 +19,14 @@
 //! - `←` / `→`    — mueve la nota seleccionada ±1 beat.
 //! - `↑` / `↓`    — mueve la nota seleccionada ±1 semitono.
 //! - `Del`/`⌫`    — borra la nota seleccionada.
+//! - `S`          — guarda el score a `TAKIY_SCORE_JSON` (o a
+//!                  `/tmp/takiy_<unix>.takiy.json` si la variable no
+//!                  está seteada).
 //! - `Esc`        — cierra la ventana.
+//!
+//! Si `TAKIY_SCORE_JSON` está seteado, la app además **auto-guarda**
+//! después de cada edición (agregar, borrar, mover). No hay debounce:
+//! un score normal son pocos KB y escribirlo es instantáneo.
 
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::prelude::{percent, Size, Style};
@@ -65,6 +72,9 @@ enum Msg {
     CycleTrack,
     /// Agrega una pista nueva (vacía) y la activa.
     NewTrack,
+    /// Guarda el score actual a `TAKIY_SCORE_JSON` (o a `/tmp/...` si
+    /// la variable no está seteada).
+    Save,
     Quit,
 }
 
@@ -99,6 +109,11 @@ struct Model {
     /// actualizada después de cada movimiento (que cambia el índice
     /// porque `Track::add` re-inserta en orden por `start`).
     selected: Option<(usize, usize)>,
+    /// Ruta donde escribir el score. `Some` si `TAKIY_SCORE_JSON` está
+    /// seteado (y entonces se auto-guarda en cada edición). `None` si
+    /// no — la tecla `S` la setea a un path en `/tmp` al primer save
+    /// explícito.
+    save_path: Option<std::path::PathBuf>,
 }
 
 struct Takiy;
@@ -165,10 +180,19 @@ impl App for Takiy {
             active_track: 0,
             next_track_n: n_tracks + 1,
             selected: None,
+            save_path: std::env::var_os("TAKIY_SCORE_JSON").map(std::path::PathBuf::from),
         }
     }
 
     fn update(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
+        let is_edit = matches!(
+            msg,
+            Msg::AddNote { .. }
+                | Msg::DeleteNote { .. }
+                | Msg::MoveSelected { .. }
+                | Msg::DeleteSelected
+                | Msg::NewTrack
+        );
         match msg {
             Msg::Quit => {
                 handle.quit();
@@ -291,6 +315,27 @@ impl App for Takiy {
                     }
                 }
             }
+            Msg::Save => {
+                let path = model.save_path.clone().unwrap_or_else(|| {
+                    let ts = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    let p = std::path::PathBuf::from(format!("/tmp/takiy_{ts}.takiy.json"));
+                    model.save_path = Some(p.clone());
+                    p
+                });
+                match write_score(&model.score, &path) {
+                    Ok(()) => {
+                        eprintln!("takiy · saved → {}", path.display());
+                        model.status = format!("saved → {}", path.display());
+                    }
+                    Err(e) => {
+                        eprintln!("takiy · save error en {}: {e}", path.display());
+                        model.status = format!("save error: {e}");
+                    }
+                }
+            }
             Msg::CycleTrack => {
                 let n = model.score.tracks().len().max(1);
                 model.active_track = (model.active_track + 1) % n;
@@ -307,6 +352,16 @@ impl App for Takiy {
                 let idx = model.score.add_track(Track::new(&name));
                 model.active_track = idx;
                 model.status = format!("new · pista {idx} ({name})");
+            }
+        }
+        if is_edit {
+            if let Some(path) = model.save_path.as_deref() {
+                if let Err(e) = write_score(&model.score, path) {
+                    eprintln!("takiy · auto-save error en {}: {e}", path.display());
+                    // No piso `status` con el error si la edición fue
+                    // exitosa: el log al stderr alcanza para diagnóstico,
+                    // y el header queda con el feedback de la edición.
+                }
             }
         }
         model
@@ -350,6 +405,7 @@ impl App for Takiy {
             }
             Key::Named(NamedKey::Delete | NamedKey::Backspace) => Some(Msg::DeleteSelected),
             Key::Character(s) if s.eq_ignore_ascii_case("n") => Some(Msg::NewTrack),
+            Key::Character(s) if s.eq_ignore_ascii_case("s") => Some(Msg::Save),
             _ => None,
         }
     }
@@ -667,6 +723,18 @@ fn pitch_range(score: &Score) -> (u8, u8) {
         return (60, 72);
     }
     (min.saturating_sub(2), max.saturating_add(2).min(127))
+}
+
+/// Serializa el score a JSON pretty y lo escribe atómicamente a `path`:
+/// primero escribe a `<path>.tmp` y después renombra, así una interrupción
+/// (Ctrl+C, kill, falla de disco a mitad del write) no deja el archivo
+/// truncado. Si el rename falla, devuelve el error de `rename`.
+fn write_score(score: &Score, path: &std::path::Path) -> std::io::Result<()> {
+    let json = serde_json::to_string_pretty(score)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let tmp = path.with_extension("takiy.json.tmp");
+    std::fs::write(&tmp, json)?;
+    std::fs::rename(&tmp, path)
 }
 
 /// Encuentra el índice de `target` en una lista de notas comparando
