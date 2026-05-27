@@ -284,22 +284,30 @@ ráfagas de `ProveedorObjeto` redundantes.
 
 ## 9. Apps de Génesis (boot/main.rs::GENESIS)
 
+Tras la Fase 50 (consolidación de `pluma`) y el ciclo de release firmado de la
+Fase 48 (`AGORA_AUTH_RING` + `mudanza`), el censo definitivo del array
+`const GENESIS: [AppGenesis; 12]` (en `wawa-boot/src/main.rs:137`) es **doce**
+módulos, no diez:
+
 | Nombre | .wasm | Region (x,y,w,h) | Fuel | Permisos |
 |---|---|---|---|---|
-| bitacora | bitacora.wasm | (100,120,480,280) | 6M | 0 (solo estado propio) |
-| pregon | pregon.wasm | (100,120,480,160) | 2M | RED |
-| tonada | tonada.wasm | (100,120,360,120) | 2M | ALTAVOZ |
-| pulso | pulso.wasm | (100,120,360,120) | 2M | 0 |
-| hola | app.wasm | (100,120,480,560) | 2M | 0 |
-| memoriosa | memoriosa.wasm | (700,120,360,80) | 2M | 0 |
-| discola | discola.wasm | (60,700,360,80) | 2M | 0 (demo `SinCombustible`) |
-| glotona | glotona.wasm | (460,700,360,80) | 2M | 0 (demo `SinMemoria`) |
-| cronista | cronista.wasm | (860,700,360,80) | 2M | GRAFO_ESCRITURA \| RAIZ |
-| tonalero | tonalero.wasm | (700,220,480,300) | 2M | CONFIG |
+| bitacora | bitacora.wasm | (100,120,480,280) | `FUEL_EDITOR` (6M) | 0 (solo estado propio) |
+| pregon | pregon.wasm | (100,120,480,160) | `FUEL_COMUN` (2M) | RED |
+| tonada | tonada.wasm | (100,120,360,120) | `FUEL_COMUN` | ALTAVOZ |
+| pulso | pulso.wasm | (100,120,360,120) | `FUEL_COMUN` | 0 |
+| hola | app.wasm | (100,120,480,560) | `FUEL_COMUN` | 0 |
+| memoriosa | memoriosa.wasm | (700,120,360,80) | `FUEL_COMUN` | 0 |
+| discola | discola.wasm | (60,700,360,80) | `FUEL_COMUN` | 0 (demo `SinCombustible`) |
+| glotona | glotona.wasm | (460,700,360,80) | `FUEL_COMUN` | 0 (demo `SinMemoria`) |
+| cronista | cronista.wasm | (860,700,360,80) | `FUEL_COMUN` | GRAFO_ESCRITURA \| RAIZ |
+| tonalero | tonalero.wasm | (700,220,480,300) | `FUEL_COMUN` | CONFIG |
+| **mudanza** | mudanza.wasm | (60,220,480,240) | `FUEL_COMUN` | **RAIZ** — primer cliente de `MensajeAkasha::AnunciarCanal`; invoca `sys_manifiesto_proponer` (Fase 41/48). |
+| **pluma** | pluma.wasm | (160,60,480,400) | `FUEL_EDITOR` | **GRAFO_ESCRITURA** — cuaderno reactivo consolidado en 11 KiB (post `wasm-opt -Os`, Fase 50). |
 
 `TECHO_GENESIS = 4 MiB`. Cada app: módulo cdylib WASM con `init()` y `tick()`
 exportados, `#![no_std]`, panic handler propio (`loop {}` que será atrapado por
-el guardarraíl de fuel).
+el guardarraíl de fuel). `03_ukupacha/wawa/apps/` además contiene `ide/`, fuera
+de GENESIS por ahora — disponible para invocación dinámica (Alt+N).
 
 ---
 
@@ -340,23 +348,72 @@ verifica:
 
 ## 14. Plan — siguientes hitos
 
-1. **Firma criptográfica del manifiesto** (Ed25519 sobre la raíz). Hoy `format::AgoraId` / `Firma` existen para `Canal`; falta extender al `Manifiesto` para que las propuestas Akasha de re‑ancla se rechacen en kernel sin que la firma cuadre con un `autor` aceptado por el usuario local. Implica una `claves.rs` que cargue la pubkey local del manifiesto o de un objeto‑fijo separado.
+### 14.0 Hitos previamente listados que YA están en el código
 
-2. **App `mudanza`** (userspace): consume `MensajeAkasha::AnunciarCanal`, verifica firma con `ed25519-compact` (WASM), presenta UI de aceptar/rechazar nueva raíz de manifiesto. Sería el primer cliente de `Canal` + `RaizFirmada`.
+Esta sección anota lo que el plan histórico daba por pendiente y el árbol ya
+materializa. Si una IA o un humano lee este documento como mapa del trabajo
+restante, debe descontar primero estos hitos para no duplicar esfuerzo:
 
-3. **GC syscall + permiso**: exponer `compactar()` como `sys_grafo_compactar()` gateado por nuevo `PERMISO_COMPACTAR` (32). Permitiría a `wawactl`/cronista forzar compactación.
+- **Firma criptográfica del manifiesto** — **HECHA** (Fase 41/48). `claves.rs`
+  con `AGORA_AUTH_RING: [[u8; 32]; 3]` (tres pubkeys Ed25519 forjadas en la
+  ceremonia de la Fase 48, sin placeholders). `verificar_manifiesto_firmado`
+  (`claves.rs:151`) + `verificar_cuaderno_firmado` operan zero-alloc sobre
+  `ed25519-compact` con `default-features = false`. La syscall
+  `sys_manifiesto_proponer` (`wasm/env.rs:1670`) gatea cada propuesta de
+  re-ancla contra el anillo; clave pública desconocida ⇒ rechazada antes de
+  tocar disco.
+- **App `mudanza`** — **HECHA** y sembrada en GENESIS (ver §9). Consume
+  `MensajeAkasha::AnunciarCanal`, valida la firma del autor contra el anillo
+  vía la syscall, presenta UI de aceptar/rechazar.
+- **IDE nativo / Notebook engine** — **HECHA por el camino corto**: en lugar
+  de portar tree-sitter, se embebió `pluma` (cuaderno reactivo sobre
+  `pluma-notebook-core`, núcleo `no_std + alloc` compartido bit a bit con el
+  host). Consolidada a 11 KiB post `wasm-opt -Os` (Fase 50). Persistencia
+  cerrada por las syscalls `sys_cuaderno_anexar_celda` /
+  `sys_cuaderno_leer_celda` / `sys_cuaderno_firmar_y_anclar`. Walker rehidrata
+  el grafo entre arranques.
 
-4. **Auditoría DMA exhaustion**: el `Hal::dma_alloc` de virtio-drivers tiene firma infallible — un userspace adversario podría agotar la arena con sys_object_put masivos. Mitigación: rate‑limit por app y/o `dma_alloc` con back‑pressure ante exhaustion.
+### 14.1 Hitos genuinamente pendientes (orden de mérito)
 
-5. **Mouse cursor visible**: el compositor sabe la posición pero el cursor visible está incompleto. `consola::estampar_puntero` existe (Fase 13) pero no se integra con el camino de recomposición zero‑alloc.
+1. **GC syscall + permiso**: exponer `compactar()` como `sys_grafo_compactar()`
+   gateado por nuevo `PERMISO_COMPACTAR = 1 << 5` (= 32). El compactador ya
+   corre solo cuando `ESCRITURAS_DESDE_GC > UMBRAL_GC=32` en el tic ocioso del
+   compositor; falta dejarle a `wawactl` / `cronista` la palanca explícita.
 
-6. **Multi-monitor / resolución dinámica**: `bootloader_api::FrameBufferInfo` ya entrega la geometría real; la consola y el compositor todavía asumen un único framebuffer. Requiere capa de abstracción `Pantalla` extendida.
+2. **Mouse cursor visible**: el compositor sabe la posición pero el cursor
+   visible está incompleto. `consola::estampar_puntero` existe (Fase 13, ver
+   `consola.rs:493`) pero no se integra con el camino de recomposición
+   zero‑alloc de `compositor::recomponer`.
 
-7. **wawactl `gc`**: subcomando para inspeccionar/forzar compactación. Lee superbloque vía un socket de control que aún no existe (host‑side: solo lectura del disco montado).
+3. **`wawactl daemon-firma --slot N --clave-privada PATH`**: el host-side de
+   la ceremonia de claves. `claves.rs` ya documenta la API esperada (encabezado
+   ASCII `wawactl::sign_pci::` + 32 B hash crudo sobre el VirtIO Console,
+   respuesta = 1 B slot + 64 B firma). Falta el daemon tokio que escucha el
+   char-device de QEMU, exige confirmación interactiva al operador, firma con
+   la seed del slot indicado y devuelve la firma por el mismo canal.
 
-8. **Tabla de capacidades por bytecode hash**: cuando el manifiesto declare `bytecode` por hash, los permisos podrían derivarse de la firma sobre `(hash_bytecode, permisos)` en lugar de declararse en `EntradaApp`. Daría inmutabilidad real al binding "qué binario puede hacer qué".
+4. **`wawactl gc`**: subcomando host-side complementario a la syscall del hito
+   1. Lee superbloque / dispara compactación via socket de control que aún
+   no existe.
 
-9. **IDE nativo / Notebook engine** (mencionado en directivas): primer cliente real del swap semántico (estructuras intermedias del análisis sintáctico serializadas al grafo y traídas por hash). Requeriría `tree-sitter` portado a WASM `cdylib` + protocolo entre paneles.
+5. **Multi-monitor / resolución dinámica**: `bootloader_api::FrameBufferInfo`
+   ya entrega la geometría real; la consola y el compositor todavía asumen un
+   único framebuffer. Requiere capa de abstracción `Pantalla` extendida.
+
+6. **Auditoría DMA exhaustion**: el `Hal::dma_alloc` de virtio-drivers tiene
+   firma infallible — un userspace adversario podría agotar la arena con
+   `sys_object_put` masivos. Mitigación: rate-limit por app y/o `dma_alloc`
+   con back-pressure ante exhaustion. (Hay un cap parcial,
+   `MAX_PAGINAS_DMA_PER_APP`, pero falta el back-pressure.)
+
+7. **Zero-alloc del demuxer Akasha**: `encolar_para_usuario` aún hace
+   `frame.to_vec()` por frame entrante. Cambiar por un anillo pre-alocado de
+   buffers MTU con free-list LIFO dentro de `COLA_USUARIO`.
+
+8. **Tabla de capacidades por bytecode hash**: cuando el manifiesto declare
+   `bytecode` por hash, los permisos podrían derivarse de la firma sobre
+   `(hash_bytecode, permisos)` en lugar de declararse en `EntradaApp`. Daría
+   inmutabilidad real al binding "qué binario puede hacer qué".
 
 10. **Auditoría zero‑alloc del demuxer Akasha**: `encolar_para_usuario` aún hace `frame.to_vec()` por cada frame entrante. El siguiente paso es un anillo pre‑alocado de buffers de tamaño MTU dentro de `COLA_USUARIO`, con un free‑list LIFO.
 
