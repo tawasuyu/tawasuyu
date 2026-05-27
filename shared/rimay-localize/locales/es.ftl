@@ -105,6 +105,7 @@ cosmos-tile-modulos = módulos
 cosmos-tile-armonico = armónico
 cosmos-tile-cuerpos = cuerpos
 cosmos-tile-aspectos = aspectos
+cosmos-tile-box-graph = aspectarian
 cosmos-tile-uraniano = dial uraniano 90°
 cosmos-tile-cross-transit = cross · tránsito
 cosmos-tile-cross-progression = cross · progresión

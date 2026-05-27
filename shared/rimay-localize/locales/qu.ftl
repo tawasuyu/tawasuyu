@@ -108,6 +108,7 @@ cosmos-tile-modulos = módulos
 cosmos-tile-armonico = armónico
 cosmos-tile-cuerpos = ukhukuna
 cosmos-tile-aspectos = aspectos
+cosmos-tile-box-graph = aspectarian
 cosmos-tile-uraniano = uraniano 90° muyu
 cosmos-tile-cross-transit = cross · puriq
 cosmos-tile-cross-progression = cross · wiñay

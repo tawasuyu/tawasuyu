@@ -108,6 +108,7 @@ enum TileId {
     Armonico,
     Cuerpos,
     Aspectos,
+    BoxGraph,
     Uraniano,
     CrossTransit,
     CrossProgression,
@@ -122,6 +123,7 @@ impl TileId {
             TileId::Armonico => "cosmos-tile-armonico",
             TileId::Cuerpos => "cosmos-tile-cuerpos",
             TileId::Aspectos => "cosmos-tile-aspectos",
+            TileId::BoxGraph => "cosmos-tile-box-graph",
             TileId::Uraniano => "cosmos-tile-uraniano",
             TileId::CrossTransit => "cosmos-tile-cross-transit",
             TileId::CrossProgression => "cosmos-tile-cross-progression",
@@ -136,6 +138,7 @@ const DEFAULT_ORDER: &[TileId] = &[
     TileId::Armonico,
     TileId::Cuerpos,
     TileId::Aspectos,
+    TileId::BoxGraph,
 ];
 
 /// Devuelve el TileId dinámico que aporta un overlay, si aporta uno. Los
@@ -422,6 +425,7 @@ fn build_tile(tid: TileId, model: &Model, theme: &Theme) -> TileSpec<Msg> {
         TileId::Armonico => tile_armonico(model, theme),
         TileId::Cuerpos => tile_cuerpos(&model.render, theme),
         TileId::Aspectos => tile_aspectos(&model.render, "natal", theme),
+        TileId::BoxGraph => tile_box_graph(&model.render, theme),
         TileId::Uraniano => tile_uraniano(&model.render.uranian_groups, theme),
         TileId::CrossTransit => tile_aspectos(&model.render, "transit", theme),
         TileId::CrossProgression => tile_aspectos(&model.render, "progression", theme),
@@ -710,6 +714,111 @@ fn tile_uraniano(groups: &[UranianGroup], theme: &Theme) -> View<Msg> {
         })
         .collect();
     tile_container(rows, theme)
+}
+
+// ----- Box graph (aspectarian triangular) -----
+
+fn tile_box_graph(render: &RenderModel, theme: &Theme) -> View<Msg> {
+    // 1. cuerpos natales en orden de longitud (estable porque la layer ya
+    //    los emite en el orden canónico).
+    let bodies: Vec<String> = render
+        .layers
+        .iter()
+        .filter(|l| l.module_id == "natal" && matches!(l.kind, LayerKind::Bodies))
+        .flat_map(|l| l.glyphs.iter())
+        .map(|g| g.symbol.clone())
+        .collect();
+    if bodies.len() < 2 {
+        return tile_container(
+            vec![line(
+                rimay_localize::t("cosmos-empty"),
+                11.0,
+                theme.fg_muted,
+            )],
+            theme,
+        );
+    }
+    // 2. mapa (par ordenado) → símbolo de aspecto.
+    let mut aspects: std::collections::HashMap<(String, String), String> =
+        std::collections::HashMap::new();
+    for a in &render.aspect_summary {
+        if a.module_id != "natal" {
+            continue;
+        }
+        let key = sorted_pair(&a.from_body, &a.to_body);
+        aspects.insert(key, a.kind.clone());
+    }
+    // 3. filas triangulares: fila i = etiqueta cuerpo i + i celdas.
+    const CELL: f32 = 22.0;
+    const LBL: f32 = 24.0;
+    let rows: Vec<View<Msg>> = bodies
+        .iter()
+        .enumerate()
+        .map(|(i, body_i)| {
+            let mut cells: Vec<View<Msg>> = Vec::with_capacity(i + 1);
+            cells.push(box_cell(
+                simbolo_cuerpo(body_i),
+                theme.fg_text,
+                None,
+                LBL,
+                CELL,
+                theme,
+            ));
+            for body_j in bodies.iter().take(i) {
+                let pair = sorted_pair(body_i, body_j);
+                let asp = aspects.get(&pair);
+                let (text, bg) = match asp {
+                    Some(k) => (simbolo_aspecto(k), Some(theme.bg_panel_alt)),
+                    None => ("·", None),
+                };
+                cells.push(box_cell(text, theme.fg_text, bg, CELL, CELL, theme));
+            }
+            View::new(Style {
+                flex_direction: FlexDirection::Row,
+                size: Size {
+                    width: Dimension::auto(),
+                    height: length(CELL),
+                },
+                flex_shrink: 0.0,
+                ..Default::default()
+            })
+            .children(cells)
+        })
+        .collect();
+    tile_container(rows, theme)
+}
+
+fn box_cell(
+    text: &'static str,
+    fg: Color,
+    bg: Option<Color>,
+    w: f32,
+    h: f32,
+    _theme: &Theme,
+) -> View<Msg> {
+    let mut v = View::new(Style {
+        size: Size {
+            width: length(w),
+            height: length(h),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text_aligned(text.to_string(), 11.0, fg, Alignment::Center);
+    if let Some(c) = bg {
+        v = v.fill(c).radius(2.0);
+    }
+    v
+}
+
+fn sorted_pair(a: &str, b: &str) -> (String, String) {
+    if a <= b {
+        (a.into(), b.into())
+    } else {
+        (b.into(), a.into())
+    }
 }
 
 // =====================================================================
