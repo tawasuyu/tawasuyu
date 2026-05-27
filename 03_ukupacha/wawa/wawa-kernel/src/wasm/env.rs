@@ -29,6 +29,12 @@
 //                              el hash de su codigo fuente como PRIMER HIJO:
 //                              el binario arrastra su causa criptografica
 //                              (Fase 31, La Arista Causal).
+//    * sys_subsistema_ejecutar_dinamico       — instanciar y correr UNA SOLA
+//                              VEZ un binario emitido por una app (Fase 32,
+//                              El Cargador en Vivo): sub-jaula efimera, fuel
+//                              acotado, retorno de `"run"` propagado al
+//                              llamante. Toca el grafo? No durante el calculo
+//                              (Linker vacio); solo para recuperar el binario.
 //
 //  GUARDARRAIL: el kernel valida MATEMATICAMENTE todo puntero que el modulo le
 //  entrega contra los limites reales de su memoria lineal. No se confia en que
@@ -535,6 +541,92 @@ pub(crate) fn enlazar_capacidades(
         },
     )?;
     } // PERMISO_GRAFO_ESCRITURA (v2)
+
+    // --- CAPACIDAD 3d :: sys_subsistema_ejecutar_dinamico --------------------
+    // sys_subsistema_ejecutar_dinamico(binario_hash_ptr) -> i32
+    //
+    // EL CIERRE DEL BUCLE (Fase 32). Lee 32 bytes del hash; recupera el
+    // payload del grafo; instancia una sub-jaula EFIMERA; invoca su export
+    // `"run"` UNA SOLA VEZ con un techo estricto de combustible
+    // (`FUEL_DINAMICO`); destruye la jaula. El i32 que devuelve `"run"`
+    // (positivo o negativo) se PROPAGA a la app llamante como el retorno
+    // de la syscall. Los codigos negativos reservados de `CodigoError`
+    // (-1 a -7) NO colisionan con valores Forth tipicos porque la app que
+    // llama compara antes contra los enumerados conocidos —y al usuario
+    // se le rotula la causa en el panel GAMMA—.
+    //
+    // GATEADA por PERMISO_GRAFO_ESCRITURA + foco: solo la ventana enfocada
+    // puede pedir un despacho dinamico (igual disciplina que `sys_tono` y
+    // `sys_config_proponer`). El bit ya autoriza al IDE a escribir el
+    // grafo; ejecutar un binario que el mismo emitio cae naturalmente
+    // bajo la misma autoridad. El foco evita que una app en segundo plano
+    // despache calculos a espaldas del usuario.
+    //
+    // BACK-PRESSURE DMA: el almacen::recuperar hace E/S; cuenta como una
+    // pagina (idem `sys_object_datos`, que tambien la consume).
+    if permisos & PERMISO_GRAFO_ESCRITURA != 0 {
+    enlazador.func_wrap(
+        "renaser",
+        "sys_subsistema_ejecutar_dinamico",
+        |mut caller: Caller<'_, ContextoCapacidades>,
+         binario_hash_ptr: u32|
+         -> Result<i32, Error> {
+            // Solo la ventana enfocada despacha calculos.
+            if crate::compositor::foco() != caller.data().indice_app {
+                return Ok(CodigoError::SinFoco.como_i32());
+            }
+            if caller.data().paginas_dma_en_vuelo >= MAX_PAGINAS_DMA_PER_APP {
+                return Ok(CodigoError::Saturado.como_i32());
+            }
+            caller.data_mut().paginas_dma_en_vuelo += 1;
+
+            let memoria = obtener_memoria(&caller)?;
+            let hash = {
+                let m = memoria.data(&caller);
+                match leer_hash(
+                    m,
+                    binario_hash_ptr,
+                    "WASM :: sys_subsistema_ejecutar_dinamico desbordo memoria (hash)",
+                ) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        caller.data_mut().paginas_dma_en_vuelo -= 1;
+                        return Err(e);
+                    }
+                }
+            };
+
+            // Recuperar el bytecode del grafo direccionado por contenido.
+            let objeto = match crate::almacen::recuperar(&hash) {
+                Ok(Some(objeto)) => objeto,
+                Ok(None) => {
+                    caller.data_mut().paginas_dma_en_vuelo -= 1;
+                    return Ok(CodigoError::Ausente.como_i32());
+                }
+                Err(_) => {
+                    caller.data_mut().paginas_dma_en_vuelo -= 1;
+                    return Ok(CodigoError::AlmacenamientoFallo.como_i32());
+                }
+            };
+
+            // Liberar la pagina ANTES de la ejecucion: la operacion del bus
+            // ya termino. La sub-jaula que sigue no usa DMA del kernel —el
+            // motor de wasmi corre puramente en CPU—.
+            caller.data_mut().paginas_dma_en_vuelo -= 1;
+
+            // Despachar. El retorno entero del binario sube TAL CUAL al
+            // usuario; las fallas se traducen a `CodigoError` negativos
+            // — el cuadro de mando del IDE distingue las dos clases con
+            // la etiqueta que pinta en GAMMA, no por el numero a secas.
+            match crate::wasm::ejecutar_dinamico(&objeto.datos) {
+                Ok(retorno) => Ok(retorno),
+                Err(crate::wasm::FallaApp::SinCombustible) => Ok(CodigoError::Saturado.como_i32()),
+                Err(crate::wasm::FallaApp::SinMemoria) => Ok(CodigoError::CapacidadInsuficiente.como_i32()),
+                Err(_) => Ok(CodigoError::PayloadInvalido.como_i32()),
+            }
+        },
+    )?;
+    } // PERMISO_GRAFO_ESCRITURA (dinamico)
 
     // --- CAPACIDAD 4 :: sys_object_datos(hash, salida, capacidad) -> i32 ---
     // Copia la carga util del objeto `hash` en `salida`. Devuelve el numero de

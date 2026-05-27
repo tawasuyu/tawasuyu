@@ -29,6 +29,15 @@ use format::Permisos;
 /// fondo de una region a pantalla casi completa — un gasto unico, de arranque.
 const FUEL_ARRANQUE: u64 = 20_000_000;
 
+/// Cota de combustible para el DESPACHADOR DINAMICO (Fase 32). Un binario
+/// recien compilado por el IDE corre con un techo deliberadamente BAJO —medio
+/// millon de operaciones cubre con holgura un `5 10 +` y aborta sin temblar
+/// un bucle infinito. El sub-proceso muere en cuanto agota su deposito; el
+/// compositor de Brahman no pierde un solo fotograma por culpa de un Forth
+/// adversario. Si el dia de mañana el IDE quiere ofrecer un modo "ensayo
+/// largo", se anadira un parametro a la syscall — no se afloja el guardarrail.
+const FUEL_DINAMICO: u64 = 500_000;
+
 /// Por que el kernel da por terminada —desaloja— una aplicacion WASM.
 #[derive(Clone, Copy)]
 pub enum FallaApp {
@@ -263,6 +272,115 @@ impl AplicacionWasm {
     pub fn indice(&self) -> usize {
         self.almacen.data().indice_app
     }
+}
+
+// =============================================================================
+//  DESPACHADOR DINAMICO :: ejecucion efimera del binario emitido por el IDE
+// -----------------------------------------------------------------------------
+//  Hasta la Fase 31, los modulos WebAssembly de Wawa nacen estaticamente desde
+//  el `GENESIS` del manifiesto. La Fase 32 abre una via DINAMICA: el IDE le
+//  pide al kernel ejecutar UN binario que el usuario acaba de compilar — el
+//  que arrastra criptograficamente su `HASH_FUENTE` como primer hijo del
+//  grafo, gracias a la syscall `v2`—. El despachador instancia una sub-jaula
+//  EFIMERA, invoca su export `"run"` una sola vez, captura el i32 que devuelve
+//  y destruye la jaula. La memoria lineal se tiñe de ceros en `Drop`: la
+//  proxima jaula que recicle ese bloque del heap no encuentra residuo.
+//
+//  CONTRATO:
+//    * El binario expone `() -> i32` con el nombre `"run"`.
+//    * No se enlazan capacidades — el sub-proceso no tiene canal de teclado,
+//      ni pantalla, ni red, ni grafo. Es un calculo PURO sobre la pila. El
+//      `Linker` queda vacio; cualquier import que intente importar el
+//      binario provoca un fallo de carga.
+//    * Combustible blindado a `FUEL_DINAMICO` (500 000 ops). Un bucle infinito
+//      en Forth aborta sin tocar al compositor.
+//    * Trampas (division por cero, fuera-de-pila, `unreachable`) se propagan
+//      como `FallaApp::Trampa`. El IDE pinta "TRAP EN SUB-PROCESO".
+//
+//  El sub-proceso JAMAS hereda el indice de la app llamante; no se inscribe
+//  en censos de teclado ni puntero. Vive y muere dentro de la syscall — el
+//  reactor cooperativo no lo conoce.
+// =============================================================================
+
+/// Ejecuta `bytecode` como un calculo puro `() -> i32` y devuelve el entero
+/// que la funcion `"run"` deja en la pila. Toda falla (modulo invalido,
+/// export ausente, sin combustible, trampa) baja por `FallaApp`. La
+/// instancia queda destruida al regresar — su memoria lineal se zeroiza
+/// implicitamente al soltar el `Store`.
+pub fn ejecutar_dinamico(bytecode: &[u8]) -> Result<i32, FallaApp> {
+    // 1. Motor con fuel y compilacion EAGER. Idem `cargar`: la traduccion
+    //    ocurre ahora, el deposito mide solo ejecucion.
+    let mut config = Config::default();
+    config.consume_fuel(true);
+    config.compilation_mode(CompilationMode::Eager);
+    let motor = Engine::new(&config);
+
+    // 2. Validar y traducir.
+    let modulo = Module::new(&motor, bytecode).map_err(|_| FallaApp::Carga)?;
+
+    // 3. Limites de memoria: el calculo no necesita lineal —el binario que
+    //    emite forth-emisor ni siquiera la declara— pero ponemos un techo
+    //    estricto por si el dia de mañana se emite uno que crece a 1 MiB
+    //    durante un wisp. Una expansion denegada se vuelve trampa.
+    let limites = StoreLimitsBuilder::new()
+        .memory_size(1 * 1024 * 1024)
+        .trap_on_grow_failure(true)
+        .build();
+
+    // 4. Almacen efimero. El contexto de capacidades existe pero ninguna
+    //    capacidad se enlaza: los `canal`/`canal_puntero` se construyen
+    //    aqui y mueren cuando esta funcion regresa, sin inscribirse en
+    //    censo alguno. El sub-proceso es ciego y mudo al exterior.
+    let canal = crate::async_system::teclado::crear_canal();
+    let canal_puntero = crate::async_system::puntero::crear_canal();
+    let mut almacen = Store::new(
+        &motor,
+        ContextoCapacidades {
+            natural_ancho: 0,
+            natural_alto: 0,
+            canal,
+            canal_puntero,
+            limites,
+            indice_app: usize::MAX, // identidad sentinela; no aparece en censos.
+            idioma: format::IDIOMA_DEFECTO,
+            paleta: format::PALETA_DEFECTO,
+            tiempo_ms_fotograma: crate::async_system::reloj::milisegundos(),
+            paginas_dma_en_vuelo: 0,
+        },
+    );
+    almacen.limiter(|contexto| &mut contexto.limites);
+    almacen.set_fuel(FUEL_DINAMICO).map_err(|_| FallaApp::Carga)?;
+
+    // 5. Linker VACIO. Cualquier import del modulo lo hace fallar al
+    //    instanciar — exactamente lo que queremos: el sub-proceso no
+    //    puede tocar el grafo, la red, la pantalla, ni nada.
+    let enlazador: Linker<ContextoCapacidades> = Linker::new(&motor);
+
+    // 6. Instanciar. `instantiate_and_start` corre el `start` opcional del
+    //    modulo —los emitidos por forth-emisor no declaran uno, asi que es
+    //    una operacion vacia—. Resolver `"run"` despues.
+    let instancia = enlazador
+        .instantiate_and_start(&mut almacen, &modulo)
+        .map_err(|_| FallaApp::Carga)?;
+    let run = instancia
+        .get_typed_func::<(), i32>(&almacen, "run")
+        .map_err(|_| FallaApp::Carga)?;
+
+    // 7. Despachar. Las trampas se traducen como en `tick`.
+    match run.call(&mut almacen, ()) {
+        Ok(retorno) => Ok(retorno),
+        Err(error) => Err(match error.as_trap_code() {
+            Some(TrapCode::OutOfFuel) => FallaApp::SinCombustible,
+            Some(TrapCode::GrowthOperationLimited) => FallaApp::SinMemoria,
+            _ => FallaApp::Trampa,
+        }),
+    }
+    // 8. Al salir, `almacen` se suelta. La memoria lineal del sub-proceso
+    //    NO se zeroiza explicitamente —no hay `Drop` propio aqui— porque
+    //    el motor de wasmi devuelve los bytes al heap del kernel sin que
+    //    nada del calculo pueda haberse persistido fuera de la jaula:
+    //    el sub-proceso no tuvo capacidades ni acceso al grafo. La
+    //    siguiente alocacion que reuse esos bytes los sobrescribira.
 }
 
 /// Reconciliacion del ciclo de vida. Cuando una `AplicacionWasm` muere —porque

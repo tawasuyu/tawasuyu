@@ -62,6 +62,14 @@ extern "C" {
         padre_hash_ptr: u32,
         salida_hash_ptr: u32,
     ) -> i32;
+    /// FASE 32 :: ejecucion EFIMERA. El kernel recupera el binario por su
+    /// hash, lo instancia en una sub-jaula sin capacidades con un techo
+    /// estricto de combustible, invoca su export `"run"` una sola vez y
+    /// destruye la jaula. El i32 retornado por `"run"` viaja TAL CUAL al
+    /// IDE; los codigos negativos de `CodigoError` (-1..-7) cubren las
+    /// fallas conocidas (Ausente, Saturado por fuel, PayloadInvalido por
+    /// trap, etc.).
+    fn sys_subsistema_ejecutar_dinamico(binario_hash_ptr: u32) -> i32;
 }
 
 #[cfg(not(test))]
@@ -123,7 +131,14 @@ static mut ULTIMA_ETIQUETA: [u8; 8] = *b"INICIO  ";
 static mut F1_PREV: bool = false;
 static mut F2_PREV: bool = false;
 static mut F3_PREV: bool = false;
+static mut F4_PREV: bool = false;
 static mut SCAN_PREV: u32 = 0;
+
+/// FASE 32 :: el resultado de la ultima ejecucion dinamica. El IDE lo
+/// pinta en el Panel GAMMA. `EJECUCION_VALIDA` distingue una corrida
+/// fresca de la pantalla en blanco del arranque o de un F4 fallido.
+static mut EJECUCION_VALIDA: bool = false;
+static mut EJECUCION_RETORNO: i32 = 0;
 
 #[no_mangle]
 pub extern "C" fn init() {
@@ -179,12 +194,20 @@ fn atender_scancode(scancode: u32) {
             unsafe { F3_PREV = true };
             return;
         }
+        0x3E => {
+            if !unsafe { F4_PREV } {
+                accion_ejecutar_dinamico();
+            }
+            unsafe { F4_PREV = true };
+            return;
+        }
         _ => {}
     }
     unsafe {
         F1_PREV = scancode == 0x3B;
         F2_PREV = scancode == 0x3C;
         F3_PREV = scancode == 0x3D;
+        F4_PREV = scancode == 0x3E;
     }
 
     let escribir = match scancode {
@@ -192,8 +215,12 @@ fn atender_scancode(scancode: u32) {
             if unsafe { FUENTE_LEN } > 0 {
                 unsafe { FUENTE_LEN -= 1 };
                 // Romper la arista causal: la fuente ya no coincide con la
-                // que engendro el binario inscrito en el grafo.
-                unsafe { ARISTA_SINCRONIZADA = false };
+                // que engendro el binario inscrito en el grafo. Y enmascarar
+                // el resultado de F4: corresponde al binario antiguo.
+                unsafe {
+                    ARISTA_SINCRONIZADA = false;
+                    EJECUCION_VALIDA = false;
+                }
             }
             return;
         }
@@ -211,7 +238,10 @@ fn atender_scancode(scancode: u32) {
             unsafe { FUENTE_LEN = len };
             // Romper la arista causal: cualquier edicion posterior a F1
             // divorcia la causa escrita del efecto ejecutable.
-            unsafe { ARISTA_SINCRONIZADA = false };
+            unsafe {
+                ARISTA_SINCRONIZADA = false;
+                EJECUCION_VALIDA = false;
+            }
         }
     }
 }
@@ -308,6 +338,9 @@ mod emisor {
 // =============================================================================
 
 fn accion_compilar() {
+    // Un F1 nuevo invalida cualquier resultado de F4 anterior: el binario
+    // que se acaba de inscribir todavia no se ha ejecutado.
+    unsafe { EJECUCION_VALIDA = false };
     let len = unsafe { FUENTE_LEN };
     if len == 0 {
         unsafe {
@@ -431,6 +464,45 @@ fn accion_recuperar_ultimo() {
     }
 }
 
+/// FASE 32 :: F4 :: cierra el bucle del IDE. Si la ARISTA CAUSAL esta
+/// SINCRONIZADA (gracias a un F1 exitoso reciente, sin ediciones
+/// posteriores), pide al kernel que ejecute el binario en una sub-jaula
+/// efimera. El i32 retornado por `"run"` se atrapa en `EJECUCION_RETORNO`;
+/// el Panel GAMMA lo pinta en grande. Si la arista esta rota, el F4 cae
+/// sin tocar la syscall — el sub-proceso no puede correr un opcode que
+/// el editor ya divorcio del binario inscrito.
+fn accion_ejecutar_dinamico() {
+    if !unsafe { ARISTA_SINCRONIZADA } || !unsafe { HASH_BINARIO_VALIDO } {
+        unsafe {
+            ULTIMO_CODIGO = -7;
+            ULTIMA_ETIQUETA = *b"F4 SYNC ";
+            EJECUCION_VALIDA = false;
+        }
+        return;
+    }
+    let codigo = unsafe {
+        sys_subsistema_ejecutar_dinamico(core::ptr::addr_of!(HASH_BINARIO) as u32)
+    };
+    // El sub-proceso devuelve su i32 TAL CUAL — incluso un -1 perfectamente
+    // legitimo de un Forth como "0 1 -" colisionaria con CodigoError::Ausente.
+    // Para distinguir, miramos los codigos NEGATIVOS reservados [-7..=-1]:
+    // si encajan exactamente con una falla conocida del kernel, los
+    // tratamos como tal; cualquier otro valor (positivo, cero o negativo
+    // fuera de rango) es resultado legitimo del calculo.
+    let es_falla_reservada = codigo <= -1 && codigo >= -7;
+    unsafe {
+        ULTIMO_CODIGO = codigo;
+        if es_falla_reservada {
+            ULTIMA_ETIQUETA = *b"F4 TRAP ";
+            EJECUCION_VALIDA = false;
+        } else {
+            ULTIMA_ETIQUETA = *b"F4 RUN  ";
+            EJECUCION_VALIDA = true;
+            EJECUCION_RETORNO = codigo;
+        }
+    }
+}
+
 // =============================================================================
 //  Pintado
 // =============================================================================
@@ -447,7 +519,7 @@ fn pintar() {
     rellenar_rect(lienzo, 0, 0, ANCHO, ALTO, fondo);
 
     rellenar_rect(lienzo, 0, 0, ANCHO, ALFA_Y - 4, secundario);
-    dibujar_texto(lienzo, b"IDE WAWA  FASE 31", 8, 6, 2, tinta);
+    dibujar_texto(lienzo, b"IDE WAWA  FASE 32", 8, 6, 2, tinta);
     rellenar_rect(lienzo, 0, ALFA_Y - 4, ANCHO, 2, acento);
 
     pintar_panel_alfa(lienzo, tinta, acento);
@@ -592,33 +664,55 @@ fn pintar_panel_gamma(lienzo: &mut [u32], tinta: u32, acento: u32, secundario: u
     }
     dibujar_texto(lienzo, &linea1[..n], 12, GAMMA_Y + 18, 1, tinta);
 
-    let leyenda: &[u8] = match codigo {
-        0 => b"OK  BINARIO EMITIDO CON EXITO",
-        -1 => b"AUSENTE  OBJETO NO HALLADO",
-        -2 => b"CAPACIDAD INSUFICIENTE",
-        -3 => b"ALMACENAMIENTO FALLO",
-        -4 => b"SIN FOCO",
-        -5 => b"ENVIO FALLO",
-        -6 => b"SATURADO  REINTENTAR PROXIMO TICK",
-        -7 => b"PAYLOAD INVALIDO  SINTAXIS FORTH AJENA",
-        x if x > 0 => b"OK  BYTES COPIADOS",
-        _ => b"INICIO  TECLEA 5 10 + Y PULSA F1",
-    };
-    dibujar_texto(lienzo, leyenda, 12, GAMMA_Y + 32, 1, tinta);
+    // FASE 32 :: el ultimo F4 toma protagonismo en GAMMA si hubo ejecucion.
+    // Pintamos el RETORNO en grande (escala 2) cuando la sub-jaula corrio el
+    // calculo y devolvio un i32 legitimo. Las leyendas etiquetadas por
+    // codigo siguen sirviendo para todos los demas hotkeys.
+    if unsafe { EJECUCION_VALIDA } {
+        dibujar_texto(lienzo, b"EJECUCION COMPLETA", 12, GAMMA_Y + 32, 1, acento);
+        let mut linea_ret = [b' '; 32];
+        let prefix = b"RETORNO VALOR  ";
+        linea_ret[..prefix.len()].copy_from_slice(prefix);
+        let (dec, dlen) = formatear_i32(unsafe { EJECUCION_RETORNO });
+        let mut n = prefix.len();
+        for &c in &dec[..dlen] {
+            if n < linea_ret.len() {
+                linea_ret[n] = c;
+                n += 1;
+            }
+        }
+        dibujar_texto(lienzo, &linea_ret[..n], 12, GAMMA_Y + 46, 2, tinta);
+    } else {
+        let leyenda: &[u8] = match (unsafe { ULTIMA_ETIQUETA }, codigo) {
+            (etq, _) if &etq == b"F4 SYNC " => b"CODIGO MODIFICADO SIN COMPILAR  PULSA F1",
+            (etq, _) if &etq == b"F4 TRAP " => b"TRAP EN SUB PROCESO  EJECUCION ABORTADA",
+            (_, 0) => b"OK  BINARIO EMITIDO CON EXITO",
+            (_, -1) => b"AUSENTE  OBJETO NO HALLADO",
+            (_, -2) => b"CAPACIDAD INSUFICIENTE",
+            (_, -3) => b"ALMACENAMIENTO FALLO",
+            (_, -4) => b"SIN FOCO",
+            (_, -5) => b"ENVIO FALLO",
+            (_, -6) => b"SATURADO  REINTENTAR PROXIMO TICK",
+            (_, -7) => b"PAYLOAD INVALIDO  SINTAXIS FORTH AJENA",
+            (_, x) if x > 0 => b"OK  BYTES COPIADOS",
+            _ => b"INICIO  TECLEA 5 10 + Y PULSA F1 F4",
+        };
+        dibujar_texto(lienzo, leyenda, 12, GAMMA_Y + 32, 1, tinta);
 
-    let rl = unsafe { RECUPERADO_LEN };
-    if rl > 0 {
-        let mut linea3 = [b' '; 32];
-        let prefix = b"BYTE0  ";
-        linea3[..prefix.len()].copy_from_slice(prefix);
-        let b0 = unsafe { RECUPERADO[0] };
-        linea3[prefix.len()] = nibble_hex(b0 >> 4);
-        linea3[prefix.len() + 1] = nibble_hex(b0 & 0x0F);
-        let len_total = prefix.len() + 2;
-        dibujar_texto(lienzo, &linea3[..len_total], 12, GAMMA_Y + 46, 1, acento);
+        let rl = unsafe { RECUPERADO_LEN };
+        if rl > 0 {
+            let mut linea3 = [b' '; 32];
+            let prefix = b"BYTE0  ";
+            linea3[..prefix.len()].copy_from_slice(prefix);
+            let b0 = unsafe { RECUPERADO[0] };
+            linea3[prefix.len()] = nibble_hex(b0 >> 4);
+            linea3[prefix.len() + 1] = nibble_hex(b0 & 0x0F);
+            let len_total = prefix.len() + 2;
+            dibujar_texto(lienzo, &linea3[..len_total], 12, GAMMA_Y + 46, 1, acento);
+        }
     }
 
-    let hotkeys = b"F1 COMPILA   F2 CRUDO   F3 RECUPERA   BS  ENTER";
+    let hotkeys = b"F1 COMPILA  F2 CRUDO  F3 GET  F4 RUN";
     dibujar_texto(lienzo, hotkeys, 8, GAMMA_Y + GAMMA_ALTO - 10, 1, acento);
 }
 
