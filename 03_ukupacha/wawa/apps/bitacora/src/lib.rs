@@ -11,6 +11,14 @@
 //  Backspace borra el ultimo. Cada cambio se persiste de inmediato, asi que la
 //  apagada brusca no pierde nada — la proxima vida del kernel retoma exacto.
 //
+//  Capacidad: 8 KiB de texto vivo. Cuando se desborda, se descartan los 512 B
+//  mas viejos para amortizar el coste del rotate.
+//
+//  Teclado: tracking del Shift (LShift `0x2A` y RShift `0x36`, con sus break
+//  codes `0xAA`/`0xB6`). Con Shift sostenido se obtienen mayusculas, simbolos
+//  de la fila numerica `!@#$%^&*()`, y el resto de puntuacion del layout US
+//  (`<>?:"_+{}|~`). Sin Shift, lo que ya habia mas `-=[]\` y backtick.
+//
 //  Tipografia: la 8x8 clasica (font8x8), escalada x2 a 16x16. Cabe en su propia
 //  memoria lineal y se renderiza pixel a pixel — el app no toca el lienzo del
 //  kernel, solo entrega su propio fotograma.
@@ -56,7 +64,9 @@ const FILAS: usize = (ALTO - Y_TEXTO) / PASO;
 /// Capacidad del buffer de texto. Al desbordarse se descarta una porcion del
 /// principio (el texto mas viejo) para dejar sitio al nuevo — un cuaderno con
 /// memoria finita, no un agujero negro.
-const CAPACIDAD: usize = 512;
+const CAPACIDAD: usize = 8192;
+/// Bytes que se descartan al desbordarse — amortiza el coste del rotate.
+const DESCARTE: usize = 512;
 
 const FONDO: u32 = 0x0A_18_30;
 const TINTA: u32 = 0xE8_EC_F4;
@@ -65,6 +75,10 @@ const ETIQUETA: u32 = 0x8B_5C_F6;
 static mut BUFFER: [u8; CAPACIDAD] = [0; CAPACIDAD];
 static mut LEN: usize = 0;
 static mut LIENZO: [u32; ANCHO * ALTO] = [0; ANCHO * ALTO];
+/// Estado de las teclas modificadoras. Se actualiza con make/break de los
+/// scancodes `0x2A` (LShift) y `0x36` (RShift) ANTES del filtro general de
+/// key-up, asi una mayuscula sostenida se mantiene activa entre pulsaciones.
+static mut SHIFT: bool = false;
 
 // --- ABI del userspace --------------------------------------------------------
 
@@ -95,8 +109,22 @@ pub extern "C" fn tick() {
         if sc == 0 {
             break;
         }
+        // Shift se sigue ANTES del filtro general: necesitamos saber cuando se
+        // suelta para volver a minuscula. Make codes `0x2A`/`0x36`; break codes
+        // `0xAA`/`0xB6` (bit 7 sobre el make).
+        match sc {
+            0x2A | 0x36 => {
+                unsafe { SHIFT = true; }
+                continue;
+            }
+            0xAA | 0xB6 => {
+                unsafe { SHIFT = false; }
+                continue;
+            }
+            _ => {}
+        }
         if sc & 0x80 != 0 {
-            // Codigo de KEY-UP (release). Lo ignoramos: tecleamos al pulsar.
+            // Codigo de KEY-UP (release) del resto. Lo ignoramos: tecleamos al pulsar.
             continue;
         }
         match sc {
@@ -115,7 +143,8 @@ pub extern "C" fn tick() {
                 cambio = true;
             }
             otro => {
-                let c = scancode_a_caracter(otro);
+                let shift = unsafe { SHIFT };
+                let c = scancode_a_caracter(otro, shift);
                 if c != 0 {
                     anexar(c);
                     cambio = true;
@@ -138,8 +167,8 @@ fn anexar(c: u8) {
     unsafe {
         if LEN >= CAPACIDAD {
             let buffer = &mut *core::ptr::addr_of_mut!(BUFFER);
-            buffer.copy_within(64.., 0);
-            LEN = CAPACIDAD - 64;
+            buffer.copy_within(DESCARTE.., 0);
+            LEN = CAPACIDAD - DESCARTE;
         }
         let buffer = &mut *core::ptr::addr_of_mut!(BUFFER);
         buffer[LEN] = c;
@@ -166,7 +195,7 @@ fn pintar() {
         *pixel = FONDO;
     }
     // Titulo.
-    pintar_texto(lienzo, b"bitacora :: el texto persiste", MARGEN_X, Y_LABEL, ETIQUETA);
+    pintar_texto(lienzo, b"bitacora :: SHIFT + 8KB", MARGEN_X, Y_LABEL, ETIQUETA);
     // Linea sutil bajo el titulo.
     let y_linea = Y_LABEL + PASO + 4;
     for x in MARGEN_X..(ANCHO - MARGEN_X) {
@@ -268,22 +297,48 @@ fn pintar_glifo(lienzo: &mut [u32], c: u8, x: usize, y: usize, color: u32) {
 
 // --- Teclado: scancode -> caracter --------------------------------------------
 
-/// Traduce un MAKE-code del set 1 (US layout) a su caracter ASCII en minuscula.
-/// Devuelve 0 para los scancodes que no producen texto — modificadores,
-/// extendidos, etc.: el llamante los descarta sin gritar.
-fn scancode_a_caracter(sc: u8) -> u8 {
-    match sc {
-        0x02 => b'1', 0x03 => b'2', 0x04 => b'3', 0x05 => b'4', 0x06 => b'5',
-        0x07 => b'6', 0x08 => b'7', 0x09 => b'8', 0x0A => b'9', 0x0B => b'0',
-        0x10 => b'q', 0x11 => b'w', 0x12 => b'e', 0x13 => b'r', 0x14 => b't',
-        0x15 => b'y', 0x16 => b'u', 0x17 => b'i', 0x18 => b'o', 0x19 => b'p',
-        0x1E => b'a', 0x1F => b's', 0x20 => b'd', 0x21 => b'f', 0x22 => b'g',
-        0x23 => b'h', 0x24 => b'j', 0x25 => b'k', 0x26 => b'l',
-        0x2C => b'z', 0x2D => b'x', 0x2E => b'c', 0x2F => b'v', 0x30 => b'b',
-        0x31 => b'n', 0x32 => b'm',
-        0x33 => b',', 0x34 => b'.', 0x35 => b'/',
-        0x27 => b';', 0x28 => b'\'',
-        0x39 => b' ',
-        _ => 0,
+/// Traduce un MAKE-code del set 1 (US layout) a su caracter ASCII, respetando
+/// el modificador Shift. Devuelve 0 para los scancodes que no producen texto
+/// —modificadores, extendidos, etc.: el llamante los descarta sin gritar.
+fn scancode_a_caracter(sc: u8, shift: bool) -> u8 {
+    if shift {
+        match sc {
+            // Fila numerica: simbolos del US layout.
+            0x02 => b'!', 0x03 => b'@', 0x04 => b'#', 0x05 => b'$', 0x06 => b'%',
+            0x07 => b'^', 0x08 => b'&', 0x09 => b'*', 0x0A => b'(', 0x0B => b')',
+            // Letras: mayusculas.
+            0x10 => b'Q', 0x11 => b'W', 0x12 => b'E', 0x13 => b'R', 0x14 => b'T',
+            0x15 => b'Y', 0x16 => b'U', 0x17 => b'I', 0x18 => b'O', 0x19 => b'P',
+            0x1E => b'A', 0x1F => b'S', 0x20 => b'D', 0x21 => b'F', 0x22 => b'G',
+            0x23 => b'H', 0x24 => b'J', 0x25 => b'K', 0x26 => b'L',
+            0x2C => b'Z', 0x2D => b'X', 0x2E => b'C', 0x2F => b'V', 0x30 => b'B',
+            0x31 => b'N', 0x32 => b'M',
+            // Puntuacion con shift.
+            0x33 => b'<', 0x34 => b'>', 0x35 => b'?',
+            0x27 => b':', 0x28 => b'"',
+            0x0C => b'_', 0x0D => b'+',
+            0x1A => b'{', 0x1B => b'}',
+            0x2B => b'|', 0x29 => b'~',
+            0x39 => b' ',
+            _ => 0,
+        }
+    } else {
+        match sc {
+            0x02 => b'1', 0x03 => b'2', 0x04 => b'3', 0x05 => b'4', 0x06 => b'5',
+            0x07 => b'6', 0x08 => b'7', 0x09 => b'8', 0x0A => b'9', 0x0B => b'0',
+            0x10 => b'q', 0x11 => b'w', 0x12 => b'e', 0x13 => b'r', 0x14 => b't',
+            0x15 => b'y', 0x16 => b'u', 0x17 => b'i', 0x18 => b'o', 0x19 => b'p',
+            0x1E => b'a', 0x1F => b's', 0x20 => b'd', 0x21 => b'f', 0x22 => b'g',
+            0x23 => b'h', 0x24 => b'j', 0x25 => b'k', 0x26 => b'l',
+            0x2C => b'z', 0x2D => b'x', 0x2E => b'c', 0x2F => b'v', 0x30 => b'b',
+            0x31 => b'n', 0x32 => b'm',
+            0x33 => b',', 0x34 => b'.', 0x35 => b'/',
+            0x27 => b';', 0x28 => b'\'',
+            0x0C => b'-', 0x0D => b'=',
+            0x1A => b'[', 0x1B => b']',
+            0x2B => b'\\', 0x29 => b'`',
+            0x39 => b' ',
+            _ => 0,
+        }
     }
 }
