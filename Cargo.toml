@@ -119,6 +119,7 @@ members = [
     "01_yachay/iniy/iniy-ingest",
     "01_yachay/iniy/iniy-nli",
     "01_yachay/iniy/iniy-nli-llm",
+    "01_yachay/iniy/iniy-server",
     "01_yachay/iniy/iniy-store",
     "01_yachay/iniy/iniy-wiki",
     "01_yachay/nakui/nakui-core",
@@ -376,6 +377,10 @@ epub = "2.1"
 
 # === Bulk import Wikipedia (iniy-wiki dump) ===
 bzip2 = "0.4"
+
+# === HTTP server (iniy-server) ===
+axum = "0.7"
+tower = "0.5"
 
 # === P2P (minga) ===
 libp2p = { version = "0.56", features = ["tokio", "tcp", "noise", "yamux", "macros", "kad", "identify"] }

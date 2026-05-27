@@ -1,0 +1,25 @@
+[package]
+name = "iniy-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "iniy-server — API HTTP read-only sobre una DB de iniy. Permite que múltiples clientes consulten testimonio/consenso/contradictions sin acceso directo al SQLite. Base para federación P2P futura."
+
+[dependencies]
+iniy-core = { workspace = true }
+iniy-store = { workspace = true }
+iniy-nli = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+axum = { workspace = true }
+tower = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+ulid = { workspace = true }
+
+[[bin]]
+name = "iniy-server"
+path = "src/main.rs"
