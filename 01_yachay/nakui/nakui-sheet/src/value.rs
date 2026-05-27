@@ -119,6 +119,100 @@ impl SheetValue {
             Self::Error(e) => e.token().to_string(),
         }
     }
+
+    /// Como `to_display_string`, pero respeta un [`CellFormat`]. Texto
+    /// y booleanos ignoran el format (no son numéricos); empty,
+    /// number y error sí responden — number aplica el formato
+    /// numérico, empty queda vacío, error muestra su token.
+    pub fn to_formatted_string(&self, fmt: &CellFormat) -> String {
+        match self {
+            Self::Number(d) => fmt.format_number(*d),
+            _ => self.to_display_string(),
+        }
+    }
+}
+
+/// Formato de display de una celda. Es metadata visual — no cambia
+/// el valor almacenado, solo cómo se pinta. `General` (default)
+/// usa el `to_display_string` natural; los otros son opt-in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CellFormat {
+    /// Sin formato — muestra el value tal cual.
+    General,
+    /// Número con un número fijo de decimales y separador de miles
+    /// (`1,234.50`).
+    Number { decimals: u8 },
+    /// Moneda con prefijo (`$1,234.50` o `€1.234,50` — el símbolo
+    /// queda al gusto del usuario). Sin convertir entre monedas;
+    /// es solo cosmético.
+    Currency { symbol: String, decimals: u8 },
+    /// Porcentaje: multiplica el valor por 100 al display
+    /// (`0.5` → `50.00%`).
+    Percent { decimals: u8 },
+}
+
+impl Default for CellFormat {
+    fn default() -> Self {
+        Self::General
+    }
+}
+
+impl CellFormat {
+    pub fn format_number(&self, n: rust_decimal::Decimal) -> String {
+        match self {
+            Self::General => n.normalize().to_string(),
+            Self::Number { decimals } => format_with_separators(n, *decimals, ""),
+            Self::Currency { symbol, decimals } => {
+                let body = format_with_separators(n, *decimals, "");
+                if n.is_sign_negative() {
+                    // Estilo Excel: el símbolo va después del menos.
+                    // "−$1,234.50" en vez de "$−1,234.50".
+                    let abs = body.trim_start_matches('-');
+                    format!("-{symbol}{abs}")
+                } else {
+                    format!("{symbol}{body}")
+                }
+            }
+            Self::Percent { decimals } => {
+                let scaled = n * rust_decimal::Decimal::from(100);
+                format_with_separators(scaled, *decimals, "") + "%"
+            }
+        }
+    }
+}
+
+/// Formatea un `Decimal` con N decimales fijos y separador de miles
+/// (`,`). Sin localización (que es scope creep — primero hacemos
+/// que funcione, luego internacionalizamos).
+fn format_with_separators(
+    n: rust_decimal::Decimal,
+    decimals: u8,
+    _locale: &str,
+) -> String {
+    let rounded = n.round_dp(decimals as u32);
+    let s = format!("{rounded:.*}", decimals as usize);
+    // Insertar separadores de miles en la parte entera.
+    let (sign, body) = if let Some(stripped) = s.strip_prefix('-') {
+        ("-", stripped)
+    } else {
+        ("", s.as_str())
+    };
+    let (int_part, frac_part) = match body.find('.') {
+        Some(idx) => (&body[..idx], &body[idx..]),
+        None => (body, ""),
+    };
+    let mut out = String::new();
+    out.push_str(sign);
+    let bytes = int_part.as_bytes();
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 && (bytes.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(*b as char);
+    }
+    out.push_str(frac_part);
+    out
 }
 
 impl From<Decimal> for SheetValue {
@@ -218,5 +312,55 @@ mod tests {
         // `normalize` elimina ceros sobrantes: 1.50 → 1.5, 5.00 → 5.
         let v = SheetValue::Number(Decimal::from_str("1.50").unwrap());
         assert_eq!(v.to_display_string(), "1.5");
+    }
+
+    #[test]
+    fn number_format_with_decimals_and_separators() {
+        let v = SheetValue::Number(Decimal::from_str("1234567.5").unwrap());
+        let fmt = CellFormat::Number { decimals: 2 };
+        assert_eq!(v.to_formatted_string(&fmt), "1,234,567.50");
+    }
+
+    #[test]
+    fn number_format_rounds() {
+        let v = SheetValue::Number(Decimal::from_str("3.456").unwrap());
+        let fmt = CellFormat::Number { decimals: 2 };
+        // banker's rounding de Decimal: 3.456 → 3.46
+        assert_eq!(v.to_formatted_string(&fmt), "3.46");
+    }
+
+    #[test]
+    fn currency_format_uses_symbol_and_sign() {
+        let v = SheetValue::Number(Decimal::from_str("1234.5").unwrap());
+        let fmt = CellFormat::Currency {
+            symbol: "$".into(),
+            decimals: 2,
+        };
+        assert_eq!(v.to_formatted_string(&fmt), "$1,234.50");
+        let neg = SheetValue::Number(Decimal::from_str("-99").unwrap());
+        assert_eq!(neg.to_formatted_string(&fmt), "-$99.00");
+    }
+
+    #[test]
+    fn percent_format_multiplies_by_hundred() {
+        let v = SheetValue::Number(Decimal::from_str("0.5").unwrap());
+        let fmt = CellFormat::Percent { decimals: 1 };
+        assert_eq!(v.to_formatted_string(&fmt), "50.0%");
+    }
+
+    #[test]
+    fn general_format_uses_natural_display() {
+        let v = SheetValue::Number(Decimal::from_str("1.50").unwrap());
+        assert_eq!(v.to_formatted_string(&CellFormat::General), "1.5");
+    }
+
+    #[test]
+    fn non_numeric_values_ignore_format() {
+        let v = SheetValue::Text("hola".into());
+        let fmt = CellFormat::Currency {
+            symbol: "$".into(),
+            decimals: 2,
+        };
+        assert_eq!(v.to_formatted_string(&fmt), "hola");
     }
 }

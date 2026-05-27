@@ -26,7 +26,7 @@ use llimphi_ui::{
     App, Handle, Key, KeyEvent, KeyState, NamedKey, View, WheelDelta,
 };
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
-use nakui_sheet::{CellRef, SheetValue, Workbook};
+use nakui_sheet::{CellFormat, CellRef, SheetValue, Workbook};
 
 const VISIBLE_COLS: u32 = 12;
 const VISIBLE_ROWS: u32 = 25;
@@ -93,6 +93,9 @@ enum Msg {
     /// tipeada — comportamiento natural cuando empezás a escribir
     /// sobre una celda no-editando.
     StartEditWith(String),
+    /// Aplica un formato predefinido a la celda activa. Lo dispara
+    /// Ctrl+Shift+1/4/5 — los atajos clásicos de Excel.
+    ApplyFormat(CellFormat),
 }
 
 #[derive(Clone, Copy)]
@@ -222,6 +225,20 @@ impl App for NakuiSheetApp {
                 model.editing = true;
                 model.bar.set_text(first_char);
             }
+            Msg::ApplyFormat(fmt) => match model.wb.set_format(model.selected, fmt.clone()) {
+                Ok(_) => {
+                    model.status = Status {
+                        text: format!("  ▦ formato aplicado a {}", model.selected),
+                        kind: StatusKind::Info,
+                    };
+                }
+                Err(e) => {
+                    model.status = Status {
+                        text: format!("  ✗ formato: {e}"),
+                        kind: StatusKind::Error,
+                    };
+                }
+            },
             Msg::Scroll { drow, dcol } => {
                 model.viewport_row =
                     apply_scroll_axis(model.viewport_row, drow);
@@ -378,6 +395,33 @@ impl App for NakuiSheetApp {
                     "x" => return Some(Msg::Cut),
                     "v" => return Some(Msg::Paste),
                     _ => {}
+                }
+                // Atajos Ctrl+Shift+N de formato. En distintos
+                // layouts el caracter producido por la tecla "1"
+                // con shift puede ser "!", "¡", etc. — chequeamos
+                // contra ambos.
+                if ev.modifiers.shift {
+                    let lower = s.to_lowercase();
+                    if lower == "1" || lower == "!" {
+                        return Some(Msg::ApplyFormat(CellFormat::Number {
+                            decimals: 2,
+                        }));
+                    }
+                    if lower == "4" || lower == "$" {
+                        return Some(Msg::ApplyFormat(CellFormat::Currency {
+                            symbol: "$".into(),
+                            decimals: 2,
+                        }));
+                    }
+                    if lower == "5" || lower == "%" {
+                        return Some(Msg::ApplyFormat(CellFormat::Percent {
+                            decimals: 0,
+                        }));
+                    }
+                    if lower == "0" || lower == ")" {
+                        // Ctrl+Shift+0: vuelve a General (sin formato).
+                        return Some(Msg::ApplyFormat(CellFormat::General));
+                    }
                 }
             }
         }
@@ -931,7 +975,10 @@ fn cell_view(wb: &Workbook, selected: CellRef, cr: CellRef) -> View<Msg> {
     let value = wb.value(cr);
     let display = match &value {
         SheetValue::Empty => String::new(),
-        _ => value.to_display_string(),
+        // El display respeta el formato configurado en la celda
+        // (Number/Currency/Percent/General). Los no-numéricos
+        // ignoran el formato a propósito.
+        _ => wb.formatted(cr),
     };
     let is_error = matches!(value, SheetValue::Error(_));
     let is_text = matches!(value, SheetValue::Text(_));

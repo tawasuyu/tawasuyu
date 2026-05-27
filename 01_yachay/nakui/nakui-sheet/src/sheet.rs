@@ -16,7 +16,7 @@
 use crate::cell::CellRef;
 use crate::formula::{self, CellResolver, FormulaExpr};
 use crate::graph::{CycleError, SheetGraph};
-use crate::value::SheetValue;
+use crate::value::{CellFormat, SheetValue};
 use rust_decimal::Decimal;
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
@@ -45,6 +45,10 @@ pub struct CellState {
     pub raw: String,
     pub expr: FormulaExpr,
     pub value: SheetValue,
+    /// Formato de display. Default `General`. Cambiarlo NO toca el
+    /// valor — sigue siendo el mismo `Decimal`, solo cambia cómo
+    /// se pinta.
+    pub format: CellFormat,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -123,11 +127,11 @@ impl Sheet {
         let deps = formula::dependencies(&expr);
         self.graph.set_deps(cr, &deps)?;
 
-        let prev_value = self
+        let (prev_value, prev_format) = self
             .cells
             .get(&cr)
-            .map(|s| s.value.clone())
-            .unwrap_or(SheetValue::Empty);
+            .map(|s| (s.value.clone(), s.format.clone()))
+            .unwrap_or((SheetValue::Empty, CellFormat::default()));
         if expr.is_volatile() {
             self.volatiles.insert(cr);
         } else {
@@ -139,9 +143,43 @@ impl Sheet {
                 raw,
                 expr,
                 value: SheetValue::Empty,
+                // Preservamos el formato: editar el contenido de una
+                // celda no debería resetear el "esta celda es moneda"
+                // que el usuario configuró.
+                format: prev_format,
             },
         );
         Ok(self.recalc_from(&[cr], Some((cr, prev_value))))
+    }
+
+    /// Cambia el formato de display de una celda. Si la celda no
+    /// existe todavía, la crea vacía (Empty con ese formato). El
+    /// valor no se toca — el cambio es puramente visual.
+    pub fn set_format(&mut self, cr: CellRef, format: CellFormat) {
+        if let Some(state) = self.cells.get_mut(&cr) {
+            state.format = format;
+        } else {
+            self.cells.insert(
+                cr,
+                CellState {
+                    raw: String::new(),
+                    expr: FormulaExpr::Text(String::new()),
+                    value: SheetValue::Empty,
+                    format,
+                },
+            );
+            // Aseguramos que el grafo tenga el nodo, por consistencia.
+            let _ = self.graph.set_deps(cr, &[]);
+        }
+    }
+
+    /// Formato actual de la celda — `General` si nunca se le asignó
+    /// uno.
+    pub fn format(&self, cr: CellRef) -> CellFormat {
+        self.cells
+            .get(&cr)
+            .map(|s| s.format.clone())
+            .unwrap_or_default()
     }
 
     /// Recalcula explícitamente todas las celdas volátiles. Útil

@@ -24,5 +24,5 @@ pub use formula::{compile, dependencies, eval_formula, CellResolver, FormulaExpr
 pub use graph::{CycleError, SheetGraph};
 pub use sheet::{SetError, SetReport, Sheet};
 pub use sink::{EventSink, FileSink, MemorySink, SinkError};
-pub use value::{SheetError, SheetValue};
+pub use value::{CellFormat, SheetError, SheetValue};
 pub use workbook::{RecordedEvent, SheetEvent, Workbook, WorkbookError};

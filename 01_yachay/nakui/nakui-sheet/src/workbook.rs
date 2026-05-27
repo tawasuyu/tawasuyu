@@ -21,7 +21,7 @@ use crate::cell::{CellRange, CellRef};
 use crate::formula::{self, CellResolver, FormulaExpr};
 use crate::sheet::{SetError, SetReport, Sheet};
 use crate::sink::{EventSink, MemorySink, SinkError};
-use crate::value::SheetValue;
+use crate::value::{CellFormat, SheetValue};
 use serde::{Deserialize, Serialize};
 use std::io::{self, BufRead, Write};
 use thiserror::Error;
@@ -64,6 +64,9 @@ pub enum SheetEvent {
     /// habría producido la edición original — pero el WAL conserva
     /// el rastro completo de la operación.
     Restore { cells: Vec<(CellRef, Option<String>)> },
+    /// Cambia el formato de display de una celda. NO toca el valor
+    /// (sigue siendo el mismo Decimal/Text/Bool), solo cómo se pinta.
+    SetFormat { cell: CellRef, format: CellFormat },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -210,6 +213,32 @@ impl Workbook {
     /// rango de una sola celda).
     pub fn copy_cell(&mut self, src: CellRef, dest: CellRef) -> Result<SetReport, WorkbookError> {
         self.fill(src, CellRange::new(dest, dest))
+    }
+
+    /// Aplica un formato de display a una celda. Si tras el cambio
+    /// algún invariante se viola (extraño — los invariantes leen
+    /// valores, no formatos, pero podría haber edge cases), se
+    /// revierte.
+    pub fn set_format(
+        &mut self,
+        cell: CellRef,
+        format: CellFormat,
+    ) -> Result<SetReport, WorkbookError> {
+        self.apply_user_event(SheetEvent::SetFormat { cell, format })
+    }
+
+    /// Formato actual de la celda (`General` por defecto).
+    pub fn format(&self, cr: CellRef) -> CellFormat {
+        self.sheet.format(cr)
+    }
+
+    /// Display de la celda respetando su formato — lo que la UI
+    /// debe pintar. Para celdas sin formato custom es equivalente a
+    /// `value(cell).to_display_string()`.
+    pub fn formatted(&self, cr: CellRef) -> String {
+        self.sheet
+            .value(cr)
+            .to_formatted_string(&self.sheet.format(cr))
     }
 
     /// Deshace la última edición. Estrategia: cursor virtual.
@@ -382,6 +411,16 @@ fn apply_to_sheet(sheet: &mut Sheet, event: &SheetEvent) -> Result<SetReport, Se
         SheetEvent::ClearCell { cell } => Ok(sheet.clear_cell(*cell)),
         SheetEvent::Fill { src, dest } => apply_fill(sheet, *src, *dest),
         SheetEvent::Restore { cells } => apply_restore(sheet, cells),
+        SheetEvent::SetFormat { cell, format } => {
+            sheet.set_format(*cell, format.clone());
+            // SetFormat no dispara cascada de cómputo (es metadata),
+            // pero igual reportamos la celda como "tocada" para que la
+            // UI sepa que tiene que repintar.
+            let mut rep = SetReport::default();
+            rep.changed
+                .push((*cell, sheet.value(*cell), sheet.value(*cell)));
+            Ok(rep)
+        }
     }
 }
 
@@ -838,6 +877,38 @@ mod tests {
         // B1 NO se toca (no estaba en el write-set del Fill,
         // excluida por ser la fuente).
         assert_eq!(wb.value(cr("B1")), SheetValue::Number(dec("10")));
+    }
+
+    #[test]
+    fn set_format_changes_display_not_value() {
+        let mut wb = Workbook::new();
+        wb.set_cell(cr("A1"), "1234.5").unwrap();
+        // Sin formato: usa el natural.
+        assert_eq!(wb.formatted(cr("A1")), "1234.5");
+        wb.set_format(
+            cr("A1"),
+            CellFormat::Currency {
+                symbol: "$".into(),
+                decimals: 2,
+            },
+        )
+        .unwrap();
+        // El valor sigue siendo el mismo Decimal:
+        assert_eq!(wb.value(cr("A1")), SheetValue::Number(dec("1234.5")));
+        // ...pero el display cambió:
+        assert_eq!(wb.formatted(cr("A1")), "$1,234.50");
+    }
+
+    #[test]
+    fn format_persists_through_edits() {
+        let mut wb = Workbook::new();
+        wb.set_cell(cr("A1"), "10").unwrap();
+        wb.set_format(cr("A1"), CellFormat::Percent { decimals: 0 })
+            .unwrap();
+        // Reescribimos el valor. El formato debe sobrevivir.
+        wb.set_cell(cr("A1"), "0.25").unwrap();
+        assert_eq!(wb.format(cr("A1")), CellFormat::Percent { decimals: 0 });
+        assert_eq!(wb.formatted(cr("A1")), "25%");
     }
 
     #[test]
