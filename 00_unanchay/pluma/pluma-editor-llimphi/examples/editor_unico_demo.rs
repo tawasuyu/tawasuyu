@@ -2,29 +2,31 @@
 //!
 //! Layout vertical:
 //!
-//!   ┌──────────────────────────────────────────────┐
-//!   │ header: cuerpo activo + atajos               │
-//!   ├──────────────────────────────────────────────┤
-//!   │ multilienzo: columnas paralelas + hebras     │  ← vista panorámica
-//!   ├──────────────────────────────────────────────┤
-//!   │                                              │
-//!   │ cuerpo_ide: text-editor IDE del cuerpo       │  ← edición real
-//!   │ activo (buffer único, multi-cursor, undo)    │
-//!   │                                              │
-//!   ├──────────────────────────────────────────────┤
-//!   │ footer: último save                          │
-//!   └──────────────────────────────────────────────┘
+//!   ┌──────────────────────────────────────────────────────────────┐
+//!   │ header: cuerpo activo + atajos                               │
+//!   ├──────────────────────────────────────────────────────────────┤
+//!   │ ┌─────────────────┬─────────┬─────────────────┐              │
+//!   │ │                 │         │                 │              │
+//!   │ │ CuerpoIde 0     │ hebras  │ CuerpoIde 1     │              │
+//!   │ │ (text-editor)   │ (carril)│ (text-editor)   │              │
+//!   │ │                 │         │                 │              │
+//!   │ └─────────────────┴─────────┴─────────────────┘              │
+//!   ├──────────────────────────────────────────────────────────────┤
+//!   │ footer: último save                                          │
+//!   └──────────────────────────────────────────────────────────────┘
 //!
 //! Dos cuerpos: `es` (original) + `qu` (derivado por
-//! `EjecutorTraducirTabla`). Una carta `es ↔ qu` los conecta.
+//! `EjecutorTraducirTabla`). Una carta `es ↔ qu` los conecta. Cada
+//! cuerpo es un text-editor real (no readonly): escribís donde mirás,
+//! sin mover la atención a otra región de la pantalla. Las hebras
+//! cruzan el carril intermedio y siguen el scroll de cada editor.
 //!
 //! Atajos y gestos:
-//!   - **Click sobre un bloque de átomo del multilienzo** → cambia el
-//!     cuerpo activo a esa columna y posiciona el caret del IDE en el
-//!     átomo cliqueado. Es la navegación primaria: usar la panorámica
-//!     como minimapa para saltar a cualquier párrafo de cualquier cuerpo.
-//!   - `Ctrl+1` / `Ctrl+2` → cambiar cuerpo activo (preserva buffer de
-//!     cada uno — cada cuerpo tiene su propio `CuerpoIde`).
+//!   - **Click dentro de cualquier editor** → le da el foco (cuerpo
+//!     activo) y posiciona el caret en la línea cliqueada.
+//!   - `Ctrl+1` / `Ctrl+2` → cambiar cuerpo activo con teclado (preserva
+//!     buffer, caret, undo de cada uno — cada cuerpo tiene su propio
+//!     `CuerpoIde`).
 //!   - `Ctrl+S` → diff + persiste el cuerpo activo; si era la madre
 //!     (`es`), marca la carta como stale (hebras punteadas).
 //!   - `Ctrl+]` → siguiente átomo del cuerpo activo.
@@ -37,7 +39,7 @@
 use std::collections::HashMap;
 
 use llimphi_ui::llimphi_layout::taffy::prelude::{
-    auto, length, percent, FlexDirection, Rect, Size, Style,
+    length, percent, FlexDirection, Rect, Size, Style,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
@@ -49,9 +51,10 @@ use pluma_align::CartaHebras;
 use pluma_core::NarrativeAtom;
 use pluma_cuerpo::{Cuerpo, Intencion};
 use pluma_editor_cuerpo::CambioAtom;
-use pluma_editor_llimphi::cuerpo_ide::{cuerpo_ide_view, CuerpoIde};
-use pluma_editor_llimphi::multilienzo::{
-    multilienzo_view_interactivo, IndiceAtoms, MultilienzoConfig, PaletaHebras,
+use pluma_editor_llimphi::cuerpo_ide::CuerpoIde;
+use pluma_editor_llimphi::multilienzo::PaletaHebras;
+use pluma_editor_llimphi::multilienzo_editor::{
+    multilienzo_editor_view, ConfigMultilienzoEditor,
 };
 use pluma_editor_llimphi::Palette;
 use pluma_transform::{Ejecutor, TipoTransformacion, Transformacion};
@@ -60,25 +63,17 @@ use uuid::Uuid;
 
 const METRICS: EditorMetrics = EditorMetrics::for_font_size(13.0);
 const VISIBLE_LINES: usize = 200;
-/// Alto reservado para la franja del multilienzo arriba del editor.
-/// La pinta clip → con muchos cuerpos largos algunos átomos quedan
-/// fuera; aceptable para el demo, en producción esta franja iría con
-/// scroll horizontal/vertical propio.
-const ALTO_MULTILIENZO: f32 = 360.0;
 
 #[derive(Clone, Debug)]
 enum Msg {
     EditorKey(KeyEvent),
-    EditorPointer(PointerEvent),
+    /// Pointer event sobre el editor del cuerpo `cuerpo`. Al cliquear un
+    /// editor que no es el activo, además del set_caret cambiamos el
+    /// `activo` — el foco lo da el último click.
+    EditorPointer { cuerpo: usize, ev: PointerEvent },
     Guardar,
     CambiarActivo(usize),
     SaltarAtomoSiguiente,
-    /// Disparado al cliquear un bloque de átomo en el multilienzo: salta
-    /// el caret a ese átomo, cambiando el cuerpo activo si hace falta.
-    SaltarAAtomo {
-        i_cuerpo: usize,
-        atom_id: Uuid,
-    },
 }
 
 struct Model {
@@ -89,12 +84,14 @@ struct Model {
     /// Un IDE por cuerpo — cambiar de cuerpo conserva el buffer de cada
     /// uno (caret, undo, ediciones sin guardar). Indexado por cuerpo.
     ides: Vec<CuerpoIde>,
-    /// Índice en `cuerpos` y en `ides` del cuerpo que está siendo
-    /// editado ahora mismo.
+    /// Índice en `cuerpos` y en `ides` del cuerpo con foco — el que
+    /// recibe los `Msg::EditorKey` y se pinta con borde accent.
     activo: usize,
     clipboard: MemClipboard,
     ultimo_save: String,
-    drag_accum: (f32, f32),
+    /// Acumulado de drag (x, y) por cuerpo — el `Drag` del widget pasa
+    /// deltas y el caller acumula.
+    drag_accum: Vec<(f32, f32)>,
 }
 
 struct Demo;
@@ -104,7 +101,7 @@ impl App for Demo {
     type Msg = Msg;
 
     fn title() -> &'static str {
-        "pluma · editor único (multilienzo + cuerpo_ide)"
+        "pluma · editor único (editores lado-a-lado + hebras)"
     }
 
     fn initial_size() -> (u32, u32) {
@@ -174,6 +171,7 @@ impl App for Demo {
             .collect();
         drop(idx);
 
+        let n = cuerpos.len();
         Model {
             cuerpos,
             atoms,
@@ -182,7 +180,7 @@ impl App for Demo {
             activo: 0,
             clipboard: MemClipboard::default(),
             ultimo_save: String::new(),
-            drag_accum: (0.0, 0.0),
+            drag_accum: vec![(0.0, 0.0); n],
         }
     }
 
@@ -194,15 +192,23 @@ impl App for Demo {
                 let _ = model.ides[i].apply_key_with_clipboard(&ev, &mut model.clipboard);
                 model
             }
-            Msg::EditorPointer(ev) => {
+            Msg::EditorPointer { cuerpo, ev } => {
                 let mut model = model;
-                let i = model.activo;
-                let scroll = model.ides[i].state.scroll_offset;
+                if cuerpo >= model.cuerpos.len() {
+                    return model;
+                }
+                // Cualquier click en un editor le da el foco. Drag sin
+                // click previo no debería cambiar el activo (el press
+                // que originó el drag ya lo cambió antes).
+                if matches!(ev, PointerEvent::Click { .. }) && cuerpo != model.activo {
+                    model.activo = cuerpo;
+                }
+                let scroll = model.ides[cuerpo].state.scroll_offset;
                 match ev {
                     PointerEvent::Click { x, y } => {
-                        model.drag_accum = (0.0, 0.0);
+                        model.drag_accum[cuerpo] = (0.0, 0.0);
                         let (line, col) = METRICS.screen_to_pos(x, y, scroll);
-                        model.ides[i].set_caret(line, col);
+                        model.ides[cuerpo].set_caret(line, col);
                     }
                     PointerEvent::Drag {
                         initial_x,
@@ -210,12 +216,12 @@ impl App for Demo {
                         dx,
                         dy,
                     } => {
-                        model.drag_accum.0 += dx;
-                        model.drag_accum.1 += dy;
-                        let cx = initial_x + model.drag_accum.0;
-                        let cy = initial_y + model.drag_accum.1;
+                        model.drag_accum[cuerpo].0 += dx;
+                        model.drag_accum[cuerpo].1 += dy;
+                        let cx = initial_x + model.drag_accum[cuerpo].0;
+                        let cy = initial_y + model.drag_accum[cuerpo].1;
                         let (line, col) = METRICS.screen_to_pos(cx, cy, scroll);
-                        model.ides[i].state.extend_selection_to(line, col);
+                        model.ides[cuerpo].state.extend_selection_to(line, col);
                     }
                 }
                 model
@@ -225,7 +231,9 @@ impl App for Demo {
                 let mut model = model;
                 if i < model.cuerpos.len() {
                     model.activo = i;
-                    model.drag_accum = (0.0, 0.0);
+                    if let Some(slot) = model.drag_accum.get_mut(i) {
+                        *slot = (0.0, 0.0);
+                    }
                 }
                 model
             }
@@ -237,28 +245,6 @@ impl App for Demo {
                         model.ides[i].set_caret(line, col);
                         model.ides[i].state.ensure_caret_visible(VISIBLE_LINES);
                     }
-                }
-                model
-            }
-            Msg::SaltarAAtomo { i_cuerpo, atom_id } => {
-                let mut model = model;
-                if i_cuerpo >= model.cuerpos.len() {
-                    return model;
-                }
-                // Cambiar de cuerpo activo si hace falta.
-                if i_cuerpo != model.activo {
-                    model.activo = i_cuerpo;
-                    model.drag_accum = (0.0, 0.0);
-                }
-                // Saltar el caret al átomo cliqueado. Si la columna del
-                // multilienzo está pintando un átomo "ausente" (no está
-                // en el IDE del cuerpo), `posicion_de_atom` devuelve
-                // None y dejamos el caret donde estaba.
-                if let Some((line, col)) = model.ides[i_cuerpo].posicion_de_atom(atom_id) {
-                    model.ides[i_cuerpo].set_caret(line, col);
-                    model.ides[i_cuerpo]
-                        .state
-                        .ensure_caret_visible(VISIBLE_LINES);
                 }
                 model
             }
@@ -288,7 +274,7 @@ impl App for Demo {
         let palette_editor = EditorPalette::default();
         let palette_lienzo = Palette::default();
         let paleta_hebras = PaletaHebras::default();
-        let cfg = MultilienzoConfig::default();
+        let cfg = ConfigMultilienzoEditor::default();
 
         let bg_app = palette_editor.bg;
         let fg_text = palette_editor.fg_text;
@@ -296,7 +282,7 @@ impl App for Demo {
 
         let ide_activo = &model.ides[model.activo];
         let header_text = format!(
-            "activo: «{}»  ·  {} átomos  ·  {} párrafos  ·  {}  ·  click átomo en multilienzo = ir  ·  Ctrl+1/2 cambiar  ·  Ctrl+S guardar  ·  Ctrl+] siguiente",
+            "activo: «{}»  ·  {} átomos  ·  {} párrafos  ·  {}  ·  click = foco  ·  Ctrl+1/2 cambiar  ·  Ctrl+S guardar  ·  Ctrl+] siguiente",
             model.cuerpos[model.activo].metadatos.nombre_legible,
             model.cuerpos[model.activo].orden.len(),
             ide_activo.n_parrafos_buffer(),
@@ -308,57 +294,37 @@ impl App for Demo {
         );
         let header = chip(header_text, 28.0, 12.0, Color::from_rgba8(40, 44, 52, 255), fg_text);
 
-        // Multilienzo arriba — vista panorámica clickeable: cada bloque
-        // de átomo emite `SaltarAAtomo`, que cambia el cuerpo activo y
-        // posiciona el caret en ese átomo.
-        let idx: IndiceAtoms = model.atoms.iter().map(|(k, v)| (*k, v)).collect();
+        // Cuerpo principal: N editores lado-a-lado con hebras entre
+        // cada par consecutivo. Click en cualquiera → foco; teclas →
+        // editor activo. Las hebras siguen al scroll de cada editor.
+        let ides_ref: Vec<&CuerpoIde> = model.ides.iter().collect();
         let cuerpos_ref: Vec<&Cuerpo> = model.cuerpos.iter().collect();
         let cartas_ref: Vec<Option<&CartaHebras>> = model.cartas.iter().map(Some).collect();
-        let lienzo = multilienzo_view_interactivo::<Msg, _>(
+        let editores = multilienzo_editor_view::<Msg, _>(
+            &ides_ref,
             &cuerpos_ref,
-            &idx,
             &cartas_ref,
-            &cfg,
+            model.activo,
+            &palette_editor,
             &paleta_hebras,
             &palette_lienzo,
-            "",
-            |i_cuerpo, atom_id| Msg::SaltarAAtomo { i_cuerpo, atom_id },
+            &cfg,
+            METRICS,
+            VISIBLE_LINES,
+            Language::Plain,
+            |cuerpo, ev| Msg::EditorPointer { cuerpo, ev },
         );
-        let banda_lienzo = View::new(Style {
+        let area_principal = View::new(Style {
+            flex_direction: FlexDirection::Row,
+            flex_grow: 1.0,
             size: Size {
                 width: percent(1.0_f32),
-                height: length(ALTO_MULTILIENZO),
+                height: percent(1.0_f32),
             },
             ..Default::default()
         })
         .fill(palette_lienzo.bg_app)
-        .clip(true)
-        .children(vec![lienzo]);
-
-        // IDE abajo — edición del cuerpo activo.
-        let editor = cuerpo_ide_view::<Msg>(
-            ide_activo,
-            &palette_editor,
-            METRICS,
-            VISIBLE_LINES,
-            Language::Plain,
-            |ev| Some(Msg::EditorPointer(ev)),
-        );
-        let contenedor_editor = View::new(Style {
-            size: Size {
-                width: percent(1.0_f32),
-                height: auto(),
-            },
-            padding: Rect {
-                left: length(8.0_f32),
-                right: length(8.0_f32),
-                top: length(6.0_f32),
-                bottom: length(6.0_f32),
-            },
-            ..Default::default()
-        })
-        .fill(bg_app)
-        .children(vec![editor]);
+        .children(vec![editores]);
 
         let footer_text = if model.ultimo_save.is_empty() {
             "(sin saves — editá y dale Ctrl+S; las hebras se marcan stale al editar la madre)".to_string()
@@ -376,7 +342,7 @@ impl App for Demo {
             ..Default::default()
         })
         .fill(bg_app)
-        .children(vec![header, banda_lienzo, contenedor_editor, footer])
+        .children(vec![header, area_principal, footer])
     }
 }
 

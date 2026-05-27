@@ -13,6 +13,7 @@
 
 pub mod cuerpo_ide;
 pub mod multilienzo;
+pub mod multilienzo_editor;
 
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{auto, length, percent, Position, Rect, Size, Style},
