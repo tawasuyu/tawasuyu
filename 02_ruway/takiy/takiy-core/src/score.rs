@@ -135,6 +135,15 @@ impl Score {
         &self.tracks
     }
 
+    /// Elimina la pista en `index`. Devuelve la pista quitada, o
+    /// `None` si el índice no existe.
+    pub fn remove_track(&mut self, index: usize) -> Option<Track> {
+        if index >= self.tracks.len() {
+            return None;
+        }
+        Some(self.tracks.remove(index))
+    }
+
     /// Duración en pulsos — la pista más larga.
     pub fn duration_beats(&self) -> f32 {
         self.tracks.iter().map(|t| t.duration()).fold(0.0, f32::max)

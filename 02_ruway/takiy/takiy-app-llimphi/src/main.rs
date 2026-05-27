@@ -30,6 +30,8 @@
 //!                  30..=300).
 //! - `p` / `P`    — programa GM anterior / siguiente para la pista
 //!                  activa (sólo aplica si hay SF2 cargado).
+//! - `Ctrl+⌫`     — borra la pista activa (no se permite quedarse
+//!                  sin pistas; si sólo queda una, no hace nada).
 //! - `Esc`        — cierra la ventana.
 //!
 //! Si `TAKIY_SCORE_JSON` está seteado, la app además **auto-guarda**
@@ -90,6 +92,9 @@ enum Msg {
     CycleTrack,
     /// Agrega una pista nueva (vacía) y la activa.
     NewTrack,
+    /// Borra la pista activa. No hace nada si sólo queda una (no
+    /// dejamos al editor sin ningún destino para nuevas notas).
+    DeleteActiveTrack,
     /// Guarda el score actual a `TAKIY_SCORE_JSON` (o a `/tmp/...` si
     /// la variable no está seteada).
     Save,
@@ -226,6 +231,7 @@ impl App for Takiy {
                 | Msg::NudgeVelocity { .. }
                 | Msg::NudgeTempo { .. }
                 | Msg::NewTrack
+                | Msg::DeleteActiveTrack
         );
         // Nota: `NudgeProgram` cambia el SF2 en memoria pero no el
         // `Score` serializable, así que no se persiste (vive sólo en
@@ -468,6 +474,30 @@ impl App for Takiy {
                 model.active_track = idx;
                 model.status = format!("new · pista {idx} ({name})");
             }
+            Msg::DeleteActiveTrack => {
+                let n = model.score.tracks().len();
+                if n <= 1 {
+                    model.status = "no se puede borrar la última pista".into();
+                    return model;
+                }
+                let removed = model.active_track.min(n - 1);
+                let gone = model.score.remove_track(removed);
+                // Re-apuntar `active_track` y `selected` después del
+                // shift de índices.
+                if model.active_track >= n - 1 {
+                    model.active_track = n - 2;
+                }
+                model.selected = match model.selected {
+                    Some((t, _)) if t == removed => None,
+                    Some((t, i)) if t > removed => Some((t - 1, i)),
+                    other => other,
+                };
+                let name = gone
+                    .as_ref()
+                    .map(|t| t.name.as_str())
+                    .unwrap_or("?");
+                model.status = format!("deleted · pista {removed} ({name})");
+            }
         }
         if is_edit {
             if let Some(path) = model.save_path.as_deref() {
@@ -517,6 +547,9 @@ impl App for Takiy {
             }
             Key::Named(NamedKey::ArrowDown) => {
                 Some(Msg::MoveSelected { d_beat: 0.0, d_semitones: -1 })
+            }
+            Key::Named(NamedKey::Backspace) if event.modifiers.ctrl => {
+                Some(Msg::DeleteActiveTrack)
             }
             Key::Named(NamedKey::Delete | NamedKey::Backspace) => Some(Msg::DeleteSelected),
             Key::Character(s) if s.eq_ignore_ascii_case("n") => Some(Msg::NewTrack),
