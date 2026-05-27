@@ -255,6 +255,13 @@ impl Workbook {
         self.applied < self.events_cache.len()
     }
 
+    /// Cuántos eventos del cache están actualmente aplicados al
+    /// sheet. En estado normal == `events().len()`. Tras un undo
+    /// queda por debajo, dejando eventos disponibles para `redo`.
+    pub fn applied_count(&self) -> usize {
+        self.applied
+    }
+
     /// Reconstruye un `Sheet` aplicando los primeros `n` eventos del
     /// cache. Igual que `snapshot_at` pero sin acceso público — lo
     /// usa `undo` para volver al estado anterior.

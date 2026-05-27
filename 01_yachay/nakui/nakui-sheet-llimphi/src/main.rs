@@ -82,6 +82,8 @@ enum Msg {
     /// Desplaza el viewport. Filas positivas = scroll hacia abajo
     /// (la celda B5 sube en pantalla, llegan al fondo nuevas filas).
     Scroll { drow: i32, dcol: i32 },
+    Undo,
+    Redo,
 }
 
 #[derive(Clone, Copy)]
@@ -201,6 +203,56 @@ impl App for NakuiSheetApp {
                 model.viewport_col =
                     apply_scroll_axis(model.viewport_col, dcol);
             }
+            Msg::Undo => match model.wb.undo() {
+                Ok(Some(_)) => {
+                    model.bar.set_text(model.wb.raw(model.selected).unwrap_or(""));
+                    model.status = Status {
+                        text: format!(
+                            "  ↶ undo  ·  applied {} / {} eventos",
+                            applied_count(&model.wb),
+                            model.wb.events().len()
+                        ),
+                        kind: StatusKind::Info,
+                    };
+                }
+                Ok(None) => {
+                    model.status = Status {
+                        text: "  nada que deshacer".into(),
+                        kind: StatusKind::Info,
+                    };
+                }
+                Err(e) => {
+                    model.status = Status {
+                        text: format!("  ✗ undo: {e}"),
+                        kind: StatusKind::Error,
+                    };
+                }
+            },
+            Msg::Redo => match model.wb.redo() {
+                Ok(Some(_)) => {
+                    model.bar.set_text(model.wb.raw(model.selected).unwrap_or(""));
+                    model.status = Status {
+                        text: format!(
+                            "  ↷ redo  ·  applied {} / {} eventos",
+                            applied_count(&model.wb),
+                            model.wb.events().len()
+                        ),
+                        kind: StatusKind::Info,
+                    };
+                }
+                Ok(None) => {
+                    model.status = Status {
+                        text: "  nada que rehacer".into(),
+                        kind: StatusKind::Info,
+                    };
+                }
+                Err(e) => {
+                    model.status = Status {
+                        text: format!("  ✗ redo: {e}"),
+                        kind: StatusKind::Error,
+                    };
+                }
+            },
         }
         model
     }
@@ -232,6 +284,23 @@ impl App for NakuiSheetApp {
     fn on_key(model: &Self::Model, ev: &KeyEvent) -> Option<Self::Msg> {
         if ev.state != KeyState::Pressed {
             return None;
+        }
+        // Atajos con Ctrl: undo/redo. Tienen prioridad sobre cualquier
+        // otra interpretación de la tecla.
+        if ev.modifiers.ctrl {
+            if let Key::Character(s) = &ev.key {
+                let lc = s.to_lowercase();
+                if lc == "z" {
+                    return Some(if ev.modifiers.shift {
+                        Msg::Redo
+                    } else {
+                        Msg::Undo
+                    });
+                }
+                if lc == "y" {
+                    return Some(Msg::Redo);
+                }
+            }
         }
         match &ev.key {
             Key::Named(NamedKey::Enter) => Some(Msg::Commit),
@@ -302,6 +371,10 @@ fn move_cell(cr: CellRef, dir: Dir) -> CellRef {
         Dir::Left => CellRef::new(col.saturating_sub(1), row),
         Dir::Right => CellRef::new(col.saturating_add(1), row),
     }
+}
+
+fn applied_count(wb: &Workbook) -> usize {
+    wb.applied_count()
 }
 
 fn apply_scroll_axis(viewport: u32, delta: i32) -> u32 {
