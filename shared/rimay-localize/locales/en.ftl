@@ -309,3 +309,24 @@ wawa-panel-mod-minga = minga · p2p storage
 wawa-panel-mod-agora = agora · public square
 wawa-panel-mod-on = on
 wawa-panel-mod-off = off
+
+# === mirada-asistente ===
+# Llimphi app that translates natural language into mirada-ctl commands
+# by consulting an LLM. The AI proposes; the human confirms before executing.
+asistente-title = carmen · assistant
+asistente-sub = tell me what you want to do; the assistant proposes, you confirm.
+asistente-placeholder = what do you want to do? (Enter to ask, Esc to clear)
+asistente-banner-no-llm = LLM unavailable: { $motivo }
+asistente-status-pensando = thinking…
+asistente-boton-ejecutar = Run
+asistente-boton-descartar = Discard
+asistente-ejecutado-ok = ✓ { $accion } executed
+asistente-ejecutado-fallo = ✗ { $accion } failed
+asistente-error-transporte = transport: { $motivo }
+asistente-error-sin-llm = LLM not initialized
+asistente-error-sin-json = response without JSON: { $crudo }
+asistente-error-accion-vacia = proposal without action: { $crudo }
+asistente-error-json-invalido = unrecognized JSON: { $crudo }
+asistente-error-spawn = spawn failed: { $err } (is mirada-ctl in PATH?)
+asistente-cero-salida = (no output)
+asistente-codigo-salida = exit code { $codigo }

@@ -312,3 +312,24 @@ wawa-panel-mod-minga = minga · almacenamiento p2p
 wawa-panel-mod-agora = agora · plaza pública
 wawa-panel-mod-on = encendido
 wawa-panel-mod-off = apagado
+
+# === mirada-asistente ===
+# App Llimphi que traduce lenguaje natural a comandos de mirada-ctl
+# consultando un LLM. La IA propone, el humano confirma antes de ejecutar.
+asistente-title = carmen · asistente
+asistente-sub = describí lo que querés hacer; el asistente propone, vos confirmás.
+asistente-placeholder = ¿qué querés hacer? (Enter para preguntar, Esc para limpiar)
+asistente-banner-no-llm = LLM no disponible: { $motivo }
+asistente-status-pensando = pensando…
+asistente-boton-ejecutar = Ejecutar
+asistente-boton-descartar = Descartar
+asistente-ejecutado-ok = ✓ { $accion } ejecutado
+asistente-ejecutado-fallo = ✗ { $accion } falló
+asistente-error-transporte = transporte: { $motivo }
+asistente-error-sin-llm = LLM no inicializado
+asistente-error-sin-json = respuesta sin JSON: { $crudo }
+asistente-error-accion-vacia = propuesta sin accion: { $crudo }
+asistente-error-json-invalido = JSON no reconocido: { $crudo }
+asistente-error-spawn = spawn falló: { $err } (¿está mirada-ctl en PATH?)
+asistente-cero-salida = (sin salida)
+asistente-codigo-salida = código { $codigo }

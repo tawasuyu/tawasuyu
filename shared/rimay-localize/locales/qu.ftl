@@ -315,3 +315,24 @@ wawa-panel-mod-minga = minga · p2p waqaychana
 wawa-panel-mod-agora = agora · llaqta plaza
 wawa-panel-mod-on = kasqa
 wawa-panel-mod-off = wañusqa
+
+# === mirada-asistente ===
+# Llimphi rurana, runa siminchikmanta `mirada-ctl` kamachikunaman tikrachiq,
+# LLM-ta tapuspa. Nahual nin, runa hunisqa ruwakun.
+asistente-title = carmen · yanapaq
+asistente-sub = imatachus ruway munanki nipuway; yanapaq nin, qan hunichinki.
+asistente-placeholder = imatachus ruwayta munanki? (Enter tapunapaq, Esc pichanapaq)
+asistente-banner-no-llm = LLM mana kanchu: { $motivo }
+asistente-status-pensando = yuyaykuspa…
+asistente-boton-ejecutar = Ruway
+asistente-boton-descartar = Wikch'uy
+asistente-ejecutado-ok = ✓ { $accion } ruwasqa
+asistente-ejecutado-fallo = ✗ { $accion } pantapun
+asistente-error-transporte = apaqniyoq: { $motivo }
+asistente-error-sin-llm = LLM mana kallarisqachu
+asistente-error-sin-json = JSON mana kapuq kutichiq: { $crudo }
+asistente-error-accion-vacia = ruwana mana kanchu chay nisqaqa: { $crudo }
+asistente-error-json-invalido = JSON mana riqsisqa: { $crudo }
+asistente-error-spawn = paqarichiy pantapun: { $err } (mirada-ctl PATH-pi kachkanchu?)
+asistente-cero-salida = (mana kutichiq)
+asistente-codigo-salida = lluqsiy yupay { $codigo }

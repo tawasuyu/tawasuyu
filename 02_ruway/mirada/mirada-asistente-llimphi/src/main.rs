@@ -22,6 +22,7 @@
 //! que vería un humano tipeando — la IA no inventa caminos nuevos al núcleo
 //! del compositor.
 
+use std::borrow::Cow;
 use std::process::Command;
 use std::sync::Arc;
 
@@ -73,7 +74,7 @@ antes de ejecutar.";
 const MAX_TOKENS_RESPUESTA: u32 = 300;
 
 /// La forma JSON que el modelo debe producir cuando entiende la petición.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct Propuesta {
     accion: String,
     #[serde(default)]
@@ -90,10 +91,29 @@ struct Rechazo {
     error: String,
 }
 
+/// Resultado de parsear la salida del LLM — separado del `Estado` de UI para
+/// que la lógica de parseo sea pura y testeable sin entorno gráfico.
+#[derive(Debug, PartialEq, Eq)]
+enum ParseResult {
+    /// El modelo produjo una propuesta válida.
+    Propuesta(Propuesta),
+    /// El modelo respondió con `{error: "..."}` — entiende que no puede o
+    /// no quiere hacer lo que pediste.
+    Rechazo(String),
+    /// Encontramos JSON pero no encaja con `Propuesta` ni con `Rechazo`.
+    JsonInvalido(String),
+    /// La respuesta no contiene un objeto JSON balanceado.
+    SinJson(String),
+    /// El JSON parseó como `Propuesta` pero `accion` quedó vacía — el modelo
+    /// nos dió un objeto sintácticamente válido pero semánticamente inútil.
+    AccionVacia(String),
+}
+
 /// El cliente LLM compartible entre el hilo de UI y los workers de fondo.
 type DynLlm = Arc<dyn ChatClient>;
 
 fn main() {
+    rimay_localize::init();
     llimphi_ui::run::<Asistente>();
 }
 
@@ -175,7 +195,13 @@ impl App for Asistente {
         // respuestas del Mock, lo que sirve para probar el flujo de UI.
         let (llm, init_error) = match pluma_llm::from_env() {
             Ok(client) => (Some(client), None),
-            Err(e) => (None, Some(format!("LLM no disponible: {e}"))),
+            Err(e) => (
+                None,
+                Some(rimay_localize::t_args(
+                    "asistente-banner-no-llm",
+                    &[("motivo", Cow::Owned(e.to_string()))],
+                )),
+            ),
         };
         Model {
             llm,
@@ -217,7 +243,7 @@ impl App for Asistente {
                     m.estado = Estado::Error(
                         m.init_error
                             .clone()
-                            .unwrap_or_else(|| "LLM no inicializado".into()),
+                            .unwrap_or_else(|| rimay_localize::t("asistente-error-sin-llm")),
                     );
                     return m;
                 };
@@ -238,10 +264,13 @@ impl App for Asistente {
                 });
             }
             Msg::LlmDone(Ok(texto)) => {
-                m.estado = parsear_respuesta(&texto);
+                m.estado = parseo_a_estado(parsear_respuesta(&texto));
             }
             Msg::LlmDone(Err(motivo)) => {
-                m.estado = Estado::Error(format!("transporte: {motivo}"));
+                m.estado = Estado::Error(rimay_localize::t_args(
+                    "asistente-error-transporte",
+                    &[("motivo", Cow::Owned(motivo))],
+                ));
             }
             Msg::EjecutarPropuesta => {
                 let Estado::Propuesta(p) = &m.estado else {
@@ -276,10 +305,10 @@ impl App for Asistente {
         let theme = Theme::dark();
         let input_palette = TextInputPalette::from_theme(&theme);
 
-        let title = row(28.0, "carmen · asistente", 22.0, theme.fg_text);
+        let title = row(28.0, &rimay_localize::t("asistente-title"), 22.0, theme.fg_text);
         let sub = row(
             14.0,
-            "describe lo que quieres hacer; el asistente propone, tú confirmas.",
+            &rimay_localize::t("asistente-sub"),
             11.0,
             theme.fg_muted,
         );
@@ -292,7 +321,7 @@ impl App for Asistente {
 
         let input = text_input_view(
             &model.pregunta,
-            "¿qué quieres hacer? (Enter para preguntar, Esc para limpiar)",
+            &rimay_localize::t("asistente-placeholder"),
             true,
             &input_palette,
             Msg::Limpiar, // click en el input cuando NO está enfocado: limpiar
@@ -302,9 +331,17 @@ impl App for Asistente {
         let cuerpo: Vec<View<Msg>> = match &model.estado {
             Estado::Idle => vec![],
             Estado::Consultando => {
-                vec![row(20.0, "pensando…", 14.0, theme.fg_muted)]
+                vec![row(
+                    20.0,
+                    &rimay_localize::t("asistente-status-pensando"),
+                    14.0,
+                    theme.fg_muted,
+                )]
             }
             Estado::Propuesta(p) => {
+                // Resumen del comando NO se traduce — es un literal de
+                // shell que el operador puede copiar/pegar tal cual al
+                // terminal si quiere ejecutarlo a mano.
                 let resumen = format!("mirada-ctl {} {}", p.accion, p.args.join(" "));
                 vec![
                     row(22.0, &resumen, 16.0, theme.fg_text),
@@ -316,11 +353,15 @@ impl App for Asistente {
                 vec![row(20.0, e, 13.0, theme.fg_destructive)]
             }
             Estado::Ejecutado { accion, salida, ok } => {
-                let cabecera = if *ok {
-                    format!("✓ {} ejecutado", accion)
+                let llave = if *ok {
+                    "asistente-ejecutado-ok"
                 } else {
-                    format!("✗ {} falló", accion)
+                    "asistente-ejecutado-fallo"
                 };
+                let cabecera = rimay_localize::t_args(
+                    llave,
+                    &[("accion", Cow::Borrowed(accion.as_str()))],
+                );
                 let tinta = if *ok {
                     theme.fg_text
                 } else {
@@ -379,24 +420,47 @@ impl App for Asistente {
 /// Intenta interpretar `texto` como JSON producido por el LLM. La respuesta
 /// puede venir limpia (el modelo siguió las instrucciones) o con basurilla
 /// alrededor (markdown fences, prosa); buscamos el primer `{...}` balanceado
-/// y parseamos eso. Si todo falla, dejamos un `Estado::Error` con la cadena
-/// cruda — el operador puede leerla y reformular su pedido.
-fn parsear_respuesta(texto: &str) -> Estado {
+/// y parseamos eso. Función pura — sin estado, sin I/O — testeada en
+/// `mod parser_tests`.
+fn parsear_respuesta(texto: &str) -> ParseResult {
     let Some(json) = extraer_objeto_json(texto) else {
-        return Estado::Error(format!("respuesta sin JSON: {texto}"));
+        return ParseResult::SinJson(texto.to_string());
     };
-    if let Ok(propuesta) = serde_json::from_str::<Propuesta>(json) {
-        // `accion` debe ser no vacía — si lo es, el JSON estaba mal formado
-        // semánticamente aunque parseara.
-        if propuesta.accion.is_empty() {
-            return Estado::Error(format!("propuesta sin accion: {texto}"));
-        }
-        return Estado::Propuesta(propuesta);
-    }
+    // Probamos `Rechazo` PRIMERO porque su shape es estricto (un solo
+    // campo `error`); `Propuesta` lo permitiría parsear con `accion`
+    // vacía si lo intentáramos al revés.
     if let Ok(rechazo) = serde_json::from_str::<Rechazo>(json) {
-        return Estado::Error(rechazo.error);
+        return ParseResult::Rechazo(rechazo.error);
     }
-    Estado::Error(format!("JSON no reconocido: {texto}"))
+    if let Ok(propuesta) = serde_json::from_str::<Propuesta>(json) {
+        if propuesta.accion.is_empty() {
+            return ParseResult::AccionVacia(texto.to_string());
+        }
+        return ParseResult::Propuesta(propuesta);
+    }
+    ParseResult::JsonInvalido(texto.to_string())
+}
+
+/// Traduce un `ParseResult` al `Estado` de UI que corresponde. Mantenemos
+/// esta capa separada del parser para que la lógica sea testeable sin
+/// arrastrar el enum de UI ni la traducción i18n.
+fn parseo_a_estado(r: ParseResult) -> Estado {
+    match r {
+        ParseResult::Propuesta(p) => Estado::Propuesta(p),
+        ParseResult::Rechazo(motivo) => Estado::Error(motivo),
+        ParseResult::SinJson(crudo) => Estado::Error(rimay_localize::t_args(
+            "asistente-error-sin-json",
+            &[("crudo", Cow::Owned(crudo))],
+        )),
+        ParseResult::AccionVacia(crudo) => Estado::Error(rimay_localize::t_args(
+            "asistente-error-accion-vacia",
+            &[("crudo", Cow::Owned(crudo))],
+        )),
+        ParseResult::JsonInvalido(crudo) => Estado::Error(rimay_localize::t_args(
+            "asistente-error-json-invalido",
+            &[("crudo", Cow::Owned(crudo))],
+        )),
+    }
 }
 
 /// Devuelve la primera sub-cadena de `texto` que es un objeto JSON
@@ -450,9 +514,15 @@ fn ejecutar_mirada_ctl(accion: &str, args: &[String]) -> SalidaCmd {
             }
             if salida.is_empty() {
                 salida = if out.status.success() {
-                    "(sin salida)".into()
+                    rimay_localize::t("asistente-cero-salida")
                 } else {
-                    format!("código {}", out.status.code().unwrap_or(-1))
+                    rimay_localize::t_args(
+                        "asistente-codigo-salida",
+                        &[(
+                            "codigo",
+                            Cow::Owned(out.status.code().unwrap_or(-1).to_string()),
+                        )],
+                    )
                 };
             }
             SalidaCmd {
@@ -461,7 +531,10 @@ fn ejecutar_mirada_ctl(accion: &str, args: &[String]) -> SalidaCmd {
             }
         }
         Err(e) => SalidaCmd {
-            salida: format!("spawn falló: {e} (¿está `mirada-ctl` en PATH?)"),
+            salida: rimay_localize::t_args(
+                "asistente-error-spawn",
+                &[("err", Cow::Owned(e.to_string()))],
+            ),
             ok: false,
         },
     }
@@ -500,8 +573,18 @@ fn botonera(theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .children(vec![
-        boton("Ejecutar", theme.fg_text, theme.bg_app, Msg::EjecutarPropuesta),
-        boton("Descartar", theme.fg_muted, theme.bg_panel, Msg::Limpiar),
+        boton(
+            &rimay_localize::t("asistente-boton-ejecutar"),
+            theme.fg_text,
+            theme.bg_app,
+            Msg::EjecutarPropuesta,
+        ),
+        boton(
+            &rimay_localize::t("asistente-boton-descartar"),
+            theme.fg_muted,
+            theme.bg_panel,
+            Msg::Limpiar,
+        ),
     ])
 }
 
@@ -520,3 +603,154 @@ fn boton(label: &str, fg: Color, bg: Color, on_click: Msg) -> View<Msg> {
     .text_aligned(label.to_string(), 14.0, fg, Alignment::Start)
     .on_click(on_click)
 }
+
+// ---------------------------------------------------------------------
+// Tests del parser — lógica pura, sin entorno gráfico ni red.
+// ---------------------------------------------------------------------
+
+#[cfg(test)]
+mod parser_tests {
+    use super::*;
+
+    #[test]
+    fn extraer_objeto_json_basico() {
+        assert_eq!(extraer_objeto_json(r#"{"a": 1}"#), Some(r#"{"a": 1}"#));
+    }
+
+    #[test]
+    fn extraer_objeto_json_con_prosa_alrededor() {
+        let texto = r#"Por supuesto, aquí va: {"accion": "focus-next"} ¡espero que te sirva!"#;
+        assert_eq!(extraer_objeto_json(texto), Some(r#"{"accion": "focus-next"}"#));
+    }
+
+    #[test]
+    fn extraer_objeto_json_anidado() {
+        // Llaves anidadas: el balanceo debe contar profundidad correctamente.
+        let texto = r#"{"a": {"b": 2}, "c": 3}"#;
+        assert_eq!(extraer_objeto_json(texto), Some(texto));
+    }
+
+    #[test]
+    fn extraer_objeto_json_dentro_de_markdown_fences() {
+        let texto = "```json\n{\"accion\": \"workspace\", \"args\": [\"3\"]}\n```";
+        assert_eq!(
+            extraer_objeto_json(texto),
+            Some(r#"{"accion": "workspace", "args": ["3"]}"#),
+        );
+    }
+
+    #[test]
+    fn extraer_objeto_json_sin_llaves_es_none() {
+        assert_eq!(extraer_objeto_json("solo prosa, sin JSON"), None);
+    }
+
+    #[test]
+    fn extraer_objeto_json_desbalanceado_es_none() {
+        // Sólo abre pero nunca cierra — esperamos `None`, no panic.
+        assert_eq!(extraer_objeto_json("{abc {def"), None);
+    }
+
+    #[test]
+    fn parsear_propuesta_canonica() {
+        let respuesta = r#"{"accion": "focus-next", "args": [], "explicacion": "ir a la siguiente ventana"}"#;
+        let r = parsear_respuesta(respuesta);
+        match r {
+            ParseResult::Propuesta(p) => {
+                assert_eq!(p.accion, "focus-next");
+                assert!(p.args.is_empty());
+                assert_eq!(p.explicacion, "ir a la siguiente ventana");
+            }
+            otro => panic!("esperaba Propuesta, obtuve {otro:?}"),
+        }
+    }
+
+    #[test]
+    fn parsear_propuesta_con_args() {
+        let respuesta = r#"{"accion": "workspace", "args": ["3"], "explicacion": "ir al 3"}"#;
+        match parsear_respuesta(respuesta) {
+            ParseResult::Propuesta(p) => {
+                assert_eq!(p.accion, "workspace");
+                assert_eq!(p.args, vec!["3".to_string()]);
+            }
+            otro => panic!("esperaba Propuesta, obtuve {otro:?}"),
+        }
+    }
+
+    #[test]
+    fn parsear_propuesta_omite_explicacion_opcional() {
+        // `explicacion` tiene `#[serde(default)]` — debe parsear sin ella.
+        let respuesta = r#"{"accion": "close-focused", "args": []}"#;
+        match parsear_respuesta(respuesta) {
+            ParseResult::Propuesta(p) => {
+                assert_eq!(p.accion, "close-focused");
+                assert_eq!(p.explicacion, "");
+            }
+            otro => panic!("esperaba Propuesta, obtuve {otro:?}"),
+        }
+    }
+
+    #[test]
+    fn parsear_rechazo_explicito() {
+        let respuesta = r#"{"error": "no se cómo hacer eso"}"#;
+        assert_eq!(
+            parsear_respuesta(respuesta),
+            ParseResult::Rechazo("no se cómo hacer eso".to_string()),
+        );
+    }
+
+    #[test]
+    fn parsear_accion_vacia_es_error_separado() {
+        // Sintácticamente válido, semánticamente inútil — el modelo nos dió
+        // un esqueleto sin acción real.
+        let respuesta = r#"{"accion": "", "args": []}"#;
+        assert!(matches!(
+            parsear_respuesta(respuesta),
+            ParseResult::AccionVacia(_),
+        ));
+    }
+
+    #[test]
+    fn parsear_sin_json_devuelve_sin_json() {
+        let respuesta = "Hola, no entiendo qué quieres hacer.";
+        assert!(matches!(
+            parsear_respuesta(respuesta),
+            ParseResult::SinJson(_),
+        ));
+    }
+
+    #[test]
+    fn parsear_json_que_no_es_ni_propuesta_ni_rechazo() {
+        // Forma JSON desconocida — ni `accion` ni `error`. No debe panic ni
+        // confundirse con Propuesta vacía.
+        let respuesta = r#"{"otra_cosa": 42, "comentario": "lol"}"#;
+        assert!(matches!(
+            parsear_respuesta(respuesta),
+            ParseResult::JsonInvalido(_),
+        ));
+    }
+
+    #[test]
+    fn parsear_rechazo_gana_sobre_propuesta_si_hay_ambos() {
+        // Edge case: el modelo emite ambos campos. Preferimos `Rechazo`
+        // porque su shape es más estricto (sin `accion` ni `args`) y, en la
+        // intención de la prompt, `error` significa "no quise hacerlo".
+        let respuesta = r#"{"error": "ambiguo"}"#;
+        assert_eq!(
+            parsear_respuesta(respuesta),
+            ParseResult::Rechazo("ambiguo".to_string()),
+        );
+    }
+
+    #[test]
+    fn parsear_respuesta_con_prosa_alrededor_funciona() {
+        let respuesta = "Claro, esto debería servir:\n\n```json\n{\"accion\": \"layout\", \"args\": [\"grid\"]}\n```\n\n¿Te parece bien?";
+        match parsear_respuesta(respuesta) {
+            ParseResult::Propuesta(p) => {
+                assert_eq!(p.accion, "layout");
+                assert_eq!(p.args, vec!["grid".to_string()]);
+            }
+            otro => panic!("esperaba Propuesta, obtuve {otro:?}"),
+        }
+    }
+}
+
