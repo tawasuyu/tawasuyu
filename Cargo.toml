@@ -100,6 +100,7 @@ members = [
     "01_yachay/cosmos/cosmos-modules",
     "01_yachay/cosmos/cosmos-pointing",
     "01_yachay/cosmos/cosmos-render",
+    "01_yachay/cosmos/cosmos-rise-set",
     "01_yachay/cosmos/cosmos-server",
     "01_yachay/cosmos/cosmos-skywatch",
     "01_yachay/cosmos/cosmos-sundial",

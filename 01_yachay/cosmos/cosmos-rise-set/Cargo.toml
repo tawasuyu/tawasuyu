@@ -1,0 +1,17 @@
+[package]
+name = "cosmos-rise-set"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "cosmos-rise-set — instantes de salida, paso meridiano y puesta de Sol/Luna/planetas para una ubicación. Capa fina sobre cosmos-skywatch: bracketing por altitud-horizonte y refinamiento por bisección. Soporta horizontes alternativos (civil/náutico/astronómico) para crepúsculo del Sol."
+
+[dependencies]
+cosmos-core = { workspace = true }
+cosmos-time = { path = "../cosmos-time" }
+cosmos-skywatch = { path = "../cosmos-skywatch" }
+
+[[example]]
+name = "rise_set_lima_demo"
+path = "examples/rise_set_lima_demo.rs"
