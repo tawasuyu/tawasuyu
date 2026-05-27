@@ -179,6 +179,11 @@ enum Cmd {
         /// Filtra a aserciones de documentos con este tag.
         #[arg(long)]
         tag: Option<String>,
+        /// Imprime la cadena completa de derivación por cada contribución:
+        /// opinión autoral → invertir (si contradice) → descontar por NLI →
+        /// descontar por reputación → fusión final.
+        #[arg(long)]
+        trace: bool,
     },
 }
 
@@ -558,7 +563,7 @@ async fn main() -> Result<()> {
                 println!("    «{}»", truncar(&att.asercion.texto, 130));
             }
         }
-        Cmd::Consenso { query, umbral, pesar_reputacion, tag } => {
+        Cmd::Consenso { query, umbral, pesar_reputacion, tag, trace } => {
             let todas = match tag.as_deref() {
                 Some(t) => store.cargar_aserciones_atribuidas_por_tag(t)?,
                 None => store.cargar_aserciones_atribuidas_todas()?,
@@ -579,34 +584,55 @@ async fn main() -> Result<()> {
             } else {
                 std::collections::HashMap::new()
             };
-            let mut contribuciones: Vec<(Opinion, &AsercionAtribuida, &'static str, f32, Option<f32>)> = Vec::new();
+            // Cada contribución guarda la cadena completa para trace:
+            // (autoral, post_signo, post_nli, post_rep, att, signo, nli_score, rep_score).
+            struct Contrib<'a> {
+                autoral: Opinion,
+                post_signo: Opinion,    // tras invertir si contradice
+                post_nli: Opinion,      // tras descontar por NLI score
+                final_op: Opinion,      // tras descontar por reputación (= post_nli si !pesar_reputacion)
+                att: &'a AsercionAtribuida,
+                signo: &'static str,
+                nli_score: f32,
+                rep_score: Option<f32>,
+            }
+            let mut contribuciones: Vec<Contrib> = Vec::new();
             for att in todas.iter() {
                 let rel = relacion_lexica(&query, &att.asercion.texto, umbral);
-                let base_op = if rel.entailment > 0.0 {
-                    Some((att.asercion.opinion_autoral.descontar(rel.entailment), "apoya", rel.entailment))
+                let (signo, score, post_signo) = if rel.entailment > 0.0 {
+                    ("apoya", rel.entailment, att.asercion.opinion_autoral)
                 } else if rel.contradiction > 0.0 {
-                    Some((att.asercion.opinion_autoral.invertir().descontar(rel.contradiction), "contradice", rel.contradiction))
+                    ("contradice", rel.contradiction, att.asercion.opinion_autoral.invertir())
                 } else {
-                    None
+                    continue;
                 };
-                if let Some((mut op, signo, score)) = base_op {
-                    let mut rep_aplicada = None;
-                    if pesar_reputacion {
-                        if let Some(fid) = att.fuente.as_ref().map(|f| f.id) {
-                            let rep = reputaciones.get(&fid).copied().unwrap_or(0.0);
-                            let peso = ((1.0 + rep) / 2.0).clamp(0.0, 1.0);
-                            op = op.descontar(peso);
-                            rep_aplicada = Some(rep);
-                        }
+                let post_nli = post_signo.descontar(score);
+                let mut final_op = post_nli;
+                let mut rep_aplicada = None;
+                if pesar_reputacion {
+                    if let Some(fid) = att.fuente.as_ref().map(|f| f.id) {
+                        let rep = reputaciones.get(&fid).copied().unwrap_or(0.0);
+                        let peso = ((1.0 + rep) / 2.0).clamp(0.0, 1.0);
+                        final_op = post_nli.descontar(peso);
+                        rep_aplicada = Some(rep);
                     }
-                    contribuciones.push((op, att, signo, score, rep_aplicada));
                 }
+                contribuciones.push(Contrib {
+                    autoral: att.asercion.opinion_autoral,
+                    post_signo,
+                    post_nli,
+                    final_op,
+                    att,
+                    signo,
+                    nli_score: score,
+                    rep_score: rep_aplicada,
+                });
             }
             if contribuciones.is_empty() {
                 println!("consenso sobre «{}»: (corpus en silencio — nadie habla con suficiente overlap léxico)", query);
                 return Ok(());
             }
-            let ops: Vec<Opinion> = contribuciones.iter().map(|c| c.0).collect();
+            let ops: Vec<Opinion> = contribuciones.iter().map(|c| c.final_op).collect();
             let fusion = Opinion::fusionar_muchas(&ops);
             println!("consenso sobre: «{}»", query);
             println!("  fuentes que hablan: {}", contribuciones.len());
@@ -616,12 +642,34 @@ async fn main() -> Result<()> {
             println!("  opinión fusionada: {}", fila_opinion(&fusion));
             println!("  probabilidad esperada: {:.2}", fusion.probabilidad_esperada());
             println!();
-            println!("contribuciones:");
-            for (op, att, signo, score, rep) in contribuciones {
-                let suf = rep.map(|r| format!(" · reputación={:+.2}", r)).unwrap_or_default();
-                println!("  · {signo} (score={:.2}){suf} → {}", score, fila_opinion(&op));
-                println!("    {}", etiqueta_fuente(att));
-                println!("    «{}»", truncar(&att.asercion.texto, 130));
+            if trace {
+                println!("trace de la derivación:");
+                for (k, c) in contribuciones.iter().enumerate() {
+                    println!();
+                    println!("  [{}]  {}", k + 1, etiqueta_fuente(c.att));
+                    println!("       «{}»", truncar(&c.att.asercion.texto, 130));
+                    println!("       autoral:    {}", fila_opinion(&c.autoral));
+                    if c.signo == "contradice" {
+                        println!("       invertir:   {}    (porque {} con query)", fila_opinion(&c.post_signo), c.signo);
+                    }
+                    println!("       NLI(·{:.2}): {}    ({}, score {:.2})",
+                        c.nli_score, fila_opinion(&c.post_nli), c.signo, c.nli_score);
+                    if let Some(rep) = c.rep_score {
+                        let peso = ((1.0 + rep) / 2.0).clamp(0.0, 1.0);
+                        println!("       rep(·{:.2}): {}    (reputación {:+.2} → peso {:.2})",
+                            peso, fila_opinion(&c.final_op), rep, peso);
+                    }
+                }
+                println!();
+                println!("  fusionar_muchas([{}]) → {}", contribuciones.len(), fila_opinion(&fusion));
+            } else {
+                println!("contribuciones:");
+                for c in &contribuciones {
+                    let suf = c.rep_score.map(|r| format!(" · reputación={:+.2}", r)).unwrap_or_default();
+                    println!("  · {} (score={:.2}){suf} → {}", c.signo, c.nli_score, fila_opinion(&c.final_op));
+                    println!("    {}", etiqueta_fuente(c.att));
+                    println!("    «{}»", truncar(&c.att.asercion.texto, 130));
+                }
             }
         }
         Cmd::Testimonio { query, umbral, top, tag } => {
