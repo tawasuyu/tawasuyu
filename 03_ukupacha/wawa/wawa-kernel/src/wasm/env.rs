@@ -40,6 +40,12 @@
 //                              indisoluble (Fase 33, Persistencia Ortogonal
 //                              por Celdas): los dos hashes viajan como
 //                              hijos legitimos del nodo cuaderno.
+//    * sys_subsistema_vincular_macro          — inspeccionar un binario del
+//                              grafo sin instanciarlo (Fase 36, Cross-App
+//                              Semantic Bridge): valida magia + export
+//                              `"run"` y devuelve un dictamen de 4 B
+//                              listo para que la app dispare la macro
+//                              con `sys_subsistema_ejecutar_dinamico`.
 //
 //  GUARDARRAIL: el kernel valida MATEMATICAMENTE todo puntero que el modulo le
 //  entrega contra los limites reales de su memoria lineal. No se confia en que
@@ -745,6 +751,125 @@ pub(crate) fn enlazar_capacidades(
         },
     )?;
     } // PERMISO_GRAFO_ESCRITURA (cuaderno)
+
+    // --- CAPACIDAD 3f :: sys_subsistema_vincular_macro -----------------------
+    // sys_subsistema_vincular_macro(binario_hash_ptr, salida_info_ptr) -> i32
+    //
+    // EL PUENTE INTER-APP (Fase 36 :: Cross-App Semantic Bridge). Una app
+    // —el cuaderno (`apps/pluma`), por ejemplo— le pasa al kernel el hash
+    // de un binario emitido en OTRA pestaña (ayer, hace un mes, por el
+    // IDE viejo o el que sea) y obtiene a cambio un PARTE de inspeccion:
+    //
+    //   * Byte 0 = 0x01 si el nodo existe en el grafo, contiene la magia
+    //     `\0asm` Y expone una funcion `"run"` en sus exports — el binario
+    //     queda "vinculado" como macro lista para que la app la dispare via
+    //     `sys_subsistema_ejecutar_dinamico` sin recompilar nada.
+    //     Byte 0 = 0x00 si CUALQUIERA de las pre-condiciones falla.
+    //   * Bytes 1..4 = tamaño en BLOQUES DE 256 BYTES del binario, LE u24.
+    //     Acota cuanto va a pesar el `sys_subsistema_ejecutar_dinamico`
+    //     posterior: la app puede negarse a importar macros gigantes.
+    //
+    // INSPECCION SIN INSTANCIAR. `Module::new` parsea y valida el modulo
+    // (magia + secciones + tabla de tipos) pero NO crea Store ni reserva
+    // memoria lineal. Solo cuando la app dispare la macro con
+    // `sys_subsistema_ejecutar_dinamico` se levanta una sub-jaula efimera
+    // con su techo de FUEL_DINAMICO. La inspeccion es barata; la ejecucion
+    // sigue gateada igual que siempre.
+    //
+    // GATEADA por PERMISO_GRAFO_ESCRITURA + FOCO (misma autoridad que
+    // ejecutar_dinamico, porque el resultado de inspeccionar se usa para
+    // disparar la macro). Hereda back-pressure DMA: la operacion lee del
+    // disco (sectores del log), cuenta como una pagina.
+    if permisos & PERMISO_GRAFO_ESCRITURA != 0 {
+    enlazador.func_wrap(
+        "renaser",
+        "sys_subsistema_vincular_macro",
+        |mut caller: Caller<'_, ContextoCapacidades>,
+         binario_hash_ptr: u32,
+         salida_info_ptr: u32|
+         -> Result<i32, Error> {
+            if crate::compositor::foco() != caller.data().indice_app {
+                return Ok(CodigoError::SinFoco.como_i32());
+            }
+            if caller.data().paginas_dma_en_vuelo >= MAX_PAGINAS_DMA_PER_APP {
+                return Ok(CodigoError::Saturado.como_i32());
+            }
+            caller.data_mut().paginas_dma_en_vuelo += 1;
+
+            let memoria = obtener_memoria(&caller)?;
+            let hash = {
+                let m = memoria.data(&caller);
+                match leer_hash(
+                    m,
+                    binario_hash_ptr,
+                    "WASM :: sys_subsistema_vincular_macro desbordo memoria (hash)",
+                ) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        caller.data_mut().paginas_dma_en_vuelo -= 1;
+                        return Err(e);
+                    }
+                }
+            };
+            // Verificar que la salida cabe ANTES de tocar el disco.
+            {
+                let m = memoria.data(&caller);
+                if let Err(e) = rango(
+                    m,
+                    salida_info_ptr,
+                    4,
+                    "WASM :: sys_subsistema_vincular_macro desbordo memoria (salida)",
+                ) {
+                    caller.data_mut().paginas_dma_en_vuelo -= 1;
+                    return Err(e);
+                }
+            }
+
+            let objeto = match crate::almacen::recuperar(&hash) {
+                Ok(Some(o)) => o,
+                Ok(None) => {
+                    caller.data_mut().paginas_dma_en_vuelo -= 1;
+                    return Ok(CodigoError::Ausente.como_i32());
+                }
+                Err(_) => {
+                    caller.data_mut().paginas_dma_en_vuelo -= 1;
+                    return Ok(CodigoError::AlmacenamientoFallo.como_i32());
+                }
+            };
+            // La operacion de disco termino — liberar la pagina DMA aqui.
+            caller.data_mut().paginas_dma_en_vuelo -= 1;
+
+            // Verificacion semantica: magia WASM + parsear modulo + exigir
+            // export `"run"`. Si cualquier paso falla, byte 0 = 0x00 y
+            // salimos con Ok (no es error del syscall, es "vinculacion
+            // rechazada con dictamen estructurado").
+            const WASM_MAGIA: [u8; 4] = [0x00, 0x61, 0x73, 0x6D];
+            let valido = objeto.datos.len() >= 8 && objeto.datos[..4] == WASM_MAGIA && {
+                // Parseo wasmi sin instanciar — barato, sin Store.
+                let mut config = wasmi::Config::default();
+                config.compilation_mode(wasmi::CompilationMode::Eager);
+                let motor = wasmi::Engine::new(&config);
+                match wasmi::Module::new(&motor, &objeto.datos[..]) {
+                    Ok(modulo) => modulo.exports().any(|e| e.name() == "run"),
+                    Err(_) => false,
+                }
+            };
+
+            // Tamaño en bloques de 256 B (ceil). MAX_OBJETO = 1 MiB =>
+            // 4096 bloques => 0x1000, cabe holgado en 24 bits LE.
+            let bloques = (objeto.datos.len() + 255) / 256;
+            let bloques = bloques.min(0xFF_FFFF) as u32;
+
+            let m = memoria.data_mut(&mut caller);
+            let off = salida_info_ptr as usize;
+            m[off] = if valido { 0x01 } else { 0x00 };
+            m[off + 1] = (bloques & 0xFF) as u8;
+            m[off + 2] = ((bloques >> 8) & 0xFF) as u8;
+            m[off + 3] = ((bloques >> 16) & 0xFF) as u8;
+            Ok(CodigoError::Ok.como_i32())
+        },
+    )?;
+    } // PERMISO_GRAFO_ESCRITURA (vincular_macro)
 
     // --- CAPACIDAD 4 :: sys_object_datos(hash, salida, capacidad) -> i32 ---
     // Copia la carga util del objeto `hash` en `salida`. Devuelve el numero de

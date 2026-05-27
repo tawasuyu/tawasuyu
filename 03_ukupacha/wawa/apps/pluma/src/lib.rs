@@ -101,6 +101,19 @@ extern "C" {
         retorno: i32,
         salida_cuaderno_hash_ptr: u32,
     ) -> i32;
+    /// FASE 36 :: Cross-App Semantic Bridge. Inspecciona un binario en el
+    /// grafo (sin instanciar) y devuelve un dictamen de 4 B en
+    /// `salida_info_ptr`:
+    ///   byte 0 = 0x01 si el nodo existe + tiene magia WASM + expone
+    ///            export `"run"`; 0x00 en cualquier otro caso.
+    ///   bytes 1..4 = tamaño en bloques de 256 B (LE u24).
+    /// El retorno i32 es 0 (Ok) si la inspeccion corrio; codigos
+    /// negativos reservados (Ausente, Saturado, etc.) reportan
+    /// fallas del syscall en si.
+    fn sys_subsistema_vincular_macro(
+        binario_hash_ptr: u32,
+        salida_info_ptr: u32,
+    ) -> i32;
 }
 
 #[cfg(not(test))]
@@ -130,7 +143,10 @@ const CELDA_ALTO: usize = CELDAS_ALTO / MAX_CELDAS;
 // =============================================================================
 
 /// Tope del buffer fuente (compartido por todas las celdas y el editor).
-const FUENTE_CAP: usize = 64;
+/// Capacidad del buffer fuente. La Fase 36 introduce el token `@hash` para
+/// importar binarios pre-compilados: `@` + 64 hex = 65 bytes minimo. Subimos
+/// a 96 para dejar holgura para el editor y la fuente efectiva concatenada.
+const FUENTE_CAP: usize = 96;
 
 /// Una celda del cuaderno en su forma viva en RAM. La forma serializada
 /// canonica vive en el grafo: este struct es el cache de pintado.
@@ -163,6 +179,14 @@ struct Celda {
     /// El i32 que se prepended a la fuente del editor para compilar esta
     /// celda. Solo es significativo cuando `heredado == true`.
     valor_heredado: i32,
+    /// FASE 36 :: la celda no nacio de compilar Forth en el editor, sino
+    /// de IMPORTAR un binario pre-existente del grafo via la sintaxis
+    /// `@<64-hex>`. La cadena de compilacion se salta: el cuaderno solo
+    /// inspecciona (`sys_subsistema_vincular_macro`), ejecuta
+    /// (`sys_subsistema_ejecutar_dinamico`) y consolida la celda. El
+    /// `hash_binario` apunta a un nodo que pinto OTRA APP en el grafo
+    /// del disco; el cuaderno se vuelve cross-app por construccion.
+    macro_importada: bool,
 }
 
 impl Celda {
@@ -177,6 +201,7 @@ impl Celda {
             exito: false,
             heredado: false,
             valor_heredado: 0,
+            macro_importada: false,
         }
     }
 }
@@ -282,6 +307,11 @@ fn atender_scancode(scancode: u32) {
 
 fn mapear_caracter(scan: u8) -> Option<u8> {
     Some(match scan {
+        // FASE 36 :: la tecla backtick/grave (rara en Forth) produce `@`,
+        // el prefijo del token de importacion de macros. Sin esto, la
+        // sintaxis `@<hash>` seria intecleable: el kernel no decodifica
+        // modificadores (Shift, AltGr), asi que `Shift+2` solo emite '2'.
+        0x29 => b'@',
         0x02 => b'1',
         0x03 => b'2',
         0x04 => b'3',
@@ -328,6 +358,21 @@ const FUENTE_EFECTIVA_CAP: usize = 96;
 fn ejecutar_celda_actual() {
     let len = unsafe { EDITOR_LEN };
     if len == 0 {
+        return;
+    }
+
+    // ----- FASE 36 :: rama de IMPORTACION DE MACRO (@<64-hex>) ---------------
+    // Si el editor arranca con `@` y trae al menos 64 hex caracteres
+    // despues, NO pasamos por forth-emisor: el binario ya esta en el
+    // grafo (lo escribio otra app en otra pestaña, otro arranque, otro
+    // mes). Pedimos al kernel que lo VINCULE como macro (inspeccion sin
+    // instanciar) y, si el dictamen es valido, lo EJECUTAMOS via
+    // `sys_subsistema_ejecutar_dinamico`. La celda se consolida en el
+    // grafo igual que cualquier otra; el `hash_fuente` queda en cero
+    // —no hay fuente Forth que enlazar— y el `hash_binario` es el del
+    // nodo importado.
+    if unsafe { EDITOR[0] } == b'@' && len >= 65 {
+        ejecutar_celda_importada();
         return;
     }
 
@@ -482,6 +527,135 @@ fn ejecutar_celda_actual() {
     // y vuelve a F5. Vaciar el editor cada vez seria un anti-MVP.
 }
 
+/// FASE 36 :: parsea un caracter ASCII (0-9, a-f, A-F) a su nibble [0..15].
+/// Devuelve `None` si el caracter no es hex valido.
+fn nibble_de_hex(c: u8) -> Option<u8> {
+    Some(match c {
+        b'0'..=b'9' => c - b'0',
+        b'a'..=b'f' => c - b'a' + 10,
+        b'A'..=b'F' => c - b'A' + 10,
+        _ => return None,
+    })
+}
+
+/// FASE 36 :: ejecuta el camino de IMPORTACION DE MACRO. El editor empieza
+/// con `@` seguido de exactamente 64 caracteres hex (32 bytes). Parsea el
+/// hash, lo vincula con el kernel, lo ejecuta y consolida la celda.
+fn ejecutar_celda_importada() {
+    let mut celda = Celda::vacia();
+    celda.valida = true;
+    celda.macro_importada = true;
+
+    // 1. Parsear los 64 hex chars tras el `@` a un [u8; 32]. Tomamos el
+    //    puntero crudo del editor — Rust 2024 prohibe la referencia
+    //    `&EDITOR` directa sobre un `static mut`, pero un `*const`
+    //    elaborado con `addr_of!` lo sortea sin Undefined Behavior.
+    let mut hash = [0u8; 32];
+    let editor_ptr = core::ptr::addr_of!(EDITOR);
+    let editor: &[u8; FUENTE_CAP] = unsafe { &*editor_ptr };
+    for i in 0..32 {
+        let hi = match nibble_de_hex(editor[1 + i * 2]) {
+            Some(n) => n,
+            None => {
+                celda.retorno = -7; // PayloadInvalido: hash mal formado.
+                celda.exito = false;
+                unsafe {
+                    RETORNO_HEREDADO_VALIDO = false;
+                    CADENA_ROTA = true;
+                }
+                registrar_celda_local(celda);
+                return;
+            }
+        };
+        let lo = match nibble_de_hex(editor[1 + i * 2 + 1]) {
+            Some(n) => n,
+            None => {
+                celda.retorno = -7;
+                celda.exito = false;
+                unsafe {
+                    RETORNO_HEREDADO_VALIDO = false;
+                    CADENA_ROTA = true;
+                }
+                registrar_celda_local(celda);
+                return;
+            }
+        };
+        hash[i] = (hi << 4) | lo;
+    }
+    celda.hash_binario = hash;
+    // La "fuente" mostrada es el token literal `@<hash>` recortado.
+    let cap = 64.min(FUENTE_CAP);
+    celda.fuente[..cap].copy_from_slice(&editor[..cap]);
+    celda.fuente_len = cap;
+
+    // 2. Pedirle al kernel el dictamen de vinculacion (4 B).
+    let mut dictamen = [0u8; 4];
+    let cod_vinc = unsafe {
+        sys_subsistema_vincular_macro(
+            celda.hash_binario.as_ptr() as u32,
+            dictamen.as_mut_ptr() as u32,
+        )
+    };
+    if cod_vinc != 0 || dictamen[0] != 0x01 {
+        // Codigos: -1 Ausente, 0 con dictamen[0]=0 → binario invalido o
+        // no expone `run`. Cualquier otro negativo: falla del syscall.
+        // Reportamos el codigo si es negativo, o -7 si la inspeccion
+        // rechazo el binario.
+        celda.retorno = if cod_vinc < 0 { cod_vinc } else { -7 };
+        celda.exito = false;
+        unsafe {
+            RETORNO_HEREDADO_VALIDO = false;
+            CADENA_ROTA = true;
+        }
+        registrar_celda_local(celda);
+        return;
+    }
+
+    // 3. Ejecutar la macro. NOTA :: en este MVP la cascada NO inyecta el
+    //    retorno heredado al sub-proceso — el binario importado fue
+    //    compilado con su pila propia y la ABI actual de
+    //    `sys_subsistema_ejecutar_dinamico` solo soporta `() -> i32`.
+    //    Documentamos el HER del cuaderno solo como cortesia visual.
+    //    Convergencia con `(i32) -> i32` queda para Fase 37+.
+    let retorno = unsafe {
+        sys_subsistema_ejecutar_dinamico(celda.hash_binario.as_ptr() as u32)
+    };
+    let es_falla = retorno <= -1 && retorno >= -7;
+    celda.retorno = retorno;
+    celda.exito = !es_falla;
+    // El campo `heredado` queda en false para celdas importadas: aunque
+    // exista un RETORNO_HEREDADO disponible, no se inyecta al binario;
+    // el indicador visual del chevron `>` no tiene sentido aqui.
+    celda.heredado = false;
+
+    // 4. Consolidar la celda en el grafo. `hash_fuente` queda en cero
+    //    (no hay fuente Forth nueva — la fuente vive en otra app, en
+    //    otra celda, en otro cuaderno). El nodo cuaderno asi formado
+    //    apunta solo a `hash_binario` como hijo.
+    let cod_cuaderno = unsafe {
+        sys_cuaderno_registrar_celda(
+            celda.hash_fuente.as_ptr() as u32,
+            celda.hash_binario.as_ptr() as u32,
+            celda.retorno,
+            core::ptr::addr_of_mut!(HASH_CUADERNO) as u32,
+        )
+    };
+    unsafe { HASH_CUADERNO_VALIDO = cod_cuaderno == 0 };
+
+    unsafe {
+        if celda.exito {
+            RETORNO_HEREDADO = retorno;
+            RETORNO_HEREDADO_VALIDO = true;
+            CADENA_ROTA = false;
+        } else {
+            RETORNO_HEREDADO_VALIDO = false;
+            CADENA_ROTA = true;
+        }
+    }
+
+    registrar_celda_local(celda);
+}
+
 /// Inserta `celda` en el array circular. Cuando el cuaderno se llena, la
 /// celda mas antigua se sobreescribe — el grafo guarda todas las
 /// historias, pero el panel solo retiene las ultimas tres.
@@ -510,7 +684,7 @@ fn pintar() {
 
     // Cabecera con el hash del cuaderno (si ya hubo una consolidacion).
     rellenar_rect(lienzo, 0, 0, ANCHO, EDITOR_Y - 4, secundario);
-    dibujar_texto(lienzo, b"PLUMA  WAWA  F35", 8, 6, 1, tinta);
+    dibujar_texto(lienzo, b"PLUMA  WAWA  F36", 8, 6, 1, tinta);
     if unsafe { HASH_CUADERNO_VALIDO } {
         let h = unsafe { HASH_CUADERNO };
         let mut etiqueta = [b' '; 8];
@@ -535,7 +709,7 @@ fn pintar() {
     let leyenda: &[u8] = if unsafe { CADENA_ROTA } {
         b"ERROR  CADENA DE EJECUCION ROTA"
     } else {
-        b"F5 EJECUTAR CELDA   BS BORRAR"
+        b"F5 EJECUTA  BS BORRA  @HASH IMPORTA MACRO"
     };
     dibujar_texto(lienzo, leyenda, 8, LEYENDA_Y, 1, acento);
 }
@@ -583,9 +757,24 @@ fn pintar_celdas(lienzo: &mut [u32], tinta: u32, acento: u32, secundario: u32) {
         };
         rellenar_rect(lienzo, 8, y, ANCHO - 16, CELDA_ALTO - 4, fondo_celda);
 
+        // FASE 36 :: indicador vertical de 5 px en el borde IZQUIERDO de
+        // las celdas que importaron un binario via `@<hash>`. Tinte
+        // acento (maestro) — el ojo lo distingue de las celdas que
+        // nacieron compilando Forth en este mismo cuaderno.
+        if celda.valida && celda.macro_importada {
+            rellenar_rect(lienzo, 8, y, 5, CELDA_ALTO - 4, acento);
+        }
+
         // Etiqueta de slot (CELDA 1/2/3).
         let etiqueta = [b'C', b'E', b'L', b'D', b'A', b' ', b'1' + i as u8];
         dibujar_texto(lienzo, &etiqueta, 14, y + 4, 1, acento);
+
+        // FASE 36 :: rotulo "MACRO" en la esquina superior derecha si
+        // la celda viene del puente inter-app. La etiqueta "HER N" no
+        // aplica aqui (no hay cascada hacia el binario importado todavia).
+        if celda.macro_importada {
+            dibujar_texto(lienzo, b"MACRO", ANCHO - 14 - 5 * 6, y + 4, 1, acento);
+        }
 
         // FASE 34 :: chevron `>` en el margen IZQUIERDO de las celdas que
         // heredaron un valor de su predecesora exitosa. El glifo se
@@ -702,7 +891,7 @@ fn rellenar_rect(lienzo: &mut [u32], x: usize, y: usize, w: usize, h: usize, col
 }
 
 fn es_renderable(c: u8) -> bool {
-    c.is_ascii_alphanumeric() || c == b' ' || c == b'+' || c == b'-' || c == b'*'
+    c.is_ascii_alphanumeric() || c == b' ' || c == b'+' || c == b'-' || c == b'*' || c == b'@'
 }
 
 fn nibble_hex(n: u8) -> u8 {
@@ -763,6 +952,8 @@ fn glifo(c: u8) -> [u8; FH] {
         b'*' => [0x00, 0x0A, 0x04, 0x1F, 0x04, 0x0A, 0x00],
         // FASE 34 :: chevron derecho — indicador de herencia en cascada.
         b'>' => [0x10, 0x08, 0x04, 0x02, 0x04, 0x08, 0x10],
+        // FASE 36 :: arroba — prefijo del token de importacion de macros.
+        b'@' => [0x0E, 0x11, 0x17, 0x15, 0x17, 0x10, 0x0E],
         b'0' => [0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E],
         b'1' => [0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E],
         b'2' => [0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F],
