@@ -5,8 +5,8 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use minga_cli::{
-    cmd_diff, cmd_ingest, cmd_init, cmd_listen, cmd_log, cmd_mount, cmd_retire, cmd_show,
-    cmd_status, cmd_sync, cmd_verify_root, cmd_watch, CliError, DiffLine,
+    cmd_diff, cmd_ingest, cmd_init, cmd_listen, cmd_log, cmd_mount, cmd_prune, cmd_retire,
+    cmd_show, cmd_status, cmd_sync, cmd_verify_root, cmd_watch, CliError, DiffLine,
 };
 
 #[derive(Parser)]
@@ -86,6 +86,10 @@ enum Command {
         /// la fuente reconstruida.
         #[arg(long)]
         sexp: bool,
+        /// Compara contra otro hash (atajo de `minga diff`). Mutuamente
+        /// excluyente con `--sexp`.
+        #[arg(long = "diff-against")]
+        diff_against: Option<String>,
     },
 
     /// Compara dos versiones del repo (típicamente dos α-hashes) y
@@ -113,6 +117,11 @@ enum Command {
         /// α-hash en hex (64 caracteres).
         hash: String,
     },
+
+    /// Recolector de basura del grafo CAS: borra nodos no alcanzables
+    /// desde ninguna raíz (típicamente quedan tras `retire`/`watch`
+    /// Remove). Idempotente.
+    Prune,
 }
 
 fn main() -> ExitCode {
@@ -195,6 +204,14 @@ fn run() -> Result<(), CliError> {
                 println!("{} {}  {}  [{}]  by {}", mark, when, e.alpha, dialect, e.author);
             }
         }
+        Command::Prune => {
+            let pass = prompt_passphrase()?;
+            let s = cmd_prune(&cli.repo, &pass)?;
+            println!(
+                "Prune: {} raíces · {} nodos antes · {} alcanzables · {} borrados",
+                s.roots, s.before, s.alive, s.removed
+            );
+        }
         Command::Verify { hash } => {
             let pass = prompt_passphrase()?;
             let v = cmd_verify_root(&cli.repo, &pass, &hash)?;
@@ -247,21 +264,47 @@ fn run() -> Result<(), CliError> {
                 }
             }
         }
-        Command::Show { hash, sexp } => {
+        Command::Show {
+            hash,
+            sexp,
+            diff_against,
+        } => {
             let pass = prompt_passphrase()?;
-            let r = cmd_show(&cli.repo, &pass, &hash, sexp)?;
-            if r.is_root {
-                let dialect = r.dialect.map(|d| d.name()).unwrap_or("?");
-                eprintln!(
-                    "# raíz α={} → struct={} ({})",
-                    r.alpha.unwrap(),
-                    r.struct_hash,
-                    dialect
-                );
+            if let Some(other) = diff_against {
+                // Atajo: show --diff-against <other> ≡ minga diff <hash> <other>.
+                if sexp {
+                    eprintln!("--sexp y --diff-against son mutuamente excluyentes");
+                    return Err(CliError::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "flags incompatibles",
+                    )));
+                }
+                let d = cmd_diff(&cli.repo, &pass, &hash, &other)?;
+                eprintln!("--- {}", d.left_hash);
+                eprintln!("+++ {}", d.right_hash);
+                eprintln!("@@ +{} −{} @@", d.additions, d.deletions);
+                for line in d.lines {
+                    match line {
+                        DiffLine::Same(t) => print!(" {t}"),
+                        DiffLine::Add(t) => print!("+{t}"),
+                        DiffLine::Remove(t) => print!("-{t}"),
+                    }
+                }
             } else {
-                eprintln!("# nodo estructural {}", r.struct_hash);
+                let r = cmd_show(&cli.repo, &pass, &hash, sexp)?;
+                if r.is_root {
+                    let dialect = r.dialect.map(|d| d.name()).unwrap_or("?");
+                    eprintln!(
+                        "# raíz α={} → struct={} ({})",
+                        r.alpha.unwrap(),
+                        r.struct_hash,
+                        dialect
+                    );
+                } else {
+                    eprintln!("# nodo estructural {}", r.struct_hash);
+                }
+                print!("{}", r.rendered);
             }
-            print!("{}", r.rendered);
         }
     }
     Ok(())

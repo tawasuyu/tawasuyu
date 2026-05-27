@@ -15,6 +15,7 @@ pub struct SyncStats {
     pub fetches: usize,
     pub delivers: usize,
     pub attest_pushes: usize,
+    pub retract_pushes: usize,
     pub dones: usize,
 }
 
@@ -28,6 +29,7 @@ impl SyncStats {
             Message::Fetch { .. } => self.fetches += 1,
             Message::Deliver { .. } => self.delivers += 1,
             Message::AttestPush { .. } => self.attest_pushes += 1,
+            Message::RetractPush { .. } => self.retract_pushes += 1,
             Message::Done => self.dones += 1,
         }
     }
@@ -40,6 +42,7 @@ impl SyncStats {
             + self.fetches
             + self.delivers
             + self.attest_pushes
+            + self.retract_pushes
             + self.dones
     }
 }

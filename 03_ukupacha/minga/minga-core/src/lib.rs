@@ -21,5 +21,5 @@ pub use attestation::{Attestation, AttestationError, AttestationStore};
 pub use cas::{hash_components, hash_node, ContentHash};
 pub use identity::{Did, Keypair, KeypairCryptoError, Signature};
 pub use mst::{empty_subtree_hash, Mst, MstDiff, NodeProbe};
-pub use retraction::{Retraction, RetractionError, RETRACTION_DOMAIN};
+pub use retraction::{Retraction, RetractionError, RetractionStore, RETRACTION_DOMAIN};
 pub use store::{hash_stored, MemStore, NodeStore, StoredNode};

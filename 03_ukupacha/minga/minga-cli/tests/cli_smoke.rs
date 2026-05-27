@@ -223,3 +223,43 @@ fn verify_root_matches_dialect_used_to_ingest() {
     assert_eq!(v.stored_dialect, Some(minga_core::parse::Dialect::Python));
     assert!(v.matches_stored());
 }
+
+#[test]
+fn prune_removes_unreachable_nodes_after_retire() {
+    use minga_cli::{cmd_prune, cmd_retire, cmd_status};
+
+    let dir = TempDir::new().unwrap();
+    let repo = dir.path().join("repo");
+    cmd_init(&repo, "p").unwrap();
+
+    // Ingerimos dos archivos distintos: dejan ambos AST en el grafo CAS.
+    let a = dir.path().join("a.rs");
+    fs::write(&a, "fn a() -> i32 { 1 }").unwrap();
+    let b = dir.path().join("b.rs");
+    fs::write(&b, "fn b() -> i32 { 2 }").unwrap();
+    let r_a = cmd_ingest(&repo, "p", &a).unwrap();
+    cmd_ingest(&repo, "p", &b).unwrap();
+
+    let nodes_with_both = cmd_status(&repo, "p").unwrap().nodes_len;
+
+    // Retiramos una raíz: el AST queda huérfano (los nodos siguen).
+    cmd_retire(&repo, "p", &r_a.alpha.to_string()).unwrap();
+    let s_after_retire = cmd_status(&repo, "p").unwrap();
+    assert_eq!(s_after_retire.roots_len, 1);
+    assert_eq!(
+        s_after_retire.nodes_len, nodes_with_both,
+        "retire NO borra nodos del CAS — el GC lo hace después"
+    );
+
+    // Prune: borra los huérfanos.
+    let stats = cmd_prune(&repo, "p").unwrap();
+    assert_eq!(stats.roots, 1);
+    assert_eq!(stats.before, nodes_with_both);
+    assert!(stats.removed > 0, "alguna parte del AST de a.rs debe haber quedado huérfana");
+    assert!(stats.alive < stats.before);
+
+    // Segunda pasada: idempotente.
+    let stats2 = cmd_prune(&repo, "p").unwrap();
+    assert_eq!(stats2.removed, 0, "prune idempotente");
+    assert_eq!(stats2.before, stats.alive);
+}

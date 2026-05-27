@@ -42,7 +42,7 @@
 
 use minga_core::{
     cas::ContentHash, empty_subtree_hash, hash_stored, AttestationStore, Did, Keypair, MemStore,
-    Mst, NodeProbe, NodeStore,
+    Mst, NodeProbe, NodeStore, RetractionStore,
 };
 use rand::rngs::OsRng;
 use rand::RngCore;
@@ -71,6 +71,7 @@ pub struct SyncSession {
     mst: Mst,
     store: MemStore,
     attestations: AttestationStore,
+    retractions: RetractionStore,
 
     /// Llave del peer local: firma el `Hello` y queda asociada al
     /// `Did` que el peer remoto verá.
@@ -94,6 +95,8 @@ pub struct SyncSession {
     /// de autenticar al peer, o cualquier otra inconsistencia que el
     /// `AttestationStore` rechace.
     rejected_attests: usize,
+    /// Contador análogo para retracciones rechazadas.
+    rejected_retracts: usize,
 
     /// Nonce aleatorio que **nosotros** emitimos en `Challenge`. La
     /// firma del `Hello` del peer debe ser sobre este nonce.
@@ -107,15 +110,31 @@ pub struct SyncSession {
     sent_hello: bool,
     received_hello: bool,
     sent_attestations: bool,
+    sent_retractions: bool,
     sent_done: bool,
     received_done: bool,
 }
 
 impl SyncSession {
+    /// Constructor sin retracciones — el chasis lo usa cuando no hay
+    /// retracciones que sincronizar (o por compat con tests viejos).
     pub fn new(
         mst: Mst,
         store: MemStore,
         attestations: AttestationStore,
+        keypair: Keypair,
+    ) -> Self {
+        Self::with_retractions(mst, store, attestations, RetractionStore::new(), keypair)
+    }
+
+    /// Constructor completo con retracciones. Las retracciones se
+    /// empujan al peer junto con las atestaciones (en su propio
+    /// mensaje `RetractPush`).
+    pub fn with_retractions(
+        mst: Mst,
+        store: MemStore,
+        attestations: AttestationStore,
+        retractions: RetractionStore,
         keypair: Keypair,
     ) -> Self {
         let own_probes = mst.build_probe_index();
@@ -126,6 +145,7 @@ impl SyncSession {
             mst,
             store,
             attestations,
+            retractions,
             keypair,
             peer_did: None,
             own_probes,
@@ -137,6 +157,7 @@ impl SyncSession {
             rejected_hellos: 0,
             rejected_delivers: 0,
             rejected_attests: 0,
+            rejected_retracts: 0,
             self_nonce,
             peer_nonce: None,
             sent_challenge: false,
@@ -144,6 +165,7 @@ impl SyncSession {
             sent_hello: false,
             received_hello: false,
             sent_attestations: false,
+            sent_retractions: false,
             sent_done: false,
             received_done: false,
         }
@@ -202,6 +224,14 @@ impl SyncSession {
                     out.push(Message::AttestPush { attestations: atts });
                 }
                 self.sent_attestations = true;
+
+                // Y de retracciones: análogo a AttestPush pero con
+                // las retracciones que conocemos.
+                let rets: Vec<_> = self.retractions.all().cloned().collect();
+                if !rets.is_empty() {
+                    out.push(Message::RetractPush { retractions: rets });
+                }
+                self.sent_retractions = true;
             }
 
             Message::Hello {
@@ -320,6 +350,19 @@ impl SyncSession {
                 }
             }
 
+            Message::RetractPush { retractions } => {
+                // Mismo contrato que AttestPush: exigimos Hello previo.
+                if !self.received_hello {
+                    self.rejected_retracts += retractions.len();
+                    return out;
+                }
+                for r in retractions {
+                    if self.retractions.add(r).is_err() {
+                        self.rejected_retracts += 1;
+                    }
+                }
+            }
+
             Message::Done => {
                 self.received_done = true;
             }
@@ -397,7 +440,7 @@ impl SyncSession {
         if !self.sent_hello || !self.received_hello {
             return Vec::new();
         }
-        if !self.sent_attestations {
+        if !self.sent_attestations || !self.sent_retractions {
             return Vec::new();
         }
         if !self.awaited_probes.is_empty() {
@@ -426,8 +469,23 @@ impl SyncSession {
         self.rejected_attests
     }
 
+    pub fn rejected_retracts(&self) -> usize {
+        self.rejected_retracts
+    }
+
+    /// `true` si la sesión ya verificó el `Hello` del peer remoto.
+    /// Útil para tests que necesitan saber cuándo es seguro inyectar
+    /// `AttestPush`/`RetractPush` (que requieren `received_hello`).
+    pub fn received_hello(&self) -> bool {
+        self.received_hello
+    }
+
     pub fn attestations(&self) -> &AttestationStore {
         &self.attestations
+    }
+
+    pub fn retractions(&self) -> &RetractionStore {
+        &self.retractions
     }
 
     /// Identidad del peer remoto, capturada tras verificar su `Hello`.
@@ -457,5 +515,14 @@ impl SyncSession {
 
     pub fn into_parts(self) -> (Mst, MemStore, AttestationStore) {
         (self.mst, self.store, self.attestations)
+    }
+
+    /// Variante de [`into_parts`] que también devuelve las retracciones.
+    /// Pensada para callers que necesitan mezclar `RetractPush`es
+    /// recibidos en su estado persistente.
+    pub fn into_parts_with_retractions(
+        self,
+    ) -> (Mst, MemStore, AttestationStore, RetractionStore) {
+        (self.mst, self.store, self.attestations, self.retractions)
     }
 }

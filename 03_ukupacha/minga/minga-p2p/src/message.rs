@@ -28,7 +28,7 @@
 //!    no tiene probes ni fetches pendientes. Cuando ambos `Done`s han
 //!    cruzado, la sesión termina con ambos repos convergentes.
 
-use minga_core::{Attestation, ContentHash, Did, NodeProbe, Signature, StoredNode};
+use minga_core::{Attestation, ContentHash, Did, NodeProbe, Retraction, Signature, StoredNode};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Message {
@@ -74,6 +74,14 @@ pub enum Message {
     /// peer verifique la identidad del remitente antes de procesarlas.
     AttestPush {
         attestations: Vec<Attestation>,
+    },
+    /// Empuje de retracciones: contraparte negativa de `AttestPush`.
+    /// Cada `Retraction` es auto-verificable (firma sobre
+    /// `RETRACTION_DOMAIN ++ content_hash`), así que el receptor las
+    /// valida igual que las atestaciones — sin necesidad de confiar
+    /// en el remitente más allá de su firma.
+    RetractPush {
+        retractions: Vec<Retraction>,
     },
     Done,
 }

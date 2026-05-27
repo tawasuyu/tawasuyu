@@ -114,6 +114,43 @@ impl SledNodeStore {
         Ok(())
     }
 
+    /// Elimina un nodo del store por su hash. **Cuidado**: los hijos no
+    /// se borran en cascada (otros nodos pueden referenciarlos). El
+    /// caller es responsable de la consistencia (típicamente: usar
+    /// mark-sweep sobre raíces vivas).
+    pub fn remove(&self, h: &ContentHash) -> Result<bool, StoreError> {
+        Ok(self.tree.remove(h.0)?.is_some())
+    }
+
+    /// Itera sólo los hashes (sin deserializar el valor). Más liviano
+    /// que `iter` cuando sólo se necesitan las claves — útil para
+    /// mark-sweep del GC.
+    pub fn iter_hashes(&self) -> impl Iterator<Item = Result<ContentHash, StoreError>> + '_ {
+        self.tree.iter().map(|kv| {
+            let (k, _) = kv?;
+            if k.len() != 32 {
+                return Err(StoreError::HashMismatch);
+            }
+            let mut bytes = [0u8; 32];
+            bytes.copy_from_slice(&k);
+            Ok(ContentHash(bytes))
+        })
+    }
+
+    /// Lee sólo los hashes de los hijos de un nodo (sin reconstruir
+    /// `StoredNode` completo más allá del shape del header postcard).
+    /// Optimización del walk del mark-sweep: para visitar el subárbol
+    /// no necesitamos `kind`/`field_name`/`leaf_text`.
+    pub fn children_of(&self, h: &ContentHash) -> Result<Option<Vec<ContentHash>>, StoreError> {
+        match self.tree.get(h.0)? {
+            Some(bytes) => {
+                let stored: StoredNode = postcard::from_bytes(&bytes)?;
+                Ok(Some(stored.children))
+            }
+            None => Ok(None),
+        }
+    }
+
     /// Itera todos los pares `(hash, stored_node)` persistidos. Sin
     /// orden garantizado más allá del lexicográfico de sled. Usado al
     /// arrancar para volcar el contenido a un `MemStore` en memoria.

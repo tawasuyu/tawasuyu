@@ -122,18 +122,32 @@ La re-verificación se ofrece como primitiva (`alpha::verify_root_alpha`) y como
 
 **No** intercepta automáticamente en el path de sync porque el wire actual no transmite dialect ni el binding α→struct. Para integrarlo ahí hay que extender `minga-p2p::session::Message` con una variante `RootDeclaration { alpha, struct_hash, dialect }`; queda para una fase futura.
 
-## 7. Próximos pasos abiertos
+## 7. Tercer sprint (4 items más completados)
+
+| # | Tarea | Resultado |
+|---|---|---|
+| 16 | **`minga prune`** — mark-sweep GC del grafo CAS. Marca alcanzables desde `roots` siguiendo `children_of` (lectura liviana), borra los huérfanos de `nodes`. Idempotente. Atestaciones/retracciones/timestamps preservados (referencian α-hash, no struct). | hecho |
+| 17 | **`minga show --diff-against <other>`** — atajo a `minga diff` desde el subcomando `show`. Mutuamente excluyente con `--sexp`. | hecho |
+| 18 | **`shuma-module-minga` shortcut Verify** — recorre raíces visibles, las verifica con `verify_root_alpha` en un thread. Marca cada `RootRow` con `verified: Option<bool>`, pintado con `·`/`✓`/`✘`. | hecho |
+| 19 | **Sync de Retractions** — Wire extendido con `Message::RetractPush { retractions }`. `SyncSession::with_retractions` constructor nuevo. Push tras Hello autenticado. Idéntica idempotencia/verificación que atestaciones. `MingaPeer::open` carga retracciones desde disco; `merge_into_state` las mezcla y persiste. Test `sync_propagates_retractions_for_owned_content` cierra el round-trip; `forged_retraction_signature_is_rejected` verifica que firmas inválidas se cuentan como `rejected_retracts`. | hecho |
+
+### Cambios en el wire (importante para compat)
+
+`Message` ganó la variante `RetractPush { retractions: Vec<Retraction> }`. Repos sincronizados con peers que corran versión vieja del protocolo **descartarán** ese mensaje (postcard error en `decode`) y la sesión seguirá funcionando para atestaciones. No es un break-change explícito; sólo se pierde la propagación de retracciones contra peers que no lo entienden.
+
+`SyncSession::new` mantiene la firma vieja (con `RetractionStore::new()` interno); el nuevo `with_retractions` toma 5 args. `into_parts` sigue devolviendo 3-tupla por compat; `into_parts_with_retractions` agrega la cuarta.
+
+## 8. Próximos pasos abiertos
 
 | # | Tarea | Prioridad |
 |---|---|---|
 | A | Cachear `MingaPeer` con backend sled directo (item #5 deferido) | media |
-| B | Extender wire de sync con `RootDeclaration { alpha, struct, dialect }` + re-verificar α automáticamente al recibir | media (seguridad) |
-| C | `minga prune-cas` — recolector de basura del grafo CAS (nodos ya no referenciados por ninguna raíz) | media |
-| D | Sync de `Retraction`s — wire actual sólo transmite `Attestation`s | media |
-| E | `minga show --diff-against <other>` — combinar show+diff en un sólo comando | baja UX |
-| F | Exportar `roots` como API REST/JSON desde un daemon minga | baja |
-| G | `shuma-module-minga`: shortcut "Verify" que corre `cmd_verify_root` sobre cada raíz visible y marca consistentes/inconsistentes | media UX |
+| B | Wire-side α-verification: `RootDeclaration { alpha, struct, dialect }` + re-verificar al recibir | media (seguridad) |
+| C | Exportar `roots` como API REST/JSON desde un daemon minga (paralelo a `shuma-gateway`) | baja |
+| D | `minga blame <path>` — para cada línea, el último α-hash que la introdujo (requiere historial path→hash, que `cmd_log` no mantiene aún) | media UX |
+| E | DHT bootstrap automático en `cmd_listen` (anunciar todas las raíces al arrancar) | media |
+| F | Indicador en `shuma-module-minga` cuando alguna raíz tiene retracciones pendientes (un dot rojo al lado del α-hash) | baja UX |
 
 ---
 
-*Generado por Claude (Opus 4.7) — `2026-05-27`. 14/15 tareas completadas; #5 deferido (refactor invasivo, alto costo, beneficio sólo en repos grandes).*
+*Generado por Claude (Opus 4.7) — `2026-05-27`. **18/19 tareas completadas**; #5 deferido (refactor invasivo). El wire de sync ahora transmite retractions además de atestaciones.*

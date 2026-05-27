@@ -437,6 +437,85 @@ pub fn cmd_verify_root(
     })
 }
 
+/// Resultado de `cmd_prune`: cuántos nodos había antes, cuántos
+/// quedaron vivos (alcanzables desde alguna raíz), cuántos se borraron.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PruneStats {
+    pub before: usize,
+    pub alive: usize,
+    pub removed: usize,
+    pub roots: usize,
+}
+
+/// `minga prune`: mark-sweep del grafo CAS. Marca todos los nodos
+/// alcanzables desde alguna raíz del tree `roots` (siguiendo los
+/// `children` recursivamente) y borra del tree `nodes` los que no
+/// quedaron marcados. Idempotente: correr dos veces seguidas no
+/// elimina nada en la segunda pasada.
+///
+/// Las atestaciones, retracciones y timestamps quedan intactos —
+/// referencian α-hashes (no struct-hashes) y son históricos.
+pub fn cmd_prune(repo_path: &Path, passphrase: &str) -> Result<PruneStats, CliError> {
+    use std::collections::HashSet;
+
+    let _keypair = keypair_file::load(repo_path.join(KEYPAIR_FILENAME), passphrase)?;
+    let repo = PersistentRepo::open(repo_path.join(REPO_DIRNAME))?;
+
+    let before = repo.nodes.len();
+
+    // 1. Recolectar los struct-hashes raíz a partir de `roots`.
+    let mut roots_set: HashSet<ContentHash> = HashSet::new();
+    let mut roots_count = 0usize;
+    for r in repo.roots.iter() {
+        let (_alpha, struct_hash, _dialect) = r?;
+        roots_set.insert(struct_hash);
+        roots_count += 1;
+    }
+
+    // 2. Mark: BFS desde cada raíz por `children_of` (lee sólo los
+    //    hashes, sin reconstruir el SemanticNode completo).
+    let mut alive_set: HashSet<ContentHash> = HashSet::new();
+    let mut frontier: Vec<ContentHash> = roots_set.into_iter().collect();
+    while let Some(h) = frontier.pop() {
+        if !alive_set.insert(h) {
+            continue; // ya visitado
+        }
+        if let Some(children) = repo.nodes.children_of(&h)? {
+            for c in children {
+                if !alive_set.contains(&c) {
+                    frontier.push(c);
+                }
+            }
+        }
+        // Si `children_of` devolvió None, el hash es huérfano (en el
+        // tree `roots` pero NO en `nodes` — debería ser imposible bajo
+        // ingest sano; pasamos de él en silencio).
+    }
+    let alive = alive_set.len();
+
+    // 3. Sweep: borrar todo lo que no quedó vivo.
+    let all_hashes: Vec<ContentHash> = repo
+        .nodes
+        .iter_hashes()
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut removed = 0usize;
+    for h in &all_hashes {
+        if !alive_set.contains(h) {
+            if repo.nodes.remove(h)? {
+                removed += 1;
+            }
+        }
+    }
+    repo.flush()?;
+
+    Ok(PruneStats {
+        before,
+        alive,
+        removed,
+        roots: roots_count,
+    })
+}
+
 /// Resultado de `cmd_retire`: confirmación con metadata.
 #[derive(Debug, Clone)]
 pub struct RetireResult {

@@ -68,6 +68,10 @@ pub struct RepoSnapshot {
 pub struct RootRow {
     pub alpha: ContentHash,
     pub dialect: Option<&'static str>,
+    /// Resultado del último `Verify` sobre esta raíz: `Some(true)` si
+    /// el α-hash es consistente con su contenido bajo algún dialect,
+    /// `Some(false)` si no, `None` si nunca se verificó.
+    pub verified: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -137,12 +141,19 @@ pub enum Msg {
     },
     /// Cierra el visor de fuente — deselecciona.
     DeselectRoot,
+    /// Pide verificar todas las raíces visibles. El chasis spawnea el
+    /// trabajo y reenvía `VerifyAllReady`.
+    VerifyAll,
+    /// Resultado de un VerifyAll: para cada α, `true` si la raíz es
+    /// consistente bajo algún dialect, `false` si no.
+    VerifyAllReady(Vec<(ContentHash, bool)>),
 }
 
 /// Mapea `action_id` de `ShortcutAction::ModuleAction` al `Msg`.
 pub fn dispatch(action_id: &str) -> Option<Msg> {
     match action_id {
         "minga.refresh" => Some(Msg::Refresh),
+        "minga.verify_all" => Some(Msg::VerifyAll),
         _ => None,
     }
 }
@@ -178,8 +189,55 @@ pub fn update(state: State, msg: Msg) -> State {
             s.selected = None;
             s.selected_source = None;
         }
+        Msg::VerifyAll => {
+            // Limpia las marcas previas; el chasis dispara el trabajo
+            // y mandará VerifyAllReady.
+            if let Some(snap) = &mut s.snapshot {
+                for row in &mut snap.recent {
+                    row.verified = None;
+                }
+            }
+        }
+        Msg::VerifyAllReady(results) => {
+            if let Some(snap) = &mut s.snapshot {
+                use std::collections::HashMap;
+                let by_hash: HashMap<_, _> = results.into_iter().collect();
+                for row in &mut snap.recent {
+                    if let Some(ok) = by_hash.get(&row.alpha) {
+                        row.verified = Some(*ok);
+                    }
+                }
+            }
+        }
     }
     s
+}
+
+/// Reconstruye cada raíz visible y la verifica con `verify_root_alpha`.
+/// Bloqueante — corre en un thread del host disparado por `VerifyAll`.
+pub fn verify_all_blocking(
+    repo_path: &std::path::Path,
+    alphas: &[ContentHash],
+) -> Vec<(ContentHash, bool)> {
+    let inner = repo_path.join(REPO_SUBDIR);
+    let repo = match PersistentRepo::open(&inner) {
+        Ok(r) => r,
+        Err(_) => return alphas.iter().map(|a| (*a, false)).collect(),
+    };
+    let mut out = Vec::with_capacity(alphas.len());
+    for &alpha in alphas {
+        let ok = match repo.roots.get(&alpha) {
+            Ok(Some((struct_hash, _))) => match repo.nodes.reconstruct(&struct_hash) {
+                Ok(Some(node)) => {
+                    minga_core::alpha::verify_root_alpha(&node, &alpha).is_some()
+                }
+                _ => false,
+            },
+            _ => false,
+        };
+        out.push((alpha, ok));
+    }
+    out
 }
 
 /// Lee el `StoredNode` raíz y devuelve la fuente reconstruida
@@ -236,6 +294,7 @@ pub fn load_snapshot(repo_path: &std::path::Path) -> Result<RepoSnapshot, String
         .map(|(alpha, _struct, dialect)| RootRow {
             alpha,
             dialect: dialect.map(|d| d.name()),
+            verified: None,
         })
         .collect();
 
@@ -360,7 +419,13 @@ fn root_row<M: Clone + 'static>(
     let short: String = alpha_hex.chars().take(16).collect();
     let dialect = row.dialect.unwrap_or("?");
     let marker = if is_selected { "▶ " } else { "  " };
-    let line = format!("{marker}{short}  {dialect}");
+    // Marca de verificación: `·` = no verificado, `✓` = OK, `✘` = inconsistente.
+    let v = match row.verified {
+        None => "·",
+        Some(true) => "✓",
+        Some(false) => "✘",
+    };
+    let line = format!("{marker}{v} {short}  {dialect}");
     let bg = if is_selected {
         theme.bg_selected
     } else {
@@ -500,8 +565,12 @@ pub fn contributions(state: &State) -> ModuleContributions {
 
     ModuleContributions {
         monitors: vec![monitor],
-        shortcuts: vec![ShortcutSpec::module_action("Refresh", "minga.refresh")
-            .with_hint("Relee el repo Minga del cwd")],
+        shortcuts: vec![
+            ShortcutSpec::module_action("Refresh", "minga.refresh")
+                .with_hint("Relee el repo Minga del cwd"),
+            ShortcutSpec::module_action("Verify", "minga.verify_all")
+                .with_hint("Recomputa el α-hash de cada raíz visible y marca consistencia"),
+        ],
     }
 }
 

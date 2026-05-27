@@ -796,3 +796,90 @@ fn sync_attest_push_count_in_stats() {
 
     assert_eq!(stats.attest_pushes, 2);
 }
+
+// ─── Propagación de retracciones ────────────────────────────────────
+
+use minga_core::{Retraction, RetractionStore};
+
+#[test]
+fn sync_propagates_retractions_for_owned_content() {
+    // A retira su propia atestación; tras sync, B conoce la retracción.
+    let kp_a = kp(30);
+    let kp_b = kp(40);
+
+    let (mst_a, store_a, atts_a, roots_a) =
+        build_repo_with_attests(&["fn x() -> i32 { 9 }"], &[&kp_a]);
+    let mut rets_a = RetractionStore::new();
+    rets_a.add(Retraction::create(&kp_a, roots_a[0])).unwrap();
+
+    let (mst_b, store_b, atts_b, _roots_b) =
+        build_repo_with_attests(&["fn y() -> i32 { 8 }"], &[&kp_b]);
+    let rets_b = RetractionStore::new();
+
+    let mut a = SyncSession::with_retractions(mst_a, store_a, atts_a, rets_a, kp_a.clone());
+    let mut b = SyncSession::with_retractions(mst_b, store_b, atts_b, rets_b, kp_b.clone());
+    let stats = run_sync(&mut a, &mut b);
+
+    assert!(stats.retract_pushes >= 1, "debe haber al menos un RetractPush");
+    // B ahora conoce la retracción que firmó A.
+    let b_retract_authors = b.retractions().authors_of(&roots_a[0]);
+    assert_eq!(b_retract_authors, vec![kp_a.did()]);
+    // Y A, que no recibió retracciones de B, tiene la suya sola.
+    assert_eq!(a.retractions().len(), 1);
+    assert_eq!(a.rejected_retracts(), 0);
+    assert_eq!(b.rejected_retracts(), 0);
+}
+
+#[test]
+fn forged_retraction_signature_is_rejected() {
+    // Una retracción con firma rota debe contarse como rechazada y NO
+    // entrar al store del peer receptor.
+    let kp_a = kp(50);
+    let kp_b = kp(60);
+
+    let (mst_a, store_a, atts_a, _) =
+        build_repo_with_attests(&["fn a() -> i32 { 1 }"], &[&kp_a]);
+    let mut rets_a = RetractionStore::new();
+    // Forjamos una retracción con firma inválida pasándola por dentro
+    // del wire de un push manual.
+    let bogus = Retraction {
+        content: ContentHash([7u8; 32]),
+        author: kp_a.did(),
+        signature: minga_core::Signature([0u8; 64]),
+    };
+    // No la agregamos al RetractionStore (`add` rechazaría); la mandamos
+    // por wire manualmente.
+    let _ = &mut rets_a; // silencio
+
+    let (mst_b, store_b, atts_b, _) =
+        build_repo_with_attests(&["fn b() -> i32 { 2 }"], &[&kp_b]);
+
+    let mut a = SyncSession::new(mst_a, store_a, atts_a, kp_a.clone());
+    let mut b = SyncSession::new(mst_b, store_b, atts_b, kp_b.clone());
+
+    // Avanzamos hasta que ambos hayan intercambiado Hello.
+    let m1 = a.start();
+    let mut from_a: Vec<Message> = m1;
+    let mut from_b: Vec<Message> = b.start();
+    while !from_a.is_empty() || !from_b.is_empty() {
+        let take_a = from_a;
+        from_a = Vec::new();
+        for m in take_a {
+            from_b.extend(b.handle(m));
+        }
+        let take_b = from_b;
+        from_b = Vec::new();
+        for m in take_b {
+            from_a.extend(a.handle(m));
+        }
+        if b.received_hello() && a.received_hello() {
+            break;
+        }
+    }
+    // Inyectamos el push forjado.
+    b.handle(Message::RetractPush {
+        retractions: vec![bogus],
+    });
+    assert_eq!(b.rejected_retracts(), 1);
+    assert_eq!(b.retractions().len(), 0);
+}

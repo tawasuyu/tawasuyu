@@ -758,6 +758,29 @@ fn handle_shortcut(
                     );
                 }
             }
+            // Minga verify_all: recorre las raíces del snapshot y las
+            // verifica una por una en un thread.
+            if action_id == "minga.verify_all" {
+                if let (Some(repo_path), Some(alphas)) = (
+                    minga_repo_path(&slot, &m),
+                    minga_visible_alphas(&slot, &m),
+                ) {
+                    let slot_back = slot.clone();
+                    handle.spawn(move || {
+                        let results =
+                            shuma_module_minga::verify_all_blocking(&repo_path, &alphas);
+                        Msg::Module(
+                            slot_back,
+                            ModuleMsg::Minga(shuma_module_minga::Msg::VerifyAllReady(results)),
+                        )
+                    });
+                    return apply_module_msg(
+                        m,
+                        slot,
+                        ModuleMsg::Minga(shuma_module_minga::Msg::VerifyAll),
+                    );
+                }
+            }
             let msg = dispatch_to_module(&slot, &m, action_id);
             if let Some(mmsg) = msg {
                 m = apply_module_msg(m, slot, mmsg);
@@ -777,6 +800,27 @@ fn minga_repo_path(slot: &Slot, model: &Model) -> Option<std::path::PathBuf> {
     };
     match &inst.state {
         ModuleState::Minga(s) => Some(s.repo_path.clone()),
+        _ => None,
+    }
+}
+
+/// Lista de α-hashes de las raíces actualmente visibles en el snapshot
+/// del módulo minga. `None` si el slot no es minga o no tiene snapshot
+/// cargado todavía.
+fn minga_visible_alphas(
+    slot: &Slot,
+    model: &Model,
+) -> Option<Vec<minga_core::ContentHash>> {
+    let inst = match slot {
+        Slot::TopBar => model.topbar.as_ref()?,
+        Slot::BottomBar => model.bottombar.as_ref()?,
+        Slot::Main => model.main.as_ref()?,
+        Slot::DrawerTab(i) => model.drawer_tabs.get(*i)?,
+    };
+    match &inst.state {
+        ModuleState::Minga(s) => s.snapshot.as_ref().map(|snap| {
+            snap.recent.iter().map(|r| r.alpha).collect()
+        }),
         _ => None,
     }
 }

@@ -22,6 +22,7 @@
 
 use crate::cas::ContentHash;
 use crate::identity::{Did, Keypair, Signature};
+use std::collections::HashMap;
 
 /// Prefijo de dominio para que la firma de una retracción no colisione
 /// con la de una atestación: los mensajes firmados son distintos.
@@ -71,6 +72,62 @@ impl Retraction {
         msg.extend_from_slice(RETRACTION_DOMAIN);
         msg.extend_from_slice(&self.content.0);
         self.author.verify(&msg, &self.signature)
+    }
+}
+
+/// Registro in-memory de retracciones, espejo de [`crate::AttestationStore`].
+///
+/// Idempotente por `(author, content)`. Rechaza firmas inválidas. Un
+/// mismo `content_hash` puede tener retracciones de autores distintos.
+#[derive(Debug, Default, Clone)]
+pub struct RetractionStore {
+    by_content: HashMap<ContentHash, Vec<Retraction>>,
+}
+
+impl RetractionStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Inserta una retracción. `Err(InvalidSignature)` si la firma no
+    /// verifica — el store nunca almacena firmas rotas.
+    pub fn add(&mut self, r: Retraction) -> Result<(), RetractionError> {
+        if !r.verify() {
+            return Err(RetractionError::InvalidSignature);
+        }
+        let entry = self.by_content.entry(r.content).or_default();
+        if !entry.iter().any(|x| x.author == r.author) {
+            entry.push(r);
+        }
+        Ok(())
+    }
+
+    pub fn get(&self, content: &ContentHash) -> &[Retraction] {
+        self.by_content
+            .get(content)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    /// Conjunto de DIDs que han retirado este contenido.
+    pub fn authors_of(&self, content: &ContentHash) -> Vec<Did> {
+        self.by_content
+            .get(content)
+            .map(|v| v.iter().map(|a| a.author).collect())
+            .unwrap_or_default()
+    }
+
+    pub fn len(&self) -> usize {
+        self.by_content.values().map(Vec::len).sum()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_content.values().all(Vec::is_empty)
+    }
+
+    /// Itera todas las retracciones (orden no especificado).
+    pub fn all(&self) -> impl Iterator<Item = &Retraction> + '_ {
+        self.by_content.values().flat_map(|v| v.iter())
     }
 }
 

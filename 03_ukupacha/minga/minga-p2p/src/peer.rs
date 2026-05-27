@@ -26,7 +26,7 @@ use tokio_util::compat::FuturesAsyncReadCompatExt;
 
 use minga_core::{
     alpha::hash_alpha_with, parse::Dialect, AttestationStore, ContentHash, Keypair, MemStore, Mst,
-    NodeStore, SemanticNode,
+    NodeStore, RetractionStore, SemanticNode,
 };
 use minga_dht::DhtKey;
 use minga_store::{PersistentRepo, StoreError};
@@ -57,6 +57,7 @@ struct PeerState {
     mst: Mst,
     store: MemStore,
     attestations: AttestationStore,
+    retractions: RetractionStore,
     keypair: Keypair,
     /// Backing persistente opcional. Si está presente, todo cambio
     /// de estado escribe a disco vía write-through.
@@ -80,6 +81,7 @@ impl MingaPeer {
             mst,
             store,
             attestations,
+            retractions: RetractionStore::new(),
             keypair,
             persistent: None,
         }));
@@ -115,11 +117,19 @@ impl MingaPeer {
             let _ = attestations.add(att);
         }
 
+        // Cargar retracciones desde disco.
+        let mut retractions = RetractionStore::new();
+        for r in repo.retractions.iter() {
+            let r = r?;
+            let _ = retractions.add(r);
+        }
+
         let node = LibP2pNode::new()?;
         let state = Arc::new(Mutex::new(PeerState {
             mst,
             store,
             attestations,
+            retractions,
             keypair,
             persistent: Some(repo),
         }));
@@ -198,18 +208,19 @@ impl MingaPeer {
 
     async fn snapshot_session(&self) -> SyncSession {
         let s = self.state.lock().await;
-        SyncSession::new(
+        SyncSession::with_retractions(
             s.mst.clone(),
             s.store.clone(),
             s.attestations.clone(),
+            s.retractions.clone(),
             s.keypair.clone(),
         )
     }
 
     async fn merge_back(&self, session: SyncSession) {
-        let (new_mst, new_store, new_atts) = session.into_parts();
+        let (new_mst, new_store, new_atts, new_rets) = session.into_parts_with_retractions();
         let mut s = self.state.lock().await;
-        merge_into_state(&mut s, new_mst, new_store, new_atts);
+        merge_into_state(&mut s, new_mst, new_store, new_atts, new_rets);
     }
 
     /// Instantánea del estado actual (mst + store + attestations).
@@ -297,17 +308,18 @@ impl MingaPeer {
 async fn handle_incoming(stream: Stream, state: Arc<Mutex<PeerState>>) {
     let session = {
         let s = state.lock().await;
-        SyncSession::new(
+        SyncSession::with_retractions(
             s.mst.clone(),
             s.store.clone(),
             s.attestations.clone(),
+            s.retractions.clone(),
             s.keypair.clone(),
         )
     };
     if let Ok(result) = run_sync_async(session, stream.compat()).await {
-        let (new_mst, new_store, new_atts) = result.into_parts();
+        let (new_mst, new_store, new_atts, new_rets) = result.into_parts_with_retractions();
         let mut s = state.lock().await;
-        merge_into_state(&mut s, new_mst, new_store, new_atts);
+        merge_into_state(&mut s, new_mst, new_store, new_atts, new_rets);
     }
     // Errores de sync se ignoran: cada sesión es independiente, una
     // sesión rota no debería tumbar el peer entero. Una iteración
@@ -319,6 +331,7 @@ fn merge_into_state(
     new_mst: Mst,
     new_store: MemStore,
     new_atts: AttestationStore,
+    new_rets: RetractionStore,
 ) {
     // Write-through: cada inserción en memoria también va al backing
     // persistente si existe. Errores de IO se ignoran (best-effort);
@@ -341,6 +354,13 @@ fn merge_into_state(
             // Solo persistimos las que pasaron verificación en memoria.
             if let Some(repo) = &state.persistent {
                 let _ = repo.attestations.add(att.clone());
+            }
+        }
+    }
+    for r in new_rets.all() {
+        if state.retractions.add(r.clone()).is_ok() {
+            if let Some(repo) = &state.persistent {
+                let _ = repo.retractions.add(r.clone());
             }
         }
     }
