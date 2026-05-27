@@ -64,7 +64,7 @@ pub fn ingest_epub(ruta: &Path, titulo: String) -> Result<Documento> {
     let mut doc = epub::doc::EpubDoc::new(ruta)
         .map_err(|e| anyhow!("EPUB inválido en {}: {e}", ruta.display()))?;
     let mut texto = String::new();
-    let n_capitulos = doc.get_num_pages();
+    let n_capitulos = doc.get_num_chapters();
     for _ in 0..n_capitulos {
         if let Some((contenido, _)) = doc.get_current_str() {
             let plano = quitar_html(&contenido);

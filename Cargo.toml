@@ -113,6 +113,7 @@ members = [
     "01_yachay/dominium/dominium-render-plan",
     "01_yachay/iniy/iniy-cli",
     "01_yachay/iniy/iniy-core",
+    "01_yachay/iniy/iniy-explorer-llimphi",
     "01_yachay/iniy/iniy-extract",
     "01_yachay/iniy/iniy-graph",
     "01_yachay/iniy/iniy-ingest",

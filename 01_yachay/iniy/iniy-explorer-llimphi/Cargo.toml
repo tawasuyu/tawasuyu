@@ -1,0 +1,21 @@
+[package]
+name = "iniy-explorer-llimphi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "iniy explorer — visualiza el corpus de iniy en Llimphi: aserciones con su opinión, fuentes con reputación, relaciones NLI."
+
+[dependencies]
+iniy-core = { workspace = true }
+iniy-store = { workspace = true }
+iniy-graph = { workspace = true }
+anyhow = { workspace = true }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-app-header = { workspace = true }
+llimphi-widget-banner = { workspace = true }
+llimphi-widget-card = { workspace = true }
+
+[[bin]]
+name = "iniy-explorer-llimphi"
+path = "src/main.rs"
