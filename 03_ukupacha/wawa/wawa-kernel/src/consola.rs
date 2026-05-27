@@ -448,6 +448,21 @@ impl Consola {
         // seleccion con J/K (MVP — el scrolling viene despues).
         let filas_y0 = r.y + altura_titulo;
         let filas_y_max = r.y + r.alto.saturating_sub(GROSOR_BORDE + 4);
+        // FASE 58 v3 :: si la query filtra a cero matches, decirlo en lugar
+        // de mostrar una caja muda. Que el operador sepa que no es bug,
+        // sino una busqueda sin resultados.
+        if overlay.filtrado.is_empty() && !overlay.catalogo.is_empty() {
+            let base_y = filas_y0 + (altura_fila + 14) / 2;
+            self.pintar_etiqueta(
+                r.x + MARGEN_TEXTO,
+                base_y,
+                "(sin coincidencias)",
+                14.0,
+                Color::PANEL,
+                Color::SIN_FOCO,
+            );
+            return;
+        }
         for (i, &idx_real) in overlay.filtrado.iter().enumerate() {
             let fila_y = filas_y0 + i * altura_fila;
             if fila_y + altura_fila > filas_y_max {
