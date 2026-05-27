@@ -34,6 +34,7 @@ pub fn eval_formula(expr: &FormulaExpr, resolver: &dyn CellResolver) -> SheetVal
         FormulaExpr::Number(n) => SheetValue::Number(*n),
         FormulaExpr::Text(t) => SheetValue::Text(t.clone()),
         FormulaExpr::Bool(b) => SheetValue::Bool(*b),
+        FormulaExpr::ErrorLiteral(e) => SheetValue::Error(e.clone()),
         FormulaExpr::Ref(c) => resolver.resolve(*c),
         FormulaExpr::Range(_) => {
             // Un rango en posición escalar es un error de uso: las

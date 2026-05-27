@@ -17,7 +17,7 @@
 //! morfismos) es el siguiente bloque y vive como un trait que
 //! implementa este `Vec` y, en producción, el log durable.
 
-use crate::cell::CellRef;
+use crate::cell::{CellRange, CellRef};
 use crate::formula::{self, CellResolver, FormulaExpr};
 use crate::sheet::{SetError, SetReport, Sheet};
 use crate::value::SheetValue;
@@ -46,6 +46,10 @@ pub enum WorkbookError {
 pub enum SheetEvent {
     SetCell { cell: CellRef, raw: String },
     ClearCell { cell: CellRef },
+    /// Fill desde una celda fuente a un rango destino. Se registra
+    /// como un solo evento (no como N SetCell) para que el replay
+    /// sea idéntico al gesto del usuario y el WAL ocupe menos.
+    Fill { src: CellRef, dest: CellRange },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -122,6 +126,23 @@ impl Workbook {
 
     pub fn clear_cell(&mut self, cr: CellRef) -> Result<SetReport, WorkbookError> {
         self.apply_user_event(SheetEvent::ClearCell { cell: cr })
+    }
+
+    /// Replica la fórmula de `src` al rango `dest`, ajustando refs
+    /// relativas y respetando `$` (igual que el fill-handle de
+    /// Excel). El rango destino puede incluir o no a `src`; si lo
+    /// incluye, `src` se preserva intacto. Si una ref shifted se
+    /// sale de la hoja queda como `#REF!` en esa celda específica.
+    /// Atómico vs. invariantes: si tras el fill alguno se viola, se
+    /// revierte todo.
+    pub fn fill(&mut self, src: CellRef, dest: CellRange) -> Result<SetReport, WorkbookError> {
+        self.apply_user_event(SheetEvent::Fill { src, dest })
+    }
+
+    /// Copia `src` a `dest` con shift (igual que `fill` sobre un
+    /// rango de una sola celda).
+    pub fn copy_cell(&mut self, src: CellRef, dest: CellRef) -> Result<SetReport, WorkbookError> {
+        self.fill(src, CellRange::new(dest, dest))
     }
 
     fn apply_user_event(&mut self, event: SheetEvent) -> Result<SetReport, WorkbookError> {
@@ -220,6 +241,59 @@ fn apply_to_sheet(sheet: &mut Sheet, event: &SheetEvent) -> Result<SetReport, Se
     match event {
         SheetEvent::SetCell { cell, raw } => sheet.set_cell(*cell, raw),
         SheetEvent::ClearCell { cell } => Ok(sheet.clear_cell(*cell)),
+        SheetEvent::Fill { src, dest } => apply_fill(sheet, *src, *dest),
+    }
+}
+
+/// Implementación del fill: lee la celda fuente, shifta su expr por
+/// cada celda destino, persiste el resultado. Se incluye `src` en
+/// `dest` solo si dest lo incluye; si no, el src queda intacto.
+///
+/// Atomicidad: aplicamos uno a uno con `set_cell_expr`. Si una de las
+/// celdas destino cierra un ciclo (caso raro pero posible si la
+/// fórmula se auto-referencia tras shiftar), la celda específica
+/// queda con su valor anterior — las demás siguen aplicándose. La
+/// transacción más amplia (vs. invariantes) la maneja `Workbook`
+/// arriba con candidate-swap.
+fn apply_fill(sheet: &mut Sheet, src: CellRef, dest: CellRange) -> Result<SetReport, SetError> {
+    let src_state = match sheet.cells_get(src) {
+        Some(s) => s,
+        None => {
+            // Sin fuente no hay qué replicar; reporte vacío.
+            return Ok(SetReport::default());
+        }
+    };
+    let src_expr = src_state.expr.clone();
+    let src_raw = src_state.raw.clone();
+    let mut combined = SetReport::default();
+    for target in dest.iter() {
+        if target == src {
+            continue;
+        }
+        let drow = target.row as i32 - src.row as i32;
+        let dcol = target.col as i32 - src.col as i32;
+        let shifted = formula::shift(&src_expr, drow, dcol);
+        let new_raw = build_raw(&src_raw, &shifted);
+        match sheet.set_cell_expr(target, shifted, new_raw) {
+            Ok(rep) => combined.changed.extend(rep.changed),
+            Err(SetError::Cycle(_)) => {
+                // El shift creó un ciclo en esta celda (raro). La
+                // saltamos y seguimos — no rompemos el fill entero.
+            }
+            Err(SetError::Parse(_)) => unreachable!("expr ya parseada"),
+        }
+    }
+    Ok(combined)
+}
+
+/// Reconstruye el raw a partir del expr shifted. Mantiene el prefijo
+/// `=` solo si el raw original lo tenía (literales no llevan `=`).
+fn build_raw(orig_raw: &str, expr: &FormulaExpr) -> String {
+    let rendered = formula::render(expr);
+    if orig_raw.starts_with('=') {
+        format!("={rendered}")
+    } else {
+        rendered
     }
 }
 
@@ -244,6 +318,7 @@ fn now_ms() -> u128 {
 mod tests {
     use super::*;
     use crate::cell::CellRef;
+    use crate::value::SheetError;
     use rust_decimal::Decimal;
     use std::io::Cursor;
     use std::str::FromStr;
@@ -345,6 +420,70 @@ mod tests {
         wb.set_cell(cr("A1"), "=B1+1").unwrap();
         let err = wb.set_cell(cr("B1"), "=A1+1").unwrap_err();
         assert!(matches!(err, WorkbookError::Set(SetError::Cycle(_))));
+    }
+
+    #[test]
+    fn fill_replicates_formula_shifting_refs() {
+        let mut wb = Workbook::new();
+        // Columna A con cantidades.
+        wb.set_cell(cr("A1"), "10").unwrap();
+        wb.set_cell(cr("A2"), "20").unwrap();
+        wb.set_cell(cr("A3"), "30").unwrap();
+        // B1 = A1 * 2. Fill hasta B3.
+        wb.set_cell(cr("B1"), "=A1*2").unwrap();
+        wb.fill(cr("B1"), "B1:B3".parse().unwrap()).unwrap();
+        assert_eq!(wb.value(cr("B1")), SheetValue::Number(dec("20")));
+        assert_eq!(wb.value(cr("B2")), SheetValue::Number(dec("40")));
+        assert_eq!(wb.value(cr("B3")), SheetValue::Number(dec("60")));
+        // El raw de B2 debe reflejar el shift.
+        assert_eq!(wb.raw(cr("B2")), Some("=A2*2"));
+    }
+
+    #[test]
+    fn fill_respects_dollar_anchors() {
+        let mut wb = Workbook::new();
+        wb.set_cell(cr("A1"), "10").unwrap();
+        wb.set_cell(cr("A2"), "20").unwrap();
+        wb.set_cell(cr("A3"), "30").unwrap();
+        wb.set_cell(cr("C1"), "100").unwrap(); // factor anclado
+        // B1 = A1 * $C$1
+        wb.set_cell(cr("B1"), "=A1*$C$1").unwrap();
+        wb.fill(cr("B1"), "B1:B3".parse().unwrap()).unwrap();
+        assert_eq!(wb.value(cr("B1")), SheetValue::Number(dec("1000")));
+        assert_eq!(wb.value(cr("B2")), SheetValue::Number(dec("2000")));
+        // Verifico que $C$1 no se shifteó.
+        assert_eq!(wb.raw(cr("B3")), Some("=A3*$C$1"));
+    }
+
+    #[test]
+    fn fill_out_of_sheet_produces_ref_error() {
+        let mut wb = Workbook::new();
+        wb.set_cell(cr("B2"), "=A2*2").unwrap();
+        // Fill hacia A2 (drow=0, dcol=-1) → A2 referenciaría col -1 → #REF!
+        wb.fill(cr("B2"), "A2:A2".parse().unwrap()).unwrap();
+        assert_eq!(wb.value(cr("A2")), SheetValue::Error(SheetError::Ref));
+    }
+
+    #[test]
+    fn fill_preserves_src_when_dest_includes_it() {
+        let mut wb = Workbook::new();
+        wb.set_cell(cr("A1"), "5").unwrap();
+        wb.set_cell(cr("B1"), "=A1*10").unwrap();
+        // Fill B1:B3 con B1 dentro del rango: B1 no debe modificarse.
+        let before_raw = wb.raw(cr("B1")).unwrap().to_string();
+        wb.fill(cr("B1"), "B1:B3".parse().unwrap()).unwrap();
+        assert_eq!(wb.raw(cr("B1")).unwrap(), before_raw);
+    }
+
+    #[test]
+    fn copy_cell_is_fill_of_singleton() {
+        let mut wb = Workbook::new();
+        wb.set_cell(cr("A1"), "7").unwrap();
+        wb.set_cell(cr("A2"), "11").unwrap();
+        wb.set_cell(cr("B1"), "=A1+1").unwrap();
+        wb.copy_cell(cr("B1"), cr("B2")).unwrap();
+        assert_eq!(wb.value(cr("B2")), SheetValue::Number(dec("12")));
+        assert_eq!(wb.raw(cr("B2")), Some("=A2+1"));
     }
 
     #[test]

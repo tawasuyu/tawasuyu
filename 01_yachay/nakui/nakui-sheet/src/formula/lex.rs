@@ -6,12 +6,17 @@
 //! detrás (función), o si hay `:` (rango). Esto evita reglas
 //! ambiguas a nivel léxico (`A1` vs `SIN`).
 
+use crate::value::SheetError;
 use rust_decimal::Decimal;
 use std::str::FromStr;
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
+    /// Literal de error: `#REF!`, `#N/A`, etc. El lexer lo reconoce
+    /// por su prefijo `#` y el body conocido; cualquier `#xxx` no
+    /// registrado es `LexError::UnknownErrorLiteral`.
+    ErrorLit(SheetError),
     Number(Decimal),
     /// Texto literal entre comillas dobles, ya sin las comillas y con
     /// `""` → `"` decodificado.
@@ -48,6 +53,8 @@ pub enum LexError {
     InvalidNumber(String, usize),
     #[error("unexpected character `{0}` at position {1}")]
     UnexpectedChar(char, usize),
+    #[error("unknown error literal starting at position {0}")]
+    UnknownErrorLiteral(usize),
 }
 
 pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
@@ -209,6 +216,32 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
             b'$' => {
                 tokens.push(Token::Dollar);
                 i += 1;
+            }
+            b'#' => {
+                // Literal de error: prueba prefijos conocidos (de más
+                // largo a más corto para evitar matches parciales).
+                let tail = &src[i..];
+                let candidates: &[(&str, SheetError)] = &[
+                    ("#DIV/0!", SheetError::DivZero),
+                    ("#VALUE!", SheetError::Value),
+                    ("#NAME?", SheetError::Name),
+                    ("#REF!", SheetError::Ref),
+                    ("#NUM!", SheetError::Num),
+                    ("#CYCLE!", SheetError::Cycle),
+                    ("#PARSE!", SheetError::Parse),
+                    ("#N/A", SheetError::NotApplicable),
+                ];
+                let matched = candidates
+                    .iter()
+                    .find(|(tok, _)| tail.starts_with(tok))
+                    .map(|(tok, err)| (tok.len(), err.clone()));
+                match matched {
+                    Some((len, err)) => {
+                        tokens.push(Token::ErrorLit(err));
+                        i += len;
+                    }
+                    None => return Err(LexError::UnknownErrorLiteral(i)),
+                }
             }
             other => return Err(LexError::UnexpectedChar(other as char, i)),
         }

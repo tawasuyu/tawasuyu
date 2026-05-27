@@ -17,11 +17,15 @@ pub mod eval;
 pub mod funcs;
 pub mod lex;
 pub mod parse;
+pub mod render;
+pub mod rewrite;
 
 pub use ast::{BinaryOp, FormulaArg, FormulaExpr, UnaryOp};
 pub use eval::{eval_formula, CellResolver};
 pub use lex::{LexError, Token};
 pub use parse::{parse_formula, ParseError};
+pub use render::render;
+pub use rewrite::{shift, ShiftError};
 
 /// Atajo: lex + parse en un solo paso. La fórmula puede venir con o
 /// sin el `=` líder; lo aceptamos para que la entrada sea exactamente
@@ -42,7 +46,7 @@ pub fn dependencies(expr: &FormulaExpr) -> Vec<crate::cell::CellRef> {
 fn collect_deps(expr: &FormulaExpr, out: &mut Vec<crate::cell::CellRef>) {
     use FormulaExpr::*;
     match expr {
-        Number(_) | Text(_) | Bool(_) => {}
+        Number(_) | Text(_) | Bool(_) | ErrorLiteral(_) => {}
         Ref(c) => out.push(*c),
         Range(r) => out.extend(r.iter()),
         Unary(_, inner) => collect_deps(inner, out),

@@ -19,7 +19,13 @@ use std::fmt;
 use std::str::FromStr;
 use thiserror::Error;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Una referencia de celda. Identidad = `(col, row)` solamente; los
+/// flags de anclaje (`col_absolute`, `row_absolute`) son metadata de
+/// notación que afectan SOLO al `Display` y al `shift` de fill/copy
+/// — no a la resolución en el HashMap del sheet, ni al `Eq`/`Hash`.
+/// Esto significa que `A1`, `$A1`, `A$1` y `$A$1` apuntan a la misma
+/// celda; sólo cambia cómo se reescribe la fórmula al copiarla.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct CellRef {
     pub col: u32,
     pub row: u32,
@@ -27,6 +33,21 @@ pub struct CellRef {
     pub col_absolute: bool,
     #[serde(default)]
     pub row_absolute: bool,
+}
+
+impl PartialEq for CellRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.col == other.col && self.row == other.row
+    }
+}
+
+impl Eq for CellRef {}
+
+impl std::hash::Hash for CellRef {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.col.hash(state);
+        self.row.hash(state);
+    }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]

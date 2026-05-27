@@ -2,7 +2,7 @@
 //! builtin (`SUM`, `IF`, ...).
 
 use crate::cell::{CellRange, CellRef};
-use crate::value::SheetValue;
+use crate::value::{SheetError, SheetValue};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +13,11 @@ pub enum FormulaExpr {
     Bool(bool),
     Ref(CellRef),
     Range(CellRange),
+    /// Literal de error en la fórmula misma — `=#REF!`, `=#N/A`. El
+    /// motor de fill/copy lo emite cuando una referencia se sale de
+    /// la hoja; el parser también lo acepta para que `raw` ↔ `expr`
+    /// sea round-trip completo.
+    ErrorLiteral(SheetError),
     Unary(UnaryOp, Box<FormulaExpr>),
     Binary(BinaryOp, Box<FormulaExpr>, Box<FormulaExpr>),
     /// Nombre normalizado a UPPERCASE (`sum`, `Sum`, `SUM` → `SUM`)

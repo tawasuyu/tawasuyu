@@ -38,13 +38,13 @@ pub struct SetReport {
 }
 
 #[derive(Debug, Clone)]
-struct CellState {
+pub struct CellState {
     /// Texto original tal como lo tecleó el usuario (con o sin `=`).
     /// Sirve para mostrar la fórmula al usuario y para re-parsear si
     /// el formato del AST cambia entre versiones.
-    raw: String,
-    expr: FormulaExpr,
-    value: SheetValue,
+    pub raw: String,
+    pub expr: FormulaExpr,
+    pub value: SheetValue,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -82,6 +82,13 @@ impl Sheet {
         self.cells.iter().map(|(c, s)| (*c, &s.value))
     }
 
+    /// Acceso de lectura al estado interno de una celda (raw + expr
+    /// + value). Lo usan los motores de fill/copy que parten del
+    /// AST ya parseado para evitar re-parsear.
+    pub fn cells_get(&self, cr: CellRef) -> Option<&CellState> {
+        self.cells.get(&cr)
+    }
+
     /// Escribe (o reescribe) una celda. Pipeline:
     ///   1. Si `raw` está vacío, borra la celda.
     ///   2. Parsea como fórmula (`=...`) o como literal.
@@ -93,16 +100,24 @@ impl Sheet {
         if raw.is_empty() {
             return Ok(self.clear_cell(cr));
         }
-
         let expr = parse_input(raw)?;
-        let deps = formula::dependencies(&expr);
+        self.set_cell_expr(cr, expr, raw.to_string())
+    }
 
-        // El grafo decide ciclos. Si rechaza, devolvemos sin
-        // tocar `self.cells` — atómico.
+    /// Variante que recibe el AST ya parseado + el raw original. Útil
+    /// para fill/copy que parten de una fórmula existente, le aplican
+    /// `shift`, y persisten el resultado sin re-parsearlo. Misma
+    /// atomicidad que `set_cell` — si la nueva expr cierra un ciclo,
+    /// el sheet queda intacto.
+    pub fn set_cell_expr(
+        &mut self,
+        cr: CellRef,
+        expr: FormulaExpr,
+        raw: String,
+    ) -> Result<SetReport, SetError> {
+        let deps = formula::dependencies(&expr);
         self.graph.set_deps(cr, &deps)?;
 
-        // Inserto/actualizo la celda con un valor placeholder; el
-        // recálculo de abajo lo sobrescribe.
         let prev_value = self
             .cells
             .get(&cr)
@@ -111,12 +126,11 @@ impl Sheet {
         self.cells.insert(
             cr,
             CellState {
-                raw: raw.to_string(),
+                raw,
                 expr,
                 value: SheetValue::Empty,
             },
         );
-
         Ok(self.recalc_from(&[cr], Some((cr, prev_value))))
     }
 

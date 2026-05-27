@@ -160,6 +160,10 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
                 Ok(FormulaExpr::Text(t))
             }
+            Some(Token::ErrorLit(e)) => {
+                self.pos += 1;
+                Ok(FormulaExpr::ErrorLiteral(e))
+            }
             Some(Token::LParen) => {
                 self.pos += 1;
                 let inner = self.parse_expr(0)?;
