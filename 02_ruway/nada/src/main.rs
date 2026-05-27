@@ -1503,6 +1503,16 @@ fn right_panel(model: &Model, theme: &Theme) -> View<Msg> {
         None => editor,
     };
     let mut children = vec![editor_row];
+    if let Some(state) = model.fif.as_ref() {
+        let palette = FifPalette::from_theme(theme);
+        children.push(fif::view_results_bar(
+            state,
+            &model.all_files,
+            &model.root,
+            &palette,
+            Msg::Fif,
+        ));
+    }
     if let Some(state) = model.term.as_ref() {
         children.push(term::view(
             state,
@@ -1612,9 +1622,9 @@ fn active_editor_content(model: &Model, theme: &Theme) -> View<Msg> {
         let palette = PickerPalette::from_theme(theme);
         children.push(picker::view(p, &model.all_files, &model.root, &palette, Msg::Picker));
     }
-    if let Some(f) = model.fif.as_ref() {
+    if let Some(f) = model.fif.as_ref().filter(|s| s.dialog_open) {
         let palette = FifPalette::from_theme(theme);
-        children.push(fif::view(f, &model.all_files, &model.root, &palette, Msg::Fif));
+        children.push(fif::view_dialog(f, &palette, Msg::Fif));
     }
     if let Some(find) = model.find.as_ref() {
         children.push(find_bar(find, theme));
@@ -2241,8 +2251,9 @@ fn apply_picker(model: Model, pm: PickerMsg) -> Model {
 /// que conoce los detalles del módulo.
 fn apply_fif(model: Model, fmsg: FifMsg) -> Model {
     let mut m = model;
-    // Lazy-init: el host emite `FifMsg::Open` cuando el user dispara el
-    // shortcut; recién ahí construimos el state.
+    // Lazy-init en Open: si no había state, lo creamos (dialog_open=true
+    // por default). Si ya existía, reabrimos el dialog conservando los
+    // resultados previos — pasamos `FifMsg::Open` adelante a `apply`.
     if matches!(fmsg, FifMsg::Open) && m.fif.is_none() {
         m.fif = Some(FifState::new());
         m.status = format!(
@@ -2257,7 +2268,12 @@ fn apply_fif(model: Model, fmsg: FifMsg) -> Model {
     };
     match action {
         FifAction::None => {}
-        FifAction::Close => {
+        FifAction::CloseDialog => {
+            if let Some(state) = m.fif.as_mut() {
+                state.dialog_open = false;
+            }
+        }
+        FifAction::CloseAll => {
             m.fif = None;
         }
         FifAction::Searched { matches, elapsed, query } => {
@@ -2267,7 +2283,11 @@ fn apply_fif(model: Model, fmsg: FifMsg) -> Model {
             );
         }
         FifAction::OpenAt { path, line, col } => {
-            m.fif = None;
+            // Cerramos el dialog pero dejamos la barra de resultados viva
+            // — el user puede saltar entre matches sin reescribir la query.
+            if let Some(state) = m.fif.as_mut() {
+                state.dialog_open = false;
+            }
             m = open_path(m, path);
             if let Some(tab) = m.active_tab_mut() {
                 tab.editor.set_caret_at(line, col);
