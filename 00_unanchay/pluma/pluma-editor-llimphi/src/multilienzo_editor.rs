@@ -226,6 +226,15 @@ where
         language,
         on_pointer,
     );
+    // Overlay con divisores entre átomos: una línea horizontal sutil en
+    // la "línea vacía" del separador (la línea blanca del `\n\n`) entre
+    // cada par de átomos consecutivos. Saca el ojo del muro de texto y
+    // marca dónde termina cada párrafo lógico. El overlay no tiene
+    // handler de click, así que es transparente al hit-test —
+    // `paint_with` solo dibuja, no captura.
+    let overlay_separadores =
+        overlay_separadores_atomos::<Msg>(ide, metrics, palette_lienzo);
+
     let contenedor_editor = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -235,7 +244,7 @@ where
         ..Default::default()
     })
     .fill(palette_editor.bg)
-    .children(vec![editor]);
+    .children(vec![editor, overlay_separadores]);
 
     // Wrapper con padding accent cuando es el activo — el padding actúa
     // como borde grueso visible (Llimphi todavía no expone `border()`
@@ -304,18 +313,114 @@ fn carril_editor<Msg: Clone + 'static>(
         let solido = Stroke::new(grosor as f64);
         let punteado = Stroke::new(grosor as f64).with_dashes(0.0, [6.0, 4.0]);
         let alto_carril = rect.h;
+        // Bezier cúbica con tangentes horizontales en ambos extremos —
+        // mismo look que un grafo Sankey o las hebras de `git log
+        // --graph`. El control point arranca a `t * ancho` del extremo
+        // en X y queda a la altura del extremo en Y. `t = 0.5` deja la
+        // curva con su panza justo en el centro del carril.
+        let t = 0.5_f32;
+        let dx = (rect.w * t) as f64;
         for h in &hebras {
             // Clamp suave al alto del carril — cuando un átomo está fuera
             // del viewport, la hebra se "asoma" pegada al borde.
             let y_izq = h.y_izq.clamp(0.0, alto_carril);
             let y_der = h.y_der.clamp(0.0, alto_carril);
+            let x1 = rect.x as f64;
+            let x2 = (rect.x + rect.w) as f64;
+            let y1 = (rect.y + y_izq) as f64;
+            let y2 = (rect.y + y_der) as f64;
             let mut path = BezPath::new();
-            path.move_to((rect.x as f64, (rect.y + y_izq) as f64));
-            path.line_to(((rect.x + rect.w) as f64, (rect.y + y_der) as f64));
+            path.move_to((x1, y1));
+            path.curve_to((x1 + dx, y1), (x2 - dx, y2), (x2, y2));
             let stroke = if h.punteada { &punteado } else { &solido };
             scene.stroke(stroke, Affine::IDENTITY, h.color, None, &path);
         }
     })
+}
+
+/// Arma el overlay que pinta los divisores entre átomos. Va sobre el
+/// editor — superpuesto al contenido del text-editor pero detrás de
+/// nada (es el último hijo del contenedor). Sin `on_click`, así que el
+/// hit-test del runtime lo ignora y los clicks llegan al editor abajo.
+fn overlay_separadores_atomos<Msg: Clone + 'static>(
+    ide: &CuerpoIde,
+    metrics: EditorMetrics,
+    palette_lienzo: &Palette,
+) -> View<Msg> {
+    let ys = precomputar_y_separadores(ide, metrics);
+    let line_h = metrics.line_height;
+    let gutter = metrics.gutter_width as f64;
+    // Color sutil: fg_muted con alpha reducido — visible pero sin
+    // competir con el texto.
+    let base = palette_lienzo.fg_muted.components;
+    let color = Color::new([base[0], base[1], base[2], base[3] * 0.35]);
+
+    let nodo = View::new(Style {
+        position: llimphi_ui::llimphi_layout::taffy::Position::Absolute,
+        inset: Rect {
+            left: length(0.0_f32),
+            top: length(0.0_f32),
+            right: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        ..Default::default()
+    });
+    if ys.is_empty() {
+        return nodo;
+    }
+    nodo.paint_with(move |scene, _ts, rect| {
+        let stroke = Stroke::new(1.0);
+        for &y_local in &ys {
+            // El editor no tiene padding vertical interno; rangos válidos
+            // del overlay son [0, rect.h]. Las líneas fuera de viewport
+            // se omiten (no se pintan recortadas — confundiría).
+            if y_local < 0.0 || y_local > rect.h {
+                continue;
+            }
+            // Salta el gutter (no separamos sobre los números de línea).
+            let x1 = rect.x as f64 + gutter;
+            let x2 = (rect.x + rect.w) as f64;
+            let y = (rect.y + y_local) as f64;
+            let mut path = BezPath::new();
+            path.move_to((x1, y));
+            path.line_to((x2, y));
+            scene.stroke(&stroke, Affine::IDENTITY, color, None, &path);
+        }
+        // suppress unused warning if compiler complains about line_h
+        let _ = line_h;
+    })
+}
+
+/// Devuelve los Y locales (en el rect del editor, sin contar el header
+/// que vive en otro nodo) donde cae el separador entre átomos
+/// consecutivos del ide, ajustados al scroll actual.
+fn precomputar_y_separadores(ide: &CuerpoIde, metrics: EditorMetrics) -> Vec<f32> {
+    let mut out = Vec::new();
+    if ide.editor_cuerpo.atom_ids.len() < 2 {
+        return out;
+    }
+    let scroll = ide.state.scroll_offset as f32;
+    for i in 1..ide.editor_cuerpo.atom_ids.len() {
+        let id = ide.editor_cuerpo.atom_ids[i];
+        let Some((line, _)) = ide.posicion_de_atom(id) else {
+            continue;
+        };
+        // El SEPARADOR es `\n\n`, que aporta una línea vacía entre dos
+        // párrafos. El átomo `i` arranca en `line`; la línea vacía es
+        // `line - 1`. Si el átomo arranca en 0 (no debería pasar para
+        // i >= 1), saltamos.
+        if line == 0 {
+            continue;
+        }
+        let linea_sep = (line - 1) as f32;
+        let y = (linea_sep - scroll + 0.5) * metrics.line_height;
+        out.push(y);
+    }
+    out
 }
 
 /// Resuelve para cada hebra de la carta su posición Y en cada editor.
@@ -456,6 +561,46 @@ mod pruebas {
         let idx: HashMap<Uuid, &NarrativeAtom> = atoms.iter().map(|a| (a.id, a)).collect();
         let ide = CuerpoIde::from_cuerpo(&c, &idx);
         (c, atoms, ide)
+    }
+
+    #[test]
+    fn separadores_se_computan_uno_por_juntura_entre_atomos() {
+        // 3 átomos → 2 separadores. El primer átomo arranca en línea 0,
+        // los siguientes en 2 y 4 (con SEPARADOR `\n\n` = 1 línea vacía
+        // entre cada par).
+        let (_, _, ide) = ide_con_textos("es", Intencion::Original, &["uno", "dos", "tres"]);
+        let metrics = EditorMetrics::for_font_size(13.0);
+        let ys = precomputar_y_separadores(&ide, metrics);
+        assert_eq!(ys.len(), 2);
+        // Separador entre átomo 0 y 1 → línea 1 (atomo[1] arranca en 2).
+        let y_sep_01 = (1.0 + 0.5) * metrics.line_height;
+        assert!((ys[0] - y_sep_01).abs() < 1e-3);
+        // Separador entre átomo 1 y 2 → línea 3 (atomo[2] arranca en 4).
+        let y_sep_12 = (3.0 + 0.5) * metrics.line_height;
+        assert!((ys[1] - y_sep_12).abs() < 1e-3);
+    }
+
+    #[test]
+    fn separadores_siguen_al_scroll() {
+        let (_, _, mut ide) = ide_con_textos("es", Intencion::Original, &["uno", "dos"]);
+        let metrics = EditorMetrics::for_font_size(13.0);
+        let antes = precomputar_y_separadores(&ide, metrics);
+        ide.state.scroll_offset = 2;
+        let despues = precomputar_y_separadores(&ide, metrics);
+        // El separador queda más arriba cuando se scrollea hacia abajo:
+        // la diferencia debe ser exactamente 2 × line_height.
+        assert_eq!(antes.len(), 1);
+        assert_eq!(despues.len(), 1);
+        let delta = antes[0] - despues[0];
+        assert!((delta - 2.0 * metrics.line_height).abs() < 1e-3);
+    }
+
+    #[test]
+    fn separadores_vacio_para_un_solo_atomo() {
+        let (_, _, ide) = ide_con_textos("es", Intencion::Original, &["uno"]);
+        let metrics = EditorMetrics::for_font_size(13.0);
+        let ys = precomputar_y_separadores(&ide, metrics);
+        assert!(ys.is_empty());
     }
 
     #[test]
