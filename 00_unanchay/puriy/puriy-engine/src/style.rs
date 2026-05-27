@@ -135,28 +135,62 @@ impl StyleEngine {
             style.font_weight = weight_default;
         }
 
-        // Cascada con especificidad. Recolectamos todas las reglas que
-        // matchean y las aplicamos ordenadas por (specificity ASC,
-        // source_index ASC) — la última escrita gana en caso de empate,
-        // pero un `#id` siempre vence a `body p` aunque llegue antes.
-        let mut matched: Vec<(u32, usize, &Rule)> = self
+        // Cascada en dos pasadas:
+        //   1. Decls normales, ordenadas por (specificity, source_index).
+        //   2. Decls `!important`, ordenadas igual.
+        // Cada decl individual lleva su flag — una misma regla puede
+        // tener decls normales y `!important` mezcladas.
+        let matched: Vec<(u32, usize, &Rule)> = self
             .rules
             .iter()
             .enumerate()
             .filter(|(_, r)| r.matches(node))
             .map(|(i, r)| (r.selector.specificity(), i, r))
             .collect();
-        matched.sort_by_key(|(spec, idx, _)| (*spec, *idx));
-        for (_, _, rule) in matched {
-            rule.apply(&mut style);
+        let inline_decls: Vec<Decl> = dom::attr(node, "style")
+            .map(|s| parse_declarations(&s))
+            .unwrap_or_default();
+
+        // PASADA 1 — normales.
+        let mut normal_apps: Vec<(u32, usize, &Decl)> = Vec::new();
+        for (spec, src, rule) in &matched {
+            for d in &rule.decls {
+                if !d.important {
+                    normal_apps.push((*spec, *src, d));
+                }
+            }
+        }
+        normal_apps.sort_by_key(|(spec, idx, _)| (*spec, *idx));
+        for (_, _, d) in normal_apps {
+            d.apply(&mut style);
+        }
+        // Inline normal (especificidad 1000) cierra la pasada normal.
+        for d in &inline_decls {
+            if !d.important {
+                d.apply(&mut style);
+            }
         }
 
-        // Inline `style="..."` tiene especificidad implícita 1000 — más
-        // alta que cualquier selector, así que se aplica al final y
-        // sobrescribe todo lo anterior.
-        if let Some(inline) = dom::attr(node, "style") {
-            for decl in parse_declarations(&inline) {
-                decl.apply(&mut style);
+        // PASADA 2 — `!important`. Cualquier important de cualquier
+        // regla vence cualquier normal — y entre importants, vuelve a
+        // mandar especificidad/orden.
+        let mut imp_apps: Vec<(u32, usize, &Decl)> = Vec::new();
+        for (spec, src, rule) in &matched {
+            for d in &rule.decls {
+                if d.important {
+                    imp_apps.push((*spec, *src, d));
+                }
+            }
+        }
+        imp_apps.sort_by_key(|(spec, idx, _)| (*spec, *idx));
+        for (_, _, d) in imp_apps {
+            d.apply(&mut style);
+        }
+        // Inline `!important` (efectiva 10_000 en CSS real, pero acá
+        // simplemente cierra la pasada — gana todo lo anterior).
+        for d in &inline_decls {
+            if d.important {
+                d.apply(&mut style);
             }
         }
         style
@@ -422,11 +456,6 @@ impl Rule {
         }
         true
     }
-    fn apply(&self, style: &mut ComputedStyle) {
-        for d in &self.decls {
-            d.apply(style);
-        }
-    }
 }
 
 fn parent_of(node: &markup5ever_rcdom::Handle) -> Option<markup5ever_rcdom::Handle> {
@@ -455,8 +484,15 @@ fn prev_element_sibling(
     None
 }
 
+/// Una declaración CSS individual + flag `!important`.
 #[derive(Debug, Clone)]
-enum Decl {
+struct Decl {
+    kind: DeclKind,
+    important: bool,
+}
+
+#[derive(Debug, Clone)]
+enum DeclKind {
     Color(Color),
     Background(Color),
     Display(Display),
@@ -472,18 +508,18 @@ enum Decl {
 
 impl Decl {
     fn apply(&self, s: &mut ComputedStyle) {
-        match self {
-            Decl::Color(c) => s.color = *c,
-            Decl::Background(c) => s.background = Some(*c),
-            Decl::Display(d) => s.display = *d,
-            Decl::FontSize(v) => s.font_size = *v,
-            Decl::FontWeight(w) => s.font_weight = *w,
-            Decl::Margin(v) => s.margin = *v,
-            Decl::Padding(v) => s.padding = *v,
-            Decl::Width(v) => s.width = *v,
-            Decl::MaxWidth(v) => s.max_width = *v,
-            Decl::TextAlign(a) => s.text_align = *a,
-            Decl::LineHeight(v) => s.line_height = Some(*v),
+        match &self.kind {
+            DeclKind::Color(c) => s.color = *c,
+            DeclKind::Background(c) => s.background = Some(*c),
+            DeclKind::Display(d) => s.display = *d,
+            DeclKind::FontSize(v) => s.font_size = *v,
+            DeclKind::FontWeight(w) => s.font_weight = *w,
+            DeclKind::Margin(v) => s.margin = *v,
+            DeclKind::Padding(v) => s.padding = *v,
+            DeclKind::Width(v) => s.width = *v,
+            DeclKind::MaxWidth(v) => s.max_width = *v,
+            DeclKind::TextAlign(a) => s.text_align = *a,
+            DeclKind::LineHeight(v) => s.line_height = Some(*v),
         }
     }
 }
@@ -522,10 +558,28 @@ fn ua_stylesheet() -> Vec<Rule> {
         }
     }
     vec![
-        Rule { selector: ty("h1"), decls: vec![Decl::FontSize(32.0), Decl::Margin(20.0)] },
-        Rule { selector: ty("h2"), decls: vec![Decl::FontSize(24.0), Decl::Margin(18.0)] },
-        Rule { selector: ty("p"), decls: vec![Decl::Margin(12.0)] },
-        Rule { selector: ty("body"), decls: vec![Decl::Padding(8.0)] },
+        Rule {
+            selector: ty("h1"),
+            decls: vec![
+                Decl { kind: DeclKind::FontSize(32.0), important: false },
+                Decl { kind: DeclKind::Margin(20.0), important: false },
+            ],
+        },
+        Rule {
+            selector: ty("h2"),
+            decls: vec![
+                Decl { kind: DeclKind::FontSize(24.0), important: false },
+                Decl { kind: DeclKind::Margin(18.0), important: false },
+            ],
+        },
+        Rule {
+            selector: ty("p"),
+            decls: vec![Decl { kind: DeclKind::Margin(12.0), important: false }],
+        },
+        Rule {
+            selector: ty("body"),
+            decls: vec![Decl { kind: DeclKind::Padding(8.0), important: false }],
+        },
     ]
 }
 
@@ -819,32 +873,53 @@ fn strip_comments(css: &str) -> String {
 }
 
 fn parse_declarations(css: &str) -> Vec<Decl> {
-    // Cada decl separada por `;`.
+    // Cada decl separada por `;`. Detectamos `!important` recortando
+    // el sufijo del value antes de pasarlo al parser de tipo.
     let mut out = Vec::new();
     for chunk in css.split(';') {
         let Some((prop, value)) = chunk.split_once(':') else {
             continue;
         };
-        if let Some(d) = decl_from_pair(prop.trim(), value.trim()) {
-            out.push(d);
+        let value = value.trim();
+        let (value, important) = match strip_important(value) {
+            Some(stripped) => (stripped, true),
+            None => (value, false),
+        };
+        if let Some(kind) = decl_kind_from_pair(prop.trim(), value) {
+            out.push(Decl { kind, important });
         }
     }
     out
 }
 
-fn decl_from_pair(prop: &str, value: &str) -> Option<Decl> {
+/// Si `value` termina en `!important` (con o sin espacios), devuelve la
+/// porción antes del bang. Sino, `None`.
+fn strip_important(value: &str) -> Option<&str> {
+    let v = value.trim_end();
+    if v.len() < "!important".len() {
+        return None;
+    }
+    let tail = &v[v.len() - "!important".len()..];
+    if tail.eq_ignore_ascii_case("!important") {
+        Some(v[..v.len() - "!important".len()].trim_end())
+    } else {
+        None
+    }
+}
+
+fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
     match prop.to_ascii_lowercase().as_str() {
-        "color" => parse_color(value).map(Decl::Color),
-        "background-color" | "background" => parse_color(value).map(Decl::Background),
-        "display" => parse_display(value).map(Decl::Display),
-        "font-size" => parse_length_px(value).map(Decl::FontSize),
-        "font-weight" => parse_weight(value).map(Decl::FontWeight),
-        "margin" => parse_length_px(value).map(Decl::Margin),
-        "padding" => parse_length_px(value).map(Decl::Padding),
-        "width" => parse_length_or_pct(value).map(Decl::Width),
-        "max-width" => parse_length_or_pct(value).map(Decl::MaxWidth),
-        "text-align" => parse_text_align(value).map(Decl::TextAlign),
-        "line-height" => parse_line_height(value).map(Decl::LineHeight),
+        "color" => parse_color(value).map(DeclKind::Color),
+        "background-color" | "background" => parse_color(value).map(DeclKind::Background),
+        "display" => parse_display(value).map(DeclKind::Display),
+        "font-size" => parse_length_px(value).map(DeclKind::FontSize),
+        "font-weight" => parse_weight(value).map(DeclKind::FontWeight),
+        "margin" => parse_length_px(value).map(DeclKind::Margin),
+        "padding" => parse_length_px(value).map(DeclKind::Padding),
+        "width" => parse_length_or_pct(value).map(DeclKind::Width),
+        "max-width" => parse_length_or_pct(value).map(DeclKind::MaxWidth),
+        "text-align" => parse_text_align(value).map(DeclKind::TextAlign),
+        "line-height" => parse_line_height(value).map(DeclKind::LineHeight),
         _ => None,
     }
 }
@@ -1301,25 +1376,25 @@ mod tests {
     fn parsea_width_max_width() {
         let s = parse_stylesheet("p { width: 80%; max-width: 800px } div { width: auto }");
         assert_eq!(s.len(), 2);
-        assert!(matches!(s[0].decls[0], Decl::Width(LengthVal::Pct(80.0))));
-        assert!(matches!(s[0].decls[1], Decl::MaxWidth(LengthVal::Px(800.0))));
-        assert!(matches!(s[1].decls[0], Decl::Width(LengthVal::Auto)));
+        assert!(matches!(s[0].decls[0].kind, DeclKind::Width(LengthVal::Pct(80.0))));
+        assert!(matches!(s[0].decls[1].kind, DeclKind::MaxWidth(LengthVal::Px(800.0))));
+        assert!(matches!(s[1].decls[0].kind, DeclKind::Width(LengthVal::Auto)));
     }
 
     #[test]
     fn parsea_text_align() {
         let s = parse_stylesheet("h1 { text-align: center } p { text-align: right }");
-        assert!(matches!(s[0].decls[0], Decl::TextAlign(TextAlign::Center)));
-        assert!(matches!(s[1].decls[0], Decl::TextAlign(TextAlign::Right)));
+        assert!(matches!(s[0].decls[0].kind, DeclKind::TextAlign(TextAlign::Center)));
+        assert!(matches!(s[1].decls[0].kind, DeclKind::TextAlign(TextAlign::Right)));
     }
 
     #[test]
     fn parsea_line_height() {
         let s = parse_stylesheet("p { line-height: 1.5 } h1 { line-height: 32px }");
         // 1.5 → 1.5
-        assert!(matches!(s[0].decls[0], Decl::LineHeight(v) if (v - 1.5).abs() < 1e-6));
+        assert!(matches!(s[0].decls[0].kind, DeclKind::LineHeight(v) if (v - 1.5).abs() < 1e-6));
         // 32px sobre font-size 16px estimado → 2.0
-        assert!(matches!(s[1].decls[0], Decl::LineHeight(v) if (v - 2.0).abs() < 1e-6));
+        assert!(matches!(s[1].decls[0].kind, DeclKind::LineHeight(v) if (v - 2.0).abs() < 1e-6));
     }
 
     #[test]
@@ -1469,6 +1544,45 @@ mod tests {
         let eng = StyleEngine::from_dom(&dom);
         let p = dom.find("p").unwrap();
         assert_eq!(eng.compute(&p).color, Color::rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn important_vence_normal_de_mayor_especificidad() {
+        // `body p { color: red !important }` (spec=2) debe vencer a
+        // `#hero { color: blue }` (spec=100) — important rompe la
+        // jerarquía de especificidad dentro del mismo origen.
+        let html = r#"<html><head><style>
+            body p { color: red !important }
+            #hero { color: blue }
+        </style></head><body><p id="hero">x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        assert_eq!(eng.compute(&p).color, Color::rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn important_inline_vence_important_de_id() {
+        // Inline !important vence cualquier !important de selector.
+        let html = r##"<html><head><style>
+            #hero { color: red !important }
+        </style></head><body><p id="hero" style="color: green !important">x</p></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        assert_eq!(eng.compute(&p).color, Color::rgb(0, 128, 0));
+    }
+
+    #[test]
+    fn normal_inline_pierde_contra_important_de_regla() {
+        // Inline normal (1000) pierde contra !important de cualquier selector.
+        let html = r##"<html><head><style>
+            p { color: red !important }
+        </style></head><body><p style="color: green">x</p></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        assert_eq!(eng.compute(&p).color, Color::rgb(255, 0, 0));
     }
 
     #[test]
