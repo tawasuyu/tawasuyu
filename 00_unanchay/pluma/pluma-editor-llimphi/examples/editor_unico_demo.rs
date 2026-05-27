@@ -15,11 +15,12 @@
 //!   │ footer: último save                                          │
 //!   └──────────────────────────────────────────────────────────────┘
 //!
-//! Dos cuerpos: `es` (original) + `qu` (derivado por
-//! `EjecutorTraducirTabla`). Una carta `es ↔ qu` los conecta. Cada
-//! cuerpo es un text-editor real (no readonly): escribís donde mirás,
-//! sin mover la atención a otra región de la pantalla. Las hebras
-//! cruzan el carril intermedio y siguen el scroll de cada editor.
+//! Tres cuerpos: `qu` (derivado) — `es` (original, **al centro**) —
+//! `en` (derivado). Dos cartas: `qu ↔ es` y `es ↔ en`. Cada cuerpo
+//! es un text-editor real (no readonly): escribís donde mirás. Las
+//! hebras salen en curva S a ambos lados de la madre central — el
+//! sentido visual del DAG es directo (madre arriba/centro, hijas
+//! abajo/laterales) sin necesidad de etiquetas.
 //!
 //! **Scroll vertical sincronizado**: al final de cada `update`, el
 //! scroll del cuerpo activo se copia a todos los demás (clampeado al
@@ -31,11 +32,11 @@
 //! Atajos y gestos:
 //!   - **Click dentro de cualquier editor** → le da el foco (cuerpo
 //!     activo) y posiciona el caret en la línea cliqueada.
-//!   - `Ctrl+1` / `Ctrl+2` → cambiar cuerpo activo con teclado (preserva
-//!     buffer, caret, undo de cada uno — cada cuerpo tiene su propio
-//!     `CuerpoIde`).
+//!   - `Ctrl+1` / `Ctrl+2` / `Ctrl+3` → cambiar cuerpo activo con
+//!     teclado (qu / es / en respectivamente; preserva buffer, caret,
+//!     undo — cada cuerpo tiene su propio `CuerpoIde`).
 //!   - `Ctrl+S` → diff + persiste el cuerpo activo; si era la madre
-//!     (`es`), marca la carta como stale (hebras punteadas).
+//!     (`es`), marca **ambas** cartas como stale (hebras punteadas).
 //!   - `Ctrl+]` → siguiente átomo del cuerpo activo.
 //!   - `Ctrl+C/X/V` → clipboard en memoria.
 //!
@@ -132,45 +133,50 @@ impl App for Demo {
             es.agregar(a.id, 101);
         }
 
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime tokio");
+
         // -- Cuerpo `qu` derivado por tabla -------------------------------
-        let traducciones = [
+        let traducciones_qu = [
             "Kuntur wayqu hanaqpachata pacha paqarinpi pasarqa.",
             "Llamaqakuna qulla suyup q'achupinpi mikhusharqaku.",
             "Sipas warmiq away wasiq hawanpi awayta ruwasharqa.",
             "Apurímac mayu rumikuna ukhumanta qhaparispa uraykurqa.",
         ];
-        let mut tabla: HashMap<Uuid, String> = HashMap::new();
-        for (atom, tr) in atoms_es.iter().zip(traducciones.iter()) {
-            tabla.insert(atom.id, (*tr).to_string());
-        }
-        let ejecutor = EjecutorTraducirTabla::new(tabla, "qu");
-        let t_qu = Transformacion::nueva(
-            es.id,
-            Uuid::new_v4(),
-            TipoTransformacion::Traducir {
-                lengua_destino: "qu".into(),
-            },
-            "ana",
-            200,
+        let (qu, atoms_qu, carta_es_qu) = derivar_por_tabla(
+            &rt, &es, &atoms_es, &traducciones_qu, "qu", 200,
         );
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime tokio");
-        let prod = rt
-            .block_on(ejecutor.aplicar(&t_qu, &es, 200))
-            .expect("traducción por tabla");
-        let qu = prod.hija;
-        let atoms_qu = prod.atoms_nuevos;
-        let carta_es_qu = prod.carta;
+
+        // -- Cuerpo `en` derivado por tabla -------------------------------
+        let traducciones_en = [
+            "The condor crossed the valley sky at dawn.",
+            "Llamas grazed among the highland grasslands.",
+            "A young woman was weaving on a loom beneath the eaves.",
+            "The Apurímac river descended roaring through the rocks.",
+        ];
+        let (en, atoms_en, carta_es_en) = derivar_por_tabla(
+            &rt, &es, &atoms_es, &traducciones_en, "en", 300,
+        );
 
         // -- Index global de atoms ----------------------------------------
         let mut atoms: HashMap<Uuid, NarrativeAtom> = HashMap::new();
-        for a in atoms_es.iter().chain(atoms_qu.iter()) {
+        for a in atoms_es
+            .iter()
+            .chain(atoms_qu.iter())
+            .chain(atoms_en.iter())
+        {
             atoms.insert(a.id, a.clone());
         }
 
-        let cuerpos = vec![es, qu];
+        // Orden visual: la madre (es) al centro, derivadas a los lados.
+        // El multilienzo_editor pinta cartas entre cuerpos consecutivos,
+        // así que cartas[0] = qu↔es y cartas[1] = es↔en. Las hebras
+        // salen en S a ambos lados de la columna central — visualiza
+        // cómo `es` es el ancla de las traducciones.
+        let cuerpos = vec![qu, es, en];
+        let cartas = vec![carta_es_qu, carta_es_en];
         let idx = ref_idx(&atoms);
         let ides: Vec<CuerpoIde> = cuerpos
             .iter()
@@ -182,9 +188,10 @@ impl App for Demo {
         Model {
             cuerpos,
             atoms,
-            cartas: vec![carta_es_qu],
+            cartas,
             ides,
-            activo: 0,
+            // Arranca con `es` (la madre) activa — está al centro.
+            activo: 1,
             clipboard: MemClipboard::default(),
             ultimo_save: String::new(),
             drag_accum: vec![(0.0, 0.0); n],
@@ -281,6 +288,7 @@ impl App for Demo {
                     "]" => return Some(Msg::SaltarAtomoSiguiente),
                     "1" => return Some(Msg::CambiarActivo(0)),
                     "2" => return Some(Msg::CambiarActivo(1)),
+                    "3" => return Some(Msg::CambiarActivo(2)),
                     _ => {}
                 }
             }
@@ -300,7 +308,7 @@ impl App for Demo {
 
         let ide_activo = &model.ides[model.activo];
         let header_text = format!(
-            "activo: «{}»  ·  {} átomos  ·  {} párrafos  ·  {}  ·  click = foco  ·  Ctrl+1/2 cambiar  ·  Ctrl+S guardar  ·  Ctrl+] siguiente",
+            "activo: «{}»  ·  {} átomos  ·  {} párrafos  ·  {}  ·  click = foco  ·  Ctrl+1/2/3 cambiar  ·  Ctrl+S guardar  ·  Ctrl+] siguiente",
             model.cuerpos[model.activo].metadatos.nombre_legible,
             model.cuerpos[model.activo].orden.len(),
             ide_activo.n_parrafos_buffer(),
@@ -344,10 +352,17 @@ impl App for Demo {
         .fill(palette_lienzo.bg_app)
         .children(vec![editores]);
 
+        // Footer: estado de las hebras (fresh/total por carta) +
+        // último save. Útil para ver de un vistazo qué pasó al
+        // Ctrl+S — si editaste `es`, las dos cartas pasan de N/N a
+        // 0/N y las hebras del multilienzo se pintan punteadas.
+        let estado_hebras = formatear_estado_hebras(&model);
         let footer_text = if model.ultimo_save.is_empty() {
-            "(sin saves — editá y dale Ctrl+S; las hebras se marcan stale al editar la madre)".to_string()
+            format!(
+                "{estado_hebras}  ·  editá y Ctrl+S; al tocar la madre las hebras pasan a stale"
+            )
         } else {
-            model.ultimo_save.clone()
+            format!("{estado_hebras}  ·  {}", model.ultimo_save)
         };
         let footer = chip(footer_text, 24.0, 11.0, Color::from_rgba8(33, 36, 42, 255), fg_muted);
 
@@ -386,6 +401,74 @@ fn ref_idx(atoms: &HashMap<Uuid, NarrativeAtom>) -> HashMap<Uuid, &NarrativeAtom
     atoms.iter().map(|(k, v)| (*k, v)).collect()
 }
 
+/// Crea un cuerpo derivado de `madre` aplicando `EjecutorTraducirTabla`
+/// con la tabla `madre_atom_id → traduccion[i]`. Devuelve la hija +
+/// sus átomos nuevos + la carta de hebras derivadas.
+///
+/// El demo lo usa para generar `qu` y `en` desde la misma `es` sin
+/// duplicar el ceremonial del runtime tokio en cada llamada.
+/// Resumen textual del estado de cada carta en el formato
+/// `cuerpoA↔cuerpoB: fresh/total`. El multilienzo_editor pinta `cartas[i]`
+/// entre `cuerpos[i]` y `cuerpos[i+1]`, así que el rótulo refleja ese
+/// par exacto. Hebras stale destacan con un `✗`, todas fresh con un `✓`.
+fn formatear_estado_hebras(model: &Model) -> String {
+    if model.cartas.is_empty() {
+        return "(sin cartas)".to_string();
+    }
+    let mut partes: Vec<String> = Vec::with_capacity(model.cartas.len());
+    for (i, carta) in model.cartas.iter().enumerate() {
+        let total = carta.hebras.len();
+        let fresh = carta.hebras.iter().filter(|h| h.fresco).count();
+        let estado = if total == 0 {
+            "—"
+        } else if fresh == total {
+            "✓"
+        } else {
+            "✗"
+        };
+        let a = model
+            .cuerpos
+            .get(i)
+            .map(|c| c.branch_id.as_str())
+            .unwrap_or("?");
+        let b = model
+            .cuerpos
+            .get(i + 1)
+            .map(|c| c.branch_id.as_str())
+            .unwrap_or("?");
+        partes.push(format!("{a}↔{b}: {fresh}/{total} {estado}"));
+    }
+    partes.join("  ·  ")
+}
+
+fn derivar_por_tabla(
+    rt: &tokio::runtime::Runtime,
+    madre: &Cuerpo,
+    atoms_madre: &[NarrativeAtom],
+    traducciones: &[&str],
+    lengua_destino: &str,
+    timestamp: u64,
+) -> (Cuerpo, Vec<NarrativeAtom>, CartaHebras) {
+    let mut tabla: HashMap<Uuid, String> = HashMap::new();
+    for (atom, tr) in atoms_madre.iter().zip(traducciones.iter()) {
+        tabla.insert(atom.id, (*tr).to_string());
+    }
+    let ejecutor = EjecutorTraducirTabla::new(tabla, lengua_destino);
+    let t = Transformacion::nueva(
+        madre.id,
+        Uuid::new_v4(),
+        TipoTransformacion::Traducir {
+            lengua_destino: lengua_destino.into(),
+        },
+        "ana",
+        timestamp,
+    );
+    let prod = rt
+        .block_on(ejecutor.aplicar(&t, madre, timestamp))
+        .expect("traducción por tabla");
+    (prod.hija, prod.atoms_nuevos, prod.carta)
+}
+
 fn atom_siguiente(ide: &CuerpoIde) -> Option<Uuid> {
     if ide.editor_cuerpo.atom_ids.is_empty() {
         return None;
@@ -417,11 +500,13 @@ fn guardar(model: Model) -> Model {
     let toco_atomos = !cambios.is_empty();
     let resumen = persistir(&mut model, i, &cambios);
 
-    // Si tocamos la madre (cuerpo 0 en este demo), las hebras del lado
-    // izquierdo de cualquier carta cuyo `a` viva en ese cuerpo quedan
-    // stale. Marcamos *todas* las hebras de la carta es↔qu como stale —
-    // es conservador pero exacto para el demo.
-    if toco_atomos && i == 0 {
+    // Si tocamos la madre (`es`, idx=1 en el orden [qu, es, en]), TODAS
+    // las cartas quedan stale — ambas la usan como un extremo. Si
+    // tocamos una hija (qu o en), las hebras se mantienen fresh: la
+    // hija cambió por edición humana, no porque la madre haya
+    // derivado. Conservador pero exacto para el demo.
+    let edito_la_madre = i == 1;
+    if toco_atomos && edito_la_madre {
         for carta in &mut model.cartas {
             for h in &mut carta.hebras {
                 h.fresco = false;
