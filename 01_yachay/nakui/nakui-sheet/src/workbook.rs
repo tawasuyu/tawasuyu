@@ -20,6 +20,7 @@
 use crate::cell::{CellRange, CellRef};
 use crate::formula::{self, CellResolver, FormulaExpr};
 use crate::sheet::{SetError, SetReport, Sheet};
+use crate::sink::{EventSink, MemorySink, SinkError};
 use crate::value::SheetValue;
 use serde::{Deserialize, Serialize};
 use std::io::{self, BufRead, Write};
@@ -39,6 +40,8 @@ pub enum WorkbookError {
     LogDecode { line: usize, reason: String },
     #[error("event log refers to sequence numbers out of order")]
     LogOutOfOrder,
+    #[error("sink error: {0}")]
+    Sink(#[from] SinkError),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -68,12 +71,36 @@ struct Invariant {
     expr: FormulaExpr,
 }
 
-#[derive(Debug, Default)]
 pub struct Workbook {
     sheet: Sheet,
-    events: Vec<RecordedEvent>,
+    /// Sink de eventos — la capa que decide si vive en RAM, en
+    /// disco, o en `nakui-core::event_log`. Default: [`MemorySink`].
+    sink: Box<dyn EventSink>,
+    /// Cache de los eventos para que `events()` siga devolviendo
+    /// `&[...]` sin tocar el sink (que sí podría hacer I/O).
+    events_cache: Vec<RecordedEvent>,
     invariants: Vec<Invariant>,
-    next_seq: u64,
+}
+
+impl std::fmt::Debug for Workbook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Workbook")
+            .field("sheet", &self.sheet)
+            .field("events", &self.events_cache.len())
+            .field("invariants", &self.invariants.len())
+            .finish()
+    }
+}
+
+impl Default for Workbook {
+    fn default() -> Self {
+        Self {
+            sheet: Sheet::default(),
+            sink: Box::new(MemorySink::new()),
+            events_cache: Vec::new(),
+            invariants: Vec::new(),
+        }
+    }
 }
 
 impl Workbook {
@@ -81,12 +108,30 @@ impl Workbook {
         Self::default()
     }
 
+    /// Construye un workbook con un sink custom (file, custom, etc).
+    /// Si el sink trae eventos previos (FileSink leyendo un archivo
+    /// existente), se reaplican al sheet en orden para reconstruir
+    /// el estado.
+    pub fn with_sink(sink: Box<dyn EventSink>) -> Result<Self, WorkbookError> {
+        let mut sheet = Sheet::default();
+        let existing = sink.events();
+        for ev in &existing {
+            apply_to_sheet(&mut sheet, &ev.event)?;
+        }
+        Ok(Self {
+            sheet,
+            sink,
+            events_cache: existing,
+            invariants: Vec::new(),
+        })
+    }
+
     pub fn sheet(&self) -> &Sheet {
         &self.sheet
     }
 
     pub fn events(&self) -> &[RecordedEvent] {
-        &self.events
+        &self.events_cache
     }
 
     pub fn value(&self, cr: CellRef) -> SheetValue {
@@ -168,11 +213,11 @@ impl Workbook {
         let report = apply_to_sheet(&mut candidate, &event)?;
         Self::check_invariants(&self.invariants, &candidate)?;
         self.sheet = candidate;
-        let seq = self.next_seq;
-        self.next_seq += 1;
-        self.events.push(RecordedEvent {
+        let timestamp_ms = now_ms();
+        let seq = self.sink.record(event.clone(), timestamp_ms)?;
+        self.events_cache.push(RecordedEvent {
             seq,
-            timestamp_ms: now_ms(),
+            timestamp_ms,
             event,
         });
         Ok(report)
@@ -197,7 +242,7 @@ impl Workbook {
     /// formato es estable: misma versión de Nakui produce el mismo
     /// bytes-for-bytes, lo cual es lo que permite verificar drift.
     pub fn write_log<W: Write>(&self, mut w: W) -> Result<(), WorkbookError> {
-        for ev in &self.events {
+        for ev in &self.events_cache {
             serde_json::to_writer(&mut w, ev).map_err(|e| {
                 WorkbookError::LogDecode {
                     line: ev.seq as usize,
@@ -215,29 +260,8 @@ impl Workbook {
     /// verdad de lo que ocurrió, y si fuera inconsistente lo
     /// detectaríamos al evaluar.
     pub fn from_log<R: BufRead>(r: R) -> Result<Self, WorkbookError> {
-        let mut wb = Self::new();
-        let mut expected = 0u64;
-        for (line_no, line) in r.lines().enumerate() {
-            let line = line?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            let ev: RecordedEvent =
-                serde_json::from_str(&line).map_err(|e| WorkbookError::LogDecode {
-                    line: line_no,
-                    reason: e.to_string(),
-                })?;
-            if ev.seq != expected {
-                return Err(WorkbookError::LogOutOfOrder);
-            }
-            expected += 1;
-            // Aplica al sheet directo (sin invariantes — el evento
-            // ya pasó la validación en su tiempo).
-            apply_to_sheet(&mut wb.sheet, &ev.event)?;
-            wb.events.push(ev);
-        }
-        wb.next_seq = expected;
-        Ok(wb)
+        let sink = MemorySink::from_reader(r)?;
+        Self::with_sink(Box::new(sink))
     }
 
     /// Time-travel: reconstruye la hoja como estaba después de
@@ -246,7 +270,7 @@ impl Workbook {
     /// modifica — devolvemos un `Sheet` snapshot.
     pub fn snapshot_at(&self, n: usize) -> Result<Sheet, WorkbookError> {
         let mut s = Sheet::new();
-        for ev in self.events.iter().take(n) {
+        for ev in self.events_cache.iter().take(n) {
             apply_to_sheet(&mut s, &ev.event)?;
         }
         Ok(s)
@@ -336,6 +360,7 @@ fn now_ms() -> u128 {
 mod tests {
     use super::*;
     use crate::cell::CellRef;
+    use crate::sink::FileSink;
     use crate::value::SheetError;
     use rust_decimal::Decimal;
     use std::io::Cursor;
@@ -589,6 +614,37 @@ mod tests {
     }
 
     #[test]
+    fn workbook_with_file_sink_round_trip() {
+        // Sesión 1: edito unas celdas y dejo el archivo cerrado.
+        let mut p = std::env::temp_dir();
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        p.push(format!("nakui-wb-roundtrip-{pid}-{nanos}.jsonl"));
+
+        {
+            let sink = Box::new(FileSink::open(&p).unwrap());
+            let mut wb = Workbook::with_sink(sink).unwrap();
+            wb.set_cell(cr("A1"), "10").unwrap();
+            wb.set_cell(cr("B1"), "=A1*5").unwrap();
+            assert_eq!(wb.value(cr("B1")), SheetValue::Number(dec("50")));
+        }
+
+        // Sesión 2: vuelvo a abrir el mismo archivo y el estado
+        // debe reaparecer intacto.
+        {
+            let sink = Box::new(FileSink::open(&p).unwrap());
+            let wb = Workbook::with_sink(sink).unwrap();
+            assert_eq!(wb.value(cr("A1")), SheetValue::Number(dec("10")));
+            assert_eq!(wb.value(cr("B1")), SheetValue::Number(dec("50")));
+            assert_eq!(wb.events().len(), 2);
+        }
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
     fn out_of_order_log_rejected() {
         let mut wb = Workbook::new();
         wb.set_cell(cr("A1"), "1").unwrap();
@@ -602,6 +658,11 @@ mod tests {
             buf.push(b'\n');
         }
         let err = Workbook::from_log(Cursor::new(buf)).unwrap_err();
-        assert!(matches!(err, WorkbookError::LogOutOfOrder));
+        // Tras refactorizar a EventSink, el out-of-order lo detecta
+        // MemorySink::from_reader → WorkbookError::Sink(Skew{..}).
+        assert!(
+            matches!(err, WorkbookError::Sink(SinkError::Skew { .. })),
+            "got: {err:?}"
+        );
     }
 }
