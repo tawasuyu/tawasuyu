@@ -164,14 +164,34 @@ fn alinear_arriba(valor: u64, alineacion: u64) -> u64 {
 
 /// Reserva `paginas` marcos fisicos contiguos de 4 KiB y devuelve su direccion
 /// fisica. Agotar la arena es un fallo del kernel, no recuperable aqui: el
-/// rasgo `Hal` no admite que `dma_alloc` falle.
+/// rasgo `Hal` no admite que `dma_alloc` falle. En ese caso cedemos al sello
+/// de la baliza —pantalla carmesí + traza serial sin recorte— en lugar del
+/// `panic!` por defecto: el operador ve YA en pantalla qué pasó y se evita
+/// que el panic handler corra sobre un estado de I/O comprometido.
+///
+/// Casos de aborto:
+///   1. `ASIGNADOR` no fundado: `init` no se llamó antes del primer
+///      `dma_alloc`. Bug de orden de arranque en el kernel — sube prioridad
+///      del `init` del subsistema disco.
+///   2. Arena exhausta: con `MAX_MARCOS=4096` y la cota per-app
+///      `MAX_PAGINAS_DMA_PER_APP=4` × `MAX_VENTANAS=32`=128 simultaneas en
+///      vuelo, agotarla solo ocurre si un subsistema interno fuga marcos
+///      o si se sube alguna constante sin acompañar a `MAX_MARCOS`.
 fn asignar_marcos(paginas: usize) -> u64 {
-    ASIGNADOR
-        .get()
-        .expect("DMA :: el asignador de marcos no esta fundado")
-        .lock()
-        .asignar(paginas)
-        .expect("DMA :: la arena de marcos fisicos se agoto")
+    let asignador = match ASIGNADOR.get() {
+        Some(a) => a,
+        None => crate::baliza::aborto_fatal_carmesi(
+            b"DMA ARENA NO FUNDADA",
+            "DMA :: asignador no inicializado al primer dma_alloc — bug de orden de init del kernel",
+        ),
+    };
+    match asignador.lock().asignar(paginas) {
+        Some(fisica) => fisica,
+        None => crate::baliza::aborto_fatal_carmesi(
+            b"DMA ARENA AGOTADA",
+            "DMA :: arena de marcos fisicos exhausta — fuga interna o constantes desbalanceadas",
+        ),
+    }
 }
 
 /// Devuelve `paginas` marcos fisicos a la arena. El reverso de `asignar_marcos`.

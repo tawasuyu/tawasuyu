@@ -412,32 +412,40 @@ restante, debe descontar primero estos hitos para no duplicar esfuerzo:
   asoma la pila; `pop_usuario` desencola al `buf` del userspace y devuelve
   el slot a libres. Cero `to_vec()` en RX, cero `push_back` que alocan.
   Invariante mantenida: `fifo_n + libres_n == 64` siempre.
+- **Defensa en profundidad para `dma_alloc`** — **HECHA** (Fase 56). La
+  back-pressure adversarial estaba cubierta estructuralmente (32 apps × 4
+  páginas en vuelo = 128 << 4096 arena, ver `drivers/disco.rs:45` y
+  `wasm/env.rs:169`); lo único pendiente era reemplazar los dos
+  `.expect()` de `asignar_marcos` por algo legible cuando el bug ocurre.
+  Hecho: ambos casos (`ASIGNADOR` no fundado, arena exhausta) ahora
+  invocan `baliza::aborto_fatal_carmesi(traza_corta, traza_serial)` —
+  pantalla carmesí + traza serial sin recorte + IRQs apagadas. El
+  operador ve YA en pantalla qué pasó en lugar de tener que rescatar
+  el panic handler del COM1.
 
 ### 14.1 Hitos genuinamente pendientes (orden de mérito)
 
 1. **`wawactl gc`**: subcomando host-side complementario a `sys_grafo_compactar`
    (Fase 53, §14.0). Lee superbloque / dispara compactación vía socket de
-   control que aún no existe.
+   control que aún no existe — su diseño debería reusar el virtio-console
+   ya cableado por `daemon-firma` (Fase 49) con un PREFIJO distinto
+   (`wawactl::gc_request::`), respondido por un Ente userspace mínimo con
+   `PERMISO_COMPACTAR` que invoque `sys_grafo_compactar`. Alternativa
+   pesada: nuevo char-device dedicado.
 
-2. **Multi-monitor / resolución dinámica**: `bootloader_api::FrameBufferInfo`
-   ya entrega la geometría real; la consola y el compositor todavía asumen un
-   único framebuffer. Requiere capa de abstracción `Pantalla` extendida.
+2. **Multi-monitor — bloqueado por el bootloader**. `bootloader_api 0.11`
+   define `BootInfo.framebuffer: Optional<FrameBuffer>` (un solo
+   framebuffer, no un vector), así que el firmware UEFI sólo entrega un
+   output al kernel. Refactorizar `Pantalla` a `Pantallas[N]` no destraba
+   nada por sí solo — el dato extra no existe. Para multi-output real
+   harían falta: (a) forkear `bootloader_api` para exponer todos los
+   handles GOP que el firmware mantiene, o (b) escribir un driver GPU
+   propio que enumere outputs en runtime. Ambos caminos son grandes y
+   ortogonales al kernel actual. Lo que YA hace bien el código:
+   `Pantalla::adoptar` (`grafico.rs:333`) lee la geometría real de
+   `FrameBufferInfo` — resolución dinámica para el output que sí existe.
 
-3. **Defensa en profundidad para `dma_alloc`**: la back-pressure adversarial
-   YA está cubierta estructuralmente — `MAX_PAGINAS_DMA_PER_APP = 4` × `MAX_VENTANAS = 32` = 128
-   páginas máximo en vuelo simultáneo, frente a una arena de
-   `MAX_MARCOS = 4096` páginas (16 MiB) en `drivers/disco.rs:45`. El cap
-   per-app se chequea en cada syscall que toca DMA antes de despachar al
-   driver y se reinicia cada tick (ver `paginas_dma_en_vuelo` en
-   `wasm/env.rs:169`). Lo que sí queda como hito de hardening defensivo:
-   cambiar el `.expect("DMA :: la arena de marcos fisicos se agoto")` de
-   `disco.rs:174` por una traza warn + sentinel address (`Hal::dma_alloc`
-   tiene firma infallible, así que el panic no se puede convertir en
-   error, pero sí se puede sustituir por un retorno controlado que el
-   driver fallará al usarlo). Defensa contra bugs internos, no contra
-   apps — el vector de ataque de userspace está cerrado.
-
-4. **Tabla de capacidades por bytecode hash**: cuando el manifiesto declare
+3. **Tabla de capacidades por bytecode hash**: cuando el manifiesto declare
    `bytecode` por hash, los permisos podrían derivarse de la firma sobre
    `(hash_bytecode, permisos)` en lugar de declararse en `EntradaApp`. Daría
    inmutabilidad real al binding "qué binario puede hacer qué".
