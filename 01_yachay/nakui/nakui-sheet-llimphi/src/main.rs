@@ -87,6 +87,12 @@ enum Msg {
     Copy,
     Cut,
     Paste,
+    /// Entra a modo edición preservando el raw actual (F2).
+    StartEditExisting,
+    /// Entra a modo edición SUSTITUYENDO el raw por la tecla
+    /// tipeada — comportamiento natural cuando empezás a escribir
+    /// sobre una celda no-editando.
+    StartEditWith(String),
 }
 
 #[derive(Clone, Copy)]
@@ -116,6 +122,11 @@ struct Model {
     /// Nakui" y aplicamos shift de fórmula. Si difiere (el user copió
     /// algo de otro lado), el paste es literal.
     clipboard_origin: Option<(String, CellRef)>,
+    /// `true` cuando el usuario está editando la celda activa
+    /// dentro de la grilla (F2 o tipeando una letra). El text-input
+    /// se renderiza encima de la celda en vez del valor estático,
+    /// y las flechas commitean+mueven en vez de navegar.
+    editing: bool,
 }
 
 #[derive(Default, Clone)]
@@ -158,18 +169,28 @@ impl App for NakuiSheetApp {
             viewport_row: 0,
             viewport_col: 0,
             clipboard_origin: None,
+            editing: false,
         }
     }
 
     fn update(mut model: Self::Model, msg: Self::Msg, _h: &Handle<Self::Msg>) -> Self::Model {
         match msg {
             Msg::SelectCell(cr) => {
+                // Click externo cierra una edición en curso aplicando
+                // lo que había en la barra — feel Excel.
+                if model.editing {
+                    commit_bar(&mut model);
+                }
                 model.selected = cr;
                 model.bar.set_text(model.wb.raw(cr).unwrap_or(""));
                 model.status = Status::default();
                 ensure_visible(&mut model);
             }
             Msg::Move(dir) => {
+                if model.editing {
+                    commit_bar(&mut model);
+                    model.editing = false;
+                }
                 let cr = move_cell(model.selected, dir);
                 model.selected = cr;
                 model.bar.set_text(model.wb.raw(cr).unwrap_or(""));
@@ -180,32 +201,26 @@ impl App for NakuiSheetApp {
                 model.bar.apply_key(&ev);
             }
             Msg::Commit => {
-                let raw = model.bar.text();
-                match model.wb.set_cell(model.selected, &raw) {
-                    Ok(report) => {
-                        model.status = Status {
-                            text: format!(
-                                "  {} celda(s) recomputada(s)  ·  WAL: {} eventos",
-                                report.changed.len(),
-                                model.wb.events().len()
-                            ),
-                            kind: StatusKind::Info,
-                        };
-                    }
-                    Err(e) => {
-                        model.status = Status {
-                            text: format!("  ✗ {e}"),
-                            kind: StatusKind::Error,
-                        };
-                    }
-                }
+                commit_bar(&mut model);
+                model.editing = false;
             }
             Msg::Cancel => {
-                // Esc revierte la barra al valor real de la celda.
+                // Esc revierte la barra al valor real de la celda y
+                // sale de edición.
                 model
                     .bar
                     .set_text(model.wb.raw(model.selected).unwrap_or(""));
+                model.editing = false;
                 model.status = Status::default();
+            }
+            Msg::StartEditExisting => {
+                model.editing = true;
+                // bar ya tiene el raw cargado por SelectCell; nada más
+                // que hacer salvo confirmar el modo.
+            }
+            Msg::StartEditWith(first_char) => {
+                model.editing = true;
+                model.bar.set_text(first_char);
             }
             Msg::Scroll { drow, dcol } => {
                 model.viewport_row =
@@ -325,6 +340,8 @@ impl App for NakuiSheetApp {
             model.selected,
             model.viewport_row,
             model.viewport_col,
+            model.editing,
+            &model.bar,
         );
         let status = status_bar_view(&model.status);
 
@@ -367,23 +384,50 @@ impl App for NakuiSheetApp {
         match &ev.key {
             Key::Named(NamedKey::Enter) => Some(Msg::Commit),
             Key::Named(NamedKey::Escape) => Some(Msg::Cancel),
-            // Flechas sin Shift navegan el grid; con Shift las cede al
-            // text-input para edición/selección dentro de la barra.
+            Key::Named(NamedKey::F2) => Some(Msg::StartEditExisting),
+            // Flechas: si NO está editando, navegan SIEMPRE. Si está
+            // editando, navegan SOLO si el caret está en el extremo
+            // de la barra (Up/Down) o si Shift no se está usando
+            // (Left/Right ya consideran el caret). Esto reproduce el
+            // feel Excel: flechas sin Shift dentro de una celda en
+            // edición commiteán y mueven; con Shift seleccionan
+            // dentro del texto.
             Key::Named(NamedKey::ArrowUp) if !ev.modifiers.shift => Some(Msg::Move(Dir::Up)),
             Key::Named(NamedKey::ArrowDown) if !ev.modifiers.shift => Some(Msg::Move(Dir::Down)),
-            Key::Named(NamedKey::ArrowLeft) if !ev.modifiers.shift && !text_caret_can_move_left(&model.bar) => {
+            Key::Named(NamedKey::ArrowLeft)
+                if !ev.modifiers.shift
+                    && (!model.editing || !text_caret_can_move_left(&model.bar)) =>
+            {
                 Some(Msg::Move(Dir::Left))
             }
-            Key::Named(NamedKey::ArrowRight) if !ev.modifiers.shift && !text_caret_can_move_right(&model.bar) => {
+            Key::Named(NamedKey::ArrowRight)
+                if !ev.modifiers.shift
+                    && (!model.editing || !text_caret_can_move_right(&model.bar)) =>
+            {
                 Some(Msg::Move(Dir::Right))
             }
             Key::Named(NamedKey::Tab) => Some(Msg::Move(Dir::Right)),
-            _ => Some(Msg::FormulaKey(ev.clone())),
+            _ => {
+                // Si no está editando y llega una tecla productiva
+                // (con texto sin modificadores), entra a edición
+                // reemplazando el contenido — feel Excel: tipeás y
+                // la celda muestra lo que estás tipeando.
+                if !model.editing
+                    && !ev.modifiers.alt
+                    && !ev.modifiers.meta
+                    && !ev.modifiers.ctrl
+                {
+                    if let Some(text) = ev.text.as_ref() {
+                        if !text.is_empty()
+                            && text.chars().all(|c| !c.is_control())
+                        {
+                            return Some(Msg::StartEditWith(text.clone()));
+                        }
+                    }
+                }
+                Some(Msg::FormulaKey(ev.clone()))
+            }
         }
-        // Nota: la heurística de flechas izq/der intenta mantener
-        // "feel Excel": si el caret de la barra puede moverse dentro
-        // del texto, la flecha edita; si está en el extremo, navega
-        // la celda. Up/Down siempre navegan (no hay multilínea).
     }
 
     fn on_wheel(
@@ -437,6 +481,32 @@ fn move_cell(cr: CellRef, dir: Dir) -> CellRef {
 
 fn applied_count(wb: &Workbook) -> usize {
     wb.applied_count()
+}
+
+/// Aplica el contenido actual de la barra a la celda seleccionada
+/// y actualiza el status. No toca `editing` — el caller decide qué
+/// hacer con ese flag (Commit lo desactiva; Move lo desactiva tras
+/// commit; SelectCell lo desactiva tras commit).
+fn commit_bar(model: &mut Model) {
+    let raw = model.bar.text();
+    match model.wb.set_cell(model.selected, &raw) {
+        Ok(report) => {
+            model.status = Status {
+                text: format!(
+                    "  {} celda(s) recomputada(s)  ·  WAL: {} eventos",
+                    report.changed.len(),
+                    model.wb.events().len()
+                ),
+                kind: StatusKind::Info,
+            };
+        }
+        Err(e) => {
+            model.status = Status {
+                text: format!("  ✗ {e}"),
+                kind: StatusKind::Error,
+            };
+        }
+    }
 }
 
 /// Paste con shift-de-fórmulas si la fuente coincide con
@@ -638,6 +708,8 @@ fn grid_view(
     selected: CellRef,
     viewport_row: u32,
     viewport_col: u32,
+    editing: bool,
+    bar: &TextInputState,
 ) -> View<Msg> {
     let mut rows: Vec<View<Msg>> = Vec::new();
     // Cabecera de columnas: muestra los labels A, B, C... empezando
@@ -646,7 +718,7 @@ fn grid_view(
     // Filas de datos. Cada r local mapea a row = viewport_row + r.
     for r in 0..VISIBLE_ROWS {
         let abs_row = viewport_row + r;
-        rows.push(data_row(wb, selected, abs_row, viewport_col));
+        rows.push(data_row(wb, selected, abs_row, viewport_col, editing, bar));
     }
     // El contenedor de la grilla se pinta con el color de las líneas
     // — los bordes inferior/derecho de cada celda dejan ver este
@@ -762,7 +834,14 @@ fn column_header_row(viewport_col: u32) -> View<Msg> {
     .children(cells)
 }
 
-fn data_row(wb: &Workbook, selected: CellRef, row: u32, viewport_col: u32) -> View<Msg> {
+fn data_row(
+    wb: &Workbook,
+    selected: CellRef,
+    row: u32,
+    viewport_col: u32,
+    editing: bool,
+    bar: &TextInputState,
+) -> View<Msg> {
     let is_active_row = row == selected.row;
     let mut cells: Vec<View<Msg>> = Vec::new();
     // Cabecera de fila — accent suave si la fila contiene la celda activa.
@@ -789,7 +868,11 @@ fn data_row(wb: &Workbook, selected: CellRef, row: u32, viewport_col: u32) -> Vi
     for c in 0..VISIBLE_COLS {
         let abs_col = viewport_col + c;
         let cr = CellRef::new(abs_col, row);
-        cells.push(cell_view(wb, selected, cr));
+        if editing && cr == selected {
+            cells.push(editing_cell_view(bar));
+        } else {
+            cells.push(cell_view(wb, selected, cr));
+        }
     }
     View::new(Style {
         size: Size {
@@ -799,6 +882,48 @@ fn data_row(wb: &Workbook, selected: CellRef, row: u32, viewport_col: u32) -> Vi
         ..Default::default()
     })
     .children(cells)
+}
+
+/// Celda en modo edición: muestra el contenido del text-input
+/// directamente, con un borde accent para que el usuario vea
+/// claramente que está tipeando ahí (y no solo en la barra).
+fn editing_cell_view(bar: &TextInputState) -> View<Msg> {
+    let text = bar.text();
+    let inner = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        padding: Rect {
+            left: length(6.0_f32),
+            right: length(6.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(palette::BG_PANEL_ALT)
+    .text_aligned(text, 12.5, palette::FG_TEXT, Alignment::Start);
+
+    // Padre del color accent para que la celda tenga un borde
+    // distinguible (los 1px de padding right+bottom siguen
+    // marcando la grilla, pero ahora ese borde es accent).
+    View::new(Style {
+        size: Size {
+            width: length(CELL_W),
+            height: length(CELL_H),
+        },
+        padding: Rect {
+            left: length(1.0_f32),
+            right: length(1.0_f32),
+            top: length(1.0_f32),
+            bottom: length(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(palette::ACCENT)
+    .children(vec![inner])
 }
 
 fn cell_view(wb: &Workbook, selected: CellRef, cr: CellRef) -> View<Msg> {
