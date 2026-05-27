@@ -423,11 +423,19 @@ restante, debe descontar primero estos hitos para no duplicar esfuerzo:
    ya entrega la geometría real; la consola y el compositor todavía asumen un
    único framebuffer. Requiere capa de abstracción `Pantalla` extendida.
 
-3. **Auditoría DMA exhaustion**: el `Hal::dma_alloc` de virtio-drivers tiene
-   firma infallible — un userspace adversario podría agotar la arena con
-   `sys_object_put` masivos. Mitigación: rate-limit por app y/o `dma_alloc`
-   con back-pressure ante exhaustion. (Hay un cap parcial,
-   `MAX_PAGINAS_DMA_PER_APP`, pero falta el back-pressure.)
+3. **Defensa en profundidad para `dma_alloc`**: la back-pressure adversarial
+   YA está cubierta estructuralmente — `MAX_PAGINAS_DMA_PER_APP = 4` × `MAX_VENTANAS = 32` = 128
+   páginas máximo en vuelo simultáneo, frente a una arena de
+   `MAX_MARCOS = 4096` páginas (16 MiB) en `drivers/disco.rs:45`. El cap
+   per-app se chequea en cada syscall que toca DMA antes de despachar al
+   driver y se reinicia cada tick (ver `paginas_dma_en_vuelo` en
+   `wasm/env.rs:169`). Lo que sí queda como hito de hardening defensivo:
+   cambiar el `.expect("DMA :: la arena de marcos fisicos se agoto")` de
+   `disco.rs:174` por una traza warn + sentinel address (`Hal::dma_alloc`
+   tiene firma infallible, así que el panic no se puede convertir en
+   error, pero sí se puede sustituir por un retorno controlado que el
+   driver fallará al usarlo). Defensa contra bugs internos, no contra
+   apps — el vector de ataque de userspace está cerrado.
 
 4. **Tabla de capacidades por bytecode hash**: cuando el manifiesto declare
    `bytecode` por hash, los permisos podrían derivarse de la firma sobre
