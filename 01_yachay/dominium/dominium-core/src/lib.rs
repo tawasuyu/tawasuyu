@@ -23,6 +23,7 @@ pub mod grid;
 pub mod lemmings;
 pub mod metrics;
 pub mod params;
+pub mod psi_metrics;
 pub mod world;
 
 pub use conceptos::{BehaviorHack, Concepto, Conceptos, LayerMods, Trigger};
@@ -30,6 +31,7 @@ pub use epoch::Epoch;
 pub use grid::Grid;
 pub use lemmings::Lemmings;
 pub use metrics::WorldStats;
+pub use psi_metrics::{PsiMetrics, POLARIZATION_ALPHA, POLARIZATION_BINS};
 pub use params::{
     ActionPolicy, SimParams, TradeTarget, RELIEVE_DEGRADACION, RELIEVE_MATERIA, RELIEVE_ORO,
     RELIEVE_PODER, RELIEVE_PSIQUE,

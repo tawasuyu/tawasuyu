@@ -23,8 +23,8 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use dominium_core::{
-    ActionPolicy, BehaviorHack, Concepto, Conceptos, Epoch, LayerMods, SimParams, Trigger, World,
-    WorldStats,
+    ActionPolicy, BehaviorHack, Concepto, Conceptos, Epoch, LayerMods, PsiMetrics, SimParams,
+    Trigger, World, WorldStats,
 };
 use dominium_physics::tick;
 
@@ -200,6 +200,7 @@ fn run_sim(
         w.flush()?;
     }
     let final_stats = WorldStats::from_world(&world);
+    let psi = PsiMetrics::from_world(&world);
     let tps = (ticks as f64) / dt.as_secs_f64().max(1e-9);
     println!(
         "ok · {} ticks en {:.2?} ({:.0} tps) · seed={} grid={}×{} · poblacion={} materia={:.0} oro={:.0} energia={:.0} gini_e={:.3}",
@@ -215,21 +216,53 @@ fn run_sim(
         final_stats.total_energia,
         final_stats.gini_energia,
     );
+    println!(
+        "    psi · polariz=[{:.3} {:.3} {:.3} {:.3}] · corr(CORR↔Extraer)={:+.3} corr(CORR↔Degradar)={:+.3} corr(ORDEN↔Intercamb.)={:+.3} corr(MIEDO↔Mover)={:+.3}",
+        psi.polarization[0],
+        psi.polarization[1],
+        psi.polarization[2],
+        psi.polarization[3],
+        psi.psi_action_corr[3][1],
+        psi.psi_action_corr[3][5],
+        psi.psi_action_corr[0][3],
+        psi.psi_action_corr[1][0],
+    );
     Ok(())
 }
 
 /// Encabezado CSV: orden estable usado por `write_row` y por el header del
 /// REPL. Cualquier reordenamiento debe replicarse en `write_row`.
-const CSV_HEADER: &str = "tick,epoca,poblacion,materia,psique,poder,oro,degradacion,energia,mean_edad,gini_e,var_psi0,var_psi1,var_psi2,var_psi3,act_mover,act_extraer,act_sync,act_trade,act_repl,act_degr";
+///
+/// Columnas Fase C parcial (PsiMetrics):
+/// - `pol_psi{0..3}`: polarización Esteban-Ray por componente del psi.
+/// - `corr_{psi}_{accion}`: correlación punto-biserial entre el componente
+///   del psi y el indicador binario de la acción. Seis pares canónicos
+///   alineados con la matriz `action_weights` por default — los que
+///   esperamos que se enciendan cuando `ActionPolicy::PsiArgmax` funciona.
+const CSV_HEADER: &str = "tick,epoca,poblacion,materia,psique,poder,oro,degradacion,energia,mean_edad,gini_e,var_psi0,var_psi1,var_psi2,var_psi3,act_mover,act_extraer,act_sync,act_trade,act_repl,act_degr,pol_psi0,pol_psi1,pol_psi2,pol_psi3,corr_corr_extraer,corr_corr_degradar,corr_orden_intercambiar,corr_orden_replicar,corr_miedo_mover,corr_curiosidad_sync";
 
-/// Escribe una fila al CSV usando `WorldStats` — formato bit-exacto con
-/// `:.3` para los floats (mismo grano que el formato original).
+/// Escribe una fila al CSV usando `WorldStats` + `PsiMetrics` — formato
+/// estable con `:.3` para floats macro y `:.6` para correlaciones (rango
+/// `[-1,1]`, queremos resolución fina).
 fn write_row<W: Write>(w: &mut W, world: &World, t: u64) -> std::io::Result<()> {
     let s = WorldStats::from_world(world);
     let e = Epoch::classify(&s);
+    let p = PsiMetrics::from_world(world);
+    // Índices semánticos para legibilidad — coinciden con `lemmings.rs`.
+    const ORDEN: usize = 0;
+    const MIEDO: usize = 1;
+    const CURIOSIDAD: usize = 2;
+    const CORR: usize = 3;
+    // Y con `world::Action::from_u8`.
+    const MOVER: usize = 0;
+    const EXTRAER: usize = 1;
+    const SYNC: usize = 2;
+    const INTERCAMBIAR: usize = 3;
+    const REPLICAR: usize = 4;
+    const DEGRADAR: usize = 5;
     writeln!(
         w,
-        "{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{},{},{},{}",
+        "{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{},{},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}",
         t,
         e.label(),
         s.n,
@@ -251,6 +284,16 @@ fn write_row<W: Write>(w: &mut W, world: &World, t: u64) -> std::io::Result<()> 
         s.action_counts[3],
         s.action_counts[4],
         s.action_counts[5],
+        p.polarization[0],
+        p.polarization[1],
+        p.polarization[2],
+        p.polarization[3],
+        p.psi_action_corr[CORR][EXTRAER],
+        p.psi_action_corr[CORR][DEGRADAR],
+        p.psi_action_corr[ORDEN][INTERCAMBIAR],
+        p.psi_action_corr[ORDEN][REPLICAR],
+        p.psi_action_corr[MIEDO][MOVER],
+        p.psi_action_corr[CURIOSIDAD][SYNC],
     )
 }
 
