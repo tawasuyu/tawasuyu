@@ -1,0 +1,16 @@
+[package]
+name = "llimphi-widget-nodegraph"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-nodegraph — lienzo de nodos con pins y cables Bezier. Reusable por pluma (DAG), nakui (fórmulas yupay), tullpu (ajustes no destructivos), dominium (sistemas), takiy (cadena de audio)."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+
+[[example]]
+name = "nodegraph_demo"
+path = "examples/nodegraph_demo.rs"
