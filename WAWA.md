@@ -323,7 +323,7 @@ Audit (`grep -rE "\.unwrap\(\)|\.expect\(|panic!|unreachable!"`):
 
 - `compositor::recomponer` **no aloca**. `Escritorio` retiene `capas_buf` y `celdas_buf` (`Vec::with_capacity(MAX_VENTANAS=32)`) reutilizados con `clear() + push()`. El reloj se formatea en pila (`[u8; 8]` + `formatear_reloj`). `consola::{CapaSlot, CeldaTaskbarSlot}` no tienen lifetimes; resolución de bytes/nombres por trait `Resolver`.
 - `sys_net_recibir` usa buffer en pila `[u8; 2048]` (MTU clásico Ethernet); cap > 2048 ⇒ `CapacidadInsuficiente`.
-- Asignaciones que quedan documentadas como legítimas: `almacenar` en escrituras al grafo (gasto E/S explícito del userspace), `nacer_ventana` (cache de fotograma única al alta), `to_vec` en `encolar_para_usuario` de Akasha (no en tick path crítico; RX driver context).
+- Asignaciones que quedan documentadas como legítimas: `almacenar` en escrituras al grafo (gasto E/S explícito del userspace), `nacer_ventana` (cache de fotograma única al alta). El `to_vec` histórico de `encolar_para_usuario` desapareció en la Fase 55 — `COLA_USUARIO` es ahora un anillo de slots MTU pre-alocados (ver §14.0).
 
 ## 12. Simetría no_std
 
@@ -404,6 +404,14 @@ restante, debe descontar primero estos hitos para no duplicar esfuerzo:
   `ed25519-compact` la seed del slot indicado y emite 65 B (1 slot id +
   64 firma) por el mismo canal. `chrono` deja marcas de tiempo en el log
   de auditoría.
+- **Zero-alloc del demuxer Akasha** — **HECHA** (Fase 55). `COLA_USUARIO`
+  pasa de `Mutex<VecDeque<Vec<u8>>>` a un anillo `Mutex<AnilloCola>` de 64
+  slots MTU (`SLOT_CAPACIDAD = 2048`) pre-alocados en `.bss` (~128 KiB) +
+  dos pistas `[u8; 64]`: FIFO de ocupados + LIFO de libres.
+  `encolar_para_usuario` ahora hace `copy_from_slice` directo al slot que
+  asoma la pila; `pop_usuario` desencola al `buf` del userspace y devuelve
+  el slot a libres. Cero `to_vec()` en RX, cero `push_back` que alocan.
+  Invariante mantenida: `fifo_n + libres_n == 64` siempre.
 
 ### 14.1 Hitos genuinamente pendientes (orden de mérito)
 
@@ -421,11 +429,7 @@ restante, debe descontar primero estos hitos para no duplicar esfuerzo:
    con back-pressure ante exhaustion. (Hay un cap parcial,
    `MAX_PAGINAS_DMA_PER_APP`, pero falta el back-pressure.)
 
-4. **Zero-alloc del demuxer Akasha**: `encolar_para_usuario` aún hace
-   `frame.to_vec()` por frame entrante. Cambiar por un anillo pre-alocado de
-   buffers MTU con free-list LIFO dentro de `COLA_USUARIO`.
-
-5. **Tabla de capacidades por bytecode hash**: cuando el manifiesto declare
+4. **Tabla de capacidades por bytecode hash**: cuando el manifiesto declare
    `bytecode` por hash, los permisos podrían derivarse de la firma sobre
    `(hash_bytecode, permisos)` en lugar de declararse en `EntradaApp`. Daría
    inmutabilidad real al binding "qué binario puede hacer qué".

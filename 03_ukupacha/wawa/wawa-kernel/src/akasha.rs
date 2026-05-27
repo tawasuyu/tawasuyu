@@ -25,7 +25,6 @@
 // =============================================================================
 
 use alloc::collections::VecDeque;
-use alloc::vec::Vec;
 use core::fmt::Write;
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -44,17 +43,137 @@ use crate::drivers::red;
 
 // =============================================================================
 //  Cola del userspace — frames NO-AoE en espera de `sys_net_recibir`
+// -----------------------------------------------------------------------------
+//  ZERO-ALLOC (Fase 55) :: la cola es un anillo de slots MTU pre-alocados en
+//  `.bss`, no un `VecDeque<Vec<u8>>` que aloca por cada frame entrante. Dos
+//  pistas de indices `u8` orquestan el anillo:
+//    - `fifo`: indices de slots ocupados, en orden de llegada (FIFO).
+//    - `libres`: indices de slots disponibles, pila LIFO (free-list).
+//  `push` copia el frame al slot que asoma la pila libres y encola su indice;
+//  `pop` desencola un indice, copia su slot al buffer del userspace y devuelve
+//  el indice a la pila libres. Cuando el anillo esta lleno, el slot del frame
+//  mas antiguo se libera —preferimos perder pasado a quedar sordos del
+//  futuro—. Cero `to_vec()`, cero `push_back` que alocan, cero `pop_front`
+//  que liberan.
 // =============================================================================
 
 /// Cuantos frames como mucho retenemos en la cola del userspace. Cota dura:
 /// si el userspace se duerme, los frames mas antiguos se pierden antes que
-/// la cola se desborde.
+/// la cola se desborde. Debe caber en `u8` (los indices viajan como `u8`).
 const PROFUNDIDAD_COLA_USUARIO: usize = 64;
+const _: () = assert!(PROFUNDIDAD_COLA_USUARIO <= u8::MAX as usize + 1);
 
-/// La cola FIFO de frames que NO son AoE y aguardan a `sys_net_recibir`. Cada
-/// frame se copia tal cual lo entrega el driver; el userspace ve la cabecera
-/// Ethernet completa, como antes de la Fase 20.
-static COLA_USUARIO: Mutex<VecDeque<Vec<u8>>> = Mutex::new(VecDeque::new());
+/// Capacidad de cada slot del anillo. MTU clasico de Ethernet (1500 datos +
+/// 14 cabecera + holgura): cualquier frame del cable comun cabe entero. El
+/// driver `red::drenar_rx` ya recorta frames mayores antes de llegar aqui.
+const SLOT_CAPACIDAD: usize = 2048;
+
+/// Un slot del anillo: capacidad fija MTU + bytes utiles. La capacidad se
+/// reserva al fundar el kernel; los frames variables se acomodan adentro.
+#[derive(Clone, Copy)]
+struct SlotCola {
+    bytes: [u8; SLOT_CAPACIDAD],
+    len: u16,
+}
+
+impl SlotCola {
+    const fn nuevo() -> Self {
+        Self { bytes: [0u8; SLOT_CAPACIDAD], len: 0 }
+    }
+}
+
+/// Anillo de slots MTU + dos pistas de indices. Ocupacion: 64 * 2050 B
+/// = ~128 KiB en `.bss` del kernel, mas un epsilon de contadores. Cero
+/// alocacion dinamica en el path RX.
+struct AnilloCola {
+    slots: [SlotCola; PROFUNDIDAD_COLA_USUARIO],
+    /// Indices de slots ocupados, FIFO circular sobre `[u8; N]`.
+    fifo: [u8; PROFUNDIDAD_COLA_USUARIO],
+    /// Indice del slot mas antiguo dentro de `fifo`.
+    fifo_ini: u8,
+    /// Cuantos slots estan ocupados ahora. `fifo_ini + fifo_n mod N` apunta
+    /// al primer hueco.
+    fifo_n: u8,
+    /// Indices de slots disponibles, pila LIFO.
+    libres: [u8; PROFUNDIDAD_COLA_USUARIO],
+    /// Cuantos indices libres hay en la pila. Invariante: `fifo_n + libres_n
+    /// == PROFUNDIDAD_COLA_USUARIO` siempre — cada indice habita una sola
+    /// pista.
+    libres_n: u8,
+}
+
+impl AnilloCola {
+    /// `const fn` para vivir como `static`: arranca con todos los slots
+    /// libres (`libres = [0, 1, ..., N-1]`), `fifo_n = 0`.
+    const fn nuevo() -> Self {
+        let mut libres = [0u8; PROFUNDIDAD_COLA_USUARIO];
+        let mut i = 0;
+        while i < PROFUNDIDAD_COLA_USUARIO {
+            libres[i] = i as u8;
+            i += 1;
+        }
+        Self {
+            slots: [SlotCola::nuevo(); PROFUNDIDAD_COLA_USUARIO],
+            fifo: [0u8; PROFUNDIDAD_COLA_USUARIO],
+            fifo_ini: 0,
+            fifo_n: 0,
+            libres,
+            libres_n: PROFUNDIDAD_COLA_USUARIO as u8,
+        }
+    }
+
+    /// Encola un frame copiandolo a un slot libre. Si el anillo esta lleno,
+    /// libera el slot mas antiguo y reutiliza su indice — descarte FIFO
+    /// natural, sin alocacion intermedia. El contador
+    /// `USUARIO_DESBORDADOS` lo lleva el llamante (encolar_para_usuario).
+    fn empujar(&mut self, frame: &[u8]) -> bool {
+        let lleno = self.fifo_n as usize >= PROFUNDIDAD_COLA_USUARIO;
+        if lleno {
+            // Liberar el slot mas antiguo. Su indice vuelve a la pila libres.
+            let idx = self.fifo[self.fifo_ini as usize];
+            self.fifo_ini = ((self.fifo_ini as usize + 1) % PROFUNDIDAD_COLA_USUARIO) as u8;
+            self.fifo_n -= 1;
+            self.libres[self.libres_n as usize] = idx;
+            self.libres_n += 1;
+        }
+        // Tomar un slot libre de la pila. Invariante: siempre hay al menos
+        // uno tras la poda anterior.
+        self.libres_n -= 1;
+        let idx = self.libres[self.libres_n as usize];
+        let slot = &mut self.slots[idx as usize];
+        let n = frame.len().min(SLOT_CAPACIDAD);
+        slot.bytes[..n].copy_from_slice(&frame[..n]);
+        slot.len = n as u16;
+        // Encolar el indice al final del FIFO circular.
+        let fin = (self.fifo_ini as usize + self.fifo_n as usize) % PROFUNDIDAD_COLA_USUARIO;
+        self.fifo[fin] = idx;
+        self.fifo_n += 1;
+        lleno
+    }
+
+    /// Saca el frame mas antiguo a `buf`, devuelve los bytes copiados. El
+    /// slot del frame retorna a la pila libres para el proximo `empujar`.
+    fn sacar(&mut self, buf: &mut [u8]) -> usize {
+        if self.fifo_n == 0 {
+            return 0;
+        }
+        let idx = self.fifo[self.fifo_ini as usize];
+        self.fifo_ini = ((self.fifo_ini as usize + 1) % PROFUNDIDAD_COLA_USUARIO) as u8;
+        self.fifo_n -= 1;
+        let slot = &self.slots[idx as usize];
+        let n = (slot.len as usize).min(buf.len());
+        buf[..n].copy_from_slice(&slot.bytes[..n]);
+        // Devolver el slot a la pila libres para reciclar.
+        self.libres[self.libres_n as usize] = idx;
+        self.libres_n += 1;
+        n
+    }
+}
+
+/// La cola FIFO de frames que NO son AoE y aguardan a `sys_net_recibir`. Vive
+/// integramente en `.bss` — el anillo se construye en `const fn` y entra al
+/// kernel como dato estatico, no como alocacion en el heap.
+static COLA_USUARIO: Mutex<AnilloCola> = Mutex::new(AnilloCola::nuevo());
 
 // =============================================================================
 //  Contadores — la voz que la barra y el diagnostico leen
@@ -141,13 +260,12 @@ pub fn drenar_y_demultiplexar() {
 
 /// Encola un frame entero hacia el userspace. Si la cola esta llena, descarta
 /// el mas antiguo —preferimos perder el pasado a quedar sordos del futuro—.
+/// Cero alocacion: la copia entra a un slot del anillo MTU pre-alocado.
 fn encolar_para_usuario(frame: &[u8]) {
-    let mut cola = COLA_USUARIO.lock();
-    if cola.len() >= PROFUNDIDAD_COLA_USUARIO {
-        cola.pop_front();
+    let desbordo = COLA_USUARIO.lock().empujar(frame);
+    if desbordo {
         USUARIO_DESBORDADOS.fetch_add(1, Ordering::Relaxed);
     }
-    cola.push_back(frame.to_vec());
     USUARIO_ENCOLADOS.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -159,14 +277,9 @@ fn encolar_para_usuario(frame: &[u8]) {
 /// copiados (acotados por `buf.len()`), o `0` si no hay frame pendiente. El
 /// reemplazo natural de `red::recibir_en` para el lado WASM —ahora el
 /// userspace ya no compite con el kernel por la cola RX del dispositivo—.
+/// Cero alocacion: el slot del anillo retorna a la pila libres.
 pub fn pop_usuario(buf: &mut [u8]) -> usize {
-    let frame = match COLA_USUARIO.lock().pop_front() {
-        Some(f) => f,
-        None => return 0,
-    };
-    let n = frame.len().min(buf.len());
-    buf[..n].copy_from_slice(&frame[..n]);
-    n
+    COLA_USUARIO.lock().sacar(buf)
 }
 
 // =============================================================================
