@@ -347,6 +347,13 @@ verifica:
 | `6cd5b95` | GC semántico (compactador del log direccionado por contenido) |
 | `5cd1311` | Tres leyes inmutables (no_std symmetry script + zero‑alloc parcial + panic‑free verificado) |
 | `90631ac` | Zero‑alloc completo en `compositor::recomponer` |
+| `0e8702c` | Fase 53 — `sys_grafo_compactar` + `PERMISO_COMPACTAR` |
+| `930ff22` | Fase 55 — demuxer Akasha cero‑alloc (anillo MTU pre‑alocado) |
+| `9c00555` | Fase 56 — `asignar_marcos` aborta vía baliza, no panic |
+| `21f332a` | Fase 57 — Alt+G dispara GC manual del grafo |
+| `5e967e5` | Fase 58 v1 — Alt+P abre launcher gráfico modal |
+| `1c03019` | Fase 58 v2 — ratón modal en el launcher |
+| `6aa8228` | Fase 58 v3 — búsqueda por texto en vivo (substring CI) |
 
 ## 14. Plan — siguientes hitos
 
@@ -431,6 +438,35 @@ restante, debe descontar primero estos hitos para no duplicar esfuerzo:
   end-to-end sin esperar al protocolo host-side de `wawactl gc`. El
   scancode `0x22` se registra en `async_system/teclado.rs:60` como
   `TECLA_G`.
+- **Launcher gráfico tipo Spotlight** — **HECHA** (Fase 58, vueltas
+  1–3 + polish). `Alt+P` engendra `Mando::ToggleLauncher`; el
+  compositor pinta un overlay modal centrado con la lista de apps del
+  manifiesto y la roba el foco del teclado y del ratón.
+  - Teclado: `Alt+J/K` mueven la selección entre las apps filtradas,
+    Enter (con o sin Alt) lanza la resaltada, `Alt+Q` o Escape cierran
+    sin lanzar.
+  - Ratón: hover resalta una fila, clic izquierdo la lanza, clic fuera
+    del overlay cierra sin lanzar.
+  - Búsqueda por texto en vivo: escribir letras/cifras/espacio filtra
+    el catálogo por substring case-insensitive; Backspace borra el
+    último carácter; la lista se recalcula por keystroke
+    (`refiltrar_launcher`).
+  - Pipeline IRQ→compositor sin locks: mirror atómico
+    `compositor::LAUNCHER_ABIERTO: AtomicBool` que `recibir_scancode`
+    consulta sin tomar el cerrojo del escritorio; si está vivo,
+    `traducir_scancode_a_ascii` mapea el make code a un byte ASCII y
+    el compositor recibe un `Mando::TextoLauncher(byte)` que absorbe
+    dentro del lock.
+  - Las altas dirigidas viajan por
+    `PARTOS_POR_INDICE: Once<Mutex<Vec<usize>>>`, paralelo al contador
+    legacy `PARTOS` de la rotación ciega (`Alt+N` y botón `+` de la
+    taskbar siguen vivos). El orquestador
+    (`main.rs::tarea_compositor`) drena ambos y resuelve cada índice
+    contra `PLANTILLAS[idx]` via `lanzar_app_por_indice`.
+  - Geometría compartida `compositor::PICKER_*` + `region_launcher` +
+    `consola::pintar_launcher` — un solo origen para alto de fila,
+    título, padding inferior y techo de filas visibles (`PICKER_MAX_FILAS
+    = 16`).
 
 ### 14.1 Hitos genuinamente pendientes (orden de mérito)
 

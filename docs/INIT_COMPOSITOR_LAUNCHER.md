@@ -84,7 +84,7 @@ Sin SDD; arquitectura embebida en descripciones de Cargo.toml y comentarios. **N
 **Sesión típica imaginada (script `session/mirada-session` referenciado en código):**
 `login TTY` → `mirada-session` setea `XDG_SESSION_TYPE=wayland` + `XDG_CURRENT_DESKTOP=carmen` → `mirada-compositor --greeter --drm` arranca compositor + greeter Llimphi → user auth → `SessionTicket` por stdout → compositor muta a sesión del user (setuid) → autostart desde `~/.config/mirada/autostart` → keybinds disparan `mirada-ctl` o lanzan apps (incluyendo `mirada-app-llimphi` como shell principal, o `mirada-launcher` para apps XDG).
 
-**Pendiente** Linux side: backend DRM con conmutación VT + hotplug; integración fina arje‑zero ↔ mirada-session (hoy hay un script bash, debería ser un Ente más); el "brain" de arje cognitivo está casi vacío.
+**Pendiente** Linux side: backend DRM con conmutación VT + hotplug; el "brain" de arje cognitivo está casi vacío. La integración arje‑zero ↔ mirada-session ya pasó del script bash a un Ente del fractal (commit `e4b70cc`).
 
 ---
 
@@ -169,15 +169,13 @@ Acceso a apps fuera de GENESIS hoy requiere primero introducir su bytecode al gr
 - **`almacen.rs`** — log direccionado por contenido. `almacenar(datos, hijos) → Result<Hash>` (append + dedup + persiste superbloque); `recuperar(hash) → Option<Objeto>` (reverifica). **GC semántico (Fase 24)** vivo: `compactar()` corre MARK → SWEEP → SWAP en una sola escritura atómica del superbloque. Trigger: `ESCRITURAS_DESDE_GC > UMBRAL_GC=32` en el tic ocioso del compositor. Emite traza serial `gc :: compactado :: vivos=N muertos=M sectores=A->B`.
 - **`akasha.rs`** — demux capa-2 sobre EtherType propio. Procesa `SolicitarObjeto` / `ProveedorObjeto` (con re-hash) / `AnunciarRaiz` (faro) / `AnunciarCanal` (firmado). Dedup `(MAC, hash)` con ventana TOCTOU-safe. **El kernel no verifica firmas** — ingresa el DAG y traza; toda política vive en userspace (app `mudanza`).
 
-### 2.8 Firma criptográfica (estado real, no el de `WAWA.md §14.1`)
+### 2.8 Firma criptográfica (estado real)
 
-`WAWA.md §14.1` lista esto como "pendiente". **El código dice otra cosa:**
-- `wawa-kernel/src/claves.rs` **existe**.
-- `verificar_manifiesto_firmado` + `verificar_cuaderno_firmado` están implementadas.
-- Syscall `sys_manifiesto_proponer` gatea por Ed25519 + `AGORA_AUTH_RING` (3 slots de pubkey forjados en ceremonia Fase 48).
+- `wawa-kernel/src/claves.rs` con `AGORA_AUTH_RING: [[u8; 32]; 3]` (3 pubkeys Ed25519 forjadas en ceremonia Fase 48).
+- `verificar_manifiesto_firmado` + `verificar_cuaderno_firmado` zero-alloc sobre `ed25519-compact` con `default-features = false`.
+- Syscall `sys_manifiesto_proponer` gatea cada propuesta de re-ancla contra el anillo; pubkey desconocida → rechazada antes de tocar disco.
 - `apps/mudanza` ya invoca la syscall (rechaza zero-key correctamente).
-
-`WAWA.md §14` quedó atrás del código y necesita actualización (ver §4 de este reporte).
+- `WAWA.md §14.0` reconcilia esto desde el commit `d2d84c1` (Fase 51) — el doc ya no engaña.
 
 ### 2.9 Estado de tests
 
@@ -209,21 +207,21 @@ cargo +nightly run -p boot -Z bindeps      △ Boot al QEMU funciona; el audit r
 
 ### 4.1 Inmediato (alta señal, bajo riesgo)
 
-1. **Actualizar `WAWA.md` §9 + §14** contra la realidad — 12 apps de Génesis, firma de manifiesto **ya implementada** (`claves.rs` + `AGORA_AUTH_RING` + `sys_manifiesto_proponer`), `mudanza` ya consume la syscall. El doc está engañando al lector. Bloque de ~30 min de edición.
+1. ~~**Actualizar `WAWA.md` §9 + §14**~~ — ✓ cerrado. `WAWA.md §9` ya lista las 12 apps reales (commit `d2d84c1`, Fase 51), `§14.0` reconcilia firma + cursor + GC + Akasha zero-alloc + DMA exhaustion + Fase 58 launcher contra el código. La afirmación "el doc engaña al lector" del reporte original era ella misma stale; este commit la cierra.
 2. ~~**Cursor visible en wawa**~~ — **revisado 2026-05-27**: ya estaba integrado al camino zero-alloc desde la Fase 13 (`Consola::recomponer → presentar → pantalla.estampar_puntero`). Misma drift que con la firma del manifiesto: el doc decía "pendiente" sin verificar contra el código.
 3. **`wawactl gc` subcomando**: ✓ cerrado en Fase 53 (`sys_grafo_compactar` + `PERMISO_COMPACTAR = 32`) y Fase 57 (`Alt+G` operacional).
 
 ### 4.2 Cierre del shell de Linux
 
 4. **`mirada-compositor --drm` con conmutación VT + hotplug.** Hoy el backend DRM es parcial; sin VT-switch no es usable como compositor primario en hardware real. Smithay tiene los hooks (`udev`, `libinput`); falta el cableado. Estimado: 3–5 sesiones.
-5. **`arje-zero` ↔ `mirada-session` como Ente del fractal.** Hoy el script `session/mirada-session` es bash. Convertirlo en un Ente declarado en la Tarjeta Semilla cierra el loop init → compositor sin shell scripts. Estimado: 2 sesiones.
+5. ~~**`arje-zero` ↔ `mirada-session` como Ente del fractal**~~ — ✓ cerrado (commit `e4b70cc`, "feat(arje-zero): mirada-session como Ente del fractal — adiós al bash de sesión"). El script bash dejó de ser pieza obligada; el loop init → compositor pasa por un Ente declarado en la Tarjeta Semilla.
 6. ~~**Llenar `arje-brain-rules` y `arje-brain-cognitive`**~~ — **revisado**: el motor `arje-brain-rules` está completo (825 LOC); lo que faltaba era config. `rules.example.json` canónico shipped 2026-05-27. `arje-brain-cognitive` (sliding window, entropía de Shannon, "crystallize") sigue siendo andamiaje a llenar — requeriría ejemplos de patrones cognitivos del dominio, open-ended.
 
 ### 4.3 Cierre del shell de wawa
 
 7. **Launcher gráfico en wawa** (Spotlight-like): vueltas 1–3 shipped en Fase 58 — overlay modal `Alt+P`, navegación Alt+J/K + Enter, ratón completo (hover + clic + clic-fuera-cancela), búsqueda por texto en vivo (substring case-insensitive sobre el catálogo, refiltrado por keystroke, Escape para cerrar). Falta: matcher fuzzy (hoy es substring lineal — para 12 apps sobra, para 100 empezaría a sentirse), scroll vertical si el catálogo crece más allá de las 16 filas visibles, instalación en vivo de apps desde el grafo (Akasha/cronista). Estimado pendiente: 1–2 sesiones para llegar a paridad funcional con Spotlight.
 8. **Multi-monitor / resolución dinámica**: `bootloader_api::FrameBufferInfo` ya entrega geometría real; consola y compositor asumen framebuffer único. Capa `Pantalla` extendida. Estimado: 2 sesiones.
-9. **Zero-alloc del demuxer Akasha** (anillo pre-alocado de buffers MTU + free-list LIFO en `COLA_USUARIO`). Hoy `encolar_para_usuario` hace `frame.to_vec()` por cada frame RX. Estimado: 1 sesión.
+9. ~~**Zero-alloc del demuxer Akasha**~~ — ✓ cerrado en Fase 55 (commit `930ff22`). `COLA_USUARIO` pasó de `Mutex<VecDeque<Vec<u8>>>` a un anillo `AnilloCola` de 64 slots MTU (`SLOT_CAPACIDAD = 2048`) pre-alocados en `.bss` + dos pistas `[u8; 64]` (FIFO ocupados / LIFO libres). `encolar_para_usuario` hace `copy_from_slice` directo; cero `to_vec()` en RX.
 
 ### 4.4 Convergencia (largo plazo)
 
@@ -234,23 +232,22 @@ cargo +nightly run -p boot -Z bindeps      △ Boot al QEMU funciona; el audit r
 ### 4.5 Dependencias (DAG)
 
 ```
-  4.1.1 actualizar doc        ──┐ (independiente, hazlo ya)
-                                │
-  4.1.2 cursor wawa  ───────────┤
-  4.1.3 wawactl gc   ───────────┤
-                                │
-  4.2.4 drm hotplug ─┐          │
-  4.2.5 arje session ┴──> 4.2.6 brain reglas
-                                │
-  4.3.7 launcher gráfico ──> 4.3.8 multi-monitor
-  4.3.9 akasha zero-alloc (independiente)
-                                │
+  4.1.1 ✓ actualizar doc       ──┐ (cerrado)
+  4.1.2 ✓ cursor wawa  ──────────┤ (era stale del doc, no del codigo)
+  4.1.3 ✓ wawactl gc syscall   ──┤ (Fase 53 + 57; host-side CLI pendiente)
+                                 │
+  4.2.4 drm hotplug ─┐           │
+  4.2.5 ✓ arje session ┴──> 4.2.6 brain reglas
+                                 │
+  4.3.7 ✓ launcher grafico ──> 4.3.8 multi-monitor (bloqueado por bootloader)
+  4.3.9 ✓ akasha zero-alloc (Fase 55)
+                                 │
                      4.4.10 protocolo mirada compartido
                      4.4.11 caps por hash bytecode
                      4.4.12 DM hardware real
 ```
 
-Nada en §4.1 bloquea a nada — pueden ir en paralelo. §4.4 son hitos grandes que dependen del resto.
+Vivos: 4.1.3 host-side CLI, 4.2.4 DRM hotplug, 4.2.6 brain cognitivo, 4.3.8 multi-monitor (estructuralmente bloqueado, ver `WAWA.md §14.1.2`), §4.4 entero.
 
 ---
 
