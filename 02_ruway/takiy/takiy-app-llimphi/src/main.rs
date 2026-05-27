@@ -18,6 +18,10 @@
 //! - Click der.   — borra la nota bajo el cursor (de cualquier pista).
 //! - `←` / `→`    — mueve la nota seleccionada ±1 beat.
 //! - `↑` / `↓`    — mueve la nota seleccionada ±1 semitono.
+//! - `+` / `-`    — alarga / acorta la nota seleccionada en 0.5 beats
+//!                  (mín. 0.25, máx. 16).
+//! - `[` / `]`    — baja / sube la velocity de la nota seleccionada en
+//!                  10 (rango 1..=127).
 //! - `Del`/`⌫`    — borra la nota seleccionada.
 //! - `S`          — guarda el score a `TAKIY_SCORE_JSON` (o a
 //!                  `/tmp/takiy_<unix>.takiy.json` si la variable no
@@ -68,6 +72,11 @@ enum Msg {
     MoveSelected { d_beat: f32, d_semitones: i32 },
     /// Borra la nota seleccionada y limpia la selección.
     DeleteSelected,
+    /// Cambia la duración de la nota seleccionada en `d_beat` beats
+    /// (puede ser negativo). Se aplica con clamp `[0.25, 16.0]`.
+    ResizeSelected { d_beat: f32 },
+    /// Cambia la velocity de la nota seleccionada (clamp `[1, 127]`).
+    NudgeVelocity { delta: i32 },
     /// Avanza la pista activa al siguiente índice (wrap).
     CycleTrack,
     /// Agrega una pista nueva (vacía) y la activa.
@@ -114,6 +123,14 @@ struct Model {
     /// no — la tecla `S` la setea a un path en `/tmp` al primer save
     /// explícito.
     save_path: Option<std::path::PathBuf>,
+    /// Timestamp en que arrancó la reproducción actual. `Some` mientras
+    /// suena, `None` cuando está detenida. El painter lo usa para
+    /// posicionar el cursor de playback en el grid.
+    playback_started_at: Option<std::time::Instant>,
+    /// BPM con el que se lanzó el render actual. Se congela en
+    /// `TogglePlay`: si cambia el tempo del score durante la
+    /// reproducción, el cursor sigue a la velocidad del render real.
+    playback_bpm: f32,
 }
 
 struct Takiy;
@@ -162,10 +179,13 @@ impl App for Takiy {
         let target_sr = player.as_ref().map(Player::sample_rate).unwrap_or(44_100);
         let (sf2, engine) = load_sf2(&score, target_sr);
 
-        // Tick periódico ~5 Hz para que el header refleje el fin del
-        // playback. El thread sólo dispatcha el Msg; el chequeo real
-        // vive en `update`, que es el único con acceso al `Player`.
-        handle.spawn_periodic(std::time::Duration::from_millis(200), || Msg::Tick);
+        // Tick periódico ~20 Hz. Sirve para dos cosas:
+        // (a) detectar que el playback terminó solo (vive en `update`,
+        //     el único con acceso al `Player`);
+        // (b) refrescar la posición del cursor de reproducción.
+        // El costo es despreciable: el `update` es no-op cuando no hay
+        // nada que reflejar.
+        handle.spawn_periodic(std::time::Duration::from_millis(50), || Msg::Tick);
 
         let n_tracks = score.tracks().len();
         Model {
@@ -181,6 +201,8 @@ impl App for Takiy {
             next_track_n: n_tracks + 1,
             selected: None,
             save_path: std::env::var_os("TAKIY_SCORE_JSON").map(std::path::PathBuf::from),
+            playback_started_at: None,
+            playback_bpm: 120.0,
         }
     }
 
@@ -191,6 +213,8 @@ impl App for Takiy {
                 | Msg::DeleteNote { .. }
                 | Msg::MoveSelected { .. }
                 | Msg::DeleteSelected
+                | Msg::ResizeSelected { .. }
+                | Msg::NudgeVelocity { .. }
                 | Msg::NewTrack
         );
         match msg {
@@ -204,10 +228,13 @@ impl App for Takiy {
                 if model.playing {
                     player.stop();
                     model.playing = false;
+                    model.playback_started_at = None;
                     model.status = "stopped".into();
                 } else {
                     let buf = render_score(&model.score, model.sf2.as_ref(), player.sample_rate());
                     let secs = buf.duration_seconds();
+                    model.playback_bpm = model.score.tempo_bpm;
+                    model.playback_started_at = Some(std::time::Instant::now());
                     player.play(buf);
                     model.playing = true;
                     model.status = format!("playing · {secs:.1}s");
@@ -221,9 +248,12 @@ impl App for Takiy {
                         .is_some_and(|p| p.is_playing());
                     if !still {
                         model.playing = false;
+                        model.playback_started_at = None;
                         model.status = "stopped".into();
                     }
                 }
+                // Si no está playing y el tick llega igual, no hace
+                // nada — sólo dispara repaint, que es barato.
             }
             Msg::AddNote { beat, midi } => {
                 let Some(pitch) = Pitch::from_midi(midi) else {
@@ -314,6 +344,56 @@ impl App for Takiy {
                         }
                     }
                 }
+            }
+            Msg::ResizeSelected { d_beat } => {
+                let Some((track_idx, note_idx)) = model.selected else {
+                    return model;
+                };
+                let Some(track) = model.score.track_mut(track_idx) else {
+                    return model;
+                };
+                let Some(old) = track.notes().get(note_idx).copied() else {
+                    return model;
+                };
+                let new_dur = (old.duration + d_beat).clamp(0.25, 16.0);
+                if (new_dur - old.duration).abs() < f32::EPSILON {
+                    return model;
+                }
+                let new_note = ScoreNote::new(old.pitch, old.start, new_dur, old.velocity);
+                // Resize no cambia `start`, así que el orden del Track no
+                // se afecta — pero igual remove+add para no perforar el
+                // encapsulamiento del Vec interno.
+                track.remove(note_idx);
+                track.add(new_note);
+                if let Some(new_idx) = find_note_idx(track.notes(), &new_note) {
+                    model.selected = Some((track_idx, new_idx));
+                }
+                model.status = format!(
+                    "resized · pista {track_idx} · dur {:.2}",
+                    new_dur
+                );
+            }
+            Msg::NudgeVelocity { delta } => {
+                let Some((track_idx, note_idx)) = model.selected else {
+                    return model;
+                };
+                let Some(track) = model.score.track_mut(track_idx) else {
+                    return model;
+                };
+                let Some(old) = track.notes().get(note_idx).copied() else {
+                    return model;
+                };
+                let new_vel = (old.velocity as i32 + delta).clamp(1, 127) as u8;
+                if new_vel == old.velocity {
+                    return model;
+                }
+                let new_note = ScoreNote::new(old.pitch, old.start, old.duration, new_vel);
+                track.remove(note_idx);
+                track.add(new_note);
+                if let Some(new_idx) = find_note_idx(track.notes(), &new_note) {
+                    model.selected = Some((track_idx, new_idx));
+                }
+                model.status = format!("vel {} · pista {track_idx}", new_vel);
             }
             Msg::Save => {
                 let path = model.save_path.clone().unwrap_or_else(|| {
@@ -406,6 +486,21 @@ impl App for Takiy {
             Key::Named(NamedKey::Delete | NamedKey::Backspace) => Some(Msg::DeleteSelected),
             Key::Character(s) if s.eq_ignore_ascii_case("n") => Some(Msg::NewTrack),
             Key::Character(s) if s.eq_ignore_ascii_case("s") => Some(Msg::Save),
+            Key::Character(s) if s == "+" || s == "=" => {
+                // En layouts US el `+` requiere shift; el `=` cae en
+                // la misma tecla. Aceptamos ambos para no obligar a
+                // shift.
+                Some(Msg::ResizeSelected { d_beat: 0.5 })
+            }
+            Key::Character(s) if s == "-" || s == "_" => {
+                Some(Msg::ResizeSelected { d_beat: -0.5 })
+            }
+            Key::Character(s) if s == "[" || s == "{" => {
+                Some(Msg::NudgeVelocity { delta: -10 })
+            }
+            Key::Character(s) if s == "]" || s == "}" => {
+                Some(Msg::NudgeVelocity { delta: 10 })
+            }
             _ => None,
         }
     }
@@ -419,6 +514,8 @@ impl App for Takiy {
         let playing = model.playing;
         let active_track = model.active_track;
         let selected = model.selected;
+        let playback_started_at = model.playback_started_at;
+        let playback_bpm = model.playback_bpm;
         let (min_midi, max_midi) = pitch_range(&score);
         let total_beats = score.duration_beats().max(8.0);
 
@@ -454,7 +551,8 @@ impl App for Takiy {
         .paint_with(move |scene, ts, rect: PaintRect| {
             paint_piano_roll(
                 scene, ts, rect, &score_paint, &source, &engine, &status, playing,
-                active_track, selected, min_midi, max_midi, total_beats, theme,
+                active_track, selected, playback_started_at, playback_bpm, min_midi,
+                max_midi, total_beats, theme,
             );
         })
     }
@@ -472,6 +570,8 @@ fn paint_piano_roll(
     playing: bool,
     active_track: usize,
     selected: Option<(usize, usize)>,
+    playback_started_at: Option<std::time::Instant>,
+    playback_bpm: f32,
     min_midi: u8,
     max_midi: u8,
     total_beats: f32,
@@ -621,6 +721,24 @@ fn paint_piano_roll(
                     &r,
                 );
             }
+        }
+    }
+
+    // Cursor de reproducción: línea vertical que avanza con el
+    // tiempo. La posición se calcula del wall-clock (no del Player)
+    // porque cpal no expone su sample-position con resolución
+    // visible — el clock es suficientemente exacto para una barra a
+    // 20fps. Si la barra cae fuera del grid, no la dibujamos.
+    if let Some(started) = playback_started_at {
+        let elapsed_sec = started.elapsed().as_secs_f32();
+        let cursor_beat = elapsed_sec * playback_bpm / 60.0;
+        let x = grid_x + cursor_beat * beat_w;
+        if x >= grid_x && x <= grid_x + grid_w {
+            let cursor_color = Color::from_rgba8(255, 240, 120, 230);
+            let mut path = BezPath::new();
+            path.move_to((x as f64, grid_y as f64));
+            path.line_to((x as f64, (grid_y + grid_h) as f64));
+            scene.stroke(&Stroke::new(1.8), Affine::IDENTITY, cursor_color, None, &path);
         }
     }
 }
