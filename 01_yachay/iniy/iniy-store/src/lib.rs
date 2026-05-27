@@ -405,6 +405,39 @@ impl Store {
         Ok(())
     }
 
+    /// Todas las implicaciones del corpus, sin filtrar por documento.
+    /// Insumo de propagación cross-doc.
+    pub fn cargar_implicaciones_todas(&self) -> Result<Vec<Implicacion>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT premisa, hipotesis, entailment, contradiction, neutral FROM implicaciones",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, f64>(2)?,
+                r.get::<_, f64>(3)?,
+                r.get::<_, f64>(4)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            let (p, h, e, c, n) = r?;
+            let premisa = AsercionId(Ulid::from_str(&p).with_context(|| format!("premisa inválida: {p}"))?);
+            let hipotesis = AsercionId(Ulid::from_str(&h).with_context(|| format!("hipotesis inválida: {h}"))?);
+            out.push(Implicacion {
+                premisa,
+                hipotesis,
+                relacion: RelacionNli {
+                    entailment: e as f32,
+                    contradiction: c as f32,
+                    neutral: n as f32,
+                },
+            });
+        }
+        Ok(out)
+    }
+
     /// Implicaciones cuyos dos extremos viven en `doc_id`.
     pub fn cargar_implicaciones_del_doc(&self, doc_id: DocId) -> Result<Vec<Implicacion>> {
         let mut stmt = self.conn.prepare(

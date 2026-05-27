@@ -15,7 +15,7 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use iniy_core::{Asercion, DocId, Implicacion, Opinion};
+use iniy_core::{Asercion, AsercionId, DocId, Implicacion, Opinion};
 use iniy_extract::{Extractor, ExtractorHeuristico};
 use iniy_graph::GrafoCreencias;
 use iniy_nli::{relacion_lexica, MotorNli, MotorNliLexico};
@@ -67,14 +67,15 @@ enum Cmd {
     },
     /// Extrae aserciones atómicas de los chunks de un documento.
     Extract { doc_id: String },
-    /// Computa la matriz NLI sobre los pares de aserciones del documento.
+    /// Computa la matriz NLI sobre los pares de aserciones. Si `doc_id` se
+    /// omite, recorre TODO el corpus (cross-doc) — necesario para que el
+    /// grafo conecte aserciones que viven en documentos / fuentes distintas.
     Nli {
-        doc_id: String,
+        doc_id: Option<String>,
         #[arg(long, default_value_t = 0.30)]
         umbral: f32,
         /// Backend NLI: `lexico` (default, instantáneo, sin red) o `llm`
-        /// (vía `pluma_llm::from_env`; usa ANTHROPIC_API_KEY /
-        /// GEMINI_API_KEY / DEEPSEEK_API_KEY o cae a Mock).
+        /// (vía `pluma_llm::from_env`).
         #[arg(long, default_value = "lexico")]
         backend: BackendNli,
     },
@@ -102,11 +103,29 @@ enum Cmd {
         #[arg(long, default_value_t = 10)]
         top: usize,
     },
+    /// Propaga la opinión autoral de una aserción semilla por el grafo NLI,
+    /// con descuento de Jøsang por el score de cada arista.
+    Propagar {
+        asercion_id: String,
+    },
+    /// Fusiona las opiniones del corpus sobre la query: incorpora APOYAN
+    /// (descontados por entailment) y CONTRADICEN (invertidos + descontados).
+    /// Devuelve la opinión consensuada + lista de fuentes que contribuyen.
+    Consenso {
+        query: String,
+        #[arg(long, default_value_t = 0.20)]
+        umbral: f32,
+    },
 }
 
 fn parse_doc_id(s: &str) -> Result<DocId> {
     let ulid = Ulid::from_str(s).with_context(|| format!("doc_id inválido (esperado Ulid): {s}"))?;
     Ok(DocId(ulid))
+}
+
+fn parse_asercion_id(s: &str) -> Result<AsercionId> {
+    let ulid = Ulid::from_str(s).with_context(|| format!("asercion_id inválido (esperado Ulid): {s}"))?;
+    Ok(AsercionId(ulid))
 }
 
 fn truncar(s: &str, n: usize) -> String {
@@ -198,11 +217,20 @@ async fn main() -> Result<()> {
             }
         }
         Cmd::Nli { doc_id, umbral, backend } => {
-            let doc_id = parse_doc_id(&doc_id)?;
-            let aserciones = store.cargar_aserciones(doc_id)?;
+            let (aserciones, alcance) = match doc_id {
+                Some(d) => {
+                    let id = parse_doc_id(&d)?;
+                    (store.cargar_aserciones(id)?, format!("doc {}", id.0))
+                }
+                None => {
+                    let atribuidas = store.cargar_aserciones_atribuidas_todas()?;
+                    (atribuidas.into_iter().map(|a| a.asercion).collect(), "todo el corpus (cross-doc)".to_string())
+                }
+            };
             if aserciones.len() < 2 {
                 anyhow::bail!("se necesitan ≥2 aserciones (corre `iniy extract` primero)");
             }
+            println!("nli sobre {alcance}: {} aserciones", aserciones.len());
             let motor: Box<dyn MotorNli> = match backend {
                 BackendNli::Lexico => Box::new(MotorNliLexico { umbral_overlap: umbral }),
                 BackendNli::Llm => {
@@ -236,8 +264,7 @@ async fn main() -> Result<()> {
             store.persistir_implicaciones(&imps)?;
             println!("pares evaluados: {}", imps.len());
             println!("relaciones no triviales: {}  (entailment o contradiction > 0)", no_neutrales);
-            println!("persistido. corre `iniy contradictions {doc_id}` para ver el top.",
-                doc_id = doc_id.0);
+            println!("persistido.");
         }
         Cmd::Contradictions { doc_id, top } => {
             let doc_id = parse_doc_id(&doc_id)?;
@@ -288,6 +315,72 @@ async fn main() -> Result<()> {
             let fuente_id = store.obtener_o_crear_fuente(&fuente, kind.as_deref())?;
             store.asignar_fuente_a_doc(doc_id, Some(fuente_id))?;
             println!("doc {} ahora atribuido a «{}»", doc_id.0, fuente);
+        }
+        Cmd::Propagar { asercion_id } => {
+            let seed_id = parse_asercion_id(&asercion_id)?;
+            let todas = store.cargar_aserciones_atribuidas_todas()?;
+            let seed = todas.iter().find(|a| a.asercion.id == seed_id)
+                .with_context(|| format!("aserción {asercion_id} no encontrada en el corpus"))?;
+            let imps = store.cargar_implicaciones_todas()?;
+            let mut g = GrafoCreencias::nuevo();
+            for a in &todas { g.agregar_asercion(&a.asercion); }
+            for i in imps { g.agregar_implicacion(i); }
+            let propagado = g.propagar(seed_id, seed.asercion.opinion_autoral);
+
+            println!("propagación desde:");
+            println!("  {}", etiqueta_fuente(seed));
+            println!("  «{}»", truncar(&seed.asercion.texto, 140));
+            println!("  inicial: {}", fila_opinion(&seed.asercion.opinion_autoral));
+            println!();
+            println!("opinión inducida sobre {} aserciones alcanzables:", propagado.len() - 1);
+
+            let mut alcanzadas: Vec<(&AsercionAtribuida, Opinion)> = propagado.iter()
+                .filter(|(id, _)| **id != seed_id)
+                .filter_map(|(id, op)| todas.iter().find(|a| a.asercion.id == *id).map(|a| (a, *op)))
+                .collect();
+            // Las más polarizadas (lejos de neutro) primero.
+            alcanzadas.sort_by(|a, b| {
+                let pa = (a.1.creencia - a.1.descreencia).abs();
+                let pb = (b.1.creencia - b.1.descreencia).abs();
+                pb.partial_cmp(&pa).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            for (att, op) in alcanzadas {
+                println!("  · {}", fila_opinion(&op));
+                println!("    {}", etiqueta_fuente(att));
+                println!("    «{}»", truncar(&att.asercion.texto, 130));
+            }
+        }
+        Cmd::Consenso { query, umbral } => {
+            let todas = store.cargar_aserciones_atribuidas_todas()?;
+            if todas.is_empty() {
+                anyhow::bail!("corpus vacío de aserciones");
+            }
+            let mut contribuciones: Vec<(Opinion, &AsercionAtribuida, &'static str, f32)> = Vec::new();
+            for att in todas.iter() {
+                let rel = relacion_lexica(&query, &att.asercion.texto, umbral);
+                if rel.entailment > 0.0 {
+                    contribuciones.push((att.asercion.opinion_autoral.descontar(rel.entailment), att, "apoya", rel.entailment));
+                } else if rel.contradiction > 0.0 {
+                    contribuciones.push((att.asercion.opinion_autoral.invertir().descontar(rel.contradiction), att, "contradice", rel.contradiction));
+                }
+            }
+            if contribuciones.is_empty() {
+                println!("consenso sobre «{}»: (corpus en silencio — nadie habla con suficiente overlap léxico)", query);
+                return Ok(());
+            }
+            let ops: Vec<Opinion> = contribuciones.iter().map(|c| c.0).collect();
+            let fusion = Opinion::fusionar_muchas(&ops);
+            println!("consenso sobre: «{}»", query);
+            println!("  fuentes que hablan: {}", contribuciones.len());
+            println!("  opinión fusionada: {}", fila_opinion(&fusion));
+            println!("  probabilidad esperada: {:.2}", fusion.probabilidad_esperada());
+            println!();
+            println!("contribuciones:");
+            for (op, att, signo, score) in contribuciones {
+                println!("  · {signo} (score={:.2}) → {}", score, fila_opinion(&op));
+                println!("    {}", etiqueta_fuente(att));
+                println!("    «{}»", truncar(&att.asercion.texto, 130));
+            }
         }
         Cmd::Testimonio { query, umbral, top } => {
             let todas = store.cargar_aserciones_atribuidas_todas()?;

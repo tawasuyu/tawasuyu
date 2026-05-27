@@ -127,6 +127,82 @@ impl Opinion {
     pub fn dogmatica_no() -> Self {
         Self { creencia: 0.0, descreencia: 1.0, incertidumbre: 0.0, base_rate: 0.5 }
     }
+
+    /// Invierte la polaridad: lo que era creencia pasa a descreencia y
+    /// viceversa. Útil para propagar opiniones a través de aristas de
+    /// contradicción (si creo A y A contradice B, mi opinión sobre B es
+    /// la opuesta de mi opinión sobre A).
+    pub fn invertir(&self) -> Self {
+        Self {
+            creencia: self.descreencia,
+            descreencia: self.creencia,
+            incertidumbre: self.incertidumbre,
+            base_rate: 1.0 - self.base_rate,
+        }
+    }
+
+    /// Trust discounting de Jøsang: degrada b y d hacia u proporcional a
+    /// (1 - peso). peso=1.0 → opinión intacta; peso=0.0 → opinión vacua.
+    /// Preserva b+d+u=1 exactamente. Usar para propagar opinión a través
+    /// de una arista NLI cuyo score (entailment o contradiction) < 1.
+    pub fn descontar(&self, peso: f32) -> Self {
+        let p = peso.clamp(0.0, 1.0);
+        Self {
+            creencia: self.creencia * p,
+            descreencia: self.descreencia * p,
+            incertidumbre: self.incertidumbre * p + (1.0 - p),
+            base_rate: self.base_rate,
+        }
+    }
+
+    /// Cumulative belief fusion de Jøsang: combina dos opiniones sobre la
+    /// misma proposición provenientes de fuentes distintas. La opinión más
+    /// cierta (u más baja) pesa más. Si ambas son dogmáticas (u=0), cae a
+    /// promedio simple.
+    pub fn fusionar(a: &Self, b: &Self) -> Self {
+        let denom = a.incertidumbre + b.incertidumbre - a.incertidumbre * b.incertidumbre;
+        let base_rate = (a.base_rate + b.base_rate) * 0.5;
+        if denom < 1e-6 {
+            // Ambas dogmáticas: u_a = u_b = 0. Promedio sin perder normalización.
+            let creencia = (a.creencia + b.creencia) * 0.5;
+            let descreencia = (a.descreencia + b.descreencia) * 0.5;
+            let s = creencia + descreencia;
+            if s < 1e-6 {
+                return Self::vacua(base_rate).expect("base_rate ∈ [0,1]");
+            }
+            return Self {
+                creencia: creencia / s,
+                descreencia: descreencia / s,
+                incertidumbre: 0.0,
+                base_rate,
+            };
+        }
+        let creencia = (a.creencia * b.incertidumbre + b.creencia * a.incertidumbre) / denom;
+        let descreencia = (a.descreencia * b.incertidumbre + b.descreencia * a.incertidumbre) / denom;
+        let incertidumbre = (a.incertidumbre * b.incertidumbre) / denom;
+        let s = creencia + descreencia + incertidumbre;
+        // Reescalar si la aritmética flotante saca de norma.
+        Self {
+            creencia: creencia / s,
+            descreencia: descreencia / s,
+            incertidumbre: incertidumbre / s,
+            base_rate,
+        }
+    }
+
+    /// Fusiona N opiniones. Si la lista está vacía, devuelve la vacua con
+    /// base_rate=0.5. Asociativa y conmutativa por construcción de `fusionar`.
+    pub fn fusionar_muchas(ops: &[Self]) -> Self {
+        let mut iter = ops.iter();
+        let Some(first) = iter.next() else {
+            return Self::vacua(0.5).expect("0.5 ∈ [0,1]");
+        };
+        let mut acc = *first;
+        for o in iter {
+            acc = Self::fusionar(&acc, o);
+        }
+        acc
+    }
 }
 
 /// Aserción atómica extraída del texto.
@@ -192,5 +268,84 @@ mod tests {
     fn opinion_vacua_proyecta_base_rate() {
         let op = Opinion::vacua(0.3).unwrap();
         assert!((op.probabilidad_esperada() - 0.3).abs() < 1e-5);
+    }
+
+    #[test]
+    fn invertir_intercambia_creencia_y_descreencia() {
+        let a = Opinion::nueva(0.7, 0.1, 0.2, 0.5).unwrap();
+        let b = a.invertir();
+        assert!((b.creencia - 0.1).abs() < 1e-5);
+        assert!((b.descreencia - 0.7).abs() < 1e-5);
+        assert!((b.incertidumbre - 0.2).abs() < 1e-5);
+        assert!((b.base_rate - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn descontar_con_peso_uno_es_identidad() {
+        let a = Opinion::nueva(0.7, 0.1, 0.2, 0.5).unwrap();
+        let b = a.descontar(1.0);
+        assert!((a.creencia - b.creencia).abs() < 1e-5);
+        assert!((a.descreencia - b.descreencia).abs() < 1e-5);
+        assert!((a.incertidumbre - b.incertidumbre).abs() < 1e-5);
+    }
+
+    #[test]
+    fn descontar_con_peso_cero_es_vacua() {
+        let a = Opinion::nueva(0.7, 0.1, 0.2, 0.5).unwrap();
+        let b = a.descontar(0.0);
+        assert!((b.incertidumbre - 1.0).abs() < 1e-5);
+        assert!((b.creencia).abs() < 1e-5);
+        assert!((b.descreencia).abs() < 1e-5);
+    }
+
+    #[test]
+    fn descontar_preserva_norma() {
+        let a = Opinion::nueva(0.6, 0.3, 0.1, 0.5).unwrap();
+        let b = a.descontar(0.5);
+        let s = b.creencia + b.descreencia + b.incertidumbre;
+        assert!((s - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn fusionar_dos_opiniones_iguales_es_idempotente_en_p_esperada() {
+        let a = Opinion::nueva(0.6, 0.1, 0.3, 0.5).unwrap();
+        let f = Opinion::fusionar(&a, &a);
+        assert!((f.probabilidad_esperada() - a.probabilidad_esperada()).abs() < 0.05);
+    }
+
+    #[test]
+    fn fusionar_baja_incertidumbre() {
+        let a = Opinion::nueva(0.5, 0.0, 0.5, 0.5).unwrap();
+        let b = Opinion::nueva(0.5, 0.0, 0.5, 0.5).unwrap();
+        let f = Opinion::fusionar(&a, &b);
+        // Dos opiniones independientes confluyentes deben bajar la u.
+        assert!(f.incertidumbre < a.incertidumbre - 0.05);
+    }
+
+    #[test]
+    fn fusionar_dogmaticas_opuestas_se_balancea() {
+        let si = Opinion::dogmatica_si();
+        let no = Opinion::dogmatica_no();
+        let f = Opinion::fusionar(&si, &no);
+        assert!((f.creencia - 0.5).abs() < 0.01);
+        assert!((f.descreencia - 0.5).abs() < 0.01);
+        assert_eq!(f.incertidumbre, 0.0);
+    }
+
+    #[test]
+    fn fusionar_muchas_lista_vacia_es_vacua() {
+        let f = Opinion::fusionar_muchas(&[]);
+        assert_eq!(f.incertidumbre, 1.0);
+    }
+
+    #[test]
+    fn fusionar_muchas_es_consistente_con_fusionar_dos() {
+        let a = Opinion::nueva(0.7, 0.1, 0.2, 0.5).unwrap();
+        let b = Opinion::nueva(0.6, 0.1, 0.3, 0.5).unwrap();
+        let c = Opinion::nueva(0.5, 0.2, 0.3, 0.5).unwrap();
+        let chain = Opinion::fusionar(&Opinion::fusionar(&a, &b), &c);
+        let muchas = Opinion::fusionar_muchas(&[a, b, c]);
+        assert!((chain.creencia - muchas.creencia).abs() < 1e-5);
+        assert!((chain.incertidumbre - muchas.incertidumbre).abs() < 1e-5);
     }
 }
