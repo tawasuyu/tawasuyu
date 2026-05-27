@@ -1,0 +1,17 @@
+[package]
+name = "cosmos-leo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "cosmos-leo — propagador SGP4 + parser TLE para satélites en órbita baja (ISS, Starlink, etc.) y geoestacionarios. Convierte el estado TEME a topocéntrico (alt/az + range) para una Location dada. Sexto extracto del cosmos-ephem puro."
+
+[dependencies]
+cosmos-core = { workspace = true }
+sgp4 = "2"
+chrono = { workspace = true }
+
+[[example]]
+name = "iss_pass_demo"
+path = "examples/iss_pass_demo.rs"
