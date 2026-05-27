@@ -1,56 +1,60 @@
 // =============================================================================
 //  renaser :: apps/bitacora — editor de notas personales que recuerda
 // -----------------------------------------------------------------------------
-//  La fase 7c le dio a las apps memoria mas alla del arranque: `sys_estado_*`
-//  ancla la huella de un app en el grafo, y al reiniciar el kernel se la
-//  devuelve. `memoriosa` lo demostro contando teclas. `bitacora` lo lleva al
-//  siguiente paso natural: ofrecer un editor de texto. Lo que la app sabe hacer
-//  hoy:
+//  Editor de texto WASM que persiste entre arranques. Lo que sabe hacer hoy:
 //
 //    1. **Ocho notas independientes**. `F1`..`F8` cambian la nota activa.
-//       Cada una tiene su propio buffer (8 KiB), su propio cursor y su propio
-//       scroll. El header pinta `1 2 3 4 5 6 7 8` con la activa en tinta y
-//       el resto atenuado.
+//       Cada una tiene su propio buffer (8 KiB), cursor y scroll. El header
+//       pinta `1 2 3 4 5 6 7 8` con la activa en tinta y el resto atenuado.
 //
-//    2. **Cursor editable in-situ**. Flechas izquierda/derecha mueven el
-//       cursor un byte; arriba/abajo lo llevan a la misma columna de la
-//       linea anterior/siguiente (separadas por `\n`, sin wrap visual).
-//       `Home`/`End` saltan al inicio/fin de la linea logica.
-//       `Backspace`/`Delete` borran atras/adelante. Cualquier tecla de
-//       texto se INSERTA en la posicion del cursor (memmove del resto).
+//    2. **Cursor editable in-situ**. Flechas izquierda/derecha mueven un
+//       byte; arriba/abajo van a la misma columna de la linea anterior /
+//       siguiente (separadas por `\n`). `Home`/`End` saltan al inicio /
+//       fin de la linea logica. `Backspace`/`Delete` borran atras /
+//       adelante. Cualquier tecla de texto se INSERTA en cursor.
 //
 //    3. **Shift sostenido**. Tracking de LShift (`0x2A`/`0xAA`) y RShift
-//       (`0x36`/`0xB6`) ANTES del filtro general de key-up — asi una
-//       mayuscula sostenida no se "suelta" al pulsar otra tecla. Con
-//       Shift: A-Z, `!@#$%^&*()` en la fila numerica, y `<>?:"_+{}|~` en
-//       el resto. Sin Shift: minusculas + `-=[]\` y backtick.
+//       (`0x36`/`0xB6`) ANTES del filtro general de key-up. Con Shift:
+//       A-Z, `!@#$%^&*()` en la fila numerica, `<>?:"_+{}|~`. Sin Shift:
+//       minusculas + `-=[]\` y backtick.
 //
 //    4. **Seleccion + portapapeles interno**. Con Shift sostenido las
-//       flechas y `Home`/`End` EXTIENDEN una seleccion en lugar de mover
-//       el cursor solo. Cualquier movimiento sin Shift colapsa la
-//       seleccion. `Ctrl+C` copia, `Ctrl+X` corta, `Ctrl+V` pega,
-//       `Ctrl+A` selecciona todo. El portapapeles vive en la memoria
-//       lineal de la app (un buffer estatico) — sirve para mover texto
-//       entre las ocho notas sin tocar al kernel. Cualquier insercion o
-//       borrado reemplaza primero la seleccion existente.
+//       flechas y `Home`/`End` EXTIENDEN una seleccion. Cualquier
+//       movimiento sin Shift colapsa la seleccion. `Ctrl+C`/`Ctrl+X`/
+//       `Ctrl+V`/`Ctrl+A`. El portapapeles vive en la memoria lineal de
+//       la app — sirve para mover texto entre notas sin tocar al kernel.
 //
 //    5. **Scroll vertical**. `PageUp`/`PageDown` desplazan el viewport
-//       FILAS lineas visuales sin mover el cursor — util para releer el
-//       principio de una nota larga. `Ctrl+Home`/`Ctrl+End` saltan al
-//       principio/fin del documento (cursor + scroll a la vez). Cualquier
-//       movimiento de cursor mantiene el caret visible: si se sale del
-//       viewport, el scroll lo sigue.
+//       FILAS lineas visuales sin mover el cursor. `Ctrl+Home`/`Ctrl+End`
+//       saltan al principio/fin del documento. Cualquier movimiento de
+//       cursor mantiene el caret visible.
 //
-//    6. **Persistencia v3**. Cada cambio (texto, cursor, scroll, nota
-//       activa) se persiste de inmediato con un formato firmado por el
-//       magic `BTC2`. Soporta v2 (Fase 18, sin scroll) y v3 (esta) sin
-//       romper notas viejas. Si el buffer que el kernel devuelve no
-//       lleva el magic, se asume formato Fase 17 (un buffer plano) y se
-//       carga en la nota 1 con el cursor al final.
+//    6. **Wrap por palabra**. El render parte las lineas en el ultimo
+//       espacio antes de COLUMNAS en lugar de en cualquier byte. Las
+//       palabras mas largas que COLUMNAS siguen rompiendose por la
+//       fuerza. Los movimientos `↑↓` siguen operando sobre lineas
+//       LOGICAS (separadas por `\n`); las lineas VISUALES (wrap)
+//       afectan solo al scroll.
+//
+//    7. **Modo busqueda**. `Ctrl+F` entra a modo busqueda; aparece una
+//       barra abajo con el query. Tecleas para refinar, `Backspace`
+//       borra, `Enter` salta al siguiente match, `Esc` sale. El render
+//       destaca los matches con fondo amarillo (distinto del azul de
+//       seleccion). Case-insensitive.
+//
+//    8. **Modo indice (F9)**. Overlay a pantalla completa: lista las 8
+//       notas con su numero, primera linea como titulo y bytes usados.
+//       Flechas `↑↓` navegan; `Enter` o `F1`..`F8` eligen y vuelven a
+//       NORMAL. `Esc` cierra sin cambiar.
+//
+//    9. **Persistencia v3**. Cada cambio se persiste con un formato
+//       firmado por el magic `BTC2`. Soporta v2 (sin scroll), v3 (con
+//       scroll) y el formato Fase 17 (un buffer plano) — la nota del
+//       usuario sobrevive a cada upgrade sin perdida.
 //
 //  Tipografia: la 8x8 clasica (font8x8), escalada x2 a 16x16. Cabe en la
-//  memoria lineal de la app y se renderiza pixel a pixel — no toca el
-//  lienzo del kernel, solo entrega su propio fotograma.
+//  memoria lineal de la app y se renderiza pixel a pixel — la app entrega
+//  su propio fotograma; el kernel solo lo compone en su region.
 // =============================================================================
 
 #![no_std]
@@ -72,49 +76,50 @@ fn al_fallar(_: &core::panic::PanicInfo) -> ! {
 
 // --- Geometria ----------------------------------------------------------------
 
-/// Tamaño del lienzo natural — debe coincidir con `region` del manifiesto.
 const ANCHO: usize = 480;
 const ALTO: usize = 280;
-/// Pixeles por celda de glifo (8x8 escalado x2).
 const PASO: usize = 16;
-/// Margen horizontal para el cuerpo del texto.
 const MARGEN_X: usize = 16;
-/// Y de la linea base del titulo.
 const Y_LABEL: usize = 6;
-/// Y de la linea base de la primera fila de texto.
 const Y_TEXTO: usize = 38;
-/// Cuantas columnas caben.
 const COLUMNAS: usize = (ANCHO - 2 * MARGEN_X) / PASO;
-/// Cuantas filas caben bajo el titulo.
-const FILAS: usize = (ALTO - Y_TEXTO) / PASO;
+/// Filas visibles del cuerpo. La fila bajo este bloque (`Y_BARRA`) se reserva
+/// para la barra de busqueda; en modo normal queda en blanco.
+const FILAS: usize = 14;
+const Y_BARRA: usize = Y_TEXTO + FILAS * PASO;
 
-// --- Estado -------------------------------------------------------------------
+// --- Modos --------------------------------------------------------------------
 
-/// Numero de notas independientes. Se cambian con F1..F8.
+const MODO_NORMAL: u8 = 0;
+const MODO_BUSCAR: u8 = 1;
+const MODO_INDICE: u8 = 2;
+static mut MODO: u8 = MODO_NORMAL;
+
+// --- Estado de busqueda -------------------------------------------------------
+
+const CAP_QUERY: usize = 64;
+static mut QUERY: [u8; CAP_QUERY] = [0; CAP_QUERY];
+static mut QUERY_LEN: usize = 0;
+/// Posiciones de los matches encontrados sobre la nota activa para la query
+/// actual. Recalculadas a demanda (cuando query o nota cambian, o cada render
+/// del modo busqueda). Cap practico para una nota de 8 KiB con query corta.
+const CAP_MATCHES: usize = 256;
+static mut MATCH_POS: [u32; CAP_MATCHES] = [0; CAP_MATCHES];
+static mut MATCH_LEN: usize = 0;
+
+// --- Estado del indice --------------------------------------------------------
+
+/// Nota focada en el panel indice (NO la activa: solo la que tiene el
+/// resaltado de navegacion). Enter la convierte en activa.
+static mut INDICE_FOCO: usize = 0;
+
+// --- Estado de notas ----------------------------------------------------------
+
 const NUM_NOTAS: usize = 8;
-/// Capacidad de texto por nota. Al desbordarse se descartan `DESCARTE` bytes
-/// del principio (amortiza el coste; no es una mudanza por cada pulsacion).
 const CAP_NOTA: usize = 8192;
-/// Bytes que se descartan al desbordar la nota actual.
 const DESCARTE: usize = 512;
-
-const FONDO: u32 = 0x0A_18_30;
-const TINTA: u32 = 0xE8_EC_F4;
-const ETIQUETA: u32 = 0x8B_5C_F6;
-/// Numero de nota inactivo en el header — atenuado respecto a ETIQUETA.
-const INACTIVO: u32 = 0x4A_3A_7C;
-/// Caret del cursor — un poco mas brillante que la tinta para verlo.
-const CARET: u32 = 0xF8_E8_8A;
-/// Fondo del rectangulo de seleccion — azul profundo bajo TINTA.
-const SELECCION: u32 = 0x24_3C_72;
-
-/// Centinela "sin seleccion" en `sel_anchor`. Se elige fuera del rango
-/// representable [0, CAP_NOTA] para no chocar con posiciones validas.
 const SIN_SEL: u32 = u32::MAX;
 
-/// Una nota: su buffer de texto, el cursor, el ancla de seleccion (o
-/// `SIN_SEL`) y el scroll vertical (en filas visuales). Sin `String`, sin
-/// `Vec`: arrays estaticos puros, asi la app no necesita allocator.
 #[derive(Copy, Clone)]
 struct Nota {
     cuerpo: [u8; CAP_NOTA],
@@ -137,27 +142,28 @@ static mut ACTIVA: usize = 0;
 
 static mut LIENZO: [u32; ANCHO * ALTO] = [0; ANCHO * ALTO];
 
-/// Estado de las teclas modificadoras. Se actualiza con make/break ANTES del
-/// filtro general de key-up — asi un modifier sostenido se mantiene activo
-/// entre pulsaciones de otras teclas.
 static mut SHIFT: bool = false;
 static mut CTRL: bool = false;
-/// Recuerda si el scancode anterior fue el prefijo extendido `0xE0`. Las
-/// flechas, Home/End, Delete, PageUp/Down, RCtrl, etc. llegan como pareja
-/// `0xE0 <sc>`; ponemos el flag al ver el `0xE0` y lo bajamos al consumir el
-/// byte siguiente.
 static mut EXT_PREFIX: bool = false;
 
-/// Portapapeles interno: vive en la memoria lineal de la app. Cualquier
-/// `Ctrl+C` o `Ctrl+X` lo reemplaza; `Ctrl+V` lo inserta en cursor. Sirve
-/// para mover texto entre notas dentro de la misma sesion.
 static mut CLIPBOARD: [u8; CAP_NOTA] = [0; CAP_NOTA];
 static mut CLIP_LEN: usize = 0;
 
-/// Buffer de E/S del estado persistido. Formato v3:
-///   [magic 4B "BTC2"][version 1B = 0x03][activa 1B][pad 2B = 0]
-///   for i in 0..NUM_NOTAS:
-///     [len_i u32 LE][cursor_i u32 LE][scroll_i u32 LE][bytes_i: len_i bytes]
+// --- Colores ------------------------------------------------------------------
+
+const FONDO: u32 = 0x0A_18_30;
+const TINTA: u32 = 0xE8_EC_F4;
+const ETIQUETA: u32 = 0x8B_5C_F6;
+const INACTIVO: u32 = 0x4A_3A_7C;
+const CARET: u32 = 0xF8_E8_8A;
+const SELECCION: u32 = 0x24_3C_72;
+/// Fondo del match en modo busqueda — amarillo oscuro.
+const MATCH_BG: u32 = 0x6A_60_18;
+/// Fondo de la tile focada en el panel indice — morado profundo.
+const FOCO_BG: u32 = 0x3A_2A_5A;
+
+// --- Persistencia: cabecera ---------------------------------------------------
+
 const HDR: usize = 4 + 1 + 1 + 2;
 const NOTA_HDR_V3: usize = 4 + 4 + 4;
 const ESTADO_CAP: usize = HDR + NUM_NOTAS * (NOTA_HDR_V3 + CAP_NOTA);
@@ -175,8 +181,6 @@ pub extern "C" fn init() {
     if n > 0 {
         let n = (n as usize).min(ESTADO_CAP);
         if !cargar_btc2(buf, n) {
-            // Compatibilidad: si no es BTC2, asumimos formato Fase 17 (un
-            // solo buffer plano sin cabecera). Lo cargamos en la nota 1.
             cargar_legacy(buf, n);
         }
     }
@@ -192,7 +196,6 @@ pub extern "C" fn tick() {
         if sc == 0 {
             break;
         }
-        // Prefijo extendido: solo marca, no produce evento por si solo.
         if sc == 0xE0 {
             unsafe { EXT_PREFIX = true; }
             continue;
@@ -200,8 +203,8 @@ pub extern "C" fn tick() {
         let ext = unsafe { EXT_PREFIX };
         unsafe { EXT_PREFIX = false; }
 
-        // Modifiers. Se siguen ANTES del filtro general de key-up. Ctrl tiene
-        // make `0x1D` (LCtrl no-ext / RCtrl ext) y break `0x9D` con o sin ext.
+        // Modifiers ANTES del filtro de key-up. Ctrl tiene make `0x1D` (LCtrl
+        // no-ext / RCtrl ext) y break `0x9D` con o sin ext.
         match (sc, ext) {
             (0x2A, false) | (0x36, false) => { unsafe { SHIFT = true; } continue; }
             (0xAA, false) | (0xB6, false) => { unsafe { SHIFT = false; } continue; }
@@ -210,95 +213,25 @@ pub extern "C" fn tick() {
             _ => {}
         }
 
-        // Resto de key-ups (bit 7): ignorar.
         if sc & 0x80 != 0 {
             continue;
         }
 
         let shift = unsafe { SHIFT };
         let ctrl = unsafe { CTRL };
+        let modo = unsafe { MODO };
 
-        // F1..F8 → cambiar nota activa. Sin ext, sin Ctrl.
-        if !ext && !ctrl {
-            if let Some(idx) = tecla_funcion(sc) {
-                if idx < NUM_NOTAS {
-                    unsafe { ACTIVA = idx; }
-                    cambio_ui = true;
-                    continue;
-                }
+        match modo {
+            MODO_NORMAL => {
+                dispatch_normal(sc, ext, shift, ctrl, &mut cambio_texto, &mut cambio_ui);
             }
-        }
-
-        if ext {
-            if ctrl {
-                match sc {
-                    0x47 => { ctrl_home(); cambio_ui = true; continue; } // Ctrl+Home
-                    0x4F => { ctrl_end();  cambio_ui = true; continue; } // Ctrl+End
-                    _ => {}
-                }
+            MODO_BUSCAR => {
+                dispatch_buscar(sc, ext, shift, &mut cambio_ui);
             }
-            match sc {
-                0x4B => { mover_izquierda();  cambio_ui = true; }
-                0x4D => { mover_derecha();    cambio_ui = true; }
-                0x48 => { mover_arriba();     cambio_ui = true; }
-                0x50 => { mover_abajo();      cambio_ui = true; }
-                0x47 => { mover_inicio_linea(); cambio_ui = true; }
-                0x4F => { mover_fin_linea();    cambio_ui = true; }
-                0x49 => { page_up();   cambio_ui = true; } // PageUp
-                0x51 => { page_down(); cambio_ui = true; } // PageDown
-                0x53 => { // Delete
-                    if borrar_seleccion() || borrar_adelante() {
-                        cambio_texto = true;
-                    }
-                }
-                _ => {}
+            MODO_INDICE => {
+                dispatch_indice(sc, ext, &mut cambio_ui);
             }
-            continue;
-        }
-
-        if ctrl {
-            match sc {
-                0x2E => { // Ctrl+C
-                    copiar_seleccion();
-                    cambio_ui = true;
-                }
-                0x2D => { // Ctrl+X
-                    copiar_seleccion();
-                    if borrar_seleccion() {
-                        cambio_texto = true;
-                    }
-                }
-                0x2F => { // Ctrl+V
-                    if pegar() {
-                        cambio_texto = true;
-                    }
-                }
-                0x1E => { // Ctrl+A
-                    seleccionar_todo();
-                    cambio_ui = true;
-                }
-                _ => {}
-            }
-            continue;
-        }
-
-        match sc {
-            0x0E => { // Backspace
-                if borrar_seleccion() || borrar_atras() {
-                    cambio_texto = true;
-                }
-            }
-            0x1C => {
-                insertar(b'\n');
-                cambio_texto = true;
-            }
-            otro => {
-                let c = scancode_a_caracter(otro, shift);
-                if c != 0 {
-                    insertar(c);
-                    cambio_texto = true;
-                }
-            }
+            _ => {}
         }
     }
     if cambio_texto || cambio_ui {
@@ -307,9 +240,205 @@ pub extern "C" fn tick() {
     pintar();
 }
 
+// --- Dispatch por modo --------------------------------------------------------
+
+fn dispatch_normal(sc: u8, ext: bool, shift: bool, ctrl: bool, cambio_texto: &mut bool, cambio_ui: &mut bool) {
+    // F1..F8 (sin ext, sin ctrl) cambian de nota activa.
+    if !ext && !ctrl {
+        if let Some(idx) = tecla_funcion(sc) {
+            if idx < NUM_NOTAS {
+                unsafe { ACTIVA = idx; }
+                *cambio_ui = true;
+                return;
+            }
+        }
+        // F9 abre el panel indice.
+        if sc == 0x43 {
+            unsafe {
+                INDICE_FOCO = ACTIVA;
+                MODO = MODO_INDICE;
+            }
+            *cambio_ui = true;
+            return;
+        }
+    }
+
+    if ext {
+        if ctrl {
+            match sc {
+                0x47 => { ctrl_home(); *cambio_ui = true; return; }
+                0x4F => { ctrl_end();  *cambio_ui = true; return; }
+                _ => {}
+            }
+        }
+        match sc {
+            0x4B => { mover_izquierda();  *cambio_ui = true; }
+            0x4D => { mover_derecha();    *cambio_ui = true; }
+            0x48 => { mover_arriba();     *cambio_ui = true; }
+            0x50 => { mover_abajo();      *cambio_ui = true; }
+            0x47 => { mover_inicio_linea(); *cambio_ui = true; }
+            0x4F => { mover_fin_linea();    *cambio_ui = true; }
+            0x49 => { page_up();   *cambio_ui = true; }
+            0x51 => { page_down(); *cambio_ui = true; }
+            0x53 => {
+                if borrar_seleccion() || borrar_adelante() {
+                    *cambio_texto = true;
+                }
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    if ctrl {
+        match sc {
+            0x2E => { copiar_seleccion(); *cambio_ui = true; }       // Ctrl+C
+            0x2D => {                                                 // Ctrl+X
+                copiar_seleccion();
+                if borrar_seleccion() {
+                    *cambio_texto = true;
+                }
+            }
+            0x2F => { if pegar() { *cambio_texto = true; } }          // Ctrl+V
+            0x1E => { seleccionar_todo(); *cambio_ui = true; }        // Ctrl+A
+            0x21 => {                                                 // Ctrl+F
+                unsafe {
+                    MODO = MODO_BUSCAR;
+                    QUERY_LEN = 0;
+                }
+                *cambio_ui = true;
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    match sc {
+        0x0E => {
+            if borrar_seleccion() || borrar_atras() {
+                *cambio_texto = true;
+            }
+        }
+        0x1C => {
+            insertar(b'\n');
+            *cambio_texto = true;
+        }
+        otro => {
+            let c = scancode_a_caracter(otro, shift);
+            if c != 0 {
+                insertar(c);
+                *cambio_texto = true;
+            }
+        }
+    }
+}
+
+fn dispatch_buscar(sc: u8, ext: bool, shift: bool, cambio_ui: &mut bool) {
+    // Esc sale del modo busqueda.
+    if !ext && sc == 0x01 {
+        unsafe { MODO = MODO_NORMAL; }
+        *cambio_ui = true;
+        return;
+    }
+    // F1..F8 cambian de nota y salen del modo busqueda.
+    if !ext {
+        if let Some(idx) = tecla_funcion(sc) {
+            if idx < NUM_NOTAS {
+                unsafe {
+                    ACTIVA = idx;
+                    MODO = MODO_NORMAL;
+                    QUERY_LEN = 0;
+                }
+                *cambio_ui = true;
+                return;
+            }
+        }
+    }
+    // Enter salta al siguiente match (Shift+Enter al anterior).
+    if !ext && sc == 0x1C {
+        if shift {
+            ir_a_anterior_match();
+        } else {
+            ir_a_siguiente_match();
+        }
+        *cambio_ui = true;
+        return;
+    }
+    // Backspace borra del query.
+    if !ext && sc == 0x0E {
+        unsafe {
+            if QUERY_LEN > 0 {
+                QUERY_LEN -= 1;
+            }
+        }
+        *cambio_ui = true;
+        return;
+    }
+    // Texto anexado al query.
+    if !ext {
+        let c = scancode_a_caracter(sc, shift);
+        if c != 0 {
+            unsafe {
+                if QUERY_LEN < CAP_QUERY {
+                    let q = &mut *core::ptr::addr_of_mut!(QUERY);
+                    q[QUERY_LEN] = c;
+                    QUERY_LEN += 1;
+                }
+            }
+            *cambio_ui = true;
+        }
+    }
+    // Flechas en ext se ignoran en modo busqueda — la atencion del usuario
+    // esta en la barra; tras Esc el cursor sigue donde estaba.
+}
+
+fn dispatch_indice(sc: u8, ext: bool, cambio_ui: &mut bool) {
+    // Esc cierra el indice sin cambiar la activa.
+    if !ext && sc == 0x01 {
+        unsafe { MODO = MODO_NORMAL; }
+        *cambio_ui = true;
+        return;
+    }
+    // Enter elige la nota focada.
+    if !ext && sc == 0x1C {
+        unsafe {
+            ACTIVA = INDICE_FOCO.min(NUM_NOTAS - 1);
+            MODO = MODO_NORMAL;
+        }
+        *cambio_ui = true;
+        return;
+    }
+    // F1..F8 eligen directamente.
+    if !ext {
+        if let Some(idx) = tecla_funcion(sc) {
+            if idx < NUM_NOTAS {
+                unsafe {
+                    ACTIVA = idx;
+                    MODO = MODO_NORMAL;
+                }
+                *cambio_ui = true;
+                return;
+            }
+        }
+    }
+    // Flechas mueven el foco.
+    if ext {
+        match sc {
+            0x48 => unsafe {
+                if INDICE_FOCO > 0 { INDICE_FOCO -= 1; }
+                *cambio_ui = true;
+            },
+            0x50 => unsafe {
+                if INDICE_FOCO + 1 < NUM_NOTAS { INDICE_FOCO += 1; }
+                *cambio_ui = true;
+            },
+            _ => {}
+        }
+    }
+}
+
 // --- Edicion del buffer activo ------------------------------------------------
 
-/// Aplica `f` a la nota activa.
 fn con_activa<F: FnOnce(&mut Nota)>(f: F) {
     unsafe {
         let idx = ACTIVA.min(NUM_NOTAS - 1);
@@ -318,7 +447,6 @@ fn con_activa<F: FnOnce(&mut Nota)>(f: F) {
     }
 }
 
-/// Rango ordenado `[lo, hi)` de la seleccion activa, o `None` si no hay.
 fn rango_sel(n: &Nota) -> Option<(usize, usize)> {
     if n.sel_anchor == SIN_SEL {
         return None;
@@ -334,9 +462,6 @@ fn rango_sel(n: &Nota) -> Option<(usize, usize)> {
     }
 }
 
-/// Antes de un movimiento de cursor: si Shift esta sostenido, fijamos el
-/// ancla en la posicion actual del cursor (si aun no habia ancla); si no,
-/// colapsamos la seleccion previa.
 fn antes_de_mover() {
     let shift = unsafe { SHIFT };
     con_activa(|n| {
@@ -350,8 +475,6 @@ fn antes_de_mover() {
     });
 }
 
-/// Garantiza que el caret quede dentro del viewport vertical actual; mueve
-/// `scroll` lo minimo necesario.
 fn asegurar_cursor_visible() {
     con_activa(|n| {
         let fila = fila_visual(&n.cuerpo, n.len as usize, n.cursor as usize) as u32;
@@ -363,10 +486,6 @@ fn asegurar_cursor_visible() {
     });
 }
 
-/// Inserta `c` en la posicion del cursor; mueve el resto un byte a la derecha.
-/// Si hay seleccion activa, la sustituye. Si la nota esta llena, descarta los
-/// primeros `DESCARTE` bytes y reajusta cursor (pierde posicion solo si caia
-/// dentro del fragmento descartado).
 fn insertar(c: u8) {
     let _ = borrar_seleccion();
     con_activa(|n| {
@@ -388,8 +507,6 @@ fn insertar(c: u8) {
     asegurar_cursor_visible();
 }
 
-/// Borra el byte inmediatamente atras del cursor — `Backspace` clasico.
-/// Devuelve `true` si hubo algo que borrar.
 fn borrar_atras() -> bool {
     let mut cambio = false;
     con_activa(|n| {
@@ -408,7 +525,6 @@ fn borrar_atras() -> bool {
     cambio
 }
 
-/// Borra el byte EN la posicion del cursor — `Delete`.
 fn borrar_adelante() -> bool {
     let mut cambio = false;
     con_activa(|n| {
@@ -424,8 +540,6 @@ fn borrar_adelante() -> bool {
     cambio
 }
 
-/// Borra el rango de la seleccion actual y colapsa el ancla. Devuelve `true`
-/// si habia algo que borrar.
 fn borrar_seleccion() -> bool {
     let mut cambio = false;
     con_activa(|n| {
@@ -442,7 +556,6 @@ fn borrar_seleccion() -> bool {
     cambio
 }
 
-/// Copia la seleccion (si la hay) al portapapeles interno. No toca el buffer.
 fn copiar_seleccion() {
     con_activa(|n| {
         if let Some((lo, hi)) = rango_sel(n) {
@@ -456,9 +569,6 @@ fn copiar_seleccion() {
     });
 }
 
-/// Inserta el contenido del portapapeles en el cursor (o sustituye la
-/// seleccion, si la hay). Si no cabe entero, descarta bytes del principio en
-/// pasos de DESCARTE hasta hacer hueco.
 fn pegar() -> bool {
     let _ = borrar_seleccion();
     let n_clip = unsafe { CLIP_LEN };
@@ -496,7 +606,6 @@ fn pegar() -> bool {
     cambio
 }
 
-/// Selecciona todo el buffer de la nota activa.
 fn seleccionar_todo() {
     con_activa(|n| {
         if n.len == 0 {
@@ -530,8 +639,6 @@ fn mover_derecha() {
     asegurar_cursor_visible();
 }
 
-/// Devuelve `(inicio_linea, columna)` para la posicion `cursor` dentro de
-/// `buf[..len]` — separadas por `\n`, sin contar el wrap visual.
 fn linea_actual(buf: &[u8], _len: usize, cursor: usize) -> (usize, usize) {
     let mut inicio = 0usize;
     let mut i = cursor;
@@ -545,7 +652,6 @@ fn linea_actual(buf: &[u8], _len: usize, cursor: usize) -> (usize, usize) {
     (inicio, cursor - inicio)
 }
 
-/// Indice del siguiente `\n` desde `pos`, o `len` si no hay.
 fn fin_linea(buf: &[u8], len: usize, pos: usize) -> usize {
     let mut i = pos;
     while i < len {
@@ -622,15 +728,12 @@ fn mover_fin_linea() {
     asegurar_cursor_visible();
 }
 
-/// PageUp: scroll FILAS lineas visuales arriba. NO mueve el cursor — util
-/// para releer el principio mientras se deja el caret en su sitio.
 fn page_up() {
     con_activa(|n| {
         n.scroll = n.scroll.saturating_sub(FILAS as u32);
     });
 }
 
-/// PageDown: scroll FILAS lineas visuales abajo, sin pasarse del total.
 fn page_down() {
     con_activa(|n| {
         let total = filas_totales(&n.cuerpo, n.len as usize) as u32;
@@ -639,7 +742,6 @@ fn page_down() {
     });
 }
 
-/// Ctrl+Home: cursor y viewport al principio absoluto.
 fn ctrl_home() {
     antes_de_mover();
     con_activa(|n| {
@@ -648,7 +750,6 @@ fn ctrl_home() {
     });
 }
 
-/// Ctrl+End: cursor al final, viewport al ultimo bloque visible.
 fn ctrl_end() {
     antes_de_mover();
     con_activa(|n| {
@@ -657,7 +758,6 @@ fn ctrl_end() {
     asegurar_cursor_visible();
 }
 
-/// `0x3B..=0x42` = F1..F8. F9..F12 no se mapean (NUM_NOTAS = 8).
 fn tecla_funcion(sc: u8) -> Option<usize> {
     if (0x3B..=0x42).contains(&sc) {
         Some((sc - 0x3B) as usize)
@@ -666,46 +766,202 @@ fn tecla_funcion(sc: u8) -> Option<usize> {
     }
 }
 
-/// Fila visual del byte `pos` en `buf[..len]`, contando wraps por `COLUMNAS`.
+// --- Wrap visual (por palabra) ------------------------------------------------
+
+/// Indice del primer byte de la SIGUIENTE linea visual desde `inicio`.
+/// Reglas:
+///   - Si encuentra un `\n` antes de COLUMNAS, wrap justo despues del `\n`.
+///   - Si la linea cabe entera sin wrap, devuelve `len`.
+///   - Si excede COLUMNAS, busca el ULTIMO espacio en `[inicio, inicio+COLUMNAS]`
+///     y wrap justo despues. El espacio queda en la linea anterior; la
+///     siguiente arranca con el primer no-espacio. Si no hay espacio (palabra
+///     mas larga que COLUMNAS), wrap duro en COLUMNAS.
+fn fin_linea_visual(buf: &[u8], len: usize, inicio: usize) -> usize {
+    if inicio >= len {
+        return len;
+    }
+    let mut i = inicio;
+    let tope = (inicio + COLUMNAS).min(len);
+    // 1) Buscar `\n` dentro de la primera COLUMNAS.
+    while i < tope {
+        if buf[i] == b'\n' {
+            return i + 1;
+        }
+        i += 1;
+    }
+    if tope == len {
+        return len;
+    }
+    if i >= len {
+        return len;
+    }
+    // 2) No hay `\n` en la primera COLUMNAS. Buscar el ultimo espacio para
+    //    wrappear en limite de palabra.
+    let mut j = tope;
+    while j > inicio {
+        if buf[j - 1] == b' ' {
+            return j;
+        }
+        j -= 1;
+    }
+    // 3) Sin espacio: wrap duro en COLUMNAS.
+    tope
+}
+
+/// Fila visual del byte `pos` en `buf[..len]`, segun el wrap por palabra.
 fn fila_visual(buf: &[u8], len: usize, pos: usize) -> usize {
     let pos = pos.min(len);
     let mut fila = 0usize;
-    let mut col = 0usize;
-    for i in 0..pos {
-        if buf[i] == b'\n' {
-            fila += 1;
-            col = 0;
-        } else {
-            if col >= COLUMNAS {
-                fila += 1;
-                col = 0;
-            }
-            col += 1;
+    let mut inicio = 0usize;
+    while inicio < pos {
+        let fin = fin_linea_visual(buf, len, inicio);
+        if fin > pos {
+            break;
         }
+        if fin == inicio {
+            break; // proteccion ante una iteracion sin avance.
+        }
+        fila += 1;
+        inicio = fin;
     }
     fila
 }
 
-/// Numero total de filas visuales que ocupa `buf[..len]`.
+/// Total de filas visuales que ocupa `buf[..len]`. Al menos 1 (linea vacia).
 fn filas_totales(buf: &[u8], len: usize) -> usize {
-    let mut filas = 1usize;
-    let mut col = 0usize;
-    for i in 0..len {
-        if buf[i] == b'\n' {
-            filas += 1;
-            col = 0;
-        } else {
-            if col >= COLUMNAS {
-                filas += 1;
-                col = 0;
-            }
-            col += 1;
-        }
+    if len == 0 {
+        return 1;
     }
-    filas
+    let mut filas = 0usize;
+    let mut inicio = 0usize;
+    while inicio < len {
+        let fin = fin_linea_visual(buf, len, inicio);
+        if fin == inicio {
+            break;
+        }
+        filas += 1;
+        inicio = fin;
+    }
+    // Si el ultimo char es `\n`, hay una linea visual mas (la vacia).
+    if len > 0 && buf[len - 1] == b'\n' {
+        filas += 1;
+    }
+    if filas == 0 { 1 } else { filas }
 }
 
-// --- Persistencia: serializar/deserializar el estado completo -----------------
+// --- Busqueda -----------------------------------------------------------------
+
+fn igual_ci(a: u8, b: u8) -> bool {
+    let na = if a.is_ascii_uppercase() { a + 32 } else { a };
+    let nb = if b.is_ascii_uppercase() { b + 32 } else { b };
+    na == nb
+}
+
+/// Recalcula `MATCH_POS` y `MATCH_LEN` con todas las ocurrencias case-insens
+/// de `query` en `buf[..len]`. No solapadas. Hasta CAP_MATCHES posiciones.
+fn buscar_matches(buf: &[u8], len: usize, query: &[u8]) {
+    let q_len = query.len();
+    unsafe { MATCH_LEN = 0; }
+    if q_len == 0 || q_len > len {
+        return;
+    }
+    let matches = unsafe { &mut *core::ptr::addr_of_mut!(MATCH_POS) };
+    let mut n = 0usize;
+    let mut i = 0usize;
+    while i + q_len <= len && n < CAP_MATCHES {
+        let mut ok = true;
+        for j in 0..q_len {
+            if !igual_ci(buf[i + j], query[j]) {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            matches[n] = i as u32;
+            n += 1;
+            i += q_len;
+        } else {
+            i += 1;
+        }
+    }
+    unsafe { MATCH_LEN = n; }
+}
+
+/// Trae el cursor al inicio del siguiente match, contando desde la posicion
+/// actual del cursor. Si no hay matches o el cursor esta despues del ultimo
+/// match, vuelve al primer match (wrap-around).
+fn ir_a_siguiente_match() {
+    // Asegurarse de que MATCH_POS este al dia respecto a la query y nota.
+    refrescar_matches();
+    let n = unsafe { MATCH_LEN };
+    if n == 0 {
+        return;
+    }
+    let matches = unsafe { &*core::ptr::addr_of!(MATCH_POS) };
+    con_activa(|nota| {
+        let cursor = nota.cursor;
+        let mut elegido = matches[0];
+        let mut hubo = false;
+        for k in 0..n {
+            if matches[k] > cursor {
+                elegido = matches[k];
+                hubo = true;
+                break;
+            }
+        }
+        if !hubo {
+            elegido = matches[0]; // wrap-around al principio.
+        }
+        nota.cursor = elegido;
+        nota.sel_anchor = SIN_SEL;
+    });
+    asegurar_cursor_visible();
+}
+
+fn ir_a_anterior_match() {
+    refrescar_matches();
+    let n = unsafe { MATCH_LEN };
+    if n == 0 {
+        return;
+    }
+    let matches = unsafe { &*core::ptr::addr_of!(MATCH_POS) };
+    con_activa(|nota| {
+        let cursor = nota.cursor;
+        let mut elegido = matches[n - 1];
+        let mut hubo = false;
+        let mut k = n;
+        while k > 0 {
+            k -= 1;
+            if matches[k] < cursor {
+                elegido = matches[k];
+                hubo = true;
+                break;
+            }
+        }
+        if !hubo {
+            elegido = matches[n - 1];
+        }
+        nota.cursor = elegido;
+        nota.sel_anchor = SIN_SEL;
+    });
+    asegurar_cursor_visible();
+}
+
+fn refrescar_matches() {
+    let q_len = unsafe { QUERY_LEN };
+    if q_len == 0 {
+        unsafe { MATCH_LEN = 0; }
+        return;
+    }
+    let q = unsafe { &*core::ptr::addr_of!(QUERY) };
+    let activa = unsafe { ACTIVA }.min(NUM_NOTAS - 1);
+    let notas = unsafe { &*core::ptr::addr_of!(NOTAS) };
+    let nota = &notas[activa];
+    let len = (nota.len as usize).min(CAP_NOTA);
+    buscar_matches(&nota.cuerpo[..len], len, &q[..q_len]);
+}
+
+// --- Persistencia ------------------------------------------------------------
 
 fn guardar() {
     let buf = unsafe { &mut *core::ptr::addr_of_mut!(ESTADO_IO) };
@@ -732,8 +988,6 @@ fn guardar() {
     }
 }
 
-/// Carga formato BTC2 (v2 = Fase 18 sin scroll, v3 = esta con scroll).
-/// Devuelve `false` si no es BTC2.
 fn cargar_btc2(buf: &[u8], n: usize) -> bool {
     if n < HDR || buf[0..4] != MAGIC {
         return false;
@@ -770,8 +1024,6 @@ fn cargar_btc2(buf: &[u8], n: usize) -> bool {
     true
 }
 
-/// Fase 17: el buffer plano era el unico estado. Lo cargamos como nota 1 con
-/// el cursor al final — el usuario ve su texto donde lo dejo y puede seguir.
 fn cargar_legacy(buf: &[u8], n: usize) {
     let len = n.min(CAP_NOTA);
     let notas = unsafe { &mut *core::ptr::addr_of_mut!(NOTAS) };
@@ -783,14 +1035,32 @@ fn cargar_legacy(buf: &[u8], n: usize) {
     unsafe { ACTIVA = 0; }
 }
 
-// --- Renderizado --------------------------------------------------------------
+// --- Render -------------------------------------------------------------------
 
 fn pintar() {
     let lienzo = unsafe { &mut *core::ptr::addr_of_mut!(LIENZO) };
     for pixel in lienzo.iter_mut() {
         *pixel = FONDO;
     }
-    // Header: prefijo + lista de notas con la activa en tinta.
+    let modo = unsafe { MODO };
+    if modo == MODO_INDICE {
+        pintar_indice(lienzo);
+    } else {
+        pintar_header(lienzo);
+        if modo == MODO_BUSCAR {
+            refrescar_matches();
+        }
+        pintar_cuerpo(lienzo);
+        if modo == MODO_BUSCAR {
+            pintar_barra_busqueda(lienzo);
+        }
+    }
+    unsafe {
+        sys_render_frame(lienzo.as_ptr() as u32, (ANCHO * ALTO * 4) as u32);
+    }
+}
+
+fn pintar_header(lienzo: &mut [u32]) {
     let prefijo = b"bitacora :: ";
     pintar_texto(lienzo, prefijo, MARGEN_X, Y_LABEL, ETIQUETA);
     let mut cx = MARGEN_X + prefijo.len() * PASO;
@@ -803,92 +1073,281 @@ fn pintar() {
         pintar_glifo(lienzo, b' ', cx, Y_LABEL, color);
         cx += PASO;
     }
-    // Linea sutil bajo el titulo.
     let y_linea = Y_LABEL + PASO + 4;
     for x in MARGEN_X..(ANCHO - MARGEN_X) {
         lienzo[y_linea * ANCHO + x] = ETIQUETA;
         lienzo[(y_linea + 1) * ANCHO + x] = ETIQUETA;
     }
+}
 
+/// `true` si `i` cae dentro de algun match cacheado en MATCH_POS.
+fn dentro_match(i: usize, q_len: usize) -> bool {
+    if q_len == 0 {
+        return false;
+    }
+    let n = unsafe { MATCH_LEN };
+    let matches = unsafe { &*core::ptr::addr_of!(MATCH_POS) };
+    // Busqueda binaria por el primer match cuyo inicio sea <= i.
+    // n esta acotado a 256, busqueda lineal hacia adelante es OK; matches estan
+    // en orden creciente. Optimizable, pero MVP.
+    for k in 0..n {
+        let p = matches[k] as usize;
+        if i < p { return false; }
+        if i < p + q_len { return true; }
+    }
+    false
+}
+
+fn pintar_cuerpo(lienzo: &mut [u32]) {
+    let activa = unsafe { ACTIVA }.min(NUM_NOTAS - 1);
     let notas = unsafe { &*core::ptr::addr_of!(NOTAS) };
-    let nota = &notas[activa.min(NUM_NOTAS - 1)];
+    let nota = &notas[activa];
     let len = (nota.len as usize).min(CAP_NOTA);
     let cursor = (nota.cursor as usize).min(len);
     let scroll = nota.scroll as usize;
     let sel = rango_sel(nota);
     let buffer = &nota.cuerpo[..len];
 
-    // Una sola pasada: cuenta filas mientras pinta, capturando el caret en
-    // su posicion visual EXACTA y rellenando el fondo de la seleccion antes
-    // de cada glifo. `skip = scroll` (fila visual del tope del viewport).
-    let skip = scroll;
-    let mut fila_actual = 0usize;
-    let mut col2 = 0usize;
+    let modo = unsafe { MODO };
+    let q_len = if modo == MODO_BUSCAR { unsafe { QUERY_LEN } } else { 0 };
+
+    // Iterar por lineas visuales.
+    let mut inicio_visual = 0usize;
+    let mut fila_visual_n = 0usize;
     let mut caret_x: Option<usize> = None;
     let mut caret_y: usize = Y_TEXTO;
-    for i in 0..len {
-        let c = buffer[i];
-        let visible = fila_actual >= skip && (fila_actual - skip) < FILAS;
-        let dentro_sel = sel.map(|(lo, hi)| i >= lo && i < hi).unwrap_or(false);
+    let mut ultima_col = 0usize;
+    let mut ultima_fila = 0usize;
+    let mut ultima_termina_en_nl = false;
 
-        if c == b'\n' {
-            // Cursor justo antes del newline: queda al final de la linea actual.
+    while inicio_visual < len {
+        let fin = fin_linea_visual(buffer, len, inicio_visual);
+        if fin == inicio_visual {
+            break;
+        }
+        let visible = fila_visual_n >= scroll && (fila_visual_n - scroll) < FILAS;
+        let rfila = fila_visual_n.saturating_sub(scroll);
+        let mut col = 0usize;
+
+        for i in inicio_visual..fin {
+            let c = buffer[i];
+            let dentro_sel = sel.map(|(lo, hi)| i >= lo && i < hi).unwrap_or(false);
+            let en_match = q_len > 0 && dentro_match(i, q_len);
+
+            // Capturar caret antes de pintar este byte.
             if i == cursor && caret_x.is_none() && visible {
-                let rfila = fila_actual - skip;
-                caret_x = Some(MARGEN_X + col2 * PASO);
+                caret_x = Some(MARGEN_X + col * PASO);
                 caret_y = Y_TEXTO + rfila * PASO;
             }
-            // Seleccion incluye el newline: pinta un cuadrado al final.
-            if dentro_sel && visible {
-                let rfila = fila_actual - skip;
-                let x = MARGEN_X + col2 * PASO;
-                let y = Y_TEXTO + rfila * PASO;
-                rellenar(lienzo, x, y, PASO, PASO, SELECCION);
+
+            if c == b'\n' {
+                // Newline en la seleccion: rectangulo al final de la linea.
+                if dentro_sel && visible {
+                    let x = MARGEN_X + col * PASO;
+                    let y = Y_TEXTO + rfila * PASO;
+                    rellenar(lienzo, x, y, PASO, PASO, SELECCION);
+                }
+                // No incrementa col, no se pinta como glifo.
+            } else {
+                if visible {
+                    let x = MARGEN_X + col * PASO;
+                    let y = Y_TEXTO + rfila * PASO;
+                    if dentro_sel {
+                        rellenar(lienzo, x, y, PASO, PASO, SELECCION);
+                    } else if en_match {
+                        rellenar(lienzo, x, y, PASO, PASO, MATCH_BG);
+                    }
+                    pintar_glifo(lienzo, c, x, y, TINTA);
+                }
+                col += 1;
             }
-            fila_actual += 1;
-            col2 = 0;
-            continue;
         }
-        if col2 >= COLUMNAS {
-            fila_actual += 1;
-            col2 = 0;
-        }
-        let visible = fila_actual >= skip && (fila_actual - skip) < FILAS;
-        if i == cursor && caret_x.is_none() && visible {
-            let rfila = fila_actual - skip;
-            caret_x = Some(MARGEN_X + col2 * PASO);
-            caret_y = Y_TEXTO + rfila * PASO;
-        }
-        if visible {
-            let rfila = fila_actual - skip;
-            let x = MARGEN_X + col2 * PASO;
-            let y = Y_TEXTO + rfila * PASO;
-            if dentro_sel {
-                rellenar(lienzo, x, y, PASO, PASO, SELECCION);
-            }
-            pintar_glifo(lienzo, c, x, y, TINTA);
-        }
-        col2 += 1;
+
+        ultima_col = col;
+        ultima_fila = fila_visual_n;
+        ultima_termina_en_nl = fin > 0 && buffer[fin - 1] == b'\n';
+
+        fila_visual_n += 1;
+        inicio_visual = fin;
     }
-    // Caret al final del buffer si no se capturo antes.
+
+    // Caret al final del buffer (cursor == len) o sobre buffer vacio.
     if caret_x.is_none() && cursor == len {
-        let visible = fila_actual >= skip && (fila_actual - skip) < FILAS;
-        if visible {
-            let rfila = fila_actual - skip;
-            caret_x = Some(MARGEN_X + col2 * PASO);
+        let fila_caret = if len == 0 {
+            0
+        } else if ultima_termina_en_nl {
+            fila_visual_n
+        } else {
+            ultima_fila
+        };
+        let col_caret = if len == 0 {
+            0
+        } else if ultima_termina_en_nl {
+            0
+        } else {
+            ultima_col
+        };
+        if fila_caret >= scroll && (fila_caret - scroll) < FILAS {
+            let rfila = fila_caret - scroll;
+            caret_x = Some(MARGEN_X + col_caret * PASO);
             caret_y = Y_TEXTO + rfila * PASO;
         }
     }
     if let Some(cx) = caret_x {
         pintar_caret(lienzo, cx, caret_y);
     }
+}
 
-    unsafe {
-        sys_render_frame(lienzo.as_ptr() as u32, (ANCHO * ALTO * 4) as u32);
+fn pintar_barra_busqueda(lienzo: &mut [u32]) {
+    // Fondo de la barra.
+    rellenar(lienzo, 0, Y_BARRA, ANCHO, PASO, 0x14_24_44);
+    let prefijo = b"[buscar]: ";
+    pintar_texto(lienzo, prefijo, MARGEN_X, Y_BARRA, ETIQUETA);
+    let q_len = unsafe { QUERY_LEN };
+    let q = unsafe { &*core::ptr::addr_of!(QUERY) };
+    let mut cx = MARGEN_X + prefijo.len() * PASO;
+    for k in 0..q_len {
+        if cx + PASO > ANCHO - 80 {
+            break;
+        }
+        pintar_glifo(lienzo, q[k], cx, Y_BARRA, TINTA);
+        cx += PASO;
+    }
+    // Caret blinkless al final del query.
+    if cx + 2 <= ANCHO {
+        pintar_caret(lienzo, cx, Y_BARRA);
+    }
+    // Conteo de matches en el extremo derecho.
+    let n = unsafe { MATCH_LEN };
+    let texto = formatear_conteo(n);
+    let largo = texto.iter().take_while(|&&c| c != 0).count();
+    let x = ANCHO.saturating_sub(largo * PASO + 4);
+    pintar_texto(lienzo, &texto[..largo], x, Y_BARRA, ETIQUETA);
+}
+
+/// Formatea el conteo `N matches` en un buffer fijo (sin alloc). Devuelve los
+/// bytes utilizables; el resto es `0` (centinela).
+fn formatear_conteo(n: usize) -> [u8; 16] {
+    let mut out = [0u8; 16];
+    if n == 0 {
+        let s = b"sin matches";
+        out[..s.len()].copy_from_slice(s);
+        return out;
+    }
+    let mut digitos = [0u8; 6];
+    let mut nd = 0usize;
+    let mut x = n;
+    while x > 0 && nd < digitos.len() {
+        digitos[nd] = b'0' + (x % 10) as u8;
+        x /= 10;
+        nd += 1;
+    }
+    let mut pos = 0usize;
+    let mut k = nd;
+    while k > 0 {
+        k -= 1;
+        if pos < out.len() {
+            out[pos] = digitos[k];
+            pos += 1;
+        }
+    }
+    for &b in b" matches".iter() {
+        if pos < out.len() {
+            out[pos] = b;
+            pos += 1;
+        }
+    }
+    out
+}
+
+fn pintar_indice(lienzo: &mut [u32]) {
+    // Header — corto para caber holgado en 480 px.
+    pintar_texto(lienzo, b"bitacora :: indice", MARGEN_X, Y_LABEL, ETIQUETA);
+    let y_linea = Y_LABEL + PASO + 4;
+    for x in MARGEN_X..(ANCHO - MARGEN_X) {
+        lienzo[y_linea * ANCHO + x] = ETIQUETA;
+        lienzo[(y_linea + 1) * ANCHO + x] = ETIQUETA;
+    }
+
+    let foco = unsafe { INDICE_FOCO }.min(NUM_NOTAS - 1);
+    let activa = unsafe { ACTIVA };
+    let notas = unsafe { &*core::ptr::addr_of!(NOTAS) };
+    let alto_tile = 26usize;
+    let y0 = Y_TEXTO;
+    for i in 0..NUM_NOTAS {
+        let y = y0 + i * alto_tile;
+        if i == foco {
+            rellenar(lienzo, 4, y - 2, ANCHO - 8, alto_tile, FOCO_BG);
+        }
+        // Numero.
+        let mut etiqueta = [b'F', b'0', b' ', b' '];
+        etiqueta[1] = b'1' + i as u8;
+        // Marcador de activa: `*` en lugar del segundo espacio.
+        if i == activa {
+            etiqueta[3] = b'*';
+        }
+        let color = if i == foco { TINTA } else { ETIQUETA };
+        pintar_texto(lienzo, &etiqueta, MARGEN_X, y, color);
+        // Titulo (primera linea, hasta `\n` o 28 chars).
+        let nota = &notas[i];
+        let nlen = (nota.len as usize).min(CAP_NOTA);
+        let mut tlen = 0usize;
+        while tlen < nlen && tlen < 28 && nota.cuerpo[tlen] != b'\n' {
+            tlen += 1;
+        }
+        let cx = MARGEN_X + etiqueta.len() * PASO + 8;
+        if tlen == 0 {
+            pintar_texto(lienzo, b"(vacia)", cx, y, INACTIVO);
+        } else {
+            pintar_texto(lienzo, &nota.cuerpo[..tlen], cx, y, TINTA);
+        }
+        // Bytes en el extremo derecho.
+        let buf = formatear_bytes(nlen);
+        let largo = buf.iter().take_while(|&&c| c != 0).count();
+        let x_d = ANCHO.saturating_sub(largo * PASO + 8);
+        pintar_texto(lienzo, &buf[..largo], x_d, y, INACTIVO);
+    }
+    // Pie con ayuda corta — cabe en 480 px (29 chars * 16 = 464).
+    let y_pie = Y_TEXTO + NUM_NOTAS * 26;
+    if y_pie + PASO <= ALTO {
+        pintar_texto(lienzo, b"Enter elegir   Esc volver", MARGEN_X, y_pie, INACTIVO);
     }
 }
 
-/// Caret: barra vertical de 2 px de ancho por PASO de alto en color CARET.
+fn formatear_bytes(n: usize) -> [u8; 12] {
+    let mut out = [0u8; 12];
+    let mut digitos = [0u8; 6];
+    let mut nd = 0usize;
+    let mut x = n;
+    if x == 0 {
+        digitos[0] = b'0';
+        nd = 1;
+    } else {
+        while x > 0 && nd < digitos.len() {
+            digitos[nd] = b'0' + (x % 10) as u8;
+            x /= 10;
+            nd += 1;
+        }
+    }
+    let mut pos = 0usize;
+    let mut k = nd;
+    while k > 0 {
+        k -= 1;
+        if pos < out.len() {
+            out[pos] = digitos[k];
+            pos += 1;
+        }
+    }
+    let resto = b" B";
+    for &b in resto.iter() {
+        if pos < out.len() {
+            out[pos] = b;
+            pos += 1;
+        }
+    }
+    out
+}
+
 fn pintar_caret(lienzo: &mut [u32], x: usize, y: usize) {
     let x_max = (x + 2).min(ANCHO);
     let y_max = (y + PASO).min(ALTO);
@@ -904,7 +1363,6 @@ fn pintar_caret(lienzo: &mut [u32], x: usize, y: usize) {
     }
 }
 
-/// Rellena un rectangulo recortado a los limites del lienzo.
 fn rellenar(lienzo: &mut [u32], x: usize, y: usize, ancho: usize, alto: usize, color: u32) {
     let x1 = (x + ancho).min(ANCHO);
     let y1 = (y + alto).min(ALTO);
@@ -920,7 +1378,6 @@ fn rellenar(lienzo: &mut [u32], x: usize, y: usize, ancho: usize, alto: usize, c
     }
 }
 
-/// Pinta una cadena ASCII en (x, y_base).
 fn pintar_texto(lienzo: &mut [u32], texto: &[u8], x: usize, y: usize, color: u32) {
     let mut cx = x;
     for &c in texto {
@@ -932,7 +1389,6 @@ fn pintar_texto(lienzo: &mut [u32], texto: &[u8], x: usize, y: usize, color: u32
     }
 }
 
-/// Pinta un solo glifo 8x8 escalado a 16x16. No ASCII se renderiza como `?`.
 fn pintar_glifo(lienzo: &mut [u32], c: u8, x: usize, y: usize, color: u32) {
     let glifo = if (c as usize) < 128 {
         BASIC_LEGACY[c as usize]
@@ -958,8 +1414,6 @@ fn pintar_glifo(lienzo: &mut [u32], c: u8, x: usize, y: usize, color: u32) {
 
 // --- Teclado: scancode -> caracter --------------------------------------------
 
-/// Traduce un MAKE-code del set 1 (US layout) a su caracter ASCII, respetando
-/// Shift. Devuelve 0 para los scancodes que no producen texto.
 fn scancode_a_caracter(sc: u8, shift: bool) -> u8 {
     if shift {
         match sc {
