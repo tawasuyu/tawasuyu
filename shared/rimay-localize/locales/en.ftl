@@ -95,6 +95,7 @@ cosmos-overlay-uranian = uranian
 cosmos-overlay-lots = lots
 cosmos-overlay-fixed-stars = fixed stars
 cosmos-overlay-midpoints = midpoints
+cosmos-harmonic-label = harmonic
 
 # === wawa-explorer (Wawa image browser) ===
 wawa-marker-via-aoe =   ·  via AoE

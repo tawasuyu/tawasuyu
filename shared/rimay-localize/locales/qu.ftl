@@ -101,6 +101,7 @@ cosmos-overlay-uranian = uraniano
 cosmos-overlay-lots = lote
 cosmos-overlay-fixed-stars = qulluy
 cosmos-overlay-midpoints = chawpi
+cosmos-harmonic-label = armónico
 
 # === wawa-explorer (Wawa imagen qhawana) ===
 wawa-marker-via-aoe =   ·  AoE-pi

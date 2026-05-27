@@ -30,7 +30,10 @@ const WHEEL_SIZE: f32 = 720.0;
 enum Msg {
     WawaConfigChanged(Box<wawa_config::WawaConfig>),
     ToggleOverlay(OverlayKind),
+    SetHarmonic(u32),
 }
+
+const HARMONICS: &[u32] = &[1, 4, 5, 7, 9];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum OverlayKind {
@@ -88,6 +91,7 @@ impl OverlayKind {
 struct Model {
     chart: Chart,
     overlays: Vec<OverlayKind>,
+    harmonic: u32,
     render: RenderModel,
     theme: Theme,
     error: Option<String>,
@@ -121,10 +125,12 @@ impl App for Cosmos {
 
         let chart = sample_chart();
         let overlays: Vec<OverlayKind> = Vec::new();
-        let (render, error) = compute(&chart, &overlays);
+        let harmonic = 1;
+        let (render, error) = compute(&chart, &overlays, harmonic);
         Model {
             chart,
             overlays,
+            harmonic,
             render,
             theme,
             error,
@@ -147,9 +153,17 @@ impl App for Cosmos {
                 } else {
                     m.overlays.push(kind);
                 }
-                let (render, error) = compute(&m.chart, &m.overlays);
+                let (render, error) = compute(&m.chart, &m.overlays, m.harmonic);
                 m.render = render;
                 m.error = error;
+            }
+            Msg::SetHarmonic(n) => {
+                if m.harmonic != n {
+                    m.harmonic = n;
+                    let (render, error) = compute(&m.chart, &m.overlays, m.harmonic);
+                    m.render = render;
+                    m.error = error;
+                }
             }
         }
         m
@@ -174,6 +188,7 @@ impl App for Cosmos {
 
         let header = header_bar(&model.render, &theme);
         let toolbar = overlay_toolbar(model, &theme);
+        let harmonic_bar = harmonic_toolbar(model, &theme);
         let status = status_bar(model, &theme);
 
         View::new(Style {
@@ -185,7 +200,7 @@ impl App for Cosmos {
             ..Default::default()
         })
         .fill(theme.bg_app)
-        .children(vec![header, toolbar, canvas, status])
+        .children(vec![header, toolbar, harmonic_bar, canvas, status])
     }
 }
 
@@ -283,6 +298,83 @@ fn overlay_toolbar(model: &Model, theme: &Theme) -> View<Msg> {
     .children(btns)
 }
 
+fn harmonic_toolbar(model: &Model, theme: &Theme) -> View<Msg> {
+    let pal_off = ButtonPalette::from_theme(theme);
+    let pal_on = ButtonPalette {
+        bg: theme.accent,
+        bg_hover: theme.accent,
+        fg: theme.bg_panel,
+        radius: pal_off.radius,
+    };
+
+    let mut row: Vec<View<Msg>> = Vec::with_capacity(HARMONICS.len() + 1);
+    row.push(
+        View::new(Style {
+            size: Size {
+                width: length(72.0_f32),
+                height: length(22.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text_aligned(
+            rimay_localize::t("cosmos-harmonic-label"),
+            12.0,
+            theme.fg_muted,
+            Alignment::Start,
+        ),
+    );
+    for h in HARMONICS {
+        let active = model.harmonic == *h;
+        let palette = if active { &pal_on } else { &pal_off };
+        row.push(button_styled(
+            format!("H{h}"),
+            Style {
+                size: Size {
+                    width: length(48.0_f32),
+                    height: length(22.0_f32),
+                },
+                margin: Rect {
+                    left: length(0.0_f32),
+                    right: length(6.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                padding: Rect {
+                    left: length(6.0_f32),
+                    right: length(6.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                ..Default::default()
+            },
+            Alignment::Center,
+            palette,
+            Msg::SetHarmonic(*h),
+        ));
+    }
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(32.0_f32),
+        },
+        padding: Rect {
+            left: length(10.0_f32),
+            right: length(10.0_f32),
+            top: length(4.0_f32),
+            bottom: length(4.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .children(row)
+}
+
 fn status_bar(model: &Model, theme: &Theme) -> View<Msg> {
     let txt = if let Some(err) = &model.error {
         rimay_localize::t_args("cosmos-status-error", &[("err", err.as_str().into())])
@@ -353,7 +445,11 @@ fn sample_chart() -> Chart {
 /// Llama al engine con los overlays activos. En error, vuelve a un
 /// `compute_mock` para que la UI nunca quede en blanco; el mensaje se
 /// surface vía status bar.
-fn compute(chart: &Chart, overlays: &[OverlayKind]) -> (RenderModel, Option<String>) {
+fn compute(
+    chart: &Chart,
+    overlays: &[OverlayKind],
+    harmonic: u32,
+) -> (RenderModel, Option<String>) {
     let target_age = 35.0;
     let requests: Vec<PipelineRequest> =
         overlays.iter().map(|k| k.to_request(target_age)).collect();
@@ -362,7 +458,7 @@ fn compute(chart: &Chart, overlays: &[OverlayKind]) -> (RenderModel, Option<Stri
         show_minors: false,
         orb_multiplier: 1.0,
         show_dignities: true,
-        harmonic: 1,
+        harmonic,
     };
     match cosmos_engine::compose_with_options(chart, 0, &requests, &opts) {
         Ok(r) => (r, None),
