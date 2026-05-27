@@ -111,10 +111,17 @@ pub const SNIPPET_MAX_CHARS: usize = 160;
 pub const MIN_QUERY_LEN: usize = 2;
 
 const DIALOG_W: f32 = 560.0;
-const DIALOG_H: f32 = 78.0;
+const DIALOG_H: f32 = 116.0;
 const BAR_H: f32 = 220.0;
 const ROW_H: f32 = 20.0;
 const MAX_VISIBLE: usize = 9;
+
+/// Qué input tiene el foco dentro del dialog. `Tab` alterna.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FifFocus {
+    Search,
+    Replace,
+}
 
 /// Un match individual.
 #[derive(Debug, Clone)]
@@ -134,6 +141,9 @@ pub struct FifMatch {
 /// Estado interno del módulo.
 pub struct FifState {
     pub input: TextInputState,
+    /// Texto de reemplazo. Si vacío, `ReplaceAll` borra los matches.
+    pub replace: TextInputState,
+    pub focus: FifFocus,
     pub results: Vec<FifMatch>,
     pub selected: usize,
     /// Última query realmente ejecutada (puede diferir del input si el
@@ -154,6 +164,8 @@ impl FifState {
     pub fn new() -> Self {
         Self {
             input: TextInputState::new(),
+            replace: TextInputState::new(),
+            focus: FifFocus::Search,
             results: Vec::new(),
             selected: 0,
             last_query: String::new(),
@@ -182,6 +194,13 @@ pub enum FifMsg {
     Submit,
     /// Click en una fila de la barra inferior: selecciona y abre.
     ActivateAt(usize),
+    /// Alterna el foco entre los inputs search ↔ replace (Tab).
+    ToggleFocus,
+    /// Reemplaza el texto matcheado por `replace.text()` en todos los
+    /// matches actuales. Idempotente: re-leer el archivo, sustituir
+    /// case-insensitive por la query, escribir. Vacía `results` para
+    /// forzar nueva búsqueda si el user quiere ver el estado posterior.
+    ReplaceAll,
 }
 
 /// Efecto solicitado al host. El módulo nunca toca el FS ni el resto del
@@ -200,6 +219,16 @@ pub enum FifAction {
     /// El módulo NO se cierra automáticamente: el host decide si ocultar
     /// el dialog tras abrir el match.
     OpenAt { path: PathBuf, line: usize, col: usize },
+    /// Tras `ReplaceAll`: cuántos archivos tocados, cuántos matches
+    /// sustituidos, cuántos fallaron. El host debería refrescar buffers
+    /// abiertos (recargar de disco si no-dirty) y mostrar status.
+    Replaced {
+        files_changed: usize,
+        replacements: usize,
+        failures: usize,
+        query: String,
+        replacement: String,
+    },
 }
 
 /// Aplica un mensaje al estado y retorna el efecto que el host debe ejecutar.
@@ -216,8 +245,38 @@ pub fn apply(state: &mut FifState, msg: FifMsg, paths: &[PathBuf]) -> FifAction 
         FifMsg::CloseDialog => FifAction::CloseDialog,
         FifMsg::CloseAll => FifAction::CloseAll,
         FifMsg::KeyInput(ev) => {
-            state.input.apply_key(&ev);
+            let _ = match state.focus {
+                FifFocus::Search => state.input.apply_key(&ev),
+                FifFocus::Replace => state.replace.apply_key(&ev),
+            };
             FifAction::None
+        }
+        FifMsg::ToggleFocus => {
+            state.focus = match state.focus {
+                FifFocus::Search => FifFocus::Replace,
+                FifFocus::Replace => FifFocus::Search,
+            };
+            FifAction::None
+        }
+        FifMsg::ReplaceAll => {
+            let query = state.last_query.clone();
+            if query.is_empty() || state.results.is_empty() {
+                return FifAction::None;
+            }
+            let replacement = state.replace.text();
+            let (files_changed, replacements, failures) =
+                replace_all(paths, &state.results, &query, &replacement);
+            // Invalidamos resultados: las posiciones (line, col) ya no
+            // necesariamente apuntan al mismo texto. El user puede re-Enter.
+            state.results.clear();
+            state.selected = 0;
+            FifAction::Replaced {
+                files_changed,
+                replacements,
+                failures,
+                query,
+                replacement,
+            }
         }
         FifMsg::Nav(d) => {
             let n = state.results.len() as i32;
@@ -277,6 +336,7 @@ pub fn on_key(state: &FifState, event: &KeyEvent) -> Option<FifMsg> {
     Some(match &event.key {
         Key::Named(NamedKey::Escape) => FifMsg::CloseDialog,
         Key::Named(NamedKey::Enter) => FifMsg::Submit,
+        Key::Named(NamedKey::Tab) => FifMsg::ToggleFocus,
         Key::Named(NamedKey::ArrowDown) => FifMsg::Nav(1),
         Key::Named(NamedKey::ArrowUp) => FifMsg::Nav(-1),
         _ => FifMsg::KeyInput(event.clone()),
@@ -364,25 +424,77 @@ where
     .text_aligned(header, 10.0, palette.fg_muted, Alignment::Start);
 
     let tp = TextInputPalette::from_theme(&palette.theme);
-    let input_view = View::new(Style {
-        size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
+    let search_focus = state.focus == FifFocus::Search;
+    let search_view = labelled_input(
+        "buscar",
+        &state.input,
+        "buscar en archivos…",
+        search_focus,
+        palette,
+        &tp,
+        to_host(FifMsg::Open),
+    );
+    let replace_view = labelled_input(
+        "reemplazar",
+        &state.replace,
+        "(vacío para borrar)",
+        !search_focus,
+        palette,
+        &tp,
+        to_host(FifMsg::Open),
+    );
+
+    let replace_btn = View::new(Style {
+        size: Size { width: length(118.0_f32), height: length(20.0_f32) },
+        padding: Rect {
+            left: length(6.0_f32),
+            right: length(6.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(palette.bg_header)
+    .radius(3.0)
+    .text_aligned(
+        "reemplazar todo".to_string(),
+        10.0,
+        palette.fg_muted,
+        Alignment::Center,
+    )
+    .on_click(to_host(FifMsg::ReplaceAll));
+
+    let hint = View::new(Style {
+        flex_grow: 1.0,
+        size: Size { width: percent(0.0_f32), height: length(20.0_f32) },
         padding: Rect {
             left: length(8.0_f32),
             right: length(8.0_f32),
-            top: length(4.0_f32),
-            bottom: length(4.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
         },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned("Tab alterna campos".to_string(), 9.0, palette.fg_muted, Alignment::Start);
+
+    let actions = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(20.0_f32) },
+        padding: Rect {
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
         flex_shrink: 0.0,
         ..Default::default()
     })
     .fill(palette.bg_panel)
-    .children(vec![text_input_view(
-        &state.input,
-        "buscar en archivos…",
-        true,
-        &tp,
-        to_host(FifMsg::Open),
-    )]);
+    .children(vec![hint, replace_btn]);
 
     // Wrapper exterior: tamaño fijo del dialog + borde sutil.
     let dialog = View::new(Style {
@@ -393,7 +505,7 @@ where
     })
     .fill(palette.bg_panel)
     .radius(6.0)
-    .children(vec![header_view, input_view]);
+    .children(vec![header_view, search_view, replace_view, actions]);
 
     // Container que centra el dialog horizontalmente — el host pone esto
     // como overlay arriba del editor; un click en zona vacía no hace nada
@@ -568,9 +680,133 @@ pub fn search(paths: &[PathBuf], query: &str) -> Vec<FifMatch> {
     out
 }
 
+/// Reemplazo case-insensitive sobre los archivos involucrados en
+/// `results`. Devuelve `(files_changed, replacements, failures)`.
+/// Lee cada archivo una sola vez, sustituye todas las apariciones de
+/// `query` por `replacement` (case-insensitive, preservando el resto), y
+/// escribe sólo si hubo cambios. No toca buffers en memoria del host —
+/// el host es responsable de recargar tabs si quiere ver los cambios.
+pub fn replace_all(
+    paths: &[PathBuf],
+    results: &[FifMatch],
+    query: &str,
+    replacement: &str,
+) -> (usize, usize, usize) {
+    if query.is_empty() {
+        return (0, 0, 0);
+    }
+    let mut touched: std::collections::BTreeSet<usize> =
+        std::collections::BTreeSet::new();
+    for fm in results {
+        touched.insert(fm.file_idx);
+    }
+    let mut files_changed = 0usize;
+    let mut total_replacements = 0usize;
+    let mut failures = 0usize;
+    let q_lc = query.to_lowercase();
+    for idx in touched {
+        let Some(path) = paths.get(idx) else { continue };
+        let Ok(content) = std::fs::read_to_string(path) else {
+            failures += 1;
+            continue;
+        };
+        let (new_content, n) = ci_replace_all(&content, query, &q_lc, replacement);
+        if n == 0 {
+            continue;
+        }
+        if std::fs::write(path, new_content).is_err() {
+            failures += 1;
+            continue;
+        }
+        files_changed += 1;
+        total_replacements += n;
+    }
+    (files_changed, total_replacements, failures)
+}
+
+/// Reemplazo case-insensitive preservando los bytes no-matchados.
+fn ci_replace_all(haystack: &str, _needle: &str, needle_lc: &str, repl: &str) -> (String, usize) {
+    let hay_lc = haystack.to_lowercase();
+    let mut out = String::with_capacity(haystack.len());
+    let mut count = 0usize;
+    let mut i = 0usize;
+    while i <= hay_lc.len() {
+        if let Some(pos) = hay_lc[i..].find(needle_lc) {
+            let abs = i + pos;
+            out.push_str(&haystack[i..abs]);
+            out.push_str(repl);
+            i = abs + needle_lc.len();
+            count += 1;
+        } else {
+            out.push_str(&haystack[i..]);
+            break;
+        }
+    }
+    (out, count)
+}
+
 // ---------------------------------------------------------------------
 // Helpers internos
 // ---------------------------------------------------------------------
+
+/// Pinta un input con etiqueta a la izquierda; cuando `focus` es true,
+/// el fondo se realza para que el user vea dónde está tipeando.
+fn labelled_input<HostMsg>(
+    label: &str,
+    state: &TextInputState,
+    placeholder: &str,
+    focus: bool,
+    palette: &FifPalette,
+    tp: &TextInputPalette,
+    fallback_msg: HostMsg,
+) -> View<HostMsg>
+where
+    HostMsg: Clone + 'static,
+{
+    let bg = if focus { palette.bg_selected } else { palette.bg_panel };
+    let label_view = View::new(Style {
+        size: Size { width: length(82.0_f32), height: length(28.0_f32) },
+        padding: Rect {
+            left: length(10.0_f32),
+            right: length(4.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .text_aligned(label.to_string(), 10.0, palette.fg_muted, Alignment::Start);
+
+    let input_view = View::new(Style {
+        flex_grow: 1.0,
+        size: Size { width: percent(0.0_f32), height: length(28.0_f32) },
+        padding: Rect {
+            left: length(4.0_f32),
+            right: length(10.0_f32),
+            top: length(2.0_f32),
+            bottom: length(2.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![text_input_view(
+        state,
+        placeholder,
+        focus,
+        tp,
+        fallback_msg,
+    )]);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+        align_items: Some(AlignItems::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(bg)
+    .children(vec![label_view, input_view])
+}
 
 fn relative_to(root: &Path, path: &Path) -> String {
     path.strip_prefix(root)

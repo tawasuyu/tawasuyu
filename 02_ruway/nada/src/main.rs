@@ -196,6 +196,13 @@ struct Tab {
     path: PathBuf,
     editor: EditorState,
     dirty: bool,
+    /// mtime del archivo la última vez que lo leímos o escribimos. Si en
+    /// el siguiente `PollLsp` el mtime de disco difiere, alguien lo tocó
+    /// por fuera — el host avisa o recarga según `dirty`.
+    last_mtime: Option<std::time::SystemTime>,
+    /// `true` si ya advertimos al user del cambio externo desde el último
+    /// reload — para no spamear el status bar cada poll.
+    external_warned: bool,
 }
 
 struct Model {
@@ -629,6 +636,11 @@ impl App for EditorApp {
                         handle.dispatch(Msg::OutlineRefresh(items));
                     }
                 }
+                // Watcher liviano: comparamos mtimes en disco vs los que
+                // teníamos al abrir o al último save. Si difiere y el
+                // tab está limpio, recargamos; si está sucio, alertamos
+                // una sola vez para evitar spam.
+                detect_external_changes(&mut m);
                 m
             }
             Msg::CompletionsRequest => {
@@ -930,7 +942,14 @@ impl App for EditorApp {
                         editor.ensure_caret_visible(EDITOR_VISIBLE_LINES);
                         let ext = loc.path.extension().and_then(|s| s.to_str()).unwrap_or("");
                         m.lsp.did_open(&loc.path, ext, &content);
-                        m.tabs.push(Tab { path: loc.path.clone(), editor, dirty: false });
+                        let mtime = file_mtime(&loc.path);
+                        m.tabs.push(Tab {
+                            path: loc.path.clone(),
+                            editor,
+                            dirty: false,
+                            last_mtime: mtime,
+                            external_warned: false,
+                        });
                         m.active = Some(m.tabs.len() - 1);
                         m.status = rimay_localize::t_args(
                         "edit-status-goto-def-at",
@@ -962,6 +981,8 @@ impl App for EditorApp {
                             .unwrap_or_default();
                         if let Some(tab) = m.active_tab_mut() {
                             tab.dirty = false;
+                            tab.last_mtime = file_mtime(&tab.path);
+                            tab.external_warned = false;
                         }
                         rimay_localize::t_args(
                             "edit-status-saved",
@@ -2209,7 +2230,14 @@ fn open_path(mut model: Model, path: PathBuf) -> Model {
             }
             let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
             model.lsp.did_open(&path, ext, &content);
-            model.tabs.push(Tab { path: path.clone(), editor, dirty: false });
+            let mtime = file_mtime(&path);
+            model.tabs.push(Tab {
+                path: path.clone(),
+                editor,
+                dirty: false,
+                last_mtime: mtime,
+                external_warned: false,
+            });
             model.active = Some(model.tabs.len() - 1);
             model.status = format!("abierto · {} bytes", content.len());
         }
@@ -2280,6 +2308,36 @@ fn apply_fif(model: Model, fmsg: FifMsg) -> Model {
             m.status = format!(
                 "find-in-files · «{query}» · {matches} matches · {:.0} ms",
                 elapsed.as_secs_f64() * 1000.0,
+            );
+        }
+        FifAction::Replaced {
+            files_changed,
+            replacements,
+            failures,
+            query,
+            replacement,
+        } => {
+            // Recargar tabs limpios cuyo path haya cambiado en disco.
+            // Para tabs sucios el watcher externo se encarga del aviso.
+            let touched_paths: std::collections::BTreeSet<PathBuf> =
+                m.tabs.iter().map(|t| t.path.clone()).collect();
+            for path in touched_paths {
+                if let Some(idx) = m.tabs.iter().position(|t| t.path == path) {
+                    if !m.tabs[idx].dirty {
+                        if let Ok(content) = fs::read_to_string(&path) {
+                            m.tabs[idx].editor.set_text(&content);
+                            m.tabs[idx].last_mtime = file_mtime(&path);
+                        }
+                    }
+                }
+            }
+            let fail_note = if failures > 0 {
+                format!(" · {failures} archivos fallaron")
+            } else {
+                String::new()
+            };
+            m.status = format!(
+                "reemplazo · «{query}» → «{replacement}» · {replacements} matches en {files_changed} archivos{fail_note}",
             );
         }
         FifAction::OpenAt { path, line, col } => {
@@ -2854,6 +2912,54 @@ fn save_open_file(model: Model, handle: &Handle<Msg>) -> Model {
 // ---------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------
+
+/// mtime del archivo si se puede leer. `None` si no existe o falla
+/// metadata — el watcher trata ambos casos igual: ignora.
+fn file_mtime(path: &Path) -> Option<std::time::SystemTime> {
+    fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
+/// Compara mtimes en disco vs `Tab.last_mtime` para cada tab. Si difiere:
+/// - tab no-dirty → recarga buffer desde disco y actualiza el LSP.
+/// - tab dirty → status warn (una sola vez vía `external_warned`).
+fn detect_external_changes(m: &mut Model) {
+    let n = m.tabs.len();
+    for idx in 0..n {
+        let path = m.tabs[idx].path.clone();
+        let disk = file_mtime(&path);
+        let known = m.tabs[idx].last_mtime;
+        // Si nunca tuvimos mtime, lo seteamos y seguimos.
+        if known.is_none() {
+            m.tabs[idx].last_mtime = disk;
+            continue;
+        }
+        if disk == known {
+            // Sin cambios — limpiamos la alerta si el user salvó/aceptó
+            // afuera (el caso típico es que disk == known otra vez
+            // tras un save manual).
+            m.tabs[idx].external_warned = false;
+            continue;
+        }
+        if !m.tabs[idx].dirty {
+            if let Ok(content) = fs::read_to_string(&path) {
+                m.tabs[idx].editor.set_text(&content);
+                m.tabs[idx].last_mtime = disk;
+                m.tabs[idx].external_warned = false;
+                m.lsp.did_change(&path, &content);
+                m.status = format!(
+                    "recargado · {} cambió en disco",
+                    relative_to(&m.root, &path),
+                );
+            }
+        } else if !m.tabs[idx].external_warned {
+            m.tabs[idx].external_warned = true;
+            m.status = format!(
+                "⚠ {} cambió en disco — guardar sobreescribe; Ctrl+S forzaría",
+                relative_to(&m.root, &path),
+            );
+        }
+    }
+}
 
 fn row_label(n: &TreeNode) -> String {
     let name = n.path.file_name().and_then(|s| s.to_str()).unwrap_or("?");
