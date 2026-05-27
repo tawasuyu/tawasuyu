@@ -22,5 +22,11 @@ pub mod disco;
 pub mod pci;
 pub mod raton;
 pub mod red;
-// Fase 38 :: COM1 polling — canal del firmador externo (wawactl).
+// Fase 38 :: COM1 polling — canal LEGACY del firmador externo (wawactl).
+// La Fase 49 corono el HAL bajo virtio-console; este modulo persiste como
+// fallback para escenarios donde QEMU no expone un virtconsole.
 pub mod serial;
+// Fase 49 :: VirtIO Console — canal de alta velocidad sobre PCI moderno.
+// Espeja la API de `serial` pero enrutado por el mismo transporte que
+// gobierna virtio-blk y virtio-net.
+pub mod consola_virtio;

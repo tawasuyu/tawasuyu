@@ -153,9 +153,21 @@ enum Cmd {
         op: ClavesCmd,
     },
     DaemonFirma {
-        /// Path al PTY/dispositivo serial que QEMU expone como COM1.
-        #[arg(long)]
-        pty: String,
+        /// LEGACY (Fase 38/39) :: path al PTY/dispositivo serial que QEMU
+        /// expone como COM1. Activa el parser ASCII
+        /// `wawa::sign_request::<HEX>\n`. Mutuamente excluyente con
+        /// `--char-device` / `--virtio-port`.
+        #[arg(long, conflicts_with_all = ["char_device", "virtio_port"])]
+        pty: Option<String>,
+        /// FASE 49 :: path al char device / socket que QEMU expone como
+        /// backend del virtio-console (`-chardev socket,path=... ; -device
+        /// virtconsole,chardev=...`). Activa el parser BINARIO
+        /// `wawactl::sign_pci::<32 raw bytes>`. Alias: `--virtio-port`.
+        #[arg(long = "char-device", conflicts_with = "pty")]
+        char_device: Option<String>,
+        /// Alias de `--char-device` (mas conciso en docs/qemu invocations).
+        #[arg(long = "virtio-port", conflicts_with = "pty")]
+        virtio_port: Option<String>,
         /// Path al archivo con la clave privada Ed25519 (32 B seed o 64 B SK).
         #[arg(long = "clave-privada")]
         clave_privada: String,
@@ -251,17 +263,40 @@ fn run(cmd: Cmd) -> Result<(), String> {
         },
         Cmd::DaemonFirma {
             pty,
+            char_device,
+            virtio_port,
             clave_privada,
             log,
             auto_firmar_durante,
             slot,
-        } => cmd_daemon_firma(
-            &pty,
-            &clave_privada,
-            &log,
-            auto_firmar_durante.as_deref(),
-            slot,
-        ),
+        } => {
+            // FASE 49 :: el transporte se infiere del flag. `--char-device`
+            // y `--virtio-port` son alias del bus virtio; `--pty` es el
+            // legacy UART. Exactamente UNO debe estar presente — clap ya
+            // hace cumplir conflicts; aqui completamos con la regla "al
+            // menos uno". Sin flag, abortamos con ayuda explicita.
+            let virtio = char_device.or(virtio_port);
+            let (transporte_path, modo) = match (pty, virtio) {
+                (Some(p), None) => (p, ModoTransporte::PtyAscii),
+                (None, Some(p)) => (p, ModoTransporte::VirtioBinario),
+                (None, None) => {
+                    return Err(
+                        "daemon-firma requiere --pty <PATH> (legacy) o --char-device <PATH> \
+                         (virtio-console, Fase 49)"
+                            .to_string(),
+                    );
+                }
+                (Some(_), Some(_)) => unreachable!("clap rechaza el conflicto antes"),
+            };
+            cmd_daemon_firma(
+                &transporte_path,
+                modo,
+                &clave_privada,
+                &log,
+                auto_firmar_durante.as_deref(),
+                slot,
+            )
+        }
     }
 }
 
@@ -657,11 +692,28 @@ fn parse_bool_or_clock(v: &str) -> Result<bool, String> {
 //  auditoria en `wawactl_audit.log`.
 // =============================================================================
 
-/// Prefijo de control que el kernel de Wawa emite antes del hash. El parser
-/// es estricto: solo lineas que arrancan EXACTAMENTE asi son candidatas.
-const PREFIJO_SOLICITUD: &str = "wawa::sign_request::";
+/// LEGACY (Fase 38/39) :: prefijo ASCII emitido por el kernel a traves
+/// del UART de COM1 antes del hash en hexadecimal + newline.
+const PREFIJO_SOLICITUD_ASCII: &str = "wawa::sign_request::";
+/// FASE 49 :: prefijo BINARIO emitido por el kernel a traves del bus
+/// virtio-console antes de los 32 bytes RAW del hash. Sin newline; el
+/// parser mide por longitud fija (19 prefijo + 32 hash = 51 bytes).
+const PREFIJO_SOLICITUD_VIRTIO: &[u8] = b"wawactl::sign_pci::";
 /// Longitud del hash en caracteres hexadecimales (32 bytes -> 64 chars).
 const HASH_HEX_LEN: usize = 64;
+
+/// FASE 49 :: transporte fisico del demonio. Selecciona prefijo, parser
+/// y forma de lectura (lineas ASCII vs ventana binaria).
+#[derive(Clone, Copy)]
+enum ModoTransporte {
+    /// UART legacy via PTY (Fase 38/39). Parser ASCII; lectura por
+    /// lineas terminadas en `\n`. Bandera CLI: `--pty`.
+    PtyAscii,
+    /// VirtIO Console via char device (Fase 49). Parser binario;
+    /// lectura por ventana deslizante. Bandera CLI: `--char-device`
+    /// o `--virtio-port`.
+    VirtioBinario,
+}
 /// Tiempo maximo que el demonio espera la confirmacion del operador.
 /// 30 s alinea con la cadencia humana sin congelar el kernel — si no
 /// hay decision, la syscall en Wawa expira con `Saturado` y la app
@@ -681,11 +733,12 @@ enum DecisionOperador {
     Rechazada,
 }
 
-/// FASE 39/41 :: subcomando `daemon-firma`. Crea un runtime tokio y delega
-/// en `ejecutar_daemon`. Devolver `Err` aqui imprime al stderr de wawactl
-/// y sale con codigo no-cero.
+/// FASE 39/41/49 :: subcomando `daemon-firma`. Crea un runtime tokio y
+/// delega en el ejecutor que case con el `ModoTransporte`. Devolver
+/// `Err` aqui imprime al stderr de wawactl y sale con codigo no-cero.
 fn cmd_daemon_firma(
-    pty: &str,
+    transporte: &str,
+    modo: ModoTransporte,
     clave_path: &str,
     log_path: &str,
     auto_firmar_durante: Option<&str>,
@@ -720,13 +773,22 @@ fn cmd_daemon_firma(
         .enable_all()
         .build()
         .map_err(|e| format!("no pude construir el runtime tokio: {e}"))?;
-    rt.block_on(ejecutar_daemon(
-        pty.to_string(),
-        sk,
-        log_path.to_string(),
-        ventana_hasta,
-        slot,
-    ))
+    match modo {
+        ModoTransporte::PtyAscii => rt.block_on(ejecutar_daemon(
+            transporte.to_string(),
+            sk,
+            log_path.to_string(),
+            ventana_hasta,
+            slot,
+        )),
+        ModoTransporte::VirtioBinario => rt.block_on(ejecutar_daemon_virtio(
+            transporte.to_string(),
+            sk,
+            log_path.to_string(),
+            ventana_hasta,
+            slot,
+        )),
+    }
 }
 
 /// FASE 41 :: parser de duraciones humanas (`30s`, `15m`, `1h`). Sin alocacion,
@@ -825,7 +887,7 @@ async fn ejecutar_daemon(
         // basura (logs del kernel, trazas de boot) cae al sumidero
         // silencioso — el operador la ve en su terminal de QEMU igual.
         let trim = linea.trim_end_matches(|c| c == '\n' || c == '\r');
-        let Some(hash_hex) = trim.strip_prefix(PREFIJO_SOLICITUD) else {
+        let Some(hash_hex) = trim.strip_prefix(PREFIJO_SOLICITUD_ASCII) else {
             continue;
         };
         if hash_hex.len() != HASH_HEX_LEN || !hash_hex.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -886,6 +948,138 @@ async fn ejecutar_daemon(
             }
         }
     }
+}
+
+/// FASE 49 :: lazo asincrono del demonio sobre el bus virtio-console.
+/// El parser ya no es por lineas: el kernel emite 19 B de prefijo +
+/// 32 B raw de hash, sin separador. Usamos una ventana deslizante de
+/// bytes que detecta el prefijo y luego absorbe los 32 bytes
+/// siguientes como hash crudo. La respuesta sigue siendo los 65 B de
+/// `[slot | firma]` —contrato del Userspace inalterado.
+async fn ejecutar_daemon_virtio(
+    transporte_path: String,
+    sk: ed25519_compact::SecretKey,
+    log_path: String,
+    ventana_hasta: Option<std::time::Instant>,
+    slot: u8,
+) -> Result<(), String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    eprintln!("wawactl: daemon-firma escuchando en {transporte_path} (virtio-console)");
+    eprintln!("wawactl: auditoria a {log_path}");
+    eprintln!("wawactl: firmando con slot {slot} del anillo AGORA_AUTH_RING");
+    if let Some(t) = ventana_hasta {
+        let restante = t.saturating_duration_since(std::time::Instant::now());
+        eprintln!(
+            "wawactl: ventana de auto-firma activa durante {} s",
+            restante.as_secs()
+        );
+    }
+    eprintln!("wawactl: Ctrl-C para terminar");
+
+    let file = tokio::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&transporte_path)
+        .await
+        .map_err(|e| format!("no pude abrir {transporte_path}: {e}"))?;
+    let (mut reader, mut writer) = tokio::io::split(file);
+
+    // Ventana deslizante. Mantiene como mucho los ultimos `pref + 32`
+    // bytes; cuando el prefijo aparece pegado al final, los 32
+    // siguientes forman el hash. Sin alocacion dinamica — un array
+    // estatico de `MAX_PENDIENTE` bytes con cursor manual basta.
+    const PREF_LEN: usize = PREFIJO_SOLICITUD_VIRTIO.len();
+    const FRAME_LEN: usize = PREF_LEN + 32;
+    let mut ventana = [0u8; FRAME_LEN];
+    let mut llenos: usize = 0;
+    let mut chunk = [0u8; 256];
+
+    loop {
+        let n = reader
+            .read(&mut chunk)
+            .await
+            .map_err(|e| format!("error leyendo del transporte virtio: {e}"))?;
+        if n == 0 {
+            eprintln!("wawactl: transporte cerrado — saliendo");
+            return Ok(());
+        }
+        for &b in &chunk[..n] {
+            // Avanzar el cursor; si la ventana se llena sin haber
+            // matcheado el prefijo, desplazamos un byte a la izquierda
+            // — el parser tolera basura intercalada (bytes de boot,
+            // trazas) sin perder un prefijo legitimo.
+            if llenos < FRAME_LEN {
+                ventana[llenos] = b;
+                llenos += 1;
+            } else {
+                ventana.copy_within(1..FRAME_LEN, 0);
+                ventana[FRAME_LEN - 1] = b;
+            }
+            // Buscar el prefijo en cualquier posicion del slice activo.
+            // Solo nos interesa el match que deje 32 bytes utiles a su
+            // derecha — es decir, el prefijo arrancando en offset 0.
+            if llenos == FRAME_LEN && &ventana[..PREF_LEN] == PREFIJO_SOLICITUD_VIRTIO {
+                let mut hash = [0u8; 32];
+                hash.copy_from_slice(&ventana[PREF_LEN..]);
+                let hash_hex = hex_de_bytes(&hash);
+
+                let dentro_ventana = ventana_hasta
+                    .map(|t| std::time::Instant::now() < t)
+                    .unwrap_or(false);
+                let decision = if dentro_ventana {
+                    DecisionOperador::AutorizadaAutomatica
+                } else {
+                    confirmar_con_operador(&hash_hex).await
+                };
+
+                match decision {
+                    DecisionOperador::Autorizada | DecisionOperador::AutorizadaAutomatica => {
+                        let marcador = match decision {
+                            DecisionOperador::AutorizadaAutomatica => "FIRMA_AUTO_EMITIDA",
+                            _ => "FIRMA_EMITIDA",
+                        };
+                        let firma = sk.sign(hash, None);
+                        let mut frame = [0u8; 65];
+                        frame[0] = slot;
+                        frame[1..65].copy_from_slice(firma.as_ref());
+                        writer
+                            .write_all(&frame)
+                            .await
+                            .map_err(|e| format!("error escribiendo frame al transporte: {e}"))?;
+                        writer
+                            .flush()
+                            .await
+                            .map_err(|e| format!("error flush transporte: {e}"))?;
+                        escribir_auditoria(&log_path, marcador, slot, &hash_hex);
+                        eprintln!(
+                            "wawactl: {} slot={} (65 B sobre virtio-console)",
+                            marcador, slot
+                        );
+                    }
+                    DecisionOperador::Rechazada => {
+                        escribir_auditoria(&log_path, "FIRMA_RECHAZADA", slot, &hash_hex);
+                        eprintln!("wawactl: solicitud rechazada o timeout");
+                    }
+                }
+                // Reset de la ventana: un nuevo prefijo arrancara desde
+                // cero. Sin esto un mismo bloque podria gatillar dos
+                // veces si el contenido casa fortuitamente.
+                llenos = 0;
+            }
+        }
+    }
+}
+
+/// Hex-encode de un hash de 32 bytes a 64 chars ASCII. Util para el
+/// prompt interactivo y el log de auditoria — el operador lee hex,
+/// el bus mueve binario.
+fn hex_de_bytes(bytes: &[u8; 32]) -> String {
+    let mut s = String::with_capacity(64);
+    for b in bytes {
+        s.push_str(&format!("{:02x}", b));
+    }
+    s
 }
 
 /// Muestra el prompt al operador y lee `y`/`N` por stdin con timeout. La

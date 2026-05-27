@@ -611,6 +611,24 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     }
     traza("red :: listo");
 
+    // --- 6.8. FASE 49 :: montar virtio-console — el canal del firmador
+    //          externo de alta velocidad. Si el firmware no expone un
+    //          virtconsole, `montar` devuelve `Err` y la syscall de
+    //          firma cae al UART de la Fase 38: la boot story sigue
+    //          intacta. La virtio-console NO es critica.
+    match drivers::consola_virtio::montar() {
+        Ok(()) => {
+            let _ = writeln!(baliza::Serie, "consola :: virtio-console :: montado");
+        }
+        Err(motivo) => {
+            let _ = writeln!(
+                baliza::Serie,
+                "consola :: virtio-console :: {motivo} (fallback UART)"
+            );
+        }
+    }
+    traza("consola_virtio :: listo");
+
     // --- 7. FASE 7 :: levantar el reactor y poblar el userspace DESDE EL
     //        GRAFO. El kernel ya no empotra los modulos WASM: lee el
     //        Manifiesto de Genesis que `boot` sembro en la imagen de disco e

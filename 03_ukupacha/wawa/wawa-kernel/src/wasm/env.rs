@@ -197,14 +197,6 @@ fn leer_hash(m: &[u8], ptr: u32, fallo: &'static str) -> Result<Hash, Error> {
     Ok(hash)
 }
 
-/// Convierte un nibble (4 bits) a su caracter ASCII hex minuscula. Usado por
-/// la Fase 38 para emitir el hash del cuaderno por COM1 en un formato que
-/// `wawactl` (host) puede parsear con `from_str_radix(_, 16)` directo.
-#[inline]
-fn hex_nibble(n: u8) -> u8 {
-    if n < 10 { b'0' + n } else { b'a' + (n - 10) }
-}
-
 /// Inyecta en el enlazador la matriz de capacidades del modulo WASM. Todo lo
 /// que no se defina aqui le queda, al modulo, fisicamente fuera de alcance.
 ///
@@ -1324,22 +1316,26 @@ pub(crate) fn enlazar_capacidades(
     // --- CAPACIDAD 3h :: sys_cuaderno_solicitar_firma_host ------------------
     // sys_cuaderno_solicitar_firma_host(hash_ptr, salida_firma_ptr) -> i32
     //
-    // EL CANAL DEL FIRMADOR EXTERNO (Fase 38). El kernel preserva la ley
-    // inmutable de la Fase 25 —jamas firma desde Ring 0; solo verifica—
-    // y delega el sellado criptografico en el operador del host
-    // (`wawactl` o un HSM futuro). Esta syscall es el cordon umbilical
-    // limpio entre Wawa y el firmador:
+    // EL CANAL DEL FIRMADOR EXTERNO (Fase 38/49). El kernel preserva la
+    // ley inmutable de la Fase 25 —jamas firma desde Ring 0; solo
+    // verifica— y delega el sellado criptografico en el operador del
+    // host (`wawactl` o un HSM futuro). Esta syscall es el cordon
+    // umbilical limpio entre Wawa y el firmador:
     //
     //   1. La app entrega los 32 bytes del hash del cuaderno a firmar.
-    //   2. El kernel emite por COM1 (`0x3F8`) la cadena de control
-    //      `wawa::sign_request::<HEX>\n` — donde <HEX> son los 64
-    //      caracteres ASCII del hash en hexadecimal minuscula. Es la
-    //      UNICA informacion que sale del Ring 0; jamas viaja una clave.
-    //   3. El kernel intenta leer 64 bytes del ring RX (rellenado por
-    //      `wawactl` a traves del PTY/socket de QEMU mapeado a COM1).
-    //   4. Si los 64 bytes ya estan completos en el ring, los escribe en
-    //      `salida_firma_ptr` y devuelve `Ok(0)`. Si todavia no, devuelve
-    //      `Saturado (-6)` — la app re-llama en el proximo tick.
+    //   2. El kernel emite la baliza estructurada compacta de la
+    //      Fase 49: 17 bytes de prefijo `wawactl::sign_pci::` + 32
+    //      bytes RAW del hash = 49 bytes BINARIOS. El transporte es la
+    //      consola paravirtualizada de VirtIO sobre PCI (driver
+    //      `consola_virtio`); si el firmware no expuso un virtconsole,
+    //      el kernel cae al UART de COM1 (Fase 38) sin alterar el
+    //      contrato del Userspace.
+    //   3. El kernel intenta leer 65 bytes del ring RX (rellenado por
+    //      el demonio `wawactl daemon-firma` a traves de la consola
+    //      VirtIO o el PTY de COM1, segun el transporte vivo).
+    //   4. Si los 65 bytes ya estan completos en el ring, los escribe
+    //      en `salida_firma_ptr` y devuelve `Ok(0)`. Si todavia no,
+    //      devuelve `Saturado (-6)` — la app re-llama en el proximo tick.
     //
     // Para que el reintento no inunde el host con peticiones duplicadas,
     // el kernel recuerda el hash pendiente; mientras la app vuelva a
@@ -1347,13 +1343,15 @@ pub(crate) fn enlazar_capacidades(
     // distinto se considera "nueva solicitud" y vuelve a emitir.
     //
     // GATEADA por PERMISO_GRAFO_ESCRITURA + foco. Back-pressure DMA: la
-    // operacion no toca el bus virtio, pero contamos una pagina por
+    // operacion no toca el bus virtio-blk, pero contamos una pagina por
     // simetria con las otras syscalls de cuaderno — la cuota se reinicia
     // cada tic y el reintento no la satura.
     //
-    // ZERO-ALLOC: el formateo del prefijo + 64 chars hex vive en un
-    // buffer en pila de 90 B; el ring RX es un array global de 256 B.
-    // Ningun camino toca `linked_list_allocator`.
+    // ZERO-ALLOC EN EL CAMINO CALIENTE: la baliza de 49 B vive en un
+    // buffer en pila; el ring RX es un array global de 256 B en cada
+    // transporte. El cambio Fase 38 -> Fase 49 ahorra 36 B por solicitud
+    // (sin hex-encoding, sin newline) y multiplica la velocidad por
+    // ordenes de magnitud (115200 baud -> bus PCI nativo).
     if permisos & PERMISO_GRAFO_ESCRITURA != 0 {
     enlazador.func_wrap(
         "renaser",
@@ -1419,41 +1417,58 @@ pub(crate) fn enlazar_capacidades(
                 }
                 cambio
             };
+            // FASE 49 :: seleccion de transporte. Si el virtio-console
+            // se monto durante el boot, todo el dialogo (emision +
+            // drenado) viaja por PCI; si no, caemos al UART de COM1
+            // (Fase 38). La decision es por solicitud — un transporte
+            // que cambie en caliente seria un bug del firmware, no
+            // un caso que la app deba contemplar.
+            let usar_virtio = crate::drivers::consola_virtio::montada();
+
             if emitir {
                 // FASE 39 :: solicitud nueva. Limpiamos el ring de RX para
                 // descartar bytes huerfanos de una solicitud anterior
                 // abortada (el demonio rechazo, timeout, etc.) Y reseteamos
                 // el acumulador de 65 bytes — el siguiente byte que entre
                 // sera el byte 0 (slot id) de la nueva respuesta.
-                crate::drivers::serial::vaciar_input();
+                if usar_virtio {
+                    crate::drivers::consola_virtio::vaciar_input();
+                } else {
+                    crate::drivers::serial::vaciar_input();
+                }
                 let mut acc = ACUMULADOR.lock();
                 acc.0 = [0; 65];
                 acc.1 = 0;
                 drop(acc);
 
-                // Prefijo de control + hash en hexadecimal + newline.
-                // 20 (prefijo) + 64 (hex) + 1 (\n) = 85 bytes — cabe holgado
-                // en el buffer estatico de pila.
-                let mut linea = [0u8; 96];
-                let prefijo = b"wawa::sign_request::";
-                linea[..prefijo.len()].copy_from_slice(prefijo);
-                let mut n = prefijo.len();
-                for &b in &hash {
-                    linea[n] = hex_nibble(b >> 4);
-                    linea[n + 1] = hex_nibble(b & 0x0F);
-                    n += 2;
+                // FASE 49 :: baliza estructurada compacta. 17 bytes de
+                // prefijo + 32 bytes RAW del hash = 49 bytes BINARIOS.
+                // Sin hex-encoding, sin newline — el parser del demonio
+                // mide por longitud fija. Cabe holgado en pila.
+                let mut frame = [0u8; 64];
+                let prefijo = b"wawactl::sign_pci::";
+                frame[..prefijo.len()].copy_from_slice(prefijo);
+                let n = prefijo.len();
+                frame[n..n + 32].copy_from_slice(&hash);
+                let total = n + 32;
+                if usar_virtio {
+                    crate::drivers::consola_virtio::escribir(&frame[..total]);
+                } else {
+                    crate::drivers::serial::escribir(&frame[..total]);
                 }
-                linea[n] = b'\n';
-                n += 1;
-                crate::drivers::serial::escribir(&linea[..n]);
             }
 
             // Drenar lo que haya llegado del host al ring interno y luego
             // intentar leer 65 B (slot + firma). Si todavia faltan, la
             // app reintenta en el proximo tic.
-            crate::drivers::serial::drenar_input();
             let mut frame = [0u8; 65];
-            let leidos = crate::drivers::serial::leer_disponible(&mut frame);
+            let leidos = if usar_virtio {
+                crate::drivers::consola_virtio::drenar_input();
+                crate::drivers::consola_virtio::leer_disponible(&mut frame)
+            } else {
+                crate::drivers::serial::drenar_input();
+                crate::drivers::serial::leer_disponible(&mut frame)
+            };
 
             if leidos < 65 {
                 // Devolvemos los bytes parciales al acumulador estatico
