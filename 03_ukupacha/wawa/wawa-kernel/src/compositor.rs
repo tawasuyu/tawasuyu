@@ -1159,6 +1159,41 @@ pub fn atender_raton() {
         let x = evento.x as usize;
         let y = evento.y as usize;
         let izq_antes = escritorio.raton_izq;
+
+        // FASE 58 :: el launcher abierto SE QUEDA con el raton. Mientras lo
+        // este, ningun clic ni movimiento llega al userspace ni a la
+        // taskbar — el overlay es modal.
+        if escritorio.launcher_abierto {
+            let region = region_launcher(escritorio.ancho, escritorio.alto, escritorio.catalogo.len());
+            let fila = fila_launcher_en(region, x, y, escritorio.catalogo.len());
+            // Hover: la fila bajo el puntero se vuelve la seleccion vigente,
+            // de modo que Alt+Enter y el clic se mantengan coherentes.
+            if let Some(idx) = fila {
+                if escritorio.launcher_seleccion != idx {
+                    escritorio.launcher_seleccion = idx;
+                    cambio = true;
+                }
+            }
+            // Clic-bajada: si cae sobre una fila, lanzar esa app y cerrar;
+            // si cae fuera del overlay, cerrar sin lanzar (clic-para-cancelar).
+            // Un clic en el titulo o el padding del overlay no hace nada — el
+            // usuario aun puede mover la seleccion o salir.
+            if izq && !izq_antes {
+                if let Some(idx) = fila {
+                    if let Some(cola) = PARTOS_POR_INDICE.get() {
+                        cola.lock().push(idx);
+                    }
+                    escritorio.launcher_abierto = false;
+                    cambio = true;
+                } else if !contiene(region, x, y) {
+                    escritorio.launcher_abierto = false;
+                    cambio = true;
+                }
+            }
+            escritorio.raton_izq = izq;
+            continue;
+        }
+
         if izq && !izq_antes {
             // Boton bajó: un CLIC. Si cae en la barra de tareas, enfocar la
             // pestaña pulsada SIN iniciar arrastre. Si no, comportamiento
@@ -1338,30 +1373,57 @@ pub fn area_apps(ancho_pantalla: usize, alto_pantalla: usize) -> RegionPantalla 
     }
 }
 
+/// FASE 58 :: constantes del overlay del launcher (Alt+P). Prefijo `PICKER_`
+/// para no chocar con `LAUNCHER_*` que define al boton `+` de la taskbar —
+/// dos «launchers» distintos, uno es la palanca, otro es el picker modal.
+/// `consola::pintar_launcher` las re-importa para mantener la geometria en
+/// un solo sitio.
+pub(crate) const PICKER_ANCHO: usize = 480;
+pub(crate) const PICKER_ALTURA_TITULO: usize = 32;
+pub(crate) const PICKER_ALTURA_FILA: usize = 26;
+pub(crate) const PICKER_PADDING_INFERIOR: usize = 8;
+/// Maximo de filas visibles a la vez — un poco mas que el genesis (12).
+pub(crate) const PICKER_MAX_FILAS: usize = 16;
+
 /// FASE 58 :: la region del overlay del launcher, centrada en la pantalla.
 /// La caja escala con el numero de items hasta un techo razonable (cubre el
 /// genesis con holgura sin tapar el escritorio entero); si el catalogo crece
 /// mas alla del techo, las filas sobrantes se omiten en silencio —el launcher
 /// MVP no hace scroll—. La altura del titulo y la fila se mantienen alineadas
-/// con las constantes de `consola::pintar_launcher`.
+/// con las constantes de `consola::pintar_launcher` via `PICKER_*`.
 fn region_launcher(ancho_pantalla: usize, alto_pantalla: usize, items: usize) -> RegionPantalla {
-    const ANCHO: usize = 480;
-    const ALTURA_TITULO: usize = 32;
-    const ALTURA_FILA: usize = 26;
-    const PADDING_INFERIOR: usize = 8;
-    /// Maximo de filas visibles a la vez — un poco mas que el genesis (12).
-    const MAX_FILAS: usize = 16;
-
-    let filas_visibles = items.min(MAX_FILAS).max(1);
-    let alto = ALTURA_TITULO + filas_visibles * ALTURA_FILA + PADDING_INFERIOR;
+    let filas_visibles = items.min(PICKER_MAX_FILAS).max(1);
+    let alto = PICKER_ALTURA_TITULO + filas_visibles * PICKER_ALTURA_FILA + PICKER_PADDING_INFERIOR;
     let alto = alto.min(alto_pantalla);
-    let ancho = ANCHO.min(ancho_pantalla);
+    let ancho = PICKER_ANCHO.min(ancho_pantalla);
     RegionPantalla {
         x: (ancho_pantalla.saturating_sub(ancho)) / 2,
         y: (alto_pantalla.saturating_sub(alto)) / 2,
         ancho,
         alto,
     }
+}
+
+/// FASE 58 :: traduce un punto (x, y) en pantalla al indice de la fila del
+/// launcher bajo el. `None` si el punto cae fuera de `region`, en la barra
+/// de titulo, en el padding inferior, o sobre una fila que excede el numero
+/// real de items del catalogo. El llamante debe acotar el indice si lo usa
+/// para indexar — la funcion ya lo recorta a `items.min(MAX_FILAS)`.
+fn fila_launcher_en(region: RegionPantalla, x: usize, y: usize, items: usize) -> Option<usize> {
+    if !contiene(region, x, y) {
+        return None;
+    }
+    let filas_y0 = region.y + PICKER_ALTURA_TITULO;
+    let filas_y_max = region.y + region.alto.saturating_sub(PICKER_PADDING_INFERIOR);
+    if y < filas_y0 || y >= filas_y_max {
+        return None;
+    }
+    let idx = (y - filas_y0) / PICKER_ALTURA_FILA;
+    let max_idx = items.min(PICKER_MAX_FILAS);
+    if idx >= max_idx {
+        return None;
+    }
+    Some(idx)
 }
 
 /// El area de la barra de tareas: una franja al pie de la pantalla.

@@ -153,7 +153,7 @@ Hoy hay **dos rutas** al userspace:
 
 1. **GENESIS-only en boot**: las 12 apps nacen al inicializar el manifiesto.
 2. **Alt+N → rotación ciega**: instancia la siguiente plantilla de `PLANTILLAS` (mismo bytecode, índice de app nuevo, fotograma propio). El botón `+` de la taskbar dispara lo mismo. Útil para devs.
-3. **Alt+P → launcher gráfico (Fase 58)**: overlay modal centrado con la lista de apps del manifiesto. `Alt+J`/`Alt+K` mueven la selección (ciclando), `Alt+Enter` lanza la app resaltada y cierra, `Alt+Q` cierra sin lanzar. Mientras está abierto el launcher se queda con el foco del teclado (el resto de mandos se descarta) para que el escritorio no mute por debajo. Las altas dirigidas viajan por `PARTOS_POR_INDICE: Once<Mutex<Vec<usize>>>` y el orquestador (`main.rs::tarea_compositor`) las drena tras los partos por rotación. MVP feo: sin scroll (techo de 16 filas visibles), sin búsqueda por texto, sin clics dentro del overlay.
+3. **Alt+P → launcher gráfico (Fase 58)**: overlay modal centrado con la lista de apps del manifiesto. **Teclado**: `Alt+J`/`Alt+K` mueven la selección (ciclando), `Alt+Enter` lanza la app resaltada y cierra, `Alt+Q` cierra sin lanzar. **Ratón**: hover sobre una fila la convierte en la selección vigente, clic-izquierdo sobre una fila lanza esa app, clic-izquierdo fuera del overlay cierra sin lanzar. Mientras está abierto el launcher se queda con el foco del teclado Y del ratón (ningún mando ni evento llega a las ventanas) para que el escritorio no mute por debajo. Las altas dirigidas viajan por `PARTOS_POR_INDICE: Once<Mutex<Vec<usize>>>` y el orquestador (`main.rs::tarea_compositor`) las drena tras los partos por rotación. MVP feo: sin scroll (techo de 16 filas visibles) y sin búsqueda por texto.
 
 Acceso a apps fuera de GENESIS hoy requiere primero introducir su bytecode al grafo (vía Akasha o `cronista`-style) y añadir su `EntradaApp` al manifiesto vivo — no hay UI de instalación en kernel.
 
@@ -221,7 +221,7 @@ cargo +nightly run -p boot -Z bindeps      △ Boot al QEMU funciona; el audit r
 
 ### 4.3 Cierre del shell de wawa
 
-7. **Launcher gráfico en wawa** (Spotlight-like): primera vuelta MVP shipped en Fase 58 — overlay modal (`Alt+P`), navegación Alt+J/K, lanzamiento Alt+Enter por índice sobre `PLANTILLAS`. Falta: búsqueda por texto (widget de input en framebuffer + matcher fuzzy `no_std`), clic dentro del overlay para lanzar con el ratón, y scroll vertical si el catálogo crece más allá de las 16 filas visibles. Estimado pendiente: 1–2 sesiones.
+7. **Launcher gráfico en wawa** (Spotlight-like): primera + segunda vuelta MVP shipped en Fase 58 — overlay modal (`Alt+P`), navegación Alt+J/K, lanzamiento Alt+Enter por índice sobre `PLANTILLAS`, ratón completo (hover-resalta-fila, clic-lanza, clic-fuera-cancela) y modal verdadero (no enruta eventos a ventanas bajo el overlay). Falta: búsqueda por texto (widget de input en framebuffer + matcher fuzzy `no_std`) y scroll vertical si el catálogo crece más allá de las 16 filas visibles. Estimado pendiente: 1–2 sesiones.
 8. **Multi-monitor / resolución dinámica**: `bootloader_api::FrameBufferInfo` ya entrega geometría real; consola y compositor asumen framebuffer único. Capa `Pantalla` extendida. Estimado: 2 sesiones.
 9. **Zero-alloc del demuxer Akasha** (anillo pre-alocado de buffers MTU + free-list LIFO en `COLA_USUARIO`). Hoy `encolar_para_usuario` hace `frame.to_vec()` por cada frame RX. Estimado: 1 sesión.
 

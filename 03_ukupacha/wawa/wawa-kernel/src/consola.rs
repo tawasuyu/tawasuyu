@@ -373,12 +373,14 @@ impl Consola {
     /// con fondo `PANEL`, borde `FOCO`, una linea de titulo y un renglon por
     /// item. La fila seleccionada se pinta con fondo `FOCO`. La consola
     /// asume que `overlay.region` cabe dentro del lienzo —el llamante calcula
-    /// la geometria—.
+    /// la geometria—. Las constantes vienen del compositor para evitar drift
+    /// entre `region_launcher` y este pintado.
     fn pintar_launcher(&mut self, overlay: &LauncherOverlay) {
+        use crate::compositor::{PICKER_ALTURA_FILA, PICKER_ALTURA_TITULO};
         const GROSOR_BORDE: usize = 3;
-        const ALTURA_FILA: usize = 26;
-        const ALTURA_TITULO: usize = 32;
         const MARGEN_TEXTO: usize = 16;
+        let altura_fila = PICKER_ALTURA_FILA;
+        let altura_titulo = PICKER_ALTURA_TITULO;
 
         let r = overlay.region;
         // Fondo del panel.
@@ -405,7 +407,7 @@ impl Consola {
         );
 
         // Titulo en la barra superior — un renglon con el atajo recordatorio.
-        let titulo_base_y = r.y + ALTURA_TITULO - 8;
+        let titulo_base_y = r.y + altura_titulo - 8;
         self.pintar_etiqueta(
             r.x + MARGEN_TEXTO,
             titulo_base_y,
@@ -419,11 +421,11 @@ impl Consola {
         // del titulo y por encima del borde inferior. Si no cabe alguna, se
         // omite en silencio: el operador puede mover la seleccion con J/K
         // hasta una visible (MVP — el scrolling viene despues).
-        let filas_y0 = r.y + ALTURA_TITULO;
+        let filas_y0 = r.y + altura_titulo;
         let filas_y_max = r.y + r.alto.saturating_sub(GROSOR_BORDE + 4);
         for (i, item) in overlay.items.iter().enumerate() {
-            let fila_y = filas_y0 + i * ALTURA_FILA;
-            if fila_y + ALTURA_FILA > filas_y_max {
+            let fila_y = filas_y0 + i * altura_fila;
+            if fila_y + altura_fila > filas_y_max {
                 break;
             }
             let seleccionada = i == overlay.seleccion;
@@ -439,11 +441,11 @@ impl Consola {
                     r.x + GROSOR_BORDE,
                     fila_y,
                     r.ancho.saturating_sub(GROSOR_BORDE * 2),
-                    ALTURA_FILA,
+                    altura_fila,
                     Color::FOCO,
                 );
             }
-            let base_y = fila_y + (ALTURA_FILA + 14) / 2;
+            let base_y = fila_y + (altura_fila + 14) / 2;
             self.pintar_etiqueta(
                 r.x + MARGEN_TEXTO,
                 base_y,
