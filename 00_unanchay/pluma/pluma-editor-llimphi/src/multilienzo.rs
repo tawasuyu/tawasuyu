@@ -154,6 +154,68 @@ pub fn multilienzo_view_resaltado<Msg: Clone + 'static>(
     palette: &Palette,
     resaltar: &str,
 ) -> View<Msg> {
+    armar_multilienzo::<Msg>(
+        cuerpos,
+        atoms,
+        cartas,
+        cfg,
+        paleta_hebras,
+        palette,
+        resaltar,
+        &|_, _| None,
+    )
+}
+
+/// Variante interactiva: además del resaltado, recibe un callback que
+/// el runtime invoca al hacer click en cualquier bloque de átomo de
+/// cualquier columna. El callback recibe `(i_cuerpo, atom_id)` — el
+/// índice del cuerpo dentro del slice `cuerpos` (no su `branch_id`) y
+/// el `Uuid` del átomo cliqueado — y produce el `Msg` que el caller
+/// quiera disparar (típicamente: cambiar cuerpo activo + saltar caret
+/// del IDE a ese átomo).
+///
+/// La cabecera de la columna (rótulo) **no** es clickeable; solo los
+/// bloques de párrafo.
+pub fn multilienzo_view_interactivo<Msg, F>(
+    cuerpos: &[&Cuerpo],
+    atoms: &IndiceAtoms<'_>,
+    cartas: &[Option<&CartaHebras>],
+    cfg: &MultilienzoConfig,
+    paleta_hebras: &PaletaHebras,
+    palette: &Palette,
+    resaltar: &str,
+    on_atom_click: F,
+) -> View<Msg>
+where
+    Msg: Clone + 'static,
+    F: Fn(usize, Uuid) -> Msg,
+{
+    armar_multilienzo::<Msg>(
+        cuerpos,
+        atoms,
+        cartas,
+        cfg,
+        paleta_hebras,
+        palette,
+        resaltar,
+        &|i, id| Some(on_atom_click(i, id)),
+    )
+}
+
+/// Núcleo común: las variantes públicas se diferencian solo en si
+/// pasan o no un handler de click por átomo. El handler se modela como
+/// `&dyn Fn(usize, Uuid) -> Option<Msg>` — `None` significa "no
+/// cablear `on_click` en ese bloque" (caso no interactivo).
+fn armar_multilienzo<Msg: Clone + 'static>(
+    cuerpos: &[&Cuerpo],
+    atoms: &IndiceAtoms<'_>,
+    cartas: &[Option<&CartaHebras>],
+    cfg: &MultilienzoConfig,
+    paleta_hebras: &PaletaHebras,
+    palette: &Palette,
+    resaltar: &str,
+    on_atom_click: &dyn Fn(usize, Uuid) -> Option<Msg>,
+) -> View<Msg> {
     if cuerpos.is_empty() {
         return View::new(Style::default());
     }
@@ -171,11 +233,13 @@ pub fn multilienzo_view_resaltado<Msg: Clone + 'static>(
     for (i, c) in cuerpos.iter().enumerate() {
         hijos.push(columna_cuerpo::<Msg>(
             c,
+            i,
             atoms,
             cfg,
             palette,
             alto_contenido,
             resaltar,
+            on_atom_click,
         ));
         if i + 1 < cuerpos.len() {
             let carta = cartas.get(i).copied().flatten();
@@ -208,13 +272,19 @@ pub fn multilienzo_view_resaltado<Msg: Clone + 'static>(
 }
 
 /// Columna de un cuerpo: cabecera + lista vertical de bloques de párrafo.
+///
+/// `i_cuerpo` es el índice de esta columna dentro del slice del caller;
+/// se lo pasamos a `on_atom_click` para que el caller sepa **qué**
+/// cuerpo recibió el click sin tener que re-buscar por `branch_id`.
 fn columna_cuerpo<Msg: Clone + 'static>(
     cuerpo: &Cuerpo,
+    i_cuerpo: usize,
     atoms: &IndiceAtoms<'_>,
     cfg: &MultilienzoConfig,
     palette: &Palette,
     alto_total: f32,
     resaltar: &str,
+    on_atom_click: &dyn Fn(usize, Uuid) -> Option<Msg>,
 ) -> View<Msg> {
     let header_text = format!(
         "{} · {}",
@@ -255,7 +325,8 @@ fn columna_cuerpo<Msg: Clone + 'static>(
             })
             .unwrap_or_else(|| ("(átomo ausente)".to_string(), false));
         let y = cfg.padding_top + cfg.alto_header + i as f32 * (cfg.altura_atom + cfg.gap_atom);
-        bloques.push(bloque_atom::<Msg>(&preview, y, cfg, palette, hit));
+        let click_msg = on_atom_click(i_cuerpo, *atom_id);
+        bloques.push(bloque_atom::<Msg>(&preview, y, cfg, palette, hit, click_msg));
     }
 
     View::new(Style {
@@ -282,6 +353,7 @@ fn bloque_atom<Msg: Clone + 'static>(
     cfg: &MultilienzoConfig,
     palette: &Palette,
     hit_busqueda: bool,
+    click_msg: Option<Msg>,
 ) -> View<Msg> {
     // Fondo destacado cuando el átomo matchea la búsqueda transversal.
     // Mezcla 30% del color accent con el bg_panel base — visible sin
@@ -291,7 +363,7 @@ fn bloque_atom<Msg: Clone + 'static>(
     } else {
         palette.bg_panel
     };
-    View::new(Style {
+    let mut v = View::new(Style {
         position: Position::Absolute,
         inset: Rect {
             left: length(8.0_f32),
@@ -313,7 +385,11 @@ fn bloque_atom<Msg: Clone + 'static>(
     })
     .fill(fondo)
     .radius(4.0)
-    .text_aligned(preview.to_string(), 13.0, palette.fg_text, Alignment::Start)
+    .text_aligned(preview.to_string(), 13.0, palette.fg_text, Alignment::Start);
+    if let Some(msg) = click_msg {
+        v = v.on_click(msg);
+    }
+    v
 }
 
 /// Interpolación lineal de dos colores por componente RGBA. `t = 0`
@@ -584,6 +660,45 @@ mod pruebas {
         // El alpha debe ser ~0.4 del alpha base de paleta.embeddings.
         let a_base = paleta.embeddings.components[3];
         assert!((hebras[0].color.components[3] - a_base * 0.4).abs() < 1e-3);
+    }
+
+    #[test]
+    fn variante_interactiva_invoca_callback_por_cada_atomo() {
+        use std::cell::RefCell;
+        let (a, _atoms_a) = cuerpo_con_atomos("es", Intencion::Original, &["uno", "dos", "tres"]);
+        let (b, _atoms_b) = cuerpo_con_atomos("qu", Intencion::Traduccion, &["huk", "iskay"]);
+        let idx: IndiceAtoms = IndiceAtoms::new();
+        let cuerpos: Vec<&Cuerpo> = vec![&a, &b];
+        let cartas: Vec<Option<&CartaHebras>> = vec![None];
+        let cfg = MultilienzoConfig::default();
+        let paleta = PaletaHebras::default();
+        let palette = Palette::default();
+
+        let visitas: RefCell<Vec<(usize, Uuid)>> = RefCell::new(Vec::new());
+        let _v: View<()> = multilienzo_view_interactivo(
+            &cuerpos,
+            &idx,
+            &cartas,
+            &cfg,
+            &paleta,
+            &palette,
+            "",
+            |i, id| {
+                visitas.borrow_mut().push((i, id));
+            },
+        );
+
+        // Cada átomo de cada columna debe haber producido una visita —
+        // así sabemos que el cableado de `on_click` está pasando por la
+        // ruta del callback (3 átomos de `a` + 2 de `b` = 5).
+        let v = visitas.borrow();
+        assert_eq!(v.len(), 5);
+        let cuerpo_ids: Vec<usize> = v.iter().map(|(i, _)| *i).collect();
+        assert_eq!(cuerpo_ids, vec![0, 0, 0, 1, 1]);
+        // Los Uuid emitidos deben coincidir con el orden de los cuerpos.
+        assert_eq!(v[0].1, a.orden[0]);
+        assert_eq!(v[2].1, a.orden[2]);
+        assert_eq!(v[3].1, b.orden[0]);
     }
 
     #[test]

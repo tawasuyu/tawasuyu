@@ -18,7 +18,11 @@
 //! Dos cuerpos: `es` (original) + `qu` (derivado por
 //! `EjecutorTraducirTabla`). Una carta `es ↔ qu` los conecta.
 //!
-//! Atajos:
+//! Atajos y gestos:
+//!   - **Click sobre un bloque de átomo del multilienzo** → cambia el
+//!     cuerpo activo a esa columna y posiciona el caret del IDE en el
+//!     átomo cliqueado. Es la navegación primaria: usar la panorámica
+//!     como minimapa para saltar a cualquier párrafo de cualquier cuerpo.
 //!   - `Ctrl+1` / `Ctrl+2` → cambiar cuerpo activo (preserva buffer de
 //!     cada uno — cada cuerpo tiene su propio `CuerpoIde`).
 //!   - `Ctrl+S` → diff + persiste el cuerpo activo; si era la madre
@@ -47,7 +51,7 @@ use pluma_cuerpo::{Cuerpo, Intencion};
 use pluma_editor_cuerpo::CambioAtom;
 use pluma_editor_llimphi::cuerpo_ide::{cuerpo_ide_view, CuerpoIde};
 use pluma_editor_llimphi::multilienzo::{
-    multilienzo_view, IndiceAtoms, MultilienzoConfig, PaletaHebras,
+    multilienzo_view_interactivo, IndiceAtoms, MultilienzoConfig, PaletaHebras,
 };
 use pluma_editor_llimphi::Palette;
 use pluma_transform::{Ejecutor, TipoTransformacion, Transformacion};
@@ -69,6 +73,12 @@ enum Msg {
     Guardar,
     CambiarActivo(usize),
     SaltarAtomoSiguiente,
+    /// Disparado al cliquear un bloque de átomo en el multilienzo: salta
+    /// el caret a ese átomo, cambiando el cuerpo activo si hace falta.
+    SaltarAAtomo {
+        i_cuerpo: usize,
+        atom_id: Uuid,
+    },
 }
 
 struct Model {
@@ -230,6 +240,28 @@ impl App for Demo {
                 }
                 model
             }
+            Msg::SaltarAAtomo { i_cuerpo, atom_id } => {
+                let mut model = model;
+                if i_cuerpo >= model.cuerpos.len() {
+                    return model;
+                }
+                // Cambiar de cuerpo activo si hace falta.
+                if i_cuerpo != model.activo {
+                    model.activo = i_cuerpo;
+                    model.drag_accum = (0.0, 0.0);
+                }
+                // Saltar el caret al átomo cliqueado. Si la columna del
+                // multilienzo está pintando un átomo "ausente" (no está
+                // en el IDE del cuerpo), `posicion_de_atom` devuelve
+                // None y dejamos el caret donde estaba.
+                if let Some((line, col)) = model.ides[i_cuerpo].posicion_de_atom(atom_id) {
+                    model.ides[i_cuerpo].set_caret(line, col);
+                    model.ides[i_cuerpo]
+                        .state
+                        .ensure_caret_visible(VISIBLE_LINES);
+                }
+                model
+            }
         }
     }
 
@@ -264,7 +296,7 @@ impl App for Demo {
 
         let ide_activo = &model.ides[model.activo];
         let header_text = format!(
-            "activo: «{}»  ·  {} átomos  ·  {} párrafos  ·  {}  ·  Ctrl+1/2 cambiar  ·  Ctrl+S guardar  ·  Ctrl+] siguiente",
+            "activo: «{}»  ·  {} átomos  ·  {} párrafos  ·  {}  ·  click átomo en multilienzo = ir  ·  Ctrl+1/2 cambiar  ·  Ctrl+S guardar  ·  Ctrl+] siguiente",
             model.cuerpos[model.activo].metadatos.nombre_legible,
             model.cuerpos[model.activo].orden.len(),
             ide_activo.n_parrafos_buffer(),
@@ -276,17 +308,21 @@ impl App for Demo {
         );
         let header = chip(header_text, 28.0, 12.0, Color::from_rgba8(40, 44, 52, 255), fg_text);
 
-        // Multilienzo arriba — vista panorámica.
+        // Multilienzo arriba — vista panorámica clickeable: cada bloque
+        // de átomo emite `SaltarAAtomo`, que cambia el cuerpo activo y
+        // posiciona el caret en ese átomo.
         let idx: IndiceAtoms = model.atoms.iter().map(|(k, v)| (*k, v)).collect();
         let cuerpos_ref: Vec<&Cuerpo> = model.cuerpos.iter().collect();
         let cartas_ref: Vec<Option<&CartaHebras>> = model.cartas.iter().map(Some).collect();
-        let lienzo = multilienzo_view::<Msg>(
+        let lienzo = multilienzo_view_interactivo::<Msg, _>(
             &cuerpos_ref,
             &idx,
             &cartas_ref,
             &cfg,
             &paleta_hebras,
             &palette_lienzo,
+            "",
+            |i_cuerpo, atom_id| Msg::SaltarAAtomo { i_cuerpo, atom_id },
         );
         let banda_lienzo = View::new(Style {
             size: Size {
