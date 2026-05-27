@@ -1,0 +1,47 @@
+[
+  {
+    "id": "01HV4N7XHE3JKWQM4Z5P5F6Z7Q",
+    "priority": 5,
+    "when": { "type": "Single", "kind": "EnteDied" },
+    "then": [
+      {
+        "kind": "Log",
+        "level": "warn",
+        "message": "Ente del fractal terminó — el supervisor decidirá si reincarna"
+      }
+    ],
+    "scope": {}
+  },
+
+  {
+    "id": "01HV4N7XHE3JKWQM4Z5P5F6Z7R",
+    "priority": 5,
+    "when": { "type": "Single", "kind": "DeviceAdded" },
+    "then": [
+      {
+        "kind": "Log",
+        "level": "info",
+        "message": "Dispositivo nuevo en el fractal — udev levantó algo"
+      }
+    ],
+    "scope": {}
+  },
+
+  {
+    "id": "01HV4N7XHE3JKWQM4Z5P5F6Z7S",
+    "priority": 8,
+    "when": {
+      "type": "Sequence",
+      "kinds": ["EnteDied", "EnteDied", "EnteDied"],
+      "within_ms": 10000
+    },
+    "then": [
+      {
+        "kind": "Log",
+        "level": "error",
+        "message": "Tormenta de crashes — tres muertes en menos de 10 s sobre el mismo Ente. Posible loop de regresión; considere inhibir el restart automático."
+      }
+    ],
+    "scope": { "subject_label": "mirada-session" }
+  }
+]
