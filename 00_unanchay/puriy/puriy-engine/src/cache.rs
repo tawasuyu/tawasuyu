@@ -87,14 +87,31 @@ pub fn clear() {
     c.bytes = 0;
 }
 
-/// Path canónico para persistir la cache: `$XDG_CACHE_HOME/puriy/cache.bin`
-/// con fallback a `$HOME/.cache/puriy/cache.bin`. `None` si no se puede
-/// resolver ningún base path.
+/// Path canónico para persistir la cache. Por default
+/// `$XDG_CACHE_HOME/puriy/cache.bin` (fallback `$HOME/.cache/puriy/...`).
+/// La app puede sobrescribir con [`set_persist_path`] para que cada
+/// `--profile NAME` use su propio archivo (`profile_dir/cache.bin`).
 fn persist_path() -> Option<PathBuf> {
+    if let Ok(g) = PERSIST_OVERRIDE.lock() {
+        if let Some(p) = g.clone() {
+            return Some(p);
+        }
+    }
     let base = std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))?;
     Some(base.join("puriy").join("cache.bin"))
+}
+
+static PERSIST_OVERRIDE: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Setea un path absoluto para la cache persistente, ignorando el XDG
+/// default. Útil para aislar caches por perfil. Llamar UNA vez al
+/// startup, antes de `load_from_disk`.
+pub fn set_persist_path(path: PathBuf) {
+    if let Ok(mut g) = PERSIST_OVERRIDE.lock() {
+        *g = Some(path);
+    }
 }
 
 /// Carga la cache desde disco si existe el archivo. Silencioso en caso

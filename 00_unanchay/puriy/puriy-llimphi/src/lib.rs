@@ -34,14 +34,53 @@ const TABS_H: f32 = 30.0;
 const LINE_PX: f32 = 24.0;
 const NEW_TAB_URL: &str = "about:blank";
 
-/// Punto de entrada — abre ventana Llimphi con una pestaña en `url`.
+/// Punto de entrada — abre ventana Llimphi con una pestaña en `url` sin
+/// profile (caches/historial efímeros). Prefiere `run_with_profile` si
+/// el caller ya levantó un Profile.
 pub fn run(url: String) {
     PURIY_URL.with(|cell| *cell.borrow_mut() = Some(url));
     llimphi_ui::run::<Puriy>();
 }
 
+/// Punto de entrada con Profile cableado. El chrome graba en
+/// `profile.history` cada navegación exitosa, deja Ctrl+D para
+/// bookmarkear, y persiste a `profile_path` después de cada cambio
+/// (best-effort, errores silenciosos).
+pub fn run_with_profile(
+    url: String,
+    profile: std::sync::Arc<std::sync::Mutex<puriy_core::Profile>>,
+    profile_path: std::path::PathBuf,
+) {
+    PURIY_URL.with(|cell| *cell.borrow_mut() = Some(url));
+    PURIY_PROFILE.with(|cell| *cell.borrow_mut() = Some(profile));
+    PURIY_PROFILE_PATH.with(|cell| *cell.borrow_mut() = Some(profile_path));
+    llimphi_ui::run::<Puriy>();
+}
+
 thread_local! {
     static PURIY_URL: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    static PURIY_PROFILE: std::cell::RefCell<Option<std::sync::Arc<std::sync::Mutex<puriy_core::Profile>>>> = const { std::cell::RefCell::new(None) };
+    static PURIY_PROFILE_PATH: std::cell::RefCell<Option<std::path::PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Devuelve la handle al Profile compartido si el chrome se arrancó vía
+/// `run_with_profile`. `None` en el path `run(url)` (efímero).
+fn profile_handle() -> Option<std::sync::Arc<std::sync::Mutex<puriy_core::Profile>>> {
+    PURIY_PROFILE.with(|c| c.borrow().clone())
+}
+
+fn profile_path() -> Option<std::path::PathBuf> {
+    PURIY_PROFILE_PATH.with(|c| c.borrow().clone())
+}
+
+/// Persiste el Profile a disco si está cableado. Silencioso ante I/O
+/// errors — el usuario no necesita ver mensajes del flush.
+fn persist_profile() {
+    let (Some(handle), Some(path)) = (profile_handle(), profile_path()) else {
+        return;
+    };
+    let Ok(p) = handle.lock() else { return };
+    let _ = puriy_core::store::save(&path, &p);
 }
 
 /// ID de pestaña incremental — los mensajes async (Loaded/Failed)
@@ -134,6 +173,9 @@ pub enum Msg {
     SelectTab(usize),
     NextTab,
     PrevTab,
+    /// Ctrl+D — agrega la URL de la pestaña activa al BookmarkStore del
+    /// Profile. Si el chrome corre sin profile, no-op.
+    Bookmark,
 }
 
 impl App for Puriy {
@@ -174,6 +216,7 @@ impl App for Puriy {
                 Key::Character(s) if s.eq_ignore_ascii_case("w") => {
                     return Some(Msg::CloseTab(model.active));
                 }
+                Key::Character(s) if s.eq_ignore_ascii_case("d") => return Some(Msg::Bookmark),
                 Key::Named(NamedKey::Tab) if mods.shift => return Some(Msg::PrevTab),
                 Key::Named(NamedKey::Tab) => return Some(Msg::NextTab),
                 _ => {}
@@ -222,10 +265,20 @@ impl App for Puriy {
                 if let Some(idx) = m.tab_idx(tab) {
                     let t = &mut m.tabs[idx];
                     if t.gen == gen {
-                        t.title = title;
+                        t.title = title.clone();
                         let n = box_tree.descendants_count();
                         t.status = format!("OK · {n} boxes");
                         t.box_tree = Some(box_tree);
+                        // Registra en la history global del Profile (no
+                        // confundir con TabState.history, que es el
+                        // stack back/fwd de la pestaña).
+                        let url_for_history = t.url.clone();
+                        if let Some(handle) = profile_handle() {
+                            if let Ok(mut p) = handle.lock() {
+                                p.history.record(&url_for_history, &title, puriy_core::now());
+                            }
+                        }
+                        persist_profile();
                     }
                 }
             }
@@ -312,6 +365,27 @@ impl App for Puriy {
                 if !m.tabs.is_empty() {
                     m.active = (m.active + m.tabs.len() - 1) % m.tabs.len();
                 }
+            }
+            Msg::Bookmark => {
+                let t = m.active();
+                let url = t.url.clone();
+                let title = if t.title.is_empty() { t.url.clone() } else { t.title.clone() };
+                if let Some(handle) = profile_handle() {
+                    if let Ok(mut p) = handle.lock() {
+                        let already = p
+                            .bookmarks
+                            .items()
+                            .iter()
+                            .any(|b| b.url == url);
+                        if !already {
+                            p.bookmarks.add(&url, &title, None, puriy_core::now());
+                            m.active_mut().status = format!("⭐ guardado · {} bookmarks", p.bookmarks.len());
+                        } else {
+                            m.active_mut().status = "⭐ ya estaba guardado".into();
+                        }
+                    }
+                }
+                persist_profile();
             }
         }
         m
