@@ -1,16 +1,21 @@
-//! Showcase CLI del `CosmosKernel`.
+//! Showcase CLI del `CosmosKernel` — versión extendida con los seis
+//! lenguajes nuevos sobre cosmos-skywatch + extractos.
 //!
 //! Notebook hardcoded:
 //!
 //! ```text
-//!   tdb ─┬─► positions (todos)
-//!        ├─► helio (todos)
-//!        └─► distance(mars)
+//!   tdb ─┬─► positions, helio, distance(mars)
+//!        ├─► skywatch (alt/az desde Location)
+//!        ├─► sundial  (sombra del gnomon)
+//!        ├─► tides    (mareas)
+//!        ├─► rise-set (agenda celeste)
+//!        ├─► eclipses (4 años solar)
+//!        └─► transits (15 años)
+//!   location ─► (alimenta skywatch, sundial, tides, rise-set)
 //! ```
 //!
-//! Cambiar el TDB y re-correr `run_all` muta toda la cadena con el
-//! nuevo instante. El notebook tiene un `digest` reproducible — dos
-//! corridas con el mismo TDB dan el mismo digest.
+//! Editar la celda TDB o LOCATION y re-correr `run_all` muta toda la
+//! cadena. Mismo patrón reactivo que kernel-dominium.
 //!
 //! Corré con: `cargo run -p pluma-notebook-kernel-cosmos --example
 //! notebook_cosmos_demo --release`.
@@ -23,12 +28,29 @@ use pluma_notebook_kernel_cosmos::CosmosKernel;
 async fn main() {
     let mut nb = Notebook::new();
     let t = code(&mut nb, "cosmos-tdb", "2026-05-27T00:00:00");
+    let l = code(&mut nb, "cosmos-location", "-12.05 -77.05 150");
     let p = code(&mut nb, "cosmos-positions", "");
     let h = code(&mut nb, "cosmos-helio", "");
     let d = code(&mut nb, "cosmos-distance", "mars");
+    let sw = code(&mut nb, "cosmos-skywatch", "sun moon jupiter saturn");
+    let sd = code(&mut nb, "cosmos-sundial", "");
+    let td = code(&mut nb, "cosmos-tides", "");
+    let rs = code(&mut nb, "cosmos-rise-set", "sun moon jupiter");
+    let ec = code(&mut nb, "cosmos-eclipses", "4 solar");
+    let tr = code(&mut nb, "cosmos-transits", "15");
     nb.add_dependency(p, t);
     nb.add_dependency(h, t);
     nb.add_dependency(d, t);
+    nb.add_dependency(sw, t);
+    nb.add_dependency(sw, l);
+    nb.add_dependency(sd, t);
+    nb.add_dependency(sd, l);
+    nb.add_dependency(td, t);
+    nb.add_dependency(td, l);
+    nb.add_dependency(rs, t);
+    nb.add_dependency(rs, l);
+    nb.add_dependency(ec, t);
+    nb.add_dependency(tr, t);
 
     let kernel = CosmosKernel::new();
     let report = run_all(&mut nb, &kernel).await.expect("notebook sin ciclo");

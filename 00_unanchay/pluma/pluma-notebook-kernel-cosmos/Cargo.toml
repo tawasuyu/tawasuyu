@@ -13,6 +13,12 @@ pluma-notebook-core = { path = "../pluma-notebook-core" }
 pluma-notebook-exec = { path = "../pluma-notebook-exec" }
 cosmos-time = { path = "../../../01_yachay/cosmos/cosmos-time" }
 cosmos-ephemeris = { path = "../../../01_yachay/cosmos/cosmos-ephemeris" }
+cosmos-skywatch = { path = "../../../01_yachay/cosmos/cosmos-skywatch" }
+cosmos-sundial = { path = "../../../01_yachay/cosmos/cosmos-sundial" }
+cosmos-tides = { path = "../../../01_yachay/cosmos/cosmos-tides" }
+cosmos-rise-set = { path = "../../../01_yachay/cosmos/cosmos-rise-set" }
+cosmos-eclipses = { path = "../../../01_yachay/cosmos/cosmos-eclipses" }
+cosmos-transits = { path = "../../../01_yachay/cosmos/cosmos-transits" }
 cosmos-core = { workspace = true }
 
 [dev-dependencies]
