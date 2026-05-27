@@ -121,6 +121,7 @@ enum TileId {
     Cuerpos,
     Aspectos,
     BoxGraph,
+    Cualidades,
     AstroCarto,
     Cartas,
     Corpus,
@@ -142,6 +143,7 @@ impl TileId {
             TileId::Cuerpos => "cosmos-tile-cuerpos",
             TileId::Aspectos => "cosmos-tile-aspectos",
             TileId::BoxGraph => "cosmos-tile-box-graph",
+            TileId::Cualidades => "cosmos-tile-cualidades",
             TileId::AstroCarto => "cosmos-tile-astrocarto",
             TileId::Cartas => "cosmos-tile-cartas",
             TileId::Corpus => "cosmos-tile-corpus",
@@ -164,6 +166,7 @@ const DEFAULT_ORDER: &[TileId] = &[
     TileId::Cuerpos,
     TileId::Aspectos,
     TileId::BoxGraph,
+    TileId::Cualidades,
     TileId::AstroCarto,
     TileId::Corpus,
 ];
@@ -799,6 +802,7 @@ fn build_tile(tid: TileId, model: &Model, theme: &Theme) -> TileSpec<Msg> {
         TileId::Cuerpos => tile_cuerpos(&model.render, theme),
         TileId::Aspectos => tile_aspectos(&model.render, "natal", theme),
         TileId::BoxGraph => tile_box_graph(&model.render, theme),
+        TileId::Cualidades => tile_cualidades(&model.render, theme),
         TileId::AstroCarto => tile_astrocarto(&model.chart, &model.render, theme),
         TileId::Cartas => tile_cartas(theme),
         TileId::Corpus => tile_corpus(&model.render, &model.corpus, theme),
@@ -1185,6 +1189,92 @@ fn tile_uraniano(groups: &[UranianGroup], theme: &Theme) -> View<Msg> {
         })
         .collect();
     tile_container(rows, theme)
+}
+
+// ----- Cualidades (elementos + modalidades + polaridad) -----
+
+fn tile_cualidades(render: &RenderModel, theme: &Theme) -> View<Msg> {
+    let bodies: Vec<(&str, f32)> = render
+        .layers
+        .iter()
+        .filter(|l| l.module_id == "natal" && matches!(l.kind, LayerKind::Bodies))
+        .flat_map(|l| l.glyphs.iter())
+        .map(|g| (g.symbol.as_str(), g.deg))
+        .collect();
+
+    // Elementos: sign_idx % 4 → 0=Fuego, 1=Tierra, 2=Aire, 3=Agua.
+    let mut elementos: [Vec<&'static str>; 4] = Default::default();
+    // Modalidades: sign_idx % 3 → 0=Cardinal, 1=Fijo, 2=Mutable.
+    let mut modalidades: [Vec<&'static str>; 3] = Default::default();
+    // Polaridad: sign_idx % 2 → 0=Yang (fuego/aire), 1=Yin (tierra/agua).
+    let mut polaridad: [Vec<&'static str>; 2] = Default::default();
+
+    for (name, deg) in &bodies {
+        let sign_idx = ((deg.rem_euclid(360.0) / 30.0) as usize) % 12;
+        let glyph = simbolo_cuerpo(name);
+        elementos[sign_idx % 4].push(glyph);
+        modalidades[sign_idx % 3].push(glyph);
+        polaridad[sign_idx % 2].push(glyph);
+    }
+
+    let elem_labels = [
+        rimay_localize::t("cosmos-elem-fuego"),
+        rimay_localize::t("cosmos-elem-tierra"),
+        rimay_localize::t("cosmos-elem-aire"),
+        rimay_localize::t("cosmos-elem-agua"),
+    ];
+    let mod_labels = [
+        rimay_localize::t("cosmos-mod-cardinal"),
+        rimay_localize::t("cosmos-mod-fijo"),
+        rimay_localize::t("cosmos-mod-mutable"),
+    ];
+    let pol_labels = [
+        rimay_localize::t("cosmos-pol-yang"),
+        rimay_localize::t("cosmos-pol-yin"),
+    ];
+
+    let mut rows: Vec<View<Msg>> = Vec::new();
+    rows.push(seccion_label(rimay_localize::t("cosmos-elementos"), theme));
+    for (i, label) in elem_labels.iter().enumerate() {
+        rows.push(fila_cualidad(label, &elementos[i], theme));
+    }
+    rows.push(seccion_label(rimay_localize::t("cosmos-modalidades"), theme));
+    for (i, label) in mod_labels.iter().enumerate() {
+        rows.push(fila_cualidad(label, &modalidades[i], theme));
+    }
+    rows.push(seccion_label(rimay_localize::t("cosmos-polaridad"), theme));
+    for (i, label) in pol_labels.iter().enumerate() {
+        rows.push(fila_cualidad(label, &polaridad[i], theme));
+    }
+    tile_container(rows, theme)
+}
+
+fn seccion_label(text: String, theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(14.0_f32),
+        },
+        flex_shrink: 0.0,
+        margin: Rect {
+            left: length(0.0_f32),
+            right: length(0.0_f32),
+            top: length(2.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(text, 10.0, theme.fg_muted, Alignment::Start)
+}
+
+fn fila_cualidad(label: &str, glyphs: &[&str], theme: &Theme) -> View<Msg> {
+    let count = glyphs.len();
+    let bar_len = count.min(10);
+    let bar: String = "▰".repeat(bar_len) + &"▱".repeat(10_usize.saturating_sub(bar_len));
+    let glyph_str = glyphs.join(" ");
+    let txt = format!("{label:>9}  {bar}  {count}  {glyph_str}");
+    line(txt, 11.0, theme.fg_text)
 }
 
 // ----- Box graph (aspectarian triangular) -----
