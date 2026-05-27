@@ -754,3 +754,109 @@ mod parser_tests {
     }
 }
 
+// ---------------------------------------------------------------------
+// Tests de integración: end-to-end del contrato LLM → parser.
+//
+// Sin red, sin entorno gráfico. Usa MockChatClient (pluma-llm-mock) para
+// simular un backend que responde con JSON conforme al system prompt.
+// Valida que la cadena (ChatRequest → complete() → ChatResponse.content
+// → parsear_respuesta) cierra correctamente para los casos típicos del
+// flujo real.
+// ---------------------------------------------------------------------
+
+#[cfg(test)]
+mod integracion_tests {
+    use super::*;
+    use pluma_llm_core::ChatRequest;
+    use pluma_llm_mock::MockChatClient;
+
+    /// Helper: construye el ChatRequest tal como lo hace `update` cuando el
+    /// operador pulsa Enter. Igualar este código al de producción evita
+    /// que los tests pasen contra una request inventada.
+    fn request_para(prompt: &str) -> ChatRequest {
+        ChatRequest::una_vuelta(prompt, MAX_TOKENS_RESPUESTA).con_sistema(PROMPT_SISTEMA)
+    }
+
+    /// Helper: corre el LLM y devuelve el ParseResult del flujo completo.
+    fn flujo(cliente: &MockChatClient, prompt: &str) -> ParseResult {
+        let req = request_para(prompt);
+        let resp = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio rt")
+            .block_on(cliente.complete(&req))
+            .expect("mock no falla");
+        parsear_respuesta(&resp.content)
+    }
+
+    #[test]
+    fn flujo_completo_propuesta_simple() {
+        let mock = MockChatClient::default().con_respuesta(
+            "siguiente ventana",
+            r#"{"accion": "focus-next", "args": [], "explicacion": "siguiente"}"#,
+        );
+        match flujo(&mock, "foca la siguiente ventana") {
+            ParseResult::Propuesta(p) => assert_eq!(p.accion, "focus-next"),
+            otro => panic!("esperaba Propuesta, obtuve {otro:?}"),
+        }
+    }
+
+    #[test]
+    fn flujo_completo_propuesta_con_args() {
+        let mock = MockChatClient::default().con_respuesta(
+            "workspace 3",
+            r#"{"accion": "workspace", "args": ["3"], "explicacion": "ir al 3"}"#,
+        );
+        match flujo(&mock, "lléváme al workspace 3") {
+            ParseResult::Propuesta(p) => {
+                assert_eq!(p.accion, "workspace");
+                assert_eq!(p.args, vec!["3".to_string()]);
+            }
+            otro => panic!("esperaba Propuesta, obtuve {otro:?}"),
+        }
+    }
+
+    #[test]
+    fn flujo_completo_rechazo_del_llm() {
+        let mock = MockChatClient::default().con_respuesta(
+            "haz café",
+            r#"{"error": "mirada-ctl no hace café"}"#,
+        );
+        match flujo(&mock, "por favor haz café") {
+            ParseResult::Rechazo(motivo) => assert!(motivo.contains("café")),
+            otro => panic!("esperaba Rechazo, obtuve {otro:?}"),
+        }
+    }
+
+    #[test]
+    fn flujo_completo_respuesta_envuelta_en_markdown() {
+        // Modelos reales suelen devolver JSON dentro de ```json ... ```.
+        let mock = MockChatClient::default().con_respuesta(
+            "modo grid",
+            "Claro, pasamos a grid:\n\n```json\n{\"accion\": \"layout\", \"args\": [\"grid\"], \"explicacion\": \"teselado grid\"}\n```",
+        );
+        match flujo(&mock, "ponlo en modo grid") {
+            ParseResult::Propuesta(p) => {
+                assert_eq!(p.accion, "layout");
+                assert_eq!(p.args, vec!["grid".to_string()]);
+            }
+            otro => panic!("esperaba Propuesta, obtuve {otro:?}"),
+        }
+    }
+
+    #[test]
+    fn flujo_completo_respuesta_basura_da_error_legible() {
+        // El modelo "alucinó" — no devuelve nada parseable. El parser
+        // produce SinJson en lugar de panic; la UI lo muestra al operador.
+        let mock = MockChatClient::default().con_respuesta(
+            "tonterías",
+            "Lo siento, hoy no estoy operativo. Vuelve mañana.",
+        );
+        assert!(matches!(
+            flujo(&mock, "tonterías"),
+            ParseResult::SinJson(_)
+        ));
+    }
+}
+
+

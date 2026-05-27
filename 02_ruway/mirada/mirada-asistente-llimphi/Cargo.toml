@@ -22,3 +22,8 @@ rimay-localize = { path = "../../../shared/rimay-localize" }
 tokio = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+# MockChatClient para tests de integracion que validen el contrato
+# "respuesta LLM → parser" sin tocar la red.
+pluma-llm-mock = { path = "../../../00_unanchay/pluma/pluma-llm-mock" }
