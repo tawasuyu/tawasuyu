@@ -11,6 +11,7 @@ description = "shuma-module-minga — tab del shell que muestra el estado del re
 shuma-module = { path = "../shuma-module" }
 minga-core = { path = "../../../../03_ukupacha/minga/minga-core" }
 minga-store = { path = "../../../../03_ukupacha/minga/minga-store" }
+minga-vfs = { path = "../../../../03_ukupacha/minga/minga-vfs" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 

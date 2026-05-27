@@ -10,7 +10,9 @@ use std::path::Path;
 use std::time::Duration;
 
 use libp2p::{multiaddr::Protocol, Multiaddr, PeerId};
-use minga_core::{alpha::hash_alpha_with, parse, Attestation, ContentHash, Did, Keypair};
+use minga_core::{
+    alpha::hash_alpha_with, parse, Attestation, ContentHash, Did, Keypair, Retraction,
+};
 use minga_p2p::MingaPeer;
 use minga_store::{keypair_file, PersistentRepo};
 
@@ -250,6 +252,108 @@ fn parse_hash_hex(s: &str) -> Result<ContentHash, CliError> {
     Ok(ContentHash(bytes))
 }
 
+/// Resuelve un hash que puede ser α (raíz) o struct (nodo interno) al
+/// struct-hash con el cual lookupar en `nodes`. Si es raíz, también
+/// retorna el dialect persistido.
+fn resolve_hash(
+    repo: &PersistentRepo,
+    hash: ContentHash,
+) -> Result<(ContentHash, Option<parse::Dialect>, bool), CliError> {
+    match repo.roots.get(&hash)? {
+        Some((sh, dl)) => Ok((sh, dl, true)),
+        None => Ok((hash, None, false)),
+    }
+}
+
+/// Una línea del diff. `Same` se preserva tal cual; `Add`/`Remove` se
+/// marcan con `+`/`-` en la salida unified.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiffLine {
+    Same(String),
+    Add(String),
+    Remove(String),
+}
+
+/// Resultado de `cmd_diff`: metadata de ambos lados + líneas resultantes.
+#[derive(Debug, Clone)]
+pub struct DiffResult {
+    pub left_hash: ContentHash,
+    pub right_hash: ContentHash,
+    pub left_dialect: Option<parse::Dialect>,
+    pub right_dialect: Option<parse::Dialect>,
+    pub left_is_root: bool,
+    pub right_is_root: bool,
+    pub lines: Vec<DiffLine>,
+    /// Cuántas líneas son `Add`.
+    pub additions: usize,
+    /// Cuántas líneas son `Remove`.
+    pub deletions: usize,
+}
+
+/// `minga diff <left> <right>`: reconstruye ambos nodos y emite el
+/// diff unified entre sus `render_source`. Acepta α-hashes (raíces) y
+/// hashes estructurales.
+pub fn cmd_diff(
+    repo_path: &Path,
+    passphrase: &str,
+    left_hex: &str,
+    right_hex: &str,
+) -> Result<DiffResult, CliError> {
+    let _keypair = keypair_file::load(repo_path.join(KEYPAIR_FILENAME), passphrase)?;
+    let repo = PersistentRepo::open(repo_path.join(REPO_DIRNAME))?;
+
+    let left_hash = parse_hash_hex(left_hex)?;
+    let right_hash = parse_hash_hex(right_hex)?;
+
+    let (left_struct, left_dialect, left_is_root) = resolve_hash(&repo, left_hash)?;
+    let (right_struct, right_dialect, right_is_root) = resolve_hash(&repo, right_hash)?;
+
+    let left_node = repo
+        .nodes
+        .reconstruct(&left_struct)?
+        .ok_or(CliError::HashNotFound(left_struct))?;
+    let right_node = repo
+        .nodes
+        .reconstruct(&right_struct)?
+        .ok_or(CliError::HashNotFound(right_struct))?;
+
+    let left_text = minga_vfs::render_source(&left_node);
+    let right_text = minga_vfs::render_source(&right_node);
+
+    let diff = similar::TextDiff::from_lines(&left_text, &right_text);
+    let mut lines = Vec::new();
+    let mut additions = 0;
+    let mut deletions = 0;
+    for change in diff.iter_all_changes() {
+        let text = change.to_string();
+        // `similar` incluye el `\n` final en cada línea — lo conservamos
+        // para que el caller pueda imprimir sin reflowing.
+        match change.tag() {
+            similar::ChangeTag::Equal => lines.push(DiffLine::Same(text)),
+            similar::ChangeTag::Insert => {
+                additions += 1;
+                lines.push(DiffLine::Add(text));
+            }
+            similar::ChangeTag::Delete => {
+                deletions += 1;
+                lines.push(DiffLine::Remove(text));
+            }
+        }
+    }
+
+    Ok(DiffResult {
+        left_hash,
+        right_hash,
+        left_dialect,
+        right_dialect,
+        left_is_root,
+        right_is_root,
+        lines,
+        additions,
+        deletions,
+    })
+}
+
 fn hex_decode_32(s: &str) -> Option<[u8; 32]> {
     if s.len() != 64 {
         return None;
@@ -272,6 +376,111 @@ fn nibble(b: u8) -> Option<u8> {
     }
 }
 
+/// Resultado de `cmd_verify_root`: si la raíz es consistente y bajo
+/// qué dialecto (independiente del que figure en `roots`).
+#[derive(Debug, Clone)]
+pub struct VerifyResult {
+    pub alpha: ContentHash,
+    pub struct_hash: ContentHash,
+    /// Dialecto registrado en el tree `roots` al momento de ingerir.
+    /// `None` si la raíz no estaba registrada (caso "huérfano":
+    /// puede pasar tras sync si el wire no transmite el binding).
+    pub stored_dialect: Option<parse::Dialect>,
+    /// Dialecto bajo el cual `hash_alpha_with(d, &node) == alpha`.
+    /// `None` significa **inconsistente** — el α-hash claimado no
+    /// se corresponde con el contenido del nodo bajo ningún
+    /// dialecto soportado.
+    pub verified_dialect: Option<parse::Dialect>,
+}
+
+impl VerifyResult {
+    pub fn is_consistent(&self) -> bool {
+        self.verified_dialect.is_some()
+    }
+
+    pub fn matches_stored(&self) -> bool {
+        match (self.stored_dialect, self.verified_dialect) {
+            (Some(a), Some(b)) => a == b,
+            (None, Some(_)) => true, // sin info previa, lo verificado es lo bueno
+            _ => false,
+        }
+    }
+}
+
+/// `minga verify <hash>`: reconstruye el nodo al que apunta `hash`
+/// (asumido α-hash de una raíz) y verifica que algún dialect produce
+/// ese hash sobre ese contenido. Útil para auditar repos sincronizados
+/// donde el remitente no es 100 % confiable.
+pub fn cmd_verify_root(
+    repo_path: &Path,
+    passphrase: &str,
+    hash_hex: &str,
+) -> Result<VerifyResult, CliError> {
+    let _keypair = keypair_file::load(repo_path.join(KEYPAIR_FILENAME), passphrase)?;
+    let repo = PersistentRepo::open(repo_path.join(REPO_DIRNAME))?;
+
+    let alpha = parse_hash_hex(hash_hex)?;
+    let (struct_hash, stored_dialect, _is_root) = resolve_hash(&repo, alpha)?;
+
+    let node = repo
+        .nodes
+        .reconstruct(&struct_hash)?
+        .ok_or(CliError::HashNotFound(struct_hash))?;
+
+    let verified_dialect = minga_core::alpha::verify_root_alpha(&node, &alpha);
+
+    Ok(VerifyResult {
+        alpha,
+        struct_hash,
+        stored_dialect,
+        verified_dialect,
+    })
+}
+
+/// Resultado de `cmd_retire`: confirmación con metadata.
+#[derive(Debug, Clone)]
+pub struct RetireResult {
+    pub alpha: ContentHash,
+    pub author: Did,
+    /// `true` si la raíz existía en el MST antes de la retracción
+    /// (caso esperado). `false` si el hash no era una raíz conocida
+    /// (la retracción se firma igual — funciona como "declaración de
+    /// no autoría" útil para sync, aunque el efecto local es nulo).
+    pub was_root: bool,
+}
+
+/// `minga retire <hash>`: emite una atestación negativa firmada
+/// declarando que el dueño del keypair ya no respalda `hash`. Quita la
+/// entrada del MST y de `roots`, persiste la retracción en su tree
+/// propio. Las atestaciones originales NO se borran (siguen como
+/// prueba histórica de que en algún momento se firmaron).
+pub fn cmd_retire(
+    repo_path: &Path,
+    passphrase: &str,
+    hash_hex: &str,
+) -> Result<RetireResult, CliError> {
+    let keypair = keypair_file::load(repo_path.join(KEYPAIR_FILENAME), passphrase)?;
+    let repo = PersistentRepo::open(repo_path.join(REPO_DIRNAME))?;
+
+    let alpha = parse_hash_hex(hash_hex)?;
+    let was_root = repo.roots.contains(&alpha)?;
+
+    let retraction = Retraction::create(&keypair, alpha);
+    repo.retractions.add(retraction)?;
+
+    // Quitar del MST y de roots (los nodos del CAS quedan: pueden estar
+    // referenciados por otras raíces o ser navegables vía cas/<hash>).
+    repo.mst.remove(&alpha)?;
+    repo.roots.remove(&alpha)?;
+    repo.flush()?;
+
+    Ok(RetireResult {
+        alpha,
+        author: keypair.did(),
+        was_root,
+    })
+}
+
 /// `minga mount <punto>`: monta el repositorio como un filesystem FUSE
 /// de sólo lectura. Cada hash del store se vuelve un archivo
 /// navegable con `ls`/`cat`. Bloquea hasta que se desmonte el punto
@@ -289,10 +498,13 @@ pub fn cmd_mount(
     Ok(())
 }
 
-/// Detecta el dialecto del archivo. Prueba primero por **extensión**
-/// (rápido, sin abrir el archivo); si no matchea, lee la primera línea
-/// e intenta por **shebang** (cubre scripts sin extensión como `bin/foo`).
-/// Error si ninguno de los dos métodos identifica un dialecto soportado.
+/// Detecta el dialecto del archivo en tres pasos cada vez más caros:
+/// 1. **Extensión** (`.rs`, `.py`, …) — sin abrir el archivo.
+/// 2. **Shebang** (primera línea) — un read_line.
+/// 3. **Contenido** — parsea con cada gramática y elige la que produce
+///    el AST con menos errores. Para esto sí leemos el archivo entero.
+///
+/// Error si los tres pasos fallan.
 fn detect_dialect(file: &Path) -> Result<parse::Dialect, CliError> {
     let ext = file
         .extension()
@@ -301,7 +513,7 @@ fn detect_dialect(file: &Path) -> Result<parse::Dialect, CliError> {
     if let Some(d) = parse::detect_by_extension(ext) {
         return Ok(d);
     }
-    // Fallback: leer sólo la primera línea para el shebang.
+    // Shebang: leer sólo la primera línea.
     if let Ok(f) = fs::File::open(file) {
         use std::io::{BufRead, BufReader};
         let mut first = String::new();
@@ -309,6 +521,12 @@ fn detect_dialect(file: &Path) -> Result<parse::Dialect, CliError> {
             if let Some(d) = parse::detect_by_shebang(&first) {
                 return Ok(d);
             }
+        }
+    }
+    // Fallback caro: leer el contenido y probar cada parser.
+    if let Ok(source) = fs::read_to_string(file) {
+        if let Some(d) = parse::detect_by_content(&source) {
+            return Ok(d);
         }
     }
     Err(CliError::UnsupportedLanguage {

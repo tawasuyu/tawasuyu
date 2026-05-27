@@ -106,18 +106,34 @@ MINGA_REPO=./.minga cargo run -p minga-explorer-llimphi
 3. **Tree `roots` separado del MST.** El MST contiene sólo los α-hashes (claves), igual que antes — la nueva indirección `roots` es independiente. Esto preserva todos los tests del protocolo.
 4. **`SledTimestampStore` es local.** Dos peers que ven la misma atestación tendrán timestamps distintos (cuando llegó a cada uno) — esto es deliberado: `minga log` es una vista local del historial.
 
-## 6. Próximos pasos sugeridos
+## 6. Sub-sprint posterior (5 items adicionales completados)
+
+| # | Tarea | Estado |
+|---|---|---|
+| 11 | **`minga diff`** entre dos hashes (LCS vía `similar` crate) | hecho — el test `rename_local_var_keeps_same_alpha_hash` valida que α se manifiesta end-to-end |
+| 12 | **`minga retire`** — tombstone firmado (`Retraction` con `RETRACTION_DOMAIN` prefix; `SledRetractionStore` paralelo a atestaciones; quita del MST y `roots` pero conserva la atestación original como prueba histórica) | hecho |
+| 13 | **`minga verify`** — `verify_root_alpha(node, claimed) -> Option<Dialect>` que prueba cada dialecto; el CLI reporta consistencia + drift con dialect registrado | hecho (la re-verificación al recibir-wire requiere modificar el protocolo de sync, documentado abajo) |
+| 14 | **Click en raíz del módulo shuma-module-minga**: dispara `SelectRoot(hash)` → el chasis spawnea `load_root_source` en thread → resultado vía `SourceLoaded` → panel inferior con `render_source` | hecho — race-protect: si llega un click nuevo mientras carga el anterior, el resultado viejo se descarta |
+| 15 | **Detección de dialect por contenido**: marcadores textuales por línea (`def`/`fn`/`func`/`function`/`interface`) + tie-break por ratio de nodos ERROR. `detect_dialect` ahora prueba ext → shebang → contenido | hecho |
+
+### #13 (verify) — alcance honesto
+
+La re-verificación se ofrece como primitiva (`alpha::verify_root_alpha`) y como subcomando (`minga verify <hash>`). Verifica **localmente** que una raíz del repo es consistente bajo algún dialect; útil tras sync con peers no-confiables.
+
+**No** intercepta automáticamente en el path de sync porque el wire actual no transmite dialect ni el binding α→struct. Para integrarlo ahí hay que extender `minga-p2p::session::Message` con una variante `RootDeclaration { alpha, struct_hash, dialect }`; queda para una fase futura.
+
+## 7. Próximos pasos abiertos
 
 | # | Tarea | Prioridad |
 |---|---|---|
-| A | Cachear `MingaPeer` con backend sled directo (item #5 diferido) | media |
-| B | `minga diff <hash_a> <hash_b>` — comparar dos versiones | alta UX |
-| C | `minga tombstone <hash>` — atestación de retiro (versus el remove local actual) | media |
-| D | Detección por **contenido** (heurística "se parece a Python") cuando no hay extensión ni shebang | baja |
-| E | Re-verificación opcional de α-hash al recibir un root por wire (usando el dialect persistido en `roots`) | media (seguridad) |
-| F | `shuma-module-minga`: clickear una raíz → invocar `minga show` y mostrar fuente en panel auxiliar | alta UX |
-| G | Exportar `roots` como API REST/JSON desde un daemon minga (paralelo a `shuma-gateway`) | baja |
+| A | Cachear `MingaPeer` con backend sled directo (item #5 deferido) | media |
+| B | Extender wire de sync con `RootDeclaration { alpha, struct, dialect }` + re-verificar α automáticamente al recibir | media (seguridad) |
+| C | `minga prune-cas` — recolector de basura del grafo CAS (nodos ya no referenciados por ninguna raíz) | media |
+| D | Sync de `Retraction`s — wire actual sólo transmite `Attestation`s | media |
+| E | `minga show --diff-against <other>` — combinar show+diff en un sólo comando | baja UX |
+| F | Exportar `roots` como API REST/JSON desde un daemon minga | baja |
+| G | `shuma-module-minga`: shortcut "Verify" que corre `cmd_verify_root` sobre cada raíz visible y marca consistentes/inconsistentes | media UX |
 
 ---
 
-*Generado por Claude (Opus 4.7) — `2026-05-27`. 9/10 tareas completadas en el sprint; #5 documentado como diferido.*
+*Generado por Claude (Opus 4.7) — `2026-05-27`. 14/15 tareas completadas; #5 deferido (refactor invasivo, alto costo, beneficio sólo en repos grandes).*

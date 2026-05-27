@@ -41,3 +41,29 @@ pub fn hash_alpha_with(dialect: Dialect, node: &SemanticNode) -> ContentHash {
         Dialect::Go => go::hash_node_alpha_go(node),
     }
 }
+
+/// Verifica que `claimed_alpha` sea el α-hash de `node` bajo *algún*
+/// dialecto soportado. Devuelve el dialecto que coincide (raro tener
+/// más de uno: los profiles α producen hashes distintos por las
+/// constantes de wire de cada profile). Si ningún dialecto matchea,
+/// devuelve `None` — la raíz está inconsistente con su contenido.
+///
+/// Usado al auditar un repo (sea sincronizado o ingerido) sin
+/// confiar en el `dialect` persistido en `SledRootsStore`: si el
+/// repo se trajo del wire de un peer no-confiable, ésta es la forma
+/// de validar que el α-hash que figura en el MST corresponde de
+/// verdad al contenido del nodo.
+pub fn verify_root_alpha(node: &SemanticNode, claimed_alpha: &ContentHash) -> Option<Dialect> {
+    for d in [
+        Dialect::Rust,
+        Dialect::Python,
+        Dialect::TypeScript,
+        Dialect::JavaScript,
+        Dialect::Go,
+    ] {
+        if &hash_alpha_with(d, node) == claimed_alpha {
+            return Some(d);
+        }
+    }
+    None
+}

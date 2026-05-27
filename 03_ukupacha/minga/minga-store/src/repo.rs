@@ -8,7 +8,8 @@ use sled::Db;
 
 use crate::{
     attestation_store::SledAttestationStore, error::StoreError, mst_store::SledMstStore,
-    node_store::SledNodeStore, roots_store::SledRootsStore, timestamp_store::SledTimestampStore,
+    node_store::SledNodeStore, retraction_store::SledRetractionStore,
+    roots_store::SledRootsStore, timestamp_store::SledTimestampStore,
 };
 
 pub struct PersistentRepo {
@@ -22,6 +23,10 @@ pub struct PersistentRepo {
     /// Timestamps locales de cuándo se observó cada atestación. No se
     /// transmite por wire — es metadata propia del peer.
     pub timestamps: SledTimestampStore,
+    /// Retracciones firmadas: el autor declara que ya no respalda un
+    /// contenido. Coexiste con la atestación original (que sigue como
+    /// prueba histórica).
+    pub retractions: SledRetractionStore,
 }
 
 impl PersistentRepo {
@@ -32,6 +37,7 @@ impl PersistentRepo {
         let mst = SledMstStore::open_tree(&db, "mst")?;
         let roots = SledRootsStore::open_tree(&db, "roots")?;
         let timestamps = SledTimestampStore::open_tree(&db, "attestation_timestamps")?;
+        let retractions = SledRetractionStore::open_tree(&db, "retractions")?;
         Ok(Self {
             db,
             nodes,
@@ -39,6 +45,7 @@ impl PersistentRepo {
             mst,
             roots,
             timestamps,
+            retractions,
         })
     }
 

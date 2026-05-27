@@ -361,6 +361,27 @@ impl App for Shell {
                 m.monitors_width = (m.monitors_width - dx).clamp(180.0, 480.0);
             }
             Msg::Module(slot, mmsg) => {
+                // Hook: SelectRoot del módulo minga dispara la carga
+                // de la fuente reconstruida en un thread aparte. El
+                // mensaje se sigue propagando para que el state marque
+                // `selected = Some(alpha)` y `selected_source = None`
+                // mientras carga.
+                if let ModuleMsg::Minga(shuma_module_minga::Msg::SelectRoot(alpha)) = &mmsg {
+                    if let Some(repo_path) = minga_repo_path(&slot, &m) {
+                        let alpha = *alpha;
+                        let slot_back = slot.clone();
+                        handle.spawn(move || {
+                            let result = shuma_module_minga::load_root_source(&repo_path, alpha);
+                            Msg::Module(
+                                slot_back,
+                                ModuleMsg::Minga(shuma_module_minga::Msg::SourceLoaded {
+                                    alpha,
+                                    result,
+                                }),
+                            )
+                        });
+                    }
+                }
                 m = apply_module_msg(m, slot, mmsg);
             }
             Msg::ShortcutClicked(slot, action) => {

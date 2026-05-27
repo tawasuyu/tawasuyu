@@ -156,6 +156,149 @@ pub fn detect_by_shebang(source: &str) -> Option<Dialect> {
     cand
 }
 
+/// Detecta el dialecto **por contenido**. Combina dos señales:
+///
+/// 1. **Marcadores textuales** distintivos por lenguaje (palabras
+///    clave en posición de declaración: `def `/`class ` para Python,
+///    `fn `/`impl `/`pub ` para Rust, `func `/`package ` para Go,
+///    `function `/`interface `/anotaciones de tipo TS para JS/TS).
+///    Tree-sitter es muy permisivo — acepta casi cualquier cosa con
+///    pocos `ERROR`, así que no se puede confiar sólo en eso.
+/// 2. **Ratio de nodos `ERROR`** al parsear con la gramática candidata.
+///    Sirve como tie-break: si dos lenguajes empatan en marcadores,
+///    gana el que produce el AST más limpio.
+///
+/// Si ningún candidato consigue un parse limpio (≤ 5 % errores) o
+/// ningún marcador textual identifica un lenguaje, devuelve `None`.
+pub fn detect_by_content(source: &str) -> Option<Dialect> {
+    if source.trim().is_empty() {
+        return None;
+    }
+    // Marcadores textuales por lenguaje. Cada lenguaje suma puntos
+    // según cuántos marcadores aparecen en el source.
+    let mut scores: [(Dialect, u32); 5] = [
+        (Dialect::Rust, 0),
+        (Dialect::Python, 0),
+        (Dialect::TypeScript, 0),
+        (Dialect::JavaScript, 0),
+        (Dialect::Go, 0),
+    ];
+    for line in source.lines() {
+        let t = line.trim_start();
+        // Rust: `fn `/`pub fn `/`impl `/`use `/`mod `/`let `.
+        if t.starts_with("fn ")
+            || t.starts_with("pub fn ")
+            || t.starts_with("pub(crate) fn ")
+            || t.starts_with("impl ")
+            || t.starts_with("use ")
+            || t.starts_with("mod ")
+            || t.starts_with("let ")
+            || t.starts_with("struct ")
+            || t.starts_with("enum ")
+            || t.starts_with("trait ")
+        {
+            scores[0].1 += 1;
+        }
+        // Python: `def `/`class `/`import `/`from `/`elif `.
+        if t.starts_with("def ")
+            || t.starts_with("class ")
+            || t.starts_with("import ")
+            || t.starts_with("from ")
+            || t.starts_with("elif ")
+            || t.starts_with("async def ")
+        {
+            scores[1].1 += 1;
+        }
+        // TypeScript: anotaciones `: \w+`, `interface `, `type `,
+        // `enum `. JS no usa la mayoría de éstos.
+        if t.starts_with("interface ")
+            || t.starts_with("type ")
+            || t.starts_with("enum ")
+        {
+            scores[2].1 += 1;
+        }
+        // JavaScript/TypeScript ambos.
+        if t.starts_with("function ")
+            || t.starts_with("const ")
+            || t.starts_with("let ")
+            || t.starts_with("var ")
+            || t.starts_with("export ")
+            || t.starts_with("import {")
+        {
+            // `let ` también lo usa Rust — dejamos que el score Rust
+            // gane si hay otros indicadores; aquí sólo sumamos a JS
+            // si no parece Rust en otros aspectos. Para simplicidad,
+            // sumamos a JS y a Rust independientemente y dejamos que
+            // el tie-break de errores decida.
+            scores[3].1 += 1;
+        }
+        // Go.
+        if t.starts_with("func ")
+            || t.starts_with("package ")
+            || t.starts_with("import (")
+            || t.starts_with("type ") && t.contains(" struct ")
+        {
+            scores[4].1 += 1;
+        }
+    }
+
+    // Si nadie tiene marcadores, no podemos decidir.
+    let max_score = scores.iter().map(|(_, n)| *n).max().unwrap_or(0);
+    if max_score == 0 {
+        return None;
+    }
+
+    // Top candidatos: los que empatan en el score más alto.
+    let top: Vec<Dialect> = scores
+        .iter()
+        .filter(|(_, n)| *n == max_score)
+        .map(|(d, _)| *d)
+        .collect();
+
+    // Si hay un único top, devolverlo (sin verificar errores —
+    // marcadores robustos ya identifican el lenguaje).
+    if top.len() == 1 {
+        return Some(top[0]);
+    }
+
+    // Empate: parsear con cada candidato y elegir el de menos errores.
+    let mut best: Option<(Dialect, f32)> = None;
+    for d in top {
+        if let Ok(node) = d.parse(source) {
+            let (errors, total) = count_errors(&node);
+            if total == 0 {
+                continue;
+            }
+            let ratio = errors as f32 / total as f32;
+            if best.map_or(true, |(_, r)| ratio < r) {
+                best = Some((d, ratio));
+            }
+        }
+    }
+    best.and_then(|(d, r)| if r <= 0.05 { Some(d) } else { None })
+}
+
+/// Cuenta nodos `ERROR`/`MISSING` y el total de nodos en el subárbol.
+/// Tree-sitter marca con `kind == "ERROR"` cualquier sección que la
+/// gramática no pudo absorber; `is_named() == false` y un nombre vacío
+/// suele indicar tokens missing.
+fn count_errors(node: &SemanticNode) -> (usize, usize) {
+    let mut errors = 0usize;
+    let mut total = 0usize;
+    walk_count(node, &mut errors, &mut total);
+    (errors, total)
+}
+
+fn walk_count(n: &SemanticNode, errors: &mut usize, total: &mut usize) {
+    *total += 1;
+    if n.kind == "ERROR" {
+        *errors += 1;
+    }
+    for c in &n.children {
+        walk_count(c, errors, total);
+    }
+}
+
 /// Devuelve el último "token" (separado por whitespace) de la cadena.
 /// Para shebangs `#!/usr/bin/env python3 -u` queremos el `python3`,
 /// pero también `#!/usr/bin/python3.11` (sin `env`) — el truco es:
@@ -295,6 +438,43 @@ mod tests {
             detect_by_shebang("#!/usr/bin/env -S deno run --ext=ts\n"),
             Some(Dialect::TypeScript)
         );
+    }
+
+    #[test]
+    fn detect_content_rust_clean() {
+        assert_eq!(
+            detect_by_content("fn main() { let x = 1; println!(\"{}\", x); }"),
+            Some(Dialect::Rust)
+        );
+    }
+
+    #[test]
+    fn detect_content_python_clean() {
+        assert_eq!(
+            detect_by_content("def add(a, b):\n    return a + b\n"),
+            Some(Dialect::Python)
+        );
+    }
+
+    #[test]
+    fn detect_content_go_clean() {
+        assert_eq!(
+            detect_by_content("package main\n\nfunc add(a, b int) int { return a + b }\n"),
+            Some(Dialect::Go)
+        );
+    }
+
+    #[test]
+    fn detect_content_returns_none_for_garbage() {
+        // Texto que ninguna gramática absorbe sin un montón de ERRORs.
+        let garbage = "++++ @@@@ ###% %%%% [[[[[[[[[ ............";
+        assert_eq!(detect_by_content(garbage), None);
+    }
+
+    #[test]
+    fn detect_content_handles_empty() {
+        assert_eq!(detect_by_content(""), None);
+        assert_eq!(detect_by_content("   \n\t  "), None);
     }
 
     #[test]

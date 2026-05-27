@@ -78,6 +78,12 @@ pub struct State {
     pub repo_path: PathBuf,
     pub snapshot: Option<RepoSnapshot>,
     pub error: Option<String>,
+    /// Raíz seleccionada (último click en una fila). El chasis dispara
+    /// `load_root_source` y reenvía el resultado.
+    pub selected: Option<ContentHash>,
+    /// Fuente reconstruida de la raíz seleccionada — o un mensaje de
+    /// error si la reconstrucción falló. `None` mientras carga.
+    pub selected_source: Option<Result<String, String>>,
     /// Counter de raíces compartido con el `sampler` del monitor.
     /// Mutex porque el sampler corre en un hilo del host.
     roots_count: Arc<Mutex<usize>>,
@@ -98,6 +104,8 @@ impl State {
             repo_path,
             snapshot: None,
             error: None,
+            selected: None,
+            selected_source: None,
             roots_count: Arc::new(Mutex::new(0)),
         }
     }
@@ -117,6 +125,18 @@ pub enum Msg {
     Refresh,
     /// Resultado de un refresh.
     SnapshotReady(Result<RepoSnapshot, String>),
+    /// El usuario clickeó una raíz. El chasis carga el contenido en un
+    /// thread y reenvía como `SourceLoaded`.
+    SelectRoot(ContentHash),
+    /// Fuente reconstruida (o error) para la raíz que `selected`
+    /// señala. Se ignora si la `alpha` ya no coincide con `selected`
+    /// (otro click llegó antes que este resultado).
+    SourceLoaded {
+        alpha: ContentHash,
+        result: Result<String, String>,
+    },
+    /// Cierra el visor de fuente — deselecciona.
+    DeselectRoot,
 }
 
 /// Mapea `action_id` de `ShortcutAction::ModuleAction` al `Msg`.
@@ -143,8 +163,50 @@ pub fn update(state: State, msg: Msg) -> State {
         Msg::SnapshotReady(Err(e)) => {
             s.error = Some(e);
         }
+        Msg::SelectRoot(alpha) => {
+            s.selected = Some(alpha);
+            s.selected_source = None; // cargando…
+        }
+        Msg::SourceLoaded { alpha, result } => {
+            // Race-protect: si el usuario clickeó otra raíz mientras
+            // el thread cargaba la primera, descartamos el resultado.
+            if s.selected == Some(alpha) {
+                s.selected_source = Some(result);
+            }
+        }
+        Msg::DeselectRoot => {
+            s.selected = None;
+            s.selected_source = None;
+        }
     }
     s
+}
+
+/// Lee el `StoredNode` raíz y devuelve la fuente reconstruida
+/// (`render_source`). Bloqueante — pensado para correr en un thread
+/// del host como respuesta a [`Msg::SelectRoot`].
+pub fn load_root_source(
+    repo_path: &std::path::Path,
+    alpha: ContentHash,
+) -> Result<String, String> {
+    let inner = repo_path.join(REPO_SUBDIR);
+    let repo = PersistentRepo::open(&inner).map_err(|e| format!("open sled: {e}"))?;
+    let struct_hash = match repo.roots.get(&alpha).map_err(|e| e.to_string())? {
+        Some((sh, _)) => sh,
+        None => return Err(format!("α-hash {alpha} no es una raíz registrada")),
+    };
+    let node = repo
+        .nodes
+        .reconstruct(&struct_hash)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("struct-hash {struct_hash} no está en el grafo"))?;
+    Ok(minga_vfs_render_source(&node))
+}
+
+/// Helper local — `minga-vfs::render_source` reexportado para no
+/// agregar otra dep aquí. La función vive en `minga-vfs`.
+fn minga_vfs_render_source(node: &minga_core::SemanticNode) -> String {
+    minga_vfs::render_source(node)
 }
 
 /// Lee el repo Minga en `repo_path/<REPO_SUBDIR>` y devuelve counts +
@@ -188,13 +250,12 @@ pub fn load_snapshot(repo_path: &std::path::Path) -> Result<RepoSnapshot, String
 
 // ─── Vista ──────────────────────────────────────────────────────────
 
-/// Renderiza el tab del módulo. `_lift` está para uniformidad con el
-/// resto de módulos (mapean `Msg → ShellMsg`); este módulo no emite
-/// mensajes desde la vista todavía.
+/// Renderiza el tab del módulo. `lift` mapea `Msg` del módulo al
+/// `ShellMsg` del chasis (cierre que el host construye según el slot).
 pub fn view<ShellMsg: Clone + 'static>(
     state: &State,
     theme: &Theme,
-    _lift: impl Fn(Msg) -> ShellMsg + Clone + 'static,
+    lift: impl Fn(Msg) -> ShellMsg + Clone + 'static,
 ) -> View<ShellMsg> {
     let mut children: Vec<View<ShellMsg>> = Vec::new();
 
@@ -206,7 +267,15 @@ pub fn view<ShellMsg: Clone + 'static>(
         children.push(counts_row(snap, theme));
         children.push(separator(theme));
         for row in &snap.recent {
-            children.push(root_row(row, theme));
+            let is_selected = state.selected == Some(row.alpha);
+            let lift_click = lift.clone();
+            let alpha = row.alpha;
+            children.push(root_row(
+                row,
+                theme,
+                is_selected,
+                move || lift_click(Msg::SelectRoot(alpha)),
+            ));
         }
         if snap.recent.is_empty() {
             children.push(text_row(
@@ -214,6 +283,13 @@ pub fn view<ShellMsg: Clone + 'static>(
                 theme.fg_muted,
                 theme,
             ));
+        }
+
+        // Panel inferior con la fuente reconstruida de la raíz
+        // seleccionada (si la hay).
+        if state.selected.is_some() {
+            children.push(separator(theme));
+            children.push(selected_source_panel(state, theme, lift.clone()));
         }
     } else {
         children.push(text_row("cargando…", theme.fg_muted, theme));
@@ -274,20 +350,109 @@ fn counts_row<M: Clone + 'static>(snap: &RepoSnapshot, theme: &Theme) -> View<M>
     .text_aligned(s, 11.0, theme.fg_text, Alignment::Start)
 }
 
-fn root_row<M: Clone + 'static>(row: &RootRow, theme: &Theme) -> View<M> {
+fn root_row<M: Clone + 'static>(
+    row: &RootRow,
+    theme: &Theme,
+    is_selected: bool,
+    on_click: impl FnOnce() -> M,
+) -> View<M> {
     let alpha_hex = row.alpha.to_string();
     let short: String = alpha_hex.chars().take(16).collect();
     let dialect = row.dialect.unwrap_or("?");
-    let line = format!("{short}  {dialect}");
+    let marker = if is_selected { "▶ " } else { "  " };
+    let line = format!("{marker}{short}  {dialect}");
+    let bg = if is_selected {
+        theme.bg_selected
+    } else {
+        theme.bg_panel
+    };
     View::new(Style {
         size: Size {
             width: percent(1.0_f32),
-            height: length(16.0_f32),
+            height: length(18.0_f32),
+        },
+        padding: Rect {
+            left: length(4.0_f32),
+            right: length(4.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
         },
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .text_aligned(line, 11.0, theme.fg_muted, Alignment::Start)
+    .fill(bg)
+    .hover_fill(theme.bg_row_hover)
+    .text_aligned(line, 11.0, theme.fg_text, Alignment::Start)
+    .on_click(on_click())
+}
+
+/// Panel inferior con la fuente reconstruida de la raíz seleccionada.
+/// Muestra "cargando…" mientras el thread del chasis trae el contenido,
+/// o el render canónico cuando llega.
+fn selected_source_panel<ShellMsg: Clone + 'static>(
+    state: &State,
+    theme: &Theme,
+    lift: impl Fn(Msg) -> ShellMsg + Clone + 'static,
+) -> View<ShellMsg> {
+    let alpha_short: String = state
+        .selected
+        .map(|a| a.to_string().chars().take(16).collect())
+        .unwrap_or_default();
+    let close_lift = lift.clone();
+    let header = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(18.0_f32),
+        },
+        padding: Rect {
+            left: length(4.0_f32),
+            right: length(4.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .hover_fill(theme.bg_button_hover)
+    .text_aligned(
+        format!("· fuente de {alpha_short} — click para cerrar"),
+        11.0,
+        theme.fg_muted,
+        Alignment::Start,
+    )
+    .on_click(close_lift(Msg::DeselectRoot));
+
+    let body_text = match &state.selected_source {
+        None => "cargando…".to_string(),
+        Some(Ok(src)) => src.clone(),
+        Some(Err(e)) => format!("✘ error: {e}"),
+    };
+    let body = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: Dimension::auto(),
+        },
+        padding: Rect {
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(4.0_f32),
+            bottom: length(8.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_input)
+    .text_aligned(body_text, 11.0, theme.fg_text, Alignment::Start);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: Dimension::auto(),
+        },
+        ..Default::default()
+    })
+    .children(vec![header, body])
 }
 
 fn text_row<M: Clone + 'static>(

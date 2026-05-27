@@ -5,8 +5,8 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use minga_cli::{
-    cmd_ingest, cmd_init, cmd_listen, cmd_log, cmd_mount, cmd_show, cmd_status, cmd_sync,
-    cmd_watch, CliError,
+    cmd_diff, cmd_ingest, cmd_init, cmd_listen, cmd_log, cmd_mount, cmd_retire, cmd_show,
+    cmd_status, cmd_sync, cmd_verify_root, cmd_watch, CliError, DiffLine,
 };
 
 #[derive(Parser)]
@@ -86,6 +86,32 @@ enum Command {
         /// la fuente reconstruida.
         #[arg(long)]
         sexp: bool,
+    },
+
+    /// Compara dos versiones del repo (típicamente dos α-hashes) y
+    /// muestra el diff unified de sus `render_source`.
+    Diff {
+        /// Hash izquierdo en hex.
+        left: String,
+        /// Hash derecho en hex.
+        right: String,
+    },
+
+    /// Retira una raíz: emite una atestación negativa firmada por el
+    /// keypair del repo y quita el α-hash del MST/`roots`. Las
+    /// atestaciones originales se conservan como prueba histórica.
+    Retire {
+        /// α-hash en hex (64 caracteres).
+        hash: String,
+    },
+
+    /// Verifica que el α-hash de una raíz local es consistente con su
+    /// contenido bajo algún dialecto soportado. Útil para auditar
+    /// raíces traídas por sync (cuyo dialect no necesariamente está
+    /// registrado, o cuyo remitente puede no ser confiable).
+    Verify {
+        /// α-hash en hex (64 caracteres).
+        hash: String,
     },
 }
 
@@ -167,6 +193,58 @@ fn run() -> Result<(), CliError> {
                 let when = format_ts(e.ts_secs);
                 let dialect = e.dialect.map(|d| d.name()).unwrap_or("?");
                 println!("{} {}  {}  [{}]  by {}", mark, when, e.alpha, dialect, e.author);
+            }
+        }
+        Command::Verify { hash } => {
+            let pass = prompt_passphrase()?;
+            let v = cmd_verify_root(&cli.repo, &pass, &hash)?;
+            println!("α-hash:    {}", v.alpha);
+            println!("struct:    {}", v.struct_hash);
+            println!(
+                "registrado: {}",
+                v.stored_dialect.map(|d| d.name()).unwrap_or("(huérfano — sin entrada en `roots`)")
+            );
+            match v.verified_dialect {
+                Some(d) => println!("verificado: OK como {}", d.name()),
+                None => {
+                    println!("verificado: ✘ INCONSISTENTE — ningún dialecto produce ese α-hash");
+                    std::process::exit(2);
+                }
+            }
+            if !v.matches_stored() && v.stored_dialect.is_some() {
+                println!("⚠ aviso: dialect registrado ≠ verificado (posible drift)");
+            }
+        }
+        Command::Retire { hash } => {
+            let pass = prompt_passphrase()?;
+            let r = cmd_retire(&cli.repo, &pass, &hash)?;
+            if r.was_root {
+                println!("Retirada raíz {}", r.alpha);
+            } else {
+                println!(
+                    "Atestación negativa firmada para {} (no era raíz local)",
+                    r.alpha
+                );
+            }
+            println!("Firmada por: {}", r.author);
+        }
+        Command::Diff { left, right } => {
+            let pass = prompt_passphrase()?;
+            let d = cmd_diff(&cli.repo, &pass, &left, &right)?;
+            let left_kind = if d.left_is_root { "α" } else { "struct" };
+            let right_kind = if d.right_is_root { "α" } else { "struct" };
+            eprintln!("--- {} ({})", d.left_hash, left_kind);
+            eprintln!("+++ {} ({})", d.right_hash, right_kind);
+            eprintln!(
+                "@@ +{} −{} @@",
+                d.additions, d.deletions
+            );
+            for line in d.lines {
+                match line {
+                    DiffLine::Same(t) => print!(" {t}"),
+                    DiffLine::Add(t) => print!("+{t}"),
+                    DiffLine::Remove(t) => print!("-{t}"),
+                }
             }
         }
         Command::Show { hash, sexp } => {
