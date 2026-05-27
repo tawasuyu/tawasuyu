@@ -53,6 +53,12 @@
 //                              AGORA_PUBLIC_KEY_LOCAL, y fija el cuaderno
 //                              como raiz del grafo. Zero-alloc, sin
 //                              panicos posibles desde la app.
+//    * sys_cuaderno_solicitar_firma_host      — emitir un hash por COM1 y
+//                              leer 64 bytes de firma del operador
+//                              externo (Fase 38, Host Signer Injection):
+//                              el cordon umbilical limpio entre Ring 0
+//                              y `wawactl`, conservando la ley "el kernel
+//                              jamas firma; solo verifica".
 //
 //  GUARDARRAIL: el kernel valida MATEMATICAMENTE todo puntero que el modulo le
 //  entrega contra los limites reales de su memoria lineal. No se confia en que
@@ -165,6 +171,14 @@ fn leer_hash(m: &[u8], ptr: u32, fallo: &'static str) -> Result<Hash, Error> {
     let mut hash = [0u8; 32];
     hash.copy_from_slice(bytes);
     Ok(hash)
+}
+
+/// Convierte un nibble (4 bits) a su caracter ASCII hex minuscula. Usado por
+/// la Fase 38 para emitir el hash del cuaderno por COM1 en un formato que
+/// `wawactl` (host) puede parsear con `from_str_radix(_, 16)` directo.
+#[inline]
+fn hex_nibble(n: u8) -> u8 {
+    if n < 10 { b'0' + n } else { b'a' + (n - 10) }
 }
 
 /// Inyecta en el enlazador la matriz de capacidades del modulo WASM. Todo lo
@@ -972,6 +986,165 @@ pub(crate) fn enlazar_capacidades(
         },
     )?;
     } // PERMISO_GRAFO_ESCRITURA (cuaderno_firmar_y_anclar)
+
+    // --- CAPACIDAD 3h :: sys_cuaderno_solicitar_firma_host ------------------
+    // sys_cuaderno_solicitar_firma_host(hash_ptr, salida_firma_ptr) -> i32
+    //
+    // EL CANAL DEL FIRMADOR EXTERNO (Fase 38). El kernel preserva la ley
+    // inmutable de la Fase 25 —jamas firma desde Ring 0; solo verifica—
+    // y delega el sellado criptografico en el operador del host
+    // (`wawactl` o un HSM futuro). Esta syscall es el cordon umbilical
+    // limpio entre Wawa y el firmador:
+    //
+    //   1. La app entrega los 32 bytes del hash del cuaderno a firmar.
+    //   2. El kernel emite por COM1 (`0x3F8`) la cadena de control
+    //      `wawa::sign_request::<HEX>\n` — donde <HEX> son los 64
+    //      caracteres ASCII del hash en hexadecimal minuscula. Es la
+    //      UNICA informacion que sale del Ring 0; jamas viaja una clave.
+    //   3. El kernel intenta leer 64 bytes del ring RX (rellenado por
+    //      `wawactl` a traves del PTY/socket de QEMU mapeado a COM1).
+    //   4. Si los 64 bytes ya estan completos en el ring, los escribe en
+    //      `salida_firma_ptr` y devuelve `Ok(0)`. Si todavia no, devuelve
+    //      `Saturado (-6)` — la app re-llama en el proximo tick.
+    //
+    // Para que el reintento no inunde el host con peticiones duplicadas,
+    // el kernel recuerda el hash pendiente; mientras la app vuelva a
+    // pedir el mismo hash, el prefijo se emite UNA SOLA VEZ. Un hash
+    // distinto se considera "nueva solicitud" y vuelve a emitir.
+    //
+    // GATEADA por PERMISO_GRAFO_ESCRITURA + foco. Back-pressure DMA: la
+    // operacion no toca el bus virtio, pero contamos una pagina por
+    // simetria con las otras syscalls de cuaderno — la cuota se reinicia
+    // cada tic y el reintento no la satura.
+    //
+    // ZERO-ALLOC: el formateo del prefijo + 64 chars hex vive en un
+    // buffer en pila de 90 B; el ring RX es un array global de 256 B.
+    // Ningun camino toca `linked_list_allocator`.
+    if permisos & PERMISO_GRAFO_ESCRITURA != 0 {
+    enlazador.func_wrap(
+        "renaser",
+        "sys_cuaderno_solicitar_firma_host",
+        |mut caller: Caller<'_, ContextoCapacidades>,
+         hash_ptr: u32,
+         salida_firma_ptr: u32|
+         -> Result<i32, Error> {
+            if crate::compositor::foco() != caller.data().indice_app {
+                return Ok(CodigoError::SinFoco.como_i32());
+            }
+            if caller.data().paginas_dma_en_vuelo >= MAX_PAGINAS_DMA_PER_APP {
+                return Ok(CodigoError::Saturado.como_i32());
+            }
+            caller.data_mut().paginas_dma_en_vuelo += 1;
+
+            let memoria = obtener_memoria(&caller)?;
+            let hash = {
+                let m = memoria.data(&caller);
+                match leer_hash(
+                    m,
+                    hash_ptr,
+                    "WASM :: sys_cuaderno_solicitar_firma_host desbordo memoria (hash)",
+                ) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        caller.data_mut().paginas_dma_en_vuelo -= 1;
+                        return Err(e);
+                    }
+                }
+            };
+            // Verificar que la salida de 64 B cabe ANTES de tocar el bus.
+            {
+                let m = memoria.data(&caller);
+                if let Err(e) = rango(
+                    m,
+                    salida_firma_ptr,
+                    64,
+                    "WASM :: sys_cuaderno_solicitar_firma_host desbordo memoria (firma)",
+                ) {
+                    caller.data_mut().paginas_dma_en_vuelo -= 1;
+                    return Err(e);
+                }
+            }
+
+            // De-duplicacion de la solicitud: emitimos el prefijo solo si
+            // el hash pendiente cambio. Asi, un loop de la app reintentando
+            // cada tick no inunda al host con sign_requests duplicadas.
+            // El estado vive en un Mutex spin —el reactor cooperativo no
+            // se contiende—.
+            use spin::Mutex;
+            static ULTIMO_HASH: Mutex<Option<crate::almacen::Hash>> = Mutex::new(None);
+            let emitir = {
+                let mut slot = ULTIMO_HASH.lock();
+                let cambio = slot.as_ref() != Some(&hash);
+                if cambio {
+                    *slot = Some(hash);
+                }
+                cambio
+            };
+            if emitir {
+                // Prefijo de control + hash en hexadecimal + newline.
+                // 20 (prefijo) + 64 (hex) + 1 (\n) = 85 bytes — cabe holgado
+                // en el buffer estatico de pila.
+                let mut linea = [0u8; 96];
+                let prefijo = b"wawa::sign_request::";
+                linea[..prefijo.len()].copy_from_slice(prefijo);
+                let mut n = prefijo.len();
+                for &b in &hash {
+                    linea[n] = hex_nibble(b >> 4);
+                    linea[n + 1] = hex_nibble(b & 0x0F);
+                    n += 2;
+                }
+                linea[n] = b'\n';
+                n += 1;
+                crate::drivers::serial::escribir(&linea[..n]);
+            }
+
+            // Drenar lo que haya llegado del host al ring interno y luego
+            // intentar leer 64 bytes. Si todavia faltan, la app reintenta.
+            crate::drivers::serial::drenar_input();
+            let mut firma = [0u8; 64];
+            let leidos = crate::drivers::serial::leer_disponible(&mut firma);
+
+            if leidos < 64 {
+                // Devolvemos los bytes parciales al ring para no perderlos —
+                // el ring no tiene push_front, asi que conservamos la firma
+                // en un acumulador estatico.
+                static ACUMULADOR: Mutex<([u8; 64], usize)> = Mutex::new(([0; 64], 0));
+                let mut acc = ACUMULADOR.lock();
+                let (ref mut buf, ref mut llenos) = *acc;
+                let cap = (64 - *llenos).min(leidos);
+                for i in 0..cap {
+                    buf[*llenos + i] = firma[i];
+                }
+                *llenos += cap;
+                if *llenos < 64 {
+                    caller.data_mut().paginas_dma_en_vuelo -= 1;
+                    return Ok(CodigoError::Saturado.como_i32());
+                }
+                // Tenemos los 64 bytes acumulados ahora; copiarlos a la
+                // memoria del modulo + reset del acumulador.
+                let firma_total = *buf;
+                *buf = [0; 64];
+                *llenos = 0;
+                drop(acc);
+                let m = memoria.data_mut(&mut caller);
+                m[salida_firma_ptr as usize..salida_firma_ptr as usize + 64]
+                    .copy_from_slice(&firma_total);
+                // Reset del hash pendiente — proxima solicitud volvera a emitir.
+                *ULTIMO_HASH.lock() = None;
+                caller.data_mut().paginas_dma_en_vuelo -= 1;
+                return Ok(CodigoError::Ok.como_i32());
+            }
+
+            // Llegaron los 64 bytes de un golpe — caso ideal.
+            let m = memoria.data_mut(&mut caller);
+            m[salida_firma_ptr as usize..salida_firma_ptr as usize + 64]
+                .copy_from_slice(&firma);
+            *ULTIMO_HASH.lock() = None;
+            caller.data_mut().paginas_dma_en_vuelo -= 1;
+            Ok(CodigoError::Ok.como_i32())
+        },
+    )?;
+    } // PERMISO_GRAFO_ESCRITURA (solicitar_firma_host)
 
     // --- CAPACIDAD 4 :: sys_object_datos(hash, salida, capacidad) -> i32 ---
     // Copia la carga util del objeto `hash` en `salida`. Devuelve el numero de

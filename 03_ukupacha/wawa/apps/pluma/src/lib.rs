@@ -125,6 +125,18 @@ extern "C" {
     ///   * -3 → firma forjada o tampered.
     ///   * -4 → app sin foco.
     fn sys_cuaderno_firmar_y_anclar(cuaderno_firmado_ptr: u32) -> i32;
+    /// FASE 38 :: solicita una firma legítima al operador externo
+    /// (`wawactl`) via COM1. El kernel emite `wawa::sign_request::<HEX>\n`
+    /// y, cuando el host responda con 64 bytes, los entrega en
+    /// `salida_firma_ptr`. Devuelve:
+    ///   * 0  → la firma ya llegó completa, lista para usar.
+    ///   * -6 → Saturado: el host todavía no respondió; reintentar
+    ///          en el próximo tick (sin re-emitir el prefijo).
+    ///   * -4 → app sin foco.
+    fn sys_cuaderno_solicitar_firma_host(
+        hash_ptr: u32,
+        salida_firma_ptr: u32,
+    ) -> i32;
 }
 
 #[cfg(not(test))]
@@ -260,6 +272,17 @@ static mut SOBERANIA_ANCLADA: bool = false;
 static mut SOBERANIA_FIRMA_ROTA: bool = false;
 static mut SOBERANIA_CODIGO: i32 = 0;
 
+/// FASE 38 :: solicitud de firma EN VUELO. Al presionar F6, la app pide la
+/// firma al host via `sys_cuaderno_solicitar_firma_host`. Mientras
+/// `FIRMA_PENDIENTE = true`, el `tick()` reintenta la syscall en cada
+/// fotograma sin volver a emitir el prefijo —el kernel de-duplica por
+/// hash—. Cuando llegue la firma, el cuaderno arma el sobre
+/// `CuadernoFirmado` con la firma real y dispara
+/// `sys_cuaderno_firmar_y_anclar`. La leyenda muestra
+/// "ESPERANDO OPERADOR  HOST" mientras estamos en este estado.
+static mut FIRMA_PENDIENTE: bool = false;
+static mut FIRMA_HASH_PENDIENTE: [u8; 32] = [0; 32];
+
 // =============================================================================
 //  ABI obligatorio del userspace renaser
 // =============================================================================
@@ -280,6 +303,15 @@ pub extern "C" fn tick() {
         atender_scancode(scancode);
     }
     unsafe { SCAN_PREV = scancode };
+
+    // FASE 38 :: reintento cooperativo del canal del firmador. Mientras
+    // haya una solicitud en vuelo (F6 disparada), este `tick` la sondea
+    // hasta que el host responda con los 64 bytes de la firma. No
+    // bloquea — el kernel devuelve `Saturado` cuando el ring RX aun no
+    // se completo y reintentamos en el proximo fotograma.
+    if unsafe { FIRMA_PENDIENTE } {
+        intentar_completar_firma();
+    }
 
     pintar();
     volcar();
@@ -303,16 +335,12 @@ fn atender_scancode(scancode: u32) {
         return;
     }
     if scancode == 0x40 {
-        // FASE 37 :: F6 :: firmar y anclar el cuaderno soberano. Toma el
-        // ultimo `HASH_CUADERNO` que el kernel devolvio en la consolidacion
-        // de la cascada y lo pasa por `sys_cuaderno_firmar_y_anclar` con
-        // un sobre criptografico. Sin clave privada en la jaula, el MVP
-        // adjunta un placeholder de firma — el kernel correctamente lo
-        // rechaza con AlmacenamientoFallo y la leyenda al pie indica
-        // "FIRMA INVALIDA". El camino feliz requerira un signer externo
-        // (wawactl) en la Fase 38+.
+        // FASE 38 :: F6 :: solicitar firma al operador externo (wawactl)
+        // por COM1 y, cuando llegue, anclar el cuaderno como soberano.
+        // No es bloqueante: F6 solo INICIA la solicitud; `tick()` reintenta
+        // pasivamente cada fotograma hasta que el host responde o falla.
         if !unsafe { F6_PREV } {
-            firmar_y_anclar_cuaderno();
+            iniciar_solicitud_firma_host();
         }
         unsafe { F6_PREV = true };
         return;
@@ -695,57 +723,81 @@ fn ejecutar_celda_importada() {
     registrar_celda_local(celda);
 }
 
-/// FASE 37 :: Firma del Tejido Celular. Empaqueta un sobre `CuadernoFirmado`
-/// con el `HASH_CUADERNO` mas reciente y se lo pasa al kernel. La clave
-/// privada del operador no vive en la jaula (politica de la Fase 25:
-/// solo el kernel VERIFICA, jamas FIRMA dentro de Ring 0), de modo que
-/// el sobre lleva la `autor` pinneada a `AGORA_PUBLIC_KEY_LOCAL` y una
-/// firma PLACEHOLDER. El kernel verificara matematicamente y la rechazara
-/// con `AlmacenamientoFallo` — el camino visual rotula "FIRMA INVALIDA".
-/// Cuando `wawactl` o una clave de sesion del kernel se conecten en la
-/// Fase 38+, la `firma` real reemplazara el placeholder y el camino
-/// feliz quedara disponible — la infraestructura de Ring 0 ya esta hoy.
-fn firmar_y_anclar_cuaderno() {
+/// FASE 38 :: clave publica empotrada del operador local. Acordada con
+/// `claves::AGORA_PUBLIC_KEY_LOCAL` del kernel — cualquier divergencia
+/// hace que la verificacion en Ring 0 falle con `CapacidadInsuficiente`.
+const AGORA_PUBLIC_KEY_LOCAL: [u8; 32] = [
+    0x1a, 0x4f, 0x7c, 0x91, 0xb6, 0x2d, 0x5e, 0xa8,
+    0x33, 0xc7, 0x09, 0x84, 0xf1, 0x60, 0xb5, 0x52,
+    0x6e, 0xae, 0x17, 0x40, 0x82, 0xfb, 0x99, 0xc1,
+    0x2d, 0x55, 0xd6, 0x3a, 0xe4, 0x77, 0x1c, 0x80,
+];
+
+/// FASE 38 :: arranca la solicitud de firma al host. Solo marca el estado
+/// pendiente con el hash actual; el trabajo lo hace `tick()` en cada
+/// fotograma via `intentar_completar_firma`.
+fn iniciar_solicitud_firma_host() {
     if !unsafe { HASH_CUADERNO_VALIDO } {
-        // No hay cuaderno consolidado para firmar. Reportamos sin tocar
-        // al kernel; la leyenda se queda igual.
-        unsafe {
-            SOBERANIA_FIRMA_ROTA = false;
-            SOBERANIA_ANCLADA = false;
-        }
         return;
     }
+    unsafe {
+        FIRMA_HASH_PENDIENTE = HASH_CUADERNO;
+        FIRMA_PENDIENTE = true;
+        SOBERANIA_ANCLADA = false;
+        SOBERANIA_FIRMA_ROTA = false;
+    }
+}
 
-    // Llave publica del operador local — empotrada en el kernel desde
-    // la Fase 25. La constante esta acordada con
-    // `claves::AGORA_PUBLIC_KEY_LOCAL` y vive en este array para que el
-    // sobre que enviamos sea estructuralmente legitimo (autor reconocido).
-    const AGORA_PUBLIC_KEY_LOCAL: [u8; 32] = [
-        0x1a, 0x4f, 0x7c, 0x91, 0xb6, 0x2d, 0x5e, 0xa8,
-        0x33, 0xc7, 0x09, 0x84, 0xf1, 0x60, 0xb5, 0x52,
-        0x6e, 0xae, 0x17, 0x40, 0x82, 0xfb, 0x99, 0xc1,
-        0x2d, 0x55, 0xd6, 0x3a, 0xe4, 0x77, 0x1c, 0x80,
-    ];
+/// FASE 38 :: reintento cooperativo del canal del firmador. Llamado en
+/// cada `tick()` mientras `FIRMA_PENDIENTE`. Pide la firma al host
+/// (sys_cuaderno_solicitar_firma_host); si llega completa, arma el
+/// sobre `CuadernoFirmado` con esa firma real y dispara
+/// `sys_cuaderno_firmar_y_anclar`. Cualquier otro codigo se considera
+/// fallo terminal — la cadena de firma se rompe.
+fn intentar_completar_firma() {
+    if !unsafe { FIRMA_PENDIENTE } {
+        return;
+    }
+    let mut firma = [0u8; 64];
+    let hash_pendiente = unsafe { FIRMA_HASH_PENDIENTE };
+    let cod = unsafe {
+        sys_cuaderno_solicitar_firma_host(
+            hash_pendiente.as_ptr() as u32,
+            firma.as_mut_ptr() as u32,
+        )
+    };
+    match cod {
+        0 => {
+            // La firma llego completa. Armar el sobre y anclar.
+            unsafe { FIRMA_PENDIENTE = false };
+            anclar_con_firma(&hash_pendiente, &firma);
+        }
+        -6 => {
+            // Saturado: el host todavia no respondio. Esperar al
+            // proximo tick — el kernel ya no re-emite el prefijo.
+        }
+        otro => {
+            // Cualquier otro codigo (SinFoco, etc.) es fallo terminal.
+            unsafe {
+                FIRMA_PENDIENTE = false;
+                SOBERANIA_FIRMA_ROTA = true;
+                SOBERANIA_ANCLADA = false;
+                SOBERANIA_CODIGO = otro;
+            }
+        }
+    }
+}
 
-    // Sobre serializado MANUALMENTE en pila. Postcard, para una struct
-    // con tres arrays de tamaño fijo, NO inserta headers de longitud:
-    // cuaderno_raiz_hash (32) + autor (32) + firma (64) = 128 B EXACTOS.
-    // El buffer se padea a 256 B con ceros para satisfacer la lectura
-    // de 256 B que el kernel hace (cota dura MAX_CF). Pila pura,
-    // zero-alloc. `postcard::take_from_bytes` consume solo el prefijo
-    // de 128 B; los ceros del padding son inofensivos.
+/// FASE 38 :: arma el sobre `CuadernoFirmado` con la firma real recibida
+/// del host e invoca `sys_cuaderno_firmar_y_anclar`. Zero-alloc — el sobre
+/// vive en un buffer de 256 B en pila (padding incluido). El kernel lee
+/// los 128 B utiles con `postcard::take_from_bytes`; el resto del buffer
+/// queda en ceros y es inofensivo.
+fn anclar_con_firma(hash: &[u8; 32], firma: &[u8; 64]) {
     let mut sobre = [0u8; 256];
-    let hash_cuaderno = unsafe { HASH_CUADERNO };
-    sobre[0..32].copy_from_slice(&hash_cuaderno);
+    sobre[0..32].copy_from_slice(hash);
     sobre[32..64].copy_from_slice(&AGORA_PUBLIC_KEY_LOCAL);
-    // Firma PLACEHOLDER (ceros, ya inicializados arriba). El kernel
-    // la rechazara matematicamente — Ed25519 sobre todo-ceros no verifica
-    // para ninguna llave publica realista. La estructura del sobre es
-    // legitima; la criptografia, no. Cuando un signer real este
-    // disponible (wawactl o clave de sesion del kernel en Fase 38+),
-    // sobre[64..128] llevara los 64 bytes de la firma autentica y el
-    // kernel anclara con Ok(0).
-
+    sobre[64..128].copy_from_slice(firma);
     let codigo = unsafe { sys_cuaderno_firmar_y_anclar(sobre.as_ptr() as u32) };
     unsafe {
         SOBERANIA_CODIGO = codigo;
@@ -787,7 +839,7 @@ fn pintar() {
 
     // Cabecera con el hash del cuaderno (si ya hubo una consolidacion).
     rellenar_rect(lienzo, 0, 0, ANCHO, EDITOR_Y - 4, secundario);
-    dibujar_texto(lienzo, b"PLUMA  WAWA  F37", 8, 6, 1, tinta);
+    dibujar_texto(lienzo, b"PLUMA  WAWA  F38", 8, 6, 1, tinta);
     if unsafe { HASH_CUADERNO_VALIDO } {
         let h = unsafe { HASH_CUADERNO };
         let mut etiqueta = [b' '; 8];
@@ -809,10 +861,13 @@ fn pintar() {
     // FASE 34 :: la leyenda rota a la version de cadena rota cuando la
     // ultima ejecucion fallo en mitad de un flujo encadenado. La proxima
     // celda exitosa restaura la leyenda normal automaticamente.
-    // FASE 37 :: la soberania anclada tiene prioridad visual sobre la
-    // leyenda comun. Una firma rechazada deja el rotulo de integridad
-    // comprometida hasta que un nuevo F6 exitoso lo restaure.
-    let leyenda: &[u8] = if unsafe { SOBERANIA_FIRMA_ROTA } {
+    // FASE 38 :: leyenda al pie priorizada por estado de soberania.
+    // ESPERANDO > FIRMA_ROTA > ANCLADA > CADENA_ROTA > default. Una
+    // solicitud en vuelo (F6 disparada, host aun callado) muestra
+    // "ESPERANDO OPERADOR (HOST)" hasta que el sobre llegue o falle.
+    let leyenda: &[u8] = if unsafe { FIRMA_PENDIENTE } {
+        b"ESPERANDO OPERADOR  HOST"
+    } else if unsafe { SOBERANIA_FIRMA_ROTA } {
         b"FIRMA INVALIDA  INTEGRIDAD COMPROMETIDA"
     } else if unsafe { SOBERANIA_ANCLADA } {
         b"CUADERNO SOBERANO ANCLADO  OK"

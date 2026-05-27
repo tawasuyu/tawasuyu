@@ -22,3 +22,5 @@ pub mod disco;
 pub mod pci;
 pub mod raton;
 pub mod red;
+// Fase 38 :: COM1 polling — canal del firmador externo (wawactl).
+pub mod serial;

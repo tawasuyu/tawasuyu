@@ -90,6 +90,34 @@ enum Cmd {
         #[arg(long)]
         system: bool,
     },
+    /// Fase 38 :: firma un cuaderno de Pluma para que el kernel de Wawa
+    /// lo ancle como soberano. Lee el hash en hexadecimal (64 chars), la
+    /// clave privada Ed25519 desde un archivo (32 bytes en formato
+    /// raw — el formato esperado por `ed25519-compact`), genera los 64
+    /// bytes de la firma y los emite a stdout. El operador los redirige
+    /// al canal serial de QEMU (por ejemplo `> /dev/ttyS0` cuando el
+    /// dispositivo COM1 esta mapeado a un PTY).
+    ///
+    /// Uso tipico:
+    ///   wawactl firmar-cuaderno \
+    ///       --hash 0123...abcd \
+    ///       --clave-privada ~/.config/wawa/operador.sk \
+    ///       > /dev/ttyS0
+    ///
+    /// El comando es minimal por diseno: NO abre la PTY de QEMU el solo,
+    /// NO escucha COM1 esperando solicitudes. Es un primitive que el
+    /// arnes de pruebas / un wrapper futuro de mas alto nivel puede
+    /// componer. La criptografia es real (ed25519-compact); cuando
+    /// `wawactl` arme su capa de "demonio escucha", la integracion sera
+    /// directa.
+    FirmarCuaderno {
+        /// Hash del cuaderno a firmar, 64 caracteres hexadecimales.
+        #[arg(long)]
+        hash: String,
+        /// Path al archivo con la clave privada Ed25519 cruda (32 bytes).
+        #[arg(long = "clave-privada")]
+        clave_privada: String,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -122,7 +150,61 @@ fn run(cmd: Cmd) -> Result<(), String> {
         Cmd::Reset { system } => cmd_reset(layer_of(system)),
         Cmd::Watch => cmd_watch(),
         Cmd::Module { id, op, system } => cmd_module(&id, &op, layer_of(system)),
+        Cmd::FirmarCuaderno { hash, clave_privada } => cmd_firmar_cuaderno(&hash, &clave_privada),
     }
+}
+
+/// FASE 38 :: subcomando `firmar-cuaderno`. Lee el hash hex, carga la clave
+/// privada Ed25519 desde un archivo, firma los 32 bytes del hash y vuelca
+/// los 64 bytes crudos de la firma a stdout. Operacion offline: no toca el
+/// kernel ni la red — el redireccionado al PTY de QEMU vive en el shell
+/// del operador. ZERO heuristica: si el hash no es 64 hex o la clave no es
+/// 32 bytes, abortamos sin firmar.
+fn cmd_firmar_cuaderno(hash_hex: &str, clave_path: &str) -> Result<(), String> {
+    use std::io::Write;
+
+    if hash_hex.len() != 64 {
+        return Err(format!(
+            "el hash debe traer 64 caracteres hexadecimales; recibi {}",
+            hash_hex.len()
+        ));
+    }
+    let mut hash = [0u8; 32];
+    for i in 0..32 {
+        let byte_str = &hash_hex[i * 2..i * 2 + 2];
+        hash[i] = u8::from_str_radix(byte_str, 16)
+            .map_err(|_| format!("hash con caracteres no-hex cerca del byte {i}"))?;
+    }
+
+    let clave_bytes = std::fs::read(clave_path)
+        .map_err(|e| format!("no pude leer la clave privada en {clave_path}: {e}"))?;
+    // ed25519-compact espera la SecretKey en formato "expanded" (64 bytes:
+    // 32 de la seed + 32 de la pubkey derivada). Aceptamos ambos formatos:
+    // si el archivo trae 32 bytes los tratamos como seed; si trae 64, como
+    // SecretKey completa.
+    let firma = if clave_bytes.len() == 32 {
+        let mut seed_arr = [0u8; 32];
+        seed_arr.copy_from_slice(&clave_bytes);
+        let seed = ed25519_compact::Seed::new(seed_arr);
+        let kp = ed25519_compact::KeyPair::from_seed(seed);
+        kp.sk.sign(hash, None)
+    } else if clave_bytes.len() == 64 {
+        let sk = ed25519_compact::SecretKey::from_slice(&clave_bytes)
+            .map_err(|e| format!("clave privada invalida: {e}"))?;
+        sk.sign(hash, None)
+    } else {
+        return Err(format!(
+            "la clave privada debe traer 32 (seed) o 64 (SecretKey) bytes; trae {}",
+            clave_bytes.len()
+        ));
+    };
+
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    out.write_all(firma.as_ref())
+        .map_err(|e| format!("no pude escribir la firma a stdout: {e}"))?;
+    out.flush().ok();
+    Ok(())
 }
 
 fn layer_of(system: bool) -> Layer {

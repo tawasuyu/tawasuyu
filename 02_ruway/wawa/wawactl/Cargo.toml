@@ -15,3 +15,9 @@ path = "src/main.rs"
 clap = { workspace = true }
 serde_json = { workspace = true }
 wawa-config = { path = "../../../shared/wawa-config" }
+# Fase 38 :: firma criptografica de cuadernos del lado host. `wawactl` es el
+# UNICO portador legitimo de la clave privada del operador; el kernel jamas
+# la ve. `default-features = false` apaga la generacion de aleatoriedad —
+# para forjar una clave nueva se usa un proceso separado (futuro `wawactl
+# claves forjar`); aqui solo firmamos con la clave existente.
+ed25519-compact = { version = "2", default-features = false }

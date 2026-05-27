@@ -517,7 +517,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     gdt::init();
     interrupts::init();
     pic::init();
-    traza("gdt + idt + pic");
+    // Fase 38 :: COM1 polling para el canal del firmador externo. Sin IRQ,
+    // sin asignador — solo configurar el UART una vez al boot.
+    drivers::serial::init();
+    traza("gdt + idt + pic + serial");
 
     // --- 4. FASE 3 :: fundar el heap. A partir de aqui, `alloc` esta vivo. ---
     memory::init();
