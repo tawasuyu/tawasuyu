@@ -382,6 +382,9 @@ bzip2 = "0.4"
 axum = "0.7"
 tower = "0.5"
 
+# === ANN sobre embeddings (iniy nli --ann) ===
+instant-distance = "0.6"
+
 # === P2P (minga) ===
 libp2p = { version = "0.56", features = ["tokio", "tcp", "noise", "yamux", "macros", "kad", "identify"] }
 libp2p-stream = "=0.4.0-alpha"

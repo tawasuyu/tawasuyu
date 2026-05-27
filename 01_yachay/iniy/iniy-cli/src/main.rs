@@ -95,6 +95,15 @@ enum Cmd {
         /// Umbral de cos para pre-filtrado. Default 0.55 (multilingual-e5-small).
         #[arg(long, default_value_t = 0.55)]
         umbral_embeddings: f32,
+        /// Usa ANN (HNSW vía instant-distance) para encontrar los k
+        /// vecinos más cercanos por embedding y solo evaluar NLI sobre
+        /// esos pares. Escala a millones de aserciones (vs O(N²) del
+        /// pre-filtro lineal). Requiere --prefiltro-embeddings implícito.
+        #[arg(long)]
+        ann: bool,
+        /// k vecinos a recuperar con ANN.
+        #[arg(long, default_value_t = 20)]
+        ann_k: usize,
     },
     /// Imprime las N aserciones más contradictorias entre sí.
     Contradictions {
@@ -296,6 +305,27 @@ fn formato_fecha(unix: i64) -> String {
     format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", y, mo, d, h, m, s)
 }
 
+/// Wrapper newtype para que `Vec<f32>` implemente `instant_distance::Point`.
+/// Distancia = 1 - cosine similarity (HNSW espera distancia métrica creciente).
+#[derive(Clone)]
+struct HnswPoint(Vec<f32>);
+
+impl instant_distance::Point for HnswPoint {
+    fn distance(&self, other: &Self) -> f32 {
+        let (a, b) = (&self.0, &other.0);
+        let mut dot = 0.0_f32;
+        let mut na = 0.0_f32;
+        let mut nb = 0.0_f32;
+        for i in 0..a.len().min(b.len()) {
+            dot += a[i] * b[i];
+            na += a[i] * a[i];
+            nb += b[i] * b[i];
+        }
+        let denom = (na.sqrt() * nb.sqrt()).max(1e-9);
+        (1.0 - dot / denom).max(0.0)
+    }
+}
+
 /// Intenta fastembed (multilingual-e5-small, local, ~120MB ONNX descargado al
 /// primer uso). Si falla (sin internet en el primer arranque, ONNX runtime
 /// roto, etc.) cae a un mock determinista con warning. El mock NO da
@@ -395,7 +425,7 @@ async fn main() -> Result<()> {
                 println!("  … (+{} más, persistidas)", aserciones.len() - 8);
             }
         }
-        Cmd::Nli { doc_id, umbral, backend, prefiltro_embeddings, umbral_embeddings } => {
+        Cmd::Nli { doc_id, umbral, backend, prefiltro_embeddings, umbral_embeddings, ann, ann_k } => {
             let (aserciones, alcance) = match doc_id {
                 Some(d) => {
                     let id = parse_doc_id(&d)?;
@@ -420,11 +450,11 @@ async fn main() -> Result<()> {
                 }
             };
 
-            // Pre-cómputo de embeddings (opcional).
-            let embeddings: Option<Vec<EmbeddingVector>> = if prefiltro_embeddings {
+            // ANN implica pre-cómputo de embeddings.
+            let necesita_embeddings = prefiltro_embeddings || ann;
+            let embeddings: Option<Vec<EmbeddingVector>> = if necesita_embeddings {
                 let provider = construir_provider_embeddings().await?;
-                println!("pre-filtro embeddings: {} (umbral cos ≥ {:.2})",
-                    provider.model_id().name, umbral_embeddings);
+                println!("embeddings: {} ({}d)", provider.model_id().name, provider.model_id().dimension);
                 let textos: Vec<String> = aserciones.iter().map(|a| a.texto.clone()).collect();
                 let vecs = provider.embed_batch(&textos).await
                     .map_err(|e| anyhow::anyhow!("embed_batch falló: {e}"))?;
@@ -433,48 +463,80 @@ async fn main() -> Result<()> {
                 None
             };
 
-            let total = aserciones.len() * (aserciones.len() - 1) / 2;
-            let mut imps = Vec::new();
+            // Estrategia de selección de pares.
+            let pares_candidatos: Vec<(usize, usize)> = if ann {
+                let vecs = embeddings.as_ref().expect("ann implica embeddings");
+                println!("construyendo índice HNSW (k={ann_k}, {} aserciones)...", aserciones.len());
+                let t0 = std::time::Instant::now();
+                let pts: Vec<HnswPoint> = vecs.iter().map(|v| HnswPoint(v.values.clone())).collect();
+                let valores: Vec<usize> = (0..aserciones.len()).collect();
+                let hnsw = instant_distance::Builder::default().build(pts.clone(), valores);
+                println!("  índice construido en {:.1}s", t0.elapsed().as_secs_f64());
+                let mut pares = std::collections::HashSet::<(usize, usize)>::new();
+                let mut search = instant_distance::Search::default();
+                for (i, p) in pts.iter().enumerate() {
+                    let vecinos = hnsw.search(p, &mut search).take(ann_k + 1);  // +1 porque el primero es uno mismo
+                    for item in vecinos {
+                        let j = *item.value;
+                        if j == i { continue; }
+                        let (a, b) = if i < j { (i, j) } else { (j, i) };
+                        pares.insert((a, b));
+                    }
+                }
+                let mut v: Vec<_> = pares.into_iter().collect();
+                v.sort();
+                println!("  pares ANN únicos: {}", v.len());
+                v
+            } else {
+                // Modo lineal: todos los pares (i, j) con i < j.
+                let mut v = Vec::with_capacity(aserciones.len() * (aserciones.len() - 1) / 2);
+                for i in 0..aserciones.len() {
+                    for j in (i + 1)..aserciones.len() {
+                        v.push((i, j));
+                    }
+                }
+                v
+            };
+
+            let total = pares_candidatos.len();
+            let mut imps = Vec::with_capacity(total);
             let mut no_neutrales = 0usize;
             let mut hechos = 0usize;
             let mut salteados_por_prefiltro = 0usize;
-            for i in 0..aserciones.len() {
-                for j in (i + 1)..aserciones.len() {
-                    let rel = if let Some(vs) = &embeddings {
-                        let cos = vs[i].cosine(&vs[j])
-                            .map_err(|e| anyhow::anyhow!("cosine falló: {e}"))?;
-                        if cos < umbral_embeddings {
-                            salteados_por_prefiltro += 1;
-                            iniy_core::RelacionNli { entailment: 0.0, contradiction: 0.0, neutral: 1.0 }
-                        } else {
-                            motor.evaluar(&aserciones[i], &aserciones[j]).await?
-                        }
+            for (i, j) in pares_candidatos {
+                let rel = if let Some(vs) = &embeddings {
+                    let cos = vs[i].cosine(&vs[j])
+                        .map_err(|e| anyhow::anyhow!("cosine falló: {e}"))?;
+                    if prefiltro_embeddings && cos < umbral_embeddings {
+                        salteados_por_prefiltro += 1;
+                        iniy_core::RelacionNli { entailment: 0.0, contradiction: 0.0, neutral: 1.0 }
                     } else {
                         motor.evaluar(&aserciones[i], &aserciones[j]).await?
-                    };
-                    hechos += 1;
-                    if matches!(backend, BackendNli::Llm) && hechos % 10 == 0 {
-                        eprintln!("  ... {hechos}/{total}");
                     }
-                    if rel.contradiction > 0.0 || rel.entailment > 0.0 {
-                        no_neutrales += 1;
-                    }
-                    imps.push(Implicacion {
-                        premisa: aserciones[i].id,
-                        hipotesis: aserciones[j].id,
-                        relacion: rel,
-                    });
+                } else {
+                    motor.evaluar(&aserciones[i], &aserciones[j]).await?
+                };
+                hechos += 1;
+                if matches!(backend, BackendNli::Llm) && hechos % 10 == 0 {
+                    eprintln!("  ... {hechos}/{total}");
                 }
+                if rel.contradiction > 0.0 || rel.entailment > 0.0 {
+                    no_neutrales += 1;
+                }
+                imps.push(Implicacion {
+                    premisa: aserciones[i].id,
+                    hipotesis: aserciones[j].id,
+                    relacion: rel,
+                });
             }
             store.persistir_implicaciones(&imps)?;
             println!("pares evaluados: {}", imps.len());
             if prefiltro_embeddings {
                 println!("pares salteados por embeddings: {} ({:.0}%)",
                     salteados_por_prefiltro,
-                    100.0 * salteados_por_prefiltro as f32 / total as f32);
+                    100.0 * salteados_por_prefiltro as f32 / total.max(1) as f32);
             }
             println!("relaciones no triviales: {}  (entailment o contradiction > 0)", no_neutrales);
-            // Recalcular reputaciones inmediatamente (el grafo cambió).
             let n_reps = store.recalcular_reputaciones()?;
             println!("persistido. reputaciones recalculadas: {n_reps} fuentes.");
         }
