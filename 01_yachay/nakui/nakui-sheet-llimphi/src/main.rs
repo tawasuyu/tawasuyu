@@ -29,7 +29,7 @@ use llimphi_widget_context_menu::{
     context_menu_view, step_active, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
 };
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
-use nakui_sheet::{csv_io, CellFormat, CellRef, ExportMode, SheetValue, Workbook};
+use nakui_sheet::{csv_io, CellFormat, CellRange, CellRef, ExportMode, SheetValue, Workbook};
 use std::sync::Arc;
 
 const VISIBLE_COLS: u32 = 12;
@@ -69,6 +69,11 @@ mod palette {
     pub const FG_HEADER: Color = Color::from_rgba8(170, 175, 188, 255);
     pub const ACCENT: Color = Color::from_rgba8(255, 140, 32, 255);
     pub const ACCENT_FG: Color = Color::from_rgba8(20, 14, 6, 255);
+    /// Tinte sutil para celdas dentro del rango de selección
+    /// (excepto la active, que es accent sólido). Brown-amber muy
+    /// apagado — visible sobre el negro pero no rivaliza con la
+    /// accent de la live cell.
+    pub const SEL_RANGE_BG: Color = Color::from_rgba8(64, 44, 22, 255);
     pub const ERROR: Color = Color::from_rgba8(232, 96, 96, 255);
     pub const ERROR_BG: Color = Color::from_rgba8(80, 24, 24, 255);
     pub const FG_PLACEHOLDER: Color = Color::from_rgba8(95, 100, 115, 255);
@@ -80,6 +85,9 @@ struct NakuiSheetApp;
 enum Msg {
     SelectCell(CellRef),
     Move(Dir),
+    /// Como `Move`, pero NO colapsa el anchor — extiende el rango
+    /// de selección desde el anchor actual. Lo dispara Shift+flecha.
+    ExtendMove(Dir),
     FormulaKey(KeyEvent),
     Commit,
     Cancel,
@@ -155,6 +163,12 @@ struct Model {
     editing: bool,
     /// Estado del menú contextual abierto. `None` = sin menú.
     menu: Option<MenuState>,
+    /// "Otro extremo" del rango de selección. La selección es el
+    /// rectángulo `(anchor, selected)` normalizado. Con un click o
+    /// flecha pelada, `anchor == selected` (selección de una sola
+    /// celda). Shift+flecha mueve `selected` sin tocar `anchor`,
+    /// extendiendo el rectángulo a lo Excel.
+    anchor: CellRef,
 }
 
 /// Estado del menú contextual mientras está abierto.
@@ -211,6 +225,7 @@ impl App for NakuiSheetApp {
             clipboard_origin: None,
             editing: false,
             menu: None,
+            anchor: selected,
         }
     }
 
@@ -223,8 +238,9 @@ impl App for NakuiSheetApp {
                     commit_bar(&mut model);
                 }
                 model.selected = cr;
+                model.anchor = cr;
                 model.bar.set_text(model.wb.raw(cr).unwrap_or(""));
-                model.status = Status::default();
+                model.status = selection_status(&model);
                 ensure_visible(&mut model);
             }
             Msg::Move(dir) => {
@@ -234,8 +250,24 @@ impl App for NakuiSheetApp {
                 }
                 let cr = move_cell(model.selected, dir);
                 model.selected = cr;
+                model.anchor = cr;
                 model.bar.set_text(model.wb.raw(cr).unwrap_or(""));
-                model.status = Status::default();
+                model.status = selection_status(&model);
+                ensure_visible(&mut model);
+            }
+            Msg::ExtendMove(dir) => {
+                // Shift+flecha: extiende sin tocar anchor. Si estaba
+                // editando, salimos primero (mover ≠ editar).
+                if model.editing {
+                    commit_bar(&mut model);
+                    model.editing = false;
+                }
+                let cr = move_cell(model.selected, dir);
+                model.selected = cr;
+                // bar mantiene el raw de la cell activa (la "live"
+                // cell del rango), igual que Excel.
+                model.bar.set_text(model.wb.raw(cr).unwrap_or(""));
+                model.status = selection_status(&model);
                 ensure_visible(&mut model);
             }
             Msg::FormulaKey(ev) => {
@@ -560,6 +592,7 @@ impl App for NakuiSheetApp {
             model.viewport_col,
             model.editing,
             &model.bar,
+            model,
         );
         let status = status_bar_view(&model.status);
 
@@ -670,6 +703,21 @@ impl App for NakuiSheetApp {
             {
                 Some(Msg::Move(Dir::Right))
             }
+            // Shift+flechas: extienden la selección. Solo aplica
+            // FUERA de edición — dentro de la barra, Shift+flecha
+            // sigue siendo selección de texto (cae al FormulaKey).
+            Key::Named(NamedKey::ArrowUp) if ev.modifiers.shift && !model.editing => {
+                Some(Msg::ExtendMove(Dir::Up))
+            }
+            Key::Named(NamedKey::ArrowDown) if ev.modifiers.shift && !model.editing => {
+                Some(Msg::ExtendMove(Dir::Down))
+            }
+            Key::Named(NamedKey::ArrowLeft) if ev.modifiers.shift && !model.editing => {
+                Some(Msg::ExtendMove(Dir::Left))
+            }
+            Key::Named(NamedKey::ArrowRight) if ev.modifiers.shift && !model.editing => {
+                Some(Msg::ExtendMove(Dir::Right))
+            }
             Key::Named(NamedKey::Tab) => Some(Msg::Move(Dir::Right)),
             _ => {
                 // Si no está editando y llega una tecla productiva
@@ -745,6 +793,62 @@ fn move_cell(cr: CellRef, dir: Dir) -> CellRef {
 
 fn applied_count(wb: &Workbook) -> usize {
     wb.applied_count()
+}
+
+/// Rectángulo de selección actual normalizado (top-left + bottom-right).
+fn selection_rect(model: &Model) -> CellRange {
+    CellRange::new(model.anchor, model.selected)
+}
+
+fn selection_is_single(model: &Model) -> bool {
+    model.anchor == model.selected
+}
+
+/// Status descriptivo de la selección: una sola celda → vacío
+/// (volvemos al estado neutro); un rango → "Sel: A1:C5 · 15 celdas
+/// · suma 234.5" si hay numéricos.
+fn selection_status(model: &Model) -> Status {
+    if selection_is_single(model) {
+        return Status::default();
+    }
+    let r = selection_rect(model);
+    let count = r.cell_count();
+    let mut sum = rust_decimal::Decimal::ZERO;
+    let mut num_count = 0u32;
+    for cr in r.iter() {
+        if let SheetValue::Number(n) = model.wb.value(cr) {
+            sum += n;
+            num_count += 1;
+        }
+    }
+    let text = if num_count == 0 {
+        format!("  Sel: {} · {} celdas", r, count)
+    } else {
+        let avg = sum / rust_decimal::Decimal::from(num_count as i64);
+        format!(
+            "  Sel: {} · {} celdas · suma {} · prom {}",
+            r,
+            count,
+            sum.normalize(),
+            avg.normalize()
+        )
+    };
+    Status {
+        text,
+        kind: StatusKind::Info,
+    }
+}
+
+fn cell_in_selection(model: &Model, cr: CellRef) -> bool {
+    if selection_is_single(model) {
+        cr == model.selected
+    } else {
+        let r = selection_rect(model);
+        cr.col >= r.start.col
+            && cr.col <= r.end.col
+            && cr.row >= r.start.row
+            && cr.row <= r.end.row
+    }
 }
 
 /// Aplica el contenido actual de la barra a la celda seleccionada
@@ -1039,6 +1143,7 @@ fn grid_view(
     viewport_col: u32,
     editing: bool,
     bar: &TextInputState,
+    model: &Model,
 ) -> View<Msg> {
     let mut rows: Vec<View<Msg>> = Vec::new();
     // Cabecera de columnas: muestra los labels A, B, C... empezando
@@ -1047,7 +1152,15 @@ fn grid_view(
     // Filas de datos. Cada r local mapea a row = viewport_row + r.
     for r in 0..VISIBLE_ROWS {
         let abs_row = viewport_row + r;
-        rows.push(data_row(wb, selected, abs_row, viewport_col, editing, bar));
+        rows.push(data_row(
+            wb,
+            selected,
+            abs_row,
+            viewport_col,
+            editing,
+            bar,
+            model,
+        ));
     }
     // El contenedor de la grilla se pinta con el color de las líneas
     // — los bordes inferior/derecho de cada celda dejan ver este
@@ -1170,6 +1283,7 @@ fn data_row(
     viewport_col: u32,
     editing: bool,
     bar: &TextInputState,
+    model: &Model,
 ) -> View<Msg> {
     let is_active_row = row == selected.row;
     let mut cells: Vec<View<Msg>> = Vec::new();
@@ -1200,7 +1314,7 @@ fn data_row(
         if editing && cr == selected {
             cells.push(editing_cell_view(bar));
         } else {
-            cells.push(cell_view(wb, selected, cr));
+            cells.push(cell_view(wb, selected, cr, model));
         }
     }
     View::new(Style {
@@ -1255,8 +1369,13 @@ fn editing_cell_view(bar: &TextInputState) -> View<Msg> {
     .children(vec![inner])
 }
 
-fn cell_view(wb: &Workbook, selected: CellRef, cr: CellRef) -> View<Msg> {
+fn cell_view(wb: &Workbook, selected: CellRef, cr: CellRef, model: &Model) -> View<Msg> {
     let is_sel = cr == selected;
+    // `in_sel_range` cubre todas las celdas del rango activo
+    // EXCEPTO la "live cell" (active). Excel pinta el rango con un
+    // tinte sutil y deja la active sólida en accent — eso es lo
+    // que reproducimos aquí.
+    let in_sel_range = !is_sel && cell_in_selection(model, cr);
     let value = wb.value(cr);
     let display = match &value {
         SheetValue::Empty => String::new(),
@@ -1272,6 +1391,8 @@ fn cell_view(wb: &Workbook, selected: CellRef, cr: CellRef) -> View<Msg> {
         palette::ACCENT
     } else if is_error {
         palette::ERROR_BG
+    } else if in_sel_range {
+        palette::SEL_RANGE_BG
     } else {
         palette::BG_CELL
     };
