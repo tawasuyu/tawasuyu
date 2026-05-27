@@ -5,6 +5,14 @@
 #
 # Instálalo en el PATH (p. ej. /usr/local/bin/mirada-session) junto al
 # binario `mirada-compositor`.
+#
+# CAMINO CANÓNICO (recomendado): el Ente `mirada-session` declarado en la
+# Tarjeta Semilla de arje-zero (`03_ukupacha/arje/init/arje-zero/src/seed.rs::mirada_session_card`)
+# levanta el compositor con estas mismas variables de entorno pero bajo
+# supervisión del fractal — back-off automático ante crash y trazado por
+# el bus de eventos. Este script queda como FALLBACK para hosts con DM
+# externo (greetd, ly, sddm) o setups manuales que aún no migraron a
+# arje-zero como PID 1.
 
 # Carmen es un compositor Wayland.
 export XDG_SESSION_TYPE=wayland

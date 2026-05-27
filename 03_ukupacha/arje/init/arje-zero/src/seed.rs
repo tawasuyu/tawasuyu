@@ -172,6 +172,14 @@ fn synthesize_dev_seed() -> EntityCard {
         }
     }
 
+    // El compositor Wayland gioser (`mirada-compositor --drm`) como Ente
+    // supervisado por arje-zero. Si el binario no esta instalado en el
+    // host, el fractal arranca sin compositor — util en CI o devs sin GPU.
+    // Reemplaza al script `mirada-session` (queda como fallback legacy).
+    if let Some(card) = mirada_session_card() {
+        genesis.push(card);
+    }
+
     EntityCard {
         schema_version: CARD_SCHEMA_VERSION,
         id: Ulid::new(),
@@ -246,4 +254,64 @@ fn restart_supervision() -> Supervision {
         initial: Duration::from_millis(100),
         max: Duration::from_secs(30),
     }
+}
+
+/// Construye el Ente `mirada-session`: el compositor Wayland soberano
+/// (`mirada-compositor --drm`) supervisado por arje-zero, con las
+/// variables de entorno Wayland que el script `mirada-session` exportaba
+/// inline. Devuelve `None` si el binario no está instalado — así el
+/// fractal arranca igual en un host sin compositor (CI, devs sin GPU).
+///
+/// Reemplaza al script bash `02_ruway/mirada/mirada-compositor/session/mirada-session`
+/// elevándolo a Ente del grafo. Beneficios:
+///   - el ciclo init → compositor pasa por una sola autoridad (arje-zero
+///     supervisa, reinicia con back-off, registra eventos en el bus);
+///   - una crash del compositor relanza por el supervisor en lugar de
+///     quedar la pantalla negra esperando a que el DM externo lo note;
+///   - los envp se versionan con el resto del fractal en seed.card.json,
+///     no en un script shell desperdigado en `/usr/local/bin`.
+fn mirada_session_card() -> Option<EntityCard> {
+    const COMPOSITOR_BIN: &str = "/usr/local/bin/mirada-compositor";
+    if !Path::new(COMPOSITOR_BIN).exists() {
+        return None;
+    }
+    // El compositor necesita /dev/dri/* abierto (backend DRM directo,
+    // sin pasar por logind). La capacidad se declara aqui — quien
+    // valide la card en otro contexto sabra que esta Ente toma DRM.
+    let mut requires = BTreeSet::new();
+    requires.insert(Capability::Device { class: arje_card::DeviceClass::Drm });
+    Some(EntityCard {
+        schema_version: CARD_SCHEMA_VERSION,
+        id: Ulid::new(),
+        lineage: None,
+        label: "mirada-session".into(),
+        provides: BTreeSet::new(),
+        requires,
+        soma: SomaSpec::default(),
+        payload: Payload::Native {
+            exec: COMPOSITOR_BIN.into(),
+            argv: vec!["--drm".into()],
+            // El mismo conjunto que el script `mirada-session` exportaba
+            // antes. `XDG_CURRENT_DESKTOP=carmen` identifica al
+            // compositor frente a las apps GUI (xdg-portal, gnome-keyring
+            // y similares lo leen). Las `QT_QPA_PLATFORM` / `SDL_VIDEODRIVER` /
+            // `MOZ_ENABLE_WAYLAND` empujan a los toolkits hacia su backend
+            // Wayland nativo cuando lo tienen.
+            envp: vec![
+                ("XDG_SESSION_TYPE".into(), "wayland".into()),
+                ("XDG_CURRENT_DESKTOP".into(), "carmen".into()),
+                ("XDG_SESSION_DESKTOP".into(), "carmen".into()),
+                ("MOZ_ENABLE_WAYLAND".into(), "1".into()),
+                ("QT_QPA_PLATFORM".into(), "wayland;xcb".into()),
+                ("SDL_VIDEODRIVER".into(), "wayland".into()),
+                ("_JAVA_AWT_WM_NONREPARENTING".into(), "1".into()),
+            ],
+        },
+        // Reiniciar con back-off: si el compositor cae, lo levantamos
+        // automaticamente; el back-off cubre crashes en cascada por
+        // bugs sin agotar el bus de eventos.
+        supervision: restart_supervision(),
+        genesis: vec![],
+        ..Default::default()
+    })
 }
