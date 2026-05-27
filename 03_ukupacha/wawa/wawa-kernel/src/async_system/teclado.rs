@@ -157,6 +157,30 @@ pub fn recibir_scancode(scancode: u8) {
         return;
     }
 
+    // FASE 58 v3 :: si el launcher esta abierto, las teclas SIN Alt no van
+    // al userspace — alimentan la query del overlay. El compositor LEE un
+    // mirror atomico (`LAUNCHER_ABIERTO`) que sincroniza desde el contexto
+    // cooperativo, asi esta comprobacion es libre de cerrojos en IRQ.
+    if compositor::LAUNCHER_ABIERTO.load(Ordering::Relaxed) {
+        // Make codes (bit 7 limpio): traducir y empujar. Break codes (bit 7
+        // puesto, scancode >= 0x80) los ignoramos — la pulsacion ya quedo
+        // contada en la make.
+        if scancode < 0x80 {
+            if let Some(byte) = traducir_scancode_a_ascii(scancode) {
+                compositor::solicitar(Mando::TextoLauncher(byte));
+            } else if scancode == 0x01 {
+                // Escape cierra el launcher — atajo intuitivo en cualquier
+                // shell sin pasar por Alt+Q.
+                compositor::solicitar(Mando::ToggleLauncher);
+            } else if scancode == 0x1C {
+                // Enter sin Alt tambien lanza la app seleccionada — el
+                // operador no tiene que mantener Alt mientras escribe.
+                compositor::solicitar(Mando::Promover);
+            }
+        }
+        return;
+    }
+
     // 3. Tecla ordinaria: se entrega SOLO a la app que tiene el foco. El foco
     //    es un indice atomico; el censo, un vector indexado por `indice_app`.
     if let Some(censo) = CANALES.get() {
@@ -165,5 +189,59 @@ pub fn recibir_scancode(scancode: u8) {
             // vale perder una tecla que colapsar dentro de una interrupcion.
             let _ = canal.push(scancode);
         }
+    }
+}
+
+/// FASE 58 v3 :: traduce un scancode set 1 de letra/cifra/espacio/backspace
+/// al ASCII minuscula correspondiente. `None` para scancodes que no son
+/// imprimibles ni borrado — el llamante los ignora. Es la unica traduccion
+/// que el kernel hace; el resto del soporte de teclado se delega al
+/// userspace (cada app interpreta sus scancodes).
+fn traducir_scancode_a_ascii(scancode: u8) -> Option<u8> {
+    // Sentinela `0x08` = backspace, como ASCII.
+    if scancode == 0x0E {
+        return Some(0x08);
+    }
+    // Espacio.
+    if scancode == 0x39 {
+        return Some(b' ');
+    }
+    // Cifras '1'-'9' (0x02..=0x0A), '0' en 0x0B.
+    if (0x02..=0x0A).contains(&scancode) {
+        return Some(b'1' + (scancode - 0x02));
+    }
+    if scancode == 0x0B {
+        return Some(b'0');
+    }
+    // Filas de letras del scancode set 1 (con huecos por las teclas de
+    // sistema: Backspace, Tab, Enter, Ctrl, Shift, etc.).
+    match scancode {
+        0x10 => Some(b'q'),
+        0x11 => Some(b'w'),
+        0x12 => Some(b'e'),
+        0x13 => Some(b'r'),
+        0x14 => Some(b't'),
+        0x15 => Some(b'y'),
+        0x16 => Some(b'u'),
+        0x17 => Some(b'i'),
+        0x18 => Some(b'o'),
+        0x19 => Some(b'p'),
+        0x1E => Some(b'a'),
+        0x1F => Some(b's'),
+        0x20 => Some(b'd'),
+        0x21 => Some(b'f'),
+        0x22 => Some(b'g'),
+        0x23 => Some(b'h'),
+        0x24 => Some(b'j'),
+        0x25 => Some(b'k'),
+        0x26 => Some(b'l'),
+        0x2C => Some(b'z'),
+        0x2D => Some(b'x'),
+        0x2E => Some(b'c'),
+        0x2F => Some(b'v'),
+        0x30 => Some(b'b'),
+        0x31 => Some(b'n'),
+        0x32 => Some(b'm'),
+        _ => None,
     }
 }

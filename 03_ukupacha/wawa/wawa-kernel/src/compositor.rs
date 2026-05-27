@@ -45,7 +45,7 @@
 //  pudiera disputar a una tarea cooperativa.
 // =============================================================================
 
-use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use alloc::string::{String, ToString};
 use alloc::vec;
@@ -137,6 +137,11 @@ pub enum Mando {
     /// cierra el overlay (sin matar a la ventana enfocada). Es el sustituto
     /// dirigido del ciclo ciego de `Alt+N`.
     ToggleLauncher,
+    /// FASE 58 v3 :: una letra/cifra/espacio para la query del launcher, o el
+    /// byte sentinela `0x08` para borrar el ultimo caracter. La empuja el
+    /// teclado cuando ve un scancode imprimible mientras `LAUNCHER_ABIERTO`
+    /// esta vivo (Alt sin pulsar). Cualquier otro byte es ASCII minuscula.
+    TextoLauncher(u8),
 }
 
 /// Un arrastre EN CURSO (Fase 13): el indice de la ventana flotante asida con
@@ -229,7 +234,31 @@ struct Escritorio {
     /// `PLANTILLAS` en `main.rs` — el orquestador lo recibe en la cola de
     /// partos por indice y resuelve la plantilla por esa posicion.
     catalogo: Vec<String>,
+    /// FASE 58 v3 :: query incremental del launcher — ASCII minuscula, sin
+    /// modificadores. Se acumula en `recibir_scancode` via `TextoLauncher`,
+    /// se vacia al abrir/cerrar el launcher. Su capacidad esta acotada por
+    /// `QUERY_MAX_LEN` para no degenerar.
+    launcher_query: String,
+    /// FASE 58 v3 :: indices del `catalogo` que matchean la query vigente,
+    /// recalculado en cada keystroke. La seleccion del launcher (`Alt+J/K`,
+    /// hover, clic) indexa ESTE vector, no el catalogo directamente — asi un
+    /// "p" filtra a las apps con esa letra en su nombre y el lanzamiento
+    /// resuelve al indice original de plantilla.
+    launcher_filtrado: Vec<usize>,
 }
+
+/// FASE 58 v3 :: mirror atomico de `Escritorio::launcher_abierto` que el
+/// manejador de IRQ1 LEE antes de enrutar una tecla — el unico camino para
+/// detectar el modo del launcher sin tomar el cerrojo del escritorio en
+/// contexto de interrupcion. Lo escribe `launcher_intercepta` cada vez que
+/// el estado del overlay cambia, y `atender_raton` cuando el clic-fuera
+/// cancela.
+pub static LAUNCHER_ABIERTO: AtomicBool = AtomicBool::new(false);
+
+/// FASE 58 v3 :: techo de la query del launcher. Treinta y dos caracteres
+/// cubren cualquier nombre realista de app sin abrir la puerta a una query
+/// patologicamente larga.
+const QUERY_MAX_LEN: usize = 32;
 
 /// El escritorio global. Se funda una sola vez, en el arranque.
 static ESCRITORIO: Once<Mutex<Escritorio>> = Once::new();
@@ -317,6 +346,8 @@ pub fn fundar(ancho: usize, alto: usize, naturales: &[(usize, usize, &str)]) {
         launcher_abierto: false,
         launcher_seleccion: 0,
         catalogo: Vec::new(),
+        launcher_query: String::new(),
+        launcher_filtrado: Vec::new(),
     };
     aplicar_teselado(&mut escritorio);
 
@@ -478,9 +509,12 @@ pub fn atender_mandos() {
             Mando::Lanzar => {
                 PARTOS.fetch_add(1, Ordering::Relaxed);
             }
-            // ToggleLauncher se atiende SIEMPRE en `launcher_intercepta` —
-            // si llego hasta aqui es que el escritorio aun no esta fundado.
+            // ToggleLauncher y TextoLauncher se atienden SIEMPRE en
+            // `launcher_intercepta` —si llegan hasta aqui es que el
+            // escritorio aun no esta fundado o el launcher se cerro entre
+            // medias—. En cualquier caso, se descartan sin efecto.
             Mando::ToggleLauncher => {}
+            Mando::TextoLauncher(_) => {}
             // Fase 57 :: GC manual desde el teclado. La pasada toma el cerrojo
             // del almacen durante toda la operacion, asi que el fotograma
             // del compositor se estira — aceptable como gesto explicito del
@@ -535,17 +569,9 @@ fn launcher_intercepta(mando: Mando) -> bool {
 
     if matches!(mando, Mando::ToggleLauncher) {
         if escritorio.launcher_abierto {
-            escritorio.launcher_abierto = false;
+            cerrar_launcher(&mut escritorio);
         } else {
-            escritorio.launcher_abierto = true;
-            // Acotar la seleccion al catalogo VIGENTE — si encogio entre
-            // aperturas, evitar un indice fuera de rango.
-            let n = escritorio.catalogo.len();
-            if n == 0 {
-                escritorio.launcher_seleccion = 0;
-            } else if escritorio.launcher_seleccion >= n {
-                escritorio.launcher_seleccion = n - 1;
-            }
+            abrir_launcher(&mut escritorio);
         }
         recomponer(&mut escritorio);
         return true;
@@ -557,29 +583,44 @@ fn launcher_intercepta(mando: Mando) -> bool {
 
     match mando {
         Mando::FocoSiguiente => {
-            let n = escritorio.catalogo.len();
+            let n = escritorio.launcher_filtrado.len();
             if n > 0 {
                 escritorio.launcher_seleccion = (escritorio.launcher_seleccion + 1) % n;
             }
         }
         Mando::FocoAnterior => {
-            let n = escritorio.catalogo.len();
+            let n = escritorio.launcher_filtrado.len();
             if n > 0 {
                 escritorio.launcher_seleccion = (escritorio.launcher_seleccion + n - 1) % n;
             }
         }
         Mando::Promover => {
-            let n = escritorio.catalogo.len();
-            if n > 0 {
-                let idx = escritorio.launcher_seleccion;
+            if let Some(&idx_real) = escritorio
+                .launcher_filtrado
+                .get(escritorio.launcher_seleccion)
+            {
                 if let Some(cola) = PARTOS_POR_INDICE.get() {
-                    cola.lock().push(idx);
+                    cola.lock().push(idx_real);
                 }
             }
-            escritorio.launcher_abierto = false;
+            cerrar_launcher(&mut escritorio);
         }
         Mando::Cerrar => {
-            escritorio.launcher_abierto = false;
+            cerrar_launcher(&mut escritorio);
+        }
+        Mando::TextoLauncher(byte) => {
+            // FASE 58 v3 :: edicion en vivo de la query. Backspace borra el
+            // ultimo caracter; cualquier otro byte se trata como ASCII y se
+            // agrega si cabe en el techo de longitud. Tras tocar la query,
+            // refiltrar el catalogo y reanclar la seleccion al inicio para
+            // que el primer match siempre quede visible.
+            const BACKSPACE: u8 = 0x08;
+            if byte == BACKSPACE {
+                escritorio.launcher_query.pop();
+            } else if escritorio.launcher_query.len() < QUERY_MAX_LEN {
+                escritorio.launcher_query.push(byte as char);
+            }
+            refiltrar_launcher(&mut escritorio);
         }
         // Cualquier otro mando se descarta — el launcher se queda con el
         // foco del teclado hasta cerrarse.
@@ -588,6 +629,78 @@ fn launcher_intercepta(mando: Mando) -> bool {
 
     recomponer(&mut escritorio);
     true
+}
+
+/// FASE 58 v3 :: abre el overlay, sembrando el filtrado con el catalogo
+/// entero y reseteando la query y la seleccion. Sincroniza el mirror
+/// atomico `LAUNCHER_ABIERTO` para que el IRQ del teclado vea el cambio.
+fn abrir_launcher(escritorio: &mut Escritorio) {
+    escritorio.launcher_abierto = true;
+    escritorio.launcher_query.clear();
+    escritorio.launcher_seleccion = 0;
+    refiltrar_launcher(escritorio);
+    LAUNCHER_ABIERTO.store(true, Ordering::Relaxed);
+}
+
+/// FASE 58 v3 :: cierra el overlay y libera la query. El filtrado se vacia
+/// para que el siguiente `abrir_launcher` arranque desde cero —no quedan
+/// indices viejos colgando si el catalogo crecio entre aperturas—.
+fn cerrar_launcher(escritorio: &mut Escritorio) {
+    escritorio.launcher_abierto = false;
+    escritorio.launcher_query.clear();
+    escritorio.launcher_filtrado.clear();
+    escritorio.launcher_seleccion = 0;
+    LAUNCHER_ABIERTO.store(false, Ordering::Relaxed);
+}
+
+/// FASE 58 v3 :: recalcula `launcher_filtrado` contra la query vigente —
+/// match por substring case-insensitive en ASCII—. El catalogo es minusculo
+/// (12 apps hoy), asi que iterar entero por keystroke es trivial. La
+/// seleccion vuelve a 0 para que la primera coincidencia quede destacada,
+/// haciendo "alanz<Enter>" lance la primera app que empieza por "alanz".
+fn refiltrar_launcher(escritorio: &mut Escritorio) {
+    escritorio.launcher_filtrado.clear();
+    let query = &escritorio.launcher_query;
+    if query.is_empty() {
+        // Sin query: todo el catalogo es valido, en su orden original.
+        for i in 0..escritorio.catalogo.len() {
+            escritorio.launcher_filtrado.push(i);
+        }
+    } else {
+        for (i, nombre) in escritorio.catalogo.iter().enumerate() {
+            if contiene_ascii_ci(nombre, query) {
+                escritorio.launcher_filtrado.push(i);
+            }
+        }
+    }
+    escritorio.launcher_seleccion = 0;
+}
+
+/// FASE 58 v3 :: substring case-insensitive sobre ASCII. Para nombres de
+/// apps del manifiesto —ASCII puro hoy— basta con un compare byte-a-byte
+/// tras `to_ascii_lowercase`. Bytes no-ASCII en `aguja` o `pajar` se comparan
+/// crudos: pueden no matchear pero no causan panico.
+fn contiene_ascii_ci(pajar: &str, aguja: &str) -> bool {
+    let pajar = pajar.as_bytes();
+    let aguja = aguja.as_bytes();
+    if aguja.is_empty() {
+        return true;
+    }
+    if pajar.len() < aguja.len() {
+        return false;
+    }
+    let aguja_lc: alloc::vec::Vec<u8> = aguja.iter().map(|b| b.to_ascii_lowercase()).collect();
+    for inicio in 0..=(pajar.len() - aguja.len()) {
+        let ventana = &pajar[inicio..inicio + aguja.len()];
+        if ventana
+            .iter()
+            .zip(aguja_lc.iter())
+            .all(|(a, b)| a.to_ascii_lowercase() == *b)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Cicla al siguiente modo de teselado: recalcula los marcos de las ventanas
@@ -879,13 +992,21 @@ fn recomponer(escritorio: &mut Escritorio) {
     };
     // FASE 58 :: si el launcher esta abierto, calcular su region centrada y
     // entregar el overlay a la consola como ultima capa. La caja escala con
-    // el catalogo —dentro de un techo razonable—; si no entra, las filas
-    // sobrantes se omiten en `pintar_launcher`.
+    // las filas FILTRADAS (v3) —no con todo el catalogo—, asi al escribir la
+    // caja encoge a las que matchean. El overlay viaja con el slice del
+    // catalogo + el slice del filtrado: la consola itera el filtrado y
+    // resuelve el nombre via `catalogo[filtrado[i]]`.
     let overlay = if escritorio.launcher_abierto {
         Some(consola::LauncherOverlay {
-            region: region_launcher(escritorio.ancho, escritorio.alto, escritorio.catalogo.len()),
-            items: &escritorio.catalogo,
+            region: region_launcher(
+                escritorio.ancho,
+                escritorio.alto,
+                escritorio.launcher_filtrado.len(),
+            ),
+            catalogo: &escritorio.catalogo,
+            filtrado: &escritorio.launcher_filtrado,
             seleccion: escritorio.launcher_seleccion,
+            query: &escritorio.launcher_query,
         })
     } else {
         None
@@ -1115,7 +1236,13 @@ pub fn fijar_catalogo(nombres: Vec<String>) {
     let Some(escritorio) = ESCRITORIO.get() else {
         return;
     };
-    escritorio.lock().catalogo = nombres;
+    let mut escritorio = escritorio.lock();
+    escritorio.catalogo = nombres;
+    // Si el catalogo cambia y el launcher seguia abierto (no deberia, pero
+    // defensivo), refiltrar para que la lista visible no quede obsoleta.
+    if escritorio.launcher_abierto {
+        refiltrar_launcher(&mut escritorio);
+    }
 }
 
 /// Avanza el reloj de la barra de tareas (Fase 16): si el segundo del reloj
@@ -1162,15 +1289,20 @@ pub fn atender_raton() {
 
         // FASE 58 :: el launcher abierto SE QUEDA con el raton. Mientras lo
         // este, ningun clic ni movimiento llega al userspace ni a la
-        // taskbar — el overlay es modal.
+        // taskbar — el overlay es modal. La fila se mapea contra el
+        // FILTRADO (v3), no contra el catalogo entero: si el operador
+        // escribio "p", solo las apps con "p" en su nombre se ven y el
+        // indice de fila resuelve a un indice real del catalogo via
+        // `launcher_filtrado[fila]`.
         if escritorio.launcher_abierto {
-            let region = region_launcher(escritorio.ancho, escritorio.alto, escritorio.catalogo.len());
-            let fila = fila_launcher_en(region, x, y, escritorio.catalogo.len());
+            let visibles = escritorio.launcher_filtrado.len();
+            let region = region_launcher(escritorio.ancho, escritorio.alto, visibles);
+            let fila = fila_launcher_en(region, x, y, visibles);
             // Hover: la fila bajo el puntero se vuelve la seleccion vigente,
             // de modo que Alt+Enter y el clic se mantengan coherentes.
-            if let Some(idx) = fila {
-                if escritorio.launcher_seleccion != idx {
-                    escritorio.launcher_seleccion = idx;
+            if let Some(idx_filtrado) = fila {
+                if escritorio.launcher_seleccion != idx_filtrado {
+                    escritorio.launcher_seleccion = idx_filtrado;
                     cambio = true;
                 }
             }
@@ -1179,14 +1311,16 @@ pub fn atender_raton() {
             // Un clic en el titulo o el padding del overlay no hace nada — el
             // usuario aun puede mover la seleccion o salir.
             if izq && !izq_antes {
-                if let Some(idx) = fila {
-                    if let Some(cola) = PARTOS_POR_INDICE.get() {
-                        cola.lock().push(idx);
+                if let Some(idx_filtrado) = fila {
+                    if let Some(&idx_real) = escritorio.launcher_filtrado.get(idx_filtrado) {
+                        if let Some(cola) = PARTOS_POR_INDICE.get() {
+                            cola.lock().push(idx_real);
+                        }
                     }
-                    escritorio.launcher_abierto = false;
+                    cerrar_launcher(&mut escritorio);
                     cambio = true;
                 } else if !contiene(region, x, y) {
-                    escritorio.launcher_abierto = false;
+                    cerrar_launcher(&mut escritorio);
                     cambio = true;
                 }
             }

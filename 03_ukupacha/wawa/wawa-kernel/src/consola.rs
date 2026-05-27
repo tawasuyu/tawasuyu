@@ -98,18 +98,23 @@ pub(crate) struct TaskbarSlot<'a> {
 }
 
 /// FASE 58 :: el overlay del launcher grafico. Pinta una caja centrada con
-/// la lista de apps lanzables y resalta la seleccion vigente. La consola lo
-/// recibe como ultima capa de la recomposicion —sobre la taskbar—, de modo
-/// que aparezca por encima de todo lo demas. Vive como un slot sin lifetime
-/// "propio" mas alla del fotograma: las cadenas vienen del `Vec<String>` del
-/// escritorio, que el compositor sostiene mientras el lock este tomado.
+/// la lista de apps que matchean la query y resalta la seleccion vigente.
+/// La consola lo recibe como ultima capa de la recomposicion —sobre la
+/// taskbar—, de modo que aparezca por encima de todo lo demas. Vive como un
+/// slot sin lifetime "propio" mas alla del fotograma: las cadenas vienen
+/// del `Vec<String>` del escritorio, que el compositor sostiene mientras el
+/// lock este tomado.
 pub(crate) struct LauncherOverlay<'a> {
     /// Region centrada que ocupa el overlay en pantalla.
     pub(crate) region: RegionPantalla,
-    /// Nombres de las apps en el orden de la plantilla.
-    pub(crate) items: &'a [alloc::string::String],
-    /// Indice de la fila seleccionada — el operador la lanza con Enter.
+    /// Catalogo COMPLETO de apps lanzables, indexado por la plantilla.
+    pub(crate) catalogo: &'a [alloc::string::String],
+    /// Indices de `catalogo` que matchean la query — el orden visible.
+    pub(crate) filtrado: &'a [usize],
+    /// Indice DENTRO de `filtrado` de la fila seleccionada.
     pub(crate) seleccion: usize,
+    /// Query incremental que escribe el operador.
+    pub(crate) query: &'a str,
 }
 
 /// Resolver de datos por indice de ventana. La consola lo invoca para
@@ -406,28 +411,51 @@ impl Consola {
             Color::FOCO,
         );
 
-        // Titulo en la barra superior — un renglon con el atajo recordatorio.
+        // FASE 58 v3 :: la barra de titulo lleva un prompt + la query viva
+        // que el operador escribio. Si la query esta vacia, mostrar una
+        // pista del atajo —el launcher no es solo el listado, es busqueda
+        // en vivo—. La etiqueta se pinta a 14px sobre el `PANEL`.
         let titulo_base_y = r.y + altura_titulo - 8;
-        self.pintar_etiqueta(
-            r.x + MARGEN_TEXTO,
-            titulo_base_y,
-            "lanzar app  ::  Alt+J/K mueven  ::  Alt+Enter lanza  ::  Alt+Q cierra",
-            14.0,
-            Color::PANEL,
-            Color::TEXTO,
-        );
+        if overlay.query.is_empty() {
+            self.pintar_etiqueta(
+                r.x + MARGEN_TEXTO,
+                titulo_base_y,
+                "lanzar app  ::  escribe para filtrar  ::  Alt+Enter lanza",
+                14.0,
+                Color::PANEL,
+                Color::TEXTO,
+            );
+        } else {
+            // Prompt "> <query>" — `>` actua como caret implicito.
+            // Allocacion barata: una sola por fotograma, solo cuando la
+            // query no esta vacia.
+            let mut buf = alloc::string::String::with_capacity(overlay.query.len() + 4);
+            buf.push_str("> ");
+            buf.push_str(overlay.query);
+            self.pintar_etiqueta(
+                r.x + MARGEN_TEXTO,
+                titulo_base_y,
+                buf.as_str(),
+                16.0,
+                Color::PANEL,
+                Color::TEXTO,
+            );
+        }
 
-        // Filas — una por item del catalogo, dentro del area util por debajo
+        // Filas — una por item filtrado, dentro del area util por debajo
         // del titulo y por encima del borde inferior. Si no cabe alguna, se
-        // omite en silencio: el operador puede mover la seleccion con J/K
-        // hasta una visible (MVP — el scrolling viene despues).
+        // omite en silencio: el operador puede afinar la query o mover la
+        // seleccion con J/K (MVP — el scrolling viene despues).
         let filas_y0 = r.y + altura_titulo;
         let filas_y_max = r.y + r.alto.saturating_sub(GROSOR_BORDE + 4);
-        for (i, item) in overlay.items.iter().enumerate() {
+        for (i, &idx_real) in overlay.filtrado.iter().enumerate() {
             let fila_y = filas_y0 + i * altura_fila;
             if fila_y + altura_fila > filas_y_max {
                 break;
             }
+            let Some(nombre) = overlay.catalogo.get(idx_real) else {
+                continue;
+            };
             let seleccionada = i == overlay.seleccion;
             let fondo = if seleccionada {
                 Color::FOCO
@@ -449,7 +477,7 @@ impl Consola {
             self.pintar_etiqueta(
                 r.x + MARGEN_TEXTO,
                 base_y,
-                item.as_str(),
+                nombre.as_str(),
                 16.0,
                 fondo,
                 Color::TEXTO,
