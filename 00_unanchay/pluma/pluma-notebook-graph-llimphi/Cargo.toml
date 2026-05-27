@@ -1,0 +1,18 @@
+[package]
+name = "pluma-notebook-graph-llimphi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "pluma-notebook-graph-llimphi — bindea el DAG de pluma-notebook-core a llimphi-widget-nodegraph: notebook como lienzo visual de nodos, drag de celdas + conectar dependencias arrastrando pin→pin."
+
+[dependencies]
+pluma-notebook-core = { path = "../pluma-notebook-core" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-nodegraph = { workspace = true }
+
+[[example]]
+name = "notebook_graph_demo"
+path = "examples/notebook_graph_demo.rs"
