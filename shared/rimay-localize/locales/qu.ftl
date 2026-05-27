@@ -336,3 +336,4 @@ asistente-error-json-invalido = JSON mana riqsisqa: { $crudo }
 asistente-error-spawn = paqarichiy pantapun: { $err } (mirada-ctl PATH-pi kachkanchu?)
 asistente-cero-salida = (mana kutichiq)
 asistente-codigo-salida = lluqsiy yupay { $codigo }
+asistente-error-accion-desconocida = LLM mana riqsisqa ruwanata nirqa: { $accion }

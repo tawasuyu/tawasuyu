@@ -73,6 +73,38 @@ antes de ejecutar.";
 /// <100 tokens). Mantenemos margen para `explicacion` algo prolija.
 const MAX_TOKENS_RESPUESTA: u32 = 300;
 
+/// Acciones que `mirada-ctl` reconoce — lista blanca contra alucinaciones
+/// del LLM. Si el modelo propone una acción fuera de esta lista, la
+/// rechazamos ANTES de llegar al botón "Ejecutar": un test extra de
+/// defensa en profundidad sobre el system prompt (que ya pide al LLM no
+/// inventar comandos). Hay que mantenerla sincronizada con la salida
+/// de `mirada-ctl --help` — el test `lista_acciones_no_vacia` defiende
+/// contra que alguien la vacíe por accidente; mantener la coherencia
+/// semantica con el CLI sigue siendo trabajo humano.
+const ACCIONES_VALIDAS: &[&str] = &[
+    "focus-next",
+    "focus-prev",
+    "focus-window",
+    "move-forward",
+    "move-backward",
+    "close-focused",
+    "toggle-float",
+    "toggle-fullscreen",
+    "send-to-scratchpad",
+    "toggle-scratchpad",
+    "cycle-layout",
+    "layout",
+    "grow-master",
+    "shrink-master",
+    "inc-master",
+    "dec-master",
+    "promote-to-master",
+    "workspace",
+    "send-to-workspace",
+    "focus-output-next",
+    "quit",
+];
+
 /// La forma JSON que el modelo debe producir cuando entiende la petición.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct Propuesta {
@@ -107,6 +139,9 @@ enum ParseResult {
     /// El JSON parseó como `Propuesta` pero `accion` quedó vacía — el modelo
     /// nos dió un objeto sintácticamente válido pero semánticamente inútil.
     AccionVacia(String),
+    /// El JSON parseó como `Propuesta` pero `accion` no está en la lista
+    /// blanca `ACCIONES_VALIDAS` — el LLM alucinó un comando.
+    AccionDesconocida(String),
 }
 
 /// El cliente LLM compartible entre el hilo de UI y los workers de fondo.
@@ -445,6 +480,13 @@ fn parsear_respuesta(texto: &str) -> ParseResult {
         if propuesta.accion.is_empty() {
             return ParseResult::AccionVacia(texto.to_string());
         }
+        // Defensa contra alucinaciones del LLM: si propone un comando que
+        // `mirada-ctl` no reconoce, lo rechazamos AQUI en lugar de dejar
+        // que el spawn falle más tarde. El operador ve la accion alucinada
+        // y puede reformular.
+        if !ACCIONES_VALIDAS.contains(&propuesta.accion.as_str()) {
+            return ParseResult::AccionDesconocida(propuesta.accion);
+        }
         return ParseResult::Propuesta(propuesta);
     }
     ParseResult::JsonInvalido(texto.to_string())
@@ -468,6 +510,10 @@ fn parseo_a_estado(r: ParseResult) -> Estado {
         ParseResult::JsonInvalido(crudo) => Estado::Error(rimay_localize::t_args(
             "asistente-error-json-invalido",
             &[("crudo", Cow::Owned(crudo))],
+        )),
+        ParseResult::AccionDesconocida(accion) => Estado::Error(rimay_localize::t_args(
+            "asistente-error-accion-desconocida",
+            &[("accion", Cow::Owned(accion))],
         )),
     }
 }
@@ -781,6 +827,38 @@ mod parser_tests {
             parsear_respuesta(respuesta),
             ParseResult::Rechazo("ambiguo".to_string()),
         );
+    }
+
+    #[test]
+    fn parsear_accion_desconocida_es_rechazada() {
+        // El LLM alucinó un comando que `mirada-ctl` no reconoce. Debe
+        // caer como `AccionDesconocida(nombre)` antes de llegar al
+        // botón "Ejecutar", no como `Propuesta` válida.
+        let respuesta = r#"{"accion": "destruir-todo", "args": [], "explicacion": "kaboom"}"#;
+        assert_eq!(
+            parsear_respuesta(respuesta),
+            ParseResult::AccionDesconocida("destruir-todo".to_string()),
+        );
+    }
+
+    #[test]
+    fn parsear_accion_valida_pasa_la_lista_blanca() {
+        // Sanity check: una acción que SÍ está en ACCIONES_VALIDAS no es
+        // bloqueada por la nueva validación.
+        let respuesta = r#"{"accion": "focus-next", "args": []}"#;
+        assert!(matches!(
+            parsear_respuesta(respuesta),
+            ParseResult::Propuesta(_),
+        ));
+    }
+
+    #[test]
+    fn lista_acciones_no_vacia() {
+        // Garantia minima: si alguien vacia la lista blanca, todos los
+        // pedidos cae a `AccionDesconocida` — este test mata el silencio.
+        assert!(!ACCIONES_VALIDAS.is_empty(), "lista blanca no debe vaciarse");
+        assert!(ACCIONES_VALIDAS.contains(&"focus-next"));
+        assert!(ACCIONES_VALIDAS.contains(&"quit"));
     }
 
     #[test]

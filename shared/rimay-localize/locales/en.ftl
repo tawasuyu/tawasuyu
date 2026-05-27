@@ -330,3 +330,4 @@ asistente-error-json-invalido = unrecognized JSON: { $crudo }
 asistente-error-spawn = spawn failed: { $err } (is mirada-ctl in PATH?)
 asistente-cero-salida = (no output)
 asistente-codigo-salida = exit code { $codigo }
+asistente-error-accion-desconocida = LLM proposed an unknown action: { $accion }

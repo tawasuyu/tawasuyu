@@ -333,3 +333,4 @@ asistente-error-json-invalido = JSON no reconocido: { $crudo }
 asistente-error-spawn = spawn falló: { $err } (¿está mirada-ctl en PATH?)
 asistente-cero-salida = (sin salida)
 asistente-codigo-salida = código { $codigo }
+asistente-error-accion-desconocida = el LLM propuso una accion desconocida: { $accion }
