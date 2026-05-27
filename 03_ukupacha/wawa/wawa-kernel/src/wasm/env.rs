@@ -40,6 +40,11 @@
 //                              indisoluble (Fase 33, Persistencia Ortogonal
 //                              por Celdas): los dos hashes viajan como
 //                              hijos legitimos del nodo cuaderno.
+//    * sys_cuaderno_leer_celda                — deserializar un nodo cuaderno
+//                              del grafo y devolver UNA CeldaWawa por
+//                              indice (Fase 44, Notebook Walker): habilita
+//                              la persistencia entre reboots — el cold
+//                              boot reconstruye el lienzo desde disco.
 //    * sys_subsistema_vincular_macro          — inspeccionar un binario del
 //                              grafo sin instanciarlo (Fase 36, Cross-App
 //                              Semantic Bridge): valida magia + export
@@ -888,6 +893,140 @@ pub(crate) fn enlazar_capacidades(
         },
     )?;
     } // PERMISO_GRAFO_ESCRITURA (cuaderno)
+
+    // --- CAPACIDAD 3e_walker :: sys_cuaderno_leer_celda --------------------
+    // sys_cuaderno_leer_celda(cuaderno_hash_ptr, indice_lineal, salida_celda_ptr) -> i32
+    //
+    // EL EXPLORADOR DEL GRAFO INMUTABLE (Fase 44 :: Notebook Walker). La
+    // app entrega el hash de un nodo cuaderno y un indice lineal; el
+    // kernel deserializa el `Vec<CeldaWawa>` del payload via
+    // `format::deserializar_celdas`, busca la celda en ese indice y la
+    // copia a la memoria lineal de la app en formato ABI plano de
+    // 73 bytes (sin postcard del lado app — el modulo WASM puede leer
+    // los campos por offset sin importar la crate `format`):
+    //
+    //   Offset Size Campo
+    //   0      1    flags  (bit 0 = marca_error,
+    //                       bit 1 = has_binario,
+    //                       bit 2 = has_retorno)
+    //   1      4    id_secuencial    (u32 LE)
+    //   5      32   fuente_hash
+    //   37     32   binario_hash     (ceros si !has_binario)
+    //   69     4    ultimo_retorno   (i32 LE, 0 si !has_retorno)
+    //
+    // Indices fuera de rango devuelven `Ausente(-1)` — el walker rompe
+    // su lazo limpiamente. Hash no encontrado en el grafo: `Ausente`.
+    // Payload que no deserializa como `Vec<CeldaWawa>`: `PayloadInvalido`.
+    //
+    // GATEADA por PERMISO_GRAFO_ESCRITURA + foco. Back-pressure DMA.
+    //
+    // ZERO-ALLOC EN EL HOST: la deserializacion via postcard usa el
+    // asignador del kernel para construir el Vec — eso ya existia en
+    // la version anterior (registrar_celda). El WALK en si no agrega
+    // alocaciones nuevas; lee y libera el Vec en el mismo stack frame.
+    if permisos & PERMISO_GRAFO_ESCRITURA != 0 {
+    enlazador.func_wrap(
+        "renaser",
+        "sys_cuaderno_leer_celda",
+        |mut caller: Caller<'_, ContextoCapacidades>,
+         cuaderno_hash_ptr: u32,
+         indice_lineal: u32,
+         salida_celda_ptr: u32|
+         -> Result<i32, Error> {
+            if crate::compositor::foco() != caller.data().indice_app {
+                return Ok(CodigoError::SinFoco.como_i32());
+            }
+            if caller.data().paginas_dma_en_vuelo >= MAX_PAGINAS_DMA_PER_APP {
+                return Ok(CodigoError::Saturado.como_i32());
+            }
+            caller.data_mut().paginas_dma_en_vuelo += 1;
+
+            let memoria = obtener_memoria(&caller)?;
+            let hash = {
+                let m = memoria.data(&caller);
+                match leer_hash(
+                    m,
+                    cuaderno_hash_ptr,
+                    "WASM :: sys_cuaderno_leer_celda desbordo memoria (hash)",
+                ) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        caller.data_mut().paginas_dma_en_vuelo -= 1;
+                        return Err(e);
+                    }
+                }
+            };
+            // Verificar que el destino de 73 B cabe en la memoria lineal
+            // ANTES de tocar el disco. Un puntero invalido aborta limpio.
+            {
+                let m = memoria.data(&caller);
+                if let Err(e) = rango(
+                    m,
+                    salida_celda_ptr,
+                    73,
+                    "WASM :: sys_cuaderno_leer_celda desbordo memoria (salida)",
+                ) {
+                    caller.data_mut().paginas_dma_en_vuelo -= 1;
+                    return Err(e);
+                }
+            }
+
+            // Recuperar el nodo del grafo.
+            let objeto = match crate::almacen::recuperar(&hash) {
+                Ok(Some(o)) => o,
+                Ok(None) => {
+                    caller.data_mut().paginas_dma_en_vuelo -= 1;
+                    return Ok(CodigoError::Ausente.como_i32());
+                }
+                Err(_) => {
+                    caller.data_mut().paginas_dma_en_vuelo -= 1;
+                    return Ok(CodigoError::AlmacenamientoFallo.como_i32());
+                }
+            };
+            // Deserializar el payload como Vec<CeldaWawa>.
+            let celdas = match format::deserializar_celdas(&objeto.datos) {
+                Ok(v) => v,
+                Err(_) => {
+                    caller.data_mut().paginas_dma_en_vuelo -= 1;
+                    return Ok(CodigoError::PayloadInvalido.como_i32());
+                }
+            };
+            // Indice fuera de rango: fin del cuaderno. El walker lo
+            // interpreta como condicion de parada.
+            let celda = match celdas.get(indice_lineal as usize) {
+                Some(c) => c.clone(),
+                None => {
+                    caller.data_mut().paginas_dma_en_vuelo -= 1;
+                    return Ok(CodigoError::Ausente.como_i32());
+                }
+            };
+
+            // Construir el frame de 73 bytes en pila y volcarlo.
+            let mut frame = [0u8; 73];
+            let has_binario = celda.binario_hash.is_some();
+            let has_retorno = celda.ultimo_retorno.is_some();
+            frame[0] = (celda.marca_error as u8)
+                | ((has_binario as u8) << 1)
+                | ((has_retorno as u8) << 2);
+            frame[1..5].copy_from_slice(&celda.id_secuencial.to_le_bytes());
+            frame[5..37].copy_from_slice(&celda.fuente_hash);
+            if let Some(b) = celda.binario_hash {
+                frame[37..69].copy_from_slice(&b);
+            }
+            // Si !has_binario, los bytes 37..69 quedan en 0 (init).
+            if let Some(r) = celda.ultimo_retorno {
+                frame[69..73].copy_from_slice(&r.to_le_bytes());
+            }
+            // Si !has_retorno, los bytes 69..73 quedan en 0 (init).
+
+            let m = memoria.data_mut(&mut caller);
+            m[salida_celda_ptr as usize..salida_celda_ptr as usize + 73]
+                .copy_from_slice(&frame);
+            caller.data_mut().paginas_dma_en_vuelo -= 1;
+            Ok(CodigoError::Ok.como_i32())
+        },
+    )?;
+    } // PERMISO_GRAFO_ESCRITURA (cuaderno_leer_celda)
 
     // --- CAPACIDAD 3f :: sys_subsistema_vincular_macro -----------------------
     // sys_subsistema_vincular_macro(binario_hash_ptr, salida_info_ptr) -> i32

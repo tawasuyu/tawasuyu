@@ -155,6 +155,27 @@ extern "C" {
         hash_ptr: u32,
         salida_firma_ptr: u32,
     ) -> i32;
+    /// FASE 7 :: lee el hash de la raiz userspace del grafo. Escribe 32 B
+    /// en `salida` si hay raiz (devuelve 1); 0 si el grafo aun no tiene
+    /// raiz anclada. La app la consulta en el arranque para descubrir
+    /// si hay un cuaderno persistido de sesiones anteriores.
+    fn sys_object_raiz(salida: u32) -> i32;
+    /// FASE 44 :: NOTEBOOK WALKER. Lee la celda en `indice_lineal` del
+    /// nodo cuaderno anclado en `cuaderno_hash_ptr`. El kernel escribe
+    /// 73 bytes con el layout plano:
+    ///   Offset Size Campo
+    ///   0      1    flags (bit 0=marca_error, 1=has_binario, 2=has_retorno)
+    ///   1      4    id_secuencial (u32 LE)
+    ///   5      32   fuente_hash
+    ///   37     32   binario_hash (ceros si !has_binario)
+    ///   69     4    ultimo_retorno (i32 LE, 0 si !has_retorno)
+    /// Devuelve 0 si copio la celda; -1 (Ausente) si el indice es fin
+    /// del cuaderno o el hash no existe; -7 si el payload no deserializa.
+    fn sys_cuaderno_leer_celda(
+        cuaderno_hash_ptr: u32,
+        indice_lineal: u32,
+        salida_celda_ptr: u32,
+    ) -> i32;
 }
 
 #[cfg(not(test))]
@@ -316,6 +337,11 @@ static mut FIRMA_HASH_PENDIENTE: [u8; 32] = [0; 32];
 #[no_mangle]
 pub extern "C" fn init() {
     refrescar_contexto();
+    // FASE 44 :: cold boot del NOTEBOOK WALKER. Si el grafo trae raiz
+    // anclada de una sesion previa, reconstruimos las celdas en
+    // memoria lineal ANTES del primer pintado — el humano ve su
+    // cuaderno persistido apenas arranca el sistema.
+    cold_boot_walker();
     pintar();
     volcar();
 }
@@ -345,6 +371,117 @@ pub extern "C" fn tick() {
 
 fn refrescar_contexto() {
     let _ = unsafe { sys_config_paleta(core::ptr::addr_of_mut!(PALETA) as u32) };
+}
+
+// =============================================================================
+//  Fase 44 :: NOTEBOOK WALKER — cold boot del cuaderno persistido
+// -----------------------------------------------------------------------------
+//  Al arrancar la app, consultamos la raiz userspace del grafo. Si trae un
+//  cuaderno anclado, walkeamos sus celdas en orden 0, 1, 2, ... hasta que el
+//  kernel devuelva `Ausente`. Cada `CeldaWawa` recuperada se traduce a la
+//  estructura local `Celda` y se inserta en el array circular `CELDAS` —
+//  el lazo `pintar()` la mostrara sin saber que viene de disco.
+//
+//  La fuente original (texto Forth tecleado) NO se reconstruye: el grafo
+//  guarda el HASH de la fuente, pero el ASCII vive en otro nodo que no
+//  recuperamos aqui (lo dejamos para una fase futura que use
+//  `sys_object_datos`). Mostramos solo los hashes + retorno + flag de
+//  error. Suficiente para reanudar la cascada `F5` y autorizar nuevas
+//  celdas via `F6`.
+// =============================================================================
+
+/// Decodifica un frame de 73 bytes producido por `sys_cuaderno_leer_celda`
+/// (Fase 44, ABI plano) y rellena los campos correspondientes de una
+/// `Celda` local. Los campos UI-only (`heredado`, `valor_heredado`,
+/// `macro_importada`, `fuente`/`fuente_len`) quedan en su default — la
+/// app puede repintar y volver a operar sobre la cascada sin necesidad
+/// del texto original.
+fn celda_desde_frame(frame: &[u8; 73]) -> Celda {
+    let flags = frame[0];
+    let marca_error = (flags & 0b001) != 0;
+    let has_binario = (flags & 0b010) != 0;
+    let has_retorno = (flags & 0b100) != 0;
+    let id_secuencial = u32::from_le_bytes([frame[1], frame[2], frame[3], frame[4]]);
+    let mut hash_fuente = [0u8; 32];
+    hash_fuente.copy_from_slice(&frame[5..37]);
+    let mut hash_binario = [0u8; 32];
+    if has_binario {
+        hash_binario.copy_from_slice(&frame[37..69]);
+    }
+    let retorno = if has_retorno {
+        i32::from_le_bytes([frame[69], frame[70], frame[71], frame[72]])
+    } else {
+        0
+    };
+    let mut c = Celda::vacia();
+    c.hash_fuente = hash_fuente;
+    c.hash_binario = hash_binario;
+    c.retorno = retorno;
+    c.valida = true;
+    c.exito = !marca_error;
+    // `fuente`/`fuente_len`/`heredado`/`valor_heredado`/`macro_importada`
+    // quedan en default — son estado UI/runtime, no datos persistidos.
+    // El campo `id_secuencial` no vive en Celda local pero alimentara
+    // `PROXIMO_ID_SECUENCIAL` desde el walker.
+    let _ = id_secuencial; // documenta la lectura — el caller la usa.
+    c
+}
+
+/// Camino de cold boot. Lee la raiz userspace; si trae cuaderno, walker.
+fn cold_boot_walker() {
+    let mut raiz_hash = [0u8; 32];
+    let cod_raiz = unsafe { sys_object_raiz(raiz_hash.as_mut_ptr() as u32) };
+    if cod_raiz <= 0 {
+        // 0 = sin raiz; negativo = error. En ambos casos no hay nada
+        // que reconstruir — el cuaderno arranca en blanco como antes.
+        return;
+    }
+
+    // Walker iterativo. Lee hasta MAX_CELDAS_WALKER celdas para no
+    // colgar la app si el cuaderno es enorme (la cota la pone la
+    // estabilidad del init — la persistencia historica completa
+    // queda para fases posteriores con paginacion en la UI).
+    const MAX_CELDAS_WALKER: u32 = 256;
+    let mut frame = [0u8; 73];
+    let mut indice: u32 = 0;
+    let mut max_id_visto: u32 = 0;
+    while indice < MAX_CELDAS_WALKER {
+        let cod = unsafe {
+            sys_cuaderno_leer_celda(
+                raiz_hash.as_ptr() as u32,
+                indice,
+                frame.as_mut_ptr() as u32,
+            )
+        };
+        if cod != 0 {
+            // -1 (Ausente) = fin del cuaderno o hash no encontrado.
+            // Cualquier otro negativo (-4 SinFoco, -7 PayloadInvalido)
+            // tambien rompe el walker — la app sigue con lo que reuni.
+            break;
+        }
+        let celda = celda_desde_frame(&frame);
+        // El id_secuencial vive en el frame, lo decodificamos aqui
+        // para mantener `PROXIMO_ID_SECUENCIAL` sincronizado.
+        let id_sec = u32::from_le_bytes([frame[1], frame[2], frame[3], frame[4]]);
+        if id_sec > max_id_visto {
+            max_id_visto = id_sec;
+        }
+        registrar_celda_local(celda);
+        indice += 1;
+    }
+
+    if indice > 0 {
+        // Continuidad de IDs: la proxima celda nueva (F5 post-boot)
+        // hereda el siguiente id natural.
+        unsafe { PROXIMO_ID_SECUENCIAL = max_id_visto.wrapping_add(1) };
+        // El hash de la raiz que acabamos de walkear ES el cuaderno
+        // soberano actual — lo dejamos cargado para que el pintado lo
+        // muestre en la cabecera como si recien lo hubieramos anclado.
+        unsafe {
+            HASH_CUADERNO = raiz_hash;
+            HASH_CUADERNO_VALIDO = true;
+        }
+    }
 }
 
 // =============================================================================
@@ -930,7 +1067,7 @@ fn pintar() {
 
     // Cabecera con el hash del cuaderno (si ya hubo una consolidacion).
     rellenar_rect(lienzo, 0, 0, ANCHO, EDITOR_Y - 4, secundario);
-    dibujar_texto(lienzo, b"PLUMA  WAWA  F43", 8, 6, 1, tinta);
+    dibujar_texto(lienzo, b"PLUMA  WAWA  F44", 8, 6, 1, tinta);
     if unsafe { HASH_CUADERNO_VALIDO } {
         let h = unsafe { HASH_CUADERNO };
         let mut etiqueta = [b' '; 8];
