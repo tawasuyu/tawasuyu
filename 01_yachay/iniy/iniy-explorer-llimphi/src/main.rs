@@ -19,9 +19,10 @@ use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, FlexDirection, Size, Style},
     AlignItems, Rect,
 };
-use llimphi_ui::llimphi_raster::peniko::Color;
+use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
+use llimphi_ui::llimphi_raster::vello::kurbo::{Affine, BezPath, Circle as KurboCircle, Stroke};
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, Handle, View};
+use llimphi_ui::{App, Handle, PaintRect, View};
 use llimphi_widget_app_header::{app_header, AppHeaderPalette};
 use llimphi_widget_banner::{banner_view, BannerKind};
 use llimphi_widget_card::{card_view, CardOptions, CardPalette};
@@ -45,6 +46,12 @@ struct Model {
     aserciones: Vec<AsercionAtribuida>,
     fuentes: Vec<FuenteResumen>,
     reputaciones: std::collections::HashMap<FuenteId, f32>,
+    /// Pre-computado en init con Fruchterman-Reingold. Coordenadas en [0,1].
+    /// Compartido por `Arc` con el painter para no clonar en cada frame.
+    posiciones: std::sync::Arc<std::collections::HashMap<AsercionId, (f32, f32)>>,
+    /// Pre-computado: (premisa, hipotesis, entailment, contradiction).
+    /// Solo relaciones no triviales (al menos una > 0).
+    aristas_grafo: std::sync::Arc<Vec<(AsercionId, AsercionId, f32, f32)>>,
     n_implicaciones: usize,
     theme: Theme,
 }
@@ -71,21 +78,37 @@ impl App for Explorer {
         let theme = Theme::dark();
 
         match cargar_modelo(&db_path) {
-            Ok((aserciones, fuentes, reputaciones, n_implicaciones)) => Model {
-                db_path,
-                error: None,
-                aserciones,
-                fuentes,
-                reputaciones,
-                n_implicaciones,
-                theme,
-            },
+            Ok((aserciones, fuentes, reputaciones, n_implicaciones, imps)) => {
+                let aristas_grafo = std::sync::Arc::new(
+                    imps.iter()
+                        .filter(|i| i.relacion.entailment > 0.0 || i.relacion.contradiction > 0.0)
+                        .map(|i| (i.premisa, i.hipotesis, i.relacion.entailment, i.relacion.contradiction))
+                        .collect::<Vec<_>>(),
+                );
+                let posiciones = std::sync::Arc::new(layout_fruchterman_reingold(
+                    &aserciones,
+                    &aristas_grafo,
+                ));
+                Model {
+                    db_path,
+                    error: None,
+                    aserciones,
+                    fuentes,
+                    reputaciones,
+                    posiciones,
+                    aristas_grafo,
+                    n_implicaciones,
+                    theme,
+                }
+            }
             Err(e) => Model {
                 db_path,
                 error: Some(e.to_string()),
                 aserciones: Vec::new(),
                 fuentes: Vec::new(),
                 reputaciones: std::collections::HashMap::new(),
+                posiciones: std::sync::Arc::new(std::collections::HashMap::new()),
+                aristas_grafo: std::sync::Arc::new(Vec::new()),
                 n_implicaciones: 0,
                 theme,
             },
@@ -149,11 +172,14 @@ impl App for Explorer {
         }
         let panel_asercs = panel_columna(theme, aserc_cards);
 
+        // Panel central: grafo dibujado vía paint_with.
+        let panel_grafo = grafo_panel(model);
+
         let body = View::new(Style {
             flex_direction: FlexDirection::Row,
             size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
             flex_grow: 1.0,
-            gap: Size { width: length(12.0_f32), height: length(0.0_f32) },
+            gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
             padding: Rect {
                 left: length(12.0_f32),
                 right: length(12.0_f32),
@@ -163,7 +189,7 @@ impl App for Explorer {
             ..Default::default()
         })
         .fill(theme.bg_app)
-        .children(vec![panel_fuentes, panel_asercs]);
+        .children(vec![panel_fuentes, panel_grafo, panel_asercs]);
 
         chrome.push(body);
         rama_columna(theme, chrome)
@@ -183,7 +209,7 @@ fn rama_columna(theme: Theme, children: Vec<View<Msg>>) -> View<Msg> {
 fn panel_columna(theme: Theme, children: Vec<View<Msg>>) -> View<Msg> {
     View::new(Style {
         flex_direction: FlexDirection::Column,
-        size: Size { width: percent(0.5_f32), height: percent(1.0_f32) },
+        size: Size { width: percent(0.25_f32), height: percent(1.0_f32) },
         flex_grow: 1.0,
         gap: Size { width: length(0.0_f32), height: length(6.0_f32) },
         padding: Rect {
@@ -197,6 +223,73 @@ fn panel_columna(theme: Theme, children: Vec<View<Msg>>) -> View<Msg> {
     .fill(theme.bg_panel_alt)
     .clip(true)
     .children(children)
+}
+
+fn grafo_panel(model: &Model) -> View<Msg> {
+    use llimphi_ui::llimphi_raster::vello::Scene;
+    let theme = model.theme;
+    let posiciones = model.posiciones.clone();
+    let aristas = model.aristas_grafo.clone();
+    // Para color por opinión necesitamos la opinión por id.
+    let opiniones: std::sync::Arc<std::collections::HashMap<AsercionId, Opinion>> =
+        std::sync::Arc::new(
+            model.aserciones.iter()
+                .map(|a| (a.asercion.id, a.asercion.opinion_autoral))
+                .collect()
+        );
+    let bg = theme.bg_panel;
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(0.5_f32), height: percent(1.0_f32) },
+        flex_grow: 2.0,
+        ..Default::default()
+    })
+    .fill(bg)
+    .clip(true)
+    .paint_with(move |scene: &mut Scene, _ts, rect: PaintRect| {
+        if posiciones.is_empty() {
+            return;
+        }
+        let xform = Affine::IDENTITY;
+        // Aristas primero, para que los nodos las cubran en el centro.
+        for (premisa, hipotesis, ent, contra) in aristas.iter() {
+            let (Some(p), Some(h)) = (posiciones.get(premisa), posiciones.get(hipotesis)) else { continue; };
+            let x1 = rect.x + p.0 * rect.w;
+            let y1 = rect.y + p.1 * rect.h;
+            let x2 = rect.x + h.0 * rect.w;
+            let y2 = rect.y + h.1 * rect.h;
+            let (color, ancho) = if contra > ent {
+                (Color::from_rgba8(0xbf, 0x61, 0x6a, 0xc0), 1.5 + contra * 3.0)
+            } else {
+                (Color::from_rgba8(0xa3, 0xbe, 0x8c, 0xc0), 1.5 + ent * 3.0)
+            };
+            let mut path = BezPath::new();
+            path.move_to((x1 as f64, y1 as f64));
+            path.line_to((x2 as f64, y2 as f64));
+            scene.stroke(&Stroke::new(ancho as f64), xform, color, None, &path);
+        }
+        // Nodos.
+        for (id, (x, y)) in posiciones.iter() {
+            let cx = (rect.x + x * rect.w) as f64;
+            let cy = (rect.y + y * rect.h) as f64;
+            let op = opiniones.get(id).copied().unwrap_or(Opinion::vacua(0.5).unwrap());
+            let color = if op.creencia >= op.descreencia && op.creencia >= op.incertidumbre {
+                Color::from_rgba8(0xa3, 0xbe, 0x8c, 0xff)
+            } else if op.descreencia >= op.incertidumbre {
+                Color::from_rgba8(0xbf, 0x61, 0x6a, 0xff)
+            } else {
+                Color::from_rgba8(0x88, 0x88, 0x99, 0xff)
+            };
+            // Radio escalado por probabilidad esperada (más opinión, más visible).
+            let r = (3.5 + op.creencia.max(op.descreencia) * 4.0) as f64;
+            let c = KurboCircle::new((cx, cy), r);
+            scene.fill(Fill::NonZero, xform, color, None, &c);
+            // Halo oscuro para definirlo sobre el fondo.
+            scene.stroke(&Stroke::new(0.8), xform,
+                Color::from_rgba8(0x1a, 0x1a, 0x20, 0xff), None, &c);
+        }
+    })
 }
 
 fn etiqueta_seccion(s: impl Into<String>, color: Color) -> View<Msg> {
@@ -324,6 +417,7 @@ fn cargar_modelo(
     Vec<FuenteResumen>,
     std::collections::HashMap<FuenteId, f32>,
     usize,
+    Vec<Implicacion>,
 )> {
     let store = Store::abrir(db_path)?;
     let aserciones = store.cargar_aserciones_atribuidas_todas()?;
@@ -331,7 +425,100 @@ fn cargar_modelo(
     let imps = store.cargar_implicaciones_todas()?;
     let reputaciones = calcular_reputaciones(&aserciones, &imps);
     let n = imps.len();
-    Ok((aserciones, fuentes, reputaciones, n))
+    Ok((aserciones, fuentes, reputaciones, n, imps))
+}
+
+/// Fruchterman-Reingold simplificado en espacio normalizado [0,1]².
+/// Coordenadas iniciales determinísticas por hash del id; 80 iteraciones
+/// con cooling lineal. Sin aristas, los nodos se distribuyen
+/// repulsivamente en una grilla aproximada.
+fn layout_fruchterman_reingold(
+    aserciones: &[AsercionAtribuida],
+    aristas: &[(AsercionId, AsercionId, f32, f32)],
+) -> std::collections::HashMap<AsercionId, (f32, f32)> {
+    use std::collections::HashMap;
+    let n = aserciones.len();
+    if n == 0 {
+        return HashMap::new();
+    }
+    let mut pos: Vec<(f32, f32)> = aserciones
+        .iter()
+        .map(|a| {
+            let h = hash_id(&a.asercion.id);
+            let x = ((h & 0xFFFF) as f32 / 0xFFFF as f32) * 0.9 + 0.05;
+            let y = (((h >> 16) & 0xFFFF) as f32 / 0xFFFF as f32) * 0.9 + 0.05;
+            (x, y)
+        })
+        .collect();
+    let id_a_idx: HashMap<AsercionId, usize> = aserciones.iter().enumerate()
+        .map(|(i, a)| (a.asercion.id, i))
+        .collect();
+    let aristas_idx: Vec<(usize, usize, f32)> = aristas.iter()
+        .filter_map(|(p, h, e, c)| {
+            let pi = *id_a_idx.get(p)?;
+            let hi = *id_a_idx.get(h)?;
+            // peso = max(entailment, contradiction) — la fuerza de la conexión.
+            Some((pi, hi, e.max(*c)))
+        })
+        .collect();
+
+    let k = (1.0_f32 / n as f32).sqrt();        // distancia ideal entre nodos
+    let mut t: f32 = 0.10;                       // temperatura (paso máximo)
+    let iter = 80usize;
+    for it in 0..iter {
+        let mut disp = vec![(0.0_f32, 0.0_f32); n];
+        // Repulsivas: todas con todas.
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let dx = pos[i].0 - pos[j].0;
+                let dy = pos[i].1 - pos[j].1;
+                let d = (dx * dx + dy * dy).sqrt().max(1e-4);
+                let f = (k * k) / d;
+                let ux = dx / d;
+                let uy = dy / d;
+                disp[i].0 += ux * f;
+                disp[i].1 += uy * f;
+                disp[j].0 -= ux * f;
+                disp[j].1 -= uy * f;
+            }
+        }
+        // Atractivas: por arista, ponderada por peso.
+        for &(a, b, w) in &aristas_idx {
+            let dx = pos[a].0 - pos[b].0;
+            let dy = pos[a].1 - pos[b].1;
+            let d = (dx * dx + dy * dy).sqrt().max(1e-4);
+            let f = (d * d) / k * w;
+            let ux = dx / d;
+            let uy = dy / d;
+            disp[a].0 -= ux * f;
+            disp[a].1 -= uy * f;
+            disp[b].0 += ux * f;
+            disp[b].1 += uy * f;
+        }
+        // Aplicar desplazamiento, limitado por t. Mantener en [0.05, 0.95].
+        for i in 0..n {
+            let (mx, my) = disp[i];
+            let m = (mx * mx + my * my).sqrt().max(1e-4);
+            let dx = (mx / m) * m.min(t);
+            let dy = (my / m) * m.min(t);
+            pos[i].0 = (pos[i].0 + dx).clamp(0.05, 0.95);
+            pos[i].1 = (pos[i].1 + dy).clamp(0.05, 0.95);
+        }
+        // Cooling lineal.
+        t = 0.10 * (1.0 - it as f32 / iter as f32);
+    }
+    aserciones.iter().enumerate().map(|(i, a)| (a.asercion.id, pos[i])).collect()
+}
+
+fn hash_id(id: &AsercionId) -> u64 {
+    // FNV-1a sobre los 16 bytes del Ulid.
+    let bytes = id.0.to_bytes();
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100_0000_01b3);
+    }
+    h
 }
 
 /// Cálculo de reputación duplicado del CLI (versión simplificada: solo el
