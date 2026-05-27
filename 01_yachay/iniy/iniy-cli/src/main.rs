@@ -161,6 +161,20 @@ enum Cmd {
     ImportSqlite {
         archivo: PathBuf,
     },
+    /// Vista cronológica del corpus: documentos ordenados por timestamp
+    /// de ingesta, ascendente. Útil para ver cómo creció la "creencia
+    /// del corpus" en el tiempo.
+    Timeline {
+        /// Filtra a docs creados >= esta epoch Unix (segundos).
+        #[arg(long)]
+        desde: Option<i64>,
+        /// Filtra a docs creados <= esta epoch Unix (segundos).
+        #[arg(long)]
+        hasta: Option<i64>,
+        /// Filtra por tag.
+        #[arg(long)]
+        tag: Option<String>,
+    },
     /// Reputación de cada fuente (persistida en la tabla `reputaciones`).
     /// Lee la tabla; si está vacía o pasaste --recalcular, primero
     /// recalcula desde el grafo NLI y persiste vía UPSERT.
@@ -257,6 +271,29 @@ fn etiqueta_fuente(att: &AsercionAtribuida) -> String {
 
 fn fila_opinion(op: &Opinion) -> String {
     format!("b={:.2} d={:.2} u={:.2}", op.creencia, op.descreencia, op.incertidumbre)
+}
+
+/// Formatea Unix epoch como YYYY-MM-DD HH:MM:SS UTC, manual (sin chrono).
+fn formato_fecha(unix: i64) -> String {
+    // Conversión Unix → fecha calendárica (gregoriano) en UTC.
+    // Días desde Unix epoch (1970-01-01) en UTC.
+    let days = unix.div_euclid(86_400);
+    let secs_dia = unix.rem_euclid(86_400);
+    let h = secs_dia / 3600;
+    let m = (secs_dia % 3600) / 60;
+    let s = secs_dia % 60;
+    // Algoritmo de Howard Hinnant (civil_from_days), simplificado.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097) as i64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if mo <= 2 { y + 1 } else { y };
+    format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", y, mo, d, h, m, s)
 }
 
 /// Intenta fastembed (multilingual-e5-small, local, ~120MB ONNX descargado al
@@ -619,6 +656,24 @@ async fn main() -> Result<()> {
                 println!();
                 println!("(tokens: input={} cache_read={} output={})",
                     u.input_tokens, u.cache_read_input_tokens, u.output_tokens);
+            }
+        }
+        Cmd::Timeline { desde, hasta, tag } => {
+            let docs = store.listar_cronologicamente(desde, hasta, tag.as_deref())?;
+            if docs.is_empty() {
+                println!("(corpus vacío en ese rango / con ese tag)");
+                return Ok(());
+            }
+            let mut acum_asercs = 0u64;
+            println!("timeline ({} docs):", docs.len());
+            println!();
+            for d in docs {
+                acum_asercs += d.n_aserciones as u64;
+                let fecha = formato_fecha(d.creado_unix);
+                let fuente = d.fuente.as_ref().map(|f| f.nombre.as_str()).unwrap_or("(sin fuente)");
+                let tags_str = if d.tags.is_empty() { String::new() } else { format!(" #{}", d.tags.join(" #")) };
+                println!("  {fecha}  +{:>4} asercs (Σ={acum_asercs})  {}  «{}»{tags_str}",
+                    d.n_aserciones, fuente, d.titulo);
             }
         }
         Cmd::Reputacion { recalcular } => {

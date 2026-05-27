@@ -21,6 +21,18 @@ pub struct DocumentoResumen {
     pub titulo: String,
     pub fuente: Option<Fuente>,
     pub n_chunks: u32,
+    /// Timestamp Unix de cuando el doc se ingirió en esta DB.
+    pub creado_unix: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct DocumentoCronologico {
+    pub id: DocId,
+    pub titulo: String,
+    pub fuente: Option<Fuente>,
+    pub n_aserciones: u32,
+    pub creado_unix: i64,
+    pub tags: Vec<String>,
 }
 
 /// Una aserción con su contexto atribucional: en qué doc apareció y de qué
@@ -339,7 +351,7 @@ impl Store {
     pub fn listar_documentos(&self) -> Result<Vec<DocumentoResumen>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT d.id, d.titulo, COUNT(c.id) AS n,
+            SELECT d.id, d.titulo, COUNT(c.id) AS n, d.creado,
                    f.id AS f_id, f.nombre AS f_nombre, f.kind AS f_kind
             FROM documentos d
             LEFT JOIN chunks c ON c.doc_id = d.id
@@ -350,17 +362,15 @@ impl Store {
         )?;
         let rows = stmt.query_map([], |r| {
             Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, i64>(2)?,
-                r.get::<_, Option<String>>(3)?,
-                r.get::<_, Option<String>>(4)?,
-                r.get::<_, Option<String>>(5)?,
+                r.get::<_, String>(0)?, r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?, r.get::<_, i64>(3)?,
+                r.get::<_, Option<String>>(4)?, r.get::<_, Option<String>>(5)?,
+                r.get::<_, Option<String>>(6)?,
             ))
         })?;
         let mut out = Vec::new();
         for r in rows {
-            let (id_s, titulo, n, f_id, f_nombre, f_kind) = r?;
+            let (id_s, titulo, n, creado, f_id, f_nombre, f_kind) = r?;
             let ulid = Ulid::from_str(&id_s).with_context(|| format!("doc_id inválido: {id_s}"))?;
             let fuente = match (f_id, f_nombre) {
                 (Some(fid_s), Some(nombre)) => {
@@ -369,7 +379,88 @@ impl Store {
                 }
                 _ => None,
             };
-            out.push(DocumentoResumen { id: DocId(ulid), titulo, fuente, n_chunks: n as u32 });
+            out.push(DocumentoResumen {
+                id: DocId(ulid), titulo, fuente, n_chunks: n as u32, creado_unix: creado,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Documentos ordenados cronológicamente (asc, los más antiguos primero).
+    /// Cada uno con su n_aserciones + lista de tags. Filtros opcionales:
+    /// `desde_unix` / `hasta_unix` (inclusivo); `tag` exacto.
+    pub fn listar_cronologicamente(
+        &self,
+        desde_unix: Option<i64>,
+        hasta_unix: Option<i64>,
+        tag: Option<&str>,
+    ) -> Result<Vec<DocumentoCronologico>> {
+        let (sql, params_dyn): (&str, Vec<Box<dyn rusqlite::ToSql>>) = match (desde_unix, hasta_unix, tag) {
+            (Some(d), Some(h), Some(t)) => (r#"
+                SELECT d.id, d.titulo, d.creado, COUNT(a.id) AS n,
+                       f.id, f.nombre, f.kind
+                FROM documentos d
+                LEFT JOIN aserciones a ON a.doc_id = d.id
+                LEFT JOIN fuentes f ON f.id = d.fuente_id
+                JOIN documento_tags dt ON dt.doc_id = d.id
+                WHERE d.creado >= ?1 AND d.creado <= ?2 AND dt.tag = ?3
+                GROUP BY d.id ORDER BY d.creado ASC, d.id ASC
+            "#, vec![Box::new(d), Box::new(h), Box::new(t.to_string())]),
+            (Some(d), Some(h), None) => (r#"
+                SELECT d.id, d.titulo, d.creado, COUNT(a.id) AS n,
+                       f.id, f.nombre, f.kind
+                FROM documentos d
+                LEFT JOIN aserciones a ON a.doc_id = d.id
+                LEFT JOIN fuentes f ON f.id = d.fuente_id
+                WHERE d.creado >= ?1 AND d.creado <= ?2
+                GROUP BY d.id ORDER BY d.creado ASC, d.id ASC
+            "#, vec![Box::new(d), Box::new(h)]),
+            (None, None, Some(t)) => (r#"
+                SELECT d.id, d.titulo, d.creado, COUNT(a.id) AS n,
+                       f.id, f.nombre, f.kind
+                FROM documentos d
+                LEFT JOIN aserciones a ON a.doc_id = d.id
+                LEFT JOIN fuentes f ON f.id = d.fuente_id
+                JOIN documento_tags dt ON dt.doc_id = d.id
+                WHERE dt.tag = ?1
+                GROUP BY d.id ORDER BY d.creado ASC, d.id ASC
+            "#, vec![Box::new(t.to_string())]),
+            _ => (r#"
+                SELECT d.id, d.titulo, d.creado, COUNT(a.id) AS n,
+                       f.id, f.nombre, f.kind
+                FROM documentos d
+                LEFT JOIN aserciones a ON a.doc_id = d.id
+                LEFT JOIN fuentes f ON f.id = d.fuente_id
+                GROUP BY d.id ORDER BY d.creado ASC, d.id ASC
+            "#, vec![]),
+        };
+        let mut stmt = self.conn.prepare(sql)?;
+        let params: Vec<&dyn rusqlite::ToSql> = params_dyn.iter().map(|p| p.as_ref()).collect();
+        let rows = stmt.query_map(params.as_slice(), |r| {
+            Ok((
+                r.get::<_, String>(0)?, r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?, r.get::<_, i64>(3)?,
+                r.get::<_, Option<String>>(4)?, r.get::<_, Option<String>>(5)?,
+                r.get::<_, Option<String>>(6)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            let (id_s, titulo, creado, n, f_id, f_nombre, f_kind) = r?;
+            let did = DocId(Ulid::from_str(&id_s).with_context(|| format!("doc_id inválido: {id_s}"))?);
+            let fuente = match (f_id, f_nombre) {
+                (Some(fid_s), Some(nombre)) => {
+                    let fid = Ulid::from_str(&fid_s).with_context(|| format!("fuente_id inválido: {fid_s}"))?;
+                    Some(Fuente { id: FuenteId(fid), nombre, kind: f_kind })
+                }
+                _ => None,
+            };
+            let tags = self.tags_de_doc(did)?;
+            out.push(DocumentoCronologico {
+                id: did, titulo, fuente,
+                n_aserciones: n as u32,
+                creado_unix: creado, tags,
+            });
         }
         Ok(out)
     }
