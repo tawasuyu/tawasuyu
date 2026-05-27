@@ -2,7 +2,7 @@
 //! la estructura del MST).
 //!
 //! El protocolo es simétrico — ambos peers ejecutan el mismo rol y
-//! emiten los mismos mensajes — y consta de seis tipos:
+//! emiten los mismos mensajes — y consta de ocho tipos:
 //!
 //! 1. `Hello { root_subtree_hash }` anuncia el hash Merkle del MST raíz
 //!    del emisor. Si ambos hashes coinciden, los dos repos son idénticos
@@ -28,7 +28,9 @@
 //!    no tiene probes ni fetches pendientes. Cuando ambos `Done`s han
 //!    cruzado, la sesión termina con ambos repos convergentes.
 
-use minga_core::{Attestation, ContentHash, Did, NodeProbe, Retraction, Signature, StoredNode};
+use minga_core::{
+    Attestation, ContentHash, Did, NodeProbe, Retraction, RootDecl, Signature, StoredNode,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Message {
@@ -82,6 +84,18 @@ pub enum Message {
     /// en el remitente más allá de su firma.
     RetractPush {
         retractions: Vec<Retraction>,
+    },
+    /// Declaración de raíces conocidas por el emisor: para cada raíz,
+    /// el α-hash, el struct-hash del CAS y el dialect declarado. El
+    /// receptor **re-verifica** llamando a `verify_root_alpha` tras
+    /// reconstruir el `SemanticNode` desde su store local — es lo que
+    /// cierra el loop de seguridad α↔struct frente a un peer que
+    /// pudiera anunciar un α-hash que no corresponde al contenido. Una
+    /// declaración cuyo struct_hash no está aún en el store (todavía
+    /// no se entregó por `Deliver`) o cuya α-verificación falla se
+    /// cuenta como rechazada y no entra al `roots` tree del receptor.
+    RootDeclaration {
+        decls: Vec<RootDecl>,
     },
     Done,
 }

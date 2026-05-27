@@ -883,3 +883,190 @@ fn forged_retraction_signature_is_rejected() {
     assert_eq!(b.rejected_retracts(), 1);
     assert_eq!(b.retractions().len(), 0);
 }
+
+// ─── Propagación de declaraciones de raíz (α-verification) ─────────
+
+use minga_core::{alpha::hash_alpha_with, parse::Dialect, RootDecl};
+use std::collections::HashMap;
+
+#[test]
+fn sync_propagates_verified_root_declarations() {
+    // A tiene una raíz declarada con su α-hash y dialect. Tras sync,
+    // B la conoce y la α-verificó contra el contenido reconstruido.
+    //
+    // Nota: este test indexa el MST por struct_hash (la convención
+    // pre-α), separando dos preocupaciones — el sync del grafo CAS
+    // por un lado, y la declaración del binding α→struct por el otro.
+    // RootDeclaration es metadata acerca de raíces, no reemplaza al
+    // MST como índice de contenido.
+    let kp_a = kp(200);
+    let kp_b = kp(201);
+
+    let src = "fn add(x: i32, y: i32) -> i32 { x + y }";
+    let node = parse::rust(src).unwrap();
+    let alpha = hash_alpha_with(Dialect::Rust, &node);
+    let mut store_a = MemStore::new();
+    let struct_hash = store_a.put(&node);
+    let mut mst_a = Mst::new();
+    mst_a.insert(struct_hash);
+    let mut roots_a = HashMap::new();
+    roots_a.insert(alpha, (struct_hash, Dialect::Rust));
+
+    let mut a = SyncSession::with_roots(
+        mst_a,
+        store_a,
+        AttestationStore::new(),
+        RetractionStore::new(),
+        roots_a,
+        kp_a,
+    );
+    let mut b = SyncSession::with_roots(
+        Mst::new(),
+        MemStore::new(),
+        AttestationStore::new(),
+        RetractionStore::new(),
+        HashMap::new(),
+        kp_b,
+    );
+    let stats = run_sync(&mut a, &mut b);
+
+    // Se emitió al menos una RootDeclaration (A → B).
+    assert!(stats.root_declarations >= 1);
+
+    // El contenido cruzó normal por el sync del grafo.
+    assert!(b.store().contains(&struct_hash));
+
+    // B verificó y aceptó la declaración: cero rechazos.
+    let verified = b.take_verified_root_decls();
+    assert_eq!(b.rejected_root_decls(), 0);
+    assert_eq!(verified.len(), 1);
+    let (got_struct, got_dialect) = verified[&alpha];
+    assert_eq!(got_struct, struct_hash);
+    assert_eq!(got_dialect, Dialect::Rust);
+}
+
+#[test]
+fn sync_rejects_root_decl_with_forged_alpha() {
+    // A inyecta una RootDeclaration con α-hash que no corresponde
+    // al contenido. B debe rechazarla.
+    let kp_a = kp(210);
+    let kp_b = kp(211);
+
+    let src = "fn forge() -> i32 { 0 }";
+    let node = parse::rust(src).unwrap();
+    let mut store_a = MemStore::new();
+    let struct_hash = store_a.put(&node);
+    // α-hash falso (todo ceros) que no recompondrá bajo ningún dialect.
+    let fake_alpha = ContentHash([0u8; 32]);
+    let mut mst_a = Mst::new();
+    mst_a.insert(fake_alpha);
+
+    let mut a = SyncSession::with_roots(
+        mst_a,
+        store_a,
+        AttestationStore::new(),
+        RetractionStore::new(),
+        HashMap::new(), // No declaramos roots locales: inyectamos manual.
+        kp_a,
+    );
+    let mut b = SyncSession::with_roots(
+        Mst::new(),
+        MemStore::new(),
+        AttestationStore::new(),
+        RetractionStore::new(),
+        HashMap::new(),
+        kp_b,
+    );
+
+    // Iniciamos sync hasta intercambiar Hello.
+    let mut from_a: Vec<Message> = a.start();
+    let mut from_b: Vec<Message> = b.start();
+    while !from_a.is_empty() || !from_b.is_empty() {
+        let take_a = from_a;
+        from_a = Vec::new();
+        for m in take_a {
+            from_b.extend(b.handle(m));
+        }
+        let take_b = from_b;
+        from_b = Vec::new();
+        for m in take_b {
+            from_a.extend(a.handle(m));
+        }
+        if b.received_hello() && a.received_hello() {
+            break;
+        }
+    }
+    // Para verificar α necesitamos que B tenga el struct_hash en su
+    // store. Inyectamos el Deliver primero.
+    let stored = StoredNode {
+        kind: "source_file".to_string(),
+        field_name: None,
+        leaf_text: None,
+        children: vec![],
+    };
+    let stored_hash = hash_stored(&stored);
+    b.handle(Message::Deliver {
+        hash: stored_hash,
+        stored,
+    });
+    // Ahora el RootDeclaration forjado: el α falso "apunta" al stored_hash.
+    b.handle(Message::RootDeclaration {
+        decls: vec![RootDecl::new(fake_alpha, stored_hash, Dialect::Rust)],
+    });
+
+    let verified = b.take_verified_root_decls();
+    assert_eq!(verified.len(), 0);
+    assert_eq!(b.rejected_root_decls(), 1);
+}
+
+#[test]
+fn sync_rejects_root_decl_before_hello() {
+    // Igual que AttestPush/RetractPush: una RootDeclaration sin Hello
+    // previo se descarta entera.
+    let mut a = SyncSession::without_attestations(Mst::new(), MemStore::new(), kp(220));
+    let decls = vec![
+        RootDecl::new(ContentHash([1u8; 32]), ContentHash([2u8; 32]), Dialect::Rust),
+        RootDecl::new(ContentHash([3u8; 32]), ContentHash([4u8; 32]), Dialect::Python),
+    ];
+    let out = a.handle(Message::RootDeclaration { decls });
+    assert!(out.is_empty());
+    assert_eq!(a.rejected_root_decls(), 2);
+}
+
+#[test]
+fn sync_rejects_root_decl_with_unknown_dialect_byte() {
+    // Un byte de dialect que esta versión no conoce (e.g., 99) no
+    // tumba la sesión — la declaración se cuenta como rechazada.
+    let kp_a = kp(230);
+    let mut a = SyncSession::with_roots(
+        Mst::new(),
+        MemStore::new(),
+        AttestationStore::new(),
+        RetractionStore::new(),
+        HashMap::new(),
+        kp_a,
+    );
+    // Forjamos un Hello válido contra a para pasar el gate.
+    let peer = kp(231);
+    let nonce = a.self_nonce();
+    let peer_root = minga_core::empty_subtree_hash();
+    let payload = hello_payload(&nonce, &peer.did(), &peer_root);
+    let sig = peer.sign(&payload);
+    a.handle(Message::Hello {
+        peer_did: peer.did(),
+        root_subtree_hash: peer_root,
+        signature: sig,
+    });
+
+    let decl_unknown = RootDecl {
+        alpha: ContentHash([5u8; 32]),
+        struct_hash: ContentHash([6u8; 32]),
+        dialect_byte: 99, // No reconocido por esta versión.
+    };
+    a.handle(Message::RootDeclaration {
+        decls: vec![decl_unknown],
+    });
+    let verified = a.take_verified_root_decls();
+    assert_eq!(verified.len(), 0);
+    assert_eq!(a.rejected_root_decls(), 1);
+}

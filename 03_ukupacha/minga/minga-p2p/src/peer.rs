@@ -16,6 +16,7 @@
 //! consistente: un sync que empezó antes que un merge terminado puede
 //! no ver esas novedades, pero el siguiente sync sí.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -58,6 +59,10 @@ struct PeerState {
     store: MemStore,
     attestations: AttestationStore,
     retractions: RetractionStore,
+    /// Tabla local α-hash → (struct-hash, dialect). Se replica al
+    /// disco si hay backing persistente (`repo.roots`); también se
+    /// empuja al peer remoto durante sync vía `RootDeclaration`.
+    roots: HashMap<ContentHash, (ContentHash, Dialect)>,
     keypair: Keypair,
     /// Backing persistente opcional. Si está presente, todo cambio
     /// de estado escribe a disco vía write-through.
@@ -82,6 +87,7 @@ impl MingaPeer {
             store,
             attestations,
             retractions: RetractionStore::new(),
+            roots: HashMap::new(),
             keypair,
             persistent: None,
         }));
@@ -124,12 +130,25 @@ impl MingaPeer {
             let _ = retractions.add(r);
         }
 
+        // Cargar raíces desde disco. `from_byte` puede devolver None
+        // si el dialect persistido es de una versión futura — se
+        // descarta esa entrada para no propagarla al wire (no
+        // sabríamos verificarla del otro lado tampoco).
+        let mut roots: HashMap<ContentHash, (ContentHash, Dialect)> = HashMap::new();
+        for r in repo.roots.iter() {
+            let (alpha, struct_hash, dialect) = r?;
+            if let Some(d) = dialect {
+                roots.insert(alpha, (struct_hash, d));
+            }
+        }
+
         let node = LibP2pNode::new()?;
         let state = Arc::new(Mutex::new(PeerState {
             mst,
             store,
             attestations,
             retractions,
+            roots,
             keypair,
             persistent: Some(repo),
         }));
@@ -208,19 +227,26 @@ impl MingaPeer {
 
     async fn snapshot_session(&self) -> SyncSession {
         let s = self.state.lock().await;
-        SyncSession::with_retractions(
+        SyncSession::with_roots(
             s.mst.clone(),
             s.store.clone(),
             s.attestations.clone(),
             s.retractions.clone(),
+            s.roots.clone(),
             s.keypair.clone(),
         )
     }
 
-    async fn merge_back(&self, session: SyncSession) {
-        let (new_mst, new_store, new_atts, new_rets) = session.into_parts_with_retractions();
+    async fn merge_back(&self, mut session: SyncSession) {
+        // Verifica α↔struct de las declaraciones recibidas ANTES de
+        // mover la sesión: si el caller no llamó `take_verified_root_decls`
+        // explícitamente, las raíces no pasarían a `verified_root_decls`
+        // y se perderían en silencio.
+        let _verified = session.take_verified_root_decls();
+        let (new_mst, new_store, new_atts, new_rets, new_roots) =
+            session.into_parts_with_roots();
         let mut s = self.state.lock().await;
-        merge_into_state(&mut s, new_mst, new_store, new_atts, new_rets);
+        merge_into_state(&mut s, new_mst, new_store, new_atts, new_rets, new_roots);
     }
 
     /// Instantánea del estado actual (mst + store + attestations).
@@ -267,6 +293,7 @@ impl MingaPeer {
         let mut s = self.state.lock().await;
         let struct_hash = s.store.put(node);
         s.mst.insert(alpha);
+        s.roots.insert(alpha, (struct_hash, dialect));
         if let Some(repo) = &s.persistent {
             let _ = repo.nodes.put(node);
             let _ = repo.mst.insert(alpha);
@@ -308,18 +335,21 @@ impl MingaPeer {
 async fn handle_incoming(stream: Stream, state: Arc<Mutex<PeerState>>) {
     let session = {
         let s = state.lock().await;
-        SyncSession::with_retractions(
+        SyncSession::with_roots(
             s.mst.clone(),
             s.store.clone(),
             s.attestations.clone(),
             s.retractions.clone(),
+            s.roots.clone(),
             s.keypair.clone(),
         )
     };
-    if let Ok(result) = run_sync_async(session, stream.compat()).await {
-        let (new_mst, new_store, new_atts, new_rets) = result.into_parts_with_retractions();
+    if let Ok(mut result) = run_sync_async(session, stream.compat()).await {
+        let _verified = result.take_verified_root_decls();
+        let (new_mst, new_store, new_atts, new_rets, new_roots) =
+            result.into_parts_with_roots();
         let mut s = state.lock().await;
-        merge_into_state(&mut s, new_mst, new_store, new_atts, new_rets);
+        merge_into_state(&mut s, new_mst, new_store, new_atts, new_rets, new_roots);
     }
     // Errores de sync se ignoran: cada sesión es independiente, una
     // sesión rota no debería tumbar el peer entero. Una iteración
@@ -332,6 +362,7 @@ fn merge_into_state(
     new_store: MemStore,
     new_atts: AttestationStore,
     new_rets: RetractionStore,
+    new_roots: HashMap<ContentHash, (ContentHash, Dialect)>,
 ) {
     // Write-through: cada inserción en memoria también va al backing
     // persistente si existe. Errores de IO se ignoran (best-effort);
@@ -362,6 +393,18 @@ fn merge_into_state(
             if let Some(repo) = &state.persistent {
                 let _ = repo.retractions.add(r.clone());
             }
+        }
+    }
+    // Raíces ya verificadas (α↔struct↔dialect): la fuente local es
+    // autoritativa, así que sólo insertamos las que no conocemos
+    // todavía. La verificación criptográfica ya pasó en la sesión.
+    for (alpha, (struct_hash, dialect)) in new_roots {
+        if state.roots.contains_key(&alpha) {
+            continue;
+        }
+        state.roots.insert(alpha, (struct_hash, dialect));
+        if let Some(repo) = &state.persistent {
+            let _ = repo.roots.put(alpha, struct_hash, dialect);
         }
     }
 }

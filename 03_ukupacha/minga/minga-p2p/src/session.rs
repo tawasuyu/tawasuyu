@@ -41,8 +41,8 @@
 //!    cierra cuando ambos `Done`s han cruzado.
 
 use minga_core::{
-    cas::ContentHash, empty_subtree_hash, hash_stored, AttestationStore, Did, Keypair, MemStore,
-    Mst, NodeProbe, NodeStore, RetractionStore,
+    alpha::verify_root_alpha, cas::ContentHash, empty_subtree_hash, hash_stored, parse::Dialect,
+    AttestationStore, Did, Keypair, MemStore, Mst, NodeProbe, NodeStore, RetractionStore, RootDecl,
 };
 use rand::rngs::OsRng;
 use rand::RngCore;
@@ -73,6 +73,11 @@ pub struct SyncSession {
     attestations: AttestationStore,
     retractions: RetractionStore,
 
+    /// Raíces locales (α-hash → (struct-hash, dialect)). Las empujamos
+    /// al peer como `RootDeclaration` para que pueda re-verificar el
+    /// binding α↔struct al recibirlas.
+    local_roots: HashMap<ContentHash, (ContentHash, Dialect)>,
+
     /// Llave del peer local: firma el `Hello` y queda asociada al
     /// `Did` que el peer remoto verá.
     keypair: Keypair,
@@ -89,6 +94,15 @@ pub struct SyncSession {
     awaiting_root: HashSet<ContentHash>,
     awaiting_child: HashSet<ContentHash>,
 
+    /// Declaraciones de raíces recibidas, **antes** de verificar. Se
+    /// drenan al finalizar la sesión (cuando el store ya recibió todo
+    /// lo que va a recibir) llamando a `take_verified_root_decls`.
+    pending_root_decls: Vec<RootDecl>,
+    /// Declaraciones ya verificadas (α-hash recompone bajo el dialect
+    /// declarado tras reconstruir el `SemanticNode` del store local).
+    /// Listas para que el caller las persista en su `roots` tree.
+    verified_root_decls: HashMap<ContentHash, (ContentHash, Dialect)>,
+
     rejected_hellos: usize,
     rejected_delivers: usize,
     /// Contador de atestaciones rechazadas: firma rota, llegada antes
@@ -97,6 +111,11 @@ pub struct SyncSession {
     rejected_attests: usize,
     /// Contador análogo para retracciones rechazadas.
     rejected_retracts: usize,
+    /// Contador de declaraciones de raíz rechazadas: dialect byte
+    /// desconocido, struct_hash ausente en el store al finalizar, o
+    /// α-verificación falla (el α anunciado no recompone bajo el
+    /// dialect declarado).
+    rejected_root_decls: usize,
 
     /// Nonce aleatorio que **nosotros** emitimos en `Challenge`. La
     /// firma del `Hello` del peer debe ser sobre este nonce.
@@ -111,6 +130,7 @@ pub struct SyncSession {
     received_hello: bool,
     sent_attestations: bool,
     sent_retractions: bool,
+    sent_root_decls: bool,
     sent_done: bool,
     received_done: bool,
 }
@@ -127,14 +147,36 @@ impl SyncSession {
         Self::with_retractions(mst, store, attestations, RetractionStore::new(), keypair)
     }
 
-    /// Constructor completo con retracciones. Las retracciones se
-    /// empujan al peer junto con las atestaciones (en su propio
-    /// mensaje `RetractPush`).
+    /// Constructor con retracciones, sin declaración explícita de
+    /// raíces. Se empuja un `RootDeclaration` vacío para que la sesión
+    /// igual avance al `Done` (el contador de sent_root_decls se marca).
     pub fn with_retractions(
         mst: Mst,
         store: MemStore,
         attestations: AttestationStore,
         retractions: RetractionStore,
+        keypair: Keypair,
+    ) -> Self {
+        Self::with_roots(
+            mst,
+            store,
+            attestations,
+            retractions,
+            HashMap::new(),
+            keypair,
+        )
+    }
+
+    /// Constructor completo: además de retracciones, lleva el mapa de
+    /// raíces locales `(α-hash → (struct-hash, dialect))` que se
+    /// empujarán al peer como `RootDeclaration` tras el Hello. El peer
+    /// las re-verificará al final de la sesión.
+    pub fn with_roots(
+        mst: Mst,
+        store: MemStore,
+        attestations: AttestationStore,
+        retractions: RetractionStore,
+        local_roots: HashMap<ContentHash, (ContentHash, Dialect)>,
         keypair: Keypair,
     ) -> Self {
         let own_probes = mst.build_probe_index();
@@ -146,6 +188,7 @@ impl SyncSession {
             store,
             attestations,
             retractions,
+            local_roots,
             keypair,
             peer_did: None,
             own_probes,
@@ -154,10 +197,13 @@ impl SyncSession {
             seen_probes: HashSet::new(),
             awaiting_root: HashSet::new(),
             awaiting_child: HashSet::new(),
+            pending_root_decls: Vec::new(),
+            verified_root_decls: HashMap::new(),
             rejected_hellos: 0,
             rejected_delivers: 0,
             rejected_attests: 0,
             rejected_retracts: 0,
+            rejected_root_decls: 0,
             self_nonce,
             peer_nonce: None,
             sent_challenge: false,
@@ -166,6 +212,7 @@ impl SyncSession {
             received_hello: false,
             sent_attestations: false,
             sent_retractions: false,
+            sent_root_decls: false,
             sent_done: false,
             received_done: false,
         }
@@ -232,6 +279,22 @@ impl SyncSession {
                     out.push(Message::RetractPush { retractions: rets });
                 }
                 self.sent_retractions = true;
+
+                // Declaración de raíces: para cada raíz conocida
+                // localmente, anunciamos el binding α↔struct+dialect.
+                // El peer verificará al cerrar la sesión que el α que
+                // le anunciamos recompone bajo el dialect declarado.
+                let decls: Vec<RootDecl> = self
+                    .local_roots
+                    .iter()
+                    .map(|(alpha, (struct_hash, dialect))| {
+                        RootDecl::new(*alpha, *struct_hash, *dialect)
+                    })
+                    .collect();
+                if !decls.is_empty() {
+                    out.push(Message::RootDeclaration { decls });
+                }
+                self.sent_root_decls = true;
             }
 
             Message::Hello {
@@ -363,6 +426,21 @@ impl SyncSession {
                 }
             }
 
+            Message::RootDeclaration { decls } => {
+                // Mismo contrato de autenticación que AttestPush /
+                // RetractPush: sin Hello verificado no procesamos.
+                if !self.received_hello {
+                    self.rejected_root_decls += decls.len();
+                    return out;
+                }
+                // Las acumulamos crudas — la verificación α↔struct
+                // requiere que el struct_hash ya esté reconstruible
+                // desde el store local, lo que sólo está garantizado
+                // al cerrar la sesión. `take_verified_root_decls`
+                // drena este buffer y verifica entonces.
+                self.pending_root_decls.extend(decls);
+            }
+
             Message::Done => {
                 self.received_done = true;
             }
@@ -440,7 +518,7 @@ impl SyncSession {
         if !self.sent_hello || !self.received_hello {
             return Vec::new();
         }
-        if !self.sent_attestations || !self.sent_retractions {
+        if !self.sent_attestations || !self.sent_retractions || !self.sent_root_decls {
             return Vec::new();
         }
         if !self.awaited_probes.is_empty() {
@@ -451,6 +529,61 @@ impl SyncSession {
         }
         self.sent_done = true;
         vec![Message::Done]
+    }
+
+    /// Drena las declaraciones de raíz pendientes, verifica cada una
+    /// reconstruyendo el `SemanticNode` desde el store local y
+    /// llamando a [`verify_root_alpha`], y devuelve el mapa
+    /// `α-hash → (struct-hash, dialect)` de las que aprueban. Rechazos
+    /// (struct_hash ausente, dialect byte desconocido, α-hash no
+    /// recompone bajo el dialect declarado) se acumulan en el contador
+    /// `rejected_root_decls`.
+    ///
+    /// Idempotente para llamadas repetidas: la primera consume el
+    /// buffer pendiente y popula `verified_root_decls`; las siguientes
+    /// devuelven una copia del mapa ya verificado sin recontar.
+    pub fn take_verified_root_decls(
+        &mut self,
+    ) -> HashMap<ContentHash, (ContentHash, Dialect)> {
+        let pending = std::mem::take(&mut self.pending_root_decls);
+        for decl in pending {
+            let Some(dialect) = decl.dialect() else {
+                // Byte de dialect que esta versión no conoce —
+                // versión futura. La descartamos sin verificar.
+                self.rejected_root_decls += 1;
+                continue;
+            };
+            // Si ya tenemos esta raíz localmente, no la
+            // sobre-escribimos — la fuente local es autoritativa.
+            if self.local_roots.contains_key(&decl.alpha)
+                || self.verified_root_decls.contains_key(&decl.alpha)
+            {
+                continue;
+            }
+            // El struct_hash tiene que estar en el store ya: el sync
+            // habrá entregado el nodo vía `Deliver` si correspondía.
+            let Some(node) = self.store.reconstruct(&decl.struct_hash) else {
+                self.rejected_root_decls += 1;
+                continue;
+            };
+            // Re-verificación criptográfica del α: si el α anunciado
+            // no recompone bajo NINGÚN dialect conocido, el peer
+            // (malicioso o con bug) está mintiendo. Si recompone bajo
+            // un dialect distinto al declarado, también rechazamos —
+            // los profiles α producen hashes distintos por sus
+            // constantes de wire, así que el match cruzado es un
+            // intento de evadir la indexación por dialect.
+            match verify_root_alpha(&node, &decl.alpha) {
+                Some(d) if d == dialect => {
+                    self.verified_root_decls
+                        .insert(decl.alpha, (decl.struct_hash, dialect));
+                }
+                _ => {
+                    self.rejected_root_decls += 1;
+                }
+            }
+        }
+        self.verified_root_decls.clone()
     }
 
     pub fn is_done(&self) -> bool {
@@ -471,6 +604,10 @@ impl SyncSession {
 
     pub fn rejected_retracts(&self) -> usize {
         self.rejected_retracts
+    }
+
+    pub fn rejected_root_decls(&self) -> usize {
+        self.rejected_root_decls
     }
 
     /// `true` si la sesión ya verificó el `Hello` del peer remoto.
@@ -524,5 +661,27 @@ impl SyncSession {
         self,
     ) -> (Mst, MemStore, AttestationStore, RetractionStore) {
         (self.mst, self.store, self.attestations, self.retractions)
+    }
+
+    /// Variante extendida que devuelve también el mapa de raíces
+    /// **ya verificadas** recibidas por wire. Para que las raíces
+    /// estén verificadas, llamar a `take_verified_root_decls` antes
+    /// de consumir la sesión; de lo contrario, el mapa estará vacío.
+    pub fn into_parts_with_roots(
+        self,
+    ) -> (
+        Mst,
+        MemStore,
+        AttestationStore,
+        RetractionStore,
+        HashMap<ContentHash, (ContentHash, Dialect)>,
+    ) {
+        (
+            self.mst,
+            self.store,
+            self.attestations,
+            self.retractions,
+            self.verified_root_decls,
+        )
     }
 }
