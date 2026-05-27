@@ -19,7 +19,7 @@ use llimphi_ui::llimphi_text::{draw_block, Alignment as TextAlignment, TextBlock
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, PaintRect, View};
 use takiy_core::{Pitch, PitchClass, Score, ScoreNote, Track};
 use takiy_playback::Player;
-use takiy_synth::{OscRenderer, Renderer};
+use takiy_synth::{AudioBuffer, MultiProgramRenderer, OscRenderer, Renderer};
 
 const KEYBOARD_W: f32 = 56.0;
 const HEADER_H: f32 = 28.0;
@@ -43,6 +43,12 @@ struct Model {
     /// `Some` si el device default abrió bien. Si abrió mal, el visor
     /// sigue siendo útil sin sonido — sólo loguea el error al arrancar.
     player: Option<Player>,
+    /// Renderer SF2 si `TAKIY_SF2` apuntó a un soundfont válido. Si es
+    /// `None`, caemos a osciladores básicos (`OscRenderer`).
+    sf2: Option<MultiProgramRenderer>,
+    /// Etiqueta del motor de síntesis en uso ("osc" o "sf2 file.sf2"),
+    /// para el header.
+    engine: String,
     /// Refleja el estado del `Player`. Lo mantenemos en el modelo para
     /// repintar el header sin tener que llamar `is_playing()` desde el
     /// painter (que correría en cada frame).
@@ -90,12 +96,24 @@ impl App for Takiy {
             }
         };
 
+        let target_sr = player.as_ref().map(Player::sample_rate).unwrap_or(44_100);
+        let (sf2, engine) = load_sf2(&score, target_sr);
+
         // Tick periódico ~5 Hz para que el header refleje el fin del
         // playback. El thread sólo dispatcha el Msg; el chequeo real
         // vive en `update`, que es el único con acceso al `Player`.
         handle.spawn_periodic(std::time::Duration::from_millis(200), || Msg::Tick);
 
-        Model { score, source, theme: Theme::dark(), player, playing: false, status }
+        Model {
+            score,
+            source,
+            theme: Theme::dark(),
+            player,
+            sf2,
+            engine,
+            playing: false,
+            status,
+        }
     }
 
     fn update(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
@@ -112,11 +130,7 @@ impl App for Takiy {
                     model.playing = false;
                     model.status = "stopped".into();
                 } else {
-                    let renderer = OscRenderer {
-                        sample_rate: player.sample_rate(),
-                        ..Default::default()
-                    };
-                    let buf = renderer.render(&model.score);
+                    let buf = render_score(&model.score, model.sf2.as_ref(), player.sample_rate());
                     let secs = buf.duration_seconds();
                     player.play(buf);
                     model.playing = true;
@@ -154,6 +168,7 @@ impl App for Takiy {
         let theme = model.theme;
         let score = model.score.clone();
         let source = model.source.clone();
+        let engine = model.engine.clone();
         let status = model.status.clone();
         let playing = model.playing;
         let (min_midi, max_midi) = pitch_range(&score);
@@ -166,8 +181,8 @@ impl App for Takiy {
         .fill(theme.bg_app)
         .paint_with(move |scene, ts, rect: PaintRect| {
             paint_piano_roll(
-                scene, ts, rect, &score, &source, &status, playing, min_midi, max_midi,
-                total_beats, theme,
+                scene, ts, rect, &score, &source, &engine, &status, playing, min_midi,
+                max_midi, total_beats, theme,
             );
         })
     }
@@ -180,6 +195,7 @@ fn paint_piano_roll(
     rect: PaintRect,
     score: &Score,
     source: &str,
+    engine: &str,
     status: &str,
     playing: bool,
     min_midi: u8,
@@ -259,8 +275,8 @@ fn paint_piano_roll(
     );
     scene.fill(Fill::NonZero, Affine::IDENTITY, header_bg, None, &header_rect);
 
-    // Texto del header: fuente + estado de playback.
-    let header_text = format!("{source}  ·  {status}");
+    // Texto del header: fuente + motor de síntesis + estado de playback.
+    let header_text = format!("{source}  ·  {engine}  ·  {status}");
     let text_color = if playing {
         Color::from_rgba8(140, 230, 170, 240)
     } else {
@@ -323,6 +339,72 @@ fn pitch_range(score: &Score) -> (u8, u8) {
         return (60, 72);
     }
     (min.saturating_sub(2), max.saturating_add(2).min(127))
+}
+
+/// Si `TAKIY_SF2` apunta a un .sf2 válido, devuelve un
+/// `MultiProgramRenderer` con un mapeo nombre→programa GM aplicado a
+/// las pistas del score. Si no, devuelve `None` y la app cae a osc.
+fn load_sf2(score: &Score, sample_rate: u32) -> (Option<MultiProgramRenderer>, String) {
+    let Ok(path) = std::env::var("TAKIY_SF2") else {
+        return (None, "engine osc".into());
+    };
+    let mut renderer = match MultiProgramRenderer::from_path(&path) {
+        Ok(r) => r.with_sample_rate(sample_rate),
+        Err(e) => {
+            eprintln!("takiy · SF2 {path} no cargó ({e}) — cayendo a osc");
+            return (None, format!("engine osc (SF2 error: {e})"));
+        }
+    };
+    for (idx, track) in score.tracks().iter().enumerate() {
+        let program = gm_program_for_track_name(&track.name);
+        renderer = renderer.with_track_program(idx, program);
+    }
+    let label = std::path::Path::new(&path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(&path)
+        .to_owned();
+    (Some(renderer), format!("engine sf2 {label}"))
+}
+
+/// Mapeo heurístico nombre de pista → programa GM `0..=127`. Pensado para
+/// que el demo built-in suene razonable sin configuración: cae a piano (0)
+/// si no reconoce el nombre.
+fn gm_program_for_track_name(name: &str) -> u8 {
+    let n = name.to_lowercase();
+    if n.contains("bass") || n.contains("bajo") {
+        32 // Acoustic Bass
+    } else if n.contains("guitar") || n.contains("guitarra") {
+        24 // Acoustic Guitar (nylon)
+    } else if n.contains("string") || n.contains("cuerda") {
+        48 // String Ensemble 1
+    } else if n.contains("organ") || n.contains("órgano") || n.contains("organo") {
+        19 // Church Organ
+    } else if n.contains("flute") || n.contains("flauta") {
+        73 // Flute
+    } else if n.contains("trumpet") || n.contains("trompeta") {
+        56 // Trumpet
+    } else if n.contains("pad") {
+        88 // Pad 1 (new age)
+    } else {
+        0 // Acoustic Grand Piano
+    }
+}
+
+/// Elige el renderer (SF2 si está disponible, osc en su defecto) y
+/// renderiza el score al `sample_rate` del device.
+fn render_score(score: &Score, sf2: Option<&MultiProgramRenderer>, sample_rate: u32) -> AudioBuffer {
+    if let Some(sf2) = sf2 {
+        // El renderer SF2 ya está configurado con el SR del player en
+        // `load_sf2`; lo verificamos por si el device cambió de SR en runtime
+        // (poco común pero barato de chequear).
+        if sf2.sample_rate == sample_rate {
+            return sf2.render(score);
+        }
+        return sf2.clone().with_sample_rate(sample_rate).render(score);
+    }
+    let osc = OscRenderer { sample_rate, ..Default::default() };
+    osc.render(score)
 }
 
 fn load_score() -> (Score, String) {
