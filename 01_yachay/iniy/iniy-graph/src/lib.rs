@@ -11,7 +11,7 @@ use iniy_core::{Asercion, AsercionId, ClaseNli, Implicacion, Opinion};
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
 pub struct GrafoCreencias {
     grafo: DiGraph<AsercionId, Implicacion>,

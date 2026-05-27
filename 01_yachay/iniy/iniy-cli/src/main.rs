@@ -248,7 +248,7 @@ async fn main() -> Result<()> {
     match cli.cmd {
         Cmd::Ingest { ruta, titulo, fuente, kind } => {
             let titulo = titulo.unwrap_or_else(|| ruta.file_stem().and_then(|s| s.to_str()).unwrap_or("sin-titulo").to_string());
-            let doc = iniy_ingest::ingest_txt(&ruta, titulo)?;
+            let doc = iniy_ingest::ingest_path(&ruta, titulo)?;
             let fuente_id = match fuente.as_deref() {
                 Some(n) => Some(store.obtener_o_crear_fuente(n, kind.as_deref())?),
                 None => None,
