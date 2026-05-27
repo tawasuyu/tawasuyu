@@ -20,12 +20,25 @@ use std::sync::{Mutex, OnceLock};
 
 const CAP_BYTES: usize = 64 * 1024 * 1024;
 const PERSIST_MAGIC: &[u8; 4] = b"PUYC";
-const PERSIST_VERSION: u8 = 1;
+/// Versión 2 incorpora TTL por entrada (u64 expires_at en segundos UNIX,
+/// `u64::MAX` = sin expiración). Archivos V1 se ignoran en `load_from_disk`.
+const PERSIST_VERSION: u8 = 2;
+
+/// Marcador de "sin TTL" — la entrada nunca expira por tiempo (sólo por
+/// eviction LRU). Usado por callers que no parsearon `Cache-Control` o
+/// para responses sin el header.
+const NO_TTL: u64 = u64::MAX;
 
 struct CacheInner {
-    entries: std::collections::HashMap<String, Vec<u8>>,
+    /// Por URL: (bytes, expires_at en segundos UNIX).
+    entries: std::collections::HashMap<String, (Vec<u8>, u64)>,
     order: VecDeque<String>,
     bytes: usize,
+}
+
+fn now_unix() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 fn cache() -> &'static Mutex<CacheInner> {
@@ -39,12 +52,21 @@ fn cache() -> &'static Mutex<CacheInner> {
     })
 }
 
-/// Recupera los bytes cacheados para `url`, si existen. Mueve el slot
-/// al final de la cola LRU (most-recent).
+/// Recupera los bytes cacheados para `url`, si existen y no expiraron.
+/// Mueve el slot al final de la cola LRU (most-recent). Si la entrada
+/// está vencida, la elimina y devuelve `None` (miss limpio).
 pub fn get(url: &str) -> Option<Vec<u8>> {
     let mut c = cache().lock().ok()?;
-    let bytes = c.entries.get(url).cloned()?;
-    // Re-anclar al final de la cola (LRU touch).
+    let (bytes, expires_at) = c.entries.get(url).cloned()?;
+    if expires_at != NO_TTL && expires_at < now_unix() {
+        // Expirada. Quitar y reportar miss para que el caller refetch.
+        if let Some(pos) = c.order.iter().position(|u| u == url) {
+            c.order.remove(pos);
+        }
+        c.entries.remove(url);
+        c.bytes = c.bytes.saturating_sub(bytes.len());
+        return None;
+    }
     if let Some(pos) = c.order.iter().position(|u| u == url) {
         c.order.remove(pos);
         c.order.push_back(url.to_string());
@@ -52,26 +74,33 @@ pub fn get(url: &str) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
-/// Inserta o reemplaza los bytes para `url`. Si el total supera el cap,
-/// eyecta entradas LRU hasta volver debajo.
+/// Inserta o reemplaza los bytes para `url` sin TTL (la entrada nunca
+/// expira por tiempo, sólo por eviction LRU). Equivalente a
+/// `put_with_expiry(url, bytes, NO_TTL)`.
 pub fn put(url: &str, bytes: Vec<u8>) {
+    put_with_expiry(url, bytes, NO_TTL);
+}
+
+/// Inserta con TTL. `expires_at` = segundos UNIX absolutos; usar
+/// `u64::MAX` para "sin expiración". Si total supera el cap, eyecta LRU.
+pub fn put_with_expiry(url: &str, bytes: Vec<u8>, expires_at: u64) {
     let mut c = match cache().lock() {
         Ok(g) => g,
-        Err(_) => return, // poison: el cache es opcional, no propagamos
+        Err(_) => return,
     };
-    if let Some(old) = c.entries.remove(url) {
+    if let Some((old, _)) = c.entries.remove(url) {
         c.bytes = c.bytes.saturating_sub(old.len());
         if let Some(pos) = c.order.iter().position(|u| u == url) {
             c.order.remove(pos);
         }
     }
     let n = bytes.len();
-    c.entries.insert(url.to_string(), bytes);
+    c.entries.insert(url.to_string(), (bytes, expires_at));
     c.order.push_back(url.to_string());
     c.bytes += n;
     while c.bytes > CAP_BYTES {
         let Some(victim) = c.order.pop_front() else { break };
-        if let Some(v) = c.entries.remove(&victim) {
+        if let Some((v, _)) = c.entries.remove(&victim) {
             c.bytes = c.bytes.saturating_sub(v.len());
         }
     }
@@ -129,9 +158,14 @@ pub fn load_from_disk() {
         None => return,
     };
     let Ok(mut c) = cache().lock() else { return };
-    for (url, data) in entries {
+    let now = now_unix();
+    for (url, data, expires_at) in entries {
+        // Skip entradas ya vencidas — no las re-cargamos.
+        if expires_at != NO_TTL && expires_at < now {
+            continue;
+        }
         let n = data.len();
-        c.entries.insert(url.clone(), data);
+        c.entries.insert(url.clone(), (data, expires_at));
         c.order.push_back(url);
         c.bytes += n;
     }
@@ -139,7 +173,7 @@ pub fn load_from_disk() {
     // entre versiones).
     while c.bytes > CAP_BYTES {
         let Some(victim) = c.order.pop_front() else { break };
-        if let Some(v) = c.entries.remove(&victim) {
+        if let Some((v, _)) = c.entries.remove(&victim) {
             c.bytes = c.bytes.saturating_sub(v.len());
         }
     }
@@ -176,17 +210,18 @@ fn encode(c: &CacheInner) -> Vec<u8> {
     let count = c.order.len() as u32;
     out.extend_from_slice(&count.to_le_bytes());
     for url in c.order.iter() {
-        let Some(data) = c.entries.get(url) else { continue };
+        let Some((data, expires_at)) = c.entries.get(url) else { continue };
         let url_b = url.as_bytes();
         out.extend_from_slice(&(url_b.len() as u32).to_le_bytes());
         out.extend_from_slice(url_b);
         out.extend_from_slice(&(data.len() as u32).to_le_bytes());
         out.extend_from_slice(data);
+        out.extend_from_slice(&expires_at.to_le_bytes());
     }
     out
 }
 
-fn decode(buf: &[u8]) -> Option<Vec<(String, Vec<u8>)>> {
+fn decode(buf: &[u8]) -> Option<Vec<(String, Vec<u8>, u64)>> {
     if buf.len() < 4 + 1 + 4 || &buf[..4] != PERSIST_MAGIC {
         return None;
     }
@@ -210,12 +245,14 @@ fn decode(buf: &[u8]) -> Option<Vec<(String, Vec<u8>)>> {
         i += ul;
         let dl = u32::from_le_bytes(buf[i..i + 4].try_into().ok()?) as usize;
         i += 4;
-        if i + dl > buf.len() {
+        if i + dl + 8 > buf.len() {
             return None;
         }
         let data = buf[i..i + dl].to_vec();
         i += dl;
-        out.push((url, data));
+        let expires_at = u64::from_le_bytes(buf[i..i + 8].try_into().ok()?);
+        i += 8;
+        out.push((url, data, expires_at));
     }
     Some(out)
 }
@@ -233,18 +270,17 @@ mod tests {
     }
 
     #[test]
-    fn codec_round_trip() {
-        // Construir un CacheInner manual y codificar/decodificar.
+    fn codec_round_trip_con_ttl() {
         let mut c = CacheInner {
             entries: std::collections::HashMap::new(),
             order: VecDeque::new(),
             bytes: 0,
         };
-        for (url, data) in [
-            ("https://a.test/", &b"hola"[..]),
-            ("https://b.test/img.png", &[0xffu8, 0xd8, 0xff, 0xe0, 0x00, 0x10][..]),
+        for (url, data, exp) in [
+            ("https://a.test/", &b"hola"[..], NO_TTL),
+            ("https://b.test/img.png", &[0xffu8, 0xd8, 0xff, 0xe0, 0x00, 0x10][..], 1_799_999_999),
         ] {
-            c.entries.insert(url.into(), data.to_vec());
+            c.entries.insert(url.into(), (data.to_vec(), exp));
             c.order.push_back(url.into());
             c.bytes += data.len();
         }
@@ -253,12 +289,28 @@ mod tests {
         assert_eq!(decoded.len(), 2);
         assert_eq!(decoded[0].0, "https://a.test/");
         assert_eq!(decoded[0].1, b"hola");
-        assert_eq!(decoded[1].0, "https://b.test/img.png");
+        assert_eq!(decoded[0].2, NO_TTL);
+        assert_eq!(decoded[1].2, 1_799_999_999);
     }
 
     #[test]
     fn decode_rechaza_magic_invalida() {
-        assert!(decode(b"NOPE\x01\x00\x00\x00\x00").is_none());
+        assert!(decode(b"NOPE\x02\x00\x00\x00\x00").is_none());
+    }
+
+    #[test]
+    fn ttl_expirada_se_trata_como_miss() {
+        clear();
+        // Insertar con expiración 0 = ya vencida.
+        put_with_expiry("https://stale.test/", b"old".to_vec(), 0);
+        assert!(get("https://stale.test/").is_none());
+        // Reinsertar con TTL futuro (un siglo) → hit.
+        put_with_expiry(
+            "https://stale.test/",
+            b"new".to_vec(),
+            now_unix() + 60 * 60 * 24 * 365 * 100,
+        );
+        assert_eq!(get("https://stale.test/").as_deref(), Some(b"new".as_slice()));
     }
 
     #[test]
