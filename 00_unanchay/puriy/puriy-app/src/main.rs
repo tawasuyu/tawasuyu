@@ -30,12 +30,23 @@ fn main() {
 
     eprintln!("[puriy] profile={} target={} url={}", cli.profile, target, url);
 
+    // Cache persistente entre sesiones: levantamos lo que quedó en disco
+    // antes de arrancar el engine, así las URLs visitadas previamente se
+    // sirven de RAM aún en cold start.
+    puriy_engine::cache::load_from_disk();
+
     match target.as_str() {
-        "headless" => run_headless(&url),
+        "headless" => {
+            run_headless(&url);
+            puriy_engine::cache::flush();
+        }
         // wayland / framebuffer ambos abren ventana Llimphi en Fase 3;
         // el split real entre WinitSurface y FramebufferSurface llega
         // cuando puriy se mueva a wawa bare-metal.
-        "wayland" | "framebuffer" => puriy_llimphi::run(url),
+        "wayland" | "framebuffer" => {
+            puriy_llimphi::run(url);
+            puriy_engine::cache::flush();
+        }
         other => {
             eprintln!("[puriy] target desconocido: {other}");
             std::process::exit(2);

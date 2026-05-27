@@ -367,6 +367,11 @@ fn spawn_load(tab: TabId, gen: u64, url: String, handle: Handle<Msg>) {
             Ok(doc) => {
                 let title = if doc.title.is_empty() { doc.url.clone() } else { doc.title.clone() };
                 handle.dispatch(Msg::Loaded { tab, gen, title, box_tree: doc.box_tree });
+                // Best-effort: persistimos la cache después de cada
+                // navegación exitosa. Si el proceso muere por SIGKILL o
+                // panic, sólo se pierde la navegación en vuelo — las
+                // anteriores ya quedaron en disco.
+                puriy_engine::cache::flush();
             }
             Err(e) => handle.dispatch(Msg::LoadFailed { tab, gen, err: e.to_string() }),
         }
