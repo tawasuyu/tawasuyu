@@ -99,7 +99,10 @@ impl MultiProgramRenderer {
         self
     }
 
-    fn program_for_track(&self, track_idx: usize) -> u8 {
+    /// Programa GM `0..=127` actualmente asignado a la pista
+    /// `track_idx`. Si no hay entrada explícita, devuelve
+    /// `default_program`.
+    pub fn program_for_track(&self, track_idx: usize) -> u8 {
         program_lookup(&self.track_programs, self.default_program, track_idx)
     }
 }

@@ -26,6 +26,10 @@
 //! - `S`          — guarda el score a `TAKIY_SCORE_JSON` (o a
 //!                  `/tmp/takiy_<unix>.takiy.json` si la variable no
 //!                  está seteada).
+//! - `,` / `.`    — baja / sube el tempo del score en 5 BPM (clamp
+//!                  30..=300).
+//! - `p` / `P`    — programa GM anterior / siguiente para la pista
+//!                  activa (sólo aplica si hay SF2 cargado).
 //! - `Esc`        — cierra la ventana.
 //!
 //! Si `TAKIY_SCORE_JSON` está seteado, la app además **auto-guarda**
@@ -77,6 +81,11 @@ enum Msg {
     ResizeSelected { d_beat: f32 },
     /// Cambia la velocity de la nota seleccionada (clamp `[1, 127]`).
     NudgeVelocity { delta: i32 },
+    /// Cambia el tempo del score en `delta` BPM (clamp `[30, 300]`).
+    NudgeTempo { delta: f32 },
+    /// Cambia el programa GM de la pista activa en `delta` (wrap
+    /// 0..=127). No hace nada si no hay SF2 cargado.
+    NudgeProgram { delta: i32 },
     /// Avanza la pista activa al siguiente índice (wrap).
     CycleTrack,
     /// Agrega una pista nueva (vacía) y la activa.
@@ -215,8 +224,12 @@ impl App for Takiy {
                 | Msg::DeleteSelected
                 | Msg::ResizeSelected { .. }
                 | Msg::NudgeVelocity { .. }
+                | Msg::NudgeTempo { .. }
                 | Msg::NewTrack
         );
+        // Nota: `NudgeProgram` cambia el SF2 en memoria pero no el
+        // `Score` serializable, así que no se persiste (vive sólo en
+        // la sesión actual).
         match msg {
             Msg::Quit => {
                 handle.quit();
@@ -373,6 +386,28 @@ impl App for Takiy {
                     new_dur
                 );
             }
+            Msg::NudgeTempo { delta } => {
+                let new_bpm = (model.score.tempo_bpm + delta).clamp(30.0, 300.0);
+                if (new_bpm - model.score.tempo_bpm).abs() > f32::EPSILON {
+                    model.score.tempo_bpm = new_bpm;
+                    model.status = format!("tempo {new_bpm:.0} bpm");
+                }
+            }
+            Msg::NudgeProgram { delta } => {
+                let Some(sf2) = model.sf2.take() else {
+                    model.status = "sin SF2 — programa no aplica".into();
+                    return model;
+                };
+                let track_idx = model.active_track;
+                let current = sf2.program_for_track(track_idx) as i32;
+                let new_prog = ((current + delta).rem_euclid(128)) as u8;
+                let new_sf2 = sf2.with_track_program(track_idx, new_prog);
+                model.sf2 = Some(new_sf2);
+                model.status = format!(
+                    "pista {track_idx} → program {new_prog} ({})",
+                    gm_program_name(new_prog)
+                );
+            }
             Msg::NudgeVelocity { delta } => {
                 let Some((track_idx, note_idx)) = model.selected else {
                     return model;
@@ -501,6 +536,12 @@ impl App for Takiy {
             Key::Character(s) if s == "]" || s == "}" => {
                 Some(Msg::NudgeVelocity { delta: 10 })
             }
+            Key::Character(s) if s == "," => Some(Msg::NudgeTempo { delta: -5.0 }),
+            Key::Character(s) if s == "." => Some(Msg::NudgeTempo { delta: 5.0 }),
+            // `p` vs `P` distingue dirección — `P` lleva shift, así
+            // que el char ya viene en mayúscula.
+            Key::Character(s) if s == "p" => Some(Msg::NudgeProgram { delta: -1 }),
+            Key::Character(s) if s == "P" => Some(Msg::NudgeProgram { delta: 1 }),
             _ => None,
         }
     }
@@ -649,14 +690,15 @@ fn paint_piano_roll(
     );
     scene.fill(Fill::NonZero, Affine::IDENTITY, header_bg, None, &header_rect);
 
-    // Texto del header: fuente + motor de síntesis + estado de playback
-    // + pista activa.
+    // Texto del header: fuente + motor + tempo + pista activa + status.
     let active_name = score
         .track(active_track)
         .map(|t| t.name.as_str())
         .unwrap_or("?");
-    let header_text =
-        format!("{source}  ·  {engine}  ·  active: {active_track}·{active_name}  ·  {status}");
+    let header_text = format!(
+        "{source}  ·  {engine}  ·  {:.0} bpm  ·  active: {active_track}·{active_name}  ·  {status}",
+        score.tempo_bpm
+    );
     let text_color = if playing {
         Color::from_rgba8(140, 230, 170, 240)
     } else {
@@ -889,6 +931,32 @@ fn load_sf2(score: &Score, sample_rate: u32) -> (Option<MultiProgramRenderer>, S
         .unwrap_or(&path)
         .to_owned();
     (Some(renderer), format!("engine sf2 {label}"))
+}
+
+/// Nombre del grupo GM al que pertenece un programa `0..=127`. No
+/// devuelve el nombre exacto del instrumento (eso requeriría una tabla
+/// de 128) sino el grupo (Pianos, Bass, Brass, etc.), que es lo que
+/// necesita el header para feedback al cambiar con `p`/`P`.
+fn gm_program_name(program: u8) -> &'static str {
+    match program / 8 {
+        0 => "Piano",
+        1 => "Chromatic Perc.",
+        2 => "Organ",
+        3 => "Guitar",
+        4 => "Bass",
+        5 => "Strings",
+        6 => "Ensemble",
+        7 => "Brass",
+        8 => "Reed",
+        9 => "Pipe",
+        10 => "Synth Lead",
+        11 => "Synth Pad",
+        12 => "Synth Effects",
+        13 => "Ethnic",
+        14 => "Percussive",
+        15 => "Sound Effects",
+        _ => "?",
+    }
 }
 
 /// Mapeo heurístico nombre de pista → programa GM `0..=127`. Pensado para
