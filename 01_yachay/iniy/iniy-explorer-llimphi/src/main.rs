@@ -249,6 +249,19 @@ fn grafo_panel(model: &Model) -> View<Msg> {
                 .collect()
         );
     let seleccionada = model.seleccionada;
+    // Pre-computar vecinos directos de la selección (si hay).
+    let vecinos: std::sync::Arc<std::collections::HashSet<AsercionId>> = std::sync::Arc::new(
+        match seleccionada {
+            Some(sel) => aristas.iter()
+                .filter_map(|(p, h, _, _)| {
+                    if *p == sel { Some(*h) }
+                    else if *h == sel { Some(*p) }
+                    else { None }
+                })
+                .collect(),
+            None => std::collections::HashSet::new(),
+        }
+    );
     let bg = theme.bg_panel;
 
     View::new(Style {
@@ -264,6 +277,7 @@ fn grafo_panel(model: &Model) -> View<Msg> {
             return;
         }
         let xform = Affine::IDENTITY;
+        let hay_seleccion = seleccionada.is_some();
         // Aristas primero, para que los nodos las cubran en el centro.
         for (premisa, hipotesis, ent, contra) in aristas.iter() {
             let (Some(p), Some(h)) = (posiciones.get(premisa), posiciones.get(hipotesis)) else { continue; };
@@ -271,10 +285,12 @@ fn grafo_panel(model: &Model) -> View<Msg> {
             let y1 = rect.y + p.1 * rect.h;
             let x2 = rect.x + h.0 * rect.w;
             let y2 = rect.y + h.1 * rect.h;
+            let incidente = hay_seleccion && (seleccionada == Some(*premisa) || seleccionada == Some(*hipotesis));
+            let alpha: u8 = if !hay_seleccion || incidente { 0xc0 } else { 0x30 };
             let (color, ancho) = if contra > ent {
-                (Color::from_rgba8(0xbf, 0x61, 0x6a, 0xc0), 1.5 + contra * 3.0)
+                (Color::from_rgba8(0xbf, 0x61, 0x6a, alpha), 1.5 + contra * 3.0)
             } else {
-                (Color::from_rgba8(0xa3, 0xbe, 0x8c, 0xc0), 1.5 + ent * 3.0)
+                (Color::from_rgba8(0xa3, 0xbe, 0x8c, alpha), 1.5 + ent * 3.0)
             };
             let mut path = BezPath::new();
             path.move_to((x1 as f64, y1 as f64));
@@ -286,12 +302,16 @@ fn grafo_panel(model: &Model) -> View<Msg> {
             let cx = (rect.x + x * rect.w) as f64;
             let cy = (rect.y + y * rect.h) as f64;
             let op = opiniones.get(id).copied().unwrap_or(Opinion::vacua(0.5).unwrap());
+            let es_sel = seleccionada == Some(*id);
+            let es_vecino = vecinos.contains(id);
+            let prominente = !hay_seleccion || es_sel || es_vecino;
+            let alpha: u8 = if prominente { 0xff } else { 0x50 };
             let color = if op.creencia >= op.descreencia && op.creencia >= op.incertidumbre {
-                Color::from_rgba8(0xa3, 0xbe, 0x8c, 0xff)
+                Color::from_rgba8(0xa3, 0xbe, 0x8c, alpha)
             } else if op.descreencia >= op.incertidumbre {
-                Color::from_rgba8(0xbf, 0x61, 0x6a, 0xff)
+                Color::from_rgba8(0xbf, 0x61, 0x6a, alpha)
             } else {
-                Color::from_rgba8(0x88, 0x88, 0x99, 0xff)
+                Color::from_rgba8(0x88, 0x88, 0x99, alpha)
             };
             // Radio escalado por probabilidad esperada (más opinión, más visible).
             let r = (3.5 + op.creencia.max(op.descreencia) * 4.0) as f64;
@@ -299,12 +319,17 @@ fn grafo_panel(model: &Model) -> View<Msg> {
             scene.fill(Fill::NonZero, xform, color, None, &c);
             // Halo oscuro para definirlo sobre el fondo.
             scene.stroke(&Stroke::new(0.8), xform,
-                Color::from_rgba8(0x1a, 0x1a, 0x20, 0xff), None, &c);
-            // Anillo de selección.
-            if seleccionada == Some(*id) {
+                Color::from_rgba8(0x1a, 0x1a, 0x20, alpha), None, &c);
+            // Anillo de selección (amber).
+            if es_sel {
                 let halo = KurboCircle::new((cx, cy), r + 5.0);
                 scene.stroke(&Stroke::new(2.5), xform,
                     Color::from_rgba8(0xeb, 0xcb, 0x8b, 0xff), None, &halo);
+            } else if es_vecino {
+                // Anillo más sutil para vecinos directos (azul-grisáceo).
+                let halo = KurboCircle::new((cx, cy), r + 3.0);
+                scene.stroke(&Stroke::new(1.5), xform,
+                    Color::from_rgba8(0x81, 0xa1, 0xc1, 0xc0), None, &halo);
             }
         }
     })
