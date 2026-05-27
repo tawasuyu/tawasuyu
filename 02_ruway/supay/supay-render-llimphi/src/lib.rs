@@ -482,11 +482,17 @@ fn render_frame(scene: &mut Scene, rect: PaintRect, snap: &SceneSnapshot, cfg: &
     // Fase 3.15: sprite del arma del jugador (pistol/shotgun/etc.) —
     // pintado *encima* de la escena 3D pero *debajo* del overlay de
     // PLAYPAL (porque los damage flashes en Doom tintan el arma también).
-    draw_weapon_sprite(scene, rect, &snap.weapon, cfg);
+    // Fase 3.18: el arma se tinta por la luz del sector del jugador
+    // (cuarto oscuro = arma oscura). Resolvemos el sector vía BSP point
+    // query una sola vez para ambos psprites — el muzzle flash usa el
+    // mismo player_light pero, gracias a su flag FF_FULLBRIGHT, igual
+    // sale a luz plena.
+    let player_light = player_sector_light(snap);
+    draw_weapon_sprite(scene, rect, &snap.weapon, player_light, cfg);
     // Fase 3.16: muzzle flash (`ps_flash`) sobrepuesto al weapon.
     // Doom usa este slot para el destello brillante de BFG, plasma,
     // chaingun, etc. Mismo helper, mismo z-order layer apenas encima.
-    draw_weapon_sprite(scene, rect, &snap.weapon_flash, cfg);
+    draw_weapon_sprite(scene, rect, &snap.weapon_flash, player_light, cfg);
 
     // Fase 3.14: overlay full-screen al final del frame (damage red,
     // pickup yellow, radsuit green, invuln white). Modernización pura
@@ -1047,6 +1053,57 @@ fn compute_bsp_order_depths(snap: &SceneSnapshot) -> Vec<Option<f32>> {
         }
     }
     depths
+}
+
+/// Light level por default cuando no podemos determinar el sector del
+/// punto consultado (mapa sin BSP, índices fuera de rango). 192 es el
+/// valor "habitación tipica iluminada" de Doom — coincide con el
+/// fallback de `gather_sprite` para sprites sin sector.
+const DEFAULT_PLAYER_LIGHT: u8 = 192;
+
+/// Devuelve el subsector que contiene el punto `(px, py)`, descendiendo
+/// el árbol BSP por el lado donde cae el punto en cada partición. `None`
+/// si el snapshot no tiene BSP cargado, o si el camino llega a un
+/// índice fuera de rango (mapa malformado). O(log N) en BSPs balanceados.
+fn subsector_at_point(nodes: &[NodeSnap], px: f32, py: f32) -> Option<u32> {
+    if nodes.is_empty() {
+        return None;
+    }
+    let mut cur: u16 = (nodes.len() - 1) as u16;
+    loop {
+        if cur & NF_SUBSECTOR != 0 {
+            return Some((cur & !NF_SUBSECTOR) as u32);
+        }
+        let node = nodes.get(cur as usize)?;
+        // Mismo signo que `walk_bsp`: side > 0 → near = children[0].
+        let side = node.partition_dx * (py - node.partition_y)
+            - node.partition_dy * (px - node.partition_x);
+        cur = if side > 0.0 {
+            node.children[0]
+        } else {
+            node.children[1]
+        };
+    }
+}
+
+/// Light level del sector donde está parado el jugador. Recorre el BSP
+/// para encontrar el subsector que contiene `(player.x, player.y)`,
+/// luego lee `light_level` del sector referenciado. Fallback a
+/// [`DEFAULT_PLAYER_LIGHT`] si no hay BSP, o el subsector apunta fuera
+/// de la lista de sectores. Usado por `draw_weapon_sprite` para tintar
+/// el arma según la iluminación local (Fase 3.18).
+fn player_sector_light(snap: &SceneSnapshot) -> u8 {
+    let ss_id = match subsector_at_point(&snap.nodes, snap.player.x, snap.player.y) {
+        Some(id) => id,
+        None => return DEFAULT_PLAYER_LIGHT,
+    };
+    let Some(ss) = snap.subsectors.get(ss_id as usize) else {
+        return DEFAULT_PLAYER_LIGHT;
+    };
+    snap.sectors
+        .get(ss.sector as usize)
+        .map(|s| s.light_level)
+        .unwrap_or(DEFAULT_PLAYER_LIGHT)
 }
 
 /// Camina el árbol BSP recursivamente desde `child`, agregando los
@@ -1836,7 +1893,13 @@ const DOOM_VIEW_H: f32 = 200.0;
 /// la posición "lista para disparar".
 const DOOM_WEAPON_TOP: f32 = 32.0;
 
-fn draw_weapon_sprite(scene: &mut Scene, rect: PaintRect, weap: &WeaponSpriteSnap, cfg: &RenderConfig) {
+fn draw_weapon_sprite(
+    scene: &mut Scene,
+    rect: PaintRect,
+    weap: &WeaponSpriteSnap,
+    player_light: u8,
+    cfg: &RenderConfig,
+) {
     if !weap.active {
         return;
     }
@@ -1871,13 +1934,19 @@ fn draw_weapon_sprite(scene: &mut Scene, rect: PaintRect, weap: &WeaponSpriteSna
     let bottom = rect.y + rect.h;
     let screen_y = bottom - patch_h_s + (weap.sy - DOOM_WEAPON_TOP) * scale;
 
-    use llimphi_ui::llimphi_raster::peniko::{Blob, Image, ImageFormat};
-    let img = Image::new(
-        Blob::from(patch.rgba.clone()),
-        ImageFormat::Rgba8,
-        patch.width as u32,
-        patch.height as u32,
-    );
+    // Fase 3.18: el arma se tinta por la luz del sector donde está
+    // parado el jugador. Si el frame tiene `FF_FULLBRIGHT` (bit 7) —
+    // muzzle flash, plasma idle frame, etc. — saltamos el shade y va a
+    // luz plena (igual que `gather_sprite`). Depth = 0: el arma está
+    // "en la mano", no debería atenuarse por niebla aunque el cuarto
+    // sí lo esté.
+    let full_bright = (weap.frame & 0x80) != 0;
+    let shade = if full_bright {
+        1.0
+    } else {
+        shade_for(player_light, 0.0, cfg)
+    };
+    let img = make_tinted_sprite_image(&patch, shade);
     // Affine: image(ix, iy) → screen(screen_x + ix·scale, screen_y + iy·scale).
     // Para mirror, X negativo + offset al borde derecho.
     let xform = if mirror {
@@ -2513,6 +2582,72 @@ mod tests {
         let mut out = Vec::new();
         walk_bsp(&nodes, (nodes.len() - 1) as u16, -10.0, 0.0, &mut out);
         assert_eq!(out, vec![1, 0], "viewer al -X visita ss1 (far) primero");
+    }
+
+    // -----------------------------------------------------------------
+    // Fase 3.18: subsector point query + player sector light
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn subsector_at_point_picks_leaf_containing_point() {
+        // Misma partición que `simple_two_leaf_bsp`: línea x=0 (dy=1).
+        // Punto (+10, 0): side = 0 - 1·10 = -10 < 0 → near = children[1] = ss1.
+        // Punto (-10, 0): side = 0 + 10 = +10 > 0 → near = children[0] = ss0.
+        let nodes = simple_two_leaf_bsp();
+        assert_eq!(subsector_at_point(&nodes, 10.0, 0.0), Some(1));
+        assert_eq!(subsector_at_point(&nodes, -10.0, 0.0), Some(0));
+    }
+
+    #[test]
+    fn subsector_at_point_none_without_bsp() {
+        // Sin nodes (snapshot stub, mapa no cargado) la query devuelve None
+        // sin entrar al loop — el caller cae a su fallback default.
+        assert_eq!(subsector_at_point(&[], 0.0, 0.0), None);
+    }
+
+    #[test]
+    fn player_sector_light_picks_local_light_level() {
+        // Dos sectores con luces opuestas; el player en cada lado debe
+        // leer el light_level del sector donde está parado.
+        let dim = SectorSnap {
+            floor_height: 0.0,
+            ceiling_height: 128.0,
+            light_level: 64,
+            floor_pic: 0,
+            ceiling_pic: 0,
+        };
+        let bright = SectorSnap {
+            floor_height: 0.0,
+            ceiling_height: 128.0,
+            light_level: 240,
+            floor_pic: 0,
+            ceiling_pic: 0,
+        };
+        let mut snap = SceneSnapshot::empty(0);
+        snap.sectors = Arc::from(vec![dim, bright]);
+        // ss0 → sector 0 (dim), ss1 → sector 1 (bright). Coincide con la
+        // convención de `simple_two_leaf_bsp`: viewer en (+10, 0) cae en ss1.
+        snap.subsectors = Arc::from(vec![
+            SubsectorSnap { sector: 0, first_seg: 0, num_segs: 0 },
+            SubsectorSnap { sector: 1, first_seg: 0, num_segs: 0 },
+        ]);
+        snap.nodes = Arc::from(simple_two_leaf_bsp());
+
+        snap.player.x = 10.0;
+        snap.player.y = 0.0;
+        assert_eq!(player_sector_light(&snap), 240, "player en ss1 (bright)");
+
+        snap.player.x = -10.0;
+        assert_eq!(player_sector_light(&snap), 64, "player en ss0 (dim)");
+    }
+
+    #[test]
+    fn player_sector_light_falls_back_without_bsp() {
+        // Snapshot vacío: no hay BSP, no hay sectores. Fallback 192 —
+        // mismo valor que usa `gather_sprite` para sprites sin sector.
+        let snap = SceneSnapshot::empty(0);
+        assert_eq!(player_sector_light(&snap), DEFAULT_PLAYER_LIGHT);
+        assert_eq!(DEFAULT_PLAYER_LIGHT, 192);
     }
 
     // -----------------------------------------------------------------

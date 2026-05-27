@@ -392,6 +392,23 @@ cargo run -p supay-doom-llimphi --release
 
 **No incluido en 3.17 (defer a 3.18+):** wall + sprite BSP ordering; mouse capture real (depende de llimphi-ui); volumetric fog real; texture scrolling validation; decals dinámicos; invuln invert-colors real; weapon shading por luz de sector; pitch realmente 3D (paredes inclinadas) — defer indefinidamente, exige reescribir todo el render pipeline.
 
+**Fase 3.18 (2026-05-27, este bloque):** weapon shading por luz del sector del jugador.
+
+- **Contexto.** Desde Fase 3.15 el sprite del arma (`psprites[ps_weapon]`) se pinta a luz plena siempre — daba igual si el jugador estaba en un cuarto a oscuras o frente a una antorcha encendida. Visualmente quedaba "stickered" sobre la escena: el cuarto fundía a negro pero la pistola seguía amarilla. Doom original también pinta el arma sin shading (sólo el PLAYPAL aplica), pero en un renderer 3D con luz por sector se nota más. Modernizamos: el arma se atenúa con el `light_level` del sector donde está parado el jugador.
+- **`supay-render-llimphi::subsector_at_point`** (nuevo): O(log N) walk del árbol BSP que devuelve el subsector que contiene `(px, py)`. Sigue siempre el lado "near" (mismo signo que `walk_bsp`) hasta caer en una hoja. `None` si el snapshot no trae BSP (modo stub) o el camino apunta fuera de rango.
+- **`supay-render-llimphi::player_sector_light`** (nuevo): compone la cadena `subsector_at_point → subsectors[ss].sector → sectors[sec].light_level`. Fallback `DEFAULT_PLAYER_LIGHT = 192` (mismo valor que `gather_sprite` usa para sprites sin sector).
+- **`draw_weapon_sprite`** gana parámetro `player_light: u8`. El RGBA del patch pasa por `make_tinted_sprite_image(patch, shade)` (helper que ya existía para sprites de mundo). Depth = 0 al `shade_for` — el arma está "en la mano", no debería atenuarse por niebla aunque el cuarto sí lo esté. `FF_FULLBRIGHT` (bit 7 del frame) saltea el shading — muzzle flashes y plasma idle siguen brillantes a luz plena.
+- **`render_frame`** resuelve `player_sector_light(snap)` una sola vez y lo pasa a ambos `draw_weapon_sprite` (weapon + flash). Cero costo extra si no hay BSP.
+- **Header bump**: `PHASE 3.17` → `PHASE 3.18`.
+- **Tests** (+4 render = 43 total verde): `subsector_at_point_picks_leaf_containing_point` (verifica que la dirección "near" lleva al leaf correcto), `subsector_at_point_none_without_bsp` (snapshot stub), `player_sector_light_picks_local_light_level` (dos sectores con luces opuestas, el player en cada lado lee la suya), `player_sector_light_falls_back_without_bsp` (sin BSP devuelve 192).
+
+**Limitaciones conocidas de 3.18.**
+- **Sin smoothing**: el arma cambia de brillo instantáneo al cruzar un sector — un step. Doom mismo se comporta así (cada tick muestra el light_level del sector actual sin transición). Si se quiere fade, sería un campo del Model en el host con lerp por tick.
+- **No considera luces dinámicas**: si un muzzle flash ilumina la pared, el arma sigue al brillo del sector base. Para luces dinámicas hace falta un canal de iluminación adicional (Fase 4+).
+- **Player_overlays todavía no respetan luz**: los PLAYPAL flashes (damage, pickup, radsuit, invuln) son full-screen overlay, sin shading. Es correcto — son tinte de pantalla, no objetos del mundo.
+
+**No incluido en 3.18 (defer a 3.19+):** wall + sprite BSP ordering (sigue pendiente); mouse capture real; volumetric fog; decals dinámicos; invuln invert-colors real; smoothing de la luz del arma.
+
 ### Fase 4 — Capa de modernización opt-in
 
 Cada feature como toggle:
@@ -455,6 +472,7 @@ Cada feature como toggle:
   - **TempLight + flash de impacto**: nueva lista `Vec<TempLight>` con `(x, y, color, strength, ttl, ttl_max)`. Cada flash dura `FLASH_TTL = 4 ticks` y su `strength` decae linealmente con el TTL. `lighting_contribution` los suma; el resultado es un destello cálido cuando un bullet impacta. Spawn en colisión pared + colisión enemy.
   - **SpriteKinds nuevos**: `DyingImp` (rojo opaco scale 0.65) y `Corpse` (mancha rojiza scale 0.30) — el enemy en `draw_scene` se convierte al kind apropiado según state.
   - El jugador puede morir (vida llega a 0 y queda en 0); por ahora sin pantalla de game over — el input sigue activo. La pantalla del HUD muestra todo en rojo cuando vida < 25.
+- **2026-05-27:** Fase 3.18 — weapon shading por luz del sector del jugador. Helper `subsector_at_point` (BSP point query O(log N)) + `player_sector_light` resuelven el light del cuarto donde está parado el player; `draw_weapon_sprite` tinta el patch con `make_tinted_sprite_image`. Muzzle flash mantiene full-bright por FF_FULLBRIGHT (bit 7 del frame). Cuartos oscuros ya no muestran la pistola pegada como sticker iluminado. 43 tests verde renderer (+4 nuevos).
 - **2026-05-26 (+16):** Fase 3.17 — mouse-look cosmético (y-shear del rasterizador + sky backdrop siguiendo el horizonte). PageUp/PageDown mueven el horizonte ±6° por tap; Home resetea. La simulación queda intacta (hitboxes/autoapuntado siguen sin pitch). 39 tests verde renderer (+4 nuevos).
 - **2026-05-26 (+15):** Fase 3.16 — `ps_flash` (muzzle flash overlay) + berserk red tint en overlays. Plasma/BFG/chaingun ahora muestran el destello brillante por encima del arma; agarrar el berserk tinte rojo el frame por un rato. 35 tests verde renderer.
 - **2026-05-26 (+14):** Fase 3.15 — weapon psprite (pistol/shotgun/etc. en mano). Capture de `players[].psprites[ps_weapon]` desde doomgeneric, render como image overlay 2D anclado al bottom del viewport. Smoothing de sx/sy entre snapshots para weapon bob suave.
