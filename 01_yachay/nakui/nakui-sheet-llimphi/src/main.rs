@@ -26,7 +26,7 @@ use llimphi_ui::{
     App, Handle, Key, KeyEvent, KeyState, NamedKey, View, WheelDelta,
 };
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
-use nakui_sheet::{CellFormat, CellRef, SheetValue, Workbook};
+use nakui_sheet::{csv_io, CellFormat, CellRef, ExportMode, SheetValue, Workbook};
 
 const VISIBLE_COLS: u32 = 12;
 const VISIBLE_ROWS: u32 = 25;
@@ -96,6 +96,10 @@ enum Msg {
     /// Aplica un formato predefinido a la celda activa. Lo dispara
     /// Ctrl+Shift+1/4/5 — los atajos clásicos de Excel.
     ApplyFormat(CellFormat),
+    /// Exporta la hoja entera a `./nakui-export.csv` (Ctrl+E).
+    ExportCsv,
+    /// Importa `./nakui-import.csv` a partir de A1 (Ctrl+I).
+    ImportCsv,
 }
 
 #[derive(Clone, Copy)]
@@ -224,6 +228,47 @@ impl App for NakuiSheetApp {
             Msg::StartEditWith(first_char) => {
                 model.editing = true;
                 model.bar.set_text(first_char);
+            }
+            Msg::ExportCsv => {
+                let path = std::path::Path::new("./nakui-export.csv");
+                let result = std::fs::File::create(path)
+                    .map_err(|e| format!("crear {path:?}: {e}"))
+                    .and_then(|f| {
+                        csv_io::export_csv(&model.wb, ExportMode::Raw, f)
+                            .map_err(|e| format!("export: {e}"))
+                    });
+                model.status = match result {
+                    Ok(()) => Status {
+                        text: format!("  ⇪ exportado a {}", path.display()),
+                        kind: StatusKind::Info,
+                    },
+                    Err(e) => Status {
+                        text: format!("  ✗ export: {e}"),
+                        kind: StatusKind::Error,
+                    },
+                };
+            }
+            Msg::ImportCsv => {
+                let path = std::path::Path::new("./nakui-import.csv");
+                let result = std::fs::File::open(path)
+                    .map_err(|e| format!("abrir {path:?}: {e}"))
+                    .and_then(|f| {
+                        csv_io::import_csv(&mut model.wb, f)
+                            .map_err(|e| format!("import: {e}"))
+                    });
+                model.status = match result {
+                    Ok(n) => {
+                        model.bar.set_text(model.wb.raw(model.selected).unwrap_or(""));
+                        Status {
+                            text: format!("  ⇩ importadas {n} celdas desde {}", path.display()),
+                            kind: StatusKind::Info,
+                        }
+                    }
+                    Err(e) => Status {
+                        text: format!("  ✗ import: {e}"),
+                        kind: StatusKind::Error,
+                    },
+                };
             }
             Msg::ApplyFormat(fmt) => match model.wb.set_format(model.selected, fmt.clone()) {
                 Ok(_) => {
@@ -394,6 +439,8 @@ impl App for NakuiSheetApp {
                     "c" => return Some(Msg::Copy),
                     "x" => return Some(Msg::Cut),
                     "v" => return Some(Msg::Paste),
+                    "e" => return Some(Msg::ExportCsv),
+                    "i" => return Some(Msg::ImportCsv),
                     _ => {}
                 }
                 // Atajos Ctrl+Shift+N de formato. En distintos

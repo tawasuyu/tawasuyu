@@ -12,6 +12,7 @@
 //! manifiesto.
 
 pub mod cell;
+pub mod csv_io;
 pub mod formula;
 pub mod graph;
 pub mod sheet;
@@ -20,6 +21,7 @@ pub mod value;
 pub mod workbook;
 
 pub use cell::{CellRange, CellRangeError, CellRef, CellRefError};
+pub use csv_io::{export_csv, import_csv, ExportMode};
 pub use formula::{compile, dependencies, eval_formula, CellResolver, FormulaExpr};
 pub use graph::{CycleError, SheetGraph};
 pub use sheet::{SetError, SetReport, Sheet};
