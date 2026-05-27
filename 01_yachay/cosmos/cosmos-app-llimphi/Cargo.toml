@@ -21,6 +21,7 @@ llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-button = { workspace = true }
 llimphi-widget-tiled = { workspace = true }
+notify = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 rimay-localize = { path = "../../../shared/rimay-localize" }

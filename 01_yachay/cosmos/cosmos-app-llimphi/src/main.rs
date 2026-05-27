@@ -47,6 +47,8 @@ enum Msg {
     ToggleOverlay(OverlayKind),
     SetHarmonic(u32),
     SwapTiles(usize, usize),
+    /// El archivo `cosmos-chart.json` cambió en disco — recargá.
+    ChartFileChanged,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -166,6 +168,12 @@ const CORPUS_DEFAULT_RON: &str = include_str!("../../cosmos-corpus/ejemplo.ron")
 /// para no acoplar a un dirs propio por app — un solo árbol de config.
 const UI_STATE_FILE: &str = "cosmos-ui.json";
 
+/// Nombre del archivo JSON donde persiste la carta cargada. El usuario
+/// edita ESTE archivo con su editor para cambiar fecha/lat/long/label;
+/// la app reacciona vía watcher (mismo patrón que wawa-config). Sin
+/// form de UI hasta que llegue la fase de store de cartas.
+const CHART_FILE: &str = "cosmos-chart.json";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct UiState {
     #[serde(default)]
@@ -192,6 +200,100 @@ impl Default for UiState {
 
 fn ui_state_path() -> Option<PathBuf> {
     wawa_config::config_dir().map(|d| d.join(UI_STATE_FILE))
+}
+
+fn chart_path() -> Option<PathBuf> {
+    wawa_config::config_dir().map(|d| d.join(CHART_FILE))
+}
+
+/// Forma serializada minimal de un Chart natal. Pierde `id`/`contact_id`
+/// (se regeneran al cargar) y `created_at_ms` — son metadata interna que
+/// no aporta al usuario que edita el JSON a mano.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ChartFile {
+    label: String,
+    birth_data: StoredBirthData,
+    #[serde(default)]
+    config: StoredChartConfig,
+}
+
+impl From<&Chart> for ChartFile {
+    fn from(c: &Chart) -> Self {
+        Self {
+            label: c.label.clone(),
+            birth_data: c.birth_data.clone(),
+            config: c.config.clone(),
+        }
+    }
+}
+
+impl ChartFile {
+    fn into_chart(self) -> Chart {
+        Chart {
+            id: ChartId::new(),
+            contact_id: ContactId::new(),
+            kind: ChartKind::Natal,
+            label: self.label,
+            birth_data: self.birth_data,
+            config: self.config,
+            related_chart_id: None,
+            created_at_ms: 0,
+        }
+    }
+}
+
+fn load_chart_from_disk() -> Option<Chart> {
+    let path = chart_path()?;
+    let bytes = std::fs::read(&path).ok()?;
+    let f: ChartFile = serde_json::from_slice(&bytes)
+        .map_err(|e| eprintln!("cosmos · chart-file: no se pudo parsear {path:?}: {e}"))
+        .ok()?;
+    Some(f.into_chart())
+}
+
+/// Arranca un watcher sobre `cosmos-chart.json` que dispara
+/// `Msg::ChartFileChanged` al detectar `Modify`/`Create` en el archivo.
+/// Devuelve `None` si no hay config dir disponible o si notify falla —
+/// la app sigue funcionando sin hot-reload, solo no reaccionará a edits
+/// externos hasta el próximo arranque.
+fn spawn_chart_watcher(handle: &Handle<Msg>) -> Option<notify::RecommendedWatcher> {
+    let path = chart_path()?;
+    // Asegurá que el dir existe y el archivo está sembrado antes de
+    // watchearlo — notify exige que el path exista al `watch`.
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if !path.exists() {
+        // Sembrado lazy: si nunca pasó por init(), no hay archivo. Lo
+        // creamos vacío para que el watcher tenga algo que mirar; init
+        // lo sobreescribirá con el sample al arrancar.
+        let _ = std::fs::write(&path, b"{}");
+    }
+    let h = handle.clone();
+    wawa_config::watch_path(&path, move |ev: notify::Event| {
+        use notify::EventKind;
+        if matches!(
+            ev.kind,
+            EventKind::Modify(_) | EventKind::Create(_)
+        ) {
+            h.dispatch(Msg::ChartFileChanged);
+        }
+    })
+    .map_err(|e| eprintln!("cosmos · chart-watcher: {e}"))
+    .ok()
+}
+
+fn save_chart_to_disk(chart: &Chart) {
+    let Some(path) = chart_path() else { return };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let f: ChartFile = chart.into();
+    if let Ok(json) = serde_json::to_vec_pretty(&f) {
+        if let Err(e) = std::fs::write(&path, json) {
+            eprintln!("cosmos · chart-file: write fallido {path:?}: {e}");
+        }
+    }
 }
 
 fn load_ui_state() -> UiState {
@@ -287,6 +389,9 @@ struct Model {
     panel_order: Vec<TileId>,
     corpus: Corpus,
     _wawa_watcher: Option<wawa_config::ConfigWatcher>,
+    /// Watcher del archivo `cosmos-chart.json`. Lo mantenemos vivo en el
+    /// Model — se cae automáticamente cuando la app cierra.
+    _chart_watcher: Option<notify::RecommendedWatcher>,
 }
 
 struct Cosmos;
@@ -314,10 +419,17 @@ impl App for Cosmos {
         .map_err(|e| eprintln!("cosmos · wawa-config watcher: {e}"))
         .ok();
 
-        let chart = sample_chart();
+        let chart = load_chart_from_disk().unwrap_or_else(|| {
+            let c = sample_chart();
+            // Sembramos el archivo en el primer arranque para que el
+            // usuario pueda editar la sample con su editor.
+            save_chart_to_disk(&c);
+            c
+        });
         let ui = load_ui_state();
         let (render, error) = compute(&chart, &ui.overlays, ui.harmonic);
         let corpus = Corpus::desde_ron(CORPUS_DEFAULT_RON).unwrap_or_default();
+        let chart_watcher = spawn_chart_watcher(handle);
         Model {
             chart,
             overlays: ui.overlays,
@@ -328,6 +440,7 @@ impl App for Cosmos {
             panel_order: ui.panel_order,
             corpus,
             _wawa_watcher: watcher,
+            _chart_watcher: chart_watcher,
         }
     }
 
@@ -376,6 +489,14 @@ impl App for Cosmos {
                 if from != to && from < m.panel_order.len() && to < m.panel_order.len() {
                     m.panel_order.swap(from, to);
                     persist = true;
+                }
+            }
+            Msg::ChartFileChanged => {
+                if let Some(new_chart) = load_chart_from_disk() {
+                    m.chart = new_chart;
+                    let (render, error) = compute(&m.chart, &m.overlays, m.harmonic);
+                    m.render = render;
+                    m.error = error;
                 }
             }
         }
@@ -654,6 +775,9 @@ fn tile_carta(model: &Model, theme: &Theme) -> View<Msg> {
         fmt_deg_sign(model.render.imum_coeli_deg),
     );
 
+    let path_hint = chart_path()
+        .map(|p| format!("edit: {}", p.display()))
+        .unwrap_or_default();
     tile_container(
         vec![
             line(model.chart.label.clone(), 12.0, theme.fg_text),
@@ -661,6 +785,7 @@ fn tile_carta(model: &Model, theme: &Theme) -> View<Msg> {
             line(fecha, 10.0, theme.fg_muted),
             line(lat_long, 10.0, theme.fg_muted),
             line(angles, 10.0, theme.fg_text),
+            line(path_hint, 9.0, theme.fg_muted),
         ],
         theme,
     )
