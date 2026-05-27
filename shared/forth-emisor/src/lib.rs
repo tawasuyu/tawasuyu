@@ -1,18 +1,31 @@
 // =============================================================================
-//  forth-emisor :: Fase 30 :: compilador Forth -> WASM 1.0 aislado y verificado
+//  forth-emisor :: Fase 30/40 :: compilador Forth -> WASM 1.0 aislado y verificado
 // -----------------------------------------------------------------------------
 //  Esta crate compila expresiones de pila simples ("5 10 +", "3 4 5 * +") al
 //  format binario WebAssembly 1.0. Se diseño para que la app `apps/ide` pueda
 //  emitir modulos `.wasm` en caliente desde la jaula —pero la logica vive
 //  AQUI para que el toolchain pueda verificarla con tests nativos en el host.
 //
-//  CONTRATO:
+//  CONTRATO (modo `() -> i32`, default):
 //    * Entrada: `&str` ASCII (digitos, espacios, `+ - *`). Cualquier caracter
 //      fuera de ese dominio cae con `None`. No hay panico, no hay heap.
 //    * Salida: numero de bytes escritos en `out_modulo`, o `None` si el
 //      compilador no pudo construir un modulo legitimo (token ajeno, pila
 //      descuadrada, buffer destino corto).
 //    * El modulo resultante exporta una funcion `"run"` con firma `() -> i32`.
+//
+//  CONTRATO (modo `(i32) -> i32`, Fase 40 - opt-in):
+//    * Idem, pero la firma exportada es `(i32) -> i32`. El cuerpo arranca
+//      con `local.get 0` para que el parametro inyectado habite la base de
+//      la pila. El codigo Forth tecleado opera sobre ese valor implicito.
+//    * Verificacion de balance: el codigo del usuario debe balancear con
+//      la pila inicial de 1 valor — escribir "10 +" produce
+//      `[param, 10] -> [param+10]` (1 valor final, OK), pero "5 10 +"
+//      produce `[param, 5, 10] -> [param, 15]` (2 valores, rechazo).
+//    * Usado por el cuaderno (`apps/pluma`) cuando una celda macro
+//      importada via `@<hash>` debe heredar el `RETORNO_HEREDADO` de la
+//      celda anterior. El kernel detecta dinamicamente la firma y elige
+//      v1 o v2 en consecuencia.
 // =============================================================================
 
 #![no_std]
@@ -25,6 +38,11 @@ pub mod opcodes {
     pub const I32_SUB: u8 = 0x6B;
     pub const I32_MUL: u8 = 0x6C;
     pub const END: u8 = 0x0B;
+    /// FASE 40 :: empujar el local `index` a la pila. Usado al inicio del
+    /// cuerpo en modo `(i32) -> i32` para colocar el parametro inyectado
+    /// en la base de la pila — `local.get 0` es la unica via WASM de
+    /// acceder al primer parametro de una funcion.
+    pub const LOCAL_GET: u8 = 0x20;
 }
 
 /// Bytes magicos de un modulo WASM 1.0: `\0asm`.
@@ -54,6 +72,34 @@ impl ForthCompiler {
     /// trabaja sobre un `[u8; 256]` ASCII, asi que esta variante le
     /// evita revalidar UTF-8 cuando ya sabe que sus tokens son ASCII.
     pub fn compilar_bytes(fuente: &[u8], out_modulo: &mut [u8]) -> Option<usize> {
+        Self::compilar_interno(fuente, out_modulo, false)
+    }
+
+    /// FASE 40 :: compila al modo `(i32) -> i32` opt-in. Emite un modulo
+    /// cuyo `"run"` espera un parametro i32 (el valor inyectado en
+    /// cascada por el host) y devuelve un i32. El cuerpo arranca con
+    /// `local.get 0` para que el parametro habite la base de la pila;
+    /// el codigo Forth tecleado opera sobre ese valor implicito.
+    ///
+    /// La validacion de balance ahora exige que el codigo del usuario
+    /// produzca EXACTAMENTE un valor neto: la pila inicia con
+    /// `[param]` (depth=1) y debe quedar con un solo i32 al `end`.
+    pub fn compilar_bytes_con_parametro(
+        fuente: &[u8],
+        out_modulo: &mut [u8],
+    ) -> Option<usize> {
+        Self::compilar_interno(fuente, out_modulo, true)
+    }
+
+    /// Camino comun de las dos variantes. `con_parametro = false`
+    /// preserva la semantica historica (firma `() -> i32`, pila inicial
+    /// vacia); `con_parametro = true` emite `(i32) -> i32` con
+    /// `local.get 0` prepended y pila inicial de un valor.
+    fn compilar_interno(
+        fuente: &[u8],
+        out_modulo: &mut [u8],
+        con_parametro: bool,
+    ) -> Option<usize> {
         // --- 1. Tokenizar y construir el CUERPO de la funcion en un scratch
         //        local en pila. La cota acota el bytecode emitido a algo
         //        razonable para una expresion humana (~384 B). ---
@@ -63,7 +109,16 @@ impl ForthCompiler {
         // Locals declarations: 0 grupos (la funcion no tiene locales).
         push_byte(&mut body, &mut body_len, 0x00)?;
 
-        let mut profundidad: i32 = 0;
+        // FASE 40 :: en modo paramétrico, el parametro inyectado entra a la
+        // base de la pila via `local.get 0`. La profundidad inicial pasa
+        // de 0 a 1, y el balance final sigue exigiendo profundidad == 1.
+        let mut profundidad: i32 = if con_parametro {
+            push_byte(&mut body, &mut body_len, opcodes::LOCAL_GET)?;
+            push_byte(&mut body, &mut body_len, 0x00)?; // local index 0
+            1
+        } else {
+            0
+        };
         let mut i = 0usize;
         while i < fuente.len() {
             let c = fuente[i];
@@ -109,8 +164,12 @@ impl ForthCompiler {
             return None;
         }
 
-        // La firma `() -> i32` exige EXACTAMENTE un valor en la pila al
-        // cerrar. Sobrante = pila desbordada; ausente = pila vacia.
+        // Las firmas `() -> i32` y `(i32) -> i32` exigen EXACTAMENTE un
+        // valor neto en la pila al cerrar. Sobrante = pila desbordada;
+        // ausente = pila vacia. En modo parametrico la pila INICIA con
+        // 1 valor (el parametro implicito), asi que codigos como "10 +"
+        // balancean a `[param+10]` (1 valor neto) pero "5 10 +" caeria
+        // a `[param, 15]` (2 valores) y seria rechazado.
         if profundidad != 1 {
             return None;
         }
@@ -124,10 +183,17 @@ impl ForthCompiler {
         push_slice(out_modulo, &mut out, &WASM_MAGIA)?;
         push_slice(out_modulo, &mut out, &WASM_VERSION)?;
 
-        // Type Section (0x01): UN functype `() -> i32`.
-        //   count=1, 0x60 (functype), n_params=0, n_results=1, 0x7F (i32)
-        let type_payload = [0x01, 0x60, 0x00, 0x01, 0x7F];
-        emit_section(0x01, &type_payload, out_modulo, &mut out)?;
+        // Type Section (0x01): UN functype, parametrizado segun el modo.
+        //   Modo legacy `() -> i32`:    count=1 0x60 n_params=0 n_results=1 0x7F
+        //   Modo paramétrico `(i32) -> i32`:
+        //                               count=1 0x60 n_params=1 0x7F n_results=1 0x7F
+        if con_parametro {
+            let type_payload = [0x01, 0x60, 0x01, 0x7F, 0x01, 0x7F];
+            emit_section(0x01, &type_payload, out_modulo, &mut out)?;
+        } else {
+            let type_payload = [0x01, 0x60, 0x00, 0x01, 0x7F];
+            emit_section(0x01, &type_payload, out_modulo, &mut out)?;
+        }
 
         // Function Section (0x03): UNA funcion que usa el type 0.
         let func_payload = [0x01, 0x00];
@@ -374,5 +440,72 @@ mod tests {
         let mut salida = [0u8; 256];
         // i32::MAX = 2_147_483_647. Pasamos un valor que lo supera holgado.
         assert!(ForthCompiler::compilar("9999999999999 1 +", &mut salida).is_none());
+    }
+
+    /// FASE 40 :: el modo parametrico `(i32) -> i32` debe:
+    ///   - declarar `(i32) -> i32` en la Type Section
+    ///     (n_params=1 + tipo i32, n_results=1 + tipo i32)
+    ///   - arrancar el cuerpo con `local.get 0` (opcodes 0x20 0x00)
+    ///     ANTES del codigo Forth tecleado
+    ///   - aceptar codigos que balancean con pila inicial = 1, como
+    ///     `10 +` (suma 10 al parametro) o el codigo vacio (devuelve el
+    ///     parametro tal cual)
+    ///   - rechazar codigos que balancean para el modo legacy pero no
+    ///     para el parametrico, como `5 10 +` (deja `[param, 15]`)
+    #[test]
+    fn test_compilacion_con_parametro_inyectado_consigue_calcular() {
+        // 1. Type Section: la firma declarada debe ser `(i32) -> i32`.
+        //    La secuencia exacta del payload en wire WASM 1.0 es:
+        //      0x01 (count=1), 0x60 (functype), 0x01 (n_params=1),
+        //      0x7F (i32), 0x01 (n_results=1), 0x7F (i32).
+        let mut salida = [0u8; 256];
+        let n = ForthCompiler::compilar_bytes_con_parametro(b"10 +", &mut salida)
+            .expect("'10 +' es valido bajo el modo parametrico");
+        let modulo = &salida[..n];
+        let firma_esperada = [0x01u8, 0x60, 0x01, 0x7F, 0x01, 0x7F];
+        assert!(
+            modulo.windows(firma_esperada.len()).any(|w| w == firma_esperada),
+            "la Type Section no declara `(i32) -> i32` correctamente"
+        );
+
+        // 2. El cuerpo debe empezar con LOCAL_GET 0 (0x20 0x00) seguido
+        //    del codigo Forth (i32.const 10; i32.add). El END cierra.
+        //    Secuencia: 0x20 0x00 0x41 0x0A 0x6A 0x0B.
+        let cuerpo_esperado = [
+            opcodes::LOCAL_GET, 0x00,
+            opcodes::I32_CONST, 0x0A,
+            opcodes::I32_ADD,
+            opcodes::END,
+        ];
+        assert!(
+            modulo.windows(cuerpo_esperado.len()).any(|w| w == cuerpo_esperado),
+            "el cuerpo no arranca con `local.get 0` o el codigo Forth"
+        );
+
+        // 3. El export sigue siendo `"run"`.
+        assert!(
+            modulo.windows(5).any(|w| w == [0x03, b'r', b'u', b'n', 0x00]),
+            "el export `run` no aparece"
+        );
+
+        // 4. Rechazo del codigo Forth que solo balancea bajo el modo legacy:
+        //    `5 10 +` deja `[param, 15]` (2 valores) y debe ser None.
+        let mut salida = [0u8; 256];
+        assert!(
+            ForthCompiler::compilar_bytes_con_parametro(b"5 10 +", &mut salida).is_none(),
+            "`5 10 +` desbalancea la pila en modo parametrico y debe ser None"
+        );
+
+        // 5. Codigo vacio (sin tokens Forth): solo `local.get 0; end`.
+        //    Es legitimo — la macro devuelve el parametro tal cual.
+        let mut salida = [0u8; 256];
+        let n = ForthCompiler::compilar_bytes_con_parametro(b"", &mut salida)
+            .expect("codigo vacio es identidad en modo parametrico");
+        let modulo = &salida[..n];
+        let solo_local_get = [opcodes::LOCAL_GET, 0x00, opcodes::END];
+        assert!(
+            modulo.windows(solo_local_get.len()).any(|w| w == solo_local_get),
+            "la identidad parametrica deberia ser `local.get 0; end`"
+        );
     }
 }

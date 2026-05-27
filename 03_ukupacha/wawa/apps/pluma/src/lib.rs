@@ -95,6 +95,14 @@ extern "C" {
         salida_hash_ptr: u32,
     ) -> i32;
     fn sys_subsistema_ejecutar_dinamico(binario_hash_ptr: u32) -> i32;
+    /// FASE 40 :: variante PARAMETRICA del despachador dinamico. Inyecta
+    /// `valor_entrada` al sub-proceso si su firma es `(i32) -> i32`;
+    /// para modulos legacy `() -> i32` el kernel ignora el valor y los
+    /// corre como antes — la compatibilidad regresiva es total.
+    fn sys_subsistema_ejecutar_dinamico_v2(
+        binario_hash_ptr: u32,
+        valor_entrada: i32,
+    ) -> i32;
     fn sys_cuaderno_registrar_celda(
         fuente_hash_ptr: u32,
         binario_hash_ptr: u32,
@@ -678,22 +686,30 @@ fn ejecutar_celda_importada() {
         return;
     }
 
-    // 3. Ejecutar la macro. NOTA :: en este MVP la cascada NO inyecta el
-    //    retorno heredado al sub-proceso — el binario importado fue
-    //    compilado con su pila propia y la ABI actual de
-    //    `sys_subsistema_ejecutar_dinamico` solo soporta `() -> i32`.
-    //    Documentamos el HER del cuaderno solo como cortesia visual.
-    //    Convergencia con `(i32) -> i32` queda para Fase 37+.
+    // 3. Ejecutar la macro via la syscall PARAMETRICA (Fase 40). Si hay
+    //    RETORNO_HEREDADO valido, el kernel lo inyecta al sub-proceso
+    //    cuando la firma del binario es `(i32) -> i32`. Para binarios
+    //    legacy con firma `() -> i32` el kernel ignora el valor — la
+    //    compatibilidad regresiva es total. El chevron `>` y el rotulo
+    //    `HER N` ahora SI aplican para celdas macro importadas que
+    //    realmente heredaron, cerrando el puente cross-app de la Fase 36.
+    let heredado = unsafe { RETORNO_HEREDADO_VALIDO };
+    let valor_heredado = unsafe { RETORNO_HEREDADO };
+    let valor_entrada = if heredado { valor_heredado } else { 0 };
     let retorno = unsafe {
-        sys_subsistema_ejecutar_dinamico(celda.hash_binario.as_ptr() as u32)
+        sys_subsistema_ejecutar_dinamico_v2(
+            celda.hash_binario.as_ptr() as u32,
+            valor_entrada,
+        )
     };
     let es_falla = retorno <= -1 && retorno >= -7;
     celda.retorno = retorno;
     celda.exito = !es_falla;
-    // El campo `heredado` queda en false para celdas importadas: aunque
-    // exista un RETORNO_HEREDADO disponible, no se inyecta al binario;
-    // el indicador visual del chevron `>` no tiene sentido aqui.
-    celda.heredado = false;
+    // FASE 40 :: la herencia cruza limpiamente la frontera inter-app
+    // cuando se uso. `heredado=true` enciende el chevron `>` y el
+    // rotulo `HER <valor>` sobre la celda macro importada.
+    celda.heredado = heredado;
+    celda.valor_heredado = if heredado { valor_heredado } else { 0 };
 
     // 4. Consolidar la celda en el grafo. `hash_fuente` queda en cero
     //    (no hay fuente Forth nueva — la fuente vive en otra app, en
@@ -839,7 +855,7 @@ fn pintar() {
 
     // Cabecera con el hash del cuaderno (si ya hubo una consolidacion).
     rellenar_rect(lienzo, 0, 0, ANCHO, EDITOR_Y - 4, secundario);
-    dibujar_texto(lienzo, b"PLUMA  WAWA  F38", 8, 6, 1, tinta);
+    dibujar_texto(lienzo, b"PLUMA  WAWA  F40", 8, 6, 1, tinta);
     if unsafe { HASH_CUADERNO_VALIDO } {
         let h = unsafe { HASH_CUADERNO };
         let mut etiqueta = [b' '; 8];

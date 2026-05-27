@@ -59,6 +59,11 @@
 //                              el cordon umbilical limpio entre Ring 0
 //                              y `wawactl`, conservando la ley "el kernel
 //                              jamas firma; solo verifica".
+//    * sys_subsistema_ejecutar_dinamico_v2    — evolucion del ABI dinamico
+//                              con despacho polimorfico (Fase 40, Cascade
+//                              Injection): inyecta un i32 a binarios cuya
+//                              firma es `(i32) -> i32`, degrada elegante
+//                              a `() -> i32` para modulos legacy.
 //
 //  GUARDARRAIL: el kernel valida MATEMATICAMENTE todo puntero que el modulo le
 //  entrega contra los limites reales de su memoria lineal. No se confia en que
@@ -659,6 +664,78 @@ pub(crate) fn enlazar_capacidades(
         },
     )?;
     } // PERMISO_GRAFO_ESCRITURA (dinamico)
+
+    // --- CAPACIDAD 3d_v2 :: sys_subsistema_ejecutar_dinamico_v2 ------------
+    // sys_subsistema_ejecutar_dinamico_v2(binario_hash_ptr, valor_entrada) -> i32
+    //
+    // FASE 40 :: la EVOLUCION del ABI dinamico. Idem `ejecutar_dinamico` pero
+    // con un parametro `i32` que el host inyecta al sub-proceso si su firma
+    // de `"run"` es `(i32) -> i32`. Para binarios legacy que solo declaran
+    // `() -> i32`, el kernel ignora el parametro y los corre como antes —
+    // compatibilidad regresiva total.
+    //
+    // El despacho polimorfico vive en `wasm::ejecutar_dinamico_v2`. Esta
+    // syscall solo agrega el bridge: leer el hash, recuperar el binario,
+    // delegar en la fn de wasm.
+    //
+    // GATEADA igual que la v1: PERMISO_GRAFO_ESCRITURA + foco, BACK-PRESSURE
+    // DMA. Mismo techo de FUEL_DINAMICO y 1 MiB de RAM en la sub-jaula.
+    if permisos & PERMISO_GRAFO_ESCRITURA != 0 {
+    enlazador.func_wrap(
+        "renaser",
+        "sys_subsistema_ejecutar_dinamico_v2",
+        |mut caller: Caller<'_, ContextoCapacidades>,
+         binario_hash_ptr: u32,
+         valor_entrada: i32|
+         -> Result<i32, Error> {
+            if crate::compositor::foco() != caller.data().indice_app {
+                return Ok(CodigoError::SinFoco.como_i32());
+            }
+            if caller.data().paginas_dma_en_vuelo >= MAX_PAGINAS_DMA_PER_APP {
+                return Ok(CodigoError::Saturado.como_i32());
+            }
+            caller.data_mut().paginas_dma_en_vuelo += 1;
+
+            let memoria = obtener_memoria(&caller)?;
+            let hash = {
+                let m = memoria.data(&caller);
+                match leer_hash(
+                    m,
+                    binario_hash_ptr,
+                    "WASM :: sys_subsistema_ejecutar_dinamico_v2 desbordo memoria (hash)",
+                ) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        caller.data_mut().paginas_dma_en_vuelo -= 1;
+                        return Err(e);
+                    }
+                }
+            };
+
+            let objeto = match crate::almacen::recuperar(&hash) {
+                Ok(Some(o)) => o,
+                Ok(None) => {
+                    caller.data_mut().paginas_dma_en_vuelo -= 1;
+                    return Ok(CodigoError::Ausente.como_i32());
+                }
+                Err(_) => {
+                    caller.data_mut().paginas_dma_en_vuelo -= 1;
+                    return Ok(CodigoError::AlmacenamientoFallo.como_i32());
+                }
+            };
+            caller.data_mut().paginas_dma_en_vuelo -= 1;
+
+            match crate::wasm::ejecutar_dinamico_v2(&objeto.datos, valor_entrada) {
+                Ok(retorno) => Ok(retorno),
+                Err(crate::wasm::FallaApp::SinCombustible) => Ok(CodigoError::Saturado.como_i32()),
+                Err(crate::wasm::FallaApp::SinMemoria) => {
+                    Ok(CodigoError::CapacidadInsuficiente.como_i32())
+                }
+                Err(_) => Ok(CodigoError::PayloadInvalido.como_i32()),
+            }
+        },
+    )?;
+    } // PERMISO_GRAFO_ESCRITURA (dinamico_v2)
 
     // --- CAPACIDAD 3e :: sys_cuaderno_registrar_celda -----------------------
     // sys_cuaderno_registrar_celda(fuente_hash_ptr, binario_hash_ptr,

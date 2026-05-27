@@ -383,6 +383,86 @@ pub fn ejecutar_dinamico(bytecode: &[u8]) -> Result<i32, FallaApp> {
     //    siguiente alocacion que reuse esos bytes los sobrescribira.
 }
 
+/// FASE 40 :: variante PARAMETRICA del despachador dinamico. Idem
+/// `ejecutar_dinamico` pero con DESPACHO POLIMORFICO sobre la firma del
+/// export `"run"`:
+///
+///   * Si el binario declara `"run": (i32) -> i32`, el kernel lo invoca
+///     con `valor_entrada` como argumento — la cascada cross-app se
+///     consuma y el `RETORNO_HEREDADO` del cuaderno alcanza al sub-proceso.
+///   * Si el binario declara `"run": () -> i32` (modulo legacy, emitido
+///     por `forth-emisor::compilar_bytes`), el kernel IGNORA `valor_entrada`
+///     y llama a la funcion sin parametros. La compatibilidad regresiva
+///     es total: cualquier `@<hash>` historico sigue corriendo.
+///
+/// La inspeccion del tipo NO toca al asignador — `get_typed_func` es una
+/// consulta sobre la tabla de exports del modulo ya parseado en
+/// `Module::new`, todo en pila.
+pub fn ejecutar_dinamico_v2(bytecode: &[u8], valor_entrada: i32) -> Result<i32, FallaApp> {
+    let mut config = Config::default();
+    config.consume_fuel(true);
+    config.compilation_mode(CompilationMode::Eager);
+    let motor = Engine::new(&config);
+
+    let modulo = Module::new(&motor, bytecode).map_err(|_| FallaApp::Carga)?;
+
+    let limites = StoreLimitsBuilder::new()
+        .memory_size(1 * 1024 * 1024)
+        .trap_on_grow_failure(true)
+        .build();
+
+    let canal = crate::async_system::teclado::crear_canal();
+    let canal_puntero = crate::async_system::puntero::crear_canal();
+    let mut almacen = Store::new(
+        &motor,
+        ContextoCapacidades {
+            natural_ancho: 0,
+            natural_alto: 0,
+            canal,
+            canal_puntero,
+            limites,
+            indice_app: usize::MAX,
+            idioma: format::IDIOMA_DEFECTO,
+            paleta: format::PALETA_DEFECTO,
+            tiempo_ms_fotograma: crate::async_system::reloj::milisegundos(),
+            paginas_dma_en_vuelo: 0,
+        },
+    );
+    almacen.limiter(|contexto| &mut contexto.limites);
+    almacen.set_fuel(FUEL_DINAMICO).map_err(|_| FallaApp::Carga)?;
+
+    let enlazador: Linker<ContextoCapacidades> = Linker::new(&motor);
+    let instancia = enlazador
+        .instantiate_and_start(&mut almacen, &modulo)
+        .map_err(|_| FallaApp::Carga)?;
+
+    // DESPACHO POLIMORFICO. Intentamos primero la firma parametrica;
+    // si no resuelve, caemos a la legacy. Ambas branches NO alocan —
+    // `get_typed_func` es una operacion de inspeccion pura.
+    if let Ok(run_v2) = instancia.get_typed_func::<i32, i32>(&almacen, "run") {
+        match run_v2.call(&mut almacen, valor_entrada) {
+            Ok(retorno) => Ok(retorno),
+            Err(error) => Err(match error.as_trap_code() {
+                Some(TrapCode::OutOfFuel) => FallaApp::SinCombustible,
+                Some(TrapCode::GrowthOperationLimited) => FallaApp::SinMemoria,
+                _ => FallaApp::Trampa,
+            }),
+        }
+    } else {
+        let run_v1 = instancia
+            .get_typed_func::<(), i32>(&almacen, "run")
+            .map_err(|_| FallaApp::Carga)?;
+        match run_v1.call(&mut almacen, ()) {
+            Ok(retorno) => Ok(retorno),
+            Err(error) => Err(match error.as_trap_code() {
+                Some(TrapCode::OutOfFuel) => FallaApp::SinCombustible,
+                Some(TrapCode::GrowthOperationLimited) => FallaApp::SinMemoria,
+                _ => FallaApp::Trampa,
+            }),
+        }
+    }
+}
+
 /// Reconciliacion del ciclo de vida. Cuando una `AplicacionWasm` muere —porque
 /// fue desalojada y su tarea concluyo—, su canal de teclado debe darse de baja
 /// de la difusion de la IRQ1. Sin esto, el manejador de interrupciones seguiria
