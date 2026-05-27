@@ -27,8 +27,8 @@ pub struct ComputedStyle {
     pub background: Option<Color>,
     pub font_size: f32,
     pub font_weight: u16,
-    pub margin: f32,
-    pub padding: f32,
+    pub margin: Sides<f32>,
+    pub padding: Sides<f32>,
     /// Ancho explícito. `Auto` = el default block-fills-parent.
     pub width: LengthVal,
     /// Tope superior — útil para containers narrow ("max-width:800px").
@@ -108,6 +108,30 @@ pub enum LengthVal {
     Pct(f32),
 }
 
+/// 4 valores por lado (top/right/bottom/left). Lo usan `margin` y
+/// `padding` para no perder información del shorthand CSS — un
+/// `padding: 10px 20px` se queda con `top/bottom=10, right/left=20`
+/// en vez de colapsarse a un único `f32`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Sides<T: Copy> {
+    pub top: T,
+    pub right: T,
+    pub bottom: T,
+    pub left: T,
+}
+
+impl<T: Copy> Sides<T> {
+    pub const fn all(v: T) -> Self {
+        Self { top: v, right: v, bottom: v, left: v }
+    }
+}
+
+impl Default for Sides<f32> {
+    fn default() -> Self {
+        Self::all(0.0)
+    }
+}
+
 /// Alineación horizontal del contenido inline dentro de un bloque.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextAlign {
@@ -125,8 +149,8 @@ impl Default for ComputedStyle {
             background: None,
             font_size: 16.0,
             font_weight: 400,
-            margin: 0.0,
-            padding: 0.0,
+            margin: Sides::all(0.0),
+            padding: Sides::all(0.0),
             width: LengthVal::Auto,
             max_width: LengthVal::Auto,
             text_align: TextAlign::Left,
@@ -646,8 +670,16 @@ enum DeclKind {
     Display(Display),
     FontSize(f32),
     FontWeight(u16),
-    Margin(f32),
-    Padding(f32),
+    Margin(Sides<f32>),
+    MarginTop(f32),
+    MarginRight(f32),
+    MarginBottom(f32),
+    MarginLeft(f32),
+    Padding(Sides<f32>),
+    PaddingTop(f32),
+    PaddingRight(f32),
+    PaddingBottom(f32),
+    PaddingLeft(f32),
     Width(LengthVal),
     MaxWidth(LengthVal),
     TextAlign(TextAlign),
@@ -673,7 +705,15 @@ impl Decl {
             DeclKind::FontSize(v) => s.font_size = *v,
             DeclKind::FontWeight(w) => s.font_weight = *w,
             DeclKind::Margin(v) => s.margin = *v,
+            DeclKind::MarginTop(v) => s.margin.top = *v,
+            DeclKind::MarginRight(v) => s.margin.right = *v,
+            DeclKind::MarginBottom(v) => s.margin.bottom = *v,
+            DeclKind::MarginLeft(v) => s.margin.left = *v,
             DeclKind::Padding(v) => s.padding = *v,
+            DeclKind::PaddingTop(v) => s.padding.top = *v,
+            DeclKind::PaddingRight(v) => s.padding.right = *v,
+            DeclKind::PaddingBottom(v) => s.padding.bottom = *v,
+            DeclKind::PaddingLeft(v) => s.padding.left = *v,
             DeclKind::Width(v) => s.width = *v,
             DeclKind::MaxWidth(v) => s.max_width = *v,
             DeclKind::TextAlign(a) => s.text_align = *a,
@@ -732,23 +772,23 @@ fn ua_stylesheet() -> Vec<Rule> {
             selector: ty("h1"),
             decls: vec![
                 Decl { kind: DeclKind::FontSize(32.0), important: false },
-                Decl { kind: DeclKind::Margin(20.0), important: false },
+                Decl { kind: DeclKind::Margin(Sides::all(20.0)), important: false },
             ],
         },
         Rule {
             selector: ty("h2"),
             decls: vec![
                 Decl { kind: DeclKind::FontSize(24.0), important: false },
-                Decl { kind: DeclKind::Margin(18.0), important: false },
+                Decl { kind: DeclKind::Margin(Sides::all(18.0)), important: false },
             ],
         },
         Rule {
             selector: ty("p"),
-            decls: vec![Decl { kind: DeclKind::Margin(12.0), important: false }],
+            decls: vec![Decl { kind: DeclKind::Margin(Sides::all(12.0)), important: false }],
         },
         Rule {
             selector: ty("body"),
-            decls: vec![Decl { kind: DeclKind::Padding(8.0), important: false }],
+            decls: vec![Decl { kind: DeclKind::Padding(Sides::all(8.0)), important: false }],
         },
         // Defaults de text-decoration. `<a>` y `<u>`/`<ins>` van con
         // underline; `<s>`/`<strike>`/`<del>` tachadas. Cualquier autor
@@ -1184,8 +1224,16 @@ fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "display" => parse_display(value).map(DeclKind::Display),
         "font-size" => parse_length_px(value).map(DeclKind::FontSize),
         "font-weight" => parse_weight(value).map(DeclKind::FontWeight),
-        "margin" => parse_length_px(value).map(DeclKind::Margin),
-        "padding" => parse_length_px(value).map(DeclKind::Padding),
+        "margin" => parse_sides(value).map(DeclKind::Margin),
+        "margin-top" => parse_length_px(value).map(DeclKind::MarginTop),
+        "margin-right" => parse_length_px(value).map(DeclKind::MarginRight),
+        "margin-bottom" => parse_length_px(value).map(DeclKind::MarginBottom),
+        "margin-left" => parse_length_px(value).map(DeclKind::MarginLeft),
+        "padding" => parse_sides(value).map(DeclKind::Padding),
+        "padding-top" => parse_length_px(value).map(DeclKind::PaddingTop),
+        "padding-right" => parse_length_px(value).map(DeclKind::PaddingRight),
+        "padding-bottom" => parse_length_px(value).map(DeclKind::PaddingBottom),
+        "padding-left" => parse_length_px(value).map(DeclKind::PaddingLeft),
         "width" => parse_length_or_pct(value).map(DeclKind::Width),
         "max-width" => parse_length_or_pct(value).map(DeclKind::MaxWidth),
         "text-align" => parse_text_align(value).map(DeclKind::TextAlign),
@@ -1432,7 +1480,7 @@ fn parse_line_height(s: &str) -> Option<f32> {
 
 fn parse_color(s: &str) -> Option<Color> {
     let s = s.trim();
-    // hex #RRGGBB
+    // hex #RRGGBB / #RGB / #RRGGBBAA / #RGBA
     if let Some(hex) = s.strip_prefix('#') {
         if hex.len() == 6 {
             let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
@@ -1446,9 +1494,180 @@ fn parse_color(s: &str) -> Option<Color> {
             let b = u8::from_str_radix(&hex[2..3], 16).ok()? * 17;
             return Some(Color::rgb(r, g, b));
         }
+        if hex.len() == 8 {
+            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+            let a = u8::from_str_radix(&hex[6..8], 16).ok()?;
+            return Some(Color { r, g, b, a });
+        }
+        if hex.len() == 4 {
+            let r = u8::from_str_radix(&hex[0..1], 16).ok()? * 17;
+            let g = u8::from_str_radix(&hex[1..2], 16).ok()? * 17;
+            let b = u8::from_str_radix(&hex[2..3], 16).ok()? * 17;
+            let a = u8::from_str_radix(&hex[3..4], 16).ok()? * 17;
+            return Some(Color { r, g, b, a });
+        }
     }
-    // Nombres comunes — lista mínima.
+    // rgb()/rgba() — coma legacy o whitespace moderno, con alpha por
+    // 4to arg o sufijo `/ alpha`.
+    if let Some(args) = strip_fn(s, "rgba").or_else(|| strip_fn(s, "rgb")) {
+        return parse_rgb_func(args);
+    }
+    if let Some(args) = strip_fn(s, "hsla").or_else(|| strip_fn(s, "hsl")) {
+        return parse_hsl_func(args);
+    }
+    // Nombres comunes.
     NAMED_COLORS.iter().find(|(n, _)| n.eq_ignore_ascii_case(s)).map(|(_, c)| *c)
+}
+
+/// Si `s` es de la forma `name(…)`, devuelve los argumentos crudos
+/// (sin paréntesis). Tolera espacios entre el nombre y `(`. Match del
+/// nombre case-insensitive.
+fn strip_fn<'a>(s: &'a str, name: &str) -> Option<&'a str> {
+    let s = s.trim();
+    if !s.get(..name.len())?.eq_ignore_ascii_case(name) {
+        return None;
+    }
+    let rest = s[name.len()..].trim_start();
+    let inner = rest.strip_prefix('(')?.strip_suffix(')')?;
+    Some(inner.trim())
+}
+
+/// Parsea los argumentos de `rgb(…)` o `rgba(…)`. Acepta sintaxis
+/// legacy (separador coma, alpha como 4to arg) y moderna (whitespace
+/// + `/ alpha`). Cada canal RGB tolera entero 0-255 o porcentaje. El
+/// alpha tolera fracción 0-1 o porcentaje.
+fn parse_rgb_func(args: &str) -> Option<Color> {
+    let (rgb, alpha) = split_color_args(args)?;
+    if rgb.len() != 3 {
+        return None;
+    }
+    let r = parse_color_chan(rgb[0])?;
+    let g = parse_color_chan(rgb[1])?;
+    let b = parse_color_chan(rgb[2])?;
+    let a = match alpha {
+        Some(a_str) => parse_alpha(a_str)?,
+        None => 255,
+    };
+    Some(Color { r, g, b, a })
+}
+
+/// Parsea `hsl(…)` / `hsla(…)`. H = grados (0-360, se wrappea), S/L =
+/// porcentaje (0-100). Alpha igual que rgba.
+fn parse_hsl_func(args: &str) -> Option<Color> {
+    let (parts, alpha) = split_color_args(args)?;
+    if parts.len() != 3 {
+        return None;
+    }
+    let h = parse_hue(parts[0])?;
+    let s = parse_pct(parts[1])?;
+    let l = parse_pct(parts[2])?;
+    let (r, g, b) = hsl_to_rgb(h, s, l);
+    let a = match alpha {
+        Some(a_str) => parse_alpha(a_str)?,
+        None => 255,
+    };
+    Some(Color { r, g, b, a })
+}
+
+/// Tokeniza los args de un color function. Devuelve `(canales, alpha?)`.
+/// Resuelve coma vs whitespace y la sintaxis moderna `r g b / a`.
+fn split_color_args(args: &str) -> Option<(Vec<&str>, Option<&str>)> {
+    let args = args.trim();
+    // Sintaxis moderna: `R G B / A`. La barra separa el alpha.
+    if let Some(slash) = args.find('/') {
+        let main = args[..slash].trim();
+        let alpha = args[slash + 1..].trim();
+        let parts: Vec<&str> = main.split_whitespace().collect();
+        if parts.is_empty() {
+            return None;
+        }
+        return Some((parts, Some(alpha)));
+    }
+    // Legacy: comas separan TODO (incluido el alpha).
+    if args.contains(',') {
+        let parts: Vec<&str> = args.split(',').map(|s| s.trim()).collect();
+        if parts.len() == 4 {
+            let (rgb, a) = parts.split_at(3);
+            return Some((rgb.to_vec(), Some(a[0])));
+        }
+        return Some((parts, None));
+    }
+    // Moderna sin alpha: solo whitespace.
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    Some((parts, None))
+}
+
+/// Canal RGB: entero 0-255 o porcentaje 0%-100%.
+fn parse_color_chan(s: &str) -> Option<u8> {
+    let s = s.trim();
+    if let Some(num) = s.strip_suffix('%') {
+        let pct: f32 = num.trim().parse().ok()?;
+        return Some((pct.clamp(0.0, 100.0) * 2.55).round() as u8);
+    }
+    s.parse::<i32>().ok().map(|n| n.clamp(0, 255) as u8)
+}
+
+/// Alpha: fracción 0.0-1.0 o porcentaje 0%-100%.
+fn parse_alpha(s: &str) -> Option<u8> {
+    let s = s.trim();
+    if let Some(num) = s.strip_suffix('%') {
+        let pct: f32 = num.trim().parse().ok()?;
+        return Some((pct.clamp(0.0, 100.0) * 2.55).round() as u8);
+    }
+    let f: f32 = s.parse().ok()?;
+    Some((f.clamp(0.0, 1.0) * 255.0).round() as u8)
+}
+
+/// Hue: `Ndeg` o número crudo (grados implícitos). `Nrad`/`Nturn` no
+/// soportados — caen a `None` y la función devuelve `None`.
+fn parse_hue(s: &str) -> Option<f32> {
+    let s = s.trim();
+    let s = s.strip_suffix("deg").unwrap_or(s);
+    s.trim().parse().ok()
+}
+
+/// Porcentaje 0%-100% → fracción 0.0-1.0.
+fn parse_pct(s: &str) -> Option<f32> {
+    let s = s.trim().strip_suffix('%')?;
+    let pct: f32 = s.trim().parse().ok()?;
+    Some((pct / 100.0).clamp(0.0, 1.0))
+}
+
+/// HSL→RGB estándar (CSS Color Module L3). h en grados, s/l en 0..1.
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let h_prime = h.rem_euclid(360.0) / 60.0;
+    let x = c * (1.0 - (h_prime.rem_euclid(2.0) - 1.0).abs());
+    let (r1, g1, b1) = match h_prime as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = l - c / 2.0;
+    let to_u8 = |v: f32| ((v + m) * 255.0).round().clamp(0.0, 255.0) as u8;
+    (to_u8(r1), to_u8(g1), to_u8(b1))
+}
+
+/// Parsea un value tipo `margin: <1..4 longitudes>`. Devuelve `None` si
+/// algún token no es longitud válida o si hay menos de 1 / más de 4.
+fn parse_sides(value: &str) -> Option<Sides<f32>> {
+    let parts: Vec<&str> = value.split_whitespace().collect();
+    let parsed: Vec<f32> = parts
+        .iter()
+        .map(|t| parse_length_px(t))
+        .collect::<Option<Vec<_>>>()?;
+    Some(match parsed.as_slice() {
+        [a] => Sides::all(*a),
+        [v, h] => Sides { top: *v, right: *h, bottom: *v, left: *h },
+        [t, h, b] => Sides { top: *t, right: *h, bottom: *b, left: *h },
+        [t, r, b, l] => Sides { top: *t, right: *r, bottom: *b, left: *l },
+        _ => return None,
+    })
 }
 
 const NAMED_COLORS: &[(&str, Color)] = &[
@@ -1458,7 +1677,33 @@ const NAMED_COLORS: &[(&str, Color)] = &[
     ("green", Color::rgb_const(0, 128, 0)),
     ("blue", Color::rgb_const(0, 0, 255)),
     ("gray", Color::rgb_const(128, 128, 128)),
+    ("grey", Color::rgb_const(128, 128, 128)),
     ("silver", Color::rgb_const(192, 192, 192)),
+    ("maroon", Color::rgb_const(128, 0, 0)),
+    ("yellow", Color::rgb_const(255, 255, 0)),
+    ("olive", Color::rgb_const(128, 128, 0)),
+    ("lime", Color::rgb_const(0, 255, 0)),
+    ("aqua", Color::rgb_const(0, 255, 255)),
+    ("cyan", Color::rgb_const(0, 255, 255)),
+    ("teal", Color::rgb_const(0, 128, 128)),
+    ("navy", Color::rgb_const(0, 0, 128)),
+    ("fuchsia", Color::rgb_const(255, 0, 255)),
+    ("magenta", Color::rgb_const(255, 0, 255)),
+    ("purple", Color::rgb_const(128, 0, 128)),
+    ("orange", Color::rgb_const(255, 165, 0)),
+    ("pink", Color::rgb_const(255, 192, 203)),
+    ("brown", Color::rgb_const(165, 42, 42)),
+    ("gold", Color::rgb_const(255, 215, 0)),
+    ("indigo", Color::rgb_const(75, 0, 130)),
+    ("violet", Color::rgb_const(238, 130, 238)),
+    ("crimson", Color::rgb_const(220, 20, 60)),
+    ("darkblue", Color::rgb_const(0, 0, 139)),
+    ("darkgreen", Color::rgb_const(0, 100, 0)),
+    ("darkred", Color::rgb_const(139, 0, 0)),
+    ("darkgray", Color::rgb_const(169, 169, 169)),
+    ("lightgray", Color::rgb_const(211, 211, 211)),
+    ("lightblue", Color::rgb_const(173, 216, 230)),
+    ("lightgreen", Color::rgb_const(144, 238, 144)),
     ("transparent", Color::TRANSPARENT),
 ];
 
@@ -1904,7 +2149,8 @@ mod tests {
         let p_style = eng.compute_with_parent(&p, Some(&div_style));
         assert_eq!(p_style.background, None);
         // margin del <p> es 12px (UA default), no 30px del padre.
-        assert!((p_style.margin - 12.0).abs() < 1e-6);
+        assert!((p_style.margin.top - 12.0).abs() < 1e-6);
+        assert!((p_style.margin.bottom - 12.0).abs() < 1e-6);
     }
 
     #[test]
@@ -2381,5 +2627,163 @@ mod tests {
         let a = dom.find("a").unwrap();
         let style = eng.compute(&a);
         assert_eq!(style.text_decoration, TextDecorationLine::None);
+    }
+
+    #[test]
+    fn parsea_rgb_legacy_y_moderno() {
+        // Legacy con comas.
+        assert_eq!(parse_color("rgb(255, 0, 0)"), Some(Color::rgb(255, 0, 0)));
+        // Moderno con whitespace.
+        assert_eq!(parse_color("rgb(0 128 255)"), Some(Color::rgb(0, 128, 255)));
+        // Porcentajes.
+        assert_eq!(parse_color("rgb(100%, 0%, 50%)"), Some(Color::rgb(255, 0, 128)));
+        // Sobre/sub-rango → clamp.
+        assert_eq!(parse_color("rgb(300, -10, 128)"), Some(Color::rgb(255, 0, 128)));
+    }
+
+    #[test]
+    fn parsea_rgba_y_slash_alpha() {
+        // Alpha como 4to arg (legacy).
+        assert_eq!(parse_color("rgba(255, 0, 0, 0.5)"), Some(Color { r: 255, g: 0, b: 0, a: 128 }));
+        // Alpha como porcentaje.
+        assert_eq!(parse_color("rgba(0, 0, 0, 50%)"), Some(Color { r: 0, g: 0, b: 0, a: 128 }));
+        // Sintaxis moderna `R G B / A`.
+        assert_eq!(parse_color("rgb(255 0 0 / 0.5)"), Some(Color { r: 255, g: 0, b: 0, a: 128 }));
+        // `rgba` también acepta moderno.
+        assert_eq!(parse_color("rgba(0 255 0 / 100%)"), Some(Color::rgb(0, 255, 0)));
+    }
+
+    #[test]
+    fn parsea_hsl_basico() {
+        // hsl(0, 100%, 50%) = rojo puro.
+        let red = parse_color("hsl(0, 100%, 50%)").unwrap();
+        assert_eq!(red, Color::rgb(255, 0, 0));
+        // hsl(120, 100%, 50%) = verde puro.
+        let green = parse_color("hsl(120, 100%, 50%)").unwrap();
+        assert_eq!(green, Color::rgb(0, 255, 0));
+        // hsl(240, 100%, 50%) = azul puro.
+        let blue = parse_color("hsl(240, 100%, 50%)").unwrap();
+        assert_eq!(blue, Color::rgb(0, 0, 255));
+        // hsl(0, 0%, 50%) = gris medio.
+        let gray = parse_color("hsl(0, 0%, 50%)").unwrap();
+        assert_eq!(gray, Color::rgb(128, 128, 128));
+    }
+
+    #[test]
+    fn parsea_hsla_con_alpha() {
+        let c = parse_color("hsla(0, 100%, 50%, 0.5)").unwrap();
+        assert_eq!(c, Color { r: 255, g: 0, b: 0, a: 128 });
+        // Moderno con slash.
+        let c2 = parse_color("hsl(120 100% 50% / 0.25)").unwrap();
+        assert_eq!(c2, Color { r: 0, g: 255, b: 0, a: 64 });
+    }
+
+    #[test]
+    fn parsea_hex_8_y_4_chars() {
+        // #RRGGBBAA.
+        assert_eq!(parse_color("#ff000080"), Some(Color { r: 255, g: 0, b: 0, a: 128 }));
+        // #RGBA expande cada nibble * 17.
+        assert_eq!(parse_color("#f00f"), Some(Color { r: 255, g: 0, b: 0, a: 255 }));
+        assert_eq!(parse_color("#0008"), Some(Color { r: 0, g: 0, b: 0, a: 136 }));
+    }
+
+    #[test]
+    fn named_colors_extendidos() {
+        assert_eq!(parse_color("orange"), Some(Color::rgb(255, 165, 0)));
+        assert_eq!(parse_color("navy"), Some(Color::rgb(0, 0, 128)));
+        assert_eq!(parse_color("teal"), Some(Color::rgb(0, 128, 128)));
+        assert_eq!(parse_color("CRIMSON"), Some(Color::rgb(220, 20, 60))); // case-insensitive
+        assert_eq!(parse_color("lightblue"), Some(Color::rgb(173, 216, 230)));
+        // Alias.
+        assert_eq!(parse_color("grey"), parse_color("gray"));
+        assert_eq!(parse_color("cyan"), parse_color("aqua"));
+        assert_eq!(parse_color("magenta"), parse_color("fuchsia"));
+    }
+
+    #[test]
+    fn parsea_sides_shorthand_1_2_3_4() {
+        assert_eq!(parse_sides("10px"), Some(Sides::all(10.0)));
+        assert_eq!(
+            parse_sides("10px 20px"),
+            Some(Sides { top: 10.0, right: 20.0, bottom: 10.0, left: 20.0 }),
+        );
+        assert_eq!(
+            parse_sides("10px 20px 30px"),
+            Some(Sides { top: 10.0, right: 20.0, bottom: 30.0, left: 20.0 }),
+        );
+        assert_eq!(
+            parse_sides("10px 20px 30px 40px"),
+            Some(Sides { top: 10.0, right: 20.0, bottom: 30.0, left: 40.0 }),
+        );
+        // 5 valores → inválido.
+        assert_eq!(parse_sides("1px 2px 3px 4px 5px"), None);
+        // Token no-longitud → inválido.
+        assert_eq!(parse_sides("10px bad 20px"), None);
+    }
+
+    #[test]
+    fn margin_shorthand_aplica_4_lados() {
+        let html = r#"<html><head><style>
+            div { margin: 5px 10px 15px 20px }
+        </style></head><body><div>x</div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let d = dom.find("div").unwrap();
+        let s = eng.compute(&d);
+        assert_eq!(s.margin.top, 5.0);
+        assert_eq!(s.margin.right, 10.0);
+        assert_eq!(s.margin.bottom, 15.0);
+        assert_eq!(s.margin.left, 20.0);
+    }
+
+    #[test]
+    fn padding_shorthand_2_valores_eje_vertical_horizontal() {
+        let html = r#"<html><head><style>
+            div { padding: 8px 16px }
+        </style></head><body><div>x</div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let d = dom.find("div").unwrap();
+        let s = eng.compute(&d);
+        assert_eq!(s.padding.top, 8.0);
+        assert_eq!(s.padding.bottom, 8.0);
+        assert_eq!(s.padding.left, 16.0);
+        assert_eq!(s.padding.right, 16.0);
+    }
+
+    #[test]
+    fn margin_individual_pisa_shorthand_por_cascada() {
+        // El shorthand setea todo a 10px, después `margin-top: 50px` lo pisa.
+        let html = r#"<html><head><style>
+            div { margin: 10px; margin-top: 50px }
+        </style></head><body><div>x</div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let d = dom.find("div").unwrap();
+        let s = eng.compute(&d);
+        assert_eq!(s.margin.top, 50.0);
+        assert_eq!(s.margin.right, 10.0);
+        assert_eq!(s.margin.bottom, 10.0);
+        assert_eq!(s.margin.left, 10.0);
+    }
+
+    #[test]
+    fn padding_individual_4_lados() {
+        let html = r#"<html><head><style>
+            div {
+                padding-top: 1px;
+                padding-right: 2px;
+                padding-bottom: 3px;
+                padding-left: 4px;
+            }
+        </style></head><body><div>x</div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let d = dom.find("div").unwrap();
+        let s = eng.compute(&d);
+        assert_eq!(s.padding.top, 1.0);
+        assert_eq!(s.padding.right, 2.0);
+        assert_eq!(s.padding.bottom, 3.0);
+        assert_eq!(s.padding.left, 4.0);
     }
 }

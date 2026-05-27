@@ -12,7 +12,8 @@ use markup5ever_rcdom::{Handle, NodeData};
 
 use crate::dom::{self, DomTree};
 use crate::style::{
-    BoxShadow, ComputedStyle, LengthVal, ListStyleType, StyleEngine, TextAlign, TextDecorationLine,
+    BoxShadow, ComputedStyle, LengthVal, ListStyleType, Sides, StyleEngine, TextAlign,
+    TextDecorationLine,
 };
 
 /// Color RGBA, 8 bits por canal. Suficiente para CSS color values.
@@ -57,8 +58,8 @@ pub struct BoxNode {
     /// como normal y `>= 600` como bold (Llimphi text aún no expone
     /// weight axis arbitrario).
     pub font_weight: u16,
-    pub margin: f32,
-    pub padding: f32,
+    pub margin: Sides<f32>,
+    pub padding: Sides<f32>,
     /// Ancho explícito CSS (`auto` por defecto).
     pub width: LengthVal,
     /// Tope superior del ancho.
@@ -157,8 +158,8 @@ fn empty_root() -> BoxNode {
         color: Color::BLACK,
         font_size: 16.0,
         font_weight: 400,
-        margin: 0.0,
-        padding: 0.0,
+        margin: Sides::all(0.0),
+        padding: Sides::all(0.0),
         width: LengthVal::Auto,
         max_width: LengthVal::Auto,
         text_align: TextAlign::Left,
@@ -301,8 +302,8 @@ fn build_node(
                 color: p.color,
                 font_size: p.font_size,
                 font_weight: p.font_weight,
-                margin: 0.0,
-                padding: 0.0,
+                margin: Sides::all(0.0),
+                padding: Sides::all(0.0),
                 width: LengthVal::Auto,
                 max_width: LengthVal::Auto,
                 text_align: p.text_align,
@@ -333,8 +334,8 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         color: style.color,
         font_size: style.font_size,
         font_weight: style.font_weight,
-        margin: 0.0,
-        padding: 0.0,
+        margin: Sides::all(0.0),
+        padding: Sides::all(0.0),
         width: LengthVal::Auto,
         max_width: LengthVal::Auto,
         text_align: style.text_align,

@@ -910,16 +910,16 @@ fn box_style(b: &BoxNode) -> Style {
         size: Size { width, height },
         max_size,
         margin: Rect {
-            left: length(b.margin),
-            right: length(b.margin * 0.25),
-            top: length(b.margin * 0.25),
-            bottom: length(b.margin * 0.25),
+            left: length(b.margin.left),
+            right: length(b.margin.right),
+            top: length(b.margin.top),
+            bottom: length(b.margin.bottom),
         },
         padding: Rect {
-            left: length(b.padding),
-            right: length(b.padding),
-            top: length(b.padding * 0.5),
-            bottom: length(b.padding * 0.5),
+            left: length(b.padding.left),
+            right: length(b.padding.right),
+            top: length(b.padding.top),
+            bottom: length(b.padding.bottom),
         },
         ..Default::default()
     }
