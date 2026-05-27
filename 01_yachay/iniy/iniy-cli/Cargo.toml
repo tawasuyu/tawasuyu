@@ -17,8 +17,10 @@ iniy-core = { workspace = true }
 iniy-ingest = { workspace = true }
 iniy-extract = { workspace = true }
 iniy-nli = { workspace = true }
+iniy-nli-llm = { workspace = true }
 iniy-graph = { workspace = true }
 iniy-store = { workspace = true }
+pluma-llm = { path = "../../../00_unanchay/pluma/pluma-llm" }
 clap = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }

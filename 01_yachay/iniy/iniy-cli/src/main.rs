@@ -19,6 +19,7 @@ use iniy_core::{Asercion, DocId, Implicacion, Opinion};
 use iniy_extract::{Extractor, ExtractorHeuristico};
 use iniy_graph::GrafoCreencias;
 use iniy_nli::{relacion_lexica, MotorNli, MotorNliLexico};
+use iniy_nli_llm::MotorNliLlm;
 use iniy_store::AsercionAtribuida;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -34,6 +35,12 @@ struct Cli {
     /// Ruta al archivo SQLite (default: ./iniy.db)
     #[arg(long, default_value = "iniy.db", global = true)]
     db: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum BackendNli {
+    Lexico,
+    Llm,
 }
 
 #[derive(Subcommand)]
@@ -65,6 +72,11 @@ enum Cmd {
         doc_id: String,
         #[arg(long, default_value_t = 0.30)]
         umbral: f32,
+        /// Backend NLI: `lexico` (default, instantáneo, sin red) o `llm`
+        /// (vía `pluma_llm::from_env`; usa ANTHROPIC_API_KEY /
+        /// GEMINI_API_KEY / DEEPSEEK_API_KEY o cae a Mock).
+        #[arg(long, default_value = "lexico")]
+        backend: BackendNli,
     },
     /// Imprime las N aserciones más contradictorias entre sí.
     Contradictions {
@@ -185,18 +197,32 @@ async fn main() -> Result<()> {
                 println!("  … (+{} más, persistidas)", total.len() - 8);
             }
         }
-        Cmd::Nli { doc_id, umbral } => {
+        Cmd::Nli { doc_id, umbral, backend } => {
             let doc_id = parse_doc_id(&doc_id)?;
             let aserciones = store.cargar_aserciones(doc_id)?;
             if aserciones.len() < 2 {
                 anyhow::bail!("se necesitan ≥2 aserciones (corre `iniy extract` primero)");
             }
-            let motor = MotorNliLexico { umbral_overlap: umbral };
+            let motor: Box<dyn MotorNli> = match backend {
+                BackendNli::Lexico => Box::new(MotorNliLexico { umbral_overlap: umbral }),
+                BackendNli::Llm => {
+                    let chat = pluma_llm::from_env()
+                        .map_err(|e| anyhow::anyhow!("no pude inicializar LLM: {e}"))?;
+                    println!("backend LLM: {}", chat.model_id());
+                    Box::new(MotorNliLlm::nuevo(chat))
+                }
+            };
+            let total = aserciones.len() * (aserciones.len() - 1) / 2;
             let mut imps = Vec::new();
             let mut no_neutrales = 0usize;
+            let mut hechos = 0usize;
             for i in 0..aserciones.len() {
                 for j in (i + 1)..aserciones.len() {
                     let rel = motor.evaluar(&aserciones[i], &aserciones[j]).await?;
+                    hechos += 1;
+                    if matches!(backend, BackendNli::Llm) && hechos % 10 == 0 {
+                        eprintln!("  ... {hechos}/{total}");
+                    }
                     if rel.contradiction > 0.0 || rel.entailment > 0.0 {
                         no_neutrales += 1;
                     }

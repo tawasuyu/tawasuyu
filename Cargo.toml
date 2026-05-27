@@ -117,6 +117,7 @@ members = [
     "01_yachay/iniy/iniy-graph",
     "01_yachay/iniy/iniy-ingest",
     "01_yachay/iniy/iniy-nli",
+    "01_yachay/iniy/iniy-nli-llm",
     "01_yachay/iniy/iniy-store",
     "01_yachay/nakui/nakui-core",
     "01_yachay/nakui/nakui-explorer-llimphi",
@@ -537,6 +538,7 @@ iniy-core = { path = "01_yachay/iniy/iniy-core" }
 iniy-ingest = { path = "01_yachay/iniy/iniy-ingest" }
 iniy-extract = { path = "01_yachay/iniy/iniy-extract" }
 iniy-nli = { path = "01_yachay/iniy/iniy-nli" }
+iniy-nli-llm = { path = "01_yachay/iniy/iniy-nli-llm" }
 iniy-graph = { path = "01_yachay/iniy/iniy-graph" }
 iniy-store = { path = "01_yachay/iniy/iniy-store" }
 
