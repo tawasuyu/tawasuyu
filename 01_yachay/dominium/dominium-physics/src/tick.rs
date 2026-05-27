@@ -3,7 +3,7 @@
 //! Orden fijo: difusión/entropía → evaluación de transiciones → acciones
 //! de los agentes → envejecimiento y cosecha de muertos.
 
-use crate::conceptos::{apply_conceptos, apply_hacks};
+use crate::conceptos::{apply_conceptos, apply_hacks, apply_persuasion};
 use crate::diffuse::{diffuse_with, regrow_materia};
 use crate::social::apply_social_contagion;
 use dominium_core::{select_action_argmax, ActionPolicy, SimParams, World};
@@ -116,12 +116,19 @@ pub fn tick(world: &mut World, p: &SimParams) {
     // 2b. Regrowth logístico de materia — cierre termodinámico que evita
     //     la extinción. Sub-fase del paso 2, no agrega fase nueva al §1.5.
     regrow_materia(&mut world.grid, p.regrowth_rate, p.carrying_capacity);
-    // 2c. Contagio social (Fase B, opt-in vía `social_radius/contagion_rate`).
+    // 2c. Persuasión institucional (Fase B.2, opt-in vía `Concepto::persuasion`).
+    //     Empuja psi de agentes dentro del radio de cada Concepto persuasor
+    //     hacia su `target_psi`, con falloff lineal. Va ANTES del contagio
+    //     social: las instituciones imprimen primero, después los pares
+    //     imitan o filtran (homofilia).
+    apply_persuasion(world);
+    // 2d. Contagio social (Fase B, opt-in vía `social_radius/contagion_rate`).
     //     Cada agente acerca su `vector_psi` al promedio del psi de sus
-    //     vecinos en radio R. Va antes de psi_policy para que la
-    //     reelección de acción vea el psi ya contagiado.
+    //     vecinos en radio R, opcionalmente filtrando por homofilia. Va
+    //     antes de psi_policy para que la reelección de acción vea el psi
+    //     ya influenciado por instituciones + pares.
     apply_social_contagion(world, p);
-    // 2d. Política psicológica de acción (opt-in vía `ActionPolicy::PsiArgmax`).
+    // 2e. Política psicológica de acción (opt-in vía `ActionPolicy::PsiArgmax`).
     //     Reelige `accion` por argmax(W · psi) para lemmings libres. Sub-fase
     //     de la 2 — corre antes de las transiciones y los hacks, así la
     //     desesperación y la captura siempre ganan a la psicología tranquila.

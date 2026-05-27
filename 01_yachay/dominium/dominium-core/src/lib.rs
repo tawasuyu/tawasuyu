@@ -26,7 +26,7 @@ pub mod params;
 pub mod psi_metrics;
 pub mod world;
 
-pub use conceptos::{BehaviorHack, Concepto, Conceptos, LayerMods, Trigger};
+pub use conceptos::{BehaviorHack, Concepto, Conceptos, LayerMods, Persuasion, Trigger};
 pub use epoch::Epoch;
 pub use grid::Grid;
 pub use lemmings::Lemmings;

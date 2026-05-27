@@ -108,6 +108,11 @@ enum Cmd {
         /// Rango útil 0.01..0.20.
         #[arg(long, default_value_t = 0.0)]
         contagion_rate: f32,
+        /// Umbral de homofilia (Fase B.2). `0.0` = contagio universal.
+        /// Con valor > 0, sólo influyen vecinos con distancia psi <
+        /// umbral. Rango útil 0.3..1.0 para producir tribus aisladas.
+        #[arg(long, default_value_t = 0.0)]
+        homophily_threshold: f32,
     },
 }
 
@@ -138,6 +143,7 @@ fn main() -> Result<()> {
             policy_period,
             social_radius,
             contagion_rate,
+            homophily_threshold,
         } => run_sim(
             seed,
             ticks,
@@ -152,6 +158,7 @@ fn main() -> Result<()> {
             policy_period,
             social_radius,
             contagion_rate,
+            homophily_threshold,
         ),
         Cmd::Repl { seed, grid, lemmings, conceptos } => {
             repl(seed, grid, lemmings, conceptos.as_deref())
@@ -173,6 +180,7 @@ fn run_sim(
     policy_period: u32,
     social_radius: f32,
     contagion_rate: f32,
+    homophily_threshold: f32,
 ) -> Result<()> {
     let mut world = build_world(seed, grid, lemmings);
     if let Some(path) = conceptos_path {
@@ -190,6 +198,7 @@ fn run_sim(
     params.policy_reeval_period = policy_period;
     params.social_radius = social_radius;
     params.contagion_rate = contagion_rate;
+    params.homophily_threshold = homophily_threshold;
 
     let mut writer: Option<BufWriter<File>> = match csv_path {
         Some(p) => Some(BufWriter::new(
@@ -544,6 +553,7 @@ fn parse_add<'a>(mut parts: impl Iterator<Item = &'a str>) -> Result<Concepto> {
         radius: r,
         mods: LayerMods::default(),
         hack,
+        persuasion: None,
     })
 }
 

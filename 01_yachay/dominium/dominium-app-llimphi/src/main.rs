@@ -176,6 +176,7 @@ fn spawn_concepto_at(m: &mut Model, x: f32, y: f32) {
         radius: 4.0,
         mods: LayerMods::default(),
         hack: None,
+        persuasion: None,
     };
     let i = m.world.conceptos.add(new);
     m.selected = Some(i);

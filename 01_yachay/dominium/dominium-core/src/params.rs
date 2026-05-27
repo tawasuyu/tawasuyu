@@ -215,6 +215,19 @@ pub struct SimParams {
     /// mismo psi), valores chicos preservan diversidad.
     #[serde(default)]
     pub contagion_rate: f32,
+    /// Umbral de homofilia (Fase B.2): un vecino dentro del `social_radius`
+    /// sólo influye al agente si su distancia psi euclidiana es menor a
+    /// este umbral. Mismo psi → siempre influye; psi muy distinto → no
+    /// influye en absoluto. Es el "sólo escucho a los míos" canónico de la
+    /// psicología social.
+    ///
+    /// `0.0` (default) = sin filtro de homofilia → contagio universal
+    /// (motor B.1: produce homogeneización con tasas altas). Rango útil
+    /// 0.3..1.0 — con threshold chico emergen **tribus aisladas** y la
+    /// polarización **sube** en vez de bajar; con threshold grande, recae
+    /// al comportamiento de B.1.
+    #[serde(default)]
+    pub homophily_threshold: f32,
 }
 
 /// Default de `SimParams::action_weights` — fila por acción, columna por
@@ -344,6 +357,9 @@ impl Default for SimParams {
             // histórico no recorre vecinos sociales, mantiene perf O(N).
             social_radius: 0.0,
             contagion_rate: 0.0,
+            // Fase B.2: sin filtro de homofilia → contagio universal cuando
+            // se enciende (semántica de B.1).
+            homophily_threshold: 0.0,
         }
     }
 }

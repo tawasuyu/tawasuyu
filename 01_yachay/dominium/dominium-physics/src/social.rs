@@ -40,14 +40,20 @@ pub fn apply_social_contagion(world: &mut World, p: &SimParams) {
         return;
     }
     let r2 = p.social_radius * p.social_radius;
+    // Si `homophily_threshold` > 0, comparamos contra su cuadrado para
+    // ahorrar sqrt en el loop interior (distancia euclidiana al cuadrado).
+    let use_homophily = p.homophily_threshold > 0.0;
+    let homo2 = p.homophily_threshold * p.homophily_threshold;
     // Snapshot del psi "antes" — sin esto el contagio sería asimétrico y
-    // dependiente del orden de iteración.
+    // dependiente del orden de iteración. También sirve como base contra
+    // la cual se evalúa el filtro de homofilia.
     let psi_snapshot: Vec<[f32; 4]> = world.lemmings.vector_psi.clone();
-    // Para no asignar dentro del loop: buffer de actualizaciones.
+    // Buffer de actualizaciones — escritura única al final.
     let mut new_psi: Vec<[f32; 4]> = psi_snapshot.clone();
     for i in 0..n {
         let xi = world.lemmings.pos_x[i];
         let yi = world.lemmings.pos_y[i];
+        let psi_i = psi_snapshot[i];
         let mut sum = [0.0f64; 4];
         let mut count: u32 = 0;
         for j in 0..n {
@@ -60,6 +66,18 @@ pub fn apply_social_contagion(world: &mut World, p: &SimParams) {
                 continue;
             }
             let psi_j = psi_snapshot[j];
+            if use_homophily {
+                // Distancia psi² — sólo nos cuenta si está "psicológicamente
+                // cerca" del agente i.
+                let d0 = psi_j[0] - psi_i[0];
+                let d1 = psi_j[1] - psi_i[1];
+                let d2 = psi_j[2] - psi_i[2];
+                let d3 = psi_j[3] - psi_i[3];
+                let dpsi2 = d0 * d0 + d1 * d1 + d2 * d2 + d3 * d3;
+                if dpsi2 > homo2 {
+                    continue;
+                }
+            }
             for k in 0..4 {
                 sum[k] += psi_j[k] as f64;
             }
@@ -76,7 +94,6 @@ pub fn apply_social_contagion(world: &mut World, p: &SimParams) {
             new_psi[i][k] = (cur + rate * (mean - cur)) as f32;
         }
     }
-    // Commit: una sola escritura al world.lemmings.vector_psi.
     world.lemmings.vector_psi = new_psi;
 }
 
@@ -210,6 +227,83 @@ mod tests {
                 (mean_after_rev[k] - mean_orig[k]).abs() < 1e-4,
                 "comp {k}: media drift (rev) {} vs orig {}",
                 mean_after_rev[k], mean_orig[k]
+            );
+        }
+    }
+
+    #[test]
+    fn homophily_isolates_two_distinct_tribes() {
+        // Dos grupos físicamente cercanos (radio social los cubre a todos)
+        // pero psicológicamente lejanos. Con homophily_threshold pequeño,
+        // cada tribu sólo se influye a sí misma — NO converge al promedio
+        // global; cada tribu mantiene su centroide y la varianza entre
+        // tribus se preserva.
+        let mut w = World::new(40, 40);
+        // Tribu A (psi=[1,0,0,0]) en posiciones cercanas.
+        for k in 0..4 {
+            w.lemmings
+                .spawn(10.0 + k as f32 * 0.3, 10.0, 30.0, [1.0, 0.0, 0.0, 0.0]);
+        }
+        // Tribu B (psi=[0,0,0,1]) en posiciones también cercanas a A.
+        for k in 0..4 {
+            w.lemmings
+                .spawn(12.0 + k as f32 * 0.3, 10.0, 30.0, [0.0, 0.0, 0.0, 1.0]);
+        }
+        let mut p = SimParams::default();
+        p.social_radius = 10.0; // todos se ven entre sí
+        p.contagion_rate = 0.30;
+        // Distancia psi entre tribus = sqrt(1²+1²) ≈ 1.41. Threshold 0.5
+        // → A ignora a B y viceversa.
+        p.homophily_threshold = 0.5;
+        for _ in 0..100 {
+            apply_social_contagion(&mut w, &p);
+        }
+        // Tras 100 pasos: la tribu A debe mantenerse cerca de [1,0,0,0],
+        // la tribu B cerca de [0,0,0,1] — NO al promedio global [0.5,0,0,0.5].
+        for i in 0..4 {
+            let p_a = w.lemmings.vector_psi[i];
+            assert!(
+                (p_a[0] - 1.0).abs() < 0.01 && p_a[3].abs() < 0.01,
+                "tribu A drift: {:?}",
+                p_a
+            );
+        }
+        for i in 4..8 {
+            let p_b = w.lemmings.vector_psi[i];
+            assert!(
+                p_b[0].abs() < 0.01 && (p_b[3] - 1.0).abs() < 0.01,
+                "tribu B drift: {:?}",
+                p_b
+            );
+        }
+    }
+
+    #[test]
+    fn homophily_zero_falls_back_to_universal_contagion() {
+        // homophily_threshold = 0.0 (default) → comportamiento de B.1:
+        // las dos tribus convergen al promedio global.
+        let mut w = World::new(40, 40);
+        for k in 0..4 {
+            w.lemmings
+                .spawn(10.0 + k as f32 * 0.3, 10.0, 30.0, [1.0, 0.0, 0.0, 0.0]);
+        }
+        for k in 0..4 {
+            w.lemmings
+                .spawn(12.0 + k as f32 * 0.3, 10.0, 30.0, [0.0, 0.0, 0.0, 1.0]);
+        }
+        let mut p = SimParams::default();
+        p.social_radius = 10.0;
+        p.contagion_rate = 0.30;
+        p.homophily_threshold = 0.0; // explícito
+        for _ in 0..100 {
+            apply_social_contagion(&mut w, &p);
+        }
+        // Convergen al promedio [0.5, 0, 0, 0.5].
+        for psi in &w.lemmings.vector_psi {
+            assert!(
+                (psi[0] - 0.5).abs() < 0.01 && (psi[3] - 0.5).abs() < 0.01,
+                "no convergió al promedio: {:?}",
+                psi
             );
         }
     }

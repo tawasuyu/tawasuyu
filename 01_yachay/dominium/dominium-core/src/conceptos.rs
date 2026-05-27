@@ -62,6 +62,32 @@ pub struct BehaviorHack {
     pub duration: u32,
 }
 
+/// Influencia psicológica de un Concepto — Fase B.2.
+///
+/// A diferencia del `BehaviorHack` (que CONGELA acción por N ticks, una
+/// metáfora de coerción/captura), la `Persuasion` empuja el `vector_psi`
+/// del agente hacia un objetivo cada tick mientras esté dentro del radio,
+/// sin tocar su acción. Es la mecánica canónica de **persuasión** /
+/// **propaganda**: el agente sigue siendo libre de actuar, pero su
+/// psicología deriva.
+///
+/// El falloff es lineal (1 en el centro, 0 en el borde) — la mismo que
+/// usa `LayerMods` sobre la grilla. Así un agente que entra y sale del
+/// radio acumula influencia proporcional al tiempo expuesto y a su
+/// proximidad al centro.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Persuasion {
+    /// Objetivo psicológico hacia el que se empuja el `vector_psi` del
+    /// agente. Convención `[ORDEN, MIEDO, CURIOSIDAD, CORRUPTIBILIDAD]`.
+    /// Ej. una "iglesia ortodoxa" usaría `[1.0, 0.5, 0.0, 0.0]`.
+    pub target_psi: [f32; 4],
+    /// Tasa de convergencia por tick a falloff 1.0 (centro del radio).
+    /// `psi_nuevo = psi + rate · falloff · (target − psi)`. Rango útil
+    /// 0.01..0.10. Valores grandes producen "lavado de cerebro" en pocos
+    /// ticks; chicos generan deriva lenta.
+    pub rate: f32,
+}
+
 /// Un emisor de campo metaprogramable.
 ///
 /// `sprite_id` es opaco al motor: solo viaja del JSON hasta el backend
@@ -83,6 +109,13 @@ pub struct Concepto {
     /// Toma de control opcional. `None` = solo emite campo.
     #[serde(default)]
     pub hack: Option<BehaviorHack>,
+    /// Persuasión psicológica opcional (Fase B.2). `None` = el Concepto
+    /// sólo emite campo / hackea acción. Cuando está presente, ADEMÁS
+    /// empuja el `vector_psi` de los lemmings dentro del radio cada tick.
+    /// Es ortogonal al `hack`: un Concepto puede coercer una acción Y
+    /// persuadir psi simultáneamente.
+    #[serde(default)]
+    pub persuasion: Option<Persuasion>,
 }
 
 /// Colección lineal. Sin ordenamiento, sin índice espacial: la sim es
@@ -137,6 +170,7 @@ mod tests {
             radius: 5.0,
             mods: LayerMods::default(),
             hack: None,
+            persuasion: None,
         });
         let _b = cs.add(Concepto {
             id: "b".into(),
@@ -146,6 +180,7 @@ mod tests {
             radius: 5.0,
             mods: LayerMods::default(),
             hack: None,
+            persuasion: None,
         });
         assert_eq!((a, cs.len()), (0, 2));
         cs.remove(a);
@@ -167,6 +202,7 @@ mod tests {
                 forced_action: 2,
                 duration: 50,
             }),
+            persuasion: None,
         };
         let s = serde_json::to_string(&c).expect("serializa");
         let back: Concepto = serde_json::from_str(&s).expect("deserializa");
@@ -184,6 +220,7 @@ mod tests {
             radius: 5.0,
             mods: LayerMods { psique: 0.5, ..Default::default() },
             hack: None,
+            persuasion: None,
         });
         cs.add(Concepto {
             id: "banco".into(),
@@ -193,6 +230,7 @@ mod tests {
             radius: 4.0,
             mods: LayerMods { oro: -0.2, poder: 0.4, ..Default::default() },
             hack: None,
+            persuasion: None,
         });
         let s = serde_json::to_string(&cs).expect("serializa");
         let back: Conceptos = serde_json::from_str(&s).expect("deserializa");

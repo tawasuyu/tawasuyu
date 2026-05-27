@@ -11,6 +11,43 @@
 
 use dominium_core::{Trigger, World};
 
+/// Empuja el `vector_psi` de los lemmings dentro del radio de cualquier
+/// Concepto con `persuasion: Some(_)` hacia su `target_psi`, con tasa
+/// modulada por el falloff lineal (1 en el centro, 0 en el borde).
+///
+/// Esta fase NO bloquea acción (no toca `hack_lock` ni `accion`) — la
+/// persuasión es ortogonal al hack coercitivo. Un Concepto puede ejercer
+/// ambas: persuadir y, si entra el trigger del hack, capturar.
+///
+/// Determinismo: iteración lineal `(concepto, agente)` por índices,
+/// `libm::sqrtf` para el falloff (bit-exacto cross-platform).
+pub fn apply_persuasion(world: &mut World) {
+    for c in &world.conceptos.items {
+        let Some(per) = &c.persuasion else { continue };
+        if c.radius <= 0.0 || per.rate <= 0.0 {
+            continue;
+        }
+        let r2 = c.radius * c.radius;
+        for i in 0..world.lemmings.len() {
+            let dx = world.lemmings.pos_x[i] - c.pos_x;
+            let dy = world.lemmings.pos_y[i] - c.pos_y;
+            let d2 = dx * dx + dy * dy;
+            if d2 > r2 {
+                continue;
+            }
+            // Mismo falloff que `apply_conceptos`: lineal sobre la
+            // distancia normalizada.
+            let falloff = 1.0 - libm::sqrtf(d2 / r2);
+            let pull = per.rate * falloff;
+            for k in 0..4 {
+                let cur = world.lemmings.vector_psi[i][k];
+                let target = per.target_psi[k];
+                world.lemmings.vector_psi[i][k] = cur + pull * (target - cur);
+            }
+        }
+    }
+}
+
 /// Suma los modificadores de cada concepto a las celdas dentro de su radio,
 /// con falloff lineal (1 en el centro, 0 en el borde).
 ///
@@ -113,6 +150,7 @@ mod tests {
             radius: r,
             mods,
             hack: None,
+            persuasion: None,
         }
     }
 
@@ -198,6 +236,7 @@ mod tests {
                 forced_action: 2, // Sincronizar
                 duration: 10,
             }),
+            persuasion: None,
         });
         apply_hacks(&mut w);
         assert_eq!(w.lemmings.accion[0], 2);
@@ -221,6 +260,7 @@ mod tests {
                 forced_action: 2,
                 duration: 5,
             }),
+            persuasion: None,
         });
         apply_hacks(&mut w);
         assert_eq!(w.lemmings.accion[0], 0); // sigue moviéndose
@@ -246,11 +286,84 @@ mod tests {
                 forced_action: 5,
                 duration: 10,
             }),
+            persuasion: None,
         });
         apply_hacks(&mut w);
         // El lock baja a 2, la acción se mantiene en 2 (no se re-evaluó).
         assert_eq!(w.lemmings.hack_lock[0], 2);
         assert_eq!(w.lemmings.accion[0], 2);
+    }
+
+    #[test]
+    fn persuasion_arrastra_psi_hacia_target_y_no_toca_accion() {
+        // Iglesia ortodoxa en (10, 10), radio 5, persuade psi → [1,0.5,0,0]
+        // con rate=0.20. Lemming en el centro con psi=[0,0,0,0] hace accion=0.
+        let mut w = empty_world(20, 20);
+        w.lemmings.spawn(10.0, 10.0, 30.0, [0.0, 0.0, 0.0, 0.0]);
+        w.lemmings.accion[0] = 0; // Mover
+        w.conceptos.add(Concepto {
+            id: "iglesia-ortodoxa".into(),
+            sprite_id: 0,
+            pos_x: 10.0,
+            pos_y: 10.0,
+            radius: 5.0,
+            mods: LayerMods::default(),
+            hack: None,
+            persuasion: Some(dominium_core::Persuasion {
+                target_psi: [1.0, 0.5, 0.0, 0.0],
+                rate: 0.20,
+            }),
+        });
+        apply_persuasion(&mut w);
+        // En el centro, falloff = 1.0. Pull efectivo = 0.20.
+        // psi_nuevo = 0 + 0.20 · (target − 0) = target · 0.20.
+        let psi = w.lemmings.vector_psi[0];
+        assert!((psi[0] - 0.20).abs() < 1e-5, "psi[0]: {}", psi[0]);
+        assert!((psi[1] - 0.10).abs() < 1e-5, "psi[1]: {}", psi[1]);
+        // Y la acción NO cambia (la persuasión es ortogonal al hack).
+        assert_eq!(w.lemmings.accion[0], 0);
+        assert_eq!(w.lemmings.hack_lock[0], 0);
+    }
+
+    #[test]
+    fn persuasion_falloff_lineal_en_el_borde() {
+        // Lemming al borde del radio: falloff = 0 → no se modifica psi.
+        let mut w = empty_world(20, 20);
+        w.lemmings.spawn(15.0, 10.0, 30.0, [0.0; 4]); // a distancia 5 del concepto
+        w.conceptos.add(Concepto {
+            id: "fuente-de-virtud".into(),
+            sprite_id: 0,
+            pos_x: 10.0,
+            pos_y: 10.0,
+            radius: 5.0,
+            mods: LayerMods::default(),
+            hack: None,
+            persuasion: Some(dominium_core::Persuasion {
+                target_psi: [1.0; 4],
+                rate: 1.0, // máxima tasa: si influyera nada, no es por rate chica
+            }),
+        });
+        apply_persuasion(&mut w);
+        assert_eq!(w.lemmings.vector_psi[0], [0.0; 4]);
+    }
+
+    #[test]
+    fn persuasion_none_no_cambia_psi() {
+        let mut w = empty_world(20, 20);
+        w.lemmings.spawn(10.0, 10.0, 30.0, [0.3, 0.4, 0.5, 0.6]);
+        w.conceptos.add(Concepto {
+            id: "solo-emite-campo".into(),
+            sprite_id: 0,
+            pos_x: 10.0,
+            pos_y: 10.0,
+            radius: 5.0,
+            mods: LayerMods { materia: 0.5, ..Default::default() },
+            hack: None,
+            persuasion: None,
+        });
+        let psi_pre = w.lemmings.vector_psi[0];
+        apply_persuasion(&mut w);
+        assert_eq!(w.lemmings.vector_psi[0], psi_pre);
     }
 
     #[test]
@@ -269,6 +382,7 @@ mod tests {
                 forced_action: action,
                 duration: 7,
             }),
+            persuasion: None,
         };
         w.conceptos.add(mk("a", 3));
         w.conceptos.add(mk("b", 5));
