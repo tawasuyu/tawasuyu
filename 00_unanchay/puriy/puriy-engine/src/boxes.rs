@@ -11,7 +11,9 @@
 use markup5ever_rcdom::{Handle, NodeData};
 
 use crate::dom::{self, DomTree};
-use crate::style::{BoxShadow, ComputedStyle, LengthVal, StyleEngine, TextAlign, TextDecorationLine};
+use crate::style::{
+    BoxShadow, ComputedStyle, LengthVal, ListStyleType, StyleEngine, TextAlign, TextDecorationLine,
+};
 
 /// Color RGBA, 8 bits por canal. Suficiente para CSS color values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -213,11 +215,16 @@ fn build_node(
                 None
             };
             let mut children = Vec::new();
-            // <li>: prefija con bullet. Lo agregamos como un hijo Text
-            // inline antes de procesar los hijos reales. El bullet
-            // hereda color/font-size de `style`.
+            // <li>: prefija con marker (bullet o numeral según
+            // `list-style-type`). Lo agregamos como un hijo Text inline
+            // antes de procesar los hijos reales — hereda
+            // color/font-size de `style`. Si `list-style-type: none` o
+            // no estamos dentro de una lista reconocible, no se inyecta
+            // marker.
             if tag.as_deref() == Some("li") {
-                children.push(inline_text_with_style("•  ".into(), &style));
+                if let Some(marker) = li_marker(node, style.list_style_type) {
+                    children.push(inline_text_with_style(marker, &style));
+                }
             }
             // <img> sin imagen decodificada: muestra `alt`.
             if tag.as_deref() == Some("img") && image.is_none() {
@@ -390,6 +397,123 @@ fn collapse_whitespace(s: &str) -> String {
     out
 }
 
+/// Construye el texto del marker de un `<li>`. Para tipos numerados
+/// (`decimal`/`*-alpha`/`*-roman`) calcula la posición del item entre sus
+/// hermanos `<li>` del mismo padre, respetando `<ol start>` y
+/// `<li value>`. Devuelve `None` si `list-style-type: none`.
+///
+/// Marcadores con número usan `"N. "` (período + un espacio) — alineado
+/// con el comportamiento de browsers. Marcadores con símbolo usan
+/// `"<sym>  "` (doble espacio) para dar el airecito que tenía el bullet
+/// hardcoded original.
+fn li_marker(node: &Handle, kind: ListStyleType) -> Option<String> {
+    match kind {
+        ListStyleType::None => None,
+        ListStyleType::Disc => Some("•  ".into()),
+        ListStyleType::Circle => Some("◦  ".into()),
+        ListStyleType::Square => Some("▪  ".into()),
+        ListStyleType::Decimal => Some(format!("{}. ", ol_item_position(node))),
+        ListStyleType::LowerAlpha => {
+            Some(format!("{}. ", to_alpha(ol_item_position(node), false)))
+        }
+        ListStyleType::UpperAlpha => {
+            Some(format!("{}. ", to_alpha(ol_item_position(node), true)))
+        }
+        ListStyleType::LowerRoman => {
+            Some(format!("{}. ", to_roman(ol_item_position(node), false)))
+        }
+        ListStyleType::UpperRoman => {
+            Some(format!("{}. ", to_roman(ol_item_position(node), true)))
+        }
+    }
+}
+
+/// Posición 1-indexed del `<li>` entre sus hermanos `<li>` del padre.
+/// Respeta `<ol start="N">` (arranca el contador en N) y `<li value="N">`
+/// (resetea el contador al valor dado para ese item y los siguientes).
+/// Si `node` no es un `<li>` o no tiene padre, devuelve 1.
+fn ol_item_position(node: &Handle) -> i32 {
+    let Some(parent) = parent_handle(node) else { return 1 };
+    let parent_is_ol = dom::element_name(&parent).as_deref() == Some("ol");
+    let mut counter: i32 = if parent_is_ol {
+        dom::attr(&parent, "start").and_then(|s| s.trim().parse().ok()).unwrap_or(1)
+    } else {
+        1
+    };
+    for child in parent.children.borrow().iter() {
+        if dom::element_name(child).as_deref() != Some("li") {
+            continue;
+        }
+        if let Some(v) = dom::attr(child, "value").and_then(|s| s.trim().parse::<i32>().ok()) {
+            counter = v;
+        }
+        if std::rc::Rc::ptr_eq(child, node) {
+            return counter;
+        }
+        counter += 1;
+    }
+    counter
+}
+
+/// Misma idea que `style::parent_of`. Lo duplicamos acá para no tocar
+/// la visibilidad del helper en `style.rs`.
+fn parent_handle(node: &Handle) -> Option<Handle> {
+    let weak = node.parent.take();
+    let restored = weak.clone();
+    node.parent.set(restored);
+    weak.and_then(|w| w.upgrade())
+}
+
+/// Convierte 1..N a alpha bijectiva base-26 (1=a, 26=z, 27=aa, 28=ab…).
+/// Valores `<= 0` caen a `"0"` — el marker numérico igual se imprime.
+fn to_alpha(mut n: i32, upper: bool) -> String {
+    if n <= 0 {
+        return n.to_string();
+    }
+    let mut buf: Vec<u8> = Vec::new();
+    while n > 0 {
+        n -= 1;
+        let d = (n % 26) as u8;
+        buf.push(if upper { b'A' + d } else { b'a' + d });
+        n /= 26;
+    }
+    buf.reverse();
+    // SAFETY: sólo ASCII A-Z/a-z.
+    String::from_utf8(buf).expect("alpha ascii-only")
+}
+
+/// Romanos 1..3999. Fuera del rango caemos a decimal — matchea el
+/// comportamiento de browsers (Chromium también).
+fn to_roman(n: i32, upper: bool) -> String {
+    if !(1..=3999).contains(&n) {
+        return n.to_string();
+    }
+    const VALUES: &[(i32, &str, &str)] = &[
+        (1000, "M", "m"),
+        (900, "CM", "cm"),
+        (500, "D", "d"),
+        (400, "CD", "cd"),
+        (100, "C", "c"),
+        (90, "XC", "xc"),
+        (50, "L", "l"),
+        (40, "XL", "xl"),
+        (10, "X", "x"),
+        (9, "IX", "ix"),
+        (5, "V", "v"),
+        (4, "IV", "iv"),
+        (1, "I", "i"),
+    ];
+    let mut n = n;
+    let mut out = String::new();
+    for (val, up, lo) in VALUES {
+        while n >= *val {
+            out.push_str(if upper { up } else { lo });
+            n -= val;
+        }
+    }
+    out
+}
+
 fn resolve_href(base: Option<&url::Url>, href: &str) -> Option<String> {
     let href = href.trim();
     if href.is_empty() || href.starts_with('#') || href.starts_with("javascript:") {
@@ -435,6 +559,139 @@ mod tests {
         });
         assert!(!tags.contains(&"title".to_string()));
         assert!(!tags.contains(&"head".to_string()));
+    }
+
+    #[test]
+    fn ol_li_recibe_marker_decimal() {
+        let html =
+            "<html><body><ol><li>uno</li><li>dos</li><li>tres</li></ol></body></html>";
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut markers = Vec::new();
+        doc.box_tree.walk(|b| {
+            if let Some(t) = &b.text {
+                if t.ends_with(". ") {
+                    markers.push(t.clone());
+                }
+            }
+        });
+        assert_eq!(markers, vec!["1. ".to_string(), "2. ".into(), "3. ".into()]);
+    }
+
+    #[test]
+    fn ul_li_recibe_marker_bullet() {
+        let html = "<html><body><ul><li>a</li><li>b</li></ul></body></html>";
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut markers = Vec::new();
+        doc.box_tree.walk(|b| {
+            if let Some(t) = &b.text {
+                if t.starts_with('•') {
+                    markers.push(t.clone());
+                }
+            }
+        });
+        assert_eq!(markers.len(), 2);
+    }
+
+    #[test]
+    fn list_style_none_suprime_marker() {
+        let html = r#"<html><head><style>
+            ul { list-style-type: none }
+        </style></head><body><ul><li>uno</li><li>dos</li></ul></body></html>"#;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut has_bullet = false;
+        doc.box_tree.walk(|b| {
+            if let Some(t) = &b.text {
+                if t.contains('•') {
+                    has_bullet = true;
+                }
+            }
+        });
+        assert!(!has_bullet, "no debería haber marker con list-style-type:none");
+    }
+
+    #[test]
+    fn ol_start_corre_el_contador() {
+        let html =
+            "<html><body><ol start=\"5\"><li>x</li><li>y</li></ol></body></html>";
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut markers = Vec::new();
+        doc.box_tree.walk(|b| {
+            if let Some(t) = &b.text {
+                if t.ends_with(". ") {
+                    markers.push(t.clone());
+                }
+            }
+        });
+        assert_eq!(markers, vec!["5. ".to_string(), "6. ".into()]);
+    }
+
+    #[test]
+    fn li_value_resetea_el_contador() {
+        let html = "<html><body><ol><li>x</li><li value=\"10\">y</li><li>z</li></ol></body></html>";
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut markers = Vec::new();
+        doc.box_tree.walk(|b| {
+            if let Some(t) = &b.text {
+                if t.ends_with(". ") {
+                    markers.push(t.clone());
+                }
+            }
+        });
+        assert_eq!(markers, vec!["1. ".to_string(), "10. ".into(), "11. ".into()]);
+    }
+
+    #[test]
+    fn lower_roman_y_lower_alpha_aplican() {
+        let html = r#"<html><head><style>
+            .roman { list-style-type: lower-roman }
+            .alpha { list-style-type: upper-alpha }
+        </style></head><body>
+          <ol class="roman"><li>a</li><li>b</li><li>c</li></ol>
+          <ol class="alpha"><li>a</li><li>b</li></ol>
+        </body></html>"#;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut markers = Vec::new();
+        doc.box_tree.walk(|b| {
+            if let Some(t) = &b.text {
+                if t.ends_with(". ") {
+                    markers.push(t.clone());
+                }
+            }
+        });
+        // ol.roman → i. ii. iii.   ol.alpha → A. B.
+        assert_eq!(
+            markers,
+            vec![
+                "i. ".to_string(),
+                "ii. ".into(),
+                "iii. ".into(),
+                "A. ".into(),
+                "B. ".into(),
+            ]
+        );
+    }
+
+    #[test]
+    fn to_alpha_y_to_roman_son_correctos() {
+        use super::{to_alpha, to_roman};
+        assert_eq!(to_alpha(1, false), "a");
+        assert_eq!(to_alpha(26, false), "z");
+        assert_eq!(to_alpha(27, false), "aa");
+        assert_eq!(to_alpha(28, false), "ab");
+        assert_eq!(to_alpha(52, true), "AZ");
+        assert_eq!(to_roman(4, false), "iv");
+        assert_eq!(to_roman(9, true), "IX");
+        assert_eq!(to_roman(1994, false), "mcmxciv");
+        assert_eq!(to_roman(3999, true), "MMMCMXCIX");
+        // Fuera de rango → decimal fallback.
+        assert_eq!(to_roman(4000, false), "4000");
+        assert_eq!(to_roman(0, true), "0");
     }
 
     #[test]

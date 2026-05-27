@@ -49,6 +49,27 @@ pub struct ComputedStyle {
     /// `text-decoration-line` reducido al subset que pintamos.
     /// `None` = sin decoración (default HTML, salvo `<a>`/`<u>`/`<s>`).
     pub text_decoration: TextDecorationLine,
+    /// Marker que `<li>` pinta delante del contenido. Hereda (CSS spec).
+    /// Default `Disc` (CSS default); UA stylesheet override en `<ol>` y
+    /// `<ul>` por consistencia.
+    pub list_style_type: ListStyleType,
+}
+
+/// Estilo del marker de `<li>`. Reducido al subset que el chrome puede
+/// pintar como texto plano (sin imágenes ni cuadritos pintados a mano).
+/// `Decimal`/`*Alpha`/`*Roman` requieren conocer la posición del `<li>`
+/// entre sus hermanos — `boxes::build_node` la calcula y la sustituye.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListStyleType {
+    None,
+    Disc,
+    Circle,
+    Square,
+    Decimal,
+    LowerAlpha,
+    UpperAlpha,
+    LowerRoman,
+    UpperRoman,
 }
 
 /// Línea decorativa que el chrome dibuja sobre/atravesando/debajo del
@@ -115,6 +136,7 @@ impl Default for ComputedStyle {
             border_radius: 0.0,
             box_shadow: None,
             text_decoration: TextDecorationLine::None,
+            list_style_type: ListStyleType::Disc,
         }
     }
 }
@@ -178,6 +200,9 @@ impl StyleEngine {
             // text-decoration: tratada heredable para que descendientes
             // inline (`<a>foo <b>bar</b></a>`) mantengan la línea.
             style.text_decoration = p.text_decoration;
+            // list-style-type sí es heredable según CSS spec — un `<ol>`
+            // con `list-style-type: decimal` debe propagarse a sus `<li>`.
+            style.list_style_type = p.list_style_type;
         }
         let Some(local) = dom::element_name(node) else {
             return style;
@@ -636,6 +661,7 @@ enum DeclKind {
     /// `None` = `box-shadow: none` (limpia la sombra).
     BoxShadow(Option<BoxShadow>),
     TextDecoration(TextDecorationLine),
+    ListStyleType(ListStyleType),
 }
 
 impl Decl {
@@ -663,6 +689,7 @@ impl Decl {
             DeclKind::BorderRadius(v) => s.border_radius = *v,
             DeclKind::BoxShadow(v) => s.box_shadow = *v,
             DeclKind::TextDecoration(t) => s.text_decoration = *t,
+            DeclKind::ListStyleType(t) => s.list_style_type = *t,
         }
     }
 }
@@ -765,6 +792,30 @@ fn ua_stylesheet() -> Vec<Rule> {
             selector: ty("del"),
             decls: vec![Decl {
                 kind: DeclKind::TextDecoration(TextDecorationLine::LineThrough),
+                important: false,
+            }],
+        },
+        // Listas: `<ol>` numérico, `<ul>` con bullets. La propiedad se
+        // hereda, así que poniéndola en el container es suficiente — los
+        // `<li>` descendientes la recogen vía inheritance.
+        Rule {
+            selector: ty("ol"),
+            decls: vec![Decl {
+                kind: DeclKind::ListStyleType(ListStyleType::Decimal),
+                important: false,
+            }],
+        },
+        Rule {
+            selector: ty("ul"),
+            decls: vec![Decl {
+                kind: DeclKind::ListStyleType(ListStyleType::Disc),
+                important: false,
+            }],
+        },
+        Rule {
+            selector: ty("menu"),
+            decls: vec![Decl {
+                kind: DeclKind::ListStyleType(ListStyleType::Disc),
                 important: false,
             }],
         },
@@ -1147,6 +1198,11 @@ fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "text-decoration" | "text-decoration-line" => {
             parse_text_decoration(value).map(DeclKind::TextDecoration)
         }
+        "list-style-type" => parse_list_style_type(value).map(DeclKind::ListStyleType),
+        // `list-style` shorthand reducido: sólo capturamos el `-type`.
+        // Image y position los ignoramos — `none` desactiva el marker
+        // entero (matchea el comportamiento del browser).
+        "list-style" => parse_list_style_shorthand(value).map(DeclKind::ListStyleType),
         // `border: 1px solid #ccc` — shorthand. Devolvemos un único
         // DeclKind sintético: en realidad ya hay 3 sub-decls que el
         // caller debe emitir, así que delegamos a una ruta especial vía
@@ -1294,6 +1350,39 @@ fn parse_text_decoration(value: &str) -> Option<TextDecorationLine> {
             "line-through" => return Some(TextDecorationLine::LineThrough),
             "overline" => return Some(TextDecorationLine::Overline),
             _ => {}
+        }
+    }
+    None
+}
+
+/// Parsea `list-style-type: <keyword>`. Acepta los aliases comunes
+/// (`lower-latin` = `lower-alpha`, `upper-latin` = `upper-alpha`).
+/// Keywords no soportados (`georgian`, `hebrew`, …) caen a `None` y la
+/// declaración se ignora — el caller mantiene el valor anterior.
+fn parse_list_style_type(s: &str) -> Option<ListStyleType> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "none" => Some(ListStyleType::None),
+        "disc" => Some(ListStyleType::Disc),
+        "circle" => Some(ListStyleType::Circle),
+        "square" => Some(ListStyleType::Square),
+        "decimal" => Some(ListStyleType::Decimal),
+        "lower-alpha" | "lower-latin" => Some(ListStyleType::LowerAlpha),
+        "upper-alpha" | "upper-latin" => Some(ListStyleType::UpperAlpha),
+        "lower-roman" => Some(ListStyleType::LowerRoman),
+        "upper-roman" => Some(ListStyleType::UpperRoman),
+        _ => None,
+    }
+}
+
+/// Shorthand `list-style: [type] [position] [image]` muy reducido. Sólo
+/// extraemos el primer token que matchee un `-type` keyword. `list-style:
+/// none` desactiva el marker (matchea browsers — `none` ahí setea ambos
+/// `-type` e `-image` a none, y como no tenemos `-image`, alcanza con
+/// poner `-type` en `None`).
+fn parse_list_style_shorthand(s: &str) -> Option<ListStyleType> {
+    for tok in s.split_whitespace() {
+        if let Some(t) = parse_list_style_type(tok) {
+            return Some(t);
         }
     }
     None
@@ -2234,6 +2323,54 @@ mod tests {
         let b = dom.find("b").unwrap();
         let b_style = eng.compute_with_parent(&b, Some(&a_style));
         assert_eq!(b_style.text_decoration, TextDecorationLine::Underline);
+    }
+
+    #[test]
+    fn parsea_list_style_type() {
+        assert_eq!(parse_list_style_type("disc"), Some(ListStyleType::Disc));
+        assert_eq!(parse_list_style_type("circle"), Some(ListStyleType::Circle));
+        assert_eq!(parse_list_style_type("square"), Some(ListStyleType::Square));
+        assert_eq!(parse_list_style_type("decimal"), Some(ListStyleType::Decimal));
+        assert_eq!(parse_list_style_type("lower-alpha"), Some(ListStyleType::LowerAlpha));
+        assert_eq!(parse_list_style_type("lower-latin"), Some(ListStyleType::LowerAlpha));
+        assert_eq!(parse_list_style_type("UPPER-ROMAN"), Some(ListStyleType::UpperRoman));
+        assert_eq!(parse_list_style_type("none"), Some(ListStyleType::None));
+        assert_eq!(parse_list_style_type("georgian"), None);
+    }
+
+    #[test]
+    fn parsea_list_style_shorthand() {
+        // Cuando aparece un keyword reconocido, se captura.
+        assert_eq!(parse_list_style_shorthand("square inside"), Some(ListStyleType::Square));
+        assert_eq!(parse_list_style_shorthand("none"), Some(ListStyleType::None));
+        // Sin keywords reconocibles, devolvemos None y el caller mantiene
+        // el valor anterior.
+        assert_eq!(parse_list_style_shorthand("url(foo.png)"), None);
+    }
+
+    #[test]
+    fn ua_aplica_decimal_a_ol_y_disc_a_ul() {
+        let html = "<html><body><ol><li>x</li></ol><ul><li>y</li></ul></body></html>";
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let ol = dom.find("ol").unwrap();
+        let ul = dom.find("ul").unwrap();
+        assert_eq!(eng.compute(&ol).list_style_type, ListStyleType::Decimal);
+        assert_eq!(eng.compute(&ul).list_style_type, ListStyleType::Disc);
+    }
+
+    #[test]
+    fn list_style_type_hereda_de_padre_a_li() {
+        // El `<ol>` recibe `decimal` por UA; el `<li>` no tiene regla
+        // propia pero hereda el valor.
+        let html = "<html><body><ol><li>x</li></ol></body></html>";
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let ol = dom.find("ol").unwrap();
+        let ol_style = eng.compute_with_parent(&ol, None);
+        let li = dom.find("li").unwrap();
+        let li_style = eng.compute_with_parent(&li, Some(&ol_style));
+        assert_eq!(li_style.list_style_type, ListStyleType::Decimal);
     }
 
     #[test]
