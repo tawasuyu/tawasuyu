@@ -152,6 +152,15 @@ enum Cmd {
     Import {
         archivo: PathBuf,
     },
+    /// Exporta la DB a otro archivo SQLite (vía VACUUM INTO).
+    /// Más compacto y rápido que JSON; preserva el binary layout.
+    ExportSqlite {
+        archivo: PathBuf,
+    },
+    /// Importa otra DB SQLite mergeando con la actual (ATTACH + INSERT OR IGNORE).
+    ImportSqlite {
+        archivo: PathBuf,
+    },
     /// Reputación de cada fuente (persistida en la tabla `reputaciones`).
     /// Lee la tabla; si está vacía o pasaste --recalcular, primero
     /// recalcula desde el grafo NLI y persiste vía UPSERT.
@@ -481,6 +490,24 @@ async fn main() -> Result<()> {
             let fuente_id = store.obtener_o_crear_fuente(&fuente, kind.as_deref())?;
             store.asignar_fuente_a_doc(doc_id, Some(fuente_id))?;
             println!("doc {} ahora atribuido a «{}»", doc_id.0, fuente);
+        }
+        Cmd::ExportSqlite { archivo } => {
+            store.exportar_sqlite(&archivo)?;
+            println!("exportado a SQLite: {}", archivo.display());
+        }
+        Cmd::ImportSqlite { archivo } => {
+            let stats = store.importar_sqlite(&archivo)?;
+            println!("nuevos / omitidos por colisión de id:");
+            println!("  fuentes:       {}  /  {}", stats.fuentes, stats.fuentes_omitidas);
+            println!("  documentos:    {}  /  {}", stats.documentos, stats.documentos_omitidos);
+            println!("  chunks:        {}  /  {}", stats.chunks, stats.chunks_omitidos);
+            println!("  aserciones:    {}  /  {}", stats.aserciones, stats.aserciones_omitidas);
+            println!("  implicaciones: {}  /  {}", stats.implicaciones, stats.implicaciones_omitidas);
+            println!("  tags(rel):     {}  /  {}", stats.tags, stats.tags_omitidos);
+            if stats.implicaciones > 0 {
+                let n = store.recalcular_reputaciones()?;
+                println!("reputaciones recalculadas: {n} fuentes.");
+            }
         }
         Cmd::Export { archivo, pretty } => {
             let dump = store.exportar_todo()?;

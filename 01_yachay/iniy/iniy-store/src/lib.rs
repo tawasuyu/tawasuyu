@@ -786,6 +786,71 @@ impl Store {
         }))
     }
 
+    /// Exporta la DB completa a un archivo SQLite usando `VACUUM INTO`.
+    /// El archivo destino debe NO existir; queda como una DB independiente
+    /// y compacta (VACUUM elimina espacio libre).
+    pub fn exportar_sqlite(&self, destino: &Path) -> Result<()> {
+        if destino.exists() {
+            anyhow::bail!("destino ya existe: {}", destino.display());
+        }
+        // VACUUM INTO requiere literal de string SQL, no parámetro. Validamos
+        // la ruta para evitar inyección (sin comillas simples).
+        let s = destino.to_string_lossy();
+        if s.contains('\'') {
+            anyhow::bail!("ruta con comillas simples no soportada");
+        }
+        self.conn.execute_batch(&format!("VACUUM INTO '{}'", s))?;
+        Ok(())
+    }
+
+    /// Importa otra DB SQLite de iniy mergeando vía ATTACH + INSERT OR IGNORE.
+    /// La DB actual es destino; `origen` se ataca con alias `src` y sus
+    /// tablas se copian. Reputaciones se recalculan al final.
+    pub fn importar_sqlite(&mut self, origen: &Path) -> Result<ImportStats> {
+        let s = origen.to_string_lossy();
+        if s.contains('\'') {
+            anyhow::bail!("ruta con comillas simples no soportada");
+        }
+        // ATTACH es una statement aparte; no usa parámetros bind para la ruta.
+        self.conn.execute_batch(&format!("ATTACH DATABASE '{}' AS src", s))?;
+        let mut stats = ImportStats::default();
+        let tx = self.conn.transaction()?;
+        // Por cada tabla, hacemos INSERT OR IGNORE y contamos las filas
+        // afectadas con `changes()`.
+        let pares: [(&str, &str, &mut usize, &mut usize); 6] = [
+            ("fuentes", "id, nombre, kind", &mut stats.fuentes, &mut stats.fuentes_omitidas),
+            ("documentos", "id, titulo, fuente_id", &mut stats.documentos, &mut stats.documentos_omitidos),
+            ("chunks", "id, doc_id, orden, texto", &mut stats.chunks, &mut stats.chunks_omitidos),
+            ("aserciones", "id, doc_id, chunk_id, texto, opinion_json, fuente_citada_id", &mut stats.aserciones, &mut stats.aserciones_omitidas),
+            ("implicaciones", "premisa, hipotesis, entailment, contradiction, neutral", &mut stats.implicaciones, &mut stats.implicaciones_omitidas),
+            ("documento_tags", "doc_id, tag", &mut stats.tags, &mut stats.tags_omitidos),
+        ];
+        for (tabla, cols, nuevos, omitidos) in pares {
+            let total: i64 = tx.query_row(
+                &format!("SELECT COUNT(*) FROM src.{tabla}"),
+                [], |r| r.get(0))?;
+            let antes: i64 = tx.query_row(
+                &format!("SELECT COUNT(*) FROM {tabla}"),
+                [], |r| r.get(0))?;
+            if tabla == "documento_tags" {
+                tx.execute("INSERT OR IGNORE INTO tags (nombre) SELECT DISTINCT tag FROM src.documento_tags", [])?;
+            }
+            tx.execute(
+                &format!("INSERT OR IGNORE INTO {tabla} ({cols}) SELECT {cols} FROM src.{tabla}"),
+                [],
+            )?;
+            let despues: i64 = tx.query_row(
+                &format!("SELECT COUNT(*) FROM {tabla}"),
+                [], |r| r.get(0))?;
+            let inserted = (despues - antes).max(0) as usize;
+            *nuevos = inserted;
+            *omitidos = (total as usize).saturating_sub(inserted);
+        }
+        tx.commit()?;
+        self.conn.execute_batch("DETACH DATABASE src")?;
+        Ok(stats)
+    }
+
     /// Exporta toda la DB a un struct serializable. Para federación:
     /// dos instancias intercambian dumps JSON y mergean por id (Ulid es
     /// globally unique, no hay colisión espuria).
