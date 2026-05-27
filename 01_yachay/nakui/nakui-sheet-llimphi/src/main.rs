@@ -28,14 +28,22 @@ use llimphi_ui::{
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 use nakui_sheet::{CellRef, SheetValue, Workbook};
 
-const VISIBLE_COLS: u32 = 8;
-const VISIBLE_ROWS: u32 = 18;
+const VISIBLE_COLS: u32 = 12;
+const VISIBLE_ROWS: u32 = 25;
 const CELL_W: f32 = 110.0;
 const CELL_H: f32 = 24.0;
-const ROW_HEADER_W: f32 = 46.0;
+const ROW_HEADER_W: f32 = 52.0;
 const FORMULA_BAR_H: f32 = 36.0;
 const TOP_HEADER_H: f32 = 30.0;
 const STATUS_H: f32 = 24.0;
+/// Cuánto avanza el viewport por cada "línea" de wheel. Las apps
+/// modernas tienden a 3 líneas por tick (mismo factor que GTK/macOS).
+const WHEEL_LINES: f32 = 3.0;
+/// Margen de seguridad: cuando la selección se acerca al borde
+/// visible, ajustamos el viewport para que siempre quede al menos
+/// una celda de "respiración" alrededor.
+const SCROLL_MARGIN_ROWS: u32 = 1;
+const SCROLL_MARGIN_COLS: u32 = 1;
 
 /// Paleta dark-sheet — fondo casi negro con cuadrícula sutil. Los
 /// colores se eligen para que la grilla se vea NÍTIDA pero no
@@ -71,6 +79,9 @@ enum Msg {
     FormulaKey(KeyEvent),
     Commit,
     Cancel,
+    /// Desplaza el viewport. Filas positivas = scroll hacia abajo
+    /// (la celda B5 sube en pantalla, llegan al fondo nuevas filas).
+    Scroll { drow: i32, dcol: i32 },
 }
 
 #[derive(Clone, Copy)]
@@ -90,6 +101,10 @@ struct Model {
     /// Mensaje en la barra de estado (último error o info). Vacío = ok.
     status: Status,
     theme: Theme,
+    /// Esquina superior izquierda del viewport visible. El render
+    /// pinta `VISIBLE_ROWS × VISIBLE_COLS` celdas a partir de aquí.
+    viewport_row: u32,
+    viewport_col: u32,
 }
 
 #[derive(Default, Clone)]
@@ -129,6 +144,8 @@ impl App for NakuiSheetApp {
             bar,
             status: Status::default(),
             theme: dark_sheet_theme(),
+            viewport_row: 0,
+            viewport_col: 0,
         }
     }
 
@@ -138,12 +155,14 @@ impl App for NakuiSheetApp {
                 model.selected = cr;
                 model.bar.set_text(model.wb.raw(cr).unwrap_or(""));
                 model.status = Status::default();
+                ensure_visible(&mut model);
             }
             Msg::Move(dir) => {
                 let cr = move_cell(model.selected, dir);
                 model.selected = cr;
                 model.bar.set_text(model.wb.raw(cr).unwrap_or(""));
                 model.status = Status::default();
+                ensure_visible(&mut model);
             }
             Msg::FormulaKey(ev) => {
                 model.bar.apply_key(&ev);
@@ -176,6 +195,12 @@ impl App for NakuiSheetApp {
                     .set_text(model.wb.raw(model.selected).unwrap_or(""));
                 model.status = Status::default();
             }
+            Msg::Scroll { drow, dcol } => {
+                model.viewport_row =
+                    apply_scroll_axis(model.viewport_row, drow);
+                model.viewport_col =
+                    apply_scroll_axis(model.viewport_col, dcol);
+            }
         }
         model
     }
@@ -184,7 +209,12 @@ impl App for NakuiSheetApp {
         let t = &model.theme;
         let title_bar = title_bar_view(model.selected);
         let formula_bar = formula_bar_view(t, &model.bar, model.selected);
-        let grid = grid_view(&model.wb, model.selected);
+        let grid = grid_view(
+            &model.wb,
+            model.selected,
+            model.viewport_row,
+            model.viewport_col,
+        );
         let status = status_bar_view(&model.status);
 
         View::new(Style {
@@ -227,11 +257,27 @@ impl App for NakuiSheetApp {
 
     fn on_wheel(
         _model: &Self::Model,
-        _delta: WheelDelta,
+        delta: WheelDelta,
         _cursor: (f32, f32),
-        _modifiers: llimphi_ui::Modifiers,
+        modifiers: llimphi_ui::Modifiers,
     ) -> Option<Self::Msg> {
-        None
+        // Convención CSS de llimphi: delta.y positivo = scroll hacia
+        // abajo. Multiplico por WHEEL_LINES para que cada tick mueva
+        // varias filas — comportamiento esperado en apps de tabla.
+        let drow = (delta.y * WHEEL_LINES).round() as i32;
+        let dcol = (delta.x * WHEEL_LINES).round() as i32;
+        // Shift+wheel convierte el scroll vertical en horizontal —
+        // mismo gesto que GTK/Excel.
+        let (drow, dcol) = if modifiers.shift {
+            (0, drow.max(dcol))
+        } else {
+            (drow, dcol)
+        };
+        if drow == 0 && dcol == 0 {
+            None
+        } else {
+            Some(Msg::Scroll { drow, dcol })
+        }
     }
 }
 
@@ -248,11 +294,45 @@ fn text_caret_can_move_right(bar: &TextInputState) -> bool {
 fn move_cell(cr: CellRef, dir: Dir) -> CellRef {
     let col = cr.col;
     let row = cr.row;
+    // Sin clamp a VISIBLE_* — la hoja es virtualmente ilimitada;
+    // el viewport sigue a la selección vía `ensure_visible`.
     match dir {
         Dir::Up => CellRef::new(col, row.saturating_sub(1)),
-        Dir::Down => CellRef::new(col, row.saturating_add(1).min(VISIBLE_ROWS - 1)),
+        Dir::Down => CellRef::new(col, row.saturating_add(1)),
         Dir::Left => CellRef::new(col.saturating_sub(1), row),
-        Dir::Right => CellRef::new(col.saturating_add(1).min(VISIBLE_COLS - 1), row),
+        Dir::Right => CellRef::new(col.saturating_add(1), row),
+    }
+}
+
+fn apply_scroll_axis(viewport: u32, delta: i32) -> u32 {
+    if delta >= 0 {
+        viewport.saturating_add(delta as u32)
+    } else {
+        viewport.saturating_sub((-delta) as u32)
+    }
+}
+
+/// Mantiene la celda seleccionada dentro del viewport con un margen
+/// de seguridad. Si la celda salió por arriba/izquierda, el viewport
+/// se acerca; si salió por abajo/derecha, el viewport avanza lo
+/// justo para volver a verla más el margen.
+fn ensure_visible(model: &mut Model) {
+    let sel = model.selected;
+    // Vertical
+    let v_top = model.viewport_row;
+    let v_bot = model.viewport_row + VISIBLE_ROWS;
+    if sel.row < v_top + SCROLL_MARGIN_ROWS {
+        model.viewport_row = sel.row.saturating_sub(SCROLL_MARGIN_ROWS);
+    } else if sel.row + SCROLL_MARGIN_ROWS >= v_bot {
+        model.viewport_row = sel.row + SCROLL_MARGIN_ROWS + 1 - VISIBLE_ROWS;
+    }
+    // Horizontal
+    let h_left = model.viewport_col;
+    let h_right = model.viewport_col + VISIBLE_COLS;
+    if sel.col < h_left + SCROLL_MARGIN_COLS {
+        model.viewport_col = sel.col.saturating_sub(SCROLL_MARGIN_COLS);
+    } else if sel.col + SCROLL_MARGIN_COLS >= h_right {
+        model.viewport_col = sel.col + SCROLL_MARGIN_COLS + 1 - VISIBLE_COLS;
     }
 }
 
@@ -349,13 +429,20 @@ fn formula_bar_view(t: &Theme, bar: &TextInputState, selected: CellRef) -> View<
     .children(vec![label, input])
 }
 
-fn grid_view(wb: &Workbook, selected: CellRef) -> View<Msg> {
+fn grid_view(
+    wb: &Workbook,
+    selected: CellRef,
+    viewport_row: u32,
+    viewport_col: u32,
+) -> View<Msg> {
     let mut rows: Vec<View<Msg>> = Vec::new();
-    // Cabecera de columnas.
-    rows.push(column_header_row());
-    // Filas de datos.
+    // Cabecera de columnas: muestra los labels A, B, C... empezando
+    // desde la columna del viewport.
+    rows.push(column_header_row(viewport_col));
+    // Filas de datos. Cada r local mapea a row = viewport_row + r.
     for r in 0..VISIBLE_ROWS {
-        rows.push(data_row(wb, selected, r));
+        let abs_row = viewport_row + r;
+        rows.push(data_row(wb, selected, abs_row, viewport_col));
     }
     // El contenedor de la grilla se pinta con el color de las líneas
     // — los bordes inferior/derecho de cada celda dejan ver este
@@ -435,7 +522,7 @@ fn bordered_cell(
     .children(vec![inner])
 }
 
-fn column_header_row() -> View<Msg> {
+fn column_header_row(viewport_col: u32) -> View<Msg> {
     let mut cells: Vec<View<Msg>> = Vec::new();
     // Esquina vacía — más oscura para anclar visualmente la grilla.
     cells.push(bordered_cell(
@@ -449,13 +536,14 @@ fn column_header_row() -> View<Msg> {
         None,
     ));
     for c in 0..VISIBLE_COLS {
+        let abs_col = viewport_col + c;
         cells.push(bordered_cell(
             CELL_W,
             CELL_H,
             palette::BG_HEADER,
             None,
             palette::FG_HEADER,
-            CellRef::col_label(c),
+            CellRef::col_label(abs_col),
             Alignment::Center,
             None,
         ));
@@ -470,7 +558,7 @@ fn column_header_row() -> View<Msg> {
     .children(cells)
 }
 
-fn data_row(wb: &Workbook, selected: CellRef, row: u32) -> View<Msg> {
+fn data_row(wb: &Workbook, selected: CellRef, row: u32, viewport_col: u32) -> View<Msg> {
     let is_active_row = row == selected.row;
     let mut cells: Vec<View<Msg>> = Vec::new();
     // Cabecera de fila — accent suave si la fila contiene la celda activa.
@@ -495,7 +583,8 @@ fn data_row(wb: &Workbook, selected: CellRef, row: u32) -> View<Msg> {
         None,
     ));
     for c in 0..VISIBLE_COLS {
-        let cr = CellRef::new(c, row);
+        let abs_col = viewport_col + c;
+        let cr = CellRef::new(abs_col, row);
         cells.push(cell_view(wb, selected, cr));
     }
     View::new(Style {
