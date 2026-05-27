@@ -57,12 +57,14 @@ pub fn eval_formula(expr: &FormulaExpr, resolver: &dyn CellResolver) -> SheetVal
 }
 
 /// Evalúa una sub-expresión que va a ser argumento de función. Un
-/// `Range(...)` literal se materializa como `FormulaArg::Range(...)`;
-/// el resto como `FormulaArg::Value(...)`.
+/// `Range(...)` literal se materializa como `FormulaArg::Range` con
+/// shape `rows × cols`; el resto como `FormulaArg::Value`.
 fn eval_arg(expr: &FormulaExpr, resolver: &dyn CellResolver) -> FormulaArg {
     if let FormulaExpr::Range(r) = expr {
-        let vs = r.iter().map(|c| resolver.resolve(c)).collect();
-        FormulaArg::Range(vs)
+        let rows = (r.end.row - r.start.row + 1) as usize;
+        let cols = (r.end.col - r.start.col + 1) as usize;
+        let values: Vec<SheetValue> = r.iter().map(|c| resolver.resolve(c)).collect();
+        FormulaArg::Range { values, rows, cols }
     } else {
         FormulaArg::Value(eval_formula(expr, resolver))
     }

@@ -47,13 +47,21 @@ pub enum BinaryOp {
 
 /// Lo que cada función builtin recibe por argumento: o un valor
 /// escalar (resultado de evaluar la expresión) o un rango ya
-/// materializado en row-major. El evaluador decide cuál entregar
-/// según el tipo de la sub-expresión (`Range(_)` literal → `Range`,
-/// el resto → `Value`).
+/// materializado en row-major + shape `rows × cols`. El evaluador
+/// decide cuál entregar según el tipo de la sub-expresión
+/// (`Range(_)` literal → `Range`, el resto → `Value`).
+///
+/// El shape es necesario para funciones 2D como `VLOOKUP`/`INDEX`
+/// que recorren una tabla rectangular. Las funciones agregadas que
+/// solo necesitan la lista de escalares siguen llamando `flatten()`.
 #[derive(Debug, Clone)]
 pub enum FormulaArg {
     Value(SheetValue),
-    Range(Vec<SheetValue>),
+    Range {
+        values: Vec<SheetValue>,
+        rows: usize,
+        cols: usize,
+    },
 }
 
 impl FormulaArg {
@@ -62,14 +70,36 @@ impl FormulaArg {
     pub fn flatten(&self) -> Vec<&SheetValue> {
         match self {
             Self::Value(v) => vec![v],
-            Self::Range(vs) => vs.iter().collect(),
+            Self::Range { values, .. } => values.iter().collect(),
         }
     }
 
     pub fn as_scalar(&self) -> Option<&SheetValue> {
         match self {
             Self::Value(v) => Some(v),
-            Self::Range(_) => None,
+            Self::Range { .. } => None,
+        }
+    }
+
+    /// Accede a la celda `(row, col)` del rango (0-indexada). Devuelve
+    /// `None` si el arg es escalar o el índice cae fuera del shape.
+    pub fn at(&self, row: usize, col: usize) -> Option<&SheetValue> {
+        match self {
+            Self::Value(_) => None,
+            Self::Range { values, cols, rows } => {
+                if row >= *rows || col >= *cols {
+                    None
+                } else {
+                    values.get(row * cols + col)
+                }
+            }
+        }
+    }
+
+    pub fn shape(&self) -> Option<(usize, usize)> {
+        match self {
+            Self::Value(_) => None,
+            Self::Range { rows, cols, .. } => Some((*rows, *cols)),
         }
     }
 }
