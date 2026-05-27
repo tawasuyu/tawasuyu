@@ -92,7 +92,11 @@ impl Lcg {
             .0
             .wrapping_mul(6364136223846793005)
             .wrapping_add(1442695040888963407);
-        (self.0 >> 33) as u32
+        // Shift por 32 (no 33): los 32 bits altos del LCG son los de mejor
+        // calidad, y `as u32` los toma sin perder el bit 31. La versión
+        // anterior usaba `>> 33`, dejando un resultado en `[0, 2^31)` →
+        // `next_f32()` retornaba `[0, 0.5)` y todo el mundo era mar.
+        (self.0 >> 32) as u32
     }
     fn next_f32(&mut self) -> f32 {
         (self.next_u32() >> 8) as f32 / (1u32 << 24) as f32
@@ -353,14 +357,17 @@ fn seed(seed: u64) -> World {
     for cy in 0..GRID {
         for cx in 0..GRID {
             let idx = w.grid.idx(cx, cy);
-            let e = elev[idx];
+            let e_raw = elev[idx];
             let h = humid[idx];
-            // Bordes del mapa empujados al mar para evitar continentes que
-            // se peguen al borde — atenuación cosenoidal radial.
+            // Forma del continente:
+            //  - bias +0.25 → tierra domina globalmente.
+            //  - edge_drop · 0.30 → costas/bordes en mar.
+            // E[edge_drop] = 2/3 en una grilla uniforme → mean(e) ≈ 0.05,
+            // con FBM std ≈ 0.24 da ~35% mar, ~65% tierra.
             let nx = (cx as f32 / GRID as f32) * 2.0 - 1.0;
             let ny = (cy as f32 / GRID as f32) * 2.0 - 1.0;
-            let edge_drop = (nx * nx + ny * ny).min(1.0);
-            let e = e - edge_drop * 0.35;
+            let edge_drop = nx.abs().max(ny.abs());
+            let e = e_raw + 0.30 - edge_drop * 0.28;
 
             if e < -0.18 {
                 // Mar profundo: psique alta para que el azul aguante la
@@ -391,9 +398,9 @@ fn seed(seed: u64) -> World {
                 if rng.next_f32() > 0.92 {
                     w.grid.oro[idx] = rng.next_f32() * 24.0;
                 }
-            } else if e < 0.50 {
+            } else if e < 0.42 {
                 // Colinas: materia decreciente, asoma el poder (vetas).
-                let alpha = (e - 0.30) / 0.20;
+                let alpha = (e - 0.30) / 0.12;
                 w.grid.materia[idx] = (1.0 - alpha) * 35.0 + rng.next_f32() * 4.0;
                 w.grid.poder[idx] = alpha * 9.0;
                 if rng.next_f32() > 0.82 {
@@ -402,9 +409,9 @@ fn seed(seed: u64) -> World {
             } else {
                 // Montañas / picos: poco material vivo, mucha estructura
                 // bruta (poder) y, en los más altos, cicatriz rocosa. Umbral
-                // bajado de 0.60 a 0.50 — más superficie es cordillera, los
-                // continentes se ven más "duros" y los picos abundan.
-                let alpha = ((e - 0.50) / 0.50).clamp(0.0, 1.0);
+                // bajado a 0.42 (en la cola del FBM con mean ≈ +0.08) para
+                // que ~10% del mapa sea cordillera visible.
+                let alpha = ((e - 0.42) / 0.40).clamp(0.0, 1.0);
                 w.grid.poder[idx] = 6.0 + alpha * 18.0;
                 w.grid.degradacion[idx] = 1.5 + alpha * alpha * 14.0;
                 if rng.next_f32() > 0.97 {
@@ -423,14 +430,16 @@ fn seed(seed: u64) -> World {
     //     un punto válido, suelta donde caiga (failsafe para no congelar el
     //     seed). ---
     let pick_land = |rng: &mut Lcg, elev: &[f32]| -> (f32, f32) {
-        for _ in 0..32 {
+        for _ in 0..64 {
             let x = rng.next_f32() * (GRID as f32 - 1.0);
             let y = rng.next_f32() * (GRID as f32 - 1.0);
             let nx = (x / GRID as f32) * 2.0 - 1.0;
             let ny = (y / GRID as f32) * 2.0 - 1.0;
-            let edge_drop = (nx * nx + ny * ny).min(1.0);
-            let e = elev[(y as usize) * GRID + (x as usize)] - edge_drop * 0.35;
-            if e > -0.02 && e < 0.40 {
+            let edge_drop = nx.abs().max(ny.abs());
+            // Misma transformación que el biomeing arriba, así los
+            // lemmings caen en celdas-tierra coherentes.
+            let e = elev[(y as usize) * GRID + (x as usize)] + 0.30 - edge_drop * 0.28;
+            if e > -0.05 && e < 0.45 {
                 return (x, y);
             }
         }
@@ -749,10 +758,13 @@ impl App for Dominium {
         .ok();
 
         let rng_seed = 0xD0_31_31_07;
-        // SimParams con overrides puntuales para grilla grande + miles de
-        // lemmings. La idea: los mares aguantan minutos sin difundirse a
-        // verde, y la natalidad ya no explota exponencial. Mantiene la
-        // termodinámica cerrada del motor — todo lo que toco son tasas.
+        // SimParams con overrides puntuales. La iteración anterior puso
+        // `metabolic_cost=0.35` que con energía inicial 40-80 vacía a los
+        // lemmings en ~200 ticks → murieron todos en 10s. Acá la calibración
+        // afloja: drenaje basal modesto, threshold de réplica más bajo, hijos
+        // que arrancan con energía digna. La capacidad de carga sigue
+        // limitada por el regrowth + carrying_capacity, no por matar al
+        // adulto promedio.
         let params = SimParams {
             // Difusión y entropía bajas → la psique de los mares no se
             // empuja a tierra en pocos ticks. (Defaults son 0.1 / 0.01.)
@@ -763,36 +775,36 @@ impl App for Dominium {
             // 0 inicial pero materia → carrying_capacity).
             regrowth_rate: 0.004,
             carrying_capacity: 40.0,
-            // Frenos termodinámicos al crecimiento exponencial: cada
-            // lemming drena más metabolismo, replica más tarde, y los
-            // hijos arrancan con menos energía → ciclo madre→hijo más
-            // costoso.
-            metabolic_cost: 0.35,
-            replicate_threshold: 35.0,
-            child_energy_frac: 0.30,
-            abundance_threshold: 55.0,
+            // Drenaje basal mínimo: 0.05 E/tick frena el techo sin matar
+            // la cohorte joven (energía inicial 40-80 dura > 800 ticks).
+            metabolic_cost: 0.05,
+            // Réplica menos cara → la sociedad alcanza un equilibrio
+            // dinámico en vez de extinguirse.
+            replicate_threshold: 28.0,
+            child_energy_frac: 0.45,
+            abundance_threshold: 50.0,
             ..SimParams::default()
         };
         Model {
             world: seed(rng_seed),
             params,
-            // Scale 3.0 para que la grilla 240×240 entre en pantalla:
-            // ancho ≈ 240·3·cos(30°) ≈ 624 px, deja espacio al panel y al
-            // border. z_factor 0.35 da volumen claro: mares ~12 px hundidos,
-            // picos ~9 px elevados.
-            iso: IsoProjector::new(3.0, 0.35),
-            // Relieve por bioma, recalibrado para los valores nuevos de
-            // las capas (psique sube a 200 en mar, degradacion a ~16 en pico):
-            //   - mares  → z ≈ -12 (psique 200 × −0.06)
-            //   - llanura → z ≈ +2.4 (materia 80 × 0.03)
+            // Scale 3.0 para que la grilla 240×240 entre en pantalla. z_factor
+            // 0.55 levanta el relieve a algo perceptible sin que los picos
+            // exploten: mares ~−25 px, llanura plana, colinas ~+10 px,
+            // picos ~+30 px. La versión 0.35 anterior daba total ~9 px → el
+            // mapa parecía plano por completo.
+            iso: IsoProjector::new(3.0, 0.55),
+            // Relieve por bioma, recalibrado para valores nuevos:
+            //   - mares  → z ≈ −15 (psique 200 × −0.075)
+            //   - llanura → z ≈ +1.6 (materia 80 × 0.02)
             //   - colinas → z ≈ +6 (poder 15 × 0.4)
-            //   - picos  → z ≈ +9 (degradacion 14 × 0.6 + el resto)
+            //   - picos  → z ≈ +21 (degradacion 16 × 1.3 + el resto)
             weights: ZWeights {
-                materia: 0.03,
-                psique: -0.06,
+                materia: 0.02,
+                psique: -0.075,
                 poder: 0.40,
                 oro: 0.0,
-                degradacion: 0.60,
+                degradacion: 1.30,
             },
             cfg: PlanConfig {
                 tile: 3.0,
@@ -2374,4 +2386,120 @@ fn z_slider(
             DragPhase::End => None,
         },
     )
+}
+
+#[cfg(test)]
+mod seeding_tests {
+    //! Tests del seeding del mundo. No verifican la física (eso ya está en
+    //! `dominium-core` / `dominium-physics`), sólo que la distribución de
+    //! biomas tras `seed()` queda en proporciones razonables: ni todo mar
+    //! ni todo montaña.
+
+    use super::*;
+
+    /// Clasificación de bioma a partir de las capas de una celda. Espeja
+    /// los thresholds de `seed()` para validar lo que efectivamente quedó
+    /// pintado.
+    fn classify_cell(g: &dominium_core::Grid, idx: usize) -> &'static str {
+        // Mar profundo: mucha psique y nada de materia/poder.
+        if g.psique[idx] > 150.0 && g.materia[idx] < 1.0 {
+            "mar_profundo"
+        } else if g.psique[idx] > 80.0 && g.materia[idx] < 6.0 {
+            "mar_somero"
+        } else if g.psique[idx] > 15.0 && g.psique[idx] <= 80.0 && g.materia[idx] > 30.0 {
+            "costa"
+        } else if g.materia[idx] > 40.0 && g.poder[idx] < 0.5 {
+            "llanura"
+        } else if g.poder[idx] >= 0.5 && g.poder[idx] < 8.0 {
+            "colina"
+        } else if g.poder[idx] >= 8.0 || g.degradacion[idx] > 4.0 {
+            "pico"
+        } else {
+            "otro"
+        }
+    }
+
+    /// Sanity: el LCG genera valores uniformes en [-1, 1] (esta función
+    /// hubiera capturado el bug `>> 33` original donde la mean era -0.5).
+    #[test]
+    fn lcg_genera_distribucion_simetrica() {
+        let mut rng = Lcg::new(1234);
+        let mut sum = 0.0_f64;
+        let n = 100_000;
+        for _ in 0..n {
+            sum += (rng.next_f32() * 2.0 - 1.0) as f64;
+        }
+        let mean = sum / n as f64;
+        assert!(
+            mean.abs() < 0.02,
+            "LCG sesgado: mean = {mean:.4} (debe estar cerca de 0)"
+        );
+    }
+
+    #[test]
+    fn seed_default_balances_biomas() {
+        let w = seed(0xD0_31_31_07);
+        let total = w.grid.cells();
+        let mut hist = std::collections::HashMap::<&'static str, usize>::new();
+        for i in 0..total {
+            *hist.entry(classify_cell(&w.grid, i)).or_default() += 1;
+        }
+        let pct = |k: &str| -> f32 {
+            *hist.get(k).unwrap_or(&0) as f32 / total as f32 * 100.0
+        };
+        let mar = pct("mar_profundo") + pct("mar_somero");
+        // El mar no debe dominar el mapa visualmente (versión anterior daba
+        // ~50% mar y al usuario "todo se ve azul al inicio").
+        assert!(
+            mar < 40.0,
+            "mar < 40% del mapa, fue {:.1}% — el bias continental no está empujando suficiente tierra",
+            mar
+        );
+        // Y al menos hay mar — sin mar no hay distinción agua/tierra.
+        assert!(mar > 10.0, "mar > 10%, fue {:.1}% — el mapa quedó casi sin agua", mar);
+        // La tierra incluye llanura (la mayoría de los lemmings vive ahí).
+        assert!(
+            pct("llanura") > 18.0,
+            "llanura > 18%, fue {:.1}% — sin granero el motor se ahoga",
+            pct("llanura")
+        );
+        // Picos visibles pero no dominantes (la versión anterior daba el
+        // mapa "casi plano").
+        let pico = pct("pico");
+        assert!(
+            (5.0..28.0).contains(&pico),
+            "pico ∈ [5, 28]%, fue {:.1}% — cordillera fuera de rango",
+            pico
+        );
+    }
+
+    #[test]
+    fn lemmings_no_se_acumulan_en_un_cuadrante() {
+        let w = seed(0xD0_31_31_07);
+        // Reparto por cuadrante.
+        let mut q = [0_u32; 4];
+        for i in 0..w.lemmings.len() {
+            let x = w.lemmings.pos_x[i];
+            let y = w.lemmings.pos_y[i];
+            let h = GRID as f32 / 2.0;
+            let qi = match (x >= h, y >= h) {
+                (false, false) => 0,
+                (true, false) => 1,
+                (false, true) => 2,
+                (true, true) => 3,
+            };
+            q[qi] += 1;
+        }
+        let total = w.lemmings.len() as u32;
+        // Ningún cuadrante > 75% de la población (versión anterior tenía
+        // seeds donde el continente caía en un solo cuadrante y todos los
+        // lemmings se apilaban ahí).
+        for (i, &n) in q.iter().enumerate() {
+            let pct = n as f32 / total as f32 * 100.0;
+            assert!(
+                pct < 75.0,
+                "cuadrante {i} concentra {pct:.1}% de los lemmings — el bias continental + center_lift no está dispersando bien"
+            );
+        }
+    }
 }
