@@ -47,7 +47,9 @@ enum BackendNli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Ingesta un archivo de texto y lo chunkea.
+    /// Ingesta un archivo (TXT/MD/PDF/EPUB/PNG/JPG/TIF) y lo chunkea.
+    /// PDFs sin texto digital y archivos de imagen disparan OCR vía
+    /// tesseract + pdftoppm.
     Ingest {
         ruta: PathBuf,
         #[arg(long)]
@@ -58,6 +60,10 @@ enum Cmd {
         /// Tipo de fuente: "autor", "escuela", "tradición", "observación", etc.
         #[arg(long)]
         kind: Option<String>,
+        /// Idioma(s) para OCR cuando aplica, formato tesseract: "spa",
+        /// "eng", "spa+eng", "lat", "qu" (quechua si está instalado), …
+        #[arg(long, default_value = "spa+eng")]
+        lang: String,
     },
     /// Lista los documentos persistidos en la DB.
     List,
@@ -276,9 +282,9 @@ async fn main() -> Result<()> {
     let mut store = iniy_store::Store::abrir(&cli.db)?;
 
     match cli.cmd {
-        Cmd::Ingest { ruta, titulo, fuente, kind } => {
+        Cmd::Ingest { ruta, titulo, fuente, kind, lang } => {
             let titulo = titulo.unwrap_or_else(|| ruta.file_stem().and_then(|s| s.to_str()).unwrap_or("sin-titulo").to_string());
-            let doc = iniy_ingest::ingest_path(&ruta, titulo)?;
+            let doc = iniy_ingest::ingest_path_lang(&ruta, titulo, &lang)?;
             let fuente_id = match fuente.as_deref() {
                 Some(n) => Some(store.obtener_o_crear_fuente(n, kind.as_deref())?),
                 None => None,

@@ -5,10 +5,15 @@
 //! y descartar fragmentos <40 chars. Para PDF/EPUB, primero se extrae el
 //! texto plano y luego se aplica el mismo chunking.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use iniy_core::{ChunkId, DocId};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::process::Command;
+
+/// Mínimo de caracteres tras `pdf-extract` para considerar que el PDF tiene
+/// texto digital aprovechable. Por debajo, se intenta OCR si está disponible.
+const UMBRAL_TEXTO_DIGITAL: usize = 200;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Documento {
@@ -25,13 +30,30 @@ pub struct Chunk {
     pub texto: String,
 }
 
-/// Punto de entrada por extensión. `.txt` y `.md` → texto plano; `.pdf` →
-/// `pdf-extract`; `.epub` → `epub` crate. Otras extensiones intentan TXT.
+/// Punto de entrada por extensión. `.txt`/`.md` → texto plano;
+/// `.pdf` → `pdf-extract` (con fallback a OCR si el texto extraído es
+/// trivialmente vacío, indicando PDF escaneado); `.epub` → `epub` crate;
+/// `.png`/`.jpg`/`.jpeg`/`.tif`/`.tiff` → OCR vía tesseract.
+/// `lang` se pasa a tesseract si se necesita OCR ("spa" / "eng" /
+/// "spa+eng"…). None → "spa+eng" por default.
 pub fn ingest_path(ruta: &Path, titulo: String) -> Result<Documento> {
     let ext = ruta.extension().and_then(|s| s.to_str()).map(|s| s.to_lowercase()).unwrap_or_default();
+    let lang = "spa+eng";
     match ext.as_str() {
-        "pdf" => ingest_pdf(ruta, titulo),
+        "pdf" => ingest_pdf_smart(ruta, titulo, lang),
         "epub" => ingest_epub(ruta, titulo),
+        "png" | "jpg" | "jpeg" | "tif" | "tiff" | "bmp" => ingest_imagen(ruta, titulo, lang),
+        _ => ingest_txt(ruta, titulo),
+    }
+}
+
+/// Como `ingest_path` pero permite especificar el lang de OCR explícitamente.
+pub fn ingest_path_lang(ruta: &Path, titulo: String, lang: &str) -> Result<Documento> {
+    let ext = ruta.extension().and_then(|s| s.to_str()).map(|s| s.to_lowercase()).unwrap_or_default();
+    match ext.as_str() {
+        "pdf" => ingest_pdf_smart(ruta, titulo, lang),
+        "epub" => ingest_epub(ruta, titulo),
+        "png" | "jpg" | "jpeg" | "tif" | "tiff" | "bmp" => ingest_imagen(ruta, titulo, lang),
         _ => ingest_txt(ruta, titulo),
     }
 }
@@ -45,8 +67,8 @@ pub fn ingest_txt(ruta: &Path, titulo: String) -> Result<Documento> {
     Ok(doc_desde_texto(contenido, titulo))
 }
 
-/// Ingesta PDF — `pdf-extract` devuelve el texto plano de todas las páginas
-/// concatenado con saltos. Aplicamos el mismo chunking.
+/// Ingesta PDF — solo intenta `pdf-extract`, NO OCR. Para fallback automático
+/// a OCR en PDFs escaneados, usar `ingest_pdf_smart`.
 pub fn ingest_pdf(ruta: &Path, titulo: String) -> Result<Documento> {
     let bytes = std::fs::read(ruta)
         .with_context(|| format!("leyendo PDF {}", ruta.display()))?;
@@ -56,6 +78,89 @@ pub fn ingest_pdf(ruta: &Path, titulo: String) -> Result<Documento> {
         tracing::warn!(ruta = %ruta.display(), "PDF sin texto extraíble (¿escaneado sin OCR?)");
     }
     Ok(doc_desde_texto(texto, titulo))
+}
+
+/// PDF con fallback automático a OCR: intenta `pdf-extract`; si el texto
+/// digital tiene < UMBRAL_TEXTO_DIGITAL caracteres tras trim, asume PDF
+/// escaneado y rasteriza vía `pdftoppm` + OCR vía `tesseract`.
+///
+/// Requiere `pdftoppm` (poppler-utils) y `tesseract` en PATH si el fallback
+/// se dispara. Falla con error claro si el PDF está vacío y las herramientas
+/// no están disponibles.
+pub fn ingest_pdf_smart(ruta: &Path, titulo: String, lang: &str) -> Result<Documento> {
+    let bytes = std::fs::read(ruta)
+        .with_context(|| format!("leyendo PDF {}", ruta.display()))?;
+    let texto_digital = pdf_extract::extract_text_from_mem(&bytes).unwrap_or_default();
+    if texto_digital.trim().chars().count() >= UMBRAL_TEXTO_DIGITAL {
+        return Ok(doc_desde_texto(texto_digital, titulo));
+    }
+    tracing::info!(
+        ruta = %ruta.display(),
+        n_digital = texto_digital.trim().chars().count(),
+        "PDF con poco texto digital — intentando OCR"
+    );
+    ocr_pdf(ruta, titulo, lang)
+}
+
+/// Rasteriza un PDF a imágenes con `pdftoppm` y aplica OCR a cada página
+/// con `tesseract`. DPI 200 (suficiente para libros estándar).
+pub fn ocr_pdf(ruta: &Path, titulo: String, lang: &str) -> Result<Documento> {
+    let tmp = tempfile::tempdir().context("creando tmpdir para OCR")?;
+    let prefijo = tmp.path().join("page");
+    let pdftoppm = Command::new("pdftoppm")
+        .arg("-r").arg("200")
+        .arg("-png")
+        .arg(ruta)
+        .arg(&prefijo)
+        .status()
+        .map_err(|e| anyhow!("pdftoppm no se pudo invocar (¿poppler-utils instalado?): {e}"))?;
+    if !pdftoppm.success() {
+        bail!("pdftoppm falló con código {pdftoppm}");
+    }
+    let mut imagenes: Vec<std::path::PathBuf> = std::fs::read_dir(tmp.path())?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.starts_with("page-") && n.ends_with(".png"))
+            .unwrap_or(false))
+        .collect();
+    imagenes.sort();
+    if imagenes.is_empty() {
+        bail!("pdftoppm no generó imágenes (¿PDF corrupto?)");
+    }
+    tracing::info!(n_paginas = imagenes.len(), "OCR sobre páginas rasterizadas");
+    let mut texto = String::new();
+    for img in &imagenes {
+        let pagina = tesseract_imagen(img, lang)
+            .with_context(|| format!("OCR sobre {}", img.display()))?;
+        texto.push_str(&pagina);
+        texto.push_str("\n\n");
+    }
+    Ok(doc_desde_texto(texto, titulo))
+}
+
+/// OCR sobre una imagen (PNG/JPG/TIF) usando `tesseract`.
+pub fn ingest_imagen(ruta: &Path, titulo: String, lang: &str) -> Result<Documento> {
+    let texto = tesseract_imagen(ruta, lang)
+        .with_context(|| format!("OCR sobre imagen {}", ruta.display()))?;
+    Ok(doc_desde_texto(texto, titulo))
+}
+
+fn tesseract_imagen(ruta: &Path, lang: &str) -> Result<String> {
+    let salida = Command::new("tesseract")
+        .arg(ruta)
+        .arg("-")              // stdout
+        .arg("-l").arg(lang)
+        .output()
+        .map_err(|e| anyhow!("tesseract no se pudo invocar (¿instalado en PATH?): {e}"))?;
+    if !salida.status.success() {
+        let stderr = String::from_utf8_lossy(&salida.stderr);
+        bail!("tesseract falló sobre {}: {}", ruta.display(), stderr.trim());
+    }
+    let texto = String::from_utf8(salida.stdout)
+        .map_err(|e| anyhow!("tesseract devolvió UTF-8 inválido: {e}"))?;
+    Ok(texto)
 }
 
 /// Ingesta EPUB — concatena los capítulos en orden de spine y aplica el
