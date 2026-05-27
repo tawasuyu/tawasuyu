@@ -120,6 +120,7 @@ members = [
     "01_yachay/iniy/iniy-nli",
     "01_yachay/iniy/iniy-nli-llm",
     "01_yachay/iniy/iniy-store",
+    "01_yachay/iniy/iniy-wiki",
     "01_yachay/nakui/nakui-core",
     "01_yachay/nakui/nakui-explorer-llimphi",
     "01_yachay/nakui/nakui-sheet",

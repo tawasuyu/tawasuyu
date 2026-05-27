@@ -1,0 +1,23 @@
+[package]
+name = "iniy-wiki"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "iniy-wiki — importador de Wikipedia vía API REST. Descarga artículos / búsquedas / categorías y los persiste en una DB de iniy como Documentos con fuente 'Wikipedia [lang]'."
+
+[dependencies]
+iniy-core = { workspace = true }
+iniy-ingest = { workspace = true }
+iniy-store = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true, features = ["json", "rustls-tls"], default-features = false }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[[bin]]
+name = "iniy-wiki"
+path = "src/main.rs"
