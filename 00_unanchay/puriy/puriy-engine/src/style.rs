@@ -12,6 +12,8 @@
 //! inline style alcanza para renderizar páginas simples (example.com,
 //! landing del propio repo).
 
+use std::collections::HashMap;
+
 use markup5ever_rcdom::Handle;
 
 use crate::boxes::{Color, Display};
@@ -168,6 +170,11 @@ impl Default for ComputedStyle {
 /// Almacena reglas parseadas + función de "computar para nodo".
 pub struct StyleEngine {
     rules: Vec<Rule>,
+    /// CSS variables declaradas en `:root`/`html`/`*`. Se substituyen en
+    /// los values en parse-time (y en values de `style="..."` inline en
+    /// compute-time). Scope cascade real queda para una iteración futura
+    /// — :root cubre el 80% de los usos en el wild.
+    vars: HashMap<String, String>,
 }
 
 impl StyleEngine {
@@ -176,10 +183,18 @@ impl StyleEngine {
     /// conoce).
     pub fn from_dom(dom: &DomTree) -> Self {
         let mut rules = ua_stylesheet();
+        // Primera pasada: recoger `--name: value` de `:root` de todos
+        // los stylesheets para que cualquier `var(--x)` se resuelva sin
+        // importar en qué archivo se declaró.
+        let mut vars: HashMap<String, String> = HashMap::new();
         for sheet in dom.collect_inline_stylesheets() {
-            rules.extend(parse_stylesheet(&sheet));
+            let cleaned = strip_comments(&sheet);
+            extract_root_vars(&cleaned, &mut vars);
         }
-        Self { rules }
+        for sheet in dom.collect_inline_stylesheets() {
+            rules.extend(parse_stylesheet(&sheet, &vars));
+        }
+        Self { rules, vars }
     }
 
     /// Computa el estilo de un nodo Element. Aplica en orden: UA →
@@ -256,7 +271,7 @@ impl StyleEngine {
             .map(|(i, r)| (r.selector.specificity(), i, r))
             .collect();
         let inline_decls: Vec<Decl> = dom::attr(node, "style")
-            .map(|s| parse_declarations(&s))
+            .map(|s| parse_declarations(&s, &self.vars))
             .unwrap_or_default();
 
         // PASADA 1 — normales.
@@ -869,7 +884,7 @@ fn ua_stylesheet() -> Vec<Rule> {
 // nesting / `@media` / `!important`, migrar a `cssparser::StyleSheetParser`
 // con un visitor.
 
-fn parse_stylesheet(css: &str) -> Vec<Rule> {
+fn parse_stylesheet(css: &str, vars: &HashMap<String, String>) -> Vec<Rule> {
     let mut out = Vec::new();
     // Strip comentarios /* ... */
     let css = strip_comments(css);
@@ -895,9 +910,98 @@ fn parse_stylesheet(css: &str) -> Vec<Rule> {
                 // inerte y el documento sigue parseando.
                 continue;
             };
-            out.push(Rule { selector, decls: parse_declarations(body) });
+            out.push(Rule { selector, decls: parse_declarations(body, vars) });
         }
     }
+    out
+}
+
+/// Pasada previa al parseo real: encuentra bloques `:root { ... }`,
+/// `html { ... }` o `* { ... }` y recoge cualquier declaración `--name:
+/// value` en el mapa global de variables. Los conflictos (mismo nombre
+/// en dos bloques) los gana el último — se acerca bastante a la cascada
+/// CSS para vars declaradas en root.
+fn extract_root_vars(css: &str, vars: &mut HashMap<String, String>) {
+    let mut i = 0;
+    while i < css.len() {
+        let Some(brace) = css[i..].find('{') else { break };
+        let sel_raw = css[i..i + brace].trim();
+        let body_start = i + brace + 1;
+        let Some(close) = css[body_start..].find('}') else { break };
+        let body = &css[body_start..body_start + close];
+        i = body_start + close + 1;
+        let mut is_root = false;
+        for sel in sel_raw.split(',') {
+            let sel = sel.trim();
+            if sel == ":root" || sel == "html" || sel == "*" {
+                is_root = true;
+                break;
+            }
+        }
+        if !is_root {
+            continue;
+        }
+        for chunk in body.split(';') {
+            let Some((prop, value)) = chunk.split_once(':') else {
+                continue;
+            };
+            let prop = prop.trim();
+            if let Some(name) = prop.strip_prefix("--") {
+                vars.insert(name.to_string(), value.trim().to_string());
+            }
+        }
+    }
+}
+
+/// Reemplaza `var(--name)` y `var(--name, fallback)` en `value` por el
+/// valor recogido en `vars`. Si la variable no existe y hay fallback, lo
+/// usa; sino, sustituye por cadena vacía. La sustitución es recursiva
+/// (un value de var puede a su vez contener `var(...)`).
+fn substitute_vars(value: &str, vars: &HashMap<String, String>) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(start) = rest.find("var(") {
+        out.push_str(&rest[..start]);
+        let inside_start = start + 4;
+        // Buscar el `)` que cierra, respetando nesting de paréntesis
+        // (para tolerar `var(--x, calc(1px))` aunque no parseemos calc).
+        let mut depth = 1usize;
+        let bytes = rest[inside_start..].as_bytes();
+        let mut close_pos: Option<usize> = None;
+        for (i, &c) in bytes.iter().enumerate() {
+            match c {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close_pos = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(close) = close_pos else {
+            // Paréntesis colgado — devolvemos lo que quedaba pegado.
+            out.push_str(&rest[start..]);
+            return out;
+        };
+        let args = &rest[inside_start..inside_start + close];
+        let (name, fallback) = match args.split_once(',') {
+            Some((n, f)) => (n.trim(), Some(f.trim())),
+            None => (args.trim(), None),
+        };
+        let var_name = name.strip_prefix("--").unwrap_or("");
+        let replacement = vars
+            .get(var_name)
+            .cloned()
+            .or_else(|| fallback.map(|s| s.to_string()))
+            .unwrap_or_default();
+        // Recursión: el value resuelto puede contener más var().
+        out.push_str(&substitute_vars(&replacement, vars));
+        rest = &rest[inside_start + close + 1..];
+    }
+    out.push_str(rest);
     out
 }
 
@@ -1176,7 +1280,7 @@ fn strip_comments(css: &str) -> String {
     out
 }
 
-fn parse_declarations(css: &str) -> Vec<Decl> {
+fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> Vec<Decl> {
     // Cada decl separada por `;`. Detectamos `!important` recortando
     // el sufijo del value antes de pasarlo al parser de tipo. La
     // shorthand `border:` se expande inline a 1..3 decls atómicas.
@@ -1186,11 +1290,21 @@ fn parse_declarations(css: &str) -> Vec<Decl> {
             continue;
         };
         let prop = prop.trim();
+        // Las declaraciones de variables (`--name: value`) ya se
+        // recogieron en la pasada de `extract_root_vars`. Acá las
+        // saltamos para no intentar parsearlas como propiedades reales.
+        if prop.starts_with("--") {
+            continue;
+        }
         let value = value.trim();
         let (value, important) = match strip_important(value) {
             Some(stripped) => (stripped, true),
             None => (value, false),
         };
+        // Sustituye `var(--name)` antes de parsear. `substitute_vars` es
+        // cheap si el value no contiene `var(` (early-out al primer find).
+        let substituted = substitute_vars(value, vars);
+        let value = substituted.as_str();
         if prop.eq_ignore_ascii_case("border") {
             out.extend(parse_border_shorthand(value, important));
             continue;
@@ -1776,7 +1890,7 @@ mod tests {
 
     #[test]
     fn parsea_regla_simple() {
-        let rules = parse_stylesheet("p { color: red; font-size: 14px; }");
+        let rules = parse_stylesheet("p { color: red; font-size: 14px; }", &HashMap::new());
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].selector.compounds.len(), 1);
         assert!(matches!(
@@ -2083,7 +2197,10 @@ mod tests {
 
     #[test]
     fn parsea_width_max_width() {
-        let s = parse_stylesheet("p { width: 80%; max-width: 800px } div { width: auto }");
+        let s = parse_stylesheet(
+            "p { width: 80%; max-width: 800px } div { width: auto }",
+            &HashMap::new(),
+        );
         assert_eq!(s.len(), 2);
         assert!(matches!(s[0].decls[0].kind, DeclKind::Width(LengthVal::Pct(80.0))));
         assert!(matches!(s[0].decls[1].kind, DeclKind::MaxWidth(LengthVal::Px(800.0))));
@@ -2092,14 +2209,20 @@ mod tests {
 
     #[test]
     fn parsea_text_align() {
-        let s = parse_stylesheet("h1 { text-align: center } p { text-align: right }");
+        let s = parse_stylesheet(
+            "h1 { text-align: center } p { text-align: right }",
+            &HashMap::new(),
+        );
         assert!(matches!(s[0].decls[0].kind, DeclKind::TextAlign(TextAlign::Center)));
         assert!(matches!(s[1].decls[0].kind, DeclKind::TextAlign(TextAlign::Right)));
     }
 
     #[test]
     fn parsea_line_height() {
-        let s = parse_stylesheet("p { line-height: 1.5 } h1 { line-height: 32px }");
+        let s = parse_stylesheet(
+            "p { line-height: 1.5 } h1 { line-height: 32px }",
+            &HashMap::new(),
+        );
         // 1.5 → 1.5
         assert!(matches!(s[0].decls[0].kind, DeclKind::LineHeight(v) if (v - 1.5).abs() < 1e-6));
         // 32px sobre font-size 16px estimado → 2.0
@@ -2765,6 +2888,106 @@ mod tests {
         assert_eq!(s.margin.right, 10.0);
         assert_eq!(s.margin.bottom, 10.0);
         assert_eq!(s.margin.left, 10.0);
+    }
+
+    #[test]
+    fn css_var_basico_sobre_root() {
+        let html = r#"<html><head><style>
+            :root { --primary: #ff0000 }
+            p { color: var(--primary) }
+        </style></head><body><p>x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        assert_eq!(eng.compute(&p).color, Color::rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn css_var_con_fallback() {
+        // `--missing` no existe → usa el fallback `blue`.
+        let html = r#"<html><head><style>
+            p { color: var(--missing, blue) }
+        </style></head><body><p>x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        assert_eq!(eng.compute(&p).color, Color::rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn css_var_se_declara_en_html_y_asterisco() {
+        // Variables declaradas en `html` y `*` también valen (no solo `:root`).
+        let html = r#"<html><head><style>
+            html { --a: #aa0000 }
+            * { --b: 5px }
+            p { color: var(--a); margin: var(--b) }
+        </style></head><body><p>x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        let s = eng.compute(&p);
+        assert_eq!(s.color, Color::rgb(0xaa, 0, 0));
+        assert_eq!(s.margin.top, 5.0);
+    }
+
+    #[test]
+    fn css_var_recursiva() {
+        // `--secondary` se define como `var(--primary)` — la sustitución
+        // debe resolver hasta el valor base.
+        let html = r#"<html><head><style>
+            :root {
+                --primary: rgb(0, 200, 100);
+                --secondary: var(--primary);
+            }
+            p { color: var(--secondary) }
+        </style></head><body><p>x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        assert_eq!(eng.compute(&p).color, Color::rgb(0, 200, 100));
+    }
+
+    #[test]
+    fn css_var_en_inline_style() {
+        // `style="..."` también debe resolver var().
+        let html = r#"<html><head><style>
+            :root { --hi: hsl(120, 100%, 50%) }
+        </style></head><body>
+          <p style="background: var(--hi)">x</p>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        assert_eq!(eng.compute(&p).background, Some(Color::rgb(0, 255, 0)));
+    }
+
+    #[test]
+    fn css_var_inexistente_sin_fallback_borra_declaracion() {
+        // `var(--nope)` sin fallback resuelve a "" — el parser de color
+        // rechaza el value y la decl se ignora silenciosamente.
+        // El color debe quedar en el default BLACK heredado.
+        let html = r#"<html><head><style>
+            p { color: var(--nope) }
+        </style></head><body><p>x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        assert_eq!(eng.compute(&p).color, Color::BLACK);
+    }
+
+    #[test]
+    fn css_var_multiple_en_un_value() {
+        // Shorthand `border: var(--w) solid var(--c)`.
+        let html = r#"<html><head><style>
+            :root { --w: 3px; --c: orange }
+            div { border: var(--w) solid var(--c) }
+        </style></head><body><div>x</div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let d = dom.find("div").unwrap();
+        let s = eng.compute(&d);
+        assert!((s.border_width - 3.0).abs() < 1e-6);
+        assert_eq!(s.border_color, Some(Color::rgb(255, 165, 0)));
     }
 
     #[test]
