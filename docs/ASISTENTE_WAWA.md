@@ -1,6 +1,7 @@
 # Asistente conversacional en wawa — diseño técnico
 
-> Documento de diseño. No hay código todavía. La contraparte Linux
+> Documento de diseño. **Estado: hito 1-2 (formato del protocolo) ya
+> implementado en `shared/format`**. La contraparte Linux
 > (`mirada-asistente-llimphi`) ya existe y sirve como referencia operativa
 > del flujo "propuesta → confirmación humana → ejecución".
 
@@ -64,42 +65,45 @@ Permisos = RED | GRAFO_LECTURA
 - ❌ `COMPACTAR`: no puede invocar GC.
 - ❌ `ALTAVOZ` / `RAW_INPUT` / cualquier capacidad sensible.
 
-### 2.2 ABI nueva: canal Akasha "asistente"
+### 2.2 ABI nueva: canal Akasha "asistente" — ✅ implementado
 
-Necesitamos un identificador de canal Akasha bien conocido (similar a los
-canales que `mudanza` ya usa para propuestas firmadas). Llamémoslo
-`CANAL_ASISTENTE = 0x4153` (`"AS"` en ASCII). Sobre ese canal viajan:
+`shared/format/src/lib.rs` define los tipos del protocolo y un canal
+Akasha bien conocido. Importables como `format::CANAL_ASISTENTE`,
+`format::MensajeAsistente`, `format::AccionPropuesta`, `format::Contexto`.
+Round-trip postcard verificado por 7 tests en `mod pruebas`.
 
-```rust
-enum MensajeAsistente {
-    /// La app pregunta. El puente lo retransmite al LLM y devuelve.
-    Consulta {
-        id: u64,           // correlación request/response
-        prompt: String,    // lo que el humano tipeó
-        contexto: Contexto // manifiesto resumido + estado actual
-    },
-    /// El puente responde con una propuesta interpretada del LLM.
-    Propuesta {
-        id: u64,
-        accion: AccionPropuesta,
-        explicacion: String,
-        confianza: f32     // 0.0..1.0, decisión del puente
-    },
-    /// El puente reporta un error de transporte / parseo.
-    Error { id: u64, motivo: String },
-}
+- **`CANAL_ASISTENTE: u16 = 0x4153`** (ASCII `"AS"`). El kernel filtra
+  frames con este canal hacia los suscriptores del oficio asistente; el
+  puente Linux abre un socket raw que suscribe al mismo número.
 
-enum AccionPropuesta {
-    LanzarApp { plantilla: usize },
-    InstalarApp { manifiesto_propuesto: Hash },
-    CambiarConfiguracion { config_propuesta: Hash },
-    Notar { texto: String },     // sin efecto, sólo info al humano
-}
-```
+- **`MensajeAsistente`** con variantes:
+  - `Consulta { id, prompt, contexto }` — la app pregunta. `id` es
+    `u64` para correlación; el puente sirviendo varios nodos los
+    distingue por id antes de cualquier RTT extra.
+  - `Propuesta { id, accion, explicacion, confianza: f32 }` — el
+    puente responde. `confianza` es `1.0` si el LLM produjo JSON limpio
+    y la acción está en lista blanca; menos si tuvo que adivinar.
+  - `Error { id, motivo }` — el puente reporta fallo de transporte o
+    parseo.
 
-`Contexto` incluye un resumen del manifiesto vivo (qué apps hay, qué
-permisos tienen), el modo de teselado, el escritorio activo, etc. — lo que
-la app puede leer con `GRAFO_LECTURA` + las syscalls que ya existen.
+- **`AccionPropuesta`**: `LanzarApp { plantilla: u32 }`, `InstalarApp
+  { manifiesto_propuesto: Hash }`, `CambiarConfiguracion {
+  config_propuesta: Hash }`, `Notar { texto: String }`. Las dos del
+  medio referencian objetos del grafo por hash — el puente los preparó
+  e ingestó por Akasha; el kernel los verifica al aplicar (la firma
+  humana vía `daemon-firma` sigue siendo obligatoria para `InstalarApp`
+  y `CambiarConfiguracion`).
+
+- **`Contexto { apps, manifiesto_actual, configuracion_activa }`** —
+  acotado deliberadamente para que la consulta no infle la tarifa de
+  tokens. Si más adelante hace falta enviar workspace activo, modo de
+  teselado, foco vigente, etc., se agregan campos al struct (postcard
+  tolera extensión hacia atrás siempre que sea sufijo).
+
+`MensajeAsistente` deriva `PartialEq` pero NO `Eq` porque `confianza:
+f32` no es Eq por NaN. Aceptable: el operador no compara mensajes por
+igualdad estricta en runtime — el round-trip de tests usa `assert_eq!`
+con valores literales, donde el f32 es bit-exacto.
 
 ### 2.3 Flujo desde la app
 
@@ -182,10 +186,12 @@ syscall correspondiente (`PARTOS_POR_INDICE` para lanzar) sin pasar por
 
 Mostrados en orden de dependencia, no de complejidad:
 
-1. **Definir `MensajeAsistente`** en `shared/format` como tipos `no_std +
-   serde`. Reusables por la app, el kernel y el puente.
-2. **Reservar `CANAL_ASISTENTE = 0x4153`** en el catálogo de canales
-   Akasha. Documentarlo en `WAWA.md §20` junto al resto.
+1. ~~**Definir `MensajeAsistente`** en `shared/format` como tipos `no_std
+   + serde`. Reusables por la app, el kernel y el puente.~~ ✅ HECHO en
+   `shared/format/src/lib.rs` (commit `c6eb9bd`, Fase 60 v1).
+2. ~~**Reservar `CANAL_ASISTENTE = 0x4153`** en el catálogo de canales
+   Akasha.~~ ✅ HECHO junto con el §1. Documentar en `WAWA.md §20` queda
+   como nota de mantenimiento cuando se cierre la familia de canales.
 3. **Escribir el puente** como crate Linux `02_ruway/mirada/asistente-
    puente`. Stub de socket raw Akasha + integración pluma-llm + parseo.
    ~3-4 sesiones.
@@ -198,9 +204,10 @@ Mostrados en orden de dependencia, no de complejidad:
 6. **Sembrar `asistente.wasm` en GENESIS** o, mejor, dejar que el operador
    la instale en vivo vía `mudanza` (la palanca de v9/v10 del launcher).
 
-Estimado total: 10-15 sesiones de trabajo medido. La fase 1-2 son texto de
-diseño + decisiones, la 3-4 son código nuevo, la 5 es extensión de algo
-existente, la 6 es cero código (la palanca ya existe).
+Estimado restante: 8-13 sesiones (la fase 1-2 ya está hecha). El
+asistente Linux (`mirada-asistente-llimphi`) que ya corre cubre el caso
+de uso "asistente conversacional para gioser" para el operador humano de
+hoy; la versión wawa avanza en paralelo según prioridades.
 
 ## 6. Modos de fallo
 
@@ -253,8 +260,9 @@ Por elección, no por descuido:
 
 ## 9. Estado
 
-Este documento, no código. Cuando lo abramos, los pasos de §5 se
-convierten en hitos concretos. Sin urgencia: el asistente Linux cubre el
-caso de uso "asistente conversacional para gioser" para el operador
-humano de hoy; la versión wawa es para cuando wawa sea el daily driver,
-que aún no lo es.
+**Hito 1-2 (formato del protocolo y canal Akasha) cerrado** en
+`shared/format` (commit `c6eb9bd`, Fase 60 v1). El resto de §5 sigue
+abierto. Sin urgencia: el asistente Linux cubre el caso de uso
+"asistente conversacional para gioser" para el operador humano de hoy;
+la versión wawa es para cuando wawa sea el daily driver, que aún no lo
+es.
