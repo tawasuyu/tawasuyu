@@ -12,13 +12,17 @@
 //  MISMA estructura que la del bare-metal.
 //
 //  Un cuaderno (en el sentido del grafo: un NODO con payload
-//  `Vec<TipoCeldaWawa>` + aristas a fuente y binario) lo construye la
-//  syscall `sys_cuaderno_registrar_celda`. Cada CELDA enlaza una FUENTE
-//  Forth, un BINARIO WASM emitido por forth-emisor y el RETORNO de su
-//  ultima ejecucion. Las tres piezas se inscriben en el grafo
-//  direccionado por contenido del kernel — el cuaderno deja de ser un
-//  buffer volatil y se vuelve un nodo inmutable que sobrevive al
-//  apagado, al panico y a la mudanza.
+//  `Vec<CeldaWawa>` + aristas a cuaderno-previo + fuente + binario) lo
+//  construye la syscall `sys_cuaderno_anexar_celda` (Fase 47, Notebook
+//  DAG Accumulator). Cada anexion lee el cuaderno previo, deserializa
+//  su vector acumulado, hace push de la nueva celda y reinscribe el
+//  cuaderno entero como un nodo nuevo cuya arista ancestral apunta al
+//  predecesor por hash. Cada CELDA enlaza una FUENTE Forth, un BINARIO
+//  WASM emitido por forth-emisor y el RETORNO de su ultima ejecucion.
+//  Las piezas se inscriben en el grafo direccionado por contenido del
+//  kernel — el cuaderno deja de ser un buffer volatil y se vuelve una
+//  bitacora forense profundamente enlazada que sobrevive al apagado,
+//  al panico y a la mudanza.
 //
 //  FASE 34 :: AUDITORIA DE CRATES y FLUJO CELULAR ENCADENADO
 //
@@ -58,8 +62,8 @@
 //       (`sys_subsistema_registrar_ejecutable_v2`).
 //    4. Ejecuta el binario en una sub-jaula efimera de la Fase 32
 //       (`sys_subsistema_ejecutar_dinamico`) y captura el i32 retornado.
-//    5. Consolida la celda en el cuaderno via la nueva syscall de la
-//       Fase 33 (`sys_cuaderno_registrar_celda`).
+//    5. Anexa la celda al cuaderno acumulativo via la syscall de la
+//       Fase 47 (`sys_cuaderno_anexar_celda`).
 //
 //  Si CUALQUIER paso de la cadena falla (trap, fuel agotado, almacenamiento),
 //  la celda se inscribe igual — con `retorno` negativo del rango reservado de
@@ -103,15 +107,24 @@ extern "C" {
         binario_hash_ptr: u32,
         valor_entrada: i32,
     ) -> i32;
-    /// FASE 33/43 :: registra una celda en el grafo bajo el modelo
-    /// unificado `format::CeldaWawa` (id_secuencial + fuente_hash +
-    /// binario_hash + ultimo_retorno + marca_error). El kernel ensambla
-    /// la struct en su pila y emite UN nodo del grafo cuyo payload es
-    /// `Vec<CeldaWawa>` de longitud 1.
+    /// FASE 47 :: anexa una celda al cuaderno acumulativo. Sucesor
+    /// directo de `sys_cuaderno_registrar_celda` (Fase 33/43): el
+    /// kernel lee `cuaderno_previo_hash_ptr` y, si no es `[0; 32]`,
+    /// recupera el nodo previo, deserializa su `Vec<CeldaWawa>` y
+    /// hace `push` de la nueva celda antes de reinscribir el vector
+    /// completo. Cuando el ptr apunta a ceros, arranca un cuaderno
+    /// virgen. El hash resultante es la NUEVA raiz del cuaderno y se
+    /// escribe en `salida_hash_ptr` — la app debe persistirlo en
+    /// `HASH_CUADERNO_VIVO` para encadenar la siguiente anexion.
+    ///
     /// Convencion: `binario_hash_ptr` apunta a `[0; 32]` cuando la
     /// celda no produjo binario (compilacion fallida). El kernel
     /// detecta el patron all-zero y lo traduce a `None` en la struct.
-    fn sys_cuaderno_registrar_celda(
+    ///
+    /// Codigos: 0 (Ok), -6 (Saturado: cuaderno lleno o DMA), -7
+    /// (PayloadInvalido: cuaderno previo no deserializa).
+    fn sys_cuaderno_anexar_celda(
+        cuaderno_previo_hash_ptr: u32,
         fuente_hash_ptr: u32,
         binario_hash_ptr: u32,
         retorno: i32,
@@ -291,20 +304,26 @@ static mut EDITOR_LEN: usize = 0;
 static mut CELDAS: [Celda; MAX_CELDAS] = [Celda::vacia(); MAX_CELDAS];
 static mut PROXIMA_CELDA: usize = 0;
 
-/// Hash del cuaderno tras la ultima consolidacion exitosa. Es la "raiz"
-/// movil del cuaderno: cada celda inscrita engendra un cuaderno nuevo y
-/// este se reancla aqui. No se compara con el grafo del kernel — solo
-/// rotula la cabecera del editor para que el humano vea que el cuaderno
-/// quedo persistido (`HASH cuaderno: XX..YY`).
-static mut HASH_CUADERNO: [u8; 32] = [0; 32];
+/// FASE 47 :: el CORDON ANCESTRAL del cuaderno acumulativo. Tras
+/// cada anexion exitosa via `sys_cuaderno_anexar_celda`, el kernel
+/// devuelve el hash del NUEVO cuaderno (vector con la celda recien
+/// agregada al final). Esa identidad migra aqui y se inyecta como
+/// `cuaderno_previo_hash_ptr` en la proxima F5: el grafo cose la
+/// arista ancestral sola. Inicializado a `[0; 32]` para que la
+/// primera anexion arranque un cuaderno virgen.
+///
+/// Tambien rotula la cabecera del editor ("HASH cuaderno: XX..YY")
+/// con los primeros y ultimos bytes del hash mas reciente — feedback
+/// visual de que el historial quedo anclado.
+static mut HASH_CUADERNO_VIVO: [u8; 32] = [0; 32];
 static mut HASH_CUADERNO_VALIDO: bool = false;
 
-/// FASE 43 :: contador monotono de ID secuencial para celdas inscritas.
-/// El campo `id_secuencial` de `format::CeldaWawa` lo necesita para
-/// fijar el orden de presentacion del cuaderno cuando un consumidor
-/// futuro deserialice el `Vec<CeldaWawa>`. Cada F5 exitoso o fallido
-/// (cualquier llamada a `sys_cuaderno_registrar_celda`) incrementa este
-/// contador.
+/// FASE 43/47 :: contador monotono de ID secuencial para celdas
+/// inscritas. El campo `id_secuencial` de `format::CeldaWawa` lo
+/// necesita para fijar el orden de presentacion del cuaderno cuando
+/// un consumidor deserialice el `Vec<CeldaWawa>` acumulado. Cada F5
+/// exitoso o fallido (cualquier llamada a `sys_cuaderno_anexar_celda`)
+/// incrementa este contador.
 static mut PROXIMO_ID_SECUENCIAL: u32 = 0;
 
 /// FASE 34 :: el ESTADO FLUYENTE entre celdas. El ultimo retorno exitoso
@@ -402,7 +421,7 @@ fn refrescar_contexto() {
 }
 
 // =============================================================================
-//  Fase 44 :: NOTEBOOK WALKER — cold boot del cuaderno persistido
+//  Fase 44/47 :: NOTEBOOK WALKER — cold boot del cuaderno persistido
 // -----------------------------------------------------------------------------
 //  Al arrancar la app, consultamos la raiz userspace del grafo. Si trae un
 //  cuaderno anclado, walkeamos sus celdas en orden 0, 1, 2, ... hasta que el
@@ -410,12 +429,16 @@ fn refrescar_contexto() {
 //  estructura local `Celda` y se inserta en el array circular `CELDAS` —
 //  el lazo `pintar()` la mostrara sin saber que viene de disco.
 //
-//  La fuente original (texto Forth tecleado) NO se reconstruye: el grafo
-//  guarda el HASH de la fuente, pero el ASCII vive en otro nodo que no
-//  recuperamos aqui (lo dejamos para una fase futura que use
-//  `sys_object_datos`). Mostramos solo los hashes + retorno + flag de
-//  error. Suficiente para reanudar la cascada `F5` y autorizar nuevas
-//  celdas via `F6`.
+//  FASE 47 :: con la syscall acumulativa `sys_cuaderno_anexar_celda`, el
+//  nodo raiz ya contiene TODO el `Vec<CeldaWawa>` historico (no una sola
+//  celda huerfana como en la Fase 33). El walker itera `indice_lineal`
+//  sobre el vector completo y rehidrata las 3 ultimas ranuras del array
+//  circular en orden cronologico real — el historial entero revive.
+//
+//  La fuente original (texto Forth tecleado) se rehidrata via
+//  `sys_object_datos` sobre `hash_fuente` (Fase 45). Si el objeto fuente
+//  ya no esta en el grafo, la celda queda con `fuente_len = 0` y el
+//  renderer la rotula como historica con el glifo `~`.
 // =============================================================================
 
 /// Decodifica un frame de 73 bytes producido por `sys_cuaderno_leer_celda`
@@ -556,7 +579,7 @@ fn cold_boot_walker() {
         // soberano actual — lo dejamos cargado para que el pintado lo
         // muestre en la cabecera como si recien lo hubieramos anclado.
         unsafe {
-            HASH_CUADERNO = raiz_hash;
+            HASH_CUADERNO_VIVO = raiz_hash;
             HASH_CUADERNO_VALIDO = true;
         }
         // FASE 45 :: PRESERVACION DE LA CASCADA. Si la ultima celda
@@ -899,24 +922,27 @@ fn ejecutar_celda_actual() {
     celda.retorno = retorno;
     celda.exito = !es_falla;
 
-    // 5. Consolidar la celda como nodo cuaderno en el grafo (Fase 43:
-    //    modelo unificado `CeldaWawa`). El kernel ensambla los campos en
-    //    su pila y emite un nodo con payload `Vec<CeldaWawa>` de 1
-    //    entrada. `error_flag` deriva de `celda.exito`; `id_sec` viene
-    //    del contador monotono local.
+    // 5. Anexar la celda al cuaderno acumulativo (Fase 47, Notebook
+    //    DAG Accumulator). El kernel lee `HASH_CUADERNO_VIVO` como
+    //    cordon ancestral, recupera su `Vec<CeldaWawa>`, hace `push`
+    //    y reinscribe el cuaderno entero. El nuevo hash retorna a
+    //    `HASH_CUADERNO_VIVO` para encadenar la siguiente F5.
+    //    `error_flag` deriva de `celda.exito`; `id_sec` viene del
+    //    contador monotono local.
     let id_sec = unsafe {
         let id = PROXIMO_ID_SECUENCIAL;
         PROXIMO_ID_SECUENCIAL = id.wrapping_add(1);
         id
     };
     let cod_cuaderno = unsafe {
-        sys_cuaderno_registrar_celda(
+        sys_cuaderno_anexar_celda(
+            core::ptr::addr_of!(HASH_CUADERNO_VIVO) as u32,
             celda.hash_fuente.as_ptr() as u32,
             celda.hash_binario.as_ptr() as u32,
             celda.retorno,
             (!celda.exito) as u32,
             id_sec,
-            core::ptr::addr_of_mut!(HASH_CUADERNO) as u32,
+            core::ptr::addr_of_mut!(HASH_CUADERNO_VIVO) as u32,
         )
     };
     unsafe { HASH_CUADERNO_VALIDO = cod_cuaderno == 0 };
@@ -1051,24 +1077,26 @@ fn ejecutar_celda_importada() {
     celda.heredado = heredado;
     celda.valor_heredado = if heredado { valor_heredado } else { 0 };
 
-    // 4. Consolidar la celda en el grafo bajo el modelo unificado
-    //    `CeldaWawa` (Fase 43). `hash_fuente` queda en cero — la fuente
-    //    vive en otra app/celda/cuaderno; el kernel detecta el patron
-    //    all-zero del binario (que aqui SI tiene contenido) e inyecta
-    //    el Option<Hash> correcto. El `error_flag` deriva del exito.
+    // 4. Anexar la celda al cuaderno acumulativo (Fase 47).
+    //    `hash_fuente` queda en cero — la fuente vive en otra
+    //    app/celda/cuaderno; el kernel detecta el patron all-zero
+    //    del binario (que aqui SI tiene contenido) e inyecta el
+    //    Option<Hash> correcto. `HASH_CUADERNO_VIVO` se actualiza
+    //    para que la proxima anexion cose la arista ancestral.
     let id_sec = unsafe {
         let id = PROXIMO_ID_SECUENCIAL;
         PROXIMO_ID_SECUENCIAL = id.wrapping_add(1);
         id
     };
     let cod_cuaderno = unsafe {
-        sys_cuaderno_registrar_celda(
+        sys_cuaderno_anexar_celda(
+            core::ptr::addr_of!(HASH_CUADERNO_VIVO) as u32,
             celda.hash_fuente.as_ptr() as u32,
             celda.hash_binario.as_ptr() as u32,
             celda.retorno,
             (!celda.exito) as u32,
             id_sec,
-            core::ptr::addr_of_mut!(HASH_CUADERNO) as u32,
+            core::ptr::addr_of_mut!(HASH_CUADERNO_VIVO) as u32,
         )
     };
     unsafe { HASH_CUADERNO_VALIDO = cod_cuaderno == 0 };
@@ -1125,7 +1153,7 @@ fn iniciar_solicitud_firma_host() {
         return;
     }
     unsafe {
-        FIRMA_HASH_PENDIENTE = HASH_CUADERNO;
+        FIRMA_HASH_PENDIENTE = HASH_CUADERNO_VIVO;
         FIRMA_PENDIENTE = true;
         SOBERANIA_ANCLADA = false;
         SOBERANIA_FIRMA_ROTA = false;
@@ -1243,7 +1271,7 @@ fn pintar() {
     rellenar_rect(lienzo, 0, 0, ANCHO, EDITOR_Y - 4, secundario);
     dibujar_texto(lienzo, b"PLUMA  WAWA  F46", 8, 6, 1, tinta);
     if unsafe { HASH_CUADERNO_VALIDO } {
-        let h = unsafe { HASH_CUADERNO };
+        let h = unsafe { HASH_CUADERNO_VIVO };
         let mut etiqueta = [b' '; 8];
         etiqueta[0] = nibble_hex(h[0] >> 4);
         etiqueta[1] = nibble_hex(h[0] & 0x0F);

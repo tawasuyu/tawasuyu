@@ -35,16 +35,23 @@
 //                              acotado, retorno de `"run"` propagado al
 //                              llamante. Toca el grafo? No durante el calculo
 //                              (Linker vacio); solo para recuperar el binario.
-//    * sys_cuaderno_registrar_celda           — inscribir un nodo "cuaderno"
-//                              que enlaza FUENTE+BINARIO+OUT como un trio
-//                              indisoluble (Fase 33, Persistencia Ortogonal
-//                              por Celdas): los dos hashes viajan como
-//                              hijos legitimos del nodo cuaderno.
+//    * sys_cuaderno_anexar_celda              — anexar una celda al cuaderno
+//                              acumulativo (Fase 47, Notebook DAG
+//                              Accumulator). Lee el cuaderno previo del
+//                              grafo, deserializa su `Vec<CeldaWawa>`,
+//                              hace `push` de la nueva celda y reinscribe
+//                              el cuaderno como un nodo nuevo cuyos hijos
+//                              son la arista ancestral (cuaderno previo),
+//                              la fuente y, si existe, el binario. Cuando
+//                              `cuaderno_previo_hash` es `[0; 32]` arranca
+//                              un cuaderno virgen.
 //    * sys_cuaderno_leer_celda                — deserializar un nodo cuaderno
 //                              del grafo y devolver UNA CeldaWawa por
 //                              indice (Fase 44, Notebook Walker): habilita
 //                              la persistencia entre reboots — el cold
 //                              boot reconstruye el lienzo desde disco.
+//                              Tras la Fase 47 el walker recorre TODAS
+//                              las celdas acumuladas, no solo la ultima.
 //    * sys_subsistema_vincular_macro          — inspeccionar un binario del
 //                              grafo sin instanciarlo (Fase 36, Cross-App
 //                              Semantic Bridge): valida magia + export
@@ -99,6 +106,13 @@ use format::{
 /// PERMISO_GRAFO_ESCRITURA podria agotar los descriptores en segundos y
 /// dejar mudo al resto del sistema.
 const MAX_PAGINAS_DMA_PER_APP: u32 = 4;
+
+/// Techo del vector acumulado en `sys_cuaderno_anexar_celda` (Fase 47).
+/// Cada `CeldaWawa` mide < 80 B serializada; doce celdas caben holgadas
+/// en < 1 KiB sobre la pila de Ring 0 y dejan a la app un MVP interactivo
+/// generoso sin transformar la syscall en una palanca para inflar el log.
+/// Anexar sobre un cuaderno lleno cortocircuita con `Saturado(-6)`.
+const MAX_CELDAS_ACUMULADAS: usize = 12;
 
 /// El estado del host adscrito al `Store` de una aplicacion: cuanto necesita
 /// una capacidad para servir a ESA app y a ninguna otra — su region de pantalla,
@@ -750,40 +764,50 @@ pub(crate) fn enlazar_capacidades(
     )?;
     } // PERMISO_GRAFO_ESCRITURA (dinamico_v2)
 
-    // --- CAPACIDAD 3e :: sys_cuaderno_registrar_celda -----------------------
-    // sys_cuaderno_registrar_celda(fuente_hash_ptr, binario_hash_ptr,
-    //                              retorno: i32, error_flag: u32,
-    //                              id_sec: u32, salida_hash_ptr) -> i32
+    // --- CAPACIDAD 3e :: sys_cuaderno_anexar_celda ---------------------------
+    // sys_cuaderno_anexar_celda(cuaderno_previo_hash_ptr,
+    //                           fuente_hash_ptr, binario_hash_ptr,
+    //                           retorno: i32, error_flag: u32,
+    //                           id_sec: u32, salida_hash_ptr) -> i32
     //
-    // EL ALMACEN SEMANTICO DEL CUADERNO (Fase 33/43, modelo unificado).
-    // La app entrega los campos planos de UNA celda; el kernel los
-    // ensambla en un `format::CeldaWawa` sobre la pila de Ring 0,
-    // lo wrapea en un `Vec<CeldaWawa>` de una entrada, lo serializa
-    // con postcard y lo inscribe como nodo del grafo.
+    // EL HISTORIAL ACUMULATIVO DEL CUADERNO (Fase 47, Notebook DAG
+    // Accumulator). Evoluciona `sys_cuaderno_registrar_celda` de la
+    // Fase 33: el kernel ya no emite cuadernos huerfanos de UNA
+    // celda. En su lugar:
+    //
+    //   1. Si `cuaderno_previo_hash_ptr` apunta a `[0; 32]`, arranca
+    //      un cuaderno virgen con vector vacio.
+    //   2. Si apunta a un hash real, recupera el nodo previo,
+    //      deserializa su `Vec<CeldaWawa>` y lo asume como base.
+    //   3. Ensambla la nueva `CeldaWawa` con los campos planos
+    //      provistos por la app, hace `push` y reinscribe el
+    //      vector COMPLETO como un nodo nuevo. Los hijos del DAG
+    //      son: el cuaderno previo (arista ancestral, si Some),
+    //      la fuente y el binario (si Some).
+    //
+    // El cuaderno se vuelve una bitacora forense profundamente
+    // enlazada: cada nodo apunta a su predecesor por hash, formando
+    // una cadena recorrible por el Walker en orden cronologico real.
     //
     // CONVENCION DE CAMPOS OPCIONALES (zero-alloc en el lado app):
     //   * `binario_hash` lleva [0; 32] cuando la app no produjo binario
     //     (compilacion fallida). El kernel detecta el patron all-zero
     //     y lo traduce a `binario_hash: None`.
     //   * `error_flag != 0` marca `marca_error: true` en la struct.
-    //   * `ultimo_retorno` siempre se inscribe como `Some(retorno)` —
-    //     el `None` queda reservado para celdas que el kernel inscriba
-    //     en el futuro sin pasar por una ejecucion (no es el caso hoy).
+    //   * `ultimo_retorno` siempre se inscribe como `Some(retorno)`.
     //
-    // ARISTAS CAUSALES :: los hijos del nodo siguen siendo
-    // `fuente_hash` (siempre) y `binario_hash` (cuando Some). El grafo
-    // direccionado por contenido cose por si mismo el tejido completo
-    // del cuaderno.
+    // LIMITE DURO :: el vector acumulado se topa contra
+    // `MAX_CELDAS_ACUMULADAS` antes del `push`. Superarlo cortocircuita
+    // con `Saturado(-6)` sin tocar el disco — protege la pila del kernel
+    // y mantiene el techo presupuestal del MVP interactivo.
     //
-    // GATEADA por PERMISO_GRAFO_ESCRITURA. Back-pressure DMA. La app
-    // re-invoca por cada celda nueva — el nodo previo queda en
-    // sectores anteriores del log, inalcanzable salvo recoleccion
-    // semantica explicita.
+    // GATEADA por PERMISO_GRAFO_ESCRITURA. Back-pressure DMA.
     if permisos & PERMISO_GRAFO_ESCRITURA != 0 {
     enlazador.func_wrap(
         "renaser",
-        "sys_cuaderno_registrar_celda",
+        "sys_cuaderno_anexar_celda",
         |mut caller: Caller<'_, ContextoCapacidades>,
+         cuaderno_previo_hash_ptr: u32,
          fuente_hash_ptr: u32,
          binario_hash_ptr: u32,
          retorno: i32,
@@ -797,13 +821,24 @@ pub(crate) fn enlazar_capacidades(
             caller.data_mut().paginas_dma_en_vuelo += 1;
 
             let memoria = obtener_memoria(&caller)?;
-            // Leer los dos hashes de la memoria lineal.
-            let (fuente_hash, binario_hash_bytes) = {
+            // Leer los TRES hashes de la memoria lineal en un solo borrow.
+            let (cuaderno_previo_bytes, fuente_hash, binario_hash_bytes) = {
                 let m = memoria.data(&caller);
+                let p = match leer_hash(
+                    m,
+                    cuaderno_previo_hash_ptr,
+                    "WASM :: sys_cuaderno_anexar_celda desbordo memoria (previo)",
+                ) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        caller.data_mut().paginas_dma_en_vuelo -= 1;
+                        return Err(e);
+                    }
+                };
                 let f = match leer_hash(
                     m,
                     fuente_hash_ptr,
-                    "WASM :: sys_cuaderno_registrar_celda desbordo memoria (fuente)",
+                    "WASM :: sys_cuaderno_anexar_celda desbordo memoria (fuente)",
                 ) {
                     Ok(h) => h,
                     Err(e) => {
@@ -814,7 +849,7 @@ pub(crate) fn enlazar_capacidades(
                 let b = match leer_hash(
                     m,
                     binario_hash_ptr,
-                    "WASM :: sys_cuaderno_registrar_celda desbordo memoria (binario)",
+                    "WASM :: sys_cuaderno_anexar_celda desbordo memoria (binario)",
                 ) {
                     Ok(h) => h,
                     Err(e) => {
@@ -822,7 +857,7 @@ pub(crate) fn enlazar_capacidades(
                         return Err(e);
                     }
                 };
-                (f, b)
+                (p, f, b)
             };
             // Verificar que el destino del hash del cuaderno cabe ANTES de
             // tocar el disco. Un puntero invalido aborta sin escribir.
@@ -832,36 +867,68 @@ pub(crate) fn enlazar_capacidades(
                     m,
                     salida_hash_ptr,
                     32,
-                    "WASM :: sys_cuaderno_registrar_celda desbordo memoria (salida)",
+                    "WASM :: sys_cuaderno_anexar_celda desbordo memoria (salida)",
                 ) {
                     caller.data_mut().paginas_dma_en_vuelo -= 1;
                     return Err(e);
                 }
             }
 
-            // CONVENCION DEL HASH NULO (Fase 43): un binario `[0; 32]`
-            // significa "la celda no produjo binario ejecutable" y
-            // colapsa a `Option::None` en la struct.
+            // CONVENCION DEL HASH NULO: un binario `[0; 32]` significa
+            // "la celda no produjo binario ejecutable" y colapsa a
+            // `Option::None` en la struct.
             let binario_hash: Option<Hash> = if binario_hash_bytes == [0u8; 32] {
                 None
             } else {
                 Some(binario_hash_bytes)
             };
+            // Cuaderno previo nulo = arranque virgen del historial.
+            let cuaderno_previo: Option<Hash> = if cuaderno_previo_bytes == [0u8; 32] {
+                None
+            } else {
+                Some(cuaderno_previo_bytes)
+            };
 
-            // Ensamblar la CeldaWawa unificada (Fase 43). Una sola
-            // entrada en el Vec — la convergencia con `pluma-notebook-core`
-            // permite que un cuaderno multi-celda futuro use el mismo
-            // Vec con N entradas en una sola pasada.
-            let celda = format::CeldaWawa {
+            // Recuperar el vector acumulado del cuaderno previo. Si el
+            // hash no existe en el grafo lo tratamos como virgen — la
+            // app pudo haber perdido referencia, pero no rompemos la
+            // anexion. Si el almacen falla, propagamos el error
+            // controlado sin tocar el disco.
+            let mut celdas: alloc::vec::Vec<format::CeldaWawa> = match cuaderno_previo {
+                None => alloc::vec::Vec::new(),
+                Some(h) => match crate::almacen::recuperar(&h) {
+                    Ok(Some(objeto)) => match format::deserializar_celdas(&objeto.datos) {
+                        Ok(v) => v,
+                        Err(_) => {
+                            caller.data_mut().paginas_dma_en_vuelo -= 1;
+                            return Ok(CodigoError::PayloadInvalido.como_i32());
+                        }
+                    },
+                    Ok(None) => alloc::vec::Vec::new(),
+                    Err(_) => {
+                        caller.data_mut().paginas_dma_en_vuelo -= 1;
+                        return Ok(CodigoError::AlmacenamientoFallo.como_i32());
+                    }
+                },
+            };
+
+            // LIMITE DURO :: techo pre-alocado para que el vector
+            // acumulado no agote la pila del kernel ni se transforme
+            // en una palanca para inflar el log. Si la app necesita
+            // mas historial, debera compactar (fase futura).
+            if celdas.len() >= MAX_CELDAS_ACUMULADAS {
+                caller.data_mut().paginas_dma_en_vuelo -= 1;
+                return Ok(CodigoError::Saturado.como_i32());
+            }
+
+            celdas.push(format::CeldaWawa {
                 id_secuencial: id_sec,
                 fuente_hash,
                 binario_hash,
                 ultimo_retorno: Some(retorno),
                 marca_error: error_flag != 0,
-            };
-            let mut celdas: alloc::vec::Vec<format::CeldaWawa> =
-                alloc::vec::Vec::with_capacity(1);
-            celdas.push(celda);
+            });
+
             let payload = match format::serializar_celdas(&celdas) {
                 Ok(bytes) => bytes,
                 Err(_) => {
@@ -870,10 +937,13 @@ pub(crate) fn enlazar_capacidades(
                 }
             };
 
-            // Los hijos del nodo cuaderno: la fuente siempre, el binario
-            // solo cuando existe. El i32 del retorno vive dentro del
-            // payload, no es nodo del grafo.
-            let mut hijos: alloc::vec::Vec<Hash> = alloc::vec::Vec::with_capacity(2);
+            // Hijos del DAG: arista ancestral (cuaderno previo, si
+            // Some), fuente (siempre), binario (si Some). Cose el
+            // tejido criptografico completo del historial.
+            let mut hijos: alloc::vec::Vec<Hash> = alloc::vec::Vec::with_capacity(3);
+            if let Some(p) = cuaderno_previo {
+                hijos.push(p);
+            }
             hijos.push(fuente_hash);
             if let Some(b) = binario_hash {
                 hijos.push(b);
@@ -892,7 +962,7 @@ pub(crate) fn enlazar_capacidades(
             Ok(resultado.como_i32())
         },
     )?;
-    } // PERMISO_GRAFO_ESCRITURA (cuaderno)
+    } // PERMISO_GRAFO_ESCRITURA (cuaderno_anexar)
 
     // --- CAPACIDAD 3e_walker :: sys_cuaderno_leer_celda --------------------
     // sys_cuaderno_leer_celda(cuaderno_hash_ptr, indice_lineal, salida_celda_ptr) -> i32

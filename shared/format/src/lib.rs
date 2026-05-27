@@ -555,10 +555,12 @@ pub struct RaizFirmada {
 //  en el silicio.
 //
 //  Las aristas del nodo (los `hijos` que el almacen registra al insertar)
-//  siguen siendo las pubkeys del grafo: `fuente_hash` siempre,
-//  `binario_hash` cuando esta presente. El direccionamiento por contenido
-//  hace EXPLICITAS las dependencias y el cuaderno arrastra
-//  criptograficamente todo su tejido de causas y efectos.
+//  son: el CUADERNO PREVIO cuando existe (arista ancestral, Fase 47),
+//  `fuente_hash` siempre, `binario_hash` cuando esta presente. El
+//  direccionamiento por contenido hace EXPLICITAS las dependencias y
+//  el cuaderno arrastra criptograficamente todo su tejido de causas y
+//  efectos. Con la Fase 47, cada cuaderno apunta a su predecesor por
+//  hash — el historial es una cadena recorrible por el Walker.
 //
 //  Postcard-amigable: campos primitivos + `Option<T>` + arrays alineados.
 //  La deserializacion del cuaderno no allocea fuera del `Vec` principal.
@@ -825,8 +827,8 @@ mod pruebas {
         let leido = deserializar_celdas(&bytes).unwrap();
         assert_eq!(leido, celdas);
 
-        // Single-cell payload (el caso que el kernel produce hoy en
-        // cada `sys_cuaderno_registrar_celda`).
+        // Single-cell payload (el caso que produce la PRIMERA anexion
+        // de `sys_cuaderno_anexar_celda` sobre un cuaderno virgen).
         let una: Vec<CeldaWawa> = vec![CeldaWawa {
             id_secuencial: 99,
             fuente_hash: [0xF0; 32],
@@ -837,6 +839,48 @@ mod pruebas {
         let bytes = serializar_celdas(&una).unwrap();
         let leido = deserializar_celdas(&bytes).unwrap();
         assert_eq!(leido, una);
+    }
+
+    #[test]
+    fn cuaderno_acumulativo_anexa_celdas_en_orden() {
+        // FASE 47 :: la nueva syscall `sys_cuaderno_anexar_celda` opera
+        // en el kernel como: recuperar -> deserializar Vec<CeldaWawa> ->
+        // push(nueva) -> reserializar. Este test reproduce esa cadena
+        // en miniatura, asegurando que el roundtrip respeta el orden
+        // cronologico real con id_secuencial creciente.
+        let mut acumulado: Vec<CeldaWawa> = Vec::new();
+        for i in 0..5u32 {
+            // Re-deserializar lo que el kernel "tendria en disco" antes
+            // del push — refleja exactamente la operacion del host.
+            let acumulado_actual = if acumulado.is_empty() {
+                Vec::new()
+            } else {
+                let bytes = serializar_celdas(&acumulado).unwrap();
+                deserializar_celdas(&bytes).unwrap()
+            };
+            let mut siguiente = acumulado_actual;
+            siguiente.push(CeldaWawa {
+                id_secuencial: i,
+                fuente_hash: [i as u8; 32],
+                binario_hash: if i % 2 == 0 {
+                    Some([(i + 0x10) as u8; 32])
+                } else {
+                    None
+                },
+                ultimo_retorno: Some(i as i32),
+                marca_error: i % 3 == 0,
+            });
+            acumulado = siguiente;
+        }
+        // Tras 5 anexiones, el cuaderno tiene 5 celdas en orden 0..5.
+        assert_eq!(acumulado.len(), 5);
+        for (i, c) in acumulado.iter().enumerate() {
+            assert_eq!(c.id_secuencial, i as u32);
+        }
+        // Roundtrip final del vector acumulado preserva la cadena.
+        let bytes = serializar_celdas(&acumulado).unwrap();
+        let leido = deserializar_celdas(&bytes).unwrap();
+        assert_eq!(leido, acumulado);
     }
 
     #[test]

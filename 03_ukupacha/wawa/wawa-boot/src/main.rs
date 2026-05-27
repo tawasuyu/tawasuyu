@@ -151,7 +151,7 @@ const GENESIS: [AppGenesis; 12] = [
     // distinto al de `pluma-notebook-llimphi` porque corre en framebuffer
     // 480x400 dentro de Wawa OS. PERMISO_GRAFO_ESCRITURA para encadenar
     // sys_object_put + sys_subsistema_registrar_ejecutable_v2 +
-    // sys_subsistema_ejecutar_dinamico + sys_cuaderno_registrar_celda en
+    // sys_subsistema_ejecutar_dinamico + sys_cuaderno_anexar_celda en
     // la cadena de F5. Sustituye al `ide` previo: el cuaderno hace todo lo
     // que el IDE hacia y ademas cascadea y persiste.
     AppGenesis { nombre: "pluma", archivo: "pluma.wasm", region: (160, 60, 480, 400), fuel: FUEL_EDITOR, permisos: format::PERMISO_GRAFO_ESCRITURA },
