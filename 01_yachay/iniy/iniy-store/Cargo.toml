@@ -10,8 +10,10 @@ description = "iniy — persistencia: documentos, chunks, aserciones y matriz NL
 
 [dependencies]
 iniy-core = { workspace = true }
+iniy-ingest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 rusqlite = { workspace = true }
+ulid = { workspace = true }
