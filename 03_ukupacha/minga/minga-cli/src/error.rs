@@ -55,4 +55,10 @@ pub enum CliError {
 
     #[error("ningún peer del DHT anuncia ser proveedor de {0}")]
     NoProvidersForHash(minga_core::ContentHash),
+
+    #[error(
+        "el path {0} no tiene historial de ingesta — corré `minga ingest` o \
+         `minga watch` primero"
+    )]
+    PathNotIngested(PathBuf),
 }

@@ -263,3 +263,61 @@ fn prune_removes_unreachable_nodes_after_retire() {
     assert_eq!(stats2.removed, 0, "prune idempotente");
     assert_eq!(stats2.before, stats.alive);
 }
+
+#[test]
+fn blame_attributes_lines_across_two_revisions() {
+    // El archivo arranca con una función; después le agregamos otra.
+    // `minga blame` debe atribuir las líneas de la función original
+    // al primer α-hash, y las de la nueva al segundo.
+    use minga_cli::cmd_blame;
+
+    let dir = TempDir::new().unwrap();
+    let repo = dir.path().join("repo");
+    cmd_init(&repo, "p").unwrap();
+
+    let src = dir.path().join("evolución.rs");
+    fs::write(&src, "fn first() -> i32 { 1 }\n").unwrap();
+    let r1 = cmd_ingest(&repo, "p", &src).unwrap();
+
+    // Sobrescribimos el archivo: misma función + una nueva.
+    fs::write(
+        &src,
+        "fn first() -> i32 { 1 }\nfn second() -> i32 { 2 }\n",
+    )
+    .unwrap();
+    let r2 = cmd_ingest(&repo, "p", &src).unwrap();
+    assert_ne!(r1.alpha, r2.alpha, "el contenido cambió, el α debe cambiar");
+
+    let blame = cmd_blame(&repo, "p", &src).unwrap();
+    assert!(!blame.is_empty(), "blame no debe estar vacío");
+
+    // Al menos una línea atribuida a r1.alpha (la `first`).
+    assert!(
+        blame.iter().any(|l| l.alpha == r1.alpha),
+        "alguna línea original debe atribuirse a r1: {:?}",
+        blame.iter().map(|l| (&l.text, l.alpha.to_string())).collect::<Vec<_>>()
+    );
+    // Al menos una línea atribuida a r2.alpha (la `second`).
+    assert!(
+        blame.iter().any(|l| l.alpha == r2.alpha),
+        "alguna línea nueva debe atribuirse a r2"
+    );
+}
+
+#[test]
+fn blame_errors_for_path_without_history() {
+    use minga_cli::cmd_blame;
+
+    let dir = TempDir::new().unwrap();
+    let repo = dir.path().join("repo");
+    cmd_init(&repo, "p").unwrap();
+
+    let src = dir.path().join("nunca.rs");
+    fs::write(&src, "fn x() -> i32 { 0 }").unwrap();
+
+    let err = cmd_blame(&repo, "p", &src).unwrap_err();
+    assert!(
+        matches!(err, minga_cli::CliError::PathNotIngested(_)),
+        "esperaba PathNotIngested, obtuvo {err}"
+    );
+}

@@ -8,8 +8,9 @@ use sled::Db;
 
 use crate::{
     attestation_store::SledAttestationStore, error::StoreError, mst_store::SledMstStore,
-    node_store::SledNodeStore, retraction_store::SledRetractionStore,
-    roots_store::SledRootsStore, timestamp_store::SledTimestampStore,
+    node_store::SledNodeStore, path_history_store::SledPathHistoryStore,
+    retraction_store::SledRetractionStore, roots_store::SledRootsStore,
+    timestamp_store::SledTimestampStore,
 };
 
 pub struct PersistentRepo {
@@ -27,6 +28,9 @@ pub struct PersistentRepo {
     /// contenido. Coexiste con la atestación original (que sigue como
     /// prueba histórica).
     pub retractions: SledRetractionStore,
+    /// Historial path → secuencia de α-hashes ingeridos. Local al peer
+    /// (los paths no se transmiten por wire). Alimenta `minga blame`.
+    pub paths: SledPathHistoryStore,
 }
 
 impl PersistentRepo {
@@ -38,6 +42,7 @@ impl PersistentRepo {
         let roots = SledRootsStore::open_tree(&db, "roots")?;
         let timestamps = SledTimestampStore::open_tree(&db, "attestation_timestamps")?;
         let retractions = SledRetractionStore::open_tree(&db, "retractions")?;
+        let paths = SledPathHistoryStore::open_tree(&db, "path_history")?;
         Ok(Self {
             db,
             nodes,
@@ -46,6 +51,7 @@ impl PersistentRepo {
             roots,
             timestamps,
             retractions,
+            paths,
         })
     }
 

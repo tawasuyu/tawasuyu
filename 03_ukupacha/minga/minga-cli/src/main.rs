@@ -5,8 +5,8 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use minga_cli::{
-    cmd_diff, cmd_ingest, cmd_init, cmd_listen, cmd_log, cmd_mount, cmd_prune, cmd_retire,
-    cmd_show, cmd_status, cmd_sync, cmd_verify_root, cmd_watch, CliError, DiffLine,
+    cmd_blame, cmd_diff, cmd_ingest, cmd_init, cmd_listen, cmd_log, cmd_mount, cmd_prune,
+    cmd_retire, cmd_show, cmd_status, cmd_sync, cmd_verify_root, cmd_watch, CliError, DiffLine,
 };
 
 #[derive(Parser)]
@@ -122,6 +122,15 @@ enum Command {
     /// desde ninguna raíz (típicamente quedan tras `retire`/`watch`
     /// Remove). Idempotente.
     Prune,
+
+    /// Para cada línea del archivo registrado, muestra el α-hash que la
+    /// introdujo. Reconstruye la cadena de versiones del path desde su
+    /// historial (poblado por `ingest`/`watch`) y propaga la atribución
+    /// hacia adelante con diffs línea-a-línea.
+    Blame {
+        /// Archivo cuyo historial atribuir.
+        file: PathBuf,
+    },
 }
 
 fn main() -> ExitCode {
@@ -304,6 +313,15 @@ fn run() -> Result<(), CliError> {
                     eprintln!("# nodo estructural {}", r.struct_hash);
                 }
                 print!("{}", r.rendered);
+            }
+        }
+        Command::Blame { file } => {
+            let pass = prompt_passphrase()?;
+            let lines = cmd_blame(&cli.repo, &pass, &file)?;
+            for line in lines {
+                let short: String = line.alpha.to_string().chars().take(12).collect();
+                let when = format_ts(line.ts_secs);
+                println!("{} {} {} | {}", short, when, line.author, line.text);
             }
         }
     }

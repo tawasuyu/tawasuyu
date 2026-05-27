@@ -10,8 +10,9 @@ pub mod commands;
 pub mod error;
 
 pub use commands::{
-    cmd_diff, cmd_ingest, cmd_init, cmd_listen, cmd_log, cmd_mount, cmd_prune, cmd_retire,
-    cmd_show, cmd_status, cmd_sync, cmd_verify_root, cmd_watch, DiffLine, DiffResult,
-    IngestResult, LogEntry, PruneStats, RepoStatus, RetireResult, ShowResult, VerifyResult,
+    cmd_blame, cmd_diff, cmd_ingest, cmd_init, cmd_listen, cmd_log, cmd_mount, cmd_prune,
+    cmd_retire, cmd_show, cmd_status, cmd_sync, cmd_verify_root, cmd_watch, BlameLine, DiffLine,
+    DiffResult, IngestResult, LogEntry, PruneStats, RepoStatus, RetireResult, ShowResult,
+    VerifyResult,
 };
 pub use error::CliError;

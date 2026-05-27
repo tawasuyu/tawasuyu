@@ -96,6 +96,14 @@ pub fn cmd_ingest(
     let dialect = detect_dialect(file)?;
     let node = dialect.parse(&source)?;
     let (alpha, struct_hash) = ingest_node_alpha(&repo, &keypair, dialect, &node)?;
+    // Anexamos al historial path → α para que `minga blame` pueda
+    // atribuir cada línea actual al α que la introdujo. Errores de
+    // canonicalize se tratan como "no hay historial" — la ingesta
+    // funcional ya está completa.
+    if let Some(path_key) = canonical_path_key(file) {
+        let now_secs = unix_now_secs();
+        let _ = repo.paths.append(&path_key, alpha, now_secs);
+    }
     repo.flush()?;
 
     Ok(IngestResult {
@@ -104,6 +112,22 @@ pub fn cmd_ingest(
         did: keypair.did(),
         dialect,
     })
+}
+
+/// Canonicaliza `path` y lo convierte a String para usar como clave
+/// del historial. `None` si el archivo no existe o `canonicalize`
+/// falla (filesystem inusual). El callsite debe degradar
+/// silenciosamente — la ingesta principal no depende de esto.
+fn canonical_path_key(path: &Path) -> Option<String> {
+    let abs = fs::canonicalize(path).ok()?;
+    Some(abs.to_string_lossy().into_owned())
+}
+
+fn unix_now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// Ingiere un nodo ya parseado: lo desempaqueta en el grafo CAS,
@@ -121,10 +145,7 @@ fn ingest_node_alpha(
     repo.mst.insert(alpha)?;
     let att = Attestation::create(keypair, alpha);
     repo.attestations.add(att.clone())?;
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    let now_secs = unix_now_secs();
     repo.timestamps.put(&att.content, &att.author, now_secs)?;
     Ok((alpha, struct_hash))
 }
@@ -374,6 +395,133 @@ fn nibble(b: u8) -> Option<u8> {
         b'A'..=b'F' => Some(b - b'A' + 10),
         _ => None,
     }
+}
+
+/// Una línea de `cmd_blame`: el texto tal como aparece en el archivo
+/// actual, más el α-hash que la introdujo (la primera versión del
+/// archivo que la contenía) con su timestamp y autor.
+#[derive(Debug, Clone)]
+pub struct BlameLine {
+    pub text: String,
+    pub alpha: ContentHash,
+    pub ts_secs: u64,
+    pub author: Did,
+}
+
+/// `minga blame <path>`: para cada línea del archivo actual, devuelve
+/// el α-hash que la introdujo. Reconstruye la cadena de versiones del
+/// path desde su historial, ejecuta diffs línea-a-línea entre versiones
+/// consecutivas, y propaga la atribución hacia adelante: las líneas
+/// nuevas en una versión se atribuyen a ella; las preservadas heredan
+/// la atribución de la versión anterior.
+///
+/// Necesita que el path haya sido ingerido al menos una vez (vía
+/// `minga ingest` o el `cmd_watch`). El archivo en disco se ignora —
+/// la blame es contra la **última** versión registrada en el historial,
+/// no contra la copia actual no-ingerida.
+pub fn cmd_blame(
+    repo_path: &Path,
+    passphrase: &str,
+    file: &Path,
+) -> Result<Vec<BlameLine>, CliError> {
+    let _keypair = keypair_file::load(repo_path.join(KEYPAIR_FILENAME), passphrase)?;
+    let repo = PersistentRepo::open(repo_path.join(REPO_DIRNAME))?;
+
+    let path_key = canonical_path_key(file)
+        .ok_or_else(|| CliError::PathNotIngested(file.to_path_buf()))?;
+    let history = repo.paths.history(&path_key)?;
+    if history.is_empty() {
+        return Err(CliError::PathNotIngested(file.to_path_buf()));
+    }
+
+    // Atribución por línea para la versión "current" del walk. La
+    // representamos como Vec<(line_text, attribution_index)>, donde
+    // attribution_index apunta a una entrada de `history` (el α que
+    // introdujo esa línea). Empezamos con la versión más vieja: todas
+    // sus líneas se atribuyen a su propio α.
+    let oldest_source = source_for_alpha(&repo, &history[0].0)?;
+    let mut current_lines: Vec<(String, usize)> = oldest_source
+        .lines()
+        .map(|l| (l.to_string(), 0_usize))
+        .collect();
+
+    // Avanzamos por la historia: en cada paso, computamos diff entre
+    // current_lines y la fuente de la siguiente versión, y construimos
+    // la nueva lista de líneas atribuidas preservando attributions de
+    // las que no cambiaron y asignando el nuevo α a las insertadas.
+    for (idx, (alpha, _ts)) in history.iter().enumerate().skip(1) {
+        let new_source = source_for_alpha(&repo, alpha)?;
+        let current_text: String = current_lines
+            .iter()
+            .map(|(t, _)| t.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let diff = similar::TextDiff::from_lines(&current_text, &new_source);
+        let mut next: Vec<(String, usize)> = Vec::new();
+        let mut old_idx = 0usize;
+        for change in diff.iter_all_changes() {
+            // `similar` agrega `\n` al final de cada línea — lo
+            // quitamos para uniformidad con la entrada original
+            // (que vino de .lines()).
+            let mut text = change.to_string();
+            if text.ends_with('\n') {
+                text.pop();
+            }
+            match change.tag() {
+                similar::ChangeTag::Equal => {
+                    let attr = current_lines
+                        .get(old_idx)
+                        .map(|(_, a)| *a)
+                        .unwrap_or(idx);
+                    next.push((text, attr));
+                    old_idx += 1;
+                }
+                similar::ChangeTag::Delete => {
+                    old_idx += 1;
+                }
+                similar::ChangeTag::Insert => {
+                    next.push((text, idx));
+                }
+            }
+        }
+        current_lines = next;
+    }
+
+    // Resolvemos cada attribution_index a su BlameLine completa.
+    // Para `author`/`ts` consultamos la atestación local sobre el α.
+    let mut out = Vec::with_capacity(current_lines.len());
+    for (text, attr_idx) in current_lines {
+        let (alpha, ts) = history[attr_idx];
+        let author = first_author_for(&repo, &alpha).unwrap_or(Did([0u8; 32]));
+        out.push(BlameLine {
+            text,
+            alpha,
+            ts_secs: ts,
+            author,
+        });
+    }
+    Ok(out)
+}
+
+/// Reconstruye la fuente canónica del α-hash de una raíz. Resuelve
+/// vía `roots` (α → struct), reconstruye y renderea.
+fn source_for_alpha(
+    repo: &PersistentRepo,
+    alpha: &ContentHash,
+) -> Result<String, CliError> {
+    let (struct_hash, _, _) = resolve_hash(repo, *alpha)?;
+    let node = repo
+        .nodes
+        .reconstruct(&struct_hash)?
+        .ok_or(CliError::HashNotFound(struct_hash))?;
+    Ok(minga_vfs::render_source(&node))
+}
+
+/// Devuelve el primer DID que firmó una atestación sobre `alpha`.
+/// `None` si la raíz no tiene atestaciones registradas localmente.
+fn first_author_for(repo: &PersistentRepo, alpha: &ContentHash) -> Option<Did> {
+    let atts = repo.attestations.get(alpha).ok()?;
+    atts.first().map(|a| a.author)
 }
 
 /// Resultado de `cmd_verify_root`: si la raíz es consistente y bajo
@@ -815,6 +963,9 @@ fn ingest_into_repo(
     let dialect = detect_dialect(file)?;
     let node = dialect.parse(&source)?;
     let (alpha, _struct_hash) = ingest_node_alpha(repo, keypair, dialect, &node)?;
+    if let Some(path_key) = canonical_path_key(file) {
+        let _ = repo.paths.append(&path_key, alpha, unix_now_secs());
+    }
     repo.flush()?;
     Ok(alpha)
 }
