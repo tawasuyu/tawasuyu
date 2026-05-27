@@ -145,6 +145,14 @@ pub enum CodigoError {
     /// codigo de retorno entero. Distingue a una autodefensa del kernel
     /// frente al codigo de la app de un fallo del propio almacenamiento.
     Saturado = -6,
+    /// El payload que la app entrego al kernel decodifica pero esta FUERA
+    /// del dominio que la capacidad acepta — un codigo de idioma que no es
+    /// letras ASCII, una paleta cuyos canales suman cero, un campo
+    /// inconsistente con su contexto. Distinto de `Ausente` (recurso
+    /// inexistente) y `CapacidadInsuficiente` (bufer corto): aqui los
+    /// bytes llegaron pero su SIGNIFICADO los descalifica. La app ha
+    /// de reconstruir su entrada con valores legitimos antes de reintentar.
+    PayloadInvalido = -7,
 }
 
 impl CodigoError {
@@ -811,6 +819,7 @@ mod pruebas {
         assert_eq!(CodigoError::SinFoco.como_i32(), -4);
         assert_eq!(CodigoError::EnvioFallo.como_i32(), -5);
         assert_eq!(CodigoError::Saturado.como_i32(), -6);
+        assert_eq!(CodigoError::PayloadInvalido.como_i32(), -7);
     }
 
     #[test]

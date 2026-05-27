@@ -902,6 +902,17 @@ pub(crate) fn enlazar_capacidades(
             if crate::compositor::foco() != caller.data().indice_app {
                 return Ok(CodigoError::SinFoco.como_i32());
             }
+            // Defensa-en-profundidad N.1 (Fase 27): validar que el codigo de
+            // idioma sea un par ISO 639-1 lexico — dos letras ASCII. Un
+            // codigo como `0x4040` (`@@`) cae con `PayloadInvalido` aqui
+            // antes de que toque el grafo. El kernel jamas anclaria una
+            // configuracion cuyo idioma fuera un sinsentido lexico.
+            let idioma_lo = (idioma & 0xFF) as u8;
+            let idioma_hi = ((idioma >> 8) & 0xFF) as u8;
+            let es_letra = |b: u8| b.is_ascii_uppercase() || b.is_ascii_lowercase();
+            if !(es_letra(idioma_lo) && es_letra(idioma_hi)) {
+                return Ok(CodigoError::PayloadInvalido.como_i32());
+            }
             let memoria = obtener_memoria(&caller)?;
             let datos = memoria.data(&caller);
             let paleta_bytes = rango(
