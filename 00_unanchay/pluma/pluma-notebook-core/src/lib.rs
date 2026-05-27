@@ -14,6 +14,15 @@
 //! código y el render de los embeds van en capas superiores.
 
 #![forbid(unsafe_code)]
+#![no_std]
+
+// Tipos puros del notebook — sin runtime, sin GPU, sin tokio. La eleccion de
+// `no_std + alloc` (en lugar de `std`) deja viva la operacion sobre Linux
+// (alloc esta disponible como parte de std) y abre la puerta a que el
+// mismo crate sirva al userspace bare-metal de Wawa (apps/pluma), donde
+// std no existe. El digest Merkle, las celdas, el DAG y el orden de
+// ejecucion son los mismos en ambas pilas: una sola verdad del Notebook.
+extern crate alloc;
 
 pub mod cell;
 pub mod notebook;

@@ -1,0 +1,46 @@
+# =============================================================================
+#  renaser :: apps/pluma — Fase 33/34/35 :: notebook bare-metal de Pluma
+# -----------------------------------------------------------------------------
+#  Reflejo bare-metal del ecosistema Pluma del host. Comparte con la pila
+#  Linux (`pluma-notebook-core`, `pluma-notebook-llimphi`, `gioser-edit`)
+#  los TIPOS y la LOGICA del notebook reproducible (celdas, DAG,
+#  staleness, digest Merkle), pero su RENDERER es propio: framebuffer
+#  480x400 dibujado dentro de la jaula WASM de Wawa OS.
+#
+#  El humano teclea Forth en el panel editor; F5 compila (forth-emisor),
+#  inscribe la fuente con su arista causal (Fase 31 :: registrar v2),
+#  ejecuta el binario en sub-jaula efimera (Fase 32 :: dinamico) y
+#  consolida la celda como nodo cuaderno en el grafo direccionado por
+#  contenido (Fase 33 :: registrar_celda). Las celdas se encadenan en
+#  cascada (Fase 34): la Celda N hereda el `UltimoRetorno` de la Celda
+#  N-1 si fue exitosa, inyectandolo como cabeza de su pila Forth.
+#
+#  Comparte con la pila Linux la PUERTA ARQUITECTONICA (mismo nombre,
+#  mismo concepto, mismo crate de tipos `pluma-notebook-core` cuando la
+#  convergencia de tipos minimal/rico llegue) sin pretender unificar el
+#  renderer — ropey/tree-sitter/wgpu no compilan a bare-metal.
+# =============================================================================
+
+[package]
+name = "pluma"
+version = "0.1.0"
+edition = "2021"
+description = "renaser :: app WASM pluma — notebook bare-metal con celdas Forth ejecutables y digest reproducible"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# El emisor Forth -> WASM es la misma crate no_std auditada que el IDE
+# previo usaba desde la Fase 30. Una unica verdad del compilador.
+forth-emisor = { path = "../../../../shared/forth-emisor" }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true

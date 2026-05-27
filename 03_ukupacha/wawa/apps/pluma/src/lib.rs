@@ -1,11 +1,24 @@
 // =============================================================================
-//  renaser :: apps/cuaderno — Fase 33/34 :: motor celular con flujo en cascada
+//  renaser :: apps/pluma — Fase 33/34/35 :: notebook bare-metal de Pluma
 // -----------------------------------------------------------------------------
-//  Un cuaderno de celulas: cada CELDA enlaza una FUENTE Forth, un BINARIO
-//  WASM emitido por forth-emisor y el RETORNO de su ultima ejecucion. Las
-//  tres piezas se inscriben en el grafo direccionado por contenido del
-//  kernel — el cuaderno deja de ser un buffer volatil y se vuelve un nodo
-//  inmutable que sobrevive al apagado, al panico y a la mudanza.
+//  Reflejo bare-metal del ecosistema PLUMA del host (`00_unanchay/pluma/`).
+//  En Linux, Pluma se renderiza con `pluma-notebook-llimphi` /
+//  `pluma-editor-llimphi` (wgpu + ropey + tree-sitter); aqui, el mismo
+//  concepto vive dentro de una jaula WASM de Wawa OS sobre un framebuffer
+//  480x400. La capa de TIPOS converge: `pluma-notebook-core` ya es
+//  `#![no_std] + alloc` (Fase 35) y puede importarse desde la pila
+//  bare-metal — el dia que el modelo Forth minimal converja con el rico
+//  (markdown/embed/table/image), la `Cell`/`CellKind` del host sera la
+//  MISMA estructura que la del bare-metal.
+//
+//  Un cuaderno (en el sentido del grafo: un NODO con payload
+//  `Vec<TipoCeldaWawa>` + aristas a fuente y binario) lo construye la
+//  syscall `sys_cuaderno_registrar_celda`. Cada CELDA enlaza una FUENTE
+//  Forth, un BINARIO WASM emitido por forth-emisor y el RETORNO de su
+//  ultima ejecucion. Las tres piezas se inscriben en el grafo
+//  direccionado por contenido del kernel — el cuaderno deja de ser un
+//  buffer volatil y se vuelve un nodo inmutable que sobrevive al
+//  apagado, al panico y a la mudanza.
 //
 //  FASE 34 :: AUDITORIA DE CRATES y FLUJO CELULAR ENCADENADO
 //
@@ -497,7 +510,7 @@ fn pintar() {
 
     // Cabecera con el hash del cuaderno (si ya hubo una consolidacion).
     rellenar_rect(lienzo, 0, 0, ANCHO, EDITOR_Y - 4, secundario);
-    dibujar_texto(lienzo, b"CUADERNO WAWA  FASE 34", 8, 6, 1, tinta);
+    dibujar_texto(lienzo, b"PLUMA  WAWA  F35", 8, 6, 1, tinta);
     if unsafe { HASH_CUADERNO_VALIDO } {
         let h = unsafe { HASH_CUADERNO };
         let mut etiqueta = [b' '; 8];

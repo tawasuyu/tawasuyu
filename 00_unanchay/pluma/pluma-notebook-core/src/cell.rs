@@ -1,5 +1,8 @@
 //! La celda — la unidad de un notebook.
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use serde::{Deserialize, Serialize};
 
 /// Identificador de una celda dentro de su notebook.
@@ -157,6 +160,7 @@ impl Cell {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
 
     fn cell(kind: CellKind, source: &str) -> Cell {
         Cell {

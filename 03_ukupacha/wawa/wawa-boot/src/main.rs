@@ -134,7 +134,7 @@ const FUEL_EDITOR: u32 = 6_000_000;
 /// `cronista` (la cronica de los arranques)—, `tonalero` (Fase 22, testigo
 /// del bucle de Configuracion) y `mudanza` (Fase 25): el centro soberano
 /// de reancla del manifiesto, unica app con PERMISO_RAIZ + sys_manifiesto_proponer.
-const GENESIS: [AppGenesis; 13] = [
+const GENESIS: [AppGenesis; 12] = [
     AppGenesis { nombre: "bitacora", archivo: "bitacora.wasm", region: (100, 120, 480, 280), fuel: FUEL_EDITOR, permisos: 0 },
     AppGenesis { nombre: "pregon", archivo: "pregon.wasm", region: (100, 120, 480, 160), fuel: FUEL_COMUN, permisos: format::PERMISO_RED },
     AppGenesis { nombre: "tonada", archivo: "tonada.wasm", region: (100, 120, 360, 120), fuel: FUEL_COMUN, permisos: format::PERMISO_ALTAVOZ },
@@ -146,16 +146,15 @@ const GENESIS: [AppGenesis; 13] = [
     AppGenesis { nombre: "cronista", archivo: "cronista.wasm", region: (860, 700, 360, 80), fuel: FUEL_COMUN, permisos: format::PERMISO_GRAFO_ESCRITURA | format::PERMISO_RAIZ },
     AppGenesis { nombre: "tonalero", archivo: "tonalero.wasm", region: (700, 220, 480, 300), fuel: FUEL_COMUN, permisos: format::PERMISO_CONFIG },
     AppGenesis { nombre: "mudanza", archivo: "mudanza.wasm", region: (60, 220, 480, 240), fuel: FUEL_COMUN, permisos: format::PERMISO_RAIZ },
-    // Fase 28 :: el IDE semantico. PERMISO_GRAFO_ESCRITURA para serializar
-    // bloques al log y registrar modulos via sys_subsistema_registrar_ejecutable.
-    // FUEL_EDITOR para holgar parser/emisor cuando lleguen los bloques 8.
-    AppGenesis { nombre: "ide", archivo: "ide.wasm", region: (160, 60, 480, 400), fuel: FUEL_EDITOR, permisos: format::PERMISO_GRAFO_ESCRITURA },
-    // Fase 33 :: el cuaderno de celdas Forth persistentes. Necesita el bit
-    // de escritura del grafo (su cadena consume sys_object_put,
-    // sys_subsistema_registrar_ejecutable_v2, sys_subsistema_ejecutar_dinamico
-    // y la nueva sys_cuaderno_registrar_celda). FUEL_EDITOR holga: cinco
-    // syscalls por F5 + repintado celular se llevan por delante el tope.
-    AppGenesis { nombre: "cuaderno", archivo: "cuaderno.wasm", region: (200, 100, 480, 400), fuel: FUEL_EDITOR, permisos: format::PERMISO_GRAFO_ESCRITURA },
+    // Fase 33/34/35 :: `pluma` — la app bare-metal del notebook de Pluma.
+    // Comparte tipos con `pluma-notebook-core` (no_std + alloc), render
+    // distinto al de `pluma-notebook-llimphi` porque corre en framebuffer
+    // 480x400 dentro de Wawa OS. PERMISO_GRAFO_ESCRITURA para encadenar
+    // sys_object_put + sys_subsistema_registrar_ejecutable_v2 +
+    // sys_subsistema_ejecutar_dinamico + sys_cuaderno_registrar_celda en
+    // la cadena de F5. Sustituye al `ide` previo: el cuaderno hace todo lo
+    // que el IDE hacia y ademas cascadea y persiste.
+    AppGenesis { nombre: "pluma", archivo: "pluma.wasm", region: (160, 60, 480, 400), fuel: FUEL_EDITOR, permisos: format::PERMISO_GRAFO_ESCRITURA },
 ];
 
 /// Techo de memoria lineal de cada app de genesis: 4 MiB. Un modulo que intente

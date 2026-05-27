@@ -6,7 +6,9 @@
 //! ejecución sigue el DAG; el digest Merkle certifica que dos corridas
 //! del mismo notebook producen lo mismo.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
+use alloc::string::String;
+use alloc::vec::Vec;
 
 use serde::{Deserialize, Serialize};
 
@@ -276,6 +278,7 @@ impl Notebook {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
 
     fn code(nb: &mut Notebook, src: &str) -> CellId {
         nb.push(CellKind::Code { language: "rust".into() }, src)
