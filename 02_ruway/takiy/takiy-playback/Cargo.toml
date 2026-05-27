@@ -1,0 +1,16 @@
+[package]
+name = "takiy-playback"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "takiy — reproducción en vivo: levanta un stream de audio en el dispositivo default del SO (cpal) y va consumiendo un AudioBuffer rendereado por takiy-synth. Pensado para cerrar el loop ver→escuchar sin depender del filesystem."
+
+[dependencies]
+takiy-synth = { path = "../takiy-synth" }
+cpal = { workspace = true }
+
+[dev-dependencies]
+# Sólo lo usan los doctests para mostrar cómo construir un `Score`.
+takiy-core = { path = "../takiy-core" }

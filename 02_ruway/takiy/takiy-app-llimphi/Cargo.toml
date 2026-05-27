@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "takiy-app-llimphi — piano roll visor sobre Llimphi. Carga un Score (default = demo built-in, o TAKIY_SCORE_JSON apunta a un .takiy.json) y lo pinta como grid pitch×beats con una nota = un rect. Solo visualización; edición y playback vendrán después."
+description = "takiy-app-llimphi — piano roll visor sobre Llimphi. Carga un Score (default = demo built-in, o TAKIY_SCORE_JSON apunta a un .takiy.json), lo pinta como grid pitch×beats y lo reproduce con Space (osc → cpal vía takiy-playback). Edición sigue pendiente."
 
 [[bin]]
 name = "takiy-app-llimphi"
@@ -13,6 +13,8 @@ path = "src/main.rs"
 
 [dependencies]
 takiy-core = { path = "../takiy-core" }
+takiy-synth = { path = "../takiy-synth" }
+takiy-playback = { path = "../takiy-playback" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 serde_json = { workspace = true }

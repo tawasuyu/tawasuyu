@@ -230,6 +230,7 @@ members = [
     "02_ruway/shuma/shuma-gateway",
     "02_ruway/takiy/takiy-core",
     "02_ruway/takiy/takiy-synth",
+    "02_ruway/takiy/takiy-playback",
     "02_ruway/takiy/takiy-app-llimphi",
     "03_ukupacha/agora/agora-app",
     "03_ukupacha/agora/agora-core",
@@ -595,3 +596,10 @@ ureq = { version = "2", default-features = false, features = ["tls"] }
 # rustysynth = sintetizador SF2 puro Rust, MIT. Reemplaza el oscilador
 # feo de takiy-synth por muestras reales (FluidR3, GeneralUser GS, etc).
 rustysynth = "1.3"
+
+# === takiy-playback (audio device output) ===
+# cpal = backend de audio cross-platform (ALSA/PulseAudio/Pipewire en
+# Linux, WASAPI en Windows, CoreAudio en macOS). Lo usamos sólo para
+# abrir el device default y empujar muestras f32 — nada de mezclado
+# ni efectos en el callback.
+cpal = "0.15"
