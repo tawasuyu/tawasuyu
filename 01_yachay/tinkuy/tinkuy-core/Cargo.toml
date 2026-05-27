@@ -1,0 +1,25 @@
+[package]
+name = "tinkuy-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "tinkuy — motor de partículas data-oriented: SoA alineado a línea de caché, grilla 3D, transferencia lock-free worker-local, integrador Velocity-Verlet paralelo, snapshots BLAKE3 (compatibles con Wawa/Akasha)."
+
+[features]
+default = ["cpu"]
+# Backend CPU paralelo con rayon. El único habilitado por defecto.
+cpu = ["dep:rayon"]
+# Reservado para kernels SIMD explícitos (std::simd) en bloques posteriores.
+simd = []
+# Sin rayon: degradación a single-thread para WASM/AOT cranelift.
+wasm = []
+
+[dependencies]
+blake3 = { workspace = true }
+bytemuck = { version = "1.16", features = ["derive"] }
+rayon = { workspace = true, optional = true }
+
+[dev-dependencies]
+# (futuro: criterion para benches B4+)
