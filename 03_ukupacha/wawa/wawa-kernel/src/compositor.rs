@@ -653,12 +653,27 @@ fn cerrar_launcher(escritorio: &mut Escritorio) {
     LAUNCHER_ABIERTO.store(false, Ordering::Relaxed);
 }
 
-/// FASE 58 v3 :: recalcula `launcher_filtrado` contra la query vigente —
-/// match por substring case-insensitive en ASCII—. El catalogo es minusculo
-/// (12 apps hoy), asi que iterar entero por keystroke es trivial. La
-/// seleccion vuelve a 0 para que la primera coincidencia quede destacada,
-/// haciendo "alanz<Enter>" lance la primera app que empieza por "alanz".
+/// FASE 58 v5 :: recalcula `launcher_filtrado` contra la query vigente con
+/// match jerarquico — los nombres se ordenan por *calidad* del match, no por
+/// el orden del manifiesto—. Tres niveles, mejor primero:
+///
+///   3. prefijo  — el nombre empieza con la query (case-insensitive).
+///   2. substring — la query aparece contigua dentro del nombre.
+///   1. subsecuencia — las letras de la query aparecen en orden, no
+///      necesariamente pegadas (estilo fzf/Spotlight: "plm" matchea "pluma").
+///
+/// Dentro de cada nivel, gana el que tiene la primera letra emparejada mas
+/// cerca del inicio; en empate, el orden original del manifiesto. La seleccion
+/// previa se preserva si la app sigue lanzable —backspace ya no tira el cursor
+/// al primer item, como pasaba en v3—.
 fn refiltrar_launcher(escritorio: &mut Escritorio) {
+    // Si habia algo seleccionado, anclamos su indice de catalogo para
+    // intentar recolocarlo tras refiltrar.
+    let sel_previa = escritorio
+        .launcher_filtrado
+        .get(escritorio.launcher_seleccion)
+        .copied();
+
     escritorio.launcher_filtrado.clear();
     let query = &escritorio.launcher_query;
     if query.is_empty() {
@@ -667,40 +682,93 @@ fn refiltrar_launcher(escritorio: &mut Escritorio) {
             escritorio.launcher_filtrado.push(i);
         }
     } else {
+        // Reunimos (nivel, primer_match, indice_catalogo) para los que
+        // matcheen — Vec temporal porque el catalogo es chico (12 hoy) y la
+        // refiltracion ocurre una vez por keystroke, no en el camino caliente.
+        let mut ranking: Vec<((u8, usize), usize)> = Vec::new();
         for (i, nombre) in escritorio.catalogo.iter().enumerate() {
-            if contiene_ascii_ci(nombre, query) {
-                escritorio.launcher_filtrado.push(i);
+            if let Some(score) = evaluar_match(nombre, query) {
+                ranking.push((score, i));
             }
         }
+        // Orden: nivel desc, primer_match asc, indice_catalogo asc.
+        ranking.sort_by(|a, b| {
+            b.0 .0
+                .cmp(&a.0 .0)
+                .then(a.0 .1.cmp(&b.0 .1))
+                .then(a.1.cmp(&b.1))
+        });
+        for (_, idx) in ranking {
+            escritorio.launcher_filtrado.push(idx);
+        }
     }
-    escritorio.launcher_seleccion = 0;
+
+    // Recolocar la seleccion donde quedo la app previa si sigue en el listado;
+    // si desaparecio (o no habia previa), volver a la cabeza.
+    escritorio.launcher_seleccion = sel_previa
+        .and_then(|prev| {
+            escritorio
+                .launcher_filtrado
+                .iter()
+                .position(|&i| i == prev)
+        })
+        .unwrap_or(0);
 }
 
-/// FASE 58 v3 :: substring case-insensitive sobre ASCII. Para nombres de
-/// apps del manifiesto —ASCII puro hoy— basta con un compare byte-a-byte
-/// tras `to_ascii_lowercase`. Bytes no-ASCII en `aguja` o `pajar` se comparan
-/// crudos: pueden no matchear pero no causan panico.
-fn contiene_ascii_ci(pajar: &str, aguja: &str) -> bool {
+/// FASE 58 v5 :: evalua el match de `aguja` contra `pajar` y devuelve
+/// `(nivel, indice_primer_match)` o `None` si no hay match ni siquiera como
+/// subsecuencia. Nivel mas alto = match mejor (ver `refiltrar_launcher`).
+/// Case-insensitive sobre ASCII; bytes no-ASCII se comparan crudos —pueden
+/// no matchear pero no causan panico—.
+fn evaluar_match(pajar: &str, aguja: &str) -> Option<(u8, usize)> {
     let pajar = pajar.as_bytes();
     let aguja = aguja.as_bytes();
     if aguja.is_empty() {
-        return true;
+        return Some((3, 0));
     }
-    if pajar.len() < aguja.len() {
-        return false;
-    }
-    let aguja_lc: alloc::vec::Vec<u8> = aguja.iter().map(|b| b.to_ascii_lowercase()).collect();
-    for inicio in 0..=(pajar.len() - aguja.len()) {
-        let ventana = &pajar[inicio..inicio + aguja.len()];
-        if ventana
+    let eq = |a: u8, b: u8| a.to_ascii_lowercase() == b.to_ascii_lowercase();
+
+    // Nivel 3 — prefijo.
+    if pajar.len() >= aguja.len()
+        && pajar[..aguja.len()]
             .iter()
-            .zip(aguja_lc.iter())
-            .all(|(a, b)| a.to_ascii_lowercase() == *b)
-        {
-            return true;
+            .zip(aguja.iter())
+            .all(|(a, b)| eq(*a, *b))
+    {
+        return Some((3, 0));
+    }
+
+    // Nivel 2 — substring contiguo.
+    if pajar.len() >= aguja.len() {
+        for inicio in 1..=(pajar.len() - aguja.len()) {
+            let ventana = &pajar[inicio..inicio + aguja.len()];
+            if ventana
+                .iter()
+                .zip(aguja.iter())
+                .all(|(a, b)| eq(*a, *b))
+            {
+                return Some((2, inicio));
+            }
         }
     }
-    false
+
+    // Nivel 1 — subsecuencia (cada caracter en orden, no necesariamente
+    // contiguo). Recorremos pajar de izquierda a derecha consumiendo aguja
+    // a medida que casa; si terminamos aguja entera, hay match.
+    let mut iter = pajar.iter().enumerate();
+    let mut primer: Option<usize> = None;
+    'siguiente_letra: for &ch_a in aguja {
+        for (idx, &ch_p) in iter.by_ref() {
+            if eq(ch_p, ch_a) {
+                if primer.is_none() {
+                    primer = Some(idx);
+                }
+                continue 'siguiente_letra;
+            }
+        }
+        return None;
+    }
+    primer.map(|p| (1, p))
 }
 
 /// Cicla al siguiente modo de teselado: recalcula los marcos de las ventanas

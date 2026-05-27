@@ -354,6 +354,8 @@ verifica:
 | `5e967e5` | Fase 58 v1 — Alt+P abre launcher gráfico modal |
 | `1c03019` | Fase 58 v2 — ratón modal en el launcher |
 | `6aa8228` | Fase 58 v3 — búsqueda por texto en vivo (substring CI) |
+| `7d35c4a` | Fase 58 v4 — contador "N/M" en el título del launcher |
+| (Fase 58 v5) | match jerárquico del launcher (prefijo > substring > subsecuencia) + selección sticky |
 
 ## 14. Plan — siguientes hitos
 
@@ -439,7 +441,7 @@ restante, debe descontar primero estos hitos para no duplicar esfuerzo:
   scancode `0x22` se registra en `async_system/teclado.rs:60` como
   `TECLA_G`.
 - **Launcher gráfico tipo Spotlight** — **HECHA** (Fase 58, vueltas
-  1–3 + polish). `Alt+P` engendra `Mando::ToggleLauncher`; el
+  1–5 + polish). `Alt+P` engendra `Mando::ToggleLauncher`; el
   compositor pinta un overlay modal centrado con la lista de apps del
   manifiesto y la roba el foco del teclado y del ratón.
   - Teclado: `Alt+J/K` mueven la selección entre las apps filtradas,
@@ -448,9 +450,21 @@ restante, debe descontar primero estos hitos para no duplicar esfuerzo:
   - Ratón: hover resalta una fila, clic izquierdo la lanza, clic fuera
     del overlay cierra sin lanzar.
   - Búsqueda por texto en vivo: escribir letras/cifras/espacio filtra
-    el catálogo por substring case-insensitive; Backspace borra el
-    último carácter; la lista se recalcula por keystroke
-    (`refiltrar_launcher`).
+    el catálogo; Backspace borra el último carácter; la lista se
+    recalcula por keystroke (`refiltrar_launcher`).
+  - Match jerárquico (v5): `evaluar_match` clasifica cada nombre en
+    tres niveles — 3) prefijo, 2) substring contiguo, 1) subsecuencia
+    (chars en orden, no necesariamente pegados, estilo Spotlight:
+    `plm` matchea `pluma`). Dentro de cada nivel, gana el que tiene
+    el primer match más cerca del inicio; en empate, el orden original
+    del manifiesto. La selección es *sticky*: tras un refiltrado, si
+    la app previa sigue lanzable, el cursor se queda sobre ella
+    (backspace ya no tira el cursor al primer item).
+  - Contador "N/M" (v4) a la derecha de la barra de título: hace
+    visible cuándo la query deja cero matches o cuántas apps quedan
+    tras filtrar; se pinta en `Color::SIN_FOCO` como información
+    subordinada al texto principal (`formatear_contador` en
+    `consola.rs`, sin alocación).
   - Pipeline IRQ→compositor sin locks: mirror atómico
     `compositor::LAUNCHER_ABIERTO: AtomicBool` que `recibir_scancode`
     consulta sin tomar el cerrojo del escritorio; si está vivo,
