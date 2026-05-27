@@ -1171,6 +1171,89 @@ mod pruebas {
     }
 
     #[test]
+    fn test_wawa_ecosystem_immutable_vanguard() {
+        // =====================================================================
+        // FASE 50 :: VANGUARDIA INMUTABLE DEL ABI WAWA
+        // ---------------------------------------------------------------------
+        //  Sello de cierre del Manifiesto Tecnico. La firma numerica de las
+        //  ocho variantes licitas de `CodigoError` —el lenguaje compartido
+        //  entre el kernel Ring 0, los modulos WASM Ring 3 y el explorador
+        //  host-side— ha quedado fijada. Este test la consagra:
+        //
+        //    * Cada variante tiene su valor i32 FIJO en el orden negociado
+        //      a lo largo de las primeras 49 fases. Renumerar una existente
+        //      seria romper, byte a byte, todo binario Ring 3 ya inscrito
+        //      en el grafo direccionado por contenido.
+        //
+        //    * La conversion `as i32` y la `const fn como_i32` son gemelas:
+        //      ambas extraen el discriminante `#[repr(i32)]` —sin trampa,
+        //      sin tabla auxiliar—.
+        //
+        //    * El catalogo permanece de cardinalidad ocho: ni una variante
+        //      menos (siempre Ok=0 + siete fallas controladas), ni una mas
+        //      escondida tras renumeracion. Anadir una NUEVA codifica un
+        //      valor entero NUEVO; el contrato no se rompe.
+        //
+        //  Quien pretenda extender el catalogo en una fase futura debera,
+        //  ANTES de mover una variante, actualizar esta tabla de cierre
+        //  y aceptar que el wire del ecosistema entero ha cambiado de era.
+        // =====================================================================
+
+        // 1. Firma numerica congelada de la vanguardia (Ok + 7 fallas).
+        const VANGUARDIA: [(CodigoError, i32); 8] = [
+            (CodigoError::Ok, 0),
+            (CodigoError::Ausente, -1),
+            (CodigoError::CapacidadInsuficiente, -2),
+            (CodigoError::AlmacenamientoFallo, -3),
+            (CodigoError::SinFoco, -4),
+            (CodigoError::EnvioFallo, -5),
+            (CodigoError::Saturado, -6),
+            (CodigoError::PayloadInvalido, -7),
+        ];
+        for &(variante, valor) in VANGUARDIA.iter() {
+            assert_eq!(
+                variante.como_i32(),
+                valor,
+                "ABI roto: {:?} dejo de valer {} — mutacion accidental detectada",
+                variante,
+                valor,
+            );
+            // `as i32` directo: el `#[repr(i32)]` fija el discriminante en
+            // ambos caminos —el const fn y el cast— sin tabla auxiliar.
+            assert_eq!(variante as i32, valor);
+        }
+
+        // 2. La proyeccion debe ser inyectiva: dos variantes distintas no
+        //    pueden compartir su valor i32 — el catalogo de la vanguardia
+        //    no tolera colisiones.
+        for i in 0..VANGUARDIA.len() {
+            for j in (i + 1)..VANGUARDIA.len() {
+                assert_ne!(
+                    VANGUARDIA[i].1, VANGUARDIA[j].1,
+                    "ABI roto: dos variantes comparten valor i32"
+                );
+            }
+        }
+
+        // 3. Cardinalidad inmutable: 1 (Ok) + 7 fallas controladas. Cualquier
+        //    fase que pretenda crecer este catalogo debe actualizar el test
+        //    explicitamente; un cambio silencioso se delata aqui.
+        assert_eq!(
+            VANGUARDIA.len(),
+            8,
+            "ABI roto: cardinalidad del catalogo CodigoError mutada"
+        );
+
+        // 4. Rango cerrado de fallas en [-7, -1]. La cascada de Pluma
+        //    (apps/pluma) y el dispatcher Ring 0 cuentan con este rango
+        //    EXACTO para distinguir codigos de error de retornos legitimos.
+        let fallas_min = VANGUARDIA.iter().skip(1).map(|&(_, v)| v).min().unwrap();
+        let fallas_max = VANGUARDIA.iter().skip(1).map(|&(_, v)| v).max().unwrap();
+        assert_eq!(fallas_min, -7, "ABI roto: el suelo de fallas se desplazo");
+        assert_eq!(fallas_max, -1, "ABI roto: el techo de fallas se desplazo");
+    }
+
+    #[test]
     fn superbloque_porta_log_inicio_distinto_de_uno() {
         // Tras una compactacion semantica, `log_inicio` no es 1: apunta al
         // sector donde empieza el segmento limpio recien escrito. El

@@ -1275,7 +1275,17 @@ fn pintar() {
 
     // Cabecera con el hash del cuaderno (si ya hubo una consolidacion).
     rellenar_rect(lienzo, 0, 0, ANCHO, EDITOR_Y - 4, secundario);
-    dibujar_texto(lienzo, b"PLUMA  WAWA  F46", 8, 6, 1, tinta);
+    // FASE 50 :: timbrado GOLD del header. El identificador del sistema
+    // operativo deja de rotular la fase intermedia y celebra el cierre
+    // del Manifiesto Tecnico con su version definitiva.
+    dibujar_texto(
+        lienzo,
+        b"PLUMA WAWA OPERATING SYSTEM [V1.0.0-GOLD]",
+        8,
+        6,
+        1,
+        tinta,
+    );
     if unsafe { HASH_CUADERNO_VALIDO } {
         let h = unsafe { HASH_CUADERNO_VIVO };
         let mut etiqueta = [b' '; 8];
@@ -1317,6 +1327,17 @@ fn pintar() {
         b"F5 EJECUTA  F6 FIRMA  F7 CLONA  ENTER NAV"
     };
     dibujar_texto(lienzo, leyenda, 8, LEYENDA_Y, 1, acento);
+
+    // FASE 50 :: BADGE DISCRETO DE ESTADO DE BUS. Con la migracion de
+    // la aduana criptografica al `consola_virtio.rs` (Fase 49), el HAL
+    // ya habla VirtIO-PCI con el host a velocidad de silicio. El timbre
+    // permanente al pie derecho del lienzo celebra la soberania del bus
+    // —`OK` significa que el demonio sigue respondiendo el handshake de
+    // 49 bytes—. Renderizado en `secundario` para no robar peso visual
+    // a la leyenda principal: status, no mando.
+    let bus_badge: &[u8] = b"BUS: VIRTIO-PCI [OK]";
+    let badge_x = ANCHO - 8 - bus_badge.len() * FAV;
+    dibujar_texto(lienzo, bus_badge, badge_x, LEYENDA_Y, 1, secundario);
 
     // FASE 37 :: marco vertical amarillo palido a lo largo del borde
     // izquierdo del lienzo cuando la integridad esta comprometida. Es
@@ -1586,6 +1607,10 @@ fn glifo(c: u8) -> [u8; FH] {
         b'-' => [0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00],
         b'.' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x06],
         b':' => [0x00, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00],
+        // FASE 50 :: corchetes para el timbrado GOLD del header y el badge
+        // de estado del bus VirtIO. Mismos 5x7 que el resto de la tipografia.
+        b'[' => [0x0E, 0x08, 0x08, 0x08, 0x08, 0x08, 0x0E],
+        b']' => [0x0E, 0x02, 0x02, 0x02, 0x02, 0x02, 0x0E],
         b'+' => [0x00, 0x04, 0x04, 0x1F, 0x04, 0x04, 0x00],
         b'*' => [0x00, 0x0A, 0x04, 0x1F, 0x04, 0x0A, 0x00],
         // FASE 34 :: chevron derecho — indicador de herencia en cascada.
