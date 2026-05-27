@@ -187,6 +187,12 @@ struct Ventana {
     /// app concluye su tarea, la ranura queda inerte —fuera del orden, del
     /// orden-Z y del foco— y el teselado reclama su espacio.
     cerrada: bool,
+    /// FASE 59 v2 :: el output donde vive esta ventana. Hoy siempre `0` —el
+    /// unico output existente—; cuando un driver enumere outputs adicionales
+    /// (`pantallas::registrar`), las ventanas pueden distribuirse entre
+    /// ellos. El teselado agrupa las ventanas por este indice y tesela cada
+    /// grupo en su `Output::region` propia.
+    output: usize,
 }
 
 /// El escritorio: el registro de todas las ventanas y el modo de teselado.
@@ -353,6 +359,10 @@ pub fn fundar(ancho: usize, alto: usize, naturales: &[(usize, usize, &str)]) {
             pintada: false,
             baliza: None,
             cerrada: false,
+            // FASE 59 v2 :: todas las ventanas del genesis nacen en el
+            // output primario. Apps que en el futuro pidan nacer en otro
+            // output usarian `nacer_ventana_en` (no implementada todavia).
+            output: 0,
         });
     }
 
@@ -391,16 +401,57 @@ pub fn fundar(ancho: usize, alto: usize, naturales: &[(usize, usize, &str)]) {
 /// Recalcula el teselado y asigna a cada ventana TESELADA su marco. La celda
 /// `slot` del teselado va a la ventana `orden[slot]`: manda el orden, no la
 /// identidad. Las ventanas flotantes no estan en `orden` y conservan su marco.
+///
+/// FASE 59 v2 :: las ventanas se AGRUPAN por `Ventana::output` y cada grupo se
+/// tesela dentro de la `RegionPantalla` de ese output (`pantallas::todos()`).
+/// Para el caso vivo (un solo output que cubre el framebuffer), el resultado
+/// es identico al teselado anterior: un solo grupo con todas las ventanas
+/// teseladas, una sola region. Cuando un driver registre outputs adicionales,
+/// las ventanas asociadas a cada uno se tesselan independientemente —sin
+/// invadir la pantalla del vecino—.
 fn aplicar_teselado(escritorio: &mut Escritorio) {
-    let marcos = teselar(
-        escritorio.orden.len(),
-        escritorio.ancho,
-        escritorio.alto,
-        escritorio.modo,
-    );
-    for (slot, marco) in marcos.into_iter().enumerate() {
-        let ventana = escritorio.orden[slot];
-        escritorio.ventanas[ventana].marco = marco;
+    let outputs = crate::pantallas::todos();
+    if outputs.is_empty() {
+        // Sin registro de outputs (situacion imposible tras `fundar`, pero
+        // defensiva): caer al comportamiento legacy con el ancho/alto del
+        // escritorio.
+        let marcos = teselar(
+            escritorio.orden.len(),
+            escritorio.ancho,
+            escritorio.alto,
+            escritorio.modo,
+        );
+        for (slot, marco) in marcos.into_iter().enumerate() {
+            let ventana = escritorio.orden[slot];
+            escritorio.ventanas[ventana].marco = marco;
+        }
+        return;
+    }
+
+    for output in &outputs {
+        // Las ventanas TESELADAS que viven en este output, en el orden
+        // preservado de `escritorio.orden`. Un mismo paso para N=1 (todas
+        // caen en el output 0) o para N>1 (cada output recibe su sub-orden).
+        let mut indices_local: Vec<usize> = Vec::with_capacity(escritorio.orden.len());
+        for &i in &escritorio.orden {
+            if escritorio.ventanas[i].output == output.id {
+                indices_local.push(i);
+            }
+        }
+        let n = indices_local.len();
+        if n == 0 {
+            continue;
+        }
+        // Teselar dentro de la region del output: como `teselar` espera
+        // ancho/alto absolutos de "la pantalla", le pasamos los del output;
+        // luego trasladamos los marcos por el origen del output.
+        let marcos = teselar(n, output.region.ancho, output.region.alto, escritorio.modo);
+        for (slot, mut marco) in marcos.into_iter().enumerate() {
+            marco.x = marco.x.saturating_add(output.region.x);
+            marco.y = marco.y.saturating_add(output.region.y);
+            let ventana = indices_local[slot];
+            escritorio.ventanas[ventana].marco = marco;
+        }
     }
 }
 
@@ -1381,6 +1432,10 @@ pub fn nacer_ventana(nat_ancho: usize, nat_alto: usize, nombre: &str) -> usize {
         pintada: false,
         baliza: None,
         cerrada: false,
+        // FASE 59 v2 :: las altas en vivo nacen siempre en el output
+        // primario. Un futuro `nacer_ventana_en(output, ...)` aceptara
+        // un output explicito cuando haya N>1.
+        output: 0,
     });
     escritorio.orden.push(indice);
     aplicar_teselado(&mut escritorio);

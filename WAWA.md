@@ -361,6 +361,8 @@ verifica:
 | (Fase 58 v8) | `Alt+1..9` quick-launch sobre la fila VISIBLE del filtrado |
 | (Fase 58 v9) | `instalar_app(EntradaApp)` — PLANTILLAS mutable + refresh del catálogo |
 | (Fase 58 v10) | polling automático del manifiesto: `tarea_compositor` invoca `refrescar_apps_desde_manifiesto` cada ~6 s |
+| (Fase 59 v1) | módulo `pantallas` — registro `Once<Mutex<Vec<Output>>>` con N=1, fundado desde el framebuffer del bootloader |
+| (Fase 59 v2) | `Ventana::output` + `aplicar_teselado` agrupa por output y tesela cada uno en su `Output::region` |
 
 ## 14. Plan — siguientes hitos
 
@@ -542,17 +544,23 @@ restante, debe descontar primero estos hitos para no duplicar esfuerzo:
    `PERMISO_COMPACTAR` que invoque `sys_grafo_compactar`. Alternativa
    pesada: nuevo char-device dedicado.
 
-2. **Multi-monitor — bloqueado por el bootloader**. `bootloader_api 0.11`
-   define `BootInfo.framebuffer: Optional<FrameBuffer>` (un solo
-   framebuffer, no un vector), así que el firmware UEFI sólo entrega un
-   output al kernel. Refactorizar `Pantalla` a `Pantallas[N]` no destraba
-   nada por sí solo — el dato extra no existe. Para multi-output real
-   harían falta: (a) forkear `bootloader_api` para exponer todos los
-   handles GOP que el firmware mantiene, o (b) escribir un driver GPU
-   propio que enumere outputs en runtime. Ambos caminos son grandes y
-   ortogonales al kernel actual. Lo que YA hace bien el código:
-   `Pantalla::adoptar` (`grafico.rs:333`) lee la geometría real de
-   `FrameBufferInfo` — resolución dinámica para el output que sí existe.
+2. **Multi-monitor — refactor estructural HECHO, bloqueador físico vigente**
+   (Fase 59 v1+v2). El **modelo** ya es N-output: el módulo `pantallas`
+   (`pantallas.rs`) mantiene un registro `Once<Mutex<Vec<Output>>>`,
+   `Ventana::output` asocia cada ventana a un output, y `aplicar_teselado`
+   agrupa por output y tesela cada uno en su `Output::region`. Para N=1
+   (el caso vivo hoy) el resultado es idéntico al teselado anterior. El
+   **bloqueador físico** sigue siendo `bootloader_api 0.11` que entrega
+   `BootInfo.framebuffer: Optional<FrameBuffer>` — UN solo framebuffer.
+   Para que `pantallas::registrar` reciba un output adicional con
+   geometría real hace falta (a) forkear `bootloader_api` para exponer
+   todos los handles GOP que el firmware mantiene, o (b) escribir un
+   driver GPU propio (virtio-gpu / PCI) que enumere outputs en runtime.
+   La capa de software ya está lista; falta el origen del dato. Limitación
+   conocida del MVP: `area_apps` resta la consola y la taskbar globales,
+   que en N>1 sólo tienen sentido en el output primario — la decisión
+   "taskbar replicada en cada monitor vs sólo en uno" queda para cuando
+   haya N>1 que validar.
 
 3. **Tabla de capacidades por bytecode hash**: cuando el manifiesto declare
    `bytecode` por hash, los permisos podrían derivarse de la firma sobre
