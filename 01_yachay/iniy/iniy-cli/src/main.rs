@@ -130,6 +130,23 @@ enum Cmd {
         #[arg(long)]
         recalcular: bool,
     },
+    /// Asocia un tag (temática libre) a un documento. El tag se crea si
+    /// no existe. Los tags propagan por doc a sus aserciones, así que
+    /// `testimonio --tag X` filtra a aserciones de docs etiquetados con X.
+    Tag {
+        doc_id: String,
+        tag: String,
+    },
+    /// Quita un tag de un documento.
+    Untag {
+        doc_id: String,
+        tag: String,
+    },
+    /// Lista todos los tags del corpus con conteo de docs. Sin args
+    /// muestra el global; con doc-id muestra solo los del doc.
+    Tags {
+        doc_id: Option<String>,
+    },
     /// "¿Qué dice el corpus sobre X?" — agrupa aserciones que apoyan o contradicen
     /// el query, con la opinión autoral y la fuente de cada una.
     Testimonio {
@@ -138,6 +155,9 @@ enum Cmd {
         umbral: f32,
         #[arg(long, default_value_t = 10)]
         top: usize,
+        /// Filtra a aserciones de documentos con este tag.
+        #[arg(long)]
+        tag: Option<String>,
     },
     /// Propaga la opinión autoral de una aserción semilla por el grafo NLI,
     /// con descuento de Jøsang por el score de cada arista.
@@ -156,6 +176,9 @@ enum Cmd {
         /// Fuentes contradictorias con el corpus pesan menos.
         #[arg(long)]
         pesar_reputacion: bool,
+        /// Filtra a aserciones de documentos con este tag.
+        #[arg(long)]
+        tag: Option<String>,
     },
 }
 
@@ -456,6 +479,39 @@ async fn main() -> Result<()> {
                 println!("         emite: {}↑ apoyos · {}↓ contradicciones", r.apoya, r.contradice);
             }
         }
+        Cmd::Tag { doc_id, tag } => {
+            let did = parse_doc_id(&doc_id)?;
+            store.taggear_doc(did, &tag)?;
+            println!("doc {} tagged: «{}»", did.0, tag);
+        }
+        Cmd::Untag { doc_id, tag } => {
+            let did = parse_doc_id(&doc_id)?;
+            store.destaggear_doc(did, &tag)?;
+            println!("doc {} sin tag «{}»", did.0, tag);
+        }
+        Cmd::Tags { doc_id } => {
+            match doc_id {
+                Some(d) => {
+                    let did = parse_doc_id(&d)?;
+                    let tags = store.tags_de_doc(did)?;
+                    if tags.is_empty() {
+                        println!("(doc sin tags)");
+                    } else {
+                        for t in tags { println!("  · {t}"); }
+                    }
+                }
+                None => {
+                    let lista = store.listar_tags_con_conteo()?;
+                    if lista.is_empty() {
+                        println!("(sin tags — usa `iniy tag <doc-id> <tag>`)");
+                    } else {
+                        for (t, n) in lista {
+                            println!("  {:>3} docs  {}", n, t);
+                        }
+                    }
+                }
+            }
+        }
         Cmd::Cite { asercion_id, fuente, kind, unset } => {
             let aid = parse_asercion_id(&asercion_id)?;
             if unset {
@@ -502,10 +558,13 @@ async fn main() -> Result<()> {
                 println!("    «{}»", truncar(&att.asercion.texto, 130));
             }
         }
-        Cmd::Consenso { query, umbral, pesar_reputacion } => {
-            let todas = store.cargar_aserciones_atribuidas_todas()?;
+        Cmd::Consenso { query, umbral, pesar_reputacion, tag } => {
+            let todas = match tag.as_deref() {
+                Some(t) => store.cargar_aserciones_atribuidas_por_tag(t)?,
+                None => store.cargar_aserciones_atribuidas_todas()?,
+            };
             if todas.is_empty() {
-                anyhow::bail!("corpus vacío de aserciones");
+                anyhow::bail!("corpus vacío (¿tag inexistente?)");
             }
             let reputaciones: std::collections::HashMap<FuenteId, f32> = if pesar_reputacion {
                 let persistidas = store.cargar_reputaciones_todas()?;
@@ -565,10 +624,17 @@ async fn main() -> Result<()> {
                 println!("    «{}»", truncar(&att.asercion.texto, 130));
             }
         }
-        Cmd::Testimonio { query, umbral, top } => {
-            let todas = store.cargar_aserciones_atribuidas_todas()?;
+        Cmd::Testimonio { query, umbral, top, tag } => {
+            let todas = match tag.as_deref() {
+                Some(t) => store.cargar_aserciones_atribuidas_por_tag(t)?,
+                None => store.cargar_aserciones_atribuidas_todas()?,
+            };
             if todas.is_empty() {
-                anyhow::bail!("corpus vacío de aserciones (corre `iniy extract` sobre algún doc primero)");
+                let hint = match tag.as_deref() {
+                    Some(t) => format!("ningún doc con tag «{t}»"),
+                    None => "corpus vacío de aserciones (corre `iniy extract` sobre algún doc primero)".into(),
+                };
+                anyhow::bail!(hint);
             }
 
             let mut apoyan: Vec<(f32, AsercionAtribuida)> = Vec::new();

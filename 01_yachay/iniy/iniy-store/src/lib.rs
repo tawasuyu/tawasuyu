@@ -113,6 +113,24 @@ impl Store {
         self.migrar_documentos_fuente_id()?;
         self.migrar_aserciones_fuente_citada()?;
         self.migrar_reputaciones()?;
+        self.migrar_tags()?;
+        Ok(())
+    }
+
+    fn migrar_tags(&self) -> Result<()> {
+        self.conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS tags (
+                nombre TEXT PRIMARY KEY
+            );
+            CREATE TABLE IF NOT EXISTS documento_tags (
+                doc_id TEXT NOT NULL REFERENCES documentos(id),
+                tag    TEXT NOT NULL REFERENCES tags(nombre),
+                PRIMARY KEY (doc_id, tag)
+            );
+            CREATE INDEX IF NOT EXISTS idx_doctag_tag ON documento_tags(tag);
+            "#,
+        )?;
         Ok(())
     }
 
@@ -605,6 +623,109 @@ impl Store {
                 contradice: contradice as u32,
                 score: score as f32,
                 actualizada_at: at,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Agrega un tag a un documento (crea el tag si no existe).
+    pub fn taggear_doc(&mut self, doc_id: DocId, tag: &str) -> Result<()> {
+        let tag = tag.trim();
+        if tag.is_empty() {
+            anyhow::bail!("tag vacío");
+        }
+        let tx = self.conn.transaction()?;
+        tx.execute("INSERT OR IGNORE INTO tags (nombre) VALUES (?1)", params![tag])?;
+        tx.execute(
+            "INSERT OR IGNORE INTO documento_tags (doc_id, tag) VALUES (?1, ?2)",
+            params![doc_id.0.to_string(), tag],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn destaggear_doc(&mut self, doc_id: DocId, tag: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM documento_tags WHERE doc_id = ?1 AND tag = ?2",
+            params![doc_id.0.to_string(), tag],
+        )?;
+        Ok(())
+    }
+
+    pub fn tags_de_doc(&self, doc_id: DocId) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT tag FROM documento_tags WHERE doc_id = ?1 ORDER BY tag",
+        )?;
+        let rows = stmt.query_map(params![doc_id.0.to_string()], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn listar_tags_con_conteo(&self) -> Result<Vec<(String, u32)>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT t.nombre, COUNT(dt.doc_id) AS n
+            FROM tags t
+            LEFT JOIN documento_tags dt ON dt.tag = t.nombre
+            GROUP BY t.nombre
+            ORDER BY n DESC, t.nombre ASC
+            "#,
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+        let mut out = Vec::new();
+        for r in rows {
+            let (n, c) = r?;
+            out.push((n, c as u32));
+        }
+        Ok(out)
+    }
+
+    /// Carga aserciones atribuidas filtradas por tag (vía doc).
+    pub fn cargar_aserciones_atribuidas_por_tag(&self, tag: &str) -> Result<Vec<AsercionAtribuida>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT a.id, a.doc_id, a.chunk_id, a.texto, a.opinion_json,
+                   d.titulo,
+                   CASE WHEN fc.id IS NOT NULL THEN fc.id     ELSE fd.id     END AS f_id,
+                   CASE WHEN fc.id IS NOT NULL THEN fc.nombre ELSE fd.nombre END AS f_nombre,
+                   CASE WHEN fc.id IS NOT NULL THEN fc.kind   ELSE fd.kind   END AS f_kind,
+                   CASE WHEN fc.id IS NOT NULL THEN 1 ELSE 0 END AS citada
+            FROM aserciones a
+            JOIN documentos d ON d.id = a.doc_id
+            JOIN documento_tags dt ON dt.doc_id = d.id
+            LEFT JOIN fuentes fd ON fd.id = d.fuente_id
+            LEFT JOIN fuentes fc ON fc.id = a.fuente_citada_id
+            WHERE dt.tag = ?1
+            "#,
+        )?;
+        let rows = stmt.query_map(params![tag], |r| {
+            Ok((
+                r.get::<_, String>(0)?, r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?, r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?, r.get::<_, String>(5)?,
+                r.get::<_, Option<String>>(6)?, r.get::<_, Option<String>>(7)?,
+                r.get::<_, Option<String>>(8)?, r.get::<_, i64>(9)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            let (a_id_s, d_id_s, c_id_s, texto, op_json, d_titulo, f_id, f_nombre, f_kind, citada) = r?;
+            let id = AsercionId(Ulid::from_str(&a_id_s).with_context(|| format!("asercion_id inválido: {a_id_s}"))?);
+            let doc_id = DocId(Ulid::from_str(&d_id_s).with_context(|| format!("doc_id inválido: {d_id_s}"))?);
+            let chunk_id = ChunkId(Ulid::from_str(&c_id_s).with_context(|| format!("chunk_id inválido: {c_id_s}"))?);
+            let opinion_autoral: Opinion = serde_json::from_str(&op_json)
+                .with_context(|| format!("opinion_json corrupta: {a_id_s}"))?;
+            let fuente = match (f_id, f_nombre) {
+                (Some(fid_s), Some(nombre)) => {
+                    let fid = Ulid::from_str(&fid_s).with_context(|| format!("fuente_id inválido: {fid_s}"))?;
+                    Some(Fuente { id: FuenteId(fid), nombre, kind: f_kind })
+                }
+                _ => None,
+            };
+            out.push(AsercionAtribuida {
+                asercion: Asercion { id, doc_id, chunk_id, texto, opinion_autoral },
+                doc_titulo: d_titulo,
+                fuente,
+                citada: citada != 0,
             });
         }
         Ok(out)
