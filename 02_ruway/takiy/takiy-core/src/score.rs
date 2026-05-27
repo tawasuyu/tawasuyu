@@ -81,6 +81,15 @@ impl Track {
         self.notes.iter().filter(|n| n.sounds_at(beat)).collect()
     }
 
+    /// Quita la nota en el índice dado. Devuelve la nota eliminada o
+    /// `None` si el índice estaba fuera de rango.
+    pub fn remove(&mut self, idx: usize) -> Option<ScoreNote> {
+        if idx >= self.notes.len() {
+            return None;
+        }
+        Some(self.notes.remove(idx))
+    }
+
     /// Transpone la pista entera. Es atómico: si alguna nota se saldría
     /// del rango MIDI, no se cambia nada y devuelve `false`.
     pub fn transpose(&mut self, semitones: i32) -> bool {
@@ -194,6 +203,20 @@ mod tests {
     fn velocity_is_clamped() {
         let n = ScoreNote::new(Pitch::MIDDLE_C, 0.0, 1.0, 200);
         assert_eq!(n.velocity, 127);
+    }
+
+    #[test]
+    fn remove_takes_note_at_index_and_leaves_rest_sorted() {
+        let mut t = Track::new("x");
+        t.add(note(PitchClass::C, 0.0));
+        t.add(note(PitchClass::D, 1.0));
+        t.add(note(PitchClass::E, 2.0));
+        let gone = t.remove(1).expect("idx 1 existe");
+        assert!((gone.start - 1.0).abs() < 1e-6);
+        let starts: Vec<f32> = t.notes().iter().map(|n| n.start).collect();
+        assert_eq!(starts, vec![0.0, 2.0]);
+        // Fuera de rango: no rompe.
+        assert!(t.remove(99).is_none());
     }
 
     #[test]

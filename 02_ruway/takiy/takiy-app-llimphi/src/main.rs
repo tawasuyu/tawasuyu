@@ -8,8 +8,15 @@
 //!
 //! Controles:
 //!
-//! - `Space` — toca / detiene el score.
-//! - `Esc`   — cierra la ventana.
+//! - `Space`      — toca / detiene el score.
+//! - `Tab`        — cicla la pista activa (la próxima nota que agregues
+//!                  irá ahí; el borde resalta cuál está activa).
+//! - `N`          — crea una pista nueva en blanco y la activa.
+//! - Click izq.   — agrega una nota en la celda (1 beat, vel 96) en la
+//!                  pista activa. Si caés sobre una nota existente, no
+//!                  hace nada.
+//! - Click der.   — borra la nota bajo el cursor (de cualquier pista).
+//! - `Esc`        — cierra la ventana.
 
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::prelude::{percent, Size, Style};
@@ -33,6 +40,19 @@ enum Msg {
     /// Tick periódico para detectar que el playback terminó solo (y
     /// repintar el header). El estado real vive en el `Player`.
     Tick,
+    /// Agrega una nota en la pista activa con `start = beat`,
+    /// `duration = 1.0` y `velocity = 96`. La pista la decide `update`
+    /// según `model.active_track`, no el callback de UI, así si el
+    /// usuario apretó Tab justo antes del click se respeta el último
+    /// estado del modelo.
+    AddNote { beat: f32, midi: u8 },
+    /// Borra la nota `note_idx` de `track_idx`. Si el índice ya no
+    /// existe (race con otra edición), no hace nada.
+    DeleteNote { track: usize, idx: usize },
+    /// Avanza la pista activa al siguiente índice (wrap).
+    CycleTrack,
+    /// Agrega una pista nueva (vacía) y la activa.
+    NewTrack,
     Quit,
 }
 
@@ -56,6 +76,12 @@ struct Model {
     /// Mensaje breve para el header — ayuda a debuggear el error si el
     /// device no abrió, o muestra "playing"/"paused".
     status: String,
+    /// Índice de la pista activa para edición. Las notas nuevas (click
+    /// izquierdo en celda vacía) se agregan acá. Si el score está
+    /// vacío al arrancar — caso raro — se crea una pista por default.
+    active_track: usize,
+    /// Counter para nombrar nuevas pistas creadas con `N`.
+    next_track_n: usize,
 }
 
 struct Takiy;
@@ -73,7 +99,12 @@ impl App for Takiy {
     }
 
     fn init(handle: &Handle<Msg>) -> Model {
-        let (score, source) = load_score();
+        let (mut score, source) = load_score();
+        if score.tracks().is_empty() {
+            // Garantizamos una pista para que el primer click izquierdo
+            // tenga dónde aterrizar sin que el usuario tenga que pulsar N.
+            score.add_track(Track::new("track 1"));
+        }
         eprintln!(
             "takiy · cargado {source} ({} pistas, {:.1} beats)",
             score.tracks().len(),
@@ -104,6 +135,7 @@ impl App for Takiy {
         // vive en `update`, que es el único con acceso al `Player`.
         handle.spawn_periodic(std::time::Duration::from_millis(200), || Msg::Tick);
 
+        let n_tracks = score.tracks().len();
         Model {
             score,
             source,
@@ -113,6 +145,8 @@ impl App for Takiy {
             engine,
             playing: false,
             status,
+            active_track: 0,
+            next_track_n: n_tracks + 1,
         }
     }
 
@@ -149,6 +183,47 @@ impl App for Takiy {
                     }
                 }
             }
+            Msg::AddNote { beat, midi } => {
+                let Some(pitch) = Pitch::from_midi(midi) else {
+                    return model;
+                };
+                let track_idx = model.active_track.min(model.score.tracks().len().saturating_sub(1));
+                if let Some(track) = model.score.track_mut(track_idx) {
+                    track.add(ScoreNote::new(pitch, beat, 1.0, 96));
+                    model.status = format!(
+                        "added · pista {} · beat {:.0} · midi {midi}",
+                        track_idx, beat
+                    );
+                    // Si el SF2 está activo y agregamos una pista nueva
+                    // (caso raro acá), no reasignamos programas: el
+                    // mapeo se hizo en init y vuelve a aplicarse al
+                    // próximo Play porque siempre vive en el Model.
+                }
+            }
+            Msg::DeleteNote { track, idx } => {
+                if let Some(t) = model.score.track_mut(track) {
+                    if t.remove(idx).is_some() {
+                        model.status = format!("deleted · pista {track} · nota #{idx}");
+                    }
+                }
+            }
+            Msg::CycleTrack => {
+                let n = model.score.tracks().len().max(1);
+                model.active_track = (model.active_track + 1) % n;
+                let name = model
+                    .score
+                    .track(model.active_track)
+                    .map(|t| t.name.as_str())
+                    .unwrap_or("?");
+                model.status = format!("active · pista {} ({name})", model.active_track);
+            }
+            Msg::NewTrack => {
+                let name = format!("track {}", model.next_track_n);
+                model.next_track_n += 1;
+                let idx = model.score.add_track(Track::new(&name));
+                model.active_track = idx;
+                model.status = format!("new · pista {idx} ({name})");
+            }
         }
         model
     }
@@ -159,7 +234,9 @@ impl App for Takiy {
         }
         match &event.key {
             Key::Named(NamedKey::Space) => Some(Msg::TogglePlay),
+            Key::Named(NamedKey::Tab) => Some(Msg::CycleTrack),
             Key::Named(NamedKey::Escape) => Some(Msg::Quit),
+            Key::Character(s) if s.eq_ignore_ascii_case("n") => Some(Msg::NewTrack),
             _ => None,
         }
     }
@@ -171,18 +248,44 @@ impl App for Takiy {
         let engine = model.engine.clone();
         let status = model.status.clone();
         let playing = model.playing;
+        let active_track = model.active_track;
         let (min_midi, max_midi) = pitch_range(&score);
         let total_beats = score.duration_beats().max(8.0);
+
+        // Capturas separadas para cada closure: el painter recibe el
+        // score; los handlers de click también, pero los cierran como
+        // `Arc`-equivalentes vía clone (Score es Clone barato — Vec<Track>).
+        let score_paint = score.clone();
+        let score_click = score.clone();
+        let score_right = score;
 
         View::new(Style {
             size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
             ..Default::default()
         })
         .fill(theme.bg_app)
+        .on_click_at(move |lx, ly, rw, rh| {
+            // Click izq.: si cae sobre una nota existente, ignoramos
+            // (el usuario no quiere "agregar encima"). Si cae en
+            // celda vacía, agregamos.
+            if hit_test_note(&score_click, lx, ly, rw, rh, min_midi, max_midi, total_beats)
+                .is_some()
+            {
+                return None;
+            }
+            let (beat, midi) =
+                cell_at(lx, ly, rw, rh, min_midi, max_midi, total_beats)?;
+            Some(Msg::AddNote { beat, midi })
+        })
+        .on_right_click_at(move |lx, ly, rw, rh| {
+            let (track, idx) =
+                hit_test_note(&score_right, lx, ly, rw, rh, min_midi, max_midi, total_beats)?;
+            Some(Msg::DeleteNote { track, idx })
+        })
         .paint_with(move |scene, ts, rect: PaintRect| {
             paint_piano_roll(
-                scene, ts, rect, &score, &source, &engine, &status, playing, min_midi,
-                max_midi, total_beats, theme,
+                scene, ts, rect, &score_paint, &source, &engine, &status, playing,
+                active_track, min_midi, max_midi, total_beats, theme,
             );
         })
     }
@@ -198,6 +301,7 @@ fn paint_piano_roll(
     engine: &str,
     status: &str,
     playing: bool,
+    active_track: usize,
     min_midi: u8,
     max_midi: u8,
     total_beats: f32,
@@ -275,8 +379,14 @@ fn paint_piano_roll(
     );
     scene.fill(Fill::NonZero, Affine::IDENTITY, header_bg, None, &header_rect);
 
-    // Texto del header: fuente + motor de síntesis + estado de playback.
-    let header_text = format!("{source}  ·  {engine}  ·  {status}");
+    // Texto del header: fuente + motor de síntesis + estado de playback
+    // + pista activa.
+    let active_name = score
+        .track(active_track)
+        .map(|t| t.name.as_str())
+        .unwrap_or("?");
+    let header_text =
+        format!("{source}  ·  {engine}  ·  active: {active_track}·{active_name}  ·  {status}");
     let text_color = if playing {
         Color::from_rgba8(140, 230, 170, 240)
     } else {
@@ -303,8 +413,10 @@ fn paint_piano_roll(
         Color::from_rgba8(180, 140, 240, 240),
     ];
 
+    let active_outline = Color::from_rgba8(255, 255, 255, 230);
     for (track_idx, track) in score.tracks().iter().enumerate() {
         let color = palette[track_idx % palette.len()];
+        let is_active = track_idx == active_track;
         for note in track.notes() {
             let midi = note.pitch.midi();
             if midi < min_midi || midi > max_midi {
@@ -317,8 +429,97 @@ fn paint_piano_roll(
             let h = (key_h - 1.5).max(2.0);
             let r = KurboRect::new(x as f64, y as f64, (x + w) as f64, (y + h) as f64);
             scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &r);
+            if is_active {
+                scene.stroke(
+                    &Stroke::new(1.2),
+                    Affine::IDENTITY,
+                    active_outline,
+                    None,
+                    &r,
+                );
+            }
         }
     }
+}
+
+/// Geometría compartida entre el painter y los handlers de click, así
+/// hit-test y pintado nunca se desincronizan.
+fn grid_geometry(
+    rect_w: f32,
+    rect_h: f32,
+    min_midi: u8,
+    max_midi: u8,
+    total_beats: f32,
+) -> Option<(f32, f32, f32, f32, f32, f32)> {
+    let grid_w = (rect_w - KEYBOARD_W).max(0.0);
+    let grid_h = (rect_h - HEADER_H).max(0.0);
+    if grid_w <= 0.0 || grid_h <= 0.0 {
+        return None;
+    }
+    let n_keys = (max_midi - min_midi + 1) as f32;
+    let key_h = (grid_h / n_keys).clamp(MIN_KEY_H, MAX_KEY_H);
+    let beat_w = (grid_w / total_beats).max(MIN_BEAT_W);
+    Some((KEYBOARD_W, HEADER_H, grid_w, grid_h, key_h, beat_w))
+}
+
+/// Mapea (lx, ly) — coordenadas locales al `View` raíz — a `(beat, midi)`.
+/// Devuelve `None` si el punto cae fuera del grid (teclado, header, o
+/// fuera de los límites verticales/horizontales).
+fn cell_at(
+    lx: f32,
+    ly: f32,
+    rect_w: f32,
+    rect_h: f32,
+    min_midi: u8,
+    max_midi: u8,
+    total_beats: f32,
+) -> Option<(f32, u8)> {
+    let (grid_x, grid_y, grid_w, grid_h, key_h, beat_w) =
+        grid_geometry(rect_w, rect_h, min_midi, max_midi, total_beats)?;
+    if lx < grid_x || ly < grid_y || lx > grid_x + grid_w || ly > grid_y + grid_h {
+        return None;
+    }
+    let row = ((ly - grid_y) / key_h).floor() as i32;
+    let midi_i = max_midi as i32 - row;
+    if midi_i < min_midi as i32 || midi_i > max_midi as i32 {
+        return None;
+    }
+    let beat = ((lx - grid_x) / beat_w).floor().max(0.0);
+    Some((beat, midi_i as u8))
+}
+
+/// Devuelve `(track_idx, note_idx)` de la nota bajo `(lx, ly)`, o `None`
+/// si el punto no está sobre ninguna. Itera en orden estable; si dos
+/// notas se solapan, gana la primera encontrada.
+fn hit_test_note(
+    score: &Score,
+    lx: f32,
+    ly: f32,
+    rect_w: f32,
+    rect_h: f32,
+    min_midi: u8,
+    max_midi: u8,
+    total_beats: f32,
+) -> Option<(usize, usize)> {
+    let (grid_x, grid_y, _gw, _gh, key_h, beat_w) =
+        grid_geometry(rect_w, rect_h, min_midi, max_midi, total_beats)?;
+    for (ti, track) in score.tracks().iter().enumerate() {
+        for (ni, note) in track.notes().iter().enumerate() {
+            let midi = note.pitch.midi();
+            if midi < min_midi || midi > max_midi {
+                continue;
+            }
+            let row = (max_midi - midi) as f32;
+            let nx = grid_x + note.start * beat_w;
+            let ny = grid_y + row * key_h;
+            let nw = (note.duration * beat_w).max(1.5);
+            let nh = (key_h - 1.5).max(2.0);
+            if lx >= nx && lx < nx + nw && ly >= ny && ly < ny + nh {
+                return Some((ti, ni));
+            }
+        }
+    }
+    None
 }
 
 /// Rango MIDI con padding de 2 semitonos arriba y abajo. Si el score
