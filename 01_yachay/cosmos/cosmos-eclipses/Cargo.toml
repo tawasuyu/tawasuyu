@@ -1,0 +1,17 @@
+[package]
+name = "cosmos-eclipses"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "cosmos-eclipses — detecta eclipses solares (Luna oculta el Sol visto desde Tierra) y lunares (Luna entra en el cono de sombra terrestre). Capa fina sobre cosmos-ephemeris: separación angular Luna-Sol vs (R_sun+R_moon)/d para solares; distancia Luna al eje Tierra-Sol vs cono umbra/penumbra para lunares."
+
+[dependencies]
+cosmos-core = { workspace = true }
+cosmos-time = { path = "../cosmos-time" }
+cosmos-ephemeris = { path = "../cosmos-ephemeris" }
+
+[[example]]
+name = "next_eclipses_demo"
+path = "examples/next_eclipses_demo.rs"

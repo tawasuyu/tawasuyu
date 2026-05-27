@@ -93,6 +93,7 @@ members = [
     "01_yachay/cosmos/cosmos-coords",
     "01_yachay/cosmos/cosmos-core",
     "01_yachay/cosmos/cosmos-corpus",
+    "01_yachay/cosmos/cosmos-eclipses",
     "01_yachay/cosmos/cosmos-engine",
     "01_yachay/cosmos/cosmos-ephemeris",
     "01_yachay/cosmos/cosmos-images",
