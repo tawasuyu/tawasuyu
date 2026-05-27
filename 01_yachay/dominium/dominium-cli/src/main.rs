@@ -99,6 +99,15 @@ enum Cmd {
         /// deshabilita la reelección incluso con la política activa.
         #[arg(long, default_value_t = 0)]
         policy_period: u32,
+        /// Radio de contagio social (Fase B). `0.0` (default) deshabilita
+        /// el contagio. Los agentes en este radio acercan su psi al
+        /// promedio local cada tick.
+        #[arg(long, default_value_t = 0.0)]
+        social_radius: f32,
+        /// Tasa de contagio social (Fase B). `0.0` (default) deshabilita.
+        /// Rango útil 0.01..0.20.
+        #[arg(long, default_value_t = 0.0)]
+        contagion_rate: f32,
     },
 }
 
@@ -127,6 +136,8 @@ fn main() -> Result<()> {
             psi_modulation,
             action_policy,
             policy_period,
+            social_radius,
+            contagion_rate,
         } => run_sim(
             seed,
             ticks,
@@ -139,6 +150,8 @@ fn main() -> Result<()> {
             psi_modulation,
             action_policy,
             policy_period,
+            social_radius,
+            contagion_rate,
         ),
         Cmd::Repl { seed, grid, lemmings, conceptos } => {
             repl(seed, grid, lemmings, conceptos.as_deref())
@@ -158,6 +171,8 @@ fn run_sim(
     psi_modulation: f32,
     action_policy: ActionPolicy,
     policy_period: u32,
+    social_radius: f32,
+    contagion_rate: f32,
 ) -> Result<()> {
     let mut world = build_world(seed, grid, lemmings);
     if let Some(path) = conceptos_path {
@@ -173,6 +188,8 @@ fn run_sim(
     params.psi_effect_modulation = psi_modulation;
     params.action_policy = action_policy;
     params.policy_reeval_period = policy_period;
+    params.social_radius = social_radius;
+    params.contagion_rate = contagion_rate;
 
     let mut writer: Option<BufWriter<File>> = match csv_path {
         Some(p) => Some(BufWriter::new(

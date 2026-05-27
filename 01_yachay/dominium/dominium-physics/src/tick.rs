@@ -5,6 +5,7 @@
 
 use crate::conceptos::{apply_conceptos, apply_hacks};
 use crate::diffuse::{diffuse_with, regrow_materia};
+use crate::social::apply_social_contagion;
 use dominium_core::{select_action_argmax, ActionPolicy, SimParams, World};
 
 /// Reelige la `accion` base de los lemmings libres según la política
@@ -115,7 +116,12 @@ pub fn tick(world: &mut World, p: &SimParams) {
     // 2b. Regrowth logístico de materia — cierre termodinámico que evita
     //     la extinción. Sub-fase del paso 2, no agrega fase nueva al §1.5.
     regrow_materia(&mut world.grid, p.regrowth_rate, p.carrying_capacity);
-    // 2c. Política psicológica de acción (opt-in vía `ActionPolicy::PsiArgmax`).
+    // 2c. Contagio social (Fase B, opt-in vía `social_radius/contagion_rate`).
+    //     Cada agente acerca su `vector_psi` al promedio del psi de sus
+    //     vecinos en radio R. Va antes de psi_policy para que la
+    //     reelección de acción vea el psi ya contagiado.
+    apply_social_contagion(world, p);
+    // 2d. Política psicológica de acción (opt-in vía `ActionPolicy::PsiArgmax`).
     //     Reelige `accion` por argmax(W · psi) para lemmings libres. Sub-fase
     //     de la 2 — corre antes de las transiciones y los hacks, así la
     //     desesperación y la captura siempre ganan a la psicología tranquila.

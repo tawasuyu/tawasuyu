@@ -14,8 +14,10 @@
 
 pub mod conceptos;
 pub mod diffuse;
+pub mod social;
 pub mod tick;
 
 pub use conceptos::{apply_conceptos, apply_hacks};
 pub use diffuse::{diffuse, diffuse_with, regrow_materia};
+pub use social::apply_social_contagion;
 pub use tick::{run, tick};

@@ -197,6 +197,24 @@ pub struct SimParams {
     /// (cambia de oficio cada poco); muy grandes, inerte.
     #[serde(default)]
     pub policy_reeval_period: u32,
+    /// Radio de influencia social (Fase B): cada agente acerca su
+    /// `vector_psi` al promedio del psi de los vecinos que estén a
+    /// distancia euclidiana ≤ `social_radius`. `0.0` (default) deshabilita
+    /// el contagio — el motor histórico no paga nada.
+    ///
+    /// **Costo**: O(N²) determinista, aceptable hasta ~10k agentes por la
+    /// grilla típica. Sin índice espacial: para poblaciones masivas habría
+    /// que indexar celdas por agente — pendiente para Fase B.2.
+    #[serde(default)]
+    pub social_radius: f32,
+    /// Tasa de convergencia del contagio social (Fase B). Cada tick, los
+    /// agentes en el radio acercan su psi al promedio local por
+    /// `psi_nuevo = psi + rate · (psi_local − psi)`. `0.0` (default) =
+    /// sin contagio incluso si `social_radius > 0`. Rango útil 0.01..0.20:
+    /// valores grandes producen conformismo brutal (todos convergen al
+    /// mismo psi), valores chicos preservan diversidad.
+    #[serde(default)]
+    pub contagion_rate: f32,
 }
 
 /// Default de `SimParams::action_weights` — fila por acción, columna por
@@ -322,6 +340,10 @@ impl Default for SimParams {
             action_weights: default_action_weights(),
             // Failsafe: con período 0, ni siquiera `PsiArgmax` reelige.
             policy_reeval_period: 0,
+            // Fase B: contagio social desactivado por default. El motor
+            // histórico no recorre vecinos sociales, mantiene perf O(N).
+            social_radius: 0.0,
+            contagion_rate: 0.0,
         }
     }
 }
