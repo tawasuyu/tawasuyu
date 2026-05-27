@@ -712,6 +712,14 @@ pub(crate) fn enlazar_capacidades(
                 }
             };
 
+            // FASE 41 :: CRL — el binario solicitado puede estar proscrito
+            // por la lista de revocacion estatica del kernel. Aborto
+            // inmediato, antes de tocar el disco o gastar criptografia.
+            if crate::almacen::esta_revocado(&hash) {
+                caller.data_mut().paginas_dma_en_vuelo -= 1;
+                return Ok(CodigoError::PayloadInvalido.como_i32());
+            }
+
             let objeto = match crate::almacen::recuperar(&hash) {
                 Ok(Some(o)) => o,
                 Ok(None) => {
@@ -1038,6 +1046,15 @@ pub(crate) fn enlazar_capacidades(
                 Ok(cf) => cf,
                 Err(_) => return Ok(CodigoError::Ausente.como_i32()),
             };
+            // FASE 41 :: CRL — un cuaderno cuyo hash este en la lista de
+            // revocacion del kernel se rechaza ANTES de tocar la
+            // criptografia, aunque la firma sea matematicamente perfecta.
+            // El operador retiro la confianza despues del sellado original;
+            // el direccionamiento por contenido conserva el sello pero el
+            // anillo soberano lo repudia.
+            if crate::almacen::esta_revocado(&cf.cuaderno_raiz_hash) {
+                return Ok(CodigoError::PayloadInvalido.como_i32());
+            }
             // Verificacion criptografica. Sin firma valida no hay anclaje.
             if let Err(err) = crate::claves::verificar_cuaderno_firmado(&cf) {
                 return Ok(err.como_i32());

@@ -40,6 +40,49 @@ use crate::drivers::disco;
 // `almacen::Objeto`, sin enterarse de donde viven realmente.
 pub use format::{Hash, Objeto};
 
+// =============================================================================
+//  Fase 41 :: LISTA DE REVOCACION ATOMICA (CRL)
+// -----------------------------------------------------------------------------
+//  Direccionar por contenido garantiza que un objeto no puede mutar bajo el
+//  pie del kernel — un solo bit alterado cambia el hash. Pero un objeto
+//  cuyo contenido fue MALICIOSO desde su origen no se detecta por la matematica
+//  del hash, solo por la palabra del operador: "este hash quedo comprometido,
+//  no lo ejecutes ni lo ancles aunque la firma cuadre".
+//
+//  La GRAFO_REVOCATION_LIST es el filtro Ring 0 que materializa esa palabra.
+//  Vive en `.rodata`: cambia solo re-forjando el binario del kernel, sin
+//  TOCTOU posible desde una app o desde la red. El despacho de las syscalls
+//  sensibles (`sys_cuaderno_firmar_y_anclar`, `sys_subsistema_ejecutar_dinamico*`)
+//  consulta la lista ANTES de gastar criptografia o instanciar wasmi — el
+//  binario revocado es repudiado en hardware, sin importar que su firma
+//  Ed25519 sea matematicamente perfecta.
+//
+//  VALOR PROVISIONAL: dos slots de prueba con hashes triviales. Cuando una
+//  amenaza real se identifique, los slots se rellenan re-forjando el kernel.
+//  La actualizacion de la lista en vivo (sin re-flash) queda para una fase
+//  futura con su propio sello de autoridad.
+// =============================================================================
+
+/// Hashes proscritos del grafo. Cualquier operacion que intente anclarlos
+/// como raiz, ejecutarlos como macro o vincularlos cae con
+/// `CodigoError::PayloadInvalido` sin pasar por la criptografia.
+pub const GRAFO_REVOCATION_LIST: [Hash; 2] = [[0u8; 32], [1u8; 32]];
+
+/// Comprueba si un hash habita la CRL. Iteracion lineal con cortocircuito;
+/// sin alocacion, sin indirecciones, sin acceso a disco. La cota dura
+/// (2 entradas hoy) la hace `O(1)` efectivo a la velocidad del cache L1.
+#[inline]
+pub fn esta_revocado(hash: &Hash) -> bool {
+    let mut i = 0;
+    while i < GRAFO_REVOCATION_LIST.len() {
+        if *hash == GRAFO_REVOCATION_LIST[i] {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
 /// El estado vivo del almacen: el cursor del log, la raiz, el manifiesto y el
 /// indice en memoria que traduce cada hash al sector donde habita su registro.
 struct Almacen {

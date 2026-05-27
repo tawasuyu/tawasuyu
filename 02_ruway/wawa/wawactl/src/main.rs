@@ -145,6 +145,14 @@ enum Cmd {
         /// `./wawactl_audit.log`.
         #[arg(long = "log", default_value = "wawactl_audit.log")]
         log: String,
+        /// FASE 41 :: ventana opcional de PRE-AUTORIZACION temporal. Si se
+        /// indica, durante esa ventana las solicitudes se firman
+        /// automaticamente (sin prompt) y se registran en el audit log
+        /// con el marcador `FIRMA_AUTO_EMITIDA`. Al expirar, el demonio
+        /// vuelve al modo restrictivo por defecto (confirmacion interactiva
+        /// con timeout). Sintaxis: `30s`, `15m`, `1h` (s/m/h).
+        #[arg(long = "auto-firmar-durante")]
+        auto_firmar_durante: Option<String>,
     },
 }
 
@@ -179,7 +187,12 @@ fn run(cmd: Cmd) -> Result<(), String> {
         Cmd::Watch => cmd_watch(),
         Cmd::Module { id, op, system } => cmd_module(&id, &op, layer_of(system)),
         Cmd::FirmarCuaderno { hash, clave_privada } => cmd_firmar_cuaderno(&hash, &clave_privada),
-        Cmd::DaemonFirma { pty, clave_privada, log } => cmd_daemon_firma(&pty, &clave_privada, &log),
+        Cmd::DaemonFirma {
+            pty,
+            clave_privada,
+            log,
+            auto_firmar_durante,
+        } => cmd_daemon_firma(&pty, &clave_privada, &log, auto_firmar_durante.as_deref()),
     }
 }
 
@@ -435,26 +448,78 @@ const HASH_HEX_LEN: usize = 64;
 /// puede reintentar despues.
 const TIMEOUT_CONFIRMACION: Duration = Duration::from_secs(30);
 
+#[derive(Clone, Copy)]
 enum DecisionOperador {
     /// El operador autorizo. Firmamos y devolvemos los 64 bytes raw.
     Autorizada,
+    /// FASE 41 :: la solicitud cayo dentro de la ventana de
+    /// pre-autorizacion temporal. Firmamos sin prompt; auditamos con
+    /// el marcador explicito `FIRMA_AUTO_EMITIDA`.
+    AutorizadaAutomatica,
     /// El operador rechazo o el timeout expiro. No firmamos; el kernel
     /// vera `Saturado` y la app puede reintentar.
     Rechazada,
 }
 
-/// FASE 39 :: subcomando `daemon-firma`. Crea un runtime tokio y delega
+/// FASE 39/41 :: subcomando `daemon-firma`. Crea un runtime tokio y delega
 /// en `ejecutar_daemon`. Devolver `Err` aqui imprime al stderr de wawactl
 /// y sale con codigo no-cero.
-fn cmd_daemon_firma(pty: &str, clave_path: &str, log_path: &str) -> Result<(), String> {
+fn cmd_daemon_firma(
+    pty: &str,
+    clave_path: &str,
+    log_path: &str,
+    auto_firmar_durante: Option<&str>,
+) -> Result<(), String> {
     // Cargar la clave privada UNA SOLA VEZ al arrancar — el ataque
     // superficie del lazo asincrono no la toca a partir de ahi.
     let sk = cargar_clave_privada(clave_path)?;
+
+    // FASE 41 :: parsear la ventana de pre-autorizacion (si fue indicada)
+    // y traducirla a un `Instant` de expiracion. La ventana se computa
+    // una sola vez al arranque del demonio — el reloj monotono del
+    // sistema garantiza que no haya "salto hacia atras" si la hora del
+    // SO cambia (NTP, etc.).
+    let ventana_hasta = match auto_firmar_durante {
+        Some(s) => Some(
+            std::time::Instant::now()
+                + parse_duracion(s).map_err(|e| format!("--auto-firmar-durante: {e}"))?,
+        ),
+        None => None,
+    };
+
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|e| format!("no pude construir el runtime tokio: {e}"))?;
-    rt.block_on(ejecutar_daemon(pty.to_string(), sk, log_path.to_string()))
+    rt.block_on(ejecutar_daemon(
+        pty.to_string(),
+        sk,
+        log_path.to_string(),
+        ventana_hasta,
+    ))
+}
+
+/// FASE 41 :: parser de duraciones humanas (`30s`, `15m`, `1h`). Sin alocacion,
+/// sin deps externas. Acepta numeros enteros positivos seguidos de unidad.
+fn parse_duracion(s: &str) -> Result<Duration, String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err("vacio".to_string());
+    }
+    let (numero, unidad) = s.split_at(s.len() - 1);
+    let n: u64 = numero
+        .parse()
+        .map_err(|_| format!("`{s}` no es un numero seguido de unidad (s/m/h)"))?;
+    let multiplicador = match unidad {
+        "s" => 1u64,
+        "m" => 60,
+        "h" => 3600,
+        otro => return Err(format!("unidad desconocida `{otro}` (esperaba s/m/h)")),
+    };
+    Ok(Duration::from_secs(
+        n.checked_mul(multiplicador)
+            .ok_or_else(|| format!("duracion `{s}` desborda u64"))?,
+    ))
 }
 
 /// Carga la clave privada desde un archivo. Acepta dos formatos:
@@ -485,11 +550,19 @@ async fn ejecutar_daemon(
     pty_path: String,
     sk: ed25519_compact::SecretKey,
     log_path: String,
+    ventana_hasta: Option<std::time::Instant>,
 ) -> Result<(), String> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     eprintln!("wawactl: daemon-firma escuchando en {pty_path}");
     eprintln!("wawactl: auditoria a {log_path}");
+    if let Some(t) = ventana_hasta {
+        let restante = t.saturating_duration_since(std::time::Instant::now());
+        eprintln!(
+            "wawactl: ventana de auto-firma activa durante {} s",
+            restante.as_secs()
+        );
+    }
     eprintln!("wawactl: Ctrl-C para terminar");
 
     let file = tokio::fs::OpenOptions::new()
@@ -531,8 +604,24 @@ async fn ejecutar_daemon(
             continue;
         }
 
-        match confirmar_con_operador(hash_hex).await {
-            DecisionOperador::Autorizada => {
+        // FASE 41 :: ventana de pre-autorizacion. Si el reloj monotono cae
+        // dentro de la ventana, la solicitud se firma sin prompt; al
+        // expirar la ventana volvemos al modo interactivo restrictivo.
+        let dentro_ventana = ventana_hasta
+            .map(|t| std::time::Instant::now() < t)
+            .unwrap_or(false);
+        let decision = if dentro_ventana {
+            DecisionOperador::AutorizadaAutomatica
+        } else {
+            confirmar_con_operador(hash_hex).await
+        };
+
+        match decision {
+            DecisionOperador::Autorizada | DecisionOperador::AutorizadaAutomatica => {
+                let marcador = match decision {
+                    DecisionOperador::AutorizadaAutomatica => "FIRMA_AUTO_EMITIDA",
+                    _ => "FIRMA_EMITIDA",
+                };
                 let firma = sk.sign(hash, None);
                 let bytes = firma.as_ref();
                 writer
@@ -543,8 +632,8 @@ async fn ejecutar_daemon(
                     .flush()
                     .await
                     .map_err(|e| format!("error flush PTY: {e}"))?;
-                escribir_auditoria(&log_path, "FIRMA_EMITIDA", hash_hex);
-                eprintln!("wawactl: firma emitida ({} bytes)", bytes.len());
+                escribir_auditoria(&log_path, marcador, hash_hex);
+                eprintln!("wawactl: {} ({} bytes)", marcador, bytes.len());
             }
             DecisionOperador::Rechazada => {
                 escribir_auditoria(&log_path, "FIRMA_RECHAZADA", hash_hex);
