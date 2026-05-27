@@ -92,17 +92,27 @@ prosa antes y después, JSON anidado, rechazo explícito del LLM, JSON
 desconocido, acción vacía, etc. Lógica pura — corren sin entorno gráfico
 ni red.
 
+## Contexto del compositor
+
+Antes de cada consulta, el asistente intenta spawnear `mirada-ctl
+windows` y embebe su salida en el system prompt como "Estado actual del
+compositor". Eso le permite al LLM responder con valores concretos
+(`focus-window 5` con el id real, no inventado). Si el spawn falla
+(compositor caído, `mirada-ctl` no en PATH), seguimos con el prompt base
+y el LLM responde "a ciegas" — el flujo no se rompe, sólo pierde
+precisión.
+
 ## Limitaciones conocidas
 
 - **Sin multi-turn.** Cada consulta es independiente; no se mantiene
   contexto entre pedidos. Si querés refinar ("no, prefiero grid"), tenés
   que reformular la pregunta entera. Ampliable, no urgente.
-- **Sin contexto del estado actual.** El system prompt no incluye qué
-  ventanas hay abiertas ni en qué workspace está el operador. El LLM
-  responde "a ciegas". Mejorable con un `mirada-ctl windows` previo,
-  pero implica costo de tokens en cada consulta.
-- **El binario `mirada-ctl` debe estar en PATH.** Si no, falla legiblemente
-  pero no intenta otras rutas.
+- **El binario `mirada-ctl` debe estar en PATH** tanto para ejecutar
+  acciones como para obtener contexto. Si no, fallan legiblemente pero
+  el asistente no intenta otras rutas.
+- **El contexto se relee en cada consulta** — un spawn extra por
+  pregunta. Trivial frente al RTT del LLM, pero medible si el usuario
+  pregunta cien cosas seguidas.
 
 ## Versión wawa
 

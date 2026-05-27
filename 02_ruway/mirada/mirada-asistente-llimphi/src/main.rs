@@ -248,9 +248,18 @@ impl App for Asistente {
                     return m;
                 };
                 m.estado = Estado::Consultando;
-                let req = ChatRequest::una_vuelta(prompt, MAX_TOKENS_RESPUESTA)
-                    .con_sistema(PROMPT_SISTEMA);
                 handle.spawn(move || {
+                    // Obtener el contexto del compositor ANTES de armar el
+                    // request, dentro del worker para no bloquear la UI.
+                    // Si `mirada-ctl windows` no responde (compositor caído o
+                    // binario ausente), seguimos sin contexto — el LLM
+                    // responde "a ciegas" como en versiones previas.
+                    let system = match obtener_contexto_compositor() {
+                        Some(ctx) => construir_sistema_con_contexto(&ctx),
+                        None => PROMPT_SISTEMA.to_string(),
+                    };
+                    let req = ChatRequest::una_vuelta(prompt, MAX_TOKENS_RESPUESTA)
+                        .con_sistema(system);
                     // Cada call abre su propio runtime de Tokio porque el
                     // worker de Llimphi es síncrono y vivir entre messages
                     // sin un runtime compartido es más simple que reusar uno.
@@ -483,6 +492,39 @@ fn extraer_objeto_json(texto: &str) -> Option<&str> {
         }
     }
     None
+}
+
+// ---------------------------------------------------------------------
+// Contexto del compositor — para enriquecer el system prompt del LLM
+// ---------------------------------------------------------------------
+
+/// Spawnea `mirada-ctl windows` y devuelve su stdout, o `None` si el
+/// comando falla. Sin timeout explícito: confiamos en que la respuesta del
+/// socket de `mirada-brain` es rápida (read local, <100 ms típico). El
+/// worker que llama es el mismo que hará después la llamada al LLM (RTT
+/// de segundos), así que un overhead de decenas de ms es invisible.
+fn obtener_contexto_compositor() -> Option<String> {
+    let out = Command::new("mirada-ctl").arg("windows").output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let texto = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if texto.is_empty() {
+        return None;
+    }
+    Some(texto)
+}
+
+/// Construye el system prompt extendido con el contexto del compositor.
+/// Función pura — testeable sin spawn. Si más adelante agregamos más
+/// fuentes de contexto (workspace activo, modo de teselado, etc.) sumamos
+/// secciones aquí.
+fn construir_sistema_con_contexto(ctx: &str) -> String {
+    format!(
+        "{PROMPT_SISTEMA}\n\n# Estado actual del compositor (mirada-ctl windows)\n\n```\n{ctx}\n```\n\n\
+         Usa este estado para responder con valores concretos cuando aplique \
+         (p. ej. `focus-window <id>` con el id real de la fila pedida)."
+    )
 }
 
 // ---------------------------------------------------------------------
@@ -738,6 +780,18 @@ mod parser_tests {
         assert_eq!(
             parsear_respuesta(respuesta),
             ParseResult::Rechazo("ambiguo".to_string()),
+        );
+    }
+
+    #[test]
+    fn construir_sistema_incluye_base_y_contexto() {
+        let ctx = "* id 5    esc 1       firefox                  Mozilla Firefox";
+        let sistema = construir_sistema_con_contexto(ctx);
+        assert!(sistema.starts_with(PROMPT_SISTEMA), "preserva el prompt base");
+        assert!(sistema.contains("firefox"), "incluye el contexto");
+        assert!(
+            sistema.contains("Estado actual del compositor"),
+            "encabezado del bloque visible",
         );
     }
 
