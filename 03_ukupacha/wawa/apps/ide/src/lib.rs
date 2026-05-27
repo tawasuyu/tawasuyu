@@ -52,6 +52,16 @@ extern "C" {
         len: u32,
         salida_hash_ptr: u32,
     ) -> i32;
+    /// FASE 31 :: vincula causa->efecto. El kernel inscribe `padre_hash`
+    /// como el PRIMER HIJO del nodo binario; la arista queda materializada
+    /// en el grafo direccionado por contenido sin que el userspace tenga
+    /// que escribir dos veces.
+    fn sys_subsistema_registrar_ejecutable_v2(
+        ptr: u32,
+        len: u32,
+        padre_hash_ptr: u32,
+        salida_hash_ptr: u32,
+    ) -> i32;
 }
 
 #[cfg(not(test))]
@@ -94,6 +104,14 @@ static mut HASH_FUENTE_VALIDO: bool = false;
 /// Hash del objeto BINARIO (modulo WASM materializado) tras un F1 exitoso.
 static mut HASH_BINARIO: [u8; 32] = [0; 32];
 static mut HASH_BINARIO_VALIDO: bool = false;
+
+/// FASE 31 :: la ARISTA CAUSAL esta SINCRONIZADA cuando el binario y la
+/// fuente del editor siguen siendo el mismo par que se inscribio. Si el
+/// usuario teclea (o borra) un solo caracter despues de F1, la sincronia
+/// se rompe: el conector vertical entre FUENTE y BINARIO en el Panel BETA
+/// se desvanece al gris mate, demostrando en tiempo real que la causa
+/// escrita y el efecto ejecutable han divergido.
+static mut ARISTA_SINCRONIZADA: bool = false;
 
 /// Buffer de recuperacion de F3.
 static mut RECUPERADO: [u8; 32] = [0; 32];
@@ -173,6 +191,9 @@ fn atender_scancode(scancode: u32) {
         0x0E => {
             if unsafe { FUENTE_LEN } > 0 {
                 unsafe { FUENTE_LEN -= 1 };
+                // Romper la arista causal: la fuente ya no coincide con la
+                // que engendro el binario inscrito en el grafo.
+                unsafe { ARISTA_SINCRONIZADA = false };
             }
             return;
         }
@@ -188,6 +209,9 @@ fn atender_scancode(scancode: u32) {
             }
             len += 1;
             unsafe { FUENTE_LEN = len };
+            // Romper la arista causal: cualquier edicion posterior a F1
+            // divorcia la causa escrita del efecto ejecutable.
+            unsafe { ARISTA_SINCRONIZADA = false };
         }
     }
 }
@@ -289,6 +313,7 @@ fn accion_compilar() {
         unsafe {
             ULTIMO_CODIGO = -7;
             ULTIMA_ETIQUETA = *b"F1 VACIO";
+            ARISTA_SINCRONIZADA = false;
         }
         return;
     }
@@ -303,12 +328,14 @@ fn accion_compilar() {
                 ULTIMA_ETIQUETA = *b"F1 EMSR ";
                 HASH_FUENTE_VALIDO = false;
                 HASH_BINARIO_VALIDO = false;
+                ARISTA_SINCRONIZADA = false;
             }
             return;
         }
     };
 
     // 1) Grabar el TEXTO FUENTE como objeto del grafo. Sin hijos.
+    //    Devuelve HASH_FUENTE — la causa direccionada por contenido.
     let codigo_fuente = unsafe {
         sys_object_put(
             core::ptr::addr_of!(FUENTE) as u32,
@@ -324,23 +351,34 @@ fn accion_compilar() {
             ULTIMA_ETIQUETA = *b"F1 PUT  ";
             HASH_FUENTE_VALIDO = false;
             HASH_BINARIO_VALIDO = false;
+            ARISTA_SINCRONIZADA = false;
         }
         return;
     }
     unsafe { HASH_FUENTE_VALIDO = true };
 
-    // 2) Registrar el BINARIO WASM via la syscall privilegiada.
+    // 2) Registrar el BINARIO WASM via la syscall PRIVILEGIADA `v2` (Fase 31):
+    //    el kernel inscribe HASH_FUENTE como PRIMER HIJO del nodo binario, de
+    //    modo que la arista causa->efecto queda materializada en el grafo en
+    //    una sola transicion. El IDE no escribe la arista a mano; la firma
+    //    criptografica del enlace la pone el almacen direccionado por
+    //    contenido al mezclar el HASH_FUENTE con el bytecode del binario.
     let codigo_bin = unsafe {
-        sys_subsistema_registrar_ejecutable(
+        sys_subsistema_registrar_ejecutable_v2(
             binario.as_ptr() as u32,
             bin_len as u32,
+            core::ptr::addr_of!(HASH_FUENTE) as u32,
             core::ptr::addr_of_mut!(HASH_BINARIO) as u32,
         )
     };
     unsafe {
         ULTIMO_CODIGO = codigo_bin;
-        ULTIMA_ETIQUETA = *b"F1 BIN  ";
+        ULTIMA_ETIQUETA = *b"F1 V2   ";
         HASH_BINARIO_VALIDO = codigo_bin == 0;
+        // La arista solo queda SINCRONIZADA si ambas escrituras llegaron a
+        // disco sin novedad. Saturado (-6) deja el binario sin registrar y
+        // la arista huerfana hasta el proximo tick.
+        ARISTA_SINCRONIZADA = codigo_bin == 0;
     }
 }
 
@@ -409,7 +447,7 @@ fn pintar() {
     rellenar_rect(lienzo, 0, 0, ANCHO, ALTO, fondo);
 
     rellenar_rect(lienzo, 0, 0, ANCHO, ALFA_Y - 4, secundario);
-    dibujar_texto(lienzo, b"IDE WAWA  FASE 29", 8, 6, 2, tinta);
+    dibujar_texto(lienzo, b"IDE WAWA  FASE 31", 8, 6, 2, tinta);
     rellenar_rect(lienzo, 0, ALFA_Y - 4, ANCHO, 2, acento);
 
     pintar_panel_alfa(lienzo, tinta, acento);
@@ -489,17 +527,31 @@ fn pintar_panel_beta(lienzo: &mut [u32], tinta: u32, acento: u32, secundario: u3
     dibujar_texto(lienzo, &hex_f[..32], 60, fila_y_fuente + 2, 1, tinta);
     dibujar_texto(lienzo, &hex_f[32..], 60, fila_y_fuente + 12, 1, tinta);
 
-    // --- Linea acento vertical (5 px de ancho) que une nodo fuente y binario.
+    // --- LA ARISTA CAUSAL (Fase 31). Linea acento vertical de 5 px que une
+    // los nodos FUENTE y BINARIO. Cuando el ultimo F1 cerro con exito
+    // (codigo 0 y ambos hashes inscritos por `v2`), la pintamos con el
+    // color ACENTO de la paleta activa: la causa escrita y el efecto
+    // ejecutable estan consolidados en el hardware. Si el usuario teclea
+    // un solo caracter despues, la sincronia se rompe y el conector se
+    // tiñe de GRIS MATE — el divorcio entre lo que el editor muestra y
+    // lo que el grafo guarda es visible en tiempo real.
     let conector_x = 32;
     let conector_y0 = fila_y_fuente + 24;
     let conector_y1 = fila_y_bin;
+    let color_conector = if unsafe { ARISTA_SINCRONIZADA } {
+        acento
+    } else {
+        // Gris mate: la arista existe en el grafo (si los hashes son
+        // validos) pero ya no refleja el texto que el usuario edita.
+        color_atenuar_u32(secundario, 0x60)
+    };
     rellenar_rect(
         lienzo,
         conector_x,
         conector_y0,
         5,
         conector_y1 - conector_y0,
-        acento,
+        color_conector,
     );
 
     // --- Nodo BINARIO (modulo WASM emitido).

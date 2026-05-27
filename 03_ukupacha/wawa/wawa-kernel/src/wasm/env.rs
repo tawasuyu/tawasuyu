@@ -24,6 +24,11 @@
 //    * sys_red_solicitar     — pedir un objeto por hash a peers de capa-2; el
 //                              demultiplexer absorbe la respuesta async al
 //                              almacen local (Fase 21, AoE bajo demanda).
+//    * sys_subsistema_registrar_ejecutable    — registrar un modulo WASM (v1).
+//    * sys_subsistema_registrar_ejecutable_v2 — registrar un modulo WASM CON
+//                              el hash de su codigo fuente como PRIMER HIJO:
+//                              el binario arrastra su causa criptografica
+//                              (Fase 31, La Arista Causal).
 //
 //  GUARDARRAIL: el kernel valida MATEMATICAMENTE todo puntero que el modulo le
 //  entrega contra los limites reales de su memoria lineal. No se confia en que
@@ -430,6 +435,106 @@ pub(crate) fn enlazar_capacidades(
         },
     )?;
     } // PERMISO_GRAFO_ESCRITURA
+
+    // --- CAPACIDAD 3c :: sys_subsistema_registrar_ejecutable_v2 -------------
+    // sys_subsistema_registrar_ejecutable_v2(ptr, len, padre_hash_ptr,
+    //                                        salida_hash_ptr) -> i32
+    //
+    // EVOLUCION del ABI sin romper compatibilidad regresiva (Fase 31). La
+    // syscall `v1` (ver mas arriba) sigue VIVA e INTACTA: los modulos del
+    // userspace que la importan no perciben este cambio. La `v2` anade un
+    // PARAMETRO MAS — un puntero a 32 bytes que apuntan al HASH del CODIGO
+    // FUENTE que engendro este binario—. El kernel entrelaza ambos en el
+    // grafo: el HASH_FUENTE se inscribe como el PRIMER HIJO LICITO del
+    // nodo ejecutable. El binario deja de ser huerfano: arrastra un
+    // CORDON UMBILICAL criptografico hacia su propia causa.
+    //
+    // GATEADA por PERMISO_GRAFO_ESCRITURA. Hereda back-pressure DMA y
+    // validacion semantica (firma WASM) de la `v1`.
+    if permisos & PERMISO_GRAFO_ESCRITURA != 0 {
+    enlazador.func_wrap(
+        "renaser",
+        "sys_subsistema_registrar_ejecutable_v2",
+        |mut caller: Caller<'_, ContextoCapacidades>,
+         ptr: u32,
+         len: u32,
+         padre_hash_ptr: u32,
+         salida_hash_ptr: u32|
+         -> Result<i32, Error> {
+            // Back-pressure DMA: misma cota que la v1; el bytecode pesa.
+            if caller.data().paginas_dma_en_vuelo >= MAX_PAGINAS_DMA_PER_APP {
+                return Ok(CodigoError::Saturado.como_i32());
+            }
+            caller.data_mut().paginas_dma_en_vuelo += 1;
+
+            let memoria = obtener_memoria(&caller)?;
+
+            // Lectura del payload con limites firmes.
+            let payload = {
+                let m = memoria.data(&caller);
+                let bytes = rango(
+                    m,
+                    ptr,
+                    len as usize,
+                    "WASM :: sys_subsistema_registrar_ejecutable_v2 desbordo memoria (payload)",
+                )?;
+                bytes.to_vec()
+            };
+
+            // Lectura del hash del padre (32 bytes) — la causa del binario.
+            let padre_hash = {
+                let m = memoria.data(&caller);
+                match leer_hash(
+                    m,
+                    padre_hash_ptr,
+                    "WASM :: sys_subsistema_registrar_ejecutable_v2 desbordo memoria (padre)",
+                ) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        caller.data_mut().paginas_dma_en_vuelo -= 1;
+                        return Err(e);
+                    }
+                }
+            };
+
+            // Validacion semantica: cuatro bytes magicos `\0asm`.
+            const WASM_MAGIA: [u8; 4] = [0x00, 0x61, 0x73, 0x6D];
+            if payload.len() < 8 || payload[..4] != WASM_MAGIA {
+                caller.data_mut().paginas_dma_en_vuelo -= 1;
+                return Ok(CodigoError::PayloadInvalido.como_i32());
+            }
+
+            // Verificar que el destino del hash cabe ANTES de tocar el disco.
+            {
+                let m = memoria.data(&caller);
+                rango(
+                    m,
+                    salida_hash_ptr,
+                    32,
+                    "WASM :: sys_subsistema_registrar_ejecutable_v2 desbordo memoria (salida)",
+                )?;
+            }
+
+            // LA ARISTA CAUSAL: el HASH_FUENTE se inscribe como el PRIMER
+            // HIJO del nodo binario. El grafo queda con dos nodos enlazados
+            // de forma indisoluble: causa (fuente) -> efecto (binario).
+            let mut hijos: alloc::vec::Vec<Hash> = alloc::vec::Vec::with_capacity(1);
+            hijos.push(padre_hash);
+
+            let resultado = match crate::almacen::almacenar(payload, hijos) {
+                Ok(hash) => {
+                    let m = memoria.data_mut(&mut caller);
+                    m[salida_hash_ptr as usize..salida_hash_ptr as usize + 32]
+                        .copy_from_slice(&hash);
+                    CodigoError::Ok
+                }
+                Err(_) => CodigoError::AlmacenamientoFallo,
+            };
+            caller.data_mut().paginas_dma_en_vuelo -= 1;
+            Ok(resultado.como_i32())
+        },
+    )?;
+    } // PERMISO_GRAFO_ESCRITURA (v2)
 
     // --- CAPACIDAD 4 :: sys_object_datos(hash, salida, capacidad) -> i32 ---
     // Copia la carga util del objeto `hash` en `salida`. Devuelve el numero de
