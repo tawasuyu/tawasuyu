@@ -21,12 +21,12 @@ No hay una "realidad base" que contenga a los planos. Son ontologías paralelas,
 
 ## II. Plano 1 — Sensible
 
-<code>
+```
 S₁ = {afección sensorial pura}
 ∄ "yo" en S₁
 ∄ cuerpo en S₁
 S₁ solo contiene datos: color, sonido, textura, temperatura
-</code>
+```
 
 Lo que hay: el toque de los sentidos, sin cuerpo que los reporte. El cuerpo físico como tal no existe desde aquí. Hay afección sensible pura — colores, sonidos, texturas — sin un "yo" al que pertenezcan.
 
@@ -42,12 +42,12 @@ La constatación física en su nivel más burdo: el cuerpo como evidencia inmedi
 
 ## III. Plano 2 — Alma / Mental
 
-<code>
+```
 S₂ = {imágenes mentales, conceptualizaciones, campo relacional}
 cuerpo(S₂) = imagen mental del cuerpo, no carne
 t(S₂) = objeto bloque (pasado, presente, futuro coexisten)
 campo(S₂) = f(interacción de nodos de consciencia)
-</code>
+```
 
 Lo que hay: la imagen mental de las cosas. Aquí viven las conceptualizaciones.
 
@@ -66,10 +66,10 @@ Aquí el tiempo ya no es flujo vivido. Es una cosa contenida. Toda la línea tem
 
 ### El conflicto humano
 
-<code>
+```
 pecado original = conflicto de transición entre zonas biológicas
 no es moral — es el bamboleo de una especie entre dos equilibrios
-</code>
+```
 
 El "pecado original" no es una mancha moral. Es la descripción del conflicto que aparece cuando una especie animal se asoma fuera de la corriente de la selva sin haber terminado el movimiento.
 
@@ -79,13 +79,13 @@ El "pecado original" no es una mancha moral. Es la descripción del conflicto qu
 
 ## IV. Plano 3 — Presencia (0, 0)
 
-<code>
+```
 S₃ = {fenomenología pura}
 P = (0, 0, 0)
 ∀s ∈ S : s − P = v
 t(S₃) = ∅  // el tiempo no es categoría aplicable
 S₃ es un punto que contiene el universo completo
-</code>
+```
 
 Lo que hay: fenomenología pura. Un punto es el universo completo, porque todo lo demás es solo contenido de su visión.
 
@@ -119,21 +119,21 @@ La zona más cercana a nosotros es entre la tierra y el cielo. Es un lugar de du
 
 ### Postura erecta
 
-<code>
+```
 pararse en dos pies = sistema de equilibrio en desequilibrio permanente
 no es detalle biomecánico — es la forma física del desequilibrio
 el cuerpo se sostiene cayendo hacia adelante y recuperándose
-</code>
+```
 
 En algún punto de la evolución, la especie animal asomó la cabeza del mundo animal y comenzó a entreverse donde se es humano. No hay diferencias de valor entre zonas — solo zonas distintas. Pero la especie aún no se ha actualizado: empezó un viaje donde atraviesa un desequilibrio para volver a un nuevo equilibrio.
 
 ### El ego como síntoma
 
-<code>
+```
 ego = mareo del viaje entre dos zonas
   = síntoma de estar entre: vista fuera de la selva,
     cuerpo aún no reequilibrado en la nueva posición
-</code>
+```
 
 El ego no es error ni enfermedad. Es el mareo del viaje que enfrentó una especie animal incursionando en la humanidad. Es el síntoma de estar entre dos zonas: la vista ya no está en la selva, pero el cuerpo aún no se reequilibró en la nueva posición.
 
@@ -161,10 +161,10 @@ A continuación, herramientas que operan dentro de los planos — principalmente
 
 ### Chip cognitivo (Cᵢ)
 
-<code>
+```
 Cᵢ ⊂ S₂ = atractor local en el campo mental
 bucle de retroalimentación que estabiliza patrones subóptimos
-</code>
+```
 
 Ejemplos: rumiación, diálogo interno autoalimentado, pánico.
 
@@ -178,12 +178,12 @@ Ejemplos: rumiación, diálogo interno autoalimentado, pánico.
 
 ### Métrica
 
-<code>
+```
 Co = señal / ruido psicofisiológico
 H  = H(señal conductual)   // entropía temporal
 IR = t(baseline | perturbación)
 PA = Δ(IR, Co) tras intervención
-</code>
+```
 
 ### Protocolo
 

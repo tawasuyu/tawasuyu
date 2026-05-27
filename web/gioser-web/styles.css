@@ -202,6 +202,39 @@ a:hover { color: var(--fg-text); }
   font-style: italic;
 }
 
+/* ----- chakana al origen (decorativa) -----
+ * Cuerpo: del color opuesto al texto (negro en oscuro, blanco en claro).
+ *   → se funde con el fondo, "casi invisible".
+ * Centro: del color del texto (blanco en oscuro, negro en claro).
+ *   → contrasta con el fondo, hace de luz.
+ */
+.chakana-body {
+  fill: #000;
+  opacity: 0.32;
+}
+.chakana-core {
+  fill: #FFF;
+  opacity: 0.92;
+}
+.chakana-glow {
+  fill: #FFF;
+  opacity: 0.10;
+  filter: blur(0.6px);
+}
+
+[data-theme-variant="light"] .chakana-body {
+  fill: #FFF;
+  opacity: 0.45;
+}
+[data-theme-variant="light"] .chakana-core {
+  fill: #000;
+  opacity: 0.85;
+}
+[data-theme-variant="light"] .chakana-glow {
+  fill: #000;
+  opacity: 0.08;
+}
+
 .quad { cursor: pointer; }
 .quad rect {
   fill: rgba(22, 26, 36, 0.4);
