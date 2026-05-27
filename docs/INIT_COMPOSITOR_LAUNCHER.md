@@ -50,7 +50,7 @@ Sin SDD; arquitectura embebida en descripciones de Cargo.toml y comentarios. **N
 **Runtime del "brain"** (stubs estructurales, lógica mínima):
 - `arje-bus` — bus IPC tokio sobre Unix socket con `SO_PEERCRED` (228 LOC). Marco postcard con prefijo de longitud. Testeable contra `arje-echo` (cliente demo, 18 lib + 46 main).
 - `arje-brain` — wiring del brain (37 LOC). Expone `IntrospectServer`, autopromote loop, métricas HTTP. La lógica vive en subcrates.
-- `arje-brain-rules` — motor determinista *Subject + Event + Action* (15 LOC). Sin estado global, dispatch O(1) por discriminante.
+- `arje-brain-rules` — motor determinista *Subject + Event + Action*. **Re-audit 2026-05-27**: la primera auditoría leyó solo `lib.rs` (15 LOC de re-exports) y reportó "stub estructural". La realidad: 825 LOC en 5 archivos — `rules.rs` (216), `engine.rs` (399), `dispatch.rs` (73), `loader.rs` (122). `RuleEngine` con dispatch O(1) por discriminante, `ActionSink` async, loader JSON con tres formas (array, object-con-array, JSONL). Lo que faltaba era *config* (`rules.example.json`, ahora canónico), no código del motor.
 - `arje-brain-audit` — audit log con hashes encadenados (13 LOC). Tipos sin tests.
 - `arje-brain-cognitive` — observador estadístico (sliding window, entropía de Shannon, info mutua) + "crystallize" para detectar patrones (11 LOC). Tipos puros.
 - `arje-cas` — almacén direccionado por contenido (SHA‑256, GC, resolve, store) (120 LOC). Funcional.
@@ -216,7 +216,7 @@ cargo +nightly run -p boot -Z bindeps      △ Boot al QEMU funciona; el audit r
 
 4. **`mirada-compositor --drm` con conmutación VT + hotplug.** Hoy el backend DRM es parcial; sin VT-switch no es usable como compositor primario en hardware real. Smithay tiene los hooks (`udev`, `libinput`); falta el cableado. Estimado: 3–5 sesiones.
 5. **`arje-zero` ↔ `mirada-session` como Ente del fractal.** Hoy el script `session/mirada-session` es bash. Convertirlo en un Ente declarado en la Tarjeta Semilla cierra el loop init → compositor sin shell scripts. Estimado: 2 sesiones.
-6. **Llenar `arje-brain-rules` y `arje-brain-cognitive`** con casos reales (auto-restart, detección de loops de crash, "crystallize" → reglas nuevas). Hoy son tipos puros sin cuerpo. Es trabajo open-ended, pero un MVP de 3 reglas bien probadas vale más que el andamiaje vacío.
+6. ~~**Llenar `arje-brain-rules` y `arje-brain-cognitive`**~~ — **revisado**: el motor `arje-brain-rules` está completo (825 LOC); lo que faltaba era config. `rules.example.json` canónico shipped 2026-05-27. `arje-brain-cognitive` (sliding window, entropía de Shannon, "crystallize") sigue siendo andamiaje a llenar — requeriría ejemplos de patrones cognitivos del dominio, open-ended.
 
 ### 4.3 Cierre del shell de wawa
 

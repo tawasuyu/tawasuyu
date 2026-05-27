@@ -23,7 +23,7 @@ Lectura previa obligatoria al tocar cualquier cosa de fondo: `README.md`, `PLAN.
 ```
 00_unanchay/   PERCIBIR  — pluma · khipu · rimay · chaka · pineal · puriy
 01_yachay/     CONOCER   — cosmos · dominium · nakui · iniy · tinkuy
-02_ruway/      HACER     — mirada · shuma · nahual · chasqui · takiy · llimphi · supay · gioser-edit · wawa (host-side)
+02_ruway/      HACER     — mirada · shuma · nahual · chasqui · takiy · llimphi · supay · nada · wawa (host-side)
 03_ukupacha/   RAÍZ      — arje · wawa (kernel + apps WASM) · agora · minga · wawa-explorer
 shared/                  — sandokan · auth · card · ssh · format · foreign-* · rimay-localize · wawa-config · forth-emisor
 web/                     — landing sobria (no producto)
@@ -58,13 +58,13 @@ Muchas apps tienen `examples/*_demo.rs` que son la forma esperada de probar feat
 
 Necesita `wasm-bindgen-cli` en la versión **exacta** de `Cargo.lock` (hoy 0.2.121; `grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | head` para confirmar) — si difiere, el JS no carga el `.wasm`. La landing es la única pieza del workspace que cruza el puente JS; no es producto, sólo cartel.
 
-### Editor de archivos rápido (`gioser-edit`)
+### Editor de archivos rápido (`nada`)
 
 ```bash
-cargo run -p gioser-edit --release   # file tree + text-editor Llimphi sobre archivos reales del workspace
+cargo run -p nada --release   # file tree + text-editor Llimphi sobre archivos reales del workspace
 ```
 
-Útil para ejercitar features del `llimphi-widget-text-editor` (selección, undo, brackets, clipboard) sin levantar una app de dominio.
+Útil para ejercitar features del `llimphi-widget-text-editor` (selección, undo, brackets, clipboard) sin levantar una app de dominio. (Antes se llamaba `gioser-edit` — renombrado en 2026-05-27.)
 
 ### Núcleos `no_std` compartidos
 
