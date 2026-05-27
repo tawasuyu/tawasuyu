@@ -50,6 +50,31 @@ impl AsercionId {
     }
 }
 
+/// Identificador de una fuente (autor, escuela, tradición, observación).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct FuenteId(pub Ulid);
+
+impl FuenteId {
+    pub fn nuevo() -> Self {
+        Self(Ulid::new())
+    }
+}
+
+/// Una fuente atribuye autoría/proveniencia a un documento. No es solo
+/// "quién escribió" — es la *tradición* o *postura* desde la cual se afirma
+/// algo. Dos documentos del mismo Aristóteles cuentan como una fuente; dos
+/// documentos de tradiciones distintas que repiten el mismo texto, no.
+///
+/// `kind` es libre: "autor", "escuela", "tradición", "observación", "wiki",
+/// "consenso científico", etc. Para MVP no se valida — se respeta lo que
+/// el ingestor decida.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Fuente {
+    pub id: FuenteId,
+    pub nombre: String,
+    pub kind: Option<String>,
+}
+
 /// Opinión subjetiva al estilo Jøsang: (creencia, descreencia, incertidumbre, base_rate).
 ///
 /// Invariantes: b + d + u == 1.0 (con tolerancia ε), todos en [0,1].
