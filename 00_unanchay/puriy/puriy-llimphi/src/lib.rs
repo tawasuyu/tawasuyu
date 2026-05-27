@@ -22,12 +22,12 @@ use llimphi_layout::taffy::prelude::{
     auto, length, percent, AlignItems, FlexDirection, FlexWrap, Position, Rect, Size, Style,
 };
 use llimphi_raster::kurbo::{Affine, RoundedRect, Stroke};
-use llimphi_raster::peniko::{Blob, Color, Image as PenikoImage, ImageFormat};
+use llimphi_raster::peniko::{Blob, Color, Fill, Image as PenikoImage, ImageFormat};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
-use puriy_engine::{BoxNode, BoxTree, Display, Engine, LengthVal, TextAlign};
+use puriy_engine::{BoxNode, BoxShadow, BoxTree, Display, Engine, LengthVal, TextAlign};
 
 const HEADER_H: f32 = 78.0;
 const TABS_H: f32 = 30.0;
@@ -666,7 +666,7 @@ fn render_box(b: &BoxNode) -> View<Msg> {
     if let Some(hbg) = b.hover_background {
         view = view.hover_fill(Color::from_rgb8(hbg.r, hbg.g, hbg.b));
     }
-    view = apply_border(view, b);
+    view = apply_decorations(view, b);
 
     let link_color = Color::from_rgb8(30, 90, 200);
     let display_color = if b.link.is_some() {
@@ -753,35 +753,58 @@ fn render_link_subtree(b: &BoxNode, target: &str, color: Color) -> View<Msg> {
     view
 }
 
-/// Aplica `border-radius` (vía `View::radius`) y dibuja el contorno del
-/// box con `paint_with(...)` si `border_width > 0 && border_color.is_some()`.
-/// Vello stroke con `RoundedRect` da bordes redondeados consistentes con
-/// el fill — ambos comparten el mismo radio.
-fn apply_border(mut view: View<Msg>, b: &BoxNode) -> View<Msg> {
+/// Aplica `border-radius` y dibuja, en una sola pasada de `paint_with`,
+/// la sombra (si la hay) y el contorno del border (si lo hay). Vello
+/// pinta el callback entre el `fill` y la `image`/`text` del view, así
+/// que la sombra cae detrás del contenido pero encima del fondo del
+/// parent. Aproximación: sin gaussian blur — el `blur_px` se mapea
+/// como expansión adicional del rect con alpha proporcional, lo cual
+/// da una sombra "dura" pero proporcionada.
+fn apply_decorations(mut view: View<Msg>, b: &BoxNode) -> View<Msg> {
     if b.border_radius > 0.0 {
         view = view.radius(b.border_radius as f64);
     }
-    let (Some(bc), w) = (b.border_color, b.border_width) else {
-        return view;
+    let radius = b.border_radius as f64;
+    let shadow = b.box_shadow;
+    let border = match (b.border_color, b.border_width) {
+        (Some(c), w) if w > 0.0 => Some((c, w)),
+        _ => None,
     };
-    if w <= 0.0 {
+    if shadow.is_none() && border.is_none() {
         return view;
     }
-    let radius = b.border_radius as f64;
-    let color = Color::from_rgba8(bc.r, bc.g, bc.b, 255);
-    let stroke = Stroke::new(w as f64);
     view.paint_with(move |scene, _typesetter, rect| {
-        // Inset por media línea para que el stroke caiga dentro del
-        // rect — vello pinta el trazo centrado en el path.
-        let half = stroke.width * 0.5;
-        let r = RoundedRect::new(
-            rect.x as f64 + half,
-            rect.y as f64 + half,
-            (rect.x + rect.w) as f64 - half,
-            (rect.y + rect.h) as f64 - half,
-            (radius - half).max(0.0),
-        );
-        scene.stroke(&stroke, Affine::IDENTITY, color, None, &r);
+        if let Some(BoxShadow { offset_x, offset_y, blur_px, spread_px, color }) = shadow {
+            let extra = (blur_px + spread_px) as f64;
+            let half_alpha = if blur_px > 0.0 { 0.55 } else { 0.85 };
+            let sc = Color::from_rgba8(
+                color.r,
+                color.g,
+                color.b,
+                (color.a as f64 * half_alpha) as u8,
+            );
+            let r = RoundedRect::new(
+                (rect.x + offset_x) as f64 - extra,
+                (rect.y + offset_y) as f64 - extra,
+                (rect.x + rect.w + offset_x) as f64 + extra,
+                (rect.y + rect.h + offset_y) as f64 + extra,
+                (radius + extra).max(0.0),
+            );
+            scene.fill(Fill::NonZero, Affine::IDENTITY, sc, None, &r);
+        }
+        if let Some((bc, w)) = border {
+            let stroke = Stroke::new(w as f64);
+            let half = stroke.width * 0.5;
+            let r = RoundedRect::new(
+                rect.x as f64 + half,
+                rect.y as f64 + half,
+                (rect.x + rect.w) as f64 - half,
+                (rect.y + rect.h) as f64 - half,
+                (radius - half).max(0.0),
+            );
+            let color = Color::from_rgba8(bc.r, bc.g, bc.b, 255);
+            scene.stroke(&stroke, Affine::IDENTITY, color, None, &r);
+        }
     })
 }
 

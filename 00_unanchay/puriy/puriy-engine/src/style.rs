@@ -44,6 +44,20 @@ pub struct ComputedStyle {
     pub border_color: Option<Color>,
     /// Radio del corner-radius en px (0 = esquinas vivas).
     pub border_radius: f32,
+    /// `box-shadow` simplificado. `None` = sin sombra.
+    pub box_shadow: Option<BoxShadow>,
+}
+
+/// Sombra rectangular detrás del box. `blur_px` y `spread_px` se
+/// combinan en una expansión efectiva del rect — gaussian blur real
+/// queda para cuando el render-pipeline soporte multi-pass.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BoxShadow {
+    pub offset_x: f32,
+    pub offset_y: f32,
+    pub blur_px: f32,
+    pub spread_px: f32,
+    pub color: Color,
 }
 
 /// Valor longitud de CSS reducido al subset que soportamos: `auto`,
@@ -81,6 +95,7 @@ impl Default for ComputedStyle {
             border_width: 0.0,
             border_color: None,
             border_radius: 0.0,
+            box_shadow: None,
         }
     }
 }
@@ -557,6 +572,8 @@ enum DeclKind {
     /// lo desactiva (color → None).
     BorderEnabled(bool),
     BorderRadius(f32),
+    /// `None` = `box-shadow: none` (limpia la sombra).
+    BoxShadow(Option<BoxShadow>),
 }
 
 impl Decl {
@@ -582,6 +599,7 @@ impl Decl {
                 }
             }
             DeclKind::BorderRadius(v) => s.border_radius = *v,
+            DeclKind::BoxShadow(v) => s.box_shadow = *v,
         }
     }
 }
@@ -993,6 +1011,7 @@ fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "border-color" => parse_color(value).map(DeclKind::BorderColor),
         "border-style" => parse_border_style(value).map(DeclKind::BorderEnabled),
         "border-radius" => parse_length_px(value).map(DeclKind::BorderRadius),
+        "box-shadow" => Some(DeclKind::BoxShadow(parse_box_shadow(value))),
         // `border: 1px solid #ccc` — shorthand. Devolvemos un único
         // DeclKind sintético: en realidad ya hay 3 sub-decls que el
         // caller debe emitir, así que delegamos a una ruta especial vía
@@ -1002,6 +1021,49 @@ fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "border" => None,
         _ => None,
     }
+}
+
+/// Parsea `box-shadow: <offset-x> <offset-y> [blur] [spread] <color>`
+/// o `box-shadow: none`. Devuelve `None` (= no-shadow) si:
+/// - value es exactamente `none`, o
+/// - falta el offset-x/offset-y, o
+/// - no se reconoce el color.
+///
+/// `inset` y múltiples sombras separadas por coma no soportadas — el
+/// resto del declaration se ignora silenciosamente.
+fn parse_box_shadow(value: &str) -> Option<BoxShadow> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") || v.is_empty() {
+        return None;
+    }
+    // Toma sólo la primera sombra (si hay coma).
+    let first = v.split(',').next().unwrap_or(v).trim();
+    let mut lengths: Vec<f32> = Vec::with_capacity(4);
+    let mut color: Option<Color> = None;
+    for tok in first.split_whitespace() {
+        if tok.eq_ignore_ascii_case("inset") {
+            // No soportado todavía — abortamos.
+            return None;
+        }
+        if let Some(l) = parse_length_px(tok) {
+            lengths.push(l);
+            continue;
+        }
+        if let Some(c) = parse_color(tok) {
+            color = Some(c);
+            continue;
+        }
+    }
+    if lengths.len() < 2 {
+        return None;
+    }
+    Some(BoxShadow {
+        offset_x: lengths[0],
+        offset_y: lengths[1],
+        blur_px: lengths.get(2).copied().unwrap_or(0.0),
+        spread_px: lengths.get(3).copied().unwrap_or(0.0),
+        color: color.unwrap_or(Color::rgb(0, 0, 0)),
+    })
 }
 
 fn parse_border_style(s: &str) -> Option<bool> {
@@ -1798,6 +1860,37 @@ mod tests {
         });
         assert_eq!(hover_bgs.len(), 1);
         assert_eq!(hover_bgs[0], Some(Color::rgb(0xff, 0xaa, 0)));
+    }
+
+    #[test]
+    fn parsea_box_shadow_completo() {
+        let html = r#"<html><head><style>
+            .a { box-shadow: 2px 4px 8px 1px #000000 }
+            .b { box-shadow: 1px 2px red }
+            .c { box-shadow: none }
+        </style></head><body>
+          <div class="a"></div><div class="b"></div><div class="c"></div>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("div") {
+                divs.push(n.clone());
+            }
+        });
+        let a = eng.compute(&divs[0]).box_shadow.unwrap();
+        assert!((a.offset_x - 2.0).abs() < 1e-6);
+        assert!((a.offset_y - 4.0).abs() < 1e-6);
+        assert!((a.blur_px - 8.0).abs() < 1e-6);
+        assert!((a.spread_px - 1.0).abs() < 1e-6);
+        assert_eq!(a.color, Color::BLACK);
+        let b = eng.compute(&divs[1]).box_shadow.unwrap();
+        assert_eq!(b.color, Color::rgb(255, 0, 0));
+        assert!((b.blur_px - 0.0).abs() < 1e-6);
+        assert!((b.spread_px - 0.0).abs() < 1e-6);
+        let c = eng.compute(&divs[2]).box_shadow;
+        assert!(c.is_none());
     }
 
     #[test]

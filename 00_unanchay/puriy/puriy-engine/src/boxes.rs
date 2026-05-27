@@ -11,7 +11,7 @@
 use markup5ever_rcdom::{Handle, NodeData};
 
 use crate::dom::{self, DomTree};
-use crate::style::{ComputedStyle, LengthVal, StyleEngine, TextAlign};
+use crate::style::{BoxShadow, ComputedStyle, LengthVal, StyleEngine, TextAlign};
 
 /// Color RGBA, 8 bits por canal. Suficiente para CSS color values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,6 +77,8 @@ pub struct BoxNode {
     /// chrome lo plug-ea vía `View::hover_fill`. Restyle completo en
     /// hover (cambios de color/border) queda fuera de scope por ahora.
     pub hover_background: Option<Color>,
+    /// Box-shadow propagado a `paint_with` en el chrome.
+    pub box_shadow: Option<BoxShadow>,
     /// Texto plano del nodo (sólo para hojas de texto). Para nodos con
     /// hijos el texto vive en los hijos.
     pub text: Option<String>,
@@ -160,6 +162,7 @@ fn empty_root() -> BoxNode {
         border_color: None,
         border_radius: 0.0,
         hover_background: None,
+        box_shadow: None,
         text: None,
         children: Vec::new(),
         tag: Some("body".into()),
@@ -241,6 +244,7 @@ fn build_node(
                 border_color: style.border_color,
                 border_radius: style.border_radius,
                 hover_background,
+                box_shadow: style.box_shadow,
                 text: None,
                 children,
                 tag,
@@ -295,6 +299,7 @@ fn build_node(
                 border_color: None,
                 border_radius: 0.0,
                 hover_background: None,
+                box_shadow: None,
                 text: None,
                 children,
                 tag: None,
@@ -325,6 +330,7 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         border_color: None,
         border_radius: 0.0,
         hover_background: None,
+        box_shadow: None,
         text: Some(s),
         children: Vec::new(),
         tag: None,
