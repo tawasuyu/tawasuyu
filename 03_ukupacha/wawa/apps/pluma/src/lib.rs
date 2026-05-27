@@ -160,6 +160,12 @@ extern "C" {
     /// raiz anclada. La app la consulta en el arranque para descubrir
     /// si hay un cuaderno persistido de sesiones anteriores.
     fn sys_object_raiz(salida: u32) -> i32;
+    /// FASE 6.1c :: copia la carga util del objeto `hash` en `salida`.
+    /// Devuelve los bytes copiados (positivo), -1 si el objeto no existe,
+    /// -2 si `capacidad` no basta, -3 si el almacen fallo. Pluma la usa
+    /// en el cold boot para REHIDRATAR el texto Forth original de las
+    /// celdas reconstruidas — sin esto, el walker pintaria solo hashes.
+    fn sys_object_datos(hash_ptr: u32, salida: u32, capacidad: u32) -> i32;
     /// FASE 44 :: NOTEBOOK WALKER. Lee la celda en `indice_lineal` del
     /// nodo cuaderno anclado en `cuaderno_hash_ptr`. El kernel escribe
     /// 73 bytes con el layout plano:
@@ -249,6 +255,13 @@ struct Celda {
     /// `hash_binario` apunta a un nodo que pinto OTRA APP en el grafo
     /// del disco; el cuaderno se vuelve cross-app por construccion.
     macro_importada: bool,
+    /// FASE 45 :: la celda fue REHIDRATADA por el `cold_boot_walker`
+    /// desde el grafo persistido (no nacio de un F5 en esta sesion).
+    /// El renderer pinta un glifo `~` discreto en el margen derecho
+    /// para que el humano distinga las celdas historicas de las nuevas.
+    /// Al ser sobreescrita por un F5 posterior, la nueva `Celda::vacia()`
+    /// trae `restaurada = false` y el glifo se apaga naturalmente.
+    restaurada: bool,
 }
 
 impl Celda {
@@ -264,6 +277,7 @@ impl Celda {
             heredado: false,
             valor_heredado: 0,
             macro_importada: false,
+            restaurada: false,
         }
     }
 }
@@ -419,10 +433,14 @@ fn celda_desde_frame(frame: &[u8; 73]) -> Celda {
     c.retorno = retorno;
     c.valida = true;
     c.exito = !marca_error;
-    // `fuente`/`fuente_len`/`heredado`/`valor_heredado`/`macro_importada`
-    // quedan en default — son estado UI/runtime, no datos persistidos.
-    // El campo `id_secuencial` no vive en Celda local pero alimentara
-    // `PROXIMO_ID_SECUENCIAL` desde el walker.
+    // FASE 45 :: la celda viene del Walker; el glifo `~` aparecera
+    // junto al rotulo en el margen derecho hasta que un F5 la
+    // sobreescriba con una celda nueva (volatil presente).
+    c.restaurada = true;
+    // `fuente`/`fuente_len` se rellenan despues con `sys_object_datos`
+    // en `cold_boot_walker`; `heredado`/`valor_heredado` son estado
+    // de runtime no persistido. `macro_importada` se infiere del
+    // prefijo del texto rehidratado.
     let _ = id_secuencial; // documenta la lectura — el caller la usa.
     c
 }
@@ -445,6 +463,12 @@ fn cold_boot_walker() {
     let mut frame = [0u8; 73];
     let mut indice: u32 = 0;
     let mut max_id_visto: u32 = 0;
+    // FASE 45 :: para preservar la cascada cross-boot necesitamos el
+    // ultimo `retorno` exitoso que se hayan registrado en disco. Lo
+    // rastreamos durante el walk; al cerrar el bucle inyectamos su
+    // valor a `RETORNO_HEREDADO` para que el primer F5 post-boot
+    // herede el estado de la sesion anterior.
+    let mut ultimo_retorno_exitoso: Option<i32> = None;
     while indice < MAX_CELDAS_WALKER {
         let cod = unsafe {
             sys_cuaderno_leer_celda(
@@ -459,12 +483,52 @@ fn cold_boot_walker() {
             // tambien rompe el walker — la app sigue con lo que reuni.
             break;
         }
-        let celda = celda_desde_frame(&frame);
+        let mut celda = celda_desde_frame(&frame);
+
+        // FASE 45 :: REHIDRATACION SEMANTICA. Succionamos el texto
+        // Forth original del nodo `fuente_hash` para que la app
+        // pinte la celda con su codigo, no solo con hashes mudos.
+        // El kernel copia bytes ASCII crudos a `celda.fuente`; el
+        // contador `fuente_len` se ajusta al numero copiado. Errores
+        // (objeto ausente o capacidad insuficiente) se ignoran
+        // silenciosamente: la celda queda con `fuente_len = 0` y el
+        // glifo `~` del walker rotula su procedencia historica.
+        let n_bytes = unsafe {
+            sys_object_datos(
+                celda.hash_fuente.as_ptr() as u32,
+                celda.fuente.as_mut_ptr() as u32,
+                FUENTE_CAP as u32,
+            )
+        };
+        if n_bytes > 0 {
+            celda.fuente_len = n_bytes as usize;
+            // FASE 45 :: detectar macros rehidratadas. Si el texto
+            // recuperado arranca con `@`, la celda viene de un F5
+            // sobre la sintaxis `@<hash>` (Fase 36, cross-app). El
+            // renderer la pinta con el indicador acento vertical.
+            if celda.fuente[0] == b'@' {
+                celda.macro_importada = true;
+            }
+        }
+
         // El id_secuencial vive en el frame, lo decodificamos aqui
-        // para mantener `PROXIMO_ID_SECUENCIAL` sincronizado.
+        // para mantener `PROXIMO_ID_SECUENCIAL` sincronizado y
+        // rastrear el ultimo exito de la cascada.
         let id_sec = u32::from_le_bytes([frame[1], frame[2], frame[3], frame[4]]);
         if id_sec > max_id_visto {
             max_id_visto = id_sec;
+        }
+        // Solo las celdas exitosas alimentan la cascada cross-boot.
+        // El walker pasa en orden de id_secuencial, asi que la
+        // ultima asignacion sobrevive y refleja el retorno mas
+        // reciente del cuaderno soberano.
+        if celda.exito {
+            ultimo_retorno_exitoso = Some(celda.retorno);
+        } else {
+            // Una celda fallida ROMPE el flujo desde su id_sec
+            // adelante; la cadena solo retoma si una celda
+            // posterior vuelve a ser exitosa.
+            ultimo_retorno_exitoso = None;
         }
         registrar_celda_local(celda);
         indice += 1;
@@ -480,6 +544,20 @@ fn cold_boot_walker() {
         unsafe {
             HASH_CUADERNO = raiz_hash;
             HASH_CUADERNO_VALIDO = true;
+        }
+        // FASE 45 :: PRESERVACION DE LA CASCADA. Si la ultima celda
+        // exitosa del cuaderno persistido trae un retorno legitimo,
+        // lo inyectamos al flujo de herencia para que el primer F5
+        // post-boot continue el calculo donde lo dejo la sesion
+        // anterior. Sin esto, la cascada arrancaba siempre en cero
+        // tras reboot — el cuaderno tenia historia visual pero el
+        // pipeline funcional estaba decapitado.
+        if let Some(retorno) = ultimo_retorno_exitoso {
+            unsafe {
+                RETORNO_HEREDADO = retorno;
+                RETORNO_HEREDADO_VALIDO = true;
+                CADENA_ROTA = false;
+            }
         }
     }
 }
@@ -1067,7 +1145,7 @@ fn pintar() {
 
     // Cabecera con el hash del cuaderno (si ya hubo una consolidacion).
     rellenar_rect(lienzo, 0, 0, ANCHO, EDITOR_Y - 4, secundario);
-    dibujar_texto(lienzo, b"PLUMA  WAWA  F44", 8, 6, 1, tinta);
+    dibujar_texto(lienzo, b"PLUMA  WAWA  F45", 8, 6, 1, tinta);
     if unsafe { HASH_CUADERNO_VALIDO } {
         let h = unsafe { HASH_CUADERNO };
         let mut etiqueta = [b' '; 8];
@@ -1175,6 +1253,16 @@ fn pintar_celdas(lienzo: &mut [u32], tinta: u32, acento: u32, secundario: u32) {
         // aplica aqui (no hay cascada hacia el binario importado todavia).
         if celda.macro_importada {
             dibujar_texto(lienzo, b"MACRO", ANCHO - 14 - 5 * 6, y + 4, 1, acento);
+        }
+
+        // FASE 45 :: glifo `~` discreto en el borde derecho de las celdas
+        // rehidratadas por el `cold_boot_walker`. El humano distingue
+        // de un vistazo "vino del grafo persistido (sesion anterior)"
+        // vs "tecleada/disparada en esta sesion". Al sobreescribirla
+        // un F5 nuevo, la nueva `Celda::vacia()` trae `restaurada=false`
+        // y el glifo se apaga.
+        if celda.restaurada {
+            dibujar_texto(lienzo, b"~", ANCHO - 14, y + 4, 1, acento);
         }
 
         // FASE 34 :: chevron `>` en el margen IZQUIERDO de las celdas que
@@ -1355,6 +1443,10 @@ fn glifo(c: u8) -> [u8; FH] {
         b'>' => [0x10, 0x08, 0x04, 0x02, 0x04, 0x08, 0x10],
         // FASE 36 :: arroba — prefijo del token de importacion de macros.
         b'@' => [0x0E, 0x11, 0x17, 0x15, 0x17, 0x10, 0x0E],
+        // FASE 45 :: tilde — glifo de sincronia temporal. Marca celdas
+        // que el `cold_boot_walker` rehidrato desde el grafo persistido
+        // (vs. celdas tecleadas/disparadas en la sesion presente).
+        b'~' => [0x00, 0x00, 0x09, 0x16, 0x00, 0x00, 0x00],
         b'0' => [0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E],
         b'1' => [0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E],
         b'2' => [0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F],
