@@ -38,9 +38,11 @@ use std::collections::{BTreeMap, HashMap};
 
 use llimphi_ui::{DragPhase, View};
 use llimphi_widget_nodegraph::{
-    nodegraph_view, NodeId, NodeSpec, NodegraphMetrics, NodegraphPalette, PinIdx, Wire,
+    nodegraph_view, nodegraph_view_ex, NodeId, NodeSpec, NodegraphMetrics, NodegraphPalette,
+    PinIdx, Wire,
 };
 use pluma_notebook_core::{Cell, CellId, CellKind, Notebook, Position};
+use pluma_notebook_exec::{Kernel, RunReport};
 
 /// Parámetros visuales del layout automático.
 #[derive(Debug, Clone, Copy)]
@@ -111,6 +113,84 @@ where
             on_connect(from_node as CellId, to_node as CellId)
         },
     )
+}
+
+/// Variante de [`notebook_graph_view`] que añade un handler de click
+/// derecho por nodo — pensado para "ejecutar desde aquí" sobre un
+/// kernel reactivo. `on_exec_from(cell_id) -> Option<Msg>` se evalúa
+/// una vez por celda al construir la vista; si devuelve `Some(m)`, el
+/// runtime emite ese `Msg` cuando el usuario hace right-click sobre la
+/// title bar del nodo correspondiente.
+///
+/// El caller materializa `Msg` y desde su `update` corre
+/// `pluma_notebook_exec::run_from(notebook, kernel, cell_id)` para
+/// recomputar el cono — o usa el helper [`exec_from`] de este mismo
+/// crate, que envuelve la misma llamada y devuelve el `RunReport`.
+pub fn notebook_graph_view_with_exec<Msg, FDrag, FConnect, FExec>(
+    notebook: &Notebook,
+    layout: AutoLayout,
+    palette: &NodegraphPalette,
+    metrics: &NodegraphMetrics,
+    on_drag_cell: FDrag,
+    on_connect: FConnect,
+    on_exec_from: FExec,
+) -> View<Msg>
+where
+    Msg: Clone + Send + Sync + 'static,
+    FDrag: Fn(CellId, DragPhase, f32, f32) -> Option<Msg> + Send + Sync + 'static,
+    FConnect: Fn(CellId, CellId) -> Option<Msg> + Send + Sync + 'static,
+    FExec: Fn(CellId) -> Option<Msg>,
+{
+    let (nodes, wires, _id_map) = build_nodegraph(notebook, layout);
+    nodegraph_view_ex(
+        &nodes,
+        &wires,
+        palette,
+        metrics,
+        move |node_id, phase, dx, dy| {
+            on_drag_cell(node_id as CellId, phase, dx, dy)
+        },
+        move |from_node, _from_pin: PinIdx, to_node, _to_pin: PinIdx| {
+            on_connect(from_node as CellId, to_node as CellId)
+        },
+        Some(move |node_id: NodeId| on_exec_from(node_id as CellId)),
+    )
+}
+
+/// Async wrapper sobre `pluma_notebook_exec::run_from`. Útil cuando la
+/// app captura un `Msg::ExecFrom(cell)` desde la UI y quiere correr la
+/// recomputación reactiva sin volver a hablar directamente con el
+/// crate `pluma-notebook-exec` en cada llamada. Devuelve el
+/// `RunReport` para que la UI pueda mostrar qué celdas se ejecutaron /
+/// fallaron / saltaron.
+///
+/// `None` si la celda no existe o el notebook tiene un ciclo.
+pub async fn exec_from<K: Kernel>(
+    notebook: &mut Notebook,
+    kernel: &K,
+    cell: CellId,
+) -> Option<RunReport> {
+    pluma_notebook_exec::run_from(notebook, kernel, cell).await
+}
+
+/// Variante de [`apply_connect`] que, tras agregar la dependencia,
+/// ejecuta `run_from` sobre la celda destino. La conexión + la
+/// recomputación quedan en una sola llamada — patrón "auto-exec" para
+/// UIs donde conectar dos nodos debe disparar el efecto inmediato.
+///
+/// Devuelve `None` si la conexión fue rechazada (ciclo o self-loop) o
+/// si el notebook tiene un ciclo global; `Some(report)` con el reporte
+/// de la corrida si la conexión y la ejecución prosperaron.
+pub async fn apply_connect_and_exec<K: Kernel>(
+    notebook: &mut Notebook,
+    from: CellId,
+    to: CellId,
+    kernel: &K,
+) -> Option<RunReport> {
+    if !apply_connect(notebook, from, to) {
+        return None;
+    }
+    pluma_notebook_exec::run_from(notebook, kernel, to).await
 }
 
 /// Aplica el delta de un drag a la `Position` de una celda. Si la
@@ -459,6 +539,87 @@ mod tests {
         );
         let (nodes_post, _, _) = build_nodegraph(&nb, AutoLayout::default());
         assert_eq!(nodes_post[0].outputs[0], "scalar");
+    }
+
+    // === Helpers run_from / exec_from / apply_connect_and_exec ===
+
+    use async_trait::async_trait;
+    use pluma_notebook_core::CellState;
+    use pluma_notebook_exec::{Kernel, KernelError, KernelOutput};
+    use std::sync::{Arc, Mutex};
+
+    /// Kernel mínimo de test: cuenta cada celda que el caller le mandó.
+    struct CountingKernel {
+        log: Arc<Mutex<Vec<String>>>,
+    }
+    impl CountingKernel {
+        fn new() -> (Self, Arc<Mutex<Vec<String>>>) {
+            let log: Arc<Mutex<Vec<String>>> = Default::default();
+            (Self { log: log.clone() }, log)
+        }
+    }
+    #[async_trait]
+    impl Kernel for CountingKernel {
+        async fn execute(
+            &self,
+            source: &str,
+            _language: &str,
+        ) -> Result<KernelOutput, KernelError> {
+            self.log.lock().unwrap().push(source.to_string());
+            Ok(KernelOutput::empty())
+        }
+    }
+
+    #[tokio::test]
+    async fn exec_from_solo_corre_el_cono() {
+        // a → b → c, d suelta — exec_from(b) ejecuta b y c, no a ni d.
+        let (mut nb, _a, b, _c) = chain();
+        let _d = nb.push(
+            CellKind::Code { language: "rust".into() },
+            "suelta",
+        );
+        for c in nb.cells().iter().map(|c| c.id).collect::<Vec<_>>() {
+            nb.set_state(c, CellState::Fresh);
+        }
+        let (k, log) = CountingKernel::new();
+        let report = exec_from(&mut nb, &k, b).await.unwrap();
+        assert_eq!(report.executed.len(), 2);
+        // El kernel vio exactamente dos sources (b y c).
+        assert_eq!(log.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn apply_connect_and_exec_corre_solo_si_conecta() {
+        let mut nb = Notebook::new();
+        let a = nb.push(
+            CellKind::Code { language: "rust".into() },
+            "let x = 1;",
+        );
+        let b = nb.push(
+            CellKind::Code { language: "rust".into() },
+            "let y = 2;",
+        );
+        for id in [a, b] {
+            nb.set_state(id, CellState::Fresh);
+        }
+        let (k, log) = CountingKernel::new();
+        // Conecta a → b y dispara la ejecución del cono (solo b).
+        let report = apply_connect_and_exec(&mut nb, a, b, &k).await.unwrap();
+        assert_eq!(report.executed, vec![b]);
+        // Sólo b debió pasar por el kernel.
+        let seen = log.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1);
+        assert!(seen[0].contains("let y"));
+    }
+
+    #[tokio::test]
+    async fn apply_connect_and_exec_devuelve_none_si_ciclo() {
+        let (mut nb, a, _b, c) = chain();
+        let (k, log) = CountingKernel::new();
+        // a depender de c cerraría el ciclo — rechazado, no debe correr.
+        let result = apply_connect_and_exec(&mut nb, c, a, &k).await;
+        assert!(result.is_none());
+        assert!(log.lock().unwrap().is_empty());
     }
 
     #[test]

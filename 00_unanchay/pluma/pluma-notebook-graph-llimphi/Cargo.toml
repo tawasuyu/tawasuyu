@@ -9,10 +9,20 @@ description = "pluma-notebook-graph-llimphi — bindea el DAG de pluma-notebook-
 
 [dependencies]
 pluma-notebook-core = { path = "../pluma-notebook-core" }
+pluma-notebook-exec = { path = "../pluma-notebook-exec" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-nodegraph = { workspace = true }
 
+[dev-dependencies]
+tokio = { workspace = true }
+async-trait = { workspace = true }
+pluma-notebook-kernel-dominium = { path = "../pluma-notebook-kernel-dominium" }
+
 [[example]]
 name = "notebook_graph_demo"
 path = "examples/notebook_graph_demo.rs"
+
+[[example]]
+name = "notebook_graph_dominium_demo"
+path = "examples/notebook_graph_dominium_demo.rs"

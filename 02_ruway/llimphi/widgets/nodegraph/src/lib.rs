@@ -201,6 +201,43 @@ where
     FConnect:
         Fn(NodeId, PinIdx, NodeId, PinIdx) -> Option<Msg> + Send + Sync + 'static,
 {
+    nodegraph_view_ex::<Msg, FDrag, FConnect, fn(NodeId) -> Option<Msg>>(
+        nodes,
+        wires,
+        palette,
+        metrics,
+        on_drag_node,
+        on_connect,
+        None,
+    )
+}
+
+/// Variante extendida con un handler opcional de click derecho sobre
+/// la title bar de cada nodo. Permite a la app montar acciones por-nodo
+/// (estilo "ejecutar desde aquí" en un notebook reactivo, o "duplicar
+/// este nodo" en un editor de cadena de audio) sin esperar a que el
+/// widget tenga un menú contextual propio.
+///
+/// `on_right_click_node` se evalúa una vez por nodo al construir la
+/// vista — si devuelve `Some(msg)`, el runtime emite ese `Msg` al hacer
+/// right-click sobre la title bar; `None` deja al nodo sin acción
+/// contextual.
+pub fn nodegraph_view_ex<Msg, FDrag, FConnect, FRight>(
+    nodes: &[NodeSpec],
+    wires: &[Wire],
+    palette: &NodegraphPalette,
+    metrics: &NodegraphMetrics,
+    on_drag_node: FDrag,
+    on_connect: FConnect,
+    on_right_click_node: Option<FRight>,
+) -> View<Msg>
+where
+    Msg: Clone + Send + Sync + 'static,
+    FDrag: Fn(NodeId, DragPhase, f32, f32) -> Option<Msg> + Send + Sync + 'static,
+    FConnect:
+        Fn(NodeId, PinIdx, NodeId, PinIdx) -> Option<Msg> + Send + Sync + 'static,
+    FRight: Fn(NodeId) -> Option<Msg>,
+{
     let on_drag: DragNodeFn<Msg> = Arc::new(on_drag_node);
     let on_connect: ConnectFn<Msg> = Arc::new(on_connect);
 
@@ -215,7 +252,17 @@ where
 
     // Capa 1..N — nodos.
     for node in nodes {
-        children.push(node_view(node, palette, metrics, &on_drag, &on_connect));
+        let right_click_msg = on_right_click_node
+            .as_ref()
+            .and_then(|f| f(node.id));
+        children.push(node_view(
+            node,
+            palette,
+            metrics,
+            &on_drag,
+            &on_connect,
+            right_click_msg,
+        ));
     }
 
     View::new(Style {
@@ -303,6 +350,7 @@ fn node_view<Msg>(
     metrics: &NodegraphMetrics,
     on_drag: &DragNodeFn<Msg>,
     on_connect: &ConnectFn<Msg>,
+    on_right_click_msg: Option<Msg>,
 ) -> View<Msg>
 where
     Msg: Clone + Send + Sync + 'static,
@@ -313,7 +361,7 @@ where
 
     let node_id = node.id;
     let drag = on_drag.clone();
-    let title_bar = View::new(Style {
+    let mut title_bar = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
             height: length(metrics.title_height),
@@ -335,6 +383,10 @@ where
         Alignment::Start,
     )
     .draggable(move |phase, dx, dy| (drag)(node_id, phase, dx, dy));
+
+    if let Some(msg) = on_right_click_msg {
+        title_bar = title_bar.on_right_click(msg);
+    }
 
     let mut pin_layer_children: Vec<View<Msg>> = Vec::with_capacity(n_in + n_out);
     for (i, label) in node.inputs.iter().enumerate() {

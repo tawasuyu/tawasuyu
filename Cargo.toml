@@ -62,6 +62,7 @@ members = [
     "00_unanchay/pluma/pluma-notebook-core",
     "00_unanchay/pluma/pluma-notebook-exec",
     "00_unanchay/pluma/pluma-notebook-graph-llimphi",
+    "00_unanchay/pluma/pluma-notebook-kernel-cosmos",
     "00_unanchay/pluma/pluma-notebook-kernel-dominium",
     "00_unanchay/pluma/pluma-notebook-kernel-llm",
     "00_unanchay/pluma/pluma-notebook-kernel-python",
