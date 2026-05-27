@@ -121,6 +121,19 @@ impl StyleEngine {
         node: &Handle,
         parent: Option<&ComputedStyle>,
     ) -> ComputedStyle {
+        self.compute_with_parent_in_state(node, parent, false)
+    }
+
+    /// Variante con hover. Si `hover_active=true`, los selectores con
+    /// `:hover` también matchean. Permite computar el "estilo bajo el
+    /// mouse" sin un mouse real — el chrome lo usa para precalcular
+    /// `hover_fill` en el render.
+    pub fn compute_with_parent_in_state(
+        &self,
+        node: &Handle,
+        parent: Option<&ComputedStyle>,
+        hover_active: bool,
+    ) -> ComputedStyle {
         let mut style = ComputedStyle::default();
         if let Some(p) = parent {
             style.color = p.color;
@@ -153,7 +166,7 @@ impl StyleEngine {
             .rules
             .iter()
             .enumerate()
-            .filter(|(_, r)| r.matches(node))
+            .filter(|(_, r)| r.matches_in_state(node, hover_active))
             .map(|(i, r)| (r.selector.specificity(), i, r))
             .collect();
         let inline_decls: Vec<Decl> = dom::attr(node, "style")
@@ -300,9 +313,10 @@ enum AttrOp {
     Contains,
 }
 
-/// Pseudoclases estructurales — puramente posicionales, sin estado de UI.
-/// `:hover`, `:focus`, `:active` siguen sin soporte porque requieren
-/// tracking del chrome.
+/// Pseudoclases soportadas — la mayoría estructurales (puramente
+/// posicionales). `Hover` se evalúa según un flag externo que pasa el
+/// caller (`hover_active`); el chrome se encarga de mantenerlo
+/// correlacionado con la posición del mouse.
 #[derive(Debug, Clone, Copy)]
 enum Pseudo {
     FirstChild,
@@ -310,10 +324,21 @@ enum Pseudo {
     OnlyChild,
     FirstOfType,
     LastOfType,
+    Hover,
 }
 
 impl Compound {
     fn matches(&self, node: &markup5ever_rcdom::Handle) -> bool {
+        self.matches_in_state(node, false)
+    }
+
+    /// Variante con flag `hover_active` — sólo afecta el matching de
+    /// `:hover`. El resto del compound se evalúa idéntico.
+    fn matches_in_state(
+        &self,
+        node: &markup5ever_rcdom::Handle,
+        hover_active: bool,
+    ) -> bool {
         let Some(local) = dom::element_name(node) else {
             return false;
         };
@@ -342,7 +367,7 @@ impl Compound {
             }
         }
         for p in &self.pseudos {
-            if !pseudo_matches(node, *p) {
+            if !pseudo_matches(node, *p, hover_active) {
                 return false;
             }
         }
@@ -367,7 +392,14 @@ fn attr_matches(node: &markup5ever_rcdom::Handle, am: &AttrMatch) -> bool {
     }
 }
 
-fn pseudo_matches(node: &markup5ever_rcdom::Handle, p: Pseudo) -> bool {
+fn pseudo_matches(
+    node: &markup5ever_rcdom::Handle,
+    p: Pseudo,
+    hover_active: bool,
+) -> bool {
+    if matches!(p, Pseudo::Hover) {
+        return hover_active;
+    }
     let Some(parent) = parent_of(node) else { return false };
     let kids = parent.children.borrow();
     let mut elems: Vec<markup5ever_rcdom::Handle> = Vec::new();
@@ -380,6 +412,7 @@ fn pseudo_matches(node: &markup5ever_rcdom::Handle, p: Pseudo) -> bool {
         return false;
     };
     match p {
+        Pseudo::Hover => unreachable!("Hover ya fue resuelto arriba"),
         Pseudo::FirstChild => pos == 0,
         Pseudo::LastChild => pos + 1 == elems.len(),
         Pseudo::OnlyChild => elems.len() == 1,
@@ -399,13 +432,18 @@ fn pseudo_matches(node: &markup5ever_rcdom::Handle, p: Pseudo) -> bool {
 }
 
 impl Rule {
+    #[allow(dead_code)]
     fn matches(&self, node: &markup5ever_rcdom::Handle) -> bool {
+        self.matches_in_state(node, false)
+    }
+
+    fn matches_in_state(&self, node: &markup5ever_rcdom::Handle, hover_active: bool) -> bool {
         let compounds = &self.selector.compounds;
         if compounds.is_empty() {
             return false;
         }
         // El sujeto (último) debe matchear el nodo.
-        if !compounds.last().unwrap().matches(node) {
+        if !compounds.last().unwrap().matches_in_state(node, hover_active) {
             return false;
         }
         if compounds.len() == 1 {
@@ -823,6 +861,7 @@ fn parse_compound(sel: &str) -> Option<Compound> {
                     "only-child" => Pseudo::OnlyChild,
                     "first-of-type" => Pseudo::FirstOfType,
                     "last-of-type" => Pseudo::LastOfType,
+                    "hover" => Pseudo::Hover,
                     _ => return None,
                 };
                 pseudos.push(p);
@@ -1717,6 +1756,48 @@ mod tests {
         assert!((st.border_width - 3.0).abs() < 1e-6);
         assert_eq!(st.border_color, Some(Color::rgb(0, 0xff, 0)));
         assert!((st.border_radius - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn hover_state_activa_regla_solo_cuando_corresponde() {
+        // `.btn:hover { background: red }`: matchea con hover_active=true,
+        // no matchea sin él.
+        let html = r##"<html><head><style>
+            .btn:hover { background: #ff0000 }
+            .btn { background: #ffffff }
+        </style></head><body><a class="btn">x</a></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let a = dom.find("a").unwrap();
+        let base = eng.compute_with_parent_in_state(&a, None, false);
+        let hover = eng.compute_with_parent_in_state(&a, None, true);
+        assert_eq!(base.background, Some(Color::rgb(255, 255, 255)));
+        assert_eq!(hover.background, Some(Color::rgb(255, 0, 0)));
+    }
+
+    #[test]
+    fn hover_pseudo_aporta_a_specificity() {
+        // `.btn:hover` debe tener specificity 0,2,0 → 20 (clase 10 + pseudo 10)
+        let s = parse_selector(".btn:hover").unwrap();
+        assert_eq!(s.specificity(), 20);
+    }
+
+    #[test]
+    fn box_tree_expone_hover_background() {
+        let html = r##"<html><head><style>
+            .btn { background: white }
+            .btn:hover { background: #ffaa00 }
+        </style></head><body><a class="btn">x</a></body></html>"##;
+        let eng = crate::Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut hover_bgs = Vec::new();
+        doc.box_tree.walk(|b| {
+            if b.tag.as_deref() == Some("a") {
+                hover_bgs.push(b.hover_background);
+            }
+        });
+        assert_eq!(hover_bgs.len(), 1);
+        assert_eq!(hover_bgs[0], Some(Color::rgb(0xff, 0xaa, 0)));
     }
 
     #[test]

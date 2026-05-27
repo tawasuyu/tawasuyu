@@ -584,6 +584,9 @@ fn render_box(b: &BoxNode) -> View<Msg> {
     if let Some(bg) = b.background {
         view = view.fill(Color::from_rgb8(bg.r, bg.g, bg.b));
     }
+    if let Some(hbg) = b.hover_background {
+        view = view.hover_fill(Color::from_rgb8(hbg.r, hbg.g, hbg.b));
+    }
     view = apply_border(view, b);
 
     let link_color = Color::from_rgb8(30, 90, 200);

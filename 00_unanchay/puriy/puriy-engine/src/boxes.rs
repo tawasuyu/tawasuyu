@@ -72,6 +72,11 @@ pub struct BoxNode {
     pub border_color: Option<Color>,
     /// Radio corner-radius en px.
     pub border_radius: f32,
+    /// Background a aplicar cuando el nodo está bajo el mouse. `None` =
+    /// no hay regla `:hover` que cambie el background del nodo. El
+    /// chrome lo plug-ea vía `View::hover_fill`. Restyle completo en
+    /// hover (cambios de color/border) queda fuera de scope por ahora.
+    pub hover_background: Option<Color>,
     /// Texto plano del nodo (sólo para hojas de texto). Para nodos con
     /// hijos el texto vive en los hijos.
     pub text: Option<String>,
@@ -154,6 +159,7 @@ fn empty_root() -> BoxNode {
         border_width: 0.0,
         border_color: None,
         border_radius: 0.0,
+        hover_background: None,
         text: None,
         children: Vec::new(),
         tag: Some("body".into()),
@@ -174,6 +180,17 @@ fn build_node(
             if style.display == Display::None {
                 return None;
             }
+            // Hover style: recomputamos con hover_active=true y vemos si
+            // alguna pseudo-clase `:hover` cambió el background. Si sí,
+            // exponemos el delta al chrome para que use hover_fill().
+            // Resto del diff (color/border/etc.) queda fuera por ahora —
+            // restyle completo en hover requeriría re-mount del tree.
+            let hover_style = styles.compute_with_parent_in_state(node, parent_style, true);
+            let hover_background = if hover_style.background != style.background {
+                hover_style.background
+            } else {
+                None
+            };
             let tag = dom::element_name(node);
             let link = match (tag.as_deref(), base) {
                 (Some("a"), base) => dom::attr(node, "href").and_then(|h| resolve_href(base, &h)),
@@ -223,6 +240,7 @@ fn build_node(
                 border_width: style.border_width,
                 border_color: style.border_color,
                 border_radius: style.border_radius,
+                hover_background,
                 text: None,
                 children,
                 tag,
@@ -276,6 +294,7 @@ fn build_node(
                 border_width: 0.0,
                 border_color: None,
                 border_radius: 0.0,
+                hover_background: None,
                 text: None,
                 children,
                 tag: None,
@@ -305,6 +324,7 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         border_width: 0.0,
         border_color: None,
         border_radius: 0.0,
+        hover_background: None,
         text: Some(s),
         children: Vec::new(),
         tag: None,
