@@ -9,6 +9,8 @@
 //!   wawactl reset [--system]           restablece defaults y persiste
 //!   wawactl watch                      sigue ambas capas y muestra cada cambio
 //!   wawactl module <id> on|off|toggle [--system]   conmuta un módulo
+//!   wawactl claves forjar --slot N --salida PATH    forja un par Ed25519
+//!   wawactl claves derivar-pubkey --clave-privada PATH  re-deriva pubkey
 //!
 //! Las keys aceptadas en get/set son los nombres de campos del struct:
 //! `theme_variant`, `accent`, `lang`, `timefmt_24h`. Para los módulos
@@ -134,6 +136,22 @@ enum Cmd {
     /// El demonio NO firma ciegamente — la soberania del operador es
     /// inviolable. Una app enjaulada que inunde el COM1 con
     /// sign_requests solo lograra que el humano vea el spam y rechace.
+    /// FASE 48 :: ceremonia de fianza de claves soberanas (Boot Trust
+    /// Ceremony). Subcomandos:
+    ///
+    ///   wawactl claves forjar --slot <0|1|2> --salida <PATH>
+    ///     Forja un par Ed25519 fresco con entropia del SO, persiste la
+    ///     seed (32 B) en `--salida` con permisos 0600 e imprime la
+    ///     clave publica derivada como un array literal de Rust listo
+    ///     para pegar en `kernel/src/claves.rs::AGORA_AUTH_RING`.
+    ///
+    ///   wawactl claves derivar-pubkey --clave-privada <PATH>
+    ///     Re-imprime la clave publica de una seed persistida — utilidad
+    ///     forense del operador antes de re-forjar la imagen del kernel.
+    Claves {
+        #[command(subcommand)]
+        op: ClavesCmd,
+    },
     DaemonFirma {
         /// Path al PTY/dispositivo serial que QEMU expone como COM1.
         #[arg(long)]
@@ -160,6 +178,39 @@ enum Cmd {
         /// publica embeber en el sobre `CuadernoFirmado`.
         #[arg(long, default_value_t = 0u8)]
         slot: u8,
+    },
+}
+
+/// FASE 48 :: variantes del subcomando `wawactl claves`. Cada una opera
+/// estrictamente offline; la criptografia ocurre del lado del operador y
+/// el kernel jamas ve la clave privada.
+#[derive(Subcommand)]
+enum ClavesCmd {
+    /// Forja un par Ed25519 fresco con entropia del SO. Persiste la seed
+    /// (32 B raw) en `--salida` con permisos 0600 e imprime la clave
+    /// publica como array literal de Rust, listo para inyectar en el
+    /// slot indicado del anillo `AGORA_AUTH_RING` del kernel.
+    Forjar {
+        /// Slot del anillo multi-autor (0=primaria, 1=secundaria,
+        /// 2=recuperacion). Anota el destino del literal en la cabecera
+        /// del bloque impreso a stdout — no muta el archivo del kernel.
+        #[arg(long)]
+        slot: u8,
+        /// Path donde persistir la clave privada (seed de 32 bytes raw).
+        /// Si el archivo ya existe, se aborta sin sobrescribir — la
+        /// soberania del operador es inviolable.
+        #[arg(long)]
+        salida: String,
+    },
+    /// Re-deriva la clave publica de una seed persistida. Imprime el
+    /// literal Rust por stdout. Operacion forense: util para auditar
+    /// que la clave publica grabada en el kernel sigue casando con la
+    /// seed que el operador guarda en su HSM/USB.
+    DerivarPubkey {
+        /// Path al archivo con la clave privada Ed25519 (32 B seed
+        /// raw o 64 B SecretKey completa — ambos formatos aceptados).
+        #[arg(long = "clave-privada")]
+        clave_privada: String,
     },
 }
 
@@ -194,6 +245,10 @@ fn run(cmd: Cmd) -> Result<(), String> {
         Cmd::Watch => cmd_watch(),
         Cmd::Module { id, op, system } => cmd_module(&id, &op, layer_of(system)),
         Cmd::FirmarCuaderno { hash, clave_privada } => cmd_firmar_cuaderno(&hash, &clave_privada),
+        Cmd::Claves { op } => match op {
+            ClavesCmd::Forjar { slot, salida } => cmd_claves_forjar(slot, &salida),
+            ClavesCmd::DerivarPubkey { clave_privada } => cmd_claves_derivar_pubkey(&clave_privada),
+        },
         Cmd::DaemonFirma {
             pty,
             clave_privada,
@@ -260,6 +315,157 @@ fn cmd_firmar_cuaderno(hash_hex: &str, clave_path: &str) -> Result<(), String> {
     out.write_all(firma.as_ref())
         .map_err(|e| format!("no pude escribir la firma a stdout: {e}"))?;
     out.flush().ok();
+    Ok(())
+}
+
+// =============================================================================
+//  FASE 48 :: ceremonia de fianza de claves soberanas
+// -----------------------------------------------------------------------------
+//  `wawactl claves forjar/derivar-pubkey` es la unica forma legitima de
+//  poblar el anillo `AGORA_AUTH_RING` del kernel con claves vivas. Toda la
+//  criptografia ocurre AQUI; el kernel jamas ve la seed. La ceremonia es
+//  estricta:
+//
+//    1. Forjar la seed con entropia del SO (lectura cruda de /dev/urandom).
+//    2. Derivar el par Ed25519 con `ed25519-compact`.
+//    3. Persistir la seed con 0600 — la soberania del operador es fisica.
+//    4. Emitir la pubkey como literal de Rust para que el operador la
+//       pegue manualmente en `kernel/src/claves.rs::AGORA_AUTH_RING`.
+//
+//  ZERO heuristica: si el archivo destino ya existe, abortamos sin
+//  sobrescribir. Una seed perdida no se recupera; rehusarse a clobberear
+//  es elemental.
+// =============================================================================
+
+/// Slots validos del anillo. Anclados con la convencion documentada en
+/// el kernel: 0=primaria, 1=secundaria, 2=recuperacion.
+const SLOTS_VALIDOS: &[u8] = &[0, 1, 2];
+
+/// Lee `N` bytes de `/dev/urandom`. Es la fuente CSPRNG estandar en
+/// Linux/BSD/macOS — bloquea solo en el arranque tempranisimo del SO,
+/// nunca en una sesion de operador interactivo. Evitamos pulsar el
+/// feature `random` de `ed25519-compact` para no inflar la matriz de
+/// dependencias del workspace.
+fn leer_entropia<const N: usize>() -> Result<[u8; N], String> {
+    use std::io::Read;
+    let mut f = std::fs::File::open("/dev/urandom")
+        .map_err(|e| format!("no pude abrir /dev/urandom: {e}"))?;
+    let mut buf = [0u8; N];
+    f.read_exact(&mut buf)
+        .map_err(|e| format!("entropia del SO truncada: {e}"))?;
+    Ok(buf)
+}
+
+/// Formatea 32 bytes como un array literal de Rust de cuatro filas de
+/// ocho bytes — el estilo que ya usa `AGORA_AUTH_RING` en el kernel.
+/// La salida es pegable directa, sin retoques.
+fn pubkey_literal_rust(pk: &[u8; 32]) -> String {
+    let mut s = String::with_capacity(256);
+    s.push_str("[\n");
+    for fila in 0..4 {
+        s.push_str("    ");
+        for col in 0..8 {
+            let i = fila * 8 + col;
+            s.push_str(&format!("0x{:02x}, ", pk[i]));
+        }
+        s.push('\n');
+    }
+    s.push(']');
+    s
+}
+
+/// Decodifica una clave privada desde un buffer crudo. Acepta 32 B
+/// (seed) o 64 B (SecretKey expandida); cualquier otro tamaño aborta.
+fn pubkey_de_seed_o_sk(bytes: &[u8]) -> Result<[u8; 32], String> {
+    if bytes.len() == 32 {
+        let mut seed_arr = [0u8; 32];
+        seed_arr.copy_from_slice(bytes);
+        let seed = ed25519_compact::Seed::new(seed_arr);
+        let kp = ed25519_compact::KeyPair::from_seed(seed);
+        let mut pk = [0u8; 32];
+        pk.copy_from_slice(kp.pk.as_ref());
+        Ok(pk)
+    } else if bytes.len() == 64 {
+        let sk = ed25519_compact::SecretKey::from_slice(bytes)
+            .map_err(|e| format!("clave privada invalida: {e}"))?;
+        let mut pk = [0u8; 32];
+        pk.copy_from_slice(sk.public_key().as_ref());
+        Ok(pk)
+    } else {
+        Err(format!(
+            "la clave privada debe traer 32 (seed) o 64 (SecretKey) bytes; trae {}",
+            bytes.len()
+        ))
+    }
+}
+
+/// `wawactl claves forjar --slot N --salida PATH`. Genera un par
+/// Ed25519 fresco, persiste la seed con 0600 e imprime la pubkey como
+/// array literal de Rust. Aborta si el archivo destino ya existe — un
+/// re-forjado accidental sobre una seed viva equivaldria a perder la
+/// identidad del operador en ese slot.
+fn cmd_claves_forjar(slot: u8, salida: &str) -> Result<(), String> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    if !SLOTS_VALIDOS.contains(&slot) {
+        return Err(format!(
+            "slot fuera de rango: {slot}. Validos: 0 (primaria), 1 (secundaria), 2 (recuperacion)"
+        ));
+    }
+
+    // Aforjamos la seed con entropia del SO ANTES de tocar el disco.
+    // Si /dev/urandom falla, no dejamos un archivo a medio escribir.
+    let mut seed_bytes: [u8; 32] = leer_entropia()?;
+    let seed = ed25519_compact::Seed::new(seed_bytes);
+    let kp = ed25519_compact::KeyPair::from_seed(seed);
+    let mut pk_bytes = [0u8; 32];
+    pk_bytes.copy_from_slice(kp.pk.as_ref());
+
+    // Persistir con `create_new` (E EXCL) + mode 0600. Cualquier
+    // colision con un archivo preexistente aborta sin clobberear.
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(salida)
+        .map_err(|e| format!("no pude crear {salida} (0600, exclusivo): {e}"))?;
+    f.write_all(&seed_bytes)
+        .map_err(|e| format!("no pude escribir la seed en {salida}: {e}"))?;
+    f.sync_all().ok();
+    drop(f);
+
+    // Limpieza absoluta del buffer en memoria antes de salir de scope.
+    // No es defensa criptografica de la mas pura — el kernel pudo haber
+    // copiado la pagina a swap antes — pero minimiza la huella en la
+    // memoria del proceso. Equivalente moral al `mlock` + zeroize que
+    // un HSM serio haria.
+    seed_bytes.fill(0);
+
+    let etiqueta = match slot {
+        0 => "PRIMARIA",
+        1 => "SECUNDARIA",
+        2 => "RECUPERACION",
+        _ => unreachable!(),
+    };
+    println!("// SLOT {slot} ({etiqueta}) PUBLIC KEY LITERAL");
+    println!("// Seed persistida en: {salida}");
+    println!("{},", pubkey_literal_rust(&pk_bytes));
+    Ok(())
+}
+
+/// `wawactl claves derivar-pubkey --clave-privada PATH`. Carga la
+/// seed/SecretKey persistida, recalcula su pubkey y la emite como
+/// literal Rust. Util como auditoria forense: el operador verifica
+/// que la pubkey grabada en el kernel sigue casando con la seed que
+/// guarda offline antes de aceptar una nueva imagen.
+fn cmd_claves_derivar_pubkey(clave_path: &str) -> Result<(), String> {
+    let mut clave_bytes = std::fs::read(clave_path)
+        .map_err(|e| format!("no pude leer la clave privada en {clave_path}: {e}"))?;
+    let pk = pubkey_de_seed_o_sk(&clave_bytes)?;
+    clave_bytes.fill(0); // ver `cmd_claves_forjar` para el porque.
+    println!("// PUBLIC KEY DERIVADA DE {clave_path}");
+    println!("{},", pubkey_literal_rust(&pk));
     Ok(())
 }
 

@@ -1,5 +1,5 @@
 // =============================================================================
-//  renaser :: kernel/src/claves.rs — Fase 25/41 :: el sello criptografico del Ring 0
+//  renaser :: kernel/src/claves.rs — Fase 25/41/48 :: el sello criptografico del Ring 0
 // -----------------------------------------------------------------------------
 //  POSIX gobierna la identidad por enteros mutables (UID/GID, sudoers, capabilities
 //  de Linux). Cada uno de ellos es UN check `if (uid == 0)` que un bug del kernel
@@ -20,6 +20,33 @@
 //  ZERO-ALLOC: la verificacion ocurre integramente sobre la pila + el bloque
 //  estatico de la `pubkey`. `ed25519-compact` con `default-features = false`
 //  no toca al asignador para verificar; no le hace falta `random`.
+//
+//  ---------------------------------------------------------------------------
+//  CEREMONIA DE FIANZA DE CLAVES SOBERANAS (Fase 48, Boot Trust Ceremony)
+//  ---------------------------------------------------------------------------
+//  Las tres claves de [`AGORA_AUTH_RING`] DEJARON DE SER PLACEHOLDERS. Cada
+//  una es la pubkey Ed25519 derivada de una seed forjada por el operador
+//  local con `wawactl claves forjar`. La seed correspondiente vive offline
+//  en el HSM/USB/papel del operador, jamas en este arbol.
+//
+//  Para colonizar un hardware virgen con Wawa, la ceremonia es esta:
+//
+//    1. `wawactl claves forjar --slot <N> --salida <PATH>` (N=0,1,2). La
+//       seed se persiste con `0600`; el comando imprime la pubkey como
+//       array literal de Rust pegable directo.
+//    2. El operador inyecta los TRES literales en los slots
+//       correspondientes de [`AGORA_AUTH_RING`] de este archivo.
+//    3. `cargo +nightly build --target x86_64-unknown-none` re-forja el
+//       binario inmutable del kernel con el anillo nuevo embebido en
+//       `.rodata`.
+//    4. El demonio `wawactl daemon-firma --slot <N> --clave-privada <PATH>`
+//       opera la firma viva con la seed del slot que corresponda. Las
+//       otras dos seeds quedan en almacenamiento frio como reserva.
+//
+//  Si en cualquier momento futuro el operador necesita auditar que la
+//  pubkey grabada aqui sigue casando con la seed offline:
+//    `wawactl claves derivar-pubkey --clave-privada <PATH>`
+//  reimprime el literal — comparar byte a byte basta.
 // =============================================================================
 
 use ed25519_compact::{PublicKey, Signature};
@@ -37,38 +64,41 @@ use format::{CodigoError, CuadernoFirmado, ManifiestoFirmado};
 /// indirecciones — el anillo vive en `.rodata` del binario del kernel
 /// y solo cambia re-forjando la imagen.
 ///
-/// VALOR PROVISIONAL: cada slot lleva 32 bytes determinados que no son
-/// claves "vivas" todavia. Cuando `wawactl` gane su comando de forja
-/// de claves multi-dispositivo, los tres slots se rellenaran con
-/// pubkeys reales via `include_bytes!` durante el build del kernel.
+/// FASE 48 :: claves SOBERANAS. Los placeholders historicos quedaron
+/// sepultados — cada slot contiene una pubkey Ed25519 forjada por la
+/// ceremonia documentada arriba. Las seeds correspondientes viven
+/// offline en el HSM/USB del operador local. Re-forjar la imagen es
+/// el unico camino para rotar una clave; el binario es la fuente de
+/// verdad.
 pub const AGORA_AUTH_RING: [[u8; 32]; 3] = [
     // Slot 0 :: LLAVE PRIMARIA DEL OPERADOR. Es la que `apps/pluma`
     // empotra en `AGORA_PUBLIC_KEY_LOCAL` para componer el sobre por
-    // defecto. Continuidad binaria con la constante de la Fase 25 — un
-    // cuaderno firmado antes de la Fase 41 sigue validando.
+    // defecto. Forjada en la ceremonia de la Fase 48; reemplaza el
+    // placeholder historico de la Fase 25.
     [
-        0x1a, 0x4f, 0x7c, 0x91, 0xb6, 0x2d, 0x5e, 0xa8,
-        0x33, 0xc7, 0x09, 0x84, 0xf1, 0x60, 0xb5, 0x52,
-        0x6e, 0xae, 0x17, 0x40, 0x82, 0xfb, 0x99, 0xc1,
-        0x2d, 0x55, 0xd6, 0x3a, 0xe4, 0x77, 0x1c, 0x80,
+        0x68, 0x47, 0x56, 0xec, 0x9a, 0xad, 0x2e, 0x83,
+        0x02, 0x78, 0x11, 0x34, 0x71, 0x69, 0x83, 0xd5,
+        0xf2, 0xff, 0xe7, 0x28, 0x3d, 0x8d, 0xcd, 0x67,
+        0x17, 0xd8, 0xad, 0x57, 0xe0, 0x35, 0x6f, 0x48,
     ],
     // Slot 1 :: DISPOSITIVO SECUNDARIO. Para firmas desde el telefono,
-    // USB, o un wawactl en otra terminal. Placeholder hasta que la
-    // forja multi-dispositivo de `wawactl claves` exista.
+    // USB, o un wawactl en otra terminal. Forjada en la Fase 48; la
+    // seed paralela vive en almacenamiento frio del operador.
     [
-        0x2b, 0x60, 0x8d, 0xa2, 0xc7, 0x3e, 0x6f, 0xb9,
-        0x44, 0xd8, 0x1a, 0x95, 0x02, 0x71, 0xc6, 0x63,
-        0x7f, 0xbf, 0x28, 0x51, 0x93, 0x0c, 0xaa, 0xd2,
-        0x3e, 0x66, 0xe7, 0x4b, 0xf5, 0x88, 0x2d, 0x91,
+        0x21, 0x4d, 0x1d, 0xab, 0xa3, 0x65, 0xcd, 0x85,
+        0x9f, 0x4a, 0xf5, 0x1a, 0x03, 0x83, 0x62, 0x1c,
+        0x86, 0x86, 0xfa, 0xf2, 0xa8, 0x73, 0x01, 0xa4,
+        0xb6, 0xf2, 0xef, 0xa2, 0x74, 0x10, 0x0a, 0xf8,
     ],
     // Slot 2 :: LLAVE DE RECUPERACION (cold-storage). Para el evento
-    // raro de perdida de los dispositivos vivos. Tipicamente offline,
-    // grabada en papel/metal/HSM cerrado bajo llave fisica.
+    // raro de perdida de los dispositivos vivos. Forjada en la Fase 48;
+    // la seed esta destinada a almacenamiento offline (papel/metal/HSM
+    // cerrado bajo llave fisica).
     [
-        0x3c, 0x71, 0x9e, 0xb3, 0xd8, 0x4f, 0x70, 0xca,
-        0x55, 0xe9, 0x2b, 0xa6, 0x13, 0x82, 0xd7, 0x74,
-        0x80, 0xc0, 0x39, 0x62, 0xa4, 0x1d, 0xbb, 0xe3,
-        0x4f, 0x77, 0xf8, 0x5c, 0x06, 0x99, 0x3e, 0xa2,
+        0x39, 0xc8, 0x8e, 0xaa, 0x02, 0x1c, 0x42, 0xea,
+        0x42, 0x3e, 0x18, 0xf4, 0x3c, 0xcc, 0xbc, 0x5a,
+        0x44, 0xb0, 0x51, 0x01, 0xcc, 0x02, 0xd2, 0x77,
+        0x76, 0x41, 0x02, 0x8c, 0xa0, 0x20, 0x12, 0x11,
     ],
 ];
 
