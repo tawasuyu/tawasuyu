@@ -267,7 +267,23 @@ impl Selector {
             ids += c.ids.len() as u32;
             classes_etc += c.classes.len() as u32;
             classes_etc += c.attrs.len() as u32;
-            classes_etc += c.pseudos.len() as u32;
+            for p in &c.pseudos {
+                match p {
+                    // CSS spec: :not(X) aporta la especificidad de X, no
+                    // la suya propia. Sumamos las partes del compound
+                    // interno.
+                    Pseudo::Not(inner) => {
+                        ids += inner.ids.len() as u32;
+                        classes_etc += inner.classes.len() as u32;
+                        classes_etc += inner.attrs.len() as u32;
+                        classes_etc += inner.pseudos.len() as u32;
+                        if matches!(inner.tag, TagPart::Type(_)) {
+                            types += 1;
+                        }
+                    }
+                    _ => classes_etc += 1,
+                }
+            }
             if matches!(c.tag, TagPart::Type(_)) {
                 types += 1;
             }
@@ -332,7 +348,7 @@ enum AttrOp {
 /// posicionales). `Hover` se evalúa según un flag externo que pasa el
 /// caller (`hover_active`); el chrome se encarga de mantenerlo
 /// correlacionado con la posición del mouse.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum Pseudo {
     FirstChild,
     LastChild,
@@ -340,6 +356,15 @@ enum Pseudo {
     FirstOfType,
     LastOfType,
     Hover,
+    /// `:nth-child(an+b)` — match si la posición 1-indexed del nodo en
+    /// el padre satisface `pos = a*k + b` para algún `k >= 0`.
+    NthChild {
+        a: i32,
+        b: i32,
+    },
+    /// `:not(simple)` — negación de un compound simple sin combinadores
+    /// ni `:not` anidado. Almacenamos el compound interno completo.
+    Not(Box<Compound>),
 }
 
 impl Compound {
@@ -382,7 +407,7 @@ impl Compound {
             }
         }
         for p in &self.pseudos {
-            if !pseudo_matches(node, *p, hover_active) {
+            if !pseudo_matches(node, p, hover_active) {
                 return false;
             }
         }
@@ -409,11 +434,13 @@ fn attr_matches(node: &markup5ever_rcdom::Handle, am: &AttrMatch) -> bool {
 
 fn pseudo_matches(
     node: &markup5ever_rcdom::Handle,
-    p: Pseudo,
+    p: &Pseudo,
     hover_active: bool,
 ) -> bool {
-    if matches!(p, Pseudo::Hover) {
-        return hover_active;
+    match p {
+        Pseudo::Hover => return hover_active,
+        Pseudo::Not(c) => return !c.matches_in_state(node, hover_active),
+        _ => {}
     }
     let Some(parent) = parent_of(node) else { return false };
     let kids = parent.children.borrow();
@@ -427,7 +454,7 @@ fn pseudo_matches(
         return false;
     };
     match p {
-        Pseudo::Hover => unreachable!("Hover ya fue resuelto arriba"),
+        Pseudo::Hover | Pseudo::Not(_) => unreachable!("ya resueltos arriba"),
         Pseudo::FirstChild => pos == 0,
         Pseudo::LastChild => pos + 1 == elems.len(),
         Pseudo::OnlyChild => elems.len() == 1,
@@ -442,6 +469,18 @@ fn pseudo_matches(
             elems[pos + 1..]
                 .iter()
                 .all(|c| dom::element_name(c).map(|t| t != my_tag).unwrap_or(true))
+        }
+        Pseudo::NthChild { a, b } => {
+            // `pos` es 0-indexed, CSS usa 1-indexed.
+            let p_css = (pos + 1) as i32;
+            let diff = p_css - *b;
+            if *a == 0 {
+                diff == 0
+            } else if *a > 0 {
+                diff >= 0 && diff % *a == 0
+            } else {
+                diff <= 0 && diff % *a == 0
+            }
         }
     }
 }
@@ -868,10 +907,34 @@ fn parse_compound(sel: &str) -> Option<Compound> {
                     return None;
                 }
                 let name = sel[start..i].to_ascii_lowercase();
-                // Pseudoclases con paréntesis (`:not(...)`, `:nth-child(...)`)
-                // no soportadas todavía — rechazamos el selector entero.
+                // Funcionales: `:nth-child(...)`, `:not(...)`. Detectamos
+                // y consumimos los argumentos.
                 if i < bytes.len() && bytes[i] == b'(' {
-                    return None;
+                    let arg_start = i + 1;
+                    let rel_close = sel[arg_start..].find(')')?;
+                    let arg = &sel[arg_start..arg_start + rel_close];
+                    let p = match name.as_str() {
+                        "nth-child" => {
+                            let (a, b) = parse_nth_arg(arg)?;
+                            Pseudo::NthChild { a, b }
+                        }
+                        "not" => {
+                            let inner = parse_compound(arg)?;
+                            // Anti-recursión: `:not(:not(...))` rechazamos.
+                            if inner
+                                .pseudos
+                                .iter()
+                                .any(|p| matches!(p, Pseudo::Not(_)))
+                            {
+                                return None;
+                            }
+                            Pseudo::Not(Box::new(inner))
+                        }
+                        _ => return None,
+                    };
+                    pseudos.push(p);
+                    i = arg_start + rel_close + 1;
+                    continue;
                 }
                 let p = match name.as_str() {
                     "first-child" => Pseudo::FirstChild,
@@ -1021,6 +1084,41 @@ fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "border" => None,
         _ => None,
     }
+}
+
+/// Parsea el argumento de `:nth-child(...)`. Soporta:
+/// - palabras clave: `odd` (= `2n+1`), `even` (= `2n`)
+/// - número entero: `3` → `(0, 3)` (sólo la 3a)
+/// - `n` → `(1, 0)` (todos), `-n` → `(-1, 0)`
+/// - `an` → `(a, 0)`; `an+b` y `an-b` → `(a, ±b)`
+/// - `-n+b` → `(-1, b)`
+///
+/// Devuelve `Some((a, b))` o `None` si el formato no encaja.
+fn parse_nth_arg(arg: &str) -> Option<(i32, i32)> {
+    let s: String = arg.chars().filter(|c| !c.is_whitespace()).collect();
+    let s = s.to_ascii_lowercase();
+    if s == "odd" {
+        return Some((2, 1));
+    }
+    if s == "even" {
+        return Some((2, 0));
+    }
+    // Caso entero puro: "3" o "-3".
+    if let Ok(n) = s.parse::<i32>() {
+        return Some((0, n));
+    }
+    // Buscar la 'n' que separa coeficiente de constante.
+    let n_pos = s.find('n')?;
+    let coeff_str = &s[..n_pos];
+    let rest = &s[n_pos + 1..];
+    let a: i32 = match coeff_str {
+        "" => 1,
+        "-" => -1,
+        "+" => 1,
+        other => other.parse().ok()?,
+    };
+    let b: i32 = if rest.is_empty() { 0 } else { rest.parse().ok()? };
+    Some((a, b))
 }
 
 /// Parsea `box-shadow: <offset-x> <offset-y> [blur] [spread] <color>`
@@ -1891,6 +1989,104 @@ mod tests {
         assert!((b.spread_px - 0.0).abs() < 1e-6);
         let c = eng.compute(&divs[2]).box_shadow;
         assert!(c.is_none());
+    }
+
+    #[test]
+    fn parse_nth_arg_acepta_formatos_comunes() {
+        assert_eq!(parse_nth_arg("odd"), Some((2, 1)));
+        assert_eq!(parse_nth_arg("even"), Some((2, 0)));
+        assert_eq!(parse_nth_arg("3"), Some((0, 3)));
+        assert_eq!(parse_nth_arg("n"), Some((1, 0)));
+        assert_eq!(parse_nth_arg("2n"), Some((2, 0)));
+        assert_eq!(parse_nth_arg("2n+1"), Some((2, 1)));
+        assert_eq!(parse_nth_arg("3n -2"), Some((3, -2)));
+        assert_eq!(parse_nth_arg("-n+3"), Some((-1, 3)));
+        assert_eq!(parse_nth_arg("xyz"), None);
+    }
+
+    #[test]
+    fn selector_nth_child_aplica() {
+        // `li:nth-child(odd)` matchea li 1, 3 (1-indexed).
+        let html = r#"<html><head><style>
+            li:nth-child(odd) { color: #f00 }
+            li:nth-child(2n) { color: #00f }
+        </style></head><body><ul>
+          <li>a</li><li>b</li><li>c</li><li>d</li>
+        </ul></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut lis = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("li") {
+                lis.push(n.clone());
+            }
+        });
+        assert_eq!(lis.len(), 4);
+        assert_eq!(eng.compute(&lis[0]).color, Color::rgb(0xff, 0, 0)); // odd
+        assert_eq!(eng.compute(&lis[1]).color, Color::rgb(0, 0, 0xff)); // even (2n)
+        assert_eq!(eng.compute(&lis[2]).color, Color::rgb(0xff, 0, 0)); // odd
+        assert_eq!(eng.compute(&lis[3]).color, Color::rgb(0, 0, 0xff)); // even
+    }
+
+    #[test]
+    fn selector_nth_child_n_fija() {
+        // `:nth-child(3)` matchea SÓLO la tercera.
+        let html = r#"<html><head><style>
+            li:nth-child(3) { color: #0a0 }
+        </style></head><body><ul>
+          <li>1</li><li>2</li><li>3</li><li>4</li>
+        </ul></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut lis = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("li") {
+                lis.push(n.clone());
+            }
+        });
+        assert_eq!(eng.compute(&lis[0]).color, Color::BLACK);
+        assert_eq!(eng.compute(&lis[1]).color, Color::BLACK);
+        assert_eq!(eng.compute(&lis[2]).color, Color::rgb(0, 0xaa, 0));
+        assert_eq!(eng.compute(&lis[3]).color, Color::BLACK);
+    }
+
+    #[test]
+    fn selector_not_excluye() {
+        // `p:not(.skip)` matchea todos los <p> excepto los con class skip.
+        let html = r#"<html><head><style>
+            p:not(.skip) { color: #f00 }
+        </style></head><body>
+          <p>uno</p>
+          <p class="skip">dos</p>
+          <p>tres</p>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut ps = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("p") {
+                ps.push(n.clone());
+            }
+        });
+        assert_eq!(eng.compute(&ps[0]).color, Color::rgb(0xff, 0, 0));
+        assert_eq!(eng.compute(&ps[1]).color, Color::BLACK);
+        assert_eq!(eng.compute(&ps[2]).color, Color::rgb(0xff, 0, 0));
+    }
+
+    #[test]
+    fn specificity_not_aporta_la_del_argumento() {
+        // `:not(#x)` aporta 100 (la del #id interno).
+        let s = parse_selector(":not(#x)").unwrap();
+        assert_eq!(s.specificity(), 100);
+        // `a:not(.b)` aporta 1 (tag) + 10 (.b interno) = 11.
+        let s = parse_selector("a:not(.b)").unwrap();
+        assert_eq!(s.specificity(), 11);
+    }
+
+    #[test]
+    fn not_anidado_se_rechaza() {
+        // `:not(:not(p))` debe ignorarse, no soportamos recursión.
+        assert!(parse_selector(":not(:not(p))").is_none());
     }
 
     #[test]
