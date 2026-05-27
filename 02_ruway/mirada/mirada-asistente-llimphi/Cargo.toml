@@ -1,0 +1,23 @@
+[package]
+name = "mirada-asistente-llimphi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "mirada-asistente — app Llimphi que traduce lenguaje natural a comandos de `mirada-ctl` consultando un LLM (pluma-llm autodetecta backend). El humano confirma antes de ejecutar."
+
+[[bin]]
+name = "mirada-asistente"
+path = "src/main.rs"
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-text-input = { workspace = true }
+pluma-llm = { path = "../../../00_unanchay/pluma/pluma-llm" }
+pluma-llm-core = { path = "../../../00_unanchay/pluma/pluma-llm-core" }
+tokio = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }

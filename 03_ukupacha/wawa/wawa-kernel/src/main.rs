@@ -58,6 +58,7 @@ mod grafico;
 mod interrupts;
 mod manifiesto;
 mod memory;
+mod pantallas;
 mod pic;
 mod sync;
 mod texto;
@@ -561,6 +562,12 @@ fn cargar_userspace(ejecutor: &mut Executor, ancho_pantalla: usize, alto_pantall
             .iter()
             .map(|e| (e.region_ancho as usize, e.region_alto as usize, e.nombre.as_str()))
             .collect();
+        // FASE 59 v1 :: fundar el registro de outputs ANTES del escritorio,
+        // de modo que el compositor pueda consultar `pantallas::primario()`
+        // si necesita. Hoy hay UN output cubriendo todo el framebuffer; un
+        // driver futuro (virtio-gpu, fork de bootloader_api) registrara los
+        // adicionales con `pantallas::registrar`.
+        pantallas::fundar(ancho_pantalla, alto_pantalla);
         compositor::fundar(ancho_pantalla, alto_pantalla, &naturales);
         compositor::componer_escenario();
 

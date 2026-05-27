@@ -320,7 +320,18 @@ static ULTIMO_SEGUNDO: AtomicU64 = AtomicU64::new(u64::MAX);
 /// Funda el escritorio: crea una ventana por app, con su marco teselado inicial
 /// y su cache de respaldo ya reservada al tamaño natural. `naturales` da el
 /// `(ancho, alto)` del lienzo de cada app, en el orden del manifiesto.
+///
+/// FASE 59 v1 :: si el registro de outputs ya esta fundado, las dimensiones
+/// se toman del output PRIMARIO en lugar de los parametros — la fuente de
+/// verdad del «area que el compositor ocupa» pasa a vivir en
+/// `pantallas`, no en los args de esta funcion. Mantenemos los parametros
+/// como fallback por compatibilidad con flujos de boot que aun no inician
+/// `pantallas` (tests, futuros backends).
 pub fn fundar(ancho: usize, alto: usize, naturales: &[(usize, usize, &str)]) {
+    let (ancho, alto) = match crate::pantallas::primario() {
+        Some(region) => (region.ancho, region.alto),
+        None => (ancho, alto),
+    };
     MANDOS.call_once(|| ArrayQueue::new(CAPACIDAD_MANDOS));
     PARTOS_POR_INDICE.call_once(|| Mutex::new(Vec::new()));
 
