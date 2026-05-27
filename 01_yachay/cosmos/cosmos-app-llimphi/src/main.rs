@@ -117,6 +117,9 @@ enum TileId {
     BoxGraph,
     Corpus,
     Uraniano,
+    Lotes,
+    EstrellasFijas,
+    PuntosMedios,
     CrossTransit,
     CrossProgression,
     CrossSolarArc,
@@ -133,6 +136,9 @@ impl TileId {
             TileId::BoxGraph => "cosmos-tile-box-graph",
             TileId::Corpus => "cosmos-tile-corpus",
             TileId::Uraniano => "cosmos-tile-uraniano",
+            TileId::Lotes => "cosmos-tile-lotes",
+            TileId::EstrellasFijas => "cosmos-tile-estrellas-fijas",
+            TileId::PuntosMedios => "cosmos-tile-puntos-medios",
             TileId::CrossTransit => "cosmos-tile-cross-transit",
             TileId::CrossProgression => "cosmos-tile-cross-progression",
             TileId::CrossSolarArc => "cosmos-tile-cross-solar-arc",
@@ -263,7 +269,9 @@ fn overlay_tile(kind: OverlayKind) -> Option<TileId> {
         OverlayKind::Transit => Some(TileId::CrossTransit),
         OverlayKind::Progression => Some(TileId::CrossProgression),
         OverlayKind::SolarArc => Some(TileId::CrossSolarArc),
-        OverlayKind::Lots | OverlayKind::FixedStars | OverlayKind::Midpoints => None,
+        OverlayKind::Lots => Some(TileId::Lotes),
+        OverlayKind::FixedStars => Some(TileId::EstrellasFijas),
+        OverlayKind::Midpoints => Some(TileId::PuntosMedios),
     }
 }
 
@@ -554,6 +562,13 @@ fn build_tile(tid: TileId, model: &Model, theme: &Theme) -> TileSpec<Msg> {
         TileId::BoxGraph => tile_box_graph(&model.render, theme),
         TileId::Corpus => tile_corpus(&model.render, &model.corpus, theme),
         TileId::Uraniano => tile_uraniano(&model.render.uranian_groups, theme),
+        TileId::Lotes => tile_layer_glyphs(&model.render, LayerKind::Lots, "lots", theme),
+        TileId::EstrellasFijas => {
+            tile_layer_glyphs(&model.render, LayerKind::FixedStars, "fixed_stars", theme)
+        }
+        TileId::PuntosMedios => {
+            tile_layer_glyphs(&model.render, LayerKind::Midpoints, "midpoints", theme)
+        }
         TileId::CrossTransit => tile_aspectos(&model.render, "transit", theme),
         TileId::CrossProgression => tile_aspectos(&model.render, "progression", theme),
         TileId::CrossSolarArc => tile_aspectos(&model.render, "solar_arc", theme),
@@ -938,6 +953,55 @@ fn box_cell(
         v = v.fill(c).radius(2.0);
     }
     v
+}
+
+// ----- Tile genérico: lista de glyphs de una layer -----
+
+fn tile_layer_glyphs(
+    render: &RenderModel,
+    kind: LayerKind,
+    module_id: &str,
+    theme: &Theme,
+) -> View<Msg> {
+    let glyphs: Vec<&cosmos_render::Glyph> = render
+        .layers
+        .iter()
+        .filter(|l| l.module_id == module_id && std::mem::discriminant(&l.kind) == std::mem::discriminant(&kind))
+        .flat_map(|l| l.glyphs.iter())
+        .collect();
+    if glyphs.is_empty() {
+        return tile_container(
+            vec![line(
+                rimay_localize::t("cosmos-empty"),
+                11.0,
+                theme.fg_muted,
+            )],
+            theme,
+        );
+    }
+    let rows: Vec<View<Msg>> = glyphs
+        .into_iter()
+        .take(20)
+        .map(|g| {
+            // Para lots viene "lot:Fo" — recortamos el prefijo y usamos annotation.
+            let label = if g.symbol.starts_with("lot:") {
+                g.annotation.clone().unwrap_or_else(|| g.symbol.clone())
+            } else if g.symbol.starts_with("✦") {
+                g.annotation.clone().unwrap_or_else(|| g.symbol.clone())
+            } else {
+                simbolo_cuerpo(&g.symbol).to_string()
+            };
+            let casa = g.house.map(|h| format!(" h{h}")).unwrap_or_default();
+            let dms = fmt_dms(g.deg.rem_euclid(30.0) as f64);
+            let sign = signo_de_longitud(g.deg);
+            line(
+                format!("{label}  {dms} {sign}{casa}"),
+                11.0,
+                theme.fg_text,
+            )
+        })
+        .collect();
+    tile_container(rows, theme)
 }
 
 fn sorted_pair(a: &str, b: &str) -> (String, String) {
