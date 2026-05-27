@@ -453,6 +453,65 @@ impl ManifiestoFirmado {
     }
 }
 
+// =============================================================================
+//  Fase 37 :: el sello criptografico del CUADERNO SOBERANO
+// -----------------------------------------------------------------------------
+//  La integridad de un cuaderno —un nodo del grafo cuyo payload es
+//  `Vec<TipoCeldaWawa>`— se proteje en dos planos:
+//
+//    * Localmente, el direccionamiento por contenido garantiza que un
+//      bit alterado en cualquier celda cambia el hash del cuaderno
+//      —y ese hash es la identidad del nodo en el almacen—.
+//    * En la red capa-2 (Akasha), eso no basta: un peer hostil puede
+//      reescribir el cuaderno entero y reanunciarlo con su propio hash.
+//      Para que el sistema reconozca un cuaderno como SOBERANO del
+//      operador local, el peer ha de adjuntar una firma Ed25519 del
+//      cuaderno_raiz_hash producida con la clave privada que pertenece
+//      a la `AGORA_PUBLIC_KEY_LOCAL` empotrada en el binario del kernel.
+//
+//  Gemelo estructural de `ManifiestoFirmado`: la verificacion comparte
+//  el camino Ring 0 zero-alloc de `ed25519-compact`.
+// =============================================================================
+
+/// Sobre criptografico de un cuaderno: vincula su `hash` con un autor y
+/// una firma Ed25519. Sin este sobre, un cuaderno es solo un nodo mas
+/// del grafo — con el sobre, queda anclado como SOBERANO al usuario
+/// que firmo, y el kernel lo distingue de cualquier otro nodo cuaderno
+/// que viaje por la red.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct CuadernoFirmado {
+    /// Hash BLAKE3 del cuaderno propuesto. El payload del cuaderno es
+    /// `Vec<TipoCeldaWawa>` serializado con postcard; este hash es el
+    /// resumen criptografico que va a engrapar la firma.
+    pub cuaderno_raiz_hash: Hash,
+    /// Llave publica Ed25519 del autor. El kernel la compara contra
+    /// `AGORA_PUBLIC_KEY_LOCAL` antes de gastar un ciclo en criptografia
+    /// — un autor ajeno cae con `CapacidadInsuficiente`.
+    pub autor: AgoraId,
+    /// Firma Ed25519 sobre los 32 bytes de `cuaderno_raiz_hash`.
+    #[serde(with = "BigArray")]
+    pub firma: Firma,
+}
+
+impl CuadernoFirmado {
+    /// Serializa el sobre a su forma binaria `postcard`. La forma cruda
+    /// ocupa 32 + 32 + 64 = 128 bytes; postcard agrega un preludio
+    /// minusculo (longitudes varint) que mantiene el sobre bajo 140 B.
+    pub fn serializar(&self) -> Result<Vec<u8>, &'static str> {
+        postcard::to_allocvec(self)
+            .map_err(|_| "cuaderno_firmado :: serializacion fallida")
+    }
+
+    /// Reconstruye un sobre desde su forma binaria. Tolera bytes
+    /// sobrantes tras la estructura — el relleno del registro o el
+    /// padding del payload del syscall.
+    pub fn deserializar(bytes: &[u8]) -> Result<CuadernoFirmado, &'static str> {
+        postcard::take_from_bytes::<CuadernoFirmado>(bytes)
+            .map(|(cf, _)| cf)
+            .map_err(|_| "cuaderno_firmado :: deserializacion fallida")
+    }
+}
+
 /// Una entrada del historial de un canal: una raiz de manifiesto, el instante
 /// en que el autor la propuso, y la firma Ed25519 con la que el autor la
 /// respalda. La firma se calcula sobre [`mensaje_a_firmar`].
@@ -885,6 +944,26 @@ mod pruebas {
         // Tamaño acotado: 32 + 32 + 64 = 128 bytes crudos + el preludio
         // postcard. Debe caber holgado en un sector y en un frame Ethernet.
         assert!(bytes.len() <= 160, "MF demasiado grande: {} bytes", bytes.len());
+    }
+
+    #[test]
+    fn cuaderno_firmado_ida_y_vuelta() {
+        // Roundtrip estructural del sobre criptografico del cuaderno
+        // (Fase 37). Gemelo a `manifiesto_firmado_ida_y_vuelta` — el
+        // mismo contrato de los tres campos contra el wire/log.
+        let cf = CuadernoFirmado {
+            cuaderno_raiz_hash: [0xCE; 32],
+            autor: [0xA1; 32],
+            firma: [0x66; 64],
+        };
+        let bytes = cf.serializar().unwrap();
+        let leido = CuadernoFirmado::deserializar(&bytes).unwrap();
+        assert_eq!(leido, cf);
+        assert!(
+            bytes.len() <= 160,
+            "CuadernoFirmado demasiado grande: {} bytes",
+            bytes.len()
+        );
     }
 
     #[test]

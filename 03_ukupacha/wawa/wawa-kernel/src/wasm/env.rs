@@ -46,6 +46,13 @@
 //                              `"run"` y devuelve un dictamen de 4 B
 //                              listo para que la app dispare la macro
 //                              con `sys_subsistema_ejecutar_dinamico`.
+//    * sys_cuaderno_firmar_y_anclar           — verificar Ed25519 + anclar
+//                              un cuaderno soberano (Fase 37, Firma del
+//                              Tejido Celular): copia el sobre a pila,
+//                              verifica autor + firma contra
+//                              AGORA_PUBLIC_KEY_LOCAL, y fija el cuaderno
+//                              como raiz del grafo. Zero-alloc, sin
+//                              panicos posibles desde la app.
 //
 //  GUARDARRAIL: el kernel valida MATEMATICAMENTE todo puntero que el modulo le
 //  entrega contra los limites reales de su memoria lineal. No se confia en que
@@ -870,6 +877,101 @@ pub(crate) fn enlazar_capacidades(
         },
     )?;
     } // PERMISO_GRAFO_ESCRITURA (vincular_macro)
+
+    // --- CAPACIDAD 3g :: sys_cuaderno_firmar_y_anclar -----------------------
+    // sys_cuaderno_firmar_y_anclar(cuaderno_firmado_ptr) -> i32
+    //
+    // LA FIRMA DEL TEJIDO CELULAR (Fase 37 :: Soberania Criptografica).
+    // La app entrega un sobre `CuadernoFirmado` (32 + 32 + 64 = 128 B
+    // crudos + preludio postcard) ya producido fuera de la jaula
+    // —tipicamente por `wawactl` con la clave privada del operador, o
+    // por una futura clave de sesion del kernel—. El kernel:
+    //
+    //   1. Copia el sobre a una pila estatica de 256 B (zero-alloc).
+    //   2. Lo deserializa con `CuadernoFirmado::deserializar` —si los
+    //      bytes no parsean, cae con `Ausente`—.
+    //   3. Verifica criptograficamente via `claves::verificar_cuaderno_firmado`:
+    //      autor ajeno -> `CapacidadInsuficiente`; firma forjada o
+    //      tampered -> `AlmacenamientoFallo`.
+    //   4. Si la matematica es licita, ANCLA el cuaderno como nueva
+    //      raiz del grafo userspace via `almacen::fijar_raiz`. Esta
+    //      operacion ES una escritura atomica del superbloque
+    //      (sector 0); el sistema "ve" el cuaderno soberano desde el
+    //      proximo fotograma.
+    //
+    // Notese que el chequeo de PERMISO_RAIZ se SALTA aqui: la
+    // autoridad ya no viene de un bit del manifiesto sino de la firma
+    // Ed25519 verificada en Ring 0. Una app sin PERMISO_RAIZ pero con
+    // un sobre legitimo del operador local puede mover la raiz.
+    //
+    // GATEADA por PERMISO_GRAFO_ESCRITURA + foco: la app que invoca el
+    // anclaje debe poseer la autoridad de escritura del grafo y ser
+    // la ventana enfocada por el usuario. El bit es necesario pero
+    // no suficiente — sin firma valida, el syscall no mueve un byte
+    // del superbloque.
+    //
+    // ZERO-ALLOC + NO PANICOS: la deserializacion y la criptografia
+    // viven en la pila. Un sobre adversario malformado, oversized o
+    // con bytes maliciosos cae por `Result` lineal hasta el `Ok(i32)`;
+    // el kernel jamas levanta `panic!`.
+    if permisos & PERMISO_GRAFO_ESCRITURA != 0 {
+    enlazador.func_wrap(
+        "renaser",
+        "sys_cuaderno_firmar_y_anclar",
+        |caller: Caller<'_, ContextoCapacidades>,
+         cuaderno_firmado_ptr: u32|
+         -> Result<i32, Error> {
+            if crate::compositor::foco() != caller.data().indice_app {
+                return Ok(CodigoError::SinFoco.como_i32());
+            }
+            // Cota dura del sobre: 32 + 32 + 64 + preludio postcard < 256 B.
+            // Acota tambien una llamada adversaria con un len absurdo que
+            // pretendiera desbordar la pila.
+            const MAX_CF: usize = 256;
+            let memoria = obtener_memoria(&caller)?;
+            // Copiar el sobre a una pila local — sin tocar al asignador
+            // del kernel. `MAX_CF` es el limite duro: si la app pide leer
+            // mas alla, el `rango` deniega antes de tocar la memoria.
+            let mut buf = [0u8; MAX_CF];
+            {
+                let m = memoria.data(&caller);
+                let crudo = rango(
+                    m,
+                    cuaderno_firmado_ptr,
+                    MAX_CF,
+                    "WASM :: sys_cuaderno_firmar_y_anclar desbordo memoria",
+                )?;
+                buf.copy_from_slice(crudo);
+            }
+            let cf = match format::CuadernoFirmado::deserializar(&buf) {
+                Ok(cf) => cf,
+                Err(_) => return Ok(CodigoError::Ausente.como_i32()),
+            };
+            // Verificacion criptografica. Sin firma valida no hay anclaje.
+            if let Err(err) = crate::claves::verificar_cuaderno_firmado(&cf) {
+                return Ok(err.como_i32());
+            }
+            // Defensa-en-profundidad: el cuaderno referenciado tiene que
+            // estar ingestado localmente. Sin esto, un peer hostil podria
+            // anunciar un hash que NUNCA tuvo payload — y el sistema lo
+            // aceptaria como raiz solo porque la firma cuadra. El
+            // direccionamiento por contenido exige que el bytes esten.
+            match crate::almacen::recuperar(&cf.cuaderno_raiz_hash) {
+                Ok(Some(_)) => {}
+                Ok(None) => return Ok(CodigoError::Ausente.como_i32()),
+                Err(_) => return Ok(CodigoError::AlmacenamientoFallo.como_i32()),
+            }
+            // Anclaje atomico: superbloque queda apuntando al cuaderno
+            // soberano firmado. El proximo fotograma —y todo arranque
+            // ulterior hasta que otra firma valida proponga otra raiz—
+            // veran este cuaderno.
+            match crate::almacen::fijar_raiz(cf.cuaderno_raiz_hash) {
+                Ok(()) => Ok(CodigoError::Ok.como_i32()),
+                Err(_) => Ok(CodigoError::AlmacenamientoFallo.como_i32()),
+            }
+        },
+    )?;
+    } // PERMISO_GRAFO_ESCRITURA (cuaderno_firmar_y_anclar)
 
     // --- CAPACIDAD 4 :: sys_object_datos(hash, salida, capacidad) -> i32 ---
     // Copia la carga util del objeto `hash` en `salida`. Devuelve el numero de

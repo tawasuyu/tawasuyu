@@ -114,6 +114,17 @@ extern "C" {
         binario_hash_ptr: u32,
         salida_info_ptr: u32,
     ) -> i32;
+    /// FASE 37 :: Firma del Tejido Celular. La app entrega un sobre
+    /// `CuadernoFirmado` (cuaderno_raiz_hash + autor Ed25519 + firma)
+    /// serializado con postcard en su memoria lineal. El kernel verifica
+    /// la firma contra `AGORA_PUBLIC_KEY_LOCAL` y, si es lícita, fija
+    /// el cuaderno como raíz del grafo userspace. Códigos:
+    ///   * 0  → CUADERNO SOBERANO ANCLADO.
+    ///   * -1 → sobre malformado / cuaderno no ingestado.
+    ///   * -2 → autor distinto al operador local.
+    ///   * -3 → firma forjada o tampered.
+    ///   * -4 → app sin foco.
+    fn sys_cuaderno_firmar_y_anclar(cuaderno_firmado_ptr: u32) -> i32;
 }
 
 #[cfg(not(test))]
@@ -237,7 +248,17 @@ static mut RETORNO_HEREDADO_VALIDO: bool = false;
 static mut CADENA_ROTA: bool = false;
 
 static mut F5_PREV: bool = false;
+static mut F6_PREV: bool = false;
 static mut SCAN_PREV: u32 = 0;
+
+/// FASE 37 :: estado del anclaje soberano. Tras un F6 exitoso, el kernel
+/// confirma que el cuaderno se firmo y anclo como raiz; la leyenda al
+/// pie muestra "CUADERNO SOBERANO ANCLADO [OK]". Un fallo (firma rota,
+/// autor ajeno, cuaderno no ingestado) viste el indicador del marco de
+/// amarillo palido y rotula "FIRMA INVALIDA  INTEGRIDAD COMPROMETIDA".
+static mut SOBERANIA_ANCLADA: bool = false;
+static mut SOBERANIA_FIRMA_ROTA: bool = false;
+static mut SOBERANIA_CODIGO: i32 = 0;
 
 // =============================================================================
 //  ABI obligatorio del userspace renaser
@@ -281,7 +302,25 @@ fn atender_scancode(scancode: u32) {
         unsafe { F5_PREV = true };
         return;
     }
-    unsafe { F5_PREV = scancode == 0x3F };
+    if scancode == 0x40 {
+        // FASE 37 :: F6 :: firmar y anclar el cuaderno soberano. Toma el
+        // ultimo `HASH_CUADERNO` que el kernel devolvio en la consolidacion
+        // de la cascada y lo pasa por `sys_cuaderno_firmar_y_anclar` con
+        // un sobre criptografico. Sin clave privada en la jaula, el MVP
+        // adjunta un placeholder de firma — el kernel correctamente lo
+        // rechaza con AlmacenamientoFallo y la leyenda al pie indica
+        // "FIRMA INVALIDA". El camino feliz requerira un signer externo
+        // (wawactl) en la Fase 38+.
+        if !unsafe { F6_PREV } {
+            firmar_y_anclar_cuaderno();
+        }
+        unsafe { F6_PREV = true };
+        return;
+    }
+    unsafe {
+        F5_PREV = scancode == 0x3F;
+        F6_PREV = scancode == 0x40;
+    }
 
     if scancode == 0x0E {
         // Backspace.
@@ -656,6 +695,70 @@ fn ejecutar_celda_importada() {
     registrar_celda_local(celda);
 }
 
+/// FASE 37 :: Firma del Tejido Celular. Empaqueta un sobre `CuadernoFirmado`
+/// con el `HASH_CUADERNO` mas reciente y se lo pasa al kernel. La clave
+/// privada del operador no vive en la jaula (politica de la Fase 25:
+/// solo el kernel VERIFICA, jamas FIRMA dentro de Ring 0), de modo que
+/// el sobre lleva la `autor` pinneada a `AGORA_PUBLIC_KEY_LOCAL` y una
+/// firma PLACEHOLDER. El kernel verificara matematicamente y la rechazara
+/// con `AlmacenamientoFallo` — el camino visual rotula "FIRMA INVALIDA".
+/// Cuando `wawactl` o una clave de sesion del kernel se conecten en la
+/// Fase 38+, la `firma` real reemplazara el placeholder y el camino
+/// feliz quedara disponible — la infraestructura de Ring 0 ya esta hoy.
+fn firmar_y_anclar_cuaderno() {
+    if !unsafe { HASH_CUADERNO_VALIDO } {
+        // No hay cuaderno consolidado para firmar. Reportamos sin tocar
+        // al kernel; la leyenda se queda igual.
+        unsafe {
+            SOBERANIA_FIRMA_ROTA = false;
+            SOBERANIA_ANCLADA = false;
+        }
+        return;
+    }
+
+    // Llave publica del operador local — empotrada en el kernel desde
+    // la Fase 25. La constante esta acordada con
+    // `claves::AGORA_PUBLIC_KEY_LOCAL` y vive en este array para que el
+    // sobre que enviamos sea estructuralmente legitimo (autor reconocido).
+    const AGORA_PUBLIC_KEY_LOCAL: [u8; 32] = [
+        0x1a, 0x4f, 0x7c, 0x91, 0xb6, 0x2d, 0x5e, 0xa8,
+        0x33, 0xc7, 0x09, 0x84, 0xf1, 0x60, 0xb5, 0x52,
+        0x6e, 0xae, 0x17, 0x40, 0x82, 0xfb, 0x99, 0xc1,
+        0x2d, 0x55, 0xd6, 0x3a, 0xe4, 0x77, 0x1c, 0x80,
+    ];
+
+    // Sobre serializado MANUALMENTE en pila. Postcard, para una struct
+    // con tres arrays de tamaño fijo, NO inserta headers de longitud:
+    // cuaderno_raiz_hash (32) + autor (32) + firma (64) = 128 B EXACTOS.
+    // El buffer se padea a 256 B con ceros para satisfacer la lectura
+    // de 256 B que el kernel hace (cota dura MAX_CF). Pila pura,
+    // zero-alloc. `postcard::take_from_bytes` consume solo el prefijo
+    // de 128 B; los ceros del padding son inofensivos.
+    let mut sobre = [0u8; 256];
+    let hash_cuaderno = unsafe { HASH_CUADERNO };
+    sobre[0..32].copy_from_slice(&hash_cuaderno);
+    sobre[32..64].copy_from_slice(&AGORA_PUBLIC_KEY_LOCAL);
+    // Firma PLACEHOLDER (ceros, ya inicializados arriba). El kernel
+    // la rechazara matematicamente — Ed25519 sobre todo-ceros no verifica
+    // para ninguna llave publica realista. La estructura del sobre es
+    // legitima; la criptografia, no. Cuando un signer real este
+    // disponible (wawactl o clave de sesion del kernel en Fase 38+),
+    // sobre[64..128] llevara los 64 bytes de la firma autentica y el
+    // kernel anclara con Ok(0).
+
+    let codigo = unsafe { sys_cuaderno_firmar_y_anclar(sobre.as_ptr() as u32) };
+    unsafe {
+        SOBERANIA_CODIGO = codigo;
+        if codigo == 0 {
+            SOBERANIA_ANCLADA = true;
+            SOBERANIA_FIRMA_ROTA = false;
+        } else {
+            SOBERANIA_ANCLADA = false;
+            SOBERANIA_FIRMA_ROTA = true;
+        }
+    }
+}
+
 /// Inserta `celda` en el array circular. Cuando el cuaderno se llena, la
 /// celda mas antigua se sobreescribe — el grafo guarda todas las
 /// historias, pero el panel solo retiene las ultimas tres.
@@ -684,7 +787,7 @@ fn pintar() {
 
     // Cabecera con el hash del cuaderno (si ya hubo una consolidacion).
     rellenar_rect(lienzo, 0, 0, ANCHO, EDITOR_Y - 4, secundario);
-    dibujar_texto(lienzo, b"PLUMA  WAWA  F36", 8, 6, 1, tinta);
+    dibujar_texto(lienzo, b"PLUMA  WAWA  F37", 8, 6, 1, tinta);
     if unsafe { HASH_CUADERNO_VALIDO } {
         let h = unsafe { HASH_CUADERNO };
         let mut etiqueta = [b' '; 8];
@@ -706,12 +809,27 @@ fn pintar() {
     // FASE 34 :: la leyenda rota a la version de cadena rota cuando la
     // ultima ejecucion fallo en mitad de un flujo encadenado. La proxima
     // celda exitosa restaura la leyenda normal automaticamente.
-    let leyenda: &[u8] = if unsafe { CADENA_ROTA } {
+    // FASE 37 :: la soberania anclada tiene prioridad visual sobre la
+    // leyenda comun. Una firma rechazada deja el rotulo de integridad
+    // comprometida hasta que un nuevo F6 exitoso lo restaure.
+    let leyenda: &[u8] = if unsafe { SOBERANIA_FIRMA_ROTA } {
+        b"FIRMA INVALIDA  INTEGRIDAD COMPROMETIDA"
+    } else if unsafe { SOBERANIA_ANCLADA } {
+        b"CUADERNO SOBERANO ANCLADO  OK"
+    } else if unsafe { CADENA_ROTA } {
         b"ERROR  CADENA DE EJECUCION ROTA"
     } else {
-        b"F5 EJECUTA  BS BORRA  @HASH IMPORTA MACRO"
+        b"F5 EJECUTA  F6 FIRMA  BS BORRA  @HASH MACRO"
     };
     dibujar_texto(lienzo, leyenda, 8, LEYENDA_Y, 1, acento);
+
+    // FASE 37 :: marco vertical amarillo palido a lo largo del borde
+    // izquierdo del lienzo cuando la integridad esta comprometida. Es
+    // una pista perimetral inconfundible — no oculta el contenido pero
+    // recuerda que el cuaderno no quedo anclado como soberano.
+    if unsafe { SOBERANIA_FIRMA_ROTA } {
+        rellenar_rect(lienzo, 0, 0, 3, ALTO, AMARILLO_PALIDO);
+    }
 }
 
 fn pintar_editor(lienzo: &mut [u32], tinta: u32, acento: u32, secundario: u32) {

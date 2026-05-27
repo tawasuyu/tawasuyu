@@ -24,7 +24,7 @@
 
 use ed25519_compact::{PublicKey, Signature};
 
-use format::{CodigoError, ManifiestoFirmado};
+use format::{CodigoError, CuadernoFirmado, ManifiestoFirmado};
 
 /// CLAVE PUBLICA del autor local —el operador con poder de reancla del
 /// manifiesto—. Sin un esquema TPM/USB todavia, esta empotrada en el binario
@@ -76,5 +76,28 @@ pub fn verificar_manifiesto_firmado(mf: &ManifiestoFirmado) -> Result<(), Codigo
     // no se preocupa por longitud; firmar el hash equivale a firmar el
     // payload entero —el hash es ya el resumen criptografico—.
     pk.verify(mf.manifiesto_hash, &sig)
+        .map_err(|_| CodigoError::AlmacenamientoFallo)
+}
+
+/// Verifica un sobre criptografico `CuadernoFirmado` (Fase 37). El espejo
+/// matematico de `verificar_manifiesto_firmado`, mismo orden estricto de
+/// fallos, mismos codigos de retorno — un cuaderno cuyo autor no es el
+/// operador local cae con `CapacidadInsuficiente` antes de tocar la
+/// criptografia, y una firma forjada cae con `AlmacenamientoFallo`.
+///
+/// La verificacion es ZERO-ALLOC: `PublicKey`/`Signature` viven en la pila,
+/// `pk.verify` opera sobre los 32 bytes del hash sin tocar al asignador.
+/// El llamante decide que hacer con el `Ok(())` —tipicamente, fijar el
+/// `cuaderno_raiz_hash` como raiz del grafo en un solo append atomico—.
+pub fn verificar_cuaderno_firmado(cf: &CuadernoFirmado) -> Result<(), CodigoError> {
+    // Defensa-en-profundidad N.1: autor ajeno cae antes de descomprimir
+    // bytes en estructuras criptograficas. No regalamos scalar mult a
+    // peers que el operador local no reconocio.
+    if cf.autor != AGORA_PUBLIC_KEY_LOCAL {
+        return Err(CodigoError::CapacidadInsuficiente);
+    }
+    let pk = PublicKey::from_slice(&cf.autor).map_err(|_| CodigoError::Ausente)?;
+    let sig = Signature::from_slice(&cf.firma).map_err(|_| CodigoError::Ausente)?;
+    pk.verify(cf.cuaderno_raiz_hash, &sig)
         .map_err(|_| CodigoError::AlmacenamientoFallo)
 }
