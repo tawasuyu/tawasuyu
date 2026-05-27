@@ -14,7 +14,9 @@
 //! research; scroll vertical en sidebar cuando hay muchos tiles.
 
 use cosmos_canvas_llimphi::canvas_view;
-use cosmos_engine::{compose, NatalOptions, PipelineRequest};
+use cosmos_engine::{
+    combinaciones_de_carta, compose, corpus_inputs, Corpus, NatalOptions, PipelineRequest,
+};
 use cosmos_model::{
     Chart, ChartId, ChartKind, ContactId, StoredBirthData, StoredChartConfig, TimeCertainty,
 };
@@ -109,6 +111,7 @@ enum TileId {
     Cuerpos,
     Aspectos,
     BoxGraph,
+    Corpus,
     Uraniano,
     CrossTransit,
     CrossProgression,
@@ -124,6 +127,7 @@ impl TileId {
             TileId::Cuerpos => "cosmos-tile-cuerpos",
             TileId::Aspectos => "cosmos-tile-aspectos",
             TileId::BoxGraph => "cosmos-tile-box-graph",
+            TileId::Corpus => "cosmos-tile-corpus",
             TileId::Uraniano => "cosmos-tile-uraniano",
             TileId::CrossTransit => "cosmos-tile-cross-transit",
             TileId::CrossProgression => "cosmos-tile-cross-progression",
@@ -139,7 +143,13 @@ const DEFAULT_ORDER: &[TileId] = &[
     TileId::Cuerpos,
     TileId::Aspectos,
     TileId::BoxGraph,
+    TileId::Corpus,
 ];
+
+/// Corpus de interpretación embebido — la plantilla que viene con
+/// `cosmos-corpus`. Se reemplaza más adelante por un loader que mire en
+/// `~/.config/cosmos/corpus.ron` y caiga a este si no existe.
+const CORPUS_DEFAULT_RON: &str = include_str!("../../cosmos-corpus/ejemplo.ron");
 
 /// Devuelve el TileId dinámico que aporta un overlay, si aporta uno. Los
 /// overlays que solo tienen efecto visual sobre el wheel (Lots, FixedStars,
@@ -164,6 +174,7 @@ struct Model {
     /// Orden actual de tiles visibles. Se reordena por drag-to-swap; se
     /// extiende/recorta cuando los overlays con tile propio se prenden/apagan.
     panel_order: Vec<TileId>,
+    corpus: Corpus,
     _wawa_watcher: Option<wawa_config::ConfigWatcher>,
 }
 
@@ -196,6 +207,7 @@ impl App for Cosmos {
         let overlays: Vec<OverlayKind> = Vec::new();
         let harmonic = 1;
         let (render, error) = compute(&chart, &overlays, harmonic);
+        let corpus = Corpus::desde_ron(CORPUS_DEFAULT_RON).unwrap_or_default();
         Model {
             chart,
             overlays,
@@ -204,6 +216,7 @@ impl App for Cosmos {
             theme,
             error,
             panel_order: DEFAULT_ORDER.to_vec(),
+            corpus,
             _wawa_watcher: watcher,
         }
     }
@@ -426,6 +439,7 @@ fn build_tile(tid: TileId, model: &Model, theme: &Theme) -> TileSpec<Msg> {
         TileId::Cuerpos => tile_cuerpos(&model.render, theme),
         TileId::Aspectos => tile_aspectos(&model.render, "natal", theme),
         TileId::BoxGraph => tile_box_graph(&model.render, theme),
+        TileId::Corpus => tile_corpus(&model.render, &model.corpus, theme),
         TileId::Uraniano => tile_uraniano(&model.render.uranian_groups, theme),
         TileId::CrossTransit => tile_aspectos(&model.render, "transit", theme),
         TileId::CrossProgression => tile_aspectos(&model.render, "progression", theme),
@@ -819,6 +833,55 @@ fn sorted_pair(a: &str, b: &str) -> (String, String) {
     } else {
         (b.into(), a.into())
     }
+}
+
+// ----- Corpus (pasajes interpretativos) -----
+
+fn tile_corpus(render: &RenderModel, corpus: &Corpus, theme: &Theme) -> View<Msg> {
+    let (colocaciones, aspectos) = corpus_inputs(render);
+    let combinaciones = combinaciones_de_carta(&colocaciones, &aspectos);
+    let pasajes = corpus.interpretar(&combinaciones);
+    let huecos = corpus.huecos(&combinaciones);
+
+    let header_txt = rimay_localize::t_args(
+        "cosmos-corpus-header",
+        &[
+            ("pasajes", pasajes.len().to_string().into()),
+            ("huecos", huecos.len().to_string().into()),
+            ("total", combinaciones.len().to_string().into()),
+        ],
+    );
+    let mut rows: Vec<View<Msg>> = Vec::with_capacity(pasajes.len() * 2 + 1);
+    rows.push(line(header_txt, 11.0, theme.fg_muted));
+
+    if pasajes.is_empty() {
+        rows.push(line(
+            rimay_localize::t("cosmos-corpus-vacio"),
+            11.0,
+            theme.fg_muted,
+        ));
+    } else {
+        for p in pasajes.iter().take(8) {
+            rows.push(line(p.combinacion.to_string(), 10.0, theme.fg_muted));
+            // Texto del pasaje: lo cortamos a ~140 chars para que la fila
+            // siga siendo de una sola línea visible en el sidebar.
+            let txt = recortar(&p.texto, 140);
+            rows.push(line(txt, 11.0, theme.fg_text));
+        }
+    }
+    tile_container(rows, theme)
+}
+
+fn recortar(s: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    for (i, ch) in s.chars().enumerate() {
+        if i >= max_chars {
+            out.push('…');
+            return out;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 // =====================================================================
