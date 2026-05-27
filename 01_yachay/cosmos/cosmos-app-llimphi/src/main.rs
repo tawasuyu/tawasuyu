@@ -49,6 +49,10 @@ enum Msg {
     SwapTiles(usize, usize),
     /// El archivo `cosmos-chart.json` cambió en disco — recargá.
     ChartFileChanged,
+    /// Cargar una carta guardada de `cosmos-charts/<name>.json`.
+    CargarCarta(String),
+    /// Duplicar la carta actual a un nuevo archivo en `cosmos-charts/`.
+    DuplicarActual,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -118,6 +122,7 @@ enum TileId {
     Aspectos,
     BoxGraph,
     AstroCarto,
+    Cartas,
     Corpus,
     Uraniano,
     Lotes,
@@ -138,6 +143,7 @@ impl TileId {
             TileId::Aspectos => "cosmos-tile-aspectos",
             TileId::BoxGraph => "cosmos-tile-box-graph",
             TileId::AstroCarto => "cosmos-tile-astrocarto",
+            TileId::Cartas => "cosmos-tile-cartas",
             TileId::Corpus => "cosmos-tile-corpus",
             TileId::Uraniano => "cosmos-tile-uraniano",
             TileId::Lotes => "cosmos-tile-lotes",
@@ -152,6 +158,7 @@ impl TileId {
 
 const DEFAULT_ORDER: &[TileId] = &[
     TileId::Carta,
+    TileId::Cartas,
     TileId::Modulos,
     TileId::Armonico,
     TileId::Cuerpos,
@@ -160,6 +167,11 @@ const DEFAULT_ORDER: &[TileId] = &[
     TileId::AstroCarto,
     TileId::Corpus,
 ];
+
+/// Subdirectorio dentro del config dir donde viven las cartas guardadas
+/// como archivos individuales `<nombre>.json`. El usuario lo gestiona
+/// con su file manager — la app solo lista, lee y escribe.
+const CHARTS_SUBDIR: &str = "cosmos-charts";
 
 /// Corpus de interpretación embebido — la plantilla que viene con
 /// `cosmos-corpus`. Se reemplaza más adelante por un loader que mire en
@@ -284,6 +296,94 @@ fn spawn_chart_watcher(handle: &Handle<Msg>) -> Option<notify::RecommendedWatche
     })
     .map_err(|e| eprintln!("cosmos · chart-watcher: {e}"))
     .ok()
+}
+
+// =====================================================================
+// Store de cartas (multi-archivo)
+// =====================================================================
+
+fn charts_dir() -> Option<PathBuf> {
+    wawa_config::config_dir().map(|d| d.join(CHARTS_SUBDIR))
+}
+
+/// Lista los nombres de las cartas guardadas (sin `.json`), ordenados
+/// alfabéticamente. Lee el directorio en cada call — barato porque son
+/// pocos archivos y la app no es hot-path.
+fn list_cards() -> Vec<String> {
+    let Some(dir) = charts_dir() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.extension().and_then(|s| s.to_str()) == Some("json") {
+                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                    out.push(stem.to_string());
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+fn load_card(name: &str) -> Option<Chart> {
+    let path = charts_dir()?.join(format!("{name}.json"));
+    let bytes = std::fs::read(&path).ok()?;
+    serde_json::from_slice::<ChartFile>(&bytes)
+        .map_err(|e| eprintln!("cosmos · load_card({name}): {e}"))
+        .ok()
+        .map(|f| f.into_chart())
+}
+
+fn save_card(name: &str, chart: &Chart) {
+    let Some(dir) = charts_dir() else { return };
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join(format!("{name}.json"));
+    let f: ChartFile = chart.into();
+    if let Ok(json) = serde_json::to_vec_pretty(&f) {
+        if let Err(e) = std::fs::write(&path, json) {
+            eprintln!("cosmos · save_card({name}): {e}");
+        }
+    }
+}
+
+/// Genera un nombre de archivo único para `chart` — sluggea el label,
+/// concatena fecha de nacimiento, y agrega un sufijo numérico si hubiera
+/// colisión con un archivo ya existente.
+fn generate_card_name(chart: &Chart) -> String {
+    let bd = &chart.birth_data;
+    let slug: String = chart
+        .label
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let slug = slug
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    let base = format!("{slug}-{:04}-{:02}-{:02}", bd.year, bd.month, bd.day);
+    let mut name = base.clone();
+    let mut i = 2;
+    while let Some(dir) = charts_dir() {
+        if !dir.join(format!("{name}.json")).exists() {
+            break;
+        }
+        name = format!("{base}-{i}");
+        i += 1;
+        if i > 99 {
+            break;
+        }
+    }
+    name
 }
 
 fn save_chart_to_disk(chart: &Chart) {
@@ -502,6 +602,21 @@ impl App for Cosmos {
                     m.error = error;
                 }
             }
+            Msg::CargarCarta(name) => {
+                if let Some(loaded) = load_card(&name) {
+                    m.chart = loaded;
+                    save_chart_to_disk(&m.chart);
+                    let (render, error) = compute(&m.chart, &m.overlays, m.harmonic);
+                    m.render = render;
+                    m.error = error;
+                } else {
+                    m.error = Some(format!("no se pudo cargar carta: {name}"));
+                }
+            }
+            Msg::DuplicarActual => {
+                let name = generate_card_name(&m.chart);
+                save_card(&name, &m.chart);
+            }
         }
         if persist {
             save_ui_state(&UiState {
@@ -685,6 +800,7 @@ fn build_tile(tid: TileId, model: &Model, theme: &Theme) -> TileSpec<Msg> {
         TileId::Aspectos => tile_aspectos(&model.render, "natal", theme),
         TileId::BoxGraph => tile_box_graph(&model.render, theme),
         TileId::AstroCarto => tile_astrocarto(&model.chart, &model.render, theme),
+        TileId::Cartas => tile_cartas(theme),
         TileId::Corpus => tile_corpus(&model.render, &model.corpus, theme),
         TileId::Uraniano => tile_uraniano(&model.render.uranian_groups, theme),
         TileId::Lotes => tile_layer_glyphs(&model.render, LayerKind::Lots, "lots", theme),
@@ -745,6 +861,90 @@ fn line(text: String, size: f32, color: Color) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(text, size, color, Alignment::Start)
+}
+
+// ----- Cartas (librería multi-archivo) -----
+
+fn tile_cartas(theme: &Theme) -> View<Msg> {
+    let pal_btn = ButtonPalette::from_theme(theme);
+    let mut rows: Vec<View<Msg>> = Vec::new();
+
+    // Botón "duplicar actual" arriba — captura el chart presente en disco.
+    rows.push(button_styled(
+        rimay_localize::t("cosmos-cartas-duplicar"),
+        Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(22.0_f32),
+            },
+            flex_shrink: 0.0,
+            padding: Rect {
+                left: length(8.0_f32),
+                right: length(8.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            margin: Rect {
+                left: length(0.0_f32),
+                right: length(0.0_f32),
+                top: length(0.0_f32),
+                bottom: length(4.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Start),
+            ..Default::default()
+        },
+        Alignment::Start,
+        &pal_btn,
+        Msg::DuplicarActual,
+    ));
+
+    let cards = list_cards();
+    if cards.is_empty() {
+        rows.push(line(
+            rimay_localize::t("cosmos-cartas-vacio"),
+            10.0,
+            theme.fg_muted,
+        ));
+    } else {
+        for name in cards {
+            rows.push(button_styled(
+                name.clone(),
+                Style {
+                    size: Size {
+                        width: percent(1.0_f32),
+                        height: length(20.0_f32),
+                    },
+                    flex_shrink: 0.0,
+                    padding: Rect {
+                        left: length(8.0_f32),
+                        right: length(8.0_f32),
+                        top: length(0.0_f32),
+                        bottom: length(0.0_f32),
+                    },
+                    margin: Rect {
+                        left: length(0.0_f32),
+                        right: length(0.0_f32),
+                        top: length(0.0_f32),
+                        bottom: length(2.0_f32),
+                    },
+                    align_items: Some(AlignItems::Center),
+                    justify_content: Some(JustifyContent::Start),
+                    ..Default::default()
+                },
+                Alignment::Start,
+                &pal_btn,
+                Msg::CargarCarta(name),
+            ));
+        }
+    }
+
+    let path_hint = charts_dir()
+        .map(|p| format!("dir: {}", p.display()))
+        .unwrap_or_default();
+    rows.push(line(path_hint, 9.0, theme.fg_muted));
+
+    tile_container(rows, theme)
 }
 
 // ----- Carta -----
