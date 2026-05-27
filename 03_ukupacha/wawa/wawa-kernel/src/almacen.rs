@@ -105,11 +105,35 @@ pub fn init() -> Result<Resumen, &'static str> {
         match format::SuperBloque::deserializar(&sector0) {
             // Disco de renaser, con la version corriente: adoptar su grafo.
             Ok(sb) if sb.magia == format::MAGIA && sb.version == format::VERSION_SUPERBLOQUE => {
-                let indice = reconstruir_indice(sb.log_inicio, sb.cursor)?;
+                // Si la reconstruccion del indice falla, el LOG esta corrupto
+                // — pero la magia decia que el disco era de Wawa. NO podemos
+                // reformatear sin perder datos del operador; abdicamos con
+                // la baliza carmesi y dejamos que una herramienta offline
+                // diagnostique. Esta es la regla de oro de la Fase 26:
+                // jamas tapar una herida del disco con un reformat ciego.
+                let indice = match reconstruir_indice(sb.log_inicio, sb.cursor) {
+                    Ok(i) => i,
+                    Err(_) => {
+                        crate::baliza::aborto_fatal_carmesi(
+                            b"DISCO CORRUPTO LOG ILEGIBLE",
+                            "almacen :: reconstruir_indice fallido sobre disco de Wawa",
+                        );
+                    }
+                };
                 (sb.log_inicio, sb.cursor, sb.raiz, sb.manifiesto, indice, false)
             }
-            // Disco virgen, ajeno o de otra version: empezar de cero. El log
-            // arranca en el sector 1, justo despues del superbloque.
+            // Disco que dice ser de Wawa (magia correcta) pero version ajena:
+            // probable corrupcion del sector 0 o image de otra forja. NO
+            // reformateamos —es disco con datos posiblemente recuperables—.
+            Ok(sb) if sb.magia == format::MAGIA => {
+                crate::baliza::aborto_fatal_carmesi(
+                    b"DISCO DE OTRA VERSION",
+                    "almacen :: superbloque con magia Wawa pero version desconocida",
+                );
+            }
+            // Magia ausente o superbloque ilegible: probablemente disco virgen
+            // o de otro SO. Reformatear es seguro porque no afirmamos haber
+            // visto datos de Wawa antes.
             _ => (1, 1, None, None, BTreeMap::new(), true),
         };
 

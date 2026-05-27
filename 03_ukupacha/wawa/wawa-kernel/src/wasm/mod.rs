@@ -150,6 +150,7 @@ impl AplicacionWasm {
                 idioma: configuracion.idioma,
                 paleta: configuracion.paleta,
                 tiempo_ms_fotograma: tiempo_arranque,
+                paginas_dma_en_vuelo: 0,
             },
         );
         // Ligar el limitador de recursos: `wasmi` lo consultara en cada
@@ -229,6 +230,13 @@ impl AplicacionWasm {
         datos.idioma = configuracion.idioma;
         datos.paleta = configuracion.paleta;
         datos.tiempo_ms_fotograma = tiempo_ahora;
+        // Reinicio del contador de paginas DMA por fotograma (Fase 26).
+        // El back-pressure es POR-TICK: una app puede gastar hasta
+        // `MAX_PAGINAS_DMA_PER_APP` escrituras en su rafaga, pero el
+        // siguiente fotograma le regala el techo de nuevo. Asi la cuota
+        // protege la arena DMA contra mafias instantaneas sin convertirse
+        // en una camisa de fuerza sobre apps de larga vida.
+        datos.paginas_dma_en_vuelo = 0;
 
         // Recargar el deposito: cada fotograma parte con su techo intacto —
         // el que su `EntradaApp` declaro, no un techo unico del kernel.

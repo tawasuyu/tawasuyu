@@ -509,8 +509,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         &pantalla,
         codificar(format, Color::ALERTA),
         codificar(format, Color::OOM),
+        codificar(format, Color::FATAL_CARMESI),
     );
-    traza("baliza encendida");
+    traza("baliza encendida (alerta + oom + carmesi)");
 
     // --- 3. Cimientos de fallos e interrupciones (Fases 2.0 y 2.1). ---
     gdt::init();

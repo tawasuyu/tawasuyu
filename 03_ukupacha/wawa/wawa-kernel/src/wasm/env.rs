@@ -45,6 +45,16 @@ use format::{
     PERMISO_GRAFO_ESCRITURA, PERMISO_RAIZ, PERMISO_RED,
 };
 
+/// Cuota de paginas DMA en vuelo simultaneas por aplicacion (Fase 26).
+/// Cuatro paginas de 4 KiB = 16 KiB de buffers DMA en uso a la vez por una
+/// sola jaula. Una app que necesite mas ha de cooperar: pide su escritura,
+/// devuelve el control con un `tick`, y al siguiente fotograma el contador
+/// se ha reiniciado y puede seguir. El bus virtio-blk y virtio-net comparten
+/// la arena DMA del kernel; sin este techo, un app adversaria con
+/// PERMISO_GRAFO_ESCRITURA podria agotar los descriptores en segundos y
+/// dejar mudo al resto del sistema.
+const MAX_PAGINAS_DMA_PER_APP: u32 = 4;
+
 /// El estado del host adscrito al `Store` de una aplicacion: cuanto necesita
 /// una capacidad para servir a ESA app y a ninguna otra — su region de pantalla,
 /// su canal de teclado y sus cuotas de recursos. Dos apps jamas comparten nada.
@@ -88,6 +98,16 @@ pub(crate) struct ContextoCapacidades {
     /// gettimeofday devuelva tres valores distintos en tres lineas
     /// adyacentes; renaser no.
     pub(crate) tiempo_ms_fotograma: u64,
+    /// PAGINAS DE INTERCAMBIO DMA en vuelo para ESTA app, en este fotograma
+    /// (Fase 26). Cada escritura al grafo (`sys_object_put`) cuenta como una
+    /// pagina de 4 KiB —cota generosa para acomodar payloads tipicos—. Cuando
+    /// el contador supera `MAX_PAGINAS_DMA_PER_APP`, el kernel devuelve
+    /// `CodigoError::Saturado` ANTES de despachar al driver: back-pressure
+    /// cooperativa. La cuota se reinicia al inicio de cada `tick` —cuando
+    /// el reactor le cede el control y la IRQ del disco ha tenido un
+    /// fotograma para liberar descriptores—. Asi un app que abuse del bus
+    /// se auto-regula sin tumbar al driver de red.
+    pub(crate) paginas_dma_en_vuelo: u32,
 }
 
 /// Recupera la memoria lineal exportada por el modulo. Que no la exporte es un
@@ -252,6 +272,19 @@ pub(crate) fn enlazar_capacidades(
          hijos_cnt: u32,
          salida: u32|
          -> Result<i32, Error> {
+            // BACK-PRESSURE DMA (Fase 26). Si la app ha grabado ya su techo
+            // en este `tick`, devolvemos `Saturado` SIN despachar al driver
+            // —el unico camino legitimo es retirarse y reintentar en el
+            // proximo fotograma—. La cuota se reinicia al inicio de cada
+            // `tick` (ver `AplicacionWasm::tick`).
+            if caller.data().paginas_dma_en_vuelo >= MAX_PAGINAS_DMA_PER_APP {
+                return Ok(CodigoError::Saturado.como_i32());
+            }
+            // Reservar la pagina ANTES de tocar el disco. Si el almacen
+            // falla y devuelve error, la decrementaremos en la rama de
+            // fallo (ver mas abajo); asi una rafaga de fallos no se queda
+            // pegada con paginas "ocupadas" ficticiamente.
+            caller.data_mut().paginas_dma_en_vuelo += 1;
             let memoria = obtener_memoria(&caller)?;
 
             // --- Leer las entradas de la memoria lineal, con limites firmes. ---
@@ -296,14 +329,22 @@ pub(crate) fn enlazar_capacidades(
             };
 
             // --- Grabar. Un fallo del almacen NO es culpa de la app. ---
-            match crate::almacen::almacenar(datos, hijos) {
+            let resultado = match crate::almacen::almacenar(datos, hijos) {
                 Ok(hash) => {
                     let m = memoria.data_mut(&mut caller);
                     m[salida as usize..salida as usize + 32].copy_from_slice(&hash);
-                    Ok(CodigoError::Ok.como_i32())
+                    CodigoError::Ok
                 }
-                Err(_) => Ok(CodigoError::AlmacenamientoFallo.como_i32()),
-            }
+                Err(_) => CodigoError::AlmacenamientoFallo,
+            };
+            // Devolver la pagina al pozo: la operacion termino (con exito o
+            // con fallo) y los descriptores virtio quedaron liberados por
+            // el camino sincrono del driver. Si en el futuro `almacenar`
+            // se vuelve async, este decremento migrara al despertar del
+            // waker que arme la IRQ del disco — el contrato con la app no
+            // cambia.
+            caller.data_mut().paginas_dma_en_vuelo -= 1;
+            Ok(resultado.como_i32())
         },
     )?;
     } // PERMISO_GRAFO_ESCRITURA

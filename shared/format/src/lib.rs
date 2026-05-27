@@ -135,6 +135,16 @@ pub enum CodigoError {
     /// driver y la capacidad lo propaga: no hay rastro de bytes residuales en
     /// el hardware.
     EnvioFallo = -5,
+    /// Cuota de recurso saturada para esta app en este fotograma: hay un
+    /// limite blando que protege un recurso fisico (DMA, descriptores de un
+    /// anillo virtio) y la app lo alcanzo. El kernel NO entrega la
+    /// operacion ni avanza el contador; la app ha de retirarse y volver a
+    /// intentar en su proximo `tick` —cuando la IRQ del hardware haya
+    /// liberado los descriptores que tenia retenidos—. Es BACK-PRESSURE
+    /// cooperativa: el equivalente de un `Poll::Pending` que cabe en un
+    /// codigo de retorno entero. Distingue a una autodefensa del kernel
+    /// frente al codigo de la app de un fallo del propio almacenamiento.
+    Saturado = -6,
 }
 
 impl CodigoError {
@@ -800,6 +810,7 @@ mod pruebas {
         assert_eq!(CodigoError::AlmacenamientoFallo.como_i32(), -3);
         assert_eq!(CodigoError::SinFoco.como_i32(), -4);
         assert_eq!(CodigoError::EnvioFallo.como_i32(), -5);
+        assert_eq!(CodigoError::Saturado.como_i32(), -6);
     }
 
     #[test]
