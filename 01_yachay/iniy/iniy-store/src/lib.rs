@@ -484,6 +484,26 @@ impl Store {
         Ok(out)
     }
 
+    /// Lista los docs que aún no tienen aserciones extraídas. Pensado para
+    /// `iniy extract-all` tras un import masivo (Wikipedia, OCR de mil PDFs).
+    pub fn documentos_sin_aserciones(&self) -> Result<Vec<DocId>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT d.id FROM documentos d
+            LEFT JOIN aserciones a ON a.doc_id = d.id
+            WHERE a.id IS NULL
+            ORDER BY d.creado ASC, d.id ASC
+            "#,
+        )?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for r in rows {
+            let s = r?;
+            out.push(DocId(Ulid::from_str(&s).with_context(|| format!("doc_id inválido: {s}"))?));
+        }
+        Ok(out)
+    }
+
     /// Bulk-insert de aserciones en una sola transacción. `INSERT OR REPLACE`
     /// para que volver a correr `extract` sobre el mismo doc no duplique.
     pub fn persistir_aserciones(&mut self, aserciones: &[Asercion]) -> Result<()> {

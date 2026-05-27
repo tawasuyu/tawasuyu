@@ -75,6 +75,17 @@ enum Cmd {
     },
     /// Extrae aserciones atómicas de los chunks de un documento.
     Extract { doc_id: String },
+    /// Bulk-extract: recorre TODOS los documentos sin aserciones y los
+    /// procesa con el extractor heurístico. Reporta progreso cada 100
+    /// docs. Para corpus masivos (post-Wikipedia bulk dump).
+    ExtractAll {
+        /// Frecuencia de progreso (docs procesados entre reportes).
+        #[arg(long, default_value_t = 100)]
+        cada: usize,
+        /// Detener tras N docs (default: hasta agotarlos).
+        #[arg(long)]
+        max: Option<usize>,
+    },
     /// Computa la matriz NLI sobre los pares de aserciones. Si `doc_id` se
     /// omite, recorre TODO el corpus (cross-doc) — necesario para que el
     /// grafo conecte aserciones que viven en documentos / fuentes distintas.
@@ -423,6 +434,53 @@ async fn main() -> Result<()> {
             }
             if aserciones.len() > 8 {
                 println!("  … (+{} más, persistidas)", aserciones.len() - 8);
+            }
+        }
+        Cmd::ExtractAll { cada, max } => {
+            let pendientes = store.documentos_sin_aserciones()?;
+            let total = pendientes.len();
+            if total == 0 {
+                println!("(todos los docs ya tienen aserciones extraídas)");
+                return Ok(());
+            }
+            let limite = max.unwrap_or(total).min(total);
+            println!("extract bulk: {limite} de {total} docs pendientes");
+            let extractor = ExtractorHeuristico::default();
+            let t0 = std::time::Instant::now();
+            let mut total_asercs = 0usize;
+            let mut total_citas = 0usize;
+            for (k, doc_id) in pendientes.into_iter().take(limite).enumerate() {
+                let chunks = store.cargar_chunks(doc_id)?;
+                if chunks.is_empty() { continue; }
+                let mut extraidas = Vec::new();
+                for c in &chunks {
+                    let mut a = extractor.extraer_con_atribucion(c).await?;
+                    extraidas.append(&mut a);
+                }
+                let aserciones: Vec<Asercion> = extraidas.iter().map(|e| e.asercion.clone()).collect();
+                if aserciones.is_empty() { continue; }
+                store.persistir_aserciones(&aserciones)?;
+                for e in &extraidas {
+                    if let Some(nombre) = &e.fuente_citada_nombre {
+                        let fid = store.obtener_o_crear_fuente(nombre, None)?;
+                        store.asignar_fuente_citada(e.asercion.id, Some(fid))?;
+                        total_citas += 1;
+                    }
+                }
+                total_asercs += aserciones.len();
+                let n = k + 1;
+                if n.is_multiple_of(cada) || n == limite {
+                    let secs = t0.elapsed().as_secs_f64();
+                    let rate = n as f64 / secs.max(0.001);
+                    eprintln!("  [{n}/{limite}]  Σ {total_asercs} aserciones · {total_citas} citas · {rate:.0} docs/s");
+                }
+            }
+            let secs = t0.elapsed().as_secs_f64();
+            println!();
+            println!("done. {total_asercs} aserciones extraídas en {secs:.1}s ({:.0} docs/s).",
+                limite as f64 / secs.max(0.001));
+            if total_citas > 0 {
+                println!("{total_citas} fuentes citadas inline detectadas («Según X, …» / «X afirma que …»).");
             }
         }
         Cmd::Nli { doc_id, umbral, backend, prefiltro_embeddings, umbral_embeddings, ann, ann_k } => {
