@@ -131,6 +131,12 @@ pub enum Mando {
     /// baliza serial. No interactua con el grafo de aplicaciones —es
     /// estrictamente mantenimiento del log direccionado por contenido—.
     CompactarGrafo,
+    /// Abre o cierra el launcher grafico (Fase 58). Mientras esta abierto,
+    /// `FocoSiguiente`/`FocoAnterior` mueven la seleccion DENTRO del overlay
+    /// —no entre ventanas—, `Promover` lanza la app seleccionada y `Cerrar`
+    /// cierra el overlay (sin matar a la ventana enfocada). Es el sustituto
+    /// dirigido del ciclo ciego de `Alt+N`.
+    ToggleLauncher,
 }
 
 /// Un arrastre EN CURSO (Fase 13): el indice de la ventana flotante asida con
@@ -211,6 +217,18 @@ struct Escritorio {
     /// Igual que `capas_buf` pero para las pestañas de la taskbar. Cubre
     /// como mucho una pestaña por ventana viva.
     celdas_buf: Vec<consola::CeldaTaskbarSlot>,
+    /// FASE 58 :: ¿Esta el launcher grafico abierto? Si lo esta, los mandos
+    /// del teclado se reinterpretan (foco mueve seleccion, Enter lanza la
+    /// app seleccionada) y `recomponer` pinta el overlay sobre la taskbar.
+    launcher_abierto: bool,
+    /// FASE 58 :: indice de la app SELECCIONADA en el launcher, dentro del
+    /// `catalogo`. Acotado en `[0, catalogo.len())` mientras este abierto.
+    launcher_seleccion: usize,
+    /// FASE 58 :: catalogo de apps lanzables (nombres). Lo fija `fijar_catalogo`
+    /// tras armar las plantillas del manifiesto. El indice coincide con el de
+    /// `PLANTILLAS` en `main.rs` — el orquestador lo recibe en la cola de
+    /// partos por indice y resuelve la plantilla por esa posicion.
+    catalogo: Vec<String>,
 }
 
 /// El escritorio global. Se funda una sola vez, en el arranque.
@@ -232,6 +250,13 @@ static MANDOS: Once<ArrayQueue<Mando>> = Once::new();
 /// Atomico: el compositor lo escribe, el orquestador lo lee y lo pone a cero.
 static PARTOS: AtomicUsize = AtomicUsize::new(0);
 
+/// FASE 58 :: cola de partos DIRIGIDOS — cada `usize` es el indice de la
+/// plantilla a instanciar (la N-esima del manifiesto). La rellena el launcher
+/// al cerrar con Alt+Enter; la drena el orquestador igual que `PARTOS`. Vive
+/// en un `Mutex` y NO en una cola lock-free porque solo se toca desde el tic
+/// cooperativo del compositor —jamas desde IRQ—.
+static PARTOS_POR_INDICE: Once<Mutex<Vec<usize>>> = Once::new();
+
 /// El ultimo segundo del reloj monotono que la barra de tareas ha mostrado.
 /// `tick_reloj` lo compara con el actual: si difiere, recompone para pintar el
 /// nuevo. Centinela `u64::MAX` para garantizar que el primer tick fuerza un
@@ -247,6 +272,7 @@ static ULTIMO_SEGUNDO: AtomicU64 = AtomicU64::new(u64::MAX);
 /// `(ancho, alto)` del lienzo de cada app, en el orden del manifiesto.
 pub fn fundar(ancho: usize, alto: usize, naturales: &[(usize, usize, &str)]) {
     MANDOS.call_once(|| ArrayQueue::new(CAPACIDAD_MANDOS));
+    PARTOS_POR_INDICE.call_once(|| Mutex::new(Vec::new()));
 
     let mut ventanas = Vec::with_capacity(naturales.len());
     for &(nat_ancho, nat_alto, nombre) in naturales {
@@ -288,6 +314,9 @@ pub fn fundar(ancho: usize, alto: usize, naturales: &[(usize, usize, &str)]) {
         // se omiten silenciosamente del repintado, no se aloca tras este punto.
         capas_buf: Vec::with_capacity(MAX_VENTANAS),
         celdas_buf: Vec::with_capacity(MAX_VENTANAS),
+        launcher_abierto: false,
+        launcher_seleccion: 0,
+        catalogo: Vec::new(),
     };
     aplicar_teselado(&mut escritorio);
 
@@ -427,6 +456,13 @@ pub fn atender_mandos() {
         return;
     };
     while let Some(mando) = mandos.pop() {
+        // FASE 58 :: si el launcher esta abierto, se queda con el foco del
+        // teclado: navega su seleccion, lanza la app elegida o se cierra. El
+        // resto de los mandos se ignoran en silencio hasta que se cierre,
+        // para que el escritorio no mute por debajo del overlay.
+        if launcher_intercepta(mando) {
+            continue;
+        }
         match mando {
             Mando::CiclarLayout => ciclar_layout(),
             Mando::FocoSiguiente => mover_foco(true),
@@ -442,6 +478,9 @@ pub fn atender_mandos() {
             Mando::Lanzar => {
                 PARTOS.fetch_add(1, Ordering::Relaxed);
             }
+            // ToggleLauncher se atiende SIEMPRE en `launcher_intercepta` —
+            // si llego hasta aqui es que el escritorio aun no esta fundado.
+            Mando::ToggleLauncher => {}
             // Fase 57 :: GC manual desde el teclado. La pasada toma el cerrojo
             // del almacen durante toda la operacion, asi que el fotograma
             // del compositor se estira — aceptable como gesto explicito del
@@ -473,6 +512,82 @@ pub fn atender_mandos() {
             }
         }
     }
+}
+
+/// FASE 58 :: el launcher como duenio del teclado. Devuelve `true` si el
+/// `mando` se atendio dentro del overlay y no debe pasar al despacho normal.
+/// `Mando::ToggleLauncher` se atiende siempre aqui —abre o cierra—; el resto
+/// solo se interpreta si el overlay esta abierto.
+///
+/// Atajos mientras el launcher esta abierto:
+///   * `Alt+J` / `Alt+K` mueven la seleccion abajo y arriba (cicla).
+///   * `Alt+Enter` lanza la app seleccionada y cierra el overlay.
+///   * `Alt+Q` cierra el overlay sin lanzar nada.
+///   * `Alt+P` (toggle) tambien cierra.
+///
+/// Cualquier otro mando se descarta: el escritorio NO debe mutar por debajo
+/// del overlay mientras el operador esta eligiendo.
+fn launcher_intercepta(mando: Mando) -> bool {
+    let Some(escritorio) = ESCRITORIO.get() else {
+        return false;
+    };
+    let mut escritorio = escritorio.lock();
+
+    if matches!(mando, Mando::ToggleLauncher) {
+        if escritorio.launcher_abierto {
+            escritorio.launcher_abierto = false;
+        } else {
+            escritorio.launcher_abierto = true;
+            // Acotar la seleccion al catalogo VIGENTE — si encogio entre
+            // aperturas, evitar un indice fuera de rango.
+            let n = escritorio.catalogo.len();
+            if n == 0 {
+                escritorio.launcher_seleccion = 0;
+            } else if escritorio.launcher_seleccion >= n {
+                escritorio.launcher_seleccion = n - 1;
+            }
+        }
+        recomponer(&mut escritorio);
+        return true;
+    }
+
+    if !escritorio.launcher_abierto {
+        return false;
+    }
+
+    match mando {
+        Mando::FocoSiguiente => {
+            let n = escritorio.catalogo.len();
+            if n > 0 {
+                escritorio.launcher_seleccion = (escritorio.launcher_seleccion + 1) % n;
+            }
+        }
+        Mando::FocoAnterior => {
+            let n = escritorio.catalogo.len();
+            if n > 0 {
+                escritorio.launcher_seleccion = (escritorio.launcher_seleccion + n - 1) % n;
+            }
+        }
+        Mando::Promover => {
+            let n = escritorio.catalogo.len();
+            if n > 0 {
+                let idx = escritorio.launcher_seleccion;
+                if let Some(cola) = PARTOS_POR_INDICE.get() {
+                    cola.lock().push(idx);
+                }
+            }
+            escritorio.launcher_abierto = false;
+        }
+        Mando::Cerrar => {
+            escritorio.launcher_abierto = false;
+        }
+        // Cualquier otro mando se descarta — el launcher se queda con el
+        // foco del teclado hasta cerrarse.
+        _ => {}
+    }
+
+    recomponer(&mut escritorio);
+    true
 }
 
 /// Cicla al siguiente modo de teselado: recalcula los marcos de las ventanas
@@ -762,7 +877,20 @@ fn recomponer(escritorio: &mut Escritorio) {
     let resolver = ResolverEscritorio {
         ventanas: &escritorio.ventanas,
     };
-    consola::recomponer(area, &escritorio.capas_buf, &taskbar, &resolver);
+    // FASE 58 :: si el launcher esta abierto, calcular su region centrada y
+    // entregar el overlay a la consola como ultima capa. La caja escala con
+    // el catalogo —dentro de un techo razonable—; si no entra, las filas
+    // sobrantes se omiten en `pintar_launcher`.
+    let overlay = if escritorio.launcher_abierto {
+        Some(consola::LauncherOverlay {
+            region: region_launcher(escritorio.ancho, escritorio.alto, escritorio.catalogo.len()),
+            items: &escritorio.catalogo,
+            seleccion: escritorio.launcher_seleccion,
+        })
+    } else {
+        None
+    };
+    consola::recomponer(area, &escritorio.capas_buf, &taskbar, &resolver, overlay.as_ref());
     // Recordar el segundo recien mostrado: `tick_reloj` evita repintar de mas
     // mientras dure este mismo segundo.
     ULTIMO_SEGUNDO.store(segs, Ordering::Relaxed);
@@ -966,6 +1094,28 @@ pub fn ventana_cerrada(indice: usize) -> bool {
 /// sabe instanciar un WASM— en cada fotograma de la tarea del compositor.
 pub fn partos_pendientes() -> usize {
     PARTOS.swap(0, Ordering::Relaxed)
+}
+
+/// FASE 58 :: drena la cola de partos DIRIGIDOS —cada indice apunta a la
+/// plantilla a instanciar—. La rellena el launcher al cerrar con Alt+Enter;
+/// la consume el orquestador del kernel. Se reusa el `Vec` interno con un
+/// `mem::take` para no obligar al llamante a tomar el cerrojo dos veces.
+pub fn partos_por_indice_pendientes() -> Vec<usize> {
+    let Some(cola) = PARTOS_POR_INDICE.get() else {
+        return Vec::new();
+    };
+    core::mem::take(&mut *cola.lock())
+}
+
+/// FASE 58 :: fija el catalogo de apps lanzables — el listado que el launcher
+/// muestra al usuario. El indice de cada nombre coincide con el de la plantilla
+/// homonima en `main.rs::PLANTILLAS`. Se invoca una sola vez, justo despues de
+/// armar las plantillas del manifiesto en el arranque.
+pub fn fijar_catalogo(nombres: Vec<String>) {
+    let Some(escritorio) = ESCRITORIO.get() else {
+        return;
+    };
+    escritorio.lock().catalogo = nombres;
 }
 
 /// Avanza el reloj de la barra de tareas (Fase 16): si el segundo del reloj
@@ -1185,6 +1335,32 @@ pub fn area_apps(ancho_pantalla: usize, alto_pantalla: usize) -> RegionPantalla 
         y: cabeza,
         ancho: ancho_pantalla,
         alto: alto_pantalla.saturating_sub(cabeza).saturating_sub(pie),
+    }
+}
+
+/// FASE 58 :: la region del overlay del launcher, centrada en la pantalla.
+/// La caja escala con el numero de items hasta un techo razonable (cubre el
+/// genesis con holgura sin tapar el escritorio entero); si el catalogo crece
+/// mas alla del techo, las filas sobrantes se omiten en silencio —el launcher
+/// MVP no hace scroll—. La altura del titulo y la fila se mantienen alineadas
+/// con las constantes de `consola::pintar_launcher`.
+fn region_launcher(ancho_pantalla: usize, alto_pantalla: usize, items: usize) -> RegionPantalla {
+    const ANCHO: usize = 480;
+    const ALTURA_TITULO: usize = 32;
+    const ALTURA_FILA: usize = 26;
+    const PADDING_INFERIOR: usize = 8;
+    /// Maximo de filas visibles a la vez — un poco mas que el genesis (12).
+    const MAX_FILAS: usize = 16;
+
+    let filas_visibles = items.min(MAX_FILAS).max(1);
+    let alto = ALTURA_TITULO + filas_visibles * ALTURA_FILA + PADDING_INFERIOR;
+    let alto = alto.min(alto_pantalla);
+    let ancho = ANCHO.min(ancho_pantalla);
+    RegionPantalla {
+        x: (ancho_pantalla.saturating_sub(ancho)) / 2,
+        y: (alto_pantalla.saturating_sub(alto)) / 2,
+        ancho,
+        alto,
     }
 }
 

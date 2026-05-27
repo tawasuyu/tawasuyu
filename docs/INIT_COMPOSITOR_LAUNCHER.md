@@ -145,16 +145,17 @@ Verificado contra `wawa-boot/src/main.rs:137` (`const GENESIS: [AppGenesis; 12]`
 - **Capa flotante** separada de la teselada, con orden-Z. Ventanas cerrables en vivo (Alt+Q marca slot como inerte).
 - **Taskbar** (Fase 14–16, 40 px de alto): pestaña por app + **botón lanzador `+`** a la izquierda (36 px ancho) + reloj monótono a la derecha. Click en pestaña enfoca; click en `+` lanza la siguiente plantilla.
 - **Ratón PS/2** (`drivers/raton.rs`, IRQ12): paquetes de 3 bytes → `compositor::atender_raton` → foco/arrastre → `puntero::enrutar` con descuento del origen del marco. Eventos fuera del lienzo natural de la app enfocada se descartan en silencio (4.3 del WAWA.md, geometría como contexto inyectado).
-- **Cursor visible**: `consola::estampar_puntero` existe (Fase 13) pero **no integrado** al camino zero-alloc del compositor — pendiente.
+- **Cursor visible**: `consola::estampar_puntero` (Fase 13) ya está cosida al camino zero-alloc — `Consola::recomponer` → `presentar()` → `pantalla.estampar_puntero(x, y)`, y `presentar_region` re-estampa si el sprite intersecta. El doc previo decía "pendiente" pero el código lo desmiente (mismo patrón que la firma del manifiesto).
 
 ### 2.5 Launcher de wawa
 
-**No hay launcher gráfico tipo Spotlight.** El "launcher" tiene dos rutas:
+Hoy hay **dos rutas** al userspace:
 
 1. **GENESIS-only en boot**: las 12 apps nacen al inicializar el manifiesto.
-2. **Alt+N → `compositor::nacer_ventana(ancho, alto, nombre)`**: instancia la siguiente app WASM en una rotación sobre `PLANTILLAS` (mismo bytecode, indice de app nuevo, fotograma propio). No hay buscador ni filtro — sólo ciclo.
+2. **Alt+N → rotación ciega**: instancia la siguiente plantilla de `PLANTILLAS` (mismo bytecode, índice de app nuevo, fotograma propio). El botón `+` de la taskbar dispara lo mismo. Útil para devs.
+3. **Alt+P → launcher gráfico (Fase 58)**: overlay modal centrado con la lista de apps del manifiesto. `Alt+J`/`Alt+K` mueven la selección (ciclando), `Alt+Enter` lanza la app resaltada y cierra, `Alt+Q` cierra sin lanzar. Mientras está abierto el launcher se queda con el foco del teclado (el resto de mandos se descarta) para que el escritorio no mute por debajo. Las altas dirigidas viajan por `PARTOS_POR_INDICE: Once<Mutex<Vec<usize>>>` y el orquestador (`main.rs::tarea_compositor`) las drena tras los partos por rotación. MVP feo: sin scroll (techo de 16 filas visibles), sin búsqueda por texto, sin clics dentro del overlay.
 
-El botón `+` de la taskbar dispara la misma rotación. Acceso a apps fuera de GENESIS hoy requiere primero introducir su bytecode al grafo (vía Akasha o `cronista`-style) y añadir su `EntradaApp` al manifiesto vivo — no hay UI de instalación en kernel.
+Acceso a apps fuera de GENESIS hoy requiere primero introducir su bytecode al grafo (vía Akasha o `cronista`-style) y añadir su `EntradaApp` al manifiesto vivo — no hay UI de instalación en kernel.
 
 ### 2.6 Sistema de apps WASM
 
@@ -209,8 +210,8 @@ cargo +nightly run -p boot -Z bindeps      △ Boot al QEMU funciona; el audit r
 ### 4.1 Inmediato (alta señal, bajo riesgo)
 
 1. **Actualizar `WAWA.md` §9 + §14** contra la realidad — 12 apps de Génesis, firma de manifiesto **ya implementada** (`claves.rs` + `AGORA_AUTH_RING` + `sys_manifiesto_proponer`), `mudanza` ya consume la syscall. El doc está engañando al lector. Bloque de ~30 min de edición.
-2. **Cursor visible en wawa**: integrar `consola::estampar_puntero` al `compositor::recomponer` zero-alloc. Hoy el ratón mueve foco pero no se ve cursor. Estimado: 1 sesión.
-3. **`wawactl gc` subcomando**: exponer `compactar()` como `sys_grafo_compactar()` (nuevo `PERMISO_COMPACTAR = 32`), gateado a apps con permiso. Requiere syscall + handler + UI mínima en wawactl. Estimado: 1–2 sesiones.
+2. ~~**Cursor visible en wawa**~~ — **revisado 2026-05-27**: ya estaba integrado al camino zero-alloc desde la Fase 13 (`Consola::recomponer → presentar → pantalla.estampar_puntero`). Misma drift que con la firma del manifiesto: el doc decía "pendiente" sin verificar contra el código.
+3. **`wawactl gc` subcomando**: ✓ cerrado en Fase 53 (`sys_grafo_compactar` + `PERMISO_COMPACTAR = 32`) y Fase 57 (`Alt+G` operacional).
 
 ### 4.2 Cierre del shell de Linux
 
@@ -220,7 +221,7 @@ cargo +nightly run -p boot -Z bindeps      △ Boot al QEMU funciona; el audit r
 
 ### 4.3 Cierre del shell de wawa
 
-7. **Launcher gráfico en wawa** (Spotlight-like): buscador sobre `Manifiesto::apps`, filtro por nombre, lanzar por click. Hoy Alt+N cicla — útil para devs, hostil para usuarios. Estimado: 2–3 sesiones (widget de input en framebuffer + busqueda fuzzy reusando `nucleo-matcher` si compila `no_std`).
+7. **Launcher gráfico en wawa** (Spotlight-like): primera vuelta MVP shipped en Fase 58 — overlay modal (`Alt+P`), navegación Alt+J/K, lanzamiento Alt+Enter por índice sobre `PLANTILLAS`. Falta: búsqueda por texto (widget de input en framebuffer + matcher fuzzy `no_std`), clic dentro del overlay para lanzar con el ratón, y scroll vertical si el catálogo crece más allá de las 16 filas visibles. Estimado pendiente: 1–2 sesiones.
 8. **Multi-monitor / resolución dinámica**: `bootloader_api::FrameBufferInfo` ya entrega geometría real; consola y compositor asumen framebuffer único. Capa `Pantalla` extendida. Estimado: 2 sesiones.
 9. **Zero-alloc del demuxer Akasha** (anillo pre-alocado de buffers MTU + free-list LIFO en `COLA_USUARIO`). Hoy `encolar_para_usuario` hace `frame.to_vec()` por cada frame RX. Estimado: 1 sesión.
 
@@ -276,3 +277,4 @@ Nada en §4.1 bloquea a nada — pueden ir en paralelo. §4.4 son hitos grandes 
 - **2026-05-26**: GPUI declarado extinto en todo el repo. Toda la migración pluma/dominium/cosmos/nahual/nakui empieza/termina ese día.
 - **2026-05-26 (wawa)**: Canal de release firmado (Ed25519 + `AGORA_AUTH_RING`), `mudanza` consumiendo `AnunciarCanal`, pluma embebida como app de GENESIS (11 KiB post `wasm-opt -Os`).
 - **2026-05-27**: smoke `cargo check --workspace` fix-up tras detectar que tres crates Android dependían de `log` solo bajo `cfg(target_os = "android")` — ahora `log` está en deps incondicionales en `02_ruway/llimphi/android/*`.
+- **2026-05-27 (wawa Fase 58)**: launcher gráfico MVP — `Alt+P` abre overlay modal, `Alt+J/K` mueven selección, `Alt+Enter` lanza por índice, `Alt+Q` cierra. Cola `PARTOS_POR_INDICE` paralela a la legacy de rotación.

@@ -56,10 +56,12 @@ const ENTER: u8 = 0x1C;
 const TECLA_F: u8 = 0x21;
 /// Tecla Q — `Alt + Q` cierra la aplicacion enfocada (baja en vivo).
 const TECLA_Q: u8 = 0x10;
-/// Tecla N — `Alt + N` lanza una aplicacion nueva (alta en vivo).
+/// Tecla N — `Alt + N` lanza una aplicacion nueva (alta en vivo, rotativa).
 const TECLA_N: u8 = 0x31;
 /// Tecla G — `Alt + G` fuerza una pasada del compactador del grafo (Fase 57).
 const TECLA_G: u8 = 0x22;
+/// Tecla P — `Alt + P` abre/cierra el launcher grafico (Fase 58).
+const TECLA_P: u8 = 0x19;
 
 /// Un canal de teclado: la cola lock-free de scancodes de UNA aplicacion.
 pub type CanalTeclado = Arc<ArrayQueue<u8>>;
@@ -149,6 +151,7 @@ pub fn recibir_scancode(scancode: u8) {
             TECLA_Q => compositor::solicitar(Mando::Cerrar),
             TECLA_N => compositor::solicitar(Mando::Lanzar),
             TECLA_G => compositor::solicitar(Mando::CompactarGrafo),
+            TECLA_P => compositor::solicitar(Mando::ToggleLauncher),
             _ => {}
         }
         return;

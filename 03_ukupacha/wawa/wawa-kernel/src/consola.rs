@@ -97,6 +97,21 @@ pub(crate) struct TaskbarSlot<'a> {
     pub(crate) reloj_region: RegionPantalla,
 }
 
+/// FASE 58 :: el overlay del launcher grafico. Pinta una caja centrada con
+/// la lista de apps lanzables y resalta la seleccion vigente. La consola lo
+/// recibe como ultima capa de la recomposicion —sobre la taskbar—, de modo
+/// que aparezca por encima de todo lo demas. Vive como un slot sin lifetime
+/// "propio" mas alla del fotograma: las cadenas vienen del `Vec<String>` del
+/// escritorio, que el compositor sostiene mientras el lock este tomado.
+pub(crate) struct LauncherOverlay<'a> {
+    /// Region centrada que ocupa el overlay en pantalla.
+    pub(crate) region: RegionPantalla,
+    /// Nombres de las apps en el orden de la plantilla.
+    pub(crate) items: &'a [alloc::string::String],
+    /// Indice de la fila seleccionada — el operador la lanza con Enter.
+    pub(crate) seleccion: usize,
+}
+
 /// Resolver de datos por indice de ventana. La consola lo invoca para
 /// obtener los bytes del fotograma cacheado y el nombre de la pestaña; el
 /// compositor implementa el rasgo con una vista sobre `escritorio.ventanas`.
@@ -313,6 +328,7 @@ impl Consola {
         capas: &[CapaSlot],
         taskbar: &TaskbarSlot,
         resolver: &dyn Resolver,
+        overlay: Option<&LauncherOverlay>,
     ) {
         self.lienzo.rellenar_rect(
             area.x,
@@ -344,7 +360,99 @@ impl Consola {
             self.dibujar_borde(m, capa.enfocada);
         }
         self.pintar_taskbar(taskbar, resolver);
+        // FASE 58 :: si el launcher esta abierto, pintar su overlay como
+        // ULTIMA capa, encima de la taskbar — el operador lo ve por encima
+        // de todo y no se confunde con una ventana mas.
+        if let Some(overlay) = overlay {
+            self.pintar_launcher(overlay);
+        }
         self.presentar();
+    }
+
+    /// FASE 58 :: pinta el overlay del launcher centrado en su region. Caja
+    /// con fondo `PANEL`, borde `FOCO`, una linea de titulo y un renglon por
+    /// item. La fila seleccionada se pinta con fondo `FOCO`. La consola
+    /// asume que `overlay.region` cabe dentro del lienzo —el llamante calcula
+    /// la geometria—.
+    fn pintar_launcher(&mut self, overlay: &LauncherOverlay) {
+        const GROSOR_BORDE: usize = 3;
+        const ALTURA_FILA: usize = 26;
+        const ALTURA_TITULO: usize = 32;
+        const MARGEN_TEXTO: usize = 16;
+
+        let r = overlay.region;
+        // Fondo del panel.
+        self.lienzo
+            .rellenar_rect(r.x, r.y, r.ancho, r.alto, Color::PANEL);
+        // Borde indigo grueso — delata que es modal.
+        self.lienzo
+            .rellenar_rect(r.x, r.y, r.ancho, GROSOR_BORDE, Color::FOCO);
+        self.lienzo.rellenar_rect(
+            r.x,
+            r.y + r.alto.saturating_sub(GROSOR_BORDE),
+            r.ancho,
+            GROSOR_BORDE,
+            Color::FOCO,
+        );
+        self.lienzo
+            .rellenar_rect(r.x, r.y, GROSOR_BORDE, r.alto, Color::FOCO);
+        self.lienzo.rellenar_rect(
+            r.x + r.ancho.saturating_sub(GROSOR_BORDE),
+            r.y,
+            GROSOR_BORDE,
+            r.alto,
+            Color::FOCO,
+        );
+
+        // Titulo en la barra superior — un renglon con el atajo recordatorio.
+        let titulo_base_y = r.y + ALTURA_TITULO - 8;
+        self.pintar_etiqueta(
+            r.x + MARGEN_TEXTO,
+            titulo_base_y,
+            "lanzar app  ::  Alt+J/K mueven  ::  Alt+Enter lanza  ::  Alt+Q cierra",
+            14.0,
+            Color::PANEL,
+            Color::TEXTO,
+        );
+
+        // Filas — una por item del catalogo, dentro del area util por debajo
+        // del titulo y por encima del borde inferior. Si no cabe alguna, se
+        // omite en silencio: el operador puede mover la seleccion con J/K
+        // hasta una visible (MVP — el scrolling viene despues).
+        let filas_y0 = r.y + ALTURA_TITULO;
+        let filas_y_max = r.y + r.alto.saturating_sub(GROSOR_BORDE + 4);
+        for (i, item) in overlay.items.iter().enumerate() {
+            let fila_y = filas_y0 + i * ALTURA_FILA;
+            if fila_y + ALTURA_FILA > filas_y_max {
+                break;
+            }
+            let seleccionada = i == overlay.seleccion;
+            let fondo = if seleccionada {
+                Color::FOCO
+            } else {
+                Color::PANEL
+            };
+            if seleccionada {
+                // Pinta la franja completa de la fila — desde el borde
+                // izquierdo del panel hasta el derecho, salvo el borde.
+                self.lienzo.rellenar_rect(
+                    r.x + GROSOR_BORDE,
+                    fila_y,
+                    r.ancho.saturating_sub(GROSOR_BORDE * 2),
+                    ALTURA_FILA,
+                    Color::FOCO,
+                );
+            }
+            let base_y = fila_y + (ALTURA_FILA + 14) / 2;
+            self.pintar_etiqueta(
+                r.x + MARGEN_TEXTO,
+                base_y,
+                item.as_str(),
+                16.0,
+                fondo,
+                Color::TEXTO,
+            );
+        }
     }
 
     /// Pinta la barra de tareas como ultima capa del escritorio (Fase 14/16):
@@ -559,9 +667,12 @@ pub(crate) fn recomponer(
     capas: &[CapaSlot],
     taskbar: &TaskbarSlot,
     resolver: &dyn Resolver,
+    overlay: Option<&LauncherOverlay>,
 ) {
     if let Some(consola) = CONSOLA.get() {
-        consola.lock().recomponer(area, capas, taskbar, resolver);
+        consola
+            .lock()
+            .recomponer(area, capas, taskbar, resolver, overlay);
     }
 }
 

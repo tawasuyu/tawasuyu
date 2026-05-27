@@ -183,6 +183,13 @@ async fn tarea_compositor() {
         for _ in 0..compositor::partos_pendientes() {
             lanzar_app();
         }
+        // FASE 58 :: partos DIRIGIDOS desde el launcher grafico. Cada indice
+        // apunta a la plantilla N-esima del catalogo. Se drena despues de
+        // los partos por rotacion para que un Alt+N tardio no canibalice
+        // un Alt+P + Enter del mismo fotograma.
+        for indice in compositor::partos_por_indice_pendientes() {
+            lanzar_app_por_indice(indice);
+        }
         // FASE 24 :: tic ocioso del compactador semantico. Cuando el log ha
         // ganado bastantes escrituras desde la ultima pasada, aspirar los
         // nodos huerfanos. La operacion es BLOQUEANTE para la E/S de disco
@@ -329,8 +336,26 @@ fn lanzar_app() {
     }
     // El cursor rota sobre las plantillas: cada `Alt+N` engendra la siguiente.
     let cursor = CURSOR_PLANTILLA.fetch_add(1, Ordering::Relaxed);
-    let plantilla = &plantillas[cursor % plantillas.len()];
+    instanciar_plantilla(&plantillas[cursor % plantillas.len()]);
+}
 
+/// FASE 58 :: variante DIRIGIDA del lanzamiento — instancia la plantilla
+/// `indice`-esima del manifiesto. La invoca el drenado de partos por indice,
+/// que viene del launcher grafico tras pulsar Alt+Enter. Indice fuera de
+/// rango: se ignora (un launcher con catalogo viejo).
+fn lanzar_app_por_indice(indice: usize) {
+    let Some(plantillas) = PLANTILLAS.get() else {
+        return;
+    };
+    let Some(plantilla) = plantillas.get(indice) else {
+        return;
+    };
+    instanciar_plantilla(plantilla);
+}
+
+/// Camino comun de `lanzar_app` y `lanzar_app_por_indice`: abre la ventana,
+/// carga el WASM y engendra la tarea — o tatua la baliza si la carga falla.
+fn instanciar_plantilla(plantilla: &Plantilla) {
     // La ventana nace primero: el compositor le entrega su indice —su
     // identidad—, que el WASM necesita para hallar su ventana y su canal.
     let indice = compositor::nacer_ventana(plantilla.nat_ancho, plantilla.nat_alto, &plantilla.nombre);
@@ -418,6 +443,16 @@ fn cargar_userspace(ejecutor: &mut Executor, ancho_pantalla: usize, alto_pantall
         // FASE 10 :: fijar las plantillas de las apps. A partir de aqui, cada
         // `Alt+N` instancia una copia viva, en rotacion.
         PLANTILLAS.call_once(|| plantillas);
+
+        // FASE 58 :: poblar el catalogo del launcher con los nombres de las
+        // plantillas YA fijadas. El indice de cada nombre coincide con el de
+        // su plantilla — el orquestador resuelve `partos_por_indice` por esa
+        // posicion. Si no hay plantillas (manifiesto sin apps), el catalogo
+        // queda vacio y el launcher se cierra solo en Alt+Enter.
+        if let Some(plantillas) = PLANTILLAS.get() {
+            let nombres = plantillas.iter().map(|p| p.nombre.clone()).collect();
+            compositor::fijar_catalogo(nombres);
+        }
 
         // La tarea del compositor: atiende los mandos del teclado —ciclar el
         // teselado, mover el foco, cerrar y lanzar apps— en cada fotograma.
