@@ -32,10 +32,35 @@ const VISIBLE_COLS: u32 = 8;
 const VISIBLE_ROWS: u32 = 18;
 const CELL_W: f32 = 110.0;
 const CELL_H: f32 = 24.0;
-const ROW_HEADER_W: f32 = 40.0;
+const ROW_HEADER_W: f32 = 46.0;
 const FORMULA_BAR_H: f32 = 36.0;
 const TOP_HEADER_H: f32 = 30.0;
 const STATUS_H: f32 = 24.0;
+
+/// Paleta dark-sheet — fondo casi negro con cuadrícula sutil. Los
+/// colores se eligen para que la grilla se vea NÍTIDA pero no
+/// agresiva: las líneas de borde son 1px en gris oscuro,
+/// suficientemente claras para guiar el ojo, suficientemente
+/// apagadas para no competir con los valores de las celdas.
+mod palette {
+    use llimphi_ui::llimphi_raster::peniko::Color;
+
+    pub const BG_APP: Color = Color::from_rgba8(8, 8, 10, 255);
+    pub const BG_PANEL: Color = Color::from_rgba8(18, 18, 22, 255);
+    pub const BG_PANEL_ALT: Color = Color::from_rgba8(24, 24, 28, 255);
+    pub const BG_CELL: Color = Color::from_rgba8(12, 12, 14, 255);
+    pub const BG_CELL_HOVER: Color = Color::from_rgba8(22, 22, 28, 255);
+    pub const BG_HEADER: Color = Color::from_rgba8(28, 28, 34, 255);
+    pub const GRID_LINE: Color = Color::from_rgba8(42, 42, 50, 255);
+    pub const FG_TEXT: Color = Color::from_rgba8(232, 232, 235, 255);
+    pub const FG_MUTED: Color = Color::from_rgba8(135, 138, 150, 255);
+    pub const FG_HEADER: Color = Color::from_rgba8(170, 175, 188, 255);
+    pub const ACCENT: Color = Color::from_rgba8(255, 140, 32, 255);
+    pub const ACCENT_FG: Color = Color::from_rgba8(20, 14, 6, 255);
+    pub const ERROR: Color = Color::from_rgba8(232, 96, 96, 255);
+    pub const ERROR_BG: Color = Color::from_rgba8(80, 24, 24, 255);
+    pub const FG_PLACEHOLDER: Color = Color::from_rgba8(95, 100, 115, 255);
+}
 
 struct NakuiSheetApp;
 
@@ -103,7 +128,7 @@ impl App for NakuiSheetApp {
             selected,
             bar,
             status: Status::default(),
-            theme: Theme::dark(),
+            theme: dark_sheet_theme(),
         }
     }
 
@@ -157,10 +182,10 @@ impl App for NakuiSheetApp {
 
     fn view(model: &Self::Model) -> View<Self::Msg> {
         let t = &model.theme;
-        let title_bar = title_bar_view(t, model.selected);
+        let title_bar = title_bar_view(model.selected);
         let formula_bar = formula_bar_view(t, &model.bar, model.selected);
-        let grid = grid_view(t, &model.wb, model.selected);
-        let status = status_bar_view(t, &model.status);
+        let grid = grid_view(&model.wb, model.selected);
+        let status = status_bar_view(&model.status);
 
         View::new(Style {
             size: Size {
@@ -170,7 +195,7 @@ impl App for NakuiSheetApp {
             flex_direction: FlexDirection::Column,
             ..Default::default()
         })
-        .fill(t.bg_app)
+        .fill(palette::BG_APP)
         .children(vec![title_bar, formula_bar, grid, status])
     }
 
@@ -231,7 +256,7 @@ fn move_cell(cr: CellRef, dir: Dir) -> CellRef {
     }
 }
 
-fn title_bar_view(t: &Theme, selected: CellRef) -> View<Msg> {
+fn title_bar_view(selected: CellRef) -> View<Msg> {
     View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -246,7 +271,7 @@ fn title_bar_view(t: &Theme, selected: CellRef) -> View<Msg> {
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .fill(t.bg_panel)
+    .fill(palette::BG_PANEL)
     .children(vec![View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -258,24 +283,31 @@ fn title_bar_view(t: &Theme, selected: CellRef) -> View<Msg> {
     .text_aligned(
         format!("nakui-sheet  ·  celda activa: {selected}"),
         13.0,
-        t.fg_text,
+        palette::FG_TEXT,
         Alignment::Start,
     )])
 }
 
 fn formula_bar_view(t: &Theme, bar: &TextInputState, selected: CellRef) -> View<Msg> {
-    let palette = TextInputPalette::from_theme(t);
+    let input_palette = TextInputPalette::from_theme(t);
+    // Box pequeño tipo "Name Box" de Excel: muestra la cell activa
+    // con fondo accent translúcido para que sea inconfundible.
     let label = View::new(Style {
         size: Size {
-            width: length(60.0_f32),
+            width: length(70.0_f32),
             height: percent(1.0_f32),
         },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
     })
-    .fill(t.bg_panel_alt)
-    .text_aligned(selected.to_string(), 13.0, t.fg_text, Alignment::Center);
+    .fill(palette::BG_PANEL_ALT)
+    .text_aligned(
+        selected.to_string(),
+        13.0,
+        palette::ACCENT,
+        Alignment::Center,
+    );
 
     let input = View::new(Style {
         size: Size {
@@ -283,8 +315,8 @@ fn formula_bar_view(t: &Theme, bar: &TextInputState, selected: CellRef) -> View<
             height: percent(1.0_f32),
         },
         padding: Rect {
-            left: length(6.0_f32),
-            right: length(6.0_f32),
+            left: length(8.0_f32),
+            right: length(8.0_f32),
             top: length(0.0_f32),
             bottom: length(0.0_f32),
         },
@@ -296,7 +328,7 @@ fn formula_bar_view(t: &Theme, bar: &TextInputState, selected: CellRef) -> View<
         bar,
         "ingresa fórmula o valor",
         true,
-        &palette,
+        &input_palette,
         Msg::SelectCell(selected),
     )]);
 
@@ -313,18 +345,23 @@ fn formula_bar_view(t: &Theme, bar: &TextInputState, selected: CellRef) -> View<
         },
         ..Default::default()
     })
-    .fill(t.bg_app)
+    .fill(palette::BG_APP)
     .children(vec![label, input])
 }
 
-fn grid_view(t: &Theme, wb: &Workbook, selected: CellRef) -> View<Msg> {
+fn grid_view(wb: &Workbook, selected: CellRef) -> View<Msg> {
     let mut rows: Vec<View<Msg>> = Vec::new();
     // Cabecera de columnas.
-    rows.push(column_header_row(t));
+    rows.push(column_header_row());
     // Filas de datos.
     for r in 0..VISIBLE_ROWS {
-        rows.push(data_row(t, wb, selected, r));
+        rows.push(data_row(wb, selected, r));
     }
+    // El contenedor de la grilla se pinta con el color de las líneas
+    // — los bordes inferior/derecho de cada celda dejan ver este
+    // fondo, lo cual crea la cuadrícula sin overdrawing. El borde
+    // superior+izquierdo del grid surge automáticamente porque la
+    // primera fila/columna apoya contra este fondo.
     View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -332,110 +369,37 @@ fn grid_view(t: &Theme, wb: &Workbook, selected: CellRef) -> View<Msg> {
         },
         flex_direction: FlexDirection::Column,
         flex_grow: 1.0,
+        padding: Rect {
+            left: length(1.0_f32),
+            right: length(0.0_f32),
+            top: length(1.0_f32),
+            bottom: length(0.0_f32),
+        },
         ..Default::default()
     })
-    .fill(t.bg_app)
+    .fill(palette::GRID_LINE)
     .children(rows)
 }
 
-fn column_header_row(t: &Theme) -> View<Msg> {
-    let mut cells: Vec<View<Msg>> = Vec::new();
-    // Esquina vacía.
-    cells.push(
-        View::new(Style {
-            size: Size {
-                width: length(ROW_HEADER_W),
-                height: length(CELL_H),
-            },
-            ..Default::default()
-        })
-        .fill(t.bg_panel_alt),
-    );
-    for c in 0..VISIBLE_COLS {
-        cells.push(
-            View::new(Style {
-                size: Size {
-                    width: length(CELL_W),
-                    height: length(CELL_H),
-                },
-                align_items: Some(AlignItems::Center),
-                justify_content: Some(JustifyContent::Center),
-                ..Default::default()
-            })
-            .fill(t.bg_panel)
-            .text_aligned(CellRef::col_label(c), 12.0, t.fg_muted, Alignment::Center),
-        );
-    }
-    View::new(Style {
+/// Wrap genérico para una celda de la grilla: rect padre del color
+/// de las líneas con padding right+bottom = 1px que deja ver la
+/// línea; hijo del color de fondo de la celda. Cada celda "lleva
+/// puesto" su borde inferior+derecho — el superior y el izquierdo
+/// del grid los aporta el contenedor exterior.
+fn bordered_cell(
+    width_px: f32,
+    height_px: f32,
+    bg: Color,
+    hover: Option<Color>,
+    fg: Color,
+    text: String,
+    text_align: Alignment,
+    on_click: Option<Msg>,
+) -> View<Msg> {
+    let mut inner = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
-            height: length(CELL_H),
-        },
-        ..Default::default()
-    })
-    .children(cells)
-}
-
-fn data_row(t: &Theme, wb: &Workbook, selected: CellRef, row: u32) -> View<Msg> {
-    let mut cells: Vec<View<Msg>> = Vec::new();
-    // Cabecera de fila.
-    cells.push(
-        View::new(Style {
-            size: Size {
-                width: length(ROW_HEADER_W),
-                height: length(CELL_H),
-            },
-            align_items: Some(AlignItems::Center),
-            justify_content: Some(JustifyContent::Center),
-            ..Default::default()
-        })
-        .fill(t.bg_panel)
-        .text_aligned(format!("{}", row + 1), 12.0, t.fg_muted, Alignment::Center),
-    );
-    for c in 0..VISIBLE_COLS {
-        let cr = CellRef::new(c, row);
-        cells.push(cell_view(t, wb, selected, cr));
-    }
-    View::new(Style {
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(CELL_H),
-        },
-        ..Default::default()
-    })
-    .children(cells)
-}
-
-fn cell_view(t: &Theme, wb: &Workbook, selected: CellRef, cr: CellRef) -> View<Msg> {
-    let is_sel = cr == selected;
-    let value = wb.value(cr);
-    let display = match &value {
-        SheetValue::Empty => String::new(),
-        _ => value.to_display_string(),
-    };
-    let is_error = matches!(value, SheetValue::Error(_));
-    let is_text = matches!(value, SheetValue::Text(_));
-
-    let bg = if is_sel { t.accent } else { t.bg_app };
-    let fg = if is_sel {
-        // Sobre accent queremos texto contrastante; usamos fg_text del
-        // tema asumiendo dark + accent legible (los temas current lo son).
-        t.fg_text
-    } else if is_error {
-        Color::from_rgba8(220, 90, 90, 255)
-    } else {
-        t.fg_text
-    };
-    let alignment = if is_text {
-        Alignment::Start
-    } else {
-        Alignment::End
-    };
-
-    View::new(Style {
-        size: Size {
-            width: length(CELL_W),
-            height: length(CELL_H),
+            height: percent(1.0_f32),
         },
         padding: Rect {
             left: length(6.0_f32),
@@ -447,19 +411,149 @@ fn cell_view(t: &Theme, wb: &Workbook, selected: CellRef, cr: CellRef) -> View<M
         ..Default::default()
     })
     .fill(bg)
-    .hover_fill(t.bg_panel)
-    .text_aligned(display, 12.5, fg, alignment)
-    .on_click(Msg::SelectCell(cr))
+    .text_aligned(text, 12.5, fg, text_align);
+    if let Some(h) = hover {
+        inner = inner.hover_fill(h);
+    }
+    if let Some(msg) = on_click {
+        inner = inner.on_click(msg);
+    }
+    View::new(Style {
+        size: Size {
+            width: length(width_px),
+            height: length(height_px),
+        },
+        padding: Rect {
+            left: length(0.0_f32),
+            right: length(1.0_f32),
+            top: length(0.0_f32),
+            bottom: length(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(palette::GRID_LINE)
+    .children(vec![inner])
 }
 
-fn status_bar_view(t: &Theme, status: &Status) -> View<Msg> {
-    let bg = match status.kind {
-        StatusKind::Info => t.bg_panel,
-        StatusKind::Error => Color::from_rgba8(120, 40, 40, 255),
+fn column_header_row() -> View<Msg> {
+    let mut cells: Vec<View<Msg>> = Vec::new();
+    // Esquina vacía — más oscura para anclar visualmente la grilla.
+    cells.push(bordered_cell(
+        ROW_HEADER_W,
+        CELL_H,
+        palette::BG_HEADER,
+        None,
+        palette::FG_HEADER,
+        String::new(),
+        Alignment::Center,
+        None,
+    ));
+    for c in 0..VISIBLE_COLS {
+        cells.push(bordered_cell(
+            CELL_W,
+            CELL_H,
+            palette::BG_HEADER,
+            None,
+            palette::FG_HEADER,
+            CellRef::col_label(c),
+            Alignment::Center,
+            None,
+        ));
+    }
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(CELL_H),
+        },
+        ..Default::default()
+    })
+    .children(cells)
+}
+
+fn data_row(wb: &Workbook, selected: CellRef, row: u32) -> View<Msg> {
+    let is_active_row = row == selected.row;
+    let mut cells: Vec<View<Msg>> = Vec::new();
+    // Cabecera de fila — accent suave si la fila contiene la celda activa.
+    let header_bg = if is_active_row {
+        palette::BG_PANEL_ALT
+    } else {
+        palette::BG_HEADER
     };
-    let fg = match status.kind {
-        StatusKind::Info => t.fg_muted,
-        StatusKind::Error => Color::from_rgba8(255, 220, 220, 255),
+    let header_fg = if is_active_row {
+        palette::ACCENT
+    } else {
+        palette::FG_HEADER
+    };
+    cells.push(bordered_cell(
+        ROW_HEADER_W,
+        CELL_H,
+        header_bg,
+        None,
+        header_fg,
+        format!("{}", row + 1),
+        Alignment::Center,
+        None,
+    ));
+    for c in 0..VISIBLE_COLS {
+        let cr = CellRef::new(c, row);
+        cells.push(cell_view(wb, selected, cr));
+    }
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(CELL_H),
+        },
+        ..Default::default()
+    })
+    .children(cells)
+}
+
+fn cell_view(wb: &Workbook, selected: CellRef, cr: CellRef) -> View<Msg> {
+    let is_sel = cr == selected;
+    let value = wb.value(cr);
+    let display = match &value {
+        SheetValue::Empty => String::new(),
+        _ => value.to_display_string(),
+    };
+    let is_error = matches!(value, SheetValue::Error(_));
+    let is_text = matches!(value, SheetValue::Text(_));
+
+    let bg = if is_sel {
+        palette::ACCENT
+    } else if is_error {
+        palette::ERROR_BG
+    } else {
+        palette::BG_CELL
+    };
+    let fg = if is_sel {
+        palette::ACCENT_FG
+    } else if is_error {
+        palette::ERROR
+    } else {
+        palette::FG_TEXT
+    };
+    let alignment = if is_text {
+        Alignment::Start
+    } else {
+        Alignment::End
+    };
+
+    bordered_cell(
+        CELL_W,
+        CELL_H,
+        bg,
+        if is_sel { None } else { Some(palette::BG_CELL_HOVER) },
+        fg,
+        display,
+        alignment,
+        Some(Msg::SelectCell(cr)),
+    )
+}
+
+fn status_bar_view(status: &Status) -> View<Msg> {
+    let (bg, fg) = match status.kind {
+        StatusKind::Info => (palette::BG_PANEL, palette::FG_MUTED),
+        StatusKind::Error => (palette::ERROR_BG, palette::ERROR),
     };
     View::new(Style {
         size: Size {
@@ -467,8 +561,8 @@ fn status_bar_view(t: &Theme, status: &Status) -> View<Msg> {
             height: length(STATUS_H),
         },
         padding: Rect {
-            left: length(8.0_f32),
-            right: length(8.0_f32),
+            left: length(10.0_f32),
+            right: length(10.0_f32),
             top: length(0.0_f32),
             bottom: length(0.0_f32),
         },
@@ -477,6 +571,24 @@ fn status_bar_view(t: &Theme, status: &Status) -> View<Msg> {
     })
     .fill(bg)
     .text_aligned(status.text.clone(), 12.0, fg, Alignment::Start)
+}
+
+/// Theme custom: `Theme::dark()` con overrides para que `text-input`
+/// (que se construye desde un Theme) use nuestra paleta dark-sheet.
+fn dark_sheet_theme() -> Theme {
+    let mut t = Theme::dark();
+    t.bg_app = palette::BG_APP;
+    t.bg_panel = palette::BG_PANEL;
+    t.bg_panel_alt = palette::BG_PANEL_ALT;
+    t.bg_input = palette::BG_CELL;
+    t.bg_input_focus = palette::BG_PANEL_ALT;
+    t.fg_text = palette::FG_TEXT;
+    t.fg_muted = palette::FG_MUTED;
+    t.fg_placeholder = palette::FG_PLACEHOLDER;
+    t.border = palette::GRID_LINE;
+    t.border_focus = palette::ACCENT;
+    t.accent = palette::ACCENT;
+    t
 }
 
 fn seed(wb: &mut Workbook) {
