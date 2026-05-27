@@ -589,3 +589,8 @@ markup5ever_rcdom = "0.39"
 cssparser = "0.35"
 url = "2"
 ureq = { version = "2", default-features = false, features = ["tls"] }
+
+# === takiy-synth (SoundFont MIDI) ===
+# rustysynth = sintetizador SF2 puro Rust, MIT. Reemplaza el oscilador
+# feo de takiy-synth por muestras reales (FluidR3, GeneralUser GS, etc).
+rustysynth = "1.3"

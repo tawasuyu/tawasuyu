@@ -9,6 +9,7 @@ description = "takiy — síntesis: render de un Score a audio PCM. Osciladores 
 
 [dependencies]
 takiy-core = { path = "../takiy-core" }
+rustysynth = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
