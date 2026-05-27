@@ -1,0 +1,119 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Qué es gioser
+
+Suite vertical en Rust (kernel propio, identidad, motor gráfico, navegador, ERP, shell, broker, simulador...) organizada como un solo Cargo workspace de ~210 crates. La arquitectura está embebida en el filesystem: cuatro cuadrantes (`00_unanchay`/`01_yachay`/`02_ruway`/`03_ukupacha`) corresponden a las cuatro fases del ciclo de la información (PERCIBIR / CONOCER / HACER / RAÍZ). Mover un dominio de cuadrante cambia su naturaleza — no son carpetas administrativas.
+
+Lectura previa obligatoria al tocar cualquier cosa de fondo: `README.md`, `PLAN.md`, `WAWA.md` (este último describe el SO bare‑metal `wawa`, que vive aparte del workspace global). Hay SDDs específicos para dominios complejos: `02_ruway/llimphi/SDD.md`, `02_ruway/wawa/SDD.md`, `02_ruway/supay/SDD.md`, `01_yachay/dominium/SDD.md`, `00_unanchay/puriy/SDD.md` — son la fuente autoritativa cuando difieren con esta guía.
+
+## Reglas duras del repo
+
+1. **Un dominio = un crate raíz con subcrates plugin.** Nada de proliferación lateral. Splittear crates > ~1.500–2.000 LOC.
+2. **Las UIs son frontends intercambiables sobre `*-core` agnósticos.** La lógica de dominio no sabe quién la pinta.
+3. **GPUI está extinto** (2026-05-26). Todo gráfico nuevo va sobre **Llimphi** (`02_ruway/llimphi/*`: `hal/raster/layout/text/ui` + widgets + modules). Stack: `wgpu` + `vello` + `taffy` + `parley`, bucle Elm `input→update→view→layout→raster→present`. No agregar dependencias GPUI ni código nuevo sobre él.
+4. **Formatos ajenos entran por puentes en `shared/foreign-*`**, nunca al núcleo de las apps. Las apps siempre trabajan en formato nativo (BLAKE3 + DAG + postcard). Hoy sólo existe `shared/foreign-docx`; el resto de la familia (`foreign-xlsx`/`-pptx`/`-psd`) está planificada en `PLAN.md` §6.ter pero todavía no en disco — no asumir que existen al diseñar.
+5. **`cargo check --workspace` debe pasar en `main` siempre** — es el smoke test mínimo.
+6. **Nombres con carga semántica fuerte se respetan en su idioma** (mayormente quechua/español). No retraducir `khipu`, `rimay`, `pluma`, `wawa`, `mirada`, `nahual`, `chasqui`, `takiy`, `agora`, `arje`, `minga`, `shuma`, `nakui`, `iniy`, `tinkuy`, `chaka`, `pineal`, `puriy`, `supay`, `sandokan`, `dominium`, `cosmos`, `tullpu`, `yupay`, `llimphi`, `akasha`, `unanchay`, `yachay`, `ruway`, `ukupacha`.
+7. **Comentarios y mensajes de commit en español.** Es la convención del repo (ver `git log`).
+
+## Layout del workspace
+
+```
+00_unanchay/   PERCIBIR  — pluma · khipu · rimay · chaka · pineal · puriy
+01_yachay/     CONOCER   — cosmos · dominium · nakui · iniy · tinkuy
+02_ruway/      HACER     — mirada · shuma · nahual · chasqui · takiy · llimphi · supay · gioser-edit · wawa (host-side)
+03_ukupacha/   RAÍZ      — arje · wawa (kernel + apps WASM) · agora · minga · wawa-explorer
+shared/                  — sandokan · auth · card · ssh · format · foreign-* · rimay-localize · wawa-config · forth-emisor
+web/                     — landing sobria (no producto)
+```
+
+Subcrates dentro de un dominio siguen el patrón `<dominio>-{core,app,cli,server,store,...}` o, para UI Llimphi, `<dominio>-<rol>-llimphi`. Demos ejecutables suelen vivir como `examples/` dentro del crate de UI correspondiente.
+
+### `03_ukupacha/wawa` está **excluido** del workspace raíz
+
+El kernel SASOS de wawa compila para `x86_64-unknown-none` con `panic = "abort"`, incompatible con el perfil global. `Cargo.toml` lo excluye explícitamente. `wawa-boot` lo consume como `[dependencies.kernel]` con `artifact = "bin"`. Los crates compartidos (`format`, `akasha`, `mirada-layout`, `forth-emisor`, `pluma-notebook-core`) cruzan la frontera referenciados por `path` — deben mantenerse `#![no_std]`.
+
+## Comandos
+
+### Workspace global (host)
+
+```bash
+cargo check --workspace                          # smoke test mínimo: debe pasar siempre
+cargo build --workspace --release
+cargo test -p <crate>                            # tests de un crate puntual
+cargo run -p <crate> --example <demo> --release  # demos ejecutables (Llimphi)
+```
+
+Muchas apps tienen `examples/*_demo.rs` que son la forma esperada de probar features sin levantar la suite completa (ej. `pluma-editor-llimphi` tiene `multilienzo_demo`, `multilienzo_llm_demo`, `multilienzo_completo_demo`, `cuerpo_ide_demo`, `editor_unico_demo`; `pluma-notebook-kernel-{dominium,cosmos,llm}` traen `notebook_*_demo`).
+
+### Landing web (`web/gioser-web`)
+
+```bash
+./scripts/build-gioser-web.sh dev       # cargo build + wasm-bindgen, ~10 s
+./scripts/build-gioser-web.sh release   # opt-level=3 + lto + strip, ~30 s
+# output queda en web/gioser-web/pkg/ (gioser_web.js + gioser_web_bg.wasm)
+```
+
+Necesita `wasm-bindgen-cli` en la versión **exacta** de `Cargo.lock` (hoy 0.2.121; `grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | head` para confirmar) — si difiere, el JS no carga el `.wasm`. La landing es la única pieza del workspace que cruza el puente JS; no es producto, sólo cartel.
+
+### Editor de archivos rápido (`gioser-edit`)
+
+```bash
+cargo run -p gioser-edit --release   # file tree + text-editor Llimphi sobre archivos reales del workspace
+```
+
+Útil para ejercitar features del `llimphi-widget-text-editor` (selección, undo, brackets, clipboard) sin levantar una app de dominio.
+
+### Núcleos `no_std` compartidos
+
+```bash
+./scripts/check-shared-cores.sh           # valida los 5 no_std (format, akasha, mirada-layout, forth-emisor, pluma-notebook-core)
+./scripts/check-shared-cores.sh format    # un solo núcleo
+```
+
+Exige `rustup target add wasm32-unknown-unknown`. La ley: si un tipo viaja por Akasha, vive en disco direccionado por contenido, o se comparte entre kernel y userspace, su crate compila sin `std`.
+
+### Kernel bare‑metal y apps WASM (`03_ukupacha/wawa`)
+
+```bash
+cd 03_ukupacha/wawa/wawa-kernel
+cargo +nightly check --target x86_64-unknown-none -Z build-std=core,alloc
+
+cd 03_ukupacha/wawa
+cargo +nightly run -p boot -Z bindeps                 # forja imagen UEFI y arranca en QEMU
+
+cd 03_ukupacha/wawa/apps/<app>
+cargo build --target wasm32-unknown-unknown --release # luego copiar el .wasm a kernel/assets/
+
+./scripts/build-pluma.sh                              # pipeline cargo + wasm-opt + consolidación en assets/
+```
+
+Toolchain: nightly con `rust-src`, targets `wasm32-unknown-unknown` y `x86_64-unknown-none`.
+
+### LLM en pluma — backends y envs
+
+`pluma-llm` es una fachada transparente (`LlmConfig{kind, model?, ...}` → `Arc<dyn ChatClient>`). Backends: Anthropic, Gemini, DeepSeek, Cohere, Ollama, Mock. `from_env()` autodetecta vía `PLUMA_LLM_BACKEND` o la primera env presente entre `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`/`GOOGLE_API_KEY`, `DEEPSEEK_API_KEY`, `COHERE_API_KEY`. Sin credenciales cae a Mock — los demos arrancan igual.
+
+### Daemon de embeddings
+
+`rimay-verbo-daemon-bin` sirve un `Provider` por socket Unix. Consumidores (`pluma-semantic`, `pluma-align-embeddings`, `khipu`, `chasqui`) cambian `MockProvider::default()` por `DaemonClient::connect("$XDG_RUNTIME_DIR/verbo.sock").await?`. Una instancia = un modelo; multi-modelo = N daemons.
+
+```bash
+cargo run -p rimay-verbo-daemon-bin -- --provider fastembed   # default multilingual-e5-small (384d)
+cargo run -p rimay-verbo-daemon-bin -- --provider mock --dim 384
+```
+
+## Arquitectura — el “porqué” detrás de varios archivos
+
+- **Llimphi y el bucle Elm.** `llimphi-ui::App` define `update(Msg) -> ()` + `view() -> View`. `Handle<Msg>` es `Send + Clone` — workers de simulación reentran al `update` vía `Handle::dispatch(Msg::X)` o `Handle::spawn_periodic(Duration, Fn() -> Msg)`. Composición: `tiled_view_reorderable_cols(cols)` para paneles draggables (drag-to-swap por title bar), `splitter` (drag de divisores), `nodegraph` (DAG visual con pins y cables Bezier), `text-editor` (ropey + multi-cursor + undo). Paleta semántica en `llimphi-theme` (`Palette::from_theme(&theme)`). `View::paint_with(Fn(&mut Scene, &mut Typesetter, PaintRect))` para canvas custom; `View::image(peniko::Image)` para mostrar PNG/JPEG decodificados.
+- **Pluma multilienzo (haz de cuerpos).** Un documento es un haz de `Cuerpo`s (lienzos: idioma, tono, audiencia, resumen, versión) sobre el mismo material, alineados párrafo-a-párrafo por `CartaHebras`. `NarrativeAtom` mantiene `id: Uuid` estable; `Transformacion` (Traducir/Tono/Resumir/Reescribir/Custom-Rhai) deriva un cuerpo hija de una madre. Si la madre cambia, la hija queda *stale* y la UI pinta la hebra punteada — un botón regenera. Persistencia en `pluma-store` (`sled` + trees nominales `atoms / cuerpos / transformaciones / cartas / estado_ui`). Ver `PLAN.md` §11 para el modelo completo.
+- **Pluma notebook.** DAG reactivo de celdas (`pluma-notebook-core`) ejecutado por `pluma-notebook-exec::run_from` en orden topológico, con kernels intercambiables (`pluma-notebook-kernel-{llm,dominium,cosmos,python,wasm}`). Bindeo visual: `pluma-notebook-graph-llimphi` sobre `llimphi-widget-nodegraph` — drag pin→pin agrega dependencia y dispara `run_from` del cono; right-click ejecuta una celda. Outputs incluyen `OutputPayload::Image{bytes,mime}` para que un kernel produzca un PNG y la UI lo muestre directamente.
+- **Wawa (SO bare‑metal).** Reactor cooperativo en `async_system/` (PIT 100Hz + IRQs). Apps son módulos WASM `cdylib` aislados por `wasmi`; capacidades **no se registran** en el linker si el bit del bitfield `Permisos` no está puesto (frontera física, no tabla de permisos). Almacenamiento direccionado por contenido (`almacen.rs`, BLAKE3 + log + GC mark/sweep/swap). Protocolo de red propio (`akasha`) en EtherType propio, sin TCP/IP. Ver `WAWA.md` §0–§14.
+- **Cosmos refactor astrométrico puro.** `cosmos-ephemeris` + `cosmos-skywatch` + `cosmos-sundial` + `cosmos-tides` + `cosmos-transits` son extractos independientes del motor astrológico (`cosmos-engine`). Sirven sundial / mareas / navegación / planning sin tocar la maquinaria de cartas.
+- **`agora` no provee firma todavía.** `format::Firma` es transporte sin verificación. La verificación de firmas Ed25519 sobre canales y manifiesto es pendiente (ver `WAWA.md` §14.1) y la decisión arquitectónica es que vive en userspace, no en kernel.
+
+## Después de cada bloque funcional
+
+`git add` específicos + commit + push a `origin/main`, sin pedir permiso (operaciones no destructivas). El estilo de commit del repo: `tipo(scope): mensaje corto en minúsculas y español` (`git log` para ver el patrón vigente).
