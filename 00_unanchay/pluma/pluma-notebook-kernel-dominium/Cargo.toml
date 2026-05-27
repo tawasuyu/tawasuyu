@@ -13,6 +13,7 @@ pluma-notebook-core = { path = "../pluma-notebook-core" }
 pluma-notebook-exec = { path = "../pluma-notebook-exec" }
 dominium-core = { path = "../../../01_yachay/dominium/dominium-core" }
 dominium-physics = { path = "../../../01_yachay/dominium/dominium-physics" }
+png = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

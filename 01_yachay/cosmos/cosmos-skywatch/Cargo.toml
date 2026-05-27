@@ -1,0 +1,22 @@
+[package]
+name = "cosmos-skywatch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "cosmos-skywatch — qué se ve esta noche desde una ubicación dada. Capa fina sobre cosmos-ephemeris/cosmos-time/cosmos-core para convertir posiciones ICRS de cuerpos del sistema solar a coordenadas horizontales (alt/az) topocéntricas. Demuestra que el motor astrométrico sirve a dominios no-astrológicos (astrofoto planning, sundial, navegación)."
+
+[dependencies]
+cosmos-core = { workspace = true }
+cosmos-time = { path = "../cosmos-time" }
+cosmos-ephemeris = { path = "../cosmos-ephemeris" }
+serde = { workspace = true, optional = true }
+
+[features]
+default = []
+serde = ["dep:serde"]
+
+[[example]]
+name = "skywatch_lima_demo"
+path = "examples/skywatch_lima_demo.rs"

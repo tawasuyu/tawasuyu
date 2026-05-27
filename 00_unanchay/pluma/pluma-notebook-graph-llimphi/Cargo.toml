@@ -18,6 +18,7 @@ llimphi-widget-nodegraph = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 pluma-notebook-kernel-dominium = { path = "../pluma-notebook-kernel-dominium" }
+image = { workspace = true }
 
 [[example]]
 name = "notebook_graph_demo"

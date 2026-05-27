@@ -18,6 +18,7 @@
 //! | `dominium-tick`   | `"N"` o vacío                | Corre N ticks (default 1); output = stats post.              |
 //! | `dominium-stats`  | (vacío)                      | Lee `WorldStats` sin tick.                                   |
 //! | `dominium-param`  | `"NAME=VALUE"` por línea     | Setea uno o más campos `f32` de `SimParams`.                 |
+//! | `dominium-render` | `"W H [SCALE]"` (px)         | Rasteriza grid + lemmings a PNG, output `OutputPayload::Image`. |
 //!
 //! Cualquier otra `language` devuelve `KernelError::Runtime` con
 //! mensaje claro.
@@ -103,10 +104,11 @@ impl Kernel for DominiumKernel {
             "dominium-tick" => exec_tick(source, &self.state),
             "dominium-stats" => exec_stats(&self.state),
             "dominium-param" => exec_param(source, &self.state),
+            "dominium-render" => exec_render(source, &self.state),
             other => Err(KernelError::Runtime(format!(
                 "lenguaje no reconocido por el kernel dominium: '{other}' \
                  (esperaba: dominium-world | dominium-seed | dominium-tick | \
-                 dominium-stats | dominium-param)"
+                 dominium-stats | dominium-param | dominium-render)"
             ))),
         }
     }
@@ -285,6 +287,154 @@ fn set_param_field(p: &mut SimParams, name: &str, v: f32) -> Result<(), KernelEr
         }
     }
     Ok(())
+}
+
+fn exec_render(
+    source: &str,
+    state: &Arc<Mutex<DominiumState>>,
+) -> Result<KernelOutput, KernelError> {
+    let mut it = source.split_whitespace();
+    let w_px: u32 = it
+        .next()
+        .map(|s| {
+            s.parse::<u32>().map_err(|_| {
+                KernelError::Runtime(format!("WIDTH inválido: '{s}'"))
+            })
+        })
+        .transpose()?
+        .unwrap_or(256);
+    let h_px: u32 = it
+        .next()
+        .map(|s| {
+            s.parse::<u32>().map_err(|_| {
+                KernelError::Runtime(format!("HEIGHT inválido: '{s}'"))
+            })
+        })
+        .transpose()?
+        .unwrap_or(256);
+    // SCALE futuro (zoom > 1.0); por ahora se acepta y se ignora.
+    let _scale: f32 = it
+        .next()
+        .map(|s| s.parse::<f32>().unwrap_or(1.0))
+        .unwrap_or(1.0);
+
+    if w_px == 0 || h_px == 0 || w_px > 4096 || h_px > 4096 {
+        return Err(KernelError::Runtime(format!(
+            "WIDTH/HEIGHT debe estar en [1, 4096], llegó {w_px}x{h_px}"
+        )));
+    }
+
+    let s = lock(state)?;
+    let world = s
+        .world
+        .as_ref()
+        .ok_or_else(|| KernelError::Runtime(
+            "no hay world: llamá a dominium-world WxH primero".into(),
+        ))?;
+    let png = rasterize_world(world, w_px, h_px);
+    Ok(CellOutput {
+        stdout: format!("rasterizado {w_px}×{h_px} px ({} bytes PNG)", png.len()),
+        value: Some(format!("{}x{}", w_px, h_px)),
+        payload: OutputPayload::Image {
+            width: w_px,
+            height: h_px,
+            mime: "image/png".to_string(),
+            bytes: png,
+        },
+    })
+}
+
+/// Rasteriza el `World` a un PNG RGBA `w_px × h_px`. Mapeo:
+/// - cada pixel del PNG corresponde a una posición (x, y) de la grilla
+///   muestreada con vecino más cercano;
+/// - el color de la celda es una combinación de las 5 capas normalizadas
+///   contra su pico actual (so las escalas no colapsan): rojo = poder,
+///   verde = materia, azul = psique, amarillo (R+G) = oro, marrón
+///   atenuante = degradación;
+/// - cada lemming se pinta como un punto blanco de 2×2 px (clamped).
+fn rasterize_world(world: &dominium_core::World, w_px: u32, h_px: u32) -> Vec<u8> {
+    let g = &world.grid;
+    let gw = g.width.max(1) as f32;
+    let gh = g.height.max(1) as f32;
+
+    // Peaks para normalizar — evita que escenas vacías queden negras
+    // por completo (un valor pequeño se vuelve visible relativamente).
+    let peak = |layer: &[f32]| -> f32 {
+        layer
+            .iter()
+            .copied()
+            .fold(0.0_f32, |m, v| if v > m { v } else { m })
+            .max(1e-6)
+    };
+    let p_mat = peak(&g.materia);
+    let p_psi = peak(&g.psique);
+    let p_pod = peak(&g.poder);
+    let p_oro = peak(&g.oro);
+    let p_deg = peak(&g.degradacion);
+
+    let mut buf: Vec<u8> = vec![0u8; (w_px as usize) * (h_px as usize) * 4];
+    for py in 0..h_px {
+        let gy = ((py as f32) * gh / h_px as f32).floor() as usize;
+        let gy = gy.min(g.height - 1);
+        for px in 0..w_px {
+            let gx = ((px as f32) * gw / w_px as f32).floor() as usize;
+            let gx = gx.min(g.width - 1);
+            let idx = g.idx(gx, gy);
+            let mat = g.materia[idx] / p_mat;
+            let psi = g.psique[idx] / p_psi;
+            let pod = g.poder[idx] / p_pod;
+            let oro = g.oro[idx] / p_oro;
+            let deg = g.degradacion[idx] / p_deg;
+
+            // Mezcla: R = poder + 0.6*oro; G = materia + 0.6*oro; B = psique.
+            // Degradación atenúa todo (suelo quemado).
+            let atten = (1.0 - 0.5 * deg).max(0.2);
+            let r = ((pod + 0.6 * oro) * atten).clamp(0.0, 1.0);
+            let g_c = ((mat + 0.6 * oro) * atten).clamp(0.0, 1.0);
+            let b = (psi * atten).clamp(0.0, 1.0);
+            let off = ((py as usize) * w_px as usize + px as usize) * 4;
+            buf[off] = (r * 255.0) as u8;
+            buf[off + 1] = (g_c * 255.0) as u8;
+            buf[off + 2] = (b * 255.0) as u8;
+            buf[off + 3] = 255;
+        }
+    }
+
+    // Pinta lemmings como pixels blancos (2×2) por agente. Coords
+    // físicas en (0..g.width-1, 0..g.height-1) → (0..w_px-1, 0..h_px-1).
+    let inv_gw = if g.width > 1 { (w_px as f32 - 1.0) / (g.width as f32 - 1.0) } else { 0.0 };
+    let inv_gh = if g.height > 1 { (h_px as f32 - 1.0) / (g.height as f32 - 1.0) } else { 0.0 };
+    for i in 0..world.lemmings.len() {
+        let lx = world.lemmings.pos_x[i];
+        let ly = world.lemmings.pos_y[i];
+        let px = (lx * inv_gw) as i32;
+        let py = (ly * inv_gh) as i32;
+        for dy in 0..2i32 {
+            for dx in 0..2i32 {
+                let x = (px + dx).clamp(0, w_px as i32 - 1) as usize;
+                let y = (py + dy).clamp(0, h_px as i32 - 1) as usize;
+                let off = (y * w_px as usize + x) * 4;
+                buf[off] = 255;
+                buf[off + 1] = 255;
+                buf[off + 2] = 255;
+                buf[off + 3] = 255;
+            }
+        }
+    }
+
+    encode_png_rgba(&buf, w_px, h_px)
+}
+
+fn encode_png_rgba(rgba: &[u8], w: u32, h: u32) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::with_capacity(rgba.len() / 2);
+    {
+        let mut encoder = png::Encoder::new(&mut out, w, h);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().expect("encoder header");
+        writer.write_image_data(rgba).expect("encoder data");
+    }
+    out
 }
 
 fn stats_to_output(stats: &WorldStats, ticks_run: Option<usize>) -> KernelOutput {
@@ -526,6 +676,62 @@ mod tests {
         let k = kernel();
         let r = k.execute("hola", "python").await;
         assert!(matches!(r, Err(KernelError::Runtime(ref m)) if m.contains("no reconocido")));
+    }
+
+    #[tokio::test]
+    async fn render_sin_world_falla() {
+        let k = kernel();
+        let r = k.execute("64 64", "dominium-render").await;
+        assert!(matches!(r, Err(KernelError::Runtime(ref m)) if m.contains("dominium-world")));
+    }
+
+    #[tokio::test]
+    async fn render_produce_png_payload() {
+        let k = kernel();
+        k.execute("16 16", "dominium-world").await.unwrap();
+        k.execute("20 1", "dominium-seed").await.unwrap();
+        let out = k.execute("64 64", "dominium-render").await.unwrap();
+        match out.payload {
+            OutputPayload::Image {
+                width,
+                height,
+                mime,
+                bytes,
+            } => {
+                assert_eq!(width, 64);
+                assert_eq!(height, 64);
+                assert_eq!(mime, "image/png");
+                // Header PNG: 89 50 4E 47 0D 0A 1A 0A
+                assert_eq!(
+                    &bytes[..8],
+                    &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+                );
+            }
+            other => panic!("se esperaba Image, llegó {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn render_defaults_256x256() {
+        let k = kernel();
+        k.execute("8 8", "dominium-world").await.unwrap();
+        let out = k.execute("", "dominium-render").await.unwrap();
+        if let OutputPayload::Image { width, height, .. } = out.payload {
+            assert_eq!(width, 256);
+            assert_eq!(height, 256);
+        } else {
+            panic!("se esperaba Image");
+        }
+    }
+
+    #[tokio::test]
+    async fn render_dimensiones_invalidas_falla() {
+        let k = kernel();
+        k.execute("8 8", "dominium-world").await.unwrap();
+        let r = k.execute("0 100", "dominium-render").await;
+        assert!(matches!(r, Err(KernelError::Runtime(_))));
+        let r2 = k.execute("100 8000", "dominium-render").await;
+        assert!(matches!(r2, Err(KernelError::Runtime(_))));
     }
 
     #[tokio::test]

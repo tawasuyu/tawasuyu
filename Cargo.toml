@@ -101,6 +101,7 @@ members = [
     "01_yachay/cosmos/cosmos-pointing",
     "01_yachay/cosmos/cosmos-render",
     "01_yachay/cosmos/cosmos-server",
+    "01_yachay/cosmos/cosmos-skywatch",
     "01_yachay/cosmos/cosmos-sky",
     "01_yachay/cosmos/cosmos-store",
     "01_yachay/cosmos/cosmos-time",
