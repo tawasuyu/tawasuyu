@@ -21,6 +21,8 @@ use iniy_graph::GrafoCreencias;
 use iniy_nli::{relacion_lexica, MotorNli, MotorNliLexico};
 use iniy_nli_llm::MotorNliLlm;
 use iniy_store::AsercionAtribuida;
+use rimay_verbo_core::{EmbeddingVector, Provider};
+use std::sync::Arc;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -78,6 +80,15 @@ enum Cmd {
         /// (vía `pluma_llm::from_env`).
         #[arg(long, default_value = "lexico")]
         backend: BackendNli,
+        /// Pre-filtra pares por similitud coseno de embeddings; solo los
+        /// pares con cos ≥ `--umbral-embeddings` se mandan al backend.
+        /// Reduce drásticamente las llamadas LLM en corpus grandes.
+        /// Default OFF (todos los pares al backend).
+        #[arg(long)]
+        prefiltro_embeddings: bool,
+        /// Umbral de cos para pre-filtrado. Default 0.55 (multilingual-e5-small).
+        #[arg(long, default_value_t = 0.55)]
+        umbral_embeddings: f32,
     },
     /// Imprime las N aserciones más contradictorias entre sí.
     Contradictions {
@@ -171,6 +182,25 @@ fn etiqueta_fuente(att: &AsercionAtribuida) -> String {
 
 fn fila_opinion(op: &Opinion) -> String {
     format!("b={:.2} d={:.2} u={:.2}", op.creencia, op.descreencia, op.incertidumbre)
+}
+
+/// Intenta fastembed (multilingual-e5-small, local, ~120MB ONNX descargado al
+/// primer uso). Si falla (sin internet en el primer arranque, ONNX runtime
+/// roto, etc.) cae a un mock determinista con warning. El mock NO da
+/// similaridades semánticas reales — solo permite probar el flujo.
+async fn construir_provider_embeddings() -> Result<Arc<dyn Provider>> {
+    let fastembed_result = tokio::task::spawn_blocking(|| {
+        rimay_verbo_fastembed::FastembedProvider::try_default()
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("spawn_blocking falló: {e}"))?;
+    match fastembed_result {
+        Ok(p) => Ok(Arc::new(p)),
+        Err(e) => {
+            eprintln!("warning: fastembed falló ({e}); cayendo a MockProvider — el pre-filtro NO será semántico");
+            Ok(Arc::new(rimay_verbo_mock::MockProvider::default()))
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -318,7 +348,7 @@ async fn main() -> Result<()> {
                 println!("  … (+{} más, persistidas)", aserciones.len() - 8);
             }
         }
-        Cmd::Nli { doc_id, umbral, backend } => {
+        Cmd::Nli { doc_id, umbral, backend, prefiltro_embeddings, umbral_embeddings } => {
             let (aserciones, alcance) = match doc_id {
                 Some(d) => {
                     let id = parse_doc_id(&d)?;
@@ -342,13 +372,39 @@ async fn main() -> Result<()> {
                     Box::new(MotorNliLlm::nuevo(chat))
                 }
             };
+
+            // Pre-cómputo de embeddings (opcional).
+            let embeddings: Option<Vec<EmbeddingVector>> = if prefiltro_embeddings {
+                let provider = construir_provider_embeddings().await?;
+                println!("pre-filtro embeddings: {} (umbral cos ≥ {:.2})",
+                    provider.model_id().name, umbral_embeddings);
+                let textos: Vec<String> = aserciones.iter().map(|a| a.texto.clone()).collect();
+                let vecs = provider.embed_batch(&textos).await
+                    .map_err(|e| anyhow::anyhow!("embed_batch falló: {e}"))?;
+                Some(vecs)
+            } else {
+                None
+            };
+
             let total = aserciones.len() * (aserciones.len() - 1) / 2;
             let mut imps = Vec::new();
             let mut no_neutrales = 0usize;
             let mut hechos = 0usize;
+            let mut salteados_por_prefiltro = 0usize;
             for i in 0..aserciones.len() {
                 for j in (i + 1)..aserciones.len() {
-                    let rel = motor.evaluar(&aserciones[i], &aserciones[j]).await?;
+                    let rel = if let Some(vs) = &embeddings {
+                        let cos = vs[i].cosine(&vs[j])
+                            .map_err(|e| anyhow::anyhow!("cosine falló: {e}"))?;
+                        if cos < umbral_embeddings {
+                            salteados_por_prefiltro += 1;
+                            iniy_core::RelacionNli { entailment: 0.0, contradiction: 0.0, neutral: 1.0 }
+                        } else {
+                            motor.evaluar(&aserciones[i], &aserciones[j]).await?
+                        }
+                    } else {
+                        motor.evaluar(&aserciones[i], &aserciones[j]).await?
+                    };
                     hechos += 1;
                     if matches!(backend, BackendNli::Llm) && hechos % 10 == 0 {
                         eprintln!("  ... {hechos}/{total}");
@@ -365,6 +421,11 @@ async fn main() -> Result<()> {
             }
             store.persistir_implicaciones(&imps)?;
             println!("pares evaluados: {}", imps.len());
+            if prefiltro_embeddings {
+                println!("pares salteados por embeddings: {} ({:.0}%)",
+                    salteados_por_prefiltro,
+                    100.0 * salteados_por_prefiltro as f32 / total as f32);
+            }
             println!("relaciones no triviales: {}  (entailment o contradiction > 0)", no_neutrales);
             println!("persistido.");
         }
