@@ -11,7 +11,7 @@ use iniy_core::{Asercion, AsercionId, ClaseNli, Implicacion, Opinion};
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 pub struct GrafoCreencias {
     grafo: DiGraph<AsercionId, Implicacion>,
@@ -65,57 +65,90 @@ impl GrafoCreencias {
         self.grafo.edge_count()
     }
 
-    /// Propaga `op_inicial` desde `origen` por el grafo, descontando por el
-    /// score NLI de cada arista y fusionando cuando dos rutas convergen sobre
-    /// la misma aserción destino. Aristas tratadas como simétricas (las
-    /// implicaciones del corpus pueden venir indexadas en cualquier orden).
+    /// Propaga `op_inicial` desde `origen` por el grafo NLI, descontando por
+    /// el score de cada arista y FUSIONANDO opiniones cuando múltiples rutas
+    /// convergen sobre la misma aserción destino.
     ///
-    /// Algoritmo: BFS por niveles. En cada nivel, cada nodo nuevo recibe la
-    /// opinión derivada del nodo del nivel anterior con mejor score, y se
-    /// fusiona con cualquier opinión preexistente del mismo nivel. Se detiene
-    /// cuando ya no hay nodos nuevos por explorar (no propaga al ya-visitado
-    /// — evita loops y mantiene el costo O(V+E)).
+    /// Algoritmo: BFS por niveles. La opinión de un nodo `n` en nivel `k` se
+    /// computa como `Opinion::fusionar_muchas` de las opiniones derivadas
+    /// desde TODOS sus vecinos que estén en niveles `< k`. Un nodo solo entra
+    /// a la salida si tiene al menos una derivación no neutral.
     ///
-    /// Devuelve un mapa `AsercionId -> Opinion` que incluye al `origen` (con
-    /// `op_inicial`) y a cada aserción alcanzable que no fue neutral en alguna
-    /// arista del camino.
+    /// Esto convierte rutas convergentes en evidencia acumulada: si A → B y
+    /// A → C → B con scores suficientes, B fusiona las dos opiniones (con
+    /// menor incertidumbre que cualquiera de las dos sola).
+    ///
+    /// Aristas se tratan como simétricas para propagación: una arista NLI
+    /// premisa→hipótesis representa una relación que la creencia respeta en
+    /// ambas direcciones (apoyar A apoya B; descreer A descree B).
     pub fn propagar(&self, origen: AsercionId, op_inicial: Opinion) -> HashMap<AsercionId, Opinion> {
         let mut salida: HashMap<AsercionId, Opinion> = HashMap::new();
+        salida.insert(origen, op_inicial);
         let Some(&origen_idx) = self.indice.get(&origen) else {
-            salida.insert(origen, op_inicial);
             return salida;
         };
-        salida.insert(origen, op_inicial);
 
-        let mut visitados: HashMap<NodeIndex, Opinion> = HashMap::new();
-        visitados.insert(origen_idx, op_inicial);
-        let mut cola: VecDeque<NodeIndex> = VecDeque::from([origen_idx]);
+        // ops[idx] = opinión derivada del nodo `idx`. nivel[idx] = nivel BFS.
+        let mut ops: HashMap<NodeIndex, Opinion> = HashMap::new();
+        let mut nivel: HashMap<NodeIndex, usize> = HashMap::new();
+        ops.insert(origen_idx, op_inicial);
+        nivel.insert(origen_idx, 0);
 
-        while let Some(actual) = cola.pop_front() {
-            let op_actual = *visitados.get(&actual).expect("invariante de BFS");
-            // Vecinos en ambas direcciones (out + in): la implicación
-            // premisa→hipótesis se considera bi-direccionable a nivel de
-            // propagación de creencia (apoyar A apoya B y viceversa, con
-            // descuento por el score).
-            for dir in [Direction::Outgoing, Direction::Incoming] {
-                for eref in self.grafo.edges_directed(actual, dir) {
-                    let vecino = if dir == Direction::Outgoing { eref.target() } else { eref.source() };
-                    if visitados.contains_key(&vecino) {
-                        continue;
+        let mut frontera: HashSet<NodeIndex> = HashSet::from([origen_idx]);
+        let mut k: usize = 0;
+
+        while !frontera.is_empty() {
+            // Candidatos para nivel k+1 = vecinos no visitados de cualquier nodo en la frontera.
+            let mut candidatos: HashSet<NodeIndex> = HashSet::new();
+            for &actual in &frontera {
+                for dir in [Direction::Outgoing, Direction::Incoming] {
+                    for eref in self.grafo.edges_directed(actual, dir) {
+                        let vecino = if dir == Direction::Outgoing { eref.target() } else { eref.source() };
+                        if !nivel.contains_key(&vecino) {
+                            candidatos.insert(vecino);
+                        }
                     }
-                    let rel = &eref.weight().relacion;
-                    let op_derivada = if rel.entailment >= rel.contradiction && rel.entailment > 0.0 {
-                        op_actual.descontar(rel.entailment)
-                    } else if rel.contradiction > 0.0 {
-                        op_actual.invertir().descontar(rel.contradiction)
-                    } else {
-                        continue;
-                    };
-                    visitados.insert(vecino, op_derivada);
-                    salida.insert(self.grafo[vecino], op_derivada);
-                    cola.push_back(vecino);
                 }
             }
+            if candidatos.is_empty() {
+                break;
+            }
+            k += 1;
+            let mut nueva_frontera: HashSet<NodeIndex> = HashSet::new();
+            for cand in candidatos {
+                // Recolectar derivaciones desde TODOS los predecesores de niveles < k.
+                let mut derivadas: Vec<Opinion> = Vec::new();
+                for dir in [Direction::Outgoing, Direction::Incoming] {
+                    for eref in self.grafo.edges_directed(cand, dir) {
+                        let vecino = if dir == Direction::Outgoing { eref.target() } else { eref.source() };
+                        let Some(&niv_vecino) = nivel.get(&vecino) else { continue; };
+                        if niv_vecino >= k {
+                            continue;
+                        }
+                        let op_vecino = ops[&vecino];
+                        let rel = &eref.weight().relacion;
+                        let derivada = if rel.entailment >= rel.contradiction && rel.entailment > 0.0 {
+                            op_vecino.descontar(rel.entailment)
+                        } else if rel.contradiction > 0.0 {
+                            op_vecino.invertir().descontar(rel.contradiction)
+                        } else {
+                            continue;
+                        };
+                        derivadas.push(derivada);
+                    }
+                }
+                if derivadas.is_empty() {
+                    // El candidato no tiene aristas no-neutrales hacia el cono
+                    // explorado; no se propaga.
+                    continue;
+                }
+                let op_cand = Opinion::fusionar_muchas(&derivadas);
+                ops.insert(cand, op_cand);
+                nivel.insert(cand, k);
+                salida.insert(self.grafo[cand], op_cand);
+                nueva_frontera.insert(cand);
+            }
+            frontera = nueva_frontera;
         }
         salida
     }
@@ -210,6 +243,34 @@ mod tests {
         let op_c = map[&c.id];
         // creencia tras dos descuentos: 1.0 * 0.8 * 0.5 = 0.4
         assert!((op_c.creencia - 0.4).abs() < 1e-5);
+    }
+
+    #[test]
+    fn propagar_dos_caminos_convergentes_fusiona_bajando_incertidumbre() {
+        // Topología: A → B (e=0.6), A → C (e=0.6), B → D (e=0.6), C → D (e=0.6).
+        // D recibe dos rutas paralelas desde A. Cada una sola da
+        // creencia 0.6 * 0.6 = 0.36 con u alta. La fusión debe bajar la
+        // incertidumbre respecto a una sola ruta.
+        let mut g = GrafoCreencias::nuevo();
+        let a = aserc("A");
+        let b = aserc("B");
+        let c = aserc("C");
+        let d = aserc("D");
+        g.agregar_asercion(&a);
+        g.agregar_asercion(&b);
+        g.agregar_asercion(&c);
+        g.agregar_asercion(&d);
+        let e = |p, h, val| Implicacion { premisa: p, hipotesis: h,
+            relacion: RelacionNli { entailment: val, contradiction: 0.0, neutral: 1.0 - val } };
+        g.agregar_implicacion(e(a.id, b.id, 0.6));
+        g.agregar_implicacion(e(a.id, c.id, 0.6));
+        g.agregar_implicacion(e(b.id, d.id, 0.6));
+        g.agregar_implicacion(e(c.id, d.id, 0.6));
+        let map = g.propagar(a.id, Opinion::dogmatica_si());
+        // D debe estar presente y su u < u de una sola ruta (que sería 0.64).
+        let op_d = map[&d.id];
+        assert!(op_d.creencia > 0.3, "D recibió creencia: {op_d:?}");
+        assert!(op_d.incertidumbre < 0.64, "fusión debe bajar u, got: {}", op_d.incertidumbre);
     }
 
     #[test]
