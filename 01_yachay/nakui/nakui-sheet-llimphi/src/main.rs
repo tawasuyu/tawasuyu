@@ -84,6 +84,9 @@ enum Msg {
     Scroll { drow: i32, dcol: i32 },
     Undo,
     Redo,
+    Copy,
+    Cut,
+    Paste,
 }
 
 #[derive(Clone, Copy)]
@@ -107,6 +110,12 @@ struct Model {
     /// pinta `VISIBLE_ROWS × VISIBLE_COLS` celdas a partir de aquí.
     viewport_row: u32,
     viewport_col: u32,
+    /// Origen del último copy/cut interno: `(raw, source_cell)`. Si
+    /// al pegar el clipboard del sistema sigue conteniendo
+    /// exactamente ese mismo raw, sabemos que es un paste "Nakui →
+    /// Nakui" y aplicamos shift de fórmula. Si difiere (el user copió
+    /// algo de otro lado), el paste es literal.
+    clipboard_origin: Option<(String, CellRef)>,
 }
 
 #[derive(Default, Clone)]
@@ -148,6 +157,7 @@ impl App for NakuiSheetApp {
             theme: dark_sheet_theme(),
             viewport_row: 0,
             viewport_col: 0,
+            clipboard_origin: None,
         }
     }
 
@@ -228,6 +238,55 @@ impl App for NakuiSheetApp {
                     };
                 }
             },
+            Msg::Copy => {
+                let raw = model.wb.raw(model.selected).unwrap_or("").to_string();
+                match arboard::Clipboard::new()
+                    .and_then(|mut cb| cb.set_text(raw.clone()))
+                {
+                    Ok(()) => {
+                        model.clipboard_origin = Some((raw, model.selected));
+                        model.status = Status {
+                            text: format!("  ⧉ copiado: {}", model.selected),
+                            kind: StatusKind::Info,
+                        };
+                    }
+                    Err(e) => {
+                        model.status = Status {
+                            text: format!("  ✗ clipboard: {e}"),
+                            kind: StatusKind::Error,
+                        };
+                    }
+                }
+            }
+            Msg::Cut => {
+                let raw = model.wb.raw(model.selected).unwrap_or("").to_string();
+                match arboard::Clipboard::new()
+                    .and_then(|mut cb| cb.set_text(raw.clone()))
+                {
+                    Ok(()) => {
+                        model.clipboard_origin = Some((raw, model.selected));
+                        // Cut = copy + clear de la fuente.
+                        let _ = model.wb.clear_cell(model.selected);
+                        model.bar.set_text("");
+                        model.status = Status {
+                            text: format!("  ✂ cortado: {}", model.selected),
+                            kind: StatusKind::Info,
+                        };
+                    }
+                    Err(e) => {
+                        model.status = Status {
+                            text: format!("  ✗ clipboard: {e}"),
+                            kind: StatusKind::Error,
+                        };
+                    }
+                }
+            }
+            Msg::Paste => {
+                model.status = paste_into(&mut model.wb, model.selected, &model.clipboard_origin);
+                // Tras pegar, recargo la barra de fórmula con el nuevo
+                // raw de la celda destino.
+                model.bar.set_text(model.wb.raw(model.selected).unwrap_or(""));
+            }
             Msg::Redo => match model.wb.redo() {
                 Ok(Some(_)) => {
                     model.bar.set_text(model.wb.raw(model.selected).unwrap_or(""));
@@ -289,16 +348,19 @@ impl App for NakuiSheetApp {
         // otra interpretación de la tecla.
         if ev.modifiers.ctrl {
             if let Key::Character(s) = &ev.key {
-                let lc = s.to_lowercase();
-                if lc == "z" {
-                    return Some(if ev.modifiers.shift {
-                        Msg::Redo
-                    } else {
-                        Msg::Undo
-                    });
-                }
-                if lc == "y" {
-                    return Some(Msg::Redo);
+                match s.to_lowercase().as_str() {
+                    "z" => {
+                        return Some(if ev.modifiers.shift {
+                            Msg::Redo
+                        } else {
+                            Msg::Undo
+                        });
+                    }
+                    "y" => return Some(Msg::Redo),
+                    "c" => return Some(Msg::Copy),
+                    "x" => return Some(Msg::Cut),
+                    "v" => return Some(Msg::Paste),
+                    _ => {}
                 }
             }
         }
@@ -375,6 +437,75 @@ fn move_cell(cr: CellRef, dir: Dir) -> CellRef {
 
 fn applied_count(wb: &Workbook) -> usize {
     wb.applied_count()
+}
+
+/// Paste con shift-de-fórmulas si la fuente coincide con
+/// `clipboard_origin`. Si el clipboard del sistema cambió (el
+/// usuario copió texto de otra app), pega literal.
+fn paste_into(
+    wb: &mut Workbook,
+    dest: CellRef,
+    origin: &Option<(String, CellRef)>,
+) -> Status {
+    let payload = match arboard::Clipboard::new().and_then(|mut cb| cb.get_text()) {
+        Ok(t) => t,
+        Err(e) => {
+            return Status {
+                text: format!("  ✗ clipboard vacío: {e}"),
+                kind: StatusKind::Error,
+            };
+        }
+    };
+    // Caso 1: paste interno coherente con un copy/cut previo →
+    // shift de fórmulas. La fuente y el raw deben coincidir
+    // exactamente; si el user cambió la celda fuente entremedias,
+    // el origin queda desactualizado y caemos al paste literal.
+    if let Some((origin_raw, origin_cell)) = origin {
+        if *origin_raw == payload {
+            let drow = dest.row as i32 - origin_cell.row as i32;
+            let dcol = dest.col as i32 - origin_cell.col as i32;
+            let new_raw = shift_raw(&payload, drow, dcol);
+            return match wb.set_cell(dest, &new_raw) {
+                Ok(_) => Status {
+                    text: format!("  ⇲ pegado en {dest} (shift {drow:+},{dcol:+})"),
+                    kind: StatusKind::Info,
+                },
+                Err(e) => Status {
+                    text: format!("  ✗ paste: {e}"),
+                    kind: StatusKind::Error,
+                },
+            };
+        }
+    }
+    // Caso 2: paste literal — clipboard de otra app o cambió de
+    // contenido. Lo metemos tal cual.
+    match wb.set_cell(dest, &payload) {
+        Ok(_) => Status {
+            text: format!("  ⇲ pegado en {dest}"),
+            kind: StatusKind::Info,
+        },
+        Err(e) => Status {
+            text: format!("  ✗ paste: {e}"),
+            kind: StatusKind::Error,
+        },
+    }
+}
+
+/// Shifta el raw como lo haría un fill: parse → shift → render. Si
+/// el raw no es una fórmula (no empieza con `=`) o no parsea, lo
+/// devolvemos sin tocar — un literal numérico o texto no se shifta.
+fn shift_raw(raw: &str, drow: i32, dcol: i32) -> String {
+    let stripped = match raw.strip_prefix('=') {
+        Some(s) => s,
+        None => return raw.to_string(),
+    };
+    match nakui_sheet::formula::compile(stripped) {
+        Ok(expr) => {
+            let shifted = nakui_sheet::formula::shift(&expr, drow, dcol);
+            format!("={}", nakui_sheet::formula::render(&shifted))
+        }
+        Err(_) => raw.to_string(),
+    }
 }
 
 fn apply_scroll_axis(viewport: u32, delta: i32) -> u32 {
