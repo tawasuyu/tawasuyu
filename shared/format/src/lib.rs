@@ -348,6 +348,15 @@ pub const PERMISO_ALTAVOZ: Permisos = 1 << 3;
 /// sys_config_paleta) no necesita bit; cualquier app la tiene siempre.
 pub const PERMISO_CONFIG: Permisos = 1 << 4;
 
+/// Permite forzar una pasada del compactador semantico del grafo
+/// (`sys_grafo_compactar`). El GC ya corre solo cuando
+/// `escrituras_pendientes() >= UMBRAL_GC` en el tic ocioso del compositor;
+/// este bit habilita la palanca explicita para `wawactl gc` y similares.
+/// Por su coste (toma el cerrojo del almacen y reescribe sectores), se
+/// asume reservado a apps de mantenimiento privilegiadas — no apto para
+/// userspace generico.
+pub const PERMISO_COMPACTAR: Permisos = 1 << 5;
+
 /// Una entrada del manifiesto: una aplicacion del userspace y todo lo que el
 /// kernel necesita para darle vida — su bytecode, su ventana, su cuota de
 /// memoria, su tabla de permisos y, si lo tuviera, su ultimo estado persistido.
@@ -1011,7 +1020,8 @@ mod pruebas {
                 | PERMISO_GRAFO_ESCRITURA
                 | PERMISO_RAIZ
                 | PERMISO_ALTAVOZ
-                | PERMISO_CONFIG,
+                | PERMISO_CONFIG
+                | PERMISO_COMPACTAR,
             ..base.clone()
         };
         let m = Manifiesto {
@@ -1021,7 +1031,7 @@ mod pruebas {
         };
         let bytes = m.serializar().unwrap();
         let leido = Manifiesto::deserializar(&bytes).unwrap();
-        assert_eq!(leido.apps[0].permisos, 0b11111);
+        assert_eq!(leido.apps[0].permisos, 0b111111);
     }
 
     #[test]

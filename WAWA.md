@@ -115,7 +115,7 @@ desde IRQ y por el reloj PIT.
 - `EntradaApp { nombre, bytecode: Hash, region_*: u32, techo_memoria: u32, fuel_fotograma: u32, estado: Option<Hash>, permisos: Permisos }`.
 - `VERSION_CONFIGURACION = 1`. `Configuracion { version, idioma: IdiomaCodigo, paleta: [u8;20] }`.
 - `Hash = [u8; 32]` (BLAKE3 sobre el payload postcard).
-- `Permisos: u32` bitfield. Constantes: `PERMISO_RED=1`, `PERMISO_GRAFO_ESCRITURA=2`, `PERMISO_RAIZ=4`, `PERMISO_ALTAVOZ=8`, `PERMISO_CONFIG=16`.
+- `Permisos: u32` bitfield. Constantes: `PERMISO_RED=1`, `PERMISO_GRAFO_ESCRITURA=2`, `PERMISO_RAIZ=4`, `PERMISO_ALTAVOZ=8`, `PERMISO_CONFIG=16`, `PERMISO_COMPACTAR=32`.
 - `CodigoError: #[repr(i32)]` — `Ok=0, Ausente=-1, CapacidadInsuficiente=-2, AlmacenamientoFallo=-3, SinFoco=-4, EnvioFallo=-5`.
 - Estabilidad: una variante NUEVA no renumera las existentes (test `codigo_error_tiene_valores_estables`).
 
@@ -159,9 +159,10 @@ Capacidades de **lectura pasiva siempre disponibles**: `sys_render_frame`,
 Gateadas:
 - `PERMISO_RED` ⇒ `sys_net_mac`, `sys_net_enviar`, `sys_net_recibir`, `sys_red_solicitar`.
 - `PERMISO_GRAFO_ESCRITURA` ⇒ `sys_object_put`.
-- `PERMISO_RAIZ` ⇒ `sys_object_fijar_raiz`.
+- `PERMISO_RAIZ` ⇒ `sys_object_fijar_raiz`, `sys_manifiesto_proponer`.
 - `PERMISO_ALTAVOZ` ⇒ `sys_tono`.
 - `PERMISO_CONFIG` ⇒ `sys_config_proponer`.
+- `PERMISO_COMPACTAR` ⇒ `sys_grafo_compactar`.
 
 ### 4.3 Geometría del puntero
 
@@ -216,6 +217,7 @@ desalojada.
 | `sys_object_hijo` | `(hash, indice, salida)` | — | Devuelve nº de hijos; si `indice < n`, escribe el hash en `salida`. |
 | `sys_object_raiz` | `(salida) -> i32` | — | `1` si raíz, `0` si no, escribe hash en `salida` si la hay. |
 | `sys_object_fijar_raiz` | `(hash_ptr)` | RAIZ | Corona objeto como raíz del DAG. |
+| `sys_grafo_compactar` | `() -> i32` | COMPACTAR | Fuerza pasada GC (MARK→SWEEP→SWAP). Retorna `nodos_vivos` o `AlmacenamientoFallo`. |
 | `sys_estado_cargar` | `(salida, capacidad)` | — | Lee el estado anclado para esta app (slot del manifiesto). |
 | `sys_estado_guardar` | `(datos, datos_len)` | — | Graba nuevo estado y reanca manifiesto vivo. |
 | `sys_tiempo_mono` | `() -> u64` | — | Tiempo congelado por fotograma. |
@@ -372,45 +374,47 @@ restante, debe descontar primero estos hitos para no duplicar esfuerzo:
   cerrada por las syscalls `sys_cuaderno_anexar_celda` /
   `sys_cuaderno_leer_celda` / `sys_cuaderno_firmar_y_anclar`. Walker rehidrata
   el grafo entre arranques.
+- **GC syscall + permiso** — **HECHA** (Fase 53). `PERMISO_COMPACTAR = 1 << 5`
+  añadido en `shared/format`. Syscall `sys_grafo_compactar() -> i32` registrada
+  en `wasm/env.rs` (CAPACIDAD 7c) gateada por el bit; cuerpo invoca
+  `crate::almacen::compactar()` y retorna `stats.nodos_vivos` (cap `i32::MAX`)
+  o `CodigoError::AlmacenamientoFallo`. El compactador automatico del tic
+  ocioso del compositor sigue intacto — esta syscall es la palanca
+  complementaria para `wawactl gc` / `cronista`.
 
 ### 14.1 Hitos genuinamente pendientes (orden de mérito)
 
-1. **GC syscall + permiso**: exponer `compactar()` como `sys_grafo_compactar()`
-   gateado por nuevo `PERMISO_COMPACTAR = 1 << 5` (= 32). El compactador ya
-   corre solo cuando `ESCRITURAS_DESDE_GC > UMBRAL_GC=32` en el tic ocioso del
-   compositor; falta dejarle a `wawactl` / `cronista` la palanca explícita.
-
-2. **Mouse cursor visible**: el compositor sabe la posición pero el cursor
+1. **Mouse cursor visible**: el compositor sabe la posición pero el cursor
    visible está incompleto. `consola::estampar_puntero` existe (Fase 13, ver
    `consola.rs:493`) pero no se integra con el camino de recomposición
    zero‑alloc de `compositor::recomponer`.
 
-3. **`wawactl daemon-firma --slot N --clave-privada PATH`**: el host-side de
+2. **`wawactl daemon-firma --slot N --clave-privada PATH`**: el host-side de
    la ceremonia de claves. `claves.rs` ya documenta la API esperada (encabezado
    ASCII `wawactl::sign_pci::` + 32 B hash crudo sobre el VirtIO Console,
    respuesta = 1 B slot + 64 B firma). Falta el daemon tokio que escucha el
    char-device de QEMU, exige confirmación interactiva al operador, firma con
    la seed del slot indicado y devuelve la firma por el mismo canal.
 
-4. **`wawactl gc`**: subcomando host-side complementario a la syscall del hito
-   1. Lee superbloque / dispara compactación via socket de control que aún
-   no existe.
+3. **`wawactl gc`**: subcomando host-side complementario a `sys_grafo_compactar`
+   (Fase 53, §14.0). Lee superbloque / dispara compactación vía socket de
+   control que aún no existe.
 
-5. **Multi-monitor / resolución dinámica**: `bootloader_api::FrameBufferInfo`
+4. **Multi-monitor / resolución dinámica**: `bootloader_api::FrameBufferInfo`
    ya entrega la geometría real; la consola y el compositor todavía asumen un
    único framebuffer. Requiere capa de abstracción `Pantalla` extendida.
 
-6. **Auditoría DMA exhaustion**: el `Hal::dma_alloc` de virtio-drivers tiene
+5. **Auditoría DMA exhaustion**: el `Hal::dma_alloc` de virtio-drivers tiene
    firma infallible — un userspace adversario podría agotar la arena con
    `sys_object_put` masivos. Mitigación: rate-limit por app y/o `dma_alloc`
    con back-pressure ante exhaustion. (Hay un cap parcial,
    `MAX_PAGINAS_DMA_PER_APP`, pero falta el back-pressure.)
 
-7. **Zero-alloc del demuxer Akasha**: `encolar_para_usuario` aún hace
+6. **Zero-alloc del demuxer Akasha**: `encolar_para_usuario` aún hace
    `frame.to_vec()` por frame entrante. Cambiar por un anillo pre-alocado de
    buffers MTU con free-list LIFO dentro de `COLA_USUARIO`.
 
-8. **Tabla de capacidades por bytecode hash**: cuando el manifiesto declare
+7. **Tabla de capacidades por bytecode hash**: cuando el manifiesto declare
    `bytecode` por hash, los permisos podrían derivarse de la firma sobre
    `(hash_bytecode, permisos)` en lugar de declararse en `EntradaApp`. Daría
    inmutabilidad real al binding "qué binario puede hacer qué".

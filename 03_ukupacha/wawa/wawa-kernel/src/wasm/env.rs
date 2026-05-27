@@ -93,8 +93,8 @@ use crate::almacen::Hash;
 use crate::async_system::puntero::CanalPuntero;
 use crate::async_system::teclado::CanalTeclado;
 use format::{
-    CodigoError, IdiomaCodigo, Paleta, Permisos, PERMISO_ALTAVOZ, PERMISO_CONFIG,
-    PERMISO_GRAFO_ESCRITURA, PERMISO_RAIZ, PERMISO_RED,
+    CodigoError, IdiomaCodigo, Paleta, Permisos, PERMISO_ALTAVOZ, PERMISO_COMPACTAR,
+    PERMISO_CONFIG, PERMISO_GRAFO_ESCRITURA, PERMISO_RAIZ, PERMISO_RED,
 };
 
 /// Cuota de paginas DMA en vuelo simultaneas por aplicacion (Fase 26).
@@ -1745,6 +1745,42 @@ pub(crate) fn enlazar_capacidades(
         },
     )?;
     } // PERMISO_RAIZ
+
+    // --- CAPACIDAD 7c :: sys_grafo_compactar() -> i32 ---
+    // Lanza una pasada del compactador semantico (MARK -> SWEEP -> SWAP) sobre
+    // el log direccionado por contenido. El GC ya corre solo en el tic ocioso
+    // del compositor cuando `escrituras_pendientes() >= UMBRAL_GC`; esta
+    // syscall expone la palanca EXPLICITA para `wawactl gc`, `cronista` y
+    // similares: forzar la compactacion AHORA, sin esperar al umbral.
+    //
+    // RETORNO: numero de nodos VIVOS supervivientes (>= 0) si la pasada tuvo
+    // exito, o `CodigoError::AlmacenamientoFallo` (-3) si el almacen fallo.
+    // El cap superior del disco (32 MiB / 512 B = 65 536 nodos) cae comodo
+    // dentro de i32 positivo, asi que la mezcla con codigos de error en
+    // [-7, -1] no colisiona — la convencion del ABI sigue intacta.
+    //
+    // GATEADA por PERMISO_COMPACTAR: una app sin el bit no ve la syscall.
+    // No se exige foco —es una operacion de mantenimiento, no interactiva—,
+    // pero el hecho de tomar el cerrojo del almacen durante toda la pasada
+    // hace que el fotograma del invocador (y el resto del reactor) se
+    // estire; por eso el bit se asume reservado a apps privilegiadas.
+    if permisos & PERMISO_COMPACTAR != 0 {
+    enlazador.func_wrap(
+        "renaser",
+        "sys_grafo_compactar",
+        |_caller: Caller<'_, ContextoCapacidades>| -> Result<i32, Error> {
+            match crate::almacen::compactar() {
+                Ok(stats) => {
+                    // Cap a i32::MAX por defensa logica; en la practica el
+                    // disco de 32 MiB nunca alcanza ese techo.
+                    let vivos = core::cmp::min(stats.nodos_vivos, i32::MAX as usize);
+                    Ok(vivos as i32)
+                }
+                Err(_) => Ok(CodigoError::AlmacenamientoFallo.como_i32()),
+            }
+        },
+    )?;
+    } // PERMISO_COMPACTAR
 
     // --- CAPACIDAD 8 :: sys_estado_cargar(salida, capacidad) -> i32 ---
     // Copia el estado persistido de ESTA app —el objeto que su `EntradaApp` del
