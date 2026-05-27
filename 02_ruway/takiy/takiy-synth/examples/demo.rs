@@ -11,7 +11,9 @@
 use std::path::PathBuf;
 
 use takiy_core::{Pitch, PitchClass, Score, ScoreNote, Track};
-use takiy_synth::{write_wav, OscRenderer, Renderer, SoundFontRenderer, Waveform};
+use takiy_synth::{
+    write_wav, MultiProgramRenderer, OscRenderer, Renderer, SoundFontRenderer, Waveform,
+};
 
 fn main() -> std::io::Result<()> {
     let mut score = Score::new(120.0);
@@ -57,9 +59,9 @@ fn main() -> std::io::Result<()> {
         audio.sample_rate,
     );
 
-    // Si TAKIY_SF2 apunta a un .sf2, renderiza también con SoundFont real
-    // (piano por default). Mismo Score, otro timbre.
+    // Si TAKIY_SF2 apunta a un .sf2, renderiza también con SoundFont real.
     if let Ok(sf_path) = std::env::var("TAKIY_SF2") {
+        // 1) Renderer single-preset: todo piano.
         match SoundFontRenderer::from_path(&sf_path) {
             Ok(sf_renderer) => {
                 let audio = sf_renderer.render(&score);
@@ -74,6 +76,26 @@ fn main() -> std::io::Result<()> {
                 );
             }
             Err(e) => eprintln!("sf2     × {sf_path}: {e}"),
+        }
+
+        // 2) Renderer multi-preset: piano (0) para melodía, contrabajo (32)
+        //    para el bajo. Mismo Score, dos timbres en una sola pasada.
+        match MultiProgramRenderer::from_path(&sf_path) {
+            Ok(mp_renderer) => {
+                let mp_renderer = mp_renderer
+                    .with_track_program(0, 0)   // Acoustic Grand Piano
+                    .with_track_program(1, 32); // Acoustic Bass
+                let audio = mp_renderer.render(&score);
+                let wav_path = out_path("takiy-demo-multi.wav");
+                write_wav(&audio, &wav_path)?;
+                println!(
+                    "sf2 mp  → {} ({} muestras, {:.2}s, piano + bajo)",
+                    wav_path.display(),
+                    audio.samples.len(),
+                    audio.duration_seconds(),
+                );
+            }
+            Err(e) => eprintln!("sf2 mp  × {sf_path}: {e}"),
         }
     } else {
         println!("sf2     (skip — exportá TAKIY_SF2=/path/a/un.sf2 para usar SoundFont)");

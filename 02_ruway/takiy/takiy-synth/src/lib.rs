@@ -14,6 +14,7 @@
 //! - [`envelope`] — `Adsr` en segundos.
 //! - [`renderer`] — `Renderer` trait + `OscRenderer`.
 //! - [`soundfont`] — `SoundFontRenderer` sobre SF2 (rustysynth).
+//! - [`soundfont_multi`] — `MultiProgramRenderer`, preset por pista.
 //! - [`wav`] — escritor WAV PCM 16-bit, sin dependencias.
 
 #![forbid(unsafe_code)]
@@ -22,6 +23,7 @@ pub mod audio;
 pub mod envelope;
 pub mod renderer;
 pub mod soundfont;
+pub mod soundfont_multi;
 pub mod waveform;
 pub mod wav;
 
@@ -29,5 +31,6 @@ pub use audio::AudioBuffer;
 pub use envelope::Adsr;
 pub use renderer::{OscRenderer, Renderer};
 pub use soundfont::{LoadError, SoundFontRenderer};
+pub use soundfont_multi::MultiProgramRenderer;
 pub use waveform::Waveform;
 pub use wav::write_wav;
