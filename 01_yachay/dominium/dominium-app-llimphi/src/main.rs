@@ -39,15 +39,17 @@ use llimphi_widget_button::{button_view, ButtonPalette};
 use llimphi_widget_slider::{slider_view, SliderPalette};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
-/// Lado de la grilla cuadrada del mundo. 160 — continente entero con mares,
-/// ríos serpenteantes y montañas. El motor sigue siendo O(grid) en difusión
-/// y O(N²) en `nearest`, así que la población se mantiene moderada (ver
-/// `LEMMINGS`).
-const GRID: usize = 160;
-/// Población inicial de Lemmings. Densidad equivalente a la grilla 80×80
-/// previa con 220 lemmings (≈0.034 lem/celda) — la diferencia es que ahora
-/// están distribuidos solo por tierra navegable, no por mar.
-const LEMMINGS: usize = 900;
+/// Lado de la grilla cuadrada del mundo. 240×240 = 57 600 celdas: continente
+/// con varios biomas (mares, ríos, llanuras, sierras, picos). El motor sigue
+/// siendo O(grid) en difusión y O(N²) en `nearest`, así que la población
+/// arranca en miles pero limitada por los frenos termodinámicos de
+/// `init`-time (ver `SimParams` override).
+const GRID: usize = 240;
+/// Población inicial de Lemmings. Miles. La densidad efectiva queda más
+/// baja que en la versión 80² histórica (≈0.043 lem/celda) porque sólo
+/// spawnean en tierra navegable y el motor ya no permite el crecimiento
+/// exponencial sin freno.
+const LEMMINGS: usize = 2500;
 /// Periodo del bucle de simulación (~11 Hz).
 const TICK_MS: u64 = 90;
 /// Cada cuántos ticks recalculamos k-means para colorear los clusters
@@ -94,6 +96,32 @@ impl Lcg {
     }
     fn next_f32(&mut self) -> f32 {
         (self.next_u32() >> 8) as f32 / (1u32 << 24) as f32
+    }
+}
+
+/// Paleta retocada para que mar / tierra / cumbres se lean a primera
+/// vista. Reemplaza la `Palette::default()` del render-plan en la app sin
+/// tocar el crate (otros consumidores siguen con el default histórico).
+fn bioma_palette() -> dominium_render_plan::Palette {
+    dominium_render_plan::Palette {
+        // Arena oscura para celdas sin capa dominante — visualmente
+        // "tierra de borde" en lugar del gris-azulado original.
+        floor: [0.30, 0.25, 0.20, 1.0],
+        // Pasto firme.
+        materia: [0.30, 0.62, 0.32, 1.0],
+        // Azul océano profundo (sustituye al cian claro del default).
+        psique: [0.16, 0.34, 0.66, 1.0],
+        // Siena de cumbre (sustituye al rojo bandera).
+        poder: [0.78, 0.52, 0.32, 1.0],
+        oro: [0.92, 0.76, 0.28, 1.0],
+        // Gris-violeta de roca alta (sustituye al violeta saturado).
+        degradacion: [0.46, 0.40, 0.50, 1.0],
+        // Marfil suave para lemmings — destaca sobre pasto y agua.
+        lemming: [0.97, 0.95, 0.88, 1.0],
+        concepto_aura: [0.95, 0.86, 0.55, 0.18],
+        concepto_base: [0.58, 0.45, 0.18, 1.0],
+        concepto: [0.98, 0.88, 0.42, 1.0],
+        shadow: [0.04, 0.04, 0.06, 0.42],
     }
 }
 
@@ -305,7 +333,7 @@ fn carve_river(w: &mut World, rng: &mut Lcg, vertical: bool, length: usize, widt
                 let intensity = 1.0 - d / width;
                 let idx = w.grid.idx(x as usize, y as usize);
                 // Río = mucha psique (agua azul), nada de materia, sin oro.
-                w.grid.psique[idx] = (w.grid.psique[idx] + 55.0 * intensity).min(80.0);
+                w.grid.psique[idx] = (w.grid.psique[idx] + 130.0 * intensity).min(180.0);
                 w.grid.materia[idx] *= 1.0 - intensity * 0.95;
                 w.grid.oro[idx] *= 1.0 - intensity * 0.8;
                 w.grid.poder[idx] *= 1.0 - intensity * 0.8;
@@ -334,42 +362,51 @@ fn seed(seed: u64) -> World {
             let edge_drop = (nx * nx + ny * ny).min(1.0);
             let e = e - edge_drop * 0.35;
 
-            if e < -0.20 {
-                // Mar profundo: agua, sin biomasa ni metales.
-                w.grid.psique[idx] = 65.0 + rng.next_f32() * 8.0;
+            if e < -0.18 {
+                // Mar profundo: psique alta para que el azul aguante la
+                // difusión lenta (entropy=0.005, diffusion=0.02 → unos cientos
+                // de ticks antes de notarse erosión visual). Pintar también
+                // `degradacion` baja persistente refuerza el tono frío y
+                // ancla la celda como "no fértil" para los lemmings que la
+                // crucen.
+                w.grid.psique[idx] = 180.0 + rng.next_f32() * 30.0;
+                w.grid.degradacion[idx] = 2.0;
             } else if e < -0.05 {
-                // Mar somero / lagunas: agua más clara, vida acuática mínima.
-                w.grid.psique[idx] = 40.0 + rng.next_f32() * 10.0;
+                // Mar somero / lagunas: agua más clara, mínima vida acuática.
+                w.grid.psique[idx] = 110.0 + rng.next_f32() * 20.0;
                 w.grid.materia[idx] = rng.next_f32() * 4.0;
-            } else if e < 0.10 {
+                w.grid.degradacion[idx] = 1.0;
+            } else if e < 0.08 {
                 // Costa / pantano fértil: alta materia + algo de agua.
-                w.grid.materia[idx] = 35.0 + (h.max(0.0)) * 30.0 + rng.next_f32() * 6.0;
-                w.grid.psique[idx] = 8.0 + rng.next_f32() * 5.0;
+                w.grid.materia[idx] = 45.0 + (h.max(0.0)) * 30.0 + rng.next_f32() * 6.0;
+                w.grid.psique[idx] = 18.0 + rng.next_f32() * 8.0;
                 if rng.next_f32() > 0.94 {
                     w.grid.oro[idx] = rng.next_f32() * 18.0;
                 }
-            } else if e < 0.35 {
+            } else if e < 0.30 {
                 // Llanura: el granero del mundo. Materia muy alta cuando
                 // hay humedad; menos donde el clima es seco.
                 let fertility = (h * 0.5 + 0.5).clamp(0.2, 1.0);
-                w.grid.materia[idx] = 45.0 + fertility * 50.0 + rng.next_f32() * 5.0;
+                w.grid.materia[idx] = 50.0 + fertility * 50.0 + rng.next_f32() * 5.0;
                 if rng.next_f32() > 0.92 {
                     w.grid.oro[idx] = rng.next_f32() * 24.0;
                 }
-            } else if e < 0.60 {
+            } else if e < 0.50 {
                 // Colinas: materia decreciente, asoma el poder (vetas).
-                let alpha = (e - 0.35) / 0.25;
+                let alpha = (e - 0.30) / 0.20;
                 w.grid.materia[idx] = (1.0 - alpha) * 35.0 + rng.next_f32() * 4.0;
-                w.grid.poder[idx] = alpha * 6.0;
-                if rng.next_f32() > 0.85 {
+                w.grid.poder[idx] = alpha * 9.0;
+                if rng.next_f32() > 0.82 {
                     w.grid.oro[idx] = rng.next_f32() * 30.0; // minas en colinas
                 }
             } else {
                 // Montañas / picos: poco material vivo, mucha estructura
-                // bruta (poder) y, en los más altos, cicatriz rocosa.
-                let alpha = ((e - 0.60) / 0.40).clamp(0.0, 1.0);
-                w.grid.poder[idx] = 4.0 + alpha * 12.0;
-                w.grid.degradacion[idx] = alpha * alpha * 8.0;
+                // bruta (poder) y, en los más altos, cicatriz rocosa. Umbral
+                // bajado de 0.60 a 0.50 — más superficie es cordillera, los
+                // continentes se ven más "duros" y los picos abundan.
+                let alpha = ((e - 0.50) / 0.50).clamp(0.0, 1.0);
+                w.grid.poder[idx] = 6.0 + alpha * 18.0;
+                w.grid.degradacion[idx] = 1.5 + alpha * alpha * 14.0;
                 if rng.next_f32() > 0.97 {
                     w.grid.oro[idx] = rng.next_f32() * 35.0;
                 }
@@ -393,7 +430,7 @@ fn seed(seed: u64) -> World {
             let ny = (y / GRID as f32) * 2.0 - 1.0;
             let edge_drop = (nx * nx + ny * ny).min(1.0);
             let e = elev[(y as usize) * GRID + (x as usize)] - edge_drop * 0.35;
-            if e > -0.03 && e < 0.45 {
+            if e > -0.02 && e < 0.40 {
                 return (x, y);
             }
         }
@@ -712,41 +749,67 @@ impl App for Dominium {
         .ok();
 
         let rng_seed = 0xD0_31_31_07;
+        // SimParams con overrides puntuales para grilla grande + miles de
+        // lemmings. La idea: los mares aguantan minutos sin difundirse a
+        // verde, y la natalidad ya no explota exponencial. Mantiene la
+        // termodinámica cerrada del motor — todo lo que toco son tasas.
+        let params = SimParams {
+            // Difusión y entropía bajas → la psique de los mares no se
+            // empuja a tierra en pocos ticks. (Defaults son 0.1 / 0.01.)
+            diffusion_rate: 0.02,
+            entropy_rate: 0.004,
+            // Regrowth limitado a la carga base de la llanura — sin esto
+            // el regrowth llena de materia incluso los mares (que tienen
+            // 0 inicial pero materia → carrying_capacity).
+            regrowth_rate: 0.004,
+            carrying_capacity: 40.0,
+            // Frenos termodinámicos al crecimiento exponencial: cada
+            // lemming drena más metabolismo, replica más tarde, y los
+            // hijos arrancan con menos energía → ciclo madre→hijo más
+            // costoso.
+            metabolic_cost: 0.35,
+            replicate_threshold: 35.0,
+            child_energy_frac: 0.30,
+            abundance_threshold: 55.0,
+            ..SimParams::default()
+        };
         Model {
             world: seed(rng_seed),
-            params: SimParams::default(),
-            // Scale 4.5 para que la grilla 160×160 entre en pantalla;
-            // z_factor 0.20 da volumen sin que los picos coman demasiado vertical.
-            iso: IsoProjector::new(4.5, 0.20),
-            // Relieve por bioma:
-            //   - mares (psique alta) → z negativo → fosas.
-            //   - llanura (materia alta) → z casi cero, ligero relieve fértil.
-            //   - colinas (poder) → suben moderado.
-            //   - montañas (degradacion) → suben fuerte → picos.
+            params,
+            // Scale 3.0 para que la grilla 240×240 entre en pantalla:
+            // ancho ≈ 240·3·cos(30°) ≈ 624 px, deja espacio al panel y al
+            // border. z_factor 0.35 da volumen claro: mares ~12 px hundidos,
+            // picos ~9 px elevados.
+            iso: IsoProjector::new(3.0, 0.35),
+            // Relieve por bioma, recalibrado para los valores nuevos de
+            // las capas (psique sube a 200 en mar, degradacion a ~16 en pico):
+            //   - mares  → z ≈ -12 (psique 200 × −0.06)
+            //   - llanura → z ≈ +2.4 (materia 80 × 0.03)
+            //   - colinas → z ≈ +6 (poder 15 × 0.4)
+            //   - picos  → z ≈ +9 (degradacion 14 × 0.6 + el resto)
             weights: ZWeights {
-                materia: 0.04,
-                psique: -0.18,
-                poder: 0.5,
+                materia: 0.03,
+                psique: -0.06,
+                poder: 0.40,
                 oro: 0.0,
-                degradacion: 1.2,
+                degradacion: 0.60,
             },
             cfg: PlanConfig {
-                // El tile real queda definido por el iso.scale (las celdas
-                // son polygons proyectados, no rects axis-aligned). Estos
-                // siguen siendo factores para lemmings/conceptos.
-                tile: 4.5,
-                lemming_size: 3.5,
+                tile: 3.0,
+                lemming_size: 2.6,
                 lemming_lift: 0.6,
-                concepto_size: 9.0,
-                concepto_lift: 2.4,
+                concepto_size: 7.0,
+                concepto_lift: 2.0,
                 light_dir: (0.55, 0.35),
                 andina_layers: 0,
                 andina_threshold: 1.0,
-                palette: Default::default(),
+                palette: bioma_palette(),
                 render_mode: RenderMode::Composite,
-                // Textura procedural por default — es lo que vuelve maqueta
-                // al render.
-                texture: true,
+                // Textura procedural OFF por default: con miles de celdas,
+                // los micro-quads empiezan a tapar la maqueta y el render
+                // pierde claridad. El usuario lo prende en el tab Vista
+                // si quiere "estampa".
+                texture: false,
             },
             running: true,
             tick: 0,
@@ -1440,6 +1503,16 @@ fn status_bar(model: &Model, theme: &Theme) -> View<Msg> {
     } else {
         "dominium-status-paused"
     });
+    // Texto principal: tamaño · población · epoch · tick. El usuario lo
+    // ve siempre, sin importar el tab del panel.
+    let line = format!(
+        "{}×{}  ·  pob {}  ·  epoch {}  ·  tick {}",
+        GRID,
+        GRID,
+        model.world.lemmings.len(),
+        model.epoch,
+        model.tick,
+    );
     let label_view = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -1448,18 +1521,7 @@ fn status_bar(model: &Model, theme: &Theme) -> View<Msg> {
         flex_grow: 1.0,
         ..Default::default()
     })
-    .text_aligned(
-        rimay_localize::t_args(
-            "dominium-status-line",
-            &[
-                ("epoch", model.epoch.to_string().into()),
-                ("tick", model.tick.to_string().into()),
-            ],
-        ),
-        12.0,
-        theme.fg_text,
-        Alignment::Start,
-    );
+    .text_aligned(line, 12.0, theme.fg_text, Alignment::Start);
     let estado_view = View::new(Style {
         size: Size {
             width: length(120.0_f32),
