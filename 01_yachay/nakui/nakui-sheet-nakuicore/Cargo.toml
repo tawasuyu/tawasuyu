@@ -1,0 +1,19 @@
+[package]
+name = "nakui-sheet-nakuicore"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Puente entre nakui-sheet (motor de hojas de cálculo) y nakui-core::event_log (WAL canonical con drift detection). Implementa EventSink mapeando cada SheetEvent al LogEntry::Seed del log de nakui-core."
+
+[dependencies]
+nakui-sheet = { path = "../nakui-sheet" }
+nakui-core = { path = "../nakui-core" }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+rust_decimal = { version = "1.36", default-features = false, features = ["std"] }

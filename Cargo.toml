@@ -122,6 +122,7 @@ members = [
     "01_yachay/nakui/nakui-explorer-llimphi",
     "01_yachay/nakui/nakui-sheet",
     "01_yachay/nakui/nakui-sheet-llimphi",
+    "01_yachay/nakui/nakui-sheet-nakuicore",
     "01_yachay/nakui/nakui-ui-llimphi",
     "02_ruway/gioser-edit",
     "02_ruway/chasqui/chasqui-broker",
