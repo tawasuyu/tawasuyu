@@ -57,6 +57,26 @@ pub enum EventKind {
         radius: f32,
         delta_psi: [f32; 4],
     },
+    /// Spawnea `n` agentes con `psi/energia/accion` iguales. Si `radius > 0`
+    /// y `n > 1`, los dispersa en una rejilla en espiral de Vogel
+    /// (determinista, simétrica) dentro del círculo; si `radius == 0` o
+    /// `n == 1`, todos quedan en `(x, y)`. Modela: migración, refugiados,
+    /// nacimiento de una colonia.
+    Spawn {
+        x: f32,
+        y: f32,
+        n: u32,
+        radius: f32,
+        energia: f32,
+        psi: [f32; 4],
+        accion: u8,
+    },
+    /// Mata todos los agentes dentro del radio. Determinista total: la
+    /// fracción que muere no es probabilística — todo el que está
+    /// adentro, muere. Modela: pandemia regional, genocidio, terremoto
+    /// localizado. Para fracciones parciales, encadená varios `Kill` con
+    /// radios concéntricos en distintos ticks.
+    Kill { x: f32, y: f32, radius: f32 },
 }
 
 /// Un evento etiquetado con el tick en que debe dispararse.
@@ -78,6 +98,12 @@ pub fn apply_event(world: &mut World, ev: &EventKind) {
         }
         EventKind::PsiNudge { x, y, radius, delta_psi } => {
             apply_psi_nudge(world, *x, *y, *radius, *delta_psi);
+        }
+        EventKind::Spawn { x, y, n, radius, energia, psi, accion } => {
+            apply_spawn(world, *x, *y, *n, *radius, *energia, *psi, *accion);
+        }
+        EventKind::Kill { x, y, radius } => {
+            apply_kill(world, *x, *y, *radius);
         }
     }
 }
@@ -124,6 +150,75 @@ fn apply_shock_on_layer(
                 LayerId::Degradacion => world.grid.degradacion[idx] += delta,
             }
         }
+    }
+}
+
+/// Spawnea `n` agentes determinísticamente. Espiral de Vogel
+/// (golden-angle): para `k ∈ 0..n`, `θ_k = k · 137.5077°` y
+/// `r_k = radius · sqrt(k / (n-1))`. Distribuye uniformemente sin RNG —
+/// el patrón es bit-exacto cross-platform vía libm.
+fn apply_spawn(
+    world: &mut World,
+    x: f32,
+    y: f32,
+    n: u32,
+    radius: f32,
+    energia: f32,
+    psi: [f32; 4],
+    accion: u8,
+) {
+    if n == 0 {
+        return;
+    }
+    let max_x = world.grid.width as f32 - 1.0;
+    let max_y = world.grid.height as f32 - 1.0;
+    let radius_eff = radius.max(0.0);
+    // Golden angle en radianes: π · (3 − √5).
+    let golden = std::f32::consts::PI * (3.0 - libm::sqrtf(5.0));
+    let nf = n as f32;
+    for k in 0..n {
+        let (px, py) = if radius_eff > 0.0 && n > 1 {
+            let kf = k as f32;
+            let theta = kf * golden;
+            // Distancia normalizada por raíz cuadrada — distribución uniforme
+            // en el disco. `+ 0.5` centra el primer punto fuera del origen.
+            let r = radius_eff * libm::sqrtf((kf + 0.5) / nf);
+            (
+                x + r * libm::cosf(theta),
+                y + r * libm::sinf(theta),
+            )
+        } else {
+            (x, y)
+        };
+        let px = px.clamp(0.0, max_x);
+        let py = py.clamp(0.0, max_y);
+        let i = world.lemmings.spawn(px, py, energia, psi);
+        world.lemmings.accion[i] = accion.min(5);
+    }
+}
+
+/// Mata determinísticamente todos los agentes dentro del radio. Recorre
+/// índices al revés para que `swap_remove` no invalide los menores que
+/// todavía no procesamos. Bit-exacto cross-platform.
+fn apply_kill(world: &mut World, x: f32, y: f32, radius: f32) {
+    if radius <= 0.0 {
+        return;
+    }
+    let r2 = radius * radius;
+    // Recolectar índices a matar primero, luego matarlos en orden decreciente.
+    let mut to_kill: Vec<usize> = Vec::new();
+    for i in 0..world.lemmings.len() {
+        let dx = world.lemmings.pos_x[i] - x;
+        let dy = world.lemmings.pos_y[i] - y;
+        if dx * dx + dy * dy <= r2 {
+            to_kill.push(i);
+        }
+    }
+    // Sort descendente: `swap_remove` mueve el último al hueco; si vamos
+    // de mayor a menor, los índices menores siguen siendo válidos.
+    to_kill.sort_unstable_by(|a, b| b.cmp(a));
+    for i in to_kill {
+        world.lemmings.remove(i);
     }
 }
 
@@ -220,6 +315,97 @@ mod tests {
     }
 
     #[test]
+    fn spawn_zero_n_is_noop() {
+        let mut w = World::new(20, 20);
+        apply_event(
+            &mut w,
+            &EventKind::Spawn {
+                x: 10.0, y: 10.0, n: 0, radius: 5.0,
+                energia: 30.0, psi: [0.5; 4], accion: 0,
+            },
+        );
+        assert_eq!(w.lemmings.len(), 0);
+    }
+
+    #[test]
+    fn spawn_one_agent_at_point() {
+        let mut w = World::new(20, 20);
+        apply_event(
+            &mut w,
+            &EventKind::Spawn {
+                x: 10.0, y: 10.0, n: 1, radius: 0.0,
+                energia: 42.0, psi: [0.1, 0.2, 0.3, 0.4], accion: 3,
+            },
+        );
+        assert_eq!(w.lemmings.len(), 1);
+        assert_eq!(w.lemmings.pos_x[0], 10.0);
+        assert_eq!(w.lemmings.pos_y[0], 10.0);
+        assert_eq!(w.lemmings.energia[0], 42.0);
+        assert_eq!(w.lemmings.vector_psi[0], [0.1, 0.2, 0.3, 0.4]);
+        assert_eq!(w.lemmings.accion[0], 3);
+    }
+
+    #[test]
+    fn spawn_n_disperses_in_radius_deterministically() {
+        // Espiral de Vogel: para n=20, radius=5, todos los agentes deben
+        // caer dentro del círculo (distancia ≤ radius) y la distribución
+        // debe ser repetible bit-exacto.
+        let mut a = World::new(40, 40);
+        let mut b = World::new(40, 40);
+        let ev = EventKind::Spawn {
+            x: 20.0, y: 20.0, n: 20, radius: 5.0,
+            energia: 30.0, psi: [0.5; 4], accion: 1,
+        };
+        apply_event(&mut a, &ev);
+        apply_event(&mut b, &ev);
+        assert_eq!(a.lemmings.len(), 20);
+        assert_eq!(a.lemmings.pos_x, b.lemmings.pos_x);
+        assert_eq!(a.lemmings.pos_y, b.lemmings.pos_y);
+        // Todos dentro del círculo (+ pequeña tolerancia por sqrt).
+        for i in 0..a.lemmings.len() {
+            let dx = a.lemmings.pos_x[i] - 20.0;
+            let dy = a.lemmings.pos_y[i] - 20.0;
+            let d = libm::sqrtf(dx * dx + dy * dy);
+            assert!(d <= 5.0 + 1e-3, "agente {i} fuera del círculo: d={d}");
+        }
+        // No todos en el mismo punto (verificación de dispersión efectiva).
+        let center_dx = a.lemmings.pos_x[0] - 20.0;
+        let center_dy = a.lemmings.pos_y[0] - 20.0;
+        let other_dx = a.lemmings.pos_x[10] - 20.0;
+        let other_dy = a.lemmings.pos_y[10] - 20.0;
+        assert!(
+            (center_dx - other_dx).abs() > 0.5 || (center_dy - other_dy).abs() > 0.5,
+            "agentes 0 y 10 demasiado cerca — la espiral no dispersó"
+        );
+    }
+
+    #[test]
+    fn kill_removes_agents_inside_radius() {
+        let mut w = World::new(40, 40);
+        // 3 dentro del radio (centro 20,20, r=5), 2 afuera.
+        w.lemmings.spawn(20.0, 20.0, 30.0, [0.0; 4]); // dentro
+        w.lemmings.spawn(22.0, 20.0, 30.0, [0.1; 4]); // dentro
+        w.lemmings.spawn(19.0, 21.0, 30.0, [0.2; 4]); // dentro
+        w.lemmings.spawn(30.0, 30.0, 30.0, [0.3; 4]); // afuera
+        w.lemmings.spawn(5.0, 5.0, 30.0, [0.4; 4]); // afuera
+        apply_event(&mut w, &EventKind::Kill { x: 20.0, y: 20.0, radius: 5.0 });
+        assert_eq!(w.lemmings.len(), 2);
+        // Los sobrevivientes son los dos lejos — sus psi se preservan
+        // (no exigimos orden por swap_remove, pero deben ser los originales).
+        let psis: Vec<[f32; 4]> = w.lemmings.vector_psi.clone();
+        assert!(psis.contains(&[0.3; 4]));
+        assert!(psis.contains(&[0.4; 4]));
+    }
+
+    #[test]
+    fn kill_zero_radius_is_noop() {
+        let mut w = World::new(20, 20);
+        w.lemmings.spawn(10.0, 10.0, 30.0, [0.0; 4]);
+        apply_event(&mut w, &EventKind::Kill { x: 10.0, y: 10.0, radius: 0.0 });
+        assert_eq!(w.lemmings.len(), 1);
+    }
+
+    #[test]
     fn timeline_json_roundtrip() {
         let events = vec![
             Event {
@@ -239,6 +425,26 @@ mod tests {
                     y: 20.0,
                     radius: 8.0,
                     delta_psi: [0.0, 0.5, 0.0, 0.0],
+                },
+            },
+            Event {
+                tick: 150,
+                kind: EventKind::Spawn {
+                    x: 5.0,
+                    y: 5.0,
+                    n: 10,
+                    radius: 2.0,
+                    energia: 40.0,
+                    psi: [0.2, 0.3, 0.4, 0.1],
+                    accion: 1,
+                },
+            },
+            Event {
+                tick: 200,
+                kind: EventKind::Kill {
+                    x: 25.0,
+                    y: 25.0,
+                    radius: 4.0,
                 },
             },
         ];

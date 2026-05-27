@@ -33,6 +33,22 @@ pub const POLARIZATION_BINS: usize = 8;
 /// distancia. `α=0` colapsaría a Gini; `α=1.6` (otro canónico) penaliza
 /// más los polos chicos.
 pub const POLARIZATION_ALPHA: f32 = 1.0;
+/// Radio de vecindad (en unidades de celda) usado por el `from_world`
+/// default para Moran's I. Pares de agentes con distancia ≤ este radio
+/// son considerados vecinos espaciales con peso 1; el resto, peso 0
+/// (vecindad binaria). Valor calibrado para grids 30–80: detecta
+/// autocorrelación local sin colapsar al promedio global.
+pub const MORANS_RADIUS_DEFAULT: f32 = 6.0;
+/// Cantidad de clusters fija para `kmeans_psi`. Tres es el mínimo que
+/// detecta "centro + dos polos" — el patrón típico cuando emerge
+/// polarización en la población.
+pub const KMEANS_K: usize = 3;
+/// Iteraciones máximas del k-means. 20 alcanza para 4 dimensiones y
+/// poblaciones <10k; con convergencia temprana cuando `Δinertia < EPS`.
+pub const KMEANS_MAX_ITER: u32 = 20;
+/// Tolerancia de convergencia para `kmeans_psi` — cuando la inercia entre
+/// iteraciones consecutivas cambia menos que esto, asume convergencia.
+pub const KMEANS_EPS: f32 = 1e-4;
 
 /// Snapshot psicológico instantáneo. Foto, no historia.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -47,29 +63,107 @@ pub struct PsiMetrics {
     /// Rango teórico `[-1, 1]`. Cero por convención cuando no hay agentes
     /// con la acción `a` (o todos la tienen) o cuando `var(psi[k]) ≈ 0`.
     pub psi_action_corr: [[f32; 6]; 4],
+    /// Índice de Moran I por componente del `vector_psi`. Mide
+    /// autocorrelación espacial: cuán parecido es el psi de un agente al
+    /// de sus vecinos en radio `MORANS_RADIUS_DEFAULT`. Rango teórico
+    /// aprox. `[-1, +1]`:
+    /// - `+1`: vecinos muy parecidos → segregación residencial (Schelling).
+    /// - `0`: psi distribuido al azar espacialmente.
+    /// - `-1`: vecinos opuestos (patrón "tablero de ajedrez").
+    /// Cero por convención cuando `n < 2`, `var(psi[k]) ≈ 0`, o ningún
+    /// par está dentro del radio.
+    pub moran_i: [f32; 4],
 }
 
 impl PsiMetrics {
-    /// Computa todas las métricas en pasadas lineales sobre los agentes.
-    /// Vacío o N<2 → ceros (no hay señal).
+    /// Computa todas las métricas con el radio de Moran default
+    /// (`MORANS_RADIUS_DEFAULT`). Vacío o N<2 → ceros (no hay señal).
     pub fn from_world(w: &World) -> Self {
+        Self::from_world_with_moran_radius(w, MORANS_RADIUS_DEFAULT)
+    }
+
+    /// Como `from_world`, pero el caller decide el radio de vecindad
+    /// espacial usado por Moran's I. Útil cuando el grid es muy chico o
+    /// muy grande y el default no aplica.
+    pub fn from_world_with_moran_radius(w: &World, moran_radius: f32) -> Self {
         let l = &w.lemmings;
         let n = l.len();
         if n < 2 {
             return Self::default();
         }
         let mut polarization = [0.0f32; 4];
+        let mut moran_i = [0.0f32; 4];
         for k in 0..4 {
-            // Construir el componente k como slice virtual.
             let mut buf = Vec::with_capacity(n);
             for i in 0..n {
                 buf.push(l.vector_psi[i][k]);
             }
             polarization[k] = polarization_esteban_ray(&buf);
+            moran_i[k] = morans_i_for(&buf, &l.pos_x, &l.pos_y, moran_radius);
         }
         let psi_action_corr = psi_action_corr_all(l);
-        Self { polarization, psi_action_corr }
+        Self { polarization, psi_action_corr, moran_i }
     }
+}
+
+/// Índice de Moran I clásico con vecindad binaria por radio:
+///
+/// ```text
+///   I = (n / S₀) · Σᵢ Σⱼ wᵢⱼ · (xᵢ − μ) · (xⱼ − μ) / Σᵢ (xᵢ − μ)²
+/// ```
+///
+/// `wᵢⱼ = 1` si `|posᵢ − posⱼ| ≤ radius` y `i ≠ j`, sino `0`.
+/// `S₀ = Σᵢⱼ wᵢⱼ` (el número total de pares vecinos).
+///
+/// Devuelve `0.0` para casos patológicos (n<2, varianza ~0, S₀==0).
+/// Acumulador en `f64` para estabilidad numérica en grids grandes.
+pub fn morans_i_for(values: &[f32], xs: &[f32], ys: &[f32], radius: f32) -> f32 {
+    let n = values.len();
+    if n < 2 {
+        return 0.0;
+    }
+    if radius <= 0.0 {
+        return 0.0;
+    }
+    let r2 = radius * radius;
+    let nf = n as f64;
+    let mut mean: f64 = 0.0;
+    for &v in values {
+        mean += v as f64;
+    }
+    mean /= nf;
+    let mut variance: f64 = 0.0;
+    for &v in values {
+        let d = v as f64 - mean;
+        variance += d * d;
+    }
+    if variance < 1e-12 {
+        return 0.0;
+    }
+    let mut numerator: f64 = 0.0;
+    let mut s0: f64 = 0.0;
+    for i in 0..n {
+        let xi = xs[i];
+        let yi = ys[i];
+        let di = values[i] as f64 - mean;
+        for j in 0..n {
+            if i == j {
+                continue;
+            }
+            let dx = xs[j] - xi;
+            let dy = ys[j] - yi;
+            if dx * dx + dy * dy > r2 {
+                continue;
+            }
+            let dj = values[j] as f64 - mean;
+            numerator += di * dj;
+            s0 += 1.0;
+        }
+    }
+    if s0 < 1e-12 {
+        return 0.0;
+    }
+    ((nf / s0) * (numerator / variance)) as f32
 }
 
 /// Polarización Esteban-Ray con K=`POLARIZATION_BINS` bins igualmente
@@ -213,6 +307,121 @@ fn psi_action_corr_all(l: &Lemmings) -> [[f32; 6]; 4] {
     out
 }
 
+/// Resultado del k-means determinista sobre `vector_psi`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KMeansResult {
+    /// Centroides finales en el espacio psi 4D. `[cluster][componente]`.
+    pub centroids: [[f32; 4]; KMEANS_K],
+    /// Cantidad de agentes asignados a cada cluster.
+    pub sizes: [u32; KMEANS_K],
+    /// Asignación por agente: byte `0..KMEANS_K`. Largo = `world.lemmings.len()`.
+    pub assignments: Vec<u8>,
+    /// Suma de distancias cuadradas de cada agente a su centroide. Métrica
+    /// agregada de "compactness" de los clusters. Cero = clusters perfectos
+    /// (todos los agentes están en su centroide); valores grandes = clusters
+    /// difusos.
+    pub inertia: f32,
+    /// Iteraciones efectivamente corridas hasta la convergencia.
+    pub iterations: u32,
+}
+
+/// k-means determinista sobre `vector_psi` con `k = KMEANS_K = 3`. Cero
+/// RNG: inicialización por buckets `i % k`. Convergencia cuando la inercia
+/// entre iteraciones consecutivas cambia menos que `KMEANS_EPS`. Asignación
+/// tie-break por menor índice de cluster.
+///
+/// Devuelve `None` cuando hay menos de `KMEANS_K` agentes.
+pub fn kmeans_psi(world: &World) -> Option<KMeansResult> {
+    let l = &world.lemmings;
+    let n = l.len();
+    if n < KMEANS_K {
+        return None;
+    }
+    // Inicialización determinista: buckets por índice módulo K.
+    let mut centroids: [[f32; 4]; KMEANS_K] = [[0.0; 4]; KMEANS_K];
+    {
+        let mut sums = [[0.0f64; 4]; KMEANS_K];
+        let mut counts = [0u32; KMEANS_K];
+        for i in 0..n {
+            let c = i % KMEANS_K;
+            for d in 0..4 {
+                sums[c][d] += l.vector_psi[i][d] as f64;
+            }
+            counts[c] += 1;
+        }
+        for c in 0..KMEANS_K {
+            if counts[c] == 0 {
+                continue;
+            }
+            for d in 0..4 {
+                centroids[c][d] = (sums[c][d] / counts[c] as f64) as f32;
+            }
+        }
+    }
+    let mut assignments = vec![0u8; n];
+    let mut prev_inertia: f64 = f64::INFINITY;
+    let mut iterations: u32 = 0;
+    let mut last_inertia: f64 = 0.0;
+    for it in 0..KMEANS_MAX_ITER {
+        iterations = it + 1;
+        // Step 1: asignar cada agente al centroide más cercano.
+        let mut inertia: f64 = 0.0;
+        for i in 0..n {
+            let mut best_c: u8 = 0;
+            let mut best_d2: f32 = f32::MAX;
+            for c in 0..KMEANS_K {
+                let mut d2: f32 = 0.0;
+                for d in 0..4 {
+                    let diff = l.vector_psi[i][d] - centroids[c][d];
+                    d2 += diff * diff;
+                }
+                if d2 < best_d2 {
+                    best_d2 = d2;
+                    best_c = c as u8;
+                }
+            }
+            assignments[i] = best_c;
+            inertia += best_d2 as f64;
+        }
+        last_inertia = inertia;
+        // Convergencia: si la inercia no se mueve, paramos.
+        if (prev_inertia - inertia).abs() < KMEANS_EPS as f64 {
+            break;
+        }
+        prev_inertia = inertia;
+        // Step 2: recomputar centroides como medias del cluster. Clusters
+        // vacíos preservan su centroide del paso anterior (no se actualizan).
+        let mut new_sums = [[0.0f64; 4]; KMEANS_K];
+        let mut new_counts = [0u32; KMEANS_K];
+        for i in 0..n {
+            let c = assignments[i] as usize;
+            for d in 0..4 {
+                new_sums[c][d] += l.vector_psi[i][d] as f64;
+            }
+            new_counts[c] += 1;
+        }
+        for c in 0..KMEANS_K {
+            if new_counts[c] == 0 {
+                continue;
+            }
+            for d in 0..4 {
+                centroids[c][d] = (new_sums[c][d] / new_counts[c] as f64) as f32;
+            }
+        }
+    }
+    let mut sizes = [0u32; KMEANS_K];
+    for &a in &assignments {
+        sizes[a as usize] += 1;
+    }
+    Some(KMeansResult {
+        centroids,
+        sizes,
+        assignments,
+        inertia: last_inertia as f32,
+        iterations,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,6 +541,119 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn morans_i_is_high_when_neighbors_are_alike() {
+        // Dos clusters físicos+psi distintos: izquierda con psi[0]=1,
+        // derecha con psi[0]=0. Como cada agente está rodeado de iguales,
+        // Moran's I debe ser cercano a +1.
+        let mut w = World::new(40, 40);
+        for k in 0..6 {
+            w.lemmings
+                .spawn(5.0 + (k % 3) as f32, 5.0 + (k / 3) as f32, 30.0, [1.0, 0.0, 0.0, 0.0]);
+        }
+        for k in 0..6 {
+            w.lemmings
+                .spawn(30.0 + (k % 3) as f32, 30.0 + (k / 3) as f32, 30.0, [0.0, 0.0, 0.0, 0.0]);
+        }
+        let m = PsiMetrics::from_world(&w);
+        // En psi[ORDEN], la segregación física espeja la variación → Moran alto.
+        assert!(
+            m.moran_i[0] > 0.5,
+            "Moran's I bajo aunque hay clustering espacial claro: {}",
+            m.moran_i[0]
+        );
+    }
+
+    #[test]
+    fn morans_i_is_zero_when_psi_is_spatially_random() {
+        // Mismas posiciones que el test anterior pero alternando psi:
+        // patrón A B A B A B en ambas zonas → autocorrelación ≈ 0.
+        let mut w = World::new(40, 40);
+        for k in 0..12 {
+            let psi_val = if k % 2 == 0 { 1.0 } else { 0.0 };
+            let x = 5.0 + (k % 4) as f32 * 2.0;
+            let y = 5.0 + (k / 4) as f32 * 2.0;
+            w.lemmings.spawn(x, y, 30.0, [psi_val, 0.0, 0.0, 0.0]);
+        }
+        let m = PsiMetrics::from_world(&w);
+        // Patrón tipo ajedrez: Moran's I tiende a ser negativo (vecinos
+        // distintos). Aceptamos un rango amplio: muy lejos de +1.
+        assert!(
+            m.moran_i[0] < 0.5,
+            "Moran's I alto en distribución alternante: {}",
+            m.moran_i[0]
+        );
+    }
+
+    #[test]
+    fn morans_i_zero_when_uniform_population() {
+        let mut w = World::new(40, 40);
+        for _ in 0..20 {
+            w.lemmings.spawn(10.0, 10.0, 30.0, [0.5; 4]);
+        }
+        let m = PsiMetrics::from_world(&w);
+        for k in 0..4 {
+            assert!(
+                m.moran_i[k].abs() < 1e-5,
+                "Moran[{k}] no es cero en pop uniforme: {}",
+                m.moran_i[k]
+            );
+        }
+    }
+
+    #[test]
+    fn kmeans_returns_none_when_too_few_agents() {
+        let w = World::new(8, 8);
+        assert!(kmeans_psi(&w).is_none());
+        let mut w = World::new(8, 8);
+        w.lemmings.spawn(1.0, 1.0, 10.0, [0.5; 4]);
+        w.lemmings.spawn(2.0, 2.0, 10.0, [0.5; 4]);
+        assert!(kmeans_psi(&w).is_none()); // sólo 2 agentes, K=3
+    }
+
+    #[test]
+    fn kmeans_finds_three_distinct_clusters() {
+        // Tres grupos en zonas opuestas del espacio psi: [1,0,0,0],
+        // [0,1,0,0], [0,0,1,0]. 10 agentes por grupo.
+        let mut w = World::new(8, 8);
+        for _ in 0..10 {
+            w.lemmings.spawn(1.0, 1.0, 10.0, [1.0, 0.0, 0.0, 0.0]);
+        }
+        for _ in 0..10 {
+            w.lemmings.spawn(1.0, 1.0, 10.0, [0.0, 1.0, 0.0, 0.0]);
+        }
+        for _ in 0..10 {
+            w.lemmings.spawn(1.0, 1.0, 10.0, [0.0, 0.0, 1.0, 0.0]);
+        }
+        let r = kmeans_psi(&w).expect("k-means corre");
+        // Los 3 clusters deben quedar de tamaño ~10 cada uno.
+        let mut sizes = r.sizes.to_vec();
+        sizes.sort();
+        assert_eq!(sizes, vec![10, 10, 10]);
+        // Inertia muy chica porque los clusters son compactos.
+        assert!(r.inertia < 0.1, "inertia alta: {}", r.inertia);
+    }
+
+    #[test]
+    fn kmeans_is_deterministic_under_same_input() {
+        // Dos mundos idénticos deben producir k-means idéntico.
+        let build = || {
+            let mut w = World::new(8, 8);
+            for k in 0..18 {
+                let val = (k as f32 * 0.37).fract();
+                w.lemmings.spawn(1.0, 1.0, 10.0, [val, 1.0 - val, val * val, 0.5]);
+            }
+            w
+        };
+        let a = kmeans_psi(&build()).expect("a");
+        let b = kmeans_psi(&build()).expect("b");
+        assert_eq!(a.centroids, b.centroids);
+        assert_eq!(a.sizes, b.sizes);
+        assert_eq!(a.assignments, b.assignments);
+        assert_eq!(a.inertia, b.inertia);
+        assert_eq!(a.iterations, b.iterations);
     }
 
     #[test]

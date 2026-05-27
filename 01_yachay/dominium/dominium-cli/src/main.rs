@@ -404,6 +404,10 @@ fn run_sim(
         psi.psi_action_corr[0][3],
         psi.psi_action_corr[1][0],
     );
+    println!(
+        "    psi · moran_i=[{:+.3} {:+.3} {:+.3} {:+.3}]  (autocorrelación espacial, +1=segregación, 0=azar, -1=ajedrez)",
+        psi.moran_i[0], psi.moran_i[1], psi.moran_i[2], psi.moran_i[3],
+    );
     Ok(())
 }
 
@@ -416,7 +420,7 @@ fn run_sim(
 ///   del psi y el indicador binario de la acción. Seis pares canónicos
 ///   alineados con la matriz `action_weights` por default — los que
 ///   esperamos que se enciendan cuando `ActionPolicy::PsiArgmax` funciona.
-const CSV_HEADER: &str = "tick,epoca,poblacion,materia,psique,poder,oro,degradacion,energia,mean_edad,gini_e,var_psi0,var_psi1,var_psi2,var_psi3,act_mover,act_extraer,act_sync,act_trade,act_repl,act_degr,pol_psi0,pol_psi1,pol_psi2,pol_psi3,corr_corr_extraer,corr_corr_degradar,corr_orden_intercambiar,corr_orden_replicar,corr_miedo_mover,corr_curiosidad_sync";
+const CSV_HEADER: &str = "tick,epoca,poblacion,materia,psique,poder,oro,degradacion,energia,mean_edad,gini_e,var_psi0,var_psi1,var_psi2,var_psi3,act_mover,act_extraer,act_sync,act_trade,act_repl,act_degr,pol_psi0,pol_psi1,pol_psi2,pol_psi3,corr_corr_extraer,corr_corr_degradar,corr_orden_intercambiar,corr_orden_replicar,corr_miedo_mover,corr_curiosidad_sync,moran_psi0,moran_psi1,moran_psi2,moran_psi3";
 
 /// Escribe una fila al CSV usando `WorldStats` + `PsiMetrics` — formato
 /// estable con `:.3` para floats macro y `:.6` para correlaciones (rango
@@ -439,7 +443,7 @@ fn write_row<W: Write>(w: &mut W, world: &World, t: u64) -> std::io::Result<()> 
     const DEGRADAR: usize = 5;
     writeln!(
         w,
-        "{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{},{},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}",
+        "{},{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{},{},{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}",
         t,
         e.label(),
         s.n,
@@ -471,6 +475,10 @@ fn write_row<W: Write>(w: &mut W, world: &World, t: u64) -> std::io::Result<()> 
         p.psi_action_corr[ORDEN][REPLICAR],
         p.psi_action_corr[MIEDO][MOVER],
         p.psi_action_corr[CURIOSIDAD][SYNC],
+        p.moran_i[0],
+        p.moran_i[1],
+        p.moran_i[2],
+        p.moran_i[3],
     )
 }
 
@@ -874,6 +882,7 @@ struct SweepRowMetrics {
     mean_edad: f32,
     polariz: [f32; 4],
     psi_action_corr: [[f32; 6]; 4],
+    moran_i: [f32; 4],
     action_counts: [u32; 6],
 }
 
@@ -887,6 +896,7 @@ impl SweepRowMetrics {
             mean_edad: s.mean_edad,
             polariz: p.polarization,
             psi_action_corr: p.psi_action_corr,
+            moran_i: p.moran_i,
             action_counts: s.action_counts,
         }
     }
@@ -951,6 +961,7 @@ fn run_sweep(a: SweepArgs) -> Result<()> {
         "param_name,param_value,seed,rep,n,gini_e,mean_edad,\
         pol_psi0,pol_psi1,pol_psi2,pol_psi3,\
         corr_corr_extraer,corr_corr_degradar,corr_orden_intercambiar,corr_orden_replicar,corr_miedo_mover,corr_curiosidad_sync,\
+        moran_psi0,moran_psi1,moran_psi2,moran_psi3,\
         act_mover,act_extraer,act_sync,act_trade,act_repl,act_degr"
     )?;
     let t0 = std::time::Instant::now();
@@ -998,7 +1009,7 @@ fn run_sweep(a: SweepArgs) -> Result<()> {
             const DEGRADAR: usize = 5;
             writeln!(
                 writer,
-                "{},{:.6},{},{},{},{:.6},{:.3},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{},{},{},{}",
+                "{},{:.6},{},{},{},{:.6},{:.3},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{},{},{},{},{}",
                 a.param,
                 value,
                 seed,
@@ -1016,6 +1027,10 @@ fn run_sweep(a: SweepArgs) -> Result<()> {
                 m.psi_action_corr[ORDEN][REPLICAR],
                 m.psi_action_corr[MIEDO][MOVER],
                 m.psi_action_corr[CURIOSIDAD][SYNC],
+                m.moran_i[0],
+                m.moran_i[1],
+                m.moran_i[2],
+                m.moran_i[3],
                 m.action_counts[0],
                 m.action_counts[1],
                 m.action_counts[2],

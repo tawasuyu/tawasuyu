@@ -33,7 +33,10 @@ pub use events::{apply_event, Event, EventKind, LayerId};
 pub use grid::Grid;
 pub use lemmings::Lemmings;
 pub use metrics::WorldStats;
-pub use psi_metrics::{PsiMetrics, POLARIZATION_ALPHA, POLARIZATION_BINS};
+pub use psi_metrics::{
+    kmeans_psi, morans_i_for, KMeansResult, PsiMetrics, KMEANS_EPS, KMEANS_K, KMEANS_MAX_ITER,
+    MORANS_RADIUS_DEFAULT, POLARIZATION_ALPHA, POLARIZATION_BINS,
+};
 pub use params::{
     ActionPolicy, SimParams, TradeTarget, RELIEVE_DEGRADACION, RELIEVE_MATERIA, RELIEVE_ORO,
     RELIEVE_PODER, RELIEVE_PSIQUE,
