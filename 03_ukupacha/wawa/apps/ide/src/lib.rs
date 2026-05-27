@@ -257,199 +257,27 @@ fn mapear_caracter(scan: u8) -> Option<u8> {
 }
 
 // =============================================================================
-//  Emisor Forth -> WASM (Fase 29)
+//  Emisor Forth -> WASM (Fase 29 / Fase 30)
 // -----------------------------------------------------------------------------
-//  Compila expresiones de pila ("5 10 +") al format binario WebAssembly 1.0
-//  sobre buffers FIJOS pre-alocados en pila. Cero alocaciones, cero
-//  dependencias. La salida es un modulo entero: cabecera (`\0asm\1\0\0\0`)
-//  + Type Section (1 funcion () -> i32) + Function Section + Export
-//  Section ("run") + Code Section (cuerpo emitido).
-//
-//  Tokens reconocidos:
-//
-//   digitos    ->  i32.const <valor>   (LEB128 signed)
-//   '+'        ->  i32.add             (opcode 0x6A)
-//   '-'        ->  i32.sub             (opcode 0x6B)
-//   '*'        ->  i32.mul             (opcode 0x6C)
-//
-//  La pila debe terminar con EXACTAMENTE un valor (firma `() -> i32`).
-//  Cualquier desviacion (token ajeno, sobrante, vacio) cae en Err.
+//  Fase 30 :: el motor de tokenizacion y emision LEB128 vive ahora en
+//  la crate aislada `shared/forth-emisor`, donde el toolchain del host
+//  audita su contrato con una suite de tests nativos. El IDE solo
+//  consume `ForthCompiler::compilar_bytes(&buffer, &mut salida)` —el
+//  comportamiento es identico al de la Fase 29 pero la lectura del
+//  codigo cabe ahora en una crate por separado y la deuda formal queda
+//  saldada.
 // =============================================================================
 
+// `forth_emisor` re-exportado para el wrapper local que conserva la
+// interfaz que ya usa el resto del IDE (`emisor::compilar(...)`). Eso
+// nos ahorra tocar las dos invocaciones de `accion_*`.
 mod emisor {
-    /// Opcodes WASM 1.0 que el emisor produce.
-    const OP_I32_CONST: u8 = 0x41;
-    const OP_I32_ADD: u8 = 0x6A;
-    const OP_I32_SUB: u8 = 0x6B;
-    const OP_I32_MUL: u8 = 0x6C;
-    const OP_END: u8 = 0x0B;
-
-    /// Compila el buffer Forth en `fuente` al modulo WASM `destino`.
-    /// Devuelve `Some(len)` con la longitud final del modulo, o `None` si
-    /// el codigo es invalido (token ajeno, pila descuadrada, desbordo del
-    /// buffer destino).
+    use forth_emisor::ForthCompiler;
     pub fn compilar(fuente: &[u8], destino: &mut [u8]) -> Option<usize> {
-        // --- 1. Construir el CUERPO de la funcion en un scratch local. ---
-        let mut body = [0u8; 384];
-        let mut body_len = 0usize;
-
-        // Locals declarations: 0 grupos.
-        body[body_len] = 0x00;
-        body_len += 1;
-
-        let mut profundidad: i32 = 0;
-        let mut i = 0usize;
-        while i < fuente.len() {
-            let c = fuente[i];
-            // Saltar espacios, saltos, tabs, y bytes nulos del relleno.
-            if c == b' ' || c == b'\n' || c == b'\t' || c == 0 {
-                i += 1;
-                continue;
-            }
-            // Numero.
-            if c.is_ascii_digit() {
-                let mut valor: i64 = 0;
-                while i < fuente.len() && fuente[i].is_ascii_digit() {
-                    valor = valor * 10 + (fuente[i] - b'0') as i64;
-                    if valor > i32::MAX as i64 {
-                        return None;
-                    }
-                    i += 1;
-                }
-                if body_len + 6 > body.len() {
-                    return None;
-                }
-                body[body_len] = OP_I32_CONST;
-                body_len += 1;
-                emit_leb128_i32(valor as i32, &mut body, &mut body_len);
-                profundidad += 1;
-                continue;
-            }
-            // Operador binario.
-            if c == b'+' || c == b'-' || c == b'*' {
-                if profundidad < 2 {
-                    return None;
-                }
-                let op = match c {
-                    b'+' => OP_I32_ADD,
-                    b'-' => OP_I32_SUB,
-                    _ => OP_I32_MUL,
-                };
-                if body_len + 1 > body.len() {
-                    return None;
-                }
-                body[body_len] = op;
-                body_len += 1;
-                profundidad -= 1;
-                i += 1;
-                continue;
-            }
-            // Cualquier otro caracter: invalido. El compilador no es
-            // permissivo con tokens que no entienda — la baliza visual y
-            // la traza serial bastan; no agendamos correcciones magicas.
-            return None;
-        }
-        // El cuerpo ha de cerrar EXACTAMENTE con un valor en la pila —es
-        // lo que la firma `() -> i32` exige—.
-        if profundidad != 1 {
-            return None;
-        }
-        // Opcode `end` (cierra la funcion).
-        if body_len + 1 > body.len() {
-            return None;
-        }
-        body[body_len] = OP_END;
-        body_len += 1;
-
-        // --- 2. Emitir el modulo completo a `destino`. ---
-        let mut out = 0usize;
-
-        // Header WASM 1.0.
-        const HEADER: [u8; 8] = [0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00];
-        if HEADER.len() > destino.len() {
-            return None;
-        }
-        destino[..HEADER.len()].copy_from_slice(&HEADER);
-        out += HEADER.len();
-
-        // Type Section (0x01) :: 1 functype  () -> i32
-        //   payload: count=1, functype = 0x60 0x00 (0 params) 0x01 0x7F (1 result, i32)
-        let type_payload = [0x01, 0x60, 0x00, 0x01, 0x7F];
-        emit_section(0x01, &type_payload, destino, &mut out)?;
-
-        // Function Section (0x03) :: la funcion 0 usa el type 0.
-        let func_payload = [0x01, 0x00];
-        emit_section(0x03, &func_payload, destino, &mut out)?;
-
-        // Export Section (0x07) :: nombre "run" -> func 0.
-        let export_payload = [0x01, 0x03, b'r', b'u', b'n', 0x00, 0x00];
-        emit_section(0x07, &export_payload, destino, &mut out)?;
-
-        // Code Section (0x0A) :: count=1, body_size LEB128, body.
-        let mut code_payload = [0u8; 400];
-        let mut cp = 0usize;
-        code_payload[cp] = 0x01;
-        cp += 1;
-        emit_leb128_u32(body_len as u32, &mut code_payload, &mut cp);
-        if cp + body_len > code_payload.len() {
-            return None;
-        }
-        code_payload[cp..cp + body_len].copy_from_slice(&body[..body_len]);
-        cp += body_len;
-        emit_section(0x0A, &code_payload[..cp], destino, &mut out)?;
-
-        Some(out)
-    }
-
-    fn emit_section(id: u8, payload: &[u8], destino: &mut [u8], cursor: &mut usize) -> Option<()> {
-        if *cursor + 1 > destino.len() {
-            return None;
-        }
-        destino[*cursor] = id;
-        *cursor += 1;
-        emit_leb128_u32(payload.len() as u32, destino, cursor);
-        if *cursor + payload.len() > destino.len() {
-            return None;
-        }
-        destino[*cursor..*cursor + payload.len()].copy_from_slice(payload);
-        *cursor += payload.len();
-        Some(())
-    }
-
-    fn emit_leb128_u32(mut v: u32, out: &mut [u8], cursor: &mut usize) {
-        loop {
-            let mut byte = (v & 0x7F) as u8;
-            v >>= 7;
-            if v != 0 {
-                byte |= 0x80;
-                out[*cursor] = byte;
-                *cursor += 1;
-            } else {
-                out[*cursor] = byte;
-                *cursor += 1;
-                return;
-            }
-        }
-    }
-
-    fn emit_leb128_i32(mut v: i32, out: &mut [u8], cursor: &mut usize) {
-        loop {
-            let byte = (v & 0x7F) as u8;
-            v >>= 7;
-            let continuar = !((v == 0 && byte & 0x40 == 0) || (v == -1 && byte & 0x40 != 0));
-            if continuar {
-                out[*cursor] = byte | 0x80;
-                *cursor += 1;
-            } else {
-                out[*cursor] = byte;
-                *cursor += 1;
-            }
-            if !continuar {
-                return;
-            }
-        }
+        ForthCompiler::compilar_bytes(fuente, destino)
     }
 }
+
 
 // =============================================================================
 //  Acciones de las hotkeys

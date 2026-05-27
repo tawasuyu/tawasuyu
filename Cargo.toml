@@ -275,6 +275,7 @@ members = [
     "shared/card/cards",
     "shared/foreign-docx",
     "shared/format",
+    "shared/forth-emisor",
     "shared/rimay-localize",
     "shared/sandokan/sandokan",
     "shared/sandokan/sandokan-app",

@@ -1,0 +1,25 @@
+# =============================================================================
+#  forth-emisor — nucleo `no_std` del compilador Forth -> WASM 1.0
+# -----------------------------------------------------------------------------
+#  Fase 30 :: extraido de `apps/ide` para que la logica matematica del
+#  emisor —tokenizacion, LEB128 signed/unsigned, ensamblado de secciones
+#  WebAssembly— viva en su propia crate compartida con pruebas en host.
+#
+#  La crate compila en:
+#    * x86_64-unknown-linux-gnu  (tests nativos via cargo test)
+#    * wasm32-unknown-unknown    (apps WASM enjauladas)
+#    * x86_64-unknown-none       (potencialmente, si el kernel necesitara
+#                                  emitir bytecode en algun camino futuro)
+#
+#  CERO dependencias, CERO alocacion dinamica, CERO panics. Cualquier
+#  fallo del compilador se propaga como `None`; ningun `unwrap` viaja
+#  por sus tripas.
+# =============================================================================
+
+[package]
+name = "forth-emisor"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+description = "Emisor Forth -> WASM 1.0 no_std zero-alloc"
+authors = ["JL Soltech <gerencia@jlsoltech.com>"]

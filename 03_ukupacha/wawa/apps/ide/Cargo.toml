@@ -20,6 +20,12 @@ description = "renaser :: app WASM del IDE semantico (Fase 28)"
 [lib]
 crate-type = ["cdylib"]
 
+[dependencies]
+# Fase 30 :: el emisor Forth -> WASM vive en su propia crate no_std
+# compartida. Tests nativos en host la auditan; el IDE solo es uno de
+# sus consumidores.
+forth-emisor = { path = "../../../../shared/forth-emisor" }
+
 [profile.dev]
 panic = "abort"
 

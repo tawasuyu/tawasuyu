@@ -32,6 +32,7 @@ NUCLEOS=(
     "format|shared/format"
     "akasha|03_ukupacha/wawa/wawa-fs"
     "mirada-layout|02_ruway/mirada/mirada-layout"
+    "forth-emisor|shared/forth-emisor"
 )
 
 # Colores del informe — silenciados si la salida no es una TTY.
