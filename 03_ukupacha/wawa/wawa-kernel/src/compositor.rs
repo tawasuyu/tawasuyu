@@ -55,7 +55,7 @@ use crossbeam_queue::ArrayQueue;
 use mirada_layout::{tile, LayoutMode, LayoutParams, Rect};
 use spin::{Mutex, Once};
 
-use crate::consola::{self, Capa, CeldaTaskbar, Contenido, Taskbar};
+use crate::consola;
 use crate::grafico::{Color, RegionPantalla};
 
 /// Altura del strip superior reservado a la consola; las apps teselan debajo.
@@ -166,6 +166,15 @@ struct Ventana {
 
 /// El escritorio: el registro de todas las ventanas y el modo de teselado.
 /// Lo tocan SOLO tareas cooperativas — nunca el manejador de IRQ1.
+/// Cuota dura de ventanas concurrentes. Acota los buffers pre-alocados de
+/// recomposicion (`capas_buf`, `celdas_buf`) para que `recomponer` no toque
+/// jamas al asignador en el camino caliente del compositor. Treinta y dos
+/// pestañas cubren con holgura el genesis y los `Alt+N` que un usuario suele
+/// engendrar antes de cerrar algo; si alguien la rebasa, el escritorio
+/// silenciosamente deja de listar las sobrantes en la barra de tareas, sin
+/// alocar a sus espaldas.
+const MAX_VENTANAS: usize = 32;
+
 struct Escritorio {
     modo: LayoutMode,
     ancho: usize,
@@ -187,6 +196,14 @@ struct Escritorio {
     raton_izq: bool,
     /// Arrastre en curso, si lo hay (Fase 13).
     arrastre: Option<Arrastre>,
+    /// Buffer pre-alocado de capas de recomposicion. Vive aqui, no en cada
+    /// llamada: `recomponer` lo limpia con `clear()` (sin liberar capacidad)
+    /// y lo rellena con `push()` dentro de su tope. CERO ALOCACIONES en el
+    /// camino caliente del compositor. Capacidad `MAX_VENTANAS`.
+    capas_buf: Vec<consola::CapaSlot>,
+    /// Igual que `capas_buf` pero para las pestañas de la taskbar. Cubre
+    /// como mucho una pestaña por ventana viva.
+    celdas_buf: Vec<consola::CeldaTaskbarSlot>,
 }
 
 /// El escritorio global. Se funda una sola vez, en el arranque.
@@ -258,6 +275,12 @@ pub fn fundar(ancho: usize, alto: usize, naturales: &[(usize, usize, &str)]) {
         flotantes: Vec::new(),
         raton_izq: false,
         arrastre: None,
+        // Buffers de recomposicion: reservados UNA SOLA VEZ al fundar el
+        // escritorio; `recomponer` los reusa con `clear() + push()` sin
+        // tocar al asignador. La cota es MAX_VENTANAS — apps por encima
+        // se omiten silenciosamente del repintado, no se aloca tras este punto.
+        capas_buf: Vec::with_capacity(MAX_VENTANAS),
+        celdas_buf: Vec::with_capacity(MAX_VENTANAS),
     };
     aplicar_teselado(&mut escritorio);
 
@@ -287,8 +310,8 @@ pub fn componer_escenario() {
     let Some(escritorio) = ESCRITORIO.get() else {
         return;
     };
-    let escritorio = escritorio.lock();
-    recomponer(&escritorio);
+    let mut escritorio = escritorio.lock();
+    recomponer(&mut escritorio);
 }
 
 /// El indice de la ventana enfocada. Lo LEE el manejador de IRQ1 para enrutar
@@ -350,7 +373,7 @@ pub fn presentar_fotograma(indice: usize, datos: &[u8]) {
         consola::volcar_marco(marco, nat_ancho, nat_alto, datos, enfocada);
     } else {
         // Hay ventanas flotantes: el solapamiento obliga a recomponer.
-        recomponer(&escritorio);
+        recomponer(&mut escritorio);
     }
 }
 
@@ -381,7 +404,7 @@ pub fn desalojar(indice: usize, color: Color) {
         drop(escritorio);
         consola::pintar_desalojo(marco, color, enfocada);
     } else {
-        recomponer(&escritorio);
+        recomponer(&mut escritorio);
     }
 }
 
@@ -425,7 +448,7 @@ fn ciclar_layout() {
     let mut escritorio = escritorio.lock();
     escritorio.modo = escritorio.modo.next();
     aplicar_teselado(&mut escritorio);
-    recomponer(&escritorio);
+    recomponer(&mut escritorio);
 }
 
 /// Mueve el foco a la siguiente ventana VIVA. El recorrido abarca TODAS las
@@ -474,7 +497,7 @@ fn mover_foco(adelante: bool) {
     crate::drivers::altavoz::tono(0);
     // La ventana recien enfocada, si flota, al frente del orden-Z.
     alzar_si_flota(&mut escritorio, nuevo);
-    recomponer(&escritorio);
+    recomponer(&mut escritorio);
 }
 
 /// Promueve la ventana enfocada a la posicion maestra —la celda 0— del
@@ -490,7 +513,7 @@ fn promover() {
         let ventana = escritorio.orden.remove(pos);
         escritorio.orden.insert(0, ventana);
         aplicar_teselado(&mut escritorio);
-        recomponer(&escritorio);
+        recomponer(&mut escritorio);
     }
 }
 
@@ -515,7 +538,7 @@ fn mover_ventana(adelante: bool) {
         };
         escritorio.orden.swap(pos, destino);
         aplicar_teselado(&mut escritorio);
-        recomponer(&escritorio);
+        recomponer(&mut escritorio);
     }
 }
 
@@ -542,13 +565,13 @@ fn flotar() {
         escritorio.ventanas[foco].marco = marco;
         escritorio.flotantes.push(foco);
         aplicar_teselado(&mut escritorio);
-        recomponer(&escritorio);
+        recomponer(&mut escritorio);
     } else if let Some(pos) = escritorio.flotantes.iter().position(|&v| v == foco) {
         // Flotante -> teselada: vuelve a la rejilla, al final del orden.
         escritorio.flotantes.remove(pos);
         escritorio.orden.push(foco);
         aplicar_teselado(&mut escritorio);
-        recomponer(&escritorio);
+        recomponer(&mut escritorio);
     }
 }
 
@@ -596,18 +619,28 @@ fn marco_flotante(escritorio: &Escritorio, indice: usize) -> RegionPantalla {
 /// orden de una sola pasada. El solapamiento se resuelve por el orden del
 /// pintado. La invocan los mandos del teclado y `presentar_fotograma` cuando
 /// hay flotantes vivas. El llamante sostiene ya el cerrojo del `ESCRITORIO`.
-fn recomponer(escritorio: &Escritorio) {
+fn recomponer(escritorio: &mut Escritorio) {
     let area = area_apps(escritorio.ancho, escritorio.alto);
     let foco = FOCO.load(Ordering::Relaxed);
-    let mut capas: Vec<Capa> = Vec::with_capacity(escritorio.ventanas.len());
-    for &indice in escritorio.orden.iter().chain(escritorio.flotantes.iter()) {
+
+    // --- BUFFER de capas reusado. clear() no libera capacidad; push() abajo
+    //     se mantiene dentro de la capacity reservada al fundar (no toca al
+    //     asignador). Si MAX_VENTANAS se queda corto, el `take` lo acota sin
+    //     panico — las apps extras quedan sin recomponer este fotograma. ---
+    escritorio.capas_buf.clear();
+    for &indice in escritorio
+        .orden
+        .iter()
+        .chain(escritorio.flotantes.iter())
+        .take(MAX_VENTANAS)
+    {
         let ventana = &escritorio.ventanas[indice];
         let contenido = match ventana.baliza {
-            Some(color) => Contenido::Baliza(color),
-            None if ventana.pintada => Contenido::Fotograma(&ventana.cache),
-            None => Contenido::Panel,
+            Some(color) => consola::ContenidoSlot::Baliza(color),
+            None if ventana.pintada => consola::ContenidoSlot::Fotograma(indice),
+            None => consola::ContenidoSlot::Panel,
         };
-        capas.push(Capa {
+        escritorio.capas_buf.push(consola::CapaSlot {
             marco: ventana.marco,
             nat_ancho: ventana.natural_ancho,
             nat_alto: ventana.natural_alto,
@@ -616,8 +649,8 @@ fn recomponer(escritorio: &Escritorio) {
         });
     }
 
-    // FASE 14/16 :: armar la barra de tareas. A la izquierda un boton lanzador
-    // («+»); en el medio una pestaña por ventana viva; a la derecha el reloj.
+    // --- FASE 14/16 :: armar la barra de tareas. El mismo trato: clear() +
+    //     push() sobre el buffer pre-alocado de celdas. ---
     let area_bar = area_taskbar(escritorio.ancho, escritorio.alto);
     let cy = area_bar.y + 4;
     let calto = area_bar.alto.saturating_sub(8);
@@ -630,9 +663,14 @@ fn recomponer(escritorio: &Escritorio) {
     let cells_x0 = launcher.x + launcher.ancho + LAUNCHER_HUECO;
     let cells_x_max =
         area_bar.x + area_bar.ancho - CELDA_TASKBAR_MARGEN - RELOJ_ANCHO - RELOJ_HUECO;
-    let mut celdas: Vec<CeldaTaskbar> = Vec::new();
+    escritorio.celdas_buf.clear();
     let mut cx = cells_x0;
-    for (indice, ventana) in escritorio.ventanas.iter().enumerate() {
+    for (indice, ventana) in escritorio
+        .ventanas
+        .iter()
+        .enumerate()
+        .take(MAX_VENTANAS)
+    {
         if ventana.cerrada {
             continue;
         }
@@ -644,40 +682,102 @@ fn recomponer(escritorio: &Escritorio) {
             None if indice == foco => Color::FOCO,
             None => Color::PANEL,
         };
-        celdas.push(CeldaTaskbar {
+        escritorio.celdas_buf.push(consola::CeldaTaskbarSlot {
             region: RegionPantalla {
                 x: cx,
                 y: cy,
                 ancho: CELDA_TASKBAR_ANCHO,
                 alto: calto,
             },
-            nombre: &ventana.nombre,
+            ventana: indice,
             fondo,
             tinta: tinta_para(fondo),
         });
         cx += CELDA_TASKBAR_ANCHO + CELDA_TASKBAR_HUECO;
     }
-    // El reloj: minutos:segundos desde el arranque, alineado a la derecha.
+
+    // --- Reloj formateado SOBRE PILA. Reemplaza `alloc::format!("{}:{:02}", ...)`
+    //     por escritura en un `[u8; 8]` mediante un `core::fmt::Write` minimo.
+    //     Cero allocaciones. El segundero cubre hasta 99:59 (~6000 segundos);
+    //     a partir de ahi se acota a "99:59" — el escritorio se reinicia
+    //     antes en cualquier escenario realista. ---
     let ms = crate::async_system::reloj::milisegundos();
     let segs = ms / 1000;
-    let reloj_texto = alloc::format!("{}:{:02}", segs / 60, segs % 60);
+    let mut reloj_buf = [0u8; RELOJ_BUFFER_LEN];
+    let reloj_len = formatear_reloj(&mut reloj_buf, segs);
+    // SEGURIDAD: `formatear_reloj` escribe SOLO ASCII (digitos y ':'),
+    // garantizando un &str valido sin pasar por `from_utf8`.
+    let reloj_texto =
+        unsafe { core::str::from_utf8_unchecked(&reloj_buf[..reloj_len]) };
+
     let reloj_region = RegionPantalla {
         x: area_bar.x + area_bar.ancho - CELDA_TASKBAR_MARGEN - RELOJ_ANCHO,
         y: cy,
         ancho: RELOJ_ANCHO,
         alto: calto,
     };
-    let taskbar = Taskbar {
+    let taskbar = consola::TaskbarSlot {
         area: area_bar,
         launcher,
-        celdas: &celdas,
-        reloj: &reloj_texto,
+        celdas: &escritorio.celdas_buf,
+        reloj: reloj_texto,
         reloj_region,
     };
-    consola::recomponer(area, &capas, &taskbar);
+    let resolver = ResolverEscritorio {
+        ventanas: &escritorio.ventanas,
+    };
+    consola::recomponer(area, &escritorio.capas_buf, &taskbar, &resolver);
     // Recordar el segundo recien mostrado: `tick_reloj` evita repintar de mas
     // mientras dure este mismo segundo.
     ULTIMO_SEGUNDO.store(segs, Ordering::Relaxed);
+}
+
+/// Resolver concreto del compositor para la consola: traduce un indice de
+/// ventana a su cache de fotograma y a su nombre legible. Se construye en
+/// la pila justo antes de invocar `consola::recomponer` — su lifetime no
+/// se extiende mas alla del cerrojo del escritorio.
+struct ResolverEscritorio<'a> {
+    ventanas: &'a [Ventana],
+}
+
+impl<'a> consola::Resolver for ResolverEscritorio<'a> {
+    fn cache(&self, indice: usize) -> &[u8] {
+        &self.ventanas[indice].cache
+    }
+    fn nombre(&self, indice: usize) -> &str {
+        &self.ventanas[indice].nombre
+    }
+}
+
+/// Anchura del buffer del reloj. Cubre "MM:SS" con M de hasta dos digitos
+/// y un margen — formato fijo "99:59" cuando los segundos saturan.
+const RELOJ_BUFFER_LEN: usize = 8;
+
+/// Escribe "M:SS" o "MM:SS" en `dst` y devuelve la longitud. Sin alocacion,
+/// sin `core::fmt::Write`: un formateador ad-hoc para el reloj de la
+/// taskbar. Acota los minutos a 99 — un disclaimer barato para no
+/// engordar el formato y evitar tener que reanclar buffer en runtime.
+fn formatear_reloj(dst: &mut [u8; RELOJ_BUFFER_LEN], segs: u64) -> usize {
+    let mut min = segs / 60;
+    let sec = (segs % 60) as u8;
+    if min > 99 {
+        min = 99;
+    }
+    let min = min as u8;
+    let mut n = 0usize;
+    if min >= 10 {
+        dst[n] = b'0' + (min / 10);
+        n += 1;
+    }
+    dst[n] = b'0' + (min % 10);
+    n += 1;
+    dst[n] = b':';
+    n += 1;
+    dst[n] = b'0' + (sec / 10);
+    n += 1;
+    dst[n] = b'0' + (sec % 10);
+    n += 1;
+    n
 }
 
 /// Localiza la celda de la barra de tareas bajo la coordenada x: itera las
@@ -774,7 +874,7 @@ fn cerrar() {
     crate::drivers::altavoz::tono(0);
     alzar_si_flota(&mut escritorio, nuevo);
     aplicar_teselado(&mut escritorio);
-    recomponer(&escritorio);
+    recomponer(&mut escritorio);
 }
 
 /// Da de alta una ventana NUEVA y devuelve su indice —su identidad—. La crea
@@ -804,7 +904,7 @@ pub fn nacer_ventana(nat_ancho: usize, nat_alto: usize, nombre: &str) -> usize {
     });
     escritorio.orden.push(indice);
     aplicar_teselado(&mut escritorio);
-    recomponer(&escritorio);
+    recomponer(&mut escritorio);
     // Fase 15: el kernel saluda al nacimiento con un repique ascendente.
     crate::drivers::altavoz::agendar(&crate::drivers::altavoz::VOZ_LANZAR);
     indice
@@ -844,8 +944,8 @@ pub fn tick_reloj() {
     let Some(escritorio) = ESCRITORIO.get() else {
         return;
     };
-    let escritorio = escritorio.lock();
-    recomponer(&escritorio);
+    let mut escritorio = escritorio.lock();
+    recomponer(&mut escritorio);
 }
 
 // =============================================================================
@@ -958,7 +1058,7 @@ pub fn atender_raton() {
         }
     }
     if cambio {
-        recomponer(&escritorio);
+        recomponer(&mut escritorio);
         // El recomponer ya presento; sincronizar el centinela para no presentar
         // dos veces en la misma vuelta.
         PUNTERO_REFRESCADO.store(empacar_puntero(), Ordering::Relaxed);

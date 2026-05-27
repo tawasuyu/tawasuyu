@@ -44,51 +44,69 @@ fn mezclar(fondo: Color, tinta: Color, cobertura: u8) -> Color {
 //  ventanas se resuelve solo, por el orden del pintado.
 // =============================================================================
 
-/// El contenido visible de una capa al recomponer el escritorio.
-pub(crate) enum Contenido<'a> {
+/// El contenido visible de una capa. SIN LIFETIMES: una capa describe el
+/// contenido por INDICE de ventana, no por referencia a sus bytes. Los bytes
+/// los resuelve un `Resolver` que el compositor entrega a la consola. Esto
+/// permite que el compositor mantenga buffers de capas pre-alocados y los
+/// reuse sin alocar en cada recomposicion (Fase 25).
+pub(crate) enum ContenidoSlot {
     /// La ventana aun no ha pintado: solo se ve su panel de reposo.
     Panel,
-    /// El ultimo fotograma de la ventana — su lienzo natural crudo.
-    Fotograma(&'a [u8]),
+    /// El ultimo fotograma de la ventana — su lienzo natural crudo. El
+    /// `usize` es el indice de la ventana; el `Resolver` entrega los bytes.
+    Fotograma(usize),
     /// La ventana fue desalojada: su baliza, un color plano.
     Baliza(Color),
 }
 
-/// Una capa del escritorio: una ventana, su marco y lo que muestra. El
-/// compositor arma con ellas una lista ordenada de atras hacia adelante.
-pub(crate) struct Capa<'a> {
+/// Una capa del escritorio: una ventana, su marco y lo que muestra. SIN
+/// LIFETIMES — un slot puro: cabe en un Vec pre-alocado que se reusa con
+/// `clear() + push()` sin tocar al asignador, fotograma tras fotograma.
+pub(crate) struct CapaSlot {
     /// El marco donde la ventana vive en pantalla.
     pub(crate) marco: RegionPantalla,
     /// El tamaño natural del lienzo de la app — su fotograma mide esto.
     pub(crate) nat_ancho: usize,
     pub(crate) nat_alto: usize,
     /// Lo que la capa muestra.
-    pub(crate) contenido: Contenido<'a>,
+    pub(crate) contenido: ContenidoSlot,
     /// ¿Tiene esta ventana el foco del compositor?
     pub(crate) enfocada: bool,
 }
 
-/// Una pestaña de la barra de tareas (Fase 14): una región de pantalla, el
-/// nombre de la app y los colores con que pintarla. Las arma el compositor
-/// con una pestaña por ventana viva.
-pub(crate) struct CeldaTaskbar<'a> {
+/// Una pestaña de la barra de tareas (Fase 14). SIN LIFETIMES — el nombre
+/// se resuelve por indice de ventana via `Resolver`.
+pub(crate) struct CeldaTaskbarSlot {
     pub(crate) region: RegionPantalla,
-    pub(crate) nombre: &'a str,
+    /// Indice de la ventana cuyo nombre rotular en la pestaña.
+    pub(crate) ventana: usize,
     /// Color de fondo: indigo del foco, slate del panel, o color de baliza.
     pub(crate) fondo: Color,
     /// Color de la tinta del texto.
     pub(crate) tinta: Color,
 }
 
-/// La barra de tareas del escritorio (Fase 14): el area entera, el boton
-/// lanzador a la izquierda («+», Fase 16), las pestañas y el reloj a la
-/// derecha (Fase 16).
-pub(crate) struct Taskbar<'a> {
+/// La barra de tareas del escritorio (Fase 14). Solo viaja con dos referencias:
+/// el slice de celdas (apuntando al buffer pre-alocado del escritorio) y el
+/// texto del reloj (apuntando a un buffer de PILA del propio recomponedor).
+pub(crate) struct TaskbarSlot<'a> {
     pub(crate) area: RegionPantalla,
     pub(crate) launcher: RegionPantalla,
-    pub(crate) celdas: &'a [CeldaTaskbar<'a>],
+    pub(crate) celdas: &'a [CeldaTaskbarSlot],
     pub(crate) reloj: &'a str,
     pub(crate) reloj_region: RegionPantalla,
+}
+
+/// Resolver de datos por indice de ventana. La consola lo invoca para
+/// obtener los bytes del fotograma cacheado y el nombre de la pestaña; el
+/// compositor implementa el rasgo con una vista sobre `escritorio.ventanas`.
+/// El acoplamiento entre consola y compositor pasa a ser este rasgo, no las
+/// estructuras concretas — la consola sigue ignorando que es una Ventana.
+pub(crate) trait Resolver {
+    /// Bytes del ultimo fotograma cacheado de la ventana `indice`.
+    fn cache(&self, indice: usize) -> &[u8];
+    /// Nombre legible de la ventana `indice` — el del manifiesto.
+    fn nombre(&self, indice: usize) -> &str;
 }
 
 /// La consola grafica de renaser: doble bufer, pantalla fisica y pluma.
@@ -289,7 +307,13 @@ impl Consola {
     /// flotantes se resuelve por si solo, sin recortes ni mascaras. Cada capa
     /// pinta primero su panel —el cromo de la ventana— y, encima, su contenido;
     /// una sola presentacion cierra la pasada.
-    fn recomponer(&mut self, area: RegionPantalla, capas: &[Capa], taskbar: &Taskbar) {
+    fn recomponer(
+        &mut self,
+        area: RegionPantalla,
+        capas: &[CapaSlot],
+        taskbar: &TaskbarSlot,
+        resolver: &dyn Resolver,
+    ) {
         self.lienzo.rellenar_rect(
             area.x,
             area.y,
@@ -300,24 +324,26 @@ impl Consola {
         for capa in capas {
             let m = capa.marco;
             match &capa.contenido {
-                Contenido::Panel => {
+                ContenidoSlot::Panel => {
                     self.lienzo
                         .rellenar_rect(m.x, m.y, m.ancho, m.alto, Color::PANEL);
                 }
-                Contenido::Fotograma(datos) => {
+                ContenidoSlot::Fotograma(indice) => {
                     // El panel primero —el cromo que rodea el lienzo— y el
-                    // fotograma natural centrado encima.
+                    // fotograma natural centrado encima. Los bytes los aporta
+                    // el resolver: la consola no sabe que es una `Ventana`.
                     self.lienzo
                         .rellenar_rect(m.x, m.y, m.ancho, m.alto, Color::PANEL);
+                    let datos = resolver.cache(*indice);
                     self.componer_fotograma(m, capa.nat_ancho, capa.nat_alto, datos);
                 }
-                Contenido::Baliza(color) => {
+                ContenidoSlot::Baliza(color) => {
                     self.lienzo.rellenar_rect(m.x, m.y, m.ancho, m.alto, *color);
                 }
             }
             self.dibujar_borde(m, capa.enfocada);
         }
-        self.pintar_taskbar(taskbar);
+        self.pintar_taskbar(taskbar, resolver);
         self.presentar();
     }
 
@@ -325,7 +351,7 @@ impl Consola {
     /// el fondo de la franja, una linea fina arriba que la separa de las apps,
     /// el lanzador a la izquierda, las pestañas en el medio y el reloj a la
     /// derecha.
-    fn pintar_taskbar(&mut self, taskbar: &Taskbar) {
+    fn pintar_taskbar(&mut self, taskbar: &TaskbarSlot, resolver: &dyn Resolver) {
         // Fondo de la barra y linea de separacion.
         self.lienzo.rellenar_rect(
             taskbar.area.x,
@@ -368,13 +394,14 @@ impl Consola {
             radio * 2,
             Color::TEXTO,
         );
-        // Las pestañas.
+        // Las pestañas. El nombre se resuelve por indice via el resolver.
         for celda in taskbar.celdas {
             let r = celda.region;
             self.lienzo
                 .rellenar_rect(r.x, r.y, r.ancho, r.alto, celda.fondo);
             let base_y = r.y + (r.alto + 14) / 2;
-            self.pintar_etiqueta(r.x + 10, base_y, celda.nombre, 16.0, celda.fondo, celda.tinta);
+            let nombre = resolver.nombre(celda.ventana);
+            self.pintar_etiqueta(r.x + 10, base_y, nombre, 16.0, celda.fondo, celda.tinta);
         }
         // El reloj a la derecha: alineado a la izquierda de su region, sobre
         // el fondo del panel (sin caja propia — la barra es su lienzo).
@@ -527,9 +554,14 @@ pub(crate) fn volcar_marco(
 /// La invoca `compositor` al arrancar y siempre que hay ventanas flotantes: el
 /// solapamiento obliga a repintar el escritorio en bloque, no ventana a
 /// ventana. Las capas llegan ya ordenadas de atras hacia adelante.
-pub(crate) fn recomponer(area: RegionPantalla, capas: &[Capa], taskbar: &Taskbar) {
+pub(crate) fn recomponer(
+    area: RegionPantalla,
+    capas: &[CapaSlot],
+    taskbar: &TaskbarSlot,
+    resolver: &dyn Resolver,
+) {
     if let Some(consola) = CONSOLA.get() {
-        consola.lock().recomponer(area, capas, taskbar);
+        consola.lock().recomponer(area, capas, taskbar, resolver);
     }
 }
 
