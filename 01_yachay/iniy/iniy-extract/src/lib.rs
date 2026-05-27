@@ -101,10 +101,18 @@ impl Extractor for ExtractorHeuristico {
     }
 }
 
-/// Detecta atribución inline en español: "Según X, …" o "Para X, …".
-/// Devuelve `(nombre_fuente_citada, resto_sin_el_prefijo)` o `None`.
-/// El nombre se limita a 60 caracteres para evitar capturar frases largas.
+/// Detecta atribución inline en español. Dos patrones:
+/// 1. Prefijo: "Según X, …" / "Para X, …" / "Según X. …" / "Según X: …".
+/// 2. Verbo: "<X> afirma|sostiene|dice|escribió|defiende|… que <oración>".
+/// Devuelve `(nombre_fuente_citada, resto_sin_atribución)` o `None`.
 pub fn detectar_cita(texto: &str) -> Option<(String, String)> {
+    if let Some(r) = detectar_cita_prefijo(texto) {
+        return Some(r);
+    }
+    detectar_cita_verbo(texto)
+}
+
+fn detectar_cita_prefijo(texto: &str) -> Option<(String, String)> {
     let trim = texto.trim_start();
     for prefijo in ["Según ", "según ", "Para ", "para "] {
         if let Some(rest) = trim.strip_prefix(prefijo) {
@@ -124,10 +132,71 @@ pub fn detectar_cita(texto: &str) -> Option<(String, String)> {
                 return None;
             }
             let resto = rest[fin + 1..].trim_start().to_string();
-            // Capitaliza la primera letra del resto si quedó en minúscula.
             let resto = capitalizar_inicial(&resto);
             return Some((nombre, resto));
         }
+    }
+    None
+}
+
+const VERBOS_ATRIBUCION: &[&str] = &[
+    "afirma", "afirmó", "afirmaba",
+    "sostiene", "sostuvo", "sostenía",
+    "dice", "dijo", "decía",
+    "escribe", "escribió", "escribía",
+    "defiende", "defendió", "defendía",
+    "argumenta", "argumentó", "argumentaba",
+    "postula", "postuló", "postulaba",
+    "propone", "propuso", "proponía",
+    "declara", "declaró", "declaraba",
+    "señala", "señaló", "señalaba",
+    "opina", "opinó", "opinaba",
+    "considera", "consideró", "consideraba",
+    "piensa", "pensó", "pensaba",
+    "cree", "creyó", "creía",
+    "enseña", "enseñó", "enseñaba",
+    "asegura", "aseguró", "aseguraba",
+    "explica", "explicó", "explicaba",
+];
+
+fn detectar_cita_verbo(texto: &str) -> Option<(String, String)> {
+    let lower = texto.to_lowercase();
+    for v in VERBOS_ATRIBUCION {
+        let needle = format!(" {v} que ");
+        let Some(idx) = lower.find(&needle) else { continue; };
+        // Nombre = todo lo anterior al verbo.
+        let nombre_raw = &texto[..idx];
+        let nombre = nombre_raw.trim();
+        if nombre.is_empty() || nombre.chars().count() > 60 {
+            continue;
+        }
+        // Filtro heurístico: si el "nombre" contiene puntuación que
+        // sugiere que en realidad es una oración, descartamos. Una coma
+        // sola al final podría ser cierre de aposición y se acepta;
+        // pero punto/punto-y-coma o múltiples comas no.
+        if nombre.contains('.') || nombre.contains(';') {
+            continue;
+        }
+        if nombre.matches(',').count() > 1 {
+            continue;
+        }
+        // Si el nombre es demasiado corto (1-2 chars) o todo en minúscula
+        // (probablemente no es un nombre propio), descartamos.
+        if nombre.chars().count() < 3 {
+            continue;
+        }
+        let primera = nombre.chars().next().unwrap();
+        if !primera.is_uppercase() {
+            // No es un nombre propio capitalizado. Para MVP feo, lo
+            // descartamos — evita falsos positivos como "el autor cree que".
+            continue;
+        }
+        let resto_inicio = idx + needle.len();
+        let resto = texto[resto_inicio..].trim();
+        if resto.chars().count() < 3 {
+            continue;
+        }
+        return Some((nombre.to_string(), capitalizar_inicial(resto)));
     }
     None
 }
@@ -266,6 +335,43 @@ mod tests {
     fn detectar_cita_nombre_demasiado_largo_es_none() {
         let largo = "x ".repeat(50);
         assert!(detectar_cita(&format!("Según {largo}, algo.")).is_none());
+    }
+
+    #[test]
+    fn detectar_cita_verbo_afirma_que() {
+        let r = detectar_cita("Aristóteles afirma que el cosmos es eterno.");
+        assert_eq!(r.as_ref().map(|(n, _)| n.as_str()), Some("Aristóteles"));
+        assert!(r.unwrap().1.starts_with("El cosmos"));
+    }
+
+    #[test]
+    fn detectar_cita_verbo_sostiene_pasado() {
+        let r = detectar_cita("Heráclito sostenía que todo fluye constantemente.");
+        assert_eq!(r.as_ref().map(|(n, _)| n.as_str()), Some("Heráclito"));
+    }
+
+    #[test]
+    fn detectar_cita_verbo_dijo_que() {
+        let r = detectar_cita("Sócrates dijo que solo sabía que no sabía nada.");
+        assert_eq!(r.as_ref().map(|(n, _)| n.as_str()), Some("Sócrates"));
+    }
+
+    #[test]
+    fn detectar_cita_verbo_nombre_minuscula_es_none() {
+        // "el autor sostiene que ..." no es un nombre propio; descartamos.
+        assert!(detectar_cita("el autor sostiene que la teoría es falsa.").is_none());
+    }
+
+    #[test]
+    fn detectar_cita_verbo_sin_que_no_detecta() {
+        assert!(detectar_cita("Aristóteles afirma cosas interesantes.").is_none());
+    }
+
+    #[test]
+    fn detectar_cita_verbo_oracion_compleja_se_descarta() {
+        // Si lo que viene antes del verbo contiene puntuación oracional,
+        // probablemente no es un nombre propio sino una oración intermedia.
+        assert!(detectar_cita("Esto pasa cada día. Aristóteles. Realmente afirma que algo.").is_none());
     }
 
     #[tokio::test]
