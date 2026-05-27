@@ -17,7 +17,7 @@ llimphi-widget-nodegraph = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true }
 async-trait = { workspace = true }
-pluma-notebook-kernel-dominium = { path = "../pluma-notebook-kernel-dominium" }
+dominium-notebook-kernel = { path = "../../../01_yachay/dominium/dominium-notebook-kernel" }
 image = { workspace = true }
 
 [[example]]

@@ -1,0 +1,29 @@
+[package]
+name = "cosmos-notebook-kernel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "cosmos — kernel de notebook que envuelve cosmos-ephemeris/cosmos-time: celdas para fijar instante TDB y obtener posiciones de Sol/Luna/planetas. Eje 'cosmos-ephem puro' del refactor de cosmos (sin Chart, sin astrología) — sirve a skywatch, sundial, mareas, n-body."
+
+[dependencies]
+async-trait = { workspace = true }
+pluma-notebook-core = { path = "../../../00_unanchay/pluma/pluma-notebook-core" }
+pluma-notebook-exec = { path = "../../../00_unanchay/pluma/pluma-notebook-exec" }
+cosmos-time = { path = "../cosmos-time" }
+cosmos-ephemeris = { path = "../cosmos-ephemeris" }
+cosmos-skywatch = { path = "../cosmos-skywatch" }
+cosmos-sundial = { path = "../cosmos-sundial" }
+cosmos-tides = { path = "../cosmos-tides" }
+cosmos-rise-set = { path = "../cosmos-rise-set" }
+cosmos-eclipses = { path = "../cosmos-eclipses" }
+cosmos-transits = { path = "../cosmos-transits" }
+cosmos-core = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[[example]]
+name = "notebook_cosmos_demo"
+path = "examples/notebook_cosmos_demo.rs"

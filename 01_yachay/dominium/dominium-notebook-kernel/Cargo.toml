@@ -1,0 +1,23 @@
+[package]
+name = "dominium-notebook-kernel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "dominium — kernel de notebook que ejecuta celdas sobre un World de dominium-core/physics. 5 lenguajes (world/seed/tick/stats/param) sobre estado compartido Arc<Mutex<DominiumState>>; convierte el notebook DAG en un editor de simulaciones."
+
+[dependencies]
+async-trait = { workspace = true }
+pluma-notebook-core = { path = "../../../00_unanchay/pluma/pluma-notebook-core" }
+pluma-notebook-exec = { path = "../../../00_unanchay/pluma/pluma-notebook-exec" }
+dominium-core = { path = "../dominium-core" }
+dominium-physics = { path = "../dominium-physics" }
+png = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[[example]]
+name = "notebook_dominium_demo"
+path = "examples/notebook_dominium_demo.rs"

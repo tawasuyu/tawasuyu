@@ -39,7 +39,7 @@ use pluma_notebook_core::{CellId, CellKind, Notebook, OutputPayload};
 use pluma_notebook_graph_llimphi::{
     apply_drag, notebook_graph_view_with_exec, AutoLayout,
 };
-use pluma_notebook_kernel_dominium::DominiumKernel;
+use dominium_notebook_kernel::DominiumKernel;
 
 #[derive(Clone)]
 enum Msg {
