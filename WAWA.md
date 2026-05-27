@@ -356,6 +356,7 @@ verifica:
 | `6aa8228` | Fase 58 v3 — búsqueda por texto en vivo (substring CI) |
 | `7d35c4a` | Fase 58 v4 — contador "N/M" en el título del launcher |
 | (Fase 58 v5) | match jerárquico del launcher (prefijo > substring > subsecuencia) + selección sticky |
+| (Fase 58 v6) | highlight de chars matcheados (Spotlight-classic, máscara u64 + tinta `RESALTE_BUSQUEDA`) |
 
 ## 14. Plan — siguientes hitos
 
@@ -460,6 +461,16 @@ restante, debe descontar primero estos hitos para no duplicar esfuerzo:
     del manifiesto. La selección es *sticky*: tras un refiltrado, si
     la app previa sigue lanzable, el cursor se queda sobre ella
     (backspace ya no tira el cursor al primer item).
+  - Highlight de chars matcheados (v6): `evaluar_match` devuelve, junto
+    al nivel, una máscara `u64` con un bit a 1 por cada byte de pajar
+    que formó parte del match (contigua para nivel 3/2, dispersa para
+    nivel 1). `LauncherOverlay::mascaras` viaja paralela a `filtrado` y
+    `consola::pintar_etiqueta_resaltada` pinta cada glifo en
+    `Color::RESALTE_BUSQUEDA` (ámbar dorado) si su bit está a 1, en
+    `Color::TEXTO` si está a 0. Visualiza el "por qué" del match —
+    indispensable cuando el catálogo crezca y el nivel 1 produzca
+    coincidencias inesperadas. Caracteres más allá del bit 63 se pintan
+    en tinta normal (degradación silenciosa).
   - Contador "N/M" (v4) a la derecha de la barra de título: hace
     visible cuándo la query deja cero matches o cuántas apps quedan
     tras filtrar; se pinta en `Color::SIN_FOCO` como información

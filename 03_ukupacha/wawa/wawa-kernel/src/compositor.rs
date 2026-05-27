@@ -245,6 +245,12 @@ struct Escritorio {
     /// "p" filtra a las apps con esa letra en su nombre y el lanzamiento
     /// resuelve al indice original de plantilla.
     launcher_filtrado: Vec<usize>,
+    /// FASE 58 v6 :: mascara de chars matcheados por fila filtrada, paralela
+    /// a `launcher_filtrado`. Bit `i` a 1 = el caracter `i` del nombre matcheo
+    /// con la query (Spotlight-classic highlight). 64 bits cubren los nombres
+    /// del manifiesto con holgura — caracteres mas alla del bit 63 no se
+    /// resaltan (degradacion silenciosa, no panic).
+    launcher_mascaras: Vec<u64>,
 }
 
 /// FASE 58 v3 :: mirror atomico de `Escritorio::launcher_abierto` que el
@@ -348,6 +354,7 @@ pub fn fundar(ancho: usize, alto: usize, naturales: &[(usize, usize, &str)]) {
         catalogo: Vec::new(),
         launcher_query: String::new(),
         launcher_filtrado: Vec::new(),
+        launcher_mascaras: Vec::new(),
     };
     aplicar_teselado(&mut escritorio);
 
@@ -649,6 +656,7 @@ fn cerrar_launcher(escritorio: &mut Escritorio) {
     escritorio.launcher_abierto = false;
     escritorio.launcher_query.clear();
     escritorio.launcher_filtrado.clear();
+    escritorio.launcher_mascaras.clear();
     escritorio.launcher_seleccion = 0;
     LAUNCHER_ABIERTO.store(false, Ordering::Relaxed);
 }
@@ -666,6 +674,11 @@ fn cerrar_launcher(escritorio: &mut Escritorio) {
 /// cerca del inicio; en empate, el orden original del manifiesto. La seleccion
 /// previa se preserva si la app sigue lanzable —backspace ya no tira el cursor
 /// al primer item, como pasaba en v3—.
+///
+/// FASE 58 v6 :: en paralelo a `launcher_filtrado`, se llena
+/// `launcher_mascaras` con la mascara de chars matcheados por nombre —el
+/// pintado del overlay las usa para resaltar las letras del match (Spotlight
+/// classic).
 fn refiltrar_launcher(escritorio: &mut Escritorio) {
     // Si habia algo seleccionado, anclamos su indice de catalogo para
     // intentar recolocarlo tras refiltrar.
@@ -675,31 +688,36 @@ fn refiltrar_launcher(escritorio: &mut Escritorio) {
         .copied();
 
     escritorio.launcher_filtrado.clear();
+    escritorio.launcher_mascaras.clear();
     let query = &escritorio.launcher_query;
     if query.is_empty() {
         // Sin query: todo el catalogo es valido, en su orden original.
+        // Mascara cero = ningun char marcado (no hay nada que resaltar).
         for i in 0..escritorio.catalogo.len() {
             escritorio.launcher_filtrado.push(i);
+            escritorio.launcher_mascaras.push(0);
         }
     } else {
-        // Reunimos (nivel, primer_match, indice_catalogo) para los que
-        // matcheen — Vec temporal porque el catalogo es chico (12 hoy) y la
-        // refiltracion ocurre una vez por keystroke, no en el camino caliente.
-        let mut ranking: Vec<((u8, usize), usize)> = Vec::new();
+        // Reunimos (nivel, primer_match, mascara, indice_catalogo) para los
+        // que matcheen — Vec temporal porque el catalogo es chico (12 hoy)
+        // y la refiltracion ocurre una vez por keystroke, no en el camino
+        // caliente del compositor.
+        let mut ranking: Vec<(u8, usize, u64, usize)> = Vec::new();
         for (i, nombre) in escritorio.catalogo.iter().enumerate() {
-            if let Some(score) = evaluar_match(nombre, query) {
-                ranking.push((score, i));
+            if let Some((tier, mask)) = evaluar_match(nombre, query) {
+                let primer = mask.trailing_zeros() as usize;
+                ranking.push((tier, primer, mask, i));
             }
         }
         // Orden: nivel desc, primer_match asc, indice_catalogo asc.
         ranking.sort_by(|a, b| {
-            b.0 .0
-                .cmp(&a.0 .0)
-                .then(a.0 .1.cmp(&b.0 .1))
+            b.0.cmp(&a.0)
                 .then(a.1.cmp(&b.1))
+                .then(a.3.cmp(&b.3))
         });
-        for (_, idx) in ranking {
+        for (_, _, mask, idx) in ranking {
             escritorio.launcher_filtrado.push(idx);
+            escritorio.launcher_mascaras.push(mask);
         }
     }
 
@@ -715,18 +733,41 @@ fn refiltrar_launcher(escritorio: &mut Escritorio) {
         .unwrap_or(0);
 }
 
-/// FASE 58 v5 :: evalua el match de `aguja` contra `pajar` y devuelve
-/// `(nivel, indice_primer_match)` o `None` si no hay match ni siquiera como
-/// subsecuencia. Nivel mas alto = match mejor (ver `refiltrar_launcher`).
+/// FASE 58 v5+v6 :: evalua el match de `aguja` contra `pajar` y devuelve
+/// `(nivel, mascara)` o `None` si no hay match ni siquiera como subsecuencia.
+/// `nivel` clasifica la calidad del match (3 = prefijo, 2 = substring, 1 =
+/// subsecuencia). `mascara` tiene el bit `i` a 1 si el caracter `i` de `pajar`
+/// formo parte del match —el llamante lo usa para resaltar las letras
+/// matcheadas en el overlay (Spotlight-classic).
+///
+/// Para nivel 3 (prefijo) los bits 0..aguja.len() estan a 1; para nivel 2
+/// (substring) los bits inicio..inicio+aguja.len(); para nivel 1
+/// (subsecuencia) los bits dispersos correspondientes al greedy de izquierda
+/// a derecha. Caracteres mas alla del bit 63 nunca se marcan (los nombres
+/// del manifiesto son cortos —los mas largos llevan 9 chars hoy—).
+///
 /// Case-insensitive sobre ASCII; bytes no-ASCII se comparan crudos —pueden
 /// no matchear pero no causan panico—.
-fn evaluar_match(pajar: &str, aguja: &str) -> Option<(u8, usize)> {
+fn evaluar_match(pajar: &str, aguja: &str) -> Option<(u8, u64)> {
     let pajar = pajar.as_bytes();
     let aguja = aguja.as_bytes();
     if aguja.is_empty() {
         return Some((3, 0));
     }
     let eq = |a: u8, b: u8| a.to_ascii_lowercase() == b.to_ascii_lowercase();
+    // Helper: mascara contigua de `n` bits arrancando en `inicio` (chars
+    // mas alla del bit 63 se truncan silenciosamente). Construirla a mano
+    // evita los casos de borde de `(1 << n) - 1` cuando n = 64.
+    let mascara_contigua = |inicio: usize, n: usize| -> u64 {
+        let mut m: u64 = 0;
+        for k in 0..n {
+            let bit = inicio + k;
+            if bit < 64 {
+                m |= 1u64 << bit;
+            }
+        }
+        m
+    };
 
     // Nivel 3 — prefijo.
     if pajar.len() >= aguja.len()
@@ -735,7 +776,7 @@ fn evaluar_match(pajar: &str, aguja: &str) -> Option<(u8, usize)> {
             .zip(aguja.iter())
             .all(|(a, b)| eq(*a, *b))
     {
-        return Some((3, 0));
+        return Some((3, mascara_contigua(0, aguja.len())));
     }
 
     // Nivel 2 — substring contiguo.
@@ -747,28 +788,29 @@ fn evaluar_match(pajar: &str, aguja: &str) -> Option<(u8, usize)> {
                 .zip(aguja.iter())
                 .all(|(a, b)| eq(*a, *b))
             {
-                return Some((2, inicio));
+                return Some((2, mascara_contigua(inicio, aguja.len())));
             }
         }
     }
 
     // Nivel 1 — subsecuencia (cada caracter en orden, no necesariamente
     // contiguo). Recorremos pajar de izquierda a derecha consumiendo aguja
-    // a medida que casa; si terminamos aguja entera, hay match.
+    // a medida que casa; si terminamos aguja entera, hay match. Marcamos
+    // cada posicion casada en la mascara.
     let mut iter = pajar.iter().enumerate();
-    let mut primer: Option<usize> = None;
+    let mut mascara: u64 = 0;
     'siguiente_letra: for &ch_a in aguja {
         for (idx, &ch_p) in iter.by_ref() {
             if eq(ch_p, ch_a) {
-                if primer.is_none() {
-                    primer = Some(idx);
+                if idx < 64 {
+                    mascara |= 1u64 << idx;
                 }
                 continue 'siguiente_letra;
             }
         }
         return None;
     }
-    primer.map(|p| (1, p))
+    Some((1, mascara))
 }
 
 /// Cicla al siguiente modo de teselado: recalcula los marcos de las ventanas
@@ -1073,6 +1115,7 @@ fn recomponer(escritorio: &mut Escritorio) {
             ),
             catalogo: &escritorio.catalogo,
             filtrado: &escritorio.launcher_filtrado,
+            mascaras: &escritorio.launcher_mascaras,
             seleccion: escritorio.launcher_seleccion,
             query: &escritorio.launcher_query,
         })

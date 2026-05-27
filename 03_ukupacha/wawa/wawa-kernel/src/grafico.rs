@@ -106,6 +106,16 @@ impl Color {
         b: 0xE0,
     };
 
+    /// FASE 58 v6 :: resalte de los caracteres que matchean la query del
+    /// launcher (Spotlight-classic). Un ambar dorado que contrasta tanto sobre
+    /// `PANEL` (filas no seleccionadas) como sobre `FOCO` (fila seleccionada),
+    /// y no choca con la semantica de ninguno de los otros colores de baliza.
+    pub(crate) const RESALTE_BUSQUEDA: Color = Color {
+        r: 0xF4,
+        g: 0xC4,
+        b: 0x30,
+    };
+
     /// Carmesi profundo: la baliza ULTIMA del kernel — fallo de inicializacion
     /// no recuperable (Fase 25). Se invoca cuando un superbloque que dice
     /// estar firmado no supera la verificacion criptografica, o cuando un

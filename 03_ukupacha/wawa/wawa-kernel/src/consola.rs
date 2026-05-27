@@ -111,6 +111,11 @@ pub(crate) struct LauncherOverlay<'a> {
     pub(crate) catalogo: &'a [alloc::string::String],
     /// Indices de `catalogo` que matchean la query — el orden visible.
     pub(crate) filtrado: &'a [usize],
+    /// FASE 58 v6 :: mascaras de chars matcheados por nombre, paralelo a
+    /// `filtrado`. Bit `i` a 1 = el caracter `i` del nombre matcheo la query
+    /// y debe pintarse en `Color::RESALTE_BUSQUEDA`. Si la query esta vacia
+    /// todas son cero (no hay nada que resaltar).
+    pub(crate) mascaras: &'a [u64],
     /// Indice DENTRO de `filtrado` de la fila seleccionada.
     pub(crate) seleccion: usize,
     /// Query incremental que escribe el operador.
@@ -512,13 +517,21 @@ impl Consola {
                 );
             }
             let base_y = fila_y + (altura_fila + 14) / 2;
-            self.pintar_etiqueta(
+            // FASE 58 v6 :: la mascara dice que chars matchearon. Si todas
+            // las filas tienen mascara 0 (caso query vacia), la variante
+            // resaltada degenera al mismo render que `pintar_etiqueta`.
+            // Indices fuera de `mascaras` se tratan como mascara 0
+            // (degradacion silenciosa).
+            let mascara = overlay.mascaras.get(i).copied().unwrap_or(0);
+            self.pintar_etiqueta_resaltada(
                 r.x + MARGEN_TEXTO,
                 base_y,
                 nombre.as_str(),
                 16.0,
                 fondo,
                 Color::TEXTO,
+                Color::RESALTE_BUSQUEDA,
+                mascara,
             );
         }
     }
@@ -600,6 +613,53 @@ impl Consola {
     ) {
         let mut cursor = x;
         for caracter in texto.chars() {
+            let (metricas, cobertura) = texto::rasterizar(caracter, tamaño);
+            let inicio_x = cursor as isize + metricas.xmin as isize;
+            let inicio_y = base_y as isize - metricas.ymin as isize - metricas.height as isize;
+            for fila in 0..metricas.height {
+                for col in 0..metricas.width {
+                    let opacidad = cobertura[fila * metricas.width + col];
+                    if opacidad == 0 {
+                        continue;
+                    }
+                    let px = inicio_x + col as isize;
+                    let py = inicio_y + fila as isize;
+                    if px < 0 || py < 0 {
+                        continue;
+                    }
+                    let color = mezclar(fondo, tinta, opacidad);
+                    self.lienzo.pintar_pixel(px as usize, py as usize, color);
+                }
+            }
+            cursor += metricas.advance_width as usize;
+        }
+    }
+
+    /// FASE 58 v6 :: variante de `pintar_etiqueta` que pinta cada caracter en
+    /// `tinta_match` si su bit correspondiente en `mascara` esta a 1, y en
+    /// `tinta_normal` si esta a 0. Si la mascara es 0 (caso comun: query
+    /// vacia o el nombre no tiene chars matcheados visibles), el render es
+    /// identico al de `pintar_etiqueta` con `tinta = tinta_normal`. Los
+    /// caracteres mas alla del bit 63 se pintan con `tinta_normal`
+    /// (degradacion silenciosa — los nombres del manifiesto son ASCII corto).
+    fn pintar_etiqueta_resaltada(
+        &mut self,
+        x: usize,
+        base_y: usize,
+        texto: &str,
+        tamaño: f32,
+        fondo: Color,
+        tinta_normal: Color,
+        tinta_match: Color,
+        mascara: u64,
+    ) {
+        let mut cursor = x;
+        for (idx, caracter) in texto.chars().enumerate() {
+            let tinta = if idx < 64 && (mascara >> idx) & 1 == 1 {
+                tinta_match
+            } else {
+                tinta_normal
+            };
             let (metricas, cobertura) = texto::rasterizar(caracter, tamaño);
             let inicio_x = cursor as isize + metricas.xmin as isize;
             let inicio_y = base_y as isize - metricas.ymin as isize - metricas.height as isize;
