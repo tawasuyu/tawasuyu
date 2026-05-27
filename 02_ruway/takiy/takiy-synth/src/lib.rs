@@ -1,0 +1,30 @@
+//! `takiy-synth` — síntesis: convierte un `Score` en audio PCM.
+//!
+//! La pieza más fea del stack, a propósito: osciladores básicos
+//! (sine/square/saw/triangle) con envolvente ADSR. Suena horrible, pero
+//! permite escuchar lo que escribes sin instalar nada.
+//!
+//! El trabajo serio lo hará luego otro `Renderer`: SoundFonts (SF2/SFZ)
+//! con muestras reales, y eventualmente render neural en `takiy-ai`. La
+//! interfaz [`Renderer`] es lo que permite intercambiarlos sin tocar el
+//! resto de la app.
+//!
+//! - [`audio`] — `AudioBuffer` mono `f32` y su tasa de muestreo.
+//! - [`waveform`] — formas de onda básicas.
+//! - [`envelope`] — `Adsr` en segundos.
+//! - [`renderer`] — `Renderer` trait + `OscRenderer`.
+//! - [`wav`] — escritor WAV PCM 16-bit, sin dependencias.
+
+#![forbid(unsafe_code)]
+
+pub mod audio;
+pub mod envelope;
+pub mod renderer;
+pub mod waveform;
+pub mod wav;
+
+pub use audio::AudioBuffer;
+pub use envelope::Adsr;
+pub use renderer::{OscRenderer, Renderer};
+pub use waveform::Waveform;
+pub use wav::write_wav;
