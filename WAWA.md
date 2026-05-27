@@ -393,35 +393,39 @@ restante, debe descontar primero estos hitos para no duplicar esfuerzo:
   El cursor vive en framebuffer, no en lienzo (el lienzo HACE de save-under),
   así que la siguiente recomposición lo borra y la siguiente presentación
   lo redibuja — cero artefactos.
+- **`wawactl daemon-firma`** — **HECHA** (Fase 39/41/49, auditoría
+  2026-05-27). `02_ruway/wawa/wawactl/src/main.rs` (1158 LOC) tiene
+  `cmd_daemon_firma` cableado con dos transportes: `--pty <PATH>` (legacy,
+  fase 39) y `--char-device <PATH>` (virtio-console, fase 49). Parser de
+  ventana deslizante reconoce `PREFIJO_SOLICITUD_VIRTIO =
+  b"wawactl::sign_pci::"` + 32 B hash; prompt interactivo
+  `[y/N] (timeout 30 s)` vía `tokio::time::timeout(TIMEOUT_CONFIRMACION, ...)`
+  sobre `spawn_blocking` para stdin; al aceptar firma con
+  `ed25519-compact` la seed del slot indicado y emite 65 B (1 slot id +
+  64 firma) por el mismo canal. `chrono` deja marcas de tiempo en el log
+  de auditoría.
 
 ### 14.1 Hitos genuinamente pendientes (orden de mérito)
 
-1. **`wawactl daemon-firma --slot N --clave-privada PATH`**: el host-side de
-   la ceremonia de claves. `claves.rs` ya documenta la API esperada (encabezado
-   ASCII `wawactl::sign_pci::` + 32 B hash crudo sobre el VirtIO Console,
-   respuesta = 1 B slot + 64 B firma). Falta el daemon tokio que escucha el
-   char-device de QEMU, exige confirmación interactiva al operador, firma con
-   la seed del slot indicado y devuelve la firma por el mismo canal.
-
-2. **`wawactl gc`**: subcomando host-side complementario a `sys_grafo_compactar`
+1. **`wawactl gc`**: subcomando host-side complementario a `sys_grafo_compactar`
    (Fase 53, §14.0). Lee superbloque / dispara compactación vía socket de
    control que aún no existe.
 
-3. **Multi-monitor / resolución dinámica**: `bootloader_api::FrameBufferInfo`
+2. **Multi-monitor / resolución dinámica**: `bootloader_api::FrameBufferInfo`
    ya entrega la geometría real; la consola y el compositor todavía asumen un
    único framebuffer. Requiere capa de abstracción `Pantalla` extendida.
 
-4. **Auditoría DMA exhaustion**: el `Hal::dma_alloc` de virtio-drivers tiene
+3. **Auditoría DMA exhaustion**: el `Hal::dma_alloc` de virtio-drivers tiene
    firma infallible — un userspace adversario podría agotar la arena con
    `sys_object_put` masivos. Mitigación: rate-limit por app y/o `dma_alloc`
    con back-pressure ante exhaustion. (Hay un cap parcial,
    `MAX_PAGINAS_DMA_PER_APP`, pero falta el back-pressure.)
 
-5. **Zero-alloc del demuxer Akasha**: `encolar_para_usuario` aún hace
+4. **Zero-alloc del demuxer Akasha**: `encolar_para_usuario` aún hace
    `frame.to_vec()` por frame entrante. Cambiar por un anillo pre-alocado de
    buffers MTU con free-list LIFO dentro de `COLA_USUARIO`.
 
-6. **Tabla de capacidades por bytecode hash**: cuando el manifiesto declare
+5. **Tabla de capacidades por bytecode hash**: cuando el manifiesto declare
    `bytecode` por hash, los permisos podrían derivarse de la firma sobre
    `(hash_bytecode, permisos)` en lugar de declararse en `EntradaApp`. Daría
    inmutabilidad real al binding "qué binario puede hacer qué".
