@@ -1,0 +1,12 @@
+[package]
+name = "llimphi-widget-context-menu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-context-menu — menú contextual gioser: panel negro, barra accent vertical de 3px a la izquierda, sin esquinas redondeadas ni sombras, header en uppercase tiny. Se monta sobre App::view_overlay con un scrim full-screen que dismissa al click-fuera."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }

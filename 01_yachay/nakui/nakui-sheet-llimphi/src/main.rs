@@ -25,8 +25,12 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{
     App, Handle, Key, KeyEvent, KeyState, NamedKey, View, WheelDelta,
 };
+use llimphi_widget_context_menu::{
+    context_menu_view, step_active, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 use nakui_sheet::{csv_io, CellFormat, CellRef, ExportMode, SheetValue, Workbook};
+use std::sync::Arc;
 
 const VISIBLE_COLS: u32 = 12;
 const VISIBLE_ROWS: u32 = 25;
@@ -100,6 +104,21 @@ enum Msg {
     ExportCsv,
     /// Importa `./nakui-import.csv` a partir de A1 (Ctrl+I).
     ImportCsv,
+    /// Borra el contenido de la celda activa (Delete / menú "Limpiar").
+    ClearActive,
+    /// Abre el menú contextual sobre la celda dada, en la posición de
+    /// pantalla `(x, y)`. La selección se mueve a esa celda como
+    /// efecto colateral — es lo que el usuario espera tras un
+    /// right-click.
+    OpenMenu { cell: CellRef, pos: (f32, f32) },
+    /// Cierra el menú contextual sin elegir ninguna opción.
+    CloseMenu,
+    /// Mueve el item resaltado del menú (-1 = arriba, +1 = abajo).
+    MenuStep(i32),
+    /// Activa el item resaltado del menú actual (Enter).
+    MenuActivateActive,
+    /// Activa el item N-ésimo del menú (click directo).
+    MenuPick(usize),
 }
 
 #[derive(Clone, Copy)]
@@ -134,6 +153,20 @@ struct Model {
     /// se renderiza encima de la celda en vez del valor estático,
     /// y las flechas commitean+mueven en vez de navegar.
     editing: bool,
+    /// Estado del menú contextual abierto. `None` = sin menú.
+    menu: Option<MenuState>,
+}
+
+/// Estado del menú contextual mientras está abierto.
+#[derive(Clone)]
+struct MenuState {
+    /// Celda sobre la que se invocó. La selección ya se movió a
+    /// esta celda al abrir el menú.
+    cell: CellRef,
+    /// Esquina top-left donde queremos renderizar el panel.
+    pos: (f32, f32),
+    /// Item resaltado por keyboard nav. `usize::MAX` = ninguno.
+    active: usize,
 }
 
 #[derive(Default, Clone)]
@@ -177,10 +210,11 @@ impl App for NakuiSheetApp {
             viewport_col: 0,
             clipboard_origin: None,
             editing: false,
+            menu: None,
         }
     }
 
-    fn update(mut model: Self::Model, msg: Self::Msg, _h: &Handle<Self::Msg>) -> Self::Model {
+    fn update(mut model: Self::Model, msg: Self::Msg, h: &Handle<Self::Msg>) -> Self::Model {
         match msg {
             Msg::SelectCell(cr) => {
                 // Click externo cierra una edición en curso aplicando
@@ -389,8 +423,130 @@ impl App for NakuiSheetApp {
                     };
                 }
             },
+            Msg::ClearActive => {
+                let cr = model.selected;
+                match model.wb.clear_cell(cr) {
+                    Ok(_) => {
+                        model.bar.set_text("");
+                        model.status = Status {
+                            text: format!("  ␡ limpiada: {cr}"),
+                            kind: StatusKind::Info,
+                        };
+                    }
+                    Err(e) => {
+                        model.status = Status {
+                            text: format!("  ✗ limpiar: {e}"),
+                            kind: StatusKind::Error,
+                        };
+                    }
+                }
+            }
+            Msg::OpenMenu { cell, pos } => {
+                if model.editing {
+                    commit_bar(&mut model);
+                    model.editing = false;
+                }
+                model.selected = cell;
+                model.bar.set_text(model.wb.raw(cell).unwrap_or(""));
+                model.menu = Some(MenuState {
+                    cell,
+                    pos,
+                    active: usize::MAX,
+                });
+            }
+            Msg::CloseMenu => {
+                model.menu = None;
+            }
+            Msg::MenuStep(dir) => {
+                if let Some(menu) = model.menu.as_mut() {
+                    let items = menu_items(&model.wb, model.clipboard_origin.is_some());
+                    menu.active = step_active(&items, menu.active, dir);
+                }
+            }
+            Msg::MenuActivateActive => {
+                if let Some(menu) = model.menu.clone() {
+                    model.menu = None;
+                    if menu.active != usize::MAX {
+                        if let Some(inner) = menu_item_msg(menu.active) {
+                            h.dispatch(inner);
+                        }
+                    }
+                }
+            }
+            Msg::MenuPick(idx) => {
+                model.menu = None;
+                if let Some(inner) = menu_item_msg(idx) {
+                    h.dispatch(inner);
+                }
+            }
         }
         model
+    }
+
+    fn view_overlay(model: &Self::Model) -> Option<View<Self::Msg>> {
+        let menu = model.menu.as_ref()?;
+        let items = menu_items(&model.wb, model.clipboard_origin.is_some());
+        let mut palette = ContextMenuPalette::from_theme(&model.theme);
+        // El theme dark-sheet vive en `palette` (módulo local). El
+        // accent es naranja gioser; eso ya viene del theme. Aclaramos
+        // los slots para que el menú pegue con el panel negro y la
+        // grilla sutil:
+        palette.bg_panel = self::palette::BG_PANEL;
+        palette.fg_text = self::palette::FG_TEXT;
+        palette.fg_active = self::palette::ACCENT_FG;
+        palette.bg_active = self::palette::ACCENT;
+        palette.fg_shortcut = self::palette::FG_MUTED;
+        palette.fg_disabled = self::palette::FG_PLACEHOLDER;
+        palette.fg_header = self::palette::FG_MUTED;
+        palette.border = self::palette::GRID_LINE;
+        palette.separator = self::palette::GRID_LINE;
+        palette.accent = self::palette::ACCENT;
+        // Scrim casi imperceptible — apenas un velo. La idea es no
+        // ocultar la hoja; el menú flota y la grilla sigue viéndose
+        // detrás, sólo un poco amortiguada.
+        palette.scrim = Color::from_rgba8(0, 0, 0, 90);
+
+        let header = Some(menu.cell.to_string());
+        let viewport_w = (VISIBLE_COLS as f32 * CELL_W) + ROW_HEADER_W;
+        let viewport_h = TOP_HEADER_H
+            + FORMULA_BAR_H
+            + (VISIBLE_ROWS as f32 * CELL_H)
+            + STATUS_H
+            + CELL_H /* header de columnas */;
+        // Anclaje: esquina inferior izquierda de la celda invocadora.
+        // Si la celda está fuera del viewport (raro porque el menú
+        // se invoca por click sobre una celda visible), el clamping
+        // del widget la trae al borde más cercano.
+        let col_local = menu
+            .cell
+            .col
+            .saturating_sub(model.viewport_col) as f32;
+        let row_local = menu
+            .cell
+            .row
+            .saturating_sub(model.viewport_row) as f32;
+        let anchor_x = ROW_HEADER_W + col_local * CELL_W + 6.0;
+        // Y: top-of-window + barra título + barra fórmula + header de
+        // columnas + filas previas + altura de la propia celda → menú
+        // aparece JUSTO debajo de la celda, sin solaparla.
+        let anchor_y = TOP_HEADER_H
+            + FORMULA_BAR_H
+            + CELL_H /* header de columnas */
+            + row_local * CELL_H
+            + CELL_H;
+        let _ = menu.pos;
+
+        let spec = ContextMenuSpec {
+            anchor: (anchor_x, anchor_y),
+            viewport: (viewport_w, viewport_h),
+            header,
+            items,
+            active: menu.active,
+            on_pick: Arc::new(|i| Msg::MenuPick(i)),
+            on_dismiss: Msg::CloseMenu,
+            palette,
+        };
+        Some(context_menu_view(spec))
     }
 
     fn view(model: &Self::Model) -> View<Self::Msg> {
@@ -422,6 +578,19 @@ impl App for NakuiSheetApp {
     fn on_key(model: &Self::Model, ev: &KeyEvent) -> Option<Self::Msg> {
         if ev.state != KeyState::Pressed {
             return None;
+        }
+        // Si el menú contextual está abierto, todas las teclas se
+        // interpretan en su contexto. Flechas mueven, Enter activa,
+        // Esc cierra. Cualquier otra tecla cierra también — feel
+        // estándar de menús.
+        if model.menu.is_some() {
+            return match &ev.key {
+                Key::Named(NamedKey::ArrowUp) => Some(Msg::MenuStep(-1)),
+                Key::Named(NamedKey::ArrowDown) => Some(Msg::MenuStep(1)),
+                Key::Named(NamedKey::Enter) => Some(Msg::MenuActivateActive),
+                Key::Named(NamedKey::Escape) => Some(Msg::CloseMenu),
+                _ => Some(Msg::CloseMenu),
+            };
         }
         // Atajos con Ctrl: undo/redo. Tienen prioridad sobre cualquier
         // otra interpretación de la tecla.
@@ -476,6 +645,10 @@ impl App for NakuiSheetApp {
             Key::Named(NamedKey::Enter) => Some(Msg::Commit),
             Key::Named(NamedKey::Escape) => Some(Msg::Cancel),
             Key::Named(NamedKey::F2) => Some(Msg::StartEditExisting),
+            // Delete: limpia el contenido de la celda activa cuando NO
+            // se está editando. (Adentro de la barra ya sirve para
+            // borrar carácter por carácter — viaja por FormulaKey.)
+            Key::Named(NamedKey::Delete) if !model.editing => Some(Msg::ClearActive),
             // Flechas: si NO está editando, navegan SIEMPRE. Si está
             // editando, navegan SOLO si el caret está en el extremo
             // de la barra (Up/Down) o si Shift no se está usando
@@ -698,6 +871,71 @@ fn ensure_visible(model: &mut Model) {
         model.viewport_col = sel.col.saturating_sub(SCROLL_MARGIN_COLS);
     } else if sel.col + SCROLL_MARGIN_COLS >= h_right {
         model.viewport_col = sel.col + SCROLL_MARGIN_COLS + 1 - VISIBLE_COLS;
+    }
+}
+
+/// Construye la lista de items del menú contextual de una celda. El
+/// orden de items aquí es el contrato implícito de
+/// `activate_menu_item` — si reordenás, asegurate de mover el match.
+fn menu_items(wb: &Workbook, has_clipboard: bool) -> Vec<ContextMenuItem> {
+    let can_undo = wb.events().len() > 0; // approximation; el Workbook expone applied_count
+    let _ = can_undo;
+    vec![
+        ContextMenuItem::action("Copiar").with_shortcut("Ctrl+C"),       // 0
+        ContextMenuItem::action("Cortar").with_shortcut("Ctrl+X"),       // 1
+        if has_clipboard {
+            ContextMenuItem::action("Pegar").with_shortcut("Ctrl+V")
+        } else {
+            ContextMenuItem::action("Pegar")
+                .with_shortcut("Ctrl+V")
+                .disabled()
+        },                                                                // 2
+        ContextMenuItem::separator(),                                    // 3
+        ContextMenuItem::action("Limpiar")
+            .with_shortcut("Del")
+            .destructive(),                                              // 4
+        ContextMenuItem::separator(),                                    // 5
+        ContextMenuItem::action("Formato: Número").with_shortcut("Ctrl+!"), // 6
+        ContextMenuItem::action("Formato: Moneda  $").with_shortcut("Ctrl+$"), // 7
+        ContextMenuItem::action("Formato: Porcentaje").with_shortcut("Ctrl+%"), // 8
+        ContextMenuItem::action("Formato: General").with_shortcut("Ctrl+)"), // 9
+        ContextMenuItem::separator(),                                    // 10
+        if wb.can_undo() {
+            ContextMenuItem::action("Deshacer").with_shortcut("Ctrl+Z")
+        } else {
+            ContextMenuItem::action("Deshacer")
+                .with_shortcut("Ctrl+Z")
+                .disabled()
+        },                                                                // 11
+        if wb.can_redo() {
+            ContextMenuItem::action("Rehacer").with_shortcut("Ctrl+Y")
+        } else {
+            ContextMenuItem::action("Rehacer")
+                .with_shortcut("Ctrl+Y")
+                .disabled()
+        },                                                                // 12
+    ]
+}
+
+/// Traduce un índice del menú a su Msg-equivalente. `None` para
+/// separators o índices sin acción. Es la fuente de verdad para qué
+/// hace cada fila del menú.
+fn menu_item_msg(idx: usize) -> Option<Msg> {
+    match idx {
+        0 => Some(Msg::Copy),
+        1 => Some(Msg::Cut),
+        2 => Some(Msg::Paste),
+        4 => Some(Msg::ClearActive),
+        6 => Some(Msg::ApplyFormat(CellFormat::Number { decimals: 2 })),
+        7 => Some(Msg::ApplyFormat(CellFormat::Currency {
+            symbol: "$".into(),
+            decimals: 2,
+        })),
+        8 => Some(Msg::ApplyFormat(CellFormat::Percent { decimals: 0 })),
+        9 => Some(Msg::ApplyFormat(CellFormat::General)),
+        11 => Some(Msg::Undo),
+        12 => Some(Msg::Redo),
+        _ => None,
     }
 }
 
@@ -1050,7 +1288,13 @@ fn cell_view(wb: &Workbook, selected: CellRef, cr: CellRef) -> View<Msg> {
         Alignment::End
     };
 
-    bordered_cell(
+    // Right-click sobre la celda abre el menú contextual. El cálculo
+    // de la posición de anclaje del panel lo hace `view_overlay`
+    // mirroreando la matemática de `grid_view` desde la cell y el
+    // viewport — `on_right_click_at` da local_x/local_y, pero no la
+    // posición global. Pasamos la pos local en el Msg por si más
+    // adelante queremos posicionar exactamente bajo el cursor.
+    let cell = bordered_cell(
         CELL_W,
         CELL_H,
         bg,
@@ -1059,7 +1303,13 @@ fn cell_view(wb: &Workbook, selected: CellRef, cr: CellRef) -> View<Msg> {
         display,
         alignment,
         Some(Msg::SelectCell(cr)),
-    )
+    );
+    cell.on_right_click_at(move |lx, ly, _, _| {
+        Some(Msg::OpenMenu {
+            cell: cr,
+            pos: (lx, ly),
+        })
+    })
 }
 
 fn status_bar_view(status: &Status) -> View<Msg> {

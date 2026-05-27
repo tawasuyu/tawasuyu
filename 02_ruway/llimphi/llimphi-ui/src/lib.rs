@@ -63,6 +63,22 @@ pub trait App: 'static {
         None
     }
 
+    /// Capa de overlay opcional. Si devuelve `Some(view)`, el runtime
+    /// la pinta encima del árbol principal y los clicks/hover se
+    /// rutean exclusivamente a ella (el árbol de fondo queda "bajo
+    /// vidrio" hasta que se cierre el overlay). Pensado para menús
+    /// contextuales, diálogos modales, popovers — el patrón usual es
+    /// envolver los items en un scrim a pantalla completa con
+    /// `on_click = DismissOverlay` para que los clicks afuera lo
+    /// cierren.
+    ///
+    /// La transición entre "con overlay" y "sin overlay" la maneja la
+    /// app vía su Model: cuando el state diga "menu abierto",
+    /// `view_overlay` devuelve `Some`; cuando se cierre, `None`.
+    fn view_overlay(_model: &Self::Model) -> Option<View<Self::Msg>> {
+        None
+    }
+
     /// Título de la ventana (sólo se lee al arrancar).
     fn title() -> &'static str {
         "llimphi"
@@ -307,6 +323,16 @@ pub struct View<Msg> {
     /// de mundo. Si está presente, gana sobre `on_click`. Devolver
     /// `None` no dispara update.
     pub on_click_at: Option<ClickAtFn<Msg>>,
+    /// Equivalente a `on_click` pero para el botón derecho del ratón.
+    /// Pensado para menús contextuales: el nodo declara qué `Msg`
+    /// emitir cuando se le hace right-click, y la app abre el overlay
+    /// con el menú.
+    pub on_right_click: Option<Msg>,
+    /// Variante posicional de [`Self::on_right_click`]. Útil para
+    /// grillas que necesitan saber *qué celda* del rect recibió el
+    /// click derecho (la celda no es un nodo aparte, sino una región
+    /// dentro del nodo). Si está presente, gana sobre `on_right_click`.
+    pub on_right_click_at: Option<ClickAtFn<Msg>>,
     /// Handler de drag. Si está presente, este nodo arrastra (y NO emite
     /// `on_click` al presionar — un nodo es uno u otro).
     pub drag: Option<DragFn<Msg>>,
@@ -341,6 +367,8 @@ impl<Msg> View<Msg> {
             painter: None,
             on_click: None,
             on_click_at: None,
+            on_right_click: None,
+            on_right_click_at: None,
             drag: None,
             drag_at: None,
             drag_payload: None,
@@ -468,6 +496,27 @@ impl<Msg> View<Msg> {
         self
     }
 
+    /// Declara el `Msg` a emitir cuando el usuario hace click derecho
+    /// sobre este nodo. Para menús contextuales, conviene pasar un
+    /// `Msg::OpenMenu { ... }` y dejar que el modelo guarde la
+    /// posición; el overlay se abre vía [`App::view_overlay`].
+    pub fn on_right_click(mut self, msg: Msg) -> Self {
+        self.on_right_click = Some(msg);
+        self
+    }
+
+    /// Variante posicional de [`Self::on_right_click`]. El handler recibe
+    /// `(local_x, local_y, rect_w, rect_h)` para que un nodo "grilla"
+    /// pueda resolver internamente qué subcelda recibió el click. La
+    /// posición está relativa al rect del nodo.
+    pub fn on_right_click_at<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(f32, f32, f32, f32) -> Option<Msg> + Send + Sync + 'static,
+    {
+        self.on_right_click_at = Some(Arc::new(handler));
+        self
+    }
+
     /// Pinta `image` dentro del rect del nodo, centrada y escalada
     /// preservando aspect ratio. Re-exporta `peniko::Image` vía
     /// `llimphi_raster::peniko::Image` — el caller decodifica los
@@ -527,6 +576,8 @@ struct MountedNode<Msg> {
     painter: Option<PaintFn>,
     on_click: Option<Msg>,
     on_click_at: Option<ClickAtFn<Msg>>,
+    on_right_click: Option<Msg>,
+    on_right_click_at: Option<ClickAtFn<Msg>>,
     drag: Option<DragFn<Msg>>,
     drag_at: Option<DragAtFn<Msg>>,
     drag_payload: Option<u64>,
@@ -563,6 +614,8 @@ fn mount_recursive<Msg: Clone>(
         painter,
         on_click,
         on_click_at,
+        on_right_click,
+        on_right_click_at,
         drag,
         drag_at,
         drag_payload,
@@ -582,6 +635,8 @@ fn mount_recursive<Msg: Clone>(
         painter,
         on_click,
         on_click_at,
+        on_right_click,
+        on_right_click_at,
         drag,
         drag_at,
         drag_payload,
@@ -792,6 +847,21 @@ fn hit_test_click<Msg>(
     })
 }
 
+/// Hit-test específico para right-click. Sólo considera nodos que
+/// declararon `on_right_click` o `on_right_click_at` — un right-click
+/// sobre un nodo sin handler no hace nada (no se "filtra" al click
+/// izquierdo).
+fn hit_test_right_click<Msg>(
+    mounted: &Mounted<Msg>,
+    computed: &ComputedLayout,
+    x: f32,
+    y: f32,
+) -> Option<usize> {
+    hit_test_pred(mounted, computed, x, y, |n| {
+        n.on_right_click.is_some() || n.on_right_click_at.is_some()
+    })
+}
+
 /// Hit-test específico para hover (nodos con `hover_fill`).
 fn hit_test_hover<Msg>(
     mounted: &Mounted<Msg>,
@@ -849,6 +919,17 @@ struct RenderCache<Msg> {
     /// Índice del drop target hovereado en el frame ya pintado. Solo
     /// se setea durante un drag activo con `payload` declarado.
     drop_hover_idx: Option<usize>,
+    /// Capa de overlay (menú contextual, modal). Cuando está presente,
+    /// hover/click/right-click se rutean a ella exclusivamente — el
+    /// árbol principal queda "bajo vidrio" hasta que la app cierre el
+    /// overlay devolviendo `None` desde [`App::view_overlay`].
+    overlay: Option<OverlayCache<Msg>>,
+}
+
+struct OverlayCache<Msg> {
+    mounted: Mounted<Msg>,
+    computed: ComputedLayout,
+    hover_idx: Option<usize>,
 }
 
 /// Dos sabores de handler de drag activo: el simple `(phase, dx, dy)`
@@ -992,15 +1073,29 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                         state.window.request_redraw();
                     }
                 } else if let Some(cache) = state.last_render.as_ref() {
-                    // Sin drag: chequear hover. Si cambió, pedir redraw.
-                    let new_hover = hit_test_hover(
-                        &cache.mounted,
-                        &cache.computed,
-                        position.x as f32,
-                        position.y as f32,
-                    );
-                    if new_hover != cache.hover_idx {
-                        state.window.request_redraw();
+                    // Sin drag: chequear hover. Si hay overlay, el
+                    // hover-test va contra él; el árbol principal queda
+                    // congelado mientras el overlay esté arriba.
+                    if let Some(ov) = cache.overlay.as_ref() {
+                        let new_hover = hit_test_hover(
+                            &ov.mounted,
+                            &ov.computed,
+                            position.x as f32,
+                            position.y as f32,
+                        );
+                        if new_hover != ov.hover_idx {
+                            state.window.request_redraw();
+                        }
+                    } else {
+                        let new_hover = hit_test_hover(
+                            &cache.mounted,
+                            &cache.computed,
+                            position.x as f32,
+                            position.y as f32,
+                        );
+                        if new_hover != cache.hover_idx {
+                            state.window.request_redraw();
+                        }
                     }
                     let _ = prev_cursor;
                 }
@@ -1071,21 +1166,10 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     Option<ClickAtFn<M>>,
                     Option<(f32, f32, f32, f32)>,
                 );
-                let idx_and_action: Option<HitInfo<A::Msg>> = if let Some(cache) =
-                    state.last_render.as_ref()
-                {
-                    hit_test_click(
-                        &cache.mounted,
-                        &cache.computed,
-                        cursor.x as f32,
-                        cursor.y as f32,
-                    )
-                    .map(|i| {
-                        let node = &cache.mounted.nodes[i];
-                        let rect = cache
-                            .computed
-                            .get(node.id)
-                            .map(|r| (r.x, r.y, r.w, r.h));
+                let lookup_hit = |m: &Mounted<A::Msg>, c: &ComputedLayout| -> Option<HitInfo<A::Msg>> {
+                    hit_test_click(m, c, cursor.x as f32, cursor.y as f32).map(|i| {
+                        let node = &m.nodes[i];
+                        let rect = c.get(node.id).map(|r| (r.x, r.y, r.w, r.h));
                         (
                             node.drag.clone(),
                             node.drag_at.clone(),
@@ -1095,28 +1179,40 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                             rect,
                         )
                     })
+                };
+                // Con overlay activo, los clicks van EXCLUSIVAMENTE a él.
+                // Si el cursor cae sobre un nodo del overlay sin handler,
+                // el click se descarta — la convención de "scrim que
+                // dismissa" pide que la app meta su propio fondo
+                // clicable con `on_click = DismissOverlay`.
+                let idx_and_action: Option<HitInfo<A::Msg>> = if let Some(cache) =
+                    state.last_render.as_ref()
+                {
+                    if let Some(ov) = cache.overlay.as_ref() {
+                        lookup_hit(&ov.mounted, &ov.computed)
+                    } else {
+                        lookup_hit(&cache.mounted, &cache.computed)
+                    }
                 } else {
-                    let view = A::view(state.model.as_ref().expect("model"));
+                    let model_ref = state.model.as_ref().expect("model");
+                    let view = A::view(model_ref);
+                    let overlay_view = A::view_overlay(model_ref);
                     let mut layout = LayoutTree::new();
                     let mounted: Mounted<A::Msg> = mount(&mut layout, view);
                     let (w, h) = state.surface.size();
                     let computed = layout
                         .compute(mounted.root, (w as f32, h as f32))
                         .expect("layout");
-                    hit_test_click(&mounted, &computed, cursor.x as f32, cursor.y as f32).map(
-                        |i| {
-                            let node = &mounted.nodes[i];
-                            let rect = computed.get(node.id).map(|r| (r.x, r.y, r.w, r.h));
-                            (
-                                node.drag.clone(),
-                                node.drag_at.clone(),
-                                node.drag_payload,
-                                node.on_click.clone(),
-                                node.on_click_at.clone(),
-                                rect,
-                            )
-                        },
-                    )
+                    if let Some(ov) = overlay_view {
+                        let mut olay = LayoutTree::new();
+                        let omounted: Mounted<A::Msg> = mount(&mut olay, ov);
+                        let ocomp = olay
+                            .compute(omounted.root, (w as f32, h as f32))
+                            .expect("layout overlay");
+                        lookup_hit(&omounted, &ocomp)
+                    } else {
+                        lookup_hit(&mounted, &computed)
+                    }
                 };
                 // drag_at + on_click_at COEXISTEN: el press dispara
                 // on_click_at (si está) y arranca un drag rastreado con la
@@ -1186,6 +1282,60 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 }
             }
             WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Right,
+                ..
+            } => {
+                // Right-click: dispatcheamos `on_right_click` o
+                // `on_right_click_at` del nodo bajo cursor. La capa
+                // overlay tiene prioridad (mismo razonamiento que el
+                // left-click). Nodos sin handler de right-click no
+                // reaccionan — no "filtramos" al left.
+                let cursor = state.cursor;
+                let lookup =
+                    |m: &Mounted<A::Msg>, c: &ComputedLayout| -> Option<(Option<A::Msg>, Option<ClickAtFn<A::Msg>>, (f32, f32, f32, f32))> {
+                        hit_test_right_click(m, c, cursor.x as f32, cursor.y as f32).map(|i| {
+                            let node = &m.nodes[i];
+                            let rect = c
+                                .get(node.id)
+                                .map(|r| (r.x, r.y, r.w, r.h))
+                                .unwrap_or((0.0, 0.0, 0.0, 0.0));
+                            (
+                                node.on_right_click.clone(),
+                                node.on_right_click_at.clone(),
+                                rect,
+                            )
+                        })
+                    };
+                let hit = if let Some(cache) = state.last_render.as_ref() {
+                    if let Some(ov) = cache.overlay.as_ref() {
+                        lookup(&ov.mounted, &ov.computed)
+                    } else {
+                        lookup(&cache.mounted, &cache.computed)
+                    }
+                } else {
+                    None
+                };
+                if let Some((msg_opt, at_opt, (ox, oy, rw, rh))) = hit {
+                    let msg = if let Some(handler) = at_opt {
+                        handler(
+                            cursor.x as f32 - ox,
+                            cursor.y as f32 - oy,
+                            rw,
+                            rh,
+                        )
+                    } else {
+                        msg_opt
+                    };
+                    if let Some(msg) = msg {
+                        let model = state.model.take().expect("model");
+                        state.model = Some(A::update(model, msg, &self.handle));
+                        state.last_render = None;
+                        state.window.request_redraw();
+                    }
+                }
+            }
+            WindowEvent::MouseInput {
                 state: ElementState::Released,
                 button: MouseButton::Left,
                 ..
@@ -1243,21 +1393,50 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     }
                 };
                 let (w, h) = frame.size();
-                let view = A::view(state.model.as_ref().expect("model"));
+                let model_ref = state.model.as_ref().expect("model");
+                let view = A::view(model_ref);
+                let overlay_view = A::view_overlay(model_ref);
                 let mut layout = LayoutTree::new();
                 let mounted: Mounted<A::Msg> = mount(&mut layout, view);
                 let computed = layout
                     .compute(mounted.root, (w as f32, h as f32))
                     .expect("layout");
-                // Hover fresco contra el árbol recién montado (los
-                // índices del cache anterior pueden no ser válidos).
-                let hover_idx = hit_test_hover(
-                    &mounted,
-                    &computed,
-                    state.cursor.x as f32,
-                    state.cursor.y as f32,
-                );
-                // Drop hover sólo si hay drag activo con payload.
+                // Mount + layout del overlay en un árbol aparte. Lo
+                // computamos con el mismo tamaño de viewport para que
+                // un scrim a percent(1.0) cubra toda la pantalla.
+                let overlay_built = overlay_view.map(|v| {
+                    let mut olayout = LayoutTree::new();
+                    let omounted: Mounted<A::Msg> = mount(&mut olayout, v);
+                    let ocomputed = olayout
+                        .compute(omounted.root, (w as f32, h as f32))
+                        .expect("layout overlay");
+                    let ohover = hit_test_hover(
+                        &omounted,
+                        &ocomputed,
+                        state.cursor.x as f32,
+                        state.cursor.y as f32,
+                    );
+                    OverlayCache {
+                        mounted: omounted,
+                        computed: ocomputed,
+                        hover_idx: ohover,
+                    }
+                });
+                // Hover en el main solo si NO hay overlay — durante un
+                // menú abierto, el fondo no debe reaccionar al ratón.
+                let hover_idx = if overlay_built.is_some() {
+                    None
+                } else {
+                    hit_test_hover(
+                        &mounted,
+                        &computed,
+                        state.cursor.x as f32,
+                        state.cursor.y as f32,
+                    )
+                };
+                // Drop hover sólo si hay drag activo con payload (un
+                // drag bloquea el overlay; rara combinación pero la
+                // resolvemos a favor del drag).
                 let drop_hover_idx = state
                     .drag
                     .as_ref()
@@ -1279,6 +1458,16 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     hover_idx,
                     drop_hover_idx,
                 );
+                if let Some(ov) = overlay_built.as_ref() {
+                    paint(
+                        &mut state.scene,
+                        &ov.mounted,
+                        &ov.computed,
+                        &mut state.typesetter,
+                        ov.hover_idx,
+                        None,
+                    );
+                }
                 if let Err(e) = state.renderer.render(
                     &state.hal,
                     &state.scene,
@@ -1293,6 +1482,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     computed,
                     hover_idx,
                     drop_hover_idx,
+                    overlay: overlay_built,
                 });
             }
             _ => {}

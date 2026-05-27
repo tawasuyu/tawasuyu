@@ -17,4 +17,5 @@ nakui-sheet = { path = "../nakui-sheet" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
+llimphi-widget-context-menu = { workspace = true }
 arboard = { workspace = true }
