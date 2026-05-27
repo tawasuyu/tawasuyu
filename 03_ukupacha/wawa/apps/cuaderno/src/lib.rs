@@ -1,11 +1,41 @@
 // =============================================================================
-//  renaser :: apps/cuaderno — Fase 33 :: motor celular de calculo persistente
+//  renaser :: apps/cuaderno — Fase 33/34 :: motor celular con flujo en cascada
 // -----------------------------------------------------------------------------
 //  Un cuaderno de celulas: cada CELDA enlaza una FUENTE Forth, un BINARIO
 //  WASM emitido por forth-emisor y el RETORNO de su ultima ejecucion. Las
 //  tres piezas se inscriben en el grafo direccionado por contenido del
 //  kernel — el cuaderno deja de ser un buffer volatil y se vuelve un nodo
 //  inmutable que sobrevive al apagado, al panico y a la mudanza.
+//
+//  FASE 34 :: AUDITORIA DE CRATES y FLUJO CELULAR ENCADENADO
+//
+//  Auditoria conceptual de parsers `no_std` antes de codificar:
+//    * `nom` (default-features=false): viable bajo wasm32 + alloc. Sin
+//      embargo, exige el `alloc` global y construye combinatores con
+//      closures alocadas en heap — viola la zero-alloc strict policy
+//      que nuestro emisor mantiene hoy en su buffer en pila.
+//    * `winnow` (fork moderno de nom): mismo veredicto. Util si el dia
+//      de mañana exponemos Forth con definiciones anidadas y necesitamos
+//      backtracking real; hoy el lenguaje es tan plano que el coste
+//      no compensa.
+//    * `logos`: lexer por proc-macro. Genera codigo no_std-friendly pero
+//      su API natural devuelve `Token`s en un iterador heap-backed.
+//    * `chumsky`: depende de `std` (BTreeMap, etc.). Descartado.
+//
+//  CONCLUSION: `forth-emisor` casero (zero-alloc, ~400 LOC, 8 tests verde)
+//  es ESTRICTAMENTE mas puro que cualquier crate externa al fragmento
+//  actual del lenguaje. La auditoria queda registrada aqui para que la
+//  proxima Fase que extienda Forth (definiciones, condicionales, words)
+//  recoja `winnow` como primera opcion sin recorrer este sendero otra vez.
+//
+//  EJECUCION EN CASCADA :: la Celda N hereda el `UltimoRetorno` de la
+//  Celda N-1 (si fue exitoso) y lo inyecta como prefijo en el stack
+//  Forth de la celda actual. La cadena es estricta: una celda con
+//  fallo ROMPE la cascada y la leyenda del pie pasa a rotular
+//  "ERROR  CADENA DE EJECUCION ROTA" hasta que una celda exitosa la
+//  restaure. La transferencia entre celdas es zero-alloc — el valor
+//  viaja en la pila como `i32` y se serializa a ASCII decimal en un
+//  buffer estatico al concatenar con la fuente del editor.
 //
 //  El usuario teclea en el PANEL EDITOR (parte alta del lienzo natural);
 //  F5 dispara una rafaga de syscalls que:
@@ -93,6 +123,11 @@ const FUENTE_CAP: usize = 64;
 /// canonica vive en el grafo: este struct es el cache de pintado.
 #[derive(Clone, Copy)]
 struct Celda {
+    /// La fuente Forth tal y como la TECLEO el humano. La fuente real que
+    /// se compila puede llevar prepended el retorno heredado de la celda
+    /// anterior — esa version efectiva se inscribe en el grafo (via
+    /// `hash_fuente`) para que la arista causal del binario apunte a la
+    /// cadena exacta de caracteres que lo engendro.
     fuente: [u8; FUENTE_CAP],
     fuente_len: usize,
     hash_fuente: [u8; 32],
@@ -106,6 +141,15 @@ struct Celda {
     /// usa este bit para teñir la celda de amarillo palido sin enterrar
     /// el resultado.
     exito: bool,
+    /// FASE 34 :: la celda HEREDO un valor de su predecesora exitosa y lo
+    /// inyecto como cabeza de su pila Forth. El pintado dibuja un glifo
+    /// `>` en el margen izquierdo cuando esto es cierto, y muestra
+    /// `HER N` con `N` en `valor_heredado`. Una celda que ejecute en
+    /// solitario (sin predecesora exitosa) deja este bit a `false`.
+    heredado: bool,
+    /// El i32 que se prepended a la fuente del editor para compilar esta
+    /// celda. Solo es significativo cuando `heredado == true`.
+    valor_heredado: i32,
 }
 
 impl Celda {
@@ -118,6 +162,8 @@ impl Celda {
             retorno: 0,
             valida: false,
             exito: false,
+            heredado: false,
+            valor_heredado: 0,
         }
     }
 }
@@ -138,6 +184,19 @@ static mut PROXIMA_CELDA: usize = 0;
 /// quedo persistido (`HASH cuaderno: XX..YY`).
 static mut HASH_CUADERNO: [u8; 32] = [0; 32];
 static mut HASH_CUADERNO_VALIDO: bool = false;
+
+/// FASE 34 :: el ESTADO FLUYENTE entre celdas. El ultimo retorno exitoso
+/// queda disponible aqui para que la siguiente F5 lo prependa como cabeza
+/// de pila Forth. Una celda exitosa lo refresca; una celda fallida lo
+/// INVALIDA — el flujo se interrumpe hasta que otra celda exitosa
+/// reanude la cascada.
+static mut RETORNO_HEREDADO: i32 = 0;
+static mut RETORNO_HEREDADO_VALIDO: bool = false;
+/// Bandera de la leyenda al pie: cuando una celda que pretendia heredar
+/// fallo (o cuando una celda fallida deja roto el flujo), el pintado
+/// rota la leyenda a "ERROR  CADENA DE EJECUCION ROTA". Se reinicia en
+/// `false` con la proxima celda exitosa.
+static mut CADENA_ROTA: bool = false;
 
 static mut F5_PREV: bool = false;
 static mut SCAN_PREV: u32 = 0;
@@ -243,41 +302,97 @@ fn mapear_caracter(scan: u8) -> Option<u8> {
 //  Cadena de ejecucion celular (F5)
 // =============================================================================
 
+/// Tope del buffer EFECTIVO de fuente: 64 (editor) + 12 (ASCII decimal de
+/// un i32) + 1 (separador) + holgura. Vive en pila durante la rafaga F5
+/// — el asignador del kernel nunca interviene en la cascada.
+const FUENTE_EFECTIVA_CAP: usize = 96;
+
 /// Recorre la cadena FUENTE -> BINARIO -> EJECUTAR -> CUADERNO sobre el
-/// buffer del editor. Cualquier eslabon fallido se conserva como celda
-/// con `exito = false`, para que el humano vea el motivo en el panel sin
-/// que el cuaderno entero se invalide.
+/// buffer del editor, EVENTUALMENTE prepended con el retorno heredado de
+/// la celda anterior (Fase 34). Cualquier eslabon fallido se conserva
+/// como celda con `exito = false` y rompe la cascada para las celdas
+/// siguientes hasta que un nuevo F5 exitoso la restaure.
 fn ejecutar_celda_actual() {
     let len = unsafe { EDITOR_LEN };
     if len == 0 {
         return;
     }
 
+    // ----- Construir la FUENTE EFECTIVA en un buffer en pila ----------------
+    // Si la celda previa fue exitosa, su retorno encabeza la pila Forth de
+    // esta celda. La concatenacion ocurre en ASCII decimal — forth-emisor
+    // tokeniza digitos y operadores, no hay otro camino para introducir
+    // una constante por la puerta delantera del lenguaje.
+    let mut efectiva = [0u8; FUENTE_EFECTIVA_CAP];
+    let mut efectiva_len = 0usize;
+    let heredado = unsafe { RETORNO_HEREDADO_VALIDO };
+    let valor_heredado = unsafe { RETORNO_HEREDADO };
+    if heredado {
+        let (dec, dlen) = formatear_i32(valor_heredado);
+        if dlen + 1 + len > FUENTE_EFECTIVA_CAP {
+            // El editor pegado al ASCII del retorno no cabria — escenario
+            // hipotetico con un retorno de 11 digitos y un editor casi
+            // pleno. Tratamos como cadena rota: una celda con texto que
+            // no compila en este formato no debe abortar el cuaderno.
+            unsafe {
+                RETORNO_HEREDADO_VALIDO = false;
+                CADENA_ROTA = true;
+            }
+            // Caemos al modo sin herencia: el editor compila como-as.
+        } else {
+            efectiva[..dlen].copy_from_slice(&dec[..dlen]);
+            efectiva[dlen] = b' ';
+            efectiva_len = dlen + 1;
+        }
+    }
+    // Copiar el editor al final del buffer efectivo (con o sin prefijo).
+    let editor_inicio = efectiva_len;
+    let cap_rest = FUENTE_EFECTIVA_CAP - efectiva_len;
+    let n_editor = len.min(cap_rest);
+    efectiva[editor_inicio..editor_inicio + n_editor]
+        .copy_from_slice(unsafe { &EDITOR[..n_editor] });
+    efectiva_len += n_editor;
+    let efectiva_uso = unsafe { RETORNO_HEREDADO_VALIDO } && heredado;
+
     let mut celda = Celda::vacia();
-    celda.fuente_len = len;
-    celda.fuente[..len].copy_from_slice(unsafe { &EDITOR[..len] });
+    // En `celda.fuente` guardamos la fuente EFECTIVA: es la cadena de
+    // bytes que el grafo va a inscribir como TextoFuente y la que el
+    // binario referencia como primer hijo. El pintado distingue el
+    // tramo heredado del tramo tecleado via los campos
+    // `heredado`/`valor_heredado`.
+    let copy_n = efectiva_len.min(FUENTE_CAP);
+    celda.fuente[..copy_n].copy_from_slice(&efectiva[..copy_n]);
+    celda.fuente_len = copy_n;
     celda.valida = true;
+    celda.heredado = efectiva_uso;
+    celda.valor_heredado = if efectiva_uso { valor_heredado } else { 0 };
 
     // 1. Compilar Forth -> WASM en un buffer en pila.
     let mut binario = [0u8; 512];
     let bin_len = match forth_emisor::ForthCompiler::compilar_bytes(
-        &celda.fuente[..celda.fuente_len],
+        &efectiva[..efectiva_len],
         &mut binario,
     ) {
         Some(n) => n,
         None => {
             celda.retorno = -7; // PayloadInvalido (sintaxis Forth ajena).
             celda.exito = false;
+            unsafe {
+                RETORNO_HEREDADO_VALIDO = false;
+                CADENA_ROTA = true;
+            }
             registrar_celda_local(celda);
             return;
         }
     };
 
-    // 2. Grabar la FUENTE como objeto del grafo. Sin hijos.
+    // 2. Grabar la FUENTE EFECTIVA como objeto del grafo. Sin hijos: la
+    //    fuente es una hoja del DAG. El hash que devuelve es el padre
+    //    del binario que vamos a registrar a continuacion.
     let cod_fuente = unsafe {
         sys_object_put(
-            celda.fuente.as_ptr() as u32,
-            celda.fuente_len as u32,
+            efectiva.as_ptr() as u32,
+            efectiva_len as u32,
             0u32,
             0u32,
             celda.hash_fuente.as_mut_ptr() as u32,
@@ -286,6 +401,10 @@ fn ejecutar_celda_actual() {
     if cod_fuente != 0 {
         celda.retorno = cod_fuente;
         celda.exito = false;
+        unsafe {
+            RETORNO_HEREDADO_VALIDO = false;
+            CADENA_ROTA = true;
+        }
         registrar_celda_local(celda);
         return;
     }
@@ -302,6 +421,10 @@ fn ejecutar_celda_actual() {
     if cod_bin != 0 {
         celda.retorno = cod_bin;
         celda.exito = false;
+        unsafe {
+            RETORNO_HEREDADO_VALIDO = false;
+            CADENA_ROTA = true;
+        }
         registrar_celda_local(celda);
         return;
     }
@@ -324,6 +447,20 @@ fn ejecutar_celda_actual() {
         )
     };
     unsafe { HASH_CUADERNO_VALIDO = cod_cuaderno == 0 };
+
+    // 6. Refrescar el flujo cascada. Una celda exitosa propaga su retorno
+    //    a la proxima F5 y restaura la leyenda al pie; una celda fallida
+    //    rompe la cascada hasta que otra celda exitosa la reanude.
+    unsafe {
+        if celda.exito {
+            RETORNO_HEREDADO = retorno;
+            RETORNO_HEREDADO_VALIDO = true;
+            CADENA_ROTA = false;
+        } else {
+            RETORNO_HEREDADO_VALIDO = false;
+            CADENA_ROTA = true;
+        }
+    }
 
     registrar_celda_local(celda);
 
@@ -360,7 +497,7 @@ fn pintar() {
 
     // Cabecera con el hash del cuaderno (si ya hubo una consolidacion).
     rellenar_rect(lienzo, 0, 0, ANCHO, EDITOR_Y - 4, secundario);
-    dibujar_texto(lienzo, b"CUADERNO WAWA  FASE 33", 8, 6, 1, tinta);
+    dibujar_texto(lienzo, b"CUADERNO WAWA  FASE 34", 8, 6, 1, tinta);
     if unsafe { HASH_CUADERNO_VALIDO } {
         let h = unsafe { HASH_CUADERNO };
         let mut etiqueta = [b' '; 8];
@@ -379,7 +516,14 @@ fn pintar() {
     pintar_editor(lienzo, tinta, acento, secundario);
     pintar_celdas(lienzo, tinta, acento, secundario);
 
-    let leyenda = b"F5 EJECUTAR CELDA   BS BORRAR";
+    // FASE 34 :: la leyenda rota a la version de cadena rota cuando la
+    // ultima ejecucion fallo en mitad de un flujo encadenado. La proxima
+    // celda exitosa restaura la leyenda normal automaticamente.
+    let leyenda: &[u8] = if unsafe { CADENA_ROTA } {
+        b"ERROR  CADENA DE EJECUCION ROTA"
+    } else {
+        b"F5 EJECUTAR CELDA   BS BORRAR"
+    };
     dibujar_texto(lienzo, leyenda, 8, LEYENDA_Y, 1, acento);
 }
 
@@ -430,12 +574,34 @@ fn pintar_celdas(lienzo: &mut [u32], tinta: u32, acento: u32, secundario: u32) {
         let etiqueta = [b'C', b'E', b'L', b'D', b'A', b' ', b'1' + i as u8];
         dibujar_texto(lienzo, &etiqueta, 14, y + 4, 1, acento);
 
+        // FASE 34 :: chevron `>` en el margen IZQUIERDO de las celdas que
+        // heredaron un valor de su predecesora exitosa. El glifo se
+        // dibuja en escala 2 para que sea inconfundible incluso a
+        // distancia, y se acompaña de "HER N" rotulando el valor
+        // exacto que vino de la cadena.
+        if celda.heredado {
+            dibujar_texto(lienzo, b">", 2, y + 18, 2, acento);
+            let mut etiq_her = [b' '; 14];
+            let prefijo = b"HER ";
+            etiq_her[..prefijo.len()].copy_from_slice(prefijo);
+            let (dec, dlen) = formatear_i32(celda.valor_heredado);
+            let mut p = prefijo.len();
+            for &c in &dec[..dlen] {
+                if p < etiq_her.len() {
+                    etiq_her[p] = c;
+                    p += 1;
+                }
+            }
+            dibujar_texto(lienzo, &etiq_her[..p], ANCHO - 14 - p * 6, y + 4, 1, acento);
+        }
+
         if !celda.valida {
             dibujar_texto(lienzo, b"VACIA", ANCHO - 14 - 5 * 6, y + 4, 1, tinta);
             continue;
         }
 
-        // Linea 1: fragmento de la fuente en minusculas (hasta 24 chars).
+        // Linea 1: fragmento de la fuente EFECTIVA (incluye el valor
+        // heredado si la celda lo recibio). Hasta 24 chars.
         let mut linea_src = [b' '; 24];
         let cap = celda.fuente_len.min(linea_src.len());
         for k in 0..cap {
@@ -582,6 +748,8 @@ fn glifo(c: u8) -> [u8; FH] {
         b':' => [0x00, 0x04, 0x00, 0x00, 0x00, 0x04, 0x00],
         b'+' => [0x00, 0x04, 0x04, 0x1F, 0x04, 0x04, 0x00],
         b'*' => [0x00, 0x0A, 0x04, 0x1F, 0x04, 0x0A, 0x00],
+        // FASE 34 :: chevron derecho — indicador de herencia en cascada.
+        b'>' => [0x10, 0x08, 0x04, 0x02, 0x04, 0x08, 0x10],
         b'0' => [0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E],
         b'1' => [0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E],
         b'2' => [0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F],
