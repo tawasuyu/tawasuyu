@@ -10,12 +10,15 @@
 //!
 //! - `Space`      — toca / detiene el score.
 //! - `Tab`        — cicla la pista activa (la próxima nota que agregues
-//!                  irá ahí; el borde resalta cuál está activa).
+//!                  irá ahí; el borde fino resalta cuál está activa).
 //! - `N`          — crea una pista nueva en blanco y la activa.
-//! - Click izq.   — agrega una nota en la celda (1 beat, vel 96) en la
-//!                  pista activa. Si caés sobre una nota existente, no
-//!                  hace nada.
+//! - Click izq.   — agrega una nota en la celda vacía (1 beat, vel 96)
+//!                  en la pista activa, y la selecciona. Si caés sobre
+//!                  una nota existente, la selecciona.
 //! - Click der.   — borra la nota bajo el cursor (de cualquier pista).
+//! - `←` / `→`    — mueve la nota seleccionada ±1 beat.
+//! - `↑` / `↓`    — mueve la nota seleccionada ±1 semitono.
+//! - `Del`/`⌫`    — borra la nota seleccionada.
 //! - `Esc`        — cierra la ventana.
 
 use llimphi_theme::Theme;
@@ -49,6 +52,15 @@ enum Msg {
     /// Borra la nota `note_idx` de `track_idx`. Si el índice ya no
     /// existe (race con otra edición), no hace nada.
     DeleteNote { track: usize, idx: usize },
+    /// Marca una nota como seleccionada (highlight). Las flechas y
+    /// Delete operan sobre ésta.
+    Select { track: usize, idx: usize },
+    /// Mueve la nota seleccionada `d_beat` beats (puede ser negativo)
+    /// y `d_semitones` semitonos. Si el resultado es inválido (start
+    /// < 0 o pitch fuera del rango MIDI), no se aplica.
+    MoveSelected { d_beat: f32, d_semitones: i32 },
+    /// Borra la nota seleccionada y limpia la selección.
+    DeleteSelected,
     /// Avanza la pista activa al siguiente índice (wrap).
     CycleTrack,
     /// Agrega una pista nueva (vacía) y la activa.
@@ -82,6 +94,11 @@ struct Model {
     active_track: usize,
     /// Counter para nombrar nuevas pistas creadas con `N`.
     next_track_n: usize,
+    /// Nota seleccionada por click. Las flechas y `Del` operan sobre
+    /// ésta; el painter le dibuja un borde más fuerte. Se mantiene
+    /// actualizada después de cada movimiento (que cambia el índice
+    /// porque `Track::add` re-inserta en orden por `start`).
+    selected: Option<(usize, usize)>,
 }
 
 struct Takiy;
@@ -147,6 +164,7 @@ impl App for Takiy {
             status,
             active_track: 0,
             next_track_n: n_tracks + 1,
+            selected: None,
         }
     }
 
@@ -188,22 +206,88 @@ impl App for Takiy {
                     return model;
                 };
                 let track_idx = model.active_track.min(model.score.tracks().len().saturating_sub(1));
+                let new_note = ScoreNote::new(pitch, beat, 1.0, 96);
                 if let Some(track) = model.score.track_mut(track_idx) {
-                    track.add(ScoreNote::new(pitch, beat, 1.0, 96));
+                    track.add(new_note);
+                    if let Some(new_idx) = find_note_idx(track.notes(), &new_note) {
+                        model.selected = Some((track_idx, new_idx));
+                    }
                     model.status = format!(
                         "added · pista {} · beat {:.0} · midi {midi}",
                         track_idx, beat
                     );
-                    // Si el SF2 está activo y agregamos una pista nueva
-                    // (caso raro acá), no reasignamos programas: el
-                    // mapeo se hizo en init y vuelve a aplicarse al
-                    // próximo Play porque siempre vive en el Model.
                 }
             }
             Msg::DeleteNote { track, idx } => {
                 if let Some(t) = model.score.track_mut(track) {
                     if t.remove(idx).is_some() {
+                        // Si borramos la nota seleccionada (o una
+                        // anterior en la misma pista, que correría los
+                        // índices), limpiamos la selección. Para los
+                        // otros casos, queda donde estaba.
+                        if let Some((sel_t, sel_i)) = model.selected {
+                            if sel_t == track {
+                                if sel_i == idx {
+                                    model.selected = None;
+                                } else if sel_i > idx {
+                                    model.selected = Some((sel_t, sel_i - 1));
+                                }
+                            }
+                        }
                         model.status = format!("deleted · pista {track} · nota #{idx}");
+                    }
+                }
+            }
+            Msg::Select { track, idx } => {
+                let exists = model
+                    .score
+                    .track(track)
+                    .is_some_and(|t| idx < t.notes().len());
+                if exists {
+                    model.selected = Some((track, idx));
+                    model.status = format!("selected · pista {track} · nota #{idx}");
+                }
+            }
+            Msg::MoveSelected { d_beat, d_semitones } => {
+                let Some((track_idx, note_idx)) = model.selected else {
+                    return model;
+                };
+                let Some(track) = model.score.track_mut(track_idx) else {
+                    return model;
+                };
+                let Some(old) = track.notes().get(note_idx).copied() else {
+                    return model;
+                };
+                let new_start = old.start + d_beat;
+                if new_start < 0.0 {
+                    return model;
+                }
+                let new_midi = old.pitch.midi() as i32 + d_semitones;
+                let Some(new_pitch) = u8::try_from(new_midi)
+                    .ok()
+                    .and_then(Pitch::from_midi)
+                else {
+                    return model;
+                };
+                let new_note = ScoreNote::new(new_pitch, new_start, old.duration, old.velocity);
+                // Remove + add para mantener el invariante de orden por start.
+                track.remove(note_idx);
+                track.add(new_note);
+                if let Some(new_idx) = find_note_idx(track.notes(), &new_note) {
+                    model.selected = Some((track_idx, new_idx));
+                }
+                model.status = format!(
+                    "moved · pista {track_idx} · beat {:.0} · midi {}",
+                    new_start,
+                    new_pitch.midi()
+                );
+            }
+            Msg::DeleteSelected => {
+                if let Some((track, idx)) = model.selected.take() {
+                    if let Some(t) = model.score.track_mut(track) {
+                        if t.remove(idx).is_some() {
+                            model.status = format!("deleted · pista {track} · nota #{idx}");
+                        }
                     }
                 }
             }
@@ -229,13 +313,42 @@ impl App for Takiy {
     }
 
     fn on_key(_model: &Model, event: &KeyEvent) -> Option<Msg> {
-        if event.state != KeyState::Pressed || event.repeat {
+        if event.state != KeyState::Pressed {
+            return None;
+        }
+        // Las flechas y delete deben permitir repeat (mover/borrar
+        // sostenido es lo natural); Tab/N/Space no.
+        let allow_repeat = matches!(
+            &event.key,
+            Key::Named(
+                NamedKey::ArrowLeft
+                    | NamedKey::ArrowRight
+                    | NamedKey::ArrowUp
+                    | NamedKey::ArrowDown
+                    | NamedKey::Delete
+                    | NamedKey::Backspace
+            )
+        );
+        if event.repeat && !allow_repeat {
             return None;
         }
         match &event.key {
             Key::Named(NamedKey::Space) => Some(Msg::TogglePlay),
             Key::Named(NamedKey::Tab) => Some(Msg::CycleTrack),
             Key::Named(NamedKey::Escape) => Some(Msg::Quit),
+            Key::Named(NamedKey::ArrowLeft) => {
+                Some(Msg::MoveSelected { d_beat: -1.0, d_semitones: 0 })
+            }
+            Key::Named(NamedKey::ArrowRight) => {
+                Some(Msg::MoveSelected { d_beat: 1.0, d_semitones: 0 })
+            }
+            Key::Named(NamedKey::ArrowUp) => {
+                Some(Msg::MoveSelected { d_beat: 0.0, d_semitones: 1 })
+            }
+            Key::Named(NamedKey::ArrowDown) => {
+                Some(Msg::MoveSelected { d_beat: 0.0, d_semitones: -1 })
+            }
+            Key::Named(NamedKey::Delete | NamedKey::Backspace) => Some(Msg::DeleteSelected),
             Key::Character(s) if s.eq_ignore_ascii_case("n") => Some(Msg::NewTrack),
             _ => None,
         }
@@ -249,6 +362,7 @@ impl App for Takiy {
         let status = model.status.clone();
         let playing = model.playing;
         let active_track = model.active_track;
+        let selected = model.selected;
         let (min_midi, max_midi) = pitch_range(&score);
         let total_beats = score.duration_beats().max(8.0);
 
@@ -265,13 +379,12 @@ impl App for Takiy {
         })
         .fill(theme.bg_app)
         .on_click_at(move |lx, ly, rw, rh| {
-            // Click izq.: si cae sobre una nota existente, ignoramos
-            // (el usuario no quiere "agregar encima"). Si cae en
-            // celda vacía, agregamos.
-            if hit_test_note(&score_click, lx, ly, rw, rh, min_midi, max_midi, total_beats)
-                .is_some()
+            // Click izq.: si cae sobre una nota, la seleccionamos.
+            // Si cae en celda vacía, la agregamos y queda seleccionada.
+            if let Some((track, idx)) =
+                hit_test_note(&score_click, lx, ly, rw, rh, min_midi, max_midi, total_beats)
             {
-                return None;
+                return Some(Msg::Select { track, idx });
             }
             let (beat, midi) =
                 cell_at(lx, ly, rw, rh, min_midi, max_midi, total_beats)?;
@@ -285,7 +398,7 @@ impl App for Takiy {
         .paint_with(move |scene, ts, rect: PaintRect| {
             paint_piano_roll(
                 scene, ts, rect, &score_paint, &source, &engine, &status, playing,
-                active_track, min_midi, max_midi, total_beats, theme,
+                active_track, selected, min_midi, max_midi, total_beats, theme,
             );
         })
     }
@@ -302,6 +415,7 @@ fn paint_piano_roll(
     status: &str,
     playing: bool,
     active_track: usize,
+    selected: Option<(usize, usize)>,
     min_midi: u8,
     max_midi: u8,
     total_beats: f32,
@@ -414,10 +528,11 @@ fn paint_piano_roll(
     ];
 
     let active_outline = Color::from_rgba8(255, 255, 255, 230);
+    let selected_outline = Color::from_rgba8(255, 230, 90, 255);
     for (track_idx, track) in score.tracks().iter().enumerate() {
         let color = palette[track_idx % palette.len()];
         let is_active = track_idx == active_track;
-        for note in track.notes() {
+        for (note_idx, note) in track.notes().iter().enumerate() {
             let midi = note.pitch.midi();
             if midi < min_midi || midi > max_midi {
                 continue;
@@ -434,6 +549,18 @@ fn paint_piano_roll(
                     &Stroke::new(1.2),
                     Affine::IDENTITY,
                     active_outline,
+                    None,
+                    &r,
+                );
+            }
+            if selected == Some((track_idx, note_idx)) {
+                // El outline amarillo va por encima del blanco de la
+                // pista activa para que siempre se distinga, incluso
+                // si la nota seleccionada pertenece a la pista activa.
+                scene.stroke(
+                    &Stroke::new(2.4),
+                    Affine::IDENTITY,
+                    selected_outline,
                     None,
                     &r,
                 );
@@ -540,6 +667,16 @@ fn pitch_range(score: &Score) -> (u8, u8) {
         return (60, 72);
     }
     (min.saturating_sub(2), max.saturating_add(2).min(127))
+}
+
+/// Encuentra el índice de `target` en una lista de notas comparando
+/// los campos relevantes (`pitch`, `start`, `duration`, `velocity`).
+/// Es lineal pero las pistas son cortas (≪1000 notas en el uso normal),
+/// así que alcanza. Si hay varias notas idénticas devuelve la primera
+/// — no es un problema porque las flechas operan sobre el `selected`
+/// que apunta a la misma copia.
+fn find_note_idx(notes: &[ScoreNote], target: &ScoreNote) -> Option<usize> {
+    notes.iter().position(|n| n == target)
 }
 
 /// Si `TAKIY_SF2` apunta a un .sf2 válido, devuelve un
