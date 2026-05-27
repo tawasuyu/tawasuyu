@@ -18,6 +18,8 @@
 //!   tile destino se ilumina (`drop_hover_fill` = `accent`) mientras
 //!   el cursor está sobre él durante el drag. Usa los primitives
 //!   `drag_payload` + `on_drop` + `drop_hover_fill` de `llimphi-ui`.
+//! - [`tiled_view_cols`] / [`tiled_view_reorderable_cols`] — fuerzan el
+//!   número de columnas (útil para sidebars verticales: `cols = 1`).
 
 #![forbid(unsafe_code)]
 
@@ -83,7 +85,7 @@ pub fn tiled_view<Msg>(tiles: Vec<TileSpec<Msg>>, palette: &TiledPalette) -> Vie
 where
     Msg: Clone + Send + Sync + 'static,
 {
-    build(tiles, palette, None)
+    build(tiles, palette, None, None)
 }
 
 /// Construye una grilla con drag-to-swap. Arrastrar la title bar de un
@@ -99,13 +101,43 @@ where
     Msg: Clone + Send + Sync + 'static,
     F: Fn(usize, usize) -> Option<Msg> + Send + Sync + 'static,
 {
-    build(tiles, palette, Some(Arc::new(on_reorder)))
+    build(tiles, palette, Some(Arc::new(on_reorder)), None)
+}
+
+/// Como [`tiled_view`] pero con número fijo de columnas. Útil para
+/// sidebars verticales (`cols = 1`) o filas horizontales (`cols = n`)
+/// donde el algoritmo auto-sqrt no sirve. `cols.max(1)` se aplica por
+/// seguridad.
+pub fn tiled_view_cols<Msg>(
+    tiles: Vec<TileSpec<Msg>>,
+    cols: usize,
+    palette: &TiledPalette,
+) -> View<Msg>
+where
+    Msg: Clone + Send + Sync + 'static,
+{
+    build(tiles, palette, None, Some(cols))
+}
+
+/// Como [`tiled_view_reorderable`] pero con número fijo de columnas.
+pub fn tiled_view_reorderable_cols<Msg, F>(
+    tiles: Vec<TileSpec<Msg>>,
+    cols: usize,
+    on_reorder: F,
+    palette: &TiledPalette,
+) -> View<Msg>
+where
+    Msg: Clone + Send + Sync + 'static,
+    F: Fn(usize, usize) -> Option<Msg> + Send + Sync + 'static,
+{
+    build(tiles, palette, Some(Arc::new(on_reorder)), Some(cols))
 }
 
 fn build<Msg>(
     tiles: Vec<TileSpec<Msg>>,
     palette: &TiledPalette,
     on_reorder: Option<ReorderFn<Msg>>,
+    cols_override: Option<usize>,
 ) -> View<Msg>
 where
     Msg: Clone + Send + Sync + 'static,
@@ -127,7 +159,9 @@ where
         );
     }
 
-    let cols = ((n as f32).sqrt().ceil() as usize).max(1);
+    let cols = cols_override
+        .map(|c| c.max(1))
+        .unwrap_or_else(|| ((n as f32).sqrt().ceil() as usize).max(1));
     let rows = (n + cols - 1) / cols;
 
     let mut tiles_iter = tiles.into_iter().enumerate();

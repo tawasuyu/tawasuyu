@@ -96,6 +96,16 @@ cosmos-overlay-lots = lots
 cosmos-overlay-fixed-stars = fixed stars
 cosmos-overlay-midpoints = midpoints
 cosmos-harmonic-label = harmonic
+cosmos-empty = (empty)
+cosmos-tile-carta = chart
+cosmos-tile-modulos = modules
+cosmos-tile-armonico = harmonic
+cosmos-tile-cuerpos = bodies
+cosmos-tile-aspectos = aspects
+cosmos-tile-uraniano = uranian dial 90°
+cosmos-tile-cross-transit = cross · transit
+cosmos-tile-cross-progression = cross · progression
+cosmos-tile-cross-solar-arc = cross · solar arc
 
 # === wawa-explorer (Wawa image browser) ===
 wawa-marker-via-aoe =   ·  via AoE

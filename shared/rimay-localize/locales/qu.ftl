@@ -102,6 +102,16 @@ cosmos-overlay-lots = lote
 cosmos-overlay-fixed-stars = qulluy
 cosmos-overlay-midpoints = chawpi
 cosmos-harmonic-label = armónico
+cosmos-empty = (manaña)
+cosmos-tile-carta = qillqa
+cosmos-tile-modulos = módulos
+cosmos-tile-armonico = armónico
+cosmos-tile-cuerpos = ukhukuna
+cosmos-tile-aspectos = aspectos
+cosmos-tile-uraniano = uraniano 90° muyu
+cosmos-tile-cross-transit = cross · puriq
+cosmos-tile-cross-progression = cross · wiñay
+cosmos-tile-cross-solar-arc = cross · inti arco
 
 # === wawa-explorer (Wawa imagen qhawana) ===
 wawa-marker-via-aoe =   ·  AoE-pi
