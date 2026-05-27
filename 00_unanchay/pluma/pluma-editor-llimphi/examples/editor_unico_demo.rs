@@ -21,6 +21,13 @@
 //! sin mover la atención a otra región de la pantalla. Las hebras
 //! cruzan el carril intermedio y siguen el scroll de cada editor.
 //!
+//! **Scroll vertical sincronizado**: al final de cada `update`, el
+//! scroll del cuerpo activo se copia a todos los demás (clampeado al
+//! fin de buffer de cada uno). PageUp/PageDown, ensure_caret_visible
+//! tras typing y set_caret tras click — cualquier cosa que mueva el
+//! viewport del activo arrastra al resto. Las hebras nunca se
+//! desalinean visualmente.
+//!
 //! Atajos y gestos:
 //!   - **Click dentro de cualquier editor** → le da el foco (cuerpo
 //!     activo) y posiciona el caret en la línea cliqueada.
@@ -54,7 +61,7 @@ use pluma_editor_cuerpo::CambioAtom;
 use pluma_editor_llimphi::cuerpo_ide::CuerpoIde;
 use pluma_editor_llimphi::multilienzo::PaletaHebras;
 use pluma_editor_llimphi::multilienzo_editor::{
-    multilienzo_editor_view, ConfigMultilienzoEditor,
+    multilienzo_editor_view, sincronizar_scroll_desde_activo, ConfigMultilienzoEditor,
 };
 use pluma_editor_llimphi::Palette;
 use pluma_transform::{Ejecutor, TipoTransformacion, Transformacion};
@@ -185,7 +192,11 @@ impl App for Demo {
     }
 
     fn update(model: Model, msg: Msg, _: &Handle<Msg>) -> Model {
-        match msg {
+        // Procesamos el msg sobre el cuerpo activo y, al final, sincronizamos
+        // el scroll del activo a todos los demás editores. Las hebras
+        // quedan así alineadas en todo momento sin importar qué cuerpo
+        // disparó el cambio.
+        let mut model: Model = match msg {
             Msg::EditorKey(ev) => {
                 let mut model = model;
                 let i = model.activo;
@@ -234,6 +245,11 @@ impl App for Demo {
                     if let Some(slot) = model.drag_accum.get_mut(i) {
                         *slot = (0.0, 0.0);
                     }
+                    // Al cambiar activo con teclado, el caret del nuevo
+                    // activo puede estar fuera del viewport común. Lo
+                    // traemos a la vista — el scroll resultante se
+                    // propaga al resto en la sincronización del final.
+                    model.ides[i].state.ensure_caret_visible(VISIBLE_LINES);
                 }
                 model
             }
@@ -248,7 +264,9 @@ impl App for Demo {
                 }
                 model
             }
-        }
+        };
+        sincronizar_scroll_desde_activo(&mut model.ides, model.activo);
+        model
     }
 
     fn on_key(_model: &Self::Model, event: &KeyEvent) -> Option<Self::Msg> {

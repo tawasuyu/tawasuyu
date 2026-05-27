@@ -377,6 +377,38 @@ fn precomputar_hebras_editor(
     out
 }
 
+/// Copia el `scroll_offset` del cuerpo activo al resto de los editores —
+/// el patrón estándar para mantener las hebras alineadas cuando el
+/// usuario scrollea uno solo. Cada destino clampea al fin de su buffer
+/// (si el cuerpo destino es más corto, su scroll queda topado en su
+/// última línea — el viewport muestra menos contenido, pero nunca
+/// líneas espurias arriba).
+///
+/// El caller suele llamar esto al final de cada `update` que pueda
+/// haber tocado el scroll del activo (typing con `ensure_caret_visible`,
+/// PageUp/PageDown, click+set_caret).
+pub fn sincronizar_scroll_desde_activo(ides: &mut [CuerpoIde], activo: usize) {
+    if activo >= ides.len() {
+        return;
+    }
+    let scroll = ides[activo].state.scroll_offset;
+    sincronizar_scroll(ides, scroll, activo);
+}
+
+/// Versión explícita: aplica `scroll` a todos los `ides` salvo el índice
+/// `excepto`. Útil cuando el caller ya tiene el valor de scroll (p.ej.
+/// porque viene de un wheel event futuro) y no quiere depender del
+/// estado del activo.
+pub fn sincronizar_scroll(ides: &mut [CuerpoIde], scroll: usize, excepto: usize) {
+    for (i, ide) in ides.iter_mut().enumerate() {
+        if i == excepto {
+            continue;
+        }
+        let max = ide.state.line_count().saturating_sub(1);
+        ide.state.scroll_offset = scroll.min(max);
+    }
+}
+
 fn modular_alpha(c: Color, factor: f32) -> Color {
     let f = factor.clamp(0.0, 1.0);
     let [r, g, b, a] = c.components;
@@ -499,6 +531,44 @@ mod pruebas {
         );
         assert_eq!(hebras.len(), 1);
         assert!(hebras[0].punteada);
+    }
+
+    #[test]
+    fn sincronizar_scroll_copia_al_resto_y_clampea() {
+        // Cuerpo activo largo: 10 átomos. Cuerpos destino: uno largo, uno corto.
+        let textos_largos: Vec<String> = (0..10).map(|i| format!("p{i}")).collect();
+        let textos_largos_ref: Vec<&str> = textos_largos.iter().map(|s| s.as_str()).collect();
+        let (_, _, ide_largo_a) = ide_con_textos("es", Intencion::Original, &textos_largos_ref);
+        let (_, _, ide_largo_b) = ide_con_textos("qu", Intencion::Traduccion, &textos_largos_ref);
+        let (_, _, ide_corto) = ide_con_textos("en", Intencion::Traduccion, &["solo uno"]);
+
+        let mut ides = vec![ide_largo_a, ide_largo_b, ide_corto];
+        ides[0].state.scroll_offset = 12; // activo scrollea hacia abajo
+
+        sincronizar_scroll_desde_activo(&mut ides, 0);
+
+        // El otro cuerpo largo recibe el scroll tal cual (su line_count
+        // permite scrollear más allá de 12).
+        assert!(ides[1].state.scroll_offset >= 12 - 1);
+        // El cuerpo corto se clampea a su última línea (solo tiene 1
+        // párrafo ⇒ line_count == 1 ⇒ max_scroll == 0).
+        assert_eq!(ides[2].state.scroll_offset, 0);
+        // El activo no se toca.
+        assert_eq!(ides[0].state.scroll_offset, 12);
+    }
+
+    #[test]
+    fn sincronizar_scroll_es_idempotente_sin_cambios() {
+        let (_, _, mut ide_a) = ide_con_textos("es", Intencion::Original, &["uno", "dos", "tres"]);
+        let (_, _, mut ide_b) = ide_con_textos("qu", Intencion::Traduccion, &["huk", "iskay", "kimsa"]);
+        ide_a.state.scroll_offset = 2;
+        ide_b.state.scroll_offset = 2;
+        let mut ides = vec![ide_a, ide_b];
+
+        sincronizar_scroll_desde_activo(&mut ides, 0);
+        sincronizar_scroll_desde_activo(&mut ides, 0);
+        assert_eq!(ides[0].state.scroll_offset, 2);
+        assert_eq!(ides[1].state.scroll_offset, 2);
     }
 
     #[test]
