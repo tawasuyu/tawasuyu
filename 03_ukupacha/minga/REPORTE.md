@@ -148,7 +148,14 @@ La re-verificación se ofrece como primitiva (`alpha::verify_root_alpha`) y como
 | G | **`minga roots`** — lista todas las raíces con path conocido, dialect, fecha de última atestación y cantidad de firmas, ordenadas por actividad reciente. Reverse-index del `SledPathHistoryStore` para resolver α→path. Cierra el hueco entre `status` (counts) y `show <hash>` (que requería conocer el hash). | hecho |
 | H | **`minga history <path>`** — dump cronológico descendente del historial path→α + dialect + marcador `current` (best-effort: parsea el archivo actual y compara α). Versión liviana del blame cuando sólo querés saber "cuándo cambió este archivo". | hecho |
 
-## 9. Próximos pasos abiertos
+## 9. Quinto sprint — vouching colaborativo y bulk ingest
+
+| # | Tarea | Resultado |
+|---|---|---|
+| K | **`minga sign <α-hash>`** — emite una atestación bajo el keypair local sobre un α-hash existente. A diferencia de `ingest` (firma como efecto de versionar contenido propio), `sign` es vouching explícito: Alice ingiere, Bob sincroniza, Bob firma. La raíz queda con dos atestaciones independientes — habilita co-autoría semántica y aval de revisores. Idempotente: re-firmar con el mismo keypair reemplaza la entrada con bytes idénticos (no duplica). Avisa si el α no es raíz registrada (puede ser fragmento del CAS o raíz huérfana). | hecho |
+| L | **`minga ingest-dir <dir> [--recursive]`** — versión one-shot del `initial_scan` interno de `watch`. Recorre el directorio, ingiere todos los archivos soportados, reporta `(seen, ingested, failed)`. En modo recursivo poda dot-dirs (`.git`, `.minga`, `.venv`) para evitar ruido. Hace lo que muchos usuarios harían con un `find … -exec minga ingest {} \;` pero sin el costo de re-abrir el repo sled por archivo. | hecho |
+
+## 10. Próximos pasos abiertos
 
 | # | Tarea | Prioridad |
 |---|---|---|
@@ -156,7 +163,8 @@ La re-verificación se ofrece como primitiva (`alpha::verify_root_alpha`) y como
 | C | Exportar `roots` como API REST/JSON desde un daemon minga (paralelo a `shuma-gateway`) | baja |
 | I | `minga export-bundle` / `minga import-bundle` — empaquetar atestaciones + retractions + nodos alcanzables para transferencia offline (USB-stick mode), idempotente. Wire actual sólo cubre sync online vía libp2p. | baja |
 | J | Reverse-index dedicado `α → paths` en disco (hoy se reconstruye en RAM dentro de `cmd_roots`). Sólo vale la pena cuando un repo pase el millón de paths. | muy baja |
+| M | `minga signers <α-hash>` — lista de DIDs que han atestado la raíz, con timestamps. Vista natural sobre lo que `cmd_sign` siembra; hoy hay que pasarlo por `cmd_log` y filtrar. | baja UX |
 
 ---
 
-*Generado por Claude (Opus 4.7) — `2026-05-27`. **24/25 tareas completadas**; #5 (NodeStore genérico para MingaPeer) sigue diferido por su costo de refactor vs. beneficio actual.*
+*Generado por Claude (Opus 4.7) — `2026-05-27`. **26/27 tareas completadas**; #5 (NodeStore genérico para MingaPeer) sigue diferido por su costo de refactor vs. beneficio actual. El flujo de atestación deja de ser exclusivamente "firmo lo que ingiero" — ahora hay vouching colaborativo de raíces sincronizadas.*

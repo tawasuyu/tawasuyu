@@ -5,9 +5,9 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use minga_cli::{
-    cmd_blame, cmd_diff, cmd_history, cmd_ingest, cmd_init, cmd_listen, cmd_log, cmd_mount,
-    cmd_prune, cmd_retire, cmd_roots, cmd_show, cmd_status, cmd_sync, cmd_verify_root, cmd_watch,
-    CliError, DiffLine,
+    cmd_blame, cmd_diff, cmd_history, cmd_ingest, cmd_ingest_dir, cmd_init, cmd_listen, cmd_log,
+    cmd_mount, cmd_prune, cmd_retire, cmd_roots, cmd_show, cmd_sign, cmd_status, cmd_sync,
+    cmd_verify_root, cmd_watch, CliError, DiffLine,
 };
 
 #[derive(Parser)]
@@ -39,6 +39,27 @@ enum Command {
     Ingest {
         /// Ruta del archivo .rs a ingerir.
         file: PathBuf,
+    },
+
+    /// Ingiere todos los archivos soportados de un directorio en una
+    /// sola pasada (sin dejar `watch` corriendo). Útil para versionar un
+    /// repo entero on-demand.
+    IngestDir {
+        /// Directorio a recorrer.
+        dir: PathBuf,
+        /// Descender recursivamente. Los dot-dirs (`.git`, `.minga`, …)
+        /// se saltan durante el descenso para evitar ruido.
+        #[arg(short, long)]
+        recursive: bool,
+    },
+
+    /// Firma una atestación bajo el keypair local sobre un α-hash
+    /// existente — vouching colaborativo. A diferencia de `ingest`, no
+    /// crea contenido nuevo: sólo declara aval sobre algo ya en el repo
+    /// (típicamente traído por `sync` desde otro peer).
+    Sign {
+        /// α-hash en hex (64 caracteres).
+        hash: String,
     },
 
     /// Escucha conexiones de peers en una multiaddr libp2p y acepta
@@ -183,6 +204,38 @@ fn run() -> Result<(), CliError> {
             println!("α-hash: {}", r.alpha);
             println!("struct: {}", r.struct_hash);
             println!("Firmado por: {}", r.did);
+        }
+        Command::IngestDir { dir, recursive } => {
+            let pass = prompt_passphrase()?;
+            let s = cmd_ingest_dir(&cli.repo, &pass, &dir, recursive)?;
+            println!(
+                "Bulk ingest en {}: {} archivos vistos, {} ingeridos, {} fallos",
+                dir.display(),
+                s.seen,
+                s.ingested,
+                s.failed.len()
+            );
+            for (p, msg) in s.failed {
+                eprintln!("  ✘ {}: {}", p.display(), msg);
+            }
+        }
+        Command::Sign { hash } => {
+            let pass = prompt_passphrase()?;
+            let r = cmd_sign(&cli.repo, &pass, &hash)?;
+            if r.is_new_attestation {
+                println!("Firmado α-hash {} por {}", r.alpha, r.author);
+            } else {
+                println!(
+                    "Atestación ya existente para {} bajo {} (idempotente, no se duplica)",
+                    r.alpha, r.author
+                );
+            }
+            if !r.is_known_root {
+                println!(
+                    "⚠ aviso: {} no está registrado como raíz local (firmaste igual)",
+                    r.alpha
+                );
+            }
         }
         Command::Listen { addr } => {
             let pass = prompt_passphrase()?;

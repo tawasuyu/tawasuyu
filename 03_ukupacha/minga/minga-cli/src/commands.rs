@@ -150,6 +150,67 @@ fn ingest_node_alpha(
     Ok((alpha, struct_hash))
 }
 
+/// Resultado de `cmd_sign`: confirmación con metadata sobre si la firma
+/// es nueva (vouching genuino) o redundante (idempotencia).
+#[derive(Debug, Clone)]
+pub struct SignResult {
+    pub alpha: ContentHash,
+    pub author: Did,
+    /// `false` si el repo ya tenía una atestación local de este author
+    /// sobre `alpha` (re-firmar es idempotente, no se duplica entrada).
+    /// `true` cuando esta es la primera vez que este DID firma esa raíz.
+    pub is_new_attestation: bool,
+    /// `true` si el α-hash está en el tree `roots`. Cuando es `false`,
+    /// se firma igual — útil para vouching de fragmentos del CAS o de
+    /// raíces que aún no llegaron por sync — pero el CLI lo avisa al
+    /// usuario para que no firme algo desconocido por error de tipeo.
+    pub is_known_root: bool,
+}
+
+/// `minga sign <α-hash>`: emite una atestación bajo el keypair local
+/// sobre un α-hash existente. A diferencia de `ingest` (que firma como
+/// efecto secundario de versionar contenido propio), `sign` es
+/// **vouching explícito**: Alice ingiere, Bob sincroniza, Bob firma
+/// con `sign` — la raíz queda con dos atestaciones independientes,
+/// permitiendo "co-autoría" semántica o aval de revisores.
+///
+/// Re-firmar la misma raíz con el mismo keypair es idempotente:
+/// `SledAttestationStore` indexa por `content || author`, así que la
+/// segunda inserción reemplaza la primera con bytes idénticos.
+pub fn cmd_sign(
+    repo_path: &Path,
+    passphrase: &str,
+    hash_hex: &str,
+) -> Result<SignResult, CliError> {
+    let keypair = keypair_file::load(repo_path.join(KEYPAIR_FILENAME), passphrase)?;
+    let repo = PersistentRepo::open(repo_path.join(REPO_DIRNAME))?;
+
+    let alpha = parse_hash_hex(hash_hex)?;
+    let did = keypair.did();
+
+    // ¿Ya habíamos firmado este α con este DID? Sólo para reportar al
+    // caller; la firma se emite igual y el store la deduplica sola.
+    let already = repo
+        .attestations
+        .get(&alpha)?
+        .iter()
+        .any(|a| a.author == did);
+    let is_known_root = repo.roots.contains(&alpha)?;
+
+    let att = Attestation::create(&keypair, alpha);
+    repo.attestations.add(att.clone())?;
+    repo.timestamps
+        .put(&att.content, &att.author, unix_now_secs())?;
+    repo.flush()?;
+
+    Ok(SignResult {
+        alpha,
+        author: did,
+        is_new_attestation: !already,
+        is_known_root,
+    })
+}
+
 /// Una entrada del log: atestación + timestamp de cuándo se observó.
 #[derive(Debug, Clone)]
 pub struct LogEntry {
@@ -1005,6 +1066,89 @@ fn extract_peer_id(addr: &Multiaddr) -> Option<PeerId> {
         Protocol::P2p(peer_id) => Some(peer_id),
         _ => None,
     })
+}
+
+/// Estadísticas devueltas por `cmd_ingest_dir`: cuántos archivos
+/// soportados se vieron, cuántos se ingirieron sin error, y la lista
+/// de fallos para que el CLI los reporte.
+#[derive(Debug, Clone)]
+pub struct BulkIngestStats {
+    /// Archivos que pasaron `is_supported_source` (extensión o shebang).
+    pub seen: usize,
+    /// De esos, cuántos terminaron en el grafo.
+    pub ingested: usize,
+    /// Fallos individuales — la ingesta sigue tras un error.
+    pub failed: Vec<(std::path::PathBuf, String)>,
+}
+
+/// `minga ingest-dir <dir> [--recursive]`: ingiere todos los archivos
+/// soportados de un directorio en una sola pasada. Es básicamente
+/// `initial_scan` (el bootstrap interno de `watch`) expuesto como
+/// one-shot, para versionar un repo entero sin dejar el watcher
+/// corriendo.
+///
+/// En modo recursivo, **omite directorios ocultos** (los que empiezan
+/// con `.`): evita pisar `.git`, `.minga`, `.venv` y similares — son
+/// fuentes de ruido (archivos generados, repos anidados). Si necesitás
+/// versionar un dot-dir explícitamente, llamalo con `--recursive` desde
+/// dentro o pasalo como `dir` raíz.
+pub fn cmd_ingest_dir(
+    repo_path: &Path,
+    passphrase: &str,
+    dir: &Path,
+    recursive: bool,
+) -> Result<BulkIngestStats, CliError> {
+    let keypair = keypair_file::load(repo_path.join(KEYPAIR_FILENAME), passphrase)?;
+    let repo = PersistentRepo::open(repo_path.join(REPO_DIRNAME))?;
+
+    let mut stats = BulkIngestStats {
+        seen: 0,
+        ingested: 0,
+        failed: Vec::new(),
+    };
+    walk_and_ingest(&repo, &keypair, dir, recursive, &mut stats);
+    repo.flush()?;
+    Ok(stats)
+}
+
+fn walk_and_ingest(
+    repo: &PersistentRepo,
+    keypair: &Keypair,
+    dir: &Path,
+    recursive: bool,
+    stats: &mut BulkIngestStats,
+) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        // Saltar dot-dirs sólo en descenso recursivo. El directorio raíz
+        // pasado por el usuario puede ser oculto y se respeta.
+        if p.is_dir() {
+            if recursive && !is_hidden_dirname(&p) {
+                walk_and_ingest(repo, keypair, &p, recursive, stats);
+            }
+            continue;
+        }
+        if is_supported_source(&p) {
+            stats.seen += 1;
+            match ingest_into_repo(repo, keypair, &p) {
+                Ok(_) => stats.ingested += 1,
+                Err(e) => stats.failed.push((p, e.to_string())),
+            }
+        }
+    }
+}
+
+/// `true` si el último componente del path empieza con `.`. Usamos esto
+/// para podar descenso en `ingest-dir --recursive` y evitar `.git`,
+/// `.minga`, `.venv`, etc.
+fn is_hidden_dirname(p: &Path) -> bool {
+    p.file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.starts_with('.'))
+        .unwrap_or(false)
 }
 
 /// `minga watch <dir>`: vigila un directorio, re-parsea y re-ingesta
