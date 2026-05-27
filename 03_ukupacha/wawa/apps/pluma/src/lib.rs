@@ -322,7 +322,21 @@ static mut CADENA_ROTA: bool = false;
 
 static mut F5_PREV: bool = false;
 static mut F6_PREV: bool = false;
+static mut F7_PREV: bool = false;
 static mut SCAN_PREV: u32 = 0;
+
+/// FASE 46 :: indice de la celda que tiene el FOCO de navegacion historica.
+/// Rango [0, MAX_CELDAS-1]. Se incrementa/decrementa con las flechas en
+/// modo interactivo y se usa como puntero al slot que el F7 clonara al
+/// editor caliente.
+static mut CELDA_FOCADA: usize = 0;
+
+/// FASE 46 :: bandera de modo. `false` (default) = el operador teclea en
+/// el editor activo; las flechas no hacen nada. `true` = el operador
+/// navega el historial con flechas; el editor queda congelado hasta
+/// que ENTER/ESC lo devuelvan al modo edicion. F7 funciona en ambos
+/// modos para clonar el texto historico al editor.
+static mut MODO_INTERACTIVO: bool = false;
 
 /// FASE 37 :: estado del anclaje soberano. Tras un F6 exitoso, el kernel
 /// confirma que el cuaderno se firmo y anclo como raiz; la leyenda al
@@ -562,6 +576,38 @@ fn cold_boot_walker() {
     }
 }
 
+/// FASE 46 :: clona la celda focada al buffer caliente del editor. Zero-alloc:
+/// slice-copy puro entre arrays estaticos. La celda historica (rehidratada
+/// por el walker) o cualquier celda viva del array se vuelve la nueva
+/// fuente del editor — el operador la muta letra a letra y dispara F5.
+///
+/// Hermetismo: si la celda no tiene texto (`fuente_len == 0`) o el largo
+/// supera la capacidad del editor (no deberia, ambos son `FUENTE_CAP`,
+/// pero defensa en profundidad), la operacion es no-op silenciosa.
+fn clonar_celda_focada_al_editor() {
+    let idx = unsafe { CELDA_FOCADA };
+    if idx >= MAX_CELDAS {
+        return;
+    }
+    let celda = unsafe { &CELDAS[idx] };
+    if !celda.valida || celda.fuente_len == 0 || celda.fuente_len > FUENTE_CAP {
+        return;
+    }
+    let n = celda.fuente_len;
+    unsafe {
+        // Slice-copy directo entre buffers estaticos. Sin allocator, sin
+        // `String`, sin `Vec`. El editor pasa a ser el texto de la celda
+        // historica, listo para ser editado y vuelto a ejecutar.
+        EDITOR[..n].copy_from_slice(&celda.fuente[..n]);
+        EDITOR_LEN = n;
+        // Salir del modo navegacion automaticamente — el operador
+        // viene a editar el texto clonado, no a seguir browseando.
+        // No tocamos `RETORNO_HEREDADO*` ni `CADENA_ROTA`: la cascada
+        // se preserva intacta entre la clonacion y el proximo F5.
+        MODO_INTERACTIVO = false;
+    }
+}
+
 // =============================================================================
 //  Teclado
 // =============================================================================
@@ -586,9 +632,59 @@ fn atender_scancode(scancode: u32) {
         unsafe { F6_PREV = true };
         return;
     }
+    if scancode == 0x41 {
+        // FASE 46 :: F7 :: clona la celda focada al editor caliente.
+        // Funciona en CUALQUIER modo — el operador puede recuperar el
+        // ultimo texto historico para mutarlo sin entrar al modo
+        // navegacion explicitamente.
+        if !unsafe { F7_PREV } {
+            clonar_celda_focada_al_editor();
+        }
+        unsafe { F7_PREV = true };
+        return;
+    }
+    // FASE 46 :: ENTER/ESC :: conmutan MODO_INTERACTIVO. Cuando el
+    // operador entra al modo, las flechas mueven el foco; el editor
+    // queda congelado. Cuando sale, el editor vuelve a recibir teclas.
+    if scancode == 0x1C || scancode == 0x01 {
+        // Solo conmutamos en la primera pulsacion para evitar bounce.
+        // SCAN_PREV ya hace ese trabajo en `tick`; aqui es seguro.
+        unsafe { MODO_INTERACTIVO = !MODO_INTERACTIVO };
+        return;
+    }
+    // FASE 46 :: flechas — navegacion de foco celular. Solo activas
+    // en modo interactivo; en modo edicion las ignoramos para no
+    // colisionar con futuros usos del editor.
+    if unsafe { MODO_INTERACTIVO } {
+        if scancode == 0x48 {
+            // Flecha Arriba: foco hacia celdas mas antiguas (slot menor).
+            unsafe {
+                CELDA_FOCADA = CELDA_FOCADA.saturating_sub(1);
+            }
+            return;
+        }
+        if scancode == 0x50 {
+            // Flecha Abajo: foco hacia celdas mas nuevas (slot mayor).
+            unsafe {
+                if CELDA_FOCADA + 1 < MAX_CELDAS {
+                    CELDA_FOCADA += 1;
+                }
+            }
+            return;
+        }
+        // En modo navegacion ignoramos teclas alfanumericas — el editor
+        // no debe mutar mientras el operador esta browseando el pasado.
+        unsafe {
+            F5_PREV = scancode == 0x3F;
+            F6_PREV = scancode == 0x40;
+            F7_PREV = scancode == 0x41;
+        }
+        return;
+    }
     unsafe {
         F5_PREV = scancode == 0x3F;
         F6_PREV = scancode == 0x40;
+        F7_PREV = scancode == 0x41;
     }
 
     if scancode == 0x0E {
@@ -1145,7 +1241,7 @@ fn pintar() {
 
     // Cabecera con el hash del cuaderno (si ya hubo una consolidacion).
     rellenar_rect(lienzo, 0, 0, ANCHO, EDITOR_Y - 4, secundario);
-    dibujar_texto(lienzo, b"PLUMA  WAWA  F45", 8, 6, 1, tinta);
+    dibujar_texto(lienzo, b"PLUMA  WAWA  F46", 8, 6, 1, tinta);
     if unsafe { HASH_CUADERNO_VALIDO } {
         let h = unsafe { HASH_CUADERNO };
         let mut etiqueta = [b' '; 8];
@@ -1179,8 +1275,12 @@ fn pintar() {
         b"CUADERNO SOBERANO ANCLADO  OK"
     } else if unsafe { CADENA_ROTA } {
         b"ERROR  CADENA DE EJECUCION ROTA"
+    } else if unsafe { MODO_INTERACTIVO } {
+        // FASE 46 :: en modo navegacion, la leyenda al pie cambia para
+        // recordar al operador como salir y como clonar.
+        b"NAV  ARROWS MUEVE  F7 CLONA  ENTER SALE"
     } else {
-        b"F5 EJECUTA  F6 FIRMA  BS BORRA  @HASH MACRO"
+        b"F5 EJECUTA  F6 FIRMA  F7 CLONA  ENTER NAV"
     };
     dibujar_texto(lienzo, leyenda, 8, LEYENDA_Y, 1, acento);
 
@@ -1235,6 +1335,21 @@ fn pintar_celdas(lienzo: &mut [u32], tinta: u32, acento: u32, secundario: u32) {
             color_atenuar_u32(secundario, 0xA0)
         };
         rellenar_rect(lienzo, 8, y, ANCHO - 16, CELDA_ALTO - 4, fondo_celda);
+
+        // FASE 46 :: highlight perimetral en MODO_INTERACTIVO sobre la
+        // celda focada. Borde superior + inferior + lateral derecho de
+        // 3 px en color acento — el ojo localiza el foco sin ambiguedad.
+        // Se dibuja ANTES del indicador macro (Fase 36) para que el
+        // chevron acento del puente cross-app gane prioridad visual
+        // si ambos coinciden.
+        if unsafe { MODO_INTERACTIVO } && i == unsafe { CELDA_FOCADA } {
+            // Borde superior.
+            rellenar_rect(lienzo, 8, y, ANCHO - 16, 3, acento);
+            // Borde inferior.
+            rellenar_rect(lienzo, 8, y + CELDA_ALTO - 7, ANCHO - 16, 3, acento);
+            // Borde lateral derecho.
+            rellenar_rect(lienzo, ANCHO - 11, y, 3, CELDA_ALTO - 4, acento);
+        }
 
         // FASE 36 :: indicador vertical de 5 px en el borde IZQUIERDO de
         // las celdas que importaron un binario via `@<hash>`. Tinte
