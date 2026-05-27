@@ -463,6 +463,85 @@ pub(crate) fn enlazar_capacidades(
     )?;
     } // PERMISO_RAIZ
 
+    // --- CAPACIDAD 7b :: sys_manifiesto_proponer(mf_ptr, mf_len) -> i32 ---
+    // Reancla del MANIFIESTO con guardarrail criptografico (Fase 25). La app
+    // entrega en su memoria lineal la forma `postcard` de un sobre
+    // `ManifiestoFirmado` (manifiesto_hash + autor Ed25519 + firma). El kernel:
+    //
+    //   1. Decodifica el sobre — un payload truncado o ajeno cae con
+    //      `CodigoError::Ausente` (no es un error de almacenamiento).
+    //   2. Verifica la firma contra `claves::AGORA_PUBLIC_KEY_LOCAL`. Una
+    //      llave ajena, un payload tampered o una firma forjada caen sin
+    //      mover un solo byte del manifiesto.
+    //   3. Comprueba que el `manifiesto_hash` referenciado YA existe en el
+    //      grafo local — la red puede traer la propuesta, pero el manifiesto
+    //      real ha de estar ingestado (via Akasha) antes de reanclar.
+    //   4. Reanca el manifiesto vivo del kernel — una sola escritura del
+    //      superbloque, atomica como cualquier `fijar_manifiesto`.
+    //
+    // GATEADA por PERMISO_RAIZ: misma autoridad que mueve la raiz del grafo.
+    // Una app sin este permiso no puede ni nombrar la capacidad: el linker
+    // ni siquiera registra el simbolo.
+    //
+    // CERO ALOCACION ADICIONAL: la verificacion `ed25519-compact` corre sobre
+    // la pila; el sobre se deserializa con `take_from_bytes` que NO copia.
+    if permisos & PERMISO_RAIZ != 0 {
+    enlazador.func_wrap(
+        "renaser",
+        "sys_manifiesto_proponer",
+        |caller: Caller<'_, ContextoCapacidades>,
+         mf_ptr: u32,
+         mf_len: u32|
+         -> Result<i32, Error> {
+            // Cota dura del sobre: 32 + 32 + 64 + preludio postcard < 256 B.
+            // Acota tambien una llamada adversaria con mf_len absurdo, que
+            // intentaria desbordar el rango.
+            const MAX_MF: usize = 256;
+            if (mf_len as usize) > MAX_MF {
+                return Ok(CodigoError::CapacidadInsuficiente.como_i32());
+            }
+            let memoria = obtener_memoria(&caller)?;
+            // Copiar el sobre a una pila local — sin tocar al asignador.
+            let mut buf = [0u8; MAX_MF];
+            let n = mf_len as usize;
+            {
+                let m = memoria.data(&caller);
+                let crudo = rango(
+                    m,
+                    mf_ptr,
+                    n,
+                    "WASM :: sys_manifiesto_proponer desbordo la memoria lineal",
+                )?;
+                buf[..n].copy_from_slice(crudo);
+            }
+            let mf = match format::ManifiestoFirmado::deserializar(&buf[..n]) {
+                Ok(mf) => mf,
+                Err(_) => return Ok(CodigoError::Ausente.como_i32()),
+            };
+            // Verificacion criptografica. Sin firma valida, no hay reancla.
+            if let Err(err) = crate::claves::verificar_manifiesto_firmado(&mf) {
+                return Ok(err.como_i32());
+            }
+            // El manifiesto referenciado tiene que estar ingestado localmente.
+            // Si la red trajo el sobre pero no el Manifiesto en si, mudanza
+            // ha de pedirlo via sys_red_solicitar y reintentar este syscall
+            // cuando el demuxer lo haya absorbido al grafo.
+            match crate::almacen::recuperar(&mf.manifiesto_hash) {
+                Ok(Some(_)) => {}
+                Ok(None) => return Ok(CodigoError::Ausente.como_i32()),
+                Err(_) => return Ok(CodigoError::AlmacenamientoFallo.como_i32()),
+            }
+            // Reancla atomica del manifiesto: el superbloque queda apuntando
+            // a la propuesta verificada. El proximo fotograma —y todo
+            // arranque ulterior— veran el nuevo userspace.
+            match crate::almacen::fijar_manifiesto(mf.manifiesto_hash) {
+                Ok(()) => Ok(CodigoError::Ok.como_i32()),
+                Err(_) => Ok(CodigoError::AlmacenamientoFallo.como_i32()),
+            }
+        },
+    )?;
+    } // PERMISO_RAIZ
+
     // --- CAPACIDAD 8 :: sys_estado_cargar(salida, capacidad) -> i32 ---
     // Copia el estado persistido de ESTA app —el objeto que su `EntradaApp` del
     // manifiesto tiene anclado— en `salida`. Devuelve el numero de bytes

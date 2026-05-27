@@ -49,6 +49,7 @@ mod akasha;
 mod almacen;
 mod async_system;
 mod baliza;
+mod claves;
 mod compositor;
 mod consola;
 mod drivers;

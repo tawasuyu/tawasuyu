@@ -1,0 +1,30 @@
+# =============================================================================
+#  renaser :: apps/mudanza — Fase 25 :: centro de control soberano de raices
+# -----------------------------------------------------------------------------
+#  Mudanza es la unica app del genesis que invoca `sys_manifiesto_proponer`.
+#  Escucha los frames `AnunciarCanal` que llegan por la red Akasha, presenta
+#  al usuario la propuesta —el hash, el autor, la firma— y, si el operador
+#  consiente con Alt+Enter, traslada el sobre criptografico al kernel. El
+#  kernel verifica Ed25519 contra `claves::AGORA_PUBLIC_KEY_LOCAL` y, solo si
+#  la firma es licita, reanca el manifiesto en una sola escritura atomica
+#  del superbloque.
+# =============================================================================
+
+[package]
+name = "mudanza"
+version = "0.1.0"
+edition = "2021"
+description = "renaser :: app WASM de propuesta de reancla del manifiesto"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true

@@ -390,6 +390,51 @@ pub struct Canal {
     pub raices: Vec<RaizFirmada>,
 }
 
+/// El sobre criptografico de un Manifiesto: empareja su hash BLAKE3 con la
+/// firma Ed25519 que un autor `AgoraId` produjo sobre el. Fase 25 — el
+/// kernel solo acepta una propuesta de reancla del manifiesto cuando llega
+/// envuelta en uno de estos sobres Y la firma valida contra la clave publica
+/// del usuario local que el binario del kernel lleva grabada. Sin firma
+/// valida, no hay mutacion: la mudanza de raiz es un PACTO MATEMATICO
+/// explicito, no una orden ciega de la red.
+///
+/// El mensaje que se firma es, literalmente, los 32 bytes de
+/// `manifiesto_hash` — el hash mismo es ya el resumen criptografico del
+/// payload del manifiesto, asi que firmar el hash equivale a firmar el
+/// manifiesto completo. Ed25519 no se preocupa por la longitud del mensaje.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct ManifiestoFirmado {
+    /// Hash BLAKE3 del Manifiesto propuesto. Un hash idiosincratico = un
+    /// manifiesto idiosincratico — ningun atacante puede sustituirlo y
+    /// reutilizar la firma sin reproducir el hash exacto.
+    pub manifiesto_hash: Hash,
+    /// Llave publica Ed25519 del autor que firma esta propuesta. El kernel
+    /// la compara contra su clave local empotrada antes de molestarse en
+    /// verificar la firma: una llave ajena cae con `CapacidadInsuficiente`
+    /// sin gastar ciclos en criptografia.
+    pub autor: AgoraId,
+    /// Firma Ed25519 sobre los 32 bytes de `manifiesto_hash`.
+    #[serde(with = "BigArray")]
+    pub firma: Firma,
+}
+
+impl ManifiestoFirmado {
+    /// Serializa el sobre a su forma binaria `postcard` — la carga util del
+    /// objeto del grafo que lo aloja (o el payload de un mensaje Akasha).
+    pub fn serializar(&self) -> Result<Vec<u8>, &'static str> {
+        postcard::to_allocvec(self)
+            .map_err(|_| "manifiesto_firmado :: serializacion fallida")
+    }
+
+    /// Reconstruye un sobre desde su forma binaria. Tolera bytes sobrantes
+    /// tras la estructura — el relleno del registro.
+    pub fn deserializar(bytes: &[u8]) -> Result<ManifiestoFirmado, &'static str> {
+        postcard::take_from_bytes::<ManifiestoFirmado>(bytes)
+            .map(|(mf, _)| mf)
+            .map_err(|_| "manifiesto_firmado :: deserializacion fallida")
+    }
+}
+
 /// Una entrada del historial de un canal: una raiz de manifiesto, el instante
 /// en que el autor la propuso, y la firma Ed25519 con la que el autor la
 /// respalda. La firma se calcula sobre [`mensaje_a_firmar`].
@@ -723,6 +768,24 @@ mod pruebas {
         let bytes = m.serializar().unwrap();
         let leido = Manifiesto::deserializar(&bytes).unwrap();
         assert_eq!(leido.apps[0].permisos, 0b11111);
+    }
+
+    #[test]
+    fn manifiesto_firmado_ida_y_vuelta() {
+        // Roundtrip serializar->deserializar preserva los tres campos del
+        // sobre criptografico: hash del manifiesto, llave publica del autor
+        // y firma. Es el contrato basico de la Fase 25 con el wire/log.
+        let mf = ManifiestoFirmado {
+            manifiesto_hash: [0xC5; 32],
+            autor: [0xA1; 32],
+            firma: [0x77; 64],
+        };
+        let bytes = mf.serializar().unwrap();
+        let leido = ManifiestoFirmado::deserializar(&bytes).unwrap();
+        assert_eq!(leido, mf);
+        // Tamaño acotado: 32 + 32 + 64 = 128 bytes crudos + el preludio
+        // postcard. Debe caber holgado en un sector y en un frame Ethernet.
+        assert!(bytes.len() <= 160, "MF demasiado grande: {} bytes", bytes.len());
     }
 
     #[test]

@@ -91,3 +91,12 @@ akasha = { path = "../wawa-fs" }
 # lo enlaza por `path` cruzando la frontera. La feature `serde` queda
 # APAGADA: el kernel computa el layout en memoria, no lo serializa.
 mirada-layout = { path = "../../../02_ruway/mirada/mirada-layout" }
+
+# --- Fase 25 :: criptografia del manifiesto (sello Ed25519) ---
+# El kernel SOLO verifica firmas; el firmador vive fuera (wawactl, peers).
+# Esto evita empotrar la clave privada en el binario y limita el incendio
+# si el kernel se filtra: un atacante con kernel.elf NO puede engendrar
+# propuestas que el sistema acepte —solo podria reproducir verificaciones—.
+# `default-features = false` apaga `std` y `random`; verificacion Ed25519
+# es deterministica y no necesita ninguna de las dos.
+ed25519-compact = { version = "2", default-features = false }

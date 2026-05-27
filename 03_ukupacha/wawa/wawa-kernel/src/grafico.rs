@@ -105,6 +105,19 @@ impl Color {
         g: 0xFF,
         b: 0xE0,
     };
+
+    /// Carmesi profundo: la baliza ULTIMA del kernel — fallo de inicializacion
+    /// no recuperable (Fase 25). Se invoca cuando un superbloque que dice
+    /// estar firmado no supera la verificacion criptografica, o cuando un
+    /// invariante de la cadena de arranque cae. NO es un desalojo de app —
+    /// el kernel entero abdica de seguir presentando un escritorio que ya
+    /// no puede atestiguar como legitimo—. La pantalla queda en este color
+    /// y la traza completa va al puerto serial para diagnostico offline.
+    pub(crate) const FATAL_CARMESI: Color = Color {
+        r: 0x8B,
+        g: 0x00,
+        b: 0x00,
+    };
 }
 
 // =============================================================================
