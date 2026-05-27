@@ -203,7 +203,7 @@
 
         <!-- Cuadrante II: 00_unanchay PERCIBIR -->
         <g class="quad" data-cuad="00_unanchay" data-theme="unanchay" transform="translate(-50,-50)"
-           data-doc="/web/gioser-web/md/aire.md" data-title="unanchay · percibir">
+           data-doc="/00_unanchay/README.md" data-title="00 unanchay · percibir">
           <rect x="-40" y="-40" width="80" height="80"/>
           <text class="quad-id"   x="0" y="-30">0x00</text>
           <text class="quad-name" x="0" y="-14">UNANCHAY</text>
@@ -217,7 +217,7 @@
 
         <!-- Cuadrante I: 01_yachay CONOCER -->
         <g class="quad" data-cuad="01_yachay" data-theme="yachay" transform="translate(50,-50)"
-           data-doc="/web/gioser-web/md/cosmos.md" data-title="yachay · conocer">
+           data-doc="/01_yachay/README.md" data-title="01 yachay · conocer">
           <rect x="-40" y="-40" width="80" height="80"/>
           <text class="quad-id"   x="0" y="-30">0x01</text>
           <text class="quad-name" x="0" y="-14">YACHAY</text>
@@ -231,7 +231,7 @@
 
         <!-- Cuadrante III: 03_ukupacha RAIZ -->
         <g class="quad" data-cuad="03_ukupacha" data-theme="ukupacha" transform="translate(-50,50)"
-           data-doc="/web/gioser-web/md/tierra.md" data-title="ukupacha · raíz">
+           data-doc="/03_ukupacha/README.md" data-title="03 ukupacha · raíz">
           <rect x="-40" y="-40" width="80" height="80"/>
           <text class="quad-id"   x="0" y="-30">0x03</text>
           <text class="quad-name" x="0" y="-14">UKUPACHA</text>
@@ -245,7 +245,7 @@
 
         <!-- Cuadrante IV: 02_ruway HACER -->
         <g class="quad" data-cuad="02_ruway" data-theme="ruway" transform="translate(50,50)"
-           data-doc="/web/gioser-web/md/fuego.md" data-title="ruway · hacer">
+           data-doc="/02_ruway/README.md" data-title="02 ruway · hacer">
           <rect x="-40" y="-40" width="80" height="80"/>
           <text class="quad-id"   x="0" y="-30">0x02</text>
           <text class="quad-name" x="0" y="-14">RUWAY</text>
@@ -371,6 +371,13 @@
     el.addEventListener('mousedown', () => traerAlFrente(id));
     el.querySelector('.win-min').addEventListener('click',  (e) => { e.stopPropagation(); minimizar(id); });
     el.querySelector('.win-close').addEventListener('click',(e) => { e.stopPropagation(); cerrar(id); });
+
+    // En mobile (≤ 800px) auto-cerramos la sidebar para que el artículo
+    // ocupe todo el ancho. En desktop la sidebar sigue abierta y el
+    // artículo respeta su ancho (lo arregla el CSS de #windows-layer).
+    if (window.matchMedia('(max-width: 800px)').matches) {
+      document.body.classList.remove('sidebar-open');
+    }
 
     cargar_md(contId, url, theme || 'gioser');
     return id;
@@ -569,14 +576,16 @@
     document.getElementById('clock').textContent = `${hh}:${mm}`;
   }
 
-  // Toggle del sidebar (gioser brand → botón en mobile, texto en desktop).
-  // En desktop la sidebar vive abierta; en mobile se oculta y el brand
-  // funciona como hamburguesa. La media query del CSS decide cuándo.
+  // Toggle del sidebar — desktop usa `sidebar-collapsed` (oculta una
+  // sidebar que vive abierta), mobile usa `sidebar-open` (muestra una
+  // sidebar que vive cerrada). El brand decide cuál según el viewport.
   function bindSidebarToggle() {
     const btn = document.getElementById('brand-toggle');
     if (!btn) return;
     btn.addEventListener('click', () => {
-      document.body.classList.toggle('sidebar-collapsed');
+      const isMobile = window.matchMedia('(max-width: 800px)').matches;
+      const cls = isMobile ? 'sidebar-open' : 'sidebar-collapsed';
+      document.body.classList.toggle(cls);
     });
   }
 
