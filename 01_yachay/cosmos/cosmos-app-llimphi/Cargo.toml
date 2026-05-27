@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "cosmos-app-llimphi — visor minimalista del lienzo astrológico sobre Llimphi. MVP: arma un `RenderModel` mock (carta natal estática con cuerpos clásicos + ejes) y la pinta con `cosmos-canvas-llimphi` + `compose_wheel`. Sin engine real (eternal-sky no compila a WASM y arrastrar las efemérides es trabajo de otro bloque); el shell completo con tree + panel laterales viene después."
+description = "cosmos-app-llimphi — visor del lienzo astrológico sobre Llimphi. Llama a `cosmos-engine::compose` (VSOP2013 vía eternal-bridge) con un `Chart` sample y pinta el `RenderModel` con `cosmos-canvas-llimphi`. Toolbar de overlays (Transit/Progression/SolarArc) en la barra superior. Shell completo con tree + panel laterales viene después."
 
 [[bin]]
 name = "cosmos-app-llimphi"
@@ -14,9 +14,12 @@ path = "src/main.rs"
 
 [dependencies]
 cosmos-canvas-llimphi = { path = "../cosmos-canvas-llimphi" }
+cosmos-engine = { path = "../cosmos-engine" }
+cosmos-model = { path = "../cosmos-model" }
 cosmos-render = { path = "../cosmos-render" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
+llimphi-widget-button = { workspace = true }
 rimay-localize = { path = "../../../shared/rimay-localize" }
 wawa-config = { path = "../../../shared/wawa-config" }
 wawa-config-llimphi = { path = "../../../shared/wawa-config-llimphi" }

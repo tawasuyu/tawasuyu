@@ -86,9 +86,18 @@ dominium-label-hack = hack:
 cosmos-btn-save-transit = 💾 Guardar tránsito como carta libre
 cosmos-btn-save-progressed = 💾 Guardar progresada como carta libre
 cosmos-btn-save-return = 💾 Guardar retorno como carta libre
-cosmos-header = cosmos · { $title } (mock · Asc { $asc }° MC { $mc }°)
-cosmos-demo-title = Carta sintética (demo)
-cosmos-demo-subtitle = sin cómputo real — sólo geometría
+cosmos-header = cosmos · { $title } · Asc { $asc }° · MC { $mc }°
+cosmos-demo-title = Carta de muestra (Lima)
+cosmos-demo-subtitle = computada por cosmos-engine (VSOP2013)
+cosmos-status = { $ms } ms · { $layers } capas · { $overlays } overlays · { $aspects } aspectos
+cosmos-status-error = error: { $err }
+cosmos-overlay-transit = tránsito
+cosmos-overlay-progression = progresión
+cosmos-overlay-solar-arc = arco solar
+cosmos-overlay-uranian = uraniano
+cosmos-overlay-lots = lotes
+cosmos-overlay-fixed-stars = est. fijas
+cosmos-overlay-midpoints = puntos medios
 
 # === wawa-explorer (Wawa image browser) ===
 wawa-marker-via-aoe =   ·  via AoE

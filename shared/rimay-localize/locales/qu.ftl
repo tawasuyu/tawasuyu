@@ -89,9 +89,18 @@ dominium-label-hack = hack:
 cosmos-btn-save-transit = 💾 Purichiqta qispi qillqaman waqaychay
 cosmos-btn-save-progressed = 💾 Wiñasqata qispi qillqaman waqaychay
 cosmos-btn-save-return = 💾 Kutiqta qispi qillqaman waqaychay
-cosmos-header = cosmos · { $title } (mock · Asc { $asc }° MC { $mc }°)
-cosmos-demo-title = Carta ruwasqa (demo)
-cosmos-demo-subtitle = mana yupasqa — geometría sapanlla
+cosmos-header = cosmos · { $title } · Asc { $asc }° · MC { $mc }°
+cosmos-demo-title = Qhawanapaq qillqa (Lima)
+cosmos-demo-subtitle = cosmos-engine yupan (VSOP2013)
+cosmos-status = { $ms } ms · { $layers } qatakuna · { $overlays } overlays · { $aspects } aspectos
+cosmos-status-error = pantasqa: { $err }
+cosmos-overlay-transit = puriq
+cosmos-overlay-progression = wiñay
+cosmos-overlay-solar-arc = inti arco
+cosmos-overlay-uranian = uraniano
+cosmos-overlay-lots = lote
+cosmos-overlay-fixed-stars = qulluy
+cosmos-overlay-midpoints = chawpi
 
 # === wawa-explorer (Wawa imagen qhawana) ===
 wawa-marker-via-aoe =   ·  AoE-pi
