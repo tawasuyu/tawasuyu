@@ -66,6 +66,12 @@ pub struct BoxNode {
     /// Multiplicador line-height (font-size * line_height = altura
     /// de línea). `None` → caller usa 1.4 como default.
     pub line_height: Option<f32>,
+    /// Ancho del border en px.
+    pub border_width: f32,
+    /// Color del border. `None` = no se dibuja.
+    pub border_color: Option<Color>,
+    /// Radio corner-radius en px.
+    pub border_radius: f32,
     /// Texto plano del nodo (sólo para hojas de texto). Para nodos con
     /// hijos el texto vive en los hijos.
     pub text: Option<String>,
@@ -145,6 +151,9 @@ fn empty_root() -> BoxNode {
         max_width: LengthVal::Auto,
         text_align: TextAlign::Left,
         line_height: None,
+        border_width: 0.0,
+        border_color: None,
+        border_radius: 0.0,
         text: None,
         children: Vec::new(),
         tag: Some("body".into()),
@@ -211,6 +220,9 @@ fn build_node(
                 max_width: style.max_width,
                 text_align: style.text_align,
                 line_height: style.line_height,
+                border_width: style.border_width,
+                border_color: style.border_color,
+                border_radius: style.border_radius,
                 text: None,
                 children,
                 tag,
@@ -261,6 +273,9 @@ fn build_node(
                 max_width: LengthVal::Auto,
                 text_align: p.text_align,
                 line_height: p.line_height,
+                border_width: 0.0,
+                border_color: None,
+                border_radius: 0.0,
                 text: None,
                 children,
                 tag: None,
@@ -287,6 +302,9 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         max_width: LengthVal::Auto,
         text_align: style.text_align,
         line_height: style.line_height,
+        border_width: 0.0,
+        border_color: None,
+        border_radius: 0.0,
         text: Some(s),
         children: Vec::new(),
         tag: None,

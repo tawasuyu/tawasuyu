@@ -38,6 +38,12 @@ pub struct ComputedStyle {
     /// Altura de línea como multiplicador del font-size. `None` =
     /// default razonable (1.4) en el caller.
     pub line_height: Option<f32>,
+    /// Ancho del border en px. `0` = sin border.
+    pub border_width: f32,
+    /// Color del border. `None` = no se dibuja aunque `border_width > 0`.
+    pub border_color: Option<Color>,
+    /// Radio del corner-radius en px (0 = esquinas vivas).
+    pub border_radius: f32,
 }
 
 /// Valor longitud de CSS reducido al subset que soportamos: `auto`,
@@ -72,6 +78,9 @@ impl Default for ComputedStyle {
             max_width: LengthVal::Auto,
             text_align: TextAlign::Left,
             line_height: None,
+            border_width: 0.0,
+            border_color: None,
+            border_radius: 0.0,
         }
     }
 }
@@ -504,6 +513,12 @@ enum DeclKind {
     MaxWidth(LengthVal),
     TextAlign(TextAlign),
     LineHeight(f32),
+    BorderWidth(f32),
+    BorderColor(Color),
+    /// `border-style: solid` activa el dibujo del border; `none`/`hidden`
+    /// lo desactiva (color → None).
+    BorderEnabled(bool),
+    BorderRadius(f32),
 }
 
 impl Decl {
@@ -520,6 +535,15 @@ impl Decl {
             DeclKind::MaxWidth(v) => s.max_width = *v,
             DeclKind::TextAlign(a) => s.text_align = *a,
             DeclKind::LineHeight(v) => s.line_height = Some(*v),
+            DeclKind::BorderWidth(v) => s.border_width = *v,
+            DeclKind::BorderColor(c) => s.border_color = Some(*c),
+            DeclKind::BorderEnabled(on) => {
+                if !*on {
+                    s.border_color = None;
+                    s.border_width = 0.0;
+                }
+            }
+            DeclKind::BorderRadius(v) => s.border_radius = *v,
         }
     }
 }
@@ -874,18 +898,24 @@ fn strip_comments(css: &str) -> String {
 
 fn parse_declarations(css: &str) -> Vec<Decl> {
     // Cada decl separada por `;`. Detectamos `!important` recortando
-    // el sufijo del value antes de pasarlo al parser de tipo.
+    // el sufijo del value antes de pasarlo al parser de tipo. La
+    // shorthand `border:` se expande inline a 1..3 decls atómicas.
     let mut out = Vec::new();
     for chunk in css.split(';') {
         let Some((prop, value)) = chunk.split_once(':') else {
             continue;
         };
+        let prop = prop.trim();
         let value = value.trim();
         let (value, important) = match strip_important(value) {
             Some(stripped) => (stripped, true),
             None => (value, false),
         };
-        if let Some(kind) = decl_kind_from_pair(prop.trim(), value) {
+        if prop.eq_ignore_ascii_case("border") {
+            out.extend(parse_border_shorthand(value, important));
+            continue;
+        }
+        if let Some(kind) = decl_kind_from_pair(prop, value) {
             out.push(Decl { kind, important });
         }
     }
@@ -920,8 +950,65 @@ fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "max-width" => parse_length_or_pct(value).map(DeclKind::MaxWidth),
         "text-align" => parse_text_align(value).map(DeclKind::TextAlign),
         "line-height" => parse_line_height(value).map(DeclKind::LineHeight),
+        "border-width" => parse_length_px(value).map(DeclKind::BorderWidth),
+        "border-color" => parse_color(value).map(DeclKind::BorderColor),
+        "border-style" => parse_border_style(value).map(DeclKind::BorderEnabled),
+        "border-radius" => parse_length_px(value).map(DeclKind::BorderRadius),
+        // `border: 1px solid #ccc` — shorthand. Devolvemos un único
+        // DeclKind sintético: en realidad ya hay 3 sub-decls que el
+        // caller debe emitir, así que delegamos a una ruta especial vía
+        // parse_declarations (ver más arriba). Acá no podemos producir
+        // varios, así que ignoramos — la entrada se rellena en
+        // parse_declarations cuando ve `border`.
+        "border" => None,
         _ => None,
     }
+}
+
+fn parse_border_style(s: &str) -> Option<bool> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "solid" | "dashed" | "dotted" | "double" => Some(true),
+        "none" | "hidden" => Some(false),
+        _ => None,
+    }
+}
+
+/// Parsea el shorthand `border: <width> <style> <color>` (componentes en
+/// cualquier orden). Devuelve hasta 3 decls. Si falta el style, se asume
+/// `solid`. Cualquier "none" en la posición de style desactiva el border.
+fn parse_border_shorthand(value: &str, important: bool) -> Vec<Decl> {
+    let mut width: Option<f32> = None;
+    let mut color: Option<Color> = None;
+    let mut style_on: Option<bool> = None;
+    for tok in value.split_whitespace() {
+        if let Some(w) = parse_length_px(tok) {
+            width = Some(w);
+            continue;
+        }
+        if let Some(c) = parse_color(tok) {
+            color = Some(c);
+            continue;
+        }
+        if let Some(s) = parse_border_style(tok) {
+            style_on = Some(s);
+            continue;
+        }
+    }
+    // Defaults razonables: si hay width+color sin style, asumimos solid.
+    if style_on.is_none() && (width.is_some() || color.is_some()) {
+        style_on = Some(true);
+    }
+    let mut out = Vec::new();
+    if let Some(on) = style_on {
+        out.push(Decl { kind: DeclKind::BorderEnabled(on), important });
+    }
+    if let Some(w) = width {
+        out.push(Decl { kind: DeclKind::BorderWidth(w), important });
+    }
+    if let Some(c) = color {
+        out.push(Decl { kind: DeclKind::BorderColor(c), important });
+    }
+    out
 }
 
 fn parse_text_align(s: &str) -> Option<TextAlign> {
@@ -1583,6 +1670,53 @@ mod tests {
         let eng = StyleEngine::from_dom(&dom);
         let p = dom.find("p").unwrap();
         assert_eq!(eng.compute(&p).color, Color::rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn parsea_border_shorthand() {
+        let html = r#"<html><head><style>
+            .a { border: 2px solid #ff0000 }
+            .b { border: 1px dashed blue !important }
+            .c { border: none }
+            .d { border-radius: 8px }
+        </style></head><body>
+          <div class="a"></div><div class="b"></div>
+          <div class="c"></div><div class="d"></div>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("div") {
+                divs.push(n.clone());
+            }
+        });
+        assert_eq!(divs.len(), 4);
+        let a = eng.compute(&divs[0]);
+        assert!((a.border_width - 2.0).abs() < 1e-6);
+        assert_eq!(a.border_color, Some(Color::rgb(255, 0, 0)));
+        let b = eng.compute(&divs[1]);
+        assert!((b.border_width - 1.0).abs() < 1e-6);
+        assert_eq!(b.border_color, Some(Color::rgb(0, 0, 255)));
+        let c = eng.compute(&divs[2]);
+        assert_eq!(c.border_color, None); // `none` deshabilita
+        assert!((c.border_width - 0.0).abs() < 1e-6);
+        let d = eng.compute(&divs[3]);
+        assert!((d.border_radius - 8.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn parsea_border_propiedades_individuales() {
+        let html = r#"<html><head><style>
+            div { border-width: 3px; border-color: #00ff00; border-style: solid; border-radius: 5px }
+        </style></head><body><div></div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let div = dom.find("div").unwrap();
+        let st = eng.compute(&div);
+        assert!((st.border_width - 3.0).abs() < 1e-6);
+        assert_eq!(st.border_color, Some(Color::rgb(0, 0xff, 0)));
+        assert!((st.border_radius - 5.0).abs() < 1e-6);
     }
 
     #[test]

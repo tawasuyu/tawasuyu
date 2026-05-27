@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use llimphi_layout::taffy::prelude::{
     auto, length, percent, AlignItems, FlexDirection, FlexWrap, Position, Rect, Size, Style,
 };
+use llimphi_raster::kurbo::{Affine, RoundedRect, Stroke};
 use llimphi_raster::peniko::{Blob, Color, Image as PenikoImage, ImageFormat};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
@@ -583,6 +584,7 @@ fn render_box(b: &BoxNode) -> View<Msg> {
     if let Some(bg) = b.background {
         view = view.fill(Color::from_rgb8(bg.r, bg.g, bg.b));
     }
+    view = apply_border(view, b);
 
     let link_color = Color::from_rgb8(30, 90, 200);
     let display_color = if b.link.is_some() {
@@ -667,6 +669,38 @@ fn render_link_subtree(b: &BoxNode, target: &str, color: Color) -> View<Msg> {
         );
     }
     view
+}
+
+/// Aplica `border-radius` (vía `View::radius`) y dibuja el contorno del
+/// box con `paint_with(...)` si `border_width > 0 && border_color.is_some()`.
+/// Vello stroke con `RoundedRect` da bordes redondeados consistentes con
+/// el fill — ambos comparten el mismo radio.
+fn apply_border(mut view: View<Msg>, b: &BoxNode) -> View<Msg> {
+    if b.border_radius > 0.0 {
+        view = view.radius(b.border_radius as f64);
+    }
+    let (Some(bc), w) = (b.border_color, b.border_width) else {
+        return view;
+    };
+    if w <= 0.0 {
+        return view;
+    }
+    let radius = b.border_radius as f64;
+    let color = Color::from_rgba8(bc.r, bc.g, bc.b, 255);
+    let stroke = Stroke::new(w as f64);
+    view.paint_with(move |scene, _typesetter, rect| {
+        // Inset por media línea para que el stroke caiga dentro del
+        // rect — vello pinta el trazo centrado en el path.
+        let half = stroke.width * 0.5;
+        let r = RoundedRect::new(
+            rect.x as f64 + half,
+            rect.y as f64 + half,
+            (rect.x + rect.w) as f64 - half,
+            (rect.y + rect.h) as f64 - half,
+            (radius - half).max(0.0),
+        );
+        scene.stroke(&stroke, Affine::IDENTITY, color, None, &r);
+    })
 }
 
 fn box_style(b: &BoxNode) -> Style {
