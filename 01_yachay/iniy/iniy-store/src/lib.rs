@@ -82,6 +82,22 @@ pub struct DumpAsercion {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+pub struct CorpusStats {
+    pub n_fuentes: u64,
+    pub n_documentos: u64,
+    pub n_chunks: u64,
+    pub n_aserciones: u64,
+    pub n_implicaciones: u64,
+    pub n_tags: u64,
+    pub n_documento_tags: u64,
+    pub nli_entail: u64,
+    pub nli_contra: u64,
+    pub nli_neutral: u64,
+    pub primero_unix: Option<i64>,
+    pub ultimo_unix: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
 pub struct ImportStats {
     pub fuentes: usize, pub fuentes_omitidas: usize,
     pub documentos: usize, pub documentos_omitidos: usize,
@@ -482,6 +498,52 @@ impl Store {
             out.push(Chunk { id: ChunkId(ulid), doc_id, orden: orden as u32, texto });
         }
         Ok(out)
+    }
+
+    /// Overview cuantitativo del corpus. Devuelve conteos por tabla,
+    /// distribución NLI por clase dominante, y el rango temporal.
+    pub fn stats(&self) -> Result<CorpusStats> {
+        fn count(c: &Connection, t: &str) -> Result<u64> {
+            Ok(c.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get::<_, i64>(0))? as u64)
+        }
+        let c = &self.conn;
+        let n_fuentes = count(c, "fuentes")?;
+        let n_documentos = count(c, "documentos")?;
+        let n_chunks = count(c, "chunks")?;
+        let n_aserciones = count(c, "aserciones")?;
+        let n_implicaciones = count(c, "implicaciones")?;
+        let n_tags = count(c, "tags")?;
+        let n_documento_tags = count(c, "documento_tags")?;
+        // Distribución NLI por clase dominante.
+        let mut nli_entail = 0u64;
+        let mut nli_contra = 0u64;
+        let mut nli_neutral = 0u64;
+        let mut stmt = c.prepare(
+            "SELECT entailment, contradiction, neutral FROM implicaciones"
+        )?;
+        let rows = stmt.query_map([], |r| Ok((
+            r.get::<_, f64>(0)?, r.get::<_, f64>(1)?, r.get::<_, f64>(2)?,
+        )))?;
+        for r in rows {
+            let (e, k, n) = r?;
+            if e >= k && e >= n { nli_entail += 1; }
+            else if k >= n { nli_contra += 1; }
+            else { nli_neutral += 1; }
+        }
+        // Rango temporal de docs.
+        let temporal: Option<(i64, i64)> = c.query_row(
+            "SELECT MIN(creado), MAX(creado) FROM documentos",
+            [],
+            |r| Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, Option<i64>>(1)?)),
+        ).optional()?
+        .and_then(|(min, max)| Some((min?, max?)));
+        Ok(CorpusStats {
+            n_fuentes, n_documentos, n_chunks, n_aserciones, n_implicaciones,
+            n_tags, n_documento_tags,
+            nli_entail, nli_contra, nli_neutral,
+            primero_unix: temporal.map(|(min, _)| min),
+            ultimo_unix: temporal.map(|(_, max)| max),
+        })
     }
 
     /// Lista los docs que aún no tienen aserciones extraídas. Pensado para

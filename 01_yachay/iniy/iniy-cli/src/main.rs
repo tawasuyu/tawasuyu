@@ -181,6 +181,10 @@ enum Cmd {
     ImportSqlite {
         archivo: PathBuf,
     },
+    /// Overview cuantitativo del corpus: conteos por tabla, distribución
+    /// NLI, top fuentes por reputación, top tags. Útil para entender
+    /// "qué tengo" tras imports masivos o tras una sesión larga.
+    Stats,
     /// Vista cronológica del corpus: documentos ordenados por timestamp
     /// de ingesta, ascendente. Útil para ver cómo creció la "creencia
     /// del corpus" en el tiempo.
@@ -291,6 +295,21 @@ fn etiqueta_fuente(att: &AsercionAtribuida) -> String {
 
 fn fila_opinion(op: &Opinion) -> String {
     format!("b={:.2} d={:.2} u={:.2}", op.creencia, op.descreencia, op.incertidumbre)
+}
+
+fn formato_bytes(n: u64) -> String {
+    const UNIDADES: &[&str] = &["B", "KB", "MB", "GB", "TB"];
+    let mut x = n as f64;
+    let mut u = 0;
+    while x >= 1024.0 && u < UNIDADES.len() - 1 {
+        x /= 1024.0;
+        u += 1;
+    }
+    if u == 0 {
+        format!("{:.0} {}", x, UNIDADES[u])
+    } else {
+        format!("{:.2} {}", x, UNIDADES[u])
+    }
 }
 
 /// Formatea Unix epoch como YYYY-MM-DD HH:MM:SS UTC, manual (sin chrono).
@@ -776,6 +795,69 @@ async fn main() -> Result<()> {
                 println!();
                 println!("(tokens: input={} cache_read={} output={})",
                     u.input_tokens, u.cache_read_input_tokens, u.output_tokens);
+            }
+        }
+        Cmd::Stats => {
+            let s = store.stats()?;
+            // Tamaño de la DB en disco.
+            let tamano_db = std::fs::metadata(&cli.db).ok().map(|m| m.len());
+            println!("─── corpus en {} ───", cli.db.display());
+            if let Some(b) = tamano_db {
+                println!("  tamaño DB:        {}", formato_bytes(b));
+            }
+            println!();
+            println!("  conteos:");
+            println!("    fuentes:        {:>10}", s.n_fuentes);
+            println!("    documentos:     {:>10}", s.n_documentos);
+            println!("    chunks:         {:>10}", s.n_chunks);
+            println!("    aserciones:     {:>10}", s.n_aserciones);
+            println!("    implicaciones:  {:>10}", s.n_implicaciones);
+            println!("    tags:           {:>10}", s.n_tags);
+            println!("    doc-tags (rel): {:>10}", s.n_documento_tags);
+            if s.n_implicaciones > 0 {
+                println!();
+                println!("  distribución NLI (clase dominante):");
+                let pct = |n: u64| 100.0 * n as f32 / s.n_implicaciones as f32;
+                println!("    entailment:    {:>10}  ({:>5.1}%)", s.nli_entail, pct(s.nli_entail));
+                println!("    contradiction: {:>10}  ({:>5.1}%)", s.nli_contra, pct(s.nli_contra));
+                println!("    neutral:       {:>10}  ({:>5.1}%)", s.nli_neutral, pct(s.nli_neutral));
+            }
+            if let (Some(p), Some(u)) = (s.primero_unix, s.ultimo_unix) {
+                println!();
+                println!("  rango temporal:");
+                println!("    primer doc:  {}", formato_fecha(p));
+                println!("    último doc:  {}", formato_fecha(u));
+            }
+            // Top fuentes por reputación.
+            let reps = store.cargar_reputaciones_todas().unwrap_or_default();
+            if !reps.is_empty() {
+                let fuentes_idx: std::collections::HashMap<FuenteId, iniy_store::FuenteResumen> = store
+                    .listar_fuentes()?.into_iter().map(|f| (f.fuente.id, f)).collect();
+                let mut con_nombres: Vec<_> = reps.iter().filter_map(|r| {
+                    fuentes_idx.get(&r.fuente_id).map(|f| (r.score, f.fuente.nombre.clone()))
+                }).collect();
+                con_nombres.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+                println!();
+                println!("  top 5 fuentes por reputación:");
+                for (sc, n) in con_nombres.iter().take(5) {
+                    println!("    {:+.2}  {}", sc, n);
+                }
+                if con_nombres.len() > 5 {
+                    println!();
+                    println!("  bottom 5 fuentes por reputación:");
+                    for (sc, n) in con_nombres.iter().rev().take(5) {
+                        println!("    {:+.2}  {}", sc, n);
+                    }
+                }
+            }
+            // Top tags.
+            let tags = store.listar_tags_con_conteo().unwrap_or_default();
+            if !tags.is_empty() {
+                println!();
+                println!("  top 10 tags:");
+                for (t, n) in tags.iter().take(10) {
+                    println!("    {:>5}  {}", n, t);
+                }
             }
         }
         Cmd::Timeline { desde, hasta, tag } => {
