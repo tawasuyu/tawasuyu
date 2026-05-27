@@ -38,7 +38,10 @@ const ACCENT_INCERTIDUMBRE: Color = Color::from_rgba8(0x88, 0x88, 0x99, 0xff); /
 const ACCENT_CITADA: Color = Color::from_rgba8(0xeb, 0xcb, 0x8b, 0xff);       // ámbar
 
 #[derive(Clone)]
-enum Msg {}
+enum Msg {
+    /// Toggle: si el id ya estaba seleccionado, deselecciona.
+    Seleccionar(AsercionId),
+}
 
 struct Model {
     db_path: PathBuf,
@@ -53,6 +56,7 @@ struct Model {
     /// Solo relaciones no triviales (al menos una > 0).
     aristas_grafo: std::sync::Arc<Vec<(AsercionId, AsercionId, f32, f32)>>,
     n_implicaciones: usize,
+    seleccionada: Option<AsercionId>,
     theme: Theme,
 }
 
@@ -98,6 +102,7 @@ impl App for Explorer {
                     posiciones,
                     aristas_grafo,
                     n_implicaciones,
+                    seleccionada: None,
                     theme,
                 }
             }
@@ -110,12 +115,18 @@ impl App for Explorer {
                 posiciones: std::sync::Arc::new(std::collections::HashMap::new()),
                 aristas_grafo: std::sync::Arc::new(Vec::new()),
                 n_implicaciones: 0,
+                seleccionada: None,
                 theme,
             },
         }
     }
 
-    fn update(model: Model, _: Msg, _: &Handle<Msg>) -> Model {
+    fn update(mut model: Model, msg: Msg, _: &Handle<Msg>) -> Model {
+        match msg {
+            Msg::Seleccionar(id) => {
+                model.seleccionada = if model.seleccionada == Some(id) { None } else { Some(id) };
+            }
+        }
         model
     }
 
@@ -159,7 +170,8 @@ impl App for Explorer {
         let asercs_titulo = etiqueta_seccion("aserciones", theme.fg_muted);
         let mut aserc_cards: Vec<View<Msg>> = vec![asercs_titulo];
         for att in model.aserciones.iter().take(MAX_ASERCIONES_VISIBLES) {
-            aserc_cards.push(asercion_card(att, &theme, &palette));
+            let sel = model.seleccionada == Some(att.asercion.id);
+            aserc_cards.push(asercion_card(att, sel, &theme, &palette));
         }
         if model.aserciones.len() > MAX_ASERCIONES_VISIBLES {
             aserc_cards.push(
@@ -230,13 +242,13 @@ fn grafo_panel(model: &Model) -> View<Msg> {
     let theme = model.theme;
     let posiciones = model.posiciones.clone();
     let aristas = model.aristas_grafo.clone();
-    // Para color por opinión necesitamos la opinión por id.
     let opiniones: std::sync::Arc<std::collections::HashMap<AsercionId, Opinion>> =
         std::sync::Arc::new(
             model.aserciones.iter()
                 .map(|a| (a.asercion.id, a.asercion.opinion_autoral))
                 .collect()
         );
+    let seleccionada = model.seleccionada;
     let bg = theme.bg_panel;
 
     View::new(Style {
@@ -288,6 +300,12 @@ fn grafo_panel(model: &Model) -> View<Msg> {
             // Halo oscuro para definirlo sobre el fondo.
             scene.stroke(&Stroke::new(0.8), xform,
                 Color::from_rgba8(0x1a, 0x1a, 0x20, 0xff), None, &c);
+            // Anillo de selección.
+            if seleccionada == Some(*id) {
+                let halo = KurboCircle::new((cx, cy), r + 5.0);
+                scene.stroke(&Stroke::new(2.5), xform,
+                    Color::from_rgba8(0xeb, 0xcb, 0x8b, 0xff), None, &halo);
+            }
         }
     })
 }
@@ -331,7 +349,7 @@ fn accent_por_opinion(op: &Opinion) -> Color {
     }
 }
 
-fn asercion_card(att: &AsercionAtribuida, theme: &Theme, palette: &CardPalette) -> View<Msg> {
+fn asercion_card(att: &AsercionAtribuida, seleccionada: bool, theme: &Theme, palette: &CardPalette) -> View<Msg> {
     let op = &att.asercion.opinion_autoral;
     let accent = if att.citada { ACCENT_CITADA } else { accent_por_opinion(op) };
 
@@ -358,11 +376,19 @@ fn asercion_card(att: &AsercionAtribuida, theme: &Theme, palette: &CardPalette) 
         theme.fg_muted,
     );
 
-    card_view::<Msg>(
+    let card = card_view::<Msg>(
         vec![texto, fuente_line, op_line],
         CardOptions { accent: Some(accent), ..Default::default() },
         palette,
-    )
+    );
+    // Marco extra si está seleccionada: re-fill con un highlight bg.
+    let card = if seleccionada {
+        card.fill(Color::from_rgba8(0x40, 0x40, 0x60, 0xff))
+    } else {
+        card
+    };
+    let id = att.asercion.id;
+    card.on_click(Msg::Seleccionar(id))
 }
 
 fn fuente_card(f: &FuenteResumen, reputacion: Option<f32>, theme: &Theme, palette: &CardPalette) -> View<Msg> {
