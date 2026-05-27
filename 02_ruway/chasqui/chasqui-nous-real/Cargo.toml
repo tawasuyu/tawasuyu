@@ -19,7 +19,7 @@ embeddings = ["dep:fastembed"]
 
 [dependencies]
 card-core = { path = "../../../shared/card/card-core" }
-card-sidecar = { path = "../../../shared/card/card-sidecar" }
+card-sidecar = { path = "../card-sidecar" }
 arje-cas = { path = "../../../03_ukupacha/arje/runtime/arje-cas" }
 chasqui-nous = { path = "../chasqui-nous" }
 serde_json = { workspace = true }

@@ -118,6 +118,14 @@ pub(crate) struct LauncherOverlay<'a> {
     pub(crate) mascaras: &'a [u64],
     /// Indice DENTRO de `filtrado` de la fila seleccionada.
     pub(crate) seleccion: usize,
+    /// FASE 58 v7 :: primer indice de `filtrado` visible en el overlay.
+    /// El render itera `filtrado[scroll..scroll + filas_visibles]` y la
+    /// seleccion absoluta se traduce a "fila visible" como `seleccion - scroll`.
+    pub(crate) scroll: usize,
+    /// FASE 58 v7 :: maximo de filas visibles a la vez (`PICKER_MAX_FILAS`,
+    /// hoy 16). El overlay no pinta mas filas que esto — si el filtrado las
+    /// excede, el scroll desliza el viewport.
+    pub(crate) filas_visibles: usize,
     /// Query incremental que escribe el operador.
     pub(crate) query: &'a str,
 }
@@ -491,8 +499,22 @@ impl Consola {
             );
             return;
         }
-        for (i, &idx_real) in overlay.filtrado.iter().enumerate() {
-            let fila_y = filas_y0 + i * altura_fila;
+        // FASE 58 v7 :: el render salta a la ventana visible. `scroll` es el
+        // primer indice de `filtrado` que entra al viewport, y `filas_visibles`
+        // acota cuantas filas pintamos. La fila "i" del overlay corresponde al
+        // indice absoluto `scroll + i` del filtrado — la seleccion se compara
+        // contra el indice ABSOLUTO, no contra `i`.
+        let scroll = overlay.scroll;
+        let techo = overlay.filas_visibles;
+        for (i, &idx_real) in overlay
+            .filtrado
+            .iter()
+            .enumerate()
+            .skip(scroll)
+            .take(techo)
+        {
+            let visible_idx = i - scroll;
+            let fila_y = filas_y0 + visible_idx * altura_fila;
             if fila_y + altura_fila > filas_y_max {
                 break;
             }

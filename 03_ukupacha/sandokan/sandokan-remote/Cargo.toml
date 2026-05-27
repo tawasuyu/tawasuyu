@@ -8,9 +8,9 @@ publish.workspace = true
 description = "sandokan RemoteEngine — orquesta en un host remoto tunelando el wire del daemon sobre un canal SSH direct-streamlocal."
 
 [dependencies]
-sandokan-core = { path = "../sandokan-core" }
+sandokan-core = { path = "../../../shared/sandokan/sandokan-core" }
 sandokan-daemon = { path = "../sandokan-daemon" }
-sandokan-lifecycle = { path = "../sandokan-lifecycle" }
-ssh = { path = "../../ssh" }
+sandokan-lifecycle = { path = "../../../shared/sandokan/sandokan-lifecycle" }
+ssh = { path = "../../../shared/ssh" }
 async-trait = { workspace = true }
 ulid = { workspace = true }

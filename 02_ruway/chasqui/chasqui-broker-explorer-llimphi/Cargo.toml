@@ -10,8 +10,8 @@ description = "Probe Llimphi del broker brahman: conecta cada N segundos vía aw
 [dependencies]
 chasqui-broker = { path = "../chasqui-broker" }
 card-core = { path = "../../../shared/card/card-core" }
-card-handshake = { path = "../../../shared/card/card-handshake" }
-card-sidecar = { path = "../../../shared/card/card-sidecar" }
+card-handshake = { path = "../card-handshake" }
+card-sidecar = { path = "../card-sidecar" }
 ulid = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }

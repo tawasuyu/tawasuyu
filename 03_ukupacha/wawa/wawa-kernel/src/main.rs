@@ -107,6 +107,11 @@ fn traza(rotulo: &str) {
 /// su bytecode —cacheado en RAM al arrancar, para no volver al disco despues—
 /// y la geometria, cuota de memoria y presupuesto de combustible con que
 /// instanciarla.
+///
+/// FASE 58 v9 :: `Clone` para poder copiar la plantilla afuera del lock de
+/// `PLANTILLAS` antes de instanciarla — asi `nacer_ventana` no anida cerrojos.
+/// El bytecode (Vec<u8>) son unos pocos KiB por app: el clon es barato.
+#[derive(Clone)]
 struct Plantilla {
     /// Nombre legible de la app — el del manifiesto, que la barra de tareas
     /// (Fase 14) muestra en la pestaña.
@@ -122,9 +127,14 @@ struct Plantilla {
     permisos: format::Permisos,
 }
 
-/// Las plantillas de las apps de genesis. Se fijan una vez, en el arranque;
-/// cada `Alt+N` instancia la siguiente en rotacion.
-static PLANTILLAS: Once<Vec<Plantilla>> = Once::new();
+/// Las plantillas de las apps lanzables. Se fundan en el arranque con la lista
+/// del manifiesto; `Alt+N` instancia la siguiente en rotacion, `Alt+P + Enter`
+/// instancia la elegida por indice.
+///
+/// FASE 58 v9 :: el `Mutex` permite agregar plantillas POST-BOOT — la
+/// instalacion viva de apps que llegan via `mudanza` o `cronista` despues
+/// del arranque (ver `instalar_app`).
+static PLANTILLAS: Once<Mutex<Vec<Plantilla>>> = Once::new();
 
 /// El cursor rotatorio sobre `PLANTILLAS`: que app nace en el proximo `Alt+N`.
 static CURSOR_PLANTILLA: AtomicUsize = AtomicUsize::new(0);
@@ -328,15 +338,22 @@ fn encender_app(
 /// marcha. Si la carga falla, la ventana recien nacida se desaloja; el kernel
 /// sigue. La invoca la tarea del compositor al atender un `Alt+N`.
 fn lanzar_app() {
-    let Some(plantillas) = PLANTILLAS.get() else {
-        return;
+    // Tomamos el lock SOLO para clonar la plantilla elegida; instanciar la
+    // app vive afuera para evitar anidar el lock de `PLANTILLAS` con el del
+    // escritorio (que toma `nacer_ventana` dentro de `instanciar_plantilla`).
+    let plantilla = {
+        let Some(mutex) = PLANTILLAS.get() else {
+            return;
+        };
+        let plantillas = mutex.lock();
+        if plantillas.is_empty() {
+            return;
+        }
+        // El cursor rota sobre las plantillas: cada `Alt+N` engendra la siguiente.
+        let cursor = CURSOR_PLANTILLA.fetch_add(1, Ordering::Relaxed);
+        plantillas[cursor % plantillas.len()].clone()
     };
-    if plantillas.is_empty() {
-        return;
-    }
-    // El cursor rota sobre las plantillas: cada `Alt+N` engendra la siguiente.
-    let cursor = CURSOR_PLANTILLA.fetch_add(1, Ordering::Relaxed);
-    instanciar_plantilla(&plantillas[cursor % plantillas.len()]);
+    instanciar_plantilla(&plantilla);
 }
 
 /// FASE 58 :: variante DIRIGIDA del lanzamiento — instancia la plantilla
@@ -344,13 +361,61 @@ fn lanzar_app() {
 /// que viene del launcher grafico tras pulsar Alt+Enter. Indice fuera de
 /// rango: se ignora (un launcher con catalogo viejo).
 fn lanzar_app_por_indice(indice: usize) {
-    let Some(plantillas) = PLANTILLAS.get() else {
-        return;
+    let plantilla = {
+        let Some(mutex) = PLANTILLAS.get() else {
+            return;
+        };
+        let plantillas = mutex.lock();
+        let Some(plantilla) = plantillas.get(indice) else {
+            return;
+        };
+        plantilla.clone()
     };
-    let Some(plantilla) = plantillas.get(indice) else {
-        return;
+    instanciar_plantilla(&plantilla);
+}
+
+/// FASE 58 v9 :: instala una app POST-BOOT a partir de su `EntradaApp` —
+/// recupera su bytecode del grafo, construye una `Plantilla` y la incorpora
+/// a `PLANTILLAS`, refrescando luego el catalogo del launcher para que
+/// `Alt+P` la vea de inmediato. NO instancia la app —solo la deja lanzable—:
+/// el operador decide cuando pulsarla.
+///
+/// Devuelve el indice de la nueva plantilla (= indice del catalogo del
+/// launcher), o `None` si el bytecode no esta en el grafo o `PLANTILLAS`
+/// aun no fue fundado. La llamada llega del orquestador despues de un
+/// re-ancla de manifiesto (via `mudanza`) o de un alta puntual via
+/// Akasha/cronista; eventualmente se cableara automatica, hoy es API
+/// publica esperando consumidor.
+#[allow(dead_code)]
+pub fn instalar_app(entrada: &manifiesto::EntradaApp) -> Option<usize> {
+    let natural = manifiesto::region(entrada);
+    let bytecode = match almacen::recuperar(&entrada.bytecode) {
+        Ok(Some(objeto)) => objeto.datos,
+        _ => return None,
     };
-    instanciar_plantilla(plantilla);
+    let plantilla = Plantilla {
+        nombre: entrada.nombre.clone(),
+        bytecode,
+        nat_ancho: natural.ancho,
+        nat_alto: natural.alto,
+        techo: entrada.techo_memoria as usize,
+        fuel: entrada.fuel_fotograma as u64,
+        permisos: entrada.permisos,
+    };
+    let mutex = PLANTILLAS.get()?;
+    let nuevo_idx;
+    let nombres: Vec<alloc::string::String> = {
+        let mut plantillas = mutex.lock();
+        plantillas.push(plantilla);
+        nuevo_idx = plantillas.len() - 1;
+        plantillas.iter().map(|p| p.nombre.clone()).collect()
+    };
+    // Refrescar el catalogo del launcher AFUERA del lock de PLANTILLAS:
+    // `fijar_catalogo` toma el cerrojo del escritorio y, si el launcher
+    // esta abierto, dispara una recomposicion — no queremos esos locks
+    // anidados con el de PLANTILLAS.
+    compositor::fijar_catalogo(nombres);
+    Some(nuevo_idx)
 }
 
 /// Camino comun de `lanzar_app` y `lanzar_app_por_indice`: abre la ventana,
@@ -442,15 +507,20 @@ fn cargar_userspace(ejecutor: &mut Executor, ancho_pantalla: usize, alto_pantall
         }
         // FASE 10 :: fijar las plantillas de las apps. A partir de aqui, cada
         // `Alt+N` instancia una copia viva, en rotacion.
-        PLANTILLAS.call_once(|| plantillas);
+        // FASE 58 v9 :: PLANTILLAS vive ahora en un Mutex — `instalar_app`
+        // agrega plantillas post-boot via push, sin necesidad de re-funder.
+        PLANTILLAS.call_once(|| Mutex::new(plantillas));
 
         // FASE 58 :: poblar el catalogo del launcher con los nombres de las
         // plantillas YA fijadas. El indice de cada nombre coincide con el de
         // su plantilla — el orquestador resuelve `partos_por_indice` por esa
         // posicion. Si no hay plantillas (manifiesto sin apps), el catalogo
         // queda vacio y el launcher se cierra solo en Alt+Enter.
-        if let Some(plantillas) = PLANTILLAS.get() {
-            let nombres = plantillas.iter().map(|p| p.nombre.clone()).collect();
+        if let Some(mutex) = PLANTILLAS.get() {
+            let nombres: Vec<alloc::string::String> = {
+                let plantillas = mutex.lock();
+                plantillas.iter().map(|p| p.nombre.clone()).collect()
+            };
             compositor::fijar_catalogo(nombres);
         }
 

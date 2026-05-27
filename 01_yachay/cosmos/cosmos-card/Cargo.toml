@@ -7,7 +7,7 @@ description = "Tahuantinsuyu — Tarjeta de Presentación brahman + spawn del si
 
 [dependencies]
 card-core = { path = "../../../shared/card/card-core" }
-card-sidecar = { path = "../../../shared/card/card-sidecar" }
+card-sidecar = { path = "../../../02_ruway/chasqui/card-sidecar" }
 cosmos-engine = { path = "../cosmos-engine" }
 cosmos-model = { path = "../cosmos-model" }
 ulid = { workspace = true }

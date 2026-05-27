@@ -9,7 +9,7 @@ publish.workspace = true
 description = "Brahman — sidecar reusable: thread + tokio runtime que mantiene viva la sesión de un módulo contra el Init."
 
 [dependencies]
-card-core = { path = "../card-core" }
+card-core = { path = "../../../shared/card/card-core" }
 card-handshake = { path = "../card-handshake" }
 thiserror = { workspace = true }
 tokio = { workspace = true }
@@ -17,7 +17,7 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true }
-card-wit = { path = "../card-wit" }
+card-wit = { path = "../../../shared/card/card-wit" }
 
 [[example]]
 name = "presence"

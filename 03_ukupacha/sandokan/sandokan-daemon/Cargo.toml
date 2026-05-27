@@ -8,8 +8,8 @@ authors.workspace = true
 publish.workspace = true
 
 [dependencies]
-sandokan-core = { path = "../sandokan-core" }
-sandokan-lifecycle = { path = "../sandokan-lifecycle" }
+sandokan-core = { path = "../../../shared/sandokan/sandokan-core" }
+sandokan-lifecycle = { path = "../../../shared/sandokan/sandokan-lifecycle" }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 postcard = { workspace = true }

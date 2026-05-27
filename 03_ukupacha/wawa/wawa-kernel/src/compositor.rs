@@ -142,6 +142,13 @@ pub enum Mando {
     /// teclado cuando ve un scancode imprimible mientras `LAUNCHER_ABIERTO`
     /// esta vivo (Alt sin pulsar). Cualquier otro byte es ASCII minuscula.
     TextoLauncher(u8),
+    /// FASE 58 v8 :: lanzamiento rapido `Alt+1..9` sobre la fila VISIBLE
+    /// `0..=8` del launcher. El indice esta en el rango `0..=8` (1-based en
+    /// teclado, 0-based en el mando); el compositor le suma `launcher_scroll`
+    /// para resolver al indice absoluto del filtrado y dispara la app si
+    /// existe, en silencio si la fila visible esta vacia. Solo se emite
+    /// cuando `LAUNCHER_ABIERTO` esta vivo.
+    LanzarFila(usize),
 }
 
 /// Un arrastre EN CURSO (Fase 13): el indice de la ventana flotante asida con
@@ -251,6 +258,14 @@ struct Escritorio {
     /// del manifiesto con holgura — caracteres mas alla del bit 63 no se
     /// resaltan (degradacion silenciosa, no panic).
     launcher_mascaras: Vec<u64>,
+    /// FASE 58 v7 :: primer indice de `launcher_filtrado` visible en el
+    /// overlay. La ventana visible es `[launcher_scroll, launcher_scroll +
+    /// PICKER_MAX_FILAS)`; las filas fuera de esa ventana no se pintan. Se
+    /// reajusta automaticamente cuando la seleccion sale del viewport
+    /// (`ajustar_scroll_launcher`), de modo que `Alt+J`/`Alt+K` jamas dejan
+    /// al cursor fuera de pantalla. Para 12 apps el scroll queda en 0 toda
+    /// la vida util del launcher — es invisible hasta que el catalogo crece.
+    launcher_scroll: usize,
 }
 
 /// FASE 58 v3 :: mirror atomico de `Escritorio::launcher_abierto` que el
@@ -355,6 +370,7 @@ pub fn fundar(ancho: usize, alto: usize, naturales: &[(usize, usize, &str)]) {
         launcher_query: String::new(),
         launcher_filtrado: Vec::new(),
         launcher_mascaras: Vec::new(),
+        launcher_scroll: 0,
     };
     aplicar_teselado(&mut escritorio);
 
@@ -516,12 +532,13 @@ pub fn atender_mandos() {
             Mando::Lanzar => {
                 PARTOS.fetch_add(1, Ordering::Relaxed);
             }
-            // ToggleLauncher y TextoLauncher se atienden SIEMPRE en
-            // `launcher_intercepta` —si llegan hasta aqui es que el
+            // ToggleLauncher / TextoLauncher / LanzarFila se atienden SIEMPRE
+            // en `launcher_intercepta` —si llegan hasta aqui es que el
             // escritorio aun no esta fundado o el launcher se cerro entre
             // medias—. En cualquier caso, se descartan sin efecto.
             Mando::ToggleLauncher => {}
             Mando::TextoLauncher(_) => {}
+            Mando::LanzarFila(_) => {}
             // Fase 57 :: GC manual desde el teclado. La pasada toma el cerrojo
             // del almacen durante toda la operacion, asi que el fotograma
             // del compositor se estira — aceptable como gesto explicito del
@@ -593,12 +610,14 @@ fn launcher_intercepta(mando: Mando) -> bool {
             let n = escritorio.launcher_filtrado.len();
             if n > 0 {
                 escritorio.launcher_seleccion = (escritorio.launcher_seleccion + 1) % n;
+                ajustar_scroll_launcher(&mut escritorio);
             }
         }
         Mando::FocoAnterior => {
             let n = escritorio.launcher_filtrado.len();
             if n > 0 {
                 escritorio.launcher_seleccion = (escritorio.launcher_seleccion + n - 1) % n;
+                ajustar_scroll_launcher(&mut escritorio);
             }
         }
         Mando::Promover => {
@@ -629,6 +648,21 @@ fn launcher_intercepta(mando: Mando) -> bool {
             }
             refiltrar_launcher(&mut escritorio);
         }
+        Mando::LanzarFila(visible) => {
+            // FASE 58 v8 :: el operador pulso `Alt+<digito>` sobre la fila
+            // visible `visible` (0..=8 = filas 1..9 del launcher). El indice
+            // absoluto en el filtrado es `scroll + visible`. Si la fila no
+            // existe (filtrado mas corto que el visible), se descarta en
+            // silencio —Alt+5 sobre un filtrado de 3 apps no hace nada en
+            // lugar de explotar—.
+            let idx_absoluto = escritorio.launcher_scroll + visible;
+            if let Some(&idx_real) = escritorio.launcher_filtrado.get(idx_absoluto) {
+                if let Some(cola) = PARTOS_POR_INDICE.get() {
+                    cola.lock().push(idx_real);
+                }
+                cerrar_launcher(&mut escritorio);
+            }
+        }
         // Cualquier otro mando se descarta — el launcher se queda con el
         // foco del teclado hasta cerrarse.
         _ => {}
@@ -645,6 +679,7 @@ fn abrir_launcher(escritorio: &mut Escritorio) {
     escritorio.launcher_abierto = true;
     escritorio.launcher_query.clear();
     escritorio.launcher_seleccion = 0;
+    escritorio.launcher_scroll = 0;
     refiltrar_launcher(escritorio);
     LAUNCHER_ABIERTO.store(true, Ordering::Relaxed);
 }
@@ -658,6 +693,7 @@ fn cerrar_launcher(escritorio: &mut Escritorio) {
     escritorio.launcher_filtrado.clear();
     escritorio.launcher_mascaras.clear();
     escritorio.launcher_seleccion = 0;
+    escritorio.launcher_scroll = 0;
     LAUNCHER_ABIERTO.store(false, Ordering::Relaxed);
 }
 
@@ -731,6 +767,41 @@ fn refiltrar_launcher(escritorio: &mut Escritorio) {
                 .position(|&i| i == prev)
         })
         .unwrap_or(0);
+    // FASE 58 v7 :: tras refiltrar, el viewport se reposiciona para que la
+    // seleccion vigente sea visible — si la lista se acorto o la sel. se
+    // movio, el scroll viejo puede haber quedado fuera del rango valido.
+    ajustar_scroll_launcher(escritorio);
+}
+
+/// FASE 58 v7 :: ajusta `launcher_scroll` para mantener `launcher_seleccion`
+/// dentro del viewport visible `[scroll, scroll + PICKER_MAX_FILAS)`. Si el
+/// catalogo filtrado cabe entero, el scroll queda en 0; si la seleccion
+/// quedo por encima del scroll, lo arrastramos hasta ponerla en la cabeza
+/// del viewport; si quedo por debajo, lo empujamos hasta dejarla en la
+/// cola. Sin animacion: el viewport salta lo mas corto posible.
+fn ajustar_scroll_launcher(escritorio: &mut Escritorio) {
+    let total = escritorio.launcher_filtrado.len();
+    let sel = escritorio.launcher_seleccion;
+    if total <= PICKER_MAX_FILAS {
+        escritorio.launcher_scroll = 0;
+        return;
+    }
+    let mut scroll = escritorio.launcher_scroll;
+    // Cota superior: el ultimo scroll que aun deja PICKER_MAX_FILAS filas
+    // visibles —no tiene sentido scrollear mas alla del final del listado—.
+    let scroll_max = total - PICKER_MAX_FILAS;
+    if scroll > scroll_max {
+        scroll = scroll_max;
+    }
+    // La seleccion vive arriba del viewport: arrastrar el viewport hacia ella.
+    if sel < scroll {
+        scroll = sel;
+    }
+    // La seleccion vive bajo el viewport: empujarlo hasta dejarla en la cola.
+    if sel >= scroll + PICKER_MAX_FILAS {
+        scroll = sel + 1 - PICKER_MAX_FILAS;
+    }
+    escritorio.launcher_scroll = scroll;
 }
 
 /// FASE 58 v5+v6 :: evalua el match de `aguja` contra `pajar` y devuelve
@@ -1117,6 +1188,8 @@ fn recomponer(escritorio: &mut Escritorio) {
             filtrado: &escritorio.launcher_filtrado,
             mascaras: &escritorio.launcher_mascaras,
             seleccion: escritorio.launcher_seleccion,
+            scroll: escritorio.launcher_scroll,
+            filas_visibles: PICKER_MAX_FILAS,
             query: &escritorio.launcher_query,
         })
     } else {
@@ -1406,14 +1479,22 @@ pub fn atender_raton() {
         // indice de fila resuelve a un indice real del catalogo via
         // `launcher_filtrado[fila]`.
         if escritorio.launcher_abierto {
-            let visibles = escritorio.launcher_filtrado.len();
-            let region = region_launcher(escritorio.ancho, escritorio.alto, visibles);
-            let fila = fila_launcher_en(region, x, y, visibles);
+            let total = escritorio.launcher_filtrado.len();
+            let scroll = escritorio.launcher_scroll;
+            let region = region_launcher(escritorio.ancho, escritorio.alto, total);
+            // FASE 58 v7 :: `fila_launcher_en` devuelve un indice VISIBLE
+            // (0..filas_visibles). El indice absoluto en `launcher_filtrado`
+            // es `scroll + visible`; sin sumar el scroll, hover y clic
+            // engancharian la app equivocada cuando hay scroll.
+            let fila_visible =
+                fila_launcher_en(region, x, y, total.saturating_sub(scroll));
+            let fila_absoluta = fila_visible.map(|v| scroll + v);
             // Hover: la fila bajo el puntero se vuelve la seleccion vigente,
             // de modo que Alt+Enter y el clic se mantengan coherentes.
-            if let Some(idx_filtrado) = fila {
+            if let Some(idx_filtrado) = fila_absoluta {
                 if escritorio.launcher_seleccion != idx_filtrado {
                     escritorio.launcher_seleccion = idx_filtrado;
+                    ajustar_scroll_launcher(&mut escritorio);
                     cambio = true;
                 }
             }
@@ -1422,7 +1503,7 @@ pub fn atender_raton() {
             // Un clic en el titulo o el padding del overlay no hace nada — el
             // usuario aun puede mover la seleccion o salir.
             if izq && !izq_antes {
-                if let Some(idx_filtrado) = fila {
+                if let Some(idx_filtrado) = fila_absoluta {
                     if let Some(&idx_real) = escritorio.launcher_filtrado.get(idx_filtrado) {
                         if let Some(cola) = PARTOS_POR_INDICE.get() {
                             cola.lock().push(idx_real);

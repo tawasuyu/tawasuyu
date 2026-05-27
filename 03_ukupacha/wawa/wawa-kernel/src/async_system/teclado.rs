@@ -140,6 +140,18 @@ pub fn recibir_scancode(scancode: u8) {
     // 2. Con Alt pulsada, los make codes son MANDOS del compositor. Se traducen
     //    a una orden en la cola lock-free y se consumen — jamas llegan a una app.
     if ALT_PULSADO.load(Ordering::Relaxed) {
+        // FASE 58 v8 :: Alt+<digito> sobre el launcher abierto lanza la fila
+        // VISIBLE correspondiente (1..9 → indices 0..=8). Fuera del launcher
+        // se ignora — los digitos no son atajos del compositor en otros
+        // contextos hoy. Scancodes 0x02..=0x0A son las teclas '1' a '9' en
+        // set 1; '0' (0x0B) queda reservado para una eventual «fila 10».
+        if compositor::LAUNCHER_ABIERTO.load(Ordering::Relaxed)
+            && (0x02..=0x0A).contains(&scancode)
+        {
+            let visible = (scancode - 0x02) as usize;
+            compositor::solicitar(Mando::LanzarFila(visible));
+            return;
+        }
         match scancode {
             ESPACIO => compositor::solicitar(Mando::CiclarLayout),
             TECLA_J => compositor::solicitar(Mando::FocoSiguiente),

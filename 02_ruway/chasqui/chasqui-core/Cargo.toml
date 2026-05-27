@@ -13,8 +13,8 @@ chasqui-card = { path = "../chasqui-card" }
 chasqui-nous = { path = "../chasqui-nous" }
 shuma-discern = { path = "../../shuma/sandbox/shuma-discern" }
 card-core = { path = "../../../shared/card/card-core" }
-card-handshake = { path = "../../../shared/card/card-handshake" }
-card-sidecar = { path = "../../../shared/card/card-sidecar" }
+card-handshake = { path = "../card-handshake" }
+card-sidecar = { path = "../card-sidecar" }
 blake3 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

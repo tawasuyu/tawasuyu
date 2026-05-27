@@ -9,9 +9,9 @@ publish.workspace = true
 description = "Brahman — búsqueda de Cards: índice local con filtros + escaneo de directorios + discovery P2P sobre minga-dht."
 
 [dependencies]
-card-core = { path = "../card-core" }
-cards = { path = "../cards" }
-minga-dht = { path = "../../../03_ukupacha/minga/minga-dht" }
+card-core = { path = "../../../shared/card/card-core" }
+cards = { path = "../../../02_ruway/cards" }
+minga-dht = { path = "../minga-dht" }
 libp2p = { workspace = true }
 ulid = { workspace = true }
 

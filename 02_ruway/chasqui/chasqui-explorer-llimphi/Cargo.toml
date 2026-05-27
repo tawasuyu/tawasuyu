@@ -9,7 +9,7 @@ description = "Explorador Llimphi de Mónadas: panel que descubre al daemon chas
 
 [dependencies]
 card-core = { path = "../../../shared/card/card-core" }
-card-sidecar = { path = "../../../shared/card/card-sidecar" }
+card-sidecar = { path = "../card-sidecar" }
 chasqui-card = { path = "../chasqui-card" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }

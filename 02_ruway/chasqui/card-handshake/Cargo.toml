@@ -9,9 +9,9 @@ publish.workspace = true
 description = "Brahman — handshake runtime Init↔módulo. Local sobre Unix socket; remoto sobre stream libp2p (card-net)."
 
 [dependencies]
-card-core = { path = "../card-core" }
-chasqui-broker = { path = "../../../02_ruway/chasqui/chasqui-broker" }
-card-net = { path = "../card-net" }
+card-core = { path = "../../../shared/card/card-core" }
+chasqui-broker = { path = "../chasqui-broker" }
+card-net = { path = "../../../shared/card/card-net" }
 blake3 = { workspace = true }
 futures = { workspace = true }
 notify = { workspace = true }

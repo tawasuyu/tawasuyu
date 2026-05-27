@@ -8,10 +8,10 @@ authors.workspace = true
 publish.workspace = true
 
 [dependencies]
-sandokan-core = { path = "../sandokan-core" }
-sandokan-lifecycle = { path = "../sandokan-lifecycle" }
-arje-incarnate = { path = "../../../03_ukupacha/arje/init/arje-incarnate" }
-card-core = { path = "../../card/card-core" }
+sandokan-core = { path = "../../../shared/sandokan/sandokan-core" }
+sandokan-lifecycle = { path = "../../../shared/sandokan/sandokan-lifecycle" }
+arje-incarnate = { path = "../../arje/init/arje-incarnate" }
+card-core = { path = "../../../shared/card/card-core" }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 nix = { workspace = true }

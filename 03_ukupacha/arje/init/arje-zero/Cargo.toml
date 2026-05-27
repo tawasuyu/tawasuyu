@@ -22,9 +22,9 @@ arje-brain = { path = "../../runtime/arje-brain" }
 arje-echo = { path = "../../runtime/arje-echo" }   # solo para constantes del demo
 
 # Brahman protocol — handshake para módulos brahman conscientes
-card-handshake = { path = "../../../../shared/card/card-handshake" }
+card-handshake = { path = "../../../../02_ruway/chasqui/card-handshake" }
 chasqui-broker = { path = "../../../../02_ruway/chasqui/chasqui-broker" }
-card-admin = { path = "../../../../shared/card/card-admin" }
+card-admin = { path = "../../../../02_ruway/chasqui/card-admin" }
 card-net = { path = "../../../../shared/card/card-net" }
 
 # Runtime / utilidades de PID 1

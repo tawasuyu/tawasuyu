@@ -357,6 +357,9 @@ verifica:
 | `7d35c4a` | Fase 58 v4 — contador "N/M" en el título del launcher |
 | (Fase 58 v5) | match jerárquico del launcher (prefijo > substring > subsecuencia) + selección sticky |
 | (Fase 58 v6) | highlight de chars matcheados (Spotlight-classic, máscara u64 + tinta `RESALTE_BUSQUEDA`) |
+| (Fase 58 v7) | scroll vertical con auto-track de la selección (PICKER_MAX_FILAS=16) |
+| (Fase 58 v8) | `Alt+1..9` quick-launch sobre la fila VISIBLE del filtrado |
+| (Fase 58 v9) | `instalar_app(EntradaApp)` — PLANTILLAS mutable + refresh del catálogo |
 
 ## 14. Plan — siguientes hitos
 
@@ -442,12 +445,16 @@ restante, debe descontar primero estos hitos para no duplicar esfuerzo:
   scancode `0x22` se registra en `async_system/teclado.rs:60` como
   `TECLA_G`.
 - **Launcher gráfico tipo Spotlight** — **HECHA** (Fase 58, vueltas
-  1–5 + polish). `Alt+P` engendra `Mando::ToggleLauncher`; el
+  1–9 + polish). `Alt+P` engendra `Mando::ToggleLauncher`; el
   compositor pinta un overlay modal centrado con la lista de apps del
   manifiesto y la roba el foco del teclado y del ratón.
   - Teclado: `Alt+J/K` mueven la selección entre las apps filtradas,
     Enter (con o sin Alt) lanza la resaltada, `Alt+Q` o Escape cierran
-    sin lanzar.
+    sin lanzar. `Alt+1..9` (v8) lanza directamente la fila VISIBLE
+    correspondiente (1..9 → índices 0..=8) — `Mando::LanzarFila(visible)`
+    resuelve `launcher_scroll + visible` y dispara la app si la fila
+    visible no está vacía; `Alt+0` queda reservado para una eventual
+    «fila 10».
   - Ratón: hover resalta una fila, clic izquierdo la lanza, clic fuera
     del overlay cierra sin lanzar.
   - Búsqueda por texto en vivo: escribir letras/cifras/espacio filtra
@@ -471,6 +478,28 @@ restante, debe descontar primero estos hitos para no duplicar esfuerzo:
     indispensable cuando el catálogo crezca y el nivel 1 produzca
     coincidencias inesperadas. Caracteres más allá del bit 63 se pintan
     en tinta normal (degradación silenciosa).
+  - Scroll vertical (v7): `Escritorio::launcher_scroll` es el primer
+    índice de `filtrado` que entra al viewport;
+    `ajustar_scroll_launcher` empuja el viewport para mantener la
+    selección dentro de `[scroll, scroll + PICKER_MAX_FILAS=16)` tras
+    cada movimiento de cursor o refiltrado. `LauncherOverlay::{scroll,
+    filas_visibles}` viajan al renderer, que itera
+    `filtrado[scroll..scroll+filas_visibles]` y compara la selección
+    contra el índice ABSOLUTO. El hover/clic del ratón compensa el
+    offset: una fila visible 3 con `scroll = 10` resuelve a la app 13
+    del filtrado. Para 12 apps el scroll queda en 0 toda la vida — el
+    código es invisible hasta que el catálogo crece.
+  - Instalación viva (v9): `static PLANTILLAS` pasó de
+    `Once<Vec<Plantilla>>` a `Once<Mutex<Vec<Plantilla>>>` para
+    permitir mutación post-boot, y `Plantilla` ahora deriva `Clone`
+    para clonar antes de instanciar sin anidar locks. Nueva API
+    pública `pub fn instalar_app(entrada: &manifiesto::EntradaApp) ->
+    Option<usize>` que recupera el bytecode del grafo, construye la
+    plantilla, push al Mutex y refresca el catálogo del launcher vía
+    `compositor::fijar_catalogo`. La API es completa y verde; el
+    cableado de un consumidor automático (mudanza tras re-ancla,
+    cronista al añadir EntradaApp) queda como hito v10 — la palanca
+    estructural ya existe.
   - Contador "N/M" (v4) a la derecha de la barra de título: hace
     visible cuándo la query deja cero matches o cuántas apps quedan
     tras filtrar; se pinta en `Color::SIN_FOCO` como información

@@ -9,7 +9,7 @@ description = "Nakui — runtime Llimphi de la metainterfaz. MVP: carga module.j
 nakui-core = { path = "../nakui-core" }
 nahual-meta-schema = { path = "../../../02_ruway/nahual/libs/meta-schema" }
 nahual-meta-runtime = { path = "../../../02_ruway/nahual/libs/meta-runtime" }
-cards = { path = "../../../shared/card/cards" }
+cards = { path = "../../../02_ruway/cards" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-app-header = { workspace = true }

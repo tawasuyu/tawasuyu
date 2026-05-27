@@ -10,7 +10,7 @@ description = "Nouser — Nous mock determinístico: implementa el contrato nous
 
 [dependencies]
 card-core = { path = "../../../shared/card/card-core" }
-card-sidecar = { path = "../../../shared/card/card-sidecar" }
+card-sidecar = { path = "../card-sidecar" }
 chasqui-card = { path = "../chasqui-card" }
 chasqui-core = { path = "../chasqui-core" }
 chasqui-nous = { path = "../chasqui-nous" }
