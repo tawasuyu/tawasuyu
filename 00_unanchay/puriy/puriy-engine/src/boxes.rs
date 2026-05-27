@@ -11,7 +11,7 @@
 use markup5ever_rcdom::{Handle, NodeData};
 
 use crate::dom::{self, DomTree};
-use crate::style::{BoxShadow, ComputedStyle, LengthVal, StyleEngine, TextAlign};
+use crate::style::{BoxShadow, ComputedStyle, LengthVal, StyleEngine, TextAlign, TextDecorationLine};
 
 /// Color RGBA, 8 bits por canal. Suficiente para CSS color values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +79,9 @@ pub struct BoxNode {
     pub hover_background: Option<Color>,
     /// Box-shadow propagado a `paint_with` en el chrome.
     pub box_shadow: Option<BoxShadow>,
+    /// Línea decorativa que el chrome dibuja sobre la hoja de texto
+    /// (underline / line-through / overline). `None` = sin decoración.
+    pub text_decoration: TextDecorationLine,
     /// Texto plano del nodo (sólo para hojas de texto). Para nodos con
     /// hijos el texto vive en los hijos.
     pub text: Option<String>,
@@ -163,6 +166,7 @@ fn empty_root() -> BoxNode {
         border_radius: 0.0,
         hover_background: None,
         box_shadow: None,
+        text_decoration: TextDecorationLine::None,
         text: None,
         children: Vec::new(),
         tag: Some("body".into()),
@@ -245,6 +249,7 @@ fn build_node(
                 border_radius: style.border_radius,
                 hover_background,
                 box_shadow: style.box_shadow,
+                text_decoration: style.text_decoration,
                 text: None,
                 children,
                 tag,
@@ -300,6 +305,7 @@ fn build_node(
                 border_radius: 0.0,
                 hover_background: None,
                 box_shadow: None,
+                text_decoration: p.text_decoration,
                 text: None,
                 children,
                 tag: None,
@@ -331,6 +337,7 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         border_radius: 0.0,
         hover_background: None,
         box_shadow: None,
+        text_decoration: style.text_decoration,
         text: Some(s),
         children: Vec::new(),
         tag: None,

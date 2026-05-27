@@ -46,6 +46,24 @@ pub struct ComputedStyle {
     pub border_radius: f32,
     /// `box-shadow` simplificado. `None` = sin sombra.
     pub box_shadow: Option<BoxShadow>,
+    /// `text-decoration-line` reducido al subset que pintamos.
+    /// `None` = sin decoración (default HTML, salvo `<a>`/`<u>`/`<s>`).
+    pub text_decoration: TextDecorationLine,
+}
+
+/// Línea decorativa que el chrome dibuja sobre/atravesando/debajo del
+/// texto del nodo. CSS spec dice que la propiedad NO se hereda — los
+/// descendientes inline heredan la decoración por propagación visual,
+/// no computacional. Acá la tratamos como heredable porque dibujamos
+/// por leaf de texto: sin propagar, `<a>foo <b>bar</b></a>` rendearía
+/// `foo` subrayado y `bar` sin subrayar. Override explícito a `None`
+/// la suprime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextDecorationLine {
+    None,
+    Underline,
+    LineThrough,
+    Overline,
 }
 
 /// Sombra rectangular detrás del box. `blur_px` y `spread_px` se
@@ -96,6 +114,7 @@ impl Default for ComputedStyle {
             border_color: None,
             border_radius: 0.0,
             box_shadow: None,
+            text_decoration: TextDecorationLine::None,
         }
     }
 }
@@ -156,6 +175,9 @@ impl StyleEngine {
             style.font_weight = p.font_weight;
             style.text_align = p.text_align;
             style.line_height = p.line_height;
+            // text-decoration: tratada heredable para que descendientes
+            // inline (`<a>foo <b>bar</b></a>`) mantengan la línea.
+            style.text_decoration = p.text_decoration;
         }
         let Some(local) = dom::element_name(node) else {
             return style;
@@ -613,6 +635,7 @@ enum DeclKind {
     BorderRadius(f32),
     /// `None` = `box-shadow: none` (limpia la sombra).
     BoxShadow(Option<BoxShadow>),
+    TextDecoration(TextDecorationLine),
 }
 
 impl Decl {
@@ -639,6 +662,7 @@ impl Decl {
             }
             DeclKind::BorderRadius(v) => s.border_radius = *v,
             DeclKind::BoxShadow(v) => s.box_shadow = *v,
+            DeclKind::TextDecoration(t) => s.text_decoration = *t,
         }
     }
 }
@@ -698,6 +722,51 @@ fn ua_stylesheet() -> Vec<Rule> {
         Rule {
             selector: ty("body"),
             decls: vec![Decl { kind: DeclKind::Padding(8.0), important: false }],
+        },
+        // Defaults de text-decoration. `<a>` y `<u>`/`<ins>` van con
+        // underline; `<s>`/`<strike>`/`<del>` tachadas. Cualquier autor
+        // puede override con `text-decoration: none` en su stylesheet.
+        Rule {
+            selector: ty("a"),
+            decls: vec![Decl {
+                kind: DeclKind::TextDecoration(TextDecorationLine::Underline),
+                important: false,
+            }],
+        },
+        Rule {
+            selector: ty("u"),
+            decls: vec![Decl {
+                kind: DeclKind::TextDecoration(TextDecorationLine::Underline),
+                important: false,
+            }],
+        },
+        Rule {
+            selector: ty("ins"),
+            decls: vec![Decl {
+                kind: DeclKind::TextDecoration(TextDecorationLine::Underline),
+                important: false,
+            }],
+        },
+        Rule {
+            selector: ty("s"),
+            decls: vec![Decl {
+                kind: DeclKind::TextDecoration(TextDecorationLine::LineThrough),
+                important: false,
+            }],
+        },
+        Rule {
+            selector: ty("strike"),
+            decls: vec![Decl {
+                kind: DeclKind::TextDecoration(TextDecorationLine::LineThrough),
+                important: false,
+            }],
+        },
+        Rule {
+            selector: ty("del"),
+            decls: vec![Decl {
+                kind: DeclKind::TextDecoration(TextDecorationLine::LineThrough),
+                important: false,
+            }],
         },
     ]
 }
@@ -1075,6 +1144,9 @@ fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "border-style" => parse_border_style(value).map(DeclKind::BorderEnabled),
         "border-radius" => parse_length_px(value).map(DeclKind::BorderRadius),
         "box-shadow" => Some(DeclKind::BoxShadow(parse_box_shadow(value))),
+        "text-decoration" | "text-decoration-line" => {
+            parse_text_decoration(value).map(DeclKind::TextDecoration)
+        }
         // `border: 1px solid #ccc` — shorthand. Devolvemos un único
         // DeclKind sintético: en realidad ya hay 3 sub-decls que el
         // caller debe emitir, así que delegamos a una ruta especial vía
@@ -1208,6 +1280,23 @@ fn parse_border_shorthand(value: &str, important: bool) -> Vec<Decl> {
         out.push(Decl { kind: DeclKind::BorderColor(c), important });
     }
     out
+}
+
+/// Parsea `text-decoration` o `text-decoration-line`. Acepta el shorthand
+/// con varios tokens — busca el primer keyword reconocido como line y
+/// devuelve eso. Estilos (`dotted`/`wavy`) y color se ignoran (sólo
+/// pintamos línea sólida del color del texto).
+fn parse_text_decoration(value: &str) -> Option<TextDecorationLine> {
+    for tok in value.split_whitespace() {
+        match tok.to_ascii_lowercase().as_str() {
+            "none" => return Some(TextDecorationLine::None),
+            "underline" => return Some(TextDecorationLine::Underline),
+            "line-through" => return Some(TextDecorationLine::LineThrough),
+            "overline" => return Some(TextDecorationLine::Overline),
+            _ => {}
+        }
+    }
+    None
 }
 
 fn parse_text_align(s: &str) -> Option<TextAlign> {
@@ -2097,5 +2186,63 @@ mod tests {
         let p = dom.find("p").unwrap();
         let style = eng.compute(&p);
         assert_eq!(style.color, Color::rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn parsea_text_decoration() {
+        assert_eq!(parse_text_decoration("underline"), Some(TextDecorationLine::Underline));
+        assert_eq!(parse_text_decoration("line-through"), Some(TextDecorationLine::LineThrough));
+        assert_eq!(parse_text_decoration("overline"), Some(TextDecorationLine::Overline));
+        assert_eq!(parse_text_decoration("none"), Some(TextDecorationLine::None));
+        // Shorthand con varios tokens: capturamos el line, ignoramos color/estilo.
+        assert_eq!(
+            parse_text_decoration("underline dotted red"),
+            Some(TextDecorationLine::Underline)
+        );
+        assert_eq!(parse_text_decoration("solid red"), None);
+    }
+
+    #[test]
+    fn ua_aplica_underline_a_link() {
+        let html = "<html><body><a href='/x'>click</a></body></html>";
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let a = dom.find("a").unwrap();
+        let style = eng.compute(&a);
+        assert_eq!(style.text_decoration, TextDecorationLine::Underline);
+    }
+
+    #[test]
+    fn ua_aplica_line_through_a_del() {
+        let html = "<html><body><del>removed</del></body></html>";
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let d = dom.find("del").unwrap();
+        let style = eng.compute(&d);
+        assert_eq!(style.text_decoration, TextDecorationLine::LineThrough);
+    }
+
+    #[test]
+    fn text_decoration_se_hereda_a_descendiente_inline() {
+        // <a>foo <b>bar</b></a>: el `<b>` debe heredar underline desde `<a>`.
+        let html =
+            "<html><body><a href='/x'>foo <b>bar</b></a></body></html>";
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let a = dom.find("a").unwrap();
+        let a_style = eng.compute(&a);
+        let b = dom.find("b").unwrap();
+        let b_style = eng.compute_with_parent(&b, Some(&a_style));
+        assert_eq!(b_style.text_decoration, TextDecorationLine::Underline);
+    }
+
+    #[test]
+    fn text_decoration_none_override_padre() {
+        let html = "<html><head><style>a { text-decoration: none }</style></head><body><a href='/x'>plain</a></body></html>";
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let a = dom.find("a").unwrap();
+        let style = eng.compute(&a);
+        assert_eq!(style.text_decoration, TextDecorationLine::None);
     }
 }

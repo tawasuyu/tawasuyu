@@ -21,13 +21,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use llimphi_layout::taffy::prelude::{
     auto, length, percent, AlignItems, FlexDirection, FlexWrap, Position, Rect, Size, Style,
 };
-use llimphi_raster::kurbo::{Affine, RoundedRect, Stroke};
+use llimphi_raster::kurbo::{Affine, Line, RoundedRect, Stroke};
 use llimphi_raster::peniko::{Blob, Color, Fill, Image as PenikoImage, ImageFormat};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
-use puriy_engine::{BoxNode, BoxShadow, BoxTree, Display, Engine, LengthVal, TextAlign};
+use puriy_engine::{
+    BoxNode, BoxShadow, BoxTree, Display, Engine, LengthVal, TextAlign, TextDecorationLine,
+};
 
 const HEADER_H: f32 = 78.0;
 const TABS_H: f32 = 30.0;
@@ -770,7 +772,14 @@ fn apply_decorations(mut view: View<Msg>, b: &BoxNode) -> View<Msg> {
         (Some(c), w) if w > 0.0 => Some((c, w)),
         _ => None,
     };
-    if shadow.is_none() && border.is_none() {
+    // text-decoration sólo tiene efecto visual sobre hojas de texto. En
+    // un nodo container, la línea ya la pinta cada hoja descendiente.
+    let deco = if b.text.is_some() && b.text_decoration != TextDecorationLine::None {
+        Some((b.text_decoration, b.color, b.font_size))
+    } else {
+        None
+    };
+    if shadow.is_none() && border.is_none() && deco.is_none() {
         return view;
     }
     view.paint_with(move |scene, _typesetter, rect| {
@@ -804,6 +813,31 @@ fn apply_decorations(mut view: View<Msg>, b: &BoxNode) -> View<Msg> {
             );
             let color = Color::from_rgba8(bc.r, bc.g, bc.b, 255);
             scene.stroke(&stroke, Affine::IDENTITY, color, None, &r);
+        }
+        if let Some((line_kind, c, font_size)) = deco {
+            // Posición vertical relativa al rect (sin baseline real). El
+            // rect del leaf de texto tiene height = font_size * line_height
+            // (≈1.4 default), así que el texto vive arriba-centro:
+            //   overline    → top + line_height*0.10
+            //   line-through → mid (≈ 0.55)
+            //   underline   → ~ baseline (≈ 0.85)
+            let y_frac = match line_kind {
+                TextDecorationLine::Overline => 0.10,
+                TextDecorationLine::LineThrough => 0.55,
+                TextDecorationLine::Underline => 0.88,
+                TextDecorationLine::None => return,
+            };
+            let y = rect.y as f64 + rect.h as f64 * y_frac;
+            let thickness = ((font_size * 0.07) as f64).max(1.0);
+            let stroke = Stroke::new(thickness);
+            let dec_color = Color::from_rgba8(c.r, c.g, c.b, 255);
+            scene.stroke(
+                &stroke,
+                Affine::IDENTITY,
+                dec_color,
+                None,
+                &Line::new((rect.x as f64, y), ((rect.x + rect.w) as f64, y)),
+            );
         }
     })
 }
