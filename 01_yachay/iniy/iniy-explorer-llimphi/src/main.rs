@@ -423,7 +423,15 @@ fn cargar_modelo(
     let aserciones = store.cargar_aserciones_atribuidas_todas()?;
     let fuentes = store.listar_fuentes()?;
     let imps = store.cargar_implicaciones_todas()?;
-    let reputaciones = calcular_reputaciones(&aserciones, &imps);
+    // Reputaciones: prefiere la tabla persistida (más rápida); fallback al
+    // cálculo on-the-fly si la tabla está vacía (DB pre-tabla o nunca corrió
+    // `iniy reputacion --recalcular`).
+    let persistidas = store.cargar_reputaciones_todas().unwrap_or_default();
+    let reputaciones = if !persistidas.is_empty() {
+        persistidas.into_iter().map(|r| (r.fuente_id, r.score)).collect()
+    } else {
+        calcular_reputaciones(&aserciones, &imps)
+    };
     let n = imps.len();
     Ok((aserciones, fuentes, reputaciones, n, imps))
 }

@@ -43,6 +43,17 @@ pub struct FuenteResumen {
     pub n_aserciones: u32,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct ReputacionPersistida {
+    pub fuente_id: FuenteId,
+    pub apoyada: u32,
+    pub contradicha: u32,
+    pub apoya: u32,
+    pub contradice: u32,
+    pub score: f32,
+    pub actualizada_at: i64,
+}
+
 impl Store {
     pub fn abrir(ruta: &Path) -> Result<Self> {
         let conn = Connection::open(ruta)?;
@@ -101,6 +112,24 @@ impl Store {
         )?;
         self.migrar_documentos_fuente_id()?;
         self.migrar_aserciones_fuente_citada()?;
+        self.migrar_reputaciones()?;
+        Ok(())
+    }
+
+    fn migrar_reputaciones(&self) -> Result<()> {
+        self.conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS reputaciones (
+                fuente_id        TEXT PRIMARY KEY REFERENCES fuentes(id),
+                apoyada          INTEGER NOT NULL DEFAULT 0,
+                contradicha      INTEGER NOT NULL DEFAULT 0,
+                apoya            INTEGER NOT NULL DEFAULT 0,
+                contradice       INTEGER NOT NULL DEFAULT 0,
+                score            REAL NOT NULL DEFAULT 0.0,
+                actualizada_at   INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+            );
+            "#,
+        )?;
         Ok(())
     }
 
@@ -476,6 +505,130 @@ impl Store {
         Ok(out)
     }
 
+    /// Recalcula la reputación de todas las fuentes a partir del grafo NLI
+    /// actual y la persiste (UPSERT). Devuelve cuántas fuentes se actualizaron.
+    ///
+    /// Solo cuenta aristas CROSS-fuente (intra-fuente no es evidencia
+    /// independiente). Para cada fuente F:
+    ///   - apoyada = aristas entailment-dominantes que apuntan a aserciones de F.
+    ///   - contradicha = aristas contradiction-dominantes que apuntan a F.
+    ///   - apoya / contradice = aristas que F emite hacia otras fuentes.
+    ///   - score = (apoyada - contradicha) / max(1, apoyada + contradicha) ∈ [-1, 1].
+    pub fn recalcular_reputaciones(&mut self) -> Result<usize> {
+        use std::collections::HashMap;
+        let aserciones = self.cargar_aserciones_atribuidas_todas()?;
+        let imps = self.cargar_implicaciones_todas()?;
+        let asercion_a_fuente: HashMap<AsercionId, FuenteId> = aserciones.iter()
+            .filter_map(|a| a.fuente.as_ref().map(|f| (a.asercion.id, f.id)))
+            .collect();
+        // (apoyada, contradicha, apoya, contradice) por fuente.
+        let mut stats: HashMap<FuenteId, [u32; 4]> = HashMap::new();
+        for a in &aserciones {
+            if let Some(f) = &a.fuente {
+                stats.entry(f.id).or_default();
+            }
+        }
+        for imp in &imps {
+            let Some(&fa) = asercion_a_fuente.get(&imp.premisa) else { continue; };
+            let Some(&fb) = asercion_a_fuente.get(&imp.hipotesis) else { continue; };
+            if fa == fb {
+                continue;
+            }
+            let rel = &imp.relacion;
+            if rel.entailment > rel.contradiction && rel.entailment > 0.0 {
+                stats.entry(fa).or_default()[2] += 1; // fa apoya
+                stats.entry(fb).or_default()[0] += 1; // fb apoyada
+            } else if rel.contradiction > 0.0 {
+                stats.entry(fa).or_default()[3] += 1; // fa contradice
+                stats.entry(fb).or_default()[1] += 1; // fb contradicha
+            }
+        }
+        let tx = self.conn.transaction()?;
+        let n = stats.len();
+        {
+            let mut stmt = tx.prepare(
+                r#"INSERT INTO reputaciones (fuente_id, apoyada, contradicha, apoya, contradice, score, actualizada_at)
+                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, strftime('%s','now'))
+                   ON CONFLICT(fuente_id) DO UPDATE SET
+                     apoyada = excluded.apoyada,
+                     contradicha = excluded.contradicha,
+                     apoya = excluded.apoya,
+                     contradice = excluded.contradice,
+                     score = excluded.score,
+                     actualizada_at = excluded.actualizada_at"#,
+            )?;
+            for (fid, [apoyada, contradicha, apoya, contradice]) in &stats {
+                let recibidos = apoyada + contradicha;
+                let score = if recibidos > 0 {
+                    (*apoyada as f32 - *contradicha as f32) / recibidos as f32
+                } else {
+                    0.0
+                };
+                stmt.execute(params![
+                    fid.0.to_string(),
+                    apoyada,
+                    contradicha,
+                    apoya,
+                    contradice,
+                    score as f64,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(n)
+    }
+
+    pub fn cargar_reputaciones_todas(&self) -> Result<Vec<ReputacionPersistida>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT fuente_id, apoyada, contradicha, apoya, contradice, score, actualizada_at FROM reputaciones",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, i64>(4)?,
+                r.get::<_, f64>(5)?,
+                r.get::<_, i64>(6)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            let (fid_s, apoyada, contradicha, apoya, contradice, score, at) = r?;
+            let fid = FuenteId(Ulid::from_str(&fid_s).with_context(|| format!("fuente_id inválido: {fid_s}"))?);
+            out.push(ReputacionPersistida {
+                fuente_id: fid,
+                apoyada: apoyada as u32,
+                contradicha: contradicha as u32,
+                apoya: apoya as u32,
+                contradice: contradice as u32,
+                score: score as f32,
+                actualizada_at: at,
+            });
+        }
+        Ok(out)
+    }
+
+    pub fn cargar_reputacion(&self, fuente_id: FuenteId) -> Result<Option<ReputacionPersistida>> {
+        let r: Option<(i64, i64, i64, i64, f64, i64)> = self.conn
+            .query_row(
+                "SELECT apoyada, contradicha, apoya, contradice, score, actualizada_at FROM reputaciones WHERE fuente_id = ?1",
+                params![fuente_id.0.to_string()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            )
+            .optional()?;
+        Ok(r.map(|(a, c, ap, co, s, at)| ReputacionPersistida {
+            fuente_id,
+            apoyada: a as u32,
+            contradicha: c as u32,
+            apoya: ap as u32,
+            contradice: co as u32,
+            score: s as f32,
+            actualizada_at: at,
+        }))
+    }
+
     /// Implicaciones cuyos dos extremos viven en `doc_id`.
     pub fn cargar_implicaciones_del_doc(&self, doc_id: DocId) -> Result<Vec<Implicacion>> {
         let mut stmt = self.conn.prepare(
@@ -726,6 +879,52 @@ mod tests {
         let doxo = lista.iter().find(|r| r.fuente.nombre == "Doxógrafo").unwrap();
         assert_eq!(tales.n_aserciones, 1); // la citada
         assert_eq!(doxo.n_aserciones, 1);  // la que cae al doc
+    }
+
+    #[test]
+    fn recalcular_reputaciones_persiste_y_calcula_score() {
+        let mut s = Store::en_memoria().unwrap();
+        let f1 = s.obtener_o_crear_fuente("F1", None).unwrap();
+        let f2 = s.obtener_o_crear_fuente("F2", None).unwrap();
+        let doc1 = doc_demo();
+        let doc2 = doc_demo();
+        s.persistir_documento(&doc1, Some(f1)).unwrap();
+        s.persistir_documento(&doc2, Some(f2)).unwrap();
+        let a1 = asercion_demo(doc1.id, doc1.chunks[0].id, "F1 dice X");
+        let a2 = asercion_demo(doc2.id, doc2.chunks[0].id, "F2 contradice X");
+        s.persistir_aserciones(&[a1.clone(), a2.clone()]).unwrap();
+        // F1 ←(contradiction)← F2.
+        s.persistir_implicaciones(&[Implicacion {
+            premisa: a2.id,
+            hipotesis: a1.id,
+            relacion: RelacionNli { entailment: 0.0, contradiction: 0.8, neutral: 0.2 },
+        }]).unwrap();
+        let n = s.recalcular_reputaciones().unwrap();
+        assert_eq!(n, 2);
+
+        let rep_f1 = s.cargar_reputacion(f1).unwrap().unwrap();
+        assert_eq!(rep_f1.contradicha, 1);
+        assert_eq!(rep_f1.apoyada, 0);
+        assert!((rep_f1.score - (-1.0)).abs() < 1e-5);
+
+        let rep_f2 = s.cargar_reputacion(f2).unwrap().unwrap();
+        assert_eq!(rep_f2.contradice, 1);
+        assert_eq!(rep_f2.apoya, 0);
+        // F2 no recibe nada, score=0.
+        assert!((rep_f2.score - 0.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn recalcular_reputaciones_es_idempotente() {
+        let mut s = Store::en_memoria().unwrap();
+        let f = s.obtener_o_crear_fuente("F", None).unwrap();
+        let doc = doc_demo();
+        s.persistir_documento(&doc, Some(f)).unwrap();
+        let a = asercion_demo(doc.id, doc.chunks[0].id, "x");
+        s.persistir_aserciones(&[a]).unwrap();
+        s.recalcular_reputaciones().unwrap();
+        s.recalcular_reputaciones().unwrap();
+        assert_eq!(s.cargar_reputaciones_todas().unwrap().len(), 1);
     }
 
     #[test]

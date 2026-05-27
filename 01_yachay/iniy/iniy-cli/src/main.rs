@@ -15,7 +15,7 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use iniy_core::{Asercion, AsercionId, DocId, Fuente, FuenteId, Implicacion, Opinion};
+use iniy_core::{Asercion, AsercionId, DocId, FuenteId, Implicacion, Opinion};
 use iniy_extract::{Extractor, ExtractorHeuristico};
 use iniy_graph::GrafoCreencias;
 use iniy_nli::{relacion_lexica, MotorNli, MotorNliLexico};
@@ -123,10 +123,13 @@ enum Cmd {
         #[arg(long)]
         unset: bool,
     },
-    /// Reputación derivada del grafo NLI: cuántas aristas entrantes
-    /// apoyan a cada fuente (entailment desde otras) vs cuántas la
-    /// contradicen. Score ∈ [-1,1].
-    Reputacion,
+    /// Reputación de cada fuente (persistida en la tabla `reputaciones`).
+    /// Lee la tabla; si está vacía o pasaste --recalcular, primero
+    /// recalcula desde el grafo NLI y persiste vía UPSERT.
+    Reputacion {
+        #[arg(long)]
+        recalcular: bool,
+    },
     /// "¿Qué dice el corpus sobre X?" — agrupa aserciones que apoyan o contradicen
     /// el query, con la opinión autoral y la fuente de cada una.
     Testimonio {
@@ -209,71 +212,6 @@ async fn construir_provider_embeddings() -> Result<Arc<dyn Provider>> {
     }
 }
 
-#[derive(Debug, Clone)]
-struct ReputacionFuente {
-    fuente: Fuente,
-    n_aserciones: u32,
-    apoyada_por_otros: u32,
-    contradicha_por_otros: u32,
-    apoya_a_otros: u32,
-    contradice_a_otros: u32,
-    /// Score ∈ [-1, 1]: (apoyos - contradicciones) / max(1, apoyos + contradicciones).
-    score: f32,
-}
-
-/// Calcula reputación de cada fuente a partir del corpus atribuido + grafo.
-/// Solo cuenta aristas CROSS-FUENTE (apoyo o contradicción interna no afecta
-/// la reputación porque no es independiente).
-fn calcular_reputaciones(
-    todas: &[iniy_store::AsercionAtribuida],
-    imps: &[Implicacion],
-) -> Vec<ReputacionFuente> {
-    use std::collections::HashMap;
-    // a_id -> fuente_id
-    let asercion_a_fuente: HashMap<AsercionId, FuenteId> = todas.iter()
-        .filter_map(|a| a.fuente.as_ref().map(|f| (a.asercion.id, f.id)))
-        .collect();
-    // Fuente plana por id.
-    let fuentes: HashMap<FuenteId, Fuente> = todas.iter()
-        .filter_map(|a| a.fuente.clone().map(|f| (f.id, f)))
-        .collect();
-    let mut stats: HashMap<FuenteId, ReputacionFuente> = HashMap::new();
-    for (fid, fuente) in &fuentes {
-        stats.insert(*fid, ReputacionFuente {
-            fuente: fuente.clone(),
-            n_aserciones: todas.iter().filter(|a| a.fuente.as_ref().map(|f| f.id) == Some(*fid)).count() as u32,
-            apoyada_por_otros: 0,
-            contradicha_por_otros: 0,
-            apoya_a_otros: 0,
-            contradice_a_otros: 0,
-            score: 0.0,
-        });
-    }
-    for imp in imps {
-        let Some(&fa) = asercion_a_fuente.get(&imp.premisa) else { continue; };
-        let Some(&fb) = asercion_a_fuente.get(&imp.hipotesis) else { continue; };
-        if fa == fb {
-            continue; // intra-fuente: no es evidencia independiente.
-        }
-        let rel = &imp.relacion;
-        if rel.entailment > rel.contradiction && rel.entailment > 0.0 {
-            if let Some(s) = stats.get_mut(&fa) { s.apoya_a_otros += 1; }
-            if let Some(s) = stats.get_mut(&fb) { s.apoyada_por_otros += 1; }
-        } else if rel.contradiction > 0.0 {
-            if let Some(s) = stats.get_mut(&fa) { s.contradice_a_otros += 1; }
-            if let Some(s) = stats.get_mut(&fb) { s.contradicha_por_otros += 1; }
-        }
-    }
-    for s in stats.values_mut() {
-        let recibidos = (s.apoyada_por_otros + s.contradicha_por_otros) as f32;
-        if recibidos > 0.0 {
-            s.score = (s.apoyada_por_otros as f32 - s.contradicha_por_otros as f32) / recibidos;
-        }
-    }
-    let mut v: Vec<_> = stats.into_values().collect();
-    v.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-    v
-}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -433,7 +371,9 @@ async fn main() -> Result<()> {
                     100.0 * salteados_por_prefiltro as f32 / total as f32);
             }
             println!("relaciones no triviales: {}  (entailment o contradiction > 0)", no_neutrales);
-            println!("persistido.");
+            // Recalcular reputaciones inmediatamente (el grafo cambió).
+            let n_reps = store.recalcular_reputaciones()?;
+            println!("persistido. reputaciones recalculadas: {n_reps} fuentes.");
         }
         Cmd::Contradictions { doc_id, top } => {
             let doc_id = parse_doc_id(&doc_id)?;
@@ -485,21 +425,35 @@ async fn main() -> Result<()> {
             store.asignar_fuente_a_doc(doc_id, Some(fuente_id))?;
             println!("doc {} ahora atribuido a «{}»", doc_id.0, fuente);
         }
-        Cmd::Reputacion => {
-            let todas = store.cargar_aserciones_atribuidas_todas()?;
-            if todas.is_empty() {
+        Cmd::Reputacion { recalcular } => {
+            let mut persistidas = store.cargar_reputaciones_todas()?;
+            if persistidas.is_empty() || recalcular {
+                let n = store.recalcular_reputaciones()?;
+                println!("(recalculado: {} fuentes)", n);
+                persistidas = store.cargar_reputaciones_todas()?;
+            }
+            if persistidas.is_empty() {
                 println!("(corpus vacío — sin reputaciones que calcular)");
                 return Ok(());
             }
-            let imps = store.cargar_implicaciones_todas()?;
-            let reps = calcular_reputaciones(&todas, &imps);
-            println!("reputación de fuentes (por aristas cross-fuente del grafo NLI):");
+            // Resolver fuente + n_aserciones por id.
+            let fuentes_idx: HashMap<FuenteId, iniy_store::FuenteResumen> = store
+                .listar_fuentes()?
+                .into_iter()
+                .map(|f| (f.fuente.id, f))
+                .collect();
+            // Orden: score desc, nombre asc para empates.
+            persistidas.sort_by(|a, b| b.score.partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal));
+            println!("reputación de fuentes (persistida; --recalcular para refrescar):");
             println!();
-            for r in reps {
-                let kind = r.fuente.kind.as_deref().map(|k| format!(" [{k}]")).unwrap_or_default();
-                println!("  {:+.2}  {}{}  ({} aserciones)", r.score, r.fuente.nombre, kind, r.n_aserciones);
-                println!("        recibe: {}↑ apoyos · {}↓ contradicciones", r.apoyada_por_otros, r.contradicha_por_otros);
-                println!("         emite: {}↑ apoyos · {}↓ contradicciones", r.apoya_a_otros, r.contradice_a_otros);
+            for r in &persistidas {
+                let Some(fres) = fuentes_idx.get(&r.fuente_id) else { continue; };
+                let f = &fres.fuente;
+                let kind = f.kind.as_deref().map(|k| format!(" [{k}]")).unwrap_or_default();
+                println!("  {:+.2}  {}{}  ({} aserciones)", r.score, f.nombre, kind, fres.n_aserciones);
+                println!("        recibe: {}↑ apoyos · {}↓ contradicciones", r.apoyada, r.contradicha);
+                println!("         emite: {}↑ apoyos · {}↓ contradicciones", r.apoya, r.contradice);
             }
         }
         Cmd::Cite { asercion_id, fuente, kind, unset } => {
@@ -554,9 +508,15 @@ async fn main() -> Result<()> {
                 anyhow::bail!("corpus vacío de aserciones");
             }
             let reputaciones: std::collections::HashMap<FuenteId, f32> = if pesar_reputacion {
-                let imps = store.cargar_implicaciones_todas()?;
-                calcular_reputaciones(&todas, &imps).into_iter()
-                    .map(|r| (r.fuente.id, r.score)).collect()
+                let persistidas = store.cargar_reputaciones_todas()?;
+                if persistidas.is_empty() {
+                    // Lazy: si nunca se calcularon, hacerlo ahora.
+                    store.recalcular_reputaciones()?;
+                    store.cargar_reputaciones_todas()?.into_iter()
+                        .map(|r| (r.fuente_id, r.score)).collect()
+                } else {
+                    persistidas.into_iter().map(|r| (r.fuente_id, r.score)).collect()
+                }
             } else {
                 std::collections::HashMap::new()
             };
