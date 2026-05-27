@@ -163,7 +163,7 @@ lanzan independientemente desde el usuario y no son entes hijos.
 |---|---|---|---|
 | `wawa-panel-llimphi` | 02_ruway | productor + consumidor | todo |
 | `wawactl` | 02_ruway | productor + consumidor | todo (CLI) |
-| `gioser-edit` | 02_ruway | consumidor | theme, accent, lang |
+| `nada` | 02_ruway | consumidor | theme, accent, lang |
 | `nahual-shell-llimphi` | 02_ruway | consumidor | theme, accent |
 | `dominium-app-llimphi` | 01_yachay | consumidor | theme, accent, lang |
 | `cosmos-app-llimphi` | 01_yachay | consumidor | theme, accent, lang |
@@ -204,7 +204,7 @@ crate dedicado mantiene el grafo limpio para herramientas no-GUI.
 
 ```sh
 # Build
-cargo build -p wawa-config -p wawa-panel-llimphi -p wawactl -p gioser-edit
+cargo build -p wawa-config -p wawa-panel-llimphi -p wawactl -p nada
 
 # Terminal 1: observar el bus
 ./target/debug/wawactl watch
@@ -224,7 +224,7 @@ sudo ./target/debug/wawactl module mirada off --system
 
 # Terminal 3 (opcional): consumidores reales
 ./target/debug/wawa-panel       # GUI; cambios se reflejan al instante
-./target/debug/gioser-edit      # cambia theme cuando el bus emite
+./target/debug/nada      # cambia theme cuando el bus emite
 ```
 
 ## Roadmap

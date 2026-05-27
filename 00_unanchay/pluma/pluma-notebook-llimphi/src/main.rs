@@ -86,7 +86,7 @@ struct EditState {
     id: CellId,
     editor: EditorState,
     /// Acumulado de drag para drag-to-select del mouse — análogo a
-    /// gioser-edit. Pos actual = initial + accum.
+    /// nada. Pos actual = initial + accum.
     drag_accum: (f32, f32),
 }
 
@@ -692,7 +692,7 @@ fn edit_input_view(editor: &EditorState, body_h: f32, language: Language) -> Vie
     let visible = (body_h / metrics.line_height).max(1.0) as usize;
     // En modo edición la card pierde su drag (en canvas_card), así que el
     // editor recibe los eventos del mouse para click-posiciona-caret y
-    // drag-selecciona, como en gioser-edit.
+    // drag-selecciona, como en nada.
     text_editor_view_highlighted(editor, &ep, metrics, visible, language, |ev| {
         Some(Msg::EditorPointer(ev))
     })

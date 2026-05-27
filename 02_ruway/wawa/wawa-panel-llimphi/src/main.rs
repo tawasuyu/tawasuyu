@@ -131,7 +131,7 @@ const ACCENTS: &[(&str, &str)] = &[
 /// "Lanzar"; si no existe en `$PATH` o `target/debug/`, el panel lo
 /// reporta en el status sin caer.
 const APPS: &[(&str, &str, &str)] = &[
-    ("gioser-edit",            "gioser-edit",       "Editor de texto · sesiones, LSP, theme switcher"),
+    ("nada",            "nada",       "Editor de texto · sesiones, LSP, theme switcher"),
     ("dominium-app-llimphi",   "dominium",           "Simulador del campo medio · lemmings y conceptos"),
     ("nakui-explorer-llimphi", "nakui-explorer",     "Explorador estelar del catálogo cosmos"),
     ("nahual-image-viewer-llimphi", "nahual-viewer", "Visor de imágenes con texto y shell"),

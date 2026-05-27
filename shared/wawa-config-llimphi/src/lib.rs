@@ -25,7 +25,7 @@
 //! m.theme = theme_from_wawa(&cfg, &m.theme);
 //! ```
 //!
-//! Antes vivía duplicado en `gioser-edit` y `dominium-app-llimphi`;
+//! Antes vivía duplicado en `nada` y `dominium-app-llimphi`;
 //! al integrar `cosmos-app-llimphi` y `nakui-explorer-llimphi` como
 //! consumidores tres más, el duplicado se factorizó acá.
 

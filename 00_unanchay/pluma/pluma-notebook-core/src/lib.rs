@@ -36,7 +36,7 @@ pub use notebook::Notebook;
 //  Re-export bit-a-bit de `format::CeldaWawa` — la representacion canonica
 //  de una celda en el disco direccionado por contenido de Wawa OS. Cualquier
 //  consumidor del ecosistema Pluma (Linux: `pluma-notebook-llimphi`,
-//  `gioser-edit`, etc.) que quiera hablar el lenguaje del Grafo de Wawa
+//  `nada`, etc.) que quiera hablar el lenguaje del Grafo de Wawa
 //  importa este tipo directamente — sin capa de traduccion ni dialecto.
 //
 //  Los tipos historicos (`Cell`, `CellKind`, `Notebook`, etc.) siguen

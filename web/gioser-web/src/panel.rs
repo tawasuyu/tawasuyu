@@ -808,9 +808,9 @@ fn render_apps() -> String {
         ("chasqui",         "02 ruway",   "ruway",
          "Correo y mensajería — núcleo y broker.",
          "/web/gioser-web/md/practica.md", "chasqui"),
-        ("gioser-edit",     "02 ruway",   "ruway",
+        ("nada",     "02 ruway",   "ruway",
          "Editor de texto con sesiones y temas.",
-         "/02_ruway/llimphi/SDD.md", "gioser-edit"),
+         "/02_ruway/llimphi/SDD.md", "nada"),
 
         // 03 ukupacha
         ("arje · seeds",    "03 ukupacha","ukupacha",

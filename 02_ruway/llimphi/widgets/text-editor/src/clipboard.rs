@@ -2,7 +2,7 @@
 //! SO concreto (X11 / Wayland / macOS / Windows), así que define el
 //! trait y entrega un mock para tests. La impl real (vía `arboard`)
 //! vive del lado del caller — típicamente la app embebida en
-//! `gioser-edit` o el visor del notebook.
+//! `nada` o el visor del notebook.
 
 /// Backend de clipboard. `set` mete texto; `get` lo lee. Cualquiera de
 /// los dos puede fallar (sin display, headless CI, race con otro

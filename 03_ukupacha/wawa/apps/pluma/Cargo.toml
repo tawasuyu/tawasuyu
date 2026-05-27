@@ -2,7 +2,7 @@
 #  renaser :: apps/pluma — Fase 33/34/35 :: notebook bare-metal de Pluma
 # -----------------------------------------------------------------------------
 #  Reflejo bare-metal del ecosistema Pluma del host. Comparte con la pila
-#  Linux (`pluma-notebook-core`, `pluma-notebook-llimphi`, `gioser-edit`)
+#  Linux (`pluma-notebook-core`, `pluma-notebook-llimphi`, `nada`)
 #  los TIPOS y la LOGICA del notebook reproducible (celdas, DAG,
 #  staleness, digest Merkle), pero su RENDERER es propio: framebuffer
 #  480x400 dibujado dentro de la jaula WASM de Wawa OS.

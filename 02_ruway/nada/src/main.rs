@@ -1,4 +1,4 @@
-//! `gioser-edit` — editor de archivos rudimentario sobre Llimphi.
+//! `nada` — editor de archivos rudimentario sobre Llimphi.
 //!
 //! - **Tree** a la izquierda (240 px) con el contenido del directorio
 //!   `cwd` (o el primer argumento). Click expande/colapsa directorios;
@@ -362,7 +362,7 @@ impl App for EditorApp {
     type Msg = Msg;
 
     fn title() -> &'static str {
-        "gioser-edit"
+        "nada"
     }
 
     fn initial_size() -> (u32, u32) {
@@ -457,7 +457,7 @@ impl App for EditorApp {
         let watcher = wawa_config::ConfigWatcher::spawn(move |new_cfg| {
             handle_clone.dispatch(Msg::WawaConfigChanged(Box::new(new_cfg)));
         })
-        .map_err(|e| eprintln!("gioser-edit · wawa-config watcher: {e}"))
+        .map_err(|e| eprintln!("nada · wawa-config watcher: {e}"))
         .ok();
         model._wawa_watcher = watcher;
         model
@@ -1277,7 +1277,7 @@ impl App for EditorApp {
 }
 
 fn header_bar(model: &Model, theme: &Theme) -> View<Msg> {
-    // Section 1: brand pill (gioser-edit con bg accent).
+    // Section 1: brand pill (nada con bg accent).
     let brand = View::new(Style {
         size: Size { width: length(108.0_f32), height: length(22.0_f32) },
         padding: Rect {
@@ -1290,7 +1290,7 @@ fn header_bar(model: &Model, theme: &Theme) -> View<Msg> {
     })
     .fill(theme.accent)
     .radius(4.0)
-    .text_aligned("gioser-edit".to_string(), 11.0, theme.bg_app, Alignment::Center);
+    .text_aligned("nada".to_string(), 11.0, theme.bg_app, Alignment::Center);
 
     // Section 2: breadcrumb root - active-file (ocupa el centro).
     let crumb_text = match model.active_tab() {
@@ -1991,7 +1991,7 @@ fn empty_editor_placeholder(theme: &Theme) -> View<Msg> {
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .text_aligned("gioser-edit".to_string(), 22.0, theme.fg_text, Alignment::Center);
+    .text_aligned("nada".to_string(), 22.0, theme.fg_text, Alignment::Center);
 
     let subtitle = View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
@@ -2237,7 +2237,7 @@ fn apply_picker(model: Model, pm: PickerMsg) -> Model {
 }
 
 /// Routea un FifMsg a `llimphi_module_fif::apply` y traduce el `FifAction`
-/// resultante a la mutación apropiada del Model. Único lugar de gioser-edit
+/// resultante a la mutación apropiada del Model. Único lugar de nada
 /// que conoce los detalles del módulo.
 fn apply_fif(model: Model, fmsg: FifMsg) -> Model {
     let mut m = model;
@@ -2900,7 +2900,7 @@ fn transparent() -> Color {
 
 /// Snapshot serializable de la sesion. Solo lo que es semantico — no
 /// guardamos scroll positions ni caret per-tab (cambian todo el tiempo).
-/// Path al archivo: $XDG_CONFIG_HOME/gioser-edit/session.json
+/// Path al archivo: $XDG_CONFIG_HOME/nada/session.json
 /// (o el equivalente en Mac/Windows via directories crate).
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 struct Session {
@@ -2917,7 +2917,7 @@ struct Session {
 /// Path donde leemos/escribimos la sesion. None si el SO no expone
 /// un config dir conocido (raro).
 fn session_path() -> Option<PathBuf> {
-    let dirs = directories::ProjectDirs::from("net", "gioser", "gioser-edit")?;
+    let dirs = directories::ProjectDirs::from("net", "gioser", "nada")?;
     let dir = dirs.config_dir().to_path_buf();
     let _ = fs::create_dir_all(&dir);
     Some(dir.join("session.json"))

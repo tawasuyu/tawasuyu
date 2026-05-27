@@ -92,7 +92,7 @@ poca interacción con teclado/mouse y mucho rendering:
 6. **shuma-shell-llimphi** — teclado virtual, ya casi no usa shortcuts
 7. **mirada-app-llimphi** — el compositor; touch desktop = problema UX
 
-Las apps con paleta de comandos (gioser-edit, pluma-app full) son las
+Las apps con paleta de comandos (nada, pluma-app full) son las
 **últimas** porque su UX core (Ctrl+Shift+P, multi-pane splitter,
 file picker) necesita ser repensada para touch.
 

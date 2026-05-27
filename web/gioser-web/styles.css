@@ -54,8 +54,7 @@
   --mono: ui-monospace, "JetBrains Mono", "Fira Code", "Cascadia Mono", Menlo, monospace;
   --sans: ui-sans-serif, system-ui, "Inter", "Segoe UI", Roboto, sans-serif;
 
-  --taskbar-h: 36px;
-  --topbar-h:  34px;
+  --topbar-h:  36px;
 }
 
 * { box-sizing: border-box; }
@@ -81,42 +80,122 @@ a:hover { color: var(--fg-text); }
   width: 100vw;
   height: 100vh;
   display: grid;
-  grid-template-rows: var(--topbar-h) 1fr var(--taskbar-h);
+  grid-template-rows: var(--topbar-h) 1fr;
   background:
     radial-gradient(1200px 800px at 20% 10%, rgba(110,140,220,0.06), transparent 60%),
     radial-gradient(900px 700px at 90% 90%, rgba(110,140,220,0.04), transparent 60%),
     var(--bg-app);
 }
 
-/* topbar */
+/* topbar — única barra; alberga brand, indicadores de ventanas, panel, README, PLAN, reloj, gitea */
 #topbar {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   justify-content: space-between;
-  padding: 0 14px;
+  padding: 0 12px;
   background: var(--bg-panel-alt);
   border-bottom: 1px solid var(--border);
   font-size: 12px;
+  gap: 10px;
 }
 .topbar-left, .topbar-right {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  min-width: 0;
 }
+.topbar-left { flex: 1; min-width: 0; }
+
+/* brand: en desktop es texto plano (cursor default); en mobile pasa a botón
+ * hamburguesa que togglea body.sidebar-collapsed. La media query manda. */
 .brand {
+  background: transparent;
+  border: none;
   color: var(--fg-text);
+  font-family: var(--mono);
+  font-size: 13px;
   letter-spacing: 0.08em;
   font-weight: 500;
+  padding: 4px 8px;
+  cursor: default;
+  border-radius: 3px;
 }
-.brand-sub { color: var(--fg-muted); font-size: 11px; }
+.brand-sub { color: var(--fg-muted); font-size: 11px; white-space: nowrap; }
+
 .topbar-link {
   color: var(--fg-muted);
   cursor: pointer;
   padding: 2px 6px;
   border-radius: 3px;
+  white-space: nowrap;
 }
 .topbar-link:hover { background: var(--bg-row-hover); color: var(--fg-text); }
 .topbar-sep { color: var(--border); }
+.topbar-clock {
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+/* indicadores de ventanas abiertas (antes en taskbar bottom) */
+#taskbar-items {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  min-width: 0;
+  margin-left: 6px;
+  padding: 0 2px;
+  scrollbar-width: thin;
+}
+#taskbar-items::-webkit-scrollbar { height: 3px; }
+#taskbar-items::-webkit-scrollbar-thumb { background: var(--border); }
+#taskbar-items:empty { display: none; }
+
+.task-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  height: 22px;
+  max-width: 200px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-bottom: 2px solid transparent;
+  border-radius: 3px;
+  color: var(--fg-muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.task-item:hover { background: var(--bg-row-hover); color: var(--fg-text); }
+.task-item.active {
+  background: var(--bg-button);
+  color: var(--fg-text);
+  border-bottom-color: var(--accent);
+}
+.task-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--fg-muted);
+}
+.task-item.active .task-dot { background: var(--accent); }
+.task-item[data-theme="unanchay"] .task-dot { background: var(--c-unanchay); }
+.task-item[data-theme="yachay"]   .task-dot { background: var(--c-yachay); }
+.task-item[data-theme="ruway"]    .task-dot { background: var(--c-ruway); }
+.task-item[data-theme="ukupacha"] .task-dot { background: var(--c-ukupacha); }
+.task-item[data-theme="aire"]     .task-dot { background: var(--c-aire); }
+.task-item[data-theme="fuego"]    .task-dot { background: var(--c-fuego); }
+.task-item[data-theme="tierra"]   .task-dot { background: var(--c-tierra); }
+.task-item[data-theme="agua"]     .task-dot { background: var(--c-agua); }
+.task-item[data-theme="cosmos"]   .task-dot { background: var(--c-cosmos); }
+.task-label { overflow: hidden; text-overflow: ellipsis; }
 
 /* portada: sidebar + plano */
 #portada {
@@ -281,7 +360,7 @@ a:hover { color: var(--fg-text); }
   top: var(--topbar-h);
   left: 0;
   right: 0;
-  bottom: var(--taskbar-h);
+  bottom: 0;
   pointer-events: none;
 }
 
@@ -508,105 +587,59 @@ a:hover { color: var(--fg-text); }
 .window[data-theme="agua"]     .win-icon { color: var(--c-agua); }
 .window[data-theme="cosmos"]   .win-icon { color: var(--c-cosmos); }
 
-/* ===================== taskbar ===================== */
-
-#taskbar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 4px 0 8px;
-  background: linear-gradient(180deg, #161A24 0%, #10141C 100%);
-  border-top: 1px solid var(--border);
-  height: var(--taskbar-h);
-  font-size: 12px;
-}
-
-.task-start {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  height: calc(var(--taskbar-h) - 8px);
-  background: var(--bg-button);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  color: var(--fg-text);
-  cursor: default;
-}
-.task-start:hover { background: var(--bg-button-hover); }
-.start-glyph { color: var(--accent); font-size: 14px; }
-.start-label { letter-spacing: 0.08em; }
-
-#taskbar-items {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  overflow-x: auto;
-  height: 100%;
-  padding: 4px 4px;
-}
-#taskbar-items::-webkit-scrollbar { height: 4px; }
-#taskbar-items::-webkit-scrollbar-thumb { background: var(--border); }
-
-.task-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0 10px;
-  height: calc(var(--taskbar-h) - 12px);
-  max-width: 220px;
-  background: var(--bg-panel-alt);
-  border: 1px solid var(--border);
-  border-bottom: 2px solid transparent;
-  border-radius: 3px;
-  color: var(--fg-muted);
-  font-family: var(--mono);
-  font-size: 12px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.task-item:hover { background: var(--bg-row-hover); color: var(--fg-text); }
-.task-item.active {
-  background: var(--bg-button);
-  color: var(--fg-text);
-  border-bottom-color: var(--accent);
-}
-.task-dot {
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--fg-muted);
-}
-.task-item.active .task-dot { background: var(--accent); }
-.task-item[data-theme="unanchay"] .task-dot { background: var(--c-unanchay); }
-.task-item[data-theme="yachay"]   .task-dot { background: var(--c-yachay); }
-.task-item[data-theme="ruway"]    .task-dot { background: var(--c-ruway); }
-.task-item[data-theme="ukupacha"] .task-dot { background: var(--c-ukupacha); }
-.task-item[data-theme="aire"]     .task-dot { background: var(--c-aire); }
-.task-item[data-theme="fuego"]    .task-dot { background: var(--c-fuego); }
-.task-item[data-theme="tierra"]   .task-dot { background: var(--c-tierra); }
-.task-item[data-theme="agua"]     .task-dot { background: var(--c-agua); }
-.task-item[data-theme="cosmos"]   .task-dot { background: var(--c-cosmos); }
-
-.task-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.task-clock {
-  padding: 0 10px;
-  color: var(--fg-muted);
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.04em;
-}
+/* (taskbar inferior removida — los indicadores de ventana viven en
+ *  el topbar y el reloj también. Mirá la sección "topbar" arriba.) */
 
 /* responsivo: oculta sidebar en pantallas chicas */
+/* En desktop la sidebar vive abierta. La brand del topbar es texto (no
+ * botón). El toggle body.sidebar-collapsed la oculta manualmente. */
+body.sidebar-collapsed #portada { grid-template-columns: 0 1fr; }
+body.sidebar-collapsed #sidebar { display: none; }
+
+/* En mobile la sidebar arranca colapsada y la brand se vuelve botón
+ * hamburguesa visible. */
 @media (max-width: 800px) {
   #portada { grid-template-columns: 1fr; }
   #sidebar { display: none; }
+  body:not(.sidebar-open) #sidebar { display: none; }
+  body.sidebar-open #portada { grid-template-columns: 280px 1fr; }
+  body.sidebar-open #sidebar { display: block; }
+  .brand {
+    cursor: pointer;
+    background: var(--bg-button);
+    border: 1px solid var(--border);
+  }
+  .brand:hover { background: var(--bg-button-hover); }
+  .brand::before { content: "≡  "; color: var(--accent); }
+  .brand-sub { display: none; }
 }
+
+/* Header de cuadrante clickable */
+.sidebar-section h3.sec-head {
+  margin: 6px 0 8px;
+  padding: 0;
+}
+.sidebar-section h3.sec-head .doc {
+  display: block;
+  padding: 3px 8px;
+  border-radius: 3px;
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: lowercase;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+.sidebar-section h3.sec-head .doc:hover {
+  background: var(--bg-row-hover);
+  color: var(--fg-text);
+  border-left-color: var(--accent);
+}
+.sidebar-section[data-mod="unanchay"] h3.sec-head .doc { color: var(--c-unanchay); }
+.sidebar-section[data-mod="yachay"]   h3.sec-head .doc { color: var(--c-yachay); }
+.sidebar-section[data-mod="ruway"]    h3.sec-head .doc { color: var(--c-ruway); }
+.sidebar-section[data-mod="ukupacha"] h3.sec-head .doc { color: var(--c-ukupacha); }
 
 /* ===================== panel de control ===================== */
 

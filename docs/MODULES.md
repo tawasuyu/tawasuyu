@@ -61,7 +61,7 @@ Si en el futuro emerge un patrón que sí justifica un trait (ej. para
 serialización de estado, hot-reload, descubrimiento dinámico), se
 introduce ahí, no preventivamente.
 
-## Cómo enchufa una app: ejemplo `gioser-edit` ↔ `llimphi-module-fif`
+## Cómo enchufa una app: ejemplo `nada` ↔ `llimphi-module-fif`
 
 ```rust
 use llimphi_module_fif::{self as fif, FifAction, FifMsg, FifPalette, FifState};
@@ -310,7 +310,7 @@ módulo emite `PaletteAction::Invoke(id)`; el host hace match contra su
 tabla y dispatcha el `Msg` correspondiente.
 
 El módulo **no sabe qué hacen los comandos**. Eso es lo que permite
-que el mismo crate funcione idéntico en gioser-edit (cuyos comandos
+que el mismo crate funcione idéntico en nada (cuyos comandos
 son "Save File", "Open Terminal", "Format Document") y en un hipotético
 dominium-explorer (cuyos comandos serían "Insert Concept", "Run Pack",
 "Toggle Epoch View") sin acoplarse al dominio de la app.
