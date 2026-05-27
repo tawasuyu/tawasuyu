@@ -27,6 +27,8 @@ pub mod keypair_file;
 pub mod mst_store;
 pub mod node_store;
 pub mod repo;
+pub mod roots_store;
+pub mod timestamp_store;
 
 pub use attestation_store::SledAttestationStore;
 pub use error::StoreError;
@@ -34,3 +36,5 @@ pub use keypair_file::KeypairFileError;
 pub use mst_store::SledMstStore;
 pub use node_store::SledNodeStore;
 pub use repo::PersistentRepo;
+pub use roots_store::SledRootsStore;
+pub use timestamp_store::SledTimestampStore;

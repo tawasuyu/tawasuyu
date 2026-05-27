@@ -9,11 +9,10 @@
 //!   El AST semántico descartó whitespace y comentarios al ingerir
 //!   (son `extra` en tree-sitter), así que esto NO recupera el archivo
 //!   original byte-a-byte: es una forma *normalizada*, re-indentada por
-//!   estructura de llaves. Para lenguajes con bloques por llaves
-//!   (Rust/TS/JS/Go) sale legible; Python —cuya estructura vive en la
-//!   indentación, y la indentación es trivia— sale como una secuencia
-//!   de tokens en pocas líneas. Es esperado: el hash es de la
-//!   estructura, no del format.
+//!   estructura. Para lenguajes con bloques por llaves (Rust/TS/JS/Go)
+//!   indenta por `{`/`}`; para Python (estructura por indentación)
+//!   detecta el root `module` y recurre por `function_definition`,
+//!   `if_statement`, `for_statement`, etc. con indent explícito.
 //!
 //! - [`render_sexp`]: el árbol como S-expression indentada. Vista
 //!   exacta y sin pérdida de lo que el store guarda de verdad.
@@ -22,14 +21,136 @@ use minga_core::SemanticNode;
 
 /// Reconstruye el código fuente de un subárbol en forma canónica.
 ///
-/// Recolecta los tokens hoja en orden y los re-imprime con un
-/// pretty-printer mínimo, consciente de llaves: indenta tras `{`,
-/// desindenta antes de `}`, corta línea tras `;`. El resultado termina
-/// siempre con exactamente un `\n`.
+/// Si el root es un `module` (Python tree-sitter), delega al renderer
+/// indent-aware. Si no, usa el pretty-printer general por tokens con
+/// llaves.
 pub fn render_source(node: &SemanticNode) -> String {
+    if node.kind == "module" {
+        return render_python(node);
+    }
     let mut tokens = Vec::new();
     collect_leaves(node, &mut tokens);
     pretty_print(&tokens)
+}
+
+// ─── Render Python (indent-aware) ──────────────────────────────────
+
+/// Reconstruye un archivo Python. El root es `module`; sus children son
+/// statements de nivel superior. Para cada statement compuesto
+/// (función, clase, if, for, while, with, try) recurre por el `block`
+/// del cuerpo aumentando la indentación.
+fn render_python(module: &SemanticNode) -> String {
+    let mut out = String::new();
+    render_py_block_children(&module.children, 0, &mut out);
+    while out.ends_with([' ', '\t', '\n']) {
+        out.pop();
+    }
+    out.push('\n');
+    out
+}
+
+fn render_py_block(block: &SemanticNode, indent: usize, out: &mut String) {
+    render_py_block_children(&block.children, indent, out);
+}
+
+fn render_py_block_children(children: &[SemanticNode], indent: usize, out: &mut String) {
+    for child in children {
+        if is_py_compound(child) {
+            render_py_compound(child, indent, out);
+        } else if child.kind == ":" || child.kind == "comment" {
+            // tokens sueltos del header de un parent ya capturado; ignorar
+            // si llegan a este nivel (no debería pasar con root `module`).
+            continue;
+        } else {
+            let mut tokens = Vec::new();
+            collect_leaves(child, &mut tokens);
+            if tokens.is_empty() {
+                continue;
+            }
+            push_indent(out, indent);
+            join_py_tokens(&tokens, out);
+            out.push('\n');
+        }
+    }
+}
+
+fn is_py_compound(node: &SemanticNode) -> bool {
+    matches!(
+        node.kind.as_str(),
+        "function_definition"
+            | "async_function_definition"
+            | "class_definition"
+            | "decorated_definition"
+            | "if_statement"
+            | "for_statement"
+            | "async_for_statement"
+            | "while_statement"
+            | "with_statement"
+            | "async_with_statement"
+            | "try_statement"
+            | "match_statement"
+    )
+}
+
+/// Renderiza un statement compuesto. Itera los children: los tokens
+/// previos a un `block` forman el header (terminado en `:`); cada `block`
+/// se renderiza con indent+1; las cláusulas anidadas (`elif_clause`,
+/// `else_clause`, `except_clause`, `finally_clause`, `case_clause`) se
+/// recursan como compounds en el mismo nivel de indent.
+fn render_py_compound(node: &SemanticNode, indent: usize, out: &mut String) {
+    let mut header: Vec<String> = Vec::new();
+    let mut header_emitted = false;
+    for c in &node.children {
+        match c.kind.as_str() {
+            "block" => {
+                if !header_emitted {
+                    flush_py_header(&mut header, indent, out);
+                    header_emitted = true;
+                }
+                render_py_block(c, indent + 1, out);
+            }
+            "elif_clause" | "else_clause" | "except_clause" | "finally_clause"
+            | "case_clause" => {
+                if !header_emitted {
+                    flush_py_header(&mut header, indent, out);
+                    header_emitted = true;
+                }
+                render_py_compound(c, indent, out);
+            }
+            _ => collect_leaves(c, &mut header),
+        }
+    }
+    if !header_emitted {
+        // Compound sin cuerpo (raro en código real, pero posible).
+        flush_py_header(&mut header, indent, out);
+    }
+}
+
+fn flush_py_header(header: &mut Vec<String>, indent: usize, out: &mut String) {
+    if header.is_empty() {
+        return;
+    }
+    push_indent(out, indent);
+    join_py_tokens(header, out);
+    if !out.ends_with(':') {
+        out.push(':');
+    }
+    out.push('\n');
+    header.clear();
+}
+
+/// Junta tokens Python en una línea respetando las reglas de espacio
+/// (compartidas con el renderer general).
+fn join_py_tokens(tokens: &[String], out: &mut String) {
+    for (i, tok) in tokens.iter().enumerate() {
+        if i > 0 {
+            let prev = tokens[i - 1].as_str();
+            if needs_space(tok, prev) {
+                out.push(' ');
+            }
+        }
+        out.push_str(tok);
+    }
 }
 
 /// Recolecta el texto de los nodos hoja en orden de recorrido (DFS).
@@ -264,5 +385,43 @@ mod tests {
         let out = render_sexp(&leaf("string", "a\"b\nc"));
         assert!(out.contains("\\\""), "comilla escapada: {out:?}");
         assert!(out.contains("\\n"), "newline escapado: {out:?}");
+    }
+
+    /// El render Python real opera sobre el árbol que produce
+    /// tree-sitter al parsear. Estos tests usan ese path end-to-end —
+    /// más realistas que árboles a mano y testean la cadena completa.
+    #[test]
+    fn python_function_indents_body() {
+        use minga_core::parse::Dialect;
+        let src = "def add(a, b):\n    return a + b\n";
+        let node = Dialect::Python.parse(src).expect("parse");
+        let out = render_source(&node);
+        assert!(out.contains("def add"), "header presente: {out:?}");
+        assert!(out.contains(":\n"), "header cerrado con `:`: {out:?}");
+        assert!(out.contains("    return"), "cuerpo indentado: {out:?}");
+    }
+
+    #[test]
+    fn python_if_else_keeps_branches_at_same_level() {
+        use minga_core::parse::Dialect;
+        let src = "if x:\n    a = 1\nelse:\n    a = 2\n";
+        let node = Dialect::Python.parse(src).expect("parse");
+        let out = render_source(&node);
+        // ambos branches deben estar al nivel base (sin indent), y sus
+        // cuerpos un nivel adentro.
+        assert!(out.contains("\nelse:"), "else al nivel base: {out:?}");
+        assert!(out.contains("    a = 1"), "rama if indentada: {out:?}");
+        assert!(out.contains("    a = 2"), "rama else indentada: {out:?}");
+    }
+
+    #[test]
+    fn python_class_with_method() {
+        use minga_core::parse::Dialect;
+        let src = "class C:\n    def m(self):\n        return self.x\n";
+        let node = Dialect::Python.parse(src).expect("parse");
+        let out = render_source(&node);
+        assert!(out.contains("class C:"), "header de clase: {out:?}");
+        assert!(out.contains("    def m"), "método indentado 4: {out:?}");
+        assert!(out.contains("        return"), "cuerpo del método indentado 8: {out:?}");
     }
 }

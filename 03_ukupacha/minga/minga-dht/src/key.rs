@@ -40,20 +40,37 @@ impl RecordKind {
 /// Longitud fija de la clave en wire: 1 byte de kind + 32 de hash.
 pub const DHT_KEY_LEN: usize = 33;
 
-/// Clave de DHT namespaced. Se construye con un `id` legible; la
-/// representación en wire hashea el `id` con blake3.
+/// Clave de DHT namespaced. Dos formas de construcción:
+///
+/// - Con un `id` legible (`new`, `code`, `card`, `persona`) — el wire
+///   hashea el id con blake3. Útil cuando el consumidor publica
+///   identidades simbólicas (nombres de módulos, slugs de personas).
+/// - Con `for_hash` — el wire usa los 32 bytes del hash directamente.
+///   Útil cuando el id YA es un blake3 (como en minga, que indexa
+///   contenido por su α-hash) — evita una segunda pasada de blake3.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DhtKey {
     kind: RecordKind,
-    id: String,
+    /// Representación canónica de los 32 bytes que forman la "id" en wire.
+    /// Si se construyó por nombre simbólico, son `blake3(id_string)`.
+    /// Si se construyó por hash directo, son el hash tal cual.
+    body: [u8; 32],
+    /// `id` legible — para `Display`. `None` si se construyó por hash.
+    label: Option<String>,
 }
 
 impl DhtKey {
     pub fn new(kind: RecordKind, id: impl Into<String>) -> Self {
-        Self { kind, id: id.into() }
+        let id = id.into();
+        let body = *blake3::hash(id.as_bytes()).as_bytes();
+        Self {
+            kind,
+            body,
+            label: Some(id),
+        }
     }
 
-    /// Clave para un bloque de código.
+    /// Clave para un bloque de código (id legible).
     pub fn code(id: impl Into<String>) -> Self {
         Self::new(RecordKind::Code, id)
     }
@@ -68,19 +85,29 @@ impl DhtKey {
         Self::new(RecordKind::Persona, id)
     }
 
+    /// Clave a partir de un hash ya computado (32 bytes). El wire usa
+    /// esos bytes directamente, **sin re-hashear**.
+    pub fn for_hash(kind: RecordKind, hash: [u8; 32]) -> Self {
+        Self {
+            kind,
+            body: hash,
+            label: None,
+        }
+    }
+
     pub fn kind(&self) -> RecordKind {
         self.kind
     }
 
-    pub fn id(&self) -> &str {
-        &self.id
+    pub fn id(&self) -> Option<&str> {
+        self.label.as_deref()
     }
 
-    /// Representación en wire: `[kind_tag] ++ blake3(id)`, 33 bytes.
+    /// Representación en wire: `[kind_tag] ++ body`, 33 bytes.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(DHT_KEY_LEN);
         out.push(self.kind.tag());
-        out.extend_from_slice(blake3::hash(self.id.as_bytes()).as_bytes());
+        out.extend_from_slice(&self.body);
         out
     }
 }

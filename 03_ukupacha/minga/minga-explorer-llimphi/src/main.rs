@@ -66,6 +66,9 @@ struct Model {
     snapshot: Option<RepoSnapshot>,
     error: Option<String>,
     last_load_ms: u64,
+    /// Mantenemos vivo el watcher para que su thread no muera. No se
+    /// usa después de crearlo (consume su sí mismo cuando se dropea).
+    _wawa_watcher: Option<wawa_config::ConfigWatcher>,
 }
 
 #[derive(Clone)]
@@ -79,6 +82,8 @@ enum Msg {
         result: Result<RepoSnapshot, String>,
         elapsed_ms: u64,
     },
+    /// El bus de wawa-config cambió: re-aplicar theme/accent/idioma.
+    WawaChanged(wawa_config::WawaConfig),
 }
 
 struct Explorer;
@@ -107,12 +112,24 @@ impl App for Explorer {
         handle.dispatch(Msg::Tick);
         handle.spawn_periodic(REFRESH_INTERVAL, || Msg::Tick);
 
+        // Cargar config wawa una vez y aplicarla; suscribirse a cambios.
+        let initial_cfg = wawa_config::WawaConfig::load();
+        let theme = theme_from_wawa(&initial_cfg);
+        apply_lang_from_wawa(&initial_cfg);
+
+        let handle_clone = handle.clone();
+        let watcher = wawa_config::ConfigWatcher::spawn(move |cfg| {
+            handle_clone.dispatch(Msg::WawaChanged(cfg));
+        })
+        .ok();
+
         Model {
-            theme: Theme::dark(),
+            theme,
             repo_path,
             snapshot: None,
             error: None,
             last_load_ms: 0,
+            _wawa_watcher: watcher,
         }
     }
 
@@ -145,6 +162,10 @@ impl App for Explorer {
                     }
                 }
                 m.last_load_ms = elapsed_ms;
+            }
+            Msg::WawaChanged(cfg) => {
+                m.theme = theme_from_wawa(&cfg);
+                apply_lang_from_wawa(&cfg);
             }
         }
         m
@@ -342,6 +363,28 @@ fn load_snapshot(repo_path: &std::path::Path) -> Result<RepoSnapshot, String> {
 /// dentro de un repo single-machine).
 fn short_hash(s: &str) -> String {
     s.chars().take(12).collect()
+}
+
+/// Construye un `Theme` a partir de la config wawa: matchea el variant
+/// canónico contra `Theme::by_name`, aplica el accent si está definido.
+/// Cualquier campo no reconocido cae al default dark sin romper.
+fn theme_from_wawa(cfg: &wawa_config::WawaConfig) -> Theme {
+    let mut t = wawa_config::canonical_theme_name(&cfg.theme_variant)
+        .and_then(Theme::by_name)
+        .unwrap_or_else(Theme::dark);
+    if let Some([r, g, b]) = wawa_config::accent_rgb(&cfg.accent) {
+        let c = Color::from_rgba8(r, g, b, 0xff);
+        t.accent = c;
+        t.border_focus = c;
+    }
+    t
+}
+
+/// Aplica el `lang` de wawa a `rimay_localize`. Errores (locale
+/// desconocido) se ignoran — la traducción cae a la cadena default
+/// silenciosamente, no vale tumbar la UI por eso.
+fn apply_lang_from_wawa(cfg: &wawa_config::WawaConfig) {
+    let _ = rimay_localize::set_locale(&cfg.lang);
 }
 
 fn main() {

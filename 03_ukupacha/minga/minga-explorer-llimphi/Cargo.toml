@@ -15,6 +15,7 @@ llimphi-widget-app-header = { workspace = true }
 llimphi-widget-banner = { workspace = true }
 llimphi-widget-stat-card = { workspace = true }
 rimay-localize = { path = "../../../shared/rimay-localize" }
+wawa-config = { path = "../../../shared/wawa-config" }
 
 [[bin]]
 name = "minga-explorer-llimphi"

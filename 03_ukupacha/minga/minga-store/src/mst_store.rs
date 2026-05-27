@@ -31,6 +31,13 @@ impl SledMstStore {
         Ok(prev.is_none())
     }
 
+    /// Elimina una clave del MST. `Ok(true)` si existía, `Ok(false)`
+    /// si no. Los nodos del grafo CAS NO se eliminan: pueden seguir
+    /// referenciados desde otras raíces.
+    pub fn remove(&self, h: &ContentHash) -> Result<bool, StoreError> {
+        Ok(self.tree.remove(h.0)?.is_some())
+    }
+
     pub fn contains(&self, h: &ContentHash) -> Result<bool, StoreError> {
         Ok(self.tree.contains_key(h.0)?)
     }

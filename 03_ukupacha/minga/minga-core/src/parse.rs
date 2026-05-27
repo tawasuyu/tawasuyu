@@ -59,6 +59,31 @@ impl Dialect {
         }
     }
 
+    /// Byte estable para persistir/transmitir el dialecto. Numérico para
+    /// no depender del orden de la enum si se agregan lenguajes.
+    pub fn as_byte(self) -> u8 {
+        match self {
+            Dialect::Rust => 1,
+            Dialect::Python => 2,
+            Dialect::TypeScript => 3,
+            Dialect::JavaScript => 4,
+            Dialect::Go => 5,
+        }
+    }
+
+    /// Inversa de [`Dialect::as_byte`]. `None` si el byte no corresponde
+    /// a un dialecto conocido por esta versión.
+    pub fn from_byte(b: u8) -> Option<Self> {
+        Some(match b {
+            1 => Dialect::Rust,
+            2 => Dialect::Python,
+            3 => Dialect::TypeScript,
+            4 => Dialect::JavaScript,
+            5 => Dialect::Go,
+            _ => return None,
+        })
+    }
+
     /// Parsea `source` con la gramática de este dialecto.
     pub fn parse(self, source: &str) -> Result<SemanticNode, ParseError> {
         match self {
@@ -88,6 +113,62 @@ pub fn detect_by_extension(ext: &str) -> Option<Dialect> {
         "js" | "mjs" | "cjs" => Some(Dialect::JavaScript),
         "go" => Some(Dialect::Go),
         _ => None,
+    }
+}
+
+/// Detecta el dialecto leyendo la primera línea como shebang. Reconoce
+/// las formas habituales:
+/// - `#!/usr/bin/env python3` → Python
+/// - `#!/usr/bin/python3.11` → Python
+/// - `#!/usr/bin/env node` / `deno` → JavaScript
+/// - `#!/usr/bin/env -S deno run --ext=ts` / `tsx` → TypeScript
+/// - `#!/usr/bin/env bash` / `sh` → `None` (no soportado)
+///
+/// Sólo mira la **primera línea**: si no comienza por `#!`, devuelve
+/// `None` sin tocar el resto del buffer.
+pub fn detect_by_shebang(source: &str) -> Option<Dialect> {
+    let first = source.lines().next()?;
+    let rest = first.strip_prefix("#!")?.trim();
+    let interpreter = last_token(rest);
+    let lower = interpreter.to_ascii_lowercase();
+    let trimmed = lower.trim_start_matches(|c: char| c == '/' || c.is_ascii_alphanumeric() == false);
+    let last_segment = lower.rsplit('/').next().unwrap_or(&lower);
+    // Coincidencia laxa por sufijo: cubre versiones como `python3.11`.
+    let cand = if last_segment.starts_with("python") {
+        Some(Dialect::Python)
+    } else if last_segment == "node" || last_segment == "deno" || last_segment == "bun" {
+        // Por defecto JS; el ext flag se evalúa abajo.
+        Some(Dialect::JavaScript)
+    } else if last_segment == "tsx" || last_segment == "ts-node" {
+        Some(Dialect::TypeScript)
+    } else if last_segment.ends_with("rustc") {
+        Some(Dialect::Rust)
+    } else if last_segment == "go" {
+        Some(Dialect::Go)
+    } else {
+        None
+    };
+    // Override por `--ext=ts` en la cadena (env -S deno run --ext=ts).
+    if rest.contains("--ext=ts") || rest.contains("--ext ts") {
+        return Some(Dialect::TypeScript);
+    }
+    let _ = trimmed; // suppress unused
+    cand
+}
+
+/// Devuelve el último "token" (separado por whitespace) de la cadena.
+/// Para shebangs `#!/usr/bin/env python3 -u` queremos el `python3`,
+/// pero también `#!/usr/bin/python3.11` (sin `env`) — el truco es:
+/// si hay `env`, tomar lo siguiente; si no, el path completo y luego
+/// el último segmento. Esta función devuelve el penúltimo token cuando
+/// el primero parece un path absoluto a `env`.
+fn last_token(s: &str) -> &str {
+    let mut tokens = s.split_whitespace().filter(|t| !t.starts_with('-'));
+    let first = tokens.next().unwrap_or("");
+    if first.ends_with("/env") || first == "env" {
+        tokens.next().unwrap_or(first)
+    } else {
+        first
     }
 }
 
@@ -182,6 +263,49 @@ mod tests {
         assert_eq!(detect_by_extension("go"), Some(Dialect::Go));
         assert_eq!(detect_by_extension("unknown"), None);
         assert_eq!(detect_by_extension(""), None);
+    }
+
+    #[test]
+    fn detect_shebang_python_env() {
+        assert_eq!(
+            detect_by_shebang("#!/usr/bin/env python3\nprint(1)\n"),
+            Some(Dialect::Python)
+        );
+    }
+
+    #[test]
+    fn detect_shebang_python_direct() {
+        assert_eq!(
+            detect_by_shebang("#!/usr/bin/python3.11\n"),
+            Some(Dialect::Python)
+        );
+    }
+
+    #[test]
+    fn detect_shebang_node() {
+        assert_eq!(
+            detect_by_shebang("#!/usr/bin/env node\nconsole.log(1)\n"),
+            Some(Dialect::JavaScript)
+        );
+    }
+
+    #[test]
+    fn detect_shebang_deno_with_ext_ts() {
+        assert_eq!(
+            detect_by_shebang("#!/usr/bin/env -S deno run --ext=ts\n"),
+            Some(Dialect::TypeScript)
+        );
+    }
+
+    #[test]
+    fn detect_shebang_no_match_for_bash() {
+        assert_eq!(detect_by_shebang("#!/bin/bash\necho hola\n"), None);
+    }
+
+    #[test]
+    fn detect_shebang_requires_hashbang() {
+        // No es shebang — empieza con `//` (comentario JS), no debe matchear.
+        assert_eq!(detect_by_shebang("// nope\n"), None);
     }
 
     #[test]

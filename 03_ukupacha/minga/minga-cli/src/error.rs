@@ -46,4 +46,13 @@ pub enum CliError {
          a ningún dialecto conocido (rs, py, pyi, ts, js, mjs, cjs, go)"
     )]
     UnsupportedLanguage { path: PathBuf, extension: String },
+
+    #[error("hash hex inválido: '{0}' (esperado 64 caracteres hex)")]
+    InvalidHash(String),
+
+    #[error("hash no encontrado en el repo: {0}")]
+    HashNotFound(minga_core::ContentHash),
+
+    #[error("ningún peer del DHT anuncia ser proveedor de {0}")]
+    NoProvidersForHash(minga_core::ContentHash),
 }

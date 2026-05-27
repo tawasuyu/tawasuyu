@@ -1,0 +1,18 @@
+[package]
+name = "shuma-module-minga"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "shuma-module-minga — tab del shell que muestra el estado del repo Minga del cwd: counts, raíces recientes con su α-hash y dialect, y un monitor de pasos pendientes (atestaciones no firmadas locales)."
+
+[dependencies]
+shuma-module = { path = "../shuma-module" }
+minga-core = { path = "../../../../03_ukupacha/minga/minga-core" }
+minga-store = { path = "../../../../03_ukupacha/minga/minga-store" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

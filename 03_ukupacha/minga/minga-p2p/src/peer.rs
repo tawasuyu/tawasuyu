@@ -24,7 +24,11 @@ use libp2p::{Multiaddr, PeerId, Stream};
 use tokio::sync::Mutex;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 
-use minga_core::{AttestationStore, ContentHash, Keypair, MemStore, Mst, NodeStore, SemanticNode};
+use minga_core::{
+    alpha::hash_alpha_with, parse::Dialect, AttestationStore, ContentHash, Keypair, MemStore, Mst,
+    NodeStore, SemanticNode,
+};
+use minga_dht::DhtKey;
 use minga_store::{PersistentRepo, StoreError};
 
 use crate::async_driver::{run_sync_async, AsyncSyncError};
@@ -145,16 +149,19 @@ impl MingaPeer {
     }
 
     /// Anuncia en el DHT que este peer provee el contenido `hash`.
-    /// Otros peers podrán descubrirlo vía `find_providers(hash)`.
+    /// El record viaja con un byte de namespace (`RecordKind::Code`) que
+    /// separa el keyspace de minga del de cards/personas sobre la misma
+    /// malla Kademlia compartida (`brahman-net`).
     pub fn announce_provider(&self, hash: ContentHash) {
-        self.node.start_providing(&hash.0);
+        let key = DhtKey::for_hash(minga_dht::RecordKind::Code, hash.0);
+        self.node.start_providing(&key.to_bytes());
     }
 
     /// Consulta el DHT por peers que han anunciado proveer este
-    /// contenido. La unión de los `PeerId`s permite a quien busque
-    /// `hash` decidir a quién dial directamente para sincronizar.
+    /// contenido. La clave usa el mismo namespace que [`announce_provider`].
     pub async fn find_providers(&self, hash: ContentHash) -> Vec<PeerId> {
-        self.node.find_providers(&hash.0).await
+        let key = DhtKey::for_hash(minga_dht::RecordKind::Code, hash.0);
+        self.node.find_providers(&key.to_bytes()).await
     }
 
     /// Lanza el bucle de aceptación pasiva. Devuelve un `JoinHandle`
@@ -227,12 +234,39 @@ impl MingaPeer {
         }
         drop(s);
 
-        // Anunciamos como proveedores en el DHT. Best-effort: si no
-        // hay peers cercanos para replicar, el record vive local hasta
-        // que llegue una conexión.
-        self.node.start_providing(&h.0);
+        // Anunciamos como proveedores en el DHT con la clave typed
+        // (kind = Code) — comparte malla con cards/personas sin colisión.
+        let key = DhtKey::for_hash(minga_dht::RecordKind::Code, h.0);
+        self.node.start_providing(&key.to_bytes());
 
         h
+    }
+
+    /// Variante de [`ingest`] que conoce el `dialect` del archivo y por
+    /// tanto registra la raíz por su **α-hash** (estable bajo
+    /// renombrado de variables ligadas), no por su hash estructural.
+    /// Devuelve `(alpha_hash, struct_hash)`. Si el peer es persistente,
+    /// también actualiza el tree `roots` y los timestamps.
+    pub async fn ingest_with_dialect(
+        &self,
+        node: &SemanticNode,
+        dialect: Dialect,
+    ) -> (ContentHash, ContentHash) {
+        let alpha = hash_alpha_with(dialect, node);
+        let mut s = self.state.lock().await;
+        let struct_hash = s.store.put(node);
+        s.mst.insert(alpha);
+        if let Some(repo) = &s.persistent {
+            let _ = repo.nodes.put(node);
+            let _ = repo.mst.insert(alpha);
+            let _ = repo.roots.put(alpha, struct_hash, dialect);
+        }
+        drop(s);
+
+        let key = DhtKey::for_hash(minga_dht::RecordKind::Code, alpha.0);
+        self.node.start_providing(&key.to_bytes());
+
+        (alpha, struct_hash)
     }
 
     /// Inserta una atestación en el peer. Si el peer es persistente,

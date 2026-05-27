@@ -230,6 +230,7 @@ members = [
     "02_ruway/shuma/sandbox/shuma-module-commandbar",
     "02_ruway/shuma/sandbox/shuma-module-launcher",
     "02_ruway/shuma/sandbox/shuma-module-matilda",
+    "02_ruway/shuma/sandbox/shuma-module-minga",
     "02_ruway/shuma/sandbox/shuma-module-shell",
     "02_ruway/shuma/sandbox/shuma-protocol",
     "02_ruway/shuma/sandbox/shuma-remote-exec",

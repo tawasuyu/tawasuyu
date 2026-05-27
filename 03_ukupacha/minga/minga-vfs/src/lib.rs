@@ -38,6 +38,7 @@ pub mod render;
 pub mod source;
 
 pub use fs::MingaFs;
+pub use render::{render_sexp, render_source};
 pub use source::{reconstruct, MemSource, NodeSource, RepoSource};
 
 use std::io;

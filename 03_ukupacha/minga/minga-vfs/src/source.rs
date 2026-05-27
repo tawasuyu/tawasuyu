@@ -62,10 +62,20 @@ impl NodeSource for RepoSource {
     fn roots(&self) -> Vec<ContentHash> {
         // Las claves del MST corruptas (si las hubiera) se descartan en
         // silencio: un par de entradas ilegibles no deben tirar el `ls`.
+        // Esto devuelve **α-hashes**: la identidad estable de los
+        // archivos ingeridos, no su hash estructural.
         self.repo.mst.iter().filter_map(Result::ok).collect()
     }
 
     fn get(&self, hash: &ContentHash) -> Option<StoredNode> {
+        // Primero intentamos resolver `hash` como α-hash de una raíz:
+        // si lo es, redirigimos al struct-hash que apunta al `StoredNode`
+        // real dentro del grafo CAS. Si no es raíz, asumimos que es un
+        // hash estructural y lo buscamos directo (esto cubre la
+        // navegación `cas/<hash>` de cualquier nodo interno).
+        if let Ok(Some((struct_hash, _dialect))) = self.repo.roots.get(hash) {
+            return self.repo.nodes.get(&struct_hash).ok().flatten();
+        }
         self.repo.nodes.get(hash).ok().flatten()
     }
 }

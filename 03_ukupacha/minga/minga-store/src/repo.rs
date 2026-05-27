@@ -8,7 +8,7 @@ use sled::Db;
 
 use crate::{
     attestation_store::SledAttestationStore, error::StoreError, mst_store::SledMstStore,
-    node_store::SledNodeStore,
+    node_store::SledNodeStore, roots_store::SledRootsStore, timestamp_store::SledTimestampStore,
 };
 
 pub struct PersistentRepo {
@@ -16,6 +16,12 @@ pub struct PersistentRepo {
     pub nodes: SledNodeStore,
     pub attestations: SledAttestationStore,
     pub mst: SledMstStore,
+    /// α-hash → (struct-hash, dialect). Indirección de los archivos
+    /// ingeridos hacia el grafo CAS interno.
+    pub roots: SledRootsStore,
+    /// Timestamps locales de cuándo se observó cada atestación. No se
+    /// transmite por wire — es metadata propia del peer.
+    pub timestamps: SledTimestampStore,
 }
 
 impl PersistentRepo {
@@ -24,16 +30,20 @@ impl PersistentRepo {
         let nodes = SledNodeStore::open_tree(&db, "nodes")?;
         let attestations = SledAttestationStore::open_tree(&db, "attestations")?;
         let mst = SledMstStore::open_tree(&db, "mst")?;
+        let roots = SledRootsStore::open_tree(&db, "roots")?;
+        let timestamps = SledTimestampStore::open_tree(&db, "attestation_timestamps")?;
         Ok(Self {
             db,
             nodes,
             attestations,
             mst,
+            roots,
+            timestamps,
         })
     }
 
-    /// Flushea los tres trees a disco. Llamar en puntos de
-    /// checkpoint o antes de cerrar para garantizar durabilidad.
+    /// Flushea todos los trees a disco. Llamar en puntos de checkpoint
+    /// o antes de cerrar para garantizar durabilidad.
     pub fn flush(&self) -> Result<(), StoreError> {
         self.db.flush()?;
         Ok(())

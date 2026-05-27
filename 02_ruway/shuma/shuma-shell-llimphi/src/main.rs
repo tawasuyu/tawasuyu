@@ -85,6 +85,7 @@ enum Kind {
     CommandBar,
     Shell,
     Matilda,
+    Minga,
 }
 
 impl Kind {
@@ -96,6 +97,7 @@ impl Kind {
             Kind::CommandBar => shuma_module_commandbar::ID,
             Kind::Shell => shuma_module_shell::ID,
             Kind::Matilda => shuma_module_matilda::ID,
+            Kind::Minga => shuma_module_minga::ID,
         }
     }
 }
@@ -109,6 +111,7 @@ enum ModuleState {
     // `State` de matilda lleva el inventory entero (varios cientos
     // de bytes); boxearlo mantiene el enum ModuleState compacto.
     Matilda(Box<shuma_module_matilda::State>),
+    Minga(shuma_module_minga::State),
 }
 
 /// Una instancia activa de un módulo. `kind` + `state` deben coincidir
@@ -166,6 +169,14 @@ impl Instance {
             state: ModuleState::Matilda(Box::new(state)),
         }
     }
+
+    fn minga(label: String, source: Source) -> Self {
+        Self {
+            kind: Kind::Minga,
+            label,
+            state: ModuleState::Minga(shuma_module_minga::State::new(source)),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -175,6 +186,7 @@ enum ModuleMsg {
     #[allow(dead_code)]
     Shell(shuma_module_shell::Msg),
     Matilda(shuma_module_matilda::Msg),
+    Minga(shuma_module_minga::Msg),
 }
 
 // ─── Slot del chasis al que va un Msg de módulo ────────────────────
@@ -462,6 +474,7 @@ fn resolve_instance(
         shuma_module_matilda::ID => Some(Instance::matilda_with_inventory(
             label, source, inventory,
         )),
+        shuma_module_minga::ID => Some(Instance::minga(label, source)),
         unknown => {
             eprintln!("shuma: módulo desconocido «{unknown}» — se ignora");
             None
@@ -513,6 +526,7 @@ fn collect_contributions(model: &Model) -> Vec<(Slot, ModuleContributions)> {
             ModuleState::CommandBar(s) => shuma_module_commandbar::contributions(s),
             ModuleState::Shell(s) => shuma_module_shell::contributions(s),
             ModuleState::Matilda(s) => shuma_module_matilda::contributions(s),
+            ModuleState::Minga(s) => shuma_module_minga::contributions(s),
         };
         out.push((slot, c));
     };
@@ -702,6 +716,27 @@ fn handle_shortcut(
                     return m;
                 }
             }
+            // Minga refresh: el módulo es "declarativo" en update (no
+            // toca sled) — el load real lo hacemos acá en un thread y
+            // reenviamos el snapshot como SnapshotReady.
+            if action_id == "minga.refresh" {
+                if let Some(repo_path) = minga_repo_path(&slot, &m) {
+                    let slot_back = slot.clone();
+                    handle.spawn(move || {
+                        let result = shuma_module_minga::load_snapshot(&repo_path);
+                        Msg::Module(
+                            slot_back,
+                            ModuleMsg::Minga(shuma_module_minga::Msg::SnapshotReady(result)),
+                        )
+                    });
+                    // Y también marcar el state como "refreshing".
+                    return apply_module_msg(
+                        m,
+                        slot,
+                        ModuleMsg::Minga(shuma_module_minga::Msg::Refresh),
+                    );
+                }
+            }
             let msg = dispatch_to_module(&slot, &m, action_id);
             if let Some(mmsg) = msg {
                 m = apply_module_msg(m, slot, mmsg);
@@ -709,6 +744,20 @@ fn handle_shortcut(
         }
     }
     m
+}
+
+/// Path del repo Minga de un slot que aloje el módulo minga.
+fn minga_repo_path(slot: &Slot, model: &Model) -> Option<std::path::PathBuf> {
+    let inst = match slot {
+        Slot::TopBar => model.topbar.as_ref()?,
+        Slot::BottomBar => model.bottombar.as_ref()?,
+        Slot::Main => model.main.as_ref()?,
+        Slot::DrawerTab(i) => model.drawer_tabs.get(*i)?,
+    };
+    match &inst.state {
+        ModuleState::Minga(s) => Some(s.repo_path.clone()),
+        _ => None,
+    }
 }
 
 /// Si la instancia focada (drawer tab activo, o Main) es un shell,
@@ -792,6 +841,7 @@ fn dispatch_to_module(slot: &Slot, model: &Model, action_id: &str) -> Option<Mod
         }
         Kind::Shell => shuma_module_shell::dispatch(action_id).map(ModuleMsg::Shell),
         Kind::Matilda => shuma_module_matilda::dispatch(action_id).map(ModuleMsg::Matilda),
+        Kind::Minga => shuma_module_minga::dispatch(action_id).map(ModuleMsg::Minga),
     }
 }
 
@@ -808,6 +858,9 @@ fn route_to_instance(inst: &mut Instance, msg: ModuleMsg) {
         }
         (ModuleState::Matilda(s), ModuleMsg::Matilda(m)) => {
             **s = shuma_module_matilda::update((**s).clone(), m);
+        }
+        (ModuleState::Minga(s), ModuleMsg::Minga(m)) => {
+            *s = shuma_module_minga::update(s.clone(), m);
         }
         // Combinación inconsistente (state ≠ msg kind): no hace nada.
         // El registry no debería emitirlos; si pasa es un bug del chasis.
@@ -893,6 +946,11 @@ fn render_main_layer(model: &Model, theme: &Theme) -> View<Msg> {
             (Kind::Matilda, ModuleState::Matilda(state)) => {
                 shuma_module_matilda::view::<Msg>(state.as_ref(), theme, |m| {
                     Msg::Module(Slot::Main, ModuleMsg::Matilda(m))
+                })
+            }
+            (Kind::Minga, ModuleState::Minga(state)) => {
+                shuma_module_minga::view::<Msg>(state, theme, |m| {
+                    Msg::Module(Slot::Main, ModuleMsg::Minga(m))
                 })
             }
             _ => placeholder(theme, &rimay_localize::t("shuma-empty-main-incompat")),
@@ -1008,6 +1066,7 @@ fn drawer_toolbar(model: &Model, theme: &Theme) -> View<Msg> {
         ModuleState::CommandBar(s) => shuma_module_commandbar::contributions(s),
         ModuleState::Shell(s) => shuma_module_shell::contributions(s),
         ModuleState::Matilda(s) => shuma_module_matilda::contributions(s),
+        ModuleState::Minga(s) => shuma_module_minga::contributions(s),
     };
 
     if contribs.shortcuts.is_empty() {
@@ -1106,6 +1165,11 @@ fn drawer_tab_content(model: &Model, theme: &Theme) -> View<Msg> {
         (Kind::Matilda, ModuleState::Matilda(state)) => {
             shuma_module_matilda::view::<Msg>(state.as_ref(), theme, move |m| {
                 Msg::Module(Slot::DrawerTab(idx), ModuleMsg::Matilda(m))
+            })
+        }
+        (Kind::Minga, ModuleState::Minga(state)) => {
+            shuma_module_minga::view::<Msg>(state, theme, move |m| {
+                Msg::Module(Slot::DrawerTab(idx), ModuleMsg::Minga(m))
             })
         }
         // Otros Kinds (Launcher/CommandBar) no tienen sentido como tab;

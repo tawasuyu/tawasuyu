@@ -1,5 +1,400 @@
-// shuma-module-minga — pendiente de implementacion. El Cargo.toml fue
-// inscrito al workspace antes que el cuerpo del crate; este lib.rs vacio
-// hace que `cargo check --workspace` siga pasando hasta que la sesion
-// que lo creo aporte el contenido real (tab del shell con monitor del
-// repo Minga + recent roots + dialecto).
+//! `shuma-module-minga` — visualizador del repo Minga del cwd como tab
+//! del shell.
+//!
+//! Muestra:
+//! - Counts del repo: raíces (α-hashes), nodos del grafo CAS,
+//!   atestaciones, claves del MST.
+//! - Lista de las últimas raíces ingeridas con su α-hash y dialect.
+//!
+//! Diseño del tab:
+//!
+//! ```text
+//!  Minga · local · /home/u/proyecto/.minga
+//!  raíces: 14 · nodos: 1322 · atestaciones: 14 · mst: 14
+//!  ────────────────────────────────────────────────────
+//!  a1b2c3d4e5f6789a  rust
+//!  f5e6a7b80c1d2e3f  python
+//!  …
+//! ```
+//!
+//! El módulo abre el `PersistentRepo` en read-only cada refresh. Si la
+//! apertura falla (no hay `.minga` en el cwd, sled corrupto, etc.) el
+//! tab muestra un mensaje informativo en lugar de los counts.
+//!
+//! Contribuciones:
+//! - Monitor "minga · raíces": curva con la cantidad de raíces del MST.
+//! - Shortcut "Refresh": fuerza un re-load del snapshot.
+
+#![forbid(unsafe_code)]
+
+use llimphi_ui::llimphi_layout::taffy::{
+    prelude::{length, percent, AlignItems, Dimension, FlexDirection, Size, Style},
+    Rect,
+};
+use llimphi_ui::llimphi_text::Alignment;
+use llimphi_ui::View;
+use llimphi_theme::Theme;
+use minga_core::ContentHash;
+use minga_store::PersistentRepo;
+use shuma_module::{ModuleContributions, MonitorSpec, Rgb, Sample, ShortcutSpec, Source};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+/// `id` canónico — el chasis lo usa para enrutar el shumarc.
+pub const ID: &str = "minga";
+
+/// Subdirectorio del repo sled dentro del directorio Minga
+/// (típicamente `<cwd>/.minga/repo`).
+const REPO_SUBDIR: &str = "repo";
+
+/// Cuántas raíces recientes mostrar en el tab — paridad con el
+/// `RECENT_LIMIT` del explorer standalone.
+pub const RECENT_LIMIT: usize = 10;
+
+/// Snapshot del repo: counts + muestra de raíces. Inmutable una vez
+/// construido por [`load_snapshot`].
+#[derive(Debug, Clone, Default)]
+pub struct RepoSnapshot {
+    pub roots: usize,
+    pub nodes: usize,
+    pub attestations: usize,
+    pub mst_keys: usize,
+    /// Raíces recientes (orden lexicográfico de sled — no temporal).
+    pub recent: Vec<RootRow>,
+}
+
+/// Una fila del listado de raíces, ya formateada para la vista.
+#[derive(Debug, Clone)]
+pub struct RootRow {
+    pub alpha: ContentHash,
+    pub dialect: Option<&'static str>,
+}
+
+#[derive(Debug, Clone)]
+pub struct State {
+    pub source: Source,
+    /// Path del directorio Minga (típicamente `<cwd>/.minga`). El
+    /// módulo lee `<repo_path>/repo/` para abrir sled.
+    pub repo_path: PathBuf,
+    pub snapshot: Option<RepoSnapshot>,
+    pub error: Option<String>,
+    /// Counter de raíces compartido con el `sampler` del monitor.
+    /// Mutex porque el sampler corre en un hilo del host.
+    roots_count: Arc<Mutex<usize>>,
+}
+
+impl State {
+    /// Estado por defecto: source local, repo_path = `<cwd>/.minga`.
+    pub fn new(source: Source) -> Self {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        Self::with_repo_path(source, cwd.join(".minga"))
+    }
+
+    /// Estado apuntando a un `repo_path` específico — para tests o
+    /// cuando el shumarc lo override en `options`.
+    pub fn with_repo_path(source: Source, repo_path: PathBuf) -> Self {
+        Self {
+            source,
+            repo_path,
+            snapshot: None,
+            error: None,
+            roots_count: Arc::new(Mutex::new(0)),
+        }
+    }
+
+    /// Cuenta de raíces actual (alimenta el monitor de `contributions`).
+    pub fn roots_count(&self) -> usize {
+        *self.roots_count.lock().unwrap()
+    }
+}
+
+/// Mensajes del módulo. El host enruta `Refresh` desde el shortcut
+/// `minga.refresh`; `SnapshotReady` viene del worker que abrió sled.
+#[derive(Debug, Clone)]
+pub enum Msg {
+    /// Pide releer el repo. El chasis debe llamar a [`load_snapshot`]
+    /// en un thread aparte y reenviar el resultado como `SnapshotReady`.
+    Refresh,
+    /// Resultado de un refresh.
+    SnapshotReady(Result<RepoSnapshot, String>),
+}
+
+/// Mapea `action_id` de `ShortcutAction::ModuleAction` al `Msg`.
+pub fn dispatch(action_id: &str) -> Option<Msg> {
+    match action_id {
+        "minga.refresh" => Some(Msg::Refresh),
+        _ => None,
+    }
+}
+
+/// Aplica un `Msg` al estado. `Refresh` es **declarativo**: marca el
+/// estado pero NO hace IO. El chasis lanza el load fuera de `update`.
+pub fn update(state: State, msg: Msg) -> State {
+    let mut s = state;
+    match msg {
+        Msg::Refresh => {
+            s.error = None;
+        }
+        Msg::SnapshotReady(Ok(snap)) => {
+            *s.roots_count.lock().unwrap() = snap.roots;
+            s.snapshot = Some(snap);
+            s.error = None;
+        }
+        Msg::SnapshotReady(Err(e)) => {
+            s.error = Some(e);
+        }
+    }
+    s
+}
+
+/// Lee el repo Minga en `repo_path/<REPO_SUBDIR>` y devuelve counts +
+/// últimas raíces. Bloqueante — pensado para correr en un thread del
+/// host. Si el directorio no existe, devuelve `Err` con mensaje
+/// explicativo (no panic).
+pub fn load_snapshot(repo_path: &std::path::Path) -> Result<RepoSnapshot, String> {
+    let inner = repo_path.join(REPO_SUBDIR);
+    if !inner.exists() {
+        return Err(format!(
+            "no hay repo Minga en {} (esperaba {})",
+            repo_path.display(),
+            inner.display()
+        ));
+    }
+    let repo = PersistentRepo::open(&inner).map_err(|e| format!("open sled: {e}"))?;
+    let nodes = repo.nodes.len();
+    let attestations = repo.attestations.len();
+    let mst_keys = repo.mst.len();
+    let roots = repo.roots.len();
+
+    let recent: Vec<RootRow> = repo
+        .roots
+        .iter()
+        .filter_map(|r| r.ok())
+        .take(RECENT_LIMIT)
+        .map(|(alpha, _struct, dialect)| RootRow {
+            alpha,
+            dialect: dialect.map(|d| d.name()),
+        })
+        .collect();
+
+    Ok(RepoSnapshot {
+        roots,
+        nodes,
+        attestations,
+        mst_keys,
+        recent,
+    })
+}
+
+// ─── Vista ──────────────────────────────────────────────────────────
+
+/// Renderiza el tab del módulo. `_lift` está para uniformidad con el
+/// resto de módulos (mapean `Msg → ShellMsg`); este módulo no emite
+/// mensajes desde la vista todavía.
+pub fn view<ShellMsg: Clone + 'static>(
+    state: &State,
+    theme: &Theme,
+    _lift: impl Fn(Msg) -> ShellMsg + Clone + 'static,
+) -> View<ShellMsg> {
+    let mut children: Vec<View<ShellMsg>> = Vec::new();
+
+    children.push(header_row(state, theme));
+
+    if let Some(e) = &state.error {
+        children.push(text_row(e, theme.fg_muted, theme));
+    } else if let Some(snap) = &state.snapshot {
+        children.push(counts_row(snap, theme));
+        children.push(separator(theme));
+        for row in &snap.recent {
+            children.push(root_row(row, theme));
+        }
+        if snap.recent.is_empty() {
+            children.push(text_row(
+                "(sin raíces — corré `minga ingest`)",
+                theme.fg_muted,
+                theme,
+            ));
+        }
+    } else {
+        children.push(text_row("cargando…", theme.fg_muted, theme));
+    }
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        padding: Rect {
+            left: length(12.0_f32),
+            right: length(12.0_f32),
+            top: length(10.0_f32),
+            bottom: length(12.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(4.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children(children)
+}
+
+fn header_row<M: Clone + 'static>(state: &State, theme: &Theme) -> View<M> {
+    let title = format!(
+        "Minga · {} · {}",
+        state.source.label(),
+        state.repo_path.display()
+    );
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(20.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(title, 12.0, theme.fg_text, Alignment::Start)
+}
+
+fn counts_row<M: Clone + 'static>(snap: &RepoSnapshot, theme: &Theme) -> View<M> {
+    let s = format!(
+        "raíces: {} · nodos: {} · atestaciones: {} · mst: {}",
+        snap.roots, snap.nodes, snap.attestations, snap.mst_keys
+    );
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(18.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(s, 11.0, theme.fg_text, Alignment::Start)
+}
+
+fn root_row<M: Clone + 'static>(row: &RootRow, theme: &Theme) -> View<M> {
+    let alpha_hex = row.alpha.to_string();
+    let short: String = alpha_hex.chars().take(16).collect();
+    let dialect = row.dialect.unwrap_or("?");
+    let line = format!("{short}  {dialect}");
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(16.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(line, 11.0, theme.fg_muted, Alignment::Start)
+}
+
+fn text_row<M: Clone + 'static>(
+    msg: &str,
+    color: llimphi_ui::llimphi_raster::peniko::Color,
+    _theme: &Theme,
+) -> View<M> {
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: Dimension::auto(),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(msg.to_string(), 11.0, color, Alignment::Start)
+}
+
+fn separator<M: Clone + 'static>(theme: &Theme) -> View<M> {
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.border)
+}
+
+// ─── contributions ──────────────────────────────────────────────────
+
+pub fn contributions(state: &State) -> ModuleContributions {
+    let counter = state.roots_count.clone();
+    let monitor = MonitorSpec {
+        id: "minga.roots",
+        label: "minga · raíces".to_string(),
+        accent: Rgb::new(0xB4, 0x8E, 0xAD),
+        history_capacity: 60,
+        period_secs: 5.0,
+        sampler: Box::new(move || {
+            let n = *counter.lock().unwrap();
+            Sample::new(n as f32, format!("{n} raíces"))
+        }),
+    };
+
+    ModuleContributions {
+        monitors: vec![monitor],
+        shortcuts: vec![ShortcutSpec::module_action("Refresh", "minga.refresh")
+            .with_hint("Relee el repo Minga del cwd")],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn id_is_stable() {
+        assert_eq!(ID, "minga");
+    }
+
+    #[test]
+    fn dispatch_known_refresh() {
+        assert!(matches!(dispatch("minga.refresh"), Some(Msg::Refresh)));
+    }
+
+    #[test]
+    fn dispatch_unknown_returns_none() {
+        assert!(dispatch("foo.bar").is_none());
+        assert!(dispatch("matilda.refresh").is_none());
+    }
+
+    #[test]
+    fn load_snapshot_errors_on_missing_repo() {
+        let p = std::env::temp_dir().join(format!(
+            "shuma-module-minga-missing-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let err = load_snapshot(&p).unwrap_err();
+        assert!(err.contains("no hay repo"), "msg debe explicar: {err}");
+    }
+
+    #[test]
+    fn snapshot_ready_updates_counts_and_clears_error() {
+        let mut s = State::with_repo_path(Source::Local, PathBuf::from("/tmp/nope"));
+        s.error = Some("anterior".into());
+        let snap = RepoSnapshot {
+            roots: 7,
+            nodes: 100,
+            attestations: 7,
+            mst_keys: 7,
+            recent: vec![],
+        };
+        let s2 = update(s, Msg::SnapshotReady(Ok(snap)));
+        assert_eq!(s2.roots_count(), 7);
+        assert!(s2.error.is_none());
+        assert_eq!(s2.snapshot.unwrap().roots, 7);
+    }
+
+    #[test]
+    fn snapshot_error_sets_error_only() {
+        let s = State::with_repo_path(Source::Local, PathBuf::from("/tmp/nope"));
+        let s2 = update(s, Msg::SnapshotReady(Err("boom".to_string())));
+        assert_eq!(s2.error.as_deref(), Some("boom"));
+        assert!(s2.snapshot.is_none());
+    }
+}
