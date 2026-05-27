@@ -524,6 +524,154 @@ fn first_author_for(repo: &PersistentRepo, alpha: &ContentHash) -> Option<Did> {
     atts.first().map(|a| a.author)
 }
 
+/// Una fila de `cmd_roots`: una raíz registrada en el repo con metadata
+/// agregada de paths e historial de atestaciones.
+#[derive(Debug, Clone)]
+pub struct RootRow {
+    pub alpha: ContentHash,
+    pub struct_hash: ContentHash,
+    pub dialect: Option<parse::Dialect>,
+    /// Path local donde se ingirió este α por última vez. `None` si la
+    /// raíz vino por sync sin pasar nunca por un path local, o si el
+    /// historial path→α no la cubre.
+    pub path: Option<String>,
+    /// Timestamp Unix de la atestación más reciente sobre esta raíz
+    /// (cualquier autor). `0` si no hay timestamps locales registrados.
+    pub last_seen_secs: u64,
+    /// Cuántas atestaciones distintas hay almacenadas localmente.
+    pub attestations: usize,
+}
+
+/// `minga roots`: lista todas las raíces registradas en el repo con
+/// path conocido, dialect, fecha de última atestación y cantidad de
+/// firmas. Ordenado por `last_seen_secs` descendente — empate por
+/// α-hash para estabilidad.
+///
+/// Cierra la asimetría histórica entre `status` (sólo da counts) y
+/// `show <hash>` (que exige conocer el hash de antemano): permite
+/// descubrir las raíces de un repo sin levantar el explorer Llimphi
+/// ni el módulo shuma.
+pub fn cmd_roots(repo_path: &Path, passphrase: &str) -> Result<Vec<RootRow>, CliError> {
+    use std::collections::HashMap;
+
+    let _keypair = keypair_file::load(repo_path.join(KEYPAIR_FILENAME), passphrase)?;
+    let repo = PersistentRepo::open(repo_path.join(REPO_DIRNAME))?;
+
+    // Reverse-index path_history para asociar cada α al path bajo el
+    // cual se ingirió más recientemente. Empate de ts: el path
+    // descubierto primero en la iteración gana (orden sled-dependiente
+    // pero estable dentro de una misma run).
+    let mut alpha_to_path: HashMap<ContentHash, (String, u64)> = HashMap::new();
+    for entry in repo.paths.iter() {
+        let (path, history) = entry?;
+        for (alpha, ts) in history {
+            match alpha_to_path.get(&alpha) {
+                Some((_, existing_ts)) if *existing_ts >= ts => {}
+                _ => {
+                    alpha_to_path.insert(alpha, (path.clone(), ts));
+                }
+            }
+        }
+    }
+
+    let mut rows = Vec::new();
+    for r in repo.roots.iter() {
+        let (alpha, struct_hash, dialect) = r?;
+        let atts = repo.attestations.get(&alpha)?;
+        let attestations = atts.len();
+        let last_seen_secs = atts
+            .iter()
+            .filter_map(|a| repo.timestamps.get(&a.content, &a.author).ok().flatten())
+            .max()
+            .unwrap_or(0);
+        let path = alpha_to_path.get(&alpha).map(|(p, _)| p.clone());
+        rows.push(RootRow {
+            alpha,
+            struct_hash,
+            dialect,
+            path,
+            last_seen_secs,
+            attestations,
+        });
+    }
+    rows.sort_by(|a, b| {
+        b.last_seen_secs
+            .cmp(&a.last_seen_secs)
+            .then(a.alpha.0.cmp(&b.alpha.0))
+    });
+    Ok(rows)
+}
+
+/// Una fila de `cmd_history`: una versión histórica de un path.
+#[derive(Debug, Clone)]
+pub struct HistoryEntry {
+    pub alpha: ContentHash,
+    pub ts_secs: u64,
+    pub dialect: Option<parse::Dialect>,
+    /// `true` si el α-hash actual del archivo en disco coincide con esta
+    /// entrada. Si el archivo no existe o no se puede parsear hoy, todas
+    /// las filas vienen con `current = false`.
+    pub current: bool,
+}
+
+/// `minga history <path>`: dumpea el historial path→α (poblado por
+/// `ingest`/`watch`) para `path`. Útil para ver cuándo cambió un
+/// archivo sin reconstruir el blame completo (que ya requiere correr
+/// diff línea-a-línea entre cada par de versiones consecutivas).
+///
+/// Salida cronológica **descendente** (la versión más reciente arriba),
+/// igual que `cmd_log`. Si el archivo todavía existe en disco y su
+/// α-hash actual coincide con alguna entrada, esa entrada lleva
+/// `current = true`.
+pub fn cmd_history(
+    repo_path: &Path,
+    passphrase: &str,
+    file: &Path,
+) -> Result<Vec<HistoryEntry>, CliError> {
+    let _keypair = keypair_file::load(repo_path.join(KEYPAIR_FILENAME), passphrase)?;
+    let repo = PersistentRepo::open(repo_path.join(REPO_DIRNAME))?;
+
+    let path_key = canonical_path_key(file)
+        .ok_or_else(|| CliError::PathNotIngested(file.to_path_buf()))?;
+    let history = repo.paths.history(&path_key)?;
+    if history.is_empty() {
+        return Err(CliError::PathNotIngested(file.to_path_buf()));
+    }
+
+    // α-hash del contenido actual en disco, si parseamos sin error.
+    // Best-effort: si el archivo se movió o ya no parsea, todas las
+    // filas salen sin el marcador `current`.
+    let current_alpha = file
+        .exists()
+        .then(|| try_current_alpha(file))
+        .flatten();
+
+    let mut out = Vec::with_capacity(history.len());
+    for (alpha, ts) in history {
+        let dialect = repo.roots.get(&alpha)?.and_then(|(_, d)| d);
+        let current = current_alpha.as_ref().map(|a| a == &alpha).unwrap_or(false);
+        out.push(HistoryEntry {
+            alpha,
+            ts_secs: ts,
+            dialect,
+            current,
+        });
+    }
+    // Más reciente primero, idéntica convención que `cmd_log`.
+    out.reverse();
+    Ok(out)
+}
+
+/// Best-effort: lee `file`, detecta dialect y devuelve su α-hash actual.
+/// Cualquier error (io, dialect, parse) → `None` — el caller degrada
+/// silenciosamente al modo "sin marcador current".
+fn try_current_alpha(file: &Path) -> Option<ContentHash> {
+    let source = fs::read_to_string(file).ok()?;
+    let dialect = detect_dialect(file).ok()?;
+    let node = dialect.parse(&source).ok()?;
+    Some(hash_alpha_with(dialect, &node))
+}
+
 /// Resultado de `cmd_verify_root`: si la raíz es consistente y bajo
 /// qué dialecto (independiente del que figure en `roots`).
 #[derive(Debug, Clone)]

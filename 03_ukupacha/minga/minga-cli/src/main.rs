@@ -5,8 +5,9 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use minga_cli::{
-    cmd_blame, cmd_diff, cmd_ingest, cmd_init, cmd_listen, cmd_log, cmd_mount, cmd_prune,
-    cmd_retire, cmd_show, cmd_status, cmd_sync, cmd_verify_root, cmd_watch, CliError, DiffLine,
+    cmd_blame, cmd_diff, cmd_history, cmd_ingest, cmd_init, cmd_listen, cmd_log, cmd_mount,
+    cmd_prune, cmd_retire, cmd_roots, cmd_show, cmd_status, cmd_sync, cmd_verify_root, cmd_watch,
+    CliError, DiffLine,
 };
 
 #[derive(Parser)]
@@ -129,6 +130,19 @@ enum Command {
     /// hacia adelante con diffs línea-a-línea.
     Blame {
         /// Archivo cuyo historial atribuir.
+        file: PathBuf,
+    },
+
+    /// Lista todas las raíces del repo con su path conocido, dialect,
+    /// fecha de última atestación y cantidad de firmas. Ordenado por
+    /// actividad reciente — útil cuando no recordás un α-hash.
+    Roots,
+
+    /// Historial cronológico (más reciente primero) de un path: cada
+    /// α-hash que pasó por esa ruta vía `ingest`/`watch`. Marca con `*`
+    /// la entrada cuyo α coincide con el contenido actual del archivo.
+    History {
+        /// Archivo cuyo historial mostrar.
         file: PathBuf,
     },
 }
@@ -322,6 +336,33 @@ fn run() -> Result<(), CliError> {
                 let short: String = line.alpha.to_string().chars().take(12).collect();
                 let when = format_ts(line.ts_secs);
                 println!("{} {} {} | {}", short, when, line.author, line.text);
+            }
+        }
+        Command::Roots => {
+            let pass = prompt_passphrase()?;
+            let rows = cmd_roots(&cli.repo, &pass)?;
+            if rows.is_empty() {
+                println!("(repo sin raíces)");
+            }
+            for r in rows {
+                let when = format_ts(r.last_seen_secs);
+                let dialect = r.dialect.map(|d| d.name()).unwrap_or("?");
+                let short: String = r.alpha.to_string().chars().take(12).collect();
+                let path = r.path.as_deref().unwrap_or("(sin path local)");
+                println!(
+                    "{}  {}  [{:<6}]  ×{}  {}",
+                    short, when, dialect, r.attestations, path
+                );
+            }
+        }
+        Command::History { file } => {
+            let pass = prompt_passphrase()?;
+            let entries = cmd_history(&cli.repo, &pass, &file)?;
+            for e in entries {
+                let mark = if e.current { "*" } else { " " };
+                let when = format_ts(e.ts_secs);
+                let dialect = e.dialect.map(|d| d.name()).unwrap_or("?");
+                println!("{} {}  {}  [{}]", mark, when, e.alpha, dialect);
             }
         }
     }

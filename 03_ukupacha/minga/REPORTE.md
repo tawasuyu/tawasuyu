@@ -137,17 +137,26 @@ La re-verificación se ofrece como primitiva (`alpha::verify_root_alpha`) y como
 
 `SyncSession::new` mantiene la firma vieja (con `RetractionStore::new()` interno); el nuevo `with_retractions` toma 5 args. `into_parts` sigue devolviendo 3-tupla por compat; `into_parts_with_retractions` agrega la cuarta.
 
-## 8. Próximos pasos abiertos
+## 8. Cuarto sprint — B, D, E, F + descubribilidad CLI
+
+| # | Tarea | Resultado |
+|---|---|---|
+| B | **Wire-side α-verification** — `RootDeclaration { alpha, struct, dialect }` añadido al protocolo (`minga-p2p::session::Message`). El receptor re-verifica `verify_root_alpha` contra el contenido recibido; declaraciones inconsistentes se rechazan sin tocar `roots`. | hecho (commit `580875e`) |
+| D | **`minga blame <path>`** — historial path→α (nuevo `SledPathHistoryStore`) + diff línea-a-línea entre versiones consecutivas + propagación de atribución. Resultado: cada línea actual atada al α que la introdujo. | hecho (commit `750b6f9`) |
+| E | **DHT bootstrap automático en `listen`** — `MingaPeer::announce_all_roots()` se llama tras `listen`; cualquier α local pasa a ser descubrible por `sync <hash>` sin conocer multiaddr. | hecho (commit `b519700`) |
+| F | **Dot rojo en `shuma-module-minga`** para raíces con retracciones pendientes — `SledRetractionStore::iter` reverse-indexado por α; render del módulo lo marca con `·` rojo al lado del α-hash. | hecho (commit `b519700`) |
+| G | **`minga roots`** — lista todas las raíces con path conocido, dialect, fecha de última atestación y cantidad de firmas, ordenadas por actividad reciente. Reverse-index del `SledPathHistoryStore` para resolver α→path. Cierra el hueco entre `status` (counts) y `show <hash>` (que requería conocer el hash). | hecho |
+| H | **`minga history <path>`** — dump cronológico descendente del historial path→α + dialect + marcador `current` (best-effort: parsea el archivo actual y compara α). Versión liviana del blame cuando sólo querés saber "cuándo cambió este archivo". | hecho |
+
+## 9. Próximos pasos abiertos
 
 | # | Tarea | Prioridad |
 |---|---|---|
 | A | Cachear `MingaPeer` con backend sled directo (item #5 deferido) | media |
-| B | Wire-side α-verification: `RootDeclaration { alpha, struct, dialect }` + re-verificar al recibir | media (seguridad) |
 | C | Exportar `roots` como API REST/JSON desde un daemon minga (paralelo a `shuma-gateway`) | baja |
-| D | `minga blame <path>` — para cada línea, el último α-hash que la introdujo (requiere historial path→hash, que `cmd_log` no mantiene aún) | media UX |
-| E | DHT bootstrap automático en `cmd_listen` (anunciar todas las raíces al arrancar) | media |
-| F | Indicador en `shuma-module-minga` cuando alguna raíz tiene retracciones pendientes (un dot rojo al lado del α-hash) | baja UX |
+| I | `minga export-bundle` / `minga import-bundle` — empaquetar atestaciones + retractions + nodos alcanzables para transferencia offline (USB-stick mode), idempotente. Wire actual sólo cubre sync online vía libp2p. | baja |
+| J | Reverse-index dedicado `α → paths` en disco (hoy se reconstruye en RAM dentro de `cmd_roots`). Sólo vale la pena cuando un repo pase el millón de paths. | muy baja |
 
 ---
 
-*Generado por Claude (Opus 4.7) — `2026-05-27`. **18/19 tareas completadas**; #5 deferido (refactor invasivo). El wire de sync ahora transmite retractions además de atestaciones.*
+*Generado por Claude (Opus 4.7) — `2026-05-27`. **24/25 tareas completadas**; #5 (NodeStore genérico para MingaPeer) sigue diferido por su costo de refactor vs. beneficio actual.*
