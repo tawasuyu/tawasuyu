@@ -155,16 +155,30 @@ La re-verificación se ofrece como primitiva (`alpha::verify_root_alpha`) y como
 | K | **`minga sign <α-hash>`** — emite una atestación bajo el keypair local sobre un α-hash existente. A diferencia de `ingest` (firma como efecto de versionar contenido propio), `sign` es vouching explícito: Alice ingiere, Bob sincroniza, Bob firma. La raíz queda con dos atestaciones independientes — habilita co-autoría semántica y aval de revisores. Idempotente: re-firmar con el mismo keypair reemplaza la entrada con bytes idénticos (no duplica). Avisa si el α no es raíz registrada (puede ser fragmento del CAS o raíz huérfana). | hecho |
 | L | **`minga ingest-dir <dir> [--recursive]`** — versión one-shot del `initial_scan` interno de `watch`. Recorre el directorio, ingiere todos los archivos soportados, reporta `(seen, ingested, failed)`. En modo recursivo poda dot-dirs (`.git`, `.minga`, `.venv`) para evitar ruido. Hace lo que muchos usuarios harían con un `find … -exec minga ingest {} \;` pero sin el costo de re-abrir el repo sled por archivo. | hecho |
 
-## 10. Próximos pasos abiertos
+## 10. Sexto sprint — vista de firmas y bundle offline
+
+| # | Tarea | Resultado |
+|---|---|---|
+| M | **`minga signers <α-hash>`** — lista de DIDs que han atestado la raíz, con timestamp local. Marca con `↺` quienes también firmaron una retracción posterior. Vista natural sobre lo que `cmd_sign` siembra; antes había que pasar por `cmd_log` y filtrar. | hecho |
+| I | **`minga bundle export <α-hash> <out>`** + **`minga bundle import <archivo>`** — empaquetado offline ("USB-stick mode") con misma garantía criptográfica que el wire. El export hace BFS por el DAG, recolecta `StoredNode`s + atestaciones + retracciones, y serializa con postcard. El import re-verifica cada pieza: `put_chunked` rehashe los nodos antes de insertar; `hash_alpha_with` re-deriva el α y se compara contra el claimado; `Attestation::add`/`Retraction::add` ya verifican firma Ed25519. Idempotente bajo reintentos. Nuevo módulo `minga-cli::bundle` con `BundleV1` (versionado para forward-compat). | hecho |
+
+### Notas sobre el bundle (#I)
+
+- **Formato.** `BundleV1 { version, alpha, struct_hash, dialect_byte, nodes, attestations, retractions }` — todo postcard. Dialect viaja como `u8` para no atar el formato a una variante específica; un importador viejo recibe `UnknownDialect` (error claro) si llega un byte que no reconoce.
+- **Dialect requerido en `roots`.** Si la raíz fue sincronizada bajo el wire pre-`RootDeclaration` (commit `580875e`) y no tiene dialect persistido, `export` falla con `BundleMissingDialect` — sin dialect el receptor no puede re-verificar el α. Re-ingerí esa raíz primero para registrar su dialect.
+- **Path metadata excluida.** El bundle no transmite `SledPathHistoryStore` ni `SledTimestampStore` (locales por diseño, como en el wire de sync). El receptor pone timestamp = `now` al merge.
+- **Atestaciones/retractions con `content != alpha`** se descartan silenciosamente en el import. No debería pasar bajo bundles bien formados; el filtro es defensivo.
+
+## 11. Próximos pasos abiertos
 
 | # | Tarea | Prioridad |
 |---|---|---|
 | A | Cachear `MingaPeer` con backend sled directo (item #5 deferido) | media |
 | C | Exportar `roots` como API REST/JSON desde un daemon minga (paralelo a `shuma-gateway`) | baja |
-| I | `minga export-bundle` / `minga import-bundle` — empaquetar atestaciones + retractions + nodos alcanzables para transferencia offline (USB-stick mode), idempotente. Wire actual sólo cubre sync online vía libp2p. | baja |
 | J | Reverse-index dedicado `α → paths` en disco (hoy se reconstruye en RAM dentro de `cmd_roots`). Sólo vale la pena cuando un repo pase el millón de paths. | muy baja |
-| M | `minga signers <α-hash>` — lista de DIDs que han atestado la raíz, con timestamps. Vista natural sobre lo que `cmd_sign` siembra; hoy hay que pasarlo por `cmd_log` y filtrar. | baja UX |
+| N | `minga bundle export --recursive <dir>` — empaquetar todas las raíces de un repo en un solo archivo (multi-bundle). Hoy hay que llamarlo por hash. | baja |
+| O | Test round-trip de bundle (export → import en repo vacío → verificar α y atestaciones). Aumentaría confianza en cambios del formato. | media |
 
 ---
 
-*Generado por Claude (Opus 4.7) — `2026-05-27`. **26/27 tareas completadas**; #5 (NodeStore genérico para MingaPeer) sigue diferido por su costo de refactor vs. beneficio actual. El flujo de atestación deja de ser exclusivamente "firmo lo que ingiero" — ahora hay vouching colaborativo de raíces sincronizadas.*
+*Generado por Claude (Opus 4.7) — `2026-05-27`. **28/29 tareas completadas**; #5 (NodeStore genérico para MingaPeer) sigue diferido por su costo de refactor vs. beneficio actual. Minga ahora puede transferir raíces offline con el mismo nivel de verificación criptográfica que el wire libp2p.*

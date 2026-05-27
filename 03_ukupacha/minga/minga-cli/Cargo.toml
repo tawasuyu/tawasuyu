@@ -23,6 +23,8 @@ futures = { workspace = true }
 libp2p = { workspace = true }
 notify = { workspace = true }
 similar = { workspace = true }
+serde = { workspace = true }
+postcard = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

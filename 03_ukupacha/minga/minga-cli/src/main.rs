@@ -5,9 +5,10 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use minga_cli::{
-    cmd_blame, cmd_diff, cmd_history, cmd_ingest, cmd_ingest_dir, cmd_init, cmd_listen, cmd_log,
-    cmd_mount, cmd_prune, cmd_retire, cmd_roots, cmd_show, cmd_sign, cmd_status, cmd_sync,
-    cmd_verify_root, cmd_watch, CliError, DiffLine,
+    cmd_blame, cmd_bundle_export, cmd_bundle_import, cmd_diff, cmd_history, cmd_ingest,
+    cmd_ingest_dir, cmd_init, cmd_listen, cmd_log, cmd_mount, cmd_prune, cmd_retire, cmd_roots,
+    cmd_show, cmd_sign, cmd_signers, cmd_status, cmd_sync, cmd_verify_root, cmd_watch, CliError,
+    DiffLine,
 };
 
 #[derive(Parser)]
@@ -164,6 +165,39 @@ enum Command {
     /// la entrada cuyo α coincide con el contenido actual del archivo.
     History {
         /// Archivo cuyo historial mostrar.
+        file: PathBuf,
+    },
+
+    /// Lista los DIDs que han atestado un α-hash, con timestamp local
+    /// de cuándo se observó la firma. Marca quienes también firmaron
+    /// una retracción posterior.
+    Signers {
+        /// α-hash en hex (64 caracteres).
+        hash: String,
+    },
+
+    /// Bundle: empaquetar / desempaquetar una raíz para transferencia
+    /// offline (USB-stick) — mismo nivel de verificación criptográfica
+    /// que el wire libp2p, sin necesidad de red.
+    #[command(subcommand)]
+    Bundle(BundleCommand),
+}
+
+#[derive(Subcommand)]
+enum BundleCommand {
+    /// Empaqueta α-hash + nodos alcanzables + atestaciones + retracciones
+    /// en un archivo postcard portable.
+    Export {
+        /// α-hash en hex (64 caracteres).
+        hash: String,
+        /// Ruta de salida del bundle (sobreescribe si existe).
+        out: PathBuf,
+    },
+
+    /// Lee un bundle, re-verifica criptográficamente cada pieza, y
+    /// mergea idempotentemente en los stores locales.
+    Import {
+        /// Ruta del bundle a importar.
         file: PathBuf,
     },
 }
@@ -417,6 +451,47 @@ fn run() -> Result<(), CliError> {
                 let dialect = e.dialect.map(|d| d.name()).unwrap_or("?");
                 println!("{} {}  {}  [{}]", mark, when, e.alpha, dialect);
             }
+        }
+        Command::Signers { hash } => {
+            let pass = prompt_passphrase()?;
+            let entries = cmd_signers(&cli.repo, &pass, &hash)?;
+            if entries.is_empty() {
+                println!("(sin atestaciones locales para ese α-hash)");
+            }
+            for e in entries {
+                let when = format_ts(e.ts_secs);
+                let marker = if e.retracted { "↺" } else { " " };
+                println!("{} {}  {}", marker, when, e.author);
+            }
+        }
+        Command::Bundle(BundleCommand::Export { hash, out }) => {
+            let pass = prompt_passphrase()?;
+            let s = cmd_bundle_export(&cli.repo, &pass, &hash, &out)?;
+            println!("Bundle escrito en {}", out.display());
+            println!("  α-hash:        {}", s.alpha);
+            println!("  nodos:         {}", s.nodes);
+            println!("  atestaciones:  {}", s.attestations);
+            println!("  retractions:   {}", s.retractions);
+            println!("  tamaño:        {} bytes", s.bytes);
+        }
+        Command::Bundle(BundleCommand::Import { file }) => {
+            let pass = prompt_passphrase()?;
+            let s = cmd_bundle_import(&cli.repo, &pass, &file)?;
+            println!("Bundle importado: α-hash {}", s.alpha);
+            if s.root_was_new {
+                println!("  raíz nueva, registrada en MST y `roots`");
+            } else {
+                println!("  raíz ya conocida (idempotente)");
+            }
+            println!("  nodos insertados:        {}", s.nodes_inserted);
+            println!(
+                "  atestaciones:            {} nuevas, {} rechazadas",
+                s.attestations_added, s.attestations_rejected
+            );
+            println!(
+                "  retractions:             {} nuevas, {} rechazadas",
+                s.retractions_added, s.retractions_rejected
+            );
         }
     }
     Ok(())

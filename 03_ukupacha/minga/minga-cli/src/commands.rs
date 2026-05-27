@@ -123,7 +123,7 @@ fn canonical_path_key(path: &Path) -> Option<String> {
     Some(abs.to_string_lossy().into_owned())
 }
 
-fn unix_now_secs() -> u64 {
+pub(crate) fn unix_now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -209,6 +209,66 @@ pub fn cmd_sign(
         is_new_attestation: !already,
         is_known_root,
     })
+}
+
+/// Una entrada de `cmd_signers`: quién firmó la raíz, cuándo, y si
+/// también la retractó.
+#[derive(Debug, Clone)]
+pub struct SignerEntry {
+    pub author: Did,
+    /// Timestamp local de cuándo se observó la atestación. `0` si no
+    /// hay timestamp (atestación vieja sin entry en
+    /// `SledTimestampStore`).
+    pub ts_secs: u64,
+    /// `true` si el mismo `author` también firmó una `Retraction` sobre
+    /// esta raíz — declara que avaló y luego revocó. La atestación
+    /// original sigue presente como prueba histórica.
+    pub retracted: bool,
+}
+
+/// `minga signers <α-hash>`: lista los DIDs que han atestado una raíz.
+/// Complementa `cmd_sign` ofreciendo la vista "quién avaló esto" sin
+/// pasar por `cmd_log` (que mezcla todas las raíces).
+///
+/// Salida ordenada por timestamp local descendente (más reciente
+/// primero). Marca con `retracted = true` a los DIDs que también
+/// emitieron una retracción — útil para visualizar cambios de postura
+/// en la cadena de aval.
+pub fn cmd_signers(
+    repo_path: &Path,
+    passphrase: &str,
+    hash_hex: &str,
+) -> Result<Vec<SignerEntry>, CliError> {
+    use std::collections::HashSet;
+
+    let _keypair = keypair_file::load(repo_path.join(KEYPAIR_FILENAME), passphrase)?;
+    let repo = PersistentRepo::open(repo_path.join(REPO_DIRNAME))?;
+
+    let alpha = parse_hash_hex(hash_hex)?;
+
+    let atts = repo.attestations.get(&alpha)?;
+    let retractions = repo.retractions.get(&alpha)?;
+    let retract_authors: HashSet<Did> = retractions.into_iter().map(|r| r.author).collect();
+
+    let mut entries: Vec<SignerEntry> = atts
+        .into_iter()
+        .map(|a| {
+            let ts = repo
+                .timestamps
+                .get(&a.content, &a.author)
+                .ok()
+                .flatten()
+                .unwrap_or(0);
+            SignerEntry {
+                author: a.author,
+                ts_secs: ts,
+                retracted: retract_authors.contains(&a.author),
+            }
+        })
+        .collect();
+
+    entries.sort_by(|a, b| b.ts_secs.cmp(&a.ts_secs).then(a.author.0.cmp(&b.author.0)));
+    Ok(entries)
 }
 
 /// Una entrada del log: atestación + timestamp de cuándo se observó.
@@ -329,7 +389,7 @@ pub fn cmd_show(
     })
 }
 
-fn parse_hash_hex(s: &str) -> Result<ContentHash, CliError> {
+pub(crate) fn parse_hash_hex(s: &str) -> Result<ContentHash, CliError> {
     let bytes = hex_decode_32(s).ok_or(CliError::InvalidHash(s.to_string()))?;
     Ok(ContentHash(bytes))
 }

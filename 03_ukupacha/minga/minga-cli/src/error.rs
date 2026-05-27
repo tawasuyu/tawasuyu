@@ -61,4 +61,37 @@ pub enum CliError {
          `minga watch` primero"
     )]
     PathNotIngested(PathBuf),
+
+    #[error("bundle malformado: postcard no pudo decodificarlo")]
+    InvalidBundle,
+
+    #[error(
+        "versión de bundle {0} no soportada por este binario (esperado 1) — \
+         actualizá minga o re-exportá desde la versión que generó el archivo"
+    )]
+    UnsupportedBundleVersion(u32),
+
+    #[error(
+        "el dialecto del bundle (byte {0}) no es reconocido por este binario \
+         — el archivo lo generó una versión más nueva con soporte para un \
+         lenguaje que esta no entiende"
+    )]
+    UnknownDialect(u8),
+
+    #[error(
+        "la raíz del bundle ({struct_hash}) no produce el α-hash declarado \
+         ({claimed_alpha}) bajo el dialecto declarado — bundle corrupto o \
+         falsificado"
+    )]
+    BundleAlphaMismatch {
+        struct_hash: minga_core::ContentHash,
+        claimed_alpha: minga_core::ContentHash,
+    },
+
+    #[error(
+        "la raíz {0} no tiene dialect registrado en `roots` — exportá una \
+         raíz que haya sido ingerida (no sincronizada bajo el viejo wire \
+         pre-RootDeclaration)"
+    )]
+    BundleMissingDialect(minga_core::ContentHash),
 }
