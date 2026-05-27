@@ -72,6 +72,12 @@ pub struct RootRow {
     /// el α-hash es consistente con su contenido bajo algún dialect,
     /// `Some(false)` si no, `None` si nunca se verificó.
     pub verified: Option<bool>,
+    /// `true` si al menos un autor firmó una retracción sobre esta
+    /// raíz. La UI lo marca con un dot rojo a la izquierda del α-hash.
+    /// Cuántos autores retractaron — la lectura semántica es "la raíz
+    /// tiene desconfianza histórica", no "está borrada" (las
+    /// atestaciones originales se preservan como prueba).
+    pub retracted: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -291,10 +297,21 @@ pub fn load_snapshot(repo_path: &std::path::Path) -> Result<RepoSnapshot, String
         .iter()
         .filter_map(|r| r.ok())
         .take(RECENT_LIMIT)
-        .map(|(alpha, _struct, dialect)| RootRow {
-            alpha,
-            dialect: dialect.map(|d| d.name()),
-            verified: None,
+        .map(|(alpha, _struct, dialect)| {
+            // Una raíz cuenta como retractada si su tree de retracciones
+            // tiene al menos una entrada para su α-hash. Errores de
+            // sled se tratan como "no retractada" (best-effort UI).
+            let retracted = repo
+                .retractions
+                .get(&alpha)
+                .map(|rs| !rs.is_empty())
+                .unwrap_or(false);
+            RootRow {
+                alpha,
+                dialect: dialect.map(|d| d.name()),
+                verified: None,
+                retracted,
+            }
         })
         .collect();
 
@@ -425,7 +442,16 @@ fn root_row<M: Clone + 'static>(
         Some(true) => "✓",
         Some(false) => "✘",
     };
-    let line = format!("{marker}{v} {short}  {dialect}");
+    // Dot de retracción: punto sólido si al menos un autor retractó.
+    // Sirve como señal visual rápida — no implica que la raíz esté
+    // borrada (las atestaciones originales se preservan).
+    let retract = if row.retracted { "● " } else { "  " };
+    let line = format!("{marker}{retract}{v} {short}  {dialect}");
+    let fg = if row.retracted {
+        theme.fg_destructive
+    } else {
+        theme.fg_text
+    };
     let bg = if is_selected {
         theme.bg_selected
     } else {
@@ -447,7 +473,7 @@ fn root_row<M: Clone + 'static>(
     })
     .fill(bg)
     .hover_fill(theme.bg_row_hover)
-    .text_aligned(line, 11.0, theme.fg_text, Alignment::Start)
+    .text_aligned(line, 11.0, fg, Alignment::Start)
     .on_click(on_click())
 }
 
@@ -630,5 +656,65 @@ mod tests {
         let s2 = update(s, Msg::SnapshotReady(Err("boom".to_string())));
         assert_eq!(s2.error.as_deref(), Some("boom"));
         assert!(s2.snapshot.is_none());
+    }
+
+    #[test]
+    fn load_snapshot_marks_retracted_roots() {
+        // Montamos un repo con dos raíces: a una le firmamos una
+        // retracción, a la otra no. El snapshot debe reflejar la
+        // diferencia en el flag `retracted`.
+        use minga_core::{alpha::hash_alpha_with, parse, Keypair, Retraction};
+
+        let base = std::env::temp_dir().join(format!(
+            "shuma-module-minga-retract-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let inner = base.join(REPO_SUBDIR);
+        std::fs::create_dir_all(&inner).unwrap();
+
+        let repo = PersistentRepo::open(&inner).unwrap();
+        let kp = Keypair::from_seed(&[42u8; 32]);
+
+        // Raíz 1: con retracción.
+        let n1 = parse::rust("fn one() -> i32 { 1 }").unwrap();
+        use minga_store::node_store::SledNodeStore as _SLN;
+        let _ = _SLN::put(&repo.nodes, &n1).unwrap();
+        let alpha1 = hash_alpha_with(minga_core::parse::Dialect::Rust, &n1);
+        let struct1 = minga_core::cas::hash_node(&n1);
+        repo.roots
+            .put(alpha1, struct1, minga_core::parse::Dialect::Rust)
+            .unwrap();
+        repo.mst.insert(alpha1).unwrap();
+        repo.retractions
+            .add(Retraction::create(&kp, alpha1))
+            .unwrap();
+
+        // Raíz 2: sin retracción.
+        let n2 = parse::rust("fn two() -> i32 { 2 }").unwrap();
+        let _ = _SLN::put(&repo.nodes, &n2).unwrap();
+        let alpha2 = hash_alpha_with(minga_core::parse::Dialect::Rust, &n2);
+        let struct2 = minga_core::cas::hash_node(&n2);
+        repo.roots
+            .put(alpha2, struct2, minga_core::parse::Dialect::Rust)
+            .unwrap();
+        repo.mst.insert(alpha2).unwrap();
+
+        repo.flush().unwrap();
+        drop(repo);
+
+        let snap = load_snapshot(&base).unwrap();
+        assert_eq!(snap.roots, 2);
+        assert_eq!(snap.recent.len(), 2);
+
+        let row1 = snap.recent.iter().find(|r| r.alpha == alpha1).unwrap();
+        let row2 = snap.recent.iter().find(|r| r.alpha == alpha2).unwrap();
+        assert!(row1.retracted, "raíz con retracción debe marcarse");
+        assert!(!row2.retracted, "raíz sin retracción no debe marcarse");
+
+        // Cleanup.
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

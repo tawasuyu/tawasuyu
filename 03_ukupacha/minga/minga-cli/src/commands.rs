@@ -630,11 +630,21 @@ pub async fn cmd_listen(
     let actual = peer.listen(multi).await;
     let _accept = peer.run_passive_accept();
 
+    // Bootstrap del DHT: anuncia todas las raíces locales como
+    // proveedores en Kademlia. Los peers que busquen el α-hash de un
+    // archivo que tengamos podrán descubrirnos sin conocer nuestro
+    // multiaddr de antemano (siempre que compartan al menos un peer
+    // bootstrap de la malla `brahman-net`).
+    let announced = peer.announce_all_roots().await;
+
     // Bloqueamos para siempre mientras la task de accept procesa
     // sincronizaciones. El usuario cierra con Ctrl+C.
     println!("Escuchando en: {}", actual);
     println!("DID Minga: {}", did);
     println!("PeerID libp2p: {}", peer.peer_id());
+    if announced > 0 {
+        println!("Anunciadas {} raíces en el DHT", announced);
+    }
     futures::future::pending::<()>().await;
 
     Ok(actual)

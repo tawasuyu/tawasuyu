@@ -186,6 +186,25 @@ impl MingaPeer {
         self.node.start_providing(&key.to_bytes());
     }
 
+    /// Anuncia en el DHT todas las raíces locales del peer (los
+    /// α-hashes registrados en `roots`). Útil al arrancar un `listen`:
+    /// el peer queda descubrible para cualquier otro que haga
+    /// `find_providers(α)` sobre la malla Kademlia compartida. Devuelve
+    /// la cantidad de raíces anunciadas — 0 si el repo está vacío o si
+    /// nunca se ingirió con `ingest_with_dialect`.
+    pub async fn announce_all_roots(&self) -> usize {
+        let alphas: Vec<ContentHash> = {
+            let s = self.state.lock().await;
+            s.roots.keys().copied().collect()
+        };
+        let n = alphas.len();
+        for alpha in alphas {
+            let key = DhtKey::for_hash(minga_dht::RecordKind::Code, alpha.0);
+            self.node.start_providing(&key.to_bytes());
+        }
+        n
+    }
+
     /// Consulta el DHT por peers que han anunciado proveer este
     /// contenido. La clave usa el mismo namespace que [`announce_provider`].
     pub async fn find_providers(&self, hash: ContentHash) -> Vec<PeerId> {

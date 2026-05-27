@@ -96,3 +96,44 @@ async fn minga_peer_ingest_auto_announces_provider() {
         providers,
     );
 }
+
+#[tokio::test]
+async fn minga_peer_announce_all_roots_publishes_each_alpha() {
+    // Tras ingerir múltiples raíces con dialect, `announce_all_roots`
+    // republica todos los α-hashes en el DHT. Útil al arrancar un
+    // `listen` sobre un repo existente: las raíces vuelven a ser
+    // descubribles sin re-ingerir cada archivo.
+    use minga_core::parse::Dialect;
+
+    let a_kp = kp(11);
+    let b_kp = kp(12);
+
+    let a = MingaPeer::new(a_kp, Mst::new(), MemStore::new(), AttestationStore::new()).unwrap();
+    let b = MingaPeer::new(b_kp, Mst::new(), MemStore::new(), AttestationStore::new()).unwrap();
+
+    let addr_a = a.listen("/ip4/127.0.0.1/tcp/0".parse().unwrap()).await;
+    let addr_b = b.listen("/ip4/127.0.0.1/tcp/0".parse().unwrap()).await;
+
+    a.add_dht_peer(b.peer_id(), addr_b);
+    b.add_dht_peer(a.peer_id(), addr_a.clone());
+    b.dial(addr_a);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // A ingresa dos raíces distintas con dialect.
+    let n1 = parse::rust("fn alpha_one() -> i32 { 1 }").unwrap();
+    let (alpha1, _) = a.ingest_with_dialect(&n1, Dialect::Rust).await;
+    let n2 = parse::rust("fn alpha_two() -> i32 { 2 }").unwrap();
+    let (alpha2, _) = a.ingest_with_dialect(&n2, Dialect::Rust).await;
+
+    // Re-anuncia (idempotente). Devuelve 2.
+    let announced = a.announce_all_roots().await;
+    assert_eq!(announced, 2);
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // B busca cada α-hash y debe encontrar A.
+    let p1 = b.find_providers(alpha1).await;
+    let p2 = b.find_providers(alpha2).await;
+    assert!(p1.iter().any(|p| *p == a.peer_id()));
+    assert!(p2.iter().any(|p| *p == a.peer_id()));
+}
