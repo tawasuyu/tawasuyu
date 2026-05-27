@@ -441,6 +441,29 @@ impl Consola {
                 Color::TEXTO,
             );
         }
+        // FASE 58 v4 :: contador "N/M" a la derecha de la barra de titulo.
+        // Hace visible cuando un keystroke deja la query con cero matches o
+        // cuantas apps quedan tras filtrar. Se pinta en `SIN_FOCO` para que
+        // sea informacion subordinada al texto principal del titulo.
+        let mut contador = [0u8; 16];
+        let largo = formatear_contador(
+            &mut contador,
+            overlay.filtrado.len(),
+            overlay.catalogo.len(),
+        );
+        // SEGURIDAD: `formatear_contador` escribe SOLO ASCII (digitos y '/'),
+        // garantizando un &str valido sin pasar por `from_utf8`.
+        let contador_texto = unsafe { core::str::from_utf8_unchecked(&contador[..largo]) };
+        const CONTADOR_ANCHO: usize = 64;
+        let contador_x = r.x + r.ancho.saturating_sub(CONTADOR_ANCHO + MARGEN_TEXTO);
+        self.pintar_etiqueta(
+            contador_x,
+            titulo_base_y,
+            contador_texto,
+            14.0,
+            Color::PANEL,
+            Color::SIN_FOCO,
+        );
 
         // Filas — una por item filtrado, dentro del area util por debajo
         // del titulo y por encima del borde inferior. Si no cabe alguna, se
@@ -671,6 +694,42 @@ fn sprite_puntero_rect(x: usize, y: usize) -> RegionPantalla {
         ancho: 12,
         alto: 18,
     }
+}
+
+/// FASE 58 v4 :: escribe "N/M" en `dst` y devuelve la longitud. Sin
+/// alocacion, sin `core::fmt::Write`: un formateador ad-hoc para el
+/// contador del launcher. Acota N y M a tres digitos —el catalogo
+/// realista cabe holgadamente en eso—; el resto se trunca por la cola.
+fn formatear_contador(dst: &mut [u8; 16], filtrado: usize, total: usize) -> usize {
+    fn escribir(buf: &mut [u8; 16], mut pos: usize, mut n: usize) -> usize {
+        let mut tmp = [0u8; 4];
+        let mut len = 0;
+        if n == 0 {
+            tmp[0] = b'0';
+            len = 1;
+        } else {
+            while n > 0 && len < tmp.len() {
+                tmp[len] = b'0' + (n % 10) as u8;
+                n /= 10;
+                len += 1;
+            }
+        }
+        for i in (0..len).rev() {
+            if pos >= buf.len() {
+                break;
+            }
+            buf[pos] = tmp[i];
+            pos += 1;
+        }
+        pos
+    }
+    let mut pos = escribir(dst, 0, filtrado.min(999));
+    if pos < dst.len() {
+        dst[pos] = b'/';
+        pos += 1;
+    }
+    pos = escribir(dst, pos, total.min(999));
+    pos
 }
 
 /// `true` si dos regiones se solapan en al menos un pixel.
