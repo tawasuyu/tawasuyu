@@ -5,6 +5,38 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Política de elección de la `accion` base de los Lemmings.
+///
+/// El motor histórico fija la acción una sola vez (en `seed` / al replicarse
+/// se hereda del padre) y nunca la recalcula salvo por transiciones de
+/// supervivencia (desesperación → pelear) o captura por Conceptos
+/// (`apply_hacks`). Eso convierte al `vector_psi` en una variable casi
+/// decorativa: la psicología del agente no decide qué hace, sólo cómo se
+/// mueve.
+///
+/// `PsiArgmax` cierra el bucle: cada `policy_reeval_period` ticks, los
+/// agentes libres (sin `hack_lock`) recalculan su byte de acción tomando el
+/// `argmax` de `action_weights · vector_psi`. Determinista bit-exacto: sin
+/// RNG, sin softmax — comparación lineal de 6 escalares con tie-break por
+/// menor índice. Es el complemento mínimo que vuelve endógena la
+/// heterogeneidad poblacional sin romper §1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ActionPolicy {
+    /// Comportamiento histórico: la acción se asigna al spawn (o se hereda
+    /// del padre en `Replicar`) y sólo cambia por transiciones de
+    /// supervivencia o hacks. La psicología no decide qué hace el agente.
+    Fixed,
+    /// La acción se reelige cada `policy_reeval_period` ticks como
+    /// `argmax(action_weights · vector_psi)`. Determinista, sin RNG.
+    PsiArgmax,
+}
+
+impl Default for ActionPolicy {
+    fn default() -> Self {
+        ActionPolicy::Fixed
+    }
+}
+
 /// A quién dona un Lemming cuando ejecuta `act_intercambiar`. Permite
 /// elegir entre la semántica original (vecino físico) y la redistribución
 /// solidaria (el más necesitado del mundo) — esta última es la que cierra
@@ -117,6 +149,73 @@ pub struct SimParams {
     /// superarlo; el regrowth nunca lo hace.
     #[serde(default)]
     pub carrying_capacity: f32,
+    /// Intensidad con la que el `vector_psi` del agente modula los efectos
+    /// de sus 5 acciones físicas (Mover, Extraer, Intercambiar, Replicar,
+    /// Degradar). Con `0.0` los efectos son idénticos al motor histórico
+    /// — bit-exacto. Con `> 0`, el psi entra en cada cantidad afín:
+    ///
+    /// - `Mover`: `move_cost ← move_cost · (1 + mod · 0.5 · psi[MIEDO])`
+    ///   — el miedoso se cansa más al moverse.
+    /// - `Extraer`: `extract_rate ← extract_rate · (1 + mod · psi[CORRUPTIBILIDAD])`
+    ///   — el corrupto saca más del suelo y deja más cicatriz.
+    /// - `Intercambiar`: `trade_amount ← trade_amount · max(0, 1 + mod ·
+    ///   (psi[ORDEN] − psi[CORRUPTIBILIDAD]))` — el ordenado comparte, el
+    ///   corrupto retiene.
+    /// - `Replicar`: `replicate_threshold ← replicate_threshold · max(0.1,
+    ///   1 − mod · 0.3 · psi[ORDEN])` — el ordenado replica antes.
+    /// - `Degradar`: `fight_damage ← fight_damage · max(0, 1 + mod ·
+    ///   (psi[CORRUPTIBILIDAD] − psi[MIEDO]))` — el miedoso pega menos, el
+    ///   corrupto más.
+    ///
+    /// Rango sugerido `[0, 1]`. Valores > 1 amplifican la heterogeneidad
+    /// pero pueden producir efectos no-monotónicos cuando un psi extremo
+    /// hace flip al signo del factor (los clamps a 0/0.1 lo previenen).
+    #[serde(default)]
+    pub psi_effect_modulation: f32,
+    /// Política de elección de la `accion` base. Ver [`ActionPolicy`].
+    /// Default `Fixed` → comportamiento histórico bit-exacto.
+    #[serde(default)]
+    pub action_policy: ActionPolicy,
+    /// Pesos `[accion][componente_psi]` para `ActionPolicy::PsiArgmax`. Una
+    /// matriz 6×4 — fila `a` = qué tan atractiva es la acción `a` para cada
+    /// componente del psi. Cuando la política es `Fixed` se ignora.
+    ///
+    /// Default semánticamente plausible (independiente del comportamiento
+    /// histórico porque sólo se consulta con `PsiArgmax`):
+    /// - `Mover` (0): premia CURIOSIDAD, penaliza MIEDO.
+    /// - `Extraer` (1): premia ORDEN y CORRUPTIBILIDAD.
+    /// - `Sincronizar` (2): premia CURIOSIDAD.
+    /// - `Intercambiar` (3): premia ORDEN, penaliza MIEDO.
+    /// - `Replicar` (4): premia ORDEN.
+    /// - `Degradar` (5): premia CORRUPTIBILIDAD, penaliza MIEDO.
+    #[serde(default = "default_action_weights")]
+    pub action_weights: [[f32; 4]; 6],
+    /// Cada cuántos ticks reelige la acción la `ActionPolicy::PsiArgmax`.
+    /// `0` deshabilita la reelección incluso si la política es `PsiArgmax`
+    /// (failsafe: la matriz sólo "se enciende" cuando hay periodo). Valores
+    /// típicos: 10..200. Períodos chicos pueden volver al sistema neurótico
+    /// (cambia de oficio cada poco); muy grandes, inerte.
+    #[serde(default)]
+    pub policy_reeval_period: u32,
+}
+
+/// Default de `SimParams::action_weights` — fila por acción, columna por
+/// componente del `vector_psi` (`[ORDEN, MIEDO, CURIOSIDAD, CORRUPTIBILIDAD]`).
+fn default_action_weights() -> [[f32; 4]; 6] {
+    [
+        // 0 Mover         O    M    C    K
+        [0.0, -0.5, 1.0, 0.0],
+        // 1 Extraer       O    M    C    K
+        [0.6, 0.0, 0.0, 0.8],
+        // 2 Sincronizar   O    M    C    K
+        [0.0, 0.0, 1.0, 0.0],
+        // 3 Intercambiar  O    M    C    K
+        [1.0, -0.4, 0.0, 0.0],
+        // 4 Replicar      O    M    C    K
+        [1.0, 0.0, 0.0, 0.0],
+        // 5 Degradar      O    M    C    K
+        [0.0, -0.8, 0.0, 1.0],
+    ]
 }
 
 /// Índices semánticos para indexar `SimParams::relieve`. Coinciden con el
@@ -213,6 +312,16 @@ impl Default for SimParams {
             // Si subís estos, N* explota (validate empíricamente).
             regrowth_rate: 0.015,
             carrying_capacity: 18.0,
+            // Default: psi NO modula efectos → bit-exacto al motor histórico.
+            // Subir lentamente (0.3..0.7) para que la psicología empiece a
+            // sentirse sin reventar las calibraciones del Default.
+            psi_effect_modulation: 0.0,
+            // Default: política fija → la acción no se reelige por psi. Esto
+            // preserva tests existentes y todos los packs históricos.
+            action_policy: ActionPolicy::Fixed,
+            action_weights: default_action_weights(),
+            // Failsafe: con período 0, ni siquiera `PsiArgmax` reelige.
+            policy_reeval_period: 0,
         }
     }
 }

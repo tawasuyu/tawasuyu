@@ -23,7 +23,8 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use dominium_core::{
-    BehaviorHack, Concepto, Conceptos, Epoch, LayerMods, SimParams, Trigger, World, WorldStats,
+    ActionPolicy, BehaviorHack, Concepto, Conceptos, Epoch, LayerMods, SimParams, Trigger, World,
+    WorldStats,
 };
 use dominium_physics::tick;
 
@@ -83,7 +84,32 @@ enum Cmd {
         /// Amplitud del ciclo estacional ∈ [0, 1]. `0` = sin estaciones.
         #[arg(long, default_value_t = 0.0)]
         season_amplitude: f32,
+        /// Intensidad de la modulación de efectos por `vector_psi` (Fase A).
+        /// `0.0` (default) = comportamiento histórico bit-exacto. Rango útil
+        /// 0.0..1.0; valores mayores amplifican la heterogeneidad por psi.
+        #[arg(long, default_value_t = 0.0)]
+        psi_modulation: f32,
+        /// Política de elección de acción. `fixed` (default) = la acción se
+        /// hereda y nunca se reelige. `psi-argmax` = cada
+        /// `--policy-period` ticks los lemmings reeligen su acción como
+        /// `argmax(action_weights · psi)`.
+        #[arg(long, value_parser = parse_action_policy, default_value = "fixed")]
+        action_policy: ActionPolicy,
+        /// Período de reelección para `--action-policy psi-argmax`. `0`
+        /// deshabilita la reelección incluso con la política activa.
+        #[arg(long, default_value_t = 0)]
+        policy_period: u32,
     },
+}
+
+fn parse_action_policy(s: &str) -> Result<ActionPolicy, String> {
+    match s.to_ascii_lowercase().as_str() {
+        "fixed" => Ok(ActionPolicy::Fixed),
+        "psi-argmax" | "psiargmax" | "argmax" => Ok(ActionPolicy::PsiArgmax),
+        other => Err(format!(
+            "policy desconocida `{other}`; usá `fixed` o `psi-argmax`"
+        )),
+    }
 }
 
 fn main() -> Result<()> {
@@ -98,6 +124,9 @@ fn main() -> Result<()> {
             csv,
             season_period,
             season_amplitude,
+            psi_modulation,
+            action_policy,
+            policy_period,
         } => run_sim(
             seed,
             ticks,
@@ -107,6 +136,9 @@ fn main() -> Result<()> {
             csv.as_deref(),
             season_period,
             season_amplitude,
+            psi_modulation,
+            action_policy,
+            policy_period,
         ),
         Cmd::Repl { seed, grid, lemmings, conceptos } => {
             repl(seed, grid, lemmings, conceptos.as_deref())
@@ -123,6 +155,9 @@ fn run_sim(
     csv_path: Option<&std::path::Path>,
     season_period: u32,
     season_amplitude: f32,
+    psi_modulation: f32,
+    action_policy: ActionPolicy,
+    policy_period: u32,
 ) -> Result<()> {
     let mut world = build_world(seed, grid, lemmings);
     if let Some(path) = conceptos_path {
@@ -135,6 +170,9 @@ fn run_sim(
     let mut params = SimParams::default();
     params.season_period = season_period;
     params.season_amplitude = season_amplitude;
+    params.psi_effect_modulation = psi_modulation;
+    params.action_policy = action_policy;
+    params.policy_reeval_period = policy_period;
 
     let mut writer: Option<BufWriter<File>> = match csv_path {
         Some(p) => Some(BufWriter::new(

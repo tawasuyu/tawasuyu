@@ -5,7 +5,40 @@
 
 use crate::conceptos::{apply_conceptos, apply_hacks};
 use crate::diffuse::{diffuse_with, regrow_materia};
-use dominium_core::{SimParams, World};
+use dominium_core::{select_action_argmax, ActionPolicy, SimParams, World};
+
+/// Reelige la `accion` base de los lemmings libres según la política
+/// psicológica. Cero costo cuando la política es `Fixed` o el periodo es 0
+/// — el motor histórico no paga nada por esta fase.
+///
+/// Agentes capturados por un Concepto (`hack_lock > 0`) quedan blindados:
+/// la captura externa siempre vence a la reelección psicológica. La
+/// transición de desesperación (energía baja → pelear) se aplica *después*
+/// de esta función, así que la supervivencia también vence a la psicología.
+fn apply_psi_policy(world: &mut World, p: &SimParams) {
+    if !matches!(p.action_policy, ActionPolicy::PsiArgmax) {
+        return;
+    }
+    if p.policy_reeval_period == 0 {
+        return;
+    }
+    // Reelige sólo en los ticks que son múltiplos del período. El reloj
+    // global `tick_count` se incrementa al *final* de cada tick, así que
+    // en el primer tick (tick_count == 0) la fase se ejecuta — eso es
+    // intencional: deja a la psicología decidir antes de que la simulación
+    // arranque a inercia.
+    if (world.tick_count % p.policy_reeval_period as u64) != 0 {
+        return;
+    }
+    let weights = &p.action_weights;
+    for i in 0..world.lemmings.len() {
+        if world.lemmings.hack_lock[i] > 0 {
+            continue;
+        }
+        let psi = world.lemmings.vector_psi[i];
+        world.lemmings.accion[i] = select_action_argmax(&psi, weights);
+    }
+}
 
 /// Evaluación de transiciones: un agente exhausto se fuerza a `Pelear`.
 /// Un lemming bajo `hack_lock` está blindado: su acción ya está fijada por
@@ -82,6 +115,11 @@ pub fn tick(world: &mut World, p: &SimParams) {
     // 2b. Regrowth logístico de materia — cierre termodinámico que evita
     //     la extinción. Sub-fase del paso 2, no agrega fase nueva al §1.5.
     regrow_materia(&mut world.grid, p.regrowth_rate, p.carrying_capacity);
+    // 2c. Política psicológica de acción (opt-in vía `ActionPolicy::PsiArgmax`).
+    //     Reelige `accion` por argmax(W · psi) para lemmings libres. Sub-fase
+    //     de la 2 — corre antes de las transiciones y los hacks, así la
+    //     desesperación y la captura siempre ganan a la psicología tranquila.
+    apply_psi_policy(world, p);
     // 3. Transiciones de estado forzadas (desesperación → pelear).
     apply_transitions(world, p);
     // 4. Captura de acción por Conceptos. Vence cualquier transición previa:
@@ -250,6 +288,74 @@ mod tests {
         run(&mut b, &p, 20);
         assert_eq!(a.grid.materia, b.grid.materia);
         assert_eq!(a.lemmings.energia, b.lemmings.energia);
+    }
+
+    #[test]
+    fn psi_policy_fixed_default_keeps_accion_intact() {
+        // ActionPolicy::Fixed (default) NO debe tocar la `accion` aunque
+        // la fase 2c esté presente en el tick. Aislamos el efecto desactivando
+        // metabolic_cost (para que `desperation_threshold` no aplique) y
+        // abundance (para que no haya replicación lateral). Excluimos
+        // `Replicar` y `Degradar` del set probado porque consumen energía
+        // propia / ajena y desestabilizan el test.
+        let mut w = World::new(8, 8);
+        for c in w.grid.materia.iter_mut() { *c = 5.0; }
+        // Agentes con accion 0,1,2,3: Mover/Extraer/Sincronizar/Intercambiar.
+        for k in 0..4u8 {
+            let i = w.lemmings.spawn(4.0, 4.0, 200.0, [0.5; 4]);
+            w.lemmings.accion[i] = k;
+        }
+        let mut p = SimParams::default();
+        p.metabolic_cost = 0.0;
+        p.abundance_threshold = 0.0;
+        let acciones_antes = w.lemmings.accion.clone();
+        run(&mut w, &p, 5);
+        assert_eq!(w.lemmings.accion, acciones_antes);
+    }
+
+    #[test]
+    fn psi_policy_argmax_reasigns_accion_segun_psi() {
+        use dominium_core::ActionPolicy;
+        // Tres agentes con psi extremos:
+        // - psi=CORRUPTIBILIDAD → Degradar (5)
+        // - psi=ORDEN → Intercambiar (3) por tie-break
+        // - psi=CURIOSIDAD → Mover (0) por tie-break
+        let mut w = World::new(8, 8);
+        for c in w.grid.materia.iter_mut() { *c = 5.0; }
+        w.lemmings.spawn(4.0, 4.0, 50.0, [0.0, 0.0, 0.0, 1.0]);
+        w.lemmings.spawn(4.0, 4.0, 50.0, [1.0, 0.0, 0.0, 0.0]);
+        w.lemmings.spawn(4.0, 4.0, 50.0, [0.0, 0.0, 1.0, 0.0]);
+        // Acción inicial random (que NO coincide con lo esperado).
+        w.lemmings.accion[0] = 0;
+        w.lemmings.accion[1] = 0;
+        w.lemmings.accion[2] = 5;
+        let mut p = SimParams::default();
+        p.action_policy = ActionPolicy::PsiArgmax;
+        p.policy_reeval_period = 1; // reelige cada tick
+        // Forzamos modulación 0 para que las acciones no cambien psi de paso
+        // y el test mida sólo la reelección.
+        p.psi_effect_modulation = 0.0;
+        // Un solo tick basta: apply_psi_policy corre antes de step_lemming.
+        tick(&mut w, &p);
+        assert_eq!(w.lemmings.accion[0], 5, "corrupto → Degradar");
+        assert_eq!(w.lemmings.accion[1], 3, "ordenado → Intercambiar (tie-break)");
+        assert_eq!(w.lemmings.accion[2], 0, "curioso → Mover (tie-break)");
+    }
+
+    #[test]
+    fn psi_policy_argmax_respeta_hack_lock() {
+        use dominium_core::ActionPolicy;
+        // Un agente bajo hack_lock no debe ser reelegido por psi.
+        let mut w = World::new(8, 8);
+        w.lemmings.spawn(4.0, 4.0, 50.0, [0.0, 0.0, 0.0, 1.0]); // psi → Degradar
+        w.lemmings.accion[0] = 2; // pero está sincronizando bajo captura
+        w.lemmings.hack_lock[0] = 50;
+        let mut p = SimParams::default();
+        p.action_policy = ActionPolicy::PsiArgmax;
+        p.policy_reeval_period = 1;
+        tick(&mut w, &p);
+        // Sigue sincronizando: el hack_lock blinda contra la reelección psi.
+        assert_eq!(w.lemmings.accion[0], 2);
     }
 
     #[test]

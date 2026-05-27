@@ -31,7 +31,7 @@ pub use grid::Grid;
 pub use lemmings::Lemmings;
 pub use metrics::WorldStats;
 pub use params::{
-    SimParams, TradeTarget, RELIEVE_DEGRADACION, RELIEVE_MATERIA, RELIEVE_ORO, RELIEVE_PODER,
-    RELIEVE_PSIQUE,
+    ActionPolicy, SimParams, TradeTarget, RELIEVE_DEGRADACION, RELIEVE_MATERIA, RELIEVE_ORO,
+    RELIEVE_PODER, RELIEVE_PSIQUE,
 };
-pub use world::{Action, World};
+pub use world::{select_action_argmax, Action, World};

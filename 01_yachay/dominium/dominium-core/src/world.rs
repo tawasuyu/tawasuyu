@@ -9,6 +9,26 @@ use crate::lemmings::{Lemmings, PSI_CORRUPTIBILIDAD, PSI_CURIOSIDAD, PSI_MIEDO, 
 use crate::params::{SimParams, TradeTarget};
 use serde::{Deserialize, Serialize};
 
+/// Selecciona el byte de acción que maximiza `action_weights · psi`. Tie-break
+/// determinista por menor índice. Devuelve el byte en `0..=5`.
+///
+/// Esta función es la mecánica matemática de [`ActionPolicy::PsiArgmax`]: sin
+/// RNG, sin softmax, sin libm. Cualquier sintonía de pesos produce el mismo
+/// resultado en x86 y ARM porque sólo hay multiplicaciones y sumas `f32` en
+/// orden fijo.
+pub fn select_action_argmax(psi: &[f32; 4], weights: &[[f32; 4]; 6]) -> u8 {
+    let mut best_idx: u8 = 0;
+    let mut best_score: f32 = f32::MIN;
+    for (a, w) in weights.iter().enumerate() {
+        let s = w[0] * psi[0] + w[1] * psi[1] + w[2] * psi[2] + w[3] * psi[3];
+        if s > best_score {
+            best_score = s;
+            best_idx = a as u8;
+        }
+    }
+    best_idx
+}
+
 /// Las 6 acciones atómicas. El byte `accion` del Lemming es uno de estos.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
@@ -128,16 +148,27 @@ impl World {
             (self.lemmings.pos_y[i] + best_dir.1 * p.move_speed).clamp(0.0, h);
         // Costo base + costo de pendiente realmente subida.
         let climb_paid = (best_z - z_cur).max(0.0) * p.climb_cost;
-        self.lemmings.energia[i] -= p.move_cost + climb_paid;
+        // Psi-modulación: el miedoso se cansa más al moverse (chequea el
+        // entorno, vuelve, duda). Factor 1.0 cuando modulation == 0.
+        let move_cost_eff =
+            p.move_cost * (1.0 + p.psi_effect_modulation * 0.5 * psi[PSI_MIEDO]).max(0.0);
+        self.lemmings.energia[i] -= move_cost_eff + climb_paid;
     }
 
     /// 1 · Extraer — vacía materia de la celda hacia la energía del agente.
+    ///
+    /// Psi-modulación: el agente con `psi[CORRUPTIBILIDAD]` alto saca más
+    /// de la celda (y deja proporcionalmente más cicatriz). Sin modulación
+    /// (factor 1.0) el comportamiento es idéntico al motor histórico.
     pub fn act_extraer(&mut self, i: usize, p: &SimParams) {
         let idx = self.cell_of(i);
-        let taken = self.grid.materia[idx].min(p.extract_rate).max(0.0);
+        let psi = self.lemmings.vector_psi[i];
+        let factor = (1.0 + p.psi_effect_modulation * psi[PSI_CORRUPTIBILIDAD]).max(0.0);
+        let rate_eff = p.extract_rate * factor;
+        let taken = self.grid.materia[idx].min(rate_eff).max(0.0);
         self.grid.materia[idx] -= taken;
         self.lemmings.energia[i] += taken;
-        self.grid.degradacion[idx] += p.degr_per_extract;
+        self.grid.degradacion[idx] += p.degr_per_extract * factor;
     }
 
     /// 2 · Sincronizar — el `vector_psi` deriva hacia los campos de la celda.
@@ -167,7 +198,14 @@ impl World {
             TradeTarget::Poorest => self.lemmings.poorest(i),
         };
         let Some(j) = target else { return };
-        let amount = p.trade_amount.min(self.lemmings.energia[i]).max(0.0);
+        // Psi-modulación: el ordenado comparte, el corruptible retiene.
+        // Factor clamp ≥ 0 — un psi extremo en CORRUPTIBILIDAD puede
+        // anular el intercambio pero no invertirlo (eso sería robo, que
+        // no es la semántica de `act_intercambiar`).
+        let psi = self.lemmings.vector_psi[i];
+        let factor =
+            (1.0 + p.psi_effect_modulation * (psi[PSI_ORDEN] - psi[PSI_CORRUPTIBILIDAD])).max(0.0);
+        let amount = (p.trade_amount * factor).min(self.lemmings.energia[i]).max(0.0);
         self.lemmings.energia[i] -= amount;
         self.lemmings.energia[j] += amount;
     }
@@ -185,12 +223,17 @@ impl World {
     /// `step_lemming`) son las tres piezas que dan al sistema un punto
     /// fijo `N* > 0`.
     pub fn act_replicar(&mut self, i: usize, p: &SimParams) {
-        if self.lemmings.energia[i] <= p.replicate_threshold {
+        let psi = self.lemmings.vector_psi[i];
+        // Psi-modulación: el ordenado baja su umbral de reproducción
+        // (forma familia antes). Clamp inferior a 0.1·threshold para
+        // evitar reproducción explosiva con psi extremos.
+        let thr_factor = (1.0 - p.psi_effect_modulation * 0.3 * psi[PSI_ORDEN]).max(0.1);
+        let thr_eff = p.replicate_threshold * thr_factor;
+        if self.lemmings.energia[i] <= thr_eff {
             return;
         }
         let cost = self.lemmings.energia[i] * p.child_energy_frac;
         self.lemmings.energia[i] -= cost;
-        let psi = self.lemmings.vector_psi[i];
         let accion = self.lemmings.accion[i];
         // Dirección de dispersión: 0=E, 1=O, 2=S, 3=N. Determinista por
         // (edad + i) — distribuye los hijos sucesivos en las 4 vecinas.
@@ -210,9 +253,18 @@ impl World {
     }
 
     /// 5 · Degradar (Pelear) — resta energía al vecino y absorbe parte.
+    ///
+    /// Psi-modulación: el atacante miedoso pega menos, el corruptible más.
+    /// Factor `max(0, 1 + mod · (CORR − MIEDO))` — un agente cuyo MIEDO
+    /// domina deja de hacer daño (pero `act_degradar` sigue ejecutándose:
+    /// es la mecánica de "amago" / "huida").
     pub fn act_degradar(&mut self, i: usize, p: &SimParams) {
         let Some(j) = self.lemmings.nearest(i) else { return };
-        let dmg = p.fight_damage.min(self.lemmings.energia[j]).max(0.0);
+        let psi = self.lemmings.vector_psi[i];
+        let factor =
+            (1.0 + p.psi_effect_modulation * (psi[PSI_CORRUPTIBILIDAD] - psi[PSI_MIEDO])).max(0.0);
+        let dmg_max = p.fight_damage * factor;
+        let dmg = dmg_max.min(self.lemmings.energia[j]).max(0.0);
         self.lemmings.energia[j] -= dmg;
         self.lemmings.energia[i] += dmg * p.absorb_frac;
     }
@@ -424,5 +476,114 @@ mod tests {
         w.act_intercambiar(0, &p);
         assert!(w.lemmings.energia[1] > before_close, "le donó al cercano");
         assert_eq!(w.lemmings.energia[2], before_poor, "no le tocó al pobre");
+    }
+
+    // ───────────────────────── Fase A: psi modula efectos ─────────────────
+
+    #[test]
+    fn psi_modulation_zero_preserves_legacy_act_extraer() {
+        // Con psi_effect_modulation = 0.0 el resultado es bit-exacto al motor
+        // histórico, sin importar qué psi tenga el agente. Esta es la
+        // garantía de retrocompat para todo el corpus de tests preexistentes.
+        let mut a = World::new(8, 8);
+        let mut b = World::new(8, 8);
+        let i = a.lemmings.spawn(4.0, 4.0, 100.0, [0.9, 0.0, 0.0, 0.9]);
+        let j = b.lemmings.spawn(4.0, 4.0, 100.0, [0.0, 0.0, 0.0, 0.0]);
+        let idx = a.grid.idx(4, 4);
+        a.grid.materia[idx] = 50.0;
+        b.grid.materia[idx] = 50.0;
+        let p = SimParams::default(); // psi_effect_modulation == 0
+        a.act_extraer(i, &p);
+        b.act_extraer(j, &p);
+        assert_eq!(a.lemmings.energia[i], b.lemmings.energia[j]);
+        assert_eq!(a.grid.materia[idx], b.grid.materia[idx]);
+        assert_eq!(a.grid.degradacion[idx], b.grid.degradacion[idx]);
+    }
+
+    #[test]
+    fn corruptible_extrae_mas_y_degrada_mas() {
+        // Dos agentes idénticos salvo CORRUPTIBILIDAD: el corrupto saca más
+        // materia (más energía propia) y deja más cicatriz en el suelo.
+        // Es la modulación canónica de Extraer.
+        let mut a = World::new(8, 8); // corrupto
+        let mut b = World::new(8, 8); // honesto
+        let i = a.lemmings.spawn(4.0, 4.0, 0.0, [0.0, 0.0, 0.0, 1.0]);
+        let j = b.lemmings.spawn(4.0, 4.0, 0.0, [0.0, 0.0, 0.0, 0.0]);
+        let idx = a.grid.idx(4, 4);
+        a.grid.materia[idx] = 100.0;
+        b.grid.materia[idx] = 100.0;
+        let mut p = SimParams::default();
+        p.psi_effect_modulation = 0.8;
+        a.act_extraer(i, &p);
+        b.act_extraer(j, &p);
+        assert!(
+            a.lemmings.energia[i] > b.lemmings.energia[j],
+            "corrupto sacó más: {} vs {}",
+            a.lemmings.energia[i], b.lemmings.energia[j]
+        );
+        assert!(
+            a.grid.degradacion[idx] > b.grid.degradacion[idx],
+            "corrupto dejó más cicatriz"
+        );
+    }
+
+    #[test]
+    fn miedoso_pega_menos_en_degradar() {
+        let mut a = World::new(8, 8); // miedoso
+        let mut b = World::new(8, 8); // valiente
+        a.lemmings.spawn(4.0, 4.0, 50.0, [0.0, 1.0, 0.0, 0.0]); // MIEDO=1
+        a.lemmings.spawn(5.0, 4.0, 50.0, [0.0; 4]); // víctima
+        b.lemmings.spawn(4.0, 4.0, 50.0, [0.0; 4]); // valiente
+        b.lemmings.spawn(5.0, 4.0, 50.0, [0.0; 4]); // víctima
+        let mut p = SimParams::default();
+        p.psi_effect_modulation = 0.8;
+        let e_victima_pre = a.lemmings.energia[1];
+        a.act_degradar(0, &p);
+        b.act_degradar(0, &p);
+        let dmg_miedoso = e_victima_pre - a.lemmings.energia[1];
+        let dmg_valiente = e_victima_pre - b.lemmings.energia[1];
+        assert!(
+            dmg_miedoso < dmg_valiente,
+            "miedoso pega menos: {dmg_miedoso} < {dmg_valiente}"
+        );
+    }
+
+    #[test]
+    fn ordenado_comparte_mas_en_intercambiar() {
+        let mut a = World::new(8, 8); // ordenado
+        let mut b = World::new(8, 8); // neutral
+        a.lemmings.spawn(4.0, 4.0, 50.0, [1.0, 0.0, 0.0, 0.0]); // ORDEN=1
+        a.lemmings.spawn(5.0, 4.0, 1.0, [0.0; 4]); // pobre cercano
+        b.lemmings.spawn(4.0, 4.0, 50.0, [0.0; 4]);
+        b.lemmings.spawn(5.0, 4.0, 1.0, [0.0; 4]);
+        let mut p = SimParams::default();
+        p.psi_effect_modulation = 0.8;
+        p.trade_target = TradeTarget::Nearest; // forzamos al cercano para test reproducible
+        a.act_intercambiar(0, &p);
+        b.act_intercambiar(0, &p);
+        let donado_orden = a.lemmings.energia[1] - 1.0;
+        let donado_base = b.lemmings.energia[1] - 1.0;
+        assert!(
+            donado_orden > donado_base,
+            "ordenado donó más: {donado_orden} > {donado_base}"
+        );
+    }
+
+    #[test]
+    fn argmax_picks_action_with_highest_psi_dot_weights() {
+        // psi puro en CORRUPTIBILIDAD → con los pesos por default, la
+        // acción ganadora es Extraer (peso 0.8) o Degradar (peso 1.0). Como
+        // Degradar tiene mayor peso para CORRUPTIBILIDAD, gana.
+        let weights = crate::params::SimParams::default().action_weights;
+        let psi = [0.0, 0.0, 0.0, 1.0];
+        assert_eq!(select_action_argmax(&psi, &weights), 5);
+        // psi puro en CURIOSIDAD → Mover (1.0) y Sincronizar (1.0) empatan
+        // → gana el menor índice = Mover (0).
+        let psi = [0.0, 0.0, 1.0, 0.0];
+        assert_eq!(select_action_argmax(&psi, &weights), 0);
+        // psi puro en ORDEN → Intercambiar (1.0) y Replicar (1.0) empatan
+        // → gana el menor índice = Intercambiar (3).
+        let psi = [1.0, 0.0, 0.0, 0.0];
+        assert_eq!(select_action_argmax(&psi, &weights), 3);
     }
 }
