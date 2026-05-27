@@ -1,0 +1,17 @@
+[package]
+name = "cosmos-transits"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "cosmos-transits — detecta tránsitos de Mercurio o Venus sobre el disco solar visto desde la Tierra. Capa fina sobre cosmos-ephemeris: calcula la separación angular geocéntrica al Sol y reporta los instantes donde es menor que el radio aparente del Sol."
+
+[dependencies]
+cosmos-core = { workspace = true }
+cosmos-time = { path = "../cosmos-time" }
+cosmos-ephemeris = { path = "../cosmos-ephemeris" }
+
+[[example]]
+name = "next_transits_demo"
+path = "examples/next_transits_demo.rs"

@@ -1,0 +1,17 @@
+[package]
+name = "cosmos-tides"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "cosmos-tides — modelo de mareas instantáneas Sol+Luna. Capa fina sobre cosmos-skywatch que evalúa el potencial de marea de Newton/Laplace (2do polinomio de Legendre) para una ubicación y un instante. MVP: no resuelve la respuesta hidrodinámica de la cuenca; sólo la fuerza generadora."
+
+[dependencies]
+cosmos-core = { workspace = true }
+cosmos-time = { path = "../cosmos-time" }
+cosmos-skywatch = { path = "../cosmos-skywatch" }
+
+[[example]]
+name = "tides_callao_demo"
+path = "examples/tides_callao_demo.rs"

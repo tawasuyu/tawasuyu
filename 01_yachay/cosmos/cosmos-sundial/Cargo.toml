@@ -1,0 +1,17 @@
+[package]
+name = "cosmos-sundial"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "cosmos-sundial — reloj de sol simulado. Capa fina sobre cosmos-skywatch que convierte alt/az del Sol en (largo, azimut) de la sombra de un gnomon vertical. Útil para diseño físico de cuadrantes solares + visualizaciones educativas; tercera pieza del extracto 'cosmos-ephem puro'."
+
+[dependencies]
+cosmos-core = { workspace = true }
+cosmos-time = { path = "../cosmos-time" }
+cosmos-skywatch = { path = "../cosmos-skywatch" }
+
+[[example]]
+name = "sundial_lima_demo"
+path = "examples/sundial_lima_demo.rs"
