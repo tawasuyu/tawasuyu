@@ -1069,9 +1069,12 @@ pub(crate) fn enlazar_capacidades(
             // el hash pendiente cambio. Asi, un loop de la app reintentando
             // cada tick no inunda al host con sign_requests duplicadas.
             // El estado vive en un Mutex spin —el reactor cooperativo no
-            // se contiende—.
+            // se contiende—. El acumulador de 64 bytes y el ultimo hash
+            // viajan acoplados para que un cambio de solicitud reinicie
+            // todo el camino limpio.
             use spin::Mutex;
             static ULTIMO_HASH: Mutex<Option<crate::almacen::Hash>> = Mutex::new(None);
+            static ACUMULADOR: Mutex<([u8; 64], usize)> = Mutex::new(([0; 64], 0));
             let emitir = {
                 let mut slot = ULTIMO_HASH.lock();
                 let cambio = slot.as_ref() != Some(&hash);
@@ -1081,6 +1084,17 @@ pub(crate) fn enlazar_capacidades(
                 cambio
             };
             if emitir {
+                // FASE 39 :: solicitud nueva. Limpiamos el ring de RX para
+                // descartar bytes huerfanos de una solicitud anterior
+                // abortada (el demonio rechazo, timeout, etc.) Y reseteamos
+                // el acumulador de 64 bytes — el siguiente byte que entre
+                // sera el primero de la nueva firma esperada.
+                crate::drivers::serial::vaciar_input();
+                let mut acc = ACUMULADOR.lock();
+                acc.0 = [0; 64];
+                acc.1 = 0;
+                drop(acc);
+
                 // Prefijo de control + hash en hexadecimal + newline.
                 // 20 (prefijo) + 64 (hex) + 1 (\n) = 85 bytes — cabe holgado
                 // en el buffer estatico de pila.
@@ -1105,10 +1119,10 @@ pub(crate) fn enlazar_capacidades(
             let leidos = crate::drivers::serial::leer_disponible(&mut firma);
 
             if leidos < 64 {
-                // Devolvemos los bytes parciales al ring para no perderlos —
-                // el ring no tiene push_front, asi que conservamos la firma
-                // en un acumulador estatico.
-                static ACUMULADOR: Mutex<([u8; 64], usize)> = Mutex::new(([0; 64], 0));
+                // Devolvemos los bytes parciales al acumulador estatico
+                // declarado arriba — el ring no tiene push_front, asi que
+                // conservamos los bytes parciales en `ACUMULADOR` hasta
+                // juntar los 64 a traves de multiples tics.
                 let mut acc = ACUMULADOR.lock();
                 let (ref mut buf, ref mut llenos) = *acc;
                 let cap = (64 - *llenos).min(leidos);

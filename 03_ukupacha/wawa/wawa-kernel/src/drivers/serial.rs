@@ -156,3 +156,18 @@ pub fn leer_disponible(out: &mut [u8]) -> usize {
     }
     n
 }
+
+/// FASE 39 :: vacia el ring de RX Y purga el FIFO del UART. Llamala cuando
+/// arranca una nueva solicitud (emision de prefijo) — asi descartamos
+/// cualquier byte huerfano que quedo de una solicitud anterior abortada o
+/// de basura en el canal antes del demonio. Tras esta llamada, el primer
+/// byte que entre por COM1 sera el primero que vea el llamante.
+pub fn vaciar_input() {
+    // Drenar el UART al ring (por si hay bytes pendientes en el FIFO).
+    drenar_input();
+    // Resetear el ring entero — head = tail = 0 descarta todo el contenido
+    // sin recorrerlo byte a byte.
+    let mut ring = RX.lock();
+    ring.head = 0;
+    ring.tail = 0;
+}

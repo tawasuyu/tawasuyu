@@ -21,3 +21,10 @@ wawa-config = { path = "../../../shared/wawa-config" }
 # para forjar una clave nueva se usa un proceso separado (futuro `wawactl
 # claves forjar`); aqui solo firmamos con la clave existente.
 ed25519-compact = { version = "2", default-features = false }
+# Fase 39 :: demonio bidireccional `wawactl daemon-firma`. tokio gobierna el
+# loop async (lectura del PTY de COM1 + temporizador de confirmacion 30s);
+# chrono pone marcas de tiempo en el log de auditoria; anyhow simplifica
+# la propagacion de errores en el lazo asincrono.
+tokio = { workspace = true }
+chrono = { workspace = true }
+anyhow = { workspace = true }

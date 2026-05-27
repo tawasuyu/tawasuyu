@@ -118,6 +118,34 @@ enum Cmd {
         #[arg(long = "clave-privada")]
         clave_privada: String,
     },
+    /// Fase 39 :: demonio bidireccional. Escucha el PTY que QEMU expone
+    /// como COM1 de Wawa, parsea solicitudes `wawa::sign_request::<HEX>`,
+    /// pide confirmacion al operador humano (`y/N`, timeout 30 s) y
+    /// reinyecta la firma Ed25519 de 64 bytes raw de vuelta por el mismo
+    /// canal. Cada firma autorizada deja huella en
+    /// `wawactl_audit.log` para analisis forense.
+    ///
+    /// Uso tipico (con QEMU mapeando COM1 a un PTY local):
+    ///   qemu-system-x86_64 -serial pty ... # imprime "char device redirected to /dev/pts/N"
+    ///   wawactl daemon-firma \
+    ///       --pty /dev/pts/N \
+    ///       --clave-privada ~/.config/wawa/operador.sk
+    ///
+    /// El demonio NO firma ciegamente — la soberania del operador es
+    /// inviolable. Una app enjaulada que inunde el COM1 con
+    /// sign_requests solo lograra que el humano vea el spam y rechace.
+    DaemonFirma {
+        /// Path al PTY/dispositivo serial que QEMU expone como COM1.
+        #[arg(long)]
+        pty: String,
+        /// Path al archivo con la clave privada Ed25519 (32 B seed o 64 B SK).
+        #[arg(long = "clave-privada")]
+        clave_privada: String,
+        /// Path opcional del log de auditoria. Default:
+        /// `./wawactl_audit.log`.
+        #[arg(long = "log", default_value = "wawactl_audit.log")]
+        log: String,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -151,6 +179,7 @@ fn run(cmd: Cmd) -> Result<(), String> {
         Cmd::Watch => cmd_watch(),
         Cmd::Module { id, op, system } => cmd_module(&id, &op, layer_of(system)),
         Cmd::FirmarCuaderno { hash, clave_privada } => cmd_firmar_cuaderno(&hash, &clave_privada),
+        Cmd::DaemonFirma { pty, clave_privada, log } => cmd_daemon_firma(&pty, &clave_privada, &log),
     }
 }
 
@@ -382,5 +411,217 @@ fn parse_bool_or_clock(v: &str) -> Result<bool, String> {
         "true" | "24" | "24h" => Ok(true),
         "false" | "12" | "12h" => Ok(false),
         other => Err(format!("bool inválido: {other}")),
+    }
+}
+
+// =============================================================================
+//  FASE 39 :: demonio bidireccional de firma del cuaderno
+// -----------------------------------------------------------------------------
+//  El subcomando `wawactl daemon-firma --pty <path> --clave-privada <path>`
+//  vive aqui. Lazo asincrono basado en tokio, escucha del PTY de QEMU
+//  (mapeado a COM1 de Wawa por `-serial pty`), parser tolerante a basura,
+//  confirmacion interactiva del operador humano con timeout 30 s, y log de
+//  auditoria en `wawactl_audit.log`.
+// =============================================================================
+
+/// Prefijo de control que el kernel de Wawa emite antes del hash. El parser
+/// es estricto: solo lineas que arrancan EXACTAMENTE asi son candidatas.
+const PREFIJO_SOLICITUD: &str = "wawa::sign_request::";
+/// Longitud del hash en caracteres hexadecimales (32 bytes -> 64 chars).
+const HASH_HEX_LEN: usize = 64;
+/// Tiempo maximo que el demonio espera la confirmacion del operador.
+/// 30 s alinea con la cadencia humana sin congelar el kernel — si no
+/// hay decision, la syscall en Wawa expira con `Saturado` y la app
+/// puede reintentar despues.
+const TIMEOUT_CONFIRMACION: Duration = Duration::from_secs(30);
+
+enum DecisionOperador {
+    /// El operador autorizo. Firmamos y devolvemos los 64 bytes raw.
+    Autorizada,
+    /// El operador rechazo o el timeout expiro. No firmamos; el kernel
+    /// vera `Saturado` y la app puede reintentar.
+    Rechazada,
+}
+
+/// FASE 39 :: subcomando `daemon-firma`. Crea un runtime tokio y delega
+/// en `ejecutar_daemon`. Devolver `Err` aqui imprime al stderr de wawactl
+/// y sale con codigo no-cero.
+fn cmd_daemon_firma(pty: &str, clave_path: &str, log_path: &str) -> Result<(), String> {
+    // Cargar la clave privada UNA SOLA VEZ al arrancar — el ataque
+    // superficie del lazo asincrono no la toca a partir de ahi.
+    let sk = cargar_clave_privada(clave_path)?;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("no pude construir el runtime tokio: {e}"))?;
+    rt.block_on(ejecutar_daemon(pty.to_string(), sk, log_path.to_string()))
+}
+
+/// Carga la clave privada desde un archivo. Acepta dos formatos:
+///   * 32 bytes -> seed (ed25519-compact deriva el keypair).
+///   * 64 bytes -> SecretKey "expanded" canonica.
+fn cargar_clave_privada(path: &str) -> Result<ed25519_compact::SecretKey, String> {
+    let bytes = std::fs::read(path)
+        .map_err(|e| format!("no pude leer la clave privada en {path}: {e}"))?;
+    match bytes.len() {
+        32 => {
+            let mut seed = [0u8; 32];
+            seed.copy_from_slice(&bytes);
+            let kp = ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new(seed));
+            Ok(kp.sk)
+        }
+        64 => ed25519_compact::SecretKey::from_slice(&bytes)
+            .map_err(|e| format!("SecretKey invalida: {e}")),
+        n => Err(format!(
+            "la clave debe traer 32 (seed) o 64 (SecretKey) bytes; trae {n}"
+        )),
+    }
+}
+
+/// Lazo asincrono del demonio. Mantiene un BufReader sobre la mitad de
+/// lectura del PTY y reescribe en la mitad de escritura los 64 bytes
+/// raw de cada firma autorizada.
+async fn ejecutar_daemon(
+    pty_path: String,
+    sk: ed25519_compact::SecretKey,
+    log_path: String,
+) -> Result<(), String> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    eprintln!("wawactl: daemon-firma escuchando en {pty_path}");
+    eprintln!("wawactl: auditoria a {log_path}");
+    eprintln!("wawactl: Ctrl-C para terminar");
+
+    let file = tokio::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&pty_path)
+        .await
+        .map_err(|e| format!("no pude abrir {pty_path}: {e}"))?;
+    // Split del File en R+W. `tokio::io::split` requiere AsyncRead + AsyncWrite;
+    // `tokio::fs::File` cumple ambos rasgos por separado en sus halves.
+    let (reader, mut writer) = tokio::io::split(file);
+    let mut reader = BufReader::new(reader);
+    let mut linea = String::new();
+
+    loop {
+        linea.clear();
+        let n = reader
+            .read_line(&mut linea)
+            .await
+            .map_err(|e| format!("error leyendo PTY: {e}"))?;
+        if n == 0 {
+            eprintln!("wawactl: PTY cerrada — saliendo");
+            return Ok(());
+        }
+
+        // El parser es ESTRICTO: la linea debe arrancar con el prefijo
+        // exacto y traer 64 chars hex justo despues. Cualquier otra
+        // basura (logs del kernel, trazas de boot) cae al sumidero
+        // silencioso — el operador la ve en su terminal de QEMU igual.
+        let trim = linea.trim_end_matches(|c| c == '\n' || c == '\r');
+        let Some(hash_hex) = trim.strip_prefix(PREFIJO_SOLICITUD) else {
+            continue;
+        };
+        if hash_hex.len() != HASH_HEX_LEN || !hash_hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            continue;
+        }
+        let mut hash = [0u8; 32];
+        if !hex_a_bytes(hash_hex, &mut hash) {
+            continue;
+        }
+
+        match confirmar_con_operador(hash_hex).await {
+            DecisionOperador::Autorizada => {
+                let firma = sk.sign(hash, None);
+                let bytes = firma.as_ref();
+                writer
+                    .write_all(bytes)
+                    .await
+                    .map_err(|e| format!("error escribiendo firma al PTY: {e}"))?;
+                writer
+                    .flush()
+                    .await
+                    .map_err(|e| format!("error flush PTY: {e}"))?;
+                escribir_auditoria(&log_path, "FIRMA_EMITIDA", hash_hex);
+                eprintln!("wawactl: firma emitida ({} bytes)", bytes.len());
+            }
+            DecisionOperador::Rechazada => {
+                escribir_auditoria(&log_path, "FIRMA_RECHAZADA", hash_hex);
+                eprintln!("wawactl: solicitud rechazada o timeout");
+            }
+        }
+    }
+}
+
+/// Muestra el prompt al operador y lee `y`/`N` por stdin con timeout. La
+/// lectura de stdin es bloqueante (no hay un read async robusto para
+/// stdin en tokio sin features adicionales); usamos `spawn_blocking`
+/// para que el lazo principal pueda imponer el timeout via
+/// `tokio::time::timeout`.
+async fn confirmar_con_operador(hash_hex: &str) -> DecisionOperador {
+    use std::io::Write;
+    eprintln!();
+    eprintln!("================================================================");
+    eprintln!("  SOLICITUD DE FIRMA DE CUADERNO");
+    eprintln!("  HASH: {hash_hex}");
+    eprintln!("  Autorizar firma en el metal? [y/N]  (timeout 30 s)");
+    eprintln!("================================================================");
+    let _ = std::io::stderr().flush();
+
+    let respuesta = tokio::task::spawn_blocking(|| {
+        let mut buf = String::new();
+        let _ = std::io::stdin().read_line(&mut buf);
+        buf.trim().to_string()
+    });
+
+    match tokio::time::timeout(TIMEOUT_CONFIRMACION, respuesta).await {
+        Ok(Ok(s)) if s.eq_ignore_ascii_case("y") => DecisionOperador::Autorizada,
+        Ok(_) => DecisionOperador::Rechazada,
+        Err(_) => {
+            eprintln!("wawactl: timeout — sin respuesta del operador");
+            DecisionOperador::Rechazada
+        }
+    }
+}
+
+/// Convierte una cadena hexadecimal de 64 chars a `[u8; 32]`. Devuelve
+/// `false` si algun caracter no es hex valido — el parser de lineas ya
+/// filtro antes, pero defensa en profundidad no cuesta.
+fn hex_a_bytes(hex: &str, out: &mut [u8; 32]) -> bool {
+    if hex.len() != 64 {
+        return false;
+    }
+    for i in 0..32 {
+        match u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16) {
+            Ok(b) => out[i] = b,
+            Err(_) => return false,
+        }
+    }
+    true
+}
+
+/// Append a `log_path` de una entrada estructurada de auditoria. Cada
+/// linea contiene timestamp ISO 8601, accion (FIRMA_EMITIDA o
+/// FIRMA_RECHAZADA) y el hash. Errores de I/O se imprimen a stderr
+/// pero NO interrumpen el lazo — perder una linea de log es preferible
+/// a perder el demonio entero.
+fn escribir_auditoria(log_path: &str, accion: &str, hash_hex: &str) {
+    use std::io::Write;
+    let ts = chrono::Utc::now().to_rfc3339();
+    let linea = format!(
+        "[{ts}] | ACCION: {accion} | HASH: {hash_hex} | AUTOR: AGORA_PUBLIC_KEY_LOCAL\n"
+    );
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+    {
+        Ok(mut f) => {
+            if let Err(e) = f.write_all(linea.as_bytes()) {
+                eprintln!("wawactl: no pude escribir audit log: {e}");
+            }
+        }
+        Err(e) => eprintln!("wawactl: no pude abrir audit log {log_path}: {e}"),
     }
 }
