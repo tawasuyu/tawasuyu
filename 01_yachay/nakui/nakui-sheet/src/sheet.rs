@@ -18,7 +18,7 @@ use crate::formula::{self, CellResolver, FormulaExpr};
 use crate::graph::{CycleError, SheetGraph};
 use crate::value::SheetValue;
 use rust_decimal::Decimal;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use thiserror::Error;
 
@@ -51,6 +51,11 @@ pub struct CellState {
 pub struct Sheet {
     cells: HashMap<CellRef, CellState>,
     graph: SheetGraph,
+    /// Celdas con fórmulas que contienen funciones volátiles (`TODAY`,
+    /// `NOW`, `RAND`, `RANDBETWEEN`). Se incluyen como seeds en cada
+    /// `recalc_from` para que su valor se mantenga "vivo" aunque
+    /// nada upstream haya cambiado.
+    volatiles: HashSet<CellRef>,
 }
 
 impl Sheet {
@@ -123,6 +128,11 @@ impl Sheet {
             .get(&cr)
             .map(|s| s.value.clone())
             .unwrap_or(SheetValue::Empty);
+        if expr.is_volatile() {
+            self.volatiles.insert(cr);
+        } else {
+            self.volatiles.remove(&cr);
+        }
         self.cells.insert(
             cr,
             CellState {
@@ -134,6 +144,22 @@ impl Sheet {
         Ok(self.recalc_from(&[cr], Some((cr, prev_value))))
     }
 
+    /// Recalcula explícitamente todas las celdas volátiles. Útil
+    /// para un "refresh" tipo F9: actualiza `TODAY()`, `RAND()`,
+    /// etc. sin haber editado nada. Devuelve el set de celdas que
+    /// cambiaron de valor.
+    pub fn recompute_volatiles(&mut self) -> SetReport {
+        if self.volatiles.is_empty() {
+            return SetReport::default();
+        }
+        let seeds: Vec<CellRef> = self.volatiles.iter().copied().collect();
+        self.recalc_from(&seeds, None)
+    }
+
+    pub fn volatile_count(&self) -> usize {
+        self.volatiles.len()
+    }
+
     /// Borra una celda. Equivale a `set_cell(cr, "")` excepto que no
     /// pasa por el parser.
     pub fn clear_cell(&mut self, cr: CellRef) -> SetReport {
@@ -143,6 +169,7 @@ impl Sheet {
         let prev_value = self.cells[&cr].value.clone();
         // Una celda vacía no tiene deps; el grafo absorbe el cambio.
         let _ = self.graph.set_deps(cr, &[]);
+        self.volatiles.remove(&cr);
         self.cells.remove(&cr);
         // Aunque la celda en sí ya no existe, sus downstream sí siguen
         // referenciándola — se evaluarán contra `SheetValue::Empty`.
@@ -159,12 +186,23 @@ impl Sheet {
     /// `seed_with_prev` se da, se trata como "esa celda acaba de
     /// cambiar; usa este valor como referencia para detectar si
     /// cambió". Útil para `set_cell`.
+    ///
+    /// Las celdas volátiles registradas (`TODAY`, `RAND`...) se
+    /// agregan automáticamente al set de seeds — su valor depende
+    /// del tiempo/aleatoriedad, así que cada recálculo es una
+    /// oportunidad de actualizarlas. Es lo que mantiene viva la
+    /// reactividad sin un thread de tick por separado.
     fn recalc_from(
         &mut self,
         seeds: &[CellRef],
         seed_with_prev: Option<(CellRef, SheetValue)>,
     ) -> SetReport {
-        let order = self.graph.downstream_topo(seeds);
+        let combined_seeds: Vec<CellRef> = seeds
+            .iter()
+            .chain(self.volatiles.iter())
+            .copied()
+            .collect();
+        let order = self.graph.downstream_topo(&combined_seeds);
         let mut report = SetReport::default();
         let mut seed_prev: HashMap<CellRef, SheetValue> = HashMap::new();
         if let Some((c, v)) = seed_with_prev {

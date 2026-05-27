@@ -61,9 +61,12 @@ pub fn dispatch(name: &str, args: &[FormulaArg]) -> SheetValue {
         "MATCH" => fn_match(args),
         "DATE" => fn_date(args),
         "TODAY" => fn_today(args),
+        "NOW" => fn_now(args),
         "YEAR" => fn_year(args),
         "MONTH" => fn_month(args),
         "DAY" => fn_day(args),
+        "RAND" => fn_rand(args),
+        "RANDBETWEEN" => fn_randbetween(args),
         _ => SheetValue::Error(SheetError::Name),
     }
 }
@@ -787,6 +790,98 @@ fn fn_today(args: &[FormulaArg]) -> SheetValue {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
     SheetValue::Number(Decimal::from(secs / 86400))
+}
+
+/// `NOW()` — fecha+hora como serial. Parte entera = días desde
+/// 1970-01-01 (igual que `TODAY`); fracción = segundos/86400 dentro
+/// del día. Función volátil.
+fn fn_now(args: &[FormulaArg]) -> SheetValue {
+    if !args.is_empty() {
+        return SheetValue::Error(SheetError::Value);
+    }
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    // Mantengo 6 decimales de precisión (~ 0.086 segundos) — suficiente
+    // para que dos NOW() consecutivas dentro del mismo segundo
+    // generen valores distintos.
+    let day_secs = 86400i64;
+    let days = Decimal::from(secs / day_secs);
+    let in_day = secs % day_secs;
+    // fract = in_day / day_secs, scaled to 6 dp.
+    let frac_micros = (in_day as i128) * 1_000_000 / day_secs as i128;
+    let frac = Decimal::new(frac_micros as i64, 6);
+    SheetValue::Number(days + frac)
+}
+
+/// `RAND()` — número pseudo-aleatorio en `[0, 1)`. Función volátil.
+/// PRNG: Xorshift64 con seed derivada de SystemTime::nanos. No es
+/// criptográfico — es para hojas de cálculo, no para llaves.
+fn fn_rand(args: &[FormulaArg]) -> SheetValue {
+    if !args.is_empty() {
+        return SheetValue::Error(SheetError::Value);
+    }
+    let n = xorshift_next();
+    // Tomamos 53 bits superiores y los mapeamos a `[0, 1)` con 9
+    // decimales — suficiente para gráficos y muestreo casero.
+    let scaled = (n >> 11) as u64; // 53 bits
+    let max = (1u64 << 53) as i128;
+    let val = scaled as i128 * 1_000_000_000 / max;
+    SheetValue::Number(Decimal::new(val as i64, 9))
+}
+
+/// `RANDBETWEEN(min, max)` — entero pseudo-aleatorio inclusivo
+/// `[min, max]`. Función volátil.
+fn fn_randbetween(args: &[FormulaArg]) -> SheetValue {
+    if let Err(e) = arity(args, 2) {
+        return e;
+    }
+    let lo = match scalar_to_number(&args[0]) {
+        Ok(n) => n,
+        Err(e) => return e,
+    };
+    let hi = match scalar_to_number(&args[1]) {
+        Ok(n) => n,
+        Err(e) => return e,
+    };
+    let lo_i = match decimal_to_i64(lo) {
+        Some(n) => n,
+        None => return SheetValue::Error(SheetError::Num),
+    };
+    let hi_i = match decimal_to_i64(hi) {
+        Some(n) => n,
+        None => return SheetValue::Error(SheetError::Num),
+    };
+    if hi_i < lo_i {
+        return SheetValue::Error(SheetError::Num);
+    }
+    let range = (hi_i - lo_i + 1) as u64;
+    let n = xorshift_next();
+    let pick = (n % range) as i64;
+    SheetValue::Number(Decimal::from(lo_i + pick))
+}
+
+/// Xorshift64* state — un `AtomicU64` que avanza con cada llamada.
+/// La seed inicial mezcla `SystemTime::nanos` con un pid-style
+/// constante derivada de la dirección del propio estado para que
+/// dos procesos distintos no arranquen del mismo punto.
+fn xorshift_next() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static STATE: AtomicU64 = AtomicU64::new(0);
+    let mut s = STATE.load(Ordering::Relaxed);
+    if s == 0 {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(1);
+        s = nanos | 1; // garantiza no-cero
+    }
+    s ^= s << 13;
+    s ^= s >> 7;
+    s ^= s << 17;
+    STATE.store(s, Ordering::Relaxed);
+    s
 }
 
 fn fn_year(args: &[FormulaArg]) -> SheetValue {

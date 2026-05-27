@@ -69,6 +69,33 @@ pub enum FormulaArg {
     },
 }
 
+impl FormulaExpr {
+    /// `true` si la fórmula contiene alguna función volátil (`TODAY`,
+    /// `NOW`, `RAND`, `RANDBETWEEN`) en cualquier nivel. Las celdas
+    /// con fórmulas volátiles se incluyen automáticamente en cada
+    /// recálculo del workbook, aunque no haya cambios upstream.
+    pub fn is_volatile(&self) -> bool {
+        match self {
+            FormulaExpr::Number(_)
+            | FormulaExpr::Text(_)
+            | FormulaExpr::Bool(_)
+            | FormulaExpr::Ref(_)
+            | FormulaExpr::Range(_)
+            | FormulaExpr::ErrorLiteral(_) => false,
+            FormulaExpr::Unary(_, inner) => inner.is_volatile(),
+            FormulaExpr::Binary(_, l, r) => l.is_volatile() || r.is_volatile(),
+            FormulaExpr::Call(name, args) => {
+                is_volatile_fn(name) || args.iter().any(|a| a.is_volatile())
+            }
+        }
+    }
+}
+
+/// Nombres canónicos (uppercase) de las funciones volátiles.
+fn is_volatile_fn(name: &str) -> bool {
+    matches!(name, "TODAY" | "NOW" | "RAND" | "RANDBETWEEN")
+}
+
 impl FormulaArg {
     /// Aplana en una secuencia de escalares — la forma que comen las
     /// funciones agregadas (`SUM`, `AVG`, `COUNT`, ...).

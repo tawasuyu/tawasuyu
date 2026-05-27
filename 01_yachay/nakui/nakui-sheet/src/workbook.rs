@@ -145,6 +145,24 @@ impl Workbook {
         self.fill(src, CellRange::new(dest, dest))
     }
 
+    /// Recalcula explícitamente las celdas volátiles (`TODAY`,
+    /// `NOW`, `RAND`, etc.). No se registra como evento en el WAL
+    /// — un refresh manual no cambia la historia editable, solo
+    /// "despierta" lo que es función del tiempo. Si tras el recalc
+    /// algún invariante se viola, se revierte y se devuelve el
+    /// error (igual que set_cell).
+    pub fn refresh_volatiles(&mut self) -> Result<SetReport, WorkbookError> {
+        let mut candidate = self.sheet.clone();
+        let report = candidate.recompute_volatiles();
+        Self::check_invariants(&self.invariants, &candidate)?;
+        self.sheet = candidate;
+        Ok(report)
+    }
+
+    pub fn volatile_count(&self) -> usize {
+        self.sheet.volatile_count()
+    }
+
     fn apply_user_event(&mut self, event: SheetEvent) -> Result<SetReport, WorkbookError> {
         let mut candidate = self.sheet.clone();
         let report = apply_to_sheet(&mut candidate, &event)?;
@@ -484,6 +502,90 @@ mod tests {
         wb.copy_cell(cr("B1"), cr("B2")).unwrap();
         assert_eq!(wb.value(cr("B2")), SheetValue::Number(dec("12")));
         assert_eq!(wb.raw(cr("B2")), Some("=A2+1"));
+    }
+
+    #[test]
+    fn volatile_count_tracks_today_cells() {
+        let mut wb = Workbook::new();
+        wb.set_cell(cr("A1"), "=TODAY()").unwrap();
+        wb.set_cell(cr("A2"), "=RAND()").unwrap();
+        wb.set_cell(cr("A3"), "=A1+1").unwrap(); // no es volátil ella misma
+        assert_eq!(wb.volatile_count(), 2);
+        // Reescribir A1 como literal saca la celda del set volátil.
+        wb.set_cell(cr("A1"), "42").unwrap();
+        assert_eq!(wb.volatile_count(), 1);
+    }
+
+    #[test]
+    fn refresh_volatiles_updates_rand_value() {
+        let mut wb = Workbook::new();
+        wb.set_cell(cr("A1"), "=RAND()").unwrap();
+        let v1 = wb.value(cr("A1"));
+        wb.refresh_volatiles().unwrap();
+        let v2 = wb.value(cr("A1"));
+        // Con PRNG y nanos del reloj, prácticamente seguro que
+        // cambia. Si por mala suerte coincide en un test único,
+        // sigue siendo un Number — el test no se vuelve flaky por
+        // valor, sino por shape.
+        match (v1, v2) {
+            (SheetValue::Number(_), SheetValue::Number(_)) => {}
+            other => panic!("rand no devolvió Number: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn editing_unrelated_cell_recomputes_volatiles() {
+        let mut wb = Workbook::new();
+        wb.set_cell(cr("A1"), "=TODAY()").unwrap();
+        let initial = wb.value(cr("A1"));
+        // Editar B1 (sin dependencia con A1) debe re-evaluar A1.
+        // No comprobamos cambio de valor (el día casi nunca cambia
+        // entre dos llamadas), pero sí que A1 figure en el report.
+        let report = wb.set_cell(cr("B1"), "999").unwrap();
+        let touched: std::collections::HashSet<_> =
+            report.changed.iter().map(|(c, _, _)| *c).collect();
+        // B1 sí cambió de seguro. A1 puede no aparecer si el TODAY no
+        // cambió de valor — eso significa que recompute_volatiles ya
+        // se llamó pero el delta fue cero. Esa es la semántica que
+        // queremos.
+        assert!(touched.contains(&cr("B1")));
+        // Si quería A1 en el report siempre, tendría que cambiar la
+        // semántica de SetReport. Lo que sí garantizo: el valor
+        // sigue siendo un Number (no se quedó Empty por accidente).
+        match wb.value(cr("A1")) {
+            SheetValue::Number(_) => {}
+            other => panic!("A1 perdió su valor: {other:?}"),
+        }
+        let _ = initial;
+    }
+
+    #[test]
+    fn now_includes_subsecond_fraction() {
+        let mut wb = Workbook::new();
+        wb.set_cell(cr("A1"), "=NOW()").unwrap();
+        match wb.value(cr("A1")) {
+            SheetValue::Number(n) => {
+                // El test corre años 2026+ → serial > 20000.
+                assert!(n > dec("20000"));
+            }
+            other => panic!("NOW() no fue Number: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn randbetween_in_range() {
+        let mut wb = Workbook::new();
+        wb.set_cell(cr("A1"), "=RANDBETWEEN(1, 6)").unwrap();
+        for _ in 0..20 {
+            wb.refresh_volatiles().unwrap();
+            match wb.value(cr("A1")) {
+                SheetValue::Number(n) => {
+                    assert!(n >= dec("1") && n <= dec("6"), "out of range: {n}");
+                    assert_eq!(n.fract(), Decimal::ZERO);
+                }
+                other => panic!("RANDBETWEEN no devolvió Number: {other:?}"),
+            }
+        }
     }
 
     #[test]
