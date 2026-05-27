@@ -1145,14 +1145,15 @@ pub(crate) fn enlazar_capacidades(
                     }
                 }
             };
-            // Verificar que la salida de 64 B cabe ANTES de tocar el bus.
+            // FASE 42 :: la salida ahora son 65 B (1 slot + 64 firma).
+            // Verificar que el rango completo cabe ANTES de tocar el bus.
             {
                 let m = memoria.data(&caller);
                 if let Err(e) = rango(
                     m,
                     salida_firma_ptr,
-                    64,
-                    "WASM :: sys_cuaderno_solicitar_firma_host desbordo memoria (firma)",
+                    65,
+                    "WASM :: sys_cuaderno_solicitar_firma_host desbordo memoria (firma+slot)",
                 ) {
                     caller.data_mut().paginas_dma_en_vuelo -= 1;
                     return Err(e);
@@ -1163,12 +1164,13 @@ pub(crate) fn enlazar_capacidades(
             // el hash pendiente cambio. Asi, un loop de la app reintentando
             // cada tick no inunda al host con sign_requests duplicadas.
             // El estado vive en un Mutex spin —el reactor cooperativo no
-            // se contiende—. El acumulador de 64 bytes y el ultimo hash
-            // viajan acoplados para que un cambio de solicitud reinicie
-            // todo el camino limpio.
+            // se contiende—. El acumulador de 65 B (slot + firma) y el
+            // ultimo hash viajan acoplados para que un cambio de solicitud
+            // reinicie todo el camino limpio.
             use spin::Mutex;
             static ULTIMO_HASH: Mutex<Option<crate::almacen::Hash>> = Mutex::new(None);
-            static ACUMULADOR: Mutex<([u8; 64], usize)> = Mutex::new(([0; 64], 0));
+            // FASE 42 :: 65 B = byte 0 (slot 0/1/2) + bytes 1..65 (firma).
+            static ACUMULADOR: Mutex<([u8; 65], usize)> = Mutex::new(([0; 65], 0));
             let emitir = {
                 let mut slot = ULTIMO_HASH.lock();
                 let cambio = slot.as_ref() != Some(&hash);
@@ -1181,11 +1183,11 @@ pub(crate) fn enlazar_capacidades(
                 // FASE 39 :: solicitud nueva. Limpiamos el ring de RX para
                 // descartar bytes huerfanos de una solicitud anterior
                 // abortada (el demonio rechazo, timeout, etc.) Y reseteamos
-                // el acumulador de 64 bytes — el siguiente byte que entre
-                // sera el primero de la nueva firma esperada.
+                // el acumulador de 65 bytes — el siguiente byte que entre
+                // sera el byte 0 (slot id) de la nueva respuesta.
                 crate::drivers::serial::vaciar_input();
                 let mut acc = ACUMULADOR.lock();
-                acc.0 = [0; 64];
+                acc.0 = [0; 65];
                 acc.1 = 0;
                 drop(acc);
 
@@ -1207,46 +1209,47 @@ pub(crate) fn enlazar_capacidades(
             }
 
             // Drenar lo que haya llegado del host al ring interno y luego
-            // intentar leer 64 bytes. Si todavia faltan, la app reintenta.
+            // intentar leer 65 B (slot + firma). Si todavia faltan, la
+            // app reintenta en el proximo tic.
             crate::drivers::serial::drenar_input();
-            let mut firma = [0u8; 64];
-            let leidos = crate::drivers::serial::leer_disponible(&mut firma);
+            let mut frame = [0u8; 65];
+            let leidos = crate::drivers::serial::leer_disponible(&mut frame);
 
-            if leidos < 64 {
+            if leidos < 65 {
                 // Devolvemos los bytes parciales al acumulador estatico
                 // declarado arriba — el ring no tiene push_front, asi que
                 // conservamos los bytes parciales en `ACUMULADOR` hasta
-                // juntar los 64 a traves de multiples tics.
+                // juntar los 65 a traves de multiples tics.
                 let mut acc = ACUMULADOR.lock();
                 let (ref mut buf, ref mut llenos) = *acc;
-                let cap = (64 - *llenos).min(leidos);
+                let cap = (65 - *llenos).min(leidos);
                 for i in 0..cap {
-                    buf[*llenos + i] = firma[i];
+                    buf[*llenos + i] = frame[i];
                 }
                 *llenos += cap;
-                if *llenos < 64 {
+                if *llenos < 65 {
                     caller.data_mut().paginas_dma_en_vuelo -= 1;
                     return Ok(CodigoError::Saturado.como_i32());
                 }
-                // Tenemos los 64 bytes acumulados ahora; copiarlos a la
+                // Tenemos los 65 bytes acumulados ahora; copiarlos a la
                 // memoria del modulo + reset del acumulador.
-                let firma_total = *buf;
-                *buf = [0; 64];
+                let frame_total = *buf;
+                *buf = [0; 65];
                 *llenos = 0;
                 drop(acc);
                 let m = memoria.data_mut(&mut caller);
-                m[salida_firma_ptr as usize..salida_firma_ptr as usize + 64]
-                    .copy_from_slice(&firma_total);
+                m[salida_firma_ptr as usize..salida_firma_ptr as usize + 65]
+                    .copy_from_slice(&frame_total);
                 // Reset del hash pendiente — proxima solicitud volvera a emitir.
                 *ULTIMO_HASH.lock() = None;
                 caller.data_mut().paginas_dma_en_vuelo -= 1;
                 return Ok(CodigoError::Ok.como_i32());
             }
 
-            // Llegaron los 64 bytes de un golpe — caso ideal.
+            // Llegaron los 65 bytes de un golpe — caso ideal.
             let m = memoria.data_mut(&mut caller);
-            m[salida_firma_ptr as usize..salida_firma_ptr as usize + 64]
-                .copy_from_slice(&firma);
+            m[salida_firma_ptr as usize..salida_firma_ptr as usize + 65]
+                .copy_from_slice(&frame);
             *ULTIMO_HASH.lock() = None;
             caller.data_mut().paginas_dma_en_vuelo -= 1;
             Ok(CodigoError::Ok.como_i32())

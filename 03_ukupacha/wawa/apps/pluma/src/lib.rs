@@ -739,14 +739,34 @@ fn ejecutar_celda_importada() {
     registrar_celda_local(celda);
 }
 
-/// FASE 38 :: clave publica empotrada del operador local. Acordada con
-/// `claves::AGORA_PUBLIC_KEY_LOCAL` del kernel — cualquier divergencia
-/// hace que la verificacion en Ring 0 falle con `CapacidadInsuficiente`.
-const AGORA_PUBLIC_KEY_LOCAL: [u8; 32] = [
-    0x1a, 0x4f, 0x7c, 0x91, 0xb6, 0x2d, 0x5e, 0xa8,
-    0x33, 0xc7, 0x09, 0x84, 0xf1, 0x60, 0xb5, 0x52,
-    0x6e, 0xae, 0x17, 0x40, 0x82, 0xfb, 0x99, 0xc1,
-    0x2d, 0x55, 0xd6, 0x3a, 0xe4, 0x77, 0x1c, 0x80,
+/// FASE 41/42 :: anillo de claves publicas del operador local, ESPEJO
+/// bit-a-bit del `claves::AGORA_AUTH_RING` del kernel. Cualquier
+/// divergencia bytewise hace que la verificacion en Ring 0 falle con
+/// `CapacidadInsuficiente`. El slot que reporta `wawactl daemon-firma`
+/// indexa esta tabla para que el sobre `CuadernoFirmado` embeba la
+/// pubkey que casa con la firma Ed25519 emitida.
+const AGORA_AUTH_RING: [[u8; 32]; 3] = [
+    // Slot 0 :: primaria (acordada con la Fase 25 original).
+    [
+        0x1a, 0x4f, 0x7c, 0x91, 0xb6, 0x2d, 0x5e, 0xa8,
+        0x33, 0xc7, 0x09, 0x84, 0xf1, 0x60, 0xb5, 0x52,
+        0x6e, 0xae, 0x17, 0x40, 0x82, 0xfb, 0x99, 0xc1,
+        0x2d, 0x55, 0xd6, 0x3a, 0xe4, 0x77, 0x1c, 0x80,
+    ],
+    // Slot 1 :: dispositivo secundario.
+    [
+        0x2b, 0x60, 0x8d, 0xa2, 0xc7, 0x3e, 0x6f, 0xb9,
+        0x44, 0xd8, 0x1a, 0x95, 0x02, 0x71, 0xc6, 0x63,
+        0x7f, 0xbf, 0x28, 0x51, 0x93, 0x0c, 0xaa, 0xd2,
+        0x3e, 0x66, 0xe7, 0x4b, 0xf5, 0x88, 0x2d, 0x91,
+    ],
+    // Slot 2 :: llave de recuperacion (cold-storage).
+    [
+        0x3c, 0x71, 0x9e, 0xb3, 0xd8, 0x4f, 0x70, 0xca,
+        0x55, 0xe9, 0x2b, 0xa6, 0x13, 0x82, 0xd7, 0x74,
+        0x80, 0xc0, 0x39, 0x62, 0xa4, 0x1d, 0xbb, 0xe3,
+        0x4f, 0x77, 0xf8, 0x5c, 0x06, 0x99, 0x3e, 0xa2,
+    ],
 ];
 
 /// FASE 38 :: arranca la solicitud de firma al host. Solo marca el estado
@@ -764,29 +784,46 @@ fn iniciar_solicitud_firma_host() {
     }
 }
 
-/// FASE 38 :: reintento cooperativo del canal del firmador. Llamado en
-/// cada `tick()` mientras `FIRMA_PENDIENTE`. Pide la firma al host
-/// (sys_cuaderno_solicitar_firma_host); si llega completa, arma el
-/// sobre `CuadernoFirmado` con esa firma real y dispara
-/// `sys_cuaderno_firmar_y_anclar`. Cualquier otro codigo se considera
-/// fallo terminal — la cadena de firma se rompe.
+/// FASE 38/42 :: reintento cooperativo del canal del firmador. Llamado en
+/// cada `tick()` mientras `FIRMA_PENDIENTE`. Pide al kernel un frame de
+/// 65 B (1 byte de slot + 64 bytes de firma); si llega completo, arma el
+/// sobre `CuadernoFirmado` con la pubkey correspondiente al slot y
+/// dispara `sys_cuaderno_firmar_y_anclar`. Cualquier otro codigo se
+/// considera fallo terminal — la cadena de firma se rompe.
 fn intentar_completar_firma() {
     if !unsafe { FIRMA_PENDIENTE } {
         return;
     }
-    let mut firma = [0u8; 64];
+    // FASE 42 :: buffer de 65 B = slot (1) + firma (64).
+    let mut buffer_firma_v2 = [0u8; 65];
     let hash_pendiente = unsafe { FIRMA_HASH_PENDIENTE };
     let cod = unsafe {
         sys_cuaderno_solicitar_firma_host(
             hash_pendiente.as_ptr() as u32,
-            firma.as_mut_ptr() as u32,
+            buffer_firma_v2.as_mut_ptr() as u32,
         )
     };
     match cod {
         0 => {
-            // La firma llego completa. Armar el sobre y anclar.
+            // El frame llego completo. Auto-detectar el slot y validar
+            // limites lexicos antes de embeber la pubkey en el sobre.
+            let slot_id = buffer_firma_v2[0] as usize;
+            if slot_id >= AGORA_AUTH_RING.len() {
+                // Slot fuera de rango — el demonio envio algo extraño o
+                // el canal serial se corrompio. Tratamos como fallo
+                // terminal; el operador puede reintentar con F6.
+                unsafe {
+                    FIRMA_PENDIENTE = false;
+                    SOBERANIA_FIRMA_ROTA = true;
+                    SOBERANIA_ANCLADA = false;
+                    SOBERANIA_CODIGO = -7;
+                }
+                return;
+            }
+            let mut firma = [0u8; 64];
+            firma.copy_from_slice(&buffer_firma_v2[1..65]);
             unsafe { FIRMA_PENDIENTE = false };
-            anclar_con_firma(&hash_pendiente, &firma);
+            anclar_con_firma(&hash_pendiente, slot_id, &firma);
         }
         -6 => {
             // Saturado: el host todavia no respondio. Esperar al
@@ -804,15 +841,16 @@ fn intentar_completar_firma() {
     }
 }
 
-/// FASE 38 :: arma el sobre `CuadernoFirmado` con la firma real recibida
-/// del host e invoca `sys_cuaderno_firmar_y_anclar`. Zero-alloc — el sobre
-/// vive en un buffer de 256 B en pila (padding incluido). El kernel lee
-/// los 128 B utiles con `postcard::take_from_bytes`; el resto del buffer
-/// queda en ceros y es inofensivo.
-fn anclar_con_firma(hash: &[u8; 32], firma: &[u8; 64]) {
+/// FASE 38/42 :: arma el sobre `CuadernoFirmado` con la firma real recibida
+/// del host e invoca `sys_cuaderno_firmar_y_anclar`. El campo `autor`
+/// se compone DINAMICAMENTE indexando `AGORA_AUTH_RING[slot_id]` — el
+/// kernel solo aceptara el sobre si la pubkey embebida coincide con la
+/// que produjo la firma. Zero-alloc — el sobre vive en un buffer de
+/// 256 B en pila (padding incluido).
+fn anclar_con_firma(hash: &[u8; 32], slot_id: usize, firma: &[u8; 64]) {
     let mut sobre = [0u8; 256];
     sobre[0..32].copy_from_slice(hash);
-    sobre[32..64].copy_from_slice(&AGORA_PUBLIC_KEY_LOCAL);
+    sobre[32..64].copy_from_slice(&AGORA_AUTH_RING[slot_id]);
     sobre[64..128].copy_from_slice(firma);
     let codigo = unsafe { sys_cuaderno_firmar_y_anclar(sobre.as_ptr() as u32) };
     unsafe {
@@ -855,7 +893,7 @@ fn pintar() {
 
     // Cabecera con el hash del cuaderno (si ya hubo una consolidacion).
     rellenar_rect(lienzo, 0, 0, ANCHO, EDITOR_Y - 4, secundario);
-    dibujar_texto(lienzo, b"PLUMA  WAWA  F40", 8, 6, 1, tinta);
+    dibujar_texto(lienzo, b"PLUMA  WAWA  F42", 8, 6, 1, tinta);
     if unsafe { HASH_CUADERNO_VALIDO } {
         let h = unsafe { HASH_CUADERNO };
         let mut etiqueta = [b' '; 8];

@@ -153,6 +153,13 @@ enum Cmd {
         /// con timeout). Sintaxis: `30s`, `15m`, `1h` (s/m/h).
         #[arg(long = "auto-firmar-durante")]
         auto_firmar_durante: Option<String>,
+        /// FASE 42 :: slot del anillo multi-autor (`AGORA_AUTH_RING`) con
+        /// el que esta clave firma. 0 = primaria (default), 1 = secundaria,
+        /// 2 = recuperacion. El demonio antepone este byte al sello
+        /// Ed25519 de 64 B para que `apps/pluma` autodetecte que clave
+        /// publica embeber en el sobre `CuadernoFirmado`.
+        #[arg(long, default_value_t = 0u8)]
+        slot: u8,
     },
 }
 
@@ -192,7 +199,14 @@ fn run(cmd: Cmd) -> Result<(), String> {
             clave_privada,
             log,
             auto_firmar_durante,
-        } => cmd_daemon_firma(&pty, &clave_privada, &log, auto_firmar_durante.as_deref()),
+            slot,
+        } => cmd_daemon_firma(
+            &pty,
+            &clave_privada,
+            &log,
+            auto_firmar_durante.as_deref(),
+            slot,
+        ),
     }
 }
 
@@ -469,7 +483,16 @@ fn cmd_daemon_firma(
     clave_path: &str,
     log_path: &str,
     auto_firmar_durante: Option<&str>,
+    slot: u8,
 ) -> Result<(), String> {
+    // FASE 42 :: validar el slot ANTES de hacer cualquier I/O. Tres slots
+    // legitimos: 0 primaria, 1 secundaria, 2 recuperacion. Cualquier
+    // otro valor es un error de invocacion del usuario.
+    if slot > 2 {
+        return Err(format!(
+            "--slot {slot}: el anillo AGORA_AUTH_RING tiene 3 slots (0/1/2)"
+        ));
+    }
     // Cargar la clave privada UNA SOLA VEZ al arrancar — el ataque
     // superficie del lazo asincrono no la toca a partir de ahi.
     let sk = cargar_clave_privada(clave_path)?;
@@ -496,6 +519,7 @@ fn cmd_daemon_firma(
         sk,
         log_path.to_string(),
         ventana_hasta,
+        slot,
     ))
 }
 
@@ -551,11 +575,13 @@ async fn ejecutar_daemon(
     sk: ed25519_compact::SecretKey,
     log_path: String,
     ventana_hasta: Option<std::time::Instant>,
+    slot: u8,
 ) -> Result<(), String> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     eprintln!("wawactl: daemon-firma escuchando en {pty_path}");
     eprintln!("wawactl: auditoria a {log_path}");
+    eprintln!("wawactl: firmando con slot {slot} del anillo AGORA_AUTH_RING");
     if let Some(t) = ventana_hasta {
         let restante = t.saturating_duration_since(std::time::Instant::now());
         eprintln!(
@@ -624,19 +650,32 @@ async fn ejecutar_daemon(
                 };
                 let firma = sk.sign(hash, None);
                 let bytes = firma.as_ref();
+                // FASE 42 :: el frame inyectado al kernel ahora es de 65 B:
+                // byte 0 = slot del anillo AGORA_AUTH_RING, bytes 1..65 =
+                // los 64 bytes crudos del sello Ed25519. La app enjaulada
+                // autodetecta que clave publica embeber en el sobre
+                // CuadernoFirmado leyendo el byte 0.
+                let mut frame = [0u8; 65];
+                frame[0] = slot;
+                frame[1..65].copy_from_slice(bytes);
                 writer
-                    .write_all(bytes)
+                    .write_all(&frame)
                     .await
-                    .map_err(|e| format!("error escribiendo firma al PTY: {e}"))?;
+                    .map_err(|e| format!("error escribiendo frame al PTY: {e}"))?;
                 writer
                     .flush()
                     .await
                     .map_err(|e| format!("error flush PTY: {e}"))?;
-                escribir_auditoria(&log_path, marcador, hash_hex);
-                eprintln!("wawactl: {} ({} bytes)", marcador, bytes.len());
+                escribir_auditoria(&log_path, marcador, slot, hash_hex);
+                eprintln!(
+                    "wawactl: {} slot={} ({} bytes incluyendo prefijo)",
+                    marcador,
+                    slot,
+                    frame.len()
+                );
             }
             DecisionOperador::Rechazada => {
-                escribir_auditoria(&log_path, "FIRMA_RECHAZADA", hash_hex);
+                escribir_auditoria(&log_path, "FIRMA_RECHAZADA", slot, hash_hex);
                 eprintln!("wawactl: solicitud rechazada o timeout");
             }
         }
@@ -691,15 +730,18 @@ fn hex_a_bytes(hex: &str, out: &mut [u8; 32]) -> bool {
 }
 
 /// Append a `log_path` de una entrada estructurada de auditoria. Cada
-/// linea contiene timestamp ISO 8601, accion (FIRMA_EMITIDA o
-/// FIRMA_RECHAZADA) y el hash. Errores de I/O se imprimen a stderr
+/// linea contiene timestamp ISO 8601, accion (FIRMA_EMITIDA /
+/// FIRMA_AUTO_EMITIDA / FIRMA_RECHAZADA), slot del anillo AGORA_AUTH_RING
+/// con que se firmo, y el hash. Errores de I/O se imprimen a stderr
 /// pero NO interrumpen el lazo — perder una linea de log es preferible
-/// a perder el demonio entero.
-fn escribir_auditoria(log_path: &str, accion: &str, hash_hex: &str) {
+/// a perder el demonio entero. FASE 42 :: el campo `SLOT` distingue las
+/// firmas emitidas por distintos dispositivos del operador (primario,
+/// secundario, recuperacion).
+fn escribir_auditoria(log_path: &str, accion: &str, slot: u8, hash_hex: &str) {
     use std::io::Write;
     let ts = chrono::Utc::now().to_rfc3339();
     let linea = format!(
-        "[{ts}] | ACCION: {accion} | HASH: {hash_hex} | AUTOR: AGORA_PUBLIC_KEY_LOCAL\n"
+        "[{ts}] | ACCION: {accion} | SLOT: {slot} | HASH: {hash_hex} | AUTOR: AGORA_AUTH_RING[{slot}]\n"
     );
     match std::fs::OpenOptions::new()
         .create(true)
