@@ -123,6 +123,23 @@ enum Cmd {
         #[arg(long)]
         unset: bool,
     },
+    /// RAG con atribución: recupera del corpus las aserciones léxicamente
+    /// más relevantes para la pregunta, construye un prompt con la
+    /// evidencia citada, y le pide al LLM una respuesta. La respuesta
+    /// debe citar cada afirmación con [N] referenciando la fuente.
+    Ask {
+        pregunta: String,
+        #[arg(long, default_value_t = 10)]
+        top: usize,
+        #[arg(long, default_value_t = 0.20)]
+        umbral: f32,
+        /// Filtra evidencia por tag.
+        #[arg(long)]
+        tag: Option<String>,
+        /// Máximo de tokens de la respuesta.
+        #[arg(long, default_value_t = 600)]
+        max_tokens: u32,
+    },
     /// Reputación de cada fuente (persistida en la tabla `reputaciones`).
     /// Lee la tabla; si está vacía o pasaste --recalcular, primero
     /// recalcula desde el grafo NLI y persiste vía UPSERT.
@@ -452,6 +469,87 @@ async fn main() -> Result<()> {
             let fuente_id = store.obtener_o_crear_fuente(&fuente, kind.as_deref())?;
             store.asignar_fuente_a_doc(doc_id, Some(fuente_id))?;
             println!("doc {} ahora atribuido a «{}»", doc_id.0, fuente);
+        }
+        Cmd::Ask { pregunta, top, umbral, tag, max_tokens } => {
+            use pluma_llm_core::{ChatRequest, ChatMessage};
+            let todas = match tag.as_deref() {
+                Some(t) => store.cargar_aserciones_atribuidas_por_tag(t)?,
+                None => store.cargar_aserciones_atribuidas_todas()?,
+            };
+            if todas.is_empty() {
+                anyhow::bail!("corpus vacío (¿tag inexistente?)");
+            }
+            // Ranking léxico: cualquier relación NLI (entailment o contradiction) significa
+            // "habla del tema". Ordenamos por max(entailment, contradiction) desc.
+            let mut ranked: Vec<(f32, &AsercionAtribuida, &'static str)> = Vec::new();
+            for att in todas.iter() {
+                let rel = relacion_lexica(&pregunta, &att.asercion.texto, umbral);
+                let score = rel.entailment.max(rel.contradiction);
+                if score > 0.0 {
+                    let signo = if rel.entailment >= rel.contradiction { "apoya" } else { "contradice" };
+                    ranked.push((score, att, signo));
+                }
+            }
+            ranked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+            ranked.truncate(top);
+            if ranked.is_empty() {
+                println!("(corpus en silencio sobre «{}» — nada con overlap léxico ≥ {:.2})", pregunta, umbral);
+                return Ok(());
+            }
+
+            let evidencia: String = ranked.iter().enumerate().map(|(i, (_score, att, signo))| {
+                let fuente = match &att.fuente {
+                    Some(f) => match &f.kind {
+                        Some(k) => format!("{} [{}]", f.nombre, k),
+                        None => f.nombre.clone(),
+                    },
+                    None => "(sin fuente)".to_string(),
+                };
+                let op = &att.asercion.opinion_autoral;
+                format!(
+                    "[{}] (Fuente: {} · {} la pregunta · b={:.2} d={:.2} u={:.2}) {}",
+                    i + 1, fuente, signo, op.creencia, op.descreencia, op.incertidumbre,
+                    att.asercion.texto.trim()
+                )
+            }).collect::<Vec<_>>().join("\n");
+
+            let system = r#"Eres un asistente de razonamiento crítico. Respondes preguntas usando ESTRICTAMENTE la evidencia que se te provee del corpus. Reglas:
+
+1. Cita cada afirmación de tu respuesta con [N], donde N es el número entre corchetes de la evidencia.
+2. Si distintas fuentes se contradicen, dilo explícitamente y muestra ambos lados.
+3. Si la evidencia es insuficiente para responder, di "el corpus es insuficiente para responder esto" y explica qué falta.
+4. NO inventes ni completes con conocimiento externo no presente en la evidencia.
+5. La opinión autoral (b/d/u) de cada aserción es informativa: una aserción con d alto significa que la fuente AFIRMA LA NEGACIÓN — interprétalo correctamente.
+6. Respuesta concisa (3-6 oraciones), en el mismo idioma de la pregunta."#;
+
+            let chat = pluma_llm::from_env()
+                .map_err(|e| anyhow::anyhow!("LLM no inicializado: {e}"))?;
+            println!("backend: {}", chat.model_id());
+            println!();
+
+            let user = format!("Pregunta: {pregunta}\n\nEvidencia del corpus:\n{evidencia}\n\nResponde citando con [N]:");
+            let req = ChatRequest {
+                system: Some(system.to_string()),
+                messages: vec![ChatMessage::user(user)],
+                max_tokens,
+                temperature: 0.2,
+            };
+            let resp = chat.complete(&req).await
+                .map_err(|e| anyhow::anyhow!("LLM falló: {e}"))?;
+
+            println!("─── respuesta ────────────────────────────────────────────");
+            println!("{}", resp.content.trim());
+            println!();
+            println!("─── evidencia usada ({} aserciones) ──────────────────────", ranked.len());
+            for (i, (score, att, signo)) in ranked.iter().enumerate() {
+                println!("[{}] {} (score={:.2}) · {}", i + 1, signo, score, etiqueta_fuente(att));
+                println!("    «{}»", truncar(&att.asercion.texto, 160));
+            }
+            if let Some(u) = resp.usage {
+                println!();
+                println!("(tokens: input={} cache_read={} output={})",
+                    u.input_tokens, u.cache_read_input_tokens, u.output_tokens);
+            }
         }
         Cmd::Reputacion { recalcular } => {
             let mut persistidas = store.cargar_reputaciones_todas()?;
