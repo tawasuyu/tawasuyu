@@ -422,6 +422,15 @@ restante, debe descontar primero estos hitos para no duplicar esfuerzo:
   pantalla carmesí + traza serial sin recorte + IRQs apagadas. El
   operador ve YA en pantalla qué pasó en lugar de tener que rescatar
   el panic handler del COM1.
+- **GC manual desde el teclado** — **HECHA** (Fase 57). `Alt+G` engendra
+  `Mando::CompactarGrafo` (nuevo, `compositor.rs:127`); el compositor
+  lo atiende en su tic invocando `crate::almacen::compactar()` y emite
+  el resultado por la baliza serial:
+  `gc :: manual (Alt+G) :: vivos=N muertos=M sectores=A->B`. Palanca
+  operacional in-VM que demuestra la cadena tecla → compositor → GC
+  end-to-end sin esperar al protocolo host-side de `wawactl gc`. El
+  scancode `0x22` se registra en `async_system/teclado.rs:60` como
+  `TECLA_G`.
 
 ### 14.1 Hitos genuinamente pendientes (orden de mérito)
 

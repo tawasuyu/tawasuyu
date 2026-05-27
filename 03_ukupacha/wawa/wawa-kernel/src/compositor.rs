@@ -124,6 +124,13 @@ pub enum Mando {
     Cerrar,
     /// Lanzar una aplicacion nueva — un alta en vivo (Fase 10).
     Lanzar,
+    /// Forzar una pasada del compactador semantico del grafo (Fase 57).
+    /// Es la palanca operacional in-VM equivalente al futuro `wawactl gc`
+    /// host-side: el operador pulsa `Alt+G` y el compositor invoca
+    /// `almacen::compactar()` en su tic, emitiendo el resultado por la
+    /// baliza serial. No interactua con el grafo de aplicaciones —es
+    /// estrictamente mantenimiento del log direccionado por contenido—.
+    CompactarGrafo,
 }
 
 /// Un arrastre EN CURSO (Fase 13): el indice de la ventana flotante asida con
@@ -434,6 +441,35 @@ pub fn atender_mandos() {
             // orquestador del kernel la atendera (ver `partos_pendientes`).
             Mando::Lanzar => {
                 PARTOS.fetch_add(1, Ordering::Relaxed);
+            }
+            // Fase 57 :: GC manual desde el teclado. La pasada toma el cerrojo
+            // del almacen durante toda la operacion, asi que el fotograma
+            // del compositor se estira — aceptable como gesto explicito del
+            // operador, no como rutina automatica (eso ya lo cubre el tic
+            // ocioso del compositor cuando `escrituras_pendientes() >= UMBRAL_GC`).
+            // El resultado va a la baliza serial: el operador lee el COM1
+            // para confirmar nodos_vivos / muertos / sectores recuperados.
+            Mando::CompactarGrafo => {
+                use core::fmt::Write;
+                match crate::almacen::compactar() {
+                    Ok(stats) => {
+                        let _ = writeln!(
+                            crate::baliza::Serie,
+                            "gc :: manual (Alt+G) :: vivos={} muertos={} sectores={}->{}",
+                            stats.nodos_vivos,
+                            stats.nodos_muertos,
+                            stats.sectores_antes,
+                            stats.sectores_despues,
+                        );
+                    }
+                    Err(motivo) => {
+                        let _ = writeln!(
+                            crate::baliza::Serie,
+                            "gc :: manual (Alt+G) :: fallo :: {}",
+                            motivo,
+                        );
+                    }
+                }
             }
         }
     }

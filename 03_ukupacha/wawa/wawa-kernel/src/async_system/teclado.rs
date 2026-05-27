@@ -58,6 +58,8 @@ const TECLA_F: u8 = 0x21;
 const TECLA_Q: u8 = 0x10;
 /// Tecla N — `Alt + N` lanza una aplicacion nueva (alta en vivo).
 const TECLA_N: u8 = 0x31;
+/// Tecla G — `Alt + G` fuerza una pasada del compactador del grafo (Fase 57).
+const TECLA_G: u8 = 0x22;
 
 /// Un canal de teclado: la cola lock-free de scancodes de UNA aplicacion.
 pub type CanalTeclado = Arc<ArrayQueue<u8>>;
@@ -146,6 +148,7 @@ pub fn recibir_scancode(scancode: u8) {
             TECLA_F => compositor::solicitar(Mando::Flotar),
             TECLA_Q => compositor::solicitar(Mando::Cerrar),
             TECLA_N => compositor::solicitar(Mando::Lanzar),
+            TECLA_G => compositor::solicitar(Mando::CompactarGrafo),
             _ => {}
         }
         return;
