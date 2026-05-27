@@ -140,6 +140,18 @@ enum Cmd {
         #[arg(long, default_value_t = 600)]
         max_tokens: u32,
     },
+    /// Exporta toda la DB a un archivo JSON (federación / backup).
+    Export {
+        archivo: PathBuf,
+        /// Pretty-print con indentación (default: minificado).
+        #[arg(long)]
+        pretty: bool,
+    },
+    /// Importa un dump JSON producido por otra instancia.
+    /// INSERT OR IGNORE: entidades con id ya presente se respetan.
+    Import {
+        archivo: PathBuf,
+    },
     /// Reputación de cada fuente (persistida en la tabla `reputaciones`).
     /// Lee la tabla; si está vacía o pasaste --recalcular, primero
     /// recalcula desde el grafo NLI y persiste vía UPSERT.
@@ -469,6 +481,37 @@ async fn main() -> Result<()> {
             let fuente_id = store.obtener_o_crear_fuente(&fuente, kind.as_deref())?;
             store.asignar_fuente_a_doc(doc_id, Some(fuente_id))?;
             println!("doc {} ahora atribuido a «{}»", doc_id.0, fuente);
+        }
+        Cmd::Export { archivo, pretty } => {
+            let dump = store.exportar_todo()?;
+            let json = if pretty {
+                serde_json::to_string_pretty(&dump)?
+            } else {
+                serde_json::to_string(&dump)?
+            };
+            std::fs::write(&archivo, json)?;
+            println!("exportado a {} :", archivo.display());
+            println!("  {} fuentes, {} docs, {} chunks, {} aserciones, {} implicaciones, {} tags",
+                dump.fuentes.len(), dump.documentos.len(), dump.chunks.len(),
+                dump.aserciones.len(), dump.implicaciones.len(), dump.documento_tags.len());
+        }
+        Cmd::Import { archivo } => {
+            let json = std::fs::read_to_string(&archivo)?;
+            let dump: iniy_store::DbDump = serde_json::from_str(&json)?;
+            println!("importando dump v{} (exportado at unix {})", dump.iniy_version, dump.exportado_at);
+            let stats = store.importar_dump(&dump)?;
+            println!("nuevos / omitidos por colisión de id:");
+            println!("  fuentes:       {}  /  {}", stats.fuentes, stats.fuentes_omitidas);
+            println!("  documentos:    {}  /  {}", stats.documentos, stats.documentos_omitidos);
+            println!("  chunks:        {}  /  {}", stats.chunks, stats.chunks_omitidos);
+            println!("  aserciones:    {}  /  {}", stats.aserciones, stats.aserciones_omitidas);
+            println!("  implicaciones: {}  /  {}", stats.implicaciones, stats.implicaciones_omitidas);
+            println!("  tags(rel):     {}  /  {}", stats.tags, stats.tags_omitidos);
+            // Reputaciones son derivadas — recalcular después de import si el grafo creció.
+            if stats.implicaciones > 0 {
+                let n = store.recalcular_reputaciones()?;
+                println!("reputaciones recalculadas: {n} fuentes.");
+            }
         }
         Cmd::Ask { pregunta, top, umbral, tag, max_tokens } => {
             use pluma_llm_core::{ChatRequest, ChatMessage};

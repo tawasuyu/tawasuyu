@@ -43,6 +43,42 @@ pub struct FuenteResumen {
     pub n_aserciones: u32,
 }
 
+/// Dump completo de una DB de iniy para federación.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DbDump {
+    pub iniy_version: String,
+    pub exportado_at: i64,
+    pub fuentes: Vec<Fuente>,
+    pub documentos: Vec<DumpDocumento>,
+    pub chunks: Vec<iniy_ingest::Chunk>,
+    pub aserciones: Vec<DumpAsercion>,
+    pub implicaciones: Vec<Implicacion>,
+    pub documento_tags: Vec<(DocId, String)>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DumpDocumento {
+    pub id: DocId,
+    pub titulo: String,
+    pub fuente_id: Option<FuenteId>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DumpAsercion {
+    pub asercion: Asercion,
+    pub fuente_citada_id: Option<FuenteId>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ImportStats {
+    pub fuentes: usize, pub fuentes_omitidas: usize,
+    pub documentos: usize, pub documentos_omitidos: usize,
+    pub chunks: usize, pub chunks_omitidos: usize,
+    pub aserciones: usize, pub aserciones_omitidas: usize,
+    pub implicaciones: usize, pub implicaciones_omitidas: usize,
+    pub tags: usize, pub tags_omitidos: usize,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ReputacionPersistida {
     pub fuente_id: FuenteId,
@@ -750,6 +786,148 @@ impl Store {
         }))
     }
 
+    /// Exporta toda la DB a un struct serializable. Para federación:
+    /// dos instancias intercambian dumps JSON y mergean por id (Ulid es
+    /// globally unique, no hay colisión espuria).
+    pub fn exportar_todo(&self) -> Result<DbDump> {
+        // Fuentes.
+        let fuentes: Vec<Fuente> = self.listar_fuentes()?.into_iter().map(|f| f.fuente).collect();
+        // Documentos.
+        let mut docs_stmt = self.conn.prepare(
+            "SELECT id, titulo, fuente_id FROM documentos"
+        )?;
+        let documentos: Vec<DumpDocumento> = docs_stmt.query_map([], |r| Ok((
+            r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?,
+        )))?.map(|r| {
+            let (id_s, titulo, fid_s) = r.map_err(anyhow::Error::from)?;
+            let id = DocId(Ulid::from_str(&id_s)?);
+            let fuente_id = fid_s.map(|s| Ulid::from_str(&s)).transpose()?.map(FuenteId);
+            Ok::<_, anyhow::Error>(DumpDocumento { id, titulo, fuente_id })
+        }).collect::<Result<_>>()?;
+        // Chunks (usamos iniy_ingest::Chunk que ya tiene serde).
+        let mut chunks_stmt = self.conn.prepare("SELECT id, doc_id, orden, texto FROM chunks")?;
+        let chunks: Vec<Chunk> = chunks_stmt.query_map([], |r| Ok((
+            r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, String>(3)?,
+        )))?.map(|r| {
+            let (id_s, doc_s, orden, texto) = r.map_err(anyhow::Error::from)?;
+            Ok::<_, anyhow::Error>(Chunk {
+                id: ChunkId(Ulid::from_str(&id_s)?),
+                doc_id: DocId(Ulid::from_str(&doc_s)?),
+                orden: orden as u32,
+                texto,
+            })
+        }).collect::<Result<_>>()?;
+        // Aserciones.
+        let mut a_stmt = self.conn.prepare(
+            "SELECT id, doc_id, chunk_id, texto, opinion_json, fuente_citada_id FROM aserciones"
+        )?;
+        let aserciones: Vec<DumpAsercion> = a_stmt.query_map([], |r| Ok((
+            r.get::<_, String>(0)?, r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?, r.get::<_, String>(3)?,
+            r.get::<_, String>(4)?, r.get::<_, Option<String>>(5)?,
+        )))?.map(|r| {
+            let (id_s, doc_s, c_s, texto, op_json, fc_s) = r.map_err(anyhow::Error::from)?;
+            let opinion: Opinion = serde_json::from_str(&op_json)?;
+            Ok::<_, anyhow::Error>(DumpAsercion {
+                asercion: Asercion {
+                    id: AsercionId(Ulid::from_str(&id_s)?),
+                    doc_id: DocId(Ulid::from_str(&doc_s)?),
+                    chunk_id: ChunkId(Ulid::from_str(&c_s)?),
+                    texto,
+                    opinion_autoral: opinion,
+                },
+                fuente_citada_id: fc_s.map(|s| Ulid::from_str(&s)).transpose()?.map(FuenteId),
+            })
+        }).collect::<Result<_>>()?;
+        // Implicaciones.
+        let implicaciones = self.cargar_implicaciones_todas()?;
+        // Tags.
+        let mut tags_stmt = self.conn.prepare("SELECT doc_id, tag FROM documento_tags")?;
+        let documento_tags: Vec<(DocId, String)> = tags_stmt.query_map([], |r| Ok((
+            r.get::<_, String>(0)?, r.get::<_, String>(1)?,
+        )))?.map(|r| {
+            let (d, t) = r.map_err(anyhow::Error::from)?;
+            Ok::<_, anyhow::Error>((DocId(Ulid::from_str(&d)?), t))
+        }).collect::<Result<_>>()?;
+
+        Ok(DbDump {
+            iniy_version: env!("CARGO_PKG_VERSION").to_string(),
+            exportado_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0),
+            fuentes,
+            documentos,
+            chunks,
+            aserciones,
+            implicaciones,
+            documento_tags,
+        })
+    }
+
+    /// Importa un dump producido por otra instancia. INSERT OR IGNORE en
+    /// cada tabla: la entidad con id ya existente se respeta. Las
+    /// reputaciones NO se importan (son derivadas; recalcular después).
+    pub fn importar_dump(&mut self, dump: &DbDump) -> Result<ImportStats> {
+        let mut stats = ImportStats::default();
+        let tx = self.conn.transaction()?;
+        for f in &dump.fuentes {
+            let r = tx.execute(
+                "INSERT OR IGNORE INTO fuentes (id, nombre, kind) VALUES (?1, ?2, ?3)",
+                params![f.id.0.to_string(), f.nombre, f.kind],
+            )?;
+            if r > 0 { stats.fuentes += 1; } else { stats.fuentes_omitidas += 1; }
+        }
+        for d in &dump.documentos {
+            let r = tx.execute(
+                "INSERT OR IGNORE INTO documentos (id, titulo, fuente_id) VALUES (?1, ?2, ?3)",
+                params![d.id.0.to_string(), d.titulo, d.fuente_id.map(|f| f.0.to_string())],
+            )?;
+            if r > 0 { stats.documentos += 1; } else { stats.documentos_omitidos += 1; }
+        }
+        for c in &dump.chunks {
+            let r = tx.execute(
+                "INSERT OR IGNORE INTO chunks (id, doc_id, orden, texto) VALUES (?1, ?2, ?3, ?4)",
+                params![c.id.0.to_string(), c.doc_id.0.to_string(), c.orden, c.texto],
+            )?;
+            if r > 0 { stats.chunks += 1; } else { stats.chunks_omitidos += 1; }
+        }
+        for a in &dump.aserciones {
+            let op_json = serde_json::to_string(&a.asercion.opinion_autoral)?;
+            let r = tx.execute(
+                "INSERT OR IGNORE INTO aserciones (id, doc_id, chunk_id, texto, opinion_json, fuente_citada_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    a.asercion.id.0.to_string(),
+                    a.asercion.doc_id.0.to_string(),
+                    a.asercion.chunk_id.0.to_string(),
+                    a.asercion.texto, op_json,
+                    a.fuente_citada_id.map(|f| f.0.to_string()),
+                ],
+            )?;
+            if r > 0 { stats.aserciones += 1; } else { stats.aserciones_omitidas += 1; }
+        }
+        for i in &dump.implicaciones {
+            let r = tx.execute(
+                "INSERT OR IGNORE INTO implicaciones (premisa, hipotesis, entailment, contradiction, neutral) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    i.premisa.0.to_string(), i.hipotesis.0.to_string(),
+                    i.relacion.entailment as f64, i.relacion.contradiction as f64, i.relacion.neutral as f64,
+                ],
+            )?;
+            if r > 0 { stats.implicaciones += 1; } else { stats.implicaciones_omitidas += 1; }
+        }
+        for (doc_id, tag) in &dump.documento_tags {
+            tx.execute("INSERT OR IGNORE INTO tags (nombre) VALUES (?1)", params![tag])?;
+            let r = tx.execute(
+                "INSERT OR IGNORE INTO documento_tags (doc_id, tag) VALUES (?1, ?2)",
+                params![doc_id.0.to_string(), tag],
+            )?;
+            if r > 0 { stats.tags += 1; } else { stats.tags_omitidos += 1; }
+        }
+        tx.commit()?;
+        Ok(stats)
+    }
+
     /// Implicaciones cuyos dos extremos viven en `doc_id`.
     pub fn cargar_implicaciones_del_doc(&self, doc_id: DocId) -> Result<Vec<Implicacion>> {
         let mut stmt = self.conn.prepare(
@@ -1046,6 +1224,50 @@ mod tests {
         s.recalcular_reputaciones().unwrap();
         s.recalcular_reputaciones().unwrap();
         assert_eq!(s.cargar_reputaciones_todas().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn export_import_round_trip_preserva_todo() {
+        let mut origen = Store::en_memoria().unwrap();
+        let f = origen.obtener_o_crear_fuente("F", Some("autor")).unwrap();
+        let doc = doc_demo();
+        origen.persistir_documento(&doc, Some(f)).unwrap();
+        let a = asercion_demo(doc.id, doc.chunks[0].id, "X");
+        origen.persistir_aserciones(&[a.clone()]).unwrap();
+        origen.taggear_doc(doc.id, "tema1").unwrap();
+        let dump = origen.exportar_todo().unwrap();
+
+        let mut destino = Store::en_memoria().unwrap();
+        let stats = destino.importar_dump(&dump).unwrap();
+        assert_eq!(stats.fuentes, 1);
+        assert_eq!(stats.documentos, 1);
+        assert_eq!(stats.aserciones, 1);
+        assert_eq!(stats.tags, 1);
+
+        // Verificar que el destino refleja el origen.
+        let asercs = destino.cargar_aserciones_atribuidas_todas().unwrap();
+        assert_eq!(asercs.len(), 1);
+        assert_eq!(asercs[0].asercion.texto, "X");
+        assert_eq!(asercs[0].fuente.as_ref().unwrap().nombre, "F");
+        assert_eq!(destino.tags_de_doc(doc.id).unwrap(), vec!["tema1".to_string()]);
+    }
+
+    #[test]
+    fn import_es_idempotente_sobre_re_aplicacion() {
+        let mut origen = Store::en_memoria().unwrap();
+        let f = origen.obtener_o_crear_fuente("F", None).unwrap();
+        let doc = doc_demo();
+        origen.persistir_documento(&doc, Some(f)).unwrap();
+        let dump = origen.exportar_todo().unwrap();
+
+        let mut destino = Store::en_memoria().unwrap();
+        destino.importar_dump(&dump).unwrap();
+        let stats2 = destino.importar_dump(&dump).unwrap();
+        // Segunda pasada: todos omitidos.
+        assert_eq!(stats2.fuentes, 0);
+        assert_eq!(stats2.fuentes_omitidas, 1);
+        assert_eq!(stats2.documentos, 0);
+        assert_eq!(stats2.documentos_omitidos, 1);
     }
 
     #[test]
