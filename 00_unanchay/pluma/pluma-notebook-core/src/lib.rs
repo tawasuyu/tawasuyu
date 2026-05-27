@@ -29,3 +29,21 @@ pub mod notebook;
 
 pub use cell::{Cell, CellId, CellKind, CellOutput, CellState, OutputPayload, Position};
 pub use notebook::Notebook;
+
+// =============================================================================
+//  FASE 43 :: convergencia del tejido celular bare-metal <-> host
+// -----------------------------------------------------------------------------
+//  Re-export bit-a-bit de `format::CeldaWawa` — la representacion canonica
+//  de una celda en el disco direccionado por contenido de Wawa OS. Cualquier
+//  consumidor del ecosistema Pluma (Linux: `pluma-notebook-llimphi`,
+//  `gioser-edit`, etc.) que quiera hablar el lenguaje del Grafo de Wawa
+//  importa este tipo directamente — sin capa de traduccion ni dialecto.
+//
+//  Los tipos historicos (`Cell`, `CellKind`, `Notebook`, etc.) siguen
+//  vigentes en `pluma-notebook-core` para sostener notebooks con
+//  markdown/code/embed/outputs ricos. La convergencia es por puerta de
+//  enlace: `CeldaWawa` cubre el caso Forth/macro minimo y se inscribe
+//  IDENTICAMENTE en disco que en RAM-host; los esquemas mas ricos se
+//  derivan a partir de el cuando la fase futura los traiga.
+// =============================================================================
+pub use format::{CeldaWawa, deserializar_celdas, serializar_celdas};

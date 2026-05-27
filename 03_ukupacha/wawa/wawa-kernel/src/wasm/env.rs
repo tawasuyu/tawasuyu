@@ -747,20 +747,33 @@ pub(crate) fn enlazar_capacidades(
 
     // --- CAPACIDAD 3e :: sys_cuaderno_registrar_celda -----------------------
     // sys_cuaderno_registrar_celda(fuente_hash_ptr, binario_hash_ptr,
-    //                              retorno: i32, salida_cuaderno_hash_ptr) -> i32
+    //                              retorno: i32, error_flag: u32,
+    //                              id_sec: u32, salida_hash_ptr) -> i32
     //
-    // EL ALMACEN SEMANTICO DEL CUADERNO (Fase 33). El kernel construye en
-    // un solo trazo un nodo cuaderno: un Vec<TipoCeldaWawa> con la
-    // FUENTE, el BINARIO y el RETORNO de la ultima ejecucion. Los HIJOS
-    // legitimos del nodo —las aristas del grafo direccionado por
-    // contenido— son los dos hashes que llegaron por parametro: el grafo
-    // dibuja por si mismo el tejido causal completo del cuaderno.
+    // EL ALMACEN SEMANTICO DEL CUADERNO (Fase 33/43, modelo unificado).
+    // La app entrega los campos planos de UNA celda; el kernel los
+    // ensambla en un `format::CeldaWawa` sobre la pila de Ring 0,
+    // lo wrapea en un `Vec<CeldaWawa>` de una entrada, lo serializa
+    // con postcard y lo inscribe como nodo del grafo.
     //
-    // GATEADA por PERMISO_GRAFO_ESCRITURA. Hereda back-pressure DMA. La
-    // app cuaderno re-invoca esta syscall cada vez que una celda se
-    // ejecuta — el nodo cuaderno anterior queda en sectores anteriores
-    // del log, inalcanzable salvo recoleccion semantica explicita;
-    // el cuaderno nuevo recoge el eslabon nuevo y conserva el resto.
+    // CONVENCION DE CAMPOS OPCIONALES (zero-alloc en el lado app):
+    //   * `binario_hash` lleva [0; 32] cuando la app no produjo binario
+    //     (compilacion fallida). El kernel detecta el patron all-zero
+    //     y lo traduce a `binario_hash: None`.
+    //   * `error_flag != 0` marca `marca_error: true` en la struct.
+    //   * `ultimo_retorno` siempre se inscribe como `Some(retorno)` —
+    //     el `None` queda reservado para celdas que el kernel inscriba
+    //     en el futuro sin pasar por una ejecucion (no es el caso hoy).
+    //
+    // ARISTAS CAUSALES :: los hijos del nodo siguen siendo
+    // `fuente_hash` (siempre) y `binario_hash` (cuando Some). El grafo
+    // direccionado por contenido cose por si mismo el tejido completo
+    // del cuaderno.
+    //
+    // GATEADA por PERMISO_GRAFO_ESCRITURA. Back-pressure DMA. La app
+    // re-invoca por cada celda nueva — el nodo previo queda en
+    // sectores anteriores del log, inalcanzable salvo recoleccion
+    // semantica explicita.
     if permisos & PERMISO_GRAFO_ESCRITURA != 0 {
     enlazador.func_wrap(
         "renaser",
@@ -769,7 +782,9 @@ pub(crate) fn enlazar_capacidades(
          fuente_hash_ptr: u32,
          binario_hash_ptr: u32,
          retorno: i32,
-         salida_cuaderno_hash_ptr: u32|
+         error_flag: u32,
+         id_sec: u32,
+         salida_hash_ptr: u32|
          -> Result<i32, Error> {
             if caller.data().paginas_dma_en_vuelo >= MAX_PAGINAS_DMA_PER_APP {
                 return Ok(CodigoError::Saturado.como_i32());
@@ -778,7 +793,7 @@ pub(crate) fn enlazar_capacidades(
 
             let memoria = obtener_memoria(&caller)?;
             // Leer los dos hashes de la memoria lineal.
-            let (fuente_hash, binario_hash) = {
+            let (fuente_hash, binario_hash_bytes) = {
                 let m = memoria.data(&caller);
                 let f = match leer_hash(
                     m,
@@ -810,7 +825,7 @@ pub(crate) fn enlazar_capacidades(
                 let m = memoria.data(&caller);
                 if let Err(e) = rango(
                     m,
-                    salida_cuaderno_hash_ptr,
+                    salida_hash_ptr,
                     32,
                     "WASM :: sys_cuaderno_registrar_celda desbordo memoria (salida)",
                 ) {
@@ -819,13 +834,29 @@ pub(crate) fn enlazar_capacidades(
                 }
             }
 
-            // Empaquetar las tres celdas en orden: FUENTE -> BINARIO -> OUT.
-            // El orden del Vec define la secuencia de ejecucion lineal.
-            let mut celdas: alloc::vec::Vec<format::TipoCeldaWawa> =
-                alloc::vec::Vec::with_capacity(3);
-            celdas.push(format::TipoCeldaWawa::TextoFuente(fuente_hash));
-            celdas.push(format::TipoCeldaWawa::BytecodeBinario(binario_hash));
-            celdas.push(format::TipoCeldaWawa::UltimoRetorno(retorno));
+            // CONVENCION DEL HASH NULO (Fase 43): un binario `[0; 32]`
+            // significa "la celda no produjo binario ejecutable" y
+            // colapsa a `Option::None` en la struct.
+            let binario_hash: Option<Hash> = if binario_hash_bytes == [0u8; 32] {
+                None
+            } else {
+                Some(binario_hash_bytes)
+            };
+
+            // Ensamblar la CeldaWawa unificada (Fase 43). Una sola
+            // entrada en el Vec — la convergencia con `pluma-notebook-core`
+            // permite que un cuaderno multi-celda futuro use el mismo
+            // Vec con N entradas en una sola pasada.
+            let celda = format::CeldaWawa {
+                id_secuencial: id_sec,
+                fuente_hash,
+                binario_hash,
+                ultimo_retorno: Some(retorno),
+                marca_error: error_flag != 0,
+            };
+            let mut celdas: alloc::vec::Vec<format::CeldaWawa> =
+                alloc::vec::Vec::with_capacity(1);
+            celdas.push(celda);
             let payload = match format::serializar_celdas(&celdas) {
                 Ok(bytes) => bytes,
                 Err(_) => {
@@ -834,19 +865,19 @@ pub(crate) fn enlazar_capacidades(
                 }
             };
 
-            // Los hijos del nodo cuaderno: el grafo cose por si mismo la
-            // arista hacia la fuente y hacia el binario. No incluimos el
-            // i32 — los retornos viven solo dentro del payload, no son
-            // nodos del grafo.
+            // Los hijos del nodo cuaderno: la fuente siempre, el binario
+            // solo cuando existe. El i32 del retorno vive dentro del
+            // payload, no es nodo del grafo.
             let mut hijos: alloc::vec::Vec<Hash> = alloc::vec::Vec::with_capacity(2);
             hijos.push(fuente_hash);
-            hijos.push(binario_hash);
+            if let Some(b) = binario_hash {
+                hijos.push(b);
+            }
 
             let resultado = match crate::almacen::almacenar(payload, hijos) {
                 Ok(hash) => {
                     let m = memoria.data_mut(&mut caller);
-                    m[salida_cuaderno_hash_ptr as usize
-                        ..salida_cuaderno_hash_ptr as usize + 32]
+                    m[salida_hash_ptr as usize..salida_hash_ptr as usize + 32]
                         .copy_from_slice(&hash);
                     CodigoError::Ok
                 }

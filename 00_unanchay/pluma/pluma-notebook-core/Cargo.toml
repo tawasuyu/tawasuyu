@@ -10,3 +10,10 @@ description = "pluma-notebook-app — núcleo de notebooks reproducibles: celdas
 [dependencies]
 blake3 = { workspace = true }
 serde = { workspace = true }
+# FASE 43 :: convergencia del tejido celular. `pluma-notebook-core`
+# re-exporta `format::CeldaWawa` para que el motor Linux y el kernel
+# bare-metal hablen un unico idioma sobre las celdas Forth+macro. La
+# riqueza historica (`Cell`, `CellKind`, outputs tipados) se conserva
+# para el ecosistema de notebooks markdown/code/LLM del host; pero la
+# representacion canonica de la celda Forth/macro queda en `format`.
+format = { path = "../../../shared/format" }

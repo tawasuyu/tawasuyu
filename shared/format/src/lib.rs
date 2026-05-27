@@ -457,7 +457,7 @@ impl ManifiestoFirmado {
 //  Fase 37 :: el sello criptografico del CUADERNO SOBERANO
 // -----------------------------------------------------------------------------
 //  La integridad de un cuaderno —un nodo del grafo cuyo payload es
-//  `Vec<TipoCeldaWawa>`— se proteje en dos planos:
+//  `Vec<CeldaWawa>` (Fase 43, modelo unificado)— se proteje en dos planos:
 //
 //    * Localmente, el direccionamiento por contenido garantiza que un
 //      bit alterado en cualquier celda cambia el hash del cuaderno
@@ -481,7 +481,7 @@ impl ManifiestoFirmado {
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct CuadernoFirmado {
     /// Hash BLAKE3 del cuaderno propuesto. El payload del cuaderno es
-    /// `Vec<TipoCeldaWawa>` serializado con postcard; este hash es el
+    /// `Vec<CeldaWawa>` serializado con postcard; este hash es el
     /// resumen criptografico que va a engrapar la firma.
     pub cuaderno_raiz_hash: Hash,
     /// Llave publica Ed25519 del autor. El kernel la compara contra
@@ -532,63 +532,86 @@ pub struct RaizFirmada {
 }
 
 // =============================================================================
-//  Fase 33 :: el almacen semantico del cuaderno
+//  Fase 33/43 :: el almacen semantico del cuaderno (modelo unificado)
 // -----------------------------------------------------------------------------
 //  Un CUADERNO de Wawa es un nodo del grafo cuyo payload `postcard` es un
-//  `Vec<TipoCeldaWawa>`. Cada variante codifica un eslabon del calculo:
+//  `Vec<CeldaWawa>`. Cada `CeldaWawa` empaqueta TODA la informacion de un
+//  eslabon del calculo en una sola estructura inmutable:
 //
-//    * `TextoFuente`  ─ enlaza por hash el ASCII Forth que el humano tecleo.
-//    * `BytecodeBinario` ─ enlaza el modulo WASM que el emisor produjo y
-//                       que el kernel ya valido con la magia `\0asm`.
-//    * `UltimoRetorno` ─ el i32 que la sub-jaula efimera devolvio al
-//                       ejecutar el binario (o un codigo negativo
-//                       reservado de `CodigoError` si la celda fallo).
+//    * `id_secuencial`   :: indice lineal en el cuaderno.
+//    * `fuente_hash`     :: hash del texto Forth o token `@<hash>` literal.
+//    * `binario_hash`    :: hash del modulo WASM materializado (None si
+//                           la compilacion fallo).
+//    * `ultimo_retorno`  :: el i32 que la sub-jaula efimera devolvio
+//                           (None si nunca se ejecuto).
+//    * `marca_error`     :: bandera atomica: hubo TRAP, OUT_OF_FUEL,
+//                           PAYLOAD_INVALIDO, o cualquier otra falla.
 //
-//  Las variantes con `Hash` viajan tambien como HIJOS del nodo cuaderno
-//  cuando el kernel lo inscribe (ver `sys_cuaderno_registrar_celda`): el
-//  direccionamiento por contenido hace EXPLICITAS las aristas, y el
-//  cuaderno arrastra criptograficamente todo su tejido de causas y
-//  efectos. Eliminar una celda es engendrar un cuaderno nuevo con la
-//  lista podada; el original permanece inmutable en sectores anteriores
-//  del log mientras nada lo recolecte.
+//  La fusion (Fase 43) elimina el enum heredado `TipoCeldaWawa` con sus
+//  tres variantes flat — el modelo estructurado es mas honesto con la
+//  semantica del cuaderno y converge bit-a-bit con la representacion
+//  del motor Linux del ecosistema Pluma (`pluma-notebook-core`), que
+//  re-exporta esta misma struct para hablar el mismo idioma en host y
+//  en el silicio.
 //
-//  La enum es `no_std` y `postcard`-amigable: solo enteros, hashes
-//  alineados y la variante mas pequeña — la deserializacion del cuaderno
-//  no allocea fuera del `Vec` principal.
+//  Las aristas del nodo (los `hijos` que el almacen registra al insertar)
+//  siguen siendo las pubkeys del grafo: `fuente_hash` siempre,
+//  `binario_hash` cuando esta presente. El direccionamiento por contenido
+//  hace EXPLICITAS las dependencias y el cuaderno arrastra
+//  criptograficamente todo su tejido de causas y efectos.
+//
+//  Postcard-amigable: campos primitivos + `Option<T>` + arrays alineados.
+//  La deserializacion del cuaderno no allocea fuera del `Vec` principal.
 // =============================================================================
 
-/// Eslabon individual de un cuaderno. Las celdas se almacenan en orden de
-/// ejecucion dentro de un `Vec` que conforma el payload del nodo cuaderno.
+/// El eslabon canonico de un cuaderno (Fase 43). Reemplaza al enum
+/// `TipoCeldaWawa` de la Fase 33: en lugar de tres variantes flat que
+/// solo el orden del `Vec` ataba a una "celda", aqui CADA `CeldaWawa`
+/// es una celda completa con todos sus eslabones bundled. Bit-compatible
+/// con `pluma_notebook_core::CeldaWawa` (re-export en el motor Linux).
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub enum TipoCeldaWawa {
-    /// Enlace por hash al objeto del grafo que aloja los caracteres ASCII
-    /// del script Forth que engendro esta celda.
-    TextoFuente(Hash),
-    /// Enlace por hash al objeto del grafo que aloja el modulo WebAssembly
-    /// compilado a partir de `TextoFuente`. La arista causal de la Fase 31
-    /// garantiza que el binario referencia a su fuente como primer hijo.
-    BytecodeBinario(Hash),
+pub struct CeldaWawa {
+    /// Indice lineal en el cuaderno — orden de presentacion. Empieza
+    /// en 0 y crece con cada celda exitosamente registrada.
+    pub id_secuencial: u32,
+    /// Hash del texto fuente: ASCII Forth tecleado por el humano, o
+    /// la cadena literal `@<64-hex>` para celdas macro-importadas
+    /// (Fase 36, Cross-App Bridge). Siempre presente — una celda sin
+    /// fuente es incoherente con el modelo.
+    pub fuente_hash: Hash,
+    /// Hash del modulo WASM materializado por `forth-emisor` (o
+    /// importado del grafo via `@<hash>`). `None` cuando la compilacion
+    /// fallo, la sintaxis Forth fue rechazada, o la vinculacion macro
+    /// no se logro — el binario no llego a inscribirse.
+    pub binario_hash: Option<Hash>,
     /// El i32 que la sub-jaula efimera (Fase 32) devolvio en su ultima
-    /// ejecucion. Un retorno positivo es el resultado normal del calculo;
-    /// un valor negativo en el rango [-7, -1] reservado en `CodigoError`
-    /// codifica una falla controlada (trap, ausente, saturado). El
-    /// cuaderno mantiene este eslabon visible para que el humano lea
-    /// "OUT: 42" o "OUT: TRAP" en la celda correspondiente.
-    UltimoRetorno(i32),
+    /// ejecucion. `None` cuando la celda nunca corrio (sin binario, o
+    /// el despacho dinamico ni siquiera arranco). Un valor negativo
+    /// en `[-7, -1]` reservado en `CodigoError` codifica fallas
+    /// controladas; valores fuera de ese rango son resultados legitimos.
+    pub ultimo_retorno: Option<i32>,
+    /// Bandera atomica de error: `true` si CUALQUIER eslabon de la
+    /// cadena (compilacion, registro v2, ejecucion dinamica, anclaje
+    /// de cuaderno) devolvio fallo. El renderer la usa para teñir la
+    /// celda de amarillo palido sin enterrar el valor del retorno —
+    /// `marca_error && ultimo_retorno == Some(-7)` significa
+    /// "ejecutada, fallida con trap"; `marca_error && ultimo_retorno
+    /// == None` significa "ni siquiera corrio".
+    pub marca_error: bool,
 }
 
 /// Serializa una secuencia de celdas a `postcard` — la forma que el
 /// kernel inscribe como payload del nodo cuaderno. Centralizada aqui
 /// para que el kernel no tenga que declarar `postcard` directamente
 /// (ya lo hereda transitivamente via `format`).
-pub fn serializar_celdas(celdas: &[TipoCeldaWawa]) -> Result<Vec<u8>, &'static str> {
+pub fn serializar_celdas(celdas: &[CeldaWawa]) -> Result<Vec<u8>, &'static str> {
     postcard::to_allocvec(celdas).map_err(|_| "celdas :: serializacion fallida")
 }
 
 /// Reconstruye la secuencia de celdas desde el payload de un nodo cuaderno.
 /// Tolera bytes sobrantes — el relleno del registro vive despues del payload.
-pub fn deserializar_celdas(bytes: &[u8]) -> Result<Vec<TipoCeldaWawa>, &'static str> {
-    postcard::take_from_bytes::<Vec<TipoCeldaWawa>>(bytes)
+pub fn deserializar_celdas(bytes: &[u8]) -> Result<Vec<CeldaWawa>, &'static str> {
+    postcard::take_from_bytes::<Vec<CeldaWawa>>(bytes)
         .map(|(celdas, _)| celdas)
         .map_err(|_| "celdas :: deserializacion fallida")
 }
@@ -770,21 +793,50 @@ mod pruebas {
 
     #[test]
     fn cuaderno_ida_y_vuelta_con_celdas_mixtas() {
-        // Un cuaderno con las tres variantes representativas: una celda
-        // fuente, su binario, y el retorno de la ultima ejecucion.
-        let celdas: Vec<TipoCeldaWawa> = vec![
-            TipoCeldaWawa::TextoFuente([0xA1; 32]),
-            TipoCeldaWawa::BytecodeBinario([0xB2; 32]),
-            TipoCeldaWawa::UltimoRetorno(42),
+        // FASE 43 :: el modelo unificado CeldaWawa empaqueta los cinco
+        // campos en una sola struct. Roundtrip cubre:
+        //   - celda exitosa con binario y retorno legitimo
+        //   - celda fallida sin binario, sin retorno, con `marca_error`
+        //   - celda fallida con binario pero retorno negativo y error
+        let celdas: Vec<CeldaWawa> = vec![
+            CeldaWawa {
+                id_secuencial: 0,
+                fuente_hash: [0xA1; 32],
+                binario_hash: Some([0xB2; 32]),
+                ultimo_retorno: Some(42),
+                marca_error: false,
+            },
+            CeldaWawa {
+                id_secuencial: 1,
+                fuente_hash: [0xC3; 32],
+                binario_hash: None,
+                ultimo_retorno: None,
+                marca_error: true,
+            },
+            CeldaWawa {
+                id_secuencial: 2,
+                fuente_hash: [0xD4; 32],
+                binario_hash: Some([0xE5; 32]),
+                ultimo_retorno: Some(-7),
+                marca_error: true,
+            },
         ];
-        let bytes = postcard::to_allocvec(&celdas).unwrap();
-        let leido: Vec<TipoCeldaWawa> = postcard::from_bytes(&bytes).unwrap();
+        let bytes = serializar_celdas(&celdas).unwrap();
+        let leido = deserializar_celdas(&bytes).unwrap();
         assert_eq!(leido, celdas);
-        // Retornos negativos legitimos (codigos de error reservados) sobreviven.
-        let con_falla: Vec<TipoCeldaWawa> = vec![TipoCeldaWawa::UltimoRetorno(-7)];
-        let bytes = postcard::to_allocvec(&con_falla).unwrap();
-        let leido: Vec<TipoCeldaWawa> = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(leido, con_falla);
+
+        // Single-cell payload (el caso que el kernel produce hoy en
+        // cada `sys_cuaderno_registrar_celda`).
+        let una: Vec<CeldaWawa> = vec![CeldaWawa {
+            id_secuencial: 99,
+            fuente_hash: [0xF0; 32],
+            binario_hash: None,
+            ultimo_retorno: Some(0),
+            marca_error: false,
+        }];
+        let bytes = serializar_celdas(&una).unwrap();
+        let leido = deserializar_celdas(&bytes).unwrap();
+        assert_eq!(leido, una);
     }
 
     #[test]

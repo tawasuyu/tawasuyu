@@ -103,11 +103,21 @@ extern "C" {
         binario_hash_ptr: u32,
         valor_entrada: i32,
     ) -> i32;
+    /// FASE 33/43 :: registra una celda en el grafo bajo el modelo
+    /// unificado `format::CeldaWawa` (id_secuencial + fuente_hash +
+    /// binario_hash + ultimo_retorno + marca_error). El kernel ensambla
+    /// la struct en su pila y emite UN nodo del grafo cuyo payload es
+    /// `Vec<CeldaWawa>` de longitud 1.
+    /// Convencion: `binario_hash_ptr` apunta a `[0; 32]` cuando la
+    /// celda no produjo binario (compilacion fallida). El kernel
+    /// detecta el patron all-zero y lo traduce a `None` en la struct.
     fn sys_cuaderno_registrar_celda(
         fuente_hash_ptr: u32,
         binario_hash_ptr: u32,
         retorno: i32,
-        salida_cuaderno_hash_ptr: u32,
+        error_flag: u32,
+        id_sec: u32,
+        salida_hash_ptr: u32,
     ) -> i32;
     /// FASE 36 :: Cross-App Semantic Bridge. Inspecciona un binario en el
     /// grafo (sin instanciar) y devuelve un dictamen de 4 B en
@@ -253,6 +263,14 @@ static mut PROXIMA_CELDA: usize = 0;
 /// quedo persistido (`HASH cuaderno: XX..YY`).
 static mut HASH_CUADERNO: [u8; 32] = [0; 32];
 static mut HASH_CUADERNO_VALIDO: bool = false;
+
+/// FASE 43 :: contador monotono de ID secuencial para celdas inscritas.
+/// El campo `id_secuencial` de `format::CeldaWawa` lo necesita para
+/// fijar el orden de presentacion del cuaderno cuando un consumidor
+/// futuro deserialice el `Vec<CeldaWawa>`. Cada F5 exitoso o fallido
+/// (cualquier llamada a `sys_cuaderno_registrar_celda`) incrementa este
+/// contador.
+static mut PROXIMO_ID_SECUENCIAL: u32 = 0;
 
 /// FASE 34 :: el ESTADO FLUYENTE entre celdas. El ultimo retorno exitoso
 /// queda disponible aqui para que la siguiente F5 lo prependa como cabeza
@@ -570,12 +588,23 @@ fn ejecutar_celda_actual() {
     celda.retorno = retorno;
     celda.exito = !es_falla;
 
-    // 5. Consolidar la celda como nodo cuaderno en el grafo.
+    // 5. Consolidar la celda como nodo cuaderno en el grafo (Fase 43:
+    //    modelo unificado `CeldaWawa`). El kernel ensambla los campos en
+    //    su pila y emite un nodo con payload `Vec<CeldaWawa>` de 1
+    //    entrada. `error_flag` deriva de `celda.exito`; `id_sec` viene
+    //    del contador monotono local.
+    let id_sec = unsafe {
+        let id = PROXIMO_ID_SECUENCIAL;
+        PROXIMO_ID_SECUENCIAL = id.wrapping_add(1);
+        id
+    };
     let cod_cuaderno = unsafe {
         sys_cuaderno_registrar_celda(
             celda.hash_fuente.as_ptr() as u32,
             celda.hash_binario.as_ptr() as u32,
             celda.retorno,
+            (!celda.exito) as u32,
+            id_sec,
             core::ptr::addr_of_mut!(HASH_CUADERNO) as u32,
         )
     };
@@ -711,15 +740,23 @@ fn ejecutar_celda_importada() {
     celda.heredado = heredado;
     celda.valor_heredado = if heredado { valor_heredado } else { 0 };
 
-    // 4. Consolidar la celda en el grafo. `hash_fuente` queda en cero
-    //    (no hay fuente Forth nueva — la fuente vive en otra app, en
-    //    otra celda, en otro cuaderno). El nodo cuaderno asi formado
-    //    apunta solo a `hash_binario` como hijo.
+    // 4. Consolidar la celda en el grafo bajo el modelo unificado
+    //    `CeldaWawa` (Fase 43). `hash_fuente` queda en cero — la fuente
+    //    vive en otra app/celda/cuaderno; el kernel detecta el patron
+    //    all-zero del binario (que aqui SI tiene contenido) e inyecta
+    //    el Option<Hash> correcto. El `error_flag` deriva del exito.
+    let id_sec = unsafe {
+        let id = PROXIMO_ID_SECUENCIAL;
+        PROXIMO_ID_SECUENCIAL = id.wrapping_add(1);
+        id
+    };
     let cod_cuaderno = unsafe {
         sys_cuaderno_registrar_celda(
             celda.hash_fuente.as_ptr() as u32,
             celda.hash_binario.as_ptr() as u32,
             celda.retorno,
+            (!celda.exito) as u32,
+            id_sec,
             core::ptr::addr_of_mut!(HASH_CUADERNO) as u32,
         )
     };
@@ -893,7 +930,7 @@ fn pintar() {
 
     // Cabecera con el hash del cuaderno (si ya hubo una consolidacion).
     rellenar_rect(lienzo, 0, 0, ANCHO, EDITOR_Y - 4, secundario);
-    dibujar_texto(lienzo, b"PLUMA  WAWA  F42", 8, 6, 1, tinta);
+    dibujar_texto(lienzo, b"PLUMA  WAWA  F43", 8, 6, 1, tinta);
     if unsafe { HASH_CUADERNO_VALIDO } {
         let h = unsafe { HASH_CUADERNO };
         let mut etiqueta = [b' '; 8];
