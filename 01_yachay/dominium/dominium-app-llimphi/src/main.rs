@@ -24,8 +24,9 @@ use dominium_core::{
 };
 use dominium_iso::{IsoProjector, ZWeights};
 use dominium_physics::tick;
+use dominium_core::kmeans_psi;
 use dominium_render_plan::{
-    build_plan, Color, PlanConfig, Quad, RenderLayer, RenderMode, RenderPlan,
+    build_plan_with_overrides, Color, PlanConfig, Quad, RenderLayer, RenderMode, RenderPlan,
 };
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
@@ -38,14 +39,21 @@ use llimphi_widget_button::{button_view, ButtonPalette};
 use llimphi_widget_slider::{slider_view, SliderPalette};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
-/// Lado de la grilla cuadrada del mundo. Subido a 80 para que se vea como
-/// un continente y no como una sala; tps suficiente con regrowth + caras.
-const GRID: usize = 80;
-/// Población inicial de Lemmings. 4× la grilla anterior, manteniendo
-/// densidad similar.
-const LEMMINGS: usize = 220;
+/// Lado de la grilla cuadrada del mundo. 160 — continente entero con mares,
+/// ríos serpenteantes y montañas. El motor sigue siendo O(grid) en difusión
+/// y O(N²) en `nearest`, así que la población se mantiene moderada (ver
+/// `LEMMINGS`).
+const GRID: usize = 160;
+/// Población inicial de Lemmings. Densidad equivalente a la grilla 80×80
+/// previa con 220 lemmings (≈0.034 lem/celda) — la diferencia es que ahora
+/// están distribuidos solo por tierra navegable, no por mar.
+const LEMMINGS: usize = 900;
 /// Periodo del bucle de simulación (~11 Hz).
 const TICK_MS: u64 = 90;
+/// Cada cuántos ticks recalculamos k-means para colorear los clusters
+/// (modo PsiCluster). 30 ticks ≈ 2.7s — suficiente para ver tribus
+/// emergentes sin que el costo del kmeans (O(K·N·iter)) note.
+const KMEANS_REFRESH_TICKS: u64 = 30;
 /// Ancho del panel de stats.
 const SIDE_WIDTH: f32 = 240.0;
 /// Pack JSON por defecto — iglesia / banco / comuna / laboratorio + variantes.
@@ -215,23 +223,187 @@ fn load_user_pack() -> Option<Conceptos> {
 
 /// Siembra un mundo: continentes de materia, vetas de oro, niebla de
 /// psique y una población de Lemmings con sesgos y acciones variadas.
+/// Value noise multioctava determinista. Devuelve `Vec<f32>` de tamaño
+/// `w*h` con valores aproximadamente en `[-1, 1]`. Las octavas suben en
+/// frecuencia y bajan en amplitud — la primera define continentes, las
+/// últimas, granulado. Smoothstep `s(t) = t²(3-2t)` entre celdas coarse.
+fn fbm_noise(seed: u64, w: usize, h: usize) -> Vec<f32> {
+    let mut rng = Lcg::new(seed);
+    let mut field = vec![0.0_f32; w * h];
+    // (frecuencia, amplitud). 4 octavas: 6×6 continentes → 96×96 ruido fino.
+    let octaves: [(usize, f32); 4] = [(6, 1.0), (12, 0.55), (24, 0.30), (96, 0.18)];
+    let mut amp_norm = 0.0_f32;
+    for (_, a) in &octaves {
+        amp_norm += a;
+    }
+    for (n, amp) in octaves {
+        // Grilla coarse (n+1)×(n+1) de valores aleatorios en [-1, 1].
+        let coarse_w = n + 1;
+        let mut coarse = vec![0.0_f32; coarse_w * coarse_w];
+        for v in coarse.iter_mut() {
+            *v = rng.next_f32() * 2.0 - 1.0;
+        }
+        let sx = n as f32 / w as f32;
+        let sy = n as f32 / h as f32;
+        for y in 0..h {
+            for x in 0..w {
+                let fx = x as f32 * sx;
+                let fy = y as f32 * sy;
+                let cx = (fx.floor() as usize).min(n - 1);
+                let cy = (fy.floor() as usize).min(n - 1);
+                let tx = (fx - cx as f32).clamp(0.0, 1.0);
+                let ty = (fy - cy as f32).clamp(0.0, 1.0);
+                let smooth = |a: f32| a * a * (3.0 - 2.0 * a);
+                let u = smooth(tx);
+                let v = smooth(ty);
+                let a = coarse[cy * coarse_w + cx];
+                let b = coarse[cy * coarse_w + cx + 1];
+                let c = coarse[(cy + 1) * coarse_w + cx];
+                let d = coarse[(cy + 1) * coarse_w + cx + 1];
+                let p = a * (1.0 - u) + b * u;
+                let q = c * (1.0 - u) + d * u;
+                field[y * w + x] += amp * (p * (1.0 - v) + q * v);
+            }
+        }
+    }
+    for v in field.iter_mut() {
+        *v /= amp_norm;
+    }
+    field
+}
+
+/// Esculpe un río senoidal entre `(x0, y0)` y el borde opuesto, pintando
+/// `psique` alta y limpiando `materia` a lo largo del trazo. El río tiene
+/// ancho `width` celdas y serpentea con amplitud `wiggle` perpendicular al
+/// rumbo. La curva se muestrea a paso unitario.
+fn carve_river(w: &mut World, rng: &mut Lcg, vertical: bool, length: usize, width: f32, wiggle: f32) {
+    let g_w = w.grid.width as f32;
+    let g_h = w.grid.height as f32;
+    let start = rng.next_f32() * if vertical { g_w } else { g_h };
+    let phase = rng.next_f32() * core::f32::consts::TAU;
+    let freq = 0.06 + rng.next_f32() * 0.05;
+    for s in 0..length {
+        let t = s as f32;
+        let bend = libm::sinf(t * freq + phase) * wiggle;
+        let (cx_f, cy_f) = if vertical {
+            (start + bend, t * g_h / length as f32)
+        } else {
+            (t * g_w / length as f32, start + bend)
+        };
+        let r = width.ceil() as i64;
+        for dy in -r..=r {
+            for dx in -r..=r {
+                let x = cx_f + dx as f32;
+                let y = cy_f + dy as f32;
+                if x < 0.0 || y < 0.0 || x >= g_w || y >= g_h {
+                    continue;
+                }
+                let d = libm::sqrtf((dx as f32).powi(2) + (dy as f32).powi(2));
+                if d > width {
+                    continue;
+                }
+                let intensity = 1.0 - d / width;
+                let idx = w.grid.idx(x as usize, y as usize);
+                // Río = mucha psique (agua azul), nada de materia, sin oro.
+                w.grid.psique[idx] = (w.grid.psique[idx] + 55.0 * intensity).min(80.0);
+                w.grid.materia[idx] *= 1.0 - intensity * 0.95;
+                w.grid.oro[idx] *= 1.0 - intensity * 0.8;
+                w.grid.poder[idx] *= 1.0 - intensity * 0.8;
+                w.grid.degradacion[idx] *= 1.0 - intensity * 0.9;
+            }
+        }
+    }
+}
+
 fn seed(seed: u64) -> World {
     let mut w = World::new(GRID, GRID);
     let mut rng = Lcg::new(seed);
+    // --- Capas iniciales basadas en dos campos fbm independientes ---
+    // `elev` ∈ ~[-1, 1] decide bioma; `humid` ∈ ~[-1, 1] modula fertilidad.
+    let elev = fbm_noise(seed ^ 0xE1E_7A57, GRID, GRID);
+    let humid = fbm_noise(seed ^ 0x4D015_7CE, GRID, GRID);
     for cy in 0..GRID {
         for cx in 0..GRID {
             let idx = w.grid.idx(cx, cy);
-            let m = rng.next_f32();
-            w.grid.materia[idx] = m * m * 60.0;
-            if rng.next_f32() > 0.92 {
-                w.grid.oro[idx] = rng.next_f32() * 40.0;
+            let e = elev[idx];
+            let h = humid[idx];
+            // Bordes del mapa empujados al mar para evitar continentes que
+            // se peguen al borde — atenuación cosenoidal radial.
+            let nx = (cx as f32 / GRID as f32) * 2.0 - 1.0;
+            let ny = (cy as f32 / GRID as f32) * 2.0 - 1.0;
+            let edge_drop = (nx * nx + ny * ny).min(1.0);
+            let e = e - edge_drop * 0.35;
+
+            if e < -0.20 {
+                // Mar profundo: agua, sin biomasa ni metales.
+                w.grid.psique[idx] = 65.0 + rng.next_f32() * 8.0;
+            } else if e < -0.05 {
+                // Mar somero / lagunas: agua más clara, vida acuática mínima.
+                w.grid.psique[idx] = 40.0 + rng.next_f32() * 10.0;
+                w.grid.materia[idx] = rng.next_f32() * 4.0;
+            } else if e < 0.10 {
+                // Costa / pantano fértil: alta materia + algo de agua.
+                w.grid.materia[idx] = 35.0 + (h.max(0.0)) * 30.0 + rng.next_f32() * 6.0;
+                w.grid.psique[idx] = 8.0 + rng.next_f32() * 5.0;
+                if rng.next_f32() > 0.94 {
+                    w.grid.oro[idx] = rng.next_f32() * 18.0;
+                }
+            } else if e < 0.35 {
+                // Llanura: el granero del mundo. Materia muy alta cuando
+                // hay humedad; menos donde el clima es seco.
+                let fertility = (h * 0.5 + 0.5).clamp(0.2, 1.0);
+                w.grid.materia[idx] = 45.0 + fertility * 50.0 + rng.next_f32() * 5.0;
+                if rng.next_f32() > 0.92 {
+                    w.grid.oro[idx] = rng.next_f32() * 24.0;
+                }
+            } else if e < 0.60 {
+                // Colinas: materia decreciente, asoma el poder (vetas).
+                let alpha = (e - 0.35) / 0.25;
+                w.grid.materia[idx] = (1.0 - alpha) * 35.0 + rng.next_f32() * 4.0;
+                w.grid.poder[idx] = alpha * 6.0;
+                if rng.next_f32() > 0.85 {
+                    w.grid.oro[idx] = rng.next_f32() * 30.0; // minas en colinas
+                }
+            } else {
+                // Montañas / picos: poco material vivo, mucha estructura
+                // bruta (poder) y, en los más altos, cicatriz rocosa.
+                let alpha = ((e - 0.60) / 0.40).clamp(0.0, 1.0);
+                w.grid.poder[idx] = 4.0 + alpha * 12.0;
+                w.grid.degradacion[idx] = alpha * alpha * 8.0;
+                if rng.next_f32() > 0.97 {
+                    w.grid.oro[idx] = rng.next_f32() * 35.0;
+                }
             }
-            w.grid.psique[idx] = rng.next_f32() * 12.0;
         }
     }
+    // --- Ríos: 2 cruces. Uno vertical, uno horizontal. Sin erosión real
+    //     — los ríos se pintan encima del bioma sobrescribiendo. ---
+    carve_river(&mut w, &mut rng, true, GRID, 2.4, GRID as f32 * 0.18);
+    carve_river(&mut w, &mut rng, false, GRID, 1.8, GRID as f32 * 0.14);
+
+    // --- Lemmings: distribuidos solo en tierra firme (e ∈ [-0.05, 0.45]).
+    //     Rechaza candidatos en mar o pico. Si tras 32 intentos no encuentra
+    //     un punto válido, suelta donde caiga (failsafe para no congelar el
+    //     seed). ---
+    let pick_land = |rng: &mut Lcg, elev: &[f32]| -> (f32, f32) {
+        for _ in 0..32 {
+            let x = rng.next_f32() * (GRID as f32 - 1.0);
+            let y = rng.next_f32() * (GRID as f32 - 1.0);
+            let nx = (x / GRID as f32) * 2.0 - 1.0;
+            let ny = (y / GRID as f32) * 2.0 - 1.0;
+            let edge_drop = (nx * nx + ny * ny).min(1.0);
+            let e = elev[(y as usize) * GRID + (x as usize)] - edge_drop * 0.35;
+            if e > -0.03 && e < 0.45 {
+                return (x, y);
+            }
+        }
+        (
+            rng.next_f32() * (GRID as f32 - 1.0),
+            rng.next_f32() * (GRID as f32 - 1.0),
+        )
+    };
     for k in 0..LEMMINGS {
-        let x = rng.next_f32() * (GRID as f32 - 1.0);
-        let y = rng.next_f32() * (GRID as f32 - 1.0);
+        let (x, y) = pick_land(&mut rng, &elev);
         let psi = [
             rng.next_f32(),
             rng.next_f32(),
@@ -323,6 +495,51 @@ struct Model {
     /// la creación puede fallar en plataformas sin ProjectDirs.
     /// Se mantiene viva mientras vive el `Model`.
     _wawa_watcher: Option<wawa_config::ConfigWatcher>,
+    /// Asignación k-means → cluster por lemming. Vacío hasta que se entre
+    /// al modo PsiCluster o se ejecute el primer refresh. `assignments[i]`
+    /// ∈ `0..KMEANS_K` indica el cluster del lemming `i`. Si la población
+    /// cambia entre refrescos (spawn/kill), los índices nuevos caen en `0`
+    /// hasta el próximo refresh.
+    cluster_assignments: Vec<u8>,
+    /// Tick global en el que se calculó por última vez `cluster_assignments`.
+    /// Usado para gated refresh cada `KMEANS_REFRESH_TICKS`.
+    cluster_last_refresh: u64,
+    /// Cuál tab del panel lateral está activo. La UI muestra los grupos
+    /// relevantes según esta selección — el modelo es simple, sin lazy load.
+    panel_tab: PanelTab,
+    /// Si el usuario ya entendió las gestures de canvas (click crea, drag
+    /// mueve, segundo click selecciona). Cuando es `false` la app muestra
+    /// un hint flotante sobre el canvas. Se apaga al primer click.
+    onboarding_done: bool,
+}
+
+/// Pestañas del panel lateral. El orden es el orden visual en el tab bar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PanelTab {
+    Mundo,
+    Conceptos,
+    Psique,
+    Vista,
+}
+
+impl PanelTab {
+    fn label(self) -> &'static str {
+        match self {
+            PanelTab::Mundo => "Mundo",
+            PanelTab::Conceptos => "Conceptos",
+            PanelTab::Psique => "ψ",
+            PanelTab::Vista => "Vista",
+        }
+    }
+
+    fn all() -> [PanelTab; 4] {
+        [
+            PanelTab::Mundo,
+            PanelTab::Conceptos,
+            PanelTab::Psique,
+            PanelTab::Vista,
+        ]
+    }
 }
 
 /// Una de las cuatro capas modificables de un `Concepto` (degradacion
@@ -455,6 +672,11 @@ enum Msg {
     /// Cicla `ActionPolicy` entre Fixed y PsiArgmax. Con periodo 0 nunca
     /// re-elige, así que también arrancamos un período sano la primera vez.
     CyclePsiPolicy,
+    /// Cambia el tab activo del panel lateral.
+    SelectTab(PanelTab),
+    /// Cierra el hint flotante de onboarding (se cierra solo en el primer
+    /// click sobre el canvas, pero también hay una X visible).
+    DismissOnboarding,
 }
 
 struct Dominium;
@@ -493,17 +715,28 @@ impl App for Dominium {
         Model {
             world: seed(rng_seed),
             params: SimParams::default(),
-            // Scale más chico (8.0) para encajar el grid 80×80 en pantalla.
-            // z_factor más alto (0.18) para que el relieve se sienta volumétrico.
-            iso: IsoProjector::new(8.0, 0.18),
-            weights: ZWeights::default(),
+            // Scale 4.5 para que la grilla 160×160 entre en pantalla;
+            // z_factor 0.20 da volumen sin que los picos coman demasiado vertical.
+            iso: IsoProjector::new(4.5, 0.20),
+            // Relieve por bioma:
+            //   - mares (psique alta) → z negativo → fosas.
+            //   - llanura (materia alta) → z casi cero, ligero relieve fértil.
+            //   - colinas (poder) → suben moderado.
+            //   - montañas (degradacion) → suben fuerte → picos.
+            weights: ZWeights {
+                materia: 0.04,
+                psique: -0.18,
+                poder: 0.5,
+                oro: 0.0,
+                degradacion: 1.2,
+            },
             cfg: PlanConfig {
                 // El tile real queda definido por el iso.scale (las celdas
                 // son polygons proyectados, no rects axis-aligned). Estos
                 // siguen siendo factores para lemmings/conceptos.
-                tile: 8.0,
-                lemming_size: 5.5,
-                lemming_lift: 0.5,
+                tile: 4.5,
+                lemming_size: 3.5,
+                lemming_lift: 0.6,
                 concepto_size: 9.0,
                 concepto_lift: 2.4,
                 light_dir: (0.55, 0.35),
@@ -530,6 +763,10 @@ impl App for Dominium {
             show_trails: false,
             theme,
             _wawa_watcher: wawa_watcher,
+            cluster_assignments: Vec::new(),
+            cluster_last_refresh: 0,
+            panel_tab: PanelTab::Mundo,
+            onboarding_done: false,
         }
     }
 
@@ -668,6 +905,10 @@ impl App for Dominium {
                 spawn_concepto_at(&mut m, center, center);
             }
             Msg::CanvasClick(wx, wy) => {
+                // Primer click sobre el canvas también apaga el hint de
+                // onboarding — si llegó hasta acá, ya entendió que se
+                // puede interactuar con el mapa.
+                m.onboarding_done = true;
                 // Hit-test contra Conceptos existentes (centro + radio
                 // pickeable acotado). Si pega, selecciona sin crear; si
                 // no, crea un Concepto nuevo ahí.
@@ -798,9 +1039,14 @@ impl App for Dominium {
             Msg::CycleRenderMode => {
                 m.cfg.render_mode = match m.cfg.render_mode {
                     RenderMode::Composite => RenderMode::Heatmap(RenderLayer::Materia),
-                    RenderMode::Heatmap(RenderLayer::Degradacion) => RenderMode::Composite,
+                    RenderMode::Heatmap(RenderLayer::Degradacion) => RenderMode::PsiCluster,
                     RenderMode::Heatmap(l) => RenderMode::Heatmap(l.next()),
+                    RenderMode::PsiCluster => RenderMode::Composite,
                 };
+                // Forzar refresh inmediato del k-means al entrar al modo.
+                if matches!(m.cfg.render_mode, RenderMode::PsiCluster) {
+                    refresh_clusters(&mut m);
+                }
             }
             Msg::ToggleTrails => {
                 m.show_trails = !m.show_trails;
@@ -848,6 +1094,12 @@ impl App for Dominium {
                     let _ = rimay_localize::set_locale(&cfg.lang);
                 }
             }
+            Msg::SelectTab(tab) => {
+                m.panel_tab = tab;
+            }
+            Msg::DismissOnboarding => {
+                m.onboarding_done = true;
+            }
         }
         m
     }
@@ -878,7 +1130,13 @@ impl App for Dominium {
         // por frame a 11 Hz, perfectamente costeable y nos da las métricas
         // psicológicas en vivo sin un segundo bucle de cálculo.
         let psi_metrics = PsiMetrics::from_world(shown);
-        let mut plan = build_plan(shown, &model.iso, &model.weights, &model.cfg);
+        let mut plan = build_plan_with_overrides(
+            shown,
+            &model.iso,
+            &model.weights,
+            &model.cfg,
+            |i| lemming_color_for(model, i),
+        );
         if model.show_trails && model.rewind_offset == 0 {
             overlay_trails(&mut plan, model);
         }
@@ -928,6 +1186,11 @@ impl App for Dominium {
         })
         .children(vec![canvas, side]);
 
+        let mut frame: Vec<View<Msg>> = vec![status];
+        if !model.onboarding_done {
+            frame.push(onboarding_bar(&theme));
+        }
+        frame.push(body);
         View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
@@ -937,8 +1200,55 @@ impl App for Dominium {
             ..Default::default()
         })
         .fill(theme.bg_app)
-        .children(vec![status, body])
+        .children(frame)
     }
+}
+
+/// Banda informativa que cubre el ancho de la app y explica las tres
+/// gestures básicas del canvas. Se muestra hasta que el usuario haga el
+/// primer click (que también es la gesture más obvia). Tiene una X a la
+/// derecha para cerrarla manualmente sin tocar el canvas.
+fn onboarding_bar(theme: &Theme) -> View<Msg> {
+    let hint_text = "Click vacío → crea concepto · Click sobre uno → selecciona · Drag → mover · Tabs arriba a la derecha";
+    let label = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .text_aligned(hint_text, 11.5, theme.accent, Alignment::Start);
+    let close_btn = View::new(Style {
+        size: Size {
+            width: length(28.0_f32),
+            height: percent(1.0_f32),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .children(vec![llimphi_widget_button::button_view::<Msg>(
+        "✕",
+        &ButtonPalette::from_theme(theme),
+        Msg::DismissOnboarding,
+    )]);
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(28.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        padding: Rect {
+            left: length(14.0_f32),
+            right: length(6.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(vec![label, close_btn])
 }
 
 use wawa_config_llimphi::theme_from_wawa;
@@ -968,9 +1278,53 @@ fn advance(m: &mut Model) {
         m.tick = 0;
         m.snapshots.clear();
         m.trails.clear();
+        m.cluster_assignments.clear();
     }
     push_snapshot(m);
     push_trail_frame(m);
+    // K-means de psi: sólo cuando el render lo necesita. Si el usuario
+    // está en otro modo, no pagamos el costo.
+    if matches!(m.cfg.render_mode, RenderMode::PsiCluster)
+        && m.tick.saturating_sub(m.cluster_last_refresh) >= KMEANS_REFRESH_TICKS
+    {
+        refresh_clusters(m);
+    }
+}
+
+/// Tres colores fijos del paleta de clusters — orden de aparición en el
+/// resultado de `kmeans_psi`. Magenta / cian / amarillo: los más fáciles de
+/// distinguir sobre cualquier fondo de bioma.
+const CLUSTER_COLORS: [Color; 3] = [
+    [0.96, 0.30, 0.72, 1.0], // magenta
+    [0.30, 0.90, 0.90, 1.0], // cian
+    [0.96, 0.92, 0.30, 1.0], // amarillo
+];
+
+/// Recalcula `cluster_assignments` desde el `World` actual y deja el tick
+/// como timestamp del refresh. Si `kmeans_psi` devuelve `None` (pob < K),
+/// limpia las asignaciones para que los lemmings caigan al color default.
+fn refresh_clusters(m: &mut Model) {
+    if let Some(km) = kmeans_psi(&m.world) {
+        m.cluster_assignments = km.assignments;
+    } else {
+        m.cluster_assignments.clear();
+    }
+    m.cluster_last_refresh = m.tick;
+}
+
+/// Color para el lemming `i` según el `RenderMode` actual y las
+/// asignaciones de cluster vigentes. Se usa como override de
+/// `build_plan_with_overrides`.
+fn lemming_color_for(m: &Model, i: usize) -> Color {
+    if matches!(m.cfg.render_mode, RenderMode::PsiCluster)
+        && i < m.cluster_assignments.len()
+    {
+        let c = m.cluster_assignments[i] as usize;
+        if c < CLUSTER_COLORS.len() {
+            return CLUSTER_COLORS[c];
+        }
+    }
+    m.cfg.palette.lemming
 }
 
 fn reseed(m: &mut Model) {
@@ -1182,551 +1536,26 @@ fn side_panel(
         Msg::Reseed,
     );
 
-    let separator = || -> View<Msg> {
-        View::new(Style {
-            size: Size {
-                width: percent(1.0_f32),
-                height: length(1.0_f32),
-            },
-            ..Default::default()
-        })
-        .fill(theme.border)
-    };
+    // --- Tab bar: 4 pestañas chiquitas en fila ---
+    let tab_bar = tab_bar_view(model, &btn_palette, theme);
 
-    let conceptos_header = label_view(
-        &rimay_localize::t("dominium-header-conceptos"),
-        11.0,
-        theme.fg_muted,
-    );
-    let conceptos_count = label_view(
-        &rimay_localize::t_args(
-            "dominium-active-count",
-            &[("count", model.world.conceptos.len().to_string().into())],
-        ),
-        12.0,
-        theme.fg_text,
-    );
+    // Header siempre visible: play/pause + reseed (los controles más usados,
+    // independientes del tab).
     let mut children: Vec<View<Msg>> = vec![
         header,
+        tab_bar,
         play_btn,
         reset_btn,
-        separator(),
-        stat_row(
-            &rimay_localize::t("dominium-stat-population"),
-            &stats.n.to_string(),
-            theme,
-        ),
-        stat_row(
-            &rimay_localize::t("dominium-stat-materia"),
-            &format!("{:.0}", stats.total_materia),
-            theme,
-        ),
-        stat_row(
-            &rimay_localize::t("dominium-stat-oro"),
-            &format!("{:.0}", stats.total_oro),
-            theme,
-        ),
-        stat_row(
-            &rimay_localize::t("dominium-stat-energia"),
-            &format!("{:.0}", stats.total_energia),
-            theme,
-        ),
-        separator(),
-        label_view(
-            &rimay_localize::t("dominium-header-metricas"),
-            11.0,
-            theme.fg_muted,
-        ),
-        stat_row(
-            &rimay_localize::t("dominium-stat-epoca"),
-            Epoch::classify(stats).label(),
-            theme,
-        ),
-        stat_row(
-            &rimay_localize::t("dominium-stat-gini-energia"),
-            &format!("{:.3}", stats.gini_energia),
-            theme,
-        ),
-        stat_row(
-            &rimay_localize::t("dominium-stat-edad-media"),
-            &format!("{:.1}", stats.mean_edad),
-            theme,
-        ),
-        stat_row(
-            &rimay_localize::t("dominium-stat-var-psi-orden"),
-            &format!("{:.3}", stats.var_psi[0]),
-            theme,
-        ),
-        stat_row(
-            &rimay_localize::t("dominium-stat-var-psi-miedo"),
-            &format!("{:.3}", stats.var_psi[1]),
-            theme,
-        ),
-        stat_row(
-            &rimay_localize::t("dominium-stat-var-psi-curiosidad"),
-            &format!("{:.3}", stats.var_psi[2]),
-            theme,
-        ),
-        stat_row(
-            &rimay_localize::t("dominium-stat-var-psi-corruptib"),
-            &format!("{:.3}", stats.var_psi[3]),
-            theme,
-        ),
-        stat_row(
-            &rimay_localize::t("dominium-action-mover"),
-            &stats.action_counts[0].to_string(),
-            theme,
-        ),
-        stat_row(
-            &rimay_localize::t("dominium-action-extraer"),
-            &stats.action_counts[1].to_string(),
-            theme,
-        ),
-        stat_row(
-            &rimay_localize::t("dominium-action-sincronizar"),
-            &stats.action_counts[2].to_string(),
-            theme,
-        ),
-        stat_row(
-            &rimay_localize::t("dominium-action-intercambiar"),
-            &stats.action_counts[3].to_string(),
-            theme,
-        ),
-        stat_row(
-            &rimay_localize::t("dominium-action-replicar"),
-            &stats.action_counts[4].to_string(),
-            theme,
-        ),
-        stat_row(
-            &rimay_localize::t("dominium-action-degradar"),
-            &stats.action_counts[5].to_string(),
-            theme,
-        ),
-        stat_row(
-            "season×",
-            &format!(
-                "{:.2}",
-                model.params.season_factor(model.world.tick_count)
-            ),
-            theme,
-        ),
-        separator(),
-        conceptos_header,
-        conceptos_count,
+        separator(theme),
     ];
-    for (i, c) in model.world.conceptos.items.iter().enumerate() {
-        children.push(concepto_row(i, &c.id, model.selected == Some(i), theme));
+
+    // Contenido específico del tab actual.
+    match model.panel_tab {
+        PanelTab::Mundo => append_mundo_tab(&mut children, model, stats, theme, &btn_palette, &slider_palette),
+        PanelTab::Conceptos => append_conceptos_tab(&mut children, model, theme, &btn_palette, &slider_palette),
+        PanelTab::Psique => append_psique_tab(&mut children, model, stats, psi_metrics, theme, &btn_palette, &slider_palette),
+        PanelTab::Vista => append_vista_tab(&mut children, model, theme, &btn_palette, &slider_palette),
     }
-    children.push(sized_button(
-        &rimay_localize::t("dominium-btn-create-concept"),
-        &btn_palette,
-        Msg::CrearConcepto,
-    ));
-    children.push(sized_button(
-        &rimay_localize::t("dominium-btn-seed-pack"),
-        &btn_palette,
-        Msg::SembrarConceptos,
-    ));
-    children.push(sized_button(
-        &rimay_localize::t("dominium-btn-clear"),
-        &btn_palette,
-        Msg::LimpiarConceptos,
-    ));
-    children.push(sized_button(
-        &rimay_localize::t("dominium-btn-save"),
-        &btn_palette,
-        Msg::GuardarPack,
-    ));
-    children.push(sized_button(
-        &rimay_localize::t("dominium-btn-load-saved"),
-        &btn_palette,
-        Msg::CargarPack,
-    ));
-
-    // Editor del concepto seleccionado: sliders en vivo sobre radius + 4 mods.
-    if let Some(i) = model.selected {
-        if let Some(c) = model.world.conceptos.items.get(i) {
-            children.push(separator());
-            children.push(label_view(
-                &rimay_localize::t("dominium-header-editar"),
-                11.0,
-                theme.fg_muted,
-            ));
-            if model.id_input_focused {
-                children.push(text_input_view(
-                    &model.id_input,
-                    &rimay_localize::t("dominium-slider-nombre"),
-                    true,
-                    &TextInputPalette::from_theme(theme),
-                    Msg::FocusIdInput,
-                ));
-            } else {
-                children.push(sized_button(
-                    &format!("• {}  (✎ renombrar)", c.id),
-                    &btn_palette,
-                    Msg::FocusIdInput,
-                ));
-            }
-            children.push(slider_view(
-                &rimay_localize::t("dominium-slider-radius"),
-                c.radius,
-                0.5,
-                20.0,
-                &slider_palette,
-                |phase, dv| match phase {
-                    DragPhase::Move => Some(Msg::EditRadius(dv)),
-                    DragPhase::End => None,
-                },
-            ));
-            let sprite_glyph = dominium_render_plan::glyph_for_sprite(c.sprite_id)
-                .map(|c| c.to_string())
-                .unwrap_or_else(|| "—".to_string());
-            children.push(sized_button(
-                &format!("sprite: {} ({})", c.sprite_id, sprite_glyph),
-                &btn_palette,
-                Msg::CycleSprite,
-            ));
-            children.push(mod_slider(
-                &rimay_localize::t("dominium-slider-materia"),
-                c.mods.materia,
-                Layer::Materia,
-                &slider_palette,
-            ));
-            children.push(mod_slider(
-                &rimay_localize::t("dominium-slider-psique"),
-                c.mods.psique,
-                Layer::Psique,
-                &slider_palette,
-            ));
-            children.push(mod_slider(
-                &rimay_localize::t("dominium-slider-poder"),
-                c.mods.poder,
-                Layer::Poder,
-                &slider_palette,
-            ));
-            children.push(mod_slider(
-                &rimay_localize::t("dominium-slider-oro"),
-                c.mods.oro,
-                Layer::Oro,
-                &slider_palette,
-            ));
-
-            // BehaviorHack editor.
-            children.push(label_view(
-                &rimay_localize::t("dominium-label-hack"),
-                11.0,
-                theme.fg_muted,
-            ));
-            match c.hack {
-                None => {
-                    children.push(sized_button(
-                        "+ Agregar hack",
-                        &btn_palette,
-                        Msg::HackToggle,
-                    ));
-                }
-                Some(h) => {
-                    children.push(sized_button(
-                        &format!("trigger: {}", trigger_label(h.trigger)),
-                        &btn_palette,
-                        Msg::HackCycleTrigger,
-                    ));
-                    // Slider del parámetro del trigger (solo si aplica).
-                    match h.trigger {
-                        Trigger::Always => {}
-                        Trigger::EnergiaBajo(v) => {
-                            children.push(slider_view(
-                                "umbral",
-                                v,
-                                0.0,
-                                100.0,
-                                &slider_palette,
-                                |phase, dv| match phase {
-                                    DragPhase::Move => Some(Msg::HackEditTriggerParam(dv)),
-                                    DragPhase::End => None,
-                                },
-                            ));
-                        }
-                        Trigger::EdadSobre(v) => {
-                            children.push(slider_view(
-                                "edad",
-                                v as f32,
-                                0.0,
-                                1000.0,
-                                &slider_palette,
-                                |phase, dv| match phase {
-                                    DragPhase::Move => Some(Msg::HackEditTriggerParam(dv)),
-                                    DragPhase::End => None,
-                                },
-                            ));
-                        }
-                    }
-                    children.push(sized_button(
-                        &format!("acción: {} ({})", h.forced_action, action_name(h.forced_action)),
-                        &btn_palette,
-                        Msg::HackCycleAction,
-                    ));
-                    children.push(slider_view(
-                        "duración",
-                        h.duration as f32,
-                        1.0,
-                        500.0,
-                        &slider_palette,
-                        |phase, dv| match phase {
-                            DragPhase::Move => Some(Msg::HackEditDuration(dv)),
-                            DragPhase::End => None,
-                        },
-                    ));
-                    children.push(sized_button(
-                        "− Quitar hack",
-                        &btn_palette,
-                        Msg::HackToggle,
-                    ));
-                }
-            }
-
-            children.push(sized_button("🗑  Borrar", &btn_palette, Msg::DeleteSelected));
-            children.push(sized_button("◌  Deseleccionar", &btn_palette, Msg::DeselectConcepto));
-        }
-    }
-
-    children.push(separator());
-    children.push(label_view("[ MOTOR ]", 11.0, theme.fg_muted));
-    children.push(param_slider(
-        "climb",
-        model.params.climb_cost,
-        ParamSlot::ClimbCost,
-        &slider_palette,
-    ));
-    children.push(param_slider(
-        "move",
-        model.params.move_cost,
-        ParamSlot::MoveCost,
-        &slider_palette,
-    ));
-    children.push(param_slider(
-        "diffuse",
-        model.params.diffusion_rate,
-        ParamSlot::DiffusionRate,
-        &slider_palette,
-    ));
-    children.push(param_slider(
-        "entropy",
-        model.params.entropy_rate,
-        ParamSlot::EntropyRate,
-        &slider_palette,
-    ));
-    children.push(param_slider(
-        "season T",
-        model.params.season_period as f32,
-        ParamSlot::SeasonPeriod,
-        &slider_palette,
-    ));
-    children.push(param_slider(
-        "season A",
-        model.params.season_amplitude,
-        ParamSlot::SeasonAmplitude,
-        &slider_palette,
-    ));
-
-    // ─── [ PSICOLOGÍA ] — sliders de los parámetros psi + toggles ───
-    children.push(separator());
-    children.push(label_view("[ PSICOLOGIA ]", 11.0, theme.fg_muted));
-    children.push(param_slider(
-        "psi mod",
-        model.params.psi_effect_modulation,
-        ParamSlot::PsiModulation,
-        &slider_palette,
-    ));
-    children.push(param_slider(
-        "radio soc",
-        model.params.social_radius,
-        ParamSlot::SocialRadius,
-        &slider_palette,
-    ));
-    children.push(param_slider(
-        "contagio",
-        model.params.contagion_rate,
-        ParamSlot::ContagionRate,
-        &slider_palette,
-    ));
-    children.push(param_slider(
-        "homofilia",
-        model.params.homophily_threshold,
-        ParamSlot::HomophilyThreshold,
-        &slider_palette,
-    ));
-    let big5_label = if model.params.big_five {
-        "✓  Big Five: ON (5D)"
-    } else {
-        "○  Big Five: OFF (4D)"
-    };
-    children.push(sized_button(big5_label, &btn_palette, Msg::ToggleBigFive));
-    let policy_label = match model.params.action_policy {
-        dominium_core::ActionPolicy::Fixed => "○  Política: Fixed".to_string(),
-        dominium_core::ActionPolicy::PsiArgmax => format!(
-            "✓  Política: PsiArgmax (T={})",
-            model.params.policy_reeval_period
-        ),
-    };
-    children.push(sized_button(&policy_label, &btn_palette, Msg::CyclePsiPolicy));
-
-    // ─── [ MÉTRICAS ψ ] — polarización + Moran's I por componente ───
-    children.push(separator());
-    children.push(label_view("[ METRICAS ψ ]", 11.0, theme.fg_muted));
-    children.push(stat_row(
-        "polar ORDEN",
-        &format!("{:.4}", psi_metrics.polarization[0]),
-        theme,
-    ));
-    children.push(stat_row(
-        "polar MIEDO",
-        &format!("{:.4}", psi_metrics.polarization[1]),
-        theme,
-    ));
-    children.push(stat_row(
-        "polar CURIO",
-        &format!("{:.4}", psi_metrics.polarization[2]),
-        theme,
-    ));
-    children.push(stat_row(
-        "polar CORR",
-        &format!("{:.4}", psi_metrics.polarization[3]),
-        theme,
-    ));
-    children.push(stat_row(
-        "Moran ORDEN",
-        &format!("{:+.3}", psi_metrics.moran_i[0]),
-        theme,
-    ));
-    children.push(stat_row(
-        "Moran MIEDO",
-        &format!("{:+.3}", psi_metrics.moran_i[1]),
-        theme,
-    ));
-    children.push(stat_row(
-        "Moran CURIO",
-        &format!("{:+.3}", psi_metrics.moran_i[2]),
-        theme,
-    ));
-    children.push(stat_row(
-        "Moran CORR",
-        &format!("{:+.3}", psi_metrics.moran_i[3]),
-        theme,
-    ));
-    if model.params.big_five {
-        children.push(stat_row(
-            "polar EXTRA",
-            &format!("{:.4}", psi_metrics.polarization_ext),
-            theme,
-        ));
-        children.push(stat_row(
-            "Moran EXTRA",
-            &format!("{:+.3}", psi_metrics.moran_i_ext),
-            theme,
-        ));
-    }
-
-    children.push(separator());
-    children.push(label_view("[ RELIEVE VISUAL ]", 11.0, theme.fg_muted));
-    children.push(z_slider(
-        &rimay_localize::t("dominium-slider-materia"),
-        model.weights.materia,
-        ZSlot::Materia,
-        &slider_palette,
-    ));
-    children.push(z_slider(
-        &rimay_localize::t("dominium-slider-psique"),
-        model.weights.psique,
-        ZSlot::Psique,
-        &slider_palette,
-    ));
-    children.push(z_slider(
-        &rimay_localize::t("dominium-slider-poder"),
-        model.weights.poder,
-        ZSlot::Poder,
-        &slider_palette,
-    ));
-    children.push(z_slider(
-        &rimay_localize::t("dominium-slider-oro"),
-        model.weights.oro,
-        ZSlot::Oro,
-        &slider_palette,
-    ));
-    children.push(z_slider("degrad.", model.weights.degradacion, ZSlot::Degradacion, &slider_palette));
-    let sync_label = if model.sync_relieve { "✓  Sync físico: ON" } else { "○  Sync físico: OFF" };
-    children.push(sized_button(sync_label, &btn_palette, Msg::ToggleSyncRelieve));
-    let andina_label = if model.cfg.andina_layers > 0 {
-        "✓  Estampa andina: ON"
-    } else {
-        "○  Estampa andina: OFF"
-    };
-    children.push(sized_button(andina_label, &btn_palette, Msg::ToggleAndina));
-
-    // ─── [ VISTA ] — render mode + trails + rewind ───
-    children.push(separator());
-    children.push(label_view("[ VISTA ]", 11.0, theme.fg_muted));
-    let render_label = match model.cfg.render_mode {
-        RenderMode::Composite => "Render: compuesto".to_string(),
-        RenderMode::Heatmap(l) => format!("Render: heatmap {}", l.label()),
-    };
-    children.push(sized_button(&render_label, &btn_palette, Msg::CycleRenderMode));
-    let trails_label = if model.show_trails {
-        "✓  Trayectorias: ON"
-    } else {
-        "○  Trayectorias: OFF"
-    };
-    children.push(sized_button(trails_label, &btn_palette, Msg::ToggleTrails));
-    let texture_label = if model.cfg.texture {
-        "✓  Textura: ON"
-    } else {
-        "○  Textura: OFF"
-    };
-    children.push(sized_button(texture_label, &btn_palette, Msg::ToggleTexture));
-
-    // Rewind: slider de tiempo (0 = vivo, N = N pasos atrás)
-    let max_rewind = model.snapshots.len().saturating_sub(1).max(1);
-    children.push(slider_view(
-        "rewind",
-        model.rewind_offset as f32,
-        0.0,
-        max_rewind as f32,
-        &slider_palette,
-        |phase, dv| match phase {
-            DragPhase::Move => Some(Msg::RewindBy(dv)),
-            DragPhase::End => None,
-        },
-    ));
-    // Atajo: si está en rewind, un botón "vivo" lo resetea instantáneo.
-    if model.rewind_offset > 0 {
-        children.push(sized_button(
-            &format!("▶  Vivo (estabas {} atrás)", model.rewind_offset),
-            &btn_palette,
-            Msg::RewindHome,
-        ));
-    }
-
-    // ─── [ SCENARIO ] — picker de packs embebidos ───
-    children.push(separator());
-    children.push(label_view("[ SCENARIO ]", 11.0, theme.fg_muted));
-    let packs = scenario_packs();
-    let (current_id, _) = packs[model.scenario_idx];
-    children.push(sized_button(
-        &format!("pack: {} (▸ ciclar)", current_id),
-        &btn_palette,
-        Msg::CycleScenario,
-    ));
-    children.push(sized_button(
-        &rimay_localize::t_args(
-            "dominium-btn-load-named",
-            &[("name", current_id.into())],
-        ),
-        &btn_palette,
-        Msg::LoadScenario,
-    ));
-
-    children.push(separator());
-    children.push(label_view(&format!("grilla {GRID}×{GRID}"), 11.0, theme.fg_muted));
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -1749,6 +1578,602 @@ fn side_panel(
     })
     .fill(theme.bg_panel)
     .children(children)
+}
+
+/// Línea horizontal de 1 px usada como separator entre secciones del panel.
+fn separator(theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.border)
+}
+
+/// Barra horizontal con un botón por cada `PanelTab`. El tab activo se
+/// resalta cambiando el `accent` del label (botón) — la palette de Llimphi
+/// no expone "tab pill", así que usamos la convención de marcar el activo
+/// con `▸`.
+fn tab_bar_view(model: &Model, btn_palette: &ButtonPalette, _theme: &Theme) -> View<Msg> {
+    let buttons: Vec<View<Msg>> = PanelTab::all()
+        .into_iter()
+        .map(|tab| {
+            let active = tab == model.panel_tab;
+            let label = if active {
+                format!("▸ {}", tab.label())
+            } else {
+                tab.label().to_string()
+            };
+            let mut bp = btn_palette.clone();
+            if active {
+                bp.bg = btn_palette.bg_hover;
+            }
+            View::new(Style {
+                size: Size {
+                    width: Dimension::auto(),
+                    height: length(26.0_f32),
+                },
+                flex_grow: 1.0,
+                flex_basis: length(0.0_f32),
+                ..Default::default()
+            })
+            .children(vec![llimphi_widget_button::button_view::<Msg>(
+                &label,
+                &bp,
+                Msg::SelectTab(tab),
+            )])
+        })
+        .collect();
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(26.0_f32),
+        },
+        gap: Size {
+            width: length(4.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(buttons)
+}
+
+/// Tab "Mundo" — estado macro + sliders de motor + scenario picker.
+fn append_mundo_tab(
+    children: &mut Vec<View<Msg>>,
+    model: &Model,
+    stats: &WorldStats,
+    theme: &Theme,
+    btn_palette: &ButtonPalette,
+    slider_palette: &SliderPalette,
+) {
+    children.push(label_view(
+        &rimay_localize::t("dominium-header-metricas"),
+        11.0,
+        theme.fg_muted,
+    ));
+    children.push(stat_row(
+        &rimay_localize::t("dominium-stat-population"),
+        &stats.n.to_string(),
+        theme,
+    ));
+    children.push(stat_row(
+        &rimay_localize::t("dominium-stat-epoca"),
+        Epoch::classify(stats).label(),
+        theme,
+    ));
+    children.push(stat_row(
+        &rimay_localize::t("dominium-stat-materia"),
+        &format!("{:.0}", stats.total_materia),
+        theme,
+    ));
+    children.push(stat_row(
+        &rimay_localize::t("dominium-stat-oro"),
+        &format!("{:.0}", stats.total_oro),
+        theme,
+    ));
+    children.push(stat_row(
+        &rimay_localize::t("dominium-stat-energia"),
+        &format!("{:.0}", stats.total_energia),
+        theme,
+    ));
+    children.push(stat_row(
+        &rimay_localize::t("dominium-stat-gini-energia"),
+        &format!("{:.3}", stats.gini_energia),
+        theme,
+    ));
+    children.push(stat_row(
+        &rimay_localize::t("dominium-stat-edad-media"),
+        &format!("{:.1}", stats.mean_edad),
+        theme,
+    ));
+    children.push(stat_row(
+        "season×",
+        &format!("{:.2}", model.params.season_factor(model.world.tick_count)),
+        theme,
+    ));
+
+    children.push(separator(theme));
+    children.push(label_view("[ ACCIONES ACTUALES ]", 11.0, theme.fg_muted));
+    let action_labels: [(&str, usize); 6] = [
+        ("dominium-action-mover", 0),
+        ("dominium-action-extraer", 1),
+        ("dominium-action-sincronizar", 2),
+        ("dominium-action-intercambiar", 3),
+        ("dominium-action-replicar", 4),
+        ("dominium-action-degradar", 5),
+    ];
+    for (key, ai) in action_labels {
+        children.push(stat_row(
+            &rimay_localize::t(key),
+            &stats.action_counts[ai].to_string(),
+            theme,
+        ));
+    }
+
+    children.push(separator(theme));
+    children.push(label_view("[ MOTOR ]", 11.0, theme.fg_muted));
+    children.push(param_slider("climb", model.params.climb_cost, ParamSlot::ClimbCost, slider_palette));
+    children.push(param_slider("move", model.params.move_cost, ParamSlot::MoveCost, slider_palette));
+    children.push(param_slider("diffuse", model.params.diffusion_rate, ParamSlot::DiffusionRate, slider_palette));
+    children.push(param_slider("entropy", model.params.entropy_rate, ParamSlot::EntropyRate, slider_palette));
+    children.push(param_slider("season T", model.params.season_period as f32, ParamSlot::SeasonPeriod, slider_palette));
+    children.push(param_slider("season A", model.params.season_amplitude, ParamSlot::SeasonAmplitude, slider_palette));
+
+    children.push(separator(theme));
+    children.push(label_view("[ SCENARIO ]", 11.0, theme.fg_muted));
+    let packs = scenario_packs();
+    let (current_id, _) = packs[model.scenario_idx];
+    children.push(sized_button(
+        &format!("pack: {} (▸ ciclar)", current_id),
+        btn_palette,
+        Msg::CycleScenario,
+    ));
+    children.push(sized_button(
+        &rimay_localize::t_args("dominium-btn-load-named", &[("name", current_id.into())]),
+        btn_palette,
+        Msg::LoadScenario,
+    ));
+    children.push(separator(theme));
+    children.push(label_view(&format!("grilla {GRID}×{GRID}"), 11.0, theme.fg_muted));
+}
+
+/// Tab "Conceptos" — lista de conceptos, crear/cargar/guardar/limpiar,
+/// y el editor del Concepto seleccionado (radius, sprite, 4 mods, hack).
+fn append_conceptos_tab(
+    children: &mut Vec<View<Msg>>,
+    model: &Model,
+    theme: &Theme,
+    btn_palette: &ButtonPalette,
+    slider_palette: &SliderPalette,
+) {
+    children.push(label_view(
+        &rimay_localize::t("dominium-header-conceptos"),
+        11.0,
+        theme.fg_muted,
+    ));
+    children.push(label_view(
+        &rimay_localize::t_args(
+            "dominium-active-count",
+            &[("count", model.world.conceptos.len().to_string().into())],
+        ),
+        12.0,
+        theme.fg_text,
+    ));
+
+    // Hint contextual: si no hay conceptos, le decimos cómo crear uno.
+    if model.world.conceptos.items.is_empty() {
+        children.push(label_view(
+            "Click sobre el mapa para crear",
+            11.0,
+            theme.fg_muted,
+        ));
+    }
+
+    for (i, c) in model.world.conceptos.items.iter().enumerate() {
+        children.push(concepto_row(i, &c.id, model.selected == Some(i), theme));
+    }
+    children.push(sized_button(
+        &rimay_localize::t("dominium-btn-create-concept"),
+        btn_palette,
+        Msg::CrearConcepto,
+    ));
+    children.push(sized_button(
+        &rimay_localize::t("dominium-btn-seed-pack"),
+        btn_palette,
+        Msg::SembrarConceptos,
+    ));
+    children.push(sized_button(
+        &rimay_localize::t("dominium-btn-clear"),
+        btn_palette,
+        Msg::LimpiarConceptos,
+    ));
+    children.push(sized_button(
+        &rimay_localize::t("dominium-btn-save"),
+        btn_palette,
+        Msg::GuardarPack,
+    ));
+    children.push(sized_button(
+        &rimay_localize::t("dominium-btn-load-saved"),
+        btn_palette,
+        Msg::CargarPack,
+    ));
+
+    // Editor del seleccionado.
+    let Some(i) = model.selected else { return };
+    let Some(c) = model.world.conceptos.items.get(i) else { return };
+    children.push(separator(theme));
+    children.push(label_view(
+        &rimay_localize::t("dominium-header-editar"),
+        11.0,
+        theme.fg_muted,
+    ));
+    if model.id_input_focused {
+        children.push(text_input_view(
+            &model.id_input,
+            &rimay_localize::t("dominium-slider-nombre"),
+            true,
+            &TextInputPalette::from_theme(theme),
+            Msg::FocusIdInput,
+        ));
+    } else {
+        children.push(sized_button(
+            &format!("• {}  (✎ renombrar)", c.id),
+            btn_palette,
+            Msg::FocusIdInput,
+        ));
+    }
+    children.push(slider_view(
+        &rimay_localize::t("dominium-slider-radius"),
+        c.radius,
+        0.5,
+        20.0,
+        slider_palette,
+        |phase, dv| match phase {
+            DragPhase::Move => Some(Msg::EditRadius(dv)),
+            DragPhase::End => None,
+        },
+    ));
+    let sprite_glyph = dominium_render_plan::glyph_for_sprite(c.sprite_id)
+        .map(|c| c.to_string())
+        .unwrap_or_else(|| "—".to_string());
+    children.push(sized_button(
+        &format!("sprite: {} ({})", c.sprite_id, sprite_glyph),
+        btn_palette,
+        Msg::CycleSprite,
+    ));
+    children.push(mod_slider(
+        &rimay_localize::t("dominium-slider-materia"),
+        c.mods.materia,
+        Layer::Materia,
+        slider_palette,
+    ));
+    children.push(mod_slider(
+        &rimay_localize::t("dominium-slider-psique"),
+        c.mods.psique,
+        Layer::Psique,
+        slider_palette,
+    ));
+    children.push(mod_slider(
+        &rimay_localize::t("dominium-slider-poder"),
+        c.mods.poder,
+        Layer::Poder,
+        slider_palette,
+    ));
+    children.push(mod_slider(
+        &rimay_localize::t("dominium-slider-oro"),
+        c.mods.oro,
+        Layer::Oro,
+        slider_palette,
+    ));
+
+    children.push(label_view(
+        &rimay_localize::t("dominium-label-hack"),
+        11.0,
+        theme.fg_muted,
+    ));
+    match c.hack {
+        None => {
+            children.push(sized_button(
+                "+ Agregar hack",
+                btn_palette,
+                Msg::HackToggle,
+            ));
+        }
+        Some(h) => {
+            children.push(sized_button(
+                &format!("trigger: {}", trigger_label(h.trigger)),
+                btn_palette,
+                Msg::HackCycleTrigger,
+            ));
+            match h.trigger {
+                Trigger::Always => {}
+                Trigger::EnergiaBajo(v) => {
+                    children.push(slider_view(
+                        "umbral",
+                        v,
+                        0.0,
+                        100.0,
+                        slider_palette,
+                        |phase, dv| match phase {
+                            DragPhase::Move => Some(Msg::HackEditTriggerParam(dv)),
+                            DragPhase::End => None,
+                        },
+                    ));
+                }
+                Trigger::EdadSobre(v) => {
+                    children.push(slider_view(
+                        "edad",
+                        v as f32,
+                        0.0,
+                        1000.0,
+                        slider_palette,
+                        |phase, dv| match phase {
+                            DragPhase::Move => Some(Msg::HackEditTriggerParam(dv)),
+                            DragPhase::End => None,
+                        },
+                    ));
+                }
+            }
+            children.push(sized_button(
+                &format!("acción: {} ({})", h.forced_action, action_name(h.forced_action)),
+                btn_palette,
+                Msg::HackCycleAction,
+            ));
+            children.push(slider_view(
+                "duración",
+                h.duration as f32,
+                1.0,
+                500.0,
+                slider_palette,
+                |phase, dv| match phase {
+                    DragPhase::Move => Some(Msg::HackEditDuration(dv)),
+                    DragPhase::End => None,
+                },
+            ));
+            children.push(sized_button("− Quitar hack", btn_palette, Msg::HackToggle));
+        }
+    }
+    children.push(sized_button("🗑  Borrar", btn_palette, Msg::DeleteSelected));
+    children.push(sized_button("◌  Deseleccionar", btn_palette, Msg::DeselectConcepto));
+}
+
+/// Tab "ψ" — sliders de psicología social + métricas ψ.
+fn append_psique_tab(
+    children: &mut Vec<View<Msg>>,
+    model: &Model,
+    stats: &WorldStats,
+    psi_metrics: &PsiMetrics,
+    theme: &Theme,
+    btn_palette: &ButtonPalette,
+    slider_palette: &SliderPalette,
+) {
+    children.push(label_view("[ DIVERSIDAD ψ ]", 11.0, theme.fg_muted));
+    children.push(stat_row(
+        &rimay_localize::t("dominium-stat-var-psi-orden"),
+        &format!("{:.3}", stats.var_psi[0]),
+        theme,
+    ));
+    children.push(stat_row(
+        &rimay_localize::t("dominium-stat-var-psi-miedo"),
+        &format!("{:.3}", stats.var_psi[1]),
+        theme,
+    ));
+    children.push(stat_row(
+        &rimay_localize::t("dominium-stat-var-psi-curiosidad"),
+        &format!("{:.3}", stats.var_psi[2]),
+        theme,
+    ));
+    children.push(stat_row(
+        &rimay_localize::t("dominium-stat-var-psi-corruptib"),
+        &format!("{:.3}", stats.var_psi[3]),
+        theme,
+    ));
+
+    children.push(separator(theme));
+    children.push(label_view("[ CONTAGIO SOCIAL ]", 11.0, theme.fg_muted));
+    children.push(param_slider(
+        "psi mod",
+        model.params.psi_effect_modulation,
+        ParamSlot::PsiModulation,
+        slider_palette,
+    ));
+    children.push(param_slider(
+        "radio soc",
+        model.params.social_radius,
+        ParamSlot::SocialRadius,
+        slider_palette,
+    ));
+    children.push(param_slider(
+        "contagio",
+        model.params.contagion_rate,
+        ParamSlot::ContagionRate,
+        slider_palette,
+    ));
+    children.push(param_slider(
+        "homofilia",
+        model.params.homophily_threshold,
+        ParamSlot::HomophilyThreshold,
+        slider_palette,
+    ));
+    let big5_label = if model.params.big_five {
+        "✓  Big Five: ON (5D)"
+    } else {
+        "○  Big Five: OFF (4D)"
+    };
+    children.push(sized_button(big5_label, btn_palette, Msg::ToggleBigFive));
+    let policy_label = match model.params.action_policy {
+        dominium_core::ActionPolicy::Fixed => "○  Política: Fixed".to_string(),
+        dominium_core::ActionPolicy::PsiArgmax => format!(
+            "✓  Política: PsiArgmax (T={})",
+            model.params.policy_reeval_period
+        ),
+    };
+    children.push(sized_button(&policy_label, btn_palette, Msg::CyclePsiPolicy));
+
+    children.push(separator(theme));
+    children.push(label_view("[ POLARIZACIÓN Esteban-Ray ]", 11.0, theme.fg_muted));
+    let psi_labels = ["ORDEN", "MIEDO", "CURIO", "CORR"];
+    for (i, lab) in psi_labels.iter().enumerate() {
+        children.push(stat_row(
+            &format!("polar {lab}"),
+            &format!("{:.4}", psi_metrics.polarization[i]),
+            theme,
+        ));
+    }
+    children.push(label_view("[ Moran's I (autocorr.) ]", 11.0, theme.fg_muted));
+    for (i, lab) in psi_labels.iter().enumerate() {
+        children.push(stat_row(
+            &format!("Moran {lab}"),
+            &format!("{:+.3}", psi_metrics.moran_i[i]),
+            theme,
+        ));
+    }
+    if model.params.big_five {
+        children.push(stat_row(
+            "polar EXTRA",
+            &format!("{:.4}", psi_metrics.polarization_ext),
+            theme,
+        ));
+        children.push(stat_row(
+            "Moran EXTRA",
+            &format!("{:+.3}", psi_metrics.moran_i_ext),
+            theme,
+        ));
+    }
+
+    // Legend de clusters cuando el render está mostrando tribus.
+    if matches!(model.cfg.render_mode, RenderMode::PsiCluster) {
+        children.push(separator(theme));
+        children.push(label_view("[ TRIBUS k-means ]", 11.0, theme.fg_muted));
+        for (k, c) in CLUSTER_COLORS.iter().enumerate() {
+            let n_in = model
+                .cluster_assignments
+                .iter()
+                .filter(|&&a| a as usize == k)
+                .count();
+            children.push(stat_row(
+                &format!("cluster {k}  ({})", color_swatch(*c)),
+                &n_in.to_string(),
+                theme,
+            ));
+        }
+    }
+}
+
+/// Tab "Vista" — render mode + trails + andina + ZWeights + rewind.
+fn append_vista_tab(
+    children: &mut Vec<View<Msg>>,
+    model: &Model,
+    theme: &Theme,
+    btn_palette: &ButtonPalette,
+    slider_palette: &SliderPalette,
+) {
+    children.push(label_view("[ MODO RENDER ]", 11.0, theme.fg_muted));
+    let render_label = match model.cfg.render_mode {
+        RenderMode::Composite => "Render: compuesto".to_string(),
+        RenderMode::Heatmap(l) => format!("Render: heatmap {}", l.label()),
+        RenderMode::PsiCluster => "Render: tribus ψ (k-means)".to_string(),
+    };
+    children.push(sized_button(&render_label, btn_palette, Msg::CycleRenderMode));
+    let trails_label = if model.show_trails {
+        "✓  Trayectorias: ON"
+    } else {
+        "○  Trayectorias: OFF"
+    };
+    children.push(sized_button(trails_label, btn_palette, Msg::ToggleTrails));
+    let texture_label = if model.cfg.texture {
+        "✓  Textura: ON"
+    } else {
+        "○  Textura: OFF"
+    };
+    children.push(sized_button(texture_label, btn_palette, Msg::ToggleTexture));
+    let andina_label = if model.cfg.andina_layers > 0 {
+        "✓  Estampa andina: ON"
+    } else {
+        "○  Estampa andina: OFF"
+    };
+    children.push(sized_button(andina_label, btn_palette, Msg::ToggleAndina));
+
+    children.push(separator(theme));
+    children.push(label_view("[ RELIEVE VISUAL ]", 11.0, theme.fg_muted));
+    children.push(z_slider(
+        &rimay_localize::t("dominium-slider-materia"),
+        model.weights.materia,
+        ZSlot::Materia,
+        slider_palette,
+    ));
+    children.push(z_slider(
+        &rimay_localize::t("dominium-slider-psique"),
+        model.weights.psique,
+        ZSlot::Psique,
+        slider_palette,
+    ));
+    children.push(z_slider(
+        &rimay_localize::t("dominium-slider-poder"),
+        model.weights.poder,
+        ZSlot::Poder,
+        slider_palette,
+    ));
+    children.push(z_slider(
+        &rimay_localize::t("dominium-slider-oro"),
+        model.weights.oro,
+        ZSlot::Oro,
+        slider_palette,
+    ));
+    children.push(z_slider(
+        "degrad.",
+        model.weights.degradacion,
+        ZSlot::Degradacion,
+        slider_palette,
+    ));
+    let sync_label = if model.sync_relieve {
+        "✓  Sync físico: ON"
+    } else {
+        "○  Sync físico: OFF"
+    };
+    children.push(sized_button(sync_label, btn_palette, Msg::ToggleSyncRelieve));
+
+    children.push(separator(theme));
+    children.push(label_view("[ REWIND ]", 11.0, theme.fg_muted));
+    let max_rewind = model.snapshots.len().saturating_sub(1).max(1);
+    children.push(slider_view(
+        "rewind",
+        model.rewind_offset as f32,
+        0.0,
+        max_rewind as f32,
+        slider_palette,
+        |phase, dv| match phase {
+            DragPhase::Move => Some(Msg::RewindBy(dv)),
+            DragPhase::End => None,
+        },
+    ));
+    if model.rewind_offset > 0 {
+        children.push(sized_button(
+            &format!("▶  Vivo (estabas {} atrás)", model.rewind_offset),
+            btn_palette,
+            Msg::RewindHome,
+        ));
+    }
+}
+
+/// Glifo simple para indicar el color de un cluster en una fila de stat.
+/// El texto es monoespaciado pero los colores van en el panel — usamos
+/// emojis círculos para que el matching visual sea inmediato sin tocar el
+/// renderer del label.
+fn color_swatch(c: Color) -> &'static str {
+    let r = c[0] > 0.6;
+    let g = c[1] > 0.6;
+    let b = c[2] > 0.6;
+    match (r, g, b) {
+        (true, false, true) => "magenta",
+        (false, true, true) => "cian",
+        (true, true, false) => "amarillo",
+        _ => "·",
+    }
 }
 
 fn label_view(text: &str, size_px: f32, color: llimphi_ui::llimphi_raster::peniko::Color) -> View<Msg> {

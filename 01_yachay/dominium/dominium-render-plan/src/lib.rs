@@ -159,10 +159,16 @@ impl RenderLayer {
 /// `Heatmap(layer)` ignora las otras capas y pinta una sola en gradiente
 /// `floor → palette[layer]` — útil para ver dónde se concentra una capa
 /// específica sin que las otras la enmascaren.
+///
+/// `PsiCluster` deja el suelo en `Composite` pero los lemmings se colorean
+/// según la asignación k-means de `psi_metrics::kmeans_psi`. Los colores por
+/// cluster los provee el caller vía [`build_plan_with_overrides`]; si se
+/// usa `build_plan` (compat), `PsiCluster` se comporta como `Composite`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RenderMode {
     Composite,
     Heatmap(RenderLayer),
+    PsiCluster,
 }
 
 impl Default for RenderMode {
@@ -488,15 +494,28 @@ fn heatmap_color(world: &World, idx: usize, pal: &Palette, layer: RenderLayer) -
 
 /// Construye la maqueta isométrica de un `World`.
 ///
-/// Emite un quad por celda (coloreado por sus capas, elevado por el `Z`
-/// compuesto de `weights`) y un quad-marca por Lemming vivo, posado sobre
-/// el relieve de su celda. El resultado viene ordenado por profundidad de
-/// pintor: el backend sólo recorre `plan.quads` y pinta.
+/// Wrapper sobre [`build_plan_with_overrides`] que pinta todos los lemmings
+/// con `cfg.palette.lemming`. Equivalente a la firma histórica del crate.
 pub fn build_plan(
     world: &World,
     iso: &IsoProjector,
     weights: &ZWeights,
     cfg: &PlanConfig,
+) -> RenderPlan {
+    let default_color = cfg.palette.lemming;
+    build_plan_with_overrides(world, iso, weights, cfg, |_| default_color)
+}
+
+/// Versión de [`build_plan`] que permite teñir cada lemming individualmente
+/// vía la closure `lemming_color`. Indispensable para `RenderMode::PsiCluster`:
+/// el caller corre `kmeans_psi` y devuelve el color del cluster del lemming
+/// `i`. Para el resto de modos, basta pasar `|_| cfg.palette.lemming`.
+pub fn build_plan_with_overrides(
+    world: &World,
+    iso: &IsoProjector,
+    weights: &ZWeights,
+    cfg: &PlanConfig,
+    lemming_color: impl Fn(usize) -> Color,
 ) -> RenderPlan {
     let g = &world.grid;
     let mut quads: Vec<Quad> = Vec::with_capacity(world.lemmings.len() * 2);
@@ -523,7 +542,9 @@ pub fn build_plan(
             let idx = g.idx(cx, cy);
             let z = weights.z_of(g, idx);
             let color = match cfg.render_mode {
-                RenderMode::Composite => cell_color(world, idx, &cfg.palette),
+                RenderMode::Composite | RenderMode::PsiCluster => {
+                    cell_color(world, idx, &cfg.palette)
+                }
                 RenderMode::Heatmap(layer) => {
                     heatmap_color(world, idx, &cfg.palette, layer)
                 }
@@ -713,14 +734,15 @@ pub fn build_plan(
             depth: px + py + 0.3,
         });
 
-        // Marca del lemming.
+        // Marca del lemming — color por override (PsiCluster pinta por
+        // cluster k-means; los demás modos pasan `cfg.palette.lemming`).
         let (mx, my) = iso.project(px, py, z);
         quads.push(Quad {
             x: mx - cfg.lemming_size * 0.5,
             y: my - cfg.lemming_size * 0.5,
             w: cfg.lemming_size,
             h: cfg.lemming_size,
-            color: cfg.palette.lemming,
+            color: lemming_color(i),
             // +0.5 → la marca se pinta después de su celda y de las
             // celdas con su misma diagonal.
             depth: px + py + 0.5,
