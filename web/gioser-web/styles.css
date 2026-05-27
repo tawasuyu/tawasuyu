@@ -400,31 +400,43 @@ a:hover { color: var(--fg-text); }
   background: linear-gradient(135deg, transparent 50%, var(--border) 50%, var(--border) 60%, transparent 60%, transparent 70%, var(--border) 70%, var(--border) 80%, transparent 80%);
 }
 
-/* contenido pluma dentro de la ventana — ancho cómodo pero responsive:
- * en pantallas anchas centrado a 880px, en angostas llena el ancho con
- * un padding que escala suave. El top deja aire para los botones flotantes. */
+/* contenido pluma dentro de la ventana — estilo "documento README" de Gitea:
+ * sans-serif para lectura, ancho cómodo (980px) centrado, padding generoso
+ * que escala con viewport. */
 .pluma-host {
-  max-width: 880px;
+  max-width: 980px;
   margin: 0 auto;
-  padding: 52px clamp(20px, 5vw, 64px) 80px;
+  padding: 56px clamp(24px, 6vw, 80px) 96px;
   font-family: var(--sans);
   font-size: 15px;
   line-height: 1.7;
   color: var(--fg-text);
 }
-.pluma-host h1, .pluma-host h2, .pluma-host h3, .pluma-host h4 {
-  font-family: var(--mono);
-  font-weight: 500;
+/* Headings: jerarquía clara por tamaño/peso, sin barras horizontales por todos
+ * lados (que aparecen como "otra página dentro"). Sólo h1 lleva regla inferior
+ * para marcar el título principal del documento. */
+.pluma-host h1, .pluma-host h2, .pluma-host h3,
+.pluma-host h4, .pluma-host h5, .pluma-host h6 {
+  font-family: var(--sans);
+  font-weight: 600;
   color: var(--fg-text);
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 4px;
-  margin: 1.2em 0 0.6em;
-  letter-spacing: 0.02em;
+  margin: 1.6em 0 0.6em;
+  letter-spacing: 0;
+  line-height: 1.3;
 }
-.pluma-host h1 { font-size: 1.4em; }
-.pluma-host h2 { font-size: 1.2em; }
-.pluma-host h3 { font-size: 1.05em; border-bottom: none; }
-.pluma-host h4 { font-size: 1em; border-bottom: none; color: var(--fg-muted); }
+.pluma-host h1 {
+  font-size: 1.8em;
+  margin-top: 0;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+}
+.pluma-host h2 {
+  font-size: 1.4em;
+}
+.pluma-host h3 { font-size: 1.15em; }
+.pluma-host h4 { font-size: 1em; }
+.pluma-host h5 { font-size: 0.92em; color: var(--fg-muted); }
+.pluma-host h6 { font-size: 0.85em; color: var(--fg-muted); }
 
 .pluma-host p { margin: 0.6em 0; }
 .pluma-host a { color: var(--accent); text-decoration: underline; text-decoration-color: var(--border); }
