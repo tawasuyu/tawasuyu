@@ -15,21 +15,30 @@
     <div class="topbar-left">
       <!-- En desktop con sidebar abierta, .brand es texto; en mobile pasa
            a botón hamburguesa via CSS (cambia el cursor + listener). -->
-      <button class="brand" id="brand-toggle" type="button" aria-label="alternar barra lateral">gioser</button>
-      <span class="brand-sub">monorepo · 4 cuadrantes</span>
+      <button class="brand" id="brand-toggle" type="button" aria-label="alternar barra lateral">
+        <!-- chakana inline: cuerpo monocromo (currentColor) + centro
+             circular del color del fondo, dando efecto de "luz" central. -->
+        <svg class="brand-chakana" viewBox="-3 -3 6 6" aria-hidden="true">
+          <path d="
+            M -0.5 -2.5
+            L  0.5 -2.5  L  0.5 -2.0  L  1.0 -2.0  L  1.0 -1.5
+            L  1.5 -1.5  L  1.5 -1.0  L  2.0 -1.0  L  2.0 -0.5
+            L  2.5 -0.5  L  2.5  0.5  L  2.0  0.5  L  2.0  1.0
+            L  1.5  1.0  L  1.5  1.5  L  1.0  1.5  L  1.0  2.0
+            L  0.5  2.0  L  0.5  2.5  L -0.5  2.5  L -0.5  2.0
+            L -1.0  2.0  L -1.0  1.5  L -1.5  1.5  L -1.5  1.0
+            L -2.0  1.0  L -2.0  0.5  L -2.5  0.5  L -2.5 -0.5
+            L -2.0 -0.5  L -2.0 -1.0  L -1.5 -1.0  L -1.5 -1.5
+            L -1.0 -1.5  L -1.0 -2.0  L -0.5 -2.0  Z" fill="currentColor"/>
+          <circle cx="0" cy="0" r="0.7" class="brand-chakana-core"/>
+        </svg>
+        <span>gioser</span>
+      </button>
       <!-- Indicadores de ventanas abiertas (antes vivían en la taskbar). -->
       <div id="taskbar-items" role="tablist" aria-label="ventanas abiertas"></div>
     </div>
     <div class="topbar-right">
-      <span class="topbar-link is-panel" data-panel="1" data-title="panel · gioser" data-theme="gioser">panel</span>
-      <span class="topbar-sep">·</span>
-      <span class="topbar-link" data-doc="/README.md" data-title="README" data-theme="gioser">README</span>
-      <span class="topbar-sep">·</span>
-      <span class="topbar-link" data-doc="/PLAN.md" data-title="PLAN" data-theme="gioser">PLAN</span>
-      <span class="topbar-sep">·</span>
       <span id="clock" class="topbar-clock">--:--</span>
-      <span class="topbar-sep">·</span>
-      <a href="https://gitea.gioser.net/sergio/gioser" target="_blank" rel="noopener">gitea</a>
     </div>
   </header>
 
@@ -46,6 +55,8 @@
           <li><span class="doc" data-doc="/PLAN.md" data-title="gioser · PLAN" data-theme="gioser">PLAN</span></li>
           <li><span class="doc" data-doc="/docs/SUITE.md" data-title="suite" data-theme="gioser">suite</span></li>
           <li><span class="doc" data-doc="/docs/MODULES.md" data-title="módulos" data-theme="gioser">módulos</span></li>
+          <li><span class="doc is-panel" data-panel="1" data-title="panel · gioser" data-theme="gioser">panel</span></li>
+          <li><a class="doc" href="https://gitea.gioser.net/sergio/gioser" target="_blank" rel="noopener">gitea ↗</a></li>
         </ul>
       </div>
 
@@ -315,12 +326,93 @@
     ventanas.delete(id);
   }
 
-  function abrirVentana(url, title, theme) {
+  // ===== URL routing =====
+  // Cada archivo abierto cambia el hash; back/forward re-abre o re-foca.
+  function pushHash(url) {
+    const target = '#' + url;
+    if (window.location.hash !== target) {
+      window.history.pushState({ doc: url }, '', target);
+    }
+  }
+
+  function aplicarHash() {
+    const h = window.location.hash;
+    if (!h.startsWith('#/')) return;
+    const url = h.slice(1); // mantenemos el `/` inicial
+    for (const v of ventanas.values()) {
+      if (v.url === url) {
+        if (v.minimized) restaurar(v.id);
+        else traerAlFrente(v.id);
+        return;
+      }
+    }
+    // No abierta: derivar título/tema del DOM si existe el trigger.
+    const el = document.querySelector(`[data-doc="${url}"]`);
+    const title = (el && el.dataset.title) || url;
+    const theme = (el && el.dataset.theme) || 'gioser';
+    abrirVentana(url, title, theme, /* fromHash */ true);
+  }
+  window.addEventListener('popstate',   aplicarHash);
+  window.addEventListener('hashchange', aplicarHash);
+
+  // ===== lang resolution =====
+  // El URL canónico es `path/archivo.md`. Según la preferencia del usuario
+  // (gioser.lang ∈ {es,en,qu}), intentamos primero `path/archivo.<lang>.md`
+  // y caemos al canónico si no existe.
+  function getLang() {
+    try { return localStorage.getItem('gioser.lang') || 'es'; }
+    catch (e) { return 'es'; }
+  }
+  function langCandidates(url) {
+    const lang = getLang();
+    if (lang === 'es') return [url];
+    return [url.replace(/\.md$/, `.${lang}.md`), url];
+  }
+
+  // Fetch + sniff: rechaza HTML (SPA-fallback) y resuelve lang.
+  async function cargarMdSeguro(contId, url, theme) {
+    const cands = langCandidates(url);
+    let resolved = null;
+    let lastErr = null;
+    for (const cand of cands) {
+      try {
+        const resp = await fetch(cand);
+        if (!resp.ok) { lastErr = `HTTP ${resp.status}`; continue; }
+        const text = await resp.text();
+        const head = text.slice(0, 500).trimStart().toLowerCase();
+        if (head.startsWith('<!doctype html') || head.startsWith('<html')) {
+          lastErr = 'HTML en vez de markdown (¿server con SPA-fallback?)';
+          continue;
+        }
+        resolved = cand;
+        break;
+      } catch (e) { lastErr = String(e); }
+    }
+    if (!resolved) {
+      mostrarErrorDoc(contId, url, lastErr || 'no resuelve');
+      return;
+    }
+    cargar_md(contId, resolved, theme || 'gioser');
+  }
+
+  function mostrarErrorDoc(contId, url, msg) {
+    const cont = document.getElementById(contId);
+    if (!cont) return;
+    const safeUrl = url.replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const safeMsg = String(msg).replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    cont.innerHTML =
+      `<h1>No se pudo cargar el documento</h1>` +
+      `<p><code>${safeUrl}</code></p>` +
+      `<p>${safeMsg}</p>`;
+  }
+
+  function abrirVentana(url, title, theme, fromHash) {
     // Si ya hay una ventana con la misma URL, restaurarla.
     for (const [vid, v] of ventanas.entries()) {
       if (v.url === url) {
         if (v.minimized) restaurar(vid);
         else traerAlFrente(vid);
+        if (!fromHash) pushHash(url);
         return;
       }
     }
@@ -379,7 +471,8 @@
       document.body.classList.remove('sidebar-open');
     }
 
-    cargar_md(contId, url, theme || 'gioser');
+    cargarMdSeguro(contId, url, theme || 'gioser');
+    if (!fromHash) pushHash(url);
     return id;
   }
 
@@ -598,6 +691,8 @@
     bindDocTriggers(document);
     tickClock();
     setInterval(tickClock, 30_000);
+    // Si la página arranca con un hash (ej. shared link), abrir.
+    if (window.location.hash.startsWith('#/')) aplicarHash();
   });
 </script>
 </body>

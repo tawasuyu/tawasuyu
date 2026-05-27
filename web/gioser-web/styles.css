@@ -107,9 +107,12 @@ a:hover { color: var(--fg-text); }
 }
 .topbar-left { flex: 1; min-width: 0; }
 
-/* brand: en desktop es texto plano (cursor default); en mobile pasa a botón
- * hamburguesa que togglea body.sidebar-collapsed. La media query manda. */
+/* brand: en desktop es texto + chakana mini (cursor default); en mobile
+ * pasa a botón hamburguesa que togglea body.sidebar-open. */
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   background: transparent;
   border: none;
   color: var(--fg-text);
@@ -121,7 +124,17 @@ a:hover { color: var(--fg-text); }
   cursor: default;
   border-radius: 3px;
 }
-.brand-sub { color: var(--fg-muted); font-size: 11px; white-space: nowrap; }
+.brand:hover { background: var(--bg-row-hover); }
+.brand-chakana {
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.brand-chakana-core {
+  fill: var(--bg-panel-alt); /* matchea el bg del topbar → "agujero" */
+}
+.brand:hover .brand-chakana-core { fill: var(--bg-row-hover); }
 
 .topbar-link {
   color: var(--fg-muted);
