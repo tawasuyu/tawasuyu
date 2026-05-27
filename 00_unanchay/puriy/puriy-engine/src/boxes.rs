@@ -12,8 +12,8 @@ use markup5ever_rcdom::{Handle, NodeData};
 
 use crate::dom::{self, DomTree};
 use crate::style::{
-    BoxShadow, ComputedStyle, LengthVal, ListStyleType, Sides, StyleEngine, TextAlign,
-    TextDecorationLine,
+    AlignItems, BoxShadow, ComputedStyle, FlexDirection, FlexWrap, JustifyContent, LengthVal,
+    ListStyleType, Sides, StyleEngine, TextAlign, TextDecorationLine,
 };
 
 /// Color RGBA, 8 bits por canal. Suficiente para CSS color values.
@@ -44,6 +44,13 @@ pub enum Display {
     Block,
     Inline,
     InlineBlock,
+    /// CSS flexbox container (block-level). El layout se delega a taffy
+    /// con `flex_direction`, `justify_content`, `align_items`, `gap` y
+    /// `flex_wrap` provistos por las propiedades del nodo.
+    Flex,
+    /// `inline-flex`: igual que Flex pero se comporta como inline en el
+    /// flow del padre.
+    InlineFlex,
     None,
 }
 
@@ -85,6 +92,14 @@ pub struct BoxNode {
     /// Línea decorativa que el chrome dibuja sobre la hoja de texto
     /// (underline / line-through / overline). `None` = sin decoración.
     pub text_decoration: TextDecorationLine,
+    /// Propiedades de flex container — sólo relevantes si `display` es
+    /// `Flex`/`InlineFlex`. El chrome las mapea 1:1 a taffy.
+    pub flex_direction: FlexDirection,
+    pub justify_content: JustifyContent,
+    pub align_items: AlignItems,
+    pub flex_wrap: FlexWrap,
+    pub gap_row: f32,
+    pub gap_column: f32,
     /// Texto plano del nodo (sólo para hojas de texto). Para nodos con
     /// hijos el texto vive en los hijos.
     pub text: Option<String>,
@@ -169,6 +184,12 @@ fn empty_root() -> BoxNode {
         border_radius: 0.0,
         hover_background: None,
         box_shadow: None,
+        flex_direction: FlexDirection::Row,
+        justify_content: JustifyContent::Start,
+        align_items: AlignItems::Stretch,
+        flex_wrap: FlexWrap::NoWrap,
+        gap_row: 0.0,
+        gap_column: 0.0,
         text_decoration: TextDecorationLine::None,
         text: None,
         children: Vec::new(),
@@ -257,6 +278,12 @@ fn build_node(
                 border_radius: style.border_radius,
                 hover_background,
                 box_shadow: style.box_shadow,
+                flex_direction: style.flex_direction,
+                justify_content: style.justify_content,
+                align_items: style.align_items,
+                flex_wrap: style.flex_wrap,
+                gap_row: style.gap_row,
+                gap_column: style.gap_column,
                 text_decoration: style.text_decoration,
                 text: None,
                 children,
@@ -313,6 +340,12 @@ fn build_node(
                 border_radius: 0.0,
                 hover_background: None,
                 box_shadow: None,
+                flex_direction: FlexDirection::Row,
+                justify_content: JustifyContent::Start,
+                align_items: AlignItems::Stretch,
+                flex_wrap: FlexWrap::NoWrap,
+                gap_row: 0.0,
+                gap_column: 0.0,
                 text_decoration: p.text_decoration,
                 text: None,
                 children,
@@ -345,6 +378,12 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         border_radius: 0.0,
         hover_background: None,
         box_shadow: None,
+        flex_direction: FlexDirection::Row,
+        justify_content: JustifyContent::Start,
+        align_items: AlignItems::Stretch,
+        flex_wrap: FlexWrap::NoWrap,
+        gap_row: 0.0,
+        gap_column: 0.0,
         text_decoration: style.text_decoration,
         text: Some(s),
         children: Vec::new(),

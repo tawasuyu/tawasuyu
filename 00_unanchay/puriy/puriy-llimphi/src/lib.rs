@@ -19,7 +19,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use llimphi_layout::taffy::prelude::{
-    auto, length, percent, AlignItems, FlexDirection, FlexWrap, Position, Rect, Size, Style,
+    auto, length, percent, AlignItems, FlexDirection, FlexWrap, JustifyContent, Position, Rect,
+    Size, Style,
 };
 use llimphi_raster::kurbo::{Affine, Line, RoundedRect, Stroke};
 use llimphi_raster::peniko::{Blob, Color, Fill, Image as PenikoImage, ImageFormat};
@@ -28,7 +29,9 @@ use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
 use puriy_engine::{
-    BoxNode, BoxShadow, BoxTree, Display, Engine, LengthVal, TextAlign, TextDecorationLine,
+    AlignItems as CssAlignItems, BoxNode, BoxShadow, BoxTree, Display, Engine,
+    FlexDirection as CssFlexDirection, FlexWrap as CssFlexWrap, JustifyContent as CssJustifyContent,
+    LengthVal, TextAlign, TextDecorationLine,
 };
 
 const HEADER_H: f32 = 78.0;
@@ -851,8 +854,14 @@ fn box_style(b: &BoxNode) -> Style {
     let lh_mult = b.line_height.unwrap_or(1.4);
     let line_h = b.font_size * lh_mult;
 
-    let (flex_direction, mut width, height) = match b.display {
+    let is_flex = matches!(b.display, Display::Flex | Display::InlineFlex);
+
+    // Defaults según display: Block fila completa columnar, Inline en row
+    // con altura auto, Flex toma sus props del nodo. None: cero.
+    let (default_direction, mut width, height) = match b.display {
         Display::Block => (FlexDirection::Column, percent(1.0_f32), auto()),
+        Display::Flex => (map_flex_direction(b.flex_direction), percent(1.0_f32), auto()),
+        Display::InlineFlex => (map_flex_direction(b.flex_direction), auto(), auto()),
         Display::InlineBlock | Display::Inline => {
             let h = if is_text_leaf { length(line_h) } else { auto() };
             (FlexDirection::Row, auto(), h)
@@ -860,53 +869,74 @@ fn box_style(b: &BoxNode) -> Style {
         Display::None => (FlexDirection::Column, length(0.0_f32), length(0.0_f32)),
     };
 
-    // Bloques con hijos inline: habilitamos flex_wrap para que los
-    // tokens fluyan en múltiples líneas si exceden el ancho del bloque.
-    // Bloques con hijos block siguen en column sin wrap.
-    let flex_wrap = if matches!(b.display, Display::Block) && has_inline_children(b) {
+    // Para bloques con hijos inline conmutamos a Row + Wrap (igual que
+    // antes — el hack original que hace que `<p>` flowee tokens). Para
+    // Flex respetamos las props del autor sin tocar.
+    let block_inline_wrap =
+        matches!(b.display, Display::Block) && has_inline_children(b);
+
+    let flex_wrap = if is_flex {
+        map_flex_wrap(b.flex_wrap)
+    } else if block_inline_wrap {
         FlexWrap::Wrap
     } else {
         FlexWrap::NoWrap
     };
 
-    // Para bloques con hijos inline, cambiamos a Row + wrap. Esto convierte
-    // el `<p>foo <a>bar</a> baz</p>` en una fila con wrap en lugar de
-    // apilar cada token en su propia línea.
-    let (flex_direction, w_base) =
-        if matches!(b.display, Display::Block) && has_inline_children(b) {
-            (FlexDirection::Row, percent(1.0_f32))
-        } else {
-            (flex_direction, width)
-        };
+    let (flex_direction, w_base) = if block_inline_wrap {
+        (FlexDirection::Row, percent(1.0_f32))
+    } else {
+        (default_direction, width)
+    };
     width = w_base;
 
     // CSS `width` explícito gana sobre el default de display.
     if let Some(explicit) = length_to_taffy(b.width) {
         width = explicit;
     }
-    // `max-width` se aplica vía max_size del Style.
     let max_size = Size {
         width: length_to_taffy(b.max_width).unwrap_or_else(auto),
         height: auto(),
     };
 
-    // `text-align: center|right` sobre bloques con inlines mapea a
-    // `justify_content` del row interno (axis main = row → horizontal).
-    let justify_content =
-        if matches!(b.display, Display::Block) && has_inline_children(b) {
-            match b.text_align {
-                TextAlign::Left | TextAlign::Justify => None,
-                TextAlign::Center => Some(llimphi_layout::taffy::prelude::JustifyContent::Center),
-                TextAlign::Right => Some(llimphi_layout::taffy::prelude::JustifyContent::End),
-            }
-        } else {
-            None
-        };
+    // justify/align: si es flex, vienen del autor; sino, sólo derivamos
+    // `justify_content` de `text-align` sobre bloques con inlines (el
+    // viejo comportamiento heredado).
+    let justify_content = if is_flex {
+        Some(map_justify(b.justify_content))
+    } else if block_inline_wrap {
+        match b.text_align {
+            TextAlign::Left | TextAlign::Justify => None,
+            TextAlign::Center => Some(JustifyContent::Center),
+            TextAlign::Right => Some(JustifyContent::End),
+        }
+    } else {
+        None
+    };
+
+    let align_items = if is_flex {
+        Some(map_align(b.align_items))
+    } else {
+        None
+    };
+
+    // gap: aplica a flex (y a futuros grid). Taffy lo expone como
+    // `Size { width: column-gap, height: row-gap }`.
+    let gap = if is_flex {
+        Size {
+            width: length(b.gap_column),
+            height: length(b.gap_row),
+        }
+    } else {
+        Size { width: length(0.0_f32), height: length(0.0_f32) }
+    };
 
     Style {
         flex_direction,
         flex_wrap,
         justify_content,
+        align_items,
+        gap,
         size: Size { width, height },
         max_size,
         margin: Rect {
@@ -922,6 +952,44 @@ fn box_style(b: &BoxNode) -> Style {
             bottom: length(b.padding.bottom),
         },
         ..Default::default()
+    }
+}
+
+fn map_flex_direction(d: CssFlexDirection) -> FlexDirection {
+    match d {
+        CssFlexDirection::Row => FlexDirection::Row,
+        CssFlexDirection::RowReverse => FlexDirection::RowReverse,
+        CssFlexDirection::Column => FlexDirection::Column,
+        CssFlexDirection::ColumnReverse => FlexDirection::ColumnReverse,
+    }
+}
+
+fn map_flex_wrap(w: CssFlexWrap) -> FlexWrap {
+    match w {
+        CssFlexWrap::NoWrap => FlexWrap::NoWrap,
+        CssFlexWrap::Wrap => FlexWrap::Wrap,
+        CssFlexWrap::WrapReverse => FlexWrap::WrapReverse,
+    }
+}
+
+fn map_justify(j: CssJustifyContent) -> JustifyContent {
+    match j {
+        CssJustifyContent::Start => JustifyContent::Start,
+        CssJustifyContent::Center => JustifyContent::Center,
+        CssJustifyContent::End => JustifyContent::End,
+        CssJustifyContent::SpaceBetween => JustifyContent::SpaceBetween,
+        CssJustifyContent::SpaceAround => JustifyContent::SpaceAround,
+        CssJustifyContent::SpaceEvenly => JustifyContent::SpaceEvenly,
+    }
+}
+
+fn map_align(a: CssAlignItems) -> AlignItems {
+    match a {
+        CssAlignItems::Start => AlignItems::Start,
+        CssAlignItems::Center => AlignItems::Center,
+        CssAlignItems::End => AlignItems::End,
+        CssAlignItems::Stretch => AlignItems::Stretch,
+        CssAlignItems::Baseline => AlignItems::Baseline,
     }
 }
 

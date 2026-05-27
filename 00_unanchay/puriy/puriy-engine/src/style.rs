@@ -55,6 +55,19 @@ pub struct ComputedStyle {
     /// Default `Disc` (CSS default); UA stylesheet override en `<ol>` y
     /// `<ul>` por consistencia.
     pub list_style_type: ListStyleType,
+    /// Solo relevante si `display` es `Flex`/`InlineFlex`. Default Row.
+    pub flex_direction: FlexDirection,
+    /// Distribución horizontal (eje principal) de los hijos flex.
+    pub justify_content: JustifyContent,
+    /// Alineación vertical (eje cruzado) de los hijos flex.
+    pub align_items: AlignItems,
+    /// `nowrap` por default (CSS spec).
+    pub flex_wrap: FlexWrap,
+    /// Separación entre items en el eje principal (px). En CSS estándar,
+    /// `column-gap` para row-direction, `row-gap` para column-direction.
+    /// Acá los separamos para mapear directo a taffy.
+    pub gap_row: f32,
+    pub gap_column: f32,
 }
 
 /// Estilo del marker de `<li>`. Reducido al subset que el chrome puede
@@ -122,6 +135,44 @@ pub struct Sides<T: Copy> {
     pub left: T,
 }
 
+/// Eje principal de un contenedor `display: flex`. Default `Row`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlexDirection {
+    Row,
+    RowReverse,
+    Column,
+    ColumnReverse,
+}
+
+/// Distribución del espacio libre a lo largo del eje principal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JustifyContent {
+    Start,
+    Center,
+    End,
+    SpaceBetween,
+    SpaceAround,
+    SpaceEvenly,
+}
+
+/// Alineación de los items en el eje cruzado.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlignItems {
+    Start,
+    Center,
+    End,
+    Stretch,
+    Baseline,
+}
+
+/// ¿Hijos en una sola línea o wrap a múltiples?
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlexWrap {
+    NoWrap,
+    Wrap,
+    WrapReverse,
+}
+
 impl<T: Copy> Sides<T> {
     pub const fn all(v: T) -> Self {
         Self { top: v, right: v, bottom: v, left: v }
@@ -163,6 +214,12 @@ impl Default for ComputedStyle {
             box_shadow: None,
             text_decoration: TextDecorationLine::None,
             list_style_type: ListStyleType::Disc,
+            flex_direction: FlexDirection::Row,
+            justify_content: JustifyContent::Start,
+            align_items: AlignItems::Stretch,
+            flex_wrap: FlexWrap::NoWrap,
+            gap_row: 0.0,
+            gap_column: 0.0,
         }
     }
 }
@@ -709,6 +766,14 @@ enum DeclKind {
     BoxShadow(Option<BoxShadow>),
     TextDecoration(TextDecorationLine),
     ListStyleType(ListStyleType),
+    FlexDirection(FlexDirection),
+    JustifyContent(JustifyContent),
+    AlignItems(AlignItems),
+    FlexWrap(FlexWrap),
+    /// `gap: A B` setea ambos (row=A, column=B); `gap: V` los iguala.
+    Gap { row: f32, column: f32 },
+    RowGap(f32),
+    ColumnGap(f32),
 }
 
 impl Decl {
@@ -745,6 +810,16 @@ impl Decl {
             DeclKind::BoxShadow(v) => s.box_shadow = *v,
             DeclKind::TextDecoration(t) => s.text_decoration = *t,
             DeclKind::ListStyleType(t) => s.list_style_type = *t,
+            DeclKind::FlexDirection(d) => s.flex_direction = *d,
+            DeclKind::JustifyContent(j) => s.justify_content = *j,
+            DeclKind::AlignItems(a) => s.align_items = *a,
+            DeclKind::FlexWrap(w) => s.flex_wrap = *w,
+            DeclKind::Gap { row, column } => {
+                s.gap_row = *row;
+                s.gap_column = *column;
+            }
+            DeclKind::RowGap(v) => s.gap_row = *v,
+            DeclKind::ColumnGap(v) => s.gap_column = *v,
         }
     }
 }
@@ -1365,6 +1440,13 @@ fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         // Image y position los ignoramos — `none` desactiva el marker
         // entero (matchea el comportamiento del browser).
         "list-style" => parse_list_style_shorthand(value).map(DeclKind::ListStyleType),
+        "flex-direction" => parse_flex_direction(value).map(DeclKind::FlexDirection),
+        "flex-wrap" => parse_flex_wrap(value).map(DeclKind::FlexWrap),
+        "justify-content" => parse_justify_content(value).map(DeclKind::JustifyContent),
+        "align-items" => parse_align_items(value).map(DeclKind::AlignItems),
+        "gap" => parse_gap(value).map(|(r, c)| DeclKind::Gap { row: r, column: c }),
+        "row-gap" => parse_length_px(value).map(DeclKind::RowGap),
+        "column-gap" => parse_length_px(value).map(DeclKind::ColumnGap),
         // `border: 1px solid #ccc` — shorthand. Devolvemos un único
         // DeclKind sintético: en realidad ya hay 3 sub-decls que el
         // caller debe emitir, así que delegamos a una ruta especial vía
@@ -1836,7 +1918,65 @@ fn parse_display(s: &str) -> Option<Display> {
         "block" => Some(Display::Block),
         "inline" => Some(Display::Inline),
         "inline-block" => Some(Display::InlineBlock),
+        "flex" => Some(Display::Flex),
+        "inline-flex" => Some(Display::InlineFlex),
         "none" => Some(Display::None),
+        _ => None,
+    }
+}
+
+fn parse_flex_direction(s: &str) -> Option<FlexDirection> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "row" => Some(FlexDirection::Row),
+        "row-reverse" => Some(FlexDirection::RowReverse),
+        "column" => Some(FlexDirection::Column),
+        "column-reverse" => Some(FlexDirection::ColumnReverse),
+        _ => None,
+    }
+}
+
+fn parse_flex_wrap(s: &str) -> Option<FlexWrap> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "nowrap" => Some(FlexWrap::NoWrap),
+        "wrap" => Some(FlexWrap::Wrap),
+        "wrap-reverse" => Some(FlexWrap::WrapReverse),
+        _ => None,
+    }
+}
+
+fn parse_justify_content(s: &str) -> Option<JustifyContent> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "start" | "flex-start" | "left" => Some(JustifyContent::Start),
+        "center" => Some(JustifyContent::Center),
+        "end" | "flex-end" | "right" => Some(JustifyContent::End),
+        "space-between" => Some(JustifyContent::SpaceBetween),
+        "space-around" => Some(JustifyContent::SpaceAround),
+        "space-evenly" => Some(JustifyContent::SpaceEvenly),
+        _ => None,
+    }
+}
+
+fn parse_align_items(s: &str) -> Option<AlignItems> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "start" | "flex-start" => Some(AlignItems::Start),
+        "center" => Some(AlignItems::Center),
+        "end" | "flex-end" => Some(AlignItems::End),
+        "stretch" => Some(AlignItems::Stretch),
+        "baseline" => Some(AlignItems::Baseline),
+        _ => None,
+    }
+}
+
+/// `gap: V` ⇒ row=V, column=V. `gap: R C` ⇒ row=R, column=C. Coincide
+/// con la semántica CSS shorthand (primer valor = row, segundo = column).
+fn parse_gap(value: &str) -> Option<(f32, f32)> {
+    let parts: Vec<&str> = value.split_whitespace().collect();
+    match parts.as_slice() {
+        [v] => {
+            let v = parse_length_px(v)?;
+            Some((v, v))
+        }
+        [r, c] => Some((parse_length_px(r)?, parse_length_px(c)?)),
         _ => None,
     }
 }
@@ -2888,6 +3028,91 @@ mod tests {
         assert_eq!(s.margin.right, 10.0);
         assert_eq!(s.margin.bottom, 10.0);
         assert_eq!(s.margin.left, 10.0);
+    }
+
+    #[test]
+    fn parsea_display_flex_y_inline_flex() {
+        assert_eq!(parse_display("flex"), Some(Display::Flex));
+        assert_eq!(parse_display("inline-flex"), Some(Display::InlineFlex));
+        assert_eq!(parse_display("FLEX"), Some(Display::Flex));
+    }
+
+    #[test]
+    fn parsea_flex_direction() {
+        assert_eq!(parse_flex_direction("row"), Some(FlexDirection::Row));
+        assert_eq!(parse_flex_direction("column"), Some(FlexDirection::Column));
+        assert_eq!(parse_flex_direction("row-reverse"), Some(FlexDirection::RowReverse));
+        assert_eq!(parse_flex_direction("column-reverse"), Some(FlexDirection::ColumnReverse));
+        assert_eq!(parse_flex_direction("diagonal"), None);
+    }
+
+    #[test]
+    fn parsea_justify_y_align() {
+        // Aceptamos los alias `flex-start`/`flex-end` ↔ `start`/`end`.
+        assert_eq!(parse_justify_content("flex-start"), Some(JustifyContent::Start));
+        assert_eq!(parse_justify_content("space-between"), Some(JustifyContent::SpaceBetween));
+        assert_eq!(parse_justify_content("space-around"), Some(JustifyContent::SpaceAround));
+        assert_eq!(parse_align_items("flex-end"), Some(AlignItems::End));
+        assert_eq!(parse_align_items("stretch"), Some(AlignItems::Stretch));
+        assert_eq!(parse_align_items("baseline"), Some(AlignItems::Baseline));
+    }
+
+    #[test]
+    fn parsea_flex_wrap() {
+        assert_eq!(parse_flex_wrap("nowrap"), Some(FlexWrap::NoWrap));
+        assert_eq!(parse_flex_wrap("wrap"), Some(FlexWrap::Wrap));
+        assert_eq!(parse_flex_wrap("wrap-reverse"), Some(FlexWrap::WrapReverse));
+    }
+
+    #[test]
+    fn parsea_gap_1_y_2_valores() {
+        assert_eq!(parse_gap("12px"), Some((12.0, 12.0)));
+        assert_eq!(parse_gap("4px 8px"), Some((4.0, 8.0)));
+        assert_eq!(parse_gap("0"), Some((0.0, 0.0)));
+        assert_eq!(parse_gap("a b c"), None);
+    }
+
+    #[test]
+    fn computa_flex_container_completo() {
+        let html = r#"<html><head><style>
+            .row {
+                display: flex;
+                flex-direction: row;
+                justify-content: space-between;
+                align-items: center;
+                gap: 16px 24px;
+                flex-wrap: wrap;
+            }
+        </style></head><body><div class="row"><span>a</span><span>b</span></div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let d = dom.find("div").unwrap();
+        let s = eng.compute(&d);
+        assert_eq!(s.display, Display::Flex);
+        assert_eq!(s.flex_direction, FlexDirection::Row);
+        assert_eq!(s.justify_content, JustifyContent::SpaceBetween);
+        assert_eq!(s.align_items, AlignItems::Center);
+        assert_eq!(s.flex_wrap, FlexWrap::Wrap);
+        assert_eq!(s.gap_row, 16.0);
+        assert_eq!(s.gap_column, 24.0);
+    }
+
+    #[test]
+    fn row_gap_y_column_gap_individuales_pisan_shorthand() {
+        let html = r#"<html><head><style>
+            div {
+                display: flex;
+                gap: 10px;
+                row-gap: 30px;
+            }
+        </style></head><body><div></div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let d = dom.find("div").unwrap();
+        let s = eng.compute(&d);
+        // row-gap pisa la mitad del shorthand; column-gap del shorthand sigue (10).
+        assert_eq!(s.gap_row, 30.0);
+        assert_eq!(s.gap_column, 10.0);
     }
 
     #[test]
