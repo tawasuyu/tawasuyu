@@ -15,7 +15,7 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use iniy_core::{Asercion, AsercionId, DocId, Implicacion, Opinion};
+use iniy_core::{Asercion, AsercionId, DocId, Fuente, FuenteId, Implicacion, Opinion};
 use iniy_extract::{Extractor, ExtractorHeuristico};
 use iniy_graph::GrafoCreencias;
 use iniy_nli::{relacion_lexica, MotorNli, MotorNliLexico};
@@ -106,6 +106,10 @@ enum Cmd {
         #[arg(long)]
         unset: bool,
     },
+    /// Reputación derivada del grafo NLI: cuántas aristas entrantes
+    /// apoyan a cada fuente (entailment desde otras) vs cuántas la
+    /// contradicen. Score ∈ [-1,1].
+    Reputacion,
     /// "¿Qué dice el corpus sobre X?" — agrupa aserciones que apoyan o contradicen
     /// el query, con la opinión autoral y la fuente de cada una.
     Testimonio {
@@ -127,6 +131,11 @@ enum Cmd {
         query: String,
         #[arg(long, default_value_t = 0.20)]
         umbral: f32,
+        /// Pesa cada contribución por la reputación de su fuente:
+        /// descuento extra = (1 + score_reputación) / 2 (∈ [0,1]).
+        /// Fuentes contradictorias con el corpus pesan menos.
+        #[arg(long)]
+        pesar_reputacion: bool,
     },
 }
 
@@ -162,6 +171,72 @@ fn etiqueta_fuente(att: &AsercionAtribuida) -> String {
 
 fn fila_opinion(op: &Opinion) -> String {
     format!("b={:.2} d={:.2} u={:.2}", op.creencia, op.descreencia, op.incertidumbre)
+}
+
+#[derive(Debug, Clone)]
+struct ReputacionFuente {
+    fuente: Fuente,
+    n_aserciones: u32,
+    apoyada_por_otros: u32,
+    contradicha_por_otros: u32,
+    apoya_a_otros: u32,
+    contradice_a_otros: u32,
+    /// Score ∈ [-1, 1]: (apoyos - contradicciones) / max(1, apoyos + contradicciones).
+    score: f32,
+}
+
+/// Calcula reputación de cada fuente a partir del corpus atribuido + grafo.
+/// Solo cuenta aristas CROSS-FUENTE (apoyo o contradicción interna no afecta
+/// la reputación porque no es independiente).
+fn calcular_reputaciones(
+    todas: &[iniy_store::AsercionAtribuida],
+    imps: &[Implicacion],
+) -> Vec<ReputacionFuente> {
+    use std::collections::HashMap;
+    // a_id -> fuente_id
+    let asercion_a_fuente: HashMap<AsercionId, FuenteId> = todas.iter()
+        .filter_map(|a| a.fuente.as_ref().map(|f| (a.asercion.id, f.id)))
+        .collect();
+    // Fuente plana por id.
+    let fuentes: HashMap<FuenteId, Fuente> = todas.iter()
+        .filter_map(|a| a.fuente.clone().map(|f| (f.id, f)))
+        .collect();
+    let mut stats: HashMap<FuenteId, ReputacionFuente> = HashMap::new();
+    for (fid, fuente) in &fuentes {
+        stats.insert(*fid, ReputacionFuente {
+            fuente: fuente.clone(),
+            n_aserciones: todas.iter().filter(|a| a.fuente.as_ref().map(|f| f.id) == Some(*fid)).count() as u32,
+            apoyada_por_otros: 0,
+            contradicha_por_otros: 0,
+            apoya_a_otros: 0,
+            contradice_a_otros: 0,
+            score: 0.0,
+        });
+    }
+    for imp in imps {
+        let Some(&fa) = asercion_a_fuente.get(&imp.premisa) else { continue; };
+        let Some(&fb) = asercion_a_fuente.get(&imp.hipotesis) else { continue; };
+        if fa == fb {
+            continue; // intra-fuente: no es evidencia independiente.
+        }
+        let rel = &imp.relacion;
+        if rel.entailment > rel.contradiction && rel.entailment > 0.0 {
+            if let Some(s) = stats.get_mut(&fa) { s.apoya_a_otros += 1; }
+            if let Some(s) = stats.get_mut(&fb) { s.apoyada_por_otros += 1; }
+        } else if rel.contradiction > 0.0 {
+            if let Some(s) = stats.get_mut(&fa) { s.contradice_a_otros += 1; }
+            if let Some(s) = stats.get_mut(&fb) { s.contradicha_por_otros += 1; }
+        }
+    }
+    for s in stats.values_mut() {
+        let recibidos = (s.apoyada_por_otros + s.contradicha_por_otros) as f32;
+        if recibidos > 0.0 {
+            s.score = (s.apoyada_por_otros as f32 - s.contradicha_por_otros as f32) / recibidos;
+        }
+    }
+    let mut v: Vec<_> = stats.into_values().collect();
+    v.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    v
 }
 
 #[tokio::main]
@@ -343,6 +418,23 @@ async fn main() -> Result<()> {
             store.asignar_fuente_a_doc(doc_id, Some(fuente_id))?;
             println!("doc {} ahora atribuido a «{}»", doc_id.0, fuente);
         }
+        Cmd::Reputacion => {
+            let todas = store.cargar_aserciones_atribuidas_todas()?;
+            if todas.is_empty() {
+                println!("(corpus vacío — sin reputaciones que calcular)");
+                return Ok(());
+            }
+            let imps = store.cargar_implicaciones_todas()?;
+            let reps = calcular_reputaciones(&todas, &imps);
+            println!("reputación de fuentes (por aristas cross-fuente del grafo NLI):");
+            println!();
+            for r in reps {
+                let kind = r.fuente.kind.as_deref().map(|k| format!(" [{k}]")).unwrap_or_default();
+                println!("  {:+.2}  {}{}  ({} aserciones)", r.score, r.fuente.nombre, kind, r.n_aserciones);
+                println!("        recibe: {}↑ apoyos · {}↓ contradicciones", r.apoyada_por_otros, r.contradicha_por_otros);
+                println!("         emite: {}↑ apoyos · {}↓ contradicciones", r.apoya_a_otros, r.contradice_a_otros);
+            }
+        }
         Cmd::Cite { asercion_id, fuente, kind, unset } => {
             let aid = parse_asercion_id(&asercion_id)?;
             if unset {
@@ -389,18 +481,39 @@ async fn main() -> Result<()> {
                 println!("    «{}»", truncar(&att.asercion.texto, 130));
             }
         }
-        Cmd::Consenso { query, umbral } => {
+        Cmd::Consenso { query, umbral, pesar_reputacion } => {
             let todas = store.cargar_aserciones_atribuidas_todas()?;
             if todas.is_empty() {
                 anyhow::bail!("corpus vacío de aserciones");
             }
-            let mut contribuciones: Vec<(Opinion, &AsercionAtribuida, &'static str, f32)> = Vec::new();
+            let reputaciones: std::collections::HashMap<FuenteId, f32> = if pesar_reputacion {
+                let imps = store.cargar_implicaciones_todas()?;
+                calcular_reputaciones(&todas, &imps).into_iter()
+                    .map(|r| (r.fuente.id, r.score)).collect()
+            } else {
+                std::collections::HashMap::new()
+            };
+            let mut contribuciones: Vec<(Opinion, &AsercionAtribuida, &'static str, f32, Option<f32>)> = Vec::new();
             for att in todas.iter() {
                 let rel = relacion_lexica(&query, &att.asercion.texto, umbral);
-                if rel.entailment > 0.0 {
-                    contribuciones.push((att.asercion.opinion_autoral.descontar(rel.entailment), att, "apoya", rel.entailment));
+                let base_op = if rel.entailment > 0.0 {
+                    Some((att.asercion.opinion_autoral.descontar(rel.entailment), "apoya", rel.entailment))
                 } else if rel.contradiction > 0.0 {
-                    contribuciones.push((att.asercion.opinion_autoral.invertir().descontar(rel.contradiction), att, "contradice", rel.contradiction));
+                    Some((att.asercion.opinion_autoral.invertir().descontar(rel.contradiction), "contradice", rel.contradiction))
+                } else {
+                    None
+                };
+                if let Some((mut op, signo, score)) = base_op {
+                    let mut rep_aplicada = None;
+                    if pesar_reputacion {
+                        if let Some(fid) = att.fuente.as_ref().map(|f| f.id) {
+                            let rep = reputaciones.get(&fid).copied().unwrap_or(0.0);
+                            let peso = ((1.0 + rep) / 2.0).clamp(0.0, 1.0);
+                            op = op.descontar(peso);
+                            rep_aplicada = Some(rep);
+                        }
+                    }
+                    contribuciones.push((op, att, signo, score, rep_aplicada));
                 }
             }
             if contribuciones.is_empty() {
@@ -411,12 +524,16 @@ async fn main() -> Result<()> {
             let fusion = Opinion::fusionar_muchas(&ops);
             println!("consenso sobre: «{}»", query);
             println!("  fuentes que hablan: {}", contribuciones.len());
+            if pesar_reputacion {
+                println!("  (opiniones pesadas por reputación de fuente)");
+            }
             println!("  opinión fusionada: {}", fila_opinion(&fusion));
             println!("  probabilidad esperada: {:.2}", fusion.probabilidad_esperada());
             println!();
             println!("contribuciones:");
-            for (op, att, signo, score) in contribuciones {
-                println!("  · {signo} (score={:.2}) → {}", score, fila_opinion(&op));
+            for (op, att, signo, score, rep) in contribuciones {
+                let suf = rep.map(|r| format!(" · reputación={:+.2}", r)).unwrap_or_default();
+                println!("  · {signo} (score={:.2}){suf} → {}", score, fila_opinion(&op));
                 println!("    {}", etiqueta_fuente(att));
                 println!("    «{}»", truncar(&att.asercion.texto, 130));
             }
