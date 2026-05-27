@@ -35,6 +35,11 @@
 //                              acotado, retorno de `"run"` propagado al
 //                              llamante. Toca el grafo? No durante el calculo
 //                              (Linker vacio); solo para recuperar el binario.
+//    * sys_cuaderno_registrar_celda           — inscribir un nodo "cuaderno"
+//                              que enlaza FUENTE+BINARIO+OUT como un trio
+//                              indisoluble (Fase 33, Persistencia Ortogonal
+//                              por Celdas): los dos hashes viajan como
+//                              hijos legitimos del nodo cuaderno.
 //
 //  GUARDARRAIL: el kernel valida MATEMATICAMENTE todo puntero que el modulo le
 //  entrega contra los limites reales de su memoria lineal. No se confia en que
@@ -627,6 +632,119 @@ pub(crate) fn enlazar_capacidades(
         },
     )?;
     } // PERMISO_GRAFO_ESCRITURA (dinamico)
+
+    // --- CAPACIDAD 3e :: sys_cuaderno_registrar_celda -----------------------
+    // sys_cuaderno_registrar_celda(fuente_hash_ptr, binario_hash_ptr,
+    //                              retorno: i32, salida_cuaderno_hash_ptr) -> i32
+    //
+    // EL ALMACEN SEMANTICO DEL CUADERNO (Fase 33). El kernel construye en
+    // un solo trazo un nodo cuaderno: un Vec<TipoCeldaWawa> con la
+    // FUENTE, el BINARIO y el RETORNO de la ultima ejecucion. Los HIJOS
+    // legitimos del nodo —las aristas del grafo direccionado por
+    // contenido— son los dos hashes que llegaron por parametro: el grafo
+    // dibuja por si mismo el tejido causal completo del cuaderno.
+    //
+    // GATEADA por PERMISO_GRAFO_ESCRITURA. Hereda back-pressure DMA. La
+    // app cuaderno re-invoca esta syscall cada vez que una celda se
+    // ejecuta — el nodo cuaderno anterior queda en sectores anteriores
+    // del log, inalcanzable salvo recoleccion semantica explicita;
+    // el cuaderno nuevo recoge el eslabon nuevo y conserva el resto.
+    if permisos & PERMISO_GRAFO_ESCRITURA != 0 {
+    enlazador.func_wrap(
+        "renaser",
+        "sys_cuaderno_registrar_celda",
+        |mut caller: Caller<'_, ContextoCapacidades>,
+         fuente_hash_ptr: u32,
+         binario_hash_ptr: u32,
+         retorno: i32,
+         salida_cuaderno_hash_ptr: u32|
+         -> Result<i32, Error> {
+            if caller.data().paginas_dma_en_vuelo >= MAX_PAGINAS_DMA_PER_APP {
+                return Ok(CodigoError::Saturado.como_i32());
+            }
+            caller.data_mut().paginas_dma_en_vuelo += 1;
+
+            let memoria = obtener_memoria(&caller)?;
+            // Leer los dos hashes de la memoria lineal.
+            let (fuente_hash, binario_hash) = {
+                let m = memoria.data(&caller);
+                let f = match leer_hash(
+                    m,
+                    fuente_hash_ptr,
+                    "WASM :: sys_cuaderno_registrar_celda desbordo memoria (fuente)",
+                ) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        caller.data_mut().paginas_dma_en_vuelo -= 1;
+                        return Err(e);
+                    }
+                };
+                let b = match leer_hash(
+                    m,
+                    binario_hash_ptr,
+                    "WASM :: sys_cuaderno_registrar_celda desbordo memoria (binario)",
+                ) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        caller.data_mut().paginas_dma_en_vuelo -= 1;
+                        return Err(e);
+                    }
+                };
+                (f, b)
+            };
+            // Verificar que el destino del hash del cuaderno cabe ANTES de
+            // tocar el disco. Un puntero invalido aborta sin escribir.
+            {
+                let m = memoria.data(&caller);
+                if let Err(e) = rango(
+                    m,
+                    salida_cuaderno_hash_ptr,
+                    32,
+                    "WASM :: sys_cuaderno_registrar_celda desbordo memoria (salida)",
+                ) {
+                    caller.data_mut().paginas_dma_en_vuelo -= 1;
+                    return Err(e);
+                }
+            }
+
+            // Empaquetar las tres celdas en orden: FUENTE -> BINARIO -> OUT.
+            // El orden del Vec define la secuencia de ejecucion lineal.
+            let mut celdas: alloc::vec::Vec<format::TipoCeldaWawa> =
+                alloc::vec::Vec::with_capacity(3);
+            celdas.push(format::TipoCeldaWawa::TextoFuente(fuente_hash));
+            celdas.push(format::TipoCeldaWawa::BytecodeBinario(binario_hash));
+            celdas.push(format::TipoCeldaWawa::UltimoRetorno(retorno));
+            let payload = match format::serializar_celdas(&celdas) {
+                Ok(bytes) => bytes,
+                Err(_) => {
+                    caller.data_mut().paginas_dma_en_vuelo -= 1;
+                    return Ok(CodigoError::AlmacenamientoFallo.como_i32());
+                }
+            };
+
+            // Los hijos del nodo cuaderno: el grafo cose por si mismo la
+            // arista hacia la fuente y hacia el binario. No incluimos el
+            // i32 — los retornos viven solo dentro del payload, no son
+            // nodos del grafo.
+            let mut hijos: alloc::vec::Vec<Hash> = alloc::vec::Vec::with_capacity(2);
+            hijos.push(fuente_hash);
+            hijos.push(binario_hash);
+
+            let resultado = match crate::almacen::almacenar(payload, hijos) {
+                Ok(hash) => {
+                    let m = memoria.data_mut(&mut caller);
+                    m[salida_cuaderno_hash_ptr as usize
+                        ..salida_cuaderno_hash_ptr as usize + 32]
+                        .copy_from_slice(&hash);
+                    CodigoError::Ok
+                }
+                Err(_) => CodigoError::AlmacenamientoFallo,
+            };
+            caller.data_mut().paginas_dma_en_vuelo -= 1;
+            Ok(resultado.como_i32())
+        },
+    )?;
+    } // PERMISO_GRAFO_ESCRITURA (cuaderno)
 
     // --- CAPACIDAD 4 :: sys_object_datos(hash, salida, capacidad) -> i32 ---
     // Copia la carga util del objeto `hash` en `salida`. Devuelve el numero de

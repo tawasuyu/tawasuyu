@@ -1,0 +1,35 @@
+# =============================================================================
+#  renaser :: apps/cuaderno — Fase 33 :: el motor celular de calculo persistente
+# -----------------------------------------------------------------------------
+#  Un modulo WASM `cdylib` que vive en su jaula y opera como cuaderno de
+#  celulas: el humano teclea Forth en un panel editor, dispara F5, y la
+#  celda se compila (forth-emisor), se inscribe con su arista causal
+#  (sys_subsistema_registrar_ejecutable_v2), se ejecuta en sub-jaula
+#  efimera (sys_subsistema_ejecutar_dinamico), y queda finalmente
+#  consolidada como nodo cuaderno en el grafo via
+#  `sys_cuaderno_registrar_celda`. Persistencia ortogonal por celda.
+# =============================================================================
+
+[package]
+name = "cuaderno"
+version = "0.1.0"
+edition = "2021"
+description = "renaser :: app WASM cuaderno — celdas Forth ejecutables persistentes"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# El emisor Forth -> WASM es la misma crate no_std auditada que el IDE
+# utiliza desde la Fase 30. Una unica verdad del compilador.
+forth-emisor = { path = "../../../../shared/forth-emisor" }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
