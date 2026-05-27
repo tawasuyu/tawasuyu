@@ -53,6 +53,17 @@ pub enum SheetEvent {
     /// como un solo evento (no como N SetCell) para que el replay
     /// sea idéntico al gesto del usuario y el WAL ocupe menos.
     Fill { src: CellRef, dest: CellRange },
+    /// Restauración atómica de varias celdas a un estado anterior.
+    /// Emitido por `undo` y por cualquier flujo que necesite revertir
+    /// un batch arbitrario. `None` en el raw significa "borrar esta
+    /// celda" (lo que hacía `ClearCell` para un solo elemento).
+    ///
+    /// Esto NO viola la inmutabilidad del WAL: Restore es un evento
+    /// más al final del log, no una mutación del pasado. El estado
+    /// del workbook tras un undo+redo es indistinguible del que
+    /// habría producido la edición original — pero el WAL conserva
+    /// el rastro completo de la operación.
+    Restore { cells: Vec<(CellRef, Option<String>)> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -80,6 +91,14 @@ pub struct Workbook {
     /// `&[...]` sin tocar el sink (que sí podría hacer I/O).
     events_cache: Vec<RecordedEvent>,
     invariants: Vec<Invariant>,
+    /// Cursor virtual: cuántos eventos del cache están aplicados al
+    /// `sheet` actual. En operación normal `applied == events_cache.
+    /// len()`. Cuando hay un `undo` activo, `applied <
+    /// events_cache.len()`; los eventos por delante quedan para
+    /// `redo`. Una edición nueva cuando `applied < len()` trunca
+    /// los eventos por delante del sink (la historia alternativa
+    /// se pierde, semántica clásica de editor).
+    applied: usize,
 }
 
 impl std::fmt::Debug for Workbook {
@@ -99,6 +118,7 @@ impl Default for Workbook {
             sink: Box::new(MemorySink::new()),
             events_cache: Vec::new(),
             invariants: Vec::new(),
+            applied: 0,
         }
     }
 }
@@ -118,11 +138,13 @@ impl Workbook {
         for ev in &existing {
             apply_to_sheet(&mut sheet, &ev.event)?;
         }
+        let applied = existing.len();
         Ok(Self {
             sheet,
             sink,
             events_cache: existing,
             invariants: Vec::new(),
+            applied,
         })
     }
 
@@ -190,6 +212,60 @@ impl Workbook {
         self.fill(src, CellRange::new(dest, dest))
     }
 
+    /// Deshace la última edición. Estrategia: cursor virtual.
+    /// El WAL no se modifica; sólo movemos `applied` hacia atrás y
+    /// reconstruimos el sheet desde el snapshot. Una edición nueva
+    /// estando en estado `applied < len()` trunca el "futuro
+    /// alternativo" tanto del cache como del sink.
+    pub fn undo(&mut self) -> Result<Option<SetReport>, WorkbookError> {
+        if self.applied == 0 {
+            return Ok(None);
+        }
+        let new_applied = self.applied - 1;
+        let new_sheet = self.snapshot_up_to(new_applied)?;
+        self.sheet = new_sheet;
+        self.applied = new_applied;
+        // Reporte vacío: no comparamos celda por celda. La UI
+        // sabe que tras undo todo cambió y va a repintar de
+        // todos modos.
+        Ok(Some(SetReport::default()))
+    }
+
+    /// Rehace el último undo, avanzando el cursor virtual una
+    /// posición y reaplicando el evento al sheet. Devuelve `None`
+    /// si no hay nada por rehacer.
+    pub fn redo(&mut self) -> Result<Option<SetReport>, WorkbookError> {
+        if self.applied >= self.events_cache.len() {
+            return Ok(None);
+        }
+        let event = self.events_cache[self.applied].event.clone();
+        let mut candidate = self.sheet.clone();
+        let report = apply_to_sheet(&mut candidate, &event)?;
+        Self::check_invariants(&self.invariants, &candidate)?;
+        self.sheet = candidate;
+        self.applied += 1;
+        Ok(Some(report))
+    }
+
+    pub fn can_undo(&self) -> bool {
+        self.applied > 0
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.applied < self.events_cache.len()
+    }
+
+    /// Reconstruye un `Sheet` aplicando los primeros `n` eventos del
+    /// cache. Igual que `snapshot_at` pero sin acceso público — lo
+    /// usa `undo` para volver al estado anterior.
+    fn snapshot_up_to(&self, n: usize) -> Result<Sheet, WorkbookError> {
+        let mut s = Sheet::new();
+        for ev in self.events_cache.iter().take(n) {
+            apply_to_sheet(&mut s, &ev.event)?;
+        }
+        Ok(s)
+    }
+
     /// Recalcula explícitamente las celdas volátiles (`TODAY`,
     /// `NOW`, `RAND`, etc.). No se registra como evento en el WAL
     /// — un refresh manual no cambia la historia editable, solo
@@ -209,6 +285,19 @@ impl Workbook {
     }
 
     fn apply_user_event(&mut self, event: SheetEvent) -> Result<SetReport, WorkbookError> {
+        // Si hay redos pendientes (applied < len), los descartamos:
+        // el "futuro alternativo" se pierde al editar. Truncamos
+        // tanto el cache local como el sink (filesystem/memory).
+        if self.applied < self.events_cache.len() {
+            let truncate_from_seq = self
+                .events_cache
+                .get(self.applied)
+                .map(|e| e.seq)
+                .unwrap_or(0);
+            self.sink.truncate_from(truncate_from_seq)?;
+            self.events_cache.truncate(self.applied);
+        }
+
         let mut candidate = self.sheet.clone();
         let report = apply_to_sheet(&mut candidate, &event)?;
         Self::check_invariants(&self.invariants, &candidate)?;
@@ -220,6 +309,7 @@ impl Workbook {
             timestamp_ms,
             event,
         });
+        self.applied = self.events_cache.len();
         Ok(report)
     }
 
@@ -284,7 +374,25 @@ fn apply_to_sheet(sheet: &mut Sheet, event: &SheetEvent) -> Result<SetReport, Se
         SheetEvent::SetCell { cell, raw } => sheet.set_cell(*cell, raw),
         SheetEvent::ClearCell { cell } => Ok(sheet.clear_cell(*cell)),
         SheetEvent::Fill { src, dest } => apply_fill(sheet, *src, *dest),
+        SheetEvent::Restore { cells } => apply_restore(sheet, cells),
     }
+}
+
+/// Aplica un batch de restauración. Acumula los SetReport individuales
+/// para que el caller vea TODAS las celdas que cambiaron.
+fn apply_restore(
+    sheet: &mut Sheet,
+    cells: &[(CellRef, Option<String>)],
+) -> Result<SetReport, SetError> {
+    let mut combined = SetReport::default();
+    for (cr, raw) in cells {
+        let rep = match raw {
+            Some(s) => sheet.set_cell(*cr, s)?,
+            None => sheet.clear_cell(*cr),
+        };
+        combined.changed.extend(rep.changed);
+    }
+    Ok(combined)
 }
 
 /// Implementación del fill: lee la celda fuente, shifta su expr por
@@ -642,6 +750,101 @@ mod tests {
             assert_eq!(wb.events().len(), 2);
         }
         let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn undo_reverts_last_edit() {
+        let mut wb = Workbook::new();
+        wb.set_cell(cr("A1"), "10").unwrap();
+        wb.set_cell(cr("A1"), "20").unwrap();
+        assert_eq!(wb.value(cr("A1")), SheetValue::Number(dec("20")));
+        assert!(wb.can_undo());
+        wb.undo().unwrap();
+        assert_eq!(wb.value(cr("A1")), SheetValue::Number(dec("10")));
+        wb.undo().unwrap();
+        assert_eq!(wb.value(cr("A1")), SheetValue::Empty);
+    }
+
+    #[test]
+    fn undo_propagates_to_downstream() {
+        let mut wb = Workbook::new();
+        wb.set_cell(cr("A1"), "10").unwrap();
+        wb.set_cell(cr("B1"), "=A1*5").unwrap();
+        wb.set_cell(cr("A1"), "100").unwrap();
+        // B1 = 500.
+        assert_eq!(wb.value(cr("B1")), SheetValue::Number(dec("500")));
+        wb.undo().unwrap();
+        // A1 vuelve a 10, B1 cascada → 50.
+        assert_eq!(wb.value(cr("A1")), SheetValue::Number(dec("10")));
+        assert_eq!(wb.value(cr("B1")), SheetValue::Number(dec("50")));
+    }
+
+    #[test]
+    fn redo_replays_after_undo() {
+        let mut wb = Workbook::new();
+        wb.set_cell(cr("A1"), "10").unwrap();
+        wb.set_cell(cr("A1"), "20").unwrap();
+        wb.undo().unwrap();
+        assert_eq!(wb.value(cr("A1")), SheetValue::Number(dec("10")));
+        assert!(wb.can_redo());
+        wb.redo().unwrap();
+        assert_eq!(wb.value(cr("A1")), SheetValue::Number(dec("20")));
+    }
+
+    #[test]
+    fn editing_clears_redo_stack() {
+        let mut wb = Workbook::new();
+        wb.set_cell(cr("A1"), "10").unwrap();
+        wb.set_cell(cr("A1"), "20").unwrap();
+        wb.undo().unwrap();
+        assert!(wb.can_redo());
+        // Edición nueva tras undo → redo se pierde.
+        wb.set_cell(cr("A1"), "999").unwrap();
+        assert!(!wb.can_redo());
+    }
+
+    #[test]
+    fn undo_on_empty_workbook_is_noop() {
+        let mut wb = Workbook::new();
+        assert!(!wb.can_undo());
+        assert!(wb.undo().unwrap().is_none());
+    }
+
+    #[test]
+    fn undo_of_fill_restores_all_destination_cells() {
+        let mut wb = Workbook::new();
+        wb.set_cell(cr("A1"), "1").unwrap();
+        wb.set_cell(cr("A2"), "2").unwrap();
+        wb.set_cell(cr("A3"), "3").unwrap();
+        // B2 y B3 ya tienen contenido previo distinto.
+        wb.set_cell(cr("B2"), "OLD2").unwrap();
+        wb.set_cell(cr("B3"), "OLD3").unwrap();
+        wb.set_cell(cr("B1"), "=A1*10").unwrap();
+        // Fill: B1 ya está; B2 y B3 reciben =A2*10 y =A3*10.
+        wb.fill(cr("B1"), "B1:B3".parse().unwrap()).unwrap();
+        assert_eq!(wb.value(cr("B2")), SheetValue::Number(dec("20")));
+        assert_eq!(wb.value(cr("B3")), SheetValue::Number(dec("30")));
+        // Undo: B2 y B3 vuelven a OLD2 y OLD3.
+        wb.undo().unwrap();
+        assert_eq!(wb.value(cr("B2")), SheetValue::Text("OLD2".into()));
+        assert_eq!(wb.value(cr("B3")), SheetValue::Text("OLD3".into()));
+        // B1 NO se toca (no estaba en el write-set del Fill,
+        // excluida por ser la fuente).
+        assert_eq!(wb.value(cr("B1")), SheetValue::Number(dec("10")));
+    }
+
+    #[test]
+    fn undo_undo_redo_redo_round_trip() {
+        let mut wb = Workbook::new();
+        wb.set_cell(cr("A1"), "1").unwrap();
+        wb.set_cell(cr("A1"), "2").unwrap();
+        wb.set_cell(cr("A1"), "3").unwrap();
+        wb.undo().unwrap();
+        wb.undo().unwrap();
+        assert_eq!(wb.value(cr("A1")), SheetValue::Number(dec("1")));
+        wb.redo().unwrap();
+        wb.redo().unwrap();
+        assert_eq!(wb.value(cr("A1")), SheetValue::Number(dec("3")));
     }
 
     #[test]

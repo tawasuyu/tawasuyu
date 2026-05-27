@@ -33,6 +33,8 @@ pub enum SinkError {
     Decode { line: usize, reason: String },
     #[error("sequence skew: got {got}, expected {expected}")]
     Skew { got: u64, expected: u64 },
+    #[error("operation `{0}` not supported by this sink")]
+    Unsupported(&'static str),
 }
 
 pub trait EventSink: Send {
@@ -49,6 +51,21 @@ pub trait EventSink: Send {
     /// `Vec<RecordedEvent>` (clone) — más simple que un iterator
     /// con lifetime cruzando el trait object.
     fn events(&self) -> Vec<RecordedEvent>;
+
+    /// Trunca el log: descarta TODOS los eventos con `seq >= from`.
+    /// Lo usa `Workbook::set_cell` cuando hay un undo activo y
+    /// llega una edición nueva — la "historia alternativa" se
+    /// pierde, como en cualquier editor.
+    ///
+    /// Default = `Unsupported`: los sinks que necesitan implementar
+    /// inmutabilidad estructural (p.ej. el bridge a
+    /// `nakui-core::event_log`) pueden mantenerlo así, y el undo
+    /// del workbook se degradará a "rewind cursor" sin truncar
+    /// físicamente — lo importante es que el estado expuesto al
+    /// usuario es correcto.
+    fn truncate_from(&mut self, _from: u64) -> Result<(), SinkError> {
+        Err(SinkError::Unsupported("truncate_from"))
+    }
 
     fn len(&self) -> usize {
         self.events().len()
@@ -117,6 +134,12 @@ impl EventSink for MemorySink {
     fn events(&self) -> Vec<RecordedEvent> {
         self.events.clone()
     }
+
+    fn truncate_from(&mut self, from: u64) -> Result<(), SinkError> {
+        self.events.retain(|e| e.seq < from);
+        self.next_seq = from;
+        Ok(())
+    }
 }
 
 /// Sink append-only sobre un archivo JSONL. Cada `record` escribe
@@ -130,6 +153,7 @@ impl EventSink for MemorySink {
 pub struct FileSink {
     cache: Vec<RecordedEvent>,
     writer: BufWriter<File>,
+    path: std::path::PathBuf,
     next_seq: u64,
     durable: bool,
 }
@@ -139,10 +163,10 @@ impl FileSink {
     /// el archivo si no existe. El cursor de escritura queda al
     /// final.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, SinkError> {
-        let path = path.as_ref();
+        let path = path.as_ref().to_path_buf();
         // 1. Leer eventos existentes.
         let cache = if path.exists() {
-            let f = File::open(path)?;
+            let f = File::open(&path)?;
             let mem = MemorySink::from_reader(BufReader::new(f))?;
             mem.events
         } else {
@@ -153,10 +177,11 @@ impl FileSink {
         let f = OpenOptions::new()
             .create(true)
             .append(true)
-            .open(path)?;
+            .open(&path)?;
         Ok(Self {
             cache,
             writer: BufWriter::new(f),
+            path,
             next_seq,
             durable: true,
         })
@@ -201,6 +226,36 @@ impl EventSink for FileSink {
 
     fn events(&self) -> Vec<RecordedEvent> {
         self.cache.clone()
+    }
+
+    fn truncate_from(&mut self, from: u64) -> Result<(), SinkError> {
+        // 1. Recortar el cache en memoria.
+        self.cache.retain(|e| e.seq < from);
+        self.next_seq = from;
+        // 2. Reescribir el archivo entero desde cero — es lo más
+        //    simple y robusto. Una hoja con undo intensivo no debería
+        //    pasar por aquí cientos de veces por segundo; el costo
+        //    O(N) de re-escribir el log es aceptable.
+        let mut new_writer = BufWriter::new(
+            OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&self.path)?,
+        );
+        for ev in &self.cache {
+            serde_json::to_writer(&mut new_writer, ev).map_err(|e| SinkError::Decode {
+                line: ev.seq as usize,
+                reason: e.to_string(),
+            })?;
+            new_writer.write_all(b"\n")?;
+        }
+        new_writer.flush()?;
+        if self.durable {
+            new_writer.get_ref().sync_data()?;
+        }
+        self.writer = new_writer;
+        Ok(())
     }
 }
 
