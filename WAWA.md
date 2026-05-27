@@ -360,6 +360,7 @@ verifica:
 | (Fase 58 v7) | scroll vertical con auto-track de la selección (PICKER_MAX_FILAS=16) |
 | (Fase 58 v8) | `Alt+1..9` quick-launch sobre la fila VISIBLE del filtrado |
 | (Fase 58 v9) | `instalar_app(EntradaApp)` — PLANTILLAS mutable + refresh del catálogo |
+| (Fase 58 v10) | polling automático del manifiesto: `tarea_compositor` invoca `refrescar_apps_desde_manifiesto` cada ~6 s |
 
 ## 14. Plan — siguientes hitos
 
@@ -445,7 +446,7 @@ restante, debe descontar primero estos hitos para no duplicar esfuerzo:
   scancode `0x22` se registra en `async_system/teclado.rs:60` como
   `TECLA_G`.
 - **Launcher gráfico tipo Spotlight** — **HECHA** (Fase 58, vueltas
-  1–9 + polish). `Alt+P` engendra `Mando::ToggleLauncher`; el
+  1–10 + polish). `Alt+P` engendra `Mando::ToggleLauncher`; el
   compositor pinta un overlay modal centrado con la lista de apps del
   manifiesto y la roba el foco del teclado y del ratón.
   - Teclado: `Alt+J/K` mueven la selección entre las apps filtradas,
@@ -496,10 +497,19 @@ restante, debe descontar primero estos hitos para no duplicar esfuerzo:
     pública `pub fn instalar_app(entrada: &manifiesto::EntradaApp) ->
     Option<usize>` que recupera el bytecode del grafo, construye la
     plantilla, push al Mutex y refresca el catálogo del launcher vía
-    `compositor::fijar_catalogo`. La API es completa y verde; el
-    cableado de un consumidor automático (mudanza tras re-ancla,
-    cronista al añadir EntradaApp) queda como hito v10 — la palanca
-    estructural ya existe.
+    `compositor::fijar_catalogo`.
+  - Polling automático (v10): `tarea_compositor` incrementa
+    `CONTADOR_REFRESCO_APPS` en cada tic; al alcanzar
+    `INTERVALO_REFRESCO_APPS=600` fotogramas (~6 s a 100 Hz),
+    `refrescar_apps_desde_manifiesto` relee `manifiesto::cargar()` y,
+    si el manifiesto del disco tiene más entradas que las plantillas
+    vigentes, instala las nuevas con `instalar_app`. Tras un
+    `sys_manifiesto_proponer` aceptado (la app `mudanza`), las apps
+    nuevas aparecen en `Alt+P` en ≤ 6 s sin reboot. La traza emite
+    `launcher :: app instalada en vivo :: idx=N nombre=X` por la
+    baliza serial — el operador ve el alta en tiempo real. El
+    protocolo NO retira plantillas que desaparezcan del manifiesto
+    (eso invalidaría ventanas vivas y queda como política futura).
   - Contador "N/M" (v4) a la derecha de la barra de título: hace
     visible cuándo la query deja cero matches o cuántas apps quedan
     tras filtrar; se pinta en `Color::SIN_FOCO` como información

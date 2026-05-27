@@ -200,6 +200,17 @@ async fn tarea_compositor() {
         for indice in compositor::partos_por_indice_pendientes() {
             lanzar_app_por_indice(indice);
         }
+        // FASE 58 v10 :: polling del manifiesto vivo para apps recien
+        // ancladas. Cada `INTERVALO_REFRESCO_APPS` fotogramas (~6 s a
+        // 100 Hz) se relee el manifiesto del disco; si tiene mas entradas
+        // que las `PLANTILLAS` actuales, las nuevas se instalan via
+        // `instalar_app` y el launcher las refleja sin reboot. Si la
+        // lectura falla, vuelve en silencio — el siguiente tic reintenta.
+        let refresco = CONTADOR_REFRESCO_APPS.fetch_add(1, Ordering::Relaxed) + 1;
+        if refresco >= INTERVALO_REFRESCO_APPS {
+            CONTADOR_REFRESCO_APPS.store(0, Ordering::Relaxed);
+            refrescar_apps_desde_manifiesto();
+        }
         // FASE 24 :: tic ocioso del compactador semantico. Cuando el log ha
         // ganado bastantes escrituras desde la ultima pasada, aspirar los
         // nodos huerfanos. La operacion es BLOQUEANTE para la E/S de disco
@@ -416,6 +427,60 @@ pub fn instalar_app(entrada: &manifiesto::EntradaApp) -> Option<usize> {
     // anidados con el de PLANTILLAS.
     compositor::fijar_catalogo(nombres);
     Some(nuevo_idx)
+}
+
+/// FASE 58 v10 :: contador de fotogramas para el polling del manifiesto vivo
+/// (`refrescar_apps_desde_manifiesto`). Se incrementa en cada tic del
+/// compositor; al alcanzar `INTERVALO_REFRESCO_APPS` se dispara el refresco
+/// y vuelve a cero.
+static CONTADOR_REFRESCO_APPS: AtomicUsize = AtomicUsize::new(0);
+
+/// FASE 58 v10 :: cada cuantos fotogramas del compositor se relee el
+/// manifiesto del disco. 600 fotogramas ≈ 6 s a 100 Hz (PIT) — bastante
+/// frecuente para que el operador no espere, bastante raro para que la
+/// lectura de disco no domine el tic del compositor.
+const INTERVALO_REFRESCO_APPS: usize = 600;
+
+/// FASE 58 v10 :: el consumidor automatico de `instalar_app`. Relee el
+/// manifiesto del disco (el `sys_manifiesto_proponer` de `mudanza` re-ancla
+/// el superbloque pero no toca `PLANTILLAS`); si el manifiesto del disco
+/// tiene mas entradas que las plantillas vigentes, las nuevas se ingresan
+/// via `instalar_app` y el launcher las refleja en su proximo `Alt+P`.
+///
+/// Tolerante a errores: si `manifiesto::cargar` falla (disco con problemas,
+/// manifiesto corrupto), vuelve en silencio. El siguiente tic reintentara.
+/// El protocolo NO retira plantillas instaladas — un manifiesto que ENCOGE
+/// no anula apps activas; eso requeriria invalidar ventanas vivas y queda
+/// como politica explicita futura.
+fn refrescar_apps_desde_manifiesto() {
+    let Ok(Some(manifiesto)) = manifiesto::cargar() else {
+        return;
+    };
+    let plantillas_actuales = PLANTILLAS
+        .get()
+        .map(|m| m.lock().len())
+        .unwrap_or(0);
+    if manifiesto.apps.len() <= plantillas_actuales {
+        return;
+    }
+    for entrada in &manifiesto.apps[plantillas_actuales..] {
+        match instalar_app(entrada) {
+            Some(idx) => {
+                let _ = writeln!(
+                    baliza::Serie,
+                    "launcher :: app instalada en vivo :: idx={} nombre={}",
+                    idx, entrada.nombre,
+                );
+            }
+            None => {
+                let _ = writeln!(
+                    baliza::Serie,
+                    "launcher :: instalacion fallida :: nombre={} (bytecode ausente?)",
+                    entrada.nombre,
+                );
+            }
+        }
+    }
 }
 
 /// Camino comun de `lanzar_app` y `lanzar_app_por_indice`: abre la ventana,
