@@ -354,19 +354,17 @@
     zTop += 1;
     el.style.zIndex = zTop;
 
+    // Sin titlebar — los artículos no llevan "barra de Windows" propia.
+    // Botones flotantes en la esquina superior derecha.
     el.innerHTML = `
-      <header class="win-titlebar">
-        <span class="win-icon">▤</span>
-        <span class="win-title"></span>
-        <span class="win-spacer"></span>
-        <button class="win-btn win-min"   type="button" aria-label="minimizar">─</button>
-        <button class="win-btn win-close" type="button" aria-label="cerrar">×</button>
-      </header>
       <div class="win-body">
         <article id="${contId}" class="pluma-host"></article>
       </div>
+      <div class="win-actions" data-win-title="${title.replace(/"/g, '&quot;')}">
+        <button class="win-btn win-min"   type="button" aria-label="minimizar" title="minimizar">─</button>
+        <button class="win-btn win-close" type="button" aria-label="cerrar"   title="cerrar (Esc)">×</button>
+      </div>
     `;
-    el.querySelector('.win-title').textContent = title;
     layer.appendChild(el);
 
     // taskbar item
@@ -395,6 +393,16 @@
     cargar_md(contId, url, theme || 'gioser');
     return id;
   }
+
+  // Esc cierra la ventana enfocada (si es un artículo).
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const focused = document.querySelector('.window.focused');
+    if (!focused) return;
+    for (const [vid, v] of ventanas.entries()) {
+      if (v.el === focused) { cerrar(vid); break; }
+    }
+  });
 
   // ===== ventana especial: panel de control =====
   // Reutiliza el chrome (titlebar/drag/resize/taskbar) y reemplaza el

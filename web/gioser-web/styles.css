@@ -324,24 +324,27 @@ a:hover { color: var(--fg-text); }
   height: 30px;
   background: var(--bg-panel-alt);
   border-bottom: 1px solid var(--border);
+  cursor: move;
   user-select: none;
   font-size: 12px;
   color: var(--fg-muted);
 }
-.window.maximized .win-titlebar {
-  /* En maximizado no se arrastra; cursor por defecto. */
-  cursor: default;
-}
-.window:not(.maximized) .win-titlebar { cursor: move; }
 .window.focused .win-titlebar {
   color: var(--fg-text);
 }
 .win-icon { color: var(--accent); font-size: 12px; }
-.win-title {
-  letter-spacing: 0.04em;
-  text-transform: lowercase;
-}
+.win-title { letter-spacing: 0.04em; }
 .win-spacer { flex: 1; }
+
+/* Acciones flotantes del artículo (sin titlebar) — esquina sup-der. */
+.win-actions {
+  position: absolute;
+  top: 10px;
+  right: 14px;
+  display: flex;
+  gap: 2px;
+  z-index: 5;
+}
 
 .win-btn {
   background: transparent;
@@ -357,6 +360,20 @@ a:hover { color: var(--fg-text); }
 }
 .win-btn:hover { background: var(--bg-button-hover); color: var(--fg-text); }
 .win-close:hover { background: var(--fg-destructive); color: #fff; }
+
+/* En modo flotante (.win-actions) los botones necesitan un poco más de
+ * presencia para destacarse contra el contenido del artículo. */
+.win-actions .win-btn {
+  width: 28px;
+  height: 26px;
+  font-size: 14px;
+  background: rgba(0,0,0,0.0);
+  color: var(--fg-muted);
+  opacity: 0.55;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+.win-actions .win-btn:hover { opacity: 1; }
+[data-theme-variant="light"] .win-actions .win-btn { color: var(--fg-muted); }
 
 .win-body {
   flex: 1;
@@ -383,12 +400,13 @@ a:hover { color: var(--fg-text); }
   background: linear-gradient(135deg, transparent 50%, var(--border) 50%, var(--border) 60%, transparent 60%, transparent 70%, var(--border) 70%, var(--border) 80%, transparent 80%);
 }
 
-/* contenido pluma dentro de la ventana — ancho cómodo de lectura,
- * centrado, con padding generoso arriba para que respire. */
+/* contenido pluma dentro de la ventana — ancho cómodo pero responsive:
+ * en pantallas anchas centrado a 880px, en angostas llena el ancho con
+ * un padding que escala suave. El top deja aire para los botones flotantes. */
 .pluma-host {
-  max-width: 760px;
+  max-width: 880px;
   margin: 0 auto;
-  padding: 48px 32px 80px;
+  padding: 52px clamp(20px, 5vw, 64px) 80px;
   font-family: var(--sans);
   font-size: 15px;
   line-height: 1.7;
