@@ -374,6 +374,9 @@ rusqlite = { version = "0.31", features = ["bundled", "blob"] }
 pdf-extract = "0.7"
 epub = "2.1"
 
+# === Bulk import Wikipedia (iniy-wiki dump) ===
+bzip2 = "0.4"
+
 # === P2P (minga) ===
 libp2p = { version = "0.56", features = ["tokio", "tcp", "noise", "yamux", "macros", "kad", "identify"] }
 libp2p-stream = "=0.4.0-alpha"

@@ -57,6 +57,25 @@ enum Cmd {
         #[arg(long, default_value_t = 20)]
         max: usize,
     },
+    /// Bulk import desde un dump XML local de Wikipedia.
+    /// Archivos típicos: eswiki-latest-pages-articles.xml.bz2
+    /// (~3-5GB comprimido, ~20GB descomprimido) en https://dumps.wikimedia.org/.
+    /// Streamea el bz2 sin descomprimirlo a disco; SAX-parse el XML;
+    /// procesa solo páginas del namespace 0 (artículos), excluye redirects
+    /// y disambiguation. Reportes de progreso cada 1000.
+    Dump {
+        archivo: PathBuf,
+        /// Máximo de artículos a procesar (default: sin límite).
+        #[arg(long)]
+        max: Option<usize>,
+        /// Saltar los primeros N artículos (para resumir tras interrupción).
+        #[arg(long, default_value_t = 0)]
+        skip: usize,
+        /// Tamaño mínimo del wikitext para considerar el artículo
+        /// (descarta stubs).
+        #[arg(long, default_value_t = 500)]
+        min_chars: usize,
+    },
 }
 
 #[tokio::main]
@@ -75,11 +94,17 @@ async fn main() -> Result<()> {
     let fuente_nombre = format!("Wikipedia [{}]", cli.lang);
     let fuente_id = store.obtener_o_crear_fuente(&fuente_nombre, Some("enciclopedia colaborativa"))?;
 
+    // Caso especial: bulk dump XML local (no usa API HTTP, no usa `titulos`).
+    if let Cmd::Dump { archivo, max, skip, min_chars } = &cli.cmd {
+        return procesar_dump_xml(archivo, *max, *skip, *min_chars, fuente_id, &tags, &mut store);
+    }
+
     let titulos: Vec<String> = match cli.cmd {
         Cmd::Article { titulo } => vec![titulo],
         Cmd::Articles { titulos } => titulos,
         Cmd::Search { query, max } => buscar(&cliente, &api_url, &query, max).await?,
         Cmd::Category { nombre, max } => categoria_miembros(&cliente, &api_url, &nombre, max).await?,
+        Cmd::Dump { .. } => unreachable!(),
     };
     if titulos.is_empty() {
         println!("(sin artículos para importar)");
@@ -190,6 +215,160 @@ async fn categoria_miembros(cli: &reqwest::Client, api_url: &str, nombre: &str, 
         .filter_map(|m| m.get("title").and_then(|t| t.as_str()).map(|s| s.to_string()))
         .collect();
     Ok(titulos)
+}
+
+/// Procesa un dump XML bz2 de Wikipedia en streaming.
+/// Sin descomprimir a disco; sin cargar el XML completo en memoria.
+/// Reporta progreso cada 1000 artículos. SQLite en autocommit mode
+/// con batches de 50 docs por transacción.
+fn procesar_dump_xml(
+    archivo: &std::path::Path,
+    max: Option<usize>,
+    skip: usize,
+    min_chars: usize,
+    fuente_id: iniy_core::FuenteId,
+    tags: &[String],
+    store: &mut Store,
+) -> Result<()> {
+    use bzip2::read::BzDecoder;
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+    use std::fs::File;
+    use std::io::BufReader;
+    use std::time::Instant;
+
+    let f = File::open(archivo)
+        .with_context(|| format!("abriendo {}", archivo.display()))?;
+    let leido = BufReader::with_capacity(1 << 20, f);
+    // Decompresor — solo si el archivo es .bz2; si es .xml plano, leemos directo.
+    let leido: Box<dyn std::io::BufRead> = if archivo.extension()
+        .and_then(|s| s.to_str()).map(|s| s == "bz2").unwrap_or(false)
+    {
+        Box::new(BufReader::with_capacity(1 << 20, BzDecoder::new(leido)))
+    } else {
+        Box::new(leido)
+    };
+
+    let mut xml = Reader::from_reader(leido);
+    xml.trim_text(true);
+
+    // State machine.
+    let mut buf = Vec::with_capacity(1 << 16);
+    let mut path = Vec::<String>::with_capacity(8);   // pila de tags abiertos
+    let mut titulo = String::new();
+    let mut ns = String::new();
+    let mut wikitext = String::new();
+    let mut es_redirect = false;
+    let mut leyendo_text = false;
+    let mut procesados = 0usize;        // pages page=ns0 no-redirect contadas
+    let mut persistidos = 0usize;
+    let inicio = Instant::now();
+
+    println!("procesando {}...", archivo.display());
+
+    loop {
+        match xml.read_event_into(&mut buf) {
+            Err(e) => anyhow::bail!("XML error en pos {}: {e}", xml.buffer_position()),
+            Ok(Event::Eof) => break,
+            Ok(Event::Start(e)) => {
+                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                // Detectar <text ... >
+                if name == "text" && path.last().map(|s| s.as_str()) == Some("revision") {
+                    leyendo_text = true;
+                    wikitext.clear();
+                }
+                if name == "page" {
+                    titulo.clear();
+                    ns.clear();
+                    wikitext.clear();
+                    es_redirect = false;
+                }
+                path.push(name);
+            }
+            Ok(Event::End(e)) => {
+                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                if name == "text" { leyendo_text = false; }
+                path.pop();
+                if name == "page" {
+                    // Filtros.
+                    if ns != "0" || es_redirect {
+                        continue;
+                    }
+                    // Disambiguation heurístico: el wikitext contiene plantilla
+                    // "{{desambiguación}}" o "{{disambiguation}}" cerca del inicio.
+                    let inicio_wt: String = wikitext.chars().take(500).collect::<String>().to_lowercase();
+                    if inicio_wt.contains("desambiguación") || inicio_wt.contains("disambiguation") {
+                        continue;
+                    }
+                    procesados += 1;
+                    if procesados <= skip {
+                        continue;
+                    }
+                    if wikitext.chars().count() < min_chars {
+                        continue;
+                    }
+                    let texto = limpiar_wikitext(&wikitext);
+                    if texto.trim().is_empty() {
+                        continue;
+                    }
+                    let doc = doc_desde_texto(texto, titulo.clone());
+                    if doc.chunks.is_empty() {
+                        continue;
+                    }
+                    store.persistir_documento(&doc, Some(fuente_id))?;
+                    for t in tags {
+                        store.taggear_doc(doc.id, t)?;
+                    }
+                    persistidos += 1;
+                    if persistidos.is_multiple_of(1000) {
+                        let secs = inicio.elapsed().as_secs_f64();
+                        let rate = persistidos as f64 / secs;
+                        println!("  {} persistidos · {:.0} art/s · {:.1}s",
+                            persistidos, rate, secs);
+                    }
+                    if let Some(m) = max {
+                        if persistidos >= m {
+                            break;
+                        }
+                    }
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                if name == "redirect" {
+                    es_redirect = true;
+                }
+            }
+            Ok(Event::Text(t)) => {
+                let txt = t.unescape().unwrap_or_default();
+                match path.last().map(|s| s.as_str()) {
+                    Some("title") => titulo.push_str(&txt),
+                    Some("ns") => ns.push_str(&txt),
+                    Some("text") if leyendo_text => wikitext.push_str(&txt),
+                    _ => {}
+                }
+            }
+            Ok(Event::CData(t)) => {
+                if leyendo_text {
+                    if let Ok(s) = std::str::from_utf8(t.as_ref()) {
+                        wikitext.push_str(s);
+                    }
+                }
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    let secs = inicio.elapsed().as_secs_f64();
+    println!();
+    println!("done. {} artículos persistidos en {:.1}s ({:.0} art/s)",
+        persistidos, secs, persistidos as f64 / secs.max(0.001));
+    println!("(procesados namespace=0 no-redirect: {})", procesados);
+    println!();
+    println!("siguiente paso: `iniy extract <doc>` por doc o un script bulk,");
+    println!("luego `iniy nli --prefiltro-embeddings --umbral-embeddings 0.7`.");
+    Ok(())
 }
 
 /// Limpieza heurística de wikitext → texto plano. MVP feo: cubre los
