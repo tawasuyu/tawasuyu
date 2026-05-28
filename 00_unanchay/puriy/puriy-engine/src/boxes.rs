@@ -94,6 +94,11 @@ pub struct BoxNode {
     /// chrome lo plug-ea vía `View::hover_fill`. Restyle completo en
     /// hover (cambios de color/border) queda fuera de scope por ahora.
     pub hover_background: Option<Color>,
+    /// Background a aplicar cuando el nodo está focado (input/textarea
+    /// actualmente focado por el usuario). Mismo modelo limitado que
+    /// `hover_background`: sólo el delta de bg, no se propaga a
+    /// ancestros (`:focus` aplica al sujeto del selector).
+    pub focus_background: Option<Color>,
     /// Box-shadow propagado a `paint_with` en el chrome.
     pub box_shadow: Option<BoxShadow>,
     /// Línea decorativa que el chrome dibuja sobre la hoja de texto
@@ -269,6 +274,7 @@ fn empty_root() -> BoxNode {
         border_color: None,
         border_radius: 0.0,
         hover_background: None,
+        focus_background: None,
         box_shadow: None,
         flex_direction: FlexDirection::Row,
         justify_content: JustifyContent::Start,
@@ -331,14 +337,22 @@ fn build_node(
             if style.display == Display::None {
                 return None;
             }
-            // Hover style: recomputamos con hover_active=true y vemos si
-            // alguna pseudo-clase `:hover` cambió el background. Si sí,
-            // exponemos el delta al chrome para que use hover_fill().
+            // Hover/focus styles: recomputamos con hover_active=true y
+            // focus_active=true por separado y vemos si alguna pseudoclase
+            // `:hover`/`:focus` cambió el background. Si sí, exponemos el
+            // delta al chrome para que lo aplique cuando corresponda.
             // Resto del diff (color/border/etc.) queda fuera por ahora —
-            // restyle completo en hover requeriría re-mount del tree.
+            // restyle completo requeriría re-mount del tree.
             let hover_style = styles.compute_with_parent_in_state(node, parent_style, true);
             let hover_background = if hover_style.background != style.background {
                 hover_style.background
+            } else {
+                None
+            };
+            let focus_style =
+                styles.compute_with_parent_for_state(node, parent_style, false, true);
+            let focus_background = if focus_style.background != style.background {
+                focus_style.background
             } else {
                 None
             };
@@ -446,6 +460,7 @@ fn build_node(
                 border_color: style.border_color,
                 border_radius: style.border_radius,
                 hover_background,
+                focus_background,
                 box_shadow: style.box_shadow,
                 flex_direction: style.flex_direction,
                 justify_content: style.justify_content,
@@ -548,6 +563,7 @@ fn build_node(
                 border_color: None,
                 border_radius: 0.0,
                 hover_background: None,
+        focus_background: None,
                 box_shadow: None,
                 flex_direction: FlexDirection::Row,
                 justify_content: JustifyContent::Start,
@@ -620,6 +636,7 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         border_color: None,
         border_radius: 0.0,
         hover_background: None,
+        focus_background: None,
         box_shadow: None,
         flex_direction: FlexDirection::Row,
         justify_content: JustifyContent::Start,
@@ -1352,6 +1369,43 @@ mod tests {
             }
         });
         assert!(clickable.is_empty(), "ningún href no-web debería ser clickable: {clickable:?}");
+    }
+
+    #[test]
+    fn focus_pseudo_aporta_a_focus_background() {
+        use crate::StyleEngine;
+        let html = r##"<html><head><style>
+            input { background: white }
+            input:focus { background: #ffeecc }
+        </style></head><body><input type="text"></body></html>"##;
+        let dom = crate::DomTree::parse(html);
+        let styles = StyleEngine::from_dom(&dom);
+        let input = dom.find("input").unwrap();
+        let base = styles.compute_with_parent_for_state(&input, None, false, false);
+        let focused = styles.compute_with_parent_for_state(&input, None, false, true);
+        // base es blanco (255,255,255), focused es #ffeecc (255,238,204).
+        assert_eq!(base.background.map(|c| (c.r, c.g, c.b)), Some((255, 255, 255)));
+        assert_eq!(focused.background.map(|c| (c.r, c.g, c.b)), Some((255, 238, 204)));
+    }
+
+    #[test]
+    fn box_tree_expone_focus_background() {
+        let html = r##"<html><head><style>
+            input:focus { background: #abcdef }
+        </style></head><body><input type="text"></body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut found = false;
+        doc.box_tree.walk(|b| {
+            if b.tag.as_deref() == Some("input") {
+                assert_eq!(
+                    b.focus_background.map(|c| (c.r, c.g, c.b)),
+                    Some((0xab, 0xcd, 0xef))
+                );
+                found = true;
+            }
+        });
+        assert!(found, "no se encontró <input> en el box tree");
     }
 
     #[test]

@@ -538,12 +538,26 @@ impl StyleEngine {
     /// Variante con hover. Si `hover_active=true`, los selectores con
     /// `:hover` también matchean. Permite computar el "estilo bajo el
     /// mouse" sin un mouse real — el chrome lo usa para precalcular
-    /// `hover_fill` en el render.
+    /// `hover_fill` en el render. Compat con la API anterior — para
+    /// `:focus` usar [`compute_with_parent_for_state`].
     pub fn compute_with_parent_in_state(
         &self,
         node: &Handle,
         parent: Option<&ComputedStyle>,
         hover_active: bool,
+    ) -> ComputedStyle {
+        self.compute_with_parent_for_state(node, parent, hover_active, false)
+    }
+
+    /// Variante con hover **y** focus. Cuando focus_active=true, los
+    /// selectores `:focus` matchean. Útil para precalcular `focus_*`
+    /// styles desde el chrome.
+    pub fn compute_with_parent_for_state(
+        &self,
+        node: &Handle,
+        parent: Option<&ComputedStyle>,
+        hover_active: bool,
+        focus_active: bool,
     ) -> ComputedStyle {
         let mut style = ComputedStyle::default();
         if let Some(p) = parent {
@@ -595,7 +609,7 @@ impl StyleEngine {
             .rules
             .iter()
             .enumerate()
-            .filter(|(_, r)| r.matches_in_state(node, hover_active))
+            .filter(|(_, r)| r.matches_in_state(node, hover_active, focus_active))
             .map(|(i, r)| (r.selector.specificity(), i, r))
             .collect();
         let inline_decls: Vec<Decl> = dom::attr(node, "style")
@@ -770,6 +784,11 @@ enum Pseudo {
     FirstOfType,
     LastOfType,
     Hover,
+    /// `:focus` — flag externo del caller. Sólo aporta a la cascada
+    /// cuando el chrome computa el estilo "como si el nodo estuviera
+    /// focado"; el engine no sabe qué nodo lo está y deja la decisión
+    /// al chrome.
+    Focus,
     /// `:nth-child(an+b)` — match si la posición 1-indexed del nodo en
     /// el padre satisface `pos = a*k + b` para algún `k >= 0`.
     NthChild {
@@ -783,15 +802,17 @@ enum Pseudo {
 
 impl Compound {
     fn matches(&self, node: &markup5ever_rcdom::Handle) -> bool {
-        self.matches_in_state(node, false)
+        self.matches_in_state(node, false, false)
     }
 
-    /// Variante con flag `hover_active` — sólo afecta el matching de
-    /// `:hover`. El resto del compound se evalúa idéntico.
+    /// Variante con flags de estado externos (`hover_active`,
+    /// `focus_active`) — los `:hover` y `:focus` matchean cuando el
+    /// caller los activa.
     fn matches_in_state(
         &self,
         node: &markup5ever_rcdom::Handle,
         hover_active: bool,
+        focus_active: bool,
     ) -> bool {
         let Some(local) = dom::element_name(node) else {
             return false;
@@ -821,7 +842,7 @@ impl Compound {
             }
         }
         for p in &self.pseudos {
-            if !pseudo_matches(node, p, hover_active) {
+            if !pseudo_matches(node, p, hover_active, focus_active) {
                 return false;
             }
         }
@@ -850,10 +871,12 @@ fn pseudo_matches(
     node: &markup5ever_rcdom::Handle,
     p: &Pseudo,
     hover_active: bool,
+    focus_active: bool,
 ) -> bool {
     match p {
         Pseudo::Hover => return hover_active,
-        Pseudo::Not(c) => return !c.matches_in_state(node, hover_active),
+        Pseudo::Focus => return focus_active,
+        Pseudo::Not(c) => return !c.matches_in_state(node, hover_active, focus_active),
         _ => {}
     }
     let Some(parent) = parent_of(node) else { return false };
@@ -868,7 +891,7 @@ fn pseudo_matches(
         return false;
     };
     match p {
-        Pseudo::Hover | Pseudo::Not(_) => unreachable!("ya resueltos arriba"),
+        Pseudo::Hover | Pseudo::Focus | Pseudo::Not(_) => unreachable!("ya resueltos arriba"),
         Pseudo::FirstChild => pos == 0,
         Pseudo::LastChild => pos + 1 == elems.len(),
         Pseudo::OnlyChild => elems.len() == 1,
@@ -902,16 +925,24 @@ fn pseudo_matches(
 impl Rule {
     #[allow(dead_code)]
     fn matches(&self, node: &markup5ever_rcdom::Handle) -> bool {
-        self.matches_in_state(node, false)
+        self.matches_in_state(node, false, false)
     }
 
-    fn matches_in_state(&self, node: &markup5ever_rcdom::Handle, hover_active: bool) -> bool {
+    fn matches_in_state(
+        &self,
+        node: &markup5ever_rcdom::Handle,
+        hover_active: bool,
+        focus_active: bool,
+    ) -> bool {
         let compounds = &self.selector.compounds;
         if compounds.is_empty() {
             return false;
         }
-        // El sujeto (último) debe matchear el nodo.
-        if !compounds.last().unwrap().matches_in_state(node, hover_active) {
+        // El sujeto (último) debe matchear el nodo. Los ancestros/hermanos
+        // siguen matcheando sin los flags activos (un `:hover/:focus`
+        // sólo aplica al sujeto del selector, no propagamos el estado
+        // por la cadena — es suficiente para 90% del CSS real).
+        if !compounds.last().unwrap().matches_in_state(node, hover_active, focus_active) {
             return false;
         }
         if compounds.len() == 1 {
@@ -1871,6 +1902,7 @@ fn parse_compound(sel: &str) -> Option<Compound> {
                     "first-of-type" => Pseudo::FirstOfType,
                     "last-of-type" => Pseudo::LastOfType,
                     "hover" => Pseudo::Hover,
+                    "focus" | "focus-visible" | "focus-within" => Pseudo::Focus,
                     _ => return None,
                 };
                 pseudos.push(p);

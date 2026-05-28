@@ -718,10 +718,18 @@ impl App for Puriy {
                 }
             }
             Msg::InputKey(e) => {
-                let t = m.active_mut();
-                if let Some(idx) = t.focused_input {
-                    if let Some(input) = t.inputs.get_mut(idx) {
-                        input.apply_key(&e);
+                // Enter en input: por ahora sólo deja un hint en la status
+                // bar ("submit no implementado todavía"). Submit real
+                // llegará cuando exista `<form action>` handling.
+                if matches!(&e.key, Key::Named(NamedKey::Enter)) {
+                    m.active_mut().status =
+                        "↵ submit todavía no está cableado (typing OK)".into();
+                } else {
+                    let t = m.active_mut();
+                    if let Some(idx) = t.focused_input {
+                        if let Some(input) = t.inputs.get_mut(idx) {
+                            input.apply_key(&e);
+                        }
                     }
                 }
             }
@@ -1906,7 +1914,26 @@ fn render_input(
     };
     let css_width = length_to_taffy(b.width, zoom);
 
-    View::new(Style {
+    // Background base: CSS background-color del nodo si lo seteó; sino
+    // blanco. Cuando está focado y el autor escribió `:focus { background:
+    // X }`, aplicamos X.
+    let base_bg = b
+        .background
+        .map(|c| Color::from_rgba8(c.r, c.g, c.b, c.a))
+        .unwrap_or(Color::WHITE);
+    let bg = if focused {
+        b.focus_background
+            .map(|c| Color::from_rgba8(c.r, c.g, c.b, c.a))
+            .unwrap_or(base_bg)
+    } else {
+        base_bg
+    };
+    let outline = b
+        .outline
+        .color
+        .filter(|_| focused && b.outline.style_active && b.outline.width > 0.0);
+
+    let mut wrapper = View::new(Style {
         size: Size {
             width: css_width.unwrap_or_else(|| length(220.0_f32 * zoom)),
             height: length(height),
@@ -1925,10 +1952,32 @@ fn render_input(
         },
         ..Default::default()
     })
-    .fill(Color::WHITE)
+    .fill(bg)
     .radius(3.0)
-    .on_click(Msg::FocusInput(idx))
-    .children(vec![input])
+    .on_click(Msg::FocusInput(idx));
+    // Ring de focus visible: si el autor no proveyó outline, lo damos
+    // gratis para feedback. Stroke azul accent estándar.
+    if focused && outline.is_none() {
+        wrapper = wrapper.paint_with(|scene, _ts, rect| {
+            let stroke = Stroke::new(2.0);
+            let half = stroke.width * 0.5;
+            let r = RoundedRect::new(
+                rect.x as f64 - half,
+                rect.y as f64 - half,
+                (rect.x + rect.w) as f64 + half,
+                (rect.y + rect.h) as f64 + half,
+                3.0 + half,
+            );
+            scene.stroke(
+                &stroke,
+                Affine::IDENTITY,
+                Color::from_rgba8(40, 110, 220, 255),
+                None,
+                &r,
+            );
+        });
+    }
+    wrapper.children(vec![input])
 }
 
 /// Aplica `border-radius` y dibuja, en una sola pasada de `paint_with`,
