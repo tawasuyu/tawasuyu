@@ -1,0 +1,32 @@
+# =============================================================================
+#  renaser :: apps/rimay — espejo bare-metal del verbo de embeddings
+# -----------------------------------------------------------------------------
+#  Refleja el subdominio host `00_unanchay/rimay/` (Provider determinista,
+#  cosine, ModelId) dentro de la jaula WASM de wawa. El TIPO y la LOGICA
+#  del backend mock (FNV-1a + LCG) son los mismos que en
+#  `rimay-verbo-mock`, sólo que aquí re-implementados en `#![no_std]`
+#  porque rimay-verbo-core arrastra async_trait, tokio y serde — ninguno
+#  cruza la frontera del kernel. El RENDERER es propio: framebuffer
+#  480x560 + mini-tipografía 5x7, sin texto fluido, sin LLM, sin red.
+# =============================================================================
+
+[package]
+name = "rimay"
+version = "0.1.0"
+edition = "2021"
+description = "renaser :: app WASM rimay — demo determinista de verbo (mock embedding + cosine) sobre framebuffer bare-metal"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = "symbols"

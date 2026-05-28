@@ -125,7 +125,7 @@ const FUEL_COMUN: u32 = 2_000_000;
 /// presupuesto comun. El primer caso real del modelo "fuel per-app".
 const FUEL_EDITOR: u32 = 6_000_000;
 
-/// El userspace de genesis — las doce aplicaciones que pueblan un disco
+/// El userspace de genesis — las catorce aplicaciones que pueblan un disco
 /// recien forjado. La `bitacora` (Fase 17, editor que persiste), el `pregon`
 /// (Fase 19, la primera voz hacia la red), la melodia visual `tonada` (Fase
 /// 12), el compas visual `pulso` (Fase 11), un saludo (`hola`), la
@@ -134,9 +134,12 @@ const FUEL_EDITOR: u32 = 6_000_000;
 /// `glotona` (memoria), `cronista` (la cronica de los arranques)—,
 /// `tonalero` (Fase 22, testigo del bucle de Configuracion), `mudanza`
 /// (Fase 25, el centro soberano de reancla del manifiesto: unica app con
-/// PERMISO_RAIZ + sys_manifiesto_proponer) y `asistente` (Fase 60, app
-/// conversacional que habla con LLMs externos via el puente Linux).
-const GENESIS: [AppGenesis; 13] = [
+/// PERMISO_RAIZ + sys_manifiesto_proponer), `asistente` (Fase 60, app
+/// conversacional que habla con LLMs externos via el puente Linux) y
+/// `rimay` (reflejo bare-metal del subdominio host de embeddings — demo
+/// determinista de verbo + coseno sin daemon, sin red, sin descarga de
+/// modelo).
+const GENESIS: [AppGenesis; 14] = [
     AppGenesis { nombre: "bitacora", archivo: "bitacora.wasm", region: (100, 120, 480, 280), fuel: FUEL_EDITOR, permisos: 0 },
     AppGenesis { nombre: "pregon", archivo: "pregon.wasm", region: (100, 120, 480, 160), fuel: FUEL_COMUN, permisos: format::PERMISO_RED },
     AppGenesis { nombre: "tonada", archivo: "tonada.wasm", region: (100, 120, 360, 120), fuel: FUEL_COMUN, permisos: format::PERMISO_ALTAVOZ },
@@ -171,6 +174,14 @@ const GENESIS: [AppGenesis; 13] = [
     // esta dibujada hoy; la region la coloca a la derecha del compositor
     // para no superponerse con mudanza, que esta abajo-izquierda.
     AppGenesis { nombre: "asistente", archivo: "asistente.wasm", region: (600, 220, 480, 240), fuel: FUEL_COMUN, permisos: format::PERMISO_RED | format::PERMISO_RAIZ },
+    // `rimay` — reflejo bare-metal del subdominio host de embeddings.
+    // Verbo determinista (FNV-1a + LCG, mismo algoritmo que
+    // `rimay-verbo-mock`) + coseno sobre framebuffer 480x560. Sin
+    // permisos especiales: no toca el grafo, no habla por red, no
+    // necesita raíz — sólo framebuffer y teclado, las dos capacidades
+    // que el kernel inyecta a toda app. La region se solapa con `hola`
+    // (su mismo tamaño) — el operador elige cuál mirar.
+    AppGenesis { nombre: "rimay", archivo: "rimay.wasm", region: (100, 120, 480, 560), fuel: FUEL_COMUN, permisos: 0 },
 ];
 
 /// Techo de memoria lineal de cada app de genesis: 4 MiB. Un modulo que intente
@@ -364,7 +375,15 @@ fn localizar_ovmf() -> Result<String, String> {
 ///
 ///   * `-bios`            firmware UEFI OVMF.
 ///   * `-drive raw`       la imagen de disco UEFI, sin capa de traduccion.
-///   * `-vga std`         VGA estandar => framebuffer lineal que el GOP expone.
+///   * `-vga none` +      FASE 60 :: `virtio-vga` es un virtio-gpu CON
+///     `virtio-vga`       compatibilidad VGA: el firmware OVMF le bindea su
+///                        driver de video estandar y expone el framebuffer GOP
+///                        que el arranque necesita —igual que `-vga std`—,
+///                        mientras que sobre PCI es un virtio-gpu de verdad que
+///                        el kernel reclama (`drivers::gpu`) para tomar posesion
+///                        del scanout. `-vga none` evita un segundo VGA en
+///                        conflicto. Si el kernel no logra montarlo, recae al
+///                        GOP que OVMF dejo sobre este mismo dispositivo.
 ///   * `-serial stdio`    telemetria serial del procesador hacia esta consola.
 ///   * `--no-reboot`      un fallo triple detiene la maquina en vez de reiniciar
 ///                        en bucle: asi la baliza de panico permanece visible.
@@ -379,7 +398,10 @@ fn lanzar_qemu(imagen: &Path, ovmf: &str) -> Result<(), String> {
         .arg("-m").arg("256M")
         .arg("-bios").arg(ovmf)
         .arg("-drive").arg(format!("format=raw,file={}", imagen.display()))
-        .arg("-vga").arg("std")
+        // FASE 60 :: virtio-gpu con compatibilidad VGA. OVMF expone su GOP para
+        // el arranque; el kernel reclama el mismo dispositivo y toma el scanout.
+        .arg("-vga").arg("none")
+        .arg("-device").arg("virtio-vga")
         .arg("-serial").arg("stdio")
         .arg("--no-reboot")
         // El disco de objetos, como dispositivo virtio-blk sobre el bus PCI.
