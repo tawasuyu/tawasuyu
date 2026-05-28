@@ -230,6 +230,9 @@ pub struct TextSpec {
     pub alignment: llimphi_text::Alignment,
     /// `true` = forzar variante italic en la fuente activa. Default false.
     pub italic: bool,
+    /// CSS-style font-family string (acepta lista con fallbacks). `None`
+    /// = la fuente default de parley.
+    pub font_family: Option<String>,
 }
 
 /// Fase de un drag activo. `Move` se emite por cada `CursorMoved` con el
@@ -468,6 +471,7 @@ impl<Msg> View<Msg> {
             color,
             alignment: llimphi_text::Alignment::Center,
             italic: false,
+            font_family: None,
         });
         self
     }
@@ -485,6 +489,7 @@ impl<Msg> View<Msg> {
             color,
             alignment,
             italic: false,
+            font_family: None,
         });
         self
     }
@@ -505,6 +510,30 @@ impl<Msg> View<Msg> {
             color,
             alignment,
             italic,
+            font_family: None,
+        });
+        self
+    }
+
+    /// Como `text_aligned_italic` pero con font-family explícito.
+    /// La cadena se pasa como `parley::FontStack::Source` (acepta listas
+    /// CSS con fallbacks).
+    pub fn text_aligned_full(
+        mut self,
+        content: impl Into<String>,
+        size_px: f32,
+        color: Color,
+        alignment: llimphi_text::Alignment,
+        italic: bool,
+        font_family: Option<String>,
+    ) -> Self {
+        self.text = Some(TextSpec {
+            content: content.into(),
+            size_px,
+            color,
+            alignment,
+            italic,
+            font_family,
         });
         self
     }
@@ -807,6 +836,7 @@ fn paint<Msg>(
                 alignment: text.alignment,
                 line_height: 1.2,
                 italic: text.italic,
+                font_family: text.font_family.clone(),
             };
             // Shaping una sola vez: el `Layout` retornado se reusa para
             // medir (cuando hay centrado vertical) y para pintar.

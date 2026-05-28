@@ -74,6 +74,9 @@ pub struct BoxNode {
     pub font_weight: u16,
     /// CSS `font-style`: normal vs italic/oblique. Heredable.
     pub font_style: crate::style::FontStyle,
+    /// CSS `font-family` como string CSS (acepta listas con fallbacks).
+    /// `None` = default del runtime. Heredable.
+    pub font_family: Option<String>,
     pub margin: Sides<f32>,
     pub padding: Sides<f32>,
     /// Ancho explícito CSS (`auto` por defecto).
@@ -746,6 +749,7 @@ fn empty_root() -> BoxNode {
         font_size: 16.0,
         font_weight: 400,
         font_style: crate::style::FontStyle::Normal,
+        font_family: None,
         margin: Sides::all(0.0),
         padding: Sides::all(0.0),
         width: LengthVal::Auto,
@@ -980,6 +984,7 @@ fn build_node(
                 font_size: style.font_size,
                 font_weight: style.font_weight,
                 font_style: style.font_style,
+                font_family: style.font_family.clone(),
                 margin: style.margin,
                 padding: style.padding,
                 width: style.width,
@@ -1096,6 +1101,7 @@ fn build_node(
                 font_size: p.font_size,
                 font_weight: p.font_weight,
                 font_style: p.font_style,
+                font_family: p.font_family.clone(),
                 margin: Sides::all(0.0),
                 padding: Sides::all(0.0),
                 width: LengthVal::Auto,
@@ -1175,6 +1181,7 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         font_size: style.font_size,
         font_weight: style.font_weight,
         font_style: style.font_style,
+        font_family: style.font_family.clone(),
         margin: Sides::all(0.0),
         padding: Sides::all(0.0),
         width: LengthVal::Auto,

@@ -51,6 +51,7 @@ impl Typesetter {
         alignment: Alignment,
         line_height: f32,
         italic: bool,
+        font_family: Option<&str>,
     ) -> parley::Layout<()> {
         let mut builder =
             self.layout_cx
@@ -60,6 +61,13 @@ impl Typesetter {
         if italic {
             builder.push_default(parley::StyleProperty::FontStyle(
                 parley::FontStyle::Italic,
+            ));
+        }
+        if let Some(ff) = font_family {
+            // parley::FontStack::Source acepta CSS-like syntax
+            // (`"Helvetica", sans-serif`).
+            builder.push_default(parley::StyleProperty::FontStack(
+                parley::FontStack::Source(std::borrow::Cow::Borrowed(ff)),
             ));
         }
         let mut layout = builder.build(text);
@@ -107,6 +115,8 @@ pub struct TextBlock<'a> {
     pub line_height: f32,
     /// `true` → fuerza variante italic/oblique en la fuente activa.
     pub italic: bool,
+    /// CSS-style `font-family` string. `None` = sans-serif default.
+    pub font_family: Option<String>,
 }
 
 impl<'a> TextBlock<'a> {
@@ -121,6 +131,7 @@ impl<'a> TextBlock<'a> {
             alignment: Alignment::Start,
             line_height: 1.0,
             italic: false,
+            font_family: None,
         }
     }
 }
@@ -145,6 +156,7 @@ pub fn layout_block(ts: &mut Typesetter, block: &TextBlock<'_>) -> parley::Layou
         block.alignment,
         block.line_height,
         block.italic,
+        block.font_family.as_deref(),
     )
 }
 

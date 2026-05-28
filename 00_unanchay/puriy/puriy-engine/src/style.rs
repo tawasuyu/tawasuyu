@@ -31,6 +31,9 @@ pub struct ComputedStyle {
     pub font_weight: u16,
     /// CSS `font-style`: normal vs italic/oblique. Heredable.
     pub font_style: FontStyle,
+    /// CSS `font-family` como string crudo (acepta lista con fallbacks).
+    /// `None` = sin override; usa la fuente default del runtime.
+    pub font_family: Option<String>,
     pub margin: Sides<f32>,
     pub padding: Sides<f32>,
     /// Ancho explícito. `Auto` = el default block-fills-parent.
@@ -444,6 +447,7 @@ impl Default for ComputedStyle {
             font_size: 16.0,
             font_weight: 400,
             font_style: FontStyle::Normal,
+            font_family: None,
             margin: Sides::all(0.0),
             padding: Sides::all(0.0),
             width: LengthVal::Auto,
@@ -577,6 +581,7 @@ impl StyleEngine {
             style.font_size = p.font_size;
             style.font_weight = p.font_weight;
             style.font_style = p.font_style;
+            style.font_family = p.font_family.clone();
             style.text_align = p.text_align;
             style.line_height = p.line_height;
             // text-decoration: tratada heredable para que descendientes
@@ -1064,6 +1069,7 @@ enum DeclKind {
     FontSize(f32),
     FontWeight(u16),
     FontStyle(FontStyle),
+    FontFamily(String),
     Margin(Sides<f32>),
     MarginTop(f32),
     MarginRight(f32),
@@ -1145,6 +1151,7 @@ impl Decl {
             DeclKind::FontSize(v) => s.font_size = *v,
             DeclKind::FontWeight(w) => s.font_weight = *w,
             DeclKind::FontStyle(fs) => s.font_style = *fs,
+            DeclKind::FontFamily(ff) => s.font_family = Some(ff.clone()),
             DeclKind::Margin(v) => s.margin = *v,
             DeclKind::MarginTop(v) => s.margin.top = *v,
             DeclKind::MarginRight(v) => s.margin.right = *v,
@@ -2078,6 +2085,7 @@ fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "font-size" => parse_length_px(value).map(DeclKind::FontSize),
         "font-weight" => parse_weight(value).map(DeclKind::FontWeight),
         "font-style" => parse_font_style(value).map(DeclKind::FontStyle),
+        "font-family" => Some(DeclKind::FontFamily(value.trim().to_string())),
         "margin" => parse_sides(value).map(DeclKind::Margin),
         "margin-top" => parse_length_px(value).map(DeclKind::MarginTop),
         "margin-right" => parse_length_px(value).map(DeclKind::MarginRight),
