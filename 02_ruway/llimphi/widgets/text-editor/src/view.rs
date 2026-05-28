@@ -113,12 +113,13 @@ pub struct EditorMetrics {
     /// Cómo se pinta el gutter. Default [`GutterStyle::Numbers`] — el
     /// comportamiento clásico se conserva para callers existentes.
     pub gutter_style: GutterStyle,
-    /// Si `true`, cada línea **vacía** del buffer recibe un segmento
-    /// horizontal con baja opacidad atravesando su centro — un divisor
-    /// fantasma que sugiere "acá termina un bloque" sin gritar. Pensado
-    /// para editores de prosa donde `\n\n` separa párrafos. Default
-    /// `false`: comportamiento IDE clásico, líneas vacías limpias.
-    pub phantom_blank_lines: bool,
+    /// Si `true`, cada línea **guarda** (índices en
+    /// `EditorState::guard_lines`) recibe un segmento horizontal con
+    /// baja opacidad atravesando su centro — un divisor fantasma que
+    /// sugiere "acá termina un bloque" sin gritar. Sin guardas, esto
+    /// no hace nada visible. Default `false`: comportamiento IDE
+    /// clásico.
+    pub phantom_guard_lines: bool,
 }
 
 impl Default for EditorMetrics {
@@ -135,16 +136,17 @@ impl EditorMetrics {
             char_width: font_size * 0.6,
             gutter_width: font_size * 3.5,
             gutter_style: GutterStyle::Numbers,
-            phantom_blank_lines: false,
+            phantom_guard_lines: false,
         }
     }
 
     /// Variante "prosa": gutter fantasma (ticks sutiles, sin números) +
-    /// divisores fantasma en cada línea vacía. Ancho del gutter
-    /// reducido a un sliver porque ya no necesita acomodar dígitos.
+    /// divisores fantasma en cada guarda. Ancho del gutter reducido a
+    /// un sliver porque ya no necesita acomodar dígitos.
     ///
     /// Pensado para editores narrativos tipo `cuerpo_ide` donde el
-    /// número de línea es ruido y `\n\n` separa párrafos.
+    /// número de línea es ruido y las junctions están marcadas como
+    /// guardas.
     pub const fn prosa(font_size: f32) -> Self {
         Self {
             font_size,
@@ -152,7 +154,7 @@ impl EditorMetrics {
             char_width: font_size * 0.6,
             gutter_width: font_size * 1.0,
             gutter_style: GutterStyle::Phantom,
-            phantom_blank_lines: true,
+            phantom_guard_lines: true,
         }
     }
 
@@ -299,15 +301,14 @@ fn build_gutter<Msg: Clone + 'static>(
 ) -> View<Msg> {
     let count = end_line.saturating_sub(scroll);
     let mut children: Vec<View<Msg>> = Vec::with_capacity(count);
-    let guards_on = state.options.guard_blank_lines;
     for n in scroll..end_line {
-        // En modo "guarda" las líneas vacías son separadores entre
-        // zonas de texto: ni se numeran ni se pueden escribir. El
-        // espacio se preserva (la línea sigue existiendo), pero el
-        // gutter las saltea — visualmente la numeración "rompe" en
-        // cada zona.
-        let is_guard = guards_on && state.is_blank_line(n);
-        if is_guard {
+        // Las líneas-guarda son separadores estructurales entre zonas
+        // de texto: ni se numeran ni se pueden escribir. El espacio
+        // se preserva (la línea sigue existiendo), pero el gutter las
+        // saltea — visualmente la numeración "rompe" en cada zona.
+        // Si `guard_lines` está vacío, este check es siempre `false`
+        // y la numeración cubre todas las líneas (modo IDE clásico).
+        if state.is_guard_line(n) {
             continue;
         }
         let color = if n == active_line {
@@ -438,15 +439,15 @@ fn build_content<Msg: Clone + 'static>(
     }
 
     // 3) Texto — sólo las líneas en viewport.
-    //    Si `phantom_blank_lines` está activo, las líneas vacías reciben
-    //    un divisor fantasma (segmento horizontal con baja opacidad)
+    //    Si `phantom_guard_lines` está activo, cada guarda recibe un
+    //    divisor fantasma (segmento horizontal con baja opacidad)
     //    atravesando su centro — sin texto, sólo un susurro visual.
     for n in scroll..end_line {
         let text = state.buffer.line(n);
         let text = text.trim_end_matches('\n').to_owned();
         let local_line = n - scroll;
-        if metrics.phantom_blank_lines && text.is_empty() {
-            children.push(phantom_blank_divider(local_line, metrics, palette));
+        if metrics.phantom_guard_lines && state.is_guard_line(n) {
+            children.push(phantom_guard_divider(local_line, metrics, palette));
             continue;
         }
         if let Some(line_spans) = spans_per_line.get(n) {
@@ -514,11 +515,11 @@ fn line_highlight<Msg: Clone + 'static>(
     .fill(palette.bg_current_line)
 }
 
-/// Línea-fantasma para una línea vacía: un segmento horizontal con
-/// baja opacidad atravesando el centro vertical de la línea. Ancho
+/// Línea-fantasma para una guarda: un segmento horizontal con baja
+/// opacidad atravesando el centro vertical de la línea. Ancho
 /// limitado para que parezca un susurro y no una regla. Color derivado
 /// de `fg_line_number` que ya está pensado como "muted".
-fn phantom_blank_divider<Msg: Clone + 'static>(
+fn phantom_guard_divider<Msg: Clone + 'static>(
     line: usize,
     metrics: EditorMetrics,
     palette: &EditorPalette,

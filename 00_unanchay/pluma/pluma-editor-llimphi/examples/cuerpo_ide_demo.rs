@@ -58,6 +58,11 @@ enum Msg {
     Guardar,
     /// `Ctrl+]` — saltar al átomo siguiente del cuerpo activo.
     SaltarAtomoSiguiente,
+    /// `Ctrl+J` — togglea la junction inmediatamente anterior al
+    /// átomo bajo el caret: si era separador (línea-guarda), pasa a
+    /// fundida (línea editable, parte de la misma zona); si era
+    /// fundida, vuelve a separador.
+    ToglearFusion,
 }
 
 struct Model {
@@ -167,6 +172,13 @@ impl App for Demo {
                 }
                 model
             }
+            Msg::ToglearFusion => {
+                let mut model = model;
+                if let Some(idx) = model.ide.junction_antes_del_caret() {
+                    model.ide.togglear_junction(idx);
+                }
+                model
+            }
         }
     }
 
@@ -183,6 +195,9 @@ impl App for Demo {
                 if s == "]" {
                     return Some(Msg::SaltarAtomoSiguiente);
                 }
+                if s.eq_ignore_ascii_case("j") {
+                    return Some(Msg::ToglearFusion);
+                }
             }
         }
         Some(Msg::EditorKey(event.clone()))
@@ -194,13 +209,17 @@ impl App for Demo {
         let fg_text = palette_editor.fg_text;
         let fg_muted = palette_editor.fg_line_number;
 
+        let fundidas = model.ide.fundido_junctions.iter().filter(|f| **f).count();
+        let total_junctions = model.ide.fundido_junctions.len();
         let header_text = format!(
-            "cuerpo «{}»  ·  {} átomos memorizados  ·  {} párrafos en buffer  ·  {}  ·  Ctrl+S guarda · Ctrl+] siguiente átomo",
+            "cuerpo «{}»  ·  {} átomos  ·  {} párrafos  ·  {}/{} junctions fundidas  ·  {}  ·  Ctrl+S guarda · Ctrl+] siguiente · Ctrl+J fundir/separar",
             model.cuerpo.metadatos.nombre_legible,
             model.cuerpo.orden.len(),
             model.ide.n_parrafos_buffer(),
+            fundidas,
+            total_junctions,
             if model.ide.pendiente_sync() {
-                "● cambios sin guardar"
+                "● sin guardar"
             } else {
                 "○ sincronizado"
             },

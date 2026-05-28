@@ -77,6 +77,19 @@ pub struct CuerpoIde {
     /// se olvida de bajarse" cuando el caller mete cambios por fuera de
     /// `apply_key`.
     seq_sincronizado: u64,
+    /// `state.edit_seq` cuando se computaron las guardas por última
+    /// vez. Si difiere de `state.edit_seq`, la lista está stale y
+    /// [`Self::recomputar_guard_lines_si_stale`] la reconstruye.
+    seq_guardas: u64,
+    /// Flag por **junction** entre átomos consecutivos. Longitud =
+    /// `max(0, atom_ids.len() - 1)`. Índice *i* representa la
+    /// separación entre `atom_ids[i]` y `atom_ids[i+1]`. `false` =
+    /// separador (la línea vacía es guarda); `true` = fundida (la
+    /// línea vacía pertenece a la zona, es contenido editable).
+    ///
+    /// Por convención TODA junction arranca como separador (`false`).
+    /// La fusión es deliberada — un atajo del caller la togglea.
+    pub fundido_junctions: Vec<bool>,
 }
 
 impl CuerpoIde {
@@ -84,7 +97,7 @@ impl CuerpoIde {
     /// el cuerpo después con [`Self::recargar`] (p.ej. UI con `Option<…>`
     /// que arranca sin documento abierto).
     pub fn nuevo_vacio() -> Self {
-        let state = EditorState::with_options(Self::opciones_prosa(EditorOptions::default()));
+        let state = EditorState::new();
         let seq = state.edit_seq;
         Self {
             editor_cuerpo: EditorCuerpo {
@@ -93,6 +106,8 @@ impl CuerpoIde {
             },
             state,
             seq_sincronizado: seq,
+            seq_guardas: seq,
+            fundido_junctions: Vec::new(),
         }
     }
 
@@ -104,44 +119,45 @@ impl CuerpoIde {
     }
 
     /// Como [`Self::from_cuerpo`] pero permite pasar opciones del editor
-    /// (tab → spaces, indent size, page size, single-line). Las opciones
-    /// específicas de prosa (`guard_blank_lines`) se fuerzan tras
-    /// aplicar las del caller: el IDE narrativo siempre trata las
-    /// líneas vacías como guardas, no es opcional.
+    /// (tab → spaces, indent size, page size, single-line).
+    ///
+    /// Tras cargar el texto, todas las junctions arrancan como
+    /// separador (`fundido_junctions[i] = false`) y las guardas se
+    /// computan en consecuencia.
     pub fn con_opciones(
         cuerpo: &Cuerpo,
         atoms: &HashMap<Uuid, &NarrativeAtom>,
         options: EditorOptions,
     ) -> Self {
         let editor_cuerpo = EditorCuerpo::from_cuerpo(cuerpo, atoms);
-        let mut state = EditorState::with_options(Self::opciones_prosa(options));
+        let n_junctions = editor_cuerpo.atom_ids.len().saturating_sub(1);
+        let mut state = EditorState::with_options(options);
         state.set_text(&editor_cuerpo.texto);
         let seq = state.edit_seq;
-        Self {
+        let mut ide = Self {
             editor_cuerpo,
             state,
             seq_sincronizado: seq,
-        }
-    }
-
-    /// Fuerza el flag `guard_blank_lines = true` sobre las opciones
-    /// recibidas. El IDE narrativo NO es un IDE clásico: las líneas
-    /// vacías que aparecen porque los átomos se concatenan con `\n\n`
-    /// no son contenido editable, son separadores. El caller no debería
-    /// poder apagar esto — si lo quiere apagado, use directamente el
-    /// `text-editor` sin pasar por `CuerpoIde`.
-    fn opciones_prosa(mut opts: EditorOptions) -> EditorOptions {
-        opts.guard_blank_lines = true;
-        opts
+            seq_guardas: seq.wrapping_sub(1), // forzar recompute
+            fundido_junctions: vec![false; n_junctions],
+        };
+        ide.recomputar_guard_lines();
+        ide.state.snap_off_guards(-1);
+        ide
     }
 
     /// Resetea el IDE a un nuevo cuerpo (útil cuando el caller cambia de
     /// pestaña / cuerpo activo). Limpia el undo del widget — semántica
     /// del `EditorState::set_text`. Conserva las opciones del editor.
+    /// Todas las junctions vuelven a `false` (separador).
     pub fn recargar(&mut self, cuerpo: &Cuerpo, atoms: &HashMap<Uuid, &NarrativeAtom>) {
         self.editor_cuerpo = EditorCuerpo::from_cuerpo(cuerpo, atoms);
         self.state.set_text(&self.editor_cuerpo.texto);
         self.seq_sincronizado = self.state.edit_seq;
+        let n_junctions = self.editor_cuerpo.atom_ids.len().saturating_sub(1);
+        self.fundido_junctions = vec![false; n_junctions];
+        self.recomputar_guard_lines();
+        self.state.snap_off_guards(-1);
     }
 
     /// `true` si el buffer del widget difiere del `editor_cuerpo.texto`
@@ -156,9 +172,14 @@ impl CuerpoIde {
     }
 
     /// Reenvía el evento a [`EditorState::apply_key`]. El tracking de
-    /// `pendiente_sync` se mantiene automáticamente vía `edit_seq`.
+    /// `pendiente_sync` se mantiene automáticamente vía `edit_seq`. Si
+    /// el buffer cambió, las guardas se recomputan tras el evento (y
+    /// el caret vuelve a snapearse — el primer snap se hizo con la
+    /// lista vieja).
     pub fn apply_key(&mut self, event: &llimphi_ui::KeyEvent) -> ApplyResult {
-        self.state.apply_key(event)
+        let r = self.state.apply_key(event);
+        self.refrescar_guardas_si_cambio(r);
+        r
     }
 
     /// Como [`Self::apply_key`] con backend de clipboard — habilita
@@ -168,7 +189,20 @@ impl CuerpoIde {
         event: &llimphi_ui::KeyEvent,
         clipboard: &mut dyn Clipboard,
     ) -> ApplyResult {
-        self.state.apply_key_with_clipboard(event, clipboard)
+        let r = self.state.apply_key_with_clipboard(event, clipboard);
+        self.refrescar_guardas_si_cambio(r);
+        r
+    }
+
+    /// Si la edición cambió el buffer, recomputa la lista de guardas y
+    /// re-snappea el caret (el primer snap dentro del widget usó la
+    /// lista anterior). Si sólo movió el cursor, no hace nada — las
+    /// guardas no cambiaron.
+    fn refrescar_guardas_si_cambio(&mut self, r: ApplyResult) {
+        if r.changed() {
+            self.recomputar_guard_lines();
+            self.state.snap_off_guards(1);
+        }
     }
 
     /// Vuelca el texto del buffer en `editor_cuerpo.texto` (si hubo
@@ -191,9 +225,141 @@ impl CuerpoIde {
     /// Tras persistir los cambios en el grafo (creando `NarrativeAtom`s
     /// nuevos para los `Crear` y removiendo los `Eliminar`), pasá acá
     /// los Uuids generados para los `Crear`, **en orden**, y el
-    /// `atom_ids` del editor queda alineado con el cuerpo nuevo.
+    /// `atom_ids` del editor queda alineado con el cuerpo nuevo. La
+    /// lista de `fundido_junctions` se ajusta en consecuencia
+    /// (junctions nuevas arrancan como separador `false`; junctions
+    /// eliminadas se descartan preservando el flag de las que sobreviven).
     pub fn aplicar_cambios(&mut self, cambios: &[CambioAtom], nuevos_ids: &[Uuid]) {
+        let n_antes = self.editor_cuerpo.atom_ids.len();
         self.editor_cuerpo.aplicar_cambios(cambios, nuevos_ids);
+        let n_despues = self.editor_cuerpo.atom_ids.len();
+        let target = n_despues.saturating_sub(1);
+        // Preservamos el flag de las junctions que sobreviven (las
+        // primeras `min(target, len_actual)`) y extendemos con `false`
+        // (separador) para junctions nuevas. Si hay borrados al
+        // final, simplemente truncamos.
+        self.fundido_junctions.resize(target, false);
+        // Reset de seq_guardas para forzar recompute en el próximo render.
+        self.seq_guardas = self.state.edit_seq.wrapping_sub(1);
+        let _ = n_antes;
+        self.recomputar_guard_lines();
+    }
+
+    /// Togglea la junction *idx* (entre `atom_ids[idx]` y
+    /// `atom_ids[idx+1]`) — si era separador, pasa a fundida; si era
+    /// fundida, pasa a separador. Tras el toggle, las guardas y el
+    /// caret se refrescan. `idx` fuera de rango → no-op silencioso.
+    pub fn togglear_junction(&mut self, idx: usize) {
+        if idx >= self.fundido_junctions.len() {
+            return;
+        }
+        self.fundido_junctions[idx] = !self.fundido_junctions[idx];
+        self.seq_guardas = self.state.edit_seq.wrapping_sub(1);
+        self.recomputar_guard_lines();
+        // El caret puede haber quedado sobre una nueva guarda o
+        // liberado de una vieja — re-snap por las dudas.
+        self.state.snap_off_guards(0);
+    }
+
+    /// Marca la junction *idx* como fundida (no es guarda). No-op si
+    /// ya estaba fundida o si `idx` está fuera de rango.
+    pub fn fundir_junction(&mut self, idx: usize) {
+        if idx < self.fundido_junctions.len() && !self.fundido_junctions[idx] {
+            self.togglear_junction(idx);
+        }
+    }
+
+    /// Marca la junction *idx* como separador (es guarda). No-op si
+    /// ya era separador o si `idx` está fuera de rango.
+    pub fn separar_junction(&mut self, idx: usize) {
+        if idx < self.fundido_junctions.len() && self.fundido_junctions[idx] {
+            self.togglear_junction(idx);
+        }
+    }
+
+    /// Recomputa `state.guard_lines` desde cero:
+    /// 1. Enumera los índices de línea vacía del buffer (cada una es
+    ///    candidata a guarda — aparece por un `\n\n` o trailing).
+    /// 2. Las matchea por ordinal con `fundido_junctions`: la *i*-ésima
+    ///    línea vacía corresponde a la *i*-ésima junction. Junctions
+    ///    extra (más blanks que junctions registradas) se tratan como
+    ///    separador (guarda) — eso pasa típicamente cuando el usuario
+    ///    acaba de tipear `\n\n` y aún no llamó a `diff` para
+    ///    materializar el atom nuevo.
+    /// 3. Junctions `false` (separador) van a `guard_lines`; junctions
+    ///    `true` (fundida) NO se agregan — la línea vacía pertenece a
+    ///    la zona, es contenido editable.
+    pub fn recomputar_guard_lines(&mut self) {
+        let texto = self.state.text();
+        let mut guards: Vec<usize> = Vec::new();
+        let mut junction_idx = 0usize;
+        for (linea, contenido) in texto.lines().enumerate() {
+            if !contenido.is_empty() {
+                continue;
+            }
+            // Esta línea es candidata. Es guarda salvo que el flag
+            // explícito diga "fundida".
+            let fundida = self
+                .fundido_junctions
+                .get(junction_idx)
+                .copied()
+                .unwrap_or(false);
+            if !fundida {
+                guards.push(linea);
+            }
+            junction_idx += 1;
+        }
+        // Edge case: si el texto termina con `\n`, `lines()` no emite
+        // la línea trailing vacía — pero el rope sí la cuenta. Agregar
+        // como guarda si correspondiera. Lo dejamos sin guarda
+        // (comportamiento clásico) — el caret terminará ahí sólo si
+        // el caller lo posiciona explícitamente.
+        self.state.set_guard_lines(guards);
+        self.seq_guardas = self.state.edit_seq;
+    }
+
+    /// Devuelve la línea de la junction *idx* en el buffer actual,
+    /// para permitir scroll/highlight dirigidos. `None` si el índice
+    /// no corresponde a ninguna junction visible.
+    pub fn linea_de_junction(&self, idx: usize) -> Option<usize> {
+        let texto = self.state.text();
+        let mut count = 0usize;
+        for (linea, contenido) in texto.lines().enumerate() {
+            if !contenido.is_empty() {
+                continue;
+            }
+            if count == idx {
+                return Some(linea);
+            }
+            count += 1;
+        }
+        None
+    }
+
+    /// Devuelve el índice de la junction que **precede** al atom en la
+    /// línea actual del caret. Útil para "fundir el párrafo del caret
+    /// con el anterior". Devuelve `None` si el caret está en el primer
+    /// atom (no tiene junction anterior) o no se puede mapear.
+    pub fn junction_antes_del_caret(&self) -> Option<usize> {
+        let (linea, _) = self.caret();
+        let texto = self.state.text();
+        // Cuántas líneas vacías hay ANTES de `linea` — esa es la
+        // cantidad de junctions que precede al atom actual; el índice
+        // de la junction inmediatamente anterior es ese count - 1.
+        let mut count = 0usize;
+        for (i, contenido) in texto.lines().enumerate() {
+            if i >= linea {
+                break;
+            }
+            if contenido.is_empty() {
+                count += 1;
+            }
+        }
+        if count == 0 {
+            None
+        } else {
+            Some(count - 1)
+        }
     }
 
     /// Atajo retrocompatible — alias histórico de [`Self::aplicar_cambios`].
@@ -336,13 +502,13 @@ pub fn cuerpo_ide_view<Msg: Clone + 'static>(
     on_pointer: impl Fn(PointerEvent) -> Option<Msg> + Send + Sync + Clone + 'static,
 ) -> View<Msg> {
     // El IDE narrativo siempre quiere ver pista visual en las líneas
-    // separadoras: encendemos `phantom_blank_lines` si el caller no lo
-    // pidió. El estilo de gutter (Numbers/Phantom) y el ancho los
-    // decide el caller — el omitido del número en las líneas guarda
-    // ocurre automáticamente porque `state.options.guard_blank_lines`
-    // está activo (lo forza `CuerpoIde::opciones_prosa`).
+    // separadoras: encendemos `phantom_guard_lines` para que cada
+    // guarda reciba el divisor fantasma. El estilo de gutter
+    // (Numbers/Phantom) y el ancho los decide el caller — el omitido
+    // del número en las líneas guarda ocurre automáticamente porque
+    // `state.guard_lines` lo lleva (lo pobló `recomputar_guard_lines`).
     let mut metrics = metrics;
-    metrics.phantom_blank_lines = true;
+    metrics.phantom_guard_lines = true;
     text_editor_view_highlighted(
         &ide.state,
         palette,
@@ -358,16 +524,20 @@ pub fn cuerpo_ide_view<Msg: Clone + 'static>(
 /// orden. Útil cuando el caller quiere instrumentar un estado intermedio.
 pub fn cuerpo_ide_desde_texto(texto: impl Into<String>, atom_ids: Vec<Uuid>) -> CuerpoIde {
     let texto = texto.into();
-    let mut opts = EditorOptions::default();
-    opts.guard_blank_lines = true;
-    let mut state = EditorState::with_options(opts);
+    let n_junctions = atom_ids.len().saturating_sub(1);
+    let mut state = EditorState::new();
     state.set_text(&texto);
     let seq = state.edit_seq;
-    CuerpoIde {
+    let mut ide = CuerpoIde {
         editor_cuerpo: EditorCuerpo { texto, atom_ids },
         state,
         seq_sincronizado: seq,
-    }
+        seq_guardas: seq.wrapping_sub(1),
+        fundido_junctions: vec![false; n_junctions],
+    };
+    ide.recomputar_guard_lines();
+    ide.state.snap_off_guards(-1);
+    ide
 }
 
 #[cfg(test)]
@@ -574,10 +744,126 @@ mod pruebas {
         let (c, atoms) = cuerpo_con_atoms(&["abc", "def"]);
         let idx = indice(&atoms);
         let mut ide = CuerpoIde::from_cuerpo(&c, &idx);
+        // set_caret usa la API segura — con guardas, el caret no
+        // puede caer en (0, 2) sólo si esa línea es guarda; "abc" no
+        // lo es, así que el assert pasa.
         ide.set_caret(0, 2);
         assert_eq!(ide.caret(), (0, 2));
         // Set caret no marca pendiente_sync — sólo cambios del buffer
         // bumpean edit_seq.
         assert!(!ide.pendiente_sync());
+    }
+
+    #[test]
+    fn from_cuerpo_arranca_con_todas_las_junctions_como_separador() {
+        let (c, atoms) = cuerpo_con_atoms(&["A", "B", "C"]);
+        let idx = indice(&atoms);
+        let ide = CuerpoIde::from_cuerpo(&c, &idx);
+        // 3 átomos → 2 junctions, ambas separador.
+        assert_eq!(ide.fundido_junctions, vec![false, false]);
+        // Y las dos líneas vacías (1 y 3) deberían ser guardas.
+        assert_eq!(ide.state.guard_lines, vec![1, 3]);
+    }
+
+    #[test]
+    fn fundir_junction_quita_la_guarda_de_esa_linea() {
+        let (c, atoms) = cuerpo_con_atoms(&["A", "B", "C"]);
+        let idx = indice(&atoms);
+        let mut ide = CuerpoIde::from_cuerpo(&c, &idx);
+        // Líneas: 0="A", 1="", 2="B", 3="", 4="C".
+        // Fusionar la junction 0 (entre A y B): la línea 1 deja de ser guarda.
+        ide.fundir_junction(0);
+        assert_eq!(ide.fundido_junctions, vec![true, false]);
+        assert_eq!(ide.state.guard_lines, vec![3]);
+    }
+
+    #[test]
+    fn separar_junction_revierte_la_fusion() {
+        let (c, atoms) = cuerpo_con_atoms(&["A", "B"]);
+        let idx = indice(&atoms);
+        let mut ide = CuerpoIde::from_cuerpo(&c, &idx);
+        ide.fundir_junction(0);
+        assert!(ide.state.guard_lines.is_empty());
+        ide.separar_junction(0);
+        assert_eq!(ide.state.guard_lines, vec![1]);
+    }
+
+    #[test]
+    fn togglear_junction_es_idempotente_doble_aplica() {
+        let (c, atoms) = cuerpo_con_atoms(&["A", "B"]);
+        let idx = indice(&atoms);
+        let mut ide = CuerpoIde::from_cuerpo(&c, &idx);
+        ide.togglear_junction(0);
+        ide.togglear_junction(0);
+        assert_eq!(ide.fundido_junctions, vec![false]);
+        assert_eq!(ide.state.guard_lines, vec![1]);
+    }
+
+    #[test]
+    fn togglear_junction_fuera_de_rango_es_noop() {
+        let (c, atoms) = cuerpo_con_atoms(&["A", "B"]);
+        let idx = indice(&atoms);
+        let mut ide = CuerpoIde::from_cuerpo(&c, &idx);
+        ide.togglear_junction(99);
+        // Sin cambios: 1 junction separador, 1 guarda.
+        assert_eq!(ide.fundido_junctions, vec![false]);
+        assert_eq!(ide.state.guard_lines, vec![1]);
+    }
+
+    #[test]
+    fn caret_atraviesa_separador_pero_se_queda_en_linea_fundida() {
+        let (c, atoms) = cuerpo_con_atoms(&["A", "B", "C"]);
+        let idx = indice(&atoms);
+        let mut ide = CuerpoIde::from_cuerpo(&c, &idx);
+        // Fundir junction 0 → línea 1 deja de ser guarda.
+        ide.fundir_junction(0);
+        // Click en línea 1: el caret puede quedarse ahí porque es contenido.
+        ide.set_caret(1, 0);
+        assert_eq!(ide.caret(), (1, 0));
+        // Click en línea 3 (sigue siendo guarda): salta.
+        ide.set_caret(3, 0);
+        assert!(ide.caret().0 != 3);
+    }
+
+    #[test]
+    fn junction_antes_del_caret_apunta_a_la_correcta() {
+        let (c, atoms) = cuerpo_con_atoms(&["A", "B", "C"]);
+        let idx = indice(&atoms);
+        let mut ide = CuerpoIde::from_cuerpo(&c, &idx);
+        // En "A" (línea 0): no hay junction previa.
+        ide.set_caret(0, 0);
+        assert_eq!(ide.junction_antes_del_caret(), None);
+        // En "B" (línea 2): la junction previa es la 0.
+        ide.set_caret(2, 0);
+        assert_eq!(ide.junction_antes_del_caret(), Some(0));
+        // En "C" (línea 4): la junction previa es la 1.
+        ide.set_caret(4, 0);
+        assert_eq!(ide.junction_antes_del_caret(), Some(1));
+    }
+
+    #[test]
+    fn linea_de_junction_devuelve_la_linea_vacia_correcta() {
+        let (c, atoms) = cuerpo_con_atoms(&["A", "B", "C"]);
+        let idx = indice(&atoms);
+        let ide = CuerpoIde::from_cuerpo(&c, &idx);
+        assert_eq!(ide.linea_de_junction(0), Some(1));
+        assert_eq!(ide.linea_de_junction(1), Some(3));
+        assert_eq!(ide.linea_de_junction(2), None);
+    }
+
+    #[test]
+    fn recargar_resetea_junctions_a_separador() {
+        let (c1, atoms1) = cuerpo_con_atoms(&["A", "B"]);
+        let idx1 = indice(&atoms1);
+        let mut ide = CuerpoIde::from_cuerpo(&c1, &idx1);
+        ide.fundir_junction(0);
+        assert_eq!(ide.fundido_junctions, vec![true]);
+
+        let (c2, atoms2) = cuerpo_con_atoms(&["X", "Y", "Z"]);
+        let idx2 = indice(&atoms2);
+        ide.recargar(&c2, &idx2);
+        // El cuerpo nuevo arranca todo como separador.
+        assert_eq!(ide.fundido_junctions, vec![false, false]);
+        assert_eq!(ide.state.guard_lines, vec![1, 3]);
     }
 }
