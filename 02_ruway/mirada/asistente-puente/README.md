@@ -6,11 +6,19 @@ una propuesta interpretada lista para presentar al humano.
 
 ## Estado: scaffolding (sin Akasha real todavía)
 
-El binario hoy lee/escribe `MensajeAsistente` por **stdin/stdout en
-postcard binario** con un prefijo de longitud `u32 LE`. Eso permite
-probar el contrato end-to-end con tests o con `printf` + `xxd`. El
-socket raw Akasha (multiplexación, broadcast, dedup) viene en una vuelta
-posterior; el contrato del payload ya queda estable porque vive en
+El binario hoy ofrece dos modos de transporte, según los flags:
+
+- **stdio** (default, sin args): un único turno
+  `Consulta → Propuesta/Error` sobre stdin/stdout. Útil para tests o
+  ejercicios con `printf` + `xxd`.
+- **daemon Unix socket** (`--socket <path>`): listen + accept en serie,
+  cada cliente puede mandar N turnos hasta EOF. Útil para que el
+  asistente Linux lo consulte sin lanzar un proceso por pregunta.
+
+El payload en ambos modos es `MensajeAsistente` en postcard binario con
+un prefijo de longitud `u32 LE`. El socket raw Akasha (multiplexación
+real entre nodos wawa, broadcast, dedup) viene en una vuelta posterior;
+el contrato del payload ya queda estable porque vive en
 `shared/format::MensajeAsistente`.
 
 ## Lo que ya funciona
@@ -39,12 +47,11 @@ posterior; el contrato del payload ya queda estable porque vive en
 
 ## Probarlo localmente
 
-Sin credenciales, con el Mock (que responde con frases canned):
+Modo stdio, sin credenciales (cae al Mock):
 
 ```bash
-# Construir una Consulta de prueba (necesitas un helper, no hay uno
-# todavía — se haría en Rust o con un script que escriba postcard).
-cargo run -p asistente-puente
+# Necesitás un helper que escriba postcard. Para test rápido:
+cargo run -p asistente-puente -- --help
 ```
 
 Con credenciales reales, cualquiera de las que `pluma-llm` autodetecta:
@@ -52,6 +59,16 @@ Con credenciales reales, cualquiera de las que `pluma-llm` autodetecta:
 ```bash
 ANTHROPIC_API_KEY=sk-... cargo run -p asistente-puente < consulta.bin
 ```
+
+Modo daemon en un Unix socket:
+
+```bash
+cargo run -p asistente-puente -- --socket /tmp/asistente.sock
+```
+
+Cualquier cliente que abra ese socket y emita frames postcard puede
+consultarlo. Util para iterar con el asistente Linux mientras el bind
+Akasha no esté listo.
 
 ## Diseño completo
 

@@ -1,35 +1,35 @@
-//! `asistente-puente` — binario scaffolding (stdio-based, sin Akasha real).
+//! `asistente-puente` — binario scaffolding del puente Linux entre el
+//! `asistente.wasm` (kernel wawa, vía Akasha) y los LLMs externos
+//! (vía `pluma-llm`).
 //!
-//! Lee un `MensajeAsistente::Consulta` codificado en postcard binario por
-//! stdin (precedido por un `u32 LE` con la longitud del frame), llama al
-//! LLM via `pluma-llm`, traduce la respuesta a una `AccionPropuesta`, y
-//! emite un `MensajeAsistente::Propuesta` (o `Error`) por stdout en el
-//! mismo formato.
+//! Dos modos de transporte, según el flag de línea de comandos:
 //!
-//! El loop es uno-a-uno: una consulta entra, una respuesta sale. Eso es
-//! suficiente para probar el contrato end-to-end con un test runner o un
-//! humano que use `printf` y `xxd`. El socket raw Akasha (que tiene
-//! multiplexación, broadcast, dedup) viene en una vuelta posterior; el
-//! contrato del payload (postcard sobre `MensajeAsistente`) ya queda
-//! estable.
+//! - **stdio** (default, sin args): un único turno
+//!   `Consulta → Propuesta/Error` sobre stdin/stdout. Útil para tests o
+//!   ejercicios con `printf` + `xxd`.
+//! - **daemon** (`--socket <path>`): escucha en un Unix domain socket,
+//!   acepta clientes en serie (uno a la vez), atiende N consultas por
+//!   cliente hasta EOF. Útil para que el asistente Linux
+//!   (`mirada-asistente-llimphi`) lo consulte sin tener que ejecutar un
+//!   proceso nuevo por cada pregunta.
 //!
-//! Uso:
+//! El payload en ambos modos es `MensajeAsistente` en postcard binario
+//! precedido por un `u32 LE` con la longitud del frame.
 //!
-//! ```text
-//! cat consulta.bin | asistente-puente > respuesta.bin
-//! ```
-//!
-//! Sin credenciales de LLM, cae al backend Mock (pluma-llm) y siempre
-//! responde con `Notar { texto: "(mock) ..." }` — útil para tests sin
-//! tokens.
+//! El bind a un socket raw Akasha (multicast EtherType propio, dedup,
+//! multiplexación por id entre nodos) es la siguiente vuelta — el modo
+//! daemon Unix prueba la arquitectura sin pedir `cap_net_raw`.
 
 use std::io::{self, Read, Write};
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::Path;
+use std::sync::Arc;
 
 use asistente_puente::{
     construir_prompt_usuario, traducir_propuesta_llm, InterpretacionLlm, PROMPT_SISTEMA_WAWA,
 };
 use format::MensajeAsistente;
-use pluma_llm_core::ChatRequest;
+use pluma_llm_core::{ChatClient, ChatRequest};
 
 /// Cota dura del frame entrante. Una consulta razonable rara vez excede
 /// algunos KB; un `u32` declarando muchísimos megabytes es señal de
@@ -48,23 +48,133 @@ fn main() {
 }
 
 fn correr() -> Result<(), String> {
-    // 1. Leer un frame con prefijo de longitud.
-    let mut stdin = io::stdin().lock();
-    let mut long_buf = [0u8; 4];
-    stdin
-        .read_exact(&mut long_buf)
-        .map_err(|e| format!("leyendo prefijo de longitud: {e}"))?;
-    let largo = u32::from_le_bytes(long_buf) as usize;
-    if largo == 0 || largo > MAX_FRAME {
-        return Err(format!("longitud de frame fuera de rango: {largo}"));
+    let modo = parsear_args(std::env::args().skip(1))?;
+    let llm = pluma_llm::from_env().map_err(|e| format!("inicializando pluma-llm: {e}"))?;
+    // Runtime de Tokio compartido — un solo current-thread vale para
+    // ambos modos (stdio = un turno; daemon = un cliente a la vez).
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("creando tokio runtime: {e}"))?;
+    match modo {
+        Modo::Stdio => correr_stdio(&llm, &rt),
+        Modo::Daemon { socket } => correr_daemon(&llm, &rt, &socket),
     }
-    let mut payload = vec![0u8; largo];
-    stdin
-        .read_exact(&mut payload)
-        .map_err(|e| format!("leyendo payload de {largo} B: {e}"))?;
+}
 
-    // 2. Decodificar el MensajeAsistente. Tiene que ser una Consulta.
-    let mensaje = MensajeAsistente::deserializar(&payload)
+enum Modo {
+    Stdio,
+    Daemon { socket: String },
+}
+
+/// Parser minimal de argumentos. Sin libs nuevas — un solo flag bastante.
+fn parsear_args(mut args: impl Iterator<Item = String>) -> Result<Modo, String> {
+    match args.next() {
+        None => Ok(Modo::Stdio),
+        Some(flag) if flag == "--socket" => match args.next() {
+            Some(path) => Ok(Modo::Daemon { socket: path }),
+            None => Err("--socket requiere una ruta de socket".into()),
+        },
+        Some(flag) if flag == "--help" || flag == "-h" => {
+            print_help();
+            std::process::exit(0);
+        }
+        Some(otro) => Err(format!("argumento desconocido: {otro} (usá --help)")),
+    }
+}
+
+fn print_help() {
+    eprintln!(
+        "asistente-puente — puente entre asistente.wasm (wawa) y LLMs externos\n\
+         \n\
+         Uso:\n  \
+           asistente-puente                    Un turno por stdin/stdout (postcard).\n  \
+           asistente-puente --socket <path>    Daemon Unix socket; clientes en serie.\n  \
+           asistente-puente --help             Muestra esta ayuda.\n\
+         \n\
+         El payload en ambos modos es `MensajeAsistente` (shared/format) en\n\
+         postcard, precedido por u32 LE con la longitud del frame.\n\
+         \n\
+         pluma-llm autodetecta el backend desde el entorno:\n  \
+           ANTHROPIC_API_KEY, GEMINI_API_KEY, DEEPSEEK_API_KEY, COHERE_API_KEY,\n  \
+           PLUMA_LLM_BACKEND=ollama  (entre otros). Sin credencial cae al Mock."
+    );
+}
+
+// ---------------------------------------------------------------------
+// Modo stdio
+// ---------------------------------------------------------------------
+
+fn correr_stdio(llm: &Arc<dyn ChatClient>, rt: &tokio::runtime::Runtime) -> Result<(), String> {
+    let mut stdin = io::stdin().lock();
+    let mut stdout = io::stdout().lock();
+    let salida = atender_turno(&mut stdin, llm, rt)?;
+    escribir_frame(&mut stdout, &salida)
+}
+
+// ---------------------------------------------------------------------
+// Modo daemon
+// ---------------------------------------------------------------------
+
+fn correr_daemon(
+    llm: &Arc<dyn ChatClient>,
+    rt: &tokio::runtime::Runtime,
+    socket: &str,
+) -> Result<(), String> {
+    // Si el socket ya existe (proceso anterior caído sin cleanup), lo
+    // removemos antes de bind — no podemos heredar la posición del
+    // proceso muerto.
+    if Path::new(socket).exists() {
+        std::fs::remove_file(socket).map_err(|e| format!("borrando socket viejo: {e}"))?;
+    }
+    let listener =
+        UnixListener::bind(socket).map_err(|e| format!("bind {socket}: {e}"))?;
+    eprintln!("asistente-puente: escuchando en {socket}");
+    eprintln!("asistente-puente: Ctrl-C para terminar");
+
+    loop {
+        let (stream, _) = listener
+            .accept()
+            .map_err(|e| format!("accept: {e}"))?;
+        eprintln!("asistente-puente: cliente conectado");
+        if let Err(e) = atender_cliente(stream, llm, rt) {
+            eprintln!("asistente-puente: cliente cerrado por {e}");
+        }
+    }
+}
+
+/// Atiende un cliente del socket: bucle de turnos hasta EOF. Cada turno
+/// es un par Consulta/Propuesta independiente — el cliente correlaciona
+/// por `id` si quiere paralelismo, aunque hoy el servidor es serial.
+fn atender_cliente(
+    mut stream: UnixStream,
+    llm: &Arc<dyn ChatClient>,
+    rt: &tokio::runtime::Runtime,
+) -> Result<(), String> {
+    loop {
+        let salida = match atender_turno(&mut stream, llm, rt) {
+            Ok(s) => s,
+            Err(e) if e == "EOF" => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        escribir_frame(&mut stream, &salida)?;
+    }
+}
+
+// ---------------------------------------------------------------------
+// Lógica compartida: un turno
+// ---------------------------------------------------------------------
+
+/// Lee un `MensajeAsistente::Consulta` del lector, consulta al LLM, y
+/// devuelve la `MensajeAsistente` que toca enviar de vuelta. EOF al
+/// inicio del frame se propaga como `Err("EOF")` (el caller lo trata).
+fn atender_turno<R: Read>(
+    lector: &mut R,
+    llm: &Arc<dyn ChatClient>,
+    rt: &tokio::runtime::Runtime,
+) -> Result<MensajeAsistente, String> {
+    let entrada = leer_frame(lector)?;
+    let mensaje = MensajeAsistente::deserializar(&entrada)
         .map_err(|e| format!("deserializando MensajeAsistente: {e}"))?;
     let (id, prompt, contexto) = match mensaje {
         MensajeAsistente::Consulta {
@@ -74,23 +184,19 @@ fn correr() -> Result<(), String> {
         } => (id, prompt, contexto),
         otro => return Err(format!("esperaba Consulta, recibí {otro:?}")),
     };
-
-    // 3. Construir el ChatRequest y consultar al LLM dentro de un runtime
-    //    Tokio current-thread (el binario es sync; el LLM es async).
-    let llm = pluma_llm::from_env().map_err(|e| format!("inicializando pluma-llm: {e}"))?;
     let prompt_user = construir_prompt_usuario(&contexto, &prompt);
     let req = ChatRequest::una_vuelta(prompt_user, MAX_TOKENS_RESPUESTA)
         .con_sistema(PROMPT_SISTEMA_WAWA);
+    let resp = rt.block_on(llm.complete(&req));
+    Ok(traducir_a_mensaje(id, resp.map(|r| r.content)))
+}
 
-    let resp = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| format!("creando tokio runtime: {e}"))?
-        .block_on(llm.complete(&req));
-
-    // 4. Mapear el resultado a un MensajeAsistente de salida.
-    let salida = match resp {
-        Ok(r) => match traducir_propuesta_llm(&r.content) {
+fn traducir_a_mensaje(
+    id: u64,
+    resp: Result<String, pluma_llm_core::ChatError>,
+) -> MensajeAsistente {
+    match resp {
+        Ok(content) => match traducir_propuesta_llm(&content) {
             InterpretacionLlm::Propuesta {
                 accion,
                 explicacion,
@@ -108,20 +214,201 @@ fn correr() -> Result<(), String> {
             id,
             motivo: format!("transporte LLM: {e}"),
         },
-    };
+    }
+}
 
-    // 5. Serializar y escribir con prefijo de longitud.
-    let bytes = salida
+// ---------------------------------------------------------------------
+// Codec de frames (u32 LE de longitud + payload postcard)
+// ---------------------------------------------------------------------
+
+/// Lee un frame del lector. Devuelve `Err("EOF")` si el lector cierra
+/// en el primer byte (clean shutdown). Cualquier otro error es un fallo.
+fn leer_frame<R: Read>(lector: &mut R) -> Result<Vec<u8>, String> {
+    let mut long_buf = [0u8; 4];
+    if let Err(e) = lector.read_exact(&mut long_buf) {
+        if e.kind() == io::ErrorKind::UnexpectedEof {
+            return Err("EOF".into());
+        }
+        return Err(format!("leyendo prefijo de longitud: {e}"));
+    }
+    let largo = u32::from_le_bytes(long_buf) as usize;
+    if largo == 0 || largo > MAX_FRAME {
+        return Err(format!("longitud de frame fuera de rango: {largo}"));
+    }
+    let mut payload = vec![0u8; largo];
+    lector
+        .read_exact(&mut payload)
+        .map_err(|e| format!("leyendo payload de {largo} B: {e}"))?;
+    Ok(payload)
+}
+
+fn escribir_frame<W: Write>(escritor: &mut W, mensaje: &MensajeAsistente) -> Result<(), String> {
+    let bytes = mensaje
         .serializar()
         .map_err(|e| format!("serializando salida: {e}"))?;
     let largo = bytes.len() as u32;
-    let mut stdout = io::stdout().lock();
-    stdout
+    escritor
         .write_all(&largo.to_le_bytes())
         .map_err(|e| format!("escribiendo prefijo: {e}"))?;
-    stdout
+    escritor
         .write_all(&bytes)
         .map_err(|e| format!("escribiendo payload: {e}"))?;
-    stdout.flush().map_err(|e| format!("flush stdout: {e}"))?;
+    escritor.flush().map_err(|e| format!("flush: {e}"))?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------
+// Tests del parser de args y del codec — sin red.
+// ---------------------------------------------------------------------
+
+#[cfg(test)]
+mod pruebas_args {
+    use super::*;
+
+    #[test]
+    fn args_vacio_es_stdio() {
+        assert!(matches!(
+            parsear_args(std::iter::empty()),
+            Ok(Modo::Stdio)
+        ));
+    }
+
+    #[test]
+    fn args_socket_con_path() {
+        let v = vec!["--socket".to_string(), "/tmp/x.sock".to_string()];
+        match parsear_args(v.into_iter()) {
+            Ok(Modo::Daemon { socket }) => assert_eq!(socket, "/tmp/x.sock"),
+            otro => panic!("esperaba Daemon, obtuve {:?}", matches!(otro, Ok(_))),
+        }
+    }
+
+    #[test]
+    fn args_socket_sin_path_es_error() {
+        let v = vec!["--socket".to_string()];
+        assert!(parsear_args(v.into_iter()).is_err());
+    }
+
+    #[test]
+    fn args_desconocido_es_error() {
+        let v = vec!["--inventado".to_string()];
+        assert!(parsear_args(v.into_iter()).is_err());
+    }
+}
+
+#[cfg(test)]
+mod pruebas_codec {
+    use super::*;
+    use format::{AccionPropuesta, Contexto, MensajeAsistente};
+    use std::io::Cursor;
+
+    #[test]
+    fn frame_ida_y_vuelta() {
+        // Escribir un frame con un MensajeAsistente, releerlo, verificar
+        // que decodifica al mismo enum.
+        let original = MensajeAsistente::Propuesta {
+            id: 7,
+            accion: AccionPropuesta::Notar {
+                texto: "test".into(),
+            },
+            explicacion: "ok".into(),
+            confianza: 1.0,
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        escribir_frame(&mut buf, &original).expect("escribir");
+        let mut cursor = Cursor::new(buf);
+        let bytes = leer_frame(&mut cursor).expect("leer");
+        let leido = MensajeAsistente::deserializar(&bytes).expect("deserializar");
+        assert_eq!(leido, original);
+    }
+
+    #[test]
+    fn frame_eof_limpio_se_reporta_como_eof() {
+        let mut cursor = Cursor::new(Vec::<u8>::new());
+        assert_eq!(leer_frame(&mut cursor).unwrap_err(), "EOF");
+    }
+
+    #[test]
+    fn frame_longitud_cero_rechazada() {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&0u32.to_le_bytes());
+        let mut cursor = Cursor::new(buf);
+        let err = leer_frame(&mut cursor).unwrap_err();
+        assert!(err.contains("fuera de rango"));
+    }
+
+    #[test]
+    fn frame_longitud_excesiva_rechazada() {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&(u32::MAX).to_le_bytes());
+        let mut cursor = Cursor::new(buf);
+        let err = leer_frame(&mut cursor).unwrap_err();
+        assert!(err.contains("fuera de rango"));
+    }
+
+    #[test]
+    fn frame_payload_truncado_rechazado() {
+        // Anuncia 100 B pero entrega 10.
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&100u32.to_le_bytes());
+        buf.extend_from_slice(&[0u8; 10]);
+        let mut cursor = Cursor::new(buf);
+        assert!(leer_frame(&mut cursor).is_err());
+    }
+
+    #[test]
+    fn dos_frames_consecutivos_se_leen_independientes() {
+        // El cliente puede mandar muchos turnos en la misma conexión.
+        let a = MensajeAsistente::Error {
+            id: 1,
+            motivo: "a".into(),
+        };
+        let b = MensajeAsistente::Error {
+            id: 2,
+            motivo: "b".into(),
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        escribir_frame(&mut buf, &a).unwrap();
+        escribir_frame(&mut buf, &b).unwrap();
+        let mut cursor = Cursor::new(buf);
+        let leido_a = MensajeAsistente::deserializar(&leer_frame(&mut cursor).unwrap()).unwrap();
+        let leido_b = MensajeAsistente::deserializar(&leer_frame(&mut cursor).unwrap()).unwrap();
+        assert_eq!(leido_a, a);
+        assert_eq!(leido_b, b);
+    }
+
+    #[test]
+    fn traducir_a_mensaje_propuesta_ok() {
+        let salida = traducir_a_mensaje(
+            42,
+            Ok(r#"{"tipo": "notar", "texto": "hola"}"#.to_string()),
+        );
+        match salida {
+            MensajeAsistente::Propuesta {
+                id,
+                accion: AccionPropuesta::Notar { texto },
+                ..
+            } => {
+                assert_eq!(id, 42);
+                assert_eq!(texto, "hola");
+            }
+            otro => panic!("esperaba Propuesta::Notar, obtuve {otro:?}"),
+        }
+        // Suprimir warning de Contexto no usado en este test.
+        let _ = Contexto::default();
+    }
+
+    #[test]
+    fn traducir_a_mensaje_error_de_transporte() {
+        let salida = traducir_a_mensaje(
+            7,
+            Err(pluma_llm_core::ChatError::Cancelled),
+        );
+        match salida {
+            MensajeAsistente::Error { id, motivo } => {
+                assert_eq!(id, 7);
+                assert!(motivo.contains("transporte LLM"));
+            }
+            otro => panic!("esperaba Error, obtuve {otro:?}"),
+        }
+    }
 }
