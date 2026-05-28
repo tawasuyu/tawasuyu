@@ -1,21 +1,30 @@
 // =============================================================================
-//  renaser :: apps/mudanza — Fase 25 :: el centro soberano de reancla
+//  renaser :: apps/mudanza — Fase 25/48 :: el centro soberano de reancla
 // -----------------------------------------------------------------------------
 //  Mudanza es la unica app del genesis con PERMISO_RAIZ que invoca
 //  `sys_manifiesto_proponer`. La syscall toma un sobre `ManifiestoFirmado`
 //  (32 B hash + 32 B autor Ed25519 + 64 B firma) en formato postcard y, si
-//  la firma valida contra la clave publica que el kernel lleva grabada,
-//  reanca el manifiesto. Aqui el operador local autoriza esa decision con
-//  Alt+Enter, despues de leer la propuesta en pantalla.
+//  la firma valida contra el `AGORA_AUTH_RING` del binario y la criptografia
+//  cierra, reanca el manifiesto.
 //
-//  Esta version MVP no orquesta el flujo entero AnunciarCanal aun —espera
-//  a que wawactl exporte el comando de firma para que el operador genere
-//  propuestas reales—. Mientras tanto, sirve para PROBAR end-to-end el
-//  guardarrail criptografico: pulsando SPACE construye un sobre de prueba
-//  con autor `zero-key` (rechazado con `CapacidadInsuficiente`) y muestra
-//  el codigo que el kernel devolvio. El cero no equivale a la clave local,
-//  asi el rechazo es la respuesta correcta — la prueba consiste en que el
-//  kernel rechace, no en que acepte.
+//  Verificacion en DOS niveles:
+//
+//    1. USERSPACE (esta app, ed25519-compact). Antes de gastar un syscall
+//       deserializamos el sobre y verificamos `pk.verify(hash, sig)`. Una
+//       firma rota o un sobre corrupto se rechazan ANTES de Ring 0 — la
+//       UI muestra "FIRMA LOCAL INVALIDA" sin molestar al kernel.
+//
+//    2. KERNEL (claves.rs::verificar_manifiesto_firmado). Si la app acepta,
+//       el kernel re-verifica + checa que el autor habite el
+//       `AGORA_AUTH_RING`. Una pubkey ajena cae con `CapacidadInsuficiente`
+//       sin tocar criptografia.
+//
+//  El sobre `propuesta_demo.bin` viene firmado por una seed DEMO (`[42u8;32]`)
+//  generada por el example `agora-channel::forjar_propuesta_mudanza_demo`. La
+//  firma valida bajo SU PROPIA pubkey (lo que la app verifica OK), pero esa
+//  pubkey no esta en el anillo soberano del kernel — asi el demo termina
+//  con `CapacidadInsuficiente` en pantalla. Reemplazando el sobre por uno
+//  firmado por una de las claves del anillo, mudanza reanca de verdad.
 // =============================================================================
 
 #![no_std]
@@ -28,6 +37,11 @@ extern "C" {
     fn sys_config_paleta(salida: u32) -> i32;
     fn sys_manifiesto_proponer(mf_ptr: u32, mf_len: u32) -> i32;
 }
+
+/// Sobre demo embebido en el binario. Forjado por
+/// `agora-channel::forjar_propuesta_mudanza_demo`. Exactamente 128 B
+/// (postcard de `ManifiestoFirmado`).
+const PROPUESTA_DEMO: &[u8; 128] = include_bytes!("propuesta_demo.bin");
 
 #[panic_handler]
 fn al_fallar(_: &core::panic::PanicInfo) -> ! {
@@ -45,10 +59,15 @@ static mut IDIOMA: u16 = 0;
 /// Anti-rebote del SPACE: solo el flanco de subida vale como pulsacion.
 static mut SPACE_PREV: bool = false;
 
-/// Ultimo codigo recibido del kernel al probar la reancla. `i32::MIN`
-/// significa "aun no probado"; cualquier otro es el valor literal devuelto
-/// por `sys_manifiesto_proponer` —que la UI rotula sobre la paleta activa—.
+/// Resultado de la ultima propuesta intentada. Tres estados:
+/// - `i32::MIN` :: aun no probado.
+/// - `-100`    :: la verificacion en USERSPACE fallo (firma rota o sobre
+///               corrupto). El syscall NO se llamo.
+/// - cualquier otro :: el valor literal devuelto por `sys_manifiesto_proponer`.
 static mut ULTIMO_CODIGO: i32 = i32::MIN;
+
+/// Sentinel que rotula "el sobre fallo localmente, no llame al kernel".
+const VERIFICACION_LOCAL_FALLO: i32 = -100;
 
 #[no_mangle]
 pub extern "C" fn init() {
@@ -78,20 +97,48 @@ fn refrescar_contexto() {
     let _ = unsafe { sys_config_paleta(core::ptr::addr_of_mut!(PALETA) as u32) };
 }
 
-/// Construye un `ManifiestoFirmado` de prueba —autor TODO ceros, firma TODO
-/// ceros, hash TODO ceros— y lo entrega al kernel. La estructura postcard
-/// para una tupla de arrays fijos `[[u8;32],[u8;32],[u8;64]]` es el
-/// CONCATENADO crudo de los bytes: 128 B en total, sin preludios de longitud.
-/// Confiamos en este detalle del format porque la crate `format` ya lo
-/// fija con su `Serialize`/`Deserialize` derivado — el contrato lo mantiene
-/// el script guardian de simetria no_std.
-///
-/// Resultado esperado: `CodigoError::CapacidadInsuficiente` (-2). El kernel
-/// rechaza autores ajenos ANTES de tocar criptografia; un autor "ceros"
-/// jamas igualara `claves::AGORA_PUBLIC_KEY_LOCAL`.
+/// Parsea el sobre demo a sus tres campos sin allocar — postcard de
+/// `ManifiestoFirmado` es exactamente `hash(32) || autor(32) || firma(64)`
+/// (test `manifiesto_firmado_layout_es_128_bytes_raw` en agora-channel
+/// protege este contrato). Verifica la firma localmente con
+/// ed25519-compact (misma libreria que el kernel) y, si la firma cierra,
+/// lo entrega al kernel. Si la verificacion local falla, NO se llama al
+/// syscall — la UI muestra "VERIFICACION LOCAL FALLO" sin quemar un trap.
 fn probar_reancla() {
-    let mf = [0u8; 128]; // 32 hash + 32 autor + 64 firma; todo ceros.
-    let codigo = unsafe { sys_manifiesto_proponer(mf.as_ptr() as u32, mf.len() as u32) };
+    use ed25519_compact::{PublicKey, Signature};
+
+    let bytes: &[u8; 128] = PROPUESTA_DEMO;
+    let hash: &[u8; 32] = bytes[0..32].try_into().expect("hash slice");
+    let autor: &[u8; 32] = bytes[32..64].try_into().expect("autor slice");
+    let firma: &[u8; 64] = bytes[64..128].try_into().expect("firma slice");
+
+    // Verificacion en userspace: pk.verify(hash, sig). Misma logica que
+    // el kernel ejecuta despues; filtrar aqui evita el syscall sobre un
+    // sobre corrupto o forjado.
+    let pk = match PublicKey::from_slice(autor) {
+        Ok(pk) => pk,
+        Err(_) => {
+            unsafe { ULTIMO_CODIGO = VERIFICACION_LOCAL_FALLO };
+            return;
+        }
+    };
+    let sig = match Signature::from_slice(firma) {
+        Ok(sig) => sig,
+        Err(_) => {
+            unsafe { ULTIMO_CODIGO = VERIFICACION_LOCAL_FALLO };
+            return;
+        }
+    };
+    if pk.verify(*hash, &sig).is_err() {
+        unsafe { ULTIMO_CODIGO = VERIFICACION_LOCAL_FALLO };
+        return;
+    }
+
+    // La firma cierra. Ahora si vale gastar el syscall. El kernel hara
+    // su propia verificacion + el chequeo de anillo soberano.
+    let codigo = unsafe {
+        sys_manifiesto_proponer(PROPUESTA_DEMO.as_ptr() as u32, PROPUESTA_DEMO.len() as u32)
+    };
     unsafe { ULTIMO_CODIGO = codigo };
 }
 
@@ -146,6 +193,7 @@ fn pintar() {
             -1 => b"AUSENTE :: SOBRE NO DECODIFICA",
             -2 => b"AUTOR AJENO :: RECHAZADO",
             -3 => b"FIRMA INVALIDA :: RECHAZADO",
+            -100 => b"VERIFICACION LOCAL FALLO",
             _ => b"CODIGO DESCONOCIDO",
         };
         dibujar_texto(lienzo, explica, 16, y, 1, secundario);

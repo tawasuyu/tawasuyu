@@ -19,7 +19,7 @@
 #![forbid(unsafe_code)]
 
 use agora_core::{verify_signature, AgoraError, IdentityId, Keypair};
-use format::{AgoraId, Canal, Firma, Hash, RaizFirmada};
+use format::{AgoraId, Canal, Firma, Hash, ManifiestoFirmado, RaizFirmada};
 use thiserror::Error;
 
 /// Falla al firmar o verificar dentro del contrato del canal.
@@ -139,6 +139,39 @@ pub fn verificar_canal(canal: &Canal) -> Result<(), CanalError> {
         previo = Some(raiz.timestamp);
     }
     Ok(())
+}
+
+// =============================================================================
+//  ManifiestoFirmado — el sobre que mudanza pasa al kernel
+// =============================================================================
+
+/// Firma un `ManifiestoFirmado`: empareja `manifiesto_hash` con la
+/// pubkey del firmante y la firma Ed25519 que el firmante produjo
+/// sobre los 32 bytes del hash. Es el sobre que `apps/mudanza` empuja
+/// al kernel vía `sys_manifiesto_proponer`.
+///
+/// El kernel verifica primero que `autor` habite el `AGORA_AUTH_RING`
+/// del binario (rechazo barato con `CapacidadInsuficiente`) y luego
+/// re-verifica la firma. Esta función produce el sobre tal cual el
+/// kernel lo espera.
+pub fn firmar_manifiesto(kp: &Keypair, manifiesto_hash: &Hash) -> ManifiestoFirmado {
+    let firma = kp.sign(manifiesto_hash);
+    ManifiestoFirmado {
+        manifiesto_hash: *manifiesto_hash,
+        autor: kp.public_key(),
+        firma,
+    }
+}
+
+/// Re-verifica un `ManifiestoFirmado` en userspace antes de hacer el
+/// syscall. La app cliente (típicamente `mudanza`) lo llama para evitar
+/// gastar un syscall cuando el sobre vino corrupto del cable — el
+/// kernel haría el mismo trabajo y rechazaría, pero filtrar acá
+/// significa que un dialogo de UI puede mostrar "firma rota" sin
+/// quemar un trap a Ring 0.
+pub fn verificar_manifiesto(mf: &ManifiestoFirmado) -> Result<(), CanalError> {
+    verify_signature(&mf.autor, &mf.manifiesto_hash, &mf.firma)
+        .map_err(|_| CanalError::FirmaInvalida { timestamp: 0 })
 }
 
 // =============================================================================
@@ -329,6 +362,43 @@ mod tests {
         let (autor, firma) = firmar_para_anuncio(&kp, "estable", &hash, ts);
         assert_eq!(autor, kp.public_key());
         assert_eq!(firma, raiz.firma);
+    }
+
+    #[test]
+    fn manifiesto_firmado_layout_es_128_bytes_raw() {
+        // Contrato que sostiene el parser manual de `apps/mudanza`:
+        // el postcard de ManifiestoFirmado es exactamente
+        //     hash(32) || autor(32) || firma(64) = 128 bytes,
+        // sin preludios de longitud ni tags. Si format cambia la forma
+        // del sobre, este test rompe; la app `mudanza` necesita
+        // entonces actualizar `probar_reancla()` consigo.
+        let kp = Keypair::from_seed([7; 32]);
+        let mf = firmar_manifiesto(&kp, &hash_de(99));
+        let bytes = mf.serializar().expect("serializar");
+        assert_eq!(bytes.len(), 128);
+        assert_eq!(&bytes[0..32], &mf.manifiesto_hash);
+        assert_eq!(&bytes[32..64], &mf.autor);
+        assert_eq!(&bytes[64..128], &mf.firma[..]);
+    }
+
+    #[test]
+    fn firmar_y_verificar_manifiesto() {
+        let kp = Keypair::from_seed([42; 32]);
+        let mf = firmar_manifiesto(&kp, &hash_de(7));
+        assert!(verificar_manifiesto(&mf).is_ok());
+        assert_eq!(mf.autor, kp.public_key());
+        assert_eq!(mf.manifiesto_hash, hash_de(7));
+    }
+
+    #[test]
+    fn manifiesto_con_hash_manipulado_falla() {
+        let kp = Keypair::from_seed([42; 32]);
+        let mut mf = firmar_manifiesto(&kp, &hash_de(7));
+        mf.manifiesto_hash[0] ^= 0x01;
+        assert!(matches!(
+            verificar_manifiesto(&mf),
+            Err(CanalError::FirmaInvalida { .. })
+        ));
     }
 
     #[test]

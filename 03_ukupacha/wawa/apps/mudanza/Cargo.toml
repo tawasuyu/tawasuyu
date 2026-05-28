@@ -21,6 +21,21 @@ description = "renaser :: app WASM de propuesta de reancla del manifiesto"
 [lib]
 crate-type = ["cdylib"]
 
+[dependencies]
+# `ed25519-compact` es la misma libreria que el kernel usa en `claves.rs`
+# para verificar `ManifiestoFirmado`. Al validar en userspace antes del
+# syscall usamos las mismas primitivas — un sobre que la app acepta es
+# uno que el kernel ALSO aceptaria criptograficamente (modulo el filtro
+# por anillo de autores, que solo vive en kernel).
+#
+# El layout del sobre (postcard de `format::ManifiestoFirmado`) es 128 B
+# raw — `hash(32) || autor(32) || firma(64)` — lo parseamos a mano para
+# no arrastrar postcard + `extern crate alloc` solo por la deserializacion.
+# El test `manifiesto_firmado_layout_es_128_bytes_raw` en `agora-channel`
+# protege ese contrato; si format cambia, el test rompe y este parser
+# necesita actualizarse.
+ed25519-compact = { version = "2", default-features = false }
+
 [profile.dev]
 panic = "abort"
 
