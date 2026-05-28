@@ -177,6 +177,8 @@ enum Msg {
     RenameClose,
     /// Aplicar WorkspaceEdit (de rename) en N archivos.
     RenameApply(std::collections::HashMap<PathBuf, Vec<TextEdit>>),
+    /// Refresco del mapa git (cada ~3 s desde un thread).
+    GitStatusChanged(GitStatusMap),
     /// El LSP devolvió text edits (de formatting o rename) para el
     /// archivo abierto — aplicar todos en orden descendente.
     TextEditsApply(Vec<TextEdit>),
@@ -292,7 +294,13 @@ struct Model {
     pending_save_after_format: Option<usize>,
     /// Prompt de Save-As (Ctrl+Shift+S); `None` cerrado.
     save_as: Option<SaveAsBar>,
+    /// Marca git por path absoluto. Repoblado cada ~3 s por un hilo que
+    /// ejecuta `git status --porcelain` desde `root`. Vacío si no es
+    /// un repo git o git no está instalado.
+    git_status: GitStatusMap,
 }
+
+type GitStatusMap = std::collections::HashMap<PathBuf, char>;
 
 struct SaveAsBar {
     input: TextInputState,
@@ -407,6 +415,22 @@ impl App for EditorApp {
         // si el disco falla no rompe el editor; se reintenta al proximo tick.
         handle.spawn_periodic(std::time::Duration::from_secs(5), || Msg::SaveSession);
 
+        // Tick git status: cada 3 s ejecutamos `git status --porcelain`
+        // desde root y publicamos el mapa. Si no es repo git o git no
+        // está, el comando falla silenciosamente y el mapa queda vacío.
+        {
+            let args: Vec<String> = env::args().skip(1).collect();
+            let root_for_git = args
+                .iter()
+                .find(|a| !a.starts_with("--"))
+                .map(PathBuf::from)
+                .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+            let root_for_git = fs::canonicalize(&root_for_git).unwrap_or(root_for_git);
+            handle.spawn_periodic(std::time::Duration::from_secs(3), move || {
+                Msg::GitStatusChanged(query_git_status(&root_for_git))
+            });
+        }
+
         let args: Vec<String> = env::args().skip(1).collect();
         let demo_lsp = args.iter().any(|a| a == "--demo-lsp");
         let lsp_on = args.iter().any(|a| a == "--lsp");
@@ -467,6 +491,7 @@ impl App for EditorApp {
             format_on_save: args.iter().any(|a| a == "--fmt-on-save"),
             pending_save_after_format: None,
             save_as: None,
+            git_status: GitStatusMap::new(),
         };
         // Restaurar sesion previa si la hay: tabs, bookmarks, theme.
         // Best-effort: si load_session falla o paths ya no existen, arranca limpio.
@@ -638,6 +663,13 @@ impl App for EditorApp {
             Msg::SaveSession => {
                 save_session(&model);
                 model
+            }
+            Msg::GitStatusChanged(map) => {
+                let mut m = model;
+                if map != m.git_status {
+                    m.git_status = map;
+                }
+                m
             }
             Msg::CycleTheme => {
                 let mut m = model;
@@ -1576,7 +1608,8 @@ fn status_bar(model: &Model, theme: &Theme) -> View<Msg> {
     } else {
         format!("{} tabs", model.tabs.len())
     };
-    let right_text = [tabs_label, bm_label, lsp_label]
+    let git_label = git_summary(&model.git_status);
+    let right_text = [tabs_label, bm_label, git_label, lsp_label]
         .into_iter()
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
@@ -1697,7 +1730,7 @@ fn tree_panel(model: &Model, theme: &Theme) -> View<Msg> {
         .iter()
         .enumerate()
         .map(|(i, n)| TreeRow {
-            label: row_label(n),
+            label: row_label_with_git(n, &model.git_status),
             depth: n.depth,
             has_children: n.is_dir,
             expanded: n.expanded,
@@ -1740,10 +1773,15 @@ fn editor_panel(model: &Model, theme: &Theme) -> View<Msg> {
         .iter()
         .map(|t| {
             let name = t.path.file_name().and_then(|s| s.to_str()).unwrap_or("?");
+            let gmark = model
+                .git_status
+                .get(&t.path)
+                .map(|c| format!("{c} "))
+                .unwrap_or_default();
             if t.dirty {
-                format!("● {name}")
+                format!("● {gmark}{name}")
             } else {
-                name.to_string()
+                format!("{gmark}{name}")
             }
         })
         .collect();
@@ -3105,6 +3143,77 @@ fn file_mtime(path: &Path) -> Option<std::time::SystemTime> {
     fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
+/// Ejecuta `git status --porcelain -z` desde `root` y devuelve un mapa
+/// `path absoluto → marca corta` (`M` modified, `A` added, `D` deleted,
+/// `?` untracked, `R` renamed, `U` unmerged). Si no es un repo git o
+/// `git` falla, devuelve mapa vacío. Bloqueante; corre en un hilo.
+fn query_git_status(root: &Path) -> GitStatusMap {
+    use std::process::Command;
+    let mut out = GitStatusMap::new();
+    let Ok(output) = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("status")
+        .arg("--porcelain")
+        .arg("-z")
+        .output()
+    else {
+        return out;
+    };
+    if !output.status.success() {
+        return out;
+    }
+    // Formato -z: entradas separadas por NUL. Cada entrada empieza con
+    // "XY path" donde XY son 2 chars de estado (X=index, Y=worktree).
+    // Renames usan dos paths separados por otro NUL: "R  newname\0oldname".
+    let mut iter = output.stdout.split(|b| *b == 0).peekable();
+    while let Some(entry) = iter.next() {
+        if entry.len() < 4 {
+            continue;
+        }
+        let xy = &entry[..2];
+        let rest = &entry[3..];
+        let mark = pick_git_mark(xy);
+        let path_str = match std::str::from_utf8(rest) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let abs = root.join(path_str);
+        out.insert(abs, mark);
+        // Rename consume el path "old" siguiente.
+        if xy[0] == b'R' || xy[1] == b'R' {
+            iter.next();
+        }
+    }
+    out
+}
+
+fn pick_git_mark(xy: &[u8]) -> char {
+    // Prioridad simple: untracked > conflict > added > deleted > modified.
+    if xy == b"??" { return '?'; }
+    if xy[0] == b'U' || xy[1] == b'U' || xy == b"AA" || xy == b"DD" {
+        return 'U';
+    }
+    if xy[0] == b'A' || xy[1] == b'A' { return 'A'; }
+    if xy[0] == b'D' || xy[1] == b'D' { return 'D'; }
+    if xy[0] == b'R' || xy[1] == b'R' { return 'R'; }
+    'M'
+}
+
+/// Resumen "git: 3M 1?" para la status bar. Vacío si no hay cambios.
+fn git_summary(map: &GitStatusMap) -> String {
+    if map.is_empty() {
+        return String::new();
+    }
+    use std::collections::BTreeMap;
+    let mut counts: BTreeMap<char, usize> = BTreeMap::new();
+    for &m in map.values() {
+        *counts.entry(m).or_insert(0) += 1;
+    }
+    let parts: Vec<String> = counts.iter().map(|(c, n)| format!("{n}{c}")).collect();
+    format!("git: {}", parts.join(" "))
+}
+
 /// Compara mtimes en disco vs `Tab.last_mtime` para cada tab. Si difiere:
 /// - tab no-dirty → recarga buffer desde disco y actualiza el LSP.
 /// - tab dirty → status warn (una sola vez vía `external_warned`).
@@ -3156,6 +3265,21 @@ fn row_label(n: &TreeNode) -> String {
         format!("{name}/")
     } else {
         name.to_owned()
+    }
+}
+
+/// Variante del label que antepone la marca git del archivo (si existe).
+/// Para dirs, agrega `*` si algún descendiente está marcado.
+fn row_label_with_git(n: &TreeNode, git: &GitStatusMap) -> String {
+    let base = row_label(n);
+    if n.is_dir {
+        let has = git.keys().any(|p| p.starts_with(&n.path));
+        if has { format!("* {base}") } else { base }
+    } else {
+        match git.get(&n.path) {
+            Some(c) => format!("{c} {base}"),
+            None => base,
+        }
     }
 }
 
