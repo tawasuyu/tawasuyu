@@ -46,6 +46,30 @@ impl DomTree {
         find_first(&self.document(), local)
     }
 
+    /// Busca el primer `<base href="...">` del `<head>`. Su valor
+    /// override la base URL del documento para todos los hrefs
+    /// relativos. Si no aparece o está vacío, devuelve `None` y el
+    /// caller usa la URL del documento como base.
+    pub fn base_href(&self) -> Option<String> {
+        let mut found: Option<String> = None;
+        walk(&self.document(), &mut |node| {
+            if found.is_some() {
+                return;
+            }
+            if let NodeData::Element { name, .. } = &node.data {
+                if name.local.as_ref() == "base" {
+                    if let Some(href) = attr(node, "href") {
+                        let trimmed = href.trim();
+                        if !trimmed.is_empty() {
+                            found = Some(trimmed.to_string());
+                        }
+                    }
+                }
+            }
+        });
+        found
+    }
+
     /// Busca el primer `<meta http-equiv="refresh" content="N;url=...">`
     /// y extrae `(delay_secs, target_url_opcional)`. Si la URL es None,
     /// el refresh recarga la página actual. Si no hay meta refresh,
@@ -226,6 +250,21 @@ mod tests {
         let sheets = dom.collect_inline_stylesheets();
         assert_eq!(sheets.len(), 1);
         assert!(sheets[0].contains("color: red"));
+    }
+
+    #[test]
+    fn base_href_extrae_del_head() {
+        let html = r#"<html><head><base href="https://example.com/sub/"></head><body></body></html>"#;
+        let dom = DomTree::parse(html);
+        assert_eq!(dom.base_href().as_deref(), Some("https://example.com/sub/"));
+    }
+
+    #[test]
+    fn base_href_ausente_o_vacio_devuelve_none() {
+        let html = r#"<html><head><base href=""></head></html>"#;
+        assert!(DomTree::parse(html).base_href().is_none());
+        let html2 = r#"<html><head></head></html>"#;
+        assert!(DomTree::parse(html2).base_href().is_none());
     }
 
     #[test]

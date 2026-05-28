@@ -32,7 +32,18 @@ fn agent() -> ureq::Agent {
 /// engine la usa como base para resolver hrefs relativos y la chrome la
 /// muestra en la barra. Pasa por la cache global.
 pub fn fetch(url: &Url) -> Result<(String, String), FetchError> {
-    let (bytes, final_url) = fetch_bytes_with_url(url.as_str())?;
+    fetch_with_referer(url, None)
+}
+
+/// Como `fetch` pero acepta un `referer` opcional — la URL desde la
+/// que se navega. Sigue el patrón de los browsers: enviar Referer
+/// SIEMPRE para http/https; el strip-on-cross-origin queda fuera de
+/// scope por ahora (matchea el "no referrer policy" default antiguo).
+pub fn fetch_with_referer(
+    url: &Url,
+    referer: Option<&str>,
+) -> Result<(String, String), FetchError> {
+    let (bytes, final_url) = fetch_bytes_with_referer(url.as_str(), referer)?;
     let html = String::from_utf8(bytes).map_err(|e| FetchError::Body(e.to_string()))?;
     Ok((html, final_url))
 }
@@ -42,13 +53,23 @@ pub fn fetch(url: &Url) -> Result<(String, String), FetchError> {
 /// computar el `expires_at`; si no hay header, la entrada se guarda
 /// sin TTL (sólo expira por eviction LRU).
 pub fn fetch_bytes(url: &str) -> Result<Vec<u8>, FetchError> {
-    Ok(fetch_bytes_with_url(url)?.0)
+    Ok(fetch_bytes_with_referer(url, None)?.0)
 }
 
 /// Como `fetch_bytes` pero también devuelve la URL final tras seguir
 /// redirects. La cache se indexa por la URL **solicitada** (no la
 /// final) para que un mismo permalink siempre sirva del mismo slot.
 pub fn fetch_bytes_with_url(url: &str) -> Result<(Vec<u8>, String), FetchError> {
+    fetch_bytes_with_referer(url, None)
+}
+
+/// Variante completa que acepta un referer opcional. El header
+/// Referer se setea sólo si la URL fuente parsea como http/https
+/// (queremos evitar fugar `file://` o `about:` schemes).
+pub fn fetch_bytes_with_referer(
+    url: &str,
+    referer: Option<&str>,
+) -> Result<(Vec<u8>, String), FetchError> {
     if let Some(hit) = cache::get(url) {
         return Ok((hit, url.to_string()));
     }
@@ -61,6 +82,9 @@ pub fn fetch_bytes_with_url(url: &str) -> Result<(Vec<u8>, String), FetchError> 
         if let Some(cookie_hdr) = crate::cookies::cookie_header(h) {
             req = req.set("Cookie", &cookie_hdr);
         }
+    }
+    if let Some(r) = sanitize_referer(referer) {
+        req = req.set("Referer", &r);
     }
     let resp = req.call().map_err(|e| match e {
         ureq::Error::Status(code, _) => FetchError::Status(code),
@@ -113,6 +137,15 @@ fn parse_max_age(cc: &str) -> Option<u64> {
 /// response, siguiendo redirects 3xx (ureq convierte 301/302/303 a GET
 /// hacia el `Location:` igual que un browser real).
 pub fn post_form(url: &str, body: &str) -> Result<(String, String), FetchError> {
+    post_form_with_referer(url, body, None)
+}
+
+/// POST con `Referer` opcional — la URL desde la que se navega.
+pub fn post_form_with_referer(
+    url: &str,
+    body: &str,
+    referer: Option<&str>,
+) -> Result<(String, String), FetchError> {
     let parsed = url::Url::parse(url).ok();
     let host = parsed.as_ref().and_then(|u| u.host_str()).map(|s| s.to_string());
     let mut req = agent()
@@ -123,6 +156,9 @@ pub fn post_form(url: &str, body: &str) -> Result<(String, String), FetchError> 
         if let Some(cookie_hdr) = crate::cookies::cookie_header(h) {
             req = req.set("Cookie", &cookie_hdr);
         }
+    }
+    if let Some(r) = sanitize_referer(referer) {
+        req = req.set("Referer", &r);
     }
     let resp = req.send_string(body).map_err(|e| match e {
         ureq::Error::Status(code, _) => FetchError::Status(code),
@@ -136,6 +172,21 @@ pub fn post_form(url: &str, body: &str) -> Result<(String, String), FetchError> 
     }
     let body_str = resp.into_string().map_err(|e| FetchError::Transport(e.to_string()))?;
     Ok((body_str, final_url))
+}
+
+/// Decide qué valor mandar como `Referer:`. Aceptamos sólo URLs
+/// http/https — `about:`, `file:`, `data:` y similares no deben fugarse
+/// al server. Cualquier fragment se strippea (es información del
+/// cliente, nunca debe viajar al server). El query se preserva.
+fn sanitize_referer(referer: Option<&str>) -> Option<String> {
+    let r = referer?;
+    let parsed = url::Url::parse(r).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return None;
+    }
+    let mut clean = parsed.clone();
+    clean.set_fragment(None);
+    Some(clean.to_string())
 }
 
 fn now_unix() -> u64 {
@@ -158,6 +209,36 @@ mod tests {
     fn parse_max_age_rechaza_no_store_no_cache() {
         assert_eq!(parse_max_age("no-store, max-age=60"), None);
         assert_eq!(parse_max_age("no-cache"), None);
+    }
+
+    #[test]
+    fn sanitize_referer_acepta_http_y_https() {
+        assert_eq!(
+            sanitize_referer(Some("https://example.com/p?q=1")).as_deref(),
+            Some("https://example.com/p?q=1")
+        );
+        assert_eq!(
+            sanitize_referer(Some("http://example.com/")).as_deref(),
+            Some("http://example.com/")
+        );
+    }
+
+    #[test]
+    fn sanitize_referer_strippea_fragment() {
+        assert_eq!(
+            sanitize_referer(Some("https://example.com/p#section")).as_deref(),
+            Some("https://example.com/p")
+        );
+    }
+
+    #[test]
+    fn sanitize_referer_rechaza_no_http() {
+        assert_eq!(sanitize_referer(Some("about:blank")), None);
+        assert_eq!(sanitize_referer(Some("file:///etc/passwd")), None);
+        assert_eq!(sanitize_referer(Some("data:text/html,x")), None);
+        assert_eq!(sanitize_referer(None), None);
+        // URL inválida → None.
+        assert_eq!(sanitize_referer(Some("not a url")), None);
     }
 
     #[test]

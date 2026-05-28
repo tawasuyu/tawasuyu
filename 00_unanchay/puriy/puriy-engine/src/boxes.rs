@@ -195,6 +195,10 @@ pub struct BoxNode {
     /// Para `<input type=checkbox|radio>`: estado `checked` inicial.
     /// `false` por default.
     pub input_checked_initial: bool,
+    /// `true` si el `<input>`/`<textarea>` lleva el attr `autofocus`. El
+    /// chrome busca el primer matching al recibir `Msg::Loaded` y le
+    /// asigna `focused_input` para empezar la sesión con el cursor ahí.
+    pub input_autofocus: bool,
     /// Placeholder del input — atributo `placeholder` del `<input>` /
     /// `<textarea>`. `None` si vacío.
     pub input_placeholder: Option<String>,
@@ -412,6 +416,48 @@ fn find_y_inner(b: &BoxNode, target: &str, acc: &mut f32) -> Option<f32> {
     None
 }
 
+impl BoxTree {
+    /// Estima la y del N-ésimo (1-based) leaf de texto cuyo contenido
+    /// contiene `query_lower` (la query debe venir ya lowercased — el
+    /// caller suele hacerlo una vez fuera del walk). Usado por la find
+    /// bar para auto-scroll al match actual con Enter/Shift+Enter.
+    pub fn find_y_of_match(&self, query_lower: &str, nth_1based: usize) -> Option<f32> {
+        if query_lower.is_empty() || nth_1based == 0 {
+            return None;
+        }
+        let mut acc = 0.0_f32;
+        let mut seen = 0_usize;
+        find_match_y_inner(&self.root, query_lower, nth_1based, &mut acc, &mut seen)
+    }
+}
+
+fn find_match_y_inner(
+    b: &BoxNode,
+    query: &str,
+    target_nth: usize,
+    acc: &mut f32,
+    seen: &mut usize,
+) -> Option<f32> {
+    if let Some(text) = &b.text {
+        if text.to_lowercase().contains(query) {
+            *seen += 1;
+            if *seen == target_nth {
+                return Some(*acc);
+            }
+        }
+        *acc += b.font_size * b.line_height.unwrap_or(1.4);
+        return None;
+    }
+    *acc += b.margin.top + b.padding.top;
+    for c in &b.children {
+        if let Some(y) = find_match_y_inner(c, query, target_nth, acc, seen) {
+            return Some(y);
+        }
+    }
+    *acc += b.padding.bottom + b.margin.bottom;
+    None
+}
+
 fn count(b: &BoxNode) -> usize {
     1 + b.children.iter().map(count).sum::<usize>()
 }
@@ -429,7 +475,19 @@ fn walk_inner(b: &BoxNode, f: &mut impl FnMut(&BoxNode)) {
 /// absolutos. Pasale el URL del documento (puede ser `about:blank`
 /// para HTML inline).
 pub fn build(dom: &DomTree, styles: &StyleEngine, base_url: &str) -> BoxTree {
-    let base = url::Url::parse(base_url).ok();
+    // `<base href="...">` en el `<head>` override la base URL. Si está
+    // ausente o inválido, fallback al URL del documento.
+    let doc_base = url::Url::parse(base_url).ok();
+    let base = dom
+        .base_href()
+        .as_deref()
+        .and_then(|href| {
+            // El base href puede ser absoluto o relativo al URL del doc.
+            url::Url::parse(href)
+                .ok()
+                .or_else(|| doc_base.as_ref().and_then(|b| b.join(href).ok()))
+        })
+        .or(doc_base);
     let body = dom.find("body").unwrap_or_else(|| dom.document());
     let mut root = build_node(&body, styles, base.as_ref(), None).unwrap_or_else(empty_root);
     let mut forms: Vec<FormInfo> = Vec::new();
@@ -884,6 +942,7 @@ fn empty_root() -> BoxNode {
         input_placeholder: None,
         input_name: None,
         input_checked_initial: false,
+        input_autofocus: false,
         form_idx: None,
         select: None,
         svg: None,
@@ -975,6 +1034,7 @@ fn build_node(
                 input_kind,
                 Some(InputKind::Checkbox) | Some(InputKind::Radio)
             ) && dom::attr(node, "checked").is_some();
+            let input_autofocus = input_kind.is_some() && dom::attr(node, "autofocus").is_some();
             // `<svg>`: coleccionamos las primitivas (rect/circle/line) y
             // el viewBox. Las primitivas del subárbol del SVG no son
             // descendientes del box tree (el `display: inline-block` del
@@ -1149,6 +1209,7 @@ fn build_node(
                     }
                 }),
                 input_checked_initial,
+                input_autofocus,
                 form_idx: None,
                 select,
                 svg,
@@ -1259,6 +1320,7 @@ fn build_node(
                 input_placeholder: None,
         input_name: None,
         input_checked_initial: false,
+        input_autofocus: false,
         form_idx: None,
         select: None,
         svg: None,
@@ -1340,6 +1402,7 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         input_placeholder: None,
         input_name: None,
         input_checked_initial: false,
+        input_autofocus: false,
         form_idx: None,
         select: None,
         svg: None,
@@ -2342,6 +2405,46 @@ mod tests {
             }
         });
         assert_eq!(links, vec!["https://example.com/doc#top".to_string()]);
+    }
+
+    #[test]
+    fn find_y_of_match_devuelve_y_creciente_por_match() {
+        let html = r##"<html><body>
+            <p>alfa</p><p>beta</p><p>alfa beta</p><p>alfa</p>
+        </body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let bt = &doc.box_tree;
+        let y1 = bt.find_y_of_match("alfa", 1).expect("match 1");
+        let y2 = bt.find_y_of_match("alfa", 2).expect("match 2");
+        let y3 = bt.find_y_of_match("alfa", 3).expect("match 3");
+        assert!(y2 > y1, "match 2 debe quedar más abajo que match 1");
+        assert!(y3 > y2);
+        // Sin match para el 4to.
+        assert!(bt.find_y_of_match("alfa", 4).is_none());
+        // Query vacía o nth=0 devuelven None.
+        assert!(bt.find_y_of_match("", 1).is_none());
+        assert!(bt.find_y_of_match("alfa", 0).is_none());
+    }
+
+    #[test]
+    fn input_autofocus_se_marca_solo_para_inputs_con_attr() {
+        let html = r##"<html><body>
+            <form>
+                <input type="text" name="a">
+                <input type="text" name="b" autofocus>
+                <input type="text" name="c" autofocus>
+            </form>
+        </body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut flags: Vec<bool> = Vec::new();
+        doc.box_tree.walk(|b| {
+            if b.input_kind.is_some() {
+                flags.push(b.input_autofocus);
+            }
+        });
+        assert_eq!(flags, vec![false, true, true]);
     }
 
     #[test]

@@ -58,16 +58,38 @@ impl Engine {
     /// redirigió (3xx) — usamos la final para resolver hrefs relativos y
     /// la barra del chrome la muestra como URL canónica de la pestaña.
     pub fn load(&self, url: &str) -> Result<Document, EngineError> {
+        self.load_with_referer(url, None)
+    }
+
+    /// Como `load` pero envía `Referer:` con la URL fuente. El chrome lo
+    /// pasa al navegar desde un link clickeado (anti-fugas: aceptamos
+    /// sólo http/https como referer, y strippeamos fragment).
+    pub fn load_with_referer(
+        &self,
+        url: &str,
+        referer: Option<&str>,
+    ) -> Result<Document, EngineError> {
         let parsed = url::Url::parse(url).map_err(|e| EngineError::Url(e.to_string()))?;
-        let (html, final_url) = fetch(&parsed)?;
+        let (html, final_url) = fetch::fetch_with_referer(&parsed, referer)?;
         Ok(self.load_html(&final_url, &html))
     }
 
     /// POST con body `application/x-www-form-urlencoded`. Mismo pipeline
     /// que `load` después del fetch.
     pub fn load_post(&self, url: &str, body: &str) -> Result<Document, EngineError> {
+        self.load_post_with_referer(url, body, None)
+    }
+
+    /// POST con `Referer:` opcional.
+    pub fn load_post_with_referer(
+        &self,
+        url: &str,
+        body: &str,
+        referer: Option<&str>,
+    ) -> Result<Document, EngineError> {
         let parsed = url::Url::parse(url).map_err(|e| EngineError::Url(e.to_string()))?;
-        let (html, final_url) = fetch::post_form(parsed.as_str(), body)?;
+        let (html, final_url) =
+            fetch::post_form_with_referer(parsed.as_str(), body, referer)?;
         Ok(self.load_html(&final_url, &html))
     }
 

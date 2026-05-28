@@ -374,7 +374,7 @@ impl App for Puriy {
             .unwrap_or_else(|| NEW_TAB_URL.to_string());
         let mut tab = TabState::new(url.clone());
         tab.gen = 1;
-        spawn_load(tab.id, tab.gen, url, handle.clone());
+        spawn_load(tab.id, tab.gen, url, /* referer */ None, handle.clone());
         Model {
             tabs: vec![tab],
             active: 0,
@@ -531,6 +531,7 @@ impl App for Puriy {
                         let mut inputs: Vec<TextInputState> = Vec::new();
                         let mut input_checks: Vec<bool> = Vec::new();
                         let mut selects: Vec<SelectState> = Vec::new();
+                        let mut autofocus_idx: Option<usize> = None;
                         box_tree.walk(|b| {
                             if b.tag.as_deref() == Some("details") {
                                 details_open.push(b.details_open_attr);
@@ -540,8 +541,12 @@ impl App for Puriy {
                                 if let Some(initial) = &b.input_initial {
                                     s.set_text(initial.clone());
                                 }
+                                let idx = inputs.len();
                                 inputs.push(s);
                                 input_checks.push(b.input_checked_initial);
+                                if b.input_autofocus && autofocus_idx.is_none() {
+                                    autofocus_idx = Some(idx);
+                                }
                             }
                             if let Some(sel) = &b.select {
                                 selects.push(SelectState {
@@ -554,7 +559,7 @@ impl App for Puriy {
                         t.inputs = inputs;
                         t.input_checks = input_checks;
                         t.selects = selects;
-                        t.focused_input = None;
+                        t.focused_input = autofocus_idx;
                         t.box_tree = Some(box_tree);
                         // Registra en la history global del Profile (no
                         // confundir con TabState.history, que es el
@@ -659,9 +664,14 @@ impl App for Puriy {
                 start_load_post(&mut m, url, body, handle);
             }
             Msg::NavigateNewTab(target) => {
+                // `target="_blank"` debe enviar Referer del padre.
+                let referer = {
+                    let cur = m.active().url.clone();
+                    if cur == NEW_TAB_URL || cur.is_empty() { None } else { Some(cur) }
+                };
                 let mut tab = TabState::new(target.clone());
                 tab.gen = 1;
-                spawn_load(tab.id, tab.gen, target, handle.clone());
+                spawn_load(tab.id, tab.gen, target, referer, handle.clone());
                 m.tabs.push(tab);
                 m.active = m.tabs.len() - 1;
                 m.panel = None;
@@ -805,6 +815,7 @@ impl App for Puriy {
                     } else {
                         m.find_current + 1
                     };
+                    scroll_to_find_match(&mut m, &q);
                 }
             }
             Msg::FindPrev => {
@@ -816,6 +827,7 @@ impl App for Puriy {
                     } else {
                         m.find_current - 1
                     };
+                    scroll_to_find_match(&mut m, &q);
                 }
             }
             Msg::ToggleBookmarks => {
@@ -1524,6 +1536,9 @@ fn collect_history() -> (String, Vec<PanelItem>) {
 /// reload pasan `false`.
 fn start_load(m: &mut Model, url: String, push_history: bool, handle: &Handle<Msg>) {
     let t = m.active_mut();
+    // El referer es la URL desde la que se navega — útil para que el
+    // server sepa de dónde viene el click. Capturado ANTES de pisar t.url.
+    let referer = if t.url == NEW_TAB_URL || t.url.is_empty() { None } else { Some(t.url.clone()) };
     t.url = url.clone();
     t.addr.set_text(url.clone());
     t.addr_focused = false;
@@ -1540,17 +1555,17 @@ fn start_load(m: &mut Model, url: String, push_history: bool, handle: &Handle<Ms
     }
     t.gen = t.gen.wrapping_add(1);
     let (id, gen) = (t.id, t.gen);
-    spawn_load(id, gen, url, handle.clone());
+    spawn_load(id, gen, url, referer, handle.clone());
 }
 
-fn spawn_load(tab: TabId, gen: u64, url: String, handle: Handle<Msg>) {
+fn spawn_load(tab: TabId, gen: u64, url: String, referer: Option<String>, handle: Handle<Msg>) {
     if url == NEW_TAB_URL {
         // No fetch para about:blank.
         return;
     }
     std::thread::spawn(move || {
         let engine = Engine::new();
-        match engine.load(&url) {
+        match engine.load_with_referer(&url, referer.as_deref()) {
             Ok(doc) => {
                 let title = if doc.title.is_empty() { doc.url.clone() } else { doc.title.clone() };
                 handle.dispatch(Msg::Loaded {
@@ -1575,6 +1590,7 @@ fn spawn_load(tab: TabId, gen: u64, url: String, handle: Handle<Msg>) {
 
 fn start_load_post(m: &mut Model, url: String, body: String, handle: &Handle<Msg>) {
     let t = m.active_mut();
+    let referer = if t.url == NEW_TAB_URL || t.url.is_empty() { None } else { Some(t.url.clone()) };
     t.url = url.clone();
     t.addr.set_text(url.clone());
     t.addr_focused = false;
@@ -1591,7 +1607,7 @@ fn start_load_post(m: &mut Model, url: String, body: String, handle: &Handle<Msg
     let h = handle.clone();
     std::thread::spawn(move || {
         let engine = Engine::new();
-        match engine.load_post(&url, &body) {
+        match engine.load_post_with_referer(&url, &body, referer.as_deref()) {
             Ok(doc) => {
                 let title = if doc.title.is_empty() { doc.url.clone() } else { doc.title.clone() };
                 h.dispatch(Msg::Loaded {
@@ -3396,6 +3412,26 @@ fn truncate(s: &str, max: usize) -> String {
         let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
         out.push('…');
         out
+    }
+}
+
+/// Centra el viewport sobre el match actual de la find bar. Llama a
+/// `find_y_of_match` del box tree con el contador 1-based; si encuentra
+/// la y aproximada, setea `scroll_y` ~80px arriba del match para dar
+/// contexto visual. No-op si no hay box tree o el match no se encuentra.
+fn scroll_to_find_match(m: &mut Model, query_lower: &str) {
+    if m.find_current == 0 {
+        return;
+    }
+    let nth = m.find_current;
+    let y = m
+        .active()
+        .box_tree
+        .as_ref()
+        .and_then(|bt| bt.find_y_of_match(query_lower, nth));
+    if let Some(y) = y {
+        let t = m.active_mut();
+        t.scroll_y = (y - 80.0).max(0.0);
     }
 }
 
