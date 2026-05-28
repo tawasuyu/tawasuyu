@@ -21,7 +21,9 @@
 //! el socket raw Akasha viene en una vuelta posterior (ver
 //! `docs/ASISTENTE_WAWA.md` §3).
 
-use format::{AccionPropuesta, Contexto, Hash};
+use format::{
+    escribir_cabecera_cable, AccionPropuesta, Contexto, Hash, TipoCable, TAM_CABECERA_CABLE,
+};
 use serde::Deserialize;
 
 /// El prompt de sistema que el puente le envia al LLM. Lista las acciones
@@ -263,6 +265,61 @@ fn hex_de_hash(h: &Hash) -> String {
 }
 
 // ---------------------------------------------------------------------
+// Empaquetado wire — `AccionPropuesta` / `InterpretacionLlm` → bytes para
+// el cable Akasha. Espejo simetrico del parser de la app `asistente.wasm`.
+// ---------------------------------------------------------------------
+
+/// Empaqueta una `InterpretacionLlm` en bytes listos para enviar por el
+/// cable. Devuelve el (tipo, bytes) sin la cabecera; el caller agrega
+/// la cabecera con [`format::escribir_cabecera_cable`].
+///
+/// Codificacion por variante (igual que en `apps/asistente/src/lib.rs`):
+/// - `Notar(texto)`          → `(TipoCable::PropuestaNotar, texto_ascii)`
+/// - `LanzarApp(plantilla)`  → `(TipoCable::PropuestaLanzarApp, u32 BE)`
+/// - `InstalarApp(hash)`     → `(TipoCable::PropuestaInstalarApp, hash)`
+/// - `CambiarConfig(hash)`   → `(TipoCable::PropuestaCambiarConfig, hash)`
+/// - `Rechazo(motivo)`       → `(TipoCable::Error, motivo_ascii)`
+/// - `Error(motivo)`         → `(TipoCable::Error, motivo_ascii)`
+pub fn empaquetar_cable(interp: &InterpretacionLlm) -> (TipoCable, Vec<u8>) {
+    match interp {
+        InterpretacionLlm::Propuesta { accion, .. } => match accion {
+            AccionPropuesta::Notar { texto } => {
+                (TipoCable::PropuestaNotar, texto.as_bytes().to_vec())
+            }
+            AccionPropuesta::LanzarApp { plantilla } => (
+                TipoCable::PropuestaLanzarApp,
+                plantilla.to_be_bytes().to_vec(),
+            ),
+            AccionPropuesta::InstalarApp {
+                manifiesto_propuesto,
+            } => (
+                TipoCable::PropuestaInstalarApp,
+                manifiesto_propuesto.to_vec(),
+            ),
+            AccionPropuesta::CambiarConfiguracion { config_propuesta } => (
+                TipoCable::PropuestaCambiarConfig,
+                config_propuesta.to_vec(),
+            ),
+        },
+        InterpretacionLlm::Rechazo(motivo) | InterpretacionLlm::Error(motivo) => {
+            (TipoCable::Error, motivo.as_bytes().to_vec())
+        }
+    }
+}
+
+/// Construye un frame del cable completo (cabecera 12 B + payload) listo
+/// para inyectar en AF_PACKET con la MAC destino que el caller decida.
+/// El kernel pondra la cabecera Ethernet con la MAC origen segun la
+/// interfaz a la que esta bindeado el socket.
+pub fn construir_frame(id: u64, interp: &InterpretacionLlm) -> Vec<u8> {
+    let (tipo, payload) = empaquetar_cable(interp);
+    let mut frame = vec![0u8; TAM_CABECERA_CABLE + payload.len()];
+    escribir_cabecera_cable(&mut frame, tipo, id).expect("cabe");
+    frame[TAM_CABECERA_CABLE..].copy_from_slice(&payload);
+    frame
+}
+
+// ---------------------------------------------------------------------
 // Tests — lógica pura, sin red.
 // ---------------------------------------------------------------------
 
@@ -417,6 +474,80 @@ mod pruebas {
         let s = hex_de_hash(&h);
         assert_eq!(s.len(), 64);
         assert_eq!(hex_a_hash(&s), Some(h));
+    }
+
+    #[test]
+    fn empaquetar_notar_lleva_texto_ascii() {
+        let interp = InterpretacionLlm::Propuesta {
+            accion: AccionPropuesta::Notar {
+                texto: "hola".into(),
+            },
+            explicacion: "".into(),
+            confianza: 1.0,
+        };
+        let (tipo, payload) = empaquetar_cable(&interp);
+        assert_eq!(tipo, TipoCable::PropuestaNotar);
+        assert_eq!(payload, b"hola");
+    }
+
+    #[test]
+    fn empaquetar_lanzar_lleva_u32_be() {
+        let interp = InterpretacionLlm::Propuesta {
+            accion: AccionPropuesta::LanzarApp { plantilla: 0x01020304 },
+            explicacion: "".into(),
+            confianza: 1.0,
+        };
+        let (tipo, payload) = empaquetar_cable(&interp);
+        assert_eq!(tipo, TipoCable::PropuestaLanzarApp);
+        assert_eq!(payload, vec![0x01, 0x02, 0x03, 0x04]);
+    }
+
+    #[test]
+    fn empaquetar_instalar_lleva_hash_32B() {
+        let interp = InterpretacionLlm::Propuesta {
+            accion: AccionPropuesta::InstalarApp {
+                manifiesto_propuesto: [0xAB; 32],
+            },
+            explicacion: "".into(),
+            confianza: 1.0,
+        };
+        let (tipo, payload) = empaquetar_cable(&interp);
+        assert_eq!(tipo, TipoCable::PropuestaInstalarApp);
+        assert_eq!(payload.len(), 32);
+        assert!(payload.iter().all(|&b| b == 0xAB));
+    }
+
+    #[test]
+    fn empaquetar_rechazo_es_tipo_error() {
+        let interp = InterpretacionLlm::Rechazo("no se".into());
+        let (tipo, payload) = empaquetar_cable(&interp);
+        assert_eq!(tipo, TipoCable::Error);
+        assert_eq!(payload, b"no se");
+    }
+
+    #[test]
+    fn empaquetar_error_es_tipo_error() {
+        let interp = InterpretacionLlm::Error("JSON malformado".into());
+        let (tipo, payload) = empaquetar_cable(&interp);
+        assert_eq!(tipo, TipoCable::Error);
+        assert_eq!(payload, b"JSON malformado");
+    }
+
+    #[test]
+    fn construir_frame_es_decodificable_por_format() {
+        // El frame que escribimos tiene que ser legible por
+        // `format::leer_cabecera_cable` — espejo del parser que vive
+        // en `apps/asistente`.
+        let interp = InterpretacionLlm::Propuesta {
+            accion: AccionPropuesta::LanzarApp { plantilla: 5 },
+            explicacion: "abrir pluma".into(),
+            confianza: 1.0,
+        };
+        let frame = construir_frame(42, &interp);
+        let (tipo, id) = format::leer_cabecera_cable(&frame).expect("decodifica");
+        assert_eq!(tipo, TipoCable::PropuestaLanzarApp);
+        assert_eq!(id, 42);
+        assert_eq!(&frame[TAM_CABECERA_CABLE..], &5u32.to_be_bytes());
     }
 }
 

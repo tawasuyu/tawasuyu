@@ -22,6 +22,14 @@ description = "wawa :: app WASM — asistente conversacional (scaffolding)"
 [lib]
 crate-type = ["cdylib"]
 
+# La app NO importa el crate `format` aunque su protocolo cable este
+# definido alli: format es `no_std + alloc` (necesita un allocator
+# global) y esta app vive en `no_std` puro (sin alloc, sin allocator).
+# Las constantes y helpers del wire estan ESPEJADOS abajo en `src/lib.rs`
+# con un comentario que reza el contrato. El test
+# `format::pruebas::tipo_cable_codigos_estables` garantiza que los
+# discriminantes no cambien por accidente.
+
 [profile.dev]
 panic = "abort"
 

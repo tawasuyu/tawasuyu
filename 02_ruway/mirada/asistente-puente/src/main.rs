@@ -31,6 +31,8 @@ use asistente_puente::{
 use format::MensajeAsistente;
 use pluma_llm_core::{ChatClient, ChatRequest};
 
+mod akasha;
+
 /// Cota dura del frame entrante. Una consulta razonable rara vez excede
 /// algunos KB; un `u32` declarando muchísimos megabytes es señal de
 /// transporte roto, lo rechazamos.
@@ -59,12 +61,14 @@ fn correr() -> Result<(), String> {
     match modo {
         Modo::Stdio => correr_stdio(&llm, &rt),
         Modo::Daemon { socket } => correr_daemon(&llm, &rt, &socket),
+        Modo::Akasha { iface } => akasha::correr(&llm, &rt, &iface),
     }
 }
 
 enum Modo {
     Stdio,
     Daemon { socket: String },
+    Akasha { iface: String },
 }
 
 /// Parser minimal de argumentos. Sin libs nuevas — un solo flag bastante.
@@ -74,6 +78,10 @@ fn parsear_args(mut args: impl Iterator<Item = String>) -> Result<Modo, String> 
         Some(flag) if flag == "--socket" => match args.next() {
             Some(path) => Ok(Modo::Daemon { socket: path }),
             None => Err("--socket requiere una ruta de socket".into()),
+        },
+        Some(flag) if flag == "--akasha" => match args.next() {
+            Some(iface) => Ok(Modo::Akasha { iface }),
+            None => Err("--akasha requiere un nombre de interfaz".into()),
         },
         Some(flag) if flag == "--help" || flag == "-h" => {
             print_help();
@@ -90,10 +98,13 @@ fn print_help() {
          Uso:\n  \
            asistente-puente                    Un turno por stdin/stdout (postcard).\n  \
            asistente-puente --socket <path>    Daemon Unix socket; clientes en serie.\n  \
+           asistente-puente --akasha <iface>   AF_PACKET sobre interfaz fisica.\n  \
            asistente-puente --help             Muestra esta ayuda.\n\
          \n\
-         El payload en ambos modos es `MensajeAsistente` (shared/format) en\n\
-         postcard, precedido por u32 LE con la longitud del frame.\n\
+         stdio y --socket transportan `MensajeAsistente` (postcard, prefijo u32 LE).\n\
+         --akasha transporta `TipoCable` (binario corto: cabecera 12 B + payload)\n\
+         sobre EtherType 0x88B6 — el protocolo que habla `asistente.wasm` en wawa.\n\
+         Requiere permisos para abrir AF_PACKET (cap_net_raw, root o setcap).\n\
          \n\
          pluma-llm autodetecta el backend desde el entorno:\n  \
            ANTHROPIC_API_KEY, GEMINI_API_KEY, DEEPSEEK_API_KEY, COHERE_API_KEY,\n  \

@@ -192,27 +192,29 @@ Mostrados en orden de dependencia, no de complejidad:
 2. ~~**Reservar `CANAL_ASISTENTE = 0x4153`** en el catálogo de canales
    Akasha.~~ ✅ HECHO junto con el §1. Documentar en `WAWA.md §20` queda
    como nota de mantenimiento cuando se cierre la familia de canales.
-3. **Escribir el puente** como crate Linux `02_ruway/mirada/asistente-
-   puente`. **Parcialmente HECHO** (scaffolding stdio): la lógica pura
-   (PROMPT_SISTEMA_WAWA, `traducir_propuesta_llm`,
-   `construir_prompt_usuario`) ya vive en
-   `02_ruway/mirada/asistente-puente/src/lib.rs` con 12 tests; el
-   binario lee/escribe `MensajeAsistente` por stdin/stdout en postcard
-   con prefijo `u32 LE`. **Falta** el bind al socket raw Akasha
-   (cap_net_raw), la multiplexación por id, y el modo daemon.
-   ~1-2 sesiones restantes.
-4. **Escribir `asistente.wasm`** como app cdylib en
-   `03_ukupacha/wawa/apps/asistente/`. **v1+v2 HECHO** (Fase 60 v3+v4):
-   cdylib `no_std + panic=abort`, `init()` y `tick()` pintan título +
-   barra + roadmap dentro de la región 480×240. v2 sumó input de texto
-   local: `sys_get_scancode` + edge-detect anti-rebote + tabla mínima
-   de scancodes set 1 → ASCII mayúsculas + buffer `QUERY` de 64 chars
-   con backspace y cursor visible. Enter es no-op (v3 lo conectará a
-   `sys_red_enviar`). Verificado: compila a wasm32-unknown-unknown sin
-   warnings, artefacto release ~3.8 KB. **Falta v3**
-   (`sys_red_enviar`/`sys_red_recibir` sobre `CANAL_ASISTENTE`) y
-   **v4** (presentar propuestas y disparar firma humana). ~2 sesiones
-   restantes.
+3. ~~**Escribir el puente** como crate Linux `02_ruway/mirada/asistente-
+   puente`.~~ ✅ HECHO. Tres modos de transporte cableados:
+   - **stdio** (1 turno por proceso) — para tests con `printf` + `xxd`.
+   - **--socket <path>** (Unix socket, multi-turno por cliente).
+   - **--akasha <iface>** (AF_PACKET SOCK_DGRAM, EtherType 0x88B6) —
+     bind a una interfaz física, recv del cable, traduce a prompt LLM,
+     responde por broadcast. Requiere `cap_net_raw`.
+
+   23 lib tests + 12 main tests = 35 verde. Empaquetado de respuestas
+   en `construir_frame(id, interp)` espejo del parser del cable wasm.
+4. ~~**Escribir `asistente.wasm`** como app cdylib en
+   `03_ukupacha/wawa/apps/asistente/`.~~ ✅ HECHO (v1+v2+v3). cdylib
+   `no_std + panic=abort` 480×240; `init()` carga MAC, `tick()` drena
+   teclado y red. v2: `sys_get_scancode` + tabla scancodes set 1 →
+   ASCII mayúsculas + buffer `QUERY` 64 chars con backspace y cursor
+   visible. v3: `sys_net_*` con frame Ethernet manual (broadcast,
+   ETHERTYPE 0x88B6) + helpers wire (`escribir_cabecera_cable`,
+   `leer_cabecera_cable`) espejados del crate `format`. Enter dispara
+   una `Consulta`, drenar filtra por EtherType + ID. Estados de UI
+   pintan reposo/esperando/propuesta/error según `EstadoRed`. Artefacto
+   release ~6.1 KB. **Falta v4**: presentar propuestas hash con
+   `sys_manifiesto_proponer` después de `daemon-firma`. ~1 sesión
+   restante.
 5. ~~**Cablear `daemon-firma`** para que también firme objetos
    `ConfiguracionFirmada` (hoy sólo firma manifiestos).~~ ✅ HECHO (Fase
    60 v2). `wawactl daemon-firma` ahora reconoce dos prefijos paralelos
@@ -226,11 +228,9 @@ Mostrados en orden de dependencia, no de complejidad:
 6. **Sembrar `asistente.wasm` en GENESIS** o, mejor, dejar que el operador
    la instale en vivo vía `mudanza` (la palanca de v9/v10 del launcher).
 
-Estimado restante: 4-8 sesiones (las fases 1-2 y 5 están hechas; 3 y 4
-están a la mitad). El asistente Linux (`mirada-asistente-llimphi`) que
-ya corre cubre el caso de uso "asistente conversacional para gioser"
-para el operador humano de hoy; la versión wawa avanza en paralelo
-según prioridades.
+Estimado restante: 1-2 sesiones — sólo queda v4 del asistente.wasm
+(propuesta hash → daemon-firma) y la siembra en GENESIS. El resto del
+pipeline está vivo end-to-end (modulo testing en hardware real).
 
 ## 6. Modos de fallo
 
@@ -283,22 +283,21 @@ Por elección, no por descuido:
 
 ## 9. Estado
 
-**Cerrados**: hitos 1-2 (formato del protocolo y canal Akasha) y 5
-(daemon-firma discrimina cuaderno/configuración).
+**Cerrados**: hitos 1-2 (formato del protocolo y canal Akasha), 3
+(puente Linux con stdio + socket + Akasha), 4 v1+v2+v3 (asistente.wasm
+con UI + input + red), 5 (daemon-firma discrimina cuaderno/configuración).
 
-**A medio camino**:
-- Hito 3 (puente Linux): `asistente-puente` crate con la lógica pura
-  (PROMPT_SISTEMA_WAWA, traducir_propuesta_llm, construir_prompt_usuario)
-  y dos modos de transporte (stdio + daemon Unix socket). Falta el bind
-  raw Akasha (cap_net_raw, multiplexación entre nodos).
-- Hito 4 (asistente.wasm): scaffolding v1 instalado en
-  `03_ukupacha/wawa/apps/asistente/`. Compila a wasm32-unknown-unknown
-  (~2.6 KB). Falta input de texto (v2), red Akasha (v3), propuesta +
-  firma humana (v4).
+**A medio camino**: hito 4 v4 — el asistente.wasm presenta propuestas
+hash pero todavía no las dispara al `daemon-firma` para la firma humana
+ni invoca `sys_manifiesto_proponer`. Requiere PERMISO_RAIZ en la
+EntradaApp (hoy ni siquiera está sembrada).
 
-**Abiertos**: hito 6 (siembra en GENESIS). Cero código: depende de v4
-del hito 4.
+**Abiertos**: hito 6 (siembra en GENESIS).
 
 Sin urgencia: el asistente Linux cubre el caso de uso "asistente
 conversacional para gioser" para el operador humano de hoy; la versión
-wawa es para cuando wawa sea el daily driver, que aún no lo es.
+wawa es para cuando wawa sea el daily driver, que aún no lo es. El
+pipeline cable está vivo end-to-end excepto la firma — un demo de
+"app en wawa pregunta al LLM y el LLM contesta `Notar(...)` legible"
+ya funciona en cuanto se siembre la app y se corra `asistente-puente
+--akasha eth0` en otra máquina de la misma red.

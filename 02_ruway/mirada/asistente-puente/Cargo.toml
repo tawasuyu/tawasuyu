@@ -24,6 +24,11 @@ tokio = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 postcard = { workspace = true }
+# Para el modo --akasha: AF_PACKET + ifindex lookup. nix expone
+# `if_nametoindex` pero `AF_PACKET` low-level lo hacemos con libc
+# directo — menos abstraccion, mas claridad sobre la ABI del kernel.
+libc = { workspace = true }
+nix = { workspace = true }
 
 [dev-dependencies]
 pluma-llm-mock = { path = "../../../00_unanchay/pluma/pluma-llm-mock" }

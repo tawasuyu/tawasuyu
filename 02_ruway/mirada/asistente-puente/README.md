@@ -4,22 +4,24 @@ Recibe consultas de la app `asistente.wasm` (kernel wawa, vía Akasha),
 las traduce a una consulta de LLM con `pluma-llm` autodetect, y devuelve
 una propuesta interpretada lista para presentar al humano.
 
-## Estado: scaffolding (sin Akasha real todavía)
+## Estado: tres modos de transporte
 
-El binario hoy ofrece dos modos de transporte, según los flags:
+El binario ofrece tres modos según el flag de línea de comandos:
 
 - **stdio** (default, sin args): un único turno
   `Consulta → Propuesta/Error` sobre stdin/stdout. Útil para tests o
-  ejercicios con `printf` + `xxd`.
+  ejercicios con `printf` + `xxd`. Payload: `MensajeAsistente` postcard
+  con prefijo `u32 LE`.
 - **daemon Unix socket** (`--socket <path>`): listen + accept en serie,
   cada cliente puede mandar N turnos hasta EOF. Útil para que el
-  asistente Linux lo consulte sin lanzar un proceso por pregunta.
-
-El payload en ambos modos es `MensajeAsistente` en postcard binario con
-un prefijo de longitud `u32 LE`. El socket raw Akasha (multiplexación
-real entre nodos wawa, broadcast, dedup) viene en una vuelta posterior;
-el contrato del payload ya queda estable porque vive en
-`shared/format::MensajeAsistente`.
+  asistente Linux lo consulte sin lanzar un proceso por pregunta. Mismo
+  payload que stdio.
+- **Akasha** (`--akasha <iface>`): bind a `AF_PACKET SOCK_DGRAM` sobre la
+  interfaz física, filtrado por `ETHERTYPE_ASISTENTE = 0x88B6`. Payload
+  binario corto (`format::TipoCable`: 12 B cabecera + bytes específicos
+  del tipo). Es el protocolo que habla `asistente.wasm` desde el kernel
+  wawa. Requiere permisos para abrir AF_PACKET (cap_net_raw, root, o
+  `setcap cap_net_raw=ep target/release/asistente-puente`).
 
 ## Lo que ya funciona
 
@@ -33,17 +35,18 @@ el contrato del payload ya queda estable porque vive en
 
 ## Lo que falta
 
-- Bind a un socket raw Akasha (EtherType propio). El kernel wawa filtra
-  paquetes con `CANAL_ASISTENTE = 0x4153` hacia los suscriptores;
-  necesitamos `cap_net_raw` o equivalente.
-- Multiplexación: un puente sirviendo varios nodos wawa tiene que
-  enrutar respuestas por `id` de la `Consulta`.
 - Para `InstalarApp` / `CambiarConfiguracion`: emitir el objeto
   `Manifiesto` / `Configuracion` por el grafo (otra trama Akasha) antes
   de proponer su hash. Hoy el LLM puede inventar hashes — el kernel los
   rechazará al verificar, pero deberíamos cazarlo aquí antes.
-- Daemon mode: en lugar de "una consulta por proceso", correr
-  indefinidamente atendiendo el socket.
+- Multiplexación entre nodos: hoy el modo `--akasha` responde al
+  broadcast; un nodo recibe respuestas dirigidas a *cualquier* nodo de
+  la misma red (las filtra por `id` en la app `asistente.wasm`).
+  Mejorable con sendto unicast al remitente que `recvfrom` reveló.
+- Contexto del nodo: la `Consulta` v3 viaja sin `Contexto` (apps
+  disponibles, manifiesto vigente). El puente arma un `Contexto::default()`
+  vacío. Cuando v4 sume el contexto al payload del cable, el puente lo
+  pasa al LLM y las propuestas pueden referirse a apps reales.
 
 ## Probarlo localmente
 
@@ -67,8 +70,25 @@ cargo run -p asistente-puente -- --socket /tmp/asistente.sock
 ```
 
 Cualquier cliente que abra ese socket y emita frames postcard puede
-consultarlo. Util para iterar con el asistente Linux mientras el bind
-Akasha no esté listo.
+consultarlo.
+
+Modo Akasha sobre una interfaz física:
+
+```bash
+# Build release y dar capacidad sin sudo (preferido):
+cargo build -p asistente-puente --release
+sudo setcap cap_net_raw=ep target/release/asistente-puente
+target/release/asistente-puente --akasha eth0
+
+# O directo con sudo:
+sudo cargo run -p asistente-puente --release -- --akasha eth0
+```
+
+Este modo bindeará un socket `AF_PACKET SOCK_DGRAM` a la interfaz
+indicada, filtrado por `EtherType 0x88B6`. Cada `Consulta` que
+`asistente.wasm` emita desde un nodo wawa en la misma red llega aquí,
+se traduce a un prompt para el LLM, y la respuesta vuelve por broadcast
+en el mismo EtherType.
 
 ## Diseño completo
 

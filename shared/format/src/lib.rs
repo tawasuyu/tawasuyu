@@ -790,7 +790,26 @@ pub fn longitud_registro(cabecera: &[u8]) -> Option<usize> {
 /// kernel filtra paquetes con este canal hacia los suscriptores del oficio
 /// asistente; el puente Linux abre un socket raw que suscribe al mismo
 /// número para recibir consultas y enviar propuestas.
+///
+/// NOTA: 0x4153 está dentro del rango histórico de "longitud" de Ethernet
+/// (< 0x0600), así que NO sirve como EtherType. Para los frames del
+/// asistente sobre el cable se usa [`ETHERTYPE_ASISTENTE`]; este valor
+/// queda como discriminante interno (postcard tag, identificador del
+/// oficio en logs y trazas).
 pub const CANAL_ASISTENTE: u16 = 0x4153;
+
+/// EtherType de los frames del asistente sobre el cable. Vecino del
+/// 0x88B5 que ya usa Akasha — los dos viven en el rango "experimental"
+/// que la IEEE deja libre. El demuxer Akasha del kernel (`akasha.rs`)
+/// trata frames con EtherType ajeno como "para el usuario": los encola
+/// tal cual sin procesar. La app `asistente.wasm` los recoge con
+/// `sys_net_recibir`, filtra por este EtherType y decodifica el payload
+/// como [`MensajeAsistente`] postcard.
+///
+/// Mantenerlo distinto de 0x88B5 evita que el demuxer intente
+/// deserializar el payload como `MensajeAkasha` y lo descarte como
+/// `PayloadInvalido` antes de pasarlo al usuario.
+pub const ETHERTYPE_ASISTENTE: u16 = 0x88B6;
 
 /// Acción que el LLM (vía el puente) propone al asistente. La app pinta
 /// la propuesta, el humano decide. Acciones potentes (re-anclar manifiesto,
@@ -875,6 +894,96 @@ impl MensajeAsistente {
     pub fn deserializar(bytes: &[u8]) -> Result<Self, postcard::Error> {
         postcard::from_bytes(bytes)
     }
+}
+
+// =============================================================================
+//  Protocolo "cable" del asistente — alfabeto minimo sin alloc
+// -----------------------------------------------------------------------------
+//  `MensajeAsistente` (arriba) usa `String` y `Vec` para empaquetar prompts
+//  y explicaciones de longitud arbitraria. La app `asistente.wasm` corre en
+//  no_std SIN alloc — no puede construir esos tipos. Para el cable definimos
+//  un alfabeto minimo que cabe en arrays fijos: cabecera de 12 bytes
+//  (canal + tipo + id) + payload de longitud inferida del frame.
+//
+//  El puente Linux traduce entre el rico `MensajeAsistente` (que usa para
+//  hablar con pluma-llm) y este protocolo cable (que viaja por Akasha).
+// =============================================================================
+
+/// Tamaño en bytes de la cabecera del protocolo cable.
+/// `canal (2) + tipo (2) + id (8) = 12`.
+pub const TAM_CABECERA_CABLE: usize = 12;
+
+/// Tipos de mensaje sobre el cable del asistente. Discriminante u16 big
+/// endian estable — los lectores binarios pueden grep por estos valores.
+#[repr(u16)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TipoCable {
+    /// Consulta de la app al puente. Payload = bytes ASCII del prompt
+    /// (sin nul terminator — la longitud se infiere del frame).
+    Consulta = 1,
+    /// Propuesta del puente del tipo `Notar` (la IA contestó algo
+    /// informativo). Payload = bytes ASCII del texto.
+    PropuestaNotar = 2,
+    /// Propuesta del puente del tipo `LanzarApp`. Payload = u32 BE con
+    /// el índice de plantilla a lanzar (4 bytes).
+    PropuestaLanzarApp = 3,
+    /// Propuesta de re-anclar el manifiesto. Payload = 32 bytes del hash.
+    PropuestaInstalarApp = 4,
+    /// Propuesta de cambiar la configuración activa. Payload = 32 bytes
+    /// del hash de la nueva configuración.
+    PropuestaCambiarConfig = 5,
+    /// Error reportado por el puente (transporte, rechazo del LLM,
+    /// parseo). Payload = bytes ASCII del motivo.
+    Error = 6,
+}
+
+impl TipoCable {
+    /// Traduce un u16 al variant correspondiente o `None` si es
+    /// desconocido (el cable trajo un tipo no registrado).
+    pub fn de_u16(v: u16) -> Option<Self> {
+        match v {
+            1 => Some(Self::Consulta),
+            2 => Some(Self::PropuestaNotar),
+            3 => Some(Self::PropuestaLanzarApp),
+            4 => Some(Self::PropuestaInstalarApp),
+            5 => Some(Self::PropuestaCambiarConfig),
+            6 => Some(Self::Error),
+            _ => None,
+        }
+    }
+}
+
+/// Escribe la cabecera del cable en `out`. Devuelve la longitud escrita
+/// (siempre `TAM_CABECERA_CABLE`) o `None` si `out` no cabe — el caller
+/// reserva el buffer apropiado.
+pub fn escribir_cabecera_cable(out: &mut [u8], tipo: TipoCable, id: u64) -> Option<usize> {
+    if out.len() < TAM_CABECERA_CABLE {
+        return None;
+    }
+    out[0..2].copy_from_slice(&CANAL_ASISTENTE.to_be_bytes());
+    out[2..4].copy_from_slice(&(tipo as u16).to_be_bytes());
+    out[4..12].copy_from_slice(&id.to_be_bytes());
+    Some(TAM_CABECERA_CABLE)
+}
+
+/// Lee la cabecera del cable y verifica que el canal sea el del
+/// asistente. Devuelve `(tipo, id)` o `None` si los bytes son
+/// insuficientes, el canal no coincide o el tipo es desconocido. El
+/// llamante interpreta `&bytes[TAM_CABECERA_CABLE..]` según `tipo`.
+pub fn leer_cabecera_cable(bytes: &[u8]) -> Option<(TipoCable, u64)> {
+    if bytes.len() < TAM_CABECERA_CABLE {
+        return None;
+    }
+    let canal = u16::from_be_bytes([bytes[0], bytes[1]]);
+    if canal != CANAL_ASISTENTE {
+        return None;
+    }
+    let tipo_raw = u16::from_be_bytes([bytes[2], bytes[3]]);
+    let tipo = TipoCable::de_u16(tipo_raw)?;
+    let id = u64::from_be_bytes([
+        bytes[4], bytes[5], bytes[6], bytes[7], bytes[8], bytes[9], bytes[10], bytes[11],
+    ]);
+    Some((tipo, id))
 }
 
 // =============================================================================
@@ -1476,5 +1585,77 @@ mod pruebas {
         // ocupado. Cambiar el valor requiere actualizar el doc.
         assert_eq!(CANAL_ASISTENTE, 0x4153);
         assert_eq!(&CANAL_ASISTENTE.to_be_bytes(), b"AS");
+    }
+
+    #[test]
+    fn ethertype_asistente_distinto_de_akasha() {
+        // El demuxer Akasha del kernel descarta payloads que no parsean
+        // como `MensajeAkasha`. Si usaramos 0x88B5, los frames del
+        // asistente caerian como `PayloadInvalido` y se contarian en
+        // `RX_DESCARTADOS` antes de pasar al usuario. Con 0x88B6 caen
+        // en la rama `EtherTypeAjeno` que va directo al usuario.
+        assert_eq!(ETHERTYPE_ASISTENTE, 0x88B6);
+        assert_ne!(ETHERTYPE_ASISTENTE, 0x88B5);
+    }
+
+    #[test]
+    fn cabecera_cable_round_trip_consulta() {
+        let mut buf = [0u8; 32];
+        let n = escribir_cabecera_cable(&mut buf, TipoCable::Consulta, 0xDEADBEEFCAFEBABE)
+            .expect("cabe");
+        assert_eq!(n, TAM_CABECERA_CABLE);
+        let (tipo, id) = leer_cabecera_cable(&buf).expect("valida");
+        assert_eq!(tipo, TipoCable::Consulta);
+        assert_eq!(id, 0xDEADBEEFCAFEBABE);
+    }
+
+    #[test]
+    fn cabecera_cable_round_trip_propuesta_lanzar() {
+        let mut buf = [0u8; 12];
+        escribir_cabecera_cable(&mut buf, TipoCable::PropuestaLanzarApp, 7).unwrap();
+        let (tipo, id) = leer_cabecera_cable(&buf).unwrap();
+        assert_eq!(tipo, TipoCable::PropuestaLanzarApp);
+        assert_eq!(id, 7);
+    }
+
+    #[test]
+    fn cabecera_cable_rechaza_canal_ajeno() {
+        let mut buf = [0u8; 12];
+        // Forjamos una cabecera con canal distinto al asistente.
+        buf[0..2].copy_from_slice(&0xABCDu16.to_be_bytes());
+        buf[2..4].copy_from_slice(&(TipoCable::Consulta as u16).to_be_bytes());
+        assert!(leer_cabecera_cable(&buf).is_none());
+    }
+
+    #[test]
+    fn cabecera_cable_rechaza_tipo_desconocido() {
+        let mut buf = [0u8; 12];
+        buf[0..2].copy_from_slice(&CANAL_ASISTENTE.to_be_bytes());
+        buf[2..4].copy_from_slice(&999u16.to_be_bytes()); // tipo inválido
+        assert!(leer_cabecera_cable(&buf).is_none());
+    }
+
+    #[test]
+    fn cabecera_cable_rechaza_truncada() {
+        let buf = [0u8; 5];
+        assert!(leer_cabecera_cable(&buf).is_none());
+    }
+
+    #[test]
+    fn escribir_cabecera_cable_rechaza_buffer_corto() {
+        let mut buf = [0u8; 5];
+        assert!(escribir_cabecera_cable(&mut buf, TipoCable::Consulta, 0).is_none());
+    }
+
+    #[test]
+    fn tipo_cable_codigos_estables() {
+        // Si alguien renumera los discriminantes, los lectores
+        // binarios viejos rompen. Este test caza el cambio.
+        assert_eq!(TipoCable::Consulta as u16, 1);
+        assert_eq!(TipoCable::PropuestaNotar as u16, 2);
+        assert_eq!(TipoCable::PropuestaLanzarApp as u16, 3);
+        assert_eq!(TipoCable::PropuestaInstalarApp as u16, 4);
+        assert_eq!(TipoCable::PropuestaCambiarConfig as u16, 5);
+        assert_eq!(TipoCable::Error as u16, 6);
     }
 }
