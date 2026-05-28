@@ -5,8 +5,11 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "khipu-app — gravedad semántica: afinidad coseno entre notas, vecinos más cercanos, clústeres por umbral y layout 2D dirigido por fuerzas."
+description = "khipu — dos físicas puras: masa temporal (decay/refuerzo con vida media y horizonte) y gravedad semántica (afinidad coseno, vecinos, clústeres y layout 2D)."
 
 [dependencies]
 khipu-core = { path = "../khipu-core" }
 serde = { workspace = true }
+# `libm`: la masa decae con `exp` y queremos mantenernos compatibles
+# con futuros consumidores `no_std` (kernel wawa, WASM bare).
+libm = { workspace = true }

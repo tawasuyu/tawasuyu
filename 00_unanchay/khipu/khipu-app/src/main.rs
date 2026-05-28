@@ -24,8 +24,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use directories::ProjectDirs;
 use khipu_core::{Note, NoteId, NoteStore};
-use khipu_gravity::{GravityConfig, NotePlacement, SemanticField};
+use khipu_gravity::{Gravity, GravityConfig, NotePlacement, Params, SemanticField};
 use llimphi_theme::Theme;
+use llimphi_ui::llimphi_hal::winit::keyboard::{Key, NamedKey};
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, FlexDirection, Rect, Size, Style},
     AlignItems, Dimension, JustifyContent,
@@ -33,7 +34,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Circle as KurboCircle, Stroke};
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, Handle, KeyEvent, View};
+use llimphi_ui::{App, Handle, KeyEvent, KeyState, View};
 use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
 use llimphi_widget_text_editor::{
     text_editor_view, EditorMetrics, EditorPalette, EditorState, PointerEvent,
@@ -64,6 +65,7 @@ enum Msg {
     SelectNote(NoteId),
     NewNote,
     DeleteSelected,
+    ToggleArchive,
     Focus(Focus),
     Key(KeyEvent),
     EditorPointer(PointerEvent),
@@ -72,7 +74,8 @@ enum Msg {
 struct Model {
     store: NoteStore,
     field: SemanticField,
-    /// Orden de presentación (por inserción).
+    /// Orden de inserción (estable). La presentación se reordena por
+    /// masa decreciente al renderizar.
     order: Vec<NoteId>,
     selected: Option<NoteId>,
     title: TextInputState,
@@ -81,6 +84,11 @@ struct Model {
     focus: Focus,
     theme: Theme,
     data_path: Option<PathBuf>,
+    /// Física temporal: vida media + boost + horizonte.
+    gravity: Gravity,
+    /// `true` cuando el usuario quiere ver también las notas que
+    /// cayeron del horizonte. Default `false`.
+    show_archive: bool,
 }
 
 struct KhipuApp;
@@ -97,9 +105,18 @@ impl App for KhipuApp {
         };
         model.data_path = data_path;
         model.theme = Theme::dark();
-        if let Some(id) = model.order.first().copied() {
+        // Aplica el decay correspondiente al tiempo transcurrido desde
+        // la última vez que se vio cada nota — al arrancar el archivo
+        // refleja la realidad temporal, no el estado congelado.
+        apply_decay_to_all(&mut model, now_secs());
+        // Elegimos la primera nota visible tras el reordenamiento por
+        // masa; en su defecto, la primera del orden de inserción.
+        let first = first_visible(&model).or_else(|| model.order.first().copied());
+        if let Some(id) = first {
+            reinforce_and_touch(&mut model, id);
             select(&mut model, id);
         }
+        persist(&model);
         model
     }
 
@@ -107,7 +124,9 @@ impl App for KhipuApp {
         match msg {
             Msg::SelectNote(id) => {
                 commit_edits(&mut model);
+                reinforce_and_touch(&mut model, id);
                 select(&mut model, id);
+                persist(&model);
             }
             Msg::NewNote => {
                 commit_edits(&mut model);
@@ -117,6 +136,9 @@ impl App for KhipuApp {
                 refresh_embedding(&mut model, id);
                 select(&mut model, id);
                 persist(&model);
+            }
+            Msg::ToggleArchive => {
+                model.show_archive = !model.show_archive;
             }
             Msg::DeleteSelected => {
                 if let Some(id) = model.selected {
@@ -215,6 +237,19 @@ impl App for KhipuApp {
     }
 
     fn on_key(_model: &Model, event: &KeyEvent) -> Option<Msg> {
+        // Atajo global: Ctrl+N (sin foco en input necesario) crea
+        // nota. Esc libera el foco. Cualquier otra tecla la dispatcha
+        // como `Key` al input/editor focado.
+        if event.state == KeyState::Pressed && !event.repeat {
+            if event.modifiers.ctrl
+                && matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("n"))
+            {
+                return Some(Msg::NewNote);
+            }
+            if matches!(&event.key, Key::Named(NamedKey::Escape)) {
+                return Some(Msg::Focus(Focus::None));
+            }
+        }
         Some(Msg::Key(event.clone()))
     }
 
@@ -251,10 +286,21 @@ fn header_view(model: &Model) -> View<Msg> {
     .text_aligned(title, 14.0, model.theme.fg_text, Alignment::Start);
 
     let new_btn = button(
-        "+ nueva",
+        "+ nueva  (Ctrl+N)",
         model.theme.bg_button,
         model.theme.fg_text,
         Msg::NewNote,
+    );
+    let archive_label = if model.show_archive {
+        "ocultar archivo"
+    } else {
+        "ver archivo"
+    };
+    let archive_btn = button(
+        archive_label,
+        model.theme.bg_button,
+        model.theme.fg_muted,
+        Msg::ToggleArchive,
     );
     let del_btn = button(
         "borrar",
@@ -284,13 +330,18 @@ fn header_view(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .fill(model.theme.bg_panel_alt)
-    .children(vec![title_node, new_btn, del_btn])
+    .children(vec![title_node, new_btn, archive_btn, del_btn])
 }
 
 fn button(label: &str, bg: Color, fg: Color, msg: Msg) -> View<Msg> {
+    // El ancho crece con el largo del texto — los labels más
+    // explícitos («+ nueva (Ctrl+N)», «ocultar archivo») piden más
+    // espacio que un «borrar» seco.
+    let chars = label.chars().count() as f32;
+    let width = (chars * 7.2 + 22.0).max(86.0);
     View::new(Style {
         size: Size {
-            width: length(82.0_f32),
+            width: length(width),
             height: length(26.0_f32),
         },
         padding: Rect {
@@ -310,10 +361,37 @@ fn button(label: &str, bg: Color, fg: Color, msg: Msg) -> View<Msg> {
 }
 
 fn list_panel(model: &Model, palette: &ListPalette) -> View<Msg> {
-    let rows: Vec<ListRow<Msg>> = model
-        .order
-        .iter()
-        .filter_map(|id| model.store.get(*id).map(|n| (*id, n)))
+    // Particionamos en horizonte vs archivo y ordenamos cada parte por
+    // masa decreciente. El orden de inserción se conserva entre notas
+    // de la misma masa.
+    let mut visible: Vec<(NoteId, &Note)> = Vec::new();
+    let mut archive: Vec<(NoteId, &Note)> = Vec::new();
+    for id in &model.order {
+        let Some(n) = model.store.get(*id) else {
+            continue;
+        };
+        if model.gravity.is_visible(n.mass) {
+            visible.push((*id, n));
+        } else {
+            archive.push((*id, n));
+        }
+    }
+    let by_mass_desc = |a: &(NoteId, &Note), b: &(NoteId, &Note)| {
+        b.1.mass
+            .partial_cmp(&a.1.mass)
+            .unwrap_or(core::cmp::Ordering::Equal)
+            .then(a.0.cmp(&b.0))
+    };
+    visible.sort_by(by_mass_desc);
+    archive.sort_by(by_mass_desc);
+
+    let mut chain: Vec<(NoteId, &Note)> = visible.clone();
+    if model.show_archive {
+        chain.extend(archive.iter().cloned());
+    }
+
+    let rows: Vec<ListRow<Msg>> = chain
+        .into_iter()
         .map(|(id, n)| ListRow {
             label: row_label(n),
             selected: Some(id) == model.selected,
@@ -321,10 +399,26 @@ fn list_panel(model: &Model, palette: &ListPalette) -> View<Msg> {
         })
         .collect();
 
+    let caption = if archive.is_empty() {
+        format!("notas · {}", visible.len())
+    } else if model.show_archive {
+        format!(
+            "notas · {} horizonte + {} archivo",
+            visible.len(),
+            archive.len()
+        )
+    } else {
+        format!(
+            "notas · {} horizonte (+{} archivo)",
+            visible.len(),
+            archive.len()
+        )
+    };
+
     let spec = ListSpec {
         total: rows.len(),
         rows,
-        caption: Some("notas".to_string()),
+        caption: Some(caption),
         truncated_hint: None,
         row_height: ROW_H,
         palette: *palette,
@@ -342,11 +436,18 @@ fn list_panel(model: &Model, palette: &ListPalette) -> View<Msg> {
 }
 
 fn row_label(n: &Note) -> String {
-    if n.title.is_empty() {
-        "(sin título)".to_string()
+    let title = if n.title.is_empty() {
+        "(sin título)"
     } else {
-        n.title.clone()
-    }
+        n.title.as_str()
+    };
+    // Una barra de tres bloques visualiza la masa (0..1.5 mapeada a
+    // 0..3). Sobre el horizonte se ve llena; cayendo, se vacía.
+    let bars = (n.mass.clamp(0.0, 1.5) / 0.5).round() as usize;
+    let glyph: String = (0..3)
+        .map(|i| if i < bars { '▮' } else { '▯' })
+        .collect();
+    format!("{glyph}  {title}")
 }
 
 fn editor_panel(
@@ -975,6 +1076,8 @@ fn from_state(state: PersistedState) -> Model {
         focus: Focus::None,
         theme: Theme::dark(),
         data_path: None,
+        gravity: Gravity::new(Params::default()),
+        show_archive: false,
     }
 }
 
@@ -990,6 +1093,8 @@ fn seeded_model() -> Model {
         focus: Focus::None,
         theme: Theme::dark(),
         data_path: None,
+        gravity: Gravity::new(Params::default()),
+        show_archive: false,
     };
     let now = now_secs();
     let seed: [(&str, &str, &[&str]); 7] = [
@@ -1043,6 +1148,62 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// Aplica el `decay` a todas las notas según el `dt` desde su
+/// `last_access` hasta `now`. Las notas con `last_access == 0`
+/// (payloads viejos antes de los campos temporales) reciben `dt = 0`
+/// — equivale a no decaer todavía.
+fn apply_decay_to_all(model: &mut Model, now: u64) {
+    let ids: Vec<NoteId> = model.order.clone();
+    for id in ids {
+        let Some(n) = model.store.get(id) else {
+            continue;
+        };
+        let dt = if n.last_access == 0 {
+            0.0
+        } else if now > n.last_access {
+            (now - n.last_access) as f32
+        } else {
+            0.0
+        };
+        let new_mass = model.gravity.decay(n.mass, dt);
+        model.store.set_mass(id, new_mass);
+        // No re-tocamos `last_access` aquí: el decay es físico, no
+        // un acceso del usuario.
+    }
+}
+
+/// Refuerza la masa de `id` y marca `last_access`. El gesto canónico
+/// cuando el usuario selecciona o abre una nota.
+fn reinforce_and_touch(model: &mut Model, id: NoteId) {
+    let Some(n) = model.store.get(id) else {
+        return;
+    };
+    let reinforced = model.gravity.reinforce(n.mass);
+    model.store.set_mass(id, reinforced);
+    model.store.touch(id, now_secs());
+}
+
+/// Primera nota sobre el horizonte, ordenada por masa decreciente.
+fn first_visible(model: &Model) -> Option<NoteId> {
+    let mut visible: Vec<(NoteId, f32)> = model
+        .order
+        .iter()
+        .filter_map(|id| {
+            model
+                .store
+                .get(*id)
+                .filter(|n| model.gravity.is_visible(n.mass))
+                .map(|n| (*id, n.mass))
+        })
+        .collect();
+    visible.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(core::cmp::Ordering::Equal)
+            .then(a.0.cmp(&b.0))
+    });
+    visible.first().map(|(id, _)| *id)
 }
 
 fn main() {

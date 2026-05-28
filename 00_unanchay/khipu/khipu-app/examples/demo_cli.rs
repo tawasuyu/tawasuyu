@@ -11,7 +11,7 @@
 //! `cargo run -p khipu-app --example demo_cli --release`.
 
 use khipu_core::{NoteId, NoteStore};
-use khipu_gravity::{GravityConfig, SemanticField};
+use khipu_gravity::{Gravity, GravityConfig, Params, SemanticField};
 
 /// Vector de tópico con un leve sesgo — notas del mismo tema quedan
 /// afines sin ser idénticas.
@@ -121,6 +121,31 @@ fn main() {
     for p in &layout {
         println!("    ({:7.1}, {:7.1})  {}", p.x, p.y, name(p.id));
     }
+
+    println!("\n  masa temporal — vida media 7 días, boost 0.4, horizonte 0.10:");
+    let g = Gravity::new(Params::default());
+    let pivot_b = ids[4].0; // "Semillas de cilantro"
+    println!("    «{}» — escenario:", name(pivot_b));
+    let mut mass = 1.0_f32;
+    println!("       inicial                                 mass = {:.3}", mass);
+    mass = g.decay(mass, 3.0 * 24.0 * 3600.0);
+    println!(
+        "       3 días sin acceso → decay                mass = {:.3}  ({})",
+        mass,
+        if g.is_visible(mass) { "visible" } else { "archivo" }
+    );
+    mass = g.decay(mass, 14.0 * 24.0 * 3600.0);
+    println!(
+        "       +14 días sin acceso → decay              mass = {:.3}  ({})",
+        mass,
+        if g.is_visible(mass) { "visible" } else { "archivo" }
+    );
+    mass = g.reinforce(mass);
+    println!(
+        "       el usuario abre la nota → reinforce      mass = {:.3}  ({})",
+        mass,
+        if g.is_visible(mass) { "visible" } else { "archivo" }
+    );
     println!();
 }
 

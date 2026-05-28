@@ -24,7 +24,8 @@ impl NoteStore {
         Self { notes: BTreeMap::new(), next_id: 1 }
     }
 
-    /// Crea una nota y devuelve su id.
+    /// Crea una nota y devuelve su id. Empieza con `mass = 1.0` y
+    /// `last_access = now` — recién nacida, plenamente visible.
     pub fn create(
         &mut self,
         title: impl Into<String>,
@@ -43,6 +44,8 @@ impl NoteStore {
                 tags,
                 created_at: now,
                 updated_at: now,
+                last_access: now,
+                mass: 1.0,
             },
         );
         id
@@ -70,12 +73,38 @@ impl NoteStore {
     }
 
     /// Reemplaza el cuerpo de una nota y actualiza su marca de tiempo.
+    /// También marca `last_access` — editar cuenta como acceso.
     /// `false` si la nota no existe.
     pub fn update_body(&mut self, id: NoteId, body: impl Into<String>, now: u64) -> bool {
         match self.notes.get_mut(&id) {
             Some(n) => {
                 n.body = body.into();
                 n.updated_at = now;
+                n.last_access = now;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Marca `last_access = now`. La señal que `khipu-gravity` usa para
+    /// reforzar la masa. No-op si la nota no existe; `true` si tocó.
+    pub fn touch(&mut self, id: NoteId, now: u64) -> bool {
+        match self.notes.get_mut(&id) {
+            Some(n) => {
+                n.last_access = now;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Asigna directamente la masa de una nota. La física vive en
+    /// `khipu-gravity`; el store sólo persiste el resultado.
+    pub fn set_mass(&mut self, id: NoteId, mass: f32) -> bool {
+        match self.notes.get_mut(&id) {
+            Some(n) => {
+                n.mass = mass;
                 true
             }
             None => false,
@@ -249,6 +278,40 @@ mod tests {
         let mut s = NoteStore::new();
         s.create("Nota", "apunta a [[Inexistente]]", vec![], 0);
         assert_eq!(s.dangling_links(), vec!["Inexistente"]);
+    }
+
+    #[test]
+    fn create_initializes_mass_and_last_access() {
+        let mut s = NoteStore::new();
+        let id = s.create("x", "y", vec![], 1_700_000_000);
+        let n = s.get(id).unwrap();
+        assert_eq!(n.mass, 1.0);
+        assert_eq!(n.last_access, 1_700_000_000);
+    }
+
+    #[test]
+    fn touch_refreshes_last_access() {
+        let mut s = NoteStore::new();
+        let id = s.create("x", "y", vec![], 100);
+        assert!(s.touch(id, 500));
+        assert_eq!(s.get(id).unwrap().last_access, 500);
+        assert!(!s.touch(9_999, 500));
+    }
+
+    #[test]
+    fn update_body_also_marks_last_access() {
+        let mut s = NoteStore::new();
+        let id = s.create("x", "y", vec![], 100);
+        assert!(s.update_body(id, "z", 700));
+        assert_eq!(s.get(id).unwrap().last_access, 700);
+    }
+
+    #[test]
+    fn set_mass_persists_the_value() {
+        let mut s = NoteStore::new();
+        let id = s.create("x", "y", vec![], 100);
+        assert!(s.set_mass(id, 0.42));
+        assert!((s.get(id).unwrap().mass - 0.42).abs() < 1e-6);
     }
 
     #[test]

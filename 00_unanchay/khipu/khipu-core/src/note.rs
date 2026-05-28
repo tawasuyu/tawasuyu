@@ -9,7 +9,11 @@ pub type NoteId = u64;
 
 /// Una nota: título, cuerpo, etiquetas y marcas de tiempo. Los enlaces
 /// no se guardan aparte — se derivan del cuerpo bajo demanda.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `mass` y `last_access` son la señal temporal: la masa decae con el
+/// tiempo y `last_access` registra cuándo fue la última lectura. La
+/// física la aplica el caller (típicamente con `khipu-gravity`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Note {
     pub id: NoteId,
     pub title: String,
@@ -19,6 +23,20 @@ pub struct Note {
     pub created_at: u64,
     /// Segundo Unix de la última edición.
     pub updated_at: u64,
+    /// Segundo Unix del último acceso (lectura). Defecto: `created_at`
+    /// en notas nuevas; en payloads viejos sin el campo, `0` y el
+    /// caller decide cómo arrancar la masa.
+    #[serde(default)]
+    pub last_access: u64,
+    /// Masa de la nota. 1.0 al crearse; decae con el tiempo, sube con
+    /// cada acceso. Cuando cae bajo el umbral del horizonte la nota
+    /// pasa al archivo (no se borra). En payloads viejos arranca en 1.0.
+    #[serde(default = "default_mass")]
+    pub mass: f32,
+}
+
+fn default_mass() -> f32 {
+    1.0
 }
 
 impl Note {
@@ -52,6 +70,8 @@ mod tests {
             tags: vec!["casa".into()],
             created_at: 0,
             updated_at: 0,
+            last_access: 0,
+            mass: 1.0,
         }
     }
 

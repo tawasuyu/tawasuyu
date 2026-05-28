@@ -1,21 +1,82 @@
-//! `khipu_app-gravity` — la gravedad semántica de las notas.
+//! `khipu-gravity` — dos físicas, ambas puras y deterministas.
 //!
-//! Cada nota tiene un vector semántico (lo produce `verbo`; aquí entra
-//! ya calculado, sin acoplar a ningún backend). La afinidad entre dos
-//! notas es la similitud coseno de sus vectores; con eso, este crate:
+//! 1. **Masa temporal** ([`Gravity`] + [`Params`]): cada nota tiene una
+//!    `mass: f32`. Con el tiempo `decay(mass, dt)` la apaga; con cada
+//!    acceso `reinforce(mass, boost)` la enciende. Bajo un umbral la
+//!    nota cae al «archivo» — no se borra, sólo deja el horizonte
+//!    visible. El cálculo no toca el store; el caller decide qué hacer
+//!    con el resultado.
+//! 2. **Gravedad semántica** ([`SemanticField`]): afinidad coseno entre
+//!    vectores, vecinos, clústeres por umbral y layout 2D dirigido por
+//!    fuerzas. Las notas afines se atraen, todas se repelen.
 //!
-//! - encuentra los **vecinos** más afines de una nota;
-//! - agrupa las notas en **clústeres** por encima de un umbral;
-//! - calcula un **layout 2D** donde las notas afines se atraen y todas
-//!   se repelen — la «gravedad» literal de la lente espacial de khipu_app.
-//!
-//! Todo es determinista: posiciones iniciales fijas, sin RNG, iteración
-//! en orden estable.
+//! Las dos están desacopladas — un caller puede usar sólo una. El
+//! crate compila sin alcanzar `std::f32::exp` (usa [`libm`]) para
+//! mantenerse apto a futuros consumos `no_std` (kernel wawa, WASM).
 
 #![forbid(unsafe_code)]
 
 use khipu_core::NoteId;
 use serde::{Deserialize, Serialize};
+
+/// Parámetros de la física temporal de una nota.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Params {
+    /// Vida media: el `dt` (en segundos) tras el cual una masa se
+    /// reduce a la mitad sin acceso. Default 7 días.
+    pub half_life_secs: f32,
+    /// Incremento de masa por acceso. Default 0.4.
+    pub boost: f32,
+    /// Bajo este valor la nota cae al archivo (no se borra).
+    /// Default 0.10.
+    pub horizon: f32,
+}
+
+impl Default for Params {
+    fn default() -> Self {
+        Self {
+            half_life_secs: 7.0 * 24.0 * 3600.0,
+            boost: 0.4,
+            horizon: 0.10,
+        }
+    }
+}
+
+/// Física temporal: decay con el tiempo, refuerzo con cada acceso.
+/// Pura — no toca reloj ni store. El caller pasa `dt` y aplica el
+/// resultado donde corresponda.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct Gravity {
+    pub params: Params,
+}
+
+impl Gravity {
+    pub fn new(params: Params) -> Self {
+        Self { params }
+    }
+
+    /// Masa decaída tras `dt` segundos sin acceso. `dt` negativo o
+    /// `half_life_secs <= 0` devuelven la masa intacta.
+    pub fn decay(&self, mass: f32, dt_secs: f32) -> f32 {
+        if dt_secs <= 0.0 || self.params.half_life_secs <= 0.0 {
+            return mass.max(0.0);
+        }
+        let k = core::f32::consts::LN_2 / self.params.half_life_secs;
+        let factor = libm::expf(-k * dt_secs);
+        (mass * factor).max(0.0)
+    }
+
+    /// Masa tras un acceso — suma el `boost` configurado.
+    pub fn reinforce(&self, mass: f32) -> f32 {
+        (mass + self.params.boost).max(0.0)
+    }
+
+    /// `true` si la masa está sobre el horizonte (visible). `false`
+    /// significa archivo, no borrada.
+    pub fn is_visible(&self, mass: f32) -> bool {
+        mass >= self.params.horizon
+    }
+}
 
 /// Una nube de notas con su vector semántico — el dominio de la gravedad.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -367,5 +428,52 @@ mod tests {
         one.insert(7, vec![1.0, 1.0]);
         let p = one.gravity_layout(&GravityConfig::default());
         assert_eq!(p, vec![NotePlacement { id: 7, x: 0.0, y: 0.0 }]);
+    }
+}
+
+#[cfg(test)]
+mod mass_tests {
+    use super::*;
+
+    #[test]
+    fn decay_halves_mass_after_one_half_life() {
+        let g = Gravity::new(Params {
+            half_life_secs: 1000.0,
+            ..Params::default()
+        });
+        let after = g.decay(1.0, 1000.0);
+        assert!((after - 0.5).abs() < 1e-3);
+    }
+
+    #[test]
+    fn decay_with_zero_dt_is_a_no_op() {
+        let g = Gravity::default();
+        assert!((g.decay(0.7, 0.0) - 0.7).abs() < 1e-6);
+    }
+
+    #[test]
+    fn decay_negative_dt_returns_input() {
+        let g = Gravity::default();
+        assert!((g.decay(0.7, -10.0) - 0.7).abs() < 1e-6);
+    }
+
+    #[test]
+    fn reinforce_adds_boost() {
+        let g = Gravity::new(Params { boost: 0.25, ..Params::default() });
+        assert!((g.reinforce(0.5) - 0.75).abs() < 1e-6);
+    }
+
+    #[test]
+    fn is_visible_uses_horizon() {
+        let g = Gravity::new(Params { horizon: 0.1, ..Params::default() });
+        assert!(g.is_visible(0.10));
+        assert!(g.is_visible(0.99));
+        assert!(!g.is_visible(0.05));
+    }
+
+    #[test]
+    fn long_decay_keeps_mass_non_negative() {
+        let g = Gravity::default();
+        assert!(g.decay(1.0, 1_000_000_000.0) >= 0.0);
     }
 }
