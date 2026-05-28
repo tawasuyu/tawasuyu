@@ -126,6 +126,18 @@ impl TuiSession {
             cols,
         }
     }
+
+    /// Cambia las dimensiones del buffer interno del parser. El resize
+    /// del PTY real (que dispara SIGWINCH al child) lo hace el caller
+    /// vía `RunHandle::resize`.
+    pub fn set_size(&mut self, rows: u16, cols: u16) {
+        if rows == self.rows && cols == self.cols {
+            return;
+        }
+        self.parser.screen_mut().set_size(rows, cols);
+        self.rows = rows;
+        self.cols = cols;
+    }
 }
 
 impl std::fmt::Debug for ActiveRun {
@@ -176,6 +188,10 @@ pub struct State {
     pub history_cursor: Option<usize>,
     /// Overlay de búsqueda Ctrl-R activo. `None` = no abierto.
     pub history_search: Option<HistorySearch>,
+    /// Último rect (w, h) píxel del panel TUI — lo escribe el painter
+    /// y lo lee `drain_run` para disparar resize si cambia. Cero =
+    /// "todavía no se pintó".
+    pub last_tui_rect: Arc<Mutex<(f32, f32)>>,
 }
 
 /// Estado del overlay de búsqueda Ctrl-R.
@@ -202,6 +218,7 @@ impl State {
             history,
             history_cursor: None,
             history_search: None,
+            last_tui_rect: Arc::new(Mutex::new((0.0, 0.0))),
         }
     }
 
@@ -337,6 +354,9 @@ pub enum Msg {
     Tick,
     /// SIGTERM al run activo (Ctrl-C o shortcut `Cancel`).
     Cancel,
+    /// Click en una decoración del output — el dispatch decide la
+    /// acción (cd, xdg-open, pre-llenar el input, etc.).
+    OpenDecoration(shuma_line::DecorationKind),
 }
 
 /// Mapea `action_id` de `ShortcutAction::ModuleAction` al `Msg`.
@@ -412,6 +432,19 @@ pub fn update(state: State, msg: Msg) -> State {
             // (no al input). El usuario sale tipeando dentro del TUI
             // (`:q` en vim, `q` en less, etc.).
             if is_tui_active(&s) {
+                // Shift+Insert siempre pega. Ctrl-V también — en TUIs
+                // tipo less/vim no suele ser un binding (vim usa Ctrl-V
+                // para visual-block en normal mode; al editar dentro
+                // de insert mode tampoco). Si choca con un usuario
+                // específico, en el futuro lo gateamos por allowlist.
+                let paste = (ev.modifiers.ctrl
+                    && matches!(&ev.key, Key::Character(c) if c.eq_ignore_ascii_case("v")))
+                    || (ev.modifiers.shift
+                        && matches!(&ev.key, Key::Named(NamedKey::Insert)));
+                if paste {
+                    forward_paste_to_pty(&s);
+                    return s;
+                }
                 forward_key_to_pty(&s, &ev);
                 return s;
             }
@@ -426,6 +459,19 @@ pub fn update(state: State, msg: Msg) -> State {
                 if s.running.is_some() {
                     return cancel_running(s);
                 }
+            }
+            // Ctrl-V (o Shift+Insert): pega del clipboard al input.
+            // (Si hay TUI, lo intercepta `is_tui_active` arriba; ese
+            // camino tiene su propio paste.)
+            let is_paste = (ev.modifiers.ctrl
+                && matches!(&ev.key, Key::Character(c) if c.eq_ignore_ascii_case("v")))
+                || (ev.modifiers.shift
+                    && matches!(&ev.key, Key::Named(NamedKey::Insert)));
+            if is_paste {
+                if let Some(text) = read_clipboard() {
+                    s.input.insert(&text);
+                }
+                return s;
             }
             // Ctrl-R: abrir overlay de búsqueda de historial.
             if ev.modifiers.ctrl
@@ -480,8 +526,78 @@ pub fn update(state: State, msg: Msg) -> State {
                 s = cancel_running(s);
             }
         }
+        Msg::OpenDecoration(kind) => {
+            s = open_decoration(s, kind);
+        }
     }
     s
+}
+
+/// Acciona el click sobre una decoración del output. Ninguna acción
+/// bloquea la UI: `xdg-open` se forkea detached, y los cambios al
+/// state (cwd, input) son in-memory.
+fn open_decoration(mut s: State, kind: shuma_line::DecorationKind) -> State {
+    use shuma_line::DecorationKind as Dk;
+    match kind {
+        Dk::Path { abs, is_dir, is_executable, .. } => {
+            if is_dir {
+                // Directorios → cd. Cambia el cwd y lo refleja en el
+                // header sin "ejecutar" un comando.
+                if abs.is_dir() {
+                    s.cwd = abs;
+                    s.completion_source = Arc::new(ShellSource::new(&s.cwd));
+                }
+            } else if is_executable {
+                // Binarios → pre-llenar el input con el path; el
+                // usuario decide los args y Enter.
+                s.input.set_text(abs.display().to_string());
+            } else {
+                // Archivos regulares → xdg-open detached.
+                spawn_detached("xdg-open", &[abs.display().to_string().as_str()]);
+            }
+        }
+        Dk::Url(url) => {
+            spawn_detached("xdg-open", &[&url]);
+        }
+        Dk::GrepRef { abs, line_no, col } => {
+            // `$EDITOR +line file` para vim/neovim/helix; si no hay
+            // EDITOR, xdg-open al archivo y listo.
+            if let Ok(editor) = std::env::var("EDITOR") {
+                let line_flag = format!("+{line_no}");
+                let path = abs.display().to_string();
+                let args: Vec<&str> = match col {
+                    Some(_) => vec![&line_flag, &path],
+                    None => vec![&line_flag, &path],
+                };
+                spawn_detached(&editor, &args);
+            } else {
+                spawn_detached("xdg-open", &[abs.display().to_string().as_str()]);
+            }
+        }
+        Dk::GitSha(sha) => {
+            // Pre-llenar `git show <sha>` — la acción más útil 99% del tiempo.
+            s.input.set_text(format!("git show {sha}"));
+        }
+        Dk::IssueRef(_) | Dk::BoxDraw => {
+            // Sin acción asociada.
+        }
+    }
+    s
+}
+
+/// Lanza un proceso "detached" — no esperamos, no leemos su output,
+/// y el padre puede morir sin matarlo (`process_group(0)` para
+/// despegarlo de la sesión de shuma). Usado para `xdg-open` y `$EDITOR`
+/// disparados desde clicks.
+fn spawn_detached(program: &str, args: &[&str]) {
+    use std::os::unix::process::CommandExt;
+    let _ = std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .process_group(0)
+        .spawn();
 }
 
 /// Aplica un Tab: completion en la posición del cursor.
@@ -645,6 +761,49 @@ fn key_to_pty_bytes(ev: &KeyEvent) -> Vec<u8> {
             ev.text.as_deref().unwrap_or("").as_bytes().to_vec()
         }
     }
+}
+
+/// Lee el clipboard del SO (vía `arboard`). Devuelve `None` si no hay
+/// display server, está vacío, o el contenido no es texto. No cachea —
+/// el sistema tiene su propio TTL.
+fn read_clipboard() -> Option<String> {
+    let mut clip = arboard::Clipboard::new().ok()?;
+    clip.get_text().ok()
+}
+
+/// Pega el contenido del clipboard en el PTY del run activo. Si el TUI
+/// hijo está en bracketed-paste mode (DECSET 2004), envuelve la
+/// secuencia en `\x1b[200~...\x1b[201~` para que vim, less y emacs
+/// distingan "tipeé esto" de "pegué esto" (auto-indent, paste-mode,
+/// etc.). No-op silencioso si no hay TUI o el clipboard está vacío.
+fn forward_paste_to_pty(s: &State) {
+    let Some(arc) = s.running.as_ref() else {
+        return;
+    };
+    let Some(text) = read_clipboard() else {
+        return;
+    };
+    if text.is_empty() {
+        return;
+    }
+    let guard = match arc.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    let bracketed = guard
+        .tui
+        .as_ref()
+        .map(|t| t.parser.screen().bracketed_paste())
+        .unwrap_or(false);
+    let payload: Vec<u8> = if bracketed {
+        let mut buf: Vec<u8> = b"\x1b[200~".to_vec();
+        buf.extend_from_slice(text.as_bytes());
+        buf.extend_from_slice(b"\x1b[201~");
+        buf
+    } else {
+        text.into_bytes()
+    };
+    guard.handle.write_input(payload);
 }
 
 /// Manda los bytes de la tecla al PTY del run activo. No-op si no hay
@@ -812,6 +971,35 @@ fn drain_run(mut s: State) -> State {
             Ok(g) => g,
             Err(p) => p.into_inner(),
         };
+        // Resize del PTY si el rect del panel cambió desde el último
+        // tick. Cell size aproximado: 7.5 px ancho × 16 px alto (12 pt
+        // monoespacio en Llimphi default). Si el panel se redimensiona
+        // el TUI hace SIGWINCH al child.
+        let want_resize: Option<(u16, u16)> = if let Some(tui) = guard.tui.as_ref() {
+            let (w, h) = match s.last_tui_rect.lock() {
+                Ok(g) => *g,
+                Err(p) => *p.into_inner(),
+            };
+            if w > 1.0 && h > 1.0 {
+                let cols = ((w / 7.5).floor() as i32).clamp(20, 400) as u16;
+                let rows = ((h / 16.0).floor() as i32).clamp(5, 200) as u16;
+                if rows != tui.rows || cols != tui.cols {
+                    Some((rows, cols))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some((rows, cols)) = want_resize {
+            guard.handle.resize(rows, cols);
+            if let Some(tui) = guard.tui.as_mut() {
+                tui.set_size(rows, cols);
+            }
+        }
         let events = guard.handle.try_events();
         for ev in events {
             match ev {
@@ -943,7 +1131,7 @@ pub fn view<HostMsg: Clone + 'static>(
     let main_panel: View<HostMsg> = if is_tui_active(state) {
         tui_panel::<HostMsg>(state, theme)
     } else {
-        output_pane::<HostMsg>(state, theme)
+        output_pane::<HostMsg>(state, theme, &lift)
     };
     let input = shell_input_view(state, theme, lift.clone());
 
@@ -1043,6 +1231,7 @@ fn shell_input_view<HostMsg: Clone + 'static>(
                 max_width: None,
                 alignment: TAlign::Start,
                 line_height: 1.2,
+                italic: false,
             };
             let layout = layout_block(ts, &block);
             draw_layout(scene, &layout, theme_clone.fg_placeholder, (x, baseline_y));
@@ -1061,6 +1250,7 @@ fn shell_input_view<HostMsg: Clone + 'static>(
                 max_width: None,
                 alignment: TAlign::Start,
                 line_height: 1.2,
+                italic: false,
             };
             let layout = layout_block(ts, &block);
             let m = measurement(&layout);
@@ -1079,6 +1269,7 @@ fn shell_input_view<HostMsg: Clone + 'static>(
                         max_width: None,
                         alignment: TAlign::Start,
                         line_height: 1.2,
+                        italic: false,
                     };
                     let plat = layout_block(ts, &pblock);
                     cursor_x = x + measurement(&plat).width as f64;
@@ -1102,6 +1293,7 @@ fn shell_input_view<HostMsg: Clone + 'static>(
                     max_width: None,
                     alignment: TAlign::Start,
                     line_height: 1.2,
+                    italic: false,
                 };
                 let layout = layout_block(ts, &block);
                 draw_layout(
@@ -1173,6 +1365,7 @@ fn tui_panel<HostMsg: Clone + 'static>(state: &State, theme: &Theme) -> View<Hos
         .as_ref()
         .and_then(|arc| arc.lock().ok().and_then(|g| capture_tui(&g)));
     let theme_clone = *theme;
+    let rect_slot = Arc::clone(&state.last_tui_rect);
 
     let painter = move |scene: &mut vello::Scene,
                         ts: &mut llimphi_ui::llimphi_text::Typesetter,
@@ -1182,6 +1375,11 @@ fn tui_panel<HostMsg: Clone + 'static>(state: &State, theme: &Theme) -> View<Hos
         use llimphi_ui::llimphi_text::{
             draw_layout, layout_block, Alignment as TAlign, TextBlock,
         };
+        // Publica el rect al state — el próximo Tick disparará resize
+        // si las dims cambiaron.
+        if let Ok(mut g) = rect_slot.lock() {
+            *g = (rect.w, rect.h);
+        }
         let Some(snap) = &snapshot else { return };
         // Tamaño de la celda derivado del rect disponible. Monoespacio,
         // ancho/alto fijos por celda. Si el panel es chico el grid
@@ -1231,6 +1429,7 @@ fn tui_panel<HostMsg: Clone + 'static>(state: &State, theme: &Theme) -> View<Hos
                         max_width: None,
                         alignment: TAlign::Start,
                         line_height: 1.0,
+                        italic: false,
                     };
                     let layout = layout_block(ts, &block);
                     draw_layout(scene, &layout, fg, (x0, y0));
@@ -1476,7 +1675,11 @@ fn shell_header<HostMsg: Clone + 'static>(state: &State, theme: &Theme) -> View<
     .text_aligned(label, 12.0, color, Alignment::Start)
 }
 
-fn output_pane<HostMsg: Clone + 'static>(state: &State, theme: &Theme) -> View<HostMsg> {
+fn output_pane<HostMsg: Clone + 'static>(
+    state: &State,
+    theme: &Theme,
+    lift: &(impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static),
+) -> View<HostMsg> {
     // Tomamos las últimas N líneas que caben — sin scroll real todavía
     // (el panel asume altura fija; el chasis lo recorta con flex).
     const MAX_VISIBLE: usize = 200;
@@ -1485,7 +1688,7 @@ fn output_pane<HostMsg: Clone + 'static>(state: &State, theme: &Theme) -> View<H
 
     let mut children: Vec<View<HostMsg>> = Vec::with_capacity(visible.len());
     for line in visible {
-        children.push(render_output_line::<HostMsg>(line, &state.cwd, theme));
+        children.push(render_output_line::<HostMsg>(line, &state.cwd, theme, lift));
     }
 
     View::new(Style {
@@ -1509,79 +1712,75 @@ fn output_pane<HostMsg: Clone + 'static>(state: &State, theme: &Theme) -> View<H
     .children(children)
 }
 
-/// Un segmento de una línea con su color resuelto. `start..end` es el
-/// rango de bytes en el texto crudo.
+/// Una "pieza" del partición de una línea: el texto, su color y el
+/// kind de decoración (`None` = texto base, no clickable). El render
+/// la convierte en `View`s; los tests verifican la partición sin
+/// pintar.
 #[derive(Debug, Clone)]
-struct Span {
-    start: usize,
-    end: usize,
+struct LinePiece {
+    text: String,
     color: llimphi_ui::llimphi_raster::peniko::Color,
+    deco: Option<shuma_line::DecorationKind>,
 }
 
-/// Convierte las decoraciones de `shuma-line` en spans coloreados para
-/// el typesetter. Las decoraciones reclaman rangos; los huecos quedan
-/// con el color base de la línea.
-fn build_spans(
+/// Divide `text` en piezas según `decorations`. Las piezas no decoradas
+/// llevan `color = base` y `deco = None`. Las decoradas llevan el
+/// color según el kind y `deco = Some(kind.clone())`.
+fn partition_line(
     text: &str,
     decorations: &[shuma_line::Decoration],
     base: llimphi_ui::llimphi_raster::peniko::Color,
     theme: &Theme,
-) -> Vec<Span> {
+) -> Vec<LinePiece> {
     use shuma_line::DecorationKind as Dk;
-    let mut spans: Vec<Span> = Vec::new();
+    let mut out: Vec<LinePiece> = Vec::new();
     let mut cursor = 0usize;
     for d in decorations {
         if d.start < cursor || d.end > text.len() || d.start >= d.end {
             continue;
         }
         if d.start > cursor {
-            spans.push(Span {
-                start: cursor,
-                end: d.start,
+            out.push(LinePiece {
+                text: text[cursor..d.start].to_string(),
                 color: base,
+                deco: None,
             });
         }
-        let color = match d.kind {
-            // Paths reales y grep refs caen al accent — el "azul de path"
-            // tradicional de un terminal. Sin underline (Llimphi no lo
-            // soporta hoy); el cambio de color basta para distinguirlos.
-            Dk::Path { .. } | Dk::GrepRef { .. } => theme.accent,
-            // URLs en accent también (el ojo busca el mismo tono).
-            Dk::Url(_) => theme.accent,
-            // SHAs en muted (color "etiqueta") — destacan sin gritar.
+        let color = match &d.kind {
             Dk::GitSha(_) => theme.fg_muted,
-            // Issue refs en accent (atajos pendientes a links).
-            Dk::IssueRef(_) => theme.accent,
-            // Box-drawing en accent — para que las "cajas" calcen visualmente.
-            Dk::BoxDraw => theme.accent,
+            // El resto va al accent — paths, urls, grep refs, issue refs,
+            // box-drawing. Sin underline (Llimphi aún no lo soporta).
+            _ => theme.accent,
         };
-        spans.push(Span {
-            start: d.start,
-            end: d.end,
+        out.push(LinePiece {
+            text: text[d.start..d.end].to_string(),
             color,
+            deco: Some(d.kind.clone()),
         });
         cursor = d.end;
     }
     if cursor < text.len() {
-        spans.push(Span {
-            start: cursor,
-            end: text.len(),
+        out.push(LinePiece {
+            text: text[cursor..].to_string(),
             color: base,
+            deco: None,
         });
     }
-    spans
+    out
 }
 
 /// Pinta una línea del output. Para Stdout/Stderr aplica
-/// `shuma_line::decorate_line` y dibuja los spans con colores
-/// distintos vía `paint_with`. Para Prompt/Notice usa el atajo
-/// `text_aligned` plano.
+/// `shuma_line::decorate_line`: pinta cada span con su color y, si la
+/// decoración es accionable (`Path`/`Url`/`GrepRef`/`GitSha`), agrega
+/// un `on_click` que dispara `Msg::OpenDecoration`. Para Prompt/Notice
+/// usa el atajo `text_aligned` plano.
 fn render_output_line<HostMsg: Clone + 'static>(
     line: &OutputLine,
     cwd: &std::path::Path,
     theme: &Theme,
+    lift: &(impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static),
 ) -> View<HostMsg> {
-    let style = Style {
+    let line_style = Style {
         size: Size {
             width: percent(1.0_f32),
             height: length(16.0_f32),
@@ -1590,13 +1789,13 @@ fn render_output_line<HostMsg: Clone + 'static>(
     };
 
     match line.kind {
-        OutputKind::Prompt => View::new(style).text_aligned(
+        OutputKind::Prompt => View::new(line_style).text_aligned(
             line.text.clone(),
             12.0,
             theme.accent,
             Alignment::Start,
         ),
-        OutputKind::Notice => View::new(style).text_aligned(
+        OutputKind::Notice => View::new(line_style).text_aligned(
             line.text.clone(),
             12.0,
             theme.fg_muted,
@@ -1609,43 +1808,65 @@ fn render_output_line<HostMsg: Clone + 'static>(
                 theme.fg_text
             };
             let decorations = shuma_line::decorate_line(&line.text, cwd);
-            // Atajo: si no hubo decoraciones, no abrimos un paint custom
-            // (más eficiente y menos código en el hot path).
+            // Atajo: si no hubo decoraciones, una sola text_aligned alcanza.
             if decorations.is_empty() {
-                return View::new(style).text_aligned(
+                return View::new(line_style).text_aligned(
                     line.text.clone(),
                     12.0,
                     base,
                     Alignment::Start,
                 );
             }
-            let spans = build_spans(&line.text, &decorations, base, theme);
-            let text = line.text.clone();
-            View::new(style).paint_with(move |scene, ts, rect| {
-                use llimphi_ui::llimphi_text::{
-                    draw_layout, layout_block, measurement, Alignment, TextBlock,
-                };
-                let mut x = rect.x as f64;
-                let y = rect.y as f64;
-                for s in &spans {
-                    let segment = &text[s.start..s.end];
-                    let block = TextBlock {
-                        text: segment,
-                        size_px: 12.0,
-                        color: s.color,
-                        origin: (x, y),
-                        max_width: None,
-                        alignment: Alignment::Start,
-                        line_height: 1.2,
-                    };
-                    let layout = layout_block(ts, &block);
-                    let m = measurement(&layout);
-                    draw_layout(scene, &layout, s.color, (x, y));
-                    x += m.width as f64;
-                }
+            let children = build_span_children::<HostMsg>(
+                &line.text,
+                &decorations,
+                base,
+                theme,
+                lift,
+            );
+            View::new(Style {
+                flex_direction: FlexDirection::Row,
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(16.0_f32),
+                },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
             })
+            .children(children)
         }
     }
+}
+
+/// Convierte las piezas en una lista de `View`s. Las accionables
+/// (Path/Url/GrepRef/GitSha) llevan `on_click`.
+fn build_span_children<HostMsg: Clone + 'static>(
+    text: &str,
+    decorations: &[shuma_line::Decoration],
+    base: llimphi_ui::llimphi_raster::peniko::Color,
+    theme: &Theme,
+    lift: &(impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static),
+) -> Vec<View<HostMsg>> {
+    use shuma_line::DecorationKind as Dk;
+    let pieces = partition_line(text, decorations, base, theme);
+    let mut out: Vec<View<HostMsg>> = Vec::with_capacity(pieces.len());
+    for p in pieces {
+        if p.text.is_empty() {
+            continue;
+        }
+        let actionable = matches!(
+            p.deco,
+            Some(Dk::Path { .. } | Dk::Url(_) | Dk::GrepRef { .. } | Dk::GitSha(_))
+        );
+        let mut span_view: View<HostMsg> = View::new(Style { ..Default::default() })
+            .text_aligned(p.text, 12.0, p.color, Alignment::Start);
+        if let (true, Some(kind)) = (actionable, p.deco) {
+            let l = lift.clone();
+            span_view = span_view.on_click(l(Msg::OpenDecoration(kind)));
+        }
+        out.push(span_view);
+    }
+    out
 }
 
 fn pretty_path(p: &std::path::Path) -> String {
@@ -1996,6 +2217,30 @@ mod tests {
     }
 
     #[test]
+    fn paste_key_event_is_recognized() {
+        // Ctrl-V con texto en clipboard se procesa como paste (no
+        // termina llamando apply_key con el carácter 'v'). Sin display
+        // server (CI), read_clipboard devuelve None y el state no
+        // cambia. Pero verificamos que la rama de paste se toma.
+        let mut s = State::new(Source::Local);
+        s.input.set_text("hola");
+        let ctrl_v = KeyEvent {
+            key: Key::Character("v".into()),
+            state: KeyState::Pressed,
+            text: Some("v".into()),
+            modifiers: Modifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+            repeat: false,
+        };
+        s = update(s, Msg::Key(ctrl_v));
+        // El input no debe llevar una 'v' al final — la rama paste se
+        // tragó la tecla (y en CI sin clipboard no insertó nada).
+        assert_eq!(s.input.text(), "hola");
+    }
+
+    #[test]
     fn ansi_idx_palette_matches_expected_basics() {
         // Idx 0 = negro, 15 = blanco, 196 = rojo claro del cubo.
         let black = ansi_idx_to_color(0);
@@ -2017,11 +2262,10 @@ mod tests {
     }
 
     #[test]
-    fn build_spans_segments_a_line_with_a_url() {
+    fn partition_line_segments_a_line_with_a_url() {
         use shuma_line::{Decoration, DecorationKind};
         let theme = Theme::dark();
         let text = "abrí https://gioser.net y mirá";
-        // Hardcodea la decoración para no depender del FS.
         let url_start = text.find("https").unwrap();
         let url_end = url_start + "https://gioser.net".len();
         let decs = vec![Decoration {
@@ -2029,11 +2273,50 @@ mod tests {
             end: url_end,
             kind: DecorationKind::Url(text[url_start..url_end].to_string()),
         }];
-        let spans = build_spans(text, &decs, theme.fg_text, &theme);
-        assert_eq!(spans.len(), 3, "pre, url, post: {spans:?}");
-        assert_eq!(spans[0].color, theme.fg_text);
-        assert_eq!(spans[1].color, theme.accent);
-        assert_eq!(spans[2].color, theme.fg_text);
+        let pieces = partition_line(text, &decs, theme.fg_text, &theme);
+        assert_eq!(pieces.len(), 3, "pre, url, post: {pieces:?}");
+        assert_eq!(pieces[0].color, theme.fg_text);
+        assert!(pieces[0].deco.is_none());
+        assert_eq!(pieces[1].color, theme.accent);
+        assert!(matches!(pieces[1].deco, Some(DecorationKind::Url(_))));
+        assert_eq!(pieces[2].color, theme.fg_text);
+    }
+
+    #[test]
+    fn open_decoration_cd_into_a_directory() {
+        let mut s = State::new(Source::Local);
+        let target = std::env::temp_dir();
+        let kind = shuma_line::DecorationKind::Path {
+            abs: target.clone(),
+            is_dir: true,
+            is_executable: false,
+            is_symlink: false,
+        };
+        s = update(s, Msg::OpenDecoration(kind));
+        // cwd cambia al directorio target (no comparamos canónico — el
+        // open_decoration acepta el path tal cual viene si es dir).
+        assert_eq!(s.cwd, target);
+    }
+
+    #[test]
+    fn open_decoration_git_sha_prefills_input() {
+        let mut s = State::new(Source::Local);
+        let kind = shuma_line::DecorationKind::GitSha("abcdef0123456".into());
+        s = update(s, Msg::OpenDecoration(kind));
+        assert_eq!(s.input.text(), "git show abcdef0123456");
+    }
+
+    #[test]
+    fn open_decoration_path_executable_prefills_input() {
+        let mut s = State::new(Source::Local);
+        let kind = shuma_line::DecorationKind::Path {
+            abs: PathBuf::from("/usr/bin/ls"),
+            is_dir: false,
+            is_executable: true,
+            is_symlink: false,
+        };
+        s = update(s, Msg::OpenDecoration(kind));
+        assert_eq!(s.input.text(), "/usr/bin/ls");
     }
 
     #[test]

@@ -1597,6 +1597,8 @@ fn seccion_hijas(model: &Model, theme: &Theme) -> View<Msg> {
         palette: palette_list,
     });
 
+    let historial = seccion_historial(model, theme);
+
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
@@ -1604,9 +1606,108 @@ fn seccion_hijas(model: &Model, theme: &Theme) -> View<Msg> {
             height: auto(),
         },
         flex_grow: 1.0,
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(6.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![lista, divider(theme), historial])
+}
+
+fn seccion_historial(model: &Model, theme: &Theme) -> View<Msg> {
+    let palette_list = ListPalette::from_theme(theme);
+
+    // Index para resolver Uuid → Cuerpo, cuerpo.metadatos.nombre_legible.
+    let cuerpo_de = |id: Uuid| model.cuerpos.iter().find(|c| c.id == id);
+
+    // Transformaciones del cuerpo activo: ya sea como madre o como hija.
+    // Lo más útil al usuario suele ser "todo lo que pasó alrededor de
+    // este doc" — así una hija de cuya madre vengo, lo veo.
+    let activo = model.activo;
+    let mut filtradas: Vec<&Transformacion> = model
+        .transformaciones
+        .iter()
+        .filter(|t| match activo {
+            Some(id) => t.madre == id || t.hija == id,
+            None => true,
+        })
+        .collect();
+    // Más recientes arriba.
+    filtradas.sort_by(|a, b| b.creada_en.cmp(&a.creada_en));
+
+    let mut rows: Vec<ListRow<Msg>> = Vec::new();
+    for t in &filtradas {
+        let madre = cuerpo_de(t.madre)
+            .map(|c| c.metadatos.nombre_legible.as_str())
+            .unwrap_or("?");
+        let hija = cuerpo_de(t.hija)
+            .map(|c| c.metadatos.nombre_legible.as_str())
+            .unwrap_or("?");
+        let tipo = etiqueta_tipo(&t.tipo);
+        // Truncar nombres largos para que la fila no se rompa visual.
+        let label = format!(
+            "{}  →  {}  ·  {}",
+            recortar(madre, 18),
+            recortar(hija, 18),
+            tipo,
+        );
+        rows.push(ListRow {
+            label,
+            selected: false,
+            on_click: Msg::AbrirDoc(t.hija),
+        });
+    }
+
+    let n = rows.len();
+    let lista = list_view(ListSpec {
+        rows,
+        total: n,
+        caption: Some(if activo.is_some() {
+            format!("historial activo: {n}")
+        } else {
+            format!("historial: {n}")
+        }),
+        truncated_hint: None,
+        row_height: 20.0,
+        palette: palette_list,
+    });
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: auto(),
+        },
         ..Default::default()
     })
     .children(vec![lista])
+}
+
+fn etiqueta_tipo(t: &TipoTransformacion) -> String {
+    match t {
+        TipoTransformacion::Identidad => "identidad".into(),
+        TipoTransformacion::Traducir { lengua_destino } => format!("traducir → {lengua_destino}"),
+        TipoTransformacion::Tono { etiqueta } => format!("tono {etiqueta}"),
+        TipoTransformacion::Resumir {
+            palabras_objetivo: Some(n),
+        } => format!("resumir ≈{n}p"),
+        TipoTransformacion::Resumir {
+            palabras_objetivo: None,
+        } => "resumir".into(),
+        TipoTransformacion::Reescribir { .. } => "reescribir".into(),
+        TipoTransformacion::Custom { kind, .. } => kind.clone(),
+    }
+}
+
+fn recortar(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut o: String = s.chars().take(max.saturating_sub(1)).collect();
+        o.push('…');
+        o
+    }
 }
 
 fn divider(theme: &Theme) -> View<Msg> {

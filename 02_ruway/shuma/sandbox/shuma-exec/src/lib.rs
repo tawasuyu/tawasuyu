@@ -35,7 +35,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use nix::fcntl::{splice, SpliceFFlags};
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 
 /// Una etapa del pipe en ejecución directa: un binario y sus argumentos
 /// ya resueltos (sin comillas, sin metacaracteres).
@@ -165,6 +165,11 @@ pub struct RunHandle {
     /// Sólo está cableado en modo PTY; en los otros modos los sends
     /// no llegan a nadie (el receptor se cae al instante).
     stdin_tx: Sender<Vec<u8>>,
+    /// PTY master vivo — sólo en modo `Exec::Pty`. Permite resize en
+    /// caliente cuando el panel cambia de tamaño. El coordinador del
+    /// PTY lo rellena tras crear el `pair` y lo conserva hasta el exit
+    /// del child (drop al final).
+    pty_master: Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
 }
 
 /// Asa "fría" de un `RunHandle` que **sólo** sirve para matar el comando.
@@ -276,6 +281,27 @@ impl RunHandle {
     /// send se descarta (no hay listener) y devuelve `false`.
     pub fn write_input(&self, bytes: Vec<u8>) -> bool {
         self.stdin_tx.send(bytes).is_ok()
+    }
+
+    /// Reescala el PTY. Sólo aplica bajo [`Exec::Pty`]: lockea el
+    /// master vivo y llama a `MasterPty::resize`. Devuelve `false`
+    /// silenciosamente si no hay PTY (modos Shell/Direct), el master
+    /// no se publicó todavía, o el SO devuelve error.
+    pub fn resize(&self, rows: u16, cols: u16) -> bool {
+        let Ok(mut guard) = self.pty_master.lock() else {
+            return false;
+        };
+        let Some(master) = guard.as_mut() else {
+            return false;
+        };
+        master
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .is_ok()
     }
 
     /// Próximo evento, bloqueando hasta que llegue. `None` cuando el
@@ -510,8 +536,11 @@ pub fn run(spec: &CommandSpec) -> RunHandle {
     let spec = spec.clone();
     let cell: Arc<Mutex<Vec<Child>>> = Arc::new(Mutex::new(Vec::new()));
     let pty_pids: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(Vec::new()));
+    let pty_master: Arc<Mutex<Option<Box<dyn MasterPty + Send>>>> =
+        Arc::new(Mutex::new(None));
     let cell_thread = Arc::clone(&cell);
     let pty_pids_thread = Arc::clone(&pty_pids);
+    let pty_master_thread = Arc::clone(&pty_master);
 
     // Modo PTY: ruta separada — el proceso corre bajo un pseudo-terminal
     // (cross-platform via `portable-pty`), los bytes crudos se emiten
@@ -525,9 +554,26 @@ pub fn run(spec: &CommandSpec) -> RunHandle {
         let rows = *rows;
         let cwd = spec.cwd.clone();
         std::thread::spawn(move || {
-            spawn_pty_thread(&program, &args, &cwd, cols, rows, tx, stdin_rx, pty_pids_thread);
+            spawn_pty_thread(
+                &program,
+                &args,
+                &cwd,
+                cols,
+                rows,
+                tx,
+                stdin_rx,
+                pty_pids_thread,
+                pty_master_thread,
+            );
         });
-        return RunHandle { rx, finished: false, children: cell, pty_pids, stdin_tx };
+        return RunHandle {
+            rx,
+            finished: false,
+            children: cell,
+            pty_pids,
+            stdin_tx,
+            pty_master,
+        };
     }
 
     std::thread::spawn(move || {
@@ -605,7 +651,14 @@ pub fn run(spec: &CommandSpec) -> RunHandle {
         let _ = tx.send(RunEvent::Exited(code));
     });
 
-    RunHandle { rx, finished: false, children: cell, pty_pids, stdin_tx }
+    RunHandle {
+        rx,
+        finished: false,
+        children: cell,
+        pty_pids,
+        stdin_tx,
+        pty_master,
+    }
 }
 
 /// Coordinador del modo PTY: aloja un PTY de tamaño `cols`×`rows`,
@@ -626,6 +679,7 @@ fn spawn_pty_thread(
     tx: Sender<RunEvent>,
     stdin_rx: Receiver<Vec<u8>>,
     pty_pids: Arc<Mutex<Vec<u32>>>,
+    pty_master_slot: Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
 ) {
     let pty_system = native_pty_system();
     let pair = match pty_system.openpty(PtySize {
@@ -680,6 +734,13 @@ fn spawn_pty_thread(
         }
     };
 
+    // Publica el master vivo: el `RunHandle` lo lockea para resize en
+    // caliente. `take_writer`/`try_clone_reader` ya retornaron handles
+    // independientes; el master se mantiene como dueño del PTY.
+    if let Ok(mut slot) = pty_master_slot.lock() {
+        *slot = Some(pair.master);
+    }
+
     let tx_reader = tx.clone();
     let reader_thread = std::thread::spawn(move || {
         let mut buf = [0u8; 4096];
@@ -709,9 +770,11 @@ fn spawn_pty_thread(
         Ok(s) => s.exit_code() as i32,
         Err(_) => -1,
     };
-    // El master se dropea cuando salga de scope → reader ve EOF y
-    // termina. Esperamos al reader para que no se pierdan bytes finales.
-    drop(pair.master);
+    // El master se dropea ahora → reader ve EOF y termina. Esperamos al
+    // reader para que no se pierdan bytes finales.
+    if let Ok(mut slot) = pty_master_slot.lock() {
+        *slot = None;
+    }
     let _ = reader_thread.join();
     // El writer thread sale solo cuando el stdin_tx se dropee del lado
     // del frontend; no lo joineamos sincrónicamente.
@@ -931,6 +994,42 @@ mod tests {
         }
         let out = String::from_utf8_lossy(&bytes_seen);
         assert!(out.contains("hola"), "cat no echó 'hola': {out:?}");
+    }
+
+    #[test]
+    fn pty_resize_changes_dimensions_in_running_child() {
+        // Lanzamos `bash` bajo PTY a 80×24, esperamos que el slave
+        // tenga las dims iniciales, hacemos resize, y verificamos que
+        // el child ve el nuevo tamaño tras la señal SIGWINCH.
+        let spec = CommandSpec {
+            exec: Exec::Pty {
+                program: "bash".into(),
+                args: vec!["-c".into(), "stty size; sleep 0.3; stty size".into()],
+                cols: 80,
+                rows: 24,
+            },
+            cwd: ".".into(),
+            capture_limit: 0,
+            spill_path: None,
+            stdin_data: None,
+        };
+        let mut h = run(&spec);
+        // Esperar a que el master se publique (race con el coordinador).
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(h.resize(40, 132), "resize debería aplicarse");
+        let mut bytes = Vec::<u8>::new();
+        while let Some(ev) = h.next_event() {
+            if let RunEvent::Bytes(b) = ev {
+                bytes.extend(b);
+            }
+        }
+        let out = String::from_utf8_lossy(&bytes);
+        // El primer `stty size` muestra 24 80; el segundo debe mostrar
+        // las dimensiones nuevas tras el resize (40 132).
+        assert!(
+            out.contains("40 132"),
+            "stty size tras resize no muestra 40 132: {out:?}"
+        );
     }
 
     #[test]

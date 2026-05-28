@@ -114,17 +114,20 @@ Cinco crates listos pero **NO enchufados** al `shuma-module-shell` actual:
 - **`shuma-shell-render`**: CanvasPlan (lienzo de contexto del grafo de intenciones, agnóstico de UI).
 - **`shuma-remote-exec`**: cliente sync del subprotocolo `ExecStream` del daemon — API espejo de `shuma-exec::RunHandle`. Listo para reemplazar `sh -c` por *ejecución contra el daemon*.
 
-### 3.5 Estado actual del REPL (`shuma-module-shell`, ~1700 LOC)
+### 3.5 Estado actual del REPL (`shuma-module-shell`, ~2000 LOC)
 
 **Bloque A completo (2026-05-28).** El REPL ya es una pieza usable.
 
-- **Ejecución no bloqueante** (A1): streaming via `shuma-exec`, drenado por `Msg::Tick` a 100 ms (`SHELL_TICK`). `sleep`/`top` no congelan. Cola si hay run vivo. Cancel = SIGKILL al grupo (`process_group(0)` + `killpg`).
-- **Decoración del output** (A2): cada línea Stdout/Stderr pasa por `shuma_line::decorate_line` con `cwd` del state; paths/URLs/grep-refs/issue-refs/box-draw → `theme.accent`; git SHAs → `theme.fg_muted`. Render vía `paint_with` + typesetter (spans coloreados sin clickeo todavía — eso para una pasada futura).
-- **Input inteligente** (A3): `TextInputState` reemplazado por `shuma_line::LineState`. Tokens coloreados por `TokenKind` (Command/Argument/Flag/StringLit/Variable/…), cursor visible, ghost suggestion en placeholder color tomado del historial. Tab completa (binarios en `$PATH` + paths bajo cwd + flag hints de `shuma-line`); con N candidatos inserta el prefijo común. Flecha derecha al final = aceptar ghost. Ctrl+Arrow = palabra, Home/End, Backspace/Delete.
-- **Historial durable + Ctrl-R fuzzy** (A4): `shuma-history` JSONL en `$XDG_DATA_HOME/shuma/history.jsonl` (o `/dev/null` fallback). Append en cada Enter no vacío (builtins incluidos). Up/Down navegan el historial; cualquier edición rompe el cursor. Ctrl-R abre un overlay con `fuzzy_search`; Up/Down + Enter acepta la línea seleccionada (sin ejecutar — el usuario edita y Enter).
-- **PTY + vt100** (A5): allowlist hardcoded (`vi vim nvim nano emacs helix hx htop btop top less more man claude tig watch`) + prefijo `:tui <comando>` → `Exec::Pty` (80×24). Bytes del PTY alimentan `vt100::Parser`; el render del panel principal muta al grid de celdas con `paint_with` (bgs primero como rects, texto coloreado por celda agrupado en runs por fg, cursor barra). Teclas se traducen a xterm bytes (`\r`, `\x1b[A..D`, `\x1b[H/F`, `\x1b[5~/6~`, Ctrl-<letra> → 0x01..0x1a) y van por `RunHandle::write_input`. 256-color (cubo 6×6×6 + rampa gris) mapeado.
+- **A1** ejecución no bloqueante: streaming via `shuma-exec`, drenado por `Msg::ShellTick` a 100 ms. Cola si hay run vivo. Cancel = SIGKILL al grupo (`process_group(0)` + `killpg`).
+- **A2** decoración del output: `shuma_line::decorate_line` por línea; paths/URLs/grep-refs/issue/box-draw → `theme.accent`; git SHAs → `theme.fg_muted`.
+- **A3** input inteligente: `LineState` con tokens coloreados, cursor visible, ghost suggestion del historial. Tab completion (binarios en `$PATH` + paths bajo cwd + flag hints + prefijo común con N candidatos). ArrowRight al final acepta ghost. Ctrl+Arrow palabra, Home/End.
+- **A4** historial durable: JSONL en `$XDG_DATA_HOME/shuma/history.jsonl`. Up/Down navegan; Ctrl-R abre overlay `fuzzy_search`.
+- **A5** PTY + vt100: allowlist + prefijo `:tui` → `Exec::Pty`. `vt100::Parser` alimentado por bytes; render del panel = grid de celdas con `paint_with`. Teclas → xterm bytes.
+- **A6** resize dinámico del PTY: `shuma_exec::RunHandle::resize(rows, cols)` expuesto vía `MasterPty` en `Arc<Mutex<>>`; `tui_panel` painter publica el `PaintRect` en `state.last_tui_rect`; cada `drain_run` mira si cambió y manda `MasterPty::resize` + reescala el screen del `vt100::Parser`. vim/htop reciben SIGWINCH y reflowean.
+- **A7** click handlers en decoraciones: `Msg::OpenDecoration(DecorationKind)`. Path-dir → cd (más recálculo del `ShellSource`); Path-executable → llena el input con el path; Path-archivo / URL → `xdg-open` detached; GrepRef → `$EDITOR +line file`; GitSha → llena el input con `git show <sha>`. Render del output ahora es `FlexDirection::Row` con un nodo por span (los actionables llevan `on_click`).
+- **A8** paste + bracketed paste: Ctrl-V y Shift+Insert leen el clipboard (vía `arboard`). Sin TUI → `LineState::insert`. Con TUI → `RunHandle::write_input`; si el child habilitó bracketed paste (DECSET 2004, leído de `screen.bracketed_paste()`), la secuencia se envuelve en `\x1b[200~…\x1b[201~` para que vim/emacs distingan tipeo de pegado.
 - Builtins: `cd`, `pwd`, `clear`, `exit`. Tope 500 líneas en el buffer.
-- Tests: **29/29 verde** (incluyendo timing del ejecutor, navegación de historial, tab completion, build_spans, key→PTY bytes).
+- Tests: **33/33 verde** (timing del ejecutor, navegación de historial, tab/ghost/clicks/paste, build_spec routing, key→PTY bytes, palette ansi, partition_line, decoration handlers, PTY resize end-to-end con `stty size`).
 
 ---
 
@@ -159,11 +162,13 @@ Ver §3.5 para el detalle del estado actual. Resumen:
 - A3 ✅ LineState + tokens coloreados + Tab completion + ghost
 - A4 ✅ historial durable JSONL + Up/Down + Ctrl-R fuzzy overlay
 - A5 ✅ PTY + emulador vt100 (vía `vt100` crate) + render de grid
+- A6 ✅ resize dinámico del PTY (`RunHandle::resize` + tracking del PaintRect del panel)
+- A7 ✅ click handlers sobre decoraciones (Path/Url/GrepRef/GitSha)
+- A8 ✅ paste con bracketed paste (`arboard` + DECSET 2004)
 
-Lo que queda fuera del alcance A pero podría ser un A6 futuro:
-- Resize dinámico del PTY (hoy 80×24 fijo — `vt100::Parser::screen_mut().set_size`).
-- Click handlers sobre decoraciones (abrir path en editor, URL con xdg-open).
-- Bracketed paste / mouse en el PTY.
+Pendientes opcionales (no bloquean nada):
+- Mouse en el PTY (vt100 ya parsea los eventos; falta cablear el mouse de Llimphi).
+- Tooltip "what would clicking this do?" en decoraciones (espera al hover en llimphi-ui).
 
 ### Bloque B — integrar el daemon como ejecutor (escala)
 **Objetivo**: que el shell pueda hablar contra `shuma-daemon` local *o* remoto sin cambiar la API del módulo.
