@@ -51,6 +51,10 @@ use pluma_core::NarrativeAtom;
 use pluma_cuerpo::{Cuerpo, Intencion};
 use pluma_editor_cuerpo::CambioAtom;
 use pluma_editor_llimphi::cuerpo_ide::{cuerpo_ide_view, CuerpoIde};
+use pluma_editor_llimphi::multilienzo::{
+    multilienzo_view, IndiceAtoms, MultilienzoConfig, PaletaHebras,
+};
+use pluma_editor_llimphi::Palette as MultPalette;
 use pluma_llm::{build_client, BackendKind, LlmConfig};
 use pluma_llm_core::ChatClient;
 use pluma_store::PlumaStore;
@@ -97,6 +101,7 @@ enum Msg {
     FindSiguiente,
     FindAnterior,
     FindClose,
+    DiffToggle,
     ToglearFusion,
     ZonaSiguiente,
     ZonaAnterior,
@@ -152,6 +157,13 @@ struct Model {
     find_visible: bool,
     find_matches: Vec<(usize, usize)>,
     find_idx: usize,
+
+    /// Cuando es `true` y el cuerpo activo es una hija, el centro
+    /// muestra la madre y la hija lado a lado con las hebras pintadas
+    /// (read-only). Cuando el activo es Original o no se encuentra la
+    /// madre, el flag igual existe pero la vista cae al cuerpo_ide
+    /// normal con un cartel.
+    diff_visible: bool,
 
     side_izq_w: f32,
     side_der_w: f32,
@@ -226,6 +238,9 @@ impl App for Pluma {
                 }
                 if s.eq_ignore_ascii_case("f") {
                     return Some(Msg::FindToggle);
+                }
+                if s.eq_ignore_ascii_case("d") {
+                    return Some(Msg::DiffToggle);
                 }
                 if shift && (s == "}" || s == "]") {
                     return Some(Msg::ZonaSiguiente);
@@ -326,6 +341,7 @@ fn init_modelo() -> Model {
         find_visible: false,
         find_matches: Vec::new(),
         find_idx: 0,
+        diff_visible: false,
         side_izq_w: 280.0,
         side_der_w: 340.0,
     }
@@ -455,6 +471,9 @@ fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         }
         Msg::FindClose => {
             model.find_visible = false;
+        }
+        Msg::DiffToggle => {
+            model.diff_visible = !model.diff_visible;
         }
         Msg::ToglearFusion => {
             if let Some(idx) = model.ide.junction_antes_del_caret() {
@@ -1200,20 +1219,24 @@ fn seccion_archivo(model: &Model, theme: &Theme) -> View<Msg> {
 }
 
 fn panel_editor(model: &Model, palette_editor: &TEPalette) -> View<Msg> {
-    let editor = cuerpo_ide_view::<Msg>(
-        &model.ide,
-        palette_editor,
-        METRICS,
-        VISIBLE_LINES,
-        Language::Plain,
-        |ev| Some(Msg::EditorPointer(ev)),
-    );
+    let cuerpo_central: View<Msg> = if model.diff_visible {
+        vista_diff(model, palette_editor)
+    } else {
+        cuerpo_ide_view::<Msg>(
+            &model.ide,
+            palette_editor,
+            METRICS,
+            VISIBLE_LINES,
+            Language::Plain,
+            |ev| Some(Msg::EditorPointer(ev)),
+        )
+    };
 
     let mut hijos: Vec<View<Msg>> = Vec::new();
     if model.find_visible {
         hijos.push(barra_find(model));
     }
-    hijos.push(editor);
+    hijos.push(cuerpo_central);
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -1236,6 +1259,143 @@ fn panel_editor(model: &Model, palette_editor: &TEPalette) -> View<Msg> {
     .fill(palette_editor.bg)
     .clip(true)
     .children(hijos)
+}
+
+fn vista_diff(model: &Model, palette_editor: &TEPalette) -> View<Msg> {
+    // Resolver activo + madre. Si activo no es derivado o la madre no
+    // se encuentra, mostramos un cartel y volvemos a `cuerpo_ide_view`.
+    let theme = Theme::dark();
+    let activo_id = match model.activo {
+        Some(id) => id,
+        None => return cartel_diff("sin doc activo", palette_editor),
+    };
+    let activo = match model.cuerpos.iter().find(|c| c.id == activo_id) {
+        Some(c) => c,
+        None => return cartel_diff("activo no encontrado", palette_editor),
+    };
+    let madre_id = match activo.metadatos.derivado_de {
+        Some(id) => id,
+        None => {
+            // Activo es Original — fallback al editor normal con cartel.
+            return View::new(Style {
+                flex_direction: FlexDirection::Column,
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: percent(1.0_f32),
+                },
+                gap: Size {
+                    width: length(0.0_f32),
+                    height: length(4.0_f32),
+                },
+                ..Default::default()
+            })
+            .children(vec![
+                cartel_diff(
+                    "este cuerpo es Original — no tiene madre con que diffear (Ctrl+D para cerrar)",
+                    palette_editor,
+                ),
+                cuerpo_ide_view::<Msg>(
+                    &model.ide,
+                    palette_editor,
+                    METRICS,
+                    VISIBLE_LINES,
+                    Language::Plain,
+                    |ev| Some(Msg::EditorPointer(ev)),
+                ),
+            ]);
+        }
+    };
+    let madre = match model.cuerpos.iter().find(|c| c.id == madre_id) {
+        Some(c) => c,
+        None => return cartel_diff(
+            "madre referenciada no está en el sled — ¿borrada?",
+            palette_editor,
+        ),
+    };
+
+    // Buscar la carta de hebras entre estos dos. `pluma_align::CartaHebras`
+    // anota su par; consideramos cualquier orden.
+    let carta = model.cartas.iter().find(|c| {
+        (c.cuerpo_a == Some(madre.id) && c.cuerpo_b == Some(activo.id))
+            || (c.cuerpo_a == Some(activo.id) && c.cuerpo_b == Some(madre.id))
+    });
+
+    let cuerpos_ref: Vec<&Cuerpo> = vec![madre, activo];
+    let cartas_ref: Vec<Option<&CartaHebras>> = vec![carta];
+    let atoms_idx: IndiceAtoms = model.atoms.iter().map(|(k, v)| (*k, v)).collect();
+    let cfg = MultilienzoConfig::default();
+    let paleta_hebras = PaletaHebras::default();
+    let palette_mult = MultPalette::from_theme(&theme);
+
+    let mult = multilienzo_view::<Msg>(
+        &cuerpos_ref,
+        &atoms_idx,
+        &cartas_ref,
+        &cfg,
+        &paleta_hebras,
+        &palette_mult,
+    );
+
+    let header_text = format!(
+        "DIFF · madre «{}» ↔ hija «{}» ({})",
+        madre.metadatos.nombre_legible,
+        activo.metadatos.nombre_legible,
+        if carta.is_some() {
+            "con hebras"
+        } else {
+            "sin carta — hebras no disponibles"
+        },
+    );
+    let header = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(20.0_f32),
+        },
+        padding: Rect {
+            left: length(4.0_f32),
+            right: length(4.0_f32),
+            top: length(2.0_f32),
+            bottom: length(2.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(header_text, 11.0, theme.fg_muted, Alignment::Start);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(4.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![header, mult])
+}
+
+fn cartel_diff(texto: &str, palette_editor: &TEPalette) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(40.0_f32),
+        },
+        padding: Rect {
+            left: length(12.0_f32),
+            right: length(12.0_f32),
+            top: length(10.0_f32),
+            bottom: length(10.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(
+        texto.to_string(),
+        12.0,
+        palette_editor.fg_line_number,
+        Alignment::Start,
+    )
 }
 
 fn barra_find(model: &Model) -> View<Msg> {
@@ -1329,6 +1489,13 @@ fn panel_llm(model: &Model, theme: &Theme) -> View<Msg> {
     );
     let cycler = button_view::<Msg>(&etiqueta_back, pal_backend, Msg::CicloBackend);
 
+    let etiqueta_diff = if model.diff_visible {
+        "↔  diff: ON  (Ctrl+D)"
+    } else {
+        "↔  diff: off  (Ctrl+D)"
+    };
+    let diff_btn = button_view::<Msg>(etiqueta_diff, pal_backend, Msg::DiffToggle);
+
     let header = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -1358,6 +1525,7 @@ fn panel_llm(model: &Model, theme: &Theme) -> View<Msg> {
     let mut hijos: Vec<View<Msg>> = Vec::new();
     hijos.push(header);
     hijos.push(cycler);
+    hijos.push(diff_btn);
     hijos.extend(botones);
     hijos.push(divider(theme));
     hijos.push(hijas_seccion);
