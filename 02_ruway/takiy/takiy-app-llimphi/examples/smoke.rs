@@ -196,5 +196,36 @@ fn main() {
     assert_eq!(sr, 44_100);
     assert!(data_size > 0, "data chunk vacío");
 
-    println!("takiy smoke ok — 12 escenarios verdes");
+    // --- Escenario 13: drag-to-move (F7).
+    //
+    // Simula un drag completo: begin_drag + N pasos de SetSelectedAbsolute +
+    // end_drag. Verifica que el historial gane una sola entrada y que el
+    // undo restaure la posición original de la nota.
+    let mut st = EditorState::new(120.0);
+    st.snap = takiy_app::Snap::Free;
+    st.apply(EditMsg::AddNote { beat: 0.0, midi: 60 });
+    st.apply(EditMsg::Select { track: 0, idx: 0 });
+    let history_before = st.history.len();
+    st.begin_drag();
+    assert!(st.is_dragging());
+    for step in 1..=15 {
+        st.apply(EditMsg::SetSelectedAbsolute {
+            start: step as f32 * 0.25,
+            midi: 60 + step.min(7),
+        });
+    }
+    // Durante el drag, history no crece — todas son micro-mutaciones.
+    assert_eq!(st.history.len(), history_before);
+    assert!(st.end_drag().is_some(), "end_drag con cambio devuelve mensaje");
+    assert!(!st.is_dragging());
+    // Un sólo undo cubre el drag entero.
+    assert_eq!(st.history.len(), history_before + 1);
+    let n = st.score.track(0).unwrap().notes()[0];
+    assert!((n.start - 3.75).abs() < 1e-3, "última posición del drag");
+    st.undo();
+    let n = st.score.track(0).unwrap().notes()[0];
+    assert!((n.start - 0.0).abs() < 1e-6, "undo restaura beat 0");
+    assert_eq!(n.pitch.midi(), 60, "undo restaura midi original");
+
+    println!("takiy smoke ok — 13 escenarios verdes");
 }

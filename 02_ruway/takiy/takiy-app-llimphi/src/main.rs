@@ -20,6 +20,9 @@
 //! - `Tab`        — cicla la pista activa.
 //! - `N`          — crea una pista nueva y la activa.
 //! - Click izq.   — agrega una nota (o selecciona la existente bajo el cursor).
+//! - Drag izq.    — mueve la nota bajo el cursor (o la recién agregada por el
+//!                  click) por el grid, snappeando a la granularidad activa.
+//!                  Todo el drag es un sólo undo.
 //! - Click der.   — borra la nota bajo el cursor.
 //! - `←` / `→`    — mueve la nota seleccionada ±1 beat.
 //! - `↑` / `↓`    — mueve la nota seleccionada ±1 semitono.
@@ -37,11 +40,11 @@ use llimphi_ui::llimphi_layout::taffy::prelude::{percent, Size, Style};
 use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Rect as KurboRect, Stroke};
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::llimphi_text::{draw_block, Alignment as TextAlignment, TextBlock, Typesetter};
-use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, PaintRect, View};
+use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, NamedKey, PaintRect, View};
 use takiy_app::{
     cell_at, default_save_path_for_save, gm_program_for_track_name, gm_program_name,
-    header_beat_at, hit_test_note, load_score_or_demo, pitch_range, write_score, EditMsg,
-    EditorState, HEADER_H, KEYBOARD_W, MAX_KEY_H, MIN_BEAT_W, MIN_KEY_H,
+    grid_geometry, header_beat_at, hit_test_note, load_score_or_demo, pitch_range, write_score,
+    EditMsg, EditorState, HEADER_H, KEYBOARD_W, MAX_KEY_H, MIN_BEAT_W, MIN_KEY_H,
 };
 use takiy_core::{PitchClass, Score};
 use takiy_playback::{PlayOpts, Player};
@@ -96,7 +99,41 @@ enum Msg {
     /// a `ExportMidi` pero con extensión `.wav`. No incluye metrónomo ni
     /// count-in — sale crudo el score, igual que el render del test F10.
     ExportWav,
+    /// Press del botón izquierdo: hace el hit-test sobre header/nota/cell
+    /// y dispara la acción correspondiente (seek / select / add note).
+    /// Además cachea `(rw, rh)` en el modelo para que el drag posterior
+    /// pueda convertir píxeles a `(beat, midi)` sin perderlo.
+    PressAt { lx: f32, ly: f32, rw: f32, rh: f32 },
+    /// Eventos de drag-to-move sobre el grid. Se acumulan en `model.drag`
+    /// y se aplican como `SetSelectedAbsolute` sobre el `EditorState`.
+    /// El undo del drag entero queda como una sola entrada gracias a
+    /// `begin_drag`/`end_drag`.
+    DragNote {
+        phase: DragPhase,
+        dx: f32,
+        dy: f32,
+        lx0: f32,
+        ly0: f32,
+    },
     Quit,
+}
+
+/// Estado del drag-to-move activo. Se inicializa en la primera fase
+/// `DragPhase::Move` (cuando el cursor se movió tras presionar sobre
+/// una nota), persiste hasta `DragPhase::End`. Captura la posición
+/// original de la nota para que cada frame del drag se compute en
+/// términos absolutos respecto del press, sin acumular drift.
+#[derive(Debug, Clone)]
+struct DragState {
+    initial_start: f32,
+    initial_midi: u8,
+    accum_dx_px: f32,
+    accum_dy_px: f32,
+    rw: f32,
+    rh: f32,
+    min_midi: u8,
+    max_midi: u8,
+    total_beats: f32,
 }
 
 struct Model {
@@ -112,6 +149,12 @@ struct Model {
     /// si cambia el tempo durante la reproducción, el cursor avanza a la
     /// velocidad del render real (no al BPM editado).
     playback_bpm: f32,
+    /// Última dimensión conocida del view raíz. La cacheamos del último
+    /// `PressAt` para que `DragNote` pueda convertir píxeles a beats sin
+    /// que llimphi-ui le pase el rect del nodo en cada fase del drag.
+    last_rect: Option<(f32, f32)>,
+    /// Drag-to-move en curso. `None` cuando no hay drag activo.
+    drag: Option<DragState>,
 }
 
 struct Takiy;
@@ -173,6 +216,8 @@ impl App for Takiy {
             playing: false,
             status,
             playback_bpm: 120.0,
+            last_rect: None,
+            drag: None,
         }
     }
 
@@ -376,6 +421,133 @@ impl App for Takiy {
                     }
                 }
             }
+            Msg::PressAt { lx, ly, rw, rh } => {
+                model.last_rect = Some((rw, rh));
+                let (min_midi, max_midi) = pitch_range(&model.editor.score);
+                let total_beats = model
+                    .editor
+                    .score
+                    .duration_beats()
+                    .max(8.0)
+                    .max(model.editor.loop_region.map(|(_, t)| t).unwrap_or(0.0));
+                if let Some(beat) =
+                    header_beat_at(lx, ly, rw, rh, min_midi, max_midi, total_beats)
+                {
+                    // Re-entramos por TogglePlay/SeekToBeat: igual que el handler viejo.
+                    return Self::update(model, Msg::SeekToBeat(beat), handle);
+                }
+                if let Some((track, idx)) = hit_test_note(
+                    &model.editor.score,
+                    lx, ly, rw, rh, min_midi, max_midi, total_beats,
+                ) {
+                    return Self::update(
+                        model,
+                        Msg::Edit(EditMsg::Select { track, idx }),
+                        handle,
+                    );
+                }
+                if let Some((beat, midi)) =
+                    cell_at(lx, ly, rw, rh, min_midi, max_midi, total_beats)
+                {
+                    return Self::update(
+                        model,
+                        Msg::Edit(EditMsg::AddNote { beat, midi }),
+                        handle,
+                    );
+                }
+                // Press fuera del grid: no-op.
+            }
+            Msg::DragNote { phase, dx, dy, lx0, ly0 } => {
+                let Some((rw, rh)) = model.last_rect else {
+                    // Sin rect cacheado (drag sin press previo conocido):
+                    // imposible convertir píxeles a beats, ignoramos.
+                    return model;
+                };
+                match phase {
+                    DragPhase::Move => {
+                        if model.drag.is_none() {
+                            // Primer Move: arrancamos drag sólo si el press cae
+                            // sobre una nota. Los press en celdas vacías ya
+                            // habrán agregado una nota seleccionada vía
+                            // `Msg::PressAt`, así que el drag mueve esa nota
+                            // recién creada también.
+                            let (min_midi, max_midi) = pitch_range(&model.editor.score);
+                            let total_beats = model
+                                .editor
+                                .score
+                                .duration_beats()
+                                .max(8.0)
+                                .max(model.editor.loop_region.map(|(_, t)| t).unwrap_or(0.0));
+                            if grid_geometry(rw, rh, min_midi, max_midi, total_beats).is_none() {
+                                return model;
+                            }
+                            let Some((track, idx)) = model.editor.selected else {
+                                return model;
+                            };
+                            let Some(note) = model
+                                .editor
+                                .score
+                                .track(track)
+                                .and_then(|t| t.notes().get(idx))
+                                .copied()
+                            else {
+                                return model;
+                            };
+                            // Si lx0/ly0 cayeron sobre el header o el teclado,
+                            // este no era un drag de nota — abortamos.
+                            if ly0 < HEADER_H || lx0 < KEYBOARD_W {
+                                return model;
+                            }
+                            model.editor.begin_drag();
+                            model.drag = Some(DragState {
+                                initial_start: note.start,
+                                initial_midi: note.pitch.midi(),
+                                accum_dx_px: dx,
+                                accum_dy_px: dy,
+                                rw,
+                                rh,
+                                min_midi,
+                                max_midi,
+                                total_beats,
+                            });
+                        } else if let Some(state) = model.drag.as_mut() {
+                            state.accum_dx_px += dx;
+                            state.accum_dy_px += dy;
+                        }
+                        if let Some(state) = model.drag.as_ref() {
+                            let Some((_, _, _, _, key_h, beat_w)) = grid_geometry(
+                                state.rw,
+                                state.rh,
+                                state.min_midi,
+                                state.max_midi,
+                                state.total_beats,
+                            ) else {
+                                return model;
+                            };
+                            let target_beat =
+                                (state.initial_start + state.accum_dx_px / beat_w).max(0.0);
+                            // Y crece hacia abajo en pantalla pero los semitonos
+                            // crecen hacia arriba — flippeamos el signo.
+                            let target_semi_offset = -(state.accum_dy_px / key_h).round() as i32;
+                            let target_midi = (state.initial_midi as i32 + target_semi_offset)
+                                .clamp(state.min_midi as i32, state.max_midi as i32);
+                            if let Some(s) = model.editor.apply(EditMsg::SetSelectedAbsolute {
+                                start: target_beat,
+                                midi: target_midi as u8,
+                            }) {
+                                model.status = s;
+                            }
+                        }
+                    }
+                    DragPhase::End => {
+                        if model.drag.take().is_some() {
+                            if let Some(s) = model.editor.end_drag() {
+                                model.status = s;
+                            }
+                        }
+                    }
+                }
+            }
             Msg::Save => {
                 let path = model.editor.save_path.clone().unwrap_or_else(|| {
                     let ts = std::time::SystemTime::now()
@@ -550,7 +722,6 @@ impl App for Takiy {
             .max(loop_region.map(|(_, t)| t).unwrap_or(0.0));
 
         let score_paint = score.clone();
-        let score_click = score.clone();
         let score_right = score;
 
         View::new(Style {
@@ -558,20 +729,12 @@ impl App for Takiy {
             ..Default::default()
         })
         .fill(theme.bg_app)
-        .on_click_at(move |lx, ly, rw, rh| {
-            // Click sobre el header → seek. Tiene prioridad sobre el grid.
-            if let Some(beat) =
-                header_beat_at(lx, ly, rw, rh, min_midi, max_midi, total_beats)
-            {
-                return Some(Msg::SeekToBeat(beat));
-            }
-            if let Some((track, idx)) =
-                hit_test_note(&score_click, lx, ly, rw, rh, min_midi, max_midi, total_beats)
-            {
-                return Some(Msg::Edit(EditMsg::Select { track, idx }));
-            }
-            let (beat, midi) = cell_at(lx, ly, rw, rh, min_midi, max_midi, total_beats)?;
-            Some(Msg::Edit(EditMsg::AddNote { beat, midi }))
+        // El press se resuelve en `update()` para que el drag posterior
+        // tenga `(rw, rh)` cacheado en el modelo — `draggable_at` no recibe
+        // el rect del nodo, sólo (lx0, ly0) y los deltas.
+        .on_click_at(|lx, ly, rw, rh| Some(Msg::PressAt { lx, ly, rw, rh }))
+        .draggable_at(|phase, dx, dy, lx0, ly0| {
+            Some(Msg::DragNote { phase, dx, dy, lx0, ly0 })
         })
         .on_right_click_at(move |lx, ly, rw, rh| {
             let (track, idx) =

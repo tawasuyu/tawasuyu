@@ -107,6 +107,10 @@ pub struct EditorState {
     /// Clipboard interno: notas normalizadas (start - min_start ≥ 0) listas
     /// para pegarse en cualquier beat preservando intervalos relativos.
     pub clipboard: Vec<ScoreNote>,
+    /// Snapshot tomado al iniciar un drag. Mientras está `Some`, [`apply`]
+    /// no agrega entradas a `history` — todo el drag será un sólo undo,
+    /// commiteado al cerrar el drag con [`end_drag`].
+    drag_snapshot: Option<Score>,
 }
 
 /// Niveles máximos del undo stack. 100 cubre flujos típicos; cada
@@ -131,6 +135,7 @@ impl EditorState {
             history: Vec::new(),
             future: Vec::new(),
             clipboard: Vec::new(),
+            drag_snapshot: None,
         }
     }
 
@@ -152,6 +157,7 @@ impl EditorState {
             history: Vec::new(),
             future: Vec::new(),
             clipboard: Vec::new(),
+            drag_snapshot: None,
         }
     }
 
@@ -193,6 +199,11 @@ pub enum EditMsg {
     DeleteNote { track: usize, idx: usize },
     Select { track: usize, idx: usize },
     MoveSelected { d_beat: f32, d_semitones: i32 },
+    /// Posiciona la nota seleccionada en `(start, midi)` absolutos
+    /// (snap se aplica al `start`). Idempotente: si el snap no la mueve,
+    /// es no-op. Pensado para drag-to-move por mouse — el binario
+    /// recalcula la posición target en cada frame del drag.
+    SetSelectedAbsolute { start: f32, midi: u8 },
     DeleteSelected,
     ResizeSelected { d_beat: f32 },
     NudgeVelocity { delta: i32 },
@@ -234,7 +245,14 @@ impl EditorState {
     /// Aplica una edición. Envuelve `apply_internal` con la lógica de
     /// undo: snapshot pre-mutación, descarte si no cambió nada,
     /// truncado de `future` ante una rama nueva.
+    ///
+    /// Si hay un drag activo (`drag_snapshot.is_some()`), las
+    /// mutaciones intermedias *no* generan entradas de historial — el
+    /// commit de undo del drag entero lo hace [`end_drag`] una sola vez.
     pub fn apply(&mut self, msg: EditMsg) -> ApplyOutcome {
+        if self.drag_snapshot.is_some() {
+            return self.apply_internal(msg);
+        }
         let snapshot = self.score.clone();
         let out = self.apply_internal(msg);
         if self.score != snapshot {
@@ -247,6 +265,42 @@ impl EditorState {
         out
     }
 
+    /// Marca el inicio de un drag-to-move (u otro batch interactivo).
+    /// Toma snapshot del `score` actual; mientras esté pendiente, las
+    /// `apply` siguen mutando el score pero no pushean a `history`.
+    /// Idempotente: llamadas repetidas no clavan un nuevo snapshot.
+    pub fn begin_drag(&mut self) {
+        if self.drag_snapshot.is_none() {
+            self.drag_snapshot = Some(self.score.clone());
+        }
+    }
+
+    /// Cierra un drag pendiente. Si el score cambió, pushea el snapshot
+    /// original a `history` (un sólo undo cubre toda la interacción) y
+    /// trunca `future`. Sin cambios, descarta el snapshot.
+    pub fn end_drag(&mut self) -> ApplyOutcome {
+        let Some(snapshot) = self.drag_snapshot.take() else {
+            return None;
+        };
+        if snapshot != self.score {
+            self.history.push(snapshot);
+            if self.history.len() > MAX_UNDO {
+                self.history.remove(0);
+            }
+            self.future.clear();
+            Some("drag committed".into())
+        } else {
+            None
+        }
+    }
+
+    /// `true` si hay un drag iniciado y aún no commiteado. El binario
+    /// lo lee para decidir si pintar la nota como ghost o evitar
+    /// disparar auto-save mientras se arrastra.
+    pub fn is_dragging(&self) -> bool {
+        self.drag_snapshot.is_some()
+    }
+
     fn apply_internal(&mut self, msg: EditMsg) -> ApplyOutcome {
         match msg {
             EditMsg::AddNote { beat, midi } => self.add_note(beat, midi),
@@ -254,6 +308,9 @@ impl EditorState {
             EditMsg::Select { track, idx } => self.select(track, idx),
             EditMsg::MoveSelected { d_beat, d_semitones } => {
                 self.move_selected(d_beat, d_semitones)
+            }
+            EditMsg::SetSelectedAbsolute { start, midi } => {
+                self.set_selected_absolute(start, midi)
             }
             EditMsg::DeleteSelected => self.delete_selected(),
             EditMsg::ResizeSelected { d_beat } => self.resize_selected(d_beat),
@@ -363,6 +420,31 @@ impl EditorState {
         Some(format!(
             "moved · pista {track_idx} · beat {new_start:.0} · midi {}",
             new_pitch.midi()
+        ))
+    }
+
+    /// Posiciona la nota seleccionada en `(start, midi)` absolutos.
+    /// `start` se snappea según el snap activo y se clampa a `≥ 0`;
+    /// `midi` debe estar en `0..=127`. Si el resultado coincide con la
+    /// nota actual (snap mata el cambio), es no-op.
+    fn set_selected_absolute(&mut self, start: f32, midi: u8) -> ApplyOutcome {
+        let (track_idx, note_idx) = self.selected?;
+        let snap = self.snap;
+        let track = self.score.track_mut(track_idx)?;
+        let old = track.notes().get(note_idx).copied()?;
+        let new_start = snap.snap(start).max(0.0);
+        let new_pitch = Pitch::from_midi(midi)?;
+        let new_note = ScoreNote::new(new_pitch, new_start, old.duration, old.velocity);
+        if new_note == old {
+            return None;
+        }
+        track.remove(note_idx);
+        track.add(new_note);
+        if let Some(new_idx) = find_note_idx(track.notes(), &new_note) {
+            self.selected = Some((track_idx, new_idx));
+        }
+        Some(format!(
+            "drag · pista {track_idx} · beat {new_start:.2} · midi {midi}"
         ))
     }
 
@@ -1107,6 +1189,100 @@ mod tests {
         // None apaga.
         assert!(st.set_loop_region(None).is_some());
         assert!(st.loop_region.is_none());
+    }
+
+    #[test]
+    fn set_selected_absolute_snaps_start_and_keeps_duration() {
+        let mut st = EditorState::new(120.0);
+        st.snap = Snap::Beat;
+        st.apply(EditMsg::AddNote { beat: 0.0, midi: 60 });
+        st.apply(EditMsg::Select { track: 0, idx: 0 });
+        let dur_before = st.score.track(0).unwrap().notes()[0].duration;
+        st.apply(EditMsg::SetSelectedAbsolute { start: 3.4, midi: 64 });
+        let n = st.score.track(0).unwrap().notes()[0];
+        assert!((n.start - 3.0).abs() < 1e-6, "snap a beat entero");
+        assert_eq!(n.pitch.midi(), 64);
+        assert!((n.duration - dur_before).abs() < 1e-6, "duración intacta");
+    }
+
+    #[test]
+    fn set_selected_absolute_is_idempotent_on_snap_floor() {
+        let mut st = EditorState::new(120.0);
+        st.snap = Snap::Beat;
+        st.apply(EditMsg::AddNote { beat: 0.0, midi: 60 });
+        st.apply(EditMsg::Select { track: 0, idx: 0 });
+        let len_before = st.history.len();
+        // 3.4 → snap a 3.0
+        assert!(st.apply(EditMsg::SetSelectedAbsolute { start: 3.4, midi: 60 }).is_some());
+        // Re-llamada con beat distinto pero que snappea al mismo lugar: no-op.
+        assert!(st.apply(EditMsg::SetSelectedAbsolute { start: 3.3, midi: 60 }).is_none());
+        assert_eq!(st.history.len(), len_before + 1, "una sóla entrada de undo");
+    }
+
+    #[test]
+    fn drag_batches_history_into_single_undo() {
+        // Simula un drag: begin_drag + N micro-moves + end_drag = un solo undo.
+        let mut st = EditorState::new(120.0);
+        st.snap = Snap::Free;
+        st.apply(EditMsg::AddNote { beat: 0.0, midi: 60 });
+        st.apply(EditMsg::Select { track: 0, idx: 0 });
+        let history_before = st.history.len();
+
+        st.begin_drag();
+        assert!(st.is_dragging());
+        for step in 1..=20 {
+            // Cada paso es un SetSelectedAbsolute con un beat fraccionalmente
+            // distinto, todos durante el drag.
+            st.apply(EditMsg::SetSelectedAbsolute {
+                start: step as f32 * 0.1,
+                midi: 60,
+            });
+        }
+        assert!(st.is_dragging(), "drag sigue activo durante mutaciones");
+        // Durante el drag no se acumula history:
+        assert_eq!(st.history.len(), history_before);
+
+        let out = st.end_drag();
+        assert!(out.is_some(), "end_drag con cambio devuelve mensaje");
+        assert!(!st.is_dragging());
+        // Después del drag, exactamente UNA entrada nueva en history.
+        assert_eq!(st.history.len(), history_before + 1);
+
+        // Un solo undo lleva la nota a su posición original (beat 0).
+        st.undo();
+        let n = st.score.track(0).unwrap().notes()[0];
+        assert!((n.start - 0.0).abs() < 1e-6, "undo restaura beat 0");
+    }
+
+    #[test]
+    fn drag_without_changes_does_not_push_history() {
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::AddNote { beat: 0.0, midi: 60 });
+        st.apply(EditMsg::Select { track: 0, idx: 0 });
+        let len_before = st.history.len();
+        st.begin_drag();
+        // Sin mutaciones intermedias.
+        let out = st.end_drag();
+        assert!(out.is_none());
+        assert_eq!(st.history.len(), len_before);
+    }
+
+    #[test]
+    fn begin_drag_is_idempotent_and_preserves_first_snapshot() {
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::AddNote { beat: 0.0, midi: 60 });
+        st.apply(EditMsg::Select { track: 0, idx: 0 });
+        st.begin_drag();
+        // Mutación en el medio del drag.
+        st.apply(EditMsg::SetSelectedAbsolute { start: 2.0, midi: 60 });
+        // begin_drag de nuevo no debe pisar el snapshot original.
+        st.begin_drag();
+        st.apply(EditMsg::SetSelectedAbsolute { start: 4.0, midi: 60 });
+        st.end_drag();
+        st.undo();
+        // El undo debe llevar a beat 0 (snapshot original), no a 2.0.
+        let n = st.score.track(0).unwrap().notes()[0];
+        assert!((n.start - 0.0).abs() < 1e-6);
     }
 
     #[test]
