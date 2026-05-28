@@ -59,6 +59,10 @@ pub struct ComputedStyle {
     pub border_radii: Corners<f32>,
     /// `box-shadow` simplificado. `None` = sin sombra.
     pub box_shadow: Option<BoxShadow>,
+    /// `z-index` aplicado al stacking order entre siblings positioned
+    /// (absolute/fixed). Para nodos en flow normal (static), CSS spec
+    /// dice que z-index no aplica y se ignora. `0` = default.
+    pub z_index: i32,
     /// `text-decoration-line` reducido al subset que pintamos.
     /// `None` = sin decoración (default HTML, salvo `<a>`/`<u>`/`<s>`).
     pub text_decoration: TextDecorationLine,
@@ -528,6 +532,7 @@ impl Default for ComputedStyle {
             border_colors: Sides::all(None),
             border_radii: Corners::all(0.0),
             box_shadow: None,
+            z_index: 0,
             text_decoration: TextDecorationLine::None,
             list_style_type: ListStyleType::Disc,
             flex_direction: FlexDirection::Row,
@@ -1166,6 +1171,9 @@ enum DeclKind {
     BorderRadius(f32),
     /// `border-top-left-radius` etc. — setean una esquina sola.
     BorderCornerRadius(BorderCorner, f32),
+    /// `z-index: N`. Aplica sólo a positioned (absolute/fixed/relative);
+    /// para `position: static` el chrome lo ignora (matchea spec).
+    ZIndex(i32),
     /// `None` = `box-shadow: none` (limpia la sombra).
     BoxShadow(Option<BoxShadow>),
     TextDecoration(TextDecorationLine),
@@ -1262,6 +1270,7 @@ impl Decl {
             DeclKind::BorderCornerRadius(corner, v) => {
                 set_corner(&mut s.border_radii, *corner, *v)
             }
+            DeclKind::ZIndex(v) => s.z_index = *v,
             DeclKind::BoxShadow(v) => s.box_shadow = *v,
             DeclKind::TextDecoration(t) => s.text_decoration = *t,
             DeclKind::ListStyleType(t) => s.list_style_type = *t,
@@ -2247,6 +2256,15 @@ fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "border-color" => parse_color(value).map(DeclKind::BorderColor),
         "border-style" => parse_border_style(value).map(DeclKind::BorderEnabled),
         "border-radius" => parse_length_px(value).map(DeclKind::BorderRadius),
+        "z-index" => {
+            // `auto` → 0; sino int. Negativos OK.
+            let v = value.trim();
+            if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::ZIndex(0))
+            } else {
+                v.parse::<i32>().ok().map(DeclKind::ZIndex)
+            }
+        }
         "box-shadow" => Some(DeclKind::BoxShadow(parse_box_shadow(value))),
         "text-decoration" | "text-decoration-line" => {
             parse_text_decoration(value).map(DeclKind::TextDecoration)
@@ -2580,7 +2598,108 @@ fn parse_length_or_pct(s: &str) -> Option<LengthVal> {
     if let Some(num) = s.strip_suffix('%') {
         return num.trim().parse::<f32>().ok().map(LengthVal::Pct);
     }
+    if let Some(inner) = strip_calc(s) {
+        return parse_calc_expr(inner);
+    }
     parse_length_px(s).map(LengthVal::Px)
+}
+
+/// Si `s` matchea `calc(...)` (case-insensitive), devuelve el contenido
+/// entre paréntesis. Sino `None`.
+fn strip_calc(s: &str) -> Option<&str> {
+    let lower = s.to_ascii_lowercase();
+    let stripped = lower.strip_prefix("calc(")?.strip_suffix(')')?;
+    // Recortamos del original (mantiene casing del inner por si tiene
+    // hex colors en el futuro — hoy sólo números/units, no importa).
+    let start = "calc(".len();
+    Some(&s[start..s.len() - 1])
+        .filter(|_| !stripped.is_empty())
+}
+
+/// Parsea un expression `calc()` mínimo: `<term> <+|-> <term>` o un
+/// único `<term>`. Resuelve en parse time, conservando `Pct` cuando hay
+/// mezcla (caso `calc(100% - 20px)` queda como `Pct(100)` y se pierde
+/// el offset — taffy no soporta calc nativo y aproximarlo a más
+/// precisión requeriría conocer el container, que no tenemos acá).
+fn parse_calc_expr(inner: &str) -> Option<LengthVal> {
+    let toks = tokenize_calc(inner);
+    if toks.is_empty() || toks.len() % 2 == 0 {
+        // Sin tokens, o longitud par (1+op+term tiene que ser impar).
+        return None;
+    }
+    let mut acc = parse_calc_term(toks[0])?;
+    let mut i = 1;
+    while i + 1 < toks.len() {
+        let op = toks[i];
+        let rhs = parse_calc_term(toks[i + 1])?;
+        acc = combine_calc(acc, op, rhs)?;
+        i += 2;
+    }
+    Some(acc)
+}
+
+/// Tokens del calc: separamos números+unidad de operadores `+`/`-`/`*`/
+/// `/`. CSS spec requiere whitespace alrededor de `+`/`-` (no de `*`/`/`).
+/// Por simplicidad sólo soportamos `+` y `-` con whitespace.
+fn tokenize_calc(s: &str) -> Vec<&str> {
+    let mut out: Vec<&str> = Vec::new();
+    let bytes = s.as_bytes();
+    let mut start = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b' ' || c == b'\t' || c == b'\n' {
+            if i > start {
+                out.push(&s[start..i]);
+            }
+            // Detectar operador como token único si está rodeado de spaces.
+            if i + 1 < bytes.len() && (bytes[i + 1] == b'+' || bytes[i + 1] == b'-') {
+                // Skip leading spaces hasta el operador.
+                let op_start = i + 1;
+                if op_start + 1 < bytes.len()
+                    && (bytes[op_start + 1] == b' ' || bytes[op_start + 1] == b'\t')
+                {
+                    out.push(&s[op_start..op_start + 1]);
+                    i = op_start + 1;
+                    start = i;
+                    continue;
+                }
+            }
+            start = i + 1;
+        }
+        i += 1;
+    }
+    if start < bytes.len() {
+        out.push(&s[start..]);
+    }
+    out
+}
+
+fn parse_calc_term(tok: &str) -> Option<LengthVal> {
+    let tok = tok.trim();
+    if let Some(num) = tok.strip_suffix('%') {
+        return num.trim().parse::<f32>().ok().map(LengthVal::Pct);
+    }
+    parse_length_px(tok).map(LengthVal::Px)
+}
+
+fn combine_calc(a: LengthVal, op: &str, b: LengthVal) -> Option<LengthVal> {
+    let sign = match op {
+        "+" => 1.0,
+        "-" => -1.0,
+        _ => return None,
+    };
+    match (a, b) {
+        (LengthVal::Px(x), LengthVal::Px(y)) => Some(LengthVal::Px(x + sign * y)),
+        (LengthVal::Pct(x), LengthVal::Pct(y)) => Some(LengthVal::Pct(x + sign * y)),
+        // Mezcla pct/px: conservamos el pct ignorando el offset px.
+        // Aproximación pragmática — taffy no soporta calc nativo y un
+        // valor mixto requeriría el container width, no disponible acá.
+        (LengthVal::Pct(p), LengthVal::Px(_)) | (LengthVal::Px(_), LengthVal::Pct(p)) => {
+            Some(LengthVal::Pct(p))
+        }
+        _ => None,
+    }
 }
 
 /// Acepta multiplicador adimensional (`1.5`, `1.6`), `Npx`, `Nem`/`Nrem`.
@@ -3591,6 +3710,61 @@ mod tests {
         assert_eq!(parse_length_px("1.5em"), Some(24.0));
         assert_eq!(parse_length_px("0"), Some(0.0));
         assert_eq!(parse_length_px("xyz"), None);
+    }
+
+    #[test]
+    fn parsea_z_index() {
+        let html = r##"<html><head><style>
+            .a { z-index: 5 }
+            .b { z-index: -2 }
+            .c { z-index: auto }
+        </style></head><body>
+            <div class="a"></div>
+            <div class="b"></div>
+            <div class="c"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("div") {
+                divs.push(n.clone());
+            }
+        });
+        assert_eq!(divs.len(), 3);
+        assert_eq!(eng.compute(&divs[0]).z_index, 5);
+        assert_eq!(eng.compute(&divs[1]).z_index, -2);
+        assert_eq!(eng.compute(&divs[2]).z_index, 0); // auto → 0
+    }
+
+    #[test]
+    fn parsea_calc_solo_px() {
+        // calc(10px + 5px) resuelve a Px(15) en parse time.
+        assert_eq!(parse_length_or_pct("calc(10px + 5px)"), Some(LengthVal::Px(15.0)));
+        assert_eq!(parse_length_or_pct("calc(20px - 5px)"), Some(LengthVal::Px(15.0)));
+    }
+
+    #[test]
+    fn parsea_calc_solo_pct() {
+        assert_eq!(parse_length_or_pct("calc(80% - 10%)"), Some(LengthVal::Pct(70.0)));
+        assert_eq!(parse_length_or_pct("calc(50% + 20%)"), Some(LengthVal::Pct(70.0)));
+    }
+
+    #[test]
+    fn parsea_calc_mixto_pierde_offset_px() {
+        // Mezcla pct + px: conservamos el Pct e ignoramos el px (no
+        // tenemos container width acá; taffy no soporta calc nativo).
+        // Esto es una limitación documentada del soporte de calc.
+        assert_eq!(parse_length_or_pct("calc(100% - 20px)"), Some(LengthVal::Pct(100.0)));
+        assert_eq!(parse_length_or_pct("calc(50% + 10px)"), Some(LengthVal::Pct(50.0)));
+    }
+
+    #[test]
+    fn parsea_calc_invalido_devuelve_none() {
+        // Tokens incompletos / mismatched parens / op desconocido.
+        assert!(parse_length_or_pct("calc(10px +)").is_none());
+        assert!(parse_length_or_pct("calc(10px * 2)").is_none());
+        assert!(parse_length_or_pct("calc(10px").is_none());
     }
 
     #[test]

@@ -277,6 +277,19 @@ pub enum Msg {
     /// Igual que Navigate pero arranca en una pestaña nueva — usado por
     /// `<a target="_blank">` y middle-click sobre links (ese día llega).
     NavigateNewTab(String),
+    /// Click en `<a download>` — el chrome descarga el target a
+    /// `$XDG_DOWNLOAD_DIR/puriy/` (o `~/Downloads/puriy/`) en lugar de
+    /// navegar. `filename_hint` viene del attr `download="..."`; vacío
+    /// = usar el último segmento del path de la URL.
+    DownloadLink { url: String, filename_hint: String },
+    /// Resultado del thread que descarga: cuenta de bytes escritos al
+    /// disco o mensaje de error. Mismo gen check que `Loaded`.
+    DownloadDone {
+        tab: TabId,
+        gen: u64,
+        path: String,
+        result: Result<usize, String>,
+    },
     Scroll(f32),
     FocusAddr,
     AddrKey(KeyEvent),
@@ -662,6 +675,43 @@ impl App for Puriy {
                 m.panel = None;
                 m.panel_filter.clear();
                 start_load_post(&mut m, url, body, handle);
+            }
+            Msg::DownloadLink { url, filename_hint } => {
+                let filename = pick_download_filename(&url, &filename_hint);
+                let path = download_path(&filename);
+                let status_path = path.display().to_string();
+                m.active_mut().status = format!("⬇ descargando {filename}…");
+                let h = handle.clone();
+                let active_tab_id = m.active().id;
+                let active_gen = m.active().gen;
+                let url_clone = url.clone();
+                std::thread::spawn(move || {
+                    let result = puriy_engine::fetch::fetch_bytes(&url_clone)
+                        .map_err(|e| e.to_string())
+                        .and_then(|bytes| {
+                            if let Some(parent) = path.parent() {
+                                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                            }
+                            std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+                            Ok(bytes.len())
+                        });
+                    h.dispatch(Msg::DownloadDone {
+                        tab: active_tab_id,
+                        gen: active_gen,
+                        path: status_path,
+                        result,
+                    });
+                });
+            }
+            Msg::DownloadDone { tab, gen, path, result } => {
+                if let Some(idx) = m.tab_idx(tab) {
+                    if m.tabs[idx].gen == gen {
+                        m.tabs[idx].status = match result {
+                            Ok(n) => format!("⬇ {path} · {n} bytes"),
+                            Err(e) => format!("⬇ fallo: {e}"),
+                        };
+                    }
+                }
             }
             Msg::NavigateNewTab(target) => {
                 // `target="_blank"` debe enviar Referer del padre.
@@ -2029,13 +2079,22 @@ fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
 
     if let Some(target) = &b.link {
         if pe_active {
-            let msg = if b.link_new_tab {
+            // `<a download>` descarga el target en lugar de navegar. El
+            // filename hint queda en `b.link_download` (String vacío =
+            // usar nombre del path).
+            let msg = if let Some(filename_hint) = &b.link_download {
+                Msg::DownloadLink {
+                    url: target.clone(),
+                    filename_hint: filename_hint.clone(),
+                }
+            } else if b.link_new_tab {
                 Msg::NavigateNewTab(target.clone())
             } else {
                 Msg::Navigate(target.clone())
             };
             view = view
                 .on_click(msg)
+                .on_middle_click(Msg::NavigateNewTab(target.clone()))
                 .on_pointer_enter(Msg::HoverLink(Some(target.clone())))
                 .on_pointer_leave(Msg::HoverLink(None));
         }
@@ -2111,11 +2170,36 @@ fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
                 .map(|c| render_link_subtree(c, &target, link_color, new_tab, ctx))
                 .collect()
         } else {
-            b.children.iter().map(|c| render_box(c, ctx)).collect()
+            render_children_z_ordered(&b.children, ctx)
         };
         view = view.children(kids);
     }
     view
+}
+
+/// Renderea los children aplicando z-index: in-flow primero (orden
+/// DOM), luego out-of-flow (position absolute/fixed) ordenados por
+/// z-index ascendente — mayor pinta encima de los demás. Reordenar
+/// los out-of-flow es seguro porque su layout depende de insets, no
+/// de su posición en el Vec.
+fn render_children_z_ordered(children: &[BoxNode], ctx: &mut RenderCtx<'_>) -> Vec<View<Msg>> {
+    let mut in_flow_idx: Vec<usize> = Vec::new();
+    let mut out_of_flow_idx: Vec<usize> = Vec::new();
+    for (i, c) in children.iter().enumerate() {
+        match c.position {
+            puriy_engine::Position::Absolute | puriy_engine::Position::Fixed => {
+                out_of_flow_idx.push(i)
+            }
+            _ => in_flow_idx.push(i),
+        }
+    }
+    // Sort estable por z-index ascending; ties mantienen orden DOM.
+    out_of_flow_idx.sort_by_key(|&i| children[i].z_index);
+    in_flow_idx
+        .into_iter()
+        .chain(out_of_flow_idx)
+        .map(|i| render_box(&children[i], ctx))
+        .collect()
 }
 
 /// Recorre `b` y avanza `*counter` por cada `<details>` descendiente.
@@ -2297,7 +2381,9 @@ fn render_link_subtree(
             Msg::Navigate(t.to_string())
         }
     };
-    let mut view = View::new(box_style(b, zoom)).on_click(nav_msg(target));
+    let mut view = View::new(box_style(b, zoom))
+        .on_click(nav_msg(target))
+        .on_middle_click(Msg::NavigateNewTab(target.to_string()));
     let find_hit = !ctx.find_query_lc.is_empty()
         && b.text
             .as_ref()
@@ -3415,6 +3501,40 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+/// Decide qué nombre usar para una descarga. El hint del attr
+/// `download="..."` gana si no está vacío y no contiene `/` (un attr
+/// `download="../etc/passwd"` debe rechazarse — es vector de path
+/// traversal). Sino, usamos el último segmento del path de la URL; si
+/// la URL no tiene path significativo, fallback a `descarga`.
+fn pick_download_filename(url: &str, hint: &str) -> String {
+    let hint = hint.trim();
+    if !hint.is_empty() && !hint.contains('/') && !hint.contains('\\') {
+        return hint.to_string();
+    }
+    if let Ok(parsed) = url::Url::parse(url) {
+        if let Some(seg) = parsed.path_segments().and_then(|s| s.last()) {
+            let seg = seg.trim();
+            if !seg.is_empty() {
+                return seg.to_string();
+            }
+        }
+    }
+    "descarga".to_string()
+}
+
+/// Path absoluto donde la descarga termina. Convención: `$XDG_DOWNLOAD_DIR/
+/// puriy/<filename>` o, sin xdg, `~/Downloads/puriy/<filename>`. Si
+/// ningún path conocido es accesible, cae a `/tmp/`.
+fn download_path(filename: &str) -> std::path::PathBuf {
+    let base = std::env::var_os("XDG_DOWNLOAD_DIR")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("Downloads"))
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+    base.join("puriy").join(filename)
+}
+
 /// Centra el viewport sobre el match actual de la find bar. Llama a
 /// `find_y_of_match` del box tree con el contador 1-based; si encuentra
 /// la y aproximada, setea `scroll_y` ~80px arriba del match para dar
@@ -3469,6 +3589,30 @@ mod tests {
     fn parse(html: &str) -> BoxTree {
         let engine = Engine::new();
         engine.load_html("about:test", html).box_tree
+    }
+
+    #[test]
+    fn pick_download_filename_usa_hint_si_es_seguro() {
+        assert_eq!(
+            pick_download_filename("https://x/y/z.pdf", "doc.pdf"),
+            "doc.pdf"
+        );
+        // Path traversal en el hint → cae a path de la URL.
+        assert_eq!(
+            pick_download_filename("https://x/y/z.pdf", "../etc/passwd"),
+            "z.pdf"
+        );
+        assert_eq!(
+            pick_download_filename("https://x/y/z.pdf", "a\\b"),
+            "z.pdf"
+        );
+        // Hint vacío → path de la URL.
+        assert_eq!(
+            pick_download_filename("https://x/file.tar.gz", ""),
+            "file.tar.gz"
+        );
+        // URL sin path significativo + hint vacío → fallback.
+        assert_eq!(pick_download_filename("https://x/", ""), "descarga");
     }
 
     #[test]

@@ -376,6 +376,10 @@ pub struct View<Msg> {
     /// click derecho (la celda no es un nodo aparte, sino una región
     /// dentro del nodo). Si está presente, gana sobre `on_right_click`.
     pub on_right_click_at: Option<ClickAtFn<Msg>>,
+    /// Equivalente a `on_click` pero para el botón del medio del ratón
+    /// (rueda presionada). Pensado para abrir en pestaña nueva — los
+    /// browsers usan middle-click como atajo equivalente a Ctrl+Click.
+    pub on_middle_click: Option<Msg>,
     /// Handler de drag. Si está presente, este nodo arrastra (y NO emite
     /// `on_click` al presionar — un nodo es uno u otro).
     pub drag: Option<DragFn<Msg>>,
@@ -421,6 +425,7 @@ impl<Msg> View<Msg> {
             on_click_at: None,
             on_right_click: None,
             on_right_click_at: None,
+            on_middle_click: None,
             drag: None,
             drag_at: None,
             drag_payload: None,
@@ -631,6 +636,14 @@ impl<Msg> View<Msg> {
         self
     }
 
+    /// Declara el `Msg` a emitir cuando el usuario hace click con el
+    /// botón del medio (rueda presionada). Usado típicamente para abrir
+    /// links en pestaña nueva — igual que Ctrl+Click pero más rápido.
+    pub fn on_middle_click(mut self, msg: Msg) -> Self {
+        self.on_middle_click = Some(msg);
+        self
+    }
+
     /// Pinta `image` dentro del rect del nodo, centrada y escalada
     /// preservando aspect ratio. Re-exporta `peniko::Image` vía
     /// `llimphi_raster::peniko::Image` — el caller decodifica los
@@ -714,6 +727,7 @@ struct MountedNode<Msg> {
     on_click_at: Option<ClickAtFn<Msg>>,
     on_right_click: Option<Msg>,
     on_right_click_at: Option<ClickAtFn<Msg>>,
+    on_middle_click: Option<Msg>,
     drag: Option<DragFn<Msg>>,
     drag_at: Option<DragAtFn<Msg>>,
     drag_payload: Option<u64>,
@@ -755,6 +769,7 @@ fn mount_recursive<Msg: Clone>(
         on_click_at,
         on_right_click,
         on_right_click_at,
+        on_middle_click,
         drag,
         drag_at,
         drag_payload,
@@ -779,6 +794,7 @@ fn mount_recursive<Msg: Clone>(
         on_click_at,
         on_right_click,
         on_right_click_at,
+        on_middle_click,
         drag,
         drag_at,
         drag_payload,
@@ -1046,6 +1062,17 @@ fn hit_test_right_click<Msg>(
     hit_test_pred(mounted, computed, x, y, |n| {
         n.on_right_click.is_some() || n.on_right_click_at.is_some()
     })
+}
+
+/// Hit-test específico para middle-click. Mismo modelo que right-click:
+/// sólo nodos que declararon `on_middle_click` reaccionan.
+fn hit_test_middle_click<Msg>(
+    mounted: &Mounted<Msg>,
+    computed: &ComputedLayout,
+    x: f32,
+    y: f32,
+) -> Option<usize> {
+    hit_test_pred(mounted, computed, x, y, |n| n.on_middle_click.is_some())
 }
 
 /// Hit-test específico para hover (nodos con `hover_fill`).
@@ -1461,6 +1488,36 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                         state.window.request_redraw();
                     }
                 } else if let Some((_, _, _, Some(msg), _, _)) = idx_and_action {
+                    let model = state.model.take().expect("model");
+                    state.model = Some(A::update(model, msg, &self.handle));
+                    state.last_render = None;
+                    state.window.request_redraw();
+                }
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Middle,
+                ..
+            } => {
+                // Middle-click: dispatcha `on_middle_click` del nodo
+                // bajo cursor si lo declaró. La capa overlay tiene
+                // prioridad (mismo razonamiento que el left/right click).
+                let cursor = state.cursor;
+                let lookup =
+                    |m: &Mounted<A::Msg>, c: &ComputedLayout| -> Option<A::Msg> {
+                        hit_test_middle_click(m, c, cursor.x as f32, cursor.y as f32)
+                            .and_then(|i| m.nodes[i].on_middle_click.clone())
+                    };
+                let msg = if let Some(cache) = state.last_render.as_ref() {
+                    if let Some(ov) = cache.overlay.as_ref() {
+                        lookup(&ov.mounted, &ov.computed)
+                    } else {
+                        lookup(&cache.mounted, &cache.computed)
+                    }
+                } else {
+                    None
+                };
+                if let Some(msg) = msg {
                     let model = state.model.take().expect("model");
                     state.model = Some(A::update(model, msg, &self.handle));
                     state.last_render = None;

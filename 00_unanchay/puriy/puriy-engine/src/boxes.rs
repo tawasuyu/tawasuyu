@@ -106,6 +106,10 @@ pub struct BoxNode {
     pub focus_background: Option<Color>,
     /// Box-shadow propagado a `paint_with` en el chrome.
     pub box_shadow: Option<BoxShadow>,
+    /// `z-index` aplicado al stacking order entre hermanos positioned.
+    /// El chrome lo usa para reordenar children out-of-flow ascending —
+    /// el mayor pinta encima. Para `position: static` se ignora.
+    pub z_index: i32,
     /// Línea decorativa que el chrome dibuja sobre la hoja de texto
     /// (underline / line-through / overline). `None` = sin decoración.
     pub text_decoration: TextDecorationLine,
@@ -179,6 +183,10 @@ pub struct BoxNode {
     /// no-self). El chrome lo usa para abrir en nueva pestaña al click.
     /// `false` para todo lo demás.
     pub link_new_tab: bool,
+    /// Si el `<a>` lleva `download[=filename]`, el chrome descarga el
+    /// target en lugar de navegarlo. `Some(String::new())` = usar el
+    /// filename del path; `Some("foo.pdf")` = filename override.
+    pub link_download: Option<String>,
     /// Imagen decodificada del CSS `background-image: url(...)`. `None`
     /// si la propiedad no estaba o si la descarga/decode falló. El
     /// chrome la pinta como background (detrás del background sólido y
@@ -894,6 +902,7 @@ fn empty_root() -> BoxNode {
         hover_background: None,
         focus_background: None,
         box_shadow: None,
+        z_index: 0,
         flex_direction: FlexDirection::Row,
         justify_content: JustifyContent::Start,
         align_items: AlignItems::Stretch,
@@ -936,6 +945,7 @@ fn empty_root() -> BoxNode {
         image: None,
         details_open_attr: false,
         link_new_tab: false,
+        link_download: None,
         background_image: None,
         input_kind: None,
         input_initial: None,
@@ -995,6 +1005,11 @@ fn build_node(
                         !t.is_empty() && t != "_self" && t != "_parent" && t != "_top"
                     })
                     .unwrap_or(false);
+            let link_download = if tag.as_deref() == Some("a") {
+                dom::attr(node, "download").map(|s| s.trim().to_string())
+            } else {
+                None
+            };
 
             let input_kind = match tag.as_deref() {
                 Some("textarea") => Some(InputKind::TextArea),
@@ -1153,6 +1168,7 @@ fn build_node(
                 hover_background,
                 focus_background,
                 box_shadow: style.box_shadow,
+                z_index: style.z_index,
                 flex_direction: style.flex_direction,
                 justify_content: style.justify_content,
                 align_items: style.align_items,
@@ -1196,6 +1212,7 @@ fn build_node(
                 details_open_attr: tag.as_deref() == Some("details")
                     && dom::attr(node, "open").is_some(),
                 link_new_tab,
+                link_download,
                 background_image,
                 input_kind,
                 input_initial,
@@ -1272,6 +1289,7 @@ fn build_node(
                 hover_background: None,
         focus_background: None,
                 box_shadow: None,
+        z_index: 0,
                 flex_direction: FlexDirection::Row,
                 justify_content: JustifyContent::Start,
                 align_items: AlignItems::Stretch,
@@ -1314,6 +1332,7 @@ fn build_node(
                 image: None,
                 details_open_attr: false,
                 link_new_tab: false,
+        link_download: None,
                 background_image: None,
                 input_kind: None,
                 input_initial: None,
@@ -1354,6 +1373,7 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         hover_background: None,
         focus_background: None,
         box_shadow: None,
+        z_index: 0,
         flex_direction: FlexDirection::Row,
         justify_content: JustifyContent::Start,
         align_items: AlignItems::Stretch,
@@ -1396,6 +1416,7 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         image: None,
         details_open_attr: false,
         link_new_tab: false,
+        link_download: None,
         background_image: None,
         input_kind: None,
         input_initial: None,
