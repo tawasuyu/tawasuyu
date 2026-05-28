@@ -55,6 +55,7 @@ const FIELD_LABEL_SIZE: f32 = 10.0;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Focus {
     None,
+    Search,
     Title,
     Body,
     Tags,
@@ -69,6 +70,9 @@ enum Msg {
     Focus(Focus),
     Key(KeyEvent),
     EditorPointer(PointerEvent),
+    /// Latido — fuerza el rerender para que la masa decaiga
+    /// visiblemente aunque el usuario no esté tocando nada.
+    Tick,
 }
 
 struct Model {
@@ -81,6 +85,7 @@ struct Model {
     title: TextInputState,
     body: EditorState,
     tags: TextInputState,
+    search: TextInputState,
     focus: Focus,
     theme: Theme,
     data_path: Option<PathBuf>,
@@ -97,7 +102,7 @@ impl App for KhipuApp {
     type Model = Model;
     type Msg = Msg;
 
-    fn init(_handle: &Handle<Msg>) -> Model {
+    fn init(handle: &Handle<Msg>) -> Model {
         let data_path = data_file_path();
         let mut model = match data_path.as_ref().and_then(load_state) {
             Some(state) => from_state(state),
@@ -105,18 +110,17 @@ impl App for KhipuApp {
         };
         model.data_path = data_path;
         model.theme = Theme::dark();
-        // Aplica el decay correspondiente al tiempo transcurrido desde
-        // la última vez que se vio cada nota — al arrancar el archivo
-        // refleja la realidad temporal, no el estado congelado.
-        apply_decay_to_all(&mut model, now_secs());
-        // Elegimos la primera nota visible tras el reordenamiento por
-        // masa; en su defecto, la primera del orden de inserción.
+        // Elegimos la primera nota más pesada (decayendo on-the-fly);
+        // si todo el cuaderno está en archivo, caemos al orden de
+        // inserción para no abrir vacío.
         let first = first_visible(&model).or_else(|| model.order.first().copied());
         if let Some(id) = first {
             reinforce_and_touch(&mut model, id);
             select(&mut model, id);
         }
         persist(&model);
+        // Latido cada 30 s — la masa decae en disco como en pantalla.
+        handle.spawn_periodic(std::time::Duration::from_secs(30), || Msg::Tick);
         model
     }
 
@@ -139,6 +143,11 @@ impl App for KhipuApp {
             }
             Msg::ToggleArchive => {
                 model.show_archive = !model.show_archive;
+            }
+            Msg::Tick => {
+                // No muta nada: la masa vive en `current_mass` (decay
+                // contra `last_access`). El Tick existe sólo para
+                // pedirle al event loop un redraw.
             }
             Msg::DeleteSelected => {
                 if let Some(id) = model.selected {
@@ -165,6 +174,12 @@ impl App for KhipuApp {
                     Focus::Title => model.title.apply_key(&ev),
                     Focus::Body => model.body.apply_key(&ev).touched(),
                     Focus::Tags => model.tags.apply_key(&ev),
+                    Focus::Search => {
+                        // El search no muta el store: filtramos al
+                        // renderizar. Sólo consumimos el evento.
+                        let _ = model.search.apply_key(&ev);
+                        false
+                    }
                     Focus::None => false,
                 };
                 if changed {
@@ -205,7 +220,7 @@ impl App for KhipuApp {
         let editor_palette = EditorPalette::from_theme(&model.theme);
 
         let header = header_view(model);
-        let list = list_panel(model, &palette);
+        let list = list_panel(model, &palette, &input_palette);
         let editor = editor_panel(model, &input_palette, &editor_palette);
         let gravity = gravity_panel(model);
 
@@ -360,46 +375,66 @@ fn button(label: &str, bg: Color, fg: Color, msg: Msg) -> View<Msg> {
     .on_click(msg)
 }
 
-fn list_panel(model: &Model, palette: &ListPalette) -> View<Msg> {
+fn list_panel(
+    model: &Model,
+    palette: &ListPalette,
+    input_palette: &TextInputPalette,
+) -> View<Msg> {
+    let now = now_secs();
+    let query = model.search.text();
+    let q = query.trim();
+
     // Particionamos en horizonte vs archivo y ordenamos cada parte por
-    // masa decreciente. El orden de inserción se conserva entre notas
-    // de la misma masa.
-    let mut visible: Vec<(NoteId, &Note)> = Vec::new();
-    let mut archive: Vec<(NoteId, &Note)> = Vec::new();
+    // masa viva decreciente. Si hay query, ambas listas quedan
+    // pre-filtradas por coincidencia en título/cuerpo/etiquetas.
+    let mut visible: Vec<(NoteId, f32, &Note)> = Vec::new();
+    let mut archive: Vec<(NoteId, f32, &Note)> = Vec::new();
+    let mut hidden_by_query = 0usize;
     for id in &model.order {
         let Some(n) = model.store.get(*id) else {
             continue;
         };
-        if model.gravity.is_visible(n.mass) {
-            visible.push((*id, n));
+        if !q.is_empty() && !note_matches(n, q) {
+            hidden_by_query += 1;
+            continue;
+        }
+        let m = current_mass(&model.gravity, n, now);
+        if model.gravity.is_visible(m) {
+            visible.push((*id, m, n));
         } else {
-            archive.push((*id, n));
+            archive.push((*id, m, n));
         }
     }
-    let by_mass_desc = |a: &(NoteId, &Note), b: &(NoteId, &Note)| {
-        b.1.mass
-            .partial_cmp(&a.1.mass)
+    let by_mass_desc = |a: &(NoteId, f32, &Note), b: &(NoteId, f32, &Note)| {
+        b.1.partial_cmp(&a.1)
             .unwrap_or(core::cmp::Ordering::Equal)
             .then(a.0.cmp(&b.0))
     };
     visible.sort_by(by_mass_desc);
     archive.sort_by(by_mass_desc);
 
-    let mut chain: Vec<(NoteId, &Note)> = visible.clone();
+    let mut chain: Vec<(NoteId, f32, &Note)> = visible.clone();
     if model.show_archive {
         chain.extend(archive.iter().cloned());
     }
 
     let rows: Vec<ListRow<Msg>> = chain
         .into_iter()
-        .map(|(id, n)| ListRow {
-            label: row_label(n),
+        .map(|(id, mass, n)| ListRow {
+            label: row_label(n, mass),
             selected: Some(id) == model.selected,
             on_click: Msg::SelectNote(id),
         })
         .collect();
 
-    let caption = if archive.is_empty() {
+    let caption = if !q.is_empty() {
+        format!(
+            "buscar «{}» · {}/{} coinciden",
+            q,
+            visible.len() + if model.show_archive { archive.len() } else { 0 },
+            visible.len() + archive.len() + hidden_by_query
+        )
+    } else if archive.is_empty() {
         format!("notas · {}", visible.len())
     } else if model.show_archive {
         format!(
@@ -424,7 +459,47 @@ fn list_panel(model: &Model, palette: &ListPalette) -> View<Msg> {
         palette: *palette,
     };
 
+    let search_input = text_input_view(
+        &model.search,
+        "buscar (título, cuerpo, etiquetas)",
+        model.focus == Focus::Search,
+        input_palette,
+        Msg::Focus(Focus::Search),
+    );
+    let search_row = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(28.0_f32),
+        },
+        flex_shrink: 0.0,
+        padding: Rect {
+            left: length(6.0_f32),
+            right: length(6.0_f32),
+            top: length(4.0_f32),
+            bottom: length(4.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(model.theme.bg_panel_alt)
+    .children(vec![search_input]);
+
+    let list_wrap = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: Dimension::auto(),
+        },
+        flex_grow: 1.0,
+        flex_basis: length(0.0_f32),
+        min_size: Size {
+            width: length(0.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![list_view(spec)]);
+
     View::new(Style {
+        flex_direction: FlexDirection::Column,
         size: Size {
             width: length(LIST_WIDTH),
             height: percent(1.0_f32),
@@ -432,10 +507,19 @@ fn list_panel(model: &Model, palette: &ListPalette) -> View<Msg> {
         flex_shrink: 0.0,
         ..Default::default()
     })
-    .children(vec![list_view(spec)])
+    .children(vec![search_row, list_wrap])
 }
 
-fn row_label(n: &Note) -> String {
+/// Coincidencia sobre título, cuerpo y etiquetas. Case-insensitive.
+fn note_matches(n: &Note, query: &str) -> bool {
+    if n.matches(query) {
+        return true;
+    }
+    let q = query.to_lowercase();
+    n.tags.iter().any(|t| t.to_lowercase().contains(&q))
+}
+
+fn row_label(n: &Note, mass: f32) -> String {
     let title = if n.title.is_empty() {
         "(sin título)"
     } else {
@@ -443,7 +527,7 @@ fn row_label(n: &Note) -> String {
     };
     // Una barra de tres bloques visualiza la masa (0..1.5 mapeada a
     // 0..3). Sobre el horizonte se ve llena; cayendo, se vacía.
-    let bars = (n.mass.clamp(0.0, 1.5) / 0.5).round() as usize;
+    let bars = (mass.clamp(0.0, 1.5) / 0.5).round() as usize;
     let glyph: String = (0..3)
         .map(|i| if i < bars { '▮' } else { '▯' })
         .collect();
@@ -1073,6 +1157,7 @@ fn from_state(state: PersistedState) -> Model {
         title: TextInputState::new(),
         body: EditorState::default(),
         tags: TextInputState::new(),
+        search: TextInputState::new(),
         focus: Focus::None,
         theme: Theme::dark(),
         data_path: None,
@@ -1090,6 +1175,7 @@ fn seeded_model() -> Model {
         title: TextInputState::new(),
         body: EditorState::default(),
         tags: TextInputState::new(),
+        search: TextInputState::new(),
         focus: Focus::None,
         theme: Theme::dark(),
         data_path: None,
@@ -1150,52 +1236,47 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// Aplica el `decay` a todas las notas según el `dt` desde su
-/// `last_access` hasta `now`. Las notas con `last_access == 0`
-/// (payloads viejos antes de los campos temporales) reciben `dt = 0`
-/// — equivale a no decaer todavía.
-fn apply_decay_to_all(model: &mut Model, now: u64) {
-    let ids: Vec<NoteId> = model.order.clone();
-    for id in ids {
-        let Some(n) = model.store.get(id) else {
-            continue;
-        };
-        let dt = if n.last_access == 0 {
-            0.0
-        } else if now > n.last_access {
-            (now - n.last_access) as f32
-        } else {
-            0.0
-        };
-        let new_mass = model.gravity.decay(n.mass, dt);
-        model.store.set_mass(id, new_mass);
-        // No re-tocamos `last_access` aquí: el decay es físico, no
-        // un acceso del usuario.
+/// La masa "vivida" de una nota en `now`: la guardada decae contra
+/// el tiempo transcurrido desde `last_access`. Las notas con
+/// `last_access == 0` (payloads viejos sin el campo) toman su `mass`
+/// tal cual — equivale a tratar `now` como su primer acceso.
+fn current_mass(gravity: &Gravity, n: &Note, now: u64) -> f32 {
+    if n.last_access == 0 {
+        return n.mass;
     }
+    let dt = if now > n.last_access {
+        (now - n.last_access) as f32
+    } else {
+        0.0
+    };
+    gravity.decay(n.mass, dt)
 }
 
 /// Refuerza la masa de `id` y marca `last_access`. El gesto canónico
-/// cuando el usuario selecciona o abre una nota.
+/// cuando el usuario selecciona o abre una nota: primero decaemos el
+/// valor guardado al "ahora" y sobre ese decaído sumamos el boost.
 fn reinforce_and_touch(model: &mut Model, id: NoteId) {
+    let now = now_secs();
     let Some(n) = model.store.get(id) else {
         return;
     };
-    let reinforced = model.gravity.reinforce(n.mass);
+    let lived = current_mass(&model.gravity, n, now);
+    let reinforced = model.gravity.reinforce(lived);
     model.store.set_mass(id, reinforced);
-    model.store.touch(id, now_secs());
+    model.store.touch(id, now);
 }
 
-/// Primera nota sobre el horizonte, ordenada por masa decreciente.
+/// Primera nota sobre el horizonte, ordenada por masa "viva".
 fn first_visible(model: &Model) -> Option<NoteId> {
+    let now = now_secs();
     let mut visible: Vec<(NoteId, f32)> = model
         .order
         .iter()
         .filter_map(|id| {
-            model
-                .store
-                .get(*id)
-                .filter(|n| model.gravity.is_visible(n.mass))
-                .map(|n| (*id, n.mass))
+            model.store.get(*id).and_then(|n| {
+                let m = current_mass(&model.gravity, n, now);
+                model.gravity.is_visible(m).then_some((*id, m))
+            })
         })
         .collect();
     visible.sort_by(|a, b| {
