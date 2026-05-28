@@ -423,6 +423,8 @@ impl App for Takiy {
             Key::Character(s) if s.eq_ignore_ascii_case("m") => Some(Msg::ToggleMetronome),
             Key::Character(s) if s.eq_ignore_ascii_case("l") => Some(Msg::ToggleLoop),
             Key::Character(s) if s.eq_ignore_ascii_case("q") => Some(Msg::CycleSnap),
+            Key::Character(s) if s == "k" => Some(Msg::Edit(EditMsg::CycleKeyRoot)),
+            Key::Character(s) if s == "K" => Some(Msg::Edit(EditMsg::CycleKeyMode)),
             Key::Character(s) if s.eq_ignore_ascii_case("z") && event.modifiers.ctrl && event.modifiers.shift => {
                 Some(Msg::Redo)
             }
@@ -485,6 +487,8 @@ impl App for Takiy {
         let metronome_on = model.editor.metronome_beats_per_bar.is_some();
         let snap_label = model.editor.snap.label();
         let undo_depth = model.editor.history.len();
+        let key_label = takiy_app::describe_key(&model.editor.score.key);
+        let key_scale = model.editor.score.key.clone();
         let (min_midi, max_midi) = pitch_range(&score);
         let total_beats = score
             .duration_beats()
@@ -525,6 +529,7 @@ impl App for Takiy {
                 scene, ts, rect, &score_paint, &source, &engine, &status, playing,
                 active_track, selected, playback_position_seconds, playback_bpm,
                 loop_region, metronome_on, snap_label, undo_depth,
+                &key_label, key_scale.as_ref(),
                 min_midi, max_midi, total_beats, theme,
             );
         })
@@ -553,6 +558,8 @@ fn paint_piano_roll(
     metronome_on: bool,
     snap_label: &str,
     undo_depth: usize,
+    key_label: &str,
+    key_scale: Option<&takiy_core::Scale>,
     min_midi: u8,
     max_midi: u8,
     total_beats: f32,
@@ -577,6 +584,12 @@ fn paint_piano_roll(
     let white_key = Color::from_rgba8(225, 225, 230, 255);
     let black_key = Color::from_rgba8(70, 72, 80, 255);
 
+    // Color para filas en escala (tono cálido) cuando hay key activa.
+    // Las filas fuera de escala se pintan más opacas; las en escala
+    // reciben un leve glow que las hace destacar.
+    let in_scale_row = Color::from_rgba8(70, 84, 96, 255);
+    let in_scale_black = Color::from_rgba8(54, 64, 76, 255);
+
     for i in 0..n_keys as u8 {
         let midi = max_midi - i;
         let class = PitchClass::from_semitone(midi % 12);
@@ -584,9 +597,21 @@ fn paint_piano_roll(
             class,
             PitchClass::Cs | PitchClass::Ds | PitchClass::Fs | PitchClass::Gs | PitchClass::As
         );
+        let in_scale = key_scale
+            .map(|scale| {
+                takiy_core::Pitch::from_midi(midi)
+                    .map(|p| scale.contains(p))
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
         let y = grid_y + i as f32 * key_h;
 
-        let row_color = if is_black { black_row } else { white_row };
+        let row_color = match (in_scale, is_black) {
+            (true, true) => in_scale_black,
+            (true, false) => in_scale_row,
+            (false, true) => black_row,
+            (false, false) => white_row,
+        };
         let r = KurboRect::new(
             grid_x as f64,
             y as f64,
@@ -679,7 +704,7 @@ fn paint_piano_roll(
         None => String::new(),
     };
     let header_text = format!(
-        "{source}  ·  {engine}  ·  {:.0} bpm · snap {snap_label} · undo {undo_depth}{metro_marker}{loop_marker}  ·  active: {active_track}·{active_name}{active_mixer}  ·  {status}",
+        "{source}  ·  {engine}  ·  {:.0} bpm · key {key_label} · snap {snap_label} · undo {undo_depth}{metro_marker}{loop_marker}  ·  active: {active_track}·{active_name}{active_mixer}  ·  {status}",
         score.tempo_bpm
     );
     let text_color = if playing {

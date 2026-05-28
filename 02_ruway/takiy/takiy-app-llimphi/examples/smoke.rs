@@ -157,5 +157,19 @@ fn main() {
     let back_notes: usize = back.tracks().iter().map(|t| t.notes().len()).sum();
     assert_eq!(demo_notes, back_notes);
 
-    println!("takiy smoke ok — 10 escenarios verdes");
+    // --- Escenario 11: tonalidad consciente (F6).
+    let mut st = EditorState::new(120.0);
+    assert!(st.score.key.is_none());
+    st.apply(EditMsg::CycleKeyRoot); // → C major
+    assert_eq!(takiy_app::describe_key(&st.score.key), "C major");
+    st.apply(EditMsg::CycleKeyMode); // → C minor
+    assert_eq!(takiy_app::describe_key(&st.score.key), "C minor");
+    // Roundtrip serde con key.
+    let path = std::env::temp_dir().join("takiy-smoke-key.takiy.json");
+    takiy_app::write_score(&st.score, &path).unwrap();
+    let back = takiy_app::load_score(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(back, st.score);
+
+    println!("takiy smoke ok — 11 escenarios verdes");
 }

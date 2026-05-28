@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use takiy_core::{Pitch, Score, ScoreNote, Track};
+use takiy_core::{Pitch, PitchClass, Scale, Score, ScoreNote, Track};
 
 /// Granularidad de snap para edición. Determina cuánto se redondea el
 /// beat al hacer click, mover con flechas o pegar.
@@ -217,6 +217,12 @@ pub enum EditMsg {
     NudgeActiveVolume { delta: f32 },
     /// Cambia el pan de la pista activa en `delta` (clamp [-1, 1]).
     NudgeActivePan { delta: f32 },
+    /// Cicla la raíz de la tonalidad: None → C → C# → D … → B → None.
+    /// Mantiene el modo previo (mayor por default).
+    CycleKeyRoot,
+    /// Cicla el modo entre los soportados: mayor → menor natural →
+    /// pentatónica mayor → vuelta a mayor. Sólo aplica si hay key activa.
+    CycleKeyMode,
 }
 
 /// Resultado de aplicar un `EditMsg`: mensaje corto para el header.
@@ -264,6 +270,8 @@ impl EditorState {
             EditMsg::ToggleSoloActive => self.toggle_solo_active(),
             EditMsg::NudgeActiveVolume { delta } => self.nudge_active_volume(delta),
             EditMsg::NudgeActivePan { delta } => self.nudge_active_pan(delta),
+            EditMsg::CycleKeyRoot => self.cycle_key_root(),
+            EditMsg::CycleKeyMode => self.cycle_key_mode(),
         }
     }
 
@@ -523,6 +531,32 @@ impl EditorState {
         Some(format!("pista {idx} · vol {new_vol:.2}"))
     }
 
+    /// Cicla la raíz de la tonalidad en orden cromático. None → C → C# → ... → B → None.
+    fn cycle_key_root(&mut self) -> ApplyOutcome {
+        let new_key = match self.score.key.as_ref().map(|s| (s.root(), classify_mode(s))) {
+            None => Some((PitchClass::C, KeyMode::Major)),
+            Some((PitchClass::B, mode)) => {
+                // Termina el ciclo cromático — apaga la key.
+                let _ = mode;
+                None
+            }
+            Some((root, mode)) => Some((next_pitch_class(root), mode)),
+        };
+        self.score.key = new_key.map(|(root, mode)| mode.scale(root));
+        Some(format!("key · {}", describe_key(&self.score.key)))
+    }
+
+    /// Cicla el modo de la tonalidad activa. Si no hay key, la prende
+    /// en C mayor — así una sola tecla puede arrancar la consciencia.
+    fn cycle_key_mode(&mut self) -> ApplyOutcome {
+        let (root, mode) = match self.score.key.as_ref() {
+            Some(scale) => (scale.root(), classify_mode(scale).next()),
+            None => (PitchClass::C, KeyMode::Major),
+        };
+        self.score.key = Some(mode.scale(root));
+        Some(format!("key · {}", describe_key(&self.score.key)))
+    }
+
     fn nudge_active_pan(&mut self, delta: f32) -> ApplyOutcome {
         let idx = self.active_track;
         let track = self.score.track_mut(idx)?;
@@ -566,6 +600,70 @@ impl EditorState {
 /// el uso normal — alcanza. Si hay duplicados devuelve la primera.
 pub fn find_note_idx(notes: &[ScoreNote], target: &ScoreNote) -> Option<usize> {
     notes.iter().position(|n| n == target)
+}
+
+/// Modo musical soportado por el editor. Más limitado que el catálogo
+/// `takiy_core::Scale` para que el ciclo Q/Shift+Q tenga pocas opciones
+/// y sea predecible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyMode {
+    Major,
+    NaturalMinor,
+    PentatonicMajor,
+}
+
+impl KeyMode {
+    fn next(self) -> Self {
+        match self {
+            KeyMode::Major => KeyMode::NaturalMinor,
+            KeyMode::NaturalMinor => KeyMode::PentatonicMajor,
+            KeyMode::PentatonicMajor => KeyMode::Major,
+        }
+    }
+
+    fn scale(self, root: PitchClass) -> Scale {
+        match self {
+            KeyMode::Major => Scale::major(root),
+            KeyMode::NaturalMinor => Scale::natural_minor(root),
+            KeyMode::PentatonicMajor => Scale::pentatonic_major(root),
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            KeyMode::Major => "major",
+            KeyMode::NaturalMinor => "minor",
+            KeyMode::PentatonicMajor => "pent5",
+        }
+    }
+}
+
+/// Detecta el modo de una `Scale` por su patrón (3 modos soportados;
+/// cualquier otra cae a "major" como aproximación). Útil para los
+/// cyclers sin que el state guarde el modo explícitamente.
+fn classify_mode(scale: &Scale) -> KeyMode {
+    // Reconstruimos las 3 escalas base sobre la misma raíz y comparamos.
+    let root = scale.root();
+    if *scale == Scale::natural_minor(root) {
+        KeyMode::NaturalMinor
+    } else if *scale == Scale::pentatonic_major(root) {
+        KeyMode::PentatonicMajor
+    } else {
+        KeyMode::Major
+    }
+}
+
+/// Próxima `PitchClass` en orden cromático (C → C# → … → B → C).
+fn next_pitch_class(pc: PitchClass) -> PitchClass {
+    PitchClass::from_semitone(pc.semitone().wrapping_add(1) % 12)
+}
+
+/// Pretty string para el header — `"C major"`, `"A minor"`, `"none"`.
+pub fn describe_key(key: &Option<Scale>) -> String {
+    match key {
+        None => "none".into(),
+        Some(s) => format!("{} {}", s.root().name(), classify_mode(s).label()),
+    }
 }
 
 #[cfg(test)]
@@ -906,6 +1004,61 @@ mod tests {
             st.apply(EditMsg::NudgeActiveVolume { delta: -0.1 });
         }
         assert!(st.score.track(0).unwrap().volume.abs() < 1e-3);
+    }
+
+    #[test]
+    fn cycle_key_root_starts_at_c_major_then_chromatic() {
+        let mut st = EditorState::new(120.0);
+        assert!(st.score.key.is_none());
+        st.apply(EditMsg::CycleKeyRoot);
+        let k = st.score.key.as_ref().unwrap();
+        assert_eq!(k.root(), PitchClass::C);
+        st.apply(EditMsg::CycleKeyRoot);
+        assert_eq!(st.score.key.as_ref().unwrap().root(), PitchClass::Cs);
+    }
+
+    #[test]
+    fn cycle_key_root_wraps_at_b_back_to_none() {
+        let mut st = EditorState::new(120.0);
+        // Avanzamos 12 veces desde None: arranca en C; el ciclo 12 cae en B,
+        // y la siguiente vuelve a None.
+        for _ in 0..12 {
+            st.apply(EditMsg::CycleKeyRoot);
+        }
+        assert_eq!(st.score.key.as_ref().unwrap().root(), PitchClass::B);
+        st.apply(EditMsg::CycleKeyRoot);
+        assert!(st.score.key.is_none());
+    }
+
+    #[test]
+    fn cycle_key_mode_changes_scale_pattern_keeping_root() {
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::CycleKeyRoot); // → C major
+        let scale_before = st.score.key.clone().unwrap();
+        st.apply(EditMsg::CycleKeyMode); // → C minor
+        let scale_after = st.score.key.clone().unwrap();
+        assert_eq!(scale_before.root(), scale_after.root());
+        assert_ne!(scale_before, scale_after);
+    }
+
+    #[test]
+    fn cycle_key_mode_from_none_enables_c_major() {
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::CycleKeyMode);
+        let k = st.score.key.as_ref().unwrap();
+        assert_eq!(k.root(), PitchClass::C);
+    }
+
+    #[test]
+    fn describe_key_formats_root_and_mode() {
+        let mut st = EditorState::new(120.0);
+        assert_eq!(describe_key(&st.score.key), "none");
+        st.apply(EditMsg::CycleKeyRoot); // C major
+        assert_eq!(describe_key(&st.score.key), "C major");
+        st.apply(EditMsg::CycleKeyMode); // C minor
+        assert_eq!(describe_key(&st.score.key), "C minor");
+        st.apply(EditMsg::CycleKeyMode); // C pent5
+        assert_eq!(describe_key(&st.score.key), "C pent5");
     }
 
     #[test]

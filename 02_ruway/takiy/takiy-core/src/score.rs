@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::pitch::Pitch;
+use crate::scale::Scale;
 
 /// Una nota dentro de una pista: altura, inicio y duración en pulsos,
 /// y velocidad (intensidad MIDI).
@@ -155,18 +156,23 @@ impl Track {
     }
 }
 
-/// Una partitura: un tempo y varias pistas.
+/// Una partitura: un tempo, una tonalidad opcional y varias pistas.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Score {
     /// Pulsos por minuto.
     pub tempo_bpm: f32,
+    /// Tonalidad activa para el editor (resalta filas en escala,
+    /// permite snap a tonalidad). `None` = sin tonalidad declarada.
+    /// `serde(default)` para que los `.takiy.json` pre-F6 carguen igual.
+    #[serde(default)]
+    pub key: Option<Scale>,
     tracks: Vec<Track>,
 }
 
 impl Score {
     /// Partitura vacía con el tempo dado.
     pub fn new(tempo_bpm: f32) -> Self {
-        Self { tempo_bpm, tracks: Vec::new() }
+        Self { tempo_bpm, key: None, tracks: Vec::new() }
     }
 
     /// Añade una pista y devuelve su índice.
@@ -401,6 +407,25 @@ mod tests {
         // Aunque esté solo, mute la silencia. Otras pistas siguen filtradas.
         assert!(!s.track_is_audible(0));
         assert!(!s.track_is_audible(1));
+    }
+
+    #[test]
+    fn score_serde_with_missing_key_uses_default_none() {
+        // Score JSON pre-F6 (sin key).
+        let json = r#"{"tempo_bpm":96.0,"tracks":[]}"#;
+        let s: Score = serde_json::from_str(json).unwrap();
+        assert!((s.tempo_bpm - 96.0).abs() < 1e-6);
+        assert!(s.key.is_none());
+    }
+
+    #[test]
+    fn score_with_key_roundtrips_via_serde() {
+        use crate::pitch::PitchClass;
+        let mut s = Score::new(120.0);
+        s.key = Some(crate::scale::Scale::major(PitchClass::G));
+        let json = serde_json::to_string(&s).unwrap();
+        let back: Score = serde_json::from_str(&json).unwrap();
+        assert_eq!(s, back);
     }
 
     #[test]
