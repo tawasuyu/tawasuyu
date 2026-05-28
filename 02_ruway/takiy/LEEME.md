@@ -31,3 +31,19 @@ cargo run --release -p takiy-app-llimphi
 - **Latencia es first-class.** El loop de audio respeta el período del device; no se rompe por culpa del UI.
 - **Sin VST3/AU.** El catálogo de plugins es el árbol de crates; cualquier nuevo synth se agrega como crate.
 - Render offline (no-realtime) para archivos largos: dumpea WAV/FLAC determinista.
+
+## Salud del crate
+
+```sh
+./scripts/check-takiy.sh         # check + tests + smoke headless + hash WAV
+./scripts/check-takiy.sh fast    # sólo check + smoke (sin tests)
+```
+
+El script asegura que:
+
+1. los 5 crates compilan limpios;
+2. todos los tests unitarios pasan (≈150);
+3. el `example smoke` corre la lógica del editor sin abrir ventana ni device de audio;
+4. el WAV producido por el render canónico se mantiene byte-equal contra un hash BLAKE3 registrado (regresión silenciosa de la mezcla → error).
+
+Si el hash cambia con un cambio intencional, actualizar `EXPECTED_BLAKE3` en `takiy-synth/tests/wav_determinism.rs` y justificar el ajuste en el mensaje del commit.

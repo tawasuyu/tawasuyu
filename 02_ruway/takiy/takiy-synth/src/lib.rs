@@ -35,4 +35,4 @@ pub use renderer::{OscRenderer, Renderer};
 pub use soundfont::{LoadError, SoundFontRenderer};
 pub use soundfont_multi::MultiProgramRenderer;
 pub use waveform::Waveform;
-pub use wav::write_wav;
+pub use wav::{write_wav, write_wav_to};
