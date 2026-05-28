@@ -1248,12 +1248,14 @@ fn default_display(tag: &str) -> Display {
         // `SelectInfo` cuando ve un `<select>` padre y los renderea
         // como popup. Como hijos directos del DOM serían texto suelto.
         "option" | "optgroup" => Display::None,
-        // SVG y canvas: no tenemos renderer. Sin ocultarlos, sus
-        // descendientes (titles, paths con text content) salen como
-        // texto basura sobre la página. Mejor invisible que ruido.
-        "svg" | "canvas" | "math" | "video" | "audio" | "iframe" | "object" | "embed" => {
-            Display::None
-        }
+        // `<svg>`: lo tratamos como inline-block — el engine recolecta
+        // las primitivas (rect/circle/line) en `BoxNode.svg` y el chrome
+        // las pinta. Sus descendientes (los `<rect>`/`<path>`/etc.) NO
+        // entran al box tree.
+        "svg" => Display::InlineBlock,
+        // canvas/math/video/audio/iframe/object/embed: sin renderer
+        // todavía. Ocultos para no derramar texto basura en la página.
+        "canvas" | "math" | "video" | "audio" | "iframe" | "object" | "embed" => Display::None,
         _ => Display::Inline,
     }
 }
@@ -2377,6 +2379,11 @@ fn parse_line_height(s: &str) -> Option<f32> {
         return num.trim().parse().ok();
     }
     s.parse::<f32>().ok()
+}
+
+/// Versión pública para que `boxes` parsee colors de attrs SVG.
+pub(crate) fn parse_color_named_or_hex(s: &str) -> Option<Color> {
+    parse_color(s)
 }
 
 fn parse_color(s: &str) -> Option<Color> {
@@ -4943,17 +4950,17 @@ line2</pre></body></html>"#;
     }
 
     #[test]
-    fn ua_svg_y_canvas_display_none() {
-        // SVG/canvas no se renderizan — sin display:none, sus
-        // descendientes (titles, text content) salen como texto basura
-        // en la página real.
-        let html = "<html><body><svg><title>hi</title></svg><canvas></canvas></body></html>";
+    fn ua_svg_inline_block_canvas_none() {
+        // SVG ahora se renderiza (primitivas básicas vía vello), así que
+        // queda como inline-block. canvas/math/video/etc. siguen
+        // ocultos hasta que tengan renderer.
+        let html = "<html><body><svg></svg><canvas></canvas></body></html>";
         let dom = DomTree::parse(html);
         let eng = StyleEngine::from_dom(&dom);
-        for tag in ["svg", "canvas"] {
-            let n = dom.find(tag).unwrap();
-            assert_eq!(eng.compute(&n).display, Display::None, "{tag}");
-        }
+        let svg = dom.find("svg").unwrap();
+        let canvas = dom.find("canvas").unwrap();
+        assert_eq!(eng.compute(&svg).display, Display::InlineBlock);
+        assert_eq!(eng.compute(&canvas).display, Display::None);
     }
 
     #[test]

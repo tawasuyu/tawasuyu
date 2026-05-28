@@ -1615,6 +1615,10 @@ fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
         ctx.select_counter += 1;
         return render_select(b, info, my_idx, ctx);
     }
+    // <svg>: bypass del flujo normal — pinta primitivas con vello.
+    if let Some(scene) = &b.svg {
+        return render_svg(scene, zoom);
+    }
     let style = box_style(b, zoom);
     let mut view = View::new(style);
     // Si este nodo es un <details>, reservamos su slot de estado y
@@ -2261,6 +2265,75 @@ fn render_select(
     .fill(Color::from_rgb8(220, 220, 230))
     .radius(3.0)
     .children(all)
+}
+
+/// Pinta las primitivas de un `<svg>` dentro de un rect del tamaño
+/// `scene.width × scene.height` (escalado por zoom). Si `view_box` está
+/// definido, las primitivas se mapean a [0..1] vía viewBox y luego se
+/// escalan al rect del nodo (preservando aspect ratio, "meet").
+fn render_svg(scene: &puriy_engine::SvgScene, zoom: f32) -> View<Msg> {
+    use llimphi_raster::kurbo::{Circle as KurboCircle, Line as KurboLine};
+    let w = scene.width * zoom;
+    let h = scene.height * zoom;
+    let prims = scene.prims.clone();
+    let view_box = scene.view_box;
+    let svg_w = scene.width;
+    let svg_h = scene.height;
+    View::new(Style {
+        size: Size { width: length(w), height: length(h) },
+        ..Default::default()
+    })
+    .paint_with(move |scene, _ts, rect| {
+        // Mapping local → pantalla. Si hay viewBox, normalizamos por él
+        // y escalamos al rect; sino usamos directamente width/height del
+        // svg como dominio.
+        let (src_x, src_y, src_w, src_h) = view_box.unwrap_or((0.0, 0.0, svg_w, svg_h));
+        let sx = if src_w > 0.0 { rect.w as f64 / src_w as f64 } else { 1.0 };
+        let sy = if src_h > 0.0 { rect.h as f64 / src_h as f64 } else { 1.0 };
+        let s = sx.min(sy).max(0.001);
+        let to_x = |x: f32| rect.x as f64 + ((x - src_x) as f64) * s;
+        let to_y = |y: f32| rect.y as f64 + ((y - src_y) as f64) * s;
+        let to_color = |c: puriy_engine::Color| {
+            Color::from_rgba8(c.r, c.g, c.b, c.a)
+        };
+        for p in &prims {
+            match *p {
+                puriy_engine::SvgPrim::Rect {
+                    x, y, w, h, rx, fill, stroke, stroke_w,
+                } => {
+                    let r = RoundedRect::new(
+                        to_x(x),
+                        to_y(y),
+                        to_x(x + w),
+                        to_y(y + h),
+                        (rx as f64) * s,
+                    );
+                    if let Some(f) = fill {
+                        scene.fill(Fill::NonZero, Affine::IDENTITY, to_color(f), None, &r);
+                    }
+                    if let Some(st) = stroke {
+                        let stroke = Stroke::new(stroke_w as f64 * s);
+                        scene.stroke(&stroke, Affine::IDENTITY, to_color(st), None, &r);
+                    }
+                }
+                puriy_engine::SvgPrim::Circle { cx, cy, r, fill, stroke, stroke_w } => {
+                    let c = KurboCircle::new((to_x(cx), to_y(cy)), r as f64 * s);
+                    if let Some(f) = fill {
+                        scene.fill(Fill::NonZero, Affine::IDENTITY, to_color(f), None, &c);
+                    }
+                    if let Some(st) = stroke {
+                        let stroke = Stroke::new(stroke_w as f64 * s);
+                        scene.stroke(&stroke, Affine::IDENTITY, to_color(st), None, &c);
+                    }
+                }
+                puriy_engine::SvgPrim::Line { x1, y1, x2, y2, stroke, stroke_w } => {
+                    let l = KurboLine::new((to_x(x1), to_y(y1)), (to_x(x2), to_y(y2)));
+                    let stroke_obj = Stroke::new(stroke_w as f64 * s);
+                    scene.stroke(&stroke_obj, Affine::IDENTITY, to_color(stroke), None, &l);
+                }
+            }
+        }
+    })
 }
 
 /// Aplica `border-radius` y dibuja, en una sola pasada de `paint_with`,

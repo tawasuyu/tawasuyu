@@ -204,6 +204,51 @@ pub struct BoxNode {
     /// rendera como dropdown editable y guarda el índice seleccionado
     /// en su `TabState`.
     pub select: Option<SelectInfo>,
+    /// Si el nodo es `<svg>`, lista de primitivas a pintar. El chrome
+    /// las renderea adentro del rect del nodo (escalado por `viewBox` si
+    /// existe; sino cada primitiva usa sus coords nativas).
+    pub svg: Option<SvgScene>,
+}
+
+/// Escena SVG minimal: lista de primitivas + viewBox opcional.
+#[derive(Debug, Clone)]
+pub struct SvgScene {
+    pub width: f32,
+    pub height: f32,
+    /// `(min_x, min_y, w, h)` del viewBox, o `None` si el SVG no lo
+    /// declaró (las primitivas van directo a coords del viewport del svg).
+    pub view_box: Option<(f32, f32, f32, f32)>,
+    pub prims: Vec<SvgPrim>,
+}
+
+#[derive(Debug, Clone)]
+pub enum SvgPrim {
+    Rect {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        rx: f32,
+        fill: Option<Color>,
+        stroke: Option<Color>,
+        stroke_w: f32,
+    },
+    Circle {
+        cx: f32,
+        cy: f32,
+        r: f32,
+        fill: Option<Color>,
+        stroke: Option<Color>,
+        stroke_w: f32,
+    },
+    Line {
+        x1: f32,
+        y1: f32,
+        x2: f32,
+        y2: f32,
+        stroke: Color,
+        stroke_w: f32,
+    },
 }
 
 /// Datos de un `<select>` para renderizarlo como dropdown.
@@ -359,6 +404,99 @@ fn assign_form_idx(b: &mut BoxNode, stack: &mut Vec<usize>, cursor: &mut usize) 
     }
 }
 
+/// Recolecta primitivas de un `<svg>`: rect/circle/line directos.
+/// Soporta atributos `viewBox`, `width`, `height`, `fill`, `stroke`,
+/// `stroke-width`. Sin transforms ni groups recursivos.
+fn collect_svg(svg_node: &Handle) -> SvgScene {
+    let width = dom::attr(svg_node, "width")
+        .and_then(|s| s.trim_end_matches("px").trim().parse::<f32>().ok())
+        .unwrap_or(300.0);
+    let height = dom::attr(svg_node, "height")
+        .and_then(|s| s.trim_end_matches("px").trim().parse::<f32>().ok())
+        .unwrap_or(150.0);
+    let view_box = dom::attr(svg_node, "viewBox").and_then(|s| {
+        let nums: Vec<f32> = s
+            .split(|c: char| c.is_whitespace() || c == ',')
+            .filter(|p| !p.is_empty())
+            .filter_map(|p| p.parse::<f32>().ok())
+            .collect();
+        if nums.len() == 4 {
+            Some((nums[0], nums[1], nums[2], nums[3]))
+        } else {
+            None
+        }
+    });
+    let mut prims: Vec<SvgPrim> = Vec::new();
+    collect_svg_prims(svg_node, &mut prims);
+    SvgScene { width, height, view_box, prims }
+}
+
+fn collect_svg_prims(node: &Handle, out: &mut Vec<SvgPrim>) {
+    if let markup5ever_rcdom::NodeData::Element { .. } = &node.data {
+        match dom::element_name(node).as_deref() {
+            Some("rect") => {
+                let x = svg_num(node, "x", 0.0);
+                let y = svg_num(node, "y", 0.0);
+                let w = svg_num(node, "width", 0.0);
+                let h = svg_num(node, "height", 0.0);
+                let rx = svg_num(node, "rx", 0.0);
+                out.push(SvgPrim::Rect {
+                    x, y, w, h, rx,
+                    fill: svg_color(node, "fill"),
+                    stroke: svg_color(node, "stroke"),
+                    stroke_w: svg_num(node, "stroke-width", 1.0),
+                });
+            }
+            Some("circle") => {
+                let cx = svg_num(node, "cx", 0.0);
+                let cy = svg_num(node, "cy", 0.0);
+                let r = svg_num(node, "r", 0.0);
+                out.push(SvgPrim::Circle {
+                    cx, cy, r,
+                    fill: svg_color(node, "fill"),
+                    stroke: svg_color(node, "stroke"),
+                    stroke_w: svg_num(node, "stroke-width", 1.0),
+                });
+            }
+            Some("line") => {
+                let x1 = svg_num(node, "x1", 0.0);
+                let y1 = svg_num(node, "y1", 0.0);
+                let x2 = svg_num(node, "x2", 0.0);
+                let y2 = svg_num(node, "y2", 0.0);
+                if let Some(stroke) = svg_color(node, "stroke") {
+                    out.push(SvgPrim::Line {
+                        x1, y1, x2, y2,
+                        stroke,
+                        stroke_w: svg_num(node, "stroke-width", 1.0),
+                    });
+                }
+            }
+            // Containers transparentes: recurrir adentro.
+            Some("g") | Some("svg") => {}
+            // Resto (`path`, `polygon`, `polyline`, `text`, …) ignorado.
+            _ => return,
+        }
+    }
+    for c in node.children.borrow().iter() {
+        collect_svg_prims(c, out);
+    }
+}
+
+fn svg_num(node: &Handle, name: &str, default: f32) -> f32 {
+    dom::attr(node, name)
+        .and_then(|s| s.trim_end_matches("px").trim().parse::<f32>().ok())
+        .unwrap_or(default)
+}
+
+fn svg_color(node: &Handle, name: &str) -> Option<Color> {
+    let v = dom::attr(node, name)?;
+    let v = v.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return None;
+    }
+    crate::style::parse_color_named_or_hex(v)
+}
+
 fn empty_root() -> BoxNode {
     BoxNode {
         display: Display::Block,
@@ -428,6 +566,7 @@ fn empty_root() -> BoxNode {
         input_name: None,
         form_idx: None,
         select: None,
+        svg: None,
     }
 }
 
@@ -508,6 +647,16 @@ fn build_node(
             });
             let input_placeholder = input_kind.and_then(|_| dom::attr(node, "placeholder"));
             let input_name = input_kind.and_then(|_| dom::attr(node, "name"));
+            // `<svg>`: coleccionamos las primitivas (rect/circle/line) y
+            // el viewBox. Las primitivas del subárbol del SVG no son
+            // descendientes del box tree (el `display: inline-block` del
+            // `<svg>` mantiene su rect pero los hijos quedan fuera del
+            // flow). El chrome usa `b.svg` para paint_with.
+            let svg = if tag.as_deref() == Some("svg") {
+                Some(collect_svg(node))
+            } else {
+                None
+            };
             // `<select>`: coleccionamos opciones y el inicial seleccionado.
             let select = if tag.as_deref() == Some("select") {
                 let mut opts: Vec<SelectOption> = Vec::new();
@@ -651,6 +800,7 @@ fn build_node(
                 }),
                 form_idx: None,
                 select,
+                svg,
             })
         }
         NodeData::Text { contents } => {
@@ -757,6 +907,7 @@ fn build_node(
         input_name: None,
         form_idx: None,
         select: None,
+        svg: None,
             })
         }
     }
@@ -834,6 +985,7 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         input_name: None,
         form_idx: None,
         select: None,
+        svg: None,
     }
 }
 
@@ -1519,6 +1671,56 @@ mod tests {
             }
         });
         assert!(clickable.is_empty(), "ningún href no-web debería ser clickable: {clickable:?}");
+    }
+
+    #[test]
+    fn svg_recolecta_rect_circle_y_line() {
+        let html = r##"<html><body>
+            <svg width="200" height="100" viewBox="0 0 200 100">
+                <rect x="10" y="10" width="50" height="30" fill="red" stroke="black" stroke-width="2"/>
+                <circle cx="120" cy="50" r="20" fill="blue"/>
+                <line x1="0" y1="0" x2="200" y2="100" stroke="green" stroke-width="3"/>
+            </svg>
+        </body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut scene: Option<crate::SvgScene> = None;
+        doc.box_tree.walk(|b| {
+            if let Some(s) = &b.svg {
+                scene = Some(s.clone());
+            }
+        });
+        let scene = scene.expect("debería haber un <svg>");
+        assert_eq!(scene.width, 200.0);
+        assert_eq!(scene.height, 100.0);
+        assert_eq!(scene.view_box, Some((0.0, 0.0, 200.0, 100.0)));
+        assert_eq!(scene.prims.len(), 3);
+        match &scene.prims[0] {
+            crate::SvgPrim::Rect { x, y, w, h, fill, stroke, .. } => {
+                assert_eq!(*x, 10.0);
+                assert_eq!(*y, 10.0);
+                assert_eq!(*w, 50.0);
+                assert_eq!(*h, 30.0);
+                assert!(fill.is_some());
+                assert!(stroke.is_some());
+            }
+            _ => panic!("primera prim debería ser Rect"),
+        }
+        match &scene.prims[1] {
+            crate::SvgPrim::Circle { cx, cy, r, .. } => {
+                assert_eq!(*cx, 120.0);
+                assert_eq!(*cy, 50.0);
+                assert_eq!(*r, 20.0);
+            }
+            _ => panic!("segunda prim debería ser Circle"),
+        }
+        match &scene.prims[2] {
+            crate::SvgPrim::Line { x1, y2, .. } => {
+                assert_eq!(*x1, 0.0);
+                assert_eq!(*y2, 100.0);
+            }
+            _ => panic!("tercera prim debería ser Line"),
+        }
     }
 
     #[test]

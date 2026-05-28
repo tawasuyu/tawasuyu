@@ -30,6 +30,7 @@ use thiserror::Error;
 
 pub use boxes::{
     BoxNode, BoxTree, Color, Display, FormInfo, FormMethod, InputKind, SelectInfo, SelectOption,
+    SvgPrim, SvgScene,
 };
 pub use dom::DomTree;
 pub use fetch::{fetch, FetchError};
