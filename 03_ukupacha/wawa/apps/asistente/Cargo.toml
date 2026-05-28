@@ -1,0 +1,31 @@
+# =============================================================================
+#  wawa :: apps/asistente — Fase 60 v3 :: scaffolding de la app conversacional
+# -----------------------------------------------------------------------------
+#  Asistente cdylib WASM que vivira en el genesis. v1 es UI puro: pinta el
+#  fondo, el titulo y un mensaje de estado — sin red, sin input, sin
+#  consultas al puente. v2 sumara `sys_red_enviar` / `sys_red_recibir` sobre
+#  `CANAL_ASISTENTE` para hablar con `asistente-puente` (host Linux).
+#
+#  Permisos esperados cuando se siembre en GENESIS: RED + GRAFO_LECTURA.
+#  Hoy ni los pide — el scaffolding solo verifica que el modulo se
+#  instancia y pinta dentro de su region.
+# =============================================================================
+
+[package]
+name = "asistente"
+version = "0.1.0"
+edition = "2021"
+description = "wawa :: app WASM — asistente conversacional (scaffolding)"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
