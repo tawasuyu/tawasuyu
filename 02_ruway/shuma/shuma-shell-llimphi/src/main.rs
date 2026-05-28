@@ -235,6 +235,12 @@ struct Model {
     /// Último `Sample::display` por monitor — se pinta como subtítulo
     /// de la stat-card.
     extra_display: HashMap<String, String>,
+    /// Watcher del bus de config wawa. Vive lo que vive el modelo —
+    /// al dropear se cierran los notify::RecommendedWatcher y el thread
+    /// de debounce sale silenciosamente. Ningún read directo desde
+    /// el código de update — sólo recibe callbacks que se traducen a
+    /// `Msg::WawaConfigChanged`.
+    _wawa_watcher: Option<wawa_config::ConfigWatcher>,
 }
 
 #[derive(Clone)]
@@ -256,6 +262,10 @@ enum Msg {
     /// Click en un shortcut de la toolbar. `slot` es el módulo emisor
     /// (a quien se le enruta la `ModuleAction`).
     ShortcutClicked(Slot, ShortcutAction),
+    /// La config de wawa (`$XDG_CONFIG_HOME/wawa/config.json`) cambió;
+    /// rearmamos el theme, accent y locale sin reiniciar. Boxed por
+    /// tamaño (la config tiene un BTreeMap de módulos).
+    WawaConfigChanged(Box<wawa_config::WawaConfig>),
 }
 
 struct Shell;
@@ -279,6 +289,21 @@ impl App for Shell {
     fn init(handle: &Handle<Self::Msg>) -> Self::Model {
         handle.spawn_periodic(TICK, || Msg::Tick);
         handle.spawn_periodic(SHELL_TICK, || Msg::ShellTick);
+
+        // wawa-config (bus de preferencias del SO) — theme/accent/lang.
+        // Lo cargamos antes de armar las instancias para que el primer
+        // render ya tenga el theme correcto. El watcher avisa cambios
+        // posteriores con `Msg::WawaConfigChanged`.
+        let wawa = wawa_config::WawaConfig::load();
+        let theme = wawa_config_llimphi::theme_from_wawa(&wawa, &Theme::dark());
+        let _ = rimay_localize::set_locale(&wawa.lang);
+        let wawa_watcher = {
+            let handle = handle.clone();
+            wawa_config::ConfigWatcher::spawn(move |cfg| {
+                handle.dispatch(Msg::WawaConfigChanged(Box::new(cfg)));
+            })
+            .ok()
+        };
 
         let cfg = config::ShumaConfig::load_default();
         let topbar = resolve_slot(cfg.topbar.as_ref())
@@ -307,7 +332,7 @@ impl App for Shell {
         };
 
         Model {
-            theme: Theme::dark(),
+            theme,
             topbar,
             bottombar,
             main,
@@ -320,6 +345,7 @@ impl App for Shell {
             monitors_width: MONITORS_INITIAL_WIDTH,
             extra_history: HashMap::new(),
             extra_display: HashMap::new(),
+            _wawa_watcher: wawa_watcher,
         }
     }
 
@@ -357,6 +383,20 @@ impl App for Shell {
             }
             Msg::ShellTick => {
                 drain_shell_instances(&mut m);
+            }
+            Msg::WawaConfigChanged(cfg) => {
+                // Re-armar el theme con el nuevo variant + accent. El
+                // fallback es el theme actual — si la nueva config tiene
+                // un variant raro, conservamos lo de antes.
+                m.theme = wawa_config_llimphi::theme_from_wawa(&cfg, &m.theme);
+                // Locale activo — `set_locale` es no-op si el lang no
+                // está en el catálogo; los próximos `t(...)` ya devuelven
+                // strings en el nuevo idioma sin necesidad de reiniciar
+                // (los labels in-memory siguen siendo viejos hasta que
+                // el módulo correspondiente vuelva a rehidratarlos,
+                // pero todo lo que se calcula en cada `view()` se
+                // refresca al instante).
+                let _ = rimay_localize::set_locale(&cfg.lang);
             }
             Msg::ToggleDrawer => {
                 m.drawer_open = !m.drawer_open;

@@ -145,10 +145,18 @@ Forma actual de la config:
 }
 ```
 
-**Estado de la integración shuma ↔ wawa: cero.** Ni el chasis ni los módulos importan `wawa-config`. Hoy el chasis lee sólo `shumarc-modules.toml` (config propia, paralela). Falta:
-1. Que `shuma-shell-llimphi` suscriba un watcher `wawa-config` y reactive `theme_variant`/`accent`/`lang` sin reinicio.
-2. Que el toggle `modules.shuma` controle si el binario arranca / se autodescarga (hoy es decisión externa).
-3. Decidir si los slots del shumarc viven dentro del JSON wawa (sección `modules.shuma.{topbar, main, …}`) o quedan en TOML aparte. **Propuesta**: TOML aparte — el JSON wawa es para perfiles de usuario y preferencias, no para topologías de UI por app.
+**Estado de la integración shuma ↔ wawa (2026-05-28): activa.**
+
+- `shuma-shell-llimphi::init` carga `WawaConfig::load()` + `theme_from_wawa(&wawa, &Theme::dark())` + `rimay_localize::set_locale(&wawa.lang)` antes de armar las instancias, así el primer render ya sale con el theme y locale correctos.
+- Un `wawa_config::ConfigWatcher` corre en background; cada cambio dispara `Msg::WawaConfigChanged(Box<WawaConfig>)` vía `Handle::dispatch`.
+- El handler re-arma `m.theme` con el nuevo variant/accent (fallback al theme actual si el variant es desconocido) y reinvoca `set_locale` — sin reiniciar el chasis, sin re-cargar las instancias. Los próximos `view()` ya pintan con la paleta nueva; los strings que viajan por `t(...)` también se rehidratan al cambiar.
+
+**Contrato dividido (D3):**
+
+- **`shumarc-modules.toml`** (TOML, project-local): topología de la UI del shell — qué módulo se monta en qué slot (TopBar/Main/BottomBar/Drawer), labels custom, Source (Local/Daemon/DaemonTcp/Remote). Esto es estructura de la app y vive con la app.
+- **`$XDG_CONFIG_HOME/wawa/config.json`** (JSON, perfil del usuario): preferencias visuales (`theme_variant`, `accent`), locale (`lang`), formato del reloj (`timefmt_24h`), bitmask de qué apps están on (`modules.{shuma, mirada, pluma, …}`). Esto es preferencia del usuario y es compartida por **todas** las apps Llimphi de gioser (pluma, dominium, cosmos, nada, nakui, shuma…).
+
+El toggle `modules.shuma = false` en el JSON wawa no apaga el binario corriendo (el chasis no se suicida); el efecto es que los launchers no listan a shuma como app activa. La supervisión del binario en sí es decisión del SO (wawa-init en el futuro arje, o systemd/manual hoy).
 
 ---
 
@@ -231,13 +239,13 @@ F3. Editor multi-línea: `shuma-line::continuation::needs_continuation` ya está
 | ✅ | A1..A8 — bloque REPL extendido | shell completo | hecho 2026-05-28 |
 | ✅ | B1..B3 — daemon ejecutor + broker | shell remoto + observable | hecho 2026-05-28 |
 | ✅ | C1..C2 — launcher + commandbar reales | palette Cmd-P + apps | hecho 2026-05-28 |
-| 1 | D1-D3 — wawa watcher en chasis | tema + idioma live | bajo |
-| 2 | E1..E4 — limpieza pendiente | menor | variado |
-| 3 | F1 — lienzo de contexto | killer feature pero opcional | alto |
-| 4 | F2 — job control (:jobs, :term, &) | shell power-user | medio |
-| 5 | F3 — editor multi-línea | scripts multi-línea | medio |
+| ✅ | D1..D3 — wawa watcher + theme/lang live | preferencias unificadas | hecho 2026-05-28 |
+| 1 | E1..E4 — limpieza pendiente | menor | variado |
+| 2 | F1 — lienzo de contexto | killer feature pero opcional | alto |
+| 3 | F2 — job control (:jobs, :term, &) | shell power-user | medio |
+| 4 | F3 — editor multi-línea | scripts multi-línea | medio |
 
-**Recomendación de orden**: D1..D3 → E* → F*.
+**Recomendación de orden**: E* → F*.
 
 ---
 
