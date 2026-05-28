@@ -99,6 +99,12 @@ pub struct EditorState {
     pub metronome_beats_per_bar: Option<u8>,
     /// Granularidad de snap. Default `Snap::Beat` (compat con F0/F1).
     pub snap: Snap,
+    /// Si está `true` y hay [`Score::key`] activa, al agregar/mover una
+    /// nota el midi se redondea al pitch en escala más cercano (add y
+    /// drag absoluto) o salta por grados de escala (move relativo). Sin
+    /// key activa, el flag no tiene efecto — el cromático sigue siendo
+    /// el default. Tecla Alt+K en el binario.
+    pub snap_to_key: bool,
     /// Stack de undo — snapshots de `score` antes de cada edición que mutó.
     /// Limitado a [`MAX_UNDO`] niveles; el más viejo se descarta. Expuesto
     /// para que el binario pueda mostrar la profundidad en el header.
@@ -134,6 +140,7 @@ impl EditorState {
             loop_region: None,
             metronome_beats_per_bar: None,
             snap: Snap::default(),
+            snap_to_key: false,
             history: Vec::new(),
             future: Vec::new(),
             clipboard: Vec::new(),
@@ -156,6 +163,7 @@ impl EditorState {
             loop_region: None,
             metronome_beats_per_bar: None,
             snap: Snap::default(),
+            snap_to_key: false,
             history: Vec::new(),
             future: Vec::new(),
             clipboard: Vec::new(),
@@ -299,6 +307,10 @@ pub enum EditMsg {
         beat: f32,
         value: f32,
     },
+    /// Prende/apaga el snap a la tonalidad activa. Idempotente como
+    /// toggle; sin `Score::key` declarada el flag queda igual setteado
+    /// pero no tiene efecto hasta que se asigne una key.
+    ToggleSnapToKey,
 }
 
 /// Resultado de aplicar un `EditMsg`: mensaje corto para el header.
@@ -413,7 +425,36 @@ impl EditorState {
             EditMsg::DeleteAutomationPoint { track_idx, is_volume, idx } => {
                 self.delete_automation_point(track_idx, is_volume, idx)
             }
+            EditMsg::ToggleSnapToKey => self.toggle_snap_to_key(),
         }
+    }
+
+    /// Si `snap_to_key` está prendido y hay key activa, redondea `midi`
+    /// al pitch en escala más cercano (empate hacia arriba). Si no hay
+    /// nada que cuantizar, devuelve el midi sin tocar. Retorna `None`
+    /// si `midi` no es un MIDI válido.
+    fn quantize_midi(&self, midi: u8) -> Option<u8> {
+        let Some(pitch) = Pitch::from_midi(midi) else {
+            return None;
+        };
+        if !self.snap_to_key {
+            return Some(midi);
+        }
+        let Some(scale) = self.score.key.as_ref() else {
+            return Some(midi);
+        };
+        Some(scale.nearest_in_scale(pitch).midi())
+    }
+
+    fn toggle_snap_to_key(&mut self) -> ApplyOutcome {
+        self.snap_to_key = !self.snap_to_key;
+        let state = if self.snap_to_key { "on" } else { "off" };
+        let warn = if self.snap_to_key && self.score.key.is_none() {
+            " · (sin key — Q/K para definirla)"
+        } else {
+            ""
+        };
+        Some(format!("snap-key · {state}{warn}"))
     }
 
     /// Cicla el snap a la próxima granularidad. Tecla Q en el binario.
@@ -442,6 +483,7 @@ impl EditorState {
     }
 
     fn add_note(&mut self, beat: f32, midi: u8) -> ApplyOutcome {
+        let midi = self.quantize_midi(midi)?;
         let pitch = Pitch::from_midi(midi)?;
         let beat = self.snap.snap(beat).max(0.0);
         let track_idx = self.active_track.min(self.score.tracks().len().saturating_sub(1));
@@ -484,6 +526,10 @@ impl EditorState {
     fn move_selected(&mut self, d_beat: f32, d_semitones: i32) -> ApplyOutcome {
         let (track_idx, note_idx) = self.selected?;
         let snap = self.snap;
+        // Resolvemos el nuevo pitch fuera del borrow mutable porque
+        // necesitamos consultar `score.key` y `snap_to_key`.
+        let snap_to_key = self.snap_to_key;
+        let key = self.score.key.clone();
         let track = self.score.track_mut(track_idx)?;
         let old = track.notes().get(note_idx).copied()?;
         // Si hay snap activo, redondeamos el nuevo start al múltiplo
@@ -493,8 +539,19 @@ impl EditorState {
         if new_start < 0.0 {
             return None;
         }
-        let new_midi = old.pitch.midi() as i32 + d_semitones;
-        let new_pitch = u8::try_from(new_midi).ok().and_then(Pitch::from_midi)?;
+        // Snap a la tonalidad: si está prendido y hay key, ±1 semitono
+        // = ±1 grado de escala. Permite ←/→/↑/↓ pensar en grados sin
+        // dejar de usar los mismos atajos que el cromático.
+        let new_pitch = if d_semitones != 0 {
+            if let (true, Some(scale)) = (snap_to_key, key.as_ref()) {
+                scale.step_in_scale(old.pitch, d_semitones)?
+            } else {
+                let new_midi = old.pitch.midi() as i32 + d_semitones;
+                u8::try_from(new_midi).ok().and_then(Pitch::from_midi)?
+            }
+        } else {
+            old.pitch
+        };
         let new_note = ScoreNote::new(new_pitch, new_start, old.duration, old.velocity);
         track.remove(note_idx);
         track.add(new_note);
@@ -514,6 +571,7 @@ impl EditorState {
     fn set_selected_absolute(&mut self, start: f32, midi: u8) -> ApplyOutcome {
         let (track_idx, note_idx) = self.selected?;
         let snap = self.snap;
+        let midi = self.quantize_midi(midi)?;
         let track = self.score.track_mut(track_idx)?;
         let old = track.notes().get(note_idx).copied()?;
         let new_start = snap.snap(start).max(0.0);
@@ -1989,5 +2047,95 @@ mod tests {
         st.apply(EditMsg::DeleteActiveTrack); // borra "track 3"
         st.apply(EditMsg::NewTrack); // debe ser "track 4"
         assert_eq!(st.score.tracks().last().unwrap().name, "track 4");
+    }
+
+    #[test]
+    fn snap_to_key_off_is_chromatic() {
+        // Sin snap-key, agregar C#4 con C major activa: queda C#4.
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::CycleKeyRoot); // None → C major
+        assert!(matches!(
+            st.score.key.as_ref().map(|s| s.root()),
+            Some(PitchClass::C)
+        ));
+        assert!(!st.snap_to_key);
+        st.apply(EditMsg::AddNote { beat: 0.0, midi: 61 });
+        assert_eq!(st.score.track(0).unwrap().notes()[0].pitch.midi(), 61);
+    }
+
+    #[test]
+    fn snap_to_key_on_corrects_add_note_to_scale() {
+        // Con snap-key on y C major, agregar C#4 cae a D4 (62, empate arriba).
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::CycleKeyRoot); // C major
+        st.apply(EditMsg::ToggleSnapToKey);
+        assert!(st.snap_to_key);
+        st.apply(EditMsg::AddNote { beat: 0.0, midi: 61 });
+        assert_eq!(st.score.track(0).unwrap().notes()[0].pitch.midi(), 62);
+    }
+
+    #[test]
+    fn snap_to_key_without_key_is_chromatic() {
+        // Snap-key on pero score.key = None: agregar C#4 queda C#4.
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::ToggleSnapToKey);
+        assert!(st.snap_to_key);
+        assert!(st.score.key.is_none());
+        st.apply(EditMsg::AddNote { beat: 0.0, midi: 61 });
+        assert_eq!(st.score.track(0).unwrap().notes()[0].pitch.midi(), 61);
+    }
+
+    #[test]
+    fn snap_to_key_move_semitones_jumps_by_degree() {
+        // C major, snap-key on: ↑ desde C4 lleva a D4 (no C#4).
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::CycleKeyRoot); // C major
+        st.apply(EditMsg::ToggleSnapToKey);
+        st.apply(EditMsg::AddNote { beat: 0.0, midi: 60 });
+        st.apply(EditMsg::Select { track: 0, idx: 0 });
+        st.apply(EditMsg::MoveSelected { d_beat: 0.0, d_semitones: 1 });
+        assert_eq!(st.score.track(0).unwrap().notes()[0].pitch.midi(), 62);
+        // Y otro ↑ desde D4 lleva a E4 (64).
+        st.apply(EditMsg::MoveSelected { d_beat: 0.0, d_semitones: 1 });
+        assert_eq!(st.score.track(0).unwrap().notes()[0].pitch.midi(), 64);
+    }
+
+    #[test]
+    fn snap_to_key_move_down_jumps_by_degree() {
+        // C major, snap-key on: ↓ desde C4 lleva a B3 (59).
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::CycleKeyRoot);
+        st.apply(EditMsg::ToggleSnapToKey);
+        st.apply(EditMsg::AddNote { beat: 0.0, midi: 60 });
+        st.apply(EditMsg::Select { track: 0, idx: 0 });
+        st.apply(EditMsg::MoveSelected { d_beat: 0.0, d_semitones: -1 });
+        assert_eq!(st.score.track(0).unwrap().notes()[0].pitch.midi(), 59);
+    }
+
+    #[test]
+    fn snap_to_key_move_zero_semitones_only_moves_beat() {
+        // Con snap-key on, un move sólo de beat (d_semitones = 0) no toca el pitch
+        // — el path de cuantización no debe colarse en ese caso.
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::CycleKeyRoot);
+        st.apply(EditMsg::ToggleSnapToKey);
+        st.apply(EditMsg::AddNote { beat: 0.0, midi: 61 }); // se cuantiza a 62
+        st.apply(EditMsg::Select { track: 0, idx: 0 });
+        // Apago snap-key para meter una nota cromática a mano vía SetSelectedAbsolute desactivado.
+        st.apply(EditMsg::ToggleSnapToKey); // off
+        st.apply(EditMsg::MoveSelected { d_beat: 1.0, d_semitones: 0 });
+        let notes = st.score.track(0).unwrap().notes();
+        assert_eq!(notes[0].pitch.midi(), 62);
+        assert!((notes[0].start - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn snap_to_key_toggle_is_idempotent() {
+        let mut st = EditorState::new(120.0);
+        assert!(!st.snap_to_key);
+        st.apply(EditMsg::ToggleSnapToKey);
+        assert!(st.snap_to_key);
+        st.apply(EditMsg::ToggleSnapToKey);
+        assert!(!st.snap_to_key);
     }
 }

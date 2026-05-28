@@ -66,6 +66,62 @@ impl Scale {
             })
             .collect()
     }
+
+    /// Pitch dentro de la escala más cercano a `pitch`. Si `pitch` ya
+    /// está en la escala devuelve el mismo. Empata hacia arriba — al
+    /// estar exactamente entre dos grados (distancia idéntica), gana
+    /// el pitch más agudo. Si no hubiese ningún pitch en escala dentro
+    /// del rango MIDI (caso imposible para escalas no vacías), devuelve
+    /// el `pitch` original como fallback inocuo.
+    pub fn nearest_in_scale(&self, pitch: Pitch) -> Pitch {
+        if self.contains(pitch) {
+            return pitch;
+        }
+        let midi = pitch.midi() as i32;
+        for d in 1..=11_i32 {
+            // Arriba primero — la convención de "empate hacia arriba"
+            // se cae natural del orden de prueba.
+            if let Some(p) = u8::try_from(midi + d).ok().and_then(Pitch::from_midi) {
+                if self.contains(p) {
+                    return p;
+                }
+            }
+            if let Some(p) = u8::try_from(midi - d).ok().and_then(Pitch::from_midi) {
+                if self.contains(p) {
+                    return p;
+                }
+            }
+        }
+        pitch
+    }
+
+    /// Salta `steps` grados dentro de la escala (positivo arriba,
+    /// negativo abajo). Si `pitch` no está en escala, primero lo lleva
+    /// al [`nearest_in_scale`](Self::nearest_in_scale) y desde ahí cuenta
+    /// — así un Alt+↑ desde una nota fuera de escala primero la corrige
+    /// y después sube. `None` si la cadena se sale del rango MIDI.
+    pub fn step_in_scale(&self, pitch: Pitch, steps: i32) -> Option<Pitch> {
+        let mut current = self.nearest_in_scale(pitch);
+        if steps == 0 {
+            return Some(current);
+        }
+        let dir = if steps > 0 { 1_i32 } else { -1 };
+        let total = steps.unsigned_abs();
+        for _ in 0..total {
+            let mut next = None;
+            for d in 1..=11_i32 {
+                let m = current.midi() as i32 + dir * d;
+                if let Some(p) = u8::try_from(m).ok().and_then(Pitch::from_midi) {
+                    if self.contains(p) {
+                        next = Some(p);
+                        break;
+                    }
+                }
+            }
+            current = next?;
+        }
+        Some(current)
+    }
 }
 
 #[cfg(test)]
@@ -115,5 +171,73 @@ mod tests {
         let s = Scale::major(PitchClass::C);
         assert!(s.contains(Pitch::from_class_octave(PitchClass::E, 2).unwrap()));
         assert!(s.contains(Pitch::from_class_octave(PitchClass::E, 7).unwrap()));
+    }
+
+    #[test]
+    fn nearest_in_scale_keeps_in_scale_pitches() {
+        let s = Scale::major(PitchClass::C);
+        let c4 = Pitch::from_midi(60).unwrap();
+        assert_eq!(s.nearest_in_scale(c4), c4);
+        // E4 — también está en C mayor.
+        let e4 = Pitch::from_midi(64).unwrap();
+        assert_eq!(s.nearest_in_scale(e4), e4);
+    }
+
+    #[test]
+    fn nearest_in_scale_corrects_chromatic() {
+        let s = Scale::major(PitchClass::C);
+        // C#4 (61) está a 1 de C4 (60) y a 1 de D4 (62). Empate → arriba.
+        let cs4 = Pitch::from_midi(61).unwrap();
+        assert_eq!(s.nearest_in_scale(cs4).midi(), 62);
+        // F#4 (66): F=65 (a 1), G=67 (a 1). Empate → arriba (G4).
+        let fs4 = Pitch::from_midi(66).unwrap();
+        assert_eq!(s.nearest_in_scale(fs4).midi(), 67);
+    }
+
+    #[test]
+    fn nearest_in_scale_pentatonic_jumps_more() {
+        // En pentatónica C, no hay F ni B. C#4 (61) cae a D4 (62, +1).
+        // F4 (65) cae a E4 (64, -1) — F a E = 1, F a G = 2.
+        let s = Scale::pentatonic_major(PitchClass::C);
+        let cs4 = Pitch::from_midi(61).unwrap();
+        assert_eq!(s.nearest_in_scale(cs4).midi(), 62);
+        let f4 = Pitch::from_midi(65).unwrap();
+        assert_eq!(s.nearest_in_scale(f4).midi(), 64);
+    }
+
+    #[test]
+    fn step_in_scale_climbs_by_degrees() {
+        let s = Scale::major(PitchClass::C);
+        let c4 = Pitch::from_midi(60).unwrap();
+        // +1 grado: D4 (62), +2: E4 (64), +3: F4 (65).
+        assert_eq!(s.step_in_scale(c4, 1).unwrap().midi(), 62);
+        assert_eq!(s.step_in_scale(c4, 2).unwrap().midi(), 64);
+        assert_eq!(s.step_in_scale(c4, 7).unwrap().midi(), 72);
+    }
+
+    #[test]
+    fn step_in_scale_descends_by_degrees() {
+        let s = Scale::major(PitchClass::C);
+        let c4 = Pitch::from_midi(60).unwrap();
+        assert_eq!(s.step_in_scale(c4, -1).unwrap().midi(), 59); // B3
+        assert_eq!(s.step_in_scale(c4, -7).unwrap().midi(), 48); // C3
+    }
+
+    #[test]
+    fn step_in_scale_from_off_scale_first_quantizes() {
+        let s = Scale::major(PitchClass::C);
+        // C#4 (61) — nearest = D4 (62). +1 = E4 (64).
+        let cs4 = Pitch::from_midi(61).unwrap();
+        assert_eq!(s.step_in_scale(cs4, 1).unwrap().midi(), 64);
+    }
+
+    #[test]
+    fn step_in_scale_returns_none_at_midi_edges() {
+        let s = Scale::major(PitchClass::C);
+        let top = Pitch::from_midi(125).unwrap(); // F8 (en C major)
+        // C major terminal cerca de 127: 125(F)→127(G)→? siguiente sería A(129) → fuera.
+        assert!(s.step_in_scale(top, 2).is_none());
+        let bottom = Pitch::from_midi(0).unwrap();
+        assert!(s.step_in_scale(bottom, -1).is_none());
     }
 }

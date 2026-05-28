@@ -43,6 +43,10 @@
 //! - `Alt+P`      — ancla un punto de automación de pan, mismo criterio.
 //!                  Curva pintada en cyan (pan mapea −1..+1 → altura).
 //! - `Alt+C`      — limpia ambas curvas de automación de la pista activa.
+//! - `Alt+K`      — prende / apaga snap a la tonalidad (al agregar / mover
+//!                  notas, el midi cae al grado de escala más cercano y
+//!                  ↑/↓ saltan por grados en vez de semitonos). No-op si
+//!                  no hay key activa en el score (`k` para definirla).
 //! - `←` / `→`    — mueve la nota seleccionada ±1 beat.
 //! - `↑` / `↓`    — mueve la nota seleccionada ±1 semitono.
 //! - `+` / `-`    — alarga / acorta la nota seleccionada en 0.5 beats.
@@ -1105,6 +1109,9 @@ impl App for Takiy {
             Key::Character(s) if s.eq_ignore_ascii_case("c") && event.modifiers.alt => {
                 Some(Msg::Edit(EditMsg::ClearActiveAutomation))
             }
+            Key::Character(s) if s.eq_ignore_ascii_case("k") && event.modifiers.alt => {
+                Some(Msg::Edit(EditMsg::ToggleSnapToKey))
+            }
             Key::Character(s) if (s == "[" || s == "{") && event.modifiers.alt => {
                 Some(Msg::Edit(EditMsg::NudgeActiveVolume { delta: -0.1 }))
             }
@@ -1189,6 +1196,7 @@ impl App for Takiy {
         let undo_depth = model.editor.history.len();
         let key_label = takiy_app::describe_key(&model.editor.score.key);
         let key_scale = model.editor.score.key.clone();
+        let snap_to_key = model.editor.snap_to_key;
         let (min_midi, max_midi) = pitch_range_with_offset(&score, model.midi_offset);
         let total_beats = score
             .duration_beats()
@@ -1215,7 +1223,7 @@ impl App for Takiy {
                 scene, ts, rect, &score_paint, &source, &engine, &status, playing,
                 active_track, selected, playback_position_seconds, playback_bpm,
                 loop_region, metronome_on, snap_label, undo_depth,
-                &key_label, key_scale.as_ref(),
+                &key_label, key_scale.as_ref(), snap_to_key,
                 min_midi, max_midi, total_beats, theme,
             );
         })
@@ -1246,6 +1254,7 @@ fn paint_piano_roll(
     undo_depth: usize,
     key_label: &str,
     key_scale: Option<&takiy_core::Scale>,
+    snap_to_key: bool,
     min_midi: u8,
     max_midi: u8,
     total_beats: f32,
@@ -1403,8 +1412,17 @@ fn paint_piano_roll(
     } else {
         String::new()
     };
+    // El marcador snap-key sólo aparece cuando está prendido — sin key
+    // activa lo marcamos con asterisco para que sea obvio que está armado
+    // pero no hace nada hasta que se setee una tonalidad.
+    let snap_key_marker = if snap_to_key {
+        let suffix = if key_scale.is_some() { "" } else { "*" };
+        format!(" · snap-key{suffix}")
+    } else {
+        String::new()
+    };
     let header_text = format!(
-        "{source}  ·  {engine}  ·  {:.0} bpm · key {key_label} · snap {snap_label} · undo {undo_depth}{metro_marker}{loop_marker}{delay_marker}{reverb_marker}  ·  active: {active_track}·{active_name}{active_mixer}  ·  {status}",
+        "{source}  ·  {engine}  ·  {:.0} bpm · key {key_label}{snap_key_marker} · snap {snap_label} · undo {undo_depth}{metro_marker}{loop_marker}{delay_marker}{reverb_marker}  ·  active: {active_track}·{active_name}{active_mixer}  ·  {status}",
         score.tempo_bpm
     );
     let text_color = if playing {
