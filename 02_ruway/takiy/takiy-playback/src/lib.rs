@@ -49,6 +49,22 @@ use takiy_synth::AudioBuffer;
 /// la memoria acotada incluso si el audio thread se quedara colgado.
 const COMMAND_CHANNEL_CAP: usize = 16;
 
+/// Opciones de reproducción: posición inicial y región de loop opcional.
+///
+/// El uso típico es `PlayOpts::default()` (play desde el inicio, sin loop);
+/// `Player::play_from(b, s)` y `Player::play_loop(b, lo, hi)` envuelven los
+/// dos atajos comunes.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PlayOpts {
+    /// Sample desde el cual empezar a leer el buffer. `0` = inicio.
+    pub start_sample: u64,
+    /// Región de loop `[start, end)` en samples. Si está, el cursor
+    /// vuelve a `start` cada vez que alcanza `end`. Si `start >= end` o
+    /// `end > buffer.len()`, el callback ignora el loop y reproduce
+    /// linealmente.
+    pub loop_range: Option<(u64, u64)>,
+}
+
 /// Errores al abrir el dispositivo de audio.
 #[derive(Debug)]
 pub enum OpenError {
@@ -75,7 +91,7 @@ impl std::error::Error for OpenError {}
 /// Órdenes que la UI envía al callback de audio. Se reciben por
 /// `try_recv` al inicio de cada frame; nunca bloquean.
 enum Command {
-    Play(Arc<AudioBuffer>),
+    Play { buffer: Arc<AudioBuffer>, opts: PlayOpts },
     Stop,
 }
 
@@ -84,6 +100,7 @@ enum Command {
 struct AudioState {
     buffer: Option<Arc<AudioBuffer>>,
     cursor: u64,
+    loop_range: Option<(u64, u64)>,
 }
 
 /// Reproductor de audio. Mientras el `Player` viva, el stream del
@@ -153,21 +170,44 @@ impl Player {
         self.channels
     }
 
-    /// Encola un buffer para reproducción. Reemplaza cualquier buffer en curso
-    /// (no se mezclan — la idea es "tocar esto ahora"). El buffer se envuelve
-    /// en `Arc` para que el callback lo pueda compartir con quien lo creó.
-    ///
-    /// La orden se envía por canal SPSC; si el canal está saturado (no debería
-    /// pasar nunca: capacidad 16, las órdenes son raras), se descarta con un
-    /// log. La UI siempre asume éxito — no devuelve `Result` porque no hay
-    /// nada útil que hacer ante el fallo en el thread de UI.
+    /// Encola un buffer para reproducción desde el inicio, sin loop. Es
+    /// el atajo más común; equivale a `play_with(buffer, PlayOpts::default())`.
     pub fn play(&self, buffer: AudioBuffer) {
+        self.play_with(buffer, PlayOpts::default());
+    }
+
+    /// Encola un buffer para reproducción a partir de `start_sample`. Si
+    /// ya hay un buffer sonando, lo reemplaza sin reabrir el stream — el
+    /// callback recibe la orden en el próximo período (~20ms) y arranca
+    /// limpio desde el sample pedido.
+    pub fn play_from(&self, buffer: AudioBuffer, start_sample: u64) {
+        self.play_with(buffer, PlayOpts { start_sample, loop_range: None });
+    }
+
+    /// Encola un buffer para reproducción con loop entre `[loop_start, loop_end)`.
+    /// El cursor arranca en `loop_start`; al alcanzar `loop_end` vuelve a
+    /// `loop_start`. Útil para previsualizar un compás en bucle.
+    pub fn play_loop(&self, buffer: AudioBuffer, loop_start: u64, loop_end: u64) {
+        self.play_with(buffer, PlayOpts {
+            start_sample: loop_start,
+            loop_range: Some((loop_start, loop_end)),
+        });
+    }
+
+    /// Encola un buffer con opciones completas. Reemplaza cualquier
+    /// buffer en curso (no se mezclan — "tocar esto ahora"). El buffer
+    /// se envuelve en `Arc` para que el callback lo pueda compartir.
+    ///
+    /// La orden se envía por canal SPSC; si el canal está saturado (no
+    /// debería pasar nunca: capacidad 16, las órdenes son raras), se
+    /// descarta con un log. La UI siempre asume éxito.
+    pub fn play_with(&self, buffer: AudioBuffer, opts: PlayOpts) {
         // Marcamos playing inmediatamente para que la UI repinte sin
         // esperar al primer frame del callback (sería ~20ms de delay).
-        // El callback lo confirmará al consumir el comando.
         self.playing.store(true, Ordering::Release);
-        self.position.store(0, Ordering::Release);
-        if let Err(e) = self.tx.try_send(Command::Play(Arc::new(buffer))) {
+        self.position.store(opts.start_sample, Ordering::Release);
+        let cmd = Command::Play { buffer: Arc::new(buffer), opts };
+        if let Err(e) = self.tx.try_send(cmd) {
             match e {
                 TrySendError::Full(_) => {
                     eprintln!("takiy-playback · canal de órdenes saturado, play descartado");
@@ -220,7 +260,7 @@ where
     T: Sample + cpal::SizedSample + cpal::FromSample<f32> + Send + 'static,
 {
     let channels = config.channels as usize;
-    let mut state = AudioState { buffer: None, cursor: 0 };
+    let mut state = AudioState { buffer: None, cursor: 0, loop_range: None };
     device
         .build_output_stream(
             config,
@@ -246,15 +286,22 @@ fn fill<T>(
     // Drenar órdenes pendientes — no bloquea.
     while let Ok(cmd) = rx.try_recv() {
         match cmd {
-            Command::Play(b) => {
+            Command::Play { buffer: b, opts } => {
+                let total = b.samples.len() as u64;
+                let valid_loop = opts.loop_range.and_then(|(lo, hi)| {
+                    if lo < hi && hi <= total { Some((lo, hi)) } else { None }
+                });
+                let start = opts.start_sample.min(total);
                 state.buffer = Some(b);
-                state.cursor = 0;
-                position.store(0, Ordering::Release);
+                state.cursor = start;
+                state.loop_range = valid_loop;
+                position.store(start, Ordering::Release);
                 playing.store(true, Ordering::Release);
             }
             Command::Stop => {
                 state.buffer = None;
                 state.cursor = 0;
+                state.loop_range = None;
                 position.store(0, Ordering::Release);
                 playing.store(false, Ordering::Release);
             }
@@ -270,9 +317,18 @@ fn fill<T>(
     };
 
     let total = buffer.samples.len() as u64;
+    let loop_range = state.loop_range;
     let mut cursor = state.cursor;
 
     for frame in out.chunks_mut(channels) {
+        // Si hay loop activo, antes de cada muestra reverificamos si
+        // hay que rebobinar — atrapa el caso en que start_sample cayó
+        // dentro de la región y la primera muestra ya cruzó loop_end.
+        if let Some((lo, hi)) = loop_range {
+            if cursor >= hi {
+                cursor = lo;
+            }
+        }
         let value = if cursor < total {
             let v = buffer.samples[cursor as usize];
             cursor += 1;
@@ -287,10 +343,10 @@ fn fill<T>(
 
     state.cursor = cursor;
     position.store(cursor, Ordering::Release);
-    if cursor >= total {
-        // Terminó el buffer: liberamos la referencia para que el caller
-        // pueda recibir back-pressure (`is_playing → false`) y, si tiene
-        // el Arc, eventualmente liberar la memoria del audio.
+    if loop_range.is_none() && cursor >= total {
+        // Terminó el buffer y no hay loop: liberamos la referencia para
+        // back-pressure (`is_playing → false`) y eventual liberación de
+        // memoria del Arc en el lado de UI.
         state.buffer = None;
         state.cursor = 0;
         position.store(0, Ordering::Release);

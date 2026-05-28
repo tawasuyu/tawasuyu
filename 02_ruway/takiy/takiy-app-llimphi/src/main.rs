@@ -36,21 +36,35 @@ use llimphi_ui::llimphi_text::{draw_block, Alignment as TextAlignment, TextBlock
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, PaintRect, View};
 use takiy_app::{
     cell_at, default_save_path_for_save, gm_program_for_track_name, gm_program_name,
-    hit_test_note, load_score_or_demo, pitch_range, write_score, EditMsg, EditorState,
-    HEADER_H, KEYBOARD_W, MAX_KEY_H, MIN_BEAT_W, MIN_KEY_H,
+    header_beat_at, hit_test_note, load_score_or_demo, pitch_range, write_score, EditMsg,
+    EditorState, HEADER_H, KEYBOARD_W, MAX_KEY_H, MIN_BEAT_W, MIN_KEY_H,
 };
 use takiy_core::{PitchClass, Score};
-use takiy_playback::Player;
-use takiy_synth::{AudioBuffer, MultiProgramRenderer, OscRenderer, Renderer};
+use takiy_playback::{PlayOpts, Player};
+use takiy_synth::{
+    mix_clicks, prepend_count_in, AudioBuffer, Metronome, MultiProgramRenderer, OscRenderer,
+    Renderer,
+};
 
 #[derive(Clone)]
 enum Msg {
     TogglePlay,
+    /// Toca el score con un count-in de 1 compás (clicks pero sin notas).
+    /// Útil para grabar a tempo desde el principio.
+    PlayWithCountIn,
+    /// Click sobre el header → posiciona el playhead. Si está sonando
+    /// salta in-place; si no, arranca desde ese beat.
+    SeekToBeat(f32),
     /// Tick periódico para refrescar el estado de playback. El cursor se
     /// pinta del `Player::position_samples()` (sample-accurate, ver F0.2).
     Tick,
     /// Edición pura — se delega a `EditorState::apply`.
     Edit(EditMsg),
+    /// Toggle metrónomo (off ↔ 4/4).
+    ToggleMetronome,
+    /// Toggle loop. Si no hay región activa, define una de 4 compases
+    /// desde el playhead (o desde beat 0). Si hay, la apaga.
+    ToggleLoop,
     /// Cambia el programa GM de la pista activa en `delta` (wrap 0..=127).
     NudgeProgram { delta: i32 },
     /// Guarda el score actual a `TAKIY_SCORE_JSON` (o a `/tmp/...`).
@@ -150,16 +164,79 @@ impl App for Takiy {
                     model.playing = false;
                     model.status = "stopped".into();
                 } else {
-                    let buf = render_score(
-                        &model.editor.score,
-                        model.sf2.as_ref(),
-                        player.sample_rate(),
-                    );
+                    let (buf, opts) = build_play(&model.editor, model.sf2.as_ref(),
+                                                  player.sample_rate(), 0.0, false);
                     let secs = buf.duration_seconds();
                     model.playback_bpm = model.editor.score.tempo_bpm;
-                    player.play(buf);
+                    player.play_with(buf, opts);
                     model.playing = true;
-                    model.status = format!("playing · {secs:.1}s");
+                    let extras = play_status_extras(&model.editor);
+                    model.status = format!("playing · {secs:.1}s{extras}");
+                }
+            }
+            Msg::PlayWithCountIn => {
+                let Some(player) = model.player.as_ref() else {
+                    return model;
+                };
+                let (buf, opts) = build_play(&model.editor, model.sf2.as_ref(),
+                                              player.sample_rate(), 0.0, true);
+                let secs = buf.duration_seconds();
+                model.playback_bpm = model.editor.score.tempo_bpm;
+                player.play_with(buf, opts);
+                model.playing = true;
+                let extras = play_status_extras(&model.editor);
+                model.status = format!("count-in + playing · {secs:.1}s{extras}");
+            }
+            Msg::SeekToBeat(beat) => {
+                let Some(player) = model.player.as_ref() else {
+                    return model;
+                };
+                let (buf, opts) = build_play(&model.editor, model.sf2.as_ref(),
+                                              player.sample_rate(), beat, false);
+                let secs = buf.duration_seconds();
+                model.playback_bpm = model.editor.score.tempo_bpm;
+                player.play_with(buf, opts);
+                model.playing = true;
+                model.status = format!("seek → beat {beat:.1} · playing · {secs:.1}s");
+            }
+            Msg::ToggleMetronome => {
+                if let Some(s) = model.editor.toggle_metronome() {
+                    model.status = s;
+                }
+            }
+            Msg::ToggleLoop => {
+                let new_region = match model.editor.loop_region {
+                    Some(_) => None,
+                    None => {
+                        // 4 compases (16 beats en 4/4) desde el playhead actual.
+                        let bpm = model.playback_bpm.max(1.0);
+                        let beats_from_pos = model
+                            .player
+                            .as_ref()
+                            .filter(|_| model.playing)
+                            .map(|p| p.position_seconds() * bpm / 60.0)
+                            .unwrap_or(0.0)
+                            .floor()
+                            .max(0.0);
+                        Some((beats_from_pos, beats_from_pos + 16.0))
+                    }
+                };
+                if let Some(s) = model.editor.set_loop_region(new_region) {
+                    model.status = s;
+                }
+                // Si está sonando, re-lanzamos con loop aplicado.
+                if model.playing {
+                    if let Some(player) = model.player.as_ref() {
+                        let pos_beat = player.position_seconds() * model.playback_bpm / 60.0;
+                        let (buf, opts) = build_play(
+                            &model.editor,
+                            model.sf2.as_ref(),
+                            player.sample_rate(),
+                            pos_beat,
+                            false,
+                        );
+                        player.play_with(buf, opts);
+                    }
                 }
             }
             Msg::Tick => {
@@ -242,6 +319,7 @@ impl App for Takiy {
             return None;
         }
         match &event.key {
+            Key::Named(NamedKey::Space) if event.modifiers.ctrl => Some(Msg::PlayWithCountIn),
             Key::Named(NamedKey::Space) => Some(Msg::TogglePlay),
             Key::Named(NamedKey::Tab) => Some(Msg::Edit(EditMsg::CycleTrack)),
             Key::Named(NamedKey::Escape) => Some(Msg::Quit),
@@ -264,6 +342,8 @@ impl App for Takiy {
                 Some(Msg::Edit(EditMsg::DeleteSelected))
             }
             Key::Character(s) if s.eq_ignore_ascii_case("n") => Some(Msg::Edit(EditMsg::NewTrack)),
+            Key::Character(s) if s.eq_ignore_ascii_case("m") => Some(Msg::ToggleMetronome),
+            Key::Character(s) if s.eq_ignore_ascii_case("l") => Some(Msg::ToggleLoop),
             Key::Character(s) if s.eq_ignore_ascii_case("s") => Some(Msg::Save),
             Key::Character(s) if s == "+" || s == "=" => {
                 Some(Msg::Edit(EditMsg::ResizeSelected { d_beat: 0.5 }))
@@ -300,8 +380,13 @@ impl App for Takiy {
             .filter(|_| playing)
             .map(|p| p.position_seconds());
         let playback_bpm = model.playback_bpm;
+        let loop_region = model.editor.loop_region;
+        let metronome_on = model.editor.metronome_beats_per_bar.is_some();
         let (min_midi, max_midi) = pitch_range(&score);
-        let total_beats = score.duration_beats().max(8.0);
+        let total_beats = score
+            .duration_beats()
+            .max(8.0)
+            .max(loop_region.map(|(_, t)| t).unwrap_or(0.0));
 
         let score_paint = score.clone();
         let score_click = score.clone();
@@ -313,6 +398,12 @@ impl App for Takiy {
         })
         .fill(theme.bg_app)
         .on_click_at(move |lx, ly, rw, rh| {
+            // Click sobre el header → seek. Tiene prioridad sobre el grid.
+            if let Some(beat) =
+                header_beat_at(lx, ly, rw, rh, min_midi, max_midi, total_beats)
+            {
+                return Some(Msg::SeekToBeat(beat));
+            }
             if let Some((track, idx)) =
                 hit_test_note(&score_click, lx, ly, rw, rh, min_midi, max_midi, total_beats)
             {
@@ -330,7 +421,7 @@ impl App for Takiy {
             paint_piano_roll(
                 scene, ts, rect, &score_paint, &source, &engine, &status, playing,
                 active_track, selected, playback_position_seconds, playback_bpm,
-                min_midi, max_midi, total_beats, theme,
+                loop_region, metronome_on, min_midi, max_midi, total_beats, theme,
             );
         })
     }
@@ -354,6 +445,8 @@ fn paint_piano_roll(
     selected: Option<(usize, usize)>,
     playback_position_seconds: Option<f32>,
     playback_bpm: f32,
+    loop_region: Option<(f32, f32)>,
+    metronome_on: bool,
     min_midi: u8,
     max_midi: u8,
     total_beats: f32,
@@ -430,12 +523,42 @@ fn paint_piano_roll(
     );
     scene.fill(Fill::NonZero, Affine::IDENTITY, header_bg, None, &header_rect);
 
+    // Región de loop: banda tenue sobre todo el grid + barra más fuerte
+    // sobre el header. Pintar antes de las notas para que queden encima.
+    if let Some((from_b, to_b)) = loop_region {
+        let lx = grid_x + from_b * beat_w;
+        let rx = (grid_x + to_b * beat_w).min(grid_x + grid_w);
+        if rx > lx {
+            let band = KurboRect::new(
+                lx as f64,
+                grid_y as f64,
+                rx as f64,
+                (grid_y + grid_h) as f64,
+            );
+            let band_color = Color::from_rgba8(255, 230, 90, 28);
+            scene.fill(Fill::NonZero, Affine::IDENTITY, band_color, None, &band);
+            let head = KurboRect::new(
+                lx as f64,
+                (rect.y + HEADER_H - 4.0) as f64,
+                rx as f64,
+                (rect.y + HEADER_H) as f64,
+            );
+            let head_color = Color::from_rgba8(255, 220, 80, 220);
+            scene.fill(Fill::NonZero, Affine::IDENTITY, head_color, None, &head);
+        }
+    }
+
     let active_name = score
         .track(active_track)
         .map(|t| t.name.as_str())
         .unwrap_or("?");
+    let metro_marker = if metronome_on { " · 🎼" } else { "" };
+    let loop_marker = match loop_region {
+        Some((from, to)) => format!(" · loop {from:.0}..{to:.0}"),
+        None => String::new(),
+    };
     let header_text = format!(
-        "{source}  ·  {engine}  ·  {:.0} bpm  ·  active: {active_track}·{active_name}  ·  {status}",
+        "{source}  ·  {engine}  ·  {:.0} bpm{metro_marker}{loop_marker}  ·  active: {active_track}·{active_name}  ·  {status}",
         score.tempo_bpm
     );
     let text_color = if playing {
@@ -548,6 +671,78 @@ fn render_score(
     }
     let osc = OscRenderer { sample_rate, ..Default::default() };
     osc.render(score)
+}
+
+/// Construye el `(AudioBuffer, PlayOpts)` para una orden de reproducción
+/// considerando metrónomo, loop region, count-in y la posición de
+/// arranque pedida en beats. Si `start_beat` cae dentro de una región
+/// de loop activa, arranca dentro de la región para que el primer ciclo
+/// suene completo desde ahí.
+fn build_play(
+    editor: &EditorState,
+    sf2: Option<&MultiProgramRenderer>,
+    sample_rate: u32,
+    start_beat: f32,
+    count_in: bool,
+) -> (AudioBuffer, PlayOpts) {
+    let mut buf = render_score(&editor.score, sf2, sample_rate);
+    let bpm = editor.score.tempo_bpm.max(1.0);
+    let sec_per_beat = 60.0 / bpm;
+
+    // Mezcla del metrónomo: arranca en beat 0 absoluto del score y
+    // sigue hasta que se acabe el buffer. La beats_per_bar viene del
+    // estado del editor.
+    if let Some(beats_per_bar) = editor.metronome_beats_per_bar {
+        let metro = Metronome { beats_per_bar, ..Metronome::DEFAULT };
+        mix_clicks(&mut buf.samples, sample_rate, sec_per_beat, &metro, 0, None);
+    }
+
+    // Count-in: prepende un compás (beats_per_bar o 4 si metrónomo off)
+    // con clicks. La cuenta arranca en beat 0 del count-in y abarca esos
+    // beats; el score arranca justo después.
+    let pre_samples = if count_in {
+        let bpb = editor.metronome_beats_per_bar.unwrap_or(4);
+        let metro = Metronome { beats_per_bar: bpb, ..Metronome::DEFAULT };
+        let pre_samples = takiy_synth::count_in_samples(sample_rate, sec_per_beat, bpb as u32);
+        buf = prepend_count_in(buf, sec_per_beat, bpb as u32, &metro);
+        pre_samples
+    } else {
+        0
+    };
+
+    // Loop region (en beats) → rango en samples ajustando por el
+    // count-in (que vive en samples antes del score).
+    let loop_range = editor.loop_region.and_then(|(from_b, to_b)| {
+        let from_s = (from_b * sec_per_beat * sample_rate as f32) as u64
+            + pre_samples as u64;
+        let to_s = (to_b * sec_per_beat * sample_rate as f32) as u64
+            + pre_samples as u64;
+        if from_s < to_s && to_s <= buf.samples.len() as u64 {
+            Some((from_s, to_s))
+        } else {
+            None
+        }
+    });
+
+    // start_sample: si hay count-in arrancamos en 0 (durante el conteo);
+    // si no, en el offset del beat pedido. La región de loop ya tiene
+    // su pre_samples sumado, así que el cursor entra al score limpio.
+    let beat_offset_samples = (start_beat * sec_per_beat * sample_rate as f32) as u64;
+    let start_sample = if count_in { 0 } else { beat_offset_samples };
+
+    (buf, PlayOpts { start_sample, loop_range })
+}
+
+/// Suffix del status: agrega "· loop X..Y" y "· 🎼 M" cuando aplican.
+fn play_status_extras(editor: &EditorState) -> String {
+    let mut s = String::new();
+    if let Some((from, to)) = editor.loop_region {
+        s.push_str(&format!(" · loop [{from:.0}, {to:.0})"));
+    }
+    if let Some(bpb) = editor.metronome_beats_per_bar {
+        s.push_str(&format!(" · click {bpb}/4"));
+    }
+    s
 }
 
 fn main() {

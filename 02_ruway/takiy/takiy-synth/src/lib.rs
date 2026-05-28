@@ -21,6 +21,7 @@
 
 pub mod audio;
 pub mod envelope;
+pub mod metronome;
 pub mod renderer;
 pub mod soundfont;
 pub mod soundfont_multi;
@@ -29,6 +30,7 @@ pub mod wav;
 
 pub use audio::AudioBuffer;
 pub use envelope::Adsr;
+pub use metronome::{count_in_samples, mix_clicks, prepend_count_in, Metronome};
 pub use renderer::{OscRenderer, Renderer};
 pub use soundfont::{LoadError, SoundFontRenderer};
 pub use soundfont_multi::MultiProgramRenderer;

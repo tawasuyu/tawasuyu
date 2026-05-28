@@ -16,6 +16,14 @@ pub struct EditorState {
     pub next_track_n: usize,
     pub selected: Option<(usize, usize)>,
     pub save_path: Option<PathBuf>,
+    /// Región de loop activa en beats `[from, to)`. Cuando es `Some` el
+    /// playback rebobina al alcanzar `to`. Sólo afecta a la próxima
+    /// reproducción — al cambiar en vivo, el binario reenvía un play
+    /// nuevo para que el callback la respete.
+    pub loop_region: Option<(f32, f32)>,
+    /// Compases del metrónomo (`beats_per_bar`). `None` = metrónomo off.
+    /// `Some(4)` = clicks en 4/4, etc.
+    pub metronome_beats_per_bar: Option<u8>,
 }
 
 impl EditorState {
@@ -30,6 +38,8 @@ impl EditorState {
             next_track_n: 2,
             selected: None,
             save_path: None,
+            loop_region: None,
+            metronome_beats_per_bar: None,
         }
     }
 
@@ -45,6 +55,37 @@ impl EditorState {
             next_track_n: n + 1,
             selected: None,
             save_path: None,
+            loop_region: None,
+            metronome_beats_per_bar: None,
+        }
+    }
+
+    /// Toggle del metrónomo a 4/4 (lo más común). Si está en otro
+    /// compás, lo apaga; si está apagado, lo prende en 4/4.
+    pub fn toggle_metronome(&mut self) -> ApplyOutcome {
+        self.metronome_beats_per_bar = match self.metronome_beats_per_bar {
+            None => Some(4),
+            Some(_) => None,
+        };
+        Some(match self.metronome_beats_per_bar {
+            Some(b) => format!("metrónomo on · {b}/4"),
+            None => "metrónomo off".into(),
+        })
+    }
+
+    /// Define una región de loop en beats. `set_loop_region(None)` la
+    /// desactiva. Se valida `from < to`; si no, devuelve `None`.
+    pub fn set_loop_region(&mut self, region: Option<(f32, f32)>) -> ApplyOutcome {
+        match region {
+            Some((from, to)) if from < to && from >= 0.0 => {
+                self.loop_region = Some((from, to));
+                Some(format!("loop · [{from:.1}, {to:.1})"))
+            }
+            None => {
+                self.loop_region = None;
+                Some("loop off".into())
+            }
+            _ => None,
         }
     }
 }
@@ -409,6 +450,32 @@ mod tests {
         // selection: track > removed (0) → t - 1 = 0
         assert_eq!(st.selected, Some((0, 0)));
         assert_eq!(st.score.tracks().len(), 1);
+    }
+
+    #[test]
+    fn toggle_metronome_cycles_off_to_4_4_back_to_off() {
+        let mut st = EditorState::new(120.0);
+        assert!(st.metronome_beats_per_bar.is_none());
+        st.toggle_metronome();
+        assert_eq!(st.metronome_beats_per_bar, Some(4));
+        st.toggle_metronome();
+        assert!(st.metronome_beats_per_bar.is_none());
+    }
+
+    #[test]
+    fn set_loop_region_validates_bounds() {
+        let mut st = EditorState::new(120.0);
+        assert!(st.set_loop_region(Some((0.0, 4.0))).is_some());
+        assert_eq!(st.loop_region, Some((0.0, 4.0)));
+        // from >= to → rechazado, no cambia.
+        assert!(st.set_loop_region(Some((4.0, 4.0))).is_none());
+        assert_eq!(st.loop_region, Some((0.0, 4.0)));
+        // from negativo → rechazado.
+        assert!(st.set_loop_region(Some((-1.0, 4.0))).is_none());
+        assert_eq!(st.loop_region, Some((0.0, 4.0)));
+        // None apaga.
+        assert!(st.set_loop_region(None).is_some());
+        assert!(st.loop_region.is_none());
     }
 
     #[test]

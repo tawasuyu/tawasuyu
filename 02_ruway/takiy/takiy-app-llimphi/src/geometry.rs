@@ -27,6 +27,31 @@ pub fn grid_geometry(
     Some((KEYBOARD_W, HEADER_H, grid_w, grid_h, key_h, beat_w))
 }
 
+/// Mapea un click sobre la **banda del header** (0..HEADER_H) a la
+/// posición en beats que corresponde por X. Devuelve `None` si el click
+/// no está sobre el header (ej. cayó sobre el teclado, o por debajo de
+/// HEADER_H). El valor devuelto puede ser fraccional para que el seek
+/// caiga exacto en la posición clickeada, no snappeada a beat entero.
+pub fn header_beat_at(
+    lx: f32,
+    ly: f32,
+    rect_w: f32,
+    rect_h: f32,
+    min_midi: u8,
+    max_midi: u8,
+    total_beats: f32,
+) -> Option<f32> {
+    let (grid_x, grid_y, grid_w, _grid_h, _key_h, beat_w) =
+        grid_geometry(rect_w, rect_h, min_midi, max_midi, total_beats)?;
+    if ly < 0.0 || ly >= grid_y {
+        return None;
+    }
+    if lx < grid_x || lx > grid_x + grid_w {
+        return None;
+    }
+    Some(((lx - grid_x) / beat_w).max(0.0))
+}
+
 /// Mapea `(lx, ly)` — coordenadas locales — a `(beat, midi)`. Devuelve
 /// `None` si el punto cae fuera del grid (teclado, header, o fuera de
 /// los límites verticales/horizontales).
@@ -194,6 +219,33 @@ mod tests {
         let (w, h) = rect();
         let s = Score::new(120.0);
         assert_eq!(hit_test_note(&s, 200.0, 100.0, w, h, 60, 72, 8.0), None);
+    }
+
+    #[test]
+    fn header_beat_at_returns_fractional_beat() {
+        let (w, h) = rect();
+        let (min_midi, max_midi, total_beats) = (60, 72, 16.0);
+        let (gx, _gy, _gw, _gh, _key_h, beat_w) =
+            grid_geometry(w, h, min_midi, max_midi, total_beats).unwrap();
+        // Click sobre el header en el medio del beat 3.
+        let lx = gx + 3.0 * beat_w + beat_w * 0.5;
+        let ly = HEADER_H * 0.5;
+        let beat = header_beat_at(lx, ly, w, h, min_midi, max_midi, total_beats).unwrap();
+        assert!((beat - 3.5).abs() < 1e-3);
+    }
+
+    #[test]
+    fn header_beat_at_rejects_clicks_below_header() {
+        let (w, h) = rect();
+        // y > HEADER_H cae en el grid, no en el header.
+        assert!(header_beat_at(400.0, HEADER_H + 5.0, w, h, 60, 72, 16.0).is_none());
+    }
+
+    #[test]
+    fn header_beat_at_rejects_clicks_over_keyboard() {
+        let (w, h) = rect();
+        // x < KEYBOARD_W cae sobre el teclado pintado, no sobre el header.
+        assert!(header_beat_at(KEYBOARD_W * 0.5, 5.0, w, h, 60, 72, 16.0).is_none());
     }
 
     #[test]

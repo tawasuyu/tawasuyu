@@ -98,5 +98,30 @@ fn main() {
     let _ = std::fs::remove_file(&path);
     assert_eq!(reloaded, st.score);
 
-    println!("takiy smoke ok — 6 escenarios verdes");
+    // --- Escenario 7: transporte — metrónomo y loop region (F1).
+    let mut st = EditorState::new(120.0);
+    assert!(st.metronome_beats_per_bar.is_none());
+    st.toggle_metronome();
+    assert_eq!(st.metronome_beats_per_bar, Some(4));
+    assert!(st.set_loop_region(Some((0.0, 8.0))).is_some());
+    assert_eq!(st.loop_region, Some((0.0, 8.0)));
+    // Rebote: from >= to no debe cambiar la región.
+    assert!(st.set_loop_region(Some((8.0, 0.0))).is_none());
+    assert_eq!(st.loop_region, Some((0.0, 8.0)));
+
+    // --- Escenario 8: seek geometrico — header_beat_at sobre el rect.
+    let rect = (1200.0_f32, 640.0_f32);
+    let (min_midi, max_midi) = pitch_range(&st.score);
+    let total_beats = st.score.duration_beats().max(8.0);
+    let (gx, _gy, _gw, _gh, _key_h, beat_w) =
+        takiy_app::grid_geometry(rect.0, rect.1, min_midi, max_midi, total_beats).unwrap();
+    // Click en el centro de la banda del header sobre el beat 2.
+    let lx = gx + 2.0 * beat_w + beat_w * 0.5;
+    let ly = 5.0; // arriba del grid
+    let beat = takiy_app::header_beat_at(lx, ly, rect.0, rect.1, min_midi, max_midi, total_beats);
+    assert!(beat.is_some());
+    let b = beat.unwrap();
+    assert!((b - 2.5).abs() < 1e-2);
+
+    println!("takiy smoke ok — 8 escenarios verdes");
 }
