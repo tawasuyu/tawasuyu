@@ -46,6 +46,33 @@ impl DomTree {
         find_first(&self.document(), local)
     }
 
+    /// Busca el primer `<meta http-equiv="refresh" content="N;url=...">`
+    /// y extrae `(delay_secs, target_url_opcional)`. Si la URL es None,
+    /// el refresh recarga la página actual. Si no hay meta refresh,
+    /// devuelve `None`.
+    pub fn meta_refresh(&self) -> Option<MetaRefresh> {
+        let mut found: Option<MetaRefresh> = None;
+        walk(&self.document(), &mut |node| {
+            if found.is_some() {
+                return;
+            }
+            if let NodeData::Element { name, .. } = &node.data {
+                if name.local.as_ref() != "meta" {
+                    return;
+                }
+                let http_equiv = attr(node, "http-equiv").unwrap_or_default();
+                if !http_equiv.eq_ignore_ascii_case("refresh") {
+                    return;
+                }
+                let content = attr(node, "content").unwrap_or_default();
+                if let Some(mr) = parse_meta_refresh_content(&content) {
+                    found = Some(mr);
+                }
+            }
+        });
+        found
+    }
+
     /// Itera in-order todos los `<style>` y devuelve sus textos
     /// concatenados — entrada para el [`StyleEngine`](crate::StyleEngine).
     pub fn collect_inline_stylesheets(&self) -> Vec<String> {
@@ -130,6 +157,48 @@ pub(crate) fn children(node: &Handle) -> Vec<Handle> {
     node.children.borrow().iter().map(Rc::clone).collect()
 }
 
+/// Resultado de `<meta http-equiv="refresh" content="N;url=...">`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MetaRefresh {
+    /// Segundos a esperar antes de la navegación. `0` = inmediato.
+    pub delay_secs: u32,
+    /// URL destino (relativa a la página actual — el chrome la resuelve
+    /// contra `Document.url`). `None` = recargar la página actual.
+    pub url: Option<String>,
+}
+
+/// Parsea el atributo `content` de `<meta http-equiv="refresh">`. El
+/// formato real (HTML spec, sección "Pragma directive: refresh") es
+/// `<N>` o `<N>; url=<URL>` (con variantes en whitespace y comillas).
+/// Devuelve `None` si no se encuentra un delay entero.
+fn parse_meta_refresh_content(content: &str) -> Option<MetaRefresh> {
+    let content = content.trim();
+    let (delay_str, rest) = match content.find(|c: char| c == ';' || c == ',') {
+        Some(i) => (&content[..i], Some(content[i + 1..].trim())),
+        None => (content, None),
+    };
+    let delay_str = delay_str.trim();
+    let delay_secs: u32 = delay_str
+        .split('.')
+        .next()
+        .and_then(|d| d.parse::<u32>().ok())?;
+    let url = rest.and_then(|r| {
+        // Busca `url=...` (case-insensitive, opcionalmente con comillas).
+        let lower = r.to_ascii_lowercase();
+        let key = lower.find("url=")?;
+        let after = r[key + 4..].trim();
+        let after = after.trim_start_matches(['"', '\''].as_ref());
+        let after = after.trim_end_matches(['"', '\''].as_ref());
+        let after = after.trim();
+        if after.is_empty() {
+            None
+        } else {
+            Some(after.to_string())
+        }
+    });
+    Some(MetaRefresh { delay_secs, url })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,5 +226,42 @@ mod tests {
         let sheets = dom.collect_inline_stylesheets();
         assert_eq!(sheets.len(), 1);
         assert!(sheets[0].contains("color: red"));
+    }
+
+    #[test]
+    fn meta_refresh_extrae_delay_y_url() {
+        let html = r#"<html><head><meta http-equiv="refresh" content="5; url=/next">
+            </head><body>x</body></html>"#;
+        let dom = DomTree::parse(html);
+        let mr = dom.meta_refresh().expect("meta refresh debería estar");
+        assert_eq!(mr.delay_secs, 5);
+        assert_eq!(mr.url.as_deref(), Some("/next"));
+    }
+
+    #[test]
+    fn meta_refresh_solo_delay() {
+        let html = r#"<html><head><meta http-equiv="refresh" content="10">
+            </head></html>"#;
+        let dom = DomTree::parse(html);
+        let mr = dom.meta_refresh().expect("delay-only debería parsear");
+        assert_eq!(mr.delay_secs, 10);
+        assert_eq!(mr.url, None);
+    }
+
+    #[test]
+    fn meta_refresh_url_con_comillas() {
+        let html = r#"<html><head><meta http-equiv="REFRESH" content='0;URL="https://example.com/x"'>
+            </head></html>"#;
+        let dom = DomTree::parse(html);
+        let mr = dom.meta_refresh().expect("case-insensitive + comillas");
+        assert_eq!(mr.delay_secs, 0);
+        assert_eq!(mr.url.as_deref(), Some("https://example.com/x"));
+    }
+
+    #[test]
+    fn meta_refresh_inexistente_devuelve_none() {
+        let html = "<html><head></head><body></body></html>";
+        let dom = DomTree::parse(html);
+        assert!(dom.meta_refresh().is_none());
     }
 }

@@ -260,7 +260,15 @@ pub enum Msg {
         title: String,
         box_tree: BoxTree,
         source: String,
+        /// `<meta http-equiv="refresh">` del head, si existía. El chrome
+        /// programa un thread con sleep y dispatcha `MetaRefreshFire`.
+        meta_refresh: Option<puriy_engine::MetaRefresh>,
     },
+    /// Disparo del temporizador de `<meta refresh>`. El handler valida
+    /// `tab` y `gen` para descartar refreshes pendientes de pestañas
+    /// cerradas o pisadas por otra navegación. `url=None` significa
+    /// recargar; `Some(u)` navega a la URL ya resuelta contra base.
+    MetaRefreshFire { tab: TabId, gen: u64, url: Option<String> },
     LoadFailed { tab: TabId, gen: u64, err: String },
     Navigate(String),
     /// Navega vía POST con body application/x-www-form-urlencoded.
@@ -495,7 +503,7 @@ impl App for Puriy {
                 let url = m.active().url.clone();
                 start_load(&mut m, url, /* push_history */ false, handle);
             }
-            Msg::Loaded { tab, gen, final_url, title, box_tree, source } => {
+            Msg::Loaded { tab, gen, final_url, title, box_tree, source, meta_refresh } => {
                 if let Some(idx) = m.tab_idx(tab) {
                     let t = &mut m.tabs[idx];
                     if t.gen == gen {
@@ -558,6 +566,45 @@ impl App for Puriy {
                             }
                         }
                         persist_profile();
+                        // <meta http-equiv="refresh"> — programa un thread
+                        // que duerme N segundos y dispatcha
+                        // MetaRefreshFire. El gen counter lo invalida si
+                        // el usuario navegó manualmente antes de que vence.
+                        if let Some(mr) = meta_refresh {
+                            let resolved = mr.url.as_deref().and_then(|u| {
+                                url::Url::parse(&t.url)
+                                    .ok()
+                                    .and_then(|base| base.join(u).ok())
+                                    .map(|abs| abs.to_string())
+                            });
+                            t.status = match (mr.delay_secs, resolved.as_deref()) {
+                                (0, Some(u)) => format!("→ refresh inmediato a {u}"),
+                                (n, Some(u)) => format!("→ refresh en {n}s a {u}"),
+                                (0, None) => "↻ reload inmediato".to_string(),
+                                (n, None) => format!("↻ reload en {n}s"),
+                            };
+                            let h = handle.clone();
+                            let delay = mr.delay_secs;
+                            std::thread::spawn(move || {
+                                if delay > 0 {
+                                    std::thread::sleep(std::time::Duration::from_secs(
+                                        delay as u64,
+                                    ));
+                                }
+                                h.dispatch(Msg::MetaRefreshFire { tab, gen, url: resolved });
+                            });
+                        }
+                    }
+                }
+            }
+            Msg::MetaRefreshFire { tab, gen, url } => {
+                // Sólo dispara si la pestaña sigue existiendo y no fue
+                // pisada por otra navegación manual (gen counter).
+                if let Some(idx) = m.tab_idx(tab) {
+                    if m.tabs[idx].gen == gen {
+                        m.active = idx;
+                        let target = url.unwrap_or_else(|| m.tabs[idx].url.clone());
+                        return Self::update(m, Msg::Navigate(target), handle);
                     }
                 }
             }
@@ -1513,6 +1560,7 @@ fn spawn_load(tab: TabId, gen: u64, url: String, handle: Handle<Msg>) {
                     title,
                     box_tree: doc.box_tree,
                     source: doc.source,
+                    meta_refresh: doc.meta_refresh,
                 });
                 // Best-effort: persistimos la cache después de cada
                 // navegación exitosa. Si el proceso muere por SIGKILL o
@@ -1553,6 +1601,7 @@ fn start_load_post(m: &mut Model, url: String, body: String, handle: &Handle<Msg
                     title,
                     box_tree: doc.box_tree,
                     source: doc.source,
+                    meta_refresh: doc.meta_refresh,
                 });
             }
             Err(e) => h.dispatch(Msg::LoadFailed { tab: id, gen, err: e.to_string() }),
@@ -2786,10 +2835,18 @@ fn render_svg(scene: &puriy_engine::SvgScene, zoom: f32) -> View<Msg> {
 /// da una sombra "dura" pero proporcionada.
 fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> View<Msg> {
     let z = zoom;
-    if b.border_radius > 0.0 {
-        view = view.radius((b.border_radius * z) as f64);
+    // Radio del clip del view: usamos el máximo de las 4 esquinas (Llimphi
+    // `View::radius` toma un escalar). Cuando las 4 esquinas son iguales
+    // el resultado es exacto; cuando difieren, el clip queda con la
+    // esquina más redonda — el border per-side dibujado abajo seguirá
+    // marcando las corners individuales.
+    let radii = b.border_radii;
+    let radius_max =
+        radii.top_left.max(radii.top_right).max(radii.bottom_right).max(radii.bottom_left);
+    if radius_max > 0.0 {
+        view = view.radius((radius_max * z) as f64);
     }
-    let radius = (b.border_radius * z) as f64;
+    let radius = (radius_max * z) as f64;
     let shadow = b.box_shadow.map(|s| BoxShadow {
         offset_x: s.offset_x * z,
         offset_y: s.offset_y * z,
@@ -2798,9 +2855,38 @@ fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> View<Msg> {
         color: s.color,
     });
     let alpha_mul = b.opacity.clamp(0.0, 1.0);
-    let border = match (b.border_color, b.border_width) {
-        (Some(c), w) if w > 0.0 => Some((c, w * z)),
-        _ => None,
+    // Border uniforme = los 4 lados con mismo width y color. Lo
+    // dibujamos como RoundedRect stroke para que las corners radius
+    // queden suaves. Si los lados difieren, pintamos cada uno como
+    // segmento independiente (Border::Sides) — las corners en ese caso
+    // van en chaflán cuadrado, que matchea el look estándar de browsers
+    // cuando se mezclan widths/colors por lado.
+    let bw = b.border_widths;
+    let bc = b.border_colors;
+    let uniform_border = if bw.top == bw.right
+        && bw.right == bw.bottom
+        && bw.bottom == bw.left
+        && bc.top == bc.right
+        && bc.right == bc.bottom
+        && bc.bottom == bc.left
+        && bw.top > 0.0
+    {
+        bc.top.map(|c| (c, bw.top * z))
+    } else {
+        None
+    };
+    let per_side_border = if uniform_border.is_none() {
+        let s_top = bc.top.filter(|_| bw.top > 0.0).map(|c| (c, bw.top * z));
+        let s_right = bc.right.filter(|_| bw.right > 0.0).map(|c| (c, bw.right * z));
+        let s_bottom = bc.bottom.filter(|_| bw.bottom > 0.0).map(|c| (c, bw.bottom * z));
+        let s_left = bc.left.filter(|_| bw.left > 0.0).map(|c| (c, bw.left * z));
+        if s_top.is_some() || s_right.is_some() || s_bottom.is_some() || s_left.is_some() {
+            Some((s_top, s_right, s_bottom, s_left))
+        } else {
+            None
+        }
+    } else {
+        None
     };
     // outline se pinta fuera del border + offset, sin afectar layout. Si
     // `style_active` es false (none/hidden) o falta color, no pinta.
@@ -2834,7 +2920,8 @@ fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> View<Msg> {
         (peniko, img.width as f64, img.height as f64)
     });
     if shadow.is_none()
-        && border.is_none()
+        && uniform_border.is_none()
+        && per_side_border.is_none()
         && deco.is_none()
         && outline.is_none()
         && gradient.is_none()
@@ -2891,7 +2978,7 @@ fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> View<Msg> {
             );
             scene.fill(Fill::NonZero, Affine::IDENTITY, sc, None, &r);
         }
-        if let Some((bc, w)) = border {
+        if let Some((bc, w)) = uniform_border {
             let stroke = Stroke::new(w as f64);
             let half = stroke.width * 0.5;
             let r = RoundedRect::new(
@@ -2904,6 +2991,47 @@ fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> View<Msg> {
             let a = (bc.a as f32 * alpha_mul) as u8;
             let color = Color::from_rgba8(bc.r, bc.g, bc.b, a);
             scene.stroke(&stroke, Affine::IDENTITY, color, None, &r);
+        }
+        if let Some((s_top, s_right, s_bottom, s_left)) = per_side_border {
+            // Per-side: pintamos cada lado como una línea recta del color
+            // y grosor correspondientes. Corners en chaflán cuadrado —
+            // matchea el look de browsers cuando border-{top,right,...}
+            // difieren entre sí.
+            let x0 = rect.x as f64;
+            let y0 = rect.y as f64;
+            let x1 = x0 + rect.w as f64;
+            let y1 = y0 + rect.h as f64;
+            // Cada lado se inseta por w/2 para que el trazo caiga dentro
+            // del rect del nodo (vello pinta centrado al path). Pintamos
+            // inline (sin closure) para evitar capturas raras del scene.
+            if let Some((c, w)) = s_top {
+                let h = (w as f64) * 0.5;
+                let a = (c.a as f32 * alpha_mul) as u8;
+                let color = Color::from_rgba8(c.r, c.g, c.b, a);
+                let line = Line::new((x0, y0 + h), (x1, y0 + h));
+                scene.stroke(&Stroke::new(w as f64), Affine::IDENTITY, color, None, &line);
+            }
+            if let Some((c, w)) = s_bottom {
+                let h = (w as f64) * 0.5;
+                let a = (c.a as f32 * alpha_mul) as u8;
+                let color = Color::from_rgba8(c.r, c.g, c.b, a);
+                let line = Line::new((x0, y1 - h), (x1, y1 - h));
+                scene.stroke(&Stroke::new(w as f64), Affine::IDENTITY, color, None, &line);
+            }
+            if let Some((c, w)) = s_left {
+                let h = (w as f64) * 0.5;
+                let a = (c.a as f32 * alpha_mul) as u8;
+                let color = Color::from_rgba8(c.r, c.g, c.b, a);
+                let line = Line::new((x0 + h, y0), (x0 + h, y1));
+                scene.stroke(&Stroke::new(w as f64), Affine::IDENTITY, color, None, &line);
+            }
+            if let Some((c, w)) = s_right {
+                let h = (w as f64) * 0.5;
+                let a = (c.a as f32 * alpha_mul) as u8;
+                let color = Color::from_rgba8(c.r, c.g, c.b, a);
+                let line = Line::new((x1 - h, y0), (x1 - h, y1));
+                scene.stroke(&Stroke::new(w as f64), Affine::IDENTITY, color, None, &line);
+            }
         }
         if let Some((oc, ow, off)) = outline {
             let stroke = Stroke::new(ow as f64);

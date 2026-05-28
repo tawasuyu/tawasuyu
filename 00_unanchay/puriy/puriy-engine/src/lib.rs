@@ -33,7 +33,7 @@ pub use boxes::{
     BoxNode, BoxTree, Color, Display, FormInfo, FormMethod, InputKind, PathCmd, SelectInfo,
     SelectOption, SvgPrim, SvgScene,
 };
-pub use dom::DomTree;
+pub use dom::{DomTree, MetaRefresh};
 pub use fetch::{fetch, FetchError};
 pub use style::{
     AlignItems, AlignSelf, BoxShadow, BoxSizing, ComputedStyle, FlexDirection, FlexWrap, FontStyle,
@@ -77,12 +77,14 @@ impl Engine {
         let styles = StyleEngine::from_dom(&dom);
         let box_tree = boxes::build(&dom, &styles, url);
         let title = dom.title().unwrap_or_default();
+        let meta_refresh = dom.meta_refresh();
         Document {
             url: url.to_string(),
             title,
             source: html.to_string(),
             dom,
             box_tree,
+            meta_refresh,
         }
     }
 }
@@ -102,6 +104,10 @@ pub struct Document {
     pub source: String,
     pub dom: DomTree,
     pub box_tree: BoxTree,
+    /// Si el `<head>` lleva un `<meta http-equiv="refresh">`, contiene
+    /// el delay y URL destino. El chrome lo programa con un sleep en un
+    /// worker thread y dispatcha `Msg::Navigate` cuando vence.
+    pub meta_refresh: Option<MetaRefresh>,
 }
 
 #[derive(Debug, Error)]

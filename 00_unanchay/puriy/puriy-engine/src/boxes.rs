@@ -12,7 +12,7 @@ use markup5ever_rcdom::{Handle, NodeData};
 
 use crate::dom::{self, DomTree};
 use crate::style::{
-    AlignItems, AlignSelf, BoxShadow, BoxSizing, ComputedStyle, FlexDirection, FlexWrap,
+    AlignItems, AlignSelf, BoxShadow, BoxSizing, ComputedStyle, Corners, FlexDirection, FlexWrap,
     GridTrackSize, JustifyContent, LengthVal, LinearGradient, ListStyleType, Outline, Overflow,
     PointerEvents, Position, Sides, StyleEngine, TextAlign, TextDecorationLine, TextShadow,
     TextTransform, Transform, VerticalAlign, Visibility, WhiteSpace,
@@ -88,12 +88,12 @@ pub struct BoxNode {
     /// Multiplicador line-height (font-size * line_height = altura
     /// de línea). `None` → caller usa 1.4 como default.
     pub line_height: Option<f32>,
-    /// Ancho del border en px.
-    pub border_width: f32,
-    /// Color del border. `None` = no se dibuja.
-    pub border_color: Option<Color>,
-    /// Radio corner-radius en px.
-    pub border_radius: f32,
+    /// Ancho del border en px por lado.
+    pub border_widths: Sides<f32>,
+    /// Color del border por lado. `None` = ese lado no se dibuja.
+    pub border_colors: Sides<Option<Color>>,
+    /// Radio corner-radius en px por esquina.
+    pub border_radii: Corners<f32>,
     /// Background a aplicar cuando el nodo está bajo el mouse. `None` =
     /// no hay regla `:hover` que cambie el background del nodo. El
     /// chrome lo plug-ea vía `View::hover_fill`. Restyle completo en
@@ -830,9 +830,9 @@ fn empty_root() -> BoxNode {
         max_width: LengthVal::Auto,
         text_align: TextAlign::Left,
         line_height: None,
-        border_width: 0.0,
-        border_color: None,
-        border_radius: 0.0,
+        border_widths: Sides::all(0.0),
+        border_colors: Sides::all(None),
+        border_radii: Corners::all(0.0),
         hover_background: None,
         focus_background: None,
         box_shadow: None,
@@ -1087,9 +1087,9 @@ fn build_node(
                 max_width: style.max_width,
                 text_align: style.text_align,
                 line_height: style.line_height,
-                border_width: style.border_width,
-                border_color: style.border_color,
-                border_radius: style.border_radius,
+                border_widths: style.border_widths,
+                border_colors: style.border_colors,
+                border_radii: style.border_radii,
                 hover_background,
                 focus_background,
                 box_shadow: style.box_shadow,
@@ -1205,9 +1205,9 @@ fn build_node(
                 max_width: LengthVal::Auto,
                 text_align: p.text_align,
                 line_height: p.line_height,
-                border_width: 0.0,
-                border_color: None,
-                border_radius: 0.0,
+                border_widths: Sides::all(0.0),
+                border_colors: Sides::all(None),
+                border_radii: Corners::all(0.0),
                 hover_background: None,
         focus_background: None,
                 box_shadow: None,
@@ -1286,9 +1286,9 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         max_width: LengthVal::Auto,
         text_align: style.text_align,
         line_height: style.line_height,
-        border_width: 0.0,
-        border_color: None,
-        border_radius: 0.0,
+        border_widths: Sides::all(0.0),
+        border_colors: Sides::all(None),
+        border_radii: Corners::all(0.0),
         hover_background: None,
         focus_background: None,
         box_shadow: None,

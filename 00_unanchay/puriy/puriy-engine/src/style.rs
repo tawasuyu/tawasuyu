@@ -45,12 +45,18 @@ pub struct ComputedStyle {
     /// Altura de línea como multiplicador del font-size. `None` =
     /// default razonable (1.4) en el caller.
     pub line_height: Option<f32>,
-    /// Ancho del border en px. `0` = sin border.
-    pub border_width: f32,
-    /// Color del border. `None` = no se dibuja aunque `border_width > 0`.
-    pub border_color: Option<Color>,
-    /// Radio del corner-radius en px (0 = esquinas vivas).
-    pub border_radius: f32,
+    /// Ancho del border en px por lado. `0` = ese lado sin border.
+    /// El shorthand `border: 2px solid red` setea los 4 lados; las
+    /// propiedades `border-top/right/bottom/left[-width]` los setean
+    /// individualmente.
+    pub border_widths: Sides<f32>,
+    /// Color del border por lado. `None` = ese lado no se dibuja aunque
+    /// `width > 0`. Mismo modelo que `border_widths`.
+    pub border_colors: Sides<Option<Color>>,
+    /// Radio del corner-radius en px por esquina (0 = esquina viva).
+    /// El shorthand `border-radius: 8px` setea las 4; las propiedades
+    /// `border-top-left-radius` etc. las setean individualmente.
+    pub border_radii: Corners<f32>,
     /// `box-shadow` simplificado. `None` = sin sombra.
     pub box_shadow: Option<BoxShadow>,
     /// `text-decoration-line` reducido al subset que pintamos.
@@ -429,6 +435,70 @@ impl Default for Sides<f32> {
     }
 }
 
+/// Valores por esquina (top-left, top-right, bottom-right, bottom-left)
+/// — usado por `border-radius` per-corner. El shorthand `border-radius`
+/// setea las 4; las longhand `border-{top|bottom}-{left|right}-radius`
+/// las setean individualmente.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Corners<T: Copy> {
+    pub top_left: T,
+    pub top_right: T,
+    pub bottom_right: T,
+    pub bottom_left: T,
+}
+
+impl<T: Copy> Corners<T> {
+    pub const fn all(v: T) -> Self {
+        Self { top_left: v, top_right: v, bottom_right: v, bottom_left: v }
+    }
+}
+
+impl Default for Corners<f32> {
+    fn default() -> Self {
+        Self::all(0.0)
+    }
+}
+
+/// Lado de un border (`border-top-width: 2px` → `Top`, etc.).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BorderEdge {
+    Top,
+    Right,
+    Bottom,
+    Left,
+}
+
+/// Esquina de un border-radius (`border-top-left-radius` → `TopLeft`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BorderCorner {
+    TopLeft,
+    TopRight,
+    BottomRight,
+    BottomLeft,
+}
+
+fn set_side<T: Copy>(sides: &mut Sides<T>, edge: BorderEdge, v: T) {
+    match edge {
+        BorderEdge::Top => sides.top = v,
+        BorderEdge::Right => sides.right = v,
+        BorderEdge::Bottom => sides.bottom = v,
+        BorderEdge::Left => sides.left = v,
+    }
+}
+
+fn set_side_f32(sides: &mut Sides<f32>, edge: BorderEdge, v: f32) {
+    set_side(sides, edge, v)
+}
+
+fn set_corner(corners: &mut Corners<f32>, corner: BorderCorner, v: f32) {
+    match corner {
+        BorderCorner::TopLeft => corners.top_left = v,
+        BorderCorner::TopRight => corners.top_right = v,
+        BorderCorner::BottomRight => corners.bottom_right = v,
+        BorderCorner::BottomLeft => corners.bottom_left = v,
+    }
+}
+
 /// Alineación horizontal del contenido inline dentro de un bloque.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextAlign {
@@ -454,9 +524,9 @@ impl Default for ComputedStyle {
             max_width: LengthVal::Auto,
             text_align: TextAlign::Left,
             line_height: None,
-            border_width: 0.0,
-            border_color: None,
-            border_radius: 0.0,
+            border_widths: Sides::all(0.0),
+            border_colors: Sides::all(None),
+            border_radii: Corners::all(0.0),
             box_shadow: None,
             text_decoration: TextDecorationLine::None,
             list_style_type: ListStyleType::Disc,
@@ -1089,7 +1159,13 @@ enum DeclKind {
     /// `border-style: solid` activa el dibujo del border; `none`/`hidden`
     /// lo desactiva (color → None).
     BorderEnabled(bool),
+    /// Variantes per-side: `border-top-width: 2px` setea sólo el top.
+    BorderSideWidth(BorderEdge, f32),
+    BorderSideColor(BorderEdge, Color),
+    BorderSideStyle(BorderEdge, bool),
     BorderRadius(f32),
+    /// `border-top-left-radius` etc. — setean una esquina sola.
+    BorderCornerRadius(BorderCorner, f32),
     /// `None` = `box-shadow: none` (limpia la sombra).
     BoxShadow(Option<BoxShadow>),
     TextDecoration(TextDecorationLine),
@@ -1166,15 +1242,26 @@ impl Decl {
             DeclKind::MaxWidth(v) => s.max_width = *v,
             DeclKind::TextAlign(a) => s.text_align = *a,
             DeclKind::LineHeight(v) => s.line_height = Some(*v),
-            DeclKind::BorderWidth(v) => s.border_width = *v,
-            DeclKind::BorderColor(c) => s.border_color = Some(*c),
+            DeclKind::BorderWidth(v) => s.border_widths = Sides::all(*v),
+            DeclKind::BorderColor(c) => s.border_colors = Sides::all(Some(*c)),
             DeclKind::BorderEnabled(on) => {
                 if !*on {
-                    s.border_color = None;
-                    s.border_width = 0.0;
+                    s.border_colors = Sides::all(None);
+                    s.border_widths = Sides::all(0.0);
                 }
             }
-            DeclKind::BorderRadius(v) => s.border_radius = *v,
+            DeclKind::BorderSideWidth(side, v) => set_side_f32(&mut s.border_widths, *side, *v),
+            DeclKind::BorderSideColor(side, c) => set_side(&mut s.border_colors, *side, Some(*c)),
+            DeclKind::BorderSideStyle(side, on) => {
+                if !*on {
+                    set_side_f32(&mut s.border_widths, *side, 0.0);
+                    set_side(&mut s.border_colors, *side, None);
+                }
+            }
+            DeclKind::BorderRadius(v) => s.border_radii = Corners::all(*v),
+            DeclKind::BorderCornerRadius(corner, v) => {
+                set_corner(&mut s.border_radii, *corner, *v)
+            }
             DeclKind::BoxShadow(v) => s.box_shadow = *v,
             DeclKind::TextDecoration(t) => s.text_decoration = *t,
             DeclKind::ListStyleType(t) => s.list_style_type = *t,
@@ -2075,6 +2162,34 @@ fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> Vec<Decl> {
             out.extend(parse_border_shorthand(value, important));
             continue;
         }
+        if let Some(edge) = match_border_side_prop(prop, "") {
+            out.extend(parse_border_side_shorthand(edge, value, important));
+            continue;
+        }
+        if let Some(edge) = match_border_side_prop(prop, "-width") {
+            if let Some(w) = parse_length_px(value) {
+                out.push(Decl { kind: DeclKind::BorderSideWidth(edge, w), important });
+            }
+            continue;
+        }
+        if let Some(edge) = match_border_side_prop(prop, "-color") {
+            if let Some(c) = parse_color(value) {
+                out.push(Decl { kind: DeclKind::BorderSideColor(edge, c), important });
+            }
+            continue;
+        }
+        if let Some(edge) = match_border_side_prop(prop, "-style") {
+            if let Some(s) = parse_border_style(value) {
+                out.push(Decl { kind: DeclKind::BorderSideStyle(edge, s), important });
+            }
+            continue;
+        }
+        if let Some(corner) = match_border_corner_prop(prop) {
+            if let Some(r) = parse_length_px(value) {
+                out.push(Decl { kind: DeclKind::BorderCornerRadius(corner, r), important });
+            }
+            continue;
+        }
         if prop.eq_ignore_ascii_case("flex") {
             out.extend(parse_flex_shorthand(value, important));
             continue;
@@ -2321,6 +2436,75 @@ fn parse_border_shorthand(value: &str, important: bool) -> Vec<Decl> {
     }
     if let Some(c) = color {
         out.push(Decl { kind: DeclKind::BorderColor(c), important });
+    }
+    out
+}
+
+/// Match propiedades `border-{top|right|bottom|left}{suffix}`. `suffix`
+/// puede ser "" (shorthand), "-width", "-color", o "-style". Devuelve
+/// el `BorderEdge` matcheado, o `None` si no aplica.
+fn match_border_side_prop(prop: &str, suffix: &str) -> Option<BorderEdge> {
+    let lc = prop.to_ascii_lowercase();
+    for (name, edge) in [
+        ("border-top", BorderEdge::Top),
+        ("border-right", BorderEdge::Right),
+        ("border-bottom", BorderEdge::Bottom),
+        ("border-left", BorderEdge::Left),
+    ] {
+        if lc.len() == name.len() + suffix.len()
+            && lc.starts_with(name)
+            && lc[name.len()..].eq_ignore_ascii_case(suffix)
+        {
+            return Some(edge);
+        }
+    }
+    None
+}
+
+/// Match propiedades `border-{top|bottom}-{left|right}-radius`.
+fn match_border_corner_prop(prop: &str) -> Option<BorderCorner> {
+    match prop.to_ascii_lowercase().as_str() {
+        "border-top-left-radius" => Some(BorderCorner::TopLeft),
+        "border-top-right-radius" => Some(BorderCorner::TopRight),
+        "border-bottom-right-radius" => Some(BorderCorner::BottomRight),
+        "border-bottom-left-radius" => Some(BorderCorner::BottomLeft),
+        _ => None,
+    }
+}
+
+/// Shorthand `border-top: <width> <style> <color>` (componentes en
+/// cualquier orden, sólo afecta a un lado). Mismo formato que `border:`
+/// pero las decls resultantes son las variantes per-side.
+fn parse_border_side_shorthand(edge: BorderEdge, value: &str, important: bool) -> Vec<Decl> {
+    let mut width: Option<f32> = None;
+    let mut color: Option<Color> = None;
+    let mut style_on: Option<bool> = None;
+    for tok in value.split_whitespace() {
+        if let Some(w) = parse_length_px(tok) {
+            width = Some(w);
+            continue;
+        }
+        if let Some(c) = parse_color(tok) {
+            color = Some(c);
+            continue;
+        }
+        if let Some(s) = parse_border_style(tok) {
+            style_on = Some(s);
+            continue;
+        }
+    }
+    if style_on.is_none() && (width.is_some() || color.is_some()) {
+        style_on = Some(true);
+    }
+    let mut out = Vec::new();
+    if let Some(on) = style_on {
+        out.push(Decl { kind: DeclKind::BorderSideStyle(edge, on), important });
+    }
+    if let Some(w) = width {
+        out.push(Decl { kind: DeclKind::BorderSideWidth(edge, w), important });
+    }
+    if let Some(c) = color {
+        out.push(Decl { kind: DeclKind::BorderSideColor(edge, c), important });
     }
     out
 }
@@ -3966,16 +4150,69 @@ mod tests {
         });
         assert_eq!(divs.len(), 4);
         let a = eng.compute(&divs[0]);
-        assert!((a.border_width - 2.0).abs() < 1e-6);
-        assert_eq!(a.border_color, Some(Color::rgb(255, 0, 0)));
+        assert!((a.border_widths.top - 2.0).abs() < 1e-6);
+        assert_eq!(a.border_colors.top, Some(Color::rgb(255, 0, 0)));
         let b = eng.compute(&divs[1]);
-        assert!((b.border_width - 1.0).abs() < 1e-6);
-        assert_eq!(b.border_color, Some(Color::rgb(0, 0, 255)));
+        assert!((b.border_widths.top - 1.0).abs() < 1e-6);
+        assert_eq!(b.border_colors.top, Some(Color::rgb(0, 0, 255)));
         let c = eng.compute(&divs[2]);
-        assert_eq!(c.border_color, None); // `none` deshabilita
-        assert!((c.border_width - 0.0).abs() < 1e-6);
+        assert_eq!(c.border_colors.top, None); // `none` deshabilita
+        assert!((c.border_widths.top - 0.0).abs() < 1e-6);
         let d = eng.compute(&divs[3]);
-        assert!((d.border_radius - 8.0).abs() < 1e-6);
+        assert!((d.border_radii.top_left - 8.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn parsea_border_per_side() {
+        // `border-top: 2px solid red` setea sólo el top; `border-bottom-color`
+        // sólo el color del bottom; `border-right-width` sólo el ancho derecho.
+        let html = r#"<html><head><style>
+            div {
+                border-top: 2px solid #ff0000;
+                border-bottom-color: #0000ff;
+                border-bottom-width: 4px;
+                border-bottom-style: solid;
+                border-right-width: 1px;
+                border-right-color: #00ff00;
+                border-right-style: solid;
+            }
+        </style></head><body><div></div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let div = dom.find("div").unwrap();
+        let s = eng.compute(&div);
+        // Top: del shorthand
+        assert!((s.border_widths.top - 2.0).abs() < 1e-6);
+        assert_eq!(s.border_colors.top, Some(Color::rgb(255, 0, 0)));
+        // Bottom: 3 longhand
+        assert!((s.border_widths.bottom - 4.0).abs() < 1e-6);
+        assert_eq!(s.border_colors.bottom, Some(Color::rgb(0, 0, 255)));
+        // Right: 3 longhand
+        assert!((s.border_widths.right - 1.0).abs() < 1e-6);
+        assert_eq!(s.border_colors.right, Some(Color::rgb(0, 0xff, 0)));
+        // Left: no se tocó
+        assert_eq!(s.border_widths.left, 0.0);
+        assert_eq!(s.border_colors.left, None);
+    }
+
+    #[test]
+    fn parsea_border_radius_per_corner() {
+        let html = r#"<html><head><style>
+            div {
+                border-top-left-radius: 4px;
+                border-top-right-radius: 8px;
+                border-bottom-right-radius: 12px;
+                border-bottom-left-radius: 16px;
+            }
+        </style></head><body><div></div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let div = dom.find("div").unwrap();
+        let s = eng.compute(&div);
+        assert!((s.border_radii.top_left - 4.0).abs() < 1e-6);
+        assert!((s.border_radii.top_right - 8.0).abs() < 1e-6);
+        assert!((s.border_radii.bottom_right - 12.0).abs() < 1e-6);
+        assert!((s.border_radii.bottom_left - 16.0).abs() < 1e-6);
     }
 
     #[test]
@@ -3987,9 +4224,9 @@ mod tests {
         let eng = StyleEngine::from_dom(&dom);
         let div = dom.find("div").unwrap();
         let st = eng.compute(&div);
-        assert!((st.border_width - 3.0).abs() < 1e-6);
-        assert_eq!(st.border_color, Some(Color::rgb(0, 0xff, 0)));
-        assert!((st.border_radius - 5.0).abs() < 1e-6);
+        assert!((st.border_widths.top - 3.0).abs() < 1e-6);
+        assert_eq!(st.border_colors.top, Some(Color::rgb(0, 0xff, 0)));
+        assert!((st.border_radii.top_left - 5.0).abs() < 1e-6);
     }
 
     #[test]
@@ -4598,8 +4835,8 @@ mod tests {
         let eng = StyleEngine::from_dom(&dom);
         let d = dom.find("div").unwrap();
         let s = eng.compute(&d);
-        assert!((s.border_width - 3.0).abs() < 1e-6);
-        assert_eq!(s.border_color, Some(Color::rgb(255, 165, 0)));
+        assert!((s.border_widths.top - 3.0).abs() < 1e-6);
+        assert_eq!(s.border_colors.top, Some(Color::rgb(255, 165, 0)));
     }
 
     #[test]
@@ -5026,9 +5263,9 @@ line2</pre></body></html>"#;
         let td = dom.find("td").unwrap();
         let s_th = eng.compute(&th);
         let s_td = eng.compute(&td);
-        assert_eq!(s_th.border_width, 1.0);
-        assert!(s_th.border_color.is_some());
-        assert_eq!(s_td.border_width, 1.0);
+        assert_eq!(s_th.border_widths.top, 1.0);
+        assert!(s_th.border_colors.top.is_some());
+        assert_eq!(s_td.border_widths.top, 1.0);
         assert_eq!(s_th.padding, Sides::all(4.0));
         assert_eq!(s_td.padding, Sides::all(4.0));
         // `<th>` lleva un bg gris claro para destacarlo como header.
