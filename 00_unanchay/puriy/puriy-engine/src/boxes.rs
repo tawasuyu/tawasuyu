@@ -165,6 +165,10 @@ pub struct BoxNode {
     /// del primer render; subsiguientes toggles los gestiona él. Para
     /// nodos que no son `<details>` queda en `false` y no se consulta.
     pub details_open_attr: bool,
+    /// `true` si el `<a>` lleva `target="_blank"` (o cualquier target
+    /// no-self). El chrome lo usa para abrir en nueva pestaña al click.
+    /// `false` para todo lo demás.
+    pub link_new_tab: bool,
 }
 
 /// Imagen RGBA8 lista para que el chrome la envuelva en `peniko::Image`.
@@ -276,6 +280,7 @@ fn empty_root() -> BoxNode {
         link: None,
         image: None,
         details_open_attr: false,
+        link_new_tab: false,
     }
 }
 
@@ -307,6 +312,15 @@ fn build_node(
                 (Some("a"), base) => dom::attr(node, "href").and_then(|h| resolve_href(base, &h)),
                 _ => None,
             };
+            let link_new_tab = tag.as_deref() == Some("a")
+                && dom::attr(node, "target")
+                    .map(|t| {
+                        let t = t.trim().to_ascii_lowercase();
+                        // `_blank` y cualquier target con nombre custom → nueva tab.
+                        // `_self`/`_parent`/`_top` quedan como navegación in-place.
+                        !t.is_empty() && t != "_self" && t != "_parent" && t != "_top"
+                    })
+                    .unwrap_or(false);
             // <img>: descarga + decode sync. Si falla, el campo queda
             // None y el chrome muestra placeholder con el alt.
             let image = if tag.as_deref() == Some("img") {
@@ -401,6 +415,7 @@ fn build_node(
                 image,
                 details_open_attr: tag.as_deref() == Some("details")
                     && dom::attr(node, "open").is_some(),
+                link_new_tab,
             })
         }
         NodeData::Text { contents } => {
@@ -497,6 +512,7 @@ fn build_node(
                 link: None,
                 image: None,
                 details_open_attr: false,
+                link_new_tab: false,
             })
         }
     }
@@ -564,6 +580,7 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         link: None,
         image: None,
         details_open_attr: false,
+        link_new_tab: false,
     }
 }
 
@@ -844,13 +861,39 @@ fn to_roman(n: i32, upper: bool) -> String {
 
 fn resolve_href(base: Option<&url::Url>, href: &str) -> Option<String> {
     let href = href.trim();
-    if href.is_empty() || href.starts_with('#') || href.starts_with("javascript:") {
+    if href.is_empty() {
+        return None;
+    }
+    // Schemes que NO son web: el chrome no debería intentar navegar a ellos.
+    let lc = href.to_ascii_lowercase();
+    if lc.starts_with("javascript:")
+        || lc.starts_with("mailto:")
+        || lc.starts_with("tel:")
+        || lc.starts_with("sms:")
+        || lc.starts_with("data:")
+    {
+        return None;
+    }
+    // Fragmentos puros (`#foo`) — no navegan a una URL distinta. Por
+    // ahora los descartamos; en el futuro deberían scrollear al
+    // elemento con id="foo".
+    if href.starts_with('#') {
         return None;
     }
     if let Ok(abs) = url::Url::parse(href) {
-        return Some(abs.into());
+        // Sólo http/https son navegables por puriy hoy. file://, ftp://,
+        // etc. quedan ignorados para no romper la pestaña.
+        return match abs.scheme() {
+            "http" | "https" | "about" => Some(abs.into()),
+            _ => None,
+        };
     }
-    base.and_then(|b| b.join(href).ok()).map(Into::into)
+    base.and_then(|b| b.join(href).ok()).and_then(|abs| {
+        match abs.scheme() {
+            "http" | "https" | "about" => Some(abs.into()),
+            _ => None,
+        }
+    })
 }
 
 impl ComputedStyle {
@@ -1179,6 +1222,64 @@ mod tests {
             "esperaba `bar` dentro de strong en {:?}",
             texts
         );
+    }
+
+    #[test]
+    fn link_target_blank_marca_link_new_tab() {
+        let html = r#"<html><body>
+            <a href="https://a.test/" target="_blank">A</a>
+            <a href="https://b.test/">B</a>
+            <a href="https://c.test/" target="_self">C</a>
+        </body></html>"#;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut links: Vec<(String, bool)> = Vec::new();
+        doc.box_tree.walk(|b| {
+            if b.tag.as_deref() == Some("a") {
+                if let Some(target) = &b.link {
+                    links.push((target.clone(), b.link_new_tab));
+                }
+            }
+        });
+        assert!(links.iter().any(|(u, nt)| u.contains("a.test") && *nt));
+        assert!(links.iter().any(|(u, nt)| u.contains("b.test") && !*nt));
+        assert!(links.iter().any(|(u, nt)| u.contains("c.test") && !*nt));
+    }
+
+    #[test]
+    fn link_mailto_y_tel_y_javascript_se_ignoran() {
+        let html = r#"<html><body>
+            <a href="mailto:foo@bar">M</a>
+            <a href="tel:+541112345678">T</a>
+            <a href="javascript:alert(1)">J</a>
+            <a href="data:text/plain,hi">D</a>
+            <a href="ftp://example.com/">F</a>
+        </body></html>"#;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut clickable: Vec<String> = Vec::new();
+        doc.box_tree.walk(|b| {
+            if b.tag.as_deref() == Some("a") {
+                if let Some(t) = &b.link {
+                    clickable.push(t.clone());
+                }
+            }
+        });
+        assert!(clickable.is_empty(), "ningún href no-web debería ser clickable: {clickable:?}");
+    }
+
+    #[test]
+    fn link_fragmento_se_ignora() {
+        let html = r##"<html><body><a href="#top">arriba</a></body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut any_link = false;
+        doc.box_tree.walk(|b| {
+            if b.link.is_some() {
+                any_link = true;
+            }
+        });
+        assert!(!any_link, "fragmento puro #top no debería resolverse a una URL navegable");
     }
 
     #[test]

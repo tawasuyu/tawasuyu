@@ -227,6 +227,9 @@ pub enum Msg {
     },
     LoadFailed { tab: TabId, gen: u64, err: String },
     Navigate(String),
+    /// Igual que Navigate pero arranca en una pestaña nueva — usado por
+    /// `<a target="_blank">` y middle-click sobre links (ese día llega).
+    NavigateNewTab(String),
     Scroll(f32),
     FocusAddr,
     AddrKey(KeyEvent),
@@ -461,6 +464,15 @@ impl App for Puriy {
                 m.panel = None;
                 m.panel_filter.clear();
                 start_load(&mut m, target, /* push_history */ true, handle);
+            }
+            Msg::NavigateNewTab(target) => {
+                let mut tab = TabState::new(target.clone());
+                tab.gen = 1;
+                spawn_load(tab.id, tab.gen, target, handle.clone());
+                m.tabs.push(tab);
+                m.active = m.tabs.len() - 1;
+                m.panel = None;
+                m.panel_filter.clear();
             }
             Msg::Scroll(dy) => {
                 let t = m.active_mut();
@@ -1608,7 +1620,12 @@ fn render_box(
 
     if let Some(target) = &b.link {
         if pe_active {
-            view = view.on_click(Msg::Navigate(target.clone()));
+            let msg = if b.link_new_tab {
+                Msg::NavigateNewTab(target.clone())
+            } else {
+                Msg::Navigate(target.clone())
+            };
+            view = view.on_click(msg);
         }
     }
 
@@ -1674,6 +1691,7 @@ fn render_box(
                         c,
                         target,
                         link_color,
+                        b.link_new_tab,
                         zoom,
                         find_query_lc,
                         find_current,
@@ -1749,6 +1767,7 @@ fn render_link_subtree(
     b: &BoxNode,
     target: &str,
     color: Color,
+    new_tab: bool,
     zoom: f32,
     find_query_lc: &str,
     find_current: usize,
@@ -1762,7 +1781,14 @@ fn render_link_subtree(
     if b.tag.as_deref() == Some("details") {
         skip_count_details(b, details_counter);
     }
-    let mut view = View::new(box_style(b, zoom)).on_click(Msg::Navigate(target.to_string()));
+    let nav_msg = |t: &str| {
+        if new_tab {
+            Msg::NavigateNewTab(t.to_string())
+        } else {
+            Msg::Navigate(t.to_string())
+        }
+    };
+    let mut view = View::new(box_style(b, zoom)).on_click(nav_msg(target));
     let find_hit = !find_query_lc.is_empty()
         && b.text
             .as_ref()
@@ -1789,7 +1815,7 @@ fn render_link_subtree(
         let peniko = PenikoImage::new(blob, ImageFormat::Rgba8, img.width, img.height);
         return image_view(img.width, img.height, zoom)
             .image(peniko)
-            .on_click(Msg::Navigate(target.to_string()));
+            .on_click(nav_msg(target));
     }
     if let Some(text) = &b.text {
         let base = if b.font_weight >= 600 { b.font_size * 1.1 } else { b.font_size };
@@ -1805,6 +1831,7 @@ fn render_link_subtree(
                         c,
                         target,
                         color,
+                        new_tab,
                         zoom,
                         find_query_lc,
                         find_current,
