@@ -65,6 +65,40 @@ enum Cmd {
         #[command(subcommand)]
         op: CanalOp,
     },
+    /// Operaciones host-side específicas de wawa: forjar pubkey
+    /// para el AGORA_AUTH_RING + forjar propuestas de manifiesto.
+    Wawa {
+        #[command(subcommand)]
+        op: WawaOp,
+    },
+}
+
+#[derive(Subcommand)]
+enum WawaOp {
+    /// Forja un par Ed25519 nuevo, guarda la seed cifrada en el
+    /// keystore y escribe la pubkey (32 B raw + 64 chars hex) a stdout.
+    /// Útil para alimentar el AGORA_AUTH_RING de wawa-kernel en la
+    /// ceremonia de la Fase 48: la pubkey va al binario, la seed queda
+    /// offline en el HSM/USB del operador.
+    ForjarClave {
+        #[arg(long, default_value = "wawa-soberano")]
+        name: String,
+    },
+    /// Toma un hash de manifiesto + una identidad propia y produce un
+    /// `format::ManifiestoFirmado` postcard de 128 bytes, listo para
+    /// embeber en `apps/mudanza/src/propuesta_demo.bin` o emitir por
+    /// `MensajeAkasha::AnunciarCanal`.
+    ForjarPropuesta {
+        /// Identidad firmante (debe estar en el keystore local).
+        #[arg(long)]
+        como: String,
+        /// Hash hex (64 chars) del manifiesto a anclar.
+        #[arg(long)]
+        hash: String,
+        /// Archivo de salida con los 128 bytes raw.
+        #[arg(long)]
+        salida: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -111,6 +145,12 @@ enum IdentidadOp {
         /// Tipo: person, community, alliance, institution.
         #[arg(long, value_enum, default_value_t = KindArg::Person)]
         kind: KindArg,
+        /// Lee la seed de stdin en vez de generarla con CSPRNG. Acepta
+        /// 64 chars hex (más espacios/saltos de línea) o exactamente
+        /// 32 bytes raw. Útil para restaurar identidades desde un
+        /// backup offline.
+        #[arg(long)]
+        seed_stdin: bool,
     },
     /// Lista todas las identidades del grafo (★ = seed propia).
     Listar,
@@ -301,6 +341,36 @@ fn parse_hash(s: &str) -> CliResult<[u8; 32]> {
     parse_hex_32(s).map_err(|_| Error::HashInvalido(s.to_string()))
 }
 
+/// Lee una seed de 32 bytes desde stdin. Acepta dos formatos:
+/// - 64 chars hex (con whitespace/newlines tolerados — `s.trim()` +
+///   strip de espacios internos).
+/// - exactamente 32 bytes binarios raw.
+///
+/// Elige por largo del input: si después de strip ascii whitespace
+/// queda exactamente 64, intenta parsear como hex; si los bytes raw
+/// suman 32, los usa tal cual; otra cosa es error.
+fn leer_seed_de_stdin() -> CliResult<[u8; 32]> {
+    use std::io::Read;
+    let mut buf = Vec::with_capacity(64);
+    std::io::stdin().read_to_end(&mut buf)?;
+    // Strip de whitespace para el caso hex.
+    let sin_ws: Vec<u8> = buf.iter().copied().filter(|b| !b.is_ascii_whitespace()).collect();
+    if sin_ws.len() == 64 {
+        let s = std::str::from_utf8(&sin_ws).map_err(|_| Error::HexInvalido("(stdin)".into()))?;
+        return parse_hex_32(s).map_err(|_| Error::HexInvalido(s.to_string()));
+    }
+    if buf.len() == 32 {
+        let mut seed = [0u8; 32];
+        seed.copy_from_slice(&buf);
+        return Ok(seed);
+    }
+    Err(Error::HexInvalido(format!(
+        "stdin: se esperaba 64 chars hex (recibí {} sin whitespace) o 32 bytes raw (recibí {})",
+        sin_ws.len(),
+        buf.len()
+    )))
+}
+
 fn hex_de(b: &[u8]) -> String {
     let mut out = String::with_capacity(b.len() * 2);
     for x in b {
@@ -325,7 +395,9 @@ fn kind_label(k: IdentityKind) -> &'static str {
 fn run(cmd: Cmd) -> CliResult<()> {
     match cmd {
         Cmd::Identidad { op } => match op {
-            IdentidadOp::Nueva { name, kind } => identidad_nueva(name, kind.into()),
+            IdentidadOp::Nueva { name, kind, seed_stdin } => {
+                identidad_nueva(name, kind.into(), seed_stdin)
+            }
             IdentidadOp::Listar => identidad_listar(),
             IdentidadOp::Exportar { id } => identidad_exportar(&id),
         },
@@ -340,13 +412,24 @@ fn run(cmd: Cmd) -> CliResult<()> {
             CanalOp::Verificar { archivo } => canal_verificar(&archivo),
             CanalOp::Mostrar { archivo } => canal_mostrar(&archivo),
         },
+        Cmd::Wawa { op } => match op {
+            WawaOp::ForjarClave { name } => wawa_forjar_clave(&name),
+            WawaOp::ForjarPropuesta { como, hash, salida } => {
+                wawa_forjar_propuesta(&como, &hash, &salida)
+            }
+        },
     }
 }
 
-fn identidad_nueva(name: String, kind: IdentityKind) -> CliResult<()> {
+fn identidad_nueva(name: String, kind: IdentityKind, seed_stdin: bool) -> CliResult<()> {
     let mut s = Sesion::abrir()?;
-    let mut seed = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut seed);
+    let seed = if seed_stdin {
+        leer_seed_de_stdin()?
+    } else {
+        let mut seed = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut seed);
+        seed
+    };
     let kp = Keypair::from_seed(seed);
     let id = kp.identity_id();
     s.keystore
@@ -597,6 +680,68 @@ fn canal_mostrar(archivo: &Path) -> CliResult<()> {
             raiz = hex_de(&raiz.raiz_manifiesto)
         );
     }
+    Ok(())
+}
+
+// =============================================================================
+//  Wawa host-side
+// =============================================================================
+
+fn wawa_forjar_clave(name: &str) -> CliResult<()> {
+    let mut s = Sesion::abrir()?;
+    let mut seed = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut seed);
+    let kp = Keypair::from_seed(seed);
+    let id = kp.identity_id();
+    s.keystore.save(id, &seed, &s.passphrase).map_err(Error::Keystore)?;
+    s.graph.register(kp.identity(IdentityKind::Person, name));
+    s.guardar()?;
+
+    println!("clave forjada para AGORA_AUTH_RING:");
+    println!("  id     {}", hex_de(id.as_bytes()));
+    println!("  pubkey {}", hex_de(&kp.public_key()));
+    println!();
+    println!("Para empotrar en wawa-kernel/src/claves.rs:");
+    println!("  pub const AGORA_AUTH_RING: [[u8; 32]; N] = [");
+    println!("      // slot X :: {name}");
+    print!("      [");
+    for (i, b) in kp.public_key().iter().enumerate() {
+        if i % 8 == 0 {
+            println!();
+            print!("          ");
+        }
+        print!("0x{b:02x}, ");
+    }
+    println!();
+    println!("      ],");
+    println!("      // ... otros slots");
+    println!("  ];");
+    println!();
+    println!("La seed correspondiente vive cifrada en el keystore local.");
+    println!("Hacer backup con: agora-cli identidad exportar {id}");
+    Ok(())
+}
+
+fn wawa_forjar_propuesta(como: &str, hash_hex: &str, salida: &Path) -> CliResult<()> {
+    let s = Sesion::abrir()?;
+    let como_id = s.resolver_id(como)?;
+    let kp = s.cargar_keypair(como_id)?;
+    let manifiesto_hash = parse_hash(hash_hex)?;
+    let mf = agora_channel::firmar_manifiesto(&kp, &manifiesto_hash);
+    let bytes = mf.serializar().map_err(Error::Canal)?;
+    if bytes.len() != 128 {
+        return Err(Error::Canal("ManifiestoFirmado postcard ≠ 128 bytes (contrato roto)"));
+    }
+    fs::write(salida, &bytes)?;
+    println!("propuesta forjada: {} bytes → {}", bytes.len(), salida.display());
+    println!("  manifiesto_hash : {}", hex_de(&manifiesto_hash));
+    println!("  autor (pubkey)  : {}", hex_de(&mf.autor));
+    println!("  firma           : {}...{} (64 B)", hex_de(&mf.firma[..4]), hex_de(&mf.firma[60..]));
+    println!();
+    println!("Para que wawa-kernel lo acepte, la pubkey del autor debe");
+    println!("estar en AGORA_AUTH_RING de claves.rs. Si no está, mudanza");
+    println!("la verifica en userspace OK y el kernel responde con");
+    println!("CapacidadInsuficiente.");
     Ok(())
 }
 
