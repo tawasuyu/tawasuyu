@@ -66,6 +66,19 @@ enum ComposeField {
     Value,
 }
 
+/// Pantalla activa. `Unlock` pide la passphrase; `Main` muestra los
+/// cuatro tiles. La transición la dispara `Msg::UnlockSubmit` cuando la
+/// passphrase desbloquea al menos una seed (o el keystore está vacío).
+enum Screen {
+    Unlock {
+        input: TextInputState,
+        /// Mensaje al pie: vacío hasta el primer intento; al fallar,
+        /// "passphrase incorrecta".
+        status: String,
+    },
+    Main,
+}
+
 struct Model {
     graph: TrustGraph,
     keystore: Keystore,
@@ -76,6 +89,7 @@ struct Model {
     seeds: std::collections::HashMap<IdentityId, [u8; 32]>,
     passphrase: String,
     store_path: PathBuf,
+    screen: Screen,
     tiles_order: Vec<Tile>,
 
     /// Identidad seleccionada como sujeto (objetivo del próximo claim).
@@ -110,6 +124,61 @@ impl Model {
             .and_then(|id| self.seeds.get(&id).copied())
             .map(Keypair::from_seed)
     }
+
+    /// Intenta desbloquear todas las seeds del keystore con
+    /// `self.passphrase`. Sólo guarda las que descifran; el resto se
+    /// loguea a stderr y se omite.
+    fn desbloquear_seeds_silencioso(&mut self) {
+        let ids = self.keystore.list().unwrap_or_default();
+        for id in ids {
+            match self.keystore.load(id, &self.passphrase) {
+                Ok(seed) => {
+                    self.seeds.insert(id, seed);
+                }
+                Err(e) => {
+                    eprintln!("agora-app: no pude desbloquear {id}: {e}");
+                }
+            }
+        }
+    }
+
+    /// Versión "estricta" para la pantalla de unlock: requiere que
+    /// **todas** las seeds del keystore descifren contra `passphrase`.
+    /// Devuelve `true` si pasó (y deja `self.seeds` poblada).
+    fn intentar_unlock(&mut self, passphrase: &str) -> bool {
+        let ids = self.keystore.list().unwrap_or_default();
+        let mut nuevas = std::collections::HashMap::new();
+        for id in &ids {
+            match self.keystore.load(*id, passphrase) {
+                Ok(seed) => {
+                    nuevas.insert(*id, seed);
+                }
+                Err(_) => return false,
+            }
+        }
+        self.seeds = nuevas;
+        self.passphrase = passphrase.to_string();
+        true
+    }
+
+    /// Si el grafo no registra una identidad mía conocida (p. ej. el
+    /// archivo se borró pero el keystore sobrevivió), la registra
+    /// de nuevo como Person con un nombre genérico.
+    fn registrar_identidades_huerfanas(&mut self) {
+        let huerfanas: Vec<_> = self
+            .seeds
+            .iter()
+            .filter(|(id, _)| self.graph.identity(**id).is_none())
+            .map(|(_id, seed)| {
+                let kp = Keypair::from_seed(*seed);
+                let n = self.graph.identity_count();
+                kp.identity(IdentityKind::Person, format!("yo {}", n + 1))
+            })
+            .collect();
+        for ident in huerfanas {
+            self.graph.register(ident);
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -138,6 +207,15 @@ enum Msg {
     SliderMinThird(DragPhase, f32),
     /// Toggle de `accept_self`.
     ToggleAcceptSelf,
+
+    /// El archivo `graph.json` cambió en disco (lo escribió otro proceso,
+    /// típicamente `agora-cli`). Recarga el grafo desde el snapshot.
+    ArchivoCambio,
+
+    /// Tecla aplicada al input de passphrase en la pantalla de unlock.
+    UnlockKey(KeyEvent),
+    /// Intenta desbloquear el keystore con la passphrase actual.
+    UnlockSubmit,
 }
 
 // =============================================================================
@@ -158,24 +236,26 @@ impl App for AgoraApp {
         (1200, 760)
     }
 
-    fn init(_: &Handle<Msg>) -> Model {
+    fn init(handle: &Handle<Msg>) -> Model {
         let data_dir = directories::ProjectDirs::from("net", "gioser", "agora")
             .map(|p| p.data_dir().to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."));
         std::fs::create_dir_all(&data_dir).ok();
         let store_path = data_dir.join("graph.json");
 
-        let passphrase = std::env::var("AGORA_PASSPHRASE").unwrap_or_else(|_| {
-            eprintln!(
-                "agora-app: usando passphrase de desarrollo \"agora-dev\". \
-                 Setear AGORA_PASSPHRASE para producción."
-            );
-            "agora-dev".to_string()
-        });
+        // Watcher del directorio padre — vigila renames y crear/borrar
+        // del archivo aunque aún no exista (agora-store::save escribe a
+        // un tmp y rename atómico).
+        arranca_watcher(handle.clone(), data_dir.clone());
 
+        // Si AGORA_PASSPHRASE está en env, vamos directo a Main
+        // intentando desbloquear con esa passphrase. Si no, mostramos
+        // la pantalla de unlock — salvo que el keystore esté vacío,
+        // en cuyo caso no hay nada que desbloquear y vamos a Main con
+        // la passphrase default ("agora-dev").
+        let env_pass = std::env::var("AGORA_PASSPHRASE").ok();
         let keystore = Keystore::open_default()
             .unwrap_or_else(|e| panic!("agora-app: no pude abrir el keystore: {e}"));
-
         let graph = if store_path.exists() {
             agora_store::load(&store_path).unwrap_or_else(|e| {
                 eprintln!("agora-app: no pude cargar el grafo ({e}); empiezo vacío.");
@@ -185,45 +265,23 @@ impl App for AgoraApp {
             TrustGraph::new()
         };
 
-        // Desbloquear todas las identidades mías al arrancar. Si una
-        // falla, se omite — el usuario verá que no puede firmar con ella.
-        let mut seeds = std::collections::HashMap::new();
-        for id in keystore.list().unwrap_or_default() {
-            match keystore.load(id, &passphrase) {
-                Ok(seed) => {
-                    seeds.insert(id, seed);
-                }
-                Err(e) => {
-                    eprintln!("agora-app: no pude desbloquear {id}: {e}");
-                }
-            }
-        }
+        let ids_keystore = keystore.list().unwrap_or_default();
+        let necesita_unlock = !ids_keystore.is_empty() && env_pass.is_none();
 
-        // Si el grafo no registra una identidad mía conocida (p. ej. el
-        // archivo se borró pero el keystore sobrevivió), la registramos
-        // de nuevo como Person con un nombre genérico.
-        let to_register: Vec<_> = seeds
-            .iter()
-            .filter(|(id, _)| graph.identity(**id).is_none())
-            .map(|(_id, seed)| {
-                let kp = Keypair::from_seed(*seed);
-                let n = graph.identity_count();
-                kp.identity(IdentityKind::Person, format!("yo {}", n + 1))
-            })
-            .collect();
-        let mut graph = graph;
-        for ident in to_register {
-            graph.register(ident);
-        }
-
-        let active_signer = seeds.keys().next().copied();
-
-        Model {
+        let mut model = Model {
             graph,
             keystore,
-            seeds,
-            passphrase,
+            seeds: std::collections::HashMap::new(),
+            passphrase: env_pass.unwrap_or_else(|| "agora-dev".to_string()),
             store_path,
+            screen: if necesita_unlock {
+                Screen::Unlock {
+                    input: TextInputState::masked(),
+                    status: String::new(),
+                }
+            } else {
+                Screen::Main
+            },
             tiles_order: vec![
                 Tile::Identidades,
                 Tile::Compositor,
@@ -231,14 +289,21 @@ impl App for AgoraApp {
                 Tile::Politica,
             ],
             focused_subject: None,
-            active_signer,
+            active_signer: None,
             selected_attestation: None,
             compose_predicate: TextInputState::new(),
             compose_value: TextInputState::new(),
             compose_focus: ComposeField::Predicate,
             compose_status: String::new(),
             policy: TrustPolicy::default(),
+        };
+
+        if !necesita_unlock {
+            model.desbloquear_seeds_silencioso();
+            model.active_signer = model.seeds.keys().next().copied();
+            model.registrar_identidades_huerfanas();
         }
+        model
     }
 
     fn update(mut model: Model, msg: Msg, _: &Handle<Msg>) -> Model {
@@ -352,6 +417,62 @@ impl App for AgoraApp {
             Msg::ToggleAcceptSelf => {
                 model.policy.accept_self = !model.policy.accept_self;
             }
+
+            Msg::UnlockKey(ev) => {
+                if let Screen::Unlock { input, .. } = &mut model.screen {
+                    input.apply_key(&ev);
+                }
+            }
+
+            Msg::UnlockSubmit => {
+                // Sacamos primero la passphrase del input para liberar
+                // el borrow de `model.screen` antes de mutar otras
+                // partes de `model` desde `intentar_unlock`.
+                let pass_intentada = if let Screen::Unlock { input, .. } = &model.screen {
+                    Some(input.text())
+                } else {
+                    None
+                };
+                if let Some(pass) = pass_intentada {
+                    if model.intentar_unlock(&pass) {
+                        model.registrar_identidades_huerfanas();
+                        model.active_signer = model.seeds.keys().next().copied();
+                        model.screen = Screen::Main;
+                    } else if let Screen::Unlock { input, status } = &mut model.screen {
+                        *status = "passphrase incorrecta".into();
+                        input.clear();
+                    }
+                }
+            }
+
+            Msg::ArchivoCambio => {
+                // Otro proceso (típicamente agora-cli) escribió
+                // graph.json. Releemos. agora-store::save es atómico
+                // (tmp+rename), así que load siempre ve estado
+                // consistente. Si falla, dejamos el grafo en memoria
+                // intacto y logueamos.
+                match agora_store::load(&model.store_path) {
+                    Ok(g) => {
+                        // Conservamos selecciones si las identidades
+                        // siguen existiendo en el nuevo grafo. Si no,
+                        // las limpiamos.
+                        if let Some(id) = model.focused_subject {
+                            if g.identity(id).is_none() {
+                                model.focused_subject = None;
+                            }
+                        }
+                        if let Some(idx) = model.selected_attestation {
+                            if idx >= g.attestations().len() {
+                                model.selected_attestation = None;
+                            }
+                        }
+                        model.graph = g;
+                    }
+                    Err(e) => {
+                        eprintln!("agora-app: no pude recargar graph.json ({e}); sigo con el grafo en memoria.");
+                    }
+                }
+            }
         }
         model
     }
@@ -359,6 +480,14 @@ impl App for AgoraApp {
     fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
         if event.state != KeyState::Pressed {
             return None;
+        }
+        // En la pantalla de unlock todas las teclas van al input;
+        // Enter dispara el intento de desbloqueo.
+        if matches!(model.screen, Screen::Unlock { .. }) {
+            if let Key::Named(NamedKey::Enter) = &event.key {
+                return Some(Msg::UnlockSubmit);
+            }
+            return Some(Msg::UnlockKey(event.clone()));
         }
         // Tab cicla campo focado en el compositor.
         if let Key::Named(NamedKey::Tab) = &event.key {
@@ -376,6 +505,9 @@ impl App for AgoraApp {
 
     fn view(model: &Model) -> View<Msg> {
         let theme = Theme::dark();
+        if matches!(model.screen, Screen::Unlock { .. }) {
+            return unlock_view(model, &theme);
+        }
         let palette = TiledPalette::from_theme(&theme);
 
         let tiles: Vec<TileSpec<Msg>> = model
@@ -407,6 +539,137 @@ impl App for AgoraApp {
             &palette,
         )
     }
+}
+
+// =============================================================================
+//  Pantalla: Unlock
+// =============================================================================
+
+fn unlock_view(model: &Model, theme: &Theme) -> View<Msg> {
+    let (input, status_text) = match &model.screen {
+        Screen::Unlock { input, status } => (input, status.as_str()),
+        Screen::Main => unreachable!("unlock_view sólo se llama con Screen::Unlock"),
+    };
+    let input_palette = TextInputPalette::from_theme(theme);
+
+    let titulo = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(40.0_f32),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(
+        "ágora · desbloqueo".to_string(),
+        24.0,
+        theme.accent,
+        Alignment::Center,
+    );
+
+    let hint = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(22.0_f32),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .text_aligned(
+        "passphrase del keystore (Enter desbloquea)".to_string(),
+        12.0,
+        theme.fg_muted,
+        Alignment::Center,
+    );
+
+    let input_view = View::new(Style {
+        size: Size {
+            width: length(360.0_f32),
+            height: length(36.0_f32),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .children(vec![text_input_view(
+        input,
+        "•••",
+        true,
+        &input_palette,
+        Msg::UnlockSubmit, // click en el input no cambia foco — sólo hay uno
+    )]);
+
+    let status = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(22.0_f32),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .text_aligned(
+        if status_text.is_empty() {
+            String::new()
+        } else {
+            status_text.to_string()
+        },
+        12.0,
+        theme.fg_destructive,
+        Alignment::Center,
+    );
+
+    let boton = button_styled(
+        "desbloquear",
+        Style {
+            size: Size {
+                width: length(360.0_f32),
+                height: length(34.0_f32),
+            },
+            padding: edge_padding(10.0, 0.0),
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        },
+        Alignment::Center,
+        &button_palette_primary(theme),
+        Msg::UnlockSubmit,
+    );
+
+    let card = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: length(420.0_f32),
+            height: length(260.0_f32),
+        },
+        padding: Rect {
+            left: length(20.0_f32),
+            right: length(20.0_f32),
+            top: length(24.0_f32),
+            bottom: length(20.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(10.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .radius(8.0)
+    .children(vec![titulo, hint, spacer(8.0), input_view, boton, status]);
+
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children(vec![card])
 }
 
 // =============================================================================
@@ -881,6 +1144,36 @@ fn button_palette_secondary(t: &Theme) -> ButtonPalette {
 // =============================================================================
 //  Entrypoint
 // =============================================================================
+
+/// Lanza un watcher de filesystem sobre `dir` y dispatcha
+/// [`Msg::ArchivoCambio`] cada vez que notify reporta un evento OK.
+/// El callback es coarse — no distingue qué archivo cambió ni qué tipo
+/// de evento; el `update` decide si el cambio es relevante reintentando
+/// el `load`. El `Watcher` se "leakea" deliberadamente con
+/// `mem::forget`: tiene que vivir mientras el proceso corra y la app
+/// no tiene un buen lugar donde almacenarlo dentro del Model (es
+/// `!Send` en algunos backends de notify y el Model debe ser
+/// estructurado simple).
+fn arranca_watcher(handle: Handle<Msg>, dir: PathBuf) {
+    use notify::{RecursiveMode, Watcher};
+    let watcher_res = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        if res.is_ok() {
+            handle.dispatch(Msg::ArchivoCambio);
+        }
+    });
+    let mut watcher = match watcher_res {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("agora-app: no pude arrancar el watcher ({e}); cambios externos al grafo no se reflejarán hasta reiniciar.");
+            return;
+        }
+    };
+    if let Err(e) = watcher.watch(&dir, RecursiveMode::NonRecursive) {
+        eprintln!("agora-app: no pude vigilar {} ({e}); cambios externos al grafo no se reflejarán.", dir.display());
+        return;
+    }
+    std::mem::forget(watcher);
+}
 
 fn main() {
     llimphi_ui::run::<AgoraApp>();

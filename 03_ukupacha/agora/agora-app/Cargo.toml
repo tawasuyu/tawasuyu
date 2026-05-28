@@ -26,3 +26,4 @@ llimphi-widget-slider = { workspace = true }
 llimphi-widget-button = { workspace = true }
 directories = { workspace = true }
 rand = { workspace = true }
+notify = { workspace = true }
