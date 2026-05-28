@@ -4,19 +4,24 @@
 
 ## Tesis
 
-Adaptar **Servo** (motor web Rust) como engine de DOM/CSS/JS/networking, y delegar **TODO el render** a [[Llimphi]]. Resultado: un navegador que corre idéntico en:
+Motor web propio en Rust, soberano, con render delegado a [[Llimphi]]. Resultado: un navegador que corre idéntico en:
 
 - **Linux/Wayland** — Llimphi monta sobre `mirada` (compositor).
 - **Wawa bare-metal** — Llimphi monta sobre framebuffer directo (sin OS).
 
 Una sola pila gráfica (`wgpu + vello + taffy + DAG monádico`), una sola superficie abstracta (`llimphi-hal::Surface`), dos targets.
 
-## Por qué Servo, no Chromium/WebKit
+### Historia: de Servo a arquitectura propia
+
+La tesis original era **embebar Servo entero** (`script + style + layout + net`) y sustituir webrender por Llimphi. En la decisión del 2026-05-26 (Opción A pragmática) optamos por usar **sólo crates puntuales de upstream** — `html5ever` y `markup5ever_rcdom` para parsear HTML, `cssparser` como anchor; el resto (style engine, cascade, layout, render, networking) es **propio**. A medida que el motor maduró (selectores compound + combinadores + atributos + pseudoclases estructurales + nth-child + not + hover + focus + cascada con especificidad + !important + var() + calc() + pseudo-elements ::before/::after), quedó claro que NO vamos a "adoptar Stylo entero" — la pila propia ya está más alineada con Llimphi y con wawa que cualquier port de Servo. Servo quedó como inspiración inicial, no como dependencia arquitectónica.
+
+## Por qué motor propio en Rust
 
 - **Rust nativo** — sin FFI a C++. Tipos seguros, sin segfaults heredados.
-- **Modular** — `servo` se compone de crates separados (style, layout, script, net) embebibles individualmente.
-- **Sin política corporativa** — no Google, no Apple, no Mozilla mainstream. Linux Foundation desde 2024.
-- **Compatible con wawa** — Servo no asume X11/Win32/macOS. Su superficie es abstraíble.
+- **Sin runtime corporativo** — no Chromium, no WebKit, no Stylo upstream.
+- **Compatible con wawa** — el motor no asume threadpool, ni libc, ni allocator. Selectores y cascada compilan en `no_std` (la separación está en progreso).
+- **Bridge directo a Llimphi** — el box tree pasa a `llimphi-raster` sin display lists intermedios.
+- **Crates upstream usados** — sólo parsers (`html5ever 0.39`, `markup5ever_rcdom 0.39`, `cssparser 0.35` como anchor) + `ureq` para net + `url` para resolución. El resto es propio.
 
 ## Anatomía — 4 crates
 
@@ -30,9 +35,9 @@ Una sola pila gráfica (`wgpu + vello + taffy + DAG monádico`), una sola superf
    │                    (toolbar, tabs, address bar, bookmarks)
    │                    Construido sobre llimphi-ui (DAG monádico)
    ▼
-2. puriy-engine       — Bridge a Servo
-   │                    (embebe script + style + layout + net)
-   │                    Output: primitivas geométricas → llimphi-raster
+2. puriy-engine       — Motor propio en Rust
+   │                    (parser HTML via html5ever; style+cascade+layout+net propio)
+   │                    Output: BoxTree → llimphi-raster vía puriy-llimphi
    ▼
 1. puriy-core         — Modelo agnóstico
    │                    (sesiones, tabs, history, bookmarks, perfiles)
@@ -113,6 +118,14 @@ Una sola pila gráfica (`wgpu + vello + taffy + DAG monádico`), una sola superf
 - **Estado Fase 4:** CERRADA. Lo que queda es para fases siguientes: font-weight axis real (depende de llimphi-text), fetch async paralelo de assets (refactor del worker), `:hover` restyle completo (color/border), `:focus`/`:active`, JS engine via Servo `script` crate (Fase 5+).
 - **Fase 5.1 (2026-05-27):** Feature polish CSS. (a) **`box-shadow`** — `ComputedStyle.box_shadow: Option<BoxShadow { offset_x, offset_y, blur_px, spread_px, color }>`. Parser acepta `2px 4px [blur] [spread] <color>` y `none`. En el chrome, `apply_decorations` (renombra de `apply_border`) pinta sombra + border en una sola closure de `paint_with`: vello `Fill::NonZero` sobre `RoundedRect` expandido por `blur+spread`, alpha ajustado según blur (aproximación sin gaussian blur multi-pass). (b) **`:nth-child(an+b)` y `:not(simple)`** — `Pseudo` gana `NthChild { a, b }` y `Not(Box<Compound>)`. Parser detecta `:name(args)` y consume hasta `)`. `parse_nth_arg` acepta `odd`/`even`/`N`/`an`/`an+b`/`an-b`/`-n+b`. `:not(...)` rechaza recursión y combinadores en el arg. Specificity: `:not(X)` aporta la especificidad de X (CSS spec). (c) **Cache TTL con `Cache-Control`** — entries ahora son `(bytes, expires_at: u64)`. `fetch_bytes` lee `Cache-Control` post-response, parsea `max-age=N`, computa `expires_at = now + N` y llama `put_with_expiry`. Headers con `no-store`/`no-cache` se cachean sin TTL (que es como sin cache header — equivalente conservador). `cache::get` evicta lazy: si la entrada expiró, la borra y devuelve `None` (miss limpio para refetch). Formato persistente bumpea a V2 con `u64 expires_at` por entrada; archivos V1 se ignoran al cargar. 58/58 verde (10 tests nuevos).
 - **Fase 5.1 (sgte):** `text-decoration` — underline / line-through / overline. (a) **Engine**: `ComputedStyle.text_decoration: TextDecorationLine` (None/Underline/LineThrough/Overline). Parser de shorthand acepta `text-decoration: underline dotted red` y captura sólo el line (estilos/color se ignoran — pintamos línea sólida del color del texto). `text-decoration-line` es alias. (b) **Herencia**: CSS spec dice que NO se hereda en computed values (los descendientes inline pintan la línea por "propagación visual" del padre block). Acá la tratamos como heredable porque dibujamos por leaf de texto — sin propagar, `<a>foo <b>bar</b></a>` rendería `foo` subrayado pero `bar` no. Override explícito a `none` la suprime, lo cual diverge del spec pero matchea la intuición del autor (`a { text-decoration: none }` quita el underline al link entero). (c) **UA stylesheet**: `a`/`u`/`ins` → underline; `s`/`strike`/`del` → line-through. (d) **Chrome**: `apply_decorations` toma una tupla `(line_kind, color, font_size)` cuando el nodo es leaf con `text_decoration != None`. Dentro de la closure de `paint_with` se calcula la y relativa al rect (0.10 overline, 0.55 line-through, 0.88 underline — sin baseline real porque la hoja de texto tiene `height = font_size × line_height ≈ 1.4`, y el glifo vive arriba-centro), grosor `max(1.0, font_size × 0.07)` y `scene.stroke` sobre `kurbo::Line` del color del texto. 63/63 verde (5 tests nuevos).
+- **Fase 6.1 (2026-05-28):** **`::before` y `::after` pseudo-elements** — apertura de Fase 6. Esta fase deja de ser "polish CSS encima del MVP" (Fase 5) y empieza features estructurales que abren caminos a counters, generated content, iconos via content, badges y a futuras integraciones (JS engine en Fase 6.N+, async asset prefetch, etc.).
+  - **Decisión sobre JS**: NO embebemos `script` de Servo. Cuando llegue el momento (Fase 6.5+) evaluamos `boa` (motor ECMAScript 100% Rust) por encima de `rquickjs` (bindings C) o `rusty_v8` (V8). Default: `boa` por alineación con la pila Rust del repo. Esta entrada cierra la duda heredada del SDD original — Servo `script` queda descartado.
+  - **`Selector.pseudo_element: Option<PseudoElement>`** — el parser strippea `::before`/`::after` (más el legacy `:before`/`:after`) del final del selector y los guarda separados. Reglas con pseudo_element sólo matchean cuando el caller pide ese pseudo; reglas sin pseudo matchean sólo el elemento real. Las reglas pseudo NO se filtran por sí solas al elemento (`p::before { color: red }` ya no afecta al `<p>` mismo — un bug del modelo previo que ahora queda cubierto).
+  - **`compute_pseudo(node, pseudo, parent)`**: nueva variante de StyleEngine que computa el estilo del pseudo-element. Devuelve `None` cuando `content` no se setea — CSS spec dice que un pseudo sin content no se materializa.
+  - **`content: "..."`**: nuevo `ComputedStyle.content: Option<String>` + `DeclKind::Content` + `parse_content_value` que acepta string quoted (single/double) con escape `\\`, más los keywords `none`/`normal` (que resuelven a `None`). `counter(...)`/`attr(...)`/`url(...)` quedan para Fase 6.2.
+  - **boxes**: `build_node` después de computar el estilo del nodo, llama `styles.compute_pseudo(node, Before, Some(&style))`; si devuelve Some, inyecta `inline_text_with_style(content, &pseudo_style)` al inicio de `children` (antes del marker de `<li>` y de los hijos reales). Igual para `After`, appendeado al final. Reusamos el helper de hojas Text que ya respeta color/font/family/decoration heredados del pseudo style — no hace falta un constructor nuevo.
+  - **Fix latente colateral**: `strip_comments` iteraba bytes y pusheaba `bytes[i] as char`, destruyendo runs UTF-8 multi-byte (un `▸` se convertía en 3 chars latin-1 basura). Ahora copia slices `&str` originales preservando UTF-8. Detectado por el test de `::before { content: "▸ " }` — la pipeline CSS estaba lookahead-safe pero output-broken para contenido no-ASCII.
+  - Tests nuevos: 6 (engine: `parse_content_value_acepta_string_quoted`, `parse_content_value_respeta_escapes`, `pseudo_element_extrae_del_selector`, `pseudo_element_sin_content_no_se_materializa`, `reglas_pseudo_no_pegan_al_elemento_real`, `before_y_after_se_inyectan_como_children`). 207/207 verde (183 engine + 15 core + 9 llimphi).
 - **Fase 5.1 (sgte+13):** **Sweep "moderno + download + middle-click + z-index"** — 4 features que quitan papelitos amarillos del backlog.
   - **CSS `calc()`**: parser `parse_calc_expr` reconoce `calc(<term> <+/-> <term>...)`. Resuelve en parse time: `calc(10px + 5px)` → `Px(15)`, `calc(80% - 10%)` → `Pct(70)`. Para mezclas `calc(100% - 20px)` conservamos el `Pct(100)` ignorando el offset px — taffy no soporta calc nativo y resolver con precisión requeriría el container width que no tenemos a parse-time. Tokenizer respeta el requisito de whitespace alrededor de `+`/`-` (CSS spec). `*`/`/` y `var()` adentro de calc no soportados aún. Acepta `calc(...)` en cualquier `LengthVal` (width/height/insets/margin/padding).
   - **`<a download>`**: `BoxNode.link_download: Option<String>` desde el attr. Chrome: `Msg::DownloadLink { url, filename_hint }` reemplaza al Navigate cuando el link tiene download. Spawn thread con `fetch_bytes` + `std::fs::write` a `$XDG_DOWNLOAD_DIR/puriy/<filename>` (fallback `$HOME/Downloads/puriy/`). `pick_download_filename` prefiere el hint si no contiene `/` ni `\` (anti-path-traversal); sino el último segmento del path de la URL; fallback `descarga`. Msg `DownloadDone` actualiza la status bar con `⬇ <path> · N bytes` o `⬇ fallo: <error>`. Gen counter invalida si la pestaña se cerró.
