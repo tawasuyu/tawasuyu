@@ -1166,8 +1166,26 @@ fn default_display(tag: &str) -> Display {
     match tag {
         "html" | "body" | "div" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "ul" | "ol"
         | "li" | "header" | "footer" | "section" | "article" | "nav" | "main" | "aside"
-        | "form" | "pre" | "blockquote" | "hr" => Display::Block,
+        | "form" | "pre" | "blockquote" | "hr" | "figure" | "figcaption" | "details"
+        | "summary" | "dialog" | "menu" | "address" | "fieldset" | "legend" | "dl" | "dd"
+        | "dt" | "caption" => Display::Block,
+        // Tables — semánticamente correctos serían display-table-*, pero
+        // tratamos tr como flex-row, td/th como inline-block para que
+        // la grilla se rinda razonablemente sin un layout engine de
+        // tables completo.
+        "table" | "thead" | "tbody" | "tfoot" | "colgroup" | "col" => Display::Block,
+        "tr" => Display::Flex,
+        "td" | "th" => Display::InlineBlock,
+        // Form widgets: inline-block para que respeten width/height
+        // pero no rompan el row del padre.
+        "button" | "select" | "textarea" | "label" => Display::InlineBlock,
         "head" | "title" | "style" | "script" | "meta" | "link" => Display::None,
+        // SVG y canvas: no tenemos renderer. Sin ocultarlos, sus
+        // descendientes (titles, paths con text content) salen como
+        // texto basura sobre la página. Mejor invisible que ruido.
+        "svg" | "canvas" | "math" | "video" | "audio" | "iframe" | "object" | "embed" => {
+            Display::None
+        }
         _ => Display::Inline,
     }
 }
@@ -1195,28 +1213,128 @@ fn ua_stylesheet() -> Vec<Rule> {
             combinators: vec![],
         }
     }
+    fn decl(kind: DeclKind) -> Decl {
+        Decl { kind, important: false }
+    }
+    fn sides_lrtb(t: f32, r: f32, b: f32, l: f32) -> Sides<f32> {
+        Sides { top: t, right: r, bottom: b, left: l }
+    }
+    // Tamaños y márgenes de heading siguen el patrón de Firefox / Chrome
+    // (em-based, redondeado a px sobre font-size 16). h1 sólo dentro del
+    // primer `<section>`/`<article>` sería 1.5em según spec, pero ese
+    // matching contextual queda para más adelante — usamos 2em fijo.
     vec![
+        Rule {
+            selector: ty("body"),
+            decls: vec![
+                // Browser real default es `margin: 8px` (no padding). Lo
+                // dejamos así para que páginas sin CSS no queden pegadas
+                // al borde de la ventana.
+                decl(DeclKind::Margin(Sides::all(8.0))),
+            ],
+        },
         Rule {
             selector: ty("h1"),
             decls: vec![
-                Decl { kind: DeclKind::FontSize(32.0), important: false },
-                Decl { kind: DeclKind::Margin(Sides::all(20.0)), important: false },
+                decl(DeclKind::FontSize(32.0)),
+                decl(DeclKind::Margin(sides_lrtb(21.0, 0.0, 21.0, 0.0))),
             ],
         },
         Rule {
             selector: ty("h2"),
             decls: vec![
-                Decl { kind: DeclKind::FontSize(24.0), important: false },
-                Decl { kind: DeclKind::Margin(Sides::all(18.0)), important: false },
+                decl(DeclKind::FontSize(24.0)),
+                decl(DeclKind::Margin(sides_lrtb(19.0, 0.0, 19.0, 0.0))),
+            ],
+        },
+        Rule {
+            selector: ty("h3"),
+            decls: vec![
+                decl(DeclKind::FontSize(19.0)),
+                decl(DeclKind::Margin(sides_lrtb(19.0, 0.0, 19.0, 0.0))),
+            ],
+        },
+        Rule {
+            selector: ty("h4"),
+            decls: vec![
+                decl(DeclKind::FontSize(16.0)),
+                decl(DeclKind::Margin(sides_lrtb(21.0, 0.0, 21.0, 0.0))),
+            ],
+        },
+        Rule {
+            selector: ty("h5"),
+            decls: vec![
+                decl(DeclKind::FontSize(13.0)),
+                decl(DeclKind::Margin(sides_lrtb(22.0, 0.0, 22.0, 0.0))),
+            ],
+        },
+        Rule {
+            selector: ty("h6"),
+            decls: vec![
+                decl(DeclKind::FontSize(11.0)),
+                decl(DeclKind::Margin(sides_lrtb(25.0, 0.0, 25.0, 0.0))),
             ],
         },
         Rule {
             selector: ty("p"),
-            decls: vec![Decl { kind: DeclKind::Margin(Sides::all(12.0)), important: false }],
+            decls: vec![decl(DeclKind::Margin(sides_lrtb(12.0, 0.0, 12.0, 0.0)))],
+        },
+        // Listas: padding-left para los bullets/numerales (el marker se
+        // pinta antes del contenido, necesita espacio para no chocar
+        // con el borde izquierdo del block).
+        Rule {
+            selector: ty("ul"),
+            decls: vec![
+                decl(DeclKind::Margin(sides_lrtb(12.0, 0.0, 12.0, 0.0))),
+                decl(DeclKind::Padding(sides_lrtb(0.0, 0.0, 0.0, 40.0))),
+                decl(DeclKind::ListStyleType(ListStyleType::Disc)),
+            ],
         },
         Rule {
-            selector: ty("body"),
-            decls: vec![Decl { kind: DeclKind::Padding(Sides::all(8.0)), important: false }],
+            selector: ty("ol"),
+            decls: vec![
+                decl(DeclKind::Margin(sides_lrtb(12.0, 0.0, 12.0, 0.0))),
+                decl(DeclKind::Padding(sides_lrtb(0.0, 0.0, 0.0, 40.0))),
+                decl(DeclKind::ListStyleType(ListStyleType::Decimal)),
+            ],
+        },
+        Rule {
+            selector: ty("blockquote"),
+            decls: vec![decl(DeclKind::Margin(sides_lrtb(10.0, 40.0, 10.0, 40.0)))],
+        },
+        Rule {
+            selector: ty("dl"),
+            decls: vec![decl(DeclKind::Margin(sides_lrtb(12.0, 0.0, 12.0, 0.0)))],
+        },
+        Rule {
+            selector: ty("dd"),
+            decls: vec![decl(DeclKind::Margin(sides_lrtb(0.0, 0.0, 0.0, 40.0)))],
+        },
+        Rule {
+            selector: ty("pre"),
+            decls: vec![
+                decl(DeclKind::Margin(sides_lrtb(12.0, 0.0, 12.0, 0.0))),
+                decl(DeclKind::WhiteSpace(WhiteSpace::Pre)),
+            ],
+        },
+        Rule {
+            selector: ty("hr"),
+            decls: vec![
+                decl(DeclKind::Margin(sides_lrtb(8.0, 0.0, 8.0, 0.0))),
+                decl(DeclKind::BorderWidth(1.0)),
+                decl(DeclKind::BorderColor(Color::rgb(192, 192, 192))),
+                decl(DeclKind::BorderEnabled(true)),
+            ],
+        },
+        // Color por defecto de los links — azul clásico de navegadores.
+        // Esto se cascadea bajo el override del chrome que pinta links
+        // con un blue ligeramente más oscuro (30,90,200).
+        Rule {
+            selector: ty("a"),
+            decls: vec![
+                decl(DeclKind::Color(Color::rgb(0, 0, 238))),
+                decl(DeclKind::TextDecoration(TextDecorationLine::Underline)),
+            ],
         },
         // Defaults de text-decoration. `<a>` y `<u>`/`<ins>` van con
         // underline; `<s>`/`<strike>`/`<del>` tachadas. Cualquier autor
@@ -1230,62 +1348,82 @@ fn ua_stylesheet() -> Vec<Rule> {
         },
         Rule {
             selector: ty("u"),
-            decls: vec![Decl {
-                kind: DeclKind::TextDecoration(TextDecorationLine::Underline),
-                important: false,
-            }],
+            decls: vec![decl(DeclKind::TextDecoration(TextDecorationLine::Underline))],
         },
         Rule {
             selector: ty("ins"),
-            decls: vec![Decl {
-                kind: DeclKind::TextDecoration(TextDecorationLine::Underline),
-                important: false,
-            }],
+            decls: vec![decl(DeclKind::TextDecoration(TextDecorationLine::Underline))],
         },
         Rule {
             selector: ty("s"),
-            decls: vec![Decl {
-                kind: DeclKind::TextDecoration(TextDecorationLine::LineThrough),
-                important: false,
-            }],
+            decls: vec![decl(DeclKind::TextDecoration(TextDecorationLine::LineThrough))],
         },
         Rule {
             selector: ty("strike"),
-            decls: vec![Decl {
-                kind: DeclKind::TextDecoration(TextDecorationLine::LineThrough),
-                important: false,
-            }],
+            decls: vec![decl(DeclKind::TextDecoration(TextDecorationLine::LineThrough))],
         },
         Rule {
             selector: ty("del"),
-            decls: vec![Decl {
-                kind: DeclKind::TextDecoration(TextDecorationLine::LineThrough),
-                important: false,
-            }],
-        },
-        // Listas: `<ol>` numérico, `<ul>` con bullets. La propiedad se
-        // hereda, así que poniéndola en el container es suficiente — los
-        // `<li>` descendientes la recogen vía inheritance.
-        Rule {
-            selector: ty("ol"),
-            decls: vec![Decl {
-                kind: DeclKind::ListStyleType(ListStyleType::Decimal),
-                important: false,
-            }],
-        },
-        Rule {
-            selector: ty("ul"),
-            decls: vec![Decl {
-                kind: DeclKind::ListStyleType(ListStyleType::Disc),
-                important: false,
-            }],
+            decls: vec![decl(DeclKind::TextDecoration(TextDecorationLine::LineThrough))],
         },
         Rule {
             selector: ty("menu"),
-            decls: vec![Decl {
-                kind: DeclKind::ListStyleType(ListStyleType::Disc),
-                important: false,
-            }],
+            decls: vec![decl(DeclKind::ListStyleType(ListStyleType::Disc))],
+        },
+        // Tables: bordes celulares mínimos para que la grilla se vea.
+        // Wikipedia usa `<table class="wikitable">` con su propio CSS,
+        // pero tablas sin estilo necesitan al menos algo de padding.
+        Rule {
+            selector: ty("table"),
+            decls: vec![decl(DeclKind::Margin(sides_lrtb(8.0, 0.0, 8.0, 0.0)))],
+        },
+        Rule {
+            selector: ty("td"),
+            decls: vec![decl(DeclKind::Padding(Sides::all(2.0)))],
+        },
+        Rule {
+            selector: ty("th"),
+            decls: vec![decl(DeclKind::Padding(Sides::all(2.0)))],
+        },
+        // <small>/<sub>/<sup>: tamaño relativo. CSS spec usa `smaller`
+        // (~83% del padre). Acá usamos 13px como aproximación.
+        Rule {
+            selector: ty("small"),
+            decls: vec![decl(DeclKind::FontSize(13.0))],
+        },
+        Rule {
+            selector: ty("sub"),
+            decls: vec![
+                decl(DeclKind::FontSize(13.0)),
+                decl(DeclKind::VerticalAlign(VerticalAlign::Sub)),
+            ],
+        },
+        Rule {
+            selector: ty("sup"),
+            decls: vec![
+                decl(DeclKind::FontSize(13.0)),
+                decl(DeclKind::VerticalAlign(VerticalAlign::Super)),
+            ],
+        },
+        Rule {
+            selector: ty("button"),
+            decls: vec![
+                decl(DeclKind::Padding(Sides { top: 1.0, right: 6.0, bottom: 1.0, left: 6.0 })),
+                decl(DeclKind::BorderWidth(1.0)),
+                decl(DeclKind::BorderColor(Color::rgb(118, 118, 118))),
+                decl(DeclKind::BorderEnabled(true)),
+                decl(DeclKind::Background(Color::rgb(239, 239, 239))),
+            ],
+        },
+        Rule {
+            selector: ty("input"),
+            decls: vec![
+                decl(DeclKind::Padding(Sides { top: 1.0, right: 2.0, bottom: 1.0, left: 2.0 })),
+                decl(DeclKind::BorderWidth(1.0)),
+                decl(DeclKind::BorderColor(Color::rgb(118, 118, 118))),
+                decl(DeclKind::BorderEnabled(true)),
+                decl(DeclKind::Background(Color::WHITE)),
+            ],
         },
     ]
 }
@@ -3155,11 +3293,13 @@ mod tests {
         });
         assert_eq!(anchors.len(), 2);
         assert_eq!(spans.len(), 1);
-        // anchors[0] tiene class="btn"
+        // anchors[0] tiene class="btn" — `.btn { color: red }` pisa
+        // el azul-de-link del UA stylesheet.
         assert_eq!(eng.compute(&anchors[0]).color, Color::rgb(255, 0, 0));
-        // anchors[1] sin class
-        assert_eq!(eng.compute(&anchors[1]).color, Color::BLACK);
-        // span.btn no es <a>
+        // anchors[1] sin class — sólo aplica el UA, que pinta `<a>`
+        // con el azul clásico de browser (0, 0, 238).
+        assert_eq!(eng.compute(&anchors[1]).color, Color::rgb(0, 0, 238));
+        // span.btn no es <a> — no aplica el UA de link.
         assert_eq!(eng.compute(&spans[0]).color, Color::BLACK);
     }
 
@@ -3303,9 +3443,11 @@ mod tests {
                 elems.push(n.clone());
             }
         });
-        // a[href] → rojo; a sin href → negro; span → negro
+        // a[href] → rojo (la regla `[href]{color:red}` con
+        // especificidad 10 pisa el UA `a{color:#00ee}`); a sin href no
+        // matchea pero recibe el UA = azul-link; span → BLACK default.
         assert_eq!(eng.compute(&elems[0]).color, Color::rgb(255, 0, 0));
-        assert_eq!(eng.compute(&elems[1]).color, Color::BLACK);
+        assert_eq!(eng.compute(&elems[1]).color, Color::rgb(0, 0, 238));
         assert_eq!(eng.compute(&elems[2]).color, Color::BLACK);
     }
 
@@ -3359,7 +3501,9 @@ mod tests {
             _ => {}
         });
         assert_eq!(eng.compute(&anchors[0]).color, Color::rgb(0, 0, 255));
-        assert_eq!(eng.compute(&anchors[1]).color, Color::BLACK);
+        // anchors[1] no matchea `[href^="https"]` pero recibe el UA
+        // de `<a>` (azul 0,0,238).
+        assert_eq!(eng.compute(&anchors[1]).color, Color::rgb(0, 0, 238));
         assert_eq!(eng.compute(&imgs[0]).color, Color::rgb(0, 255, 0));
         assert_eq!(eng.compute(&imgs[1]).color, Color::BLACK);
         assert_eq!(eng.compute(&divs[0]).color, Color::rgb(255, 0, 0));
@@ -4642,6 +4786,94 @@ line2</pre></body></html>"#;
         let eng = StyleEngine::from_dom(&dom);
         let p = dom.find("p").unwrap();
         assert_eq!(eng.compute(&p).color, Color::rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn ua_body_lleva_margin_8() {
+        // Cualquier página sin CSS de autor debe arrancar con el body
+        // margin: 8px (default del browser real).
+        let html = "<html><body>x</body></html>";
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let body = dom.find("body").unwrap();
+        let s = eng.compute(&body);
+        assert_eq!(s.margin, Sides::all(8.0));
+    }
+
+    #[test]
+    fn ua_h3_h4_h5_h6_tienen_tamanos_propios() {
+        // Antes h3+ caían al default 16 (igual que `<p>`). Ahora cada
+        // nivel tiene tamaño y margin propios.
+        for (tag, expected) in
+            [("h3", 19.0), ("h4", 16.0), ("h5", 13.0), ("h6", 11.0)]
+        {
+            let html = format!("<html><body><{tag}>x</{tag}></body></html>");
+            let dom = DomTree::parse(&html);
+            let eng = StyleEngine::from_dom(&dom);
+            let node = dom.find(tag).unwrap();
+            let s = eng.compute(&node);
+            assert_eq!(s.font_size, expected, "{tag} font-size");
+        }
+    }
+
+    #[test]
+    fn ua_ul_y_ol_padding_left_para_bullets() {
+        let html = "<html><body><ul><li>x</li></ul></body></html>";
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let ul = dom.find("ul").unwrap();
+        let s = eng.compute(&ul);
+        assert_eq!(s.padding.left, 40.0);
+    }
+
+    #[test]
+    fn ua_a_color_azul_default() {
+        let html = "<html><body><a href=#>link</a></body></html>";
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let a = dom.find("a").unwrap();
+        let s = eng.compute(&a);
+        assert_eq!(s.color, Color::rgb(0, 0, 238));
+    }
+
+    #[test]
+    fn ua_svg_y_canvas_display_none() {
+        // SVG/canvas no se renderizan — sin display:none, sus
+        // descendientes (titles, text content) salen como texto basura
+        // en la página real.
+        let html = "<html><body><svg><title>hi</title></svg><canvas></canvas></body></html>";
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        for tag in ["svg", "canvas"] {
+            let n = dom.find(tag).unwrap();
+            assert_eq!(eng.compute(&n).display, Display::None, "{tag}");
+        }
+    }
+
+    #[test]
+    fn ua_table_layout_minimo() {
+        let html = "<html><body><table><tr><td>a</td><td>b</td></tr></table></body></html>";
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let table = dom.find("table").unwrap();
+        let tr = dom.find("tr").unwrap();
+        let td = dom.find("td").unwrap();
+        assert_eq!(eng.compute(&table).display, Display::Block);
+        // tr es Flex row para que td/td queden lado a lado.
+        assert_eq!(eng.compute(&tr).display, Display::Flex);
+        // td es InlineBlock para que el row de flex no le dé 100% width.
+        assert_eq!(eng.compute(&td).display, Display::InlineBlock);
+    }
+
+    #[test]
+    fn ua_sub_y_sup_aplican_vertical_align() {
+        let html = "<html><body><p>H<sub>2</sub>O y E=mc<sup>2</sup></p></body></html>";
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let sub = dom.find("sub").unwrap();
+        let sup = dom.find("sup").unwrap();
+        assert_eq!(eng.compute(&sub).vertical_align, VerticalAlign::Sub);
+        assert_eq!(eng.compute(&sup).vertical_align, VerticalAlign::Super);
     }
 
     #[test]

@@ -38,6 +38,7 @@ fn main() {
     };
 
     eprintln!("[puriy] profile={} target={} url={}", cli.profile, target, url);
+    diagnose_fonts();
 
     // Carga (o crea) el Profile del usuario.
     let (profile_dir, profile_path, profile) = load_or_create_profile(&cli.profile);
@@ -100,6 +101,31 @@ fn persist_all(profile_path: &std::path::Path, profile: &Arc<Mutex<Profile>>) {
         if let Err(e) = puriy_core::store::save(profile_path, &p) {
             eprintln!("[puriy] no se pudo guardar profile.json: {e}");
         }
+    }
+}
+
+/// Chequea si el sistema tiene fuentes con cobertura razonable de
+/// símbolos / CJK / emoji. Sin estas, parley/fontique dibuja `□` (tofu)
+/// para cualquier glifo no cubierto por la fuente base. Probamos rutas
+/// típicas de Linux; si están vacías, sugerimos los paquetes.
+fn diagnose_fonts() {
+    let common_paths = [
+        "/usr/share/fonts/noto",
+        "/usr/share/fonts/google-noto",
+        "/usr/share/fonts/TTF/NotoSans-Regular.ttf",
+        "/usr/share/fonts/noto-cjk",
+        "/usr/share/fonts/noto-emoji",
+        "/usr/share/fonts/truetype/noto",
+    ];
+    let found = common_paths
+        .iter()
+        .any(|p| std::path::Path::new(p).exists());
+    if !found {
+        eprintln!(
+            "[puriy] aviso: no se detectaron fuentes Noto en el sistema. \
+             Si ves cuadrados □ en lugar de glifos (símbolos math, CJK, emoji), \
+             instalá: noto-fonts noto-fonts-cjk noto-fonts-emoji noto-fonts-extra"
+        );
     }
 }
 
