@@ -1,9 +1,13 @@
 //! Layout force-directed (Fruchterman-Reingold).
 //!
 //! Repulsión entre todo par de nodos + atracción a lo largo de las
-//! aristas, integrado con cooling. Implementación naïve O(n²); Barnes-Hut
-//! es la optimización de escala (millones de nodos) — pendiente.
+//! aristas, integrado con cooling. Dos variantes del paso:
+//!
+//! - [`ForceLayout::step`] — O(n²) naïve. Hasta ~1 K nodos, exacto.
+//! - [`ForceLayout::step_bh`] — O(n log n) Barnes-Hut, con parámetro
+//!   `theta` (típico 0.5). Apta para 10⁴–10⁵ nodos.
 
+use crate::barnes_hut::Quadtree;
 use crate::buffers::{EdgeBuffer, NodeBuffer};
 
 /// Parámetros de la simulación.
@@ -108,6 +112,64 @@ impl ForceLayout {
         self.temp *= self.params.cooling;
         total
     }
+
+    /// Igual semántica que [`Self::step`] pero la repulsión se
+    /// aproxima con un quadtree Barnes-Hut. `theta` controla la
+    /// agresividad de la aproximación (0.0 = exacto/lento, ~0.5
+    /// = balance, 1.0 = grosero). La atracción y la integración
+    /// quedan iguales — Barnes-Hut sólo aplica al lazo de pares.
+    pub fn step_bh(&mut self, nodes: &mut NodeBuffer, edges: &EdgeBuffer, theta: f32) -> f32 {
+        let n = nodes.len();
+        if n == 0 {
+            return 0.0;
+        }
+        let k = self.params.k.max(1e-3);
+        let mut disp = vec![(0.0f32, 0.0f32); n];
+
+        // Repulsión vía Barnes-Hut.
+        let positions: Vec<(f32, f32)> = (0..n).map(|i| nodes.pos(i)).collect();
+        let qt = Quadtree::build(&positions);
+        for i in 0..n {
+            let f = qt.force_on(positions[i], i, k, theta.max(0.0));
+            disp[i].0 += f.0;
+            disp[i].1 += f.1;
+        }
+
+        // Atracción a lo largo de aristas, idem `step`.
+        for (u, v) in edges.iter() {
+            if u >= n || v >= n || u == v {
+                continue;
+            }
+            let (xu, yu) = nodes.pos(u);
+            let (xv, yv) = nodes.pos(v);
+            let dx = xu - xv;
+            let dy = yu - yv;
+            let dist = (dx * dx + dy * dy).sqrt().max(1e-3);
+            let f = dist * dist / k;
+            let (ux, uy) = (dx / dist, dy / dist);
+            disp[u].0 -= ux * f;
+            disp[u].1 -= uy * f;
+            disp[v].0 += ux * f;
+            disp[v].1 += uy * f;
+        }
+
+        // Integración + cooling, idéntico a `step`.
+        let mut total = 0.0f32;
+        for i in 0..n {
+            let (dx, dy) = disp[i];
+            let len = (dx * dx + dy * dy).sqrt();
+            if len < 1e-6 {
+                continue;
+            }
+            let capped = len.min(self.temp);
+            let (mx, my) = (dx / len * capped, dy / len * capped);
+            let (x, y) = nodes.pos(i);
+            nodes.set_pos(i, x + mx, y + my);
+            total += capped;
+        }
+        self.temp *= self.params.cooling;
+        total
+    }
 }
 
 #[cfg(test)]
@@ -150,5 +212,53 @@ mod tests {
         let eb = EdgeBuffer::new();
         let mut fl = ForceLayout::new(ForceParams::default());
         assert_eq!(fl.step(&mut nb, &eb), 0.0);
+    }
+
+    #[test]
+    fn step_bh_converges_to_similar_layout_as_naive() {
+        // 12 nodos en ciclo. Naïve y Barnes-Hut deberían converger a
+        // tamaños similares (dentro del 30%).
+        fn build() -> (NodeBuffer, EdgeBuffer) {
+            let mut nb = NodeBuffer::new();
+            for i in 0..12 {
+                let a = (i as f32 / 12.0) * std::f32::consts::TAU;
+                nb.push(80.0 * a.cos(), 80.0 * a.sin(), 4.0);
+            }
+            let mut eb = EdgeBuffer::new();
+            for i in 0..12 {
+                eb.push(i, (i + 1) % 12);
+            }
+            (nb, eb)
+        }
+        let (mut nb_n, eb_n) = build();
+        let mut fl_n = ForceLayout::new(ForceParams::default());
+        for _ in 0..200 {
+            fl_n.step(&mut nb_n, &eb_n);
+        }
+        let (mut nb_b, eb_b) = build();
+        let mut fl_b = ForceLayout::new(ForceParams::default());
+        for _ in 0..200 {
+            fl_b.step_bh(&mut nb_b, &eb_b, 0.5);
+        }
+        let radius = |nb: &NodeBuffer| -> f32 {
+            let mut rmax = 0.0f32;
+            for i in 0..nb.len() {
+                let (x, y) = nb.pos(i);
+                rmax = rmax.max((x * x + y * y).sqrt());
+            }
+            rmax
+        };
+        let r_n = radius(&nb_n);
+        let r_b = radius(&nb_b);
+        let ratio = (r_b - r_n).abs() / r_n.max(1.0);
+        assert!(ratio < 0.30, "naive r={r_n}, BH r={r_b} (>30% off)");
+    }
+
+    #[test]
+    fn step_bh_empty_is_noop() {
+        let mut nb = NodeBuffer::new();
+        let eb = EdgeBuffer::new();
+        let mut fl = ForceLayout::new(ForceParams::default());
+        assert_eq!(fl.step_bh(&mut nb, &eb, 0.5), 0.0);
     }
 }

@@ -10,9 +10,11 @@
 //! - `push_clip` / `pop_clip` quedan como no-op por ahora — el `View`
 //!   contenedor ya recorta vía taffy + `clip(true)`; los painters de
 //!   pineal respetan su `plot_rect` y no salen del bounds.
-//! - `fill_triangle_strip` no implementado (lo necesitan phosphor y
-//!   Sankey, que aún no están). Cuando entren, va con un BezPath o un
-//!   batch de quads.
+//! - `fill_triangle_strip` arma un `BezPath` por triángulo y lo rellena
+//!   con `Fill::NonZero` + el color promedio de los tres vértices. Vello
+//!   no expone mesh con per-vertex color directo, así que el promedio es
+//!   el trade-off (igual que el exporter SVG). Suficiente para wedges
+//!   pie/donut, ribbons Sankey, polígono fan del radar y phosphor trail.
 //!
 //! Coordenadas: pineal trabaja en pixels absolutos del scene (mismo
 //! origen que `PaintRect.{x,y}`). No traduce — los callers ya
@@ -49,6 +51,22 @@ impl<'a> SceneCanvas<'a> {
 fn to_peniko(c: Color) -> PenikoColor {
     let to_byte = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
     PenikoColor::from_rgba8(to_byte(c.r), to_byte(c.g), to_byte(c.b), to_byte(c.a))
+}
+
+fn avg_color(cs: &[Option<Color>]) -> Color {
+    let mut acc = Color::rgba(0.0, 0.0, 0.0, 0.0);
+    let mut n = 0.0;
+    for c in cs.iter().flatten() {
+        acc.r += c.r;
+        acc.g += c.g;
+        acc.b += c.b;
+        acc.a += c.a;
+        n += 1.0;
+    }
+    if n == 0.0 {
+        return Color::TRANSPARENT;
+    }
+    Color::rgba(acc.r / n, acc.g / n, acc.b / n, acc.a / n)
 }
 
 fn to_kurbo_rect(r: Rect) -> KurboRect {
@@ -117,11 +135,33 @@ impl<'a> Canvas for SceneCanvas<'a> {
         );
     }
 
-    fn fill_triangle_strip(&mut self, _coords: &[f32], _colors: &[Color]) {
-        // TODO: cuando phosphor / Sankey lo necesiten. Vello no expone
-        // mesh con per-vertex color directo — habrá que armar un BezPath
-        // por triángulo o subir un buffer custom. Por ahora paridad con
-        // gpui_backend: no-op.
+    fn fill_triangle_strip(&mut self, coords: &[f32], colors: &[Color]) {
+        let n = coords.len() / 2;
+        if n < 3 {
+            return;
+        }
+        for t in 0..n - 2 {
+            let i0 = t;
+            let i1 = t + 1;
+            let i2 = t + 2;
+            let avg = avg_color(&[
+                colors.get(i0).copied(),
+                colors.get(i1).copied(),
+                colors.get(i2).copied(),
+            ]);
+            let mut path = BezPath::new();
+            path.move_to((coords[i0 * 2] as f64, coords[i0 * 2 + 1] as f64));
+            path.line_to((coords[i1 * 2] as f64, coords[i1 * 2 + 1] as f64));
+            path.line_to((coords[i2 * 2] as f64, coords[i2 * 2 + 1] as f64));
+            path.close_path();
+            self.scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                to_peniko(avg),
+                None,
+                &path,
+            );
+        }
     }
 
     fn draw_text(&mut self, p: Point, text: &str, color: Color, size_px: f32) {

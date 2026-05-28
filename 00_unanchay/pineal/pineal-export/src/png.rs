@@ -245,8 +245,10 @@ fn stroke_segment(
     fill_triangle(buf, p1, p3, p2, color, clip);
 }
 
-/// Scanline fill de un triángulo (sin antialiasing — el resultado se ve
-/// igual a un GPU sin MSAA. Aceptable para charts densos).
+/// Scanline fill de un triángulo con AA por supersampling 2×2 (4 samples
+/// por pixel → coverage ∈ {0, ¼, ½, ¾, 1}). El color final se blendea
+/// multiplicando alpha por coverage. Edge ratio razonable: ~4× más
+/// cómputo que sample-único pero los bordes dejan de tener escalera.
 fn fill_triangle(
     buf: &mut RasterBuffer,
     a: (f32, f32),
@@ -272,15 +274,25 @@ fn fill_triangle(
         return;
     }
     let sign = area.signum();
+    const SAMPLES: [(f32, f32); 4] = [(0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)];
     for y in min_y..max_y {
         for x in min_x..max_x {
-            let p = (x as f32 + 0.5, y as f32 + 0.5);
-            let w0 = edge(b, c, p) * sign;
-            let w1 = edge(c, a, p) * sign;
-            let w2 = edge(a, b, p) * sign;
-            if w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0 {
-                buf.blend(x as u32, y as u32, color);
+            let mut hits = 0u32;
+            for (sx, sy) in SAMPLES.iter() {
+                let p = (x as f32 + *sx, y as f32 + *sy);
+                let w0 = edge(b, c, p) * sign;
+                let w1 = edge(c, a, p) * sign;
+                let w2 = edge(a, b, p) * sign;
+                if w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0 {
+                    hits += 1;
+                }
             }
+            if hits == 0 {
+                continue;
+            }
+            let cov = hits as f32 / SAMPLES.len() as f32;
+            let blended = Color { a: color.a * cov, ..color };
+            buf.blend(x as u32, y as u32, blended);
         }
     }
 }
@@ -352,9 +364,11 @@ mod tests {
         let mut reader = decoder.read_info().unwrap();
         let mut img = vec![0; reader.output_buffer_size().unwrap()];
         reader.next_frame(&mut img).unwrap();
-        // Algún pixel cerca de la diagonal debería ser negro o casi.
+        // Algún pixel cerca de la diagonal debería estar marcado (con AA
+        // los bordes tienen coverage parcial — basta con que sea
+        // visiblemente más oscuro que el fondo blanco).
         let idx = ((7u32 * 16 + 7) * 4) as usize;
-        assert!(img[idx] < 40, "esperaba algo oscuro en (7,7), got R={}", img[idx]);
+        assert!(img[idx] < 150, "esperaba pixel marcado en (7,7), got R={}", img[idx]);
     }
 
     #[test]
