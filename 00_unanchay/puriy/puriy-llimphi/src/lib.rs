@@ -163,6 +163,18 @@ pub struct Model {
     /// case-insensitive contra cada hoja de texto del box tree del
     /// documento activo. Vacío = sin highlight.
     pub find_input: TextInputState,
+    /// `Ctrl+B`/`Ctrl+H` abren un panel que reemplaza el viewport con la
+    /// lista de bookmarks o el historial. `None` = panel cerrado y el
+    /// documento se renderea normal. Sólo aplica cuando el chrome corre
+    /// con un Profile cableado (sino las listas están vacías).
+    pub panel: Option<PanelKind>,
+}
+
+/// Tipo de panel auxiliar que reemplaza el viewport cuando está abierto.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanelKind {
+    Bookmarks,
+    History,
 }
 
 const ZOOM_MIN: f32 = 0.5;
@@ -212,6 +224,16 @@ pub enum Msg {
     FindClose,
     /// Teclas redirigidas al input de la find bar mientras está activa.
     FindKey(KeyEvent),
+    /// Ctrl+B — toggle del panel de bookmarks. Si el panel está abierto
+    /// en bookmarks, lo cierra; sino lo abre con bookmarks.
+    ToggleBookmarks,
+    /// Ctrl+H — toggle del panel de historial.
+    ToggleHistory,
+    /// Esc cuando hay panel abierto (y la find bar no está activa).
+    ClosePanel,
+    /// Click en el botón ✕ de un bookmark — lo borra del profile y
+    /// persiste.
+    RemoveBookmark(puriy_core::BookmarkId),
 }
 
 impl App for Puriy {
@@ -243,6 +265,7 @@ impl App for Puriy {
             zoom: 1.0,
             find_active: false,
             find_input: TextInputState::new(),
+            panel: None,
         }
     }
 
@@ -260,6 +283,12 @@ impl App for Puriy {
                 }
                 Key::Character(s) if s.eq_ignore_ascii_case("d") => return Some(Msg::Bookmark),
                 Key::Character(s) if s.eq_ignore_ascii_case("f") => return Some(Msg::FindOpen),
+                Key::Character(s) if s.eq_ignore_ascii_case("b") => {
+                    return Some(Msg::ToggleBookmarks);
+                }
+                Key::Character(s) if s.eq_ignore_ascii_case("h") => {
+                    return Some(Msg::ToggleHistory);
+                }
                 Key::Named(NamedKey::Tab) if mods.shift => return Some(Msg::PrevTab),
                 Key::Named(NamedKey::Tab) => return Some(Msg::NextTab),
                 // Zoom: Ctrl+= / Ctrl++ / Ctrl+- / Ctrl+0. El charset depende
@@ -289,6 +318,10 @@ impl App for Puriy {
                 return Some(Msg::FindClose);
             }
             return Some(Msg::FindKey(e.clone()));
+        }
+        // Esc cierra el panel (bookmarks/history) si está abierto.
+        if model.panel.is_some() && matches!(&e.key, Key::Named(NamedKey::Escape)) {
+            return Some(Msg::ClosePanel);
         }
         // Si la address bar tiene foco, redirige las teclas al input.
         if model.active().addr_focused && !matches!(&e.key, Key::Named(NamedKey::F5)) {
@@ -353,6 +386,9 @@ impl App for Puriy {
                 }
             }
             Msg::Navigate(target) => {
+                // Cualquier navegación cierra el panel — el usuario quiere
+                // ver la página, no la lista de bookmarks/history.
+                m.panel = None;
                 start_load(&mut m, target, /* push_history */ true, handle);
             }
             Msg::Scroll(dy) => {
@@ -474,6 +510,32 @@ impl App for Puriy {
             Msg::FindKey(e) => {
                 m.find_input.apply_key(&e);
             }
+            Msg::ToggleBookmarks => {
+                m.panel = match m.panel {
+                    Some(PanelKind::Bookmarks) => None,
+                    _ => Some(PanelKind::Bookmarks),
+                };
+            }
+            Msg::ToggleHistory => {
+                m.panel = match m.panel {
+                    Some(PanelKind::History) => None,
+                    _ => Some(PanelKind::History),
+                };
+            }
+            Msg::ClosePanel => {
+                m.panel = None;
+            }
+            Msg::RemoveBookmark(id) => {
+                if let Some(handle) = profile_handle() {
+                    if let Ok(mut p) = handle.lock() {
+                        if p.bookmarks.remove(id) {
+                            m.active_mut().status =
+                                format!("⭐ borrado · {} bookmarks", p.bookmarks.len());
+                        }
+                    }
+                }
+                persist_profile();
+            }
         }
         m
     }
@@ -491,7 +553,10 @@ impl App for Puriy {
         } else {
             0
         };
-        let body = viewport(model.active(), model.zoom, &query_lc);
+        let body = match model.panel {
+            Some(kind) => panel_view(kind),
+            None => viewport(model.active(), model.zoom, &query_lc),
+        };
 
         let mut children: Vec<View<Msg>> = vec![tabs_bar, header];
         if model.find_active {
@@ -594,6 +659,213 @@ fn find_bar(input: &TextInputState, count: usize) -> View<Msg> {
         .text_aligned(count_label, 11.0, Color::from_rgb8(200, 200, 215), Alignment::Start),
         close,
     ])
+}
+
+/// Panel auxiliar que reemplaza el viewport con la lista de bookmarks o
+/// el historial. Lee directamente del Profile vía `profile_handle()`; si
+/// el chrome corre sin profile (modo efímero) muestra un mensaje.
+fn panel_view(kind: PanelKind) -> View<Msg> {
+    let (title, items) = match kind {
+        PanelKind::Bookmarks => collect_bookmarks(),
+        PanelKind::History => collect_history(),
+    };
+
+    let header = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(38.0_f32) },
+        padding: Rect {
+            left: length(16.0_f32),
+            right: length(12.0_f32),
+            top: length(8.0_f32),
+            bottom: length(8.0_f32),
+        },
+        flex_direction: FlexDirection::Row,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(Color::from_rgb8(35, 35, 45))
+    .children(vec![
+        View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(20.0_f32) },
+            ..Default::default()
+        })
+        .text_aligned(title, 13.0, Color::from_rgb8(230, 230, 240), Alignment::Start),
+        View::new(Style {
+            size: Size { width: length(22.0_f32), height: length(22.0_f32) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .fill(Color::from_rgb8(80, 80, 95))
+        .radius(3.0)
+        .text_aligned("✕", 12.0, Color::from_rgb8(220, 220, 230), Alignment::Center)
+        .on_click(Msg::ClosePanel),
+    ]);
+
+    let list: Vec<View<Msg>> = if items.is_empty() {
+        let msg = match kind {
+            PanelKind::Bookmarks => "(no hay bookmarks · Ctrl+D guarda la pestaña activa)",
+            PanelKind::History => "(historial vacío)",
+        };
+        vec![View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(48.0_f32) },
+            padding: Rect {
+                left: length(16.0_f32),
+                right: length(16.0_f32),
+                top: length(16.0_f32),
+                bottom: length(16.0_f32),
+            },
+            ..Default::default()
+        })
+        .text_aligned(msg.to_string(), 12.0, Color::from_rgb8(140, 140, 150), Alignment::Start)]
+    } else {
+        items.into_iter().map(panel_item_row).collect()
+    };
+
+    let body = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        flex_direction: FlexDirection::Column,
+        ..Default::default()
+    })
+    .fill(Color::WHITE)
+    .clip(true)
+    .children(list);
+
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        flex_direction: FlexDirection::Column,
+        ..Default::default()
+    })
+    .children(vec![header, body])
+}
+
+/// Item de panel: title arriba, url abajo (más chico/gris), click→navega.
+/// `removable` con Some(id) agrega un botón ✕ que dispara
+/// `Msg::RemoveBookmark(id)`.
+struct PanelItem {
+    title: String,
+    url: String,
+    removable: Option<puriy_core::BookmarkId>,
+}
+
+fn panel_item_row(item: PanelItem) -> View<Msg> {
+    let nav_msg = Msg::Navigate(item.url.clone());
+    let title_view = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(20.0_f32) },
+        ..Default::default()
+    })
+    .text_aligned(
+        truncate(&item.title, 80),
+        13.0,
+        Color::from_rgb8(30, 30, 40),
+        Alignment::Start,
+    );
+    let url_view = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(16.0_f32) },
+        ..Default::default()
+    })
+    .text_aligned(
+        truncate(&item.url, 100),
+        10.0,
+        Color::from_rgb8(110, 110, 130),
+        Alignment::Start,
+    );
+    let mut col_children = vec![title_view, url_view];
+    let text_col = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(44.0_f32) },
+        flex_direction: FlexDirection::Column,
+        ..Default::default()
+    })
+    .on_click(nav_msg)
+    .children(std::mem::take(&mut col_children));
+
+    let mut row_children = vec![text_col];
+    if let Some(id) = item.removable {
+        row_children.push(
+            View::new(Style {
+                size: Size { width: length(24.0_f32), height: length(24.0_f32) },
+                margin: Rect {
+                    left: length(8.0_f32),
+                    right: length(0.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .fill(Color::from_rgb8(220, 220, 230))
+            .radius(3.0)
+            .text_aligned("✕", 11.0, Color::from_rgb8(80, 80, 95), Alignment::Center)
+            .on_click(Msg::RemoveBookmark(id)),
+        );
+    }
+
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(54.0_f32) },
+        padding: Rect {
+            left: length(16.0_f32),
+            right: length(12.0_f32),
+            top: length(6.0_f32),
+            bottom: length(6.0_f32),
+        },
+        margin: Rect {
+            left: length(0.0_f32),
+            right: length(0.0_f32),
+            top: length(0.0_f32),
+            bottom: length(1.0_f32),
+        },
+        flex_direction: FlexDirection::Row,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(Color::WHITE)
+    .hover_fill(Color::from_rgb8(238, 238, 245))
+    .children(row_children)
+}
+
+/// Lee los bookmarks del Profile (si está cableado) y los devuelve como
+/// items de panel con botón de borrar.
+fn collect_bookmarks() -> (String, Vec<PanelItem>) {
+    let Some(handle) = profile_handle() else {
+        return ("Bookmarks · (sin profile)".to_string(), Vec::new());
+    };
+    let Ok(p) = handle.lock() else {
+        return ("Bookmarks".to_string(), Vec::new());
+    };
+    let items: Vec<PanelItem> = p
+        .bookmarks
+        .items()
+        .iter()
+        .map(|b| PanelItem {
+            title: if b.title.is_empty() { b.url.clone() } else { b.title.clone() },
+            url: b.url.clone(),
+            removable: Some(b.id),
+        })
+        .collect();
+    let title = format!("Bookmarks · {} items", items.len());
+    (title, items)
+}
+
+/// Lee el historial del Profile y lo devuelve descendente (más reciente
+/// primero), sin botón de borrado individual por ahora.
+fn collect_history() -> (String, Vec<PanelItem>) {
+    let Some(handle) = profile_handle() else {
+        return ("Historial · (sin profile)".to_string(), Vec::new());
+    };
+    let Ok(p) = handle.lock() else {
+        return ("Historial".to_string(), Vec::new());
+    };
+    let items: Vec<PanelItem> = p
+        .history
+        .entries()
+        .iter()
+        .rev()
+        .map(|h| PanelItem {
+            title: if h.title.is_empty() { h.url.clone() } else { h.title.clone() },
+            url: h.url.clone(),
+            removable: None,
+        })
+        .collect();
+    let title = format!("Historial · {} entradas", items.len());
+    (title, items)
 }
 
 /// Inicia la carga de `url` en la pestaña activa. Si `push_history` es
@@ -775,7 +1047,7 @@ fn header_bar(t: &TabState, zoom: f32) -> View<Msg> {
         String::new()
     };
     let status_line = format!(
-        "{}    ·    status: {}{}    ·    [Ctrl+T nueva · Ctrl+W cerrar · Ctrl+Tab rotar · Alt+←/→ back/fwd · F5 recargar · Ctrl+= / Ctrl+- / Ctrl+0 zoom]",
+        "{}    ·    status: {}{}    ·    [Ctrl+T/W/Tab · Alt+←/→ · F5 · Ctrl+= / Ctrl+- / Ctrl+0 zoom · Ctrl+F buscar · Ctrl+B bookmarks · Ctrl+H historial]",
         title_line, t.status, zoom_tag,
     );
 
