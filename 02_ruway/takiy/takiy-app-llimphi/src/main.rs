@@ -78,6 +78,8 @@ enum Msg {
     NudgeProgram { delta: i32 },
     /// Guarda el score actual a `TAKIY_SCORE_JSON` (o a `/tmp/...`).
     Save,
+    /// Exporta el score a `<save_path>.mid` (o `/tmp/takiy_<unix>.mid`).
+    ExportMidi,
     Quit,
 }
 
@@ -299,6 +301,30 @@ impl App for Takiy {
                     gm_program_name(new_prog)
                 );
             }
+            Msg::ExportMidi => {
+                // Path derivado del save path actual o un /tmp con timestamp.
+                let path = match model.editor.save_path.as_deref() {
+                    Some(p) => p.with_extension("mid"),
+                    None => {
+                        let ts = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+                        std::path::PathBuf::from(format!("/tmp/takiy_{ts}.mid"))
+                    }
+                };
+                let bytes = takiy_midi::to_smf(&model.editor.score);
+                match std::fs::write(&path, &bytes) {
+                    Ok(()) => {
+                        eprintln!("takiy · midi → {}", path.display());
+                        model.status = format!("midi → {}", path.display());
+                    }
+                    Err(e) => {
+                        eprintln!("takiy · midi error en {}: {e}", path.display());
+                        model.status = format!("midi error: {e}");
+                    }
+                }
+            }
             Msg::Save => {
                 let path = model.editor.save_path.clone().unwrap_or_else(|| {
                     let ts = std::time::SystemTime::now()
@@ -415,6 +441,9 @@ impl App for Takiy {
             }
             Key::Character(s) if s.eq_ignore_ascii_case("d") && event.modifiers.ctrl => {
                 Some(Msg::Edit(EditMsg::DuplicateSelected))
+            }
+            Key::Character(s) if s.eq_ignore_ascii_case("e") && event.modifiers.ctrl => {
+                Some(Msg::ExportMidi)
             }
             Key::Character(s) if s.eq_ignore_ascii_case("s") => Some(Msg::Save),
             Key::Character(s) if s == "+" || s == "=" => {

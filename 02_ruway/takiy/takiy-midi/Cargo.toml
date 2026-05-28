@@ -1,0 +1,12 @@
+[package]
+name = "takiy-midi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "takiy — interop con Standard MIDI File (.mid). to_smf escribe SMF tipo 1 multi-track con tempo + meta; from_smf parsea SMF 0 o 1 y reconstruye un Score. Permite abrir e intercambiar piezas con cualquier DAW."
+
+[dependencies]
+takiy-core = { path = "../takiy-core" }
+midly = { workspace = true }

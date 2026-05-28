@@ -148,5 +148,14 @@ fn main() {
     st.apply(EditMsg::DuplicateSelected);
     assert_eq!(st.score.track(0).unwrap().notes().len(), 4);
 
-    println!("takiy smoke ok — 9 escenarios verdes");
+    // --- Escenario 10: MIDI roundtrip (F5).
+    let demo = takiy_app::demo_score();
+    let bytes = takiy_midi::to_smf(&demo);
+    let back = takiy_midi::from_smf(&bytes).unwrap();
+    assert_eq!(back.tracks().len(), demo.tracks().len());
+    let demo_notes: usize = demo.tracks().iter().map(|t| t.notes().len()).sum();
+    let back_notes: usize = back.tracks().iter().map(|t| t.notes().len()).sum();
+    assert_eq!(demo_notes, back_notes);
+
+    println!("takiy smoke ok — 10 escenarios verdes");
 }

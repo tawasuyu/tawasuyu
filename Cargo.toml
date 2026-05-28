@@ -266,6 +266,7 @@ members = [
     "02_ruway/shuma/shuma-gateway",
     "02_ruway/takiy/takiy-core",
     "02_ruway/takiy/takiy-synth",
+    "02_ruway/takiy/takiy-midi",
     "02_ruway/takiy/takiy-playback",
     "02_ruway/takiy/takiy-app-llimphi",
     "03_ukupacha/agora/agora-app",
@@ -420,6 +421,10 @@ russh = "0.54"
 
 # === Math determinista cross-platform (dominium) ===
 libm = "0.2"
+
+# === SMF (takiy-midi) ===
+# midly: parser/emitter SMF tipo 0/1, no_std-friendly, sin allocs en hot path.
+midly = "0.5"
 
 # === Code parsing (minga) ===
 arboard = "3"

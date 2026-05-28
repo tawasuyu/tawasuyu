@@ -22,6 +22,7 @@ path = "examples/smoke.rs"
 [dependencies]
 takiy-core = { path = "../takiy-core" }
 takiy-synth = { path = "../takiy-synth" }
+takiy-midi = { path = "../takiy-midi" }
 takiy-playback = { path = "../takiy-playback" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }

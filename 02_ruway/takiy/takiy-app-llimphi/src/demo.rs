@@ -32,17 +32,30 @@ pub fn demo_score() -> Score {
 }
 
 /// Si `TAKIY_SCORE_JSON` apunta a un archivo válido, lo carga; si no,
-/// devuelve el [`demo_score`] built-in. Devuelve también una etiqueta
-/// para el header de la app (`"JSON path"` o `"demo built-in"`). Logea
-/// errores al stderr en lugar de propagarlos — la UX es "siempre arranca".
+/// devuelve el [`demo_score`] built-in. Soporta dos formatos según la
+/// extensión: `.takiy.json` / `.json` (nativo) y `.mid` / `.midi`
+/// (Standard MIDI File via `takiy_midi`). Devuelve también una etiqueta
+/// para el header de la app. Logea errores al stderr — la UX es "siempre
+/// arranca".
 pub fn load_score_or_demo() -> (Score, String) {
     if let Ok(path) = std::env::var("TAKIY_SCORE_JSON") {
-        match std::fs::read_to_string(&path) {
-            Ok(s) => match serde_json::from_str::<Score>(&s) {
-                Ok(score) => return (score, format!("JSON {path}")),
-                Err(e) => eprintln!("takiy · error parseando {path}: {e}"),
-            },
-            Err(e) => eprintln!("takiy · error leyendo {path}: {e}"),
+        let lower = path.to_lowercase();
+        if lower.ends_with(".mid") || lower.ends_with(".midi") {
+            match std::fs::read(&path) {
+                Ok(bytes) => match takiy_midi::from_smf(&bytes) {
+                    Ok(score) => return (score, format!("MIDI {path}")),
+                    Err(e) => eprintln!("takiy · error parseando MIDI {path}: {e}"),
+                },
+                Err(e) => eprintln!("takiy · error leyendo {path}: {e}"),
+            }
+        } else {
+            match std::fs::read_to_string(&path) {
+                Ok(s) => match serde_json::from_str::<Score>(&s) {
+                    Ok(score) => return (score, format!("JSON {path}")),
+                    Err(e) => eprintln!("takiy · error parseando {path}: {e}"),
+                },
+                Err(e) => eprintln!("takiy · error leyendo {path}: {e}"),
+            }
         }
     }
     (demo_score(), "demo built-in".into())
