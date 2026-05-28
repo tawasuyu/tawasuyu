@@ -41,7 +41,7 @@ use std::collections::HashMap;
 use llimphi_ui::View;
 use llimphi_widget_text_editor::{
     text_editor_view_highlighted, ApplyResult, Clipboard, EditorMetrics, EditorOptions,
-    EditorPalette, EditorState, Language, PointerEvent,
+    EditorPalette, EditorState, GutterStyle, Language, PointerEvent,
 };
 use pluma_core::NarrativeAtom;
 use pluma_cuerpo::Cuerpo;
@@ -52,7 +52,8 @@ use uuid::Uuid;
 // conocer la geografía interna de los dos crates que ensamblamos.
 pub use llimphi_widget_text_editor::{
     ApplyResult as EditorApplyResult, EditorMetrics as IdeMetrics,
-    EditorPalette as IdePalette, Language as IdeLanguage, PointerEvent as IdePointerEvent,
+    EditorPalette as IdePalette, GutterStyle as IdeGutterStyle, Language as IdeLanguage,
+    PointerEvent as IdePointerEvent,
 };
 pub use pluma_editor_cuerpo::{CambioAtom as IdeCambio, SEPARADOR as SEPARADOR_PARRAFO};
 
@@ -320,6 +321,15 @@ pub fn cuerpo_ide_view<Msg: Clone + 'static>(
     language: Language,
     on_pointer: impl Fn(PointerEvent) -> Option<Msg> + Send + Sync + Clone + 'static,
 ) -> View<Msg> {
+    // El IDE narrativo no quiere números de línea ni un gutter ancho:
+    // forzamos modo prosa salvo que el caller ya haya pedido algo
+    // explícitamente distinto a los defaults. Si el caller construyó
+    // las métricas con `EditorMetrics::for_font_size(...)` (lo más
+    // común), `gutter_style` es `Numbers` y `phantom_blank_lines` es
+    // `false` — los reescribimos a "prosa". Si ya pidió otra cosa
+    // (p.ej. construyó con `prosa(...)` o cambió campos a mano),
+    // respetamos su elección.
+    let metrics = aplicar_prosa(metrics);
     text_editor_view_highlighted(
         &ide.state,
         palette,
@@ -328,6 +338,28 @@ pub fn cuerpo_ide_view<Msg: Clone + 'static>(
         language,
         on_pointer,
     )
+}
+
+/// Convierte unas métricas "IDE clásico" a su versión prosa: gutter
+/// fantasma + divisores fantasma en líneas vacías + gutter angosto. Si
+/// el caller ya pidió `GutterStyle::Phantom` o `phantom_blank_lines =
+/// true`, esos cambios se respetan tal cual (no los pisamos).
+fn aplicar_prosa(mut m: EditorMetrics) -> EditorMetrics {
+    if matches!(m.gutter_style, GutterStyle::Numbers) {
+        m.gutter_style = GutterStyle::Phantom;
+        // El sliver fantasma necesita mucho menos ancho que la
+        // numeración. Sólo lo angostamos si seguía con el default
+        // amplio (~3.5 × font_size) — así no rompemos a un caller que
+        // ya haya pedido un gutter ancho a propósito.
+        let ancho_default = m.font_size * 3.5;
+        if (m.gutter_width - ancho_default).abs() < 0.001 {
+            m.gutter_width = m.font_size * 1.0;
+        }
+    }
+    if !m.phantom_blank_lines {
+        m.phantom_blank_lines = true;
+    }
+    m
 }
 
 /// Constructor para tests / herramientas: arma un `CuerpoIde` sin pasar

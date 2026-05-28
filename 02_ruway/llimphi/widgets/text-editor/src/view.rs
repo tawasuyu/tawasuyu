@@ -80,6 +80,22 @@ impl EditorPalette {
     }
 }
 
+/// Cómo renderizar la columna izquierda del editor.
+///
+/// - [`GutterStyle::Numbers`] es el comportamiento clásico de IDE:
+///   "1", "2", "3"… alineados a la derecha del gutter.
+/// - [`GutterStyle::Phantom`] suprime los números y dibuja en su lugar
+///   un tick **muy sutil** por línea (un pequeño segmento horizontal
+///   con baja opacidad). Sirve para prosa narrativa donde el número de
+///   línea es ruido — la línea sigue estando, pero "fingiendo no
+///   estar". El gutter en este modo se acorta a un sliver fino.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GutterStyle {
+    #[default]
+    Numbers,
+    Phantom,
+}
+
 /// Métricas del editor — todo derivado del `font_size`. Cambiar la
 /// fuente requiere recalcular `char_width` empíricamente para la mono
 /// que use llimphi-text; los valores acá son razonables para
@@ -94,6 +110,15 @@ pub struct EditorMetrics {
     pub char_width: f32,
     /// Ancho del gutter (incluye padding interno).
     pub gutter_width: f32,
+    /// Cómo se pinta el gutter. Default [`GutterStyle::Numbers`] — el
+    /// comportamiento clásico se conserva para callers existentes.
+    pub gutter_style: GutterStyle,
+    /// Si `true`, cada línea **vacía** del buffer recibe un segmento
+    /// horizontal con baja opacidad atravesando su centro — un divisor
+    /// fantasma que sugiere "acá termina un bloque" sin gritar. Pensado
+    /// para editores de prosa donde `\n\n` separa párrafos. Default
+    /// `false`: comportamiento IDE clásico, líneas vacías limpias.
+    pub phantom_blank_lines: bool,
 }
 
 impl Default for EditorMetrics {
@@ -109,6 +134,25 @@ impl EditorMetrics {
             line_height: font_size * 1.4,
             char_width: font_size * 0.6,
             gutter_width: font_size * 3.5,
+            gutter_style: GutterStyle::Numbers,
+            phantom_blank_lines: false,
+        }
+    }
+
+    /// Variante "prosa": gutter fantasma (ticks sutiles, sin números) +
+    /// divisores fantasma en cada línea vacía. Ancho del gutter
+    /// reducido a un sliver porque ya no necesita acomodar dígitos.
+    ///
+    /// Pensado para editores narrativos tipo `cuerpo_ide` donde el
+    /// número de línea es ruido y `\n\n` separa párrafos.
+    pub const fn prosa(font_size: f32) -> Self {
+        Self {
+            font_size,
+            line_height: font_size * 1.4,
+            char_width: font_size * 0.6,
+            gutter_width: font_size * 1.0,
+            gutter_style: GutterStyle::Phantom,
+            phantom_blank_lines: true,
         }
     }
 
@@ -260,28 +304,65 @@ fn build_gutter<Msg: Clone + 'static>(
         } else {
             palette.fg_line_number
         };
-        let label = (n + 1).to_string();
         let y = (n - scroll) as f32 * metrics.line_height;
-        children.push(
-            View::new(Style {
-                position: Position::Absolute,
-                inset: Rect {
-                    left: length(0.0_f32),
-                    top: length(y),
-                    right: length(4.0_f32),
-                    bottom: auto(),
-                },
-                size: Size {
-                    width: length(metrics.gutter_width - 4.0),
-                    height: length(metrics.line_height),
-                },
-                align_items: Some(AlignItems::Center),
-                ..Default::default()
-            })
-            .text_aligned(label, metrics.font_size * 0.85, color, Alignment::End),
-        );
+        match metrics.gutter_style {
+            GutterStyle::Numbers => {
+                let label = (n + 1).to_string();
+                children.push(
+                    View::new(Style {
+                        position: Position::Absolute,
+                        inset: Rect {
+                            left: length(0.0_f32),
+                            top: length(y),
+                            right: length(4.0_f32),
+                            bottom: auto(),
+                        },
+                        size: Size {
+                            width: length(metrics.gutter_width - 4.0),
+                            height: length(metrics.line_height),
+                        },
+                        align_items: Some(AlignItems::Center),
+                        ..Default::default()
+                    })
+                    .text_aligned(label, metrics.font_size * 0.85, color, Alignment::End),
+                );
+            }
+            GutterStyle::Phantom => {
+                // Tick fantasma — un segmento horizontal corto centrado
+                // verticalmente en la línea, con la opacidad bajada.
+                // La línea activa queda un pelín más visible.
+                let alpha = if n == active_line { 0.35 } else { 0.12 };
+                let tick_w = (metrics.gutter_width * 0.5).max(3.0);
+                let tick_h = 1.0_f32;
+                let tick_y = y + (metrics.line_height - tick_h) * 0.5;
+                let tick_x = (metrics.gutter_width - tick_w) * 0.5;
+                children.push(
+                    View::new(Style {
+                        position: Position::Absolute,
+                        inset: Rect {
+                            left: length(tick_x),
+                            top: length(tick_y),
+                            right: auto(),
+                            bottom: auto(),
+                        },
+                        size: Size {
+                            width: length(tick_w),
+                            height: length(tick_h),
+                        },
+                        ..Default::default()
+                    })
+                    .fill(with_alpha(color, alpha)),
+                );
+            }
+        }
     }
 
+    // En modo Phantom el gutter es un sliver: no aplicamos `fill` —
+    // se mezcla con el fondo del editor. El gutter "está sin estar".
+    let bg = match metrics.gutter_style {
+        GutterStyle::Numbers => palette.bg_gutter,
+        GutterStyle::Phantom => palette.bg,
+    };
     View::new(Style {
         size: Size {
             width: length(metrics.gutter_width),
@@ -289,9 +370,16 @@ fn build_gutter<Msg: Clone + 'static>(
         },
         ..Default::default()
     })
-    .fill(palette.bg_gutter)
+    .fill(bg)
     .clip(true)
     .children(children)
+}
+
+/// Devuelve `c` con la opacidad multiplicada por `alpha` (clamp 0..1).
+fn with_alpha(c: Color, alpha: f32) -> Color {
+    let rgba = c.to_rgba8();
+    let a = ((alpha.clamp(0.0, 1.0)) * (rgba.a as f32)) as u8;
+    Color::from_rgba8(rgba.r, rgba.g, rgba.b, a)
 }
 
 fn build_content<Msg: Clone + 'static>(
@@ -339,10 +427,17 @@ fn build_content<Msg: Clone + 'static>(
     }
 
     // 3) Texto — sólo las líneas en viewport.
+    //    Si `phantom_blank_lines` está activo, las líneas vacías reciben
+    //    un divisor fantasma (segmento horizontal con baja opacidad)
+    //    atravesando su centro — sin texto, sólo un susurro visual.
     for n in scroll..end_line {
         let text = state.buffer.line(n);
         let text = text.trim_end_matches('\n').to_owned();
         let local_line = n - scroll;
+        if metrics.phantom_blank_lines && text.is_empty() {
+            children.push(phantom_blank_divider(local_line, metrics, palette));
+            continue;
+        }
         if let Some(line_spans) = spans_per_line.get(n) {
             children.push(line_text_tokens(local_line, &text, line_spans, metrics, palette, syntax));
         } else {
@@ -406,6 +501,36 @@ fn line_highlight<Msg: Clone + 'static>(
         ..Default::default()
     })
     .fill(palette.bg_current_line)
+}
+
+/// Línea-fantasma para una línea vacía: un segmento horizontal con
+/// baja opacidad atravesando el centro vertical de la línea. Ancho
+/// limitado para que parezca un susurro y no una regla. Color derivado
+/// de `fg_line_number` que ya está pensado como "muted".
+fn phantom_blank_divider<Msg: Clone + 'static>(
+    line: usize,
+    metrics: EditorMetrics,
+    palette: &EditorPalette,
+) -> View<Msg> {
+    let h = 1.0_f32;
+    let y = line as f32 * metrics.line_height + (metrics.line_height - h) * 0.5;
+    // Largo visual del divisor — generoso pero no infinito.
+    let w = 320.0_f32;
+    View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            left: length(8.0_f32),
+            top: length(y),
+            right: auto(),
+            bottom: auto(),
+        },
+        size: Size {
+            width: length(w),
+            height: length(h),
+        },
+        ..Default::default()
+    })
+    .fill(with_alpha(palette.fg_line_number, 0.18))
 }
 
 fn line_text_plain<Msg: Clone + 'static>(

@@ -38,5 +38,5 @@ pub use state::{ApplyResult, EditorOptions, EditorState};
 pub use undo::UndoStack;
 pub use view::{
     text_editor_view, text_editor_view_full, text_editor_view_highlighted, EditorMetrics,
-    EditorPalette, PointerEvent,
+    EditorPalette, GutterStyle, PointerEvent,
 };
