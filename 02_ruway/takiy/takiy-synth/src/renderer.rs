@@ -41,16 +41,17 @@ impl Renderer for OscRenderer {
         // Colita extra para que las últimas notas terminen su release.
         let total_seconds =
             score.duration_beats() * sec_per_beat + self.envelope.release + 0.05;
-        let n_samples = (total_seconds * self.sample_rate as f32).ceil() as usize;
-        let mut buf = AudioBuffer::silence(self.sample_rate, n_samples);
+        let n_frames = (total_seconds * self.sample_rate as f32).ceil() as usize;
+        let mut buf = AudioBuffer::silence_with_channels(self.sample_rate, n_frames, 2);
 
         for (idx, track) in score.tracks().iter().enumerate() {
             if !score.track_is_audible(idx) {
                 continue;
             }
             let gain = track.volume.max(0.0);
+            let (gl, gr) = track.pan_gains();
             for note in track.notes() {
-                self.mix_note(note, sec_per_beat, &mut buf.samples, gain);
+                self.mix_note_stereo(note, sec_per_beat, &mut buf.samples, gain, gl, gr);
             }
         }
 
@@ -60,7 +61,15 @@ impl Renderer for OscRenderer {
 }
 
 impl OscRenderer {
-    fn mix_note(&self, note: &ScoreNote, sec_per_beat: f32, buf: &mut [f32], gain: f32) {
+    fn mix_note_stereo(
+        &self,
+        note: &ScoreNote,
+        sec_per_beat: f32,
+        buf: &mut [f32],
+        gain: f32,
+        gl: f32,
+        gr: f32,
+    ) {
         let freq = note.pitch.frequency();
         let start_sec = note.start * sec_per_beat;
         let dur_sec = note.duration * sec_per_beat;
@@ -68,18 +77,22 @@ impl OscRenderer {
         let amp = (note.velocity as f32 / 127.0) * gain;
 
         let sr = self.sample_rate as f32;
-        let start_idx = (start_sec * sr) as usize;
-        let end_idx = ((end_sec * sr).ceil() as usize).min(buf.len());
-        if start_idx >= end_idx {
+        // Estéreo interleaved: cada cuadro ocupa 2 samples (L, R).
+        let n_frames = buf.len() / 2;
+        let start_frame = (start_sec * sr) as usize;
+        let end_frame = ((end_sec * sr).ceil() as usize).min(n_frames);
+        if start_frame >= end_frame {
             return;
         }
 
         let inv_sr = 1.0 / sr;
-        for i in start_idx..end_idx {
-            let t = (i - start_idx) as f32 * inv_sr;
+        for f in start_frame..end_frame {
+            let t = (f - start_frame) as f32 * inv_sr;
             let phase = t * freq;
             let env = self.envelope.level(t, dur_sec);
-            buf[i] += self.waveform.sample(phase) * env * amp;
+            let s = self.waveform.sample(phase) * env * amp;
+            buf[f * 2] += s * gl;
+            buf[f * 2 + 1] += s * gr;
         }
     }
 }

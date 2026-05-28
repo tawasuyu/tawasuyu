@@ -215,6 +215,8 @@ pub enum EditMsg {
     ToggleSoloActive,
     /// Cambia el volumen de la pista activa en `delta` (clamp [0, 1.5]).
     NudgeActiveVolume { delta: f32 },
+    /// Cambia el pan de la pista activa en `delta` (clamp [-1, 1]).
+    NudgeActivePan { delta: f32 },
 }
 
 /// Resultado de aplicar un `EditMsg`: mensaje corto para el header.
@@ -261,6 +263,7 @@ impl EditorState {
             EditMsg::ToggleMuteActive => self.toggle_mute_active(),
             EditMsg::ToggleSoloActive => self.toggle_solo_active(),
             EditMsg::NudgeActiveVolume { delta } => self.nudge_active_volume(delta),
+            EditMsg::NudgeActivePan { delta } => self.nudge_active_pan(delta),
         }
     }
 
@@ -518,6 +521,24 @@ impl EditorState {
         }
         track.volume = new_vol;
         Some(format!("pista {idx} · vol {new_vol:.2}"))
+    }
+
+    fn nudge_active_pan(&mut self, delta: f32) -> ApplyOutcome {
+        let idx = self.active_track;
+        let track = self.score.track_mut(idx)?;
+        let new_pan = (track.pan + delta).clamp(-1.0, 1.0);
+        if (new_pan - track.pan).abs() < f32::EPSILON {
+            return None;
+        }
+        track.pan = new_pan;
+        let label = if new_pan.abs() < 0.05 {
+            "C".to_string()
+        } else if new_pan < 0.0 {
+            format!("L{:.0}", new_pan.abs() * 100.0)
+        } else {
+            format!("R{:.0}", new_pan * 100.0)
+        };
+        Some(format!("pista {idx} · pan {label}"))
     }
 
     fn delete_active_track(&mut self) -> ApplyOutcome {
@@ -885,6 +906,19 @@ mod tests {
             st.apply(EditMsg::NudgeActiveVolume { delta: -0.1 });
         }
         assert!(st.score.track(0).unwrap().volume.abs() < 1e-3);
+    }
+
+    #[test]
+    fn pan_nudge_clamps_to_minus_one_to_one() {
+        let mut st = EditorState::new(120.0);
+        for _ in 0..30 {
+            st.apply(EditMsg::NudgeActivePan { delta: 0.1 });
+        }
+        assert!((st.score.track(0).unwrap().pan - 1.0).abs() < 1e-3);
+        for _ in 0..30 {
+            st.apply(EditMsg::NudgeActivePan { delta: -0.1 });
+        }
+        assert!((st.score.track(0).unwrap().pan + 1.0).abs() < 1e-3);
     }
 
     #[test]

@@ -167,13 +167,14 @@ impl Renderer for SoundFontRenderer {
             synth.render(&mut left[cursor..total], &mut right[cursor..total]);
         }
 
-        // Mezcla a mono (promedio L+R).
-        let samples: Vec<f32> = left
-            .iter()
-            .zip(right.iter())
-            .map(|(l, r)| (l + r) * 0.5)
-            .collect();
-        let mut buf = AudioBuffer { sample_rate: self.sample_rate, samples };
+        // Estéreo interleaved: [L0, R0, L1, R1, …]. Mantiene la imagen
+        // estéreo del SoundFont sin la pérdida del promedio mono.
+        let mut samples = Vec::with_capacity(total * 2);
+        for i in 0..total {
+            samples.push(left[i]);
+            samples.push(right[i]);
+        }
+        let mut buf = AudioBuffer::from_stereo(self.sample_rate, samples);
         buf.normalize_if_clipping();
         buf
     }

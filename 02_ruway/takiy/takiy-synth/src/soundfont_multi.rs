@@ -122,8 +122,9 @@ impl Renderer for MultiProgramRenderer {
         const PROGRAM_CHANGE: i32 = 0xC0;
         const CONTROL_CHANGE: i32 = 0xB0;
         const CC_CHANNEL_VOLUME: i32 = 7;
+        const CC_PAN: i32 = 10;
 
-        // Program change + Volume por canal usado.
+        // Program change + Volume + Pan por canal usado.
         for (track_idx, track) in score.tracks().iter().enumerate() {
             let ch = channel_for_track(track_idx);
             let prog = self.program_for_track(track_idx) as i32;
@@ -141,6 +142,12 @@ impl Renderer for MultiProgramRenderer {
             // proporcionalmente para preservar el matching.
             let vol = ((v_norm * 100.0).round() as i32).clamp(0, 127);
             synth.process_midi_message(ch, CONTROL_CHANGE, CC_CHANNEL_VOLUME, vol);
+
+            // Pan CC (#10): 0 = izq, 64 = centro, 127 = der. Mapeamos
+            // pan ∈ [-1, 1] linealmente.
+            let pan_cc = (((track.pan.clamp(-1.0, 1.0) + 1.0) * 0.5 * 127.0).round() as i32)
+                .clamp(0, 127);
+            synth.process_midi_message(ch, CONTROL_CHANGE, CC_PAN, pan_cc);
         }
 
         let bpm = score.tempo_bpm.max(1e-6);
@@ -187,12 +194,15 @@ impl Renderer for MultiProgramRenderer {
             synth.render(&mut left[cursor..total], &mut right[cursor..total]);
         }
 
-        let samples: Vec<f32> = left
-            .iter()
-            .zip(right.iter())
-            .map(|(l, r)| (l + r) * 0.5)
-            .collect();
-        let mut buf = AudioBuffer { sample_rate: self.sample_rate, samples };
+        // Estéreo interleaved. La panorámica por pista se aplicó vía
+        // CC#10 abajo (al setup), así que `left` y `right` ya reflejan
+        // el balance del mixer; sólo nos queda interleave + normalize.
+        let mut samples = Vec::with_capacity(total * 2);
+        for i in 0..total {
+            samples.push(left[i]);
+            samples.push(right[i]);
+        }
+        let mut buf = AudioBuffer::from_stereo(self.sample_rate, samples);
         buf.normalize_if_clipping();
         buf
     }

@@ -54,14 +54,20 @@ const COMMAND_CHANNEL_CAP: usize = 16;
 /// El uso típico es `PlayOpts::default()` (play desde el inicio, sin loop);
 /// `Player::play_from(b, s)` y `Player::play_loop(b, lo, hi)` envuelven los
 /// dos atajos comunes.
+///
+/// **Unidades**: tanto `start_sample` como los bounds de `loop_range`
+/// están en **frames** (muestras por canal), no en samples interleaved.
+/// Para mono coinciden con el índice de muestra; para estéreo, frame `n`
+/// corresponde al par interleaved `(2n, 2n+1)`. Mantener nombre
+/// `start_sample` por compatibilidad histórica.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PlayOpts {
-    /// Sample desde el cual empezar a leer el buffer. `0` = inicio.
+    /// Frame desde el cual empezar a leer el buffer. `0` = inicio.
     pub start_sample: u64,
-    /// Región de loop `[start, end)` en samples. Si está, el cursor
-    /// vuelve a `start` cada vez que alcanza `end`. Si `start >= end` o
-    /// `end > buffer.len()`, el callback ignora el loop y reproduce
-    /// linealmente.
+    /// Región de loop `[start, end)` en frames. Si está, el cursor
+    /// vuelve a `start` cada vez que alcanza `end`. Si `start >= end`
+    /// o `end > buffer.frames()`, el callback ignora el loop y
+    /// reproduce linealmente.
     pub loop_range: Option<(u64, u64)>,
 }
 
@@ -232,11 +238,18 @@ impl Player {
         self.playing.load(Ordering::Acquire)
     }
 
-    /// Posición de reproducción en samples desde el inicio del buffer
-    /// actual. Lock-free; resolución de un sample. Devuelve `0` cuando
-    /// no hay buffer sonando.
+    /// Posición de reproducción en **frames** (muestras por canal) desde
+    /// el inicio del buffer actual. Lock-free. Devuelve `0` cuando no hay
+    /// buffer sonando. El nombre se mantiene por compatibilidad histórica
+    /// (en mono frames == samples interleaved).
     pub fn position_samples(&self) -> u64 {
         self.position.load(Ordering::Acquire)
+    }
+
+    /// Alias semánticamente claro: posición en cuadros (frames). Equivale
+    /// a [`position_samples`].
+    pub fn position_frames(&self) -> u64 {
+        self.position_samples()
     }
 
     /// Posición de reproducción en segundos. Cero si no está tocando.
@@ -316,34 +329,69 @@ fn fill<T>(
         return;
     };
 
-    let total = buffer.samples.len() as u64;
+    let in_channels = buffer.channels.max(1) as usize;
+    let frames_total = (buffer.samples.len() / in_channels) as u64;
     let loop_range = state.loop_range;
+    // `cursor` cuenta cuadros (frames), no samples. Mantenemos el
+    // contador en frames para que loop_range y position_samples()
+    // sigan teniendo el mismo significado independientemente de
+    // los canales del buffer fuente.
     let mut cursor = state.cursor;
 
     for frame in out.chunks_mut(channels) {
-        // Si hay loop activo, antes de cada muestra reverificamos si
-        // hay que rebobinar — atrapa el caso en que start_sample cayó
-        // dentro de la región y la primera muestra ya cruzó loop_end.
         if let Some((lo, hi)) = loop_range {
             if cursor >= hi {
                 cursor = lo;
             }
         }
-        let value = if cursor < total {
-            let v = buffer.samples[cursor as usize];
+        if cursor < frames_total {
+            let base = cursor as usize * in_channels;
+            // Estéreo→estéreo directo. Si input es mono y output stereo,
+            // replicamos. Si input es stereo y output mono, promediamos.
+            // Cualquier otra combinación: tomamos el primer canal del
+            // input y replicamos a todos los del output.
+            match (in_channels, channels) {
+                (1, _) => {
+                    let v = T::from_sample(buffer.samples[base]);
+                    for sample in frame.iter_mut() {
+                        *sample = v;
+                    }
+                }
+                (2, 1) => {
+                    let mix = (buffer.samples[base] + buffer.samples[base + 1]) * 0.5;
+                    frame[0] = T::from_sample(mix);
+                }
+                (2, 2) => {
+                    frame[0] = T::from_sample(buffer.samples[base]);
+                    frame[1] = T::from_sample(buffer.samples[base + 1]);
+                }
+                (2, _) => {
+                    // Output con > 2 canales (poco común): L→canales pares,
+                    // R→impares; los extras quedan con copia del último.
+                    let l = T::from_sample(buffer.samples[base]);
+                    let r = T::from_sample(buffer.samples[base + 1]);
+                    for (i, sample) in frame.iter_mut().enumerate() {
+                        *sample = if i % 2 == 0 { l } else { r };
+                    }
+                }
+                _ => {
+                    let v = T::from_sample(buffer.samples[base]);
+                    for sample in frame.iter_mut() {
+                        *sample = v;
+                    }
+                }
+            }
             cursor += 1;
-            T::from_sample(v)
         } else {
-            silence
-        };
-        for sample in frame.iter_mut() {
-            *sample = value;
+            for sample in frame.iter_mut() {
+                *sample = silence;
+            }
         }
     }
 
     state.cursor = cursor;
     position.store(cursor, Ordering::Release);
-    if loop_range.is_none() && cursor >= total {
+    if loop_range.is_none() && cursor >= frames_total {
         // Terminó el buffer y no hay loop: liberamos la referencia para
         // back-pressure (`is_playing → false`) y eventual liberación de
         // memoria del Arc en el lado de UI.

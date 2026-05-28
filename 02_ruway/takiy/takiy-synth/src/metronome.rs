@@ -43,16 +43,19 @@ impl Default for Metronome {
     }
 }
 
-/// Mezcla clicks de metrónomo en `buf` a la tasa indicada. `n_beats`
-/// limita cuántos beats se acentúan desde `start_beat`; útil para count-in
-/// (mezclar sólo unos beats al principio). Si `n_beats` es `None`, mezcla
-/// clicks en todo el buffer.
+/// Mezcla clicks de metrónomo en `buf` a la tasa indicada. `channels`
+/// (1 = mono, 2 = stereo interleaved) determina cómo se distribuyen los
+/// clicks: en mono se acumulan en cada sample; en estéreo, en ambos
+/// canales del cuadro. `n_beats` limita cuántos beats se acentúan desde
+/// `start_beat`; útil para count-in. Si `n_beats` es `None`, mezcla en
+/// todo el buffer.
 ///
 /// El beat 0 absoluto siempre arranca acentuado; los beats subsiguientes
 /// caen acentuados o normales según `metro.beats_per_bar`.
 pub fn mix_clicks(
     buf: &mut [f32],
     sample_rate: u32,
+    channels: u16,
     sec_per_beat: f32,
     metro: &Metronome,
     start_beat: u32,
@@ -61,8 +64,10 @@ pub fn mix_clicks(
     let sr = sample_rate as f32;
     let beats_per_bar = metro.beats_per_bar.max(1);
     let click_duration_sec = 0.05; // duración percusiva fija
+    let ch = channels.max(1) as usize;
 
-    let buf_seconds = buf.len() as f32 / sr;
+    let buf_frames = buf.len() / ch;
+    let buf_seconds = buf_frames as f32 / sr;
     let last_beat_in_buf = (buf_seconds / sec_per_beat).ceil() as u32;
     let end_beat = match n_beats {
         Some(n) => start_beat.saturating_add(n).min(last_beat_in_buf + 1),
@@ -76,6 +81,7 @@ pub fn mix_clicks(
         mix_click(
             buf,
             sr,
+            ch,
             beat_sec,
             click_duration_sec,
             freq,
@@ -88,24 +94,29 @@ pub fn mix_clicks(
 fn mix_click(
     buf: &mut [f32],
     sr: f32,
+    channels: usize,
     start_sec: f32,
     duration_sec: f32,
     freq: f32,
     amp: f32,
     env: Adsr,
 ) {
-    let start_idx = (start_sec * sr) as usize;
+    let start_frame = (start_sec * sr) as usize;
     let end_sec = start_sec + duration_sec + env.release;
-    let end_idx = ((end_sec * sr).ceil() as usize).min(buf.len());
-    if start_idx >= end_idx {
+    let n_frames = buf.len() / channels;
+    let end_frame = ((end_sec * sr).ceil() as usize).min(n_frames);
+    if start_frame >= end_frame {
         return;
     }
     let inv_sr = 1.0 / sr;
-    for i in start_idx..end_idx {
-        let t = (i - start_idx) as f32 * inv_sr;
+    for f in start_frame..end_frame {
+        let t = (f - start_frame) as f32 * inv_sr;
         let phase = t * freq;
         let env_lvl = env.level(t, duration_sec);
-        buf[i] += Waveform::Sine.sample(phase) * env_lvl * amp;
+        let s = Waveform::Sine.sample(phase) * env_lvl * amp;
+        for c in 0..channels {
+            buf[f * channels + c] += s;
+        }
     }
 }
 
@@ -117,26 +128,30 @@ pub fn count_in_samples(sample_rate: u32, sec_per_beat: f32, n_beats: u32) -> us
 
 /// Devuelve un nuevo `AudioBuffer` con `n_beats` de silencio al inicio,
 /// con clicks de metrónomo, seguido por el contenido de `inner`. Útil
-/// para implementar count-in sin tocar el renderer.
+/// para implementar count-in sin tocar el renderer. Respeta los canales
+/// de `inner` (mono o estéreo).
 pub fn prepend_count_in(
     inner: AudioBuffer,
     sec_per_beat: f32,
     n_beats: u32,
     metro: &Metronome,
 ) -> AudioBuffer {
-    let pre = count_in_samples(inner.sample_rate, sec_per_beat, n_beats);
+    let pre_frames = count_in_samples(inner.sample_rate, sec_per_beat, n_beats);
+    let channels = inner.channels.max(1) as usize;
+    let pre = pre_frames * channels;
     let total = pre + inner.samples.len();
     let mut samples = vec![0.0_f32; total];
     samples[pre..].copy_from_slice(&inner.samples);
     mix_clicks(
         &mut samples[..pre],
         inner.sample_rate,
+        inner.channels,
         sec_per_beat,
         metro,
         0,
         Some(n_beats),
     );
-    AudioBuffer { sample_rate: inner.sample_rate, samples }
+    AudioBuffer { sample_rate: inner.sample_rate, channels: inner.channels, samples }
 }
 
 #[cfg(test)]
@@ -146,10 +161,24 @@ mod tests {
     #[test]
     fn mix_clicks_makes_silent_buffer_audible() {
         let sr = 44_100;
-        let mut buf = vec![0.0_f32; sr as usize]; // 1s
-        mix_clicks(&mut buf, sr, 0.5, &Metronome::DEFAULT, 0, None);
+        let mut buf = vec![0.0_f32; sr as usize]; // 1s mono
+        mix_clicks(&mut buf, sr, 1, 0.5, &Metronome::DEFAULT, 0, None);
         let peak = buf.iter().copied().map(f32::abs).fold(0.0_f32, f32::max);
         assert!(peak > 0.1, "peak = {peak}");
+    }
+
+    #[test]
+    fn mix_clicks_stereo_mixes_in_both_channels() {
+        let sr = 44_100;
+        // 1s estéreo interleaved = 2 * sr samples.
+        let mut buf = vec![0.0_f32; 2 * sr as usize];
+        mix_clicks(&mut buf, sr, 2, 0.5, &Metronome::DEFAULT, 0, None);
+        // Verifico que tanto los samples pares (L) como impares (R)
+        // tengan energía.
+        let left_peak = buf.iter().step_by(2).copied().map(f32::abs).fold(0.0_f32, f32::max);
+        let right_peak = buf.iter().skip(1).step_by(2).copied().map(f32::abs).fold(0.0_f32, f32::max);
+        assert!(left_peak > 0.1, "L peak {left_peak}");
+        assert!(right_peak > 0.1, "R peak {right_peak}");
     }
 
     #[test]
@@ -161,13 +190,10 @@ mod tests {
     #[test]
     fn prepend_count_in_keeps_inner_audio_intact() {
         let sr = 44_100;
-        // Buffer "interno" no-cero para verificar copia.
-        let inner = AudioBuffer {
-            sample_rate: sr,
-            samples: vec![0.3; sr as usize],
-        };
+        // Buffer "interno" mono no-cero para verificar copia.
+        let inner = AudioBuffer::from_mono(sr, vec![0.3; sr as usize]);
         let out = prepend_count_in(inner.clone(), 0.5, 2, &Metronome::DEFAULT);
-        let pre = count_in_samples(sr, 0.5, 2);
+        let pre = count_in_samples(sr, 0.5, 2) * inner.channels as usize;
         // El bloque interno se copia tal cual.
         for i in 0..inner.samples.len() {
             assert!((out.samples[pre + i] - 0.3).abs() < 1e-6);
@@ -178,18 +204,33 @@ mod tests {
     }
 
     #[test]
+    fn prepend_count_in_preserves_inner_channels() {
+        let sr = 44_100;
+        // Buffer estéreo interleaved (L=0.4, R=-0.4 en cada frame).
+        let n_frames = sr as usize;
+        let inner = AudioBuffer::from_stereo(
+            sr,
+            (0..n_frames).flat_map(|_| [0.4_f32, -0.4]).collect(),
+        );
+        let out = prepend_count_in(inner.clone(), 0.5, 2, &Metronome::DEFAULT);
+        assert_eq!(out.channels, 2);
+        let pre_frames = count_in_samples(sr, 0.5, 2);
+        let pre = pre_frames * 2;
+        // El inner se preserva.
+        assert!((out.samples[pre] - 0.4).abs() < 1e-6);
+        assert!((out.samples[pre + 1] + 0.4).abs() < 1e-6);
+    }
+
+    #[test]
     fn accent_lands_only_at_beat_zero() {
-        // Construyo un buffer de 4 beats a 0.5s/beat = 2s a 44.1k. Mezclo
-        // SOLO el acento (frecuencia distinta) y verifico que la energía
-        // en el rango del acento (2000 Hz) sea mayor en el primer beat
-        // que en los siguientes. Test de aprox energía no exacta.
+        // Construyo un buffer mono de 4 beats a 0.5s/beat = 2s a 44.1k.
+        // Mezclo SOLO el acento y verifico que cada beat tiene energía.
         let sr = 44_100;
         let n = (2.0 * sr as f32) as usize;
         let mut buf = vec![0.0_f32; n];
         let mut m = Metronome::DEFAULT;
         m.click_hz = m.accent_hz; // forzamos para que el test sea simple
-        mix_clicks(&mut buf, sr, 0.5, &m, 0, None);
-        // Debería haber 4 clicks distribuidos cada 0.5s.
+        mix_clicks(&mut buf, sr, 1, 0.5, &m, 0, None);
         let beat_samples = (0.5 * sr as f32) as usize;
         for beat in 0..4 {
             let s = beat * beat_samples;

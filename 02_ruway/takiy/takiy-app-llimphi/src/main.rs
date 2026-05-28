@@ -388,6 +388,12 @@ impl App for Takiy {
             Key::Character(s) if (s == "]" || s == "}") && event.modifiers.alt => {
                 Some(Msg::Edit(EditMsg::NudgeActiveVolume { delta: 0.1 }))
             }
+            Key::Character(s) if (s == "," || s == "<") && event.modifiers.alt => {
+                Some(Msg::Edit(EditMsg::NudgeActivePan { delta: -0.1 }))
+            }
+            Key::Character(s) if (s == "." || s == ">") && event.modifiers.alt => {
+                Some(Msg::Edit(EditMsg::NudgeActivePan { delta: 0.1 }))
+            }
             Key::Character(s) if s.eq_ignore_ascii_case("m") => Some(Msg::ToggleMetronome),
             Key::Character(s) if s.eq_ignore_ascii_case("l") => Some(Msg::ToggleLoop),
             Key::Character(s) if s.eq_ignore_ascii_case("q") => Some(Msg::CycleSnap),
@@ -627,6 +633,14 @@ fn paint_piano_roll(
             if t.mute { parts.push("M".to_string()); }
             if t.solo { parts.push("S".to_string()); }
             parts.push(format!("vol {:.2}", t.volume));
+            if t.pan.abs() >= 0.05 {
+                let label = if t.pan < 0.0 {
+                    format!("L{:.0}", t.pan.abs() * 100.0)
+                } else {
+                    format!("R{:.0}", t.pan * 100.0)
+                };
+                parts.push(format!("pan {label}"));
+            }
             format!(" [{}]", parts.join(" · "))
         })
         .unwrap_or_default();
@@ -772,7 +786,15 @@ fn build_play(
     // estado del editor.
     if let Some(beats_per_bar) = editor.metronome_beats_per_bar {
         let metro = Metronome { beats_per_bar, ..Metronome::DEFAULT };
-        mix_clicks(&mut buf.samples, sample_rate, sec_per_beat, &metro, 0, None);
+        mix_clicks(
+            &mut buf.samples,
+            sample_rate,
+            buf.channels,
+            sec_per_beat,
+            &metro,
+            0,
+            None,
+        );
     }
 
     // Count-in: prepende un compás (beats_per_bar o 4 si metrónomo off)
@@ -788,14 +810,17 @@ fn build_play(
         0
     };
 
-    // Loop region (en beats) → rango en samples ajustando por el
-    // count-in (que vive en samples antes del score).
+    // Loop region (en beats) → rango en frames ajustando por el count-in
+    // (que vive en frames antes del score). PlayOpts/Player.position
+    // cuentan frames (= samples por canal), no samples interleaved del
+    // buffer mismo, así que el bound es buf.frames(), no buf.samples.len().
+    let total_frames = buf.frames() as u64;
     let loop_range = editor.loop_region.and_then(|(from_b, to_b)| {
         let from_s = (from_b * sec_per_beat * sample_rate as f32) as u64
             + pre_samples as u64;
         let to_s = (to_b * sec_per_beat * sample_rate as f32) as u64
             + pre_samples as u64;
-        if from_s < to_s && to_s <= buf.samples.len() as u64 {
+        if from_s < to_s && to_s <= total_frames {
             Some((from_s, to_s))
         } else {
             None

@@ -58,6 +58,10 @@ pub struct Track {
     /// Default `false`.
     #[serde(default)]
     pub solo: bool,
+    /// Panorámica estéreo `[-1, 1]`. `-1` = todo izquierda, `0` = centro,
+    /// `1` = todo derecha. Aplica equal-power. Default `0.0` (centro).
+    #[serde(default)]
+    pub pan: f32,
 }
 
 fn default_volume() -> f32 {
@@ -72,6 +76,7 @@ impl Default for Track {
             volume: 1.0,
             mute: false,
             solo: false,
+            pan: 0.0,
         }
     }
 }
@@ -84,7 +89,17 @@ impl Track {
             volume: 1.0,
             mute: false,
             solo: false,
+            pan: 0.0,
         }
+    }
+
+    /// Ganancia equal-power para el par estéreo dado el `pan` actual.
+    /// `pan = -1` → (1, 0); `pan = 0` → (√½, √½); `pan = 1` → (0, 1).
+    /// Conserva la potencia total (`gL² + gR² = 1`).
+    pub fn pan_gains(&self) -> (f32, f32) {
+        let p = self.pan.clamp(-1.0, 1.0);
+        let theta = (p + 1.0) * std::f32::consts::FRAC_PI_4; // [0, π/2]
+        (theta.cos(), theta.sin())
     }
 
     /// Inserta una nota manteniendo el orden por pulso de inicio.
@@ -306,13 +321,44 @@ mod tests {
 
     #[test]
     fn track_serde_with_missing_mixer_fields_uses_defaults() {
-        // JSON sin volume/mute/solo (formato pre-F3) debe cargar bien.
+        // JSON sin volume/mute/solo/pan (formato pre-F3) debe cargar bien.
         let json = r#"{"name":"old","notes":[]}"#;
         let t: Track = serde_json::from_str(json).unwrap();
         assert_eq!(t.name, "old");
         assert_eq!(t.volume, 1.0);
         assert!(!t.mute);
         assert!(!t.solo);
+        assert_eq!(t.pan, 0.0);
+    }
+
+    #[test]
+    fn pan_gains_equal_power_at_center_and_extremes() {
+        let mut t = Track::new("a");
+        // Centro: misma ganancia en ambos.
+        t.pan = 0.0;
+        let (l, r) = t.pan_gains();
+        assert!((l - r).abs() < 1e-6);
+        assert!((l * l + r * r - 1.0).abs() < 1e-5);
+        // Izquierda total.
+        t.pan = -1.0;
+        let (l, r) = t.pan_gains();
+        assert!((l - 1.0).abs() < 1e-6);
+        assert!(r.abs() < 1e-6);
+        // Derecha total.
+        t.pan = 1.0;
+        let (l, r) = t.pan_gains();
+        assert!(l.abs() < 1e-6);
+        assert!((r - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn pan_gains_clamps_out_of_range_input() {
+        let mut t = Track::new("a");
+        t.pan = 2.5; // fuera del rango
+        let (l, r) = t.pan_gains();
+        // Debería tratarse como pan = 1 (todo derecha).
+        assert!(l.abs() < 1e-6);
+        assert!((r - 1.0).abs() < 1e-6);
     }
 
     #[test]
