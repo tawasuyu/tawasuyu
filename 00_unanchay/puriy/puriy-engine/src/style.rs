@@ -855,14 +855,19 @@ pub fn resolve_content_items(
                     out.push_str(&v);
                 }
             }
+            // `Url` se materializa como `<img>` sintético en boxes —
+            // acá lo saltamos, el caller hace dispatch sobre los items.
+            ContentItem::Url(_) => {}
         }
     }
     out
 }
 
 /// Item dentro del valor de `content:` para `::before`/`::after`. Un
-/// `content:` puede tener varios items concatenados — se resuelven al
-/// inyectar el pseudo-element y se concatenan a una sola string.
+/// `content:` puede tener varios items concatenados — `Text`/`Counter`/
+/// `Attr` se resuelven a string y los runs adyacentes se mergean en un
+/// solo text leaf; `Url` se materializa como un `<img>` sintético
+/// separado, en línea con los demás items.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ContentItem {
     /// Literal string entre comillas — el más común.
@@ -874,6 +879,11 @@ pub enum ContentItem {
     /// `attr(name)` — el valor del atributo `name` del elemento padre del
     /// pseudo. Strings vacíos si el atributo no existe.
     Attr(String),
+    /// `url(...)` — genera un `<img>` sintético inline-block con el
+    /// recurso descargado. Si la descarga/decode falla, se omite (no
+    /// fallback a texto — CSS spec dice que un url() inválido suprime
+    /// la generación del pseudo).
+    Url(String),
 }
 
 /// Pseudo-elemento attachado al selector. Genera un box hijo sintético
@@ -1495,9 +1505,14 @@ fn default_display(tag: &str) -> Display {
         // las pinta. Sus descendientes (los `<rect>`/`<path>`/etc.) NO
         // entran al box tree.
         "svg" => Display::InlineBlock,
-        // canvas/math/video/audio/iframe/object/embed: sin renderer
-        // todavía. Ocultos para no derramar texto basura en la página.
-        "canvas" | "math" | "video" | "audio" | "iframe" | "object" | "embed" => Display::None,
+        // `<iframe>` no tiene engine de sub-página todavía, pero
+        // mostrarlo como block placeholder (border + label con la URL)
+        // es mejor que ocultarlo — el lector ve QUE hay contenido
+        // embebido y dónde apunta. El placeholder lo arma boxes.
+        "iframe" => Display::Block,
+        // canvas/math/video/audio/object/embed: sin renderer todavía.
+        // Ocultos para no derramar texto basura en la página.
+        "canvas" | "math" | "video" | "audio" | "object" | "embed" => Display::None,
         _ => Display::Inline,
     }
 }
@@ -1552,6 +1567,11 @@ fn ua_stylesheet() -> Vec<Rule> {
                 // dejamos así para que páginas sin CSS no queden pegadas
                 // al borde de la ventana.
                 decl(DeclKind::Margin(Sides::all(8.0))),
+                // CSS spec default es `font-family: serif`. Browsers
+                // mapean "serif" a Times New Roman, Georgia, etc. según
+                // el sistema. `parley::FontStack::Source("serif")` ya
+                // delega esa resolución a la system font config.
+                decl(DeclKind::FontFamily("serif".to_string())),
             ],
         },
         Rule {
@@ -1727,6 +1747,21 @@ fn ua_stylesheet() -> Vec<Rule> {
             decls: vec![
                 decl(DeclKind::TextAlign(TextAlign::Center)),
                 decl(DeclKind::Padding(Sides::all(4.0))),
+            ],
+        },
+        // `<iframe>` placeholder: border gris discreto + padding +
+        // margin vertical para que se distinga del flujo. El label
+        // con la URL lo inyecta `boxes::build_node`.
+        Rule {
+            selector: ty("iframe"),
+            decls: vec![
+                decl(DeclKind::Margin(sides_lrtb(8.0, 0.0, 8.0, 0.0))),
+                decl(DeclKind::Padding(Sides::all(8.0))),
+                decl(DeclKind::BorderWidth(1.0)),
+                decl(DeclKind::BorderColor(Color::rgb(180, 180, 180))),
+                decl(DeclKind::BorderEnabled(true)),
+                decl(DeclKind::Background(Color::rgb(248, 248, 248))),
+                decl(DeclKind::Color(Color::rgb(100, 100, 100))),
             ],
         },
         // <small>/<sub>/<sup>: tamaño relativo. CSS spec usa `smaller`
@@ -2821,7 +2856,24 @@ fn parse_content_value(value: &str) -> Option<Vec<ContentItem>> {
         match lower.as_str() {
             "counter" => items.push(ContentItem::Counter(name.to_string())),
             "attr" => items.push(ContentItem::Attr(name.to_string())),
-            _ => return None, // `url(...)`, `counters(...)` no soportados aún.
+            "url" => {
+                // El arg de url() puede venir entre comillas o sin.
+                // arg ya fue trimmeado del paréntesis exterior; acá
+                // strippeamos comillas si las hay y devolvemos el resto
+                // sin trim adicional (las URLs pueden tener espacios
+                // encodeados pero no whitespace literal interno).
+                let raw = arg.trim();
+                let clean = raw
+                    .trim_start_matches(['"', '\''].as_ref())
+                    .trim_end_matches(['"', '\''].as_ref())
+                    .trim()
+                    .to_string();
+                if clean.is_empty() {
+                    return None;
+                }
+                items.push(ContentItem::Url(clean));
+            }
+            _ => return None, // `counters(...)` no soportado aún.
         }
     }
     if items.is_empty() {

@@ -1962,7 +1962,7 @@ fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
                 let arrow_view = View::new(Style {
                     size: Size {
                         width: length(16.0_f32 * zoom),
-                        height: length(child.font_size * zoom * 1.4),
+                        height: length(child.font_size * zoom * 1.2),
                     },
                     margin: Rect {
                         left: length(0.0_f32),
@@ -3185,7 +3185,7 @@ fn box_style(b: &BoxNode, zoom: f32) -> Style {
     // colapsa los inlines al top del bloque. Para inlines con hijos
     // dejamos auto y que el padre mida.
     let is_text_leaf = b.text.is_some();
-    let lh_mult = b.line_height.unwrap_or(1.4);
+    let lh_mult = b.line_height.unwrap_or(1.2);
     let line_h = b.font_size * lh_mult * zoom;
 
     let is_flex = matches!(b.display, Display::Flex | Display::InlineFlex);

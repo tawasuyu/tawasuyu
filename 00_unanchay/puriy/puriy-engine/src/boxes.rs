@@ -86,7 +86,9 @@ pub struct BoxNode {
     /// Alineación del texto inline dentro del bloque.
     pub text_align: TextAlign,
     /// Multiplicador line-height (font-size * line_height = altura
-    /// de línea). `None` → caller usa 1.4 como default.
+    /// de línea). `None` → caller usa 1.2 como default (matchea
+    /// browser CSS `normal`; antes 1.4 — más generoso pero menos
+    /// compacto que el render real).
     pub line_height: Option<f32>,
     /// Ancho del border en px por lado.
     pub border_widths: Sides<f32>,
@@ -410,7 +412,7 @@ fn find_y_inner(b: &BoxNode, target: &str, acc: &mut f32) -> Option<f32> {
     }
     if b.text.is_some() {
         // Hoja de texto: una línea de altura font_size * line_height.
-        *acc += b.font_size * b.line_height.unwrap_or(1.4);
+        *acc += b.font_size * b.line_height.unwrap_or(1.2);
         return None;
     }
     // Block-ish: contribución de borders verticales del lado top.
@@ -453,7 +455,7 @@ fn find_match_y_inner(
                 return Some(*acc);
             }
         }
-        *acc += b.font_size * b.line_height.unwrap_or(1.4);
+        *acc += b.font_size * b.line_height.unwrap_or(1.2);
         return None;
     }
     *acc += b.margin.top + b.padding.top;
@@ -507,6 +509,12 @@ pub fn build(dom: &DomTree, styles: &StyleEngine, base_url: &str) -> BoxTree {
     // entra al pre-walk todavía — vive en CSS y requiere computar
     // styles primero.
     prefetch_image_urls(&dom.document(), base.as_ref());
+    // Segundo pass de prefetch: `background-image: url(...)` vive en
+    // CSS — necesita styles computados, así que va después del primer
+    // pre-walk. Computamos sin parent style (background-image no es
+    // heredable, así que el value es independiente del padre). Las
+    // URLs descargadas también caen en la cache global.
+    prefetch_background_image_urls(&dom.document(), styles, base.as_ref());
     let mut counters: std::collections::HashMap<String, i32> = std::collections::HashMap::new();
     let mut root = build_node(&body, styles, base.as_ref(), None, &mut counters)
         .unwrap_or_else(empty_root);
@@ -1165,10 +1173,7 @@ fn build_node(
                     *counters.entry(name.clone()).or_insert(0) += *delta;
                 }
                 if let Some(items) = &ps.content {
-                    let text = crate::style::resolve_content_items(items, node, counters);
-                    if !text.is_empty() {
-                        children.push(inline_text_with_style(text, &ps));
-                    }
+                    emit_content_items(items, node, counters, &ps, base, &mut children);
                 }
             }
             // <li>: prefija con marker (bullet o numeral según
@@ -1181,6 +1186,18 @@ fn build_node(
                 if let Some(marker) = li_marker(node, style.list_style_type) {
                     children.push(inline_text_with_style(marker, &style));
                 }
+            }
+            // `<iframe>` placeholder: sin engine de sub-página todavía,
+            // mostramos un label con la URL para que el lector vea QUE
+            // hay contenido embebido y dónde apunta.
+            if tag.as_deref() == Some("iframe") {
+                let src = dom::attr(node, "src").unwrap_or_default();
+                let label = if src.is_empty() {
+                    "[iframe sin src]".to_string()
+                } else {
+                    format!("[iframe: {src}]")
+                };
+                children.push(inline_text_with_style(label, &style));
             }
             // <img> sin imagen decodificada: muestra `alt`.
             if tag.as_deref() == Some("img") && image.is_none() {
@@ -1208,10 +1225,7 @@ fn build_node(
                     *counters.entry(name.clone()).or_insert(0) += *delta;
                 }
                 if let Some(items) = &ps.content {
-                    let text = crate::style::resolve_content_items(items, node, counters);
-                    if !text.is_empty() {
-                        children.push(inline_text_with_style(text, &ps));
-                    }
+                    emit_content_items(items, node, counters, &ps, base, &mut children);
                 }
             }
             let children = strip_block_adjacent_whitespace(children, style.display);
@@ -1618,6 +1632,63 @@ fn strip_block_adjacent_whitespace(
 /// chrome ya está en un worker thread durante `Engine::load`. Pasa por
 /// la cache global de bytes — recargas y navegación entre tabs no
 /// re-descargan.
+/// Materializa los `ContentItem`s del `content:` del pseudo en boxes
+/// hijos. Strings/counters/attrs adjacentes se concatenan en un
+/// `inline_text_with_style`; cada `Url` genera un `<img>` sintético
+/// inline-block. Orden preservado. Items que producen string vacía o
+/// urls que fallan al decode se omiten silenciosamente.
+fn emit_content_items(
+    items: &[crate::style::ContentItem],
+    node: &Handle,
+    counters: &std::collections::HashMap<String, i32>,
+    pseudo_style: &ComputedStyle,
+    base: Option<&url::Url>,
+    out: &mut Vec<BoxNode>,
+) {
+    use crate::style::ContentItem;
+    let mut text_buf = String::new();
+    let flush_text = |buf: &mut String, out: &mut Vec<BoxNode>| {
+        if !buf.is_empty() {
+            out.push(inline_text_with_style(std::mem::take(buf), pseudo_style));
+        }
+    };
+    for it in items {
+        match it {
+            ContentItem::Text(s) => text_buf.push_str(s),
+            ContentItem::Counter(name) => {
+                let v = counters.get(name).copied().unwrap_or(0);
+                text_buf.push_str(&v.to_string());
+            }
+            ContentItem::Attr(name) => {
+                if let Some(v) = dom::attr(node, name) {
+                    text_buf.push_str(&v);
+                }
+            }
+            ContentItem::Url(u) => {
+                flush_text(&mut text_buf, out);
+                if let Some(abs) = resolve_href(base, u) {
+                    if let Some(img) = fetch_and_decode(&abs) {
+                        out.push(synthetic_image_box(img, pseudo_style));
+                    }
+                    // Si fetch/decode falla, lo omitimos (matchea CSS
+                    // spec: url() inválido suprime la generación).
+                }
+            }
+        }
+    }
+    flush_text(&mut text_buf, out);
+}
+
+/// Construye un BoxNode inline-block con una imagen ya decodificada,
+/// hereda el estilo del pseudo. Se usa para `content: url(...)`.
+fn synthetic_image_box(img: ImageData, style: &ComputedStyle) -> BoxNode {
+    let mut b = inline_text_with_style(String::new(), style);
+    b.display = Display::InlineBlock;
+    b.image = Some(img);
+    b.text = None;
+    b
+}
+
 /// Margin collapsing contra el padre. CSS spec:
 /// - Si el padre NO tiene border-top ni padding-top, el margin-top
 ///   del primer hijo block in-flow "se ve" como parte del padre —
@@ -1769,6 +1840,63 @@ fn prefetch_image_urls(root: &Handle, base: Option<&url::Url>) {
                 // Best-effort: errores se ignoran. El build_node
                 // posterior los reintentará serializado y muestra el
                 // alt del `<img>` si igual falla.
+                let _ = crate::fetch::fetch_bytes(&url);
+            }
+        }));
+    }
+    for h in handles {
+        let _ = h.join();
+    }
+}
+
+/// Segundo pass de prefetch: recolecta URLs de `background-image:
+/// url(...)` después de computar styles. Reusa el mismo pool de
+/// workers que `prefetch_image_urls`. Computamos sin parent porque
+/// `background-image` no se hereda y los valores son independientes
+/// del contexto del padre (cosa que sí valdría para `color` o
+/// `font-size`).
+fn prefetch_background_image_urls(
+    root: &Handle,
+    styles: &StyleEngine,
+    base: Option<&url::Url>,
+) {
+    let mut urls: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    dom::walk(root, &mut |node| {
+        if !matches!(node.data, markup5ever_rcdom::NodeData::Element { .. }) {
+            return;
+        }
+        let style = styles.compute(node);
+        if let Some(u) = style.background_image_url.as_deref() {
+            if let Some(abs) = resolve_href(base, u) {
+                if seen.insert(abs.clone()) {
+                    urls.push(abs);
+                }
+            }
+        }
+    });
+    if urls.is_empty() {
+        return;
+    }
+    let pending: Vec<String> = urls
+        .into_iter()
+        .filter(|u| {
+            url::Url::parse(u)
+                .ok()
+                .map(|p| matches!(p.scheme(), "http" | "https"))
+                .unwrap_or(false)
+        })
+        .filter(|u| crate::cache::get(u).is_none())
+        .collect();
+    if pending.is_empty() {
+        return;
+    }
+    let chunk_size = pending.len().div_ceil(PREFETCH_WORKERS).max(1);
+    let mut handles = Vec::new();
+    for chunk in pending.chunks(chunk_size) {
+        let chunk = chunk.to_vec();
+        handles.push(std::thread::spawn(move || {
+            for url in chunk {
                 let _ = crate::fetch::fetch_bytes(&url);
             }
         }));
@@ -2704,6 +2832,61 @@ mod tests {
             }
         });
         assert_eq!(links, vec!["https://example.com/doc#top".to_string()]);
+    }
+
+    #[test]
+    fn iframe_se_renderea_como_placeholder_con_url() {
+        let html = r##"<html><body>
+            <iframe src="https://embed.example.com/video"></iframe>
+        </body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut found: Option<String> = None;
+        doc.box_tree.walk(|b| {
+            if b.tag.as_deref() == Some("iframe") {
+                if let Some(first) = b.children.first() {
+                    found = first.text.clone();
+                }
+            }
+        });
+        assert_eq!(
+            found.as_deref(),
+            Some("[iframe: https://embed.example.com/video]")
+        );
+    }
+
+    #[test]
+    fn iframe_sin_src_muestra_label_generico() {
+        let html = "<html><body><iframe></iframe></body></html>";
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut found: Option<String> = None;
+        doc.box_tree.walk(|b| {
+            if b.tag.as_deref() == Some("iframe") {
+                found = b.children.first().and_then(|c| c.text.clone());
+            }
+        });
+        assert_eq!(found.as_deref(), Some("[iframe sin src]"));
+    }
+
+    #[test]
+    fn content_url_parser_acepta_quoted_y_unquoted() {
+        use crate::ContentItem;
+        let html = r##"<html><head><style>
+            .a::before { content: url("https://x/y.png") }
+            .b::before { content: url(https://x/z.png) }
+        </style></head><body>
+            <p class="a"></p>
+            <p class="b"></p>
+        </body></html>"##;
+        let dom = crate::DomTree::parse(html);
+        let eng = crate::StyleEngine::from_dom(&dom);
+        let ps_a = dom.find("p").unwrap();
+        let before = eng.compute_pseudo(&ps_a, crate::PseudoElement::Before, None);
+        assert_eq!(
+            before.and_then(|s| s.content),
+            Some(vec![ContentItem::Url("https://x/y.png".into())])
+        );
     }
 
     #[test]
