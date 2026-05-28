@@ -92,6 +92,11 @@ enum Msg {
     DefocusPath,
     AbrirArchivo,
     ExportarMd,
+    FindToggle,
+    FindKey(KeyEvent),
+    FindSiguiente,
+    FindAnterior,
+    FindClose,
     ToglearFusion,
     ZonaSiguiente,
     ZonaAnterior,
@@ -141,6 +146,13 @@ struct Model {
     /// click fuera (en realidad, sólo Esc) lo apaga.
     path_focused: bool,
 
+    /// Find-in-page sobre el cuerpo activo. `Ctrl+F` muestra el overlay
+    /// y lo enfoca; Esc lo cierra; Enter/Shift+Enter cyclan matches.
+    find_input: TextInputState,
+    find_visible: bool,
+    find_matches: Vec<(usize, usize)>,
+    find_idx: usize,
+
     side_izq_w: f32,
     side_der_w: f32,
 }
@@ -181,6 +193,29 @@ impl App for Pluma {
         }
         let ctrl = event.modifiers.ctrl || event.modifiers.meta;
         let shift = event.modifiers.shift;
+        // Find overlay capturado: Esc cierra, Enter/Shift+Enter ciclan
+        // matches, todo lo demás edita el query.
+        if model.find_visible {
+            if matches!(&event.key, Key::Named(NamedKey::Escape)) {
+                return Some(Msg::FindClose);
+            }
+            if matches!(&event.key, Key::Named(NamedKey::Enter)) {
+                return Some(if shift {
+                    Msg::FindAnterior
+                } else {
+                    Msg::FindSiguiente
+                });
+            }
+            // Ctrl+F otra vez cierra (atajo simétrico a abrir).
+            if ctrl {
+                if let Key::Character(s) = &event.key {
+                    if s.eq_ignore_ascii_case("f") {
+                        return Some(Msg::FindClose);
+                    }
+                }
+            }
+            return Some(Msg::FindKey(event.clone()));
+        }
         if ctrl {
             if let Key::Character(s) = &event.key {
                 if s.eq_ignore_ascii_case("s") {
@@ -188,6 +223,9 @@ impl App for Pluma {
                 }
                 if s.eq_ignore_ascii_case("n") {
                     return Some(Msg::NuevoDoc);
+                }
+                if s.eq_ignore_ascii_case("f") {
+                    return Some(Msg::FindToggle);
                 }
                 if shift && (s == "}" || s == "]") {
                     return Some(Msg::ZonaSiguiente);
@@ -284,6 +322,10 @@ fn init_modelo() -> Model {
         ultimo_status: "listo".to_string(),
         path_input: TextInputState::new(),
         path_focused: false,
+        find_input: TextInputState::new(),
+        find_visible: false,
+        find_matches: Vec::new(),
+        find_idx: 0,
         side_izq_w: 280.0,
         side_der_w: 340.0,
     }
@@ -379,6 +421,40 @@ fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         Msg::ExportarMd => {
             model.path_focused = false;
             exportar_md(&mut model);
+        }
+        Msg::FindToggle => {
+            model.find_visible = !model.find_visible;
+            if model.find_visible {
+                recomputar_matches(&mut model);
+                if !model.find_matches.is_empty() {
+                    saltar_a_match(&mut model);
+                }
+            }
+        }
+        Msg::FindKey(ev) => {
+            model.find_input.apply_key(&ev);
+            recomputar_matches(&mut model);
+            if !model.find_matches.is_empty() {
+                saltar_a_match(&mut model);
+            }
+        }
+        Msg::FindSiguiente => {
+            if model.find_matches.is_empty() {
+                return model;
+            }
+            model.find_idx = (model.find_idx + 1) % model.find_matches.len();
+            saltar_a_match(&mut model);
+        }
+        Msg::FindAnterior => {
+            if model.find_matches.is_empty() {
+                return model;
+            }
+            let n = model.find_matches.len();
+            model.find_idx = (model.find_idx + n - 1) % n;
+            saltar_a_match(&mut model);
+        }
+        Msg::FindClose => {
+            model.find_visible = false;
         }
         Msg::ToglearFusion => {
             if let Some(idx) = model.ide.junction_antes_del_caret() {
@@ -545,6 +621,47 @@ fn guardar_activo(model: &mut Model) {
         .filter(|c| matches!(c, CambioAtom::Eliminar { .. }))
         .count();
     model.ultimo_status = format!("guardado: {n_mut} mut · {n_new} crear · {n_del} del");
+}
+
+/// Recalcula las posiciones (línea, col) donde aparece el query en el
+/// buffer actual. Búsqueda case-insensitive, substring. Llamarlo cada
+/// vez que el query o el texto cambian. Reset de `find_idx` al primer
+/// match cuando hay alguno; lo deja en 0 si no hay (consistente con
+/// "0 de 0"), pero la UI no salta si está vacío.
+fn recomputar_matches(model: &mut Model) {
+    let query = model.find_input.text();
+    if query.is_empty() {
+        model.find_matches.clear();
+        model.find_idx = 0;
+        return;
+    }
+    let q_lower = query.to_lowercase();
+    let mut matches: Vec<(usize, usize)> = Vec::new();
+    let texto = model.ide.texto_buffer();
+    for (line_idx, linea) in texto.lines().enumerate() {
+        let l_lower = linea.to_lowercase();
+        let mut start = 0;
+        while let Some(pos) = l_lower[start..].find(&q_lower) {
+            let col = start + pos;
+            matches.push((line_idx, col));
+            start = col + q_lower.len().max(1);
+            if start >= l_lower.len() {
+                break;
+            }
+        }
+    }
+    model.find_matches = matches;
+    if model.find_idx >= model.find_matches.len() {
+        model.find_idx = 0;
+    }
+}
+
+fn saltar_a_match(model: &mut Model) {
+    let Some(&(line, col)) = model.find_matches.get(model.find_idx) else {
+        return;
+    };
+    model.ide.set_caret(line, col);
+    model.ide.state.ensure_caret_visible(VISIBLE_LINES);
 }
 
 fn abrir_archivo(model: &mut Model) {
@@ -1092,6 +1209,12 @@ fn panel_editor(model: &Model, palette_editor: &TEPalette) -> View<Msg> {
         |ev| Some(Msg::EditorPointer(ev)),
     );
 
+    let mut hijos: Vec<View<Msg>> = Vec::new();
+    if model.find_visible {
+        hijos.push(barra_find(model));
+    }
+    hijos.push(editor);
+
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
@@ -1104,11 +1227,85 @@ fn panel_editor(model: &Model, palette_editor: &TEPalette) -> View<Msg> {
             top: length(8.0_f32),
             bottom: length(8.0_f32),
         },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(6.0_f32),
+        },
         ..Default::default()
     })
     .fill(palette_editor.bg)
     .clip(true)
-    .children(vec![editor])
+    .children(hijos)
+}
+
+fn barra_find(model: &Model) -> View<Msg> {
+    let theme = Theme::dark();
+    let palette_input = TextInputPalette::from_theme(&theme);
+    let palette_btn = ButtonPalette::from_theme(&theme);
+
+    let input = text_input_view::<Msg>(
+        &model.find_input,
+        "buscar (Enter siguiente · Shift+Enter previo · Esc cerrar)",
+        true, // find_visible implica que tiene foco
+        &palette_input,
+        Msg::FindToggle, // click en el input no cambia foco — siempre vivo
+    );
+
+    let total = model.find_matches.len();
+    let pos = if total == 0 {
+        0
+    } else {
+        model.find_idx + 1
+    };
+    let counter = View::new(Style {
+        size: Size {
+            width: length(80.0_f32),
+            height: length(34.0_f32),
+        },
+        padding: Rect {
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(8.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(
+        format!("{pos}/{total}"),
+        12.0,
+        theme.fg_muted,
+        Alignment::Center,
+    );
+
+    let prev = button_view::<Msg>("◀", &palette_btn, Msg::FindAnterior);
+    let next = button_view::<Msg>("▶", &palette_btn, Msg::FindSiguiente);
+    let cerrar = button_view::<Msg>("✕", &palette_btn, Msg::FindClose);
+
+    let input_wrap = View::new(Style {
+        flex_grow: 1.0,
+        flex_shrink: 1.0,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(34.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![input]);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(40.0_f32),
+        },
+        gap: Size {
+            width: length(6.0_f32),
+            height: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(vec![input_wrap, counter, prev, next, cerrar])
 }
 
 fn panel_llm(model: &Model, theme: &Theme) -> View<Msg> {
