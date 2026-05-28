@@ -98,9 +98,9 @@ async fn main() -> Result<()> {
     eprintln!("verbo-daemon :: bind {}", socket.display());
 
     // Provider configurado por CLI. Cada variante construye su propio
-    // `Arc<P>` concreto y lo pasa a `Daemon::serve`, que es genérico —
-    // así no se mezclan `Arc<dyn Provider>` distintos en una sola
-    // variable (cada brazo del match queda con su tipo estable).
+    // `Arc<P>` concreto y lo pasa a `Daemon::serve_with_shutdown`, que es
+    // genérico — así no se mezclan `Arc<dyn Provider>` distintos en una
+    // sola variable (cada brazo del match queda con su tipo estable).
     let daemon = Daemon::bind(&socket).context("bindear socket Unix")?;
     eprintln!("verbo-daemon :: escuchando — ^C para terminar");
     match cli.provider {
@@ -111,7 +111,10 @@ async fn main() -> Result<()> {
                 provider.model_id().name,
                 provider.model_id().dimension
             );
-            daemon.serve(provider).await.context("loop del daemon")?;
+            daemon
+                .serve_with_shutdown(provider, esperar_apagado())
+                .await
+                .context("loop del daemon")?;
         }
         ProviderKind::Fastembed => {
             // La descarga del modelo se hace ANTES de spawn del runtime
@@ -126,9 +129,39 @@ async fn main() -> Result<()> {
                 provider.model_id().name,
                 provider.model_id().dimension
             );
-            daemon.serve(provider).await.context("loop del daemon")?;
+            daemon
+                .serve_with_shutdown(provider, esperar_apagado())
+                .await
+                .context("loop del daemon")?;
         }
     }
+    eprintln!("verbo-daemon :: apagado limpio");
     Ok(())
+}
+
+/// Resuelve cuando llega SIGINT (^C) o SIGTERM (`systemctl stop`). En
+/// caso de fallo al instalar el handler de SIGTERM (poco probable en
+/// Linux) se cae solo a SIGINT — el daemon sigue apagándose con ^C.
+async fn esperar_apagado() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut term = match signal(SignalKind::terminate()) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("verbo-daemon :: SIGTERM no disponible ({e}) — solo SIGINT");
+                tokio::signal::ctrl_c().await.ok();
+                return;
+            }
+        };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => eprintln!("verbo-daemon :: SIGINT recibido"),
+            _ = term.recv() => eprintln!("verbo-daemon :: SIGTERM recibido"),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await.ok();
+    }
 }
 

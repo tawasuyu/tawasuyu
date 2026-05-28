@@ -1,0 +1,16 @@
+[package]
+name = "rimay-verbo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "rimay-verbo — fachada one-line para consumir embeddings de la suite. Re-exporta el core, descubre el socket por defecto del verbo-daemon, y conecta (con fallback opcional a MockProvider) sin que cada consumidor reinvente la convención."
+
+[dependencies]
+rimay-verbo-core = { path = "../rimay-verbo-core" }
+rimay-verbo-daemon = { path = "../rimay-verbo-daemon" }
+rimay-verbo-mock = { path = "../rimay-verbo-mock" }
+
+[dev-dependencies]
+tokio = { workspace = true }

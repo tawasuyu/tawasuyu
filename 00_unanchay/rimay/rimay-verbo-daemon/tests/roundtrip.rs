@@ -101,3 +101,48 @@ async fn connect_to_missing_daemon_errors() {
     let result = DaemonClient::connect(&path).await;
     assert!(result.is_err());
 }
+
+#[tokio::test]
+async fn ping_reports_liveness_without_invoking_model() {
+    // El daemon responde Pong sin tocar al provider. No hay manera
+    // directa de aseverar que el provider no fue invocado sin un
+    // contador, pero al menos el contrato observable (Ok(()) frente a
+    // un daemon vivo) queda cubierto.
+    let (path, handle) = spawn_daemon(16);
+    let client = DaemonClient::connect(&path).await.expect("connect");
+    client.ping().await.expect("pong");
+    handle.abort();
+}
+
+#[tokio::test]
+async fn shutdown_clausura_el_loop_sin_panic() {
+    // Comprueba el camino del `serve_with_shutdown`: una señal de
+    // shutdown (aquí, un canal cerrado) debe sacar al daemon del loop
+    // limpiamente.
+    let path = unique_socket();
+    let daemon = Daemon::bind(&path).expect("bind");
+    let provider = Arc::new(MockProvider::new(8));
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    let task = tokio::spawn(async move {
+        daemon
+            .serve_with_shutdown(provider, async move {
+                let _ = rx.await;
+            })
+            .await
+            .expect("serve_with_shutdown")
+    });
+
+    // Doy tiempo a que bindee y empiece a escuchar.
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+    // Una conexión rápida confirma que está vivo antes del shutdown.
+    let client = DaemonClient::connect(&path).await.expect("connect");
+    client.ping().await.expect("pong");
+
+    // Disparo el shutdown y espero terminar limpio.
+    tx.send(()).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), task)
+        .await
+        .expect("el daemon no salió del loop en 2s")
+        .expect("la task panificó");
+}

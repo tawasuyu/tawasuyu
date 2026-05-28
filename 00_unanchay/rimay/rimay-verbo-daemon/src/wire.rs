@@ -18,6 +18,9 @@ const MAX_FRAME: usize = 8 * 1024 * 1024;
 pub enum Request {
     /// Handshake: pide la identidad del modelo servido.
     ModelId,
+    /// Health check sin invocar el modelo. Útil para que un consumidor
+    /// decida "daemon vivo" antes de pegarle al provider real.
+    Ping,
     /// Embebe un texto.
     Embed(String),
     /// Embebe un lote en un solo round-trip.
@@ -28,6 +31,7 @@ pub enum Request {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Response {
     ModelId(ModelId),
+    Pong,
     Embed(EmbeddingVector),
     EmbedBatch(Vec<EmbeddingVector>),
     /// El backend falló; el texto es el `Display` del `EmbedError`.

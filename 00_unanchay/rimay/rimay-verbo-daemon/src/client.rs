@@ -32,6 +32,15 @@ impl DaemonClient {
         };
         Ok(Self { path, model })
     }
+
+    /// Health check sin invocar al modelo. Útil para distinguir "no hay
+    /// daemon" de "el modelo falló al embedir" antes de pegarle de verdad.
+    pub async fn ping(&self) -> Result<(), EmbedError> {
+        match round_trip(&self.path, &Request::Ping).await? {
+            Response::Pong => Ok(()),
+            other => Err(unexpected(other)),
+        }
+    }
 }
 
 /// Mapea una respuesta fuera de contrato a un `EmbedError`.
@@ -42,21 +51,63 @@ fn unexpected(r: Response) -> EmbedError {
     }
 }
 
-/// Un round-trip completo: conecta, manda el request, lee la respuesta.
-async fn round_trip(path: &Path, req: &Request) -> Result<Response, EmbedError> {
-    let mut stream = UnixStream::connect(path)
-        .await
-        .map_err(|e| EmbedError::Backend(format!("conexión al daemon verbo: {e}")))?;
-    write_frame(&mut stream, req)
-        .await
-        .map_err(|e| EmbedError::Backend(format!("envío al daemon verbo: {e}")))?;
+/// Una transmisión del request en un socket recién abierto. Devuelve
+/// `Ok(Some(resp))` con la respuesta normal, `Ok(None)` cuando el peer
+/// cerró antes de mandar nada (transitorio — el caller decide reintentar)
+/// y `Err` cuando algo falló sin ambigüedad.
+async fn intentar(path: &Path, req: &Request) -> Result<Option<Response>, EmbedError> {
+    let mut stream = match UnixStream::connect(path).await {
+        Ok(s) => s,
+        Err(e) if es_transitorio(&e) => return Ok(None),
+        Err(e) => {
+            return Err(EmbedError::Backend(format!("conexión al daemon verbo: {e}")))
+        }
+    };
+    if let Err(e) = write_frame(&mut stream, req).await {
+        if es_transitorio(&e) {
+            return Ok(None);
+        }
+        return Err(EmbedError::Backend(format!("envío al daemon verbo: {e}")));
+    }
     match read_frame::<_, Response>(&mut stream).await {
-        Ok(Some(resp)) => Ok(resp),
-        Ok(None) => Err(EmbedError::Backend(
-            "el daemon verbo cerró la conexión sin responder".into(),
-        )),
+        Ok(Some(resp)) => Ok(Some(resp)),
+        Ok(None) => Ok(None), // peer cerró antes de responder: transitorio
+        Err(e) if es_transitorio(&e) => Ok(None),
         Err(e) => Err(EmbedError::Backend(format!("lectura del daemon verbo: {e}"))),
     }
+}
+
+/// Un round-trip completo con un reintento corto. Si la primera vuelta
+/// falla por una causa transitoria (daemon reiniciando, conexión cortada
+/// antes de la respuesta), espera 100 ms y reintenta una sola vez. Si la
+/// segunda también vuelve vacía se reporta como error de backend.
+async fn round_trip(path: &Path, req: &Request) -> Result<Response, EmbedError> {
+    if let Some(resp) = intentar(path, req).await? {
+        return Ok(resp);
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    match intentar(path, req).await? {
+        Some(resp) => Ok(resp),
+        None => Err(EmbedError::Backend(
+            "el daemon verbo no respondió tras un reintento (¿caído?)".into(),
+        )),
+    }
+}
+
+/// ¿El error pinta a "el daemon se cayó / reinició" en vez de un fallo
+/// duro de aplicación? Estos justifican un reintento corto; el resto
+/// debe propagarse tal cual.
+fn es_transitorio(e: &std::io::Error) -> bool {
+    use std::io::ErrorKind::*;
+    matches!(
+        e.kind(),
+        ConnectionRefused
+            | ConnectionReset
+            | ConnectionAborted
+            | BrokenPipe
+            | UnexpectedEof
+            | NotFound
+    )
 }
 
 #[async_trait]

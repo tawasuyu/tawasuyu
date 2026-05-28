@@ -38,13 +38,35 @@ impl Daemon {
     /// conexión corre en su propia task; el provider se comparte por
     /// `Arc` — un modelo, muchos clientes concurrentes.
     pub async fn serve<P: Provider + 'static>(self, provider: Arc<P>) -> std::io::Result<()> {
+        self.serve_with_shutdown(provider, std::future::pending::<()>()).await
+    }
+
+    /// Como [`serve`](Self::serve) pero con apagado cooperativo: cuando
+    /// `shutdown` resuelve, el daemon deja de aceptar conexiones nuevas
+    /// y devuelve `Ok(())`. Las tasks ya despachadas terminan por su
+    /// cuenta (el `Drop` del listener libera el socket).
+    pub async fn serve_with_shutdown<P, S>(
+        self,
+        provider: Arc<P>,
+        shutdown: S,
+    ) -> std::io::Result<()>
+    where
+        P: Provider + 'static,
+        S: std::future::Future<Output = ()>,
+    {
+        tokio::pin!(shutdown);
         loop {
-            let (stream, _) = self.listener.accept().await?;
-            let provider = provider.clone();
-            tokio::spawn(async move {
-                // Una conexión muerta no debe tumbar el daemon.
-                let _ = handle_conn(stream, provider).await;
-            });
+            tokio::select! {
+                accepted = self.listener.accept() => {
+                    let (stream, _) = accepted?;
+                    let provider = provider.clone();
+                    tokio::spawn(async move {
+                        // Una conexión muerta no debe tumbar el daemon.
+                        let _ = handle_conn(stream, provider).await;
+                    });
+                }
+                _ = &mut shutdown => return Ok(()),
+            }
         }
     }
 }
@@ -72,6 +94,7 @@ async fn handle_conn<P: Provider>(
 async fn dispatch<P: Provider>(provider: &P, req: Request) -> Response {
     match req {
         Request::ModelId => Response::ModelId(provider.model_id().clone()),
+        Request::Ping => Response::Pong,
         Request::Embed(text) => match provider.embed(&text).await {
             Ok(v) => Response::Embed(v),
             Err(e) => Response::Error(e.to_string()),
