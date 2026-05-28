@@ -227,5 +227,44 @@ fn main() {
     assert!((n.start - 0.0).abs() < 1e-6, "undo restaura beat 0");
     assert_eq!(n.pitch.midi(), 60, "undo restaura midi original");
 
-    println!("takiy smoke ok — 13 escenarios verdes");
+    // --- Escenario 14: drag-to-resize (F2.3).
+    //
+    // Mismo patrón que el escenario 13 pero con SetSelectedDuration: un
+    // drag completo termina con una sola entrada de history y el undo
+    // restaura la duración original.
+    let mut st = EditorState::new(120.0);
+    st.snap = takiy_app::Snap::Free;
+    st.apply(EditMsg::AddNote { beat: 0.0, midi: 60 });
+    st.apply(EditMsg::Select { track: 0, idx: 0 });
+    let dur_original = st.score.track(0).unwrap().notes()[0].duration;
+    let history_before = st.history.len();
+    st.begin_drag();
+    for step in 1..=10 {
+        st.apply(EditMsg::SetSelectedDuration {
+            duration: dur_original + step as f32 * 0.2,
+        });
+    }
+    assert_eq!(st.history.len(), history_before);
+    st.end_drag();
+    assert_eq!(st.history.len(), history_before + 1, "un undo cubre el drag");
+    let dur_after = st.score.track(0).unwrap().notes()[0].duration;
+    assert!(dur_after > dur_original, "drag agrandó la nota");
+    st.undo();
+    let dur_back = st.score.track(0).unwrap().notes()[0].duration;
+    assert!((dur_back - dur_original).abs() < 1e-3, "undo restaura duración");
+
+    // --- Escenario 15: scroll vertical — pitch_range_with_offset.
+    //
+    // Verifica que offset 0 coincida con el rango natural, y que un
+    // offset extremo se quede pegado al borde MIDI sin colapsar el span.
+    let demo = takiy_app::demo_score();
+    let (auto_lo, auto_hi) = takiy_app::pitch_range(&demo);
+    let (lo0, hi0) = takiy_app::pitch_range_with_offset(&demo, 0);
+    assert_eq!((lo0, hi0), (auto_lo, auto_hi), "offset 0 == auto range");
+    let (lo_lo, _hi_lo) = takiy_app::pitch_range_with_offset(&demo, -200);
+    assert_eq!(lo_lo, 0, "offset muy negativo se pega al borde 0");
+    let (_lo_hi, hi_hi) = takiy_app::pitch_range_with_offset(&demo, 200);
+    assert_eq!(hi_hi, 127, "offset muy positivo se pega al borde 127");
+
+    println!("takiy smoke ok — 15 escenarios verdes");
 }

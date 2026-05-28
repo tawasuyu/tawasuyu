@@ -204,6 +204,10 @@ pub enum EditMsg {
     /// es no-op. Pensado para drag-to-move por mouse — el binario
     /// recalcula la posición target en cada frame del drag.
     SetSelectedAbsolute { start: f32, midi: u8 },
+    /// Setea la duración de la nota seleccionada en absoluto. Snap aplica;
+    /// clamp a `[0.125, 16.0]` (mínimo razonable, máximo del editor).
+    /// Pensado para drag-to-resize por el borde derecho.
+    SetSelectedDuration { duration: f32 },
     DeleteSelected,
     ResizeSelected { d_beat: f32 },
     NudgeVelocity { delta: i32 },
@@ -311,6 +315,9 @@ impl EditorState {
             }
             EditMsg::SetSelectedAbsolute { start, midi } => {
                 self.set_selected_absolute(start, midi)
+            }
+            EditMsg::SetSelectedDuration { duration } => {
+                self.set_selected_duration(duration)
             }
             EditMsg::DeleteSelected => self.delete_selected(),
             EditMsg::ResizeSelected { d_beat } => self.resize_selected(d_beat),
@@ -446,6 +453,29 @@ impl EditorState {
         Some(format!(
             "drag · pista {track_idx} · beat {new_start:.2} · midi {midi}"
         ))
+    }
+
+    /// Setea la duración absoluta de la nota seleccionada, snappeando si
+    /// hay snap activo y clampeando a `[0.125, 16.0]`. Idempotente: si el
+    /// resultado coincide con la nota actual, no-op.
+    fn set_selected_duration(&mut self, duration: f32) -> ApplyOutcome {
+        let (track_idx, note_idx) = self.selected?;
+        let snap = self.snap;
+        let track = self.score.track_mut(track_idx)?;
+        let old = track.notes().get(note_idx).copied()?;
+        let snapped = snap.snap(duration);
+        let raw = if snap.step().is_some() { snapped } else { duration };
+        let new_dur = raw.clamp(0.125, 16.0);
+        if (new_dur - old.duration).abs() < f32::EPSILON {
+            return None;
+        }
+        let new_note = ScoreNote::new(old.pitch, old.start, new_dur, old.velocity);
+        track.remove(note_idx);
+        track.add(new_note);
+        if let Some(new_idx) = find_note_idx(track.notes(), &new_note) {
+            self.selected = Some((track_idx, new_idx));
+        }
+        Some(format!("drag-resize · pista {track_idx} · dur {new_dur:.2}"))
     }
 
     fn delete_selected(&mut self) -> ApplyOutcome {
@@ -1189,6 +1219,39 @@ mod tests {
         // None apaga.
         assert!(st.set_loop_region(None).is_some());
         assert!(st.loop_region.is_none());
+    }
+
+    #[test]
+    fn set_selected_duration_snaps_and_clamps() {
+        let mut st = EditorState::new(120.0);
+        st.snap = Snap::Half;
+        st.apply(EditMsg::AddNote { beat: 0.0, midi: 60 });
+        st.apply(EditMsg::Select { track: 0, idx: 0 });
+        // 2.7 snappeado a 2.5 (múltiplo de 0.5).
+        st.apply(EditMsg::SetSelectedDuration { duration: 2.7 });
+        let n = st.score.track(0).unwrap().notes()[0];
+        assert!((n.duration - 2.5).abs() < 1e-6);
+        // Clamp inferior.
+        st.snap = Snap::Free;
+        st.apply(EditMsg::SetSelectedDuration { duration: 0.01 });
+        let n = st.score.track(0).unwrap().notes()[0];
+        assert!((n.duration - 0.125).abs() < 1e-6);
+        // Clamp superior.
+        st.apply(EditMsg::SetSelectedDuration { duration: 999.0 });
+        let n = st.score.track(0).unwrap().notes()[0];
+        assert!((n.duration - 16.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn set_selected_duration_is_idempotent() {
+        let mut st = EditorState::new(120.0);
+        st.snap = Snap::Beat;
+        st.apply(EditMsg::AddNote { beat: 0.0, midi: 60 });
+        st.apply(EditMsg::Select { track: 0, idx: 0 });
+        let len_before = st.history.len();
+        // La nota arranca con duration=1.0; pedir 1.0 es no-op.
+        assert!(st.apply(EditMsg::SetSelectedDuration { duration: 1.0 }).is_none());
+        assert_eq!(st.history.len(), len_before);
     }
 
     #[test]

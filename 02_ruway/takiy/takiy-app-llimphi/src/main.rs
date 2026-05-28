@@ -20,10 +20,16 @@
 //! - `Tab`        — cicla la pista activa.
 //! - `N`          — crea una pista nueva y la activa.
 //! - Click izq.   — agrega una nota (o selecciona la existente bajo el cursor).
-//! - Drag izq.    — mueve la nota bajo el cursor (o la recién agregada por el
-//!                  click) por el grid, snappeando a la granularidad activa.
-//!                  Todo el drag es un sólo undo.
+//!                  Al agregar/seleccionar suena un blip de audition con la
+//!                  voz de la pista activa (a menos que ya esté sonando el
+//!                  playback). Idem para mover con flechas ↑↓.
+//! - Drag izq.    — mueve la nota bajo el cursor por el grid, snappeando a
+//!                  la granularidad activa. Si el press cae sobre el borde
+//!                  derecho (~6 px) se entra en modo resize: el drag cambia
+//!                  la duración en lugar de la posición. Todo el drag es un
+//!                  sólo undo.
 //! - Click der.   — borra la nota bajo el cursor.
+//! - Wheel        — desplaza la ventana vertical de pitches en semitonos.
 //! - `←` / `→`    — mueve la nota seleccionada ±1 beat.
 //! - `↑` / `↓`    — mueve la nota seleccionada ±1 semitono.
 //! - `+` / `-`    — alarga / acorta la nota seleccionada en 0.5 beats.
@@ -40,13 +46,16 @@ use llimphi_ui::llimphi_layout::taffy::prelude::{percent, Size, Style};
 use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Rect as KurboRect, Stroke};
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::llimphi_text::{draw_block, Alignment as TextAlignment, TextBlock, Typesetter};
-use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, NamedKey, PaintRect, View};
+use llimphi_ui::{
+    App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, PaintRect, View,
+    WheelDelta,
+};
 use takiy_app::{
     cell_at, default_save_path_for_save, gm_program_for_track_name, gm_program_name,
-    grid_geometry, header_beat_at, hit_test_note, load_score_or_demo, pitch_range, write_score,
-    EditMsg, EditorState, HEADER_H, KEYBOARD_W, MAX_KEY_H, MIN_BEAT_W, MIN_KEY_H,
+    grid_geometry, header_beat_at, hit_test_note, load_score_or_demo, pitch_range_with_offset,
+    write_score, EditMsg, EditorState, HEADER_H, KEYBOARD_W, MAX_KEY_H, MIN_BEAT_W, MIN_KEY_H,
 };
-use takiy_core::{PitchClass, Score};
+use takiy_core::{Pitch, PitchClass, Score, ScoreNote, Track};
 use takiy_playback::{PlayOpts, Player};
 use takiy_synth::{
     mix_clicks, prepend_count_in, write_wav, AudioBuffer, Metronome, MultiProgramRenderer,
@@ -60,6 +69,22 @@ use takiy_synth::{
 /// pero el WAV exportado *siempre* se renderiza a 44100 para que dos
 /// usuarios en máquinas distintas obtengan archivos iguales.
 const WAV_EXPORT_SAMPLE_RATE: u32 = 44_100;
+
+/// Distancia en píxeles al borde derecho de la nota dentro de la que un
+/// press dispara drag-to-resize en lugar de drag-to-move. Pequeño
+/// suficiente para no robarle clicks al cuerpo de la nota, grande
+/// suficiente para acertarle con el mouse sin precisión quirúrgica.
+const RESIZE_EDGE_PX: f32 = 6.0;
+
+/// Mínimo intervalo entre auditions consecutivos. Sin esto, las repe-
+/// ticiones de teclas (arrow-down con autorepeat) o re-selecciones
+/// rápidas dispararían un blip por cada Msg, saturando el device.
+const AUDITION_THROTTLE: std::time::Duration = std::time::Duration::from_millis(80);
+
+/// Duración del blip de audition en beats. Suficiente para escuchar
+/// el ataque + algo de sustain sin tapar la siguiente nota que el
+/// usuario quiera tocar.
+const AUDITION_BEATS: f32 = 0.5;
 
 #[derive(Clone)]
 enum Msg {
@@ -104,10 +129,12 @@ enum Msg {
     /// Además cachea `(rw, rh)` en el modelo para que el drag posterior
     /// pueda convertir píxeles a `(beat, midi)` sin perderlo.
     PressAt { lx: f32, ly: f32, rw: f32, rh: f32 },
-    /// Eventos de drag-to-move sobre el grid. Se acumulan en `model.drag`
-    /// y se aplican como `SetSelectedAbsolute` sobre el `EditorState`.
-    /// El undo del drag entero queda como una sola entrada gracias a
-    /// `begin_drag`/`end_drag`.
+    /// Eventos de drag-to-move o drag-to-resize sobre el grid. Se acumulan
+    /// en `model.drag` y se aplican como `SetSelectedAbsolute` (move) o
+    /// `SetSelectedDuration` (resize) sobre el `EditorState`. El modo se
+    /// decide en la primera fase `Move` según si el press cayó cerca del
+    /// borde derecho de la nota. El undo del drag entero queda como una
+    /// sola entrada gracias a `begin_drag`/`end_drag`.
     DragNote {
         phase: DragPhase,
         dx: f32,
@@ -115,18 +142,33 @@ enum Msg {
         lx0: f32,
         ly0: f32,
     },
+    /// Wheel sobre el grid → mueve el `midi_offset` que desplaza la
+    /// ventana de pitches visible. Positivo sube (pitches más agudos),
+    /// negativo baja.
+    ScrollMidi { delta: i32 },
     Quit,
 }
 
-/// Estado del drag-to-move activo. Se inicializa en la primera fase
-/// `DragPhase::Move` (cuando el cursor se movió tras presionar sobre
-/// una nota), persiste hasta `DragPhase::End`. Captura la posición
-/// original de la nota para que cada frame del drag se compute en
-/// términos absolutos respecto del press, sin acumular drift.
+/// Modo del drag activo. Se decide al inicio (primer evento `Move`)
+/// según dónde cayó el press en relación al rect de la nota: cuerpo →
+/// `Move`, borde derecho (≤ `RESIZE_EDGE_PX`) → `Resize`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DragMode {
+    Move,
+    Resize,
+}
+
+/// Estado del drag-to-move o drag-to-resize activo. Se inicializa en la
+/// primera fase `DragPhase::Move` (cuando el cursor se movió tras
+/// presionar sobre una nota), persiste hasta `DragPhase::End`. Captura
+/// la posición/duración original de la nota para que cada frame se
+/// compute en términos absolutos respecto del press, sin acumular drift.
 #[derive(Debug, Clone)]
 struct DragState {
+    mode: DragMode,
     initial_start: f32,
     initial_midi: u8,
+    initial_duration: f32,
     accum_dx_px: f32,
     accum_dy_px: f32,
     rw: f32,
@@ -155,6 +197,13 @@ struct Model {
     last_rect: Option<(f32, f32)>,
     /// Drag-to-move en curso. `None` cuando no hay drag activo.
     drag: Option<DragState>,
+    /// Offset global del rango MIDI visible (en semitonos). Lo mueve la
+    /// rueda del mouse — `pitch_range_with_offset` lo aplica.
+    midi_offset: i32,
+    /// Último Instant en el que se disparó un blip de audition. Sirve
+    /// para throttlear repeticiones rápidas (autorepeat de flechas,
+    /// re-selecciones múltiples) y evitar saturar el device.
+    last_audition_at: Option<std::time::Instant>,
 }
 
 struct Takiy;
@@ -218,6 +267,8 @@ impl App for Takiy {
             playback_bpm: 120.0,
             last_rect: None,
             drag: None,
+            midi_offset: 0,
+            last_audition_at: None,
         }
     }
 
@@ -343,8 +394,39 @@ impl App for Takiy {
                 }
             }
             Msg::Edit(edit_msg) => {
+                // Audition: las ediciones que cambian el pitch que el
+                // usuario está manipulando disparan un blip al final.
+                // - AddNote → midi explícito en el msg.
+                // - Select / MoveSelected con cambio de semitono → leemos
+                //   el pitch *después* de `apply` (la selección puede haber
+                //   cambiado de índice tras el reorder interno).
+                enum AuditionAfter {
+                    None,
+                    Fixed(u8),
+                    FromSelected,
+                }
+                let audition_after = match &edit_msg {
+                    EditMsg::AddNote { midi, .. } => AuditionAfter::Fixed(*midi),
+                    EditMsg::Select { .. } => AuditionAfter::FromSelected,
+                    EditMsg::MoveSelected { d_semitones, .. } if *d_semitones != 0 => {
+                        AuditionAfter::FromSelected
+                    }
+                    _ => AuditionAfter::None,
+                };
                 if let Some(s) = model.editor.apply(edit_msg) {
                     model.status = s;
+                }
+                // Saltea audition durante drag (`SetSelectedAbsolute` emite
+                // un torrente y saturaría el device).
+                if !model.editor.is_dragging() {
+                    let pitch = match audition_after {
+                        AuditionAfter::None => None,
+                        AuditionAfter::Fixed(m) => Some(m),
+                        AuditionAfter::FromSelected => selected_pitch(&model),
+                    };
+                    if let Some(p) = pitch {
+                        audition_pitch(&mut model, p);
+                    }
                 }
             }
             Msg::NudgeProgram { delta } => {
@@ -423,7 +505,8 @@ impl App for Takiy {
             }
             Msg::PressAt { lx, ly, rw, rh } => {
                 model.last_rect = Some((rw, rh));
-                let (min_midi, max_midi) = pitch_range(&model.editor.score);
+                let (min_midi, max_midi) =
+                    pitch_range_with_offset(&model.editor.score, model.midi_offset);
                 let total_beats = model
                     .editor
                     .score
@@ -471,16 +554,19 @@ impl App for Takiy {
                             // habrán agregado una nota seleccionada vía
                             // `Msg::PressAt`, así que el drag mueve esa nota
                             // recién creada también.
-                            let (min_midi, max_midi) = pitch_range(&model.editor.score);
+                            let (min_midi, max_midi) =
+                                pitch_range_with_offset(&model.editor.score, model.midi_offset);
                             let total_beats = model
                                 .editor
                                 .score
                                 .duration_beats()
                                 .max(8.0)
                                 .max(model.editor.loop_region.map(|(_, t)| t).unwrap_or(0.0));
-                            if grid_geometry(rw, rh, min_midi, max_midi, total_beats).is_none() {
+                            let Some((_, _, _, _, _, beat_w)) =
+                                grid_geometry(rw, rh, min_midi, max_midi, total_beats)
+                            else {
                                 return model;
-                            }
+                            };
                             let Some((track, idx)) = model.editor.selected else {
                                 return model;
                             };
@@ -498,10 +584,23 @@ impl App for Takiy {
                             if ly0 < HEADER_H || lx0 < KEYBOARD_W {
                                 return model;
                             }
+                            // Detectar modo: si el press cayó dentro de los
+                            // últimos `RESIZE_EDGE_PX` del rect de la nota,
+                            // entramos en Resize. Si no, Move.
+                            let note_right_px =
+                                KEYBOARD_W + (note.start + note.duration) * beat_w;
+                            let mode =
+                                if (note_right_px - lx0).abs() <= RESIZE_EDGE_PX && lx0 <= note_right_px {
+                                    DragMode::Resize
+                                } else {
+                                    DragMode::Move
+                                };
                             model.editor.begin_drag();
                             model.drag = Some(DragState {
+                                mode,
                                 initial_start: note.start,
                                 initial_midi: note.pitch.midi(),
+                                initial_duration: note.duration,
                                 accum_dx_px: dx,
                                 accum_dy_px: dy,
                                 rw,
@@ -524,18 +623,38 @@ impl App for Takiy {
                             ) else {
                                 return model;
                             };
-                            let target_beat =
-                                (state.initial_start + state.accum_dx_px / beat_w).max(0.0);
-                            // Y crece hacia abajo en pantalla pero los semitonos
-                            // crecen hacia arriba — flippeamos el signo.
-                            let target_semi_offset = -(state.accum_dy_px / key_h).round() as i32;
-                            let target_midi = (state.initial_midi as i32 + target_semi_offset)
-                                .clamp(state.min_midi as i32, state.max_midi as i32);
-                            if let Some(s) = model.editor.apply(EditMsg::SetSelectedAbsolute {
-                                start: target_beat,
-                                midi: target_midi as u8,
-                            }) {
-                                model.status = s;
+                            match state.mode {
+                                DragMode::Move => {
+                                    let target_beat = (state.initial_start
+                                        + state.accum_dx_px / beat_w)
+                                        .max(0.0);
+                                    // Y crece hacia abajo en pantalla pero los
+                                    // semitonos crecen hacia arriba — flip de signo.
+                                    let target_semi_offset =
+                                        -(state.accum_dy_px / key_h).round() as i32;
+                                    let target_midi =
+                                        (state.initial_midi as i32 + target_semi_offset)
+                                            .clamp(state.min_midi as i32, state.max_midi as i32);
+                                    if let Some(s) =
+                                        model.editor.apply(EditMsg::SetSelectedAbsolute {
+                                            start: target_beat,
+                                            midi: target_midi as u8,
+                                        })
+                                    {
+                                        model.status = s;
+                                    }
+                                }
+                                DragMode::Resize => {
+                                    let target_dur =
+                                        state.initial_duration + state.accum_dx_px / beat_w;
+                                    if let Some(s) =
+                                        model.editor.apply(EditMsg::SetSelectedDuration {
+                                            duration: target_dur,
+                                        })
+                                    {
+                                        model.status = s;
+                                    }
+                                }
                             }
                         }
                     }
@@ -546,6 +665,16 @@ impl App for Takiy {
                             }
                         }
                     }
+                }
+            }
+            Msg::ScrollMidi { delta } => {
+                let new_offset = model.midi_offset + delta;
+                if new_offset != model.midi_offset {
+                    let (auto_lo, auto_hi) = pitch_range_with_offset(&model.editor.score, 0);
+                    let span = auto_hi as i32 - auto_lo as i32;
+                    let min_off = -(auto_lo as i32);
+                    let max_off = 127 - span - auto_lo as i32;
+                    model.midi_offset = new_offset.clamp(min_off, max_off);
                 }
             }
             Msg::Save => {
@@ -578,6 +707,26 @@ impl App for Takiy {
             }
         }
         model
+    }
+
+    fn on_wheel(
+        _model: &Model,
+        delta: WheelDelta,
+        _cursor: (f32, f32),
+        modifiers: Modifiers,
+    ) -> Option<Msg> {
+        if modifiers.ctrl || modifiers.alt || modifiers.shift {
+            return None;
+        }
+        // `delta.y` viene normalizado a "líneas" (positivo arriba). Lo
+        // proyectamos directo a semitonos: una "línea" de rueda mueve
+        // un semitono. Si una rueda física pisa más de un escalón, ya
+        // viene multiplicada por llimphi-ui.
+        let steps = delta.y.round() as i32;
+        if steps == 0 {
+            return None;
+        }
+        Some(Msg::ScrollMidi { delta: steps })
     }
 
     fn on_key(_model: &Model, event: &KeyEvent) -> Option<Msg> {
@@ -715,7 +864,7 @@ impl App for Takiy {
         let undo_depth = model.editor.history.len();
         let key_label = takiy_app::describe_key(&model.editor.score.key);
         let key_scale = model.editor.score.key.clone();
-        let (min_midi, max_midi) = pitch_range(&score);
+        let (min_midi, max_midi) = pitch_range_with_offset(&score, model.midi_offset);
         let total_beats = score
             .duration_beats()
             .max(8.0)
@@ -1017,6 +1166,70 @@ fn load_sf2(score: &Score, sample_rate: u32) -> (Option<MultiProgramRenderer>, S
         .unwrap_or(&path)
         .to_owned();
     (Some(renderer), format!("engine sf2 {label}"))
+}
+
+/// Devuelve el midi del nota actualmente seleccionada, o `None` si no
+/// hay selección o el índice quedó stale (p. ej. tras un delete).
+fn selected_pitch(model: &Model) -> Option<u8> {
+    let (track, idx) = model.editor.selected?;
+    Some(
+        model
+            .editor
+            .score
+            .track(track)?
+            .notes()
+            .get(idx)?
+            .pitch
+            .midi(),
+    )
+}
+
+/// Dispara un blip de audition para un pitch MIDI con la voz de la
+/// pista activa: piano roll convertido en mini-instrumento mientras se
+/// edita. Saltea si:
+/// - no hay Player (sin audio),
+/// - hay playback corriendo (no pisar lo que el usuario está escuchando),
+/// - el throttle de [`AUDITION_THROTTLE`] no se cumple desde el último blip.
+///
+/// El render usa el mismo path que el playback (osc o SF2), así que el
+/// timbre del blip coincide con lo que el usuario va a oír al apretar
+/// Space. Construye un mini `Score` de una sola nota a velocidad 96 con
+/// el tempo congelado a 120 bpm — la duración real en segundos es
+/// `AUDITION_BEATS · 60 / 120 = 0.25 s`.
+fn audition_pitch(
+    model: &mut Model,
+    pitch_midi: u8,
+) {
+    let Some(player) = model.player.as_ref() else {
+        return;
+    };
+    if model.playing {
+        return;
+    }
+    let now = std::time::Instant::now();
+    if let Some(prev) = model.last_audition_at {
+        if now.duration_since(prev) < AUDITION_THROTTLE {
+            return;
+        }
+    }
+    let Some(pitch) = Pitch::from_midi(pitch_midi) else {
+        return;
+    };
+    let mut blip = Score::new(120.0);
+    let mut track = Track::new("audition");
+    track.add(ScoreNote::new(pitch, 0.0, AUDITION_BEATS, 96));
+    let track_idx = blip.add_track(track);
+    // Si la pista activa del editor tiene un programa GM mapeable y hay
+    // SF2 cargado, propagamos ese programa al renderer del blip para
+    // que el timbre sea consistente con la pista que se está editando.
+    let active = model.editor.active_track;
+    let sf2_for_blip = model.sf2.as_ref().map(|sf2| {
+        let prog = sf2.program_for_track(active);
+        sf2.clone().with_track_program(track_idx, prog)
+    });
+    let buf = render_score(&blip, sf2_for_blip.as_ref(), player.sample_rate());
+    player.play_with(buf, PlayOpts::default());
+    model.last_audition_at = Some(now);
 }
 
 /// Elige el renderer (SF2 si está disponible, osc en su defecto) y

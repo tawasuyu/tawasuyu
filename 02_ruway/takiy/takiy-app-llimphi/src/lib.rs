@@ -21,7 +21,9 @@ pub mod io;
 pub mod model;
 
 pub use demo::{demo_score, load_score_or_demo};
-pub use geometry::{cell_at, grid_geometry, header_beat_at, hit_test_note, pitch_range};
+pub use geometry::{
+    cell_at, grid_geometry, header_beat_at, hit_test_note, pitch_range, pitch_range_with_offset,
+};
 pub use gm::{gm_program_for_track_name, gm_program_name};
 pub use io::{default_save_path as default_save_path_for_save, load_score, write_score, LoadError};
 pub use model::{describe_key, find_note_idx, EditMsg, EditorState, Snap, MAX_UNDO};

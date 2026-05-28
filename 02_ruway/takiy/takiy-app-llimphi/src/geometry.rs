@@ -115,6 +115,31 @@ pub fn hit_test_note(
     None
 }
 
+/// Rango MIDI auto-derivado del score más un `offset` global en semitonos
+/// (positivo = sube las dos puntas, negativo = baja). Es la forma de
+/// scrollear el piano roll: el usuario aplica un offset con la rueda y
+/// el rango entero se desplaza, manteniendo el span. Si la suma topa
+/// con `0` o `127`, el rango se desliza pegado a ese borde sin colapsar.
+///
+/// `offset = 0` devuelve exactamente `pitch_range(score)`.
+pub fn pitch_range_with_offset(score: &Score, offset: i32) -> (u8, u8) {
+    let (auto_min, auto_max) = pitch_range(score);
+    let span = auto_max as i32 - auto_min as i32;
+    let mut lo = auto_min as i32 + offset;
+    let mut hi = auto_max as i32 + offset;
+    if lo < 0 {
+        hi -= lo;
+        lo = 0;
+    }
+    if hi > 127 {
+        lo -= hi - 127;
+        hi = 127;
+    }
+    lo = lo.max(0);
+    hi = hi.max(lo + span).min(127);
+    (lo as u8, hi as u8)
+}
+
 /// Rango MIDI con padding de 2 semitonos arriba y abajo. Si el score
 /// está vacío devuelve C4..C5 (un rango cómodo para empezar a editar).
 pub fn pitch_range(score: &Score) -> (u8, u8) {
@@ -160,6 +185,47 @@ mod tests {
         let (lo, hi) = pitch_range(&s);
         assert_eq!(lo, 60 - 2);
         assert_eq!(hi, 69 + 2);
+    }
+
+    #[test]
+    fn pitch_range_with_offset_zero_matches_auto_range() {
+        let mut s = Score::new(120.0);
+        let mut t = Track::new("a");
+        t.add(ScoreNote::new(Pitch::MIDDLE_C, 0.0, 1.0, 80));
+        s.add_track(t);
+        assert_eq!(pitch_range_with_offset(&s, 0), pitch_range(&s));
+    }
+
+    #[test]
+    fn pitch_range_with_offset_shifts_both_ends() {
+        let mut s = Score::new(120.0);
+        let mut t = Track::new("a");
+        t.add(ScoreNote::new(Pitch::MIDDLE_C, 0.0, 1.0, 80));
+        t.add(ScoreNote::new(Pitch::A4, 0.0, 1.0, 80));
+        s.add_track(t);
+        let (auto_lo, auto_hi) = pitch_range(&s);
+        let (lo, hi) = pitch_range_with_offset(&s, 12);
+        assert_eq!(lo, auto_lo + 12);
+        assert_eq!(hi, auto_hi + 12);
+    }
+
+    #[test]
+    fn pitch_range_with_offset_clamps_and_preserves_span() {
+        let mut s = Score::new(120.0);
+        let mut t = Track::new("a");
+        t.add(ScoreNote::new(Pitch::MIDDLE_C, 0.0, 1.0, 80));
+        t.add(ScoreNote::new(Pitch::A4, 0.0, 1.0, 80));
+        s.add_track(t);
+        let (auto_lo, auto_hi) = pitch_range(&s);
+        let span = (auto_hi - auto_lo) as i32;
+        // Offset muy negativo → lo se pega a 0 y hi conserva el span.
+        let (lo, hi) = pitch_range_with_offset(&s, -100);
+        assert_eq!(lo, 0);
+        assert_eq!(hi as i32, span, "span preservado pegado al borde inferior");
+        // Offset muy positivo → hi a 127 y lo conserva el span.
+        let (lo, hi) = pitch_range_with_offset(&s, 100);
+        assert_eq!(hi, 127);
+        assert_eq!(lo as i32, 127 - span, "span preservado pegado al borde superior");
     }
 
     #[test]
