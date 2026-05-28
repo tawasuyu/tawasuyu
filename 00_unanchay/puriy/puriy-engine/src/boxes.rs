@@ -1216,6 +1216,29 @@ fn build_node(
             }
             let children = strip_block_adjacent_whitespace(children, style.display);
             let children = collapse_vertical_margins(children);
+            // Margin collapsing contra el padre. CSS spec: si el padre
+            // no tiene border-top ni padding-top, el margin-top del
+            // primer hijo block in-flow se promueve al padre (queda
+            // como max(parent.margin_top, child.margin_top)). Idem
+            // para el último hijo y margin-bottom. Solo aplica si el
+            // padre es Block-ish (no Flex/Grid/Inline); en esos casos
+            // hay un context distinto que no colapsa.
+            let parent_no_top_barrier = style.padding.top == 0.0
+                && style.border_widths.top == 0.0;
+            let parent_no_bot_barrier = style.padding.bottom == 0.0
+                && style.border_widths.bottom == 0.0;
+            let parent_is_block_flow = matches!(style.display, Display::Block);
+            let mut effective_margin = style.margin;
+            let children = if parent_is_block_flow {
+                collapse_margins_against_parent(
+                    children,
+                    &mut effective_margin,
+                    parent_no_top_barrier,
+                    parent_no_bot_barrier,
+                )
+            } else {
+                children
+            };
             Some(BoxNode {
                 display: style.display,
                 background: style.background,
@@ -1224,7 +1247,7 @@ fn build_node(
                 font_weight: style.font_weight,
                 font_style: style.font_style,
                 font_family: style.font_family.clone(),
-                margin: style.margin,
+                margin: effective_margin,
                 padding: style.padding,
                 width: style.width,
                 max_width: style.max_width,
@@ -1595,6 +1618,42 @@ fn strip_block_adjacent_whitespace(
 /// chrome ya está en un worker thread durante `Engine::load`. Pasa por
 /// la cache global de bytes — recargas y navegación entre tabs no
 /// re-descargan.
+/// Margin collapsing contra el padre. CSS spec:
+/// - Si el padre NO tiene border-top ni padding-top, el margin-top
+///   del primer hijo block in-flow "se ve" como parte del padre —
+///   se promueve y queda en `max(parent.margin_top, child.margin_top)`.
+///   El hijo se setea a 0 para evitar doble cuenta.
+/// - Idem para el último hijo y bottom.
+///
+/// Esto destraba el caso típico: `body { margin: 8px }` con un primer
+/// `<h1 style="margin: 21px 0">` — sin collapse el body tiene 8px +
+/// 21px = 29px arriba; con collapse, max(8, 21) = 21px, que es lo que
+/// hacen los browsers reales.
+fn collapse_margins_against_parent(
+    mut children: Vec<BoxNode>,
+    parent_margin: &mut Sides<f32>,
+    no_top_barrier: bool,
+    no_bot_barrier: bool,
+) -> Vec<BoxNode> {
+    if no_top_barrier {
+        if let Some(first) = children.first_mut() {
+            if is_block_level(first) && first.margin.top > 0.0 {
+                parent_margin.top = parent_margin.top.max(first.margin.top);
+                first.margin.top = 0.0;
+            }
+        }
+    }
+    if no_bot_barrier {
+        if let Some(last) = children.last_mut() {
+            if is_block_level(last) && last.margin.bottom > 0.0 {
+                parent_margin.bottom = parent_margin.bottom.max(last.margin.bottom);
+                last.margin.bottom = 0.0;
+            }
+        }
+    }
+    children
+}
+
 /// Margin collapsing CSS — entre hermanos block adyacentes, el gap
 /// vertical es `max(prev.margin_bottom, next.margin_top)` (NO la suma).
 /// Sin esto, raw HTML pages como motherfucking se ven con gaps el
@@ -2645,6 +2704,45 @@ mod tests {
             }
         });
         assert_eq!(links, vec!["https://example.com/doc#top".to_string()]);
+    }
+
+    #[test]
+    fn margin_collapse_padre_promueve_margin_del_primer_hijo() {
+        // <body style="margin: 8px"> con primer hijo
+        // <div style="margin: 20px 0 0 0">: el body no tiene padding/
+        // border arriba, así que el margin_top del div se promueve al
+        // body. Final: body.margin.top = max(8, 20) = 20; div.margin.top = 0.
+        let html = r##"<html><body style="margin: 8px">
+            <div style="margin: 20px 0 0 0">x</div>
+            <div style="margin: 0 0 12px 0">y</div>
+        </body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        // body es el root del box tree (BoxTree.root viene de
+        // dom.find("body")).
+        assert_eq!(doc.box_tree.root.tag.as_deref(), Some("body"));
+        assert_eq!(doc.box_tree.root.margin.top, 20.0);
+        assert_eq!(doc.box_tree.root.margin.bottom, 12.0);
+        // El primer hijo div quedó con margin.top = 0 (promovido).
+        let first_div = &doc.box_tree.root.children[0];
+        assert_eq!(first_div.margin.top, 0.0);
+        // El último div: margin.bottom promovido al body.
+        let last_div = doc.box_tree.root.children.last().unwrap();
+        assert_eq!(last_div.margin.bottom, 0.0);
+    }
+
+    #[test]
+    fn margin_collapse_padre_bloqueado_por_padding() {
+        // Si el body tiene padding-top, el margin del primer hijo NO
+        // colapsa contra el body — el padding es la "barrera".
+        let html = r##"<html><body style="margin: 8px; padding: 10px 0 0 0">
+            <div style="margin: 20px 0 0 0">x</div>
+        </body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        assert_eq!(doc.box_tree.root.margin.top, 8.0);
+        let first_div = &doc.box_tree.root.children[0];
+        assert_eq!(first_div.margin.top, 20.0);
     }
 
     #[test]
