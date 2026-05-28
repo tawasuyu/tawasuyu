@@ -41,7 +41,7 @@ use std::collections::HashMap;
 use llimphi_ui::View;
 use llimphi_widget_text_editor::{
     text_editor_view_highlighted, ApplyResult, Clipboard, EditorMetrics, EditorOptions,
-    EditorPalette, EditorState, GutterStyle, Language, PointerEvent,
+    EditorPalette, EditorState, Language, PointerEvent,
 };
 use pluma_core::NarrativeAtom;
 use pluma_cuerpo::Cuerpo;
@@ -84,7 +84,7 @@ impl CuerpoIde {
     /// el cuerpo después con [`Self::recargar`] (p.ej. UI con `Option<…>`
     /// que arranca sin documento abierto).
     pub fn nuevo_vacio() -> Self {
-        let state = EditorState::new();
+        let state = EditorState::with_options(Self::opciones_prosa(EditorOptions::default()));
         let seq = state.edit_seq;
         Self {
             editor_cuerpo: EditorCuerpo {
@@ -104,14 +104,17 @@ impl CuerpoIde {
     }
 
     /// Como [`Self::from_cuerpo`] pero permite pasar opciones del editor
-    /// (tab → spaces, indent size, page size, single-line).
+    /// (tab → spaces, indent size, page size, single-line). Las opciones
+    /// específicas de prosa (`guard_blank_lines`) se fuerzan tras
+    /// aplicar las del caller: el IDE narrativo siempre trata las
+    /// líneas vacías como guardas, no es opcional.
     pub fn con_opciones(
         cuerpo: &Cuerpo,
         atoms: &HashMap<Uuid, &NarrativeAtom>,
         options: EditorOptions,
     ) -> Self {
         let editor_cuerpo = EditorCuerpo::from_cuerpo(cuerpo, atoms);
-        let mut state = EditorState::with_options(options);
+        let mut state = EditorState::with_options(Self::opciones_prosa(options));
         state.set_text(&editor_cuerpo.texto);
         let seq = state.edit_seq;
         Self {
@@ -119,6 +122,17 @@ impl CuerpoIde {
             state,
             seq_sincronizado: seq,
         }
+    }
+
+    /// Fuerza el flag `guard_blank_lines = true` sobre las opciones
+    /// recibidas. El IDE narrativo NO es un IDE clásico: las líneas
+    /// vacías que aparecen porque los átomos se concatenan con `\n\n`
+    /// no son contenido editable, son separadores. El caller no debería
+    /// poder apagar esto — si lo quiere apagado, use directamente el
+    /// `text-editor` sin pasar por `CuerpoIde`.
+    fn opciones_prosa(mut opts: EditorOptions) -> EditorOptions {
+        opts.guard_blank_lines = true;
+        opts
     }
 
     /// Resetea el IDE a un nuevo cuerpo (útil cuando el caller cambia de
@@ -321,15 +335,14 @@ pub fn cuerpo_ide_view<Msg: Clone + 'static>(
     language: Language,
     on_pointer: impl Fn(PointerEvent) -> Option<Msg> + Send + Sync + Clone + 'static,
 ) -> View<Msg> {
-    // El IDE narrativo no quiere números de línea ni un gutter ancho:
-    // forzamos modo prosa salvo que el caller ya haya pedido algo
-    // explícitamente distinto a los defaults. Si el caller construyó
-    // las métricas con `EditorMetrics::for_font_size(...)` (lo más
-    // común), `gutter_style` es `Numbers` y `phantom_blank_lines` es
-    // `false` — los reescribimos a "prosa". Si ya pidió otra cosa
-    // (p.ej. construyó con `prosa(...)` o cambió campos a mano),
-    // respetamos su elección.
-    let metrics = aplicar_prosa(metrics);
+    // El IDE narrativo siempre quiere ver pista visual en las líneas
+    // separadoras: encendemos `phantom_blank_lines` si el caller no lo
+    // pidió. El estilo de gutter (Numbers/Phantom) y el ancho los
+    // decide el caller — el omitido del número en las líneas guarda
+    // ocurre automáticamente porque `state.options.guard_blank_lines`
+    // está activo (lo forza `CuerpoIde::opciones_prosa`).
+    let mut metrics = metrics;
+    metrics.phantom_blank_lines = true;
     text_editor_view_highlighted(
         &ide.state,
         palette,
@@ -340,34 +353,14 @@ pub fn cuerpo_ide_view<Msg: Clone + 'static>(
     )
 }
 
-/// Convierte unas métricas "IDE clásico" a su versión prosa: gutter
-/// fantasma + divisores fantasma en líneas vacías + gutter angosto. Si
-/// el caller ya pidió `GutterStyle::Phantom` o `phantom_blank_lines =
-/// true`, esos cambios se respetan tal cual (no los pisamos).
-fn aplicar_prosa(mut m: EditorMetrics) -> EditorMetrics {
-    if matches!(m.gutter_style, GutterStyle::Numbers) {
-        m.gutter_style = GutterStyle::Phantom;
-        // El sliver fantasma necesita mucho menos ancho que la
-        // numeración. Sólo lo angostamos si seguía con el default
-        // amplio (~3.5 × font_size) — así no rompemos a un caller que
-        // ya haya pedido un gutter ancho a propósito.
-        let ancho_default = m.font_size * 3.5;
-        if (m.gutter_width - ancho_default).abs() < 0.001 {
-            m.gutter_width = m.font_size * 1.0;
-        }
-    }
-    if !m.phantom_blank_lines {
-        m.phantom_blank_lines = true;
-    }
-    m
-}
-
 /// Constructor para tests / herramientas: arma un `CuerpoIde` sin pasar
 /// por un `Cuerpo` — recibe el texto plano y la lista de `atom_ids` en
 /// orden. Útil cuando el caller quiere instrumentar un estado intermedio.
 pub fn cuerpo_ide_desde_texto(texto: impl Into<String>, atom_ids: Vec<Uuid>) -> CuerpoIde {
     let texto = texto.into();
-    let mut state = EditorState::new();
+    let mut opts = EditorOptions::default();
+    opts.guard_blank_lines = true;
+    let mut state = EditorState::with_options(opts);
     state.set_text(&texto);
     let seq = state.edit_seq;
     CuerpoIde {

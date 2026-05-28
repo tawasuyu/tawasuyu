@@ -265,7 +265,7 @@ pub fn text_editor_view_full<Msg: Clone + 'static>(
     // realmente cambió o cambia el `Language`.
     let spans = state.highlighted_spans(language);
 
-    let gutter = build_gutter(scroll, end_line, caret.line, metrics, palette);
+    let gutter = build_gutter(state, scroll, end_line, caret.line, metrics, palette);
     let content = build_content(
         state,
         palette,
@@ -290,6 +290,7 @@ pub fn text_editor_view_full<Msg: Clone + 'static>(
 }
 
 fn build_gutter<Msg: Clone + 'static>(
+    state: &EditorState,
     scroll: usize,
     end_line: usize,
     active_line: usize,
@@ -298,7 +299,17 @@ fn build_gutter<Msg: Clone + 'static>(
 ) -> View<Msg> {
     let count = end_line.saturating_sub(scroll);
     let mut children: Vec<View<Msg>> = Vec::with_capacity(count);
+    let guards_on = state.options.guard_blank_lines;
     for n in scroll..end_line {
+        // En modo "guarda" las líneas vacías son separadores entre
+        // zonas de texto: ni se numeran ni se pueden escribir. El
+        // espacio se preserva (la línea sigue existiendo), pero el
+        // gutter las saltea — visualmente la numeración "rompe" en
+        // cada zona.
+        let is_guard = guards_on && state.is_blank_line(n);
+        if is_guard {
+            continue;
+        }
         let color = if n == active_line {
             palette.fg_line_number_active
         } else {

@@ -28,6 +28,15 @@ pub struct EditorOptions {
     /// `true` = Enter no inserta `\n`; el caller maneja submit. (modo
     /// single-line para el text-input refactorizado).
     pub single_line: bool,
+    /// Si `true`, las líneas vacías son **guardas**: el caret no puede
+    /// posicionarse ahí. Clicks y movimientos verticales saltan a la
+    /// línea no-vacía más cercana; la inserción no produce un caret
+    /// que quede sobre una guarda (también salta). El render del
+    /// gutter omite el número en las guardas (siguen contando, pero
+    /// "fingen no estar"). Pensado para editores de prosa donde un
+    /// `\n\n` separa zonas independientes (atom/párrafo). Default
+    /// `false`: comportamiento IDE clásico, líneas vacías editables.
+    pub guard_blank_lines: bool,
 }
 
 impl Default for EditorOptions {
@@ -37,6 +46,7 @@ impl Default for EditorOptions {
             indent_size: 2,
             page_size: 12,
             single_line: false,
+            guard_blank_lines: false,
         }
     }
 }
@@ -190,6 +200,9 @@ impl EditorState {
         let last_line = self.buffer.len_lines().saturating_sub(1);
         let col = self.buffer.line_len_chars(last_line);
         self.cursor = Cursor::at(last_line, col);
+        if self.options.guard_blank_lines {
+            snap_cursor_off_guard(&mut self.cursor, &self.buffer, -1);
+        }
         self.undo.clear();
         self.bump_edit_seq();
         // Cambio masivo de buffer — el árbol cached del highlighter
@@ -246,8 +259,40 @@ impl EditorState {
     /// Posiciona el caret en `(line, col)`, clampeando al rango válido
     /// del buffer. Colapsa la selección. Usado por el caller cuando el
     /// usuario clickea en el área de texto.
+    ///
+    /// Si `options.guard_blank_lines` está activo y la línea es una
+    /// guarda (vacía), el caret salta a la línea no-vacía más cercana
+    /// (privilegia hacia abajo). Así un click "en la franja entre
+    /// zonas" aterriza en el inicio de la zona siguiente.
     pub fn set_caret_at(&mut self, line: usize, col: usize) {
         self.cursor.set_caret(&self.buffer, Pos::new(line, col));
+        if self.options.guard_blank_lines {
+            snap_cursor_off_guard(&mut self.cursor, &self.buffer, 0);
+        }
+    }
+
+    /// `true` si la línea `line` del buffer está vacía (cero chars).
+    /// Fuera de rango → `false`.
+    pub fn is_blank_line(&self, line: usize) -> bool {
+        if line >= self.buffer.len_lines() {
+            return false;
+        }
+        self.buffer.line_len_chars(line) == 0
+    }
+
+    /// Salta el primary cursor + extras fuera de cualquier línea guarda
+    /// si `options.guard_blank_lines` está activo. `dir` orienta la
+    /// búsqueda: `+1` busca primero abajo, `-1` arriba, `0` igual a
+    /// `+1` (con fallback al opuesto si no hay líneas no-vacías).
+    /// No-op si la opción está apagada.
+    pub fn snap_off_guards(&mut self, dir: i32) {
+        if !self.options.guard_blank_lines {
+            return;
+        }
+        snap_cursor_off_guard(&mut self.cursor, &self.buffer, dir);
+        for c in &mut self.extra_cursors {
+            snap_cursor_off_guard(c, &self.buffer, dir);
+        }
     }
 
     /// Extiende la selección hasta `(line, col)`. Si no había anchor,
@@ -294,9 +339,22 @@ impl EditorState {
         event: &KeyEvent,
         clipboard: &mut dyn Clipboard,
     ) -> ApplyResult {
+        // Antes de aplicar la tecla guardamos la línea del primary
+        // cursor: si la edición/movimiento termina parando en una
+        // guarda, la dirección del salto es la diferencia
+        // post-pre. Up → snap arriba, Down → snap abajo, click/edit
+        // en el mismo sitio → snap abajo por default.
+        let pre_line = self.cursor.caret.line as i32;
         let r = self.apply_key_inner(event, clipboard);
         if r.changed() {
             self.bump_edit_seq();
+        }
+        if r.touched() && self.options.guard_blank_lines && !self.cursor.has_selection() {
+            // Si hay selección viva (shift+arrow / drag) no snappeamos:
+            // el usuario está seleccionando a través de la guarda y
+            // forzar el caret afuera rompería la selección.
+            let dir = (self.cursor.caret.line as i32 - pre_line).signum();
+            self.snap_off_guards(dir);
         }
         r
     }
@@ -587,6 +645,44 @@ impl EditorState {
             }
         });
     }
+}
+
+/// Si `cursor.caret.line` cae sobre una línea vacía del buffer, mueve
+/// el caret a la línea no-vacía más cercana siguiendo `dir`:
+///
+/// - `dir > 0` → busca primero abajo, luego arriba.
+/// - `dir < 0` → busca primero arriba, luego abajo.
+/// - `dir == 0` → equivalente a `dir > 0`.
+///
+/// Colapsa la selección y reposiciona `desired_col` clampeado a la
+/// línea destino. Si TODAS las líneas del buffer están vacías, no
+/// puede hacer nada y el caret queda donde está.
+fn snap_cursor_off_guard(cursor: &mut Cursor, buffer: &Buffer, dir: i32) {
+    let n = buffer.len_lines();
+    if n == 0 {
+        return;
+    }
+    let line = cursor.caret.line.min(n - 1);
+    if buffer.line_len_chars(line) > 0 {
+        return;
+    }
+    // Orden de búsqueda: primero la dirección preferida, luego la opuesta.
+    let primary: i32 = if dir < 0 { -1 } else { 1 };
+    let secondary: i32 = -primary;
+    for d in [primary, secondary] {
+        let mut probe = line as i32 + d;
+        while probe >= 0 && (probe as usize) < n {
+            let p = probe as usize;
+            if buffer.line_len_chars(p) > 0 {
+                let col = cursor.desired_col.min(buffer.line_len_chars(p));
+                cursor.caret = Pos::new(p, col);
+                cursor.anchor = None;
+                return;
+            }
+            probe += d;
+        }
+    }
+    // Buffer entero hecho de blanks — no podemos hacer nada útil.
 }
 
 /// Convierte un `EditDelta` + posiciones pre-edit a un `InputEdit` de
@@ -999,6 +1095,85 @@ mod tests {
         assert_eq!(s.scroll_offset, 0);
         s.scroll_by(1000);
         assert!(s.scroll_offset < 11);
+    }
+
+    fn estado_con_guardas(texto: &str) -> EditorState {
+        let mut opts = EditorOptions::default();
+        opts.guard_blank_lines = true;
+        let mut s = EditorState::with_options(opts);
+        s.set_text(texto);
+        s
+    }
+
+    #[test]
+    fn guarda_set_caret_at_en_linea_vacia_salta_hacia_abajo() {
+        // "abc\n\ndef" → líneas: "abc", "", "def".
+        let mut s = estado_con_guardas("abc\n\ndef");
+        s.set_caret_at(1, 0);
+        // El caret no puede quedar en la línea 1 (guarda) — salta a 2.
+        assert_eq!(s.cursor.caret, Pos::new(2, 0));
+    }
+
+    #[test]
+    fn guarda_set_caret_at_sin_linea_abajo_salta_arriba() {
+        // Última línea vacía: el snap solo puede ir hacia arriba.
+        let mut s = estado_con_guardas("abc\n\n");
+        // "abc\n\n" se parsea como ["abc", ""] — el trailing newline
+        // marca fin de "abc". Forzamos un click en la línea vacía.
+        s.set_caret_at(1, 0);
+        assert_eq!(s.cursor.caret.line, 0);
+    }
+
+    #[test]
+    fn guarda_arrow_down_atraviesa_la_separacion() {
+        let mut s = estado_con_guardas("abc\n\ndef");
+        s.cursor = Cursor::at(0, 0);
+        // Down debería terminar en línea 2, no en la 1 (guarda).
+        s.apply_key(&ev(NamedKey::ArrowDown, false, false));
+        assert_eq!(s.cursor.caret.line, 2);
+    }
+
+    #[test]
+    fn guarda_arrow_up_atraviesa_la_separacion() {
+        let mut s = estado_con_guardas("abc\n\ndef");
+        s.cursor = Cursor::at(2, 1);
+        s.apply_key(&ev(NamedKey::ArrowUp, false, false));
+        assert_eq!(s.cursor.caret.line, 0);
+    }
+
+    #[test]
+    fn guarda_set_text_no_deja_caret_en_blank() {
+        // El texto termina con `\n` → la última "línea" del rope es la
+        // vacía después del newline. Con guardas, el caret no puede
+        // quedar ahí: debe saltar a la última línea con contenido.
+        let mut opts = EditorOptions::default();
+        opts.guard_blank_lines = true;
+        let mut s = EditorState::with_options(opts);
+        s.set_text("hola\n");
+        assert!(!s.is_blank_line(s.cursor.caret.line));
+    }
+
+    #[test]
+    fn guarda_sin_opcion_set_caret_at_en_blank_se_queda() {
+        // Sin guard_blank_lines, comportamiento clásico: el caret
+        // puede caer en la línea vacía sin problemas.
+        let mut s = EditorState::new();
+        s.set_text("abc\n\ndef");
+        s.set_caret_at(1, 0);
+        assert_eq!(s.cursor.caret, Pos::new(1, 0));
+    }
+
+    #[test]
+    fn guarda_shift_arrow_extiende_seleccion_a_traves() {
+        // Con selección viva atravesando la guarda, NO snapear: el
+        // usuario está seleccionando texto multi-zona.
+        let mut s = estado_con_guardas("abc\n\ndef");
+        s.cursor = Cursor::at(0, 3);
+        s.apply_key(&ev(NamedKey::ArrowDown, true, false));
+        // El caret puede quedar en la línea 1 (vacía) mientras hay
+        // selección viva — el snap se inhibe.
+        assert!(s.cursor.has_selection());
+        assert_eq!(s.cursor.caret.line, 1);
     }
 
     #[test]
