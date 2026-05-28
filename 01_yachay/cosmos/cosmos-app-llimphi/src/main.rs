@@ -870,6 +870,53 @@ fn line(text: String, size: f32, color: Color) -> View<Msg> {
     .text_aligned(text, size, color, Alignment::Start)
 }
 
+/// Fila de la tabla de aspectos — columnas: tipo (con color), par
+/// de cuerpos, orbe, dirección (applying/separating). Usamos un Row
+/// con cells de ancho fijo para que las columnas se alineen entre
+/// filas.
+#[allow(clippy::too_many_arguments)]
+fn aspect_row(
+    kind_code: &str,
+    from: &str,
+    to: &str,
+    orb_dms: &str,
+    dir: &str,
+    kind_id: &str,
+    theme: &Theme,
+) -> View<Msg> {
+    let size = 11.0_f32;
+    let kind_color = aspecto_color(kind_id);
+    let cell = |text: String, color: Color, w: f32| -> View<Msg> {
+        View::new(Style {
+            size: Size {
+                width: length(w),
+                height: length(size + 4.0_f32),
+            },
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text_aligned(text, size, color, Alignment::Start)
+    };
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(size + 4.0_f32),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(vec![
+        cell(kind_code.to_string(), kind_color, 28.0),
+        cell(from.to_string(), theme.fg_text, 38.0),
+        cell(to.to_string(), theme.fg_text, 38.0),
+        cell(orb_dms.to_string(), theme.fg_muted, 56.0),
+        cell(dir.to_string(), theme.fg_muted, 22.0),
+    ])
+}
+
 // ----- Cartas (librería multi-archivo) -----
 
 fn tile_cartas(theme: &Theme) -> View<Msg> {
@@ -1119,7 +1166,8 @@ fn tile_cuerpos(render: &RenderModel, theme: &Theme) -> View<Msg> {
             let dms = fmt_dms(g.deg.rem_euclid(30.0) as f64);
             let body = simbolo_cuerpo(&g.symbol);
             let casa = g.house.map(|h| format!(" h{h}")).unwrap_or_default();
-            let retro = if g.retrograde { " ℞" } else { "" };
+            // "℞" (U+211E) no está en LiberationSans — usamos "(R)".
+            let retro = if g.retrograde { " (R)" } else { "" };
             let dignity = g.dignity_marker.clone().unwrap_or_default();
             let line_str = format!("{body} {dms} {sign}{casa}{retro}{dignity}");
             line(line_str, 11.0, theme.fg_text)
@@ -1130,13 +1178,45 @@ fn tile_cuerpos(render: &RenderModel, theme: &Theme) -> View<Msg> {
 
 // ----- Aspectos (filtrado por module_id) -----
 
+/// Ranking de importancia del aspecto: 0 = mayor (con/opp/squ/tri/sex),
+/// 1 = menor (quincunx/semi-sextile/semi-square/sesquiquadrate/quintile).
+/// Sortear primero por esta clave, después por orb ascendente, da la
+/// tabla con los aspectos más fuertes y cerrados arriba.
+fn aspecto_importancia(kind: &str) -> u8 {
+    match kind {
+        "conjunction" | "opposition" | "square" | "trine" | "sextile" => 0,
+        _ => 1,
+    }
+}
+
+/// Color del aspecto desde la paleta agnóstica de `cosmos-render`,
+/// traducido al `peniko::Color` que usa Llimphi. Mismas decisiones
+/// cromáticas que el wheel — así el color del aspecto en la tabla
+/// concuerda con el color de la línea en el wheel.
+fn aspecto_color(kind: &str) -> Color {
+    let pal = cosmos_render::Palette::dark();
+    let c = pal.aspect(kind);
+    let to_byte = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
+    Color::from_rgba8(to_byte(c.r), to_byte(c.g), to_byte(c.b), to_byte(c.a))
+}
+
 fn tile_aspectos(render: &RenderModel, module_id: &str, theme: &Theme) -> View<Msg> {
     let mut asps: Vec<&AspectSummary> = render
         .aspect_summary
         .iter()
         .filter(|a| a.module_id == module_id)
         .collect();
-    asps.sort_by(|a, b| a.orb_deg.partial_cmp(&b.orb_deg).unwrap_or(std::cmp::Ordering::Equal));
+    // Orden: primero los mayores; dentro de cada grupo, por orbe
+    // ascendente (los más exactos arriba).
+    asps.sort_by(|a, b| {
+        aspecto_importancia(&a.kind)
+            .cmp(&aspecto_importancia(&b.kind))
+            .then_with(|| {
+                a.orb_deg
+                    .partial_cmp(&b.orb_deg)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
     let rows: Vec<View<Msg>> = asps
         .into_iter()
         .take(20)
@@ -1145,12 +1225,17 @@ fn tile_aspectos(render: &RenderModel, module_id: &str, theme: &Theme) -> View<M
             let to = simbolo_cuerpo(&a.to_body);
             let kind = simbolo_aspecto(&a.kind);
             let dms = fmt_dms(a.orb_deg);
+            // ◂ ▸ (U+25C2/B8) no están en LiberationSans — usamos
+            // ◄ ► (U+25C4/BA) que sí, y son visualmente idénticos.
             let dir = match a.applying {
-                Some(true) => " ◂",
-                Some(false) => " ▸",
+                Some(true) => " ◄",
+                Some(false) => " ►",
                 None => "",
             };
-            line(format!("{from} {kind} {to}  {dms}{dir}"), 11.0, theme.fg_text)
+            // El kind va coloreado por la paleta de aspectos; el
+            // resto en fg_text — así la columna de tipo se distingue
+            // visualmente de los nombres de cuerpo.
+            aspect_row(kind, from, to, &dms, dir, a.kind.as_str(), theme)
         })
         .collect();
     if rows.is_empty() {
@@ -1274,7 +1359,9 @@ fn seccion_label(text: String, theme: &Theme) -> View<Msg> {
 fn fila_cualidad(label: &str, glyphs: &[&str], theme: &Theme) -> View<Msg> {
     let count = glyphs.len();
     let bar_len = count.min(10);
-    let bar: String = "▰".repeat(bar_len) + &"▱".repeat(10_usize.saturating_sub(bar_len));
+    // █ y ░ existen en LiberationSans/AdwaitaSans; ▰/▱ no, por eso
+    // antes salían como cajitas .notdef.
+    let bar: String = "█".repeat(bar_len) + &"░".repeat(10_usize.saturating_sub(bar_len));
     let glyph_str = glyphs.join(" ");
     let txt = format!("{label:>9}  {bar}  {count}  {glyph_str}");
     line(txt, 11.0, theme.fg_text)
@@ -1817,43 +1904,51 @@ fn fmt_dms(deg: f64) -> String {
     format!("{:>2}°{:02}'", d, m)
 }
 
+/// Códigos alfabéticos para mostrar cuerpos en los tiles del sidebar.
+/// **Por qué letras y no unicode** (☉☽☿…): las fuentes default del
+/// sistema (LiberationSans, AdwaitaSans) no traen `U+2609..U+265F`,
+/// así que cualquier glyph astrológico cae como `.notdef`. En el
+/// wheel ya los dibujamos como path (`cosmos_render::glyphs`) — acá
+/// son texto plano dentro de filas, así que usamos códigos cortos.
 fn simbolo_cuerpo(s: &str) -> &'static str {
     match s {
-        "sun" => "☉",
-        "moon" => "☽",
-        "mercury" => "☿",
-        "venus" => "♀",
-        "mars" => "♂",
-        "jupiter" => "♃",
-        "saturn" => "♄",
-        "uranus" => "♅",
-        "neptune" => "♆",
-        "pluto" => "♇",
-        "earth" => "⊕",
-        "north_node" | "ascending_node" => "☊",
-        "south_node" | "descending_node" => "☋",
-        "lilith" => "⚸",
-        "chiron" => "⚷",
-        "mean_node" => "☊",
+        "sun" => "Sol",
+        "moon" => "Lun",
+        "mercury" => "Mer",
+        "venus" => "Ven",
+        "mars" => "Mar",
+        "jupiter" => "Jup",
+        "saturn" => "Sat",
+        "uranus" => "Ura",
+        "neptune" => "Nep",
+        "pluto" => "Plu",
+        "earth" => "Tie",
+        "north_node" | "ascending_node" => "NoN",
+        "south_node" | "descending_node" => "NoS",
+        "lilith" => "Lil",
+        "chiron" => "Qui",
+        "mean_node" => "NoN",
         "asc" => "Asc",
-        "desc" => "Desc",
+        "desc" => "Dsc",
         "mc" => "MC",
         "ic" => "IC",
         _ => "·",
     }
 }
 
+/// Códigos alfabéticos para tipos de aspecto. Mismo motivo que
+/// [`simbolo_cuerpo`] — los unicode ☌☍△□⚹ no rendean.
 fn simbolo_aspecto(s: &str) -> &'static str {
     match s {
-        "conjunction" => "☌",
-        "opposition" => "☍",
-        "trine" => "△",
-        "square" => "□",
-        "sextile" => "⚹",
-        "quincunx" => "⚻",
-        "semi_sextile" => "⚺",
-        "semi_square" => "∠",
-        "sesquiquadrate" => "⚼",
+        "conjunction" => "con",
+        "opposition" => "opp",
+        "trine" => "tri",
+        "square" => "cua",
+        "sextile" => "sex",
+        "quincunx" => "qui",
+        "semi_sextile" => "ssx",
+        "semi_square" => "scu",
+        "sesquiquadrate" => "scq",
         _ => "·",
     }
 }
