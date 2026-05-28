@@ -263,13 +263,40 @@ Adaptar `cosmos-canvas-llimphi` para subir todas las estrellas del
 viewport en una draw call usando `gpu_paint_with`. Métrica: dataset
 HYG (~120 K estrellas brillantes) renderizadas a 144 fps en GPU mid.
 
-**Fase 6 — Tests + demo + SDD (1 día).**
-- `llimphi-raster` example: `gpu_million_points` (LCG + shader, sin
-  ninguna app, valida el HAL).
-- Update SDD: tabla "cuándo elegir vello vs GPU directo".
-- Pineal SDD: anotar que `GpuSceneCanvas` ya está disponible.
+**Fase 6 — Tests + demo + SDD (1 día). ✓ HECHO (2026-05-28).**
+- `llimphi-raster/examples/gpu_million_points.rs`: usa `GpuPipelines` +
+  `GpuBatch` puros (sin app, sin runtime Elm) para pintar N rects
+  sintéticos. Validación headless del HAL + bench de referencia
+  post-implementación. Smoke en `tests/gpu_batch_smoke.rs`.
+- Tabla "cuándo elegir" → abajo.
+- Pineal SDD §4 actualizado con `GpuSceneCanvas` en producción.
+
+### ¿Cuándo elegir vello vs GPU directo?
+
+| Pregunta | Vello (`paint_with`) | GPU directo (`gpu_paint_with`) |
+|---|---|---|
+| ¿Cuántos primitivos por frame? | < 100 K | 100 K – 10 M |
+| ¿Curvas Bezier nativas? | Sí | No (teselar antes) |
+| ¿Texto? | Sí | No — usar vello hermano u overlay |
+| ¿AA fino requerido? | Sí (analítico) | No (sin MSAA todavía) |
+| ¿Patrón "pinta lo que cambió"? | Re-build de Scene | Igual coste — reusá `GpuBatch` |
+| ¿Múltiples grosores de stroke? | Sí | Una sola `line_width` por flush |
+| ¿Anti-fluctuación de pixel? | Sí | Subpixel jitter visible |
+| Ejemplos de uso | pluma editor, shuma shell, mirada, nahual, iniy, khipu, chasqui explorer, dominium UI | cosmos starfield denso, tinkuy particles, nakui viewport, pineal denso |
+
+Default razonable: **`paint_with`** salvo que el caller ya midió que el
+volumen lo justifica. El costo de mantener un pipeline + WGSL propios
+es alto comparado con seguir usando vello.
+
+Convivencia: una misma `View` puede registrar AMBOS hooks. El runtime
+pinta vello primero (toda la Scene), luego ejecuta los GPU painters
+en orden DFS. Para texto encima de un render GPU denso, se usa
+`App::view_overlay` (segunda Scene vello sobre el main).
 
 **Estimado total: 10–15 días de trabajo concentrado.**
+**Trabajo real (1 día, 2026-05-28):** todas las fases completas, sólo
+falta validar el criterio formal (≥5× a 500K, 60 fps @ 1M) en GPU mid
+real — el bench corrió en llvmpipe.
 
 ### Trigger
 

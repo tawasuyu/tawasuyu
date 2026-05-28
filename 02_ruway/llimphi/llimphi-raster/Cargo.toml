@@ -18,3 +18,7 @@ path = "examples/render_node.rs"
 [[example]]
 name = "spike_gpu_directo"
 path = "examples/spike_gpu_directo.rs"
+
+[[example]]
+name = "gpu_million_points"
+path = "examples/gpu_million_points.rs"
