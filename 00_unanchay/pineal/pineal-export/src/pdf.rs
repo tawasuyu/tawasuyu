@@ -28,6 +28,7 @@
 //! human-readable y debugeable. Tamaño aceptable para los volúmenes
 //! que un chart produce.
 
+use pineal_core::lttb::lttb_indices;
 use pineal_render::{Color, Rect, RenderCmd, RenderPlan};
 use std::fmt::Write;
 
@@ -37,6 +38,63 @@ pub fn to_pdf(plan: &RenderPlan, width: f32, height: f32) -> Vec<u8> {
     let content = build_content(plan, height);
     assemble(width, height, &content)
 }
+
+/// Igual que [`to_pdf`] pero aplica decimación LTTB a los polylines
+/// antes de emitirlos. El target se computa según el DPI destino:
+///
+/// ```text
+/// vertices_target = width_inches × dpi × vertices_per_pixel
+/// ```
+///
+/// `vertices_per_pixel` es 3 (regla práctica del LTTB: tres vértices por
+/// pixel — el rasterizado/AA del visor rellena el resto). Para un PDF
+/// US-letter a 300 DPI: `target = 8.5 × 300 × 3 = 7 650` vértices máx
+/// por polyline. Rects, líneas, triangle-strips y texto pasan intactos.
+pub fn to_pdf_decimated(
+    plan: &RenderPlan,
+    width: f32,
+    height: f32,
+    dpi: f32,
+) -> Vec<u8> {
+    let width_inches = width / 72.0;
+    let target = (width_inches * dpi * 3.0).max(16.0) as usize;
+    let decimated = decimate_polylines(plan, target);
+    to_pdf(&decimated, width, height)
+}
+
+/// Aplica LTTB a cada `StrokePolyline` del plan, dejando el resto
+/// intacto. Si la polyline ya está por debajo del target, queda igual.
+fn decimate_polylines(plan: &RenderPlan, target: usize) -> RenderPlan {
+    let mut out = RenderPlan::new();
+    for cmd in &plan.cmds {
+        match cmd {
+            RenderCmd::StrokePolyline { coords, stroke } => {
+                let n = coords.len() / 2;
+                if n <= target {
+                    out.push(RenderCmd::StrokePolyline {
+                        coords: coords.clone(),
+                        stroke: *stroke,
+                    });
+                    continue;
+                }
+                let mut indices = Vec::with_capacity(target);
+                lttb_indices(coords, target, &mut indices);
+                let mut new_coords = Vec::with_capacity(indices.len() * 2);
+                for &i in &indices {
+                    new_coords.push(coords[i * 2]);
+                    new_coords.push(coords[i * 2 + 1]);
+                }
+                out.push(RenderCmd::StrokePolyline {
+                    coords: new_coords,
+                    stroke: *stroke,
+                });
+            }
+            other => out.push(other.clone()),
+        }
+    }
+    out
+}
+
 
 fn build_content(plan: &RenderPlan, page_h: f32) -> String {
     let mut s = String::with_capacity(plan.cmds.len() * 64 + 128);
@@ -297,6 +355,47 @@ mod tests {
         let s = String::from_utf8_lossy(&pdf);
         // 4 vértices → 2 triángulos → 2 polígonos (m + 2 l + h + f).
         assert_eq!(s.matches(" h f").count(), 2);
+    }
+
+    #[test]
+    fn decimated_polyline_shrinks_to_target() {
+        let mut rec = pineal_render::PlanRecorder::new();
+        // 1000 vértices en una polyline (datos sintéticos).
+        let coords: Vec<f32> = (0..1000)
+            .flat_map(|i| {
+                let x = i as f32;
+                let y = (x * 0.1).sin() * 50.0 + 100.0;
+                [x, y]
+            })
+            .collect();
+        rec.stroke_polyline(&coords, StrokeStyle::new(1.0, Color::BLACK));
+        let plan = rec.into_plan();
+
+        // PDF de 200×100 pts (≈ 2.78 inches) a 72 DPI →
+        // target = 2.78 × 72 × 3 ≈ 600.
+        let pdf = to_pdf_decimated(&plan, 200.0, 100.0, 72.0);
+        let s = String::from_utf8_lossy(&pdf);
+        let moveto_count = s.matches(" m\n").count() + s.matches(" m ").count();
+        let lineto_count = s.matches(" l\n").count();
+        // 1 moveto + (N-1) linetos. Target < 1000 → debería ser menos
+        // que el original.
+        assert!(moveto_count >= 1);
+        assert!(
+            lineto_count < 999,
+            "esperaba decimación, hubo {lineto_count} linetos"
+        );
+    }
+
+    #[test]
+    fn decimation_preserves_other_primitives() {
+        let mut rec = pineal_render::PlanRecorder::new();
+        rec.fill_rect(Rect::new(0.0, 0.0, 50.0, 50.0), Color::WHITE);
+        let coords: Vec<f32> = (0..200).flat_map(|i| [i as f32, 0.0]).collect();
+        rec.stroke_polyline(&coords, StrokeStyle::new(1.0, Color::BLACK));
+        let pdf = to_pdf_decimated(&rec.into_plan(), 100.0, 100.0, 300.0);
+        let s = String::from_utf8_lossy(&pdf);
+        // Rect intacto.
+        assert!(s.contains("re f"));
     }
 
     #[test]

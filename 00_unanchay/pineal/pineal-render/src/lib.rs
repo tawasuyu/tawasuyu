@@ -4,15 +4,16 @@
 //! el runtime de UI: hablan contra el trait [`Canvas`] definido acá.
 //! Eso deja a la cadena `core → render → painter` agnóstica.
 //!
-//! Hoy hay un solo backend vivo (`SceneCanvas` sobre vello + llimphi),
-//! pero el trait permite enchufar más sin tocar los painters:
+//! Backends activos:
 //!
-//! - **Llimphi/vello** — backend canónico para apps gioser; pinta
-//!   dentro de un `paint_with` del `View<Msg>` declarativo.
-//! - **SVG** — `pineal-export` implementa el mismo trait emitiendo
-//!   elementos `<path>`, `<polyline>`, etc.
-//! - **GPU directo wgpu** — placeholder; el día que una visualización
-//!   le pegue al wall (millones de puntos), entra sin tocar la lógica.
+//! - **Llimphi/vello** ([`llimphi_backend::SceneCanvas`]) — canónico
+//!   para apps gioser; pinta dentro de un `paint_with` del `View<Msg>`
+//!   declarativo.
+//! - **PlanRecorder** ([`recorder::PlanRecorder`]) — graba cada llamada
+//!   como `RenderCmd`. Consumido por `pineal-export` para emitir SVG,
+//!   PNG (raster propio con AA 2×2) y PDF (writer propio).
+//! - **GPU directo wgpu** — roadmap. Cuando una visualización pegue al
+//!   wall (>1M puntos) entrará sin tocar los painters.
 //!
 //! Tipos primitivos (`Color`, `Point`, `Rect`) viven acá para no
 //! atarlos al tipo de color/punto de ningún runtime.

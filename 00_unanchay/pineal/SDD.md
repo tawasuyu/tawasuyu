@@ -94,7 +94,7 @@ samples por pixel) da AA suficiente para reportes y dashboards.
 |---|---|---|
 | `pineal-cartesian` | `ChartView` | Ticks por escala log/lin, viewport con zoom anclado, cache de panning |
 | `pineal-polar` | `paint_pie`, `paint_radar` | Wedge teselado a 96 segs/vuelta, fan para radar |
-| `pineal-mesh` | `paint_graph`, `tree_layout`, `ForceLayout` | Fruchterman-Reingold O(n²) y Barnes-Hut O(n log n), Sugiyama-lite layered |
+| `pineal-mesh` | `paint_graph`, `tree_layout`, `ForceLayout`, `bundle` | Fruchterman-Reingold O(n²) y Barnes-Hut O(n log n), Sugiyama-lite layered, FDEB-lite para bundling |
 | `pineal-treemap` | `paint_treemap` | Squarified (Bruls / d3-hierarchy) |
 | `pineal-phosphor` | trail tipo CRT | Triangle strip con alpha decay |
 | `pineal-flow` | `paint_sankey` | Longest-path + barycenter + ribbons smoothstep |
@@ -117,6 +117,21 @@ rápido en práctica (sin overhead del árbol).
 3 pasadas: DFS para romper ciclos → Kahn longest-path para capas →
 barycenter en 2 pasadas (down + up) para reducir cruces. Devuelve
 posiciones + agrupación por capa.
+
+### 5.3 FDEB (added 2026-05-28)
+
+`pineal-mesh::fdeb::bundle` aplica Force-Directed Edge Bundling: cada
+arista se subdivide en N puntos intermedios que se atraen a puntos
+correspondientes de aristas compatibles (paralelas + cerca + similar
+escala). Endpoints fijos. Útil para grafos densos donde el spaghetti
+oculta el flujo macroscópico.
+
+### 5.4 PDF con decimación contextual (added 2026-05-28)
+
+`pineal-export::to_pdf_decimated(plan, w_pts, h_pts, dpi)` aplica LTTB
+a cada polyline antes de emitir el PDF, con
+`target = width_inches × dpi × 3 vértices/px`. Output PDF mucho más
+chico sin sacrificar la silueta visible al DPI destino.
 
 ## 6. Decisión: AA por defecto en PNG, no en pantalla
 
@@ -152,11 +167,11 @@ Total al 2026-05-28: **130+ tests verdes**.
 ## 9. Roadmap
 
 - **GPU direct backend (wgpu)** — paint específico para campos densos
-  (>1M puntos) sin pasar por vello.
-- **FDEB** (Force-Directed Edge Bundling) para grafos densos: bundle
-  de edges por bezier compartido.
-- **PDF: decimación contextual por DPI** (hoy el exporter emite todos
-  los vértices). `target = width_inches × dpi × vertices_per_pixel`.
+  (>1M puntos) sin pasar por vello. Es un proyecto aparte, no un hueco
+  del catálogo actual.
+
+El resto del catálogo está cerrado: 14 crates de viz/render/export
++ 11 demos ejecutables + SDD propio.
 
 ## 10. Lo que NO va a pineal
 

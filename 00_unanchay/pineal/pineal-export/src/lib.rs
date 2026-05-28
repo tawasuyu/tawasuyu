@@ -19,4 +19,4 @@ pub mod pdf;
 
 pub use svg::to_svg;
 pub use crate::png::to_png;
-pub use crate::pdf::to_pdf;
+pub use crate::pdf::{to_pdf, to_pdf_decimated};
