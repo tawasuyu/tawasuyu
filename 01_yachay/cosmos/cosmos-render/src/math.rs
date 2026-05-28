@@ -262,10 +262,15 @@ pub fn find_clusters(angles_deg: &[f32], threshold_deg: f32) -> Vec<Vec<usize>> 
 // Coord formatter
 // =====================================================================
 
-/// Formato compacto con precisión de minutos: "DD°MM'{signo}" donde
-/// el signo es el glyph zodiacal (♈♉♊…). Ej: 14.93° → "14°56'♈".
-/// Los minutos se redondean al entero más cercano; carry-overs entre
-/// signos están cubiertos por trabajar en minutos enteros absolutos.
+/// Formato compacto con precisión de minutos: `"DD°MM'<Sg>"` con `<Sg>`
+/// = código alfabético del signo (`Ar`/`Ta`/`Ge`/…). Ej: 14.93° →
+/// `"14°56'Ar"`.
+///
+/// **Por qué letras y no `♈♉♊…`**: muchas fuentes default del sistema
+/// (LiberationSans, AdwaitaSans) **no incluyen** el bloque de glyphs
+/// zodiacales `U+2648..U+2653`, así que el render caía como
+/// `.notdef` invisible. Las letras son legibles bajo cualquier
+/// sans-serif y mantienen toda la información (signo + grado + minuto).
 pub fn format_coord_compact(deg: f32) -> String {
     let normalized = deg.rem_euclid(360.0);
     let total_minutes = (normalized * 60.0).round() as i64;
@@ -274,21 +279,21 @@ pub fn format_coord_compact(deg: f32) -> String {
     let within_sign = total_minutes - (sign_idx as i64) * 30 * 60;
     let deg_int = (within_sign / 60) as i32;
     let minutes = (within_sign % 60) as i32;
-    let sign_glyph = match sign_idx {
-        0 => "♈",
-        1 => "♉",
-        2 => "♊",
-        3 => "♋",
-        4 => "♌",
-        5 => "♍",
-        6 => "♎",
-        7 => "♏",
-        8 => "♐",
-        9 => "♑",
-        10 => "♒",
-        _ => "♓",
+    let sign_code = match sign_idx {
+        0 => "Ar",
+        1 => "Ta",
+        2 => "Ge",
+        3 => "Cn",
+        4 => "Le",
+        5 => "Vi",
+        6 => "Li",
+        7 => "Sc",
+        8 => "Sg",
+        9 => "Cp",
+        10 => "Aq",
+        _ => "Pi",
     };
-    format!("{}°{:02}'{}", deg_int, minutes, sign_glyph)
+    format!("{}°{:02}'{}", deg_int, minutes, sign_code)
 }
 
 #[cfg(test)]
@@ -368,22 +373,22 @@ mod tests {
 
     #[test]
     fn coord_zero_aries() {
-        assert_eq!(format_coord_compact(0.0), "0°00'♈");
+        assert_eq!(format_coord_compact(0.0), "0°00'Ar");
     }
 
     #[test]
     fn coord_fourteen_fiftysix_aries() {
-        assert_eq!(format_coord_compact(14.933_3), "14°56'♈");
+        assert_eq!(format_coord_compact(14.933_3), "14°56'Ar");
     }
 
     #[test]
     fn coord_rollover_to_taurus() {
-        assert_eq!(format_coord_compact(29.9995), "0°00'♉");
+        assert_eq!(format_coord_compact(29.9995), "0°00'Ta");
     }
 
     #[test]
     fn coord_negative_wraps() {
-        assert_eq!(format_coord_compact(-10.0), "20°00'♓");
+        assert_eq!(format_coord_compact(-10.0), "20°00'Pi");
     }
 
     #[test]

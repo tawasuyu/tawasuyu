@@ -162,6 +162,15 @@ pub fn compose_wheel(
 ) -> Vec<DrawCommand> {
     use crate::math::{find_clusters, format_coord_compact, polar_to_screen, spread_angles, Radii};
     let mut out = Vec::new();
+    // Cuando dos glyphs caen en (casi) la misma coordenada (planeta ↔
+    // planeta o planeta ↔ cusp de casa con la misma DD°MM'<Sg>), el
+    // coord label de la segunda aparición se suprime — el usuario lee
+    // la coordenada una sola vez. Comparamos por el string ya
+    // formateado (precisión de minuto) en vez de por grados crudos
+    // para que la dedupe ocurra exactamente cuando la etiqueta sería
+    // idéntica visualmente.
+    let mut emitted_coords: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
 
     let cx = opts.size / 2.0;
     let cy = opts.size / 2.0;
@@ -303,14 +312,21 @@ pub fn compose_wheel(
     });
 
     // Draws cusps + numbers for both house systems (topo + geo) in their respective rings.
+    // Para el sistema geocéntrico además emitimos la coordenada DD°MM'<Sg>
+    // de cada cusp justo afuera del aro de casas — así el usuario lee la
+    // posición del cusp sin tener que cruzar con el dial zodiacal. Para
+    // el topo lo omitimos (compartirían cusps cercanos y duplicarían).
     for layer in &model.layers {
         if !matches!(layer.kind, crate::LayerKind::Houses) {
             continue;
         }
-        let (ring_outer, ring_inner, base_color, label_color) = match layer.module_id.as_str() {
-            "topocentric" => (topo_outer, topo_inner, topo_ring_color, topo_ring_color),
-            _ => (house_outer_r, house_inner_r, pal.house_cusp, pal.fg_muted),
-        };
+        let (ring_outer, ring_inner, base_color, label_color, is_geo) =
+            match layer.module_id.as_str() {
+                "topocentric" => {
+                    (topo_outer, topo_inner, topo_ring_color, topo_ring_color, false)
+                }
+                _ => (house_outer_r, house_inner_r, pal.house_cusp, pal.fg_muted, true),
+            };
         if let crate::Geometry::Ring { cusps_deg } = &layer.geometry {
             for (i, c) in cusps_deg.iter().enumerate() {
                 let is_angle = i == 0 || i == 3 || i == 6 || i == 9;
@@ -331,6 +347,25 @@ pub fn compose_wheel(
                     width,
                     dash: None,
                 });
+                // Coord label del cusp — sólo geocéntrico, sólo cuando
+                // `show_coord_labels` está activo. Lo posicionamos entre
+                // el aro de casas y el dial zodiacal (zona libre, sin
+                // glyphs compitiendo). Dedupe por string formateado.
+                if is_geo && opts.show_coord_labels {
+                    let coord_str = format_coord_compact(*c);
+                    if emitted_coords.insert(coord_str.clone()) {
+                        let cusp_label_r = (ring_outer + radii.sign_inner) / 2.0;
+                        let (lx, ly) = polar_to_screen(*c, asc, rot, cusp_label_r);
+                        out.push(DrawCommand::Text {
+                            x: cx + lx,
+                            y: cy + ly,
+                            content: coord_str,
+                            color: label_color,
+                            size: opts.size * 0.0165,
+                            anchor: TextAnchor::Middle,
+                        });
+                    }
+                }
             }
         }
         // House numbers en el centro del ring
@@ -420,18 +455,27 @@ pub fn compose_wheel(
                     anchor: TextAnchor::Middle,
                 });
 
-                // Coord label en pill — solo natal por ahora (sino se ensucia)
+                // Coord label en pill — sólo natal (los overlays se
+                // amontonarían con el natal). Dedupe contra las coords
+                // ya emitidas por house cusps + previos planetas: si dos
+                // glyphs caen en el mismo `DD°MM'<Sg>`, la coordenada se
+                // ve una sola vez. La etiqueta va INTERIOR al ring del
+                // disco (entre el disco y el aro de aspectos) para no
+                // pisar al glyph del planeta ni al cuerpo vecino.
                 if opts.show_coord_labels && is_natal {
-                    let label_ring = ring - disk * 1.6;
-                    let (lx, ly) = polar_to_screen(disp_deg, asc, rot, label_ring);
-                    out.push(DrawCommand::Text {
-                        x: cx + lx,
-                        y: cy + ly,
-                        content: format_coord_compact(g.deg),
-                        color: pal.fg_muted,
-                        size: opts.size * 0.0155,
-                        anchor: TextAnchor::Middle,
-                    });
+                    let coord_str = format_coord_compact(g.deg);
+                    if emitted_coords.insert(coord_str.clone()) {
+                        let label_ring = (ring - disk * 1.8).max(radii.aspects + opts.size * 0.012);
+                        let (lx, ly) = polar_to_screen(disp_deg, asc, rot, label_ring);
+                        out.push(DrawCommand::Text {
+                            x: cx + lx,
+                            y: cy + ly,
+                            content: coord_str,
+                            color: pal.fg_muted,
+                            size: opts.size * 0.0155,
+                            anchor: TextAnchor::Middle,
+                        });
+                    }
                 }
             }
         }
@@ -611,49 +655,63 @@ fn svg_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
+/// Etiqueta corta de un signo zodiacal — 3 letras ASCII en mayúscula.
+///
+/// **Por qué letras y no unicode** (♈♉…): muchas fuentes del sistema
+/// (LiberationSans / AdwaitaSans del default Arch/Linux) **no traen**
+/// el bloque `U+2648..U+2653`, así que el glyph caía como `.notdef`
+/// invisible o como cuadrito; parley/fontique no encuentra fallback
+/// porque tampoco hay font de símbolos instalada. Las letras renderan
+/// en cualquier fuente sans-serif y mantienen el grado de
+/// identificación (`ARI` lee igual que ♈ para un astrólogo).
 pub(crate) fn sign_unicode(name: &str) -> &'static str {
     match name {
-        "aries" => "♈",
-        "taurus" => "♉",
-        "gemini" => "♊",
-        "cancer" => "♋",
-        "leo" => "♌",
-        "virgo" => "♍",
-        "libra" => "♎",
-        "scorpio" => "♏",
-        "sagittarius" => "♐",
-        "capricorn" => "♑",
-        "aquarius" => "♒",
-        "pisces" => "♓",
+        "aries" => "ARI",
+        "taurus" => "TAU",
+        "gemini" => "GEM",
+        "cancer" => "CAN",
+        "leo" => "LEO",
+        "virgo" => "VIR",
+        "libra" => "LIB",
+        "scorpio" => "SCO",
+        "sagittarius" => "SAG",
+        "capricorn" => "CAP",
+        "aquarius" => "AQU",
+        "pisces" => "PIS",
         _ => "?",
     }
 }
 
+/// Etiqueta corta de un cuerpo — código alfabético (Su/Mo/Me/Ve/Ma/
+/// Ju/Sa/Ur/Ne/Pl/Ch/NN/SN/Li). Misma razón que [`sign_unicode`]:
+/// los símbolos planetarios unicode tienen cobertura parcial en
+/// fuentes del sistema (Liberation tiene ♀♂♃♄♅♆♇ pero no ☉☽), así
+/// que el usuario veía sólo Venus y Marte. Letras = visible siempre.
 fn planet_unicode(name: &str) -> &'static str {
     match name {
-        "sun" => "☉",
-        "moon" => "☽",
-        "mercury" => "☿",
-        "venus" => "♀",
-        "mars" => "♂",
-        "jupiter" => "♃",
-        "saturn" => "♄",
-        "uranus" => "♅",
-        "neptune" => "♆",
-        "pluto" => "♇",
-        "north_node" => "☊",
-        "south_node" => "☋",
-        "chiron" => "⚷",
-        "lilith" => "⚸",
-        _ => "•",
+        "sun" => "Su",
+        "moon" => "Mo",
+        "mercury" => "Me",
+        "venus" => "Ve",
+        "mars" => "Ma",
+        "jupiter" => "Ju",
+        "saturn" => "Sa",
+        "uranus" => "Ur",
+        "neptune" => "Ne",
+        "pluto" => "Pl",
+        "north_node" => "NN",
+        "south_node" => "SN",
+        "chiron" => "Ch",
+        "lilith" => "Li",
+        _ => "·",
     }
 }
 
-/// Glyph del cuerpo con sufijo "℞" si está retrógrado — concatenación
+/// Glyph del cuerpo con sufijo "R" si está retrógrado — concatenación
 /// directa en el text para no agregar más comandos por planeta.
 pub(crate) fn planet_unicode_with_retro(name: &str, retrograde: bool) -> String {
     if retrograde {
-        format!("{}℞", planet_unicode(name))
+        format!("{}R", planet_unicode(name))
     } else {
         planet_unicode(name).to_string()
     }

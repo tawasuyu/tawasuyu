@@ -640,7 +640,10 @@ impl App for Cosmos {
             include_bodies: true,
             palette: cosmos_render::Palette::dark(),
             draw_ascensional_cross: true,
-            show_coord_labels: false,
+            // Coord labels visibles + dedupe por DD°MM'<Sg>: el usuario
+            // ve la coordenada exacta de cada planeta y cada cusp de
+            // casa, sin que se pise una posición duplicada.
+            show_coord_labels: true,
             show_minor_aspects: false,
             dial_3d: true,
         };
