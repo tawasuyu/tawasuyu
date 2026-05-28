@@ -102,6 +102,8 @@ enum Msg {
     FindAnterior,
     FindClose,
     DiffToggle,
+    MoverAtomArriba,
+    MoverAtomAbajo,
     ToglearFusion,
     ZonaSiguiente,
     ZonaAnterior,
@@ -205,6 +207,17 @@ impl App for Pluma {
         }
         let ctrl = event.modifiers.ctrl || event.modifiers.meta;
         let shift = event.modifiers.shift;
+        let alt = event.modifiers.alt;
+        // Alt+Flecha: mover el átomo bajo el caret. Lo capturamos antes
+        // que el editor para que no procese el evento como navegación.
+        if alt && !ctrl {
+            if matches!(&event.key, Key::Named(NamedKey::ArrowUp)) {
+                return Some(Msg::MoverAtomArriba);
+            }
+            if matches!(&event.key, Key::Named(NamedKey::ArrowDown)) {
+                return Some(Msg::MoverAtomAbajo);
+            }
+        }
         // Find overlay capturado: Esc cierra, Enter/Shift+Enter ciclan
         // matches, todo lo demás edita el query.
         if model.find_visible {
@@ -475,6 +488,12 @@ fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         Msg::DiffToggle => {
             model.diff_visible = !model.diff_visible;
         }
+        Msg::MoverAtomArriba => {
+            mover_atom_caret(&mut model, -1);
+        }
+        Msg::MoverAtomAbajo => {
+            mover_atom_caret(&mut model, 1);
+        }
         Msg::ToglearFusion => {
             if let Some(idx) = model.ide.junction_antes_del_caret() {
                 model.ide.togglear_junction(idx);
@@ -681,6 +700,77 @@ fn saltar_a_match(model: &mut Model) {
     };
     model.ide.set_caret(line, col);
     model.ide.state.ensure_caret_visible(VISIBLE_LINES);
+}
+
+/// Mueve el átomo donde está el caret una posición arriba (`delta=-1`)
+/// o abajo (`delta=1`). Sincroniza el buffer al modelo antes de
+/// reordenar (para no perder ediciones pendientes), muta `cuerpo.orden`,
+/// persiste, y recarga el IDE — junctions resetean a separadores (es
+/// el costo del reorder; el usuario las re-fusiona si las quería).
+/// El caret queda en la primera línea del átomo movido.
+fn mover_atom_caret(model: &mut Model, delta: i32) {
+    let Some(activo_id) = model.activo else {
+        return;
+    };
+    // Sincroniza pendientes para no perderlos al recargar.
+    guardar_activo(model);
+
+    let (caret_line, _) = model.ide.caret();
+    let Some(atom_id) = model.ide.atom_id_en_linea(caret_line) else {
+        return;
+    };
+    let cuerpo = match model.cuerpos.iter_mut().find(|c| c.id == activo_id) {
+        Some(c) => c,
+        None => return,
+    };
+    let n = cuerpo.orden.len();
+    if n < 2 {
+        return;
+    }
+    let i = match cuerpo.orden.iter().position(|x| *x == atom_id) {
+        Some(i) => i,
+        None => return,
+    };
+    let j = if delta < 0 {
+        if i == 0 {
+            return;
+        }
+        i - 1
+    } else {
+        if i + 1 >= n {
+            return;
+        }
+        i + 1
+    };
+    cuerpo.orden.swap(i, j);
+    cuerpo.metadatos.modificado_en = cuerpo.metadatos.modificado_en.saturating_add(1);
+    let _ = model.store.put_cuerpo(cuerpo);
+    let _ = model.store.flush();
+
+    // Recargar el IDE con el orden nuevo. Snapshot la cuerpo data
+    // primero para evitar el borrow simultáneo del index.
+    let cuerpo_clon = cuerpo.clone();
+    // Liberamos el préstamo mutable de `model.cuerpos` antes de
+    // tomar uno inmutable de `model.atoms` para construir el índice.
+    let _ = cuerpo;
+    let idx: HashMap<Uuid, &NarrativeAtom> =
+        model.atoms.iter().map(|(k, v)| (*k, v)).collect();
+    model.ide.recargar(&cuerpo_clon, &idx);
+    drop(idx);
+
+    // Posicionar el caret al inicio del átomo movido. Su nuevo idx es
+    // `j`; sumamos lineas anteriores (cada atom = 1 + atoms_extra_lineas
+    // + separador). Más simple: usar posicion_de_atom.
+    if let Some((line, col)) = model.ide.posicion_de_atom(atom_id) {
+        model.ide.set_caret(line, col);
+        model.ide.state.ensure_caret_visible(VISIBLE_LINES);
+    }
+
+    model.ultimo_status = format!(
+        "atom movido {}",
+        if delta < 0 { "↑" } else { "↓" }
+    );
+    model.ultimo_error = None;
 }
 
 fn abrir_archivo(model: &mut Model) {
