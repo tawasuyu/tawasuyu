@@ -497,6 +497,16 @@ pub fn build(dom: &DomTree, styles: &StyleEngine, base_url: &str) -> BoxTree {
         })
         .or(doc_base);
     let body = dom.find("body").unwrap_or_else(|| dom.document());
+    // Prefetch paralelo de imágenes: pre-walk del DOM antes del build
+    // recolecta todas las URLs de `<img>`/`<picture>` (resueltas contra
+    // base) y las baja en paralelo con un pool de workers. Las bytes
+    // quedan en la cache global; el `fetch_and_decode` síncrono dentro
+    // de `build_node` después hace cache hit. Esto convierte el parse
+    // de una página con 20 imágenes de "20 round-trips serializados"
+    // a "ceil(20/N) round-trips". `background-image: url(...)` no
+    // entra al pre-walk todavía — vive en CSS y requiere computar
+    // styles primero.
+    prefetch_image_urls(&dom.document(), base.as_ref());
     let mut counters: std::collections::HashMap<String, i32> = std::collections::HashMap::new();
     let mut root = build_node(&body, styles, base.as_ref(), None, &mut counters)
         .unwrap_or_else(empty_root);
@@ -1557,6 +1567,92 @@ fn strip_block_adjacent_whitespace(
 /// chrome ya está en un worker thread durante `Engine::load`. Pasa por
 /// la cache global de bytes — recargas y navegación entre tabs no
 /// re-descargan.
+/// Workers paralelos para el prefetch. 6 es un compromiso razonable:
+/// alto enough para esconder latencia de TCP/TLS (cada handshake ~50-
+/// 200ms), bajo enough para no saturar servidores ni el ulimit de
+/// sockets del proceso. Browsers reales usan 6-8 por host.
+const PREFETCH_WORKERS: usize = 6;
+
+/// Pre-walk del DOM coleccionando URLs absolutas de `<img src>`,
+/// `<img srcset>`, `<picture><source srcset>`, y disparando descargas
+/// paralelas. La cache global de bytes guarda los resultados —
+/// `fetch_and_decode` en `build_node` después hace cache hit.
+fn prefetch_image_urls(root: &Handle, base: Option<&url::Url>) {
+    let mut urls: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut push = |u: String| {
+        if seen.insert(u.clone()) {
+            urls.push(u);
+        }
+    };
+    dom::walk(root, &mut |node| {
+        let tag = dom::element_name(node);
+        match tag.as_deref() {
+            Some("img") => {
+                if let Some(src) = pick_srcset(&dom::attr(node, "srcset").unwrap_or_default())
+                    .or_else(|| dom::attr(node, "src"))
+                {
+                    if let Some(abs) = resolve_href(base, &src) {
+                        push(abs);
+                    }
+                }
+            }
+            Some("picture") => {
+                for child in node.children.borrow().iter() {
+                    if dom::element_name(child).as_deref() == Some("source") {
+                        if let Some(s) = dom::attr(child, "srcset") {
+                            if let Some(c) = pick_srcset(&s) {
+                                if let Some(abs) = resolve_href(base, &c) {
+                                    push(abs);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    });
+    if urls.is_empty() {
+        return;
+    }
+    // Cache hits no necesitan fetch; los filtramos para ahorrar threads.
+    // Además filtramos schemes no-HTTP (`about:`, `file:`, `data:`) —
+    // ureq haría un round-trip al timeout para nada.
+    let pending: Vec<String> = urls
+        .into_iter()
+        .filter(|u| {
+            url::Url::parse(u)
+                .ok()
+                .map(|p| matches!(p.scheme(), "http" | "https"))
+                .unwrap_or(false)
+        })
+        .filter(|u| crate::cache::get(u).is_none())
+        .collect();
+    if pending.is_empty() {
+        return;
+    }
+    // Pool simple: dividir las URLs en chunks de tamaño ceil(N/W) y un
+    // thread por chunk. Más simple que un channel + N workers, y para
+    // 6-30 URLs típicas de una página el balance es suficiente.
+    let chunk_size = pending.len().div_ceil(PREFETCH_WORKERS).max(1);
+    let mut handles = Vec::new();
+    for chunk in pending.chunks(chunk_size) {
+        let chunk = chunk.to_vec();
+        handles.push(std::thread::spawn(move || {
+            for url in chunk {
+                // Best-effort: errores se ignoran. El build_node
+                // posterior los reintentará serializado y muestra el
+                // alt del `<img>` si igual falla.
+                let _ = crate::fetch::fetch_bytes(&url);
+            }
+        }));
+    }
+    for h in handles {
+        let _ = h.join();
+    }
+}
+
 fn fetch_and_decode(url: &str) -> Option<ImageData> {
     let bytes = crate::fetch::fetch_bytes(url).ok()?;
     let reader = image::ImageReader::new(std::io::Cursor::new(bytes))
@@ -2483,6 +2579,34 @@ mod tests {
             }
         });
         assert_eq!(links, vec!["https://example.com/doc#top".to_string()]);
+    }
+
+    #[test]
+    fn prefetch_no_crashea_sin_imagenes() {
+        // Sanity: páginas sin imágenes no deben fallar el prefetch.
+        let html = "<html><body><p>solo texto</p></body></html>";
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        // Si llegó acá sin panic, OK.
+        assert!(doc.box_tree.descendants_count() > 0);
+    }
+
+    #[test]
+    fn prefetch_skip_de_urls_no_http() {
+        // URLs `about:`/`file:`/`data:` no deben encolarse al pool —
+        // sería un round-trip al timeout para nada. El test pone una
+        // base `about:test` con `<img src="...">` que resuelve a
+        // about:... y verifica que la carga termina rápido (sin
+        // esperar timeouts de red).
+        let html = r##"<html><body><img src="x.png"></body></html>"##;
+        let eng = Engine::new();
+        let t0 = std::time::Instant::now();
+        let _ = eng.load_html("about:test", html);
+        let elapsed = t0.elapsed();
+        assert!(
+            elapsed.as_millis() < 500,
+            "load_html con base about: y un <img> debería ser instantáneo, fue {elapsed:?}"
+        );
     }
 
     #[test]
