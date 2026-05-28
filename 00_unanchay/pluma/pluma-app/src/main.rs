@@ -765,28 +765,40 @@ fn exportar_md(model: &mut Model) {
         model.ultimo_error = Some("doc activo desapareció".into());
         return;
     };
-    let mut md = String::new();
-    for atom_id in &cuerpo.orden {
-        if let Some(a) = model.atoms.get(atom_id) {
-            if !md.is_empty() {
-                md.push_str("\n\n");
+
+    let ext = extension_lower(&path).unwrap_or_default();
+    let bytes: Vec<u8> = if ext == "docx" {
+        match foreign_docx::write_docx(cuerpo, &model.atoms) {
+            Ok(b) => b,
+            Err(e) => {
+                model.ultimo_error = Some(format!("write_docx: {e}"));
+                return;
             }
-            md.push_str(&a.content);
         }
-    }
-    if md.is_empty() {
-        model.ultimo_error = Some("doc vacío — nada que exportar".into());
+    } else if ext.is_empty() || ext == "md" || ext == "markdown" || ext == "txt" {
+        let md = pluma_md::to_md(cuerpo, &model.atoms);
+        if md.is_empty() {
+            model.ultimo_error = Some("doc vacío — nada que exportar".into());
+            return;
+        }
+        md.into_bytes()
+    } else {
+        model.ultimo_error = Some(format!(
+            "extensión .{ext} no soportada — usá .md o .docx"
+        ));
         return;
-    }
+    };
+
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    match std::fs::write(&path, md.as_bytes()) {
+    match std::fs::write(&path, &bytes) {
         Ok(()) => {
             model.ultimo_status = format!(
-                "exportado «{}» a {}",
+                "exportado «{}» a {} ({} bytes)",
                 cuerpo.metadatos.nombre_legible,
-                path.display()
+                path.display(),
+                bytes.len(),
             );
             model.ultimo_error = None;
         }
@@ -1200,7 +1212,7 @@ fn seccion_archivo(model: &Model, theme: &Theme) -> View<Msg> {
     })
     .children(vec![
         button_view::<Msg>("📂 abrir", &palette_btn, Msg::AbrirArchivo),
-        button_view::<Msg>("⬆ exportar md", &palette_btn, Msg::ExportarMd),
+        button_view::<Msg>("⬆ exportar (md/docx)", &palette_btn, Msg::ExportarMd),
     ]);
 
     View::new(Style {

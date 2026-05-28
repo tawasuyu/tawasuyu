@@ -9,7 +9,9 @@
 //! tests. Si necesitás emitir Markdown-AST en lugar de HTML, usá la API
 //! `events()` y construí tu propio renderer.
 
+pub mod export;
 pub mod import;
+pub use export::{to_md, to_md_borrow};
 pub use import::{parse_md, DocumentoImportado};
 
 use pulldown_cmark::{html, Event, Options, Parser};

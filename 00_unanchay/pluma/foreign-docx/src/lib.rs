@@ -24,11 +24,13 @@
 
 #![forbid(unsafe_code)]
 
-use std::io::{Cursor, Read};
+use std::collections::HashMap;
+use std::io::{Cursor, Read, Write};
 
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use thiserror::Error;
+use uuid::Uuid;
 
 use pluma_core::NarrativeAtom;
 use pluma_cuerpo::{Cuerpo, Intencion};
@@ -153,6 +155,149 @@ fn extraer_parrafos(xml: &str) -> Result<Vec<String>, quick_xml::Error> {
     Ok(parrafos)
 }
 
+/// Exporta `cuerpo` + atoms como un `.docx` mínimo válido (zip con
+/// `[Content_Types].xml`, `_rels/.rels`, `word/_rels/document.xml.rels`
+/// y `word/document.xml`). Suficiente para que Word, LibreOffice y
+/// nuestro propio `parse_docx` lo abran sin quejarse.
+///
+/// Cada atom del `cuerpo.orden` se vuelca como un `<w:p>` con un solo
+/// `<w:r><w:t xml:space="preserve">…</w:t></w:r>`. Sin formato,
+/// estilos, headings (los prefijos `# `/`## ` quedan como texto crudo
+/// del párrafo — no se traducen a `pStyle="Heading1"` etc.). Lossy en
+/// formato es deliberado: la idea del exportador es entregar el
+/// contenido alineable, no recrear la apariencia del Word de turno.
+///
+/// Atoms ausentes del índice se saltan en silencio (igual semántica que
+/// [`pluma_md::to_md`]).
+pub fn write_docx(
+    cuerpo: &Cuerpo,
+    atoms: &HashMap<Uuid, NarrativeAtom>,
+) -> Result<Vec<u8>, DocxError> {
+    let mut buf = Vec::new();
+    {
+        let mut w = zip::ZipWriter::new(Cursor::new(&mut buf));
+        let opts: zip::write::SimpleFileOptions = Default::default();
+
+        // [Content_Types].xml — declara el tipo MIME del documento.
+        w.start_file("[Content_Types].xml", opts)?;
+        w.write_all(CONTENT_TYPES_XML.as_bytes())?;
+
+        // _rels/.rels — el package relationship que apunta al document.
+        w.start_file("_rels/.rels", opts)?;
+        w.write_all(PACKAGE_RELS_XML.as_bytes())?;
+
+        // word/_rels/document.xml.rels — vacío pero presente, Word/LO
+        // lo esperan para abrir el archivo.
+        w.start_file("word/_rels/document.xml.rels", opts)?;
+        w.write_all(DOCUMENT_RELS_XML.as_bytes())?;
+
+        // word/document.xml — el contenido.
+        let mut xml = String::from(DOCUMENT_HEAD);
+        for atom_id in &cuerpo.orden {
+            let Some(atom) = atoms.get(atom_id) else {
+                continue;
+            };
+            xml.push_str("<w:p><w:r><w:t xml:space=\"preserve\">");
+            xml.push_str(&escapar_xml(&atom.content));
+            xml.push_str("</w:t></w:r></w:p>");
+        }
+        // Si el cuerpo está vacío, igual escribimos un párrafo vacío —
+        // un .docx sin <w:p> a veces lo rechazan parsers estrictos.
+        if cuerpo.orden.is_empty() || cuerpo.orden.iter().all(|id| !atoms.contains_key(id)) {
+            xml.push_str("<w:p/>");
+        }
+        xml.push_str(DOCUMENT_TAIL);
+
+        w.start_file("word/document.xml", opts)?;
+        w.write_all(xml.as_bytes())?;
+        w.finish()?;
+    }
+    Ok(buf)
+}
+
+/// Misma lógica que [`write_docx`] pero con índice por `&NarrativeAtom`
+/// — útil para callers que tienen prestados los atoms (mismo patrón
+/// que `pluma_md::to_md_borrow`).
+pub fn write_docx_borrow(
+    cuerpo: &Cuerpo,
+    atoms: &HashMap<Uuid, &NarrativeAtom>,
+) -> Result<Vec<u8>, DocxError> {
+    let mut buf = Vec::new();
+    {
+        let mut w = zip::ZipWriter::new(Cursor::new(&mut buf));
+        let opts: zip::write::SimpleFileOptions = Default::default();
+
+        w.start_file("[Content_Types].xml", opts)?;
+        w.write_all(CONTENT_TYPES_XML.as_bytes())?;
+
+        w.start_file("_rels/.rels", opts)?;
+        w.write_all(PACKAGE_RELS_XML.as_bytes())?;
+
+        w.start_file("word/_rels/document.xml.rels", opts)?;
+        w.write_all(DOCUMENT_RELS_XML.as_bytes())?;
+
+        let mut xml = String::from(DOCUMENT_HEAD);
+        for atom_id in &cuerpo.orden {
+            let Some(atom) = atoms.get(atom_id) else {
+                continue;
+            };
+            xml.push_str("<w:p><w:r><w:t xml:space=\"preserve\">");
+            xml.push_str(&escapar_xml(&atom.content));
+            xml.push_str("</w:t></w:r></w:p>");
+        }
+        if cuerpo.orden.is_empty() || cuerpo.orden.iter().all(|id| !atoms.contains_key(id)) {
+            xml.push_str("<w:p/>");
+        }
+        xml.push_str(DOCUMENT_TAIL);
+
+        w.start_file("word/document.xml", opts)?;
+        w.write_all(xml.as_bytes())?;
+        w.finish()?;
+    }
+    Ok(buf)
+}
+
+const CONTENT_TYPES_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>"#;
+
+const PACKAGE_RELS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>"#;
+
+const DOCUMENT_RELS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+</Relationships>"#;
+
+const DOCUMENT_HEAD: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>"#;
+
+const DOCUMENT_TAIL: &str = r#"</w:body>
+</w:document>"#;
+
+/// Escapa los cinco caracteres XML que romperían el documento. Word es
+/// flexible con & y < dentro de `xml:space="preserve"`, pero los
+/// parsers strictos no.
+fn escapar_xml(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// Quita el prefijo de namespace (`w:p` → `p`). Acepta tanto QName con
 /// prefijo (`w:p`) como sin (`p`). El default-ns del documento Word es
 /// el namespace `w`, pero hay docs ajenos sin prefijo — soportamos los
@@ -265,5 +410,51 @@ mod pruebas {
         for (atom, uuid) in imp.atoms.iter().zip(imp.cuerpo.orden.iter()) {
             assert_eq!(&atom.id, uuid);
         }
+    }
+
+    fn cuerpo_y_atoms(textos: &[&str]) -> (Cuerpo, HashMap<Uuid, NarrativeAtom>) {
+        let mut c = Cuerpo::nuevo("es", "es", Intencion::Original, 0);
+        let mut map = HashMap::new();
+        for t in textos {
+            let atom = NarrativeAtom::new(*t, "es");
+            c.agregar(atom.id, 0);
+            map.insert(atom.id, atom);
+        }
+        (c, map)
+    }
+
+    #[test]
+    fn write_docx_roundtrip_preserva_orden_y_texto() {
+        let textos = vec!["Primero.", "Segundo párrafo.", "Tercero & último."];
+        let (c, atoms) = cuerpo_y_atoms(&textos);
+        let bytes = write_docx(&c, &atoms).unwrap();
+        // Releemos con nuestro parser — el camino más estricto: si
+        // parse_docx puede con lo que escribimos, Word puede también.
+        let imp = parse_docx(&bytes, "es", "roundtrip.docx", 0).unwrap();
+        assert_eq!(imp.atoms.len(), textos.len());
+        for (a, esperado) in imp.atoms.iter().zip(textos.iter()) {
+            assert_eq!(a.content.as_str(), *esperado);
+        }
+    }
+
+    #[test]
+    fn write_docx_cuerpo_vacio_genera_doc_minimo_valido() {
+        let c = Cuerpo::nuevo("es", "es", Intencion::Original, 0);
+        let atoms: HashMap<Uuid, NarrativeAtom> = HashMap::new();
+        let bytes = write_docx(&c, &atoms).unwrap();
+        // Releer no debe fallar; sin atoms el resultado del parse es vacío.
+        let imp = parse_docx(&bytes, "es", "vacio.docx", 0).unwrap();
+        assert!(imp.atoms.is_empty());
+    }
+
+    #[test]
+    fn write_docx_escapa_caracteres_xml() {
+        let (c, atoms) = cuerpo_y_atoms(&["<x> & \"comillas\" 'simples'"]);
+        let bytes = write_docx(&c, &atoms).unwrap();
+        let imp = parse_docx(&bytes, "es", "esc.docx", 0).unwrap();
+        assert_eq!(imp.atoms.len(), 1);
+        // El parser des-escapa los entities — el roundtrip debe devolver
+        // el texto original.
+        assert_eq!(imp.atoms[0].content.as_str(), "<x> & \"comillas\" 'simples'");
     }
 }

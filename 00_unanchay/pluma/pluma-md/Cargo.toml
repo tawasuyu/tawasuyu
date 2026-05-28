@@ -10,3 +10,4 @@ publish.workspace = true
 pulldown-cmark = { workspace = true }
 pluma-core = { path = "../pluma-core" }
 pluma-cuerpo = { path = "../pluma-cuerpo" }
+uuid = { workspace = true }
