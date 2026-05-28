@@ -37,6 +37,15 @@ impl IdentityId {
         Self(*blake3::hash(public_key).as_bytes())
     }
 
+    /// Reconstruye un id desde sus bytes crudos. Útil para cargar ids
+    /// previamente serializados (p. ej. nombres de archivo en el
+    /// keystore); el llamador es responsable de que los bytes provengan
+    /// de una fuente confiable — esta función no valida correspondencia
+    /// con ninguna clave pública.
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
     /// Bytes crudos del identificador.
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
