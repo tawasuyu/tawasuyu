@@ -99,6 +99,10 @@ pub struct ComputedStyle {
     /// `background-image: linear-gradient(...)`. Cuando es Some, el
     /// chrome lo pinta detrás (o encima del background sólido).
     pub background_gradient: Option<LinearGradient>,
+    /// `background-image: url(...)` — URL sin resolver (puede ser
+    /// relativa). El engine la resuelve y descarga en `build_node`; el
+    /// chrome consume el resultado vía `BoxNode.background_image`.
+    pub background_image_url: Option<String>,
     /// CSS `position`. Default Static.
     pub position: Position,
     /// Insets (top/right/bottom/left). `Auto` por default.
@@ -460,6 +464,7 @@ impl Default for ComputedStyle {
             flex_basis: LengthVal::Auto,
             outline: Outline::default(),
             background_gradient: None,
+            background_image_url: None,
             position: Position::Static,
             inset_top: LengthVal::Auto,
             inset_right: LengthVal::Auto,
@@ -1060,6 +1065,9 @@ enum DeclKind {
     /// `background-image: none` limpia el gradient (un autor puede
     /// querer overridear un gradient heredado).
     BackgroundGradientNone,
+    /// `background-image: url(...)` — URL absoluta o relativa, el engine
+    /// la resuelve contra el base del documento en `build_node`.
+    BackgroundImageUrl(String),
     Position(Position),
     InsetTop(LengthVal),
     InsetRight(LengthVal),
@@ -1143,7 +1151,11 @@ impl Decl {
             }
             DeclKind::OutlineOffset(v) => s.outline.offset = *v,
             DeclKind::BackgroundGradient(g) => s.background_gradient = Some(g.clone()),
-            DeclKind::BackgroundGradientNone => s.background_gradient = None,
+            DeclKind::BackgroundGradientNone => {
+                s.background_gradient = None;
+                s.background_image_url = None;
+            }
+            DeclKind::BackgroundImageUrl(u) => s.background_image_url = Some(u.clone()),
             DeclKind::Position(p) => s.position = *p,
             DeclKind::InsetTop(v) => s.inset_top = *v,
             DeclKind::InsetRight(v) => s.inset_right = *v,
@@ -2783,7 +2795,21 @@ fn parse_background_image(value: &str) -> Option<DeclKind> {
     if let Some(args) = strip_fn(v, "linear-gradient") {
         return parse_linear_gradient(args).map(DeclKind::BackgroundGradient);
     }
-    // url(...) y otros gradientes no soportados — silencio.
+    if let Some(args) = strip_fn(v, "url") {
+        // url('foo') / url("foo") / url(foo) — trimea comillas.
+        let raw = args.trim();
+        let unquoted = raw
+            .strip_prefix('"').and_then(|s| s.strip_suffix('"'))
+            .or_else(|| raw.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+            .unwrap_or(raw);
+        let url = unquoted.trim();
+        if url.is_empty() {
+            return None;
+        }
+        return Some(DeclKind::BackgroundImageUrl(url.to_string()));
+    }
+    // Otros gradientes (`radial-gradient`, `conic-gradient`) o `cross-fade`
+    // no soportados — silencio.
     None
 }
 

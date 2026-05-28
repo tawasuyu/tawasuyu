@@ -1892,11 +1892,21 @@ fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> View<Msg> {
         None
     };
     let gradient = b.background_gradient.clone();
+    // `background-image: url(...)`: si el engine pudo descargarla, la
+    // envolvemos en peniko::Image para que el closure de paint_with la
+    // tile/escale dentro del rect. Por ahora un sólo modo: cover sin tile,
+    // anclada arriba-izquierda y escalada a llenar el ancho del box.
+    let bg_image = b.background_image.as_ref().map(|img| {
+        let blob = Blob::from(img.rgba.clone());
+        let peniko = PenikoImage::new(blob, ImageFormat::Rgba8, img.width, img.height);
+        (peniko, img.width as f64, img.height as f64)
+    });
     if shadow.is_none()
         && border.is_none()
         && deco.is_none()
         && outline.is_none()
         && gradient.is_none()
+        && bg_image.is_none()
     {
         return view;
     }
@@ -1915,6 +1925,20 @@ fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> View<Msg> {
                     radius,
                 );
                 scene.fill(Fill::NonZero, Affine::IDENTITY, &brush, None, &r);
+            }
+        }
+        // background-image: escala la imagen a "cover" del rect (la
+        // dimensión más chica al lado del rect, el sobrante se clipea).
+        // Anchor: arriba-izquierda. Sin `background-size`/`-position`
+        // CSS por ahora — alcanza para hero images simples.
+        if let Some((img, iw, ih)) = &bg_image {
+            if *iw > 0.0 && *ih > 0.0 {
+                let sx = rect.w as f64 / *iw;
+                let sy = rect.h as f64 / *ih;
+                let s = sx.max(sy);
+                let transform = Affine::translate((rect.x as f64, rect.y as f64))
+                    * Affine::scale(s);
+                scene.draw_image(img, transform);
             }
         }
         if let Some(BoxShadow { offset_x, offset_y, blur_px, spread_px, color }) = shadow {

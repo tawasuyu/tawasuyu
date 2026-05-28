@@ -169,6 +169,11 @@ pub struct BoxNode {
     /// no-self). El chrome lo usa para abrir en nueva pestaña al click.
     /// `false` para todo lo demás.
     pub link_new_tab: bool,
+    /// Imagen decodificada del CSS `background-image: url(...)`. `None`
+    /// si la propiedad no estaba o si la descarga/decode falló. El
+    /// chrome la pinta como background (detrás del background sólido y
+    /// gradient).
+    pub background_image: Option<ImageData>,
 }
 
 /// Imagen RGBA8 lista para que el chrome la envuelva en `peniko::Image`.
@@ -281,6 +286,7 @@ fn empty_root() -> BoxNode {
         image: None,
         details_open_attr: false,
         link_new_tab: false,
+        background_image: None,
     }
 }
 
@@ -330,6 +336,14 @@ fn build_node(
             } else {
                 None
             };
+            // `background-image: url(...)` — resolver contra base y
+            // descargar/decode. Misma cache que `<img>` por la fetch::
+            // global. Falla silenciosa → background_image queda None.
+            let background_image = style
+                .background_image_url
+                .as_deref()
+                .and_then(|u| resolve_href(base, u))
+                .and_then(|abs| fetch_and_decode(&abs));
             let mut children = Vec::new();
             // <li>: prefija con marker (bullet o numeral según
             // `list-style-type`). Lo agregamos como un hijo Text inline
@@ -416,6 +430,7 @@ fn build_node(
                 details_open_attr: tag.as_deref() == Some("details")
                     && dom::attr(node, "open").is_some(),
                 link_new_tab,
+                background_image,
             })
         }
         NodeData::Text { contents } => {
@@ -513,6 +528,7 @@ fn build_node(
                 image: None,
                 details_open_attr: false,
                 link_new_tab: false,
+                background_image: None,
             })
         }
     }
@@ -581,6 +597,7 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         image: None,
         details_open_attr: false,
         link_new_tab: false,
+        background_image: None,
     }
 }
 
@@ -1266,6 +1283,39 @@ mod tests {
             }
         });
         assert!(clickable.is_empty(), "ningún href no-web debería ser clickable: {clickable:?}");
+    }
+
+    #[test]
+    fn parsea_background_image_url_a_computed_style_y_no_descarga_si_url_no_resuelve() {
+        // Sin red, fetch_and_decode falla y background_image queda None.
+        // Pero el url SÍ debe quedar capturado en computed.background_image_url
+        // (visible al re-parsear el stylesheet).
+        use crate::StyleEngine;
+        let html = r##"<html><head><style>
+            .hero { background-image: url("https://nope.invalid/bg.png") }
+        </style></head><body><div class="hero">x</div></body></html>"##;
+        let dom = crate::DomTree::parse(html);
+        let styles = StyleEngine::from_dom(&dom);
+        let div = dom.find("div").expect("debería encontrar <div>");
+        let s = styles.compute_with_parent(&div, None);
+        assert_eq!(
+            s.background_image_url.as_deref(),
+            Some("https://nope.invalid/bg.png")
+        );
+    }
+
+    #[test]
+    fn background_image_none_limpia_url() {
+        use crate::StyleEngine;
+        let html = r##"<html><head><style>
+            .hero { background-image: url(a.png) }
+            .hero.off { background-image: none }
+        </style></head><body><div class="hero off">x</div></body></html>"##;
+        let dom = crate::DomTree::parse(html);
+        let styles = StyleEngine::from_dom(&dom);
+        let div = dom.find("div").expect("debería encontrar <div>");
+        let s = styles.compute_with_parent(&div, None);
+        assert!(s.background_image_url.is_none());
     }
 
     #[test]
