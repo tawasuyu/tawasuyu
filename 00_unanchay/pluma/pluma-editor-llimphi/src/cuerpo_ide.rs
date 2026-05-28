@@ -511,6 +511,15 @@ impl CuerpoIde {
         Some((start_line, end_line))
     }
 
+    /// Devuelve los `Uuid` de los atoms que forman la zona `zona`, en
+    /// orden. `None` si la zona está fuera de rango. Útil para construir
+    /// un sub-`Cuerpo` que se pase a un ejecutor LLM y derivar SOLO esa
+    /// zona, sin tocar el resto del documento.
+    pub fn atom_ids_de_zona(&self, zona: usize) -> Option<Vec<Uuid>> {
+        let (start, end) = self.atoms_de_zona(zona)?;
+        Some(self.editor_cuerpo.atom_ids[start..=end].to_vec())
+    }
+
     /// Mueve el caret al inicio de la zona `zona` (línea de la primera
     /// atom, columna 0) y se asegura de que sea visible. Si la zona está
     /// fuera de rango, no-op.
@@ -1274,6 +1283,24 @@ mod pruebas {
         let sel = ide.state.selected_text().unwrap_or_default();
         assert!(sel.starts_with("Uno"), "selección debería empezar con 'Uno': {sel:?}");
         assert!(sel.ends_with("Dos"), "selección debería terminar con 'Dos': {sel:?}");
+    }
+
+    #[test]
+    fn atom_ids_de_zona_devuelve_orden_correcto() {
+        let (c, atoms) = cuerpo_con_atoms(&["A", "B", "C", "D"]);
+        let idx = indice(&atoms);
+        let mut ide = CuerpoIde::from_cuerpo(&c, &idx);
+        // Sin fusiones: zona 1 = solo atom B (idx 1).
+        assert_eq!(ide.atom_ids_de_zona(1), Some(vec![atoms[1].id]));
+        // Tras fundir 0: zona 0 = A+B; zona 1 = C; zona 2 = D.
+        ide.fundir_junction(0);
+        assert_eq!(
+            ide.atom_ids_de_zona(0),
+            Some(vec![atoms[0].id, atoms[1].id])
+        );
+        assert_eq!(ide.atom_ids_de_zona(1), Some(vec![atoms[2].id]));
+        assert_eq!(ide.atom_ids_de_zona(2), Some(vec![atoms[3].id]));
+        assert_eq!(ide.atom_ids_de_zona(99), None);
     }
 
     #[test]
