@@ -14,3 +14,7 @@ pollster = { workspace = true }
 [[example]]
 name = "render_node"
 path = "examples/render_node.rs"
+
+[[example]]
+name = "spike_gpu_directo"
+path = "examples/spike_gpu_directo.rs"

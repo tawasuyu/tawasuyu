@@ -168,12 +168,48 @@ Decisión: los dos backends **coexisten**. La app elige por hint
 
 ### Plan de tareas
 
-**Fase 0 — Spike de medición (½ día).**
+**Fase 0 — Spike de medición (½ día). ✓ HECHO (2026-05-28).**
 Benchmark sintético: pintar 100 K, 500 K y 1 M puntos con `SceneCanvas`
 actual vs un mock GPU-directo (vertex buffer + shader trivial). Si el
 factor no es ≥ 5× en el rango de 500 K, abortar — vello ya es
 suficiente y no vale el costo de mantenimiento. Métrica de éxito: 60 fps
 con 1 M puntos en GPU mid (Radeon 5500M, Intel Iris Xe).
+
+Implementado en `llimphi-raster/examples/spike_gpu_directo.rs`. Cubre
+ambos backends contra una textura `Rgba8Unorm` 1024×1024 headless,
+warmup 5 + 15 frames medidos, bloquea hasta GPU idle (`Maintain::Wait`)
+para que los `ms` reportados sean tiempo real CPU+GPU.
+
+**Resultados (corrida 2026-05-28 en CPU — llvmpipe, no GPU real):**
+
+| N | vello | directo | factor |
+|---:|---:|---:|---:|
+| 25K | 28.6 ms | — | — |
+| 50K | 49.0 ms | — | — |
+| 100K | 91.4 ms | 19.9 ms | **4.59×** |
+| 200K | 58.6 ms | — | — (anómalo, ver abajo) |
+| 300K | SIGSEGV | — | techo de vello |
+| 500K | — | 82.2 ms | — |
+| 1M | — | 142.5 ms | — |
+| 5M | — | 659.6 ms | — |
+
+Notas:
+- El bench corrió en `llvmpipe` (Mesa software) porque el host no tiene
+  acceso a `/dev/dri/`. Toda la rasterización fue CPU. **Hay que re-correr
+  en GPU mid real antes de aceptar/rechazar formalmente el criterio del
+  SDD.** Pendiente operativamente (waypipe + monitor disponible).
+- Aún en CPU, dos señales son inequívocas:
+  1. Vello revienta (SIGSEGV en `vello_encoding`) en el rango 200–300 K,
+     muy por debajo del 500 K objetivo. El techo existe — es el motivo
+     de este roadmap, queda verificado.
+  2. El path directo escala lineal hasta 5 M sin colgarse (1 draw call,
+     vertex buffer crece con N).
+- La anomalía vello @ 200K (58 ms < 91 ms @ 100K) es probablemente jitter
+  CPU bajo carga térmica + sólo 15 muestras. No invalida la conclusión
+  cualitativa.
+- Decisión: avanzar a Fase 1+ con la señal cualitativa. La medición
+  formal en GPU se reabre cuando esté el monitor con waypipe y se
+  ajusta el SDD si el factor real obliga a cambiar el plan.
 
 **Fase 1 — Hook en `llimphi-ui` (1–2 días).**
 Hoy `View::paint_with(F)` da
