@@ -74,7 +74,10 @@ pub fn cell_at(
     if midi_i < min_midi as i32 || midi_i > max_midi as i32 {
         return None;
     }
-    let beat = ((lx - grid_x) / beat_w).floor().max(0.0);
+    // Beat fraccional — el snap del editor decide si redondea. Esto
+    // permite snap libre (`Snap::Free`) sin perder precisión, y snaps
+    // intermedios (`Half`, `Quarter`, etc.) operando contra el valor real.
+    let beat = ((lx - grid_x) / beat_w).max(0.0);
     Some((beat, midi_i as u8))
 }
 
@@ -183,17 +186,18 @@ mod tests {
     }
 
     #[test]
-    fn cell_at_round_trips_to_grid_coordinates() {
+    fn cell_at_returns_fractional_beat() {
         let (w, h) = rect();
         let (min_midi, max_midi, total_beats) = (60, 72, 16.0);
         let (gx, gy, _gw, _gh, key_h, beat_w) =
             grid_geometry(w, h, min_midi, max_midi, total_beats).unwrap();
         let target_midi: u8 = 65;
-        let target_beat: f32 = 3.0;
-        let lx = gx + target_beat * beat_w + beat_w * 0.5;
+        // Apuntamos exactamente al medio del beat 3 → 3.5 fraccional.
+        let lx = gx + 3.0 * beat_w + beat_w * 0.5;
         let ly = gy + (max_midi - target_midi) as f32 * key_h + key_h * 0.5;
-        assert_eq!(cell_at(lx, ly, w, h, min_midi, max_midi, total_beats),
-                   Some((target_beat, target_midi)));
+        let (beat, midi) = cell_at(lx, ly, w, h, min_midi, max_midi, total_beats).unwrap();
+        assert_eq!(midi, target_midi);
+        assert!((beat - 3.5).abs() < 1e-3);
     }
 
     #[test]

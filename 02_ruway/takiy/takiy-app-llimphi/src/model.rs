@@ -7,6 +7,77 @@ use std::path::PathBuf;
 
 use takiy_core::{Pitch, Score, ScoreNote, Track};
 
+/// Granularidad de snap para edición. Determina cuánto se redondea el
+/// beat al hacer click, mover con flechas o pegar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Snap {
+    /// Sin redondeo. El beat queda exacto al cursor (puede ser irracional).
+    Free,
+    /// Pulso entero.
+    Beat,
+    /// Mitad de pulso.
+    Half,
+    /// Cuarto de pulso (corchea en 4/4).
+    Quarter,
+    /// Octavo de pulso (semicorchea).
+    Eighth,
+    /// Tresillo de corchea = 1/3 de pulso.
+    Triplet8,
+}
+
+impl Snap {
+    /// Tamaño del paso en beats. `None` para `Free`.
+    pub fn step(self) -> Option<f32> {
+        match self {
+            Snap::Free => None,
+            Snap::Beat => Some(1.0),
+            Snap::Half => Some(0.5),
+            Snap::Quarter => Some(0.25),
+            Snap::Eighth => Some(0.125),
+            Snap::Triplet8 => Some(1.0 / 3.0),
+        }
+    }
+
+    /// Redondea `beat` al múltiplo más cercano del paso. Si es `Free`,
+    /// lo devuelve sin cambios.
+    pub fn snap(self, beat: f32) -> f32 {
+        match self.step() {
+            None => beat,
+            Some(s) => (beat / s).round() * s,
+        }
+    }
+
+    /// Cicla en orden creciente de granularidad fina → vuelve a `Free`.
+    pub fn cycle(self) -> Self {
+        match self {
+            Snap::Free => Snap::Beat,
+            Snap::Beat => Snap::Half,
+            Snap::Half => Snap::Quarter,
+            Snap::Quarter => Snap::Eighth,
+            Snap::Eighth => Snap::Triplet8,
+            Snap::Triplet8 => Snap::Free,
+        }
+    }
+
+    /// Etiqueta corta para el header.
+    pub fn label(self) -> &'static str {
+        match self {
+            Snap::Free => "free",
+            Snap::Beat => "1/1",
+            Snap::Half => "1/2",
+            Snap::Quarter => "1/4",
+            Snap::Eighth => "1/8",
+            Snap::Triplet8 => "1/8t",
+        }
+    }
+}
+
+impl Default for Snap {
+    fn default() -> Self {
+        Snap::Beat
+    }
+}
+
 /// Estado mutable de edición. Lo demás (Player, SF2, theme, status) vive
 /// en `Model` del binario.
 #[derive(Debug, Clone)]
@@ -24,7 +95,20 @@ pub struct EditorState {
     /// Compases del metrónomo (`beats_per_bar`). `None` = metrónomo off.
     /// `Some(4)` = clicks en 4/4, etc.
     pub metronome_beats_per_bar: Option<u8>,
+    /// Granularidad de snap. Default `Snap::Beat` (compat con F0/F1).
+    pub snap: Snap,
+    /// Stack de undo — snapshots de `score` antes de cada edición que mutó.
+    /// Limitado a [`MAX_UNDO`] niveles; el más viejo se descarta. Expuesto
+    /// para que el binario pueda mostrar la profundidad en el header.
+    pub history: Vec<Score>,
+    /// Stack de redo — snapshots a re-aplicar. Se vacía con cualquier
+    /// edición nueva (rama futura abandonada).
+    pub future: Vec<Score>,
 }
+
+/// Niveles máximos del undo stack. 100 cubre flujos típicos; cada
+/// snapshot son ~50 bytes/nota → 5MB max para una pieza de 1000 notas.
+pub const MAX_UNDO: usize = 100;
 
 impl EditorState {
     /// Crea un estado vacío con una pista por default — garantizamos que
@@ -40,6 +124,9 @@ impl EditorState {
             save_path: None,
             loop_region: None,
             metronome_beats_per_bar: None,
+            snap: Snap::default(),
+            history: Vec::new(),
+            future: Vec::new(),
         }
     }
 
@@ -57,6 +144,9 @@ impl EditorState {
             save_path: None,
             loop_region: None,
             metronome_beats_per_bar: None,
+            snap: Snap::default(),
+            history: Vec::new(),
+            future: Vec::new(),
         }
     }
 
@@ -113,9 +203,23 @@ pub enum EditMsg {
 pub type ApplyOutcome = Option<String>;
 
 impl EditorState {
-    /// Aplica una edición. No persiste — eso lo decide el binario. Es
-    /// pura sobre `&mut self`: no toca filesystem ni audio.
+    /// Aplica una edición. Envuelve `apply_internal` con la lógica de
+    /// undo: snapshot pre-mutación, descarte si no cambió nada,
+    /// truncado de `future` ante una rama nueva.
     pub fn apply(&mut self, msg: EditMsg) -> ApplyOutcome {
+        let snapshot = self.score.clone();
+        let out = self.apply_internal(msg);
+        if self.score != snapshot {
+            self.history.push(snapshot);
+            if self.history.len() > MAX_UNDO {
+                self.history.remove(0);
+            }
+            self.future.clear();
+        }
+        out
+    }
+
+    fn apply_internal(&mut self, msg: EditMsg) -> ApplyOutcome {
         match msg {
             EditMsg::AddNote { beat, midi } => self.add_note(beat, midi),
             EditMsg::DeleteNote { track, idx } => self.delete_note(track, idx),
@@ -133,8 +237,34 @@ impl EditorState {
         }
     }
 
+    /// Cicla el snap a la próxima granularidad. Tecla Q en el binario.
+    pub fn cycle_snap(&mut self) -> ApplyOutcome {
+        self.snap = self.snap.cycle();
+        Some(format!("snap · {}", self.snap.label()))
+    }
+
+    /// Deshace la última edición. No es contado en historial — undo de
+    /// undo es redo. Devuelve `None` si la pila está vacía.
+    pub fn undo(&mut self) -> ApplyOutcome {
+        let prev = self.history.pop()?;
+        let current = std::mem::replace(&mut self.score, prev);
+        self.future.push(current);
+        self.selected = None;
+        Some("undo".into())
+    }
+
+    /// Rehace la última edición deshecha. Devuelve `None` si no hay nada.
+    pub fn redo(&mut self) -> ApplyOutcome {
+        let next = self.future.pop()?;
+        let current = std::mem::replace(&mut self.score, next);
+        self.history.push(current);
+        self.selected = None;
+        Some("redo".into())
+    }
+
     fn add_note(&mut self, beat: f32, midi: u8) -> ApplyOutcome {
         let pitch = Pitch::from_midi(midi)?;
+        let beat = self.snap.snap(beat).max(0.0);
         let track_idx = self.active_track.min(self.score.tracks().len().saturating_sub(1));
         let new_note = ScoreNote::new(pitch, beat, 1.0, 96);
         let track = self.score.track_mut(track_idx)?;
@@ -174,9 +304,13 @@ impl EditorState {
 
     fn move_selected(&mut self, d_beat: f32, d_semitones: i32) -> ApplyOutcome {
         let (track_idx, note_idx) = self.selected?;
+        let snap = self.snap;
         let track = self.score.track_mut(track_idx)?;
         let old = track.notes().get(note_idx).copied()?;
-        let new_start = old.start + d_beat;
+        // Si hay snap activo, redondeamos el nuevo start al múltiplo
+        // exacto — facilita encadenar moves sin acumular drift.
+        let raw_start = old.start + d_beat;
+        let new_start = snap.snap(raw_start);
         if new_start < 0.0 {
             return None;
         }
@@ -203,9 +337,14 @@ impl EditorState {
 
     fn resize_selected(&mut self, d_beat: f32) -> ApplyOutcome {
         let (track_idx, note_idx) = self.selected?;
+        let snap = self.snap;
         let track = self.score.track_mut(track_idx)?;
         let old = track.notes().get(note_idx).copied()?;
-        let new_dur = (old.duration + d_beat).clamp(0.25, 16.0);
+        // Snap también aplica a duración para que el resize caiga en
+        // grilla. El step mínimo razonable es 0.25 (hardcoded clamp).
+        let raw_dur = old.duration + d_beat;
+        let snapped = snap.snap(raw_dur);
+        let new_dur = if snap.step().is_some() { snapped } else { raw_dur }.clamp(0.25, 16.0);
         if (new_dur - old.duration).abs() < f32::EPSILON {
             return None;
         }
@@ -378,6 +517,7 @@ mod tests {
     #[test]
     fn resize_clamps_to_bounds() {
         let mut st = EditorState::new(120.0);
+        st.snap = Snap::Free; // sin snap para ejercer los límites exactos
         st.apply(EditMsg::AddNote { beat: 0.0, midi: 60 });
         st.apply(EditMsg::Select { track: 0, idx: 0 });
         for _ in 0..200 {
@@ -450,6 +590,79 @@ mod tests {
         // selection: track > removed (0) → t - 1 = 0
         assert_eq!(st.selected, Some((0, 0)));
         assert_eq!(st.score.tracks().len(), 1);
+    }
+
+    #[test]
+    fn snap_cycles_through_all_modes_and_returns_to_free() {
+        let mut s = Snap::Free;
+        for _ in 0..6 {
+            s = s.cycle();
+        }
+        assert_eq!(s, Snap::Free);
+    }
+
+    #[test]
+    fn snap_step_quantizes_correctly() {
+        assert!((Snap::Half.snap(0.4) - 0.5).abs() < 1e-6);
+        assert!((Snap::Half.snap(0.24) - 0.0).abs() < 1e-6);
+        assert!((Snap::Quarter.snap(0.6) - 0.5).abs() < 1e-6);
+        assert!((Snap::Eighth.snap(0.13) - 0.125).abs() < 1e-6);
+        // Free no toca el valor.
+        assert!((Snap::Free.snap(0.137) - 0.137).abs() < 1e-9);
+    }
+
+    #[test]
+    fn add_note_snaps_beat_when_snap_is_active() {
+        let mut st = EditorState::new(120.0);
+        st.snap = Snap::Half;
+        st.apply(EditMsg::AddNote { beat: 1.2, midi: 60 });
+        let notes = st.score.track(0).unwrap().notes();
+        assert!((notes[0].start - 1.0).abs() < 1e-6, "snap a múltiplo de 0.5");
+        st.snap = Snap::Free;
+        st.apply(EditMsg::AddNote { beat: 1.7, midi: 62 });
+        let notes = st.score.track(0).unwrap().notes();
+        assert!((notes[1].start - 1.7).abs() < 1e-6, "free preserva fraccional");
+    }
+
+    #[test]
+    fn undo_reverts_last_edit_and_redo_reapplies() {
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::AddNote { beat: 0.0, midi: 60 });
+        assert_eq!(st.score.track(0).unwrap().notes().len(), 1);
+        assert!(st.undo().is_some());
+        assert_eq!(st.score.track(0).unwrap().notes().len(), 0);
+        assert!(st.redo().is_some());
+        assert_eq!(st.score.track(0).unwrap().notes().len(), 1);
+    }
+
+    #[test]
+    fn undo_stack_limits_at_max_undo() {
+        let mut st = EditorState::new(120.0);
+        for i in 0..(MAX_UNDO + 30) {
+            st.apply(EditMsg::AddNote { beat: i as f32, midi: 60 });
+        }
+        assert_eq!(st.history.len(), MAX_UNDO);
+    }
+
+    #[test]
+    fn new_edit_truncates_future_branch() {
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::AddNote { beat: 0.0, midi: 60 });
+        st.apply(EditMsg::AddNote { beat: 1.0, midi: 62 });
+        st.undo(); // future = [score con 2 notas]
+        assert_eq!(st.future.len(), 1);
+        st.apply(EditMsg::AddNote { beat: 5.0, midi: 70 }); // edición nueva
+        assert!(st.future.is_empty(), "rama futura truncada");
+    }
+
+    #[test]
+    fn no_op_edits_do_not_push_to_history() {
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::AddNote { beat: 0.0, midi: 60 });
+        let len_before = st.history.len();
+        // MIDI inválido — no muta el score.
+        st.apply(EditMsg::AddNote { beat: 0.0, midi: 200 });
+        assert_eq!(st.history.len(), len_before, "no debe registrar no-ops");
     }
 
     #[test]

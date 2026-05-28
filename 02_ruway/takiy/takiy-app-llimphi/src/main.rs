@@ -65,6 +65,12 @@ enum Msg {
     /// Toggle loop. Si no hay región activa, define una de 4 compases
     /// desde el playhead (o desde beat 0). Si hay, la apaga.
     ToggleLoop,
+    /// Cicla el snap de edición (Beat → Half → Quarter → Eighth → Triplet → Free).
+    CycleSnap,
+    /// Deshace la última edición.
+    Undo,
+    /// Rehace la última edición deshecha.
+    Redo,
     /// Cambia el programa GM de la pista activa en `delta` (wrap 0..=127).
     NudgeProgram { delta: i32 },
     /// Guarda el score actual a `TAKIY_SCORE_JSON` (o a `/tmp/...`).
@@ -203,6 +209,17 @@ impl App for Takiy {
                 if let Some(s) = model.editor.toggle_metronome() {
                     model.status = s;
                 }
+            }
+            Msg::CycleSnap => {
+                if let Some(s) = model.editor.cycle_snap() {
+                    model.status = s;
+                }
+            }
+            Msg::Undo => {
+                model.status = model.editor.undo().unwrap_or_else(|| "undo vacío".into());
+            }
+            Msg::Redo => {
+                model.status = model.editor.redo().unwrap_or_else(|| "redo vacío".into());
             }
             Msg::ToggleLoop => {
                 let new_region = match model.editor.loop_region {
@@ -344,6 +361,12 @@ impl App for Takiy {
             Key::Character(s) if s.eq_ignore_ascii_case("n") => Some(Msg::Edit(EditMsg::NewTrack)),
             Key::Character(s) if s.eq_ignore_ascii_case("m") => Some(Msg::ToggleMetronome),
             Key::Character(s) if s.eq_ignore_ascii_case("l") => Some(Msg::ToggleLoop),
+            Key::Character(s) if s.eq_ignore_ascii_case("q") => Some(Msg::CycleSnap),
+            Key::Character(s) if s.eq_ignore_ascii_case("z") && event.modifiers.ctrl && event.modifiers.shift => {
+                Some(Msg::Redo)
+            }
+            Key::Character(s) if s.eq_ignore_ascii_case("z") && event.modifiers.ctrl => Some(Msg::Undo),
+            Key::Character(s) if s.eq_ignore_ascii_case("y") && event.modifiers.ctrl => Some(Msg::Redo),
             Key::Character(s) if s.eq_ignore_ascii_case("s") => Some(Msg::Save),
             Key::Character(s) if s == "+" || s == "=" => {
                 Some(Msg::Edit(EditMsg::ResizeSelected { d_beat: 0.5 }))
@@ -382,6 +405,8 @@ impl App for Takiy {
         let playback_bpm = model.playback_bpm;
         let loop_region = model.editor.loop_region;
         let metronome_on = model.editor.metronome_beats_per_bar.is_some();
+        let snap_label = model.editor.snap.label();
+        let undo_depth = model.editor.history.len();
         let (min_midi, max_midi) = pitch_range(&score);
         let total_beats = score
             .duration_beats()
@@ -421,7 +446,8 @@ impl App for Takiy {
             paint_piano_roll(
                 scene, ts, rect, &score_paint, &source, &engine, &status, playing,
                 active_track, selected, playback_position_seconds, playback_bpm,
-                loop_region, metronome_on, min_midi, max_midi, total_beats, theme,
+                loop_region, metronome_on, snap_label, undo_depth,
+                min_midi, max_midi, total_beats, theme,
             );
         })
     }
@@ -447,6 +473,8 @@ fn paint_piano_roll(
     playback_bpm: f32,
     loop_region: Option<(f32, f32)>,
     metronome_on: bool,
+    snap_label: &str,
+    undo_depth: usize,
     min_midi: u8,
     max_midi: u8,
     total_beats: f32,
@@ -558,7 +586,7 @@ fn paint_piano_roll(
         None => String::new(),
     };
     let header_text = format!(
-        "{source}  ·  {engine}  ·  {:.0} bpm{metro_marker}{loop_marker}  ·  active: {active_track}·{active_name}  ·  {status}",
+        "{source}  ·  {engine}  ·  {:.0} bpm · snap {snap_label} · undo {undo_depth}{metro_marker}{loop_marker}  ·  active: {active_track}·{active_name}  ·  {status}",
         score.tempo_bpm
     );
     let text_color = if playing {
