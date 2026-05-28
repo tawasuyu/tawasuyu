@@ -2595,6 +2595,66 @@ fn render_svg(scene: &puriy_engine::SvgScene, zoom: f32) -> View<Msg> {
                     let stroke_obj = Stroke::new(stroke_w as f64 * s);
                     scene.stroke(&stroke_obj, Affine::IDENTITY, to_color(stroke), None, &l);
                 }
+                puriy_engine::SvgPrim::Polyline {
+                    ref points, closed, fill, stroke, stroke_w,
+                } => {
+                    use llimphi_raster::kurbo::{BezPath, PathEl, Point as KurboPoint};
+                    let mut path = BezPath::new();
+                    let mut iter = points.iter();
+                    if let Some(&(x, y)) = iter.next() {
+                        path.push(PathEl::MoveTo(KurboPoint::new(to_x(x), to_y(y))));
+                        for &(x, y) in iter {
+                            path.push(PathEl::LineTo(KurboPoint::new(to_x(x), to_y(y))));
+                        }
+                        if closed {
+                            path.push(PathEl::ClosePath);
+                        }
+                    }
+                    if let Some(f) = fill {
+                        scene.fill(Fill::NonZero, Affine::IDENTITY, to_color(f), None, &path);
+                    }
+                    if let Some(st) = stroke {
+                        let stroke_obj = Stroke::new(stroke_w as f64 * s);
+                        scene.stroke(&stroke_obj, Affine::IDENTITY, to_color(st), None, &path);
+                    }
+                }
+                puriy_engine::SvgPrim::Path { ref d, fill, stroke, stroke_w } => {
+                    use llimphi_raster::kurbo::{BezPath, PathEl, Point as KurboPoint};
+                    let mut path = BezPath::new();
+                    for cmd in d {
+                        match *cmd {
+                            puriy_engine::PathCmd::MoveTo(x, y) => {
+                                path.push(PathEl::MoveTo(KurboPoint::new(to_x(x), to_y(y))));
+                            }
+                            puriy_engine::PathCmd::LineTo(x, y) => {
+                                path.push(PathEl::LineTo(KurboPoint::new(to_x(x), to_y(y))));
+                            }
+                            puriy_engine::PathCmd::CubicTo(x1, y1, x2, y2, x, y) => {
+                                path.push(PathEl::CurveTo(
+                                    KurboPoint::new(to_x(x1), to_y(y1)),
+                                    KurboPoint::new(to_x(x2), to_y(y2)),
+                                    KurboPoint::new(to_x(x), to_y(y)),
+                                ));
+                            }
+                            puriy_engine::PathCmd::QuadTo(x1, y1, x, y) => {
+                                path.push(PathEl::QuadTo(
+                                    KurboPoint::new(to_x(x1), to_y(y1)),
+                                    KurboPoint::new(to_x(x), to_y(y)),
+                                ));
+                            }
+                            puriy_engine::PathCmd::ClosePath => {
+                                path.push(PathEl::ClosePath);
+                            }
+                        }
+                    }
+                    if let Some(f) = fill {
+                        scene.fill(Fill::NonZero, Affine::IDENTITY, to_color(f), None, &path);
+                    }
+                    if let Some(st) = stroke {
+                        let stroke_obj = Stroke::new(stroke_w as f64 * s);
+                        scene.stroke(&stroke_obj, Affine::IDENTITY, to_color(st), None, &path);
+                    }
+                }
             }
         }
     })

@@ -252,6 +252,33 @@ pub enum SvgPrim {
         stroke: Color,
         stroke_w: f32,
     },
+    /// Polygon (cerrado) o polyline (abierto) — los puntos vienen del
+    /// atributo `points="x1,y1 x2,y2 …"`.
+    Polyline {
+        points: Vec<(f32, f32)>,
+        closed: bool,
+        fill: Option<Color>,
+        stroke: Option<Color>,
+        stroke_w: f32,
+    },
+    /// Path con secuencia de comandos. Subset: M (moveTo), L (lineTo),
+    /// H/V (horizontal/vertical lineTo), C (cubic bezier), Q (quadratic
+    /// bezier), Z (closepath). Todos en abs y rel (m/l/h/v/c/q/z).
+    Path {
+        d: Vec<PathCmd>,
+        fill: Option<Color>,
+        stroke: Option<Color>,
+        stroke_w: f32,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum PathCmd {
+    MoveTo(f32, f32),
+    LineTo(f32, f32),
+    CubicTo(f32, f32, f32, f32, f32, f32),
+    QuadTo(f32, f32, f32, f32),
+    ClosePath,
 }
 
 /// Datos de un `<select>` para renderizarlo como dropdown.
@@ -483,9 +510,35 @@ fn collect_svg_prims(node: &Handle, out: &mut Vec<SvgPrim>) {
                     });
                 }
             }
+            Some("polygon") | Some("polyline") => {
+                let closed = dom::element_name(node).as_deref() == Some("polygon");
+                let points = parse_svg_points(&dom::attr(node, "points").unwrap_or_default());
+                if !points.is_empty() {
+                    out.push(SvgPrim::Polyline {
+                        points,
+                        closed,
+                        fill: svg_color(node, "fill"),
+                        stroke: svg_color(node, "stroke"),
+                        stroke_w: svg_num(node, "stroke-width", 1.0),
+                    });
+                }
+            }
+            Some("path") => {
+                if let Some(d) = dom::attr(node, "d") {
+                    let cmds = parse_svg_path(&d);
+                    if !cmds.is_empty() {
+                        out.push(SvgPrim::Path {
+                            d: cmds,
+                            fill: svg_color(node, "fill"),
+                            stroke: svg_color(node, "stroke"),
+                            stroke_w: svg_num(node, "stroke-width", 1.0),
+                        });
+                    }
+                }
+            }
             // Containers transparentes: recurrir adentro.
             Some("g") | Some("svg") => {}
-            // Resto (`path`, `polygon`, `polyline`, `text`, …) ignorado.
+            // Resto (`text`, `defs`, `mask`, etc.) ignorado.
             _ => return,
         }
     }
@@ -498,6 +551,182 @@ fn svg_num(node: &Handle, name: &str, default: f32) -> f32 {
     dom::attr(node, name)
         .and_then(|s| s.trim_end_matches("px").trim().parse::<f32>().ok())
         .unwrap_or(default)
+}
+
+fn parse_svg_points(s: &str) -> Vec<(f32, f32)> {
+    let nums: Vec<f32> = s
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|p| !p.is_empty())
+        .filter_map(|p| p.parse::<f32>().ok())
+        .collect();
+    nums.chunks_exact(2).map(|c| (c[0], c[1])).collect()
+}
+
+/// Parser de `d=` minimal: soporta M/m, L/l, H/h, V/v, C/c, Q/q, Z/z.
+/// No soporta A (arcs), T, S (smooth bezier).
+fn parse_svg_path(d: &str) -> Vec<PathCmd> {
+    // Tokenize: cada comando es una letra, cada arg es un f32 (separados
+    // por whitespace o coma; el signo `-` puede arrancar un nuevo número
+    // sin separador).
+    let bytes = d.as_bytes();
+    let mut i = 0;
+    let n = bytes.len();
+    let mut out: Vec<PathCmd> = Vec::new();
+    let mut cx = 0.0_f32; // cursor x absoluto
+    let mut cy = 0.0_f32;
+    let mut start_x = 0.0_f32;
+    let mut start_y = 0.0_f32;
+    let mut current_cmd: u8 = 0;
+    while i < n {
+        let c = bytes[i];
+        if c.is_ascii_whitespace() || c == b',' {
+            i += 1;
+            continue;
+        }
+        if c.is_ascii_alphabetic() {
+            current_cmd = c;
+            i += 1;
+            // Z/z no toma args — ejecutalo acá directamente, sino el
+            // loop nunca llega al match (no hay número que dispare).
+            if c == b'Z' || c == b'z' {
+                out.push(PathCmd::ClosePath);
+                cx = start_x;
+                cy = start_y;
+            }
+            continue;
+        }
+        // c es dígito o `-`/`+`/`.`: leer un número.
+        let read_num = |from: usize| -> Option<(f32, usize)> {
+            let mut j = from;
+            if j < n && (bytes[j] == b'-' || bytes[j] == b'+') {
+                j += 1;
+            }
+            while j < n && (bytes[j].is_ascii_digit() || bytes[j] == b'.') {
+                j += 1;
+            }
+            if j < n && (bytes[j] == b'e' || bytes[j] == b'E') {
+                j += 1;
+                if j < n && (bytes[j] == b'-' || bytes[j] == b'+') {
+                    j += 1;
+                }
+                while j < n && bytes[j].is_ascii_digit() {
+                    j += 1;
+                }
+            }
+            std::str::from_utf8(&bytes[from..j])
+                .ok()
+                .and_then(|s| s.parse::<f32>().ok())
+                .map(|v| (v, j))
+        };
+        let read_args = |from: usize, count: usize| -> Option<(Vec<f32>, usize)> {
+            let mut nums = Vec::with_capacity(count);
+            let mut k = from;
+            while nums.len() < count {
+                while k < n && (bytes[k].is_ascii_whitespace() || bytes[k] == b',') {
+                    k += 1;
+                }
+                let (v, after) = read_num(k)?;
+                nums.push(v);
+                k = after;
+            }
+            Some((nums, k))
+        };
+        let rel = current_cmd.is_ascii_lowercase();
+        match current_cmd.to_ascii_uppercase() {
+            b'M' => {
+                let (args, after) = match read_args(i, 2) {
+                    Some(v) => v,
+                    None => break,
+                };
+                let (mut x, mut y) = (args[0], args[1]);
+                if rel { x += cx; y += cy; }
+                out.push(PathCmd::MoveTo(x, y));
+                cx = x; cy = y;
+                start_x = x; start_y = y;
+                i = after;
+                // M con args extra implícitamente lineTo.
+                current_cmd = if rel { b'l' } else { b'L' };
+            }
+            b'L' => {
+                let (args, after) = match read_args(i, 2) {
+                    Some(v) => v,
+                    None => break,
+                };
+                let (mut x, mut y) = (args[0], args[1]);
+                if rel { x += cx; y += cy; }
+                out.push(PathCmd::LineTo(x, y));
+                cx = x; cy = y;
+                i = after;
+            }
+            b'H' => {
+                let (args, after) = match read_args(i, 1) {
+                    Some(v) => v,
+                    None => break,
+                };
+                let mut x = args[0];
+                if rel { x += cx; }
+                out.push(PathCmd::LineTo(x, cy));
+                cx = x;
+                i = after;
+            }
+            b'V' => {
+                let (args, after) = match read_args(i, 1) {
+                    Some(v) => v,
+                    None => break,
+                };
+                let mut y = args[0];
+                if rel { y += cy; }
+                out.push(PathCmd::LineTo(cx, y));
+                cy = y;
+                i = after;
+            }
+            b'C' => {
+                let (args, after) = match read_args(i, 6) {
+                    Some(v) => v,
+                    None => break,
+                };
+                let (mut x1, mut y1, mut x2, mut y2, mut x, mut y) =
+                    (args[0], args[1], args[2], args[3], args[4], args[5]);
+                if rel {
+                    x1 += cx; y1 += cy;
+                    x2 += cx; y2 += cy;
+                    x += cx; y += cy;
+                }
+                out.push(PathCmd::CubicTo(x1, y1, x2, y2, x, y));
+                cx = x; cy = y;
+                i = after;
+            }
+            b'Q' => {
+                let (args, after) = match read_args(i, 4) {
+                    Some(v) => v,
+                    None => break,
+                };
+                let (mut x1, mut y1, mut x, mut y) = (args[0], args[1], args[2], args[3]);
+                if rel {
+                    x1 += cx; y1 += cy;
+                    x += cx; y += cy;
+                }
+                out.push(PathCmd::QuadTo(x1, y1, x, y));
+                cx = x; cy = y;
+                i = after;
+            }
+            b'Z' => {
+                out.push(PathCmd::ClosePath);
+                cx = start_x;
+                cy = start_y;
+            }
+            _ => {
+                // Comando no soportado (`A`, `T`, `S`) — saltea un número
+                // para evitar loops infinitos.
+                if let Some((_, after)) = read_num(i) {
+                    i = after;
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+    out
 }
 
 fn svg_color(node: &Handle, name: &str) -> Option<Color> {
@@ -1694,6 +1923,62 @@ mod tests {
             }
         });
         assert!(clickable.is_empty(), "ningún href no-web debería ser clickable: {clickable:?}");
+    }
+
+    #[test]
+    fn svg_parsea_polygon_y_polyline() {
+        let html = r##"<html><body>
+            <svg width="100" height="100">
+                <polygon points="0,0 50,0 50,50" fill="red"/>
+                <polyline points="0,100 100,50 100,0" stroke="blue"/>
+            </svg>
+        </body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut prim_count = 0;
+        let mut had_closed = false;
+        let mut had_open = false;
+        doc.box_tree.walk(|b| {
+            if let Some(s) = &b.svg {
+                for p in &s.prims {
+                    if let crate::SvgPrim::Polyline { points, closed, .. } = p {
+                        prim_count += 1;
+                        if *closed {
+                            had_closed = true;
+                            assert_eq!(points.len(), 3);
+                        } else {
+                            had_open = true;
+                        }
+                    }
+                }
+            }
+        });
+        assert_eq!(prim_count, 2);
+        assert!(had_closed);
+        assert!(had_open);
+    }
+
+    #[test]
+    fn svg_parsea_path_minimal() {
+        let html = r##"<html><body>
+            <svg width="100" height="100">
+                <path d="M 10 10 L 90 10 L 50 90 Z" fill="green"/>
+            </svg>
+        </body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut cmds_count = 0;
+        doc.box_tree.walk(|b| {
+            if let Some(s) = &b.svg {
+                for p in &s.prims {
+                    if let crate::SvgPrim::Path { d, .. } = p {
+                        cmds_count = d.len();
+                    }
+                }
+            }
+        });
+        // M, L, L, Z → 4 cmds.
+        assert_eq!(cmds_count, 4);
     }
 
     #[test]
