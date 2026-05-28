@@ -171,5 +171,30 @@ fn main() {
     let _ = std::fs::remove_file(&path);
     assert_eq!(back, st.score);
 
-    println!("takiy smoke ok — 11 escenarios verdes");
+    // --- Escenario 12: render offline a WAV (F4).
+    //
+    // El mismo pipeline que Ctrl+R en la UI: tomamos el demo, lo pasamos
+    // por el OscRenderer canónico y volcamos a archivo. El smoke valida
+    // el header WAV — tasa, canales y data chunk no vacío — sin asumir un
+    // hash byte-exact (eso lo cubre `wav_determinism.rs` en takiy-synth).
+    use takiy_synth::{write_wav, OscRenderer, Renderer};
+    let demo = takiy_app::demo_score();
+    let renderer = OscRenderer { sample_rate: 44_100, ..Default::default() };
+    let buf = renderer.render(&demo);
+    assert_eq!(buf.channels, 2, "render debe ser estéreo");
+    assert!(buf.peak() > 0.0, "demo debe producir audio");
+    let path = std::env::temp_dir().join("takiy-smoke-export.wav");
+    write_wav(&buf, &path).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(&bytes[0..4], b"RIFF");
+    assert_eq!(&bytes[8..12], b"WAVE");
+    let channels = u16::from_le_bytes(bytes[22..24].try_into().unwrap());
+    let sr = u32::from_le_bytes(bytes[24..28].try_into().unwrap());
+    let data_size = u32::from_le_bytes(bytes[40..44].try_into().unwrap());
+    assert_eq!(channels, 2);
+    assert_eq!(sr, 44_100);
+    assert!(data_size > 0, "data chunk vacío");
+
+    println!("takiy smoke ok — 12 escenarios verdes");
 }

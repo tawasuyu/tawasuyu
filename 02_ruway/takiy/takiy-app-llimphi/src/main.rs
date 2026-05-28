@@ -13,6 +13,10 @@
 //! Controles:
 //!
 //! - `Space`      — toca / detiene el score.
+//! - `Ctrl+E`     — exporta el score actual a SMF (.mid).
+//! - `Ctrl+R`     — render offline del score actual a WAV (44100 Hz / estéreo /
+//!                  16-bit PCM) ignorando metrónomo y count-in. Sample-rate fijo
+//!                  para reproducibilidad bit-exacta con el test de F10.
 //! - `Tab`        — cicla la pista activa.
 //! - `N`          — crea una pista nueva y la activa.
 //! - Click izq.   — agrega una nota (o selecciona la existente bajo el cursor).
@@ -42,9 +46,17 @@ use takiy_app::{
 use takiy_core::{PitchClass, Score};
 use takiy_playback::{PlayOpts, Player};
 use takiy_synth::{
-    mix_clicks, prepend_count_in, AudioBuffer, Metronome, MultiProgramRenderer, OscRenderer,
-    Renderer,
+    mix_clicks, prepend_count_in, write_wav, AudioBuffer, Metronome, MultiProgramRenderer,
+    OscRenderer, Renderer,
 };
+
+/// Sample-rate canónico para el export WAV offline. Coincide con el del
+/// test de determinismo (F10), así que un render hecho desde la UI puede
+/// hashearse byte-equal contra el WAV de referencia si el score es el
+/// canónico. El device de audio puede correr a otro SR (48 kHz, 96 kHz),
+/// pero el WAV exportado *siempre* se renderiza a 44100 para que dos
+/// usuarios en máquinas distintas obtengan archivos iguales.
+const WAV_EXPORT_SAMPLE_RATE: u32 = 44_100;
 
 #[derive(Clone)]
 enum Msg {
@@ -80,6 +92,10 @@ enum Msg {
     Save,
     /// Exporta el score a `<save_path>.mid` (o `/tmp/takiy_<unix>.mid`).
     ExportMidi,
+    /// Render offline a WAV (44.1 kHz / estéreo PCM 16-bit). Path análogo
+    /// a `ExportMidi` pero con extensión `.wav`. No incluye metrónomo ni
+    /// count-in — sale crudo el score, igual que el render del test F10.
+    ExportWav,
     Quit,
 }
 
@@ -325,6 +341,41 @@ impl App for Takiy {
                     }
                 }
             }
+            Msg::ExportWav => {
+                // Path análogo al de midi pero con `.wav`. Si la pista activa
+                // estaba sonando, no la cortamos — el render offline va por
+                // un OscRenderer/SF2 independiente del Player en vivo.
+                let path = match model.editor.save_path.as_deref() {
+                    Some(p) => p.with_extension("wav"),
+                    None => {
+                        let ts = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+                        std::path::PathBuf::from(format!("/tmp/takiy_{ts}.wav"))
+                    }
+                };
+                let buf = render_score(
+                    &model.editor.score,
+                    model.sf2.as_ref(),
+                    WAV_EXPORT_SAMPLE_RATE,
+                );
+                let secs = buf.duration_seconds();
+                match write_wav(&buf, &path) {
+                    Ok(()) => {
+                        eprintln!(
+                            "takiy · wav → {} ({:.1}s @ {WAV_EXPORT_SAMPLE_RATE} Hz)",
+                            path.display(),
+                            secs,
+                        );
+                        model.status = format!("wav → {} · {secs:.1}s", path.display());
+                    }
+                    Err(e) => {
+                        eprintln!("takiy · wav error en {}: {e}", path.display());
+                        model.status = format!("wav error: {e}");
+                    }
+                }
+            }
             Msg::Save => {
                 let path = model.editor.save_path.clone().unwrap_or_else(|| {
                     let ts = std::time::SystemTime::now()
@@ -446,6 +497,9 @@ impl App for Takiy {
             }
             Key::Character(s) if s.eq_ignore_ascii_case("e") && event.modifiers.ctrl => {
                 Some(Msg::ExportMidi)
+            }
+            Key::Character(s) if s.eq_ignore_ascii_case("r") && event.modifiers.ctrl => {
+                Some(Msg::ExportWav)
             }
             Key::Character(s) if s.eq_ignore_ascii_case("s") => Some(Msg::Save),
             Key::Character(s) if s == "+" || s == "=" => {
