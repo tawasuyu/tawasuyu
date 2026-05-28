@@ -19,10 +19,12 @@
 pub mod attest;
 pub mod claim;
 pub mod identity;
+pub mod multisig;
 
 pub use attest::Attestation;
 pub use claim::Claim;
 pub use identity::{verify_signature, Identity, IdentityId, IdentityKind, Keypair};
+pub use multisig::{MultiSigError, MultiSigVerdict, MultiSignature, SingleSig};
 
 /// Falla de una operación de identidad o atestación.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]

@@ -28,7 +28,7 @@ pub enum IdentityKind {
 
 /// Identificador estable de una identidad: BLAKE3 de su clave pública.
 /// Inmutable mientras la clave no cambie.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct IdentityId([u8; 32]);
 
 impl IdentityId {
