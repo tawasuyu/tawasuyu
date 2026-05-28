@@ -180,36 +180,48 @@ ambos backends contra una textura `Rgba8Unorm` 1024×1024 headless,
 warmup 5 + 15 frames medidos, bloquea hasta GPU idle (`Maintain::Wait`)
 para que los `ms` reportados sean tiempo real CPU+GPU.
 
-**Resultados (corrida 2026-05-28 en CPU — llvmpipe, no GPU real):**
+El binario `llimphi-gpu-bench` (en su propio crate) reporta info del
+adapter wgpu + corre dos escenarios distintos: **rebuild por frame**
+(LCG + `write_buffer` de 12-160 MB por frame, peor caso) y
+**persistente** (buffer/Scene preparados UNA vez, bucle medido sólo
+emite la draw call — caso real de cosmos/tinkuy/nakui).
 
-| N | vello | directo | factor |
+**Resultados — Intel Iris Xe (TGL GT2), Mesa 26.1.1, Vulkan, 2026-05-28:**
+
+Rebuild por frame:
+
+| N | vello ms | directo ms | factor |
 |---:|---:|---:|---:|
-| 25K | 28.6 ms | — | — |
-| 50K | 49.0 ms | — | — |
-| 100K | 91.4 ms | 19.9 ms | **4.59×** |
-| 200K | 58.6 ms | — | — (anómalo, ver abajo) |
-| 300K | SIGSEGV | — | techo de vello |
-| 500K | — | 82.2 ms | — |
-| 1M | — | 142.5 ms | — |
-| 5M | — | 659.6 ms | — |
+| 25K  | 7.3  | 1.2  | **6.05×** |
+| 50K  | 12.9 | 1.4  | **8.94×** |
+| 100K | 21.7 | 3.2  | **6.67×** |
+| 200K | 26.1 | 6.1  | 4.30× |
+| 500K | 94.4 | 18.0 | **5.25×** |
+| 1M   | 202.4 | 49.0 | 4.13× |
 
-Notas:
-- El bench corrió en `llvmpipe` (Mesa software) porque el host no tiene
-  acceso a `/dev/dri/`. Toda la rasterización fue CPU. **Hay que re-correr
-  en GPU mid real antes de aceptar/rechazar formalmente el criterio del
-  SDD.** Pendiente operativamente (waypipe + monitor disponible).
-- Aún en CPU, dos señales son inequívocas:
-  1. Vello revienta (SIGSEGV en `vello_encoding`) en el rango 200–300 K,
-     muy por debajo del 500 K objetivo. El techo existe — es el motivo
-     de este roadmap, queda verificado.
-  2. El path directo escala lineal hasta 5 M sin colgarse (1 draw call,
-     vertex buffer crece con N).
-- La anomalía vello @ 200K (58 ms < 91 ms @ 100K) es probablemente jitter
-  CPU bajo carga térmica + sólo 15 muestras. No invalida la conclusión
-  cualitativa.
-- Decisión: avanzar a Fase 1+ con la señal cualitativa. La medición
-  formal en GPU se reabre cuando esté el monitor con waypipe y se
-  ajusta el SDD si el factor real obliga a cambiar el plan.
+Persistente (datos fijos, sólo redraw):
+
+| N | vello ms | directo ms | factor | fps directo |
+|---:|---:|---:|---:|---:|
+| 100K | 18.6  | 0.8  | **22.55×** | 1210 |
+| 500K | 34.1  | 3.4  | **9.97×**  | 293 |
+| 1M   | 83.1  | 7.1  | **11.76×** | 141 |
+| 2M   | 101.7 | 16.0 | **6.37×**  | 63 |
+| 5M   | crash | 41.8 | —          | 24 |
+| 10M  | crash | 79.7 | —          | 13 |
+
+Veredictos contra el criterio del SDD:
+
+- **Factor ≥5× a 500K**: ✓ PASA. Rebuild 5.25×, persistente 9.97×.
+- **≥60 fps @ 1M**: ✓ PASA en persistente (141 fps); falla en rebuild
+  (22 fps) — pero rebuild no es el use case real.
+- **Techo de vello**: ~2 M paths en GPU mid. Más alto que mi hipótesis
+  inicial (que era 200–300 K, contaminada por llvmpipe), pero existe.
+  El path directo escala lineal a >10 M sin crashes.
+
+Conclusión: el GPU directo cumple su propósito. La diferencia entre
+rebuild y persistente (5–20×) confirma que el patrón correcto es
+"datos cambian → vello, datos estáticos → GPU directo persistente".
 
 **Fase 1 — Hook en `llimphi-ui` (1–2 días).**
 Hoy `View::paint_with(F)` da
@@ -275,11 +287,11 @@ HYG (~120 K estrellas brillantes) renderizadas a 144 fps en GPU mid.
 
 | Pregunta | Vello (`paint_with`) | GPU directo (`gpu_paint_with`) |
 |---|---|---|
-| ¿Cuántos primitivos por frame? | < 100 K | 100 K – 10 M |
+| ¿Cuántos primitivos por frame? | < ~500 K (rebuild) o < ~2 M (Scene reusada) | 100 K – 10 M+ |
+| ¿Los datos cambian cada frame? | Sí — vello rebuild es barato hasta 500 K | Posible pero con coste de `write_buffer`; ideal estático |
 | ¿Curvas Bezier nativas? | Sí | No (teselar antes) |
 | ¿Texto? | Sí | No — usar vello hermano u overlay |
 | ¿AA fino requerido? | Sí (analítico) | No (sin MSAA todavía) |
-| ¿Patrón "pinta lo que cambió"? | Re-build de Scene | Igual coste — reusá `GpuBatch` |
 | ¿Múltiples grosores de stroke? | Sí | Una sola `line_width` por flush |
 | ¿Anti-fluctuación de pixel? | Sí | Subpixel jitter visible |
 | Ejemplos de uso | pluma editor, shuma shell, mirada, nahual, iniy, khipu, chasqui explorer, dominium UI | cosmos starfield denso, tinkuy particles, nakui viewport, pineal denso |
@@ -287,6 +299,14 @@ HYG (~120 K estrellas brillantes) renderizadas a 144 fps en GPU mid.
 Default razonable: **`paint_with`** salvo que el caller ya midió que el
 volumen lo justifica. El costo de mantener un pipeline + WGSL propios
 es alto comparado con seguir usando vello.
+
+Patrón "buffer persistente": para el use case denso real (catálogo
+fijo, particles iniciales, dataset estático), construir el
+`wgpu::Buffer` y `BindGroup` UNA vez con `GpuPipelines::{rects, tris,
+lines, bind_layout}` expuestos y emitir el draw call manualmente
+desde el `gpu_paint_with` reusando esos recursos. Eso da factores
+~11× vs vello a 1M en GPU mid (medido Iris Xe), y >140 fps.
+`GpuBatch` queda para datos transitorios (UI dinámica densa).
 
 Convivencia: una misma `View` puede registrar AMBOS hooks. El runtime
 pinta vello primero (toda la Scene), luego ejecuta los GPU painters
