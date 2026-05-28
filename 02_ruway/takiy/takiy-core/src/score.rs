@@ -39,6 +39,72 @@ impl ScoreNote {
     }
 }
 
+/// Un punto de automación: un valor anclado a un beat concreto. Los
+/// renderers interpolan linealmente entre puntos consecutivos.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct AutomationPoint {
+    pub beat: f32,
+    pub value: f32,
+}
+
+/// Curva de automación: lista de puntos ordenados por `beat`. Cuando una
+/// pista tiene una `AutomationLane` activa para un parámetro, el render
+/// la consulta en el `note.start` de cada nota — el campo estático
+/// (p.ej. `Track.volume`) sólo se usa antes del primer punto.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AutomationLane {
+    /// Puntos ordenados por beat ascendente. Manipular siempre vía
+    /// [`AutomationLane::add_point`] para mantener el invariante.
+    pub points: Vec<AutomationPoint>,
+}
+
+impl AutomationLane {
+    /// Inserta o reemplaza un punto en `beat` con `value`. Mantiene el
+    /// orden por beat; si ya existía un punto en ese beat exacto, su
+    /// valor se sobreescribe (no se duplica).
+    pub fn add_point(&mut self, beat: f32, value: f32) {
+        let i = self.points.partition_point(|p| p.beat < beat);
+        if i < self.points.len() && (self.points[i].beat - beat).abs() < 1e-6 {
+            self.points[i].value = value;
+        } else {
+            self.points.insert(i, AutomationPoint { beat, value });
+        }
+    }
+
+    /// Valor de la curva en `beat`. Si la lane está vacía devuelve
+    /// `default` (el valor estático del track). Antes del primer punto
+    /// se mantiene el valor del primer punto; después del último se
+    /// mantiene el valor del último. Interpolación lineal en el medio.
+    pub fn value_at(&self, beat: f32, default: f32) -> f32 {
+        match self.points.as_slice() {
+            [] => default,
+            [only] => only.value,
+            [first, .., last] if beat <= first.beat => first.value,
+            [.., last] if beat >= last.beat => last.value,
+            _ => {
+                // Busca el primer punto cuyo beat > `beat`. Su predecesor
+                // es el punto a izquierda — entre ambos interpolamos.
+                let i = self.points.partition_point(|p| p.beat <= beat);
+                let prev = self.points[i - 1];
+                let next = self.points[i];
+                let span = (next.beat - prev.beat).max(1e-6);
+                let t = (beat - prev.beat) / span;
+                prev.value + t * (next.value - prev.value)
+            }
+        }
+    }
+
+    /// Cantidad de puntos en la curva.
+    pub fn len(&self) -> usize {
+        self.points.len()
+    }
+
+    /// `true` si no hay puntos definidos.
+    pub fn is_empty(&self) -> bool {
+        self.points.is_empty()
+    }
+}
+
 /// Una pista monofónica o polifónica: notas ordenadas por inicio.
 ///
 /// Los campos del mixer (`volume`, `mute`, `solo`) usan `serde(default)`
@@ -63,6 +129,14 @@ pub struct Track {
     /// `1` = todo derecha. Aplica equal-power. Default `0.0` (centro).
     #[serde(default)]
     pub pan: f32,
+    /// Automación de volumen. Si está presente y tiene ≥1 puntos, el
+    /// renderer la usa en lugar del campo estático `volume`. `None` o
+    /// vacía → cae al `volume` estático.
+    #[serde(default)]
+    pub volume_automation: Option<AutomationLane>,
+    /// Automación de pan, mismo criterio que `volume_automation`.
+    #[serde(default)]
+    pub pan_automation: Option<AutomationLane>,
 }
 
 fn default_volume() -> f32 {
@@ -78,6 +152,8 @@ impl Default for Track {
             mute: false,
             solo: false,
             pan: 0.0,
+            volume_automation: None,
+            pan_automation: None,
         }
     }
 }
@@ -91,7 +167,35 @@ impl Track {
             mute: false,
             solo: false,
             pan: 0.0,
+            volume_automation: None,
+            pan_automation: None,
         }
+    }
+
+    /// Volumen efectivo en `beat`. Si hay automación con puntos,
+    /// devuelve la curva interpolada; si no, el `volume` estático.
+    /// Esto es lo que el renderer consulta al mezclar cada nota.
+    pub fn volume_at(&self, beat: f32) -> f32 {
+        match self.volume_automation.as_ref() {
+            Some(lane) if !lane.is_empty() => lane.value_at(beat, self.volume),
+            _ => self.volume,
+        }
+    }
+
+    /// Pan efectivo en `beat`, mismo criterio que `volume_at`.
+    pub fn pan_at(&self, beat: f32) -> f32 {
+        match self.pan_automation.as_ref() {
+            Some(lane) if !lane.is_empty() => lane.value_at(beat, self.pan),
+            _ => self.pan,
+        }
+    }
+
+    /// Ganancias equal-power para el par estéreo evaluadas en `beat`,
+    /// honrando la automación de pan si está activa.
+    pub fn pan_gains_at(&self, beat: f32) -> (f32, f32) {
+        let p = self.pan_at(beat).clamp(-1.0, 1.0);
+        let theta = (p + 1.0) * std::f32::consts::FRAC_PI_4;
+        (theta.cos(), theta.sin())
     }
 
     /// Ganancia equal-power para el par estéreo dado el `pan` actual.
@@ -318,6 +422,76 @@ mod tests {
 
     fn note(class: PitchClass, start: f32) -> ScoreNote {
         ScoreNote::new(Pitch::from_class_octave(class, 4).unwrap(), start, 1.0, 100)
+    }
+
+    #[test]
+    fn automation_empty_returns_default() {
+        let lane = AutomationLane::default();
+        assert!((lane.value_at(0.0, 0.7) - 0.7).abs() < 1e-6);
+        assert!((lane.value_at(100.0, 0.7) - 0.7).abs() < 1e-6);
+    }
+
+    #[test]
+    fn automation_single_point_is_constant() {
+        let mut lane = AutomationLane::default();
+        lane.add_point(4.0, 0.3);
+        // Antes, igual y después del único punto siempre da su valor.
+        assert!((lane.value_at(0.0, 0.7) - 0.3).abs() < 1e-6);
+        assert!((lane.value_at(4.0, 0.7) - 0.3).abs() < 1e-6);
+        assert!((lane.value_at(10.0, 0.7) - 0.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn automation_two_points_interpolate_linearly() {
+        let mut lane = AutomationLane::default();
+        lane.add_point(0.0, 0.0);
+        lane.add_point(10.0, 1.0);
+        assert!((lane.value_at(0.0, 0.0) - 0.0).abs() < 1e-6);
+        assert!((lane.value_at(5.0, 0.0) - 0.5).abs() < 1e-6, "interpolación al 50%");
+        assert!((lane.value_at(10.0, 0.0) - 1.0).abs() < 1e-6);
+        // Antes del primero / después del último → clamp.
+        assert!((lane.value_at(-1.0, 0.0) - 0.0).abs() < 1e-6);
+        assert!((lane.value_at(20.0, 0.0) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn automation_add_point_keeps_order_and_replaces_duplicates() {
+        let mut lane = AutomationLane::default();
+        lane.add_point(2.0, 0.5);
+        lane.add_point(0.0, 0.1);
+        lane.add_point(1.0, 0.3);
+        assert_eq!(lane.points.len(), 3);
+        assert!(lane.points.windows(2).all(|w| w[0].beat <= w[1].beat));
+        // Reemplazar — no duplicar.
+        lane.add_point(1.0, 0.9);
+        assert_eq!(lane.points.len(), 3);
+        assert!((lane.points[1].value - 0.9).abs() < 1e-6);
+    }
+
+    #[test]
+    fn track_volume_at_falls_back_to_static_when_lane_empty() {
+        let mut t = Track::new("a");
+        t.volume = 0.8;
+        // Sin lane → static.
+        assert!((t.volume_at(5.0) - 0.8).abs() < 1e-6);
+        // Lane vacía → también static.
+        t.volume_automation = Some(AutomationLane::default());
+        assert!((t.volume_at(5.0) - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn track_pan_gains_at_honor_automation() {
+        let mut t = Track::new("a");
+        t.pan = 0.0;
+        let mut lane = AutomationLane::default();
+        lane.add_point(0.0, -1.0); // full left
+        lane.add_point(10.0, 1.0); // full right
+        t.pan_automation = Some(lane);
+        let (l0, r0) = t.pan_gains_at(0.0);
+        assert!(l0 > 0.99 && r0 < 0.01, "(l, r) = ({l0}, {r0}) en pan -1");
+        let (l_mid, r_mid) = t.pan_gains_at(5.0);
+        // En pan 0 (centro): cos(π/4) = sin(π/4) ≈ 0.707
+        assert!((l_mid - r_mid).abs() < 0.05, "centro casi simétrico");
     }
 
     #[test]

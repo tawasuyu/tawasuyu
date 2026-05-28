@@ -27,6 +27,6 @@ pub use geometry::{
 pub use gm::{gm_program_for_track_name, gm_program_name};
 pub use io::{default_save_path as default_save_path_for_save, load_score, write_score, LoadError};
 pub use model::{
-    describe_key, describe_master_delay, describe_master_reverb, find_note_idx, EditMsg,
-    EditorState, Snap, MAX_UNDO,
+    describe_key, describe_master_delay, describe_master_reverb, describe_track_automation,
+    find_note_idx, EditMsg, EditorState, Snap, MAX_UNDO,
 };

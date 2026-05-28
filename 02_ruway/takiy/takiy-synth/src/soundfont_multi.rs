@@ -111,6 +111,9 @@ impl MultiProgramRenderer {
 enum Event {
     On { channel: i32, key: i32, velocity: i32 },
     Off { channel: i32, key: i32 },
+    /// Control change emitido por la automación per-nota: actualiza
+    /// volumen (CC#7) o pan (CC#10) en el canal antes del note-on.
+    CC { channel: i32, ctrl: i32, value: i32 },
 }
 
 impl Renderer for MultiProgramRenderer {
@@ -162,10 +165,33 @@ impl Renderer for MultiProgramRenderer {
                 continue;
             }
             let channel = channel_for_track(track_idx);
+            let has_vol_auto = track
+                .volume_automation
+                .as_ref()
+                .is_some_and(|l| !l.is_empty());
+            let has_pan_auto = track
+                .pan_automation
+                .as_ref()
+                .is_some_and(|l| !l.is_empty());
             for note in track.notes() {
                 let on = (note.start * sec_per_beat * sr) as usize;
                 let off = (note.end() * sec_per_beat * sr) as usize;
                 let key = note.pitch.midi() as i32;
+                // Si hay automación de vol/pan, emitimos CC justo antes
+                // del note-on así el SoundFont aplica el nuevo valor a
+                // todas las notas que arranquen en `on`. Beat-accurate,
+                // mismo criterio que el OscRenderer.
+                if has_vol_auto {
+                    let vol = ((track.volume_at(note.start).max(0.0) * 100.0).round() as i32)
+                        .clamp(0, 127);
+                    events.push((on.saturating_sub(1), Event::CC { channel, ctrl: CC_CHANNEL_VOLUME, value: vol }));
+                }
+                if has_pan_auto {
+                    let pan_cc = (((track.pan_at(note.start).clamp(-1.0, 1.0) + 1.0) * 0.5 * 127.0)
+                        .round() as i32)
+                        .clamp(0, 127);
+                    events.push((on.saturating_sub(1), Event::CC { channel, ctrl: CC_PAN, value: pan_cc }));
+                }
                 events.push((on, Event::On { channel, key, velocity: note.velocity as i32 }));
                 events.push((off.max(on + 1), Event::Off { channel, key }));
             }
@@ -188,6 +214,9 @@ impl Renderer for MultiProgramRenderer {
             match ev {
                 Event::On { channel, key, velocity } => synth.note_on(channel, key, velocity),
                 Event::Off { channel, key } => synth.note_off(channel, key),
+                Event::CC { channel, ctrl, value } => {
+                    synth.process_midi_message(channel, CONTROL_CHANGE, ctrl, value);
+                }
             }
         }
         if cursor < total {

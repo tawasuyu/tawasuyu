@@ -34,6 +34,10 @@
 //! - `Alt+Shift+D` — cicla el tiempo del delay master (1/8 → 1/4 → 1/4· → 1/8· → 1/16).
 //! - `Alt+R`      — prende / apaga el reverb master (preset sala / damp 0.5 / mix 0.25).
 //! - `Alt+Shift+R` — cicla la sala del reverb master (sala → catedral → cuarto).
+//! - `Alt+V`      — ancla un punto de automación de volumen en el beat de la nota
+//!                  seleccionada (o playhead, o 0) con el volumen efectivo actual.
+//! - `Alt+P`      — ancla un punto de automación de pan, mismo criterio.
+//! - `Alt+C`      — limpia ambas curvas de automación de la pista activa.
 //! - `←` / `→`    — mueve la nota seleccionada ±1 beat.
 //! - `↑` / `↓`    — mueve la nota seleccionada ±1 semitono.
 //! - `+` / `-`    — alarga / acorta la nota seleccionada en 0.5 beats.
@@ -120,6 +124,12 @@ enum Msg {
     PasteAtPlayhead,
     /// Cambia el programa GM de la pista activa en `delta` (wrap 0..=127).
     NudgeProgram { delta: i32 },
+    /// Ancla un punto de automación de volumen en el beat actual (de la
+    /// nota seleccionada, o el playhead, o 0). El valor anclado es el
+    /// volumen efectivo de la pista activa.
+    AnchorVolumeAutomation,
+    /// Ancla un punto de automación de pan, mismo criterio.
+    AnchorPanAutomation,
     /// Guarda el score actual a `TAKIY_SCORE_JSON` (o a `/tmp/...`).
     Save,
     /// Exporta el score a `<save_path>.mid` (o `/tmp/takiy_<unix>.mid`).
@@ -432,6 +442,22 @@ impl App for Takiy {
                         audition_pitch(&mut model, p);
                     }
                 }
+            }
+            Msg::AnchorVolumeAutomation => {
+                let beat = anchor_beat(&model);
+                return Self::update(
+                    model,
+                    Msg::Edit(EditMsg::AddVolumeAutomationPoint { beat }),
+                    handle,
+                );
+            }
+            Msg::AnchorPanAutomation => {
+                let beat = anchor_beat(&model);
+                return Self::update(
+                    model,
+                    Msg::Edit(EditMsg::AddPanAutomationPoint { beat }),
+                    handle,
+                );
             }
             Msg::NudgeProgram { delta } => {
                 let Some(sf2) = model.sf2.take() else {
@@ -796,6 +822,15 @@ impl App for Takiy {
             Key::Character(s) if s.eq_ignore_ascii_case("r") && event.modifiers.alt => {
                 Some(Msg::Edit(EditMsg::ToggleMasterReverb))
             }
+            Key::Character(s) if s.eq_ignore_ascii_case("v") && event.modifiers.alt => {
+                Some(Msg::AnchorVolumeAutomation)
+            }
+            Key::Character(s) if s.eq_ignore_ascii_case("p") && event.modifiers.alt => {
+                Some(Msg::AnchorPanAutomation)
+            }
+            Key::Character(s) if s.eq_ignore_ascii_case("c") && event.modifiers.alt => {
+                Some(Msg::Edit(EditMsg::ClearActiveAutomation))
+            }
             Key::Character(s) if (s == "[" || s == "{") && event.modifiers.alt => {
                 Some(Msg::Edit(EditMsg::NudgeActiveVolume { delta: -0.1 }))
             }
@@ -1077,6 +1112,10 @@ fn paint_piano_roll(
                 };
                 parts.push(format!("pan {label}"));
             }
+            let auto = takiy_app::describe_track_automation(t);
+            if !auto.is_empty() {
+                parts.push(format!("auto {auto}"));
+            }
             format!(" [{}]", parts.join(" · "))
         })
         .unwrap_or_default();
@@ -1192,6 +1231,32 @@ fn load_sf2(score: &Score, sample_rate: u32) -> (Option<MultiProgramRenderer>, S
         .unwrap_or(&path)
         .to_owned();
     (Some(renderer), format!("engine sf2 {label}"))
+}
+
+/// Beat al que se ancla un punto de automación cuando el usuario lo
+/// pide desde la UI. Prioridad:
+/// 1. Beat de la nota seleccionada (más predecible cuando se está
+///    editando una sección puntual).
+/// 2. Playhead actual del Player (en plena reproducción, "anclá donde
+///    está sonando").
+/// 3. Beat 0 (default cuando no hay ni selección ni playback).
+fn anchor_beat(model: &Model) -> f32 {
+    if let Some((track, idx)) = model.editor.selected {
+        if let Some(note) = model
+            .editor
+            .score
+            .track(track)
+            .and_then(|t| t.notes().get(idx))
+        {
+            return note.start;
+        }
+    }
+    if model.playing {
+        if let Some(player) = model.player.as_ref() {
+            return player.position_seconds() * model.playback_bpm / 60.0;
+        }
+    }
+    0.0
 }
 
 /// Devuelve el midi del nota actualmente seleccionada, o `None` si no

@@ -23,4 +23,6 @@ pub mod score;
 pub use chord::{Chord, ChordQuality};
 pub use pitch::{Pitch, PitchClass};
 pub use scale::Scale;
-pub use score::{DelayParams, ReverbParams, Score, ScoreNote, Track};
+pub use score::{
+    AutomationLane, AutomationPoint, DelayParams, ReverbParams, Score, ScoreNote, Track,
+};

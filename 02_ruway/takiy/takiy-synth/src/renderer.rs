@@ -48,9 +48,13 @@ impl Renderer for OscRenderer {
             if !score.track_is_audible(idx) {
                 continue;
             }
-            let gain = track.volume.max(0.0);
-            let (gl, gr) = track.pan_gains();
+            // Evaluamos volumen y pan **por nota** sobre el `note.start`
+            // — la automación es beat-accurate, no sample-accurate. Para
+            // sweeps audibles bajo notas largas habría que recalcular
+            // dentro del loop interno; queda para una segunda iteración.
             for note in track.notes() {
+                let gain = track.volume_at(note.start).max(0.0);
+                let (gl, gr) = track.pan_gains_at(note.start);
                 self.mix_note_stereo(note, sec_per_beat, &mut buf.samples, gain, gl, gr);
             }
         }

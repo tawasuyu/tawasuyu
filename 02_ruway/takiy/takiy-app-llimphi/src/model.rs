@@ -5,7 +5,9 @@
 
 use std::path::PathBuf;
 
-use takiy_core::{DelayParams, Pitch, PitchClass, ReverbParams, Scale, Score, ScoreNote, Track};
+use takiy_core::{
+    AutomationLane, DelayParams, Pitch, PitchClass, ReverbParams, Scale, Score, ScoreNote, Track,
+};
 
 /// Granularidad de snap para edición. Determina cuánto se redondea el
 /// beat al hacer click, mover con flechas o pegar.
@@ -252,6 +254,17 @@ pub enum EditMsg {
     /// cuarto (0.25) → sala (0.5) → catedral (0.85) → vuelta a cuarto.
     /// No-op si el reverb está apagado.
     CycleMasterReverbRoom,
+    /// Ancla un punto en la automación de volumen de la pista activa.
+    /// El `beat` viene del binario (típicamente el beat de la nota
+    /// seleccionada o el playhead). El `value` es el volumen efectivo
+    /// actual de la pista — anclar congela ese valor en ese beat.
+    AddVolumeAutomationPoint { beat: f32 },
+    /// Ancla un punto en la automación de pan, mismo criterio que
+    /// `AddVolumeAutomationPoint`.
+    AddPanAutomationPoint { beat: f32 },
+    /// Borra ambas curvas de automación de la pista activa (vol + pan).
+    /// Útil para volver al valor estático sin escribir un script.
+    ClearActiveAutomation,
 }
 
 /// Resultado de aplicar un `EditMsg`: mensaje corto para el header.
@@ -354,6 +367,9 @@ impl EditorState {
             EditMsg::CycleMasterDelayTime => self.cycle_master_delay_time(),
             EditMsg::ToggleMasterReverb => self.toggle_master_reverb(),
             EditMsg::CycleMasterReverbRoom => self.cycle_master_reverb_room(),
+            EditMsg::AddVolumeAutomationPoint { beat } => self.add_volume_automation_point(beat),
+            EditMsg::AddPanAutomationPoint { beat } => self.add_pan_automation_point(beat),
+            EditMsg::ClearActiveAutomation => self.clear_active_automation(),
         }
     }
 
@@ -709,6 +725,45 @@ impl EditorState {
         Some(format!("delay · {}", describe_master_delay(&self.score.master_delay)))
     }
 
+    fn add_volume_automation_point(&mut self, beat: f32) -> ApplyOutcome {
+        let idx = self.active_track;
+        let track = self.score.track_mut(idx)?;
+        // Usamos el `volume` estático (no `volume_at`) para que el
+        // workflow sea: "ajustá el static con Alt+[/Alt+] → anclá con
+        // Alt+V → repetí". Si usáramos `volume_at`, una vez que la
+        // lane tiene puntos el static dejaría de tener efecto y los
+        // anchors siguientes capturarían siempre la interpolación.
+        let value = track.volume;
+        let lane = track.volume_automation.get_or_insert_with(AutomationLane::default);
+        lane.add_point(beat.max(0.0), value);
+        let n = lane.len();
+        Some(format!("vol auto · pista {idx} · beat {beat:.1} · {n} pt · v {value:.2}"))
+    }
+
+    fn add_pan_automation_point(&mut self, beat: f32) -> ApplyOutcome {
+        let idx = self.active_track;
+        let track = self.score.track_mut(idx)?;
+        let value = track.pan; // mismo razonamiento que volume.
+        let lane = track.pan_automation.get_or_insert_with(AutomationLane::default);
+        lane.add_point(beat.max(0.0), value);
+        let n = lane.len();
+        Some(format!("pan auto · pista {idx} · beat {beat:.1} · {n} pt · p {value:.2}"))
+    }
+
+    fn clear_active_automation(&mut self) -> ApplyOutcome {
+        let idx = self.active_track;
+        let track = self.score.track_mut(idx)?;
+        let had_any =
+            track.volume_automation.is_some() || track.pan_automation.is_some();
+        track.volume_automation = None;
+        track.pan_automation = None;
+        if had_any {
+            Some(format!("automation off · pista {idx}"))
+        } else {
+            None
+        }
+    }
+
     fn toggle_master_reverb(&mut self) -> ApplyOutcome {
         self.score.master_reverb = match self.score.master_reverb {
             None => Some(ReverbParams::default()),
@@ -849,6 +904,24 @@ pub fn describe_master_delay(delay: &Option<DelayParams>) -> String {
         t => format!("{t:.2}b"),
     };
     format!("{time} · fb {:.2} · mix {:.2}", d.feedback, d.mix)
+}
+
+/// Resumen ultra-corto del estado de automación de una pista para el
+/// header. Devuelve `""` si no hay automación; si hay, `"v3"`, `"p2"`,
+/// o `"v3p2"` según qué lanes están activas y cuántos puntos tienen.
+pub fn describe_track_automation(track: &Track) -> String {
+    let mut s = String::new();
+    if let Some(l) = track.volume_automation.as_ref() {
+        if !l.is_empty() {
+            s.push_str(&format!("v{}", l.len()));
+        }
+    }
+    if let Some(l) = track.pan_automation.as_ref() {
+        if !l.is_empty() {
+            s.push_str(&format!("p{}", l.len()));
+        }
+    }
+    s
 }
 
 /// Pretty string para el reverb master: `"off"` o
@@ -1487,6 +1560,77 @@ mod tests {
         let out = st.apply(EditMsg::CycleMasterDelayTime);
         assert!(st.score.master_delay.is_none(), "no enciende solo");
         assert!(out.unwrap().contains("off"));
+    }
+
+    #[test]
+    fn add_volume_automation_point_creates_lane_at_active_track() {
+        let mut st = EditorState::new(120.0);
+        // Asegurate de que la pista activa tiene volumen no-default.
+        st.score.track_mut(0).unwrap().volume = 0.7;
+        st.apply(EditMsg::AddVolumeAutomationPoint { beat: 4.0 });
+        let track = st.score.track(0).unwrap();
+        let lane = track.volume_automation.as_ref().unwrap();
+        assert_eq!(lane.points.len(), 1);
+        assert!((lane.points[0].beat - 4.0).abs() < 1e-6);
+        assert!((lane.points[0].value - 0.7).abs() < 1e-6, "anchor=volumen actual");
+    }
+
+    #[test]
+    fn add_volume_automation_point_is_undoable() {
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::AddVolumeAutomationPoint { beat: 0.0 });
+        assert!(st.score.track(0).unwrap().volume_automation.is_some());
+        st.undo();
+        assert!(st.score.track(0).unwrap().volume_automation.is_none());
+    }
+
+    #[test]
+    fn add_pan_automation_point_appends_to_existing_lane() {
+        let mut st = EditorState::new(120.0);
+        st.score.track_mut(0).unwrap().pan = 0.5;
+        st.apply(EditMsg::AddPanAutomationPoint { beat: 0.0 });
+        st.score.track_mut(0).unwrap().pan = -0.5;
+        st.apply(EditMsg::AddPanAutomationPoint { beat: 8.0 });
+        let lane = st.score.track(0).unwrap().pan_automation.as_ref().unwrap();
+        assert_eq!(lane.points.len(), 2);
+        assert!((lane.points[0].value - 0.5).abs() < 1e-6);
+        assert!((lane.points[1].value + 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn clear_active_automation_wipes_both_lanes() {
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::AddVolumeAutomationPoint { beat: 0.0 });
+        st.apply(EditMsg::AddPanAutomationPoint { beat: 4.0 });
+        st.apply(EditMsg::ClearActiveAutomation);
+        let t = st.score.track(0).unwrap();
+        assert!(t.volume_automation.is_none() && t.pan_automation.is_none());
+    }
+
+    #[test]
+    fn clear_active_automation_without_lanes_is_noop() {
+        let mut st = EditorState::new(120.0);
+        let len_before = st.history.len();
+        let out = st.apply(EditMsg::ClearActiveAutomation);
+        assert!(out.is_none(), "sin automación, sin mensaje");
+        assert_eq!(st.history.len(), len_before, "sin push a history");
+    }
+
+    #[test]
+    fn describe_track_automation_summarizes_lanes() {
+        let mut t = Track::new("a");
+        assert_eq!(describe_track_automation(&t), "");
+        let mut vlane = AutomationLane::default();
+        vlane.add_point(0.0, 0.5);
+        vlane.add_point(4.0, 0.8);
+        vlane.add_point(8.0, 0.3);
+        t.volume_automation = Some(vlane);
+        assert_eq!(describe_track_automation(&t), "v3");
+        let mut plane = AutomationLane::default();
+        plane.add_point(0.0, 0.0);
+        plane.add_point(8.0, 1.0);
+        t.pan_automation = Some(plane);
+        assert_eq!(describe_track_automation(&t), "v3p2");
     }
 
     #[test]

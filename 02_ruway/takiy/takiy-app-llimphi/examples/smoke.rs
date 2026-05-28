@@ -334,5 +334,59 @@ fn main() {
     // master_delay también sobrevive aunque no lo toquemos en este escenario.
     let _ = ReverbParams::default();
 
-    println!("takiy smoke ok — 17 escenarios verdes");
+    // --- Escenario 18: automation per-track (F9).
+    //
+    // Crea dos puntos de automación de volumen en una pista con una nota
+    // por beat. El render con automación debe diferir del render sin
+    // automación (la pista cambia de volumen entre el primer y el último
+    // beat). Verifica también el roundtrip serde de las curvas.
+    let mut st = EditorState::new(120.0);
+    for i in 0..4 {
+        st.apply(EditMsg::AddNote { beat: i as f32, midi: 60 });
+    }
+    // Render baseline (sin automación).
+    let baseline = renderer.render(&st.score);
+
+    // Ancla un punto a beat 0 con vol 0.2 y otro a beat 3 con vol 1.2.
+    st.score.track_mut(0).unwrap().volume = 0.2;
+    st.apply(EditMsg::AddVolumeAutomationPoint { beat: 0.0 });
+    st.score.track_mut(0).unwrap().volume = 1.2;
+    st.apply(EditMsg::AddVolumeAutomationPoint { beat: 3.0 });
+    assert_eq!(
+        st.score.track(0).unwrap().volume_automation.as_ref().unwrap().points.len(),
+        2
+    );
+
+    // Con automación: render distinto al baseline.
+    let automated = renderer.render(&st.score);
+    let differs = baseline
+        .samples
+        .iter()
+        .zip(automated.samples.iter())
+        .any(|(a, b)| (a - b).abs() > 1e-6);
+    assert!(differs, "automation no modificó el render");
+
+    // Volume interpolado en el beat medio (1.5) ≈ promedio.
+    let v_mid = st.score.track(0).unwrap().volume_at(1.5);
+    assert!(
+        (v_mid - 0.7).abs() < 0.05,
+        "interp ~ (0.2 + 1.2) / 2 = 0.7, got {v_mid}"
+    );
+
+    // Roundtrip serde preserva las curvas.
+    let path = std::env::temp_dir().join("takiy-smoke-auto.takiy.json");
+    takiy_app::write_score(&st.score, &path).unwrap();
+    let reloaded = takiy_app::load_score(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(
+        reloaded.track(0).unwrap().volume_automation.as_ref().unwrap().points.len(),
+        2
+    );
+
+    // ClearActiveAutomation borra ambas lanes.
+    st.apply(EditMsg::ClearActiveAutomation);
+    let t = st.score.track(0).unwrap();
+    assert!(t.volume_automation.is_none() && t.pan_automation.is_none());
+
+    println!("takiy smoke ok — 18 escenarios verdes");
 }
