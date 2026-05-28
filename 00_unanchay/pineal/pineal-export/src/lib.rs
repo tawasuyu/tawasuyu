@@ -8,18 +8,15 @@
 //! - [`svg`] — exporter SVG vectorial (`<path>`/`<rect>`/`<polygon>`…).
 //! - [`png`] — exporter PNG raster, rasterizador software propio que
 //!   replayea cada `RenderCmd` sobre un buffer RGBA8. Sin deps nativas.
-//! - [`pdf`] — placeholder; cuando se implemente, vía `printpdf` sobre
-//!   el mismo `RenderPlan`, con decimación contextual por DPI
-//!   (`target = width_inches × dpi × vertices_per_pixel`).
+//! - [`pdf`] — exporter PDF mínimo, writer propio (sin `printpdf`).
+//!   1 página, content stream con operadores básicos PDF-1.4.
 
 #![forbid(unsafe_code)]
 
 pub mod svg;
 pub mod png;
-
-/// Exporter PDF — pendiente. Se implementará sobre `printpdf`
-/// consumiendo el mismo `RenderPlan` que `svg`.
-pub mod pdf {}
+pub mod pdf;
 
 pub use svg::to_svg;
 pub use crate::png::to_png;
+pub use crate::pdf::to_pdf;

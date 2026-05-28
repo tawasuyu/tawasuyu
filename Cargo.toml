@@ -21,21 +21,25 @@ members = [
     "00_unanchay/khipu/khipu-app",
     "00_unanchay/khipu/khipu-core",
     "00_unanchay/khipu/khipu-gravity",
+    "00_unanchay/pineal/demos/pineal-contour-demo",
     "00_unanchay/pineal/demos/pineal-demo",
     "00_unanchay/pineal/demos/pineal-financial-demo",
     "00_unanchay/pineal/demos/pineal-flow-demo",
     "00_unanchay/pineal/demos/pineal-heatmap-demo",
+    "00_unanchay/pineal/demos/pineal-hexbin-demo",
     "00_unanchay/pineal/demos/pineal-mesh-demo",
     "00_unanchay/pineal/demos/pineal-phosphor-demo",
     "00_unanchay/pineal/demos/pineal-polar-demo",
     "00_unanchay/pineal/demos/pineal-stream-demo",
     "00_unanchay/pineal/demos/pineal-treemap-demo",
     "00_unanchay/pineal/pineal-cartesian",
+    "00_unanchay/pineal/pineal-contour",
     "00_unanchay/pineal/pineal-core",
     "00_unanchay/pineal/pineal-export",
     "00_unanchay/pineal/pineal-financial",
     "00_unanchay/pineal/pineal-flow",
     "00_unanchay/pineal/pineal-heatmap",
+    "00_unanchay/pineal/pineal-hexbin",
     "00_unanchay/pineal/pineal-mesh",
     "00_unanchay/pineal/pineal-phosphor",
     "00_unanchay/pineal/pineal-polar",
@@ -567,6 +571,8 @@ pineal-treemap = { path = "00_unanchay/pineal/pineal-treemap" }
 pineal-flow = { path = "00_unanchay/pineal/pineal-flow" }
 pineal-phosphor = { path = "00_unanchay/pineal/pineal-phosphor" }
 pineal-export = { path = "00_unanchay/pineal/pineal-export" }
+pineal-hexbin = { path = "00_unanchay/pineal/pineal-hexbin" }
+pineal-contour = { path = "00_unanchay/pineal/pineal-contour" }
 pineal = { path = "00_unanchay/pineal/pineal-umbrella" }
 
 # ============================================================

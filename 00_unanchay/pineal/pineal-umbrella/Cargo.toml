@@ -20,12 +20,15 @@ pineal-treemap = { path = "../pineal-treemap", optional = true }
 pineal-flow = { path = "../pineal-flow", optional = true }
 pineal-phosphor = { path = "../pineal-phosphor", optional = true }
 pineal-export = { path = "../pineal-export", optional = true }
+pineal-hexbin = { path = "../pineal-hexbin", optional = true }
+pineal-contour = { path = "../pineal-contour", optional = true }
 
 [features]
 default = ["full"]
 full = [
     "core", "render", "cartesian", "stream", "mesh", "financial",
     "polar", "heatmap", "treemap", "flow", "phosphor", "export",
+    "hexbin", "contour",
 ]
 core = ["dep:pineal-core"]
 render = ["dep:pineal-render", "core"]
@@ -39,3 +42,5 @@ treemap = ["dep:pineal-treemap", "render"]
 flow = ["dep:pineal-flow", "render"]
 phosphor = ["dep:pineal-phosphor", "stream"]
 export = ["dep:pineal-export", "render"]
+hexbin = ["dep:pineal-hexbin", "heatmap"]
+contour = ["dep:pineal-contour", "heatmap"]

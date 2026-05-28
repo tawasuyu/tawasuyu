@@ -81,8 +81,8 @@ painter vía las escalas de `pineal-core`.
 | **vello/llimphi** (`SceneCanvas`) | Producción. Pinta en `View::paint_with`. | `pineal-render::llimphi_backend` |
 | **SVG vectorial** (`to_svg`) | Producción. Emite `<rect>`/`<polyline>`/`<polygon>`. | `pineal-export::svg` |
 | **PNG raster** (`to_png`) | Producción. Software rasterizer propio con AA 2×2. | `pineal-export::png` |
-| **GPU directo `wgpu`** | Pendiente. Para millones de puntos. | — |
-| **PDF** (`printpdf`) | Roadmap. | `pineal-export::pdf` (placeholder) |
+| **PDF** (`to_pdf`) | Producción. Writer propio (sin `printpdf`), 1 página, operadores PDF-1.4. | `pineal-export::pdf` |
+| **GPU directo `wgpu`** | Roadmap. Para millones de puntos. | — |
 
 El rasterizador PNG es propio para no depender de `tiny-skia`/`cairo`/etc.
 Texto se omite a propósito — para labels usar SVG. Coverage 2×2 (4
@@ -101,6 +101,8 @@ samples por pixel) da AA suficiente para reportes y dashboards.
 | `pineal-heatmap` | `paint`, `encode_argb` | Ramp Viridis + textura para matrices grandes |
 | `pineal-stream` | `pineal_stream_view` | Sweep oscilloscope split-at-head |
 | `pineal-financial` | `paint_candles` | OHLC + agregación por bucket temporal |
+| `pineal-hexbin` | `paint_hexbin` | Bineado hexagonal pointy-top + ramp Viridis |
+| `pineal-contour` | `paint_contours` | Marching squares 16 casos → polilíneas por nivel |
 
 ### 5.1 Barnes-Hut (added 2026-05-28)
 
@@ -149,15 +151,12 @@ Total al 2026-05-28: **130+ tests verdes**.
 
 ## 9. Roadmap
 
-- **PDF exporter** sobre `printpdf` consumiendo el mismo `RenderPlan`,
-  con decimación contextual por DPI
-  (`target = width_inches × dpi × vertices_per_pixel`).
-- **Hexbin** + **contour** plots (`pineal-hexbin`, `pineal-contour`) para
-  cuando `cosmos`/`tinkuy` los necesiten.
 - **GPU direct backend (wgpu)** — paint específico para campos densos
   (>1M puntos) sin pasar por vello.
-- **FDEB** (Force-Directed Edge Bundling) para grafos densos: bundle de
-  edges por bezier compartido. Doc inicial en `pineal-core::fdeb`.
+- **FDEB** (Force-Directed Edge Bundling) para grafos densos: bundle
+  de edges por bezier compartido.
+- **PDF: decimación contextual por DPI** (hoy el exporter emite todos
+  los vértices). `target = width_inches × dpi × vertices_per_pixel`.
 
 ## 10. Lo que NO va a pineal
 

@@ -27,29 +27,11 @@ pub mod spatial;
 pub mod lttb;
 pub mod scale;
 
-// Algoritmos de layout — quedan como placeholders hasta que cada
-// módulo de visualización (mesh, treemap, flow) los demande.
-
-/// Barnes-Hut quadtree para layouts force-directed.
-///
-/// Cuando se implemente: el quadtree es un `Vec<f32>` plano de
-/// stride 7 (cm_x, cm_y, mass, half_size, center_x, center_y,
-/// child_base), no un árbol de objetos. Rebuild O(n) por frame
-/// sin allocations.
-pub mod barnes_hut {}
-
-/// Sugiyama-lite jerárquico: cycle-removal por DFS + Kahn layering
-/// + barycenter ordering con inversion-count crossings.
-pub mod sugiyama {}
-
-/// Squarified treemap (Bruls / d3-hierarchy). Worst-aspect formula
-/// usa el lado *corto* del rectángulo restante.
-pub mod squarify {}
-
-/// Subtree-width tree layout: BFS spanning + bottom-up width
-/// measurement + top-down placement. Simpler que Reingold-Tilford.
-pub mod tree_layout {}
-
-/// Force-Directed Edge Bundling (FDEB-lite, single quadratic-bezier
-/// control point por edge).
-pub mod fdeb {}
+// Algoritmos de layout: cada uno vive en el crate de la viz que lo
+// usa, no acá. Esto es deliberado — `pineal-core` no debe arrastrar
+// dependencias de visualización.
+//
+// - Barnes-Hut + Sugiyama + tree layout: `pineal-mesh`.
+// - Squarified treemap: `pineal-treemap`.
+// - Sankey layered: `pineal-flow`.
+// - FDEB (Force-Directed Edge Bundling): roadmap, vendrá a `pineal-mesh`.

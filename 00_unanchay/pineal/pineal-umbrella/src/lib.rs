@@ -51,3 +51,9 @@ pub use pineal_phosphor as phosphor;
 
 #[cfg(feature = "export")]
 pub use pineal_export as export;
+
+#[cfg(feature = "hexbin")]
+pub use pineal_hexbin as hexbin;
+
+#[cfg(feature = "contour")]
+pub use pineal_contour as contour;

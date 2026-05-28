@@ -8,9 +8,11 @@ Catalog of specialized canvases (Cartesian · polar · mesh · treemap · phosph
 
 ```sh
 cargo run --release -p pineal-demo            # cartesian multi-series
+cargo run --release -p pineal-contour-demo    # marching squares + heatmap
 cargo run --release -p pineal-financial-demo  # candlesticks OHLC
 cargo run --release -p pineal-flow-demo       # Sankey
 cargo run --release -p pineal-heatmap-demo    # heatmap 48×32 viviente
+cargo run --release -p pineal-hexbin-demo     # scatter density hexbin
 cargo run --release -p pineal-mesh-demo       # grafo force-directed
 cargo run --release -p pineal-phosphor-demo   # trail tipo CRT
 cargo run --release -p pineal-polar-demo      # pie/donut + radar
@@ -39,7 +41,9 @@ cargo run --release -p pineal-treemap-demo    # treemap squarified
 | [`pineal-stream`](pineal-stream/README.md) | Scrolling time series. |
 | [`pineal-financial`](pineal-financial/README.md) | Candles, volumes, technical overlays. |
 | [`pineal-umbrella`](pineal-umbrella/README.md) | Compose multiple pineals over a viewport. |
-| [`pineal-export`](pineal-export/README.md) | SVG (vector) + PNG (raster). |
+| [`pineal-export`](pineal-export/README.md) | SVG (vector) + PNG (raster) + PDF. |
+| `pineal-hexbin` | Bineado hexagonal pointy-top para scatter density. |
+| `pineal-contour` | Marching squares: isolíneas sobre matrices escalares. |
 | `pineal-demo` | Cartesian multi-series. |
 | `pineal-financial-demo` | OHLC candlesticks. |
 | `pineal-flow-demo` | Sankey. |
