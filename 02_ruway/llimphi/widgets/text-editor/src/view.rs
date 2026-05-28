@@ -409,6 +409,17 @@ fn build_content<Msg: Clone + 'static>(
     let caret = state.cursor.caret;
     let mut children: Vec<View<Msg>> = Vec::new();
 
+    // 0) Tintes por línea — la capa más baja, debajo de todo el resto.
+    //    Pinta un rect del ancho completo del área de contenido por
+    //    cada línea con tinte asignado. El caller elige el alpha — el
+    //    widget no lo modula. Si la línea cae fuera de viewport o no
+    //    tiene tinte, no se pinta nada.
+    for n in scroll..end_line {
+        if let Some(Some(c)) = state.line_tints.get(n) {
+            children.push(line_tint(n - scroll, *c, metrics));
+        }
+    }
+
     // 1) Fondo del renglón activo — sólo el del primary cursor.
     if caret.line >= scroll && caret.line < end_line {
         children.push(line_highlight(caret.line - scroll, metrics, palette));
@@ -491,6 +502,31 @@ fn build_content<Msg: Clone + 'static>(
         llimphi_ui::DragPhase::End => None,
     })
     .children(children)
+}
+
+/// Rect de tinte para una línea. Cubre el ancho completo y el alto
+/// exacto de la línea, pintado al color literal pasado (el caller
+/// elige el alpha). Posición absoluta dentro del área de contenido.
+fn line_tint<Msg: Clone + 'static>(
+    line: usize,
+    color: Color,
+    metrics: EditorMetrics,
+) -> View<Msg> {
+    View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            left: length(0.0_f32),
+            top: length(line as f32 * metrics.line_height),
+            right: length(0.0_f32),
+            bottom: auto(),
+        },
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(metrics.line_height),
+        },
+        ..Default::default()
+    })
+    .fill(color)
 }
 
 fn line_highlight<Msg: Clone + 'static>(

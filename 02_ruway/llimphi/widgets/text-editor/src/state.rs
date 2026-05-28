@@ -65,6 +65,15 @@ pub struct EditorState {
     /// es responsable de actualizar este campo cuando reaccione a
     /// `Changed`. Vacío = sin guardas, comportamiento clásico de IDE.
     pub guard_lines: Vec<usize>,
+    /// Tinte de fondo por línea. `line_tints[i]` controla la línea
+    /// `i` del buffer: `Some(color)` pinta un rectángulo del ancho
+    /// completo del área de contenido al ALPHA del color, **debajo**
+    /// del texto y de cualquier highlight; `None` deja la línea sin
+    /// tinte. Vacío o ausente = sin tintes (modo IDE clásico). Pensado
+    /// para colorear zonas en editores narrativos sin afectar la
+    /// lectura — los callers deben elegir colores con alpha bajo (≤
+    /// ~40/255 sobre el bg).
+    pub line_tints: Vec<Option<llimphi_ui::llimphi_raster::peniko::Color>>,
     pub undo: UndoStack,
     /// Línea inicial visible — el viewport renderiza
     /// `[scroll_offset, scroll_offset + visible)`. El caller llama a
@@ -109,6 +118,7 @@ impl EditorState {
             diagnostics: Vec::new(),
             options: EditorOptions::default(),
             guard_lines: Vec::new(),
+            line_tints: Vec::new(),
             undo: UndoStack::new(),
             scroll_offset: 0,
             edit_seq: 0,
@@ -196,9 +206,10 @@ impl EditorState {
 
     pub fn set_text(&mut self, s: &str) {
         self.buffer.set_text(s);
-        // Las guardas previas referían al texto viejo: limpiar. El
-        // caller las repuebla cuando reaccione al cambio.
+        // Las guardas y tintes previos referían al texto viejo:
+        // limpiar. El caller los repuebla cuando reaccione al cambio.
         self.guard_lines.clear();
+        self.line_tints.clear();
         // Clampea el caret a la nueva longitud.
         let last_line = self.buffer.len_lines().saturating_sub(1);
         let col = self.buffer.line_len_chars(last_line);

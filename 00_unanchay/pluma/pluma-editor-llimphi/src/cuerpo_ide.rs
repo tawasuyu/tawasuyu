@@ -38,6 +38,7 @@
 
 use std::collections::HashMap;
 
+use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::View;
 use llimphi_widget_text_editor::{
     text_editor_view_highlighted, ApplyResult, Clipboard, EditorMetrics, EditorOptions,
@@ -277,7 +278,7 @@ impl CuerpoIde {
         }
     }
 
-    /// Recomputa `state.guard_lines` desde cero:
+    /// Recomputa `state.guard_lines` Y `state.line_tints` desde cero.
     /// 1. Enumera los índices de línea vacía del buffer (cada una es
     ///    candidata a guarda — aparece por un `\n\n` o trailing).
     /// 2. Las matchea por ordinal con `fundido_junctions`: la *i*-ésima
@@ -291,30 +292,46 @@ impl CuerpoIde {
     ///    la zona, es contenido editable.
     pub fn recomputar_guard_lines(&mut self) {
         let texto = self.state.text();
+        let total_lineas = self.state.line_count();
         let mut guards: Vec<usize> = Vec::new();
+        // Cada línea del buffer pertenece a un grupo (zona). Empezamos
+        // en grupo 0; cada vez que cruzamos un separador (junction
+        // que NO está fundida), incrementamos. Líneas guarda no
+        // pertenecen a ningún grupo (color `None`).
+        let mut tints: Vec<Option<Color>> = vec![None; total_lineas];
+        let mut grupo_actual = 0usize;
         let mut junction_idx = 0usize;
         for (linea, contenido) in texto.lines().enumerate() {
-            if !contenido.is_empty() {
-                continue;
+            if contenido.is_empty() {
+                // Línea candidata a junction.
+                let fundida = self
+                    .fundido_junctions
+                    .get(junction_idx)
+                    .copied()
+                    .unwrap_or(false);
+                if !fundida {
+                    // Separador: guarda + corte de grupo.
+                    guards.push(linea);
+                    if linea < tints.len() {
+                        tints[linea] = None;
+                    }
+                    grupo_actual += 1;
+                } else {
+                    // Fundida: la línea es contenido de la zona, hereda el tinte.
+                    if linea < tints.len() {
+                        tints[linea] = Some(color_de_grupo(grupo_actual));
+                    }
+                }
+                junction_idx += 1;
+            } else {
+                // Línea de contenido — tinte del grupo actual.
+                if linea < tints.len() {
+                    tints[linea] = Some(color_de_grupo(grupo_actual));
+                }
             }
-            // Esta línea es candidata. Es guarda salvo que el flag
-            // explícito diga "fundida".
-            let fundida = self
-                .fundido_junctions
-                .get(junction_idx)
-                .copied()
-                .unwrap_or(false);
-            if !fundida {
-                guards.push(linea);
-            }
-            junction_idx += 1;
         }
-        // Edge case: si el texto termina con `\n`, `lines()` no emite
-        // la línea trailing vacía — pero el rope sí la cuenta. Agregar
-        // como guarda si correspondiera. Lo dejamos sin guarda
-        // (comportamiento clásico) — el caret terminará ahí sólo si
-        // el caller lo posiciona explícitamente.
         self.state.set_guard_lines(guards);
+        self.state.line_tints = tints;
         self.seq_guardas = self.state.edit_seq;
     }
 
@@ -538,6 +555,45 @@ pub fn cuerpo_ide_desde_texto(texto: impl Into<String>, atom_ids: Vec<Uuid>) -> 
     ide.recomputar_guard_lines();
     ide.state.snap_off_guards(-1);
     ide
+}
+
+/// Paleta circular de 8 tonalidades para colorear las zonas del IDE
+/// narrativo. Cada índice de grupo `i` recibe `PALETA_ZONAS[i %
+/// PALETA_ZONAS.len()]` — el alpha está calculado para sumar como
+/// tinte sutil sobre el fondo del editor (≤16/255), sin afectar la
+/// lectura del texto. Los matices están repartidos en el círculo
+/// cromático para que dos grupos adyacentes se distingan al ojo aun
+/// con baja saturación.
+const PALETA_ZONAS: [Color; 8] = [
+    // ámbar tibio
+    Color::from_rgba8(238, 178, 53, 16),
+    // verde salvia
+    Color::from_rgba8(94, 184, 124, 16),
+    // azul lavanda
+    Color::from_rgba8(120, 150, 220, 16),
+    // rosa palo
+    Color::from_rgba8(220, 130, 160, 16),
+    // turquesa
+    Color::from_rgba8(80, 190, 200, 16),
+    // violeta suave
+    Color::from_rgba8(170, 130, 220, 16),
+    // arena
+    Color::from_rgba8(210, 190, 130, 16),
+    // coral
+    Color::from_rgba8(230, 140, 120, 16),
+];
+
+/// Devuelve el color asignado al grupo `idx` siguiendo la paleta
+/// circular [`PALETA_ZONAS`].
+pub fn color_de_grupo(idx: usize) -> Color {
+    PALETA_ZONAS[idx % PALETA_ZONAS.len()]
+}
+
+/// Cuántos grupos distintos pueden colorearse antes de que se repita
+/// la tonalidad. Útil para que la UI muestre "N grupos · ciclo cada
+/// `paleta_zonas_len()`".
+pub const fn paleta_zonas_len() -> usize {
+    PALETA_ZONAS.len()
 }
 
 #[cfg(test)]
@@ -849,6 +905,65 @@ mod pruebas {
         assert_eq!(ide.linea_de_junction(0), Some(1));
         assert_eq!(ide.linea_de_junction(1), Some(3));
         assert_eq!(ide.linea_de_junction(2), None);
+    }
+
+    #[test]
+    fn line_tints_asigna_un_color_por_grupo() {
+        let (c, atoms) = cuerpo_con_atoms(&["A", "B", "C"]);
+        let idx = indice(&atoms);
+        let ide = CuerpoIde::from_cuerpo(&c, &idx);
+        // Líneas: 0="A", 1="", 2="B", 3="", 4="C". Tres grupos.
+        let t = &ide.state.line_tints;
+        assert_eq!(t.len(), 5);
+        // Cada atom-line tiene tinte del grupo correspondiente.
+        assert_eq!(t[0], Some(color_de_grupo(0)));
+        assert_eq!(t[2], Some(color_de_grupo(1)));
+        assert_eq!(t[4], Some(color_de_grupo(2)));
+        // Guardas (líneas 1 y 3): sin tinte.
+        assert_eq!(t[1], None);
+        assert_eq!(t[3], None);
+    }
+
+    #[test]
+    fn fundir_junction_unifica_el_color_del_grupo() {
+        let (c, atoms) = cuerpo_con_atoms(&["A", "B", "C"]);
+        let idx = indice(&atoms);
+        let mut ide = CuerpoIde::from_cuerpo(&c, &idx);
+        // Fundir junction 0 → atoms A+B forman un solo grupo (0).
+        // Atom C sigue siendo grupo 1.
+        ide.fundir_junction(0);
+        let t = &ide.state.line_tints;
+        assert_eq!(t[0], Some(color_de_grupo(0)));
+        // Línea 1 deja de ser guarda y hereda el tinte del grupo 0.
+        assert_eq!(t[1], Some(color_de_grupo(0)));
+        assert_eq!(t[2], Some(color_de_grupo(0)));
+        // Junction 1 sigue siendo separador → línea 3 es guarda sin tinte.
+        assert_eq!(t[3], None);
+        // Atom C es grupo 1 (no 2, porque se fusionó el primero).
+        assert_eq!(t[4], Some(color_de_grupo(1)));
+    }
+
+    #[test]
+    fn separar_revierte_color_a_grupos_originales() {
+        let (c, atoms) = cuerpo_con_atoms(&["A", "B"]);
+        let idx = indice(&atoms);
+        let mut ide = CuerpoIde::from_cuerpo(&c, &idx);
+        ide.fundir_junction(0);
+        // Tras fundir, ambos atoms son grupo 0 (mismo color).
+        assert_eq!(ide.state.line_tints[0], ide.state.line_tints[2]);
+        ide.separar_junction(0);
+        // Tras separar, colores distintos.
+        assert_ne!(ide.state.line_tints[0], ide.state.line_tints[2]);
+    }
+
+    #[test]
+    fn paleta_ciclica_repite_color_pasados_8_grupos() {
+        // 9 atoms → grupo 0..8 → el último debe compartir color con el primero.
+        let textos: Vec<&str> = vec!["a", "b", "c", "d", "e", "f", "g", "h", "i"];
+        let (c, atoms) = cuerpo_con_atoms(&textos);
+        let idx = indice(&atoms);
+        let ide = CuerpoIde::from_cuerpo(&c, &idx);
+        assert_eq!(ide.state.line_tints[0], ide.state.line_tints[16]);
     }
 
     #[test]
