@@ -179,6 +179,11 @@ pub struct Model {
     /// documento se renderea normal. Sólo aplica cuando el chrome corre
     /// con un Profile cableado (sino las listas están vacías).
     pub panel: Option<PanelKind>,
+    /// Filtro de texto del panel (Bookmarks/History). Substring
+    /// case-insensitive contra `title` y `url` de cada item. Vacío =
+    /// muestra todo. Persistente entre toggle del panel pero se limpia
+    /// si el usuario cambia de pestaña (no — por ahora se conserva).
+    pub panel_filter: TextInputState,
 }
 
 /// Tipo de panel auxiliar que reemplaza el viewport cuando está abierto.
@@ -250,6 +255,8 @@ pub enum Msg {
     /// Click en el botón ✕ de un bookmark — lo borra del profile y
     /// persiste.
     RemoveBookmark(puriy_core::BookmarkId),
+    /// Teclas redirigidas al input del filtro de panel (Bookmarks/History).
+    PanelFilterKey(KeyEvent),
     /// Click en `<summary>` (o en la flecha que lo precede): toggle del
     /// `<details>` cuyo índice DFS es `idx`. Si el índice excede el
     /// `details_open` actual, el msg es no-op (ej: re-render durante una
@@ -288,6 +295,7 @@ impl App for Puriy {
             find_input: TextInputState::new(),
             find_current: 0,
             panel: None,
+            panel_filter: TextInputState::new(),
         }
     }
 
@@ -345,9 +353,16 @@ impl App for Puriy {
             }
             return Some(Msg::FindKey(e.clone()));
         }
-        // Esc cierra el panel (bookmarks/history) si está abierto.
-        if model.panel.is_some() && matches!(&e.key, Key::Named(NamedKey::Escape)) {
-            return Some(Msg::ClosePanel);
+        // Panel abierto (bookmarks/history): Esc cierra; resto va al
+        // input del filtro. F5 no se intercepta (es semánticamente la
+        // pestaña activa, no el panel).
+        if model.panel.is_some() {
+            if matches!(&e.key, Key::Named(NamedKey::Escape)) {
+                return Some(Msg::ClosePanel);
+            }
+            if !matches!(&e.key, Key::Named(NamedKey::F5)) {
+                return Some(Msg::PanelFilterKey(e.clone()));
+            }
         }
         // Si la address bar tiene foco, redirige las teclas al input.
         if model.active().addr_focused && !matches!(&e.key, Key::Named(NamedKey::F5)) {
@@ -426,6 +441,7 @@ impl App for Puriy {
                 // Cualquier navegación cierra el panel — el usuario quiere
                 // ver la página, no la lista de bookmarks/history.
                 m.panel = None;
+                m.panel_filter.clear();
                 start_load(&mut m, target, /* push_history */ true, handle);
             }
             Msg::Scroll(dy) => {
@@ -584,15 +600,18 @@ impl App for Puriy {
                     Some(PanelKind::Bookmarks) => None,
                     _ => Some(PanelKind::Bookmarks),
                 };
+                m.panel_filter.clear();
             }
             Msg::ToggleHistory => {
                 m.panel = match m.panel {
                     Some(PanelKind::History) => None,
                     _ => Some(PanelKind::History),
                 };
+                m.panel_filter.clear();
             }
             Msg::ClosePanel => {
                 m.panel = None;
+                m.panel_filter.clear();
             }
             Msg::RemoveBookmark(id) => {
                 if let Some(handle) = profile_handle() {
@@ -610,6 +629,9 @@ impl App for Puriy {
                 if let Some(slot) = t.details_open.get_mut(idx) {
                     *slot = !*slot;
                 }
+            }
+            Msg::PanelFilterKey(e) => {
+                m.panel_filter.apply_key(&e);
             }
         }
         m
@@ -629,7 +651,7 @@ impl App for Puriy {
             0
         };
         let body = match model.panel {
-            Some(kind) => panel_view(kind),
+            Some(kind) => panel_view(kind, &model.panel_filter),
             None => viewport(model.active(), model.zoom, &query_lc, model.find_current),
         };
 
@@ -740,11 +762,31 @@ fn find_bar(input: &TextInputState, count: usize, current: usize) -> View<Msg> {
 
 /// Panel auxiliar que reemplaza el viewport con la lista de bookmarks o
 /// el historial. Lee directamente del Profile vía `profile_handle()`; si
-/// el chrome corre sin profile (modo efímero) muestra un mensaje.
-fn panel_view(kind: PanelKind) -> View<Msg> {
-    let (title, items) = match kind {
+/// el chrome corre sin profile (modo efímero) muestra un mensaje. El
+/// filtro substring (case-insensitive) se aplica al title y url de cada
+/// item; vacío = sin filtro.
+fn panel_view(kind: PanelKind, filter: &TextInputState) -> View<Msg> {
+    let (title, all_items) = match kind {
         PanelKind::Bookmarks => collect_bookmarks(),
         PanelKind::History => collect_history(),
+    };
+    let q = filter.text();
+    let q_lc = q.to_lowercase();
+    let items: Vec<PanelItem> = if q_lc.is_empty() {
+        all_items
+    } else {
+        all_items
+            .into_iter()
+            .filter(|it| {
+                it.title.to_lowercase().contains(&q_lc)
+                    || it.url.to_lowercase().contains(&q_lc)
+            })
+            .collect()
+    };
+    let title = if q_lc.is_empty() {
+        title
+    } else {
+        format!("{title} · filtrado: {} items", items.len())
     };
 
     let header = View::new(Style {
@@ -806,12 +848,36 @@ fn panel_view(kind: PanelKind) -> View<Msg> {
     .clip(true)
     .children(list);
 
+    let palette = TextInputPalette::default();
+    let placeholder = match kind {
+        PanelKind::Bookmarks => "filtrar bookmarks por title o url…",
+        PanelKind::History => "filtrar historial por title o url…",
+    };
+    let filter_input = text_input_view(filter, placeholder, true, &palette, Msg::ClosePanel);
+    let filter_row = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(32.0_f32) },
+        padding: Rect {
+            left: length(12.0_f32),
+            right: length(12.0_f32),
+            top: length(4.0_f32),
+            bottom: length(4.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(Color::from_rgb8(45, 45, 55))
+    .children(vec![View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![filter_input])]);
+
     View::new(Style {
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         flex_direction: FlexDirection::Column,
         ..Default::default()
     })
-    .children(vec![header, body])
+    .children(vec![header, filter_row, body])
 }
 
 /// Item de panel: title arriba, url abajo (más chico/gris), click→navega.
