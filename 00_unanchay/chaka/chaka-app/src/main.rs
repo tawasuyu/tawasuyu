@@ -1,4 +1,4 @@
-//! `chaka_app` — la CLI del transpilador COBOL → Rust.
+//! `chaka-app` — la CLI del transpilador COBOL → Rust.
 //!
 //! Envuelve el pipeline (lexer → parser → IR → codegen) y el validador
 //! en sombra en cuatro comandos:
@@ -16,16 +16,13 @@ use anyhow::{Context, Result};
 use chaka_ir::{Ir, PerformTarget, Stmt};
 use clap::{Parser, Subcommand};
 
-/// Ruta a `chaka_app-runtime`, fijada al compilar — el crate generado por
-/// `scaffold` la usa como dependencia.
-const RUNTIME_PATH: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../modules/chaka_app/chaka_app-runtime"
-);
+/// Ruta absoluta al crate `chaka-runtime`, fijada al compilar — el
+/// `Cargo.toml` que `scaffold` emite la usa para depender del runtime.
+const RUNTIME_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../chaka-runtime");
 
 /// El transpilador de COBOL a Rust.
 #[derive(Parser)]
-#[command(name = "chaka_app", version, about = "Transpilador COBOL → Rust")]
+#[command(name = "chaka", version, about = "Transpilador COBOL → Rust")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -68,7 +65,7 @@ fn main() -> ExitCode {
     match dispatch(Cli::parse().command) {
         Ok(code) => code,
         Err(err) => {
-            eprintln!("chaka_app: {err:#}");
+            eprintln!("chaka: {err:#}");
             ExitCode::FAILURE
         }
     }
@@ -91,7 +88,7 @@ fn transpile(input: &Path, output: Option<&Path>) -> Result<ExitCode> {
         Some(path) => {
             fs::write(path, rust)
                 .with_context(|| format!("no se pudo escribir {}", path.display()))?;
-            eprintln!("chaka_app: escrito {}", path.display());
+            eprintln!("chaka: escrito {}", path.display());
         }
         None => print!("{rust}"),
     }
@@ -108,7 +105,7 @@ fn scaffold(input: &Path, output: &Path) -> Result<ExitCode> {
     fs::write(output.join("src/main.rs"), rust)?;
     fs::write(output.join("Cargo.toml"), cargo_toml(&name))?;
 
-    eprintln!("chaka_app: crate «{name}» generado en {}", output.display());
+    eprintln!("chaka: crate «{name}» generado en {}", output.display());
     eprintln!(
         "  cargo run --manifest-path {}",
         output.join("Cargo.toml").display()
@@ -125,7 +122,7 @@ fn run(input: &Path) -> Result<ExitCode> {
     }
     warn_unknowns(&ir);
     if outcome.halt == chaka_shadow::Halt::StepLimit {
-        eprintln!("chaka_app: aviso — se agotó el tope de pasos (¿un bucle sin fin?)");
+        eprintln!("chaka: aviso — se agotó el tope de pasos (¿un bucle sin fin?)");
         return Ok(ExitCode::FAILURE);
     }
     Ok(ExitCode::SUCCESS)
@@ -141,10 +138,10 @@ fn check(input: &Path, expect: &Path) -> Result<ExitCode> {
     let want: Vec<&str> = expected.lines().map(|l| l.trim_end()).collect();
 
     if got == want {
-        println!("chaka_app: OK — {} líneas coinciden", got.len());
+        println!("chaka: OK — {} líneas coinciden", got.len());
         Ok(ExitCode::SUCCESS)
     } else {
-        eprintln!("chaka_app: FALLA — la salida difiere de {}", expect.display());
+        eprintln!("chaka: FALLA — la salida difiere de {}", expect.display());
         report_diff(&got, &want);
         Ok(ExitCode::FAILURE)
     }
@@ -175,7 +172,7 @@ fn cargo_toml(name: &str) -> String {
          path = \"src/main.rs\"\n\
          \n\
          [dependencies]\n\
-         chaka_app-runtime = {{ path = \"{RUNTIME_PATH}\" }}\n\
+         chaka-runtime = {{ path = \"{RUNTIME_PATH}\" }}\n\
          \n\
          [workspace]\n"
     )
@@ -215,7 +212,7 @@ fn warn_unknowns(ir: &Ir) {
     verbs.sort();
     verbs.dedup();
     eprintln!(
-        "chaka_app: aviso — verbos no transpilados (se omitieron): {}",
+        "chaka: aviso — verbos no transpilados (se omitieron): {}",
         verbs.join(", ")
     );
 }
@@ -287,7 +284,7 @@ mod tests {
     fn cargo_toml_names_the_crate_and_the_runtime() {
         let toml = cargo_toml("demo");
         assert!(toml.contains("name = \"demo\""));
-        assert!(toml.contains("chaka_app-runtime"));
+        assert!(toml.contains("chaka-runtime"));
         assert!(toml.contains("[workspace]"));
     }
 

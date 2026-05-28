@@ -1,12 +1,12 @@
-//! `chaka_app-shadow` — el validador en sombra del transpilador.
+//! `chaka-shadow` — el validador en sombra del transpilador.
 //!
-//! Certifica que el pipeline de chaka_app (lexer → parser → IR → codegen)
+//! Certifica que el pipeline de chaka (lexer → parser → IR → codegen)
 //! preserva la semántica del programa COBOL original. Lo hace con una
 //! **ejecución sombra**: un intérprete que corre el [`Ir`] directamente
-//! sobre los tipos de `chaka_app-runtime`, sin compilar nada.
+//! sobre los tipos de `chaka-runtime`, sin compilar nada.
 //!
 //! El intérprete es una segunda ruta de ejecución, independiente del
-//! código que emite `chaka_app-codegen`. Si la sombra y el transpilado
+//! código que emite `chaka-codegen`. Si la sombra y el transpilado
 //! produjeran salidas distintas, eso delataría un bug del codegen.
 //!
 //! - [`interpret`] — ejecuta un `Ir` y devuelve su salida.
@@ -14,7 +14,7 @@
 //!
 //! La referencia contra la que se comparan los resultados es, en la
 //! v1, un conjunto de salidas esperadas verificadas a mano (el corpus
-//! en `crates/modules/chaka_app/corpus/`). Cuando haya un GnuCOBOL
+//! en `crates/modules/chaka/corpus/`). Cuando haya un GnuCOBOL
 //! disponible, un modo futuro podrá diferenciar contra el compilador
 //! de COBOL real — la validación «original vs transpilado» plena.
 //!

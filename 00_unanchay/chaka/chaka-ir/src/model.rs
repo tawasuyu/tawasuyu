@@ -2,7 +2,7 @@
 //! lista de campos elementales y a los nombres de condición (nivel 88).
 //!
 //! Es la fuente única de verdad sobre «qué tipo de campo describe una
-//! PICTURE» — `chaka_app-codegen` y `chaka_app-shadow` la consumen en vez de
+//! PICTURE» — `chaka-codegen` y `chaka-shadow` la consumen en vez de
 //! reimplementar cada uno la clasificación.
 
 use chaka_bcd::{Decimal, Picture};
@@ -149,7 +149,7 @@ fn walk(items: &[DataItem], model: &mut DataModel) -> Vec<String> {
 }
 
 /// Clasifica una cláusula PICTURE: alfanumérica si tiene `X`/`A`,
-/// numérica si `chaka_app-bcd` la parsea; una PICTURE de edición se trata
+/// numérica si `chaka-bcd` la parsea; una PICTURE de edición se trata
 /// como texto de presentación.
 fn classify(pic: Option<&str>) -> Option<(FieldKind, Option<String>)> {
     let up = pic?.to_uppercase();

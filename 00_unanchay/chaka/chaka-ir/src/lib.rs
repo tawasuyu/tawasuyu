@@ -1,7 +1,7 @@
-//! `chaka_app-ir` — la representación intermedia del transpilador.
+//! `chaka-ir` — la representación intermedia del transpilador.
 //!
 //! Tercera etapa del pipeline COBOL→Rust: toma el [`Program`] de
-//! `chaka_app-parser` (cuyo PROCEDURE division es una lista de sentencias
+//! `chaka-parser` (cuyo PROCEDURE division es una lista de sentencias
 //! con tokens crudos) y produce un [`Ir`] donde cada sentencia ya es un
 //! árbol de [`Stmt`] tipados: `MOVE`, `IF`, `PERFORM`, `COMPUTE`, los
 //! verbos aritméticos, etc.

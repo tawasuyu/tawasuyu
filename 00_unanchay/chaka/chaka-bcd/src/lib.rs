@@ -1,6 +1,6 @@
-//! `chaka_app-bcd` — aritmética decimal con semántica COBOL.
+//! `chaka-bcd` — aritmética decimal con semántica COBOL.
 //!
-//! El corazón numérico del transpilador chaka_app. COBOL no calcula en
+//! El corazón numérico del transpilador chaka. COBOL no calcula en
 //! binario flotante: opera sobre campos decimales de precisión fija
 //! declarados con una cláusula `PICTURE`. Reproducir un programa COBOL
 //! fielmente exige reproducir esa aritmética dígito a dígito — eso es lo
@@ -12,7 +12,7 @@
 //!
 //! Determinista y sin dependencias de plataforma: mismo programa, mismos
 //! dígitos, en cualquier máquina. El lexer, el parser, el IR y el codegen
-//! de chaka_app se construyen sobre este cimiento.
+//! de chaka se construyen sobre este cimiento.
 
 #![forbid(unsafe_code)]
 

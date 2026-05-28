@@ -8,7 +8,7 @@ pub use chaka_parser::{DataItem, FileEntry, Token};
 pub struct Ir {
     /// El `PROGRAM-ID` ("" si el programa no lo declara).
     pub program_id: String,
-    /// El árbol de [`DataItem`] tal cual lo produjo `chaka_app-parser`,
+    /// El árbol de [`DataItem`] tal cual lo produjo `chaka-parser`,
     /// con su estructura de grupos.
     pub data: Vec<DataItem>,
     /// El modelo de datos resuelto: los datos elementales aplanados y

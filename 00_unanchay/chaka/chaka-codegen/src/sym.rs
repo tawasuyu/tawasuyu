@@ -1,12 +1,12 @@
 //! Tabla de símbolos del código generado: los campos del `struct
 //! Program` y los nombres de condición, derivados del modelo de datos
-//! resuelto que entrega `chaka_app-ir`.
+//! resuelto que entrega `chaka-ir`.
 
 use std::collections::HashMap;
 
 use chaka_ir::{ConditionName, Ir};
 
-/// El tipo de campo lo aporta `chaka_app-ir`; se reexporta para que el
+/// El tipo de campo lo aporta `chaka-ir`; se reexporta para que el
 /// resto del crate lo nombre como `crate::sym::FieldKind`.
 pub(crate) use chaka_ir::FieldKind;
 

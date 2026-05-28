@@ -1,5 +1,5 @@
 //! Emisión de los statements del PROCEDURE: cada [`Stmt`] se traduce a
-//! una o varias líneas de código Rust sobre `chaka_app-runtime`.
+//! una o varias líneas de código Rust sobre `chaka-runtime`.
 
 use chaka_ir::{
     CmpOp, Cond, FileMode, InspectOp, Operand, Perform, PerformControl, PerformTarget, Stmt,
@@ -19,7 +19,7 @@ pub(crate) fn emit_stmt(em: &mut Emitter, sym: &Symbols, stmt: &Stmt) {
         Stmt::Move { from, to } => emit_move(em, sym, from, to),
         Stmt::Display { items } => emit_display(em, sym, items),
         Stmt::Accept { .. } => {
-            em.line("// chaka_app: ACCEPT — entrada interactiva no soportada en v1");
+            em.line("// chaka: ACCEPT — entrada interactiva no soportada en v1");
         }
         Stmt::Compute {
             targets,
@@ -100,7 +100,7 @@ pub(crate) fn emit_stmt(em: &mut Emitter, sym: &Symbols, stmt: &Stmt) {
         Stmt::Perform(p) => emit_perform(em, sym, p),
         Stmt::GoTo { target } => {
             em.line(&format!(
-                "self.{}(); return; // chaka_app: GO TO (aproximado)",
+                "self.{}(); return; // chaka: GO TO (aproximado)",
                 paragraph_method(target)
             ));
         }
@@ -108,7 +108,7 @@ pub(crate) fn emit_stmt(em: &mut Emitter, sym: &Symbols, stmt: &Stmt) {
         Stmt::Exit => em.line("return;"),
         Stmt::Continue => em.line("// CONTINUE"),
         Stmt::Unknown { verb, .. } => {
-            em.line(&format!("// chaka_app: verbo no transpilado — {verb}"));
+            em.line(&format!("// chaka: verbo no transpilado — {verb}"));
         }
     }
 }
@@ -131,7 +131,7 @@ fn emit_store(em: &mut Emitter, sym: &Symbols, target: &Operand, value: &str, ro
         Some((lref, FieldKind::Text { .. })) => {
             em.line(&format!("{lref}.store(({value}).to_string().as_str());"));
         }
-        None => em.line("// chaka_app: destino no resuelto"),
+        None => em.line("// chaka: destino no resuelto"),
     }
 }
 
@@ -163,7 +163,7 @@ fn emit_move(em: &mut Emitter, sym: &Symbols, from: &Operand, to: &[Operand]) {
                     em.line(&format!("{lref}.store({});", operand_str(sym, from)));
                 }
             }
-            None => em.line("// chaka_app: destino MOVE no resuelto"),
+            None => em.line("// chaka: destino MOVE no resuelto"),
         }
     }
 }
@@ -309,7 +309,7 @@ fn emit_inplace(
             let method = if rounded { "store_rounded" } else { "store" };
             em.line(&format!("{lref}.{method}({lref}.value().{op}(&({rhs})));"));
         }
-        _ => em.line("// chaka_app: destino aritmético no resuelto"),
+        _ => em.line("// chaka: destino aritmético no resuelto"),
     }
 }
 
@@ -428,7 +428,7 @@ fn emit_store_text(em: &mut Emitter, sym: &Symbols, target: &Operand, text: &str
                  .unwrap_or_else(|_| Decimal::zero()));"
             ));
         }
-        None => em.line("// chaka_app: destino no resuelto"),
+        None => em.line("// chaka: destino no resuelto"),
     }
 }
 
@@ -481,7 +481,7 @@ fn emit_inspect(em: &mut Emitter, sym: &Symbols, target: &Operand, op: &InspectO
                 Some((lref, FieldKind::Num { .. })) => em.line(&format!(
                     "{lref}.store({lref}.value().add(&Decimal::from_integer(__n)));"
                 )),
-                _ => em.line("// chaka_app: contador INSPECT no resuelto"),
+                _ => em.line("// chaka: contador INSPECT no resuelto"),
             }
             em.dedent();
             em.line("}");
@@ -526,7 +526,7 @@ fn emit_open(em: &mut Emitter, sym: &Symbols, mode: FileMode, files: &[String]) 
     for f in files {
         match sym.file(f) {
             Some(fs) => em.line(&format!("self.{}.{method}();", fs.ident)),
-            None => em.line("// chaka_app: OPEN de fichero no resuelto"),
+            None => em.line("// chaka: OPEN de fichero no resuelto"),
         }
     }
 }
@@ -536,7 +536,7 @@ fn emit_close(em: &mut Emitter, sym: &Symbols, files: &[String]) {
     for f in files {
         match sym.file(f) {
             Some(fs) => em.line(&format!("self.{}.close();", fs.ident)),
-            None => em.line("// chaka_app: CLOSE de fichero no resuelto"),
+            None => em.line("// chaka: CLOSE de fichero no resuelto"),
         }
     }
 }
@@ -545,7 +545,7 @@ fn emit_close(em: &mut Emitter, sym: &Symbols, files: &[String]) {
 /// en el registro del fichero.
 fn emit_read(em: &mut Emitter, sym: &Symbols, file: &str, at_end: &[Stmt], not_at_end: &[Stmt]) {
     let Some(fs) = sym.file(file) else {
-        em.line("// chaka_app: READ de fichero no resuelto");
+        em.line("// chaka: READ de fichero no resuelto");
         return;
     };
     let record_ident = sym.lookup(&fs.record).map(|r| r.ident.clone());
@@ -584,7 +584,7 @@ fn emit_write(em: &mut Emitter, sym: &Symbols, record: &str, from: Option<&Opera
                 ));
             }
         }
-        None => em.line("// chaka_app: WRITE de registro no resuelto"),
+        None => em.line("// chaka: WRITE de registro no resuelto"),
     }
 }
 
@@ -598,7 +598,7 @@ fn emit_set_true(em: &mut Emitter, sym: &Symbols, conditions: &[String]) {
                 let value = cn.value.clone();
                 emit_move(em, sym, &value, std::slice::from_ref(&target));
             }
-            None => em.line(&format!("// chaka_app: condición 88 no resuelta — {name}")),
+            None => em.line(&format!("// chaka: condición 88 no resuelta — {name}")),
         }
     }
 }
@@ -606,7 +606,7 @@ fn emit_set_true(em: &mut Emitter, sym: &Symbols, conditions: &[String]) {
 /// Resetea un campo completo (escalar o tabla entera).
 fn emit_reset(em: &mut Emitter, sym: &Symbols, name: &str) {
     let Some(f) = sym.lookup(name) else {
-        em.line(&format!("// chaka_app: INITIALIZE de {name} no resuelto"));
+        em.line(&format!("// chaka: INITIALIZE de {name} no resuelto"));
         return;
     };
     let reset = match f.kind {
@@ -630,7 +630,7 @@ fn emit_reset_element(em: &mut Emitter, sym: &Symbols, op: &Operand) {
     match field_ref(sym, op) {
         Some((lref, FieldKind::Num { .. })) => em.line(&format!("{lref}.store(Decimal::zero());")),
         Some((lref, FieldKind::Text { .. })) => em.line(&format!("{lref}.fill(' ');")),
-        None => em.line("// chaka_app: INITIALIZE no resuelto"),
+        None => em.line("// chaka: INITIALIZE no resuelto"),
     }
 }
 

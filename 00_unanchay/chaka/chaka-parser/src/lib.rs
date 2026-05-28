@@ -1,7 +1,7 @@
-//! `chaka_app-parser` — parser de COBOL'85 (subconjunto) a AST.
+//! `chaka-parser` — parser de COBOL'85 (subconjunto) a AST.
 //!
 //! Segunda etapa del transpilador COBOL→Rust: consume los [`Token`] del
-//! `chaka_app-lexer` y produce un [`Program`]. El alcance de la v1 es el
+//! `chaka-lexer` y produce un [`Program`]. El alcance de la v1 es el
 //! **esqueleto del programa**:
 //!
 //! - Las cuatro divisiones (`IDENTIFICATION`, `ENVIRONMENT`, `DATA`,
@@ -12,7 +12,7 @@
 //!   uno con sus [`Sentence`] (los tokens crudos de cada sentencia).
 //!
 //! Lo que **no** hace todavía: el parseo a nivel de statement (cada
-//! sentencia queda como `Vec<Token>` — es trabajo de `chaka_app-ir`), la
+//! sentencia queda como `Vec<Token>` — es trabajo de `chaka-ir`), la
 //! ENVIRONMENT division, CICS, SQL embebido y los dialectos IBM. Son
 //! las etapas siguientes del plan.
 //!
@@ -82,7 +82,7 @@ pub struct Paragraph {
 }
 
 /// Una sentencia: los tokens entre dos puntos terminadores. La v1 no
-/// parsea a nivel de statement — eso es trabajo de `chaka_app-ir`.
+/// parsea a nivel de statement — eso es trabajo de `chaka-ir`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sentence {
     pub tokens: Vec<Token>,

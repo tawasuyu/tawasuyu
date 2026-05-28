@@ -1,4 +1,4 @@
-//! `chaka_app-lexer` — tokenizador de COBOL.
+//! `chaka-lexer` — tokenizador de COBOL.
 //!
 //! Primera etapa del transpilador COBOL→Rust: convierte el texto fuente
 //! en una secuencia de [`Token`]. El lexer es **deliberadamente tonto**

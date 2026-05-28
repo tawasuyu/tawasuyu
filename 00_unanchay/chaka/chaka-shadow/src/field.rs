@@ -1,5 +1,5 @@
 //! El estado de los datos durante la ejecución sombra: el modelo de
-//! datos resuelto de `chaka_app-ir` se materializa en campos vivos.
+//! datos resuelto de `chaka-ir` se materializa en campos vivos.
 
 use std::collections::HashMap;
 

@@ -1,8 +1,8 @@
 //! El intérprete del IR: la ejecución «sombra» del programa COBOL.
 //!
-//! Ejecuta el [`Ir`] directamente sobre los tipos de `chaka_app-runtime`,
+//! Ejecuta el [`Ir`] directamente sobre los tipos de `chaka-runtime`,
 //! sin compilar nada. Es una segunda ruta de ejecución, independiente
-//! del código que emite `chaka_app-codegen` — eso es lo que lo hace un
+//! del código que emite `chaka-codegen` — eso es lo que lo hace un
 //! validador: si el intérprete y el transpilado divergen, hay un bug.
 
 use std::collections::HashMap;
