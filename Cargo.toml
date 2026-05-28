@@ -272,6 +272,7 @@ members = [
     "02_ruway/takiy/takiy-playback",
     "02_ruway/takiy/takiy-app-llimphi",
     "03_ukupacha/agora/agora-app",
+    "03_ukupacha/agora/agora-channel",
     "03_ukupacha/agora/agora-cli",
     "03_ukupacha/agora/agora-core",
     "03_ukupacha/agora/agora-gossip",

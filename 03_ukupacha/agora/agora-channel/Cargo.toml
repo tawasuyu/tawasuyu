@@ -1,0 +1,15 @@
+[package]
+name = "agora-channel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "agora — adapter entre el Keypair Ed25519 de agora y el contrato format::Canal/RaizFirmada/mensaje_a_firmar de wawa. Firma una raíz, verifica el historial completo de un canal y compone los campos firmados de MensajeAkasha::AnunciarCanal sin acoplar al crate akasha del kernel."
+
+[dependencies]
+agora-core = { path = "../agora-core" }
+format = { path = "../../../shared/format" }
+thiserror = { workspace = true }
+
+[dev-dependencies]
