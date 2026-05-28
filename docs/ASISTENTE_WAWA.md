@@ -193,8 +193,14 @@ Mostrados en orden de dependencia, no de complejidad:
    Akasha.~~ ✅ HECHO junto con el §1. Documentar en `WAWA.md §20` queda
    como nota de mantenimiento cuando se cierre la familia de canales.
 3. **Escribir el puente** como crate Linux `02_ruway/mirada/asistente-
-   puente`. Stub de socket raw Akasha + integración pluma-llm + parseo.
-   ~3-4 sesiones.
+   puente`. **Parcialmente HECHO** (scaffolding stdio): la lógica pura
+   (PROMPT_SISTEMA_WAWA, `traducir_propuesta_llm`,
+   `construir_prompt_usuario`) ya vive en
+   `02_ruway/mirada/asistente-puente/src/lib.rs` con 12 tests; el
+   binario lee/escribe `MensajeAsistente` por stdin/stdout en postcard
+   con prefijo `u32 LE`. **Falta** el bind al socket raw Akasha
+   (cap_net_raw), la multiplexación por id, y el modo daemon.
+   ~1-2 sesiones restantes.
 4. **Escribir `asistente.wasm`** como app cdylib en
    `03_ukupacha/wawa/apps/asistente/`. Input de texto sobre el lienzo,
    syscalls `sys_red_enviar`/`sys_red_recibir`, sintaxis idéntica a las

@@ -196,6 +196,7 @@ members = [
     "02_ruway/nahual/nahual-file-explorer-llimphi",
     "02_ruway/nahual/nahual-image-viewer-llimphi",
     "02_ruway/nahual/nahual-text-viewer-llimphi",
+    "02_ruway/mirada/asistente-puente",
     "02_ruway/mirada/mirada-app-llimphi",
     "02_ruway/mirada/mirada-asistente-llimphi",
     "02_ruway/mirada/mirada-bar-core",

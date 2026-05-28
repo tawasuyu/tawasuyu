@@ -1,0 +1,29 @@
+[package]
+name = "asistente-puente"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "asistente-puente — puente Linux entre el asistente.wasm de wawa (vía Akasha) y los LLMs externos (vía pluma-llm). Scaffolding: hoy lee/escribe MensajeAsistente por stdin/stdout en postcard; el socket raw Akasha viene en una vuelta posterior."
+
+[[bin]]
+name = "asistente-puente"
+path = "src/main.rs"
+
+[lib]
+name = "asistente_puente"
+path = "src/lib.rs"
+
+[dependencies]
+format = { path = "../../../shared/format" }
+pluma-llm = { path = "../../../00_unanchay/pluma/pluma-llm" }
+pluma-llm-core = { path = "../../../00_unanchay/pluma/pluma-llm-core" }
+tokio = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+postcard = { workspace = true }
+
+[dev-dependencies]
+pluma-llm-mock = { path = "../../../00_unanchay/pluma/pluma-llm-mock" }

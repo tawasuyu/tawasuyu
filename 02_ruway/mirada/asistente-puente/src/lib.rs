@@ -1,0 +1,421 @@
+//! `asistente-puente` — lógica pura del puente Linux entre `asistente.wasm`
+//! (kernel wawa, vía Akasha) y los LLMs externos (vía `pluma-llm`).
+//!
+//! Este crate contiene las piezas testeables sin red ni I/O:
+//!
+//! - [`PROMPT_SISTEMA_WAWA`] — instrucciones que el puente le pone al LLM
+//!   para que su respuesta sea procesable. Cita las acciones posibles
+//!   (variantes de [`format::AccionPropuesta`]) y exige un JSON estricto.
+//! - [`traducir_propuesta_llm`] — parsea la respuesta del LLM y devuelve
+//!   una `format::AccionPropuesta` ya validada (lista para empaquetar en
+//!   un `MensajeAsistente::Propuesta`). Pura. Testeada.
+//! - [`construir_prompt_usuario`] — pega el `Contexto` recibido del
+//!   asistente.wasm + el `prompt` humano + recordatorio del JSON
+//!   esperado. La asimetría con `mirada-asistente-llimphi` (Linux side)
+//!   es deliberada: aquí el contexto viene del kernel wawa, no de un
+//!   `mirada-ctl windows`.
+//!
+//! El binario (`main.rs`) cablea esto sobre un transporte concreto. El
+//! scaffolding actual usa stdin/stdout en postcard binario para que un
+//! test end-to-end o un humano con `printf` puedan ejercitar el flujo;
+//! el socket raw Akasha viene en una vuelta posterior (ver
+//! `docs/ASISTENTE_WAWA.md` §3).
+
+use format::{AccionPropuesta, Contexto, Hash};
+use serde::Deserialize;
+
+/// El prompt de sistema que el puente le envia al LLM. Lista las acciones
+/// posibles, exige JSON estricto y advierte sobre el modelo de seguridad
+/// (la IA propone, el humano firma).
+pub const PROMPT_SISTEMA_WAWA: &str = "Eres el asistente de un nodo wawa (sistema operativo bare-metal de la suite gioser). \
+El usuario del nodo te describe lo que quiere hacer y tú respondes EXCLUSIVAMENTE con un \
+objeto JSON con esta forma exacta:\n\
+\n\
+  {\"tipo\": \"lanzar\", \"plantilla\": N, \"explicacion\": \"breve por qué\"}\n\
+  {\"tipo\": \"instalar\", \"manifiesto\": \"<64hex>\", \"explicacion\": \"...\"}\n\
+  {\"tipo\": \"configurar\", \"config\": \"<64hex>\", \"explicacion\": \"...\"}\n\
+  {\"tipo\": \"notar\", \"texto\": \"...\"}\n\
+\n\
+Si no entiendes la intención o no hay acción adecuada, responde:\n\
+\n\
+  {\"error\": \"razón breve\"}\n\
+\n\
+SIGNIFICADO de cada tipo:\n\
+- `lanzar`: pide al kernel que abra la app N-ésima del manifiesto.\n\
+  N es un índice 0..M-1 del catálogo que vendrá en el bloque\n\
+  '# Estado actual'. NO inventes índices.\n\
+- `instalar`: propone re-anclar el manifiesto al hash dado. El humano\n\
+  TIENE que firmar antes de que el kernel acepte; nunca propongas esto\n\
+  sin que el usuario lo haya pedido explícitamente.\n\
+- `configurar`: igual que instalar pero para la `Configuracion` activa.\n\
+  Misma firma humana obligatoria.\n\
+- `notar`: NO ejerce ninguna acción. Útil para responder preguntas tipo\n\
+  '¿cuántas apps tengo?' sin disparar cambios. El campo `texto` es lo\n\
+  que el operador va a leer.\n\
+\n\
+REGLAS: (1) responde SOLO con el JSON, sin prosa antes ni después. \
+(2) NO inventes hashes — sólo proponé `instalar`/`configurar` con un \
+hash que el usuario haya nombrado. (3) Para acciones destructivas o no \
+solicitadas, prefiere `notar` con una explicación.";
+
+/// El JSON del LLM. Distinto del enum `AccionPropuesta` del kernel porque
+/// el LLM nos da strings hex en lugar de bytes, y discrimina por un campo
+/// `tipo` que aquí mapeamos a la variante.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "tipo", rename_all = "lowercase")]
+enum PropuestaLlm {
+    Lanzar {
+        plantilla: u32,
+        #[serde(default)]
+        explicacion: String,
+    },
+    Instalar {
+        manifiesto: String,
+        #[serde(default)]
+        explicacion: String,
+    },
+    Configurar {
+        config: String,
+        #[serde(default)]
+        explicacion: String,
+    },
+    Notar {
+        texto: String,
+    },
+}
+
+/// Forma alternativa: el LLM dice "no puedo" / "no quiero".
+#[derive(Debug, Deserialize)]
+struct RechazoLlm {
+    error: String,
+}
+
+/// El resultado de interpretar la respuesta del LLM. Mantiene una capa de
+/// distancia entre "lo que dijo el modelo" y "lo que enviamos al kernel"
+/// — el llamante decide si lo empaqueta en `MensajeAsistente::Propuesta`
+/// o en `MensajeAsistente::Error`.
+#[derive(Debug, PartialEq)]
+pub enum InterpretacionLlm {
+    /// Acción válida y lista para mandar al kernel. `confianza` resume la
+    /// calidad del parseo: `1.0` si el LLM produjo JSON limpio con todos
+    /// los campos esperados; `0.8` si tuvo que limpiar markdown fences;
+    /// más abajo si tuvo que adivinar algo (no implementado todavía).
+    Propuesta {
+        accion: AccionPropuesta,
+        explicacion: String,
+        confianza: f32,
+    },
+    /// El LLM respondió `{error: ...}`. No es un error de transporte —
+    /// es el modelo declinando.
+    Rechazo(String),
+    /// No pudimos parsear nada útil. La cadena trae el motivo y un eco
+    /// del crudo para que el humano vea qué dijo el modelo.
+    Error(String),
+}
+
+/// Interpreta la respuesta cruda del LLM. Pura: sin red, sin grafo.
+/// Tolerante a markdown fences (modelos reales suelen envolver JSON en
+/// ```json ... ```), a prosa alrededor, y a campos extra (los ignoramos).
+pub fn traducir_propuesta_llm(texto: &str) -> InterpretacionLlm {
+    let Some(json) = extraer_objeto_json(texto) else {
+        return InterpretacionLlm::Error(format!("respuesta sin JSON: {texto}"));
+    };
+    // El rechazo se chequea primero porque tiene shape más estricto
+    // (solo un campo `error`). Una propuesta con `error` además no
+    // tiene sentido — el modelo está confundido y preferimos cazarlo
+    // como rechazo.
+    if let Ok(r) = serde_json::from_str::<RechazoLlm>(json) {
+        return InterpretacionLlm::Rechazo(r.error);
+    }
+    let propuesta = match serde_json::from_str::<PropuestaLlm>(json) {
+        Ok(p) => p,
+        Err(e) => {
+            return InterpretacionLlm::Error(format!("JSON no reconocido ({e}): {texto}"));
+        }
+    };
+    // Si vino envuelto en markdown fences, marcamos menor confianza —
+    // el modelo no siguió perfectamente las instrucciones. Para 1.0
+    // exigimos JSON puro al principio del texto.
+    let confianza = if texto.trim_start().starts_with('{') {
+        1.0
+    } else {
+        0.8
+    };
+    match propuesta {
+        PropuestaLlm::Lanzar {
+            plantilla,
+            explicacion,
+        } => InterpretacionLlm::Propuesta {
+            accion: AccionPropuesta::LanzarApp { plantilla },
+            explicacion,
+            confianza,
+        },
+        PropuestaLlm::Notar { texto } => InterpretacionLlm::Propuesta {
+            accion: AccionPropuesta::Notar { texto },
+            explicacion: String::new(),
+            confianza,
+        },
+        PropuestaLlm::Instalar {
+            manifiesto,
+            explicacion,
+        } => match hex_a_hash(&manifiesto) {
+            Some(h) => InterpretacionLlm::Propuesta {
+                accion: AccionPropuesta::InstalarApp {
+                    manifiesto_propuesto: h,
+                },
+                explicacion,
+                confianza,
+            },
+            None => InterpretacionLlm::Error(format!(
+                "hash de manifiesto invalido ({} chars): {manifiesto}",
+                manifiesto.len()
+            )),
+        },
+        PropuestaLlm::Configurar {
+            config,
+            explicacion,
+        } => match hex_a_hash(&config) {
+            Some(h) => InterpretacionLlm::Propuesta {
+                accion: AccionPropuesta::CambiarConfiguracion {
+                    config_propuesta: h,
+                },
+                explicacion,
+                confianza,
+            },
+            None => InterpretacionLlm::Error(format!(
+                "hash de configuracion invalido ({} chars): {config}",
+                config.len()
+            )),
+        },
+    }
+}
+
+/// Construye el prompt user que se envía al LLM. Pega el contexto del
+/// nodo wawa + el prompt humano. Pura: el llamante lo pasa a
+/// `pluma_llm_core::ChatRequest::una_vuelta(...)`.
+pub fn construir_prompt_usuario(ctx: &Contexto, prompt_humano: &str) -> String {
+    let mut s = String::new();
+    s.push_str("# Estado actual del nodo wawa\n\n");
+    s.push_str(&format!("Apps en el manifiesto ({}):\n", ctx.apps.len()));
+    for (i, nombre) in ctx.apps.iter().enumerate() {
+        s.push_str(&format!("  [{i}] {nombre}\n"));
+    }
+    if let Some(h) = ctx.manifiesto_actual {
+        s.push_str(&format!("Manifiesto vigente: {}\n", hex_de_hash(&h)));
+    }
+    if let Some(h) = ctx.configuracion_activa {
+        s.push_str(&format!("Configuración activa: {}\n", hex_de_hash(&h)));
+    }
+    s.push_str("\n# Petición del operador\n\n");
+    s.push_str(prompt_humano);
+    s.push_str("\n\nResponde con el JSON exacto según las instrucciones del sistema.");
+    s
+}
+
+// ---------------------------------------------------------------------
+// Helpers internos
+// ---------------------------------------------------------------------
+
+/// Encuentra el primer objeto JSON balanceado por `{` y `}` dentro de
+/// `texto`. Tolerante a prosa y markdown fences alrededor.
+fn extraer_objeto_json(texto: &str) -> Option<&str> {
+    let bytes = texto.as_bytes();
+    let inicio = texto.find('{')?;
+    let mut prof: usize = 0;
+    for (offset, &b) in bytes[inicio..].iter().enumerate() {
+        match b {
+            b'{' => prof += 1,
+            b'}' => {
+                prof -= 1;
+                if prof == 0 {
+                    return Some(&texto[inicio..=inicio + offset]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Convierte una cadena de 64 chars hex a `Hash` (`[u8; 32]`). `None` si
+/// el largo es distinto o algún carácter no es hex.
+fn hex_a_hash(hex: &str) -> Option<Hash> {
+    if hex.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for i in 0..32 {
+        match u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16) {
+            Ok(b) => out[i] = b,
+            Err(_) => return None,
+        }
+    }
+    Some(out)
+}
+
+/// Hex-encode de un `Hash` a 64 chars. Para volcar al prompt visible.
+fn hex_de_hash(h: &Hash) -> String {
+    let mut s = String::with_capacity(64);
+    for b in h {
+        s.push_str(&format!("{:02x}", b));
+    }
+    s
+}
+
+// ---------------------------------------------------------------------
+// Tests — lógica pura, sin red.
+// ---------------------------------------------------------------------
+
+#[cfg(test)]
+mod pruebas {
+    use super::*;
+
+    #[test]
+    fn traducir_lanzar_canonico() {
+        let resp = r#"{"tipo": "lanzar", "plantilla": 7, "explicacion": "abre pluma"}"#;
+        match traducir_propuesta_llm(resp) {
+            InterpretacionLlm::Propuesta {
+                accion: AccionPropuesta::LanzarApp { plantilla },
+                explicacion,
+                confianza,
+            } => {
+                assert_eq!(plantilla, 7);
+                assert_eq!(explicacion, "abre pluma");
+                assert_eq!(confianza, 1.0);
+            }
+            otro => panic!("esperaba Propuesta::LanzarApp, obtuve {otro:?}"),
+        }
+    }
+
+    #[test]
+    fn traducir_lanzar_con_markdown_fences_baja_confianza() {
+        let resp = "Claro:\n```json\n{\"tipo\": \"lanzar\", \"plantilla\": 3}\n```";
+        match traducir_propuesta_llm(resp) {
+            InterpretacionLlm::Propuesta {
+                accion: AccionPropuesta::LanzarApp { plantilla },
+                confianza,
+                ..
+            } => {
+                assert_eq!(plantilla, 3);
+                assert!(confianza < 1.0, "fences bajan confianza");
+            }
+            otro => panic!("esperaba Propuesta::LanzarApp, obtuve {otro:?}"),
+        }
+    }
+
+    #[test]
+    fn traducir_notar_no_ejerce_accion() {
+        let resp = r#"{"tipo": "notar", "texto": "tienes 12 apps"}"#;
+        match traducir_propuesta_llm(resp) {
+            InterpretacionLlm::Propuesta {
+                accion: AccionPropuesta::Notar { texto },
+                ..
+            } => {
+                assert_eq!(texto, "tienes 12 apps");
+            }
+            otro => panic!("esperaba Propuesta::Notar, obtuve {otro:?}"),
+        }
+    }
+
+    #[test]
+    fn traducir_instalar_con_hash_valido() {
+        let hex = "ab".repeat(32); // 64 chars
+        let resp = format!(
+            r#"{{"tipo": "instalar", "manifiesto": "{hex}", "explicacion": "v2"}}"#
+        );
+        match traducir_propuesta_llm(&resp) {
+            InterpretacionLlm::Propuesta {
+                accion:
+                    AccionPropuesta::InstalarApp {
+                        manifiesto_propuesto,
+                    },
+                ..
+            } => {
+                assert_eq!(manifiesto_propuesto, [0xAB; 32]);
+            }
+            otro => panic!("esperaba Propuesta::InstalarApp, obtuve {otro:?}"),
+        }
+    }
+
+    #[test]
+    fn traducir_instalar_hash_invalido_es_error() {
+        let resp = r#"{"tipo": "instalar", "manifiesto": "cafe", "explicacion": "corto"}"#;
+        assert!(matches!(
+            traducir_propuesta_llm(resp),
+            InterpretacionLlm::Error(_),
+        ));
+    }
+
+    #[test]
+    fn traducir_configurar_con_hash_valido() {
+        let hex = "cd".repeat(32);
+        let resp = format!(r#"{{"tipo": "configurar", "config": "{hex}"}}"#);
+        match traducir_propuesta_llm(&resp) {
+            InterpretacionLlm::Propuesta {
+                accion: AccionPropuesta::CambiarConfiguracion { config_propuesta },
+                ..
+            } => {
+                assert_eq!(config_propuesta, [0xCD; 32]);
+            }
+            otro => panic!("esperaba Propuesta::CambiarConfiguracion, obtuve {otro:?}"),
+        }
+    }
+
+    #[test]
+    fn traducir_rechazo_explicito() {
+        let resp = r#"{"error": "no entendi"}"#;
+        assert_eq!(
+            traducir_propuesta_llm(resp),
+            InterpretacionLlm::Rechazo("no entendi".to_string()),
+        );
+    }
+
+    #[test]
+    fn traducir_tipo_desconocido_es_error() {
+        // El modelo inventó un tipo. Como `PropuestaLlm` es estricto
+        // (variantes lowercase), esto cae como JSON no reconocido.
+        let resp = r#"{"tipo": "explotar", "args": []}"#;
+        assert!(matches!(
+            traducir_propuesta_llm(resp),
+            InterpretacionLlm::Error(_),
+        ));
+    }
+
+    #[test]
+    fn traducir_sin_json_es_error() {
+        assert!(matches!(
+            traducir_propuesta_llm("hola, no se que decirte"),
+            InterpretacionLlm::Error(_),
+        ));
+    }
+
+    #[test]
+    fn construir_prompt_incluye_apps_y_peticion() {
+        let ctx = Contexto {
+            apps: vec!["pluma".into(), "bitacora".into()],
+            manifiesto_actual: Some([0x11; 32]),
+            configuracion_activa: None,
+        };
+        let prompt = construir_prompt_usuario(&ctx, "abre pluma");
+        assert!(prompt.contains("[0] pluma"));
+        assert!(prompt.contains("[1] bitacora"));
+        assert!(prompt.contains("abre pluma"));
+        assert!(prompt.contains("Manifiesto vigente"));
+        // Sin configuracion: el bloque no aparece.
+        assert!(!prompt.contains("Configuración activa"));
+    }
+
+    #[test]
+    fn extraer_json_balanceado() {
+        let texto = r#"prosa {"a": {"b": 2}} mas prosa"#;
+        assert_eq!(extraer_objeto_json(texto), Some(r#"{"a": {"b": 2}}"#));
+    }
+
+    #[test]
+    fn hex_round_trip() {
+        let h: Hash = [0xAB; 32];
+        let s = hex_de_hash(&h);
+        assert_eq!(s.len(), 64);
+        assert_eq!(hex_a_hash(&s), Some(h));
+    }
+}
