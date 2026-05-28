@@ -354,6 +354,12 @@ pub struct View<Msg> {
     /// `scene.push_layer` con `Mix::Clip`). El hit-test también respeta
     /// el recorte: clicks fuera del rect ignoran a los hijos.
     pub clip: bool,
+    /// Msg a emitir cuando el cursor entra al rect del nodo (transición
+    /// no-hover → hover). Útil para previews tipo "URL del link al
+    /// pasar el mouse".
+    pub on_pointer_enter: Option<Msg>,
+    /// Msg a emitir cuando el cursor sale del rect del nodo.
+    pub on_pointer_leave: Option<Msg>,
     pub children: Vec<View<Msg>>,
 }
 
@@ -367,6 +373,8 @@ impl<Msg> View<Msg> {
             text: None,
             image: None,
             painter: None,
+            on_pointer_enter: None,
+            on_pointer_leave: None,
             on_click: None,
             on_click_at: None,
             on_right_click: None,
@@ -506,6 +514,20 @@ impl<Msg> View<Msg> {
         self
     }
 
+    /// Dispatch `msg` cuando el cursor entra al rect del nodo
+    /// (transición no-hover → hover). Sólo emite una vez por entrada —
+    /// el runtime no repite el msg si el cursor se mueve dentro del rect.
+    pub fn on_pointer_enter(mut self, msg: Msg) -> Self {
+        self.on_pointer_enter = Some(msg);
+        self
+    }
+
+    /// Dispatch `msg` cuando el cursor sale del rect del nodo.
+    pub fn on_pointer_leave(mut self, msg: Msg) -> Self {
+        self.on_pointer_leave = Some(msg);
+        self
+    }
+
     /// Como `on_click`, pero el handler recibe `(local_x, local_y,
     /// rect_w, rect_h)` — la posición del cursor relativa al rect del
     /// nodo más las dimensiones actuales del nodo. Útil para canvas
@@ -608,6 +630,8 @@ struct MountedNode<Msg> {
     on_drop: Option<DropFn<Msg>>,
     drop_hover_fill: Option<Color>,
     clip: bool,
+    on_pointer_enter: Option<Msg>,
+    on_pointer_leave: Option<Msg>,
     /// Índice (exclusivo) del fin del subárbol en `Mounted::nodes`. Los
     /// descendientes ocupan `[idx + 1, subtree_end)`. Hace de "barrera" en
     /// paint/hit_test para `pop_layer` y para saltar subárboles enteros.
@@ -646,6 +670,8 @@ fn mount_recursive<Msg: Clone>(
         on_drop,
         drop_hover_fill,
         clip,
+        on_pointer_enter,
+        on_pointer_leave,
         children,
     } = v;
     let parent_idx = out.len();
@@ -667,6 +693,8 @@ fn mount_recursive<Msg: Clone>(
         on_drop,
         drop_hover_fill,
         clip,
+        on_pointer_enter,
+        on_pointer_leave,
         subtree_end: 0,
     });
     let mut child_ids = Vec::with_capacity(children.len());

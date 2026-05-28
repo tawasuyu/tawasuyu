@@ -193,6 +193,9 @@ pub struct Model {
     /// documento se renderea normal. Sólo aplica cuando el chrome corre
     /// con un Profile cableado (sino las listas están vacías).
     pub panel: Option<PanelKind>,
+    /// URL del link bajo el cursor (preview en status bar). `None` =
+    /// cursor no está sobre ningún link.
+    pub hover_link: Option<String>,
     /// Filtro de texto del panel (Bookmarks/History). Substring
     /// case-insensitive contra `title` y `url` de cada item. Vacío =
     /// muestra todo. Persistente entre toggle del panel pero se limpia
@@ -284,6 +287,9 @@ pub enum Msg {
     PanelFilterKey(KeyEvent),
     /// Ctrl+U — toggle del panel "Page Source" para la pestaña activa.
     ViewSource,
+    /// Pointer entered un `<a>` (cursor sobre link). `Some(url)` levanta
+    /// el preview en la status bar; `None` lo limpia (pointer leave).
+    HoverLink(Option<String>),
     /// Click sobre un `<input>`/`<textarea>` del documento — foca ese
     /// input por índice DFS.
     FocusInput(usize),
@@ -328,6 +334,7 @@ impl App for Puriy {
             find_current: 0,
             panel: None,
             panel_filter: TextInputState::new(),
+            hover_link: None,
         }
     }
 
@@ -706,6 +713,9 @@ impl App for Puriy {
                 };
                 m.panel_filter.clear();
             }
+            Msg::HoverLink(url) => {
+                m.hover_link = url;
+            }
             Msg::FocusInput(idx) => {
                 let t = m.active_mut();
                 if idx == usize::MAX {
@@ -739,7 +749,7 @@ impl App for Puriy {
 
     fn view(model: &Self::Model) -> View<Self::Msg> {
         let tabs_bar = tabs_bar(model);
-        let header = header_bar(model.active(), model.zoom);
+        let header = header_bar(model.active(), model.zoom, model.hover_link.as_deref());
         let query = model.find_input.text();
         let query_lc = query.to_lowercase();
         // Pre-cuenta los matches del documento contra la query para
@@ -1384,7 +1394,7 @@ fn tabs_bar(model: &Model) -> View<Msg> {
     .children(kids)
 }
 
-fn header_bar(t: &TabState, zoom: f32) -> View<Msg> {
+fn header_bar(t: &TabState, zoom: f32, hover_link: Option<&str>) -> View<Msg> {
     let palette = TextInputPalette::default();
     let addr = text_input_view(&t.addr, "ingresar URL…", t.addr_focused, &palette, Msg::FocusAddr);
 
@@ -1432,10 +1442,16 @@ fn header_bar(t: &TabState, zoom: f32) -> View<Msg> {
     } else {
         String::new()
     };
-    let status_line = format!(
-        "{}    ·    status: {}{}    ·    [Ctrl+T/W/Tab · Alt+←/→ · F5 · Ctrl+= / Ctrl+- / Ctrl+0 zoom · Ctrl+F buscar · Ctrl+B bookmarks · Ctrl+H historial]",
-        title_line, t.status, zoom_tag,
-    );
+    // Si el cursor está sobre un link, el preview de la URL reemplaza
+    // la línea de status normal (estilo browser tradicional).
+    let status_line = if let Some(href) = hover_link {
+        format!("→ {}", truncate(href, 220))
+    } else {
+        format!(
+            "{}    ·    status: {}{}    ·    [Ctrl+T/W/Tab · Alt+←/→ · F5 · Ctrl+= / Ctrl+- / Ctrl+0 zoom · Ctrl+F buscar · Ctrl+B bookmarks · Ctrl+H historial · Ctrl+U source]",
+            title_line, t.status, zoom_tag,
+        )
+    };
 
     View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(HEADER_H - TABS_H) },
@@ -1687,7 +1703,10 @@ fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
             } else {
                 Msg::Navigate(target.clone())
             };
-            view = view.on_click(msg);
+            view = view
+                .on_click(msg)
+                .on_pointer_enter(Msg::HoverLink(Some(target.clone())))
+                .on_pointer_leave(Msg::HoverLink(None));
         }
     }
 
