@@ -36,11 +36,11 @@ pub use boxes::{
 pub use dom::{DomTree, MetaRefresh};
 pub use fetch::{fetch, FetchError};
 pub use style::{
-    AlignItems, AlignSelf, BoxShadow, BoxSizing, ComputedStyle, FlexDirection, FlexWrap, FontStyle,
-    GradientStop, GridTrackSize, JustifyContent, LengthVal, LinearGradient, Outline, Overflow,
-    PointerEvents, Position, PseudoElement, Sides, StyleEngine, TextAlign, TextDecorationLine,
-    TextShadow, TextTransform, Transform, VerticalAlign, Viewport, Visibility, WhiteSpace,
-    DEFAULT_VIEWPORT,
+    AlignItems, AlignSelf, BoxShadow, BoxSizing, ComputedStyle, ContentItem, FlexDirection,
+    FlexWrap, FontStyle, GradientStop, GridTrackSize, JustifyContent, LengthVal, LinearGradient,
+    Outline, Overflow, PointerEvents, Position, PseudoElement, Sides, StyleEngine, TextAlign,
+    TextDecorationLine, TextShadow, TextTransform, Transform, VerticalAlign, Viewport, Visibility,
+    WhiteSpace, DEFAULT_VIEWPORT,
 };
 
 /// Pipeline completo del navegador. Sin estado mutable — cada `load`

@@ -497,7 +497,9 @@ pub fn build(dom: &DomTree, styles: &StyleEngine, base_url: &str) -> BoxTree {
         })
         .or(doc_base);
     let body = dom.find("body").unwrap_or_else(|| dom.document());
-    let mut root = build_node(&body, styles, base.as_ref(), None).unwrap_or_else(empty_root);
+    let mut counters: std::collections::HashMap<String, i32> = std::collections::HashMap::new();
+    let mut root = build_node(&body, styles, base.as_ref(), None, &mut counters)
+        .unwrap_or_else(empty_root);
     let mut forms: Vec<FormInfo> = Vec::new();
     // Pre-walk del DOM para coleccionar `<form>` (orden DFS) con sus
     // attributes resueltos contra base. La asignación de form_idx por
@@ -965,12 +967,25 @@ fn build_node(
     styles: &StyleEngine,
     base: Option<&url::Url>,
     parent_style: Option<&ComputedStyle>,
+    counters: &mut std::collections::HashMap<String, i32>,
 ) -> Option<BoxNode> {
     match &node.data {
         NodeData::Element { .. } => {
             let style = styles.compute_with_parent(node, parent_style);
             if style.display == Display::None {
                 return None;
+            }
+            // CSS counters: aplicar reset (sobrescribe) y luego
+            // increment al entrar al nodo. Implementación pragmática
+            // — un map global que sólo crece. CSS spec dice que reset
+            // crea scope nuevo por subárbol, pero eso requiere un
+            // stack y rara vez importa para los usos comunes (numbered
+            // headings, breadcrumbs); cuando importe se mete el stack.
+            for (name, val) in &style.counter_reset {
+                counters.insert(name.clone(), *val);
+            }
+            for (name, delta) in &style.counter_increment {
+                *counters.entry(name.clone()).or_insert(0) += *delta;
             }
             // Hover/focus styles: recomputamos con hover_active=true y
             // focus_active=true por separado y vemos si alguna pseudoclase
@@ -1129,8 +1144,21 @@ fn build_node(
             if let Some(ps) =
                 styles.compute_pseudo(node, crate::style::PseudoElement::Before, Some(&style))
             {
-                if let Some(text) = &ps.content {
-                    children.push(inline_text_with_style(text.clone(), &ps));
+                // Aplicar reset/increment declarados en la regla del
+                // pseudo (`h2::before { counter-increment: sec }`).
+                // El pseudo es lo "primero adentro" del nodo, así que
+                // sus contadores cuentan antes de resolver su content.
+                for (name, val) in &ps.counter_reset {
+                    counters.insert(name.clone(), *val);
+                }
+                for (name, delta) in &ps.counter_increment {
+                    *counters.entry(name.clone()).or_insert(0) += *delta;
+                }
+                if let Some(items) = &ps.content {
+                    let text = crate::style::resolve_content_items(items, node, counters);
+                    if !text.is_empty() {
+                        children.push(inline_text_with_style(text, &ps));
+                    }
                 }
             }
             // <li>: prefija con marker (bullet o numeral según
@@ -1153,17 +1181,27 @@ fn build_node(
                 }
             }
             for child in node.children.borrow().iter() {
-                if let Some(b) = build_node(child, styles, base, Some(&style)) {
+                if let Some(b) = build_node(child, styles, base, Some(&style), counters) {
                     children.push(b);
                 }
             }
             // `::after` pseudo-element. Se appendea al final, después
-            // de los children reales.
+            // de los children reales. Igual que before, aplicamos
+            // reset/increment del pseudo antes de resolver content.
             if let Some(ps) =
                 styles.compute_pseudo(node, crate::style::PseudoElement::After, Some(&style))
             {
-                if let Some(text) = &ps.content {
-                    children.push(inline_text_with_style(text.clone(), &ps));
+                for (name, val) in &ps.counter_reset {
+                    counters.insert(name.clone(), *val);
+                }
+                for (name, delta) in &ps.counter_increment {
+                    *counters.entry(name.clone()).or_insert(0) += *delta;
+                }
+                if let Some(items) = &ps.content {
+                    let text = crate::style::resolve_content_items(items, node, counters);
+                    if !text.is_empty() {
+                        children.push(inline_text_with_style(text, &ps));
+                    }
                 }
             }
             let children = strip_block_adjacent_whitespace(children, style.display);
@@ -1277,7 +1315,7 @@ fn build_node(
             // que filtramos con ese display.
             let mut children = Vec::new();
             for child in node.children.borrow().iter() {
-                if let Some(b) = build_node(child, styles, base, parent_style) {
+                if let Some(b) = build_node(child, styles, base, parent_style, counters) {
                     children.push(b);
                 }
             }
@@ -2445,6 +2483,58 @@ mod tests {
             }
         });
         assert_eq!(links, vec!["https://example.com/doc#top".to_string()]);
+    }
+
+    #[test]
+    fn counter_numera_h2_sequencialmente() {
+        // Patrón clásico: body resetea el contador a 0, cada h2::before
+        // lo incrementa y muestra el valor — h2 numerados 1, 2, 3.
+        let html = r##"<html><head><style>
+            body { counter-reset: sec }
+            h2::before { counter-increment: sec; content: counter(sec) ". " }
+        </style></head><body>
+            <h2>Intro</h2>
+            <h2>Cuerpo</h2>
+            <h2>Cierre</h2>
+        </body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        // Recolectamos el primer text leaf de cada h2 (el ::before).
+        let mut h2_prefixes: Vec<String> = Vec::new();
+        doc.box_tree.walk(|b| {
+            if b.tag.as_deref() == Some("h2") {
+                if let Some(first) = b.children.first() {
+                    if let Some(t) = &first.text {
+                        h2_prefixes.push(t.clone());
+                    }
+                }
+            }
+        });
+        assert_eq!(h2_prefixes, vec!["1. ", "2. ", "3. "]);
+    }
+
+    #[test]
+    fn attr_en_content_lee_del_padre_del_pseudo() {
+        // `<a data-tag="X">` con `a::after { content: " [" attr(data-tag) "]" }`
+        // debe inyectar " [X]" después del texto del link.
+        let html = r##"<html><head><style>
+            a::after { content: " [" attr(data-tag) "]" }
+        </style></head><body>
+            <a href="#" data-tag="ALPHA">link</a>
+        </body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut a_children: Vec<String> = Vec::new();
+        doc.box_tree.walk(|b| {
+            if b.tag.as_deref() == Some("a") && a_children.is_empty() {
+                a_children = b
+                    .children
+                    .iter()
+                    .filter_map(|c| c.text.clone())
+                    .collect();
+            }
+        });
+        assert_eq!(a_children, vec!["link".to_string(), " [ALPHA]".to_string()]);
     }
 
     #[test]

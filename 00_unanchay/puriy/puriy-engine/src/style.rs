@@ -63,11 +63,22 @@ pub struct ComputedStyle {
     /// (absolute/fixed). Para nodos en flow normal (static), CSS spec
     /// dice que z-index no aplica y se ignora. `0` = default.
     pub z_index: i32,
-    /// `content: "..."` para pseudo-elementos `::before`/`::after`.
+    /// `content: ...` para pseudo-elementos `::before`/`::after`.
     /// `None` = no hay content (pseudo-element NO se materializa). Sólo
     /// se consulta en estilos computados para pseudo-elements; en el
     /// estilo del elemento real, content es no-op (matchea spec).
-    pub content: Option<String>,
+    ///
+    /// Es un `Vec` porque `content:` admite concatenación de items:
+    /// `content: "Sección " counter(sec) ": " attr(data-title)`.
+    pub content: Option<Vec<ContentItem>>,
+    /// `counter-reset: name [val] name2 [val2]...`. Cada par crea o
+    /// resetea un contador en el scope del nodo. Se aplica antes que
+    /// `counter-increment` al entrar al nodo en el DFS.
+    pub counter_reset: Vec<(String, i32)>,
+    /// `counter-increment: name [delta] name2 [delta2]...`. Cada par
+    /// incrementa el contador correspondiente; si no existía, lo crea
+    /// implícitamente (CSS spec: el reset implícito es 0).
+    pub counter_increment: Vec<(String, i32)>,
     /// `text-decoration-line` reducido al subset que pintamos.
     /// `None` = sin decoración (default HTML, salvo `<a>`/`<u>`/`<s>`).
     pub text_decoration: TextDecorationLine,
@@ -539,6 +550,8 @@ impl Default for ComputedStyle {
             box_shadow: None,
             z_index: 0,
             content: None,
+            counter_reset: Vec::new(),
+            counter_increment: Vec::new(),
             text_decoration: TextDecorationLine::None,
             list_style_type: ListStyleType::Disc,
             flex_direction: FlexDirection::Row,
@@ -817,6 +830,50 @@ impl StyleEngine {
 struct Rule {
     selector: Selector,
     decls: Vec<Decl>,
+}
+
+/// Resuelve una lista de `ContentItem` a la string final que se pintará
+/// como leaf de texto. Counters se buscan en `counters`; ausentes
+/// resuelven a `0` (CSS spec: el contador implícito vale 0 si no se
+/// resetó). Attrs se leen del `node` (el padre del pseudo-element);
+/// ausentes resuelven a `""`.
+pub fn resolve_content_items(
+    items: &[ContentItem],
+    node: &markup5ever_rcdom::Handle,
+    counters: &std::collections::HashMap<String, i32>,
+) -> String {
+    let mut out = String::new();
+    for it in items {
+        match it {
+            ContentItem::Text(s) => out.push_str(s),
+            ContentItem::Counter(name) => {
+                let v = counters.get(name).copied().unwrap_or(0);
+                out.push_str(&v.to_string());
+            }
+            ContentItem::Attr(name) => {
+                if let Some(v) = dom::attr(node, name) {
+                    out.push_str(&v);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Item dentro del valor de `content:` para `::before`/`::after`. Un
+/// `content:` puede tener varios items concatenados — se resuelven al
+/// inyectar el pseudo-element y se concatenan a una sola string.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ContentItem {
+    /// Literal string entre comillas — el más común.
+    Text(String),
+    /// `counter(name)` — el valor actual del contador con ese nombre,
+    /// formateado como decimal por ahora (CSS spec permite list-style-type
+    /// como segundo arg; queda para más adelante).
+    Counter(String),
+    /// `attr(name)` — el valor del atributo `name` del elemento padre del
+    /// pseudo. Strings vacíos si el atributo no existe.
+    Attr(String),
 }
 
 /// Pseudo-elemento attachado al selector. Genera un box hijo sintético
@@ -1240,10 +1297,14 @@ enum DeclKind {
     /// `z-index: N`. Aplica sólo a positioned (absolute/fixed/relative);
     /// para `position: static` el chrome lo ignora (matchea spec).
     ZIndex(i32),
-    /// `content: "..."` para `::before`/`::after`. Sólo string literal
-    /// soportado; `counter(...)`/`attr(...)` quedan para más adelante.
+    /// `content: ...` para `::before`/`::after`. Lista de items
+    /// (string/counter/attr) que se concatenan al inyectar el pseudo.
     /// `None` = `content: none` (suprime el pseudo-element).
-    Content(Option<String>),
+    Content(Option<Vec<ContentItem>>),
+    /// `counter-reset: name [val] name2 [val2]...`.
+    CounterReset(Vec<(String, i32)>),
+    /// `counter-increment: name [delta] name2 [delta2]...`.
+    CounterIncrement(Vec<(String, i32)>),
     /// `None` = `box-shadow: none` (limpia la sombra).
     BoxShadow(Option<BoxShadow>),
     TextDecoration(TextDecorationLine),
@@ -1342,6 +1403,8 @@ impl Decl {
             }
             DeclKind::ZIndex(v) => s.z_index = *v,
             DeclKind::Content(c) => s.content = c.clone(),
+            DeclKind::CounterReset(v) => s.counter_reset = v.clone(),
+            DeclKind::CounterIncrement(v) => s.counter_increment = v.clone(),
             DeclKind::BoxShadow(v) => s.box_shadow = *v,
             DeclKind::TextDecoration(t) => s.text_decoration = *t,
             DeclKind::ListStyleType(t) => s.list_style_type = *t,
@@ -2375,6 +2438,8 @@ fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             }
         }
         "content" => Some(DeclKind::Content(parse_content_value(value))),
+        "counter-reset" => Some(DeclKind::CounterReset(parse_counter_list(value, 0))),
+        "counter-increment" => Some(DeclKind::CounterIncrement(parse_counter_list(value, 1))),
         "box-shadow" => Some(DeclKind::BoxShadow(parse_box_shadow(value))),
         "text-decoration" | "text-decoration-line" => {
             parse_text_decoration(value).map(DeclKind::TextDecoration)
@@ -2714,22 +2779,64 @@ fn parse_length_or_pct(s: &str) -> Option<LengthVal> {
     parse_length_px(s).map(LengthVal::Px)
 }
 
-/// Parsea el value de `content:` para pseudo-elements. Soporta:
-/// - `none` / `normal` → `None` (no genera pseudo-element)
-/// - `"texto"` / `'texto'` → `Some("texto")` (con escape `\\` y `\"`)
-/// `counter(...)`/`attr(...)`/`url(...)` no soportados todavía — caen
-/// como `None`.
-fn parse_content_value(value: &str) -> Option<String> {
+/// Parsea el value de `content:` para pseudo-elements. Soporta una
+/// secuencia de items separados por whitespace: strings quoted,
+/// `counter(name)` y `attr(name)`. Devuelve `None` para `none`/`normal`
+/// (que suprime el pseudo-element) o si encuentra algo no reconocible.
+fn parse_content_value(value: &str) -> Option<Vec<ContentItem>> {
     let v = value.trim();
     if v.eq_ignore_ascii_case("none") || v.eq_ignore_ascii_case("normal") {
         return None;
     }
-    let mut chars = v.chars();
-    let quote = chars.next()?;
-    if quote != '"' && quote != '\'' {
-        return None;
+    let mut items = Vec::new();
+    let mut chars = v.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_whitespace() {
+            chars.next();
+            continue;
+        }
+        if c == '"' || c == '\'' {
+            let item = parse_string_literal(&mut chars)?;
+            items.push(ContentItem::Text(item));
+            continue;
+        }
+        // Identificador: `counter(...)` o `attr(...)` (case-insensitive).
+        let ident = read_ident(&mut chars);
+        if ident.is_empty() {
+            return None;
+        }
+        let lower = ident.to_ascii_lowercase();
+        // Comer paréntesis de apertura.
+        if chars.next() != Some('(') {
+            return None;
+        }
+        let arg = read_until(&mut chars, ')')?;
+        let arg = arg.trim();
+        // `counter(name[, list-style])`: nos quedamos con el name; el
+        // list-style queda para más adelante.
+        let name = arg.split(',').next().unwrap_or("").trim();
+        if name.is_empty() {
+            return None;
+        }
+        match lower.as_str() {
+            "counter" => items.push(ContentItem::Counter(name.to_string())),
+            "attr" => items.push(ContentItem::Attr(name.to_string())),
+            _ => return None, // `url(...)`, `counters(...)` no soportados aún.
+        }
     }
-    // Buscar la comilla de cierre matching, respetando escapes.
+    if items.is_empty() {
+        None
+    } else {
+        Some(items)
+    }
+}
+
+/// Lee una string literal (incluyendo las comillas) de `chars` —
+/// consume hasta encontrar la comilla de cierre matching. Soporta
+/// escape `\X` que vuelca X tal cual. Devuelve None si la string queda
+/// sin cerrar.
+fn parse_string_literal(chars: &mut std::iter::Peekable<std::str::Chars>) -> Option<String> {
+    let quote = chars.next()?;
     let mut out = String::new();
     while let Some(c) = chars.next() {
         if c == '\\' {
@@ -2745,6 +2852,72 @@ fn parse_content_value(value: &str) -> Option<String> {
         out.push(c);
     }
     None
+}
+
+/// Lee chars mientras sean alfanuméricos, `-` o `_`. Devuelve el ident
+/// como String (vacío si el siguiente char no era válido).
+fn read_ident(chars: &mut std::iter::Peekable<std::str::Chars>) -> String {
+    let mut out = String::new();
+    while let Some(&c) = chars.peek() {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+            out.push(c);
+            chars.next();
+        } else {
+            break;
+        }
+    }
+    out
+}
+
+/// Lee chars hasta el delimitador `end` (exclusivo) — lo consume. Devuelve
+/// el contenido. None si no encuentra el delim.
+fn read_until(chars: &mut std::iter::Peekable<std::str::Chars>, end: char) -> Option<String> {
+    let mut out = String::new();
+    while let Some(c) = chars.next() {
+        if c == end {
+            return Some(out);
+        }
+        out.push(c);
+    }
+    None
+}
+
+/// Parsea `counter-reset` o `counter-increment`. Devuelve pares
+/// `(name, value)` — para reset el default es `0`, para increment es
+/// `1`. Si el value es `none`, devuelve vec vacío.
+fn parse_counter_list(value: &str, default: i32) -> Vec<(String, i32)> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Vec::new();
+    }
+    let mut out: Vec<(String, i32)> = Vec::new();
+    let toks: Vec<&str> = v.split_whitespace().collect();
+    let mut i = 0;
+    while i < toks.len() {
+        let name = toks[i];
+        if !is_valid_counter_name(name) {
+            // Token no nombre — skip (parser tolerante).
+            i += 1;
+            continue;
+        }
+        let value = toks
+            .get(i + 1)
+            .and_then(|t| t.parse::<i32>().ok());
+        if let Some(v) = value {
+            out.push((name.to_string(), v));
+            i += 2;
+        } else {
+            out.push((name.to_string(), default));
+            i += 1;
+        }
+    }
+    out
+}
+
+fn is_valid_counter_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 /// Si `s` matchea `calc(...)` (case-insensitive), devuelve el contenido
@@ -3857,24 +4030,59 @@ mod tests {
 
     #[test]
     fn parse_content_value_acepta_string_quoted() {
-        assert_eq!(parse_content_value(r#""hola""#).as_deref(), Some("hola"));
-        assert_eq!(parse_content_value(r#"'mundo'"#).as_deref(), Some("mundo"));
+        assert_eq!(
+            parse_content_value(r#""hola""#),
+            Some(vec![ContentItem::Text("hola".into())])
+        );
+        assert_eq!(
+            parse_content_value(r#"'mundo'"#),
+            Some(vec![ContentItem::Text("mundo".into())])
+        );
         assert_eq!(parse_content_value("none"), None);
         assert_eq!(parse_content_value("normal"), None);
-        // Sin comillas → None.
+        // Sin comillas y sin counter()/attr() → None.
         assert_eq!(parse_content_value("foo"), None);
     }
 
     #[test]
     fn parse_content_value_respeta_escapes() {
         assert_eq!(
-            parse_content_value(r#""linea1\nlinea2""#).as_deref(),
-            Some("linea1nlinea2") // \n no especial — sólo escape literal
+            parse_content_value(r#""linea1\nlinea2""#),
+            Some(vec![ContentItem::Text("linea1nlinea2".into())]) // \n no especial
         );
         assert_eq!(
-            parse_content_value(r#""con \"quote\" adentro""#).as_deref(),
-            Some(r#"con "quote" adentro"#)
+            parse_content_value(r#""con \"quote\" adentro""#),
+            Some(vec![ContentItem::Text(r#"con "quote" adentro"#.into())])
         );
+    }
+
+    #[test]
+    fn parse_content_value_concat_counter_attr() {
+        let items = parse_content_value(r#""Sección " counter(sec) ": " attr(data-title)"#)
+            .expect("debería parsear");
+        assert_eq!(
+            items,
+            vec![
+                ContentItem::Text("Sección ".into()),
+                ContentItem::Counter("sec".into()),
+                ContentItem::Text(": ".into()),
+                ContentItem::Attr("data-title".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_counter_list_acepta_pares_y_defaults() {
+        assert_eq!(
+            parse_counter_list("section 0 chapter 5", 0),
+            vec![("section".into(), 0), ("chapter".into(), 5)]
+        );
+        // Default cuando no hay valor explícito.
+        assert_eq!(
+            parse_counter_list("h2", 1),
+            vec![("h2".into(), 1)]
+        );
+        assert_eq!(parse_counter_list("none", 0), Vec::<(String, i32)>::new());
     }
 
     #[test]
@@ -3891,8 +4099,14 @@ mod tests {
         let after = eng.compute_pseudo(&p, PseudoElement::After, None);
         // `:before` legacy también matchea Before pero llega después; el
         // último gana en empate de especificidad.
-        assert_eq!(before.and_then(|s| s.content).as_deref(), Some("legacy"));
-        assert_eq!(after.and_then(|s| s.content).as_deref(), Some(" POST"));
+        assert_eq!(
+            before.and_then(|s| s.content),
+            Some(vec![ContentItem::Text("legacy".into())])
+        );
+        assert_eq!(
+            after.and_then(|s| s.content),
+            Some(vec![ContentItem::Text(" POST".into())])
+        );
     }
 
     #[test]
