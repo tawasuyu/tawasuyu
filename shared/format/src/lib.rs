@@ -935,7 +935,36 @@ pub enum TipoCable {
     /// Error reportado por el puente (transporte, rechazo del LLM,
     /// parseo). Payload = bytes ASCII del motivo.
     Error = 6,
+    /// Fase 60 v4 :: la app `asistente.wasm` pide la firma humana de un
+    /// objeto (manifiesto/configuración). El puente lo relaya al
+    /// `wawactl daemon-firma` por su transporte normal (PTY/virtio-console)
+    /// y devuelve la firma en un [`TipoCable::Firma`]. Payload:
+    /// `[tipo_obj: u8, hash: [u8; 32]]` = 33 bytes.
+    ///   - `tipo_obj` = [`TIPO_OBJETO_CUADERNO`] (1) si el hash es de
+    ///     manifiesto/cuaderno (legacy `wawa::sign_request::`).
+    ///   - `tipo_obj` = [`TIPO_OBJETO_CONFIGURACION`] (2) si es de
+    ///     configuración (`wawa::sign_config::`).
+    /// Otros valores son rechazados por el puente con un `TipoCable::Error`.
+    RequestFirma = 7,
+    /// Fase 60 v4 :: respuesta del puente con la firma humana ya
+    /// autorizada por el operador (via `daemon-firma`). Payload:
+    /// `[slot: u8, firma: [u8; 64]]` = 65 bytes. `slot` es 0/1/2 — el
+    /// índice dentro de `AGORA_AUTH_RING` que el operador eligió al
+    /// arrancar el demonio. El asistente.wasm construye el sobre
+    /// firmado y, cuando tenga PERMISO_RAIZ (hito 6), invoca
+    /// `sys_manifiesto_proponer`.
+    Firma = 8,
 }
+
+/// FASE 60 v4 :: discriminantes del primer byte del payload de
+/// `TipoCable::RequestFirma`. El puente los mapea al prefijo correcto
+/// para `daemon-firma` (`wawa::sign_request::` vs `wawa::sign_config::`).
+/// El mismo discriminante puede aparecer en logs del operador.
+pub const TIPO_OBJETO_CUADERNO: u8 = 1;
+/// Como [`TIPO_OBJETO_CUADERNO`] pero para configuraciones. Ver Fase 60 v2
+/// del `wawactl daemon-firma` — el prefijo correspondiente es
+/// `wawa::sign_config::`.
+pub const TIPO_OBJETO_CONFIGURACION: u8 = 2;
 
 impl TipoCable {
     /// Traduce un u16 al variant correspondiente o `None` si es
@@ -948,6 +977,8 @@ impl TipoCable {
             4 => Some(Self::PropuestaInstalarApp),
             5 => Some(Self::PropuestaCambiarConfig),
             6 => Some(Self::Error),
+            7 => Some(Self::RequestFirma),
+            8 => Some(Self::Firma),
             _ => None,
         }
     }
@@ -1657,5 +1688,43 @@ mod pruebas {
         assert_eq!(TipoCable::PropuestaInstalarApp as u16, 4);
         assert_eq!(TipoCable::PropuestaCambiarConfig as u16, 5);
         assert_eq!(TipoCable::Error as u16, 6);
+        assert_eq!(TipoCable::RequestFirma as u16, 7);
+        assert_eq!(TipoCable::Firma as u16, 8);
+    }
+
+    #[test]
+    fn cabecera_cable_round_trip_request_firma() {
+        // Fase 60 v4 :: la app pide firma humana. Round-trip por la
+        // misma puerta — el `id` corresponde al de la propuesta original.
+        let mut buf = [0u8; 12];
+        escribir_cabecera_cable(&mut buf, TipoCable::RequestFirma, 99).unwrap();
+        let (tipo, id) = leer_cabecera_cable(&buf).unwrap();
+        assert_eq!(tipo, TipoCable::RequestFirma);
+        assert_eq!(id, 99);
+    }
+
+    #[test]
+    fn cabecera_cable_round_trip_firma() {
+        let mut buf = [0u8; 12];
+        escribir_cabecera_cable(&mut buf, TipoCable::Firma, 99).unwrap();
+        let (tipo, id) = leer_cabecera_cable(&buf).unwrap();
+        assert_eq!(tipo, TipoCable::Firma);
+        assert_eq!(id, 99);
+    }
+
+    #[test]
+    fn tipo_objeto_codigos_estables() {
+        // El primer byte del payload de RequestFirma. La app wasm y
+        // el puente leen estos numeros literalmente — renumerarlos
+        // rompe el cable.
+        assert_eq!(TIPO_OBJETO_CUADERNO, 1);
+        assert_eq!(TIPO_OBJETO_CONFIGURACION, 2);
+    }
+
+    #[test]
+    fn tipo_cable_de_u16_acepta_nuevos() {
+        assert_eq!(TipoCable::de_u16(7), Some(TipoCable::RequestFirma));
+        assert_eq!(TipoCable::de_u16(8), Some(TipoCable::Firma));
+        assert_eq!(TipoCable::de_u16(9), None);
     }
 }

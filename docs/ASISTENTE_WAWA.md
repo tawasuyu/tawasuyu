@@ -203,7 +203,7 @@ Mostrados en orden de dependencia, no de complejidad:
    23 lib tests + 12 main tests = 35 verde. Empaquetado de respuestas
    en `construir_frame(id, interp)` espejo del parser del cable wasm.
 4. ~~**Escribir `asistente.wasm`** como app cdylib en
-   `03_ukupacha/wawa/apps/asistente/`.~~ ✅ HECHO (v1+v2+v3). cdylib
+   `03_ukupacha/wawa/apps/asistente/`.~~ ✅ HECHO (v1+v2+v3+v4). cdylib
    `no_std + panic=abort` 480×240; `init()` carga MAC, `tick()` drena
    teclado y red. v2: `sys_get_scancode` + tabla scancodes set 1 →
    ASCII mayúsculas + buffer `QUERY` 64 chars con backspace y cursor
@@ -211,10 +211,16 @@ Mostrados en orden de dependencia, no de complejidad:
    ETHERTYPE 0x88B6) + helpers wire (`escribir_cabecera_cable`,
    `leer_cabecera_cable`) espejados del crate `format`. Enter dispara
    una `Consulta`, drenar filtra por EtherType + ID. Estados de UI
-   pintan reposo/esperando/propuesta/error según `EstadoRed`. Artefacto
-   release ~6.1 KB. **Falta v4**: presentar propuestas hash con
-   `sys_manifiesto_proponer` después de `daemon-firma`. ~1 sesión
-   restante.
+   pintan reposo/esperando/propuesta/error según `EstadoRed`.
+   v4: al recibir una propuesta Instalar/Cambiar, la app guarda los
+   32 B de hash en `HASH_PENDIENTE`; SPACE empaqueta un
+   `TipoCable::RequestFirma` con `[tipo_obj: u8, hash: [u8;32]]` y lo
+   envía por el cable. El puente devuelve `TipoCable::Firma` con
+   `[slot, firma 64 B]`; la app pasa a `EstadoRed::Firmada(slot)` y
+   pinta "FIRMADO POR SLOT N + primeros bytes del sello". Artefacto
+   release ~7.0 KB. Pendiente: cerrar el ciclo con
+   `sys_manifiesto_proponer` cuando la EntradaApp pida `PERMISO_RAIZ`
+   en GENESIS (hito 6).
 5. ~~**Cablear `daemon-firma`** para que también firme objetos
    `ConfiguracionFirmada` (hoy sólo firma manifiestos).~~ ✅ HECHO (Fase
    60 v2). `wawactl daemon-firma` ahora reconoce dos prefijos paralelos
@@ -228,9 +234,42 @@ Mostrados en orden de dependencia, no de complejidad:
 6. **Sembrar `asistente.wasm` en GENESIS** o, mejor, dejar que el operador
    la instale en vivo vía `mudanza` (la palanca de v9/v10 del launcher).
 
-Estimado restante: 1-2 sesiones — sólo queda v4 del asistente.wasm
-(propuesta hash → daemon-firma) y la siembra en GENESIS. El resto del
-pipeline está vivo end-to-end (modulo testing en hardware real).
+Estimado restante: 1 sesión — sólo queda la siembra en GENESIS (hito 6)
+con `PERMISO_RAIZ` en la `EntradaApp` para que la app pueda invocar
+`sys_manifiesto_proponer` cerrando el ciclo `Firma → re-ancla`. El
+resto del pipeline está vivo end-to-end (modulo testing en hardware
+real).
+
+### 5.bis :: la firma sobre el cable (Fase 60 v4)
+
+El ciclo completo en producción mínima:
+
+```
+asistente.wasm                asistente-puente                operador (terminal)
+─────────────                 ────────────────                ────────────────────
+Propuesta(Instalar|Cambiar) ◄── (LLM dijo "instalar X")
+SPACE → RequestFirma         ──► RequestFirma(tipo,hash)
+                                  · prompt y/N (30 s)         ──► HASH+TIPO+SLOT
+                                                              ◄── y
+                                  · firma Ed25519 in-process
+EstadoRed::EsperandoFirma   ◄── Firma(slot, 64 B sello)
+EstadoRed::Firmada(slot)
+```
+
+El puente firma con su propia clave (`--firma-clave PATH --firma-slot N`).
+El formato de archivo (`32 B seed` o `64 B SecretKey`) es idéntico al
+que ya usa `wawactl daemon-firma`, así que el operador puede compartir
+el mismo `.sk` entre los dos demonios. El audit log paralelo
+(`asistente_puente_audit.log`, configurable con `--firma-log`) registra
+`FIRMA_EMITIDA` / `FIRMA_RECHAZADA` con timestamp ISO 8601, tipo
+(CUADERNO/CONFIGURACION), slot y hash hex.
+
+Decisión arquitectónica: el puente firma DIRECTAMENTE en lugar de
+relayar a un `daemon-firma` separado. Justificación: ambos demonios
+son host-side, el operador es el mismo, el control criptográfico es
+el mismo (Ed25519 + slot del anillo). Levantar un segundo canal
+(virtio-console o Unix socket) sólo añadiría latencia y un punto de
+falla.
 
 ## 6. Modos de fallo
 
@@ -284,20 +323,18 @@ Por elección, no por descuido:
 ## 9. Estado
 
 **Cerrados**: hitos 1-2 (formato del protocolo y canal Akasha), 3
-(puente Linux con stdio + socket + Akasha), 4 v1+v2+v3 (asistente.wasm
-con UI + input + red), 5 (daemon-firma discrimina cuaderno/configuración).
+(puente Linux con stdio + socket + Akasha), 4 v1+v2+v3+v4 (asistente.wasm
+con UI + input + red + ciclo de firma humana), 5 (daemon-firma
+discrimina cuaderno/configuración).
 
-**A medio camino**: hito 4 v4 — el asistente.wasm presenta propuestas
-hash pero todavía no las dispara al `daemon-firma` para la firma humana
-ni invoca `sys_manifiesto_proponer`. Requiere PERMISO_RAIZ en la
-EntradaApp (hoy ni siquiera está sembrada).
-
-**Abiertos**: hito 6 (siembra en GENESIS).
+**Abiertos**: hito 6 (siembra en GENESIS). Sólo entonces la app
+asistente puede pedir `PERMISO_RAIZ` en su EntradaApp e invocar
+`sys_manifiesto_proponer` cerrando el ciclo `Firma → re-ancla`.
 
 Sin urgencia: el asistente Linux cubre el caso de uso "asistente
 conversacional para gioser" para el operador humano de hoy; la versión
 wawa es para cuando wawa sea el daily driver, que aún no lo es. El
-pipeline cable está vivo end-to-end excepto la firma — un demo de
-"app en wawa pregunta al LLM y el LLM contesta `Notar(...)` legible"
-ya funciona en cuanto se siembre la app y se corra `asistente-puente
---akasha eth0` en otra máquina de la misma red.
+pipeline cable está vivo end-to-end (Consulta → Propuesta → SPACE →
+RequestFirma → operador y/N → Firma → "FIRMADO POR SLOT N" en
+pantalla); sólo falta sembrar la app en GENESIS y conectar la firma
+con el kernel.

@@ -319,6 +319,48 @@ pub fn construir_frame(id: u64, interp: &InterpretacionLlm) -> Vec<u8> {
     frame
 }
 
+/// Fase 60 v4 :: empaqueta una `Firma` Ed25519 ya autorizada por el
+/// operador en un frame `TipoCable::Firma`. Wire: cabecera 12 B + 65 B
+/// `[slot | firma]`. La app `asistente.wasm` lo decodifica espejado.
+pub fn construir_frame_firma(id: u64, slot: u8, firma: &[u8; 64]) -> Vec<u8> {
+    let mut frame = vec![0u8; TAM_CABECERA_CABLE + 65];
+    escribir_cabecera_cable(&mut frame, TipoCable::Firma, id).expect("cabe");
+    frame[TAM_CABECERA_CABLE] = slot;
+    frame[TAM_CABECERA_CABLE + 1..].copy_from_slice(firma);
+    frame
+}
+
+/// Fase 60 v4 :: empaqueta un `Error` con un motivo libre. Util para
+/// rechazar `RequestFirma` cuando el puente no tiene clave configurada,
+/// o cuando el tipo de objeto es desconocido.
+pub fn construir_frame_error(id: u64, motivo: &str) -> Vec<u8> {
+    let payload = motivo.as_bytes();
+    let mut frame = vec![0u8; TAM_CABECERA_CABLE + payload.len()];
+    escribir_cabecera_cable(&mut frame, TipoCable::Error, id).expect("cabe");
+    frame[TAM_CABECERA_CABLE..].copy_from_slice(payload);
+    frame
+}
+
+/// Fase 60 v4 :: parser del payload de `TipoCable::RequestFirma`. Devuelve
+/// `(tipo_obj, hash)` o `None` si el payload no es de 33 bytes o el byte
+/// de tipo es desconocido. El llamante usa `tipo_obj` para elegir el
+/// prefijo legacy (`wawa::sign_request::` vs `wawa::sign_config::`) al
+/// dialogar con `daemon-firma` — aqui solo separamos los campos.
+pub fn leer_request_firma(payload: &[u8]) -> Option<(u8, [u8; 32])> {
+    if payload.len() != 33 {
+        return None;
+    }
+    let tipo_obj = payload[0];
+    if tipo_obj != format::TIPO_OBJETO_CUADERNO
+        && tipo_obj != format::TIPO_OBJETO_CONFIGURACION
+    {
+        return None;
+    }
+    let mut hash = [0u8; 32];
+    hash.copy_from_slice(&payload[1..33]);
+    Some((tipo_obj, hash))
+}
+
 // ---------------------------------------------------------------------
 // Tests — lógica pura, sin red.
 // ---------------------------------------------------------------------
@@ -548,6 +590,61 @@ mod pruebas {
         assert_eq!(tipo, TipoCable::PropuestaLanzarApp);
         assert_eq!(id, 42);
         assert_eq!(&frame[TAM_CABECERA_CABLE..], &5u32.to_be_bytes());
+    }
+
+    // ---------------------------------------------------------------
+    // Fase 60 v4 :: helpers de RequestFirma / Firma
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn construir_frame_firma_round_trip() {
+        let firma = [0xAB; 64];
+        let frame = construir_frame_firma(123, 1, &firma);
+        let (tipo, id) = format::leer_cabecera_cable(&frame).expect("cabecera valida");
+        assert_eq!(tipo, TipoCable::Firma);
+        assert_eq!(id, 123);
+        assert_eq!(frame[TAM_CABECERA_CABLE], 1, "slot");
+        assert_eq!(&frame[TAM_CABECERA_CABLE + 1..], &firma);
+        assert_eq!(frame.len(), TAM_CABECERA_CABLE + 65);
+    }
+
+    #[test]
+    fn construir_frame_error_lleva_motivo_ascii() {
+        let frame = construir_frame_error(7, "sin clave");
+        let (tipo, id) = format::leer_cabecera_cable(&frame).expect("cabecera valida");
+        assert_eq!(tipo, TipoCable::Error);
+        assert_eq!(id, 7);
+        assert_eq!(&frame[TAM_CABECERA_CABLE..], b"sin clave");
+    }
+
+    #[test]
+    fn leer_request_firma_acepta_cuaderno_y_config() {
+        // tipo_obj = 1 (cuaderno)
+        let mut payload = [0u8; 33];
+        payload[0] = format::TIPO_OBJETO_CUADERNO;
+        for i in 0..32 {
+            payload[1 + i] = (i as u8).wrapping_add(0x10);
+        }
+        let (tipo, hash) = leer_request_firma(&payload).expect("33 B + tipo conocido");
+        assert_eq!(tipo, format::TIPO_OBJETO_CUADERNO);
+        assert_eq!(hash[0], 0x10);
+        assert_eq!(hash[31], 0x10 + 31);
+
+        // tipo_obj = 2 (configuracion)
+        payload[0] = format::TIPO_OBJETO_CONFIGURACION;
+        let (tipo, _) = leer_request_firma(&payload).expect("acepta config");
+        assert_eq!(tipo, format::TIPO_OBJETO_CONFIGURACION);
+    }
+
+    #[test]
+    fn leer_request_firma_rechaza_largos_y_tipos_ajenos() {
+        // Largo distinto.
+        assert!(leer_request_firma(&[1u8; 32]).is_none());
+        assert!(leer_request_firma(&[1u8; 34]).is_none());
+        // Tipo de objeto desconocido — defensivo contra cable basura.
+        let mut payload = [0u8; 33];
+        payload[0] = 99;
+        assert!(leer_request_firma(&payload).is_none());
     }
 }
 

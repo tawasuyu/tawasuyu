@@ -50,7 +50,7 @@ fn main() {
 }
 
 fn correr() -> Result<(), String> {
-    let modo = parsear_args(std::env::args().skip(1))?;
+    let cli = parsear_args(std::env::args().skip(1))?;
     let llm = pluma_llm::from_env().map_err(|e| format!("inicializando pluma-llm: {e}"))?;
     // Runtime de Tokio compartido — un solo current-thread vale para
     // ambos modos (stdio = un turno; daemon = un cliente a la vez).
@@ -58,10 +58,22 @@ fn correr() -> Result<(), String> {
         .enable_all()
         .build()
         .map_err(|e| format!("creando tokio runtime: {e}"))?;
-    match modo {
+    // Fase 60 v4 :: si el operador suministro --firma-clave, cargamos la
+    // clave Ed25519 al arrancar. La misma seed/SK funciona en
+    // `wawactl daemon-firma`. Solo el modo --akasha la usa hoy (los
+    // demas modos solo manejan `MensajeAsistente`).
+    let config_firma = match (cli.firma_clave.as_deref(), cli.firma_slot) {
+        (Some(path), slot) => Some(akasha::ConfigFirma {
+            clave: akasha::cargar_clave_privada(path)?,
+            slot,
+            log_path: cli.firma_log.clone(),
+        }),
+        (None, _) => None,
+    };
+    match cli.modo {
         Modo::Stdio => correr_stdio(&llm, &rt),
         Modo::Daemon { socket } => correr_daemon(&llm, &rt, &socket),
-        Modo::Akasha { iface } => akasha::correr(&llm, &rt, &iface),
+        Modo::Akasha { iface } => akasha::correr(&llm, &rt, &iface, config_firma.as_ref()),
     }
 }
 
@@ -71,24 +83,79 @@ enum Modo {
     Akasha { iface: String },
 }
 
-/// Parser minimal de argumentos. Sin libs nuevas — un solo flag bastante.
-fn parsear_args(mut args: impl Iterator<Item = String>) -> Result<Modo, String> {
-    match args.next() {
-        None => Ok(Modo::Stdio),
-        Some(flag) if flag == "--socket" => match args.next() {
-            Some(path) => Ok(Modo::Daemon { socket: path }),
-            None => Err("--socket requiere una ruta de socket".into()),
-        },
-        Some(flag) if flag == "--akasha" => match args.next() {
-            Some(iface) => Ok(Modo::Akasha { iface }),
-            None => Err("--akasha requiere un nombre de interfaz".into()),
-        },
-        Some(flag) if flag == "--help" || flag == "-h" => {
-            print_help();
-            std::process::exit(0);
+struct Cli {
+    modo: Modo,
+    /// Fase 60 v4 :: clave Ed25519 que el puente usa para firmar
+    /// RequestFirma. Sin este flag, el puente responde Error a cualquier
+    /// RequestFirma (el flujo LLM funciona igual).
+    firma_clave: Option<String>,
+    /// Fase 60 v4 :: slot del anillo AGORA_AUTH_RING (0=primaria,
+    /// 1=secundaria, 2=recuperacion).
+    firma_slot: u8,
+    /// Fase 60 v4 :: log de auditoria de firmas emitidas/rechazadas.
+    firma_log: String,
+}
+
+/// Parser minimal de argumentos. Sin clap — bandera de modo + tres
+/// banderas opcionales de firma (--firma-clave / --firma-slot / --firma-log).
+fn parsear_args(args: impl Iterator<Item = String>) -> Result<Cli, String> {
+    let mut modo: Option<Modo> = None;
+    let mut firma_clave: Option<String> = None;
+    let mut firma_slot: u8 = 0;
+    let mut firma_log: String = "asistente_puente_audit.log".to_string();
+    let mut it = args.peekable();
+    while let Some(flag) = it.next() {
+        match flag.as_str() {
+            "--help" | "-h" => {
+                print_help();
+                std::process::exit(0);
+            }
+            "--socket" => {
+                let path = it.next().ok_or("--socket requiere una ruta")?;
+                fijar_modo(&mut modo, Modo::Daemon { socket: path })?;
+            }
+            "--akasha" => {
+                let iface = it.next().ok_or("--akasha requiere un nombre de interfaz")?;
+                fijar_modo(&mut modo, Modo::Akasha { iface })?;
+            }
+            "--firma-clave" => {
+                let path = it.next().ok_or("--firma-clave requiere una ruta")?;
+                firma_clave = Some(path);
+            }
+            "--firma-slot" => {
+                let n = it.next().ok_or("--firma-slot requiere un numero (0/1/2)")?;
+                firma_slot = n
+                    .parse::<u8>()
+                    .map_err(|_| format!("--firma-slot: `{n}` no es un u8"))?;
+                if firma_slot > 2 {
+                    return Err(format!(
+                        "--firma-slot {firma_slot}: el anillo tiene 3 slots (0/1/2)"
+                    ));
+                }
+            }
+            "--firma-log" => {
+                let path = it.next().ok_or("--firma-log requiere una ruta")?;
+                firma_log = path;
+            }
+            otro => return Err(format!("argumento desconocido: {otro} (usá --help)")),
         }
-        Some(otro) => Err(format!("argumento desconocido: {otro} (usá --help)")),
     }
+    Ok(Cli {
+        modo: modo.unwrap_or(Modo::Stdio),
+        firma_clave,
+        firma_slot,
+        firma_log,
+    })
+}
+
+/// Fija el modo de transporte exactamente una vez — `--socket` y `--akasha`
+/// son mutuamente excluyentes.
+fn fijar_modo(actual: &mut Option<Modo>, nuevo: Modo) -> Result<(), String> {
+    if actual.is_some() {
+        return Err("--socket y --akasha son mutuamente excluyentes".into());
+    }
+    *actual = Some(nuevo);
+    Ok(())
 }
 
 fn print_help() {
@@ -100,6 +167,11 @@ fn print_help() {
            asistente-puente --socket <path>    Daemon Unix socket; clientes en serie.\n  \
            asistente-puente --akasha <iface>   AF_PACKET sobre interfaz fisica.\n  \
            asistente-puente --help             Muestra esta ayuda.\n\
+         \n\
+         Fase 60 v4 :: el modo --akasha acepta firma de propuestas hash:\n  \
+           --firma-clave <PATH>    Clave Ed25519 (seed 32 B o SK 64 B).\n  \
+           --firma-slot <0|1|2>    Slot del anillo AGORA_AUTH_RING (default 0).\n  \
+           --firma-log <PATH>      Audit log (default asistente_puente_audit.log).\n\
          \n\
          stdio y --socket transportan `MensajeAsistente` (postcard, prefijo u32 LE).\n\
          --akasha transporta `TipoCable` (binario corto: cabecera 12 B + payload)\n\
@@ -278,18 +350,19 @@ mod pruebas_args {
 
     #[test]
     fn args_vacio_es_stdio() {
-        assert!(matches!(
-            parsear_args(std::iter::empty()),
-            Ok(Modo::Stdio)
-        ));
+        let cli = parsear_args(std::iter::empty()).expect("ok");
+        assert!(matches!(cli.modo, Modo::Stdio));
+        assert!(cli.firma_clave.is_none());
+        assert_eq!(cli.firma_slot, 0);
     }
 
     #[test]
     fn args_socket_con_path() {
         let v = vec!["--socket".to_string(), "/tmp/x.sock".to_string()];
-        match parsear_args(v.into_iter()) {
-            Ok(Modo::Daemon { socket }) => assert_eq!(socket, "/tmp/x.sock"),
-            otro => panic!("esperaba Daemon, obtuve {:?}", matches!(otro, Ok(_))),
+        let cli = parsear_args(v.into_iter()).expect("ok");
+        match cli.modo {
+            Modo::Daemon { socket } => assert_eq!(socket, "/tmp/x.sock"),
+            otro => panic!("esperaba Daemon, obtuve {:?}", matches!(otro, Modo::Stdio)),
         }
     }
 
@@ -303,6 +376,58 @@ mod pruebas_args {
     fn args_desconocido_es_error() {
         let v = vec!["--inventado".to_string()];
         assert!(parsear_args(v.into_iter()).is_err());
+    }
+
+    // Fase 60 v4 :: nuevos flags de firma.
+
+    #[test]
+    fn args_firma_clave_y_slot() {
+        let v = vec![
+            "--akasha".to_string(),
+            "eth0".to_string(),
+            "--firma-clave".to_string(),
+            "/etc/wawa/op.sk".to_string(),
+            "--firma-slot".to_string(),
+            "1".to_string(),
+        ];
+        let cli = parsear_args(v.into_iter()).expect("ok");
+        assert!(matches!(cli.modo, Modo::Akasha { .. }));
+        assert_eq!(cli.firma_clave.as_deref(), Some("/etc/wawa/op.sk"));
+        assert_eq!(cli.firma_slot, 1);
+    }
+
+    #[test]
+    fn args_firma_slot_fuera_de_rango() {
+        let v = vec![
+            "--firma-slot".to_string(),
+            "3".to_string(),
+        ];
+        let err = match parsear_args(v.into_iter()) {
+            Err(e) => e,
+            Ok(_) => panic!("esperaba error de slot fuera de rango"),
+        };
+        assert!(err.contains("3 slots"));
+    }
+
+    #[test]
+    fn args_socket_y_akasha_son_excluyentes() {
+        let v = vec![
+            "--socket".to_string(),
+            "/tmp/x.sock".to_string(),
+            "--akasha".to_string(),
+            "eth0".to_string(),
+        ];
+        let err = match parsear_args(v.into_iter()) {
+            Err(e) => e,
+            Ok(_) => panic!("esperaba error de exclusion mutua"),
+        };
+        assert!(err.contains("mutuamente excluyentes"));
+    }
+
+    #[test]
+    fn args_firma_log_default() {
+        let cli = parsear_args(std::iter::empty()).expect("ok");
+        assert_eq!(cli.firma_log, "asistente_puente_audit.log");
     }
 }
 

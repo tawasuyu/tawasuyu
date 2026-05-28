@@ -7,10 +7,17 @@
 //  - v2 :: input de texto local (sys_get_scancode + traduccion +
 //          buffer QUERY). Sin red todavia: Enter no manda nada.
 //  - v3 :: sys_red_enviar / sys_red_recibir sobre `CANAL_ASISTENTE`.
-//  - v4 :: presentar propuestas y disparar la firma humana via
-//          `daemon-firma` cuando aplique.
+//  - v4 :: ciclo de firma humana de propuestas hash. Al recibir una
+//          PropuestaInstalarApp / PropuestaCambiarConfig, la app guarda
+//          el hash y, si el operador pulsa SPACE, emite un
+//          `RequestFirma` por el cable. El puente Linux lo enrutar al
+//          operador (prompt y/N), firma y devuelve un `Firma` que la
+//          app pinta como "FIRMADO POR SLOT N". La syscall
+//          `sys_manifiesto_proponer` que cierra el ciclo queda como
+//          nota — requiere PERMISO_RAIZ que la EntradaApp aun no
+//          declara (hito 6 :: siembra en GENESIS).
 //
-//  Este archivo cubre v1+v2.
+//  Este archivo cubre v1+v2+v3+v4.
 // =============================================================================
 
 #![no_std]
@@ -97,7 +104,7 @@ static mut MAC_LISTA: bool = false;
 static mut CONSULTA_ID_SIGUIENTE: u64 = 1;
 static mut ULTIMA_CONSULTA_ID: u64 = 0;
 
-/// Estado de v3 hasta que llegue una propuesta.
+/// Estado de v3+v4 hasta que llegue una propuesta o se cierre el ciclo.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EstadoRed {
     /// Nada en vuelo. El operador puede tipear.
@@ -105,13 +112,30 @@ enum EstadoRed {
     /// Hay una consulta esperando respuesta del puente.
     EsperandoPropuesta,
     /// Llego una propuesta del tipo indicado (codigo de `TipoCable`).
-    /// El texto/hash esta en `RESPUESTA_BUFFER[..RESPUESTA_LEN]`.
+    /// El texto/hash esta en `RESPUESTA_BUFFER[..RESPUESTA_LEN]`. Para
+    /// las variantes Instalar/Cambiar el hash crudo de 32 bytes vive
+    /// ademas en `HASH_PENDIENTE` para reutilizarlo en `RequestFirma`.
     Propuesta(u16),
+    /// Fase 60 v4 :: el operador autorizo con SPACE. La app envio
+    /// `RequestFirma` por el cable y espera el `Firma` del puente.
+    EsperandoFirma,
+    /// Fase 60 v4 :: llego un `Firma`. El payload trae [slot, firma 64 B];
+    /// `RESPUESTA_BUFFER` guarda los primeros bytes de firma en hex para
+    /// pintar como prueba visual.
+    Firmada(u8),
     /// Llego un Error.
     Error,
 }
 
 static mut ESTADO_RED: EstadoRed = EstadoRed::Reposo;
+
+/// FASE 60 v4 :: hash de 32 bytes pendiente de firma. Se carga al
+/// absorber una propuesta Instalar/Cambiar; SPACE lo reusa para
+/// construir el `RequestFirma`. `HASH_PENDIENTE_TIPO` distingue cuaderno
+/// (1) vs configuracion (2) — el puente lo mapea al prefijo correcto
+/// del `daemon-firma`.
+static mut HASH_PENDIENTE: [u8; 32] = [0; 32];
+static mut HASH_PENDIENTE_TIPO: u8 = 0;
 
 /// Buffer para la representacion legible de la ultima respuesta. Hasta
 /// 256 bytes — caben textos cortos del LLM. Si una propuesta trae mas,
@@ -154,6 +178,16 @@ const TIPO_CABLE_PROPUESTA_LANZAR: u16 = 3;
 const TIPO_CABLE_PROPUESTA_INSTALAR: u16 = 4;
 const TIPO_CABLE_PROPUESTA_CAMBIAR_CONFIG: u16 = 5;
 const TIPO_CABLE_ERROR: u16 = 6;
+const TIPO_CABLE_REQUEST_FIRMA: u16 = 7;
+const TIPO_CABLE_FIRMA: u16 = 8;
+
+// FASE 60 v4 :: espejo de `format::TIPO_OBJETO_*`. El puente los lee
+// del primer byte del payload de RequestFirma para elegir entre los
+// prefijos legacy `wawa::sign_request::` (cuaderno) y `wawa::sign_config::`
+// (configuracion). Renumerar en `format` rompe el cable — el test
+// `tipo_objeto_codigos_estables` defiende la simetria.
+const TIPO_OBJETO_CUADERNO: u8 = 1;
+const TIPO_OBJETO_CONFIGURACION: u8 = 2;
 
 /// EtherType del asistente en big endian.
 const ETHERTYPE_ASISTENTE_BE: [u8; 2] = [
@@ -249,6 +283,21 @@ fn procesar_teclado() {
         unsafe { ULTIMO_CHAR = b'\n' };
         enviar_consulta();
         return;
+    }
+    // FASE 60 v4 :: SPACE (0x39) sobre una propuesta hash autoriza la
+    // firma. Es el mismo gesto que ya usa `mudanza` para "probar reancla",
+    // unificado entre apps del genesis. Si la propuesta vigente no es de
+    // tipo hash o no hay propuesta, SPACE cae al append-a-query normal.
+    if sc == 0x39 {
+        let firmable = matches!(
+            unsafe { ESTADO_RED },
+            EstadoRed::Propuesta(TIPO_CABLE_PROPUESTA_INSTALAR)
+                | EstadoRed::Propuesta(TIPO_CABLE_PROPUESTA_CAMBIAR_CONFIG)
+        );
+        if firmable {
+            solicitar_firma();
+            return;
+        }
     }
     // Letra/cifra/espacio: append si cabe.
     if let Some(byte) = traducir_scancode_a_ascii(sc) {
@@ -418,19 +467,23 @@ fn absorber_propuesta(tipo: u16, payload: &[u8]) {
                 }
             }
             TIPO_CABLE_PROPUESTA_INSTALAR | TIPO_CABLE_PROPUESTA_CAMBIAR_CONFIG => {
-                // Payload son 32 bytes de hash. v3 pinta solo los
-                // primeros 4 bytes en hex como pista; v4 lo mandara al
-                // daemon-firma para confirmacion humana.
-                if payload.len() >= 4 {
+                // Payload son 32 bytes de hash. Guardamos los 32 B en
+                // `HASH_PENDIENTE` para que SPACE pueda reusarlos
+                // construyendo un `RequestFirma`; pintamos los
+                // primeros 4 bytes en hex como pista visual.
+                if payload.len() >= 32 {
+                    let hash_dst: &mut [u8; 32] = &mut *core::ptr::addr_of_mut!(HASH_PENDIENTE);
+                    hash_dst.copy_from_slice(&payload[..32]);
+                    HASH_PENDIENTE_TIPO = if tipo == TIPO_CABLE_PROPUESTA_INSTALAR {
+                        TIPO_OBJETO_CUADERNO
+                    } else {
+                        TIPO_OBJETO_CONFIGURACION
+                    };
                     let mut buf = [b'-'; 16];
-                    buf[0] = hex_nibble(payload[0] >> 4);
-                    buf[1] = hex_nibble(payload[0] & 0x0F);
-                    buf[2] = hex_nibble(payload[1] >> 4);
-                    buf[3] = hex_nibble(payload[1] & 0x0F);
-                    buf[4] = hex_nibble(payload[2] >> 4);
-                    buf[5] = hex_nibble(payload[2] & 0x0F);
-                    buf[6] = hex_nibble(payload[3] >> 4);
-                    buf[7] = hex_nibble(payload[3] & 0x0F);
+                    for i in 0..4 {
+                        buf[i * 2] = hex_nibble(payload[i] >> 4);
+                        buf[i * 2 + 1] = hex_nibble(payload[i] & 0x0F);
+                    }
                     copiar_a_respuesta(&buf[..8]);
                     EstadoRed::Propuesta(tipo)
                 } else {
@@ -438,12 +491,30 @@ fn absorber_propuesta(tipo: u16, payload: &[u8]) {
                     EstadoRed::Error
                 }
             }
+            TIPO_CABLE_FIRMA => {
+                // Fase 60 v4 :: el puente nos devuelve [slot, firma 64 B].
+                // Pintamos los primeros 4 bytes de firma en hex y el slot.
+                if payload.len() >= 65 {
+                    let slot = payload[0];
+                    let mut buf = [b'-'; 16];
+                    for i in 0..4 {
+                        buf[i * 2] = hex_nibble(payload[1 + i] >> 4);
+                        buf[i * 2 + 1] = hex_nibble(payload[1 + i] & 0x0F);
+                    }
+                    copiar_a_respuesta(&buf[..8]);
+                    EstadoRed::Firmada(slot)
+                } else {
+                    copiar_a_respuesta(b"FIRMA TRUNCADA");
+                    EstadoRed::Error
+                }
+            }
             TIPO_CABLE_ERROR => {
                 copiar_a_respuesta(payload);
                 EstadoRed::Error
             }
-            TIPO_CABLE_CONSULTA => {
-                // Otro nodo hablando — no es para nosotros. Silencio.
+            TIPO_CABLE_CONSULTA | TIPO_CABLE_REQUEST_FIRMA => {
+                // Tipos que VIAJAN de la app al puente — un eco propio o
+                // de otro nodo. Silencio.
                 return;
             }
             _ => {
@@ -451,6 +522,41 @@ fn absorber_propuesta(tipo: u16, payload: &[u8]) {
                 return;
             }
         };
+    }
+}
+
+/// FASE 60 v4 :: empaqueta un `RequestFirma` con el `HASH_PENDIENTE`
+/// vigente y lo dispara por el cable. El operador del puente vera el
+/// prompt y/N; el `Firma` que vuelva entra por `drenar_red` →
+/// `absorber_propuesta`.
+fn solicitar_firma() {
+    unsafe {
+        if !MAC_LISTA || HASH_PENDIENTE_TIPO == 0 {
+            return;
+        }
+        // Reusamos el id de la consulta original — el puente ya respondio
+        // a ese id con la propuesta hash y ahora respondera con la firma.
+        let id = ULTIMA_CONSULTA_ID;
+
+        // Construir frame Ethernet en `TX_BUFFER`. Cabecera Eth 14 B +
+        // cabecera cable 12 B + payload firma (1 B tipo + 32 B hash).
+        let tx = &mut *core::ptr::addr_of_mut!(TX_BUFFER);
+        tx[0..6].copy_from_slice(&[0xFF; 6]);
+        let mac_ref: &[u8; 6] = &*core::ptr::addr_of!(MAC);
+        tx[6..12].copy_from_slice(mac_ref);
+        tx[12..14].copy_from_slice(&ETHERTYPE_ASISTENTE_BE);
+
+        let cab_dst = &mut tx[TAM_CAB_ETH..TAM_CAB_ETH + TAM_CABECERA_CABLE];
+        let _ = escribir_cabecera_cable(cab_dst, TIPO_CABLE_REQUEST_FIRMA, id);
+
+        let payload_inicio = TAM_CAB_ETH + TAM_CABECERA_CABLE;
+        tx[payload_inicio] = HASH_PENDIENTE_TIPO;
+        let hash_src: &[u8; 32] = &*core::ptr::addr_of!(HASH_PENDIENTE);
+        tx[payload_inicio + 1..payload_inicio + 33].copy_from_slice(hash_src);
+        let total = payload_inicio + 33;
+
+        let _ = sys_net_enviar(tx.as_ptr() as u32, total as u32);
+        ESTADO_RED = EstadoRed::EsperandoFirma;
     }
 }
 
@@ -542,8 +648,9 @@ fn pintar() {
     }
     y += 32;
 
-    // FASE 60 v3 :: estado de red. Linea fija con el estado del puente
-    // + el contenido de la respuesta cuando llega.
+    // FASE 60 v3+v4 :: estado de red. Linea fija con el estado del
+    // puente + el contenido de la respuesta cuando llega. Propuestas
+    // hash invitan al operador con un hint "SPACE PARA FIRMAR".
     let (etiqueta, tinta) = match unsafe { ESTADO_RED } {
         EstadoRed::Reposo => {
             let lista = unsafe { MAC_LISTA };
@@ -558,17 +665,31 @@ fn pintar() {
             TIPO_CABLE_PROPUESTA_NOTAR => (b"NOTA DEL PUENTE:".as_slice(), TINTA),
             TIPO_CABLE_PROPUESTA_LANZAR => (b"LANZAR APP IDX:".as_slice(), ACENTO),
             TIPO_CABLE_PROPUESTA_INSTALAR => {
-                (b"INSTALAR MANIFIESTO HASH:".as_slice(), ACENTO)
+                (b"INSTALAR MF HASH (SPACE FIRMA):".as_slice(), ACENTO)
             }
             TIPO_CABLE_PROPUESTA_CAMBIAR_CONFIG => {
-                (b"CAMBIAR CONFIG HASH:".as_slice(), ACENTO)
+                (b"CAMBIAR CFG HASH (SPACE FIRMA):".as_slice(), ACENTO)
             }
             _ => (b"PROPUESTA RECIBIDA".as_slice(), SUTIL),
         },
+        EstadoRed::EsperandoFirma => {
+            (b"ESPERANDO FIRMA DEL OPERADOR".as_slice(), ACENTO)
+        }
+        EstadoRed::Firmada(_) => (b"FIRMADO POR SLOT:".as_slice(), ACENTO),
         EstadoRed::Error => (b"ERROR DEL PUENTE:".as_slice(), TINTA),
     };
     dibujar_texto(lienzo, etiqueta, 18, y, 1, tinta);
     y += 14;
+
+    // Fase 60 v4 :: si estamos en Firmada(slot), pintamos primero el
+    // slot literal (mejor que esconderlo en la respuesta hex que pinta
+    // los primeros 4 bytes del sello).
+    if let EstadoRed::Firmada(slot) = unsafe { ESTADO_RED } {
+        let mut slot_buf = [0u8; 4];
+        let n = formatear_u32(slot as u32, &mut slot_buf);
+        dibujar_texto(lienzo, &slot_buf[..n], 18, y, 1, TINTA);
+        y += 14;
+    }
 
     // Contenido de la respuesta — primeros caracteres legibles.
     let (resp, resp_len): (&[u8], usize) =

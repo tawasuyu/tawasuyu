@@ -29,6 +29,11 @@ postcard = { workspace = true }
 # directo — menos abstraccion, mas claridad sobre la ABI del kernel.
 libc = { workspace = true }
 nix = { workspace = true }
+# Fase 60 v4 :: el puente firma in-process cuando llega RequestFirma. Mismo
+# crate que `wawactl daemon-firma` para que las claves del operador (seed
+# 32 B o SecretKey 64 B) sean intercambiables entre los dos demonios.
+ed25519-compact = { version = "2", default-features = false }
+chrono = { workspace = true }
 
 [dev-dependencies]
 pluma-llm-mock = { path = "../../../00_unanchay/pluma/pluma-llm-mock" }

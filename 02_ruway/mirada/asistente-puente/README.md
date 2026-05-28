@@ -33,6 +33,33 @@ El binario ofrece tres modos según el flag de línea de comandos:
   `Consulta → Propuesta/Error`. Inicializa pluma-llm desde el env;
   sin credenciales cae al Mock.
 
+## Fase 60 v4 :: firma humana de propuestas hash
+
+Al modo `--akasha` se le pueden sumar tres flags opcionales para que
+ESTE binario firme las propuestas que la app pulsó SPACE para
+autorizar:
+
+```bash
+target/release/asistente-puente --akasha eth0 \
+    --firma-clave ~/.config/wawa/operador.sk \
+    --firma-slot 0 \
+    --firma-log ~/asistente_puente_audit.log
+```
+
+- `--firma-clave PATH`: clave Ed25519 (32 B seed o 64 B SecretKey).
+  Intercambiable con la que ya carga `wawactl daemon-firma`.
+- `--firma-slot N`: slot del anillo `AGORA_AUTH_RING` (0/1/2). Default 0.
+- `--firma-log PATH`: append de auditoría. Default
+  `asistente_puente_audit.log` en el CWD.
+
+Flujo: cuando llega un `TipoCable::RequestFirma` por el cable (33 B
+payload = `[tipo_obj: u8, hash: [u8;32]]`), el puente imprime al
+stderr el HASH + tipo (CUADERNO/CONFIGURACION) y espera `y` por stdin
+(30 s timeout, idéntico al de `daemon-firma`). Si autoriza, firma con
+la clave cargada y devuelve un `TipoCable::Firma` con
+`[slot, firma 64 B]`. Sin `--firma-clave`, todo `RequestFirma` rebota
+con un `TipoCable::Error("PUENTE SIN CLAVE: ...")` y la app lo muestra.
+
 ## Lo que falta
 
 - Para `InstalarApp` / `CambiarConfiguracion`: emitir el objeto
