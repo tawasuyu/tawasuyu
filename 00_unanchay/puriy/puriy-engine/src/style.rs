@@ -1244,6 +1244,10 @@ fn default_display(tag: &str) -> Display {
         // pero no rompan el row del padre.
         "button" | "select" | "textarea" | "label" => Display::InlineBlock,
         "head" | "title" | "style" | "script" | "meta" | "link" => Display::None,
+        // `<option>` / `<optgroup>`: el chrome los recolecta en
+        // `SelectInfo` cuando ve un `<select>` padre y los renderea
+        // como popup. Como hijos directos del DOM serían texto suelto.
+        "option" | "optgroup" => Display::None,
         // SVG y canvas: no tenemos renderer. Sin ocultarlos, sus
         // descendientes (titles, paths con text content) salen como
         // texto basura sobre la página. Mejor invisible que ruido.

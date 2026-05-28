@@ -108,6 +108,14 @@ fn fresh_tab_id() -> TabId {
 
 pub struct Puriy;
 
+/// Estado per-`<select>` en una pestaña: opción seleccionada + si está
+/// abierto.
+#[derive(Debug, Clone)]
+pub struct SelectState {
+    pub selected: usize,
+    pub open: bool,
+}
+
 pub struct TabState {
     pub id: TabId,
     pub url: String,
@@ -130,6 +138,10 @@ pub struct TabState {
     /// contenido inicial cuando llega el `Msg::Loaded` y persiste hasta la
     /// próxima navegación de la pestaña.
     pub inputs: Vec<TextInputState>,
+    /// Estado por `<select>` del documento (mismo orden DFS que el
+    /// `select` walk del Loaded). Cada slot lleva el índice seleccionado
+    /// y si está abierto (dropdown expandido).
+    pub selects: Vec<SelectState>,
     /// Índice DFS del input/textarea focado (clave en `inputs`). `None` =
     /// sin foco; el chrome rutea teclas al resto del flow.
     pub focused_input: Option<usize>,
@@ -159,6 +171,7 @@ impl TabState {
             source: None,
             gen: 0,
             inputs: Vec::new(),
+            selects: Vec::new(),
             focused_input: None,
             details_open: Vec::new(),
         }
@@ -290,6 +303,11 @@ pub enum Msg {
     /// Pointer entered un `<a>` (cursor sobre link). `Some(url)` levanta
     /// el preview en la status bar; `None` lo limpia (pointer leave).
     HoverLink(Option<String>),
+    /// Click en el "header" de un `<select>` (la barra siempre visible)
+    /// — toggle abre/cierra el dropdown.
+    SelectToggle(usize),
+    /// Click en una de las opciones del dropdown — setea selected y cierra.
+    SelectPick(usize, usize),
     /// Click sobre un `<input>`/`<textarea>` del documento — foca ese
     /// input por índice DFS.
     FocusInput(usize),
@@ -463,6 +481,7 @@ impl App for Puriy {
                         // `open` attribute.
                         let mut details_open = Vec::new();
                         let mut inputs: Vec<TextInputState> = Vec::new();
+                        let mut selects: Vec<SelectState> = Vec::new();
                         box_tree.walk(|b| {
                             if b.tag.as_deref() == Some("details") {
                                 details_open.push(b.details_open_attr);
@@ -474,9 +493,16 @@ impl App for Puriy {
                                 }
                                 inputs.push(s);
                             }
+                            if let Some(sel) = &b.select {
+                                selects.push(SelectState {
+                                    selected: sel.initial,
+                                    open: false,
+                                });
+                            }
                         });
                         t.details_open = details_open;
                         t.inputs = inputs;
+                        t.selects = selects;
                         t.focused_input = None;
                         t.box_tree = Some(box_tree);
                         // Registra en la history global del Profile (no
@@ -715,6 +741,19 @@ impl App for Puriy {
             }
             Msg::HoverLink(url) => {
                 m.hover_link = url;
+            }
+            Msg::SelectToggle(idx) => {
+                let t = m.active_mut();
+                if let Some(s) = t.selects.get_mut(idx) {
+                    s.open = !s.open;
+                }
+            }
+            Msg::SelectPick(idx, opt) => {
+                let t = m.active_mut();
+                if let Some(s) = t.selects.get_mut(idx) {
+                    s.selected = opt;
+                    s.open = false;
+                }
             }
             Msg::FocusInput(idx) => {
                 let t = m.active_mut();
@@ -1498,6 +1537,8 @@ struct RenderCtx<'a> {
     inputs: &'a [TextInputState],
     focused_input: Option<usize>,
     input_counter: usize,
+    selects: &'a [SelectState],
+    select_counter: usize,
 }
 
 fn viewport(t: &TabState, zoom: f32, find_query_lc: &str, find_current: usize) -> View<Msg> {
@@ -1534,6 +1575,8 @@ fn viewport(t: &TabState, zoom: f32, find_query_lc: &str, find_current: usize) -
         inputs: &t.inputs,
         focused_input: t.focused_input,
         input_counter: 0,
+        selects: &t.selects,
+        select_counter: 0,
     };
     let content = View::new(Style {
         position: TaffyPosition::Absolute,
@@ -1565,6 +1608,12 @@ fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
         let my_idx = ctx.input_counter;
         ctx.input_counter += 1;
         return render_input(b, kind, my_idx, ctx);
+    }
+    // <select>: reservar slot y devolver el dropdown (header + opciones).
+    if let Some(info) = &b.select {
+        let my_idx = ctx.select_counter;
+        ctx.select_counter += 1;
+        return render_select(b, info, my_idx, ctx);
     }
     let style = box_style(b, zoom);
     let mut view = View::new(style);
@@ -1814,20 +1863,42 @@ fn build_form_submit_url(m: &Model) -> Option<String> {
         }
     });
     let form_idx = focused_form?;
-    // Segundo pase: junta los pares (name, value) de los inputs del mismo
-    // form que tengan `name` no vacío.
+    // Segundo pase: junta los pares (name, value) de los inputs y
+    // `<select>`s del mismo form que tengan `name`. Texto del input vive
+    // en `t.inputs[idx]`; valor del select en `t.selects[idx].selected`
+    // → SelectInfo.options[i].value.
     let mut pairs: Vec<(String, String)> = Vec::new();
-    let mut counter2: usize = 0;
+    let mut input_idx: usize = 0;
+    let mut select_idx: usize = 0;
     tree.walk(|b| {
         if b.input_kind.is_some() {
-            let my_idx = counter2;
-            counter2 += 1;
+            let my_idx = input_idx;
+            input_idx += 1;
             if b.form_idx == Some(form_idx) {
                 if let Some(name) = &b.input_name {
                     let value = t
                         .inputs
                         .get(my_idx)
                         .map(|s| s.text())
+                        .unwrap_or_default();
+                    pairs.push((name.clone(), value));
+                }
+            }
+        }
+        if let Some(info) = &b.select {
+            let my_idx = select_idx;
+            select_idx += 1;
+            if b.form_idx == Some(form_idx) {
+                if let Some(name) = &b.input_name {
+                    let sel = t
+                        .selects
+                        .get(my_idx)
+                        .map(|s| s.selected)
+                        .unwrap_or(info.initial);
+                    let value = info
+                        .options
+                        .get(sel)
+                        .map(|o| o.value.clone())
                         .unwrap_or_default();
                     pairs.push((name.clone(), value));
                 }
@@ -2071,6 +2142,125 @@ fn render_input(
         });
     }
     wrapper.children(vec![input])
+}
+
+/// `<select>` con `<option>`s: renderea un header click-toggle con la
+/// opción elegida + flecha; cuando está abierto, expande la lista
+/// debajo. Click en una opción la selecciona y cierra el dropdown.
+fn render_select(
+    b: &BoxNode,
+    info: &puriy_engine::SelectInfo,
+    idx: usize,
+    ctx: &mut RenderCtx<'_>,
+) -> View<Msg> {
+    let zoom = ctx.zoom;
+    let state = ctx.selects.get(idx);
+    let selected = state.map(|s| s.selected).unwrap_or(info.initial);
+    let open = state.map(|s| s.open).unwrap_or(false);
+    let current_label = info
+        .options
+        .get(selected)
+        .map(|o| o.label.clone())
+        .unwrap_or_default();
+
+    let css_width = length_to_taffy(b.width, zoom);
+    let header_h = (b.font_size * zoom).max(14.0_f32 * zoom) + 10.0;
+    let header = View::new(Style {
+        size: Size {
+            width: css_width.clone().unwrap_or_else(|| length(220.0_f32 * zoom)),
+            height: length(header_h),
+        },
+        padding: Rect {
+            left: length(8.0_f32 * zoom),
+            right: length(8.0_f32 * zoom),
+            top: length(4.0_f32 * zoom),
+            bottom: length(4.0_f32 * zoom),
+        },
+        flex_direction: FlexDirection::Row,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(Color::WHITE)
+    .radius(3.0)
+    .on_click(Msg::SelectToggle(idx))
+    .children(vec![
+        View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(header_h - 8.0) },
+            ..Default::default()
+        })
+        .text_aligned(
+            truncate(&current_label, 80),
+            b.font_size * zoom,
+            Color::from_rgb8(30, 30, 40),
+            Alignment::Start,
+        ),
+        View::new(Style {
+            size: Size {
+                width: length(14.0_f32 * zoom),
+                height: length(header_h - 8.0),
+            },
+            ..Default::default()
+        })
+        .text_aligned(
+            if open { "▲".to_string() } else { "▼".to_string() },
+            b.font_size * zoom * 0.8,
+            Color::from_rgb8(80, 80, 95),
+            Alignment::End,
+        ),
+    ]);
+
+    let mut all: Vec<View<Msg>> = vec![header];
+    if open {
+        for (i, opt) in info.options.iter().enumerate() {
+            let is_selected = i == selected;
+            let row = View::new(Style {
+                size: Size {
+                    width: css_width.clone().unwrap_or_else(|| length(220.0_f32 * zoom)),
+                    height: length(header_h),
+                },
+                padding: Rect {
+                    left: length(10.0_f32 * zoom),
+                    right: length(10.0_f32 * zoom),
+                    top: length(4.0_f32 * zoom),
+                    bottom: length(4.0_f32 * zoom),
+                },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .fill(if is_selected {
+                Color::from_rgb8(220, 230, 250)
+            } else {
+                Color::WHITE
+            })
+            .hover_fill(Color::from_rgb8(238, 240, 248))
+            .on_click(Msg::SelectPick(idx, i))
+            .text_aligned(
+                truncate(&opt.label, 80),
+                b.font_size * zoom,
+                Color::from_rgb8(30, 30, 40),
+                Alignment::Start,
+            );
+            all.push(row);
+        }
+    }
+
+    View::new(Style {
+        size: Size {
+            width: css_width.unwrap_or_else(|| length(220.0_f32 * zoom)),
+            height: auto(),
+        },
+        margin: Rect {
+            left: length(b.margin.left * zoom),
+            right: length(b.margin.right * zoom),
+            top: length(b.margin.top * zoom),
+            bottom: length(b.margin.bottom * zoom),
+        },
+        flex_direction: FlexDirection::Column,
+        ..Default::default()
+    })
+    .fill(Color::from_rgb8(220, 220, 230))
+    .radius(3.0)
+    .children(all)
 }
 
 /// Aplica `border-radius` y dibuja, en una sola pasada de `paint_with`,

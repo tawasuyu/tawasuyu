@@ -199,6 +199,28 @@ pub struct BoxNode {
     /// (más cercano hacia arriba en la jerarquía). `None` = no está
     /// dentro de un form, no se puede submitear.
     pub form_idx: Option<usize>,
+    /// Si el nodo es `<select>`, este campo lleva la lista de opciones
+    /// (con `value` y `label`) y el índice por default. El chrome lo
+    /// rendera como dropdown editable y guarda el índice seleccionado
+    /// en su `TabState`.
+    pub select: Option<SelectInfo>,
+}
+
+/// Datos de un `<select>` para renderizarlo como dropdown.
+#[derive(Debug, Clone)]
+pub struct SelectInfo {
+    pub options: Vec<SelectOption>,
+    /// Índice del `<option selected>` inicial, o `0` si ninguno lo era.
+    pub initial: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct SelectOption {
+    /// Texto que el usuario ve.
+    pub label: String,
+    /// Valor que va al querystring (cae al `label` si el HTML no
+    /// proveyó atributo `value`).
+    pub value: String,
 }
 
 /// Metadata por `<form>` del documento — el chrome la usa al submit.
@@ -326,7 +348,7 @@ fn assign_form_idx(b: &mut BoxNode, stack: &mut Vec<usize>, cursor: &mut usize) 
         stack.push(*cursor);
         *cursor += 1;
     }
-    if b.input_kind.is_some() {
+    if b.input_kind.is_some() || b.select.is_some() {
         b.form_idx = stack.last().copied();
     }
     for c in &mut b.children {
@@ -405,6 +427,7 @@ fn empty_root() -> BoxNode {
         input_placeholder: None,
         input_name: None,
         form_idx: None,
+        select: None,
     }
 }
 
@@ -485,6 +508,30 @@ fn build_node(
             });
             let input_placeholder = input_kind.and_then(|_| dom::attr(node, "placeholder"));
             let input_name = input_kind.and_then(|_| dom::attr(node, "name"));
+            // `<select>`: coleccionamos opciones y el inicial seleccionado.
+            let select = if tag.as_deref() == Some("select") {
+                let mut opts: Vec<SelectOption> = Vec::new();
+                let mut initial = 0usize;
+                let mut seen_selected = false;
+                for child in node.children.borrow().iter() {
+                    if dom::element_name(child).as_deref() == Some("option") {
+                        let label = dom::collect_text(child);
+                        let value = dom::attr(child, "value").unwrap_or_else(|| label.clone());
+                        if dom::attr(child, "selected").is_some() && !seen_selected {
+                            initial = opts.len();
+                            seen_selected = true;
+                        }
+                        opts.push(SelectOption { label, value });
+                    }
+                }
+                if opts.is_empty() {
+                    None
+                } else {
+                    Some(SelectInfo { options: opts, initial })
+                }
+            } else {
+                None
+            };
             // <img>: descarga + decode sync. Si falla, el campo queda
             // None y el chrome muestra placeholder con el alt.
             let image = if tag.as_deref() == Some("img") {
@@ -594,8 +641,16 @@ fn build_node(
                 input_kind,
                 input_initial,
                 input_placeholder,
-                input_name,
+                input_name: input_name.or_else(|| {
+                    // `<select>` también necesita un `name` para submitear.
+                    if tag.as_deref() == Some("select") {
+                        dom::attr(node, "name")
+                    } else {
+                        None
+                    }
+                }),
                 form_idx: None,
+                select,
             })
         }
         NodeData::Text { contents } => {
@@ -701,6 +756,7 @@ fn build_node(
                 input_placeholder: None,
         input_name: None,
         form_idx: None,
+        select: None,
             })
         }
     }
@@ -777,6 +833,7 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         input_placeholder: None,
         input_name: None,
         form_idx: None,
+        select: None,
     }
 }
 
@@ -1462,6 +1519,36 @@ mod tests {
             }
         });
         assert!(clickable.is_empty(), "ningún href no-web debería ser clickable: {clickable:?}");
+    }
+
+    #[test]
+    fn select_recolecta_options_y_seleccionado_inicial() {
+        let html = r##"<html><body>
+            <form action="/p">
+                <select name="lang">
+                    <option value="es">Español</option>
+                    <option value="en" selected>English</option>
+                    <option>Otro</option>
+                </select>
+            </form>
+        </body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("https://example.com/", html);
+        let mut info: Option<crate::SelectInfo> = None;
+        doc.box_tree.walk(|b| {
+            if let Some(s) = &b.select {
+                info = Some(s.clone());
+                assert_eq!(b.input_name.as_deref(), Some("lang"));
+                assert_eq!(b.form_idx, Some(0));
+            }
+        });
+        let info = info.expect("debería haber un <select>");
+        assert_eq!(info.options.len(), 3);
+        assert_eq!(info.options[0].value, "es");
+        assert_eq!(info.options[0].label, "Español");
+        assert_eq!(info.options[2].label, "Otro");
+        assert_eq!(info.options[2].value, "Otro"); // fallback al label
+        assert_eq!(info.initial, 1); // <option selected> es el segundo
     }
 
     #[test]
