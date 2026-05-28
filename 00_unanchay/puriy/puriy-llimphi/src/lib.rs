@@ -138,6 +138,11 @@ pub struct TabState {
     /// contenido inicial cuando llega el `Msg::Loaded` y persiste hasta la
     /// próxima navegación de la pestaña.
     pub inputs: Vec<TextInputState>,
+    /// Estado `checked` paralelo a `inputs` para los slots cuyo
+    /// `input_kind` es Checkbox/Radio. Para slots Text/Search/Password/
+    /// TextArea/Submit el bool se ignora; pero el indexing es 1:1 para
+    /// que sumar otro Vec no agregue otra fuente de drift.
+    pub input_checks: Vec<bool>,
     /// Estado por `<select>` del documento (mismo orden DFS que el
     /// `select` walk del Loaded). Cada slot lleva el índice seleccionado
     /// y si está abierto (dropdown expandido).
@@ -171,6 +176,7 @@ impl TabState {
             source: None,
             gen: 0,
             inputs: Vec::new(),
+            input_checks: Vec::new(),
             selects: Vec::new(),
             focused_input: None,
             details_open: Vec::new(),
@@ -308,11 +314,22 @@ pub enum Msg {
     SelectToggle(usize),
     /// Click en una de las opciones del dropdown — setea selected y cierra.
     SelectPick(usize, usize),
+    /// Click en un `<input type=checkbox>` — flippea el bool.
+    ToggleCheckbox(usize),
+    /// Click en un `<input type=radio>` — setea sólo éste como checked
+    /// en su grupo (mismo `name`).
+    SelectRadio(usize),
+    /// Click en un `<input type=submit>` — submitea su form.
+    SubmitForm(usize),
     /// Click sobre un `<input>`/`<textarea>` del documento — foca ese
     /// input por índice DFS.
     FocusInput(usize),
     /// Teclas redirigidas al input focado (cuando `focused_input` es Some).
     InputKey(KeyEvent),
+    /// Tab — foco al próximo input/textarea/select (con wrap).
+    FocusNext,
+    /// Shift+Tab — foco al input anterior.
+    FocusPrev,
     /// Click en `<summary>` (o en la flecha que lo precede): toggle del
     /// `<details>` cuyo índice DFS es `idx`. Si el índice excede el
     /// `details_open` actual, el msg es no-op (ej: re-render durante una
@@ -430,10 +447,14 @@ impl App for Puriy {
         }
         // Si hay un input/textarea del documento focado, las teclas van
         // ahí. Esc blurea (foco vuelve a la página). F5 se respeta como
-        // recargar para no perder un atajo crítico.
+        // recargar para no perder un atajo crítico. Tab/Shift+Tab cicla
+        // entre inputs sin pisar el typing.
         if model.active().focused_input.is_some() {
             if matches!(&e.key, Key::Named(NamedKey::Escape)) {
                 return Some(Msg::FocusInput(usize::MAX)); // sentinel = blur
+            }
+            if matches!(&e.key, Key::Named(NamedKey::Tab)) {
+                return Some(if mods.shift { Msg::FocusPrev } else { Msg::FocusNext });
             }
             if !matches!(&e.key, Key::Named(NamedKey::F5)) {
                 return Some(Msg::InputKey(e.clone()));
@@ -481,6 +502,7 @@ impl App for Puriy {
                         // `open` attribute.
                         let mut details_open = Vec::new();
                         let mut inputs: Vec<TextInputState> = Vec::new();
+                        let mut input_checks: Vec<bool> = Vec::new();
                         let mut selects: Vec<SelectState> = Vec::new();
                         box_tree.walk(|b| {
                             if b.tag.as_deref() == Some("details") {
@@ -492,6 +514,7 @@ impl App for Puriy {
                                     s.set_text(initial.clone());
                                 }
                                 inputs.push(s);
+                                input_checks.push(b.input_checked_initial);
                             }
                             if let Some(sel) = &b.select {
                                 selects.push(SelectState {
@@ -502,6 +525,7 @@ impl App for Puriy {
                         });
                         t.details_open = details_open;
                         t.inputs = inputs;
+                        t.input_checks = input_checks;
                         t.selects = selects;
                         t.focused_input = None;
                         t.box_tree = Some(box_tree);
@@ -755,6 +779,52 @@ impl App for Puriy {
                     s.open = false;
                 }
             }
+            Msg::ToggleCheckbox(idx) => {
+                let t = m.active_mut();
+                if let Some(c) = t.input_checks.get_mut(idx) {
+                    *c = !*c;
+                }
+            }
+            Msg::SelectRadio(idx) => {
+                // Encontrá el `name` de este radio + form_idx; los radios
+                // del mismo grupo se desmarcan, éste queda marcado.
+                let tree_opt = m.active().box_tree.clone();
+                let Some(tree) = tree_opt else { return m };
+                let mut my_name: Option<String> = None;
+                let mut my_form: Option<usize> = None;
+                let mut i = 0usize;
+                tree.walk(|b| {
+                    if b.input_kind.is_some() {
+                        if i == idx {
+                            my_name = b.input_name.clone();
+                            my_form = b.form_idx;
+                        }
+                        i += 1;
+                    }
+                });
+                let mut counter = 0usize;
+                let t = m.active_mut();
+                tree.walk(|b| {
+                    if b.input_kind == Some(puriy_engine::InputKind::Radio)
+                        && b.input_name == my_name
+                        && b.form_idx == my_form
+                    {
+                        if let Some(slot) = t.input_checks.get_mut(counter) {
+                            *slot = counter == idx;
+                        }
+                    }
+                    if b.input_kind.is_some() {
+                        counter += 1;
+                    }
+                });
+            }
+            Msg::SubmitForm(idx) => {
+                // Tratamos como si el input idx estuviera focado.
+                m.active_mut().focused_input = Some(idx);
+                if let Some(url) = build_form_submit_url(&m) {
+                    return Self::update(m, Msg::Navigate(url), handle);
+                }
+            }
             Msg::FocusInput(idx) => {
                 let t = m.active_mut();
                 if idx == usize::MAX {
@@ -764,6 +834,28 @@ impl App for Puriy {
                     t.focused_input = Some(idx);
                     // Blur address bar para que las teclas no compitan.
                     t.addr_focused = false;
+                }
+            }
+            Msg::FocusNext => {
+                let t = m.active_mut();
+                if !t.inputs.is_empty() {
+                    let n = t.inputs.len();
+                    let next = match t.focused_input {
+                        Some(i) => (i + 1) % n,
+                        None => 0,
+                    };
+                    t.focused_input = Some(next);
+                }
+            }
+            Msg::FocusPrev => {
+                let t = m.active_mut();
+                if !t.inputs.is_empty() {
+                    let n = t.inputs.len();
+                    let prev = match t.focused_input {
+                        Some(0) | None => n - 1,
+                        Some(i) => i - 1,
+                    };
+                    t.focused_input = Some(prev);
                 }
             }
             Msg::InputKey(e) => {
@@ -1535,6 +1627,7 @@ struct RenderCtx<'a> {
     details_open: &'a [bool],
     details_counter: usize,
     inputs: &'a [TextInputState],
+    input_checks: &'a [bool],
     focused_input: Option<usize>,
     input_counter: usize,
     selects: &'a [SelectState],
@@ -1573,6 +1666,7 @@ fn viewport(t: &TabState, zoom: f32, find_query_lc: &str, find_current: usize) -
         details_open: &t.details_open,
         details_counter: 0,
         inputs: &t.inputs,
+        input_checks: &t.input_checks,
         focused_input: t.focused_input,
         input_counter: 0,
         selects: &t.selects,
@@ -1875,17 +1969,42 @@ fn build_form_submit_url(m: &Model) -> Option<String> {
     let mut input_idx: usize = 0;
     let mut select_idx: usize = 0;
     tree.walk(|b| {
-        if b.input_kind.is_some() {
+        if let Some(kind) = b.input_kind {
             let my_idx = input_idx;
             input_idx += 1;
             if b.form_idx == Some(form_idx) {
                 if let Some(name) = &b.input_name {
-                    let value = t
-                        .inputs
-                        .get(my_idx)
-                        .map(|s| s.text())
-                        .unwrap_or_default();
-                    pairs.push((name.clone(), value));
+                    match kind {
+                        puriy_engine::InputKind::Checkbox
+                        | puriy_engine::InputKind::Radio => {
+                            let checked = t.input_checks.get(my_idx).copied().unwrap_or(false);
+                            if checked {
+                                let val = b
+                                    .input_initial
+                                    .clone()
+                                    .unwrap_or_else(|| "on".to_string());
+                                pairs.push((name.clone(), val));
+                            }
+                            // No-checked checkbox/radio: NO se manda
+                            // (HTML spec).
+                        }
+                        puriy_engine::InputKind::Submit => {
+                            // Submit con name: contribuye su `value`/label.
+                            let val = b
+                                .input_initial
+                                .clone()
+                                .unwrap_or_else(|| "Submit".to_string());
+                            pairs.push((name.clone(), val));
+                        }
+                        _ => {
+                            let value = t
+                                .inputs
+                                .get(my_idx)
+                                .map(|s| s.text())
+                                .unwrap_or_default();
+                            pairs.push((name.clone(), value));
+                        }
+                    }
                 }
             }
         }
@@ -2052,6 +2171,19 @@ fn render_input(
     ctx: &mut RenderCtx<'_>,
 ) -> View<Msg> {
     let zoom = ctx.zoom;
+    // Checkbox / radio / submit: widgets a parte (no text_input_view).
+    match kind {
+        puriy_engine::InputKind::Checkbox => {
+            return render_checkbox_radio(b, idx, ctx, /* radio */ false);
+        }
+        puriy_engine::InputKind::Radio => {
+            return render_checkbox_radio(b, idx, ctx, /* radio */ true);
+        }
+        puriy_engine::InputKind::Submit => {
+            return render_submit_button(b, idx, ctx);
+        }
+        _ => {}
+    }
     let focused = ctx.focused_input == Some(idx);
     // Estado por slot — usamos un blank si todavía no hay (no debería
     // pasar tras Loaded, pero defensivo).
@@ -2065,7 +2197,7 @@ fn render_input(
             puriy_engine::InputKind::Search => "buscar…",
             puriy_engine::InputKind::Password => "contraseña",
             puriy_engine::InputKind::TextArea => "",
-            puriy_engine::InputKind::Text => "",
+            _ => "",
         });
 
     let palette = TextInputPalette::default();
@@ -2146,6 +2278,92 @@ fn render_input(
         });
     }
     wrapper.children(vec![input])
+}
+
+/// `<input type=checkbox|radio>`: caja chica con `☐`/`☑` (o circle
+/// vacío/lleno para radio) clickeable. Sin label asociada — el `<label
+/// for="...">` no se cablea todavía, pero el click sobre el widget
+/// alcanza para toggle.
+fn render_checkbox_radio(
+    b: &BoxNode,
+    idx: usize,
+    ctx: &mut RenderCtx<'_>,
+    radio: bool,
+) -> View<Msg> {
+    let zoom = ctx.zoom;
+    let checked = ctx.input_checks.get(idx).copied().unwrap_or(false);
+    let glyph = if radio {
+        if checked { "●" } else { "○" }
+    } else if checked {
+        "☑"
+    } else {
+        "☐"
+    };
+    let msg = if radio { Msg::SelectRadio(idx) } else { Msg::ToggleCheckbox(idx) };
+    let size_px = (b.font_size * zoom).max(14.0 * zoom);
+    View::new(Style {
+        size: Size {
+            width: length(size_px + 4.0),
+            height: length(size_px + 4.0),
+        },
+        margin: Rect {
+            left: length(b.margin.left * zoom),
+            right: length(b.margin.right * zoom + 4.0),
+            top: length(b.margin.top * zoom),
+            bottom: length(b.margin.bottom * zoom),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .on_click(msg)
+    .text_aligned(
+        glyph.to_string(),
+        size_px,
+        Color::from_rgb8(40, 40, 50),
+        Alignment::Center,
+    )
+}
+
+/// `<input type=submit|button>` — botón con label desde `value` o
+/// default `Submit`. Click submitea el form.
+fn render_submit_button(b: &BoxNode, idx: usize, ctx: &mut RenderCtx<'_>) -> View<Msg> {
+    let zoom = ctx.zoom;
+    let label = b
+        .input_initial
+        .clone()
+        .unwrap_or_else(|| "Submit".to_string());
+    let css_width = length_to_taffy(b.width, zoom);
+    let h = (b.font_size * zoom).max(14.0 * zoom) + 12.0;
+    View::new(Style {
+        size: Size {
+            width: css_width.unwrap_or_else(|| length(120.0 * zoom)),
+            height: length(h),
+        },
+        padding: Rect {
+            left: length(10.0 * zoom),
+            right: length(10.0 * zoom),
+            top: length(6.0 * zoom),
+            bottom: length(6.0 * zoom),
+        },
+        margin: Rect {
+            left: length(b.margin.left * zoom),
+            right: length(b.margin.right * zoom),
+            top: length(b.margin.top * zoom),
+            bottom: length(b.margin.bottom * zoom),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(Color::from_rgb8(230, 230, 240))
+    .hover_fill(Color::from_rgb8(215, 220, 235))
+    .radius(3.0)
+    .on_click(Msg::SubmitForm(idx))
+    .text_aligned(
+        label,
+        b.font_size * zoom,
+        Color::from_rgb8(30, 30, 40),
+        Alignment::Center,
+    )
 }
 
 /// `<select>` con `<option>`s: renderea un header click-toggle con la

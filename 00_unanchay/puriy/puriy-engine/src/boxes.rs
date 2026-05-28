@@ -189,6 +189,9 @@ pub struct BoxNode {
     /// crear el `TextInputState` la primera vez por pestaña; los toggles
     /// y typings los maneja el chrome.
     pub input_initial: Option<String>,
+    /// Para `<input type=checkbox|radio>`: estado `checked` inicial.
+    /// `false` por default.
+    pub input_checked_initial: bool,
     /// Placeholder del input — atributo `placeholder` del `<input>` /
     /// `<textarea>`. `None` si vacío.
     pub input_placeholder: Option<String>,
@@ -300,6 +303,15 @@ pub enum InputKind {
     Search,
     /// `<textarea>` — multilínea.
     TextArea,
+    /// `<input type=checkbox>` — toggle booleano.
+    Checkbox,
+    /// `<input type=radio>` — exclusivo por nombre de grupo (`name`
+    /// compartido entre múltiples radios del mismo form).
+    Radio,
+    /// `<input type=submit|button>` — botón con label desde `value` (o
+    /// `Submit` por default). Click submitea el form si está dentro de
+    /// uno; sino no-op.
+    Submit,
 }
 
 /// Imagen RGBA8 lista para que el chrome la envuelva en `peniko::Image`.
@@ -564,6 +576,7 @@ fn empty_root() -> BoxNode {
         input_initial: None,
         input_placeholder: None,
         input_name: None,
+        input_checked_initial: false,
         form_idx: None,
         select: None,
         svg: None,
@@ -626,7 +639,10 @@ fn build_node(
                         "" | "text" | "email" | "url" | "tel" | "number" => Some(InputKind::Text),
                         "search" => Some(InputKind::Search),
                         "password" => Some(InputKind::Password),
-                        _ => None, // checkbox, radio, file, submit, button, etc.
+                        "checkbox" => Some(InputKind::Checkbox),
+                        "radio" => Some(InputKind::Radio),
+                        "submit" | "button" | "reset" => Some(InputKind::Submit),
+                        _ => None, // file, range, color, hidden, etc.
                     }
                 }
                 _ => None,
@@ -647,6 +663,10 @@ fn build_node(
             });
             let input_placeholder = input_kind.and_then(|_| dom::attr(node, "placeholder"));
             let input_name = input_kind.and_then(|_| dom::attr(node, "name"));
+            let input_checked_initial = matches!(
+                input_kind,
+                Some(InputKind::Checkbox) | Some(InputKind::Radio)
+            ) && dom::attr(node, "checked").is_some();
             // `<svg>`: coleccionamos las primitivas (rect/circle/line) y
             // el viewBox. Las primitivas del subárbol del SVG no son
             // descendientes del box tree (el `display: inline-block` del
@@ -798,6 +818,7 @@ fn build_node(
                         None
                     }
                 }),
+                input_checked_initial,
                 form_idx: None,
                 select,
                 svg,
@@ -905,6 +926,7 @@ fn build_node(
                 input_initial: None,
                 input_placeholder: None,
         input_name: None,
+        input_checked_initial: false,
         form_idx: None,
         select: None,
         svg: None,
@@ -983,6 +1005,7 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         input_initial: None,
         input_placeholder: None,
         input_name: None,
+        input_checked_initial: false,
         form_idx: None,
         select: None,
         svg: None,
