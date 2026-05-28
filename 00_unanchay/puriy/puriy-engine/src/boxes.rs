@@ -1215,6 +1215,7 @@ fn build_node(
                 }
             }
             let children = strip_block_adjacent_whitespace(children, style.display);
+            let children = collapse_vertical_margins(children);
             Some(BoxNode {
                 display: style.display,
                 background: style.background,
@@ -1330,6 +1331,7 @@ fn build_node(
                 }
             }
             let children = strip_block_adjacent_whitespace(children, Display::Block);
+            let children = collapse_vertical_margins(children);
             if children.is_empty() {
                 return None;
             }
@@ -1543,15 +1545,41 @@ fn strip_block_adjacent_whitespace(
         return children;
     }
     let block_levels: Vec<bool> = children.iter().map(is_block_level).collect();
+    let ws_only: Vec<bool> = children.iter().map(is_ws_only_inline).collect();
     let n = children.len();
+    // Para cada nodo whitespace-only, buscamos el primer vecino no-ws
+    // (antes y después). Si ambos son block-level (o son edge), drop —
+    // la run entera de whitespace entre dos blocks no aporta nada
+    // visual. Antes mirábamos sólo el vecino inmediato, lo que dejaba
+    // que runs consecutivas se preservaran al final del body
+    // ("<blockquote>X</blockquote>  \n  ").
     let mut out = Vec::with_capacity(n);
     for (i, c) in children.into_iter().enumerate() {
-        if is_ws_only_inline(&c) {
-            // Si el vecino previo (o el "borde" si i=0) es block-level,
-            // y el siguiente también (o no existe), drop. Si hay un
-            // inline real a cualquier lado, mantenemos el espacio.
-            let prev_is_block_or_edge = i == 0 || block_levels[i - 1];
-            let next_is_block_or_edge = i + 1 >= n || block_levels[i + 1];
+        if ws_only[i] {
+            let prev_is_block_or_edge = {
+                let mut j = i;
+                loop {
+                    if j == 0 {
+                        break true;
+                    }
+                    j -= 1;
+                    if !ws_only[j] {
+                        break block_levels[j];
+                    }
+                }
+            };
+            let next_is_block_or_edge = {
+                let mut j = i + 1;
+                loop {
+                    if j >= n {
+                        break true;
+                    }
+                    if !ws_only[j] {
+                        break block_levels[j];
+                    }
+                    j += 1;
+                }
+            };
             if prev_is_block_or_edge && next_is_block_or_edge {
                 continue;
             }
@@ -1567,6 +1595,44 @@ fn strip_block_adjacent_whitespace(
 /// chrome ya está en un worker thread durante `Engine::load`. Pasa por
 /// la cache global de bytes — recargas y navegación entre tabs no
 /// re-descargan.
+/// Margin collapsing CSS — entre hermanos block adyacentes, el gap
+/// vertical es `max(prev.margin_bottom, next.margin_top)` (NO la suma).
+/// Sin esto, raw HTML pages como motherfucking se ven con gaps el
+/// doble entre `<h2>` y `<p>` consecutivos. Implementación simple:
+/// para cada par (block, block) consecutivo, restamos del margin_top
+/// del segundo el min(prev.margin_bottom, next.margin_top). El total
+/// `prev.margin_bottom + next.margin_top_modificado` queda igual a
+/// `max(prev.margin_bottom, next.margin_top)`.
+///
+/// Casos NO cubiertos (queda para una iteración más completa):
+/// - Collapse con el padre (cuando primer/último hijo block no tiene
+///   padding/border arriba/abajo, su margin colapsa contra el padre).
+/// - Negative margins (CSS spec dice que se tratan separadamente).
+/// - Through-block collapsing en blocks vacíos.
+fn collapse_vertical_margins(children: Vec<BoxNode>) -> Vec<BoxNode> {
+    if children.len() < 2 {
+        return children;
+    }
+    let mut out: Vec<BoxNode> = Vec::with_capacity(children.len());
+    for c in children {
+        if let Some(prev) = out.last() {
+            if is_block_level(prev) && is_block_level(&c) {
+                let prev_bot = prev.margin.bottom.max(0.0);
+                let next_top = c.margin.top.max(0.0);
+                let reduction = prev_bot.min(next_top);
+                if reduction > 0.0 {
+                    let mut adjusted = c;
+                    adjusted.margin.top -= reduction;
+                    out.push(adjusted);
+                    continue;
+                }
+            }
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// Workers paralelos para el prefetch. 6 es un compromiso razonable:
 /// alto enough para esconder latencia de TCP/TLS (cada handshake ~50-
 /// 200ms), bajo enough para no saturar servidores ni el ulimit de
@@ -1754,9 +1820,9 @@ fn apply_text_transform(s: String, t: TextTransform) -> String {
 fn li_marker(node: &Handle, kind: ListStyleType) -> Option<String> {
     match kind {
         ListStyleType::None => None,
-        ListStyleType::Disc => Some("•  ".into()),
-        ListStyleType::Circle => Some("◦  ".into()),
-        ListStyleType::Square => Some("▪  ".into()),
+        ListStyleType::Disc => Some("• ".into()),
+        ListStyleType::Circle => Some("◦ ".into()),
+        ListStyleType::Square => Some("▪ ".into()),
         ListStyleType::Decimal => Some(format!("{}. ", ol_item_position(node))),
         ListStyleType::LowerAlpha => {
             Some(format!("{}. ", to_alpha(ol_item_position(node), false)))
@@ -2579,6 +2645,51 @@ mod tests {
             }
         });
         assert_eq!(links, vec!["https://example.com/doc#top".to_string()]);
+    }
+
+    #[test]
+    fn margin_collapsing_max_entre_block_siblings() {
+        // `<h2 style="margin: 0 0 20px 0">` seguido de `<p style="margin: 10px 0 0 0">`:
+        // gap esperado es max(20, 10) = 20. El margin_bottom del h2
+        // queda intacto (20), el margin_top del p baja a 0.
+        let html = r##"<html><body>
+            <h2 style="margin: 0 0 20px 0">Heading</h2>
+            <p style="margin: 10px 0 0 0">Para</p>
+        </body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut h2_margin_bottom: Option<f32> = None;
+        let mut p_margin_top: Option<f32> = None;
+        doc.box_tree.walk(|b| {
+            if b.tag.as_deref() == Some("h2") {
+                h2_margin_bottom = Some(b.margin.bottom);
+            }
+            if b.tag.as_deref() == Some("p") {
+                p_margin_top = Some(b.margin.top);
+            }
+        });
+        assert_eq!(h2_margin_bottom, Some(20.0));
+        // 10 - min(20, 10) = 10 - 10 = 0. Gap total = 20 + 0 = 20 = max.
+        assert_eq!(p_margin_top, Some(0.0));
+    }
+
+    #[test]
+    fn margin_collapsing_no_aplica_a_inline() {
+        // Block + inline no colapsan — el inline vive en otro flow.
+        let html = r##"<html><body>
+            <p style="margin: 0 0 10px 0">Para</p>
+            <span style="margin: 5px 0 0 0">inline</span>
+        </body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut span_margin_top: Option<f32> = None;
+        doc.box_tree.walk(|b| {
+            if b.tag.as_deref() == Some("span") {
+                span_margin_top = Some(b.margin.top);
+            }
+        });
+        // No tocado.
+        assert_eq!(span_margin_top, Some(5.0));
     }
 
     #[test]
