@@ -1,0 +1,15 @@
+[package]
+name = "llimphi-gpu-bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Binario standalone que valida el SDD §'GPU directo wgpu' en una máquina con GPU real: imprime info del adapter, corre vello vs GPU directo a varios N, evalúa el criterio (≥5× a 500K, ≥60 fps @ 1M) y exporta PNGs de verificación."
+
+[dependencies]
+llimphi-hal = { path = "../llimphi-hal" }
+llimphi-raster = { path = "../llimphi-raster" }
+vello = { workspace = true }
+pollster = { workspace = true }
+png = { workspace = true }
