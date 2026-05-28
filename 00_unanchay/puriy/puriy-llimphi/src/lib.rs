@@ -170,6 +170,10 @@ pub struct Model {
     /// case-insensitive contra cada hoja de texto del box tree del
     /// documento activo. Vacío = sin highlight.
     pub find_input: TextInputState,
+    /// Match "actual" (1-based) cuando el usuario navega con
+    /// Enter/Shift+Enter. `0` = sin nav todavía (todos los matches en
+    /// amarillo); `>= 1` = ese match pinta en naranja para destacarse.
+    pub find_current: usize,
     /// `Ctrl+B`/`Ctrl+H` abren un panel que reemplaza el viewport con la
     /// lista de bookmarks o el historial. `None` = panel cerrado y el
     /// documento se renderea normal. Sólo aplica cuando el chrome corre
@@ -231,6 +235,11 @@ pub enum Msg {
     FindClose,
     /// Teclas redirigidas al input de la find bar mientras está activa.
     FindKey(KeyEvent),
+    /// Enter en la find bar — avanza al próximo match (wrap a 1 en el
+    /// extremo). Si no hay matches, no-op.
+    FindNext,
+    /// Shift+Enter — retrocede un match (wrap a N).
+    FindPrev,
     /// Ctrl+B — toggle del panel de bookmarks. Si el panel está abierto
     /// en bookmarks, lo cierra; sino lo abre con bookmarks.
     ToggleBookmarks,
@@ -277,6 +286,7 @@ impl App for Puriy {
             zoom: 1.0,
             find_active: false,
             find_input: TextInputState::new(),
+            find_current: 0,
             panel: None,
         }
     }
@@ -323,11 +333,15 @@ impl App for Puriy {
                 _ => {}
             }
         }
-        // Si la find bar está activa, intercepta Esc (cerrar) y redirige
-        // el resto al input. Tiene prioridad sobre el address bar.
+        // Si la find bar está activa, intercepta Esc (cerrar), Enter
+        // (avanza match) y Shift+Enter (retrocede), y redirige el resto
+        // al input. Tiene prioridad sobre el address bar.
         if model.find_active {
             if matches!(&e.key, Key::Named(NamedKey::Escape)) {
                 return Some(Msg::FindClose);
+            }
+            if matches!(&e.key, Key::Named(NamedKey::Enter)) {
+                return Some(if mods.shift { Msg::FindPrev } else { Msg::FindNext });
             }
             return Some(Msg::FindKey(e.clone()));
         }
@@ -525,13 +539,45 @@ impl App for Puriy {
                 m.find_active = true;
                 // Re-abrir limpia query previa para que el usuario arranque fresh.
                 m.find_input.clear();
+                m.find_current = 0;
             }
             Msg::FindClose => {
                 m.find_active = false;
                 m.find_input.clear();
+                m.find_current = 0;
             }
             Msg::FindKey(e) => {
+                let before = m.find_input.text();
                 m.find_input.apply_key(&e);
+                let after = m.find_input.text();
+                if before != after {
+                    // Query cambió → cualquier "match actual" previo
+                    // queda inválido. Esperamos el primer Enter para
+                    // arrancar la navegación.
+                    m.find_current = 0;
+                }
+            }
+            Msg::FindNext => {
+                let q = m.find_input.text().to_lowercase();
+                let total = count_matches(m.active().box_tree.as_ref(), &q);
+                if total > 0 {
+                    m.find_current = if m.find_current >= total {
+                        1
+                    } else {
+                        m.find_current + 1
+                    };
+                }
+            }
+            Msg::FindPrev => {
+                let q = m.find_input.text().to_lowercase();
+                let total = count_matches(m.active().box_tree.as_ref(), &q);
+                if total > 0 {
+                    m.find_current = if m.find_current <= 1 {
+                        total
+                    } else {
+                        m.find_current - 1
+                    };
+                }
             }
             Msg::ToggleBookmarks => {
                 m.panel = match m.panel {
@@ -584,12 +630,12 @@ impl App for Puriy {
         };
         let body = match model.panel {
             Some(kind) => panel_view(kind),
-            None => viewport(model.active(), model.zoom, &query_lc),
+            None => viewport(model.active(), model.zoom, &query_lc, model.find_current),
         };
 
         let mut children: Vec<View<Msg>> = vec![tabs_bar, header];
         if model.find_active {
-            children.push(find_bar(&model.find_input, find_count));
+            children.push(find_bar(&model.find_input, find_count, model.find_current));
         }
         children.push(body);
 
@@ -624,20 +670,22 @@ fn count_matches(tree: Option<&BoxTree>, query_lc: &str) -> usize {
 
 /// Find bar — input + contador + close. Sticky entre header y viewport
 /// mientras `find_active`.
-fn find_bar(input: &TextInputState, count: usize) -> View<Msg> {
+fn find_bar(input: &TextInputState, count: usize, current: usize) -> View<Msg> {
     let palette = TextInputPalette::default();
     // Siempre focado mientras está abierta — Ctrl+F fue la última acción
     // explícita del usuario, no tiene sentido que el input no acepte teclas.
     let entry = text_input_view(input, "buscar en página…", true, &palette, Msg::FindOpen);
 
     let count_label = if input.text().is_empty() {
-        "(escribí algo)".to_string()
+        "(escribí algo · Enter avanza)".to_string()
     } else if count == 0 {
         "sin matches".to_string()
+    } else if current > 0 && current <= count {
+        format!("{current} de {count}")
     } else if count == 1 {
-        "1 match".to_string()
+        "1 match · Enter".to_string()
     } else {
-        format!("{count} matches")
+        format!("{count} matches · Enter")
     };
 
     let close = View::new(Style {
@@ -1109,7 +1157,7 @@ fn header_bar(t: &TabState, zoom: f32) -> View<Msg> {
     ])
 }
 
-fn viewport(t: &TabState, zoom: f32, find_query_lc: &str) -> View<Msg> {
+fn viewport(t: &TabState, zoom: f32, find_query_lc: &str, find_current: usize) -> View<Msg> {
     let Some(tree) = t.box_tree.as_ref() else {
         let msg = if t.url == NEW_TAB_URL {
             "(pestaña vacía · escribí una URL arriba)"
@@ -1134,6 +1182,7 @@ fn viewport(t: &TabState, zoom: f32, find_query_lc: &str) -> View<Msg> {
     // se escala para que el "marco" del documento sea estable; lo que
     // escala es el contenido (font_size + spacing del box tree).
     let mut details_counter: usize = 0;
+    let mut find_counter: usize = 0;
     let content = View::new(Style {
         position: TaffyPosition::Absolute,
         inset: Rect {
@@ -1149,6 +1198,8 @@ fn viewport(t: &TabState, zoom: f32, find_query_lc: &str) -> View<Msg> {
         &tree.root,
         zoom,
         find_query_lc,
+        find_current,
+        &mut find_counter,
         &t.details_open,
         &mut details_counter,
     )]);
@@ -1166,6 +1217,8 @@ fn render_box(
     b: &BoxNode,
     zoom: f32,
     find_query_lc: &str,
+    find_current: usize,
+    find_counter: &mut usize,
     details_open: &[bool],
     details_counter: &mut usize,
 ) -> View<Msg> {
@@ -1204,9 +1257,16 @@ fn render_box(
                     Alignment::Start,
                 )
                 .on_click(Msg::ToggleDetails(my_idx));
-                let summary_view =
-                    render_box(child, zoom, find_query_lc, details_open, details_counter)
-                        .on_click(Msg::ToggleDetails(my_idx));
+                let summary_view = render_box(
+                    child,
+                    zoom,
+                    find_query_lc,
+                    find_current,
+                    find_counter,
+                    details_open,
+                    details_counter,
+                )
+                .on_click(Msg::ToggleDetails(my_idx));
                 kids.push(
                     View::new(Style {
                         flex_direction: FlexDirection::Row,
@@ -1221,6 +1281,8 @@ fn render_box(
                     child,
                     zoom,
                     find_query_lc,
+                    find_current,
+                    find_counter,
                     details_open,
                     details_counter,
                 ));
@@ -1239,14 +1301,26 @@ fn render_box(
     }
     // Find-in-page: si la query no es vacía y este nodo es una hoja de
     // texto que la contiene (case-insensitive), pintamos su background
-    // con un highlight amarillo. El paint del fill normal del nodo
-    // (background CSS) lo aplicamos abajo — si hay match, lo
-    // sobrescribimos para que se note.
+    // con un highlight. El N-ésimo match en orden DFS es el "actual"
+    // (find_current, 1-based) y pinta en naranja para destacarse —
+    // el resto en amarillo. El paint del fill normal del nodo
+    // (background CSS) se sobrescribe si hay match.
     let find_hit = !find_query_lc.is_empty()
         && b.text
             .as_ref()
             .map(|s| s.to_lowercase().contains(find_query_lc))
             .unwrap_or(false);
+    let find_hit_color: Option<Color> = if find_hit {
+        *find_counter += 1;
+        let is_current = find_current != 0 && *find_counter == find_current;
+        Some(if is_current {
+            Color::from_rgba8(255, 140, 0, 240)
+        } else {
+            Color::from_rgba8(255, 230, 0, 200)
+        })
+    } else {
+        None
+    };
 
     // visibility:hidden ocupa espacio pero no pinta. Devolvemos la view
     // con su layout pero sin children/text/fill — sus descendientes
@@ -1258,9 +1332,8 @@ fn render_box(
     let alpha_mul = b.opacity.clamp(0.0, 1.0);
 
     if !hidden {
-        if find_hit {
-            // Amarillo Chrome-ish — predomina sobre el background CSS.
-            view = view.fill(Color::from_rgba8(255, 230, 0, 200));
+        if let Some(c) = find_hit_color {
+            view = view.fill(c);
         } else if let Some(bg) = b.background {
             let a = ((bg.a as f32) * alpha_mul) as u8;
             view = view.fill(Color::from_rgba8(bg.r, bg.g, bg.b, a));
@@ -1357,13 +1430,32 @@ fn render_box(
             b.children
                 .iter()
                 .map(|c| {
-                    render_link_subtree(c, target, link_color, zoom, find_query_lc, details_counter)
+                    render_link_subtree(
+                        c,
+                        target,
+                        link_color,
+                        zoom,
+                        find_query_lc,
+                        find_current,
+                        find_counter,
+                        details_counter,
+                    )
                 })
                 .collect()
         } else {
             b.children
                 .iter()
-                .map(|c| render_box(c, zoom, find_query_lc, details_open, details_counter))
+                .map(|c| {
+                    render_box(
+                        c,
+                        zoom,
+                        find_query_lc,
+                        find_current,
+                        find_counter,
+                        details_open,
+                        details_counter,
+                    )
+                })
                 .collect()
         };
         view = view.children(kids);
@@ -1413,6 +1505,8 @@ fn render_link_subtree(
     color: Color,
     zoom: f32,
     find_query_lc: &str,
+    find_current: usize,
+    find_counter: &mut usize,
     details_counter: &mut usize,
 ) -> View<Msg> {
     // <details> dentro de un <a> es HTML inválido en la práctica; pero
@@ -1428,8 +1522,19 @@ fn render_link_subtree(
             .as_ref()
             .map(|s| s.to_lowercase().contains(find_query_lc))
             .unwrap_or(false);
-    if find_hit {
-        view = view.fill(Color::from_rgba8(255, 230, 0, 200));
+    let find_hit_color: Option<Color> = if find_hit {
+        *find_counter += 1;
+        let is_current = find_current != 0 && *find_counter == find_current;
+        Some(if is_current {
+            Color::from_rgba8(255, 140, 0, 240)
+        } else {
+            Color::from_rgba8(255, 230, 0, 200)
+        })
+    } else {
+        None
+    };
+    if let Some(c) = find_hit_color {
+        view = view.fill(c);
     } else if let Some(bg) = b.background {
         view = view.fill(Color::from_rgb8(bg.r, bg.g, bg.b));
     }
@@ -1449,7 +1554,18 @@ fn render_link_subtree(
         view = view.children(
             b.children
                 .iter()
-                .map(|c| render_link_subtree(c, target, color, zoom, find_query_lc, details_counter))
+                .map(|c| {
+                    render_link_subtree(
+                        c,
+                        target,
+                        color,
+                        zoom,
+                        find_query_lc,
+                        find_current,
+                        find_counter,
+                        details_counter,
+                    )
+                })
                 .collect(),
         );
     }
