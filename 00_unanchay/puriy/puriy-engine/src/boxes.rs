@@ -341,6 +341,7 @@ fn build_node(
                     children.push(b);
                 }
             }
+            let children = strip_block_adjacent_whitespace(children, style.display);
             Some(BoxNode {
                 display: style.display,
                 background: style.background,
@@ -422,13 +423,16 @@ fn build_node(
             Some(inline_text_with_style(collapsed, &parent))
         }
         _ => {
-            // Document / Doctype / Comment → recurrir sólo en hijos.
+            // Document / Doctype / Comment → recurrir sólo en hijos. El
+            // wrapper que producimos abajo es siempre `Display::Block`, así
+            // que filtramos con ese display.
             let mut children = Vec::new();
             for child in node.children.borrow().iter() {
                 if let Some(b) = build_node(child, styles, base, parent_style) {
                     children.push(b);
                 }
             }
+            let children = strip_block_adjacent_whitespace(children, Display::Block);
             if children.is_empty() {
                 return None;
             }
@@ -561,6 +565,69 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         image: None,
         details_open_attr: false,
     }
+}
+
+/// `true` si el nodo se comporta como block-level para el flujo (Block,
+/// Flex, Grid, None). `Inline*` queda fuera — son del flow inline.
+fn is_block_level(b: &BoxNode) -> bool {
+    !matches!(
+        b.display,
+        Display::Inline | Display::InlineBlock | Display::InlineFlex | Display::InlineGrid
+    )
+}
+
+/// `true` si el nodo es un leaf de texto inline cuyo contenido se reduce
+/// a whitespace (incluye el caso post-collapse del CSS, que deja " "
+/// como "espacio entre tokens"). `<br>` y otros inlines sin texto no
+/// matchean (b.text es None).
+fn is_ws_only_inline(b: &BoxNode) -> bool {
+    matches!(b.display, Display::Inline | Display::InlineBlock)
+        && b
+            .text
+            .as_ref()
+            .map(|s| !s.is_empty() && s.chars().all(|c| c.is_whitespace()))
+            .unwrap_or(false)
+}
+
+/// Quita los text-nodes whitespace-only que separan block siblings o
+/// quedan adyacentes al borde de un block. Replica el comportamiento
+/// estándar de los browsers: en HTML, el `\n  ` entre `</p>\n  <h2>`
+/// produce un Text node " " que NO debe rendear (sino cada tag aporta
+/// una línea visible vacía). Se preserva si está rodeado de inlines
+/// (ahí sí lleva valor: separa tokens).
+fn strip_block_adjacent_whitespace(
+    children: Vec<BoxNode>,
+    parent_display: Display,
+) -> Vec<BoxNode> {
+    // Cuando el padre es Inline (`<span>`, `<em>`, etc.) los hijos viven
+    // en el inline-flow del *abuelo* block; los whitespace que tengan
+    // dentro pueden ser parte de un token relevante ("foo<span> </span>
+    // bar" debe mantener los dos espacios). No filtramos a este nivel —
+    // el filtrado real ocurre cuando el padre sí establece un contexto
+    // block (Block/Flex/Grid/InlineBlock/etc.).
+    if matches!(parent_display, Display::Inline) {
+        return children;
+    }
+    if children.iter().all(|c| !is_ws_only_inline(c)) {
+        return children;
+    }
+    let block_levels: Vec<bool> = children.iter().map(is_block_level).collect();
+    let n = children.len();
+    let mut out = Vec::with_capacity(n);
+    for (i, c) in children.into_iter().enumerate() {
+        if is_ws_only_inline(&c) {
+            // Si el vecino previo (o el "borde" si i=0) es block-level,
+            // y el siguiente también (o no existe), drop. Si hay un
+            // inline real a cualquier lado, mantenemos el espacio.
+            let prev_is_block_or_edge = i == 0 || block_levels[i - 1];
+            let next_is_block_or_edge = i + 1 >= n || block_levels[i + 1];
+            if prev_is_block_or_edge && next_is_block_or_edge {
+                continue;
+            }
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// Descarga `url` y la decodifica a RGBA8. Devuelve `None` si la URL no
@@ -1031,5 +1098,106 @@ mod tests {
                 assert!(!b.details_open_attr, "{:?} no debería tener details_open_attr=true", b.tag);
             }
         });
+    }
+
+    #[test]
+    fn ws_entre_blocks_se_filtra() {
+        // El "\n  " entre </h1> y <p> produce un Text node " " que NO
+        // debería rendear como un row vacío.
+        let html = "<html><body><h1>A</h1>\n  <p>B</p>\n  <h2>C</h2></body></html>";
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        // Walk del body. Esperamos sólo h1, p, h2 como children directos
+        // (sin text-leaves de whitespace entre ellos).
+        let body = &doc.box_tree.root;
+        // Body envuelve un Inline de transición (collapse_whitespace puede
+        // dejar uno leading o trailing). Recorremos directamente.
+        let mut top_tags: Vec<Option<String>> = body
+            .children
+            .iter()
+            .filter(|c| !super::is_ws_only_inline(c))
+            .map(|c| c.tag.clone())
+            .collect();
+        // Aseguramos que el filtrado sólo dejó tags reales.
+        top_tags.retain(|t| t.is_some());
+        let names: Vec<&str> = top_tags
+            .iter()
+            .map(|t| t.as_deref().unwrap_or(""))
+            .collect();
+        assert_eq!(names, vec!["h1", "p", "h2"]);
+        // Y verificamos que NO hay inlines whitespace-only entre ellos en
+        // el árbol real (post-strip).
+        for c in &body.children {
+            assert!(
+                !super::is_ws_only_inline(c),
+                "el body no debería tener inlines ws-only entre blocks: {:?}",
+                c.text
+            );
+        }
+    }
+
+    #[test]
+    fn ws_alrededor_de_inline_se_preserva() {
+        // El espacio entre "foo " y <strong>bar</strong> y " baz" sí
+        // tiene valor — debe quedarse para no pegar tokens.
+        let html = "<html><body><p>foo <strong>bar</strong> baz</p></body></html>";
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        // Encontramos el <p> y verificamos que sus children contengan
+        // textos con espacios donde corresponde.
+        let mut texts: Vec<String> = Vec::new();
+        doc.box_tree.walk(|b| {
+            if b.tag.as_deref() == Some("p") {
+                for c in &b.children {
+                    if let Some(t) = &c.text {
+                        texts.push(t.clone());
+                    }
+                    // Si es <strong>, mirá su hijo
+                    if c.tag.as_deref() == Some("strong") {
+                        for cc in &c.children {
+                            if let Some(t) = &cc.text {
+                                texts.push(format!("[strong]{t}"));
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        // Esperamos que "foo " conserve el espacio trailing y " baz" el leading.
+        assert!(
+            texts.iter().any(|t| t.ends_with(' ')),
+            "esperaba un text con espacio trailing en {:?}",
+            texts
+        );
+        assert!(
+            texts.iter().any(|t| t.starts_with(' ')),
+            "esperaba un text con espacio leading en {:?}",
+            texts
+        );
+        assert!(
+            texts.iter().any(|t| t == "[strong]bar"),
+            "esperaba `bar` dentro de strong en {:?}",
+            texts
+        );
+    }
+
+    #[test]
+    fn ws_solo_inline_no_se_dropea_si_padre_es_inline_flow() {
+        // <p>foo<span> </span>bar</p> — el espacio dentro de span sí debe
+        // quedar porque separa "foo" de "bar".
+        let html = "<html><body><p>foo<span> </span>bar</p></body></html>";
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut found_space = false;
+        doc.box_tree.walk(|b| {
+            if b.tag.as_deref() == Some("span") {
+                for c in &b.children {
+                    if c.text.as_deref().map(|s| s.contains(' ')).unwrap_or(false) {
+                        found_space = true;
+                    }
+                }
+            }
+        });
+        assert!(found_space, "el espacio dentro de <span> debería preservarse");
     }
 }
