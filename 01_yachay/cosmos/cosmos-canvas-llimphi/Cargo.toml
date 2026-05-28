@@ -10,3 +10,10 @@ description = "cosmos-canvas-llimphi — backend Llimphi del lienzo astrológico
 [dependencies]
 cosmos-render = { path = "../cosmos-render" }
 llimphi-ui = { workspace = true }
+
+[dev-dependencies]
+pineal-render = { path = "../../../00_unanchay/pineal/pineal-render" }
+
+[[example]]
+name = "dense_starfield"
+path = "examples/dense_starfield.rs"
