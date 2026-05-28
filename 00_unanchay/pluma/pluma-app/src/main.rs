@@ -104,6 +104,8 @@ enum Msg {
     DiffToggle,
     MoverAtomArriba,
     MoverAtomAbajo,
+    TocarMadre,
+    RegenerarStale,
     ToglearFusion,
     ZonaSiguiente,
     ZonaAnterior,
@@ -494,6 +496,12 @@ fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         Msg::MoverAtomAbajo => {
             mover_atom_caret(&mut model, 1);
         }
+        Msg::TocarMadre => {
+            tocar_madre(&mut model);
+        }
+        Msg::RegenerarStale => {
+            regenerar_siguiente_stale(&mut model, handle);
+        }
         Msg::ToglearFusion => {
             if let Some(idx) = model.ide.junction_antes_del_caret() {
                 model.ide.togglear_junction(idx);
@@ -700,6 +708,114 @@ fn saltar_a_match(model: &mut Model) {
     };
     model.ide.set_caret(line, col);
     model.ide.state.ensure_caret_visible(VISIBLE_LINES);
+}
+
+/// Avanza `modificado_en` del cuerpo activo a la hora actual. Cualquier
+/// hija derivada cuyo `regenerada_en` sea anterior se vuelve `es_stale`
+/// y aparece en el botón «regenerar stale (N)». Caso de uso típico:
+/// editaste la madre sin querer recordar todos los detalles y querés
+/// invalidar las derivadas para que vuelvan a salir del LLM.
+fn tocar_madre(model: &mut Model) {
+    let Some(activo_id) = model.activo else {
+        model.ultimo_status = "sin doc activo".into();
+        return;
+    };
+    let ahora = ahora_unix();
+    if let Some(c) = model.cuerpos.iter_mut().find(|c| c.id == activo_id) {
+        c.metadatos.modificado_en = ahora;
+        let _ = model.store.put_cuerpo(c);
+    }
+    let _ = model.store.flush();
+    let n = contar_stale_del_activo(model);
+    model.ultimo_status = format!("madre tocada — {n} hija(s) ahora stale");
+    model.ultimo_error = None;
+}
+
+fn contar_stale_del_activo(model: &Model) -> usize {
+    let Some(activo_id) = model.activo else {
+        return 0;
+    };
+    let Some(madre) = model.cuerpos.iter().find(|c| c.id == activo_id) else {
+        return 0;
+    };
+    let modif = madre.metadatos.modificado_en;
+    model
+        .cuerpos
+        .iter()
+        .filter(|c| {
+            c.metadatos.derivado_de == Some(activo_id) && c.es_derivado() && c.es_stale(modif)
+        })
+        .count()
+}
+
+/// Encuentra la primera hija del activo que sea stale, busca la
+/// `Transformacion` original registrada (madre==activo, hija==hija_id),
+/// traduce su `TipoTransformacion` a un `TrabajoLlm`, y lo lanza con la
+/// madre actualizada — el ejecutor produce una hija nueva fresca; la
+/// vieja queda en el modelo (sigue visible por si querés diff). Lo
+/// hacemos hija-por-hija (no batch) para que el progreso sea visible
+/// y un error no aborte todas.
+fn regenerar_siguiente_stale(model: &mut Model, handle: &Handle<Msg>) {
+    if model.en_curso {
+        model.ultimo_status = "LLM ocupado — esperá".into();
+        return;
+    }
+    let Some(activo_id) = model.activo else {
+        model.ultimo_status = "sin doc activo".into();
+        return;
+    };
+    let madre_modif = match model.cuerpos.iter().find(|c| c.id == activo_id) {
+        Some(c) => c.metadatos.modificado_en,
+        None => return,
+    };
+    let hija_id_opt = model
+        .cuerpos
+        .iter()
+        .find(|c| {
+            c.metadatos.derivado_de == Some(activo_id)
+                && c.es_derivado()
+                && c.es_stale(madre_modif)
+        })
+        .map(|c| c.id);
+    let Some(hija_id) = hija_id_opt else {
+        model.ultimo_status = "no hay hijas stale — tocar madre primero".into();
+        return;
+    };
+    // Buscar la Transformacion original. Prioridad: la del store (en
+    // memoria está cargada al iniciar; el sled es la fuente de verdad).
+    let tipo = model
+        .transformaciones
+        .iter()
+        .find(|t| t.madre == activo_id && t.hija == hija_id)
+        .map(|t| t.tipo.clone());
+    let Some(tipo) = tipo else {
+        model.ultimo_status = format!(
+            "no se halló transformación para regenerar {hija_id} — falta historial"
+        );
+        return;
+    };
+    let Some(trabajo) = trabajo_de_tipo(&tipo) else {
+        model.ultimo_status = format!("tipo {tipo:?} no es regenerable automáticamente");
+        return;
+    };
+    lanzar(model, handle, trabajo);
+}
+
+/// Traduce un `TipoTransformacion` persistido al `TrabajoLlm` que
+/// `lanzar` sabe correr. `Identidad`/`Reescribir`/`Custom` no son
+/// auto-regenerables — Reescribir necesita prompt humano, Custom Rhai,
+/// Identidad no aporta nada nuevo.
+fn trabajo_de_tipo(t: &TipoTransformacion) -> Option<TrabajoLlm> {
+    match t {
+        TipoTransformacion::Traducir { lengua_destino } => {
+            Some(TrabajoLlm::Traducir(lengua_destino.clone()))
+        }
+        TipoTransformacion::Tono { etiqueta } => Some(TrabajoLlm::Tono(etiqueta.clone())),
+        TipoTransformacion::Resumir { palabras_objetivo } => {
+            Some(TrabajoLlm::Resumir(*palabras_objetivo))
+        }
+        _ => None,
+    }
 }
 
 /// Mueve el átomo donde está el caret una posición arriba (`delta=-1`)
@@ -1621,6 +1737,15 @@ fn panel_llm(model: &Model, theme: &Theme) -> View<Msg> {
         mk("✂  resumir 30p", Msg::PedirResumir(Some(30))),
     ];
 
+    let n_stale = contar_stale_del_activo(model);
+    let label_regen = if n_stale > 0 {
+        format!("⟳  regenerar stale ({n_stale})")
+    } else {
+        "⟳  regenerar stale (0)".to_string()
+    };
+    let tocar_btn = button_view::<Msg>("⏰  tocar madre", pal, Msg::TocarMadre);
+    let regen_btn = button_view::<Msg>(&label_regen, pal, Msg::RegenerarStale);
+
     // Lista de hijas del cuerpo activo — para abrirlas con click.
     let hijas_seccion = seccion_hijas(model, theme);
 
@@ -1629,6 +1754,8 @@ fn panel_llm(model: &Model, theme: &Theme) -> View<Msg> {
     hijos.push(cycler);
     hijos.push(diff_btn);
     hijos.extend(botones);
+    hijos.push(tocar_btn);
+    hijos.push(regen_btn);
     hijos.push(divider(theme));
     hijos.push(hijas_seccion);
 
