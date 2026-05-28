@@ -199,12 +199,20 @@ Mostrados en orden de dependencia, no de complejidad:
    `03_ukupacha/wawa/apps/asistente/`. Input de texto sobre el lienzo,
    syscalls `sys_red_enviar`/`sys_red_recibir`, sintaxis idéntica a las
    otras apps GENESIS. ~3-4 sesiones.
-5. **Cablear `daemon-firma`** para que también firme objetos
-   `ConfiguracionFirmada` (hoy sólo firma manifiestos). 1-2 sesiones.
+5. ~~**Cablear `daemon-firma`** para que también firme objetos
+   `ConfiguracionFirmada` (hoy sólo firma manifiestos).~~ ✅ HECHO (Fase
+   60 v2). `wawactl daemon-firma` ahora reconoce dos prefijos paralelos
+   por transporte: `wawa::sign_request::` (cuaderno/manifiesto, legacy)
+   y `wawa::sign_config::` (configuración, nuevo); equivalentes
+   virtio-console `wawactl::sign_pci::` y `wawactl::sign_cfg::` con
+   igual largo (19 B) para que la ventana deslizante del parser binario
+   no cambie de tamaño. El prompt al operador y el log de auditoría
+   incluyen el campo `TIPO: cuaderno|configuracion`. 6 tests cubren
+   el clasificador.
 6. **Sembrar `asistente.wasm` en GENESIS** o, mejor, dejar que el operador
    la instale en vivo vía `mudanza` (la palanca de v9/v10 del launcher).
 
-Estimado restante: 8-13 sesiones (la fase 1-2 ya está hecha). El
+Estimado restante: 6-11 sesiones (las fases 1-2 y 5 ya están hechas). El
 asistente Linux (`mirada-asistente-llimphi`) que ya corre cubre el caso
 de uso "asistente conversacional para gioser" para el operador humano de
 hoy; la versión wawa avanza en paralelo según prioridades.
@@ -260,9 +268,10 @@ Por elección, no por descuido:
 
 ## 9. Estado
 
-**Hito 1-2 (formato del protocolo y canal Akasha) cerrado** en
-`shared/format` (commit `c6eb9bd`, Fase 60 v1). El resto de §5 sigue
-abierto. Sin urgencia: el asistente Linux cubre el caso de uso
-"asistente conversacional para gioser" para el operador humano de hoy;
-la versión wawa es para cuando wawa sea el daily driver, que aún no lo
-es.
+**Hitos 1-2 (formato del protocolo y canal Akasha) y 5 (daemon-firma
+discrimina cuaderno/configuración) cerrados.** El resto de §5 sigue
+abierto: el puente Linux Akasha↔HTTP, la app `asistente.wasm`, y la
+siembra/instalación en vivo. Sin urgencia: el asistente Linux cubre el
+caso de uso "asistente conversacional para gioser" para el operador
+humano de hoy; la versión wawa es para cuando wawa sea el daily driver,
+que aún no lo es.

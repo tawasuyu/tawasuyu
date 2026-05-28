@@ -693,14 +693,63 @@ fn parse_bool_or_clock(v: &str) -> Result<bool, String> {
 // =============================================================================
 
 /// LEGACY (Fase 38/39) :: prefijo ASCII emitido por el kernel a traves
-/// del UART de COM1 antes del hash en hexadecimal + newline.
+/// del UART de COM1 antes del hash en hexadecimal + newline. Aplica a
+/// solicitudes de firma de CUADERNO (Fase 39) y MANIFIESTO (Fase 41) —
+/// ambos comparten esta puerta ASCII por simetria historica.
 const PREFIJO_SOLICITUD_ASCII: &str = "wawa::sign_request::";
+/// FASE 60 v2 :: prefijo ASCII paralelo para solicitudes de firma de
+/// CONFIGURACION. La firma criptografica es identica (Ed25519 sobre el
+/// hash) pero el prompt y el log de auditoria distinguen el tipo, de modo
+/// que la cadena "el operador firmo X" sea trazeable hasta qué tipo de
+/// objeto.
+const PREFIJO_SOLICITUD_CONFIG_ASCII: &str = "wawa::sign_config::";
 /// FASE 49 :: prefijo BINARIO emitido por el kernel a traves del bus
 /// virtio-console antes de los 32 bytes RAW del hash. Sin newline; el
 /// parser mide por longitud fija (19 prefijo + 32 hash = 51 bytes).
 const PREFIJO_SOLICITUD_VIRTIO: &[u8] = b"wawactl::sign_pci::";
+/// FASE 60 v2 :: prefijo BINARIO paralelo para solicitudes de firma de
+/// CONFIGURACION sobre virtio-console. Mismo largo (19 B) que el de
+/// cuaderno para que la ventana deslizante del parser binario no cambie
+/// de tamano — la unica diferencia es el discriminante.
+const PREFIJO_SOLICITUD_CONFIG_VIRTIO: &[u8] = b"wawactl::sign_cfg::";
 /// Longitud del hash en caracteres hexadecimales (32 bytes -> 64 chars).
 const HASH_HEX_LEN: usize = 64;
+
+/// FASE 60 v2 :: tipo del objeto que el kernel pide firmar. Mismo
+/// algoritmo criptografico, distinto SIGNIFICADO — el operador ve el tipo
+/// en el prompt y la auditoria queda taggeada para que el log sea legible
+/// a posteriori. Si manana se agrega un tercer tipo (estados de app, sello
+/// de canal, etc.) se suma una variante aqui sin tocar el resto del flujo.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum TipoSolicitud {
+    /// Cuaderno o manifiesto. Heredados de las fases 39 y 41 — usan el
+    /// prefijo `wawa::sign_request::` / `wawactl::sign_pci::`.
+    Cuaderno,
+    /// Configuracion del sistema (Fase 60). Usa los prefijos
+    /// `wawa::sign_config::` / `wawactl::sign_cfg::`.
+    Configuracion,
+}
+
+impl TipoSolicitud {
+    /// Etiqueta corta para el log de auditoria. Estable — los lectores
+    /// del log pueden grep-ear por ella.
+    fn etiqueta_audit(self) -> &'static str {
+        match self {
+            TipoSolicitud::Cuaderno => "cuaderno",
+            TipoSolicitud::Configuracion => "configuracion",
+        }
+    }
+
+    /// Etiqueta del prompt interactivo — visible al operador antes de que
+    /// pulse y/N. Lo que se le muestra es el TIPO del objeto, no su
+    /// algoritmo (que es siempre el mismo).
+    fn etiqueta_prompt(self) -> &'static str {
+        match self {
+            TipoSolicitud::Cuaderno => "CUADERNO/MANIFIESTO",
+            TipoSolicitud::Configuracion => "CONFIGURACION",
+        }
+    }
+}
 
 /// FASE 49 :: transporte fisico del demonio. Selecciona prefijo, parser
 /// y forma de lectura (lineas ASCII vs ventana binaria).
@@ -882,12 +931,14 @@ async fn ejecutar_daemon(
             return Ok(());
         }
 
-        // El parser es ESTRICTO: la linea debe arrancar con el prefijo
-        // exacto y traer 64 chars hex justo despues. Cualquier otra
-        // basura (logs del kernel, trazas de boot) cae al sumidero
+        // El parser es ESTRICTO: la linea debe arrancar con uno de los
+        // prefijos conocidos y traer 64 chars hex justo despues. Cualquier
+        // otra basura (logs del kernel, trazas de boot) cae al sumidero
         // silencioso — el operador la ve en su terminal de QEMU igual.
         let trim = linea.trim_end_matches(|c| c == '\n' || c == '\r');
-        let Some(hash_hex) = trim.strip_prefix(PREFIJO_SOLICITUD_ASCII) else {
+        // FASE 60 v2 :: el parser detecta ambos prefijos (cuaderno/config)
+        // y tagguea el tipo para que el prompt y el log distingan.
+        let Some((tipo, hash_hex)) = clasificar_linea_ascii(trim) else {
             continue;
         };
         if hash_hex.len() != HASH_HEX_LEN || !hash_hex.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -907,7 +958,7 @@ async fn ejecutar_daemon(
         let decision = if dentro_ventana {
             DecisionOperador::AutorizadaAutomatica
         } else {
-            confirmar_con_operador(hash_hex).await
+            confirmar_con_operador(tipo, hash_hex).await
         };
 
         match decision {
@@ -934,16 +985,17 @@ async fn ejecutar_daemon(
                     .flush()
                     .await
                     .map_err(|e| format!("error flush PTY: {e}"))?;
-                escribir_auditoria(&log_path, marcador, slot, hash_hex);
+                escribir_auditoria(&log_path, marcador, tipo, slot, hash_hex);
                 eprintln!(
-                    "wawactl: {} slot={} ({} bytes incluyendo prefijo)",
+                    "wawactl: {} tipo={} slot={} ({} bytes incluyendo prefijo)",
                     marcador,
+                    tipo.etiqueta_audit(),
                     slot,
                     frame.len()
                 );
             }
             DecisionOperador::Rechazada => {
-                escribir_auditoria(&log_path, "FIRMA_RECHAZADA", slot, hash_hex);
+                escribir_auditoria(&log_path, "FIRMA_RECHAZADA", tipo, slot, hash_hex);
                 eprintln!("wawactl: solicitud rechazada o timeout");
             }
         }
@@ -986,11 +1038,21 @@ async fn ejecutar_daemon_virtio(
     let (mut reader, mut writer) = tokio::io::split(file);
 
     // Ventana deslizante. Mantiene como mucho los ultimos `pref + 32`
-    // bytes; cuando el prefijo aparece pegado al final, los 32
-    // siguientes forman el hash. Sin alocacion dinamica — un array
-    // estatico de `MAX_PENDIENTE` bytes con cursor manual basta.
+    // bytes; cuando alguno de los prefijos aparece pegado al final, los
+    // 32 siguientes forman el hash. Sin alocacion dinamica — un array
+    // estatico de `FRAME_LEN` bytes con cursor manual basta.
+    //
+    // FASE 60 v2 :: dos prefijos del mismo largo (cuaderno y configuracion)
+    // se chequean en cada paso; la ventana es indiferente al tipo. Esto
+    // requiere que ambos `PREFIJO_SOLICITUD_*_VIRTIO` midan 19 bytes —
+    // si alguno cambia, ajustar aqui.
     const PREF_LEN: usize = PREFIJO_SOLICITUD_VIRTIO.len();
     const FRAME_LEN: usize = PREF_LEN + 32;
+    debug_assert_eq!(
+        PREFIJO_SOLICITUD_VIRTIO.len(),
+        PREFIJO_SOLICITUD_CONFIG_VIRTIO.len(),
+        "los dos prefijos binarios deben medir lo mismo para que la ventana sea compartida"
+    );
     let mut ventana = [0u8; FRAME_LEN];
     let mut llenos: usize = 0;
     let mut chunk = [0u8; 256];
@@ -1016,57 +1078,67 @@ async fn ejecutar_daemon_virtio(
                 ventana.copy_within(1..FRAME_LEN, 0);
                 ventana[FRAME_LEN - 1] = b;
             }
-            // Buscar el prefijo en cualquier posicion del slice activo.
-            // Solo nos interesa el match que deje 32 bytes utiles a su
-            // derecha — es decir, el prefijo arrancando en offset 0.
-            if llenos == FRAME_LEN && &ventana[..PREF_LEN] == PREFIJO_SOLICITUD_VIRTIO {
-                let mut hash = [0u8; 32];
-                hash.copy_from_slice(&ventana[PREF_LEN..]);
-                let hash_hex = hex_de_bytes(&hash);
-
-                let dentro_ventana = ventana_hasta
-                    .map(|t| std::time::Instant::now() < t)
-                    .unwrap_or(false);
-                let decision = if dentro_ventana {
-                    DecisionOperador::AutorizadaAutomatica
-                } else {
-                    confirmar_con_operador(&hash_hex).await
-                };
-
-                match decision {
-                    DecisionOperador::Autorizada | DecisionOperador::AutorizadaAutomatica => {
-                        let marcador = match decision {
-                            DecisionOperador::AutorizadaAutomatica => "FIRMA_AUTO_EMITIDA",
-                            _ => "FIRMA_EMITIDA",
-                        };
-                        let firma = sk.sign(hash, None);
-                        let mut frame = [0u8; 65];
-                        frame[0] = slot;
-                        frame[1..65].copy_from_slice(firma.as_ref());
-                        writer
-                            .write_all(&frame)
-                            .await
-                            .map_err(|e| format!("error escribiendo frame al transporte: {e}"))?;
-                        writer
-                            .flush()
-                            .await
-                            .map_err(|e| format!("error flush transporte: {e}"))?;
-                        escribir_auditoria(&log_path, marcador, slot, &hash_hex);
-                        eprintln!(
-                            "wawactl: {} slot={} (65 B sobre virtio-console)",
-                            marcador, slot
-                        );
-                    }
-                    DecisionOperador::Rechazada => {
-                        escribir_auditoria(&log_path, "FIRMA_RECHAZADA", slot, &hash_hex);
-                        eprintln!("wawactl: solicitud rechazada o timeout");
-                    }
-                }
-                // Reset de la ventana: un nuevo prefijo arrancara desde
-                // cero. Sin esto un mismo bloque podria gatillar dos
-                // veces si el contenido casa fortuitamente.
-                llenos = 0;
+            // Buscar uno de los prefijos en offset 0 — solo ese match
+            // deja 32 bytes utiles a su derecha.
+            if llenos != FRAME_LEN {
+                continue;
             }
+            let tipo = match &ventana[..PREF_LEN] {
+                p if p == PREFIJO_SOLICITUD_VIRTIO => Some(TipoSolicitud::Cuaderno),
+                p if p == PREFIJO_SOLICITUD_CONFIG_VIRTIO => Some(TipoSolicitud::Configuracion),
+                _ => None,
+            };
+            let Some(tipo) = tipo else {
+                continue;
+            };
+            let mut hash = [0u8; 32];
+            hash.copy_from_slice(&ventana[PREF_LEN..]);
+            let hash_hex = hex_de_bytes(&hash);
+
+            let dentro_ventana = ventana_hasta
+                .map(|t| std::time::Instant::now() < t)
+                .unwrap_or(false);
+            let decision = if dentro_ventana {
+                DecisionOperador::AutorizadaAutomatica
+            } else {
+                confirmar_con_operador(tipo, &hash_hex).await
+            };
+
+            match decision {
+                DecisionOperador::Autorizada | DecisionOperador::AutorizadaAutomatica => {
+                    let marcador = match decision {
+                        DecisionOperador::AutorizadaAutomatica => "FIRMA_AUTO_EMITIDA",
+                        _ => "FIRMA_EMITIDA",
+                    };
+                    let firma = sk.sign(hash, None);
+                    let mut frame = [0u8; 65];
+                    frame[0] = slot;
+                    frame[1..65].copy_from_slice(firma.as_ref());
+                    writer
+                        .write_all(&frame)
+                        .await
+                        .map_err(|e| format!("error escribiendo frame al transporte: {e}"))?;
+                    writer
+                        .flush()
+                        .await
+                        .map_err(|e| format!("error flush transporte: {e}"))?;
+                    escribir_auditoria(&log_path, marcador, tipo, slot, &hash_hex);
+                    eprintln!(
+                        "wawactl: {} tipo={} slot={} (65 B sobre virtio-console)",
+                        marcador,
+                        tipo.etiqueta_audit(),
+                        slot
+                    );
+                }
+                DecisionOperador::Rechazada => {
+                    escribir_auditoria(&log_path, "FIRMA_RECHAZADA", tipo, slot, &hash_hex);
+                    eprintln!("wawactl: solicitud rechazada o timeout");
+                }
+            }
+            // Reset de la ventana: un nuevo prefijo arrancara desde
+            // cero. Sin esto un mismo bloque podria gatillar dos
+            // veces si el contenido casa fortuitamente.
+            llenos = 0;
         }
     }
 }
@@ -1087,11 +1159,16 @@ fn hex_de_bytes(bytes: &[u8; 32]) -> String {
 /// stdin en tokio sin features adicionales); usamos `spawn_blocking`
 /// para que el lazo principal pueda imponer el timeout via
 /// `tokio::time::timeout`.
-async fn confirmar_con_operador(hash_hex: &str) -> DecisionOperador {
+///
+/// FASE 60 v2 :: el prompt declara el TIPO del objeto (cuaderno/manifiesto
+/// vs configuracion) para que el operador pueda decidir con contexto. El
+/// algoritmo de firma es el mismo (Ed25519 sobre el hash), pero el
+/// significado del acto cambia.
+async fn confirmar_con_operador(tipo: TipoSolicitud, hash_hex: &str) -> DecisionOperador {
     use std::io::Write;
     eprintln!();
     eprintln!("================================================================");
-    eprintln!("  SOLICITUD DE FIRMA DE CUADERNO");
+    eprintln!("  SOLICITUD DE FIRMA DE {}", tipo.etiqueta_prompt());
     eprintln!("  HASH: {hash_hex}");
     eprintln!("  Autorizar firma en el metal? [y/N]  (timeout 30 s)");
     eprintln!("================================================================");
@@ -1113,6 +1190,21 @@ async fn confirmar_con_operador(hash_hex: &str) -> DecisionOperador {
     }
 }
 
+/// FASE 60 v2 :: clasifica una linea ASCII contra los prefijos conocidos.
+/// Devuelve `(tipo, hash_hex)` si la linea arranca con uno de los
+/// prefijos legitimos, o `None` si es basura (logs del kernel, trazas
+/// de boot). El llamante valida que `hash_hex` sea 64 chars hex; aqui
+/// solo separamos el discriminante del payload.
+fn clasificar_linea_ascii(linea: &str) -> Option<(TipoSolicitud, &str)> {
+    if let Some(hex) = linea.strip_prefix(PREFIJO_SOLICITUD_ASCII) {
+        return Some((TipoSolicitud::Cuaderno, hex));
+    }
+    if let Some(hex) = linea.strip_prefix(PREFIJO_SOLICITUD_CONFIG_ASCII) {
+        return Some((TipoSolicitud::Configuracion, hex));
+    }
+    None
+}
+
 /// Convierte una cadena hexadecimal de 64 chars a `[u8; 32]`. Devuelve
 /// `false` si algun caracter no es hex valido — el parser de lineas ya
 /// filtro antes, pero defensa en profundidad no cuesta.
@@ -1131,17 +1223,20 @@ fn hex_a_bytes(hex: &str, out: &mut [u8; 32]) -> bool {
 
 /// Append a `log_path` de una entrada estructurada de auditoria. Cada
 /// linea contiene timestamp ISO 8601, accion (FIRMA_EMITIDA /
-/// FIRMA_AUTO_EMITIDA / FIRMA_RECHAZADA), slot del anillo AGORA_AUTH_RING
-/// con que se firmo, y el hash. Errores de I/O se imprimen a stderr
-/// pero NO interrumpen el lazo — perder una linea de log es preferible
-/// a perder el demonio entero. FASE 42 :: el campo `SLOT` distingue las
-/// firmas emitidas por distintos dispositivos del operador (primario,
-/// secundario, recuperacion).
-fn escribir_auditoria(log_path: &str, accion: &str, slot: u8, hash_hex: &str) {
+/// FIRMA_AUTO_EMITIDA / FIRMA_RECHAZADA), TIPO del objeto firmado
+/// (cuaderno/configuracion), slot del anillo AGORA_AUTH_RING con que se
+/// firmo, y el hash. Errores de I/O se imprimen a stderr pero NO
+/// interrumpen el lazo — perder una linea de log es preferible a perder
+/// el demonio entero. FASE 42 :: el campo `SLOT` distingue las firmas
+/// emitidas por distintos dispositivos del operador (primario, secundario,
+/// recuperacion). FASE 60 v2 :: el campo `TIPO` permite reconstruir, a
+/// posteriori, que clase de objeto firmo cada slot en cada momento.
+fn escribir_auditoria(log_path: &str, accion: &str, tipo: TipoSolicitud, slot: u8, hash_hex: &str) {
     use std::io::Write;
     let ts = chrono::Utc::now().to_rfc3339();
     let linea = format!(
-        "[{ts}] | ACCION: {accion} | SLOT: {slot} | HASH: {hash_hex} | AUTOR: AGORA_AUTH_RING[{slot}]\n"
+        "[{ts}] | ACCION: {accion} | TIPO: {} | SLOT: {slot} | HASH: {hash_hex} | AUTOR: AGORA_AUTH_RING[{slot}]\n",
+        tipo.etiqueta_audit(),
     );
     match std::fs::OpenOptions::new()
         .create(true)
@@ -1154,5 +1249,73 @@ fn escribir_auditoria(log_path: &str, accion: &str, slot: u8, hash_hex: &str) {
             }
         }
         Err(e) => eprintln!("wawactl: no pude abrir audit log {log_path}: {e}"),
+    }
+}
+
+// ---------------------------------------------------------------------
+// Tests del clasificador de prefijos (Fase 60 v2)
+// ---------------------------------------------------------------------
+
+#[cfg(test)]
+mod pruebas_clasificador {
+    use super::*;
+
+    #[test]
+    fn ascii_clasifica_cuaderno() {
+        let hash = "a".repeat(64);
+        let linea = format!("{PREFIJO_SOLICITUD_ASCII}{hash}");
+        let (tipo, hex) = clasificar_linea_ascii(&linea).expect("debe matchear");
+        assert_eq!(tipo, TipoSolicitud::Cuaderno);
+        assert_eq!(hex, hash);
+    }
+
+    #[test]
+    fn ascii_clasifica_configuracion() {
+        let hash = "b".repeat(64);
+        let linea = format!("{PREFIJO_SOLICITUD_CONFIG_ASCII}{hash}");
+        let (tipo, hex) = clasificar_linea_ascii(&linea).expect("debe matchear");
+        assert_eq!(tipo, TipoSolicitud::Configuracion);
+        assert_eq!(hex, hash);
+    }
+
+    #[test]
+    fn ascii_basura_es_none() {
+        assert!(clasificar_linea_ascii("kernel :: trazza random").is_none());
+        assert!(clasificar_linea_ascii("").is_none());
+        // Prefijo cercano pero distinto al de cuaderno.
+        assert!(clasificar_linea_ascii("wawa::sign_wrong::deadbeef").is_none());
+    }
+
+    #[test]
+    fn ascii_prefijo_sin_hash_devuelve_str_vacio() {
+        // Match del prefijo pero sin hex despues. El clasificador ya
+        // devuelve `Some("")`; el validador del lazo principal rechaza
+        // porque `hex.len() != 64`.
+        let (tipo, hex) = clasificar_linea_ascii(PREFIJO_SOLICITUD_ASCII).expect("matchea");
+        assert_eq!(tipo, TipoSolicitud::Cuaderno);
+        assert!(hex.is_empty());
+    }
+
+    #[test]
+    fn prefijos_virtio_miden_lo_mismo() {
+        // El parser binario asume que ambos prefijos miden igual para
+        // poder reusar la ventana deslizante. Si alguien los modifica
+        // sin mantener la simetria, este test lo caza.
+        assert_eq!(
+            PREFIJO_SOLICITUD_VIRTIO.len(),
+            PREFIJO_SOLICITUD_CONFIG_VIRTIO.len(),
+            "los dos prefijos binarios deben medir lo mismo",
+        );
+    }
+
+    #[test]
+    fn etiqueta_audit_distingue_tipos() {
+        // Los lectores del log dependen de strings estables — si alguien
+        // los renombra, este test lo caza.
+        assert_eq!(TipoSolicitud::Cuaderno.etiqueta_audit(), "cuaderno");
+        assert_eq!(
+            TipoSolicitud::Configuracion.etiqueta_audit(),
+            "configuracion"
+        );
     }
 }
