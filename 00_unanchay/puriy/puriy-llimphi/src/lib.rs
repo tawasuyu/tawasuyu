@@ -728,12 +728,15 @@ impl App for Puriy {
                 }
             }
             Msg::InputKey(e) => {
-                // Enter en input: por ahora sólo deja un hint en la status
-                // bar ("submit no implementado todavía"). Submit real
-                // llegará cuando exista `<form action>` handling.
                 if matches!(&e.key, Key::Named(NamedKey::Enter)) {
-                    m.active_mut().status =
-                        "↵ submit todavía no está cableado (typing OK)".into();
+                    // Submit GET: arma URL `action?n1=v1&n2=v2&…` con los
+                    // inputs del mismo form que tienen `name` no vacío.
+                    if let Some(url) = build_form_submit_url(&m) {
+                        return Self::update(m, Msg::Navigate(url), handle);
+                    } else {
+                        m.active_mut().status =
+                            "↵ submit: el input no está dentro de un <form action> conocido".into();
+                    }
                 } else {
                     let t = m.active_mut();
                     if let Some(idx) = t.focused_input {
@@ -1791,6 +1794,69 @@ fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
 /// no rendereamos los hijos non-summary, sí tenemos que consumir sus
 /// índices para que no se desalineen con el vector `details_open` que
 /// el Loaded prefilló en DFS completo.
+/// Si el input focado está dentro de un `<form>`, arma la URL `action?
+/// n1=v1&n2=v2&…` con los inputs que tienen `name` no vacío,
+/// urlencodeados de manera mínima. Devuelve `None` si no hay form
+/// asociado o si el form no tiene action navegable.
+fn build_form_submit_url(m: &Model) -> Option<String> {
+    let t = m.active();
+    let focused_idx = t.focused_input?;
+    let tree = t.box_tree.as_ref()?;
+    // Primer pase: identificá el form_idx del input focado.
+    let mut focused_form: Option<usize> = None;
+    let mut counter: usize = 0;
+    tree.walk(|b| {
+        if b.input_kind.is_some() {
+            if counter == focused_idx {
+                focused_form = b.form_idx;
+            }
+            counter += 1;
+        }
+    });
+    let form_idx = focused_form?;
+    // Segundo pase: junta los pares (name, value) de los inputs del mismo
+    // form que tengan `name` no vacío.
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    let mut counter2: usize = 0;
+    tree.walk(|b| {
+        if b.input_kind.is_some() {
+            let my_idx = counter2;
+            counter2 += 1;
+            if b.form_idx == Some(form_idx) {
+                if let Some(name) = &b.input_name {
+                    let value = t
+                        .inputs
+                        .get(my_idx)
+                        .map(|s| s.text())
+                        .unwrap_or_default();
+                    pairs.push((name.clone(), value));
+                }
+            }
+        }
+    });
+    let form = tree.forms.get(form_idx)?;
+    let action = form.action.clone()?;
+    // URL-encoder mínimo (espacios → '+', resto de chars unsafe → %HH).
+    fn encode(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        for &b in s.as_bytes() {
+            match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                    out.push(b as char);
+                }
+                b' ' => out.push('+'),
+                _ => out.push_str(&format!("%{:02X}", b)),
+            }
+        }
+        out
+    }
+    let qs: Vec<String> = pairs.iter().map(|(k, v)| format!("{}={}", encode(k), encode(v))).collect();
+    let query = qs.join("&");
+    // Concatena action con `?…`. Si action ya tiene `?`, usamos `&`.
+    let sep = if action.contains('?') { '&' } else { '?' };
+    Some(format!("{}{}{}", action, sep, query))
+}
+
 fn skip_count_details(b: &BoxNode, counter: &mut usize) {
     if b.tag.as_deref() == Some("details") {
         *counter += 1;

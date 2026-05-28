@@ -192,6 +192,32 @@ pub struct BoxNode {
     /// Placeholder del input — atributo `placeholder` del `<input>` /
     /// `<textarea>`. `None` si vacío.
     pub input_placeholder: Option<String>,
+    /// Atributo `name` del input — clave del par `name=value` que va al
+    /// query string al submit. `None` = el input no se envía.
+    pub input_name: Option<String>,
+    /// Índice (en `BoxTree.forms`) del `<form>` que contiene a este nodo
+    /// (más cercano hacia arriba en la jerarquía). `None` = no está
+    /// dentro de un form, no se puede submitear.
+    pub form_idx: Option<usize>,
+}
+
+/// Metadata por `<form>` del documento — el chrome la usa al submit.
+#[derive(Debug, Clone)]
+pub struct FormInfo {
+    /// URL absoluta del action (resuelta contra el base). `None` =
+    /// submit a la URL actual de la página (CSS spec).
+    pub action: Option<String>,
+    /// Método HTTP del form — sólo soportamos `GET` por ahora (el más
+    /// común y el que funciona sin manejo de bodies/cookies en puriy).
+    pub method: FormMethod,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormMethod {
+    Get,
+    /// POST no está implementado todavía — el chrome trata como GET y
+    /// muestra un hint en status.
+    Post,
 }
 
 /// Subconjunto de `<input type=...>` que renderemos como widget de texto.
@@ -222,6 +248,9 @@ pub struct ImageData {
 #[derive(Debug, Clone)]
 pub struct BoxTree {
     pub root: BoxNode,
+    /// Forms del documento en orden DFS. Cada `<input>` que cae dentro
+    /// de uno tiene `BoxNode.form_idx = Some(i)`.
+    pub forms: Vec<FormInfo>,
 }
 
 impl BoxTree {
@@ -255,8 +284,57 @@ fn walk_inner(b: &BoxNode, f: &mut impl FnMut(&BoxNode)) {
 pub fn build(dom: &DomTree, styles: &StyleEngine, base_url: &str) -> BoxTree {
     let base = url::Url::parse(base_url).ok();
     let body = dom.find("body").unwrap_or_else(|| dom.document());
-    let root = build_node(&body, styles, base.as_ref(), None).unwrap_or_else(empty_root);
-    BoxTree { root }
+    let mut root = build_node(&body, styles, base.as_ref(), None).unwrap_or_else(empty_root);
+    let mut forms: Vec<FormInfo> = Vec::new();
+    // Pre-walk del DOM para coleccionar `<form>` (orden DFS) con sus
+    // attributes resueltos contra base. La asignación de form_idx por
+    // input se hace en un post-pass sobre el box tree con el mismo
+    // criterio DFS — ambos walks coinciden porque el box tree refleja
+    // el DOM (sólo dropea text-whitespace inter-block; los <form> son
+    // block-level y nunca se descartan).
+    collect_forms_dom(&body, base.as_ref(), &mut forms);
+    let mut form_stack: Vec<usize> = Vec::new();
+    let mut form_cursor: usize = 0;
+    assign_form_idx(&mut root, &mut form_stack, &mut form_cursor);
+    BoxTree { root, forms }
+}
+
+fn collect_forms_dom(node: &Handle, base: Option<&url::Url>, out: &mut Vec<FormInfo>) {
+    if let markup5ever_rcdom::NodeData::Element { .. } = &node.data {
+        if dom::element_name(node).as_deref() == Some("form") {
+            let action = dom::attr(node, "action").and_then(|a| resolve_href(base, &a));
+            let method = dom::attr(node, "method")
+                .map(|m| {
+                    if m.eq_ignore_ascii_case("post") {
+                        FormMethod::Post
+                    } else {
+                        FormMethod::Get
+                    }
+                })
+                .unwrap_or(FormMethod::Get);
+            out.push(FormInfo { action, method });
+        }
+    }
+    for c in node.children.borrow().iter() {
+        collect_forms_dom(c, base, out);
+    }
+}
+
+fn assign_form_idx(b: &mut BoxNode, stack: &mut Vec<usize>, cursor: &mut usize) {
+    let is_form = b.tag.as_deref() == Some("form");
+    if is_form {
+        stack.push(*cursor);
+        *cursor += 1;
+    }
+    if b.input_kind.is_some() {
+        b.form_idx = stack.last().copied();
+    }
+    for c in &mut b.children {
+        assign_form_idx(c, stack, cursor);
+    }
+    if is_form {
+        stack.pop();
+    }
 }
 
 fn empty_root() -> BoxNode {
@@ -325,6 +403,8 @@ fn empty_root() -> BoxNode {
         input_kind: None,
         input_initial: None,
         input_placeholder: None,
+        input_name: None,
+        form_idx: None,
     }
 }
 
@@ -404,6 +484,7 @@ fn build_node(
                 }
             });
             let input_placeholder = input_kind.and_then(|_| dom::attr(node, "placeholder"));
+            let input_name = input_kind.and_then(|_| dom::attr(node, "name"));
             // <img>: descarga + decode sync. Si falla, el campo queda
             // None y el chrome muestra placeholder con el alt.
             let image = if tag.as_deref() == Some("img") {
@@ -513,6 +594,8 @@ fn build_node(
                 input_kind,
                 input_initial,
                 input_placeholder,
+                input_name,
+                form_idx: None,
             })
         }
         NodeData::Text { contents } => {
@@ -616,6 +699,8 @@ fn build_node(
                 input_kind: None,
                 input_initial: None,
                 input_placeholder: None,
+        input_name: None,
+        form_idx: None,
             })
         }
     }
@@ -690,6 +775,8 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         input_kind: None,
         input_initial: None,
         input_placeholder: None,
+        input_name: None,
+        form_idx: None,
     }
 }
 
@@ -1375,6 +1462,37 @@ mod tests {
             }
         });
         assert!(clickable.is_empty(), "ningún href no-web debería ser clickable: {clickable:?}");
+    }
+
+    #[test]
+    fn form_asigna_form_idx_a_inputs_que_contiene() {
+        let html = r##"<html><body>
+            <form action="/search" method="get">
+                <input type="text" name="q" value="hola">
+                <input type="text" name="lang" value="es">
+            </form>
+            <input type="text" name="outside">
+        </body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("https://example.com/", html);
+        assert_eq!(doc.box_tree.forms.len(), 1);
+        let mut names_inside: Vec<String> = Vec::new();
+        let mut outside_form_idx: Option<usize> = None;
+        doc.box_tree.walk(|b| {
+            if let Some(name) = &b.input_name {
+                if b.form_idx == Some(0) {
+                    names_inside.push(name.clone());
+                } else if b.input_kind.is_some() && name == "outside" {
+                    outside_form_idx = b.form_idx;
+                }
+            }
+        });
+        assert_eq!(names_inside, vec!["q".to_string(), "lang".into()]);
+        assert_eq!(outside_form_idx, None);
+        assert_eq!(
+            doc.box_tree.forms[0].action.as_deref(),
+            Some("https://example.com/search")
+        );
     }
 
     #[test]
