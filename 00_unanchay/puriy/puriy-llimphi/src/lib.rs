@@ -120,6 +120,9 @@ pub struct TabState {
     pub history: Vec<String>,
     pub cursor: usize,
     pub box_tree: Option<BoxTree>,
+    /// HTML crudo de la respuesta. Lo usamos para `Ctrl+U` (page source).
+    /// `None` si la pestaña todavía no cargó.
+    pub source: Option<String>,
     /// Generación monótona — Loaded de generaciones viejas se descarta.
     pub gen: u64,
     /// Estado open/closed por `<details>` en orden DFS. Se inicializa al
@@ -145,6 +148,7 @@ impl TabState {
             history: vec![url],
             cursor: 0,
             box_tree: None,
+            source: None,
             gen: 0,
             details_open: Vec::new(),
         }
@@ -191,6 +195,8 @@ pub struct Model {
 pub enum PanelKind {
     Bookmarks,
     History,
+    /// Vista de "Page Source" — HTML crudo de la pestaña activa.
+    Source,
 }
 
 const ZOOM_MIN: f32 = 0.5;
@@ -212,7 +218,13 @@ impl Model {
 #[derive(Clone)]
 pub enum Msg {
     Reload,
-    Loaded { tab: TabId, gen: u64, title: String, box_tree: BoxTree },
+    Loaded {
+        tab: TabId,
+        gen: u64,
+        title: String,
+        box_tree: BoxTree,
+        source: String,
+    },
     LoadFailed { tab: TabId, gen: u64, err: String },
     Navigate(String),
     Scroll(f32),
@@ -257,6 +269,8 @@ pub enum Msg {
     RemoveBookmark(puriy_core::BookmarkId),
     /// Teclas redirigidas al input del filtro de panel (Bookmarks/History).
     PanelFilterKey(KeyEvent),
+    /// Ctrl+U — toggle del panel "Page Source" para la pestaña activa.
+    ViewSource,
     /// Click en `<summary>` (o en la flecha que lo precede): toggle del
     /// `<details>` cuyo índice DFS es `idx`. Si el índice excede el
     /// `details_open` actual, el msg es no-op (ej: re-render durante una
@@ -318,6 +332,9 @@ impl App for Puriy {
                 }
                 Key::Character(s) if s.eq_ignore_ascii_case("h") => {
                     return Some(Msg::ToggleHistory);
+                }
+                Key::Character(s) if s.eq_ignore_ascii_case("u") => {
+                    return Some(Msg::ViewSource);
                 }
                 Key::Named(NamedKey::Tab) if mods.shift => return Some(Msg::PrevTab),
                 Key::Named(NamedKey::Tab) => return Some(Msg::NextTab),
@@ -396,13 +413,14 @@ impl App for Puriy {
                 let url = m.active().url.clone();
                 start_load(&mut m, url, /* push_history */ false, handle);
             }
-            Msg::Loaded { tab, gen, title, box_tree } => {
+            Msg::Loaded { tab, gen, title, box_tree, source } => {
                 if let Some(idx) = m.tab_idx(tab) {
                     let t = &mut m.tabs[idx];
                     if t.gen == gen {
                         t.title = title.clone();
                         let n = box_tree.descendants_count();
                         t.status = format!("OK · {n} boxes");
+                        t.source = Some(source);
                         // Prefill el estado de los <details> walkeando el
                         // árbol nuevo en orden DFS — cada `<details>`
                         // aporta un bool inicializado desde su
@@ -633,6 +651,13 @@ impl App for Puriy {
             Msg::PanelFilterKey(e) => {
                 m.panel_filter.apply_key(&e);
             }
+            Msg::ViewSource => {
+                m.panel = match m.panel {
+                    Some(PanelKind::Source) => None,
+                    _ => Some(PanelKind::Source),
+                };
+                m.panel_filter.clear();
+            }
         }
         m
     }
@@ -651,7 +676,12 @@ impl App for Puriy {
             0
         };
         let body = match model.panel {
-            Some(kind) => panel_view(kind, &model.panel_filter),
+            Some(kind) => panel_view(
+                kind,
+                &model.panel_filter,
+                model.active().source.as_deref(),
+                model.zoom,
+            ),
             None => viewport(model.active(), model.zoom, &query_lc, model.find_current),
         };
 
@@ -765,10 +795,20 @@ fn find_bar(input: &TextInputState, count: usize, current: usize) -> View<Msg> {
 /// el chrome corre sin profile (modo efímero) muestra un mensaje. El
 /// filtro substring (case-insensitive) se aplica al title y url de cada
 /// item; vacío = sin filtro.
-fn panel_view(kind: PanelKind, filter: &TextInputState) -> View<Msg> {
+fn panel_view(
+    kind: PanelKind,
+    filter: &TextInputState,
+    source: Option<&str>,
+    zoom: f32,
+) -> View<Msg> {
+    // Source: render directo, sin items / filtro relevante.
+    if kind == PanelKind::Source {
+        return source_panel(source, zoom);
+    }
     let (title, all_items) = match kind {
         PanelKind::Bookmarks => collect_bookmarks(),
         PanelKind::History => collect_history(),
+        PanelKind::Source => unreachable!(),
     };
     let q = filter.text();
     let q_lc = q.to_lowercase();
@@ -823,6 +863,7 @@ fn panel_view(kind: PanelKind, filter: &TextInputState) -> View<Msg> {
         let msg = match kind {
             PanelKind::Bookmarks => "(no hay bookmarks · Ctrl+D guarda la pestaña activa)",
             PanelKind::History => "(historial vacío)",
+            PanelKind::Source => unreachable!(),
         };
         vec![View::new(Style {
             size: Size { width: percent(1.0_f32), height: length(48.0_f32) },
@@ -852,6 +893,7 @@ fn panel_view(kind: PanelKind, filter: &TextInputState) -> View<Msg> {
     let placeholder = match kind {
         PanelKind::Bookmarks => "filtrar bookmarks por title o url…",
         PanelKind::History => "filtrar historial por title o url…",
+        PanelKind::Source => unreachable!(),
     };
     let filter_input = text_input_view(filter, placeholder, true, &palette, Msg::ClosePanel);
     let filter_row = View::new(Style {
@@ -878,6 +920,126 @@ fn panel_view(kind: PanelKind, filter: &TextInputState) -> View<Msg> {
         ..Default::default()
     })
     .children(vec![header, filter_row, body])
+}
+
+/// Panel "Page Source" — muestra el HTML crudo de la pestaña activa.
+/// Línea por línea, prefijada por número (1-based, 4 dígitos). Mono
+/// tamaño (12px × zoom), color foreground gris claro sobre fondo
+/// oscuro estilo terminal. Sin scroll por ahora — Llimphi clipea
+/// vertical; el usuario ve las primeras líneas.
+fn source_panel(source: Option<&str>, zoom: f32) -> View<Msg> {
+    let header = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(38.0_f32) },
+        padding: Rect {
+            left: length(16.0_f32),
+            right: length(12.0_f32),
+            top: length(8.0_f32),
+            bottom: length(8.0_f32),
+        },
+        flex_direction: FlexDirection::Row,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(Color::from_rgb8(35, 35, 45))
+    .children(vec![
+        View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(20.0_f32) },
+            ..Default::default()
+        })
+        .text_aligned(
+            "Page Source · Ctrl+U cierra · Esc también".to_string(),
+            13.0,
+            Color::from_rgb8(230, 230, 240),
+            Alignment::Start,
+        ),
+        View::new(Style {
+            size: Size { width: length(22.0_f32), height: length(22.0_f32) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .fill(Color::from_rgb8(80, 80, 95))
+        .radius(3.0)
+        .text_aligned("✕", 12.0, Color::from_rgb8(220, 220, 230), Alignment::Center)
+        .on_click(Msg::ClosePanel),
+    ]);
+
+    let lines: Vec<View<Msg>> = match source {
+        Some(src) if !src.is_empty() => src
+            .lines()
+            .enumerate()
+            .take(2000) // cap protección — sources gigantes no destruyen el frame
+            .map(|(i, line)| source_line_view(i + 1, line, zoom))
+            .collect(),
+        Some(_) => vec![source_empty_row("(la respuesta no tenía cuerpo)")],
+        None => vec![source_empty_row("(la pestaña todavía no cargó)")],
+    };
+
+    let body = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        flex_direction: FlexDirection::Column,
+        ..Default::default()
+    })
+    .fill(Color::from_rgb8(24, 24, 30))
+    .clip(true)
+    .children(lines);
+
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        flex_direction: FlexDirection::Column,
+        ..Default::default()
+    })
+    .children(vec![header, body])
+}
+
+fn source_line_view(num: usize, text: &str, zoom: f32) -> View<Msg> {
+    let line_h = 16.0_f32 * zoom;
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(line_h) },
+        flex_direction: FlexDirection::Row,
+        ..Default::default()
+    })
+    .children(vec![
+        View::new(Style {
+            size: Size { width: length(48.0_f32 * zoom), height: length(line_h) },
+            margin: Rect {
+                left: length(0.0_f32),
+                right: length(8.0_f32 * zoom),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            ..Default::default()
+        })
+        .text_aligned(
+            format!("{num:>4}"),
+            11.0 * zoom,
+            Color::from_rgb8(110, 110, 130),
+            Alignment::End,
+        ),
+        View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(line_h) },
+            ..Default::default()
+        })
+        .text_aligned(
+            text.to_string(),
+            12.0 * zoom,
+            Color::from_rgb8(220, 220, 230),
+            Alignment::Start,
+        ),
+    ])
+}
+
+fn source_empty_row(msg: &str) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(40.0_f32) },
+        padding: Rect {
+            left: length(16.0_f32),
+            right: length(16.0_f32),
+            top: length(12.0_f32),
+            bottom: length(12.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(msg.to_string(), 12.0, Color::from_rgb8(140, 140, 150), Alignment::Start)
 }
 
 /// Item de panel: title arriba, url abajo (más chico/gris), click→navega.
@@ -1045,7 +1207,13 @@ fn spawn_load(tab: TabId, gen: u64, url: String, handle: Handle<Msg>) {
         match engine.load(&url) {
             Ok(doc) => {
                 let title = if doc.title.is_empty() { doc.url.clone() } else { doc.title.clone() };
-                handle.dispatch(Msg::Loaded { tab, gen, title, box_tree: doc.box_tree });
+                handle.dispatch(Msg::Loaded {
+                    tab,
+                    gen,
+                    title,
+                    box_tree: doc.box_tree,
+                    source: doc.source,
+                });
                 // Best-effort: persistimos la cache después de cada
                 // navegación exitosa. Si el proceso muere por SIGKILL o
                 // panic, sólo se pierde la navegación en vuelo — las

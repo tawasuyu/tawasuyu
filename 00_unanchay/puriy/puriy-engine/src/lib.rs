@@ -65,6 +65,7 @@ impl Engine {
         Document {
             url: url.to_string(),
             title,
+            source: html.to_string(),
             dom,
             box_tree,
         }
@@ -81,6 +82,9 @@ impl Default for Engine {
 pub struct Document {
     pub url: String,
     pub title: String,
+    /// HTML crudo del documento (idéntico al que se le pasó al parser).
+    /// Útil para "ver código fuente" (Ctrl+U) y debug.
+    pub source: String,
     pub dom: DomTree,
     pub box_tree: BoxTree,
 }
