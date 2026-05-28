@@ -419,3 +419,124 @@ mod pruebas {
         assert_eq!(hex_a_hash(&s), Some(h));
     }
 }
+
+// ---------------------------------------------------------------------
+// Tests de integración: Consulta → MockChatClient → Propuesta.
+// Validan el contrato completo del puente sin red ni grafo.
+// ---------------------------------------------------------------------
+
+#[cfg(test)]
+mod integracion {
+    use super::*;
+    use pluma_llm_core::{ChatClient, ChatRequest};
+    use pluma_llm_mock::MockChatClient;
+
+    fn ctx_demo() -> Contexto {
+        Contexto {
+            apps: vec!["pluma".into(), "bitacora".into(), "tonada".into()],
+            manifiesto_actual: Some([0x11; 32]),
+            configuracion_activa: None,
+        }
+    }
+
+    /// Helper: simula el flujo completo del puente sobre un mock.
+    fn flujo(mock: &MockChatClient, prompt: &str) -> InterpretacionLlm {
+        let ctx = ctx_demo();
+        let user = construir_prompt_usuario(&ctx, prompt);
+        let req = ChatRequest::una_vuelta(user, 500).con_sistema(PROMPT_SISTEMA_WAWA);
+        let resp = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio rt")
+            .block_on(mock.complete(&req))
+            .expect("mock no falla");
+        traducir_propuesta_llm(&resp.content)
+    }
+
+    #[test]
+    fn flujo_lanzar_pluma_indice_correcto() {
+        // El mock responde con el índice 0 (pluma); el puente lo
+        // mapea a `LanzarApp { plantilla: 0 }`.
+        let mock = MockChatClient::default().con_respuesta(
+            "abre pluma",
+            r#"{"tipo": "lanzar", "plantilla": 0, "explicacion": "es la primera"}"#,
+        );
+        match flujo(&mock, "abre pluma para tomar notas") {
+            InterpretacionLlm::Propuesta {
+                accion: AccionPropuesta::LanzarApp { plantilla },
+                ..
+            } => assert_eq!(plantilla, 0),
+            otro => panic!("esperaba LanzarApp, obtuve {otro:?}"),
+        }
+    }
+
+    #[test]
+    fn flujo_notar_responde_pregunta() {
+        let mock = MockChatClient::default().con_respuesta(
+            "cuantas apps",
+            r#"{"tipo": "notar", "texto": "tienes 3 apps: pluma, bitacora, tonada"}"#,
+        );
+        match flujo(&mock, "cuantas apps tengo?") {
+            InterpretacionLlm::Propuesta {
+                accion: AccionPropuesta::Notar { texto },
+                ..
+            } => {
+                assert!(texto.contains("3 apps"));
+                assert!(texto.contains("pluma"));
+            }
+            otro => panic!("esperaba Notar, obtuve {otro:?}"),
+        }
+    }
+
+    #[test]
+    fn flujo_modelo_se_niega() {
+        let mock = MockChatClient::default().con_respuesta(
+            "destruir",
+            r#"{"error": "no destruyo cosas a mansalva"}"#,
+        );
+        match flujo(&mock, "destruir todo") {
+            InterpretacionLlm::Rechazo(motivo) => assert!(motivo.contains("destruyo")),
+            otro => panic!("esperaba Rechazo, obtuve {otro:?}"),
+        }
+    }
+
+    #[test]
+    fn flujo_modelo_responde_con_basura_genera_error() {
+        let mock = MockChatClient::default().con_respuesta(
+            "vacio",
+            "Lo siento, hoy mi modelo está mareado.",
+        );
+        assert!(matches!(
+            flujo(&mock, "vacio"),
+            InterpretacionLlm::Error(_),
+        ));
+    }
+
+    #[test]
+    fn flujo_instalar_con_hash_de_la_red() {
+        // Caso realista: el operador habilita un canal y el modelo
+        // sugiere instalar el manifiesto que vino por él. El hash es
+        // dato del puente (en este test, fingido).
+        let hex = "fe".repeat(32);
+        let mock = MockChatClient::default().con_respuesta(
+            "instalar",
+            &format!(
+                r#"{{"tipo": "instalar", "manifiesto": "{hex}", "explicacion": "v3 del canal"}}"#
+            ),
+        );
+        match flujo(&mock, "instalar la version nueva") {
+            InterpretacionLlm::Propuesta {
+                accion:
+                    AccionPropuesta::InstalarApp {
+                        manifiesto_propuesto,
+                    },
+                explicacion,
+                ..
+            } => {
+                assert_eq!(manifiesto_propuesto, [0xFE; 32]);
+                assert!(explicacion.contains("v3"));
+            }
+            otro => panic!("esperaba InstalarApp, obtuve {otro:?}"),
+        }
+    }
+}
