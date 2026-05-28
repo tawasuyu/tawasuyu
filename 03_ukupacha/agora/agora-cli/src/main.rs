@@ -492,7 +492,9 @@ fn atestar(como: &str, sobre: &str, pred: &str, valor: &str) -> CliResult<()> {
     let claim = Claim::new(sobre, pred, valor, now);
     let att = Attestation::create(&kp, claim);
     s.graph.add_attestation(att.clone())?;
-    s.guardar()?;
+    // Append-only: en grafos grandes no re-serializamos todo. El
+    // siguiente load consolidará snapshot + log; compactar es manual.
+    agora_store::append_attestation(&s.store_path, &att).map_err(Error::Store)?;
     println!("atestación firmada y agregada al grafo");
     println!("  hash   {}", hex_de(&att.stable_hash()));
     println!("  por    {}", hex_de(att.attester.as_bytes()));

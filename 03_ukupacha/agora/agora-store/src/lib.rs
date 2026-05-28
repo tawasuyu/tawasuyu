@@ -21,8 +21,8 @@
 
 #![forbid(unsafe_code)]
 
-use std::fs::{self, File};
-use std::io::{BufReader, BufWriter, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
 use agora_core::{AgoraError, Attestation, Identity};
@@ -39,6 +39,8 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("JSON: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("postcard: {0}")]
+    Postcard(#[from] postcard::Error),
     #[error("versión de esquema desconocida: {found} (esta build soporta {SCHEMA})")]
     SchemaDesconocida { found: u32 },
     #[error("atestación con firma inválida en el archivo: {0}")]
@@ -88,23 +90,130 @@ pub fn save(ruta: &Path, graph: &TrustGraph) -> Result<()> {
 }
 
 /// Carga el grafo desde disco y reconstruye un [`TrustGraph`] nuevo
-/// re-verificando cada atestación. Si una sola firma falla, devuelve
-/// [`Error::AtestacionInvalida`] sin entregar grafo parcial.
+/// re-verificando cada atestación.
+///
+/// Combina dos fuentes:
+/// 1. El **snapshot JSON** en `ruta` (lo que produce [`save`]).
+/// 2. El **append-log** en `<ruta>.log` (lo que produce
+///    [`append_attestation`]) — replay completo.
+///
+/// Si el snapshot falla por una firma rota, devuelve
+/// [`Error::AtestacionInvalida`] sin entregar grafo parcial. Si el
+/// log contiene registros con firma rota o truncados, los ignora en
+/// silencio (un log es lo que es: append-only, puede tener basura al
+/// final por crashes). El conteo de aceptadas/rechazadas del log no se
+/// expone en el resultado — pasar por [`replay_log`] si hace falta.
 pub fn load(ruta: &Path) -> Result<TrustGraph> {
-    let f = File::open(ruta)?;
-    let env: Envelope = serde_json::from_reader(BufReader::new(f))?;
-    if env.schema != SCHEMA {
-        return Err(Error::SchemaDesconocida { found: env.schema });
-    }
+    let mut g = if ruta.exists() {
+        let f = File::open(ruta)?;
+        let env: Envelope = serde_json::from_reader(BufReader::new(f))?;
+        if env.schema != SCHEMA {
+            return Err(Error::SchemaDesconocida { found: env.schema });
+        }
+        let mut g = TrustGraph::new();
+        for identity in env.graph.identities {
+            g.register(identity);
+        }
+        for att in env.graph.attestations {
+            g.add_attestation(att).map_err(Error::AtestacionInvalida)?;
+        }
+        g
+    } else {
+        TrustGraph::new()
+    };
 
-    let mut g = TrustGraph::new();
-    for identity in env.graph.identities {
-        g.register(identity);
-    }
-    for att in env.graph.attestations {
-        g.add_attestation(att).map_err(Error::AtestacionInvalida)?;
+    let log = log_path(ruta);
+    if log.exists() {
+        let _ = replay_log(&mut g, &log)?;
     }
     Ok(g)
+}
+
+// =============================================================================
+//  Append-log: agregar UNA atestación sin reescribir el snapshot
+// =============================================================================
+
+/// Agrega una atestación al append-log de `ruta` (`<ruta>.log`). Es la
+/// operación idiomática para sumar una atestación sin pagar el costo
+/// de re-serializar el grafo entero — muy importante en grafos grandes.
+/// Cada registro es `[u32 LE largo][postcard de Attestation]`. El log
+/// crece append-only; usar [`compact`] para fusionar al snapshot y
+/// truncarlo.
+///
+/// El archivo se abre con `O_APPEND` y se hace `sync_all` tras cada
+/// registro — si el proceso crashea a mitad del write, el lector
+/// detecta la cola truncada y la descarta (ver [`replay_log`]).
+pub fn append_attestation(ruta: &Path, att: &Attestation) -> Result<()> {
+    let log = log_path(ruta);
+    let bytes = postcard::to_allocvec(att)?;
+    let len = bytes.len() as u32;
+    let mut f = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log)?;
+    f.write_all(&len.to_le_bytes())?;
+    f.write_all(&bytes)?;
+    f.sync_all()?;
+    Ok(())
+}
+
+/// Reproduce el append-log sobre `g`: aplica cada atestación con
+/// [`TrustGraph::add_attestation`] (que re-verifica firma) y devuelve
+/// `(aceptadas, rechazadas)`. Registros truncados o postcard inválido
+/// en el TAIL se ignoran silenciosamente — son la consecuencia normal
+/// de un crash a mitad de append.
+pub fn replay_log(g: &mut TrustGraph, log: &Path) -> Result<(usize, usize)> {
+    let mut f = File::open(log)?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf)?;
+    let mut aceptadas = 0;
+    let mut rechazadas = 0;
+    let mut cursor = 0;
+    while cursor + 4 <= buf.len() {
+        let mut len_bytes = [0u8; 4];
+        len_bytes.copy_from_slice(&buf[cursor..cursor + 4]);
+        let len = u32::from_le_bytes(len_bytes) as usize;
+        cursor += 4;
+        if cursor + len > buf.len() {
+            // Registro truncado — crash a mitad del append. Ignorar tail.
+            break;
+        }
+        match postcard::from_bytes::<Attestation>(&buf[cursor..cursor + len]) {
+            Ok(att) => match g.add_attestation(att) {
+                Ok(()) => aceptadas += 1,
+                Err(_) => rechazadas += 1,
+            },
+            Err(_) => {
+                // Postcard inválido — corrupción o cambio de formato.
+                // Asumimos que el resto del log es basura y cortamos.
+                break;
+            }
+        }
+        cursor += len;
+    }
+    Ok((aceptadas, rechazadas))
+}
+
+/// Fusiona snapshot + log en un snapshot fresco, y trunca el log.
+///
+/// **No es atómico** entre los dos pasos: si crashea entre el snapshot
+/// y el unlink del log, el log puede contener registros que YA están en
+/// el snapshot — al siguiente `load`, el replay los volverá a aplicar y
+/// `add_attestation` los descartará como duplicados (idempotente).
+/// Resultado neto: indistinguible del éxito completo.
+pub fn compact(ruta: &Path, graph: &TrustGraph) -> Result<()> {
+    save(ruta, graph)?;
+    let log = log_path(ruta);
+    if log.exists() {
+        fs::remove_file(&log)?;
+    }
+    Ok(())
+}
+
+fn log_path(ruta: &Path) -> PathBuf {
+    let mut s = ruta.as_os_str().to_owned();
+    s.push(".log");
+    PathBuf::from(s)
 }
 
 fn tmp_path(ruta: &Path) -> PathBuf {
@@ -204,6 +313,110 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(load(&ruta), Err(Error::SchemaDesconocida { found: 999 })));
+    }
+
+    #[test]
+    fn append_y_load_replayan_el_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let ruta = dir.path().join("agora.json");
+        let (original, yid) = graph_ejemplo();
+        save(&ruta, &original).unwrap();
+
+        // Atestación nueva que NO está en el snapshot, solo en el log.
+        let vecina = Keypair::from_seed([40; 32]);
+        let extra = Attestation::create(
+            &vecina,
+            Claim::new(yid, "oficio", "partera", 1_700_000_200),
+        );
+        append_attestation(&ruta, &extra).unwrap();
+
+        let cargado = load(&ruta).unwrap();
+        assert_eq!(cargado.attestation_count(), original.attestation_count() + 1);
+        let c = cargado.corroboration(yid, "oficio", "partera");
+        assert_eq!(c.total(), 1);
+    }
+
+    #[test]
+    fn compact_funde_el_log_al_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let ruta = dir.path().join("agora.json");
+        let log = dir.path().join("agora.json.log");
+        let (original, yid) = graph_ejemplo();
+        save(&ruta, &original).unwrap();
+
+        let vecina = Keypair::from_seed([40; 32]);
+        let extra = Attestation::create(
+            &vecina,
+            Claim::new(yid, "oficio", "partera", 1_700_000_200),
+        );
+        append_attestation(&ruta, &extra).unwrap();
+        assert!(log.exists());
+
+        // Cargar incluye snapshot + log.
+        let mut g = load(&ruta).unwrap();
+        compact(&ruta, &g).unwrap();
+        assert!(!log.exists(), "compact debe borrar el log");
+
+        // Después de compact, el snapshot ya contiene la atestación.
+        // Aplicar duplicada (simular replay tras crash) no rompe.
+        append_attestation(&ruta, &extra).unwrap();
+        let cargado = load(&ruta).unwrap();
+        assert_eq!(cargado.attestation_count(), original.attestation_count() + 1);
+        g.add_attestation(extra).ok(); // ya estaba — silencioso
+    }
+
+    #[test]
+    fn log_truncado_se_ignora_silencioso() {
+        let dir = tempfile::tempdir().unwrap();
+        let ruta = dir.path().join("agora.json");
+        let log = dir.path().join("agora.json.log");
+        let (original, yid) = graph_ejemplo();
+        save(&ruta, &original).unwrap();
+
+        let vecina = Keypair::from_seed([40; 32]);
+        let extra = Attestation::create(
+            &vecina,
+            Claim::new(yid, "oficio", "partera", 1_700_000_200),
+        );
+        append_attestation(&ruta, &extra).unwrap();
+
+        // Truncar el log en mitad del último registro.
+        let bytes = std::fs::read(&log).unwrap();
+        let truncado = &bytes[..bytes.len() - 10];
+        std::fs::write(&log, truncado).unwrap();
+
+        // load no debe romper; la atestación del registro truncado se pierde.
+        let cargado = load(&ruta).unwrap();
+        assert_eq!(cargado.attestation_count(), original.attestation_count());
+    }
+
+    #[test]
+    fn append_sin_snapshot_y_load_funciona() {
+        // Caso "primer arranque": no hay snapshot todavía pero algo ya
+        // hizo append. load debe arrancar de TrustGraph::new y replayar.
+        let dir = tempfile::tempdir().unwrap();
+        let ruta = dir.path().join("agora.json");
+        let (_, yid) = graph_ejemplo();
+
+        // Necesitamos que las identidades estén en el grafo del replay,
+        // si no add_attestation no las registra automáticamente.
+        // Por simplicidad acá, sólo verificamos que load no rompa y
+        // devuelva un grafo vacío con 0 atestaciones (el log existe pero
+        // sus atestaciones son sobre yids que el grafo nuevo no conoce
+        // — add_attestation las acepta igual, las identidades se
+        // registran aparte).
+        let vecina = Keypair::from_seed([40; 32]);
+        let att = Attestation::create(
+            &vecina,
+            Claim::new(yid, "oficio", "partera", 1_700_000_200),
+        );
+        append_attestation(&ruta, &att).unwrap();
+
+        let cargado = load(&ruta).unwrap();
+        assert_eq!(cargado.attestation_count(), 1);
+        // No registramos identidades en el grafo durante el replay
+        // (el log sólo lleva atestaciones, no identidades).
+        assert_eq!(cargado.identity_count(), 0);
     }
 
     #[test]

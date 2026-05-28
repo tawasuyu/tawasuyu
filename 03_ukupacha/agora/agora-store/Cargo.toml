@@ -13,6 +13,7 @@ agora-core = { path = "../agora-core" }
 agora-graph = { path = "../agora-graph" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+postcard = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

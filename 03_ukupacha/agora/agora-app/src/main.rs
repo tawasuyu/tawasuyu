@@ -393,12 +393,17 @@ impl App for AgoraApp {
                             .unwrap_or(0);
                         let claim = Claim::new(subject, predicate, value, now);
                         let att = Attestation::create(&kp, claim);
-                        match model.graph.add_attestation(att) {
+                        match model.graph.add_attestation(att.clone()) {
                             Ok(()) => {
                                 model.compose_predicate.clear();
                                 model.compose_value.clear();
                                 model.compose_status = "atestación agregada y persistida".into();
-                                model.save_graph();
+                                // Append al log, no save completo.
+                                if let Err(e) =
+                                    agora_store::append_attestation(&model.store_path, &att)
+                                {
+                                    eprintln!("agora-app: no pude appendear atestación: {e}");
+                                }
                             }
                             Err(e) => {
                                 model.compose_status = format!("rechazada: {e}");
