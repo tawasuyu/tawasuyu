@@ -22,6 +22,7 @@
 
 pub mod boxes;
 pub mod cache;
+pub mod cookies;
 pub mod dom;
 pub mod fetch;
 pub mod style;

@@ -38,14 +38,26 @@ pub fn fetch_bytes(url: &str) -> Result<Vec<u8>, FetchError> {
     if let Some(hit) = cache::get(url) {
         return Ok(hit);
     }
-    let resp = ureq::get(url)
-        .set("User-Agent", concat!("puriy/", env!("CARGO_PKG_VERSION")))
-        .call()
-        .map_err(|e| match e {
-            ureq::Error::Status(code, _) => FetchError::Status(code),
-            ureq::Error::Transport(t) => FetchError::Transport(t.to_string()),
-        })?;
+    let parsed = url::Url::parse(url).ok();
+    let host = parsed.as_ref().and_then(|u| u.host_str()).map(|s| s.to_string());
+    let mut req = ureq::get(url)
+        .set("User-Agent", concat!("puriy/", env!("CARGO_PKG_VERSION")));
+    if let Some(h) = host.as_deref() {
+        if let Some(cookie_hdr) = crate::cookies::cookie_header(h) {
+            req = req.set("Cookie", &cookie_hdr);
+        }
+    }
+    let resp = req.call().map_err(|e| match e {
+        ureq::Error::Status(code, _) => FetchError::Status(code),
+        ureq::Error::Transport(t) => FetchError::Transport(t.to_string()),
+    })?;
     let cc = resp.header("Cache-Control").map(|s| s.to_string());
+    // Set-Cookie: ureq junta headers en `resp.all("Set-Cookie")`.
+    if let Some(h) = host.as_deref() {
+        for sc in resp.all("Set-Cookie") {
+            crate::cookies::put_set_cookie(h, sc);
+        }
+    }
     let mut bytes = Vec::new();
     use std::io::Read;
     resp.into_reader()
@@ -84,14 +96,25 @@ fn parse_max_age(cc: &str) -> Option<u64> {
 /// los POST son no-idempotentes. Devuelve el body como String del
 /// response. Sin redirects automáticos por ahora.
 pub fn post_form(url: &str, body: &str) -> Result<String, FetchError> {
-    let resp = ureq::post(url)
+    let parsed = url::Url::parse(url).ok();
+    let host = parsed.as_ref().and_then(|u| u.host_str()).map(|s| s.to_string());
+    let mut req = ureq::post(url)
         .set("User-Agent", concat!("puriy/", env!("CARGO_PKG_VERSION")))
-        .set("Content-Type", "application/x-www-form-urlencoded")
-        .send_string(body)
-        .map_err(|e| match e {
-            ureq::Error::Status(code, _) => FetchError::Status(code),
-            ureq::Error::Transport(t) => FetchError::Transport(t.to_string()),
-        })?;
+        .set("Content-Type", "application/x-www-form-urlencoded");
+    if let Some(h) = host.as_deref() {
+        if let Some(cookie_hdr) = crate::cookies::cookie_header(h) {
+            req = req.set("Cookie", &cookie_hdr);
+        }
+    }
+    let resp = req.send_string(body).map_err(|e| match e {
+        ureq::Error::Status(code, _) => FetchError::Status(code),
+        ureq::Error::Transport(t) => FetchError::Transport(t.to_string()),
+    })?;
+    if let Some(h) = host.as_deref() {
+        for sc in resp.all("Set-Cookie") {
+            crate::cookies::put_set_cookie(h, sc);
+        }
+    }
     resp.into_string().map_err(|e| FetchError::Transport(e.to_string()))
 }
 
