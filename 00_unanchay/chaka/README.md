@@ -29,6 +29,14 @@ cargo build --release -p chaka-app
 | [`chaka-bcd`](chaka-bcd/README.md) | Decimal arithmetic with COBOL semantics + packed-decimal (`COMP-3`) codec. |
 | [`chaka-shadow`](chaka-shadow/README.md) | In-process interpreter + GnuCOBOL harness for diff-against-truth. |
 
+## Differential test
+
+The contract — *shadow ≡ transpiled ≡ hand-verified `.expected`* — is exercised end-to-end on every corpus fixture by `chaka-app/tests/corpus_e2e.rs`. For each `.cob`, the test scaffolds a crate, compiles it with `cargo` against `chaka-runtime`, runs the binary, and compares its stdout (with trailing-whitespace trimmed) against the corresponding `.expected`. Marked `#[ignore]` because each fixture invokes `cargo build`; run with:
+
+```sh
+cargo test -p chaka-app --test corpus_e2e --release -- --ignored
+```
+
 ## Out of scope (v1)
 
 - Non-COBOL dialects: the `Dialect` enum is wired in `chaka-lexer` but only `Cobol` has an implementation.

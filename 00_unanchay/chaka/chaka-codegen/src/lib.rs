@@ -17,9 +17,18 @@
 //! dato sin resolver, `**`) se emite como un comentario `// chaka:` —
 //! el código generado siempre compila.
 //!
-//! Alcance v1 — fuera: grupos como campo propio, `REDEFINES`,
-//! `OCCURS`/tablas, `PERFORM ... THRU` como rango, E/S de ficheros,
-//! `EVALUATE`, CICS y SQL embebido.
+//! Lo que sí entrega v1 (verificado contra el corpus por el test
+//! diferencial `chaka-app/tests/corpus_e2e.rs`): aritmética con
+//! `ROUNDED`, `IF` y `EVALUATE` con sus ramas, `PERFORM` inline /
+//! `UNTIL` / `VARYING` / `THRU`, `OCCURS` y `SEARCH`, `CALL` a
+//! programas vecinos, E/S `OPEN`/`READ`/`WRITE`/`REWRITE`/`DELETE`/
+//! `START`/`CLOSE` sobre line-sequential, `STRING`/`UNSTRING`,
+//! `INSPECT` (`TALLYING`/`REPLACING`), `INITIALIZE`, niveles `88` con
+//! `SET`, `MOVE`, `SORT`/`MERGE`, `COPY`, y `DISPLAY`/`ACCEPT`.
+//!
+//! Fuera de v1: `REDEFINES`, CICS y SQL embebido, `START`/`REWRITE`/
+//! `DELETE` con organizaciones indexada o relativa (se tratan como
+//! no-op sobre line-sequential), y la directiva `REPLACE`.
 
 #![forbid(unsafe_code)]
 

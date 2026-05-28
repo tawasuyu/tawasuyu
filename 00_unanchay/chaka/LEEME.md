@@ -29,6 +29,14 @@ cargo build --release -p chaka-app
 | [`chaka-bcd`](chaka-bcd/LEEME.md) | Aritmética decimal con semántica COBOL + codec packed-decimal (`COMP-3`). |
 | [`chaka-shadow`](chaka-shadow/LEEME.md) | Intérprete en proceso + harness GnuCOBOL para diff contra la verdad. |
 
+## Test diferencial
+
+El contrato — *sombra ≡ transpilado ≡ `.expected` verificado a mano* — se ejercita end-to-end sobre cada fixture del corpus en `chaka-app/tests/corpus_e2e.rs`. Por cada `.cob`, el test scaffold-ea un crate, lo compila con `cargo` contra `chaka-runtime`, ejecuta el binario y compara su stdout (con espacios finales recortados) contra el `.expected` correspondiente. Marcado `#[ignore]` porque cada fixture lanza un `cargo build`; correr con:
+
+```sh
+cargo test -p chaka-app --test corpus_e2e --release -- --ignored
+```
+
 ## Fuera de alcance (v1)
 
 - Dialectos no-COBOL: el enum `Dialect` queda enchufado en `chaka-lexer` pero sólo `Cobol` tiene implementación.

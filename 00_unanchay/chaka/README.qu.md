@@ -31,6 +31,14 @@ cargo build --release -p chaka-app
 | [`chaka-bcd`](chaka-bcd/README.qu.md) | Decimal yupay COBOL semanticawan + packed-decimal (`COMP-3`) codec. |
 | [`chaka-shadow`](chaka-shadow/README.qu.md) | Proceso ukhu intérprete + GnuCOBOL harness — cheqaqwan diff. |
 
+## Diferencial chayqachay
+
+Promesa — *llantu ≡ tikrasqa ≡ makiwan cheqasqa `.expected`* — tukuy corpus fixture-pi end-to-end ruwakun `chaka-app/tests/corpus_e2e.rs`-pi. Sapa `.cob`-paq, test crate-ta scaffold ruwan, `cargo`-wan `chaka-runtime`-pa contra compilan, binariokunata ruwarichin, hinaspa stdoutninta (final espacios pichaspa) `.expected` tinkuyninwan tinkuchin. `#[ignore]` marka, sapa fixture `cargo build` waqyakuptin; explicita kayhinapi puririchina:
+
+```sh
+cargo test -p chaka-app --test corpus_e2e --release -- --ignored
+```
+
 ## Mana kanchu (v1)
 
 - Mana COBOL dialecto: `Dialect` enum `chaka-lexer`-pi kachan, `Cobol`-llan ruwasqa.
