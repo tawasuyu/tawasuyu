@@ -338,6 +338,28 @@ pub(crate) struct Pantalla {
 }
 
 impl Pantalla {
+    /// FASE 60 :: adopta un framebuffer ARBITRARIO ya mapeado — el caso del
+    /// scanout que el kernel posee via virtio-gpu—. El format es B8G8R8A8
+    /// (BGRA, 4 bpp): los bytes salen B,G,R,A, que es justo lo que codifica
+    /// `PixelFormat::Bgr` (la A queda en 0, ignorada por el scanout). A
+    /// diferencia del GOP, escribir aqui NO presenta: hace falta un
+    /// `gpu::presentar()` que cruce la frontera hacia el anfitrion.
+    pub(crate) fn sobre_framebuffer(
+        base: *mut u8,
+        ancho: usize,
+        alto: usize,
+        paso_bytes: usize,
+    ) -> Pantalla {
+        Pantalla {
+            base,
+            ancho,
+            alto,
+            paso_bytes,
+            bytes_por_pixel: 4,
+            format: PixelFormat::Bgr,
+        }
+    }
+
     /// Adopta el framebuffer descrito por `info`. La memoria de video es
     /// permanente, asi que conservar su puntero crudo es legitimo.
     pub(crate) fn adoptar(framebuffer: &mut FrameBuffer, info: FrameBufferInfo) -> Pantalla {

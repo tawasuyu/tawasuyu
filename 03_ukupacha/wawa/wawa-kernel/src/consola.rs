@@ -750,6 +750,10 @@ impl Consola {
         if let Some((x, y)) = crate::drivers::raton::posicion() {
             self.pantalla.estampar_puntero(x, y);
         }
+        // FASE 60 :: si el kernel gobierna un scanout virtio-gpu, el lienzo y
+        // el puntero ya escritos viven en memoria del huesped; el `flush` los
+        // cruza hacia el anfitrion. No-op silencioso sobre el GOP del firmware.
+        crate::drivers::gpu::presentar();
     }
 
     /// Vuelca SOLO una sub-region del lienzo a pantalla y re-estampa el
@@ -763,6 +767,10 @@ impl Consola {
                 self.pantalla.estampar_puntero(x, y);
             }
         }
+        // FASE 60 :: volcar al anfitrion lo recien blitteado. El blit GUEST fue
+        // por sub-region (camino rapido), pero el `flush` cruza la pantalla
+        // entera — la crate no expone un `flush` por rectangulo. No-op en GOP.
+        crate::drivers::gpu::presentar();
     }
 }
 

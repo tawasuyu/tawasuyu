@@ -564,9 +564,10 @@ fn cargar_userspace(ejecutor: &mut Executor, ancho_pantalla: usize, alto_pantall
             .collect();
         // FASE 59 v1 :: fundar el registro de outputs ANTES del escritorio,
         // de modo que el compositor pueda consultar `pantallas::primario()`
-        // si necesita. Hoy hay UN output cubriendo todo el framebuffer; un
-        // driver futuro (virtio-gpu, fork de bootloader_api) registrara los
-        // adicionales con `pantallas::registrar`.
+        // si necesita. Hoy hay UN output cubriendo todo el framebuffer —sea el
+        // scanout virtio-gpu que el kernel gobierna (Fase 60) o el GOP del
+        // firmware—; el multi-scanout (`num_scanouts > 1`) registrara los
+        // adicionales con `pantallas::registrar` cuando se aborde.
         pantallas::fundar(ancho_pantalla, alto_pantalla);
         compositor::fundar(ancho_pantalla, alto_pantalla, &naturales);
         compositor::componer_escenario();
@@ -651,6 +652,12 @@ fn informar_almacen() {
         }
         None => consola.escribir("disco :: IRQ no enrutada -- E/S por sondeo\n"),
     }
+    // FASE 60 :: delatar quien gobierna el barrido de pantalla.
+    if drivers::gpu::disponible() {
+        consola.escribir("gpu :: virtio-gpu -- el kernel gobierna el scanout\n");
+    } else {
+        consola.escribir("gpu :: ausente -- escritorio sobre el framebuffer GOP\n");
+    }
     consola.presentar();
 }
 
@@ -667,7 +674,13 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     };
     let info: FrameBufferInfo = framebuffer.info();
     let format: PixelFormat = info.pixel_format;
-    let pantalla = Pantalla::adoptar(framebuffer, info);
+    // La resolucion del lienzo intermedio se acota a Full HD y se fija YA: la
+    // GPU (Fase 60) crea su scanout a esta misma medida, antes de la consola.
+    let ancho_lienzo = info.width.min(ANCHO_MAX);
+    let alto_lienzo = info.height.min(ALTO_MAX);
+    // `pantalla` arranca sobre el framebuffer GOP del firmware; si la Fase 60
+    // logra montar virtio-gpu, se reemplaza por el scanout que el kernel posee.
+    let mut pantalla = Pantalla::adoptar(framebuffer, info);
     traza("framebuffer adoptado");
 
     // Datos para la sonda de disco (Fase 6.1b): el offset al que el cargador
@@ -712,6 +725,43 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         traza("mmio :: mapeador fundado");
     }
 
+    // --- 4.6. FASE 60 :: fundar la arena de marcos DMA y, sobre ella, TOMAR
+    //          POSESION DEL SCANOUT via virtio-gpu. La arena —que el disco
+    //          fundaba en su `init`— se adelanta aqui porque `KernelHal::
+    //          dma_alloc` debe servir tambien a la GPU, que se monta antes que
+    //          el disco y antes que la consola: su framebuffer SERA el de ella.
+    //          Si falta offset/region, no hay dispositivo, o cualquier paso
+    //          falla, el kernel se queda con el framebuffer GOP del firmware —el
+    //          escritorio sigue, solo que el kernel no gobierna el barrido—. ---
+    if let (Some(offset), Some((inicio, fin))) = (offset_fisico, region_dma) {
+        drivers::disco::init(offset, inicio, fin);
+        traza("disco :: arena DMA fundada");
+        match drivers::gpu::montar(ancho_lienzo, alto_lienzo) {
+            Ok(info_gpu) => {
+                pantalla = Pantalla::sobre_framebuffer(
+                    info_gpu.base,
+                    info_gpu.ancho,
+                    info_gpu.alto,
+                    info_gpu.paso_bytes,
+                );
+                // Re-apuntar la baliza al framebuffer de la GPU: el scanout que
+                // el operador ve es ahora el del kernel, no el GOP. Sin esto, la
+                // franja de panico se pintaria en una memoria que ya nadie barre.
+                BALIZA_PANICO.encender(
+                    &pantalla,
+                    codificar(pantalla.format, Color::ALERTA),
+                    codificar(pantalla.format, Color::OOM),
+                    codificar(pantalla.format, Color::FATAL_CARMESI),
+                );
+                traza("gpu :: scanout en posesion del kernel");
+            }
+            Err(motivo) => {
+                let _ = writeln!(baliza::Serie, "gpu :: {motivo} (fallback framebuffer GOP)");
+                traza("gpu :: OMITIDO (fallback GOP)");
+            }
+        }
+    }
+
     // --- 5. Con el heap activo, fundar lo que depende de el: el canal de
     //        scancodes, el reloj de fotogramas y la tipografia vectorial. ---
     async_system::teclado::init();
@@ -726,9 +776,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         Some(m) => m,
         None => detener(),
     };
-    let ancho_lienzo = info.width.min(ANCHO_MAX);
-    let alto_lienzo = info.height.min(ALTO_MAX);
-    let mut lienzo = Lienzo::nuevo(memoria, ancho_lienzo, alto_lienzo, format);
+    // El lienzo codifica sus pixeles al format de la pantalla ACTIVA: si la
+    // GPU tomo el scanout es B8G8R8A8 (Bgr), si no, el del GOP. Asi el volcado
+    // fila-a-fila es un `memcpy` puro, sin recodificar canal por canal.
+    let mut lienzo = Lienzo::nuevo(memoria, ancho_lienzo, alto_lienzo, pantalla.format);
     lienzo.limpiar(Color::LIENZO_EN_REPOSO);
 
     let mut consola = Consola::nueva(lienzo, pantalla);
@@ -742,9 +793,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     //          y leer o forjar el superbloque del almacen direccionado por
     //          contenido. El kernel adquiere, por fin, una memoria que perdura. ---
     match (offset_fisico, region_dma) {
-        (Some(offset), Some((inicio, fin))) => {
-            traza("disco :: init");
-            drivers::disco::init(offset, inicio, fin);
+        (Some(_), Some(_)) => {
+            // La arena de marcos DMA ya se fundo en el paso 4.6 (la GPU la
+            // necesitaba antes); aqui solo montamos el disco fisico y, sobre
+            // el, el grafo de objetos direccionado por contenido.
             traza("almacen :: init");
             informar_almacen();
             traza("almacen :: listo");

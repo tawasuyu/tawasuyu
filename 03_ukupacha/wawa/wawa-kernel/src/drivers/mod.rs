@@ -15,10 +15,13 @@
 //                  paquetes de 3 bytes (Fase 13).
 //    * `red`     — la tarjeta virtio-net sobre PCI: ethernet crudo,
 //                  primer ARP al gateway de QEMU (Fase 18).
+//    * `gpu`     — el adaptador virtio-gpu sobre PCI: el kernel crea su propio
+//                  recurso 2D y toma posesion del scanout (Fase 60).
 // =============================================================================
 
 pub mod altavoz;
 pub mod disco;
+pub mod gpu;
 pub mod pci;
 pub mod raton;
 pub mod red;

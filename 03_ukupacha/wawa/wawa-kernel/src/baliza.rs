@@ -294,6 +294,9 @@ fn al_colapsar(info: &PanicInfo) -> ! {
         BALIZA_PANICO.franja(),
         BALIZA_PANICO.pixel_alerta.load(Ordering::Relaxed),
     );
+    // FASE 60 :: si el scanout lo gobierna virtio-gpu, la franja recien tiñida
+    // vive en memoria del huesped; volcarla para que se VEA, no solo en serie.
+    crate::drivers::gpu::presentar_baliza();
     let _ = writeln!(Serie);
     let _ = writeln!(Serie, "*** renaser :: panico ***");
     if let Some(lugar) = info.location() {
@@ -319,6 +322,8 @@ fn al_agotar_memoria(disposicion: core::alloc::Layout) -> ! {
         BALIZA_PANICO.franja(),
         BALIZA_PANICO.pixel_oom.load(Ordering::Relaxed),
     );
+    // FASE 60 :: volcar la franja al anfitrion si el kernel gobierna la GPU.
+    crate::drivers::gpu::presentar_baliza();
     let _ = writeln!(Serie);
     let _ = writeln!(Serie, "*** renaser :: agotamiento de memoria ***");
     let _ = writeln!(
@@ -385,6 +390,12 @@ pub fn aborto_fatal_carmesi(traza_corta: &[u8], traza_serial: &str) -> ! {
     let x = (ancho_pantalla.saturating_sub(largo)) / 2;
     let y = 40usize;
     BALIZA_PANICO.dibujar_texto_volatil(x, y, traza_corta, blanco, escala);
+
+    // FASE 60 :: el carmesi entero y su rotulo ya estan tiñidos en el
+    // framebuffer del huesped; un unico `flush` los cruza al scanout para que
+    // el operador los vea. `try_lock` adentro: jamas cuelga si la GPU estaba
+    // ocupada al colapsar.
+    crate::drivers::gpu::presentar_baliza();
 
     // Traza larga por COM1. Encabezado obligatorio para que un grep
     // ofline distinga este aborto de cualquier otro panic.

@@ -5,8 +5,8 @@
 //!
 //! ## El intercambio
 //!
-//! Tres mensajes bastan, en una ronda anti-entropy clásica adaptada al
-//! grafo de confianza:
+//! Cuatro mensajes bastan. Tres componen una ronda anti-entropy en
+//! sentido PUSH (el iniciador empuja sus novedades al peer):
 //!
 //! 1. **`Announce(Digest)`** — broadcast: «tengo estas atestaciones»
 //!    (lista de [`AttestationHash`]). El receptor compara con su propio
@@ -16,6 +16,13 @@
 //!    las pasa por [`TrustGraph::add_attestation`] una por una; las
 //!    firmas se re-verifican ahí mismo, el grafo nunca incorpora una
 //!    atestación rota.
+//!
+//! El cuarto invierte la iniciativa para hacer PULL desde el iniciador:
+//!
+//! 4. **`Pull`** — request del iniciador: «empezá vos el flow». El peer
+//!    responde con su `Announce(Digest)` y la ronda sigue normal —
+//!    `Pull` permite que un nodo sin conectividad de entrada pero con
+//!    salida igual reciba novedades de sus pares.
 //!
 //! La identidad de cada atestación es su [`Attestation::stable_hash`] —
 //! BLAKE3 sobre `claim.canonical_bytes() || attester_key || signature`,
@@ -107,6 +114,11 @@ pub enum Message {
     Request(Vec<AttestationHash>),
     /// «Aquí van las que pediste». Unicast en respuesta a `Request`.
     Bundle(Vec<Attestation>),
+    /// «Empezá vos» — invierte la iniciativa: el receptor responde con
+    /// su [`Message::Announce`] y la ronda sigue normal. Sirve para
+    /// PULL: un nodo abre stream pero pide que el peer le anuncie
+    /// primero, en vez de empujar lo propio.
+    Pull,
 }
 
 // =============================================================================
@@ -218,6 +230,11 @@ pub fn responder(
             al_recibir_bundle(local, b.clone(), stats);
             // El bundle es el cierre del ciclo — sin réplica.
             None
+        }
+        Message::Pull => {
+            // El iniciador pide que arranquemos nosotros. Le devolvemos
+            // nuestro digest; el flow sigue normal desde su lado.
+            Some(Message::Announce(Digest::from_graph(local)))
         }
     }
 }
@@ -386,6 +403,40 @@ mod tests {
         assert!(bundle.is_empty());
         assert_eq!(stats.requests_sin_match, 2);
         assert_eq!(stats.requests_atendidos, 0);
+    }
+
+    #[test]
+    fn pull_dispara_announce_del_receptor() {
+        // Iniciador manda Pull a un peer; el peer debe responder con
+        // su propio Announce(digest). El iniciador ya tiene material
+        // para diff'ar contra él.
+        let mut local = TrustGraph::new();
+        let (yumaira, venezuela, _, _) = poblar_grafo(&mut local);
+        local
+            .add_attestation(make_attestation(&venezuela, &yumaira, "nacionalidad", "venezolana"))
+            .unwrap();
+        let mut stats = GossipStats::default();
+        let resp = responder(&mut local, &Message::Pull, &mut stats);
+        match resp {
+            Some(Message::Announce(d)) => {
+                assert_eq!(d.len(), 1);
+            }
+            other => panic!("esperaba Announce(...) tras Pull, fui {:?}", other),
+        }
+    }
+
+    #[test]
+    fn pull_de_grafo_vacio_devuelve_announce_vacio() {
+        // Edge: un peer vacío contestando Pull manda un digest vacío
+        // (no `None`) — el iniciador así puede saber que no hay nada
+        // y cerrar la stream limpio.
+        let mut local = TrustGraph::new();
+        let mut stats = GossipStats::default();
+        let resp = responder(&mut local, &Message::Pull, &mut stats);
+        match resp {
+            Some(Message::Announce(d)) => assert!(d.is_empty()),
+            other => panic!("esperaba Announce(...) vacío, fui {:?}", other),
+        }
     }
 
     #[test]
