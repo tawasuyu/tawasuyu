@@ -95,6 +95,22 @@ pub enum DrawCommand {
         #[serde(default = "default_stroke_width")]
         stroke_w: f32,
     },
+    /// Path geométrico arbitrario en sintaxis SVG (atributo `d`).
+    /// Cada surface lo parsea con su API (kurbo
+    /// `BezPath::from_svg` en el canvas Llimphi, atributo `d`
+    /// directo en el SVG exporter). Lo usamos para los glyphs
+    /// astrológicos — los unicode ☉☽♈♉ tienen cobertura parcial en
+    /// fuentes del sistema, así que dibujamos los símbolos como
+    /// geometría agnóstica de fuente.
+    Path {
+        d: String,
+        #[serde(default)]
+        stroke: Option<Rgba>,
+        #[serde(default)]
+        fill: Option<Rgba>,
+        #[serde(default = "default_stroke_width")]
+        stroke_w: f32,
+    },
 }
 
 fn default_stroke_width() -> f32 {
@@ -253,22 +269,28 @@ pub fn compose_wheel(
         });
     }
 
-    // === Glyphs zodiacales con color elemental ===
+    // === Glyphs zodiacales como geometría ─ color elemental ───────
+    // Los unicode ♈♉♊… no están en las fuentes default del sistema
+    // (LiberationSans/AdwaitaSans), así que dibujamos los signos como
+    // path SVG vía `glyphs::sign_commands`. Cada signo aporta
+    // múltiples DrawCommand (Line / Path / Circle) — los apilamos.
     let sign_ring_mid = (radii.sign_outer + radii.sign_inner) / 2.0;
+    let sign_glyph_size = opts.size * 0.045;
+    let sign_stroke_w = (opts.size * 0.0030).max(1.2);
     for layer in &model.layers {
         if !matches!(layer.kind, crate::LayerKind::SignDial) {
             continue;
         }
         for g in &layer.glyphs {
             let (gx, gy) = polar_to_screen(g.deg, asc, rot, sign_ring_mid);
-            out.push(DrawCommand::Text {
-                x: cx + gx,
-                y: cy + gy,
-                content: sign_unicode(&g.symbol).into(),
-                color: pal.sign(&g.symbol),
-                size: opts.size * 0.032,
-                anchor: TextAnchor::Middle,
-            });
+            out.extend(crate::glyphs::sign_commands(
+                &g.symbol,
+                cx + gx,
+                cy + gy,
+                sign_glyph_size,
+                pal.sign(&g.symbol),
+                sign_stroke_w,
+            ));
         }
     }
 
@@ -445,15 +467,28 @@ pub fn compose_wheel(
                     fill: Some(halo_fill),
                     stroke_w: 1.2,
                 });
-                // Glyph
-                out.push(DrawCommand::Text {
-                    x: cx + gx,
-                    y: cy + gy,
-                    content: planet_unicode_with_retro(&g.symbol, g.retrograde),
-                    color: body_color,
-                    size: font,
-                    anchor: TextAnchor::Middle,
-                });
+                // Glyph como geometría (path SVG agnóstico de fuente).
+                // El tamaño visual del glyph queda inscripto en el
+                // disco; el factor 1.3 lo deja ligeramente más grande
+                // que el círculo para que se lea bien.
+                let glyph_size = (font * 1.05).min(disk * 2.4);
+                let glyph_sw = (font * 0.085).max(1.0);
+                out.extend(crate::glyphs::planet_commands(
+                    &g.symbol,
+                    cx + gx,
+                    cy + gy,
+                    glyph_size,
+                    body_color,
+                    glyph_sw,
+                ));
+                if g.retrograde {
+                    out.push(crate::glyphs::retrograde_marker(
+                        cx + gx,
+                        cy + gy,
+                        glyph_size,
+                        body_color,
+                    ));
+                }
 
                 // Coord label en pill — sólo natal (los overlays se
                 // amontonarían con el natal). Dedupe contra las coords
@@ -640,6 +675,24 @@ pub fn draw_commands_to_svg(commands: &[DrawCommand], size: f32) -> String {
                 s.push_str(&format!(
                     "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"{:.2}\" fill=\"{}\" text-anchor=\"{}\" dominant-baseline=\"central\">{}</text>",
                     x, y, sz, color.to_css(), anchor_attr, escaped
+                ));
+            }
+            DrawCommand::Path { d, stroke, fill, stroke_w } => {
+                let stroke_attr = stroke
+                    .map(|c| format!(" stroke=\"{}\" stroke-width=\"{}\"", c.to_css(), stroke_w))
+                    .unwrap_or_default();
+                let fill_attr = match fill {
+                    Some(c) => format!(" fill=\"{}\"", c.to_css()),
+                    None => " fill=\"none\"".into(),
+                };
+                // El `d` ya viene en sintaxis SVG estándar — sólo
+                // escapamos las comillas dobles por si acaso (los
+                // valores numéricos no las contienen).
+                s.push_str(&format!(
+                    "<path d=\"{}\"{}{} stroke-linecap=\"round\" stroke-linejoin=\"round\"/>",
+                    d.replace('"', "&quot;"),
+                    stroke_attr,
+                    fill_attr
                 ));
             }
         }

@@ -262,15 +262,16 @@ pub fn find_clusters(angles_deg: &[f32], threshold_deg: f32) -> Vec<Vec<usize>> 
 // Coord formatter
 // =====================================================================
 
-/// Formato compacto con precisión de minutos: `"DD°MM'<Sg>"` con `<Sg>`
-/// = código alfabético del signo (`Ar`/`Ta`/`Ge`/…). Ej: 14.93° →
-/// `"14°56'Ar"`.
+/// Formato compacto con precisión de minutos: `"DD°MM'<Sg>"` con
+/// `<Sg>` = código alfabético del signo (`Ar`/`Ta`/`Ge`/…). Ej:
+/// 14.93° → `"14°56'Ar"`.
 ///
-/// **Por qué letras y no `♈♉♊…`**: muchas fuentes default del sistema
-/// (LiberationSans, AdwaitaSans) **no incluyen** el bloque de glyphs
-/// zodiacales `U+2648..U+2653`, así que el render caía como
-/// `.notdef` invisible. Las letras son legibles bajo cualquier
-/// sans-serif y mantienen toda la información (signo + grado + minuto).
+/// **Por qué letras y no `♈♉♊…`** en el coord label: los glyphs
+/// astrológicos del dial principal los dibujamos como geometría
+/// (`cosmos_render::glyphs`) — para los signos dentro del texto del
+/// coord eso no es práctico (sería embeber paths SVG en texto), así
+/// que usamos el código de 2 letras. El símbolo grande del signo
+/// queda en el dial; el coord label le agrega precisión numérica.
 pub fn format_coord_compact(deg: f32) -> String {
     let normalized = deg.rem_euclid(360.0);
     let total_minutes = (normalized * 60.0).round() as i64;

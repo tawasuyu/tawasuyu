@@ -130,6 +130,28 @@ fn paint_command(
                 );
             }
         }
+        DrawCommand::Path { d, stroke, fill, stroke_w } => {
+            // kurbo parsea sintaxis SVG (M/L/C/Q/A/Z) — los glyphs
+            // astrológicos vienen de `cosmos_render::glyphs` como
+            // strings agnósticas para que el surface no se ate a
+            // ninguna fuente.
+            let Ok(path) = BezPath::from_svg(d) else {
+                eprintln!("cosmos-canvas: path SVG inválido: {d}");
+                return;
+            };
+            if let Some(f) = fill {
+                scene.fill(Fill::NonZero, xform, rgba_to_color(*f), None, &path);
+            }
+            if let Some(s) = stroke {
+                scene.stroke(
+                    &Stroke::new(*stroke_w as f64),
+                    xform,
+                    rgba_to_color(*s),
+                    None,
+                    &path,
+                );
+            }
+        }
         DrawCommand::Text { x, y, content, color, size, anchor } => {
             paint_text(scene, ts, x, y, content, color, size, anchor, off_x, off_y, scale);
         }
