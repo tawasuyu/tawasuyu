@@ -157,6 +157,12 @@ pub struct Model {
     /// Factor de zoom de la página (1.0 = 100%). `Ctrl+=` lo sube,
     /// `Ctrl+-` lo baja, `Ctrl+0` lo resetea. Clampado a 0.5..3.0.
     pub zoom: f32,
+    /// `Ctrl+F` levanta la find bar arriba del viewport; Esc la cierra.
+    pub find_active: bool,
+    /// Texto a buscar (se redacta vía `TextInputState`). Comparación
+    /// case-insensitive contra cada hoja de texto del box tree del
+    /// documento activo. Vacío = sin highlight.
+    pub find_input: TextInputState,
 }
 
 const ZOOM_MIN: f32 = 0.5;
@@ -200,6 +206,12 @@ pub enum Msg {
     ZoomOut,
     /// Ctrl+0 — reset a 1.0.
     ZoomReset,
+    /// Ctrl+F — abre la find bar y focaliza el input.
+    FindOpen,
+    /// Esc (con find bar activa) — cierra la find bar y limpia la query.
+    FindClose,
+    /// Teclas redirigidas al input de la find bar mientras está activa.
+    FindKey(KeyEvent),
 }
 
 impl App for Puriy {
@@ -225,7 +237,13 @@ impl App for Puriy {
         let mut tab = TabState::new(url.clone());
         tab.gen = 1;
         spawn_load(tab.id, tab.gen, url, handle.clone());
-        Model { tabs: vec![tab], active: 0, zoom: 1.0 }
+        Model {
+            tabs: vec![tab],
+            active: 0,
+            zoom: 1.0,
+            find_active: false,
+            find_input: TextInputState::new(),
+        }
     }
 
     fn on_key(model: &Self::Model, e: &KeyEvent) -> Option<Self::Msg> {
@@ -241,6 +259,7 @@ impl App for Puriy {
                     return Some(Msg::CloseTab(model.active));
                 }
                 Key::Character(s) if s.eq_ignore_ascii_case("d") => return Some(Msg::Bookmark),
+                Key::Character(s) if s.eq_ignore_ascii_case("f") => return Some(Msg::FindOpen),
                 Key::Named(NamedKey::Tab) if mods.shift => return Some(Msg::PrevTab),
                 Key::Named(NamedKey::Tab) => return Some(Msg::NextTab),
                 // Zoom: Ctrl+= / Ctrl++ / Ctrl+- / Ctrl+0. El charset depende
@@ -262,6 +281,14 @@ impl App for Puriy {
                 Key::Named(NamedKey::ArrowRight) => return Some(Msg::Forward),
                 _ => {}
             }
+        }
+        // Si la find bar está activa, intercepta Esc (cerrar) y redirige
+        // el resto al input. Tiene prioridad sobre el address bar.
+        if model.find_active {
+            if matches!(&e.key, Key::Named(NamedKey::Escape)) {
+                return Some(Msg::FindClose);
+            }
+            return Some(Msg::FindKey(e.clone()));
         }
         // Si la address bar tiene foco, redirige las teclas al input.
         if model.active().addr_focused && !matches!(&e.key, Key::Named(NamedKey::F5)) {
@@ -435,6 +462,18 @@ impl App for Puriy {
                 m.zoom = 1.0;
                 m.active_mut().status = "zoom: 100%".into();
             }
+            Msg::FindOpen => {
+                m.find_active = true;
+                // Re-abrir limpia query previa para que el usuario arranque fresh.
+                m.find_input.clear();
+            }
+            Msg::FindClose => {
+                m.find_active = false;
+                m.find_input.clear();
+            }
+            Msg::FindKey(e) => {
+                m.find_input.apply_key(&e);
+            }
         }
         m
     }
@@ -442,7 +481,23 @@ impl App for Puriy {
     fn view(model: &Self::Model) -> View<Self::Msg> {
         let tabs_bar = tabs_bar(model);
         let header = header_bar(model.active(), model.zoom);
-        let body = viewport(model.active(), model.zoom);
+        let query = model.find_input.text();
+        let query_lc = query.to_lowercase();
+        // Pre-cuenta los matches del documento contra la query para
+        // mostrarlos en la find bar. Si find_active=false o query vacía,
+        // count=0 y el viewport rendea sin highlight.
+        let find_count = if model.find_active && !query_lc.is_empty() {
+            count_matches(model.active().box_tree.as_ref(), &query_lc)
+        } else {
+            0
+        };
+        let body = viewport(model.active(), model.zoom, &query_lc);
+
+        let mut children: Vec<View<Msg>> = vec![tabs_bar, header];
+        if model.find_active {
+            children.push(find_bar(&model.find_input, find_count));
+        }
+        children.push(body);
 
         View::new(Style {
             flex_direction: FlexDirection::Column,
@@ -450,8 +505,95 @@ impl App for Puriy {
             ..Default::default()
         })
         .fill(Color::from_rgb8(245, 245, 248))
-        .children(vec![tabs_bar, header, body])
+        .children(children)
     }
+}
+
+/// Walk del box tree contando hojas de texto cuyo contenido (lowercased)
+/// contiene `query_lc`. La query ya viene en minúsculas para evitar
+/// pagar el cast por hoja.
+fn count_matches(tree: Option<&BoxTree>, query_lc: &str) -> usize {
+    let Some(t) = tree else { return 0 };
+    if query_lc.is_empty() {
+        return 0;
+    }
+    let mut count = 0_usize;
+    t.walk(|b| {
+        if let Some(txt) = &b.text {
+            if txt.to_lowercase().contains(query_lc) {
+                count += 1;
+            }
+        }
+    });
+    count
+}
+
+/// Find bar — input + contador + close. Sticky entre header y viewport
+/// mientras `find_active`.
+fn find_bar(input: &TextInputState, count: usize) -> View<Msg> {
+    let palette = TextInputPalette::default();
+    // Siempre focado mientras está abierta — Ctrl+F fue la última acción
+    // explícita del usuario, no tiene sentido que el input no acepte teclas.
+    let entry = text_input_view(input, "buscar en página…", true, &palette, Msg::FindOpen);
+
+    let count_label = if input.text().is_empty() {
+        "(escribí algo)".to_string()
+    } else if count == 0 {
+        "sin matches".to_string()
+    } else if count == 1 {
+        "1 match".to_string()
+    } else {
+        format!("{count} matches")
+    };
+
+    let close = View::new(Style {
+        size: Size { width: length(22.0_f32), height: length(22.0_f32) },
+        margin: Rect {
+            left: length(8.0_f32),
+            right: length(0.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(Color::from_rgb8(80, 80, 95))
+    .radius(3.0)
+    .text_aligned("✕", 12.0, Color::from_rgb8(220, 220, 230), Alignment::Center)
+    .on_click(Msg::FindClose);
+
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(34.0_f32) },
+        padding: Rect {
+            left: length(10.0_f32),
+            right: length(10.0_f32),
+            top: length(4.0_f32),
+            bottom: length(4.0_f32),
+        },
+        flex_direction: FlexDirection::Row,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(Color::from_rgb8(50, 50, 62))
+    .children(vec![
+        View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
+            ..Default::default()
+        })
+        .children(vec![entry]),
+        View::new(Style {
+            size: Size { width: length(120.0_f32), height: length(20.0_f32) },
+            margin: Rect {
+                left: length(8.0_f32),
+                right: length(0.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            ..Default::default()
+        })
+        .text_aligned(count_label, 11.0, Color::from_rgb8(200, 200, 215), Alignment::Start),
+        close,
+    ])
 }
 
 /// Inicia la carga de `url` en la pestaña activa. Si `push_history` es
@@ -666,7 +808,7 @@ fn header_bar(t: &TabState, zoom: f32) -> View<Msg> {
     ])
 }
 
-fn viewport(t: &TabState, zoom: f32) -> View<Msg> {
+fn viewport(t: &TabState, zoom: f32, find_query_lc: &str) -> View<Msg> {
     let Some(tree) = t.box_tree.as_ref() else {
         let msg = if t.url == NEW_TAB_URL {
             "(pestaña vacía · escribí una URL arriba)"
@@ -701,7 +843,7 @@ fn viewport(t: &TabState, zoom: f32) -> View<Msg> {
         flex_direction: FlexDirection::Column,
         ..Default::default()
     })
-    .children(vec![render_box(&tree.root, zoom)]);
+    .children(vec![render_box(&tree.root, zoom, find_query_lc)]);
 
     View::new(Style {
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
@@ -712,9 +854,19 @@ fn viewport(t: &TabState, zoom: f32) -> View<Msg> {
     .children(vec![content])
 }
 
-fn render_box(b: &BoxNode, zoom: f32) -> View<Msg> {
+fn render_box(b: &BoxNode, zoom: f32, find_query_lc: &str) -> View<Msg> {
     let style = box_style(b, zoom);
     let mut view = View::new(style);
+    // Find-in-page: si la query no es vacía y este nodo es una hoja de
+    // texto que la contiene (case-insensitive), pintamos su background
+    // con un highlight amarillo. El paint del fill normal del nodo
+    // (background CSS) lo aplicamos abajo — si hay match, lo
+    // sobrescribimos para que se note.
+    let find_hit = !find_query_lc.is_empty()
+        && b.text
+            .as_ref()
+            .map(|s| s.to_lowercase().contains(find_query_lc))
+            .unwrap_or(false);
 
     // visibility:hidden ocupa espacio pero no pinta. Devolvemos la view
     // con su layout pero sin children/text/fill — sus descendientes
@@ -726,7 +878,10 @@ fn render_box(b: &BoxNode, zoom: f32) -> View<Msg> {
     let alpha_mul = b.opacity.clamp(0.0, 1.0);
 
     if !hidden {
-        if let Some(bg) = b.background {
+        if find_hit {
+            // Amarillo Chrome-ish — predomina sobre el background CSS.
+            view = view.fill(Color::from_rgba8(255, 230, 0, 200));
+        } else if let Some(bg) = b.background {
             let a = ((bg.a as f32) * alpha_mul) as u8;
             view = view.fill(Color::from_rgba8(bg.r, bg.g, bg.b, a));
         }
@@ -815,9 +970,9 @@ fn render_box(b: &BoxNode, zoom: f32) -> View<Msg> {
 
     if !b.children.is_empty() {
         let kids: Vec<View<Msg>> = if let Some(target) = &b.link {
-            b.children.iter().map(|c| render_link_subtree(c, target, link_color, zoom)).collect()
+            b.children.iter().map(|c| render_link_subtree(c, target, link_color, zoom, find_query_lc)).collect()
         } else {
-            b.children.iter().map(|c| render_box(c, zoom)).collect()
+            b.children.iter().map(|c| render_box(c, zoom, find_query_lc)).collect()
         };
         view = view.children(kids);
     }
@@ -846,9 +1001,22 @@ fn image_view(width: u32, height: u32, zoom: f32) -> View<Msg> {
     })
 }
 
-fn render_link_subtree(b: &BoxNode, target: &str, color: Color, zoom: f32) -> View<Msg> {
+fn render_link_subtree(
+    b: &BoxNode,
+    target: &str,
+    color: Color,
+    zoom: f32,
+    find_query_lc: &str,
+) -> View<Msg> {
     let mut view = View::new(box_style(b, zoom)).on_click(Msg::Navigate(target.to_string()));
-    if let Some(bg) = b.background {
+    let find_hit = !find_query_lc.is_empty()
+        && b.text
+            .as_ref()
+            .map(|s| s.to_lowercase().contains(find_query_lc))
+            .unwrap_or(false);
+    if find_hit {
+        view = view.fill(Color::from_rgba8(255, 230, 0, 200));
+    } else if let Some(bg) = b.background {
         view = view.fill(Color::from_rgb8(bg.r, bg.g, bg.b));
     }
     if let Some(img) = &b.image {
@@ -867,7 +1035,7 @@ fn render_link_subtree(b: &BoxNode, target: &str, color: Color, zoom: f32) -> Vi
         view = view.children(
             b.children
                 .iter()
-                .map(|c| render_link_subtree(c, target, color, zoom))
+                .map(|c| render_link_subtree(c, target, color, zoom, find_query_lc))
                 .collect(),
         );
     }
@@ -1341,5 +1509,51 @@ fn truncate(s: &str, max: usize) -> String {
         let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
         out.push('…');
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper: parsea un snippet HTML offline y devuelve el BoxTree.
+    fn parse(html: &str) -> BoxTree {
+        let engine = Engine::new();
+        engine.load_html("about:test", html).box_tree
+    }
+
+    #[test]
+    fn count_matches_devuelve_cero_cuando_query_vacia() {
+        let tree = parse("<p>hola mundo</p>");
+        assert_eq!(count_matches(Some(&tree), ""), 0);
+    }
+
+    #[test]
+    fn count_matches_devuelve_cero_cuando_tree_none() {
+        assert_eq!(count_matches(None, "algo"), 0);
+    }
+
+    #[test]
+    fn count_matches_es_case_insensitive() {
+        let tree = parse("<p>Hola MUNDO</p><p>mundO repetido</p>");
+        // La query ya viene lowercased — emula lo que hace `view()`.
+        let n = count_matches(Some(&tree), "mundo");
+        assert!(n >= 2, "esperaba >= 2 matches, conseguí {n}");
+    }
+
+    #[test]
+    fn count_matches_busca_dentro_de_hojas() {
+        let tree = parse(
+            "<article><h1>Tutorial</h1><p>Este tutorial cubre Rust</p><p>Otra cosa</p></article>",
+        );
+        // La query "tutorial" matchea el <h1> y el primer <p> (ambos como hojas).
+        let n = count_matches(Some(&tree), "tutorial");
+        assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn count_matches_query_sin_hits_devuelve_cero() {
+        let tree = parse("<p>foo bar baz</p>");
+        assert_eq!(count_matches(Some(&tree), "qwerty"), 0);
     }
 }
