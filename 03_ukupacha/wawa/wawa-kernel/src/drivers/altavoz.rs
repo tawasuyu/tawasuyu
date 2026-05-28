@@ -28,10 +28,24 @@ const PIT_CANAL2: u16 = 0x42;
 /// Puerto de control de la bocina (bits 0 y 1: compuerta del PIT y dato).
 const CONTROL_BOCINA: u16 = 0x61;
 
+/// ¿Hay un virtio-sound montado que deba recibir el audio en vez de la bocina
+/// del PIT? Cuando lo hay, `tono`/`agendar`/`atender` enrutan hacia `sonido`
+/// (Fase 62) y la bocina queda en reposo; cuando no, la bocina es la voz.
+fn usar_virtio() -> bool {
+    crate::drivers::sonido::disponible()
+}
+
 /// Pone la bocina a sonar a `frecuencia_hz`. Un `0` —o una frecuencia que un
 /// divisor de 16 bits no pueda representar (por debajo de ~19 Hz)— la SILENCIA.
 /// Es la unica via del kernel hacia el sonido.
+///
+/// FASE 62 :: si hay virtio-sound, el tono se reproduce como PCM real (un tono
+/// SOSTENIDO de app, via `sys_tono`); la bocina del PIT no se toca.
 pub fn tono(frecuencia_hz: u32) {
+    if usar_virtio() {
+        crate::drivers::sonido::fijar_tono_app(frecuencia_hz);
+        return;
+    }
     if frecuencia_hz == 0 || PIT_BASE_HZ / frecuencia_hz > 0xFFFF {
         silenciar();
         return;
@@ -101,6 +115,12 @@ static FIN_NOTA: AtomicU64 = AtomicU64::new(0);
 /// sonar en orden. Un `frecuencia_hz=0` es una pausa silenciosa. Si ya habia
 /// una secuencia sonando, las nuevas notas se encolan al final.
 pub fn agendar(secuencia: &[(u32, u32)]) {
+    // FASE 62 :: con virtio-sound, la voz del kernel suena como PCM real;
+    // delegamos la secuencia a `sonido`, que la mezcla con prioridad.
+    if usar_virtio() {
+        crate::drivers::sonido::agendar(secuencia);
+        return;
+    }
     let mut cola = SECUENCIA.lock();
     for &(frec, dur) in secuencia {
         cola.push_back((frec, dur));
@@ -118,6 +138,11 @@ pub fn kernel_sonando() -> bool {
 /// siguiente de la cola y la hace sonar; si la cola esta vacia, calla la
 /// bocina. La invoca la tarea del compositor cada fotograma.
 pub fn atender() {
+    // FASE 62 :: con virtio-sound, la reproduccion la conduce la tarea de
+    // sonido (`sonido::bombear`), no esta cadencia de bocina. No-op aqui.
+    if usar_virtio() {
+        return;
+    }
     let ahora = crate::async_system::reloj::milisegundos();
     if ahora < FIN_NOTA.load(Ordering::Relaxed) {
         return; // la nota actual sigue sonando

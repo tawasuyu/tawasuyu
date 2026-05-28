@@ -91,7 +91,7 @@ inyecta vía `CARGO_BIN_FILE_KERNEL_kernel`.
 | `memory/` | Heap dinámico (`linked_list_allocator`), MMIO mapping |
 | `grafico.rs` + `consola.rs` + `texto.rs` | Framebuffer doble buffer, raster `fontdue` |
 | `async_system/` | Reactor cooperativo: `executor`, `task`, `waker`, `reloj` (PIT 100Hz), `teclado` (IRQ1), `puntero` (IRQ12) |
-| `drivers/` | `pci` (descubrimiento), `disco` (virtio-blk + DMA HAL), `red` (virtio-net), `gpu` (virtio-gpu, scanout propio — Fase 60), `tableta` (virtio-input, puntero absoluto — Fase 61), `raton` (PS/2 IRQ12), `altavoz` (PC speaker) |
+| `drivers/` | `pci` (descubrimiento), `disco` (virtio-blk + DMA HAL), `red` (virtio-net), `gpu` (virtio-gpu, scanout propio — Fase 60), `tableta` (virtio-input, puntero absoluto — Fase 61), `sonido` (virtio-sound, PCM real — Fase 62), `raton` (PS/2 IRQ12), `altavoz` (PC speaker, fallback) |
 | `almacen.rs` | Log direccionado por contenido + índice + compactador (Fase 24) |
 | `manifiesto.rs` | Manifiesto de Génesis vivo (apps + estado + Configuracion) |
 | `compositor.rs` | Teselado vía `mirada-layout` + taskbar + ventanas flotantes |

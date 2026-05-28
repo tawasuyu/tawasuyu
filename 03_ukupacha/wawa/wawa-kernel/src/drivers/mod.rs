@@ -19,6 +19,8 @@
 //                  recurso 2D y toma posesion del scanout (Fase 60).
 //    * `tableta` — un virtio-input configurado como tableta: puntero ABSOLUTO
 //                  que sigue 1:1 al cursor del host, complementa al PS/2 (Fase 61).
+//    * `sonido`  — un virtio-sound sobre PCI: PCM real por DMA que reemplaza la
+//                  bocina del PIT; sintetiza la onda desde la frecuencia (Fase 62).
 // =============================================================================
 
 pub mod altavoz;
@@ -27,6 +29,7 @@ pub mod gpu;
 pub mod pci;
 pub mod raton;
 pub mod red;
+pub mod sonido;
 pub mod tableta;
 // Fase 38 :: COM1 polling — canal LEGACY del firmador externo (wawactl).
 // La Fase 49 corono el HAL bajo virtio-console; este modulo persiste como

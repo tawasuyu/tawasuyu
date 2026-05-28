@@ -298,6 +298,19 @@ async fn tarea_sonda_disco() {
     consola.presentar();
 }
 
+/// FASE 62 :: la tarea de sonido. En cada fotograma bombea el flujo de salida
+/// de virtio-sound: recupera los periodos PCM que el dispositivo ya consumio y
+/// rellena la tuberia (con audio si hay nota o tono de app, con silencio si
+/// no), de modo que el flujo jamas cae en underrun. Solo se engendra si el
+/// dispositivo se monto; el bombeo en si no bloquea —usa transferencia no
+/// bloqueante—, asi que el escritorio sigue fluido mientras suena.
+async fn tarea_sonido() {
+    loop {
+        async_system::reloj::EsperaFrame::nueva().await;
+        drivers::sonido::bombear();
+    }
+}
+
 /// Da vida a una aplicacion del userspace a partir de su `EntradaApp` del
 /// manifiesto: recupera su bytecode del grafo, lo carga en la ventana `indice`
 /// del escritorio del compositor y despacha la app como tarea cooperativa del
@@ -874,6 +887,18 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     }
     traza("consola_virtio :: listo");
 
+    // --- 6.9. FASE 62 :: montar virtio-sound. Si lo hay, la voz del kernel y
+    //          el `sys_tono` de las apps suenan como PCM real por DMA; si no,
+    //          `altavoz` recae en la bocina del PIT. NO es critico: un fallo de
+    //          montaje deja el sonido en la bocina y el arranque sigue. ---
+    match drivers::sonido::montar() {
+        Ok(()) => reportar("sonido :: virtio-sound -- PCM real (la bocina del PIT en reposo)"),
+        Err(motivo) => {
+            let _ = writeln!(baliza::Serie, "sonido :: {motivo} (fallback bocina del PIT)");
+        }
+    }
+    traza("sonido :: listo");
+
     // --- 7. FASE 7 :: levantar el reactor y poblar el userspace DESDE EL
     //        GRAFO. El kernel ya no empotra los modulos WASM: lee el
     //        Manifiesto de Genesis que `boot` sembro en la imagen de disco e
@@ -898,6 +923,13 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // de entrada + faro periodico — va clavado al tic del compositor.
     if let Ok(mac) = mac_red {
         ejecutor.spawn(tarea_red(mac));
+    }
+    // FASE 62 :: si hay virtio-sound, una tarea del reactor bombea su flujo de
+    // salida en cada fotograma —recupera periodos consumidos y rellena la
+    // tuberia con PCM (audio o silencio)—. Sin dispositivo, no se engendra: la
+    // voz del kernel suena por la bocina del PIT como hasta la Fase 61.
+    if drivers::sonido::disponible() {
+        ejecutor.spawn(tarea_sonido());
     }
     // FASE 15 :: la voz del sistema da los buenos dias con un acorde de Do
     // mayor. La tarea del compositor lo hara sonar nota a nota una vez que

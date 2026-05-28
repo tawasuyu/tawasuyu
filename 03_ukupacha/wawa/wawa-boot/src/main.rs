@@ -416,7 +416,14 @@ fn lanzar_qemu(imagen: &Path, ovmf: &str) -> Result<(), String> {
         // FASE 61 :: tableta virtio-input — puntero ABSOLUTO. QEMU enruta el
         // cursor del host a este dispositivo (coordenadas absolutas), de modo
         // que el puntero del huesped lo sigue 1:1, sin captura ni deriva.
-        .arg("-device").arg("virtio-tablet-pci");
+        .arg("-device").arg("virtio-tablet-pci")
+        // FASE 62 :: virtio-sound — PCM real por DMA. El backend de audio es
+        // `none` por DEFECTO: el dispositivo funciona (el kernel ejercita todo
+        // el camino PCM) pero el host NO emite sonido — asi NO arriesgamos
+        // romper el arranque en una maquina sin PulseAudio/PipeWire. Para OIRLO,
+        // cambia `none` por `pa` (PulseAudio/pipewire-pulse), `pipewire` o `sdl`.
+        .arg("-audiodev").arg("none,id=snd0")
+        .arg("-device").arg("virtio-sound-pci,audiodev=snd0");
 
     // Cualquier argumento extra tras `--` se reenvia a QEMU intacto.
     // Ejemplo: `cargo run -p boot -- -display none -d int`.
