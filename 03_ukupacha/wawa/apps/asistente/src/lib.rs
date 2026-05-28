@@ -12,12 +12,18 @@
 //          el hash y, si el operador pulsa SPACE, emite un
 //          `RequestFirma` por el cable. El puente Linux lo enrutar al
 //          operador (prompt y/N), firma y devuelve un `Firma` que la
-//          app pinta como "FIRMADO POR SLOT N". La syscall
-//          `sys_manifiesto_proponer` que cierra el ciclo queda como
-//          nota — requiere PERMISO_RAIZ que la EntradaApp aun no
-//          declara (hito 6 :: siembra en GENESIS).
+//          app pinta como "FIRMADO POR SLOT N".
+//  - v7 :: cierre del ciclo. Cuando la propuesta era InstalarApp y
+//          llega la Firma, la app construye el sobre canonico de 128 B
+//          (`hash | autor | firma`), embebe la pubkey del slot
+//          correspondiente del `AGORA_AUTH_RING`, e invoca
+//          `sys_manifiesto_proponer`. El kernel reanca el manifiesto en
+//          una sola transicion atomica. CambiarConfiguracion queda como
+//          nota — el kernel solo expone `sys_config_proponer` con
+//          payload crudo (idioma + paleta), sin via para reanclar por
+//          hash; cuando exista, la app la enchufara aqui.
 //
-//  Este archivo cubre v1+v2+v3+v4.
+//  Este archivo cubre v1+v2+v3+v4+v7.
 // =============================================================================
 
 #![no_std]
@@ -47,6 +53,15 @@ extern "C" {
     /// (0x88B5) en su propio reino; lo que llega aqui es trafico de
     /// EtherType ajeno (incluido el del asistente, 0x88B6).
     fn sys_net_recibir(salida: u32, capacidad: u32) -> i32;
+    /// FASE 60 v7 :: re-anca el manifiesto del kernel a un hash propuesto
+    /// con firma humana. `mf_ptr` apunta a 128 bytes de sobre
+    /// `ManifiestoFirmado` (32 hash + 32 autor + 64 firma) en NUESTRA
+    /// memoria lineal. Devuelve 0 si el kernel verifico y reanco; -1 si
+    /// el sobre no decodifica, -2 si `autor` no esta en
+    /// `AGORA_AUTH_RING`, -3 si la firma Ed25519 no verifica, otros
+    /// codigos para fallos de almacenamiento. Gateada por
+    /// `PERMISO_RAIZ` — la app debe declararla en su `EntradaApp`.
+    fn sys_manifiesto_proponer(mf_ptr: u32, mf_len: u32) -> i32;
 }
 
 #[panic_handler]
@@ -136,6 +151,52 @@ static mut ESTADO_RED: EstadoRed = EstadoRed::Reposo;
 /// del `daemon-firma`.
 static mut HASH_PENDIENTE: [u8; 32] = [0; 32];
 static mut HASH_PENDIENTE_TIPO: u8 = 0;
+
+/// FASE 60 v7 :: codigo de retorno de la ultima invocacion de
+/// `sys_manifiesto_proponer`. `i32::MIN` significa "todavia no
+/// invocado en esta sesion". Cualquier otro valor es el codigo literal
+/// que el kernel devolvio:
+///   * 0  → reancla aceptada y aplicada.
+///   * -1 → sobre malformado.
+///   * -2 → autor ajeno al `AGORA_AUTH_RING`.
+///   * -3 → firma Ed25519 invalida.
+///   * otros → fallos de almacenamiento o de saturacion.
+/// La UI rotula el codigo abajo del slot cuando hay firma vigente.
+static mut ULTIMO_REANCLA_CODIGO: i32 = i32::MIN;
+
+/// FASE 60 v7 :: ANILLO MULTI-AUTOR :: espejo byte-a-byte de
+/// `kernel/src/claves.rs::AGORA_AUTH_RING`. El kernel verifica el
+/// sobre `ManifiestoFirmado` chequeando que `mf.autor ==
+/// AGORA_AUTH_RING[i]` para algun i; si no, devuelve -2. Por eso esta
+/// tabla DEBE casar byte a byte con la del kernel. Si el operador rota
+/// una clave con la Boot Trust Ceremony, hay que actualizar AMBAS
+/// sedes (`apps/asistente`, `apps/pluma`, `kernel/src/claves.rs`) y
+/// re-forjar la imagen. La constante tiene 96 bytes — el sobreprecio
+/// en `.rodata` del WASM es despreciable comparado con la simplicidad
+/// de mantener el contrato.
+const AGORA_AUTH_RING: [[u8; 32]; 3] = [
+    // Slot 0 :: primaria.
+    [
+        0x68, 0x47, 0x56, 0xec, 0x9a, 0xad, 0x2e, 0x83,
+        0x02, 0x78, 0x11, 0x34, 0x71, 0x69, 0x83, 0xd5,
+        0xf2, 0xff, 0xe7, 0x28, 0x3d, 0x8d, 0xcd, 0x67,
+        0x17, 0xd8, 0xad, 0x57, 0xe0, 0x35, 0x6f, 0x48,
+    ],
+    // Slot 1 :: secundario.
+    [
+        0x21, 0x4d, 0x1d, 0xab, 0xa3, 0x65, 0xcd, 0x85,
+        0x9f, 0x4a, 0xf5, 0x1a, 0x03, 0x83, 0x62, 0x1c,
+        0x86, 0x86, 0xfa, 0xf2, 0xa8, 0x73, 0x01, 0xa4,
+        0xb6, 0xf2, 0xef, 0xa2, 0x74, 0x10, 0x0a, 0xf8,
+    ],
+    // Slot 2 :: recuperacion (cold-storage).
+    [
+        0x39, 0xc8, 0x8e, 0xaa, 0x02, 0x1c, 0x42, 0xea,
+        0x42, 0x3e, 0x18, 0xf4, 0x3c, 0xcc, 0xbc, 0x5a,
+        0x44, 0xb0, 0x51, 0x01, 0xcc, 0x02, 0xd2, 0x77,
+        0x76, 0x41, 0x02, 0x8c, 0xa0, 0x20, 0x12, 0x11,
+    ],
+];
 
 /// Buffer para la representacion legible de la ultima respuesta. Hasta
 /// 256 bytes — caben textos cortos del LLM. Si una propuesta trae mas,
@@ -492,8 +553,13 @@ fn absorber_propuesta(tipo: u16, payload: &[u8]) {
                 }
             }
             TIPO_CABLE_FIRMA => {
-                // Fase 60 v4 :: el puente nos devuelve [slot, firma 64 B].
-                // Pintamos los primeros 4 bytes de firma en hex y el slot.
+                // Fase 60 v4+v7 :: el puente nos devuelve [slot, firma 64 B].
+                // Pintamos los primeros 4 bytes de firma en hex y el slot,
+                // y cerramos el ciclo invocando `sys_manifiesto_proponer`
+                // cuando la propuesta original era InstalarApp
+                // (TIPO_OBJETO_CUADERNO). El kernel verifica + reanca
+                // atomicamente y devuelve un codigo que guardamos en
+                // ULTIMO_REANCLA_CODIGO.
                 if payload.len() >= 65 {
                     let slot = payload[0];
                     let mut buf = [b'-'; 16];
@@ -502,6 +568,9 @@ fn absorber_propuesta(tipo: u16, payload: &[u8]) {
                         buf[i * 2 + 1] = hex_nibble(payload[1 + i] & 0x0F);
                     }
                     copiar_a_respuesta(&buf[..8]);
+                    let mut firma = [0u8; 64];
+                    firma.copy_from_slice(&payload[1..65]);
+                    intentar_reancla(slot, &firma);
                     EstadoRed::Firmada(slot)
                 } else {
                     copiar_a_respuesta(b"FIRMA TRUNCADA");
@@ -522,6 +591,38 @@ fn absorber_propuesta(tipo: u16, payload: &[u8]) {
                 return;
             }
         };
+    }
+}
+
+/// FASE 60 v7 :: cierra el ciclo `Firma → re-ancla`. Construye el sobre
+/// canonico de 128 B (`hash | autor | firma`) en la pila y lo entrega
+/// al kernel via `sys_manifiesto_proponer`. Solo aplica cuando la
+/// propuesta original era `InstalarApp` (TIPO_OBJETO_CUADERNO);
+/// CambiarConfiguracion (TIPO_OBJETO_CONFIGURACION) NO toca el syscall
+/// porque el kernel no expone una via "reanclar config por hash" —
+/// queda como nota arquitectonica hasta que `sys_config_reanclar_por_hash`
+/// exista. El codigo de retorno se guarda en `ULTIMO_REANCLA_CODIGO`.
+fn intentar_reancla(slot: u8, firma: &[u8; 64]) {
+    unsafe {
+        if HASH_PENDIENTE_TIPO != TIPO_OBJETO_CUADERNO {
+            // Configuracion u otro tipo de objeto — no hay syscall.
+            return;
+        }
+        let slot_idx = slot as usize;
+        if slot_idx >= AGORA_AUTH_RING.len() {
+            // Slot fuera del anillo — el puente envio algo raro o
+            // alguien actualizo la tabla aqui sin sincronizar el kernel.
+            ULTIMO_REANCLA_CODIGO = -7;
+            return;
+        }
+        // 32 hash + 32 autor + 64 firma = 128 B exactos.
+        let mut sobre = [0u8; 128];
+        let hash_src: &[u8; 32] = &*core::ptr::addr_of!(HASH_PENDIENTE);
+        sobre[0..32].copy_from_slice(hash_src);
+        sobre[32..64].copy_from_slice(&AGORA_AUTH_RING[slot_idx]);
+        sobre[64..128].copy_from_slice(firma);
+        let codigo = sys_manifiesto_proponer(sobre.as_ptr() as u32, sobre.len() as u32);
+        ULTIMO_REANCLA_CODIGO = codigo;
     }
 }
 
@@ -689,6 +790,22 @@ fn pintar() {
         let n = formatear_u32(slot as u32, &mut slot_buf);
         dibujar_texto(lienzo, &slot_buf[..n], 18, y, 1, TINTA);
         y += 14;
+        // Fase 60 v7 :: si llamamos a sys_manifiesto_proponer, pintamos
+        // el codigo y una etiqueta humana.
+        let codigo = unsafe { ULTIMO_REANCLA_CODIGO };
+        if codigo != i32::MIN {
+            let etiqueta: &[u8] = match codigo {
+                0 => b"RE-ANCLADO :: OK",
+                -1 => b"SOBRE MALFORMADO",
+                -2 => b"AUTOR FUERA DEL ANILLO",
+                -3 => b"FIRMA INVALIDA",
+                -7 => b"SLOT FUERA DE RANGO",
+                _ => b"CODIGO DESCONOCIDO",
+            };
+            let color = if codigo == 0 { ACENTO } else { TINTA };
+            dibujar_texto(lienzo, etiqueta, 18, y, 1, color);
+            y += 14;
+        }
     }
 
     // Contenido de la respuesta — primeros caracteres legibles.

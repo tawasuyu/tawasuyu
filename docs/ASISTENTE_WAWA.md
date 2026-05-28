@@ -233,30 +233,31 @@ Mostrados en orden de dependencia, no de complejidad:
    el clasificador.
 6. ~~**Sembrar `asistente.wasm` en GENESIS** o, mejor, dejar que el
    operador la instale en vivo vía `mudanza` (la palanca de v9/v10 del
-   launcher).~~ ✅ HECHO (Fase 60 v5). El `GENESIS[]` de
+   launcher).~~ ✅ HECHO (Fase 60 v5+v7). El `GENESIS[]` de
    `wawa-boot/src/main.rs` ahora trae una `AppGenesis { nombre:
    "asistente", archivo: "asistente.wasm", region: (600, 220, 480,
-   240), fuel: FUEL_COMUN, permisos: format::PERMISO_RED }`. La región
-   queda a la derecha del compositor para no superponerse con
-   `mudanza` (que ocupa abajo-izquierda). El `.wasm` se forja con
-   `./scripts/build-asistente.sh` — espejo de `build-pluma.sh`: cargo
-   wasm32 release + `wasm-opt -Os --strip-debug --strip-producers
-   --enable-bulk-memory` + consolidación en
-   `wawa-kernel/assets/asistente.wasm`. Hoy ronda 5.35 KiB (techo
-   nominal 16 KiB).
+   240), fuel: FUEL_COMUN, permisos: format::PERMISO_RED |
+   format::PERMISO_RAIZ }`. La región queda a la derecha del
+   compositor para no superponerse con `mudanza` (que ocupa
+   abajo-izquierda). El `.wasm` se forja con
+   `./scripts/build-asistente.sh` — espejo de `build-pluma.sh`. Hoy
+   ronda 5.98 KiB (techo nominal 16 KiB). Segunda app del genesis con
+   `PERMISO_RAIZ`, junto a `mudanza`.
 
-   PENDIENTE para cerrar el ciclo `Firma → sys_manifiesto_proponer`:
-   sumar `PERMISO_RAIZ` a la `EntradaApp` (hoy sólo `PERMISO_RED`) y
-   construir, dentro de la app, el sobre `ManifiestoFirmado` que la
-   syscall espera (32 B hash + 32 B autor + 64 B firma). El sello ya
-   llega por el cable como `Firma { slot, firma 64 B }`; falta sólo
-   embeber la pubkey del slot apropiado del `AGORA_AUTH_RING` y
-   serializar en postcard. Es el mismo patrón que ya usa `mudanza`.
-
-Estimado restante: 1 sesión — la siembra está cerrada; sólo queda
-añadir `PERMISO_RAIZ` y el envío del sobre cuando se desee el ciclo
-end-to-end firma→re-ancla. El pipeline cable está vivo end-to-end
-hasta la firma (modulo testing en hardware real).
+7. ~~**Cerrar el ciclo `Firma → sys_manifiesto_proponer`**.~~ ✅
+   HECHO (Fase 60 v7). El WASM importa `sys_manifiesto_proponer` y
+   embebe `AGORA_AUTH_RING` (espejo byte-a-byte del kernel y de
+   `apps/pluma`). Cuando llega un `TipoCable::Firma` y la propuesta
+   pendiente era `InstalarApp` (TIPO_OBJETO_CUADERNO), `intentar_reancla`
+   arma el sobre de 128 B (`hash | autor | firma`) e invoca el
+   syscall; el kernel verifica contra el anillo y, si autoriza,
+   reanca atómicamente. La app pinta el código de retorno en
+   pantalla — `RE-ANCLADO :: OK` cuando el kernel acepta, `AUTOR
+   FUERA DEL ANILLO` / `FIRMA INVALIDA` / etc. cuando falla. La
+   variante `CambiarConfiguracion` queda como nota: el kernel sólo
+   expone `sys_config_proponer(idioma, paleta_ptr)` que toma payload
+   crudo, no hash + firma; cuando exista
+   `sys_config_reanclar_por_hash`, se enchufa aquí.
 
 ### 5.bis :: la firma sobre el cable (Fase 60 v4)
 
@@ -340,21 +341,27 @@ Por elección, no por descuido:
 
 ## 9. Estado
 
-**Cerrados**: hitos 1-2 (formato del protocolo y canal Akasha), 3
-(puente Linux con stdio + socket + Akasha), 4 v1+v2+v3+v4
-(asistente.wasm con UI + input + red + ciclo de firma humana), 5
-(daemon-firma discrimina cuaderno/configuración), 6 (siembra en
-GENESIS).
+**Cerrados**: TODOS los hitos del roadmap original (1-7).
 
-**Abiertos**: ninguno crítico. El cierre del ciclo `Firma →
-sys_manifiesto_proponer` (re-ancla atómica desde la app) requiere
-sumar `PERMISO_RAIZ` y construir el sobre `ManifiestoFirmado` dentro
-de la app — patrón idéntico al de `mudanza`. No bloquea el demo
-end-to-end.
+1-2 — formato del protocolo y canal Akasha.
+3 — puente Linux con stdio + socket + Akasha.
+4 — `asistente.wasm` v1+v2+v3+v4: UI + input + red + ciclo de firma humana.
+5 — `daemon-firma` discrimina cuaderno/configuración.
+6 — siembra en GENESIS con `PERMISO_RED | PERMISO_RAIZ`.
+7 — cierre del ciclo `Firma → sys_manifiesto_proponer` (re-ancla
+atómica desde la app, espejo del flujo de `mudanza`).
 
-Sin urgencia: el asistente Linux cubre el caso de uso "asistente
-conversacional para gioser" para el operador humano de hoy; la versión
-wawa es para cuando wawa sea el daily driver, que aún no lo es. El
-pipeline cable está vivo end-to-end (Consulta → Propuesta → SPACE →
-RequestFirma → operador y/N → Firma → "FIRMADO POR SLOT N" en
-pantalla) y la app `asistente.wasm` ya nace con cada disco virgen.
+**Abiertos**: el `sys_config_reanclar_por_hash` que cerraría también
+la variante `CambiarConfiguracion`; hoy el kernel sólo expone
+`sys_config_proponer(idioma, paleta_ptr)` con payload crudo. No
+bloquea el demo principal (InstalarApp ya hace el ciclo entero).
+
+El pipeline cable está vivo end-to-end:
+
+  Consulta → LLM → Propuesta(hash) → SPACE → RequestFirma → operador
+  y/N → Firma → sys_manifiesto_proponer → RE-ANCLADO :: OK
+
+La app `asistente.wasm` nace con cada disco virgen y, en cuanto haya
+un `asistente-puente --akasha eth0 --firma-clave OP.SK` corriendo en
+una máquina de la misma red, el operador puede hablarle al LLM
+desde wawa y autorizar re-anclas de manifiesto en un solo gesto.

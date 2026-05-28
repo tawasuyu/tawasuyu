@@ -157,21 +157,20 @@ const GENESIS: [AppGenesis; 13] = [
     // la cadena de F5. Sustituye al `ide` previo: el cuaderno hace todo lo
     // que el IDE hacia y ademas cascadea y persiste.
     AppGenesis { nombre: "pluma", archivo: "pluma.wasm", region: (160, 60, 480, 400), fuel: FUEL_EDITOR, permisos: format::PERMISO_GRAFO_ESCRITURA },
-    // Fase 60 v5 :: `asistente` — app conversacional que pregunta a un LLM
-    // externo via el puente Linux (`asistente-puente --akasha`). El
+    // Fase 60 v5+v7 :: `asistente` — app conversacional que pregunta a un
+    // LLM externo via el puente Linux (`asistente-puente --akasha`). El
     // protocolo cable usa EtherType 0x88B6 sobre `CANAL_ASISTENTE` (0x4153);
     // la app emite Consulta cuando el operador pulsa Enter y absorbe
     // Propuesta/Error. Para propuestas hash (Instalar/Cambiar) el operador
     // pulsa SPACE y la app dispara un RequestFirma; cuando llega la Firma
     // (host-side, ya sea desde `wawactl daemon-firma` o desde el propio
-    // `asistente-puente --firma-clave`), pinta "FIRMADO POR SLOT N". El
-    // ciclo `Firma -> sys_manifiesto_proponer` aun no esta cerrado en la
-    // app — falta sumar PERMISO_RAIZ y un bucle de sobre firmado que
-    // construya el `ManifiestoFirmado` (espejo del flujo de `mudanza`).
-    // 480x240 es la geometria con la que esta dibujada hoy; la region la
-    // coloca a la derecha del compositor para no superponerse con
-    // mudanza, que esta abajo-izquierda.
-    AppGenesis { nombre: "asistente", archivo: "asistente.wasm", region: (600, 220, 480, 240), fuel: FUEL_COMUN, permisos: format::PERMISO_RED },
+    // `asistente-puente --firma-clave`), pinta "FIRMADO POR SLOT N" e
+    // (v7) invoca `sys_manifiesto_proponer` para cerrar el ciclo en una
+    // sola transicion atomica del kernel — segunda app del genesis con
+    // PERMISO_RAIZ, junto a `mudanza`. 480x240 es la geometria con la que
+    // esta dibujada hoy; la region la coloca a la derecha del compositor
+    // para no superponerse con mudanza, que esta abajo-izquierda.
+    AppGenesis { nombre: "asistente", archivo: "asistente.wasm", region: (600, 220, 480, 240), fuel: FUEL_COMUN, permisos: format::PERMISO_RED | format::PERMISO_RAIZ },
 ];
 
 /// Techo de memoria lineal de cada app de genesis: 4 MiB. Un modulo que intente
