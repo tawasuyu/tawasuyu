@@ -63,6 +63,13 @@ enum Msg {
     /// fundida (línea editable, parte de la misma zona); si era
     /// fundida, vuelve a separador.
     ToglearFusion,
+    /// `Ctrl+Shift+]` — salta el caret a la siguiente zona (grupo de
+    /// atoms unidos por junctions fundidas). Wrap circular al final.
+    ZonaSiguiente,
+    /// `Ctrl+Shift+[` — salta a la zona anterior. Wrap circular al inicio.
+    ZonaAnterior,
+    /// `Ctrl+Shift+A` — selecciona la zona donde está el caret.
+    SeleccionarZona,
 }
 
 struct Model {
@@ -179,6 +186,25 @@ impl App for Demo {
                 }
                 model
             }
+            Msg::ZonaSiguiente => {
+                let mut model = model;
+                model.ide.ir_a_zona_siguiente();
+                model.ide.state.ensure_caret_visible(VISIBLE_LINES);
+                model
+            }
+            Msg::ZonaAnterior => {
+                let mut model = model;
+                model.ide.ir_a_zona_anterior();
+                model.ide.state.ensure_caret_visible(VISIBLE_LINES);
+                model
+            }
+            Msg::SeleccionarZona => {
+                let mut model = model;
+                let zona = model.ide.zona_del_caret();
+                model.ide.seleccionar_zona(zona);
+                model.ide.state.ensure_caret_visible(VISIBLE_LINES);
+                model
+            }
         }
     }
 
@@ -187,13 +213,26 @@ impl App for Demo {
             return None;
         }
         let ctrl = event.modifiers.ctrl || event.modifiers.meta;
+        let shift = event.modifiers.shift;
         if ctrl {
             if let Key::Character(s) = &event.key {
                 if s.eq_ignore_ascii_case("s") {
                     return Some(Msg::Guardar);
                 }
-                if s == "]" {
+                // Shift+] / Shift+[ saltan por zonas; sin shift, por átomos.
+                // Algunos backends emiten "}" / "{" cuando shift+]/[ está
+                // activo; aceptamos ambas formas.
+                if shift && (s == "}" || s == "]") {
+                    return Some(Msg::ZonaSiguiente);
+                }
+                if shift && (s == "{" || s == "[") {
+                    return Some(Msg::ZonaAnterior);
+                }
+                if !shift && s == "]" {
                     return Some(Msg::SaltarAtomoSiguiente);
+                }
+                if shift && s.eq_ignore_ascii_case("a") {
+                    return Some(Msg::SeleccionarZona);
                 }
                 if s.eq_ignore_ascii_case("j") {
                     return Some(Msg::ToglearFusion);
@@ -212,9 +251,10 @@ impl App for Demo {
         let fundidas = model.ide.fundido_junctions.iter().filter(|f| **f).count();
         let total_junctions = model.ide.fundido_junctions.len();
         let header_text = format!(
-            "cuerpo «{}»  ·  {} átomos  ·  {} párrafos  ·  {}/{} junctions fundidas  ·  {}  ·  Ctrl+S guarda · Ctrl+] siguiente · Ctrl+J fundir/separar",
+            "cuerpo «{}»  ·  {} átomos  ·  {} zonas  ·  {} párrafos  ·  {}/{} junctions fundidas  ·  {}  ·  Ctrl+S guarda · Ctrl+] siguiente · Ctrl+J fundir · Ctrl+Shift+]/[ zona ↔ · Ctrl+Shift+A seleccionar zona",
             model.cuerpo.metadatos.nombre_legible,
             model.cuerpo.orden.len(),
+            model.ide.n_zonas(),
             model.ide.n_parrafos_buffer(),
             fundidas,
             total_junctions,

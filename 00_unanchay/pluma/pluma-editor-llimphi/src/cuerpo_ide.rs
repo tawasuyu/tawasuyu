@@ -385,6 +385,178 @@ impl CuerpoIde {
         self.aplicar_cambios(cambios, nuevos_ids);
     }
 
+    /// Cuántas **zonas** distintas hay en el cuerpo actual. Una zona es
+    /// un grupo de atoms consecutivos unidos por junctions fundidas; cada
+    /// junction `false` (separador) marca el inicio de una zona nueva.
+    ///
+    /// Reglas:
+    /// - `n_atoms == 0` → `0` zonas.
+    /// - `n_atoms == 1` → `1` zona.
+    /// - En general: `n_zonas = 1 + (cantidad de junctions separadoras)`.
+    pub fn n_zonas(&self) -> usize {
+        let n = self.editor_cuerpo.atom_ids.len();
+        if n == 0 {
+            return 0;
+        }
+        let separadoras = self.fundido_junctions.iter().filter(|f| !**f).count();
+        // Cada separadora abre una zona nueva; la primera zona ya existe.
+        // Si hay más junctions registradas que atoms-1 (estado transitorio
+        // entre tipeo y diff), las extras se ignoran — el cap es real:
+        // como mucho `n` zonas, una por atom.
+        (1 + separadoras).min(n)
+    }
+
+    /// Devuelve la zona que contiene al atom `atom_idx` (0-based en
+    /// `editor_cuerpo.atom_ids`). `None` si `atom_idx` está fuera de rango.
+    pub fn zona_de_atom_idx(&self, atom_idx: usize) -> Option<usize> {
+        if atom_idx >= self.editor_cuerpo.atom_ids.len() {
+            return None;
+        }
+        // La zona del atom *i* es la cantidad de junctions separadoras en
+        // `fundido_junctions[..i]`: cada separadora cierra una zona y abre
+        // la siguiente.
+        let zona = self
+            .fundido_junctions
+            .iter()
+            .take(atom_idx)
+            .filter(|f| !**f)
+            .count();
+        Some(zona)
+    }
+
+    /// Devuelve la zona a la que pertenece la línea `linea` del buffer.
+    /// Líneas guarda (separadores no fundidos) no pertenecen a ninguna
+    /// zona — devuelven `None`. Líneas vacías fundidas SÍ pertenecen a
+    /// la zona del atom que las flanquea.
+    pub fn zona_de_linea(&self, linea: usize) -> Option<usize> {
+        if self.editor_cuerpo.atom_ids.is_empty() {
+            return None;
+        }
+        if self.state.is_guard_line(linea) {
+            return None;
+        }
+        let id = self.atom_id_en_linea(linea)?;
+        let idx = self.editor_cuerpo.atom_ids.iter().position(|x| *x == id)?;
+        self.zona_de_atom_idx(idx)
+    }
+
+    /// Zona actual del caret. Si el caret está sobre una guarda, busca la
+    /// zona del atom de la línea inmediatamente anterior (consistente con
+    /// [`Self::atom_id_en_linea`], que atribuye separadores al átomo
+    /// anterior). Devuelve `0` si el cuerpo está vacío — los callers que
+    /// quieran distinguir el caso usan [`Self::n_zonas`] previamente.
+    pub fn zona_del_caret(&self) -> usize {
+        if self.editor_cuerpo.atom_ids.is_empty() {
+            return 0;
+        }
+        let (linea, _) = self.caret();
+        if let Some(z) = self.zona_de_linea(linea) {
+            return z;
+        }
+        // Caret sobre guarda: el snap del widget normalmente lo saca de
+        // ahí, pero por las dudas tomamos la zona del atom anterior.
+        let anterior = linea.saturating_sub(1);
+        self.zona_de_linea(anterior).unwrap_or(0)
+    }
+
+    /// Rango inclusive de índices de atom (en `editor_cuerpo.atom_ids`)
+    /// que forman la zona `zona`. `None` si `zona` está fuera de rango.
+    pub fn atoms_de_zona(&self, zona: usize) -> Option<(usize, usize)> {
+        if zona >= self.n_zonas() {
+            return None;
+        }
+        // Primer atom de la zona: el primero cuyo zona_de_atom_idx == zona.
+        // Caminamos las junctions contando separadoras: cuando la cuenta
+        // alcanza `zona`, el atom siguiente es el inicio.
+        let mut zona_actual = 0usize;
+        let mut start: Option<usize> = None;
+        let mut end: usize = 0;
+        for atom_idx in 0..self.editor_cuerpo.atom_ids.len() {
+            if atom_idx > 0 {
+                // Junction inmediatamente anterior a este atom.
+                let fundida = self
+                    .fundido_junctions
+                    .get(atom_idx - 1)
+                    .copied()
+                    .unwrap_or(false);
+                if !fundida {
+                    zona_actual += 1;
+                }
+            }
+            if zona_actual == zona {
+                if start.is_none() {
+                    start = Some(atom_idx);
+                }
+                end = atom_idx;
+            } else if zona_actual > zona {
+                break;
+            }
+        }
+        start.map(|s| (s, end))
+    }
+
+    /// Rango inclusive de líneas del buffer que cubren la zona `zona`.
+    /// La línea de inicio es la del primer atom de la zona; la línea de
+    /// fin es la última línea del último atom de la zona (cuenta los
+    /// `\n` internos del atom). Las junctions fundidas internas a la zona
+    /// quedan incluidas naturalmente porque no son guarda.
+    pub fn lineas_de_zona(&self, zona: usize) -> Option<(usize, usize)> {
+        let (start_atom, end_atom) = self.atoms_de_zona(zona)?;
+        let start_id = *self.editor_cuerpo.atom_ids.get(start_atom)?;
+        let end_id = *self.editor_cuerpo.atom_ids.get(end_atom)?;
+        let (start_line, _) = self.posicion_de_atom(start_id)?;
+        let (end_line_start, _) = self.posicion_de_atom(end_id)?;
+        let end_parrafo = self.editor_cuerpo.texto.split(SEPARADOR).nth(end_atom)?;
+        let end_line = end_line_start + end_parrafo.matches('\n').count();
+        Some((start_line, end_line))
+    }
+
+    /// Mueve el caret al inicio de la zona `zona` (línea de la primera
+    /// atom, columna 0) y se asegura de que sea visible. Si la zona está
+    /// fuera de rango, no-op.
+    pub fn ir_a_zona(&mut self, zona: usize) {
+        let Some((start_line, _)) = self.lineas_de_zona(zona) else {
+            return;
+        };
+        self.set_caret(start_line, 0);
+    }
+
+    /// Selecciona la zona `zona` entera: caret pasa al final de la última
+    /// línea de la zona y el anchor queda en el inicio (línea de la
+    /// primera atom, col 0). Si la zona está fuera de rango, no-op.
+    pub fn seleccionar_zona(&mut self, zona: usize) {
+        let Some((start_line, end_line)) = self.lineas_de_zona(zona) else {
+            return;
+        };
+        self.set_caret(start_line, 0);
+        let end_col = self.state.buffer.line_len_chars(end_line);
+        self.state.extend_selection_to(end_line, end_col);
+    }
+
+    /// Zona siguiente (con wrap al inicio si estamos en la última). Si
+    /// no hay zonas, no-op silencioso. Si hay solo una, recae sobre sí
+    /// misma — mueve el caret al inicio.
+    pub fn ir_a_zona_siguiente(&mut self) {
+        let total = self.n_zonas();
+        if total == 0 {
+            return;
+        }
+        let actual = self.zona_del_caret();
+        let siguiente = (actual + 1) % total;
+        self.ir_a_zona(siguiente);
+    }
+
+    /// Zona anterior (con wrap al final si estamos en la primera).
+    pub fn ir_a_zona_anterior(&mut self) {
+        let total = self.n_zonas();
+        if total == 0 {
+            return;
+        }
+        let actual = self.zona_del_caret();
+        let anterior = if actual == 0 { total - 1 } else { actual - 1 };
+        self.ir_a_zona(anterior);
+    }
+
     /// Cuántos átomos cubre el cuerpo plano que el editor está mostrando
     /// (estado del último sync — puede diferir de los párrafos del
     /// buffer hasta el próximo `diff`).
@@ -964,6 +1136,157 @@ mod pruebas {
         let idx = indice(&atoms);
         let ide = CuerpoIde::from_cuerpo(&c, &idx);
         assert_eq!(ide.state.line_tints[0], ide.state.line_tints[16]);
+    }
+
+    #[test]
+    fn n_zonas_arranca_igual_a_n_atoms() {
+        let (c, atoms) = cuerpo_con_atoms(&["A", "B", "C", "D"]);
+        let idx = indice(&atoms);
+        let ide = CuerpoIde::from_cuerpo(&c, &idx);
+        // Sin junctions fundidas: una zona por atom.
+        assert_eq!(ide.n_zonas(), 4);
+    }
+
+    #[test]
+    fn n_zonas_cae_cuando_fundimos_junctions() {
+        let (c, atoms) = cuerpo_con_atoms(&["A", "B", "C", "D"]);
+        let idx = indice(&atoms);
+        let mut ide = CuerpoIde::from_cuerpo(&c, &idx);
+        // Fundir junction 0 → A+B forman una zona, C y D solos: total 3.
+        ide.fundir_junction(0);
+        assert_eq!(ide.n_zonas(), 3);
+        // Fundir también junction 2 → C+D se unen: total 2.
+        ide.fundir_junction(2);
+        assert_eq!(ide.n_zonas(), 2);
+        // Fundir la del medio → todo una sola zona.
+        ide.fundir_junction(1);
+        assert_eq!(ide.n_zonas(), 1);
+    }
+
+    #[test]
+    fn n_zonas_cuerpo_vacio() {
+        let ide = CuerpoIde::nuevo_vacio();
+        assert_eq!(ide.n_zonas(), 0);
+    }
+
+    #[test]
+    fn zona_de_atom_idx_mapea_grupos() {
+        let (c, atoms) = cuerpo_con_atoms(&["A", "B", "C", "D"]);
+        let idx = indice(&atoms);
+        let mut ide = CuerpoIde::from_cuerpo(&c, &idx);
+        ide.fundir_junction(0); // A+B juntos
+        assert_eq!(ide.zona_de_atom_idx(0), Some(0));
+        assert_eq!(ide.zona_de_atom_idx(1), Some(0));
+        assert_eq!(ide.zona_de_atom_idx(2), Some(1));
+        assert_eq!(ide.zona_de_atom_idx(3), Some(2));
+        assert_eq!(ide.zona_de_atom_idx(99), None);
+    }
+
+    #[test]
+    fn lineas_de_zona_simple() {
+        let (c, atoms) = cuerpo_con_atoms(&["A", "B", "C"]);
+        let idx = indice(&atoms);
+        let ide = CuerpoIde::from_cuerpo(&c, &idx);
+        // Líneas: 0="A", 1="", 2="B", 3="", 4="C".
+        assert_eq!(ide.lineas_de_zona(0), Some((0, 0)));
+        assert_eq!(ide.lineas_de_zona(1), Some((2, 2)));
+        assert_eq!(ide.lineas_de_zona(2), Some((4, 4)));
+        assert_eq!(ide.lineas_de_zona(3), None);
+    }
+
+    #[test]
+    fn lineas_de_zona_con_fusion_cubre_atoms_y_junctions() {
+        let (c, atoms) = cuerpo_con_atoms(&["A", "B", "C"]);
+        let idx = indice(&atoms);
+        let mut ide = CuerpoIde::from_cuerpo(&c, &idx);
+        // Fundir junction 0 → zona 0 = atoms A+B → líneas 0..=2 (incluye
+        // la línea vacía fundida).
+        ide.fundir_junction(0);
+        assert_eq!(ide.lineas_de_zona(0), Some((0, 2)));
+        // Zona 1 = solo C → línea 4.
+        assert_eq!(ide.lineas_de_zona(1), Some((4, 4)));
+    }
+
+    #[test]
+    fn zona_de_linea_devuelve_none_sobre_guarda() {
+        let (c, atoms) = cuerpo_con_atoms(&["A", "B"]);
+        let idx = indice(&atoms);
+        let ide = CuerpoIde::from_cuerpo(&c, &idx);
+        // Línea 1 es separador → sin zona.
+        assert_eq!(ide.zona_de_linea(0), Some(0));
+        assert_eq!(ide.zona_de_linea(1), None);
+        assert_eq!(ide.zona_de_linea(2), Some(1));
+    }
+
+    #[test]
+    fn ir_a_zona_mueve_el_caret() {
+        let (c, atoms) = cuerpo_con_atoms(&["A", "B", "C"]);
+        let idx = indice(&atoms);
+        let mut ide = CuerpoIde::from_cuerpo(&c, &idx);
+        ide.ir_a_zona(2);
+        assert_eq!(ide.caret(), (4, 0));
+        ide.ir_a_zona(0);
+        assert_eq!(ide.caret(), (0, 0));
+        // Fuera de rango: no-op (caret se queda donde estaba).
+        ide.ir_a_zona(99);
+        assert_eq!(ide.caret(), (0, 0));
+    }
+
+    #[test]
+    fn ir_a_zona_siguiente_y_anterior_con_wrap() {
+        let (c, atoms) = cuerpo_con_atoms(&["A", "B", "C"]);
+        let idx = indice(&atoms);
+        let mut ide = CuerpoIde::from_cuerpo(&c, &idx);
+        // `from_cuerpo` deja el caret al final del texto (convención de
+        // set_text); plantamos explícitamente en zona 0 para arrancar.
+        ide.set_caret(0, 0);
+        ide.ir_a_zona_siguiente();
+        assert_eq!(ide.caret(), (2, 0));
+        ide.ir_a_zona_siguiente();
+        assert_eq!(ide.caret(), (4, 0));
+        // Wrap desde zona 2 → zona 0.
+        ide.ir_a_zona_siguiente();
+        assert_eq!(ide.caret(), (0, 0));
+        // Anterior desde zona 0 → wrap a la última (línea 4).
+        ide.ir_a_zona_anterior();
+        assert_eq!(ide.caret(), (4, 0));
+    }
+
+    #[test]
+    fn seleccionar_zona_planta_anchor_y_extiende_al_final() {
+        let (c, atoms) = cuerpo_con_atoms(&["Uno", "Dos", "Tres"]);
+        let idx = indice(&atoms);
+        let mut ide = CuerpoIde::from_cuerpo(&c, &idx);
+        ide.seleccionar_zona(1);
+        // Anchor en (2, 0), caret en (2, 3) — "Dos" tiene 3 chars.
+        assert_eq!(ide.caret(), (2, 3));
+        assert_eq!(ide.state.selected_text().as_deref(), Some("Dos"));
+    }
+
+    #[test]
+    fn seleccionar_zona_fundida_abarca_lineas_intermedias() {
+        let (c, atoms) = cuerpo_con_atoms(&["Uno", "Dos", "Tres"]);
+        let idx = indice(&atoms);
+        let mut ide = CuerpoIde::from_cuerpo(&c, &idx);
+        // Fundimos 0 → zona 0 = "Uno\n\nDos" (línea vacía es contenido).
+        ide.fundir_junction(0);
+        ide.seleccionar_zona(0);
+        let sel = ide.state.selected_text().unwrap_or_default();
+        assert!(sel.starts_with("Uno"), "selección debería empezar con 'Uno': {sel:?}");
+        assert!(sel.ends_with("Dos"), "selección debería terminar con 'Dos': {sel:?}");
+    }
+
+    #[test]
+    fn zona_del_caret_sigue_al_caret() {
+        let (c, atoms) = cuerpo_con_atoms(&["A", "B", "C"]);
+        let idx = indice(&atoms);
+        let mut ide = CuerpoIde::from_cuerpo(&c, &idx);
+        ide.set_caret(0, 0);
+        assert_eq!(ide.zona_del_caret(), 0);
+        ide.set_caret(2, 0);
+        assert_eq!(ide.zona_del_caret(), 1);
+        ide.set_caret(4, 0);
+        assert_eq!(ide.zona_del_caret(), 2);
     }
 
     #[test]
