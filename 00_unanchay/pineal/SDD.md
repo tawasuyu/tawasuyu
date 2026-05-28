@@ -82,7 +82,7 @@ painter vía las escalas de `pineal-core`.
 | **SVG vectorial** (`to_svg`) | Producción. Emite `<rect>`/`<polyline>`/`<polygon>`. | `pineal-export::svg` |
 | **PNG raster** (`to_png`) | Producción. Software rasterizer propio con AA 2×2. | `pineal-export::png` |
 | **PDF** (`to_pdf`) | Producción. Writer propio (sin `printpdf`), 1 página, operadores PDF-1.4. | `pineal-export::pdf` |
-| **GPU directo `wgpu`** | Roadmap. Para millones de puntos. | — |
+| **GPU directo `wgpu`** (`GpuSceneCanvas`) | Producción. Para 0.1–10 M primitivas. Pinta en `View::gpu_paint_with`, sin texto y sin AA fino. | `pineal-render::gpu_canvas` |
 
 El rasterizador PNG es propio para no depender de `tiny-skia`/`cairo`/etc.
 Texto se omite a propósito — para labels usar SVG. Coverage 2×2 (4
@@ -175,9 +175,13 @@ frame), y ése es un asunto horizontal de `llimphi-raster`, no de pineal
 — afecta por igual a cosmos, tinkuy, nakui y cualquier app sobre
 llimphi. Ver `02_ruway/llimphi/SDD.md §"GPU directo wgpu"`.
 
-Cuando llimphi exponga ese backend, pineal heredará un
-`GpuSceneCanvas` que implementa el mismo trait `Canvas` y los painters
-no cambiarán (esa es justamente la razón por la que el trait existe).
+**Hecho 2026-05-28**: `pineal-render::gpu_canvas::GpuSceneCanvas` ya
+existe — implementa el mismo trait `Canvas` apoyándose en
+`llimphi_raster::GpuBatch`. Los painters no cambian. Lo enchufa la app
+desde un `View::gpu_paint_with` (en lugar de `paint_with`). Trade-offs
+(sin texto, una sola `line_width` por flush, sin AA fino) documentados
+en el módulo. Falta la primera visualización densa que lo ejercite —
+candidata natural: cosmos starfield.
 
 ## 10. Lo que NO va a pineal
 

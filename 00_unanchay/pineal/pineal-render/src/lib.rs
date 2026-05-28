@@ -12,8 +12,11 @@
 //! - **PlanRecorder** ([`recorder::PlanRecorder`]) — graba cada llamada
 //!   como `RenderCmd`. Consumido por `pineal-export` para emitir SVG,
 //!   PNG (raster propio con AA 2×2) y PDF (writer propio).
-//! - **GPU directo wgpu** — roadmap. Cuando una visualización pegue al
-//!   wall (>1M puntos) entrará sin tocar los painters.
+//! - **GPU directo wgpu** ([`gpu_canvas::GpuSceneCanvas`]) — backend
+//!   denso para >100 K primitivas. Delega cada llamada del Canvas a
+//!   `llimphi_raster::GpuBatch` y se enchufa desde `View::gpu_paint_with`
+//!   en lugar de `paint_with`. Los painters no cambian. Sin texto y sin
+//!   AA fino — ver doc del módulo para trade-offs.
 //!
 //! Tipos primitivos (`Color`, `Point`, `Rect`) viven acá para no
 //! atarlos al tipo de color/punto de ningún runtime.
@@ -27,6 +30,7 @@ pub mod plan;
 pub mod recorder;
 
 pub mod llimphi_backend;
+pub mod gpu_canvas;
 
 pub use color::Color;
 pub use geom::{Point, Rect};
@@ -35,3 +39,4 @@ pub use plan::{RenderCmd, RenderPlan};
 pub use recorder::PlanRecorder;
 
 pub use llimphi_backend::SceneCanvas;
+pub use gpu_canvas::GpuSceneCanvas;
