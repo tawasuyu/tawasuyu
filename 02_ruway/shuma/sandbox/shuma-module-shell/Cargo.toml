@@ -10,6 +10,9 @@ description = "shuma-module-shell — el shell interactivo (input + runs + histo
 [dependencies]
 shuma-module = { path = "../shuma-module" }
 shuma-exec = { path = "../shuma-exec" }
+shuma-remote-exec = { path = "../shuma-remote-exec" }
+shuma-protocol = { path = "../shuma-protocol" }
+shuma-link = { path = "../shuma-link" }
 shuma-line = { path = "../shuma-line" }
 shuma-history = { path = "../shuma-history" }
 llimphi-ui = { workspace = true }

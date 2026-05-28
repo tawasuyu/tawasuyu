@@ -282,7 +282,7 @@ impl App for Shell {
 
         let cfg = config::ShumaConfig::load_default();
         let topbar = resolve_slot(cfg.topbar.as_ref())
-            .or_else(|| Some(Instance::launcher(shuma_module_launcher::State::demo())));
+            .or_else(|| Some(Instance::launcher(shuma_module_launcher::State::from_apps_dir())));
         let bottombar = resolve_slot(cfg.bottombar.as_ref()).or_else(|| {
             Some(Instance::command_bar(
                 shuma_module_commandbar::State::default(),
@@ -498,7 +498,7 @@ fn resolve_instance(
     let label = label.unwrap_or_else(|| source.label());
     match id {
         shuma_module_launcher::ID => {
-            Some(Instance::launcher(shuma_module_launcher::State::demo()))
+            Some(Instance::launcher(shuma_module_launcher::State::from_apps_dir()))
         }
         shuma_module_commandbar::ID => Some(Instance::command_bar(
             shuma_module_commandbar::State::default(),

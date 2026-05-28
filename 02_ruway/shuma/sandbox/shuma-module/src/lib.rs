@@ -43,13 +43,30 @@ use serde::{Deserialize, Serialize};
 pub type ModuleId = &'static str;
 
 /// Origen contra el cual opera un módulo: `Local` actúa sobre esta
-/// máquina, `Remote` sobre un servidor por SSH. La variante elegida
-/// determina qué `discover`/`apply` usa el módulo (p. ej. matilda).
+/// máquina, `Daemon` lo hace vía `shuma-daemon` por Unix socket,
+/// `DaemonTcp` igual pero por TCP autenticado (Noise XK), `Remote`
+/// SSH para módulos que aún no hablan el protocolo del daemon (matilda).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Source {
-    /// Esta máquina. Sin parámetros.
+    /// Esta máquina, ejecución directa (`shuma-exec::run`).
     Local,
+    /// Esta máquina pero los comandos van por el daemon — Unix socket.
+    /// `socket` es opcional: cuando es `None` se usa `default_socket_path()`.
+    Daemon {
+        #[serde(default)]
+        socket: Option<std::path::PathBuf>,
+        #[serde(default)]
+        label: Option<String>,
+    },
+    /// Daemon en otro host, conectado por TCP con handshake Noise XK.
+    /// `server_pub_hex` es la pubkey del server (estilo `known_hosts`).
+    DaemonTcp {
+        addr: String,
+        server_pub_hex: String,
+        #[serde(default)]
+        label: Option<String>,
+    },
     /// Servidor remoto vía SSH. `host` y `user` son obligatorios; el
     /// método de autenticación se resuelve aparte (clave por defecto o
     /// password de un keystore — no se serializa aquí en claro).
@@ -74,14 +91,19 @@ impl Source {
     pub fn label(&self) -> String {
         match self {
             Source::Local => "local".into(),
+            Source::Daemon { label: Some(l), .. } => l.clone(),
+            Source::Daemon { socket: Some(p), .. } => format!("daemon:{}", p.display()),
+            Source::Daemon { .. } => "daemon".into(),
+            Source::DaemonTcp { label: Some(l), .. } => l.clone(),
+            Source::DaemonTcp { addr, .. } => format!("daemon@{addr}"),
             Source::Remote { label: Some(l), .. } => l.clone(),
             Source::Remote { host, user, .. } => format!("{user}@{host}"),
         }
     }
 
-    /// `true` si el origen es remoto.
+    /// `true` si el origen es remoto (SSH o DaemonTcp).
     pub fn is_remote(&self) -> bool {
-        matches!(self, Source::Remote { .. })
+        matches!(self, Source::Remote { .. } | Source::DaemonTcp { .. })
     }
 }
 

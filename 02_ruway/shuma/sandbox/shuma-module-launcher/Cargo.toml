@@ -11,3 +11,5 @@ description = "shuma-module-launcher — barra superior fija (Placement::TopBar)
 shuma-module = { path = "../shuma-module" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }

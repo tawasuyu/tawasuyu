@@ -38,6 +38,7 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{Key, KeyEvent, KeyState, NamedKey, View};
 use llimphi_theme::Theme;
 use shuma_exec::{CommandSpec, Exec, Killer, RunEvent, RunHandle, StageSpec};
+use shuma_remote_exec::RemoteRunHandle;
 use shuma_line::{LineState, TokenKind};
 use shuma_module::{ModuleContributions, ShortcutSpec, Source};
 use std::collections::VecDeque;
@@ -99,16 +100,63 @@ impl OutputLine {
     }
 }
 
-/// Run vivo: handle de `shuma-exec`, su `Killer` (para SIGTERM desde la
-/// UI) y el comando original (para el notice de cierre).
+/// Run vivo: handle de ejecución (local directo o vía daemon), un
+/// `Killer` opcional (solo en local — el remoto matamos cerrando el
+/// stream) y el comando original (para el notice de cierre).
 pub struct ActiveRun {
-    pub handle: RunHandle,
-    pub killer: Killer,
+    pub handle: BackendHandle,
+    /// `Some` cuando el run es local (`shuma-exec::RunHandle.killer()`).
+    /// `None` cuando es remoto — la cancelación va por `handle.kill()`.
+    pub killer: Option<Killer>,
     pub command: String,
     /// Sesión TUI: emulador vt100 + dims del PTY. `Some` cuando el run
     /// arrancó bajo `Exec::Pty` (vim/htop/less/etc.); las teclas van al
     /// stdin del PTY y la pantalla se renderiza como grid de celdas.
+    /// El daemon no soporta PTY remoto todavía — TUIs forzados a local.
     pub tui: Option<TuiSession>,
+}
+
+/// Backend de ejecución abstracto. Local va por `shuma-exec`; Daemon
+/// (Unix o TCP) va por `shuma-remote-exec`. La API expuesta al módulo
+/// shell (`try_events`, `is_finished`, `kill`, `write_input`, `resize`)
+/// es la misma — las operaciones de PTY son no-op en remoto.
+pub enum BackendHandle {
+    Local(RunHandle),
+    Remote(RemoteRunHandle),
+}
+
+impl BackendHandle {
+    pub fn try_events(&mut self) -> Vec<RunEvent> {
+        match self {
+            BackendHandle::Local(h) => h.try_events(),
+            BackendHandle::Remote(h) => h.try_events(),
+        }
+    }
+    pub fn is_finished(&self) -> bool {
+        match self {
+            BackendHandle::Local(h) => h.is_finished(),
+            BackendHandle::Remote(h) => h.is_finished(),
+        }
+    }
+    pub fn kill(&self) {
+        match self {
+            BackendHandle::Local(h) => h.kill(),
+            BackendHandle::Remote(h) => h.kill(),
+        }
+    }
+    pub fn write_input(&self, bytes: Vec<u8>) -> bool {
+        match self {
+            BackendHandle::Local(h) => h.write_input(bytes),
+            // Remote no soporta PTY → write_input no aplica.
+            BackendHandle::Remote(_) => false,
+        }
+    }
+    pub fn resize(&self, rows: u16, cols: u16) -> bool {
+        match self {
+            BackendHandle::Local(h) => h.resize(rows, cols),
+            BackendHandle::Remote(_) => false,
+        }
+    }
 }
 
 /// Sesión TUI sobre PTY — bufferea el parser vt100 y los dims actuales.
@@ -904,16 +952,143 @@ fn run_submitted(mut s: State) -> State {
 fn start_run(mut s: State, line: String) -> State {
     let cwd_str = s.cwd.display().to_string();
     let (spec, tui) = build_spec(&line, &cwd_str);
-    let handle = shuma_exec::run(&spec);
-    let killer = handle.killer();
-    let active = ActiveRun {
-        handle,
-        killer,
-        command: line,
-        tui,
+    let active = match &s.source {
+        Source::Local => {
+            // Camino histórico — exec directo sobre esta máquina.
+            let handle = shuma_exec::run(&spec);
+            let killer = handle.killer();
+            ActiveRun {
+                handle: BackendHandle::Local(handle),
+                killer: Some(killer),
+                command: line,
+                tui,
+            }
+        }
+        Source::Daemon { socket, .. } => {
+            // PTY remoto no soportado; fallback a local con notice.
+            if tui.is_some() {
+                push_line(
+                    &mut s.output,
+                    OutputLine::notice(
+                        "PTY remoto no soportado por el daemon — corro local",
+                    ),
+                );
+                let handle = shuma_exec::run(&spec);
+                let killer = handle.killer();
+                ActiveRun {
+                    handle: BackendHandle::Local(handle),
+                    killer: Some(killer),
+                    command: line,
+                    tui,
+                }
+            } else {
+                let sock = socket
+                    .clone()
+                    .unwrap_or_else(shuma_protocol::default_socket_path);
+                match shuma_remote_exec::run(&spec, &sock) {
+                    Ok(h) => ActiveRun {
+                        handle: BackendHandle::Remote(h),
+                        killer: None,
+                        command: line,
+                        tui: None,
+                    },
+                    Err(e) => {
+                        push_line(
+                            &mut s.output,
+                            OutputLine::notice(format!("✘ daemon: {e}")),
+                        );
+                        return s;
+                    }
+                }
+            }
+        }
+        Source::DaemonTcp { addr, server_pub_hex, .. } => {
+            if tui.is_some() {
+                push_line(
+                    &mut s.output,
+                    OutputLine::notice("PTY remoto no soportado — corro local"),
+                );
+                let handle = shuma_exec::run(&spec);
+                let killer = handle.killer();
+                ActiveRun {
+                    handle: BackendHandle::Local(handle),
+                    killer: Some(killer),
+                    command: line,
+                    tui,
+                }
+            } else {
+                let kp = match load_or_create_identity() {
+                    Ok(kp) => kp,
+                    Err(e) => {
+                        push_line(
+                            &mut s.output,
+                            OutputLine::notice(format!("✘ identity: {e}")),
+                        );
+                        return s;
+                    }
+                };
+                let server_pub = match parse_pub_hex(server_pub_hex) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        push_line(
+                            &mut s.output,
+                            OutputLine::notice(format!("✘ server_pub_hex: {e}")),
+                        );
+                        return s;
+                    }
+                };
+                match shuma_remote_exec::run_tcp(&spec, addr, kp, server_pub) {
+                    Ok(h) => ActiveRun {
+                        handle: BackendHandle::Remote(h),
+                        killer: None,
+                        command: line,
+                        tui: None,
+                    },
+                    Err(e) => {
+                        push_line(
+                            &mut s.output,
+                            OutputLine::notice(format!("✘ daemon tcp: {e}")),
+                        );
+                        return s;
+                    }
+                }
+            }
+        }
+        Source::Remote { .. } => {
+            // SSH (matilda usa esta variante para otra cosa). El shell
+            // no tiene un transporte SSH para comandos arbitrarios aún;
+            // fallback a local con notice claro.
+            push_line(
+                &mut s.output,
+                OutputLine::notice(
+                    "shell vía SSH no implementado todavía — corro local",
+                ),
+            );
+            let handle = shuma_exec::run(&spec);
+            let killer = handle.killer();
+            ActiveRun {
+                handle: BackendHandle::Local(handle),
+                killer: Some(killer),
+                command: line,
+                tui,
+            }
+        }
     };
     s.running = Some(Arc::new(Mutex::new(active)));
     s
+}
+
+/// Carga el `Keypair` del shell desde el archivo de identidad,
+/// creando uno nuevo si no existe. Usa el path por defecto de
+/// `shuma-link::Keypair::default_path()` (`~/.config/shuma/keys/identity`).
+fn load_or_create_identity() -> Result<shuma_link::Keypair, String> {
+    let path = shuma_link::Keypair::default_path()
+        .ok_or_else(|| "no se pudo derivar el path de identidad".to_string())?;
+    shuma_link::Keypair::load_or_generate(&path).map_err(|e| e.to_string())
+}
+
+fn parse_pub_hex(hex_str: &str) -> Result<shuma_link::PublicKey, String> {
+    shuma_link::PublicKey::from_hex(hex_str).map_err(|e| e.to_string())
 }
 
 /// Decide cómo lanzar `line`: si el primer token está en la allowlist
@@ -1047,10 +1222,14 @@ fn cancel_running(mut s: State) -> State {
             Ok(g) => g,
             Err(p) => p.into_inner(),
         };
-        // SIGKILL al grupo entero — la UI cancela "ya". SIGTERM educado
-        // sirve cuando se quiere darle tiempo al proceso a limpiar; en
-        // un shell interactivo, Ctrl-C debe doler.
-        guard.killer.kill();
+        // Local: SIGKILL al grupo entero — Ctrl-C debe doler en una UI.
+        // Remoto: cerrar el stream — el daemon detecta EOF y mata al
+        // hijo. La forma del notice no cambia.
+        if let Some(killer) = guard.killer.as_ref() {
+            killer.kill();
+        } else {
+            guard.handle.kill();
+        }
         // El próximo Tick observará `RunEvent::Exited` y limpiará el handle.
     }
     push_line(&mut s.output, OutputLine::notice("⏹ cancel (SIGKILL enviado)"));
@@ -1232,6 +1411,7 @@ fn shell_input_view<HostMsg: Clone + 'static>(
                 alignment: TAlign::Start,
                 line_height: 1.2,
                 italic: false,
+                font_family: None,
             };
             let layout = layout_block(ts, &block);
             draw_layout(scene, &layout, theme_clone.fg_placeholder, (x, baseline_y));
@@ -1251,6 +1431,7 @@ fn shell_input_view<HostMsg: Clone + 'static>(
                 alignment: TAlign::Start,
                 line_height: 1.2,
                 italic: false,
+                font_family: None,
             };
             let layout = layout_block(ts, &block);
             let m = measurement(&layout);
@@ -1270,6 +1451,7 @@ fn shell_input_view<HostMsg: Clone + 'static>(
                         alignment: TAlign::Start,
                         line_height: 1.2,
                         italic: false,
+                        font_family: None,
                     };
                     let plat = layout_block(ts, &pblock);
                     cursor_x = x + measurement(&plat).width as f64;
@@ -1294,6 +1476,7 @@ fn shell_input_view<HostMsg: Clone + 'static>(
                     alignment: TAlign::Start,
                     line_height: 1.2,
                     italic: false,
+                    font_family: None,
                 };
                 let layout = layout_block(ts, &block);
                 draw_layout(
@@ -1430,6 +1613,7 @@ fn tui_panel<HostMsg: Clone + 'static>(state: &State, theme: &Theme) -> View<Hos
                         alignment: TAlign::Start,
                         line_height: 1.0,
                         italic: false,
+                        font_family: None,
                     };
                     let layout = layout_block(ts, &block);
                     draw_layout(scene, &layout, fg, (x0, y0));
@@ -2056,14 +2240,25 @@ mod tests {
         let arc = s.running.as_ref().unwrap().clone();
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
         while std::time::Instant::now() < deadline {
-            let has_pid = !arc.lock().unwrap().killer.pids().is_empty();
+            let has_pid = arc
+                .lock()
+                .unwrap()
+                .killer
+                .as_ref()
+                .map(|k| !k.pids().is_empty())
+                .unwrap_or(false);
             if has_pid {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert!(
-            !arc.lock().unwrap().killer.pids().is_empty(),
+            arc.lock()
+                .unwrap()
+                .killer
+                .as_ref()
+                .map(|k| !k.pids().is_empty())
+                .unwrap_or(false),
             "el coordinador no expuso el PID en 500ms"
         );
         s = update(s, Msg::Cancel);
@@ -2214,6 +2409,21 @@ mod tests {
             repeat: false,
         };
         assert_eq!(key_to_pty_bytes(&ctrl_c), vec![3u8]);
+    }
+
+    #[test]
+    fn source_daemon_failure_surfaces_as_notice() {
+        // Sin daemon corriendo, start_run con Source::Daemon debe
+        // dejar un notice rojo y no enredarse — el shell sigue vivo.
+        let mut s = State::new(Source::Daemon {
+            socket: Some(PathBuf::from("/tmp/shuma-no-existe-test.sock")),
+            label: None,
+        });
+        let _ = std::fs::remove_file("/tmp/shuma-no-existe-test.sock");
+        s.input.set_text("echo hola");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert!(s.output.iter().any(|l| l.text.starts_with("✘ daemon:")));
+        assert!(!s.is_running(), "no debe quedar un run vivo si falló");
     }
 
     #[test]

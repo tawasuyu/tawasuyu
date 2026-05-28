@@ -712,10 +712,18 @@ async fn dispatch(
             }
         }
 
-        Request::WorkspaceCreate { spec } => match mgr.create(spec).await {
-            Ok((id, warnings)) => Response::WorkspaceCreated { id, warnings },
-            Err(e) => Response::Error { message: format!("{e}") },
-        },
+        Request::WorkspaceCreate { spec } => {
+            let label_clone = spec.label.clone();
+            match mgr.create(spec).await {
+                Ok((id, warnings)) => {
+                    if let Some(p) = pool.as_deref() {
+                        p.spawn(build_workspace_card(&label_clone, id));
+                    }
+                    Response::WorkspaceCreated { id, warnings }
+                }
+                Err(e) => Response::Error { message: format!("{e}") },
+            }
+        }
 
         Request::WorkspaceList => {
             let items = mgr
@@ -1116,6 +1124,38 @@ fn type_label(t: &TypeRef) -> String {
         TypeRef::Primitive { name } => name.clone(),
         TypeRef::Wit { package, name, .. } => format!("{package}.{name}"),
     }
+}
+
+/// Card de un Workspace recién creado. Se publica al pool para que el
+/// broker-explorer (y consumidores futuros) puedan listar los
+/// workspaces vivos sin pasar por el daemon. La card es `Ente`
+/// (entidad viva), `Lifecycle::Daemon` (vive lo que el workspace), y
+/// expone un flow `commands` que un consumidor podría suscribir.
+fn build_workspace_card(label: &str, id: shuma_card::WorkspaceId) -> Card {
+    let card_label = format!("shuma.workspace.{}.{}", short_workspace_id(&id), label);
+    let mut card = Card::new(card_label);
+    card.kind = CardKind::Ente;
+    card.lifecycle = Lifecycle::Daemon;
+    card.payload = Payload::Virtual;
+    card.supervision = Supervision::Delegate;
+    card.flow = Flows {
+        input: Vec::new(),
+        output: vec![Flow {
+            name: "commands".into(),
+            ty: TypeRef::Wit {
+                package: "shuma:admin".into(),
+                interface: None,
+                name: "command-list".into(),
+            },
+            pin_to: None,
+        }],
+    };
+    card
+}
+
+fn short_workspace_id(id: &shuma_card::WorkspaceId) -> String {
+    let s = id.to_string();
+    s[s.len().saturating_sub(6)..].to_string()
 }
 
 /// Card del daemon. La presentamos al broker así otras sesiones pueden

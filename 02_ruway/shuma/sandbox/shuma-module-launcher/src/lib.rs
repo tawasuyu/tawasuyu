@@ -1,13 +1,23 @@
 //! `shuma-module-launcher` — barra superior fija con apps/shortcuts.
 //!
 //! Vive en el slot [`Placement::TopBar`] del chasis: una tira corta
-//! con accesos directos (apps, comandos del shumarc) que el usuario
-//! puede pulsar para invocar. Placeholder por ahora — la integración
-//! real con `mirada-launcher` y los `[apps]` del shumarc llega aparte.
+//! con accesos directos. Las entries se leen del filesystem:
 //!
-//! En el placeholder solo se muestra un label "shuma · launcher"
-//! con tres botones de ejemplo (Files, Shell, Matilda) que no hacen
-//! nada todavía.
+//! ```text
+//! $XDG_CONFIG_HOME/shuma/apps/*.toml
+//! ```
+//!
+//! Cada `.toml` declara una entry:
+//!
+//! ```toml
+//! label = "Pluma"
+//! exec = "pluma-app"          # opcional; si está, click → spawn detached
+//! action_id = "focus:pluma"   # opcional; si no hay exec, el chasis lo dispatchea
+//! ```
+//!
+//! Si `~/.config/shuma/apps/` no existe (o está vacío), el launcher
+//! cae al `State::demo()` con tres entries fijas (Files/Shell/Matilda)
+//! para que el chasis sea exploratorio desde el día uno.
 
 #![forbid(unsafe_code)]
 
@@ -38,14 +48,22 @@ pub struct State {
     pub entries: Vec<LauncherEntry>,
 }
 
-/// Una entrada del launcher: un label y la acción que dispara al click.
-/// El chasis traduce la acción a su propio `HostMsg`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Una entrada del launcher: label, opcional `exec` para spawn
+/// detached al click, opcional `action_id` que el chasis dispatchea.
+/// Al menos uno de los dos debe estar (el loader rechaza el manifest
+/// si los dos están vacíos).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct LauncherEntry {
     pub label: String,
-    /// Acción opaca al chasis (lo que tipea el shumarc en `action_id`),
-    /// que se enrutará al módulo destino o se interpretará como
-    /// comando. El placeholder no la usa.
+    /// Programa a ejecutar (parseo simple por whitespace: el primer
+    /// token es el binario, el resto son args). Si está, el click hace
+    /// spawn detached vía `process_group(0)`.
+    #[serde(default)]
+    pub exec: Option<String>,
+    /// Acción opaca al chasis (focus:shell, open:files, etc.). Si no
+    /// hay `exec`, el chasis decide qué hacer (focus a un tab, abrir
+    /// un módulo, etc.). Default `""` cuando hay `exec`.
+    #[serde(default)]
     pub action_id: String,
 }
 
@@ -53,14 +71,23 @@ impl LauncherEntry {
     pub fn new(label: impl Into<String>, action_id: impl Into<String>) -> Self {
         Self {
             label: label.into(),
+            exec: None,
             action_id: action_id.into(),
+        }
+    }
+
+    pub fn with_exec(label: impl Into<String>, exec: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            exec: Some(exec.into()),
+            action_id: String::new(),
         }
     }
 }
 
 impl State {
     /// State de demo con entries fijas: Files / Shell / Matilda. El
-    /// shumarc real las reemplaza.
+    /// loader real las reemplaza si encuentra manifests en disco.
     pub fn demo() -> Self {
         Self {
             entries: vec![
@@ -70,20 +97,93 @@ impl State {
             ],
         }
     }
+
+    /// Lee `$XDG_CONFIG_HOME/shuma/apps/*.toml` (orden alfabético) y
+    /// arma las entries. Si el dir no existe o no hay manifests
+    /// válidos, devuelve `State::demo()` — el chasis arranca usable.
+    pub fn from_apps_dir() -> Self {
+        let Some(dir) = apps_dir() else {
+            return Self::demo();
+        };
+        let entries = load_entries_from_dir(&dir);
+        if entries.is_empty() {
+            Self::demo()
+        } else {
+            Self { entries }
+        }
+    }
 }
 
-/// Mensajes del módulo. Por ahora sólo el click en una entry (que el
-/// chasis traducirá a un `ShortcutAction::Command` o `FocusTab`).
+fn apps_dir() -> Option<std::path::PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config"))
+        })?;
+    Some(base.join("shuma").join("apps"))
+}
+
+/// Lee `.toml` del dir como `LauncherEntry` y los devuelve ordenados.
+/// Manifests inválidos se omiten silenciosamente (un launcher no debe
+/// fallar el shell por un toml roto).
+pub fn load_entries_from_dir(dir: &std::path::Path) -> Vec<LauncherEntry> {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<std::path::PathBuf> = rd
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("toml"))
+        .collect();
+    paths.sort();
+    let mut out: Vec<LauncherEntry> = Vec::new();
+    for p in paths {
+        let Ok(text) = std::fs::read_to_string(&p) else {
+            continue;
+        };
+        let Ok(entry) = toml::from_str::<LauncherEntry>(&text) else {
+            continue;
+        };
+        if entry.exec.is_none() && entry.action_id.is_empty() {
+            continue;
+        }
+        out.push(entry);
+    }
+    out
+}
+
+/// Mensajes del módulo.
 #[derive(Debug, Clone)]
 pub enum Msg {
     /// Click en una entry; lleva el `action_id` para que el chasis lo
     /// resuelva (típicamente buscando un módulo con ese id, o lanzando
-    /// el comando si es `cmd:...`).
+    /// el comando si es `cmd:...`). Sólo se emite cuando la entry NO
+    /// tiene `exec` propio — si tenía, el launcher ya lo spawneó y el
+    /// chasis no necesita hacer nada.
     EntryClicked(String),
 }
 
 pub fn update(state: State, _msg: Msg) -> State {
     state
+}
+
+/// Spawnea el `exec` de una entry detached del shell. Parseo simple
+/// por whitespace; quoting avanzado no soportado (un launcher quiere
+/// invocar binarios, no scripts).
+pub fn spawn_exec(exec_line: &str) {
+    use std::os::unix::process::CommandExt;
+    let mut parts = exec_line.split_whitespace();
+    let Some(program) = parts.next() else {
+        return;
+    };
+    let args: Vec<&str> = parts.collect();
+    let _ = std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .process_group(0)
+        .spawn();
 }
 
 /// Mapea `action_id` a `Msg`. El launcher expone `launcher.toggle` como
@@ -124,8 +224,18 @@ pub fn view<HostMsg: Clone + 'static>(
     for entry in &state.entries {
         let lift = lift.clone();
         let action_id = entry.action_id.clone();
+        let exec = entry.exec.clone();
         children.push(entry_button(entry.label.clone(), theme, move || {
-            lift(Msg::EntryClicked(action_id.clone()))
+            // Si la entry tiene `exec`, lanzamos detached y devolvemos
+            // un msg neutral (el chasis lo ve como "no hagas nada").
+            // Si no, emitimos EntryClicked para que el chasis lo
+            // resuelva via su tabla de dispatch.
+            if let Some(line) = exec.clone() {
+                spawn_exec(&line);
+                lift(Msg::EntryClicked(String::new()))
+            } else {
+                lift(Msg::EntryClicked(action_id.clone()))
+            }
         }));
     }
 
@@ -231,5 +341,32 @@ mod tests {
         match m {
             Msg::EntryClicked(id) => assert_eq!(id, "focus:matilda"),
         }
+    }
+
+    #[test]
+    fn load_entries_from_dir_reads_toml_manifests() {
+        let dir = std::env::temp_dir().join(format!(
+            "shuma-launcher-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("01-pluma.toml"),
+            "label = \"Pluma\"\nexec = \"pluma-app\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("02-shell.toml"),
+            "label = \"Shell\"\naction_id = \"focus:shell\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("03-invalida.toml"), "label = \"X\"\n").unwrap();
+        let entries = load_entries_from_dir(&dir);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].label, "Pluma");
+        assert_eq!(entries[0].exec.as_deref(), Some("pluma-app"));
+        assert_eq!(entries[1].action_id, "focus:shell");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

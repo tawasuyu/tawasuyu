@@ -11,3 +11,4 @@ description = "shuma-module-commandbar — barra inferior fija (Placement::Botto
 shuma-module = { path = "../shuma-module" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
+nucleo-matcher = { workspace = true }

@@ -167,7 +167,9 @@ pub fn update(state: State, msg: Msg) -> State {
     let mut s = state;
     match msg {
         Msg::Discover => match &s.source {
-            Source::Local => {
+            Source::Local | Source::Daemon { .. } | Source::DaemonTcp { .. } => {
+                // Matilda no habla todavía con el daemon de shuma — corre
+                // siempre sobre el FS local cuando no es SSH.
                 let current = discover_inventory(&s.desired);
                 s.log.push(format!(
                     "✔ discover local: {} containers, {} vhosts",
@@ -349,7 +351,9 @@ fn default_ssh_key() -> PathBuf {
 /// SSH, pero usa el mismo entrypoint para uniformidad).
 pub fn discover_remote_blocking(source: &Source, desired: &Inventory) -> Result<Inventory, String> {
     match source {
-        Source::Local => Ok(discover_inventory(desired)),
+        Source::Local | Source::Daemon { .. } | Source::DaemonTcp { .. } => {
+            Ok(discover_inventory(desired))
+        }
         Source::Remote { .. } => {
             let config = ssh_config_for(source)?;
             let rt = blocking_runtime()?;
@@ -379,7 +383,9 @@ pub fn dry_run_remote_blocking(
     let mut lines = Vec::new();
 
     let current = match source {
-        Source::Local => discover_inventory(desired),
+        Source::Local | Source::Daemon { .. } | Source::DaemonTcp { .. } => {
+            discover_inventory(desired)
+        }
         Source::Remote { .. } => {
             let config = ssh_config_for(source)?;
             let rt = blocking_runtime()?;
@@ -443,7 +449,7 @@ pub fn apply_remote_blocking(
     let mut lines = Vec::new();
 
     match source {
-        Source::Local => {
+        Source::Local | Source::Daemon { .. } | Source::DaemonTcp { .. } => {
             // Local lo maneja `Msg::Apply` sincrónicamente. Para
             // uniformidad damos un fallback síncrono sin tocar el UI.
             let current = discover_inventory(desired);
@@ -534,7 +540,9 @@ fn ssh_config_for(source: &Source) -> Result<SshConfig, String> {
             config.port = *port;
             Ok(config)
         }
-        Source::Local => Err("ssh_config_for esperaba Source::Remote".into()),
+        Source::Local | Source::Daemon { .. } | Source::DaemonTcp { .. } => {
+            Err("ssh_config_for esperaba Source::Remote".into())
+        }
     }
 }
 

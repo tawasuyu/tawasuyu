@@ -170,22 +170,19 @@ Pendientes opcionales (no bloquean nada):
 - Mouse en el PTY (vt100 ya parsea los eventos; falta cablear el mouse de Llimphi).
 - Tooltip "what would clicking this do?" en decoraciones (espera al hover en llimphi-ui).
 
-### Bloque B — integrar el daemon como ejecutor (escala)
-**Objetivo**: que el shell pueda hablar contra `shuma-daemon` local *o* remoto sin cambiar la API del módulo.
+### Bloque B — integrar el daemon como ejecutor ✅ **completo (2026-05-28)**
 
-B1. **Switch local/daemon en `shuma-module-shell`**.
-- Trait pequeño `Runner` con `start(spec) -> RunHandle` que ambos crates ya implementan (sin renombrar nada, `shuma-exec::RunHandle` y `shuma-remote-exec::RemoteRunHandle` son espejos).
-- `Source::Local { via_daemon: bool }`: cuando `true`, ruta por Unix socket.
+B1 ✅ **Runner enum local/daemon** en `shuma-module-shell`. `BackendHandle` envuelve `shuma_exec::RunHandle` y `shuma_remote_exec::RemoteRunHandle` con la misma API (`try_events`, `is_finished`, `kill`, `write_input`, `resize` — write/resize son no-op en remoto). `Source` extendido con variantes `Daemon { socket: Option<PathBuf>, label }` y `DaemonTcp { addr, server_pub_hex, label }`; `start_run` rutea según la variante. PTY siempre cae a local con notice (daemon no soporta PTY remoto).
 
-B2. **Source remoto cableado vía `shuma-link`** (Noise XK ya existe).
-- Reemplazar Unix socket por TCP autenticado contra un `shuma-daemon` corriendo en otro host.
-- `KnownPeers` controla allowlist; primer arranque genera identity X25519.
+B2 ✅ **Source remoto via Noise XK**. `Source::DaemonTcp` consume `shuma_remote_exec::run_tcp`. Identidad X25519 del shell persiste vía `shuma_link::Keypair::load_or_generate(Keypair::default_path())` — primer arranque genera, después se reusa. `server_pub_hex` parseado con `PublicKey::from_hex`. Errores (no hay daemon, pubkey errónea) salen como notice en el output sin tumbar el shell.
 
-B3. **Sidecar broker**: enganchar el sidecar pool del daemon (`card_sidecar::SidecarPool`) para que cada `Workspace` se anuncie al broker. Hoy está armado pero no se publica nada relevante todavía.
+B3 ✅ **Sidecar broker en daemon**. `WorkspaceCreate` ahora llama a `pool.spawn(build_workspace_card(label, id))` cuando hay pool — cada workspace se publica al broker como `Card { kind: Ente, lifecycle: Daemon, flow: ["commands"] }` (paralelo a la `shuma.daemon` card que ya existía). `announce_edges_to_broker` para edges de pipeline ya estaba.
 
-### Bloque C — módulos placeholder
-C1. **`shuma-module-launcher` real**: leer apps Llimphi instaladas (vía `wawa-config.modules.*` + manifests), grid con íconos, lanzar por `Handle::spawn`.
-C2. **`shuma-module-commandbar` real**: parser de intents simple, autocompletado de comandos del shumarc, palette tipo Cmd-P (binding configurable).
+### Bloque C — módulos placeholder ✅ **completo (2026-05-28)**
+
+C1 ✅ **launcher real con manifests**. `shuma-module-launcher` ahora lee `$XDG_CONFIG_HOME/shuma/apps/*.toml` (orden alfabético) en `State::from_apps_dir()`. Cada manifest es `{label, exec?, action_id?}`; si tiene `exec`, click → spawn detached (`process_group(0)`); si no, emite `Msg::EntryClicked(action_id)` al chasis. Si el dir no existe o no hay manifests válidos, cae a `State::demo()` para que el chasis siga exploratorio. Chasis llama a `from_apps_dir()` en lugar de `demo()`.
+
+C2 ✅ **commandbar real Cmd-P**. `shuma-module-commandbar` ahora trae catálogo de `CommandEntry { label, category, kind: FocusTab|Exec|Action }` provisionable vía `State::set_catalog`. Tipear filtra con `nucleo_matcher::Pattern::score`; Up/Down navegan; Enter activa (`activation_for(&state, &ev)` retorna `CommandKind`); Escape limpia; click en row → `ActivateAt(idx)`. Modo `Launcher` usa el catálogo, modo `Shell` ejecuta la línea tal cual (`CommandKind::Exec(text)`). Dropdown se muestra encima de la barra con hasta 8 matches.
 
 ### Bloque D — wawa integration
 D1. Suscribir watcher `wawa-config` en `shuma-shell-llimphi::main`.
@@ -231,15 +228,16 @@ F3. Editor multi-línea: `shuma-line::continuation::needs_continuation` ya está
 
 | # | Tarea | Ganancia | Costo |
 |---|-------|----------|-------|
-| ✅ | A1..A5 — bloque REPL completo | shell utilizable | hecho 2026-05-28 |
+| ✅ | A1..A8 — bloque REPL extendido | shell completo | hecho 2026-05-28 |
+| ✅ | B1..B3 — daemon ejecutor + broker | shell remoto + observable | hecho 2026-05-28 |
+| ✅ | C1..C2 — launcher + commandbar reales | palette Cmd-P + apps | hecho 2026-05-28 |
 | 1 | D1-D3 — wawa watcher en chasis | tema + idioma live | bajo |
-| 2 | B1 — Runner trait + switch local/daemon | habilita remoto | medio |
-| 3 | C1 — launcher real | UX visible | medio |
-| 4 | C2 — commandbar real | UX visible | medio |
-| 5 | E1..E4 — limpieza pendiente | menor | variado |
-| 6 | F1 — lienzo de contexto | killer feature pero opcional | alto |
+| 2 | E1..E4 — limpieza pendiente | menor | variado |
+| 3 | F1 — lienzo de contexto | killer feature pero opcional | alto |
+| 4 | F2 — job control (:jobs, :term, &) | shell power-user | medio |
+| 5 | F3 — editor multi-línea | scripts multi-línea | medio |
 
-**Recomendación de orden**: D1..D3 → B1 → C1 → C2 → E* → F*.
+**Recomendación de orden**: D1..D3 → E* → F*.
 
 ---
 
