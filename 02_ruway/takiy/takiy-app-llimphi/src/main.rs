@@ -71,6 +71,9 @@ enum Msg {
     Undo,
     /// Rehace la última edición deshecha.
     Redo,
+    /// Paste al playhead actual (en beats). El binario es quien lee la
+    /// posición del Player y dispara el EditMsg::PasteAt correspondiente.
+    PasteAtPlayhead,
     /// Cambia el programa GM de la pista activa en `delta` (wrap 0..=127).
     NudgeProgram { delta: i32 },
     /// Guarda el score actual a `TAKIY_SCORE_JSON` (o a `/tmp/...`).
@@ -221,6 +224,17 @@ impl App for Takiy {
             Msg::Redo => {
                 model.status = model.editor.redo().unwrap_or_else(|| "redo vacío".into());
             }
+            Msg::PasteAtPlayhead => {
+                let beat = model
+                    .player
+                    .as_ref()
+                    .filter(|_| model.playing)
+                    .map(|p| p.position_seconds() * model.playback_bpm / 60.0)
+                    .unwrap_or(0.0);
+                if let Some(s) = model.editor.apply(EditMsg::PasteAt { beat }) {
+                    model.status = s;
+                }
+            }
             Msg::ToggleLoop => {
                 let new_region = match model.editor.loop_region {
                     Some(_) => None,
@@ -367,6 +381,20 @@ impl App for Takiy {
             }
             Key::Character(s) if s.eq_ignore_ascii_case("z") && event.modifiers.ctrl => Some(Msg::Undo),
             Key::Character(s) if s.eq_ignore_ascii_case("y") && event.modifiers.ctrl => Some(Msg::Redo),
+            Key::Character(s) if s.eq_ignore_ascii_case("c") && event.modifiers.ctrl => {
+                Some(Msg::Edit(EditMsg::CopySelected))
+            }
+            Key::Character(s) if s.eq_ignore_ascii_case("x") && event.modifiers.ctrl => {
+                Some(Msg::Edit(EditMsg::CutSelected))
+            }
+            Key::Character(s) if s.eq_ignore_ascii_case("v") && event.modifiers.ctrl => {
+                // Paste al beat 0; el playhead-aware paste se agrega
+                // cuando expongamos position_beats al on_key handler.
+                Some(Msg::PasteAtPlayhead)
+            }
+            Key::Character(s) if s.eq_ignore_ascii_case("d") && event.modifiers.ctrl => {
+                Some(Msg::Edit(EditMsg::DuplicateSelected))
+            }
             Key::Character(s) if s.eq_ignore_ascii_case("s") => Some(Msg::Save),
             Key::Character(s) if s == "+" || s == "=" => {
                 Some(Msg::Edit(EditMsg::ResizeSelected { d_beat: 0.5 }))

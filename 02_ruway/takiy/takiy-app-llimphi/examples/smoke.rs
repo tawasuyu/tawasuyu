@@ -123,5 +123,30 @@ fn main() {
     let b = beat.unwrap();
     assert!((b - 2.5).abs() < 1e-2);
 
-    println!("takiy smoke ok — 8 escenarios verdes");
+    // --- Escenario 9: snap + undo + clipboard (F2).
+    use takiy_app::Snap;
+    let mut st = EditorState::new(120.0);
+    st.snap = Snap::Quarter;
+    st.apply(EditMsg::AddNote { beat: 1.07, midi: 60 }); // snap → 1.0
+    let notes = st.score.track(0).unwrap().notes();
+    assert!((notes[0].start - 1.0).abs() < 1e-6);
+
+    // Undo + redo round-trip.
+    st.apply(EditMsg::AddNote { beat: 2.0, midi: 62 });
+    assert_eq!(st.score.track(0).unwrap().notes().len(), 2);
+    st.undo();
+    assert_eq!(st.score.track(0).unwrap().notes().len(), 1);
+    st.redo();
+    assert_eq!(st.score.track(0).unwrap().notes().len(), 2);
+
+    // Copy → paste → duplicate.
+    st.apply(EditMsg::Select { track: 0, idx: 0 });
+    st.apply(EditMsg::CopySelected);
+    assert_eq!(st.clipboard.len(), 1);
+    st.apply(EditMsg::PasteAt { beat: 8.0 });
+    assert_eq!(st.score.track(0).unwrap().notes().len(), 3);
+    st.apply(EditMsg::DuplicateSelected);
+    assert_eq!(st.score.track(0).unwrap().notes().len(), 4);
+
+    println!("takiy smoke ok — 9 escenarios verdes");
 }

@@ -104,6 +104,9 @@ pub struct EditorState {
     /// Stack de redo — snapshots a re-aplicar. Se vacía con cualquier
     /// edición nueva (rama futura abandonada).
     pub future: Vec<Score>,
+    /// Clipboard interno: notas normalizadas (start - min_start ≥ 0) listas
+    /// para pegarse en cualquier beat preservando intervalos relativos.
+    pub clipboard: Vec<ScoreNote>,
 }
 
 /// Niveles máximos del undo stack. 100 cubre flujos típicos; cada
@@ -127,6 +130,7 @@ impl EditorState {
             snap: Snap::default(),
             history: Vec::new(),
             future: Vec::new(),
+            clipboard: Vec::new(),
         }
     }
 
@@ -147,6 +151,7 @@ impl EditorState {
             snap: Snap::default(),
             history: Vec::new(),
             future: Vec::new(),
+            clipboard: Vec::new(),
         }
     }
 
@@ -195,6 +200,15 @@ pub enum EditMsg {
     CycleTrack,
     NewTrack,
     DeleteActiveTrack,
+    /// Copia la nota seleccionada al clipboard interno.
+    CopySelected,
+    /// Copia + borra.
+    CutSelected,
+    /// Pega el contenido del clipboard al `beat` indicado en la pista
+    /// activa, preservando offsets relativos. Sin clipboard, no-op.
+    PasteAt { beat: f32 },
+    /// Duplica la selección al final del compás siguiente.
+    DuplicateSelected,
 }
 
 /// Resultado de aplicar un `EditMsg`: mensaje corto para el header.
@@ -234,6 +248,10 @@ impl EditorState {
             EditMsg::CycleTrack => self.cycle_track(),
             EditMsg::NewTrack => self.new_track(),
             EditMsg::DeleteActiveTrack => self.delete_active_track(),
+            EditMsg::CopySelected => self.copy_selected(),
+            EditMsg::CutSelected => self.cut_selected(),
+            EditMsg::PasteAt { beat } => self.paste_at(beat),
+            EditMsg::DuplicateSelected => self.duplicate_selected(),
         }
     }
 
@@ -400,6 +418,70 @@ impl EditorState {
         let idx = self.score.add_track(Track::new(&name));
         self.active_track = idx;
         Some(format!("new · pista {idx} ({name})"))
+    }
+
+    fn copy_selected(&mut self) -> ApplyOutcome {
+        let (track, idx) = self.selected?;
+        let note = self.score.track(track)?.notes().get(idx).copied()?;
+        // Normalizamos al start = 0 (single note → trivial).
+        self.clipboard = vec![ScoreNote::new(note.pitch, 0.0, note.duration, note.velocity)];
+        Some(format!("copy · 1 nota"))
+    }
+
+    fn cut_selected(&mut self) -> ApplyOutcome {
+        self.copy_selected()?;
+        self.delete_selected();
+        Some("cut · 1 nota".into())
+    }
+
+    fn paste_at(&mut self, beat: f32) -> ApplyOutcome {
+        if self.clipboard.is_empty() {
+            return None;
+        }
+        let snap = self.snap;
+        let track_idx = self.active_track.min(self.score.tracks().len().saturating_sub(1));
+        let track = self.score.track_mut(track_idx)?;
+        let base = snap.snap(beat).max(0.0);
+        let clipboard = std::mem::take(&mut self.clipboard);
+        let n = clipboard.len();
+        let mut first_inserted = None;
+        for note in &clipboard {
+            let new_note = ScoreNote::new(
+                note.pitch,
+                (base + note.start).max(0.0),
+                note.duration,
+                note.velocity,
+            );
+            track.add(new_note);
+            if first_inserted.is_none() {
+                first_inserted = find_note_idx(track.notes(), &new_note);
+            }
+        }
+        // Restituimos el clipboard — el paste no lo consume.
+        self.clipboard = clipboard;
+        if let Some(idx) = first_inserted {
+            self.selected = Some((track_idx, idx));
+        }
+        Some(format!("paste · {n} nota(s) @ beat {base:.1}"))
+    }
+
+    fn duplicate_selected(&mut self) -> ApplyOutcome {
+        let (track_idx, idx) = self.selected?;
+        let note = self.score.track(track_idx)?.notes().get(idx).copied()?;
+        // Duplica una copia justo después de la nota (start + duration),
+        // independientemente del clipboard. Útil para repetir un motivo.
+        let track = self.score.track_mut(track_idx)?;
+        let new_note = ScoreNote::new(
+            note.pitch,
+            note.start + note.duration,
+            note.duration,
+            note.velocity,
+        );
+        track.add(new_note);
+        if let Some(new_idx) = find_note_idx(track.notes(), &new_note) {
+            self.selected = Some((track_idx, new_idx));
+        }
+        Some(format!("duplicate · pista {track_idx}"))
     }
 
     fn delete_active_track(&mut self) -> ApplyOutcome {
@@ -663,6 +745,85 @@ mod tests {
         // MIDI inválido — no muta el score.
         st.apply(EditMsg::AddNote { beat: 0.0, midi: 200 });
         assert_eq!(st.history.len(), len_before, "no debe registrar no-ops");
+    }
+
+    #[test]
+    fn copy_and_paste_creates_a_clone_at_target_beat() {
+        let mut st = EditorState::new(120.0);
+        st.snap = Snap::Free;
+        st.apply(EditMsg::AddNote { beat: 0.0, midi: 60 });
+        st.apply(EditMsg::Select { track: 0, idx: 0 });
+        st.apply(EditMsg::CopySelected);
+        assert_eq!(st.clipboard.len(), 1);
+        st.apply(EditMsg::PasteAt { beat: 4.0 });
+        let notes = st.score.track(0).unwrap().notes();
+        assert_eq!(notes.len(), 2);
+        // Original en beat 0, paste en beat 4.
+        assert!((notes[0].start - 0.0).abs() < 1e-6);
+        assert!((notes[1].start - 4.0).abs() < 1e-6);
+        // Pitch + velocity + duration preservados.
+        assert_eq!(notes[1].pitch.midi(), 60);
+        assert_eq!(notes[1].velocity, 96);
+        assert!((notes[1].duration - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn paste_without_clipboard_is_noop() {
+        let mut st = EditorState::new(120.0);
+        let out = st.apply(EditMsg::PasteAt { beat: 0.0 });
+        assert!(out.is_none());
+        assert!(st.score.track(0).unwrap().notes().is_empty());
+    }
+
+    #[test]
+    fn cut_removes_and_fills_clipboard() {
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::AddNote { beat: 2.0, midi: 64 });
+        st.apply(EditMsg::Select { track: 0, idx: 0 });
+        st.apply(EditMsg::CutSelected);
+        assert!(st.score.track(0).unwrap().notes().is_empty());
+        assert_eq!(st.clipboard.len(), 1);
+        assert_eq!(st.clipboard[0].pitch.midi(), 64);
+    }
+
+    #[test]
+    fn paste_respects_snap() {
+        let mut st = EditorState::new(120.0);
+        st.snap = Snap::Beat; // redondeo entero
+        st.apply(EditMsg::AddNote { beat: 0.0, midi: 60 });
+        st.apply(EditMsg::Select { track: 0, idx: 0 });
+        st.apply(EditMsg::CopySelected);
+        st.apply(EditMsg::PasteAt { beat: 4.3 });
+        let notes = st.score.track(0).unwrap().notes();
+        // 4.3 snappeado a 4.0.
+        assert!((notes[1].start - 4.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn duplicate_inserts_clone_after_note() {
+        let mut st = EditorState::new(120.0);
+        st.snap = Snap::Free;
+        st.apply(EditMsg::AddNote { beat: 0.0, midi: 60 });
+        st.apply(EditMsg::Select { track: 0, idx: 0 });
+        st.apply(EditMsg::DuplicateSelected);
+        let notes = st.score.track(0).unwrap().notes();
+        assert_eq!(notes.len(), 2);
+        // El duplicado va a beat = start + duration = 0 + 1 = 1.
+        assert!((notes[1].start - 1.0).abs() < 1e-6);
+        assert_eq!(notes[1].pitch.midi(), 60);
+    }
+
+    #[test]
+    fn paste_is_undoable() {
+        let mut st = EditorState::new(120.0);
+        st.snap = Snap::Free;
+        st.apply(EditMsg::AddNote { beat: 0.0, midi: 60 });
+        st.apply(EditMsg::Select { track: 0, idx: 0 });
+        st.apply(EditMsg::CopySelected);
+        st.apply(EditMsg::PasteAt { beat: 4.0 });
+        assert_eq!(st.score.track(0).unwrap().notes().len(), 2);
+        st.undo();
+        assert_eq!(st.score.track(0).unwrap().notes().len(), 1);
     }
 
     #[test]
