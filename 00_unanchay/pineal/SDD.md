@@ -166,12 +166,18 @@ Total al 2026-05-28: **130+ tests verdes**.
 
 ## 9. Roadmap
 
-- **GPU direct backend (wgpu)** — paint específico para campos densos
-  (>1M puntos) sin pasar por vello. Es un proyecto aparte, no un hueco
-  del catálogo actual.
+El catálogo de pineal está cerrado: 14 crates de viz/render/export
++ 11 demos ejecutables + SDD propio. **Pineal no tiene roadmap propio
+pendiente.**
 
-El resto del catálogo está cerrado: 14 crates de viz/render/export
-+ 11 demos ejecutables + SDD propio.
+El único techo es el del motor (vello no aguanta >1M primitivos por
+frame), y ése es un asunto horizontal de `llimphi-raster`, no de pineal
+— afecta por igual a cosmos, tinkuy, nakui y cualquier app sobre
+llimphi. Ver `02_ruway/llimphi/SDD.md §"GPU directo wgpu"`.
+
+Cuando llimphi exponga ese backend, pineal heredará un
+`GpuSceneCanvas` que implementa el mismo trait `Canvas` y los painters
+no cambiarán (esa es justamente la razón por la que el trait existe).
 
 ## 10. Lo que NO va a pineal
 
