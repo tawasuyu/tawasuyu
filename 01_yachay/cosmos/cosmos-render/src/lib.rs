@@ -40,7 +40,8 @@ pub mod palette;
 pub mod sphere3d;
 
 pub use draw::{
-    compose_wheel, draw_commands_to_svg, CompositionOpts, DrawCommand, Rgba, TextAnchor,
+    compose_wheel, compose_wheel_with_hits, draw_commands_to_svg, CompositionOpts, DrawCommand,
+    Rgba, TextAnchor, WheelHits,
 };
 pub use gr::{compute_gr_triggers, convergencia_minima, GrDirection, GrTrigger};
 pub use harmonic::apply_harmonic;

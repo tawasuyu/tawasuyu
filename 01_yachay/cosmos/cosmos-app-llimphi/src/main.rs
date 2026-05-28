@@ -13,7 +13,7 @@
 //! Pendiente: store de cartas + form de birth data; AstroCarto/box graphs/
 //! research; scroll vertical en sidebar cuando hay muchos tiles.
 
-use cosmos_canvas_llimphi::canvas_view;
+use cosmos_canvas_llimphi::canvas_view_clickable;
 use cosmos_engine::{
     combinaciones_de_carta, compose, corpus_inputs, Corpus, NatalOptions, PipelineRequest,
 };
@@ -21,7 +21,7 @@ use cosmos_model::{
     Chart, ChartId, ChartKind, ContactId, StoredBirthData, StoredChartConfig, TimeCertainty,
 };
 use cosmos_render::{
-    compose_wheel, AspectSummary, CompositionOpts, LayerKind, RenderModel, UranianGroup,
+    compose_wheel_with_hits, AspectSummary, CompositionOpts, LayerKind, RenderModel, UranianGroup,
 };
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
@@ -53,6 +53,11 @@ enum Msg {
     CargarCarta(String),
     /// Duplicar la carta actual a un nuevo archivo en `cosmos-charts/`.
     DuplicarActual,
+    /// Seleccionar (o deseleccionar con `None`) un cuerpo natal. Se
+    /// dispara desde el `on_click_at` del canvas; al estar
+    /// seleccionado, el wheel atenúa los cuerpos y aspectos no
+    /// relacionados con el elegido.
+    SelectBody(Option<String>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -494,6 +499,10 @@ struct Model {
     /// extiende/recorta cuando los overlays con tile propio se prenden/apagan.
     panel_order: Vec<TileId>,
     corpus: Corpus,
+    /// Cuerpo natal seleccionado (`None` = sin selección). Cuando hay
+    /// selección, el wheel atenúa los cuerpos y aspectos que no lo
+    /// involucran; click en vacío deselecciona.
+    selected_body: Option<String>,
     _wawa_watcher: Option<wawa_config::ConfigWatcher>,
     /// Watcher del archivo `cosmos-chart.json`. Lo mantenemos vivo en el
     /// Model — se cae automáticamente cuando la app cierra.
@@ -545,6 +554,7 @@ impl App for Cosmos {
             error,
             panel_order: ui.panel_order,
             corpus,
+            selected_body: None,
             _wawa_watcher: watcher,
             _chart_watcher: chart_watcher,
         }
@@ -620,6 +630,10 @@ impl App for Cosmos {
                 let name = generate_card_name(&m.chart);
                 save_card(&name, &m.chart);
             }
+            Msg::SelectBody(sel) => {
+                // Toggle: si se clickeó el mismo cuerpo, deselecciona.
+                m.selected_body = if m.selected_body == sel { None } else { sel };
+            }
         }
         if persist {
             save_ui_state(&UiState {
@@ -646,11 +660,23 @@ impl App for Cosmos {
             show_coord_labels: true,
             show_minor_aspects: false,
             dial_3d: true,
+            selected_body: model.selected_body.clone(),
         };
-        let commands = compose_wheel(&model.render, &opts);
+        let (commands, hits) = compose_wheel_with_hits(&model.render, &opts);
 
         let canvas_bg = Color::from_rgba8(8, 10, 16, 255);
-        let canvas = canvas_view::<Msg>(commands, WHEEL_SIZE, Some(canvas_bg));
+        // Click en un planeta natal → selecciona; click en vacío →
+        // deselecciona. `hits` se mueve dentro del closure y vive
+        // hasta el próximo render.
+        let canvas = canvas_view_clickable::<Msg, _>(
+            commands,
+            WHEEL_SIZE,
+            Some(canvas_bg),
+            move |wx, wy| {
+                let picked: Option<String> = hits.pick(wx, wy).map(str::to_string);
+                Some(Msg::SelectBody(picked))
+            },
+        );
 
         let header = header_bar(&model.render, &theme);
         let status = status_bar(model, &theme);

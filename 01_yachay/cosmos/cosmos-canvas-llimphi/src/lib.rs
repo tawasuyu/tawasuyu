@@ -71,6 +71,37 @@ where
     })
 }
 
+/// Variante de [`canvas_view`] que dispara `on_click` cuando el
+/// usuario hace click dentro del canvas. El handler recibe las
+/// coordenadas del click **ya convertidas a coords del wheel** (mismo
+/// espacio en el que se emitieron los `DrawCommand`s), y devuelve
+/// `Option<Msg>`. Pensado para hit-testear contra [`WheelHits`].
+pub fn canvas_view_clickable<Msg, F>(
+    commands: Vec<DrawCommand>,
+    wheel_size: f32,
+    background: Option<Color>,
+    on_click: F,
+) -> View<Msg>
+where
+    Msg: Clone + Send + Sync + 'static,
+    F: Fn(f32, f32) -> Option<Msg> + Send + Sync + 'static,
+{
+    let view = canvas_view::<Msg>(commands, wheel_size, background);
+    view.on_click_at(move |local_x, local_y, rect_w, rect_h| {
+        if wheel_size <= 0.0 {
+            return None;
+        }
+        // Invertir el aspect-fit que aplica `paint_with`.
+        let scale = rect_w.min(rect_h) / wheel_size;
+        let disp = wheel_size * scale;
+        let off_x = (rect_w - disp) * 0.5;
+        let off_y = (rect_h - disp) * 0.5;
+        let wheel_x = (local_x - off_x) / scale;
+        let wheel_y = (local_y - off_y) / scale;
+        on_click(wheel_x, wheel_y)
+    })
+}
+
 fn paint_command(
     scene: &mut llimphi_ui::llimphi_raster::vello::Scene,
     ts: &mut Typesetter,

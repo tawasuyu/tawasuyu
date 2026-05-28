@@ -44,7 +44,7 @@ fn main() {
         harmonic: 1,
     };
     let model = compose_with_options(&sample_chart(), 0, &[], &opts).expect("compose");
-    let copts = CompositionOpts {
+    let mut copts = CompositionOpts {
         size: 900.0,
         rot_offset_deg: 0.0,
         include_bodies: true,
@@ -53,10 +53,20 @@ fn main() {
         show_coord_labels: true,
         show_minor_aspects: false,
         dial_3d: true,
+        selected_body: None,
     };
+    // Render base (sin selección).
     let cmds = compose_wheel(&model, &copts);
     let mut svg = draw_commands_to_svg(&cmds, 900.0);
     svg = svg.replace("<svg ", "<svg style=\"background:rgb(8,10,16)\" ");
     std::fs::write("/tmp/cosmos_wheel.svg", svg).unwrap();
     println!("→ /tmp/cosmos_wheel.svg  ({} cmds)", cmds.len());
+    // Render con selección (planeta `sun`) — verifica que los aspectos y
+    // cuerpos no relacionados se atenúan.
+    copts.selected_body = Some("sun".into());
+    let cmds = compose_wheel(&model, &copts);
+    let mut svg = draw_commands_to_svg(&cmds, 900.0);
+    svg = svg.replace("<svg ", "<svg style=\"background:rgb(8,10,16)\" ");
+    std::fs::write("/tmp/cosmos_wheel_sun.svg", svg).unwrap();
+    println!("→ /tmp/cosmos_wheel_sun.svg  ({} cmds, sun selected)", cmds.len());
 }

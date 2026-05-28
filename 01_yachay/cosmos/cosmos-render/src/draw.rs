@@ -144,6 +144,12 @@ pub struct CompositionOpts {
     /// Activa relieve 3D del dial (varios strokes concéntricos con
     /// alpha decreciente para emular bevel).
     pub dial_3d: bool,
+    /// Cuerpo natal seleccionado (símbolo agnóstico: `"sun"`, `"venus"`,
+    /// …). Cuando hay selección activa, los cuerpos no relacionados y
+    /// las líneas de aspecto que no involucran al seleccionado se
+    /// atenúan (alpha = `0.18`) — el ojo del usuario va al cuerpo y
+    /// sus relaciones.
+    pub selected_body: Option<String>,
 }
 
 impl Default for CompositionOpts {
@@ -157,7 +163,41 @@ impl Default for CompositionOpts {
             show_coord_labels: true,
             show_minor_aspects: false,
             dial_3d: true,
+            selected_body: None,
         }
+    }
+}
+
+/// Regiones hit-testeables del wheel — los discos de los cuerpos
+/// natales en sus posiciones de display (post-spread). El canvas las
+/// usa para mapear un click en (x, y) local del wheel al cuerpo
+/// correspondiente. La lista la emite `compose_wheel_with_hits`
+/// junto con los DrawCommands; el caller la guarda y testea contra
+/// ella cuando llega un evento de click.
+#[derive(Debug, Clone, Default)]
+pub struct WheelHits {
+    /// Cada entry: `(symbol, cx_screen, cy_screen, hit_radius)` — el
+    /// `hit_radius` ya incluye un margen extra sobre el disco visual
+    /// (≈ 1.6 × disk) para que el usuario no tenga que apuntar al
+    /// pixel exacto.
+    pub bodies: Vec<(String, f32, f32, f32)>,
+}
+
+impl WheelHits {
+    /// Encuentra el cuerpo más cercano a `(x, y)` que esté dentro de
+    /// su hit radius. Devuelve `None` si el click cayó en vacío.
+    pub fn pick(&self, x: f32, y: f32) -> Option<&str> {
+        let mut best: Option<(&str, f32)> = None;
+        for (sym, cx, cy, r) in &self.bodies {
+            let d2 = (x - cx).powi(2) + (y - cy).powi(2);
+            if d2 <= r * r {
+                let d = d2.sqrt();
+                if best.map(|(_, bd)| d < bd).unwrap_or(true) {
+                    best = Some((sym.as_str(), d));
+                }
+            }
+        }
+        best.map(|(s, _)| s)
     }
 }
 
@@ -176,8 +216,57 @@ pub fn compose_wheel(
     model: &crate::RenderModel,
     opts: &CompositionOpts,
 ) -> Vec<DrawCommand> {
+    compose_wheel_with_hits(model, opts).0
+}
+
+/// Como [`compose_wheel`], pero además devuelve [`WheelHits`] con las
+/// regiones hit-testeables de los cuerpos. El canvas (o cualquier
+/// otro surface interactivo) usa los hits para resolver clicks a
+/// cuerpos sin tener que re-derivar las posiciones de display.
+pub fn compose_wheel_with_hits(
+    model: &crate::RenderModel,
+    opts: &CompositionOpts,
+) -> (Vec<DrawCommand>, WheelHits) {
     use crate::math::{find_clusters, polar_to_screen, spread_angles, Radii};
     let mut out = Vec::new();
+    let mut hits = WheelHits::default();
+
+    // Vecinos del cuerpo seleccionado: el conjunto de cuerpos que
+    // tienen un aspecto natal con él. Vacío si no hay selección o
+    // si no hay aspectos en el modelo.
+    let related: std::collections::HashSet<String> =
+        if let Some(sel) = opts.selected_body.as_deref() {
+            let mut s = std::collections::HashSet::new();
+            s.insert(sel.to_string());
+            for layer in &model.layers {
+                if !matches!(layer.kind, crate::LayerKind::Aspects)
+                    || layer.module_id != "natal"
+                {
+                    continue;
+                }
+                if let crate::Geometry::Lines(segs) = &layer.geometry {
+                    for seg in segs {
+                        if seg.from_body == sel {
+                            s.insert(seg.to_body.clone());
+                        }
+                        if seg.to_body == sel {
+                            s.insert(seg.from_body.clone());
+                        }
+                    }
+                }
+            }
+            s
+        } else {
+            std::collections::HashSet::new()
+        };
+    let dim_alpha = 0.18_f32;
+    let dim = |rgba: Rgba, is_related: bool| -> Rgba {
+        if opts.selected_body.is_some() && !is_related {
+            rgba.with_alpha(rgba.a * dim_alpha)
+        } else {
+            rgba
+        }
+    };
     // Coord labels (planetas natales + cusps geo) los recolectamos
     // acá y los emitimos al final en un solo bloque, agrupados por
     // proximidad. Eso permite (a) un solo label compartido cuando
@@ -445,7 +534,9 @@ pub fn compose_wheel(
                 let (gx, gy) = polar_to_screen(disp_deg, asc, rot, ring);
 
                 // Halo del disco — color del planeta, fill oscuro/claro según tema
-                let body_color = pal.planet(&g.symbol);
+                let body_is_related = is_natal
+                    && (opts.selected_body.is_none() || related.contains(&g.symbol));
+                let body_color = dim(pal.planet(&g.symbol), body_is_related);
                 let halo_fill = if pal.is_dark {
                     pal.bg_panel.with_alpha(0.92)
                 } else {
@@ -459,6 +550,17 @@ pub fn compose_wheel(
                     fill: Some(halo_fill),
                     stroke_w: 1.2,
                 });
+                // Hit region: disco visual con un margen para que el
+                // usuario no tenga que apuntar al pixel exacto. Sólo
+                // natal — los overlays se ignoran en el hit-test.
+                if is_natal {
+                    hits.bodies.push((
+                        g.symbol.clone(),
+                        cx + gx,
+                        cy + gy,
+                        disk * 1.6,
+                    ));
+                }
                 // Glyph como geometría (path SVG agnóstico de fuente).
                 // El tamaño visual del glyph queda inscripto en el
                 // disco; el factor 1.3 lo deja ligeramente más grande
@@ -559,12 +661,21 @@ pub fn compose_wheel(
                 let alpha = (seg.opacity).clamp(0.0, 1.0);
                 // Width inversa al orbe — orbe 0 → 1.6, orbe 10° → 0.5
                 let width = (1.6 - seg.orb_deg.abs() * 0.10).clamp(0.45, 1.8);
+                // Atenúa cuando hay selección y este aspecto no involucra al cuerpo elegido.
+                let aspect_is_related = match opts.selected_body.as_deref() {
+                    Some(sel) => seg.from_body == sel || seg.to_body == sel,
+                    None => true,
+                };
+                let line_color = dim(
+                    pal.aspect(&seg.kind).with_alpha(alpha),
+                    aspect_is_related,
+                );
                 out.push(DrawCommand::Line {
                     x1: cx + ax,
                     y1: cy + ay,
                     x2: cx + bx,
                     y2: cy + by,
-                    color: pal.aspect(&seg.kind).with_alpha(alpha),
+                    color: line_color,
                     width,
                     dash: None,
                 });
@@ -613,7 +724,7 @@ pub fn compose_wheel(
         }
     }
 
-    out
+    (out, hits)
 }
 
 /// Sirve los `DrawCommand`s como un documento SVG completo.
