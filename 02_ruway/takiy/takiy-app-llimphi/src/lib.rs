@@ -26,4 +26,6 @@ pub use geometry::{
 };
 pub use gm::{gm_program_for_track_name, gm_program_name};
 pub use io::{default_save_path as default_save_path_for_save, load_score, write_score, LoadError};
-pub use model::{describe_key, find_note_idx, EditMsg, EditorState, Snap, MAX_UNDO};
+pub use model::{
+    describe_key, describe_master_delay, find_note_idx, EditMsg, EditorState, Snap, MAX_UNDO,
+};

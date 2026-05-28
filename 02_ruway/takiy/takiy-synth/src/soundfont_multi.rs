@@ -203,6 +203,9 @@ impl Renderer for MultiProgramRenderer {
             samples.push(right[i]);
         }
         let mut buf = AudioBuffer::from_stereo(self.sample_rate, samples);
+        if let Some(delay) = score.master_delay.as_ref() {
+            crate::effects::apply_master_delay(&mut buf, sec_per_beat, delay);
+        }
         buf.normalize_if_clipping();
         buf
     }

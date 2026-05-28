@@ -55,6 +55,9 @@ impl Renderer for OscRenderer {
             }
         }
 
+        if let Some(delay) = score.master_delay.as_ref() {
+            crate::effects::apply_master_delay(&mut buf, sec_per_beat, delay);
+        }
         buf.normalize_if_clipping();
         buf
     }

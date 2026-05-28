@@ -30,6 +30,8 @@
 //!                  sólo undo.
 //! - Click der.   — borra la nota bajo el cursor.
 //! - Wheel        — desplaza la ventana vertical de pitches en semitonos.
+//! - `Alt+D`      — prende / apaga el delay master (preset 1/8, fb 0.35, mix 0.25).
+//! - `Alt+Shift+D` — cicla el tiempo del delay master (1/8 → 1/4 → 1/4· → 1/8· → 1/16).
 //! - `←` / `→`    — mueve la nota seleccionada ±1 beat.
 //! - `↑` / `↓`    — mueve la nota seleccionada ±1 semitono.
 //! - `+` / `-`    — alarga / acorta la nota seleccionada en 0.5 beats.
@@ -780,6 +782,12 @@ impl App for Takiy {
             Key::Character(s) if s.eq_ignore_ascii_case("s") && event.modifiers.alt => {
                 Some(Msg::Edit(EditMsg::ToggleSoloActive))
             }
+            Key::Character(s) if s == "D" && event.modifiers.alt && event.modifiers.shift => {
+                Some(Msg::Edit(EditMsg::CycleMasterDelayTime))
+            }
+            Key::Character(s) if s.eq_ignore_ascii_case("d") && event.modifiers.alt => {
+                Some(Msg::Edit(EditMsg::ToggleMasterDelay))
+            }
             Key::Character(s) if (s == "[" || s == "{") && event.modifiers.alt => {
                 Some(Msg::Edit(EditMsg::NudgeActiveVolume { delta: -0.1 }))
             }
@@ -1069,8 +1077,13 @@ fn paint_piano_roll(
         Some((from, to)) => format!(" · loop {from:.0}..{to:.0}"),
         None => String::new(),
     };
+    let delay_marker = if score.master_delay.is_some() {
+        format!(" · delay {}", takiy_app::describe_master_delay(&score.master_delay))
+    } else {
+        String::new()
+    };
     let header_text = format!(
-        "{source}  ·  {engine}  ·  {:.0} bpm · key {key_label} · snap {snap_label} · undo {undo_depth}{metro_marker}{loop_marker}  ·  active: {active_track}·{active_name}{active_mixer}  ·  {status}",
+        "{source}  ·  {engine}  ·  {:.0} bpm · key {key_label} · snap {snap_label} · undo {undo_depth}{metro_marker}{loop_marker}{delay_marker}  ·  active: {active_track}·{active_name}{active_mixer}  ·  {status}",
         score.tempo_bpm
     );
     let text_color = if playing {

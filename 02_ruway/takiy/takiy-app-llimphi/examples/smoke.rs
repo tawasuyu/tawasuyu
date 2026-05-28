@@ -266,5 +266,42 @@ fn main() {
     let (_lo_hi, hi_hi) = takiy_app::pitch_range_with_offset(&demo, 200);
     assert_eq!(hi_hi, 127, "offset muy positivo se pega al borde 127");
 
-    println!("takiy smoke ok — 15 escenarios verdes");
+    // --- Escenario 16: master delay (F8).
+    //
+    // Verifica que prender el delay master cambia el render (sumando
+    // muestras post-decay) y que el roundtrip de serde con `master_delay`
+    // = Some(_) preserva los parámetros.
+    use takiy_core::DelayParams;
+    // OscRenderer + Renderer ya importados arriba en el escenario 12.
+
+    let mut st = EditorState::new(120.0);
+    st.apply(EditMsg::AddNote { beat: 0.0, midi: 60 });
+    let renderer = OscRenderer { sample_rate: 44_100, ..Default::default() };
+
+    let dry = renderer.render(&st.score);
+    st.apply(EditMsg::ToggleMasterDelay);
+    let with_delay = renderer.render(&st.score);
+
+    // Misma duración base (el delay no extiende el buffer, sólo lo modula):
+    assert_eq!(dry.samples.len(), with_delay.samples.len());
+    // Pero algún sample debe diferir — el delay introduce ecos.
+    let differs = dry
+        .samples
+        .iter()
+        .zip(with_delay.samples.iter())
+        .any(|(a, b)| (a - b).abs() > 1e-6);
+    assert!(differs, "delay no modificó el render");
+
+    // Roundtrip serde: master_delay sobrevive a write/read.
+    let path = std::env::temp_dir().join("takiy-smoke-delay.takiy.json");
+    takiy_app::write_score(&st.score, &path).unwrap();
+    let reloaded = takiy_app::load_score(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(reloaded.master_delay, Some(DelayParams::default()));
+
+    // Cycle de tiempo cambia el time_beats al siguiente preset.
+    st.apply(EditMsg::CycleMasterDelayTime);
+    assert!((st.score.master_delay.unwrap().time_beats - 1.0).abs() < 1e-6);
+
+    println!("takiy smoke ok — 16 escenarios verdes");
 }

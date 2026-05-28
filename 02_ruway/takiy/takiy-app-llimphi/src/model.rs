@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use takiy_core::{Pitch, PitchClass, Scale, Score, ScoreNote, Track};
+use takiy_core::{DelayParams, Pitch, PitchClass, Scale, Score, ScoreNote, Track};
 
 /// Granularidad de snap para edición. Determina cuánto se redondea el
 /// beat al hacer click, mover con flechas o pegar.
@@ -238,6 +238,13 @@ pub enum EditMsg {
     /// Cicla el modo entre los soportados: mayor → menor natural →
     /// pentatónica mayor → vuelta a mayor. Sólo aplica si hay key activa.
     CycleKeyMode,
+    /// Prende/apaga el delay master. Al prenderse arranca con
+    /// `DelayParams::default()` (0.5 beats / fb 0.35 / mix 0.25).
+    ToggleMasterDelay,
+    /// Cicla el `time_beats` del delay master por presets musicales:
+    /// 1/8 (0.5) → 1/4 (1.0) → 1/4-puntillo (1.5) → 1/8-puntillo (0.75)
+    /// → 1/16 (0.25) → vuelta a 1/8. No-op si el delay está apagado.
+    CycleMasterDelayTime,
 }
 
 /// Resultado de aplicar un `EditMsg`: mensaje corto para el header.
@@ -336,6 +343,8 @@ impl EditorState {
             EditMsg::NudgeActivePan { delta } => self.nudge_active_pan(delta),
             EditMsg::CycleKeyRoot => self.cycle_key_root(),
             EditMsg::CycleKeyMode => self.cycle_key_mode(),
+            EditMsg::ToggleMasterDelay => self.toggle_master_delay(),
+            EditMsg::CycleMasterDelayTime => self.cycle_master_delay_time(),
         }
     }
 
@@ -669,6 +678,28 @@ impl EditorState {
         Some(format!("key · {}", describe_key(&self.score.key)))
     }
 
+    fn toggle_master_delay(&mut self) -> ApplyOutcome {
+        self.score.master_delay = match self.score.master_delay {
+            None => Some(DelayParams::default()),
+            Some(_) => None,
+        };
+        Some(format!("delay · {}", describe_master_delay(&self.score.master_delay)))
+    }
+
+    fn cycle_master_delay_time(&mut self) -> ApplyOutcome {
+        // Presets musicales en beats: 1/8, 1/4, 1/4-puntillo, 1/8-puntillo, 1/16.
+        const PRESETS: [f32; 5] = [0.5, 1.0, 1.5, 0.75, 0.25];
+        let Some(params) = self.score.master_delay.as_mut() else {
+            return Some("delay off (no se puede ciclar tiempo)".into());
+        };
+        let idx = PRESETS
+            .iter()
+            .position(|t| (t - params.time_beats).abs() < 1e-3)
+            .unwrap_or(0);
+        params.time_beats = PRESETS[(idx + 1) % PRESETS.len()];
+        Some(format!("delay · {}", describe_master_delay(&self.score.master_delay)))
+    }
+
     fn nudge_active_pan(&mut self, delta: f32) -> ApplyOutcome {
         let idx = self.active_track;
         let track = self.score.track_mut(idx)?;
@@ -768,6 +799,25 @@ fn classify_mode(scale: &Scale) -> KeyMode {
 /// Próxima `PitchClass` en orden cromático (C → C# → … → B → C).
 fn next_pitch_class(pc: PitchClass) -> PitchClass {
     PitchClass::from_semitone(pc.semitone().wrapping_add(1) % 12)
+}
+
+/// Pretty string para el header: `"off"` si no hay delay, o
+/// `"1/8 · fb 0.35 · mix 0.25"` si está prendido. El time se mapea a un
+/// nombre musical cuando coincide con uno conocido, si no se imprime
+/// el float bruto.
+pub fn describe_master_delay(delay: &Option<DelayParams>) -> String {
+    let Some(d) = delay else {
+        return "off".into();
+    };
+    let time = match d.time_beats {
+        t if (t - 0.25).abs() < 1e-3 => "1/16".to_string(),
+        t if (t - 0.5).abs() < 1e-3 => "1/8".to_string(),
+        t if (t - 0.75).abs() < 1e-3 => "1/8·".to_string(),
+        t if (t - 1.0).abs() < 1e-3 => "1/4".to_string(),
+        t if (t - 1.5).abs() < 1e-3 => "1/4·".to_string(),
+        t => format!("{t:.2}b"),
+    };
+    format!("{time} · fb {:.2} · mix {:.2}", d.feedback, d.mix)
 }
 
 /// Pretty string para el header — `"C major"`, `"A minor"`, `"none"`.
@@ -1346,6 +1396,50 @@ mod tests {
         // El undo debe llevar a beat 0 (snapshot original), no a 2.0.
         let n = st.score.track(0).unwrap().notes()[0];
         assert!((n.start - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn toggle_master_delay_round_trips_default() {
+        let mut st = EditorState::new(120.0);
+        assert!(st.score.master_delay.is_none());
+        st.apply(EditMsg::ToggleMasterDelay);
+        let d = st.score.master_delay.unwrap();
+        assert_eq!(d, DelayParams::default(), "arranca con preset razonable");
+        st.apply(EditMsg::ToggleMasterDelay);
+        assert!(st.score.master_delay.is_none(), "vuelve a apagado");
+    }
+
+    #[test]
+    fn toggle_master_delay_is_undoable() {
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::ToggleMasterDelay);
+        assert!(st.score.master_delay.is_some());
+        st.undo();
+        assert!(st.score.master_delay.is_none(), "undo apaga el delay");
+    }
+
+    #[test]
+    fn cycle_master_delay_time_walks_through_presets() {
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::ToggleMasterDelay); // arranca en 0.5
+        let times: Vec<f32> = (0..6)
+            .map(|_| {
+                st.apply(EditMsg::CycleMasterDelayTime);
+                st.score.master_delay.as_ref().unwrap().time_beats
+            })
+            .collect();
+        // Cinco presets — al 6to ciclo vuelve al 1ro.
+        assert_eq!(times.len(), 6);
+        assert!((times[0] - 1.0).abs() < 1e-6, "1/8 → 1/4");
+        assert!((times[5] - times[0]).abs() < 1e-6, "ciclo cerrado");
+    }
+
+    #[test]
+    fn cycle_master_delay_time_when_off_is_noop_with_status() {
+        let mut st = EditorState::new(120.0);
+        let out = st.apply(EditMsg::CycleMasterDelayTime);
+        assert!(st.score.master_delay.is_none(), "no enciende solo");
+        assert!(out.unwrap().contains("off"));
     }
 
     #[test]

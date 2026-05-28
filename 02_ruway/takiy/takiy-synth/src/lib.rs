@@ -15,11 +15,13 @@
 //! - [`renderer`] — `Renderer` trait + `OscRenderer`.
 //! - [`soundfont`] — `SoundFontRenderer` sobre SF2 (rustysynth).
 //! - [`soundfont_multi`] — `MultiProgramRenderer`, preset por pista.
+//! - [`effects`] — efectos de bus master (hoy: delay).
 //! - [`wav`] — escritor WAV PCM 16-bit, sin dependencias.
 
 #![forbid(unsafe_code)]
 
 pub mod audio;
+pub mod effects;
 pub mod envelope;
 pub mod metronome;
 pub mod renderer;
@@ -29,6 +31,7 @@ pub mod waveform;
 pub mod wav;
 
 pub use audio::AudioBuffer;
+pub use effects::apply_master_delay;
 pub use envelope::Adsr;
 pub use metronome::{count_in_samples, mix_clicks, prepend_count_in, Metronome};
 pub use renderer::{OscRenderer, Renderer};

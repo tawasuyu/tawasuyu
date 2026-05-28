@@ -156,6 +156,36 @@ impl Track {
     }
 }
 
+/// Parámetros de un delay master simple por feedback. Cuando un
+/// [`Score`] lleva `master_delay = Some(_)`, el renderer aplica una
+/// línea de retardo con realimentación al mix final.
+///
+/// El feedback se *clampa* al render a `< 1.0` para que la cola decaiga
+/// — un feedback = 1 acumula amplitud y diverge.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct DelayParams {
+    /// Tiempo entre ecos en pulsos. `0.5` = corchea a 4/4, `1.0` =
+    /// negra, `0.75` = corchea con puntillo, etc. El renderer convierte
+    /// a samples usando `score.tempo_bpm`.
+    pub time_beats: f32,
+    /// Realimentación `[0.0, 0.95]`. `0` = una sola repetición (slap),
+    /// `0.5` = ~3 ecos audibles, `0.9` = cola larga. Más de `0.95` no
+    /// se permite — divergiría.
+    pub feedback: f32,
+    /// Mezcla wet `[0.0, 1.0]`. `0` = sin efecto (dry puro),
+    /// `0.5` = parejo, `1.0` = sólo wet (sin dry).
+    pub mix: f32,
+}
+
+impl Default for DelayParams {
+    /// Preset razonable para "encender el delay y oír algo útil": una
+    /// corchea con feedback bajo y mezcla discreta. Está pensado para
+    /// el toggle `Alt+D` de la UI.
+    fn default() -> Self {
+        Self { time_beats: 0.5, feedback: 0.35, mix: 0.25 }
+    }
+}
+
 /// Una partitura: un tempo, una tonalidad opcional y varias pistas.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Score {
@@ -166,13 +196,19 @@ pub struct Score {
     /// `serde(default)` para que los `.takiy.json` pre-F6 carguen igual.
     #[serde(default)]
     pub key: Option<Scale>,
+    /// Delay aplicado al bus master al final del render. `None` =
+    /// bypass (default). `serde(default)` mantiene compat con archivos
+    /// pre-F8 — un score sin esta clave se carga con delay apagado y
+    /// produce el mismo render byte-exact que antes.
+    #[serde(default)]
+    pub master_delay: Option<DelayParams>,
     tracks: Vec<Track>,
 }
 
 impl Score {
     /// Partitura vacía con el tempo dado.
     pub fn new(tempo_bpm: f32) -> Self {
-        Self { tempo_bpm, key: None, tracks: Vec::new() }
+        Self { tempo_bpm, key: None, master_delay: None, tracks: Vec::new() }
     }
 
     /// Añade una pista y devuelve su índice.
