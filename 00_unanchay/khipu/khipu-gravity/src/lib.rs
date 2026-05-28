@@ -96,6 +96,19 @@ impl SemanticField {
         }
     }
 
+    /// Saca la nota del campo. No-op si no estaba. `true` si se removió.
+    pub fn remove(&mut self, id: NoteId) -> bool {
+        let before = self.entries.len();
+        self.entries.retain(|(eid, _)| *eid != id);
+        self.entries.len() != before
+    }
+
+    /// Itera `(id, &vector)` en orden de inserción. Útil para serializar
+    /// el campo completo (persistencia, exportar).
+    pub fn iter(&self) -> impl Iterator<Item = (NoteId, &[f32])> {
+        self.entries.iter().map(|(id, v)| (*id, v.as_slice()))
+    }
+
     fn vector_of(&self, id: NoteId) -> Option<&[f32]> {
         self.entries
             .iter()
@@ -328,6 +341,23 @@ mod tests {
         let a = f.gravity_layout(&GravityConfig::default());
         let b = f.gravity_layout(&GravityConfig::default());
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn remove_drops_a_note() {
+        let mut f = field();
+        assert!(f.remove(2));
+        assert_eq!(f.len(), 2);
+        assert!(!f.remove(99));
+    }
+
+    #[test]
+    fn iter_returns_vectors_in_insertion_order() {
+        let f = field();
+        let collected: Vec<_> = f.iter().map(|(id, v)| (id, v.to_vec())).collect();
+        assert_eq!(collected.len(), 3);
+        assert_eq!(collected[0].0, 1);
+        assert_eq!(collected[2].0, 3);
     }
 
     #[test]

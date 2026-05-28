@@ -6,12 +6,25 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "khipu-app — demostración de la toma de notas: un cuaderno con wiki-links, backlinks, enlaces colgantes y clústeres por gravedad semántica."
+description = "khipu-app — cuaderno de notas sobre Llimphi: lista editable in-situ + canvas de gravedad semántica con persistencia en $XDG_DATA_HOME/khipu/."
 
 [[bin]]
 name = "khipu-app"
 path = "src/main.rs"
 
+[[example]]
+name = "demo_cli"
+path = "examples/demo_cli.rs"
+
 [dependencies]
 khipu-core = { path = "../khipu-core" }
 khipu-gravity = { path = "../khipu-gravity" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-list = { workspace = true }
+llimphi-widget-text-editor = { workspace = true }
+llimphi-widget-text-input = { workspace = true }
+llimphi-widget-tiled = { workspace = true }
+directories = { workspace = true }
+postcard = { workspace = true }
+serde = { workspace = true }
