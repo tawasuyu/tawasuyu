@@ -11,6 +11,9 @@ pub use vello;
 pub use vello::kurbo;
 pub use vello::peniko;
 
+pub mod gpu;
+pub use gpu::{GpuBatch, GpuPipelines};
+
 /// Errores del rasterizador.
 #[derive(Debug)]
 pub enum RasterError {
