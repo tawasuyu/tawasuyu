@@ -231,14 +231,32 @@ Mostrados en orden de dependencia, no de complejidad:
    no cambie de tamaño. El prompt al operador y el log de auditoría
    incluyen el campo `TIPO: cuaderno|configuracion`. 6 tests cubren
    el clasificador.
-6. **Sembrar `asistente.wasm` en GENESIS** o, mejor, dejar que el operador
-   la instale en vivo vía `mudanza` (la palanca de v9/v10 del launcher).
+6. ~~**Sembrar `asistente.wasm` en GENESIS** o, mejor, dejar que el
+   operador la instale en vivo vía `mudanza` (la palanca de v9/v10 del
+   launcher).~~ ✅ HECHO (Fase 60 v5). El `GENESIS[]` de
+   `wawa-boot/src/main.rs` ahora trae una `AppGenesis { nombre:
+   "asistente", archivo: "asistente.wasm", region: (600, 220, 480,
+   240), fuel: FUEL_COMUN, permisos: format::PERMISO_RED }`. La región
+   queda a la derecha del compositor para no superponerse con
+   `mudanza` (que ocupa abajo-izquierda). El `.wasm` se forja con
+   `./scripts/build-asistente.sh` — espejo de `build-pluma.sh`: cargo
+   wasm32 release + `wasm-opt -Os --strip-debug --strip-producers
+   --enable-bulk-memory` + consolidación en
+   `wawa-kernel/assets/asistente.wasm`. Hoy ronda 5.35 KiB (techo
+   nominal 16 KiB).
 
-Estimado restante: 1 sesión — sólo queda la siembra en GENESIS (hito 6)
-con `PERMISO_RAIZ` en la `EntradaApp` para que la app pueda invocar
-`sys_manifiesto_proponer` cerrando el ciclo `Firma → re-ancla`. El
-resto del pipeline está vivo end-to-end (modulo testing en hardware
-real).
+   PENDIENTE para cerrar el ciclo `Firma → sys_manifiesto_proponer`:
+   sumar `PERMISO_RAIZ` a la `EntradaApp` (hoy sólo `PERMISO_RED`) y
+   construir, dentro de la app, el sobre `ManifiestoFirmado` que la
+   syscall espera (32 B hash + 32 B autor + 64 B firma). El sello ya
+   llega por el cable como `Firma { slot, firma 64 B }`; falta sólo
+   embeber la pubkey del slot apropiado del `AGORA_AUTH_RING` y
+   serializar en postcard. Es el mismo patrón que ya usa `mudanza`.
+
+Estimado restante: 1 sesión — la siembra está cerrada; sólo queda
+añadir `PERMISO_RAIZ` y el envío del sobre cuando se desee el ciclo
+end-to-end firma→re-ancla. El pipeline cable está vivo end-to-end
+hasta la firma (modulo testing en hardware real).
 
 ### 5.bis :: la firma sobre el cable (Fase 60 v4)
 
@@ -323,18 +341,20 @@ Por elección, no por descuido:
 ## 9. Estado
 
 **Cerrados**: hitos 1-2 (formato del protocolo y canal Akasha), 3
-(puente Linux con stdio + socket + Akasha), 4 v1+v2+v3+v4 (asistente.wasm
-con UI + input + red + ciclo de firma humana), 5 (daemon-firma
-discrimina cuaderno/configuración).
+(puente Linux con stdio + socket + Akasha), 4 v1+v2+v3+v4
+(asistente.wasm con UI + input + red + ciclo de firma humana), 5
+(daemon-firma discrimina cuaderno/configuración), 6 (siembra en
+GENESIS).
 
-**Abiertos**: hito 6 (siembra en GENESIS). Sólo entonces la app
-asistente puede pedir `PERMISO_RAIZ` en su EntradaApp e invocar
-`sys_manifiesto_proponer` cerrando el ciclo `Firma → re-ancla`.
+**Abiertos**: ninguno crítico. El cierre del ciclo `Firma →
+sys_manifiesto_proponer` (re-ancla atómica desde la app) requiere
+sumar `PERMISO_RAIZ` y construir el sobre `ManifiestoFirmado` dentro
+de la app — patrón idéntico al de `mudanza`. No bloquea el demo
+end-to-end.
 
 Sin urgencia: el asistente Linux cubre el caso de uso "asistente
 conversacional para gioser" para el operador humano de hoy; la versión
 wawa es para cuando wawa sea el daily driver, que aún no lo es. El
 pipeline cable está vivo end-to-end (Consulta → Propuesta → SPACE →
 RequestFirma → operador y/N → Firma → "FIRMADO POR SLOT N" en
-pantalla); sólo falta sembrar la app en GENESIS y conectar la firma
-con el kernel.
+pantalla) y la app `asistente.wasm` ya nace con cada disco virgen.

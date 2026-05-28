@@ -125,16 +125,18 @@ const FUEL_COMUN: u32 = 2_000_000;
 /// presupuesto comun. El primer caso real del modelo "fuel per-app".
 const FUEL_EDITOR: u32 = 6_000_000;
 
-/// El userspace de genesis — las once aplicaciones que pueblan un disco recien
-/// forjado. La `bitacora` (Fase 17, editor que persiste), el `pregon` (Fase 19,
-/// la primera voz hacia la red), la melodia visual `tonada` (Fase 12), el
-/// compas visual `pulso` (Fase 11), un saludo (`hola`), la `memoriosa`
-/// interactiva que recuerda entre sesiones (Fase 7c), tres demos de los
-/// guardarrailes del kernel —`discola` (combustible), `glotona` (memoria),
-/// `cronista` (la cronica de los arranques)—, `tonalero` (Fase 22, testigo
-/// del bucle de Configuracion) y `mudanza` (Fase 25): el centro soberano
-/// de reancla del manifiesto, unica app con PERMISO_RAIZ + sys_manifiesto_proponer.
-const GENESIS: [AppGenesis; 12] = [
+/// El userspace de genesis — las doce aplicaciones que pueblan un disco
+/// recien forjado. La `bitacora` (Fase 17, editor que persiste), el `pregon`
+/// (Fase 19, la primera voz hacia la red), la melodia visual `tonada` (Fase
+/// 12), el compas visual `pulso` (Fase 11), un saludo (`hola`), la
+/// `memoriosa` interactiva que recuerda entre sesiones (Fase 7c), tres
+/// demos de los guardarrailes del kernel —`discola` (combustible),
+/// `glotona` (memoria), `cronista` (la cronica de los arranques)—,
+/// `tonalero` (Fase 22, testigo del bucle de Configuracion), `mudanza`
+/// (Fase 25, el centro soberano de reancla del manifiesto: unica app con
+/// PERMISO_RAIZ + sys_manifiesto_proponer) y `asistente` (Fase 60, app
+/// conversacional que habla con LLMs externos via el puente Linux).
+const GENESIS: [AppGenesis; 13] = [
     AppGenesis { nombre: "bitacora", archivo: "bitacora.wasm", region: (100, 120, 480, 280), fuel: FUEL_EDITOR, permisos: 0 },
     AppGenesis { nombre: "pregon", archivo: "pregon.wasm", region: (100, 120, 480, 160), fuel: FUEL_COMUN, permisos: format::PERMISO_RED },
     AppGenesis { nombre: "tonada", archivo: "tonada.wasm", region: (100, 120, 360, 120), fuel: FUEL_COMUN, permisos: format::PERMISO_ALTAVOZ },
@@ -155,6 +157,21 @@ const GENESIS: [AppGenesis; 12] = [
     // la cadena de F5. Sustituye al `ide` previo: el cuaderno hace todo lo
     // que el IDE hacia y ademas cascadea y persiste.
     AppGenesis { nombre: "pluma", archivo: "pluma.wasm", region: (160, 60, 480, 400), fuel: FUEL_EDITOR, permisos: format::PERMISO_GRAFO_ESCRITURA },
+    // Fase 60 v5 :: `asistente` — app conversacional que pregunta a un LLM
+    // externo via el puente Linux (`asistente-puente --akasha`). El
+    // protocolo cable usa EtherType 0x88B6 sobre `CANAL_ASISTENTE` (0x4153);
+    // la app emite Consulta cuando el operador pulsa Enter y absorbe
+    // Propuesta/Error. Para propuestas hash (Instalar/Cambiar) el operador
+    // pulsa SPACE y la app dispara un RequestFirma; cuando llega la Firma
+    // (host-side, ya sea desde `wawactl daemon-firma` o desde el propio
+    // `asistente-puente --firma-clave`), pinta "FIRMADO POR SLOT N". El
+    // ciclo `Firma -> sys_manifiesto_proponer` aun no esta cerrado en la
+    // app — falta sumar PERMISO_RAIZ y un bucle de sobre firmado que
+    // construya el `ManifiestoFirmado` (espejo del flujo de `mudanza`).
+    // 480x240 es la geometria con la que esta dibujada hoy; la region la
+    // coloca a la derecha del compositor para no superponerse con
+    // mudanza, que esta abajo-izquierda.
+    AppGenesis { nombre: "asistente", archivo: "asistente.wasm", region: (600, 220, 480, 240), fuel: FUEL_COMUN, permisos: format::PERMISO_RED },
 ];
 
 /// Techo de memoria lineal de cada app de genesis: 4 MiB. Un modulo que intente
