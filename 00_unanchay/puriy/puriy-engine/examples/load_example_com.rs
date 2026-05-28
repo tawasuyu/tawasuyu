@@ -57,7 +57,7 @@ fn dump(b: &BoxNode, depth: usize) {
         None => String::new(),
     };
     println!(
-        "{indent}<{tag} {:?} fs={} m={} p={}{bg}> {}",
+        "{indent}<{tag} {:?} fs={} m={:?} p={:?}{bg}> {}",
         b.display, b.font_size, b.margin, b.padding, txt
     );
     for c in &b.children {

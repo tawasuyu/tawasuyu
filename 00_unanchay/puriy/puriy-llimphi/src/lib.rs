@@ -37,7 +37,7 @@ use puriy_engine::{
     BoxSizing as CssBoxSizing, BoxTree, Display, Engine, FlexDirection as CssFlexDirection,
     FlexWrap as CssFlexWrap, GridTrackSize, JustifyContent as CssJustifyContent, LengthVal,
     LinearGradient, Overflow, PointerEvents, Position as CssPosition, TextAlign,
-    TextDecorationLine, TextShadow, Transform, VerticalAlign, Visibility,
+    TextDecorationLine, VerticalAlign, Visibility,
 };
 
 const HEADER_H: f32 = 78.0;
@@ -154,7 +154,14 @@ impl TabState {
 pub struct Model {
     pub tabs: Vec<TabState>,
     pub active: usize,
+    /// Factor de zoom de la página (1.0 = 100%). `Ctrl+=` lo sube,
+    /// `Ctrl+-` lo baja, `Ctrl+0` lo resetea. Clampado a 0.5..3.0.
+    pub zoom: f32,
 }
+
+const ZOOM_MIN: f32 = 0.5;
+const ZOOM_MAX: f32 = 3.0;
+const ZOOM_STEP: f32 = 1.1;
 
 impl Model {
     fn active(&self) -> &TabState {
@@ -187,6 +194,12 @@ pub enum Msg {
     /// Ctrl+D — agrega la URL de la pestaña activa al BookmarkStore del
     /// Profile. Si el chrome corre sin profile, no-op.
     Bookmark,
+    /// Ctrl+= / Ctrl++ — sube el zoom por `ZOOM_STEP` clamp a `ZOOM_MAX`.
+    ZoomIn,
+    /// Ctrl+- — baja el zoom por `ZOOM_STEP` clamp a `ZOOM_MIN`.
+    ZoomOut,
+    /// Ctrl+0 — reset a 1.0.
+    ZoomReset,
 }
 
 impl App for Puriy {
@@ -212,7 +225,7 @@ impl App for Puriy {
         let mut tab = TabState::new(url.clone());
         tab.gen = 1;
         spawn_load(tab.id, tab.gen, url, handle.clone());
-        Model { tabs: vec![tab], active: 0 }
+        Model { tabs: vec![tab], active: 0, zoom: 1.0 }
     }
 
     fn on_key(model: &Self::Model, e: &KeyEvent) -> Option<Self::Msg> {
@@ -230,6 +243,16 @@ impl App for Puriy {
                 Key::Character(s) if s.eq_ignore_ascii_case("d") => return Some(Msg::Bookmark),
                 Key::Named(NamedKey::Tab) if mods.shift => return Some(Msg::PrevTab),
                 Key::Named(NamedKey::Tab) => return Some(Msg::NextTab),
+                // Zoom: Ctrl+= / Ctrl++ / Ctrl+- / Ctrl+0. El charset depende
+                // del layout — aceptamos `=`/`+` para zoom in y `-`/`_` para
+                // zoom out por compat con teclados sin numpad.
+                Key::Character(s) if s.as_str() == "=" || s.as_str() == "+" => {
+                    return Some(Msg::ZoomIn);
+                }
+                Key::Character(s) if s.as_str() == "-" || s.as_str() == "_" => {
+                    return Some(Msg::ZoomOut);
+                }
+                Key::Character(s) if s.as_str() == "0" => return Some(Msg::ZoomReset),
                 _ => {}
             }
         }
@@ -398,14 +421,28 @@ impl App for Puriy {
                 }
                 persist_profile();
             }
+            Msg::ZoomIn => {
+                let new_zoom = (m.zoom * ZOOM_STEP).min(ZOOM_MAX);
+                m.zoom = new_zoom;
+                m.active_mut().status = format!("zoom: {}%", (new_zoom * 100.0).round() as i32);
+            }
+            Msg::ZoomOut => {
+                let new_zoom = (m.zoom / ZOOM_STEP).max(ZOOM_MIN);
+                m.zoom = new_zoom;
+                m.active_mut().status = format!("zoom: {}%", (new_zoom * 100.0).round() as i32);
+            }
+            Msg::ZoomReset => {
+                m.zoom = 1.0;
+                m.active_mut().status = "zoom: 100%".into();
+            }
         }
         m
     }
 
     fn view(model: &Self::Model) -> View<Self::Msg> {
         let tabs_bar = tabs_bar(model);
-        let header = header_bar(model.active());
-        let body = viewport(model.active());
+        let header = header_bar(model.active(), model.zoom);
+        let body = viewport(model.active(), model.zoom);
 
         View::new(Style {
             flex_direction: FlexDirection::Column,
@@ -547,7 +584,7 @@ fn tabs_bar(model: &Model) -> View<Msg> {
     .children(kids)
 }
 
-fn header_bar(t: &TabState) -> View<Msg> {
+fn header_bar(t: &TabState, zoom: f32) -> View<Msg> {
     let palette = TextInputPalette::default();
     let addr = text_input_view(&t.addr, "ingresar URL…", t.addr_focused, &palette, Msg::FocusAddr);
 
@@ -590,9 +627,14 @@ fn header_bar(t: &TabState) -> View<Msg> {
     ]);
 
     let title_line = if t.title.is_empty() { t.url.as_str() } else { t.title.as_str() };
+    let zoom_tag = if (zoom - 1.0).abs() > 0.005 {
+        format!("    ·    zoom: {}%", (zoom * 100.0).round() as i32)
+    } else {
+        String::new()
+    };
     let status_line = format!(
-        "{}    ·    status: {}    ·    [Ctrl+T nueva · Ctrl+W cerrar · Ctrl+Tab rotar · Alt+←/→ back/fwd · F5 recargar]",
-        title_line, t.status,
+        "{}    ·    status: {}{}    ·    [Ctrl+T nueva · Ctrl+W cerrar · Ctrl+Tab rotar · Alt+←/→ back/fwd · F5 recargar · Ctrl+= / Ctrl+- / Ctrl+0 zoom]",
+        title_line, t.status, zoom_tag,
     );
 
     View::new(Style {
@@ -624,7 +666,7 @@ fn header_bar(t: &TabState) -> View<Msg> {
     ])
 }
 
-fn viewport(t: &TabState) -> View<Msg> {
+fn viewport(t: &TabState, zoom: f32) -> View<Msg> {
     let Some(tree) = t.box_tree.as_ref() else {
         let msg = if t.url == NEW_TAB_URL {
             "(pestaña vacía · escribí una URL arriba)"
@@ -642,9 +684,12 @@ fn viewport(t: &TabState) -> View<Msg> {
             ..Default::default()
         })
         .fill(Color::WHITE)
-        .text_aligned(msg.to_string(), 14.0, Color::from_rgb8(120, 120, 120), Alignment::Start);
+        .text_aligned(msg.to_string(), 14.0 * zoom, Color::from_rgb8(120, 120, 120), Alignment::Start);
     };
 
+    // Margen del viewport y scroll: el margen interior (24 px / 16 px) no
+    // se escala para que el "marco" del documento sea estable; lo que
+    // escala es el contenido (font_size + spacing del box tree).
     let content = View::new(Style {
         position: TaffyPosition::Absolute,
         inset: Rect {
@@ -656,7 +701,7 @@ fn viewport(t: &TabState) -> View<Msg> {
         flex_direction: FlexDirection::Column,
         ..Default::default()
     })
-    .children(vec![render_box(&tree.root)]);
+    .children(vec![render_box(&tree.root, zoom)]);
 
     View::new(Style {
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
@@ -667,8 +712,8 @@ fn viewport(t: &TabState) -> View<Msg> {
     .children(vec![content])
 }
 
-fn render_box(b: &BoxNode) -> View<Msg> {
-    let style = box_style(b);
+fn render_box(b: &BoxNode, zoom: f32) -> View<Msg> {
+    let style = box_style(b, zoom);
     let mut view = View::new(style);
 
     // visibility:hidden ocupa espacio pero no pinta. Devolvemos la view
@@ -689,7 +734,7 @@ fn render_box(b: &BoxNode) -> View<Msg> {
             let a = ((hbg.a as f32) * alpha_mul) as u8;
             view = view.hover_fill(Color::from_rgba8(hbg.r, hbg.g, hbg.b, a));
         }
-        view = apply_decorations(view, b);
+        view = apply_decorations(view, b, zoom);
     }
     if hidden {
         // Sin children/text — el subárbol queda invisible pero ocupando
@@ -725,11 +770,12 @@ fn render_box(b: &BoxNode) -> View<Msg> {
     if let Some(img) = &b.image {
         let blob = Blob::from(img.rgba.clone());
         let peniko = PenikoImage::new(blob, ImageFormat::Rgba8, img.width, img.height);
-        return image_view(img.width, img.height).image(peniko);
+        return image_view(img.width, img.height, zoom).image(peniko);
     }
 
     if let Some(text) = &b.text {
-        let size = if b.font_weight >= 600 { b.font_size * 1.1 } else { b.font_size };
+        let base = if b.font_weight >= 600 { b.font_size * 1.1 } else { b.font_size };
+        let size = base * zoom;
         // text-shadows: paint_with previo al texto. Cada shadow se pinta
         // como una segunda capa de texto desplazada y semitransparente —
         // peniko no expone draw text directo desde el callback, así que
@@ -737,20 +783,21 @@ fn render_box(b: &BoxNode) -> View<Msg> {
         // Aproximación suficiente para hero text decorativo.
         if !b.text_shadows.is_empty() {
             let shadows = b.text_shadows.clone();
+            let z = zoom as f64;
             view = view.paint_with(move |scene, _ts, rect| {
                 for sh in &shadows {
                     // Banda horizontal centrada de altura ≈ font_size,
                     // desplazada por (offset_x, offset_y), expandida por
                     // blur. Alpha proporcional al blur (más blur = más
                     // difuso = menos opaco).
-                    let extra = sh.blur_px as f64 * 0.5;
+                    let extra = sh.blur_px as f64 * 0.5 * z;
                     let mid_y = rect.y as f64 + rect.h as f64 * 0.55;
                     let h = size as f64 * 0.55;
                     let r = KurboRect::new(
-                        rect.x as f64 + sh.offset_x as f64 - extra,
-                        mid_y - h * 0.5 + sh.offset_y as f64 - extra,
-                        (rect.x + rect.w) as f64 + sh.offset_x as f64 + extra,
-                        mid_y + h * 0.5 + sh.offset_y as f64 + extra,
+                        rect.x as f64 + sh.offset_x as f64 * z - extra,
+                        mid_y - h * 0.5 + sh.offset_y as f64 * z - extra,
+                        (rect.x + rect.w) as f64 + sh.offset_x as f64 * z + extra,
+                        mid_y + h * 0.5 + sh.offset_y as f64 * z + extra,
                     );
                     let alpha = if sh.blur_px > 0.0 { 0.35 } else { 0.6 };
                     let c = Color::from_rgba8(
@@ -768,9 +815,9 @@ fn render_box(b: &BoxNode) -> View<Msg> {
 
     if !b.children.is_empty() {
         let kids: Vec<View<Msg>> = if let Some(target) = &b.link {
-            b.children.iter().map(|c| render_link_subtree(c, target, link_color)).collect()
+            b.children.iter().map(|c| render_link_subtree(c, target, link_color, zoom)).collect()
         } else {
-            b.children.iter().map(render_box).collect()
+            b.children.iter().map(|c| render_box(c, zoom)).collect()
         };
         view = view.children(kids);
     }
@@ -780,9 +827,9 @@ fn render_box(b: &BoxNode) -> View<Msg> {
 /// View dimensionada para una imagen — ancho hasta `width_px` pero
 /// nunca más que el contenedor (`max_width: 100%`), altura proporcional
 /// vía aspect ratio inverso (`width / height`).
-fn image_view(width: u32, height: u32) -> View<Msg> {
-    let w = (width.max(1)) as f32;
-    let h = (height.max(1)) as f32;
+fn image_view(width: u32, height: u32, zoom: f32) -> View<Msg> {
+    let w = (width.max(1)) as f32 * zoom;
+    let h = (height.max(1)) as f32 * zoom;
     View::new(Style {
         size: Size { width: length(w), height: length(h) },
         max_size: Size {
@@ -792,34 +839,35 @@ fn image_view(width: u32, height: u32) -> View<Msg> {
         margin: Rect {
             left: length(0.0_f32),
             right: length(0.0_f32),
-            top: length(4.0_f32),
-            bottom: length(4.0_f32),
+            top: length(4.0_f32 * zoom),
+            bottom: length(4.0_f32 * zoom),
         },
         ..Default::default()
     })
 }
 
-fn render_link_subtree(b: &BoxNode, target: &str, color: Color) -> View<Msg> {
-    let mut view = View::new(box_style(b)).on_click(Msg::Navigate(target.to_string()));
+fn render_link_subtree(b: &BoxNode, target: &str, color: Color, zoom: f32) -> View<Msg> {
+    let mut view = View::new(box_style(b, zoom)).on_click(Msg::Navigate(target.to_string()));
     if let Some(bg) = b.background {
         view = view.fill(Color::from_rgb8(bg.r, bg.g, bg.b));
     }
     if let Some(img) = &b.image {
         let blob = Blob::from(img.rgba.clone());
         let peniko = PenikoImage::new(blob, ImageFormat::Rgba8, img.width, img.height);
-        return image_view(img.width, img.height)
+        return image_view(img.width, img.height, zoom)
             .image(peniko)
             .on_click(Msg::Navigate(target.to_string()));
     }
     if let Some(text) = &b.text {
-        let size = if b.font_weight >= 600 { b.font_size * 1.1 } else { b.font_size };
+        let base = if b.font_weight >= 600 { b.font_size * 1.1 } else { b.font_size };
+        let size = base * zoom;
         return view.text_aligned(text.clone(), size, color, Alignment::Start);
     }
     if !b.children.is_empty() {
         view = view.children(
             b.children
                 .iter()
-                .map(|c| render_link_subtree(c, target, color))
+                .map(|c| render_link_subtree(c, target, color, zoom))
                 .collect(),
         );
     }
@@ -833,15 +881,22 @@ fn render_link_subtree(b: &BoxNode, target: &str, color: Color) -> View<Msg> {
 /// parent. Aproximación: sin gaussian blur — el `blur_px` se mapea
 /// como expansión adicional del rect con alpha proporcional, lo cual
 /// da una sombra "dura" pero proporcionada.
-fn apply_decorations(mut view: View<Msg>, b: &BoxNode) -> View<Msg> {
+fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> View<Msg> {
+    let z = zoom;
     if b.border_radius > 0.0 {
-        view = view.radius(b.border_radius as f64);
+        view = view.radius((b.border_radius * z) as f64);
     }
-    let radius = b.border_radius as f64;
-    let shadow = b.box_shadow;
+    let radius = (b.border_radius * z) as f64;
+    let shadow = b.box_shadow.map(|s| BoxShadow {
+        offset_x: s.offset_x * z,
+        offset_y: s.offset_y * z,
+        blur_px: s.blur_px * z,
+        spread_px: s.spread_px * z,
+        color: s.color,
+    });
     let alpha_mul = b.opacity.clamp(0.0, 1.0);
     let border = match (b.border_color, b.border_width) {
-        (Some(c), w) if w > 0.0 => Some((c, w)),
+        (Some(c), w) if w > 0.0 => Some((c, w * z)),
         _ => None,
     };
     // outline se pinta fuera del border + offset, sin afectar layout. Si
@@ -852,8 +907,8 @@ fn apply_decorations(mut view: View<Msg>, b: &BoxNode) -> View<Msg> {
     {
         Some((
             b.outline.color.unwrap(),
-            b.outline.width,
-            b.outline.offset,
+            b.outline.width * z,
+            b.outline.offset * z,
         ))
     } else {
         None
@@ -861,7 +916,7 @@ fn apply_decorations(mut view: View<Msg>, b: &BoxNode) -> View<Msg> {
     // text-decoration sólo tiene efecto visual sobre hojas de texto. En
     // un nodo container, la línea ya la pinta cada hoja descendiente.
     let deco = if b.text.is_some() && b.text_decoration != TextDecorationLine::None {
-        Some((b.text_decoration, b.color, b.font_size))
+        Some((b.text_decoration, b.color, b.font_size * z))
     } else {
         None
     };
@@ -967,14 +1022,14 @@ fn apply_decorations(mut view: View<Msg>, b: &BoxNode) -> View<Msg> {
     })
 }
 
-fn box_style(b: &BoxNode) -> Style {
+fn box_style(b: &BoxNode, zoom: f32) -> Style {
     // Si el nodo es una hoja de texto, le damos un height ≈ line-height
     // para que el row del padre tenga altura real — sin esto, taffy
     // colapsa los inlines al top del bloque. Para inlines con hijos
     // dejamos auto y que el padre mida.
     let is_text_leaf = b.text.is_some();
     let lh_mult = b.line_height.unwrap_or(1.4);
-    let line_h = b.font_size * lh_mult;
+    let line_h = b.font_size * lh_mult * zoom;
 
     let is_flex = matches!(b.display, Display::Flex | Display::InlineFlex);
 
@@ -1017,16 +1072,16 @@ fn box_style(b: &BoxNode) -> Style {
     width = w_base;
 
     // CSS `width` explícito gana sobre el default de display.
-    if let Some(explicit) = length_to_taffy(b.width) {
+    if let Some(explicit) = length_to_taffy(b.width, zoom) {
         width = explicit;
     }
     let max_size = Size {
-        width: length_to_taffy(b.max_width).unwrap_or_else(auto),
-        height: length_to_taffy(b.max_height).unwrap_or_else(auto),
+        width: length_to_taffy(b.max_width, zoom).unwrap_or_else(auto),
+        height: length_to_taffy(b.max_height, zoom).unwrap_or_else(auto),
     };
     let min_size = Size {
-        width: length_to_taffy(b.min_width).unwrap_or_else(|| length(0.0_f32)),
-        height: length_to_taffy(b.min_height).unwrap_or_else(|| length(0.0_f32)),
+        width: length_to_taffy(b.min_width, zoom).unwrap_or_else(|| length(0.0_f32)),
+        height: length_to_taffy(b.min_height, zoom).unwrap_or_else(|| length(0.0_f32)),
     };
 
     // justify/align: si es flex, vienen del autor; sino, sólo derivamos
@@ -1054,8 +1109,8 @@ fn box_style(b: &BoxNode) -> Style {
     // `Size { width: column-gap, height: row-gap }`.
     let gap = if is_flex {
         Size {
-            width: length(b.gap_column),
-            height: length(b.gap_row),
+            width: length(b.gap_column * zoom),
+            height: length(b.gap_row * zoom),
         }
     } else {
         Size { width: length(0.0_f32), height: length(0.0_f32) }
@@ -1078,7 +1133,7 @@ fn box_style(b: &BoxNode) -> Style {
         VerticalAlign::Bottom | VerticalAlign::Sub => Some(AlignSelf::End),
         VerticalAlign::Super => Some(AlignSelf::Start),
     };
-    let flex_basis: Dimension = length_to_taffy(b.flex_basis).unwrap_or_else(auto);
+    let flex_basis: Dimension = length_to_taffy(b.flex_basis, zoom).unwrap_or_else(auto);
 
     // Position + insets (top/right/bottom/left).
     let position_kind = match b.position {
@@ -1087,10 +1142,10 @@ fn box_style(b: &BoxNode) -> Style {
         CssPosition::Absolute | CssPosition::Fixed => TaffyPosition::Absolute,
     };
     let inset = Rect {
-        top: length_to_inset(b.inset_top),
-        right: length_to_inset(b.inset_right),
-        bottom: length_to_inset(b.inset_bottom),
-        left: length_to_inset(b.inset_left),
+        top: length_to_inset(b.inset_top, zoom),
+        right: length_to_inset(b.inset_right, zoom),
+        bottom: length_to_inset(b.inset_bottom, zoom),
+        left: length_to_inset(b.inset_left, zoom),
     };
 
     // Taffy Display: Block/Flex/Grid/None. Inline/InlineBlock las
@@ -1101,11 +1156,12 @@ fn box_style(b: &BoxNode) -> Style {
         _ => TaffyDisplay::Flex,
     };
 
-    // Grid templates — sólo se aplican si display es grid.
+    // Grid templates — sólo se aplican si display es grid. Las pistas Px
+    // se escalan con zoom; fr/auto/pct quedan intactas.
     let grid_template_columns: Vec<GridTemplateComponent<String>> =
-        if is_grid { b.grid_template_columns.iter().map(map_grid_track).collect() } else { Vec::new() };
+        if is_grid { b.grid_template_columns.iter().map(|t| map_grid_track(t, zoom)).collect() } else { Vec::new() };
     let grid_template_rows: Vec<GridTemplateComponent<String>> =
-        if is_grid { b.grid_template_rows.iter().map(map_grid_track).collect() } else { Vec::new() };
+        if is_grid { b.grid_template_rows.iter().map(|t| map_grid_track(t, zoom)).collect() } else { Vec::new() };
 
     Style {
         display: taffy_display,
@@ -1125,16 +1181,16 @@ fn box_style(b: &BoxNode) -> Style {
         min_size,
         max_size,
         margin: Rect {
-            left: length(b.margin.left),
-            right: length(b.margin.right),
-            top: length(b.margin.top),
-            bottom: length(b.margin.bottom),
+            left: length(b.margin.left * zoom),
+            right: length(b.margin.right * zoom),
+            top: length(b.margin.top * zoom),
+            bottom: length(b.margin.bottom * zoom),
         },
         padding: Rect {
-            left: length(b.padding.left),
-            right: length(b.padding.right),
-            top: length(b.padding.top),
-            bottom: length(b.padding.bottom),
+            left: length(b.padding.left * zoom),
+            right: length(b.padding.right * zoom),
+            top: length(b.padding.top * zoom),
+            bottom: length(b.padding.bottom * zoom),
         },
         grid_template_columns: grid_template_columns.into(),
         grid_template_rows: grid_template_rows.into(),
@@ -1142,10 +1198,10 @@ fn box_style(b: &BoxNode) -> Style {
     }
 }
 
-fn map_grid_track(t: &GridTrackSize) -> GridTemplateComponent<String> {
+fn map_grid_track(t: &GridTrackSize, zoom: f32) -> GridTemplateComponent<String> {
     let single: TrackSizingFunction = match t {
         GridTrackSize::Auto => auto(),
-        GridTrackSize::Px(v) => length(*v),
+        GridTrackSize::Px(v) => length(*v * zoom),
         GridTrackSize::Pct(v) => percent(*v / 100.0),
         GridTrackSize::Fr(v) => fr(*v),
     };
@@ -1153,11 +1209,12 @@ fn map_grid_track(t: &GridTrackSize) -> GridTemplateComponent<String> {
 }
 
 /// `length-percentage-auto`: para insets (top/right/bottom/left) que
-/// aceptan `auto` además de px/%.
-fn length_to_inset(v: LengthVal) -> LengthPercentageAuto {
+/// aceptan `auto` además de px/%. `zoom` escala sólo el valor Px;
+/// los porcentajes se resuelven contra el contenedor (que también escala).
+fn length_to_inset(v: LengthVal, zoom: f32) -> LengthPercentageAuto {
     match v {
         LengthVal::Auto => auto(),
-        LengthVal::Px(px) => length(px),
+        LengthVal::Px(px) => length(px * zoom),
         LengthVal::Pct(pct) => percent(pct / 100.0),
     }
 }
@@ -1260,10 +1317,10 @@ fn map_align(a: CssAlignItems) -> AlignItems {
 /// Traduce un `LengthVal` CSS al tipo de longitud que taffy entiende.
 /// `Auto` queda como `None` (caller lo reemplaza con el default según
 /// display o `auto()` para max-size).
-fn length_to_taffy(v: LengthVal) -> Option<llimphi_layout::taffy::style::Dimension> {
+fn length_to_taffy(v: LengthVal, zoom: f32) -> Option<llimphi_layout::taffy::style::Dimension> {
     match v {
         LengthVal::Auto => None,
-        LengthVal::Px(px) => Some(length(px)),
+        LengthVal::Px(px) => Some(length(px * zoom)),
         LengthVal::Pct(pct) => Some(percent(pct / 100.0)),
     }
 }
