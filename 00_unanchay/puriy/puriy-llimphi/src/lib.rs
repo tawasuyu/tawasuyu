@@ -1508,6 +1508,12 @@ fn render_box(
                         size: Size { width: percent(1.0_f32), height: auto() },
                         ..Default::default()
                     })
+                    // Hover feedback sobre toda la fila (flecha + summary)
+                    // para que sea evidente que es clickeable. El CSS no
+                    // suele estilar `<summary>:hover`, así que es nuestra
+                    // contribución de chrome — un gris muy suave.
+                    .hover_fill(Color::from_rgba8(0, 0, 0, 18))
+                    .on_click(Msg::ToggleDetails(my_idx))
                     .children(vec![arrow_view, summary_view]),
                 );
             } else if open {
@@ -1717,12 +1723,18 @@ fn skip_count_details(b: &BoxNode, counter: &mut usize) {
 fn image_view(width: u32, height: u32, zoom: f32) -> View<Msg> {
     let w = (width.max(1)) as f32 * zoom;
     let h = (height.max(1)) as f32 * zoom;
+    let ratio = if height > 0 { Some(width as f32 / height as f32) } else { None };
     View::new(Style {
         size: Size { width: length(w), height: length(h) },
+        // `max-width: 100%` clampa el ancho al contenedor (responsive
+        // por default — sin esto, imágenes grandes rompen layouts narrow);
+        // `aspect_ratio` deja que taffy preserve la proporción cuando el
+        // ancho real (post-clamp) sea menor que `length(w)`.
         max_size: Size {
             width: percent(1.0_f32),
             height: auto(),
         },
+        aspect_ratio: ratio,
         margin: Rect {
             left: length(0.0_f32),
             right: length(0.0_f32),
