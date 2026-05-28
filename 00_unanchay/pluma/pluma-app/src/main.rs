@@ -43,7 +43,7 @@ use llimphi_widget_button::{button_view, ButtonPalette};
 use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
 use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
 use llimphi_widget_text_editor::{
-    EditorMetrics, EditorPalette as TEPalette, Language, MemClipboard, PointerEvent,
+    Clipboard, EditorMetrics, EditorPalette as TEPalette, Language, PointerEvent,
 };
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 use pluma_align::CartaHebras;
@@ -134,7 +134,7 @@ struct Model {
     /// la lista de cuerpos está vacía — el init siembra uno para evitarlo.
     activo: Option<Uuid>,
     ide: CuerpoIde,
-    clipboard: MemClipboard,
+    clipboard: ArboardClipboard,
     drag_accum: (f32, f32),
 
     chat: Arc<dyn ChatClient>,
@@ -328,7 +328,7 @@ fn init_modelo() -> Model {
         transformaciones,
         activo,
         ide,
-        clipboard: MemClipboard::default(),
+        clipboard: ArboardClipboard::new(),
         drag_accum: (0.0, 0.0),
         chat,
         backend_idx,
@@ -1672,4 +1672,35 @@ fn ahora_unix() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+// ---------------------------------------------------------------------
+// Clipboard backend — arboard puente al portapapeles del sistema
+// ---------------------------------------------------------------------
+
+/// Wrapper sobre `arboard::Clipboard`. Si el sistema no expone uno
+/// (headless CI, sin Wayland/X), `inner` queda en `None` y los métodos
+/// son no-op silenciosos — exactamente la semántica documentada del
+/// trait [`Clipboard`].
+struct ArboardClipboard {
+    inner: Option<arboard::Clipboard>,
+}
+
+impl ArboardClipboard {
+    fn new() -> Self {
+        Self {
+            inner: arboard::Clipboard::new().ok(),
+        }
+    }
+}
+
+impl Clipboard for ArboardClipboard {
+    fn get(&mut self) -> Option<String> {
+        self.inner.as_mut()?.get_text().ok()
+    }
+    fn set(&mut self, s: &str) {
+        if let Some(c) = self.inner.as_mut() {
+            let _ = c.set_text(s.to_owned());
+        }
+    }
 }
