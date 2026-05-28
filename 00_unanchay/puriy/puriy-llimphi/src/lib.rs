@@ -888,6 +888,34 @@ impl App for Puriy {
         m
     }
 
+    fn view_overlay(model: &Self::Model) -> Option<View<Self::Msg>> {
+        // Si algún `<select>` está abierto, mostramos su lista como un
+        // overlay centrado. Sin layout positioning real (no sabemos
+        // dónde quedó el header del select en pantalla), el centrado
+        // es la opción menos sorprendente. Click en una opción cierra;
+        // backdrop transparente cierra también.
+        let t = model.active();
+        let (sel_idx, sel_state) = t
+            .selects
+            .iter()
+            .enumerate()
+            .find(|(_, s)| s.open)?;
+        // Busca el SelectInfo correspondiente en el box tree por DFS idx.
+        let tree = t.box_tree.as_ref()?;
+        let mut info: Option<puriy_engine::SelectInfo> = None;
+        let mut counter = 0usize;
+        tree.walk(|b| {
+            if let Some(s) = &b.select {
+                if counter == sel_idx {
+                    info = Some(s.clone());
+                }
+                counter += 1;
+            }
+        });
+        let info = info?;
+        Some(select_overlay_view(sel_idx, sel_state.selected, info))
+    }
+
     fn view(model: &Self::Model) -> View<Self::Msg> {
         let tabs_bar = tabs_bar(model);
         let header = header_bar(model.active(), model.zoom, model.hover_link.as_deref());
@@ -2485,40 +2513,11 @@ fn render_select(
         ),
     ]);
 
-    let mut all: Vec<View<Msg>> = vec![header];
-    if open {
-        for (i, opt) in info.options.iter().enumerate() {
-            let is_selected = i == selected;
-            let row = View::new(Style {
-                size: Size {
-                    width: css_width.clone().unwrap_or_else(|| length(220.0_f32 * zoom)),
-                    height: length(header_h),
-                },
-                padding: Rect {
-                    left: length(10.0_f32 * zoom),
-                    right: length(10.0_f32 * zoom),
-                    top: length(4.0_f32 * zoom),
-                    bottom: length(4.0_f32 * zoom),
-                },
-                align_items: Some(AlignItems::Center),
-                ..Default::default()
-            })
-            .fill(if is_selected {
-                Color::from_rgb8(220, 230, 250)
-            } else {
-                Color::WHITE
-            })
-            .hover_fill(Color::from_rgb8(238, 240, 248))
-            .on_click(Msg::SelectPick(idx, i))
-            .text_aligned(
-                truncate(&opt.label, 80),
-                b.font_size * zoom,
-                Color::from_rgb8(30, 30, 40),
-                Alignment::Start,
-            );
-            all.push(row);
-        }
-    }
+    // El header se rendera siempre; la lista expandida ahora vive en
+    // `view_overlay` (popup flotante) cuando `open=true`. Esto evita
+    // empujar el flow del documento al abrir un select.
+    let _ = (selected, info, open); // ya consumidos en el overlay
+    let all: Vec<View<Msg>> = vec![header];
 
     View::new(Style {
         size: Size {
@@ -2537,6 +2536,69 @@ fn render_select(
     .fill(Color::from_rgb8(220, 220, 230))
     .radius(3.0)
     .children(all)
+}
+
+/// Overlay flotante con la lista de opciones del `<select>` abierto.
+/// Centrado en la ventana; backdrop semitransparente que cierra el
+/// dropdown al clickear fuera de la lista.
+fn select_overlay_view(idx: usize, selected: usize, info: puriy_engine::SelectInfo) -> View<Msg> {
+    let row_h = 28.0_f32;
+    let total_h = (info.options.len() as f32 * row_h).min(360.0);
+    let rows: Vec<View<Msg>> = info
+        .options
+        .iter()
+        .enumerate()
+        .map(|(i, opt)| {
+            let is_sel = i == selected;
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: length(row_h) },
+                padding: Rect {
+                    left: length(12.0_f32),
+                    right: length(12.0_f32),
+                    top: length(4.0_f32),
+                    bottom: length(4.0_f32),
+                },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .fill(if is_sel {
+                Color::from_rgb8(220, 230, 250)
+            } else {
+                Color::WHITE
+            })
+            .hover_fill(Color::from_rgb8(238, 240, 248))
+            .on_click(Msg::SelectPick(idx, i))
+            .text_aligned(
+                truncate(&opt.label, 80),
+                13.0,
+                Color::from_rgb8(30, 30, 40),
+                Alignment::Start,
+            )
+        })
+        .collect();
+
+    let list = View::new(Style {
+        size: Size { width: length(320.0_f32), height: length(total_h) },
+        flex_direction: FlexDirection::Column,
+        ..Default::default()
+    })
+    .fill(Color::from_rgb8(245, 245, 250))
+    .radius(4.0)
+    .clip(true)
+    .children(rows);
+
+    // Backdrop fullscreen con flex centering del list. Click en el
+    // backdrop cierra el dropdown via SelectToggle.
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        flex_direction: FlexDirection::Column,
+        justify_content: Some(JustifyContent::Center),
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(Color::from_rgba8(0, 0, 0, 60))
+    .on_click(Msg::SelectToggle(idx))
+    .children(vec![list])
 }
 
 /// Pinta las primitivas de un `<svg>` dentro de un rect del tamaño
