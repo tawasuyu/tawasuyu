@@ -298,7 +298,13 @@ struct Model {
     /// ejecuta `git status --porcelain` desde `root`. Vacío si no es
     /// un repo git o git no está instalado.
     git_status: GitStatusMap,
+    /// Cola LRU de archivos abiertos recientemente (cap 20). El picker
+    /// los muestra al tope cuando se abre — mejor que tener que escribir
+    /// el nombre para encontrar algo que acabás de cerrar.
+    recent_files: std::collections::VecDeque<PathBuf>,
 }
+
+const RECENT_FILES_CAP: usize = 20;
 
 type GitStatusMap = std::collections::HashMap<PathBuf, char>;
 
@@ -312,6 +318,11 @@ struct RenameBar {
     anchor: (usize, usize),
     /// `true` mientras esperamos la respuesta del LSP tras submit.
     waiting: bool,
+    /// Cuándo se llamó a `request_rename` — `None` si todavía no hubo
+    /// submit. Sirve para detectar timeouts del LSP.
+    submitted_at: Option<std::time::Instant>,
+    /// `true` después de avisar al user del timeout, para no spamear.
+    timeout_warned: bool,
 }
 
 struct ReferencesBar {
@@ -319,6 +330,11 @@ struct ReferencesBar {
     selected: usize,
     /// Pos donde se pidió la búsqueda.
     anchor: (usize, usize),
+    /// Cuándo se disparó el request — para detectar timeouts del LSP.
+    requested_at: std::time::Instant,
+    /// `true` después de avisarle al user que el LSP no respondió, para
+    /// no spamear status.
+    timeout_warned: bool,
 }
 
 struct SignatureHelpBar {
@@ -492,6 +508,7 @@ impl App for EditorApp {
             pending_save_after_format: None,
             save_as: None,
             git_status: GitStatusMap::new(),
+            recent_files: std::collections::VecDeque::with_capacity(RECENT_FILES_CAP),
         };
         // Restaurar sesion previa si la hay: tabs, bookmarks, theme.
         // Best-effort: si load_session falla o paths ya no existen, arranca limpio.
@@ -753,6 +770,13 @@ impl App for EditorApp {
                     if !latest.is_empty() && latest != bar.items {
                         bar.items = latest;
                         bar.selected = 0;
+                        bar.timeout_warned = false;
+                    } else if bar.items.is_empty()
+                        && !bar.timeout_warned
+                        && bar.requested_at.elapsed() >= std::time::Duration::from_secs(3)
+                    {
+                        bar.timeout_warned = true;
+                        m.status = "references · LSP timeout · sin respuesta en 3 s".to_string();
                     }
                 }
                 // Goto-def: si llegó una definition, dispara apply en
@@ -772,6 +796,18 @@ impl App for EditorApp {
                 if !we.is_empty() {
                     m.lsp.clear_workspace_edit();
                     handle.dispatch(Msg::RenameApply(we));
+                }
+                // Timeout del rename: si waiting + 3 s sin WorkspaceEdit
+                // → avisamos una vez para no dejar al user esperando.
+                if let Some(r) = m.rename.as_mut() {
+                    if r.waiting && !r.timeout_warned {
+                        if let Some(t) = r.submitted_at {
+                            if t.elapsed() >= std::time::Duration::from_secs(3) {
+                                r.timeout_warned = true;
+                                m.status = "rename · LSP timeout · Esc cancela".to_string();
+                            }
+                        }
+                    }
                 }
                 // Document symbols: si llegaron y son distintos a lo que
                 // tenemos, refresca el outline state.
@@ -903,6 +939,8 @@ impl App for EditorApp {
                     items: Vec::new(),
                     selected: 0,
                     anchor: (line, col),
+                    requested_at: std::time::Instant::now(),
+                    timeout_warned: false,
                 });
                 m.status = rimay_localize::t("edit-status-references-waiting");
                 m
@@ -948,6 +986,8 @@ impl App for EditorApp {
                     input,
                     anchor: (line, col),
                     waiting: false,
+                    submitted_at: None,
+                    timeout_warned: false,
                 });
                 m.status = rimay_localize::t("edit-status-rename-input");
                 m
@@ -970,6 +1010,8 @@ impl App for EditorApp {
                 m.lsp.clear_workspace_edit();
                 m.lsp.request_rename(&path, r.anchor.0, r.anchor.1, &new_name);
                 r.waiting = true;
+                r.submitted_at = Some(std::time::Instant::now());
+                r.timeout_warned = false;
                 m.status = rimay_localize::t_args(
                     "edit-status-rename-waiting",
                     &[("name", new_name.as_str().into())],
@@ -1819,7 +1861,8 @@ fn active_editor_content(model: &Model, theme: &Theme) -> View<Msg> {
     }
     if let Some(p) = model.picker.as_ref() {
         let palette = PickerPalette::from_theme(theme);
-        children.push(picker::view(p, &model.all_files, &model.root, &palette, Msg::Picker));
+        let ordered = files_with_recents_first(&model.recent_files, &model.all_files);
+        children.push(picker::view(p, &ordered, &model.root, &palette, Msg::Picker));
     }
     if let Some(f) = model.fif.as_ref().filter(|s| s.dialog_open) {
         let palette = FifPalette::from_theme(theme);
@@ -2434,6 +2477,7 @@ fn select_node(mut model: Model, i: usize) -> Model {
 /// del disco, crea EditorState nuevo, notifica `did_open` al LSP y empuja
 /// un tab nuevo. Mensaje de status según el resultado.
 fn open_path(mut model: Model, path: PathBuf) -> Model {
+    push_recent(&mut model.recent_files, &path);
     if let Some(tab_idx) = model.tab_idx_for(&path) {
         model.active = Some(tab_idx);
         model.status = format!("activo · {}", relative_to(&model.root, &path));
@@ -2473,15 +2517,17 @@ fn open_path(mut model: Model, path: PathBuf) -> Model {
 fn apply_picker(model: Model, pm: PickerMsg) -> Model {
     let mut m = model;
     if matches!(pm, PickerMsg::Open) && m.picker.is_none() {
-        m.picker = Some(PickerState::new(&m.all_files, &m.root));
+        let ordered = files_with_recents_first(&m.recent_files, &m.all_files);
+        m.picker = Some(PickerState::new(&ordered, &m.root));
         m.status = format!(
             "picker · {} archivos · ↓↑ Enter abre · Esc cierra",
             m.all_files.len(),
         );
         return m;
     }
+    let ordered = files_with_recents_first(&m.recent_files, &m.all_files);
     let action = match m.picker.as_mut() {
-        Some(state) => picker::apply(state, pm, &m.all_files, &m.root),
+        Some(state) => picker::apply(state, pm, &ordered, &m.root),
         None => return m,
     };
     match action {
@@ -3198,6 +3244,41 @@ fn pick_git_mark(xy: &[u8]) -> char {
     if xy[0] == b'D' || xy[1] == b'D' { return 'D'; }
     if xy[0] == b'R' || xy[1] == b'R' { return 'R'; }
     'M'
+}
+
+/// Mueve `path` al frente de la cola LRU; deduplica. Trunca a
+/// `RECENT_FILES_CAP` para no crecer sin límite.
+fn push_recent(q: &mut std::collections::VecDeque<PathBuf>, path: &Path) {
+    if let Some(pos) = q.iter().position(|p| p == path) {
+        q.remove(pos);
+    }
+    q.push_front(path.to_path_buf());
+    while q.len() > RECENT_FILES_CAP {
+        q.pop_back();
+    }
+}
+
+/// Construye un Vec de paths con los recientes al frente (en orden LRU)
+/// + el resto de `all_files` filtrado para no duplicar. El picker filtra
+/// linealmente y mantiene el orden — el user ve sus archivos recientes
+/// arriba antes de tipear nada.
+fn files_with_recents_first(
+    recents: &std::collections::VecDeque<PathBuf>,
+    all_files: &[PathBuf],
+) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::with_capacity(all_files.len());
+    let mut seen: std::collections::HashSet<&Path> = std::collections::HashSet::new();
+    for p in recents {
+        if seen.insert(p.as_path()) {
+            out.push(p.clone());
+        }
+    }
+    for p in all_files {
+        if seen.insert(p.as_path()) {
+            out.push(p.clone());
+        }
+    }
+    out
 }
 
 /// Resumen "git: 3M 1?" para la status bar. Vacío si no hay cambios.
