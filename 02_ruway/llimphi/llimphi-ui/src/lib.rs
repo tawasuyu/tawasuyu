@@ -228,6 +228,8 @@ pub struct TextSpec {
     pub size_px: f32,
     pub color: Color,
     pub alignment: llimphi_text::Alignment,
+    /// `true` = forzar variante italic en la fuente activa. Default false.
+    pub italic: bool,
 }
 
 /// Fase de un drag activo. `Move` se emite por cada `CursorMoved` con el
@@ -457,6 +459,7 @@ impl<Msg> View<Msg> {
             size_px,
             color,
             alignment: llimphi_text::Alignment::Center,
+            italic: false,
         });
         self
     }
@@ -473,6 +476,27 @@ impl<Msg> View<Msg> {
             size_px,
             color,
             alignment,
+            italic: false,
+        });
+        self
+    }
+
+    /// Como `text_aligned` pero con un flag `italic`. Si la fuente activa
+    /// no tiene variante italic, parley aplica synthesizing.
+    pub fn text_aligned_italic(
+        mut self,
+        content: impl Into<String>,
+        size_px: f32,
+        color: Color,
+        alignment: llimphi_text::Alignment,
+        italic: bool,
+    ) -> Self {
+        self.text = Some(TextSpec {
+            content: content.into(),
+            size_px,
+            color,
+            alignment,
+            italic,
         });
         self
     }
@@ -754,6 +778,7 @@ fn paint<Msg>(
                 max_width: Some(r.w),
                 alignment: text.alignment,
                 line_height: 1.2,
+                italic: text.italic,
             };
             // Shaping una sola vez: el `Layout` retornado se reusa para
             // medir (cuando hay centrado vertical) y para pintar.

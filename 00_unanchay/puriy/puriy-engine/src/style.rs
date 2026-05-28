@@ -29,6 +29,8 @@ pub struct ComputedStyle {
     pub background: Option<Color>,
     pub font_size: f32,
     pub font_weight: u16,
+    /// CSS `font-style`: normal vs italic/oblique. Heredable.
+    pub font_style: FontStyle,
     pub margin: Sides<f32>,
     pub padding: Sides<f32>,
     /// Ancho explícito. `Auto` = el default block-fills-parent.
@@ -160,6 +162,15 @@ pub enum TextDecorationLine {
     Underline,
     LineThrough,
     Overline,
+}
+
+/// CSS `font-style`. Heredable. `Oblique` lo tratamos igual que
+/// `Italic` (parley sintetiza si la fuente no tiene oblique nativo).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FontStyle {
+    #[default]
+    Normal,
+    Italic,
 }
 
 /// Sombra rectangular detrás del box. `blur_px` y `spread_px` se
@@ -432,6 +443,7 @@ impl Default for ComputedStyle {
             background: None,
             font_size: 16.0,
             font_weight: 400,
+            font_style: FontStyle::Normal,
             margin: Sides::all(0.0),
             padding: Sides::all(0.0),
             width: LengthVal::Auto,
@@ -564,6 +576,7 @@ impl StyleEngine {
             style.color = p.color;
             style.font_size = p.font_size;
             style.font_weight = p.font_weight;
+            style.font_style = p.font_style;
             style.text_align = p.text_align;
             style.line_height = p.line_height;
             // text-decoration: tratada heredable para que descendientes
@@ -598,6 +611,12 @@ impl StyleEngine {
         let weight_default = default_weight(&local);
         if weight_default != 400 {
             style.font_weight = weight_default;
+        }
+        // `font_style` por tag (em/i/cite/dfn/var/address = italic).
+        // Override el heredado por defecto pero NO si el padre ya lo es
+        // (`<em><span>foo</span></em>` debe conservar italic en el span).
+        if default_italic(&local) {
+            style.font_style = FontStyle::Italic;
         }
 
         // Cascada en dos pasadas:
@@ -1044,6 +1063,7 @@ enum DeclKind {
     Display(Display),
     FontSize(f32),
     FontWeight(u16),
+    FontStyle(FontStyle),
     Margin(Sides<f32>),
     MarginTop(f32),
     MarginRight(f32),
@@ -1124,6 +1144,7 @@ impl Decl {
             DeclKind::Display(d) => s.display = *d,
             DeclKind::FontSize(v) => s.font_size = *v,
             DeclKind::FontWeight(w) => s.font_weight = *w,
+            DeclKind::FontStyle(fs) => s.font_style = *fs,
             DeclKind::Margin(v) => s.margin = *v,
             DeclKind::MarginTop(v) => s.margin.top = *v,
             DeclKind::MarginRight(v) => s.margin.right = *v,
@@ -1238,6 +1259,14 @@ fn default_weight(tag: &str) -> u16 {
         "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "b" | "strong" | "th" => 700,
         _ => 400,
     }
+}
+
+/// Tags que el UA stylesheet pone en italic por default (CSS spec).
+fn default_italic(tag: &str) -> bool {
+    matches!(
+        tag,
+        "em" | "i" | "cite" | "dfn" | "var" | "address" | "blockquote"
+    )
 }
 
 /// UA stylesheet mínimo — defaults HTML5 que cssparser por sí solo no
@@ -2042,6 +2071,7 @@ fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "display" => parse_display(value).map(DeclKind::Display),
         "font-size" => parse_length_px(value).map(DeclKind::FontSize),
         "font-weight" => parse_weight(value).map(DeclKind::FontWeight),
+        "font-style" => parse_font_style(value).map(DeclKind::FontStyle),
         "margin" => parse_sides(value).map(DeclKind::Margin),
         "margin-top" => parse_length_px(value).map(DeclKind::MarginTop),
         "margin-right" => parse_length_px(value).map(DeclKind::MarginRight),
@@ -2581,6 +2611,20 @@ fn parse_weight(s: &str) -> Option<u16> {
         "lighter" => Some(300),
         "bolder" => Some(700),
         num => num.parse().ok(),
+    }
+}
+
+fn parse_font_style(s: &str) -> Option<FontStyle> {
+    // CSS spec: normal | italic | oblique [<angle>?]. Tratamos oblique
+    // como italic — parley/fontique sintetizan si la fuente no tiene
+    // oblique nativo.
+    let v = s.trim().to_ascii_lowercase();
+    if v == "normal" {
+        Some(FontStyle::Normal)
+    } else if v == "italic" || v.starts_with("oblique") {
+        Some(FontStyle::Italic)
+    } else {
+        None
     }
 }
 

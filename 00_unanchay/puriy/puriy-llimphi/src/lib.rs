@@ -1737,7 +1737,14 @@ fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
                 }
             });
         }
-        return view.text_aligned(text.clone(), size, display_color, Alignment::Start);
+        let italic = matches!(b.font_style, puriy_engine::FontStyle::Italic);
+        return view.text_aligned_italic(
+            text.clone(),
+            size,
+            display_color,
+            Alignment::Start,
+            italic,
+        );
     }
 
     if !b.children.is_empty() {
@@ -1856,7 +1863,8 @@ fn render_link_subtree(
     if let Some(text) = &b.text {
         let base = if b.font_weight >= 600 { b.font_size * 1.1 } else { b.font_size };
         let size = base * zoom;
-        return view.text_aligned(text.clone(), size, color, Alignment::Start);
+        let italic = matches!(b.font_style, puriy_engine::FontStyle::Italic);
+        return view.text_aligned_italic(text.clone(), size, color, Alignment::Start, italic);
     }
     if !b.children.is_empty() {
         let target_owned = target.to_string();

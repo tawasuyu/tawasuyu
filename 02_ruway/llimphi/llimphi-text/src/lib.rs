@@ -41,7 +41,8 @@ impl Typesetter {
 
     /// Construye y resuelve un `parley::Layout`. Aplica `font_size`,
     /// `line_height` (multiplicador del font_size), `max_width` (line
-    /// break), y `alignment`.
+    /// break), y `alignment`. `italic`=true selecciona la variante
+    /// italic/oblique de la fuente activa (vía `parley::FontStyle`).
     pub fn layout(
         &mut self,
         text: &str,
@@ -49,12 +50,18 @@ impl Typesetter {
         max_width: Option<f32>,
         alignment: Alignment,
         line_height: f32,
+        italic: bool,
     ) -> parley::Layout<()> {
         let mut builder =
             self.layout_cx
                 .ranged_builder(&mut self.font_cx, text, 1.0, true);
         builder.push_default(parley::StyleProperty::FontSize(size_px));
         builder.push_default(parley::StyleProperty::LineHeight(line_height));
+        if italic {
+            builder.push_default(parley::StyleProperty::FontStyle(
+                parley::FontStyle::Italic,
+            ));
+        }
         let mut layout = builder.build(text);
         layout.break_all_lines(max_width);
         layout.align(
@@ -98,6 +105,8 @@ pub struct TextBlock<'a> {
     pub alignment: Alignment,
     /// Múltiplo del font_size (1.0 = compacto, 1.3 = cómodo).
     pub line_height: f32,
+    /// `true` → fuerza variante italic/oblique en la fuente activa.
+    pub italic: bool,
 }
 
 impl<'a> TextBlock<'a> {
@@ -111,6 +120,7 @@ impl<'a> TextBlock<'a> {
             max_width: None,
             alignment: Alignment::Start,
             line_height: 1.0,
+            italic: false,
         }
     }
 }
@@ -134,6 +144,7 @@ pub fn layout_block(ts: &mut Typesetter, block: &TextBlock<'_>) -> parley::Layou
         block.max_width,
         block.alignment,
         block.line_height,
+        block.italic,
     )
 }
 

@@ -72,6 +72,8 @@ pub struct BoxNode {
     /// como normal y `>= 600` como bold (Llimphi text aún no expone
     /// weight axis arbitrario).
     pub font_weight: u16,
+    /// CSS `font-style`: normal vs italic/oblique. Heredable.
+    pub font_style: crate::style::FontStyle,
     pub margin: Sides<f32>,
     pub padding: Sides<f32>,
     /// Ancho explícito CSS (`auto` por defecto).
@@ -264,6 +266,7 @@ fn empty_root() -> BoxNode {
         color: Color::BLACK,
         font_size: 16.0,
         font_weight: 400,
+        font_style: crate::style::FontStyle::Normal,
         margin: Sides::all(0.0),
         padding: Sides::all(0.0),
         width: LengthVal::Auto,
@@ -450,6 +453,7 @@ fn build_node(
                 color: style.color,
                 font_size: style.font_size,
                 font_weight: style.font_weight,
+                font_style: style.font_style,
                 margin: style.margin,
                 padding: style.padding,
                 width: style.width,
@@ -553,6 +557,7 @@ fn build_node(
                 color: p.color,
                 font_size: p.font_size,
                 font_weight: p.font_weight,
+                font_style: p.font_style,
                 margin: Sides::all(0.0),
                 padding: Sides::all(0.0),
                 width: LengthVal::Auto,
@@ -626,6 +631,7 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         color: style.color,
         font_size: style.font_size,
         font_weight: style.font_weight,
+        font_style: style.font_style,
         margin: Sides::all(0.0),
         padding: Sides::all(0.0),
         width: LengthVal::Auto,
@@ -1369,6 +1375,45 @@ mod tests {
             }
         });
         assert!(clickable.is_empty(), "ningún href no-web debería ser clickable: {clickable:?}");
+    }
+
+    #[test]
+    fn em_y_i_y_cite_son_italic_por_default() {
+        let html = "<html><body><em>a</em><i>b</i><cite>c</cite><p>d</p></body></html>";
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut found: Vec<(String, crate::FontStyle)> = Vec::new();
+        doc.box_tree.walk(|b| {
+            if let Some(tag) = &b.tag {
+                if matches!(tag.as_str(), "em" | "i" | "cite" | "p") {
+                    found.push((tag.clone(), b.font_style));
+                }
+            }
+        });
+        let em = found.iter().find(|(t, _)| t == "em").unwrap();
+        let i = found.iter().find(|(t, _)| t == "i").unwrap();
+        let cite = found.iter().find(|(t, _)| t == "cite").unwrap();
+        let p = found.iter().find(|(t, _)| t == "p").unwrap();
+        assert_eq!(em.1, crate::FontStyle::Italic);
+        assert_eq!(i.1, crate::FontStyle::Italic);
+        assert_eq!(cite.1, crate::FontStyle::Italic);
+        assert_eq!(p.1, crate::FontStyle::Normal);
+    }
+
+    #[test]
+    fn font_style_normal_override_padre_italic() {
+        let html = r##"<html><head><style>
+            .x { font-style: normal }
+        </style></head><body><em>fuera<span class="x">dentro</span></em></body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut span_style: Option<crate::FontStyle> = None;
+        doc.box_tree.walk(|b| {
+            if b.tag.as_deref() == Some("span") {
+                span_style = Some(b.font_style);
+            }
+        });
+        assert_eq!(span_style, Some(crate::FontStyle::Normal));
     }
 
     #[test]

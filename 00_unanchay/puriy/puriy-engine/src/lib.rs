@@ -32,7 +32,7 @@ pub use boxes::{BoxNode, BoxTree, Color, Display, InputKind};
 pub use dom::DomTree;
 pub use fetch::{fetch, FetchError};
 pub use style::{
-    AlignItems, AlignSelf, BoxShadow, BoxSizing, ComputedStyle, FlexDirection, FlexWrap,
+    AlignItems, AlignSelf, BoxShadow, BoxSizing, ComputedStyle, FlexDirection, FlexWrap, FontStyle,
     GradientStop, GridTrackSize, JustifyContent, LengthVal, LinearGradient, Outline, Overflow,
     PointerEvents, Position, Sides, StyleEngine, TextAlign, TextDecorationLine, TextShadow,
     TextTransform, Transform, VerticalAlign, Viewport, Visibility, WhiteSpace, DEFAULT_VIEWPORT,
