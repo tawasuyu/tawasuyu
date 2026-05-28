@@ -300,6 +300,40 @@ pub type PaintFn = Arc<
     dyn Fn(&mut vello::Scene, &mut llimphi_text::Typesetter, PaintRect) + Send + Sync,
 >;
 
+/// Callback de pintura GPU directo, sin vello intermedio. Recibe el
+/// `device`/`queue` ya construidos por el runtime más un
+/// `CommandEncoder` y la `TextureView` del frame (la intermediate
+/// `Rgba8Unorm` de `WinitSurface`), todo durante el paint del nodo.
+///
+/// El caller abre su propio `begin_render_pass` con `LoadOp::Load` para
+/// no sobrescribir lo que ya pintó vello, dibuja sus primitivas y
+/// cierra el pass. El runtime se encarga de dispatchear (`queue.submit`)
+/// el encoder ya con todas las pasadas de todos los nodos acumuladas —
+/// es un solo submit por frame.
+///
+/// **Orden de pintura en Fase 1**: todos los `gpu_painter` corren
+/// DESPUÉS de la pasada completa de vello (fill, image, painter,
+/// text) sobre el `mounted` tree. Entre sí mantienen el orden DFS
+/// pre-orden. Si una app necesita pintar texto **encima** del render
+/// GPU directo, la forma idiomática es ponerlo en `App::view_overlay`,
+/// que se renderiza como una segunda Scene de vello encima de todo.
+///
+/// Pensado para apps con volumen masivo de primitivos (cosmos
+/// starfield Gaia, tinkuy particle viewer, nakui viewport, pineal
+/// denso) — el hook que paga el costo de mantener pipelines WGSL
+/// propias en `llimphi-raster` (ver `02_ruway/llimphi/SDD.md`
+/// §"Roadmap — GPU directo wgpu").
+pub type GpuPaintFn = Arc<
+    dyn Fn(
+            &llimphi_hal::wgpu::Device,
+            &llimphi_hal::wgpu::Queue,
+            &mut llimphi_hal::wgpu::CommandEncoder,
+            &llimphi_hal::wgpu::TextureView,
+            PaintRect,
+        ) + Send
+        + Sync,
+>;
+
 /// Nodo de la vista declarativa. Estilo de layout (taffy) + relleno opcional
 /// (vello) + texto opcional (skrifa+vello) + Msg al click opcional + hijos.
 pub struct View<Msg> {
@@ -321,6 +355,10 @@ pub struct View<Msg> {
     /// cosmos) que pintan primitivas custom no expresables como una
     /// composición de Views.
     pub painter: Option<PaintFn>,
+    /// Pintor GPU directo. Se invoca DESPUÉS de la pasada vello del
+    /// frame; comparte tree y orden DFS con los demás. Ver
+    /// [`GpuPaintFn`].
+    pub gpu_painter: Option<GpuPaintFn>,
     pub on_click: Option<Msg>,
     /// Handler de click que recibe la posición **relativa al rect del
     /// nodo** (esquina superior-izquierda del nodo = `(0, 0)`). Útil
@@ -376,6 +414,7 @@ impl<Msg> View<Msg> {
             text: None,
             image: None,
             painter: None,
+            gpu_painter: None,
             on_pointer_enter: None,
             on_pointer_leave: None,
             on_click: None,
@@ -619,6 +658,27 @@ impl<Msg> View<Msg> {
         self
     }
 
+    /// Registra una closure de pintura GPU directo. La closure recibe
+    /// `(&Device, &Queue, &mut CommandEncoder, &TextureView, PaintRect)`
+    /// y debe escribir sobre el `TextureView` con `LoadOp::Load` (no
+    /// clear) para preservar la pasada vello previa. Ver [`GpuPaintFn`]
+    /// para semántica completa, contexto y orden de pintura.
+    pub fn gpu_paint_with<F>(mut self, painter: F) -> Self
+    where
+        F: Fn(
+                &llimphi_hal::wgpu::Device,
+                &llimphi_hal::wgpu::Queue,
+                &mut llimphi_hal::wgpu::CommandEncoder,
+                &llimphi_hal::wgpu::TextureView,
+                PaintRect,
+            ) + Send
+            + Sync
+            + 'static,
+    {
+        self.gpu_painter = Some(Arc::new(painter));
+        self
+    }
+
     /// Recorta los hijos al rect de este nodo (paint y hit-test). Útil
     /// para paneles con contenido virtualizado que no debe sangrar a
     /// vecinos (listas, scrollers, viewers).
@@ -649,6 +709,7 @@ struct MountedNode<Msg> {
     text: Option<TextSpec>,
     image: Option<Image>,
     painter: Option<PaintFn>,
+    gpu_painter: Option<GpuPaintFn>,
     on_click: Option<Msg>,
     on_click_at: Option<ClickAtFn<Msg>>,
     on_right_click: Option<Msg>,
@@ -689,6 +750,7 @@ fn mount_recursive<Msg: Clone>(
         text,
         image,
         painter,
+        gpu_painter,
         on_click,
         on_click_at,
         on_right_click,
@@ -712,6 +774,7 @@ fn mount_recursive<Msg: Clone>(
         text,
         image,
         painter,
+        gpu_painter,
         on_click,
         on_click_at,
         on_right_click,
@@ -867,6 +930,46 @@ fn paint<Msg>(
     while clip_stack.pop().is_some() {
         scene.pop_layer();
     }
+}
+
+/// Pasada GPU directo: recorre el `Mounted` en pre-orden DFS (mismo orden
+/// que [`paint`]) e invoca cada `gpu_painter` con el encoder y la
+/// `TextureView` del frame. Se ejecuta DESPUÉS de la pasada vello — la
+/// intermediate ya tiene fill/image/painter/text encima cuando los
+/// callbacks corren, así que su `LoadOp` debe ser `Load`. Devuelve si
+/// se invocó al menos un painter (para que el caller decida si vale la
+/// pena finalizar y submitir el encoder).
+fn paint_gpu<Msg>(
+    mounted: &Mounted<Msg>,
+    computed: &ComputedLayout,
+    device: &llimphi_hal::wgpu::Device,
+    queue: &llimphi_hal::wgpu::Queue,
+    encoder: &mut llimphi_hal::wgpu::CommandEncoder,
+    view: &llimphi_hal::wgpu::TextureView,
+) -> bool {
+    let mut any = false;
+    for node in &mounted.nodes {
+        let Some(painter) = node.gpu_painter.as_ref() else {
+            continue;
+        };
+        let Some(r) = computed.get(node.id) else {
+            continue;
+        };
+        (painter)(
+            device,
+            queue,
+            encoder,
+            view,
+            PaintRect {
+                x: r.x,
+                y: r.y,
+                w: r.w,
+                h: r.h,
+            },
+        );
+        any = true;
+    }
+    any
 }
 
 /// Hit-test parametrizado por elegibilidad. Devuelve el índice del nodo
@@ -1558,6 +1661,43 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     palette::css::BLACK,
                 ) {
                     eprintln!("render error: {e}");
+                }
+                // Pasada GPU directo (Fase 1 del SDD §"GPU directo wgpu"):
+                // si algún View del main o del overlay registró un
+                // `gpu_painter`, ejecutamos todos sus callbacks contra un
+                // único `CommandEncoder`, encima de lo que vello acaba de
+                // pintar sobre la intermediate. Submitimos antes del
+                // present para que el blit al swapchain incluya las
+                // primitivas GPU. Si nadie usó el hook, no se crea ni
+                // submitea nada — coste cero.
+                let mut gpu_encoder = state.hal.device.create_command_encoder(
+                    &llimphi_hal::wgpu::CommandEncoderDescriptor {
+                        label: Some("llimphi-ui-gpu-paint"),
+                    },
+                );
+                let mut any_gpu = paint_gpu(
+                    &mounted,
+                    &computed,
+                    &state.hal.device,
+                    &state.hal.queue,
+                    &mut gpu_encoder,
+                    frame.view(),
+                );
+                if let Some(ov) = overlay_built.as_ref() {
+                    any_gpu |= paint_gpu(
+                        &ov.mounted,
+                        &ov.computed,
+                        &state.hal.device,
+                        &state.hal.queue,
+                        &mut gpu_encoder,
+                        frame.view(),
+                    );
+                }
+                if any_gpu {
+                    state
+                        .hal
+                        .queue
+                        .submit(std::iter::once(gpu_encoder.finish()));
                 }
                 state.surface.present(frame, &state.hal);
                 state.last_render = Some(RenderCache {

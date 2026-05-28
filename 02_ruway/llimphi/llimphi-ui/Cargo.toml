@@ -20,3 +20,7 @@ path = "examples/counter.rs"
 [[example]]
 name = "editor"
 path = "examples/editor.rs"
+
+[[example]]
+name = "gpu_paint_demo"
+path = "examples/gpu_paint_demo.rs"
