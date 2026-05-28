@@ -80,6 +80,21 @@ fn parse_max_age(cc: &str) -> Option<u64> {
     None
 }
 
+/// POST con body `application/x-www-form-urlencoded`. NO usa cache —
+/// los POST son no-idempotentes. Devuelve el body como String del
+/// response. Sin redirects automáticos por ahora.
+pub fn post_form(url: &str, body: &str) -> Result<String, FetchError> {
+    let resp = ureq::post(url)
+        .set("User-Agent", concat!("puriy/", env!("CARGO_PKG_VERSION")))
+        .set("Content-Type", "application/x-www-form-urlencoded")
+        .send_string(body)
+        .map_err(|e| match e {
+            ureq::Error::Status(code, _) => FetchError::Status(code),
+            ureq::Error::Transport(t) => FetchError::Transport(t.to_string()),
+        })?;
+    resp.into_string().map_err(|e| FetchError::Transport(e.to_string()))
+}
+
 fn now_unix() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)

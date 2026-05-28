@@ -59,6 +59,14 @@ impl Engine {
         Ok(self.load_html(parsed.as_str(), &html))
     }
 
+    /// POST con body `application/x-www-form-urlencoded`. Mismo pipeline
+    /// que `load` después del fetch.
+    pub fn load_post(&self, url: &str, body: &str) -> Result<Document, EngineError> {
+        let parsed = url::Url::parse(url).map_err(|e| EngineError::Url(e.to_string()))?;
+        let html = fetch::post_form(parsed.as_str(), body)?;
+        Ok(self.load_html(parsed.as_str(), &html))
+    }
+
     /// Variante para tests / data URLs: parsea HTML ya en memoria.
     pub fn load_html(&self, url: &str, html: &str) -> Document {
         let dom = DomTree::parse(html);

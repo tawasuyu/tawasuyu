@@ -259,6 +259,9 @@ pub enum Msg {
     },
     LoadFailed { tab: TabId, gen: u64, err: String },
     Navigate(String),
+    /// Navega vía POST con body application/x-www-form-urlencoded.
+    /// Usado por form submit con `method=post`.
+    NavigatePost { url: String, body: String },
     /// Igual que Navigate pero arranca en una pestaña nueva — usado por
     /// `<a target="_blank">` y middle-click sobre links (ese día llega).
     NavigateNewTab(String),
@@ -558,6 +561,11 @@ impl App for Puriy {
                 m.panel_filter.clear();
                 start_load(&mut m, target, /* push_history */ true, handle);
             }
+            Msg::NavigatePost { url, body } => {
+                m.panel = None;
+                m.panel_filter.clear();
+                start_load_post(&mut m, url, body, handle);
+            }
             Msg::NavigateNewTab(target) => {
                 let mut tab = TabState::new(target.clone());
                 tab.gen = 1;
@@ -821,8 +829,8 @@ impl App for Puriy {
             Msg::SubmitForm(idx) => {
                 // Tratamos como si el input idx estuviera focado.
                 m.active_mut().focused_input = Some(idx);
-                if let Some(url) = build_form_submit_url(&m) {
-                    return Self::update(m, Msg::Navigate(url), handle);
+                if let Some(msg) = build_form_submit_url(&m) {
+                    return Self::update(m, msg, handle);
                 }
             }
             Msg::FocusInput(idx) => {
@@ -860,10 +868,9 @@ impl App for Puriy {
             }
             Msg::InputKey(e) => {
                 if matches!(&e.key, Key::Named(NamedKey::Enter)) {
-                    // Submit GET: arma URL `action?n1=v1&n2=v2&…` con los
-                    // inputs del mismo form que tienen `name` no vacío.
-                    if let Some(url) = build_form_submit_url(&m) {
-                        return Self::update(m, Msg::Navigate(url), handle);
+                    // Submit (GET o POST según el form method).
+                    if let Some(submit_msg) = build_form_submit_url(&m) {
+                        return Self::update(m, submit_msg, handle);
                     } else {
                         m.active_mut().status =
                             "↵ submit: el input no está dentro de un <form action> conocido".into();
@@ -1444,6 +1451,40 @@ fn spawn_load(tab: TabId, gen: u64, url: String, handle: Handle<Msg>) {
     });
 }
 
+fn start_load_post(m: &mut Model, url: String, body: String, handle: &Handle<Msg>) {
+    let t = m.active_mut();
+    t.url = url.clone();
+    t.addr.set_text(url.clone());
+    t.addr_focused = false;
+    t.status = format!("POST {url}…");
+    t.scroll_y = 0.0;
+    t.box_tree = None;
+    t.history.truncate(t.cursor + 1);
+    if t.history.last() != Some(&url) {
+        t.history.push(url.clone());
+        t.cursor = t.history.len() - 1;
+    }
+    t.gen = t.gen.wrapping_add(1);
+    let (id, gen) = (t.id, t.gen);
+    let h = handle.clone();
+    std::thread::spawn(move || {
+        let engine = Engine::new();
+        match engine.load_post(&url, &body) {
+            Ok(doc) => {
+                let title = if doc.title.is_empty() { doc.url.clone() } else { doc.title.clone() };
+                h.dispatch(Msg::Loaded {
+                    tab: id,
+                    gen,
+                    title,
+                    box_tree: doc.box_tree,
+                    source: doc.source,
+                });
+            }
+            Err(e) => h.dispatch(Msg::LoadFailed { tab: id, gen, err: e.to_string() }),
+        }
+    });
+}
+
 fn tabs_bar(model: &Model) -> View<Msg> {
     let mut kids: Vec<View<Msg>> = Vec::with_capacity(model.tabs.len() + 1);
     for (i, t) in model.tabs.iter().enumerate() {
@@ -1945,7 +1986,7 @@ fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
 /// n1=v1&n2=v2&…` con los inputs que tienen `name` no vacío,
 /// urlencodeados de manera mínima. Devuelve `None` si no hay form
 /// asociado o si el form no tiene action navegable.
-fn build_form_submit_url(m: &Model) -> Option<String> {
+fn build_form_submit_url(m: &Model) -> Option<Msg> {
     let t = m.active();
     let focused_idx = t.focused_input?;
     let tree = t.box_tree.as_ref()?;
@@ -2045,10 +2086,15 @@ fn build_form_submit_url(m: &Model) -> Option<String> {
         out
     }
     let qs: Vec<String> = pairs.iter().map(|(k, v)| format!("{}={}", encode(k), encode(v))).collect();
-    let query = qs.join("&");
-    // Concatena action con `?…`. Si action ya tiene `?`, usamos `&`.
-    let sep = if action.contains('?') { '&' } else { '?' };
-    Some(format!("{}{}{}", action, sep, query))
+    let body = qs.join("&");
+    match form.method {
+        puriy_engine::FormMethod::Get => {
+            // Concatena action con `?…`. Si action ya tiene `?`, usamos `&`.
+            let sep = if action.contains('?') { '&' } else { '?' };
+            Some(Msg::Navigate(format!("{}{}{}", action, sep, body)))
+        }
+        puriy_engine::FormMethod::Post => Some(Msg::NavigatePost { url: action, body }),
+    }
 }
 
 fn skip_count_details(b: &BoxNode, counter: &mut usize) {
