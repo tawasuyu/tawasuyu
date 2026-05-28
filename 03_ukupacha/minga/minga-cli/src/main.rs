@@ -5,10 +5,10 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use minga_cli::{
-    cmd_blame, cmd_bundle_export, cmd_bundle_import, cmd_diff, cmd_history, cmd_ingest,
-    cmd_ingest_dir, cmd_init, cmd_listen, cmd_log, cmd_mount, cmd_prune, cmd_retire, cmd_roots,
-    cmd_show, cmd_sign, cmd_signers, cmd_status, cmd_sync, cmd_verify_root, cmd_watch, CliError,
-    DiffLine,
+    cmd_blame, cmd_bundle_export, cmd_bundle_export_all, cmd_bundle_import, cmd_bundle_import_all,
+    cmd_diff, cmd_history, cmd_ingest, cmd_ingest_dir, cmd_init, cmd_listen, cmd_log, cmd_mount,
+    cmd_prune, cmd_retire, cmd_roots, cmd_serve, cmd_show, cmd_sign, cmd_signers, cmd_status,
+    cmd_sync, cmd_verify_root, cmd_watch, CliError, DiffLine,
 };
 
 #[derive(Parser)]
@@ -181,6 +181,14 @@ enum Command {
     /// que el wire libp2p, sin necesidad de red.
     #[command(subcommand)]
     Bundle(BundleCommand),
+
+    /// Levanta un daemon HTTP read-only sobre el repo. Útil para
+    /// integrar minga con frontends no-Rust (web, mobile, otro shell).
+    /// El passphrase se mantiene en memoria mientras el daemon corre.
+    Serve {
+        /// Socket de escucha (ej. `127.0.0.1:7777`).
+        addr: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -194,10 +202,25 @@ enum BundleCommand {
         out: PathBuf,
     },
 
-    /// Lee un bundle, re-verifica criptográficamente cada pieza, y
-    /// mergea idempotentemente en los stores locales.
+    /// Empaqueta TODAS las raíces del repo en un solo multi-bundle.
+    /// Las raíces sin dialect persistido (sync'd bajo wire pre-RootDeclaration)
+    /// se saltan; se reportan al final.
+    ExportAll {
+        /// Ruta de salida del multi-bundle (sobreescribe si existe).
+        out: PathBuf,
+    },
+
+    /// Lee un bundle single, re-verifica criptográficamente cada pieza,
+    /// y mergea idempotentemente en los stores locales.
     Import {
         /// Ruta del bundle a importar.
+        file: PathBuf,
+    },
+
+    /// Lee un multi-bundle y mergea cada raíz contenida con las mismas
+    /// garantías que `import`. Idempotente.
+    ImportAll {
+        /// Ruta del multi-bundle a importar.
         file: PathBuf,
     },
 }
@@ -491,6 +514,49 @@ fn run() -> Result<(), CliError> {
             println!(
                 "  retractions:             {} nuevas, {} rechazadas",
                 s.retractions_added, s.retractions_rejected
+            );
+        }
+        Command::Bundle(BundleCommand::ExportAll { out }) => {
+            let pass = prompt_passphrase()?;
+            let s = cmd_bundle_export_all(&cli.repo, &pass, &out)?;
+            println!("Multi-bundle escrito en {}", out.display());
+            println!("  raíces:        {}", s.roots);
+            println!("  nodos:         {}", s.total_nodes);
+            println!("  atestaciones:  {}", s.total_attestations);
+            println!("  retractions:   {}", s.total_retractions);
+            println!("  tamaño:        {} bytes", s.bytes);
+            if !s.skipped_missing_dialect.is_empty() {
+                println!(
+                    "  ⚠ {} raíces saltadas (sin dialect registrado):",
+                    s.skipped_missing_dialect.len()
+                );
+                for h in s.skipped_missing_dialect {
+                    println!("      {}", h);
+                }
+            }
+        }
+        Command::Serve { addr } => {
+            let pass = prompt_passphrase()?;
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| CliError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+            rt.block_on(cmd_serve(&cli.repo, &pass, &addr))?;
+        }
+        Command::Bundle(BundleCommand::ImportAll { file }) => {
+            let pass = prompt_passphrase()?;
+            let s = cmd_bundle_import_all(&cli.repo, &pass, &file)?;
+            println!(
+                "Multi-bundle importado: {} raíces ({} nuevas)",
+                s.items.len(),
+                s.roots_new()
+            );
+            println!("  nodos insertados:        {}", s.total_nodes_inserted());
+            println!(
+                "  atestaciones nuevas:     {}",
+                s.total_attestations_added()
+            );
+            println!(
+                "  retractions nuevas:      {}",
+                s.total_retractions_added()
             );
         }
     }

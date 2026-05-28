@@ -21,6 +21,7 @@
 //! iteración se centra en que la capa de persistencia esté correcta
 //! y testeada.
 
+pub mod alpha_paths_store;
 pub mod attestation_store;
 pub mod error;
 pub mod keypair_file;
@@ -32,6 +33,7 @@ pub mod retraction_store;
 pub mod roots_store;
 pub mod timestamp_store;
 
+pub use alpha_paths_store::SledAlphaPathsStore;
 pub use attestation_store::SledAttestationStore;
 pub use error::StoreError;
 pub use keypair_file::KeypairFileError;

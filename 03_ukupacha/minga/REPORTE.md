@@ -1,6 +1,6 @@
 # minga — reporte técnico para IA
 
-> Estado: **2026-05-27** · rama `main` · compila limpio (`cargo build -p minga-cli -p minga-explorer-llimphi -p shuma-module-minga`).
+> Estado: **2026-05-28** · rama `main` · compila limpio (`cargo check --workspace` pasa).
 > Audiencia: sesión futura de Claude u otra IA que retome el VCS semántico.
 
 ---
@@ -181,16 +181,31 @@ Aunque no toca el dominio de minga directamente, este sprint cerró el bridge en
 
 Demo: `cargo run -p agora-net-brahman --example convergencia_minga` — un solo `PeerId` sirviendo ambos protocolos sobre un solo `listen`.
 
-## 11. Próximos pasos abiertos
+## 11. Séptimo sprint — cierre del backlog abierto (2026-05-28)
+
+| # | Tarea | Resultado |
+|---|---|---|
+| O | **Round-trip test del bundle** — `tests/bundle_roundtrip.rs` en `minga-cli` con cuatro casos: round-trip básico (raíz + atestación), idempotencia del import, propagación de vouching multi-firma (A→B firma→C ve dos firmas), y propagación de retracciones bajo re-ingest. Era la red de seguridad mínima antes de tocar el formato. | hecho |
+| N | **`minga bundle export-all`** + **`minga bundle import-all`** — multi-bundle con magic prefix `MNGM` para distinguir del `BundleV1` clásico, retro-compatible. Empaca todas las raíces del repo en un solo archivo postcard; raíces sin dialect persistido se reportan en `skipped_missing_dialect` sin abortar. Import detecta el formato por magic y agrega errores específicos (`ExpectedSingleBundle`/`ExpectedMultiBundle`) para que el usuario no tenga que adivinar qué archivo es. Reuso máximo: `build_bundle_for_root` y `import_one` son helpers compartidos entre single y multi. | hecho |
+| J | **`SledAlphaPathsStore`** — índice inverso α→paths persistente en disco con clave compuesta `[α(32)][path]` y valor `ts_secs(8 be)`. Reemplaza el reverse-index que `cmd_roots` reconstruía en RAM cada llamada. Write-through en `cmd_ingest` (ambos call-sites: `commands.rs:103-106` y `commands.rs:1318-1322`). Migración perezosa en `PersistentRepo::open`: si el tree está vacío pero `path_history` tiene entradas, se rebuildea una vez. Test de migración en `minga-store/tests/alpha_paths_rebuild.rs`. | hecho |
+| C | **`minga serve <addr>`** — daemon HTTP read-only sobre axum. Endpoints: `GET /status`, `GET /roots`, `GET /roots/:α/show[?sexp=1]`, `GET /roots/:α/signers`, `GET /roots/:α/history?path=`. Mapeo de errores: `HashNotFound`/`PathNotIngested`→404, `InvalidHash`/`UnsupportedLanguage`→400, resto→500. Pasphrase en RAM durante el daemon (no se descifra por request). Tests en `tests/serve_http.rs` vía `tower::ServiceExt::oneshot` (sin abrir socket real). | hecho |
+
+### Diferido con criterio explícito
+
+| # | Tarea | Razón |
+|---|---|---|
+| A / #5 | `MingaPeer` genérico sobre `NodeStore` (backend sled directo en lugar de cargar todo a RAM) | El refactor requiere cambiar la firma `NodeStore::get(&self, h) -> Option<&StoredNode>` a `Option<StoredNode>` (owned) porque sled devuelve `IVec`s temporales — eso cascadea por `session.rs`, `peer.rs`, los tests del protocolo, y `MemStore` mismo. El payoff sólo aparece cuando el repo supera ~100k nodos (sin caso real hoy). Permanece como "tomar cuando se justifique"; el trigger sigue siendo el mismo del 6º sprint. |
+
+## 12. Próximos pasos abiertos (post-cierre)
+
+Items nuevos identificados durante el séptimo sprint, no en backlog histórico:
 
 | # | Tarea | Prioridad |
 |---|---|---|
-| A | Cachear `MingaPeer` con backend sled directo (item #5 deferido) | media |
-| C | Exportar `roots` como API REST/JSON desde un daemon minga (paralelo a `shuma-gateway`) | baja |
-| J | Reverse-index dedicado `α → paths` en disco (hoy se reconstruye en RAM dentro de `cmd_roots`). Sólo vale la pena cuando un repo pase el millón de paths. | muy baja |
-| N | `minga bundle export --recursive <dir>` — empaquetar todas las raíces de un repo en un solo archivo (multi-bundle). Hoy hay que llamarlo por hash. | baja |
-| O | Test round-trip de bundle (export → import en repo vacío → verificar α y atestaciones). Aumentaría confianza en cambios del formato. | media |
+| P | Autenticación en `minga serve` — hoy expone read-only sin auth; cualquier proceso con acceso al socket puede ver paths e historial. Razonable para `127.0.0.1` solo; si se quiere bind público hay que sumar token/basic-auth. | baja |
+| Q | Compresión del multi-bundle (`zstd` o `gzip`) — un bundle con cientos de raíces puede ser MB, comprimir a la salida y descomprimir al `import-all` no rompe el wire interno. | muy baja |
+| R | `minga signers --since <ts>` — filtrar firmas recientes para feeds tipo "qué hay nuevo en este repo". Reusa `SledTimestampStore`. | baja |
 
 ---
 
-*Generado por Claude (Opus 4.7) — `2026-05-27`. **28/29 tareas completadas**; #5 (NodeStore genérico para MingaPeer) sigue diferido por su costo de refactor vs. beneficio actual. Minga ahora puede transferir raíces offline con el mismo nivel de verificación criptográfica que el wire libp2p.*
+*Generado por Claude (Opus 4.7) — `2026-05-28`. **Backlog histórico cerrado** (32 ítems completados o diferidos con criterio explícito). El único pendiente activo (#5/A) tiene trigger documentado. Minga es funcionalmente completa como VCS semántico P2P con bundle offline, daemon HTTP, índice inverso persistente, multi-bundle, y la verificación criptográfica end-to-end que se prometió desde el primer sprint.*

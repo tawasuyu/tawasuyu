@@ -94,4 +94,16 @@ pub enum CliError {
          pre-RootDeclaration)"
     )]
     BundleMissingDialect(minga_core::ContentHash),
+
+    #[error(
+        "el archivo es un multi-bundle — usá `minga bundle import-all` para \
+         importar todas las raíces de una vez"
+    )]
+    ExpectedSingleBundle,
+
+    #[error(
+        "el archivo es un bundle single — usá `minga bundle import` para \
+         importar una raíz individual"
+    )]
+    ExpectedMultiBundle,
 }

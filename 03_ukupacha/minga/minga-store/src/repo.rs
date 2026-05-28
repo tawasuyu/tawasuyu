@@ -7,10 +7,10 @@ use std::path::Path;
 use sled::Db;
 
 use crate::{
-    attestation_store::SledAttestationStore, error::StoreError, mst_store::SledMstStore,
-    node_store::SledNodeStore, path_history_store::SledPathHistoryStore,
-    retraction_store::SledRetractionStore, roots_store::SledRootsStore,
-    timestamp_store::SledTimestampStore,
+    alpha_paths_store::SledAlphaPathsStore, attestation_store::SledAttestationStore,
+    error::StoreError, mst_store::SledMstStore, node_store::SledNodeStore,
+    path_history_store::SledPathHistoryStore, retraction_store::SledRetractionStore,
+    roots_store::SledRootsStore, timestamp_store::SledTimestampStore,
 };
 
 pub struct PersistentRepo {
@@ -31,6 +31,10 @@ pub struct PersistentRepo {
     /// Historial path → secuencia de α-hashes ingeridos. Local al peer
     /// (los paths no se transmiten por wire). Alimenta `minga blame`.
     pub paths: SledPathHistoryStore,
+    /// Índice inverso α → paths persistente. Lo poblan los mismos
+    /// callsites que llaman a `paths.append`. Evita reconstruirlo en RAM
+    /// cada vez que `cmd_roots` quiere mostrar el path canónico.
+    pub alpha_paths: SledAlphaPathsStore,
 }
 
 impl PersistentRepo {
@@ -43,6 +47,23 @@ impl PersistentRepo {
         let timestamps = SledTimestampStore::open_tree(&db, "attestation_timestamps")?;
         let retractions = SledRetractionStore::open_tree(&db, "retractions")?;
         let paths = SledPathHistoryStore::open_tree(&db, "path_history")?;
+        let alpha_paths = SledAlphaPathsStore::open_tree(&db, "alpha_paths")?;
+
+        // Migración perezosa: repos viejos no tienen `alpha_paths`
+        // poblado. Si está vacío y `path_history` ya tiene entradas, lo
+        // reconstruimos una sola vez a partir del historial — el costo
+        // se paga al primer `open` post-upgrade, después es O(1) por
+        // ingesta.
+        if alpha_paths.is_empty() && !paths.is_empty() {
+            for entry in paths.iter() {
+                let (path, history) = entry?;
+                for (alpha, ts) in history {
+                    alpha_paths.record(alpha, &path, ts)?;
+                }
+            }
+            alpha_paths.flush()?;
+        }
+
         Ok(Self {
             db,
             nodes,
@@ -52,6 +73,7 @@ impl PersistentRepo {
             timestamps,
             retractions,
             paths,
+            alpha_paths,
         })
     }
 

@@ -9,8 +9,12 @@
 pub mod bundle;
 pub mod commands;
 pub mod error;
+pub mod serve;
 
-pub use bundle::{cmd_bundle_export, cmd_bundle_import, BundleExportStats, BundleImportStats};
+pub use bundle::{
+    cmd_bundle_export, cmd_bundle_export_all, cmd_bundle_import, cmd_bundle_import_all,
+    BundleExportAllStats, BundleExportStats, BundleImportAllStats, BundleImportStats,
+};
 pub use commands::{
     cmd_blame, cmd_diff, cmd_history, cmd_ingest, cmd_ingest_dir, cmd_init, cmd_listen, cmd_log,
     cmd_mount, cmd_prune, cmd_retire, cmd_roots, cmd_show, cmd_sign, cmd_signers, cmd_status,
@@ -19,3 +23,4 @@ pub use commands::{
     ShowResult, SignResult, SignerEntry, VerifyResult,
 };
 pub use error::CliError;
+pub use serve::cmd_serve;

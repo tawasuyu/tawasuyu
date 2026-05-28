@@ -103,6 +103,7 @@ pub fn cmd_ingest(
     if let Some(path_key) = canonical_path_key(file) {
         let now_secs = unix_now_secs();
         let _ = repo.paths.append(&path_key, alpha, now_secs);
+        let _ = repo.alpha_paths.record(alpha, &path_key, now_secs);
     }
     repo.flush()?;
 
@@ -673,27 +674,8 @@ pub struct RootRow {
 /// descubrir las raíces de un repo sin levantar el explorer Llimphi
 /// ni el módulo shuma.
 pub fn cmd_roots(repo_path: &Path, passphrase: &str) -> Result<Vec<RootRow>, CliError> {
-    use std::collections::HashMap;
-
     let _keypair = keypair_file::load(repo_path.join(KEYPAIR_FILENAME), passphrase)?;
     let repo = PersistentRepo::open(repo_path.join(REPO_DIRNAME))?;
-
-    // Reverse-index path_history para asociar cada α al path bajo el
-    // cual se ingirió más recientemente. Empate de ts: el path
-    // descubierto primero en la iteración gana (orden sled-dependiente
-    // pero estable dentro de una misma run).
-    let mut alpha_to_path: HashMap<ContentHash, (String, u64)> = HashMap::new();
-    for entry in repo.paths.iter() {
-        let (path, history) = entry?;
-        for (alpha, ts) in history {
-            match alpha_to_path.get(&alpha) {
-                Some((_, existing_ts)) if *existing_ts >= ts => {}
-                _ => {
-                    alpha_to_path.insert(alpha, (path.clone(), ts));
-                }
-            }
-        }
-    }
 
     let mut rows = Vec::new();
     for r in repo.roots.iter() {
@@ -705,7 +687,10 @@ pub fn cmd_roots(repo_path: &Path, passphrase: &str) -> Result<Vec<RootRow>, Cli
             .filter_map(|a| repo.timestamps.get(&a.content, &a.author).ok().flatten())
             .max()
             .unwrap_or(0);
-        let path = alpha_to_path.get(&alpha).map(|(p, _)| p.clone());
+        // Reverse-index persistente: lookup directo por prefijo α en
+        // lugar de reconstruir el mapa en RAM. Ver
+        // `minga_store::SledAlphaPathsStore`.
+        let path = repo.alpha_paths.most_recent_path(&alpha)?;
         rows.push(RootRow {
             alpha,
             struct_hash,
@@ -1316,7 +1301,9 @@ fn ingest_into_repo(
     let node = dialect.parse(&source)?;
     let (alpha, _struct_hash) = ingest_node_alpha(repo, keypair, dialect, &node)?;
     if let Some(path_key) = canonical_path_key(file) {
-        let _ = repo.paths.append(&path_key, alpha, unix_now_secs());
+        let ts = unix_now_secs();
+        let _ = repo.paths.append(&path_key, alpha, ts);
+        let _ = repo.alpha_paths.record(alpha, &path_key, ts);
     }
     repo.flush()?;
     Ok(alpha)

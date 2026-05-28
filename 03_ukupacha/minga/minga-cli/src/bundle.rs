@@ -34,6 +34,14 @@ use crate::error::CliError;
 /// importador pueda rechazar (o adaptar) bundles de otra época.
 pub const BUNDLE_VERSION: u32 = 1;
 
+/// Magic prefix de un multi-bundle (varias raíces empacadas juntas).
+/// Si los primeros 4 bytes del archivo coinciden, el cuerpo restante es
+/// un `BundleMultiV1` postcard; si no, el archivo entero es un
+/// `BundleV1` clásico — esto preserva compat con bundles existentes
+/// sin tocar su layout.
+pub const MULTI_MAGIC: &[u8; 4] = b"MNGM";
+pub const MULTI_VERSION: u32 = 1;
+
 /// El bundle serializable. El layout es estable: cualquier cambio de
 /// campos sube `BUNDLE_VERSION` y agrega una rama en `import`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -64,6 +72,52 @@ pub struct BundleExportStats {
     pub bytes: usize,
 }
 
+/// Wrapper de múltiples bundles en un solo archivo. Se serializa con
+/// postcard precedido del prefijo `MULTI_MAGIC` para que el importador
+/// pueda distinguirlo de un `BundleV1` plano.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BundleMultiV1 {
+    pub version: u32,
+    pub items: Vec<BundleV1>,
+}
+
+/// Estadísticas devueltas por `cmd_bundle_export_all`.
+#[derive(Debug, Clone)]
+pub struct BundleExportAllStats {
+    /// Raíces efectivamente empacadas.
+    pub roots: usize,
+    /// Raíces saltadas por falta de dialect persistido (typically
+    /// raíces sincronizadas bajo el wire pre-`RootDeclaration`).
+    pub skipped_missing_dialect: Vec<ContentHash>,
+    pub total_nodes: usize,
+    pub total_attestations: usize,
+    pub total_retractions: usize,
+    pub bytes: usize,
+}
+
+/// Estadísticas agregadas del import de un multi-bundle.
+#[derive(Debug, Clone)]
+pub struct BundleImportAllStats {
+    /// Resultado individual de cada raíz en el orden en que vino dentro
+    /// del multi-bundle.
+    pub items: Vec<BundleImportStats>,
+}
+
+impl BundleImportAllStats {
+    pub fn roots_new(&self) -> usize {
+        self.items.iter().filter(|s| s.root_was_new).count()
+    }
+    pub fn total_nodes_inserted(&self) -> usize {
+        self.items.iter().map(|s| s.nodes_inserted).sum()
+    }
+    pub fn total_attestations_added(&self) -> usize {
+        self.items.iter().map(|s| s.attestations_added).sum()
+    }
+    pub fn total_retractions_added(&self) -> usize {
+        self.items.iter().map(|s| s.retractions_added).sum()
+    }
+}
+
 /// `minga bundle export <α-hash> <out>`: serializa la raíz, todos los
 /// nodos alcanzables, atestaciones y retractions en un archivo
 /// postcard. Errores:
@@ -77,12 +131,82 @@ pub fn cmd_bundle_export(
     hash_hex: &str,
     out: &Path,
 ) -> Result<BundleExportStats, CliError> {
-    use std::collections::HashSet;
-
     let _keypair = keypair_file::load(repo_path.join(KEYPAIR_FILENAME), passphrase)?;
     let repo = PersistentRepo::open(repo_path.join(REPO_DIRNAME))?;
 
     let alpha = crate::commands::parse_hash_hex(hash_hex)?;
+    let bundle = build_bundle_for_root(&repo, alpha)?;
+
+    let bytes = postcard::to_allocvec(&bundle).map_err(|_| CliError::InvalidBundle)?;
+    std::fs::write(out, &bytes)?;
+
+    Ok(BundleExportStats {
+        alpha: bundle.alpha,
+        nodes: bundle.nodes.len(),
+        attestations: bundle.attestations.len(),
+        retractions: bundle.retractions.len(),
+        bytes: bytes.len(),
+    })
+}
+
+/// Empaqueta todas las raíces del repo en un solo archivo (multi-bundle).
+/// Raíces sin dialect persistido (sync'd bajo el wire viejo) se saltan y
+/// se reportan en `skipped_missing_dialect` — el caller decide si eso es
+/// fatal o se acepta como degradación.
+pub fn cmd_bundle_export_all(
+    repo_path: &Path,
+    passphrase: &str,
+    out: &Path,
+) -> Result<BundleExportAllStats, CliError> {
+    let _keypair = keypair_file::load(repo_path.join(KEYPAIR_FILENAME), passphrase)?;
+    let repo = PersistentRepo::open(repo_path.join(REPO_DIRNAME))?;
+
+    let mut items: Vec<BundleV1> = Vec::new();
+    let mut skipped: Vec<ContentHash> = Vec::new();
+    for entry in repo.roots.iter() {
+        let (alpha, _struct_hash, dialect_opt) = entry?;
+        if dialect_opt.is_none() {
+            skipped.push(alpha);
+            continue;
+        }
+        items.push(build_bundle_for_root(&repo, alpha)?);
+    }
+
+    let total_nodes: usize = items.iter().map(|b| b.nodes.len()).sum();
+    let total_attestations: usize = items.iter().map(|b| b.attestations.len()).sum();
+    let total_retractions: usize = items.iter().map(|b| b.retractions.len()).sum();
+    let roots = items.len();
+
+    let multi = BundleMultiV1 {
+        version: MULTI_VERSION,
+        items,
+    };
+    let body = postcard::to_allocvec(&multi).map_err(|_| CliError::InvalidBundle)?;
+
+    let mut bytes = Vec::with_capacity(MULTI_MAGIC.len() + body.len());
+    bytes.extend_from_slice(MULTI_MAGIC);
+    bytes.extend_from_slice(&body);
+    std::fs::write(out, &bytes)?;
+
+    Ok(BundleExportAllStats {
+        roots,
+        skipped_missing_dialect: skipped,
+        total_nodes,
+        total_attestations,
+        total_retractions,
+        bytes: bytes.len(),
+    })
+}
+
+/// Construye un `BundleV1` para una raíz registrada en `roots`. Es el
+/// core compartido entre el export single y el export-all: BFS por el
+/// DAG estructural + agrega atestaciones y retracciones de esa α.
+fn build_bundle_for_root(
+    repo: &PersistentRepo,
+    alpha: ContentHash,
+) -> Result<BundleV1, CliError> {
+    use std::collections::HashSet;
+
     let (struct_hash, dialect_opt) = repo
         .roots
         .get(&alpha)?
@@ -114,7 +238,7 @@ pub fn cmd_bundle_export(
     let attestations = repo.attestations.get(&alpha)?;
     let retractions = repo.retractions.get(&alpha)?;
 
-    let bundle = BundleV1 {
+    Ok(BundleV1 {
         version: BUNDLE_VERSION,
         alpha,
         struct_hash,
@@ -122,17 +246,6 @@ pub fn cmd_bundle_export(
         nodes,
         attestations,
         retractions,
-    };
-
-    let bytes = postcard::to_allocvec(&bundle).map_err(|_| CliError::InvalidBundle)?;
-    std::fs::write(out, &bytes)?;
-
-    Ok(BundleExportStats {
-        alpha: bundle.alpha,
-        nodes: bundle.nodes.len(),
-        attestations: bundle.attestations.len(),
-        retractions: bundle.retractions.len(),
-        bytes: bytes.len(),
     })
 }
 
@@ -170,7 +283,47 @@ pub fn cmd_bundle_import(
     let repo = PersistentRepo::open(repo_path.join(REPO_DIRNAME))?;
 
     let bytes = std::fs::read(in_path)?;
+    if bytes.len() >= MULTI_MAGIC.len() && &bytes[..MULTI_MAGIC.len()] == MULTI_MAGIC {
+        return Err(CliError::ExpectedSingleBundle);
+    }
     let bundle: BundleV1 = postcard::from_bytes(&bytes).map_err(|_| CliError::InvalidBundle)?;
+    let stats = import_one(&repo, bundle)?;
+    repo.flush()?;
+    Ok(stats)
+}
+
+/// Importa un multi-bundle (formato `MULTI_MAGIC + BundleMultiV1`). Si
+/// el archivo es un single-bundle clásico, lo reportamos como error
+/// para que el caller elija entre `bundle import` y `bundle import-all`.
+pub fn cmd_bundle_import_all(
+    repo_path: &Path,
+    passphrase: &str,
+    in_path: &Path,
+) -> Result<BundleImportAllStats, CliError> {
+    let _keypair = keypair_file::load(repo_path.join(KEYPAIR_FILENAME), passphrase)?;
+    let repo = PersistentRepo::open(repo_path.join(REPO_DIRNAME))?;
+
+    let bytes = std::fs::read(in_path)?;
+    if bytes.len() < MULTI_MAGIC.len() || &bytes[..MULTI_MAGIC.len()] != MULTI_MAGIC {
+        return Err(CliError::ExpectedMultiBundle);
+    }
+    let multi: BundleMultiV1 = postcard::from_bytes(&bytes[MULTI_MAGIC.len()..])
+        .map_err(|_| CliError::InvalidBundle)?;
+    if multi.version != MULTI_VERSION {
+        return Err(CliError::UnsupportedBundleVersion(multi.version));
+    }
+
+    let mut items = Vec::with_capacity(multi.items.len());
+    for bundle in multi.items {
+        items.push(import_one(&repo, bundle)?);
+    }
+    repo.flush()?;
+    Ok(BundleImportAllStats { items })
+}
+
+/// Core compartido entre import single y multi. No flushea (el caller
+/// lo hace una sola vez al final para amortizar I/O en el multi).
+fn import_one(repo: &PersistentRepo, bundle: BundleV1) -> Result<BundleImportStats, CliError> {
     if bundle.version != BUNDLE_VERSION {
         return Err(CliError::UnsupportedBundleVersion(bundle.version));
     }
@@ -254,8 +407,6 @@ pub fn cmd_bundle_import(
             Err(_) => rets_rejected += 1,
         }
     }
-
-    repo.flush()?;
 
     Ok(BundleImportStats {
         alpha: bundle.alpha,
