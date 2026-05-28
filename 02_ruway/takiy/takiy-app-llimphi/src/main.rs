@@ -32,6 +32,8 @@
 //! - Wheel        — desplaza la ventana vertical de pitches en semitonos.
 //! - `Alt+D`      — prende / apaga el delay master (preset 1/8, fb 0.35, mix 0.25).
 //! - `Alt+Shift+D` — cicla el tiempo del delay master (1/8 → 1/4 → 1/4· → 1/8· → 1/16).
+//! - `Alt+R`      — prende / apaga el reverb master (preset sala / damp 0.5 / mix 0.25).
+//! - `Alt+Shift+R` — cicla la sala del reverb master (sala → catedral → cuarto).
 //! - `←` / `→`    — mueve la nota seleccionada ±1 beat.
 //! - `↑` / `↓`    — mueve la nota seleccionada ±1 semitono.
 //! - `+` / `-`    — alarga / acorta la nota seleccionada en 0.5 beats.
@@ -788,6 +790,12 @@ impl App for Takiy {
             Key::Character(s) if s.eq_ignore_ascii_case("d") && event.modifiers.alt => {
                 Some(Msg::Edit(EditMsg::ToggleMasterDelay))
             }
+            Key::Character(s) if s == "R" && event.modifiers.alt && event.modifiers.shift => {
+                Some(Msg::Edit(EditMsg::CycleMasterReverbRoom))
+            }
+            Key::Character(s) if s.eq_ignore_ascii_case("r") && event.modifiers.alt => {
+                Some(Msg::Edit(EditMsg::ToggleMasterReverb))
+            }
             Key::Character(s) if (s == "[" || s == "{") && event.modifiers.alt => {
                 Some(Msg::Edit(EditMsg::NudgeActiveVolume { delta: -0.1 }))
             }
@@ -1082,8 +1090,13 @@ fn paint_piano_roll(
     } else {
         String::new()
     };
+    let reverb_marker = if score.master_reverb.is_some() {
+        format!(" · reverb {}", takiy_app::describe_master_reverb(&score.master_reverb))
+    } else {
+        String::new()
+    };
     let header_text = format!(
-        "{source}  ·  {engine}  ·  {:.0} bpm · key {key_label} · snap {snap_label} · undo {undo_depth}{metro_marker}{loop_marker}{delay_marker}  ·  active: {active_track}·{active_name}{active_mixer}  ·  {status}",
+        "{source}  ·  {engine}  ·  {:.0} bpm · key {key_label} · snap {snap_label} · undo {undo_depth}{metro_marker}{loop_marker}{delay_marker}{reverb_marker}  ·  active: {active_track}·{active_name}{active_mixer}  ·  {status}",
         score.tempo_bpm
     );
     let text_color = if playing {

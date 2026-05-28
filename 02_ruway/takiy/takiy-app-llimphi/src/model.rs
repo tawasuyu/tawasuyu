@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use takiy_core::{DelayParams, Pitch, PitchClass, Scale, Score, ScoreNote, Track};
+use takiy_core::{DelayParams, Pitch, PitchClass, ReverbParams, Scale, Score, ScoreNote, Track};
 
 /// Granularidad de snap para edición. Determina cuánto se redondea el
 /// beat al hacer click, mover con flechas o pegar.
@@ -245,6 +245,13 @@ pub enum EditMsg {
     /// 1/8 (0.5) → 1/4 (1.0) → 1/4-puntillo (1.5) → 1/8-puntillo (0.75)
     /// → 1/16 (0.25) → vuelta a 1/8. No-op si el delay está apagado.
     CycleMasterDelayTime,
+    /// Prende/apaga el reverb master. Al prenderse arranca con
+    /// `ReverbParams::default()` (room 0.5 / damping 0.5 / mix 0.25).
+    ToggleMasterReverb,
+    /// Cicla el `room_size` del reverb master por presets espaciales:
+    /// cuarto (0.25) → sala (0.5) → catedral (0.85) → vuelta a cuarto.
+    /// No-op si el reverb está apagado.
+    CycleMasterReverbRoom,
 }
 
 /// Resultado de aplicar un `EditMsg`: mensaje corto para el header.
@@ -345,6 +352,8 @@ impl EditorState {
             EditMsg::CycleKeyMode => self.cycle_key_mode(),
             EditMsg::ToggleMasterDelay => self.toggle_master_delay(),
             EditMsg::CycleMasterDelayTime => self.cycle_master_delay_time(),
+            EditMsg::ToggleMasterReverb => self.toggle_master_reverb(),
+            EditMsg::CycleMasterReverbRoom => self.cycle_master_reverb_room(),
         }
     }
 
@@ -700,6 +709,28 @@ impl EditorState {
         Some(format!("delay · {}", describe_master_delay(&self.score.master_delay)))
     }
 
+    fn toggle_master_reverb(&mut self) -> ApplyOutcome {
+        self.score.master_reverb = match self.score.master_reverb {
+            None => Some(ReverbParams::default()),
+            Some(_) => None,
+        };
+        Some(format!("reverb · {}", describe_master_reverb(&self.score.master_reverb)))
+    }
+
+    fn cycle_master_reverb_room(&mut self) -> ApplyOutcome {
+        // Presets espaciales: cuarto, sala, catedral.
+        const PRESETS: [f32; 3] = [0.25, 0.5, 0.85];
+        let Some(params) = self.score.master_reverb.as_mut() else {
+            return Some("reverb off (no se puede ciclar sala)".into());
+        };
+        let idx = PRESETS
+            .iter()
+            .position(|r| (r - params.room_size).abs() < 1e-3)
+            .unwrap_or(0);
+        params.room_size = PRESETS[(idx + 1) % PRESETS.len()];
+        Some(format!("reverb · {}", describe_master_reverb(&self.score.master_reverb)))
+    }
+
     fn nudge_active_pan(&mut self, delta: f32) -> ApplyOutcome {
         let idx = self.active_track;
         let track = self.score.track_mut(idx)?;
@@ -818,6 +849,22 @@ pub fn describe_master_delay(delay: &Option<DelayParams>) -> String {
         t => format!("{t:.2}b"),
     };
     format!("{time} · fb {:.2} · mix {:.2}", d.feedback, d.mix)
+}
+
+/// Pretty string para el reverb master: `"off"` o
+/// `"sala · damp 0.50 · mix 0.25"`. El `room_size` se mapea a un
+/// nombre cualitativo cuando coincide con un preset conocido.
+pub fn describe_master_reverb(reverb: &Option<ReverbParams>) -> String {
+    let Some(r) = reverb else {
+        return "off".into();
+    };
+    let room = match r.room_size {
+        s if (s - 0.25).abs() < 1e-3 => "cuarto".to_string(),
+        s if (s - 0.5).abs() < 1e-3 => "sala".to_string(),
+        s if (s - 0.85).abs() < 1e-3 => "catedral".to_string(),
+        s => format!("room {s:.2}"),
+    };
+    format!("{room} · damp {:.2} · mix {:.2}", r.damping, r.mix)
 }
 
 /// Pretty string para el header — `"C major"`, `"A minor"`, `"none"`.
@@ -1439,6 +1486,45 @@ mod tests {
         let mut st = EditorState::new(120.0);
         let out = st.apply(EditMsg::CycleMasterDelayTime);
         assert!(st.score.master_delay.is_none(), "no enciende solo");
+        assert!(out.unwrap().contains("off"));
+    }
+
+    #[test]
+    fn toggle_master_reverb_round_trips_default() {
+        let mut st = EditorState::new(120.0);
+        assert!(st.score.master_reverb.is_none());
+        st.apply(EditMsg::ToggleMasterReverb);
+        assert_eq!(st.score.master_reverb.unwrap(), ReverbParams::default());
+        st.apply(EditMsg::ToggleMasterReverb);
+        assert!(st.score.master_reverb.is_none());
+    }
+
+    #[test]
+    fn toggle_master_reverb_is_undoable() {
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::ToggleMasterReverb);
+        assert!(st.score.master_reverb.is_some());
+        st.undo();
+        assert!(st.score.master_reverb.is_none());
+    }
+
+    #[test]
+    fn cycle_master_reverb_room_walks_through_presets() {
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::ToggleMasterReverb); // arranca en 0.5 (sala)
+        st.apply(EditMsg::CycleMasterReverbRoom);
+        assert!((st.score.master_reverb.unwrap().room_size - 0.85).abs() < 1e-6);
+        st.apply(EditMsg::CycleMasterReverbRoom);
+        assert!((st.score.master_reverb.unwrap().room_size - 0.25).abs() < 1e-6);
+        st.apply(EditMsg::CycleMasterReverbRoom);
+        assert!((st.score.master_reverb.unwrap().room_size - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cycle_master_reverb_room_when_off_is_noop_with_status() {
+        let mut st = EditorState::new(120.0);
+        let out = st.apply(EditMsg::CycleMasterReverbRoom);
+        assert!(st.score.master_reverb.is_none());
         assert!(out.unwrap().contains("off"));
     }
 

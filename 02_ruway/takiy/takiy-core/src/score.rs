@@ -186,6 +186,35 @@ impl Default for DelayParams {
     }
 }
 
+/// Parámetros de un reverb tipo Schroeder simple (4 combs paralelos +
+/// 2 allpasses en serie). Cuando un [`Score`] lleva `master_reverb =
+/// Some(_)`, el renderer aplica esta cola tras el delay y antes del
+/// normalize.
+///
+/// El feedback de los combs se deriva linealmente de `room_size`; el
+/// damping atenúa las frecuencias altas en el bucle de feedback para
+/// emular una sala absorbente (más damping = más oscura la cola).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ReverbParams {
+    /// Tamaño de la sala `[0.0, 1.0]`. Internamente mapea a feedback
+    /// de los combs en `0.7 + room_size * 0.28` → `[0.70, 0.98]`.
+    /// Valores típicos: 0.3 cuarto, 0.6 sala, 0.9 catedral.
+    pub room_size: f32,
+    /// Damping `[0.0, 1.0]` — `0` = cola brillante (sin filtro),
+    /// `1.0` = cola muy oscura (low-pass agresivo en el feedback).
+    pub damping: f32,
+    /// Mezcla wet `[0.0, 1.0]`. `0` = sin efecto, `1.0` = sólo wet.
+    pub mix: f32,
+}
+
+impl Default for ReverbParams {
+    /// Sala mediana con presencia discreta — sirve como punto de
+    /// partida para escuchar el efecto sin invadir la mezcla.
+    fn default() -> Self {
+        Self { room_size: 0.5, damping: 0.5, mix: 0.25 }
+    }
+}
+
 /// Una partitura: un tempo, una tonalidad opcional y varias pistas.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Score {
@@ -202,13 +231,23 @@ pub struct Score {
     /// produce el mismo render byte-exact que antes.
     #[serde(default)]
     pub master_delay: Option<DelayParams>,
+    /// Reverb aplicado al bus master *después* del delay. Mismo
+    /// criterio de compat con `serde(default)` para scores pre-reverb.
+    #[serde(default)]
+    pub master_reverb: Option<ReverbParams>,
     tracks: Vec<Track>,
 }
 
 impl Score {
     /// Partitura vacía con el tempo dado.
     pub fn new(tempo_bpm: f32) -> Self {
-        Self { tempo_bpm, key: None, master_delay: None, tracks: Vec::new() }
+        Self {
+            tempo_bpm,
+            key: None,
+            master_delay: None,
+            master_reverb: None,
+            tracks: Vec::new(),
+        }
     }
 
     /// Añade una pista y devuelve su índice.

@@ -4,7 +4,7 @@
 //! el procesamiento agnóstico al renderer (osc, SF2, …) y dejar que
 //! cada uno llame al efecto antes de normalizar el output.
 
-use takiy_core::DelayParams;
+use takiy_core::{DelayParams, ReverbParams};
 
 use crate::audio::AudioBuffer;
 
@@ -62,6 +62,156 @@ pub fn apply_master_delay(buf: &mut AudioBuffer, sec_per_beat: f32, params: &Del
         idx += 1;
         if idx == delay_frames {
             idx = 0;
+        }
+    }
+}
+
+/// Tamaños de delay en samples a 44.1 kHz para los combs paralelos del
+/// reverb. Vienen del catálogo clásico de Freeverb (mutuamente primos
+/// para evitar resonancias periódicas obvias). Se reescalan al
+/// `sample_rate` real del buffer.
+const COMB_DELAYS_44100: [usize; 4] = [1116, 1277, 1422, 1557];
+
+/// Allpasses en serie tras los combs — esparcen los ecos del comb stack
+/// para que la cola se sienta difusa y no como una secuencia rítmica.
+const ALLPASS_DELAYS_44100: [usize; 2] = [556, 441];
+
+/// Coeficiente del allpass (clásico de Schroeder, fijo en `0.5`).
+const ALLPASS_FEEDBACK: f32 = 0.5;
+
+/// Escala el delay clásico de 44.1 kHz al sample-rate del buffer
+/// preservando el tamaño proporcional. Mínimo 1 sample para no
+/// degenerar el ring buffer.
+fn scaled_delay(d: usize, sample_rate: u32) -> usize {
+    let scaled = (d as f32 * sample_rate as f32 / 44_100.0).round() as usize;
+    scaled.max(1)
+}
+
+/// Comb filter con damping (low-pass de un polo en el feedback path).
+///
+/// La forma: `out = buffer[i]; filterstore = out*(1-d) + filterstore*d;
+/// buffer[i] = input + filterstore*feedback`. El damping mete una
+/// inercia que suaviza las altas en cada vuelta del feedback — más
+/// damping, menos brillo en la cola.
+struct CombFilter {
+    buffer: Vec<f32>,
+    idx: usize,
+    feedback: f32,
+    damping: f32,
+    filterstore: f32,
+}
+
+impl CombFilter {
+    fn new(size: usize, feedback: f32, damping: f32) -> Self {
+        Self {
+            buffer: vec![0.0; size],
+            idx: 0,
+            feedback,
+            damping,
+            filterstore: 0.0,
+        }
+    }
+
+    #[inline]
+    fn process(&mut self, input: f32) -> f32 {
+        let output = self.buffer[self.idx];
+        // Low-pass de un polo en el feedback (sin coeficientes en
+        // dB — el `damping` lineal alcanza para el rango útil).
+        self.filterstore = output * (1.0 - self.damping) + self.filterstore * self.damping;
+        self.buffer[self.idx] = input + self.feedback * self.filterstore;
+        self.idx += 1;
+        if self.idx == self.buffer.len() {
+            self.idx = 0;
+        }
+        output
+    }
+}
+
+/// Allpass clásico de Schroeder: `out = -input + buffered; buffer[i] =
+/// input + buffered * 0.5`. No tiene parámetros — su rol es difundir,
+/// no colorear.
+struct AllPass {
+    buffer: Vec<f32>,
+    idx: usize,
+}
+
+impl AllPass {
+    fn new(size: usize) -> Self {
+        Self { buffer: vec![0.0; size], idx: 0 }
+    }
+
+    #[inline]
+    fn process(&mut self, input: f32) -> f32 {
+        let buffered = self.buffer[self.idx];
+        let out = -input + buffered;
+        self.buffer[self.idx] = input + buffered * ALLPASS_FEEDBACK;
+        self.idx += 1;
+        if self.idx == self.buffer.len() {
+            self.idx = 0;
+        }
+        out
+    }
+}
+
+/// Aplica un reverb tipo Schroeder in-place al `buf`. Cada canal corre
+/// su propia red (4 combs paralelos sumados + 2 allpasses en serie)
+/// para preservar la imagen estéreo del input — los allpasses son los
+/// mismos en ambos canales (más simple; un reverb más rico usaría
+/// pares L/R offseteados).
+///
+/// `room_size` controla el feedback de los combs: `0.0` → 0.70 (sala
+/// pequeña, cola corta), `1.0` → 0.98 (catedral, cola larga). El
+/// damping atenúa las altas en el feedback para emular paredes
+/// absorbentes. Mix wet/dry final, idéntico al patrón del delay.
+///
+/// Bypass automático si `params.mix <= 0` (no-op limpio).
+pub fn apply_master_reverb(buf: &mut AudioBuffer, params: &ReverbParams) {
+    if params.mix <= 0.0 {
+        return;
+    }
+    let channels = buf.channels.max(1) as usize;
+    let mix = params.mix.clamp(0.0, 1.0);
+    let dry_gain = 1.0 - mix;
+    // Mapeo Schroeder clásico: room_size lineal a [0.70, 0.98] de feedback.
+    let feedback = 0.70 + params.room_size.clamp(0.0, 1.0) * 0.28;
+    let damping = params.damping.clamp(0.0, 1.0);
+
+    // Red por canal: 4 combs + 2 allpasses, todos con sus ring buffers
+    // independientes (estado por canal).
+    let mut combs_per_ch: Vec<Vec<CombFilter>> = (0..channels)
+        .map(|_| {
+            COMB_DELAYS_44100
+                .iter()
+                .map(|&d| CombFilter::new(scaled_delay(d, buf.sample_rate), feedback, damping))
+                .collect()
+        })
+        .collect();
+    let mut allpasses_per_ch: Vec<Vec<AllPass>> = (0..channels)
+        .map(|_| {
+            ALLPASS_DELAYS_44100
+                .iter()
+                .map(|&d| AllPass::new(scaled_delay(d, buf.sample_rate)))
+                .collect()
+        })
+        .collect();
+
+    let n_frames = buf.frames();
+    for f in 0..n_frames {
+        for c in 0..channels {
+            let i = f * channels + c;
+            let dry_in = buf.samples[i];
+            // Combs en paralelo: la suma se normaliza por la cantidad
+            // (mantiene la energía controlada al cambiar el N).
+            let mut wet = 0.0;
+            for comb in &mut combs_per_ch[c] {
+                wet += comb.process(dry_in);
+            }
+            wet /= COMB_DELAYS_44100.len() as f32;
+            // Allpasses en serie para difundir el comb stack.
+            for ap in &mut allpasses_per_ch[c] {
+                wet = ap.process(wet);
+            }
+            buf.samples[i] = dry_gain * dry_in + mix * wet;
         }
     }
 }
@@ -137,5 +287,59 @@ mod tests {
             &DelayParams { time_beats: 1e-9, feedback: 0.5, mix: 0.5 },
         );
         assert_eq!(buf.samples, before);
+    }
+
+    #[test]
+    fn reverb_with_mix_zero_is_noop() {
+        let mut buf = impulse_buf(2, 44_100, 2048);
+        let before = buf.samples.clone();
+        apply_master_reverb(
+            &mut buf,
+            &ReverbParams { room_size: 0.5, damping: 0.5, mix: 0.0 },
+        );
+        assert_eq!(buf.samples, before);
+    }
+
+    #[test]
+    fn reverb_produces_tail_after_impulse() {
+        // Un impulso a t=0 + reverb wet=1: las muestras tras los primeros
+        // delays de los combs no pueden ser todas cero — debe haber cola.
+        let mut buf = impulse_buf(1, 44_100, 8192);
+        apply_master_reverb(
+            &mut buf,
+            &ReverbParams { room_size: 0.9, damping: 0.2, mix: 1.0 },
+        );
+        // Saltamos los primeros 1500 frames (~ después del primer comb delay
+        // y del primer allpass) y exigimos que aún haya energía.
+        let tail_energy: f32 = buf.samples[1500..].iter().map(|x| x * x).sum();
+        assert!(tail_energy > 1e-6, "reverb no generó cola");
+    }
+
+    #[test]
+    fn reverb_tail_decays_over_long_buffer() {
+        // room_size=1 → feedback ≈ 0.98 (alto). Buffer largo: la cola
+        // debería decaer hasta caer por debajo del peak en al menos
+        // 12 dB hacia el final. Si el feedback estuviera mal clampeado,
+        // divergiría en lugar de decaer.
+        let sr = 44_100;
+        let mut buf = AudioBuffer::silence_with_channels(sr, sr as usize * 4, 1);
+        for i in 0..100 {
+            buf.samples[i] = 0.1;
+        }
+        apply_master_reverb(
+            &mut buf,
+            &ReverbParams { room_size: 1.0, damping: 0.5, mix: 1.0 },
+        );
+        let peak = buf.samples.iter().fold(0.0_f32, |a, b| a.max(b.abs()));
+        assert!(peak.is_finite() && peak < 1.0, "reverb diverge o NaN (peak {peak})");
+        // Tras 4 segundos, la cola debe ser ≤ 0.25 × peak (≈ -12 dB).
+        let tail_start = buf.samples.len() - sr as usize / 2;
+        let tail_peak = buf.samples[tail_start..]
+            .iter()
+            .fold(0.0_f32, |a, b| a.max(b.abs()));
+        assert!(
+            tail_peak < peak * 0.25,
+            "cola no decae (tail {tail_peak} vs peak {peak})"
+        );
     }
 }

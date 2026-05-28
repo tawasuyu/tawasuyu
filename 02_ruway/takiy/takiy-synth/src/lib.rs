@@ -31,7 +31,7 @@ pub mod waveform;
 pub mod wav;
 
 pub use audio::AudioBuffer;
-pub use effects::apply_master_delay;
+pub use effects::{apply_master_delay, apply_master_reverb};
 pub use envelope::Adsr;
 pub use metronome::{count_in_samples, mix_clicks, prepend_count_in, Metronome};
 pub use renderer::{OscRenderer, Renderer};

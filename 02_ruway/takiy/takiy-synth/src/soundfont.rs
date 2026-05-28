@@ -178,6 +178,9 @@ impl Renderer for SoundFontRenderer {
         if let Some(delay) = score.master_delay.as_ref() {
             crate::effects::apply_master_delay(&mut buf, sec_per_beat, delay);
         }
+        if let Some(reverb) = score.master_reverb.as_ref() {
+            crate::effects::apply_master_reverb(&mut buf, reverb);
+        }
         buf.normalize_if_clipping();
         buf
     }

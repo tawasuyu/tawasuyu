@@ -303,5 +303,36 @@ fn main() {
     st.apply(EditMsg::CycleMasterDelayTime);
     assert!((st.score.master_delay.unwrap().time_beats - 1.0).abs() < 1e-6);
 
-    println!("takiy smoke ok — 16 escenarios verdes");
+    // --- Escenario 17: master reverb (F8).
+    //
+    // Prender reverb cambia el render; serde preserva los parámetros.
+    use takiy_core::ReverbParams;
+
+    let mut st = EditorState::new(120.0);
+    st.apply(EditMsg::AddNote { beat: 0.0, midi: 60 });
+    let dry = renderer.render(&st.score);
+    st.apply(EditMsg::ToggleMasterReverb);
+    let with_reverb = renderer.render(&st.score);
+    assert_eq!(dry.samples.len(), with_reverb.samples.len());
+    let differs = dry
+        .samples
+        .iter()
+        .zip(with_reverb.samples.iter())
+        .any(|(a, b)| (a - b).abs() > 1e-6);
+    assert!(differs, "reverb no modificó el render");
+
+    // Cycle room cambia el room_size al siguiente preset (sala → catedral).
+    st.apply(EditMsg::CycleMasterReverbRoom);
+    assert!((st.score.master_reverb.unwrap().room_size - 0.85).abs() < 1e-6);
+
+    // Roundtrip serde.
+    let path = std::env::temp_dir().join("takiy-smoke-reverb.takiy.json");
+    takiy_app::write_score(&st.score, &path).unwrap();
+    let reloaded = takiy_app::load_score(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(reloaded.master_reverb.unwrap().room_size, 0.85);
+    // master_delay también sobrevive aunque no lo toquemos en este escenario.
+    let _ = ReverbParams::default();
+
+    println!("takiy smoke ok — 17 escenarios verdes");
 }
