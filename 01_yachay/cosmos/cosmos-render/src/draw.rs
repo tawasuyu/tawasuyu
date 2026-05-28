@@ -176,17 +176,15 @@ pub fn compose_wheel(
     model: &crate::RenderModel,
     opts: &CompositionOpts,
 ) -> Vec<DrawCommand> {
-    use crate::math::{find_clusters, format_coord_compact, polar_to_screen, spread_angles, Radii};
+    use crate::math::{find_clusters, polar_to_screen, spread_angles, Radii};
     let mut out = Vec::new();
-    // Cuando dos glyphs caen en (casi) la misma coordenada (planeta ↔
-    // planeta o planeta ↔ cusp de casa con la misma DD°MM'<Sg>), el
-    // coord label de la segunda aparición se suprime — el usuario lee
-    // la coordenada una sola vez. Comparamos por el string ya
-    // formateado (precisión de minuto) en vez de por grados crudos
-    // para que la dedupe ocurra exactamente cuando la etiqueta sería
-    // idéntica visualmente.
-    let mut emitted_coords: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
+    // Coord labels (planetas natales + cusps geo) los recolectamos
+    // acá y los emitimos al final en un solo bloque, agrupados por
+    // proximidad. Eso permite (a) un solo label compartido cuando
+    // dos glyphs caen a < 5 arcmin de distancia (conjunción exacta
+    // entre planetas, o planeta-pega-al-cusp), y (b) posicionar el
+    // label fuera del disco del planeta — sin pisarlo.
+    let mut coord_items: Vec<CoordItem> = Vec::new();
 
     let cx = opts.size / 2.0;
     let cy = opts.size / 2.0;
@@ -369,24 +367,18 @@ pub fn compose_wheel(
                     width,
                     dash: None,
                 });
-                // Coord label del cusp — sólo geocéntrico, sólo cuando
-                // `show_coord_labels` está activo. Lo posicionamos entre
-                // el aro de casas y el dial zodiacal (zona libre, sin
-                // glyphs compitiendo). Dedupe por string formateado.
+                // Recolectamos el cusp como CoordItem — la emisión
+                // del label va al final, con cluster + posicionamiento
+                // consciente del disco. Sólo cusps geo (los topo
+                // saturarían el aro con duplicados cercanos).
                 if is_geo && opts.show_coord_labels {
-                    let coord_str = format_coord_compact(*c);
-                    if emitted_coords.insert(coord_str.clone()) {
-                        let cusp_label_r = (ring_outer + radii.sign_inner) / 2.0;
-                        let (lx, ly) = polar_to_screen(*c, asc, rot, cusp_label_r);
-                        out.push(DrawCommand::Text {
-                            x: cx + lx,
-                            y: cy + ly,
-                            content: coord_str,
-                            color: label_color,
-                            size: opts.size * 0.0165,
-                            anchor: TextAnchor::Middle,
-                        });
-                    }
+                    coord_items.push(CoordItem {
+                        raw_deg: *c,
+                        disp_deg: *c,
+                        is_planet: false,
+                        body_ring: 0.0,
+                        disk_r: 0.0,
+                    });
                 }
             }
         }
@@ -490,30 +482,41 @@ pub fn compose_wheel(
                     ));
                 }
 
-                // Coord label en pill — sólo natal (los overlays se
-                // amontonarían con el natal). Dedupe contra las coords
-                // ya emitidas por house cusps + previos planetas: si dos
-                // glyphs caen en el mismo `DD°MM'<Sg>`, la coordenada se
-                // ve una sola vez. La etiqueta va INTERIOR al ring del
-                // disco (entre el disco y el aro de aspectos) para no
-                // pisar al glyph del planeta ni al cuerpo vecino.
+                // Recolectamos el planeta como CoordItem — el label va
+                // al final, con cluster + posición consciente del disco.
                 if opts.show_coord_labels && is_natal {
-                    let coord_str = format_coord_compact(g.deg);
-                    if emitted_coords.insert(coord_str.clone()) {
-                        let label_ring = (ring - disk * 1.8).max(radii.aspects + opts.size * 0.012);
-                        let (lx, ly) = polar_to_screen(disp_deg, asc, rot, label_ring);
-                        out.push(DrawCommand::Text {
-                            x: cx + lx,
-                            y: cy + ly,
-                            content: coord_str,
-                            color: pal.fg_muted,
-                            size: opts.size * 0.0155,
-                            anchor: TextAnchor::Middle,
-                        });
-                    }
+                    coord_items.push(CoordItem {
+                        raw_deg: g.deg,
+                        disp_deg,
+                        is_planet: true,
+                        body_ring: ring,
+                        disk_r: disk,
+                    });
                 }
             }
         }
+    }
+
+    // === Coord labels: cluster por proximidad + posición sin pisar ===
+    // Agrupa items cuya separación angular bruta sea ≤ COORD_CLUSTER_EPS_DEG
+    // (≈5 arcmin — conjunciones exactas). Por cada cluster emite UN
+    // label posicionado para no pisar discos de planetas:
+    //   - Si el cluster tiene al menos un planeta: label radial INTERIOR
+    //     al body ring, con margen extra contra el borde del disco más
+    //     grande del cluster.
+    //   - Si solo cusps: label entre houses_outer y sign_inner.
+    if opts.show_coord_labels && !coord_items.is_empty() {
+        emit_coord_labels(
+            &mut out,
+            &coord_items,
+            &radii,
+            opts,
+            pal,
+            asc,
+            rot,
+            cx,
+            cy,
+        );
     }
 
     // === Anillo de aspectos + líneas ===
@@ -706,6 +709,163 @@ fn svg_escape(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+// =====================================================================
+// Coord labels — cluster y emisión
+// =====================================================================
+
+/// Tolerancia angular para fusionar items en el mismo cluster de
+/// label. 5 arcmin = `5/60` grados ≈ 0.083°. Captura conjunciones
+/// "exactas" (planetas dentro de unos minutos de arco entre sí), y
+/// planeta-pega-al-cusp cuando un cuerpo está justo sobre una casa.
+const COORD_CLUSTER_EPS_DEG: f32 = 5.0 / 60.0;
+
+/// Item a etiquetar — puede ser un planeta (con su ring y disco) o
+/// un cusp de casa. Se acumulan en compose_wheel y se procesan al
+/// final con [`emit_coord_labels`].
+struct CoordItem {
+    /// Grado real (sin spread anti-solapamiento). Se usa para el
+    /// texto del label (`format_coord_compact`) y para el clustering.
+    raw_deg: f32,
+    /// Grado de display (post-spread) — se usa para posicionar el
+    /// label cerca del glyph efectivo, no del crudo. Para cusps =
+    /// raw_deg (no hay spread).
+    disp_deg: f32,
+    is_planet: bool,
+    /// Ring radial donde vive el cuerpo (sólo si is_planet).
+    body_ring: f32,
+    /// Radio del disco del cuerpo (sólo si is_planet) — el label
+    /// se aleja del disco al menos `2.0 * disk_r` para no pisarlo.
+    disk_r: f32,
+}
+
+/// Posiciona los coord labels en clusters de proximidad. Toma la
+/// lista cruda, la sortea y agrupa por proximidad angular ≤
+/// `COORD_CLUSTER_EPS_DEG` (con wrap-around 0°↔360°). Por cluster
+/// emite **un** Text command — la coord aparece una sola vez aún
+/// si hay varios glyphs ahí.
+#[allow(clippy::too_many_arguments)]
+fn emit_coord_labels(
+    out: &mut Vec<DrawCommand>,
+    items: &[CoordItem],
+    radii: &crate::math::Radii,
+    opts: &CompositionOpts,
+    pal: &crate::palette::Palette,
+    asc: f32,
+    rot: f32,
+    cx: f32,
+    cy: f32,
+) {
+    use crate::math::{format_coord_compact, polar_to_screen};
+
+    // Sortear por raw_deg, manteniendo índices originales.
+    let mut sorted: Vec<&CoordItem> = items.iter().collect();
+    sorted.sort_by(|a, b| {
+        a.raw_deg
+            .partial_cmp(&b.raw_deg)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // Clusters consecutivos por proximidad.
+    let mut groups: Vec<Vec<&CoordItem>> = Vec::new();
+    for it in sorted {
+        let push_new = match groups.last() {
+            Some(g) => {
+                let last_deg = g.last().unwrap().raw_deg;
+                (it.raw_deg - last_deg).abs() > COORD_CLUSTER_EPS_DEG
+            }
+            None => true,
+        };
+        if push_new {
+            groups.push(vec![it]);
+        } else {
+            groups.last_mut().unwrap().push(it);
+        }
+    }
+    // Wrap-around: fusionar primer y último cluster si tocan a través
+    // del 0°/360°.
+    if groups.len() >= 2 {
+        let first_deg = groups.first().unwrap().first().unwrap().raw_deg;
+        let last_deg = groups.last().unwrap().last().unwrap().raw_deg;
+        if (360.0 - last_deg + first_deg).abs() <= COORD_CLUSTER_EPS_DEG {
+            let tail = groups.pop().unwrap();
+            let head = groups.remove(0);
+            let merged: Vec<&CoordItem> = tail.into_iter().chain(head).collect();
+            groups.insert(0, merged);
+        }
+    }
+
+    // Emisión por cluster.
+    for group in &groups {
+        // Coord string: usamos el grado del primer item del cluster
+        // — todos están a ≤5 arcmin, el formato a precisión de minuto
+        // es idéntico para todos.
+        let coord_str = format_coord_compact(group[0].raw_deg);
+
+        // Ángulo de display: promedio de los disp_deg (que ya
+        // incorporan el spread anti-solape de los planetas).
+        let disp_deg = mean_angle(group.iter().map(|i| i.disp_deg));
+
+        let has_planet = group.iter().any(|i| i.is_planet);
+        let label_ring = if has_planet {
+            // Posición: justo bajo el borde inferior (radial-interior)
+            // del disco más grande del cluster + un margen visual
+            // (≈ medio alto de texto + 2 px). El gap natal-aspects es
+            // estrecho (~0.08·r), así que dejamos al label rozar
+            // levemente el aro de aspectos antes que pisar el disco
+            // del planeta.
+            let body_ring = group
+                .iter()
+                .filter(|i| i.is_planet)
+                .map(|i| i.body_ring)
+                .fold(0.0_f32, f32::max);
+            let max_disk = group
+                .iter()
+                .filter(|i| i.is_planet)
+                .map(|i| i.disk_r)
+                .fold(0.0_f32, f32::max);
+            let target = body_ring - max_disk - opts.size * 0.015;
+            target.max(radii.aspects - opts.size * 0.005)
+        } else {
+            // Cusp-only: zona libre entre house ring y dial zodiacal.
+            (radii.houses_outer + radii.sign_inner) * 0.5
+        };
+
+        let (lx, ly) = polar_to_screen(disp_deg, asc, rot, label_ring);
+        let color = if has_planet {
+            pal.fg_muted
+        } else {
+            pal.house_cusp
+        };
+        out.push(DrawCommand::Text {
+            x: cx + lx,
+            y: cy + ly,
+            content: coord_str,
+            color,
+            size: opts.size * 0.0155,
+            anchor: TextAnchor::Middle,
+        });
+    }
+}
+
+/// Promedio circular de ángulos en grados — convierte a vectores
+/// unitarios, suma, y vuelve a polar. Imprescindible para promediar
+/// 359° y 1° y obtener 0°, no 180°.
+fn mean_angle<I: IntoIterator<Item = f32>>(iter: I) -> f32 {
+    let (mut sx, mut sy, mut n) = (0.0_f32, 0.0_f32, 0_u32);
+    for a in iter {
+        let r = a.to_radians();
+        sx += r.cos();
+        sy += r.sin();
+        n += 1;
+    }
+    if n == 0 {
+        return 0.0;
+    }
+    let mean_rad = sy.atan2(sx);
+    let deg = mean_rad.to_degrees();
+    if deg < 0.0 { deg + 360.0 } else { deg }
 }
 
 /// Etiqueta corta de un signo zodiacal — 3 letras ASCII en mayúscula.
