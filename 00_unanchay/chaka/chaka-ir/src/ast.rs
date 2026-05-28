@@ -4,7 +4,7 @@
 pub use chaka_parser::{DataItem, FileEntry, Token};
 
 /// Un programa COBOL en representación intermedia.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct Ir {
     /// El `PROGRAM-ID` ("" si el programa no lo declara).
     pub program_id: String,
@@ -21,7 +21,7 @@ pub struct Ir {
 }
 
 /// Un párrafo del PROCEDURE: un nombre y un cuerpo de statements.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct Procedure {
     /// Nombre del párrafo en mayúsculas; "" para el párrafo implícito.
     pub name: String,
@@ -30,7 +30,7 @@ pub struct Procedure {
 }
 
 /// Un operando: lo que puede ir donde se espera un valor.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Operand {
     /// Referencia a un dato, por nombre (en mayúsculas).
     Data(String),
@@ -46,7 +46,7 @@ pub enum Operand {
 }
 
 /// Las constantes figurativas de COBOL.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Figurative {
     Zero,
     Space,
@@ -57,7 +57,7 @@ pub enum Figurative {
 }
 
 /// Una expresión aritmética (la parte derecha de un `COMPUTE`).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Expr {
     /// Un operando hoja.
     Operand(Operand),
@@ -72,7 +72,7 @@ pub enum Expr {
 }
 
 /// Operador aritmético binario.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum BinOp {
     Add,
     Sub,
@@ -83,7 +83,7 @@ pub enum BinOp {
 }
 
 /// Una condición (la guarda de un `IF` o de un `PERFORM UNTIL`).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Cond {
     /// Comparación relacional `lhs op rhs`.
     Compare {
@@ -102,7 +102,7 @@ pub enum Cond {
 }
 
 /// Operador relacional.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CmpOp {
     Eq,
     Ne,
@@ -113,7 +113,7 @@ pub enum CmpOp {
 }
 
 /// Un statement del PROCEDURE division.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Stmt {
     /// `MOVE from TO to...`
     Move { from: Operand, to: Vec<Operand> },
@@ -301,7 +301,7 @@ pub enum Stmt {
 }
 
 /// El modo de apertura de un fichero.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FileMode {
     /// `OPEN INPUT` — para lectura.
     Input,
@@ -310,7 +310,7 @@ pub enum FileMode {
 }
 
 /// La operación de un `INSPECT`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum InspectOp {
     /// `TALLYING counter FOR ALL search` — suma a `counter` la cantidad
     /// de apariciones de `search` en el destino.
@@ -326,7 +326,7 @@ pub enum InspectOp {
 }
 
 /// Cómo una rama `WHEN` decide si se dispara.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum WhenTest {
     /// El sujeto es igual a este valor.
     Value(Operand),
@@ -339,7 +339,7 @@ pub enum WhenTest {
 /// Una rama `WHEN` de un `EVALUATE`: las pruebas que la disparan
 /// (varios `WHEN` apilados comparten cuerpo) y el cuerpo a ejecutar.
 /// La rama se dispara si **alguna** de sus pruebas pasa.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct WhenBranch {
     pub tests: Vec<WhenTest>,
     pub body: Vec<Stmt>,
@@ -347,21 +347,21 @@ pub struct WhenBranch {
 
 /// Una rama `WHEN` de un `SEARCH`: la condición que la dispara y el
 /// cuerpo a ejecutar al encontrarla. El bucle se corta al disparar una.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SearchBranch {
     pub cond: Cond,
     pub body: Vec<Stmt>,
 }
 
 /// Un statement `PERFORM`: a quién ejecuta y cuántas veces.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Perform {
     pub target: PerformTarget,
     pub control: PerformControl,
 }
 
 /// El cuerpo que un `PERFORM` ejecuta.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum PerformTarget {
     /// `PERFORM PARA [THRU PARA2]` — ejecuta uno o un rango de párrafos.
     Paragraph { name: String, thru: Option<String> },
@@ -370,7 +370,7 @@ pub enum PerformTarget {
 }
 
 /// Cuántas veces se ejecuta el cuerpo de un `PERFORM`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum PerformControl {
     /// Una sola vez.
     Once,

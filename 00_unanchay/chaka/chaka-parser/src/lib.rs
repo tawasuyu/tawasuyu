@@ -28,7 +28,7 @@ use thiserror::Error;
 pub use chaka_lexer::{Token, TokenKind};
 
 /// Un programa COBOL parseado: el esqueleto de sus cuatro divisiones.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct Program {
     /// El `PROGRAM-ID` de la IDENTIFICATION division, si está presente.
     pub program_id: Option<String>,
@@ -42,7 +42,7 @@ pub struct Program {
 
 /// Un fichero declarado: su nombre lógico, la ruta a la que se asigna
 /// (`ASSIGN TO`) y el dato de registro asociado (el `01` bajo su `FD`).
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct FileEntry {
     pub name: String,
     pub path: String,
@@ -52,7 +52,7 @@ pub struct FileEntry {
 /// Un ítem de datos de la DATA division: un número de nivel, un nombre
 /// y, opcionalmente, las cláusulas `PICTURE` y `VALUE`. Los ítems de
 /// mayor nivel numérico cuelgan como `children` del que los contiene.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DataItem {
     /// Número de nivel: 01-49 (jerárquico), 66 (`RENAMES`), 77
     /// (elemental independiente) u 88 (nombre de condición).
@@ -73,7 +73,7 @@ pub struct DataItem {
 
 /// Un párrafo de la PROCEDURE division. El párrafo implícito que
 /// agrupa las sentencias previas al primer encabezado tiene `name` "".
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Paragraph {
     /// Nombre del párrafo en mayúsculas; "" para el párrafo implícito.
     pub name: String,
@@ -83,7 +83,7 @@ pub struct Paragraph {
 
 /// Una sentencia: los tokens entre dos puntos terminadores. La v1 no
 /// parsea a nivel de statement — eso es trabajo de `chaka-ir`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Sentence {
     pub tokens: Vec<Token>,
 }

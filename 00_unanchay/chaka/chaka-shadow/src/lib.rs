@@ -23,6 +23,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod cobc;
 mod field;
 mod interp;
 

@@ -1,18 +1,19 @@
 # chaka-ir
 
-> IR intermedia normalizada de [chaka](../README.md).
+> Representación intermedia de [chaka](../LEEME.md): los statements COBOL como valores tipados.
 
-Convierte el AST del lenguaje legacy a una IR común a todos los dialectos. Tipos resueltos, control flow explícito (no `goto` legacy), efectos secundarios anotados. La IR es el pivote: `chaka-codegen` la consume sin conocer el dialecto original.
+Baja un `Program` de [`chaka-parser`](../chaka-parser/LEEME.md) a un `Ir`: cada párrafo es una lista de `Stmt` tipados (`Move`, `Display`, `Compute`, `If`, `Evaluate`, `Perform`, `Call`, `Search`, `Sort`/`Merge`, `Read`/`Write`/`Rewrite`/`Delete`/`Start`, ...). La DATA division se aplana a un `DataModel` (campos elementales, condiciones 88, grupos). El lowering es **total y tolerante**: un verbo que la v1 no modele queda como `Stmt::Unknown` con sus tokens crudos — el pipeline nunca falla en esta etapa.
 
 ## API
 
 ```rust
-use chaka_ir::{lower, Module};
+use chaka_ir::{lower, Ir};
 
-let module: Module = lower(&ast)?;
+let ir: Ir = lower(&program);
+println!("{} párrafos, {} datos", ir.procedures.len(), ir.model.fields.len());
 ```
 
 ## Deps
 
-- [`chaka-parser`](../chaka-parser/README.md)
-- `serde` para snapshot/inspección
+- [`chaka-parser`](../chaka-parser/LEEME.md), [`chaka-bcd`](../chaka-bcd/LEEME.md).
+- `serde` para que el IR haga roundtrip por JSON (el `Target::Json` de `chaka-codegen`).

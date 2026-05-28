@@ -1,19 +1,29 @@
 # chaka-bcd
 
-> Reader/writer BCD (Binary-Coded Decimal) para [chaka](../README.md).
+> Aritmética decimal con semántica COBOL y codec BCD packed-decimal para [chaka](../LEEME.md).
 
-Formato legacy específico común en mainframes y sistemas COBOL: dígitos decimales empacados 2-por-byte. Este crate ofrece API tipada para leer registros BCD y producirlos cuando un legacy ouput los exige.
+Dos piezas del corazón numérico:
+
+- **Aritmética de punto fijo exacta** (`Decimal`, `Picture`, `Rounding`): COBOL no calcula en flotante binario — opera sobre campos decimales de precisión fija declarados con una cláusula `PICTURE`. Reproducir un programa COBOL fielmente exige reproducir esa aritmética dígito a dígito. Determinista, sin deps de plataforma.
+- **Codec packed-decimal** (`pack`, `unpack`, `packed_size`): el formato `COMP-3` que usan mainframes y ficheros de datos COBOL. Un dígito por nibble, signo en el último nibble (`C` positivo, `D` negativo, `F` sin signo).
 
 ## API
 
 ```rust
-use chaka_bcd::{read, write, Number};
+use chaka_bcd::{Decimal, Picture, pack, unpack};
 
-let n: Number = read(&bytes)?;
-let bytes = write(&n);
+// Aritmética decimal exacta.
+let pic = Picture::parse("S9(5)V99")?;
+let total = Decimal::parse("123.45")?.add(&Decimal::parse("67.89")?);
+
+// Packed-decimal: pack y unpack.
+let bytes = pack(&total, &pic);            // bytes COMP-3 listos para disco
+let same  = unpack(&bytes, &pic)?;         // roundtrip exacto
+assert_eq!(total, same);
 ```
 
 ## Deps
 
-- `byteorder` para lectura endian-aware
-- Cero deps de runtime
+- `serde` para serializar `Decimal` y `Picture`.
+- `thiserror` para `BcdError`.
+- Sin deps de I/O.

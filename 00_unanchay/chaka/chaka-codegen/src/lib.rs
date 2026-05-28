@@ -35,7 +35,27 @@ use expr::rust_str;
 use stmt::emit_stmt;
 use sym::{Field, FieldKind, Symbols};
 
-/// Transpila un [`Ir`] a un fuente Rust completo (un `main.rs`).
+/// El destino del codegen: Rust transpilado o JSON con el IR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    /// Un fuente Rust completo (`main.rs`) que enlaza con `chaka-runtime`.
+    Rust,
+    /// El IR serializado en JSON, para inspección o herramientas externas.
+    Json,
+}
+
+/// Transpila un [`Ir`] al target indicado. `Target::Rust` produce el
+/// `main.rs` autocontenido; `Target::Json` serializa el IR con
+/// `serde_json` (indentación de 2 espacios).
+pub fn emit(ir: &Ir, target: Target) -> String {
+    match target {
+        Target::Rust => generate(ir),
+        Target::Json => serde_json::to_string_pretty(ir).expect("Ir serializa a JSON"),
+    }
+}
+
+/// Transpila un [`Ir`] a un fuente Rust completo (un `main.rs`). Es la
+/// forma directa de [`emit`] con `Target::Rust`.
 pub fn generate(ir: &Ir) -> String {
     let sym = Symbols::build(ir);
     let mut em = Emitter::new();
@@ -286,6 +306,23 @@ mod tests {
              SALUDA.\n\
                  DISPLAY 'HOLA'.\n");
         assert!(out.contains("self.p_saluda();"));
+    }
+
+    #[test]
+    fn json_target_serializes_the_ir() {
+        let toks = chaka_lexer::lex(
+            "PROCEDURE DIVISION.\nMAIN.\n DISPLAY 'X'.\n",
+            chaka_lexer::SourceFormat::Free,
+        )
+        .unwrap();
+        let prog = chaka_parser::parse(&toks).unwrap();
+        let ir = chaka_ir::lower(&prog);
+        let out = emit(&ir, Target::Json);
+        assert!(out.contains("\"program_id\""));
+        assert!(out.contains("\"Display\""));
+        // El JSON se debe poder re-parsear sin perder información.
+        let back: chaka_ir::Ir = serde_json::from_str(&out).expect("Ir roundtrip JSON");
+        assert_eq!(back, ir);
     }
 
     #[test]

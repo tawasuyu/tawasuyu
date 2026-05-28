@@ -10,3 +10,4 @@ description = "chaka-lexer — tokenizador de COBOL (format fijo de columnas y l
 
 [dependencies]
 thiserror = { workspace = true }
+serde = { workspace = true }

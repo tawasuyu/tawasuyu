@@ -1,21 +1,28 @@
 # chaka-lexer
 
-> Tokenizer for legacy sources of [chaka](../README.md).
+> Tokenizer for COBOL sources of [chaka](../README.md).
 
-Reads source bytes and produces `Vec<Token>` with `Span` to preserve original position. Each legacy dialect enters as a module: the lexer dispatches to the right dialect by shebang/extension, or by the explicit dialect that `chaka-app` passes.
+Reads source bytes and produces `Vec<Token>` with line/column preserved. Pre-processes the source through `COPY` directives (and discards `REPLACE` for v1) before tokenizing. Designed so additional dialects can plug in through the `Dialect` enum — `Cobol` is the only dialect implemented today.
 
 ## API
 
 ```rust
-use chaka_lexer::{lex, Dialect};
+use chaka_lexer::{lex, lex_with_dialect, Dialect, SourceFormat};
 
-let tokens = lex(source, Dialect::Bcd)?;
-for tok in tokens {
-    println!("{:?}", tok);
-}
+// Atajo — equivale a Dialect::Cobol.
+let tokens = lex(source, SourceFormat::Free)?;
+
+// Explícito, con dispatch por dialecto y resolución relativa para COPY.
+let tokens = lex_with_dialect(source, SourceFormat::Free, Dialect::Cobol, Some(&base_dir))?;
 ```
+
+## Out of scope (v1)
+
+- Non-COBOL dialects. The `Dialect` enum is ready for them, but only `Cobol` has an implementation today.
+- `REPLACE ==a== BY ==b==.` token substitution — the directive is recognized and silently dropped.
+- Continuation of literals across lines (the `-` indicator in column 7 of fixed format).
 
 ## Deps
 
-- `serde` to serialize the token stream.
-- Zero I/O deps — the caller reads the file.
+- `thiserror`, `serde` (for `Token` / `Dialect` / `SourceFormat` serialization).
+- No I/O deps in the lexer itself; `COPY` resolution reads files via `std::fs`.

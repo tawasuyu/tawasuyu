@@ -1,8 +1,8 @@
 # chaka
 
-> `chaka` (Quechua: *bridge*). Bridge between the monorepo and legacy code.
+> `chaka` (Quechua: *bridge*). Bridge between the monorepo and legacy COBOL.
 
-Reads external sources (BCD, dead languages, old formats) and normalizes them to the system's language. Layered pipeline: lexer → parser → IR → codegen → runtime, with `chaka-shadow` to run legacy in parallel and compare results without breaking the original flow.
+Reads COBOL'85 sources and transpiles them to compilable Rust. Layered pipeline: `lexer → parser → ir → codegen` for the Rust output, with `chaka-shadow` as a developer-time validator: an in-process interpreter checks that the IR walks the same way the transpiled code runs, and an opt-in GnuCOBOL harness checks both against a real COBOL compiler.
 
 ## Install
 
@@ -14,22 +14,26 @@ cargo build --release -p chaka-app
 ## Compatibility
 
 - **Linux / macOS / Windows** — pure Rust, no system deps.
-- **Wawa** — `chaka-runtime` compiles to WASM and runs inside `wawa-kernel`.
+- **GnuCOBOL** (`cobc`) is optional; when installed, `chaka-shadow::cobc` validates the in-process interpreter against the real compiler.
 
 ## Crates
 
 | Crate | Role |
 |---|---|
-| [`chaka-app`](chaka-app/README.md) | Entry CLI/UI. |
-| [`chaka-lexer`](chaka-lexer/README.md) | Tokenize legacy sources. |
-| [`chaka-parser`](chaka-parser/README.md) | Typed AST of the source language. |
-| [`chaka-ir`](chaka-ir/README.md) | Normalized intermediate IR. |
-| [`chaka-codegen`](chaka-codegen/README.md) | IR → target code. |
-| [`chaka-runtime`](chaka-runtime/README.md) | Compiled-code runner. |
-| [`chaka-bcd`](chaka-bcd/README.md) | BCD reader/writer (specific legacy format). |
-| [`chaka-shadow`](chaka-shadow/README.md) | Shadow mode: runs legacy + new in parallel, compares output. |
+| [`chaka-app`](chaka-app/README.md) | CLI entry: `transpile`, `scaffold`, `run`, `check`. |
+| [`chaka-lexer`](chaka-lexer/README.md) | Tokenize COBOL sources; expand `COPY` directives. |
+| [`chaka-parser`](chaka-parser/README.md) | Typed AST (divisions, DATA tree, PROCEDURE sentences). |
+| [`chaka-ir`](chaka-ir/README.md) | Lower the AST to typed statements (`MOVE`, `IF`, `PERFORM`, `CALL`, `SEARCH`...). |
+| [`chaka-codegen`](chaka-codegen/README.md) | IR → Rust source (default) or IR → JSON. |
+| [`chaka-runtime`](chaka-runtime/README.md) | Runtime types the transpiled code links against (`Num`, `Text`, `CobFile`, `format_edited`). |
+| [`chaka-bcd`](chaka-bcd/README.md) | Decimal arithmetic with COBOL semantics + packed-decimal (`COMP-3`) codec. |
+| [`chaka-shadow`](chaka-shadow/README.md) | In-process interpreter + GnuCOBOL harness for diff-against-truth. |
 
-## Considerations
+## Out of scope (v1)
 
-- Shadow mode doesn't replace legacy; it **accompanies** it until divergence reaches zero over an operator-set window.
-- Each new legacy source first enters as a `chaka-lexer` dialect before promoting to IR.
+- Non-COBOL dialects: the `Dialect` enum is wired in `chaka-lexer` but only `Cobol` has an implementation.
+- WASM target for `chaka-codegen` and WASM sandbox in `chaka-runtime` — both planned, both blocked on a `no_std` rework.
+- Llimphi UI for `chaka-app` — today the binary is CLI-only.
+- `REPLACE` directive (the preprocessor expands `COPY` but drops `REPLACE` with a comment).
+- Indexed and relative file organizations: `START`, `REWRITE` and `DELETE` are parsed but treated as no-ops over line-sequential storage.
+- COBOL CICS and embedded SQL.

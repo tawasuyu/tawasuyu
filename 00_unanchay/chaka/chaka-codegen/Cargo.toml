@@ -10,6 +10,7 @@ description = "chaka-codegen — emisión de Rust desde el IR de chaka-app: el m
 
 [dependencies]
 chaka-ir = { path = "../chaka-ir" }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 chaka-parser = { path = "../chaka-parser" }

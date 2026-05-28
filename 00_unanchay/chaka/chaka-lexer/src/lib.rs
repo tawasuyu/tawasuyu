@@ -22,8 +22,34 @@
 
 use thiserror::Error;
 
+/// Dialecto fuente del lexer. La v1 sólo implementa `Cobol`; las
+/// variantes futuras se conectarán aquí sin romper el API (`lex` queda
+/// como un atajo a `Dialect::Cobol`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Dialect {
+    /// COBOL'85 (subconjunto), el dialecto principal del transpilador.
+    Cobol,
+}
+
+impl Default for Dialect {
+    fn default() -> Self {
+        Self::Cobol
+    }
+}
+
+impl Dialect {
+    /// Adivina el dialecto por la extensión del fichero (case-insensitive).
+    /// `None` si no la reconoce.
+    pub fn from_extension(ext: &str) -> Option<Self> {
+        match ext.to_ascii_lowercase().as_str() {
+            "cob" | "cbl" | "cpy" | "cobol" => Some(Self::Cobol),
+            _ => None,
+        }
+    }
+}
+
 /// Formato del código fuente COBOL.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SourceFormat {
     /// Formato fijo tradicional (tarjeta de 80 columnas).
     Fixed,
@@ -32,7 +58,7 @@ pub enum SourceFormat {
 }
 
 /// Clase de un token.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TokenKind {
     /// Palabra COBOL: keyword o identificador (puede llevar guiones
     /// internos, p. ej. `WORKING-STORAGE`).
@@ -50,7 +76,7 @@ pub enum TokenKind {
 }
 
 /// Un token con su posición en el fuente (línea y columna 1-based).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Token {
     pub kind: TokenKind,
     /// Lexema. `Word`: caja original. `String`: valor ya decodificado.
@@ -184,16 +210,40 @@ fn resolve_copy_path(path: &str, base_dir: Option<&std::path::Path>) -> std::pat
     p
 }
 
-/// Tokeniza un fuente COBOL completo. Falla con el primer [`LexError`].
-/// Aplica primero el preprocesador (`COPY` / `REPLACE`) sin directorio
-/// base — los `COPY` deben usar rutas absolutas.
+/// Tokeniza un fuente del dialecto COBOL. Falla con el primer
+/// [`LexError`]. Aplica primero el preprocesador (`COPY` / `REPLACE`)
+/// sin directorio base — los `COPY` deben usar rutas absolutas.
 pub fn lex(source: &str, format: SourceFormat) -> Result<Vec<Token>, LexError> {
-    lex_with_base(source, format, None)
+    lex_with_dialect(source, format, Dialect::Cobol, None)
 }
 
 /// Versión de [`lex`] que acepta un `base_dir` para resolver rutas
-/// relativas en las directivas `COPY`.
+/// relativas en las directivas `COPY`. Equivale a
+/// [`lex_with_dialect`] con `Dialect::Cobol`.
 pub fn lex_with_base(
+    source: &str,
+    format: SourceFormat,
+    base_dir: Option<&std::path::Path>,
+) -> Result<Vec<Token>, LexError> {
+    lex_with_dialect(source, format, Dialect::Cobol, base_dir)
+}
+
+/// Forma general del lexer: despacha por dialecto y resuelve `COPY`
+/// contra `base_dir` si la ruta es relativa. Hoy todo `Dialect` se
+/// resuelve por la misma ruta (sólo `Cobol` está implementado).
+pub fn lex_with_dialect(
+    source: &str,
+    format: SourceFormat,
+    dialect: Dialect,
+    base_dir: Option<&std::path::Path>,
+) -> Result<Vec<Token>, LexError> {
+    match dialect {
+        Dialect::Cobol => lex_cobol(source, format, base_dir),
+    }
+}
+
+/// Lexa un fuente del dialecto COBOL (la implementación efectiva).
+fn lex_cobol(
     source: &str,
     format: SourceFormat,
     base_dir: Option<&std::path::Path>,
@@ -424,6 +474,22 @@ mod tests {
         let toks = kinds("WORKING-STORAGE SECTION.", SourceFormat::Free);
         assert_eq!(toks[0], (TokenKind::Word, "WORKING-STORAGE".into()));
         assert_eq!(toks[1], (TokenKind::Word, "SECTION".into()));
+    }
+
+    #[test]
+    fn dialect_from_extension_recognizes_cobol_suffixes() {
+        assert_eq!(Dialect::from_extension("cob"), Some(Dialect::Cobol));
+        assert_eq!(Dialect::from_extension("CBL"), Some(Dialect::Cobol));
+        assert_eq!(Dialect::from_extension("cpy"), Some(Dialect::Cobol));
+        assert_eq!(Dialect::from_extension("rs"), None);
+    }
+
+    #[test]
+    fn lex_with_dialect_cobol_matches_default_lex() {
+        let src = "PROCEDURE DIVISION.\nMAIN.\n DISPLAY 'OK'.\n";
+        let a = lex(src, SourceFormat::Free).unwrap();
+        let b = lex_with_dialect(src, SourceFormat::Free, Dialect::Cobol, None).unwrap();
+        assert_eq!(a, b);
     }
 
     #[test]

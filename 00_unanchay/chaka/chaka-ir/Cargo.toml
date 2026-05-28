@@ -11,6 +11,7 @@ description = "chaka-ir — representación intermedia: el AST de chaka-parser c
 [dependencies]
 chaka-parser = { path = "../chaka-parser" }
 chaka-bcd = { path = "../chaka-bcd" }
+serde = { workspace = true }
 
 [dev-dependencies]
 chaka-lexer = { path = "../chaka-lexer" }

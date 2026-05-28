@@ -11,7 +11,7 @@ use chaka_parser::DataItem;
 use crate::ast::Operand;
 
 /// El tipo resuelto de un dato elemental.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FieldKind {
     /// Numérico: dígitos enteros, fraccionarios y si lleva signo.
     Num { int: u8, frac: u8, signed: bool },
@@ -20,7 +20,7 @@ pub enum FieldKind {
 }
 
 /// Un dato elemental del programa, listo para materializarse.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Field {
     /// Nombre COBOL, en mayúsculas.
     pub name: String,
@@ -38,7 +38,7 @@ pub struct Field {
 
 /// Un nombre de condición — un dato de nivel 88. `IF <name>` equivale
 /// a comparar `parent` con `value`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ConditionName {
     /// Nombre del 88, en mayúsculas.
     pub name: String,
@@ -50,7 +50,7 @@ pub struct ConditionName {
 
 /// Un grupo de datos: su nombre y los datos elementales que contiene
 /// (recursivamente).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct GroupInfo {
     /// Nombre COBOL del grupo, en mayúsculas.
     pub name: String,
@@ -59,7 +59,7 @@ pub struct GroupInfo {
 }
 
 /// El modelo de datos resuelto de un programa.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 pub struct DataModel {
     /// Los datos elementales, en orden de declaración.
     pub fields: Vec<Field>,

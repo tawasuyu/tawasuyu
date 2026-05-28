@@ -1,23 +1,31 @@
 # chaka-app
 
-> Binario de [chaka](../README.md). CLI + UI Llimphi para correr el pipeline completo.
-
-Punto de entrada del usuario: dispara `lexer → parser → ir → codegen → runtime` con flags para detenerse en cualquier fase y dumpear el artefacto.
+> Binario CLI de [chaka](../LEEME.md): pilota el pipeline `lexer → parser → ir → codegen → sombra`.
 
 ## Uso
 
 ```sh
 cargo run --release -p chaka-app -- --help
 
-# pipeline completo
-chaka run /path/to/legacy.src --output /tmp/out
+# Transpila a un .rs único (por defecto) o vuelca el IR como JSON.
+chaka transpile programa.cob --output programa.rs
+chaka transpile programa.cob --emit json
 
-# parar en IR
-chaka build /path/to/legacy.src --emit ir
+# Genera un crate autocontenido que enlaza con chaka-runtime.
+chaka scaffold programa.cob -o /tmp/programa-rs
+
+# Corre el programa por el intérprete sombra.
+chaka run programa.cob
+
+# Corre y compara contra una salida esperada.
+chaka check programa.cob --expect programa.expected
 ```
+
+## Fuera de alcance (v1)
+
+- **UI Llimphi** del transpilador (vista por tiles con file tree, fuente COBOL, IR y diff transpilado lado a lado). Planificada pero no implementada — hoy `chaka` es sólo CLI.
 
 ## Deps
 
-- [`chaka-lexer`](../chaka-lexer/README.md), [`chaka-parser`](../chaka-parser/README.md), [`chaka-ir`](../chaka-ir/README.md), [`chaka-codegen`](../chaka-codegen/README.md), [`chaka-runtime`](../chaka-runtime/README.md)
-- [`chaka-shadow`](../chaka-shadow/README.md) para modo sombra
-- [`llimphi-ui`](../../../02_ruway/llimphi/widgets/) para la UI
+- [`chaka-lexer`](../chaka-lexer/LEEME.md), [`chaka-parser`](../chaka-parser/LEEME.md), [`chaka-ir`](../chaka-ir/LEEME.md), [`chaka-codegen`](../chaka-codegen/LEEME.md), [`chaka-runtime`](../chaka-runtime/LEEME.md), [`chaka-shadow`](../chaka-shadow/LEEME.md).
+- `clap`, `anyhow`.

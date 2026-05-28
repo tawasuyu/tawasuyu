@@ -11,3 +11,4 @@ description = "chaka-parser — parser de COBOL'85 (subconjunto) a AST: division
 [dependencies]
 chaka-lexer = { path = "../chaka-lexer" }
 thiserror = { workspace = true }
+serde = { workspace = true }

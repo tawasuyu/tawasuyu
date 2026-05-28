@@ -9,6 +9,8 @@
 //! - [`picture`] — la [`Picture`], forma declarada de un campo numérico.
 //! - [`decimal`] — el [`Decimal`] de punto fijo exacto + redondeo +
 //!   detección de desbordamiento (`ON SIZE ERROR`).
+//! - [`packed`] — codec BCD packed-decimal (`COMP-3`): pack/unpack a
+//!   bytes con un dígito por nibble y el signo en el último nibble.
 //!
 //! Determinista y sin dependencias de plataforma: mismo programa, mismos
 //! dígitos, en cualquier máquina. El lexer, el parser, el IR y el codegen
@@ -17,9 +19,11 @@
 #![forbid(unsafe_code)]
 
 pub mod decimal;
+pub mod packed;
 pub mod picture;
 
 pub use decimal::{Decimal, Rounding};
+pub use packed::{pack, pack_with_rounding, packed_size, unpack};
 pub use picture::Picture;
 
 /// Falla de una operación decimal o de una cláusula PICTURE.

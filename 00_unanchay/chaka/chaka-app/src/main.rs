@@ -13,12 +13,31 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
+use chaka_codegen::Target;
 use chaka_ir::{Ir, PerformTarget, Stmt};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 /// Ruta absoluta al crate `chaka-runtime`, fijada al compilar — el
 /// `Cargo.toml` que `scaffold` emite la usa para depender del runtime.
 const RUNTIME_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../chaka-runtime");
+
+/// Formato de salida del comando `transpile`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum EmitTarget {
+    /// Fuente Rust (`main.rs`) que enlaza con `chaka-runtime`.
+    Rust,
+    /// El IR del programa serializado en JSON.
+    Json,
+}
+
+impl From<EmitTarget> for Target {
+    fn from(value: EmitTarget) -> Self {
+        match value {
+            EmitTarget::Rust => Target::Rust,
+            EmitTarget::Json => Target::Json,
+        }
+    }
+}
 
 /// El transpilador de COBOL a Rust.
 #[derive(Parser)]
@@ -30,13 +49,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Transpila un fuente COBOL a código Rust.
+    /// Transpila un fuente COBOL a código Rust o vuelca el IR como JSON.
     Transpile {
         /// El fuente COBOL (.cob), en format libre.
         input: PathBuf,
         /// Archivo de salida; si se omite, va a la salida estándar.
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// Formato de salida: `rust` (por defecto) o `json` (el IR).
+        #[arg(long, value_enum, default_value_t = EmitTarget::Rust)]
+        emit: EmitTarget,
     },
     /// Genera un crate Rust completo y compilable.
     Scaffold {
@@ -73,7 +95,11 @@ fn main() -> ExitCode {
 
 fn dispatch(command: Command) -> Result<ExitCode> {
     match command {
-        Command::Transpile { input, output } => transpile(&input, output.as_deref()),
+        Command::Transpile {
+            input,
+            output,
+            emit,
+        } => transpile(&input, output.as_deref(), emit.into()),
         Command::Scaffold { input, output } => scaffold(&input, &output),
         Command::Run { input } => run(&input),
         Command::Check { input, expect } => check(&input, &expect),
@@ -82,8 +108,8 @@ fn dispatch(command: Command) -> Result<ExitCode> {
 
 // ── Comandos ──────────────────────────────────────────────────────
 
-fn transpile(input: &Path, output: Option<&Path>) -> Result<ExitCode> {
-    let rust = chaka_codegen::generate(&load_ir(input)?);
+fn transpile(input: &Path, output: Option<&Path>, target: Target) -> Result<ExitCode> {
+    let rust = chaka_codegen::emit(&load_ir(input)?, target);
     match output {
         Some(path) => {
             fs::write(path, rust)
