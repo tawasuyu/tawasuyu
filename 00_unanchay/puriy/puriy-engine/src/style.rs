@@ -63,6 +63,11 @@ pub struct ComputedStyle {
     /// (absolute/fixed). Para nodos en flow normal (static), CSS spec
     /// dice que z-index no aplica y se ignora. `0` = default.
     pub z_index: i32,
+    /// `content: "..."` para pseudo-elementos `::before`/`::after`.
+    /// `None` = no hay content (pseudo-element NO se materializa). Sólo
+    /// se consulta en estilos computados para pseudo-elements; en el
+    /// estilo del elemento real, content es no-op (matchea spec).
+    pub content: Option<String>,
     /// `text-decoration-line` reducido al subset que pintamos.
     /// `None` = sin decoración (default HTML, salvo `<a>`/`<u>`/`<s>`).
     pub text_decoration: TextDecorationLine,
@@ -533,6 +538,7 @@ impl Default for ComputedStyle {
             border_radii: Corners::all(0.0),
             box_shadow: None,
             z_index: 0,
+            content: None,
             text_decoration: TextDecorationLine::None,
             list_style_type: ListStyleType::Disc,
             flex_direction: FlexDirection::Row,
@@ -640,6 +646,25 @@ impl StyleEngine {
         self.compute_with_parent_for_state(node, parent, hover_active, false)
     }
 
+    /// Computa el estilo del pseudo-element `::before` o `::after` del
+    /// nodo. Sólo matchean selectores que terminan con ese pseudo;
+    /// reglas para el elemento real se ignoran. Devuelve `None` si el
+    /// pseudo no tiene `content` válido — CSS spec dice que un
+    /// pseudo-element sin content no se materializa.
+    pub fn compute_pseudo(
+        &self,
+        node: &Handle,
+        pseudo: PseudoElement,
+        parent: Option<&ComputedStyle>,
+    ) -> Option<ComputedStyle> {
+        let style = self.compute_internal(node, parent, false, false, Some(pseudo));
+        // CSS spec: si `content` no se setea (None) o resuelve a `none`,
+        // el pseudo-element NO se genera. Acá `content: None` cubre
+        // ambos casos (el parser de content normaliza `none`/`normal` a
+        // None, y la ausencia total también queda en None).
+        style.content.is_some().then_some(style)
+    }
+
     /// Variante con hover **y** focus. Cuando focus_active=true, los
     /// selectores `:focus` matchean. Útil para precalcular `focus_*`
     /// styles desde el chrome.
@@ -649,6 +674,17 @@ impl StyleEngine {
         parent: Option<&ComputedStyle>,
         hover_active: bool,
         focus_active: bool,
+    ) -> ComputedStyle {
+        self.compute_internal(node, parent, hover_active, focus_active, None)
+    }
+
+    fn compute_internal(
+        &self,
+        node: &Handle,
+        parent: Option<&ComputedStyle>,
+        hover_active: bool,
+        focus_active: bool,
+        target_pseudo: Option<PseudoElement>,
     ) -> ComputedStyle {
         let mut style = ComputedStyle::default();
         if let Some(p) = parent {
@@ -708,12 +744,28 @@ impl StyleEngine {
             .rules
             .iter()
             .enumerate()
-            .filter(|(_, r)| r.matches_in_state(node, hover_active, focus_active))
+            .filter(|(_, r)| {
+                // Filtramos por pseudo-element: cuando computamos un
+                // pseudo, sólo nos interesan reglas con ese mismo
+                // pseudo_element en el selector; cuando computamos el
+                // elemento real (target_pseudo=None), ignoramos las
+                // reglas que generan pseudo-elements (sino sus decls
+                // pegarían al padre).
+                r.selector.pseudo_element == target_pseudo
+                    && r.matches_in_state(node, hover_active, focus_active)
+            })
             .map(|(i, r)| (r.selector.specificity(), i, r))
             .collect();
-        let inline_decls: Vec<Decl> = dom::attr(node, "style")
-            .map(|s| parse_declarations(&s, &self.vars))
-            .unwrap_or_default();
+        // Inline `style="..."` no aplica a pseudo-elements (no podés
+        // setear `::before` desde el HTML inline). Sólo lo recogemos
+        // cuando computamos el elemento real.
+        let inline_decls: Vec<Decl> = if target_pseudo.is_some() {
+            Vec::new()
+        } else {
+            dom::attr(node, "style")
+                .map(|s| parse_declarations(&s, &self.vars))
+                .unwrap_or_default()
+        };
 
         // PASADA 1 — normales.
         let mut normal_apps: Vec<(u32, usize, &Decl)> = Vec::new();
@@ -767,14 +819,28 @@ struct Rule {
     decls: Vec<Decl>,
 }
 
+/// Pseudo-elemento attachado al selector. Genera un box hijo sintético
+/// del nodo matching, no parte del DOM real. `content: "..."` define
+/// qué texto pintar. El chrome lo trata como un text leaf inline
+/// regular insertado al inicio (`Before`) o al final (`After`) de los
+/// children.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PseudoElement {
+    Before,
+    After,
+}
+
 /// Selector encadenado — alterna compound + combinador. `compounds[0]`
 /// es el ancestro/hermano más lejano; `compounds.last()` es el sujeto.
 /// `combinators[i]` es el combinador entre `compounds[i]` y
-/// `compounds[i+1]`.
+/// `compounds[i+1]`. `pseudo_element` (si Some) indica que la regla
+/// genera un `::before` o `::after` del sujeto en lugar de aplicar al
+/// nodo mismo.
 #[derive(Debug, Clone)]
 struct Selector {
     compounds: Vec<Compound>,
     combinators: Vec<Combinator>,
+    pseudo_element: Option<PseudoElement>,
 }
 
 impl Selector {
@@ -1174,6 +1240,10 @@ enum DeclKind {
     /// `z-index: N`. Aplica sólo a positioned (absolute/fixed/relative);
     /// para `position: static` el chrome lo ignora (matchea spec).
     ZIndex(i32),
+    /// `content: "..."` para `::before`/`::after`. Sólo string literal
+    /// soportado; `counter(...)`/`attr(...)` quedan para más adelante.
+    /// `None` = `content: none` (suprime el pseudo-element).
+    Content(Option<String>),
     /// `None` = `box-shadow: none` (limpia la sombra).
     BoxShadow(Option<BoxShadow>),
     TextDecoration(TextDecorationLine),
@@ -1271,6 +1341,7 @@ impl Decl {
                 set_corner(&mut s.border_radii, *corner, *v)
             }
             DeclKind::ZIndex(v) => s.z_index = *v,
+            DeclKind::Content(c) => s.content = c.clone(),
             DeclKind::BoxShadow(v) => s.box_shadow = *v,
             DeclKind::TextDecoration(t) => s.text_decoration = *t,
             DeclKind::ListStyleType(t) => s.list_style_type = *t,
@@ -1397,6 +1468,7 @@ fn ua_stylesheet() -> Vec<Rule> {
                 pseudos: vec![],
             }],
             combinators: vec![],
+            pseudo_element: None,
         }
     }
     fn decl(kind: DeclKind) -> Decl {
@@ -1880,16 +1952,24 @@ fn substitute_vars(value: &str, vars: &HashMap<String, String>) -> String {
 /// el selector entero se ignora si los menciona.
 fn parse_selector(sel: &str) -> Option<Selector> {
     let sel = sel.trim();
+    // Strip pseudo-element del final (`::before`/`::after`). CSS también
+    // acepta la sintaxis legacy `:before`/`:after` con un sólo `:` —
+    // las aceptamos por compatibilidad. Pueden venir adheridas al
+    // último compound (`p::before`) o solas (`::before` matchea
+    // implícitamente al universal).
+    let (sel, pseudo_element) = strip_pseudo_element(sel);
     if sel.is_empty() {
+        let compound = Compound {
+            tag: TagPart::Universal,
+            ids: vec![],
+            classes: vec![],
+            attrs: vec![],
+            pseudos: vec![],
+        };
         return Some(Selector {
-            compounds: vec![Compound {
-                tag: TagPart::Universal,
-                ids: vec![],
-                classes: vec![],
-                attrs: vec![],
-                pseudos: vec![],
-            }],
+            compounds: vec![compound],
             combinators: vec![],
+            pseudo_element,
         });
     }
     // Tokenizamos: cada compound es una secuencia sin espacios ni
@@ -1920,11 +2000,33 @@ fn parse_selector(sel: &str) -> Option<Selector> {
     if compounds.is_empty() {
         return None;
     }
-    // Si el selector terminó con un combinador colgado, es inválido.
     if pending_combinator.is_some() {
         return None;
     }
-    Some(Selector { compounds, combinators })
+    Some(Selector { compounds, combinators, pseudo_element })
+}
+
+/// Si `sel` termina con `::before`/`::after` (o legacy `:before`/`:after`),
+/// devuelve `(prefix, Some(PseudoElement))`. Sino devuelve `(sel, None)`.
+fn strip_pseudo_element(sel: &str) -> (&str, Option<PseudoElement>) {
+    let lower = sel.to_ascii_lowercase();
+    for (suffix, pe) in [
+        ("::before", PseudoElement::Before),
+        ("::after", PseudoElement::After),
+        (":before", PseudoElement::Before),
+        (":after", PseudoElement::After),
+    ] {
+        if let Some(prefix) = lower.strip_suffix(suffix) {
+            // Cuidado: `:before` no debe matchear cuando es parte de
+            // `:before-leaf` (no es un pseudo válido en CSS). Pero al
+            // ser sufijo exacto del string, esto no aplica acá. Sí
+            // garantizamos que el prefijo no termine en alfanumérico
+            // (caso `p:beforex` — el parseo falla al no encontrar
+            // pseudoclase válida y lo rechazamos abajo). Acá basta.
+            return (&sel[..prefix.len()], Some(pe));
+        }
+    }
+    (sel, None)
 }
 
 /// Inserta espacios alrededor de `>`/`+`/`~` para que `split_whitespace`
@@ -2125,20 +2227,27 @@ fn is_ident_byte(b: u8) -> bool {
 }
 
 fn strip_comments(css: &str) -> String {
+    // Operamos a nivel byte para detectar `/*…*/`, pero copiamos slices
+    // de la `&str` original para preservar UTF-8 multi-byte (un push de
+    // bytes individuales `as char` rompe runs no-ASCII como "▸").
     let mut out = String::with_capacity(css.len());
     let bytes = css.as_bytes();
     let mut i = 0;
+    let mut chunk_start = 0;
     while i < bytes.len() {
         if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'*' {
+            // Volcamos el chunk pendiente antes del comentario.
+            out.push_str(&css[chunk_start..i]);
             if let Some(end) = css[i + 2..].find("*/") {
                 i += 2 + end + 2;
+                chunk_start = i;
                 continue;
             }
-            break;
+            return out;
         }
-        out.push(bytes[i] as char);
         i += 1;
     }
+    out.push_str(&css[chunk_start..]);
     out
 }
 
@@ -2265,6 +2374,7 @@ fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 v.parse::<i32>().ok().map(DeclKind::ZIndex)
             }
         }
+        "content" => Some(DeclKind::Content(parse_content_value(value))),
         "box-shadow" => Some(DeclKind::BoxShadow(parse_box_shadow(value))),
         "text-decoration" | "text-decoration-line" => {
             parse_text_decoration(value).map(DeclKind::TextDecoration)
@@ -2602,6 +2712,39 @@ fn parse_length_or_pct(s: &str) -> Option<LengthVal> {
         return parse_calc_expr(inner);
     }
     parse_length_px(s).map(LengthVal::Px)
+}
+
+/// Parsea el value de `content:` para pseudo-elements. Soporta:
+/// - `none` / `normal` → `None` (no genera pseudo-element)
+/// - `"texto"` / `'texto'` → `Some("texto")` (con escape `\\` y `\"`)
+/// `counter(...)`/`attr(...)`/`url(...)` no soportados todavía — caen
+/// como `None`.
+fn parse_content_value(value: &str) -> Option<String> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") || v.eq_ignore_ascii_case("normal") {
+        return None;
+    }
+    let mut chars = v.chars();
+    let quote = chars.next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    // Buscar la comilla de cierre matching, respetando escapes.
+    let mut out = String::new();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            if let Some(esc) = chars.next() {
+                out.push(esc);
+                continue;
+            }
+            return None;
+        }
+        if c == quote {
+            return Some(out);
+        }
+        out.push(c);
+    }
+    None
 }
 
 /// Si `s` matchea `calc(...)` (case-insensitive), devuelve el contenido
@@ -3710,6 +3853,73 @@ mod tests {
         assert_eq!(parse_length_px("1.5em"), Some(24.0));
         assert_eq!(parse_length_px("0"), Some(0.0));
         assert_eq!(parse_length_px("xyz"), None);
+    }
+
+    #[test]
+    fn parse_content_value_acepta_string_quoted() {
+        assert_eq!(parse_content_value(r#""hola""#).as_deref(), Some("hola"));
+        assert_eq!(parse_content_value(r#"'mundo'"#).as_deref(), Some("mundo"));
+        assert_eq!(parse_content_value("none"), None);
+        assert_eq!(parse_content_value("normal"), None);
+        // Sin comillas → None.
+        assert_eq!(parse_content_value("foo"), None);
+    }
+
+    #[test]
+    fn parse_content_value_respeta_escapes() {
+        assert_eq!(
+            parse_content_value(r#""linea1\nlinea2""#).as_deref(),
+            Some("linea1nlinea2") // \n no especial — sólo escape literal
+        );
+        assert_eq!(
+            parse_content_value(r#""con \"quote\" adentro""#).as_deref(),
+            Some(r#"con "quote" adentro"#)
+        );
+    }
+
+    #[test]
+    fn pseudo_element_extrae_del_selector() {
+        let html = r##"<html><head><style>
+            p::before { content: "PRE " }
+            p::after { content: " POST" }
+            p:before { content: "legacy" }
+        </style></head><body><p>x</p></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        let before = eng.compute_pseudo(&p, PseudoElement::Before, None);
+        let after = eng.compute_pseudo(&p, PseudoElement::After, None);
+        // `:before` legacy también matchea Before pero llega después; el
+        // último gana en empate de especificidad.
+        assert_eq!(before.and_then(|s| s.content).as_deref(), Some("legacy"));
+        assert_eq!(after.and_then(|s| s.content).as_deref(), Some(" POST"));
+    }
+
+    #[test]
+    fn pseudo_element_sin_content_no_se_materializa() {
+        // Una regla `::before` sin content → compute_pseudo devuelve None.
+        let html = r##"<html><head><style>
+            p::before { color: red }
+        </style></head><body><p>x</p></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        assert!(eng.compute_pseudo(&p, PseudoElement::Before, None).is_none());
+    }
+
+    #[test]
+    fn reglas_pseudo_no_pegan_al_elemento_real() {
+        // `p::before { color: red }` NO debe afectar el color de `<p>`
+        // — sólo de su `::before`.
+        let html = r##"<html><head><style>
+            p::before { content: "X"; color: red }
+            p { color: blue }
+        </style></head><body><p>texto</p></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        let s = eng.compute(&p);
+        assert_eq!(s.color, Color::rgb(0, 0, 255)); // blue, no red
     }
 
     #[test]

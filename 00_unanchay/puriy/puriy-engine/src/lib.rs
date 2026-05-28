@@ -38,8 +38,9 @@ pub use fetch::{fetch, FetchError};
 pub use style::{
     AlignItems, AlignSelf, BoxShadow, BoxSizing, ComputedStyle, FlexDirection, FlexWrap, FontStyle,
     GradientStop, GridTrackSize, JustifyContent, LengthVal, LinearGradient, Outline, Overflow,
-    PointerEvents, Position, Sides, StyleEngine, TextAlign, TextDecorationLine, TextShadow,
-    TextTransform, Transform, VerticalAlign, Viewport, Visibility, WhiteSpace, DEFAULT_VIEWPORT,
+    PointerEvents, Position, PseudoElement, Sides, StyleEngine, TextAlign, TextDecorationLine,
+    TextShadow, TextTransform, Transform, VerticalAlign, Viewport, Visibility, WhiteSpace,
+    DEFAULT_VIEWPORT,
 };
 
 /// Pipeline completo del navegador. Sin estado mutable — cada `load`

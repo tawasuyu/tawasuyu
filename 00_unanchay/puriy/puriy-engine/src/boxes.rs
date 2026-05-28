@@ -1123,6 +1123,16 @@ fn build_node(
                 .and_then(|u| resolve_href(base, u))
                 .and_then(|abs| fetch_and_decode(&abs));
             let mut children = Vec::new();
+            // `::before` pseudo-element. Se inyecta ANTES que el marker
+            // de `<li>` y que los children reales — matchea spec ("the
+            // first thing inside the box").
+            if let Some(ps) =
+                styles.compute_pseudo(node, crate::style::PseudoElement::Before, Some(&style))
+            {
+                if let Some(text) = &ps.content {
+                    children.push(inline_text_with_style(text.clone(), &ps));
+                }
+            }
             // <li>: prefija con marker (bullet o numeral según
             // `list-style-type`). Lo agregamos como un hijo Text inline
             // antes de procesar los hijos reales — hereda
@@ -1145,6 +1155,15 @@ fn build_node(
             for child in node.children.borrow().iter() {
                 if let Some(b) = build_node(child, styles, base, Some(&style)) {
                     children.push(b);
+                }
+            }
+            // `::after` pseudo-element. Se appendea al final, después
+            // de los children reales.
+            if let Some(ps) =
+                styles.compute_pseudo(node, crate::style::PseudoElement::After, Some(&style))
+            {
+                if let Some(text) = &ps.content {
+                    children.push(inline_text_with_style(text.clone(), &ps));
                 }
             }
             let children = strip_block_adjacent_whitespace(children, style.display);
@@ -2426,6 +2445,32 @@ mod tests {
             }
         });
         assert_eq!(links, vec!["https://example.com/doc#top".to_string()]);
+    }
+
+    #[test]
+    fn before_y_after_se_inyectan_como_children() {
+        let html = r##"<html><head><style>
+            .badge::before { content: "▸ " }
+            .badge::after  { content: " !" }
+        </style></head><body>
+            <p class="badge">Hola</p>
+        </body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        // El `<p>` tiene 3 hijos: el ::before, el text leaf "Hola", el ::after.
+        let mut p_children: Option<Vec<String>> = None;
+        doc.box_tree.walk(|b| {
+            if b.tag.as_deref() == Some("p") && p_children.is_none() {
+                p_children = Some(
+                    b.children
+                        .iter()
+                        .filter_map(|c| c.text.clone())
+                        .collect(),
+                );
+            }
+        });
+        let texts = p_children.expect("debería encontrar <p>");
+        assert_eq!(texts, vec!["▸ ".to_string(), "Hola".to_string(), " !".to_string()]);
     }
 
     #[test]
