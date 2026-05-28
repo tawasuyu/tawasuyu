@@ -122,6 +122,12 @@ pub struct TabState {
     pub box_tree: Option<BoxTree>,
     /// Generación monótona — Loaded de generaciones viejas se descarta.
     pub gen: u64,
+    /// Estado open/closed por `<details>` en orden DFS. Se inicializa al
+    /// recibir `Msg::Loaded` walkeando el box tree y consultando
+    /// `details_open_attr` de cada `<details>`. Subsiguientes
+    /// `Msg::ToggleDetails(idx)` flippean el bool. Reset en cada
+    /// navegación para evitar índices stale.
+    pub details_open: Vec<bool>,
 }
 
 impl TabState {
@@ -140,6 +146,7 @@ impl TabState {
             cursor: 0,
             box_tree: None,
             gen: 0,
+            details_open: Vec::new(),
         }
     }
 
@@ -234,6 +241,11 @@ pub enum Msg {
     /// Click en el botón ✕ de un bookmark — lo borra del profile y
     /// persiste.
     RemoveBookmark(puriy_core::BookmarkId),
+    /// Click en `<summary>` (o en la flecha que lo precede): toggle del
+    /// `<details>` cuyo índice DFS es `idx`. Si el índice excede el
+    /// `details_open` actual, el msg es no-op (ej: re-render durante una
+    /// carga nueva).
+    ToggleDetails(usize),
 }
 
 impl App for Puriy {
@@ -362,6 +374,17 @@ impl App for Puriy {
                         t.title = title.clone();
                         let n = box_tree.descendants_count();
                         t.status = format!("OK · {n} boxes");
+                        // Prefill el estado de los <details> walkeando el
+                        // árbol nuevo en orden DFS — cada `<details>`
+                        // aporta un bool inicializado desde su
+                        // `open` attribute.
+                        let mut details_open = Vec::new();
+                        box_tree.walk(|b| {
+                            if b.tag.as_deref() == Some("details") {
+                                details_open.push(b.details_open_attr);
+                            }
+                        });
+                        t.details_open = details_open;
                         t.box_tree = Some(box_tree);
                         // Registra en la history global del Profile (no
                         // confundir con TabState.history, que es el
@@ -535,6 +558,12 @@ impl App for Puriy {
                     }
                 }
                 persist_profile();
+            }
+            Msg::ToggleDetails(idx) => {
+                let t = m.active_mut();
+                if let Some(slot) = t.details_open.get_mut(idx) {
+                    *slot = !*slot;
+                }
             }
         }
         m
@@ -1104,6 +1133,7 @@ fn viewport(t: &TabState, zoom: f32, find_query_lc: &str) -> View<Msg> {
     // Margen del viewport y scroll: el margen interior (24 px / 16 px) no
     // se escala para que el "marco" del documento sea estable; lo que
     // escala es el contenido (font_size + spacing del box tree).
+    let mut details_counter: usize = 0;
     let content = View::new(Style {
         position: TaffyPosition::Absolute,
         inset: Rect {
@@ -1115,7 +1145,13 @@ fn viewport(t: &TabState, zoom: f32, find_query_lc: &str) -> View<Msg> {
         flex_direction: FlexDirection::Column,
         ..Default::default()
     })
-    .children(vec![render_box(&tree.root, zoom, find_query_lc)]);
+    .children(vec![render_box(
+        &tree.root,
+        zoom,
+        find_query_lc,
+        &t.details_open,
+        &mut details_counter,
+    )]);
 
     View::new(Style {
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
@@ -1126,9 +1162,81 @@ fn viewport(t: &TabState, zoom: f32, find_query_lc: &str) -> View<Msg> {
     .children(vec![content])
 }
 
-fn render_box(b: &BoxNode, zoom: f32, find_query_lc: &str) -> View<Msg> {
+fn render_box(
+    b: &BoxNode,
+    zoom: f32,
+    find_query_lc: &str,
+    details_open: &[bool],
+    details_counter: &mut usize,
+) -> View<Msg> {
     let style = box_style(b, zoom);
     let mut view = View::new(style);
+    // Si este nodo es un <details>, reservamos su slot de estado y
+    // renderizamos sólo `<summary>` (precedido de la flecha clickeable)
+    // si está cerrado. La rama de `<details>` retorna acá para no caer
+    // en el flujo normal de children.
+    if b.tag.as_deref() == Some("details") {
+        let my_idx = *details_counter;
+        *details_counter += 1;
+        let open = details_open.get(my_idx).copied().unwrap_or(false);
+        let mut kids: Vec<View<Msg>> = Vec::new();
+        for child in &b.children {
+            let is_summary = child.tag.as_deref() == Some("summary");
+            if is_summary {
+                let arrow = if open { "▼ " } else { "▶ " };
+                let arrow_view = View::new(Style {
+                    size: Size {
+                        width: length(16.0_f32 * zoom),
+                        height: length(child.font_size * zoom * 1.4),
+                    },
+                    margin: Rect {
+                        left: length(0.0_f32),
+                        right: length(2.0_f32 * zoom),
+                        top: length(0.0_f32),
+                        bottom: length(0.0_f32),
+                    },
+                    ..Default::default()
+                })
+                .text_aligned(
+                    arrow.to_string(),
+                    child.font_size * zoom,
+                    Color::from_rgb8(80, 80, 95),
+                    Alignment::Start,
+                )
+                .on_click(Msg::ToggleDetails(my_idx));
+                let summary_view =
+                    render_box(child, zoom, find_query_lc, details_open, details_counter)
+                        .on_click(Msg::ToggleDetails(my_idx));
+                kids.push(
+                    View::new(Style {
+                        flex_direction: FlexDirection::Row,
+                        align_items: Some(AlignItems::Center),
+                        size: Size { width: percent(1.0_f32), height: auto() },
+                        ..Default::default()
+                    })
+                    .children(vec![arrow_view, summary_view]),
+                );
+            } else if open {
+                kids.push(render_box(
+                    child,
+                    zoom,
+                    find_query_lc,
+                    details_open,
+                    details_counter,
+                ));
+            } else {
+                // Cerrado y no-summary: no renderizamos, pero sí
+                // avanzamos el counter por cada `<details>` anidado
+                // adentro para no desalinear los índices con el vector
+                // `details_open` que el Loaded prefilló en orden DFS
+                // completo. Sin esto, abrir un parent cerrado le daría
+                // a sus hijos índices que el state vector pensaba que
+                // correspondían a `<details>` posteriores.
+                skip_count_details(child, details_counter);
+            }
+        }
+        return view.children(kids);
+    }
     // Find-in-page: si la query no es vacía y este nodo es una hoja de
     // texto que la contiene (case-insensitive), pintamos su background
     // con un highlight amarillo. El paint del fill normal del nodo
@@ -1242,13 +1350,39 @@ fn render_box(b: &BoxNode, zoom: f32, find_query_lc: &str) -> View<Msg> {
 
     if !b.children.is_empty() {
         let kids: Vec<View<Msg>> = if let Some(target) = &b.link {
-            b.children.iter().map(|c| render_link_subtree(c, target, link_color, zoom, find_query_lc)).collect()
+            // Dentro de un <a>, los descendientes son no-interactive por
+            // contagio (ya enlazan al target del <a>). No esperamos
+            // <details> dentro de links — pero contamos por las dudas
+            // para no romper el invariante del counter.
+            b.children
+                .iter()
+                .map(|c| {
+                    render_link_subtree(c, target, link_color, zoom, find_query_lc, details_counter)
+                })
+                .collect()
         } else {
-            b.children.iter().map(|c| render_box(c, zoom, find_query_lc)).collect()
+            b.children
+                .iter()
+                .map(|c| render_box(c, zoom, find_query_lc, details_open, details_counter))
+                .collect()
         };
         view = view.children(kids);
     }
     view
+}
+
+/// Recorre `b` y avanza `*counter` por cada `<details>` descendiente.
+/// Usado por el chrome cuando un `<details>` padre está cerrado: aunque
+/// no rendereamos los hijos non-summary, sí tenemos que consumir sus
+/// índices para que no se desalineen con el vector `details_open` que
+/// el Loaded prefilló en DFS completo.
+fn skip_count_details(b: &BoxNode, counter: &mut usize) {
+    if b.tag.as_deref() == Some("details") {
+        *counter += 1;
+    }
+    for c in &b.children {
+        skip_count_details(c, counter);
+    }
 }
 
 /// View dimensionada para una imagen — ancho hasta `width_px` pero
@@ -1279,7 +1413,15 @@ fn render_link_subtree(
     color: Color,
     zoom: f32,
     find_query_lc: &str,
+    details_counter: &mut usize,
 ) -> View<Msg> {
+    // <details> dentro de un <a> es HTML inválido en la práctica; pero
+    // si aparece, contamos el slot igualmente para no desalinear el
+    // counter global. No reescribimos el comportamiento interactivo:
+    // dentro de un link el subtree colapsado se ignora.
+    if b.tag.as_deref() == Some("details") {
+        skip_count_details(b, details_counter);
+    }
     let mut view = View::new(box_style(b, zoom)).on_click(Msg::Navigate(target.to_string()));
     let find_hit = !find_query_lc.is_empty()
         && b.text
@@ -1307,7 +1449,7 @@ fn render_link_subtree(
         view = view.children(
             b.children
                 .iter()
-                .map(|c| render_link_subtree(c, target, color, zoom, find_query_lc))
+                .map(|c| render_link_subtree(c, target, color, zoom, find_query_lc, details_counter))
                 .collect(),
         );
     }
@@ -1827,5 +1969,33 @@ mod tests {
     fn count_matches_query_sin_hits_devuelve_cero() {
         let tree = parse("<p>foo bar baz</p>");
         assert_eq!(count_matches(Some(&tree), "qwerty"), 0);
+    }
+
+    #[test]
+    fn skip_count_details_avanza_por_cada_details_anidado() {
+        let tree = parse(
+            "<details><summary>A</summary><details><summary>B</summary><p>x</p></details></details>\
+             <details><summary>C</summary></details>",
+        );
+        // Pre-cuenta total via walk (mismo orden que el Loaded llena).
+        let mut total = 0_usize;
+        tree.walk(|b| {
+            if b.tag.as_deref() == Some("details") {
+                total += 1;
+            }
+        });
+        assert!(total >= 3, "esperaba >= 3 <details>, conseguí {total}");
+
+        let mut counter = 0_usize;
+        skip_count_details(&tree.root, &mut counter);
+        assert_eq!(counter, total, "skip_count_details debe contar todos los <details>");
+    }
+
+    #[test]
+    fn skip_count_details_no_cuenta_otros_tags() {
+        let tree = parse("<p>foo</p><h1>bar</h1><div><span>baz</span></div>");
+        let mut counter = 0_usize;
+        skip_count_details(&tree.root, &mut counter);
+        assert_eq!(counter, 0);
     }
 }

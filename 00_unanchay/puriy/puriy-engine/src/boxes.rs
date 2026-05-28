@@ -160,6 +160,11 @@ pub struct BoxNode {
     /// pudo descargarse y decodificarse. PNG/JPEG soportados; otros
     /// formatos dejan `None` y el chrome muestra un placeholder.
     pub image: Option<ImageData>,
+    /// `true` si el nodo es un `<details>` que arrancó con el atributo
+    /// `open`. El chrome usa esto para inicializar el estado open/closed
+    /// del primer render; subsiguientes toggles los gestiona él. Para
+    /// nodos que no son `<details>` queda en `false` y no se consulta.
+    pub details_open_attr: bool,
 }
 
 /// Imagen RGBA8 lista para que el chrome la envuelva en `peniko::Image`.
@@ -270,6 +275,7 @@ fn empty_root() -> BoxNode {
         tag: Some("body".into()),
         link: None,
         image: None,
+        details_open_attr: false,
     }
 }
 
@@ -389,9 +395,11 @@ fn build_node(
                 text_decoration: style.text_decoration,
                 text: None,
                 children,
-                tag,
+                tag: tag.clone(),
                 link,
                 image,
+                details_open_attr: tag.as_deref() == Some("details")
+                    && dom::attr(node, "open").is_some(),
             })
         }
         NodeData::Text { contents } => {
@@ -484,6 +492,7 @@ fn build_node(
                 tag: None,
                 link: None,
                 image: None,
+                details_open_attr: false,
             })
         }
     }
@@ -550,6 +559,7 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         tag: None,
         link: None,
         image: None,
+        details_open_attr: false,
     }
 }
 
@@ -957,5 +967,69 @@ mod tests {
             }
         });
         assert!(found_red, "no se encontró <p> con color rojo");
+    }
+
+    #[test]
+    fn details_sin_open_attr_arranca_cerrado() {
+        let html = r#"<html><body>
+            <details><summary>Tit</summary><p>Contenido</p></details>
+        </body></html>"#;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut details_attr: Vec<bool> = Vec::new();
+        doc.box_tree.walk(|b| {
+            if b.tag.as_deref() == Some("details") {
+                details_attr.push(b.details_open_attr);
+            }
+        });
+        assert_eq!(details_attr, vec![false]);
+    }
+
+    #[test]
+    fn details_con_open_attr_lo_refleja() {
+        let html = r#"<html><body>
+            <details open><summary>Tit</summary><p>Contenido</p></details>
+        </body></html>"#;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut details_attr: Vec<bool> = Vec::new();
+        doc.box_tree.walk(|b| {
+            if b.tag.as_deref() == Some("details") {
+                details_attr.push(b.details_open_attr);
+            }
+        });
+        assert_eq!(details_attr, vec![true]);
+    }
+
+    #[test]
+    fn details_summary_se_parsean_como_tags() {
+        let html = r#"<html><body>
+            <details><summary>Tit</summary><p>Contenido</p></details>
+        </body></html>"#;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut saw_details = false;
+        let mut saw_summary = false;
+        doc.box_tree.walk(|b| {
+            match b.tag.as_deref() {
+                Some("details") => saw_details = true,
+                Some("summary") => saw_summary = true,
+                _ => {}
+            }
+        });
+        assert!(saw_details, "no se encontró <details> en el box tree");
+        assert!(saw_summary, "no se encontró <summary> en el box tree");
+    }
+
+    #[test]
+    fn details_open_attr_es_false_para_nodos_no_details() {
+        let html = "<html><body><p>x</p><h1>y</h1></body></html>";
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        doc.box_tree.walk(|b| {
+            if b.tag.as_deref() != Some("details") {
+                assert!(!b.details_open_attr, "{:?} no debería tener details_open_attr=true", b.tag);
+            }
+        });
     }
 }
