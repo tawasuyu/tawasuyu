@@ -36,7 +36,10 @@
 //! - `Alt+Shift+R` — cicla la sala del reverb master (sala → catedral → cuarto).
 //! - `Alt+V`      — ancla un punto de automación de volumen en el beat de la nota
 //!                  seleccionada (o playhead, o 0) con el volumen efectivo actual.
+//!                  La curva de la pista activa se pinta como polilínea naranja
+//!                  semi-transparente sobre el grid (vol mapea 0..1.5 → altura).
 //! - `Alt+P`      — ancla un punto de automación de pan, mismo criterio.
+//!                  Curva pintada en cyan (pan mapea −1..+1 → altura).
 //! - `Alt+C`      — limpia ambas curvas de automación de la pista activa.
 //! - `←` / `→`    — mueve la nota seleccionada ±1 beat.
 //! - `↑` / `↓`    — mueve la nota seleccionada ±1 semitono.
@@ -1191,6 +1194,39 @@ fn paint_piano_roll(
         }
     }
 
+    // Overlay de automación de la pista activa: dos polilíneas
+    // semi-transparentes (vol naranja / pan cyan) que mapean el valor
+    // de la curva al rango vertical completo del grid. Sólo se pinta
+    // la pista activa para no saturar el lienzo. Dots gordos sobre
+    // cada `AutomationPoint` para que un editor visual futuro tenga
+    // dónde clavar el hit-test.
+    if let Some(active_t) = score.track(active_track) {
+        paint_automation_lane(
+            scene,
+            active_t.volume_automation.as_ref(),
+            grid_x,
+            grid_y,
+            grid_w,
+            grid_h,
+            beat_w,
+            0.0,
+            1.5,
+            Color::from_rgba8(240, 170, 90, 180),
+        );
+        paint_automation_lane(
+            scene,
+            active_t.pan_automation.as_ref(),
+            grid_x,
+            grid_y,
+            grid_w,
+            grid_h,
+            beat_w,
+            -1.0,
+            1.0,
+            Color::from_rgba8(96, 200, 240, 180),
+        );
+    }
+
     // Cursor de reproducción usando la posición real del Player
     // (sample-accurate): convertimos segundos → beats según el BPM
     // congelado al lanzar el render.
@@ -1204,6 +1240,80 @@ fn paint_piano_roll(
             path.line_to((x as f64, (grid_y + grid_h) as f64));
             scene.stroke(&Stroke::new(1.8), Affine::IDENTITY, cursor_color, None, &path);
         }
+    }
+}
+
+/// Pinta una `AutomationLane` como polilínea + dots sobre el grid.
+/// Mapea el valor a `y` linealmente entre `(v_min, v_max)` y deja un
+/// pequeño margen interno para que los puntos extremos no toquen el
+/// borde del grid. Si la lane es `None` o vacía, no pinta nada.
+///
+/// La línea se extiende horizontalmente del primer punto hacia la
+/// izquierda y del último hacia la derecha — mismo comportamiento que
+/// `AutomationLane::value_at` (clamp en los bordes), así el dibujo y
+/// la audición coinciden.
+#[allow(clippy::too_many_arguments)]
+fn paint_automation_lane(
+    scene: &mut llimphi_ui::llimphi_raster::vello::Scene,
+    lane: Option<&takiy_core::AutomationLane>,
+    grid_x: f32,
+    grid_y: f32,
+    grid_w: f32,
+    grid_h: f32,
+    beat_w: f32,
+    v_min: f32,
+    v_max: f32,
+    color: Color,
+) {
+    let Some(lane) = lane else { return };
+    if lane.points.is_empty() {
+        return;
+    }
+    let margin = 6.0_f32;
+    let usable_h = (grid_h - margin * 2.0).max(1.0);
+    let v_to_y = |v: f32| {
+        let span = (v_max - v_min).max(1e-6);
+        let norm = ((v - v_min) / span).clamp(0.0, 1.0);
+        grid_y + margin + (1.0 - norm) * usable_h
+    };
+    let beat_to_x = |b: f32| grid_x + b * beat_w;
+
+    let mut path = BezPath::new();
+    let first = lane.points.first().expect("checked non-empty");
+    let first_y = v_to_y(first.value);
+    let first_x = beat_to_x(first.beat).max(grid_x);
+    path.move_to((grid_x as f64, first_y as f64));
+    path.line_to((first_x as f64, first_y as f64));
+    for p in lane.points.iter().skip(1) {
+        let x = beat_to_x(p.beat).min(grid_x + grid_w);
+        let y = v_to_y(p.value);
+        path.line_to((x as f64, y as f64));
+        if x >= grid_x + grid_w {
+            break;
+        }
+    }
+    let last = lane.points.last().expect("checked non-empty");
+    let last_x = beat_to_x(last.beat);
+    if last_x < grid_x + grid_w {
+        let last_y = v_to_y(last.value);
+        path.line_to(((grid_x + grid_w) as f64, last_y as f64));
+    }
+    scene.stroke(&Stroke::new(1.6), Affine::IDENTITY, color, None, &path);
+
+    for p in lane.points.iter() {
+        let x = beat_to_x(p.beat);
+        if x < grid_x || x > grid_x + grid_w {
+            continue;
+        }
+        let y = v_to_y(p.value);
+        let r = 4.0_f64;
+        let dot = KurboRect::new(
+            x as f64 - r,
+            y as f64 - r,
+            x as f64 + r,
+            y as f64 + r,
+        );
+        scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &dot);
     }
 }
 
