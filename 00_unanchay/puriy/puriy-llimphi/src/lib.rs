@@ -125,6 +125,14 @@ pub struct TabState {
     pub source: Option<String>,
     /// Generación monótona — Loaded de generaciones viejas se descarta.
     pub gen: u64,
+    /// Estado de los `<input>`/`<textarea>` por DFS index. Cada slot lleva
+    /// el `TextInputState` de un input/textarea — se crea con su `value`/
+    /// contenido inicial cuando llega el `Msg::Loaded` y persiste hasta la
+    /// próxima navegación de la pestaña.
+    pub inputs: Vec<TextInputState>,
+    /// Índice DFS del input/textarea focado (clave en `inputs`). `None` =
+    /// sin foco; el chrome rutea teclas al resto del flow.
+    pub focused_input: Option<usize>,
     /// Estado open/closed por `<details>` en orden DFS. Se inicializa al
     /// recibir `Msg::Loaded` walkeando el box tree y consultando
     /// `details_open_attr` de cada `<details>`. Subsiguientes
@@ -150,6 +158,8 @@ impl TabState {
             box_tree: None,
             source: None,
             gen: 0,
+            inputs: Vec::new(),
+            focused_input: None,
             details_open: Vec::new(),
         }
     }
@@ -274,6 +284,11 @@ pub enum Msg {
     PanelFilterKey(KeyEvent),
     /// Ctrl+U — toggle del panel "Page Source" para la pestaña activa.
     ViewSource,
+    /// Click sobre un `<input>`/`<textarea>` del documento — foca ese
+    /// input por índice DFS.
+    FocusInput(usize),
+    /// Teclas redirigidas al input focado (cuando `focused_input` es Some).
+    InputKey(KeyEvent),
     /// Click en `<summary>` (o en la flecha que lo precede): toggle del
     /// `<details>` cuyo índice DFS es `idx`. Si el índice excede el
     /// `details_open` actual, el msg es no-op (ej: re-render durante una
@@ -388,6 +403,17 @@ impl App for Puriy {
         if model.active().addr_focused && !matches!(&e.key, Key::Named(NamedKey::F5)) {
             return Some(Msg::AddrKey(e.clone()));
         }
+        // Si hay un input/textarea del documento focado, las teclas van
+        // ahí. Esc blurea (foco vuelve a la página). F5 se respeta como
+        // recargar para no perder un atajo crítico.
+        if model.active().focused_input.is_some() {
+            if matches!(&e.key, Key::Named(NamedKey::Escape)) {
+                return Some(Msg::FocusInput(usize::MAX)); // sentinel = blur
+            }
+            if !matches!(&e.key, Key::Named(NamedKey::F5)) {
+                return Some(Msg::InputKey(e.clone()));
+            }
+        }
         match &e.key {
             Key::Named(NamedKey::F5) => Some(Msg::Reload),
             Key::Named(NamedKey::PageDown) => Some(Msg::Scroll(LINE_PX * 12.0)),
@@ -429,12 +455,22 @@ impl App for Puriy {
                         // aporta un bool inicializado desde su
                         // `open` attribute.
                         let mut details_open = Vec::new();
+                        let mut inputs: Vec<TextInputState> = Vec::new();
                         box_tree.walk(|b| {
                             if b.tag.as_deref() == Some("details") {
                                 details_open.push(b.details_open_attr);
                             }
+                            if b.input_kind.is_some() {
+                                let mut s = TextInputState::new();
+                                if let Some(initial) = &b.input_initial {
+                                    s.set_text(initial.clone());
+                                }
+                                inputs.push(s);
+                            }
                         });
                         t.details_open = details_open;
+                        t.inputs = inputs;
+                        t.focused_input = None;
                         t.box_tree = Some(box_tree);
                         // Registra en la history global del Profile (no
                         // confundir con TabState.history, que es el
@@ -669,6 +705,25 @@ impl App for Puriy {
                     _ => Some(PanelKind::Source),
                 };
                 m.panel_filter.clear();
+            }
+            Msg::FocusInput(idx) => {
+                let t = m.active_mut();
+                if idx == usize::MAX {
+                    // sentinel = blur
+                    t.focused_input = None;
+                } else if idx < t.inputs.len() {
+                    t.focused_input = Some(idx);
+                    // Blur address bar para que las teclas no compitan.
+                    t.addr_focused = false;
+                }
+            }
+            Msg::InputKey(e) => {
+                let t = m.active_mut();
+                if let Some(idx) = t.focused_input {
+                    if let Some(input) = t.inputs.get_mut(idx) {
+                        input.apply_key(&e);
+                    }
+                }
             }
         }
         m
@@ -1403,6 +1458,21 @@ fn header_bar(t: &TabState, zoom: f32) -> View<Msg> {
     ])
 }
 
+/// Estado por-frame que el render walk hila por toda la jerarquía. Lo
+/// agrupamos en un struct para que `render_box`/`render_link_subtree`
+/// no tengan 10 params; los `*_counter` se mutan por referencia.
+struct RenderCtx<'a> {
+    zoom: f32,
+    find_query_lc: &'a str,
+    find_current: usize,
+    find_counter: usize,
+    details_open: &'a [bool],
+    details_counter: usize,
+    inputs: &'a [TextInputState],
+    focused_input: Option<usize>,
+    input_counter: usize,
+}
+
 fn viewport(t: &TabState, zoom: f32, find_query_lc: &str, find_current: usize) -> View<Msg> {
     let Some(tree) = t.box_tree.as_ref() else {
         let msg = if t.url == NEW_TAB_URL {
@@ -1427,8 +1497,17 @@ fn viewport(t: &TabState, zoom: f32, find_query_lc: &str, find_current: usize) -
     // Margen del viewport y scroll: el margen interior (24 px / 16 px) no
     // se escala para que el "marco" del documento sea estable; lo que
     // escala es el contenido (font_size + spacing del box tree).
-    let mut details_counter: usize = 0;
-    let mut find_counter: usize = 0;
+    let mut ctx = RenderCtx {
+        zoom,
+        find_query_lc,
+        find_current,
+        find_counter: 0,
+        details_open: &t.details_open,
+        details_counter: 0,
+        inputs: &t.inputs,
+        focused_input: t.focused_input,
+        input_counter: 0,
+    };
     let content = View::new(Style {
         position: TaffyPosition::Absolute,
         inset: Rect {
@@ -1440,15 +1519,7 @@ fn viewport(t: &TabState, zoom: f32, find_query_lc: &str, find_current: usize) -
         flex_direction: FlexDirection::Column,
         ..Default::default()
     })
-    .children(vec![render_box(
-        &tree.root,
-        zoom,
-        find_query_lc,
-        find_current,
-        &mut find_counter,
-        &t.details_open,
-        &mut details_counter,
-    )]);
+    .children(vec![render_box(&tree.root, &mut ctx)]);
 
     View::new(Style {
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
@@ -1459,15 +1530,15 @@ fn viewport(t: &TabState, zoom: f32, find_query_lc: &str, find_current: usize) -
     .children(vec![content])
 }
 
-fn render_box(
-    b: &BoxNode,
-    zoom: f32,
-    find_query_lc: &str,
-    find_current: usize,
-    find_counter: &mut usize,
-    details_open: &[bool],
-    details_counter: &mut usize,
-) -> View<Msg> {
+fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
+    let zoom = ctx.zoom;
+    // <input>/<textarea>: reservar slot y devolver un text_input_view
+    // independiente del flujo normal.
+    if let Some(kind) = b.input_kind {
+        let my_idx = ctx.input_counter;
+        ctx.input_counter += 1;
+        return render_input(b, kind, my_idx, ctx);
+    }
     let style = box_style(b, zoom);
     let mut view = View::new(style);
     // Si este nodo es un <details>, reservamos su slot de estado y
@@ -1475,9 +1546,9 @@ fn render_box(
     // si está cerrado. La rama de `<details>` retorna acá para no caer
     // en el flujo normal de children.
     if b.tag.as_deref() == Some("details") {
-        let my_idx = *details_counter;
-        *details_counter += 1;
-        let open = details_open.get(my_idx).copied().unwrap_or(false);
+        let my_idx = ctx.details_counter;
+        ctx.details_counter += 1;
+        let open = ctx.details_open.get(my_idx).copied().unwrap_or(false);
         let mut kids: Vec<View<Msg>> = Vec::new();
         for child in &b.children {
             let is_summary = child.tag.as_deref() == Some("summary");
@@ -1503,16 +1574,7 @@ fn render_box(
                     Alignment::Start,
                 )
                 .on_click(Msg::ToggleDetails(my_idx));
-                let summary_view = render_box(
-                    child,
-                    zoom,
-                    find_query_lc,
-                    find_current,
-                    find_counter,
-                    details_open,
-                    details_counter,
-                )
-                .on_click(Msg::ToggleDetails(my_idx));
+                let summary_view = render_box(child, ctx).on_click(Msg::ToggleDetails(my_idx));
                 kids.push(
                     View::new(Style {
                         flex_direction: FlexDirection::Row,
@@ -1529,15 +1591,7 @@ fn render_box(
                     .children(vec![arrow_view, summary_view]),
                 );
             } else if open {
-                kids.push(render_box(
-                    child,
-                    zoom,
-                    find_query_lc,
-                    find_current,
-                    find_counter,
-                    details_open,
-                    details_counter,
-                ));
+                kids.push(render_box(child, ctx));
             } else {
                 // Cerrado y no-summary: no renderizamos, pero sí
                 // avanzamos el counter por cada `<details>` anidado
@@ -1546,7 +1600,7 @@ fn render_box(
                 // completo. Sin esto, abrir un parent cerrado le daría
                 // a sus hijos índices que el state vector pensaba que
                 // correspondían a `<details>` posteriores.
-                skip_count_details(child, details_counter);
+                skip_count_details(child, &mut ctx.details_counter);
             }
         }
         return view.children(kids);
@@ -1557,14 +1611,14 @@ fn render_box(
     // (find_current, 1-based) y pinta en naranja para destacarse —
     // el resto en amarillo. El paint del fill normal del nodo
     // (background CSS) se sobrescribe si hay match.
-    let find_hit = !find_query_lc.is_empty()
+    let find_hit = !ctx.find_query_lc.is_empty()
         && b.text
             .as_ref()
-            .map(|s| s.to_lowercase().contains(find_query_lc))
+            .map(|s| s.to_lowercase().contains(ctx.find_query_lc))
             .unwrap_or(false);
     let find_hit_color: Option<Color> = if find_hit {
-        *find_counter += 1;
-        let is_current = find_current != 0 && *find_counter == find_current;
+        ctx.find_counter += 1;
+        let is_current = ctx.find_current != 0 && ctx.find_counter == ctx.find_current;
         Some(if is_current {
             Color::from_rgba8(255, 140, 0, 240)
         } else {
@@ -1684,37 +1738,14 @@ fn render_box(
             // contagio (ya enlazan al target del <a>). No esperamos
             // <details> dentro de links — pero contamos por las dudas
             // para no romper el invariante del counter.
+            let target = target.clone();
+            let new_tab = b.link_new_tab;
             b.children
                 .iter()
-                .map(|c| {
-                    render_link_subtree(
-                        c,
-                        target,
-                        link_color,
-                        b.link_new_tab,
-                        zoom,
-                        find_query_lc,
-                        find_current,
-                        find_counter,
-                        details_counter,
-                    )
-                })
+                .map(|c| render_link_subtree(c, &target, link_color, new_tab, ctx))
                 .collect()
         } else {
-            b.children
-                .iter()
-                .map(|c| {
-                    render_box(
-                        c,
-                        zoom,
-                        find_query_lc,
-                        find_current,
-                        find_counter,
-                        details_open,
-                        details_counter,
-                    )
-                })
-                .collect()
+            b.children.iter().map(|c| render_box(c, ctx)).collect()
         };
         view = view.children(kids);
     }
@@ -1768,18 +1799,15 @@ fn render_link_subtree(
     target: &str,
     color: Color,
     new_tab: bool,
-    zoom: f32,
-    find_query_lc: &str,
-    find_current: usize,
-    find_counter: &mut usize,
-    details_counter: &mut usize,
+    ctx: &mut RenderCtx<'_>,
 ) -> View<Msg> {
+    let zoom = ctx.zoom;
     // <details> dentro de un <a> es HTML inválido en la práctica; pero
     // si aparece, contamos el slot igualmente para no desalinear el
     // counter global. No reescribimos el comportamiento interactivo:
     // dentro de un link el subtree colapsado se ignora.
     if b.tag.as_deref() == Some("details") {
-        skip_count_details(b, details_counter);
+        skip_count_details(b, &mut ctx.details_counter);
     }
     let nav_msg = |t: &str| {
         if new_tab {
@@ -1789,14 +1817,14 @@ fn render_link_subtree(
         }
     };
     let mut view = View::new(box_style(b, zoom)).on_click(nav_msg(target));
-    let find_hit = !find_query_lc.is_empty()
+    let find_hit = !ctx.find_query_lc.is_empty()
         && b.text
             .as_ref()
-            .map(|s| s.to_lowercase().contains(find_query_lc))
+            .map(|s| s.to_lowercase().contains(ctx.find_query_lc))
             .unwrap_or(false);
     let find_hit_color: Option<Color> = if find_hit {
-        *find_counter += 1;
-        let is_current = find_current != 0 && *find_counter == find_current;
+        ctx.find_counter += 1;
+        let is_current = ctx.find_current != 0 && ctx.find_counter == ctx.find_current;
         Some(if is_current {
             Color::from_rgba8(255, 140, 0, 240)
         } else {
@@ -1823,26 +1851,84 @@ fn render_link_subtree(
         return view.text_aligned(text.clone(), size, color, Alignment::Start);
     }
     if !b.children.is_empty() {
+        let target_owned = target.to_string();
         view = view.children(
             b.children
                 .iter()
-                .map(|c| {
-                    render_link_subtree(
-                        c,
-                        target,
-                        color,
-                        new_tab,
-                        zoom,
-                        find_query_lc,
-                        find_current,
-                        find_counter,
-                        details_counter,
-                    )
-                })
+                .map(|c| render_link_subtree(c, &target_owned, color, new_tab, ctx))
                 .collect(),
         );
     }
     view
+}
+
+/// `<input type=text>` / `<input type=search>` / `<input type=password>` /
+/// `<textarea>`: arma un widget `text_input_view` ligado al
+/// `TextInputState` del slot DFS `idx`. Click→focus dispara
+/// `Msg::FocusInput(idx)`. El estilo del input se mantiene básico
+/// (border gris claro + padding); el font-size hereda del nodo. Sin
+/// soporte de submit/Enter por ahora — Enter en un input single-line
+/// no hace nada (en un textarea inserta newline via apply_key).
+fn render_input(
+    b: &BoxNode,
+    kind: puriy_engine::InputKind,
+    idx: usize,
+    ctx: &mut RenderCtx<'_>,
+) -> View<Msg> {
+    let zoom = ctx.zoom;
+    let focused = ctx.focused_input == Some(idx);
+    // Estado por slot — usamos un blank si todavía no hay (no debería
+    // pasar tras Loaded, pero defensivo).
+    let blank = TextInputState::new();
+    let state = ctx.inputs.get(idx).unwrap_or(&blank);
+
+    let placeholder = b
+        .input_placeholder
+        .as_deref()
+        .unwrap_or(match kind {
+            puriy_engine::InputKind::Search => "buscar…",
+            puriy_engine::InputKind::Password => "contraseña",
+            puriy_engine::InputKind::TextArea => "",
+            puriy_engine::InputKind::Text => "",
+        });
+
+    let palette = TextInputPalette::default();
+    let input = text_input_view(state, placeholder, focused, &palette, Msg::FocusInput(idx));
+
+    // Tamaño: ancho 100% del contenedor por default (los autores suelen
+    // poner `width: 200px` o similar; el CSS engine ya lo materializa
+    // como `b.width`). El alto: una línea para text/search/password, un
+    // textarea recibe ~5 líneas.
+    let line_h = (b.font_size * zoom).max(14.0_f32 * zoom) + 12.0;
+    let height = match kind {
+        puriy_engine::InputKind::TextArea => line_h * 5.0,
+        _ => line_h,
+    };
+    let css_width = length_to_taffy(b.width, zoom);
+
+    View::new(Style {
+        size: Size {
+            width: css_width.unwrap_or_else(|| length(220.0_f32 * zoom)),
+            height: length(height),
+        },
+        padding: Rect {
+            left: length(6.0_f32 * zoom),
+            right: length(6.0_f32 * zoom),
+            top: length(4.0_f32 * zoom),
+            bottom: length(4.0_f32 * zoom),
+        },
+        margin: Rect {
+            left: length(b.margin.left * zoom),
+            right: length(b.margin.right * zoom),
+            top: length(b.margin.top * zoom),
+            bottom: length(b.margin.bottom * zoom),
+        },
+        ..Default::default()
+    })
+    .fill(Color::WHITE)
+    .radius(3.0)
+    .on_click(Msg::FocusInput(idx))
+    .children(vec![input])
 }
 
 /// Aplica `border-radius` y dibuja, en una sola pasada de `paint_with`,

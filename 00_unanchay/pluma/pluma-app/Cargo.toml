@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "pluma-app — editor de escritura DAG: ventana Llimphi con el documento como grafo de átomos narrativos, conectores de dependencia y osciloscopio de coherencia."
+description = "pluma-app — editor de escritura multilienzo: panel de documentos del sled, cuerpo_ide central editable, panel LLM con cycler de backends y derivación de hijas."
 
 [[bin]]
 name = "pluma-app"
@@ -14,11 +14,21 @@ path = "src/main.rs"
 
 [dependencies]
 pluma-core = { path = "../pluma-core" }
-pluma-graph = { path = "../pluma-graph" }
-pluma-render-plan = { path = "../pluma-render-plan" }
+pluma-cuerpo = { path = "../pluma-cuerpo" }
+pluma-align = { path = "../pluma-align" }
+pluma-editor-cuerpo = { path = "../pluma-editor-cuerpo" }
 pluma-editor-llimphi = { path = "../pluma-editor-llimphi" }
+pluma-store = { path = "../pluma-store" }
+pluma-transform = { path = "../pluma-transform" }
+pluma-transform-llm = { path = "../pluma-transform-llm" }
+pluma-llm = { path = "../pluma-llm" }
+pluma-llm-core = { path = "../pluma-llm-core" }
+pluma-llm-mock = { path = "../pluma-llm-mock" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-button = { workspace = true }
 llimphi-widget-splitter = { workspace = true }
+llimphi-widget-list = { workspace = true }
+llimphi-widget-text-editor = { workspace = true }
+tokio = { workspace = true }
 uuid = { workspace = true }

@@ -174,6 +174,32 @@ pub struct BoxNode {
     /// chrome la pinta como background (detrás del background sólido y
     /// gradient).
     pub background_image: Option<ImageData>,
+    /// Si el nodo es un `<input>` de tipo texto o un `<textarea>`, el
+    /// chrome lo renderea como widget editable. `None` para todo lo
+    /// demás. Multilinea = textarea.
+    pub input_kind: Option<InputKind>,
+    /// Valor inicial del input (atributo `value`). Sólo se consulta al
+    /// crear el `TextInputState` la primera vez por pestaña; los toggles
+    /// y typings los maneja el chrome.
+    pub input_initial: Option<String>,
+    /// Placeholder del input — atributo `placeholder` del `<input>` /
+    /// `<textarea>`. `None` si vacío.
+    pub input_placeholder: Option<String>,
+}
+
+/// Subconjunto de `<input type=...>` que renderemos como widget de texto.
+/// Todo lo demás (checkbox/radio/file/range/submit/...) se trata como
+/// box normal por ahora.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputKind {
+    /// `<input type=text>`, `<input>` sin type, search, email, url, tel,
+    /// number, password — todos se ven como una línea editable. password
+    /// idealmente mostraría bullets, eso lo decide el chrome.
+    Text,
+    Password,
+    Search,
+    /// `<textarea>` — multilínea.
+    TextArea,
 }
 
 /// Imagen RGBA8 lista para que el chrome la envuelva en `peniko::Image`.
@@ -287,6 +313,9 @@ fn empty_root() -> BoxNode {
         details_open_attr: false,
         link_new_tab: false,
         background_image: None,
+        input_kind: None,
+        input_initial: None,
+        input_placeholder: None,
     }
 }
 
@@ -327,6 +356,37 @@ fn build_node(
                         !t.is_empty() && t != "_self" && t != "_parent" && t != "_top"
                     })
                     .unwrap_or(false);
+
+            let input_kind = match tag.as_deref() {
+                Some("textarea") => Some(InputKind::TextArea),
+                Some("input") => {
+                    let t = dom::attr(node, "type")
+                        .map(|s| s.trim().to_ascii_lowercase())
+                        .unwrap_or_else(|| "text".to_string());
+                    match t.as_str() {
+                        "" | "text" | "email" | "url" | "tel" | "number" => Some(InputKind::Text),
+                        "search" => Some(InputKind::Search),
+                        "password" => Some(InputKind::Password),
+                        _ => None, // checkbox, radio, file, submit, button, etc.
+                    }
+                }
+                _ => None,
+            };
+            let input_initial = input_kind.and_then(|_| {
+                if tag.as_deref() == Some("textarea") {
+                    // El "value" del textarea es su texto interior.
+                    let mut s = String::new();
+                    for child in node.children.borrow().iter() {
+                        if let markup5ever_rcdom::NodeData::Text { contents } = &child.data {
+                            s.push_str(&contents.borrow());
+                        }
+                    }
+                    Some(s)
+                } else {
+                    dom::attr(node, "value")
+                }
+            });
+            let input_placeholder = input_kind.and_then(|_| dom::attr(node, "placeholder"));
             // <img>: descarga + decode sync. Si falla, el campo queda
             // None y el chrome muestra placeholder con el alt.
             let image = if tag.as_deref() == Some("img") {
@@ -431,6 +491,9 @@ fn build_node(
                     && dom::attr(node, "open").is_some(),
                 link_new_tab,
                 background_image,
+                input_kind,
+                input_initial,
+                input_placeholder,
             })
         }
         NodeData::Text { contents } => {
@@ -529,6 +592,9 @@ fn build_node(
                 details_open_attr: false,
                 link_new_tab: false,
                 background_image: None,
+                input_kind: None,
+                input_initial: None,
+                input_placeholder: None,
             })
         }
     }
@@ -598,6 +664,9 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         details_open_attr: false,
         link_new_tab: false,
         background_image: None,
+        input_kind: None,
+        input_initial: None,
+        input_placeholder: None,
     }
 }
 

@@ -28,7 +28,7 @@ pub mod style;
 
 use thiserror::Error;
 
-pub use boxes::{BoxNode, BoxTree, Color, Display};
+pub use boxes::{BoxNode, BoxTree, Color, Display, InputKind};
 pub use dom::DomTree;
 pub use fetch::{fetch, FetchError};
 pub use style::{
