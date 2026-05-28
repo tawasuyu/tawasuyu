@@ -1244,7 +1244,12 @@ fn default_display(tag: &str) -> Display {
         // tratamos tr como flex-row, td/th como inline-block para que
         // la grilla se rinda razonablemente sin un layout engine de
         // tables completo.
-        "table" | "thead" | "tbody" | "tfoot" | "colgroup" | "col" => Display::Block,
+        "table" | "thead" | "tbody" | "tfoot" => Display::Block,
+        // `<colgroup>` y `<col>` son metadatos de columna en la spec
+        // CSS table layout, NO se renderean como cajas propias — su rol
+        // es definir width de columnas (que acá no soportamos). Ocultar
+        // evita que tablas con esos elementos muestren espacios fantasma.
+        "colgroup" | "col" => Display::None,
         "tr" => Display::Flex,
         "td" | "th" => Display::InlineBlock,
         // Form widgets: inline-block para que respeten width/height
@@ -1455,20 +1460,43 @@ fn ua_stylesheet() -> Vec<Rule> {
             selector: ty("menu"),
             decls: vec![decl(DeclKind::ListStyleType(ListStyleType::Disc))],
         },
-        // Tables: bordes celulares mínimos para que la grilla se vea.
-        // Wikipedia usa `<table class="wikitable">` con su propio CSS,
-        // pero tablas sin estilo necesitan al menos algo de padding.
+        // Tables: bordes celulares mínimos para que la grilla se vea sin
+        // CSS de autor. Browsers reales no dibujan bordes hasta que un
+        // stylesheet lo pida, pero acá preferimos mostrarlos por default
+        // — la mayoría de páginas con `<table>` sin estilo asumen un
+        // "look spreadsheet" y tablas sin bordes salen invisibles.
         Rule {
             selector: ty("table"),
             decls: vec![decl(DeclKind::Margin(sides_lrtb(8.0, 0.0, 8.0, 0.0)))],
         },
         Rule {
             selector: ty("td"),
-            decls: vec![decl(DeclKind::Padding(Sides::all(2.0)))],
+            decls: vec![
+                decl(DeclKind::Padding(Sides::all(4.0))),
+                decl(DeclKind::BorderWidth(1.0)),
+                decl(DeclKind::BorderColor(Color::rgb(204, 204, 204))),
+                decl(DeclKind::BorderEnabled(true)),
+            ],
         },
         Rule {
             selector: ty("th"),
-            decls: vec![decl(DeclKind::Padding(Sides::all(2.0)))],
+            decls: vec![
+                decl(DeclKind::Padding(Sides::all(4.0))),
+                decl(DeclKind::BorderWidth(1.0)),
+                decl(DeclKind::BorderColor(Color::rgb(204, 204, 204))),
+                decl(DeclKind::BorderEnabled(true)),
+                decl(DeclKind::Background(Color::rgb(242, 242, 242))),
+            ],
+        },
+        // `<caption>` es el título de la tabla — centrado encima de las
+        // filas. Sin esto el caption queda alineado a la izquierda
+        // como cualquier block.
+        Rule {
+            selector: ty("caption"),
+            decls: vec![
+                decl(DeclKind::TextAlign(TextAlign::Center)),
+                decl(DeclKind::Padding(Sides::all(4.0))),
+            ],
         },
         // <small>/<sub>/<sup>: tamaño relativo. CSS spec usa `smaller`
         // (~83% del padre). Acá usamos 13px como aproximación.
@@ -4984,6 +5012,50 @@ line2</pre></body></html>"#;
         assert_eq!(eng.compute(&tr).display, Display::Flex);
         // td es InlineBlock para que el row de flex no le dé 100% width.
         assert_eq!(eng.compute(&td).display, Display::InlineBlock);
+    }
+
+    #[test]
+    fn ua_table_cells_tienen_border_y_padding() {
+        // Tablas sin CSS de autor deben mostrar bordes para que la grilla
+        // se vea — sino tablas sin estilo (Wikipedia raw, RFC docs, etc.)
+        // colapsan visualmente.
+        let html = "<html><body><table><tr><th>h</th><td>d</td></tr></table></body></html>";
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let th = dom.find("th").unwrap();
+        let td = dom.find("td").unwrap();
+        let s_th = eng.compute(&th);
+        let s_td = eng.compute(&td);
+        assert_eq!(s_th.border_width, 1.0);
+        assert!(s_th.border_color.is_some());
+        assert_eq!(s_td.border_width, 1.0);
+        assert_eq!(s_th.padding, Sides::all(4.0));
+        assert_eq!(s_td.padding, Sides::all(4.0));
+        // `<th>` lleva un bg gris claro para destacarlo como header.
+        assert_eq!(s_th.background, Some(Color::rgb(242, 242, 242)));
+    }
+
+    #[test]
+    fn ua_colgroup_y_col_ocultos() {
+        // `<colgroup><col>` son metadatos de columna — no se renderean.
+        let html = "<html><body><table><colgroup><col><col></colgroup><tr><td>x</td></tr></table></body></html>";
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let colgroup = dom.find("colgroup").unwrap();
+        let col = dom.find("col").unwrap();
+        assert_eq!(eng.compute(&colgroup).display, Display::None);
+        assert_eq!(eng.compute(&col).display, Display::None);
+    }
+
+    #[test]
+    fn ua_caption_centrado() {
+        let html = "<html><body><table><caption>Tabla X</caption><tr><td>a</td></tr></table></body></html>";
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let cap = dom.find("caption").unwrap();
+        let s = eng.compute(&cap);
+        assert_eq!(s.display, Display::Block);
+        assert_eq!(s.text_align, TextAlign::Center);
     }
 
     #[test]

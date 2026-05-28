@@ -54,18 +54,21 @@ impl Engine {
     /// Carga una URL y produce un documento listo para render.
     ///
     /// Pipeline: `fetch` → `parse_html` → `parse_styles` → `build_box_tree`.
+    /// La URL en el `Document` puede diferir de la solicitada si el server
+    /// redirigió (3xx) — usamos la final para resolver hrefs relativos y
+    /// la barra del chrome la muestra como URL canónica de la pestaña.
     pub fn load(&self, url: &str) -> Result<Document, EngineError> {
         let parsed = url::Url::parse(url).map_err(|e| EngineError::Url(e.to_string()))?;
-        let html = fetch(&parsed)?;
-        Ok(self.load_html(parsed.as_str(), &html))
+        let (html, final_url) = fetch(&parsed)?;
+        Ok(self.load_html(&final_url, &html))
     }
 
     /// POST con body `application/x-www-form-urlencoded`. Mismo pipeline
     /// que `load` después del fetch.
     pub fn load_post(&self, url: &str, body: &str) -> Result<Document, EngineError> {
         let parsed = url::Url::parse(url).map_err(|e| EngineError::Url(e.to_string()))?;
-        let html = fetch::post_form(parsed.as_str(), body)?;
-        Ok(self.load_html(parsed.as_str(), &html))
+        let (html, final_url) = fetch::post_form(parsed.as_str(), body)?;
+        Ok(self.load_html(&final_url, &html))
     }
 
     /// Variante para tests / data URLs: parsea HTML ya en memoria.

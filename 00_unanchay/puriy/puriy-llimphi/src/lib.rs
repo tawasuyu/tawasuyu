@@ -253,6 +253,10 @@ pub enum Msg {
     Loaded {
         tab: TabId,
         gen: u64,
+        /// URL final tras seguir redirects (3xx). Si el server redirigió,
+        /// difiere de la URL solicitada — el chrome actualiza
+        /// `t.url`/`t.addr` y reemplaza el último entry de history.
+        final_url: String,
         title: String,
         box_tree: BoxTree,
         source: String,
@@ -491,10 +495,22 @@ impl App for Puriy {
                 let url = m.active().url.clone();
                 start_load(&mut m, url, /* push_history */ false, handle);
             }
-            Msg::Loaded { tab, gen, title, box_tree, source } => {
+            Msg::Loaded { tab, gen, final_url, title, box_tree, source } => {
                 if let Some(idx) = m.tab_idx(tab) {
                     let t = &mut m.tabs[idx];
                     if t.gen == gen {
+                        // Si hubo redirect, propaga la URL final a la
+                        // tab, la address bar y reemplaza el slot
+                        // actual de history (no empuja uno nuevo — el
+                        // back debe saltar a la página *anterior* a la
+                        // que pidió el redirect, no al request fallido).
+                        if final_url != t.url {
+                            t.url = final_url.clone();
+                            t.addr.set_text(final_url.clone());
+                            if let Some(slot) = t.history.get_mut(t.cursor) {
+                                *slot = final_url.clone();
+                            }
+                        }
                         t.title = title.clone();
                         let n = box_tree.descendants_count();
                         t.status = format!("OK · {n} boxes");
@@ -559,6 +575,35 @@ impl App for Puriy {
                 // ver la página, no la lista de bookmarks/history.
                 m.panel = None;
                 m.panel_filter.clear();
+                // Same-page fragment navigation: si la URL solicitada
+                // sólo difiere de la actual en el fragment, scrolleamos
+                // al elemento con id matching y NO recargamos. Esto
+                // matchea el comportamiento estándar de browsers para
+                // `<a href="#sección">` y para typear `URL#frag` en la
+                // barra estando ya en `URL`.
+                let t = m.active();
+                let same_doc_frag = same_doc_with_fragment(&t.url, &target);
+                if let Some(frag) = same_doc_frag {
+                    let y = t
+                        .box_tree
+                        .as_ref()
+                        .and_then(|bt| bt.find_element_y(&frag));
+                    let t = m.active_mut();
+                    t.url = target.clone();
+                    t.addr.set_text(target.clone());
+                    t.history.truncate(t.cursor + 1);
+                    if t.history.last() != Some(&target) {
+                        t.history.push(target);
+                        t.cursor = t.history.len() - 1;
+                    }
+                    if let Some(y) = y {
+                        t.scroll_y = y.max(0.0);
+                        t.status = format!("↟ #{frag}");
+                    } else {
+                        t.status = format!("(sin id #{frag})");
+                    }
+                    return m;
+                }
                 start_load(&mut m, target, /* push_history */ true, handle);
             }
             Msg::NavigatePost { url, body } => {
@@ -1464,6 +1509,7 @@ fn spawn_load(tab: TabId, gen: u64, url: String, handle: Handle<Msg>) {
                 handle.dispatch(Msg::Loaded {
                     tab,
                     gen,
+                    final_url: doc.url.clone(),
                     title,
                     box_tree: doc.box_tree,
                     source: doc.source,
@@ -1503,6 +1549,7 @@ fn start_load_post(m: &mut Model, url: String, body: String, handle: &Handle<Msg
                 h.dispatch(Msg::Loaded {
                     tab: id,
                     gen,
+                    final_url: doc.url.clone(),
                     title,
                     box_tree: doc.box_tree,
                     source: doc.source,
@@ -3224,6 +3271,32 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+/// Si `target` representa la misma URL que `current` excepto por el
+/// fragment, devuelve el fragment (sin `#`). Si difieren en algo más
+/// (scheme/host/path/query) o el target no tiene fragment, devuelve
+/// `None` — el caller debe recargar normal.
+fn same_doc_with_fragment(current: &str, target: &str) -> Option<String> {
+    let cur = url::Url::parse(current).ok()?;
+    // El target puede venir absoluto (`https://x/y#z`) o ya resuelto
+    // contra base (`current_url#z`). Ambos casos los soporta Url::parse
+    // directo porque el engine resuelve los `#x` puros antes de pasarlos.
+    let tgt = url::Url::parse(target).ok()?;
+    let frag = tgt.fragment()?;
+    if frag.is_empty() {
+        return None;
+    }
+    // Comparamos URLs sin fragment. Cheap: clonamos y limpiamos.
+    let mut a = cur.clone();
+    a.set_fragment(None);
+    let mut b = tgt.clone();
+    b.set_fragment(None);
+    if a == b {
+        Some(frag.to_string())
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3232,6 +3305,26 @@ mod tests {
     fn parse(html: &str) -> BoxTree {
         let engine = Engine::new();
         engine.load_html("about:test", html).box_tree
+    }
+
+    #[test]
+    fn same_doc_with_fragment_detecta_solo_fragment() {
+        assert_eq!(
+            same_doc_with_fragment("https://x/p", "https://x/p#top"),
+            Some("top".to_string())
+        );
+        // Sin fragment en target → recargar normal.
+        assert_eq!(same_doc_with_fragment("https://x/p", "https://x/p"), None);
+        // Path distinto → recargar normal.
+        assert_eq!(
+            same_doc_with_fragment("https://x/p", "https://x/q#top"),
+            None
+        );
+        // Query distinta → recargar normal.
+        assert_eq!(
+            same_doc_with_fragment("https://x/p", "https://x/p?q=1#top"),
+            None
+        );
     }
 
     #[test]

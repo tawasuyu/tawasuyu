@@ -214,6 +214,11 @@ pub struct BoxNode {
     /// las renderea adentro del rect del nodo (escalado por `viewBox` si
     /// existe; sino cada primitiva usa sus coords nativas).
     pub svg: Option<SvgScene>,
+    /// Atributo HTML `id="..."` del elemento — usado por fragment
+    /// navigation (`<a href="#foo">` busca el nodo con `element_id ==
+    /// Some("foo")` y scrollea hasta él). `None` para nodos sin id y
+    /// para nodos sintéticos (markers, wrappers Document, hojas Text).
+    pub element_id: Option<String>,
 }
 
 /// Escena SVG minimal: lista de primitivas + viewBox opcional.
@@ -372,6 +377,39 @@ impl BoxTree {
     pub fn walk(&self, mut f: impl FnMut(&BoxNode)) {
         walk_inner(&self.root, &mut f);
     }
+
+    /// Estima la posición vertical (px desde el top del documento) del
+    /// nodo con `element_id == id`. Usada por fragment navigation
+    /// (`<a href="#foo">`) — el chrome ajusta `scroll_y` a este valor.
+    /// La estimación suma margin+padding de bloques y `font_size *
+    /// line_height` de hojas de texto en orden DFS; ignora layout real
+    /// (taffy todavía no corrió cuando el chrome resuelve el click), así
+    /// que el salto puede caer ~1 línea arriba o abajo del target. Es
+    /// suficiente para que el usuario vea el destino sin perderse.
+    pub fn find_element_y(&self, id: &str) -> Option<f32> {
+        let mut acc = 0.0_f32;
+        find_y_inner(&self.root, id, &mut acc)
+    }
+}
+
+fn find_y_inner(b: &BoxNode, target: &str, acc: &mut f32) -> Option<f32> {
+    if b.element_id.as_deref() == Some(target) {
+        return Some(*acc);
+    }
+    if b.text.is_some() {
+        // Hoja de texto: una línea de altura font_size * line_height.
+        *acc += b.font_size * b.line_height.unwrap_or(1.4);
+        return None;
+    }
+    // Block-ish: contribución de borders verticales del lado top.
+    *acc += b.margin.top + b.padding.top;
+    for c in &b.children {
+        if let Some(y) = find_y_inner(c, target, acc) {
+            return Some(y);
+        }
+    }
+    *acc += b.padding.bottom + b.margin.bottom;
+    None
 }
 
 fn count(b: &BoxNode) -> usize {
@@ -849,6 +887,7 @@ fn empty_root() -> BoxNode {
         form_idx: None,
         select: None,
         svg: None,
+        element_id: None,
     }
 }
 
@@ -1113,6 +1152,7 @@ fn build_node(
                 form_idx: None,
                 select,
                 svg,
+                element_id: dom::attr(node, "id").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
             })
         }
         NodeData::Text { contents } => {
@@ -1222,6 +1262,7 @@ fn build_node(
         form_idx: None,
         select: None,
         svg: None,
+        element_id: None,
             })
         }
     }
@@ -1302,6 +1343,7 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         form_idx: None,
         select: None,
         svg: None,
+        element_id: None,
     }
 }
 
@@ -1595,11 +1637,11 @@ fn resolve_href(base: Option<&url::Url>, href: &str) -> Option<String> {
     {
         return None;
     }
-    // Fragmentos puros (`#foo`) — no navegan a una URL distinta. Por
-    // ahora los descartamos; en el futuro deberían scrollear al
-    // elemento con id="foo".
+    // Fragmentos puros (`#foo`): resuelven a la URL actual + fragment.
+    // El chrome detecta same-page navigation (mismo URL sans fragment)
+    // y scrollea al elemento con id matching en lugar de recargar.
     if href.starts_with('#') {
-        return None;
+        return base.and_then(|b| b.join(href).ok()).map(|u| u.to_string());
     }
     if let Ok(abs) = url::Url::parse(href) {
         // Sólo http/https son navegables por puriy hoy. file://, ftp://,
@@ -2286,17 +2328,38 @@ mod tests {
     }
 
     #[test]
-    fn link_fragmento_se_ignora() {
+    fn link_fragmento_se_resuelve_a_base_mas_frag() {
+        // Antes: `#top` se ignoraba (None). Ahora resuelve contra la
+        // base — el chrome detecta same-page y scrollea en lugar de
+        // recargar la URL.
         let html = r##"<html><body><a href="#top">arriba</a></body></html>"##;
         let eng = Engine::new();
-        let doc = eng.load_html("about:test", html);
-        let mut any_link = false;
+        let doc = eng.load_html("https://example.com/doc", html);
+        let mut links: Vec<String> = Vec::new();
         doc.box_tree.walk(|b| {
-            if b.link.is_some() {
-                any_link = true;
+            if let Some(l) = &b.link {
+                links.push(l.clone());
             }
         });
-        assert!(!any_link, "fragmento puro #top no debería resolverse a una URL navegable");
+        assert_eq!(links, vec!["https://example.com/doc#top".to_string()]);
+    }
+
+    #[test]
+    fn element_id_se_extrae_del_attr() {
+        let html = r##"<html><body>
+            <h2 id="intro">Intro</h2>
+            <p id="">vacío no cuenta</p>
+            <p>sin id</p>
+        </body></html>"##;
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut ids: Vec<String> = Vec::new();
+        doc.box_tree.walk(|b| {
+            if let Some(id) = &b.element_id {
+                ids.push(id.clone());
+            }
+        });
+        assert_eq!(ids, vec!["intro".to_string()]);
     }
 
     #[test]
