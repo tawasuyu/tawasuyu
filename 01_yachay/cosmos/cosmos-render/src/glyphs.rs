@@ -73,18 +73,20 @@ pub fn planet_commands(
             },
         ],
         // ─── Luna: crescent abriendo a la derecha ──────────────────
+        // Dos curvas Bezier que conforman la media luna: la externa
+        // bulga fuerte hacia la izquierda; la interna sólo levemente.
+        // El espacio entre ambas es la parte rellena visualmente
+        // (cuando hay fill) o la silueta del arco si solo hay trazo.
         "moon" => {
-            // Arco externo (semicírculo a la derecha) + arco interno
-            // (más curvado, vuelve al inicio): clásico crescent.
-            let outer_r = r * 0.85;
-            let inner_rx = r * 0.5;
-            let inner_ry = r * 0.85;
-            let top_x = cx + r * 0.15;
-            let top_y = cy - outer_r;
-            let bot_x = cx + r * 0.15;
-            let bot_y = cy + outer_r;
+            let top_y = cy - r * 0.90;
+            let bot_y = cy + r * 0.90;
+            let anchor_x = cx + r * 0.25;
             let d = format!(
-                "M {top_x} {top_y} A {outer_r} {outer_r} 0 0 1 {bot_x} {bot_y} A {inner_rx} {inner_ry} 0 0 1 {top_x} {top_y} Z"
+                "M {anchor_x} {top_y} Q {} {} {anchor_x} {bot_y} Q {} {} {anchor_x} {top_y} Z",
+                cx - r * 1.00,
+                cy,
+                cx - r * 0.05,
+                cy,
             );
             vec![DrawCommand::Path {
                 d,
@@ -424,55 +426,64 @@ fn saturn_commands(cx: f32, cy: f32, r: f32, color: Rgba, sw: f32) -> Vec<DrawCo
 }
 
 fn uranus_commands(cx: f32, cy: f32, r: f32, color: Rgba, sw: f32) -> Vec<DrawCommand> {
-    // Urano: "H" con un círculo colgando abajo. Las dos verticales
-    // arriba, una horizontal al medio, y un círculo bajo el cruce.
+    // Urano (forma alquímica): dos paréntesis opuestos atravesados
+    // por una barra horizontal (silueta tipo Piscis ¦)¦|⦧) con un
+    // círculo colgando debajo. Variante astrológica clásica del
+    // glyph "alquímico" (la otra es la "H" de Herschel — descartada
+    // por petición del usuario: más reconocible la versión Piscis +
+    // círculo).
     let top = cy - r * 0.85;
-    let mid = cy - r * 0.15;
-    let arm = r * 0.45;
+    let bot_open = cy + r * 0.15;
+    let bar_y = cy - r * 0.30;
+    let bracket_r = r * 0.45;
+    let circ_cy = cy + r * 0.62;
     let circ_r = r * 0.22;
-    let circ_cy = cy + r * 0.65;
+    let left_x = cx - r * 0.55;
+    let right_x = cx + r * 0.55;
+    // Bracket izquierdo (") apertura a la derecha)
+    let d_left = format!(
+        "M {} {} A {bracket_r} {bracket_r} 0 0 1 {} {}",
+        left_x, top, left_x, bot_open
+    );
+    // Bracket derecho (apertura a la izquierda)
+    let d_right = format!(
+        "M {} {} A {bracket_r} {bracket_r} 0 0 0 {} {}",
+        right_x, top, right_x, bot_open
+    );
     vec![
-        // Vertical izquierda
+        DrawCommand::Path {
+            d: d_left,
+            stroke: Some(color),
+            fill: None,
+            stroke_w: sw,
+        },
+        DrawCommand::Path {
+            d: d_right,
+            stroke: Some(color),
+            fill: None,
+            stroke_w: sw,
+        },
+        // Barra horizontal que atraviesa
         DrawCommand::Line {
-            x1: cx - arm,
-            y1: top,
-            x2: cx - arm,
-            y2: mid,
+            x1: left_x - r * 0.05,
+            y1: bar_y,
+            x2: right_x + r * 0.05,
+            y2: bar_y,
             color,
             width: sw,
             dash: None,
         },
-        // Vertical derecha
-        DrawCommand::Line {
-            x1: cx + arm,
-            y1: top,
-            x2: cx + arm,
-            y2: mid,
-            color,
-            width: sw,
-            dash: None,
-        },
-        // Horizontal al medio
-        DrawCommand::Line {
-            x1: cx - arm,
-            y1: mid,
-            x2: cx + arm,
-            y2: mid,
-            color,
-            width: sw,
-            dash: None,
-        },
-        // Conector vertical hacia el círculo
+        // Conector vertical hacia el círculo inferior
         DrawCommand::Line {
             x1: cx,
-            y1: mid,
+            y1: bot_open,
             x2: cx,
             y2: circ_cy - circ_r,
             color,
             width: sw,
             dash: None,
         },
-        // Círculo inferior
+        // Círculo
         DrawCommand::Circle {
             cx,
             cy: circ_cy,
@@ -599,26 +610,30 @@ fn node_commands(
     sw: f32,
     north: bool,
 ) -> Vec<DrawCommand> {
-    // Nodo lunar: una U (auriculares) con un par de circulitos en los
-    // extremos. North = abre hacia abajo; South = abre hacia arriba.
-    let arm = r * 0.55;
-    let ear_r = r * 0.20;
-    let (open_y, base_y) = if north {
-        (cy + r * 0.55, cy - r * 0.50)
+    // Nodo lunar: una herradura con un par de circulitos en las
+    // puntas. North (☊) = bowl ARRIBA, ears apuntando hacia abajo.
+    // South (☋) = espejo vertical — bowl ABAJO, ears apuntando hacia
+    // arriba. La diferencia entre ambos es solo orientación.
+    //
+    // Construimos el path con líneas + un arco semicircular para que
+    // el sweep_flag no dependa de la orientación (la simetría la
+    // controlamos por la elección de top/bottom).
+    let arm = r * 0.50;
+    let ear_r = r * 0.18;
+    let bowl_h = r * 0.55;
+    let leg_h = r * 0.50;
+    let (bowl_y_outer, leg_y_inner, sweep) = if north {
+        // North: bowl arriba. Endpoints del arco en cy - bowl_h/2,
+        // legs bajan a cy + leg_h/2.
+        (cy - bowl_h * 0.5, cy + leg_h * 0.5, 1_u8)
     } else {
-        (cy - r * 0.55, cy + r * 0.50)
+        // South: bowl abajo. Endpoints arriba, legs hacia arriba.
+        (cy + bowl_h * 0.5, cy - leg_h * 0.5, 0_u8)
     };
     let d = format!(
-        "M {} {} L {} {} A {arm} {arm} 0 0 {} {} {} L {} {}",
-        cx - arm,
-        open_y,
-        cx - arm,
-        base_y,
-        if north { 1 } else { 0 },
-        cx + arm,
-        base_y,
-        cx + arm,
-        open_y
+        "M {lx} {leg_y_inner} L {lx} {bowl_y_outer} A {arm} {arm} 0 0 {sweep} {rx} {bowl_y_outer} L {rx} {leg_y_inner}",
+        lx = cx - arm,
+        rx = cx + arm,
     );
     vec![
         DrawCommand::Path {
@@ -629,7 +644,7 @@ fn node_commands(
         },
         DrawCommand::Circle {
             cx: cx - arm,
-            cy: open_y,
+            cy: leg_y_inner,
             r: ear_r,
             stroke: Some(color),
             fill: None,
@@ -637,7 +652,7 @@ fn node_commands(
         },
         DrawCommand::Circle {
             cx: cx + arm,
-            cy: open_y,
+            cy: leg_y_inner,
             r: ear_r,
             stroke: Some(color),
             fill: None,
@@ -788,47 +803,56 @@ pub fn sign_commands(
 }
 
 fn aries_commands(cx: f32, cy: f32, r: f32, color: Rgba, sw: f32) -> Vec<DrawCommand> {
-    // ♈ Aries: cuernos de carnero — dos curvas simétricas que bajan
-    // desde el centro y se enroscan hacia afuera.
-    let top = cy - r * 0.85;
-    let bot = cy + r * 0.85;
-    let d = format!(
-        "M {} {} C {} {}, {} {}, {} {} C {} {}, {} {}, {} {}",
-        cx,
-        top,
-        cx - r * 0.6,
-        top,
-        cx - r * 0.95,
-        bot - r * 0.4,
-        cx - r * 0.55,
-        bot,
-        cx,
-        top,
-        cx + r * 0.6,
-        top,
-        cx + r * 0.95,
-        bot - r * 0.4
+    // ♈ Aries: dos cuernos de carnero que parten de un ápice central
+    // arriba, bajan diagonal hacia los lados, y se enroscan hacia
+    // adentro al final. Estilo Y con curls.
+    //
+    //         /\          ← ápice
+    //        /  \
+    //       /    \        ← flancos
+    //      (      )       ← curls cerrando hacia adentro
+    //       \____/
+    let apex_x = cx;
+    let apex_y = cy - r * 0.85;
+    // Punto donde el flanco se convierte en curl (extremo exterior).
+    let curl_outer_y = cy + r * 0.20;
+    let curl_outer_dx = r * 0.65;
+    // Punto final del curl (hacia adentro, ligeramente arriba del
+    // máximo de la curva para dar sensación de enroscar).
+    let curl_inner_y = cy + r * 0.15;
+    let curl_inner_dx = r * 0.10;
+    // Profundidad del curl (cuánto baja antes de subir).
+    let curl_bottom_y = cy + r * 0.75;
+    // Trazo izquierdo: línea diagonal desde apex hasta el extremo
+    // exterior, después una curva Bezier que baja, redondea y vuelve
+    // hacia el centro-arriba.
+    let left = format!(
+        "M {apex_x} {apex_y} L {} {curl_outer_y} C {} {}, {} {}, {} {curl_inner_y}",
+        cx - curl_outer_dx,
+        cx - curl_outer_dx - r * 0.05,
+        curl_bottom_y,
+        cx - curl_inner_dx - r * 0.05,
+        curl_bottom_y - r * 0.05,
+        cx - curl_inner_dx,
     );
-    let d2 = format!(
-        "M {} {} C {} {}, {} {}, {} {}",
-        cx,
-        top,
-        cx + r * 0.6,
-        top,
-        cx + r * 0.95,
-        bot - r * 0.4,
-        cx + r * 0.55,
-        bot
+    let right = format!(
+        "M {apex_x} {apex_y} L {} {curl_outer_y} C {} {}, {} {}, {} {curl_inner_y}",
+        cx + curl_outer_dx,
+        cx + curl_outer_dx + r * 0.05,
+        curl_bottom_y,
+        cx + curl_inner_dx + r * 0.05,
+        curl_bottom_y - r * 0.05,
+        cx + curl_inner_dx,
     );
     vec![
         DrawCommand::Path {
-            d,
+            d: left,
             stroke: Some(color),
             fill: None,
             stroke_w: sw,
         },
         DrawCommand::Path {
-            d: d2,
+            d: right,
             stroke: Some(color),
             fill: None,
             stroke_w: sw,
@@ -837,19 +861,26 @@ fn aries_commands(cx: f32, cy: f32, r: f32, color: Rgba, sw: f32) -> Vec<DrawCom
 }
 
 fn taurus_commands(cx: f32, cy: f32, r: f32, color: Rgba, sw: f32) -> Vec<DrawCommand> {
-    // ♉ Tauro: círculo (cara) + dos cuernos arriba (arco hacia
-    // arriba).
-    let body_r = r * 0.45;
-    let body_cy = cy + r * 0.25;
-    let horns_y = body_cy - body_r;
+    // ♉ Tauro: cara (círculo) abajo y dos cuernos sobre la cara,
+    // dibujados como un arco con concavidad hacia abajo (las puntas
+    // suben). Equivale al símbolo unicode ♉: ∪ encima de O, donde el
+    // ∪ tiene el bowl tocando arriba del círculo y las tips
+    // apuntando hacia arriba.
+    let body_r = r * 0.38;
+    let body_cy = cy + r * 0.30;
+    let tip_y = cy - r * 0.85;
+    let arm = r * 0.70;
+    // Arc bulging DOWN (concavidad hacia abajo): de (cx-arm, tip_y)
+    // a (cx+arm, tip_y) pasando por (cx, ~body_cy - body_r). En SVG
+    // y-down, sweep_flag=1 va clockwise visualmente, lo que para
+    // endpoints en la misma altura significa bulge HACIA ARRIBA. Para
+    // bulge DOWN usamos sweep_flag=0.
     let d_horns = format!(
-        "M {} {} A {} {} 0 0 0 {} {}",
-        cx - r * 0.85,
-        horns_y,
-        r * 0.85,
-        r * 0.85,
-        cx + r * 0.85,
-        horns_y
+        "M {} {} A {arm} {arm} 0 0 0 {} {}",
+        cx - arm,
+        tip_y,
+        cx + arm,
+        tip_y,
     );
     vec![
         DrawCommand::Path {
@@ -870,53 +901,54 @@ fn taurus_commands(cx: f32, cy: f32, r: f32, color: Rgba, sw: f32) -> Vec<DrawCo
 }
 
 fn gemini_commands(cx: f32, cy: f32, r: f32, color: Rgba, sw: f32) -> Vec<DrawCommand> {
-    // ♊ Géminis: dos verticales con barras arriba y abajo (gemelos).
-    let top = cy - r * 0.85;
-    let bot = cy + r * 0.85;
+    // ♊ Géminis (gemelos): dos verticales paralelos como las
+    // columnas, con techo y piso rectos que las cierran. Forma de
+    // "Π" sobre su espejo. El usuario pidió la versión rectángulo
+    // limpio (no las barras curvas).
+    let top = cy - r * 0.75;
+    let bot = cy + r * 0.75;
     let arm = r * 0.40;
-    let bar = r * 0.55;
+    let overhang = r * 0.10;
     vec![
-        // Vertical izq
+        // Vertical izquierda
         DrawCommand::Line {
             x1: cx - arm,
-            y1: top + r * 0.10,
+            y1: top,
             x2: cx - arm,
-            y2: bot - r * 0.10,
+            y2: bot,
             color,
             width: sw,
             dash: None,
         },
-        // Vertical der
+        // Vertical derecha
         DrawCommand::Line {
             x1: cx + arm,
-            y1: top + r * 0.10,
+            y1: top,
             x2: cx + arm,
-            y2: bot - r * 0.10,
+            y2: bot,
             color,
             width: sw,
             dash: None,
         },
-        // Barra arriba (curva)
-        DrawCommand::Path {
-            d: format!(
-                "M {} {top} A {bar} {bar} 0 0 1 {} {top}",
-                cx - arm,
-                cx + arm
-            ),
-            stroke: Some(color),
-            fill: None,
-            stroke_w: sw,
+        // Techo
+        DrawCommand::Line {
+            x1: cx - arm - overhang,
+            y1: top,
+            x2: cx + arm + overhang,
+            y2: top,
+            color,
+            width: sw,
+            dash: None,
         },
-        // Barra abajo (curva inversa)
-        DrawCommand::Path {
-            d: format!(
-                "M {} {bot} A {bar} {bar} 0 0 0 {} {bot}",
-                cx - arm,
-                cx + arm
-            ),
-            stroke: Some(color),
-            fill: None,
-            stroke_w: sw,
+        // Piso
+        DrawCommand::Line {
+            x1: cx - arm - overhang,
+            y1: bot,
+            x2: cx + arm + overhang,
+            y2: bot,
+            color,
+            width: sw,
+            dash: None,
         },
     ]
 }
@@ -1057,18 +1089,18 @@ fn virgo_commands(cx: f32, cy: f32, r: f32, color: Rgba, sw: f32) -> Vec<DrawCom
 }
 
 fn libra_commands(cx: f32, cy: f32, r: f32, color: Rgba, sw: f32) -> Vec<DrawCommand> {
-    // ♎ Libra: balanza — barra horizontal con un domito arriba.
-    let top_y = cy - r * 0.05;
+    // ♎ Libra: balanza — barra horizontal con un domito más pequeño
+    // arriba. El usuario pidió achicar la curva top — antes era casi
+    // la mitad del ancho; ahora ~ 1/3.
+    let top_y = cy + r * 0.05;
     let bot_y = cy + r * 0.55;
     let bar_h = r * 0.85;
-    // Arco arriba (domo)
-    let arc_r = r * 0.45;
+    let arc_r = r * 0.28;
     let d_dome = format!(
         "M {} {top_y} A {arc_r} {arc_r} 0 0 1 {} {top_y}",
         cx - arc_r,
         cx + arc_r,
     );
-    // Línea horizontal bajo el domo
     vec![
         DrawCommand::Path {
             d: d_dome,
@@ -1215,28 +1247,57 @@ fn sagittarius_commands(cx: f32, cy: f32, r: f32, color: Rgba, sw: f32) -> Vec<D
 }
 
 fn capricorn_commands(cx: f32, cy: f32, r: f32, color: Rgba, sw: f32) -> Vec<DrawCommand> {
-    // ♑ Capricornio: "n" estilizada con cola que termina en espiral
-    // (cabra-pez). Simplificamos: dos segmentos verticales conectados
-    // por un arco arriba, y al final una espiral.
-    let top = cy - r * 0.60;
-    let bot = cy + r * 0.55;
-    let l1_x = cx - r * 0.55;
-    let l2_x = cx - r * 0.10;
-    let l3_x = cx + r * 0.35;
-    let d = format!(
-        "M {l1_x} {bot} L {l1_x} {top} L {l2_x} {top} L {l2_x} {bot} M {l2_x} {top} L {l3_x} {top} L {l3_x} {} A {} {} 0 1 0 {} {}",
-        cy + r * 0.10,
-        r * 0.25,
-        r * 0.25,
-        l3_x + r * 0.20,
-        cy + r * 0.05
+    // ♑ Capricornio: cabra-pez. Dos trazos diagonales (cabra) que
+    // bajan en zig-zag desde una punta superior-izquierda hasta el
+    // medio-derecha, y desde ahí un lazo de cola de pez que
+    // se enrosca debajo. Distinta de Escorpio (que tiene una M con
+    // flecha) — la silueta de Capricornio es angular arriba +
+    // curva cerrada abajo.
+    let top_y = cy - r * 0.70;
+    let mid_y = cy + r * 0.10;
+    let loop_y = cy + r * 0.55;
+    // Punto inicial (top-left, "punta" del cuerno de la cabra)
+    let p1_x = cx - r * 0.65;
+    let p1_y = top_y + r * 0.20;
+    // Vértice de la N — abajo en el centro
+    let p2_x = cx - r * 0.15;
+    let p2_y = mid_y;
+    // Subida al centro-arriba (el dorso de la cabra)
+    let p3_x = cx + r * 0.05;
+    let p3_y = top_y;
+    // Bajada al inicio del loop (donde empieza la cola)
+    let p4_x = cx + r * 0.20;
+    let p4_y = mid_y;
+    // Trazo angular cabra: p1 → p2 → p3 → p4
+    let cabra = format!(
+        "M {p1_x} {p1_y} L {p2_x} {p2_y} L {p3_x} {p3_y} L {p4_x} {p4_y}"
     );
-    vec![DrawCommand::Path {
-        d,
-        stroke: Some(color),
-        fill: None,
-        stroke_w: sw,
-    }]
+    // Cola: lazo que sale de p4 hacia abajo-derecha, dobla y vuelve.
+    let cola = format!(
+        "M {p4_x} {p4_y} C {} {}, {} {}, {} {} C {} {}, {} {}, {} {} Z",
+        // Sale hacia abajo-derecha
+        cx + r * 0.65, mid_y,
+        cx + r * 0.65, loop_y,
+        cx + r * 0.20, loop_y + r * 0.05,
+        // Cierra el lazo volviendo hacia arriba-izquierda
+        cx - r * 0.05, loop_y,
+        cx + r * 0.05, mid_y + r * 0.15,
+        p4_x, p4_y,
+    );
+    vec![
+        DrawCommand::Path {
+            d: cabra,
+            stroke: Some(color),
+            fill: None,
+            stroke_w: sw,
+        },
+        DrawCommand::Path {
+            d: cola,
+            stroke: Some(color),
+            fill: None,
+            stroke_w: sw,
+        },
+    ]
 }
 
 fn aquarius_commands(cx: f32, cy: f32, r: f32, color: Rgba, sw: f32) -> Vec<DrawCommand> {
