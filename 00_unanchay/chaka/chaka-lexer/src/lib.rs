@@ -69,12 +69,138 @@ pub enum LexError {
     UnterminatedString { line: u32, col: u32 },
     #[error("línea {line}:{col}: carácter inesperado {ch:?}")]
     UnexpectedChar { line: u32, col: u32, ch: char },
+    #[error("línea {line}: no se pudo leer el copybook {path:?}")]
+    BadCopybook { line: u32, path: String },
+    #[error("anidación de COPY excesiva (límite {limit})")]
+    CopyTooDeep { limit: u32 },
+}
+
+/// Profundidad máxima de anidación para `COPY` recursivos.
+const COPY_DEPTH_LIMIT: u32 = 16;
+
+/// Expande las directivas `COPY '<path>'.` reemplazándolas por el
+/// contenido del fichero referenciado. Acepta paths absolutos o, si se
+/// indica `base_dir`, rutas relativas a ese directorio. Las directivas
+/// `REPLACE ...` se descartan con un comentario — la v1 no las honra.
+pub fn preprocess(
+    source: &str,
+    base_dir: Option<&std::path::Path>,
+) -> Result<String, LexError> {
+    expand(source, base_dir, 0)
+}
+
+fn expand(
+    source: &str,
+    base_dir: Option<&std::path::Path>,
+    depth: u32,
+) -> Result<String, LexError> {
+    if depth > COPY_DEPTH_LIMIT {
+        return Err(LexError::CopyTooDeep {
+            limit: COPY_DEPTH_LIMIT,
+        });
+    }
+    let mut out = String::with_capacity(source.len());
+    for (idx, raw) in source.lines().enumerate() {
+        let line_num = (idx + 1) as u32;
+        let trimmed = raw.trim_start();
+        let upper = trimmed.to_uppercase();
+        if upper.starts_with("REPLACE ") || upper.starts_with("REPLACE.") || upper == "REPLACE" {
+            // La v1 no expande `REPLACE`: lo registra como comentario.
+            out.push_str("*> chaka: REPLACE ignorado en la v1\n");
+            continue;
+        }
+        if let Some(rest) = strip_copy_prefix(&upper, trimmed) {
+            let path = parse_copy_path(rest).ok_or_else(|| LexError::BadCopybook {
+                line: line_num,
+                path: rest.to_string(),
+            })?;
+            let resolved = resolve_copy_path(&path, base_dir);
+            let content = std::fs::read_to_string(&resolved)
+                .map_err(|_| LexError::BadCopybook {
+                    line: line_num,
+                    path: resolved.display().to_string(),
+                })?;
+            let nested = expand(&content, resolved.parent(), depth + 1)?;
+            out.push_str(&nested);
+            if !nested.ends_with('\n') {
+                out.push('\n');
+            }
+            continue;
+        }
+        out.push_str(raw);
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+/// Si la línea (en mayúsculas, sin sangría) empieza por `COPY ` devuelve
+/// el resto (sin la palabra `COPY` y con la sangría original conservada
+/// no importa — el resto es lo que viene tras `COPY`).
+fn strip_copy_prefix<'a>(upper: &str, original: &'a str) -> Option<&'a str> {
+    if !upper.starts_with("COPY ") && upper != "COPY" {
+        return None;
+    }
+    let trimmed = original.trim_start();
+    let rest = trimmed.get("COPY".len()..)?.trim_start();
+    Some(rest)
+}
+
+/// Extrae la ruta del copybook: `'path'`, `"path"` o un nombre desnudo
+/// (sin extensión, se le agrega `.cpy`). Termina al primer `.` o `,`
+/// fuera de comillas.
+fn parse_copy_path(rest: &str) -> Option<String> {
+    let rest = rest.trim();
+    if let Some(end) = rest.strip_prefix('\'').and_then(|r| r.find('\'')) {
+        return Some(rest[1..1 + end].to_string());
+    }
+    if let Some(end) = rest.strip_prefix('"').and_then(|r| r.find('"')) {
+        return Some(rest[1..1 + end].to_string());
+    }
+    // Nombre desnudo: lo que va hasta el primer punto, espacio o coma.
+    let stop = rest
+        .find(|c: char| c == '.' || c == ',' || c.is_ascii_whitespace())
+        .unwrap_or(rest.len());
+    if stop == 0 {
+        return None;
+    }
+    let name = &rest[..stop];
+    if name.contains('.') {
+        Some(name.to_string())
+    } else {
+        Some(format!("{name}.cpy"))
+    }
+}
+
+/// Resuelve la ruta de un copybook contra `base_dir` si la ruta es
+/// relativa; respeta los paths absolutos tal cual.
+fn resolve_copy_path(path: &str, base_dir: Option<&std::path::Path>) -> std::path::PathBuf {
+    let p = std::path::PathBuf::from(path);
+    if p.is_absolute() {
+        return p;
+    }
+    if let Some(base) = base_dir {
+        return base.join(p);
+    }
+    p
 }
 
 /// Tokeniza un fuente COBOL completo. Falla con el primer [`LexError`].
+/// Aplica primero el preprocesador (`COPY` / `REPLACE`) sin directorio
+/// base — los `COPY` deben usar rutas absolutas.
 pub fn lex(source: &str, format: SourceFormat) -> Result<Vec<Token>, LexError> {
+    lex_with_base(source, format, None)
+}
+
+/// Versión de [`lex`] que acepta un `base_dir` para resolver rutas
+/// relativas en las directivas `COPY`.
+pub fn lex_with_base(
+    source: &str,
+    format: SourceFormat,
+    base_dir: Option<&std::path::Path>,
+) -> Result<Vec<Token>, LexError> {
+    let expanded = preprocess(source, base_dir)?;
     let mut tokens = Vec::new();
-    for (idx, raw) in source.lines().enumerate() {
+    for (idx, raw) in expanded.lines().enumerate() {
         let line = (idx + 1) as u32;
         if let Some((content, base_col)) = prepare_line(raw, format) {
             lex_line(&content, line, base_col, &mut tokens)?;

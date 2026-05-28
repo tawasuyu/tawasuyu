@@ -517,13 +517,49 @@ mod tests {
 
     #[test]
     fn unrecognized_verb_becomes_unknown() {
-        let b = body("CALL 'SUBPROG' USING WS-X.");
+        let b = body("XYZZY 'NADA'.");
         match &b[0] {
             Stmt::Unknown { verb, tokens } => {
-                assert_eq!(verb, "CALL");
+                assert_eq!(verb, "XYZZY");
                 assert!(!tokens.is_empty());
             }
             other => panic!("se esperaba Unknown, vino {other:?}"),
+        }
+    }
+
+    #[test]
+    fn call_parses_program_and_args() {
+        let b = body("CALL 'SALUDA' USING WS-X WS-Y.");
+        match &b[0] {
+            Stmt::Call { program, using, .. } => {
+                assert_eq!(program, &Operand::Str("SALUDA".into()));
+                assert_eq!(
+                    using,
+                    &vec![Operand::Data("WS-X".into()), Operand::Data("WS-Y".into())]
+                );
+            }
+            other => panic!("se esperaba CALL, vino {other:?}"),
+        }
+    }
+
+    #[test]
+    fn call_parses_on_overflow_branches() {
+        let b = body(
+            "CALL 'SALUDA' \
+             ON OVERFLOW DISPLAY 'FALLO' \
+             NOT ON OVERFLOW DISPLAY 'OK' \
+             END-CALL.",
+        );
+        match &b[0] {
+            Stmt::Call {
+                on_overflow,
+                not_on_overflow,
+                ..
+            } => {
+                assert_eq!(on_overflow.len(), 1);
+                assert_eq!(not_on_overflow.len(), 1);
+            }
+            other => panic!("se esperaba CALL, vino {other:?}"),
         }
     }
 

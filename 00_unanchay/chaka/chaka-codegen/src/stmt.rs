@@ -2,8 +2,8 @@
 //! una o varias líneas de código Rust sobre `chaka-runtime`.
 
 use chaka_ir::{
-    CmpOp, Cond, FileMode, InspectOp, Operand, Perform, PerformControl, PerformTarget, Stmt,
-    WhenBranch, WhenTest,
+    CmpOp, Cond, FileMode, InspectOp, Operand, Perform, PerformControl, PerformTarget,
+    SearchBranch, Stmt, WhenBranch, WhenTest,
 };
 
 use crate::emit::Emitter;
@@ -89,6 +89,20 @@ pub(crate) fn emit_stmt(em: &mut Emitter, sym: &Symbols, stmt: &Stmt) {
         Stmt::Inspect { target, op } => emit_inspect(em, sym, target, op),
         Stmt::Initialize { targets } => emit_initialize(em, sym, targets),
         Stmt::SetTrue { conditions } => emit_set_true(em, sym, conditions),
+        Stmt::SetTo { targets, value } => {
+            for t in targets {
+                let target = Operand::Data(t.to_uppercase());
+                emit_move(em, sym, value, std::slice::from_ref(&target));
+            }
+        }
+        Stmt::SetAdjust { targets, by, up } => {
+            let delta = operand_decimal(sym, by);
+            for t in targets {
+                let target = Operand::Data(t.to_uppercase());
+                let op = if *up { "add" } else { "sub" };
+                emit_inplace(em, sym, &target, op, &delta, false);
+            }
+        }
         Stmt::Open { mode, files } => emit_open(em, sym, *mode, files),
         Stmt::Close { files } => emit_close(em, sym, files),
         Stmt::Read {
@@ -98,6 +112,47 @@ pub(crate) fn emit_stmt(em: &mut Emitter, sym: &Symbols, stmt: &Stmt) {
         } => emit_read(em, sym, file, at_end, not_at_end),
         Stmt::Write { record, from } => emit_write(em, sym, record, from.as_ref()),
         Stmt::Perform(p) => emit_perform(em, sym, p),
+        Stmt::Search {
+            table,
+            varying,
+            at_end,
+            whens,
+        } => emit_search(em, sym, table, varying, at_end, whens),
+        Stmt::Sort { using, giving, .. } => emit_sort_or_merge(em, sym, using, giving, true),
+        Stmt::Merge { using, giving, .. } => emit_sort_or_merge(em, sym, using, giving, true),
+        Stmt::Rewrite {
+            record,
+            from,
+            not_invalid_key,
+            ..
+        } => {
+            emit_write(em, sym, record, from.as_ref());
+            if !not_invalid_key.is_empty() {
+                emit_block(em, sym, not_invalid_key);
+            }
+        }
+        Stmt::Delete {
+            not_invalid_key, ..
+        } => {
+            em.line("// chaka: DELETE — no-op en line-sequential");
+            if !not_invalid_key.is_empty() {
+                emit_block(em, sym, not_invalid_key);
+            }
+        }
+        Stmt::Start {
+            not_invalid_key, ..
+        } => {
+            em.line("// chaka: START — no-op (acceso secuencial)");
+            if !not_invalid_key.is_empty() {
+                emit_block(em, sym, not_invalid_key);
+            }
+        }
+        Stmt::Call {
+            program,
+            on_overflow,
+            not_on_overflow,
+            ..
+        } => emit_call(em, sym, program, on_overflow, not_on_overflow),
         Stmt::GoTo { target } => {
             em.line(&format!(
                 "self.{}(); return; // chaka: GO TO (aproximado)",
@@ -466,7 +521,7 @@ fn emit_unstring(
     em.line("}");
 }
 
-/// `INSPECT` — cuenta (`TALLYING`) o reemplaza (`REPLACING`).
+/// `INSPECT` — cuenta (`TALLYING`) o reemplaza (`REPLACING`/`CONVERTING`).
 fn emit_inspect(em: &mut Emitter, sym: &Symbols, target: &Operand, op: &InspectOp) {
     match op {
         InspectOp::TallyingForAll { counter, search } => {
@@ -486,6 +541,38 @@ fn emit_inspect(em: &mut Emitter, sym: &Symbols, target: &Operand, op: &InspectO
             em.dedent();
             em.line("}");
         }
+        InspectOp::TallyingForLeading { counter, search } => {
+            em.line("{");
+            em.indent();
+            em.line(&format!(
+                "let __hay = ({}).to_string();",
+                operand_display(sym, target)
+            ));
+            em.line(&format!(
+                "let __needle = ({}).to_string();",
+                operand_display(sym, search)
+            ));
+            em.line("let mut __n: i128 = 0;");
+            em.line("if !__needle.is_empty() {");
+            em.indent();
+            em.line("let mut __rest = __hay.as_str();");
+            em.line("while __rest.starts_with(__needle.as_str()) {");
+            em.indent();
+            em.line("__n += 1;");
+            em.line("__rest = &__rest[__needle.len()..];");
+            em.dedent();
+            em.line("}");
+            em.dedent();
+            em.line("}");
+            match field_ref(sym, counter) {
+                Some((lref, FieldKind::Num { .. })) => em.line(&format!(
+                    "{lref}.store({lref}.value().add(&Decimal::from_integer(__n)));"
+                )),
+                _ => em.line("// chaka: contador INSPECT no resuelto"),
+            }
+            em.dedent();
+            em.line("}");
+        }
         InspectOp::ReplacingAll { from, to } => {
             let replaced = format!(
                 "({}).replace({}, {})",
@@ -494,6 +581,25 @@ fn emit_inspect(em: &mut Emitter, sym: &Symbols, target: &Operand, op: &InspectO
                 operand_str(sym, to)
             );
             emit_store_text(em, sym, target, &format!("{replaced}.as_str()"));
+        }
+        InspectOp::Converting { from, to } => {
+            em.line("{");
+            em.indent();
+            em.line(&format!(
+                "let __from: Vec<char> = ({}).chars().collect();",
+                operand_display(sym, from)
+            ));
+            em.line(&format!(
+                "let __to: Vec<char> = ({}).chars().collect();",
+                operand_display(sym, to)
+            ));
+            em.line(&format!(
+                "let __conv: String = ({}).chars().map(|c| match __from.iter().position(|&f| f == c) {{ Some(i) => __to.get(i).copied().unwrap_or(c), None => c }}).collect();",
+                operand_display(sym, target)
+            ));
+            emit_store_text(em, sym, target, "__conv.as_str()");
+            em.dedent();
+            em.line("}");
         }
     }
 }
@@ -631,6 +737,135 @@ fn emit_reset_element(em: &mut Emitter, sym: &Symbols, op: &Operand) {
         Some((lref, FieldKind::Num { .. })) => em.line(&format!("{lref}.store(Decimal::zero());")),
         Some((lref, FieldKind::Text { .. })) => em.line(&format!("{lref}.fill(' ');")),
         None => em.line("// chaka: INITIALIZE no resuelto"),
+    }
+}
+
+/// `SORT` y `MERGE` — lee todas las líneas de los `using`, las ordena
+/// si toca, y las vuelca a cada `giving`. Las claves `ON KEY` no se
+/// honran en la v1: se ordena por línea completa.
+fn emit_sort_or_merge(
+    em: &mut Emitter,
+    sym: &Symbols,
+    using: &[String],
+    giving: &[String],
+    do_sort: bool,
+) {
+    em.line("{");
+    em.indent();
+    em.line("let mut __lines: Vec<String> = Vec::new();");
+    for name in using {
+        match sym.file(name) {
+            Some(fs) => {
+                em.line(&format!("self.{}.open_input();", fs.ident));
+                em.line(&format!("while let Some(__l) = self.{}.read() {{", fs.ident));
+                em.indent();
+                em.line("__lines.push(__l);");
+                em.dedent();
+                em.line("}");
+                em.line(&format!("self.{}.close();", fs.ident));
+            }
+            None => em.line(&format!("// chaka: SORT/MERGE — USING {name} no resuelto")),
+        }
+    }
+    if do_sort {
+        em.line("__lines.sort();");
+    }
+    for name in giving {
+        match sym.file(name) {
+            Some(fs) => {
+                em.line(&format!("self.{}.open_output();", fs.ident));
+                em.line("for __l in &__lines {");
+                em.indent();
+                em.line(&format!("self.{}.write(__l);", fs.ident));
+                em.dedent();
+                em.line("}");
+                em.line(&format!("self.{}.close();", fs.ident));
+            }
+            None => em.line(&format!("// chaka: SORT/MERGE — GIVING {name} no resuelto")),
+        }
+    }
+    em.dedent();
+    em.line("}");
+}
+
+/// `SEARCH` — búsqueda lineal: incrementa `varying` hasta agotar la
+/// tabla (`OCCURS n`), evalúa cada `WHEN` en cada vuelta. Si ninguna
+/// dispara, ejecuta `AT END`.
+fn emit_search(
+    em: &mut Emitter,
+    sym: &Symbols,
+    table: &str,
+    varying: &str,
+    at_end: &[Stmt],
+    whens: &[SearchBranch],
+) {
+    let var_op = Operand::Data(varying.to_uppercase());
+    let limit = sym
+        .lookup(table)
+        .and_then(|f| f.occurs)
+        .unwrap_or(0);
+    if varying.is_empty() || limit == 0 {
+        em.line("// chaka: SEARCH sin VARYING o tabla sin OCCURS — corre AT END");
+        emit_block(em, sym, at_end);
+        return;
+    }
+    em.line("'search: loop {");
+    em.indent();
+    em.line(&format!(
+        "let __idx = {}.mantissa();",
+        operand_decimal(sym, &var_op)
+    ));
+    em.line(&format!("if __idx < 1 || __idx > {limit}i128 {{"));
+    em.indent();
+    emit_block(em, sym, at_end);
+    em.line("break 'search;");
+    em.dedent();
+    em.line("}");
+    for branch in whens {
+        em.line(&format!("if {} {{", emit_cond(sym, &branch.cond)));
+        em.indent();
+        emit_block(em, sym, &branch.body);
+        em.line("break 'search;");
+        em.dedent();
+        em.line("}");
+    }
+    emit_inplace(em, sym, &var_op, "add", "Decimal::from_integer(1)", false);
+    em.dedent();
+    em.line("}");
+}
+
+/// `CALL` — aproximación v1: si el nombre del sub-programa es un
+/// literal y coincide con un párrafo del mismo programa, lo invoca y
+/// emite la rama `NOT ON OVERFLOW`; en otro caso, emite la rama
+/// `ON OVERFLOW` (sub-programa externo no soportado en la v1).
+fn emit_call(
+    em: &mut Emitter,
+    sym: &Symbols,
+    program: &Operand,
+    on_overflow: &[Stmt],
+    not_on_overflow: &[Stmt],
+) {
+    let resolved = match program {
+        Operand::Str(s) => sym
+            .paragraphs
+            .iter()
+            .find(|(cobol, _)| cobol == &s.to_uppercase())
+            .map(|(_, m)| m.clone()),
+        _ => None,
+    };
+    match resolved {
+        Some(method) => {
+            em.line(&format!("self.{method}();"));
+            if !not_on_overflow.is_empty() {
+                emit_block(em, sym, not_on_overflow);
+            }
+        }
+        None => {
+            em.line("// chaka: CALL — sub-programa externo no resuelto en la v1");
+            if !on_overflow.is_empty() {
+                emit_block(em, sym, on_overflow);
+            }
+        }
     }
 }
 

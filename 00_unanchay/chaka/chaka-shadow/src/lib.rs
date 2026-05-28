@@ -128,6 +128,26 @@ mod tests {
     corpus_test!(corpus_17_rangopar, "17-rangopar");
     corpus_test!(corpus_18_fichero, "18-fichero");
     corpus_test!(corpus_19_reporte, "19-reporte");
+    corpus_test!(corpus_20_call, "20-call");
+    corpus_test!(corpus_21_search, "21-search");
+    corpus_test!(corpus_22_sort, "22-sort");
+    corpus_test!(corpus_23_fileops, "23-fileops");
+    corpus_test!(corpus_25_inspect_set, "25-inspect-set");
+
+    #[test]
+    fn corpus_24_copy() {
+        // El copybook se siembra en /tmp para que el `COPY '/tmp/...'.`
+        // del .cob lo encuentre desde cualquier directorio de trabajo.
+        std::fs::write(
+            "/tmp/chaka-corpus-24.cpy",
+            include_str!("../../corpus/24-copy.cpy"),
+        )
+        .expect("escribir copybook");
+        check(
+            include_str!("../../corpus/24-copy.cob"),
+            include_str!("../../corpus/24-copy.expected"),
+        );
+    }
 
     #[test]
     fn empty_source_runs_clean() {

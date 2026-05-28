@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use chaka_ir::{
     BinOp, CmpOp, Cond, ConditionName, Expr, Figurative, FileMode, InspectOp, Ir, Operand, Perform,
-    PerformControl, PerformTarget, Stmt, WhenTest,
+    PerformControl, PerformTarget, SearchBranch, Stmt, WhenTest,
 };
 use chaka_runtime::{cobol_text_cmp, format_edited, CobFile, Decimal, Num, Rounding, Text};
 
@@ -286,6 +286,23 @@ impl<'a> Machine<'a> {
                         let cur = self.eval_decimal(counter);
                         self.store(counter, cur.add(&Decimal::from_integer(n as i128)), false);
                     }
+                    InspectOp::TallyingForLeading { counter, search } => {
+                        let hay = self.eval_text(target);
+                        let needle = self.eval_text(search);
+                        let n = if needle.is_empty() {
+                            0
+                        } else {
+                            let mut count: usize = 0;
+                            let mut rest = hay.as_str();
+                            while rest.starts_with(needle.as_str()) {
+                                count += 1;
+                                rest = &rest[needle.len()..];
+                            }
+                            count
+                        };
+                        let cur = self.eval_decimal(counter);
+                        self.store(counter, cur.add(&Decimal::from_integer(n as i128)), false);
+                    }
                     InspectOp::ReplacingAll { from, to } => {
                         let hay = self.eval_text(target);
                         let f = self.eval_text(from);
@@ -295,6 +312,19 @@ impl<'a> Machine<'a> {
                         } else {
                             hay.replace(f.as_str(), t.as_str())
                         };
+                        self.store_text(target, &new);
+                    }
+                    InspectOp::Converting { from, to } => {
+                        let hay = self.eval_text(target);
+                        let from_chars: Vec<char> = self.eval_text(from).chars().collect();
+                        let to_chars: Vec<char> = self.eval_text(to).chars().collect();
+                        let new: String = hay
+                            .chars()
+                            .map(|c| match from_chars.iter().position(|&f| f == c) {
+                                Some(i) => to_chars.get(i).copied().unwrap_or(c),
+                                None => c,
+                            })
+                            .collect();
                         self.store_text(target, &new);
                     }
                 }
@@ -324,6 +354,22 @@ impl<'a> Machine<'a> {
                     if let Some(cn) = self.conditions.get(&name.to_uppercase()).cloned() {
                         self.do_move(&cn.value, &Operand::Data(cn.parent));
                     }
+                }
+                Flow::Normal
+            }
+            Stmt::SetTo { targets, value } => {
+                for t in targets {
+                    self.do_move(value, &Operand::Data(t.to_uppercase()));
+                }
+                Flow::Normal
+            }
+            Stmt::SetAdjust { targets, by, up } => {
+                let delta = self.eval_decimal(by);
+                for t in targets {
+                    let target = Operand::Data(t.to_uppercase());
+                    let cur = self.eval_decimal(&target);
+                    let new = if *up { cur.add(&delta) } else { cur.sub(&delta) };
+                    self.store(&target, new, false);
                 }
                 Flow::Normal
             }
@@ -391,6 +437,85 @@ impl<'a> Machine<'a> {
                 Flow::Normal
             }
             Stmt::Perform(p) => self.exec_perform(p),
+            Stmt::Search {
+                table,
+                varying,
+                at_end,
+                whens,
+            } => self.exec_search(table, varying, at_end, whens),
+            Stmt::Rewrite {
+                record,
+                from,
+                not_invalid_key,
+                ..
+            } => {
+                // En la v1 el almacenamiento es line-sequential: REWRITE
+                // se comporta como WRITE (sin distinción de `INVALID KEY`).
+                if let Some(src) = from {
+                    let text = self.eval_text(src);
+                    self.store_text(&Operand::Data(record.clone()), &text);
+                }
+                let file = self
+                    .ir
+                    .files
+                    .iter()
+                    .find(|f| f.record.eq_ignore_ascii_case(record))
+                    .map(|f| f.name.to_uppercase());
+                if let Some(file) = file {
+                    let line = self.eval_text(&Operand::Data(record.clone()));
+                    if let Some(cf) = self.files.get_mut(&file) {
+                        cf.write(&line);
+                    }
+                }
+                self.exec_block(not_invalid_key)
+            }
+            Stmt::Delete {
+                not_invalid_key, ..
+            } => {
+                // No-op: el almacenamiento line-sequential no soporta
+                // borrar un registro. Dispara siempre `NOT INVALID KEY`.
+                self.exec_block(not_invalid_key)
+            }
+            Stmt::Start {
+                not_invalid_key, ..
+            } => {
+                // No-op: el acceso es secuencial; `START` no posiciona
+                // un puntero. Dispara siempre `NOT INVALID KEY`.
+                self.exec_block(not_invalid_key)
+            }
+            Stmt::Sort {
+                using, giving, ..
+            } => {
+                self.exec_sort_or_merge(using, giving, /* do_sort = */ true);
+                Flow::Normal
+            }
+            Stmt::Merge {
+                using, giving, ..
+            } => {
+                // En la v1 MERGE re-ordena las líneas. Si las entradas
+                // ya estaban ordenadas, el resultado es idéntico.
+                self.exec_sort_or_merge(using, giving, /* do_sort = */ true);
+                Flow::Normal
+            }
+            Stmt::Call {
+                program,
+                on_overflow,
+                not_on_overflow,
+                ..
+            } => {
+                // Aproximación v1: si el nombre del sub-programa coincide
+                // con un párrafo del mismo programa, lo ejecuta. Si no,
+                // se considera fallo y dispara `ON OVERFLOW`.
+                let target = self.eval_text(program).trim().to_uppercase();
+                if self.para_index.contains_key(&target) {
+                    if let Flow::Stop = self.run_paragraph(&target) {
+                        return Flow::Stop;
+                    }
+                    self.exec_block(not_on_overflow)
+                } else {
+                    self.exec_block(on_overflow)
+                }
+            }
             Stmt::GoTo { target } => {
                 // Aproximación: ejecuta el destino y sale del párrafo.
                 match self.run_paragraph(target) {
@@ -402,6 +527,72 @@ impl<'a> Machine<'a> {
             Stmt::Exit => Flow::Exit,
             Stmt::Continue => Flow::Normal,
             Stmt::Unknown { .. } => Flow::Normal, // verbo no soportado: se omite
+        }
+    }
+
+    /// Cuerpo común de `SORT` y `MERGE`: concatena las líneas de los
+    /// ficheros `using` (los abre/cierra para leer), opcionalmente las
+    /// ordena, y las vuelca a cada fichero de `giving`.
+    fn exec_sort_or_merge(&mut self, using: &[String], giving: &[String], do_sort: bool) {
+        let mut lines: Vec<String> = Vec::new();
+        for name in using {
+            let key = name.to_uppercase();
+            if let Some(cf) = self.files.get_mut(&key) {
+                cf.open_input();
+                while let Some(l) = cf.read() {
+                    lines.push(l);
+                }
+                cf.close();
+            }
+        }
+        if do_sort {
+            lines.sort();
+        }
+        for name in giving {
+            let key = name.to_uppercase();
+            if let Some(cf) = self.files.get_mut(&key) {
+                cf.open_output();
+                for l in &lines {
+                    cf.write(l);
+                }
+                cf.close();
+            }
+        }
+    }
+
+    fn exec_search(
+        &mut self,
+        table: &str,
+        varying: &str,
+        at_end: &'a [Stmt],
+        whens: &'a [SearchBranch],
+    ) -> Flow {
+        if varying.is_empty() {
+            // Sin índice explícito la v1 no puede iterar — corre `AT END`.
+            return self.exec_block(at_end);
+        }
+        let limit = self
+            .ir
+            .model
+            .field(table)
+            .and_then(|f| f.occurs)
+            .unwrap_or(0) as i128;
+        let var_op = Operand::Data(varying.to_uppercase());
+        loop {
+            if self.tick() {
+                return Flow::Stop;
+            }
+            let idx = self.eval_decimal(&var_op).mantissa();
+            if idx < 1 || idx > limit {
+                return self.exec_block(at_end);
+            }
+            for branch in whens {
+                if self.eval_cond(&branch.cond) {
+                    return self.exec_block(&branch.body);
+                }
+            }
+            let next = idx + 1;
+            self.store(&var_op, Decimal::from_integer(next), false);
         }
     }
 

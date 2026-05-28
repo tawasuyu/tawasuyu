@@ -273,8 +273,28 @@ mod tests {
     fn unknown_verb_becomes_a_comment() {
         let out = gen("PROCEDURE DIVISION.\n\
              MAIN.\n\
-                 CALL 'SUBPROG'.\n");
-        assert!(out.contains("// chaka: verbo no transpilado — CALL"));
+                 XYZZY 'NADA'.\n");
+        assert!(out.contains("// chaka: verbo no transpilado — XYZZY"));
+    }
+
+    #[test]
+    fn call_to_local_paragraph_invokes_its_method() {
+        let out = gen("PROCEDURE DIVISION.\n\
+             MAIN.\n\
+                 CALL 'SALUDA'.\n\
+                 STOP RUN.\n\
+             SALUDA.\n\
+                 DISPLAY 'HOLA'.\n");
+        assert!(out.contains("self.p_saluda();"));
+    }
+
+    #[test]
+    fn call_to_external_falls_back_to_overflow() {
+        let out = gen("PROCEDURE DIVISION.\n\
+             MAIN.\n\
+                 CALL 'EXT' ON OVERFLOW DISPLAY 'FALLO' END-CALL.\n");
+        assert!(out.contains("CALL — sub-programa externo no resuelto"));
+        assert!(out.contains("FALLO"));
     }
 
     #[test]

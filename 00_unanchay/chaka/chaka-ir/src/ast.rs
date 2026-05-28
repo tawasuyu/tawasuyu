@@ -193,6 +193,16 @@ pub enum Stmt {
     /// `SET cond-name... TO TRUE` — hace verdaderos esos nombres de
     /// condición (nivel 88): asigna a su dato padre el valor del 88.
     SetTrue { conditions: Vec<String> },
+    /// `SET name... TO value` — asigna `value` a cada `name` (copia
+    /// directa, sin involucrar nombres de condición 88).
+    SetTo { targets: Vec<String>, value: Operand },
+    /// `SET name... UP BY n` / `SET name... DOWN BY n` — incrementa o
+    /// decrementa cada `name` en `by` unidades.
+    SetAdjust {
+        targets: Vec<String>,
+        by: Operand,
+        up: bool,
+    },
     /// `OPEN {INPUT|OUTPUT} files...`
     Open { mode: FileMode, files: Vec<String> },
     /// `CLOSE files...`
@@ -208,8 +218,73 @@ pub enum Stmt {
         record: String,
         from: Option<Operand>,
     },
+    /// `REWRITE record [FROM from] [INVALID KEY ...] [NOT INVALID KEY ...]
+    /// [END-REWRITE]`. La v1 reescribe sobre un fichero line-sequential
+    /// como un `WRITE` más; `INVALID KEY` no se dispara nunca, así que
+    /// la rama `NOT INVALID KEY` siempre corre.
+    Rewrite {
+        record: String,
+        from: Option<Operand>,
+        invalid_key: Vec<Stmt>,
+        not_invalid_key: Vec<Stmt>,
+    },
+    /// `DELETE file [INVALID KEY ...] [NOT INVALID KEY ...] [END-DELETE]`.
+    /// La v1 trata `DELETE` como un no-op sobre un fichero secuencial;
+    /// dispara siempre la rama `NOT INVALID KEY`.
+    Delete {
+        file: String,
+        invalid_key: Vec<Stmt>,
+        not_invalid_key: Vec<Stmt>,
+    },
+    /// `START file [KEY {= | > | >= | < | <=} k] [INVALID KEY ...]
+    /// [NOT INVALID KEY ...] [END-START]`. La v1 trata `START` como un
+    /// no-op (sólo soporta acceso secuencial); dispara siempre la rama
+    /// `NOT INVALID KEY`.
+    Start {
+        file: String,
+        invalid_key: Vec<Stmt>,
+        not_invalid_key: Vec<Stmt>,
+    },
     /// `PERFORM ...` — ver [`Perform`].
     Perform(Perform),
+    /// `SORT sort-file [ON {ASCENDING|DESCENDING} KEY k...] USING in...
+    /// GIVING out...`. La v1 ignora las claves: lee todas las líneas de
+    /// los `using`, las ordena lexicográficamente y las vuelca a cada
+    /// `giving`. `INPUT/OUTPUT PROCEDURE` queda fuera de alcance.
+    Sort {
+        sort_file: String,
+        using: Vec<String>,
+        giving: Vec<String>,
+    },
+    /// `MERGE sort-file [ON KEY ...] USING in... GIVING out...`. Idem
+    /// `SORT` en la v1: las entradas suelen estar ya ordenadas, así que
+    /// un re-sort lexicográfico da el mismo resultado.
+    Merge {
+        sort_file: String,
+        using: Vec<String>,
+        giving: Vec<String>,
+    },
+    /// `SEARCH table VARYING idx AT END ... WHEN cond ... END-SEARCH` —
+    /// búsqueda lineal sobre una tabla `OCCURS`. La v1 sólo modela la
+    /// forma `VARYING idx`: el bucle incrementa `idx` desde su valor
+    /// actual hasta agotar la tabla, evalúa cada `WHEN` en cada vuelta y
+    /// dispara `AT END` si ninguna se cumplió.
+    Search {
+        table: String,
+        varying: String,
+        at_end: Vec<Stmt>,
+        whens: Vec<SearchBranch>,
+    },
+    /// `CALL program USING args... [ON OVERFLOW ...] [NOT ON OVERFLOW ...]`.
+    /// La v1 modela un sub-programa cuyo nombre coincide con un párrafo
+    /// del mismo programa: si lo encuentra, lo ejecuta como un `PERFORM`.
+    /// Si no lo encuentra, dispara `on_overflow` (la rama de fallo).
+    Call {
+        program: Operand,
+        using: Vec<Operand>,
+        on_overflow: Vec<Stmt>,
+        not_on_overflow: Vec<Stmt>,
+    },
     /// `GO TO target`
     GoTo { target: String },
     /// `STOP RUN`
@@ -240,8 +315,14 @@ pub enum InspectOp {
     /// `TALLYING counter FOR ALL search` — suma a `counter` la cantidad
     /// de apariciones de `search` en el destino.
     TallyingForAll { counter: Operand, search: Operand },
+    /// `TALLYING counter FOR LEADING search` — cuenta sólo las
+    /// apariciones consecutivas de `search` desde el inicio del campo.
+    TallyingForLeading { counter: Operand, search: Operand },
     /// `REPLACING ALL from BY to` — reemplaza las apariciones de `from`.
     ReplacingAll { from: Operand, to: Operand },
+    /// `CONVERTING from TO to` — traduce carácter a carácter: el carácter
+    /// en `from[i]` se reemplaza por el de `to[i]`.
+    Converting { from: Operand, to: Operand },
 }
 
 /// Cómo una rama `WHEN` decide si se dispara.
@@ -261,6 +342,14 @@ pub enum WhenTest {
 #[derive(Debug, Clone, PartialEq)]
 pub struct WhenBranch {
     pub tests: Vec<WhenTest>,
+    pub body: Vec<Stmt>,
+}
+
+/// Una rama `WHEN` de un `SEARCH`: la condición que la dispara y el
+/// cuerpo a ejecutar al encontrarla. El bucle se corta al disparar una.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchBranch {
+    pub cond: Cond,
     pub body: Vec<Stmt>,
 }
 

@@ -74,6 +74,8 @@ pub(crate) fn is_terminator(w: &str) -> bool {
 }
 
 /// ¿Es `w` una palabra de conexión de una cláusula (`TO`, `GIVING`...)?
+/// `NOT` se cuenta como conector: introduce ramas como `NOT AT END` o
+/// `NOT ON OVERFLOW`, que el statement padre maneja por su cuenta.
 fn is_connector(w: &str) -> bool {
     matches!(
         w,
@@ -91,6 +93,9 @@ fn is_connector(w: &str) -> bool {
             | "UPON"
             | "REMAINDER"
             | "VARYING"
+            | "NOT"
+            | "UP"
+            | "DOWN"
     )
 }
 

@@ -6,8 +6,8 @@
 use chaka_parser::TokenKind;
 
 use crate::ast::{
-    FileMode, InspectOp, Operand, Perform, PerformControl, PerformTarget, Stmt, WhenBranch,
-    WhenTest,
+    FileMode, InspectOp, Operand, Perform, PerformControl, PerformTarget, SearchBranch, Stmt,
+    WhenBranch, WhenTest,
 };
 use crate::cursor::{parse_operand, Cursor};
 use crate::expr::{parse_cond, parse_expr};
@@ -52,6 +52,13 @@ fn parse_one_stmt(c: &mut Cursor, stops: &[&str]) -> Stmt {
         "READ" => parse_read(c),
         "WRITE" => parse_write(c),
         "PERFORM" => parse_perform(c),
+        "CALL" => parse_call(c),
+        "SEARCH" => parse_search(c),
+        "SORT" => parse_sort_or_merge(c, /* is_merge = */ false),
+        "MERGE" => parse_sort_or_merge(c, /* is_merge = */ true),
+        "REWRITE" => parse_rewrite(c),
+        "DELETE" => parse_delete(c),
+        "START" => parse_start(c),
         "GO" => parse_goto(c),
         "STOP" => parse_stop(c),
         "GOBACK" => {
@@ -115,11 +122,13 @@ fn parse_operand_list(c: &mut Cursor) -> Vec<Operand> {
 }
 
 /// Salta los tokens de una cláusula que la v1 no modela, hasta el
-/// siguiente verbo o terminador de ámbito.
+/// siguiente verbo o terminador de ámbito. También para en `NOT`,
+/// porque introduce ramas como `NOT AT END` o `NOT ON OVERFLOW` que el
+/// statement padre interpreta por su cuenta.
 fn skip_to_stmt_boundary(c: &mut Cursor) {
     while !c.done() {
         if let Some(w) = c.peek_word() {
-            if is_verb(&w) || is_terminator(&w) {
+            if is_verb(&w) || is_terminator(&w) || w == "NOT" {
                 break;
             }
         }
@@ -399,19 +408,44 @@ fn parse_unstring(c: &mut Cursor) -> Stmt {
 
 fn parse_set(c: &mut Cursor) -> Stmt {
     c.bump(); // SET
-    let mut conditions = Vec::new();
+    let mut targets = Vec::new();
     while let Some(name) = parse_one_name(c) {
-        conditions.push(name);
+        targets.push(name);
     }
-    // La v1 sólo modela `SET ... TO TRUE`.
-    if c.eat_word("TO") && c.eat_word("TRUE") {
-        Stmt::SetTrue { conditions }
-    } else {
-        skip_to_stmt_boundary(c);
-        Stmt::Unknown {
-            verb: "SET".to_string(),
-            tokens: Vec::new(),
+    if c.eat_word("TO") {
+        if c.eat_word("TRUE") {
+            return Stmt::SetTrue {
+                conditions: targets,
+            };
         }
+        let value = parse_operand(c);
+        skip_to_stmt_boundary(c);
+        return Stmt::SetTo { targets, value };
+    }
+    if c.eat_word("UP") {
+        c.eat_word("BY");
+        let by = parse_operand(c);
+        skip_to_stmt_boundary(c);
+        return Stmt::SetAdjust {
+            targets,
+            by,
+            up: true,
+        };
+    }
+    if c.eat_word("DOWN") {
+        c.eat_word("BY");
+        let by = parse_operand(c);
+        skip_to_stmt_boundary(c);
+        return Stmt::SetAdjust {
+            targets,
+            by,
+            up: false,
+        };
+    }
+    skip_to_stmt_boundary(c);
+    Stmt::Unknown {
+        verb: "SET".to_string(),
+        tokens: Vec::new(),
     }
 }
 
@@ -502,13 +536,18 @@ fn parse_inspect(c: &mut Cursor) -> Stmt {
     if c.eat_word("TALLYING") {
         let counter = parse_operand(c);
         c.eat_word("FOR");
-        c.eat_word("ALL");
+        let leading = c.eat_word("LEADING");
+        if !leading {
+            c.eat_word("ALL");
+        }
         let search = parse_operand(c);
         skip_to_stmt_boundary(c);
-        Stmt::Inspect {
-            target,
-            op: InspectOp::TallyingForAll { counter, search },
-        }
+        let op = if leading {
+            InspectOp::TallyingForLeading { counter, search }
+        } else {
+            InspectOp::TallyingForAll { counter, search }
+        };
+        Stmt::Inspect { target, op }
     } else if c.eat_word("REPLACING") {
         c.eat_word("ALL");
         let from = parse_operand(c);
@@ -518,6 +557,15 @@ fn parse_inspect(c: &mut Cursor) -> Stmt {
         Stmt::Inspect {
             target,
             op: InspectOp::ReplacingAll { from, to },
+        }
+    } else if c.eat_word("CONVERTING") {
+        let from = parse_operand(c);
+        c.eat_word("TO");
+        let to = parse_operand(c);
+        skip_to_stmt_boundary(c);
+        Stmt::Inspect {
+            target,
+            op: InspectOp::Converting { from, to },
         }
     } else {
         // Forma de INSPECT que la v1 no modela.
@@ -626,6 +674,222 @@ fn at_count(c: &Cursor) -> bool {
             !is_boundary(&w) && c.word_at(1).as_deref() == Some("TIMES")
         }
         _ => false,
+    }
+}
+
+/// Lee las cláusulas `[INVALID KEY ...] [NOT INVALID KEY ...]` que
+/// cierran `REWRITE`/`DELETE`/`START`, hasta el terminador `end_kw`.
+fn parse_invalid_key_branches(c: &mut Cursor, end_kw: &str) -> (Vec<Stmt>, Vec<Stmt>) {
+    let mut invalid = Vec::new();
+    let mut not_invalid = Vec::new();
+    loop {
+        if c.eat_word("INVALID") {
+            c.eat_word("KEY");
+            invalid = parse_statements(c, &["NOT", end_kw]);
+        } else if c.eat_word("NOT") {
+            c.eat_word("INVALID");
+            c.eat_word("KEY");
+            not_invalid = parse_statements(c, &[end_kw]);
+        } else {
+            break;
+        }
+    }
+    c.eat_word(end_kw);
+    (invalid, not_invalid)
+}
+
+fn parse_rewrite(c: &mut Cursor) -> Stmt {
+    c.bump(); // REWRITE
+    let record = parse_one_name(c).unwrap_or_default();
+    let from = if c.eat_word("FROM") {
+        Some(parse_operand(c))
+    } else {
+        None
+    };
+    let (invalid_key, not_invalid_key) = parse_invalid_key_branches(c, "END-REWRITE");
+    Stmt::Rewrite {
+        record,
+        from,
+        invalid_key,
+        not_invalid_key,
+    }
+}
+
+fn parse_delete(c: &mut Cursor) -> Stmt {
+    c.bump(); // DELETE
+    let file = parse_one_name(c).unwrap_or_default();
+    c.eat_word("RECORD");
+    let (invalid_key, not_invalid_key) = parse_invalid_key_branches(c, "END-DELETE");
+    Stmt::Delete {
+        file,
+        invalid_key,
+        not_invalid_key,
+    }
+}
+
+fn parse_start(c: &mut Cursor) -> Stmt {
+    c.bump(); // START
+    let file = parse_one_name(c).unwrap_or_default();
+    // Cláusula `KEY {= | > | >= | < | <=} k`: la v1 la descarta.
+    if c.eat_word("KEY") {
+        // operador opcional
+        for sym in &["=", ">=", "<=", ">", "<"] {
+            if c.eat_sym(sym) {
+                break;
+            }
+        }
+        // nombre de campo opcional
+        if let Some(w) = c.peek_word() {
+            if !is_boundary(&w) && !matches!(w.as_str(), "INVALID" | "NOT" | "END-START") {
+                c.bump();
+            }
+        }
+    }
+    let (invalid_key, not_invalid_key) = parse_invalid_key_branches(c, "END-START");
+    Stmt::Start {
+        file,
+        invalid_key,
+        not_invalid_key,
+    }
+}
+
+fn parse_sort_or_merge(c: &mut Cursor, is_merge: bool) -> Stmt {
+    c.bump(); // SORT / MERGE
+    let sort_file = parse_one_name(c).unwrap_or_default();
+    // Cláusulas `ON {ASCENDING|DESCENDING} KEY k...`: la v1 las descarta.
+    while c.eat_word("ON") || c.eat_word("ASCENDING") || c.eat_word("DESCENDING") {
+        c.eat_word("ASCENDING");
+        c.eat_word("DESCENDING");
+        c.eat_word("KEY");
+        while let Some(w) = c.peek_word() {
+            if matches!(w.as_str(), "USING" | "GIVING" | "ON" | "ASCENDING" | "DESCENDING")
+                || is_boundary(&w)
+            {
+                break;
+            }
+            c.bump();
+        }
+    }
+    let mut using = Vec::new();
+    if c.eat_word("USING") {
+        while let Some(name) = peek_file_name(c) {
+            c.bump();
+            using.push(name);
+        }
+    }
+    let mut giving = Vec::new();
+    if c.eat_word("GIVING") {
+        while let Some(name) = peek_file_name(c) {
+            c.bump();
+            giving.push(name);
+        }
+    }
+    if is_merge {
+        Stmt::Merge {
+            sort_file,
+            using,
+            giving,
+        }
+    } else {
+        Stmt::Sort {
+            sort_file,
+            using,
+            giving,
+        }
+    }
+}
+
+/// Próximo nombre de fichero (palabra no-frontera) sin consumirlo;
+/// `None` si la lista terminó.
+fn peek_file_name(c: &Cursor) -> Option<String> {
+    let w = c.peek_word()?;
+    if is_boundary(&w) {
+        return None;
+    }
+    Some(w)
+}
+
+fn parse_search(c: &mut Cursor) -> Stmt {
+    c.bump(); // SEARCH
+    // `SEARCH ALL` — la v1 lo trata como búsqueda lineal: avisa pero no
+    // implementa la búsqueda binaria.
+    let _is_all = c.eat_word("ALL");
+    let table = parse_one_name(c).unwrap_or_default();
+    let varying = if c.eat_word("VARYING") {
+        parse_one_name(c).unwrap_or_default()
+    } else {
+        // Sin `VARYING idx` no hay índice explícito. La v1 no captura el
+        // `INDEXED BY` de la cláusula `OCCURS`, así que devolvemos un
+        // statement vacío que el intérprete tratará como salto.
+        String::new()
+    };
+    let mut at_end = Vec::new();
+    if c.eat_word("AT") {
+        c.eat_word("END");
+        at_end = parse_statements(c, &["WHEN", "END-SEARCH"]);
+    }
+    let mut whens = Vec::new();
+    while c.eat_word("WHEN") {
+        let cond = parse_cond(c);
+        let body = parse_statements(c, &["WHEN", "END-SEARCH"]);
+        whens.push(SearchBranch { cond, body });
+    }
+    c.eat_word("END-SEARCH");
+    Stmt::Search {
+        table,
+        varying,
+        at_end,
+        whens,
+    }
+}
+
+fn parse_call(c: &mut Cursor) -> Stmt {
+    c.bump(); // CALL
+    let program = parse_operand(c);
+    let mut using = Vec::new();
+    if c.eat_word("USING") {
+        loop {
+            // `BY REFERENCE` / `BY CONTENT` / `BY VALUE`: la v1 los ignora.
+            if c.eat_word("BY") {
+                c.eat_word("REFERENCE");
+                c.eat_word("CONTENT");
+                c.eat_word("VALUE");
+                continue;
+            }
+            c.eat_sym(",");
+            match c.peek_word() {
+                Some(w)
+                    if !is_boundary(&w)
+                        && !matches!(w.as_str(), "ON" | "NOT" | "END-CALL") =>
+                {
+                    using.push(parse_operand(c))
+                }
+                _ => break,
+            }
+        }
+    }
+    let mut on_overflow = Vec::new();
+    let mut not_on_overflow = Vec::new();
+    loop {
+        if c.eat_word("ON") {
+            c.eat_word("OVERFLOW");
+            c.eat_word("EXCEPTION");
+            on_overflow = parse_statements(c, &["NOT", "END-CALL"]);
+        } else if c.eat_word("NOT") {
+            c.eat_word("ON");
+            c.eat_word("OVERFLOW");
+            c.eat_word("EXCEPTION");
+            not_on_overflow = parse_statements(c, &["END-CALL"]);
+        } else {
+            break;
+        }
+    }
+    c.eat_word("END-CALL");
+    Stmt::Call {
+        program,
+        using,
+        on_overflow,
+        not_on_overflow,
     }
 }
 

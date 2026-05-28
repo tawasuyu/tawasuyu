@@ -247,6 +247,40 @@ fn collect_unknowns(stmts: &[Stmt], out: &mut Vec<String>) {
                     collect_unknowns(body, out);
                 }
             }
+            Stmt::Call {
+                on_overflow,
+                not_on_overflow,
+                ..
+            } => {
+                collect_unknowns(on_overflow, out);
+                collect_unknowns(not_on_overflow, out);
+            }
+            Stmt::Search {
+                at_end, whens, ..
+            } => {
+                collect_unknowns(at_end, out);
+                for w in whens {
+                    collect_unknowns(&w.body, out);
+                }
+            }
+            Stmt::Rewrite {
+                invalid_key,
+                not_invalid_key,
+                ..
+            }
+            | Stmt::Delete {
+                invalid_key,
+                not_invalid_key,
+                ..
+            }
+            | Stmt::Start {
+                invalid_key,
+                not_invalid_key,
+                ..
+            } => {
+                collect_unknowns(invalid_key, out);
+                collect_unknowns(not_invalid_key, out);
+            }
             _ => {}
         }
     }
@@ -293,13 +327,13 @@ mod tests {
         let ir = ir_of(
             "PROCEDURE DIVISION.\n\
              MAIN.\n\
-                 CALL 'SUBPROG'.\n",
+                 XYZZY 'NADA'.\n",
         );
         let mut verbs = Vec::new();
         for proc in &ir.procedures {
             collect_unknowns(&proc.body, &mut verbs);
         }
-        assert_eq!(verbs, vec!["CALL".to_string()]);
+        assert_eq!(verbs, vec!["XYZZY".to_string()]);
     }
 
     #[test]
