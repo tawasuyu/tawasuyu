@@ -173,6 +173,11 @@ async fn tarea_compositor() {
     loop {
         async_system::reloj::EsperaFrame::nueva().await;
         compositor::atender_mandos();
+        // FASE 61 :: drenar la tableta virtio-input ANTES de atender el raton:
+        // traduce sus eventos evdev a la posicion absoluta del puntero por el
+        // mismo sumidero que el PS/2, de modo que `atender_raton` los procese
+        // sin distinguir origen. No-op si no se monto tableta.
+        drivers::tableta::atender();
         // FASE 13 :: atender los eventos del raton (clic-para-enfocar y
         // arrastre de flotantes), y refrescar el puntero si se movio en una
         // vuelta tranquila en que ninguna app pinto.
@@ -817,6 +822,17 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     //          y los clics pueden alcanzar al compositor.
     drivers::raton::init(ancho_lienzo, alto_lienzo);
     traza("raton :: listo");
+
+    // --- 6.65. FASE 61 :: montar la tableta virtio-input — un puntero ABSOLUTO
+    //           que sigue 1:1 al cursor del host, sin la deriva del raton
+    //           relativo PS/2. COMPLEMENTA al raton: si no hay tableta, `montar`
+    //           devuelve `Err` y el puntero sigue siendo el del PS/2. Se sondea
+    //           en cada fotograma desde la tarea del compositor, no por IRQ.
+    match drivers::tableta::montar(ancho_lienzo, alto_lienzo) {
+        Ok(()) => reportar("tableta :: virtio-input -- puntero absoluto"),
+        Err(motivo) => reportar(&format!("tableta :: {motivo} -- puntero PS/2 relativo")),
+    }
+    traza("tableta :: listo");
 
     // --- 6.7. FASE 18 :: montar la tarjeta virtio-net. Si el firmware no
     //          enruta una linea de IRQ util o no hay dispositivo, el resto

@@ -412,7 +412,11 @@ fn lanzar_qemu(imagen: &Path, ovmf: &str) -> Result<(), String> {
         // DHCP/DNS en 10.0.2.3, el invitado en 10.0.2.15. El kernel envia un
         // ARP request al gateway en cuanto arranca como prueba de vida.
         .arg("-netdev").arg("user,id=net0")
-        .arg("-device").arg("virtio-net-pci,netdev=net0");
+        .arg("-device").arg("virtio-net-pci,netdev=net0")
+        // FASE 61 :: tableta virtio-input — puntero ABSOLUTO. QEMU enruta el
+        // cursor del host a este dispositivo (coordenadas absolutas), de modo
+        // que el puntero del huesped lo sigue 1:1, sin captura ni deriva.
+        .arg("-device").arg("virtio-tablet-pci");
 
     // Cualquier argumento extra tras `--` se reenvia a QEMU intacto.
     // Ejemplo: `cargo run -p boot -- -display none -d int`.

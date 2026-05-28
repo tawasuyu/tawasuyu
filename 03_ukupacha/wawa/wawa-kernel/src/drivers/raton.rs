@@ -217,13 +217,30 @@ fn procesar(banderas: u8, dx_crudo: u8, dy_crudo: u8) {
     let alto = ALTO.load(Ordering::Relaxed) as i32;
     let x = (RATON_X.load(Ordering::Relaxed) as i32 + dx).clamp(0, (ancho - 1).max(0)) as usize;
     let y = (RATON_Y.load(Ordering::Relaxed) as i32 - dy).clamp(0, (alto - 1).max(0)) as usize;
+
+    // El delta ya esta integrado a una posicion absoluta; comprometerla al
+    // sumidero comun del puntero (botones en los 3 bits bajos de las banderas).
+    comprometer(x, y, banderas & 0b0000_0111);
+}
+
+/// Compromete una posicion ABSOLUTA del puntero y su estado de botones al
+/// estado compartido: acota a la pantalla, publica la posicion y encola un
+/// evento SOLO si importa —los botones cambiaron, o alguno sigue pulsado (un
+/// arrastre)—. El movimiento ocioso no satura la cola; el puntero, aun asi, ya
+/// se movio (los atomicos de posicion).
+///
+/// Lo comparten dos origenes: el paquete PS/2 (`procesar`, que integra deltas)
+/// y el driver de tableta virtio-input (`actualizar_desde_tableta`, que ya da
+/// posicion absoluta). El compositor que drena los eventos no distingue cual
+/// de los dos los produjo. Breve y libre de panicos: PS/2 lo llama en IRQ12.
+fn comprometer(x: usize, y: usize, botones: u8) {
+    let ancho = ANCHO.load(Ordering::Relaxed);
+    let alto = ALTO.load(Ordering::Relaxed);
+    let x = x.min(ancho.saturating_sub(1));
+    let y = y.min(alto.saturating_sub(1));
     RATON_X.store(x, Ordering::Relaxed);
     RATON_Y.store(y, Ordering::Relaxed);
 
-    // Encolar un evento SOLO si importa: si los botones cambiaron, o si alguno
-    // sigue pulsado —un arrastre—. El movimiento ocioso no satura la cola; el
-    // puntero, aun asi, ya se movio (los atomicos de arriba).
-    let botones = banderas & 0b0000_0111;
     let antes = BOTONES_ANTES.swap(botones, Ordering::Relaxed);
     if botones != antes || botones != 0 {
         if let Some(cola) = EVENTOS.get() {
@@ -236,6 +253,16 @@ fn procesar(banderas: u8, dx_crudo: u8, dy_crudo: u8) {
             });
         }
     }
+}
+
+/// FASE 61 :: punto de entrada del driver de tableta virtio-input. Publica una
+/// posicion ABSOLUTA del puntero —ya escalada a pixeles por el driver— y su
+/// estado de botones (bit 0 izquierdo, 1 derecho, 2 central), reusando el
+/// sumidero comun. Si el raton PS/2 nunca reporto, este es el unico origen del
+/// puntero; si ambos viven, en la practica QEMU enruta el cursor del host a la
+/// tableta (absoluta) y el PS/2 queda ocioso — no se pelean por la posicion.
+pub fn actualizar_desde_tableta(x: usize, y: usize, botones: u8) {
+    comprometer(x, y, botones);
 }
 
 // =============================================================================

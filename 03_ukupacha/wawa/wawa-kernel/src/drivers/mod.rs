@@ -17,6 +17,8 @@
 //                  primer ARP al gateway de QEMU (Fase 18).
 //    * `gpu`     — el adaptador virtio-gpu sobre PCI: el kernel crea su propio
 //                  recurso 2D y toma posesion del scanout (Fase 60).
+//    * `tableta` — un virtio-input configurado como tableta: puntero ABSOLUTO
+//                  que sigue 1:1 al cursor del host, complementa al PS/2 (Fase 61).
 // =============================================================================
 
 pub mod altavoz;
@@ -25,6 +27,7 @@ pub mod gpu;
 pub mod pci;
 pub mod raton;
 pub mod red;
+pub mod tableta;
 // Fase 38 :: COM1 polling — canal LEGACY del firmador externo (wawactl).
 // La Fase 49 corono el HAL bajo virtio-console; este modulo persiste como
 // fallback para escenarios donde QEMU no expone un virtconsole.
