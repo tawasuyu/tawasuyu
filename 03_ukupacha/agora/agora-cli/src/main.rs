@@ -60,6 +60,44 @@ enum Cmd {
     },
     /// Resumen del grafo: cuántas identidades, atestaciones, mías.
     Grafo,
+    /// Operaciones sobre canales de release (format::Canal).
+    Canal {
+        #[command(subcommand)]
+        op: CanalOp,
+    },
+}
+
+#[derive(Subcommand)]
+enum CanalOp {
+    /// Crea un canal nuevo (sin raíces) con `autor` como firmante.
+    /// La pubkey de `autor` debe estar en el keystore local — sólo
+    /// quien tiene la seed puede extender el canal después.
+    Nuevo {
+        #[arg(long)]
+        nombre: String,
+        #[arg(long)]
+        autor: String,
+        /// Archivo postcard a escribir.
+        #[arg(long)]
+        salida: PathBuf,
+    },
+    /// Agrega una RaizFirmada al final del historial del canal y
+    /// re-escribe el archivo. El timestamp es ahora UNIX.
+    Extender {
+        #[arg(long)]
+        archivo: PathBuf,
+        /// Hash hex (64 chars) del manifiesto que la raíz inaugura.
+        #[arg(long)]
+        raiz: String,
+    },
+    /// Verifica firma + monotonicidad de timestamps del canal completo.
+    Verificar {
+        archivo: PathBuf,
+    },
+    /// Imprime el canal en formato legible.
+    Mostrar {
+        archivo: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -160,6 +198,36 @@ impl Sesion {
     fn es_mia(&self, id: IdentityId) -> bool {
         self.keystore.exists(id)
     }
+
+    /// Resuelve un id desde un input de usuario que puede ser
+    /// (a) hex completo de 64 chars o (b) un prefijo hex no ambiguo
+    /// contra el conjunto de identidades del grafo. Devuelve error
+    /// si el prefijo matchea cero o más de una identidad.
+    fn resolver_id(&self, input: &str) -> CliResult<IdentityId> {
+        let input = input.trim().to_ascii_lowercase();
+        if input.len() == 64 {
+            return parse_id(&input);
+        }
+        if input.is_empty() || input.len() > 64 || !input.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(Error::HexInvalido(input));
+        }
+        let mut matches: Vec<IdentityId> = Vec::new();
+        for ident in self.graph.identities() {
+            let hex = hex_de(ident.id().as_bytes());
+            if hex.starts_with(&input) {
+                matches.push(ident.id());
+            }
+        }
+        match matches.len() {
+            1 => Ok(matches[0]),
+            0 => Err(Error::PrefijoSinMatch(input)),
+            n => Err(Error::PrefijoAmbiguo {
+                prefijo: input,
+                candidatos: matches.iter().take(5).map(|id| hex_de(id.as_bytes())).collect(),
+                total: n,
+            }),
+        }
+    }
 }
 
 // =============================================================================
@@ -186,6 +254,22 @@ enum Error {
     IdentidadNoPropia(IdentityId),
     #[error("la identidad {0} no está registrada en el grafo local")]
     IdentidadDesconocida(IdentityId),
+    #[error("ningún id del grafo empieza con el prefijo \"{0}\"")]
+    PrefijoSinMatch(String),
+    #[error(
+        "prefijo \"{prefijo}\" matchea {total} identidades distintas (mostrando hasta 5): {candidatos:?}"
+    )]
+    PrefijoAmbiguo {
+        prefijo: String,
+        candidatos: Vec<String>,
+        total: usize,
+    },
+    #[error("hash hex inválido: esperaba 64 chars hex (recibí {0})")]
+    HashInvalido(String),
+    #[error("canal: {0}")]
+    Canal(&'static str),
+    #[error("agora-channel: {0}")]
+    AgoraChannel(agora_channel::CanalError),
 }
 
 type CliResult<T> = std::result::Result<T, Error>;
@@ -195,16 +279,26 @@ type CliResult<T> = std::result::Result<T, Error>;
 // =============================================================================
 
 fn parse_id(s: &str) -> CliResult<IdentityId> {
+    let bytes = parse_hex_32(s).map_err(|_| Error::HexInvalido(s.to_string()))?;
+    Ok(IdentityId::from_bytes(bytes))
+}
+
+/// Parsea 64 chars hex a un `[u8; 32]`. Usado para ids, hashes y pubkeys.
+fn parse_hex_32(s: &str) -> Result<[u8; 32], ()> {
     let s = s.trim();
     if s.len() != 64 {
-        return Err(Error::HexInvalido(s.to_string()));
+        return Err(());
     }
     let mut bytes = [0u8; 32];
     for (i, chunk) in s.as_bytes().chunks(2).enumerate() {
-        let ch = std::str::from_utf8(chunk).map_err(|_| Error::HexInvalido(s.into()))?;
-        bytes[i] = u8::from_str_radix(ch, 16).map_err(|_| Error::HexInvalido(s.into()))?;
+        let ch = std::str::from_utf8(chunk).map_err(|_| ())?;
+        bytes[i] = u8::from_str_radix(ch, 16).map_err(|_| ())?;
     }
-    Ok(IdentityId::from_bytes(bytes))
+    Ok(bytes)
+}
+
+fn parse_hash(s: &str) -> CliResult<[u8; 32]> {
+    parse_hex_32(s).map_err(|_| Error::HashInvalido(s.to_string()))
 }
 
 fn hex_de(b: &[u8]) -> String {
@@ -233,15 +327,19 @@ fn run(cmd: Cmd) -> CliResult<()> {
         Cmd::Identidad { op } => match op {
             IdentidadOp::Nueva { name, kind } => identidad_nueva(name, kind.into()),
             IdentidadOp::Listar => identidad_listar(),
-            IdentidadOp::Exportar { id } => identidad_exportar(parse_id(&id)?),
+            IdentidadOp::Exportar { id } => identidad_exportar(&id),
         },
-        Cmd::Atestar { como, sobre, pred, valor } => {
-            atestar(parse_id(&como)?, parse_id(&sobre)?, &pred, &valor)
-        }
+        Cmd::Atestar { como, sobre, pred, valor } => atestar(&como, &sobre, &pred, &valor),
         Cmd::Verificar { archivo } => verificar(&archivo),
         Cmd::Exportar { archivo } => exportar(&archivo),
         Cmd::Importar { archivo } => importar(&archivo),
         Cmd::Grafo => grafo_resumen(),
+        Cmd::Canal { op } => match op {
+            CanalOp::Nuevo { nombre, autor, salida } => canal_nuevo(&nombre, &autor, &salida),
+            CanalOp::Extender { archivo, raiz } => canal_extender(&archivo, &raiz),
+            CanalOp::Verificar { archivo } => canal_verificar(&archivo),
+            CanalOp::Mostrar { archivo } => canal_mostrar(&archivo),
+        },
     }
 }
 
@@ -285,8 +383,9 @@ fn identidad_listar() -> CliResult<()> {
     Ok(())
 }
 
-fn identidad_exportar(id: IdentityId) -> CliResult<()> {
+fn identidad_exportar(id: &str) -> CliResult<()> {
     let s = Sesion::abrir()?;
+    let id = s.resolver_id(id)?;
     let ident = s.graph.identity(id).ok_or(Error::IdentidadDesconocida(id))?;
     println!("id     {}", hex_de(id.as_bytes()));
     println!("kind   {}", kind_label(ident.kind));
@@ -295,8 +394,10 @@ fn identidad_exportar(id: IdentityId) -> CliResult<()> {
     Ok(())
 }
 
-fn atestar(como: IdentityId, sobre: IdentityId, pred: &str, valor: &str) -> CliResult<()> {
+fn atestar(como: &str, sobre: &str, pred: &str, valor: &str) -> CliResult<()> {
     let mut s = Sesion::abrir()?;
+    let como = s.resolver_id(como)?;
+    let sobre = s.resolver_id(sobre)?;
     if s.graph.identity(sobre).is_none() {
         return Err(Error::IdentidadDesconocida(sobre));
     }
@@ -375,6 +476,127 @@ fn importar(archivo: &Path) -> CliResult<()> {
     }
     s.guardar()?;
     println!("importadas {ids} identidades, {ok} atestaciones aceptadas, {rechazadas} rechazadas");
+    Ok(())
+}
+
+// =============================================================================
+//  Canales
+// =============================================================================
+
+fn ahora_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn canal_nuevo(nombre: &str, autor: &str, salida: &Path) -> CliResult<()> {
+    use format::{Canal, NOMBRE_CANAL_LIMITE, VERSION_CANAL};
+    let s = Sesion::abrir()?;
+    let autor_id = s.resolver_id(autor)?;
+    let ident = s
+        .graph
+        .identity(autor_id)
+        .ok_or(Error::IdentidadDesconocida(autor_id))?;
+    if !s.es_mia(autor_id) {
+        return Err(Error::IdentidadNoPropia(autor_id));
+    }
+    if nombre.is_empty() || nombre.len() > NOMBRE_CANAL_LIMITE {
+        return Err(Error::Canal("nombre vacío o más largo que NOMBRE_CANAL_LIMITE"));
+    }
+    let canal = Canal {
+        version: VERSION_CANAL,
+        nombre: nombre.to_string(),
+        autor: ident.public_key,
+        raices: Vec::new(),
+    };
+    let bytes = canal.serializar().map_err(Error::Canal)?;
+    fs::write(salida, &bytes)?;
+    println!(
+        "canal nuevo creado: nombre=\"{}\" autor={} → {} ({} bytes)",
+        nombre,
+        hex_de(autor_id.as_bytes()),
+        salida.display(),
+        bytes.len()
+    );
+    Ok(())
+}
+
+fn canal_extender(archivo: &Path, raiz_hex: &str) -> CliResult<()> {
+    use format::Canal;
+    let s = Sesion::abrir()?;
+    let raiz_hash = parse_hash(raiz_hex)?;
+    let bytes = fs::read(archivo)?;
+    let mut canal = Canal::deserializar(&bytes).map_err(Error::Canal)?;
+
+    let autor_id = agora_core::IdentityId::from_public_key(&canal.autor);
+    if !s.es_mia(autor_id) {
+        return Err(Error::IdentidadNoPropia(autor_id));
+    }
+    let kp = s.cargar_keypair(autor_id)?;
+
+    let ts = ahora_unix();
+    // Forzamos timestamp estrictamente posterior al último — verificar_canal
+    // lo exigirá al releer.
+    let ts = match canal.raices.last() {
+        Some(prev) if ts <= prev.timestamp => prev.timestamp + 1,
+        _ => ts,
+    };
+    let nueva = agora_channel::firmar_raiz(&kp, &canal.nombre, &raiz_hash, ts);
+    canal.raices.push(nueva.clone());
+
+    let bytes = canal.serializar().map_err(Error::Canal)?;
+    fs::write(archivo, &bytes)?;
+    println!(
+        "canal \"{}\" extendido: raíz={} ts={} → ahora {} raíces ({} bytes)",
+        canal.nombre,
+        hex_de(&raiz_hash),
+        ts,
+        canal.raices.len(),
+        bytes.len()
+    );
+    Ok(())
+}
+
+fn canal_verificar(archivo: &Path) -> CliResult<()> {
+    use format::Canal;
+    let bytes = fs::read(archivo)?;
+    let canal = Canal::deserializar(&bytes).map_err(Error::Canal)?;
+    agora_channel::verificar_canal(&canal).map_err(Error::AgoraChannel)?;
+    println!(
+        "canal \"{}\" válido: {} raíces firmadas por {} (timestamps estrictamente monotónicos)",
+        canal.nombre,
+        canal.raices.len(),
+        hex_de(&canal.autor)
+    );
+    Ok(())
+}
+
+fn canal_mostrar(archivo: &Path) -> CliResult<()> {
+    use format::Canal;
+    let s = Sesion::abrir()?;
+    let bytes = fs::read(archivo)?;
+    let canal = Canal::deserializar(&bytes).map_err(Error::Canal)?;
+    let autor_id = agora_core::IdentityId::from_public_key(&canal.autor);
+    let autor_name = s
+        .graph
+        .identity(autor_id)
+        .map(|i| i.display_name.as_str())
+        .unwrap_or("(desconocido en el grafo local)");
+    println!("canal: {}", canal.nombre);
+    println!("autor: {} ({})", hex_de(&canal.autor), autor_name);
+    println!("version: {}", canal.version);
+    println!("raíces: {}", canal.raices.len());
+    for (i, raiz) in canal.raices.iter().enumerate() {
+        let valida = agora_channel::verificar_raiz(&canal.autor, &canal.nombre, raiz).is_ok();
+        let mark = if valida { "✔" } else { "✘" };
+        println!(
+            "  #{i:<3} {mark}  ts={ts}  raíz={raiz}",
+            i = i,
+            ts = raiz.timestamp,
+            raiz = hex_de(&raiz.raiz_manifiesto)
+        );
+    }
     Ok(())
 }
 

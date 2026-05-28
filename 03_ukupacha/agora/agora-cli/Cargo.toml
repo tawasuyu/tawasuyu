@@ -17,6 +17,8 @@ agora-core = { path = "../agora-core" }
 agora-graph = { path = "../agora-graph" }
 agora-store = { path = "../agora-store" }
 agora-keystore = { path = "../agora-keystore" }
+agora-channel = { path = "../agora-channel" }
+format = { path = "../../../shared/format" }
 clap = { workspace = true }
 directories = { workspace = true }
 rand = { workspace = true }
