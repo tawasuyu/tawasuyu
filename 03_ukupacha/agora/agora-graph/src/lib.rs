@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use agora_core::{AgoraError, Attestation, Identity, IdentityId};
+use agora_core::{AgoraError, Attestation, Identity, IdentityId, IdentityKind};
 use serde::{Deserialize, Serialize};
 
 /// Evidencia acumulada a favor de un claim concreto.
@@ -46,22 +46,65 @@ impl Corroboration {
 
 /// Umbral *negociado* de aceptación de un claim. No es una verdad del
 /// sistema: cada consumidor adopta el suyo según lo que pacte.
+///
+/// Tres ejes ortogonales:
+///
+/// - **`min_third_party` + `accept_self`** — eje básico, evaluable sin
+///   más contexto que el [`Corroboration`]. Lo cubre [`Self::accepts`].
+/// - **`min_attesters_of_kind`** — exige al menos N atestadores cuyo
+///   [`IdentityKind`] coincida con el dado (p. ej. "al menos 1
+///   Institution"). Requiere el grafo para resolver los kinds.
+/// - **`max_age_secs`** — el claim debe haberse emitido en los últimos
+///   N segundos respecto a `now`. Requiere las atestaciones (timestamps).
+///
+/// Para las dos extensiones, usar [`TrustGraph::is_accepted_at`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrustPolicy {
     /// Atestadores terceros distintos exigidos como mínimo.
     pub min_third_party: usize,
     /// Si la auto-atestación del sujeto cuenta como respaldo válido.
     pub accept_self: bool,
+    /// Exige al menos `usize` atestadores cuyo [`IdentityKind`] sea el
+    /// dado. `None` desactiva el chequeo. Útil para "necesito el aval
+    /// de UNA institución reconocida sin importar cuántas comunidades
+    /// se sumen", o vice versa.
+    pub min_attesters_of_kind: Option<(IdentityKind, usize)>,
+    /// Máxima edad del claim respecto a `now`. Si el claim más reciente
+    /// que respalda `(subject, predicate, value)` se emitió hace más de
+    /// `max_age_secs`, la política rechaza. `None` desactiva el chequeo
+    /// (las atestaciones nunca caducan).
+    pub max_age_secs: Option<u64>,
 }
 
 impl TrustPolicy {
     /// Política estricta: al menos `n` terceros, la auto-atestación no
-    /// suma.
+    /// suma, sin chequeos extra.
     pub fn strict(min_third_party: usize) -> Self {
-        Self { min_third_party, accept_self: false }
+        Self {
+            min_third_party,
+            accept_self: false,
+            min_attesters_of_kind: None,
+            max_age_secs: None,
+        }
     }
 
-    /// `true` si la evidencia satisface la política.
+    /// Builder fluido: exige al menos `n` atestadores del kind dado.
+    pub fn with_min_of_kind(mut self, kind: IdentityKind, n: usize) -> Self {
+        self.min_attesters_of_kind = Some((kind, n));
+        self
+    }
+
+    /// Builder fluido: exige que el claim se haya emitido en los
+    /// últimos `secs` segundos.
+    pub fn with_max_age(mut self, secs: u64) -> Self {
+        self.max_age_secs = Some(secs);
+        self
+    }
+
+    /// `true` si la evidencia satisface el eje **básico** de la política
+    /// (`min_third_party` + `accept_self`). Las extensiones por kind y
+    /// edad NO se evalúan aquí — para eso usar
+    /// [`TrustGraph::is_accepted_at`].
     pub fn accepts(&self, c: &Corroboration) -> bool {
         if c.third_party() >= self.min_third_party {
             return true;
@@ -71,7 +114,8 @@ impl TrustPolicy {
 }
 
 impl Default for TrustPolicy {
-    /// Por defecto: un tercero basta, la auto-atestación no.
+    /// Por defecto: un tercero basta, la auto-atestación no, sin
+    /// chequeos extra.
     fn default() -> Self {
         Self::strict(1)
     }
@@ -190,7 +234,10 @@ impl TrustGraph {
         Corroboration { attesters, self_attested }
     }
 
-    /// Atajo: `true` si la `policy` acepta el claim dada la evidencia.
+    /// Atajo: `true` si la `policy` acepta el claim según su eje
+    /// **básico** (`min_third_party` + `accept_self`). Ignora
+    /// `min_attesters_of_kind` y `max_age_secs` — para esos usar
+    /// [`Self::is_accepted_at`].
     pub fn is_accepted(
         &self,
         subject: IdentityId,
@@ -199,6 +246,64 @@ impl TrustGraph {
         policy: &TrustPolicy,
     ) -> bool {
         policy.accepts(&self.corroboration(subject, predicate, value))
+    }
+
+    /// `true` si la `policy` acepta el claim evaluando TODOS los ejes:
+    /// básico + kind + edad respecto a `now`.
+    ///
+    /// - El eje básico se evalúa primero.
+    /// - El eje kind cuenta atestadores cuyo `IdentityKind` registrado
+    ///   en el grafo coincide con el pedido. Identidades no registradas
+    ///   (atestaciones de pubkeys que el grafo desconoce) NO cuentan.
+    /// - El eje edad mira el timestamp del claim más nuevo que respalda
+    ///   `(subject, predicate, value)`; si `now - issued_at > max_age`,
+    ///   rechaza.
+    ///
+    /// Mantener `is_accepted` y `is_accepted_at` como dos métodos
+    /// permite que callers simples sigan ignorando edad sin tener que
+    /// inventar un `now`.
+    pub fn is_accepted_at(
+        &self,
+        subject: IdentityId,
+        predicate: &str,
+        value: &str,
+        policy: &TrustPolicy,
+        now: u64,
+    ) -> bool {
+        let cor = self.corroboration(subject, predicate, value);
+        if !policy.accepts(&cor) {
+            return false;
+        }
+        if let Some((kind, n)) = policy.min_attesters_of_kind {
+            let count = cor
+                .attesters
+                .iter()
+                .filter(|id| {
+                    self.identities
+                        .get(id)
+                        .map(|i| i.kind == kind)
+                        .unwrap_or(false)
+                })
+                .count();
+            if count < n {
+                return false;
+            }
+        }
+        if let Some(max_age) = policy.max_age_secs {
+            // Tomamos el claim más reciente que respalda este (subject,
+            // predicate, value). Si no hay ninguno, accepts() ya falló
+            // arriba; acá hay por lo menos uno.
+            let mas_reciente = self
+                .evidence_for(subject, predicate, value)
+                .iter()
+                .map(|a| a.claim.issued_at)
+                .max()
+                .unwrap_or(0);
+            if now.saturating_sub(mas_reciente) > max_age {
+                return false;
+            }
+        }
+        true
     }
 }
 
@@ -306,12 +411,110 @@ mod tests {
     }
 
     #[test]
+    fn policy_min_attesters_of_kind_exige_aval_de_tipo() {
+        // Yumaira tiene dos respaldos de oficio = "partera": una
+        // comunidad y una vecina (Person). Una política que exige al
+        // menos 1 Institution rechaza; relajarla a Community acepta.
+        let (yumaira, _, comunidad, vecina) = actors();
+        let mut g = TrustGraph::new();
+        g.register(yumaira.identity(IdentityKind::Person, "Yumaira"));
+        g.register(comunidad.identity(IdentityKind::Community, "Vecinos del Valle"));
+        g.register(vecina.identity(IdentityKind::Person, "Carmen"));
+        g.add_attestation(attest(&comunidad, yumaira.identity_id(), "oficio", "partera"))
+            .unwrap();
+        g.add_attestation(attest(&vecina, yumaira.identity_id(), "oficio", "partera"))
+            .unwrap();
+
+        let exige_institution = TrustPolicy::strict(2)
+            .with_min_of_kind(IdentityKind::Institution, 1);
+        assert!(!g.is_accepted_at(
+            yumaira.identity_id(),
+            "oficio",
+            "partera",
+            &exige_institution,
+            0,
+        ));
+
+        let exige_community = TrustPolicy::strict(2).with_min_of_kind(IdentityKind::Community, 1);
+        assert!(g.is_accepted_at(
+            yumaira.identity_id(),
+            "oficio",
+            "partera",
+            &exige_community,
+            0,
+        ));
+    }
+
+    #[test]
+    fn policy_max_age_rechaza_claims_viejos() {
+        // Atestación emitida en t=1_000. Política con max_age = 60
+        // evaluada en now=2_000 (1_000 s después) rechaza; en now=1_050
+        // (50 s después) acepta.
+        let (yumaira, venezuela, ..) = actors();
+        let mut g = TrustGraph::new();
+        g.register(yumaira.identity(IdentityKind::Person, "Yumaira"));
+        g.register(venezuela.identity(IdentityKind::Institution, "Venezuela"));
+        let att = Attestation::create(
+            &venezuela,
+            agora_core::Claim::new(yumaira.identity_id(), "nacionalidad", "venezolana", 1_000),
+        );
+        g.add_attestation(att).unwrap();
+
+        let policy = TrustPolicy::strict(1).with_max_age(60);
+        assert!(g.is_accepted_at(
+            yumaira.identity_id(),
+            "nacionalidad",
+            "venezolana",
+            &policy,
+            1_050,
+        ));
+        assert!(!g.is_accepted_at(
+            yumaira.identity_id(),
+            "nacionalidad",
+            "venezolana",
+            &policy,
+            2_000,
+        ));
+    }
+
+    #[test]
+    fn is_accepted_legacy_ignora_kind_y_edad() {
+        // Política con max_age=10 y claim emitido hace mucho. El
+        // método legacy `is_accepted` lo acepta igual (la edad sólo se
+        // evalúa en `is_accepted_at`); `is_accepted_at` lo rechaza.
+        let (yumaira, venezuela, ..) = actors();
+        let mut g = TrustGraph::new();
+        g.register(yumaira.identity(IdentityKind::Person, "Yumaira"));
+        g.register(venezuela.identity(IdentityKind::Institution, "Venezuela"));
+        let att = Attestation::create(
+            &venezuela,
+            agora_core::Claim::new(yumaira.identity_id(), "nacionalidad", "venezolana", 0),
+        );
+        g.add_attestation(att).unwrap();
+
+        let p = TrustPolicy::strict(1).with_max_age(10);
+        assert!(g.is_accepted(yumaira.identity_id(), "nacionalidad", "venezolana", &p));
+        assert!(!g.is_accepted_at(
+            yumaira.identity_id(),
+            "nacionalidad",
+            "venezolana",
+            &p,
+            1_000_000,
+        ));
+    }
+
+    #[test]
     fn policy_can_accept_self_attestation_when_negotiated() {
         let (yumaira, ..) = actors();
         let mut g = TrustGraph::new();
         g.add_attestation(attest(&yumaira, yumaira.identity_id(), "lema", "sembrar"))
             .unwrap();
-        let lax = TrustPolicy { min_third_party: 0, accept_self: true };
+        let lax = TrustPolicy {
+            min_third_party: 0,
+            accept_self: true,
+            min_attesters_of_kind: None,
+            max_age_secs: None,
+        };
         assert!(g.is_accepted(yumaira.identity_id(), "lema", "sembrar", &lax));
         // La política por defecto, sin terceros, no la acepta.
         assert!(!g.is_accepted(yumaira.identity_id(), "lema", "sembrar", &TrustPolicy::default()));

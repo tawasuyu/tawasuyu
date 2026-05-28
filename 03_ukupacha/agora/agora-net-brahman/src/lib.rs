@@ -323,20 +323,45 @@ impl AgoraNet {
 
     /// Lanza un loop periódico que cada `period` itera la lista de
     /// peers que devuelve `peers` y dispara `sync_with` contra cada
-    /// uno. Los errores se loguean (`stats_sink`) pero no rompen el
-    /// loop — un peer caído no tira los demás. El `JoinHandle` se
-    /// puede abortar para detener el loop.
+    /// uno. Errores se loguean a stderr; un peer caído no tira el loop.
     ///
     /// `peers` se llama una vez por ronda, así el caller puede ir
     /// devolviendo listas distintas si descubre peers nuevos vía DHT
     /// (`add_dht_peer`).
+    ///
+    /// Sin observabilidad estructurada — para eso usar
+    /// [`Self::run_sync_loop_with`].
     pub fn run_sync_loop<F>(
         &self,
         period: std::time::Duration,
-        mut peers: F,
+        peers: F,
     ) -> tokio::task::JoinHandle<()>
     where
         F: FnMut() -> Vec<PeerId> + Send + 'static,
+    {
+        self.run_sync_loop_with(period, peers, |peer, res| {
+            if let Err(e) = res {
+                eprintln!("agora-net-brahman: sync con {peer} falló: {e}");
+            }
+        })
+    }
+
+    /// Variante observable de [`Self::run_sync_loop`]: cada llamada a
+    /// `sync_with` invoca `on_event(peer, Result<SyncStats, String>)`.
+    /// El error viaja stringificado para que el callback no necesite
+    /// referencias prestadas.
+    ///
+    /// Pensado para apps que quieran graficar convergencia en vivo,
+    /// alimentar un dashboard, o decidir banear peers por tasa de fallo.
+    pub fn run_sync_loop_with<F, S>(
+        &self,
+        period: std::time::Duration,
+        mut peers: F,
+        on_event: S,
+    ) -> tokio::task::JoinHandle<()>
+    where
+        F: FnMut() -> Vec<PeerId> + Send + 'static,
+        S: Fn(PeerId, Result<SyncStats, String>) + Send + Sync + 'static,
     {
         let net = Arc::clone(&self.net);
         let graph = Arc::clone(&self.graph);
@@ -345,12 +370,8 @@ impl AgoraNet {
             loop {
                 tokio::time::sleep(period).await;
                 for peer in peers() {
-                    if let Err(e) = stub.sync_with(peer).await {
-                        // Un peer caído o un timeout es normal en P2P;
-                        // logueamos a stderr (mejor que silenciar) y
-                        // seguimos con el próximo.
-                        eprintln!("agora-net-brahman: sync con {peer} falló: {e}");
-                    }
+                    let res = stub.sync_with(peer).await.map_err(|e| e.to_string());
+                    on_event(peer, res);
                 }
             }
         })
@@ -813,6 +834,73 @@ mod tests {
             }
             if std::time::Instant::now() >= deadline {
                 panic!("convergencia incompleta: alice={a}, bob={b}");
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        loop_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn run_sync_loop_with_alimenta_el_sink_de_stats() {
+        // Variante observable: cada ronda llama on_event(peer, result).
+        // Acumulamos en un Mutex<Vec> y verificamos que termina con al
+        // menos una entrada Ok por el peer.
+        use std::sync::{Arc, Mutex};
+
+        let yumaira = Keypair::from_seed([20; 32]);
+        let venezuela = Keypair::from_seed([10; 32]);
+
+        let mut g_alice = TrustGraph::new();
+        g_alice.register(yumaira.identity(IdentityKind::Person, "Yumaira"));
+        g_alice.register(venezuela.identity(IdentityKind::Institution, "Venezuela"));
+        g_alice
+            .add_attestation(make_attestation(&venezuela, &yumaira, "nacionalidad", "venezolana"))
+            .unwrap();
+
+        let g_bob = TrustGraph::new();
+
+        let alice = AgoraNet::standalone(g_alice).expect("alice");
+        let bob = AgoraNet::standalone(g_bob).expect("bob");
+
+        let bob_pid = bob.peer_id();
+        let bob_addr = bob
+            .listen("/ip4/127.0.0.1/tcp/0".parse().unwrap())
+            .await;
+        let _accept = bob.run_passive_accept();
+        let dial_addr: Multiaddr = format!("{}/p2p/{}", bob_addr, bob_pid).parse().unwrap();
+        alice.dial(dial_addr);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let eventos: Arc<Mutex<Vec<(PeerId, Result<SyncStats, String>)>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        let eventos_para_sink = Arc::clone(&eventos);
+
+        let loop_handle = alice.run_sync_loop_with(
+            Duration::from_millis(100),
+            move || vec![bob_pid],
+            move |peer, res| {
+                eventos_para_sink.lock().unwrap().push((peer, res));
+            },
+        );
+
+        // Esperamos hasta tener al menos un Ok con bundles_enviados>0.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let lock = eventos.lock().unwrap();
+            let observado_ok = lock.iter().any(|(p, r)| {
+                *p == bob_pid
+                    && matches!(r, Ok(s) if s.push.bundles_enviados > 0)
+            });
+            drop(lock);
+            if observado_ok {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                let lock = eventos.lock().unwrap();
+                panic!(
+                    "el sink no recibió un sync_with OK para bob; eventos={:?}",
+                    lock.iter().map(|(_, r)| r.is_ok()).collect::<Vec<_>>()
+                );
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
