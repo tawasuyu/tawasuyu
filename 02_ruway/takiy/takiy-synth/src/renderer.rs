@@ -44,9 +44,13 @@ impl Renderer for OscRenderer {
         let n_samples = (total_seconds * self.sample_rate as f32).ceil() as usize;
         let mut buf = AudioBuffer::silence(self.sample_rate, n_samples);
 
-        for track in score.tracks() {
+        for (idx, track) in score.tracks().iter().enumerate() {
+            if !score.track_is_audible(idx) {
+                continue;
+            }
+            let gain = track.volume.max(0.0);
             for note in track.notes() {
-                self.mix_note(note, sec_per_beat, &mut buf.samples);
+                self.mix_note(note, sec_per_beat, &mut buf.samples, gain);
             }
         }
 
@@ -56,12 +60,12 @@ impl Renderer for OscRenderer {
 }
 
 impl OscRenderer {
-    fn mix_note(&self, note: &ScoreNote, sec_per_beat: f32, buf: &mut [f32]) {
+    fn mix_note(&self, note: &ScoreNote, sec_per_beat: f32, buf: &mut [f32], gain: f32) {
         let freq = note.pitch.frequency();
         let start_sec = note.start * sec_per_beat;
         let dur_sec = note.duration * sec_per_beat;
         let end_sec = start_sec + dur_sec + self.envelope.release;
-        let amp = note.velocity as f32 / 127.0;
+        let amp = (note.velocity as f32 / 127.0) * gain;
 
         let sr = self.sample_rate as f32;
         let start_idx = (start_sec * sr) as usize;

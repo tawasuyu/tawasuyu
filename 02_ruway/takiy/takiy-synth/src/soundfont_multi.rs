@@ -120,12 +120,27 @@ impl Renderer for MultiProgramRenderer {
             .expect("settings.sample_rate ya está validado");
 
         const PROGRAM_CHANGE: i32 = 0xC0;
+        const CONTROL_CHANGE: i32 = 0xB0;
+        const CC_CHANNEL_VOLUME: i32 = 7;
 
-        // Program change por canal usado.
-        for (track_idx, _track) in score.tracks().iter().enumerate() {
+        // Program change + Volume por canal usado.
+        for (track_idx, track) in score.tracks().iter().enumerate() {
             let ch = channel_for_track(track_idx);
             let prog = self.program_for_track(track_idx) as i32;
             synth.process_midi_message(ch, PROGRAM_CHANGE, prog, 0);
+
+            // Volume CC (#7): mapea track.volume (típ. 0..=1.5) a 0..=127.
+            // El bus mute/solo del Score lo aplicamos aquí: la pista no
+            // audible suena con volumen cero.
+            let v_norm = if score.track_is_audible(track_idx) {
+                track.volume.max(0.0)
+            } else {
+                0.0
+            };
+            // 100 es el default GM para "volumen unidad"; mapeamos
+            // proporcionalmente para preservar el matching.
+            let vol = ((v_norm * 100.0).round() as i32).clamp(0, 127);
+            synth.process_midi_message(ch, CONTROL_CHANGE, CC_CHANNEL_VOLUME, vol);
         }
 
         let bpm = score.tempo_bpm.max(1e-6);
@@ -134,6 +149,11 @@ impl Renderer for MultiProgramRenderer {
 
         let mut events: Vec<(usize, Event)> = Vec::new();
         for (track_idx, track) in score.tracks().iter().enumerate() {
+            // Skipping inaudible tracks evita gastar nota_on/off en el
+            // synth para pistas muteadas o filtradas por solo.
+            if !score.track_is_audible(track_idx) {
+                continue;
+            }
             let channel = channel_for_track(track_idx);
             for note in track.notes() {
                 let on = (note.start * sec_per_beat * sr) as usize;

@@ -209,6 +209,12 @@ pub enum EditMsg {
     PasteAt { beat: f32 },
     /// Duplica la selección al final del compás siguiente.
     DuplicateSelected,
+    /// Toggle mute de la pista activa.
+    ToggleMuteActive,
+    /// Toggle solo de la pista activa.
+    ToggleSoloActive,
+    /// Cambia el volumen de la pista activa en `delta` (clamp [0, 1.5]).
+    NudgeActiveVolume { delta: f32 },
 }
 
 /// Resultado de aplicar un `EditMsg`: mensaje corto para el header.
@@ -252,6 +258,9 @@ impl EditorState {
             EditMsg::CutSelected => self.cut_selected(),
             EditMsg::PasteAt { beat } => self.paste_at(beat),
             EditMsg::DuplicateSelected => self.duplicate_selected(),
+            EditMsg::ToggleMuteActive => self.toggle_mute_active(),
+            EditMsg::ToggleSoloActive => self.toggle_solo_active(),
+            EditMsg::NudgeActiveVolume { delta } => self.nudge_active_volume(delta),
         }
     }
 
@@ -482,6 +491,33 @@ impl EditorState {
             self.selected = Some((track_idx, new_idx));
         }
         Some(format!("duplicate · pista {track_idx}"))
+    }
+
+    fn toggle_mute_active(&mut self) -> ApplyOutcome {
+        let idx = self.active_track;
+        let track = self.score.track_mut(idx)?;
+        track.mute = !track.mute;
+        let state = if track.mute { "on" } else { "off" };
+        Some(format!("pista {idx} · mute {state}"))
+    }
+
+    fn toggle_solo_active(&mut self) -> ApplyOutcome {
+        let idx = self.active_track;
+        let track = self.score.track_mut(idx)?;
+        track.solo = !track.solo;
+        let state = if track.solo { "on" } else { "off" };
+        Some(format!("pista {idx} · solo {state}"))
+    }
+
+    fn nudge_active_volume(&mut self, delta: f32) -> ApplyOutcome {
+        let idx = self.active_track;
+        let track = self.score.track_mut(idx)?;
+        let new_vol = (track.volume + delta).clamp(0.0, 1.5);
+        if (new_vol - track.volume).abs() < f32::EPSILON {
+            return None;
+        }
+        track.volume = new_vol;
+        Some(format!("pista {idx} · vol {new_vol:.2}"))
     }
 
     fn delete_active_track(&mut self) -> ApplyOutcome {
@@ -824,6 +860,40 @@ mod tests {
         assert_eq!(st.score.track(0).unwrap().notes().len(), 2);
         st.undo();
         assert_eq!(st.score.track(0).unwrap().notes().len(), 1);
+    }
+
+    #[test]
+    fn mixer_toggles_apply_to_active_track() {
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::NewTrack); // pista 1 activa
+        assert_eq!(st.active_track, 1);
+        st.apply(EditMsg::ToggleMuteActive);
+        assert!(st.score.track(1).unwrap().mute);
+        assert!(!st.score.track(0).unwrap().mute);
+        st.apply(EditMsg::ToggleSoloActive);
+        assert!(st.score.track(1).unwrap().solo);
+    }
+
+    #[test]
+    fn volume_nudge_clamps_to_0_to_1_5() {
+        let mut st = EditorState::new(120.0);
+        for _ in 0..30 {
+            st.apply(EditMsg::NudgeActiveVolume { delta: 0.1 });
+        }
+        assert!((st.score.track(0).unwrap().volume - 1.5).abs() < 1e-3);
+        for _ in 0..30 {
+            st.apply(EditMsg::NudgeActiveVolume { delta: -0.1 });
+        }
+        assert!(st.score.track(0).unwrap().volume.abs() < 1e-3);
+    }
+
+    #[test]
+    fn mixer_changes_are_undoable() {
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::ToggleMuteActive);
+        assert!(st.score.track(0).unwrap().mute);
+        st.undo();
+        assert!(!st.score.track(0).unwrap().mute);
     }
 
     #[test]

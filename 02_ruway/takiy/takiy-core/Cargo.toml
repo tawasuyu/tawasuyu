@@ -9,3 +9,6 @@ description = "takiy — teoría musical y modelo de partitura: pitch MIDI, esca
 
 [dependencies]
 serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

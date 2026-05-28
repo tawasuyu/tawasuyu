@@ -373,6 +373,21 @@ impl App for Takiy {
                 Some(Msg::Edit(EditMsg::DeleteSelected))
             }
             Key::Character(s) if s.eq_ignore_ascii_case("n") => Some(Msg::Edit(EditMsg::NewTrack)),
+            // Mixer per-track (F3.a): Alt+M/S/[/] manejan la pista activa.
+            // Vienen ANTES de los handlers sin modifiers para que las
+            // versiones con Alt no caigan en metrónomo o velocity.
+            Key::Character(s) if s.eq_ignore_ascii_case("m") && event.modifiers.alt => {
+                Some(Msg::Edit(EditMsg::ToggleMuteActive))
+            }
+            Key::Character(s) if s.eq_ignore_ascii_case("s") && event.modifiers.alt => {
+                Some(Msg::Edit(EditMsg::ToggleSoloActive))
+            }
+            Key::Character(s) if (s == "[" || s == "{") && event.modifiers.alt => {
+                Some(Msg::Edit(EditMsg::NudgeActiveVolume { delta: -0.1 }))
+            }
+            Key::Character(s) if (s == "]" || s == "}") && event.modifiers.alt => {
+                Some(Msg::Edit(EditMsg::NudgeActiveVolume { delta: 0.1 }))
+            }
             Key::Character(s) if s.eq_ignore_ascii_case("m") => Some(Msg::ToggleMetronome),
             Key::Character(s) if s.eq_ignore_ascii_case("l") => Some(Msg::ToggleLoop),
             Key::Character(s) if s.eq_ignore_ascii_case("q") => Some(Msg::CycleSnap),
@@ -604,17 +619,24 @@ fn paint_piano_roll(
         }
     }
 
-    let active_name = score
-        .track(active_track)
-        .map(|t| t.name.as_str())
-        .unwrap_or("?");
+    let active_track_ref = score.track(active_track);
+    let active_name = active_track_ref.map(|t| t.name.as_str()).unwrap_or("?");
+    let active_mixer = active_track_ref
+        .map(|t| {
+            let mut parts = Vec::new();
+            if t.mute { parts.push("M".to_string()); }
+            if t.solo { parts.push("S".to_string()); }
+            parts.push(format!("vol {:.2}", t.volume));
+            format!(" [{}]", parts.join(" · "))
+        })
+        .unwrap_or_default();
     let metro_marker = if metronome_on { " · 🎼" } else { "" };
     let loop_marker = match loop_region {
         Some((from, to)) => format!(" · loop {from:.0}..{to:.0}"),
         None => String::new(),
     };
     let header_text = format!(
-        "{source}  ·  {engine}  ·  {:.0} bpm · snap {snap_label} · undo {undo_depth}{metro_marker}{loop_marker}  ·  active: {active_track}·{active_name}  ·  {status}",
+        "{source}  ·  {engine}  ·  {:.0} bpm · snap {snap_label} · undo {undo_depth}{metro_marker}{loop_marker}  ·  active: {active_track}·{active_name}{active_mixer}  ·  {status}",
         score.tempo_bpm
     );
     let text_color = if playing {

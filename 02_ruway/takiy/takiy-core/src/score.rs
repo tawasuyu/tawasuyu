@@ -39,15 +39,52 @@ impl ScoreNote {
 }
 
 /// Una pista monofónica o polifónica: notas ordenadas por inicio.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+///
+/// Los campos del mixer (`volume`, `mute`, `solo`) usan `serde(default)`
+/// para que los archivos `.takiy.json` escritos antes de F3 carguen sin
+/// migración: faltantes equivalen a "track audible al 100%".
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Track {
     pub name: String,
     notes: Vec<ScoreNote>,
+    /// Ganancia lineal `[0, 1.5]`. `1.0` = unidad. Default `1.0`.
+    #[serde(default = "default_volume")]
+    pub volume: f32,
+    /// `true` = la pista no aporta señal al render. Default `false`.
+    #[serde(default)]
+    pub mute: bool,
+    /// `true` = la pista forma parte del bus solo. Si alguna pista del
+    /// score está en solo, sólo las solo se mezclan en el render.
+    /// Default `false`.
+    #[serde(default)]
+    pub solo: bool,
+}
+
+fn default_volume() -> f32 {
+    1.0
+}
+
+impl Default for Track {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            notes: Vec::new(),
+            volume: 1.0,
+            mute: false,
+            solo: false,
+        }
+    }
 }
 
 impl Track {
     pub fn new(name: impl Into<String>) -> Self {
-        Self { name: name.into(), notes: Vec::new() }
+        Self {
+            name: name.into(),
+            notes: Vec::new(),
+            volume: 1.0,
+            mute: false,
+            solo: false,
+        }
     }
 
     /// Inserta una nota manteniendo el orden por pulso de inicio.
@@ -149,6 +186,26 @@ impl Score {
         self.tracks.iter().map(|t| t.duration()).fold(0.0, f32::max)
     }
 
+    /// `true` si al menos una pista está en solo. Útil al renderizar
+    /// para decidir si filtrar las no-solo.
+    pub fn has_solo(&self) -> bool {
+        self.tracks.iter().any(|t| t.solo)
+    }
+
+    /// `true` si la pista en `index` debe sonar según el bus mute/solo
+    /// global: si hay alguna en solo, sólo suenan las solo; las muteadas
+    /// siempre son silenciadas.
+    pub fn track_is_audible(&self, index: usize) -> bool {
+        let Some(t) = self.tracks.get(index) else { return false; };
+        if t.mute {
+            return false;
+        }
+        if self.has_solo() {
+            return t.solo;
+        }
+        true
+    }
+
     /// Duración en segundos según el tempo.
     pub fn duration_seconds(&self) -> f32 {
         if self.tempo_bpm <= 0.0 {
@@ -237,6 +294,67 @@ mod tests {
         assert_eq!(s.duration_beats(), 8.0);
         // 8 pulsos a 120 bpm = 4 segundos.
         assert!((s.duration_seconds() - 4.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn track_defaults_to_audible_at_unit_gain() {
+        let t = Track::new("a");
+        assert_eq!(t.volume, 1.0);
+        assert!(!t.mute);
+        assert!(!t.solo);
+    }
+
+    #[test]
+    fn track_serde_with_missing_mixer_fields_uses_defaults() {
+        // JSON sin volume/mute/solo (formato pre-F3) debe cargar bien.
+        let json = r#"{"name":"old","notes":[]}"#;
+        let t: Track = serde_json::from_str(json).unwrap();
+        assert_eq!(t.name, "old");
+        assert_eq!(t.volume, 1.0);
+        assert!(!t.mute);
+        assert!(!t.solo);
+    }
+
+    #[test]
+    fn track_is_audible_respects_mute() {
+        let mut s = Score::new(120.0);
+        let mut t = Track::new("a");
+        t.add(note(PitchClass::C, 0.0));
+        s.add_track(t);
+        assert!(s.track_is_audible(0));
+        s.track_mut(0).unwrap().mute = true;
+        assert!(!s.track_is_audible(0));
+    }
+
+    #[test]
+    fn solo_filters_other_tracks_but_not_solo_track() {
+        let mut s = Score::new(120.0);
+        let mut a = Track::new("a");
+        a.add(note(PitchClass::C, 0.0));
+        s.add_track(a);
+        let mut b = Track::new("b");
+        b.add(note(PitchClass::D, 0.0));
+        s.add_track(b);
+        s.track_mut(0).unwrap().solo = true;
+        assert!(s.has_solo());
+        assert!(s.track_is_audible(0));
+        assert!(!s.track_is_audible(1));
+    }
+
+    #[test]
+    fn mute_overrides_solo_on_same_track() {
+        let mut s = Score::new(120.0);
+        let mut a = Track::new("a");
+        a.add(note(PitchClass::C, 0.0));
+        s.add_track(a);
+        let mut b = Track::new("b");
+        b.add(note(PitchClass::D, 0.0));
+        s.add_track(b);
+        s.track_mut(0).unwrap().solo = true;
+        s.track_mut(0).unwrap().mute = true;
+        // Aunque esté solo, mute la silencia. Otras pistas siguen filtradas.
+        assert!(!s.track_is_audible(0));
+        assert!(!s.track_is_audible(1));
     }
 
     #[test]
