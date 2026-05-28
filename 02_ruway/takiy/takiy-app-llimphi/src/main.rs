@@ -143,11 +143,16 @@ enum Msg {
     /// a `ExportMidi` pero con extensión `.wav`. No incluye metrónomo ni
     /// count-in — sale crudo el score, igual que el render del test F10.
     ExportWav,
-    /// Press del botón izquierdo: hace el hit-test sobre header/nota/cell
-    /// y dispara la acción correspondiente (seek / select / add note).
-    /// Además cachea `(rw, rh)` en el modelo para que el drag posterior
-    /// pueda convertir píxeles a `(beat, midi)` sin perderlo.
+    /// Press del botón izquierdo: hace el hit-test sobre header/dot de
+    /// automación/línea de automación/nota/cell y dispara la acción
+    /// correspondiente (seek / arm-auto-drag / insert-auto-point / select
+    /// / add note). Además cachea `(rw, rh)` en el modelo para que el
+    /// drag posterior pueda convertir píxeles a `(beat, midi)` sin perderlo.
     PressAt { lx: f32, ly: f32, rw: f32, rh: f32 },
+    /// Press del botón derecho. Borra el dot de automación bajo el cursor
+    /// (si hay), o la nota bajo el cursor (idem F2.x). No tiene efecto si
+    /// no acierta a nada.
+    RightPressAt { lx: f32, ly: f32, rw: f32, rh: f32 },
     /// Eventos de drag-to-move o drag-to-resize sobre el grid. Se acumulan
     /// en `model.drag` y se aplican como `SetSelectedAbsolute` (move) o
     /// `SetSelectedDuration` (resize) sobre el `EditorState`. El modo se
@@ -225,6 +230,53 @@ fn hit_test_automation_dot(
                     initial_value: p.value,
                 });
             }
+        }
+    }
+    None
+}
+
+/// Distancia vertical máxima entre cursor y la polilínea de una lane
+/// para considerar que el click cayó sobre la curva (no sobre un dot
+/// y no sobre el espacio vacío). Generoso para que sea fácil acertarle.
+const AUTO_LINE_HIT_RADIUS_PX: f32 = 5.0;
+
+/// Hit-test sobre la polilínea de una lane: si la `value_at(beat)` de
+/// la curva proyecta a una y dentro de `AUTO_LINE_HIT_RADIUS_PX` del
+/// cursor, devuelve `(is_volume, beat, value)`. Recorre vol primero
+/// (igual orden que el painter); si ambas pasan el filtro, gana vol.
+/// Sólo dispara dentro del grid (no sobre teclado/header).
+fn hit_test_automation_line(
+    track: &Track,
+    lx: f32,
+    ly: f32,
+    grid_x: f32,
+    grid_y: f32,
+    grid_w: f32,
+    grid_h: f32,
+    beat_w: f32,
+) -> Option<(bool, f32, f32)> {
+    if lx < grid_x || lx > grid_x + grid_w || ly < grid_y || ly > grid_y + grid_h {
+        return None;
+    }
+    let usable_h = (grid_h - AUTO_LANE_MARGIN_PX * 2.0).max(1.0);
+    let lanes: [(bool, Option<&AutomationLane>, f32, f32); 2] = [
+        (true, track.volume_automation.as_ref(), 0.0, 1.5),
+        (false, track.pan_automation.as_ref(), -1.0, 1.0),
+    ];
+    let beat = ((lx - grid_x) / beat_w).max(0.0);
+    for (is_volume, lane, v_min, v_max) in lanes {
+        let Some(lane) = lane else { continue };
+        if lane.is_empty() {
+            continue;
+        }
+        // Default = primer punto si beat < first.beat (mismo clamp que
+        // `value_at` para que el hit-test coincida con el dibujo).
+        let default = lane.points.first().map(|p| p.value).unwrap_or(0.0);
+        let curve_value = lane.value_at(beat, default);
+        let norm = ((curve_value - v_min) / (v_max - v_min)).clamp(0.0, 1.0);
+        let curve_y = grid_y + AUTO_LANE_MARGIN_PX + (1.0 - norm) * usable_h;
+        if (ly - curve_y).abs() <= AUTO_LINE_HIT_RADIUS_PX {
+            return Some((is_volume, beat, curve_value));
         }
     }
     None
@@ -646,7 +698,7 @@ impl App for Takiy {
                 // la pista activa, queda armado un `auto_pending`. La
                 // primera fase `Move` lo consume; si no hay drag, el
                 // hit se descarta (sin efecto colateral).
-                if let Some((grid_x, grid_y, _, grid_h, _, beat_w)) =
+                if let Some((grid_x, grid_y, grid_w, grid_h, _, beat_w)) =
                     grid_geometry(rw, rh, min_midi, max_midi, total_beats)
                 {
                     let active = model.editor.active_track;
@@ -656,6 +708,23 @@ impl App for Takiy {
                         ) {
                             model.auto_pending = Some(hit);
                             return model;
+                        }
+                        // Click sobre la polilínea (no sobre un dot) →
+                        // insert. El value se toma de la curva actual en
+                        // ese beat para que no haya salto visual ni audible.
+                        if let Some((is_volume, beat, value)) = hit_test_automation_line(
+                            track, lx, ly, grid_x, grid_y, grid_w, grid_h, beat_w,
+                        ) {
+                            return Self::update(
+                                model,
+                                Msg::Edit(EditMsg::InsertAutomationPoint {
+                                    track_idx: active,
+                                    is_volume,
+                                    beat,
+                                    value,
+                                }),
+                                handle,
+                            );
                         }
                     }
                 }
@@ -679,6 +748,49 @@ impl App for Takiy {
                     );
                 }
                 // Press fuera del grid: no-op.
+            }
+            Msg::RightPressAt { lx, ly, rw, rh } => {
+                model.last_rect = Some((rw, rh));
+                let (min_midi, max_midi) =
+                    pitch_range_with_offset(&model.editor.score, model.midi_offset);
+                let total_beats = model
+                    .editor
+                    .score
+                    .duration_beats()
+                    .max(8.0)
+                    .max(model.editor.loop_region.map(|(_, t)| t).unwrap_or(0.0));
+                // Prioridad: dot de automación antes que nota — los dots
+                // se pintan encima.
+                if let Some((grid_x, grid_y, _, grid_h, _, beat_w)) =
+                    grid_geometry(rw, rh, min_midi, max_midi, total_beats)
+                {
+                    let active = model.editor.active_track;
+                    if let Some(track) = model.editor.score.track(active) {
+                        if let Some(hit) = hit_test_automation_dot(
+                            track, active, lx, ly, grid_x, grid_y, grid_h, beat_w,
+                        ) {
+                            return Self::update(
+                                model,
+                                Msg::Edit(EditMsg::DeleteAutomationPoint {
+                                    track_idx: hit.track_idx,
+                                    is_volume: hit.is_volume,
+                                    idx: hit.point_idx,
+                                }),
+                                handle,
+                            );
+                        }
+                    }
+                }
+                if let Some((track, idx)) = hit_test_note(
+                    &model.editor.score,
+                    lx, ly, rw, rh, min_midi, max_midi, total_beats,
+                ) {
+                    return Self::update(
+                        model,
+                        Msg::Edit(EditMsg::DeleteNote { track, idx }),
+                        handle,
+                    );
+                }
             }
             Msg::DragNote { phase, dx, dy, lx0, ly0 } => {
                 let Some((rw, rh)) = model.last_rect else {
@@ -1083,8 +1195,7 @@ impl App for Takiy {
             .max(8.0)
             .max(loop_region.map(|(_, t)| t).unwrap_or(0.0));
 
-        let score_paint = score.clone();
-        let score_right = score;
+        let score_paint = score;
 
         View::new(Style {
             size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
@@ -1098,11 +1209,7 @@ impl App for Takiy {
         .draggable_at(|phase, dx, dy, lx0, ly0| {
             Some(Msg::DragNote { phase, dx, dy, lx0, ly0 })
         })
-        .on_right_click_at(move |lx, ly, rw, rh| {
-            let (track, idx) =
-                hit_test_note(&score_right, lx, ly, rw, rh, min_midi, max_midi, total_beats)?;
-            Some(Msg::Edit(EditMsg::DeleteNote { track, idx }))
-        })
+        .on_right_click_at(|lx, ly, rw, rh| Some(Msg::RightPressAt { lx, ly, rw, rh }))
         .paint_with(move |scene, ts, rect: PaintRect| {
             paint_piano_roll(
                 scene, ts, rect, &score_paint, &source, &engine, &status, playing,

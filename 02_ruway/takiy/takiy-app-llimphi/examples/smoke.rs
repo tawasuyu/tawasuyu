@@ -434,5 +434,62 @@ fn main() {
     let lane = st.score.track(0).unwrap().volume_automation.as_ref().unwrap();
     assert!((lane.points[1].beat - 4.0).abs() < 1e-6, "undo restaura beat original");
 
-    println!("takiy smoke ok — 19 escenarios verdes");
+    // --- Escenario 20: insert + delete de puntos de automación.
+    //
+    // Verifica que InsertAutomationPoint crea la lane si falta y agrega
+    // el punto manteniendo el orden; que DeleteAutomationPoint quita el
+    // punto y apaga la lane cuando queda vacía; y que el undo de un
+    // delete restaura el punto.
+    let mut st = EditorState::new(120.0);
+    st.apply(EditMsg::InsertAutomationPoint {
+        track_idx: 0,
+        is_volume: true,
+        beat: 0.0,
+        value: 0.2,
+    });
+    st.apply(EditMsg::InsertAutomationPoint {
+        track_idx: 0,
+        is_volume: true,
+        beat: 8.0,
+        value: 1.2,
+    });
+    // Insertar en el medio mantiene el orden por beat.
+    st.apply(EditMsg::InsertAutomationPoint {
+        track_idx: 0,
+        is_volume: true,
+        beat: 4.0,
+        value: 0.7,
+    });
+    let lane = st.score.track(0).unwrap().volume_automation.as_ref().unwrap();
+    assert_eq!(lane.points.len(), 3);
+    assert!(lane.points.windows(2).all(|w| w[0].beat <= w[1].beat));
+
+    // Delete del punto del medio.
+    st.apply(EditMsg::DeleteAutomationPoint {
+        track_idx: 0,
+        is_volume: true,
+        idx: 1,
+    });
+    assert_eq!(
+        st.score.track(0).unwrap().volume_automation.as_ref().unwrap().points.len(),
+        2
+    );
+    // Undo lo trae de vuelta.
+    st.undo();
+    assert_eq!(
+        st.score.track(0).unwrap().volume_automation.as_ref().unwrap().points.len(),
+        3
+    );
+
+    // Borrar todos → la lane queda None.
+    for _ in 0..3 {
+        st.apply(EditMsg::DeleteAutomationPoint {
+            track_idx: 0,
+            is_volume: true,
+            idx: 0,
+        });
+    }
+    assert!(st.score.track(0).unwrap().volume_automation.is_none());
+
+    println!("takiy smoke ok — 20 escenarios verdes");
 }

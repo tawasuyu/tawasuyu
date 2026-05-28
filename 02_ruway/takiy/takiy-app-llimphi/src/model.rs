@@ -265,6 +265,26 @@ pub enum EditMsg {
     /// Borra ambas curvas de automación de la pista activa (vol + pan).
     /// Útil para volver al valor estático sin escribir un script.
     ClearActiveAutomation,
+    /// Inserta un punto de automación en `(beat, value)` en la pista
+    /// indicada. Si el `beat` ya existe en la lane, sobrescribe el
+    /// valor (no duplica). Pensado para la gesture "click sobre la
+    /// curva" — el binario calcula `value` evaluando la curva actual
+    /// en `beat` para que el punto insertado no genere un salto.
+    InsertAutomationPoint {
+        track_idx: usize,
+        is_volume: bool,
+        beat: f32,
+        value: f32,
+    },
+    /// Borra el punto en `idx` de la lane indicada. No-op si `idx`
+    /// queda fuera de rango. Si la lane queda vacía tras el borrado,
+    /// la `Option` se setea a `None` (limpia el flag de "automatizada"
+    /// en la pista) para evitar lanes-fantasma sin puntos.
+    DeleteAutomationPoint {
+        track_idx: usize,
+        is_volume: bool,
+        idx: usize,
+    },
     /// Mueve un punto de la lane de automación a `(beat, value)`. La
     /// `lane` indica volumen o pan (vía `is_volume`); `track_idx` fija
     /// la pista (no usa `active_track` porque el drag arranca con un
@@ -386,6 +406,12 @@ impl EditorState {
             EditMsg::ClearActiveAutomation => self.clear_active_automation(),
             EditMsg::SetAutomationPoint { track_idx, is_volume, idx, beat, value } => {
                 self.set_automation_point(track_idx, is_volume, idx, beat, value)
+            }
+            EditMsg::InsertAutomationPoint { track_idx, is_volume, beat, value } => {
+                self.insert_automation_point(track_idx, is_volume, beat, value)
+            }
+            EditMsg::DeleteAutomationPoint { track_idx, is_volume, idx } => {
+                self.delete_automation_point(track_idx, is_volume, idx)
             }
         }
     }
@@ -765,6 +791,65 @@ impl EditorState {
         lane.add_point(beat.max(0.0), value);
         let n = lane.len();
         Some(format!("pan auto · pista {idx} · beat {beat:.1} · {n} pt · p {value:.2}"))
+    }
+
+    fn insert_automation_point(
+        &mut self,
+        track_idx: usize,
+        is_volume: bool,
+        beat: f32,
+        value: f32,
+    ) -> ApplyOutcome {
+        let track = self.score.track_mut(track_idx)?;
+        let (v_min, v_max) = if is_volume { (0.0, 1.5) } else { (-1.0, 1.0) };
+        let beat = beat.max(0.0);
+        let value = value.clamp(v_min, v_max);
+        let lane = if is_volume {
+            track.volume_automation.get_or_insert_with(AutomationLane::default)
+        } else {
+            track.pan_automation.get_or_insert_with(AutomationLane::default)
+        };
+        lane.add_point(beat, value);
+        let n = lane.len();
+        let kind = if is_volume { "vol" } else { "pan" };
+        Some(format!(
+            "{kind} auto · pista {track_idx} · insert beat {beat:.1} val {value:.2} · {n} pt"
+        ))
+    }
+
+    fn delete_automation_point(
+        &mut self,
+        track_idx: usize,
+        is_volume: bool,
+        idx: usize,
+    ) -> ApplyOutcome {
+        let track = self.score.track_mut(track_idx)?;
+        let lane = if is_volume {
+            track.volume_automation.as_mut()?
+        } else {
+            track.pan_automation.as_mut()?
+        };
+        if idx >= lane.points.len() {
+            return None;
+        }
+        lane.points.remove(idx);
+        // Si la lane quedó vacía, apagar la `Option` para que la pista
+        // vuelva a usar el static. Lanes vacías son ambiguas para el
+        // resto del sistema y painter sabe ignorarlas, pero es más limpio
+        // limpiar el flag.
+        let became_empty = lane.points.is_empty();
+        if became_empty {
+            if is_volume {
+                track.volume_automation = None;
+            } else {
+                track.pan_automation = None;
+            }
+        }
+        let kind = if is_volume { "vol" } else { "pan" };
+        Some(format!(
+            "{kind} auto · pista {track_idx} · del #{idx}{}",
+            if became_empty { " · lane off" } else { "" }
+        ))
     }
 
     fn set_automation_point(
@@ -1660,6 +1745,85 @@ mod tests {
         assert_eq!(lane.points.len(), 2);
         assert!((lane.points[0].value - 0.5).abs() < 1e-6);
         assert!((lane.points[1].value + 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn insert_automation_point_creates_lane_if_missing() {
+        let mut st = EditorState::new(120.0);
+        assert!(st.score.track(0).unwrap().volume_automation.is_none());
+        st.apply(EditMsg::InsertAutomationPoint {
+            track_idx: 0,
+            is_volume: true,
+            beat: 3.5,
+            value: 0.7,
+        });
+        let lane = st.score.track(0).unwrap().volume_automation.as_ref().unwrap();
+        assert_eq!(lane.points.len(), 1);
+        assert!((lane.points[0].beat - 3.5).abs() < 1e-6);
+        assert!((lane.points[0].value - 0.7).abs() < 1e-6);
+    }
+
+    #[test]
+    fn insert_automation_point_clamps_value_to_range() {
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::InsertAutomationPoint {
+            track_idx: 0,
+            is_volume: false, // pan ∈ [-1, 1]
+            beat: 0.0,
+            value: -99.0,
+        });
+        let v = st.score.track(0).unwrap().pan_automation.as_ref().unwrap().points[0].value;
+        assert!((v + 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn delete_automation_point_removes_and_clears_empty_lane() {
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::AddVolumeAutomationPoint { beat: 0.0 });
+        st.apply(EditMsg::AddVolumeAutomationPoint { beat: 4.0 });
+        // Borra el de idx 1.
+        st.apply(EditMsg::DeleteAutomationPoint {
+            track_idx: 0,
+            is_volume: true,
+            idx: 1,
+        });
+        let lane = st.score.track(0).unwrap().volume_automation.as_ref().unwrap();
+        assert_eq!(lane.points.len(), 1);
+        // Borrar el último → la lane debe quedar None.
+        st.apply(EditMsg::DeleteAutomationPoint {
+            track_idx: 0,
+            is_volume: true,
+            idx: 0,
+        });
+        assert!(st.score.track(0).unwrap().volume_automation.is_none());
+    }
+
+    #[test]
+    fn delete_automation_point_out_of_range_is_noop() {
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::AddVolumeAutomationPoint { beat: 0.0 });
+        let len_before = st.history.len();
+        let out = st.apply(EditMsg::DeleteAutomationPoint {
+            track_idx: 0,
+            is_volume: true,
+            idx: 99,
+        });
+        assert!(out.is_none());
+        assert_eq!(st.history.len(), len_before);
+    }
+
+    #[test]
+    fn delete_automation_point_is_undoable() {
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::AddVolumeAutomationPoint { beat: 0.0 });
+        st.apply(EditMsg::DeleteAutomationPoint {
+            track_idx: 0,
+            is_volume: true,
+            idx: 0,
+        });
+        assert!(st.score.track(0).unwrap().volume_automation.is_none());
+        st.undo();
+        assert!(st.score.track(0).unwrap().volume_automation.is_some(), "undo restaura lane");
     }
 
     #[test]
