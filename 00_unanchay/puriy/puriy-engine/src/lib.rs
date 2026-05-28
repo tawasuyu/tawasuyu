@@ -33,8 +33,9 @@ pub use dom::DomTree;
 pub use fetch::{fetch, FetchError};
 pub use style::{
     AlignItems, AlignSelf, BoxShadow, BoxSizing, ComputedStyle, FlexDirection, FlexWrap,
-    GradientStop, JustifyContent, LengthVal, LinearGradient, Outline, Overflow, Sides, StyleEngine,
-    TextAlign, TextDecorationLine, TextTransform, WhiteSpace,
+    GradientStop, GridTrackSize, JustifyContent, LengthVal, LinearGradient, Outline, Overflow,
+    PointerEvents, Position, Sides, StyleEngine, TextAlign, TextDecorationLine, TextShadow,
+    TextTransform, Transform, VerticalAlign, Viewport, Visibility, WhiteSpace, DEFAULT_VIEWPORT,
 };
 
 /// Pipeline completo del navegador. Sin estado mutable — cada `load`

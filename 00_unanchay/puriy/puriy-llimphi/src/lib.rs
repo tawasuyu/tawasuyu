@@ -19,10 +19,11 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use llimphi_layout::taffy::prelude::{
-    auto, length, percent, AlignItems, AlignSelf, BoxSizing, Dimension, FlexDirection, FlexWrap,
-    JustifyContent, Position, Rect, Size, Style,
+    auto, fr, length, percent, AlignItems, AlignSelf, BoxSizing, Dimension, FlexDirection,
+    FlexWrap, JustifyContent, LengthPercentageAuto, Position as TaffyPosition, Rect, Size, Style,
 };
-use llimphi_raster::kurbo::{Affine, Line, Point, RoundedRect, Stroke};
+use llimphi_layout::taffy::{Display as TaffyDisplay, GridTemplateComponent, TrackSizingFunction};
+use llimphi_raster::kurbo::{Affine, Line, Point, Rect as KurboRect, RoundedRect, Stroke};
 use llimphi_raster::peniko::{
     Blob, Color, ColorStop, ColorStops, Fill, Gradient, GradientKind, Image as PenikoImage,
     ImageFormat,
@@ -32,10 +33,11 @@ use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
 use puriy_engine::{
-    AlignItems as CssAlignItems, AlignSelf as CssAlignSelf, BoxNode, BoxShadow, BoxSizing as CssBoxSizing,
-    BoxTree, Display, Engine, FlexDirection as CssFlexDirection, FlexWrap as CssFlexWrap,
-    JustifyContent as CssJustifyContent, LengthVal, LinearGradient, Overflow, TextAlign,
-    TextDecorationLine,
+    AlignItems as CssAlignItems, AlignSelf as CssAlignSelf, BoxNode, BoxShadow,
+    BoxSizing as CssBoxSizing, BoxTree, Display, Engine, FlexDirection as CssFlexDirection,
+    FlexWrap as CssFlexWrap, GridTrackSize, JustifyContent as CssJustifyContent, LengthVal,
+    LinearGradient, Overflow, PointerEvents, Position as CssPosition, TextAlign,
+    TextDecorationLine, TextShadow, Transform, VerticalAlign, Visibility,
 };
 
 const HEADER_H: f32 = 78.0;
@@ -644,7 +646,7 @@ fn viewport(t: &TabState) -> View<Msg> {
     };
 
     let content = View::new(Style {
-        position: Position::Absolute,
+        position: TaffyPosition::Absolute,
         inset: Rect {
             left: length(24.0_f32),
             right: length(24.0_f32),
@@ -669,19 +671,31 @@ fn render_box(b: &BoxNode) -> View<Msg> {
     let style = box_style(b);
     let mut view = View::new(style);
 
+    // visibility:hidden ocupa espacio pero no pinta. Devolvemos la view
+    // con su layout pero sin children/text/fill — sus descendientes
+    // serían computados pero también deberían ser hidden por inheritance.
+    let hidden = matches!(b.visibility, Visibility::Hidden);
+
     // opacity multiplica el alpha del background sólido. text/border
     // se manejan en apply_decorations/render del texto.
     let alpha_mul = b.opacity.clamp(0.0, 1.0);
 
-    if let Some(bg) = b.background {
-        let a = ((bg.a as f32) * alpha_mul) as u8;
-        view = view.fill(Color::from_rgba8(bg.r, bg.g, bg.b, a));
+    if !hidden {
+        if let Some(bg) = b.background {
+            let a = ((bg.a as f32) * alpha_mul) as u8;
+            view = view.fill(Color::from_rgba8(bg.r, bg.g, bg.b, a));
+        }
+        if let Some(hbg) = b.hover_background {
+            let a = ((hbg.a as f32) * alpha_mul) as u8;
+            view = view.hover_fill(Color::from_rgba8(hbg.r, hbg.g, hbg.b, a));
+        }
+        view = apply_decorations(view, b);
     }
-    if let Some(hbg) = b.hover_background {
-        let a = ((hbg.a as f32) * alpha_mul) as u8;
-        view = view.hover_fill(Color::from_rgba8(hbg.r, hbg.g, hbg.b, a));
+    if hidden {
+        // Sin children/text — el subárbol queda invisible pero ocupando
+        // su layout. Devolvemos acá para evitar pintar nada.
+        return view;
     }
-    view = apply_decorations(view, b);
     // `overflow: hidden` aplica clip(true) — recorta el subárbol al
     // borde del rect del nodo.
     if matches!(b.overflow, Overflow::Hidden) {
@@ -695,8 +709,14 @@ fn render_box(b: &BoxNode) -> View<Msg> {
         Color::from_rgb8(b.color.r, b.color.g, b.color.b)
     };
 
+    // pointer-events:none deshabilita on_click (también propaga por
+    // inheritance, así que los descendientes ya lo tienen marcado).
+    let pe_active = matches!(b.pointer_events, PointerEvents::Auto);
+
     if let Some(target) = &b.link {
-        view = view.on_click(Msg::Navigate(target.clone()));
+        if pe_active {
+            view = view.on_click(Msg::Navigate(target.clone()));
+        }
     }
 
     // <img> con imagen decodificada: arma peniko::Image, ajusta el rect
@@ -710,6 +730,39 @@ fn render_box(b: &BoxNode) -> View<Msg> {
 
     if let Some(text) = &b.text {
         let size = if b.font_weight >= 600 { b.font_size * 1.1 } else { b.font_size };
+        // text-shadows: paint_with previo al texto. Cada shadow se pinta
+        // como una segunda capa de texto desplazada y semitransparente —
+        // peniko no expone draw text directo desde el callback, así que
+        // usamos un rect aproximado proporcional al tamaño de fuente.
+        // Aproximación suficiente para hero text decorativo.
+        if !b.text_shadows.is_empty() {
+            let shadows = b.text_shadows.clone();
+            view = view.paint_with(move |scene, _ts, rect| {
+                for sh in &shadows {
+                    // Banda horizontal centrada de altura ≈ font_size,
+                    // desplazada por (offset_x, offset_y), expandida por
+                    // blur. Alpha proporcional al blur (más blur = más
+                    // difuso = menos opaco).
+                    let extra = sh.blur_px as f64 * 0.5;
+                    let mid_y = rect.y as f64 + rect.h as f64 * 0.55;
+                    let h = size as f64 * 0.55;
+                    let r = KurboRect::new(
+                        rect.x as f64 + sh.offset_x as f64 - extra,
+                        mid_y - h * 0.5 + sh.offset_y as f64 - extra,
+                        (rect.x + rect.w) as f64 + sh.offset_x as f64 + extra,
+                        mid_y + h * 0.5 + sh.offset_y as f64 + extra,
+                    );
+                    let alpha = if sh.blur_px > 0.0 { 0.35 } else { 0.6 };
+                    let c = Color::from_rgba8(
+                        sh.color.r,
+                        sh.color.g,
+                        sh.color.b,
+                        (sh.color.a as f64 * alpha) as u8,
+                    );
+                    scene.fill(Fill::NonZero, Affine::IDENTITY, c, None, &r);
+                }
+            });
+        }
         return view.text_aligned(text.clone(), size, display_color, Alignment::Start);
     }
 
@@ -925,12 +978,16 @@ fn box_style(b: &BoxNode) -> Style {
 
     let is_flex = matches!(b.display, Display::Flex | Display::InlineFlex);
 
+    let is_grid = matches!(b.display, Display::Grid | Display::InlineGrid);
+
     // Defaults según display: Block fila completa columnar, Inline en row
     // con altura auto, Flex toma sus props del nodo. None: cero.
     let (default_direction, mut width, height) = match b.display {
         Display::Block => (FlexDirection::Column, percent(1.0_f32), auto()),
         Display::Flex => (map_flex_direction(b.flex_direction), percent(1.0_f32), auto()),
         Display::InlineFlex => (map_flex_direction(b.flex_direction), auto(), auto()),
+        Display::Grid => (FlexDirection::Column, percent(1.0_f32), auto()),
+        Display::InlineGrid => (FlexDirection::Column, auto(), auto()),
         Display::InlineBlock | Display::Inline => {
             let h = if is_text_leaf { length(line_h) } else { auto() };
             (FlexDirection::Row, auto(), h)
@@ -1011,10 +1068,47 @@ fn box_style(b: &BoxNode) -> Style {
         CssBoxSizing::ContentBox => BoxSizing::ContentBox,
         CssBoxSizing::BorderBox => BoxSizing::BorderBox,
     };
-    let align_self = map_align_self(b.align_self);
+    // vertical-align mapea a align_self (con prioridad sobre el de
+    // align-self CSS) cuando es inline/inline-block — no es lo mismo en
+    // CSS spec pero alcanza para el subset que nos importa.
+    let align_self = match b.vertical_align {
+        VerticalAlign::Baseline => map_align_self(b.align_self),
+        VerticalAlign::Top => Some(AlignSelf::Start),
+        VerticalAlign::Middle => Some(AlignSelf::Center),
+        VerticalAlign::Bottom | VerticalAlign::Sub => Some(AlignSelf::End),
+        VerticalAlign::Super => Some(AlignSelf::Start),
+    };
     let flex_basis: Dimension = length_to_taffy(b.flex_basis).unwrap_or_else(auto);
 
+    // Position + insets (top/right/bottom/left).
+    let position_kind = match b.position {
+        CssPosition::Static => TaffyPosition::Relative, // = layout normal
+        CssPosition::Relative | CssPosition::Sticky => TaffyPosition::Relative,
+        CssPosition::Absolute | CssPosition::Fixed => TaffyPosition::Absolute,
+    };
+    let inset = Rect {
+        top: length_to_inset(b.inset_top),
+        right: length_to_inset(b.inset_right),
+        bottom: length_to_inset(b.inset_bottom),
+        left: length_to_inset(b.inset_left),
+    };
+
+    // Taffy Display: Block/Flex/Grid/None. Inline/InlineBlock las
+    // tratamos como Flex (row) por las hacks de inlines.
+    let taffy_display = match b.display {
+        Display::None => TaffyDisplay::None,
+        Display::Grid | Display::InlineGrid => TaffyDisplay::Grid,
+        _ => TaffyDisplay::Flex,
+    };
+
+    // Grid templates — sólo se aplican si display es grid.
+    let grid_template_columns: Vec<GridTemplateComponent<String>> =
+        if is_grid { b.grid_template_columns.iter().map(map_grid_track).collect() } else { Vec::new() };
+    let grid_template_rows: Vec<GridTemplateComponent<String>> =
+        if is_grid { b.grid_template_rows.iter().map(map_grid_track).collect() } else { Vec::new() };
+
     Style {
+        display: taffy_display,
         flex_direction,
         flex_wrap,
         justify_content,
@@ -1024,6 +1118,8 @@ fn box_style(b: &BoxNode) -> Style {
         flex_shrink: b.flex_shrink,
         flex_basis,
         box_sizing,
+        position: position_kind,
+        inset,
         gap,
         size: Size { width, height },
         min_size,
@@ -1040,7 +1136,29 @@ fn box_style(b: &BoxNode) -> Style {
             top: length(b.padding.top),
             bottom: length(b.padding.bottom),
         },
+        grid_template_columns: grid_template_columns.into(),
+        grid_template_rows: grid_template_rows.into(),
         ..Default::default()
+    }
+}
+
+fn map_grid_track(t: &GridTrackSize) -> GridTemplateComponent<String> {
+    let single: TrackSizingFunction = match t {
+        GridTrackSize::Auto => auto(),
+        GridTrackSize::Px(v) => length(*v),
+        GridTrackSize::Pct(v) => percent(*v / 100.0),
+        GridTrackSize::Fr(v) => fr(*v),
+    };
+    GridTemplateComponent::Single(single)
+}
+
+/// `length-percentage-auto`: para insets (top/right/bottom/left) que
+/// aceptan `auto` además de px/%.
+fn length_to_inset(v: LengthVal) -> LengthPercentageAuto {
+    match v {
+        LengthVal::Auto => auto(),
+        LengthVal::Px(px) => length(px),
+        LengthVal::Pct(pct) => percent(pct / 100.0),
     }
 }
 

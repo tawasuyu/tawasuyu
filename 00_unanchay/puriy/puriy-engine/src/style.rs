@@ -99,6 +99,31 @@ pub struct ComputedStyle {
     /// `background-image: linear-gradient(...)`. Cuando es Some, el
     /// chrome lo pinta detrás (o encima del background sólido).
     pub background_gradient: Option<LinearGradient>,
+    /// CSS `position`. Default Static.
+    pub position: Position,
+    /// Insets (top/right/bottom/left). `Auto` por default.
+    pub inset_top: LengthVal,
+    pub inset_right: LengthVal,
+    pub inset_bottom: LengthVal,
+    pub inset_left: LengthVal,
+    /// `vertical-align` para inline / inline-block / cells.
+    pub vertical_align: VerticalAlign,
+    /// `visibility: hidden` → ocupa espacio pero no se pinta.
+    pub visibility: Visibility,
+    /// `pointer-events: none` → ignora clics/hover.
+    pub pointer_events: PointerEvents,
+    /// Sangrado de primera línea de un bloque (en px).
+    pub text_indent: f32,
+    /// Espacio extra entre palabras (en px). Heredable.
+    pub word_spacing: f32,
+    /// Sombras del texto. Vacío = ninguna.
+    pub text_shadows: Vec<TextShadow>,
+    /// Cadena de transformaciones (translate/scale/rotate) aplicadas
+    /// en orden. Vacío = identidad.
+    pub transforms: Vec<Transform>,
+    /// Para `display: grid` — pistas de columnas y filas.
+    pub grid_template_columns: Vec<GridTrackSize>,
+    pub grid_template_rows: Vec<GridTrackSize>,
 }
 
 /// Estilo del marker de `<li>`. Reducido al subset que el chrome puede
@@ -293,6 +318,87 @@ pub struct LinearGradient {
     pub stops: Vec<GradientStop>,
 }
 
+/// CSS `position`. `Static` = el default (no position; los insets
+/// se ignoran). `Fixed`/`Sticky` los fakeamos como Absolute/Relative en
+/// el chrome — taffy 0.9 sólo expone esos dos.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Position {
+    Static,
+    Relative,
+    Absolute,
+    Fixed,
+    Sticky,
+}
+
+/// CSS `vertical-align` para inline / inline-block. Mapea a alignment
+/// del item en el contexto del padre. `Super`/`Sub` los aproximamos
+/// como Top/Bottom respectivamente.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerticalAlign {
+    Baseline,
+    Top,
+    Middle,
+    Bottom,
+    Super,
+    Sub,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Visibility {
+    Visible,
+    Hidden,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerEvents {
+    Auto,
+    None,
+}
+
+/// Una sombra de texto. CSS permite varias separadas por coma.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextShadow {
+    pub offset_x: f32,
+    pub offset_y: f32,
+    pub blur_px: f32,
+    pub color: Color,
+}
+
+/// Una transformación CSS individual. Las cadenas `transform: rotate(45deg)
+/// scale(2) translate(10px, 20px)` se aplican en orden de izquierda a
+/// derecha como matrices.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Transform {
+    /// Pixeles X/Y.
+    Translate(f32, f32),
+    /// Factores X/Y (uno solo si CSS da un valor).
+    Scale(f32, f32),
+    /// Grados (sentido horario en pantalla = sentido CSS).
+    Rotate(f32),
+}
+
+/// Tamaño de track para `display: grid`. `Fr(N)` = fracción del espacio
+/// remanente (CSS unit `fr`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GridTrackSize {
+    Auto,
+    Px(f32),
+    Pct(f32),
+    Fr(f32),
+}
+
+/// Viewport asumido por el parser para resolver unidades `vw`/`vh`/
+/// `vmin`/`vmax` y para evaluar `@media` queries. Por ahora es
+/// constante (1280×800 — desktop típico). Cuando puriy soporte resize
+/// dinámico del viewport, pasará a ser un parámetro de `StyleEngine`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Viewport {
+    pub width: f32,
+    pub height: f32,
+}
+
+pub const DEFAULT_VIEWPORT: Viewport = Viewport { width: 1280.0, height: 800.0 };
+
 impl<T: Copy> Sides<T> {
     pub const fn all(v: T) -> Self {
         Self { top: v, right: v, bottom: v, left: v }
@@ -354,6 +460,20 @@ impl Default for ComputedStyle {
             flex_basis: LengthVal::Auto,
             outline: Outline::default(),
             background_gradient: None,
+            position: Position::Static,
+            inset_top: LengthVal::Auto,
+            inset_right: LengthVal::Auto,
+            inset_bottom: LengthVal::Auto,
+            inset_left: LengthVal::Auto,
+            vertical_align: VerticalAlign::Baseline,
+            visibility: Visibility::Visible,
+            pointer_events: PointerEvents::Auto,
+            text_indent: 0.0,
+            word_spacing: 0.0,
+            text_shadows: Vec::new(),
+            transforms: Vec::new(),
+            grid_template_columns: Vec::new(),
+            grid_template_rows: Vec::new(),
         }
     }
 }
@@ -438,6 +558,13 @@ impl StyleEngine {
             // dejaría "bar" en minúscula porque el text leaf vive en `<span>`.
             style.white_space = p.white_space;
             style.text_transform = p.text_transform;
+            // text-shadow, word-spacing, text-indent, visibility,
+            // pointer-events: heredables (CSS spec).
+            style.text_shadows = p.text_shadows.clone();
+            style.word_spacing = p.word_spacing;
+            style.text_indent = p.text_indent;
+            style.visibility = p.visibility;
+            style.pointer_events = p.pointer_events;
         }
         let Some(local) = dom::element_name(node) else {
             return style;
@@ -933,6 +1060,21 @@ enum DeclKind {
     /// `background-image: none` limpia el gradient (un autor puede
     /// querer overridear un gradient heredado).
     BackgroundGradientNone,
+    Position(Position),
+    InsetTop(LengthVal),
+    InsetRight(LengthVal),
+    InsetBottom(LengthVal),
+    InsetLeft(LengthVal),
+    VerticalAlign(VerticalAlign),
+    Visibility(Visibility),
+    PointerEvents(PointerEvents),
+    TextIndent(f32),
+    WordSpacing(f32),
+    TextShadows(Vec<TextShadow>),
+    /// Cadena vacía = `transform: none`.
+    Transforms(Vec<Transform>),
+    GridTemplateColumns(Vec<GridTrackSize>),
+    GridTemplateRows(Vec<GridTrackSize>),
 }
 
 impl Decl {
@@ -1002,6 +1144,20 @@ impl Decl {
             DeclKind::OutlineOffset(v) => s.outline.offset = *v,
             DeclKind::BackgroundGradient(g) => s.background_gradient = Some(g.clone()),
             DeclKind::BackgroundGradientNone => s.background_gradient = None,
+            DeclKind::Position(p) => s.position = *p,
+            DeclKind::InsetTop(v) => s.inset_top = *v,
+            DeclKind::InsetRight(v) => s.inset_right = *v,
+            DeclKind::InsetBottom(v) => s.inset_bottom = *v,
+            DeclKind::InsetLeft(v) => s.inset_left = *v,
+            DeclKind::VerticalAlign(va) => s.vertical_align = *va,
+            DeclKind::Visibility(v) => s.visibility = *v,
+            DeclKind::PointerEvents(pe) => s.pointer_events = *pe,
+            DeclKind::TextIndent(v) => s.text_indent = *v,
+            DeclKind::WordSpacing(v) => s.word_spacing = *v,
+            DeclKind::TextShadows(shadows) => s.text_shadows = shadows.clone(),
+            DeclKind::Transforms(tr) => s.transforms = tr.clone(),
+            DeclKind::GridTemplateColumns(t) => s.grid_template_columns = t.clone(),
+            DeclKind::GridTemplateRows(t) => s.grid_template_rows = t.clone(),
         }
     }
 }
@@ -1142,35 +1298,136 @@ fn ua_stylesheet() -> Vec<Rule> {
 // con un visitor.
 
 fn parse_stylesheet(css: &str, vars: &HashMap<String, String>) -> Vec<Rule> {
-    let mut out = Vec::new();
-    // Strip comentarios /* ... */
     let css = strip_comments(css);
+    parse_rules_block(&css, vars, DEFAULT_VIEWPORT)
+}
+
+/// Parsea un bloque de reglas — el cuerpo de un stylesheet completo o
+/// el contenido de un `@media` / `@supports`. Soporta:
+/// - reglas normales `selector { decls }`
+/// - `@media (condition) { ... }` recursivo — eval contra `viewport`
+/// - `@supports (prop: value) { ... }` recursivo — eval por parser
+/// - `@-rules` desconocidos (`@font-face`, `@keyframes`, etc.) los
+///   saltea silenciosamente
+fn parse_rules_block(css: &str, vars: &HashMap<String, String>, viewport: Viewport) -> Vec<Rule> {
+    let mut out = Vec::new();
     let bytes = css.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        // Encuentra '{' que abre el body.
+        // Salta whitespace inicial.
+        while i < bytes.len() && (bytes[i] as char).is_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        // Detecta @-rule.
+        if bytes[i] == b'@' {
+            let rest = &css[i..];
+            let Some(rule_end) = at_rule_end(rest) else {
+                break;
+            };
+            let chunk = &rest[..rule_end];
+            i += rule_end;
+            // Distinguimos at-rules con bloque `{...}` vs at-rules statement
+            // que terminan en `;` (ej: @import, @charset).
+            let lower = chunk.trim_start().to_ascii_lowercase();
+            if let Some(rest_after) = lower.strip_prefix("@media") {
+                let cond = parse_at_rule_condition(chunk, "@media");
+                let body = parse_at_rule_body(chunk);
+                if evaluate_media_query(cond, viewport) {
+                    out.extend(parse_rules_block(body, vars, viewport));
+                }
+                let _ = rest_after;
+                continue;
+            }
+            if lower.starts_with("@supports") {
+                let cond = parse_at_rule_condition(chunk, "@supports");
+                let body = parse_at_rule_body(chunk);
+                if evaluate_supports_query(cond) {
+                    out.extend(parse_rules_block(body, vars, viewport));
+                }
+                continue;
+            }
+            // @-rule desconocido: lo saltamos sin parsear.
+            continue;
+        }
+        // Regla normal: `selector { decls }`.
         let Some(brace) = css[i..].find('{') else { break };
         let sel_raw = css[i..i + brace].trim();
         i += brace + 1;
-        let Some(close) = css[i..].find('}') else { break };
+        let Some(close) = matching_close_brace(&css[i..]) else { break };
         let body = &css[i..i + close];
         i += close + 1;
         if sel_raw.is_empty() {
             continue;
         }
-        // Selectores múltiples separados por ',': uno por uno.
         for sel in sel_raw.split(',') {
             let sel = sel.trim();
             let Some(selector) = parse_selector(sel) else {
-                // Selectores no soportados (combinadores, pseudoclases,
-                // atributos) ignoramos en silencio — la regla queda
-                // inerte y el documento sigue parseando.
                 continue;
             };
             out.push(Rule { selector, decls: parse_declarations(body, vars) });
         }
     }
     out
+}
+
+/// Encuentra el final del @-rule actual. Para at-rules con bloque,
+/// devuelve la posición del `}` cerrando (inclusive). Para at-rules
+/// statement (ej: `@import url;`), devuelve la posición del `;`
+/// (inclusive). Si nada cuadra, None.
+fn at_rule_end(s: &str) -> Option<usize> {
+    let semi = s.find(';');
+    let brace = s.find('{');
+    match (semi, brace) {
+        (Some(se), Some(br)) if se < br => Some(se + 1),
+        (Some(se), None) => Some(se + 1),
+        (_, Some(br)) => {
+            // Encuentra el `}` que cierra balanceado.
+            let body = &s[br + 1..];
+            let close = matching_close_brace(body)?;
+            Some(br + 1 + close + 1)
+        }
+        (None, None) => None,
+    }
+}
+
+/// Dado el chunk completo del at-rule (`@media (cond) { body }`),
+/// extrae la condición entre el nombre y el `{`.
+fn parse_at_rule_condition<'a>(chunk: &'a str, name: &str) -> &'a str {
+    let after_name = chunk.trim_start().get(name.len()..).unwrap_or("");
+    let end = after_name.find('{').unwrap_or(after_name.len());
+    after_name[..end].trim()
+}
+
+/// Extrae el body entre `{` y el `}` cerrando.
+fn parse_at_rule_body(chunk: &str) -> &str {
+    let Some(open) = chunk.find('{') else {
+        return "";
+    };
+    let after = &chunk[open + 1..];
+    let close = matching_close_brace(after).unwrap_or(after.len());
+    &after[..close]
+}
+
+/// Busca el `}` que cierra balanceadamente — respeta nesting (`{ ... }`
+/// dentro del body cuentan).
+fn matching_close_brace(s: &str) -> Option<usize> {
+    let mut depth: usize = 1;
+    for (i, c) in s.char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Pasada previa al parseo real: encuentra bloques `:root { ... }`,
@@ -1659,6 +1916,26 @@ fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "outline-style" => parse_border_style(value).map(DeclKind::OutlineStyle),
         "outline-offset" => parse_length_px(value).map(DeclKind::OutlineOffset),
         "background-image" => parse_background_image(value),
+        "position" => parse_position(value).map(DeclKind::Position),
+        "top" => parse_length_or_pct_or_auto(value).map(DeclKind::InsetTop),
+        "right" => parse_length_or_pct_or_auto(value).map(DeclKind::InsetRight),
+        "bottom" => parse_length_or_pct_or_auto(value).map(DeclKind::InsetBottom),
+        "left" => parse_length_or_pct_or_auto(value).map(DeclKind::InsetLeft),
+        "vertical-align" => parse_vertical_align(value).map(DeclKind::VerticalAlign),
+        "visibility" => parse_visibility(value).map(DeclKind::Visibility),
+        "pointer-events" => parse_pointer_events(value).map(DeclKind::PointerEvents),
+        "text-indent" => parse_length_px(value).map(DeclKind::TextIndent),
+        "word-spacing" => parse_length_px(value).map(DeclKind::WordSpacing),
+        "text-shadow" => parse_text_shadows(value).map(DeclKind::TextShadows),
+        "transform" => parse_transforms(value).map(DeclKind::Transforms),
+        "grid-template-columns" => {
+            parse_grid_template(value).map(DeclKind::GridTemplateColumns)
+        }
+        "grid-template-rows" => parse_grid_template(value).map(DeclKind::GridTemplateRows),
+        // `grid-gap` (legacy) = `gap`.
+        "grid-gap" => parse_gap(value).map(|(r, c)| DeclKind::Gap { row: r, column: c }),
+        "grid-row-gap" => parse_length_px(value).map(DeclKind::RowGap),
+        "grid-column-gap" => parse_length_px(value).map(DeclKind::ColumnGap),
         // `border: 1px solid #ccc` — shorthand. Devolvemos un único
         // DeclKind sintético: en realidad ya hay 3 sub-decls que el
         // caller debe emitir, así que delegamos a una ruta especial vía
@@ -2132,6 +2409,8 @@ fn parse_display(s: &str) -> Option<Display> {
         "inline-block" => Some(Display::InlineBlock),
         "flex" => Some(Display::Flex),
         "inline-flex" => Some(Display::InlineFlex),
+        "grid" => Some(Display::Grid),
+        "inline-grid" => Some(Display::InlineGrid),
         "none" => Some(Display::None),
         _ => None,
     }
@@ -2455,6 +2734,7 @@ fn parse_gradient_stop(s: &str) -> Option<GradientStop> {
 }
 
 /// Acepta `12px`, `1.5rem` (tratada como em*16), `0`. Sin unidad → px.
+/// `Nvw`/`Nvh`/`Nvmin`/`Nvmax` resuelven contra `DEFAULT_VIEWPORT`.
 fn parse_length_px(s: &str) -> Option<f32> {
     let s = s.trim();
     if s == "0" {
@@ -2471,7 +2751,348 @@ fn parse_length_px(s: &str) -> Option<f32> {
         let v: f32 = num.trim().parse().ok()?;
         return Some(v * 16.0);
     }
+    if let Some(num) = s.strip_suffix("vmin") {
+        let v: f32 = num.trim().parse().ok()?;
+        return Some(v * DEFAULT_VIEWPORT.width.min(DEFAULT_VIEWPORT.height) / 100.0);
+    }
+    if let Some(num) = s.strip_suffix("vmax") {
+        let v: f32 = num.trim().parse().ok()?;
+        return Some(v * DEFAULT_VIEWPORT.width.max(DEFAULT_VIEWPORT.height) / 100.0);
+    }
+    if let Some(num) = s.strip_suffix("vw") {
+        let v: f32 = num.trim().parse().ok()?;
+        return Some(v * DEFAULT_VIEWPORT.width / 100.0);
+    }
+    if let Some(num) = s.strip_suffix("vh") {
+        let v: f32 = num.trim().parse().ok()?;
+        return Some(v * DEFAULT_VIEWPORT.height / 100.0);
+    }
     s.parse().ok()
+}
+
+/// `length`, `%` o `auto`. Variante para insets que sí admiten `auto`.
+fn parse_length_or_pct_or_auto(s: &str) -> Option<LengthVal> {
+    parse_length_or_pct(s.trim())
+}
+
+fn parse_position(s: &str) -> Option<Position> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "static" => Some(Position::Static),
+        "relative" => Some(Position::Relative),
+        "absolute" => Some(Position::Absolute),
+        "fixed" => Some(Position::Fixed),
+        "sticky" => Some(Position::Sticky),
+        _ => None,
+    }
+}
+
+fn parse_vertical_align(s: &str) -> Option<VerticalAlign> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "baseline" => Some(VerticalAlign::Baseline),
+        "top" | "text-top" => Some(VerticalAlign::Top),
+        "middle" => Some(VerticalAlign::Middle),
+        "bottom" | "text-bottom" => Some(VerticalAlign::Bottom),
+        "super" => Some(VerticalAlign::Super),
+        "sub" => Some(VerticalAlign::Sub),
+        _ => None,
+    }
+}
+
+fn parse_visibility(s: &str) -> Option<Visibility> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "visible" => Some(Visibility::Visible),
+        // `collapse` lo tratamos igual que hidden (sólo aplica a
+        // tablas/flex en CSS spec, aproximación segura).
+        "hidden" | "collapse" => Some(Visibility::Hidden),
+        _ => None,
+    }
+}
+
+fn parse_pointer_events(s: &str) -> Option<PointerEvents> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(PointerEvents::Auto),
+        "none" => Some(PointerEvents::None),
+        _ => None,
+    }
+}
+
+/// `text-shadow: <x> <y> [blur] <color>[, <x> <y> [blur] <color>]*`.
+/// `none` → vector vacío. Devuelve None si ningún shadow es válido.
+fn parse_text_shadows(value: &str) -> Option<Vec<TextShadow>> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Some(Vec::new());
+    }
+    let mut out = Vec::new();
+    for sh in v.split(',') {
+        if let Some(s) = parse_one_text_shadow(sh) {
+            out.push(s);
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+fn parse_one_text_shadow(s: &str) -> Option<TextShadow> {
+    let mut lengths: Vec<f32> = Vec::with_capacity(3);
+    let mut color: Option<Color> = None;
+    for tok in s.split_whitespace() {
+        if let Some(l) = parse_length_px(tok) {
+            lengths.push(l);
+            continue;
+        }
+        if let Some(c) = parse_color(tok) {
+            color = Some(c);
+            continue;
+        }
+    }
+    if lengths.len() < 2 {
+        return None;
+    }
+    Some(TextShadow {
+        offset_x: lengths[0],
+        offset_y: lengths[1],
+        blur_px: lengths.get(2).copied().unwrap_or(0.0),
+        color: color.unwrap_or(Color::BLACK),
+    })
+}
+
+/// `transform: none` o cadena de funciones (`rotate(45deg) scale(2)
+/// translate(10px, 20px)`). Acepta `translate(x)`, `translate(x, y)`,
+/// `translateX(x)`, `translateY(y)`, `scale(s)`, `scale(sx, sy)`,
+/// `scaleX(sx)`, `scaleY(sy)`, `rotate(Ndeg|Nrad|Nturn)`.
+fn parse_transforms(value: &str) -> Option<Vec<Transform>> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Some(Vec::new());
+    }
+    let mut out = Vec::new();
+    let mut rest = v;
+    while !rest.trim().is_empty() {
+        rest = rest.trim_start();
+        let open = rest.find('(')?;
+        let name = rest[..open].trim().to_ascii_lowercase();
+        let mut depth = 1usize;
+        let bytes = rest[open + 1..].as_bytes();
+        let mut close = None;
+        for (i, &c) in bytes.iter().enumerate() {
+            match c {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let close = close?;
+        let args = &rest[open + 1..open + 1 + close];
+        let tr = parse_transform_fn(&name, args)?;
+        out.push(tr);
+        rest = &rest[open + 1 + close + 1..];
+    }
+    Some(out)
+}
+
+fn parse_transform_fn(name: &str, args: &str) -> Option<Transform> {
+    let parts: Vec<&str> = args.split(',').map(|s| s.trim()).collect();
+    match name {
+        "translate" => match parts.as_slice() {
+            [x] => Some(Transform::Translate(parse_length_px(x)?, 0.0)),
+            [x, y] => Some(Transform::Translate(parse_length_px(x)?, parse_length_px(y)?)),
+            _ => None,
+        },
+        "translatex" => Some(Transform::Translate(parse_length_px(parts[0])?, 0.0)),
+        "translatey" => Some(Transform::Translate(0.0, parse_length_px(parts[0])?)),
+        "scale" => match parts.as_slice() {
+            [s] => {
+                let v = s.parse::<f32>().ok()?;
+                Some(Transform::Scale(v, v))
+            }
+            [sx, sy] => {
+                Some(Transform::Scale(sx.parse().ok()?, sy.parse().ok()?))
+            }
+            _ => None,
+        },
+        "scalex" => Some(Transform::Scale(parts[0].parse().ok()?, 1.0)),
+        "scaley" => Some(Transform::Scale(1.0, parts[0].parse().ok()?)),
+        "rotate" => {
+            let arg = parts[0];
+            let deg = if let Some(n) = arg.strip_suffix("deg") {
+                n.trim().parse::<f32>().ok()?
+            } else if let Some(n) = arg.strip_suffix("rad") {
+                let v: f32 = n.trim().parse().ok()?;
+                v.to_degrees()
+            } else if let Some(n) = arg.strip_suffix("turn") {
+                let v: f32 = n.trim().parse().ok()?;
+                v * 360.0
+            } else {
+                // Sin unidad: asumir deg.
+                arg.parse::<f32>().ok()?
+            };
+            Some(Transform::Rotate(deg))
+        }
+        _ => None,
+    }
+}
+
+/// `grid-template-columns: <track-list>`. Subset soportado:
+/// - `auto`
+/// - `Npx` / `N%`
+/// - `Nfr`
+/// - `repeat(N, <track>)` con repeat de un solo track
+/// Tokens separados por whitespace.
+fn parse_grid_template(value: &str) -> Option<Vec<GridTrackSize>> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Some(Vec::new());
+    }
+    let mut out: Vec<GridTrackSize> = Vec::new();
+    // Tokenize: respeta nesting de paréntesis para repeat(N, X).
+    let mut tokens: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0usize;
+    for c in v.chars() {
+        match c {
+            '(' => {
+                depth += 1;
+                current.push(c);
+            }
+            ')' => {
+                depth = depth.saturating_sub(1);
+                current.push(c);
+            }
+            c if c.is_whitespace() && depth == 0 => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(c),
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    for tok in tokens {
+        if let Some(inner) = strip_fn(&tok, "repeat") {
+            let parts: Vec<&str> = inner.splitn(2, ',').collect();
+            if parts.len() != 2 {
+                continue;
+            }
+            let count: i32 = parts[0].trim().parse().ok()?;
+            let track = parse_one_grid_track(parts[1].trim())?;
+            for _ in 0..count.max(0) {
+                out.push(track);
+            }
+        } else if let Some(t) = parse_one_grid_track(&tok) {
+            out.push(t);
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+fn parse_one_grid_track(s: &str) -> Option<GridTrackSize> {
+    let s = s.trim();
+    if s.eq_ignore_ascii_case("auto") {
+        return Some(GridTrackSize::Auto);
+    }
+    if let Some(num) = s.strip_suffix("fr") {
+        let v: f32 = num.trim().parse().ok()?;
+        return Some(GridTrackSize::Fr(v));
+    }
+    if let Some(lv) = parse_length_or_pct(s) {
+        return Some(match lv {
+            LengthVal::Px(v) => GridTrackSize::Px(v),
+            LengthVal::Pct(v) => GridTrackSize::Pct(v),
+            LengthVal::Auto => GridTrackSize::Auto,
+        });
+    }
+    None
+}
+
+/// Evalúa una condición de `@media` contra el viewport por defecto. Subset:
+/// `(max-width: Npx)`, `(min-width: Npx)`, encadenados por ` and `.
+/// `screen`/`all` se ignoran (siempre true).
+fn evaluate_media_query(condition: &str, vp: Viewport) -> bool {
+    let cond = condition.trim().to_ascii_lowercase();
+    if cond.is_empty() {
+        return true;
+    }
+    let parts: Vec<&str> = cond.split(" and ").map(|s| s.trim()).collect();
+    for part in parts {
+        if part == "all" || part == "screen" || part == "print" {
+            // Tipos de media: aceptamos screen y all; print → false.
+            if part == "print" {
+                return false;
+            }
+            continue;
+        }
+        // Eliminar prefijo `only ` o `not ` (no soportamos not — falla).
+        let part = part.strip_prefix("only ").unwrap_or(part).trim();
+        if part.starts_with("not ") {
+            return false;
+        }
+        // Esperamos `(feature: value)`.
+        let inner = part.strip_prefix('(').and_then(|s| s.strip_suffix(')'));
+        let Some(inner) = inner else {
+            return false;
+        };
+        let Some((feature, val)) = inner.split_once(':').map(|(a, b)| (a.trim(), b.trim()))
+        else {
+            return false;
+        };
+        let Some(len) = parse_length_px(val) else {
+            return false;
+        };
+        match feature {
+            "max-width" => {
+                if vp.width > len {
+                    return false;
+                }
+            }
+            "min-width" => {
+                if vp.width < len {
+                    return false;
+                }
+            }
+            "max-height" => {
+                if vp.height > len {
+                    return false;
+                }
+            }
+            "min-height" => {
+                if vp.height < len {
+                    return false;
+                }
+            }
+            _ => {} // feature no soportada → ignorar (= true).
+        }
+    }
+    true
+}
+
+/// Evalúa una condición `@supports (prop: value)` ⇒ true si nuestro
+/// parser puede convertirla a algún DeclKind. Subset minimal: no
+/// soporta `and`/`or`/`not` por ahora.
+fn evaluate_supports_query(condition: &str) -> bool {
+    let cond = condition.trim();
+    let Some(inner) = cond.strip_prefix('(').and_then(|s| s.strip_suffix(')')) else {
+        return false;
+    };
+    let Some((prop, val)) = inner.split_once(':') else {
+        return false;
+    };
+    decl_kind_from_pair(prop.trim(), val.trim()).is_some()
 }
 
 /// Indica que `cssparser` está enlazado aunque el subset actual no use
@@ -3869,5 +4490,173 @@ line2</pre></body></html>"#;
         assert_eq!(s.padding.right, 2.0);
         assert_eq!(s.padding.bottom, 3.0);
         assert_eq!(s.padding.left, 4.0);
+    }
+
+    #[test]
+    fn parsea_position_y_insets() {
+        let html = r#"<html><head><style>
+            div { position: absolute; top: 10px; left: 50%; bottom: auto; right: 20px }
+        </style></head><body><div></div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let d = dom.find("div").unwrap();
+        let s = eng.compute(&d);
+        assert_eq!(s.position, Position::Absolute);
+        assert!(matches!(s.inset_top, LengthVal::Px(10.0)));
+        assert!(matches!(s.inset_left, LengthVal::Pct(50.0)));
+        assert!(matches!(s.inset_bottom, LengthVal::Auto));
+        assert!(matches!(s.inset_right, LengthVal::Px(20.0)));
+
+        let dom2 = DomTree::parse(r#"<html><body><nav style="position:sticky"></nav></body></html>"#);
+        let eng2 = StyleEngine::from_dom(&dom2);
+        let n = dom2.find("nav").unwrap();
+        assert_eq!(eng2.compute(&n).position, Position::Sticky);
+    }
+
+    #[test]
+    fn parsea_transforms_cadena() {
+        let t = parse_transforms("translate(10px, 20px) scale(2) rotate(45deg)").unwrap();
+        assert_eq!(t.len(), 3);
+        assert_eq!(t[0], Transform::Translate(10.0, 20.0));
+        assert_eq!(t[1], Transform::Scale(2.0, 2.0));
+        assert_eq!(t[2], Transform::Rotate(45.0));
+
+        let t = parse_transforms("translateX(5px) scaleY(0.5) rotate(0.5turn)").unwrap();
+        assert_eq!(t[0], Transform::Translate(5.0, 0.0));
+        assert_eq!(t[1], Transform::Scale(1.0, 0.5));
+        assert_eq!(t[2], Transform::Rotate(180.0));
+
+        assert!(parse_transforms("none").unwrap().is_empty());
+    }
+
+    #[test]
+    fn parsea_text_shadow_simple_y_multiple() {
+        let sh = parse_text_shadows("2px 3px 4px red").unwrap();
+        assert_eq!(sh.len(), 1);
+        assert_eq!(sh[0].offset_x, 2.0);
+        assert_eq!(sh[0].offset_y, 3.0);
+        assert_eq!(sh[0].blur_px, 4.0);
+        assert_eq!(sh[0].color, Color::rgb(255, 0, 0));
+
+        let sh = parse_text_shadows("1px 1px black, -1px -1px white").unwrap();
+        assert_eq!(sh.len(), 2);
+        assert_eq!(sh[0].color, Color::BLACK);
+        assert_eq!(sh[1].color, Color::WHITE);
+        assert_eq!(sh[1].offset_x, -1.0);
+
+        let sh = parse_text_shadows("none").unwrap();
+        assert!(sh.is_empty());
+    }
+
+    #[test]
+    fn parsea_vertical_align() {
+        assert_eq!(parse_vertical_align("baseline"), Some(VerticalAlign::Baseline));
+        assert_eq!(parse_vertical_align("middle"), Some(VerticalAlign::Middle));
+        assert_eq!(parse_vertical_align("text-top"), Some(VerticalAlign::Top));
+        assert_eq!(parse_vertical_align("super"), Some(VerticalAlign::Super));
+    }
+
+    #[test]
+    fn parsea_visibility_y_pointer_events_heredan() {
+        let html = r#"<html><head><style>
+            .h { visibility: hidden; pointer-events: none }
+        </style></head><body>
+          <div class="h"><p>oculto</p></div>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let d = dom.find("div").unwrap();
+        let p = dom.find("p").unwrap();
+        let d_style = eng.compute_with_parent(&d, None);
+        let p_style = eng.compute_with_parent(&p, Some(&d_style));
+        assert_eq!(p_style.visibility, Visibility::Hidden);
+        assert_eq!(p_style.pointer_events, PointerEvents::None);
+    }
+
+    #[test]
+    fn parsea_text_indent_y_word_spacing_heredan() {
+        let html = r#"<html><head><style>
+            p { text-indent: 30px; word-spacing: 5px }
+        </style></head><body><p>x <span>y</span></p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        let span = dom.find("span").unwrap();
+        let p_style = eng.compute(&p);
+        let span_style = eng.compute_with_parent(&span, Some(&p_style));
+        assert_eq!(p_style.text_indent, 30.0);
+        assert_eq!(p_style.word_spacing, 5.0);
+        assert_eq!(span_style.word_spacing, 5.0);
+        assert_eq!(span_style.text_indent, 30.0);
+    }
+
+    #[test]
+    fn parsea_display_grid_y_template() {
+        let html = r#"<html><head><style>
+            .grid {
+                display: grid;
+                grid-template-columns: 100px 1fr 2fr;
+                grid-template-rows: repeat(3, auto);
+                grid-gap: 8px 16px;
+            }
+        </style></head><body><div class="grid"></div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let d = dom.find("div").unwrap();
+        let s = eng.compute(&d);
+        assert_eq!(s.display, Display::Grid);
+        assert_eq!(s.grid_template_columns.len(), 3);
+        assert!(matches!(s.grid_template_columns[0], GridTrackSize::Px(100.0)));
+        assert!(matches!(s.grid_template_columns[1], GridTrackSize::Fr(1.0)));
+        assert!(matches!(s.grid_template_columns[2], GridTrackSize::Fr(2.0)));
+        assert_eq!(s.grid_template_rows.len(), 3);
+        assert!(matches!(s.grid_template_rows[0], GridTrackSize::Auto));
+        assert_eq!(s.gap_row, 8.0);
+        assert_eq!(s.gap_column, 16.0);
+    }
+
+    #[test]
+    fn unidades_viewport_resuelven() {
+        assert_eq!(parse_length_px("50vw"), Some(640.0));
+        assert_eq!(parse_length_px("25vh"), Some(200.0));
+        assert_eq!(parse_length_px("10vmin"), Some(80.0));
+        assert_eq!(parse_length_px("10vmax"), Some(128.0));
+    }
+
+    #[test]
+    fn media_query_filtra_segun_viewport() {
+        assert!(!evaluate_media_query("(max-width: 600px)", DEFAULT_VIEWPORT));
+        assert!(evaluate_media_query("(min-width: 1024px)", DEFAULT_VIEWPORT));
+        assert!(evaluate_media_query(
+            "(min-width: 800px) and (max-width: 1920px)",
+            DEFAULT_VIEWPORT,
+        ));
+        assert!(!evaluate_media_query("print", DEFAULT_VIEWPORT));
+        assert!(evaluate_media_query("screen", DEFAULT_VIEWPORT));
+
+        let html = r#"<html><head><style>
+            @media (max-width: 600px) { p { color: red } }
+            @media (min-width: 1024px) { p { color: blue } }
+        </style></head><body><p>x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        assert_eq!(eng.compute(&p).color, Color::rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn supports_query_filtra_por_parser() {
+        assert!(evaluate_supports_query("(display: flex)"));
+        assert!(evaluate_supports_query("(color: red)"));
+        assert!(!evaluate_supports_query("(display: garbage)"));
+
+        let html = r#"<html><head><style>
+            @supports (display: flex) { p { color: green } }
+            @supports (display: garbage) { p { color: red } }
+        </style></head><body><p>x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        assert_eq!(eng.compute(&p).color, Color::rgb(0, 128, 0));
     }
 }
