@@ -1,27 +1,29 @@
 // =============================================================================
-//  wawa :: apps/asistente — Fase 60 v3 :: scaffolding del asistente WASM
+//  wawa :: apps/asistente — Fase 60 v3+v4 :: scaffolding del asistente WASM
 // -----------------------------------------------------------------------------
-//  Asistente conversacional dentro de wawa. v1 (este archivo) es UI puro:
-//  pinta el fondo, el titulo y un mensaje de estado — todavia sin red,
-//  sin input, sin consulta al `asistente-puente`. La prueba de v1 es que
-//  el modulo se instancie y pinte dentro de la region asignada por el
-//  kernel, sin pedir capacidades nuevas.
+//  Asistente conversacional dentro de wawa. Vamos por capas:
 //
-//  Hoja de ruta (ver `docs/ASISTENTE_WAWA.md`):
-//  - v1 (este commit) :: scaffolding init+tick+pintura.
-//  - v2 :: input de texto (sys_get_scancode + buffer local).
+//  - v1 :: UI puro: pinta el fondo, el titulo, el roadmap.
+//  - v2 :: input de texto local (sys_get_scancode + traduccion +
+//          buffer QUERY). Sin red todavia: Enter no manda nada.
 //  - v3 :: sys_red_enviar / sys_red_recibir sobre `CANAL_ASISTENTE`.
 //  - v4 :: presentar propuestas y disparar la firma humana via
 //          `daemon-firma` cuando aplique.
+//
+//  Este archivo cubre v1+v2.
 // =============================================================================
 
 #![no_std]
 
-// --- Capacidades del kernel `wawa` que esta app usa. v1 solo necesita
-//     `sys_render_frame`; v2+ sumara las otras. ---
+// --- Capacidades del kernel `wawa` que esta app usa. v1+v2 necesitan
+//     `sys_render_frame` y `sys_get_scancode`; v3+ sumara las de red. ---
 #[link(wasm_import_module = "renaser")]
 extern "C" {
     fn sys_render_frame(ptr: u32, len: u32);
+    /// Devuelve el ultimo scancode pulsado en bruto, o 0 si la cola del
+    /// teclado de la app esta vacia. Es la misma syscall que `mudanza`
+    /// usa para anti-rebote del SPACE.
+    fn sys_get_scancode() -> u32;
 }
 
 #[panic_handler]
@@ -46,6 +48,25 @@ const SUTIL: u32 = 0x8C_98_AA;
 
 static mut LIENZO: [u32; ANCHO * ALTO] = [0; ANCHO * ALTO];
 
+// --- Estado de v2: el operador escribe una query en vivo. ---
+
+/// Cota dura de la query — caracteres ASCII. Por encima, los keystrokes
+/// se descartan en silencio (el operador ve que el texto no crece).
+const QUERY_MAX: usize = 64;
+static mut QUERY: [u8; QUERY_MAX] = [0; QUERY_MAX];
+static mut QUERY_LEN: usize = 0;
+
+/// Anti-rebote: el ultimo scancode procesado. Solo el flanco
+/// scancode_actual != scancode_previo cuenta como pulsacion (igual
+/// patron que `mudanza::SPACE_PREV`).
+static mut SCANCODE_PREV: u32 = 0;
+
+/// FASE 60 v2 :: el ultimo carcater visible para que el operador sepa
+/// que el input lo esta viendo. Es un byte ASCII o 0 si no hay nada
+/// reciente. Util para validacion visual del scaffolding antes de que
+/// haya red.
+static mut ULTIMO_CHAR: u8 = 0;
+
 /// El kernel invoca esta funcion UNA sola vez, al instanciar el modulo.
 /// Pinta el primer fotograma de modo que la ventana no nazca vacia.
 #[no_mangle]
@@ -54,14 +75,93 @@ pub extern "C" fn init() {
     volcar();
 }
 
-/// Un fotograma de trabajo. v1 es idempotente — la escena es estatica.
-/// v2 traera estado (query en curso, ultima propuesta, etc.) y este
-/// `tick` lo refrescara segun los scancodes y los mensajes Akasha
-/// pendientes.
+/// Un fotograma de trabajo. v2 :: drena el scancode pendiente, lo
+/// traduce a ASCII si aplica y lo apila en `QUERY`. Sin red todavia,
+/// Enter no manda nada (v3).
 #[no_mangle]
 pub extern "C" fn tick() {
+    procesar_teclado();
     pintar();
     volcar();
+}
+
+/// Lee el scancode pendiente y, si es un flanco de subida nuevo,
+/// actualiza el estado: append a `QUERY` si es printable, pop si es
+/// backspace, Enter es no-op (v3 lo conectara). Make codes (bit 7
+/// limpio) son los unicos que producen efecto; los break codes
+/// (bit 7 puesto) se ignoran — la pulsacion ya quedo contada en su make.
+fn procesar_teclado() {
+    let actual = unsafe { sys_get_scancode() };
+    let prev = unsafe { SCANCODE_PREV };
+    // Solo el flanco sirve: si llega el mismo scancode dos ticks
+    // seguidos sin cambiar, no lo re-procesamos.
+    if actual == prev {
+        return;
+    }
+    unsafe { SCANCODE_PREV = actual };
+    if actual == 0 || actual >= 0x80 {
+        // Cola vacia o break code; ignorar.
+        return;
+    }
+    let sc = actual as u8;
+    // Backspace (scancode 0x0E en set 1).
+    if sc == 0x0E {
+        unsafe {
+            if QUERY_LEN > 0 {
+                QUERY_LEN -= 1;
+                QUERY[QUERY_LEN] = 0;
+            }
+        }
+        return;
+    }
+    // Enter (scancode 0x1C en set 1) — v3 lo enviará por Akasha. Hoy
+    // marca `ULTIMO_CHAR = '\n'` como pista visual y no hace mas.
+    if sc == 0x1C {
+        unsafe { ULTIMO_CHAR = b'\n' };
+        return;
+    }
+    // Letra/cifra/espacio: append si cabe.
+    if let Some(byte) = traducir_scancode_a_ascii(sc) {
+        unsafe {
+            if QUERY_LEN < QUERY_MAX {
+                QUERY[QUERY_LEN] = byte;
+                QUERY_LEN += 1;
+                ULTIMO_CHAR = byte;
+            }
+        }
+    }
+}
+
+/// Mapa minimo de scancodes set 1 a ASCII MAYUSCULA — la app usa la
+/// fuente que solo tiene mayusculas, asi que no perdemos info al subir
+/// a uppercase. Sin shift detection: el operador escribe mayusculas
+/// siempre (consistente con el resto de las apps del kernel).
+fn traducir_scancode_a_ascii(sc: u8) -> Option<u8> {
+    // Cifras '1'-'9' en 0x02..0x0A, '0' en 0x0B.
+    if (0x02..=0x0A).contains(&sc) {
+        return Some(b'1' + (sc - 0x02));
+    }
+    if sc == 0x0B {
+        return Some(b'0');
+    }
+    // Espacio en 0x39.
+    if sc == 0x39 {
+        return Some(b' ');
+    }
+    // Letras QWERTY en set 1. Tabla escrita a mano — chiquita y
+    // determinista, sin alocacion.
+    let letra = match sc {
+        0x10 => b'Q', 0x11 => b'W', 0x12 => b'E', 0x13 => b'R',
+        0x14 => b'T', 0x15 => b'Y', 0x16 => b'U', 0x17 => b'I',
+        0x18 => b'O', 0x19 => b'P',
+        0x1E => b'A', 0x1F => b'S', 0x20 => b'D', 0x21 => b'F',
+        0x22 => b'G', 0x23 => b'H', 0x24 => b'J', 0x25 => b'K',
+        0x26 => b'L',
+        0x2C => b'Z', 0x2D => b'X', 0x2E => b'C', 0x2F => b'V',
+        0x30 => b'B', 0x31 => b'N', 0x32 => b'M',
+        _ => return None,
+    };
+    Some(letra)
 }
 
 // =============================================================================
@@ -77,24 +177,45 @@ fn pintar() {
     rellenar_rect(lienzo, 0, 0, ANCHO, ALTO, FONDO);
     rellenar_rect(lienzo, 0, 0, ANCHO, 36, PANEL);
     dibujar_texto(lienzo, b"ASISTENTE", 18, 10, 2, ACENTO);
-    // Linea fina debajo del titulo para separar visualmente.
     rellenar_rect(lienzo, 0, 36, ANCHO, 2, ACENTO);
 
-    // Cuerpo: estado del scaffolding.
+    // FASE 60 v2 :: la zona de input. Caja con el prompt y el contenido
+    // de QUERY. Vacio cuando el operador no escribio nada todavia.
     let mut y = 56;
-    dibujar_texto(lienzo, b"SCAFFOLDING V1", 18, y, 1, TINTA);
+    dibujar_texto(lienzo, b"PROMPT:", 18, y, 1, SUTIL);
     y += 14;
-    dibujar_texto(lienzo, b"SIN RED  SIN INPUT", 18, y, 1, SUTIL);
-    y += 22;
+    rellenar_rect(lienzo, 18, y, ANCHO - 36, 24, PANEL);
+    rellenar_rect(lienzo, 18, y, 2, 24, ACENTO); // borde izq del input
+    // El texto de la query, en mayusculas (la fuente solo tiene mayus).
+    // SEGURIDAD: lectura de mutable static en contexto single-threaded
+    // — solo `tick` muta `QUERY`/`QUERY_LEN`, y no reentra mientras
+    // `pintar` corre.
+    let (query, query_len): (&[u8], usize) = unsafe { (&QUERY[..QUERY_LEN], QUERY_LEN) };
+    dibujar_texto(lienzo, query, 28, y + 8, 1, TINTA);
+    // Cursor al final — un guion bajo grueso.
+    let cursor_x = 28 + query_len * 6;
+    if cursor_x < ANCHO - 12 {
+        rellenar_rect(lienzo, cursor_x, y + 16, 4, 2, ACENTO);
+    }
+    y += 32;
 
-    // Tres lineas que describen la hoja de ruta — al operador que vea
-    // este fotograma le queda claro que la pieza es real pero aun no
-    // habla con el puente.
-    dibujar_texto(lienzo, b"V2  INPUT DE TEXTO", 18, y, 1, SUTIL);
+    // Roadmap — recordatorio de lo que aun falta.
+    dibujar_texto(lienzo, b"V1  UI  V2  INPUT  V3  RED  V4  FIRMA", 18, y, 1, SUTIL);
     y += 14;
-    dibujar_texto(lienzo, b"V3  CANAL ASISTENTE  AS  0X4153", 18, y, 1, SUTIL);
-    y += 14;
-    dibujar_texto(lienzo, b"V4  PROPUESTA  FIRMA HUMANA", 18, y, 1, SUTIL);
+    dibujar_texto(lienzo, b"CANAL ASISTENTE  AS  0X4153", 18, y, 1, SUTIL);
+    y += 18;
+
+    // FASE 60 v2 :: pista visual del ultimo char aceptado. Sirve para
+    // verificar end-to-end que el flujo IRQ -> kernel -> WASM funciona
+    // cuando ejecutas en QEMU. Vacio si nada paso aun.
+    let ult = unsafe { ULTIMO_CHAR };
+    if ult == b'\n' {
+        dibujar_texto(lienzo, b"ULTIMO: ENTER", 18, y, 1, SUTIL);
+    } else if ult != 0 {
+        dibujar_texto(lienzo, b"ULTIMO:", 18, y, 1, SUTIL);
+        let buf = [ult; 1];
+        dibujar_texto(lienzo, &buf, 18 + 9 * 6, y, 1, TINTA);
+    }
 
     // Pie: una franja sutil que marca el limite de la region.
     rellenar_rect(lienzo, 0, ALTO - 2, ANCHO, 2, ACENTO);

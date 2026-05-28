@@ -202,14 +202,16 @@ Mostrados en orden de dependencia, no de complejidad:
    (cap_net_raw), la multiplexación por id, y el modo daemon.
    ~1-2 sesiones restantes.
 4. **Escribir `asistente.wasm`** como app cdylib en
-   `03_ukupacha/wawa/apps/asistente/`. **v1 scaffolding HECHO** (Fase
-   60 v3): cdylib `no_std + panic=abort`, `init()` y `tick()` pintan
-   título + barra + roadmap dentro de la región 480×240, sin pedir
-   capacidades. Verificado: compila a wasm32-unknown-unknown sin
-   warnings, artefacto release de ~2.6 KB. **Falta v2** (input de
-   texto sobre el lienzo via `sys_get_scancode` + buffer local), **v3**
-   (`sys_red_enviar`/`sys_red_recibir` sobre `CANAL_ASISTENTE`), **v4**
-   (presentar propuestas y disparar firma humana). ~3 sesiones
+   `03_ukupacha/wawa/apps/asistente/`. **v1+v2 HECHO** (Fase 60 v3+v4):
+   cdylib `no_std + panic=abort`, `init()` y `tick()` pintan título +
+   barra + roadmap dentro de la región 480×240. v2 sumó input de texto
+   local: `sys_get_scancode` + edge-detect anti-rebote + tabla mínima
+   de scancodes set 1 → ASCII mayúsculas + buffer `QUERY` de 64 chars
+   con backspace y cursor visible. Enter es no-op (v3 lo conectará a
+   `sys_red_enviar`). Verificado: compila a wasm32-unknown-unknown sin
+   warnings, artefacto release ~3.8 KB. **Falta v3**
+   (`sys_red_enviar`/`sys_red_recibir` sobre `CANAL_ASISTENTE`) y
+   **v4** (presentar propuestas y disparar firma humana). ~2 sesiones
    restantes.
 5. ~~**Cablear `daemon-firma`** para que también firme objetos
    `ConfiguracionFirmada` (hoy sólo firma manifiestos).~~ ✅ HECHO (Fase
