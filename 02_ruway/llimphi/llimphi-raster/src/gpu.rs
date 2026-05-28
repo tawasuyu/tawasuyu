@@ -30,11 +30,23 @@ use llimphi_hal::wgpu;
 use vello::peniko::Color;
 
 /// Pipelines cacheadas. Crear uno por proceso (o por surface format).
+///
+/// Para uso típico via [`GpuBatch`] los campos no se tocan directo. La
+/// API pública existe para callers avanzados que quieran montar su propio
+/// buffer persistente (datos que no cambian por frame: starfield Gaia,
+/// particles iniciales, viewport estático) y emitir draw calls
+/// manualmente reusando estas pipelines.
+///
+/// Layouts:
+/// - Vertex buffer triángulos: `[x: f32, y: f32, rgba: u32]` (12 B/vert).
+/// - Instance buffer rects:    `[x, y, w, h, rgba]`           (20 B/inst).
+/// - Instance buffer líneas:   `[x0, y0, x1, y1, rgba]`       (20 B/inst).
+/// - Bind group 0 binding 0: uniform `{viewport: vec2<f32>, line_width: f32, _pad: f32}` (16 B).
 pub struct GpuPipelines {
-    pub(crate) lines: wgpu::RenderPipeline,
-    pub(crate) tris: wgpu::RenderPipeline,
-    pub(crate) rects: wgpu::RenderPipeline,
-    pub(crate) bind_layout: wgpu::BindGroupLayout,
+    pub lines: wgpu::RenderPipeline,
+    pub tris: wgpu::RenderPipeline,
+    pub rects: wgpu::RenderPipeline,
+    pub bind_layout: wgpu::BindGroupLayout,
 }
 
 impl GpuPipelines {

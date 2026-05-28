@@ -154,6 +154,60 @@ fn main() {
     println!();
     print_scale_verdict(&scale_rows);
 
+    // ----------------------------------------------------------------
+    // Variantes persistentes: el rebuild del batch/scene por frame es
+    // el peor caso. En apps reales (cosmos starfield Gaia, tinkuy
+    // particles iniciales, nakui viewport estático) los datos no
+    // cambian por frame — se uploadean UNA vez y el bucle solo redraw.
+    // Estos benches lo miden.
+    // ----------------------------------------------------------------
+    println!("## Persistente — datos fijos, sólo redraw por frame");
+    println!();
+    println!("Setup (LCG + write_buffer / Scene fill) fuera de la medición; el bucle medido sólo emite render_pass + draw + submit + wait.");
+    println!();
+    println!("### vello (Scene reutilizada sin reset)");
+    println!();
+    println!("| N | ms / frame | fps (1000/ms) |");
+    println!("|---:|---:|---:|");
+    let mut vello_persist_rows: Vec<(u32, f64)> = Vec::new();
+    let skip_v = skip_vello();
+    for n in scale_sizes() {
+        if skip_v {
+            println!("| {} | skipped | — |", fmt_int(n));
+            continue;
+        }
+        let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            bench_vello_persistent(&hal, &mut vello_renderer, &view, n)
+        }));
+        match attempt {
+            Ok(ms) => {
+                let fps = 1000.0 / ms;
+                println!("| {} | {:.2} | {:.1} |", fmt_int(n), ms, fps);
+                let _ = std::io::stdout().flush();
+                vello_persist_rows.push((n, ms));
+            }
+            Err(_) => {
+                println!("| {} | crash | — |", fmt_int(n));
+            }
+        }
+    }
+    println!();
+    println!("### GPU directo (buffer + bind group persistentes)");
+    println!();
+    println!("| N | ms / frame | fps (1000/ms) | Mprim/s |");
+    println!("|---:|---:|---:|---:|");
+    let mut directo_persist_rows: Vec<ScaleRow> = Vec::new();
+    for n in scale_sizes() {
+        let ms = bench_directo_persistent(&hal, &pipelines, &view, n);
+        let fps = 1000.0 / ms;
+        let mps = (n as f64 / 1_000_000.0) / (ms / 1000.0);
+        println!("| {} | {:.2} | {:.1} | {:.2} |", fmt_int(n), ms, fps, mps);
+        let _ = std::io::stdout().flush();
+        directo_persist_rows.push(ScaleRow { n, ms, fps, mps });
+    }
+    println!();
+    print_persistent_verdict(&directo_persist_rows, &vello_persist_rows);
+
     println!("## Validación visual");
     println!();
     let png_vello = "bench_vello_100k.png";
@@ -178,7 +232,12 @@ fn main() {
 
     println!("## Resumen");
     println!();
-    print_summary(&spike_rows, &scale_rows);
+    print_summary(
+        &spike_rows,
+        &scale_rows,
+        &directo_persist_rows,
+        &vello_persist_rows,
+    );
 }
 
 // ============================================================
@@ -398,6 +457,158 @@ fn bench_directo(
     median(&mut samples)
 }
 
+/// Vello persistente: la Scene se construye UNA vez (fill N rects) y
+/// el bucle medido sólo invoca `render_to_texture`. Sin `scene.reset()`.
+fn bench_vello_persistent(
+    hal: &Hal,
+    renderer: &mut vello::Renderer,
+    view: &wgpu::TextureView,
+    n: u32,
+) -> f64 {
+    let mut scene = vello::Scene::new();
+    scene.reset();
+    let mut state: u32 = 0x1234_5678;
+    for _ in 0..n {
+        let (x, y, rgba) = lcg_point(&mut state);
+        let r = (rgba & 0xFF) as u8;
+        let g = ((rgba >> 8) & 0xFF) as u8;
+        let b = ((rgba >> 16) & 0xFF) as u8;
+        let a = ((rgba >> 24) & 0xFF) as u8;
+        let xf = x as f64;
+        let yf = y as f64;
+        scene.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            Color::from_rgba8(r, g, b, a),
+            None,
+            &Rect::new(xf, yf, xf + POINT_PX as f64, yf + POINT_PX as f64),
+        );
+    }
+    let mut samples: Vec<f64> = Vec::with_capacity(MEASURED);
+    for frame in 0..(WARMUP + MEASURED) {
+        let t0 = Instant::now();
+        renderer
+            .render_to_texture(
+                &hal.device,
+                &hal.queue,
+                &scene,
+                view,
+                &vello::RenderParams {
+                    base_color: palette::css::BLACK,
+                    width: W,
+                    height: H,
+                    antialiasing_method: vello::AaConfig::Area,
+                },
+            )
+            .expect("vello render");
+        hal.device.poll(wgpu::Maintain::Wait);
+        let dt = t0.elapsed().as_secs_f64() * 1000.0;
+        if frame >= WARMUP {
+            samples.push(dt);
+        }
+    }
+    median(&mut samples)
+}
+
+/// GPU directo persistente: instance buffer + uniform buffer + bind
+/// group se construyen UNA vez. Bucle medido sólo abre render_pass,
+/// hace `draw(0..6, 0..n)` y submit.
+///
+/// Replica el layout que pinta `GpuBatch::add_rect` por debajo
+/// (instance stride 20 B = [x:f32, y:f32, w:f32, h:f32, rgba:u32]),
+/// usando el `rects` pipeline + `bind_layout` expuestos por
+/// `GpuPipelines`.
+fn bench_directo_persistent(
+    hal: &Hal,
+    pipelines: &GpuPipelines,
+    view: &wgpu::TextureView,
+    n: u32,
+) -> f64 {
+    // Empaquetar instancias UNA vez.
+    let mut bytes = Vec::with_capacity(n as usize * 20);
+    let mut state: u32 = 0x1234_5678;
+    for _ in 0..n {
+        let (x, y, rgba) = lcg_point(&mut state);
+        bytes.extend_from_slice(&x.to_ne_bytes());
+        bytes.extend_from_slice(&y.to_ne_bytes());
+        bytes.extend_from_slice(&POINT_PX.to_ne_bytes());
+        bytes.extend_from_slice(&POINT_PX.to_ne_bytes());
+        bytes.extend_from_slice(&rgba.to_ne_bytes());
+    }
+    let inst_buf = hal.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("persist-rects"),
+        size: bytes.len() as u64,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    hal.queue.write_buffer(&inst_buf, 0, &bytes);
+
+    // Uniforms (viewport + line_width).
+    let u_data: [f32; 4] = [W as f32, H as f32, 1.0, 0.0];
+    let mut u_bytes = Vec::with_capacity(16);
+    for v in u_data {
+        u_bytes.extend_from_slice(&v.to_ne_bytes());
+    }
+    let uniforms = hal.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("persist-uniforms"),
+        size: 16,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    hal.queue.write_buffer(&uniforms, 0, &u_bytes);
+
+    let bind_group = hal.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("persist-bg"),
+        layout: &pipelines.bind_layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: uniforms.as_entire_binding(),
+        }],
+    });
+
+    // Asegurar que toda la escritura previa esté en la GPU antes de
+    // empezar a medir frames — si no, el primer frame paga el upload.
+    hal.queue.submit(std::iter::empty::<wgpu::CommandBuffer>());
+    hal.device.poll(wgpu::Maintain::Wait);
+
+    let mut samples: Vec<f64> = Vec::with_capacity(MEASURED);
+    for frame in 0..(WARMUP + MEASURED) {
+        let t0 = Instant::now();
+        let mut encoder = hal.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor {
+                label: Some("persist-enc"),
+            },
+        );
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("persist-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&pipelines.rects);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.set_vertex_buffer(0, inst_buf.slice(..));
+            pass.draw(0..6, 0..n);
+        }
+        hal.queue.submit(std::iter::once(encoder.finish()));
+        hal.device.poll(wgpu::Maintain::Wait);
+        let dt = t0.elapsed().as_secs_f64() * 1000.0;
+        if frame >= WARMUP {
+            samples.push(dt);
+        }
+    }
+    median(&mut samples)
+}
+
 fn lcg_point(state: &mut u32) -> (f32, f32, u32) {
     *state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
     let x = (*state % W) as f32;
@@ -450,6 +661,40 @@ fn print_spike_verdict(rows: &[SpikeRow]) {
     println!();
 }
 
+fn print_persistent_verdict(
+    directo: &[ScaleRow],
+    vello: &[(u32, f64)],
+) {
+    let d_1m = directo.iter().find(|r| r.n == 1_000_000);
+    let v_1m = vello.iter().find(|(n, _)| *n == 1_000_000);
+    match d_1m {
+        Some(r) if r.fps >= 60.0 => {
+            println!(
+                "**Veredicto persistente @ 1M:** directo {:.1} fps ≥ 60 → **PASA**.",
+                r.fps
+            );
+        }
+        Some(r) => {
+            println!(
+                "**Veredicto persistente @ 1M:** directo {:.1} fps < 60 → falla incluso sin rebuild.",
+                r.fps
+            );
+        }
+        None => println!("**Veredicto:** sin datos a 1M."),
+    }
+    if let (Some(d), Some((_, v_ms))) = (d_1m, v_1m) {
+        let factor = v_ms / d.ms;
+        println!(
+            "**Factor persistente @ 1M:** vello {:.1} ms / directo {:.1} ms = {:.2}× ({})",
+            v_ms,
+            d.ms,
+            factor,
+            if factor >= 5.0 { "≥5×" } else { "<5×" }
+        );
+    }
+    println!();
+}
+
 fn print_scale_verdict(rows: &[ScaleRow]) {
     let at_1m = rows.iter().find(|r| r.n == 1_000_000);
     match at_1m {
@@ -466,11 +711,16 @@ fn print_scale_verdict(rows: &[ScaleRow]) {
     println!();
 }
 
-fn print_summary(spike: &[SpikeRow], scale: &[ScaleRow]) {
+fn print_summary(
+    spike: &[SpikeRow],
+    scale: &[ScaleRow],
+    persist_directo: &[ScaleRow],
+    persist_vello: &[(u32, f64)],
+) {
     println!("Copiar lo que sigue al chat:");
     println!();
     println!("```");
-    println!("vello vs directo:");
+    println!("rebuild por frame — vello vs directo:");
     for r in spike {
         let v = match (r.vello_crashed, r.vello_ms) {
             (true, _) => "crash".to_string(),
@@ -481,12 +731,35 @@ fn print_summary(spike: &[SpikeRow], scale: &[ScaleRow]) {
             .factor
             .map(|x| format!("{:.2}x", x))
             .unwrap_or_else(|| "-".to_string());
-        println!("  {:>8}  vello={:>10}  directo={:>7.1}ms  factor={}", fmt_int(r.n), v, r.directo_ms, f);
+        println!("  {:>10}  vello={:>10}  directo={:>7.1}ms  factor={}", fmt_int(r.n), v, r.directo_ms, f);
     }
     println!();
-    println!("escalado directo:");
+    println!("rebuild por frame — escalado directo:");
     for r in scale {
-        println!("  {:>9}  {:>7.1}ms  {:>5.1}fps  {:>5.2}Mprim/s", fmt_int(r.n), r.ms, r.fps, r.mps);
+        println!("  {:>10}  {:>7.1}ms  {:>5.1}fps  {:>5.2}Mprim/s", fmt_int(r.n), r.ms, r.fps, r.mps);
+    }
+    println!();
+    println!("persistente (datos fijos, sólo redraw):");
+    for r in persist_directo {
+        let v_ms = persist_vello
+            .iter()
+            .find(|(n, _)| *n == r.n)
+            .map(|(_, ms)| format!("{:>7.1}ms", ms))
+            .unwrap_or_else(|| "       —".to_string());
+        let factor = persist_vello
+            .iter()
+            .find(|(n, _)| *n == r.n)
+            .map(|(_, vms)| format!("factor={:.2}x", vms / r.ms))
+            .unwrap_or_else(|| "factor=  —  ".to_string());
+        println!(
+            "  {:>10}  vello={}  directo={:>7.1}ms  {}  {:>5.1}fps  {:>5.2}Mprim/s",
+            fmt_int(r.n),
+            v_ms,
+            r.ms,
+            factor,
+            r.fps,
+            r.mps,
+        );
     }
     println!("```");
 }
