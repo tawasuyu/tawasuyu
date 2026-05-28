@@ -1605,6 +1605,9 @@ fn draw_overlay(
         max_width: Some(rect.w),
         alignment: llimphi_ui::llimphi_text::Alignment::Center,
         line_height: 1.0,
+    
+        italic: false,
+        font_family: None,
     };
     let layout = llimphi_ui::llimphi_text::layout_block(ts, &title_block);
     llimphi_ui::llimphi_text::draw_layout(scene, &layout, tcolor, title_block.origin);
@@ -1620,6 +1623,9 @@ fn draw_overlay(
         max_width: Some(rect.w),
         alignment: llimphi_ui::llimphi_text::Alignment::Center,
         line_height: 1.0,
+    
+        italic: false,
+        font_family: None,
     };
     let layout = llimphi_ui::llimphi_text::layout_block(ts, &sub_block);
     llimphi_ui::llimphi_text::draw_layout(scene, &layout, sub_color, sub_block.origin);

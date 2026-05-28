@@ -278,6 +278,9 @@ fn paint_page(scene: &mut vello::Scene, ts: &mut Typesetter, w: u32, h: u32) {
             max_width: Some(inner_w),
             alignment: Alignment::Center,
             line_height: 1.0,
+        
+            italic: false,
+            font_family: None,
         },
     );
 
@@ -293,6 +296,9 @@ fn paint_page(scene: &mut vello::Scene, ts: &mut Typesetter, w: u32, h: u32) {
             max_width: Some(inner_w),
             alignment: Alignment::Center,
             line_height: 1.0,
+        
+            italic: false,
+            font_family: None,
         },
     );
 
@@ -308,6 +314,9 @@ fn paint_page(scene: &mut vello::Scene, ts: &mut Typesetter, w: u32, h: u32) {
             max_width: Some(inner_w),
             alignment: Alignment::Center,
             line_height: 1.0,
+        
+            italic: false,
+            font_family: None,
         },
     );
 
@@ -323,6 +332,9 @@ fn paint_page(scene: &mut vello::Scene, ts: &mut Typesetter, w: u32, h: u32) {
             max_width: Some(inner_w),
             alignment: Alignment::Justify,
             line_height: 1.5,
+        
+            italic: false,
+            font_family: None,
         },
     );
 
@@ -338,6 +350,9 @@ fn paint_page(scene: &mut vello::Scene, ts: &mut Typesetter, w: u32, h: u32) {
             max_width: Some(inner_w),
             alignment: Alignment::Start,
             line_height: 1.3,
+        
+            italic: false,
+            font_family: None,
         },
     );
 }

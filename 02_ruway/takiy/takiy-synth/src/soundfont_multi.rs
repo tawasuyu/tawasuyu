@@ -194,10 +194,48 @@ mod tests {
     }
 
     #[test]
+    fn channels_full_table_first_30_tracks() {
+        // Mapeo esperado: 0..=8 directo, 9 salta a 10, 10..=14 → 11..=15,
+        // 15 envuelve (módulo 15 melódicos) → repite la secuencia.
+        let expected: [i32; 30] = [
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15,
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15,
+        ];
+        for (track, &want) in expected.iter().enumerate() {
+            assert_eq!(channel_for_track(track), want, "track {track}");
+        }
+    }
+
+    #[test]
+    fn channels_never_return_drum_channel() {
+        // Cualquier track posible debe evitar el canal 9 (drums GM).
+        for track in 0..1_000 {
+            let ch = channel_for_track(track);
+            assert_ne!(ch, 9, "track {track} cayó en drums");
+            assert!((0..16).contains(&ch), "track {track} → canal {ch} fuera de [0,16)");
+        }
+    }
+
+    #[test]
     fn unmapped_track_falls_back_to_default_program() {
         assert_eq!(program_lookup(&[5], 99, 0), 5);
         assert_eq!(program_lookup(&[5], 99, 7), 99);
         assert_eq!(program_lookup(&[], 42, 0), 42);
+    }
+
+    #[test]
+    fn program_lookup_indexes_directly_when_present() {
+        let table = [10, 20, 30, 40];
+        for (idx, &want) in table.iter().enumerate() {
+            assert_eq!(program_lookup(&table, 0, idx), want);
+        }
+    }
+
+    #[test]
+    fn program_lookup_uses_default_past_end_without_panicking() {
+        let table = [7, 8];
+        assert_eq!(program_lookup(&table, 99, 2), 99);
+        assert_eq!(program_lookup(&table, 99, 100_000), 99);
     }
 
     /// Test de integración: sólo corre si TAKIY_SF2 apunta a un .sf2.

@@ -59,6 +59,37 @@ pub fn write_wav_to<W: Write>(buf: &AudioBuffer, w: &mut W) -> io::Result<()> {
 mod tests {
     use super::*;
 
+    /// Relee un WAV PCM 16-bit mono escrito por `write_wav_to` y devuelve
+    /// `(sample_rate, channels, bits_per_sample, samples_f32)`. Es un
+    /// parser feo a propósito (sólo cubre el formato que escribimos): si
+    /// el header cambia, este parser falla y los tests se enteran.
+    fn parse_wav(bytes: &[u8]) -> (u32, u16, u16, Vec<f32>) {
+        assert_eq!(&bytes[0..4], b"RIFF");
+        assert_eq!(&bytes[8..12], b"WAVE");
+        assert_eq!(&bytes[12..16], b"fmt ");
+        let fmt_size = u32::from_le_bytes(bytes[16..20].try_into().unwrap());
+        assert_eq!(fmt_size, 16);
+        let format = u16::from_le_bytes(bytes[20..22].try_into().unwrap());
+        assert_eq!(format, 1, "PCM");
+        let channels = u16::from_le_bytes(bytes[22..24].try_into().unwrap());
+        let sr = u32::from_le_bytes(bytes[24..28].try_into().unwrap());
+        let byte_rate = u32::from_le_bytes(bytes[28..32].try_into().unwrap());
+        let block_align = u16::from_le_bytes(bytes[32..34].try_into().unwrap());
+        let bps = u16::from_le_bytes(bytes[34..36].try_into().unwrap());
+        // Coherencia interna del fmt chunk.
+        assert_eq!(byte_rate, sr * channels as u32 * (bps as u32 / 8));
+        assert_eq!(block_align, channels * (bps / 8));
+        assert_eq!(&bytes[36..40], b"data");
+        let data_size = u32::from_le_bytes(bytes[40..44].try_into().unwrap()) as usize;
+        let body = &bytes[44..44 + data_size];
+        let mut samples = Vec::with_capacity(body.len() / 2);
+        for chunk in body.chunks_exact(2) {
+            let q = i16::from_le_bytes([chunk[0], chunk[1]]);
+            samples.push(q as f32 / i16::MAX as f32);
+        }
+        (sr, channels, bps, samples)
+    }
+
     #[test]
     fn writes_valid_riff_header() {
         let buf = AudioBuffer::silence(44_100, 4);
@@ -70,13 +101,31 @@ mod tests {
         assert_eq!(&out[12..16], b"fmt ");
         assert_eq!(&out[36..40], b"data");
 
-        // sample_rate at bytes 24..28
         let sr = u32::from_le_bytes(out[24..28].try_into().unwrap());
         assert_eq!(sr, 44_100);
 
         // data size = 4 samples * 2 bytes = 8
         let ds = u32::from_le_bytes(out[40..44].try_into().unwrap());
         assert_eq!(ds, 8);
+
+        // riff_size = 36 + data_size
+        let rs = u32::from_le_bytes(out[4..8].try_into().unwrap());
+        assert_eq!(rs, 36 + 8);
+
+        // Total file size = riff_size + 8 ("RIFF" + size field).
+        assert_eq!(out.len(), 44 + 8);
+    }
+
+    #[test]
+    fn header_fields_are_internally_consistent() {
+        let buf = AudioBuffer { sample_rate: 48_000, samples: vec![0.0; 1024] };
+        let mut out = Vec::new();
+        write_wav_to(&buf, &mut out).unwrap();
+        let (sr, channels, bps, samples) = parse_wav(&out);
+        assert_eq!(sr, 48_000);
+        assert_eq!(channels, 1);
+        assert_eq!(bps, 16);
+        assert_eq!(samples.len(), 1024);
     }
 
     #[test]
@@ -84,10 +133,55 @@ mod tests {
         let buf = AudioBuffer { sample_rate: 8_000, samples: vec![2.0, -2.0] };
         let mut out = Vec::new();
         write_wav_to(&buf, &mut out).unwrap();
-        // Last 4 bytes son las 2 muestras i16.
         let lo = i16::from_le_bytes(out[44..46].try_into().unwrap());
         let hi = i16::from_le_bytes(out[46..48].try_into().unwrap());
         assert_eq!(lo, i16::MAX);
         assert_eq!(hi, -i16::MAX);
+    }
+
+    #[test]
+    fn roundtrip_preserves_samples_within_quantization_error() {
+        // Una rampa de 256 valores en [-1, 1].
+        let samples: Vec<f32> = (0..256).map(|i| (i as f32 / 255.0) * 2.0 - 1.0).collect();
+        let buf = AudioBuffer { sample_rate: 22_050, samples: samples.clone() };
+        let mut out = Vec::new();
+        write_wav_to(&buf, &mut out).unwrap();
+        let (sr, channels, _bps, decoded) = parse_wav(&out);
+        assert_eq!(sr, 22_050);
+        assert_eq!(channels, 1);
+        assert_eq!(decoded.len(), samples.len());
+        // Cuantización a 16-bit: error máximo ≈ 1 / i16::MAX ≈ 3e-5.
+        let max_err = decoded
+            .iter()
+            .zip(samples.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0_f32, f32::max);
+        assert!(max_err < 1e-4, "max_err = {max_err}");
+    }
+
+    #[test]
+    fn empty_buffer_yields_only_header() {
+        let buf = AudioBuffer { sample_rate: 44_100, samples: vec![] };
+        let mut out = Vec::new();
+        write_wav_to(&buf, &mut out).unwrap();
+        assert_eq!(out.len(), 44);
+        let ds = u32::from_le_bytes(out[40..44].try_into().unwrap());
+        assert_eq!(ds, 0);
+        let rs = u32::from_le_bytes(out[4..8].try_into().unwrap());
+        assert_eq!(rs, 36);
+    }
+
+    #[test]
+    fn file_roundtrip_through_tempfile() {
+        let buf = AudioBuffer { sample_rate: 16_000, samples: vec![0.1, -0.2, 0.3, -0.4] };
+        let path = std::env::temp_dir().join("takiy-wav-roundtrip.wav");
+        write_wav(&buf, &path).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let (sr, channels, bps, decoded) = parse_wav(&bytes);
+        assert_eq!(sr, 16_000);
+        assert_eq!(channels, 1);
+        assert_eq!(bps, 16);
+        assert_eq!(decoded.len(), 4);
     }
 }

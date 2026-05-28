@@ -1,42 +1,32 @@
 //! `takiy-app-llimphi` — piano roll visor + reproductor sobre Llimphi.
 //!
-//! MVP feo: carga un `Score` (built-in o desde `TAKIY_SCORE_JSON`), lo
-//! pinta como grid pitch×beats con una nota = un rect, y reproduce con
-//! Space. La síntesis es osciladores (`takiy-synth::OscRenderer`); el
-//! audio sale por el device default (`takiy-playback::Player` sobre
-//! cpal). Sin edición todavía.
+//! Carga un `Score` (built-in o desde `TAKIY_SCORE_JSON`), lo pinta como
+//! grid pitch×beats y reproduce con Space. La síntesis es osciladores
+//! (`takiy-synth::OscRenderer`) o SF2 (`MultiProgramRenderer` si
+//! `TAKIY_SF2` apunta a un soundfont); el audio sale por el device
+//! default (`takiy-playback::Player` sobre cpal).
+//!
+//! La lógica editable (Score + selección + pista activa) vive en
+//! [`takiy_app::EditorState`] — testeada headless en `examples/smoke.rs`.
+//! Acá quedan sólo el bridge Llimphi y la integración con el `Player`.
 //!
 //! Controles:
 //!
 //! - `Space`      — toca / detiene el score.
-//! - `Tab`        — cicla la pista activa (la próxima nota que agregues
-//!                  irá ahí; el borde fino resalta cuál está activa).
-//! - `N`          — crea una pista nueva en blanco y la activa.
-//! - Click izq.   — agrega una nota en la celda vacía (1 beat, vel 96)
-//!                  en la pista activa, y la selecciona. Si caés sobre
-//!                  una nota existente, la selecciona.
-//! - Click der.   — borra la nota bajo el cursor (de cualquier pista).
+//! - `Tab`        — cicla la pista activa.
+//! - `N`          — crea una pista nueva y la activa.
+//! - Click izq.   — agrega una nota (o selecciona la existente bajo el cursor).
+//! - Click der.   — borra la nota bajo el cursor.
 //! - `←` / `→`    — mueve la nota seleccionada ±1 beat.
 //! - `↑` / `↓`    — mueve la nota seleccionada ±1 semitono.
-//! - `+` / `-`    — alarga / acorta la nota seleccionada en 0.5 beats
-//!                  (mín. 0.25, máx. 16).
-//! - `[` / `]`    — baja / sube la velocity de la nota seleccionada en
-//!                  10 (rango 1..=127).
+//! - `+` / `-`    — alarga / acorta la nota seleccionada en 0.5 beats.
+//! - `[` / `]`    — baja / sube la velocity de la nota seleccionada en 10.
 //! - `Del`/`⌫`    — borra la nota seleccionada.
-//! - `S`          — guarda el score a `TAKIY_SCORE_JSON` (o a
-//!                  `/tmp/takiy_<unix>.takiy.json` si la variable no
-//!                  está seteada).
-//! - `,` / `.`    — baja / sube el tempo del score en 5 BPM (clamp
-//!                  30..=300).
-//! - `p` / `P`    — programa GM anterior / siguiente para la pista
-//!                  activa (sólo aplica si hay SF2 cargado).
-//! - `Ctrl+⌫`     — borra la pista activa (no se permite quedarse
-//!                  sin pistas; si sólo queda una, no hace nada).
+//! - `S`          — guarda el score a `TAKIY_SCORE_JSON` (o `/tmp/...`).
+//! - `,` / `.`    — baja / sube el tempo del score en 5 BPM.
+//! - `p` / `P`    — programa GM anterior / siguiente para la pista activa (SF2).
+//! - `Ctrl+⌫`     — borra la pista activa (mínimo 1).
 //! - `Esc`        — cierra la ventana.
-//!
-//! Si `TAKIY_SCORE_JSON` está seteado, la app además **auto-guarda**
-//! después de cada edición (agregar, borrar, mover). No hay debounce:
-//! un score normal son pocos KB y escribirlo es instantáneo.
 
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::prelude::{percent, Size, Style};
@@ -44,106 +34,42 @@ use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Rect as KurboRect, Stro
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::llimphi_text::{draw_block, Alignment as TextAlignment, TextBlock, Typesetter};
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, PaintRect, View};
-use takiy_core::{Pitch, PitchClass, Score, ScoreNote, Track};
+use takiy_app::{
+    cell_at, default_save_path_for_save, gm_program_for_track_name, gm_program_name,
+    hit_test_note, load_score_or_demo, pitch_range, write_score, EditMsg, EditorState,
+    HEADER_H, KEYBOARD_W, MAX_KEY_H, MIN_BEAT_W, MIN_KEY_H,
+};
+use takiy_core::{PitchClass, Score};
 use takiy_playback::Player;
 use takiy_synth::{AudioBuffer, MultiProgramRenderer, OscRenderer, Renderer};
-
-const KEYBOARD_W: f32 = 56.0;
-const HEADER_H: f32 = 28.0;
-const MIN_KEY_H: f32 = 8.0;
-const MAX_KEY_H: f32 = 22.0;
-const MIN_BEAT_W: f32 = 24.0;
 
 #[derive(Clone)]
 enum Msg {
     TogglePlay,
-    /// Tick periódico para detectar que el playback terminó solo (y
-    /// repintar el header). El estado real vive en el `Player`.
+    /// Tick periódico para refrescar el estado de playback. El cursor se
+    /// pinta del `Player::position_samples()` (sample-accurate, ver F0.2).
     Tick,
-    /// Agrega una nota en la pista activa con `start = beat`,
-    /// `duration = 1.0` y `velocity = 96`. La pista la decide `update`
-    /// según `model.active_track`, no el callback de UI, así si el
-    /// usuario apretó Tab justo antes del click se respeta el último
-    /// estado del modelo.
-    AddNote { beat: f32, midi: u8 },
-    /// Borra la nota `note_idx` de `track_idx`. Si el índice ya no
-    /// existe (race con otra edición), no hace nada.
-    DeleteNote { track: usize, idx: usize },
-    /// Marca una nota como seleccionada (highlight). Las flechas y
-    /// Delete operan sobre ésta.
-    Select { track: usize, idx: usize },
-    /// Mueve la nota seleccionada `d_beat` beats (puede ser negativo)
-    /// y `d_semitones` semitonos. Si el resultado es inválido (start
-    /// < 0 o pitch fuera del rango MIDI), no se aplica.
-    MoveSelected { d_beat: f32, d_semitones: i32 },
-    /// Borra la nota seleccionada y limpia la selección.
-    DeleteSelected,
-    /// Cambia la duración de la nota seleccionada en `d_beat` beats
-    /// (puede ser negativo). Se aplica con clamp `[0.25, 16.0]`.
-    ResizeSelected { d_beat: f32 },
-    /// Cambia la velocity de la nota seleccionada (clamp `[1, 127]`).
-    NudgeVelocity { delta: i32 },
-    /// Cambia el tempo del score en `delta` BPM (clamp `[30, 300]`).
-    NudgeTempo { delta: f32 },
-    /// Cambia el programa GM de la pista activa en `delta` (wrap
-    /// 0..=127). No hace nada si no hay SF2 cargado.
+    /// Edición pura — se delega a `EditorState::apply`.
+    Edit(EditMsg),
+    /// Cambia el programa GM de la pista activa en `delta` (wrap 0..=127).
     NudgeProgram { delta: i32 },
-    /// Avanza la pista activa al siguiente índice (wrap).
-    CycleTrack,
-    /// Agrega una pista nueva (vacía) y la activa.
-    NewTrack,
-    /// Borra la pista activa. No hace nada si sólo queda una (no
-    /// dejamos al editor sin ningún destino para nuevas notas).
-    DeleteActiveTrack,
-    /// Guarda el score actual a `TAKIY_SCORE_JSON` (o a `/tmp/...` si
-    /// la variable no está seteada).
+    /// Guarda el score actual a `TAKIY_SCORE_JSON` (o a `/tmp/...`).
     Save,
     Quit,
 }
 
 struct Model {
-    score: Score,
+    editor: EditorState,
     source: String,
     theme: Theme,
-    /// `Some` si el device default abrió bien. Si abrió mal, el visor
-    /// sigue siendo útil sin sonido — sólo loguea el error al arrancar.
     player: Option<Player>,
-    /// Renderer SF2 si `TAKIY_SF2` apuntó a un soundfont válido. Si es
-    /// `None`, caemos a osciladores básicos (`OscRenderer`).
     sf2: Option<MultiProgramRenderer>,
-    /// Etiqueta del motor de síntesis en uso ("osc" o "sf2 file.sf2"),
-    /// para el header.
     engine: String,
-    /// Refleja el estado del `Player`. Lo mantenemos en el modelo para
-    /// repintar el header sin tener que llamar `is_playing()` desde el
-    /// painter (que correría en cada frame).
     playing: bool,
-    /// Mensaje breve para el header — ayuda a debuggear el error si el
-    /// device no abrió, o muestra "playing"/"paused".
     status: String,
-    /// Índice de la pista activa para edición. Las notas nuevas (click
-    /// izquierdo en celda vacía) se agregan acá. Si el score está
-    /// vacío al arrancar — caso raro — se crea una pista por default.
-    active_track: usize,
-    /// Counter para nombrar nuevas pistas creadas con `N`.
-    next_track_n: usize,
-    /// Nota seleccionada por click. Las flechas y `Del` operan sobre
-    /// ésta; el painter le dibuja un borde más fuerte. Se mantiene
-    /// actualizada después de cada movimiento (que cambia el índice
-    /// porque `Track::add` re-inserta en orden por `start`).
-    selected: Option<(usize, usize)>,
-    /// Ruta donde escribir el score. `Some` si `TAKIY_SCORE_JSON` está
-    /// seteado (y entonces se auto-guarda en cada edición). `None` si
-    /// no — la tecla `S` la setea a un path en `/tmp` al primer save
-    /// explícito.
-    save_path: Option<std::path::PathBuf>,
-    /// Timestamp en que arrancó la reproducción actual. `Some` mientras
-    /// suena, `None` cuando está detenida. El painter lo usa para
-    /// posicionar el cursor de playback en el grid.
-    playback_started_at: Option<std::time::Instant>,
-    /// BPM con el que se lanzó el render actual. Se congela en
-    /// `TogglePlay`: si cambia el tempo del score durante la
-    /// reproducción, el cursor sigue a la velocidad del render real.
+    /// BPM con el que se lanzó el render actual. Se congela en `TogglePlay`:
+    /// si cambia el tempo durante la reproducción, el cursor avanza a la
+    /// velocidad del render real (no al BPM editado).
     playback_bpm: f32,
 }
 
@@ -162,16 +88,12 @@ impl App for Takiy {
     }
 
     fn init(handle: &Handle<Msg>) -> Model {
-        let (mut score, source) = load_score();
-        if score.tracks().is_empty() {
-            // Garantizamos una pista para que el primer click izquierdo
-            // tenga dónde aterrizar sin que el usuario tenga que pulsar N.
-            score.add_track(Track::new("track 1"));
-        }
+        let (score, source) = load_score_or_demo();
+        let editor = build_editor(score);
         eprintln!(
             "takiy · cargado {source} ({} pistas, {:.1} beats)",
-            score.tracks().len(),
-            score.duration_beats()
+            editor.score.tracks().len(),
+            editor.score.duration_beats()
         );
 
         let (player, status) = match Player::open() {
@@ -191,19 +113,17 @@ impl App for Takiy {
         };
 
         let target_sr = player.as_ref().map(Player::sample_rate).unwrap_or(44_100);
-        let (sf2, engine) = load_sf2(&score, target_sr);
+        let (sf2, engine) = load_sf2(&editor.score, target_sr);
 
-        // Tick periódico ~20 Hz. Sirve para dos cosas:
-        // (a) detectar que el playback terminó solo (vive en `update`,
-        //     el único con acceso al `Player`);
-        // (b) refrescar la posición del cursor de reproducción.
-        // El costo es despreciable: el `update` es no-op cuando no hay
-        // nada que reflejar.
+        // Tick periódico ~20 Hz. Sirve para repintar el cursor de
+        // reproducción y detectar fin de buffer sin tocar el callback.
         handle.spawn_periodic(std::time::Duration::from_millis(50), || Msg::Tick);
 
-        let n_tracks = score.tracks().len();
+        let mut editor = editor;
+        editor.save_path = std::env::var_os("TAKIY_SCORE_JSON").map(std::path::PathBuf::from);
+
         Model {
-            score,
+            editor,
             source,
             theme: Theme::dark(),
             player,
@@ -211,31 +131,12 @@ impl App for Takiy {
             engine,
             playing: false,
             status,
-            active_track: 0,
-            next_track_n: n_tracks + 1,
-            selected: None,
-            save_path: std::env::var_os("TAKIY_SCORE_JSON").map(std::path::PathBuf::from),
-            playback_started_at: None,
             playback_bpm: 120.0,
         }
     }
 
     fn update(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
-        let is_edit = matches!(
-            msg,
-            Msg::AddNote { .. }
-                | Msg::DeleteNote { .. }
-                | Msg::MoveSelected { .. }
-                | Msg::DeleteSelected
-                | Msg::ResizeSelected { .. }
-                | Msg::NudgeVelocity { .. }
-                | Msg::NudgeTempo { .. }
-                | Msg::NewTrack
-                | Msg::DeleteActiveTrack
-        );
-        // Nota: `NudgeProgram` cambia el SF2 en memoria pero no el
-        // `Score` serializable, así que no se persiste (vive sólo en
-        // la sesión actual).
+        let is_edit_msg = matches!(&msg, Msg::Edit(_));
         match msg {
             Msg::Quit => {
                 handle.quit();
@@ -247,13 +148,15 @@ impl App for Takiy {
                 if model.playing {
                     player.stop();
                     model.playing = false;
-                    model.playback_started_at = None;
                     model.status = "stopped".into();
                 } else {
-                    let buf = render_score(&model.score, model.sf2.as_ref(), player.sample_rate());
+                    let buf = render_score(
+                        &model.editor.score,
+                        model.sf2.as_ref(),
+                        player.sample_rate(),
+                    );
                     let secs = buf.duration_seconds();
-                    model.playback_bpm = model.score.tempo_bpm;
-                    model.playback_started_at = Some(std::time::Instant::now());
+                    model.playback_bpm = model.editor.score.tempo_bpm;
                     player.play(buf);
                     model.playing = true;
                     model.status = format!("playing · {secs:.1}s");
@@ -261,142 +164,16 @@ impl App for Takiy {
             }
             Msg::Tick => {
                 if model.playing {
-                    let still = model
-                        .player
-                        .as_ref()
-                        .is_some_and(|p| p.is_playing());
+                    let still = model.player.as_ref().is_some_and(|p| p.is_playing());
                     if !still {
                         model.playing = false;
-                        model.playback_started_at = None;
                         model.status = "stopped".into();
                     }
                 }
-                // Si no está playing y el tick llega igual, no hace
-                // nada — sólo dispara repaint, que es barato.
             }
-            Msg::AddNote { beat, midi } => {
-                let Some(pitch) = Pitch::from_midi(midi) else {
-                    return model;
-                };
-                let track_idx = model.active_track.min(model.score.tracks().len().saturating_sub(1));
-                let new_note = ScoreNote::new(pitch, beat, 1.0, 96);
-                if let Some(track) = model.score.track_mut(track_idx) {
-                    track.add(new_note);
-                    if let Some(new_idx) = find_note_idx(track.notes(), &new_note) {
-                        model.selected = Some((track_idx, new_idx));
-                    }
-                    model.status = format!(
-                        "added · pista {} · beat {:.0} · midi {midi}",
-                        track_idx, beat
-                    );
-                }
-            }
-            Msg::DeleteNote { track, idx } => {
-                if let Some(t) = model.score.track_mut(track) {
-                    if t.remove(idx).is_some() {
-                        // Si borramos la nota seleccionada (o una
-                        // anterior en la misma pista, que correría los
-                        // índices), limpiamos la selección. Para los
-                        // otros casos, queda donde estaba.
-                        if let Some((sel_t, sel_i)) = model.selected {
-                            if sel_t == track {
-                                if sel_i == idx {
-                                    model.selected = None;
-                                } else if sel_i > idx {
-                                    model.selected = Some((sel_t, sel_i - 1));
-                                }
-                            }
-                        }
-                        model.status = format!("deleted · pista {track} · nota #{idx}");
-                    }
-                }
-            }
-            Msg::Select { track, idx } => {
-                let exists = model
-                    .score
-                    .track(track)
-                    .is_some_and(|t| idx < t.notes().len());
-                if exists {
-                    model.selected = Some((track, idx));
-                    model.status = format!("selected · pista {track} · nota #{idx}");
-                }
-            }
-            Msg::MoveSelected { d_beat, d_semitones } => {
-                let Some((track_idx, note_idx)) = model.selected else {
-                    return model;
-                };
-                let Some(track) = model.score.track_mut(track_idx) else {
-                    return model;
-                };
-                let Some(old) = track.notes().get(note_idx).copied() else {
-                    return model;
-                };
-                let new_start = old.start + d_beat;
-                if new_start < 0.0 {
-                    return model;
-                }
-                let new_midi = old.pitch.midi() as i32 + d_semitones;
-                let Some(new_pitch) = u8::try_from(new_midi)
-                    .ok()
-                    .and_then(Pitch::from_midi)
-                else {
-                    return model;
-                };
-                let new_note = ScoreNote::new(new_pitch, new_start, old.duration, old.velocity);
-                // Remove + add para mantener el invariante de orden por start.
-                track.remove(note_idx);
-                track.add(new_note);
-                if let Some(new_idx) = find_note_idx(track.notes(), &new_note) {
-                    model.selected = Some((track_idx, new_idx));
-                }
-                model.status = format!(
-                    "moved · pista {track_idx} · beat {:.0} · midi {}",
-                    new_start,
-                    new_pitch.midi()
-                );
-            }
-            Msg::DeleteSelected => {
-                if let Some((track, idx)) = model.selected.take() {
-                    if let Some(t) = model.score.track_mut(track) {
-                        if t.remove(idx).is_some() {
-                            model.status = format!("deleted · pista {track} · nota #{idx}");
-                        }
-                    }
-                }
-            }
-            Msg::ResizeSelected { d_beat } => {
-                let Some((track_idx, note_idx)) = model.selected else {
-                    return model;
-                };
-                let Some(track) = model.score.track_mut(track_idx) else {
-                    return model;
-                };
-                let Some(old) = track.notes().get(note_idx).copied() else {
-                    return model;
-                };
-                let new_dur = (old.duration + d_beat).clamp(0.25, 16.0);
-                if (new_dur - old.duration).abs() < f32::EPSILON {
-                    return model;
-                }
-                let new_note = ScoreNote::new(old.pitch, old.start, new_dur, old.velocity);
-                // Resize no cambia `start`, así que el orden del Track no
-                // se afecta — pero igual remove+add para no perforar el
-                // encapsulamiento del Vec interno.
-                track.remove(note_idx);
-                track.add(new_note);
-                if let Some(new_idx) = find_note_idx(track.notes(), &new_note) {
-                    model.selected = Some((track_idx, new_idx));
-                }
-                model.status = format!(
-                    "resized · pista {track_idx} · dur {:.2}",
-                    new_dur
-                );
-            }
-            Msg::NudgeTempo { delta } => {
-                let new_bpm = (model.score.tempo_bpm + delta).clamp(30.0, 300.0);
-                if (new_bpm - model.score.tempo_bpm).abs() > f32::EPSILON {
-                    model.score.tempo_bpm = new_bpm;
-                    model.status = format!("tempo {new_bpm:.0} bpm");
+            Msg::Edit(edit_msg) => {
+                if let Some(s) = model.editor.apply(edit_msg) {
+                    model.status = s;
                 }
             }
             Msg::NudgeProgram { delta } => {
@@ -404,7 +181,7 @@ impl App for Takiy {
                     model.status = "sin SF2 — programa no aplica".into();
                     return model;
                 };
-                let track_idx = model.active_track;
+                let track_idx = model.editor.active_track;
                 let current = sf2.program_for_track(track_idx) as i32;
                 let new_prog = ((current + delta).rem_euclid(128)) as u8;
                 let new_sf2 = sf2.with_track_program(track_idx, new_prog);
@@ -414,39 +191,17 @@ impl App for Takiy {
                     gm_program_name(new_prog)
                 );
             }
-            Msg::NudgeVelocity { delta } => {
-                let Some((track_idx, note_idx)) = model.selected else {
-                    return model;
-                };
-                let Some(track) = model.score.track_mut(track_idx) else {
-                    return model;
-                };
-                let Some(old) = track.notes().get(note_idx).copied() else {
-                    return model;
-                };
-                let new_vel = (old.velocity as i32 + delta).clamp(1, 127) as u8;
-                if new_vel == old.velocity {
-                    return model;
-                }
-                let new_note = ScoreNote::new(old.pitch, old.start, old.duration, new_vel);
-                track.remove(note_idx);
-                track.add(new_note);
-                if let Some(new_idx) = find_note_idx(track.notes(), &new_note) {
-                    model.selected = Some((track_idx, new_idx));
-                }
-                model.status = format!("vel {} · pista {track_idx}", new_vel);
-            }
             Msg::Save => {
-                let path = model.save_path.clone().unwrap_or_else(|| {
+                let path = model.editor.save_path.clone().unwrap_or_else(|| {
                     let ts = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_secs())
                         .unwrap_or(0);
-                    let p = std::path::PathBuf::from(format!("/tmp/takiy_{ts}.takiy.json"));
-                    model.save_path = Some(p.clone());
+                    let p = default_save_path_for_save(ts);
+                    model.editor.save_path = Some(p.clone());
                     p
                 });
-                match write_score(&model.score, &path) {
+                match write_score(&model.editor.score, &path) {
                     Ok(()) => {
                         eprintln!("takiy · saved → {}", path.display());
                         model.status = format!("saved → {}", path.display());
@@ -457,55 +212,11 @@ impl App for Takiy {
                     }
                 }
             }
-            Msg::CycleTrack => {
-                let n = model.score.tracks().len().max(1);
-                model.active_track = (model.active_track + 1) % n;
-                let name = model
-                    .score
-                    .track(model.active_track)
-                    .map(|t| t.name.as_str())
-                    .unwrap_or("?");
-                model.status = format!("active · pista {} ({name})", model.active_track);
-            }
-            Msg::NewTrack => {
-                let name = format!("track {}", model.next_track_n);
-                model.next_track_n += 1;
-                let idx = model.score.add_track(Track::new(&name));
-                model.active_track = idx;
-                model.status = format!("new · pista {idx} ({name})");
-            }
-            Msg::DeleteActiveTrack => {
-                let n = model.score.tracks().len();
-                if n <= 1 {
-                    model.status = "no se puede borrar la última pista".into();
-                    return model;
-                }
-                let removed = model.active_track.min(n - 1);
-                let gone = model.score.remove_track(removed);
-                // Re-apuntar `active_track` y `selected` después del
-                // shift de índices.
-                if model.active_track >= n - 1 {
-                    model.active_track = n - 2;
-                }
-                model.selected = match model.selected {
-                    Some((t, _)) if t == removed => None,
-                    Some((t, i)) if t > removed => Some((t - 1, i)),
-                    other => other,
-                };
-                let name = gone
-                    .as_ref()
-                    .map(|t| t.name.as_str())
-                    .unwrap_or("?");
-                model.status = format!("deleted · pista {removed} ({name})");
-            }
         }
-        if is_edit {
-            if let Some(path) = model.save_path.as_deref() {
-                if let Err(e) = write_score(&model.score, path) {
+        if is_edit_msg {
+            if let Some(path) = model.editor.save_path.as_deref() {
+                if let Err(e) = write_score(&model.editor.score, path) {
                     eprintln!("takiy · auto-save error en {}: {e}", path.display());
-                    // No piso `status` con el error si la edición fue
-                    // exitosa: el log al stderr alcanza para diagnóstico,
-                    // y el header queda con el feedback de la edición.
                 }
             }
         }
@@ -516,8 +227,6 @@ impl App for Takiy {
         if event.state != KeyState::Pressed {
             return None;
         }
-        // Las flechas y delete deben permitir repeat (mover/borrar
-        // sostenido es lo natural); Tab/N/Space no.
         let allow_repeat = matches!(
             &event.key,
             Key::Named(
@@ -534,45 +243,42 @@ impl App for Takiy {
         }
         match &event.key {
             Key::Named(NamedKey::Space) => Some(Msg::TogglePlay),
-            Key::Named(NamedKey::Tab) => Some(Msg::CycleTrack),
+            Key::Named(NamedKey::Tab) => Some(Msg::Edit(EditMsg::CycleTrack)),
             Key::Named(NamedKey::Escape) => Some(Msg::Quit),
             Key::Named(NamedKey::ArrowLeft) => {
-                Some(Msg::MoveSelected { d_beat: -1.0, d_semitones: 0 })
+                Some(Msg::Edit(EditMsg::MoveSelected { d_beat: -1.0, d_semitones: 0 }))
             }
             Key::Named(NamedKey::ArrowRight) => {
-                Some(Msg::MoveSelected { d_beat: 1.0, d_semitones: 0 })
+                Some(Msg::Edit(EditMsg::MoveSelected { d_beat: 1.0, d_semitones: 0 }))
             }
             Key::Named(NamedKey::ArrowUp) => {
-                Some(Msg::MoveSelected { d_beat: 0.0, d_semitones: 1 })
+                Some(Msg::Edit(EditMsg::MoveSelected { d_beat: 0.0, d_semitones: 1 }))
             }
             Key::Named(NamedKey::ArrowDown) => {
-                Some(Msg::MoveSelected { d_beat: 0.0, d_semitones: -1 })
+                Some(Msg::Edit(EditMsg::MoveSelected { d_beat: 0.0, d_semitones: -1 }))
             }
             Key::Named(NamedKey::Backspace) if event.modifiers.ctrl => {
-                Some(Msg::DeleteActiveTrack)
+                Some(Msg::Edit(EditMsg::DeleteActiveTrack))
             }
-            Key::Named(NamedKey::Delete | NamedKey::Backspace) => Some(Msg::DeleteSelected),
-            Key::Character(s) if s.eq_ignore_ascii_case("n") => Some(Msg::NewTrack),
+            Key::Named(NamedKey::Delete | NamedKey::Backspace) => {
+                Some(Msg::Edit(EditMsg::DeleteSelected))
+            }
+            Key::Character(s) if s.eq_ignore_ascii_case("n") => Some(Msg::Edit(EditMsg::NewTrack)),
             Key::Character(s) if s.eq_ignore_ascii_case("s") => Some(Msg::Save),
             Key::Character(s) if s == "+" || s == "=" => {
-                // En layouts US el `+` requiere shift; el `=` cae en
-                // la misma tecla. Aceptamos ambos para no obligar a
-                // shift.
-                Some(Msg::ResizeSelected { d_beat: 0.5 })
+                Some(Msg::Edit(EditMsg::ResizeSelected { d_beat: 0.5 }))
             }
             Key::Character(s) if s == "-" || s == "_" => {
-                Some(Msg::ResizeSelected { d_beat: -0.5 })
+                Some(Msg::Edit(EditMsg::ResizeSelected { d_beat: -0.5 }))
             }
             Key::Character(s) if s == "[" || s == "{" => {
-                Some(Msg::NudgeVelocity { delta: -10 })
+                Some(Msg::Edit(EditMsg::NudgeVelocity { delta: -10 }))
             }
             Key::Character(s) if s == "]" || s == "}" => {
-                Some(Msg::NudgeVelocity { delta: 10 })
+                Some(Msg::Edit(EditMsg::NudgeVelocity { delta: 10 }))
             }
-            Key::Character(s) if s == "," => Some(Msg::NudgeTempo { delta: -5.0 }),
-            Key::Character(s) if s == "." => Some(Msg::NudgeTempo { delta: 5.0 }),
-            // `p` vs `P` distingue dirección — `P` lleva shift, así
-            // que el char ya viene en mayúscula.
+            Key::Character(s) if s == "," => Some(Msg::Edit(EditMsg::NudgeTempo { delta: -5.0 })),
+            Key::Character(s) if s == "." => Some(Msg::Edit(EditMsg::NudgeTempo { delta: 5.0 })),
             Key::Character(s) if s == "p" => Some(Msg::NudgeProgram { delta: -1 }),
             Key::Character(s) if s == "P" => Some(Msg::NudgeProgram { delta: 1 }),
             _ => None,
@@ -581,21 +287,22 @@ impl App for Takiy {
 
     fn view(model: &Model) -> View<Msg> {
         let theme = model.theme;
-        let score = model.score.clone();
+        let score = model.editor.score.clone();
         let source = model.source.clone();
         let engine = model.engine.clone();
         let status = model.status.clone();
         let playing = model.playing;
-        let active_track = model.active_track;
-        let selected = model.selected;
-        let playback_started_at = model.playback_started_at;
+        let active_track = model.editor.active_track;
+        let selected = model.editor.selected;
+        let playback_position_seconds = model
+            .player
+            .as_ref()
+            .filter(|_| playing)
+            .map(|p| p.position_seconds());
         let playback_bpm = model.playback_bpm;
         let (min_midi, max_midi) = pitch_range(&score);
         let total_beats = score.duration_beats().max(8.0);
 
-        // Capturas separadas para cada closure: el painter recibe el
-        // score; los handlers de click también, pero los cierran como
-        // `Arc`-equivalentes vía clone (Score es Clone barato — Vec<Track>).
         let score_paint = score.clone();
         let score_click = score.clone();
         let score_right = score;
@@ -606,30 +313,31 @@ impl App for Takiy {
         })
         .fill(theme.bg_app)
         .on_click_at(move |lx, ly, rw, rh| {
-            // Click izq.: si cae sobre una nota, la seleccionamos.
-            // Si cae en celda vacía, la agregamos y queda seleccionada.
             if let Some((track, idx)) =
                 hit_test_note(&score_click, lx, ly, rw, rh, min_midi, max_midi, total_beats)
             {
-                return Some(Msg::Select { track, idx });
+                return Some(Msg::Edit(EditMsg::Select { track, idx }));
             }
-            let (beat, midi) =
-                cell_at(lx, ly, rw, rh, min_midi, max_midi, total_beats)?;
-            Some(Msg::AddNote { beat, midi })
+            let (beat, midi) = cell_at(lx, ly, rw, rh, min_midi, max_midi, total_beats)?;
+            Some(Msg::Edit(EditMsg::AddNote { beat, midi }))
         })
         .on_right_click_at(move |lx, ly, rw, rh| {
             let (track, idx) =
                 hit_test_note(&score_right, lx, ly, rw, rh, min_midi, max_midi, total_beats)?;
-            Some(Msg::DeleteNote { track, idx })
+            Some(Msg::Edit(EditMsg::DeleteNote { track, idx }))
         })
         .paint_with(move |scene, ts, rect: PaintRect| {
             paint_piano_roll(
                 scene, ts, rect, &score_paint, &source, &engine, &status, playing,
-                active_track, selected, playback_started_at, playback_bpm, min_midi,
-                max_midi, total_beats, theme,
+                active_track, selected, playback_position_seconds, playback_bpm,
+                min_midi, max_midi, total_beats, theme,
             );
         })
     }
+}
+
+fn build_editor(score: Score) -> EditorState {
+    EditorState::with_score(score)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -644,7 +352,7 @@ fn paint_piano_roll(
     playing: bool,
     active_track: usize,
     selected: Option<(usize, usize)>,
-    playback_started_at: Option<std::time::Instant>,
+    playback_position_seconds: Option<f32>,
     playback_bpm: f32,
     min_midi: u8,
     max_midi: u8,
@@ -713,7 +421,6 @@ fn paint_piano_roll(
         scene.stroke(&Stroke::new(w), Affine::IDENTITY, color, None, &path);
     }
 
-    // Banda superior (header de beats).
     let header_bg = Color::from_rgba8(28, 30, 38, 255);
     let header_rect = KurboRect::new(
         rect.x as f64,
@@ -723,7 +430,6 @@ fn paint_piano_roll(
     );
     scene.fill(Fill::NonZero, Affine::IDENTITY, header_bg, None, &header_rect);
 
-    // Texto del header: fuente + motor + tempo + pista activa + status.
     let active_name = score
         .track(active_track)
         .map(|t| t.name.as_str())
@@ -745,10 +451,11 @@ fn paint_piano_roll(
         max_width: Some((rect.w - 20.0).max(0.0)),
         alignment: TextAlignment::Start,
         line_height: 1.0,
+        italic: false,
+        font_family: None,
     };
     draw_block(scene, ts, &block);
 
-    // Notas — coloreadas por track.
     let palette = [
         Color::from_rgba8(96, 174, 240, 240),
         Color::from_rgba8(240, 170, 90, 240),
@@ -776,36 +483,18 @@ fn paint_piano_roll(
             let r = KurboRect::new(x as f64, y as f64, (x + w) as f64, (y + h) as f64);
             scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &r);
             if is_active {
-                scene.stroke(
-                    &Stroke::new(1.2),
-                    Affine::IDENTITY,
-                    active_outline,
-                    None,
-                    &r,
-                );
+                scene.stroke(&Stroke::new(1.2), Affine::IDENTITY, active_outline, None, &r);
             }
             if selected == Some((track_idx, note_idx)) {
-                // El outline amarillo va por encima del blanco de la
-                // pista activa para que siempre se distinga, incluso
-                // si la nota seleccionada pertenece a la pista activa.
-                scene.stroke(
-                    &Stroke::new(2.4),
-                    Affine::IDENTITY,
-                    selected_outline,
-                    None,
-                    &r,
-                );
+                scene.stroke(&Stroke::new(2.4), Affine::IDENTITY, selected_outline, None, &r);
             }
         }
     }
 
-    // Cursor de reproducción: línea vertical que avanza con el
-    // tiempo. La posición se calcula del wall-clock (no del Player)
-    // porque cpal no expone su sample-position con resolución
-    // visible — el clock es suficientemente exacto para una barra a
-    // 20fps. Si la barra cae fuera del grid, no la dibujamos.
-    if let Some(started) = playback_started_at {
-        let elapsed_sec = started.elapsed().as_secs_f32();
+    // Cursor de reproducción usando la posición real del Player
+    // (sample-accurate): convertimos segundos → beats según el BPM
+    // congelado al lanzar el render.
+    if let Some(elapsed_sec) = playback_position_seconds {
         let cursor_beat = elapsed_sec * playback_bpm / 60.0;
         let x = grid_x + cursor_beat * beat_w;
         if x >= grid_x && x <= grid_x + grid_w {
@@ -816,128 +505,6 @@ fn paint_piano_roll(
             scene.stroke(&Stroke::new(1.8), Affine::IDENTITY, cursor_color, None, &path);
         }
     }
-}
-
-/// Geometría compartida entre el painter y los handlers de click, así
-/// hit-test y pintado nunca se desincronizan.
-fn grid_geometry(
-    rect_w: f32,
-    rect_h: f32,
-    min_midi: u8,
-    max_midi: u8,
-    total_beats: f32,
-) -> Option<(f32, f32, f32, f32, f32, f32)> {
-    let grid_w = (rect_w - KEYBOARD_W).max(0.0);
-    let grid_h = (rect_h - HEADER_H).max(0.0);
-    if grid_w <= 0.0 || grid_h <= 0.0 {
-        return None;
-    }
-    let n_keys = (max_midi - min_midi + 1) as f32;
-    let key_h = (grid_h / n_keys).clamp(MIN_KEY_H, MAX_KEY_H);
-    let beat_w = (grid_w / total_beats).max(MIN_BEAT_W);
-    Some((KEYBOARD_W, HEADER_H, grid_w, grid_h, key_h, beat_w))
-}
-
-/// Mapea (lx, ly) — coordenadas locales al `View` raíz — a `(beat, midi)`.
-/// Devuelve `None` si el punto cae fuera del grid (teclado, header, o
-/// fuera de los límites verticales/horizontales).
-fn cell_at(
-    lx: f32,
-    ly: f32,
-    rect_w: f32,
-    rect_h: f32,
-    min_midi: u8,
-    max_midi: u8,
-    total_beats: f32,
-) -> Option<(f32, u8)> {
-    let (grid_x, grid_y, grid_w, grid_h, key_h, beat_w) =
-        grid_geometry(rect_w, rect_h, min_midi, max_midi, total_beats)?;
-    if lx < grid_x || ly < grid_y || lx > grid_x + grid_w || ly > grid_y + grid_h {
-        return None;
-    }
-    let row = ((ly - grid_y) / key_h).floor() as i32;
-    let midi_i = max_midi as i32 - row;
-    if midi_i < min_midi as i32 || midi_i > max_midi as i32 {
-        return None;
-    }
-    let beat = ((lx - grid_x) / beat_w).floor().max(0.0);
-    Some((beat, midi_i as u8))
-}
-
-/// Devuelve `(track_idx, note_idx)` de la nota bajo `(lx, ly)`, o `None`
-/// si el punto no está sobre ninguna. Itera en orden estable; si dos
-/// notas se solapan, gana la primera encontrada.
-fn hit_test_note(
-    score: &Score,
-    lx: f32,
-    ly: f32,
-    rect_w: f32,
-    rect_h: f32,
-    min_midi: u8,
-    max_midi: u8,
-    total_beats: f32,
-) -> Option<(usize, usize)> {
-    let (grid_x, grid_y, _gw, _gh, key_h, beat_w) =
-        grid_geometry(rect_w, rect_h, min_midi, max_midi, total_beats)?;
-    for (ti, track) in score.tracks().iter().enumerate() {
-        for (ni, note) in track.notes().iter().enumerate() {
-            let midi = note.pitch.midi();
-            if midi < min_midi || midi > max_midi {
-                continue;
-            }
-            let row = (max_midi - midi) as f32;
-            let nx = grid_x + note.start * beat_w;
-            let ny = grid_y + row * key_h;
-            let nw = (note.duration * beat_w).max(1.5);
-            let nh = (key_h - 1.5).max(2.0);
-            if lx >= nx && lx < nx + nw && ly >= ny && ly < ny + nh {
-                return Some((ti, ni));
-            }
-        }
-    }
-    None
-}
-
-/// Rango MIDI con padding de 2 semitonos arriba y abajo. Si el score
-/// está vacío, devolvemos C4..C5.
-fn pitch_range(score: &Score) -> (u8, u8) {
-    let mut min = u8::MAX;
-    let mut max = 0u8;
-    let mut found = false;
-    for track in score.tracks() {
-        for note in track.notes() {
-            found = true;
-            let m = note.pitch.midi();
-            if m < min { min = m; }
-            if m > max { max = m; }
-        }
-    }
-    if !found {
-        return (60, 72);
-    }
-    (min.saturating_sub(2), max.saturating_add(2).min(127))
-}
-
-/// Serializa el score a JSON pretty y lo escribe atómicamente a `path`:
-/// primero escribe a `<path>.tmp` y después renombra, así una interrupción
-/// (Ctrl+C, kill, falla de disco a mitad del write) no deja el archivo
-/// truncado. Si el rename falla, devuelve el error de `rename`.
-fn write_score(score: &Score, path: &std::path::Path) -> std::io::Result<()> {
-    let json = serde_json::to_string_pretty(score)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    let tmp = path.with_extension("takiy.json.tmp");
-    std::fs::write(&tmp, json)?;
-    std::fs::rename(&tmp, path)
-}
-
-/// Encuentra el índice de `target` en una lista de notas comparando
-/// los campos relevantes (`pitch`, `start`, `duration`, `velocity`).
-/// Es lineal pero las pistas son cortas (≪1000 notas en el uso normal),
-/// así que alcanza. Si hay varias notas idénticas devuelve la primera
-/// — no es un problema porque las flechas operan sobre el `selected`
-/// que apunta a la misma copia.
-fn find_note_idx(notes: &[ScoreNote], target: &ScoreNote) -> Option<usize> {
-    notes.iter().position(|n| n == target)
 }
 
 /// Si `TAKIY_SF2` apunta a un .sf2 válido, devuelve un
@@ -966,63 +533,14 @@ fn load_sf2(score: &Score, sample_rate: u32) -> (Option<MultiProgramRenderer>, S
     (Some(renderer), format!("engine sf2 {label}"))
 }
 
-/// Nombre del grupo GM al que pertenece un programa `0..=127`. No
-/// devuelve el nombre exacto del instrumento (eso requeriría una tabla
-/// de 128) sino el grupo (Pianos, Bass, Brass, etc.), que es lo que
-/// necesita el header para feedback al cambiar con `p`/`P`.
-fn gm_program_name(program: u8) -> &'static str {
-    match program / 8 {
-        0 => "Piano",
-        1 => "Chromatic Perc.",
-        2 => "Organ",
-        3 => "Guitar",
-        4 => "Bass",
-        5 => "Strings",
-        6 => "Ensemble",
-        7 => "Brass",
-        8 => "Reed",
-        9 => "Pipe",
-        10 => "Synth Lead",
-        11 => "Synth Pad",
-        12 => "Synth Effects",
-        13 => "Ethnic",
-        14 => "Percussive",
-        15 => "Sound Effects",
-        _ => "?",
-    }
-}
-
-/// Mapeo heurístico nombre de pista → programa GM `0..=127`. Pensado para
-/// que el demo built-in suene razonable sin configuración: cae a piano (0)
-/// si no reconoce el nombre.
-fn gm_program_for_track_name(name: &str) -> u8 {
-    let n = name.to_lowercase();
-    if n.contains("bass") || n.contains("bajo") {
-        32 // Acoustic Bass
-    } else if n.contains("guitar") || n.contains("guitarra") {
-        24 // Acoustic Guitar (nylon)
-    } else if n.contains("string") || n.contains("cuerda") {
-        48 // String Ensemble 1
-    } else if n.contains("organ") || n.contains("órgano") || n.contains("organo") {
-        19 // Church Organ
-    } else if n.contains("flute") || n.contains("flauta") {
-        73 // Flute
-    } else if n.contains("trumpet") || n.contains("trompeta") {
-        56 // Trumpet
-    } else if n.contains("pad") {
-        88 // Pad 1 (new age)
-    } else {
-        0 // Acoustic Grand Piano
-    }
-}
-
 /// Elige el renderer (SF2 si está disponible, osc en su defecto) y
 /// renderiza el score al `sample_rate` del device.
-fn render_score(score: &Score, sf2: Option<&MultiProgramRenderer>, sample_rate: u32) -> AudioBuffer {
+fn render_score(
+    score: &Score,
+    sf2: Option<&MultiProgramRenderer>,
+    sample_rate: u32,
+) -> AudioBuffer {
     if let Some(sf2) = sf2 {
-        // El renderer SF2 ya está configurado con el SR del player en
-        // `load_sf2`; lo verificamos por si el device cambió de SR en runtime
-        // (poco común pero barato de chequear).
         if sf2.sample_rate == sample_rate {
             return sf2.render(score);
         }
@@ -1030,44 +548,6 @@ fn render_score(score: &Score, sf2: Option<&MultiProgramRenderer>, sample_rate: 
     }
     let osc = OscRenderer { sample_rate, ..Default::default() };
     osc.render(score)
-}
-
-fn load_score() -> (Score, String) {
-    if let Ok(path) = std::env::var("TAKIY_SCORE_JSON") {
-        match std::fs::read_to_string(&path) {
-            Ok(s) => match serde_json::from_str::<Score>(&s) {
-                Ok(score) => return (score, format!("JSON {path}")),
-                Err(e) => eprintln!("takiy · error parseando {path}: {e}"),
-            },
-            Err(e) => eprintln!("takiy · error leyendo {path}: {e}"),
-        }
-    }
-    (demo_score(), "demo built-in".into())
-}
-
-fn demo_score() -> Score {
-    let mut score = Score::new(120.0);
-
-    let mut melody = Track::new("melodía");
-    let degrees = [
-        PitchClass::C, PitchClass::D, PitchClass::E, PitchClass::F,
-        PitchClass::G, PitchClass::A, PitchClass::B, PitchClass::C,
-    ];
-    for (i, pc) in degrees.iter().enumerate() {
-        let octave = if i == 7 { 5 } else { 4 };
-        let pitch = Pitch::from_class_octave(*pc, octave).unwrap();
-        melody.add(ScoreNote::new(pitch, i as f32, 0.9, 100));
-    }
-    score.add_track(melody);
-
-    let mut bass = Track::new("bajo");
-    for (i, pc) in [PitchClass::C, PitchClass::G, PitchClass::C, PitchClass::G].iter().enumerate() {
-        let pitch = Pitch::from_class_octave(*pc, 2).unwrap();
-        bass.add(ScoreNote::new(pitch, (i * 2) as f32, 2.0, 110));
-    }
-    score.add_track(bass);
-
-    score
 }
 
 fn main() {

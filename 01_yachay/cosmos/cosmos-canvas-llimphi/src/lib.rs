@@ -231,6 +231,8 @@ fn paint_text(
         max_width: max_w,
         alignment: align,
         line_height: 1.0,
+        italic: false,
+        font_family: None,
     };
     let layout = layout_block(ts, &block);
     llimphi_ui::llimphi_text::draw_layout(scene, &layout, color, block.origin);

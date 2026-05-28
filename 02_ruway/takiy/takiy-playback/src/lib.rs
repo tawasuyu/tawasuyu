@@ -6,6 +6,14 @@
 //! emite silencio, así no hay que parar/reabrir el device entre
 //! reproducciones (eso causa clicks horribles en ALSA/PulseAudio).
 //!
+//! ## Hot path lock-free
+//!
+//! El callback de audio **nunca toma un mutex**: las órdenes (`Play`/
+//! `Stop`) del thread de UI llegan por un `std::sync::mpsc::sync_channel`
+//! que el callback drena con `try_recv` al inicio de cada frame. La
+//! posición de reproducción y el flag "playing" son `AtomicU64` /
+//! `AtomicBool` que el callback escribe y la UI lee sin contención.
+//!
 //! Modelo de uso:
 //!
 //! ```no_run
@@ -28,11 +36,18 @@
 
 #![forbid(unsafe_code)]
 
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
+use std::sync::Arc;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Sample, SampleFormat, StreamConfig};
 use takiy_synth::AudioBuffer;
+
+/// Capacidad del canal UI → audio. Las órdenes son raras (un play/stop por
+/// acción del usuario, no por frame) — 16 alcanza con margen y mantiene
+/// la memoria acotada incluso si el audio thread se quedara colgado.
+const COMMAND_CHANNEL_CAP: usize = 16;
 
 /// Errores al abrir el dispositivo de audio.
 #[derive(Debug)]
@@ -57,21 +72,32 @@ impl std::fmt::Display for OpenError {
 
 impl std::error::Error for OpenError {}
 
-/// Estado compartido con el callback de audio. El callback lee de aquí
-/// muestra-a-muestra; el thread de UI escribe nuevos buffers al disparar
-/// `play` o `stop`.
-#[derive(Default)]
-struct Shared {
-    /// Buffer activo. `None` = silencio.
+/// Órdenes que la UI envía al callback de audio. Se reciben por
+/// `try_recv` al inicio de cada frame; nunca bloquean.
+enum Command {
+    Play(Arc<AudioBuffer>),
+    Stop,
+}
+
+/// Estado mutable que vive **dentro** del callback de audio. No se
+/// comparte: el callback es el único dueño. Por eso no necesita Mutex.
+struct AudioState {
     buffer: Option<Arc<AudioBuffer>>,
-    /// Posición de lectura dentro del buffer activo, en muestras.
-    cursor: usize,
+    cursor: u64,
 }
 
 /// Reproductor de audio. Mientras el `Player` viva, el stream del
 /// device queda abierto. Drop lo cierra.
 pub struct Player {
-    shared: Arc<Mutex<Shared>>,
+    tx: SyncSender<Command>,
+    /// Posición de reproducción en samples (el callback la actualiza
+    /// cada frame). El thread de UI la consulta para pintar el cursor
+    /// del piano roll con precisión de muestra.
+    position: Arc<AtomicU64>,
+    /// `true` mientras haya buffer sonando. El callback lo limpia al
+    /// terminar el buffer (back-pressure pasiva: la UI puede notar que
+    /// el playback acabó sin hablar con el audio thread).
+    playing: Arc<AtomicBool>,
     sample_rate: u32,
     channels: u16,
     // El stream debe vivir tanto como el player: si lo dropeás, cpal
@@ -94,18 +120,26 @@ impl Player {
         let sample_rate = config.sample_rate.0;
         let channels = config.channels;
 
-        let shared: Arc<Mutex<Shared>> = Arc::new(Mutex::new(Shared::default()));
+        let (tx, rx) = sync_channel::<Command>(COMMAND_CHANNEL_CAP);
+        let position = Arc::new(AtomicU64::new(0));
+        let playing = Arc::new(AtomicBool::new(false));
         let err_fn = |e| eprintln!("takiy-playback · stream error: {e}");
 
         let stream = match sample_format {
-            SampleFormat::F32 => build_stream::<f32>(&device, &config, shared.clone(), err_fn),
-            SampleFormat::I16 => build_stream::<i16>(&device, &config, shared.clone(), err_fn),
-            SampleFormat::U16 => build_stream::<u16>(&device, &config, shared.clone(), err_fn),
+            SampleFormat::F32 => build_stream::<f32>(
+                &device, &config, rx, position.clone(), playing.clone(), err_fn,
+            ),
+            SampleFormat::I16 => build_stream::<i16>(
+                &device, &config, rx, position.clone(), playing.clone(), err_fn,
+            ),
+            SampleFormat::U16 => build_stream::<u16>(
+                &device, &config, rx, position.clone(), playing.clone(), err_fn,
+            ),
             other => Err(OpenError::Backend(format!("formato {other:?} no soportado"))),
         }?;
         stream.play().map_err(|e| OpenError::Backend(e.to_string()))?;
 
-        Ok(Self { shared, sample_rate, channels, _stream: stream })
+        Ok(Self { tx, position, playing, sample_rate, channels, _stream: stream })
     }
 
     /// Sample rate del device — usalo al pedirle al renderer.
@@ -122,77 +156,125 @@ impl Player {
     /// Encola un buffer para reproducción. Reemplaza cualquier buffer en curso
     /// (no se mezclan — la idea es "tocar esto ahora"). El buffer se envuelve
     /// en `Arc` para que el callback lo pueda compartir con quien lo creó.
+    ///
+    /// La orden se envía por canal SPSC; si el canal está saturado (no debería
+    /// pasar nunca: capacidad 16, las órdenes son raras), se descarta con un
+    /// log. La UI siempre asume éxito — no devuelve `Result` porque no hay
+    /// nada útil que hacer ante el fallo en el thread de UI.
     pub fn play(&self, buffer: AudioBuffer) {
-        let mut s = self.shared.lock().expect("audio shared lock");
-        s.buffer = Some(Arc::new(buffer));
-        s.cursor = 0;
+        // Marcamos playing inmediatamente para que la UI repinte sin
+        // esperar al primer frame del callback (sería ~20ms de delay).
+        // El callback lo confirmará al consumir el comando.
+        self.playing.store(true, Ordering::Release);
+        self.position.store(0, Ordering::Release);
+        if let Err(e) = self.tx.try_send(Command::Play(Arc::new(buffer))) {
+            match e {
+                TrySendError::Full(_) => {
+                    eprintln!("takiy-playback · canal de órdenes saturado, play descartado");
+                    self.playing.store(false, Ordering::Release);
+                }
+                TrySendError::Disconnected(_) => {
+                    eprintln!("takiy-playback · audio thread desconectado");
+                    self.playing.store(false, Ordering::Release);
+                }
+            }
+        }
     }
 
     /// Detiene la reproducción y deja sonando silencio.
     pub fn stop(&self) {
-        let mut s = self.shared.lock().expect("audio shared lock");
-        s.buffer = None;
-        s.cursor = 0;
+        self.playing.store(false, Ordering::Release);
+        let _ = self.tx.try_send(Command::Stop);
     }
 
-    /// `true` si todavía queda buffer pendiente por reproducir.
+    /// `true` si todavía queda buffer pendiente por reproducir. Lock-free.
     pub fn is_playing(&self) -> bool {
-        let s = self.shared.lock().expect("audio shared lock");
-        s.buffer.as_ref().is_some_and(|b| s.cursor < b.samples.len())
+        self.playing.load(Ordering::Acquire)
+    }
+
+    /// Posición de reproducción en samples desde el inicio del buffer
+    /// actual. Lock-free; resolución de un sample. Devuelve `0` cuando
+    /// no hay buffer sonando.
+    pub fn position_samples(&self) -> u64 {
+        self.position.load(Ordering::Acquire)
+    }
+
+    /// Posición de reproducción en segundos. Cero si no está tocando.
+    pub fn position_seconds(&self) -> f32 {
+        if self.sample_rate == 0 {
+            return 0.0;
+        }
+        self.position_samples() as f32 / self.sample_rate as f32
     }
 }
 
 fn build_stream<T>(
     device: &cpal::Device,
     config: &StreamConfig,
-    shared: Arc<Mutex<Shared>>,
+    rx: Receiver<Command>,
+    position: Arc<AtomicU64>,
+    playing: Arc<AtomicBool>,
     err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
 ) -> Result<cpal::Stream, OpenError>
 where
     T: Sample + cpal::SizedSample + cpal::FromSample<f32> + Send + 'static,
 {
     let channels = config.channels as usize;
+    let mut state = AudioState { buffer: None, cursor: 0 };
     device
         .build_output_stream(
             config,
-            move |out: &mut [T], _info| fill::<T>(out, channels, &shared),
+            move |out: &mut [T], _info| {
+                fill::<T>(out, channels, &mut state, &rx, &position, &playing);
+            },
             err_fn,
             None,
         )
         .map_err(|e| OpenError::Backend(e.to_string()))
 }
 
-fn fill<T>(out: &mut [T], channels: usize, shared: &Mutex<Shared>)
-where
+fn fill<T>(
+    out: &mut [T],
+    channels: usize,
+    state: &mut AudioState,
+    rx: &Receiver<Command>,
+    position: &AtomicU64,
+    playing: &AtomicBool,
+) where
     T: Sample + cpal::FromSample<f32>,
 {
+    // Drenar órdenes pendientes — no bloquea.
+    while let Ok(cmd) = rx.try_recv() {
+        match cmd {
+            Command::Play(b) => {
+                state.buffer = Some(b);
+                state.cursor = 0;
+                position.store(0, Ordering::Release);
+                playing.store(true, Ordering::Release);
+            }
+            Command::Stop => {
+                state.buffer = None;
+                state.cursor = 0;
+                position.store(0, Ordering::Release);
+                playing.store(false, Ordering::Release);
+            }
+        }
+    }
+
     let silence = T::from_sample(0.0f32);
-    let mut s = match shared.lock() {
-        Ok(g) => g,
-        Err(_) => {
-            for sample in out.iter_mut() {
-                *sample = silence;
-            }
-            return;
+    let Some(buffer) = state.buffer.clone() else {
+        for sample in out.iter_mut() {
+            *sample = silence;
         }
+        return;
     };
 
-    let buffer = match s.buffer.clone() {
-        Some(b) => b,
-        None => {
-            for sample in out.iter_mut() {
-                *sample = silence;
-            }
-            return;
-        }
-    };
-
-    let mut cursor = s.cursor;
-    let total = buffer.samples.len();
+    let total = buffer.samples.len() as u64;
+    let mut cursor = state.cursor;
 
     for frame in out.chunks_mut(channels) {
         let value = if cursor < total {
-            let v = buffer.samples[cursor];
+            let v = buffer.samples[cursor as usize];
             cursor += 1;
             T::from_sample(v)
         } else {
@@ -203,12 +285,15 @@ where
         }
     }
 
-    s.cursor = cursor;
+    state.cursor = cursor;
+    position.store(cursor, Ordering::Release);
     if cursor >= total {
         // Terminó el buffer: liberamos la referencia para que el caller
-        // pueda recibir back-pressure ("is_playing → false") y, si tiene
+        // pueda recibir back-pressure (`is_playing → false`) y, si tiene
         // el Arc, eventualmente liberar la memoria del audio.
-        s.buffer = None;
-        s.cursor = 0;
+        state.buffer = None;
+        state.cursor = 0;
+        position.store(0, Ordering::Release);
+        playing.store(false, Ordering::Release);
     }
 }

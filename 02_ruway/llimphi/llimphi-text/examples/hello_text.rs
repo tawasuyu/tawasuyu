@@ -102,6 +102,9 @@ impl ApplicationHandler for App {
                         max_width: Some(inner_w),
                         alignment: Alignment::Center,
                         line_height: 1.0,
+                    
+                        italic: false,
+                        font_family: None,
                     },
                 );
 
@@ -117,6 +120,9 @@ impl ApplicationHandler for App {
                         max_width: Some(inner_w),
                         alignment: Alignment::Center,
                         line_height: 1.0,
+                    
+                        italic: false,
+                        font_family: None,
                     },
                 );
 
@@ -132,6 +138,9 @@ impl ApplicationHandler for App {
                         max_width: Some(inner_w),
                         alignment: Alignment::Justify,
                         line_height: 1.4,
+                    
+                        italic: false,
+                        font_family: None,
                     },
                 );
 
