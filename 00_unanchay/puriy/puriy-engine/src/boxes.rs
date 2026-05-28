@@ -12,8 +12,9 @@ use markup5ever_rcdom::{Handle, NodeData};
 
 use crate::dom::{self, DomTree};
 use crate::style::{
-    AlignItems, BoxShadow, ComputedStyle, FlexDirection, FlexWrap, JustifyContent, LengthVal,
-    ListStyleType, Sides, StyleEngine, TextAlign, TextDecorationLine,
+    AlignItems, AlignSelf, BoxShadow, BoxSizing, ComputedStyle, FlexDirection, FlexWrap,
+    JustifyContent, LengthVal, LinearGradient, ListStyleType, Outline, Overflow, Sides,
+    StyleEngine, TextAlign, TextDecorationLine, TextTransform, WhiteSpace,
 };
 
 /// Color RGBA, 8 bits por canal. Suficiente para CSS color values.
@@ -100,6 +101,31 @@ pub struct BoxNode {
     pub flex_wrap: FlexWrap,
     pub gap_row: f32,
     pub gap_column: f32,
+    /// Modelo de caja: cómo cuenta padding/border en width.
+    pub box_sizing: BoxSizing,
+    /// Mínimos y máximo extra del axis sizing (width/max_width ya existían).
+    pub min_width: LengthVal,
+    pub min_height: LengthVal,
+    pub max_height: LengthVal,
+    /// `hidden` aplica clip() en el chrome.
+    pub overflow: Overflow,
+    /// `white-space` define cómo collapse_whitespace trata el texto.
+    pub white_space: WhiteSpace,
+    /// Aplicado al texto del nodo (si es leaf) o propagado por
+    /// herencia a hijos text leaf.
+    pub text_transform: TextTransform,
+    /// 0..1 — el chrome multiplica el alpha del background/border.
+    pub opacity: f32,
+    /// Item-side de flex.
+    pub align_self: AlignSelf,
+    pub flex_grow: f32,
+    pub flex_shrink: f32,
+    pub flex_basis: LengthVal,
+    /// Outline pintado fuera del border (sin afectar layout).
+    pub outline: Outline,
+    /// Gradiente de fondo (linear-gradient). Si Some, el chrome lo
+    /// pinta encima/en lugar del background sólido.
+    pub background_gradient: Option<LinearGradient>,
     /// Texto plano del nodo (sólo para hojas de texto). Para nodos con
     /// hijos el texto vive en los hijos.
     pub text: Option<String>,
@@ -190,6 +216,20 @@ fn empty_root() -> BoxNode {
         flex_wrap: FlexWrap::NoWrap,
         gap_row: 0.0,
         gap_column: 0.0,
+        box_sizing: BoxSizing::ContentBox,
+        min_width: LengthVal::Auto,
+        min_height: LengthVal::Auto,
+        max_height: LengthVal::Auto,
+        overflow: Overflow::Visible,
+        white_space: WhiteSpace::Normal,
+        text_transform: TextTransform::None,
+        opacity: 1.0,
+        align_self: AlignSelf::Auto,
+        flex_grow: 0.0,
+        flex_shrink: 1.0,
+        flex_basis: LengthVal::Auto,
+        outline: Outline::default(),
+        background_gradient: None,
         text_decoration: TextDecorationLine::None,
         text: None,
         children: Vec::new(),
@@ -284,6 +324,20 @@ fn build_node(
                 flex_wrap: style.flex_wrap,
                 gap_row: style.gap_row,
                 gap_column: style.gap_column,
+                box_sizing: style.box_sizing,
+                min_width: style.min_width,
+                min_height: style.min_height,
+                max_height: style.max_height,
+                overflow: style.overflow,
+                white_space: style.white_space,
+                text_transform: style.text_transform,
+                opacity: style.opacity,
+                align_self: style.align_self,
+                flex_grow: style.flex_grow,
+                flex_shrink: style.flex_shrink,
+                flex_basis: style.flex_basis,
+                outline: style.outline,
+                background_gradient: style.background_gradient.clone(),
                 text_decoration: style.text_decoration,
                 text: None,
                 children,
@@ -299,7 +353,9 @@ fn build_node(
             // (caso clásico: `foo <a>bar</a> baz` debe rendear "foo bar
             // baz" — sin el espacio adyacente al link los tokens se
             // pegan al renderizarse en views vecinas).
-            let collapsed = collapse_whitespace(&raw);
+            let parent = parent_style.unwrap_or(&ComputedStyle::default()).clone();
+            let collapsed = collapse_whitespace(&raw, parent.white_space);
+            let collapsed = apply_text_transform(collapsed, parent.text_transform);
             if collapsed.is_empty() {
                 return None;
             }
@@ -307,7 +363,7 @@ fn build_node(
             // padre (color, font-size, font-weight, text-align,
             // line-height). Sin esto, todo texto sale negro 16px aunque
             // el `<p>` padre indique color rojo.
-            Some(inline_text_with_style(collapsed, parent_style.unwrap_or(&ComputedStyle::default())))
+            Some(inline_text_with_style(collapsed, &parent))
         }
         _ => {
             // Document / Doctype / Comment → recurrir sólo en hijos.
@@ -346,6 +402,20 @@ fn build_node(
                 flex_wrap: FlexWrap::NoWrap,
                 gap_row: 0.0,
                 gap_column: 0.0,
+                box_sizing: BoxSizing::ContentBox,
+                min_width: LengthVal::Auto,
+                min_height: LengthVal::Auto,
+                max_height: LengthVal::Auto,
+                overflow: Overflow::Visible,
+                white_space: WhiteSpace::Normal,
+                text_transform: TextTransform::None,
+                opacity: 1.0,
+                align_self: AlignSelf::Auto,
+                flex_grow: 0.0,
+                flex_shrink: 1.0,
+                flex_basis: LengthVal::Auto,
+                outline: Outline::default(),
+                background_gradient: None,
                 text_decoration: p.text_decoration,
                 text: None,
                 children,
@@ -384,6 +454,20 @@ fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNode {
         flex_wrap: FlexWrap::NoWrap,
         gap_row: 0.0,
         gap_column: 0.0,
+        box_sizing: BoxSizing::ContentBox,
+        min_width: LengthVal::Auto,
+        min_height: LengthVal::Auto,
+        max_height: LengthVal::Auto,
+        overflow: Overflow::Visible,
+        white_space: WhiteSpace::Normal,
+        text_transform: TextTransform::None,
+        opacity: 1.0,
+        align_self: AlignSelf::Auto,
+        flex_grow: 0.0,
+        flex_shrink: 1.0,
+        flex_basis: LengthVal::Auto,
+        outline: Outline::default(),
+        background_gradient: None,
         text_decoration: style.text_decoration,
         text: Some(s),
         children: Vec::new(),
@@ -411,30 +495,81 @@ fn fetch_and_decode(url: &str) -> Option<ImageData> {
     Some(ImageData { rgba: rgba.into_raw(), width, height })
 }
 
-/// Colapso de whitespace al estilo CSS (sin `white-space: pre`):
-/// - todo run de whitespace interno → un solo espacio
-/// - preserva un espacio leading/trailing si existía
-/// - vacío puro → `""` (el caller decide skipear)
-fn collapse_whitespace(s: &str) -> String {
-    let leading = s.chars().next().is_some_and(|c| c.is_whitespace());
-    let trailing = s.chars().last().is_some_and(|c| c.is_whitespace());
-    let core: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
-    if core.is_empty() {
-        // Sólo whitespace: si el padre lo coloca entre dos inlines
-        // (caso `foo <a>bar</a>`), el espacio entre <a> y "foo" llega
-        // como un Text-node de un solo espacio. Lo conservamos como
-        // un solo " " para no perder la separación.
-        return if leading || trailing { " ".to_string() } else { String::new() };
+/// Colapso de whitespace según `white-space`:
+/// - `Normal` / `NoWrap`: runs internos → un espacio, leading/trailing
+///   reducidos a uno; newlines colapsan igual.
+/// - `Pre`: todo preservado.
+/// - `PreWrap`: igual que Pre — el wrap es responsabilidad del layout.
+/// - `PreLine`: runs de espacio/tab → un espacio, newlines preservados.
+fn collapse_whitespace(s: &str, ws: WhiteSpace) -> String {
+    match ws {
+        WhiteSpace::Pre | WhiteSpace::PreWrap => s.to_string(),
+        WhiteSpace::PreLine => {
+            // Colapsa espacios/tabs (no '\n') a uno solo, preserva newlines.
+            let mut out = String::with_capacity(s.len());
+            let mut prev_space = false;
+            for c in s.chars() {
+                if c == '\n' {
+                    out.push(c);
+                    prev_space = false;
+                } else if c.is_whitespace() {
+                    if !prev_space {
+                        out.push(' ');
+                        prev_space = true;
+                    }
+                } else {
+                    out.push(c);
+                    prev_space = false;
+                }
+            }
+            out
+        }
+        WhiteSpace::Normal | WhiteSpace::NoWrap => {
+            let leading = s.chars().next().is_some_and(|c| c.is_whitespace());
+            let trailing = s.chars().last().is_some_and(|c| c.is_whitespace());
+            let core: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
+            if core.is_empty() {
+                // Sólo whitespace: lo dejamos como " " para no perder el
+                // separador entre inlines vecinos.
+                return if leading || trailing { " ".to_string() } else { String::new() };
+            }
+            let mut out = String::with_capacity(core.len() + 2);
+            if leading {
+                out.push(' ');
+            }
+            out.push_str(&core);
+            if trailing {
+                out.push(' ');
+            }
+            out
+        }
     }
-    let mut out = String::with_capacity(core.len() + 2);
-    if leading {
-        out.push(' ');
+}
+
+/// Aplica `text-transform` al texto. Capitalize convierte la primera
+/// letra de cada palabra (separada por whitespace) a mayúscula.
+fn apply_text_transform(s: String, t: TextTransform) -> String {
+    match t {
+        TextTransform::None => s,
+        TextTransform::Uppercase => s.to_uppercase(),
+        TextTransform::Lowercase => s.to_lowercase(),
+        TextTransform::Capitalize => {
+            let mut out = String::with_capacity(s.len());
+            let mut start_of_word = true;
+            for c in s.chars() {
+                if c.is_whitespace() {
+                    out.push(c);
+                    start_of_word = true;
+                } else if start_of_word {
+                    out.extend(c.to_uppercase());
+                    start_of_word = false;
+                } else {
+                    out.push(c);
+                }
+            }
+            out
+        }
     }
-    out.push_str(&core);
-    if trailing {
-        out.push(' ');
-    }
-    out
 }
 
 /// Construye el texto del marker de un `<li>`. Para tipos numerados

@@ -32,8 +32,9 @@ pub use boxes::{BoxNode, BoxTree, Color, Display};
 pub use dom::DomTree;
 pub use fetch::{fetch, FetchError};
 pub use style::{
-    AlignItems, BoxShadow, ComputedStyle, FlexDirection, FlexWrap, JustifyContent, LengthVal,
-    Sides, StyleEngine, TextAlign, TextDecorationLine,
+    AlignItems, AlignSelf, BoxShadow, BoxSizing, ComputedStyle, FlexDirection, FlexWrap,
+    GradientStop, JustifyContent, LengthVal, LinearGradient, Outline, Overflow, Sides, StyleEngine,
+    TextAlign, TextDecorationLine, TextTransform, WhiteSpace,
 };
 
 /// Pipeline completo del navegador. Sin estado mutable — cada `load`

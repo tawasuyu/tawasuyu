@@ -68,6 +68,37 @@ pub struct ComputedStyle {
     /// Acá los separamos para mapear directo a taffy.
     pub gap_row: f32,
     pub gap_column: f32,
+    /// Cómo se cuentan padding/border dentro del width. Default
+    /// `ContentBox` (CSS spec); los resets modernos lo fuerzan a
+    /// BorderBox.
+    pub box_sizing: BoxSizing,
+    /// Ancho/alto mínimos.
+    pub min_width: LengthVal,
+    pub min_height: LengthVal,
+    /// Alto máximo (max-width ya existe). `Auto` = sin tope.
+    pub max_height: LengthVal,
+    /// Overflow del contenido. Default `Visible`.
+    pub overflow: Overflow,
+    /// Colapsado y wrap del texto.
+    pub white_space: WhiteSpace,
+    /// Transformación de texto pre-render.
+    pub text_transform: TextTransform,
+    /// 0..1. Multiplica alpha del background/border al pintar.
+    /// `text` queda sin tocar (el spec exige multiplicar todo el
+    /// subárbol, pero acá pragmaticamente sólo afecta el propio nodo —
+    /// matchea el uso real donde opacity se aplica a overlays).
+    pub opacity: f32,
+    /// Item-side de flex.
+    pub align_self: AlignSelf,
+    pub flex_grow: f32,
+    pub flex_shrink: f32,
+    /// `Auto` = el width del item; `Px/Pct` = base explícita.
+    pub flex_basis: LengthVal,
+    /// Outline (fuera del border, sin afectar layout).
+    pub outline: Outline,
+    /// `background-image: linear-gradient(...)`. Cuando es Some, el
+    /// chrome lo pinta detrás (o encima del background sólido).
+    pub background_gradient: Option<LinearGradient>,
 }
 
 /// Estilo del marker de `<li>`. Reducido al subset que el chrome puede
@@ -173,6 +204,95 @@ pub enum FlexWrap {
     WrapReverse,
 }
 
+/// Modelo de caja CSS: cómo se cuentan `padding` y `border` dentro del
+/// `width`/`height`. CSS default `ContentBox` (width = sólo contenido);
+/// la mayoría de los resets modernos fuerzan `BorderBox`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoxSizing {
+    ContentBox,
+    BorderBox,
+}
+
+/// `align-items` por item — pisa el del contenedor para ese hijo.
+/// `Auto` significa heredar del padre.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlignSelf {
+    Auto,
+    Start,
+    Center,
+    End,
+    Stretch,
+    Baseline,
+}
+
+/// Comportamiento de overflow del contenido del box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Overflow {
+    Visible,
+    Hidden,
+}
+
+/// `white-space` controla colapsado de espacios y wrap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WhiteSpace {
+    /// Default: runs internos colapsan a un solo espacio, wrap libre.
+    Normal,
+    /// Sin wrap; runs internos colapsan.
+    NoWrap,
+    /// Preserva todo (espacios, tabs, newlines).
+    Pre,
+    /// Preserva espacios/newlines; wrap permitido en cualquier espacio.
+    PreWrap,
+    /// Colapsa runs internos a uno, pero preserva newlines.
+    PreLine,
+}
+
+/// `text-transform` aplica una transformación al texto antes de
+/// pintarlo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextTransform {
+    None,
+    Uppercase,
+    Lowercase,
+    Capitalize,
+}
+
+/// `outline` se pinta fuera del border (sin ocupar layout). Útil para
+/// focus rings y debug. `style_active=false` (CSS `none`/`hidden`) lo
+/// desactiva aunque haya width/color.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Outline {
+    pub width: f32,
+    pub color: Option<Color>,
+    pub style_active: bool,
+    /// Distancia del border al outline. Default 0.
+    pub offset: f32,
+}
+
+impl Default for Outline {
+    fn default() -> Self {
+        Self { width: 0.0, color: None, style_active: true, offset: 0.0 }
+    }
+}
+
+/// Un stop de `linear-gradient`. `pos` es la fracción (0..1) del eje;
+/// si `None`, se distribuye automáticamente entre stops adyacentes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GradientStop {
+    pub color: Color,
+    pub pos: Option<f32>,
+}
+
+/// `background-image: linear-gradient(...)`. Subset: ángulo en grados
+/// (0 = bottom→top, 90 = left→right), 2+ stops. Conic/radial quedan
+/// para más adelante.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LinearGradient {
+    /// Ángulo CSS en grados — 0 = up, 90 = right, 180 = down, 270 = left.
+    pub angle_deg: f32,
+    pub stops: Vec<GradientStop>,
+}
+
 impl<T: Copy> Sides<T> {
     pub const fn all(v: T) -> Self {
         Self { top: v, right: v, bottom: v, left: v }
@@ -220,6 +340,20 @@ impl Default for ComputedStyle {
             flex_wrap: FlexWrap::NoWrap,
             gap_row: 0.0,
             gap_column: 0.0,
+            box_sizing: BoxSizing::ContentBox,
+            min_width: LengthVal::Auto,
+            min_height: LengthVal::Auto,
+            max_height: LengthVal::Auto,
+            overflow: Overflow::Visible,
+            white_space: WhiteSpace::Normal,
+            text_transform: TextTransform::None,
+            opacity: 1.0,
+            align_self: AlignSelf::Auto,
+            flex_grow: 0.0,
+            flex_shrink: 1.0,
+            flex_basis: LengthVal::Auto,
+            outline: Outline::default(),
+            background_gradient: None,
         }
     }
 }
@@ -299,6 +433,11 @@ impl StyleEngine {
             // list-style-type sí es heredable según CSS spec — un `<ol>`
             // con `list-style-type: decimal` debe propagarse a sus `<li>`.
             style.list_style_type = p.list_style_type;
+            // white-space y text-transform son heredables (CSS spec).
+            // Sin esto, `<p style="text-transform:uppercase">FOO <span>bar</span></p>`
+            // dejaría "bar" en minúscula porque el text leaf vive en `<span>`.
+            style.white_space = p.white_space;
+            style.text_transform = p.text_transform;
         }
         let Some(local) = dom::element_name(node) else {
             return style;
@@ -774,6 +913,26 @@ enum DeclKind {
     Gap { row: f32, column: f32 },
     RowGap(f32),
     ColumnGap(f32),
+    BoxSizing(BoxSizing),
+    MinWidth(LengthVal),
+    MinHeight(LengthVal),
+    MaxHeight(LengthVal),
+    Overflow(Overflow),
+    WhiteSpace(WhiteSpace),
+    TextTransform(TextTransform),
+    Opacity(f32),
+    AlignSelf(AlignSelf),
+    FlexGrow(f32),
+    FlexShrink(f32),
+    FlexBasis(LengthVal),
+    OutlineWidth(f32),
+    OutlineColor(Color),
+    OutlineStyle(bool),
+    OutlineOffset(f32),
+    BackgroundGradient(LinearGradient),
+    /// `background-image: none` limpia el gradient (un autor puede
+    /// querer overridear un gradient heredado).
+    BackgroundGradientNone,
 }
 
 impl Decl {
@@ -820,6 +979,29 @@ impl Decl {
             }
             DeclKind::RowGap(v) => s.gap_row = *v,
             DeclKind::ColumnGap(v) => s.gap_column = *v,
+            DeclKind::BoxSizing(b) => s.box_sizing = *b,
+            DeclKind::MinWidth(v) => s.min_width = *v,
+            DeclKind::MinHeight(v) => s.min_height = *v,
+            DeclKind::MaxHeight(v) => s.max_height = *v,
+            DeclKind::Overflow(o) => s.overflow = *o,
+            DeclKind::WhiteSpace(w) => s.white_space = *w,
+            DeclKind::TextTransform(t) => s.text_transform = *t,
+            DeclKind::Opacity(v) => s.opacity = *v,
+            DeclKind::AlignSelf(a) => s.align_self = *a,
+            DeclKind::FlexGrow(v) => s.flex_grow = *v,
+            DeclKind::FlexShrink(v) => s.flex_shrink = *v,
+            DeclKind::FlexBasis(v) => s.flex_basis = *v,
+            DeclKind::OutlineWidth(v) => s.outline.width = *v,
+            DeclKind::OutlineColor(c) => s.outline.color = Some(*c),
+            DeclKind::OutlineStyle(active) => {
+                s.outline.style_active = *active;
+                if !*active {
+                    s.outline.color = None;
+                }
+            }
+            DeclKind::OutlineOffset(v) => s.outline.offset = *v,
+            DeclKind::BackgroundGradient(g) => s.background_gradient = Some(g.clone()),
+            DeclKind::BackgroundGradientNone => s.background_gradient = None,
         }
     }
 }
@@ -1384,6 +1566,14 @@ fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> Vec<Decl> {
             out.extend(parse_border_shorthand(value, important));
             continue;
         }
+        if prop.eq_ignore_ascii_case("flex") {
+            out.extend(parse_flex_shorthand(value, important));
+            continue;
+        }
+        if prop.eq_ignore_ascii_case("outline") {
+            out.extend(parse_outline_shorthand(value, important));
+            continue;
+        }
         if let Some(kind) = decl_kind_from_pair(prop, value) {
             out.push(Decl { kind, important });
         }
@@ -1447,6 +1637,28 @@ fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "gap" => parse_gap(value).map(|(r, c)| DeclKind::Gap { row: r, column: c }),
         "row-gap" => parse_length_px(value).map(DeclKind::RowGap),
         "column-gap" => parse_length_px(value).map(DeclKind::ColumnGap),
+        "box-sizing" => parse_box_sizing(value).map(DeclKind::BoxSizing),
+        "min-width" => parse_length_or_pct(value).map(DeclKind::MinWidth),
+        "min-height" => parse_length_or_pct(value).map(DeclKind::MinHeight),
+        "max-height" => parse_length_or_pct(value).map(DeclKind::MaxHeight),
+        "overflow" | "overflow-x" | "overflow-y" => {
+            parse_overflow(value).map(DeclKind::Overflow)
+        }
+        "white-space" => parse_white_space(value).map(DeclKind::WhiteSpace),
+        "text-transform" => parse_text_transform(value).map(DeclKind::TextTransform),
+        "opacity" => parse_opacity(value).map(DeclKind::Opacity),
+        "align-self" => parse_align_self(value).map(DeclKind::AlignSelf),
+        "flex-grow" => value.trim().parse::<f32>().ok().map(DeclKind::FlexGrow),
+        "flex-shrink" => value.trim().parse::<f32>().ok().map(DeclKind::FlexShrink),
+        "flex-basis" => parse_length_or_pct(value).map(DeclKind::FlexBasis),
+        // `flex` y `outline` son shorthands múltiples — se expanden en
+        // `parse_declarations` antes de llegar acá.
+        "flex" | "outline" => None,
+        "outline-width" => parse_length_px(value).map(DeclKind::OutlineWidth),
+        "outline-color" => parse_color(value).map(DeclKind::OutlineColor),
+        "outline-style" => parse_border_style(value).map(DeclKind::OutlineStyle),
+        "outline-offset" => parse_length_px(value).map(DeclKind::OutlineOffset),
+        "background-image" => parse_background_image(value),
         // `border: 1px solid #ccc` — shorthand. Devolvemos un único
         // DeclKind sintético: en realidad ya hay 3 sub-decls que el
         // caller debe emitir, así que delegamos a una ruta especial vía
@@ -1977,6 +2189,267 @@ fn parse_gap(value: &str) -> Option<(f32, f32)> {
             Some((v, v))
         }
         [r, c] => Some((parse_length_px(r)?, parse_length_px(c)?)),
+        _ => None,
+    }
+}
+
+fn parse_box_sizing(s: &str) -> Option<BoxSizing> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "content-box" => Some(BoxSizing::ContentBox),
+        "border-box" => Some(BoxSizing::BorderBox),
+        _ => None,
+    }
+}
+
+fn parse_overflow(s: &str) -> Option<Overflow> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "visible" => Some(Overflow::Visible),
+        // hidden/clip/auto/scroll todos los tratamos como Hidden por
+        // ahora (no soportamos scroll real; clip y hidden cortan igual).
+        "hidden" | "clip" | "auto" | "scroll" => Some(Overflow::Hidden),
+        _ => None,
+    }
+}
+
+fn parse_white_space(s: &str) -> Option<WhiteSpace> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "normal" => Some(WhiteSpace::Normal),
+        "nowrap" => Some(WhiteSpace::NoWrap),
+        "pre" => Some(WhiteSpace::Pre),
+        "pre-wrap" => Some(WhiteSpace::PreWrap),
+        "pre-line" => Some(WhiteSpace::PreLine),
+        _ => None,
+    }
+}
+
+fn parse_text_transform(s: &str) -> Option<TextTransform> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "none" => Some(TextTransform::None),
+        "uppercase" => Some(TextTransform::Uppercase),
+        "lowercase" => Some(TextTransform::Lowercase),
+        "capitalize" => Some(TextTransform::Capitalize),
+        _ => None,
+    }
+}
+
+/// Acepta `0..1` o `0%..100%`. Clampa.
+fn parse_opacity(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(num) = s.strip_suffix('%') {
+        let pct: f32 = num.trim().parse().ok()?;
+        return Some((pct / 100.0).clamp(0.0, 1.0));
+    }
+    s.parse::<f32>().ok().map(|v| v.clamp(0.0, 1.0))
+}
+
+fn parse_align_self(s: &str) -> Option<AlignSelf> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(AlignSelf::Auto),
+        "start" | "flex-start" => Some(AlignSelf::Start),
+        "center" => Some(AlignSelf::Center),
+        "end" | "flex-end" => Some(AlignSelf::End),
+        "stretch" => Some(AlignSelf::Stretch),
+        "baseline" => Some(AlignSelf::Baseline),
+        _ => None,
+    }
+}
+
+/// `flex: <grow> [<shrink>] [<basis>]`. Casos especiales:
+/// - `flex: none` → `0 0 auto`
+/// - `flex: auto` → `1 1 auto`
+/// - `flex: <number>` → `N 1 0%` (basis 0%, common preset)
+/// Devuelve 3 decls atómicas (grow + shrink + basis).
+fn parse_flex_shorthand(value: &str, important: bool) -> Vec<Decl> {
+    let v = value.trim().to_ascii_lowercase();
+    let (grow, shrink, basis) = if v == "none" {
+        (0.0_f32, 0.0_f32, LengthVal::Auto)
+    } else if v == "auto" {
+        (1.0_f32, 1.0_f32, LengthVal::Auto)
+    } else if v == "initial" {
+        (0.0_f32, 1.0_f32, LengthVal::Auto)
+    } else {
+        let parts: Vec<&str> = value.split_whitespace().collect();
+        match parts.as_slice() {
+            [g] => {
+                // `flex: 1` ⇒ `1 1 0%`
+                let Some(g) = g.parse::<f32>().ok() else {
+                    return Vec::new();
+                };
+                (g, 1.0, LengthVal::Pct(0.0))
+            }
+            [g, s_or_b] => {
+                let Some(g) = g.parse::<f32>().ok() else {
+                    return Vec::new();
+                };
+                // El segundo puede ser shrink (número solo) o basis (longitud).
+                if let Some(b) = parse_length_or_pct(s_or_b) {
+                    (g, 1.0, b)
+                } else if let Some(s) = s_or_b.parse::<f32>().ok() {
+                    (g, s, LengthVal::Pct(0.0))
+                } else {
+                    return Vec::new();
+                }
+            }
+            [g, s, b] => {
+                let Some(g) = g.parse::<f32>().ok() else {
+                    return Vec::new();
+                };
+                let Some(s) = s.parse::<f32>().ok() else {
+                    return Vec::new();
+                };
+                let Some(b) = parse_length_or_pct(b) else {
+                    return Vec::new();
+                };
+                (g, s, b)
+            }
+            _ => return Vec::new(),
+        }
+    };
+    vec![
+        Decl { kind: DeclKind::FlexGrow(grow), important },
+        Decl { kind: DeclKind::FlexShrink(shrink), important },
+        Decl { kind: DeclKind::FlexBasis(basis), important },
+    ]
+}
+
+/// `outline: <width> <style> <color>`. Tokens en cualquier orden.
+fn parse_outline_shorthand(value: &str, important: bool) -> Vec<Decl> {
+    let mut width: Option<f32> = None;
+    let mut color: Option<Color> = None;
+    let mut style_active: Option<bool> = None;
+    for tok in value.split_whitespace() {
+        if width.is_none() {
+            if let Some(w) = parse_length_px(tok) {
+                width = Some(w);
+                continue;
+            }
+        }
+        if style_active.is_none() {
+            if let Some(active) = parse_border_style(tok) {
+                style_active = Some(active);
+                continue;
+            }
+        }
+        if color.is_none() {
+            if let Some(c) = parse_color(tok) {
+                color = Some(c);
+                continue;
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let active = style_active.unwrap_or(true);
+    if !active {
+        // `outline-style: none` apaga: width=0 + color=None.
+        out.push(Decl { kind: DeclKind::OutlineStyle(false), important });
+        return out;
+    }
+    if let Some(w) = width {
+        out.push(Decl { kind: DeclKind::OutlineWidth(w), important });
+    }
+    if let Some(c) = color {
+        out.push(Decl { kind: DeclKind::OutlineColor(c), important });
+    }
+    if style_active.is_some() {
+        out.push(Decl { kind: DeclKind::OutlineStyle(true), important });
+    }
+    out
+}
+
+/// `background-image: linear-gradient(...)` o `none`. Devuelve un
+/// `DeclKind` listo (Background o BackgroundGradient o None).
+fn parse_background_image(value: &str) -> Option<DeclKind> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Some(DeclKind::BackgroundGradientNone);
+    }
+    if let Some(args) = strip_fn(v, "linear-gradient") {
+        return parse_linear_gradient(args).map(DeclKind::BackgroundGradient);
+    }
+    // url(...) y otros gradientes no soportados — silencio.
+    None
+}
+
+/// Parsea el contenido de `linear-gradient(...)`. Sintaxis aceptada:
+/// - `linear-gradient(<angle>?, <stop>, <stop>, ...)`
+/// - `linear-gradient(to <side>?, <stop>, <stop>, ...)`
+/// `<angle>` en `Ndeg` o `Nturn` (turn × 360 = grados). Default 180
+/// (top→bottom). `to right`=90, `to left`=270, `to top`=0, `to bottom`=180,
+/// combinaciones diagonales (`to top right`=45) también. Stops: `<color>
+/// <pos>?` donde pos es `N%` o `Npx`.
+fn parse_linear_gradient(args: &str) -> Option<LinearGradient> {
+    let parts: Vec<&str> = args.split(',').map(|s| s.trim()).collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    let (angle_deg, stops_start) = parse_gradient_direction(parts[0]);
+    let stops_start_idx = if angle_deg.is_some() { 1 } else { 0 };
+    let angle_deg = angle_deg.unwrap_or(180.0);
+    let mut stops: Vec<GradientStop> = Vec::new();
+    for raw in &parts[stops_start_idx..] {
+        if let Some(s) = parse_gradient_stop(raw) {
+            stops.push(s);
+        }
+    }
+    if stops.len() < 2 {
+        return None;
+    }
+    let _ = stops_start;
+    Some(LinearGradient { angle_deg, stops })
+}
+
+/// Si el token es una dirección/ángulo válido devuelve `(Some(deg),
+/// true)`; si no encaja, `(None, false)` para que el caller lo trate
+/// como stop.
+fn parse_gradient_direction(s: &str) -> (Option<f32>, bool) {
+    let s = s.trim();
+    let lower = s.to_ascii_lowercase();
+    if let Some(rest) = lower.strip_prefix("to ") {
+        let deg = match rest.trim() {
+            "top" => 0.0,
+            "right" => 90.0,
+            "bottom" => 180.0,
+            "left" => 270.0,
+            "top right" | "right top" => 45.0,
+            "bottom right" | "right bottom" => 135.0,
+            "bottom left" | "left bottom" => 225.0,
+            "top left" | "left top" => 315.0,
+            _ => return (None, false),
+        };
+        return (Some(deg), true);
+    }
+    if let Some(num) = lower.strip_suffix("deg") {
+        if let Ok(v) = num.trim().parse::<f32>() {
+            return (Some(v), true);
+        }
+    }
+    if let Some(num) = lower.strip_suffix("turn") {
+        if let Ok(v) = num.trim().parse::<f32>() {
+            return (Some(v * 360.0), true);
+        }
+    }
+    (None, false)
+}
+
+fn parse_gradient_stop(s: &str) -> Option<GradientStop> {
+    let s = s.trim();
+    let parts: Vec<&str> = s.split_whitespace().collect();
+    match parts.as_slice() {
+        [c] => Some(GradientStop { color: parse_color(c)?, pos: None }),
+        [c, p] => {
+            let color = parse_color(c)?;
+            let pos = if let Some(pct) = p.strip_suffix('%') {
+                pct.trim().parse::<f32>().ok().map(|v| (v / 100.0).clamp(0.0, 1.0))
+            } else if let Some(px) = parse_length_px(p) {
+                // Aproximación: tratamos px como 0..1 dividiendo por 100.
+                // En el wild la mayoría usa %, así que esta heurística
+                // raramente importa.
+                Some((px / 100.0).clamp(0.0, 1.0))
+            } else {
+                None
+            };
+            Some(GradientStop { color, pos })
+        }
         _ => None,
     }
 }
@@ -3216,7 +3689,170 @@ mod tests {
     }
 
     #[test]
-    fn padding_individual_4_lados() {
+    fn parsea_box_sizing() {
+        assert_eq!(parse_box_sizing("content-box"), Some(BoxSizing::ContentBox));
+        assert_eq!(parse_box_sizing("border-box"), Some(BoxSizing::BorderBox));
+        assert_eq!(parse_box_sizing("WeIrD"), None);
+    }
+
+    #[test]
+    fn computa_min_max_sizes() {
+        let html = r#"<html><head><style>
+            div {
+                min-width: 100px;
+                min-height: 50px;
+                max-height: 200px;
+            }
+        </style></head><body><div></div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let d = dom.find("div").unwrap();
+        let s = eng.compute(&d);
+        assert!(matches!(s.min_width, LengthVal::Px(100.0)));
+        assert!(matches!(s.min_height, LengthVal::Px(50.0)));
+        assert!(matches!(s.max_height, LengthVal::Px(200.0)));
+    }
+
+    #[test]
+    fn parsea_overflow_alias() {
+        assert_eq!(parse_overflow("visible"), Some(Overflow::Visible));
+        assert_eq!(parse_overflow("hidden"), Some(Overflow::Hidden));
+        assert_eq!(parse_overflow("auto"), Some(Overflow::Hidden));
+        assert_eq!(parse_overflow("scroll"), Some(Overflow::Hidden));
+        assert_eq!(parse_overflow("clip"), Some(Overflow::Hidden));
+    }
+
+    #[test]
+    fn parsea_white_space_y_se_hereda() {
+        let html = r#"<html><head><style>
+            pre { white-space: pre }
+        </style></head><body><pre>line1
+line2</pre></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let pre = dom.find("pre").unwrap();
+        let s = eng.compute(&pre);
+        assert_eq!(s.white_space, WhiteSpace::Pre);
+    }
+
+    #[test]
+    fn parsea_text_transform_y_se_hereda() {
+        let html = r#"<html><head><style>
+            p { text-transform: uppercase }
+        </style></head><body><p>x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        let s = eng.compute(&p);
+        assert_eq!(s.text_transform, TextTransform::Uppercase);
+    }
+
+    #[test]
+    fn parsea_opacity_clampa() {
+        assert_eq!(parse_opacity("0.5"), Some(0.5));
+        assert_eq!(parse_opacity("100%"), Some(1.0));
+        assert_eq!(parse_opacity("0"), Some(0.0));
+        assert_eq!(parse_opacity("2"), Some(1.0)); // clamp arriba
+        assert_eq!(parse_opacity("-0.5"), Some(0.0)); // clamp abajo
+    }
+
+    #[test]
+    fn parsea_align_self() {
+        assert_eq!(parse_align_self("auto"), Some(AlignSelf::Auto));
+        assert_eq!(parse_align_self("flex-end"), Some(AlignSelf::End));
+        assert_eq!(parse_align_self("stretch"), Some(AlignSelf::Stretch));
+    }
+
+    #[test]
+    fn parsea_flex_shorthand_presets() {
+        let decls = parse_flex_shorthand("none", false);
+        assert_eq!(decls.len(), 3);
+        assert!(matches!(decls[0].kind, DeclKind::FlexGrow(g) if g == 0.0));
+        assert!(matches!(decls[1].kind, DeclKind::FlexShrink(s) if s == 0.0));
+        assert!(matches!(decls[2].kind, DeclKind::FlexBasis(LengthVal::Auto)));
+
+        let decls = parse_flex_shorthand("auto", false);
+        assert!(matches!(decls[0].kind, DeclKind::FlexGrow(g) if g == 1.0));
+        assert!(matches!(decls[1].kind, DeclKind::FlexShrink(s) if s == 1.0));
+        assert!(matches!(decls[2].kind, DeclKind::FlexBasis(LengthVal::Auto)));
+
+        let decls = parse_flex_shorthand("1", false);
+        // `flex: 1` ⇒ `1 1 0%`
+        assert!(matches!(decls[0].kind, DeclKind::FlexGrow(g) if g == 1.0));
+        assert!(matches!(decls[1].kind, DeclKind::FlexShrink(s) if s == 1.0));
+        assert!(matches!(decls[2].kind, DeclKind::FlexBasis(LengthVal::Pct(0.0))));
+    }
+
+    #[test]
+    fn parsea_flex_shorthand_3_valores() {
+        let decls = parse_flex_shorthand("2 0 200px", false);
+        assert_eq!(decls.len(), 3);
+        assert!(matches!(decls[0].kind, DeclKind::FlexGrow(g) if g == 2.0));
+        assert!(matches!(decls[1].kind, DeclKind::FlexShrink(s) if s == 0.0));
+        assert!(matches!(decls[2].kind, DeclKind::FlexBasis(LengthVal::Px(200.0))));
+    }
+
+    #[test]
+    fn parsea_outline_shorthand() {
+        let decls = parse_outline_shorthand("2px solid orange", false);
+        let mut has_w = false; let mut has_s = false; let mut has_c = false;
+        for d in &decls {
+            match &d.kind {
+                DeclKind::OutlineWidth(w) => { has_w = (*w - 2.0).abs() < 1e-6; }
+                DeclKind::OutlineStyle(active) => { has_s = *active; }
+                DeclKind::OutlineColor(c) => { has_c = *c == Color::rgb(255, 165, 0); }
+                _ => {}
+            }
+        }
+        assert!(has_w && has_s && has_c);
+
+        let decls = parse_outline_shorthand("none", false);
+        assert_eq!(decls.len(), 1);
+        assert!(matches!(decls[0].kind, DeclKind::OutlineStyle(false)));
+    }
+
+    #[test]
+    fn parsea_linear_gradient_basico() {
+        let g = parse_linear_gradient("to right, #f00, #00f").unwrap();
+        assert!((g.angle_deg - 90.0).abs() < 1e-6);
+        assert_eq!(g.stops.len(), 2);
+        assert_eq!(g.stops[0].color, Color::rgb(255, 0, 0));
+        assert_eq!(g.stops[1].color, Color::rgb(0, 0, 255));
+
+        let g = parse_linear_gradient("45deg, red 0%, blue 100%").unwrap();
+        assert!((g.angle_deg - 45.0).abs() < 1e-6);
+        assert_eq!(g.stops[0].pos, Some(0.0));
+        assert_eq!(g.stops[1].pos, Some(1.0));
+
+        // Default 180 (top→bottom) cuando no se da dirección.
+        let g = parse_linear_gradient("red, blue").unwrap();
+        assert!((g.angle_deg - 180.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn parsea_background_image_gradient_y_none() {
+        // `background-image: linear-gradient(...)` produce un Gradient.
+        let html = r#"<html><head><style>
+            div { background-image: linear-gradient(to right, red, blue) }
+        </style></head><body><div></div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let d = dom.find("div").unwrap();
+        let s = eng.compute(&d);
+        assert!(s.background_gradient.is_some());
+
+        // `background-image: none` deshabilita.
+        let html2 = r#"<html><head><style>
+            div { background-image: linear-gradient(red, blue); background-image: none }
+        </style></head><body><div></div></body></html>"#;
+        let dom2 = DomTree::parse(html2);
+        let eng2 = StyleEngine::from_dom(&dom2);
+        let d2 = dom2.find("div").unwrap();
+        assert!(eng2.compute(&d2).background_gradient.is_none());
+    }
+
+    #[test]
+    fn parsea_padding_individual_4_lados() {
         let html = r#"<html><head><style>
             div {
                 padding-top: 1px;

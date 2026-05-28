@@ -19,19 +19,23 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use llimphi_layout::taffy::prelude::{
-    auto, length, percent, AlignItems, FlexDirection, FlexWrap, JustifyContent, Position, Rect,
-    Size, Style,
+    auto, length, percent, AlignItems, AlignSelf, BoxSizing, Dimension, FlexDirection, FlexWrap,
+    JustifyContent, Position, Rect, Size, Style,
 };
-use llimphi_raster::kurbo::{Affine, Line, RoundedRect, Stroke};
-use llimphi_raster::peniko::{Blob, Color, Fill, Image as PenikoImage, ImageFormat};
+use llimphi_raster::kurbo::{Affine, Line, Point, RoundedRect, Stroke};
+use llimphi_raster::peniko::{
+    Blob, Color, ColorStop, ColorStops, Fill, Gradient, GradientKind, Image as PenikoImage,
+    ImageFormat,
+};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
 use puriy_engine::{
-    AlignItems as CssAlignItems, BoxNode, BoxShadow, BoxTree, Display, Engine,
-    FlexDirection as CssFlexDirection, FlexWrap as CssFlexWrap, JustifyContent as CssJustifyContent,
-    LengthVal, TextAlign, TextDecorationLine,
+    AlignItems as CssAlignItems, AlignSelf as CssAlignSelf, BoxNode, BoxShadow, BoxSizing as CssBoxSizing,
+    BoxTree, Display, Engine, FlexDirection as CssFlexDirection, FlexWrap as CssFlexWrap,
+    JustifyContent as CssJustifyContent, LengthVal, LinearGradient, Overflow, TextAlign,
+    TextDecorationLine,
 };
 
 const HEADER_H: f32 = 78.0;
@@ -665,13 +669,24 @@ fn render_box(b: &BoxNode) -> View<Msg> {
     let style = box_style(b);
     let mut view = View::new(style);
 
+    // opacity multiplica el alpha del background sólido. text/border
+    // se manejan en apply_decorations/render del texto.
+    let alpha_mul = b.opacity.clamp(0.0, 1.0);
+
     if let Some(bg) = b.background {
-        view = view.fill(Color::from_rgb8(bg.r, bg.g, bg.b));
+        let a = ((bg.a as f32) * alpha_mul) as u8;
+        view = view.fill(Color::from_rgba8(bg.r, bg.g, bg.b, a));
     }
     if let Some(hbg) = b.hover_background {
-        view = view.hover_fill(Color::from_rgb8(hbg.r, hbg.g, hbg.b));
+        let a = ((hbg.a as f32) * alpha_mul) as u8;
+        view = view.hover_fill(Color::from_rgba8(hbg.r, hbg.g, hbg.b, a));
     }
     view = apply_decorations(view, b);
+    // `overflow: hidden` aplica clip(true) — recorta el subárbol al
+    // borde del rect del nodo.
+    if matches!(b.overflow, Overflow::Hidden) {
+        view = view.clip(true);
+    }
 
     let link_color = Color::from_rgb8(30, 90, 200);
     let display_color = if b.link.is_some() {
@@ -771,9 +786,24 @@ fn apply_decorations(mut view: View<Msg>, b: &BoxNode) -> View<Msg> {
     }
     let radius = b.border_radius as f64;
     let shadow = b.box_shadow;
+    let alpha_mul = b.opacity.clamp(0.0, 1.0);
     let border = match (b.border_color, b.border_width) {
         (Some(c), w) if w > 0.0 => Some((c, w)),
         _ => None,
+    };
+    // outline se pinta fuera del border + offset, sin afectar layout. Si
+    // `style_active` es false (none/hidden) o falta color, no pinta.
+    let outline = if b.outline.style_active
+        && b.outline.width > 0.0
+        && b.outline.color.is_some()
+    {
+        Some((
+            b.outline.color.unwrap(),
+            b.outline.width,
+            b.outline.offset,
+        ))
+    } else {
+        None
     };
     // text-decoration sólo tiene efecto visual sobre hojas de texto. En
     // un nodo container, la línea ya la pinta cada hoja descendiente.
@@ -782,10 +812,32 @@ fn apply_decorations(mut view: View<Msg>, b: &BoxNode) -> View<Msg> {
     } else {
         None
     };
-    if shadow.is_none() && border.is_none() && deco.is_none() {
+    let gradient = b.background_gradient.clone();
+    if shadow.is_none()
+        && border.is_none()
+        && deco.is_none()
+        && outline.is_none()
+        && gradient.is_none()
+    {
         return view;
     }
     view.paint_with(move |scene, _typesetter, rect| {
+        // linear-gradient: se pinta como fill rectangular alineado al
+        // ángulo CSS. peniko interpreta `Linear { start, end }` como
+        // las dos puntas — calculamos el segmento atravesando el rect
+        // en la dirección dada.
+        if let Some(g) = &gradient {
+            if let Some(brush) = build_linear_gradient_brush(g, rect, alpha_mul) {
+                let r = RoundedRect::new(
+                    rect.x as f64,
+                    rect.y as f64,
+                    (rect.x + rect.w) as f64,
+                    (rect.y + rect.h) as f64,
+                    radius,
+                );
+                scene.fill(Fill::NonZero, Affine::IDENTITY, &brush, None, &r);
+            }
+        }
         if let Some(BoxShadow { offset_x, offset_y, blur_px, spread_px, color }) = shadow {
             let extra = (blur_px + spread_px) as f64;
             let half_alpha = if blur_px > 0.0 { 0.55 } else { 0.85 };
@@ -814,7 +866,24 @@ fn apply_decorations(mut view: View<Msg>, b: &BoxNode) -> View<Msg> {
                 (rect.y + rect.h) as f64 - half,
                 (radius - half).max(0.0),
             );
-            let color = Color::from_rgba8(bc.r, bc.g, bc.b, 255);
+            let a = (bc.a as f32 * alpha_mul) as u8;
+            let color = Color::from_rgba8(bc.r, bc.g, bc.b, a);
+            scene.stroke(&stroke, Affine::IDENTITY, color, None, &r);
+        }
+        if let Some((oc, ow, off)) = outline {
+            let stroke = Stroke::new(ow as f64);
+            let half = stroke.width * 0.5;
+            // outline se dibuja FUERA del border, separado por `offset`.
+            let outset = (off as f64) + half;
+            let r = RoundedRect::new(
+                rect.x as f64 - outset,
+                rect.y as f64 - outset,
+                (rect.x + rect.w) as f64 + outset,
+                (rect.y + rect.h) as f64 + outset,
+                radius + outset,
+            );
+            let a = (oc.a as f32 * alpha_mul) as u8;
+            let color = Color::from_rgba8(oc.r, oc.g, oc.b, a);
             scene.stroke(&stroke, Affine::IDENTITY, color, None, &r);
         }
         if let Some((line_kind, c, font_size)) = deco {
@@ -896,7 +965,11 @@ fn box_style(b: &BoxNode) -> Style {
     }
     let max_size = Size {
         width: length_to_taffy(b.max_width).unwrap_or_else(auto),
-        height: auto(),
+        height: length_to_taffy(b.max_height).unwrap_or_else(auto),
+    };
+    let min_size = Size {
+        width: length_to_taffy(b.min_width).unwrap_or_else(|| length(0.0_f32)),
+        height: length_to_taffy(b.min_height).unwrap_or_else(|| length(0.0_f32)),
     };
 
     // justify/align: si es flex, vienen del autor; sino, sólo derivamos
@@ -931,13 +1004,29 @@ fn box_style(b: &BoxNode) -> Style {
         Size { width: length(0.0_f32), height: length(0.0_f32) }
     };
 
+    // box-sizing default CSS = ContentBox; los resets modernos lo
+    // fuerzan a BorderBox. Taffy 0.9 default es BorderBox así que
+    // mapeamos explícito en ambos sentidos.
+    let box_sizing = match b.box_sizing {
+        CssBoxSizing::ContentBox => BoxSizing::ContentBox,
+        CssBoxSizing::BorderBox => BoxSizing::BorderBox,
+    };
+    let align_self = map_align_self(b.align_self);
+    let flex_basis: Dimension = length_to_taffy(b.flex_basis).unwrap_or_else(auto);
+
     Style {
         flex_direction,
         flex_wrap,
         justify_content,
         align_items,
+        align_self,
+        flex_grow: b.flex_grow,
+        flex_shrink: b.flex_shrink,
+        flex_basis,
+        box_sizing,
         gap,
         size: Size { width, height },
+        min_size,
         max_size,
         margin: Rect {
             left: length(b.margin.left),
@@ -953,6 +1042,63 @@ fn box_style(b: &BoxNode) -> Style {
         },
         ..Default::default()
     }
+}
+
+fn map_align_self(a: CssAlignSelf) -> Option<AlignSelf> {
+    match a {
+        CssAlignSelf::Auto => None,
+        CssAlignSelf::Start => Some(AlignSelf::Start),
+        CssAlignSelf::Center => Some(AlignSelf::Center),
+        CssAlignSelf::End => Some(AlignSelf::End),
+        CssAlignSelf::Stretch => Some(AlignSelf::Stretch),
+        CssAlignSelf::Baseline => Some(AlignSelf::Baseline),
+    }
+}
+
+/// Calcula el segmento (start, end) que cruza el rect en la dirección
+/// CSS (0deg = up, 90deg = right, etc.) y arma un peniko::Gradient
+/// linear con los stops del nodo. Aplica `alpha_mul` (opacity) a cada
+/// stop. Devuelve None si los stops no se pueden representar.
+fn build_linear_gradient_brush(
+    g: &LinearGradient,
+    rect: llimphi_ui::PaintRect,
+    alpha_mul: f32,
+) -> Option<Gradient> {
+    if g.stops.len() < 2 {
+        return None;
+    }
+    // CSS: 0deg = up (negative y), 90 = right (+x), 180 = down (+y),
+    // 270 = left (-x). Convertimos a radianes y direccion en
+    // espacio de pantalla (y crece hacia abajo).
+    let theta = (g.angle_deg).to_radians();
+    let dx = theta.sin() as f64;
+    let dy = -theta.cos() as f64;
+    let w = rect.w as f64;
+    let h = rect.h as f64;
+    // Largo del segmento que cubre el rect en la dirección (dx, dy):
+    // proyectamos cada esquina sobre el eje y tomamos el rango.
+    let cx = rect.x as f64 + w * 0.5;
+    let cy = rect.y as f64 + h * 0.5;
+    let half_len = (dx.abs() * w + dy.abs() * h) * 0.5;
+    let start = Point::new(cx - dx * half_len, cy - dy * half_len);
+    let end = Point::new(cx + dx * half_len, cy + dy * half_len);
+
+    // Stops: si pos es None, distribuir uniformemente.
+    let n = g.stops.len();
+    let mut peniko_stops: Vec<ColorStop> = Vec::with_capacity(n);
+    for (i, s) in g.stops.iter().enumerate() {
+        let pos = s.pos.unwrap_or_else(|| {
+            if n == 1 { 0.0 } else { i as f32 / (n - 1) as f32 }
+        });
+        let a = ((s.color.a as f32) * alpha_mul) as u8;
+        let c = Color::from_rgba8(s.color.r, s.color.g, s.color.b, a);
+        peniko_stops.push(ColorStop::from((pos, c)));
+    }
+    Some(Gradient {
+        kind: GradientKind::Linear { start, end },
+        stops: ColorStops(peniko_stops.into()),
+        ..Default::default()
+    })
 }
 
 fn map_flex_direction(d: CssFlexDirection) -> FlexDirection {
