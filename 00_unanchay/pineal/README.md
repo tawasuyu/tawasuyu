@@ -7,10 +7,15 @@ Catalog of specialized canvases (Cartesian · polar · mesh · treemap · phosph
 ## Install
 
 ```sh
-cargo run --release -p pineal-demo
-cargo run --release -p pineal-financial-demo
-cargo run --release -p pineal-phosphor-demo
-cargo run --release -p pineal-stream-demo
+cargo run --release -p pineal-demo            # cartesian multi-series
+cargo run --release -p pineal-financial-demo  # candlesticks OHLC
+cargo run --release -p pineal-flow-demo       # Sankey
+cargo run --release -p pineal-heatmap-demo    # heatmap 48×32 viviente
+cargo run --release -p pineal-mesh-demo       # grafo force-directed
+cargo run --release -p pineal-phosphor-demo   # trail tipo CRT
+cargo run --release -p pineal-polar-demo      # pie/donut + radar
+cargo run --release -p pineal-stream-demo     # osciloscopio sintético
+cargo run --release -p pineal-treemap-demo    # treemap squarified
 ```
 
 ## Compatibility
@@ -34,13 +39,18 @@ cargo run --release -p pineal-stream-demo
 | [`pineal-stream`](pineal-stream/README.md) | Scrolling time series. |
 | [`pineal-financial`](pineal-financial/README.md) | Candles, volumes, technical overlays. |
 | [`pineal-umbrella`](pineal-umbrella/README.md) | Compose multiple pineals over a viewport. |
-| [`pineal-export`](pineal-export/README.md) | PNG / SVG / GIF export. |
-| [`pineal-demo`](pineal-demo/README.md) | Demo gallery. |
-| [`pineal-financial-demo`](pineal-financial-demo/README.md) | Financial backend demo. |
-| [`pineal-phosphor-demo`](pineal-phosphor-demo/README.md) | Phosphor backend demo. |
-| [`pineal-stream-demo`](pineal-stream-demo/README.md) | Streaming backend demo. |
+| [`pineal-export`](pineal-export/README.md) | SVG (vector) + PNG (raster). |
+| `pineal-demo` | Cartesian multi-series. |
+| `pineal-financial-demo` | OHLC candlesticks. |
+| `pineal-flow-demo` | Sankey. |
+| `pineal-heatmap-demo` | Heatmap 2D animado. |
+| `pineal-mesh-demo` | Grafo force-directed. |
+| `pineal-phosphor-demo` | Trail estilo CRT. |
+| `pineal-polar-demo` | Pie / donut + radar. |
+| `pineal-stream-demo` | Osciloscopio sintético. |
+| `pineal-treemap-demo` | Treemap squarified. |
 
 ## Considerations
 
 - pineal **doesn't compute** — only draws. To run a simulation, talk to [`dominium`](../../01_yachay/dominium/README.md), [`tinkuy`](../../01_yachay/tinkuy/README.md), [`cosmos`](../../01_yachay/cosmos/README.md), etc., and feed it the result.
-- SVG export is true vector (not pixel capture).
+- SVG export is true vector (not pixel capture). PNG export is a tiny software rasterizer — no native graphics stack, no `tiny-skia`, no `cairo`. Text is intentionally skipped in PNG (use SVG when you need labels).

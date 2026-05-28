@@ -1,0 +1,14 @@
+[package]
+name = "pineal-polar-demo"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+publish = { workspace = true }
+description = "Lapaloma — demo polar: pie/donut a la izquierda, radar a la derecha."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+pineal-render = { path = "../../pineal-render" }
+pineal-polar = { path = "../../pineal-polar" }
