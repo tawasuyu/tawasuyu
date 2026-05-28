@@ -38,13 +38,14 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_theme::Theme;
-use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, View};
+use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use llimphi_widget_button::{button_view, ButtonPalette};
 use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
 use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
 use llimphi_widget_text_editor::{
     EditorMetrics, EditorPalette as TEPalette, Language, MemClipboard, PointerEvent,
 };
+use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 use pluma_align::CartaHebras;
 use pluma_core::NarrativeAtom;
 use pluma_cuerpo::{Cuerpo, Intencion};
@@ -86,6 +87,11 @@ enum Msg {
     AbrirDoc(Uuid),
     NuevoDoc,
     Guardar,
+    PathInputKey(KeyEvent),
+    FocusPath,
+    DefocusPath,
+    AbrirArchivo,
+    ExportarMd,
     ToglearFusion,
     ZonaSiguiente,
     ZonaAnterior,
@@ -127,6 +133,14 @@ struct Model {
     ultimo_error: Option<String>,
     ultimo_status: String,
 
+    /// Ruta del archivo a abrir/exportar — input compartido.
+    /// Se interpreta según qué botón clickea el usuario.
+    path_input: TextInputState,
+    /// Cuando es `true`, las teclas del usuario van al `path_input` en
+    /// vez del editor. Click sobre el input lo enciende; Esc, o un
+    /// click fuera (en realidad, sólo Esc) lo apaga.
+    path_focused: bool,
+
     side_izq_w: f32,
     side_der_w: f32,
 }
@@ -153,9 +167,17 @@ impl App for Pluma {
         actualizar(model, msg, handle)
     }
 
-    fn on_key(_model: &Self::Model, event: &KeyEvent) -> Option<Self::Msg> {
+    fn on_key(model: &Self::Model, event: &KeyEvent) -> Option<Self::Msg> {
         if event.state != KeyState::Pressed {
             return None;
+        }
+        // Si el input de ruta tiene foco, las teclas van ahí — incluso
+        // Ctrl/Shift combos. Esc lo apaga; cualquier otra cosa edita.
+        if model.path_focused {
+            if matches!(&event.key, Key::Named(NamedKey::Escape)) {
+                return Some(Msg::DefocusPath);
+            }
+            return Some(Msg::PathInputKey(event.clone()));
         }
         let ctrl = event.modifiers.ctrl || event.modifiers.meta;
         let shift = event.modifiers.shift;
@@ -260,7 +282,9 @@ fn init_modelo() -> Model {
         en_curso: false,
         ultimo_error: None,
         ultimo_status: "listo".to_string(),
-        side_izq_w: 240.0,
+        path_input: TextInputState::new(),
+        path_focused: false,
+        side_izq_w: 280.0,
         side_der_w: 340.0,
     }
 }
@@ -338,6 +362,23 @@ fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         }
         Msg::Guardar => {
             guardar_activo(&mut model);
+        }
+        Msg::PathInputKey(ev) => {
+            model.path_input.apply_key(&ev);
+        }
+        Msg::FocusPath => {
+            model.path_focused = true;
+        }
+        Msg::DefocusPath => {
+            model.path_focused = false;
+        }
+        Msg::AbrirArchivo => {
+            model.path_focused = false;
+            abrir_archivo(&mut model);
+        }
+        Msg::ExportarMd => {
+            model.path_focused = false;
+            exportar_md(&mut model);
         }
         Msg::ToglearFusion => {
             if let Some(idx) = model.ide.junction_antes_del_caret() {
@@ -504,6 +545,136 @@ fn guardar_activo(model: &mut Model) {
         .filter(|c| matches!(c, CambioAtom::Eliminar { .. }))
         .count();
     model.ultimo_status = format!("guardado: {n_mut} mut · {n_new} crear · {n_del} del");
+}
+
+fn abrir_archivo(model: &mut Model) {
+    let path_raw = model.path_input.text().trim().to_string();
+    if path_raw.is_empty() {
+        model.ultimo_error = Some("ruta vacía".into());
+        return;
+    }
+    let path = expandir_ruta(&path_raw);
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(e) => {
+            model.ultimo_error = Some(format!("leyendo {path:?}: {e}"));
+            return;
+        }
+    };
+    let nombre = path
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "archivo".to_string());
+    let ahora = ahora_unix();
+
+    let importado = if extension_lower(&path) == Some("docx".to_string()) {
+        match foreign_docx::parse_docx(&bytes, "es", nombre.clone(), ahora) {
+            Ok(imp) => (imp.cuerpo, imp.atoms),
+            Err(e) => {
+                model.ultimo_error = Some(format!("parse_docx {nombre}: {e:?}"));
+                return;
+            }
+        }
+    } else if extension_lower(&path) == Some("md".to_string())
+        || extension_lower(&path) == Some("markdown".to_string())
+        || extension_lower(&path) == Some("txt".to_string())
+    {
+        let texto = match std::str::from_utf8(&bytes) {
+            Ok(s) => s.to_string(),
+            Err(e) => {
+                model.ultimo_error = Some(format!("{nombre} no es UTF-8: {e}"));
+                return;
+            }
+        };
+        let imp = pluma_md::parse_md(&texto, "es", nombre.clone(), ahora);
+        (imp.cuerpo, imp.atoms)
+    } else {
+        model.ultimo_error = Some(format!(
+            "extensión no soportada en {nombre} — usá .md o .docx"
+        ));
+        return;
+    };
+
+    let (cuerpo, atoms_nuevos) = importado;
+    if atoms_nuevos.is_empty() {
+        model.ultimo_error = Some(format!("{nombre} no produjo átomos"));
+        return;
+    }
+    for a in &atoms_nuevos {
+        let _ = model.store.put_atom(a);
+        model.atoms.insert(a.id, a.clone());
+    }
+    let _ = model.store.put_cuerpo(&cuerpo);
+    let _ = model.store.flush();
+    let id = cuerpo.id;
+    let n = atoms_nuevos.len();
+    model.cuerpos.push(cuerpo);
+    model.ultimo_status = format!("abierto «{nombre}»: {n} átomos");
+    model.ultimo_error = None;
+    cambiar_activo(model, id);
+}
+
+fn exportar_md(model: &mut Model) {
+    let Some(activo_id) = model.activo else {
+        model.ultimo_error = Some("sin doc activo".into());
+        return;
+    };
+    let path_raw = model.path_input.text().trim().to_string();
+    if path_raw.is_empty() {
+        model.ultimo_error = Some("ruta vacía".into());
+        return;
+    }
+    let path = expandir_ruta(&path_raw);
+    let Some(cuerpo) = model.cuerpos.iter().find(|c| c.id == activo_id) else {
+        model.ultimo_error = Some("doc activo desapareció".into());
+        return;
+    };
+    let mut md = String::new();
+    for atom_id in &cuerpo.orden {
+        if let Some(a) = model.atoms.get(atom_id) {
+            if !md.is_empty() {
+                md.push_str("\n\n");
+            }
+            md.push_str(&a.content);
+        }
+    }
+    if md.is_empty() {
+        model.ultimo_error = Some("doc vacío — nada que exportar".into());
+        return;
+    }
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match std::fs::write(&path, md.as_bytes()) {
+        Ok(()) => {
+            model.ultimo_status = format!(
+                "exportado «{}» a {}",
+                cuerpo.metadatos.nombre_legible,
+                path.display()
+            );
+            model.ultimo_error = None;
+        }
+        Err(e) => {
+            model.ultimo_error = Some(format!("escribiendo {path:?}: {e}"));
+        }
+    }
+}
+
+fn expandir_ruta(raw: &str) -> PathBuf {
+    if let Some(rest) = raw.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home).join(rest);
+        }
+    } else if raw == "~" {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home);
+        }
+    }
+    PathBuf::from(raw)
+}
+
+fn extension_lower(p: &std::path::Path) -> Option<String> {
+    p.extension().map(|e| e.to_string_lossy().to_lowercase())
 }
 
 fn cycle_backend(model: &mut Model) {
@@ -822,6 +993,8 @@ fn panel_documentos(model: &Model, theme: &Theme) -> View<Msg> {
     })
     .text_aligned("DOCUMENTOS".to_string(), 10.0, theme.fg_muted, Alignment::Start);
 
+    let archivo = seccion_archivo(model, theme);
+
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
@@ -842,7 +1015,71 @@ fn panel_documentos(model: &Model, theme: &Theme) -> View<Msg> {
     })
     .fill(theme.bg_panel)
     .clip(true)
-    .children(vec![header, boton_nuevo, boton_guardar, lista])
+    .children(vec![header, boton_nuevo, boton_guardar, archivo, lista])
+}
+
+fn seccion_archivo(model: &Model, theme: &Theme) -> View<Msg> {
+    let palette_btn = ButtonPalette::from_theme(theme);
+    let palette_input = TextInputPalette::from_theme(theme);
+
+    let header = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(18.0_f32),
+        },
+        padding: Rect {
+            left: length(4.0_f32),
+            right: length(4.0_f32),
+            top: length(2.0_f32),
+            bottom: length(2.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(
+        "ARCHIVO".to_string(),
+        10.0,
+        theme.fg_muted,
+        Alignment::Start,
+    );
+
+    let input = text_input_view::<Msg>(
+        &model.path_input,
+        "ruta .md o .docx (Esc para salir)",
+        model.path_focused,
+        &palette_input,
+        Msg::FocusPath,
+    );
+
+    let fila_botones = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(28.0_f32),
+        },
+        gap: Size {
+            width: length(6.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![
+        button_view::<Msg>("📂 abrir", &palette_btn, Msg::AbrirArchivo),
+        button_view::<Msg>("⬆ exportar md", &palette_btn, Msg::ExportarMd),
+    ]);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(82.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(4.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![header, input, fila_botones])
 }
 
 fn panel_editor(model: &Model, palette_editor: &TEPalette) -> View<Msg> {

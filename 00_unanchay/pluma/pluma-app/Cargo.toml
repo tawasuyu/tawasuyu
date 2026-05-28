@@ -15,6 +15,8 @@ path = "src/main.rs"
 [dependencies]
 pluma-core = { path = "../pluma-core" }
 pluma-cuerpo = { path = "../pluma-cuerpo" }
+pluma-md = { path = "../pluma-md" }
+foreign-docx = { path = "../foreign-docx" }
 pluma-align = { path = "../pluma-align" }
 pluma-editor-cuerpo = { path = "../pluma-editor-cuerpo" }
 pluma-editor-llimphi = { path = "../pluma-editor-llimphi" }
@@ -30,5 +32,6 @@ llimphi-widget-button = { workspace = true }
 llimphi-widget-splitter = { workspace = true }
 llimphi-widget-list = { workspace = true }
 llimphi-widget-text-editor = { workspace = true }
+llimphi-widget-text-input = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
