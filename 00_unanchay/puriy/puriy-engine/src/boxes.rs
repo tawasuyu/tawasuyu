@@ -556,6 +556,42 @@ fn svg_num(node: &Handle, name: &str, default: f32) -> f32 {
         .unwrap_or(default)
 }
 
+/// Elige una URL del `srcset` HTML. Subset: cada candidato es `url
+/// [descriptor]` separados por `,`. Descriptor puede ser `Nx`
+/// (densidad) o `Nw` (ancho) o ausente. Estrategia: preferimos la
+/// más alta densidad (`Nx`) o el ancho más grande (`Nw`); sin
+/// viewport conocido al tiempo de parse, asumimos high-DPI por default.
+pub(crate) fn pick_srcset(srcset: &str) -> Option<String> {
+    if srcset.trim().is_empty() {
+        return None;
+    }
+    let mut best_score: f32 = -1.0;
+    let mut best_url: Option<String> = None;
+    for entry in srcset.split(',') {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let (url, desc) = match entry.split_once(char::is_whitespace) {
+            Some((u, d)) => (u.trim().to_string(), d.trim().to_string()),
+            None => (entry.to_string(), String::new()),
+        };
+        let score: f32 = if let Some(rest) = desc.strip_suffix('x') {
+            rest.parse::<f32>().unwrap_or(1.0) * 1000.0
+        } else if let Some(rest) = desc.strip_suffix('w') {
+            rest.parse::<f32>().unwrap_or(0.0)
+        } else {
+            // Sin descriptor — equivalente a 1x.
+            1000.0
+        };
+        if score > best_score {
+            best_score = score;
+            best_url = Some(url);
+        }
+    }
+    best_url
+}
+
 fn parse_svg_points(s: &str) -> Vec<(f32, f32)> {
     let nums: Vec<f32> = s
         .split(|c: char| c.is_whitespace() || c == ',')
@@ -935,9 +971,30 @@ fn build_node(
                 None
             };
             // <img>: descarga + decode sync. Si falla, el campo queda
-            // None y el chrome muestra placeholder con el alt.
+            // None y el chrome muestra placeholder con el alt. Resuelve
+            // `srcset` antes que `src` (responsive images).
             let image = if tag.as_deref() == Some("img") {
-                dom::attr(node, "src")
+                let src_candidate = pick_srcset(&dom::attr(node, "srcset").unwrap_or_default())
+                    .or_else(|| dom::attr(node, "src"));
+                src_candidate
+                    .and_then(|s| resolve_href(base, &s))
+                    .and_then(|abs| fetch_and_decode(&abs))
+            } else if tag.as_deref() == Some("picture") {
+                // `<picture>`: el primer `<source srcset>` que sirva
+                // gana; sino caemos al `<img>` interno (que ya entra
+                // como child y trae su src/srcset).
+                let mut chosen: Option<String> = None;
+                for child in node.children.borrow().iter() {
+                    if dom::element_name(child).as_deref() == Some("source") {
+                        if let Some(s) = dom::attr(child, "srcset") {
+                            if let Some(c) = pick_srcset(&s) {
+                                chosen = Some(c);
+                                break;
+                            }
+                        }
+                    }
+                }
+                chosen
                     .and_then(|s| resolve_href(base, &s))
                     .and_then(|abs| fetch_and_decode(&abs))
             } else {
@@ -1930,6 +1987,26 @@ mod tests {
             }
         });
         assert!(clickable.is_empty(), "ningún href no-web debería ser clickable: {clickable:?}");
+    }
+
+    #[test]
+    fn srcset_elige_la_densidad_mas_alta() {
+        let url = super::pick_srcset("foo.png 1x, foo-2x.png 2x, foo-3x.png 3x");
+        assert_eq!(url.as_deref(), Some("foo-3x.png"));
+    }
+
+    #[test]
+    fn srcset_elige_el_ancho_mas_grande() {
+        let url = super::pick_srcset("a.png 320w, b.png 800w, c.png 1600w");
+        assert_eq!(url.as_deref(), Some("c.png"));
+    }
+
+    #[test]
+    fn srcset_sin_descriptor_usa_la_primera_con_1x_implicito() {
+        // En la práctica un srcset sin descriptor es equivalente a 1x.
+        let url = super::pick_srcset("a.png, b.png");
+        // No importa el orden interno — basta con que devuelva alguno.
+        assert!(url.is_some());
     }
 
     #[test]

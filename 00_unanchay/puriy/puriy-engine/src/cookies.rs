@@ -68,9 +68,16 @@ pub fn clear() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Lock shared entre los tests del módulo — todos comparten el jar
+    /// global, así que `cargo test` con --test-threads>1 los serializa
+    /// vía esta mutex.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn put_y_get_round_trip() {
+        let _g = TEST_LOCK.lock().unwrap();
         clear();
         put_set_cookie("foo.test", "sid=abc123; Path=/; HttpOnly");
         put_set_cookie("foo.test", "theme=dark");
@@ -81,6 +88,7 @@ mod tests {
 
     #[test]
     fn put_reemplaza_si_existe() {
+        let _g = TEST_LOCK.lock().unwrap();
         clear();
         put_set_cookie("bar.test", "sid=old");
         put_set_cookie("bar.test", "sid=new");
@@ -90,6 +98,7 @@ mod tests {
 
     #[test]
     fn host_aislado() {
+        let _g = TEST_LOCK.lock().unwrap();
         clear();
         put_set_cookie("a.test", "x=1");
         put_set_cookie("b.test", "y=2");
