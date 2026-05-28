@@ -26,8 +26,10 @@
 //! - Drag izq.    — mueve la nota bajo el cursor por el grid, snappeando a
 //!                  la granularidad activa. Si el press cae sobre el borde
 //!                  derecho (~6 px) se entra en modo resize: el drag cambia
-//!                  la duración en lugar de la posición. Todo el drag es un
-//!                  sólo undo.
+//!                  la duración en lugar de la posición. Si el press cae
+//!                  sobre un dot de la curva de automación, el drag mueve
+//!                  el punto en (beat, value); el clamp impide cruzar a
+//!                  los vecinos. Todo el drag es un sólo undo.
 //! - Click der.   — borra la nota bajo el cursor.
 //! - Wheel        — desplaza la ventana vertical de pitches en semitonos.
 //! - `Alt+D`      — prende / apaga el delay master (preset 1/8, fb 0.35, mix 0.25).
@@ -66,7 +68,7 @@ use takiy_app::{
     grid_geometry, header_beat_at, hit_test_note, load_score_or_demo, pitch_range_with_offset,
     write_score, EditMsg, EditorState, HEADER_H, KEYBOARD_W, MAX_KEY_H, MIN_BEAT_W, MIN_KEY_H,
 };
-use takiy_core::{Pitch, PitchClass, Score, ScoreNote, Track};
+use takiy_core::{AutomationLane, Pitch, PitchClass, Score, ScoreNote, Track};
 use takiy_playback::{PlayOpts, Player};
 use takiy_synth::{
     mix_clicks, prepend_count_in, write_wav, AudioBuffer, Metronome, MultiProgramRenderer,
@@ -166,26 +168,104 @@ enum Msg {
     Quit,
 }
 
+/// Resultado del hit-test sobre dots de automación. Se almacena en
+/// `Model.auto_pending` entre el press y el primer `Move` del drag.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct AutoHit {
+    track_idx: usize,
+    is_volume: bool,
+    point_idx: usize,
+    initial_beat: f32,
+    initial_value: f32,
+}
+
+/// Radio de hit-test sobre los dots de automación. Un poco más grande
+/// que el radio del dibujo (4 px) para que el target sea generoso.
+const AUTO_DOT_HIT_RADIUS: f32 = 7.0;
+
+/// Margen interno usado por `paint_automation_lane`. Reproducido acá
+/// para que el hit-test coincida exactamente con el dibujo.
+const AUTO_LANE_MARGIN_PX: f32 = 6.0;
+
+/// Hit-test sobre los dots de automación de una pista. Recorre
+/// vol-lane primero (se dibuja primero) y devuelve el primer punto
+/// dentro del radio `AUTO_DOT_HIT_RADIUS`. Coordenadas en local del
+/// view raíz; mapeo de valor → y debe coincidir con
+/// `paint_automation_lane`.
+fn hit_test_automation_dot(
+    track: &Track,
+    track_idx: usize,
+    lx: f32,
+    ly: f32,
+    grid_x: f32,
+    grid_y: f32,
+    grid_h: f32,
+    beat_w: f32,
+) -> Option<AutoHit> {
+    let usable_h = (grid_h - AUTO_LANE_MARGIN_PX * 2.0).max(1.0);
+    let r2 = AUTO_DOT_HIT_RADIUS * AUTO_DOT_HIT_RADIUS;
+    let lanes: [(bool, Option<&AutomationLane>, f32, f32); 2] = [
+        (true, track.volume_automation.as_ref(), 0.0, 1.5),
+        (false, track.pan_automation.as_ref(), -1.0, 1.0),
+    ];
+    for (is_volume, lane, v_min, v_max) in lanes {
+        let Some(lane) = lane else { continue };
+        for (point_idx, p) in lane.points.iter().enumerate() {
+            let x = grid_x + p.beat * beat_w;
+            let norm = ((p.value - v_min) / (v_max - v_min)).clamp(0.0, 1.0);
+            let y = grid_y + AUTO_LANE_MARGIN_PX + (1.0 - norm) * usable_h;
+            let dx = lx - x;
+            let dy = ly - y;
+            if dx * dx + dy * dy <= r2 {
+                return Some(AutoHit {
+                    track_idx,
+                    is_volume,
+                    point_idx,
+                    initial_beat: p.beat,
+                    initial_value: p.value,
+                });
+            }
+        }
+    }
+    None
+}
+
 /// Modo del drag activo. Se decide al inicio (primer evento `Move`)
-/// según dónde cayó el press en relación al rect de la nota: cuerpo →
-/// `Move`, borde derecho (≤ `RESIZE_EDGE_PX`) → `Resize`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// según dónde cayó el press:
+/// - sobre un dot de automación → `Automation`
+/// - en el borde derecho de una nota (≤ `RESIZE_EDGE_PX`) → `Resize`
+/// - sobre el cuerpo de una nota → `Move`
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum DragMode {
     Move,
     Resize,
+    /// Mover un punto de la lane de automación de una pista concreta.
+    /// Capturamos `track_idx` al press para que el cambio de pista
+    /// activa durante el drag no rute el cambio a otra pista.
+    Automation {
+        is_volume: bool,
+        point_idx: usize,
+        track_idx: usize,
+    },
 }
 
-/// Estado del drag-to-move o drag-to-resize activo. Se inicializa en la
-/// primera fase `DragPhase::Move` (cuando el cursor se movió tras
-/// presionar sobre una nota), persiste hasta `DragPhase::End`. Captura
-/// la posición/duración original de la nota para que cada frame se
-/// compute en términos absolutos respecto del press, sin acumular drift.
+/// Estado del drag-to-move, drag-to-resize o drag-de-automación activo.
+/// Se inicializa en la primera fase `DragPhase::Move` (cuando el cursor
+/// se movió tras presionar sobre una nota o un dot), persiste hasta
+/// `DragPhase::End`. Captura los valores originales para que cada
+/// frame se compute en absoluto respecto del press, sin drift.
 #[derive(Debug, Clone)]
 struct DragState {
     mode: DragMode,
+    /// Para `Move`/`Resize`: beat inicial de la nota. Para
+    /// `Automation`: beat inicial del punto.
     initial_start: f32,
+    /// `Move` only — MIDI inicial.
     initial_midi: u8,
+    /// `Resize` only — duración inicial.
     initial_duration: f32,
+    /// `Automation` only — valor inicial del punto.
+    initial_value: f32,
     accum_dx_px: f32,
     accum_dy_px: f32,
     rw: f32,
@@ -214,6 +294,11 @@ struct Model {
     last_rect: Option<(f32, f32)>,
     /// Drag-to-move en curso. `None` cuando no hay drag activo.
     drag: Option<DragState>,
+    /// Hit-test pendiente de un dot de automación: el press lo detecta
+    /// y el primer evento `Move` del drag lo consume para arrancar un
+    /// `DragMode::Automation`. Se limpia al final del drag o si llega
+    /// otro press sin hit.
+    auto_pending: Option<AutoHit>,
     /// Offset global del rango MIDI visible (en semitonos). Lo mueve la
     /// rueda del mouse — `pitch_range_with_offset` lo aplica.
     midi_offset: i32,
@@ -284,6 +369,7 @@ impl App for Takiy {
             playback_bpm: 120.0,
             last_rect: None,
             drag: None,
+            auto_pending: None,
             midi_offset: 0,
             last_audition_at: None,
         }
@@ -538,6 +624,10 @@ impl App for Takiy {
             }
             Msg::PressAt { lx, ly, rw, rh } => {
                 model.last_rect = Some((rw, rh));
+                // Cualquier press limpia un hit pendiente — sino, un
+                // press en una celda podría arrancar drag de un dot
+                // detectado en un press anterior abortado.
+                model.auto_pending = None;
                 let (min_midi, max_midi) =
                     pitch_range_with_offset(&model.editor.score, model.midi_offset);
                 let total_beats = model
@@ -551,6 +641,23 @@ impl App for Takiy {
                 {
                     // Re-entramos por TogglePlay/SeekToBeat: igual que el handler viejo.
                     return Self::update(model, Msg::SeekToBeat(beat), handle);
+                }
+                // Hit-test automación: si el press cae sobre un dot de
+                // la pista activa, queda armado un `auto_pending`. La
+                // primera fase `Move` lo consume; si no hay drag, el
+                // hit se descarta (sin efecto colateral).
+                if let Some((grid_x, grid_y, _, grid_h, _, beat_w)) =
+                    grid_geometry(rw, rh, min_midi, max_midi, total_beats)
+                {
+                    let active = model.editor.active_track;
+                    if let Some(track) = model.editor.score.track(active) {
+                        if let Some(hit) = hit_test_automation_dot(
+                            track, active, lx, ly, grid_x, grid_y, grid_h, beat_w,
+                        ) {
+                            model.auto_pending = Some(hit);
+                            return model;
+                        }
+                    }
                 }
                 if let Some((track, idx)) = hit_test_note(
                     &model.editor.score,
@@ -582,11 +689,6 @@ impl App for Takiy {
                 match phase {
                     DragPhase::Move => {
                         if model.drag.is_none() {
-                            // Primer Move: arrancamos drag sólo si el press cae
-                            // sobre una nota. Los press en celdas vacías ya
-                            // habrán agregado una nota seleccionada vía
-                            // `Msg::PressAt`, así que el drag mueve esa nota
-                            // recién creada también.
                             let (min_midi, max_midi) =
                                 pitch_range_with_offset(&model.editor.score, model.midi_offset);
                             let total_beats = model
@@ -600,54 +702,85 @@ impl App for Takiy {
                             else {
                                 return model;
                             };
-                            let Some((track, idx)) = model.editor.selected else {
-                                return model;
-                            };
-                            let Some(note) = model
-                                .editor
-                                .score
-                                .track(track)
-                                .and_then(|t| t.notes().get(idx))
-                                .copied()
-                            else {
-                                return model;
-                            };
-                            // Si lx0/ly0 cayeron sobre el header o el teclado,
-                            // este no era un drag de nota — abortamos.
-                            if ly0 < HEADER_H || lx0 < KEYBOARD_W {
-                                return model;
-                            }
-                            // Detectar modo: si el press cayó dentro de los
-                            // últimos `RESIZE_EDGE_PX` del rect de la nota,
-                            // entramos en Resize. Si no, Move.
-                            let note_right_px =
-                                KEYBOARD_W + (note.start + note.duration) * beat_w;
-                            let mode =
-                                if (note_right_px - lx0).abs() <= RESIZE_EDGE_PX && lx0 <= note_right_px {
-                                    DragMode::Resize
-                                } else {
-                                    DragMode::Move
+                            // Primero: si `PressAt` armó un hit de
+                            // automación, arranca drag de ese punto. Tiene
+                            // prioridad sobre el drag de notas porque los
+                            // dots se pintan encima de las notas.
+                            if let Some(hit) = model.auto_pending.take() {
+                                model.editor.begin_drag();
+                                model.drag = Some(DragState {
+                                    mode: DragMode::Automation {
+                                        is_volume: hit.is_volume,
+                                        point_idx: hit.point_idx,
+                                        track_idx: hit.track_idx,
+                                    },
+                                    initial_start: hit.initial_beat,
+                                    initial_midi: 0,
+                                    initial_duration: 0.0,
+                                    initial_value: hit.initial_value,
+                                    accum_dx_px: dx,
+                                    accum_dy_px: dy,
+                                    rw,
+                                    rh,
+                                    min_midi,
+                                    max_midi,
+                                    total_beats,
+                                });
+                            } else {
+                                // Fallback: arrancamos drag de nota sólo si
+                                // el press cayó sobre una nota. Los press
+                                // en celdas vacías ya habrán agregado una
+                                // nota seleccionada vía `Msg::PressAt`, así
+                                // que el drag mueve esa nota recién
+                                // agregada también.
+                                let Some((track, idx)) = model.editor.selected else {
+                                    return model;
                                 };
-                            model.editor.begin_drag();
-                            model.drag = Some(DragState {
-                                mode,
-                                initial_start: note.start,
-                                initial_midi: note.pitch.midi(),
-                                initial_duration: note.duration,
-                                accum_dx_px: dx,
-                                accum_dy_px: dy,
-                                rw,
-                                rh,
-                                min_midi,
-                                max_midi,
-                                total_beats,
-                            });
+                                let Some(note) = model
+                                    .editor
+                                    .score
+                                    .track(track)
+                                    .and_then(|t| t.notes().get(idx))
+                                    .copied()
+                                else {
+                                    return model;
+                                };
+                                if ly0 < HEADER_H || lx0 < KEYBOARD_W {
+                                    return model;
+                                }
+                                // Detectar modo: si el press cayó dentro de los
+                                // últimos `RESIZE_EDGE_PX` del rect de la nota,
+                                // entramos en Resize. Si no, Move.
+                                let note_right_px =
+                                    KEYBOARD_W + (note.start + note.duration) * beat_w;
+                                let mode =
+                                    if (note_right_px - lx0).abs() <= RESIZE_EDGE_PX && lx0 <= note_right_px {
+                                        DragMode::Resize
+                                    } else {
+                                        DragMode::Move
+                                    };
+                                model.editor.begin_drag();
+                                model.drag = Some(DragState {
+                                    mode,
+                                    initial_start: note.start,
+                                    initial_midi: note.pitch.midi(),
+                                    initial_duration: note.duration,
+                                    initial_value: 0.0,
+                                    accum_dx_px: dx,
+                                    accum_dy_px: dy,
+                                    rw,
+                                    rh,
+                                    min_midi,
+                                    max_midi,
+                                    total_beats,
+                                });
+                            }
                         } else if let Some(state) = model.drag.as_mut() {
                             state.accum_dx_px += dx;
                             state.accum_dy_px += dy;
                         }
                         if let Some(state) = model.drag.as_ref() {
-                            let Some((_, _, _, _, key_h, beat_w)) = grid_geometry(
+                            let Some((_, _, _, grid_h, key_h, beat_w)) = grid_geometry(
                                 state.rw,
                                 state.rh,
                                 state.min_midi,
@@ -685,6 +818,32 @@ impl App for Takiy {
                                             duration: target_dur,
                                         })
                                     {
+                                        model.status = s;
+                                    }
+                                }
+                                DragMode::Automation { is_volume, point_idx, track_idx } => {
+                                    // Mapeo inverso al del painter — debe coincidir
+                                    // con `paint_automation_lane` para que la nota
+                                    // suba/baje exactamente bajo el cursor.
+                                    let (v_min, v_max) =
+                                        if is_volume { (0.0, 1.5) } else { (-1.0, 1.0) };
+                                    let usable_h =
+                                        (grid_h - AUTO_LANE_MARGIN_PX * 2.0).max(1.0);
+                                    let target_beat = (state.initial_start
+                                        + state.accum_dx_px / beat_w)
+                                        .max(0.0);
+                                    // dy negativo (mouse sube) → valor sube.
+                                    let target_value = state.initial_value
+                                        + (-state.accum_dy_px / usable_h) * (v_max - v_min);
+                                    if let Some(s) = model.editor.apply(
+                                        EditMsg::SetAutomationPoint {
+                                            track_idx,
+                                            is_volume,
+                                            idx: point_idx,
+                                            beat: target_beat,
+                                            value: target_value,
+                                        },
+                                    ) {
                                         model.status = s;
                                     }
                                 }
@@ -1255,7 +1414,7 @@ fn paint_piano_roll(
 #[allow(clippy::too_many_arguments)]
 fn paint_automation_lane(
     scene: &mut llimphi_ui::llimphi_raster::vello::Scene,
-    lane: Option<&takiy_core::AutomationLane>,
+    lane: Option<&AutomationLane>,
     grid_x: f32,
     grid_y: f32,
     grid_w: f32,

@@ -388,5 +388,51 @@ fn main() {
     let t = st.score.track(0).unwrap();
     assert!(t.volume_automation.is_none() && t.pan_automation.is_none());
 
-    println!("takiy smoke ok — 18 escenarios verdes");
+    // --- Escenario 19: drag de dot de automación.
+    //
+    // Verifica que SetAutomationPoint mueve el punto al (beat, value)
+    // target, que el clamp entre vecinos preserva el orden de la lane,
+    // y que un drag completo (begin_drag + varios SetAutomationPoint +
+    // end_drag) cuenta como un sólo undo.
+    let mut st = EditorState::new(120.0);
+    st.score.track_mut(0).unwrap().volume = 0.5;
+    st.apply(EditMsg::AddVolumeAutomationPoint { beat: 0.0 });
+    st.score.track_mut(0).unwrap().volume = 1.0;
+    st.apply(EditMsg::AddVolumeAutomationPoint { beat: 4.0 });
+    st.score.track_mut(0).unwrap().volume = 0.3;
+    st.apply(EditMsg::AddVolumeAutomationPoint { beat: 8.0 });
+    let history_before = st.history.len();
+    st.begin_drag();
+    // Pequeños movimientos del punto del medio (idx 1) durante el drag.
+    for step in 1..=10 {
+        st.apply(EditMsg::SetAutomationPoint {
+            track_idx: 0,
+            is_volume: true,
+            idx: 1,
+            beat: 4.0 + step as f32 * 0.1,
+            value: 1.0 - step as f32 * 0.02,
+        });
+    }
+    // Durante el drag, history no crece.
+    assert_eq!(st.history.len(), history_before);
+    // Intentar cruzar al vecino derecho: queda clampeado.
+    st.apply(EditMsg::SetAutomationPoint {
+        track_idx: 0,
+        is_volume: true,
+        idx: 1,
+        beat: 50.0,
+        value: 0.5,
+    });
+    let lane = st.score.track(0).unwrap().volume_automation.as_ref().unwrap();
+    assert!(
+        lane.points[1].beat < lane.points[2].beat,
+        "no cruza al vecino derecho durante drag"
+    );
+    st.end_drag();
+    assert_eq!(st.history.len(), history_before + 1, "un sólo undo cubre el drag");
+    st.undo();
+    let lane = st.score.track(0).unwrap().volume_automation.as_ref().unwrap();
+    assert!((lane.points[1].beat - 4.0).abs() < 1e-6, "undo restaura beat original");
+
+    println!("takiy smoke ok — 19 escenarios verdes");
 }

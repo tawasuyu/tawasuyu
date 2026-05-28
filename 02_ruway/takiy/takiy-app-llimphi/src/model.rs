@@ -265,6 +265,20 @@ pub enum EditMsg {
     /// Borra ambas curvas de automación de la pista activa (vol + pan).
     /// Útil para volver al valor estático sin escribir un script.
     ClearActiveAutomation,
+    /// Mueve un punto de la lane de automación a `(beat, value)`. La
+    /// `lane` indica volumen o pan (vía `is_volume`); `track_idx` fija
+    /// la pista (no usa `active_track` porque el drag arranca con un
+    /// track que puede no ser el activo al terminar). Si `idx` queda
+    /// fuera de rango, no-op. Clampea `beat` entre los vecinos para
+    /// no romper el orden de la lane; clampea `value` al rango del
+    /// parámetro (vol `[0, 1.5]`, pan `[-1, 1]`).
+    SetAutomationPoint {
+        track_idx: usize,
+        is_volume: bool,
+        idx: usize,
+        beat: f32,
+        value: f32,
+    },
 }
 
 /// Resultado de aplicar un `EditMsg`: mensaje corto para el header.
@@ -370,6 +384,9 @@ impl EditorState {
             EditMsg::AddVolumeAutomationPoint { beat } => self.add_volume_automation_point(beat),
             EditMsg::AddPanAutomationPoint { beat } => self.add_pan_automation_point(beat),
             EditMsg::ClearActiveAutomation => self.clear_active_automation(),
+            EditMsg::SetAutomationPoint { track_idx, is_volume, idx, beat, value } => {
+                self.set_automation_point(track_idx, is_volume, idx, beat, value)
+            }
         }
     }
 
@@ -748,6 +765,54 @@ impl EditorState {
         lane.add_point(beat.max(0.0), value);
         let n = lane.len();
         Some(format!("pan auto · pista {idx} · beat {beat:.1} · {n} pt · p {value:.2}"))
+    }
+
+    fn set_automation_point(
+        &mut self,
+        track_idx: usize,
+        is_volume: bool,
+        idx: usize,
+        beat: f32,
+        value: f32,
+    ) -> ApplyOutcome {
+        let track = self.score.track_mut(track_idx)?;
+        let lane = if is_volume {
+            track.volume_automation.as_mut()?
+        } else {
+            track.pan_automation.as_mut()?
+        };
+        if idx >= lane.points.len() {
+            return None;
+        }
+        // Clamp beat entre los vecinos (epsilon evita coincidir y romper
+        // partition_point en futuros add_point). Si no hay vecino, usa el
+        // borde natural (0 para abajo, +∞ para arriba).
+        let eps = 1e-4;
+        let lo = if idx > 0 {
+            lane.points[idx - 1].beat + eps
+        } else {
+            0.0
+        };
+        let hi = if idx + 1 < lane.points.len() {
+            lane.points[idx + 1].beat - eps
+        } else {
+            f32::INFINITY
+        };
+        let new_beat = beat.clamp(lo, hi.max(lo));
+        let (v_min, v_max) = if is_volume { (0.0, 1.5) } else { (-1.0, 1.0) };
+        let new_value = value.clamp(v_min, v_max);
+        let old = lane.points[idx];
+        if (old.beat - new_beat).abs() < f32::EPSILON
+            && (old.value - new_value).abs() < f32::EPSILON
+        {
+            return None;
+        }
+        lane.points[idx].beat = new_beat;
+        lane.points[idx].value = new_value;
+        let kind = if is_volume { "vol" } else { "pan" };
+        Some(format!(
+            "{kind} auto · pista {track_idx} · pt #{idx} → beat {new_beat:.1} val {new_value:.2}"
+        ))
     }
 
     fn clear_active_automation(&mut self) -> ApplyOutcome {
@@ -1595,6 +1660,85 @@ mod tests {
         assert_eq!(lane.points.len(), 2);
         assert!((lane.points[0].value - 0.5).abs() < 1e-6);
         assert!((lane.points[1].value + 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn set_automation_point_moves_value_in_place() {
+        let mut st = EditorState::new(120.0);
+        st.score.track_mut(0).unwrap().volume = 0.5;
+        st.apply(EditMsg::AddVolumeAutomationPoint { beat: 2.0 });
+        st.apply(EditMsg::SetAutomationPoint {
+            track_idx: 0,
+            is_volume: true,
+            idx: 0,
+            beat: 5.0,
+            value: 1.0,
+        });
+        let lane = st.score.track(0).unwrap().volume_automation.as_ref().unwrap();
+        assert_eq!(lane.points.len(), 1);
+        assert!((lane.points[0].beat - 5.0).abs() < 1e-6);
+        assert!((lane.points[0].value - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn set_automation_point_clamps_beat_between_neighbors() {
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::AddVolumeAutomationPoint { beat: 0.0 });
+        st.apply(EditMsg::AddVolumeAutomationPoint { beat: 4.0 });
+        st.apply(EditMsg::AddVolumeAutomationPoint { beat: 8.0 });
+        // El punto del medio (idx 1) no debe poder cruzar a sus vecinos
+        // — quedaría desordenada la lane.
+        st.apply(EditMsg::SetAutomationPoint {
+            track_idx: 0,
+            is_volume: true,
+            idx: 1,
+            beat: 100.0, // pasa el siguiente vecino
+            value: 0.5,
+        });
+        let lane = st.score.track(0).unwrap().volume_automation.as_ref().unwrap();
+        assert!(lane.points[1].beat < lane.points[2].beat, "no debe cruzar al vecino derecho");
+        st.apply(EditMsg::SetAutomationPoint {
+            track_idx: 0,
+            is_volume: true,
+            idx: 1,
+            beat: -50.0, // pasa el vecino izquierdo
+            value: 0.5,
+        });
+        let lane = st.score.track(0).unwrap().volume_automation.as_ref().unwrap();
+        assert!(lane.points[1].beat > lane.points[0].beat, "no debe cruzar al vecino izquierdo");
+    }
+
+    #[test]
+    fn set_automation_point_clamps_value_to_range() {
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::AddPanAutomationPoint { beat: 0.0 });
+        st.apply(EditMsg::SetAutomationPoint {
+            track_idx: 0,
+            is_volume: false,
+            idx: 0,
+            beat: 0.0,
+            value: 99.0, // out of [-1, 1]
+        });
+        let lane = st.score.track(0).unwrap().pan_automation.as_ref().unwrap();
+        assert!((lane.points[0].value - 1.0).abs() < 1e-6, "clampea a 1.0");
+    }
+
+    #[test]
+    fn set_automation_point_is_idempotent_when_unchanged() {
+        let mut st = EditorState::new(120.0);
+        st.apply(EditMsg::AddVolumeAutomationPoint { beat: 4.0 });
+        let len_before = st.history.len();
+        // El punto ya está en beat 4.0 con el valor estático (1.0). Setear
+        // exactamente lo mismo es no-op — no debe pushear a history.
+        let out = st.apply(EditMsg::SetAutomationPoint {
+            track_idx: 0,
+            is_volume: true,
+            idx: 0,
+            beat: 4.0,
+            value: 1.0,
+        });
+        assert!(out.is_none());
+        assert_eq!(st.history.len(), len_before);
     }
 
     #[test]
