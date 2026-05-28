@@ -26,6 +26,7 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::fd::AsFd;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -178,21 +179,19 @@ pub struct Killer {
 
 impl Killer {
     /// Manda SIGKILL a todas las etapas vivas del comando. No hace nada
-    /// si ya terminaron.
+    /// si ya terminaron. La señal va a todo el **grupo de procesos** de
+    /// cada etapa — con `bash -c "sleep 30"`, esto mata bash *y* el
+    /// sleep hijo (mismo pgid; `spawn_shell` arma cada child con
+    /// `process_group(0)`).
     pub fn kill(&self) {
+        self.signal(nix::sys::signal::Signal::SIGKILL);
+        // Fallback: además de la señal, llamamos a `kill()` del Child
+        // para que `wait()` cosechée el exit status sin colgarse (el
+        // `kill` de std manda SIGKILL al PID directo y no falla si el
+        // proceso ya murió).
         if let Ok(mut guard) = self.children.lock() {
             for c in guard.iter_mut() {
                 let _ = c.kill();
-            }
-        }
-        // PTY: el child de `portable-pty` no es un `std::process::Child`,
-        // así que su muerte va por señal a su PID.
-        if let Ok(g) = self.pty_pids.lock() {
-            for &p in g.iter() {
-                let _ = nix::sys::signal::kill(
-                    nix::unistd::Pid::from_raw(p as i32),
-                    nix::sys::signal::Signal::SIGKILL,
-                );
             }
         }
     }
@@ -235,7 +234,16 @@ impl Killer {
         let mut delivered = false;
         for pid in pids {
             let target = nix::unistd::Pid::from_raw(pid as i32);
-            if nix::sys::signal::kill(target, sig).is_ok() {
+            // `killpg` busca el grupo cuyo pgid coincide con `pid`:
+            // como cada child se lanzó con `process_group(0)`, el child
+            // es líder del grupo y `pgid == pid`. Matar el grupo abarca
+            // cualquier proceso que el child hubiese forkado.
+            if nix::sys::signal::killpg(target, sig).is_ok() {
+                delivered = true;
+            } else if nix::sys::signal::kill(target, sig).is_ok() {
+                // Fallback: si el child no es líder de grupo (PTY usa
+                // `portable-pty`, que no garantiza `process_group(0)`),
+                // mandamos al PID directo.
                 delivered = true;
             }
         }
@@ -422,6 +430,10 @@ fn spawn_shell(line: &str, program: &str, cwd: &str, want_stdin: bool) -> std::i
         .stdin(if want_stdin { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        // Nuevo grupo de procesos: con `bash -c "sleep 30"` el bash se
+        // forka a un sleep hijo; matar al bash sólo no alcanza al sleep.
+        // Con el grupo, `killpg(pid, SIG)` derriba a todo el subárbol.
+        .process_group(0)
         .spawn()?;
     let stdin = child.stdin.take();
     let stdout = child.stdout.take();
@@ -449,9 +461,20 @@ fn spawn_direct(stages: &[StageSpec], cwd: &str, want_stdin: bool) -> std::io::R
             .stderr(Stdio::piped());
         if i == 0 {
             cmd.stdin(if want_stdin { Stdio::piped() } else { Stdio::null() });
+            // Primera etapa abre su propio grupo de procesos; las demás
+            // se enganchan en el mismo (process_group(0) hereda el pgid
+            // del padre — pero el padre somos nosotros, no la etapa 0).
+            // En la práctica `setpgid` del kernel respeta sólo lo que
+            // pedimos: las etapas 1.. quedan en pgid de la 0 si las
+            // forkamos con CLONE_PARENT_SETTID; con Command no tenemos
+            // ese control fino, así que cada stage queda en su propio
+            // pgid. El Killer cubre todas las etapas igual porque
+            // mantiene los PIDs/Childs por separado.
+            cmd.process_group(0);
         } else {
             // La etapa anterior alimenta a ésta por su stdout.
             cmd.stdin(Stdio::from(prev_stdout.take().expect("stdout previo")));
+            cmd.process_group(0);
         }
         match cmd.spawn() {
             Ok(mut child) => {

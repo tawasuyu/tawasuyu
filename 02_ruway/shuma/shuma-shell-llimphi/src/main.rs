@@ -66,6 +66,11 @@ use shuma_sysmon::{Snapshot, SystemSampler};
 
 const HISTORY: usize = 60;
 const TICK: Duration = Duration::from_secs(1);
+/// Cadencia rápida para drenar el output del shell (streaming de
+/// `shuma-exec`). 1 Hz se siente lento al ver `for i in …; do echo $i;
+/// sleep 0.1; done`; 100 ms hace la salida sentirse en vivo sin
+/// comerse CPU notable.
+const SHELL_TICK: Duration = Duration::from_millis(100);
 const MONITORS_INITIAL_WIDTH: f32 = 280.0;
 
 fn main() {
@@ -235,6 +240,9 @@ struct Model {
 #[derive(Clone)]
 enum Msg {
     Tick,
+    /// Tick rápido que drena la salida del shell (~100 ms) sin tocar
+    /// el muestreo de sysmon.
+    ShellTick,
     /// Toggle del drawer (F12 o click en la command bar).
     ToggleDrawer,
     /// Cierra el drawer (Esc).
@@ -270,6 +278,7 @@ impl App for Shell {
 
     fn init(handle: &Handle<Self::Msg>) -> Self::Model {
         handle.spawn_periodic(TICK, || Msg::Tick);
+        handle.spawn_periodic(SHELL_TICK, || Msg::ShellTick);
 
         let cfg = config::ShumaConfig::load_default();
         let topbar = resolve_slot(cfg.topbar.as_ref())
@@ -345,6 +354,9 @@ impl App for Shell {
             Msg::Tick => {
                 m.last_snapshot = Some(m.sysmon.sample());
                 sample_extra_monitors(&mut m);
+            }
+            Msg::ShellTick => {
+                drain_shell_instances(&mut m);
             }
             Msg::ToggleDrawer => {
                 m.drawer_open = !m.drawer_open;
@@ -584,6 +596,29 @@ fn sample_extra_monitors(m: &mut Model) {
             }
             m.extra_display.insert(key, sample.display);
         }
+    }
+}
+
+/// Aplica `Msg::Tick` a cada `Instance` de tipo `Shell` activa para que
+/// drene la salida streamed de `shuma-exec`. Llamado a cadencia rápida
+/// (`SHELL_TICK`) sin tocar el muestreo de sysmon (`TICK`).
+fn drain_shell_instances(m: &mut Model) {
+    fn tick_one(inst: &mut Instance) {
+        if let ModuleState::Shell(s) = &mut inst.state {
+            *s = shuma_module_shell::update(s.clone(), shuma_module_shell::Msg::Tick);
+        }
+    }
+    if let Some(inst) = m.topbar.as_mut() {
+        tick_one(inst);
+    }
+    if let Some(inst) = m.bottombar.as_mut() {
+        tick_one(inst);
+    }
+    if let Some(inst) = m.main.as_mut() {
+        tick_one(inst);
+    }
+    for inst in m.drawer_tabs.iter_mut() {
+        tick_one(inst);
     }
 }
 

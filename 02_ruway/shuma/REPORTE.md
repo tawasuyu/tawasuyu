@@ -1,6 +1,6 @@
 # shuma — reporte técnico para IA
 
-> Estado: **2026-05-27** · rama `main` · compila limpio (`cargo build -p shuma-shell-llimphi -p shuma-daemon -p shuma-cli -p shuma-gateway`).
+> Estado: **2026-05-28** · rama `main` · compila limpio (`cargo build -p shuma-shell-llimphi -p shuma-daemon -p shuma-cli -p shuma-gateway`).
 > Audiencia: sesión de Claude futura u otra IA que retome el shell+plugins. Idioma del proyecto: español.
 
 ---
@@ -114,11 +114,12 @@ Cinco crates listos pero **NO enchufados** al `shuma-module-shell` actual:
 - **`shuma-shell-render`**: CanvasPlan (lienzo de contexto del grafo de intenciones, agnóstico de UI).
 - **`shuma-remote-exec`**: cliente sync del subprotocolo `ExecStream` del daemon — API espejo de `shuma-exec::RunHandle`. Listo para reemplazar `sh -c` por *ejecución contra el daemon*.
 
-### 3.5 Estado actual del REPL (`shuma-module-shell`, 605 LOC)
-- Input + cwd + ejecución sincrónica `sh -c` + buffer de output.
+### 3.5 Estado actual del REPL (`shuma-module-shell`, ~750 LOC)
+- Input + cwd + ejecución **no bloqueante** vía `shuma-exec` (Bloque A1 hecho 2026-05-28). Stdout/stderr llegan en streaming, drenados por `Msg::Tick` que el chasis dispara cada ~100 ms (`SHELL_TICK`). `sleep`/`top`/comandos largos ya no congelan la UI.
 - Builtins: `cd`, `pwd`, `clear`, `exit`.
 - Tope 500 líneas.
-- **Limitación crítica**: la ejecución es bloqueante en `update`, así que `sleep`/`top`/comandos largos congelan la UI.
+- **Cola de comandos**: si el usuario presiona Enter mientras hay un run vivo, la línea entra en `state.queue` y arranca al cerrar el actual. Header muestra `· ⟳ <cmd> (+N en cola)`.
+- **Cancel**: Ctrl-C (o shortcut `Cancel`) manda SIGKILL al grupo de procesos entero — `shuma-exec` lanza cada child con `process_group(0)` para que `killpg` derribe a bash+sleep en un solo golpe.
 
 ---
 
@@ -148,11 +149,11 @@ Forma actual de la config:
 ### Bloque A — desbloquear el REPL (alto impacto, contenido)
 **Objetivo**: que el módulo shell sea utilizable de verdad (no congele con `sleep`, soporte TUI).
 
-A1. **Cablear `shuma-exec` al `shuma-module-shell`**.
-- Sustituir `Command::output()` por `shuma_exec::Exec::Shell { … }` + `try_events()`.
-- En `update`, drenar eventos en cada `Tick`; añadir líneas al buffer por evento.
-- Mantener cap de 500 líneas.
-- *Ganancia inmediata*: `sleep 5` deja de congelar; comandos largos siguen vivos mientras el usuario interactúa.
+A1. ✅ **Cablear `shuma-exec` al `shuma-module-shell`** (hecho 2026-05-28).
+- `Command::output()` reemplazado por `shuma_exec::run(&CommandSpec::shell(...))`.
+- `Msg::Tick` drena `try_events()`; chasis dispara `Msg::ShellTick` a 100 ms separado del `Msg::Tick` de sysmon (1 Hz).
+- Cap de 500 líneas mantenido. Cola de comandos pendientes (`state.queue`).
+- `Msg::Cancel` + Ctrl-C → `killer.kill()` (SIGKILL al grupo). `shuma-exec` ahora arma cada child con `process_group(0)` y `killpg` para que el grupo entero caiga junto.
 
 A2. **Cablear `shuma-line` para decoración del output**.
 - `decorate_line` sobre cada línea Stdout → spans con kinds (Path, Url, GrepRef, ShaLike).
@@ -232,17 +233,17 @@ F3. Editor multi-línea: `shuma-line::continuation::needs_continuation` ya está
 
 | # | Tarea | Ganancia | Costo |
 |---|-------|----------|-------|
-| 1 | A1 — cablear `shuma-exec` al módulo shell | desbloquea UX | bajo (1-2 sesiones) |
-| 2 | A2 — decoración con `shuma-line` | shell se siente terminado | bajo |
-| 3 | A4 — historial durable | feature core | bajo |
-| 4 | A3 — completion + ghost | feature core | medio |
-| 5 | D1-D3 — wawa watcher en chasis | tema + idioma live | bajo |
-| 6 | B1 — Runner trait + switch local/daemon | habilita remoto | medio |
-| 7 | A5 — PTY + parser vt100 | TUI fullscreen | alto (parser) |
-| 8 | C1 — launcher real | UX visible | medio |
-| 9 | F1 — lienzo de contexto | killer feature pero opcional | alto |
+| ✅ | A1 — cablear `shuma-exec` al módulo shell | desbloquea UX | hecho 2026-05-28 |
+| 1 | A2 — decoración con `shuma-line` | shell se siente terminado | bajo |
+| 2 | A4 — historial durable | feature core | bajo |
+| 3 | A3 — completion + ghost | feature core | medio |
+| 4 | D1-D3 — wawa watcher en chasis | tema + idioma live | bajo |
+| 5 | B1 — Runner trait + switch local/daemon | habilita remoto | medio |
+| 6 | A5 — PTY + parser vt100 | TUI fullscreen | alto (parser) |
+| 7 | C1 — launcher real | UX visible | medio |
+| 8 | F1 — lienzo de contexto | killer feature pero opcional | alto |
 
-**Recomendación de orden**: A1 → A2 → A4 → A3 → D1..D3 → B1 → resto.
+**Recomendación de orden**: A2 → A4 → A3 → D1..D3 → B1 → resto.
 
 ---
 

@@ -9,6 +9,7 @@ description = "shuma-module-shell — el shell interactivo (input + runs + histo
 
 [dependencies]
 shuma-module = { path = "../shuma-module" }
+shuma-exec = { path = "../shuma-exec" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
