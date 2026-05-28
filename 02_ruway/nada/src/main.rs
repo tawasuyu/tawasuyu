@@ -180,6 +180,11 @@ enum Msg {
     /// El LSP devolvió text edits (de formatting o rename) para el
     /// archivo abierto — aplicar todos en orden descendente.
     TextEditsApply(Vec<TextEdit>),
+    /// Ctrl+Shift+S — abre prompt con el path actual prepopulado.
+    SaveAsOpen,
+    SaveAsKey(KeyEvent),
+    SaveAsSubmit,
+    SaveAsClose,
 }
 
 #[derive(Debug, Clone)]
@@ -277,6 +282,20 @@ struct Model {
     /// dejan de llegar `WawaConfigChanged`. `None` si la plataforma
     /// no expone ProjectDirs (caso muy raro).
     _wawa_watcher: Option<wawa_config::ConfigWatcher>,
+    /// Si `true`, `Msg::Save` dispara primero `request_formatting` y
+    /// guarda recién al volver los `TextEditsApply`. Lo enciende
+    /// `--fmt-on-save` desde CLI; off por default para no romper save
+    /// si el LSP devuelve edits que rompen sintaxis.
+    format_on_save: bool,
+    /// Idx del tab al que hay que guardar tras aplicar el próximo
+    /// `TextEditsApply`. `None` si el último format fue manual.
+    pending_save_after_format: Option<usize>,
+    /// Prompt de Save-As (Ctrl+Shift+S); `None` cerrado.
+    save_as: Option<SaveAsBar>,
+}
+
+struct SaveAsBar {
+    input: TextInputState,
 }
 
 struct RenameBar {
@@ -445,6 +464,9 @@ impl App for EditorApp {
             references: None,
             rename: None,
             _wawa_watcher: None,
+            format_on_save: args.iter().any(|a| a == "--fmt-on-save"),
+            pending_save_after_format: None,
+            save_as: None,
         };
         // Restaurar sesion previa si la hay: tabs, bookmarks, theme.
         // Best-effort: si load_session falla o paths ya no existen, arranca limpio.
@@ -476,7 +498,100 @@ impl App for EditorApp {
             Msg::SelectNode(i) => select_node(model, i),
             Msg::EditKey(ev) => apply_editor_key(model, ev),
             Msg::EditorPointer(ev) => apply_editor_pointer(model, ev),
-            Msg::Save => save_open_file(model, handle),
+            Msg::Save => {
+                // Si tenemos format-on-save activo y un LSP real,
+                // primero format, después save: marcamos `pending_save`
+                // y esperamos `TextEditsApply` para guardar de verdad.
+                let mut m = model;
+                if m.format_on_save && m.pending_save_after_format.is_none() {
+                    if let Some(idx) = m.active {
+                        let path = m.tabs[idx].path.clone();
+                        m.lsp.clear_text_edits();
+                        m.lsp.request_formatting(&path, 4, true);
+                        m.pending_save_after_format = Some(idx);
+                        m.status = "formateando antes de guardar…".to_string();
+                        return m;
+                    }
+                }
+                save_open_file(m, handle)
+            }
+            Msg::SaveAsOpen => {
+                let mut m = model;
+                let Some(tab) = m.active_tab() else { return m };
+                let mut input = TextInputState::new();
+                input.set_text(&tab.path.display().to_string());
+                m.save_as = Some(SaveAsBar { input });
+                m.status = "save as · editá la ruta + Enter · Esc cancela".to_string();
+                m
+            }
+            Msg::SaveAsClose => {
+                let mut m = model;
+                m.save_as = None;
+                m
+            }
+            Msg::SaveAsKey(ev) => {
+                let mut m = model;
+                if let Some(bar) = m.save_as.as_mut() {
+                    let _ = bar.input.apply_key(&ev);
+                }
+                m
+            }
+            Msg::SaveAsSubmit => {
+                let mut m = model;
+                let Some(bar) = m.save_as.take() else { return m };
+                let new_path = PathBuf::from(bar.input.text());
+                let Some(idx) = m.active else { return m };
+                if new_path.as_os_str().is_empty() {
+                    m.status = "save as · ruta vacía, ignorado".to_string();
+                    return m;
+                }
+                // Si ya hay otro tab con ese path, sobrescribir sería
+                // confuso — abortamos y dejamos que el user resuelva.
+                if m.tabs
+                    .iter()
+                    .enumerate()
+                    .any(|(i, t)| i != idx && t.path == new_path)
+                {
+                    m.status = format!(
+                        "save as · ya hay un tab con {} — cerralo primero",
+                        new_path.display(),
+                    );
+                    return m;
+                }
+                if let Some(parent) = new_path.parent() {
+                    if !parent.as_os_str().is_empty() {
+                        let _ = fs::create_dir_all(parent);
+                    }
+                }
+                let content = m.tabs[idx].editor.text();
+                match fs::write(&new_path, &content) {
+                    Ok(()) => {
+                        let old_path = m.tabs[idx].path.clone();
+                        m.lsp.did_close(&old_path);
+                        let ext = new_path
+                            .extension()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("");
+                        m.lsp.did_open(&new_path, ext, &content);
+                        m.tabs[idx].path = new_path.clone();
+                        m.tabs[idx].dirty = false;
+                        m.tabs[idx].last_mtime = file_mtime(&new_path);
+                        m.tabs[idx].external_warned = false;
+                        if !m.all_files.contains(&new_path) {
+                            m.all_files.push(new_path.clone());
+                        }
+                        m.status = format!("save as · {}", new_path.display());
+                    }
+                    Err(e) => {
+                        // Restauramos el prompt para que el user corrija.
+                        let mut input = TextInputState::new();
+                        input.set_text(&new_path.display().to_string());
+                        m.save_as = Some(SaveAsBar { input });
+                        m.status = format!("save as · error: {e}");
+                    }
+                }
+                m
+            }
             Msg::Scroll(delta) => {
                 let mut m = model;
                 if let Some(tab) = m.active_tab_mut() {
@@ -913,6 +1028,12 @@ impl App for EditorApp {
                 let new_text = tab.editor.text();
                 m.lsp.did_change(&path, &new_text);
                 m.status = rimay_localize::t("edit-status-formatting-done");
+                // Si veníamos de un Save con format-on-save, escribimos
+                // ahora. Limpia el pending para evitar el loop.
+                if m.pending_save_after_format == Some(idx) {
+                    m.pending_save_after_format = None;
+                    return save_open_file(m, handle);
+                }
                 m
             }
             Msg::GotoDefinitionApply(loc) => {
@@ -1086,8 +1207,27 @@ impl App for EditorApp {
             }
         }
 
+        // Save-As (Ctrl+Shift+S): prompt-input con el path actual
+        // prepopulado. Si el prompt ya está abierto, las teclas las
+        // tragamos abajo (en su rama dedicada).
+        if let Some(state) = model.save_as.as_ref() {
+            if event.state == KeyState::Pressed {
+                return Some(match &event.key {
+                    Key::Named(NamedKey::Escape) => Msg::SaveAsClose,
+                    Key::Named(NamedKey::Enter) => Msg::SaveAsSubmit,
+                    _ => Msg::SaveAsKey(event.clone()),
+                });
+            }
+            let _ = state;
+        }
+
         // Atajos globales
         if event.modifiers.ctrl {
+            if event.modifiers.shift
+                && matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("s"))
+            {
+                return Some(Msg::SaveAsOpen);
+            }
             if matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("s")) {
                 return Some(Msg::Save);
             }
@@ -1665,6 +1805,9 @@ fn active_editor_content(model: &Model, theme: &Theme) -> View<Msg> {
     if let Some(rn) = model.rename.as_ref() {
         children.push(rename_view(rn, theme));
     }
+    if let Some(sa) = model.save_as.as_ref() {
+        children.push(save_as_view(sa, theme));
+    }
     let editor_view = match model.active_tab() {
         None => empty_editor_placeholder(theme),
         Some(tab) => {
@@ -1708,6 +1851,46 @@ const HOVER_BAR_H: f32 = 96.0;
 const SIG_HELP_BAR_H: f32 = 56.0;
 const REFS_BAR_H: f32 = 160.0;
 const RENAME_BAR_H: f32 = 56.0;
+
+fn save_as_view(sa: &SaveAsBar, theme: &Theme) -> View<Msg> {
+    let tp = TextInputPalette::from_theme(theme);
+    let header = "save as · ruta completa · Enter guarda · Esc cancela".to_string();
+    let header_view = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
+        padding: Rect {
+            left: length(8.0_f32), right: length(8.0_f32),
+            top: length(0.0_f32), bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .text_aligned(header, 10.0, theme.fg_muted, Alignment::Start);
+
+    let input_view = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(RENAME_BAR_H - 18.0) },
+        padding: Rect {
+            left: length(6.0_f32), right: length(6.0_f32),
+            top: length(2.0_f32), bottom: length(2.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(vec![text_input_view(
+        &sa.input,
+        "/ruta/al/archivo.ext",
+        true,
+        &tp,
+        Msg::SaveAsOpen,
+    )]);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: length(RENAME_BAR_H) },
+        ..Default::default()
+    })
+    .children(vec![header_view, input_view])
+}
 
 fn rename_view(rb: &RenameBar, theme: &Theme) -> View<Msg> {
     let tp = TextInputPalette::from_theme(theme);
@@ -2535,6 +2718,8 @@ fn minimap_snapshot_data(model: &Model) -> (Vec<usize>, usize, usize, usize) {
 fn build_command_catalog() -> Vec<PaletteCommand> {
     vec![
         PaletteCommand::new("editor.save", "Save File", "Editor").with_shortcut("Ctrl+S"),
+        PaletteCommand::new("editor.saveAs", "Save File As…", "Editor")
+            .with_shortcut("Ctrl+Shift+S"),
         PaletteCommand::new("editor.openFile", "Open File…", "Editor")
             .with_shortcut("Ctrl+P"),
         PaletteCommand::new("editor.findInFiles", "Find in Files", "Editor")
@@ -2577,6 +2762,7 @@ fn build_command_catalog() -> Vec<PaletteCommand> {
 fn palette_id_to_msg(id: &str) -> Option<Msg> {
     Some(match id {
         "editor.save" => Msg::Save,
+        "editor.saveAs" => Msg::SaveAsOpen,
         "editor.openFile" => Msg::Picker(PickerMsg::Open),
         "editor.findInFiles" => Msg::Fif(FifMsg::Open),
         "editor.find" => Msg::FindOpen,
