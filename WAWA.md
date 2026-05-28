@@ -91,7 +91,7 @@ inyecta vía `CARGO_BIN_FILE_KERNEL_kernel`.
 | `memory/` | Heap dinámico (`linked_list_allocator`), MMIO mapping |
 | `grafico.rs` + `consola.rs` + `texto.rs` | Framebuffer doble buffer, raster `fontdue` |
 | `async_system/` | Reactor cooperativo: `executor`, `task`, `waker`, `reloj` (PIT 100Hz), `teclado` (IRQ1), `puntero` (IRQ12) |
-| `drivers/` | `pci` (descubrimiento), `disco` (virtio-blk + DMA HAL), `red` (virtio-net), `gpu` (virtio-gpu, scanout propio — Fase 60), `raton` (PS/2 IRQ12), `altavoz` (PC speaker) |
+| `drivers/` | `pci` (descubrimiento), `disco` (virtio-blk + DMA HAL), `red` (virtio-net), `gpu` (virtio-gpu, scanout propio — Fase 60), `tableta` (virtio-input, puntero absoluto — Fase 61), `raton` (PS/2 IRQ12), `altavoz` (PC speaker) |
 | `almacen.rs` | Log direccionado por contenido + índice + compactador (Fase 24) |
 | `manifiesto.rs` | Manifiesto de Génesis vivo (apps + estado + Configuracion) |
 | `compositor.rs` | Teselado vía `mirada-layout` + taskbar + ventanas flotantes |
@@ -382,7 +382,14 @@ restante, debe descontar primero estos hitos para no duplicar esfuerzo:
   tocar disco.
 - **App `mudanza`** — **HECHA** y sembrada en GENESIS (ver §9). Consume
   `MensajeAkasha::AnunciarCanal`, valida la firma del autor contra el anillo
-  vía la syscall, presenta UI de aceptar/rechazar.
+  vía la syscall, presenta UI de aceptar/rechazar. Verificación crypto en
+  **dos niveles** (2026-05-28): (1) userspace — la app parsea el sobre de
+  128 B raw y verifica con `ed25519-compact` ANTES del syscall (rechazo local
+  con código `-100 = VERIFICACION LOCAL FALLO` sin gastar trap a Ring 0);
+  (2) kernel — `claves::verificar_manifiesto_firmado` re-verifica + filtra
+  por `AGORA_AUTH_RING`. Los sobres los produce host-side el crate
+  [`agora-channel`](../03_ukupacha/agora/agora-channel/) (`firmar_manifiesto`
+  + `firmar_para_anuncio`) sobre identidades [`agora-core`](../03_ukupacha/agora/agora-core/).
 - **IDE nativo / Notebook engine** — **HECHA por el camino corto**: en lugar
   de portar tree-sitter, se embebió `pluma` (cuaderno reactivo sobre
   `pluma-notebook-core`, núcleo `no_std + alloc` compartido bit a bit con el

@@ -170,12 +170,12 @@ Cuando Llimphi tenga las 4 fases verdes, portar:
 
 | Pieza | Crate / archivo | Estado |
 |---|---|---|
-| App `mudanza` (daemon userspace) | `03_ukupacha/wawa/apps/mudanza/` | pendiente — suscripción a canales, verificación firma Ed25519 vía agora, descarga DAG delta, syscall `sys_actualizar_raiz` |
+| App `mudanza` (daemon userspace) | `03_ukupacha/wawa/apps/mudanza/` | **parcial 2026-05-28** — verificación crypto local con `ed25519-compact` antes del syscall (PROPUESTA_DEMO embebida firmada por seed test, mostrando que un sobre forjado por la app cierra y el kernel rechaza por anillo). Falta: suscripción a canales reales por `AnunciarCanal` + descarga DAG delta + syscall `sys_actualizar_raiz`. |
 | `sys_actualizar_raiz(hash_manifiesto)` | `wawa-kernel/src/wasm/env.rs` + manifiesto.rs | pendiente — validar tipos WASM de apps nuevas antes de re-anclar |
 | Ring buffer de últimas N raíces en superbloque | `format::SuperBloque` v3 + `almacen.rs` | pendiente — habilita rollback y menú de boot |
 | Menú "anclas recientes" en `wawa-boot` | `wawa-boot/src/main.rs` | pendiente |
-| Identidad agora Ed25519 firmable | `01_yachay/agora/agora-core` (o `shared/firma`) | pendiente — primitiva real, hoy `format::Firma` es un transporte sin verificación |
-| `mensaje firmable` también en host (constructor de canales) | host-side tool en `wawa-explorer-*` o crate nueva `canalero` | pendiente — emitir AnunciarCanal desde una laptop |
+| Identidad agora Ed25519 firmable | `03_ukupacha/agora/agora-core` + `agora-channel` | **hecho 2026-05-28** — `agora-core` ya exponía `Keypair::sign` y `verify_signature`; `agora-channel` (nuevo) cierra el contrato con `format::Canal/RaizFirmada/ManifiestoFirmado/mensaje_a_firmar` vía `firmar_raiz`, `verificar_canal` (con monotonicidad estricta de timestamps), `firmar_manifiesto` y `firmar_para_anuncio` (par `(autor, firma)` para `MensajeAkasha::AnunciarCanal` sin acoplar al crate `akasha`). 15/15 tests. |
+| `mensaje firmable` también en host (constructor de canales) | host-side tool en `wawa-explorer-*` o crate nueva `canalero` | **parcial 2026-05-28** — primitivas `firmar_raiz` y `firmar_para_anuncio` listas en `agora-channel`; falta empaque de frame `MensajeAkasha::AnunciarCanal` y emisión por red en una CLI dedicada. |
 
 **Decisión clave**: el kernel NO carga criptografía de identidad. Solo ingesta el DAG; toda política vive en userspace.
 
