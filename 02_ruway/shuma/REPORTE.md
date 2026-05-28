@@ -114,12 +114,17 @@ Cinco crates listos pero **NO enchufados** al `shuma-module-shell` actual:
 - **`shuma-shell-render`**: CanvasPlan (lienzo de contexto del grafo de intenciones, agnóstico de UI).
 - **`shuma-remote-exec`**: cliente sync del subprotocolo `ExecStream` del daemon — API espejo de `shuma-exec::RunHandle`. Listo para reemplazar `sh -c` por *ejecución contra el daemon*.
 
-### 3.5 Estado actual del REPL (`shuma-module-shell`, ~750 LOC)
-- Input + cwd + ejecución **no bloqueante** vía `shuma-exec` (Bloque A1 hecho 2026-05-28). Stdout/stderr llegan en streaming, drenados por `Msg::Tick` que el chasis dispara cada ~100 ms (`SHELL_TICK`). `sleep`/`top`/comandos largos ya no congelan la UI.
-- Builtins: `cd`, `pwd`, `clear`, `exit`.
-- Tope 500 líneas.
-- **Cola de comandos**: si el usuario presiona Enter mientras hay un run vivo, la línea entra en `state.queue` y arranca al cerrar el actual. Header muestra `· ⟳ <cmd> (+N en cola)`.
-- **Cancel**: Ctrl-C (o shortcut `Cancel`) manda SIGKILL al grupo de procesos entero — `shuma-exec` lanza cada child con `process_group(0)` para que `killpg` derribe a bash+sleep en un solo golpe.
+### 3.5 Estado actual del REPL (`shuma-module-shell`, ~1700 LOC)
+
+**Bloque A completo (2026-05-28).** El REPL ya es una pieza usable.
+
+- **Ejecución no bloqueante** (A1): streaming via `shuma-exec`, drenado por `Msg::Tick` a 100 ms (`SHELL_TICK`). `sleep`/`top` no congelan. Cola si hay run vivo. Cancel = SIGKILL al grupo (`process_group(0)` + `killpg`).
+- **Decoración del output** (A2): cada línea Stdout/Stderr pasa por `shuma_line::decorate_line` con `cwd` del state; paths/URLs/grep-refs/issue-refs/box-draw → `theme.accent`; git SHAs → `theme.fg_muted`. Render vía `paint_with` + typesetter (spans coloreados sin clickeo todavía — eso para una pasada futura).
+- **Input inteligente** (A3): `TextInputState` reemplazado por `shuma_line::LineState`. Tokens coloreados por `TokenKind` (Command/Argument/Flag/StringLit/Variable/…), cursor visible, ghost suggestion en placeholder color tomado del historial. Tab completa (binarios en `$PATH` + paths bajo cwd + flag hints de `shuma-line`); con N candidatos inserta el prefijo común. Flecha derecha al final = aceptar ghost. Ctrl+Arrow = palabra, Home/End, Backspace/Delete.
+- **Historial durable + Ctrl-R fuzzy** (A4): `shuma-history` JSONL en `$XDG_DATA_HOME/shuma/history.jsonl` (o `/dev/null` fallback). Append en cada Enter no vacío (builtins incluidos). Up/Down navegan el historial; cualquier edición rompe el cursor. Ctrl-R abre un overlay con `fuzzy_search`; Up/Down + Enter acepta la línea seleccionada (sin ejecutar — el usuario edita y Enter).
+- **PTY + vt100** (A5): allowlist hardcoded (`vi vim nvim nano emacs helix hx htop btop top less more man claude tig watch`) + prefijo `:tui <comando>` → `Exec::Pty` (80×24). Bytes del PTY alimentan `vt100::Parser`; el render del panel principal muta al grid de celdas con `paint_with` (bgs primero como rects, texto coloreado por celda agrupado en runs por fg, cursor barra). Teclas se traducen a xterm bytes (`\r`, `\x1b[A..D`, `\x1b[H/F`, `\x1b[5~/6~`, Ctrl-<letra> → 0x01..0x1a) y van por `RunHandle::write_input`. 256-color (cubo 6×6×6 + rampa gris) mapeado.
+- Builtins: `cd`, `pwd`, `clear`, `exit`. Tope 500 líneas en el buffer.
+- Tests: **29/29 verde** (incluyendo timing del ejecutor, navegación de historial, tab completion, build_spans, key→PTY bytes).
 
 ---
 
@@ -146,31 +151,19 @@ Forma actual de la config:
 
 ## 5. Plan propuesto (priorizado)
 
-### Bloque A — desbloquear el REPL (alto impacto, contenido)
-**Objetivo**: que el módulo shell sea utilizable de verdad (no congele con `sleep`, soporte TUI).
+### Bloque A — desbloquear el REPL  ✅ **completo (2026-05-28)**
+Ver §3.5 para el detalle del estado actual. Resumen:
 
-A1. ✅ **Cablear `shuma-exec` al `shuma-module-shell`** (hecho 2026-05-28).
-- `Command::output()` reemplazado por `shuma_exec::run(&CommandSpec::shell(...))`.
-- `Msg::Tick` drena `try_events()`; chasis dispara `Msg::ShellTick` a 100 ms separado del `Msg::Tick` de sysmon (1 Hz).
-- Cap de 500 líneas mantenido. Cola de comandos pendientes (`state.queue`).
-- `Msg::Cancel` + Ctrl-C → `killer.kill()` (SIGKILL al grupo). `shuma-exec` ahora arma cada child con `process_group(0)` y `killpg` para que el grupo entero caiga junto.
+- A1 ✅ ejecución no bloqueante + cola + cancel SIGKILL al grupo
+- A2 ✅ decoración del output (paths/URLs/SHAs/grep-refs/issue/box-draw)
+- A3 ✅ LineState + tokens coloreados + Tab completion + ghost
+- A4 ✅ historial durable JSONL + Up/Down + Ctrl-R fuzzy overlay
+- A5 ✅ PTY + emulador vt100 (vía `vt100` crate) + render de grid
 
-A2. **Cablear `shuma-line` para decoración del output**.
-- `decorate_line` sobre cada línea Stdout → spans con kinds (Path, Url, GrepRef, ShaLike).
-- Renderizar con colores del theme (paths subrayados, URLs en accent, SHA monoespaciado).
-
-A3. **Completion + ghost**.
-- `LineState` reemplaza el `String` actual del input.
-- Tab → `complete()` con `CompletionSource` standard (binarios en `$PATH` + paths + flags).
-- Render del `ghost_suggestion` en gris detrás del cursor.
-
-A4. **Historial durable**.
-- `shuma-history` en `$XDG_DATA_HOME/shuma/history.jsonl`.
-- Ctrl-R abre fuzzy search en un sub-panel.
-
-A5. **PTY para TUI fullscreen** (vim/htop/less/claude).
-- Cuando el comando ejecutado matchea allowlist (`vim`, `htop`, `less`, …) o el usuario prefija con `:tui`, usar `Exec::Pty`.
-- Renderizar bytes crudos con `shuma-shell-render` + parser vt100 (todavía hay que escribir; `shuma-line::ansi` ya cubre 16-color y mucho de ESC[m).
+Lo que queda fuera del alcance A pero podría ser un A6 futuro:
+- Resize dinámico del PTY (hoy 80×24 fijo — `vt100::Parser::screen_mut().set_size`).
+- Click handlers sobre decoraciones (abrir path en editor, URL con xdg-open).
+- Bracketed paste / mouse en el PTY.
 
 ### Bloque B — integrar el daemon como ejecutor (escala)
 **Objetivo**: que el shell pueda hablar contra `shuma-daemon` local *o* remoto sin cambiar la API del módulo.
@@ -233,17 +226,15 @@ F3. Editor multi-línea: `shuma-line::continuation::needs_continuation` ya está
 
 | # | Tarea | Ganancia | Costo |
 |---|-------|----------|-------|
-| ✅ | A1 — cablear `shuma-exec` al módulo shell | desbloquea UX | hecho 2026-05-28 |
-| 1 | A2 — decoración con `shuma-line` | shell se siente terminado | bajo |
-| 2 | A4 — historial durable | feature core | bajo |
-| 3 | A3 — completion + ghost | feature core | medio |
-| 4 | D1-D3 — wawa watcher en chasis | tema + idioma live | bajo |
-| 5 | B1 — Runner trait + switch local/daemon | habilita remoto | medio |
-| 6 | A5 — PTY + parser vt100 | TUI fullscreen | alto (parser) |
-| 7 | C1 — launcher real | UX visible | medio |
-| 8 | F1 — lienzo de contexto | killer feature pero opcional | alto |
+| ✅ | A1..A5 — bloque REPL completo | shell utilizable | hecho 2026-05-28 |
+| 1 | D1-D3 — wawa watcher en chasis | tema + idioma live | bajo |
+| 2 | B1 — Runner trait + switch local/daemon | habilita remoto | medio |
+| 3 | C1 — launcher real | UX visible | medio |
+| 4 | C2 — commandbar real | UX visible | medio |
+| 5 | E1..E4 — limpieza pendiente | menor | variado |
+| 6 | F1 — lienzo de contexto | killer feature pero opcional | alto |
 
-**Recomendación de orden**: A2 → A4 → A3 → D1..D3 → B1 → resto.
+**Recomendación de orden**: D1..D3 → B1 → C1 → C2 → E* → F*.
 
 ---
 
