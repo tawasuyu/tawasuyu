@@ -1,0 +1,14 @@
+[package]
+name = "shuma-module-canvas"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "shuma-module-canvas — lienzo de contexto: renderiza el SessionGraph de shuma-intent como grafo visual usando shuma-shell-render::layout y paint_with de Llimphi."
+
+[dependencies]
+shuma-module = { path = "../shuma-module" }
+shuma-intent = { path = "../shuma-intent" }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }

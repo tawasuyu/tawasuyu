@@ -240,6 +240,11 @@ pub struct State {
     /// y lo lee `drain_run` para disparar resize si cambia. Cero =
     /// "todavía no se pintó".
     pub last_tui_rect: Arc<Mutex<(f32, f32)>>,
+    /// Jobs en background — arrancados con sufijo `&` en la línea. No
+    /// son el "foreground" (ese es `running`); su output se mergea al
+    /// buffer prefijado por `[N]`. Builtins `:jobs`, `:term N`,
+    /// `:stop N`, `:cont N` operan sobre estos.
+    pub bg_jobs: Vec<Arc<Mutex<ActiveRun>>>,
 }
 
 /// Estado del overlay de búsqueda Ctrl-R.
@@ -267,6 +272,7 @@ impl State {
             history_cursor: None,
             history_search: None,
             last_tui_rect: Arc::new(Mutex::new((0.0, 0.0))),
+            bg_jobs: Vec::new(),
         }
     }
 
@@ -528,8 +534,17 @@ pub fn update(state: State, msg: Msg) -> State {
                 s.history_search = Some(HistorySearch::default());
                 return s;
             }
-            // Enter: ejecuta.
+            // Enter: ejecuta — pero si el texto deja una construcción
+            // abierta (quote, paren, heredoc, `\` final, pipe pendiente),
+            // insertamos un salto de línea y seguimos editando.
+            // Shift+Enter fuerza salto de línea siempre.
             if let Key::Named(NamedKey::Enter) = ev.key {
+                let pending = shuma_line::needs_continuation(s.input.text());
+                if pending || ev.modifiers.shift {
+                    s.input.insert("\n");
+                    s.history_cursor = None;
+                    return s;
+                }
                 s.history_cursor = None;
                 s = run_submitted(s);
                 return s;
@@ -932,12 +947,26 @@ fn run_submitted(mut s: State) -> State {
                 );
                 return s;
             }
+            ":jobs" => return apply_jobs_list(s),
+            ":term" => return apply_jobs_signal(s, rest, JobSignal::Term),
+            ":stop" => return apply_jobs_signal(s, rest, JobSignal::Stop),
+            ":cont" => return apply_jobs_signal(s, rest, JobSignal::Cont),
             _ => {}
         }
     }
 
-    // Comando externo. Si ya hay uno corriendo, lo encolamos; si no,
-    // arrancamos ahora mismo.
+    // Sufijo `&` (con espacios opcionales antes) → background. El
+    // background siempre arranca, sin encolar; no hay límite.
+    if let Some(stripped) = trimmed.strip_suffix('&') {
+        let cmd = stripped.trim_end().to_string();
+        if cmd.is_empty() {
+            return s;
+        }
+        return start_bg(s, cmd);
+    }
+
+    // Comando externo foreground. Si ya hay uno corriendo, lo encolamos;
+    // si no, arrancamos ahora mismo.
     if s.running.is_some() {
         s.queue.push_back(trimmed);
         push_line(
@@ -947,6 +976,131 @@ fn run_submitted(mut s: State) -> State {
         return s;
     }
     start_run(s, trimmed)
+}
+
+#[derive(Debug, Clone, Copy)]
+enum JobSignal {
+    Term,
+    Stop,
+    Cont,
+}
+
+/// Lista los bg_jobs con su índice y comando. Marca finalizados.
+fn apply_jobs_list(mut s: State) -> State {
+    if s.bg_jobs.is_empty() {
+        push_line(&mut s.output, OutputLine::notice("(sin jobs en background)"));
+        return s;
+    }
+    for (i, arc) in s.bg_jobs.iter().enumerate() {
+        let (cmd, status) = match arc.lock() {
+            Ok(g) => (
+                g.command.clone(),
+                if g.handle.is_finished() { "done" } else { "running" },
+            ),
+            Err(p) => {
+                let g = p.into_inner();
+                (g.command.clone(), if g.handle.is_finished() { "done" } else { "running" })
+            }
+        };
+        push_line(
+            &mut s.output,
+            OutputLine::notice(format!("[{i}] {status}  {cmd}")),
+        );
+    }
+    s
+}
+
+/// Aplica `:term N` / `:stop N` / `:cont N` al job de índice `N`.
+/// Stop/Cont son no-op en jobs sin `Killer` (remotos vía daemon).
+fn apply_jobs_signal(mut s: State, rest: &str, sig: JobSignal) -> State {
+    let idx: usize = match rest.trim().parse() {
+        Ok(n) => n,
+        Err(_) => {
+            push_line(
+                &mut s.output,
+                OutputLine::notice("uso: :term N | :stop N | :cont N"),
+            );
+            return s;
+        }
+    };
+    let Some(arc) = s.bg_jobs.get(idx).cloned() else {
+        push_line(
+            &mut s.output,
+            OutputLine::notice(format!("no hay job [{idx}]")),
+        );
+        return s;
+    };
+    let guard = match arc.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    let acted = match sig {
+        JobSignal::Term => match guard.killer.as_ref() {
+            Some(k) => {
+                k.term();
+                true
+            }
+            None => {
+                // Remoto: cancel via stream close.
+                guard.handle.kill();
+                true
+            }
+        },
+        JobSignal::Stop => guard.killer.as_ref().map(|k| k.stop()).unwrap_or(false),
+        JobSignal::Cont => guard.killer.as_ref().map(|k| k.cont()).unwrap_or(false),
+    };
+    let label = match sig {
+        JobSignal::Term => "TERM",
+        JobSignal::Stop => "STOP",
+        JobSignal::Cont => "CONT",
+    };
+    drop(guard);
+    push_line(
+        &mut s.output,
+        OutputLine::notice(if acted {
+            format!("[{idx}] SIG{label} enviado")
+        } else {
+            format!("[{idx}] no se pudo enviar SIG{label}")
+        }),
+    );
+    s
+}
+
+/// Variante de `start_run` que arranca como job background. La salida
+/// se mergea al output buffer prefijada por `[N]`. Devuelve `s` con el
+/// nuevo job en `bg_jobs`.
+fn start_bg(mut s: State, line: String) -> State {
+    let cwd_str = s.cwd.display().to_string();
+    let (spec, _tui) = build_spec(&line, &cwd_str);
+    // Background no soporta TUI (no le pintamos el grid; el panel
+    // sería robado al foreground). Si la línea era TUI, la corremos
+    // sin PTY igual — el binario podrá quejarse, pero al menos no
+    // tira la UI.
+    let bg_spec = if matches!(spec.exec, Exec::Pty { .. }) {
+        let mut s2 = spec.clone();
+        s2.exec = Exec::Shell {
+            line: line.clone(),
+            program: "bash".into(),
+        };
+        s2
+    } else {
+        spec
+    };
+    let handle = shuma_exec::run(&bg_spec);
+    let killer = handle.killer();
+    let idx = s.bg_jobs.len();
+    push_line(
+        &mut s.output,
+        OutputLine::notice(format!("[{idx}] background  {line}")),
+    );
+    let active = ActiveRun {
+        handle: BackendHandle::Local(handle),
+        killer: Some(killer),
+        command: line,
+        tui: None,
+    };
+    s.bg_jobs.push(Arc::new(Mutex::new(active)));
+    s
 }
 
 fn start_run(mut s: State, line: String) -> State {
@@ -1213,6 +1367,67 @@ fn drain_run(mut s: State) -> State {
             s = start_run(s, next);
         }
     }
+    // Drenado de jobs background — cada uno aporta sus líneas
+    // prefijadas por `[N]`. Los terminados se eliminan del Vec.
+    s = drain_bg_jobs(s);
+    s
+}
+
+/// Drena los `bg_jobs` y los limpia. Las líneas se prefijan `[N]`
+/// para distinguir su origen.
+fn drain_bg_jobs(mut s: State) -> State {
+    let mut next_jobs: Vec<Arc<Mutex<ActiveRun>>> = Vec::with_capacity(s.bg_jobs.len());
+    for (i, arc) in s.bg_jobs.iter().enumerate() {
+        let mut keep = true;
+        let prefix = format!("[{i}] ");
+        let mut finished: Option<RunEvent> = None;
+        {
+            let mut guard = match arc.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            for ev in guard.handle.try_events() {
+                match ev {
+                    RunEvent::Stdout(line) => push_line(
+                        &mut s.output,
+                        OutputLine::stdout(format!("{prefix}{line}")),
+                    ),
+                    RunEvent::Stderr(line) => push_line(
+                        &mut s.output,
+                        OutputLine::stderr(format!("{prefix}{line}")),
+                    ),
+                    RunEvent::Truncated => push_line(
+                        &mut s.output,
+                        OutputLine::notice(format!("{prefix}… (truncada)")),
+                    ),
+                    RunEvent::Spilled(path) => push_line(
+                        &mut s.output,
+                        OutputLine::notice(format!("{prefix}… (volcado a {path})")),
+                    ),
+                    RunEvent::Bytes(_) => {
+                        // Background sin PTY — no debería emitir Bytes.
+                    }
+                    ev @ (RunEvent::Exited(_) | RunEvent::Failed(_)) => {
+                        finished = Some(ev);
+                    }
+                }
+            }
+        }
+        if let Some(ev) = finished {
+            let notice = match ev {
+                RunEvent::Exited(0) => format!("{prefix}✔ exit 0"),
+                RunEvent::Exited(code) => format!("{prefix}✘ exit {code}"),
+                RunEvent::Failed(e) => format!("{prefix}✘ failed: {e}"),
+                _ => unreachable!(),
+            };
+            push_line(&mut s.output, OutputLine::notice(notice));
+            keep = false;
+        }
+        if keep {
+            next_jobs.push(arc.clone());
+        }
+    }
+    s.bg_jobs = next_jobs;
     s
 }
 
@@ -1380,13 +1595,19 @@ fn shell_input_view<HostMsg: Clone + 'static>(
 
     let text = state.input.text().to_string();
     let cursor = state.input.cursor();
-    let tokens = state.input.tokens();
     let ghost = current_ghost(state);
     let placeholder = if text.is_empty() && ghost.is_none() {
         Some("tipeá un comando…".to_string())
     } else {
         None
     };
+    // Multi-línea: cada `\n` agrega una línea visible y crece el alto
+    // del input. El cursor cae en (línea, columna) calculadas desde el
+    // byte offset del cursor.
+    let line_count = text.matches('\n').count() + 1;
+    const LINE_H: f64 = 18.0;
+    const BORDER_INNER_H: f64 = 16.0; // padding visual sumado al alto
+    let container_h = BORDER_INNER_H + LINE_H * line_count as f64;
     let theme_clone = *theme;
     let focused = state.focused;
 
@@ -1398,15 +1619,14 @@ fn shell_input_view<HostMsg: Clone + 'static>(
         };
         let pad_x = 10.0;
         let baseline_y = rect.y as f64 + 8.0;
-        let mut x = rect.x as f64 + pad_x;
-        let mut cursor_x: f64 = x;
+        let line_x_start = rect.x as f64 + pad_x;
 
         if let Some(ph) = &placeholder {
             let block = TextBlock {
                 text: ph,
                 size_px: 13.0,
                 color: theme_clone.fg_placeholder,
-                origin: (x, baseline_y),
+                origin: (line_x_start, baseline_y),
                 max_width: None,
                 alignment: TAlign::Start,
                 line_height: 1.2,
@@ -1414,64 +1634,100 @@ fn shell_input_view<HostMsg: Clone + 'static>(
                 font_family: None,
             };
             let layout = layout_block(ts, &block);
-            draw_layout(scene, &layout, theme_clone.fg_placeholder, (x, baseline_y));
+            draw_layout(
+                scene,
+                &layout,
+                theme_clone.fg_placeholder,
+                (line_x_start, baseline_y),
+            );
         }
 
-        // Pinta cada token con su color; al pasar por el cursor, capturá la x.
-        let mut last_end = 0usize;
-        for tok in &tokens {
-            let color = token_color(tok.kind, &theme_clone);
-            let segment = &text[tok.start..tok.end];
-            let block = TextBlock {
-                text: segment,
-                size_px: 13.0,
-                color,
-                origin: (x, baseline_y),
-                max_width: None,
-                alignment: TAlign::Start,
-                line_height: 1.2,
-                italic: false,
-                font_family: None,
-            };
-            let layout = layout_block(ts, &block);
-            let m = measurement(&layout);
-            draw_layout(scene, &layout, color, (x, baseline_y));
-            if tok.start < cursor && cursor <= tok.end {
-                // Cursor cae en este token: medir prefijo hasta el cursor.
-                let prefix = &text[tok.start..cursor];
-                if prefix.is_empty() {
-                    cursor_x = x;
-                } else {
-                    let pblock = TextBlock {
-                        text: prefix,
-                        size_px: 13.0,
-                        color,
-                        origin: (x, baseline_y),
-                        max_width: None,
-                        alignment: TAlign::Start,
-                        line_height: 1.2,
-                        italic: false,
-                        font_family: None,
-                    };
-                    let plat = layout_block(ts, &pblock);
-                    cursor_x = x + measurement(&plat).width as f64;
+        // Calcular qué línea/columna ocupa el cursor.
+        let (cursor_line_idx, cursor_byte_in_line) = {
+            let pre = &text[..cursor];
+            let line_idx = pre.matches('\n').count();
+            let line_start = pre.rfind('\n').map(|i| i + 1).unwrap_or(0);
+            (line_idx, cursor - line_start)
+        };
+
+        let mut cursor_x: f64 = line_x_start;
+        let mut cursor_y: f64 = baseline_y;
+        let mut last_line_end_x: f64 = line_x_start;
+        let mut last_line_y: f64 = baseline_y;
+        let mut line_byte_start = 0usize;
+        for (line_idx, line_str) in text.split('\n').enumerate() {
+            let line_y = baseline_y + line_idx as f64 * LINE_H;
+            let mut x = line_x_start;
+            // Pintar tokens sobre el slice de la línea, usando el
+            // tokenizer estándar (dialect por defecto = bash).
+            let tokens =
+                shuma_line::tokenize(line_str, state_dialect_default());
+            for tok in &tokens {
+                let color = token_color(tok.kind, &theme_clone);
+                let segment = &line_str[tok.start..tok.end];
+                let block = TextBlock {
+                    text: segment,
+                    size_px: 13.0,
+                    color,
+                    origin: (x, line_y),
+                    max_width: None,
+                    alignment: TAlign::Start,
+                    line_height: 1.2,
+                    italic: false,
+                    font_family: None,
+                };
+                let layout = layout_block(ts, &block);
+                let m = measurement(&layout);
+                draw_layout(scene, &layout, color, (x, line_y));
+                if line_idx == cursor_line_idx
+                    && tok.start < cursor_byte_in_line
+                    && cursor_byte_in_line <= tok.end
+                {
+                    let prefix = &line_str[tok.start..cursor_byte_in_line];
+                    if prefix.is_empty() {
+                        cursor_x = x;
+                    } else {
+                        let pblock = TextBlock {
+                            text: prefix,
+                            size_px: 13.0,
+                            color,
+                            origin: (x, line_y),
+                            max_width: None,
+                            alignment: TAlign::Start,
+                            line_height: 1.2,
+                            italic: false,
+                            font_family: None,
+                        };
+                        let plat = layout_block(ts, &pblock);
+                        cursor_x = x + measurement(&plat).width as f64;
+                    }
+                    cursor_y = line_y;
                 }
+                x += m.width as f64;
             }
-            x += m.width as f64;
-            last_end = tok.end;
+            // Cursor al final de una línea vacía / sin tokens hasta el cursor.
+            if line_idx == cursor_line_idx
+                && (cursor_byte_in_line == line_str.len()
+                    || tokens.is_empty())
+            {
+                cursor_x = x;
+                cursor_y = line_y;
+            }
+            last_line_end_x = x;
+            last_line_y = line_y;
+            line_byte_start += line_str.len() + 1; // +1 por el '\n'
         }
-        if cursor == last_end || (cursor == 0 && tokens.is_empty()) {
-            cursor_x = x;
-        }
+        let _ = line_byte_start; // sólo informativo
 
-        // Ghost suggestion: pinta el sufijo en color muted detrás del cursor.
+        // Ghost suggestion: sólo aplica si el cursor está al final del
+        // texto (última línea, columna final). Lo pinta detrás del cursor.
         if let Some(suffix) = &ghost {
-            if !suffix.is_empty() {
+            if !suffix.is_empty() && cursor == text.len() {
                 let block = TextBlock {
                     text: suffix,
                     size_px: 13.0,
                     color: theme_clone.fg_placeholder,
-                    origin: (x, baseline_y),
+                    origin: (last_line_end_x, last_line_y),
                     max_width: None,
                     alignment: TAlign::Start,
                     line_height: 1.2,
@@ -1483,20 +1739,20 @@ fn shell_input_view<HostMsg: Clone + 'static>(
                     scene,
                     &layout,
                     theme_clone.fg_placeholder,
-                    (x, baseline_y),
+                    (last_line_end_x, last_line_y),
                 );
             }
         }
 
-        // Cursor — barra vertical de 2 px, color accent si focado.
+        // Cursor — barra vertical de 2 px en la línea calculada.
         if focused {
             use llimphi_ui::llimphi_raster::kurbo::Rect as KurboRect;
             use llimphi_ui::llimphi_raster::peniko::Fill;
             let cursor_rect = KurboRect::new(
                 cursor_x,
-                baseline_y + 2.0,
+                cursor_y + 2.0,
                 cursor_x + 2.0,
-                baseline_y + 18.0,
+                cursor_y + LINE_H,
             );
             scene.fill(
                 Fill::NonZero,
@@ -1522,7 +1778,7 @@ fn shell_input_view<HostMsg: Clone + 'static>(
     View::new(Style {
         size: Size {
             width: percent(1.0_f32),
-            height: length(34.0_f32),
+            height: length(container_h as f32),
         },
         padding: Rect {
             left: length(1.0_f32),
@@ -1536,6 +1792,13 @@ fn shell_input_view<HostMsg: Clone + 'static>(
     .radius(4.0)
     .on_click(lift(Msg::FocusInput))
     .children(vec![inner])
+}
+
+/// Dialect por defecto para el painter — el `LineState` lo guarda
+/// internamente pero no lo expone; mientras todos los usos sean bash
+/// alcanza con este getter.
+fn state_dialect_default() -> shuma_line::Dialect {
+    shuma_line::Dialect::default()
 }
 
 /// Panel de TUI: pinta la pantalla del PTY como grid monoespaciado.
@@ -2424,6 +2687,75 @@ mod tests {
         s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
         assert!(s.output.iter().any(|l| l.text.starts_with("✘ daemon:")));
         assert!(!s.is_running(), "no debe quedar un run vivo si falló");
+    }
+
+    #[test]
+    fn ampersand_suffix_starts_background_job() {
+        let mut s = State::new(Source::Local);
+        s.cwd = PathBuf::from("/");
+        s.input.set_text("sleep 5 &");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert!(!s.is_running(), "& no debe dejar un foreground vivo");
+        assert_eq!(s.bg_jobs.len(), 1);
+        assert!(s.output.iter().any(|l| l.text.contains("[0] background")));
+        // Cancelar el job así no queda sleep colgado en el host.
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        s.input.set_text(":term 0");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert!(s.output.iter().any(|l| l.text.contains("[0] SIGTERM enviado")));
+    }
+
+    #[test]
+    fn jobs_builtin_lists_background_jobs() {
+        let mut s = State::new(Source::Local);
+        s.cwd = PathBuf::from("/");
+        s.input.set_text("sleep 5 &");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        s.input.set_text(":jobs");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert!(s
+            .output
+            .iter()
+            .any(|l| l.text.contains("[0]") && l.text.contains("sleep")));
+        s.input.set_text(":term 0");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+    }
+
+    #[test]
+    fn jobs_builtin_empty_shows_notice() {
+        let mut s = State::new(Source::Local);
+        s.input.set_text(":jobs");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert!(s.output.iter().any(|l| l.text.contains("sin jobs")));
+    }
+
+    #[test]
+    fn enter_with_open_quote_inserts_newline_instead_of_submit() {
+        let mut s = State::new(Source::Local);
+        s.input.set_text("echo 'hola");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        // No debe haber arrancado un run — Enter agregó \n.
+        assert!(!s.is_running());
+        assert_eq!(s.input.text(), "echo 'hola\n");
+    }
+
+    #[test]
+    fn shift_enter_always_inserts_newline() {
+        let mut s = State::new(Source::Local);
+        s.input.set_text("ls"); // texto completo, sin continuation pendiente
+        let shift_enter = KeyEvent {
+            key: Key::Named(NamedKey::Enter),
+            state: KeyState::Pressed,
+            text: None,
+            modifiers: Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+            repeat: false,
+        };
+        s = update(s, Msg::Key(shift_enter));
+        assert!(!s.is_running(), "shift+enter no debe ejecutar");
+        assert_eq!(s.input.text(), "ls\n");
     }
 
     #[test]

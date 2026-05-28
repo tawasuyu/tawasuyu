@@ -198,10 +198,10 @@ D2. Reaccionar a cambios de `theme_variant`/`accent`/`lang` sin reiniciar (`Them
 D3. Documentar el contrato: el shumarc topología (qué módulos en qué slots) sigue siendo TOML aparte; el JSON wawa es para preferencias visuales y toggle de apps.
 
 ### Bloque E — limpieza pendiente
-E1. `shuma-daemon/src/main.rs:520` — `audit_request` con uid 0 placeholder; cablear `SO_PEERCRED` real.
-E2. Hover trigger del drawer Quake (requiere PR en `llimphi-ui` para enter/leave events).
-E3. Parser real de teclas en shumarc (hoy mapeo manual F1..F24 en `main.rs`).
-E4. `shuma-shell-render::paint` está agnóstico; cuando llegue el lienzo de contexto al shell hay que crear un módulo nuevo `shuma-module-canvas` que lo consuma.
+E1 ✅ `audit_request(peer: &str, req)` — Unix socket pasa `uid:1000` desde `SO_PEERCRED`; TCP autenticado pasa `pubkey:<16 hex>` (primeros 16 chars de la X25519 del peer).
+E2 ⏳ Hover trigger del drawer Quake — bloqueado por dispatching de `on_pointer_enter/leave` en `llimphi-ui` (WIP del usuario en curso; los campos y métodos públicos existen pero el runtime no los emite todavía).
+E3 ✅ Parser real de teclas en shumarc — `parse_binding` acepta `Ctrl+Shift+Space`, `Super+grave`, `Alt+F1`, etc. Modifiers: `Ctrl/Alt/Shift/Super` (con alias `Meta/Cmd/Win`). Named keys: F1..F24, Escape, Enter, Space, Tab, Backspace, Delete, Home, End, PageUp/Down, Arrows, Insert, grave. Tests cubren combos.
+E4 ✅ `shuma-module-canvas` consume el `SessionGraph` directo (layout in-tree para no arrastrar `pineal-render` al chasis).
 
 ### Bloque F — features grandes (post-A/B)
 F1. Lienzo de contexto: panel adicional que renderice `shuma-intent::SessionGraph` con `shuma-shell-render::CanvasPlan`. El grafo `%cN`/`%pN` ya existe en `shuma-intent`; falta la UI y el parser de intents en la commandbar.
@@ -240,12 +240,14 @@ F3. Editor multi-línea: `shuma-line::continuation::needs_continuation` ya está
 | ✅ | B1..B3 — daemon ejecutor + broker | shell remoto + observable | hecho 2026-05-28 |
 | ✅ | C1..C2 — launcher + commandbar reales | palette Cmd-P + apps | hecho 2026-05-28 |
 | ✅ | D1..D3 — wawa watcher + theme/lang live | preferencias unificadas | hecho 2026-05-28 |
-| 1 | E1..E4 — limpieza pendiente | menor | variado |
-| 2 | F1 — lienzo de contexto | killer feature pero opcional | alto |
-| 3 | F2 — job control (:jobs, :term, &) | shell power-user | medio |
-| 4 | F3 — editor multi-línea | scripts multi-línea | medio |
+| ✅ | E1 E3 E4 — limpieza | SO_PEERCRED, parser bindings, lienzo | hecho 2026-05-28 |
+| ✅ | F2 F3 F1 — features grandes | jobs, multi-línea, lienzo | hecho 2026-05-28 |
+| ⏳ | E2 — hover trigger drawer | requiere WIP llimphi-ui (pointer events) | bloqueado |
 
-**Recomendación de orden**: E* → F*.
+Pendientes opcionales (cosas que el reporte mencionó como "futuro"):
+- Integración shell↔canvas: `shuma-module-shell` registra cada run en el `SessionGraph` del `shuma-module-canvas` activo (hoy el canvas vive como módulo standalone con demo).
+- Mouse en el PTY (vt100 ya parsea; falta cablear el mouse de Llimphi).
+- Tooltip "what would clicking this do?" en decoraciones (espera al hover de llimphi-ui).
 
 ---
 

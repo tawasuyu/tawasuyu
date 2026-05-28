@@ -360,11 +360,11 @@ impl App for Shell {
                 return Some(Msg::CloseDrawer);
             }
         }
-        // Tecla configurada para toggle (default F12). Se compara contra
-        // el label "F12"/"F11"/... — bloque 5 traerá un parser real de
-        // `Super+grave` etc.
+        // Tecla configurada para toggle (default F12). El parser
+        // acepta combos `Ctrl+Shift+Space`, `Super+grave`, `Alt+F1`,
+        // etc. — sin caso/orden estrictos.
         if let Some(want) = model.drawer_trigger.key.as_deref() {
-            if matches_key(want, &e.key) {
+            if matches_key(want, &e.key, &e.modifiers) {
                 return Some(Msg::ToggleDrawer);
             }
         }
@@ -1487,35 +1487,196 @@ fn placeholder(theme: &Theme, text: &str) -> View<Msg> {
     .text_aligned(text.to_string(), 13.0, theme.fg_muted, Alignment::Start)
 }
 
-/// Matcher mínimo del label de tecla configurado en shumarc contra el
-/// `Key` que llega del backend. Cubre F1..F24, Escape, Enter; bloque 5
-/// expande para Super/Ctrl/etc.
-fn matches_key(want: &str, key: &Key) -> bool {
-    match key {
-        Key::Named(named) => {
-            let label = named_label(*named);
-            label.eq_ignore_ascii_case(want)
+/// Matcher del binding del shumarc contra la tecla recibida. Sintaxis:
+///
+/// ```text
+/// <mods>+<tecla>
+/// ```
+///
+/// donde `<mods>` es una secuencia (en cualquier orden, separadas por
+/// `+`) de `Ctrl`, `Alt`, `Shift`, `Super` (alias `Meta`/`Cmd`/`Win`)
+/// — case-insensitive. `<tecla>` puede ser un named key (`F1..F24`,
+/// `Escape`, `Enter`, `Space`, `Tab`, `Backspace`, `Delete`, `Home`,
+/// `End`, `PageUp`, `PageDown`, `ArrowLeft/Right/Up/Down`) o un
+/// carácter literal (`a`, `1`, `grave`). El parsing es tolerante:
+/// espacios alrededor de `+` se ignoran.
+fn matches_key(want: &str, key: &Key, mods: &llimphi_ui::Modifiers) -> bool {
+    let parsed = match parse_binding(want) {
+        Some(p) => p,
+        None => return false,
+    };
+    if parsed.ctrl != mods.ctrl
+        || parsed.alt != mods.alt
+        || parsed.shift != mods.shift
+        || parsed.meta != mods.meta
+    {
+        return false;
+    }
+    match (parsed.target, key) {
+        (KeyTarget::Named(want), Key::Named(got)) => want == *got,
+        (KeyTarget::Char(want), Key::Character(s)) => {
+            s.chars().next().map(|c| c.to_ascii_lowercase() == want).unwrap_or(false)
         }
         _ => false,
     }
 }
 
-fn named_label(n: NamedKey) -> &'static str {
-    match n {
-        NamedKey::F1 => "F1",
-        NamedKey::F2 => "F2",
-        NamedKey::F3 => "F3",
-        NamedKey::F4 => "F4",
-        NamedKey::F5 => "F5",
-        NamedKey::F6 => "F6",
-        NamedKey::F7 => "F7",
-        NamedKey::F8 => "F8",
-        NamedKey::F9 => "F9",
-        NamedKey::F10 => "F10",
-        NamedKey::F11 => "F11",
-        NamedKey::F12 => "F12",
-        NamedKey::Escape => "Escape",
-        NamedKey::Enter => "Enter",
-        _ => "",
+#[derive(Debug)]
+struct ParsedBinding {
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    meta: bool,
+    target: KeyTarget,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum KeyTarget {
+    Named(NamedKey),
+    Char(char),
+}
+
+fn parse_binding(s: &str) -> Option<ParsedBinding> {
+    let mut ctrl = false;
+    let mut alt = false;
+    let mut shift = false;
+    let mut meta = false;
+    let mut target: Option<KeyTarget> = None;
+    let parts: Vec<&str> = s.split('+').map(str::trim).collect();
+    if parts.is_empty() {
+        return None;
+    }
+    // El último token es la tecla; los previos son modifiers.
+    let (last, mods) = parts.split_last()?;
+    for m in mods {
+        match m.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" => ctrl = true,
+            "alt" | "option" => alt = true,
+            "shift" => shift = true,
+            "super" | "meta" | "cmd" | "win" => meta = true,
+            "" => continue, // tolerancia con strings sucios
+            _ => return None,
+        }
+    }
+    target = Some(match last.to_ascii_lowercase().as_str() {
+        "escape" | "esc" => KeyTarget::Named(NamedKey::Escape),
+        "enter" | "return" => KeyTarget::Named(NamedKey::Enter),
+        "tab" => KeyTarget::Named(NamedKey::Tab),
+        "backspace" => KeyTarget::Named(NamedKey::Backspace),
+        "delete" | "del" => KeyTarget::Named(NamedKey::Delete),
+        "space" => KeyTarget::Named(NamedKey::Space),
+        "home" => KeyTarget::Named(NamedKey::Home),
+        "end" => KeyTarget::Named(NamedKey::End),
+        "pageup" | "pgup" => KeyTarget::Named(NamedKey::PageUp),
+        "pagedown" | "pgdn" => KeyTarget::Named(NamedKey::PageDown),
+        "left" | "arrowleft" => KeyTarget::Named(NamedKey::ArrowLeft),
+        "right" | "arrowright" => KeyTarget::Named(NamedKey::ArrowRight),
+        "up" | "arrowup" => KeyTarget::Named(NamedKey::ArrowUp),
+        "down" | "arrowdown" => KeyTarget::Named(NamedKey::ArrowDown),
+        "insert" | "ins" => KeyTarget::Named(NamedKey::Insert),
+        "grave" | "backtick" | "`" => KeyTarget::Char('`'),
+        "minus" | "-" => KeyTarget::Char('-'),
+        "equal" | "=" => KeyTarget::Char('='),
+        "slash" | "/" => KeyTarget::Char('/'),
+        f if f.starts_with('f') && f.len() <= 3 => {
+            let n: u32 = f[1..].parse().ok()?;
+            let named = match n {
+                1 => NamedKey::F1,
+                2 => NamedKey::F2,
+                3 => NamedKey::F3,
+                4 => NamedKey::F4,
+                5 => NamedKey::F5,
+                6 => NamedKey::F6,
+                7 => NamedKey::F7,
+                8 => NamedKey::F8,
+                9 => NamedKey::F9,
+                10 => NamedKey::F10,
+                11 => NamedKey::F11,
+                12 => NamedKey::F12,
+                13 => NamedKey::F13,
+                14 => NamedKey::F14,
+                15 => NamedKey::F15,
+                16 => NamedKey::F16,
+                17 => NamedKey::F17,
+                18 => NamedKey::F18,
+                19 => NamedKey::F19,
+                20 => NamedKey::F20,
+                21 => NamedKey::F21,
+                22 => NamedKey::F22,
+                23 => NamedKey::F23,
+                24 => NamedKey::F24,
+                _ => return None,
+            };
+            KeyTarget::Named(named)
+        }
+        c if c.chars().count() == 1 => KeyTarget::Char(c.chars().next().unwrap()),
+        _ => return None,
+    });
+    Some(ParsedBinding {
+        ctrl,
+        alt,
+        shift,
+        meta,
+        target: target.unwrap(),
+    })
+}
+
+#[cfg(test)]
+mod tests_bindings {
+    use super::*;
+    use llimphi_ui::Modifiers;
+
+    #[test]
+    fn f12_matches_named_no_modifiers() {
+        let p = parse_binding("F12").unwrap();
+        assert!(matches!(p.target, KeyTarget::Named(NamedKey::F12)));
+        assert!(!p.ctrl && !p.alt && !p.shift && !p.meta);
+    }
+
+    #[test]
+    fn ctrl_grave_parses_and_matches() {
+        let want = "Ctrl+grave";
+        let key = Key::Character("`".into());
+        let mods = Modifiers {
+            ctrl: true,
+            ..Default::default()
+        };
+        assert!(matches_key(want, &key, &mods));
+        // Sin Ctrl no matchea.
+        let mods_no = Modifiers::default();
+        assert!(!matches_key(want, &key, &mods_no));
+    }
+
+    #[test]
+    fn super_space_alias() {
+        let p = parse_binding("Super+Space").unwrap();
+        assert!(p.meta);
+        assert!(matches!(p.target, KeyTarget::Named(NamedKey::Space)));
+        let p2 = parse_binding("Meta+Space").unwrap();
+        assert!(p2.meta);
+    }
+
+    #[test]
+    fn ctrl_shift_letter_combo() {
+        let want = "Ctrl+Shift+a";
+        let key = Key::Character("a".into());
+        let mods = Modifiers {
+            ctrl: true,
+            shift: true,
+            ..Default::default()
+        };
+        assert!(matches_key(want, &key, &mods));
+        // Solo Ctrl, sin Shift → no matchea.
+        let mods_no = Modifiers {
+            ctrl: true,
+            ..Default::default()
+        };
+        assert!(!matches_key(want, &key, &mods_no));
+    }
+
+    #[test]
+    fn unknown_token_returns_none() {
+        assert!(parse_binding("Hyper+x").is_none());
+        assert!(parse_binding("F99").is_none());
     }
 }

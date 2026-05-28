@@ -243,6 +243,7 @@ members = [
     "02_ruway/shuma/sandbox/shuma-intent",
     "02_ruway/shuma/sandbox/shuma-line",
     "02_ruway/shuma/sandbox/shuma-module",
+    "02_ruway/shuma/sandbox/shuma-module-canvas",
     "02_ruway/shuma/sandbox/shuma-module-commandbar",
     "02_ruway/shuma/sandbox/shuma-module-launcher",
     "02_ruway/shuma/sandbox/shuma-module-matilda",

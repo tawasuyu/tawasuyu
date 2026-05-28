@@ -346,14 +346,17 @@ async fn handle_client(
     daemon_started: std::time::Instant,
 ) -> anyhow::Result<()> {
     // Audit: peer uid lo leemos una vez aquí (no cambia durante la conexión).
-    let peer = peer_uid(&stream).unwrap_or(u32::MAX);
+    let peer_id = match peer_uid(&stream) {
+        Ok(u) => format!("uid:{u}"),
+        Err(_) => "uid:unknown".to_string(),
+    };
     loop {
         let req: Request = match read_frame(&mut stream).await {
             Ok(r) => r,
             Err(shuma_protocol::ProtocolError::Closed) => return Ok(()),
             Err(e) => return Err(e.into()),
         };
-        audit_request(peer, &req);
+        audit_request(&peer_id, &req);
 
         // El subprotocolo `ExecStream` produce N frames sobre la misma
         // conexión hasta un terminal. Lo manejamos inline en vez de pasar
@@ -510,6 +513,11 @@ async fn handle_enc_client(
         return Ok(());
     }
     info!(peer = %peer.to_hex(), "TCP peer autorizado, sirviendo");
+    // Identidad del peer en el audit log: primeros 16 hex de su pubkey
+    // X25519 — suficientes para correlacionar entradas sin volcar la
+    // clave entera en cada línea.
+    let peer_hex = peer.to_hex();
+    let peer_id = format!("pubkey:{}", &peer_hex[..peer_hex.len().min(16)]);
 
     loop {
         let req: Request = match ch.recv_postcard().await {
@@ -517,10 +525,7 @@ async fn handle_enc_client(
             Err(shuma_link::channel::FrameError::Closed) => return Ok(()),
             Err(e) => return Err(anyhow::anyhow!("recv: {e}")),
         };
-        // El uid 0 a `audit_request` no es real — sólo un placeholder.
-        // En el log de auditoría aparece como uid=0 para conexiones TCP;
-        // la pubkey del peer ya quedó en el log "TCP peer autorizado".
-        audit_request(0, &req);
+        audit_request(&peer_id, &req);
 
         if let Request::ExecStream { cwd, exec, capture_limit_bytes, stdin_data } = req {
             handle_exec_stream_enc(&mut ch, cwd, exec, capture_limit_bytes, stdin_data).await?;
@@ -632,9 +637,12 @@ fn append_audit_line(path: &std::path::Path, line: &str) -> std::io::Result<()> 
     Ok(())
 }
 
-/// Loguea cada mutación con target="audit" y el peer uid. Reads (ping,
-/// list, stats) se omiten para no inundar el log.
-fn audit_request(peer_uid: u32, req: &Request) {
+/// Loguea cada mutación con target="audit" y el peer. Reads (ping,
+/// list, stats) se omiten para no inundar el log. `peer` es opaco:
+/// para Unix sockets viene como `"uid:1000"` (de `SO_PEERCRED`); para
+/// TCP autenticado viene como `"pubkey:abcdef…"` (los 16 primeros hex
+/// de la X25519 pública del peer).
+fn audit_request(peer: &str, req: &Request) {
     let (action, detail) = match req {
         Request::WorkspaceCreate { spec } => ("workspace.create", format!("label={}", spec.label)),
         Request::WorkspaceStop { id, grace_ms } => ("workspace.stop", format!("id={id} grace_ms={grace_ms}")),
@@ -675,13 +683,13 @@ fn audit_request(peer_uid: u32, req: &Request) {
         | Request::Discern { .. }
         | Request::Capabilities => return,
     };
-    info!(target: "audit", uid = peer_uid, action, detail = %detail, "audit");
+    info!(target: "audit", peer, action, detail = %detail, "audit");
     // Append a file. Failure no es fatal — sólo se pierde la entry.
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let line = format!("ts={ts} uid={peer_uid} action={action} {detail}");
+    let line = format!("ts={ts} peer={peer} action={action} {detail}");
     let path = default_audit_log_path();
     if let Err(e) = append_audit_line(&path, &line) {
         // Sólo loguear si el filesystem está roto. No reportar al cliente.
