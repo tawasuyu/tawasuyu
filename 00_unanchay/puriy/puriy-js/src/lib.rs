@@ -223,6 +223,8 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
     // tienen _parent_id === el.id. NO es una HTMLCollection viva real
     // (cada acceso recomputa), pero matchea la API más común: iterar
     // hijos y indexar por número. .length funciona.
+    // Fase 7.15 — el array devuelto soporta Symbol.iterator via
+    // Array.prototype, así `for...of` funciona naturalmente.
     Object.defineProperty(el, 'children', {
         get: function() {
             var out = [];
@@ -526,6 +528,33 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
         delete globalThis.__puriy_elements[child.id];
         return child;
     };
+    // Fase 7.15 — parent.replaceChild(newChild, oldChild). Spec:
+    // quita oldChild del DOM y mete newChild en su posición. Devuelve
+    // oldChild. Implementación: insertBefore(new, old) + removeChild(old)
+    // dispatched como dos mutaciones consecutivas. Atómico desde el JS
+    // (el guest no puede observar el estado intermedio del chrome).
+    el.replaceChild = function(newChild, oldChild) {
+        if (!newChild || !newChild._synthetic) {
+            throw new Error('replaceChild: newChild debe venir de createElement');
+        }
+        if (newChild._inserted) {
+            throw new Error('replaceChild: newChild ya fue insertado');
+        }
+        if (!oldChild || oldChild._parent_id !== el._id) {
+            throw new Error('replaceChild: oldChild no es hijo del parent');
+        }
+        // Paso 1: insertBefore(newChild, oldChild) — usa la mecánica
+        // existente de insertBefore (publica mutación insertBefore).
+        el.insertBefore(newChild, oldChild);
+        // Paso 2: remover oldChild — publica removeChild contra el parent.
+        globalThis.__puriy_dirty.push({
+            id: el._id,
+            kind: 'removeChild',
+            value: oldChild._id
+        });
+        delete globalThis.__puriy_elements[oldChild._id];
+        return oldChild;
+    };
     el.remove = function() {
         if (!el._parent_id) return; // root sin parent: no-op silencioso.
         globalThis.__puriy_dirty.push({
@@ -550,6 +579,78 @@ globalThis.__puriy_make_element = function(id, tag, text, classes, value, parent
     // distinto). Útil para llamar handlers sin un click real.
     el.focus = function() {
         globalThis.__puriy_dispatch(el._id, 'focus', null);
+    };
+    // Fase 7.15 — getAttribute/setAttribute/hasAttribute/removeAttribute.
+    // Routea por name a las APIs específicas que ya manejamos:
+    //   - 'id'    → el._id / setter de id (reindexa)
+    //   - 'class' → _classList join/set
+    //   - 'value' → _value (publica mutación 'value')
+    //   - 'data-*' → _dataset_store + mutación 'dataset:*'
+    //   - 'aria-*' / cualquier otro: NO soportado (devuelve null / no
+    //     publica). Cuando aparezca caso real con aria, agregamos
+    //     attributes generic en el BoxNode.
+    el.getAttribute = function(name) {
+        if (typeof name !== 'string') return null;
+        if (name === 'id') return el._id || null;
+        if (name === 'class') return el._classList.join(' ') || null;
+        if (name === 'value') return el._value;
+        if (name.indexOf('data-') === 0) {
+            // El _dataset_store guarda con key SIN el prefix 'data-'
+            // (ese es el formato del dataset proxy de Fase 7.11).
+            var suffix = name.slice(5);
+            var v = el._dataset_store[suffix];
+            return v == null ? null : v;
+        }
+        return null;
+    };
+    el.setAttribute = function(name, value) {
+        if (typeof name !== 'string') return;
+        var v = String(value);
+        if (name === 'id') { el.id = v; return; }
+        if (name === 'class') { el.className = v; return; }
+        if (name === 'value') {
+            // Mismo path que el.value setter.
+            el._value = v;
+            globalThis.__puriy_dirty.push({id: el._id, kind: 'value', value: v});
+            return;
+        }
+        if (name.indexOf('data-') === 0) {
+            var suffix = name.slice(5);
+            el._dataset_store[suffix] = v;
+            globalThis.__puriy_dirty.push({
+                id: el._id,
+                kind: 'dataset:' + suffix,
+                value: v
+            });
+            return;
+        }
+        // Otros attrs: no-op (warning silencioso por ahora).
+    };
+    el.hasAttribute = function(name) {
+        if (typeof name !== 'string') return false;
+        if (name === 'id') return !!el._id;
+        if (name === 'class') return el._classList.length > 0;
+        if (name === 'value') return el._value !== '';
+        if (name.indexOf('data-') === 0) {
+            return Object.prototype.hasOwnProperty.call(el._dataset_store, name.slice(5));
+        }
+        return false;
+    };
+    el.removeAttribute = function(name) {
+        if (typeof name !== 'string') return;
+        if (name === 'id') { el.id = ''; return; }
+        if (name === 'class') { el.className = ''; return; }
+        if (name === 'value') { el.value = ''; return; }
+        if (name.indexOf('data-') === 0) {
+            var suffix = name.slice(5);
+            delete el._dataset_store[suffix];
+            globalThis.__puriy_dirty.push({
+                id: el._id,
+                kind: 'dataset-remove:' + suffix,
+                value: ''
+            });
+            return;
+        }
     };
     el.blur = function() {
         globalThis.__puriy_dispatch(el._id, 'blur', null);
@@ -3581,6 +3682,208 @@ mod tests {
         assert_eq!(muts.len(), 1);
         // null refChild → fallback a appendChild.
         assert_eq!(muts[0].kind, "appendChild");
+    }
+
+    #[test]
+    fn children_for_of_funciona() {
+        // Fase 7.15 — children devuelve un Array nativo, así que
+        // for...of (via Array.prototype[Symbol.iterator]) funciona.
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("p", "ul", ""),
+            snap_with_parent("a", "li", "p"),
+            snap_with_parent("b", "li", "p"),
+        ])
+        .expect("e");
+        rt.eval(
+            "var out = ''; \
+             for (var c of document.getElementById('p').children) { out += c.id; } \
+             out;",
+        )
+        .map(|v| match v {
+            JsValue::String(s) => assert_eq!(s, "ab"),
+            other => panic!("expected String, got {:?}", other),
+        })
+        .expect("e");
+    }
+
+    #[test]
+    fn children_array_methods_funcionan() {
+        // children es Array → soporta forEach/map/filter/some/etc.
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("p", "ul", ""),
+            snap_with_parent("a", "li", "p"),
+            snap_with_parent("b", "li", "p"),
+        ])
+        .expect("e");
+        let v = rt
+            .eval(
+                "document.getElementById('p').children.map(function(c){ return c.id; }).join('+')",
+            )
+            .expect("e");
+        assert_eq!(v, JsValue::String("a+b".into()));
+    }
+
+    #[test]
+    fn replace_child_publica_insert_before_seguido_de_remove() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("p", "ul", ""),
+            snap_with_parent("old", "li", "p"),
+        ])
+        .expect("e");
+        rt.drain_dom_mutations();
+        rt.eval(
+            "var n = document.createElement('li'); \
+             n.id = 'new'; \
+             document.getElementById('p').replaceChild(n, document.getElementById('old'));",
+        )
+        .expect("e");
+        let muts = rt.drain_dom_mutations();
+        // Esperamos 2 mutaciones: insertBefore + removeChild.
+        assert_eq!(muts.len(), 2);
+        assert_eq!(muts[0].kind, "insertBefore");
+        let parts: Vec<&str> = muts[0].value.split('\u{001D}').collect();
+        assert_eq!(parts[1], "new");
+        assert_eq!(parts[5], "old"); // ref_id
+        assert_eq!(muts[1].kind, "removeChild");
+        assert_eq!(muts[1].value, "old");
+    }
+
+    #[test]
+    fn get_attribute_id_class_value_data() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[ElementSnapshot {
+            id: "x".into(),
+            tag_name: "input".into(),
+            text_content: String::new(),
+            class_list: vec!["a".into(), "b".into()],
+            value: Some("hola".into()),
+            parent_id: None,
+            dataset: vec![("role".into(), "main".into())],
+        }])
+        .expect("e");
+        let v = rt.eval("document.getElementById('x').getAttribute('id')").expect("e");
+        assert_eq!(v, JsValue::String("x".into()));
+        let v = rt.eval("document.getElementById('x').getAttribute('class')").expect("e");
+        assert_eq!(v, JsValue::String("a b".into()));
+        let v = rt.eval("document.getElementById('x').getAttribute('value')").expect("e");
+        assert_eq!(v, JsValue::String("hola".into()));
+        let v = rt.eval("document.getElementById('x').getAttribute('data-role')").expect("e");
+        assert_eq!(v, JsValue::String("main".into()));
+        let v = rt.eval("document.getElementById('x').getAttribute('nada')").expect("e");
+        assert_eq!(v, JsValue::Null);
+    }
+
+    #[test]
+    fn set_attribute_data_publica_dataset_mutation() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("x", "div", "")]).expect("e");
+        rt.drain_dom_mutations();
+        rt.eval("document.getElementById('x').setAttribute('data-foo-bar', 'val')")
+            .expect("e");
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.len(), 1);
+        assert_eq!(muts[0].kind, "dataset:foo-bar");
+        assert_eq!(muts[0].value, "val");
+        // El getter reflexivo devuelve el value seteado.
+        let v = rt.eval("document.getElementById('x').getAttribute('data-foo-bar')").expect("e");
+        assert_eq!(v, JsValue::String("val".into()));
+    }
+
+    #[test]
+    fn set_attribute_id_reindexa() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("old", "div", "")]).expect("e");
+        rt.eval("document.getElementById('old').setAttribute('id', 'nuevo')").expect("e");
+        // getElementById('nuevo') ahora encuentra el elemento; 'old' es null.
+        let v = rt.eval("document.getElementById('nuevo').tagName").expect("e");
+        assert_eq!(v, JsValue::String("div".into()));
+        let v = rt.eval("document.getElementById('old')").expect("e");
+        assert_eq!(v, JsValue::Null);
+    }
+
+    #[test]
+    fn has_attribute_devuelve_true_solo_si_existe() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap_with_class("x", "div", "", "foo")]).expect("e");
+        assert_eq!(
+            rt.eval("document.getElementById('x').hasAttribute('class')").expect("e"),
+            JsValue::Bool(true)
+        );
+        assert_eq!(
+            rt.eval("document.getElementById('x').hasAttribute('id')").expect("e"),
+            JsValue::Bool(true)
+        );
+        assert_eq!(
+            rt.eval("document.getElementById('x').hasAttribute('data-foo')").expect("e"),
+            JsValue::Bool(false)
+        );
+    }
+
+    #[test]
+    fn remove_attribute_data_publica_dataset_remove() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[ElementSnapshot {
+            id: "x".into(),
+            tag_name: "div".into(),
+            text_content: String::new(),
+            class_list: Vec::new(),
+            value: None,
+            parent_id: None,
+            dataset: vec![("role".into(), "main".into())],
+        }])
+        .expect("e");
+        rt.drain_dom_mutations();
+        rt.eval("document.getElementById('x').removeAttribute('data-role')").expect("e");
+        let muts = rt.drain_dom_mutations();
+        assert_eq!(muts.len(), 1);
+        assert_eq!(muts[0].kind, "dataset-remove:role");
+        let v = rt.eval("document.getElementById('x').getAttribute('data-role')").expect("e");
+        assert_eq!(v, JsValue::Null);
+    }
+
+    #[test]
+    fn set_attribute_no_soportado_es_noop() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[snap("x", "div", "")]).expect("e");
+        rt.drain_dom_mutations();
+        // aria-label no está soportado todavía — no debería crash ni
+        // publicar mutaciones.
+        rt.eval("document.getElementById('x').setAttribute('aria-label', 'main nav')")
+            .expect("e");
+        assert!(rt.drain_dom_mutations().is_empty());
+        // getAttribute devuelve null para attrs no-tracked.
+        let v = rt.eval("document.getElementById('x').getAttribute('aria-label')").expect("e");
+        assert_eq!(v, JsValue::Null);
+    }
+
+    #[test]
+    fn replace_child_falla_si_old_no_es_hijo() {
+        let mut rt = JsRuntime::new().expect("rt");
+        rt.set_document("t", "u", "b").expect("d");
+        rt.set_elements(&[
+            snap("p1", "ul", ""),
+            snap_with_parent("a", "li", "p1"),
+            snap("p2", "ul", ""),
+        ])
+        .expect("e");
+        let res = rt.eval(
+            "var n = document.createElement('li'); \
+             try { document.getElementById('p2').replaceChild(n, document.getElementById('a')); 'ok' } \
+             catch (e) { 'err' }",
+        );
+        assert_eq!(res.expect("e"), JsValue::String("err".into()));
     }
 
     #[test]
