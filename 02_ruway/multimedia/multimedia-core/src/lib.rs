@@ -1,17 +1,23 @@
-//! multimedia-core — emisores de frames RGBA para `llimphi-surface`.
+//! multimedia-core — productores de video y audio del dominio.
 //!
-//! Define el trait [`FrameSource`]: un productor que entrega una vista
-//! sobre un buffer RGBA del frame actual + su tamaño. Implementaciones
-//! posibles a futuro: decoder de video (ffmpeg/gst), cámara, screen
-//! capture, generador procedural. Para el MVP sólo trae [`TestCard`]:
-//! un patrón sintético que pinta un gradiente animado y un círculo
-//! que rebota — verifica el pipeline GPU sin depender de decoders
-//! externos.
+//! Dos traits gemelos:
+//!
+//! - [`FrameSource`]: entrega bytes RGBA con un tamaño. Lo consume
+//!   `llimphi-surface` para subirlo a una textura GPU.
+//! - [`AudioSource`]: rellena un buffer de samples `f32` intercalados
+//!   por canal a una sample rate dada. Lo consume un sink (cpal, JACK,
+//!   wawa) que se encarga del realtime.
+//!
+//! Ambos vienen con una implementación procedural de referencia:
+//! [`TestCard`] (gradiente animado + círculo rebotando) para video y
+//! [`ToneSource`] (senoide configurable, default A4) para audio. Son
+//! los "test patterns" del dominio: validan los pipelines completos
+//! sin meter decoders externos.
 //!
 //! El crate es `std` y no tiene dependencias — la idea es que el
 //! núcleo del dominio sea liviano y los backends pesados (ffmpeg,
-//! gstreamer, v4l2…) vivan en crates `multimedia-source-*` que
-//! impl `FrameSource`.
+//! gstreamer, v4l2, cpal…) vivan en crates `multimedia-source-*` o
+//! `multimedia-audio-*` que impl los traits.
 
 use std::time::Duration;
 
@@ -111,5 +117,76 @@ impl FrameSource for TestCard {
             }
         }
         Some((self.width, self.height))
+    }
+}
+
+// ============================================================
+// Audio
+// ============================================================
+
+/// Productor de samples de audio. El sink (cpal/JACK/wawa) llama
+/// `fill` con un buffer ya dimensionado al frame requerido por el
+/// driver, especificando `sample_rate` y `channels`. La fuente debe
+/// llenar el buffer entero (no se permite "no hay nada" — para eso
+/// rellenar con silencio) en formato intercalado por canal:
+/// `[L0, R0, L1, R1, ...]` para stereo, `[M0, M1, ...]` para mono.
+///
+/// Implementadores deben ser baratos: la llamada típica ocurre en el
+/// callback de audio realtime y no debe alocar ni bloquear.
+pub trait AudioSource {
+    fn fill(&mut self, buf: &mut [f32], sample_rate: u32, channels: u16);
+}
+
+/// Generador de tono senoidal. Útil como `TestCard` del audio: valida
+/// que el pipeline `AudioSource → sink → driver → speakers` ande sin
+/// depender de un decoder o un archivo. Default: A4 (440 Hz) con
+/// amplitud baja (-12 dB ~ 0.25) para no reventar oídos.
+pub struct ToneSource {
+    freq_hz: f32,
+    amplitude: f32,
+    phase: f32,
+}
+
+impl ToneSource {
+    pub fn new(freq_hz: f32, amplitude: f32) -> Self {
+        Self {
+            freq_hz: freq_hz.max(1.0),
+            amplitude: amplitude.clamp(0.0, 1.0),
+            phase: 0.0,
+        }
+    }
+
+    /// A4 a -12 dB. Lo suficientemente audible sin asustar.
+    pub fn a4() -> Self {
+        Self::new(440.0, 0.25)
+    }
+
+    pub fn set_frequency(&mut self, freq_hz: f32) {
+        self.freq_hz = freq_hz.max(1.0);
+    }
+}
+
+impl AudioSource for ToneSource {
+    fn fill(&mut self, buf: &mut [f32], sample_rate: u32, channels: u16) {
+        let channels = channels.max(1) as usize;
+        let sr = sample_rate.max(1) as f32;
+        let dphase = std::f32::consts::TAU * self.freq_hz / sr;
+        let frames = buf.len() / channels;
+        for frame in 0..frames {
+            let v = self.phase.sin() * self.amplitude;
+            for ch in 0..channels {
+                buf[frame * channels + ch] = v;
+            }
+            self.phase += dphase;
+            if self.phase >= std::f32::consts::TAU {
+                self.phase -= std::f32::consts::TAU;
+            }
+        }
+        // Si quedó cola por desalineación (channels > 1 y len no
+        // múltiplo), rellenar con silencio.
+        let tail = frames * channels;
+        for s in &mut buf[tail..] {
+            *s = 0.0;
+        }
     }
 }

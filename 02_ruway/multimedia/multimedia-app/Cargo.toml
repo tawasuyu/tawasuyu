@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 llimphi-surface = { path = "../../llimphi/llimphi-surface" }
 llimphi-ui = { path = "../../llimphi/llimphi-ui" }
+multimedia-audio-cpal = { path = "../multimedia-audio-cpal" }
 multimedia-core = { path = "../multimedia-core" }
 multimedia-source-gif = { path = "../multimedia-source-gif" }
 parking_lot = { workspace = true }

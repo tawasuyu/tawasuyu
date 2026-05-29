@@ -1,17 +1,23 @@
 //! multimedia-app — primer reproductor del dominio.
 //!
-//! Pipeline: una fuente [`FrameSource`] genera RGBA, lo empuja a un
-//! [`llimphi_surface::ExternalSurface`], y la UI Llimphi lo expone en
-//! un canvas central vía `View::gpu_paint_with`. Con argumento es un
-//! GIF en disco (loop infinito); sin argumento cae al [`TestCard`]
-//! sintético (gradiente animado + círculo rebotando).
+//! Pipeline video: una fuente [`FrameSource`] genera RGBA, lo empuja
+//! a un [`llimphi_surface::ExternalSurface`], y la UI Llimphi lo
+//! expone en un canvas central vía `View::gpu_paint_with`. Con
+//! argumento es un GIF en disco (loop infinito); sin argumento cae
+//! al [`TestCard`] sintético.
+//!
+//! Pipeline audio: junto al video se abre un sink cpal sobre el
+//! default output device, alimentado por un [`ToneSource`] (A4 a
+//! -12 dB). Si el sink no puede abrir el device, se loguea y se
+//! sigue sólo con video — la falta de audio no aborta la app.
 //!
 //! Corre con:
 //!   `cargo run -p multimedia-app --release`
 //!   `cargo run -p multimedia-app --release -- /ruta/al/anim.gif`
+//!   `MULTIMEDIA_MUTE=1 cargo run -p multimedia-app --release`
 
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use llimphi_surface::ExternalSurface;
@@ -22,7 +28,8 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::{App, Handle, View};
-use multimedia_core::{FrameSource, TestCard};
+use multimedia_audio_cpal::AudioSink;
+use multimedia_core::{AudioSource, FrameSource, TestCard, ToneSource};
 use multimedia_source_gif::GifSource;
 use parking_lot::Mutex;
 
@@ -226,5 +233,31 @@ fn main() {
         },
     };
     config_slot().set(cfg).ok();
+
+    // Audio: si MULTIMEDIA_MUTE está set, saltamos. Si no, abrimos un
+    // tono A4 contra el default output device. El AudioSink debe vivir
+    // hasta el exit — `cpal::Stream` no es `Sync`, así que no puede ir
+    // a un static; lo mantenemos en una local de `main` que sólo se
+    // dropea cuando el proceso termina.
+    let _audio_sink = if std::env::var("MULTIMEDIA_MUTE").is_err() {
+        let source: Arc<Mutex<dyn AudioSource + Send>> = Arc::new(Mutex::new(ToneSource::a4()));
+        match AudioSink::open(source) {
+            Ok(sink) => {
+                eprintln!(
+                    "multimedia-app: audio cpal abierto @ {} Hz · {} ch",
+                    sink.sample_rate(),
+                    sink.channels(),
+                );
+                Some(sink)
+            }
+            Err(e) => {
+                eprintln!("multimedia-app: audio off ({e}) — sigo sin sonido");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     llimphi_ui::run::<MultimediaApp>();
 }
