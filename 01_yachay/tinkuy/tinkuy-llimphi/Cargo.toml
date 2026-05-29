@@ -8,10 +8,12 @@ publish.workspace = true
 description = "tinkuy — frontend Llimphi del motor de partículas. E1 del roadmap: panel único con tiles draggables (visor 3D · fuerzas · observables · scrubber snapshots). Driver tinkuy-core en el hilo de UI con un Msg::Tick periódico."
 
 [dependencies]
-llimphi-ui           = { workspace = true }
-llimphi-theme        = { workspace = true }
-llimphi-widget-tiled = { workspace = true }
+llimphi-ui               = { workspace = true }
+llimphi-theme            = { workspace = true }
+llimphi-widget-tiled     = { workspace = true }
+llimphi-widget-nodegraph = { workspace = true }
 tinkuy-core   = { path = "../tinkuy-core" }
+tinkuy-dsl    = { path = "../tinkuy-dsl" }
 tinkuy-forces = { path = "../tinkuy-forces" }
 
 [[example]]

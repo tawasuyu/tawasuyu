@@ -27,6 +27,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod grafo;
+
 use std::collections::VecDeque;
 
 use llimphi_theme::Theme;
@@ -36,14 +38,18 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, Handle, View};
+use llimphi_ui::{App, DragPhase, Handle, View};
+use llimphi_widget_nodegraph::{nodegraph_view, NodegraphMetrics, NodegraphPalette};
 use llimphi_widget_tiled::{tiled_view_reorderable_cols, TileSpec, TiledPalette};
 
 use tinkuy_core::{
     kinetic_energy, reflect_walls, temperature, total_momentum, velocity_verlet_step,
     Grid3D, IntegratorParams, Outbox, Snapshot, World,
 };
-use tinkuy_forces::{clear_accelerations, lennard_jones, LjParams};
+use tinkuy_dsl::{compile, optimize};
+use tinkuy_forces::{clear_accelerations, DslForce};
+
+use grafo::{render_nodes, ForceGraph, LiftError};
 
 // ─── Parámetros del demo ──────────────────────────────────────────────────────
 
@@ -96,6 +102,22 @@ pub enum Msg {
     Reset,
     /// Drag-to-swap del tiled. Llega desde la title bar de cualquier tile.
     Swap { from: usize, to: usize },
+    /// Mueve un nodo del grafo de fuerzas. Llega del `nodegraph` al arrastrar
+    /// la title bar de un nodo; el handler suma el delta a la posición.
+    MoveForceNode {
+        id: u32,
+        dx: f32,
+        dy: f32,
+    },
+    /// Conecta dos pins del grafo de fuerzas. Política: el último cable que
+    /// llega a un pin de entrada reemplaza al anterior. Tras aplicar el
+    /// cable se recompila el grafo a `DslForce` (o se reporta el error).
+    ConnectForcePins {
+        from_node: u32,
+        from_output: u16,
+        to_node: u32,
+        to_input: u16,
+    },
 }
 
 pub struct Model {
@@ -104,7 +126,6 @@ pub struct Model {
     bounds_min: [f32; 3],
     bounds_max: [f32; 3],
     params: IntegratorParams,
-    lj: LjParams,
     outboxes: Vec<Outbox>,
     step: usize,
     t: f64,
@@ -117,6 +138,22 @@ pub struct Model {
     snapshots: VecDeque<SnapshotEntry>,
     /// Orden visual de los tiles. Drag-to-swap muta este vec.
     tiles: Vec<TileId>,
+    /// Grafo de fuerzas editable visualmente. Pre-poblado con LJ.
+    pub force_graph: ForceGraph,
+    /// `DslForce` compilada del último `force_graph` válido. `None` mientras
+    /// el grafo esté roto (pin desconectado, ciclo, etc.) — el `tick` salta
+    /// la simulación pero todo lo demás sigue funcionando.
+    force: Option<DslForce>,
+    /// Mensaje de estado de la última recompilación. Rojo si error, neutro
+    /// si "ok". Se pinta en la title bar lógica del tile fuerzas.
+    force_status: ForceStatus,
+}
+
+#[derive(Clone, Debug)]
+enum ForceStatus {
+    Ok,
+    /// Texto humano del error. Renderizado tal cual; no se interpreta.
+    Error(String),
 }
 
 #[derive(Clone, Copy)]
@@ -246,15 +283,12 @@ impl App for TinkuyApp {
             bounds_min,
             bounds_max,
         };
-        let lj = LjParams {
-            epsilon: EPSILON,
-            sigma: SIGMA,
-            cutoff: CUTOFF,
-        };
         // Driver de simulación: un Tick cada TICK_MS ms. El periodic vive
         // hasta que el event loop se cierra; ver `Handle::spawn_periodic`.
         handle.spawn_periodic(std::time::Duration::from_millis(TICK_MS), || Msg::Tick);
 
+        let force_graph = ForceGraph::lennard_jones_default();
+        let (force, force_status) = recompile_force(&force_graph);
         let obs = capture_obs(&world);
         Model {
             world,
@@ -262,7 +296,6 @@ impl App for TinkuyApp {
             bounds_min,
             bounds_max,
             params,
-            lj,
             outboxes: vec![Outbox::default()],
             step: 0,
             t: 0.0,
@@ -275,6 +308,9 @@ impl App for TinkuyApp {
                 TileId::Observables,
                 TileId::Snapshots,
             ],
+            force_graph,
+            force,
+            force_status,
         }
     }
 
@@ -282,9 +318,11 @@ impl App for TinkuyApp {
         match msg {
             Msg::Tick => {
                 if !model.paused {
-                    // `LjParams` no es `Copy`; tomamos referencia para evitar
-                    // mover el campo en cada iteración del closure.
-                    let lj_ref = &model.lj;
+                    // Tomamos la fuerza por `&mut Option<DslForce>` — si está
+                    // `None` (grafo roto), `clear_accelerations` corre pero
+                    // ninguna fuerza se aplica: las partículas inerciales
+                    // siguen su trayectoria. Es un fallback visual útil.
+                    let force_opt = &mut model.force;
                     for _ in 0..STEPS_POR_TICK {
                         velocity_verlet_step(
                             &mut model.world,
@@ -293,7 +331,9 @@ impl App for TinkuyApp {
                             &mut model.outboxes,
                             |world, grid| {
                                 clear_accelerations(world);
-                                lennard_jones(world, grid, lj_ref);
+                                if let Some(f) = force_opt.as_mut() {
+                                    f.apply(world, grid);
+                                }
                             },
                         );
                         reflect_walls(&mut model.world, model.bounds_min, model.bounds_max);
@@ -336,6 +376,22 @@ impl App for TinkuyApp {
                     model.tiles.swap(from, to);
                 }
             }
+            Msg::MoveForceNode { id, dx, dy } => {
+                model.force_graph.move_node(id, dx, dy);
+            }
+            Msg::ConnectForcePins {
+                from_node,
+                from_output,
+                to_node,
+                to_input,
+            } => {
+                model
+                    .force_graph
+                    .rewire_input(from_node, from_output, to_node, to_input);
+                let (force, status) = recompile_force(&model.force_graph);
+                model.force = force;
+                model.force_status = status;
+            }
         }
         model
     }
@@ -365,7 +421,7 @@ impl App for TinkuyApp {
                     content: visor_placeholder(&theme),
                 },
                 TileId::Fuerzas => TileSpec {
-                    label: "fuerzas (LJ)".into(),
+                    label: fuerzas_label(model),
                     content: fuerzas_body(model, &theme),
                 },
                 TileId::Observables => TileSpec {
@@ -464,24 +520,44 @@ fn visor_placeholder(theme: &Theme) -> View<Msg> {
     )
 }
 
+/// El label de la title bar del tile "fuerzas" lleva el estado de la última
+/// recompilación: si está "ok" sirve sólo de identificación; si hay error,
+/// el detalle viaja ahí para que el usuario no tenga que abrir otro panel.
+fn fuerzas_label(model: &Model) -> String {
+    match &model.force_status {
+        ForceStatus::Ok => "fuerzas · grafo → bytecode (ok)".into(),
+        ForceStatus::Error(msg) => format!("fuerzas · ERROR: {}", msg),
+    }
+}
+
 fn fuerzas_body(model: &Model, theme: &Theme) -> View<Msg> {
-    let pausa = if model.paused { " · PAUSA" } else { "" };
-    padded_col(
-        vec![
-            text_row(format!("ε      = {}", model.lj.epsilon), 13.0, theme.fg_text),
-            text_row(format!("σ      = {}", model.lj.sigma), 13.0, theme.fg_text),
-            text_row(format!("cutoff = {}", model.lj.cutoff), 13.0, theme.fg_text),
-            text_row(format!("dt     = {}", DT), 13.0, theme.fg_text),
-            text_row(format!("N      = {}", model.world.len()), 13.0, theme.fg_text),
-            text_row(format!("steps/tick = {}", STEPS_POR_TICK), 13.0, theme.fg_muted),
-            text_row(format!("modo: Lennard-Jones{}", pausa), 12.0, theme.accent),
-            text_row(
-                "[espacio] pausa · [r] reset".into(),
-                11.0,
-                theme.fg_muted,
-            ),
-        ],
-        None,
+    // Lienzo del grafo de fuerzas. Drag de title bar → mueve el nodo;
+    // drag desde un pin de salida hacia un pin de entrada → conecta y
+    // dispara recompilación a `DslForce`.
+    let palette = NodegraphPalette::from_theme(theme);
+    let metrics = NodegraphMetrics::default();
+    let nodes = render_nodes(&model.force_graph);
+    let wires = model.force_graph.wires.clone();
+    nodegraph_view(
+        &nodes,
+        &wires,
+        &palette,
+        &metrics,
+        // Por convención del widget: `Move` lleva el delta acumulado por
+        // evento; `End` cierra el drag con un último Msg `(dx=0,dy=0)`
+        // que no estorba porque `move_node` es aditivo.
+        |id, phase, dx, dy| match phase {
+            DragPhase::Move => Some(Msg::MoveForceNode { id, dx, dy }),
+            DragPhase::End => None,
+        },
+        |from_node, from_output, to_node, to_input| {
+            Some(Msg::ConnectForcePins {
+                from_node,
+                from_output,
+                to_node,
+                to_input,
+            })
+        },
     )
 }
 
@@ -517,6 +593,41 @@ fn snapshots_body(model: &Model, theme: &Theme) -> View<Msg> {
         }
     }
     padded_col(rows, None)
+}
+
+// ─── Recompilación grafo → DslForce ───────────────────────────────────────────
+
+/// Lifta el grafo a `Expr`, optimiza, compila a `Bytecode` y arma un
+/// `DslForce` listo para `apply`. Devuelve `(None, Error(msg))` si algo
+/// falla — el caller deja `force = None` y la simulación corre sin fuerzas.
+fn recompile_force(graph: &ForceGraph) -> (Option<DslForce>, ForceStatus) {
+    let expr = match graph.lift_to_expr() {
+        Ok(e) => e,
+        Err(err) => return (None, ForceStatus::Error(lift_error_to_string(err))),
+    };
+    let expr_opt = optimize(expr);
+    let bc = match compile(&expr_opt) {
+        Ok(b) => b,
+        Err(err) => {
+            return (
+                None,
+                ForceStatus::Error(format!("compile: {:?}", err)),
+            )
+        }
+    };
+    let force = DslForce::from_bytecode(bc, EPSILON, SIGMA, CUTOFF).with_label("grafo");
+    (Some(force), ForceStatus::Ok)
+}
+
+fn lift_error_to_string(err: LiftError) -> String {
+    match err {
+        LiftError::SinSalida => "grafo sin nodo F/r (Output)".into(),
+        LiftError::SalidaDuplicada => "más de un nodo F/r — debe haber exactamente uno".into(),
+        LiftError::PinDesconectado { node, pin } => {
+            format!("pin {} del nodo #{} sin cablear", pin, node)
+        }
+        LiftError::Ciclo => "ciclo detectado en el grafo".into(),
+    }
 }
 
 // ─── Entrypoint del demo ──────────────────────────────────────────────────────
