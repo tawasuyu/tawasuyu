@@ -23,13 +23,18 @@
 
 extern crate alloc;
 
+mod confianza;
 mod conversacion;
 mod error;
 mod nodo;
 
+pub use confianza::Membresia;
 pub use conversacion::Conversacion;
 pub use error::ErrorAyni;
-pub use nodo::{Adjunto, Carga, Contenido, MensajeNodo, VERSION_NODO};
+pub use nodo::{
+    AccionMembresia, Adjunto, Atestacion, CambioMembresia, Carga, Contenido, MensajeNodo, Recibo,
+    VERSION_NODO,
+};
 
 // Re-export de los tipos del grafo soberano que un consumidor de Ayni maneja
 // constantemente, para que no tenga que depender de `format` por separado sólo
@@ -278,6 +283,83 @@ mod tests {
             MensajeNodo::deserializar(b"\xff\xff basura").is_err(),
             "bytes corruptos ⇒ error, no pánico"
         );
+    }
+
+    // --- P7 :: confianza / membresía / recibos ------------------------------
+
+    #[test]
+    fn membresia_funda_admite_y_respeta_autoridad() {
+        let ana = clave(1);
+        let beto = clave(2);
+        let caro = clave(3);
+        let (a, b, c) = (autor_de(&ana), autor_de(&beto), autor_de(&caro));
+        let mut conv = Conversacion::nueva();
+
+        // Ana funda la conversación con el primer nodo: miembro implícito.
+        conv.publicar_texto(a, "abro la sala", 1, firmar_con(&ana)).unwrap();
+        assert_eq!(conv.membresia().fundador, Some(a));
+        assert!(conv.membresia().contiene(&a));
+        assert!(!conv.membresia().contiene(&b));
+
+        // Un NO-miembro (Beto) intenta admitir a Caro: se ignora (sin autoridad).
+        conv.admitir(b, c, 2, firmar_con(&beto)).unwrap();
+        assert!(!conv.membresia().contiene(&c), "alta de un no-miembro se ignora");
+
+        // Ana (miembro) admite a Beto; ahora Beto SÍ puede admitir a Caro.
+        conv.admitir(a, b, 3, firmar_con(&ana)).unwrap();
+        conv.admitir(b, c, 4, firmar_con(&beto)).unwrap();
+        let m = conv.membresia();
+        assert!(m.contiene(&b) && m.contiene(&c));
+        assert_eq!(m.len(), 3);
+
+        // Beto expulsa a Caro; al fundador no se le puede expulsar.
+        conv.expulsar(b, c, 5, firmar_con(&beto)).unwrap();
+        conv.expulsar(b, a, 6, firmar_con(&beto)).unwrap();
+        let m = conv.membresia();
+        assert!(!m.contiene(&c), "Caro expulsado");
+        assert!(m.contiene(&a), "el fundador es inexpulsable");
+    }
+
+    #[test]
+    fn grafo_de_confianza_propaga_por_caminos_y_revoca() {
+        let ana = clave(1);
+        let beto = clave(2);
+        let caro = clave(3);
+        let (a, b, c) = (autor_de(&ana), autor_de(&beto), autor_de(&caro));
+        let mut conv = Conversacion::nueva();
+        conv.publicar_texto(a, "raíz", 1, firmar_con(&ana)).unwrap();
+
+        // Ana da fe de Beto; Beto da fe de Caro. Cadena de confianza.
+        conv.atestar(a, b, 5, 2, firmar_con(&ana)).unwrap();
+        conv.atestar(b, c, 4, 3, firmar_con(&beto)).unwrap();
+
+        let desde_ana = conv.confianza_desde(&a);
+        assert_eq!(desde_ana.get(&b), Some(&1), "Beto a un salto");
+        assert_eq!(desde_ana.get(&c), Some(&2), "Caro a dos saltos (transitivo)");
+        assert!(!desde_ana.contains_key(&a), "el observador no se incluye");
+
+        // Ana revoca su fe en Beto (nivel 0): se corta el camino a Caro.
+        conv.atestar(a, b, 0, 4, firmar_con(&ana)).unwrap();
+        let desde_ana = conv.confianza_desde(&a);
+        assert!(desde_ana.is_empty(), "revocada la arista, nadie es alcanzable");
+    }
+
+    #[test]
+    fn recibos_simetricos_son_verificables() {
+        let ana = clave(1);
+        let beto = clave(2);
+        let (a, b) = (autor_de(&ana), autor_de(&beto));
+        let mut conv = Conversacion::nueva();
+        let raiz = conv.publicar_texto(a, "¿vieron esto?", 1, firmar_con(&ana)).unwrap();
+
+        // Beto acusa recibo del mensaje raíz; el acuse va firmado.
+        let acuse = conv.acusar_recibo(b, alloc::vec![raiz], 2, firmar_con(&beto)).unwrap();
+        assert!(conv.obtener(&acuse).unwrap().verificar(verificador), "acuse firmado");
+
+        let recibos = conv.recibos();
+        assert!(recibos.get(&raiz).unwrap().contains(&b), "raíz visto por Beto");
+        assert!(conv.acuses_de(&b).contains(&raiz));
+        assert!(conv.acuses_de(&a).is_empty(), "Ana aún no acusó nada");
     }
 
     #[test]

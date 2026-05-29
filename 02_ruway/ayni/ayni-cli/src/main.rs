@@ -13,10 +13,14 @@
 //      ayni --nombre Beto --escuchar 127.0.0.1:7701 --conectar 127.0.0.1:7700 --cifrar
 // =============================================================================
 
+use std::collections::BTreeSet;
+use std::error::Error;
 use std::io::BufRead;
 use std::sync::{Arc, Mutex};
 
-use ayni_core::{Carga, Conversacion, MensajeNodo};
+use ayni_core::{
+    AccionMembresia, AgoraId, Atestacion, CambioMembresia, Carga, Conversacion, MensajeNodo, Recibo,
+};
 use ayni_crypto::{verificar_firma, CanalSeguro, Identidad};
 use ayni_sync::{EnlaceTcp, EventoRed, Fusionador, Sobre, Transporte};
 
@@ -78,7 +82,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         enlace.conectar(peer)?;
         eprintln!("· conectando a {peer} …");
     }
-    eprintln!("· escribí y Enter para enviar. Ctrl-D para salir.\n");
+    eprintln!("· escribí y Enter para enviar. Ctrl-D para salir.");
+    eprintln!("· comandos P7: /miembros /confianza /admitir <hex> /expulsar <hex> /atestar <hex> [nivel] /recibo /ayuda\n");
 
     // --- hilo de red ---
     {
@@ -136,7 +141,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let stdin = std::io::stdin();
     for linea in stdin.lock().lines() {
         let texto = linea?;
-        if texto.trim().is_empty() {
+        let recortado = texto.trim();
+        if recortado.is_empty() {
+            continue;
+        }
+        // Los comandos P7 (confianza/membresía/recibos) empiezan por '/'.
+        if let Some(resto) = recortado.strip_prefix('/') {
+            manejar_comando(resto, &estado, &yo, &enlace)?;
             continue;
         }
         let nodo = {
@@ -157,8 +168,116 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Maneja un comando de la barra `/…` — la UX de P7 (confianza, membresía,
+/// recibos). Los que mutan el grafo (admitir/expulsar/atestar/recibo) redactan
+/// un nodo firmado, lo agregan al grafo local y lo difunden, igual que el texto.
+fn manejar_comando(
+    cmd: &str,
+    estado: &Arc<Mutex<Estado>>,
+    yo: &Arc<Identidad>,
+    enlace: &Arc<EnlaceTcp>,
+) -> Result<(), Box<dyn Error>> {
+    let mut campos = cmd.split_whitespace();
+    let verbo = campos.next().unwrap_or("");
+
+    match verbo {
+        "miembros" => {
+            let m = estado.lock().unwrap().conv.membresia();
+            eprintln!("· membresía vigente ({}):", m.len());
+            for id in &m.miembros {
+                let fund = if Some(*id) == m.fundador { " ·fundador" } else { "" };
+                let yo_m = if *id == yo.agora_id() { " ←vos" } else { "" };
+                eprintln!("    {}{}{}", hex_corto(id), fund, yo_m);
+            }
+        }
+        "confianza" => {
+            let conf = estado.lock().unwrap().conv.confianza_desde(&yo.agora_id());
+            if conf.is_empty() {
+                eprintln!("· tu grafo de confianza está vacío (nadie atestiguado todavía).");
+            } else {
+                eprintln!("· confías en (por caminos de atestaciones):");
+                for (id, saltos) in &conf {
+                    eprintln!("    {} · a {} salto/s", hex_corto(id), saltos);
+                }
+            }
+        }
+        "admitir" | "expulsar" | "atestar" => {
+            let Some(prefijo) = campos.next() else {
+                eprintln!("· uso: /{verbo} <hex> {}", if verbo == "atestar" { "[nivel 1..255]" } else { "" });
+                return Ok(());
+            };
+            let sujeto = {
+                let e = estado.lock().unwrap();
+                resolver(&e.conv, yo, prefijo)
+            };
+            let Some(sujeto) = sujeto else {
+                eprintln!("· no conozco a nadie cuyo id empiece por «{prefijo}» (mirá /miembros).");
+                return Ok(());
+            };
+            let carga = match verbo {
+                "admitir" => Carga::Membresia(CambioMembresia {
+                    accion: AccionMembresia::Alta,
+                    sujeto,
+                }),
+                "expulsar" => Carga::Membresia(CambioMembresia {
+                    accion: AccionMembresia::Baja,
+                    sujeto,
+                }),
+                _ => {
+                    let nivel: u8 = campos.next().and_then(|s| s.parse().ok()).unwrap_or(5);
+                    Carga::Atestacion(Atestacion { sujeto, nivel })
+                }
+            };
+            difundir_carga(estado, yo, enlace, carga)?;
+            eprintln!("· hecho: {verbo} {}", hex_corto(&sujeto));
+        }
+        "recibo" => {
+            let cabezas = estado.lock().unwrap().conv.cabezas();
+            if cabezas.is_empty() {
+                eprintln!("· nada que acusar (conversación vacía).");
+                return Ok(());
+            }
+            let n = cabezas.len();
+            difundir_carga(estado, yo, enlace, Carga::Recibo(Recibo { vistos: cabezas }))?;
+            eprintln!("· acuse de recibo enviado ({n} cabeza/s vista/s).");
+        }
+        "ayuda" | "" => {
+            eprintln!("· /miembros · /confianza · /admitir <hex> · /expulsar <hex> · /atestar <hex> [nivel] · /recibo");
+        }
+        otro => eprintln!("· comando desconocido: «{otro}» (probá /ayuda)."),
+    }
+    Ok(())
+}
+
+/// Redacta un nodo con la carga dada, lo agrega al grafo local y lo difunde.
+fn difundir_carga(
+    estado: &Arc<Mutex<Estado>>,
+    yo: &Arc<Identidad>,
+    enlace: &Arc<EnlaceTcp>,
+    carga: Carga,
+) -> Result<(), Box<dyn Error>> {
+    let nodo = {
+        let mut e = estado.lock().unwrap();
+        let nodo = e.conv.redactar(yo.agora_id(), carga, 0, |id| yo.firmar(id));
+        e.conv.agregar(nodo.clone()).ok();
+        nodo
+    };
+    enlace.difundir(&Sobre::Nodo(nodo))?;
+    Ok(())
+}
+
+/// Resuelve un prefijo hex (el que imprime `/miembros`) a una identidad agora
+/// CONOCIDA — un autor presente en el grafo, o uno mismo. Sin directorio
+/// global: sólo se puede nombrar a quien ya dejó huella en la conversación.
+fn resolver(conv: &Conversacion, yo: &Identidad, prefijo: &str) -> Option<AgoraId> {
+    let pref = prefijo.to_lowercase();
+    let mut candidatos: BTreeSet<AgoraId> = conv.nodos().map(|(_, n)| *n.autor()).collect();
+    candidatos.insert(yo.agora_id());
+    candidatos.into_iter().find(|id| hex_corto(id).starts_with(&pref))
+}
+
 /// Formatea un nodo entrante: `[autor] texto` (descifrando si hace falta y hay
-/// canal).
+/// canal). Las cargas sociales de P7 se muestran como actos legibles.
 fn formatear(nodo: &MensajeNodo, canal: Option<&CanalSeguro>) -> String {
     let autor = hex_corto(nodo.autor());
     let texto = match &nodo.contenido.carga {
@@ -170,6 +289,20 @@ fn formatear(nodo: &MensajeNodo, canal: Option<&CanalSeguro>) -> String {
             },
             None => "‹cifrado: sin canal›".into(),
         },
+        Carga::Adjunto(a) => {
+            format!("‹adjunto: {} · {} · {} B›", a.nombre, a.app, a.tamano)
+        }
+        Carga::Membresia(m) => match m.accion {
+            AccionMembresia::Alta => format!("‹admite a {}›", hex_corto(&m.sujeto)),
+            AccionMembresia::Baja => format!("‹expulsa a {}›", hex_corto(&m.sujeto)),
+        },
+        Carga::Atestacion(at) if at.nivel == 0 => {
+            format!("‹retira su fe en {}›", hex_corto(&at.sujeto))
+        }
+        Carga::Atestacion(at) => {
+            format!("‹da fe de {} (nivel {})›", hex_corto(&at.sujeto), at.nivel)
+        }
+        Carga::Recibo(r) => format!("‹acusa recibo de {} mensaje/s›", r.vistos.len()),
     };
     format!("[{autor}] {texto}")
 }

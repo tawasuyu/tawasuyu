@@ -35,7 +35,7 @@ reproducible.
 
 | crate          | rol                                                            | estado |
 |----------------|----------------------------------------------------------------|--------|
-| `ayni-core`    | DAG de mensajes firmados, direccionado por contenido (no_std)  | ✅ P0  |
+| `ayni-core`    | DAG de mensajes firmados + membresía/confianza/recibos (no_std) | ✅ P0/P7 |
 | `ayni-crypto`  | firma Ed25519 sobre agora ✅ + E2EE 1:1 (X25519/HKDF/ChaCha) ✅ | ✅ P2  |
 | `ayni-sync`    | `Transporte` + `EnlaceTcp` + anti-entropía (diff Merkle)       | ✅ P3  |
 | `ayni-minga`   | `EnlaceMinga`: transporte P2P sobre libp2p (mismo trait `Transporte`) | ✅ P3 |
@@ -121,7 +121,23 @@ y se verifica por *closure*; las primitivas Ed25519/MLS viven en `ayni-crypto`.
   funda su propio heap (`linked_list_allocator`, el del kernel) — el grafo de la
   conversación necesita `alloc`. `ayni-core` ganó `MensajeNodo::serializar`/
   `deserializar` (el grano fino que el grafo de objetos y la anti-entropía piden).
-- **P7 — confianza/UX**: grafo agora, membresía firmada, recibos simétricos.
+- **P7 — confianza/UX** ✅ *(hecho)*: la dimensión SOCIAL del grafo, como cargas
+  firmadas más (en `ayni-core`, módulo `confianza` — modelo puro `no_std`, viaja
+  a wawa con el resto). Tres hechos que se DERIVAN plegando el DAG, sin autoridad
+  central: **(1) membresía firmada** — `Carga::Membresia` (alta/baja); quién está
+  en la sala se calcula con `Conversacion::membresia()`, regla de autoridad (sólo
+  un miembro vigente admite/expulsa) + ancla (el autor del primer nodo funda y es
+  inexpulsable); dos pares con el mismo grafo obtienen la misma membresía.
+  **(2) grafo de confianza agora** — `Carga::Atestacion` es una arista firmada
+  `autor → sujeto`; `confianza_desde(observador)` recorre en anchura y devuelve a
+  quién alcanza y a cuántos saltos (fractal, transitiva, revocable con `nivel=0`).
+  **(3) recibos simétricos** — `Carga::Recibo` (qué nodos vio el autor);
+  `recibos()`/`acuses_de()` lo exponen verificable; la simetría (no acusar a quien
+  no acusa) es política de la UX —ayni real, presencia recíproca, cero telemetría
+  extractiva—. Constructores de conveniencia: `admitir`/`expulsar`/`atestar`/
+  `acusar_recibo`. La UX llega a `ayni-cli` como comandos `/miembros` `/confianza`
+  `/admitir` `/expulsar` `/atestar` `/recibo`, y `ayni-llimphi` pinta las cargas
+  sociales como actos legibles. 17 tests verdes en `ayni-core`.
 
 ### Por qué `02_ruway` (HACER)
 

@@ -89,6 +89,58 @@ impl Adjunto {
     }
 }
 
+/// La acción de un cambio de membresía: dar de **alta** o de **baja** a un
+/// participante de la conversación.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AccionMembresia {
+    /// Admitir a `sujeto` como miembro.
+    Alta,
+    /// Expulsar a `sujeto` de la membresía.
+    Baja,
+}
+
+/// Un cambio de MEMBRESÍA firmado (P7). El autor del nodo —en `Contenido.autor`—
+/// es quien EJERCE el cambio; sólo un miembro vigente tiene autoridad para
+/// hacerlo (lo comprueba la derivación [`Conversacion::membresia`](crate::Conversacion::membresia)).
+/// Como cualquier carga, viaja DENTRO del contenido firmado: nadie puede falsear
+/// quién admitió a quién sin invalidar la firma — la membresía es un hecho
+/// criptográfico del grafo, no una lista que un servidor custodia.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct CambioMembresia {
+    /// Alta o baja.
+    pub accion: AccionMembresia,
+    /// La identidad agora sobre la que recae el cambio.
+    pub sujeto: AgoraId,
+}
+
+/// Una ATESTACIÓN de confianza (P7): el autor del nodo DA FE de `sujeto`. Las
+/// aristas `autor → sujeto` de todas las atestaciones del grafo forman el grafo
+/// de confianza agora —fractal, sin autoridad central—: cada quien decide a
+/// quién cree, y la confianza se PROPAGA por caminos (si confío en A y A da fe
+/// de B, B me llega recomendado). Firmada como todo: una atestación es un acto
+/// de habla no-repudiable de su autor.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct Atestacion {
+    /// La identidad agora atestiguada.
+    pub sujeto: AgoraId,
+    /// Nivel declarado de confianza (`1..=255`). `0` REVOCA una atestación
+    /// previa del mismo autor sobre el mismo sujeto —retirar la fe es tan
+    /// expresable como darla—. La semántica de los niveles intermedios la fija
+    /// la UX; el grafo sólo los transporta.
+    pub nivel: u8,
+}
+
+/// Un ACUSE DE RECIBO (P7): el autor declara haber VISTO los nodos `vistos`. Es
+/// opt-in y **simétrico** por diseño —ayni de verdad—: la capa de UX sólo emite
+/// recibos hacia quien también los emite, de modo que la presencia es recíproca
+/// y nadie extrae señales de lectura sin dar las suyas. El acuse va firmado, así
+/// que "visto por fulano" es verificable, no un pixel espía.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct Recibo {
+    /// Los ids de los nodos que el autor declara haber visto.
+    pub vistos: Vec<Hash>,
+}
+
 /// La carga útil de un mensaje. Es un `enum` —no un `String` pelado— para
 /// poder crecer sin romper nodos ya firmados: adjuntos como objetos del grafo,
 /// ediciones con procedencia, reacciones, lienzos derivados (traducción /
@@ -111,6 +163,17 @@ pub enum Carga {
     /// bytes —cita su hash—; los bytes viajan aparte como blob y se verifican
     /// contra la referencia. Ver [`Adjunto`].
     Adjunto(Adjunto),
+    /// Un cambio de MEMBRESÍA firmado (P7): alta/baja de un participante. La
+    /// membresía vigente se DERIVA plegando estos nodos en orden topológico.
+    /// Ver [`CambioMembresia`] y [`Conversacion::membresia`](crate::Conversacion::membresia).
+    Membresia(CambioMembresia),
+    /// Una ATESTACIÓN de confianza (P7): el autor da fe de un `sujeto`. Las
+    /// aristas forman el grafo de confianza agora. Ver [`Atestacion`] y
+    /// [`Conversacion::confianza_desde`](crate::Conversacion::confianza_desde).
+    Atestacion(Atestacion),
+    /// Un ACUSE DE RECIBO (P7): el autor vio ciertos nodos. Opt-in y simétrico.
+    /// Ver [`Recibo`] y [`Conversacion::recibos`](crate::Conversacion::recibos).
+    Recibo(Recibo),
 }
 
 impl Carga {
@@ -137,6 +200,30 @@ impl Carga {
     pub fn adjunto(&self) -> Option<&Adjunto> {
         match self {
             Carga::Adjunto(a) => Some(a),
+            _ => None,
+        }
+    }
+
+    /// El cambio de membresía cuando la carga lo es (P7). `None` en otro caso.
+    pub fn membresia(&self) -> Option<&CambioMembresia> {
+        match self {
+            Carga::Membresia(m) => Some(m),
+            _ => None,
+        }
+    }
+
+    /// La atestación cuando la carga lo es (P7). `None` en otro caso.
+    pub fn atestacion(&self) -> Option<&Atestacion> {
+        match self {
+            Carga::Atestacion(a) => Some(a),
+            _ => None,
+        }
+    }
+
+    /// El acuse de recibo cuando la carga lo es (P7). `None` en otro caso.
+    pub fn recibo(&self) -> Option<&Recibo> {
+        match self {
+            Carga::Recibo(r) => Some(r),
             _ => None,
         }
     }

@@ -15,7 +15,7 @@
 use std::env;
 use std::sync::Arc;
 
-use ayni_core::{AgoraId, Carga, Conversacion};
+use ayni_core::{AccionMembresia, AgoraId, Carga, Conversacion};
 use ayni_crypto::{verificar_firma, CanalSeguro, Identidad};
 use ayni_sync::{EnlaceTcp, EventoRed, Fusionador, Sobre, Transporte};
 
@@ -231,6 +231,18 @@ impl App for Ayni {
                         .unwrap_or_else(|_| "‹cifrado›".into()),
                     None => "‹cifrado›".into(),
                 },
+                Carga::Adjunto(a) => format!("‹adjunto: {} · {} B›", a.nombre, a.tamano),
+                Carga::Membresia(m) => match m.accion {
+                    AccionMembresia::Alta => format!("‹admite a {}›", hex_corto(&m.sujeto)),
+                    AccionMembresia::Baja => format!("‹expulsa a {}›", hex_corto(&m.sujeto)),
+                },
+                Carga::Atestacion(at) if at.nivel == 0 => {
+                    format!("‹retira su fe en {}›", hex_corto(&at.sujeto))
+                }
+                Carga::Atestacion(at) => {
+                    format!("‹da fe de {} (nivel {})›", hex_corto(&at.sujeto), at.nivel)
+                }
+                Carga::Recibo(r) => format!("‹acuse de recibo · {} msj›", r.vistos.len()),
             };
             let etiqueta = format!("[{}] {}", hex_corto(nodo.autor()), texto);
             filas.push(
